@@ -29,6 +29,10 @@ const CATALOG := {
 	"iron_sword": 60,
 	"blueprint_small_house": 80,
 	"blueprint_cottage": 220,
+	# Manor tier (docs/concept/workforce.md's "Blueprint tiers"): the same
+	# wood-cost-to-price ratio cottage/small_house already share (~2.75x per
+	# tier) applied to manor_wide's own real 112-wood cost vs. cottage's 82.
+	"blueprint_manor": 300,
 }
 
 

@@ -217,32 +217,28 @@ tier repeats).
 Sägewerk's own `2.0`, so a player's very first blueprint needs only a
 single skill-web allocation).
 
-**A real, honest ceiling worth naming up front.** The player's own
-`carpentry_level` (`SkillTree.total_bonus`) is only ever exactly `0.0`,
-`1.0`, or `2.0` today — `carpentry_1` and `carpentry_2` are the WHOLE
-Artisan carpentry wedge, each worth `+1.0`, with no third node. Any
-`required_skill` level above `2.0` would therefore be permanently
-un-self-buildable by ANY player allocation, not just a hard one — a real
-design trap, not a difficulty knob, unless a genuinely new skill-web node
-is added first (see Open Questions). So every tier THIS pass adds stays at
-one of the two already-reachable thresholds:
+**A real ceiling, corrected from this doc's own first-pass account.**
+This doc originally claimed the player's own `carpentry_level` was only
+ever exactly `0.0`/`1.0`/`2.0` — `carpentry_1`/`carpentry_2` being "the
+WHOLE Artisan carpentry wedge, with no third node." That was a real
+research gap: it checked `skill_tree.gd`'s smaller `_NODES` dict, not
+`skill_web.gd`'s own larger ring structure, which is what `Player.
+_meets_required_skill` actually reads (via `skill_bonus()` →
+`skill_web.total_bonus`). Ring 3 of that SAME Artisan wedge already
+carries a real notable, `master_joiner` (`stat: carpentry_level, bonus:
+1.0`) — one full node beyond `carpentry_1`/`carpentry_2`, already shipped,
+already in `skills.md`'s own ring table. A genuine `3.0` tier needed no
+new skill-web node at all, just the recipe to spend it on:
 
 - **✅ Shipped: Small House** — `hut_tiny`, level `1.0` (above).
-- **Cottage** — a mid-tier reusing a real, larger, window-bearing shape
-  (`cottage_bright`: 5×5, 3 windows), `required_skill` level `2.0` — the
-  SAME ceiling the Sägewerk itself uses, so "as sophisticated as this
+- **✅ Shipped: Cottage** — a mid-tier reusing a real, larger, window-bearing
+  shape (`cottage_bright`: 5×5, 3 windows), `required_skill` level `2.0` —
+  the SAME ceiling the Sägewerk itself uses, so "as sophisticated as this
   project's own existing hardest-to-reach structure," not an invented
   harder number.
-- **Manor** (`manor_wide`/`manor_grand`/`manor_L_wide`) — deliberately NOT
-  given a recipe this pass. Gating it at `2.0` would make it exactly as
-  hard as Cottage (no real progression beyond two tiers), and gating it
-  higher hits the ceiling above. Named as its own follow-up in Open
-  Questions: a real `carpentry_3` node (ring 3 of the Artisan wedge is
-  already a "notable"-tier slot per `skills.md`'s own ring table, unused
-  today) is the honest way to make a genuinely harder third tier
-  reachable, for both the player and a hired NPC (see below) — not
-  something to fake by reusing the `2.0` threshold for a shape that should
-  read as strictly harder.
+- **✅ Shipped: Manor** — `manor_wide` (7×5, 3 windows), `required_skill`
+  level `3.0`, reached via `carpentry_1` + `carpentry_2` + `master_joiner`
+  — a genuinely harder third tier, not a re-skin of Cottage's own `2.0`.
 - The remaining cottage variants (`cottage_small`, `cottage_window_pair`,
   `cottage_wide`, `cottage_tall`, `cottage_L_small`) stay exactly what they
   already were — real shapes the PROCEDURAL village generator still picks
@@ -586,8 +582,16 @@ Updated here and in `docs/progress.md` as slices land:
   `personality_trait`/`dominant_trait()`)
 - ✅ Cottage tier (`cottage_bright`, level 2.0 — `blueprint_cottage` item,
   `Shop.CATALOG` entry, `cottage` recipe)
-- ⬜ A Manor tier — blocked on a real `carpentry_3` node (see Open
-  Questions), not attempted
+- ✅ A Manor tier (`manor_wide`, level 3.0 — `blueprint_manor` item,
+  `Shop.CATALOG` entry, `manor` recipe). **Correcting this doc's own
+  earlier claim**: level 3.0 was NOT blocked on a new skill-web node —
+  `skill_web.gd`'s own Artisan wedge ring 3 already carries a real
+  `master_joiner` notable (`stat: carpentry_level, bonus: 1.0`), one full
+  node beyond `carpentry_1`/`carpentry_2`. The "0.0/1.0/2.0, no third
+  node" note below was a real research gap (it checked `skill_tree.gd`'s
+  smaller `_NODES` dict, not `skill_web.gd`'s own larger ring structure,
+  which is what `Player._meets_required_skill` actually reads via
+  `skill_bonus()`) — no new node was needed, just the recipe itself.
 - ✅ Player-facing "start a house project" action
   (`Player._try_build_house_from_blueprint`: checks unlock+placement via
   `EarthChunkManager.can_build_house_from_blueprint`, then material+skill
@@ -605,15 +609,36 @@ Updated here and in `docs/progress.md` as slices land:
   `NpcIdentity.carpentry_level`) + `Player._try_hire_carpenter_for_house`
   (real gold via a real, explicit `HIRE_A_CARPENTER_GOLD_COST` placeholder
   constant, plus the same real material cost `craft()` would have charged —
-  only the skill requirement is waived). 🚧 **Simplified**: lands the house
-  INSTANTLY once paid for, the same way the self-build path already does,
-  rather than a real `BuilderMarker` walking over and taking real time.
-- 🚧 Hire-a-Builder path: the spare-capacity/`carpentry_level` filter and
+  only the skill requirement is waived).
+- ✅ The first live `BuilderMarker` spawner (section 5), scoped to the
+  player-hired path only, exactly as specified: `EarthChunkManager.
+  hire_builder_for_house` deposits the player's already-paid material into
+  a real nearby Storage (found via the SAME `nearest_structure_position`
+  every other real construction worker already uses — a site with none in
+  reach correctly has no hire to offer), starts a real `IN_PROGRESS`
+  `ConstructionProject` owned by the PLAYER (never the carpenter — see
+  `ConstructionProject`'s own household_id/resident_household_id
+  disambiguation), and spawns a real `BuilderMarker` that withdraws that
+  material and places every real piece over real time, exactly like any
+  other real construction worker in this codebase. Move-in
+  (`settle_resident_if_new`) fires automatically the moment the project
+  actually completes (checked on `step_workforce_economy`'s own periodic
+  tick), the same as the self-build path.
+  **Named honestly, not silently glossed over**: `BuilderMarker` itself
+  is scoped to ground pieces only (its own file header: "roof pieces...
+  out of scope for this pass") — a HIRED house therefore lands with no
+  roof, unlike a self-built one (`stamp_house_and_grant_ownership` stamps
+  both). Giving `BuilderMarker` real roof-building is a separate,
+  not-yet-attempted follow-up (see Open Questions), deliberately not
+  bundled into this pass to avoid modifying that already-tested module's
+  own declared scope.
+- ✅ Hire-a-Builder path: the spare-capacity/`carpentry_level` filter and
   gold cost are real (above); settlement-side capacity reduction for the
-  hire's duration is NOT implemented (the hire completes instantly, so
-  there is no real "duration" yet to reduce capacity for).
-- ⬜ The first live `BuilderMarker` spawner (player-hired projects only) —
-  still not needed by anything real, since the hire path above is instant
+  hire's duration is real too, narrowly scoped to "the same household is
+  never double-booked onto two hires at once"
+  (`EarthChunkManager._is_household_on_loan`) rather than a change to
+  `SettlementSpareCapacity`'s own settlement-internal construction-decision
+  consumers.
 - ✅ Move-in: `player_house_settled` event + household formation
   (deterministic resident identity via `EntityRef.for_npc`, section 6),
   wired automatically into `stamp_house_and_grant_ownership` on project
@@ -664,15 +689,25 @@ face value.
 
 ## Open questions
 
-- **A real `carpentry_3` node**, needed before a genuine third (Manor)
-  blueprint tier can exist at all without either being a fake-harder
-  re-skin of Cottage's own `2.0` or a permanently NPC-only/unbuildable
-  tier. `skills.md`'s own Artisan wedge ring structure already has an
-  unused ring-3 "notable" slot this would naturally occupy — a real,
-  small, precedented skill-web addition, not an invented mechanism — but
-  it touches the already-shipped, tested skill web, so it is deliberately
-  a separate, explicit decision rather than something this pass adds
-  quietly as a side effect of wanting a bigger house.
+- ~~A real `carpentry_3` node~~ — **resolved, and this doc's own earlier
+  premise here was wrong**: `master_joiner` (Artisan wedge ring 3) already
+  grants `carpentry_level +1.0`, so a genuine path to `3.0` already existed
+  before this pass touched anything. The Manor tier ships against it
+  directly (see Status). What's still genuinely open: `effective_bonus`
+  scales every node's contribution by DNA resonance/archetype affinity, so
+  a real player's carpentry_level at "3 nodes allocated" is not always
+  EXACTLY 3.0 the way this doc's numbers assume (same is already true, to
+  a lesser degree, of `carpentry_1`/`carpentry_2` and the Cottage/Sägewerk
+  `2.0` threshold) — harmless for a `>=` gate in the direction that matters
+  (a favorable resonance only makes a tier easier, never impossible), but
+  worth naming rather than silently assuming exact arithmetic.
+- **Real roof-building for a hired house.** `BuilderMarker` only places
+  ground pieces (its own file header's declared scope) — a player-hired
+  house therefore has no roof, unlike a self-built one. Giving it real
+  roof-piece placement (a SEPARATE `Chunk.roof_modifications` write,
+  mirroring `stamp_structure_at_global`'s own two-layer stamp) is a real,
+  separate follow-up, deliberately not bundled into this pass to avoid
+  changing that already-tested module's own explicit scope boundary.
 - **Growing NPC Carpentry from real work**, closing the gap this doc
   deliberately leaves open (section 4) — waits on `labor_skills.md`'s own
   larger "NPCs accrue skill from `occupation_production.gd`'s loop" item,

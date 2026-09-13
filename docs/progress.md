@@ -20694,3 +20694,62 @@ made; a real hotbar-armed in-world verb for the new `"furniture"` item kind
 (mirroring `_build_step`/`_destroy_step`'s existing `"placeable"` handling)
 is still missing.
 
+### Closing three named gaps: Manor tier, hired furniture verb, a real BuilderMarker (2026-09-13) -- still UNTESTED
+
+Same day, same "skip tests" instruction still in force -- the user reviewed
+the prior pass's own honestly-named gap list and asked to close it. Three
+real, separate pieces:
+
+- **Manor tier, and a real correction to this doc's own earlier claim.**
+  `workforce.md` had said the player's own `carpentry_level` topped out at
+  `2.0` (`carpentry_1`/`carpentry_2`, "no third node") -- untrue, and a real
+  research gap: it only checked `skill_tree.gd`'s smaller `_NODES` dict,
+  not `skill_web.gd`'s own larger ring structure `Player.
+  _meets_required_skill` actually reads. `skill_web.gd`'s Artisan wedge
+  ring 3 already ships a real `master_joiner` notable (`carpentry_level
+  +1.0`), confirmed against `skills.md`'s own ring table. No new skill-web
+  node was needed -- just the recipe: `manor` (`manor_wide`, 7x5, 3
+  windows, `required_skill` 3.0, 112 wood -- ground+roof cost independently
+  computed by hand and cross-checked against the exact same wood-per-cell
+  ratio small_house/cottage's own already-shipped numbers share), a
+  `blueprint_manor` item, and a `Shop.CATALOG` price. `workforce.md`
+  corrects its own earlier claim in place rather than leaving it standing.
+- **A real hotbar-armed furniture verb.** `HotbarAction` gains a `FURNISH`
+  action for the `"furniture"` item kind, `Player` gains its own
+  `_selected_furniture_item` (mutually exclusive with `_selected_
+  placeable_item` -- arming either kind clears the other), `_build_step`
+  furnishes instead of placing/terraforming when one is armed, and
+  `_destroy_step` now checks the furniture layer BEFORE the general
+  modification layer (a table on a floor destroys the table, not the
+  floor). The `/furniture place|remove` dev-console command from the
+  prior pass stays as a second, still-real path to the same world model.
+- **The first live `BuilderMarker` spawner, for real.** The hire-a-
+  carpenter path no longer stamps a house instantly -- `EarthChunkManager.
+  hire_builder_for_house` deposits the player's already-paid material into
+  a real nearby Storage (found via `nearest_structure_position`, the SAME
+  accessor every other real construction worker in this codebase already
+  uses -- a site with none in reach correctly has no hire to offer, checked
+  BEFORE anything is spent), starts a real `IN_PROGRESS`
+  `ConstructionProject` owned by the player (never the carpenter), and
+  spawns a real `BuilderMarker` that withdraws that material and places
+  every real ground piece over real time -- `timber_construction.md`'s own
+  long-named "no live spawner exists yet" gap, closed for the player-hired
+  path specifically, exactly as workforce.md's own section 5 always
+  specified. `EarthChunkManager._is_household_on_loan` stops the same
+  carpenter household from being double-booked onto a second hire while
+  the first is still in progress -- deliberately narrow (not a change to
+  `SettlementSpareCapacity`'s own settlement-internal consumers). Move-in
+  now fires the moment a hired project actually completes (checked on
+  `step_workforce_economy`'s own tick), not just for the instant self-build
+  path. **Named honestly**: `BuilderMarker` itself only places ground
+  pieces (its own file header's declared scope) -- a hired house therefore
+  has no roof yet, unlike a self-built one; extending `BuilderMarker` to
+  place roof pieces too is a real, separate follow-up, deliberately not
+  bundled in to avoid touching that already-tested module's own scope.
+
+**Still UNTESTED, same caveat as the prior pass**: written directly against
+real, independently-verified APIs, without TDD red-first, without running
+the test suite. `docs/concept/workforce.md` and `housing.md` are both
+updated in place to reflect this. Do not merge to `main` without a real GUT
+pass first.
+

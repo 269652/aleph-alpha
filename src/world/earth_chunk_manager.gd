@@ -62,6 +62,7 @@ const CaterpillarRenderer = preload("res://src/rendering/caterpillar_renderer.gd
 const MillipedeRenderer = preload("res://src/rendering/millipede_renderer.gd")
 const GrassFrogRenderer = preload("res://src/rendering/grass_frog_renderer.gd")
 const LumberjackMarker = preload("res://src/rendering/lumberjack_marker.gd")
+const BuilderMarker = preload("res://src/rendering/builder_marker.gd")
 const LogisticsMarker = preload("res://src/rendering/logistics_marker.gd")
 const StructureStockStore = preload("res://src/emergence/structure_stock_store.gd")
 
@@ -1652,6 +1653,7 @@ func record_player_settled_if_new(settlement_id: String) -> bool:
 const BLUEPRINT_RECIPE_BY_ITEM_ID := {
 	"blueprint_small_house": "small_house",
 	"blueprint_cottage": "cottage",
+	"blueprint_manor": "manor",
 }
 
 
@@ -1701,6 +1703,7 @@ func record_blueprint_learned_if_new(recipe_id: String) -> bool:
 const HOUSE_BLUEPRINT_SHAPE_BY_RECIPE_ID := {
 	"small_house": "hut_tiny",
 	"cottage": "cottage_bright",
+	"manor": "manor_wide",
 }
 
 
@@ -1938,6 +1941,8 @@ func find_spare_carpenter_household(settlement_id: String, recipe_id: String) ->
 		var occupation := _occupation_of_household(household_id)
 		if NpcProduction.PRODUCER_ITEM_BY_OCCUPATION.has(occupation):
 			continue  # already working a real survival job -- not spare
+		if _is_household_on_loan(household_id):
+			continue  # already off building someone else's hired house
 		var household := _household_store.get_household(household_id)
 		if household == null or household.members.is_empty():
 			continue
@@ -1948,6 +1953,101 @@ func find_spare_carpenter_household(settlement_id: String, recipe_id: String) ->
 		if carpenter.carpentry_level >= required_level:
 			return household_id
 	return ""
+
+
+## Real Builders spawned for a player's hired carpenter (docs/concept/
+## workforce.md section 5) -- project_id -> {"marker": BuilderMarker,
+## "carpenter_household_id": String}, the same tracked-dict shape
+## _sagewerk_lumberjacks already establishes for a different marker's own
+## lifecycle, extended with which household is on loan.
+var _hired_builders: Dictionary = {}
+
+
+## True while household_id is already off building a hired house --
+## find_spare_carpenter_household's own real "spare" filter, so the SAME
+## household is never offered for a second hire while its first is still
+## in progress (the settlement-side "capacity reduction for the hire's
+## duration" workforce.md's own Status list names -- narrowly scoped to
+## "don't double-book the same household," not a change to
+## SettlementSpareCapacity's own settlement-internal construction-decision
+## consumers).
+func _is_household_on_loan(household_id: String) -> bool:
+	for entry in _hired_builders.values():
+		if entry["carpenter_household_id"] == household_id:
+			return true
+	return false
+
+
+## The build-vs-hire fork's real hire execution (docs/concept/workforce.md
+## sections 3/5) -- called ONLY once Player has already found a qualifying
+## carpenter household, verified a real nearby Storage, and paid+consumed
+## the real gold/material cost (see Player._try_hire_carpenter_for_house).
+## Deposits the ALREADY-consumed material into that real Storage (so the
+## real BuilderMarker below can withdraw it exactly the way every other
+## real construction worker in this codebase already does -- see
+## BuilderMarker._step_withdrawing), starts a real IN_PROGRESS
+## ConstructionProject owned by `owner_household_id` (the PLAYER -- see
+## ConstructionProject's own household_id/resident_household_id
+## disambiguation; `carpenter_household_id` is never the owner), and spawns
+## a real BuilderMarker to build it piece by piece over real time -- the
+## first live BuilderMarker spawner (timber_construction.md's own
+## long-named gap), scoped to this player-hired path only. Returns the
+## real project id.
+func hire_builder_for_house(
+	recipe_id: String, origin_tile: Vector2i, owner_household_id: String, carpenter_household_id: String,
+	consumed_items: Dictionary, storage_pixel: Vector2
+) -> String:
+	var shape_id: String = HOUSE_BLUEPRINT_SHAPE_BY_RECIPE_ID.get(recipe_id, "")
+	if shape_id == "":
+		return ""
+	var chunk_coord := _chunk_coord_for_tile(origin_tile)
+	var local_origin := origin_tile - chunk_coord * CHUNK_SIZE
+	var seed_value := _house_site_seed(chunk_coord, origin_tile, recipe_id)
+	var ground_pieces := HouseBlueprint.new().build(shape_id, seed_value)
+
+	var storage_tile := Vector2i(
+		floori(storage_pixel.x / TerrainRenderer.TILE_SIZE), floori(storage_pixel.y / TerrainRenderer.TILE_SIZE)
+	)
+	for item_id in consumed_items:
+		deposit_to_structure_at(storage_tile.x, storage_tile.y, item_id, int(consumed_items[item_id]))
+
+	var project := _construction_project_store.start_project(chunk_coord, local_origin, recipe_id, owner_household_id)
+	project.status = ConstructionProject.Status.IN_PROGRESS
+
+	var marker := BuilderMarker.new()
+	marker.earth = self
+	marker.project_store = _construction_project_store
+	marker.household_store = _household_store
+	marker.target_project = project
+	marker.target_pieces = ground_pieces
+	marker.position = (Vector2(origin_tile) + Vector2(0.5, 0.5)) * TerrainRenderer.TILE_SIZE
+	_entities_parent.add_child(marker)
+	_hired_builders[project.id] = {"marker": marker, "carpenter_household_id": carpenter_household_id}
+
+	return project.id
+
+
+## Once a hired project actually reaches COMPLETE (the real BuilderMarker
+## placed every real piece -- see ConstructionProjectStore.advance_project_
+## labor_for_piece), this: (1) settles a real resident, the SAME move-in
+## stamp_house_and_grant_ownership's own self-build path already triggers
+## automatically (a hired house is exactly as real a dwelling as a
+## self-built one -- pillar 4), and (2) frees the now-idle BuilderMarker
+## (its own SEEKING phase would otherwise no-op forever once every real
+## piece is placed) and releases its carpenter household back to
+## _is_household_on_loan's own "spare" pool. Called from step_workforce_
+## economy's own periodic tick -- a resident/cleanup landing up to one tick
+## late is a real, harmless, purely cosmetic delay, not a correctness gap.
+func _despawn_completed_hired_builders() -> void:
+	for project_id in _hired_builders.keys():
+		var project: ConstructionProject = _construction_project_store.get_project(project_id)
+		if project == null or project.status != ConstructionProject.Status.COMPLETE:
+			continue
+		settle_resident_if_new(project.blueprint_id, project.chunk_coord * CHUNK_SIZE + project.origin)
+		var marker = _hired_builders[project_id]["marker"]
+		if marker != null:
+			marker.free()
+		_hired_builders.erase(project_id)
 
 
 ## The same real, derived GROWING/STABLE/DECLINING classification
@@ -1989,6 +2089,8 @@ func step_workforce_economy(delta_seconds: float, player_wallet) -> void:
 	_workforce_economy_accumulator -= WORKFORCE_ECONOMY_INTERVAL
 	if _workforce_economy_accumulator >= WORKFORCE_ECONOMY_INTERVAL:
 		_workforce_economy_accumulator = fmod(_workforce_economy_accumulator, WORKFORCE_ECONOMY_INTERVAL)
+
+	_despawn_completed_hired_builders()
 
 	# Wages: every FILLED worker slot draws real gold from the player.
 	# Simply skipped (no debt, no eviction) if the player can't afford it

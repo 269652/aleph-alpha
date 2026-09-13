@@ -96,15 +96,19 @@ simplification trees/creatures already accept.
   rendered via the ALREADY-real shared atlas (`TerrainRenderer.
   atlas_coords_for_modification` already resolves any `BuildingPiece`,
   furniture included, since furniture pieces are real `PIECE_IDS` entries)
-- 🚧 Placing/removing furniture in the world: `EarthChunkManager.
+- ✅ Placing/removing furniture in the world: `EarthChunkManager.
   build_furniture_at_global`/`destroy_furniture_at_global`/
-  `furniture_at_global` are real and gated by `FurniturePlacement` (real
-  interior-floor rule). **Reachable today only via a new `/furniture
-  place|remove` dev-console command** -- the same "dev console is a real,
-  honest interim call site" choice `player_citizenship.md`'s own item
-  commands already made; a proper hotbar-armed in-world verb (mirroring
-  `_build_step`/`_destroy_step` for the existing `"placeable"` kind) for
-  this NEW `"furniture"` kind is still missing.
+  `furniture_at_global`, gated by `FurniturePlacement` (real interior-floor
+  rule). A real hotbar-armed in-world verb now exists too: a new
+  `HotbarAction.FURNISH` (`"furniture"` kind → its own `_selected_
+  furniture_item`, mirroring `"placeable"`'s own `_selected_placeable_item`
+  exactly, mutually exclusive with it) makes `_build_step` furnish instead
+  of placing/terraforming, and `_destroy_step` checks the furniture layer
+  BEFORE the general modification layer (a table sitting on a floor
+  destroys the table, not the floor under it). The `/furniture place|
+  remove` dev-console command (the same interim-call-site choice
+  `player_citizenship.md`'s own item commands made) stays too, as a second,
+  still-real way to reach the same world model.
 - ⬜ `appeal_score` (the honest placeholder above)
 - ⬜ NPC visits / opinions from a home's appeal
 - ⬜ Multiplayer visiting/rating

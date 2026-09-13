@@ -301,6 +301,7 @@ const _ITEMS := {
 	# procedural village generator already builds for NPCs, unlocked for
 	# the player's own construction.
 	"blueprint_cottage": ["Blueprint: Cottage", "blueprint", 1, 0.0],
+	"blueprint_manor": ["Blueprint: Manor", "blueprint", 1, 0.0],
 	# Interior furniture (see docs/concept/housing.md's "Interior furniture"
 	# section) -- the SAME id as its BuildingPiece entry, the same
 	# "one string, no new plumbing on either side" convention "stone_dam"
