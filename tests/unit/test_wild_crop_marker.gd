@@ -14,6 +14,7 @@ const ProceduralSoilSprite = preload("res://src/rendering/procedural_soil_sprite
 const IllustratedCropSprite = preload("res://src/rendering/illustrated_crop_sprite.gd")
 const SeasonalFoliage = preload("res://src/rendering/seasonal_foliage.gd")
 const ItemCatalog = preload("res://src/gameplay/item_catalog.gd")
+const WildCropPatch = preload("res://src/world/wild_crop_patch.gd")
 
 var marker: WildCropMarker
 var _drops: Array = []
@@ -71,6 +72,68 @@ func test_display_name_for_potato():
 	marker.growth = 1.0
 	add_child_autofree(marker)
 	assert_eq(marker.get_display_name(), "Potato")
+
+
+## A mature, genuinely high-vigor specimen reads as a find worth noticing,
+## not just another carrot -- prefixed onto the label the hover tooltip
+## already shows (see get_display_name's other callers/tests above).
+func test_a_high_vigor_mature_crop_is_labeled_prize():
+	marker.growth = 1.0
+	marker.vigor = 1.0
+	add_child_autofree(marker)
+	assert_eq(marker.get_display_name(), "Prize Carrot")
+
+
+## The population's own mean (0.5, an ordinary specimen) must NOT read as a
+## prize -- otherwise half the meadow would be labeled "Prize" and the word
+## would mean nothing.
+func test_an_ordinary_vigor_mature_crop_is_not_labeled_prize():
+	marker.growth = 1.0
+	marker.vigor = 0.5
+	add_child_autofree(marker)
+	assert_eq(marker.get_display_name(), "Carrot")
+
+
+## An immature plant never gets the Prize prefix even if it will grow up
+## into a genuinely high-vigor specimen -- the label names what a player
+## can actually SEE right now (a tiny sprout), not a trait that only pays
+## off once it's actually pullable.
+func test_a_high_vigor_seedling_is_not_labeled_prize():
+	marker.growth = 0.0
+	marker.vigor = 1.0
+	add_child_autofree(marker)
+	assert_eq(marker.get_display_name(), "Carrot Sprout")
+
+
+## PRIZE_VIGOR_THRESHOLD must actually BE the seeding distribution's own
+## PRIZE_VIGOR_PERCENTILE cutoff (CLAUDE.md: no eyeballed floats) -- not
+## just an algebraically-plausible-looking constant. Samples the REAL
+## WildCropPatch seeding formula (a big enough grid to get a real sample --
+## MAX_PATCHES caps any one instance's own patch count, so this pools many
+## independently-seeded instances) and checks the measured fraction at or
+## above the threshold lands close to what the percentile promises.
+func test_prize_threshold_actually_selects_about_the_top_decile_of_seeded_vigor():
+	var width := 60
+	var height := 60
+	var biome := PackedStringArray()
+	biome.resize(width * height)
+	biome.fill("grassland")
+
+	var at_or_above := 0
+	var total := 0
+	for seed_value in 40:
+		var sim := WildCropPatch.new("carrot", seed_value, width, height, biome)
+		for cell in sim.get_patch_cells():
+			total += 1
+			if sim.get_vigor(cell) >= WildCropMarker.PRIZE_VIGOR_THRESHOLD:
+				at_or_above += 1
+
+	assert_gt(total, 200, "precondition: a real pooled sample of seeded patches")
+	var measured_fraction := float(at_or_above) / float(total)
+	assert_almost_eq(
+		measured_fraction, 1.0 - WildCropMarker.PRIZE_VIGOR_PERCENTILE, 0.04,
+		"the threshold must actually select about the promised top share of real seeded vigor"
+	)
 
 
 # -- only a mature, not-already-pulling patch is pullable --------------------

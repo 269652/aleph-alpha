@@ -46,6 +46,19 @@ const MAX_VIGOR_MASS_MULTIPLIER := 1.3
 static func vigor_mass_multiplier(vigor: float) -> float:
 	return lerpf(MIN_VIGOR_MASS_MULTIPLIER, MAX_VIGOR_MASS_MULTIPLIER, vigor)
 
+## What share of the seeding distribution counts as a "Prize" specimen --
+## the top (1 - PRIZE_VIGOR_PERCENTILE) share of WildCropPatch's own
+## seeding formula (the average of two salted-hash draws, VIGOR_BELL_HALVES
+## in wild_crop_patch.gd -- a triangular distribution on [0, 1], NOT flat).
+## PRIZE_VIGOR_THRESHOLD is the closed-form value that makes this true: for
+## that triangular distribution, P(X <= x) = 1 - 2*(1-x)^2 for x >= 0.5, so
+## solving 1 - 2*(1-x)^2 == PRIZE_VIGOR_PERCENTILE for x gives the formula
+## below. Verified against an empirical sample of the real seeding formula
+## (not just the algebra) by
+## test_prize_threshold_actually_selects_about_the_top_decile_of_seeded_vigor.
+const PRIZE_VIGOR_PERCENTILE := 0.9
+const PRIZE_VIGOR_THRESHOLD := 0.7763932022500211  # 1.0 - sqrt((1.0 - PRIZE_VIGOR_PERCENTILE) / 2.0)
+
 ## "carrot" or "potato" -- which sheet/item this cell grows. Set before
 ## add_child, same convention as LiftableStone.diameter_cm/stone_seed.
 var crop_id := ""
@@ -215,6 +228,8 @@ func get_display_name() -> String:
 		1:
 			return "%s Plant" % label
 		_:
+			if vigor >= PRIZE_VIGOR_THRESHOLD:
+				return "Prize %s" % label
 			return label
 
 

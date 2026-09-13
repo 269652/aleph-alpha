@@ -63,6 +63,25 @@ const _CROP_TERRITORY_ORDER := ["carrot", "potato"]
 ## shape applies. Two draws (not one) is what makes the distribution a real
 ## bell rather than a flat 0..1 -- see get_vigor's own doc comment for the
 ## default this produces for an unplanted cell.
+##
+## _seed_vigor deliberately does NOT copy FlyerPersonality._unit's own salt
+## shape byte-for-byte, though -- see AnimalGenome._unit's doc comment
+## (src/gameplay/animal_genome.gd): two salts identical except for one
+## trailing digit ahead of an otherwise-fixed suffix come out CORRELATED
+## under Godot's String hash, not independent, which fattens the
+## distribution's tails well past a true two-draw average (measured r=0.57
+## for AnimalGenome's own "_animal_genome" suffix; FlyerPersonality's
+## "_personality" shape happens to measure a milder r=0.26, low enough to
+## scrape under ITS OWN tests' budget by luck, not by design -- so mirroring
+## it byte-for-byte here would have carried the same latent bug forward
+## without any of this crop code's own tests being tight enough to catch
+## it by luck too). This crop's own
+## test_prize_threshold_actually_selects_about_the_top_decile_of_seeded_vigor
+## (test_wild_crop_marker.gd) DID catch it empirically the first time
+## (measured ~22.75% at/above the promised top decile, not ~10%) before
+## _seed_vigor was changed to vary salt LENGTH per half
+## ("x".repeat(half + 1), AnimalGenome's own fix) instead of its trailing
+## digit.
 const VIGOR_BELL_HALVES := 2
 
 ## How far a spread child's vigor can drift from its parent's, as a fraction
@@ -170,12 +189,13 @@ func graze(cell: Vector2i) -> bool:
 
 
 ## A founding cell's own Root Vigor -- the average of VIGOR_BELL_HALVES
-## independent salted-hash draws (see the constant's own doc comment),
-## exactly FlyerPersonality._bell's shape.
+## independent salted-hash draws (see VIGOR_BELL_HALVES's own doc comment
+## for why the two salts vary by LENGTH, "x".repeat(half + 1), rather than
+## by trailing digit).
 func _seed_vigor(x: int, y: int) -> float:
 	var total := 0.0
 	for half in VIGOR_BELL_HALVES:
-		var salted := "%s_%d_%d_%d_vigor_%d" % [_crop_id, _seed_value, x, y, half]
+		var salted := "%s_%d_%d_%d_vigor_%s" % [_crop_id, _seed_value, x, y, "x".repeat(half + 1)]
 		total += float(absi(hash(salted)) % 10000) / 10000.0
 	return total / float(VIGOR_BELL_HALVES)
 
