@@ -67,10 +67,28 @@ func known_item_ids() -> Array:
 ## Idempotent, like the form_*/record_*_if_new family: an item already in
 ## stock is left alone, so re-running founding logic cannot quietly double a
 ## merchant's goods and halve the town's prices.
+##
+## Two kinds of goods, two rules (reported directly: "the food should be
+## actually consumed and not stay at 20 cooked meat"). FOOD is the
+## merchant's opening inventory only -- seeded once per market
+## (Market.shop_food_seeded) and never restocked here again: the same
+## Market is what SettlementState counts as the village's own food, and a
+## refill-whenever-empty rule made those 20 cooked meat a permanent five
+## households of carrying capacity that villagers never ate (they eat from
+## it now -- see EarthChunkManager.buy_village_meal_near). What the village
+## eats is gone until its own economy puts food back, and the price climbs
+## with scarcity like everything else. TOOLS and BLUEPRINTS keep the old
+## rule and restock when sold out: the merchant trades those in from afar,
+## and nothing else in the game supplies them.
 func stock_initial_goods(market) -> void:
+	var catalog := ItemCatalog.new()
 	for item_id in CATALOG:
-		if market.stock_of(item_id) <= 0:
+		if catalog.kind_of(item_id) == "food":
+			if not market.shop_food_seeded:
+				market.add_stock(item_id, Market.REFERENCE_STOCK)
+		elif market.stock_of(item_id) <= 0:
 			market.add_stock(item_id, Market.REFERENCE_STOCK)
+	market.shop_food_seeded = true
 
 
 ## The gold price of item_id, or 0 for an item this shop doesn't sell.

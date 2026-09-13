@@ -226,18 +226,25 @@ Nothing about the classification itself changes: `SettlementState.
 status_for` reads the same `carrying_capacity = food_stock /
 FOOD_PER_HOUSEHOLD` and the same `STABLE_BAND`.
 
-**And villagers eat it.** Individual hunger buys meals from the
-`VillageMarket` (`NpcEconomy._try_eat` → `buy_meal`), which no Storage or
-Bakery ever stocks. So a hungry villager who finds the stall bare now
-"walks to the bakehouse": `EarthChunkManager.buy_structure_meal_near` sells
-one whole unit of any real food off the nearest Bakery/Storage shelf
-within the villager's own village (`STRUCTURE_MEAL_RADIUS_TILES`, one
-chunk), at `VillageMarket`'s own meal price, all-or-nothing exactly like
-`buy_meal`; and the purse-funded subsistence wage counts that shelf as
-somewhere a wage buys a meal (`has_structure_meal_near`), so nobody
-starves next to a full bakehouse because the stall happened to be empty.
-Bread is therefore consumed as well as counted — the shelf goes down as
-the village eats, and the need can genuinely return.
+**And villagers eat it — from all of the village's stores.** Individual
+hunger bought meals only from the `VillageMarket` (`NpcEconomy._try_eat` →
+`buy_meal`), the villagers' own day's gathering, which no Storage, Bakery
+or merchant ever stocks. So a hungry villager who finds the stall bare now
+"walks to the stores": `EarthChunkManager.buy_village_meal_near` sells one
+whole unit of any real food first from the settlement's own persisted
+`Market` (where the merchant stocks and the granary/trade fill — the food
+`SettlementState` had always counted as the village's own, and that nobody
+had ever eaten), then off the nearest Bakery/Storage shelf within the
+villager's own village (`STRUCTURE_MEAL_RADIUS_TILES`, one chunk), at
+`VillageMarket`'s own flat meal price, all-or-nothing exactly like
+`buy_meal`; and the purse-funded subsistence wage counts those stores as
+somewhere a wage buys a meal (`has_village_meal_near`), so nobody starves
+next to a stocked stall or a full bakehouse. Food is therefore consumed as
+well as counted — the stores go down as the village eats, and the need can
+genuinely return. The one thing that had kept the merchant's meat
+permanent, the shop refilling any sold-out item, is gone for food
+([economy.md](economy.md): food is seeded once as the merchant's opening
+inventory; tools and blueprints still restock).
 
 ### The emergent need: a food shortfall the build decision can act on
 
@@ -309,13 +316,17 @@ day, 1.5 labor-hours per unit of material): a village with three spare
 households has a Farm's material on hand in ~15 minutes and the Farm
 standing ~40 minutes later; the Mill and Bakery follow at the same pace.
 
-**A known interaction, named rather than hidden**: a visited merchant's
-Shop stocks 20 cooked meat into the emergence Market, and that counts as
-settlement food — enough capacity for five households on its own. A
-five-villager village with a merchant therefore never classifies
-`DECLINING` today and never wants a farm; villages without one do. That
-is the existing food model's own quirk (nothing ever consumes shop
-stock), not something this chain changes or works around.
+**A quirk this pass first named, then fixed on request**: a visited
+merchant's Shop stocked 20 cooked meat into the emergence Market, counted
+as settlement food — five households of capacity — that no villager ever
+ate and the shop refilled whenever it hit zero, so a five-villager village
+with a merchant could never classify `DECLINING` and never want a farm.
+Villagers now eat those stores (see "Food that counts") and the shop seeds
+food only once, so a merchant village eats through its meat and comes to
+need a Farm like any other — pinned end to end in `test_earth_chunk_
+manager_bread_chain.gd` (the meat is eaten portion by portion, the shop
+does not conjure it back, the village turns `DECLINING`, the decision
+starts a Farm).
 
 ### Placement
 
@@ -442,12 +453,11 @@ directly affected neighbouring suites were.
   decision raise a second Farm — this is also
   [npc_farm_production.md](npc_farm_production.md)'s own "Capacity and a
   second Farmer" question.
-- **The stall and the shelf are still two containers.** A hungry villager
-  now eats from a Bakery/Storage shelf directly, but nothing ever moves
-  baked bread into the `VillageMarket` a player sells food into, and the
-  merchant's shop stock counts as settlement food without ever being eaten
-  (see "A known interaction" above) — unifying the three food containers
-  is real, separate work.
+- **Three food containers, one eater.** A villager now eats from the stall,
+  the persisted Market and the shelves alike, but nothing ever moves food
+  between them (baked bread never reaches the `VillageMarket` a player
+  sells food into), and the player's shop still prices only the Market —
+  unifying the three containers is real, separate work.
 - **Oven fuel.** A real bakehouse burns wood per batch; modeling it means
   a second input the resolver would surface as a `wood` need — correct,
   and cheap once the destination-logistics leg exists, but deliberately

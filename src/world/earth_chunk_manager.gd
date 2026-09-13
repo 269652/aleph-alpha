@@ -13671,9 +13671,10 @@ func withdraw_from_structure_at(global_x: int, global_y: int, item_id: String, c
 	return _structure_stocks.stock_for(_structure_stock_key(global_x, global_y)).remove_stock(item_id, count)
 
 
-## The bakehouse meal (docs/concept/milling_and_baking.md): how far a hungry
-## villager "walks" to eat from a Storage's or Bakery's own shelf -- their
-## own village, one chunk across, not a specific radius invented here.
+## A meal from the village's own stores (docs/concept/milling_and_
+## baking.md): how far a hungry villager "walks" to eat from a Storage's or
+## Bakery's own shelf -- their own village, one chunk across, not a
+## specific radius invented here.
 const STRUCTURE_MEAL_RADIUS_TILES := CHUNK_SIZE
 
 ## The structures whose own stock a villager may eat from: where baked
@@ -13682,20 +13683,36 @@ const STRUCTURE_MEAL_RADIUS_TILES := CHUNK_SIZE
 const STRUCTURE_MEAL_SOURCE_IDS: Array[String] = ["bakery", "storage"]
 
 
-## Whether any STRUCTURE_MEAL_SOURCE_IDS structure within STRUCTURE_MEAL_
-## RADIUS_TILES of `pixel_position` holds a whole unit of real food --
-## NpcEconomy's duck-typed "is there a bakehouse meal to buy" read (its
-## subsistence wage is gated on it, so nobody starves next to a full
-## bakehouse just because the market stall is bare).
-func has_structure_meal_near(pixel_position: Vector2) -> bool:
-	return _structure_meal_tile_near(pixel_position) != null
+## Whether the village's own stores hold a whole meal near `pixel_position`
+## -- its persisted Market (where the merchant stocks and the granary/trade
+## fill: the food SettlementState has always counted as the settlement's
+## own, and that nobody ever ate before this), or a Bakery/Storage shelf
+## within STRUCTURE_MEAL_RADIUS_TILES. NpcEconomy's duck-typed "is there a
+## meal to buy" read (its subsistence wage is gated on it, so nobody
+## starves next to a stocked stall or a full bakehouse just because the
+## day's gathering is bare).
+func has_village_meal_near(pixel_position: Vector2) -> bool:
+	return _market_meal_item_near(pixel_position) != "" or _structure_meal_tile_near(pixel_position) != null
 
 
-## Buys one meal off the nearest such shelf: VillageMarket.buy_meal's exact
-## contract against StructureStock -- the same VILLAGE_LOCAL_FOOD_PRICE,
-## all-or-nothing (a wallet that cannot pay leaves the shelf and its own
-## balance untouched), returning the item_id eaten or "" if nothing was.
-func buy_structure_meal_near(pixel_position: Vector2, wallet) -> String:
+## Buys one meal from the village's stores -- the settlement's own Market
+## first, then the nearest food-holding shelf: VillageMarket.buy_meal's
+## exact contract against those containers -- the same flat VILLAGE_LOCAL_
+## FOOD_PRICE (the merchant sells to locals at the local price; scarcity
+## pricing is what the PLAYER pays at the shop), all-or-nothing (a wallet
+## that cannot pay leaves everything untouched), returning the item_id
+## eaten or "" if nothing was. Reported directly: "the food should be
+## actually consumed and not stay at 20 cooked meat" -- this is what
+## consumes it.
+func buy_village_meal_near(pixel_position: Vector2, wallet) -> String:
+	var market_item := _market_meal_item_near(pixel_position)
+	if market_item != "":
+		if not wallet.spend(VillageMarket.VILLAGE_LOCAL_FOOD_PRICE):
+			return ""
+		var market := _market_store.market_for(_settlement_id_at(pixel_position))
+		if not market.remove_stock(market_item, 1):
+			return ""
+		return market_item
 	var found = _structure_meal_tile_near(pixel_position)
 	if found == null:
 		return ""
@@ -13706,6 +13723,27 @@ func buy_structure_meal_near(pixel_position: Vector2, wallet) -> String:
 	if not withdraw_from_structure_at(tile.x, tile.y, item_id, 1):
 		return ""
 	return item_id
+
+
+## The settlement whose stores a villager standing at `pixel_position`
+## eats from -- the chunk they are in (a settlement IS its chunk, see
+## EntityRef.for_settlement).
+func _settlement_id_at(pixel_position: Vector2) -> String:
+	var tile := Vector2i(
+		floori(pixel_position.x / TerrainRenderer.TILE_SIZE), floori(pixel_position.y / TerrainRenderer.TILE_SIZE)
+	)
+	return EntityRef.for_settlement(_chunk_coord_for_tile(tile))
+
+
+## The first real food item with a whole unit in the settlement's own
+## persisted Market, or "" -- in stock order, deterministic like
+## VillageMarket.buy_meal's own pick.
+func _market_meal_item_near(pixel_position: Vector2) -> String:
+	var market := _market_store.market_for(_settlement_id_at(pixel_position))
+	for item_id in market.stock:
+		if market.stock_of(item_id) >= 1 and _item_catalog.kind_of(item_id) == "food":
+			return item_id
+	return ""
 
 
 ## {tile, item_id} of the nearest meal-holding structure, or null. Nearest

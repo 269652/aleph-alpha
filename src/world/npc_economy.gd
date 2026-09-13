@@ -226,14 +226,16 @@ func _try_eat(is_working: bool, world, pixel_position: Vector2) -> void:
 	if market.buy_meal(wallet) != "":
 		needs.feed()
 		return
-	# Nothing on the stall: the village's own baked bread (docs/concept/
-	# milling_and_baking.md) sits in a Bakery's or Storage's structure
-	# stock, not the VillageMarket -- so "walk to the bakehouse", duck-typed
-	# like every other world read here, at the same meal price and the same
-	# all-or-nothing wallet rule buy_meal keeps (see EarthChunkManager.
-	# buy_structure_meal_near). A world without the hook has no bakehouse.
-	if world != null and world.has_method("buy_structure_meal_near"):
-		if world.buy_structure_meal_near(pixel_position, wallet) != "":
+	# Nothing on the stall: the village's own STORES (docs/concept/milling_
+	# and_baking.md) -- the persisted Market the merchant stocks and the
+	# granary/trade fill, and the Bakery/Storage shelves baked bread ends up
+	# on -- are food nobody ever ate before this. So "walk to the stores",
+	# duck-typed like every other world read here, at the same meal price
+	# and the same all-or-nothing wallet rule buy_meal keeps (see
+	# EarthChunkManager.buy_village_meal_near). A world without the hook has
+	# no stores to offer.
+	if world != null and world.has_method("buy_village_meal_near"):
+		if world.buy_village_meal_near(pixel_position, wallet) != "":
 			needs.feed()
 
 
@@ -273,10 +275,11 @@ func _draw_subsistence_wage(world = null, pixel_position: Vector2 = Vector2.ZERO
 	_set_purse(market, float(payout["purse"]))
 
 
-## Whether the village's own structures hold a whole meal near this villager
-## (see _try_eat) -- a bakehouse counts as somewhere a wage buys a meal, so
-## nobody starves next to a full one just because the stall is bare.
+## Whether the village's own stores hold a whole meal near this villager
+## (see _try_eat) -- the merchant's stall or a bakehouse counts as
+## somewhere a wage buys a meal, so nobody starves next to a full one just
+## because the day's gathering on the stall is bare.
 func _structure_meal_available(world, pixel_position: Vector2) -> bool:
-	if world == null or not world.has_method("has_structure_meal_near"):
+	if world == null or not world.has_method("has_village_meal_near"):
 		return false
-	return world.has_structure_meal_near(pixel_position)
+	return world.has_village_meal_near(pixel_position)

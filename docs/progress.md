@@ -22037,3 +22037,35 @@ the integration test drives the same functions the game's own
 `step_settlements` calls. Also found in passing, not fixed here:
 `tests/unit/test_crafting_window.gd` fails 0/16 on `main` itself
 (flagged as its own task).
+
+### The merchant's meat is eaten: villagers eat from the village's stores, and the shop seeds food once (`concept/economy.md`, `concept/milling_and_baking.md`, 2026-09-13)
+
+Reported directly, on the quirk the entry above named: *"fix the quirk..
+the food should be actually consumed and not stay at 20 cooked meat."*
+Two causes, both real: villagers only ever bought meals from the live
+VillageMarket (the day's gathering), never from the persisted Market the
+merchant stocks and SettlementState counts as the village's food; and
+`Shop.stock_initial_goods` refilled ANY item that hit zero whenever the
+player came near a merchant, so even eaten food would have reappeared.
+
+- `EarthChunkManager.buy_village_meal_near`/`has_village_meal_near` (the
+  bakehouse hook from the entry above, widened): the settlement's own
+  Market first, then a Bakery/Storage shelf, at the flat local meal price
+  (scarcity pricing stays the player's), all-or-nothing like `buy_meal`.
+  `NpcEconomy._try_eat` and its subsistence-wage gate use it.
+- `Shop.stock_initial_goods`: food is the merchant's opening inventory
+  only -- seeded once per market (`Market.shop_food_seeded`, persisted in
+  `to_dict`/`from_dict`) -- tools and blueprints still restock when sold
+  out (the merchant trades those in from afar; nothing else supplies them).
+- TDD red-first: `test_shop.gd` 37/37 (seeded once, tools restock, the
+  seed survives a reload), `test_market.gd` 13/13, `test_market_store.gd`
+  4/4, `test_npc_economy.gd` 43/43, `test_earth_chunk_manager_chain_
+  logistics.gd` 14/14 (Market before shelf, only food counts), and the
+  loop end to end in `test_earth_chunk_manager_bread_chain.gd` 10/10: a
+  merchant village is not DECLINING and wants no farm while the meat
+  lasts; 20 portions are 20 real meals and then it is gone; the shop does
+  not conjure it back; the village turns DECLINING and starts a Farm.
+
+Still separate work (named in the doc): nothing moves food between the
+three containers (stall, Market, shelves), and the player's shop still
+prices only the Market.
