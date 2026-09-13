@@ -8710,9 +8710,36 @@ carrots out of earth (visually animated)". Supersedes the old
   `assets/sprites/plants/{carrot,potato}_leaves.png`, which ships exactly three.
   Genuinely multi-day; recorded so a future "while I'm here" pass does not
   drift into it by accident.
-- ⬜ No DNA/quality variation on the wild population (see `farming.md`'s
-  still-unbuilt shared DNA model) — the 7 root/tuber art variants are
-  purely cosmetic.
+- ✅ **Root Vigor** (2026-09-13): a heritable size/quality trait shipped for
+  the wild population, seeded per patch as the average of two independent
+  salted-hash draws (`WildCropPatch._vigor`, mirroring
+  `FlyerPersonality._bell`'s bell shape for boldness) and carried through
+  spread with mutation (`VIGOR_MUTATION_AMOUNT`, reusing
+  `TreeGenome.MUTATION_AMOUNT` directly). A genuinely high-vigor mature
+  crop renders visibly bigger (leaves scale by the cube root of a real
+  mass multiplier) and is labeled "Prize" in its hover name past a
+  closed-form, empirically-verified threshold
+  (`WildCropMarker.PRIZE_VIGOR_THRESHOLD`); the harvested root's real mass
+  (`ItemCatalog._PRODUCE_MASS_KG`) is scaled by the same multiplier via
+  `make_with_mass`, so a Prize specimen is a genuinely heavier physical
+  object, not just a bigger sprite.
+  `test_always_pulling_the_biggest_patches_trends_the_meadow_smaller`
+  confirms the actual selection-pressure payoff: always harvesting a
+  meadow's biggest patch measurably shrinks its mean vigor over time
+  (0.455 → 0.089 over 400 rounds in the pinned run) against an untouched
+  twin that doesn't drift. One real bug caught and fixed along the way:
+  the first seeding formula used salts identical except for a trailing
+  digit, which Godot's String hash correlates rather than treats as
+  independent (the exact, previously-documented `AnimalGenome._unit` bug)
+  — fixed by varying salt LENGTH per half instead, confirmed by resampling
+  the real seeding formula. Explicitly OUT of scope, not silently
+  dropped: linking vigor to WHICH of the 7 existing root/tuber art color
+  variants renders (those stay purely cosmetic, chosen by `sprite_seed`
+  independently of vigor), and the shared farmed/wild DNA model
+  `farming.md` calls for (still entirely unbuilt; vigor is wild-only for
+  now). Confirmed green directly against `main` after merge:
+  `test_wild_crop_patch.gd` (22/22), `test_wild_crop_marker.gd` (46/46),
+  `test_wild_crop_renderer.gd` (11/11).
 - ⬜ No player-tilled farming access point from this wild population yet.
 
 ### Carrion (`concept/carrion.md`)

@@ -13,6 +13,8 @@ const HoverTargetFinder = preload("res://src/rendering/hover_target_finder.gd")
 const ProceduralSoilSprite = preload("res://src/rendering/procedural_soil_sprite.gd")
 const IllustratedCropSprite = preload("res://src/rendering/illustrated_crop_sprite.gd")
 const SeasonalFoliage = preload("res://src/rendering/seasonal_foliage.gd")
+const ItemCatalog = preload("res://src/gameplay/item_catalog.gd")
+const WildCropPatch = preload("res://src/world/wild_crop_patch.gd")
 
 var marker: WildCropMarker
 var _drops: Array = []
@@ -70,6 +72,68 @@ func test_display_name_for_potato():
 	marker.growth = 1.0
 	add_child_autofree(marker)
 	assert_eq(marker.get_display_name(), "Potato")
+
+
+## A mature, genuinely high-vigor specimen reads as a find worth noticing,
+## not just another carrot -- prefixed onto the label the hover tooltip
+## already shows (see get_display_name's other callers/tests above).
+func test_a_high_vigor_mature_crop_is_labeled_prize():
+	marker.growth = 1.0
+	marker.vigor = 1.0
+	add_child_autofree(marker)
+	assert_eq(marker.get_display_name(), "Prize Carrot")
+
+
+## The population's own mean (0.5, an ordinary specimen) must NOT read as a
+## prize -- otherwise half the meadow would be labeled "Prize" and the word
+## would mean nothing.
+func test_an_ordinary_vigor_mature_crop_is_not_labeled_prize():
+	marker.growth = 1.0
+	marker.vigor = 0.5
+	add_child_autofree(marker)
+	assert_eq(marker.get_display_name(), "Carrot")
+
+
+## An immature plant never gets the Prize prefix even if it will grow up
+## into a genuinely high-vigor specimen -- the label names what a player
+## can actually SEE right now (a tiny sprout), not a trait that only pays
+## off once it's actually pullable.
+func test_a_high_vigor_seedling_is_not_labeled_prize():
+	marker.growth = 0.0
+	marker.vigor = 1.0
+	add_child_autofree(marker)
+	assert_eq(marker.get_display_name(), "Carrot Sprout")
+
+
+## PRIZE_VIGOR_THRESHOLD must actually BE the seeding distribution's own
+## PRIZE_VIGOR_PERCENTILE cutoff (CLAUDE.md: no eyeballed floats) -- not
+## just an algebraically-plausible-looking constant. Samples the REAL
+## WildCropPatch seeding formula (a big enough grid to get a real sample --
+## MAX_PATCHES caps any one instance's own patch count, so this pools many
+## independently-seeded instances) and checks the measured fraction at or
+## above the threshold lands close to what the percentile promises.
+func test_prize_threshold_actually_selects_about_the_top_decile_of_seeded_vigor():
+	var width := 60
+	var height := 60
+	var biome := PackedStringArray()
+	biome.resize(width * height)
+	biome.fill("grassland")
+
+	var at_or_above := 0
+	var total := 0
+	for seed_value in 40:
+		var sim := WildCropPatch.new("carrot", seed_value, width, height, biome)
+		for cell in sim.get_patch_cells():
+			total += 1
+			if sim.get_vigor(cell) >= WildCropMarker.PRIZE_VIGOR_THRESHOLD:
+				at_or_above += 1
+
+	assert_gt(total, 200, "precondition: a real pooled sample of seeded patches")
+	var measured_fraction := float(at_or_above) / float(total)
+	assert_almost_eq(
+		measured_fraction, 1.0 - WildCropMarker.PRIZE_VIGOR_PERCENTILE, 0.04,
+		"the threshold must actually select about the promised top share of real seeded vigor"
+	)
 
 
 # -- only a mature, not-already-pulling patch is pullable --------------------
@@ -143,6 +207,25 @@ func test_pull_finishes_and_drops_the_harvested_item():
 	assert_eq(_drops.size(), 1)
 	assert_eq(_drops[0].item.id, "carrot")
 	assert_true(marker.is_queued_for_deletion())
+
+
+## The harvested item's REAL mass (docs/concept/wild_crops.md's own "real
+## reference weight" framing, ItemCatalog._PRODUCE_MASS_KG) must actually
+## carry Root Vigor's effect -- a prize specimen is not just a bigger
+## sprite, it is a heavier one, which is what lets it also throw/knock back
+## harder than an ordinary one (Kick/HeldItemThrow already read mass_kg).
+func test_pull_finishes_with_a_vigor_scaled_real_mass():
+	marker.growth = 1.0
+	marker.vigor = 1.0
+	add_child_autofree(marker)
+	marker.begin_pull()
+	marker._process(CropPull.DURATION_SECONDS + 0.01)
+	var reference_mass: float = ItemCatalog.new().make("carrot").mass_kg
+	assert_almost_eq(
+		_drops[0].item.mass_kg,
+		reference_mass * WildCropMarker.vigor_mass_multiplier(1.0),
+		0.0001,
+	)
 
 
 func test_pull_finishing_calls_on_harvested_before_freeing():
@@ -330,6 +413,58 @@ func test_a_marker_nobody_told_about_the_season_renders_exactly_as_before():
 	add_child_autofree(marker)
 	assert_eq(marker.season_tint, Color.WHITE)
 	assert_eq(marker._leaves.modulate, Color.WHITE)
+
+
+# -- Root Vigor: a heritable size/quality trait (docs/concept/wild_crops.md)
+# --------------------------------------------------------------------------
+
+
+## Pins the MIN/MAX_VIGOR_MASS_MULTIPLIER range's own symmetry: the
+## population's own mean vigor (0.5) must be the range's exact identity
+## (1.0x), not an eyeballed pair of endpoints that merely happen to look
+## symmetric in a comment.
+func test_vigor_mass_multiplier_is_the_identity_at_the_populations_own_mean():
+	assert_almost_eq(WildCropMarker.vigor_mass_multiplier(0.5), 1.0, 0.0001)
+
+
+## The population's own mean vigor (0.5, see WildCropPatch.get_vigor's own
+## default) must draw at exactly the ordinary, un-nudged leaf size -- so
+## every marker built before vigor existed (every caller in every OTHER
+## test in this file, none of which set `vigor`) keeps rendering exactly as
+## before.
+func test_default_vigor_renders_leaves_at_their_ordinary_base_scale():
+	add_child_autofree(marker)
+	var illustrated := IllustratedCropSprite.new()
+	assert_almost_eq(marker._leaves.scale.x, illustrated.leaf_world_scale("carrot"), 0.0001)
+
+
+func test_higher_vigor_grows_visibly_bigger_leaves_than_lower_vigor():
+	var runt := WildCropMarker.new()
+	runt.crop_id = "carrot"
+	runt.vigor = 0.0
+	add_child_autofree(runt)
+
+	var giant := WildCropMarker.new()
+	giant.crop_id = "carrot"
+	giant.vigor = 1.0
+	add_child_autofree(giant)
+
+	assert_gt(giant._leaves.scale.x, runt._leaves.scale.x)
+
+
+## A vigor set before add_child (the renderer's own calling convention --
+## see spawn_markers/_build_marker) must still land on the leaves, the same
+## "catches up a value set before _ready" contract season_tint/growth honor.
+func test_a_vigor_set_before_ready_still_lands_on_the_leaves():
+	var runt := WildCropMarker.new()
+	runt.crop_id = "carrot"
+	var default_scale: float
+	# vigor==0.5 default -> base scale, so compare against a set()-before-
+	# ready 0.0 draw for a real, unambiguous difference.
+	runt.vigor = 0.0
+	add_child_autofree(runt)
+	default_scale = IllustratedCropSprite.new().leaf_world_scale("carrot")
+	assert_lt(runt._leaves.scale.x, default_scale)
 
 
 # -- a WILD plant grows in grass, not on a tilled mound -----------------------

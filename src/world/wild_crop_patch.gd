@@ -16,6 +16,7 @@ extends RefCounted
 ## a deliberate scope cut (see the concept doc's Status list).
 
 const TallGrass = preload("res://src/world/tall_grass.gd")
+const TreeGenome = preload("res://src/gameplay/tree_genome.gd")
 
 ## Chance (0..1) a given grassland cell starts with a crop patch. Well below
 ## TallGrass.SEED_CHANCE (0.20) -- a meadow is mostly grass with the
@@ -55,6 +56,44 @@ const SPREAD_PER_TICK := 1
 ## worth a real shared source of truth if a third crop is ever added).
 const _CROP_TERRITORY_ORDER := ["carrot", "potato"]
 
+## Root Vigor -- a heritable size/quality trait, same "average of two
+## salted-hash draws" bell shape FlyerPersonality._bell uses for boldness
+## (FlyerPersonality.BELL_HALVES), mirrored here rather than reinvented so
+## the same "unremarkable middle at 0.5, real spread either side" statistical
+## shape applies. Two draws (not one) is what makes the distribution a real
+## bell rather than a flat 0..1 -- see get_vigor's own doc comment for the
+## default this produces for an unplanted cell.
+##
+## _seed_vigor deliberately does NOT copy FlyerPersonality._unit's own salt
+## shape byte-for-byte, though -- see AnimalGenome._unit's doc comment
+## (src/gameplay/animal_genome.gd): two salts identical except for one
+## trailing digit ahead of an otherwise-fixed suffix come out CORRELATED
+## under Godot's String hash, not independent, which fattens the
+## distribution's tails well past a true two-draw average (measured r=0.57
+## for AnimalGenome's own "_animal_genome" suffix; FlyerPersonality's
+## "_personality" shape happens to measure a milder r=0.26, low enough to
+## scrape under ITS OWN tests' budget by luck, not by design -- so mirroring
+## it byte-for-byte here would have carried the same latent bug forward
+## without any of this crop code's own tests being tight enough to catch
+## it by luck too). This crop's own
+## test_prize_threshold_actually_selects_about_the_top_decile_of_seeded_vigor
+## (test_wild_crop_marker.gd) DID catch it empirically the first time
+## (measured ~22.75% at/above the promised top decile, not ~10%) before
+## _seed_vigor was changed to vary salt LENGTH per half
+## ("x".repeat(half + 1), AnimalGenome's own fix) instead of its trailing
+## digit.
+const VIGOR_BELL_HALVES := 2
+
+## How far a spread child's vigor can drift from its parent's, as a fraction
+## of vigor's own 0..1 range -- mirrors TreeGenome.MUTATION_AMOUNT's exact
+## "nudge by a clamped random direction x this amount x range" shape.
+## Reusing TreeGenome's own already-tested constant value directly (rather
+## than an independently chosen number) rather than a second, arbitrary
+## figure with no relationship to the first -- both are "how much can one
+## generation's heritable trait drift from its parent's" and there is no
+## reason a root crop's vigor should drift at some other unrelated rate.
+const VIGOR_MUTATION_AMOUNT := TreeGenome.MUTATION_AMOUNT
+
 
 ## Whether cell (x, y) belongs to `crop_id`'s share of the partition --
 ## every grassland cell in the world belongs to EXACTLY ONE crop's
@@ -76,6 +115,10 @@ var _seed_value: int
 
 ## Vector2i cell -> growth float (0..1; 1 is mature).
 var _patches: Dictionary = {}
+## Vector2i cell -> vigor float (0..1) -- Root Vigor, a heritable size/quality
+## trait, independent of growth (see docs/concept/wild_crops.md's "Root
+## Vigor" section and get_vigor's own doc comment for the default).
+var _vigor: Dictionary = {}
 var _spread_accumulator := 0.0
 var _spread_tick := 0
 
@@ -99,6 +142,16 @@ func has_crop(cell: Vector2i) -> bool:
 
 func get_growth(cell: Vector2i) -> float:
 	return _patches.get(cell, 0.0)
+
+
+## Root Vigor for `cell`, 0..1 -- a heritable size/quality trait, distinct
+## from growth (how far along THIS specimen is) the same way FlyerPersonality
+## keeps boldness distinct from age. Defaults to 0.5, the unremarkable
+## middle, for any cell not in `_vigor` -- an unplanted cell, or a save from
+## before vigor existed -- same convention FlyerPersonality.boldness_of
+## already uses for an empty trait dictionary.
+func get_vigor(cell: Vector2i) -> float:
+	return _vigor.get(cell, 0.5)
 
 
 ## Advances growth on every patch and, on a throttled interval, lets mature
@@ -127,8 +180,34 @@ func advance(delta: float, growth_modifier: float) -> void:
 
 
 ## Removes the patch at `cell`, returning true if there was a crop to pull.
+## Also forgets its vigor -- a grazed cell has no crop growing in it any
+## more, so a re-query (or a re-seed of the same cell some other way) must
+## not see a stale value left behind by whatever grew there before.
 func graze(cell: Vector2i) -> bool:
+	_vigor.erase(cell)
 	return _patches.erase(cell)
+
+
+## A founding cell's own Root Vigor -- the average of VIGOR_BELL_HALVES
+## independent salted-hash draws (see VIGOR_BELL_HALVES's own doc comment
+## for why the two salts vary by LENGTH, "x".repeat(half + 1), rather than
+## by trailing digit).
+func _seed_vigor(x: int, y: int) -> float:
+	var total := 0.0
+	for half in VIGOR_BELL_HALVES:
+		var salted := "%s_%d_%d_%d_vigor_%s" % [_crop_id, _seed_value, x, y, "x".repeat(half + 1)]
+		total += float(absi(hash(salted)) % 10000) / 10000.0
+	return total / float(VIGOR_BELL_HALVES)
+
+
+## A spread child's Root Vigor: the parent's own vigor, nudged by up to
+## VIGOR_MUTATION_AMOUNT of vigor's 0..1 range in a clamped random
+## direction -- exactly TreeGenome._nudge's shape. `salt` must be unique per
+## spread attempt (see _step_spread's callsite) so two children spreading on
+## the same tick from the same parent don't inherit an identical mutation.
+func _nudge_vigor(parent_vigor: float, salt: String) -> float:
+	var direction := (float(absi(hash("%s_vigor_dir" % salt)) % 10000) / 10000.0 - 0.5) * 2.0  # -1..1
+	return clampf(parent_vigor + direction * VIGOR_MUTATION_AMOUNT, 0.0, 1.0)
 
 
 func _seed_initial_patches() -> void:
@@ -142,8 +221,10 @@ func _seed_initial_patches() -> void:
 				continue
 			var roll := float(absi(hash("%s_%d_%d_%d_crop_seed" % [_crop_id, _seed_value, x, y])) % 10000) / 10000.0
 			if roll < SEED_CHANCE:
+				var cell := Vector2i(x, y)
 				# Initial crops start mature, like map-generated grass/trees.
-				_patches[Vector2i(x, y)] = 1.0
+				_patches[cell] = 1.0
+				_vigor[cell] = _seed_vigor(x, y)
 
 
 func _step_spread() -> void:
@@ -170,3 +251,5 @@ func _step_spread() -> void:
 		if _patches.has(target):
 			continue
 		_patches[target] = 0.0  # spread crops start immature and must grow
+		var mutation_salt := "%s_%d_%d_%d_vigor" % [_crop_id, _seed_value, _spread_tick, i]
+		_vigor[target] = _nudge_vigor(_vigor.get(parent, 0.5), mutation_salt)

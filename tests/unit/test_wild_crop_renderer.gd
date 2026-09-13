@@ -66,6 +66,18 @@ func test_spawned_markers_carry_the_crop_id_and_current_growth():
 		assert_eq(marker.growth, sim.get_growth(cell))
 
 
+## Root Vigor (docs/concept/wild_crops.md) has to actually reach the marker
+## that draws/harvests the cell -- pushed in the same way `growth` already
+## is, at spawn time.
+func test_spawned_markers_carry_the_sims_vigor():
+	var sim := WildCropPatch.new("carrot", 1, WIDTH, HEIGHT, _biome_all_grassland())
+	var markers := renderer.spawn_markers(parent, sim, "carrot", CHUNK_ORIGIN, TILE_SIZE)
+	assert_gt(markers.size(), 0, "precondition: this seed/biome produced at least one patch")
+	for cell in markers:
+		var marker: WildCropMarker = markers[cell]
+		assert_eq(marker.vigor, sim.get_vigor(cell))
+
+
 ## Retries several spread ticks rather than assuming one tick lands a new
 ## cell -- each tick's single pick (WildCropPatch.SPREAD_PER_TICK == 1) can
 ## land on an already-occupied neighbor and do nothing that round, same as
