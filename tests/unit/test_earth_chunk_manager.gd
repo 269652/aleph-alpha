@@ -4075,6 +4075,97 @@ func test_build_furniture_at_global_does_nothing_for_an_unloaded_chunk():
 	assert_false(manager.build_furniture_at_global(9999 * 32, 9999 * 32, "wood_chair"))
 
 
+# -- generation-time furnishing (docs/concept/housing.md's "Occupation-
+# themed decor" section): furnish_house_at_global is what VillageRenderer
+# calls right after stamp_structure_at_global writes a house's own floor/
+# wall pieces, so each real occupation's HouseDecor set actually lands in
+# the world instead of staying paper-only data. A 3-wide room (one door
+# cell replacing a wall tile, three real interior floor cells) is used
+# instead of _stamp_test_hut (only one floor cell) so multi-piece sets have
+# real room to land in.
+
+func _stamp_test_room(chunk_coord: Vector2i, floor_width: int) -> Dictionary:
+	var origin := chunk_coord * EarthChunkManager.CHUNK_SIZE + Vector2i(10, 10)
+	var width := floor_width + 2  # a wall cell on each side of the floor row
+	var ground := {}
+	for x in range(0, width):
+		ground[Vector2i(x, 0)] = "wood_wall"
+		ground[Vector2i(x, 2)] = "wood_wall"
+		ground[Vector2i(x, 1)] = "wood_wall" if (x == 0 or x == width - 1) else "wood_floor"
+	ground[Vector2i(1, 0)] = "wood_door"
+	manager.stamp_structure_at_global(chunk_coord, origin, ground, {})
+	return {"origin": origin, "ground": ground}
+
+
+func test_furnish_house_at_global_places_every_piece_in_a_real_furniture_set():
+	manager.update(_berlin_tile)
+	var chunk_coord := _chunk_coord_for_tile(_berlin_tile)
+	var room := _stamp_test_room(chunk_coord, 3)
+
+	var placed: int = manager.furnish_house_at_global(
+		chunk_coord, room["origin"], room["ground"], ["wood_chair", "wood_table", "wood_rug"]
+	)
+
+	assert_eq(placed, 3)
+	var origin: Vector2i = room["origin"]
+	var found := {}
+	for x in range(1, 4):
+		var piece := manager.furniture_at_global(origin.x + x, origin.y + 1)
+		if piece != "":
+			found[piece] = true
+	assert_true(found.has("wood_chair"))
+	assert_true(found.has("wood_table"))
+	assert_true(found.has("wood_rug"))
+
+
+func test_furnish_house_at_global_never_overwrites_the_floor_beneath_it():
+	manager.update(_berlin_tile)
+	var chunk_coord := _chunk_coord_for_tile(_berlin_tile)
+	var room := _stamp_test_room(chunk_coord, 3)
+
+	manager.furnish_house_at_global(chunk_coord, room["origin"], room["ground"], ["wood_chair"])
+
+	var origin: Vector2i = room["origin"]
+	for x in range(1, 4):
+		assert_eq(manager.modification_at_global(origin.x + x, origin.y + 1), "wood_floor")
+
+
+## More pieces than real floor cells: the ones that fit land, the rest are
+## silently skipped -- an odd-shaped or small house is still furnished,
+## never left empty just because its own real set didn't all fit.
+func test_furnish_house_at_global_stops_placing_once_floor_space_runs_out():
+	manager.update(_berlin_tile)
+	var chunk_coord := _chunk_coord_for_tile(_berlin_tile)
+	var room := _stamp_test_room(chunk_coord, 1)  # exactly one real floor cell
+
+	var placed: int = manager.furnish_house_at_global(
+		chunk_coord, room["origin"], room["ground"], ["wood_chair", "wood_table", "wood_rug"]
+	)
+
+	assert_eq(placed, 1)
+
+
+func test_furnish_house_at_global_paints_onto_the_furniture_layer():
+	var furniture_layer := TileMapLayer.new()
+	manager.set_furniture_layer(furniture_layer)
+	manager.update(_berlin_tile)
+	var chunk_coord := _chunk_coord_for_tile(_berlin_tile)
+	var room := _stamp_test_room(chunk_coord, 1)
+	var origin: Vector2i = room["origin"]
+
+	manager.furnish_house_at_global(chunk_coord, origin, room["ground"], ["wood_chair"])
+
+	assert_ne(furniture_layer.get_cell_source_id(origin + Vector2i(1, 1)), -1)
+	furniture_layer.free()
+
+
+func test_furnish_house_at_global_does_nothing_for_an_unloaded_chunk():
+	var placed: int = manager.furnish_house_at_global(
+		Vector2i(9999, 9999), Vector2i(9999 * 32, 9999 * 32), {Vector2i(1, 1): "wood_floor"}, ["wood_chair"]
+	)
+	assert_eq(placed, 0)
+
+
 # -- geology: a real per-chunk Strata sim exists for every loaded chunk ------
 # (see docs/concept/geology.md). Cave-entrance discovery/reveal itself is
 # exercised directly against GeologyRenderer (test_geology_renderer.gd) --
