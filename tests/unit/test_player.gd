@@ -401,6 +401,50 @@ func test_craft_sagewerk_succeeds_with_enough_carpentry_skill():
 	assert_eq(player.inventory_counts().get("sagewerk", 0), 1)
 
 
+# -- learning a blueprint permanently unlocks a recipe (docs/concept/ -------
+# -- workforce.md's "Blueprints: obtaining one" section) ---------------------
+#
+# Mirrors items.md's own already-specified spell-scroll pattern: "reading one
+# attempts to permanently learn ... consumed only on a successful learn."
+
+func test_try_learn_blueprint_consumes_the_item_and_unlocks_the_recipe():
+	_give("blueprint_small_house")
+
+	assert_true(player._try_learn_blueprint("blueprint_small_house"))
+
+	assert_eq(player.inventory_counts().get("blueprint_small_house", 0), 0)
+	assert_true(chunk_manager.has_unlocked_blueprint("small_house"))
+
+
+## An item with no real recipe behind it (or not a blueprint at all) teaches
+## nothing -- an invalid transition does nothing, same as everywhere else in
+## this codebase, and the item is NOT consumed on a no-op.
+func test_try_learn_blueprint_fails_and_keeps_the_item_for_a_non_blueprint_item():
+	_give("wood")
+
+	assert_false(player._try_learn_blueprint("wood"))
+
+	assert_eq(player.inventory_counts().get("wood", 0), 1)
+
+
+## Re-reading an already-known blueprint (a duplicate purchase, or /give
+## twice) must not re-teach it -- and, matching the spell-scroll precedent
+## exactly ("consumed only on a successful learn"), the second copy is NOT
+## consumed by the failed attempt.
+func test_try_learn_blueprint_fails_and_keeps_the_item_when_already_known():
+	_give("blueprint_small_house")
+	player._try_learn_blueprint("blueprint_small_house")
+	_give("blueprint_small_house")
+
+	assert_false(player._try_learn_blueprint("blueprint_small_house"))
+
+	assert_eq(player.inventory_counts().get("blueprint_small_house", 0), 1)
+
+
+func test_try_learn_blueprint_fails_gracefully_with_no_such_item_carried():
+	assert_false(player._try_learn_blueprint("blueprint_small_house"))
+
+
 # -- collecting a Sägewerk's real StructureStock straight into inventory ------
 #
 # docs/concept/timber_construction.md's "Storage, logistics, and the

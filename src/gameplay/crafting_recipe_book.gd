@@ -146,6 +146,29 @@ const _RECIPES := {
 		"output": {"item_id": "sagewerk", "count": 1},
 		"required_skill": {"stat_name": "carpentry_level", "level": 2.0},
 	},
+	# The first blueprint-gated house (see docs/concept/workforce.md). Never
+	# routed through Player.craft() -- a house is a real multi-piece
+	# ConstructionProject, not a single craftable item -- but it needs a
+	# real recipe anyway, the same way ConstructionProject.blueprint_id's
+	# own doc comment already requires for sagewerk/storage: this is what
+	# ConstructionLabor reads its labor-hours from and what the build-or-
+	# hire fork reads its skill threshold from. "output" is symbolic of the
+	# structure the ledger tracks (matching that same framing) and is
+	# deliberately NOT also an ItemCatalog entry -- nothing ever holds a
+	# "small_house" in a bag. required_skill is ONE full carpentry_1 node
+	# below the sagewerk's own carpentry_level 2.0, so a player's very
+	# first blueprint is buildable with a single skill-web allocation.
+	# inputs is pinned to agree with HouseBlueprint's own real "hut_tiny"
+	# piece list, costed through BuildingPiece.cost_of -- see
+	# test_small_house_recipe_inputs_agree_with_the_hut_tiny_blueprints_
+	# real_cost, the same "two real numbers must agree, tested" discipline
+	# log_to_balken/log_to_planke already established for the Sägewerk's
+	# own shaping recipes.
+	"small_house": {
+		"inputs": [{"item_id": "wood", "count": 30}],
+		"output": {"item_id": "small_house", "count": 1},
+		"required_skill": {"stat_name": "carpentry_level", "level": 1.0},
+	},
 	# The Sägewerk's own log -> Balken/Planke shaping, mirrored here ONLY so
 	# NeedResolver (docs/concept/production_chains.md) can reason about
 	# beam/plank's real dependency chain -- the Sägewerk's actual, already-

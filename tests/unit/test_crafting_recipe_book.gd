@@ -35,7 +35,9 @@ func test_recipe_ids_returns_all_defined_recipes():
 	# + starting kit (docs/concept/starting_kit.md): iron_sword, iron_axe
 	# (2 more) -- both previously had NO recipe at all, reachable only via
 	# /give, the shop, or the old hardcoded starting-kit grant.
-	assert_eq(ids.size(), 40)
+	# + workforce (docs/concept/workforce.md): small_house, the first
+	# blueprint-gated, multi-piece construction-ledger recipe (1 more).
+	assert_eq(ids.size(), 41)
 
 
 func test_iron_sword_is_craftable_from_ingots_and_a_stick():
@@ -204,6 +206,50 @@ func test_sagewerk_is_craftable_from_logs():
 	for i in inputs:
 		ids.append(i["item_id"])
 	assert_true(ids.has("log"), "a sawmill should be built from real logs, not conjured wood")
+
+
+## The first blueprint-gated house (docs/concept/workforce.md's "Recipe-
+## gated construction" section): deliberately ONE full carpentry_1 node
+## below the sagewerk's own carpentry_level 2.0, so a player's very first
+## blueprint is buildable with a single skill-web allocation. This recipe is
+## never routed through Player.craft() (a house is a real multi-piece
+## ConstructionProject, not a single craftable item) -- its "output" is
+## symbolic of the structure the construction ledger tracks, the same
+## framing ConstructionProject.blueprint_id's own doc comment already uses
+## for sagewerk/storage, and it is deliberately NOT also an ItemCatalog
+## entry, since nothing ever holds a "small_house" in a bag.
+func test_small_house_recipe_requires_carpentry_one_level_below_sagewerk():
+	assert_true(book.recipe_ids().has("small_house"))
+	assert_eq(book.recipe_output("small_house")["item_id"], "small_house")
+	var required_skill := book.recipe_required_skill("small_house")
+	assert_eq(required_skill["stat_name"], "carpentry_level")
+	assert_eq(required_skill["level"], 1.0)
+
+
+## Pinned to agree with HouseBlueprint's own real "hut_tiny" piece list (the
+## smallest catalog shape -- see house_blueprint.gd's own BLUEPRINT_IDS),
+## costed through the exact same BuildingPiece.cost_of every other piece in
+## the game already prices through -- the same "two real numbers must agree,
+## tested" discipline test_log_to_balken_and_log_to_planke_agree_with_
+## sagewerk_production_costs already established for the Sägewerk's own
+## shaping recipes. hut_tiny has zero windows, so its total cost does not
+## depend on which seed places its one door -- every wall cell costs the
+## same regardless of which one becomes the door.
+func test_small_house_recipe_inputs_agree_with_the_hut_tiny_blueprints_real_cost():
+	const HouseBlueprint = preload("res://src/gameplay/house_blueprint.gd")
+	const BuildingPiece = preload("res://src/gameplay/building_piece.gd")
+	var house_blueprint := HouseBlueprint.new()
+	var total_wood := 0
+	for pieces in [house_blueprint.build("hut_tiny", 0), house_blueprint.build_roofs("hut_tiny", 0)]:
+		for cell in pieces:
+			var cost: Dictionary = BuildingPiece.cost_of(pieces[cell])
+			total_wood += int(cost.get("wood", 0))
+	assert_gt(total_wood, 0, "precondition: hut_tiny really does cost real wood")
+
+	var inputs := book.recipe_inputs("small_house")
+	assert_eq(inputs.size(), 1, "hut_tiny is an all-wood shape -- one input, no invented second material")
+	assert_eq(inputs[0]["item_id"], "wood")
+	assert_eq(inputs[0]["count"], total_wood)
 
 
 func test_smelting_and_forge_recipes_exist():

@@ -1638,6 +1638,53 @@ func record_player_settled_if_new(settlement_id: String) -> bool:
 	return true
 
 
+## item_id -> the CraftingRecipeBook recipe id it teaches (docs/concept/
+## workforce.md's "Blueprints: obtaining one" section). A plain lookup
+## table, not a reflection trick over ItemCatalog's own "blueprint" kind --
+## the same "explicit and small" convention NpcIdentity.WORK_LOCATION_BY_
+## OCCUPATION already sets for a similarly small id->id mapping.
+const BLUEPRINT_RECIPE_BY_ITEM_ID := {
+	"blueprint_small_house": "small_house",
+}
+
+
+## Whether the player has already learned `recipe_id` from a blueprint.
+## Reads the event history straight back rather than caching it in a
+## session-lifetime dict the way `_settlement_status` needs seeding for --
+## this is a rare, low-frequency check (once per attempted build/learn),
+## never a per-frame hot path, so there is nothing here that could go stale
+## across a save/load: a fresh EarthChunkManager fed the same persisted
+## event history answers this correctly with no separate reload path
+## needed.
+func has_unlocked_blueprint(recipe_id: String) -> bool:
+	for event in _event_store.events_for_entity(PlayerIdentity.PLAYER_ENTITY_ID):
+		if event.type == "blueprint_learned" and event.tags.has(recipe_id):
+			return true
+	return false
+
+
+## Records that the player has permanently learned `recipe_id` from a
+## blueprint (docs/concept/workforce.md) -- mirrors items.md's own already-
+## specified spell-scroll pattern: "reading one attempts to permanently
+## learn ... consumed only on a successful learn." `Player._try_learn_
+## blueprint` only removes the item from inventory when this returns true.
+##
+## Idempotent, the same "an invalid transition does nothing" discipline
+## record_player_settled_if_new already applies above: learning an
+## already-known recipe teaches nothing a second time, so a duplicate
+## blueprint (a second purchase, a stray /give) is a real no-op rather than
+## a second identical event padding the store forever.
+func record_blueprint_learned_if_new(recipe_id: String) -> bool:
+	if has_unlocked_blueprint(recipe_id):
+		return false
+	var learned := Event.new("blueprint_learned", _world_age_seconds)
+	learned.actors = [PlayerIdentity.PLAYER_ENTITY_ID]
+	learned.tags = [recipe_id]
+	_event_store.append(learned)
+	_memory_store.witness_event(learned, _world_age_seconds)
+	return true
+
+
 ## Contracts and their lifecycle (see docs/emergence/03-contracts-property-
 ## economy.md "Contracts") -- one more piece of shared world state alongside
 ## the stores above.

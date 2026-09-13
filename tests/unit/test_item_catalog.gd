@@ -114,6 +114,22 @@ func test_catalog_has_smelting_items_and_iron_armor():
 	assert_eq(catalog.make("iron_helm").equip_slot_name(), "head")
 
 
+## The first blueprint (docs/concept/workforce.md's "Blueprints: obtaining
+## one" section) -- a real ItemCatalog entry of a NEW "blueprint" kind,
+## deliberately unrelated to HouseBlueprint/BuildingBlueprint/
+## ConstructionProject.blueprint_id (see that doc's own disambiguation
+## section: none of those three is an Item at all). Non-stackable like the
+## other document/instrument tools (deed, ledger, field_journal) -- a
+## blueprint is read once, not carried in bulk.
+func test_blueprint_small_house_is_a_real_non_stackable_blueprint_kind_item():
+	assert_true(catalog.has("blueprint_small_house"))
+	assert_eq(catalog.kind_of("blueprint_small_house"), "blueprint")
+	var item := catalog.make("blueprint_small_house")
+	assert_eq(item.kind, "blueprint")
+	assert_eq(item.max_stack, 1)
+	assert_gt(item.display_name.length(), 0)
+
+
 func test_catalog_has_a_fishing_rod():
 	assert_true(catalog.has("fishing_rod"))
 	assert_eq(catalog.make("fishing_rod").kind, "tool")

@@ -13889,3 +13889,54 @@ func test_bare_ground_names_no_flower():
 
 func test_unloaded_ground_names_no_flower():
 	assert_eq(manager.flower_name_at(Vector2(999999.0, 999999.0)), "")
+
+
+# -- workforce: learning a blueprint permanently unlocks a recipe (docs/ ----
+# concept/workforce.md's "Blueprints: obtaining one, and what it unlocks")
+#
+# Event-sourced, the same "the fact IS the event history" discipline every
+# other record_*_if_new method in this file already uses (see
+# record_player_settled_if_new/record_path_worn_if_new) -- has_unlocked_
+# blueprint reads the history straight back rather than caching it in a
+# session-lifetime dict, so there is nothing here that could go stale
+# across a save/load the way _settlement_status needs seeding for: a fresh
+# EarthChunkManager fed the same persisted event history answers has_
+# unlocked_blueprint correctly with no separate reload path to test.
+
+func test_record_blueprint_learned_if_new_records_a_real_event():
+	assert_true(manager.record_blueprint_learned_if_new("small_house"))
+
+	var learned: Array = manager.event_store().events_of_type("blueprint_learned")
+	assert_eq(learned.size(), 1)
+	assert_eq(learned[0].actors, [PlayerIdentity.PLAYER_ENTITY_ID])
+	assert_eq(learned[0].tags, ["small_house"])
+
+
+func test_has_unlocked_blueprint_is_false_before_learning():
+	assert_false(manager.has_unlocked_blueprint("small_house"))
+
+
+func test_has_unlocked_blueprint_is_true_after_learning():
+	manager.record_blueprint_learned_if_new("small_house")
+	assert_true(manager.has_unlocked_blueprint("small_house"))
+
+
+## Reading the SAME blueprint a second time (or /give-ing a duplicate) must
+## not re-teach an already-known recipe -- an invalid transition does
+## nothing, the same discipline every other coordinator in this file
+## already applies (see record_player_settled_if_new's own "does not count
+## them twice" sibling test).
+func test_record_blueprint_learned_if_new_is_idempotent():
+	assert_true(manager.record_blueprint_learned_if_new("small_house"))
+	assert_false(manager.record_blueprint_learned_if_new("small_house"))
+
+	assert_eq(manager.event_store().events_of_type("blueprint_learned").size(), 1)
+
+
+## Two different recipes are two independent facts -- learning one must
+## never falsely report the other as already known.
+func test_unlocked_blueprints_are_tracked_independently_per_recipe():
+	manager.record_blueprint_learned_if_new("small_house")
+
+	assert_true(manager.has_unlocked_blueprint("small_house"))
+	assert_false(manager.has_unlocked_blueprint("some_other_recipe"))

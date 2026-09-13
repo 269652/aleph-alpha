@@ -288,6 +288,14 @@ const _ITEMS := {
 	# "Harvesting honey", BeeHiveMarker.harvest) -- a stackable food item,
 	# the same "kind" as fruit/meat/mushrooms above.
 	"honey": ["Honey", "food", 20, 0.0],
+	# The first blueprint (see docs/concept/workforce.md). A NEW "blueprint"
+	# kind, deliberately unrelated to HouseBlueprint/BuildingBlueprint/
+	# ConstructionProject.blueprint_id -- none of those three is an Item at
+	# all (see that doc's own disambiguation section). Non-stackable like
+	# the other document/instrument tools above (deed, ledger,
+	# field_journal): read once via Player._try_learn_blueprint, not
+	# carried in bulk.
+	"blueprint_small_house": ["Blueprint: Small House", "blueprint", 1, 0.0],
 }
 
 
