@@ -13940,3 +13940,71 @@ func test_unlocked_blueprints_are_tracked_independently_per_recipe():
 
 	assert_true(manager.has_unlocked_blueprint("small_house"))
 	assert_false(manager.has_unlocked_blueprint("some_other_recipe"))
+
+
+# -- workforce: the player actually builds a house (docs/concept/ -----------
+# workforce.md's "Starting a real player-owned construction project"
+# section) -- can_build_house_from_blueprint is a pure query (never mutates,
+# never wastes anything), stamp_house_and_grant_ownership does the real
+# work assuming validity was already checked, matching stamp_structure_at_
+# global's own "just do it" contract one layer down.
+
+## Nothing about "is this recipe unlocked" needs a loaded chunk at all --
+## checked and refused before this function ever touches _loaded_chunks,
+## so calling it on a totally bare manager (no update() paid for) is a
+## real, cheap, meaningful test rather than a shortcut around a slow one.
+func test_can_build_house_from_blueprint_fails_when_not_unlocked():
+	assert_false(manager.can_build_house_from_blueprint("small_house", Vector2i(5, 5)))
+
+
+func test_can_build_house_from_blueprint_fails_for_a_recipe_with_no_house_shape():
+	manager.record_blueprint_learned_if_new("not_a_house_recipe")
+	assert_false(manager.can_build_house_from_blueprint("not_a_house_recipe", Vector2i(5, 5)))
+
+
+func test_can_build_house_from_blueprint_fails_when_the_chunk_is_not_loaded():
+	manager.record_blueprint_learned_if_new("small_house")
+	assert_false(manager.can_build_house_from_blueprint("small_house", Vector2i(99999, 99999)))
+
+
+## A real loaded chunk, freshly generated, has nowhere already occupied --
+## expensive (a real manager.update()), so this earns its keep by covering
+## both the success path AND the "already occupied" refusal in one fixture,
+## the same way test_player.gd's own expensive-fixture tests already
+## economize.
+func test_can_build_house_from_blueprint_on_a_real_loaded_chunk():
+	manager.record_blueprint_learned_if_new("small_house")
+	manager.update(Vector2i(0, 0))
+
+	assert_true(
+		manager.can_build_house_from_blueprint("small_house", Vector2i(1, 1)),
+		"free ground in a freshly-generated chunk should be buildable"
+	)
+
+	manager.build_at_global(1, 1, "campfire")
+	assert_false(
+		manager.can_build_house_from_blueprint("small_house", Vector2i(1, 1)),
+		"a footprint overlapping an existing structure must be refused"
+	)
+
+
+## Assumes validity was already checked (the same contract stamp_structure_
+## at_global itself already carries) -- this is the "just do it" half, real
+## pieces landing in the real chunk and a real, COMPLETE, owned
+## ConstructionProject coming out the other end.
+func test_stamp_house_and_grant_ownership_stamps_real_pieces_and_grants_property():
+	manager.update(Vector2i(0, 0))
+	var household := manager.household_store().form_household(PlayerIdentity.PLAYER_ENTITY_ID)
+
+	var project_id := manager.stamp_house_and_grant_ownership("small_house", Vector2i(1, 1), household.id)
+
+	assert_ne(project_id, "", "a real project id should come back")
+	var project := manager.construction_project_store().get_project(project_id)
+	assert_not_null(project)
+	assert_eq(project.status, ConstructionProject.Status.COMPLETE)
+	assert_eq(project.household_id, household.id)
+	assert_true(household.property.has(project.property_id()))
+	# The real hut_tiny shape landed for real -- a door somewhere, real
+	# walls, a real floor, not just ledger bookkeeping with nothing in the
+	# world to show for it.
+	assert_eq(manager.modification_at_global(2, 2), "wood_floor")

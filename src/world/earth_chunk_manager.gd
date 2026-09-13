@@ -156,6 +156,7 @@ const MarketStorePersistence = preload("res://src/emergence/market_store_persist
 const CraftingRecipeBook = preload("res://src/gameplay/crafting_recipe_book.gd")
 const ConstructionProject = preload("res://src/emergence/construction_project.gd")
 const ConstructionProjectStore = preload("res://src/emergence/construction_project_store.gd")
+const HouseBlueprint = preload("res://src/gameplay/house_blueprint.gd")
 const SettlementSpareCapacity = preload("res://src/emergence/settlement_spare_capacity.gd")
 const SettlementBuildDecision = preload("res://src/emergence/settlement_build_decision.gd")
 const Institution = preload("res://src/emergence/institution.gd")
@@ -1684,6 +1685,96 @@ func record_blueprint_learned_if_new(recipe_id: String) -> bool:
 	_event_store.append(learned)
 	_memory_store.witness_event(learned, _world_age_seconds)
 	return true
+
+
+## recipe_id -> the HouseBlueprint shape id it stamps (docs/concept/
+## workforce.md's "Starting a real player-owned construction project"
+## section) -- a plain lookup table, the same "explicit and small"
+## convention BLUEPRINT_RECIPE_BY_ITEM_ID/NpcIdentity.WORK_LOCATION_BY_
+## OCCUPATION already set, rather than parsing the recipe id itself or
+## reflecting over HouseBlueprint's own catalog.
+const HOUSE_BLUEPRINT_SHAPE_BY_RECIPE_ID := {
+	"small_house": "hut_tiny",
+	"cottage": "cottage_bright",
+}
+
+
+## A pure query: could `recipe_id`'s house actually be built at
+## `origin_tile` (its global top-left) right now? Never mutates anything
+## and never wastes material -- the caller (Player._try_build_house_from_
+## blueprint) only calls Player.craft's own atomic skill+material gate
+## once this already holds, so nothing is ever consumed on a placement
+## that was going to be refused anyway.
+##
+## Checks, in order: the blueprint must be unlocked, the recipe must map
+## to a real HouseBlueprint shape, the target chunk must be loaded, and
+## every cell the shape would occupy must be genuinely free (no existing
+## `modifications` entry there -- you cannot build over an existing
+## structure or terrain feature). Terrain buildability (water/cliff) is
+## deliberately NOT checked yet -- the same simplification BuilderMarker's
+## own `_buildable_ground` already accepts (a bare `return true`), a
+## named, honest gap rather than a silent one; see workforce.md's own
+## Open Questions.
+func can_build_house_from_blueprint(recipe_id: String, origin_tile: Vector2i) -> bool:
+	if not has_unlocked_blueprint(recipe_id):
+		return false
+	var shape_id: String = HOUSE_BLUEPRINT_SHAPE_BY_RECIPE_ID.get(recipe_id, "")
+	if shape_id == "":
+		return false
+	var chunk_coord := _chunk_coord_for_tile(origin_tile)
+	if not _loaded_chunks.has(chunk_coord):
+		return false
+	var ground_pieces := HouseBlueprint.new().build(shape_id, _house_site_seed(chunk_coord, origin_tile, recipe_id))
+	if ground_pieces.is_empty():
+		return false
+	for local_cell in ground_pieces:
+		var global_cell: Vector2i = origin_tile + local_cell
+		if modification_at_global(global_cell.x, global_cell.y) != "":
+			return false
+	return true
+
+
+## A real, deterministic seed for `recipe_id`'s house AT this exact site --
+## the same "deterministic from a real key, not a random roll" philosophy
+## this whole file already applies everywhere else (NpcIdentity, tree/
+## flower placement, ...). Reusing ConstructionProject.id_for_site's own
+## key (chunk_coord + LOCAL origin + recipe_id) rather than inventing a
+## second site key, so two calls describing the same site+blueprint always
+## resolve to the exact same door/window placement.
+func _house_site_seed(chunk_coord: Vector2i, origin_tile: Vector2i, recipe_id: String) -> int:
+	var local_origin := origin_tile - chunk_coord * CHUNK_SIZE
+	return absi(hash(ConstructionProject.id_for_site(chunk_coord, local_origin, recipe_id)))
+
+
+## The real work, assuming can_build_house_from_blueprint already held --
+## the same "just do it" contract stamp_structure_at_global itself already
+## carries one layer down. Stamps the real shape into the world (ground +
+## roof pieces), then creates and immediately completes a real, player-
+## owned ConstructionProject (docs/concept/workforce.md: instant, like
+## every other player craft action -- the player already has the skill
+## and has already paid the material by the time this is called; contrast
+## the not-yet-built hire-a-carpenter path, which genuinely takes real
+## time because someone else has to walk there and do the work).
+##
+## Returns the real project id, or "" without touching anything if
+## `recipe_id` doesn't resolve to a real shape (the one check worth
+## repeating here rather than trusting a caller that skipped can_build_
+## house_from_blueprint entirely).
+func stamp_house_and_grant_ownership(recipe_id: String, origin_tile: Vector2i, household_id: String) -> String:
+	var shape_id: String = HOUSE_BLUEPRINT_SHAPE_BY_RECIPE_ID.get(recipe_id, "")
+	if shape_id == "":
+		return ""
+	var chunk_coord := _chunk_coord_for_tile(origin_tile)
+	var seed_value := _house_site_seed(chunk_coord, origin_tile, recipe_id)
+	var house_blueprint := HouseBlueprint.new()
+	var ground_pieces := house_blueprint.build(shape_id, seed_value)
+	var roof_pieces := house_blueprint.build_roofs(shape_id, seed_value)
+	stamp_structure_at_global(chunk_coord, origin_tile, ground_pieces, roof_pieces)
+
+	var local_origin := origin_tile - chunk_coord * CHUNK_SIZE
+	var project := _construction_project_store.start_project(chunk_coord, local_origin, recipe_id, household_id)
+	_construction_project_store.complete_project(project.id, _household_store)
+	return project.id
 
 
 ## Contracts and their lifecycle (see docs/emergence/03-contracts-property-
