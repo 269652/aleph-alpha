@@ -244,8 +244,24 @@ Hall is also where a settlement surfaces a real production demand (reusing
 `NeedResolver`/`ConstructionPriority`'s existing recipe-graph walk) and
 villagers reach a real theory-of-mind consensus about who takes it on.
 That doc's own consensus mechanism (`NpcRoleConsensus`) is real and
-tested; the Meeting-Hall-reads-a-demand and winner-gets-reassigned halves
-of that pipeline are not yet built — see that doc's own Status.
+tested; the winner-gets-reassigned half of that pipeline is not yet built
+— see that doc's own Status.
+
+**Divergence, noted honestly**: the Meeting-Hall-reads-a-demand half above
+is now real — but reachable today via a deliberately SIMPLER construction
+path than this section's own "real trigger" above specifies. `"meeting_hall"`
+is a real `ItemCatalog` placeable (`kind = "placeable"`, the same
+single-tile family `campfire`/`furnace`/`sagewerk`/`storage`/`farm`
+already belong to), built directly via the ordinary crafting recipe + the
+existing `build_at_global` path — not yet the real multi-piece
+`CivicBlueprint` shape or the institution-formation-crossing
+`ConstructionProject` trigger this section specs above. That richer
+version (a real footprint, a real automatic settlement-triggered build,
+the `ConstructionProjectStore.complete_project` injected-`Callable` seam)
+stays a genuine, unbuilt follow-up — this pass's own scope was "wire the
+already-real demand computation to a buildable Meeting Hall," not "build
+the Meeting Hall's own eventual construction mechanism," and it says so
+plainly rather than quietly reinterpreting this section's spec.
 
 ### Granary
 

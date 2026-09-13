@@ -242,6 +242,14 @@ const _ITEMS := {
 	# The wooden fence (see docs/concept/npc_farm_production.md): gates a
 	# Farm's Farmer -- no Farmer moves in until a real fence stands nearby.
 	"wooden_fence": ["Wooden Fence", "placeable", 5, 0.0],
+	# The Meeting Hall (see docs/concept/civic_construction.md,
+	# docs/concept/npc_role_consensus.md): a settlement's real civic seat,
+	# where a City Hall's own "compute demands" step runs. Same placeable
+	# family as farm/sagewerk/storage/wooden_fence -- a single-tile
+	# structure, not yet the richer multi-piece CivicBlueprint shape
+	# civic_construction.md's own fuller spec describes (see that doc's own
+	# honestly-noted divergence).
+	"meeting_hall": ["Meeting Hall", "placeable", 5, 0.0],
 	# A stone check dam (see docs/concept/rivers.md). The id is deliberately
 	# the SAME string as its BuildingPiece id: build_at_global writes
 	# whatever id it is handed into chunk.modifications, so sharing one

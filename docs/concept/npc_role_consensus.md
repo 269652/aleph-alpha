@@ -185,10 +185,16 @@ shortfall in today's real recipe book (see pillar 4's own honest
 inheritance of that gap), `demands_for` simply returns an empty list — a
 silent, discoverable absence, not an invented placeholder demand.
 
-**Still not built**: `civic_construction.md`'s already-speced Meeting Hall
-itself (construction trigger, physical footprint) stays unimplemented, so
-nothing yet gates `demands_for` behind "a City Hall must exist first," and
-nothing yet calls it from live settlement-tick code — see Status.
+**Now wired**: `"meeting_hall"` is a real, buildable `ItemCatalog`
+placeable (see `civic_construction.md`'s own honestly-noted divergence —
+the simple single-tile path, not yet the richer institution-formation-
+triggered multi-piece one that doc still specs). `EarthChunkManager.
+meeting_hall_demands_near(global_x, global_y)` returns `[]` when no real
+Meeting Hall stands within `MEETING_HALL_DEMAND_RADIUS_TILES`, and
+otherwise calls `SettlementDemand.demands_for` against the SAME real
+settlement state (`market.stock`, `_present_structure_ids_for_settlement_
+chunk`) `_apply_settlement_build_decision` already reads — a City Hall now
+genuinely computes a real demand once built, not just in theory.
 
 ### Redirecting a real villager into the winning role (named follow-up, not this pass)
 
@@ -266,11 +272,13 @@ step, reusing `ConstructionPriority`/`NeedResolver` over every real
 including the real "wood" (sagewerk) case and the abstract "heat_source"
 case, honestly reported rather than resolved.
 
-⬜ City Hall / Meeting Hall construction itself —
-[civic_construction.md](civic_construction.md)'s own Meeting Hall stays
-unimplemented (no physical structure, no institution-formation trigger),
-so nothing yet gates `demands_for` behind a real built City Hall, and
-nothing in live settlement-tick code calls it yet.
+✅ `meeting_hall` is a real, buildable `ItemCatalog` placeable, and
+`EarthChunkManager.meeting_hall_demands_near` gates `SettlementDemand.
+demands_for` behind a real one standing nearby — real and tested. See
+`civic_construction.md`'s own honestly-noted divergence: this is the
+simple single-tile buildable path, not yet that doc's richer
+institution-formation-triggered multi-piece `CivicBlueprint` construction
+— which stays a genuine, unbuilt follow-up.
 
 ⬜ Redirecting the winning candidate into an actual real `NpcIdentity`/
 `NpcMarker` doing the job — blocked on the same not-yet-real
