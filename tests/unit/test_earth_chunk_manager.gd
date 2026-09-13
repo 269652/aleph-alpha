@@ -3992,6 +3992,89 @@ func test_update_shows_the_roof_again_once_the_player_leaves_the_room():
 	roof_layer.free()
 
 
+# -- furniture layer (docs/concept/housing.md's "Interior furniture" ---------
+# section): shipped UNTESTED earlier this session (be758897/0f9d3ec3/
+# c3a98c6a, per that doc's own explicit "do not merge on the strength of
+# this Status list alone" caveat) -- this group is the real GUT pass that
+# caveat named as still owed, verifying build_furniture_at_global/
+# destroy_furniture_at_global/furniture_at_global/_paint_furniture against
+# real chunk state and a real TileMapLayer, mirroring the roof group above
+# exactly. _stamp_test_hut gives a real enclosed floor cell FurniturePlacement
+# will actually accept -- an arbitrary global tile would just be refused as
+# "not indoors", so it would test the refusal path, not the paint path.
+
+func test_build_furniture_at_global_writes_to_furniture_modifications_not_ground():
+	manager.update(_berlin_tile)
+	var chunk_coord := _chunk_coord_for_tile(_berlin_tile)
+	var interior_tile := _stamp_test_hut(chunk_coord)
+
+	var placed := manager.build_furniture_at_global(interior_tile.x, interior_tile.y, "wood_chair")
+
+	assert_true(placed)
+	assert_eq(manager.furniture_at_global(interior_tile.x, interior_tile.y), "wood_chair")
+	assert_eq(
+		manager.modification_at_global(interior_tile.x, interior_tile.y), "wood_floor",
+		"furniture shares its cell with the floor beneath it, never overwrites it"
+	)
+
+
+func test_build_furniture_at_global_paints_onto_the_furniture_layer():
+	var furniture_layer := TileMapLayer.new()
+	manager.set_furniture_layer(furniture_layer)
+	manager.update(_berlin_tile)
+	var chunk_coord := _chunk_coord_for_tile(_berlin_tile)
+	var interior_tile := _stamp_test_hut(chunk_coord)
+
+	manager.build_furniture_at_global(interior_tile.x, interior_tile.y, "wood_rug")
+
+	assert_ne(
+		furniture_layer.get_cell_source_id(interior_tile), -1,
+		"the furniture should be painted onto its own layer"
+	)
+	furniture_layer.free()
+
+
+func test_build_furniture_at_global_refuses_an_unenclosed_cell():
+	manager.update(_berlin_tile)
+
+	var placed := manager.build_furniture_at_global(_berlin_tile.x, _berlin_tile.y, "wood_chair")
+
+	assert_false(placed, "open ground is not real interior floor")
+	assert_eq(manager.furniture_at_global(_berlin_tile.x, _berlin_tile.y), "")
+
+
+func test_destroy_furniture_at_global_removes_the_piece_and_erases_the_cell():
+	var furniture_layer := TileMapLayer.new()
+	manager.set_furniture_layer(furniture_layer)
+	manager.update(_berlin_tile)
+	var chunk_coord := _chunk_coord_for_tile(_berlin_tile)
+	var interior_tile := _stamp_test_hut(chunk_coord)
+	manager.build_furniture_at_global(interior_tile.x, interior_tile.y, "wood_bed")
+
+	var destroyed := manager.destroy_furniture_at_global(interior_tile.x, interior_tile.y)
+
+	assert_true(destroyed)
+	assert_eq(manager.furniture_at_global(interior_tile.x, interior_tile.y), "")
+	assert_eq(furniture_layer.get_cell_source_id(interior_tile), -1)
+	furniture_layer.free()
+
+
+func test_destroy_furniture_at_global_returns_false_when_nothing_is_there():
+	manager.update(_berlin_tile)
+	var chunk_coord := _chunk_coord_for_tile(_berlin_tile)
+	var interior_tile := _stamp_test_hut(chunk_coord)
+
+	assert_false(manager.destroy_furniture_at_global(interior_tile.x, interior_tile.y))
+
+
+func test_furniture_at_global_returns_empty_string_for_an_unloaded_chunk():
+	assert_eq(manager.furniture_at_global(9999 * 32, 9999 * 32), "")
+
+
+func test_build_furniture_at_global_does_nothing_for_an_unloaded_chunk():
+	assert_false(manager.build_furniture_at_global(9999 * 32, 9999 * 32, "wood_chair"))
+
+
 # -- geology: a real per-chunk Strata sim exists for every loaded chunk ------
 # (see docs/concept/geology.md). Cave-entrance discovery/reveal itself is
 # exercised directly against GeologyRenderer (test_geology_renderer.gd) --
