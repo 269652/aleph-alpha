@@ -314,9 +314,37 @@ found via `Player._pull_step`'s melee-range sweep, identical shape to
 - ⬜ No animal-carried seed dispersal for root crops (no scatter-hoarding
   equivalent to `TallGrass`'s mouse-cached grass seed) — spreading is
   purely the adjacent-cell throttled tick.
-- ⬜ No DNA/quality variation on the wild population (the 7 root/tuber art
-  variants are purely cosmetic, not linked to any trait) — the shared
-  farmed/wild DNA model `farming.md` calls for is still entirely unbuilt.
+- ✅ **Root Vigor**: a heritable size/quality trait (`WildCropPatch._vigor`,
+  parallel to `_patches`), seeded per founding cell as the average of two
+  salted-hash draws — the same bell shape `FlyerPersonality._bell`/
+  `AnimalGenome._bell` use for boldness/genes — and inherited through
+  spread with mutation (`VIGOR_MUTATION_AMOUNT`, reusing
+  `TreeGenome.MUTATION_AMOUNT`'s own tested value directly rather than a
+  second, unrelated figure), so a player who always pulls the biggest
+  patch measurably shrinks a meadow's mean vigor over time (pinned by
+  `test_always_pulling_the_biggest_patches_trends_the_meadow_smaller`,
+  the "always pulling the biggest patches" adaptation of
+  `test_flyer_personality.gd`'s own netting-selection test). `get_vigor`
+  defaults any unplanted/pre-vigor-save cell to 0.5, the population's own
+  mean. A genuinely high-vigor mature specimen renders visibly bigger
+  (`WildCropMarker`'s leaves scale by the cube root of
+  `vigor_mass_multiplier(vigor)` — mass scales with volume, so a linear
+  sprite scale only needs mass's cube root, not a second independently-
+  eyeballed visual range) and is labeled "Prize" in the hover tooltip once
+  vigor clears `PRIZE_VIGOR_THRESHOLD` — the closed-form value that makes
+  the seeding distribution's own top decile (`PRIZE_VIGOR_PERCENTILE`,
+  0.9) cross it, verified against an empirical sample of the real seeding
+  formula rather than left as algebra alone. The harvested root's REAL
+  mass (`ItemCatalog._PRODUCE_MASS_KG`) is scaled by the same multiplier
+  via `make_with_mass` — a Prize carrot is a genuinely heavier object, not
+  just a bigger sprite, which also makes it throw/knock back harder
+  (`Kick`/`HeldItemThrow` already read `mass_kg`). Explicitly OUT of
+  scope, named here as a real follow-up rather than silently closed:
+  linking vigor to WHICH of the 7 existing root/tuber art color variants
+  renders — those variants stay purely cosmetic, chosen independently by
+  `sprite_seed`, with no connection to vigor. The shared farmed/wild DNA
+  model `farming.md` calls for is also still entirely unbuilt; vigor is a
+  wild-only trait for now, not (yet) the crossing point with that model.
 - ⬜ No player-tilled farming, no domestication access point from this wild
   population yet (see `farming.md`'s own open questions).
 - ⬜ **Full dieback and re-sprout** — tops dying back to bare soil mounds in
