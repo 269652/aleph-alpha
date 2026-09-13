@@ -134,6 +134,27 @@ func test_graze_on_an_empty_cell_reports_failure():
 	assert_false(crop.graze(Vector2i(0, 0)))
 
 
+# -- vigor: a heritable size/quality trait, same "average of two salted-hash
+# draws" shape FlyerPersonality._bell uses for boldness -- see
+# docs/concept/wild_crops.md's "Root Vigor" section.
+
+
+## A cell nobody ever planted (or a save from before vigor existed) must
+## answer with the unremarkable middle, not an accidental 0.0 -- same reason
+## FlyerPersonality.boldness_of defaults an empty trait dictionary to 0.5.
+##
+## A 0x0 grid (not a 4x4 one against an empty biome array, as first drafted)
+## -- _seed_initial_patches indexes _biome[y * _width + x] unconditionally
+## inside its loop, so a 4x4 grid over a genuinely empty PackedStringArray
+## throws an out-of-bounds error in the constructor before get_vigor is
+## ever reached, which would fail this test for the wrong reason. Zero
+## width/height means the seeding loop never runs at all, so the only
+## thing this test can fail on is get_vigor itself.
+func test_get_vigor_defaults_to_a_middling_value_for_an_unplanted_cell():
+	var patch := WildCropPatch.new("carrot", 1, 0, 0, PackedStringArray())
+	assert_eq(patch.get_vigor(Vector2i(99, 99)), 0.5)
+
+
 # -- disjoint territory: two crops sharing a chunk must never claim the same
 # cell -- reported live: "carrots render potatoes as crop" -- two markers
 # stacked on the exact same tile (one carrot, one potato, each independently
