@@ -1093,6 +1093,11 @@ func _sync_decoration_and_grass_tracking(player_global_tile: Vector2i, center_ch
 		_grass_refresh_accumulator = GRASS_REFRESH_INTERVAL
 		_worm_refresh_accumulator = WORM_REFRESH_INTERVAL
 		_decoration_dirty = false
+		# Trees and stones hide/show with the same crossing (see
+		# _sync_static_entity_visibility) -- immediate, like the re-syncs
+		# made due above, so a newly-near chunk is never bare until a
+		# throttled refresh comes round.
+		_sync_static_entity_visibility()
 
 	# Grass ALONE is also tile-precise culled (see _grass_view_synced_tile's
 	# own doc comment for why the chunk-boundary trigger above isn't tight
@@ -7634,6 +7639,34 @@ func _decorates(chunk_coord: Vector2i) -> bool:
 	return DecorationLod.keeps_decoration(chunk_coord, _decoration_center, _decoration_radius)
 
 
+## Trees and stones follow the same gate (FPS regression round 15,
+## docs/concept/soil_fauna.md). They are direct children of the y-sorted
+## Entities layer, and every one of ~25 loaded chunks' worth stayed visible
+## for a camera that frames less than one chunk -- the renderer gathered and
+## sorted all of them every frame. A hidden canvas item is skipped before
+## that walk, so hiding the far ones is what makes render CPU scale with
+## what is on screen. Nothing else changes: the nodes stay loaded, in their
+## registries, chopped and lifted and simulated exactly as before -- only
+## `visible` follows DecorationLod, the way grass, flowers, worms, leaf
+## litter and footprints already do. Whole-registry pass on every chunk
+## crossing (rare, a walking pace); the per-chunk form runs once at load so
+## a chunk that loads while the player stands still spawns already hidden.
+func _sync_static_entity_visibility() -> void:
+	for chunk_coord in _loaded_trees:
+		_apply_static_visibility(chunk_coord)
+	for chunk_coord in _loaded_stones:
+		if not _loaded_trees.has(chunk_coord):
+			_apply_static_visibility(chunk_coord)
+
+
+func _apply_static_visibility(chunk_coord: Vector2i) -> void:
+	var visible := _decorates(chunk_coord)
+	for registry in [_loaded_trees, _loaded_stones]:
+		for node in registry.get(chunk_coord, []):
+			if is_instance_valid(node):
+				node.visible = visible
+
+
 ## Frees every sprite this chunk is holding in `holder`, for when it drops out
 ## of decoration range. Without this the sprites would simply stop being
 ## updated while staying on screen forever.
@@ -12796,6 +12829,9 @@ func _load_chunk(chunk_coord: Vector2i) -> void:
 	) + _stone_renderer.spawn_mountain_veins(
 		_entities_parent, chunk, chunk_coord * CHUNK_SIZE, TerrainRenderer.TILE_SIZE, self
 	)
+	# A chunk loading two out from a standing player spawns hidden, not
+	# visible until the next chunk crossing (see _sync_static_entity_visibility).
+	_apply_static_visibility(chunk_coord)
 
 	# Geology (see docs/concept/geology.md): a real per-chunk topsoil/
 	# regolith Strata sim, plus the surface markers for whichever cave

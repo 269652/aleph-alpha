@@ -1011,6 +1011,47 @@ func test_refresh_creatures_promotes_sparrows_once_population_rises_after_load()
 	assert_eq(sparrows, 3, "a chunk's sparrow markers must track its live population without a reload")
 
 
+# -- static entities follow the decoration gate (FPS regression round 15) ---
+#
+# Grass, flowers, worms, footprints and leaf litter already draw only within
+# DecorationLod's radius of the player's chunk; trees and stones did not --
+# every one of ~25 loaded chunks' trees and stones stayed a visible direct
+# child of the y-sorted Entities layer, gathered and sorted by the renderer
+# every frame for a camera that frames less than one chunk. A hidden canvas
+# item is skipped before that walk. Nothing about the chunk changes: the
+# nodes stay loaded, registered and simulated; only `visible` follows the
+# same gate the other decoration already follows.
+
+func _static_entities_of(chunk_coord: Vector2i) -> Array:
+	return manager._loaded_trees.get(chunk_coord, []) + manager._loaded_stones.get(chunk_coord, [])
+
+
+func test_trees_and_stones_beyond_the_decoration_radius_are_hidden_and_shown_as_the_player_moves():
+	var center: Vector2i = _berlin_tile / EarthChunkManager.CHUNK_SIZE
+	# Within LOAD_RADIUS (2), so genuinely loaded -- but past the decoration
+	# radius (1 at the default framing), so nobody can see it.
+	var far := center + Vector2i(2, 0)
+	manager._load_chunk(center)
+	manager._sync_decoration_and_grass_tracking(_berlin_tile, center)
+	# Loaded AFTER the player settled here: must spawn already hidden, not
+	# wait for the next chunk crossing to be culled.
+	manager._load_chunk(far)
+	assert_gt(_static_entities_of(center).size(), 0, "premise: the centre chunk has trees or stones")
+	assert_gt(_static_entities_of(far).size(), 0, "premise: the far chunk has trees or stones")
+	for node in _static_entities_of(center):
+		assert_true(node.visible, "a tree/stone in the player's own chunk is drawn")
+	for node in _static_entities_of(far):
+		assert_false(node.visible, "a tree/stone two chunks out is loaded but not drawn")
+
+	# Walk to the far chunk: it shows, the old centre (now two out) hides.
+	var far_tile: Vector2i = far * EarthChunkManager.CHUNK_SIZE + Vector2i(16, 16)
+	manager._sync_decoration_and_grass_tracking(far_tile, far)
+	for node in _static_entities_of(far):
+		assert_true(node.visible, "walking up to a chunk shows its trees/stones again")
+	for node in _static_entities_of(center):
+		assert_false(node.visible, "and the chunk walked away from hides its own")
+
+
 ## Blackbird's own food signal (worm density) is structural, already in
 ## place at spawn time (see AmbientFlyerRenderer.reconcile_bird_markers'
 ## own doc comment) -- unlike sparrow, it never strictly hits this gap. But
