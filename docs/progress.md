@@ -20975,3 +20975,82 @@ already-shipped small_house/cottage/manor numbers before trusting it here)
 skill-web rewrite got. `docs/concept/housing.md` is updated in place with
 the same caveat. Do not merge to `main` without a real GUT pass first.
 
+### Two-story houses, properly implemented: real collision, a Builder that finishes the job, and NPCs who can afford one (2026-09-13)
+
+Directly requested as a follow-up once the untested two-story batch above
+was reviewed: *"properly implement"* the three gaps that batch named
+honestly as scoped out -- real upper-floor wall collision, the hire/
+`BuilderMarker` path, and procedural village generation. Unlike that
+batch, this one followed the project's own mandatory strict-TDD red-first
+cycle throughout: every change below has a real, run, green GUT test
+written before its implementation, not a "written directly, unverified"
+disclosure. Full reasoning, API list, and test names are in
+`docs/concept/housing.md`'s own updated Status list -- summary only:
+
+- **Real upper-floor wall collision.** The genuinely interesting problem
+  wasn't "add a collision body" (the ground floor already has that
+  mechanism) -- it was that a house's ground and upper wall rings share
+  the same (x, y) cells almost everywhere EXCEPT the ground floor's own
+  door, which the upper floor fills with a real solid window instead. One
+  shared collision layer could only ever answer that cell one way. Fixed
+  with a genuinely different Godot physics layer for each floor
+  (`EarthChunkManager.UPPER_FLOOR_COLLISION_LAYER`, bit 2 -- ground stays
+  on the untouched default bit 1) and a single property flip on the
+  PLAYER's own `collision_mask` the instant `_current_floor` changes,
+  rather than iterating and toggling every collision body in the loaded
+  world on every staircase crossing. `test_earth_chunk_manager_upper_
+  floor_collision.gd` (new, 12 tests) and 4 new `test_player.gd` tests
+  proving `collision_mask` itself actually flips on a real floor
+  transition -- the one property the whole two-layer mechanism is FOR,
+  easy to build the rest around and forget to wire up, so it got its own
+  explicit regression test rather than being assumed to follow from the
+  layer constants existing -- plus a full re-run of the pre-existing
+  ground-floor collision suite (10/10, confirming the new explicit
+  `collision_layer = GROUND_FLOOR_COLLISION_LAYER` line changes nothing
+  observable). Deliberately still NOT extended: real structural
+  statics/decay/collapse for the upper floor -- a materially separate
+  system, left as a named, narrower gap than "no collision at all".
+- **`hire_builder_for_house`/`BuilderMarker` build the real upper floor
+  too.** `BuilderMarker.target_upper_pieces` (optional, `{}` by default --
+  every pre-existing single-story hire is completely unaffected) is only
+  ever attempted once every real ground piece is placed, the same
+  real-world build order a house actually goes up in, via its own
+  round-robin seek/withdraw/carry/place cycle checked against the UPPER
+  floor's own real neighbors, never the ground floor's -- a real, isolated
+  regression test proves this specifically, by leaving the ground floor
+  deliberately EMPTY so a bug reading the wrong grid would refuse the
+  upper wall forever rather than accidentally passing. The project's own
+  completion total now sums both floors' real labor, so a two-story hire
+  only reaches COMPLETE once the WHOLE house is real. 4 new tests in
+  `test_builder_marker.gd`. Still not extended: a hired house still gets
+  no roof at all -- the same pre-existing gap this had before two-story
+  houses existed, not something this made worse in kind, only in the
+  absolute wood left idle in Storage.
+- **Procedural village NPC houses can be two-story.** `HouseBlueprint.
+  BLUEPRINT_POOL_BY_OCCUPATION`'s merchant/blacksmith pools (the only two
+  occupations that already reached for the showiest single-story options)
+  each gained a few real two-story entries at their own showy tail -- a
+  deliberately CURATED subset, not all ten: thematically fitting names,
+  and footprints comparable to the manor tier already there rather than
+  the largest shapes, which risk visibly overlapping a neighbor in
+  `SettlementGenerator`'s own fixed ring layout (a named judgment call,
+  not an oversight). `VillageRenderer._stamp_house` stamps the real upper
+  floor once the ground floor itself is fully complete (the SAME gate the
+  roof already uses) and feeds its real windows into the SAME night-
+  lighting list the ground floor's own windows already use -- the
+  original request's own "windows in second level" now genuinely lights
+  up for NPC-owned houses too. 4 new tests in `test_village_renderer.gd` +
+  4 in `test_house_blueprint.gd`, plus both files' full pre-existing
+  suites re-run and still green (43/43, 35/35) confirming zero regression
+  from widening two long-lived pool constants.
+
+All new/changed functions above were built the required way: a failing
+test written first, confirmed red for the stated reason, then the minimum
+implementation to turn it green, then every directly-adjacent pre-existing
+suite re-run to confirm no regression. `docs/concept/housing.md`'s own
+Status and Open Questions are updated in place -- the three gaps this
+entry closes are gone from both, and what's newly, honestly still open
+(upper-floor statics, a hired roof, real upper-floor NPC use, the
+remaining five two-story shapes never reaching the generator) replaces
+them there rather than being silently dropped.
+

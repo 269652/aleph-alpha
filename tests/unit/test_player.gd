@@ -3578,3 +3578,59 @@ func test_a_granted_weapons_mass_matches_the_catalogs_real_mass():
 	player.grant_starter_items(["iron_sword"])
 	assert_eq(player.equipped_item.mass_kg, _item_catalog.make("iron_sword").mass_kg)
 	assert_gt(player.equipped_item.mass_kg, 0.0, "a real iron sword must not be massless")
+
+
+# -- two-story houses: real per-floor collision (docs/concept/housing.md) --
+#
+# Named honestly as a gap when two-story houses first shipped ("no real
+# upper-floor wall collision yet... a player can walk through an upstairs
+# wall today"), closed here directly per a follow-up request to "properly
+# implement" it. EarthChunkManager's own two independent physics layers
+# (GROUND_FLOOR_COLLISION_LAYER / UPPER_FLOOR_COLLISION_LAYER -- see
+# test_earth_chunk_manager_upper_floor_collision.gd) only matter in play if
+# the PLAYER's own collision_mask actually switches between them -- this is
+# that switch, the one piece that makes the whole mechanism real rather
+# than infrastructure nobody reads.
+
+func test_player_starts_on_the_ground_floor_collision_layer_by_default():
+	assert_eq(
+		player.collision_mask, EarthChunkManager.GROUND_FLOOR_COLLISION_LAYER,
+		"a fresh player (floor 0) must collide with ground-floor pieces, the same as before this feature existed"
+	)
+
+
+func test_stepping_onto_stairs_switches_collision_mask_to_the_upper_floor_layer():
+	var tile := _facing_tile()
+	chunk_manager.build_at_global(tile.x, tile.y, "wood_stairs")
+	chunk_manager.build_upper_floor_at_global(tile.x, tile.y, "wood_stairs")
+	player.position = Vector2((tile.x + 0.5) * TILE_SIZE, (tile.y + 0.5) * TILE_SIZE)
+
+	player._floor_transition_step()
+
+	assert_eq(player._current_floor, 1, "precondition: the player should now be on the upper floor")
+	assert_eq(player.collision_mask, EarthChunkManager.UPPER_FLOOR_COLLISION_LAYER)
+
+
+func test_stepping_back_downstairs_restores_the_ground_floor_collision_mask():
+	var tile := _facing_tile()
+	chunk_manager.build_at_global(tile.x, tile.y, "wood_stairs")
+	chunk_manager.build_upper_floor_at_global(tile.x, tile.y, "wood_stairs")
+	player.position = Vector2((tile.x + 0.5) * TILE_SIZE, (tile.y + 0.5) * TILE_SIZE)
+	player._floor_transition_step()  # up
+	# Edge-detection (_was_on_stairs) means standing still on the SAME
+	# stairs cell never flips again on its own -- simulates having
+	# genuinely stepped off and back on, the real way a second real
+	# crossing happens.
+	player._was_on_stairs = false
+
+	player._floor_transition_step()  # back down
+
+	assert_eq(player._current_floor, 0, "precondition: the player should be back on the ground floor")
+	assert_eq(player.collision_mask, EarthChunkManager.GROUND_FLOOR_COLLISION_LAYER)
+
+
+func test_walking_around_off_stairs_never_changes_the_collision_mask():
+	var before := player.collision_mask
+	for i in 5:
+		player._floor_transition_step()
+	assert_eq(player.collision_mask, before, "never touching stairs must never change which floor's collision applies")

@@ -935,6 +935,37 @@ var _loaded_villages: Dictionary = {}  # Vector2i chunk_coord -> Array[Node2D]
 ## that chunk's bodies, mirroring _loaded_trees/_loaded_stones.
 var _piece_collision_bodies: Dictionary = {}  # Vector2i chunk_coord -> {Vector2i global_cell -> StaticBody2D}
 
+## Two-story houses (docs/concept/housing.md): real per-floor collision.
+## Ground-floor solid pieces stay on Godot's own default physics layer
+## (bit 1) exactly as before this pair of constants existed -- confirmed
+## nothing anywhere in this project ever sets collision_layer/
+## collision_mask (a repo-wide grep found none), so every pre-existing
+## collision body (trees, stones, ore, ground walls) keeps colliding
+## exactly as it always has, zero blast radius. Upper-floor solid pieces
+## get their OWN bit instead of sharing layer 1, which is what makes "block
+## movement only on the floor you're actually standing on" a single
+## property flip on the PLAYER's own collision_mask (see Player.
+## _floor_transition_step) rather than iterating and toggling every
+## collision body in the loaded world on every staircase crossing. This
+## genuinely matters, not just in principle: a house's ground and upper
+## wall rings share the same (x, y) cells almost everywhere (HouseBlueprint.
+## build_upper_floor reuses build()'s own footprint), EXCEPT at the ground
+## floor's own door cell -- walkable, no collision -- which the upper floor
+## fills with a real solid window instead (there is no second entrance up
+## there). One shared layer could only ever answer that cell one way; two
+## independent layers let each floor be correct on its own terms.
+const GROUND_FLOOR_COLLISION_LAYER := 1
+const UPPER_FLOOR_COLLISION_LAYER := 2
+
+## The upper-storey twin of _piece_collision_bodies, one layer up -- a
+## SEPARATE dict (not reusing the ground one), the same "own layer because
+## it coexists with what's already at that cell" reasoning every other
+## ground/upper pair in this file already follows (see e.g. _paint_roof/
+## _paint_upper_floor). A wall cell can carry a real, independent body on
+## BOTH dicts at once -- see UPPER_FLOOR_COLLISION_LAYER's own doc comment
+## for exactly when that happens and why it must.
+var _upper_piece_collision_bodies: Dictionary = {}  # Vector2i chunk_coord -> {Vector2i global_cell -> StaticBody2D}
+
 ## Every placed structure's own real stock -- a Storage building's inventory,
 ## keyed by its own tile position (see docs/concept/timber_construction.md's
 ## "Storage, logistics, and the autonomous dependency chain" section, and
@@ -1780,12 +1811,17 @@ const HOUSE_BLUEPRINT_SHAPE_BY_RECIPE_ID := {
 ## Open Questions.
 ##
 ## Two-story shapes (docs/concept/housing.md) need no SEPARATE upper-floor
-## occupancy check here: `upper_floor_modifications` only ever gets written
-## by `_stamp_upper_floor_at_global`, which `stamp_house_and_grant_ownership`
-## only ever calls immediately alongside `stamp_structure_at_global` for the
-## SAME origin_tile+shape -- so an occupied upper floor at this site always
-## implies an occupied ground floor at the same cells, and this function's
-## existing ground-floor-only loop already refuses that.
+## occupancy check here: for THIS function's own caller (the player's own
+## self-build path), `upper_floor_modifications` only ever gets written by
+## `stamp_upper_floor_at_global` immediately alongside `stamp_structure_
+## at_global` for the SAME origin_tile+shape (see stamp_house_and_grant_
+## ownership below) -- so an occupied upper floor at a site this function
+## would approve always implies an occupied ground floor at the same cells
+## too, and this function's existing ground-floor-only loop already
+## refuses that. (The hire and village-generator paths call stamp_upper_
+## floor_at_global too, but neither of those goes through this function --
+## see hire_builder_for_house/VillageRenderer._stamp_house's own separate
+## occupancy reasoning.)
 func can_build_house_from_blueprint(recipe_id: String, origin_tile: Vector2i) -> bool:
 	if not has_unlocked_blueprint(recipe_id):
 		return false
@@ -1855,7 +1891,7 @@ func stamp_house_and_grant_ownership(recipe_id: String, origin_tile: Vector2i, h
 	stamp_structure_at_global(chunk_coord, origin_tile, ground_pieces, roof_pieces)
 	if house_blueprint.is_two_story(shape_id):
 		var upper_pieces := house_blueprint.build_upper_floor(shape_id, seed_value)
-		_stamp_upper_floor_at_global(chunk_coord, origin_tile, upper_pieces)
+		stamp_upper_floor_at_global(chunk_coord, origin_tile, upper_pieces)
 
 	var local_origin := origin_tile - chunk_coord * CHUNK_SIZE
 	var project := _construction_project_store.start_project(chunk_coord, local_origin, recipe_id, household_id)
@@ -1867,8 +1903,13 @@ func stamp_house_and_grant_ownership(recipe_id: String, origin_tile: Vector2i, h
 ## Stamps a two-story house's real upper-floor pieces into chunk.upper_
 ## floor_modifications -- mirrors stamp_structure_at_global's own "cells
 ## outside chunk_coord are silently skipped" simplification exactly, one
-## layer up. A no-op if chunk_coord isn't currently loaded.
-func _stamp_upper_floor_at_global(chunk_coord: Vector2i, origin_tile: Vector2i, upper_pieces: Dictionary) -> void:
+## layer up. A no-op if chunk_coord isn't currently loaded. Public (no
+## leading underscore, matching stamp_structure_at_global's own naming) --
+## called both by stamp_house_and_grant_ownership below (the player's own
+## blueprint path) and, duck-typed via has_method exactly like
+## stamp_structure_at_global already is, by VillageRenderer's own two-story
+## NPC houses.
+func stamp_upper_floor_at_global(chunk_coord: Vector2i, origin_tile: Vector2i, upper_pieces: Dictionary) -> void:
 	var chunk: Chunk = _loaded_chunks.get(chunk_coord)
 	if chunk == null:
 		return
@@ -1877,6 +1918,7 @@ func _stamp_upper_floor_at_global(chunk_coord: Vector2i, origin_tile: Vector2i, 
 		if _chunk_coord_for_tile(global_cell) != chunk_coord:
 			continue
 		chunk.upper_floor_modifications[_local_coord(global_cell.x, global_cell.y)] = upper_pieces[local_cell]
+		_sync_upper_piece_collision(global_cell, upper_pieces[local_cell])
 	_paint_upper_floor(chunk_coord, chunk, _hidden_upper_floor_cells_for(chunk_coord))
 
 
@@ -2085,7 +2127,17 @@ func hire_builder_for_house(
 	var chunk_coord := _chunk_coord_for_tile(origin_tile)
 	var local_origin := origin_tile - chunk_coord * CHUNK_SIZE
 	var seed_value := _house_site_seed(chunk_coord, origin_tile, recipe_id)
-	var ground_pieces := HouseBlueprint.new().build(shape_id, seed_value)
+	var house_blueprint := HouseBlueprint.new()
+	var ground_pieces := house_blueprint.build(shape_id, seed_value)
+	# Two-story houses (docs/concept/housing.md): a hired Builder now raises
+	# the real upper storey too, not just the ground floor -- named honestly
+	# as a gap when this feature first shipped, closed here directly. {} for
+	# every single-story shape (is_two_story false), so BuilderMarker.
+	# target_upper_pieces stays empty and every pre-existing hire is
+	# completely unaffected.
+	var upper_pieces := {}
+	if house_blueprint.is_two_story(shape_id):
+		upper_pieces = house_blueprint.build_upper_floor(shape_id, seed_value)
 
 	var storage_tile := Vector2i(
 		floori(storage_pixel.x / TerrainRenderer.TILE_SIZE), floori(storage_pixel.y / TerrainRenderer.TILE_SIZE)
@@ -2102,6 +2154,7 @@ func hire_builder_for_house(
 	marker.household_store = _household_store
 	marker.target_project = project
 	marker.target_pieces = ground_pieces
+	marker.target_upper_pieces = upper_pieces
 	marker.position = (Vector2(origin_tile) + Vector2(0.5, 0.5)) * TerrainRenderer.TILE_SIZE
 	_entities_parent.add_child(marker)
 	_hired_builders[project.id] = {"marker": marker, "carpenter_household_id": carpenter_household_id}
@@ -12054,6 +12107,7 @@ func _spawn_piece_collision(global_cell: Vector2i, piece_id: String) -> void:
 	body.position = Vector2(
 		(global_cell.x + 0.5) * TerrainRenderer.TILE_SIZE, (global_cell.y + 0.5) * TerrainRenderer.TILE_SIZE
 	)
+	body.collision_layer = GROUND_FLOOR_COLLISION_LAYER
 	var shape := CollisionShape2D.new()
 	var rect := RectangleShape2D.new()
 	rect.size = Vector2.ONE * TerrainRenderer.TILE_SIZE
@@ -12074,6 +12128,61 @@ func _remove_piece_collision(global_cell: Vector2i) -> void:
 		return
 	body.free()
 	bodies.erase(global_cell)
+
+
+## The upper-storey twin of _sync_piece_collision, one layer up -- see
+## UPPER_FLOOR_COLLISION_LAYER's own doc comment for why this needs its own
+## physics layer rather than reusing the ground body mechanism verbatim.
+func _sync_upper_piece_collision(global_cell: Vector2i, tile_id: String) -> void:
+	_remove_upper_piece_collision(global_cell)
+	if BuildingPiece.has_piece(tile_id) and not BuildingPiece.is_walkable(tile_id):
+		_spawn_upper_piece_collision(global_cell, tile_id)
+
+
+func _spawn_upper_piece_collision(global_cell: Vector2i, piece_id: String) -> void:
+	var body := StaticBody2D.new()
+	body.name = "UpperPieceCollision"
+	body.position = Vector2(
+		(global_cell.x + 0.5) * TerrainRenderer.TILE_SIZE, (global_cell.y + 0.5) * TerrainRenderer.TILE_SIZE
+	)
+	body.collision_layer = UPPER_FLOOR_COLLISION_LAYER
+	var shape := CollisionShape2D.new()
+	var rect := RectangleShape2D.new()
+	rect.size = Vector2.ONE * TerrainRenderer.TILE_SIZE
+	shape.shape = rect
+	body.add_child(shape)
+	_entities_parent.add_child(body)
+	var chunk_coord := _chunk_coord_for_tile(global_cell)
+	if not _upper_piece_collision_bodies.has(chunk_coord):
+		_upper_piece_collision_bodies[chunk_coord] = {}
+	_upper_piece_collision_bodies[chunk_coord][global_cell] = body
+
+
+func _remove_upper_piece_collision(global_cell: Vector2i) -> void:
+	var chunk_coord := _chunk_coord_for_tile(global_cell)
+	var bodies: Dictionary = _upper_piece_collision_bodies.get(chunk_coord, {})
+	var body: Node = bodies.get(global_cell)
+	if body == null:
+		return
+	body.free()
+	bodies.erase(global_cell)
+
+
+## The upper-storey twin of build_at_global, one layer up: a Builder's own
+## per-piece placement hook (see BuilderMarker.target_upper_pieces) and this
+## test suite's own direct entry point, mirroring build_at_global's exact
+## "write the cell, repaint, sync collision" shape. Returns false (no-op) if
+## global_x/global_y isn't in a currently-loaded chunk.
+func build_upper_floor_at_global(global_x: int, global_y: int, tile_id: String) -> bool:
+	var chunk_coord := _chunk_coord_for_tile(Vector2i(global_x, global_y))
+	var chunk: Chunk = _loaded_chunks.get(chunk_coord)
+	if chunk == null:
+		return false
+	var local := _local_coord(global_x, global_y)
+	chunk.upper_floor_modifications[local] = tile_id
+	_paint_upper_floor(chunk_coord, chunk, _hidden_upper_floor_cells_for(chunk_coord))
+	_sync_upper_piece_collision(Vector2i(global_x, global_y), tile_id)
+	return true
 
 
 ## True if a modification tile matching `structure_id` (e.g. "campfire",
@@ -12598,6 +12707,12 @@ func _load_chunk(chunk_coord: Vector2i) -> void:
 		_terrain_renderer.paint_roofs(_roof_layer, chunk, chunk_coord * CHUNK_SIZE, _hidden_cells_for(chunk_coord))
 	_paint_furniture(chunk_coord, chunk)
 	_paint_upper_floor(chunk_coord, chunk, _hidden_upper_floor_cells_for(chunk_coord))
+	# The upper-storey twin of the ground restore loop just above, for the
+	# exact same reason: a persisted upper wall/window needs its collision
+	# body back too, not just its paint.
+	for local_cell in _upper_floor_piece_grid_for(chunk):
+		var global_cell: Vector2i = chunk_coord * CHUNK_SIZE + local_cell
+		_sync_upper_piece_collision(global_cell, chunk.upper_floor_modifications[local_cell])
 	_loaded_trees[chunk_coord] = _tree_renderer.spawn_trees(
 		_entities_parent, chunk, chunk_coord * CHUNK_SIZE, TerrainRenderer.TILE_SIZE
 	)
@@ -13348,6 +13463,10 @@ func _unload_chunk(chunk_coord: Vector2i) -> void:
 	for body in _piece_collision_bodies.get(chunk_coord, {}).values():
 		body.free()
 	_piece_collision_bodies.erase(chunk_coord)
+
+	for body in _upper_piece_collision_bodies.get(chunk_coord, {}).values():
+		body.free()
+	_upper_piece_collision_bodies.erase(chunk_coord)
 
 	for tree in _loaded_trees.get(chunk_coord, []):
 		tree.free()

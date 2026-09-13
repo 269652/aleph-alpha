@@ -92,14 +92,17 @@ const BLUEPRINT_IDS: Array[String] = [
 	"cottage_bright", "cottage_L_small", "manor_wide", "manor_grand", "manor_L_wide",
 ]
 
-## The ten sophisticated two-story shapes -- kept OUT of BLUEPRINT_IDS/
-## BLUEPRINT_POOL_BY_OCCUPATION deliberately: those two feed the PROCEDURAL
-## village generator's own NPC house choices (choose_blueprint_id), and
-## teaching that generator to also stamp a real second storey + roof-over-
-## the-right-layer for an NPC's own house is a real, separate piece of work
-## this pass does not attempt (see EarthChunkManager.stamp_house_and_grant_
-## ownership's own two-story branch, built for the PLAYER's blueprint path
-## only). A real, named scope boundary, not an oversight.
+## The ten sophisticated two-story shapes -- kept OUT of the generic
+## BLUEPRINT_IDS fallback deliberately (any occupation with no dedicated
+## pool below stays single-story), but present in BLUEPRINT_POOL_BY_
+## OCCUPATION for the two occupations that already reach for the showiest
+## SINGLE-story options (merchant, blacksmith) -- see that dict's own doc
+## comment. Originally kept out of BOTH entirely, with the procedural
+## village generator's own two-story wiring named as future work ("a real,
+## separate piece of work this pass does not attempt"); that follow-up is
+## exactly what VillageRenderer._stamp_house's own two-story branch below
+## now is (see docs/concept/housing.md), so an NPC villager can genuinely
+## live in one of these too, not just the player.
 const TWO_STORY_BLUEPRINT_IDS: Array[String] = [
 	"townhouse_narrow", "merchant_house", "guild_hall", "riverside_villa", "timber_longhouse",
 	"artisan_workshop_house", "tower_keep", "harborside_manor", "grand_estate", "gambrel_lodge",
@@ -115,13 +118,31 @@ func is_two_story(blueprint_id: String) -> bool:
 ## biome species pools already use. Ordered plain -> showy within each pool
 ## (see choose_blueprint_id's own showy/plain personality bias). A generic
 ## fallback (the whole catalog) covers any occupation not listed here.
+##
+## Two-story houses (docs/concept/housing.md): merchant and blacksmith --
+## the only two occupations that already reach for the showiest SINGLE-
+## story options above (manor_grand/manor_L_wide, manor_wide) -- get a
+## few real two-story entries at their own showy tail, via this SAME
+## occupation+personality mechanism, rather than a separate gate. A
+## deliberately curated SUBSET of TWO_STORY_BLUEPRINT_IDS, not all ten:
+## thematically fitting names (a merchant's own guild_hall/harborside_
+## manor/merchant_house; a blacksmith's own artisan_workshop_house/
+## tower_keep), and footprints comparable to the manor tier already sitting
+## here (36-49 tiles) rather than the largest shapes (e.g. grand_estate's
+## 64), which risk visibly overlapping a neighboring villager's house in
+## SettlementGenerator's own fixed ring layout -- a real, named judgment
+## call, not an oversight. The remaining two-story shapes stay reachable
+## only through the player's own deliberate blueprint-crafting choice,
+## where the player picks the exact site and can judge clearance
+## themselves. Farmer/fisher/guard/herbalist stay single-story -- the same
+## plain end of the gradient they already occupy.
 const BLUEPRINT_POOL_BY_OCCUPATION := {
 	"farmer": ["hut_tiny", "cottage_small", "cottage_small", "cottage_wide"],
 	"fisher": ["hut_tiny", "hut_tiny", "cottage_small", "cottage_tall"],
 	"guard": ["hut_tiny", "cottage_small", "cottage_small", "cottage_tall"],
 	"herbalist": ["cottage_small", "cottage_window_pair", "cottage_bright", "cottage_L_small"],
-	"blacksmith": ["cottage_wide", "cottage_wide", "manor_wide", "cottage_L_small"],
-	"merchant": ["cottage_bright", "manor_wide", "manor_grand", "manor_L_wide"],
+	"blacksmith": ["cottage_wide", "cottage_wide", "manor_wide", "cottage_L_small", "artisan_workshop_house", "tower_keep"],
+	"merchant": ["cottage_bright", "manor_wide", "manor_grand", "manor_L_wide", "merchant_house", "guild_hall", "harborside_manor"],
 }
 
 ## Personality traits that nudge a choice toward the SHOWY (larger/later)

@@ -442,6 +442,50 @@ func test_every_occupation_can_choose_more_than_one_blueprint():
 ## (more floor-cell) house than a "cautious"/"stoic"-dominant one with the
 ## same occupation -- the actual, measurable shape of "personality nudges
 ## the choice" rather than an assertion that only checks the code ran.
+# -- two-story houses reachable via the procedural village generator too --
+# -- (docs/concept/housing.md) -- named honestly as scoped OUT when two----
+# -- story houses first shipped ("teaching the generator to also stamp a -
+# -- real second storey... is a real, separate piece of work this pass ---
+# -- does not attempt"), closed here directly per a follow-up request to -
+# -- "properly implement" it. Only the occupations that already reach for -
+# -- the showiest SINGLE-story options (merchant/blacksmith) get any real -
+# -- two-story entries -- a farmer suddenly living in a manor would be an -
+# -- arbitrary jump the existing plain/showy gradient never makes.
+
+func test_merchant_pool_includes_at_least_one_two_story_shape():
+	var found := false
+	for id in HouseBlueprint.BLUEPRINT_POOL_BY_OCCUPATION["merchant"]:
+		if HouseBlueprint.TWO_STORY_BLUEPRINT_IDS.has(id):
+			found = true
+	assert_true(found, "a merchant villager should sometimes be able to reach a real two-story house")
+
+
+func test_blacksmith_pool_includes_at_least_one_two_story_shape():
+	var found := false
+	for id in HouseBlueprint.BLUEPRINT_POOL_BY_OCCUPATION["blacksmith"]:
+		if HouseBlueprint.TWO_STORY_BLUEPRINT_IDS.has(id):
+			found = true
+	assert_true(found, "a blacksmith villager should sometimes be able to reach a real two-story house")
+
+
+## The generic fallback (any occupation with no dedicated pool) must stay
+## single-story -- BLUEPRINT_IDS itself deliberately excludes every
+## two-story id (see TWO_STORY_BLUEPRINT_IDS' own doc comment), so this is
+## really just confirming that exclusion still holds.
+func test_unknown_occupations_still_never_reach_a_two_story_house():
+	for id in HouseBlueprint.BLUEPRINT_IDS:
+		assert_false(HouseBlueprint.TWO_STORY_BLUEPRINT_IDS.has(id))
+
+
+func test_modest_occupations_still_never_reach_a_two_story_house():
+	for occupation in ["farmer", "fisher", "guard", "herbalist"]:
+		for id in HouseBlueprint.BLUEPRINT_POOL_BY_OCCUPATION[occupation]:
+			assert_false(
+				HouseBlueprint.TWO_STORY_BLUEPRINT_IDS.has(id),
+				"%s should stay single-story -- only merchant/blacksmith reach for the showiest tier" % occupation
+			)
+
+
 func test_showy_personalities_trend_toward_bigger_houses_than_plain_ones():
 	var showy_total := 0
 	var showy_count := 0

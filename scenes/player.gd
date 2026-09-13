@@ -4400,6 +4400,14 @@ func _destroy_step() -> void:
 ## change, the player's own world position never moves. Edge-detected on
 ## _was_on_stairs so standing still on the stairs does not flip floors
 ## every physics frame.
+##
+## Also flips the player's own REAL collision_mask between EarthChunkManager
+## .GROUND_FLOOR_COLLISION_LAYER and .UPPER_FLOOR_COLLISION_LAYER -- the one
+## property change that makes the two independent physics layers those
+## constants exist for actually matter in play, rather than infrastructure
+## nothing ever reads. A single flip here, not an iterate-and-toggle-every-
+## collision-body-in-the-world scheme, because move_and_slide only ever
+## resolves against bodies matching THIS body's own mask.
 func _floor_transition_step() -> void:
 	if _chunk_manager == null:
 		return
@@ -4411,6 +4419,10 @@ func _floor_transition_step() -> void:
 	var on_stairs := piece_id == "wood_stairs"
 	if on_stairs and not _was_on_stairs:
 		_current_floor = _chunk_manager.step_on_stairs(tile.x, tile.y, _current_floor)
+		collision_mask = (
+			EarthChunkManager.UPPER_FLOOR_COLLISION_LAYER if _current_floor == 1
+			else EarthChunkManager.GROUND_FLOOR_COLLISION_LAYER
+		)
 	_was_on_stairs = on_stairs
 
 

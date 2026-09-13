@@ -233,6 +233,13 @@ func spawn_village(
 ## the house already fully buildable (see that function's own doc comment),
 ## this stamps the exact same full pieces + roofs as before -- deliberately
 ## behavior-preserving for the common case.
+##
+## Two-story houses (docs/concept/housing.md): if `npc.occupation`'s own
+## HouseBlueprint.choose_blueprint_id lands on a real two-story id (only
+## possible for merchant/blacksmith today -- see BLUEPRINT_POOL_BY_
+## OCCUPATION's own doc comment), this ALSO stamps a real upper storey
+## once the ground floor itself is fully complete -- see the two-story
+## branch near this function's own return.
 func _stamp_house(chunk_coord: Vector2i, index: int, anchor: Vector2, npc: NpcIdentity, tile_size: int, world, npc_count: int) -> Dictionary:
 	var seed_value := hash("%d_%d_house_%d" % [chunk_coord.x, chunk_coord.y, index])
 	var blueprint_id := _house_blueprint.choose_blueprint_id(npc.occupation, npc.genome, seed_value)
@@ -286,6 +293,25 @@ func _stamp_house(chunk_coord: Vector2i, index: int, anchor: Vector2, npc: NpcId
 	# still-under-construction house (fraction < 1.0 above) only lights the
 	# windows it has actually built so far, never one that isn't there yet.
 	var window_positions := _window_positions(stamped_pieces, origin_tile, tile_size)
+
+	# Two-story houses (docs/concept/housing.md): an NPC's own real second
+	# storey, gated on the SAME "ground floor fully complete" condition the
+	# roof itself already uses just above -- a house still being raised
+	# gets no upper floor yet either, the same real build order a hired
+	# Builder now follows too (see BuilderMarker.target_upper_pieces).
+	# Duck-typed via has_method exactly like stamp_structure_at_global
+	# itself already is a few lines up. Upper windows feed the SAME
+	# window_positions list ground windows already do -- one caller-visible
+	# list, not a second one nobody reads (see spawn_village's own night-
+	# lighting loop just below this function).
+	if (
+		_house_blueprint.is_two_story(blueprint_id) and stamped_pieces.size() == pieces.size()
+		and world != null and world.has_method("stamp_upper_floor_at_global")
+	):
+		var upper_pieces := _house_blueprint.build_upper_floor(blueprint_id, seed_value, material)
+		world.stamp_upper_floor_at_global(chunk_coord, origin_tile, upper_pieces)
+		window_positions.append_array(_window_positions(upper_pieces, origin_tile, tile_size))
+
 	return {"door": door_position, "stand": stand_position, "windows": window_positions}
 
 

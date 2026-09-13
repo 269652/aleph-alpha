@@ -35,6 +35,16 @@ extends Node2D
 ## establishes for turning a footprint-relative piece dict into real global
 ## tile coordinates.
 ##
+## `target_upper_pieces` (docs/concept/housing.md's "Two-story houses"
+## section) is the SAME shape, one layer up -- optional (defaults to `{}`,
+## so every existing single-story hire is completely unaffected), placed
+## into EarthChunkManager.upper_floor_modifications via build_upper_floor_
+## at_global rather than build_at_global. Deliberately built only AFTER
+## every real ground piece is placed (see _step_seeking) -- the same
+## real-world order a building actually goes up in, and it means a house's
+## own ground floor is never left half-built while material gets spent
+## upstairs instead.
+##
 ## Deliberately does NOT auto-wire itself to any ConstructionProject lookup
 ## or spawn-per-structure trigger -- there is no real caller yet that decides
 ## a Builder should exist for a given project (see docs/concept/
@@ -81,6 +91,7 @@ var search_radius_tiles := 20
 ## Injected by the caller -- see this file's own header.
 var target_project = null
 var target_pieces: Dictionary = {}
+var target_upper_pieces: Dictionary = {}
 var project_store = null
 var household_store = null
 
@@ -92,8 +103,10 @@ var _behavior := BuilderBehavior.new()
 var _building_placement := BuildingPlacement.new()
 
 var _next_cell_index := 0
+var _next_upper_cell_index := 0
 var _current_local_cell := Vector2i.ZERO
 var _current_piece_id := ""
+var _current_is_upper := false
 var _current_cost: Dictionary = {}
 var _storage_target_position := Vector2.ZERO
 var _arrived_at_storage := false
@@ -127,11 +140,20 @@ func _step_seeking(delta: float) -> void:
 	_behavior.advance(delta)  # no-op outside SEEKING's own rehunt clock
 	if not _behavior.can_commit():
 		return
-	if earth == null or target_project == null or project_store == null or target_pieces.is_empty():
+	if earth == null or target_project == null or project_store == null:
 		return
+	if target_pieces.is_empty() and target_upper_pieces.is_empty():
+		return
+	var is_upper := false
 	var candidate = _next_unplaced_piece()
 	if candidate == null:
-		return  # every real piece already placed -- nothing left to seek
+		# The ground floor is fully placed (or there never was one) -- only
+		# THEN does a real house get its own upper storey started, the same
+		# real-world build order this file's own header documents.
+		candidate = _next_unplaced_upper_piece()
+		is_upper = true
+	if candidate == null:
+		return  # every real piece on both floors is already placed
 	var storage_position = earth.nearest_structure_position(
 		position, storage_structure_id, float(search_radius_tiles) * TerrainRenderer.TILE_SIZE
 	)
@@ -140,6 +162,7 @@ func _step_seeking(delta: float) -> void:
 
 	_current_local_cell = candidate["local_cell"]
 	_current_piece_id = candidate["piece_id"]
+	_current_is_upper = is_upper
 	_current_cost = BuildingPiece.cost_of(_current_piece_id)
 	_storage_target_position = storage_position
 	_arrived_at_storage = false
@@ -220,6 +243,35 @@ static func _cell_before(a: Vector2i, b: Vector2i) -> bool:
 	return a.x < b.x
 
 
+## The upper-storey twin of _next_unplaced_piece, one layer up -- the SAME
+## round-robin/"verify against the real world, not a tracked done set"
+## contract, mirrored against target_upper_pieces/earth.upper_floor_at_
+## global instead of target_pieces/earth.modification_at_global. Only ever
+## reached once _next_unplaced_piece itself returns null (see _step_seeking)
+## -- a house's ground floor finishes before its own upper storey starts.
+func _next_unplaced_upper_piece():
+	var sorted_cells := _sorted_upper_local_cells()
+	var count := sorted_cells.size()
+	if count == 0:
+		return null
+	for offset in range(count):
+		var index := (_next_upper_cell_index + offset) % count
+		var local_cell: Vector2i = sorted_cells[index]
+		var piece_id: String = target_upper_pieces[local_cell]
+		var global_cell := _global_cell_for(local_cell)
+		if earth.upper_floor_at_global(global_cell.x, global_cell.y) == piece_id:
+			continue  # already really placed
+		_next_upper_cell_index = (index + 1) % count
+		return {"local_cell": local_cell, "piece_id": piece_id}
+	return null
+
+
+func _sorted_upper_local_cells() -> Array:
+	var cells: Array = target_upper_pieces.keys()
+	cells.sort_custom(_cell_before)
+	return cells
+
+
 ## Withdraws EVERY real item_id/count in `_current_cost` from the currently-
 ## targeted Storage, all-or-nothing across the WHOLE cost (not just per
 ## item) -- checks every item's real available stock first so a multi-item
@@ -253,8 +305,21 @@ func _return_current_cost_to_storage() -> void:
 ## other real placement (player, village generator) already does, so nothing
 ## here bypasses that mechanism either. Returns whether the piece actually
 ## landed.
+##
+## Branches on _current_is_upper (see _step_seeking) to place against the
+## UPPER floor instead -- its own grid snapshot and its own build_upper_
+## floor_at_global, never the ground ones, so an upper piece's own
+## adjacency is judged against the upper floor's real neighbors (the two
+## floors can legitimately differ at the same cell -- see EarthChunkManager.
+## UPPER_FLOOR_COLLISION_LAYER's own doc comment for why).
 func _attempt_place() -> bool:
 	var global_cell := _global_cell_for(_current_local_cell)
+	if _current_is_upper:
+		var upper_grid := _upper_local_grid_snapshot(global_cell)
+		if not _building_placement.can_place(_current_piece_id, global_cell, upper_grid, _buildable_ground):
+			return false
+		earth.build_upper_floor_at_global(global_cell.x, global_cell.y, _current_piece_id)
+		return true
 	var grid := _local_grid_snapshot(global_cell)
 	if not _building_placement.can_place(_current_piece_id, global_cell, grid, _buildable_ground):
 		return false
@@ -280,6 +345,19 @@ func _local_grid_snapshot(global_cell: Vector2i) -> Dictionary:
 	return grid
 
 
+## The upper-storey twin of _local_grid_snapshot, reading earth.upper_
+## floor_at_global instead of earth.modification_at_global.
+func _upper_local_grid_snapshot(global_cell: Vector2i) -> Dictionary:
+	var grid := {}
+	var offsets: Array[Vector2i] = [Vector2i.ZERO, Vector2i(0, -1), Vector2i(0, 1), Vector2i(-1, 0), Vector2i(1, 0)]
+	for offset in offsets:
+		var cell := global_cell + offset
+		var tile_id: String = earth.upper_floor_at_global(cell.x, cell.y)
+		if BuildingPiece.has_piece(tile_id):
+			grid[cell] = tile_id
+	return grid
+
+
 ## Real terrain buildability (water/cliffs) has no live check anywhere in
 ## this codebase yet -- see this file's own header. A permissive stand-in,
 ## named and documented rather than silently assumed.
@@ -291,8 +369,17 @@ func _buildable_ground(_cell: Vector2i) -> bool:
 ## completes it via ConstructionProjectStore once every real piece's worth
 ## has accumulated -- see ConstructionProjectStore.advance_project_labor_for
 ## _piece's own doc comment for the full contract.
+##
+## `required` sums BOTH floors' own real totals (target_upper_pieces is {}
+## for every ordinary single-story hire, so labor_hours_required_for_pieces
+## contributes exactly 0.0 there and this stays identical to before
+## two-story houses existed) -- a two-story project only ever reaches
+## COMPLETE once every real piece on BOTH layers has actually been placed.
 func _credit_labor_for_current_piece() -> void:
-	var required := ConstructionLabor.labor_hours_required_for_pieces(target_pieces)
+	var required := (
+		ConstructionLabor.labor_hours_required_for_pieces(target_pieces)
+		+ ConstructionLabor.labor_hours_required_for_pieces(target_upper_pieces)
+	)
 	project_store.advance_project_labor_for_piece(
 		target_project.id, _current_piece_id, required, household_store
 	)

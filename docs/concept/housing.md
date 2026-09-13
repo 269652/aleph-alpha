@@ -212,30 +212,91 @@ already share.
   floor`; `Chunk.upper_floor_modifications` + its own `UpperFloor`
   `TileMapLayer`/paint pass; `EarthChunkManager.set_current_player_floor`/
   `_update_upper_floor_visibility`/`upper_floor_at_global`/
-  `step_on_stairs`/`_stamp_upper_floor_at_global`; `Player._current_floor`/
+  `step_on_stairs`/`stamp_upper_floor_at_global`; `Player._current_floor`/
   `_floor_transition_step`; ten new blueprints, `ItemCatalog` entries,
   `shop.gd` prices, and `CraftingRecipeBook` recipes (all at the manor's
   own carpentry_level 3.0 ceiling)
-- ⬜ Real upper-floor wall collision (visual/room-detection only for now —
-  named above)
-- ⬜ Hire/`BuilderMarker` path building second floors (player-only for now
-  — named above)
-- ⬜ Procedural village NPC houses ever being two-story (deliberately
-  single-story only for now — named above)
+- ✅ Real upper-floor wall collision: a SECOND real Godot physics layer
+  (`EarthChunkManager.UPPER_FLOOR_COLLISION_LAYER`, bit 2 — ground stays on
+  the default bit 1, untouched), so a wall/window solid on one floor never
+  falsely blocks (or fails to block) the other at the same cell — the real
+  case that matters is the ground floor's own door (walkable) sitting
+  under the upper floor's own window (solid) in its place. `Player.
+  collision_mask` flips between the two layers the instant `_current_
+  floor` changes (`_floor_transition_step`) — a single property flip, not
+  an iterate-and-toggle-every-body-in-the-world scheme. `build_upper_
+  floor_at_global` is the new per-cell entry point (mirrors `build_at_
+  global`), and `stamp_upper_floor_at_global` (renamed from a private
+  helper, now public like `stamp_structure_at_global`) syncs collision for
+  every cell of a bulk stamp too. Real GUT coverage: `test_earth_chunk_
+  manager_upper_floor_collision.gd` (12 tests — spawn/remove/layer-
+  identity/ground-vs-upper-at-the-same-cell/chunk unload+reload) and 4 new
+  `test_player.gd` tests proving `collision_mask` itself actually flips on
+  a real floor transition (the property nothing upstream of it matters
+  without), plus the full pre-existing ground-floor collision suite in
+  `test_earth_chunk_manager.gd` re-run and still green (10/10) to confirm
+  zero regression. Deliberately NOT extended: real structural statics/
+  decay/collapse for the upper floor (a materially separate system — see
+  workforce.md's own
+  BuildingStatics/BuildingDecay sections — left as ground-floor-only, a
+  named, narrower gap than "no collision at all").
+- ✅ `hire_builder_for_house`/`BuilderMarker` now build the real upper
+  floor too, not just the ground floor + roof-less shell: `BuilderMarker.
+  target_upper_pieces` (optional, `{}` by default so every pre-existing
+  single-story hire is unaffected) is only ever attempted once every real
+  ground piece is placed — the same real-world build order a house
+  actually goes up in — via its own round-robin seek/withdraw/carry/place
+  cycle mirroring the ground one exactly, checked against the UPPER
+  floor's own real neighbors (`build_upper_floor_at_global`/`upper_floor_
+  at_global`), never the ground floor's. The project's own real completion
+  total (`ConstructionLabor.labor_hours_required_for_pieces`) now sums
+  BOTH floors, so a two-story hire only reaches COMPLETE once the whole
+  house — not just its ground floor — is real. Real GUT coverage: 4 new
+  tests in `test_builder_marker.gd` (default-empty backward compatibility,
+  upper pieces placed after the ground floor, an upper wall's own
+  adjacency judged against the upper floor specifically — isolated by
+  leaving the ground floor deliberately EMPTY so a bug reading the wrong
+  grid would fail loudly — and full two-floor completion with the correct
+  combined labor total). Still NOT extended: a hired house still gets no
+  roof at all (the SAME pre-existing, separately-named gap this had
+  before two-story houses existed — see `BuilderMarker`'s own file header
+  — not something two-story specifically worsens in kind, only in the
+  absolute wood left over in Storage).
+- ✅ Procedural village NPC houses can be two-story: `HouseBlueprint.
+  BLUEPRINT_POOL_BY_OCCUPATION`'s own merchant/blacksmith pools (the only
+  two occupations that already reached for the showiest SINGLE-story
+  options) now each include a few real two-story entries at their own
+  showy tail — a deliberately CURATED subset (merchant: `merchant_house`/
+  `guild_hall`/`harborside_manor`; blacksmith: `artisan_workshop_house`/
+  `tower_keep`), not all ten, chosen for thematic fit and for footprints
+  comparable to the manor tier already there (36–49 tiles) rather than the
+  largest shapes, which risk visibly overlapping a neighbor in
+  `SettlementGenerator`'s own fixed ring layout — a named judgment call.
+  Farmer/fisher/guard/herbalist stay single-story. `VillageRenderer.
+  _stamp_house` stamps the real upper floor once `HouseBlueprint.
+  is_two_story` reads true AND the ground floor itself is fully complete
+  (the SAME gate the roof already uses), and appends the upper floor's own
+  real windows to the SAME night-lighting list the ground floor's windows
+  already feed — the original request's own "windows in second level"
+  now genuinely lights up for NPC-owned houses too, not just the player's.
+  Real GUT coverage: 4 new tests in `test_village_renderer.gd` (a real
+  two-story choice stamps a real, non-empty upper floor; its windows
+  extend the lighting list; a still-partially-built house gets no upper
+  floor yet; a single-story choice never calls the upper-floor stamp at
+  all) plus 4 new tests in `test_house_blueprint.gd` (merchant/blacksmith
+  pools each contain a two-story id; the generic fallback and the four
+  modest occupations still never do) — and the full pre-existing suites of
+  both files re-run and still green (43/43, 35/35) to confirm zero
+  regression from widening two long-lived pool constants.
 
-**The same explicit caveat as `workforce.md`'s own Status list**: the
-✅/🚧 items above (the layer/paint pass and the place/remove verb, and
-now the entire two-story house system) were written directly per an
-explicit, direct mid-session user instruction ("skip tests"), without
-this project's own mandatory strict-TDD red-first cycle and without
-running the test suite at all. Grounded in real, independently-verified
-existing APIs (`TerrainRenderer.atlas_coords_for_modification`,
-`ChunkSerializer.save_modifications`/`load_modifications`,
-`FurniturePlacement`'s own already-tested rule, and — for two-story
-specifically — `_update_roof_visibility`'s own already-tested room-hiding
-logic, mirrored rather than reinvented) -- but genuinely unverified until
-a real GUT pass confirms it. Do not merge to `main` on the strength of
-this Status list alone.
+**Unlike the batch above (built under an explicit "skip tests" mid-session
+instruction), this pass followed this project's own mandatory strict-TDD
+red-first cycle throughout** — every function named ✅ in this update has
+a real, run, currently-green GUT test written before its implementation,
+not just a plausible-looking claim. This directly closed three gaps that
+were named honestly as scoped OUT in the batch above (real upper-floor
+collision, the hire/`BuilderMarker` path, and procedural village
+generation), per a direct follow-up request to "properly implement" them.
 
 ### Open questions
 
@@ -247,16 +308,23 @@ this Status list alone.
   bonus feeding [survival.md](survival.md), NPC willingness to be
   [hired](npc.md#hiring--instruction)), or stay a purely social/cosmetic
   system?
-- Real upper-floor wall collision — a second simultaneous per-cell static
-  body layer, gated on `_current_player_floor`, so a player can no longer
-  walk through upstairs walls from either floor?
-- Should `hire_builder_for_house`/`BuilderMarker` ever build second floors,
-  or should two-story houses stay a player-only, hands-on build (mirroring
-  how only the player currently builds roofs by hand too)?
-- Should procedural village generation ever place NPC-owned two-story
-  houses, and if so, do NPCs get any use of the upper floor (sleeping
-  upstairs, a merchant's storeroom) or is it purely a bigger, emptier shell
-  than what a player would furnish?
+- Real upper-floor structural statics/decay/collapse — extending
+  `BuildingStatics`/`BuildingDecay` to a second, independent piece grid
+  rather than leaving the upper floor structurally inert (named above as a
+  deliberate, narrower gap once real collision existed)?
+- Should a hired `BuilderMarker` ever build a roof at all (single-story or
+  two-story) — the pre-existing gap two-story inherited rather than
+  introduced?
+- Now that NPCs can live in two-story houses, do they get any real USE of
+  the upper floor (sleeping upstairs specifically, a merchant's own
+  storeroom), or is it purely a bigger, emptier shell than what a player
+  would furnish?
+- Should the remaining five two-story shapes (`townhouse_narrow`,
+  `riverside_villa`, `timber_longhouse`, `grand_estate`, `gambrel_lodge`)
+  ever reach the procedural generator too — widening the curated merchant/
+  blacksmith pools, extending two-story to a new occupation, or improving
+  `SettlementGenerator`'s own ring spacing so the largest footprints stop
+  being a real overlap risk?
 - Furniture placement (above) only checks `modifications`' ground floor —
   should `FurniturePlacement.can_place` also accept `upper_floor_
   modifications` floor cells, so a player can furnish the upstairs room
