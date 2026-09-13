@@ -5799,7 +5799,11 @@ static func is_off_argument(args: Array) -> bool:
 ## follow-up once more than one concurrent player is actually being tested.
 func _server_process() -> void:
 	var streamed := false
-	for child in _players.get_children():
+	# The "player" group, never $Entities' own children: that node holds
+	# every tree, stone and marker in the loaded world (see _players' own doc
+	# comment), and walking it per frame for the one or two players in it
+	# measured ~2 ms a frame (FPS regression round 15).
+	for child in get_tree().get_nodes_in_group("player"):
 		var player := child as Player
 		if player == null:
 			continue
@@ -5831,7 +5835,10 @@ func _client_process(delta: float) -> void:
 
 	# Every locally-visible player (including remote players' proxies) needs a
 	# chunk_manager reference so its own visual water-state lookup works.
-	for child in _players.get_children():
+	# Found through the "player" group, never by walking $Entities: that
+	# node holds every tree, stone and marker in the loaded world, and this
+	# loop over it measured ~2 ms of every frame (FPS regression round 15).
+	for child in get_tree().get_nodes_in_group("player"):
 		var player := child as Player
 		if player != null and not player.is_set_up():
 			player.setup(_chunk_manager, TerrainRenderer.TILE_SIZE)
