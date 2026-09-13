@@ -30,7 +30,6 @@ const RiverCatalog = preload("res://src/world/river_catalog.gd")
 ## real test of the model rather than a single-scale one.
 const MEAN_DISCHARGE_M3_S := {
 	"Danube": 6452.0,   # mouth/delta, 1931-2020, AEo ~817,000 km2
-	"Rhine": 2900.0,    # mouth, summed delta arms, AEo 218,300 km2 (incl. Meuse)
 	"Elbe": 861.0,      # mouth, AEo 148,268 km2
 	"Oder": 574.0,      # mouth into the Stettiner Haff, AEo 118,890 km2
 	"Weser": 383.0,     # mouth, AEo 45,809 km2
@@ -53,7 +52,6 @@ const MEAN_DISCHARGE_M3_S := {
 ## test_the_derived_width_relation_reproduces_the_real_published_widths.
 const CURATED_WIDTH_M := {
 	"Danube": 950.0,  # lower course 900-1000; the only river with real mean width by reach
-	"Rhine": 560.0,   # >400 at Emmerich-Kleve, up to 900 on the widest Upper Rhine reach
 	"Elbe": 400.0,    # Unterelbe below the Geesthacht weir, 300-500
 	"Main": 170.0,    # Schweinfurt
 	"Isar": 150.0,    # the engineered Munich channel

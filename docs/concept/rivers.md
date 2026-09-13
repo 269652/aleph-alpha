@@ -70,7 +70,7 @@ tile_is_within_radius` already makes and documents.
 Phase 1 ships Germany's major rivers plus the Dreisam (small, but the one
 this game's spawn point sits on, so it ships regardless of size):
 
-Rhine, Danube, Elbe, Weser, Main, Mosel, Neckar, Oder, Spree, Isar, Dreisam.
+Danube, Elbe, Weser, Main, Mosel, Neckar, Oder, Spree, Isar, Dreisam.
 
 **Explicitly deferred**: every other river on Earth. The catalog structure
 places no limit on this — adding a river is adding one data entry — but
@@ -139,7 +139,7 @@ Curated rivers remain authoritative wherever they reach.
 ### Spawn: a random curated river (2026-09-12)
 
 "Can you set the spawn to a random river?" A new game now begins on a
-random point along a random **curated** river -- the Dreisam, Rhine,
+random point along a random **curated** river -- the Dreisam,
 Danube, Elbe, Weser, Main, Mosel, Neckar, Oder, Spree or Isar -- rather
 than always at Nantes. `src/world/spawn_river_picker.gd` is pure: given
 `RiverCatalog.tile_polylines`, a seeded `RandomNumberGenerator` and an
@@ -538,7 +538,7 @@ That last one **changed existing behaviour honestly**: the player used to
 swim at spawn, because the authored 2.5 m taper said so. Real physics says
 wade. The test that pinned "swimming" was pinning an invention, and now pins
 the real claim (you are in real water) with the swim path proved separately
-against the Rhine.
+against the Danube.
 
 ### Honest limits
 
@@ -1660,7 +1660,10 @@ regardless of which cells the swimmers are on.
 Pinned by `test_a_river_reach_can_be_both_fish_water_and_under_the_flow_
 overlay` at one measured Rhine coordinate rather than by re-sweeping ten
 thousand cells per run — one real example is enough to stop the case being
-reasoned away as impossible a second time.
+reasoned away as impossible a second time. The Rhine's later removal from
+the curated roster took that coordinate with it; re-sweeping the remaining
+roster's full courses and sea mouths found no replacement (see the test's
+own comment), so it is marked `pending` until one turns up.
 
 (Freshwater fishing as a *designed* mechanic — river-specific species,
 spawning rules, a reason to fish a stream rather than the sea — is still

@@ -22,6 +22,7 @@ const PlayerScene = preload("res://scenes/player.tscn")
 const EarthChunkManager = preload("res://src/world/earth_chunk_manager.gd")
 const EarthChunkGenerator = preload("res://src/world/earth_chunk_generator.gd")
 const GeoCoordinates = preload("res://src/world/geo_coordinates.gd")
+const RiverCatalog = preload("res://src/world/river_catalog.gd")
 const TerrainRenderer = preload("res://src/rendering/terrain_renderer.gd")
 
 const TILE_SIZE := TerrainRenderer.TILE_SIZE
@@ -89,23 +90,41 @@ func test_standing_at_the_river_centerline_puts_the_player_in_real_water():
 
 
 ## The other end of the real range, so the depth -> movement-mode chain is
-## pinned across it rather than at one point. The Rhine at Cologne carries
-## ~267x the Dreisam's discharge in a ~560 m channel; a river that large is
-## unambiguously not wadeable, so a real big-river cell must still produce
-## real swimming. (Deliberately a BIG river rather than a merely deep spot:
-## depth varies with local slope along any one course, so picking a large
-## discharge is what makes this robust to which waypoint gets sampled.)
+## pinned across it rather than at one point. The Danube at Regensburg
+## carries ~594x the Dreisam's discharge in a ~950 m channel; a river that
+## large is unambiguously not wadeable, so a real big-river cell must still
+## produce real swimming. (Deliberately a BIG river rather than a merely
+## deep spot: depth varies with local slope along any one course, so
+## picking a large discharge is what makes this robust to which waypoint
+## gets sampled.)
+##
+## Uses the course point NEAREST Regensburg, not Regensburg's own raw
+## coordinate: river_depth_meters_at_global only recognizes a curated
+## river within the tight RIVER_HALF_WIDTH_TILES, and the Chaikin-smoothed
+## course does not pass exactly through a city's raw lat/lon -- for a
+## long-waypoint-spacing river that gap is wider than
+## RIVER_HALF_WIDTH_TILES, so a raw city coordinate silently misses the
+## curated band and reads zero depth. This (not bad Rhine data) is what
+## made this test's original Rhine/Cologne fixture read 0.0 -- see
+## docs/progress.md.
 func test_a_genuinely_large_river_still_resolves_to_swimming():
 	var geo := GeoCoordinates.new()
-	var rhine_tile := geo.tile_for_coordinate(
-		50.93639, 6.95278, EarthChunkGenerator.WORLD_WIDTH_TILES, EarthChunkGenerator.WORLD_HEIGHT_TILES
-	)
-	chunk_manager.update(rhine_tile)
+	var width := EarthChunkGenerator.WORLD_WIDTH_TILES
+	var height := EarthChunkGenerator.WORLD_HEIGHT_TILES
+	var regensburg_centre := geo.tile_for_coordinate(49.017, 12.083, width, height)
+	var danube_tile := Vector2i.ZERO
+	var nearest := INF
+	for point in RiverCatalog.tile_polylines(width, height)["Danube"]:
+		var distance: float = Vector2(regensburg_centre).distance_to(point)
+		if distance < nearest:
+			nearest = distance
+			danube_tile = Vector2i(point)
+	chunk_manager.update(danube_tile)
 	assert_gt(
-		chunk_manager.river_depth_meters_at_global(rhine_tile.x, rhine_tile.y), 1.5,
-		"the Rhine at Cologne is nowhere near wadeable; if this drops, the hydraulics changed"
+		chunk_manager.river_depth_meters_at_global(danube_tile.x, danube_tile.y), 1.5,
+		"the Danube at Regensburg is nowhere near wadeable; if this drops, the hydraulics changed"
 	)
-	assert_eq(player._resolve_water_state(rhine_tile, 0.1).mode, "swimming")
+	assert_eq(player._resolve_water_state(danube_tile, 0.1).mode, "swimming")
 
 
 func test_standing_at_the_river_centerline_reports_real_nonzero_depth_driven_speed():

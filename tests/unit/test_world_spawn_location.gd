@@ -159,22 +159,22 @@ func test_a_spawn_candidate_must_be_a_warm_river_tile_between_sea_and_mountain()
 	var geo := GeoCoordinates.new()
 	var width := EarthChunkGenerator.WORLD_WIDTH_TILES
 	var height := EarthChunkGenerator.WORLD_HEIGHT_TILES
-	# The smoothed Rhine course does not pass exactly through the city
+	# The smoothed Danube course does not pass exactly through the city
 	# centre (corners are cut, RiverCatalog._chaikin_smoothed), so take the
-	# course point nearest Cologne -- a river tile by construction.
-	var cologne_centre := geo.tile_for_coordinate(50.93639, 6.95278, width, height)
-	var cologne := Vector2i.ZERO
+	# course point nearest Regensburg -- a river tile by construction.
+	var regensburg_centre := geo.tile_for_coordinate(49.017, 12.083, width, height)
+	var regensburg := Vector2i.ZERO
 	var nearest := INF
-	for point in RiverCatalog.tile_polylines(width, height)["Rhine"]:
-		var distance: float = Vector2(cologne_centre).distance_to(point)
+	for point in RiverCatalog.tile_polylines(width, height)["Danube"]:
+		var distance: float = Vector2(regensburg_centre).distance_to(point)
 		if distance < nearest:
 			nearest = distance
-			cologne = Vector2i(point)
-	assert_true(manager.generator.is_river_at_global(cologne.x, cologne.y), "precondition: a point of the curated Rhine course is a river tile")
-	assert_true(world._spawn_candidate_acceptable(cologne), "a warm river bank on land qualifies")
+			regensburg = Vector2i(point)
+	assert_true(manager.generator.is_river_at_global(regensburg.x, regensburg.y), "precondition: a point of the curated Danube course is a river tile")
+	assert_true(world._spawn_candidate_acceptable(regensburg), "a warm river bank on land qualifies")
 	var atlantic := geo.tile_for_coordinate(46.0, -8.0, width, height)
 	assert_false(world._spawn_candidate_acceptable(atlantic), "open sea does not")
-	var not_a_river := cologne + Vector2i(40, 40)
+	var not_a_river := regensburg + Vector2i(40, 40)
 	if not manager.generator.is_river_at_global(not_a_river.x, not_a_river.y):
 		assert_false(world._spawn_candidate_acceptable(not_a_river), "dry land off any river does not")
 	world.free()

@@ -257,7 +257,18 @@ const EarthChunkGenerator = preload("res://src/world/earth_chunk_generator.gd")
 const RiverCatalog = preload("res://src/world/river_catalog.gd")
 const WaterAreaSurvey = preload("res://src/world/water_area_survey.gd")
 
-## On the Rhine, found by sweeping every curated course's apron band.
+## Was on the Rhine, found by sweeping every curated course's apron band.
+## The Rhine has since been removed from the curated roster (it never
+## produced correct live hydraulics -- see docs/progress.md), which
+## removed this fixture too: re-swept every remaining river's course
+## (±3 tiles around all 189 smoothed polyline points, zero hits) and each
+## river's sea-mouth neighbourhood (±40 tiles, zero hits) for the same
+## ocean-biome-inside-the-flow-apron coincidence, and found none. This
+## looks like it may have been specific to where the Rhine's real course
+## happened to cross this world's (already-known-imperfect) coastline
+## data, not a property guaranteed to exist for the current roster --
+## see test below, marked pending until a real replacement coordinate is
+## found (or this case is confirmed genuinely unreachable now).
 const FISH_UNDER_THE_RIVER_SURFACE := Vector2i(20542, 4242)
 
 const _NEIGHBOR_STEPS := [
@@ -268,6 +279,12 @@ const _NEIGHBOR_STEPS := [
 
 
 func test_a_river_reach_can_be_both_fish_water_and_under_the_flow_overlay():
+	pending(
+		"FISH_UNDER_THE_RIVER_SURFACE was a Rhine-course coordinate; the Rhine"
+		+ " is removed from the curated roster and no replacement has been"
+		+ " found yet on the remaining rivers -- see the const's own comment"
+	)
+	return
 	var generator := EarthChunkGenerator.new()
 	var tile := FISH_UNDER_THE_RIVER_SURFACE
 
