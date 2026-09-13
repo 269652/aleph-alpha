@@ -2356,3 +2356,56 @@ compiled shader on a real GPU (`tools/probe_river_drift_wrap.gd`, new):
 the one-frame step straddling a fast reach's wrap now measures 0.91x
 the field's own ordinary one-frame step (indistinguishable from normal
 flow evolution) against 11.87x with the crossfade patched back out.
+
+## The river surface at snap resolution (2026-09-13)
+
+FPS regression round 15 (`soil_fauna.md`) measured, for the first time,
+what the river surface costs the GPU: with a river on screen, hiding
+`RiverFlowFx` alone took the renderer's measured GPU time from ~24 ms a
+frame to ~3 ms on the reference machine's Intel iGPU (a within-run A/B,
+five report windows hidden between control windows, so the same world
+under the same load). By itself that is above the whole 16.7 ms budget of
+a 60 fps frame. The same scene in a 640x360 window measured ~8 ms: the
+cost is fragment-bound -- it scales with pixels, not with river.
+
+**The shader already draws at half a world pixel.** The very first thing
+`fragment()` does is snap the fragment's world position to `PIXEL_SNAP`
+(0.5 world px, one art pixel -- "so the surface reads as painted-on next
+to chunky sprite terrain"), and every term after that -- the field
+reconstruction, the smear, the noise, the ripples, the bank feather -- is
+a function of that snapped position alone. At the game's fixed 4x camera
+(`Player.CAMERA_ZOOM`) a snap cell is a 2x2 block of screen fragments, so
+the full-resolution pass computed the identical answer four times per
+cell; on a 1080p window, nine times.
+
+**Design: render the layer once per snap cell and upscale by a whole
+number of pixels.** `RiverFlowPass` (`src/rendering/river_flow_pass.gd`)
+moves the `RiverFlowFx` TileMapLayer -- transform, material and every
+cell the chunk manager paints untouched -- into a SubViewport of its own
+(own World2D, transparent, redrawn every frame, nearest-filtered) whose
+Camera2D is anchored top-left at a zoom of exactly one texel per snap
+cell (`camera_zoom() == 1 / PIXEL_SNAP`), and composites the viewport
+texture back into the world canvas as one NEAREST-filtered Sprite2D at
+the layer's exact old sibling index and z_index (the ground draw order
+`test_world_ground_layer_order.gd` pins), scaled so one texel covers one
+snap cell of world. The main camera then upscales it 2x (3x at 1080p).
+Camera and composite share an origin floored onto the texel grid, so a
+texel's centre is always a snap cell's centre whatever the player
+camera's sub-texel position this frame -- the image is the same image,
+not a resampled one. The framed world span comes from
+`DisplayScaling.visible_tiles_across` (a bigger window shows the same
+world at higher fidelity, never more of it), so the viewport is 640x360
+texels plus a two-texel margin regardless of window size, and only
+reallocated when that span changes. The day/night `CanvasModulate` tints
+the composite once, in the world canvas, exactly as it tinted the layer;
+the pass's own canvas carries no modulate.
+
+**What is given up, honestly:** nothing in the image, by construction;
+one render-target allocation (640x360 RGBA) and one extra draw. What it
+does NOT cover: anything that reads the river layer's position through
+the scene tree (`$RiverFlowFx` no longer resolves after `_ready`; World
+holds the node reference, the chunk manager paints the same node). Pinned
+by `tests/unit/test_river_flow_pass.gd` (the texel is the shader's snap
+cell, the zoom is one texel per cell, the upscale is a whole number of
+screen pixels, the origin snaps, the draw order and transform survive)
+and `test_world_river_flow_pass_wiring.gd`.
