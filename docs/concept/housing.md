@@ -442,7 +442,9 @@ named gaps, not a silent claim of full coverage.
   share: `can_build_house_from_blueprint` (the player's own instant
   self-build), `BuilderMarker._buildable_ground` (the hired path, real
   now instead of `return true`), and `VillageRenderer._find_dry_origin`
-  (renamed in spirit from water-only to real terrain avoidance, preferring
+  (since replaced by `_fit_house`/`_find_clear_origin`, see the livable-
+  houses entry below; renamed in spirit from water-only to real terrain
+  avoidance, preferring
   the real check via `has_method` duck-typing when `world` provides it,
   falling back to the original ocean-only `biome_at_global` check for an
   older test double that predates it). `SettlementGenerator.
@@ -564,6 +566,40 @@ named gaps, not a silent claim of full coverage.
   water/snow overlays were ever erased). All TDD red-first: the new
   exterior tests were run against the pre-fix code first (0/8, the door
   test failing for exactly the reported reason) before the fix landed.
+
+- ✅ **Livable houses: furnished for real, dry, clear of the wood and
+  grass, and enterable** — the next live report, with screenshots: *"The
+  NPCs buildings still look poor and basic; not like sophisticated
+  architecture also they are still not furnished also some are built so
+  that you can't enter"* (a stone house with a pond INSIDE it), then
+  *"they shouldn't be able to build anything on water tiles and trees /
+  grass must be cut before and can't grow back inside a house."* Each was
+  measured before it was touched. **"Still not furnished" was true and
+  the furniture was there**: every furniture id and `wood_stairs` fell
+  through `ProceduralBuildingPieceSprite.generate_image`'s `match` to the
+  plain wood-floor tile, so the occupation-themed sets above, and the
+  stairs a player needs to find the second storey, drew as bare boards.
+  They have real art now (the file's own every-piece-distinct test had
+  been red on `main` for exactly this). **The pond**: buildability and the
+  painted water surface were two different predicates; one rule now
+  (`EarthChunkManager.is_water_at_global`, [building.md](building.md)
+  "Placement rules"), and a persisted house piece found standing in water
+  on load is washed away and the chunk re-saved, so a world saved before
+  this heals itself on the next visit. **Grass/flowers/scrub/lichen** are
+  blocked on every built cell (cleared at stamp/build/load, released on
+  destroy) and trees keep a one-cell apron around a house. **"Can't
+  enter"**: `VillageRenderer._fit_house`/`_find_clear_origin` site a house
+  with its footprint AND doorstep inside the chunk, buildable and free of
+  anything already built, anywhere in its own chunk, falling back to a
+  smaller shape before skipping. **"Poor and basic"**: the facade family,
+  [building.md](building.md) "How a house reads from above" point 6 — the
+  band a house shows the street is now plaster-and-timber or ashlar with
+  an eave shadow, sills, shutters, lintel and doorstep, its upper band a
+  variant of its own. The honest measurement of the result (the real
+  `spawn_village` re-run on ten real settlements around the reported
+  position) lives in building.md's Status entry for this pass, remaining
+  gap included. Chunk-boundary and TDD notes: all red-first; the probe that
+  found the causes is a throwaway GUT test, deliberately not committed.
 
 **Unlike the batch above (built under an explicit "skip tests" mid-session
 instruction), this pass and its follow-ups all followed this project's
