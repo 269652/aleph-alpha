@@ -121,28 +121,47 @@ func is_two_story(blueprint_id: String) -> bool:
 ##
 ## Two-story houses (docs/concept/housing.md): merchant and blacksmith --
 ## the only two occupations that already reach for the showiest SINGLE-
-## story options above (manor_grand/manor_L_wide, manor_wide) -- get a
-## few real two-story entries at their own showy tail, via this SAME
-## occupation+personality mechanism, rather than a separate gate. A
-## deliberately curated SUBSET of TWO_STORY_BLUEPRINT_IDS, not all ten:
-## thematically fitting names (a merchant's own guild_hall/harborside_
-## manor/merchant_house; a blacksmith's own artisan_workshop_house/
-## tower_keep), and footprints comparable to the manor tier already sitting
-## here (36-49 tiles) rather than the largest shapes (e.g. grand_estate's
-## 64), which risk visibly overlapping a neighboring villager's house in
+## story options above (manor_grand/manor_L_wide, manor_wide) -- get real
+## two-story entries at their own showy tail, via this SAME occupation+
+## personality mechanism, rather than a separate gate. A deliberately
+## curated SUBSET of TWO_STORY_BLUEPRINT_IDS, not all ten: thematically
+## fitting names (a merchant's own guild_hall/harborside_manor/
+## merchant_house; a blacksmith's own artisan_workshop_house/tower_keep),
+## and footprints comparable to the manor tier already sitting here
+## (25-49 tiles) rather than the largest shapes (e.g. grand_estate's 64),
+## which risk visibly overlapping a neighboring villager's house in
 ## SettlementGenerator's own fixed ring layout -- a real, named judgment
 ## call, not an oversight. The remaining two-story shapes stay reachable
 ## only through the player's own deliberate blueprint-crafting choice,
 ## where the player picks the exact site and can judge clearance
 ## themselves. Farmer/fisher/guard/herbalist stay single-story -- the same
 ## plain end of the gradient they already occupy.
+##
+## Weighted MAJORITY two-story (a real repeated-entry weighting, the same
+## "no probability table" convention this whole dict already uses) --
+## reported directly as too rare to reliably find by exploring: a village
+## walked into at random should show one often, not occasionally. Each
+## pool still opens with two real plain/single-story entries (so even a
+## cautious/stoic-dominant roll -- the lower half of choose_blueprint_id's
+## own plain/showy split -- keeps a real, if smaller, chance at one) and
+## is majority two-story from there on, so a bold/greedy roll (the upper
+## half) is now overwhelmingly likely to land on one. See
+## test_house_blueprint.gd's own test_a_merchant_or_blacksmith_village_
+## most_often_shows_a_two_story_house for the measured real hit rate this
+## reshuped pool actually produces, not just an eyeballed intent.
 const BLUEPRINT_POOL_BY_OCCUPATION := {
 	"farmer": ["hut_tiny", "cottage_small", "cottage_small", "cottage_wide"],
 	"fisher": ["hut_tiny", "hut_tiny", "cottage_small", "cottage_tall"],
 	"guard": ["hut_tiny", "cottage_small", "cottage_small", "cottage_tall"],
 	"herbalist": ["cottage_small", "cottage_window_pair", "cottage_bright", "cottage_L_small"],
-	"blacksmith": ["cottage_wide", "cottage_wide", "manor_wide", "cottage_L_small", "artisan_workshop_house", "tower_keep"],
-	"merchant": ["cottage_bright", "manor_wide", "manor_grand", "manor_L_wide", "merchant_house", "guild_hall", "harborside_manor"],
+	"blacksmith": [
+		"cottage_wide", "manor_wide",
+		"artisan_workshop_house", "tower_keep", "artisan_workshop_house", "tower_keep", "tower_keep",
+	],
+	"merchant": [
+		"cottage_bright", "manor_grand",
+		"merchant_house", "guild_hall", "harborside_manor", "merchant_house", "guild_hall", "harborside_manor",
+	],
 }
 
 ## Personality traits that nudge a choice toward the SHOWY (larger/later)

@@ -304,15 +304,71 @@ func _stamp_house(chunk_coord: Vector2i, index: int, anchor: Vector2, npc: NpcId
 	# window_positions list ground windows already do -- one caller-visible
 	# list, not a second one nobody reads (see spawn_village's own night-
 	# lighting loop just below this function).
+	var upper_pieces := {}
 	if (
 		_house_blueprint.is_two_story(blueprint_id) and stamped_pieces.size() == pieces.size()
 		and world != null and world.has_method("stamp_upper_floor_at_global")
 	):
-		var upper_pieces := _house_blueprint.build_upper_floor(blueprint_id, seed_value, material)
+		upper_pieces = _house_blueprint.build_upper_floor(blueprint_id, seed_value, material)
 		world.stamp_upper_floor_at_global(chunk_coord, origin_tile, upper_pieces)
 		window_positions.append_array(_window_positions(upper_pieces, origin_tile, tile_size))
 
+	# Interior furniture (docs/concept/housing.md's "Interior furniture"
+	# section) -- reported directly alongside two-story houses themselves
+	# ("no room decoration"): an NPC's own real house was never furnished
+	# at all before this, only the player's own hand-furnished house was.
+	# Gated on the SAME "fully complete" condition the roof/upper floor
+	# already use -- an unfinished shell isn't "lived in" yet. Furnishes
+	# BOTH floors when the house has one, via each floor's own real,
+	# separate stamp (see stamp_upper_floor_furniture_at_global's own doc
+	# comment for why the ground layer can't just be reused for the upper
+	# floor too).
+	if stamped_pieces.size() == pieces.size() and world != null:
+		if world.has_method("stamp_furniture_at_global"):
+			var ground_furniture := _furnish_house(stamped_pieces, seed_value)
+			world.stamp_furniture_at_global(chunk_coord, origin_tile, ground_furniture, stamped_pieces)
+		if not upper_pieces.is_empty() and world.has_method("stamp_upper_floor_furniture_at_global"):
+			# A distinctly-salted seed (see _house_resident_seed's own
+			# identical reasoning one file over): the upper floor's own
+			# furniture layout must not numerically mirror the ground
+			# floor's, or a bed picked for the exact same relative cell on
+			# both floors would read as an obviously copy-pasted room.
+			var upper_furniture := _furnish_house(upper_pieces, seed_value + 1)
+			world.stamp_upper_floor_furniture_at_global(chunk_coord, origin_tile, upper_furniture, upper_pieces)
+
 	return {"door": door_position, "stand": stand_position, "windows": window_positions}
+
+
+## A small, deterministic, seeded furniture layout for one real floor's
+## own worth of pieces (ground OR upper -- this function has no idea
+## which, and doesn't need to: it only ever looks at real FLOOR cells
+## within whatever `pieces` it's given). Never more real pieces than the
+## room's own real floor can hold. A fixed, priority-ordered set (bed
+## first -- the single most essential piece of furniture a room can hold,
+## so a one-floor-cell hut still gets SOMETHING real) rather than a
+## fabricated "appeal" formula -- docs/concept/housing.md's own "Appeal
+## score: honestly minimal for now" note already names that formula as
+## unresolved; this is decor, not a game-affecting number.
+const _FURNITURE_SET: Array[String] = [
+	"wood_bed", "wood_table", "wood_chair", "wood_chair", "wood_rug", "wood_bookshelf",
+]
+
+func _furnish_house(pieces: Dictionary, seed_value: int) -> Dictionary:
+	var floor_cells: Array = []
+	for cell in pieces:
+		if BuildingPiece.category_of(pieces[cell]) == BuildingPiece.CATEGORY_FLOOR:
+			floor_cells.append(cell)
+	floor_cells.sort_custom(func(a, b): return a.y < b.y if a.y != b.y else a.x < b.x)
+
+	var piece_count: int = mini(_FURNITURE_SET.size(), floor_cells.size())
+	var remaining_cells := floor_cells.duplicate()
+	var furniture := {}
+	for i in piece_count:
+		var pick_index := PixelNoise.range_index(seed_value, i + 1, 37, remaining_cells.size())
+		var cell: Vector2i = remaining_cells[pick_index]
+		furniture[cell] = _FURNITURE_SET[i]
+		remaining_cells.remove_at(pick_index)
+	return furniture
 
 
 ## How structurally complete a settlement house should be by the time a
@@ -441,15 +497,24 @@ func _door_facing_direction(door_local: Vector2i, pieces: Dictionary) -> Vector2
 	return Vector2i(1, 0)  # never happens for a real door cell; stays safe regardless
 
 
-## `raw_origin` if its whole footprint is dry land already; otherwise the
-## nearest (by squared distance, deterministic) candidate origin within
-## _WATER_AVOIDANCE_SEARCH_RADIUS_TILES whose whole footprint is dry; null if
-## none qualifies. `world` without biome_at_global (a caller that only cares
-## about stamp_structure_at_global, e.g. an older/duck-typed test double)
-## skips the check entirely and trusts raw_origin, same fail-open shape as
-## every other optional-capability check in this codebase.
+## `raw_origin` if its whole footprint is real, buildable ground already;
+## otherwise the nearest (by squared distance, deterministic) candidate
+## origin within _WATER_AVOIDANCE_SEARCH_RADIUS_TILES whose whole
+## footprint qualifies; null if none does. `world` supporting neither real
+## check (a caller that only cares about stamp_structure_at_global, e.g.
+## an older/duck-typed test double) skips the check entirely and trusts
+## raw_origin, the same fail-open shape as every other optional-capability
+## check in this codebase.
+##
+## Named "_dry" historically (water avoidance was this search's original
+## and only job); it now also avoids forest and standing trees (docs/
+## concept/building.md: "houses / buildings cannot be built on river /
+## water; also not in the forest... must first fell all trees to make
+## space") via the real EarthChunkManager.is_buildable_terrain_at, when
+## the caller provides it -- see _footprint_is_dry's own doc comment for
+## the fallback this keeps for a `world` that only has biome_at_global.
 func _find_dry_origin(raw_origin: Vector2i, footprint: Vector2i, world) -> Variant:
-	if not world.has_method("biome_at_global") or _footprint_is_dry(raw_origin, footprint, world):
+	if not _world_has_a_terrain_check(world) or _footprint_is_dry(raw_origin, footprint, world):
 		return raw_origin
 	var offsets: Array[Vector2i] = []
 	for dy in range(-_WATER_AVOIDANCE_SEARCH_RADIUS_TILES, _WATER_AVOIDANCE_SEARCH_RADIUS_TILES + 1):
@@ -464,11 +529,25 @@ func _find_dry_origin(raw_origin: Vector2i, footprint: Vector2i, world) -> Varia
 	return null
 
 
+func _world_has_a_terrain_check(world) -> bool:
+	return world.has_method("is_buildable_terrain_at") or world.has_method("biome_at_global")
+
+
+## The real, comprehensive EarthChunkManager.is_buildable_terrain_at when
+## `world` provides it (ocean, forest, river, lake, AND standing trees --
+## see that function's own doc comment); otherwise the narrower, original
+## ocean-only biome_at_global check, for a `world` double that predates
+## it (see _world_has_a_terrain_check). Prefers the real check whenever
+## it's available rather than ever running both.
 func _footprint_is_dry(origin: Vector2i, footprint: Vector2i, world) -> bool:
+	var use_real_check: bool = world.has_method("is_buildable_terrain_at")
 	for x in footprint.x:
 		for y in footprint.y:
 			var cell := origin + Vector2i(x, y)
-			if world.biome_at_global(cell.x, cell.y) == CreaturePerception.WATER_BIOME:
+			if use_real_check:
+				if not world.is_buildable_terrain_at(cell.x, cell.y):
+					return false
+			elif world.biome_at_global(cell.x, cell.y) == CreaturePerception.WATER_BIOME:
 				return false
 	return true
 

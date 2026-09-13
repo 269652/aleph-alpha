@@ -257,19 +257,15 @@ already share.
   adjacency judged against the upper floor specifically — isolated by
   leaving the ground floor deliberately EMPTY so a bug reading the wrong
   grid would fail loudly — and full two-floor completion with the correct
-  combined labor total). Still NOT extended: a hired house still gets no
-  roof at all (the SAME pre-existing, separately-named gap this had
-  before two-story houses existed — see `BuilderMarker`'s own file header
-  — not something two-story specifically worsens in kind, only in the
-  absolute wood left over in Storage).
+  combined labor total). The pre-existing "a hired house gets no roof at
+  all" gap this had before two-story houses existed is now closed too —
+  see the roof entry below, added in the same follow-up pass.
 - ✅ Procedural village NPC houses can be two-story: `HouseBlueprint.
   BLUEPRINT_POOL_BY_OCCUPATION`'s own merchant/blacksmith pools (the only
   two occupations that already reached for the showiest SINGLE-story
-  options) now each include a few real two-story entries at their own
-  showy tail — a deliberately CURATED subset (merchant: `merchant_house`/
-  `guild_hall`/`harborside_manor`; blacksmith: `artisan_workshop_house`/
-  `tower_keep`), not all ten, chosen for thematic fit and for footprints
-  comparable to the manor tier already there (36–49 tiles) rather than the
+  options) now each carry a real two-story entry at both their PLAIN end
+  and their SHOWY tail, chosen for thematic fit and for footprints
+  comparable to the manor tier already there (25–49 tiles) rather than the
   largest shapes, which risk visibly overlapping a neighbor in
   `SettlementGenerator`'s own fixed ring layout — a named judgment call.
   Farmer/fisher/guard/herbalist stay single-story. `VillageRenderer.
@@ -288,15 +284,145 @@ already share.
   modest occupations still never do) — and the full pre-existing suites of
   both files re-run and still green (43/43, 35/35) to confirm zero
   regression from widening two long-lived pool constants.
+  **Follow-up, reported directly as too rare to reliably find by
+  exploring**: `BLUEPRINT_POOL_BY_OCCUPATION`'s merchant/blacksmith pools
+  were RESHUFFLED to a real MAJORITY two-story weighting (blacksmith
+  5/7 ≈ 71%, merchant 6/8 = 75%), each still opening with two real plain
+  entries so even a cautious/stoic-dominant roll keeps a real chance.
+  `test_a_merchant_or_blacksmith_villager_most_often_gets_a_two_story_
+  house` in `test_house_blueprint.gd` measures this directly over 300 real
+  seeds per occupation (both now > 50%), rather than trusting an eyeballed
+  intent comment — the real, load-bearing lesson from this pass: a pool
+  ratio the CODE claims to weight one way must be *measured*, not assumed,
+  since `choose_blueprint_id`'s own index math depends on the pool's real
+  size and repetition, not just which ids are present.
+
+- ✅ `hire_builder_for_house`/`BuilderMarker` build the real roof too, for
+  BOTH single- and two-story hires — the pre-existing "a hired house gets
+  no roof at all" gap this had since long before two-story houses ever
+  existed. New `EarthChunkManager.roof_at_global`/`build_roof_at_global`
+  (the roof's own per-cell read/write pair, mirroring `modification_at_
+  global`/`build_at_global` exactly — `chunk.roof_modifications` could
+  previously only ever be written in BULK, fine for the player's instant
+  self-build and the village generator, but nothing for a piece-by-piece
+  worker to call). `BuilderMarker` now sequences THREE layers strictly in
+  order — ground, then upper (if any), then roof — via a `_current_layer`
+  discriminator (`"ground"`/`"upper"`/`"roof"`, replacing the two-story
+  pass's own `_current_is_upper` boolean now that there are three states,
+  not two) rather than accumulating boolean flags. The roof's own
+  adjacency check reuses the GROUND grid snapshot even for a two-story
+  hire — correct, not a shortcut, since every real two-story shape shares
+  an identical floor/wall footprint between its two layers (no notches).
+  `target_roof_pieces` defaults to `{}`, and the project's completion
+  total now sums all three layers, so every pre-existing single-story,
+  no-roof-tracking hire is unaffected. Real GUT coverage: `test_earth_
+  chunk_manager_roof_pieces.gd` (7 tests) + 4 new `test_builder_marker.gd`
+  tests (single-story hire gets a roof; two-story hire gets ground→upper→
+  roof in order; full three-layer completion with the correct combined
+  labor total) + the full pre-existing `test_builder_marker.gd` suite
+  re-run green (17/17) to confirm zero regression.
+
+- ✅ Real terrain buildability (`docs/concept/building.md`), reported
+  directly: *"houses / buildings cannot be built on river / water; also
+  not in the forest... the NPCs / Player must first fell all trees to
+  make space for the building."* Before this, `can_build_house_from_
+  blueprint` checked only that a cell had no existing MODIFICATION —
+  water, forest, and standing trees were never checked at all, and
+  `BuilderMarker`'s own `_buildable_ground` was a named, honest permissive
+  stand-in. New `EarthChunkManager.tree_at_global` (does a real,
+  currently-standing tree occupy this tile — mirrors `_clear_vegetation_
+  on_cells`' own tree-to-tile reverse lookup) and `is_buildable_terrain_at`
+  (a thin aggregator: not ocean or forest biome, not a river, not a lake,
+  no standing tree) are the one real answer all three build paths now
+  share: `can_build_house_from_blueprint` (the player's own instant
+  self-build), `BuilderMarker._buildable_ground` (the hired path, real
+  now instead of `return true`), and `VillageRenderer._find_dry_origin`
+  (renamed in spirit from water-only to real terrain avoidance, preferring
+  the real check via `has_method` duck-typing when `world` provides it,
+  falling back to the original ocean-only `biome_at_global` check for an
+  older test double that predates it). `SettlementGenerator.
+  _UNINHABITABLE_BIOMES` gained `"forest"` alongside `"ocean"`/`"mountain"`
+  — a real village would spend its whole existence fighting standing
+  trees rather than ever finishing a house. "Fell trees to make space" is
+  real for the PLAYER's own building (a tree refuses placement until
+  chopped with the existing axe mechanic) and for a HIRED builder
+  (identical refusal); the procedural village generator has no live
+  "worker" concept to fell anything, so it achieves the same real outcome
+  by SEARCHING for already-clear ground instead (the same mechanism it
+  already used for water avoidance, now widened) — a deliberate, named
+  difference in mechanism, not a gap in outcome. Real GUT coverage: `test_
+  earth_chunk_manager_buildable_terrain.gd` (8 tests, each finding one
+  real example of ocean/forest/river/lake/tree/plain-ground against the
+  real Berlin fixture — no mocked terrain), a new `test_settlement_
+  generator.gd` case (forest joins ocean/mountain), 3 new `test_village_
+  renderer.gd` tests (the real check is preferred when available; a
+  legacy `biome_at_global`-only double still works via the fallback; the
+  real check refuses cells `biome_at_global` alone could never have
+  caught), 1 new `test_builder_marker.gd` wiring test (a real standing
+  tree refuses a hired placement), and the full pre-existing suites of
+  `test_village_renderer.gd` (45/45), `test_settlement_generator.gd`
+  (10/10), and `test_builder_marker.gd` (17/17, alongside the roof tests
+  above) re-run green — this last one mattering most, since it proves
+  Berlin's own real fixture tile (already used by dozens of pre-existing
+  tests) is itself real, buildable ground under the new check, not an
+  accidental regression waiting in every other test in that file.
+
+- ✅ NPC-generated houses get real interior furniture, on BOTH floors —
+  reported directly alongside two-story houses themselves ("no room
+  decoration"), then corrected directly to cover the upper floor too ("no
+  do both floors") after this pass first scoped it to the ground floor
+  alone. New bulk `EarthChunkManager.stamp_furniture_at_global`/`stamp_
+  upper_floor_furniture_at_global` (one call per house/floor, mirroring
+  `stamp_upper_floor_at_global`'s own "one call, not one repaint per
+  piece" reasoning), each still validated through the real `Furniture
+  Placement.can_place` a player's own furnishing already uses. The upper
+  floor needed a genuinely NEW layer — `Chunk.upper_floor_furniture_
+  modifications`, its own `UpperFloorFurniture` `TileMapLayer` — rather
+  than reusing `furniture_modifications`, because a table on the ground
+  floor and a bed on the upper floor can legitimately share the exact
+  same (x, y): one Dictionary can only ever hold one piece per cell, the
+  same reasoning every other ground/upper pair in this doc already
+  follows. Its visibility rule is the one genuinely new idea here and
+  deliberately the OPPOSITE of ground furniture's: ground furniture is
+  never hidden by anything (nothing occludes the ground layer's own room
+  from a bird's-eye view — only the ROOF, a separate layer above,
+  conditionally hides), but the upper floor's own room genuinely IS
+  hidden while a player stands inside it, so its furniture hides in the
+  SAME step (`_update_upper_floor_visibility` now repaints the furniture
+  layer alongside the wall/window layer) — otherwise a bed would float
+  visibly over bare ground with no walls or floor around it once those
+  are erased. `VillageRenderer._furnish_house` (small, deterministic,
+  seeded — a fixed bed/table/chair/chair/rug/bookshelf priority list,
+  never more pieces than the room's own real floor can hold) is called
+  once per floor a house actually has, gated on the SAME "fully complete"
+  condition the roof/upper-floor already use, with a distinctly-salted
+  seed per floor so the upper floor's own layout never numerically
+  mirrors the ground floor's. Real GUT coverage: 6 new `test_village_
+  renderer.gd` tests (a complete house gets furniture; every furnished
+  cell is real floor; furniture never exceeds real floor capacity; a
+  partial house gets none yet; a two-story house furnishes its upper
+  floor too, with its own real grid; a single-story house never calls the
+  upper-floor stamp) and a new dedicated `test_earth_chunk_manager_
+  furniture_bulk.gd` (6 tests: real placement validation on both floors,
+  the two floors' furniture proven independent at the identical cell, and
+  the upper floor's own hide-in-lockstep rule proven both ways — hides
+  while occupied, restores once vacated) — plus the full `test_village_
+  renderer.gd` suite re-run green (51/51). Still NOT extended: the
+  player's own hand-furnishing verb (`HotbarAction.FURNISH`/`/furniture
+  place`) still only reaches the ground floor's `furniture_modifications`
+  — a player furnishing their OWN upper floor by hand is a real, separate,
+  already-named Open Question below, not silently assumed solved by this
+  NPC-generation-only pass.
 
 **Unlike the batch above (built under an explicit "skip tests" mid-session
-instruction), this pass followed this project's own mandatory strict-TDD
-red-first cycle throughout** — every function named ✅ in this update has
-a real, run, currently-green GUT test written before its implementation,
-not just a plausible-looking claim. This directly closed three gaps that
-were named honestly as scoped OUT in the batch above (real upper-floor
-collision, the hire/`BuilderMarker` path, and procedural village
-generation), per a direct follow-up request to "properly implement" them.
+instruction), this pass and its follow-ups all followed this project's
+own mandatory strict-TDD red-first cycle throughout** — every function
+named ✅ in these updates has a real, run, currently-green GUT test
+written before its implementation, not just a plausible-looking claim.
+Together they closed every gap the batch above named honestly as scoped
+OUT (real upper-floor collision, the hire/`BuilderMarker` path, procedural
+village generation) plus three more raised directly in review (a hired
+roof, real terrain buildability, and NPC house furniture on both floors).
 
 ### Open questions
 
@@ -312,20 +438,23 @@ generation), per a direct follow-up request to "properly implement" them.
   `BuildingStatics`/`BuildingDecay` to a second, independent piece grid
   rather than leaving the upper floor structurally inert (named above as a
   deliberate, narrower gap once real collision existed)?
-- Should a hired `BuilderMarker` ever build a roof at all (single-story or
-  two-story) — the pre-existing gap two-story inherited rather than
-  introduced?
-- Now that NPCs can live in two-story houses, do they get any real USE of
-  the upper floor (sleeping upstairs specifically, a merchant's own
-  storeroom), or is it purely a bigger, emptier shell than what a player
-  would furnish?
+- Now that NPCs can live in two-story houses with real furniture on both
+  floors, do they get any real BEHAVIORAL use of the upper floor
+  (sleeping upstairs specifically, a merchant's own storeroom), or does
+  the NPC's own daily schedule stay indifferent to which floor its
+  furniture happens to sit on?
 - Should the remaining five two-story shapes (`townhouse_narrow`,
   `riverside_villa`, `timber_longhouse`, `grand_estate`, `gambrel_lodge`)
-  ever reach the procedural generator too — widening the curated merchant/
-  blacksmith pools, extending two-story to a new occupation, or improving
-  `SettlementGenerator`'s own ring spacing so the largest footprints stop
-  being a real overlap risk?
-- Furniture placement (above) only checks `modifications`' ground floor —
-  should `FurniturePlacement.can_place` also accept `upper_floor_
-  modifications` floor cells, so a player can furnish the upstairs room
-  they just built stairs to?
+  ever reach the procedural generator too — widening the merchant/
+  blacksmith pools further, extending two-story to a new occupation, or
+  improving `SettlementGenerator`'s own ring spacing so the largest
+  footprints stop being a real overlap risk?
+- The PLAYER's own hand-furnishing verb (`HotbarAction.FURNISH`/`/
+  furniture place`) still only ever reaches `EarthChunkManager.
+  build_furniture_at_global`, which writes to the ground floor's
+  `furniture_modifications` only — NPC generation now furnishes an upper
+  floor via its own real `stamp_upper_floor_furniture_at_global`, but a
+  PLAYER standing in their own upstairs room still has no verb to place a
+  single piece there by hand. Should `build_furniture_at_global` (or a
+  new `build_upper_floor_furniture_at_global` sibling) read `Player.
+  _current_floor` to decide which real layer a placement targets?

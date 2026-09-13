@@ -477,6 +477,27 @@ func test_unknown_occupations_still_never_reach_a_two_story_house():
 		assert_false(HouseBlueprint.TWO_STORY_BLUEPRINT_IDS.has(id))
 
 
+## Reported directly as too rare to reliably find by exploring the world --
+## the pool was reshuffled to a real MAJORITY two-story weighting for
+## merchant/blacksmith (see BLUEPRINT_POOL_BY_OCCUPATION's own doc
+## comment). This is the measured proof over many real seeds, not a
+## restated intent comment: most merchant/blacksmith choices now land on
+## a two-story shape.
+func test_a_merchant_or_blacksmith_villager_most_often_gets_a_two_story_house():
+	for occupation in ["merchant", "blacksmith"]:
+		var two_story_count := 0
+		var sample_size := 300
+		for seed_value in range(sample_size):
+			var genome := NpcGenome.new(seed_value, _TRAIT_NAMES)
+			var chosen := blueprint.choose_blueprint_id(occupation, genome, seed_value)
+			if HouseBlueprint.TWO_STORY_BLUEPRINT_IDS.has(chosen):
+				two_story_count += 1
+		assert_gt(
+			two_story_count, sample_size / 2,
+			"%s should most often get a two-story house now (got %d/%d)" % [occupation, two_story_count, sample_size]
+		)
+
+
 func test_modest_occupations_still_never_reach_a_two_story_house():
 	for occupation in ["farmer", "fisher", "guard", "herbalist"]:
 		for id in HouseBlueprint.BLUEPRINT_POOL_BY_OCCUPATION[occupation]:

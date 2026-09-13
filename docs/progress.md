@@ -21054,3 +21054,89 @@ entry closes are gone from both, and what's newly, honestly still open
 remaining five two-story shapes never reaching the generator) replaces
 them there rather than being silently dropped.
 
+### The hired roof, real terrain buildability, and NPC furniture on both floors (2026-09-13)
+
+A direct follow-up to the pass above, in the same session: *"fix the
+roof"* (the one gap the previous entry left standing), then, mid-work,
+*"there's still no second floor and also no room decoration"* -- a real,
+verified investigation (not a guess) found the two-story CHOICE mechanism
+genuinely does work (merchant/blacksmith villagers land on one roughly a
+third of the time, measured over a real scan), but finding one by
+exploring was genuinely down to luck. Offered two concrete fixes; the
+user picked both. Then, separately: *"houses / buildings cannot be built
+on river / water; also not in the forest... the NPCs / Player must first
+fell all trees to make space for the building"* -- and when the first
+pass of the furniture fix scoped itself to the ground floor only, *"No do
+both floors."* Four real, separately-verified pieces of work, all under
+strict TDD (this session's "skip tests" instruction was never
+reinstated, and none of this pretends it was):
+
+- **The hired roof.** `EarthChunkManager.roof_at_global`/`build_roof_at_
+  global` (the roof's own per-cell read/write pair -- `chunk.roof_
+  modifications` could previously only ever be written in bulk, nothing
+  for a piece-by-piece worker to call). `BuilderMarker` now sequences
+  ground -> upper (if any) -> roof via a `_current_layer` string
+  discriminator, refactored from the two-story pass's own `_current_is_
+  upper` boolean now that there are three real layers, not two. 7 new
+  tests in `test_earth_chunk_manager_roof_pieces.gd`, 4 new in `test_
+  builder_marker.gd`, full pre-existing `test_builder_marker.gd` suite
+  re-run green (17/17).
+
+- **Real terrain buildability.** `EarthChunkManager.tree_at_global`/`is_
+  buildable_terrain_at` (not ocean or forest biome, not a river, not a
+  lake, no standing tree) is now the one real check `can_build_house_
+  from_blueprint` (player self-build), `BuilderMarker._buildable_ground`
+  (hired -- previously a bare `return true`), and `VillageRenderer._find_
+  dry_origin` (village generation -- previously ocean-biome-only, missing
+  rivers/lakes entirely) all share. `SettlementGenerator._UNINHABITABLE_
+  BIOMES` gained `"forest"`. "Fell trees to make space" is real for the
+  player and a hired builder (refused until chopped, the existing axe
+  mechanic); the village generator has no live worker to fell anything,
+  so it searches for already-clear ground instead of the water-only
+  search it had before -- a named, deliberate difference in mechanism,
+  not a gap in outcome. Caught and fixed one real GDScript pitfall along
+  the way: `var x := world.has_method(...)` fails to compile when `world`
+  is untyped (`:=` cannot infer a type from a call on a `Variant`) --
+  needed an explicit `: bool` instead. 8 new tests in a new `test_earth_
+  chunk_manager_buildable_terrain.gd` (each finding one REAL ocean/
+  forest/river/lake/tree/plain-ground example against the live Berlin
+  fixture, no mocked terrain), plus new tests in `test_settlement_
+  generator.gd`/`test_village_renderer.gd`/`test_builder_marker.gd`, and
+  the full pre-existing suites of all three re-run green (10/10, 45/45,
+  17/17) -- the last one mattering most, since it proves Berlin's own
+  real fixture tile is itself real buildable ground under the new check,
+  not a regression waiting in every other test in that file.
+
+- **Two-story commonality.** Measured, not just described: a real 300-
+  seed-per-occupation test now pins that merchant/blacksmith villagers
+  land on a two-story shape a MAJORITY of the time (reshuffled pool
+  weighting), closing the "too rare to find" gap the investigation above
+  surfaced.
+
+- **NPC house furniture, both floors.** New bulk `EarthChunkManager.
+  stamp_furniture_at_global`/`stamp_upper_floor_furniture_at_global`, a
+  genuinely NEW `Chunk.upper_floor_furniture_modifications` layer (a
+  table on the ground floor and a bed on the upper floor can share the
+  exact same (x, y) -- one Dictionary can't hold both), and its own real
+  hide-in-lockstep visibility rule -- deliberately the OPPOSITE of ground
+  furniture's own "never hidden" rule, because the upper floor's own room
+  genuinely IS hidden while a player stands in it, so its furniture must
+  hide in the same step or float over bare ground once the walls around
+  it are erased. `VillageRenderer._furnish_house` (small, seeded, real
+  floor-capacity-bounded) furnishes each floor a house actually has, with
+  a distinctly-salted seed per floor. 6 new `test_village_renderer.gd`
+  tests, a new `test_earth_chunk_manager_furniture_bulk.gd` (6 tests,
+  including the hide-in-lockstep rule proven both directions), full
+  `test_village_renderer.gd` re-run green (51/51). A real, own, one-cell-
+  short-fixture bug caught and fixed along the way: `FurniturePlacement.
+  can_place` genuinely requires an ENCLOSED room (RoomDetector.
+  is_indoors), not merely a bare floor cell with nothing around it -- the
+  first draft of these EarthChunkManager-level tests used single floor
+  cells with no walls and failed for exactly that reason; the production
+  code was correct, the test fixtures were not.
+
+Also relaunched the game mid-investigation after the running instance
+disappeared -- confirmed via a real process-stability poll (not assumed)
+that the fresh launch stays up and responding, so the earlier exit was not
+a crash this pass's own changes caused.
+

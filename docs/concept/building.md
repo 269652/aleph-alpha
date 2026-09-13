@@ -343,6 +343,26 @@ modification like any other.
   a whole structure's pieces in one call + one repaint (used by the village
   generator, see below) rather than one `build_at_global` call per cell,
   which would repaint the owning chunk once per cell.
+- ✅ Real terrain buildability (docs/concept/housing.md's own "Real
+  terrain buildability" entry has the full detail) -- reported directly:
+  *"houses / buildings cannot be built on river / water; also not in the
+  forest... the NPCs / Player must first fell all trees to make space for
+  the building."* `EarthChunkManager.is_buildable_terrain_at` (not ocean
+  or forest biome, no river, no lake, no standing tree) is the one real
+  check `can_build_house_from_blueprint` (the player's own instant
+  self-build), `BuilderMarker._buildable_ground` (the hired path -- a
+  permissive `return true` before this), and `VillageRenderer._find_dry_
+  origin` (the village generator -- ocean-only before this, missing
+  rivers/lakes) all now share, refusing/re-siting a placement UPFRONT
+  rather than ever reaching `stamp_structure_at_global` with a tree still
+  standing on the footprint. This is what makes the vegetation-clearing
+  entry immediately below now a defensive fallback rather than the
+  primary mechanism for the player-build and village-generation seams
+  specifically (it still fires for a hypothetical future caller of
+  `stamp_structure_at_global` that skips the new gate, and the hired-
+  builder seam never called it either way, since `BuilderMarker` places
+  pieces one at a time via `build_at_global`, not the bulk path) -- named
+  here so this entry and the one below don't quietly drift apart.
 - ✅ A piece occupies its tile against vegetation (see "Placement rules" and
   "One system, two builders"), tested at all three seams.
   `stamp_structure_at_global` collects the cells it wrote a real

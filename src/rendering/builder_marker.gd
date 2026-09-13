@@ -21,7 +21,11 @@ extends Node2D
 ## placement does, so nothing here bypasses that mechanism either; a refused
 ## piece is never force-placed, its withdrawn material is returned to
 ## Storage, and it stays unplaced for a later SEEKING round to retry) -> back
-## to SEEKING, until every real piece in `target_pieces` is placed.
+## to SEEKING, until every real piece across `target_pieces` (ground),
+## `target_upper_pieces` (a two-story house's own real second storey) and
+## `target_roof_pieces` (the roof) is placed -- strictly in that order, one
+## whole layer at a time (see _step_seeking), the same real order a house
+## actually goes up in.
 ##
 ## `target_project`/`target_pieces`/`project_store`/`household_store`/`earth`
 ## are all injected by whatever spawns this worker -- the SAME "caller
@@ -45,6 +49,14 @@ extends Node2D
 ## own ground floor is never left half-built while material gets spent
 ## upstairs instead.
 ##
+## `target_roof_pieces` closes this file's own long-standing "roof pieces
+## out of scope" gap (see below) -- optional (defaults to `{}`), built
+## LAST, once every real ground AND upper piece is placed: a roof caps
+## whichever floor is topmost, so it can never legitimately go up before
+## the walls it rests on. Placed via the new EarthChunkManager.build_roof_
+## at_global, checked against BuildingPlacement's own real "a roof needs a
+## floor beneath it" rule (see _attempt_place).
+##
 ## Deliberately does NOT auto-wire itself to any ConstructionProject lookup
 ## or spawn-per-structure trigger -- there is no real caller yet that decides
 ## a Builder should exist for a given project (see docs/concept/
@@ -54,14 +66,13 @@ extends Node2D
 ## LogisticsMarker itself shipped real and tested before EarthChunkManager
 ## auto-spawned it in a later pass.
 ##
-## Out of scope for this pass: roof pieces (CATEGORY_ROOF lives in a SEPARATE
-## `roof_modifications` layer only `stamp_structure_at_global` writes to --
-## `build_at_global` does not touch it at all, mirroring withering/statics'
-## own already-named "roof pieces not yet handled" gap); a real terrain
-## buildability check (`buildable_ground` here is a permissive stand-in
-## always answering true -- no live caller anywhere in this codebase checks
-## real water/cliff buildability for a piece yet, so inventing one here would
-## be a new, un-asked-for terrain rule, not this pass's job).
+## `_buildable_ground` and roof pieces were BOTH originally out of scope
+## here (`_buildable_ground` a permissive stand-in always answering true;
+## `CATEGORY_ROOF` living in a SEPARATE `roof_modifications` layer only
+## `stamp_structure_at_global` wrote to) -- both gaps are closed now:
+## `_buildable_ground` calls the real EarthChunkManager.is_buildable_
+## terrain_at (see that function's own doc comment), and roofs are real
+## via `target_roof_pieces` above.
 
 const BuildingPiece = preload("res://src/gameplay/building_piece.gd")
 const BuildingPlacement = preload("res://src/gameplay/building_placement.gd")
@@ -92,6 +103,7 @@ var search_radius_tiles := 20
 var target_project = null
 var target_pieces: Dictionary = {}
 var target_upper_pieces: Dictionary = {}
+var target_roof_pieces: Dictionary = {}
 var project_store = null
 var household_store = null
 
@@ -102,11 +114,21 @@ var earth = null
 var _behavior := BuilderBehavior.new()
 var _building_placement := BuildingPlacement.new()
 
+## Which of the three real layers (see this file's own header) the
+## currently-committed piece belongs to -- decides which grid _attempt_
+## place validates against and which real EarthChunkManager setter places
+## it. Set once per commit in _step_seeking, read in _attempt_place and
+## nowhere else.
+const LAYER_GROUND := "ground"
+const LAYER_UPPER := "upper"
+const LAYER_ROOF := "roof"
+
 var _next_cell_index := 0
 var _next_upper_cell_index := 0
+var _next_roof_cell_index := 0
 var _current_local_cell := Vector2i.ZERO
 var _current_piece_id := ""
-var _current_is_upper := false
+var _current_layer := LAYER_GROUND
 var _current_cost: Dictionary = {}
 var _storage_target_position := Vector2.ZERO
 var _arrived_at_storage := false
@@ -142,18 +164,24 @@ func _step_seeking(delta: float) -> void:
 		return
 	if earth == null or target_project == null or project_store == null:
 		return
-	if target_pieces.is_empty() and target_upper_pieces.is_empty():
+	if target_pieces.is_empty() and target_upper_pieces.is_empty() and target_roof_pieces.is_empty():
 		return
-	var is_upper := false
+	var layer := LAYER_GROUND
 	var candidate = _next_unplaced_piece()
 	if candidate == null:
 		# The ground floor is fully placed (or there never was one) -- only
 		# THEN does a real house get its own upper storey started, the same
 		# real-world build order this file's own header documents.
 		candidate = _next_unplaced_upper_piece()
-		is_upper = true
+		layer = LAYER_UPPER
 	if candidate == null:
-		return  # every real piece on both floors is already placed
+		# Both floors are fully placed (or a single-story house never had an
+		# upper one) -- only THEN does the roof go up, since it caps
+		# whichever floor is topmost and can't legitimately exist before it.
+		candidate = _next_unplaced_roof_piece()
+		layer = LAYER_ROOF
+	if candidate == null:
+		return  # every real piece across all three layers is already placed
 	var storage_position = earth.nearest_structure_position(
 		position, storage_structure_id, float(search_radius_tiles) * TerrainRenderer.TILE_SIZE
 	)
@@ -162,7 +190,7 @@ func _step_seeking(delta: float) -> void:
 
 	_current_local_cell = candidate["local_cell"]
 	_current_piece_id = candidate["piece_id"]
-	_current_is_upper = is_upper
+	_current_layer = layer
 	_current_cost = BuildingPiece.cost_of(_current_piece_id)
 	_storage_target_position = storage_position
 	_arrived_at_storage = false
@@ -272,6 +300,35 @@ func _sorted_upper_local_cells() -> Array:
 	return cells
 
 
+## The roof's own twin of _next_unplaced_piece/_next_unplaced_upper_piece --
+## the SAME round-robin/"verify against the real world" contract, mirrored
+## against target_roof_pieces/earth.roof_at_global. Only ever reached once
+## BOTH _next_unplaced_piece and _next_unplaced_upper_piece return null
+## (see _step_seeking) -- the roof caps whichever floor is topmost, so it
+## goes up last, never before the walls it rests on.
+func _next_unplaced_roof_piece():
+	var sorted_cells := _sorted_roof_local_cells()
+	var count := sorted_cells.size()
+	if count == 0:
+		return null
+	for offset in range(count):
+		var index := (_next_roof_cell_index + offset) % count
+		var local_cell: Vector2i = sorted_cells[index]
+		var piece_id: String = target_roof_pieces[local_cell]
+		var global_cell := _global_cell_for(local_cell)
+		if earth.roof_at_global(global_cell.x, global_cell.y) == piece_id:
+			continue  # already really placed
+		_next_roof_cell_index = (index + 1) % count
+		return {"local_cell": local_cell, "piece_id": piece_id}
+	return null
+
+
+func _sorted_roof_local_cells() -> Array:
+	var cells: Array = target_roof_pieces.keys()
+	cells.sort_custom(_cell_before)
+	return cells
+
+
 ## Withdraws EVERY real item_id/count in `_current_cost` from the currently-
 ## targeted Storage, all-or-nothing across the WHOLE cost (not just per
 ## item) -- checks every item's real available stock first so a multi-item
@@ -306,15 +363,30 @@ func _return_current_cost_to_storage() -> void:
 ## here bypasses that mechanism either. Returns whether the piece actually
 ## landed.
 ##
-## Branches on _current_is_upper (see _step_seeking) to place against the
-## UPPER floor instead -- its own grid snapshot and its own build_upper_
-## floor_at_global, never the ground ones, so an upper piece's own
-## adjacency is judged against the upper floor's real neighbors (the two
-## floors can legitimately differ at the same cell -- see EarthChunkManager.
-## UPPER_FLOOR_COLLISION_LAYER's own doc comment for why).
+## Branches on _current_layer (see _step_seeking) to place against the
+## UPPER floor or the ROOF instead -- each its own grid snapshot and its
+## own real EarthChunkManager setter, never the ground ones, so a piece's
+## own adjacency is always judged against the layer it actually belongs to
+## (the floors can legitimately differ at the same cell -- see
+## EarthChunkManager.UPPER_FLOOR_COLLISION_LAYER's own doc comment for why).
+##
+## The roof branch reads its OWN "is there a floor beneath this cell"
+## check off the GROUND grid, not the upper one, even for a two-story
+## house: every real two-story shape in HouseBlueprint shares an IDENTICAL
+## floor/wall footprint between its ground and upper layers (no notches --
+## see TWO_STORY_BLUEPRINT_IDS' own doc comment), so the two grids always
+## agree on which cells are floor. Reusing the already-real ground snapshot
+## is correct, not a shortcut, for every real catalog shape today.
 func _attempt_place() -> bool:
 	var global_cell := _global_cell_for(_current_local_cell)
-	if _current_is_upper:
+	if _current_layer == LAYER_ROOF:
+		var grid := _local_grid_snapshot(global_cell)
+		var roofs := _roof_snapshot(global_cell)
+		if not _building_placement.can_place(_current_piece_id, global_cell, grid, _buildable_ground, roofs):
+			return false
+		earth.build_roof_at_global(global_cell.x, global_cell.y, _current_piece_id)
+		return true
+	if _current_layer == LAYER_UPPER:
 		var upper_grid := _upper_local_grid_snapshot(global_cell)
 		if not _building_placement.can_place(_current_piece_id, global_cell, upper_grid, _buildable_ground):
 			return false
@@ -325,6 +397,15 @@ func _attempt_place() -> bool:
 		return false
 	earth.build_at_global(global_cell.x, global_cell.y, _current_piece_id)
 	return true
+
+
+## A minimal, single-cell roof snapshot for BuildingPlacement's own
+## `roofs` parameter -- unlike the 5-cell ground/upper snapshots, its own
+## refusal_reason only ever checks `roofs.has(cell)` for the EXACT target
+## cell (see building_placement.gd), never a neighbor.
+func _roof_snapshot(global_cell: Vector2i) -> Dictionary:
+	var roof_id: String = earth.roof_at_global(global_cell.x, global_cell.y)
+	return {global_cell: roof_id} if roof_id != "" else {}
 
 
 ## A minimal real grid snapshot -- just `global_cell` and its 4 orthogonal
@@ -358,11 +439,15 @@ func _upper_local_grid_snapshot(global_cell: Vector2i) -> Dictionary:
 	return grid
 
 
-## Real terrain buildability (water/cliffs) has no live check anywhere in
-## this codebase yet -- see this file's own header. A permissive stand-in,
-## named and documented rather than silently assumed.
-func _buildable_ground(_cell: Vector2i) -> bool:
-	return true
+## Real terrain buildability (docs/concept/building.md): no water, no
+## forest, and no standing tree still in the way -- the SAME real
+## EarthChunkManager.is_buildable_terrain_at the player's own
+## can_build_house_from_blueprint now checks, so a hired house is refused
+## on identical terms to a self-built one. Previously a permissive
+## stand-in (`return true`) -- named and documented as a real, honest gap
+## rather than silently assumed; that gap is closed now.
+func _buildable_ground(cell: Vector2i) -> bool:
+	return earth.is_buildable_terrain_at(cell.x, cell.y)
 
 
 ## Credits this piece's own real labor-hours onto the real project, and
@@ -370,15 +455,19 @@ func _buildable_ground(_cell: Vector2i) -> bool:
 ## has accumulated -- see ConstructionProjectStore.advance_project_labor_for
 ## _piece's own doc comment for the full contract.
 ##
-## `required` sums BOTH floors' own real totals (target_upper_pieces is {}
-## for every ordinary single-story hire, so labor_hours_required_for_pieces
-## contributes exactly 0.0 there and this stays identical to before
-## two-story houses existed) -- a two-story project only ever reaches
-## COMPLETE once every real piece on BOTH layers has actually been placed.
+## `required` sums ALL THREE layers' own real totals (target_upper_pieces/
+## target_roof_pieces are both {} for whatever a hire doesn't have -- a
+## single-story hire's target_upper_pieces is always {}, and either one
+## being {} contributes exactly 0.0 via labor_hours_required_for_pieces --
+## so this stays identical to before two-story houses/roofs existed for
+## any caller that never sets them) -- a project only ever reaches COMPLETE
+## once every real piece across every real layer it actually has has been
+## placed.
 func _credit_labor_for_current_piece() -> void:
 	var required := (
 		ConstructionLabor.labor_hours_required_for_pieces(target_pieces)
 		+ ConstructionLabor.labor_hours_required_for_pieces(target_upper_pieces)
+		+ ConstructionLabor.labor_hours_required_for_pieces(target_roof_pieces)
 	)
 	project_store.advance_project_labor_for_piece(
 		target_project.id, _current_piece_id, required, household_store
