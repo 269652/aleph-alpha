@@ -14139,3 +14139,199 @@ func test_stamp_house_and_grant_ownership_settles_a_resident_automatically():
 	var project_id := manager.stamp_house_and_grant_ownership("small_house", Vector2i(1, 1), "household:owner")
 	var project := manager.construction_project_store().get_project(project_id)
 	assert_ne(project.resident_household_id, "", "a completed house should already have a real resident")
+
+
+# -- the Manor tier (docs/concept/workforce.md's "Blueprint tiers") --------
+# a real GUT verification pass over the whole workforce/housing batch that
+# was written and committed with the strict TDD cycle explicitly skipped --
+# see docs/progress.md's own "UNTESTED" entries for that batch. Everything
+# below is genuine after-the-fact verification, not red-first: a failure
+# here is a real bug to fix, not an expected step of the cycle.
+
+func test_can_build_house_from_blueprint_true_for_manor_once_unlocked():
+	manager.record_blueprint_learned_if_new("manor")
+	manager.update(Vector2i(0, 0))
+	assert_true(manager.can_build_house_from_blueprint("manor", Vector2i(1, 1)))
+
+
+func test_stamp_house_and_grant_ownership_stamps_a_real_manor():
+	manager.update(Vector2i(0, 0))
+	var household := manager.household_store().form_household("npc:manor_owner")
+
+	var project_id := manager.stamp_house_and_grant_ownership("manor", Vector2i(1, 1), household.id)
+
+	var project := manager.construction_project_store().get_project(project_id)
+	assert_eq(project.status, ConstructionProject.Status.COMPLETE)
+	assert_true(household.property.has(project.property_id()))
+	# manor_wide's own real 7x5 footprint -- a door/wall/floor somewhere
+	# inside it, not just ledger bookkeeping with nothing in the world.
+	assert_eq(manager.modification_at_global(2, 2), "wood_floor")
+
+
+# -- worker slots and assignment (docs/concept/workforce.md's "Workforce: --
+# a real, spendable resource" section) --------------------------------------
+
+func test_a_fresh_workplace_has_the_full_sagewerk_worker_slots_open():
+	assert_eq(manager.open_worker_slots_at(Vector2i(5, 5)), EarthChunkManager.SAGEWERK_WORKER_SLOTS)
+
+
+func test_assigning_a_resident_fills_one_slot():
+	var workplace := Vector2i(5, 5)
+	var before := manager.open_worker_slots_at(workplace)
+
+	var assigned := manager.assign_resident_to_workplace("household:1", workplace)
+
+	assert_true(assigned)
+	assert_eq(manager.open_worker_slots_at(workplace), before - 1)
+	assert_true(manager.is_resident_assigned("household:1"))
+
+
+func test_a_resident_already_holding_a_job_cannot_be_assigned_a_second_time():
+	var workplace := Vector2i(5, 5)
+	manager.assign_resident_to_workplace("household:1", workplace)
+
+	var assigned_again := manager.assign_resident_to_workplace("household:1", Vector2i(9, 9))
+
+	assert_false(assigned_again)
+
+
+func test_assignment_fails_once_every_real_slot_is_filled():
+	var workplace := Vector2i(5, 5)
+	# SAGEWERK_WORKER_SLOTS is 1 today -- the one real slot is filled by the
+	# first resident, so a second real resident correctly finds none open.
+	for i in EarthChunkManager.SAGEWERK_WORKER_SLOTS:
+		manager.assign_resident_to_workplace("household:filler_%d" % i, workplace)
+
+	assert_false(manager.assign_resident_to_workplace("household:one_too_many", workplace))
+	assert_eq(manager.open_worker_slots_at(workplace), 0)
+
+
+func test_is_resident_assigned_is_false_for_a_household_never_assigned():
+	assert_false(manager.is_resident_assigned("household:never_worked"))
+
+
+func test_unassign_resident_frees_the_slot_back_up():
+	var workplace := Vector2i(5, 5)
+	manager.assign_resident_to_workplace("household:1", workplace)
+
+	var unassigned := manager.unassign_resident("household:1")
+
+	assert_true(unassigned)
+	assert_false(manager.is_resident_assigned("household:1"))
+	assert_eq(manager.open_worker_slots_at(workplace), EarthChunkManager.SAGEWERK_WORKER_SLOTS)
+
+
+func test_unassign_resident_for_a_household_never_assigned_fails_without_mutation():
+	assert_false(manager.unassign_resident("household:never_worked"))
+
+
+## free_workforce_in_chunk reads real, settled residents of player-built
+## houses (section 6) minus those currently assigned -- NOT a bare count of
+## every household anywhere, and NOT the general village-occupation census
+## _households_in_settlement/_occupation_of_household already serve.
+func test_free_workforce_in_chunk_counts_settled_unassigned_residents():
+	manager.update(Vector2i(0, 0))
+	manager.stamp_house_and_grant_ownership("small_house", Vector2i(1, 1), "household:owner")
+	var resident_id := manager.settle_resident_if_new("small_house", Vector2i(1, 1))
+
+	assert_eq(manager.free_workforce_in_chunk(Vector2i(0, 0)), 1)
+
+	manager.assign_resident_to_workplace(resident_id, Vector2i(5, 5))
+
+	assert_eq(
+		manager.free_workforce_in_chunk(Vector2i(0, 0)), 0,
+		"an assigned resident is no longer FREE workforce, even though they are still a real resident"
+	)
+
+
+func test_free_workforce_in_chunk_is_zero_with_no_real_residents():
+	assert_eq(manager.free_workforce_in_chunk(Vector2i(0, 0)), 0)
+
+
+# -- the build-vs-hire fork's hire-half query: find_spare_carpenter_household -
+
+## No existing test/API can construct an NpcIdentity with a chosen exact
+## carpentry_level (it is deliberately deterministic-from-seed, not
+## dial-a-stat) -- the same "search a bounded seed range for a real
+## predicate" shape test_npc_identity.gd's own carpentry range checks
+## already use, generalized into a small reusable helper here.
+func _first_seed_matching(predicate: Callable, limit: int = 800) -> int:
+	for seed_value in range(1, limit):
+		if predicate.call(seed_value):
+			return seed_value
+	fail_test("no seed under %d satisfied the predicate -- widen the search" % limit)
+	return -1
+
+
+func test_find_spare_carpenter_household_finds_a_real_spare_skilled_household():
+	var seed_value := _first_seed_matching(func(s):
+		var identity := NpcIdentity.new(s)
+		return identity.carpentry_level >= 1.0 and not NpcProduction.PRODUCER_ITEM_BY_OCCUPATION.has(identity.occupation)
+	)
+	var chunk_coord := Vector2i(30, 30)
+	manager.record_settlement_founded_if_new(chunk_coord, [NpcIdentity.new(seed_value)])
+	var settlement_id := EntityRef.for_settlement(chunk_coord)
+	var expected_household := manager.household_store().household_for(EntityRef.for_npc(seed_value))
+
+	assert_eq(manager.find_spare_carpenter_household(settlement_id, "small_house"), expected_household.id)
+
+
+func test_find_spare_carpenter_household_refuses_a_household_already_working_a_survival_job():
+	var seed_value := _first_seed_matching(func(s):
+		var identity := NpcIdentity.new(s)
+		return identity.carpentry_level >= 1.0 and NpcProduction.PRODUCER_ITEM_BY_OCCUPATION.has(identity.occupation)
+	)
+	var chunk_coord := Vector2i(31, 31)
+	manager.record_settlement_founded_if_new(chunk_coord, [NpcIdentity.new(seed_value)])
+	var settlement_id := EntityRef.for_settlement(chunk_coord)
+
+	assert_eq(manager.find_spare_carpenter_household(settlement_id, "small_house"), "")
+
+
+func test_find_spare_carpenter_household_refuses_a_spare_household_without_enough_skill():
+	var seed_value := _first_seed_matching(func(s):
+		var identity := NpcIdentity.new(s)
+		return identity.carpentry_level < 1.0 and not NpcProduction.PRODUCER_ITEM_BY_OCCUPATION.has(identity.occupation)
+	)
+	var chunk_coord := Vector2i(32, 32)
+	manager.record_settlement_founded_if_new(chunk_coord, [NpcIdentity.new(seed_value)])
+	var settlement_id := EntityRef.for_settlement(chunk_coord)
+
+	assert_eq(manager.find_spare_carpenter_household(settlement_id, "small_house"), "")
+
+
+func test_find_spare_carpenter_household_is_empty_for_a_settlement_with_no_real_history():
+	assert_eq(manager.find_spare_carpenter_household(EntityRef.for_settlement(Vector2i(99, 99)), "small_house"), "")
+
+
+func test_find_spare_carpenter_household_is_empty_for_a_recipe_with_no_required_skill():
+	var chunk_coord := Vector2i(33, 33)
+	manager.record_settlement_founded_if_new(chunk_coord, [NpcIdentity.new(1)])
+	assert_eq(
+		manager.find_spare_carpenter_household(EntityRef.for_settlement(chunk_coord), "torch"), ""
+	)
+
+
+## A REAL DISCOVERED LIMIT, surfaced by this verification pass rather than
+## silently missed: NpcIdentity.carpentry_level's own formula
+## (`skill_genome.traits["carpentry_aptitude"] * 2.0`) is mathematically
+## bounded to [0, 2) -- confirmed by that field's own doc comment ("the
+## same [0, 2) range"). The Manor recipe requires 3.0, reachable by the
+## PLAYER via the skill web's master_joiner notable (see workforce.md's own
+## corrected ceiling note), but NO NpcIdentity seed can EVER reach 3.0 --
+## meaning the Manor tier can never be hired out, only self-built. This
+## test pins that real, current behavior rather than assuming the
+## build-vs-hire fork "just works" symmetrically for every tier; see
+## docs/concept/workforce.md's own Open Questions for whether this is the
+## intended "only a true master builds a Manor" design or a real gap.
+func test_find_spare_carpenter_household_can_never_find_a_manor_grade_carpenter():
+	var chunk_coord := Vector2i(34, 34)
+	# Every one of a handful of real, distinct NPCs -- not cherry-picking
+	# the one seed most likely to fail, a real spread of real identities.
+	var npcs: Array = []
+	for seed_value in range(1, 9):
+		npcs.append(NpcIdentity.new(seed_value))
+		assert_lt(npcs[-1].carpentry_level, 3.0, "precondition: no seed reaches Manor's own 3.0 requirement")
+	manager.record_settlement_founded_if_new(chunk_coord, npcs)
+
+	assert_eq(manager.find_spare_carpenter_household(EntityRef.for_settlement(chunk_coord), "manor"), "")
