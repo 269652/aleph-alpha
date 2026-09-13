@@ -540,15 +540,11 @@ static func _build_tips() -> Array[String]:
 static var TIPS: Array[String] = _build_tips()
 
 ## How long (seconds) each tip stays on screen before the next one shows.
-## Revised (2026-09-10), reported live after actually watching a real
-## launch: the original 4.5s read as "it doesn't rotate" -- a load short
-## enough not to reach even one full interval never shows a second tip at
-## all, so the rotation itself was invisible, not broken. 2.0s is short
-## enough that rotation is visible even on a brief load, still long enough
-## to comfortably read a short line without feeling rushed. A real,
-## deliberate UX choice, pinned by test_tip_interval_is_a_real_reasonable_
+## Revised again (2026-09-13), reported live: 2.0s was too fast to actually
+## read a tip before it changed. 5.0s is the explicit, user-requested
+## duration -- pinned exactly by test_tip_interval_is_a_real_reasonable_
 ## reading_duration rather than left an eyeballed guess.
-const TIP_INTERVAL_SECONDS := 2.0
+const TIP_INTERVAL_SECONDS := 5.0
 
 
 ## `start_offset` is rolled ONCE per loading-screen appearance (a caller-

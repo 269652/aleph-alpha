@@ -461,8 +461,8 @@ only thing a player had to read. That's now split:
   returning player recognizes the joke as being about its own world. Pure
   rotation logic — `tip_for_elapsed(elapsed_seconds, start_offset)` —
   mirrors `LoadingSpinner.frame_for_elapsed`'s exact "pure model, thin
-  Node" shape: a fixed `TIP_INTERVAL_SECONDS` (2.0s as of the revision
-  below; tested, not eyeballed) advances through the pool, wrapping
+  Node" shape: a fixed `TIP_INTERVAL_SECONDS` (5.0s as of the most recent
+  revision below; tested, not eyeballed) advances through the pool, wrapping
   around a long real load rather than erroring or freezing on one line; a
   caller-rolled `start_offset` (`show_with_text` rolls `randi() %
   TIPS.size()` once per appearance) means repeated loads don't always
@@ -758,6 +758,23 @@ since Fisher-Yates's own swap range depends on array size); `1` is the
 first seed checked, from 1 upward, that clears the zero-3+-run bar.
 `test_loading_tips.gd` 18/18 again; no regression in
 `test_loading_overlay.gd`.
+
+### Revised (2026-09-13): the rotation interval lengthened from 2.0s to 5.0s
+
+Requested directly: "Make the loading screen tips stay for 5s" — the
+2.0s interval from the earlier revision above turned out to be too fast
+to actually read a tip before it changed, the opposite complaint from
+the 4.5s-too-slow report that motivated dropping it to 2.0s in the first
+place. `TIP_INTERVAL_SECONDS` is now `5.0`, and
+`test_tip_interval_is_a_real_reasonable_reading_duration`'s own check
+moved from a `(1.0, 4.0)` open range to an exact `assert_eq(..., 5.0)` —
+a direct, explicit user-requested value calls for pinning the number
+itself rather than a UX-judgment range, per CLAUDE.md's no-eyeballed-
+constants rule. Confirmed red against the unmodified 2.0s constant
+first, green after the one-line change. `test_loading_tips.gd` 18/18,
+`test_loading_overlay.gd` 6/6 (both files' other assertions already read
+`TIP_INTERVAL_SECONDS` symbolically rather than a hardcoded 2.0, so
+nothing else needed touching).
 
 ## Status / mechanisms
 
