@@ -276,7 +276,11 @@ This same replan-interrupt shape is what
 [timber_construction.md](timber_construction.md#deciding-what-to-build-and-who-builds-it-design-from-a-follow-up-brainstorm-session)'s
 own Builder assignment reuses — an idle NPC picking up construction duty
 ad hoc, not relocating, but the identical "a need crossing a threshold
-reassigns an NPC out-of-cycle" mechanism.
+reassigns an NPC out-of-cycle" mechanism. [npc_role_consensus.md](npc_role_consensus.md)
+specs WHICH idle NPC gets picked once several are eligible (a real,
+tested theory-of-mind consensus function) — genuinely reachable only once
+this replan-interrupt architecture itself is real, which it is not yet
+anywhere in this codebase.
 
 ### Current implementation status (divergence note)
 

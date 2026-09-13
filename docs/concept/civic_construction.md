@@ -238,6 +238,15 @@ signal (to quests, to dialogue, to a player just walking through) that a
 settlement has real governance, not merely an internal event-store fact
 nothing in the world reflects.
 
+**A further real payoff, specced separately**: see
+[npc_role_consensus.md](npc_role_consensus.md) — once built, a Meeting
+Hall is also where a settlement surfaces a real production demand (reusing
+`NeedResolver`/`ConstructionPriority`'s existing recipe-graph walk) and
+villagers reach a real theory-of-mind consensus about who takes it on.
+That doc's own consensus mechanism (`NpcRoleConsensus`) is real and
+tested; the Meeting-Hall-reads-a-demand and winner-gets-reassigned halves
+of that pipeline are not yet built — see that doc's own Status.
+
 ### Granary
 
 Settlement-SCALE stock, reusing `VillageMarket`'s already-real
