@@ -103,7 +103,13 @@ static func decide_and_advance(
 		if priority != ConstructionPriority.Priority.BUILD_PRODUCER_FIRST:
 			continue
 
-		var missing_structure_id: String = ConstructionPriority.new().missing_structure_id(
+		# The ROOT of whatever chain is missing, not the link nearest the
+		# shortfall: a settlement raising bread's chain must start with the
+		# farm, or its bakery would stand waiting for flour that never comes
+		# (docs/concept/milling_and_baking.md; see ConstructionPriority.
+		# deepest_missing_structure_id for why the walk's last structure need
+		# is that root).
+		var missing_structure_id: String = ConstructionPriority.new().deepest_missing_structure_id(
 			recipe_id, market.stock, present_structure_ids, recipe_book, allocated_nodes
 		)
 		if missing_structure_id == "":

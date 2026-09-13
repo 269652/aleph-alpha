@@ -52,7 +52,10 @@ func test_recipe_ids_returns_all_defined_recipes():
 	# + the City Hall (docs/concept/civic_construction.md's own "Meeting
 	# Hall" spec, docs/concept/npc_role_consensus.md): a settlement's real
 	# civic seat (1 more).
-	assert_eq(ids.size(), 57)
+	# + milling and baking (docs/concept/milling_and_baking.md): mill and
+	# bakery structures, plus the chain's three resolver recipes grow_wheat/
+	# mill_flour/bake_bread (5 more).
+	assert_eq(ids.size(), 62)
 
 
 func test_iron_sword_is_craftable_from_ingots_and_a_stick():
@@ -677,3 +680,161 @@ func test_climbing_rope_recipe_uses_only_existing_items():
 	var catalog := ItemCatalog.new()
 	for item_id in _input_item_ids("climbing_rope"):
 		assert_true(catalog.has(item_id), "climbing_rope recipe uses unknown material %s" % item_id)
+
+
+# -- milling and baking (docs/concept/milling_and_baking.md) ------------------
+#
+## The bread chain as resolver data: three recipes that exist so NeedResolver
+## can walk bread -> bakery -> flour -> mill -> wheat -> farm with zero
+## chain-specific code (the SAME role log_to_balken/log_to_planke already
+## play for the Sägewerk), each pinned to the real production constants so
+## the two data sources can never drift.
+
+func test_the_bread_chain_recipes_are_gated_on_their_real_structures():
+	const MillProduction = preload("res://src/world/mill_production.gd")
+	const BakeryProduction = preload("res://src/world/bakery_production.gd")
+
+	assert_eq(book.recipe_output("grow_wheat")["item_id"], "wheat")
+	assert_eq(book.recipe_requires_structure("grow_wheat"), "farm")
+	assert_eq(book.recipe_inputs("grow_wheat"), [], "a plot needs time and water, no consumed input -- FarmPlot's own model")
+
+	assert_eq(book.recipe_output("mill_flour")["item_id"], "flour")
+	assert_eq(book.recipe_requires_structure("mill_flour"), "mill")
+	var mill_inputs := book.recipe_inputs("mill_flour")
+	assert_eq(mill_inputs.size(), 1)
+	assert_eq(mill_inputs[0]["item_id"], "wheat")
+	assert_eq(mill_inputs[0]["count"], int(MillProduction.WHEAT_PER_FLOUR))
+
+	assert_eq(book.recipe_output("bake_bread")["item_id"], "bread")
+	assert_eq(book.recipe_requires_structure("bake_bread"), "bakery")
+	var bake_inputs := book.recipe_inputs("bake_bread")
+	assert_eq(bake_inputs.size(), 1)
+	assert_eq(bake_inputs[0]["item_id"], "flour")
+	assert_eq(bake_inputs[0]["count"], int(BakeryProduction.FLOUR_PER_BREAD))
+
+	assert_eq(book.recipe_for_output("bread"), "bake_bread")
+	assert_eq(book.recipe_for_output("flour"), "mill_flour")
+	assert_eq(book.recipe_for_output("wheat"), "grow_wheat")
+
+
+## "automated": the one new general recipe field -- a recipe a structure's
+## own production performs and a player can never craft by hand. grow_wheat
+## has no input (FarmPlot consumes none), so without it anyone standing near
+## a Farm could craft free wheat forever -- exactly the exploit
+## npc_farm_production.md refused to paper over. mill_flour/bake_bread are
+## NOT automated: a real input carried to a real building is a fair hand
+## craft.
+func test_grow_wheat_is_automated_and_the_rest_of_the_chain_is_not():
+	assert_true(book.recipe_is_automated("grow_wheat"))
+	assert_false(book.recipe_is_automated("mill_flour"))
+	assert_false(book.recipe_is_automated("bake_bread"))
+
+
+func test_recipe_is_automated_defaults_false_for_ordinary_and_unknown_recipes():
+	assert_false(book.recipe_is_automated("iron_sword"))
+	assert_false(book.recipe_is_automated("log_to_balken"))
+	assert_false(book.recipe_is_automated("no_such_recipe"))
+
+
+func test_an_automated_recipe_can_never_be_crafted_by_hand():
+	assert_false(book.can_craft("grow_wheat", {}), "no input to lack, and still never hand-craftable")
+	var result: Dictionary = book.craft("grow_wheat", {})
+	assert_false(result["success"])
+
+
+## The two buildings themselves: skill-UNGATED on purpose (the concept doc's
+## "Why no skill gate, stated plainly" -- a settlement cannot autonomously
+## raise anything skill-gated today), costed by what they are made of: a
+## post mill is mostly timber on a stone base, a bakehouse is a masonry oven
+## under a timber roof.
+func test_mill_and_bakery_are_material_gated_placeables_costed_by_their_own_construction():
+	assert_eq(book.recipe_output("mill")["item_id"], "mill")
+	assert_eq(book.recipe_required_skill("mill"), {})
+	assert_eq(book.recipe_requires_structure("mill"), "")
+	var mill_cost := _cost_by_item(book.recipe_inputs("mill"))
+	assert_gt(mill_cost.get("wood", 0), mill_cost.get("stone", 0), "a mill is mostly timber")
+	assert_gt(mill_cost.get("stone", 0), 0, "...on a stone base carrying the millstones")
+
+	assert_eq(book.recipe_output("bakery")["item_id"], "bakery")
+	assert_eq(book.recipe_required_skill("bakery"), {})
+	assert_eq(book.recipe_requires_structure("bakery"), "")
+	var bakery_cost := _cost_by_item(book.recipe_inputs("bakery"))
+	assert_gt(bakery_cost.get("stone", 0), bakery_cost.get("wood", 0), "a bakehouse is a masonry oven")
+	assert_gt(bakery_cost.get("wood", 0), 0, "...under a timber roof")
+
+
+func _cost_by_item(inputs: Array) -> Dictionary:
+	var cost := {}
+	for input in inputs:
+		cost[input["item_id"]] = input["count"]
+	return cost
+
+
+## "Bench recipe" -- the ONE predicate deciding what a player may craft by
+## hand from this book (docs/concept/production_chains.md "What the crafting
+## menu lists"). The book is deliberately wider than the bench: it also
+## carries the house-blueprint ledger recipes (output symbolic of a
+## structure, never an ItemCatalog item) and "automated" resolver data.
+## Both the crafting menu (CraftingWindow.bench_recipe_ids) and the dev
+## console's /craft gate on THIS, so the two surfaces can never drift --
+## before it, the console routed any id in recipe_ids() straight into
+## Player.craft, which for a house recipe passed the skill gate, consumed
+## the wood, and hand back nothing.
+func test_is_bench_recipe_refuses_house_blueprints_whose_output_is_no_item():
+	const ItemCatalog = preload("res://src/gameplay/item_catalog.gd")
+	var catalog := ItemCatalog.new()
+	for recipe_id in ["small_house", "cottage", "manor", "grand_estate"]:
+		assert_true(book.recipe_ids().has(recipe_id), "%s must still be a real recipe" % recipe_id)
+		assert_false(catalog.has(recipe_id), "%s is a structure, never an item" % recipe_id)
+		assert_false(book.is_bench_recipe(recipe_id, catalog), "%s must not count as a bench recipe" % recipe_id)
+
+
+func test_is_bench_recipe_refuses_automated_recipes_and_unknown_ids():
+	const ItemCatalog = preload("res://src/gameplay/item_catalog.gd")
+	var catalog := ItemCatalog.new()
+	assert_true(catalog.has("wheat"), "precondition: grow_wheat's output IS an item, only the automated flag can refuse it")
+	assert_false(book.is_bench_recipe("grow_wheat", catalog))
+	assert_false(book.is_bench_recipe("no_such_recipe", catalog))
+
+
+## Structures whose output IS a placeable item, and the structure-gated
+## hand crafts of the bread chain, are real bench recipes -- the filter
+## must exclude exactly the two ledger/resolver classes and nothing else.
+func test_is_bench_recipe_accepts_hand_crafts_including_placeable_structures():
+	const ItemCatalog = preload("res://src/gameplay/item_catalog.gd")
+	var catalog := ItemCatalog.new()
+	for recipe_id in ["torch", "sagewerk", "mill", "campfire", "mill_flour", "bake_bread"]:
+		assert_true(book.is_bench_recipe(recipe_id, catalog), "%s is a real bench craft" % recipe_id)
+
+
+## bench_recipe_ids is recipe_ids filtered by the predicate -- derived here
+## independently from the two tested facts it composes.
+func test_bench_recipe_ids_is_recipe_ids_filtered_by_the_predicate():
+	const ItemCatalog = preload("res://src/gameplay/item_catalog.gd")
+	var catalog := ItemCatalog.new()
+	var expected: Array = []
+	for recipe_id in book.recipe_ids():
+		if book.recipe_is_automated(recipe_id):
+			continue
+		if not catalog.has(book.recipe_output(recipe_id)["item_id"]):
+			continue
+		expected.append(recipe_id)
+	var actual: Array = book.bench_recipe_ids(catalog)
+	expected.sort()
+	actual.sort()
+	assert_gt(expected.size(), 0, "the bench set must not be empty or this proves nothing")
+	assert_lt(expected.size(), book.recipe_ids().size(), "the book is wider than the bench on purpose")
+	assert_eq(actual, expected)
+
+
+## The catalog handed in is what decides whether an output is an item --
+## the predicate reads it, rather than keeping its own list of house ids
+## that would go stale the next time a ledger-only recipe is added.
+class OnlyTorchCatalog:
+	func has(item_id: String) -> bool:
+		return item_id == "torch"
+
+
+func test_the_catalog_decides_which_outputs_count_as_items():
+	assert_eq(book.bench_recipe_ids(OnlyTorchCatalog.new()), ["torch"])
+	assert_false(book.is_bench_recipe("sagewerk", OnlyTorchCatalog.new()))

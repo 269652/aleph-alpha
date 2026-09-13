@@ -100,7 +100,7 @@ whatever richer recipe representation crafting.md eventually ships.
 
 ## Mechanism
 
-### The two recipe fields
+### The two recipe fields (and a third, later)
 
 `CraftingRecipeBook`'s recipe dict shape gains two OPTIONAL keys:
 
@@ -110,8 +110,22 @@ recipe_id -> {
   "output": {"item_id": String, "count": int},
   "required_skill": {"stat_name": String, "level": float},  # OPTIONAL
   "requires_structure": String,                             # OPTIONAL
+  "automated": bool,                                        # OPTIONAL, see below
 }
 ```
+
+- `automated` (added by [milling_and_baking.md](milling_and_baking.md)):
+  true for a recipe a structure's own production performs — it exists as
+  resolver data so `NeedResolver` can reach that structure — and a player
+  can never craft by hand: `CraftingRecipeBook.can_craft`/`craft` refuse
+  it outright, before any input check, so `Player.craft` inherits the
+  refusal with no gate of its own. Its reason to exist is the one case the
+  "ghost recipe" pattern below could not cover honestly: a producer whose
+  real production consumes NO input (a Farm's wheat — `FarmPlot` needs
+  time and water, nothing consumable). `log_to_balken`/`log_to_planke`
+  stay un-automated because they still cost real logs by hand, which is
+  its own exploit-proofing; `grow_wheat` has no such cost, so it is
+  `automated` instead. False for every recipe with no flag.
 
 - `required_skill` names a `SkillTree` stat and the threshold total_bonus
   must reach — read live via `SkillTree.total_bonus(stat_name,
@@ -151,6 +165,48 @@ now declare `requires_structure: "heat_source"` and behave identically to
 before) AND the mechanism that makes the Sägewerk's new `required_skill`
 gate — and any future recipe's gates — actually refuse a craft in
 practice, not just exist as unread data.
+
+### What the crafting menu lists
+
+`CraftingRecipeBook` is deliberately wider than "what a player can make at
+a bench": it also carries recipes that exist as *data* for the resolver
+and the construction ledger. So no bench-craft surface mirrors
+`recipe_ids()`. The rule is ONE predicate on the book itself —
+`CraftingRecipeBook.is_bench_recipe(recipe_id, item_catalog)` (and
+`bench_recipe_ids(item_catalog)`, its filtered list) — and every surface a
+player reaches a recipe *from* gates on it rather than keeping a copy: the
+crafting menu (`CraftingWindow.bench_recipe_ids()` delegates to it) and
+the dev console's `/craft` (`World._handle_craft_command` refuses before
+`Player.craft` is called and lists bench recipes only). A recipe is a
+bench recipe only if BOTH hold:
+
+- it is not `automated` (`can_craft`/`craft` refuse such a recipe before
+  any input check, so a card for it could only ever render permanently
+  dimmed — `grow_wheat` is the live case), and
+- its `output.item_id` is a real `ItemCatalog` item — something
+  `Player.craft` can actually hand over. The house-blueprint recipes
+  ([workforce.md](workforce.md)'s "Blueprint tiers": `small_house`,
+  `cottage`, `manor`, the two-story tiers) fail this on purpose: their
+  `output` is symbolic of the structure the ledger tracks, never an item,
+  and they are reached only through `Player._try_build_house_from_blueprint`,
+  which calls `craft()` as its material+skill gate and stamps the house
+  itself. Clicked from the menu, `craft()` would consume the wood and
+  produce nothing.
+
+Everything else stays: a structure whose output IS a placeable item
+(`sagewerk`, `mill`, `bakery`, `campfire`, `storage`, ...) is a real bench
+craft under Structures, and `mill_flour`/`bake_bread`/`log_to_balken`/
+`log_to_planke` remain hand crafts gated by `requires_structure` as above.
+Any future "ledger-only" recipe gets excluded by the same two checks with
+no new special case — the same "declare the field, get the behavior"
+discipline the gates themselves follow.
+
+The refusal deliberately lives at the surfaces, **never inside
+`Player.craft` itself**: `Player._try_build_house_from_blueprint` calls
+`craft()` as its atomic material+skill gate and depends on it consuming
+the wood for exactly the house recipes. A gate in `craft()` would break
+the only door to a house. (The predicate takes the catalog as a parameter,
+duck-typed on `has()`, so the recipe book stays the pure table it is.)
 
 ### NeedResolver: the recursive "what do I actually need" walk
 
@@ -353,6 +409,24 @@ still heat-gates exactly as before, campfire-or-furnace) AND
 newly-real (the Sägewerk's Carpentry gate and its `requires_structure:
 "sagewerk"` gate both now actually refuse a craft, not just exist as
 unread data).
+
+✅ **What the crafting menu lists** — `CraftingWindow.bench_recipe_ids()`
+(2026-09-13): `automated` recipes and recipes whose output is not an
+`ItemCatalog` item (the house-blueprint ledger recipes) get no card;
+pinned by `tests/unit/test_crafting_window.gd` against the recipe book
+and catalog directly. Before this, the first house recipe's unguarded
+`ItemCatalog.make()` aborted the whole grid — the menu opened empty.
+Same day, the rule moved into the book as
+`CraftingRecipeBook.is_bench_recipe`/`bench_recipe_ids` (the window
+delegates; `test_crafting_recipe_book.gd` tests it directly, including
+that it reads the catalog rather than a hardcoded house list) and the dev
+console's `/craft` gates on the same predicate: a house blueprint or
+automated recipe is refused with a clear message before `Player.craft`
+ever runs, an unknown id says so, and "Known:" lists bench recipes only
+(`test_craft_command_clarity.gd`, source-pinned like the other
+`*_command_clarity` files, plus a guard that `Player.craft` stays
+ungated). Before this, `/craft small_house` burned 30 wood and built
+nothing.
 
 ✅ **NeedResolver** — `src/gameplay/need_resolver.gd`, pure, recursive,
 cycle-guarded (`MAX_DEPTH`, pinned by test). Covers direct stock

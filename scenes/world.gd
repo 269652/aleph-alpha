@@ -4135,23 +4135,45 @@ func _handle_give_command(args: Array, local_player: Player) -> void:
 	_dev_console.log_line("Gave %d x %s." % [count, item_id])
 
 
+## /craft is a bench-craft surface exactly like the crafting menu, so it
+## accepts and lists only what CraftingRecipeBook.is_bench_recipe allows
+## (the ONE shared predicate, see docs/concept/production_chains.md "What
+## the crafting menu lists"). The book is wider than the bench on purpose:
+## a house-blueprint recipe (small_house, cottage, ...) handed straight to
+## Player.craft passes the carpentry gate, consumes the wood, and produces
+## nothing (its output is a ledger structure, never an item -- houses are
+## built through the blueprint action), and an automated recipe
+## (grow_wheat) is a structure's own production. Refused HERE, never inside
+## Player.craft, which the blueprint build path relies on as its material
+## gate.
 func _handle_craft_command(args: Array, local_player: Player) -> void:
 	if local_player == null:
 		_dev_console.log_line("No local player to craft for.")
 		return
+	var known := ", ".join(_crafting_recipe_book.bench_recipe_ids(_item_catalog))
 	if args.is_empty():
-		_dev_console.log_line(
-			"Usage: /craft <recipe_id>. Known: %s" % ", ".join(_crafting_recipe_book.recipe_ids())
-		)
+		_dev_console.log_line("Usage: /craft <recipe_id>. Known: %s" % known)
 		return
 
 	var recipe_id: String = args[0]
+	if not _crafting_recipe_book.is_bench_recipe(recipe_id, _item_catalog):
+		if _crafting_recipe_book.recipe_output(recipe_id).is_empty():
+			_dev_console.log_line("Unknown recipe '%s'. Known: %s" % [recipe_id, known])
+		else:
+			_dev_console.log_line(
+				(
+					"Can't craft '%s' -- not a bench recipe: house blueprints are built"
+					+ " in-world through the blueprint action, and automated recipes are a"
+					+ " structure's own production. Known: %s"
+				) % [recipe_id, known]
+			)
+		return
 	if local_player.craft(recipe_id):
 		_dev_console.log_line("Crafted %s." % recipe_id)
 	else:
 		_dev_console.log_line(
-			"Can't craft '%s' -- missing ingredients or unknown recipe. Known: %s"
-			% [recipe_id, ", ".join(_crafting_recipe_book.recipe_ids())]
+			"Can't craft '%s' -- missing ingredients, skill, or required structure. Known: %s"
+			% [recipe_id, known]
 		)
 
 

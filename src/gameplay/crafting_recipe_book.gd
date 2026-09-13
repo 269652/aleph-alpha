@@ -266,6 +266,51 @@ const _RECIPES := {
 		"output": {"item_id": "plank", "count": 1},
 		"requires_structure": "sagewerk",
 	},
+	# Milling and baking (docs/concept/milling_and_baking.md): the two
+	# buildings that turn wheat into food, and the chain itself as resolver
+	# data. mill/bakery are skill-UNGATED on purpose -- a settlement cannot
+	# autonomously raise anything skill-gated today (SettlementBuildDecision
+	# passes an empty allocated_nodes; see timber_construction.md) and the
+	# whole point of this chain is that a settlement raises it on its own --
+	# and costed by what each is made of: a post mill is mostly timber on a
+	# stone base carrying the millstones; a bakehouse is a masonry oven under
+	# a timber roof (test_crafting_recipe_book.gd pins the relationships).
+	"mill": {
+		"inputs": [{"item_id": "wood", "count": 10}, {"item_id": "stone", "count": 4}],
+		"output": {"item_id": "mill", "count": 1},
+	},
+	"bakery": {
+		"inputs": [{"item_id": "stone", "count": 8}, {"item_id": "wood", "count": 6}],
+		"output": {"item_id": "bakery", "count": 1},
+	},
+	# The chain as resolver data -- the SAME role log_to_balken/log_to_planke
+	# play above for the Sägewerk: NeedResolver walks bread -> bakery ->
+	# flour -> mill -> wheat -> farm through these with zero chain-specific
+	# code. Input counts are pinned to MillProduction.WHEAT_PER_FLOUR /
+	# BakeryProduction.FLOUR_PER_BREAD so the two data sources never drift.
+	#
+	# grow_wheat is "automated": FarmPlot consumes no input, so without that
+	# flag anyone standing near a Farm could hand-craft free wheat forever
+	# (the exploit npc_farm_production.md refused to paper over). It exists
+	# purely so the resolver can reach the Farm. mill_flour/bake_bread are
+	# NOT automated -- real wheat carried to a real Mill, real flour to a real
+	# Bakery, is a fair hand craft and a real player use for both buildings.
+	"grow_wheat": {
+		"inputs": [],
+		"output": {"item_id": "wheat", "count": 1},
+		"requires_structure": "farm",
+		"automated": true,
+	},
+	"mill_flour": {
+		"inputs": [{"item_id": "wheat", "count": 1}],
+		"output": {"item_id": "flour", "count": 1},
+		"requires_structure": "mill",
+	},
+	"bake_bread": {
+		"inputs": [{"item_id": "flour", "count": 1}],
+		"output": {"item_id": "bread", "count": 1},
+		"requires_structure": "bakery",
+	},
 	# Wayfinding & citizenship instruments (see docs/concept/wayfinding.md,
 	# docs/concept/player_citizenship.md). Every input below is an existing
 	# raw-material item id already in item_catalog.gd's _ITEMS -- no new
@@ -460,6 +505,59 @@ func recipe_requires_structure(recipe_id: String) -> String:
 	return recipe.get("requires_structure", "")
 
 
+## A recipe's OPTIONAL "automated" flag (docs/concept/milling_and_baking.md,
+## docs/concept/production_chains.md): true for a recipe a structure's own
+## production performs -- it exists as resolver data so NeedResolver can
+## reach that structure -- and a player can never craft by hand (can_craft/
+## craft refuse it outright, before any input check). False for a recipe
+## with no flag (the common case) or an unknown recipe_id.
+func recipe_is_automated(recipe_id: String) -> bool:
+	if not _RECIPES.has(recipe_id):
+		return false
+	var recipe: Dictionary = _RECIPES[recipe_id]
+	return bool(recipe.get("automated", false))
+
+
+## The ONE "bench recipe" predicate (docs/concept/production_chains.md
+## "What the crafting menu lists"): may a player craft this recipe BY HAND
+## and walk away with its output? This book is deliberately wider than
+## that -- it also carries the house-blueprint ledger recipes (small_house,
+## cottage, manor, the two-story tiers: their "output" is symbolic of the
+## structure the construction ledger tracks and deliberately NOT an
+## ItemCatalog entry, see the small_house recipe's own doc comment) and
+## "automated" resolver data (recipe_is_automated above). True only if the
+## recipe exists, is not automated, AND item_catalog.has() its output --
+## the same has() guard Player.craft applies one step later, which for a
+## house recipe means craft() consumes the wood and hands back nothing.
+##
+## Every surface a player reaches a recipe FROM (the crafting menu's
+## CraftingWindow.bench_recipe_ids, the dev console's /craft) gates on this
+## one function rather than keeping its own copy, so they cannot drift.
+## Player.craft itself deliberately does NOT: Player._try_build_house_from_
+## blueprint calls craft() as its atomic material+skill gate and depends on
+## it consuming the material for exactly those house recipes.
+##
+## item_catalog is whatever answers has(item_id) -> bool (the real
+## ItemCatalog in play); taken as a parameter so this book stays the pure
+## recipe table it is and pulls in none of the catalog's dependencies.
+func is_bench_recipe(recipe_id: String, item_catalog) -> bool:
+	if not _RECIPES.has(recipe_id):
+		return false
+	if recipe_is_automated(recipe_id):
+		return false
+	return item_catalog.has(_RECIPES[recipe_id]["output"]["item_id"])
+
+
+## recipe_ids() filtered by is_bench_recipe -- the list a bench-craft
+## surface shows or accepts.
+func bench_recipe_ids(item_catalog) -> Array:
+	var ids: Array = []
+	for recipe_id in _RECIPES:
+		if is_bench_recipe(recipe_id, item_catalog):
+			ids.append(recipe_id)
+	return ids
+
+
 ## Reverse lookup: the recipe_id whose output produces `item_id`, or "" if
 ## nothing in this book produces it -- NeedResolver's own bottom case ("go
 ## get it from the world" for a raw/gathered item like log/stone/hide,
@@ -476,6 +574,8 @@ func recipe_for_output(item_id: String) -> String:
 func can_craft(recipe_id: String, inventory_counts: Dictionary) -> bool:
 	if not _RECIPES.has(recipe_id):
 		return false
+	if recipe_is_automated(recipe_id):
+		return false  # a structure's own production, never a hand craft (see recipe_is_automated)
 	for input in _RECIPES[recipe_id]["inputs"]:
 		if inventory_counts.get(input["item_id"], 0) < input["count"]:
 			return false

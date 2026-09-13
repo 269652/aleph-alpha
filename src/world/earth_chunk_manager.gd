@@ -68,6 +68,8 @@ const LogisticsMarker = preload("res://src/rendering/logistics_marker.gd")
 const StructureStockStore = preload("res://src/emergence/structure_stock_store.gd")
 const IllustratedStructureSprite = preload("res://src/rendering/illustrated_structure_sprite.gd")
 const FarmerMarker = preload("res://src/rendering/farmer_marker.gd")
+const MillMarker = preload("res://src/rendering/mill_marker.gd")
+const BakeryMarker = preload("res://src/rendering/bakery_marker.gd")
 const SettlementDemand = preload("res://src/emergence/settlement_demand.gd")
 
 ## How much of a tile a ground-cover tuft (grass, scrub, lichen) covers.
@@ -173,6 +175,7 @@ const InstitutionFormation = preload("res://src/emergence/institution_formation.
 const PlayerIdentity = preload("res://src/emergence/player_identity.gd")
 const SettlementState = preload("res://src/emergence/settlement_state.gd")
 const SettlementFood = preload("res://src/emergence/settlement_food.gd")
+const SettlementGathering = preload("res://src/emergence/settlement_gathering.gd")
 const SettlementGranary = preload("res://src/emergence/settlement_granary.gd")
 const OccupationProduction = preload("res://src/emergence/occupation_production.gd")
 const NpcIdentity = preload("res://src/world/npc_identity.gd")
@@ -191,6 +194,7 @@ const CaravanRaid = preload("res://src/emergence/caravan_raid.gd")
 const CaravanMarker = preload("res://src/rendering/caravan_marker.gd")
 const PathScarring = preload("res://src/world/path_scarring.gd")
 const ItemCatalog = preload("res://src/gameplay/item_catalog.gd")
+const VillageMarket = preload("res://src/world/village_market.gd")
 const WorldClockPersistence = preload("res://src/world/world_clock_persistence.gd")
 const SnowBombShader = preload("res://src/rendering/snow_bomb_shader.gd")
 const RoofShape = preload("res://src/rendering/roof_shape.gd")
@@ -750,6 +754,42 @@ var _illustrated_structure_sprite := IllustratedStructureSprite.new()
 ## NPC can get hired" -- staffing is gated on a real "wooden_fence" standing
 ## within FARM_FENCE_GATE_RADIUS_TILES (see _reconcile_farmer_at).
 var _farm_farmers: Dictionary = {}
+
+## The Mill's Miller and the Bakery's Baker (docs/concept/milling_and_
+## baking.md): every placed conversion structure currently staffed with its
+## own StructureConversionMarker -- chunk_coord -> {local_cell -> marker},
+## the SAME shape as _sagewerk_lumberjacks/_farm_farmers, one dict for both
+## trades since they differ only in which marker class moves in (see
+## CONVERSION_WORKER_BY_STRUCTURE). Staffed unconditionally the moment the
+## tile exists, like the Sägewerk (no fence gate -- a quern-house and a
+## bakehouse need no plot to protect).
+var _conversion_workers: Dictionary = {}
+const CONVERSION_WORKER_BY_STRUCTURE := {"mill": MillMarker, "bakery": BakeryMarker}
+
+## Hauling between the bread chain's links (docs/concept/milling_and_
+## baking.md, "Hauling between the links"): each leg is (source structure,
+## item ids, destination structure), worked by the SAME LogisticsMarker
+## the Sägewerk/Farm -> Storage pairing already uses, with a consumer as its
+## destination. Wheat reaches the Mill both straight from a Farm and out
+## of any Storage it was hauled into first (the existing Farm -> Storage
+## pairing keeps running; two haulers on one Farm simply race, the loser
+## aborting its pickup -- see LogisticsMarker), so no wheat is ever
+## stranded in a Storage the Mill can't see. A leg is only staffed while
+## its source is: a Farm with a Farmer, a Mill/Bakery with its worker, a
+## Storage by existing at all.
+const CHAIN_LOGISTICS_LEGS := [
+	{"source": "farm", "items": ["wheat"], "destination": "mill"},
+	{"source": "storage", "items": ["wheat"], "destination": "mill"},
+	{"source": "mill", "items": ["flour"], "destination": "bakery"},
+	{"source": "bakery", "items": ["bread"], "destination": "storage"},
+]
+
+## chunk_coord -> {source_local_cell -> {destination_id -> {destination_
+## pairing_key -> {item_id -> LogisticsMarker}}}}: _logistics_workers' own
+## shape with one more level (the destination KIND) so each leg's pairs are
+## pruned independently -- a Farm's Mill legs and its Storage legs (kept in
+## _logistics_workers) must never prune each other.
+var _chain_logistics_workers: Dictionary = {}
 
 ## How far (in tiles) a wooden_fence must stand from a Farm for a Farmer to
 ## move in. Matches SAGEWERK_STORAGE_PAIR_RADIUS_TILES' own magnitude --
@@ -2336,10 +2376,38 @@ func _despawn_completed_hired_builders() -> void:
 func _settlement_status_for(settlement_id: String) -> String:
 	var market := _market_store.market_for(settlement_id)
 	var household_count := _households_in_settlement(settlement_id).size()
-	var capacity := SettlementFood.carrying_capacity(
-		market, SettlementFood.village_market_for(settlement_id, _loaded_villages)
+	var capacity := _settlement_capacity(
+		settlement_id, market, SettlementFood.village_market_for(settlement_id, _loaded_villages)
 	)
 	return SettlementState.status_for(household_count, capacity)
+
+
+## The one carrying-capacity read every settlement assessment shares (see
+## step_settlements, _settlement_status_for, legitimacy_for_settlement):
+## SettlementFood over BOTH markets AND the food on the village's own
+## shelves (docs/concept/milling_and_baking.md, "Food that counts") -- the
+## bread its Bakery bakes and its Storage holds.
+func _settlement_capacity(settlement_id: String, market, village_market) -> int:
+	return SettlementFood.carrying_capacity(
+		market, village_market, _item_catalog, _settlement_structure_stocks(settlement_id)
+	)
+
+
+## Every StructureStock standing in `settlement_id`'s own chunk (a settlement
+## IS its chunk -- EntityRef.for_settlement) -- the third food container
+## SettlementFood counts. Keys are "%d_%d" global tiles (see
+## _structure_stock_key), so the chunk each belongs to is a plain divide.
+func _settlement_structure_stocks(settlement_id: String) -> Array:
+	var chunk_coord := RegionalTrade.chunk_coord_of(settlement_id)
+	var stocks: Array = []
+	for instance_key in _structure_stocks.instance_keys():
+		var parts: PackedStringArray = str(instance_key).split("_")
+		if parts.size() != 2:
+			continue
+		var tile := Vector2i(int(parts[0]), int(parts[1]))
+		if _chunk_coord_for_tile(tile) == chunk_coord:
+			stocks.append(_structure_stocks.stock_for(instance_key))
+	return stocks
 
 
 ## Wages and Rent (docs/concept/workforce.md's own "Wages"/"Rent" sections)
@@ -3463,7 +3531,13 @@ func step_settlements(delta_seconds: float) -> void:
 		# BEFORE capacity is read, because this is what finally puts a real
 		# number in front of it (see _step_settlement_granary).
 		_step_settlement_granary(settlement_id, market, village_market, household_ids)
-		var capacity := SettlementFood.carrying_capacity(market, village_market)
+		# The village's spare hands gather building material and keep raising
+		# whatever the settlement decided to build (docs/concept/milling_and_
+		# baking.md) -- the SAME interval, so a village near the player builds
+		# in real time rather than only on a reload after an unload.
+		_step_settlement_gathering(settlement_id, market, household_ids)
+		_step_settlement_construction(settlement_id, household_ids)
+		var capacity := _settlement_capacity(settlement_id, market, village_market)
 		var status := SettlementState.status_for(household_ids.size(), capacity)
 
 		# Emergence Phase 5/4/6's own automatic triggers, closing the gap
@@ -3703,6 +3777,47 @@ func _step_settlement_granary(
 ## settlement_id -> the sub-unit gathering remainder carried into its next
 ## assessment (see _step_settlement_granary).
 var _settlement_gather_carry: Dictionary = {}
+
+## settlement_id -> SettlementGathering's own sub-unit carry for building
+## material (see _step_settlement_gathering).
+var _settlement_material_carry: Dictionary = {}
+
+
+## A settlement's spare hands cut timber, pick stone and pull fibre into its
+## own persisted Market every assessment (SettlementGathering, docs/concept/
+## milling_and_baking.md) -- loaded or not, since nothing else ever stocks
+## building material there and every autonomous construction decision
+## used to end in SHORTFALL for that reason alone.
+func _step_settlement_gathering(settlement_id: String, market, household_ids: Array[String]) -> void:
+	if household_ids.is_empty():
+		return
+	var spare_capacity := SettlementSpareCapacity.for_settlement(
+		household_ids.size(), _household_occupations_for_settlement(settlement_id)
+	)
+	var result: Dictionary = SettlementGathering.material_delta(
+		spare_capacity, SETTLEMENT_STEP_INTERVAL, _settlement_material_carry.get(settlement_id, {})
+	)
+	_settlement_material_carry[settlement_id] = result["carry"]
+	var stock_delta: Dictionary = result["stock_delta"]
+	for item_id in stock_delta:
+		market.add_stock(str(item_id), int(stock_delta[item_id]))
+
+
+## While a settlement's chunk is loaded, its construction keeps going in
+## real time: re-take the build decision (a need may have appeared or a
+## link may have just been placed) and advance every IN_PROGRESS project
+## by the assessment interval -- the SAME closed-form labor math
+## _apply_construction_labor_catchup applies to unloaded time, so nothing
+## about how fast a village builds depends on whether the player is
+## watching. An unloaded settlement is left to the reload catch-up.
+func _step_settlement_construction(settlement_id: String, household_ids: Array[String]) -> void:
+	if household_ids.is_empty():
+		return
+	var chunk_coord := RegionalTrade.chunk_coord_of(settlement_id)
+	if not _loaded_chunks.has(chunk_coord):
+		return
+	_apply_settlement_build_decision(chunk_coord)
+	_advance_construction_labor(chunk_coord, SETTLEMENT_STEP_INTERVAL)
 ## settlement_id -> SettlementGranary.SeededRegion, cached for the session.
 var _settlement_seeded_region: Dictionary = {}
 
@@ -4000,8 +4115,8 @@ func legitimacy_for_settlement(settlement_id: String) -> String:
 	# SettlementFood): Governance reads this status as legitimacy, so
 	# leaving this one on the emergence market alone would report a
 	# settlement illegitimate that step_settlements calls GROWING.
-	var capacity := SettlementFood.carrying_capacity(
-		market, SettlementFood.village_market_for(settlement_id, _loaded_villages)
+	var capacity := _settlement_capacity(
+		settlement_id, market, SettlementFood.village_market_for(settlement_id, _loaded_villages)
 	)
 	return Governance.legitimacy_for(SettlementState.status_for(household_count, capacity))
 
@@ -12456,6 +12571,7 @@ func build_at_global(global_x: int, global_y: int, tile_id: String) -> bool:
 	_sync_piece_collision(Vector2i(global_x, global_y), tile_id)
 	_sync_sagewerk_lumberjack(chunk_coord, local, previous_tile_id, tile_id)
 	_sync_farm_farmer(chunk_coord, local, previous_tile_id, tile_id)
+	_sync_conversion_worker(chunk_coord, local, previous_tile_id, tile_id)
 	_sync_logistics_workers(chunk_coord, local, previous_tile_id, tile_id)
 	_sync_structure_art(chunk_coord, local, previous_tile_id, tile_id)
 	if previous_tile_id != tile_id:
@@ -12487,6 +12603,7 @@ func destroy_at_global(global_x: int, global_y: int) -> bool:
 	_remove_piece_collision(Vector2i(global_x, global_y))
 	_sync_sagewerk_lumberjack(chunk_coord, local, previous_tile_id, "")
 	_sync_farm_farmer(chunk_coord, local, previous_tile_id, "")
+	_sync_conversion_worker(chunk_coord, local, previous_tile_id, "")
 	_sync_logistics_workers(chunk_coord, local, previous_tile_id, "")
 	_sync_structure_art(chunk_coord, local, previous_tile_id, "")
 	_sync_flow_boulder(Vector2i(global_x, global_y))
@@ -12817,6 +12934,12 @@ func _spawn_lumberjack_for(chunk_coord: Vector2i, local_cell: Vector2i) -> void:
 	var global_cell: Vector2i = chunk_coord * CHUNK_SIZE + local_cell
 	var home := (Vector2(global_cell) + Vector2(0.5, 0.5)) * TerrainRenderer.TILE_SIZE
 	var marker := LumberjackMarker.new()
+	# Wired to the world it shapes logs for, exactly like _spawn_farmer_for
+	# below -- without this, _step_production bails every frame and every
+	# beam/plank is silently discarded (test_earth_chunk_manager_structure_
+	# workers.gd pins it, found while building the bread chain on this
+	# template).
+	marker.earth = self
 	marker.home = home
 	marker.position = home
 	_entities_parent.add_child(marker)
@@ -12910,6 +13033,50 @@ func _despawn_farmer_at(chunk_coord: Vector2i, local_cell: Vector2i) -> void:
 	by_cell.erase(local_cell)
 
 
+## Keeps `_conversion_workers` in sync with a modification change at
+## `local_cell` -- _sync_sagewerk_lumberjack's exact shape, for every
+## structure id in CONVERSION_WORKER_BY_STRUCTURE: a tile that just BECAME
+## a mill/bakery gets its worker (never double-spawned), a tile that just
+## STOPPED being one has it despawned, and a mill overwritten by a bakery
+## swaps workers.
+func _sync_conversion_worker(
+	chunk_coord: Vector2i, local_cell: Vector2i, previous_tile_id: String, new_tile_id: String
+) -> void:
+	if CONVERSION_WORKER_BY_STRUCTURE.has(previous_tile_id) and new_tile_id != previous_tile_id:
+		_despawn_conversion_worker_at(chunk_coord, local_cell)
+	if CONVERSION_WORKER_BY_STRUCTURE.has(new_tile_id):
+		_spawn_conversion_worker_for(chunk_coord, local_cell, new_tile_id)
+
+
+## Spawns exactly one worker for the mill/bakery at `local_cell`, or does
+## nothing if one already exists there -- wired to this world (`earth`)
+## exactly like the Farmer, so what it grinds or bakes actually lands in
+## the building's real StructureStock.
+func _spawn_conversion_worker_for(chunk_coord: Vector2i, local_cell: Vector2i, structure_id: String) -> void:
+	if not _conversion_workers.has(chunk_coord):
+		_conversion_workers[chunk_coord] = {}
+	var by_cell: Dictionary = _conversion_workers[chunk_coord]
+	if by_cell.has(local_cell):
+		return
+	var global_cell: Vector2i = chunk_coord * CHUNK_SIZE + local_cell
+	var home := (Vector2(global_cell) + Vector2(0.5, 0.5)) * TerrainRenderer.TILE_SIZE
+	var marker = CONVERSION_WORKER_BY_STRUCTURE[structure_id].new()
+	marker.earth = self
+	marker.home = home
+	marker.position = home
+	_entities_parent.add_child(marker)
+	by_cell[local_cell] = marker
+
+
+func _despawn_conversion_worker_at(chunk_coord: Vector2i, local_cell: Vector2i) -> void:
+	var by_cell: Dictionary = _conversion_workers.get(chunk_coord, {})
+	var marker: Node = by_cell.get(local_cell)
+	if marker == null:
+		return
+	marker.free()
+	by_cell.erase(local_cell)
+
+
 ## Keeps `_logistics_workers` in sync with a modification change at
 ## `local_cell`. Two independent triggers matter: the tile itself becoming/
 ## stopping being a Sägewerk (re-decide staffing for exactly this cell), or
@@ -12933,6 +13100,132 @@ func _sync_logistics_workers(
 		for farm_chunk_coord in _farm_farmers:
 			for farm_local_cell in _farm_farmers[farm_chunk_coord]:
 				_resync_logistics_for_farm(farm_chunk_coord, farm_local_cell)
+	# A wooden_fence appearing/disappearing (re)staffs Farms without any
+	# farm tile changing (see _sync_farm_farmer) -- their own Storage
+	# pairing has to follow the Farmer, the same as every other trigger.
+	if previous_tile_id == "wooden_fence" or new_tile_id == "wooden_fence":
+		for farm_chunk_coord in _farm_farmers:
+			for farm_local_cell in _farm_farmers[farm_chunk_coord]:
+				_resync_logistics_for_farm(farm_chunk_coord, farm_local_cell)
+	_sync_chain_legs(chunk_coord, local_cell, previous_tile_id, new_tile_id)
+
+
+## The bread chain's own trigger (see CHAIN_LOGISTICS_LEGS): a tile that
+## stopped being a leg source drops every leg it had, then -- for ANY
+## change to a source, a destination, or the fence that staffs a Farm --
+## every known source's legs are re-decided, the same broad, idempotent
+## reconcile _sync_logistics_workers' own "storage changed" trigger uses.
+func _sync_chain_legs(
+	chunk_coord: Vector2i, local_cell: Vector2i, previous_tile_id: String, new_tile_id: String
+) -> void:
+	var relevant := {"wooden_fence": true}
+	for leg in CHAIN_LOGISTICS_LEGS:
+		relevant[leg["source"]] = true
+		relevant[leg["destination"]] = true
+	if not relevant.has(previous_tile_id) and not relevant.has(new_tile_id):
+		return
+	if previous_tile_id != new_tile_id and relevant.has(previous_tile_id):
+		_despawn_chain_legs_at(chunk_coord, local_cell)
+	_resync_all_chain_legs()
+
+
+## Re-decides every leg of every currently-known source in every loaded
+## chunk -- safe to call redundantly (a no-op for an already-correct pair).
+func _resync_all_chain_legs() -> void:
+	for chunk_coord in _loaded_chunks:
+		var chunk: Chunk = _loaded_chunks[chunk_coord]
+		for local_cell in chunk.modifications:
+			var tile_id: String = chunk.modifications[local_cell]
+			for leg in CHAIN_LOGISTICS_LEGS:
+				if leg["source"] == tile_id:
+					_resync_chain_leg_for(chunk_coord, local_cell, leg)
+
+
+## Whether the leg's source at this cell has anything to give: a Farm only
+## while a Farmer works it, a Mill/Bakery while its worker stands there, a
+## Storage by existing at all.
+func _is_chain_source_staffed(chunk_coord: Vector2i, local_cell: Vector2i, source_id: String) -> bool:
+	match source_id:
+		"farm":
+			return _farm_farmers.get(chunk_coord, {}).has(local_cell)
+		"storage":
+			return true
+		_:
+			return _conversion_workers.get(chunk_coord, {}).has(local_cell)
+
+
+## _resync_logistics_for_sagewerk's exact reconcile, for one chain leg of
+## one source: one hauler per item per real destination currently within
+## SAGEWERK_STORAGE_PAIR_RADIUS_TILES, a destination that dropped out of
+## range (or was destroyed) losing its own haulers, an already-paired one
+## left alone.
+func _resync_chain_leg_for(chunk_coord: Vector2i, local_cell: Vector2i, leg: Dictionary) -> void:
+	var destination_id: String = leg["destination"]
+	if not _is_chain_source_staffed(chunk_coord, local_cell, leg["source"]):
+		_despawn_chain_legs_at(chunk_coord, local_cell, destination_id)
+		return
+
+	var global_cell: Vector2i = chunk_coord * CHUNK_SIZE + local_cell
+	var source_pixel := (Vector2(global_cell) + Vector2(0.5, 0.5)) * TerrainRenderer.TILE_SIZE
+	var destinations_found: Array[Vector2] = nearby_structure_positions(
+		source_pixel, destination_id, float(SAGEWERK_STORAGE_PAIR_RADIUS_TILES) * TerrainRenderer.TILE_SIZE
+	)
+	if destinations_found.is_empty():
+		_despawn_chain_legs_at(chunk_coord, local_cell, destination_id)
+		return
+
+	var by_destination: Dictionary = (
+		_chain_logistics_workers.get(chunk_coord, {}).get(local_cell, {}).get(destination_id, {})
+	)
+	var in_range_keys := {}
+	for destination_pixel in destinations_found:
+		var key := _storage_pairing_key(destination_pixel)
+		in_range_keys[key] = true
+		if by_destination.has(key):
+			continue  # already staffed for this specific destination -- no double-spawn
+		var by_item: Dictionary = {}
+		for item_id in leg["items"]:
+			var marker := LogisticsMarker.new()
+			marker.earth = self
+			marker.item_id = item_id
+			marker.source_structure_id = leg["source"]
+			marker.storage_structure_id = destination_id
+			marker.search_radius_tiles = SAGEWERK_STORAGE_PAIR_RADIUS_TILES
+			marker.position = source_pixel
+			marker.preferred_storage_position = destination_pixel
+			_entities_parent.add_child(marker)
+			by_item[item_id] = marker
+		by_destination[key] = by_item
+
+	for key in by_destination.keys().duplicate():
+		if not in_range_keys.has(key):
+			for marker in by_destination[key].values():
+				marker.free()
+			by_destination.erase(key)
+
+	if not _chain_logistics_workers.has(chunk_coord):
+		_chain_logistics_workers[chunk_coord] = {}
+	if not _chain_logistics_workers[chunk_coord].has(local_cell):
+		_chain_logistics_workers[chunk_coord][local_cell] = {}
+	_chain_logistics_workers[chunk_coord][local_cell][destination_id] = by_destination
+
+
+## Frees the chain haulers of one source cell -- for one destination kind,
+## or (destination_id "") every leg it has.
+func _despawn_chain_legs_at(chunk_coord: Vector2i, local_cell: Vector2i, destination_id: String = "") -> void:
+	var by_cell: Dictionary = _chain_logistics_workers.get(chunk_coord, {})
+	var by_leg = by_cell.get(local_cell)
+	if by_leg == null:
+		return
+	for leg_destination in by_leg.keys().duplicate():
+		if destination_id != "" and leg_destination != destination_id:
+			continue
+		for by_item in by_leg[leg_destination].values():
+			for marker in by_item.values():
+				marker.free()
+		by_leg.erase(leg_destination)
+	if by_leg.is_empty():
+		by_cell.erase(local_cell)
 
 
 ## Re-decides whether the Sägewerk at (chunk_coord, local_cell) -- if one is
@@ -13378,6 +13671,106 @@ func withdraw_from_structure_at(global_x: int, global_y: int, item_id: String, c
 	return _structure_stocks.stock_for(_structure_stock_key(global_x, global_y)).remove_stock(item_id, count)
 
 
+## A meal from the village's own stores (docs/concept/milling_and_
+## baking.md): how far a hungry villager "walks" to eat from a Storage's or
+## Bakery's own shelf -- their own village, one chunk across, not a
+## specific radius invented here.
+const STRUCTURE_MEAL_RADIUS_TILES := CHUNK_SIZE
+
+## The structures whose own stock a villager may eat from: where baked
+## bread ends up (see CHAIN_LOGISTICS_LEGS) -- a Bakery's shelf and any
+## Storage it was hauled into.
+const STRUCTURE_MEAL_SOURCE_IDS: Array[String] = ["bakery", "storage"]
+
+
+## Whether the village's own stores hold a whole meal near `pixel_position`
+## -- its persisted Market (where the merchant stocks and the granary/trade
+## fill: the food SettlementState has always counted as the settlement's
+## own, and that nobody ever ate before this), or a Bakery/Storage shelf
+## within STRUCTURE_MEAL_RADIUS_TILES. NpcEconomy's duck-typed "is there a
+## meal to buy" read (its subsistence wage is gated on it, so nobody
+## starves next to a stocked stall or a full bakehouse just because the
+## day's gathering is bare).
+func has_village_meal_near(pixel_position: Vector2) -> bool:
+	return _market_meal_item_near(pixel_position) != "" or _structure_meal_tile_near(pixel_position) != null
+
+
+## Buys one meal from the village's stores -- the settlement's own Market
+## first, then the nearest food-holding shelf: VillageMarket.buy_meal's
+## exact contract against those containers -- the same flat VILLAGE_LOCAL_
+## FOOD_PRICE (the merchant sells to locals at the local price; scarcity
+## pricing is what the PLAYER pays at the shop), all-or-nothing (a wallet
+## that cannot pay leaves everything untouched), returning the item_id
+## eaten or "" if nothing was. Reported directly: "the food should be
+## actually consumed and not stay at 20 cooked meat" -- this is what
+## consumes it.
+func buy_village_meal_near(pixel_position: Vector2, wallet) -> String:
+	var market_item := _market_meal_item_near(pixel_position)
+	if market_item != "":
+		if not wallet.spend(VillageMarket.VILLAGE_LOCAL_FOOD_PRICE):
+			return ""
+		var market := _market_store.market_for(_settlement_id_at(pixel_position))
+		if not market.remove_stock(market_item, 1):
+			return ""
+		return market_item
+	var found = _structure_meal_tile_near(pixel_position)
+	if found == null:
+		return ""
+	var tile: Vector2i = found["tile"]
+	var item_id: String = found["item_id"]
+	if not wallet.spend(VillageMarket.VILLAGE_LOCAL_FOOD_PRICE):
+		return ""
+	if not withdraw_from_structure_at(tile.x, tile.y, item_id, 1):
+		return ""
+	return item_id
+
+
+## The settlement whose stores a villager standing at `pixel_position`
+## eats from -- the chunk they are in (a settlement IS its chunk, see
+## EntityRef.for_settlement).
+func _settlement_id_at(pixel_position: Vector2) -> String:
+	var tile := Vector2i(
+		floori(pixel_position.x / TerrainRenderer.TILE_SIZE), floori(pixel_position.y / TerrainRenderer.TILE_SIZE)
+	)
+	return EntityRef.for_settlement(_chunk_coord_for_tile(tile))
+
+
+## The first real food item with a whole unit in the settlement's own
+## persisted Market, or "" -- in stock order, deterministic like
+## VillageMarket.buy_meal's own pick.
+func _market_meal_item_near(pixel_position: Vector2) -> String:
+	var market := _market_store.market_for(_settlement_id_at(pixel_position))
+	for item_id in market.stock:
+		if market.stock_of(item_id) >= 1 and _item_catalog.kind_of(item_id) == "food":
+			return item_id
+	return ""
+
+
+## {tile, item_id} of the nearest meal-holding structure, or null. Nearest
+## first so a villager eats from their own street's bakehouse before the
+## far end of the village's; the first food-typed item on that shelf (in
+## stock order, deterministic like buy_meal's own pick).
+func _structure_meal_tile_near(pixel_position: Vector2):
+	var max_distance := float(STRUCTURE_MEAL_RADIUS_TILES) * TerrainRenderer.TILE_SIZE
+	var best = null
+	var best_distance := INF
+	for structure_id in STRUCTURE_MEAL_SOURCE_IDS:
+		for structure_pixel in nearby_structure_positions(pixel_position, structure_id, max_distance):
+			var distance := pixel_position.distance_to(structure_pixel)
+			if distance >= best_distance:
+				continue
+			var tile := Vector2i(
+				floori(structure_pixel.x / TerrainRenderer.TILE_SIZE), floori(structure_pixel.y / TerrainRenderer.TILE_SIZE)
+			)
+			var stock = _structure_stocks.stock_for(_structure_stock_key(tile.x, tile.y))
+			for item_id in stock.stock:
+				if stock.stock[item_id] >= 1 and _item_catalog.kind_of(item_id) == "food":
+					best = {"tile": tile, "item_id": item_id}
+					best_distance = distance
+					break
+	return best
+
+
 ## All chunk coordinates within `radius` chunks of center (a square/Chebyshev
 ## radius, not circular -- simpler, and streaming radii don't need to be exact).
 func chunks_in_radius(center: Vector2i, radius: int) -> Array[Vector2i]:
@@ -13631,6 +14024,13 @@ func _load_chunk(chunk_coord: Vector2i) -> void:
 		if chunk.modifications[local_cell] == "farm":
 			_reconcile_farmer_at(chunk_coord, local_cell)
 
+	# Re-staff every persisted Mill/Bakery (docs/concept/milling_and_
+	# baking.md) -- unconditional like the Sägewerk's own respawn above.
+	for local_cell in chunk.modifications:
+		var tile_id: String = chunk.modifications[local_cell]
+		if CONVERSION_WORKER_BY_STRUCTURE.has(tile_id):
+			_spawn_conversion_worker_for(chunk_coord, local_cell, tile_id)
+
 	# Re-spawn every real-art overlay sprite this chunk already had
 	# persisted, before this load -- a revisited farm/sagewerk/storage/
 	# wooden_fence looks the same as a freshly-placed one, the same
@@ -13652,6 +14052,7 @@ func _load_chunk(chunk_coord: Vector2i) -> void:
 	for farm_chunk_coord in _farm_farmers:
 		for farm_local_cell in _farm_farmers[farm_chunk_coord]:
 			_resync_logistics_for_farm(farm_chunk_coord, farm_local_cell)
+	_resync_all_chain_legs()
 
 	# The meadow that was already here is what the wind already did (see
 	# MeadowSpread). Two things it needs that a chunk seed cannot give it: the
@@ -14027,7 +14428,16 @@ func _apply_construction_labor_catchup(chunk_coord: Vector2i) -> void:
 	var elapsed := maxf(0.0, _world_age_seconds - float(record["unloaded_at"]))
 	if elapsed <= 0.0:
 		return
+	_advance_construction_labor(chunk_coord, elapsed)
 
+
+## Advances every IN_PROGRESS project sited at `chunk_coord` by `elapsed`
+## seconds of real spare-capacity labor and places whatever completes --
+## the one body both the reload catch-up above and the loaded-settlement
+## step (_step_settlement_construction) share.
+func _advance_construction_labor(chunk_coord: Vector2i, elapsed: float) -> void:
+	if elapsed <= 0.0:
+		return
 	var settlement_id := EntityRef.for_settlement(chunk_coord)
 	var household_occupations := _household_occupations_for_settlement(settlement_id)
 	var spare_capacity := SettlementSpareCapacity.for_settlement(
@@ -14095,11 +14505,72 @@ func _apply_settlement_build_decision(chunk_coord: Vector2i) -> void:
 	var market := _market_store.market_for(settlement_id)
 	var present_structure_ids := _present_structure_ids_for_settlement_chunk(chunk_coord)
 	var shortfalls := production_shortfall_quests_for_settlement(settlement_id)
+	# The second source of shortfall (docs/concept/milling_and_baking.md,
+	# "The emergent need"): a DECLINING settlement is short of bread -- the
+	# one food it can raise by construction -- and says so in the SAME shape
+	# the occupation shortfalls already use, so the decision below reasons
+	# bread -> bakery -> flour -> mill -> wheat -> farm with no new code.
+	var food_shortfall := SettlementFood.food_shortfall_for(
+		household_ids.size(), market, SettlementFood.village_market_for(settlement_id, _loaded_villages),
+		_item_catalog, _settlement_structure_stocks(settlement_id)
+	)
+	if not food_shortfall.is_empty():
+		shortfalls.append(food_shortfall)
+
+	# A real site, not Vector2i.ZERO: the first free, buildable, clear cell
+	# spiralling out from the settlement's own centre (see _settlement_build_
+	# origin_for) -- a settlement with nowhere left to build decides nothing.
+	var origin = _settlement_build_origin_for(chunk_coord)
+	if origin == null:
+		return
 
 	SettlementBuildDecision.decide_and_advance(
-		_construction_project_store, market, chunk_coord, Vector2i.ZERO, household_ids[0],
+		_construction_project_store, market, chunk_coord, origin, household_ids[0],
 		present_structure_ids, _recipe_book, shortfalls, spare_capacity
 	)
+
+
+## Where a settlement raises its next structure: the first LOCAL cell,
+## spiralling outward from the chunk's own centre (where SettlementGenerator
+## lays its ring of houses), that is real buildable terrain (the SAME
+## is_buildable_terrain_at rule every house obeys: no water, no forest, no
+## standing tree) and unmodified, with all eight of its neighbours buildable
+## and unmodified too -- a lane of clear ground around every structure, so
+## a Farm's own fence always has somewhere to stand and a hauler's path is
+## never boxed in (a one-cell hole in a forest is not a building site).
+## null when the whole chunk offers nowhere -- the decision then simply
+## waits. Deterministic, and deliberately NOT skipping the site of a live
+## project: a repeated decision lands on the same still-empty cell, finds
+## its own earlier project there (SettlementConstruction's find_project),
+## and never queues a second copy somewhere else; a placed structure
+## modifies its cell, so the next link goes to the next clear site.
+func _settlement_build_origin_for(chunk_coord: Vector2i):
+	var centre := Vector2i(CHUNK_SIZE / 2, CHUNK_SIZE / 2)
+	for radius in range(0, CHUNK_SIZE / 2):
+		for dy in range(-radius, radius + 1):
+			for dx in range(-radius, radius + 1):
+				if maxi(absi(dx), absi(dy)) != radius:
+					continue  # only the ring at this radius -- inner rings were already tried
+				var local := centre + Vector2i(dx, dy)
+				if _is_clear_settlement_site(chunk_coord, local):
+					return local
+	return null
+
+
+## The site rule _settlement_build_origin_for applies to one local cell:
+## inside the chunk with a one-cell margin, and -- for the cell AND all
+## eight neighbours -- real buildable terrain carrying no modification.
+func _is_clear_settlement_site(chunk_coord: Vector2i, local: Vector2i) -> bool:
+	if local.x < 1 or local.y < 1 or local.x >= CHUNK_SIZE - 1 or local.y >= CHUNK_SIZE - 1:
+		return false
+	var global_cell: Vector2i = chunk_coord * CHUNK_SIZE + local
+	for dy in range(-1, 2):
+		for dx in range(-1, 2):
+			var x := global_cell.x + dx
+			var y := global_cell.y + dy
+			if not is_buildable_terrain_at(x, y) or modification_at_global(x, y) != "":
+				return false
+	return true
 
 
 ## A City Hall's own real "compute demands" step (see docs/concept/
@@ -14145,8 +14616,33 @@ func _place_completed_construction_project(project) -> void:
 	var output_item_id: String = output["item_id"]
 	if _item_catalog.kind_of(output_item_id) != "placeable":
 		return
-	var global_cell: Vector2i = project.chunk_coord * CHUNK_SIZE + project.origin
+	# The site chosen when the project started (see _settlement_build_
+	# origin_for) is re-checked now that the work is done: if something was
+	# built there in the meantime (the player, another project), the
+	# structure goes to the next clear site instead of stamping over it.
+	var origin: Vector2i = project.origin
+	if not _is_clear_settlement_site(project.chunk_coord, origin):
+		var resited = _settlement_build_origin_for(project.chunk_coord)
+		if resited == null:
+			return
+		origin = resited
+	var global_cell: Vector2i = project.chunk_coord * CHUNK_SIZE + origin
 	build_at_global(global_cell.x, global_cell.y, output_item_id)
+	# A settlement raises a fenced plot in one go (docs/concept/milling_and_
+	# baking.md): the Farm's own gate rule (_reconcile_farmer_at) admits no
+	# Farmer until a real wooden_fence stands near, and the Farm recipe's own
+	# stated cost already IS the fence -- "wood (6) for fence rails/posts and
+	# plant_fibre (4) lashing them" (npc_farm_production.md) -- so the fence
+	# is placed on the first clear neighbouring cell at no further charge.
+	if output_item_id == "farm":
+		for offset in [Vector2i(1, 0), Vector2i(0, 1), Vector2i(-1, 0), Vector2i(0, -1)]:
+			var fence_cell: Vector2i = global_cell + offset
+			if (
+				is_buildable_terrain_at(fence_cell.x, fence_cell.y)
+				and modification_at_global(fence_cell.x, fence_cell.y) == ""
+			):
+				build_at_global(fence_cell.x, fence_cell.y, "wooden_fence")
+				break
 
 
 ## A property_id convention for HouseholdStore.owner_of, keyed per PIECE
@@ -14344,11 +14840,21 @@ func _unload_chunk(chunk_coord: Vector2i) -> void:
 		marker.free()
 	_farm_farmers.erase(chunk_coord)
 
+	for marker in _conversion_workers.get(chunk_coord, {}).values():
+		marker.free()
+	_conversion_workers.erase(chunk_coord)
+
 	for by_storage in _logistics_workers.get(chunk_coord, {}).values():
 		for by_item in by_storage.values():
 			for marker in by_item.values():
 				marker.free()
 	_logistics_workers.erase(chunk_coord)
+	for by_leg in _chain_logistics_workers.get(chunk_coord, {}).values():
+		for by_destination in by_leg.values():
+			for by_item in by_destination.values():
+				for marker in by_item.values():
+					marker.free()
+	_chain_logistics_workers.erase(chunk_coord)
 	# This chunk may have held the Storage (or Sägewerk/Farm) a worker
 	# elsewhere was paired against -- re-decide every REMAINING known
 	# Sägewerk's (and Farm's) Logistics staffing now that this chunk's own
@@ -14362,6 +14868,7 @@ func _unload_chunk(chunk_coord: Vector2i) -> void:
 	for farm_chunk_coord in _farm_farmers:
 		for farm_local_cell in _farm_farmers[farm_chunk_coord]:
 			_resync_logistics_for_farm(farm_chunk_coord, farm_local_cell)
+	_resync_all_chain_legs()
 
 	for art_sprite in _structure_art_sprites.get(chunk_coord, {}).values():
 		art_sprite.free()

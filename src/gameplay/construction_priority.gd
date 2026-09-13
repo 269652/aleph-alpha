@@ -93,9 +93,13 @@ func decide(
 ## needed it, per that doc's "production_chains.md's own real payoff...
 ## the first real caller that actually turns that named blocker into an
 ## action" framing. Only the FIRST structure need in NeedResolver's walk is
-## returned -- this project's real recipe graph is at most 1-2 hops deep
-## today (see NeedResolver's own MAX_DEPTH comment), so there is no real
-## multi-structure scenario yet to choose an ordering for.
+## returned -- the SHALLOWEST link when a chain has several missing (the
+## bread chain, docs/concept/milling_and_baking.md, is the first real one:
+## bakery <- mill <- farm). That is the right answer for "what blocks THIS
+## recipe directly" (SettlementBuildDecision's double-fix cancellation
+## re-checks queued projects with it); a settlement deciding what to RAISE
+## next wants the root of the chain instead -- see deepest_missing_
+## structure_id just below.
 func missing_structure_id(
 	recipe_id: String,
 	local_stock: Dictionary,
@@ -115,6 +119,37 @@ func missing_structure_id(
 		if need["kind"] == "structure":
 			return need["structure_id"]
 	return ""
+
+
+## The chain-aware twin of missing_structure_id: the DEEPEST missing
+## structure along the walk -- the root producer a settlement has to raise
+## first, since every shallower link is a dead building until it exists
+## (a Bakery with no flour ever coming). NeedResolver's walk is pre-order
+## (a recipe's own structure need is reported before its inputs'), so the
+## last structure need it reports is the deepest along the chain; for a
+## single-hop recipe this is exactly missing_structure_id's own answer
+## (test_construction_priority.gd pins both against the real recipe book).
+## "" when nothing structural is missing, or for an unknown recipe.
+func deepest_missing_structure_id(
+	recipe_id: String,
+	local_stock: Dictionary,
+	present_structure_ids: Array,
+	recipe_book,
+	allocated_nodes: Dictionary = {}
+) -> String:
+	if not recipe_book.recipe_ids().has(recipe_id):
+		return ""
+
+	var output_item_id: String = recipe_book.recipe_output(recipe_id)["item_id"]
+	var nearby_structures := _nearby_structures_dict(present_structure_ids)
+	var needs: Array = NeedResolver.new(recipe_book).resolve(
+		output_item_id, local_stock, allocated_nodes, nearby_structures
+	)
+	var deepest := ""
+	for need in needs:
+		if need["kind"] == "structure":
+			deepest = need["structure_id"]
+	return deepest
 
 
 ## Expands a flat list of present structure ids into the nearby_structures

@@ -371,3 +371,45 @@ func test_selling_without_a_market_pays_the_flat_catalog_spread():
 	assert_true(shop.sell(wallet, inventory, "cooked_meat", null))
 	assert_eq(wallet.balance, shop.sell_price_of("cooked_meat", null))
 	assert_gt(wallet.balance, 0, "a sale must be worth something even with no local market")
+
+# -- food is sold, eaten, and gone; tools and blueprints are traded in ------
+#
+## Reported directly: "the food should be actually consumed and not stay at
+## 20 cooked meat." stock_initial_goods used to refill ANY item that hit
+## zero every time the player came near a merchant -- so the 20 cooked meat
+## it seeds, which SettlementState counts as the village's own food stock,
+## could never actually run out: a permanent five households of carrying
+## capacity that nobody ever ate. Food is now seeded ONCE per market (the
+## merchant's opening inventory, persisted as Market.shop_food_seeded) and
+## never restocked by the shop again -- what the village eats is gone until
+## its own economy (producers, the granary, trade, the bakehouse) replaces
+## it, and its price climbs with scarcity like everything else. Tools and
+## blueprints keep restocking when sold out: the merchant trades those in
+## from afar, and nothing else in the game supplies them.
+
+func test_food_is_seeded_once_and_never_restocked_by_the_shop():
+	var market := Market.new()
+	shop.stock_initial_goods(market)
+	assert_eq(market.stock_of("cooked_meat"), Market.REFERENCE_STOCK, "the merchant arrives with meat")
+	assert_true(market.remove_stock("cooked_meat", Market.REFERENCE_STOCK), "the village eats all of it")
+
+	shop.stock_initial_goods(market)
+
+	assert_eq(market.stock_of("cooked_meat"), 0, "eaten food stays eaten -- the shop does not conjure more")
+
+
+func test_tools_and_blueprints_still_restock_when_sold_out():
+	var market := Market.new()
+	shop.stock_initial_goods(market)
+	assert_true(market.remove_stock("torch", Market.REFERENCE_STOCK))
+	shop.stock_initial_goods(market)
+	assert_eq(market.stock_of("torch"), Market.REFERENCE_STOCK, "traded in from afar")
+
+
+func test_the_food_seed_survives_a_save_and_reload():
+	var market := Market.new()
+	shop.stock_initial_goods(market)
+	market.remove_stock("cooked_meat", Market.REFERENCE_STOCK)
+	var restored = Market.from_dict(market.to_dict())
+	shop.stock_initial_goods(restored)
+	assert_eq(restored.stock_of("cooked_meat"), 0, "a reload must not reset the merchant's larder")

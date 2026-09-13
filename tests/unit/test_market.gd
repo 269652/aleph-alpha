@@ -35,6 +35,28 @@ func test_add_stock_increases_what_is_on_hand():
 	assert_eq(market.stock_of("wood"), 8)
 
 
+## The same all-or-nothing draw-down VillageMarket/StructureStock already
+## have. Found while wiring a real food shortfall into the autonomous build
+## pipeline (docs/concept/milling_and_baking.md): SettlementConstruction.
+## _handle_ready draws a started project's materials via `market.remove_
+## stock`, and EarthChunkManager hands it THIS class -- which had no such
+## method. Unreachable until now only because no live shortfall ever reached
+## READY; the first settlement that could afford a Farm would have crashed.
+func test_remove_stock_draws_down_all_or_nothing():
+	market.add_stock("wood", 5)
+	assert_true(market.remove_stock("wood", 3))
+	assert_eq(market.stock_of("wood"), 2)
+	assert_false(market.remove_stock("wood", 3), "short by one: nothing is taken")
+	assert_eq(market.stock_of("wood"), 2)
+	assert_false(market.remove_stock("stone", 1), "an item never stocked cannot be drawn")
+
+
+func test_remove_stock_accepts_the_float_count_settlement_construction_passes():
+	market.add_stock("wood", 5)
+	assert_true(market.remove_stock("wood", 2.0))
+	assert_eq(market.stock_of("wood"), 3)
+
+
 # -- price derives from stock, not a flat constant ----------------------------
 
 ## At the reference stock level, price is the neutral 1.0 -- neither scarce

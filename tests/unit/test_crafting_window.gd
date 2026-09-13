@@ -41,6 +41,24 @@ func _full_counts() -> Dictionary:
 	return counts
 
 
+## The recipes this bench menu is for, derived here INDEPENDENTLY of the
+## window's own filter from the two tested sources it composes: a recipe a
+## player can hand-craft (not CraftingRecipeBook's "automated" resolver
+## data) whose output is a real ItemCatalog item Player.craft can actually
+## hand over. The house-blueprint recipes (small_house, cottage, manor, the
+## two-story tiers) fail the second half on purpose -- see
+## test_house_blueprint_recipes_get_no_card.
+func _bench_recipe_ids() -> Array:
+	var ids: Array = []
+	for recipe_id in _recipe_book.recipe_ids():
+		if _recipe_book.recipe_is_automated(recipe_id):
+			continue
+		if not _catalog.has(_recipe_book.recipe_output(recipe_id)["item_id"]):
+			continue
+		ids.append(recipe_id)
+	return ids
+
+
 func test_window_minimum_size_fits_the_anchor_box_world_gives_it():
 	window.refresh(_full_counts())
 	var min_size := window.get_combined_minimum_size()
@@ -48,9 +66,50 @@ func test_window_minimum_size_fits_the_anchor_box_world_gives_it():
 	assert_lte(min_size.y, WORLD_ANCHOR_BOX.y, "window min height must fit World's anchor box or content clips off-screen")
 
 
-func test_refresh_builds_one_card_per_recipe():
+func test_refresh_builds_one_card_per_bench_recipe_and_no_other():
 	window.refresh({})
-	assert_eq(window._cards.size(), _recipe_book.recipe_ids().size())
+	var listed: Array = window._cards.keys()
+	listed.sort()
+	var expected := _bench_recipe_ids()
+	expected.sort()
+	assert_gt(expected.size(), 0, "the bench set must not be empty or this test proves nothing")
+	assert_eq(listed, expected)
+
+
+## The house blueprints (docs/concept/workforce.md "Blueprint tiers") are
+## real CraftingRecipeBook recipes whose "output" is symbolic of the
+## structure the construction ledger tracks and deliberately NOT an
+## ItemCatalog entry (see the small_house recipe's own doc comment). They
+## are built through Player._try_build_house_from_blueprint, which calls
+## craft() only as its atomic material+skill gate and then stamps the house
+## itself -- clicked from THIS menu, craft() would consume the wood and
+## hand back nothing. Before this pin the window called ItemCatalog.make()
+## on every output unguarded, which fails loudly by design for such an id
+## and took the whole grid down with it (0 cards for every recipe).
+func test_house_blueprint_recipes_get_no_card():
+	for recipe_id in ["small_house", "cottage", "manor", "grand_estate"]:
+		assert_true(_recipe_book.recipe_ids().has(recipe_id), "%s must still be a real recipe" % recipe_id)
+		assert_false(_catalog.has(recipe_id), "%s is meant to be a structure, never an item" % recipe_id)
+	window.refresh(_full_counts())
+	for recipe_id in ["small_house", "cottage", "manor", "grand_estate"]:
+		assert_false(window._cards.has(recipe_id), "%s must not be offered as a bench craft" % recipe_id)
+	# A structure whose output IS a real placeable item stays listed.
+	assert_true(window._cards.has("sagewerk"))
+	assert_true(window._cards.has("mill"))
+
+
+## An "automated" recipe (CraftingRecipeBook.recipe_is_automated, e.g.
+## grow_wheat) is a structure's own production kept as resolver data;
+## can_craft refuses it outright, so a card for it could only ever render
+## permanently dimmed -- a recipe the player can never click is not a
+## recipe this menu should show.
+func test_automated_recipes_get_no_card():
+	assert_true(_recipe_book.recipe_is_automated("grow_wheat"))
+	window.refresh(_full_counts())
+	assert_false(window._cards.has("grow_wheat"))
+	# Its hand-crafted siblings in the same chain are still real bench crafts.
+	assert_true(window._cards.has("mill_flour"))
+	assert_true(window._cards.has("bake_bread"))
 
 
 ## Every represented output kind (weapon/tool/armor/placeable/food/material)
@@ -63,9 +122,9 @@ func test_every_recipe_kind_gets_its_own_section_header():
 		if child is Label:
 			header_texts.append(child.text)
 	var represented_kinds := {}
-	for recipe_id in _recipe_book.recipe_ids():
+	for recipe_id in _bench_recipe_ids():
 		var output := _recipe_book.recipe_output(recipe_id)
-		represented_kinds[_catalog.make(output["item_id"]).kind] = true
+		represented_kinds[_catalog.kind_of(output["item_id"])] = true
 	assert_eq(header_texts.size(), represented_kinds.size())
 
 
@@ -208,3 +267,16 @@ func test_refresh_survives_being_called_from_within_a_cards_own_click_handler():
 	card.gui_input.emit(event)  # what a real click ultimately does
 
 	assert_eq(window._cards.size(), card_count_before, "the recipe grid should still show every card, not be corrupted")
+
+
+## The window's list IS the recipe book's own bench predicate
+## (CraftingRecipeBook.bench_recipe_ids) -- the SAME rule the dev console's
+## /craft gates on. One shared predicate rather than a copy per surface, so
+## the menu and the console can never disagree about what a bench craft is.
+func test_the_window_lists_exactly_the_books_bench_recipes():
+	var from_window: Array = window.bench_recipe_ids()
+	var from_book: Array = _recipe_book.bench_recipe_ids(_catalog)
+	from_window.sort()
+	from_book.sort()
+	assert_gt(from_book.size(), 0, "the bench set must not be empty or this proves nothing")
+	assert_eq(from_window, from_book)

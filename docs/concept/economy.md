@@ -72,6 +72,24 @@ which is not flavour: `MarketStore.market_for` creates a fresh **empty**
 market, and an empty market prices at twenty times the catalog. Seeding at
 `REFERENCE_STOCK` is what makes an untraded village charge the old price.
 
+**Food is seeded once; tools and blueprints restock** (2026-09-13, reported
+directly: *"the food should be actually consumed and not stay at 20 cooked
+meat"*). The merchant's market is the same `Market` that
+`SettlementState`/`SettlementFood` count as the village's own food stock,
+and `stock_initial_goods` used to refill any item that hit zero whenever the
+player came near — so its 20 cooked meat were five households of permanent
+carrying capacity that no villager ever ate. Now villagers do eat from the
+village's stores (`EarthChunkManager.buy_village_meal_near`: the Market
+first, then a Bakery/Storage shelf, at the flat local meal price —
+scarcity pricing is what the *player* pays), and the shop's **food** is the
+merchant's opening inventory only, seeded once per market
+(`Market.shop_food_seeded`, persisted) and never refilled by the shop: what
+the village eats is gone until its own economy — producers, the granary,
+trade, the bakehouse ([milling_and_baking.md](milling_and_baking.md)) — puts
+food back, and its price climbs with scarcity like everything else. Tools
+and blueprints keep restocking when sold out: the merchant trades those in
+from afar, and nothing else in the game supplies them.
+
 This closes the second half of this doc's own open question below — pricing
 for *market goods*. Hiring wages are still open.
 

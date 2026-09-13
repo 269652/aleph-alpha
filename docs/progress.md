@@ -4279,7 +4279,7 @@ Nothing in this section is implemented yet.
 
 A first crafting loop is now real and wired into live gameplay, though shallow:
 
-- **Base gather-craft-build loop** (medium) — ✅ Done (basic) — `src/gameplay/crafting_recipe_book.gd` defines recipes (inputs → output), wired into `Player.craft()`; there's now a real **crafting UI** (`scenes/crafting_window.gd`, toggle C) — plus the `/craft` console command. Overhauled from a single narrow, right-anchored list of thin text rows into a **centered, card-based catalog** (`UiTheme`-styled, matching the inventory/settings windows rather than reading as a leftover sidebar): recipes are grouped into sections by their output's item kind (Weapons/Tools/Armor/Structures/Cooking/Materials) inside a scrolling, fixed-size window rather than one that grows unbounded with the recipe count; each card shows a real item **thumbnail**, the output name (+ a `x2`-style count badge when a recipe yields more than one), and every required material as its own icon + live **have/need** count, colored green when covered and red when short, so what's blocking a craft is legible at a glance instead of buried in a text string. Unaffordable cards dim and lose their hover/click affordance; affordable ones highlight on hover with a pointing-hand cursor. `Player.craft()` produces the output into the inventory (and, if the inventory is full and consuming inputs didn't free a slot, drops the crafted item at the player's feet rather than silently losing it). The gather side is real too: chop trees (wood+sticks), smash boulders (rock), knap rock-on-rock (sharp shards), harvest tall grass (fibre), and mine ore-bearing boulders with a pickaxe (ore+stone). **Smelting/metalworking** now exists (`src/gameplay/smelting.gd`, tested, see `concept/smelting.md`): ore + coal smelted at a **heat source** (a carried campfire or crafted **furnace**) → iron/copper ingots, which forge a full **iron armor set** that out-protects leather. Real, generalized **recipe gating** now exists too (see `concept/production_chains.md`, new doc): `Player.craft`'s old hardcoded "is this a smelting recipe" special case is gone, replaced by two OPTIONAL, additive `CraftingRecipeBook` fields — `required_skill` (a `SkillTree` stat/level threshold, e.g. the `sagewerk` recipe's real Carpentry gate) and `requires_structure` (a structure id that must be built/nearby, e.g. smelting's own heat-source gate, now data-driven instead of hardcoded) — read generically, so any future recipe gets real gating just by declaring the field.
+- **Base gather-craft-build loop** (medium) — ✅ Done (basic) — `src/gameplay/crafting_recipe_book.gd` defines recipes (inputs → output), wired into `Player.craft()`; there's now a real **crafting UI** (`scenes/crafting_window.gd`, toggle C) — plus the `/craft` console command. Overhauled from a single narrow, right-anchored list of thin text rows into a **centered, card-based catalog** (`UiTheme`-styled, matching the inventory/settings windows rather than reading as a leftover sidebar): recipes are grouped into sections by their output's item kind (Weapons/Tools/Armor/Structures/Cooking/Materials) inside a scrolling, fixed-size window rather than one that grows unbounded with the recipe count; each card shows a real item **thumbnail**, the output name (+ a `x2`-style count badge when a recipe yields more than one), and every required material as its own icon + live **have/need** count, colored green when covered and red when short, so what's blocking a craft is legible at a glance instead of buried in a text string. Unaffordable cards dim and lose their hover/click affordance; affordable ones highlight on hover with a pointing-hand cursor. The menu lists **bench recipes only** (`CraftingWindow.bench_recipe_ids()`, since 2026-09-13): it skips `automated` recipes (a card `can_craft` would refuse forever) and any recipe whose output is not a real `ItemCatalog` item — the house-blueprint "ledger" recipes (`small_house`, `cottage`, `manor`, the two-story tiers), which are built through the blueprint action (`Player._try_build_house_from_blueprint`) and would have burned their wood for nothing if clicked here. The rule is the book's own `CraftingRecipeBook.is_bench_recipe`/`bench_recipe_ids` (the window delegates), and the `/craft` console command gates on the same predicate: a house blueprint or automated recipe is refused with a clear message before `Player.craft` runs, and its "Known:" text lists bench recipes only. `Player.craft()` produces the output into the inventory (and, if the inventory is full and consuming inputs didn't free a slot, drops the crafted item at the player's feet rather than silently losing it). The gather side is real too: chop trees (wood+sticks), smash boulders (rock), knap rock-on-rock (sharp shards), harvest tall grass (fibre), and mine ore-bearing boulders with a pickaxe (ore+stone). **Smelting/metalworking** now exists (`src/gameplay/smelting.gd`, tested, see `concept/smelting.md`): ore + coal smelted at a **heat source** (a carried campfire or crafted **furnace**) → iron/copper ingots, which forge a full **iron armor set** that out-protects leather. Real, generalized **recipe gating** now exists too (see `concept/production_chains.md`, new doc): `Player.craft`'s old hardcoded "is this a smelting recipe" special case is gone, replaced by two OPTIONAL, additive `CraftingRecipeBook` fields — `required_skill` (a `SkillTree` stat/level threshold, e.g. the `sagewerk` recipe's real Carpentry gate) and `requires_structure` (a structure id that must be built/nearby, e.g. smelting's own heat-source gate, now data-driven instead of hardcoded) — read generically, so any future recipe gets real gating just by declaring the field.
 - **Crafting Stations** (small) — 🚧 Partial — `src/gameplay/crafting_station.gd` (tier-gated `can_craft_at`), tested but not wired — `/craft` currently works anywhere, no station placement/proximity check.
 - **Skill-gated crafting progression** (medium) — ⬜ Not started — design landed in
   [concept/labor_skills.md](concept/labor_skills.md) (a use-based Smithing/
@@ -21959,3 +21959,221 @@ which `furnish_house_at_global` correctly refuses (the same enclosed-room
 fixture lesson that entry had already learned once, on the upper side).
 Fixed in the test, not the code -- the reconciled production code was
 right as merged.
+
+### Milling and baking: a hungry village raises farm -> mill -> bakery on its own (`concept/milling_and_baking.md`, 2026-09-13)
+
+Requested directly right after the two-story fix: *"The NPCs also need to
+produce food; so building a Wheat Farm should become an emergent need
+pretty soon."* Asked which way to close the loop, the user chose the full
+chain over a "wheat counts as food" shortcut. New concept doc first, then
+built TDD red-first on `feat/bread-chain`, every module with its own fast
+unit file; per a standing "skip tests" instruction the multi-minute
+`test_earth_chunk_manager.gd`/`test_player.gd` files were deliberately not
+re-run -- every directly affected neighbouring suite was.
+
+**Research before code changed the plan in five places** (an Explore agent
+traced the whole build pipeline; all five recorded in the doc): the
+resolver picks the SHALLOWEST missing structure (a bakery first), not the
+farm the first draft assumed; the Sägewerk's Lumberjack was never wired to
+the world (every beam/plank ever shaped in live play silently discarded);
+`SettlementConstruction` draws materials via a `Market.remove_stock` that
+did not exist; autonomous projects were sited at `Vector2i.ZERO` with no
+terrain check and no fence; and no village ever has wood/stone in its
+Market, so the pipeline could only ever end in SHORTFALL. Plus: nothing
+counted Storage-held food or let a villager eat it.
+
+Shipped, in commit order:
+- `StockConversionProduction` (SagewerkProduction's single-lane form) +
+  `MillProduction`/`BakeryProduction`, constants pinned (8/8, 3/3, 2/2).
+- `mill`/`bakery` recipes and `grow_wheat`/`mill_flour`/`bake_bread` as
+  resolver data, plus the new `"automated"` recipe field (`can_craft`/
+  `craft` refuse it) so free hand-crafted wheat is impossible -- the
+  exploit `npc_farm_production.md` had refused to paper over; recipe count
+  57 -> 62 (`test_crafting_recipe_book.gd` 66/66; `production_chains.md`
+  aligned). `mill`/`bakery`/`flour`/`bread` in `ItemCatalog` (90/90).
+- Two latent bugs fixed with pinning tests: the Lumberjack's `earth`
+  (`test_earth_chunk_manager_structure_workers.gd`) and `Market.
+  remove_stock` (`test_market.gd` 13/13).
+- `ConstructionPriority.deepest_missing_structure_id` (the walk's last
+  structure need -- the chain's root) used by `SettlementBuildDecision`:
+  a bread shortfall starts a farm, then a mill, then a bakery, and is not
+  actionable once all three stand (23/23, 15/15). City Hall demands now
+  show the chain's three links with no new code (`test_settlement_
+  demand.gd` 8/8, its "every gated structure present" list widened).
+- `SettlementFood` counts food on the village's own shelves
+  (`structure_stocks`) and `food_shortfall_for` asks for exactly the
+  loaves that lift a settlement out of DECLINING (28/28).
+- `StructureConversionMarker` -> `MillMarker` "Miller" / `BakeryMarker`
+  "Baker": one worker per tile, spawned/despawned/reloaded like the
+  Lumberjack/Farmer via `_conversion_workers`, converting the BUILDING's
+  own StructureStock so a hauler can feed it (9/9).
+- `CHAIN_LOGISTICS_LEGS`: the existing `LogisticsMarker` with a consumer
+  as destination -- farm->mill and storage->mill (wheat), mill->bakery
+  (flour), bakery->storage (bread) -- reconciled on tile change/load/
+  unload in its own `_chain_logistics_workers`; a wooden_fence change now
+  also re-pairs the Farms it staffs (pre-existing gap); one real end-to-
+  end Farm->Mill haul (12/12).
+- Villagers eat the bread: `NpcEconomy._try_eat` falls back from a bare
+  stall to `EarthChunkManager.buy_structure_meal_near` (nearest Bakery/
+  Storage shelf within the village, VillageMarket's own meal price,
+  all-or-nothing), and the subsistence wage counts that shelf (43/43).
+- `SettlementGathering`: spare hands gather wood/stone/fibre into the
+  Market every assessment, pinned daily rates, sub-unit carry (6/6).
+- The wiring, `test_earth_chunk_manager_bread_chain.gd` 9/9 end to end
+  against Berlin's real terrain: the food shortfall joins the decision's
+  inputs; projects get a real site (`_settlement_build_origin_for`: the
+  first clear, buildable cell with buildable, unmodified terrain on all
+  eight sides, spiralling out from the settlement centre -- the first
+  version checked only the centre cell and sited a Farm in a one-cell
+  forest hole with nowhere for its fence, caught by the test), re-checked
+  at completion; a completed Farm is placed fenced so its Farmer moves
+  in; `step_settlements` gathers material for every settlement and, for
+  a loaded one, re-decides and advances labor every 30 s (the same
+  closed-form math as the reload catch-up, factored into
+  `_advance_construction_labor`); every capacity read goes through one
+  `_settlement_capacity` that includes shelf food.
+
+**Named honestly**: the first draft's claim that a still-DECLINING village
+would raise a second Farm was wrong -- the resolver reports missing
+producers, not throughput -- and is now an Open Question; a visited
+merchant's 20 shop-stocked cooked meat counts as settlement food and keeps
+a five-villager village with a merchant from ever declining (the existing
+food model's quirk, named in the doc, not worked around); mill/bakery/
+flour/bread use procedural art fallbacks; oven fuel is not modeled; and no
+real village was watched walking the chain on the clock in this pass --
+the integration test drives the same functions the game's own
+`step_settlements` calls. Also found in passing, not fixed here:
+`tests/unit/test_crafting_window.gd` fails 0/16 on `main` itself
+(flagged as its own task -- fixed the same day, see "Crafting menu: the
+house blueprints took the whole grid down" below).
+
+### The merchant's meat is eaten: villagers eat from the village's stores, and the shop seeds food once (`concept/economy.md`, `concept/milling_and_baking.md`, 2026-09-13)
+
+Reported directly, on the quirk the entry above named: *"fix the quirk..
+the food should be actually consumed and not stay at 20 cooked meat."*
+Two causes, both real: villagers only ever bought meals from the live
+VillageMarket (the day's gathering), never from the persisted Market the
+merchant stocks and SettlementState counts as the village's food; and
+`Shop.stock_initial_goods` refilled ANY item that hit zero whenever the
+player came near a merchant, so even eaten food would have reappeared.
+
+- `EarthChunkManager.buy_village_meal_near`/`has_village_meal_near` (the
+  bakehouse hook from the entry above, widened): the settlement's own
+  Market first, then a Bakery/Storage shelf, at the flat local meal price
+  (scarcity pricing stays the player's), all-or-nothing like `buy_meal`.
+  `NpcEconomy._try_eat` and its subsistence-wage gate use it.
+- `Shop.stock_initial_goods`: food is the merchant's opening inventory
+  only -- seeded once per market (`Market.shop_food_seeded`, persisted in
+  `to_dict`/`from_dict`) -- tools and blueprints still restock when sold
+  out (the merchant trades those in from afar; nothing else supplies them).
+- TDD red-first: `test_shop.gd` 37/37 (seeded once, tools restock, the
+  seed survives a reload), `test_market.gd` 13/13, `test_market_store.gd`
+  4/4, `test_npc_economy.gd` 43/43, `test_earth_chunk_manager_chain_
+  logistics.gd` 14/14 (Market before shelf, only food counts), and the
+  loop end to end in `test_earth_chunk_manager_bread_chain.gd` 10/10: a
+  merchant village is not DECLINING and wants no farm while the meat
+  lasts; 20 portions are 20 real meals and then it is gone; the shop does
+  not conjure it back; the village turns DECLINING and starts a Farm.
+
+Still separate work (named in the doc): nothing moves food between the
+three containers (stall, Market, shelves), and the player's shop still
+prices only the Market.
+
+### Crafting menu: the house blueprints took the whole grid down (2026-09-13)
+
+The task flagged just above, run down: `tests/unit/test_crafting_window.gd`
+was 0/16 on `main` -- every test logging *"Invalid access to property or
+key 'small_house' on a base object of type 'Dictionary'"* followed by
+*"'kind' on a base object of type 'Nil'"*, and the card-count assertion
+reading `[0] expected to equal [62]`. Not a stale fixture: the window and
+its test last changed 2026-08-28; what moved was the recipe book. The
+workforce/housing batch above added **13 house-blueprint recipes**
+(`small_house`, `cottage`, `manor`, ten two-story tiers) whose
+`output` is, by the `small_house` recipe's own doc comment, "symbolic of
+the structure the ledger tracks and deliberately NOT also an ItemCatalog
+entry -- nothing ever holds a small_house in a bag." `CraftingWindow.
+_grouped_recipe_ids` called `ItemCatalog.make(output.item_id).kind` on
+every recipe unguarded, and `make()` fails loudly for an unknown id *by
+design* (its doc comment says so -- a null item must never propagate into
+an inventory), so the first house recipe aborted the grouping, left
+`_cards` empty, and every later `_cards["torch"]` lookup failed in turn
+(one `small_house` + one `kind`-on-Nil error per `refresh()` call, one
+`torch` error per card lookup that followed -- the pattern in the report).
+Live consequence, not just a
+red test: since those commits the crafting menu (toggle C) opened as an
+empty panel and logged that error every frame it stayed open.
+
+**The fix is a filter, not a guard.** A house card would have been worse
+than a crash: `Player.craft("small_house")` passes the skill gate,
+consumes 30 wood, then skips the output because `has()` is false -- wood
+gone, nothing built. Houses are meant to be reached only through
+`Player._try_build_house_from_blueprint`, which calls `craft()` as its
+atomic material+skill gate and stamps the house itself
+(`concept/workforce.md` section 2). So `CraftingWindow.bench_recipe_ids()`
+now decides the list up front: a recipe gets a card only if it is not
+`automated` (`can_craft` refuses those before any input check -- a card
+could only ever render dimmed; `grow_wheat` was the one live case) AND
+`ItemCatalog.has()` its output (the same guard `_display_name`/
+`_sprite_id_for`/`Player.craft` already applied one step later). Grouping
+reads `kind_of()` instead of `make().kind`. 62 recipes -> 48 cards;
+structures that ARE placeable items (`sagewerk`, `mill`, `bakery`,
+`campfire`, ...) stay under Structures, and `mill_flour`/`bake_bread`
+stay as the real hand crafts they are.
+
+Red-first (`fix/crafting-window-tests`): the expected card set is now
+derived in the test independently of the window's own filter from the two
+tested sources it composes, plus explicit pins that `small_house`/
+`cottage`/`manor`/`grand_estate` and `grow_wheat` get no card; the
+section-header test walks the same set via `kind_of()`. 18/18 green.
+Spec cross-aligned: `concept/production_chains.md` gains a "What the
+crafting menu lists" rule and status line; `concept/workforce.md`'s
+"Blueprint tiers" paragraph now says a tier's recipe never appears in the
+menu. **Not fixed here** (at the time): the dev console's `/craft
+<recipe_id>` still routed straight into `Player.craft`, so `/craft
+small_house` would burn the wood the same way -- a dev-only surface, named
+rather than papered over. Fixed the same day, see the next entry.
+
+### `/craft` refuses non-bench recipes: one predicate for the menu and the console (2026-09-13)
+
+The "Not fixed here" just above, run down. `World._handle_craft_command`
+called `Player.craft(recipe_id)` for ANY id in
+`CraftingRecipeBook.recipe_ids()` and advertised the whole book as
+"Known:". For the 13 house-blueprint recipes that meant: pass the
+carpentry gate, consume the wood, skip the output because `has()` is
+false -- `/craft small_house` burned 30 wood and built nothing, the exact
+trap the menu had just been fenced off from. `automated` recipes
+(`grow_wheat`) were safe (`can_craft` refuses them) but still listed.
+
+**One predicate, not a second copy.** The rule moved out of the window
+into the book: `CraftingRecipeBook.is_bench_recipe(recipe_id,
+item_catalog)` -- exists, not automated, output is a catalog item -- and
+`bench_recipe_ids(item_catalog)`. `CraftingWindow.bench_recipe_ids()` now
+delegates to it, and the console gates on it before `craft()` is ever
+called, so the two surfaces cannot drift. The catalog is passed in
+(duck-typed on `has()`) so the recipe book stays the pure table it is
+and pulls in none of the catalog's dependency chain. The console's
+messages split three ways: "Unknown recipe" for an id the book has never
+heard of, "not a bench recipe" (naming both classes and where houses ARE
+built) for a house blueprint or automated recipe, and the old
+missing-ingredients line -- now also naming skill/structure gates -- only
+for a real bench craft that failed. `Player.craft` itself is deliberately
+NOT gated: `_try_build_house_from_blueprint` calls it as its material gate
+and depends on it consuming the wood for exactly those recipes.
+
+Red-first (`fix/craft-console-bench-recipes-only`): `test_crafting_recipe_
+book.gd` +5 (house ids refused, automated/unknown refused, placeable
+structures and the bread-chain hand crafts accepted, `bench_recipe_ids`
+derived independently, and a stub catalog that knows only `torch` proving
+the predicate reads the catalog rather than a hardcoded house list);
+`test_crafting_window.gd` +1 (the window's list equals the book's);
+`test_craft_command_clarity.gd` (new, source-pinned like the other
+`*_command_clarity` files since `World` needs a full chunk manager to
+drive): gate before `.craft(`, a "not a bench recipe" refusal, "Known:"
+from `bench_recipe_ids(` with no raw `recipe_ids()`, plus a guard that
+`Player.craft` never grows the gate. 9 red -> green: 71/71, 19/19, 4/4;
+`test_boot_autoloads.gd` 4/4 confirms `world.gd` still compiles;
+`test_dev_console.gd` 10/10 and `test_need_resolver.gd` 10/10 untouched
+neighbors. Spec cross-aligned in `concept/production_chains.md` ("What the
+crafting menu lists" now names the shared predicate and both surfaces,
+and why the gate must never move into `craft()`) and
+`concept/workforce.md`'s "Blueprint tiers" paragraph.

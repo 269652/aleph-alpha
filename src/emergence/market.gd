@@ -30,6 +30,13 @@ const MIN_STOCK_FOR_PRICING := 1
 
 var stock: Dictionary = {}   # item_id -> int
 
+## Whether this market has already received its merchant's ONE opening
+## seed of food (see Shop.stock_initial_goods): food is sold, eaten and
+## gone, never silently refilled -- so the flag, not the stock level, is
+## what says "already seeded". Persisted with the stock, or a reload would
+## reset every village's larder.
+var shop_food_seeded := false
+
 
 func stock_of(item_id: String) -> int:
 	return stock.get(item_id, 0)
@@ -37,6 +44,20 @@ func stock_of(item_id: String) -> int:
 
 func add_stock(item_id: String, count: int) -> void:
 	stock[item_id] = stock_of(item_id) + count
+
+
+## All-or-nothing draw-down, the SAME contract VillageMarket.remove_stock and
+## StructureStock.remove_stock already keep: false (and nothing taken) when
+## stock is short. Takes a float like VillageMarket's so SettlementConstruction.
+## _handle_ready -- which draws a started project's materials through
+## whichever market EarthChunkManager hands it, this one included -- works
+## against both; counts here stay whole.
+func remove_stock(item_id: String, count: float) -> bool:
+	var whole := int(ceil(count))
+	if stock_of(item_id) < whole:
+		return false
+	stock[item_id] = stock_of(item_id) - whole
+	return true
 
 
 ## Price relative to the neutral REFERENCE_STOCK level: 1.0 at reference,
@@ -63,7 +84,7 @@ func produce(recipe_book, recipe_id: String) -> Dictionary:
 
 
 func to_dict() -> Dictionary:
-	return {"stock": stock}
+	return {"stock": stock, "shop_food_seeded": shop_food_seeded}
 
 
 static func from_dict(d: Dictionary) -> RefCounted:
@@ -71,4 +92,5 @@ static func from_dict(d: Dictionary) -> RefCounted:
 	var restored_stock: Dictionary = d.get("stock", {})
 	for item_id in restored_stock:
 		market.stock[str(item_id)] = int(restored_stock[item_id])
+	market.shop_food_seeded = bool(d.get("shop_food_seeded", false))
 	return market
