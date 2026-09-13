@@ -30,6 +30,13 @@ const MIN_STOCK_FOR_PRICING := 1
 
 var stock: Dictionary = {}   # item_id -> int
 
+## Whether this market has already received its merchant's ONE opening
+## seed of food (see Shop.stock_initial_goods): food is sold, eaten and
+## gone, never silently refilled -- so the flag, not the stock level, is
+## what says "already seeded". Persisted with the stock, or a reload would
+## reset every village's larder.
+var shop_food_seeded := false
+
 
 func stock_of(item_id: String) -> int:
 	return stock.get(item_id, 0)
@@ -77,7 +84,7 @@ func produce(recipe_book, recipe_id: String) -> Dictionary:
 
 
 func to_dict() -> Dictionary:
-	return {"stock": stock}
+	return {"stock": stock, "shop_food_seeded": shop_food_seeded}
 
 
 static func from_dict(d: Dictionary) -> RefCounted:
@@ -85,4 +92,5 @@ static func from_dict(d: Dictionary) -> RefCounted:
 	var restored_stock: Dictionary = d.get("stock", {})
 	for item_id in restored_stock:
 		market.stock[str(item_id)] = int(restored_stock[item_id])
+	market.shop_food_seeded = bool(d.get("shop_food_seeded", false))
 	return market

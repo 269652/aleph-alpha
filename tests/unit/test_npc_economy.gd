@@ -563,22 +563,25 @@ func test_a_working_fisher_does_not_crash_when_world_lacks_the_catch_hook():
 	pass_test("a working fisher against a world without record_fish_catch_near should not crash")
 
 
-# -- eating what the village baked (docs/concept/milling_and_baking.md) -----
+# -- eating from the village's own stores (docs/concept/milling_and_ ------
+# -- baking.md) ----------------------------------------------------------------
 #
-# Bread a Bakery bakes and a Storage holds lives in a structure's own stock,
-# not the VillageMarket -- so a hungry villager with nothing on the market
-# stall "walks to the bakehouse": the world is asked, duck-typed, for a
-# structure meal near them, at the SAME meal price and with the SAME
-# all-or-nothing wallet rule VillageMarket.buy_meal keeps. A world without
-# the hook (BareWorld) simply has no bakehouse to offer.
+# The stall (VillageMarket) is only the villagers' own day's gathering. The
+# village's STORES -- the persisted Market the merchant stocks and the
+# granary/trade fill, and the Bakery/Storage shelves bread ends up on --
+# are food too, and were never eaten by anyone. So a hungry villager with
+# nothing on the stall asks the world, duck-typed, for a meal from those
+# stores near them, at the SAME meal price and with the SAME all-or-nothing
+# wallet rule VillageMarket.buy_meal keeps. A world without the hook
+# (BareWorld) simply has no stores to offer.
 
-## A world with a bakehouse: offers one structure meal per unit of `loaves`.
+## A world with stores: offers one meal per unit of `loaves`.
 class BakehouseWorld extends StubWorld:
 	var loaves := 0
 	var meals_sold := 0
-	func has_structure_meal_near(_pos: Vector2) -> bool:
+	func has_village_meal_near(_pos: Vector2) -> bool:
 		return loaves > 0
-	func buy_structure_meal_near(_pos: Vector2, wallet) -> String:
+	func buy_village_meal_near(_pos: Vector2, wallet) -> String:
 		if loaves <= 0 or not wallet.spend(VillageMarket.VILLAGE_LOCAL_FOOD_PRICE):
 			return ""
 		loaves -= 1

@@ -24,6 +24,9 @@ const EntityRef = preload("res://src/emergence/entity_ref.gd")
 const ConstructionProject = preload("res://src/emergence/construction_project.gd")
 const SettlementState = preload("res://src/emergence/settlement_state.gd")
 const SettlementGathering = preload("res://src/emergence/settlement_gathering.gd")
+const Shop = preload("res://src/gameplay/shop.gd")
+const Wallet = preload("res://src/gameplay/wallet.gd")
+const Market = preload("res://src/emergence/market.gd")
 
 var manager: EarthChunkManager
 var tile_map_layer: TileMapLayer
@@ -237,3 +240,41 @@ func test_bread_in_a_storage_lifts_the_settlement_out_of_declining():
 	manager.build_at_global(storage.x, storage.y, "storage")
 	manager.deposit_to_structure_at(storage.x, storage.y, "bread", 40)
 	assert_ne(manager._settlement_status_for(_settlement_id), SettlementState.DECLINING)
+
+
+# -- the merchant's meat is eaten, and the need it masked appears ------------
+#
+# Reported directly: "the food should be actually consumed and not stay at
+# 20 cooked meat." A visited merchant seeds 20 cooked meat into the same
+# Market SettlementState counts as the village's food -- five households of
+# capacity -- which nobody ever ate and the shop refilled whenever it hit
+# zero. Villagers now eat from those stores, and the shop's food is a
+# one-time opening inventory: what the village eats is gone until its own
+# economy replaces it, so a merchant village comes to need a Farm like any
+# other.
+
+func test_villagers_eat_the_merchants_meat_until_the_village_needs_a_farm():
+	_found_a_hungry_village()
+	_stock_materials()
+	var market = manager._market_store.market_for(_settlement_id)
+	Shop.new().stock_initial_goods(market)
+	assert_eq(market.stock_of("cooked_meat"), Market.REFERENCE_STOCK, "precondition: the merchant arrived with meat")
+	assert_ne(manager._settlement_status_for(_settlement_id), SettlementState.DECLINING, "precondition: fed by it")
+	manager._apply_settlement_build_decision(_chunk_coord)
+	assert_null(_active_project("farm"), "precondition: no farm wanted while the meat lasts")
+
+	var here := (Vector2(_global(Vector2i(16, 16))) + Vector2(0.5, 0.5)) * 16.0
+	var meals := 0
+	for i in 40:
+		var wallet := Wallet.new()
+		wallet.add(10)
+		if manager.buy_village_meal_near(here, wallet) == "cooked_meat":
+			meals += 1
+	assert_eq(meals, Market.REFERENCE_STOCK, "every portion is a real meal, and then it is gone")
+	assert_eq(market.stock_of("cooked_meat"), 0)
+
+	Shop.new().stock_initial_goods(market)  # the player walks past the merchant again
+	assert_eq(market.stock_of("cooked_meat"), 0, "the shop does not conjure the meat back")
+	assert_eq(manager._settlement_status_for(_settlement_id), SettlementState.DECLINING)
+	manager._apply_settlement_build_decision(_chunk_coord)
+	assert_not_null(_active_project("farm"), "now the village raises a Farm like any other")

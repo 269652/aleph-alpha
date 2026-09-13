@@ -161,17 +161,20 @@ func test_wheat_at_the_farm_is_actually_carried_into_the_mill():
 
 
 
-# -- the bakehouse meal (docs/concept/milling_and_baking.md): a villager ----
-# -- eats structure-held food ------------------------------------------------
+# -- a meal from the village's own stores (docs/concept/milling_and_ -------
+# -- baking.md) ----------------------------------------------------------------
 #
-# NpcEconomy._try_eat asks the world, duck-typed, for a structure meal when
-# the market stall is bare -- these are the world's real answers: one whole
-# unit of any kind == "food" item in a Storage's or Bakery's own stock
-# within STRUCTURE_MEAL_RADIUS_TILES, at VillageMarket's own meal price,
-# all-or-nothing like buy_meal.
+# NpcEconomy._try_eat asks the world, duck-typed, for a meal from the
+# village's stores when the stall is bare -- these are the world's real
+# answers: first the settlement's own persisted Market (where the merchant
+# stocks and the granary/trade fill -- the food SettlementState has always
+# counted and nobody ever ate), then one whole unit of any kind == "food"
+# item on a Bakery's or Storage's own shelf within STRUCTURE_MEAL_RADIUS_
+# TILES; at VillageMarket's own meal price, all-or-nothing like buy_meal.
 
 const Wallet = preload("res://src/gameplay/wallet.gd")
 const VillageMarket = preload("res://src/world/village_market.gd")
+const EntityRef = preload("res://src/emergence/entity_ref.gd")
 
 
 func _near(tile: Vector2i) -> Vector2:
@@ -184,8 +187,8 @@ func test_bread_on_a_bakerys_shelf_is_a_meal_and_buying_it_takes_one_loaf_at_the
 	var wallet := Wallet.new()
 	wallet.add(10)
 
-	assert_true(manager.has_structure_meal_near(_near(_bakery + Vector2i(2, 2))))
-	assert_eq(manager.buy_structure_meal_near(_near(_bakery + Vector2i(2, 2)), wallet), "bread")
+	assert_true(manager.has_village_meal_near(_near(_bakery + Vector2i(2, 2))))
+	assert_eq(manager.buy_village_meal_near(_near(_bakery + Vector2i(2, 2)), wallet), "bread")
 	assert_eq(manager.structure_stock_at(_bakery.x, _bakery.y, "bread"), 2)
 	assert_eq(wallet.balance, 10 - VillageMarket.VILLAGE_LOCAL_FOOD_PRICE)
 
@@ -194,17 +197,17 @@ func test_wheat_and_flour_in_a_storage_are_not_meals():
 	manager.build_at_global(_storage.x, _storage.y, "storage")
 	manager.deposit_to_structure_at(_storage.x, _storage.y, "wheat", 5)
 	manager.deposit_to_structure_at(_storage.x, _storage.y, "flour", 5)
-	assert_false(manager.has_structure_meal_near(_near(_storage)))
+	assert_false(manager.has_village_meal_near(_near(_storage)))
 	var wallet := Wallet.new()
 	wallet.add(10)
-	assert_eq(manager.buy_structure_meal_near(_near(_storage), wallet), "")
+	assert_eq(manager.buy_village_meal_near(_near(_storage), wallet), "")
 	assert_eq(wallet.balance, 10, "a failed purchase never touches the wallet")
 
 
 func test_an_empty_wallet_buys_nothing_and_the_loaf_stays():
 	manager.build_at_global(_storage.x, _storage.y, "storage")
 	manager.deposit_to_structure_at(_storage.x, _storage.y, "bread", 1)
-	assert_eq(manager.buy_structure_meal_near(_near(_storage), Wallet.new()), "")
+	assert_eq(manager.buy_village_meal_near(_near(_storage), Wallet.new()), "")
 	assert_eq(manager.structure_stock_at(_storage.x, _storage.y, "bread"), 1)
 
 
@@ -212,4 +215,29 @@ func test_a_bakehouse_across_the_map_is_not_near():
 	manager.build_at_global(_bakery.x, _bakery.y, "bakery")
 	manager.deposit_to_structure_at(_bakery.x, _bakery.y, "bread", 3)
 	var far := _near(_bakery + Vector2i(EarthChunkManager.STRUCTURE_MEAL_RADIUS_TILES + 8, 0))
-	assert_false(manager.has_structure_meal_near(far))
+	assert_false(manager.has_village_meal_near(far))
+
+
+## The merchant's own cooked meat -- reported directly: "the food should be
+## actually consumed and not stay at 20 cooked meat".
+func test_the_settlements_own_market_food_is_eaten_first_at_the_local_meal_price():
+	var settlement_id := EntityRef.for_settlement(_chunk_coord)
+	var market = manager._market_store.market_for(settlement_id)
+	market.add_stock("cooked_meat", 20)
+	manager.build_at_global(_storage.x, _storage.y, "storage")
+	manager.deposit_to_structure_at(_storage.x, _storage.y, "bread", 3)
+	var wallet := Wallet.new()
+	wallet.add(10)
+
+	assert_true(manager.has_village_meal_near(_near(_storage)))
+	assert_eq(manager.buy_village_meal_near(_near(_storage), wallet), "cooked_meat", "the stores before the shelf")
+	assert_eq(market.stock_of("cooked_meat"), 19, "one portion actually left the market")
+	assert_eq(manager.structure_stock_at(_storage.x, _storage.y, "bread"), 3, "the shelf untouched")
+	assert_eq(wallet.balance, 10 - VillageMarket.VILLAGE_LOCAL_FOOD_PRICE)
+
+
+func test_only_food_in_the_market_counts_as_a_meal():
+	var market = manager._market_store.market_for(EntityRef.for_settlement(_chunk_coord))
+	market.add_stock("torch", 20)
+	market.add_stock("wood", 20)
+	assert_false(manager.has_village_meal_near(_near(_storage)))
