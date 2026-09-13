@@ -78,6 +78,17 @@ func test_campfires_burn_and_glow_animations_loop():
 	assert_true(entry.animations.glow.loop)
 
 
+func test_campfire_entry_gains_a_ground_context_matching_furnace():
+	# campfire's own "placed" surface predates this pass and stays deferred
+	# (no real art either, same as furnace's), but a dropped/uncrafted
+	# campfire item still needs a ground sprite same as every other
+	# placeable -- furnace already draws this exact icon/ground/placed
+	# shape, so campfire gains the ground context to match.
+	var entry := registry.entry_for("campfire")
+	assert_true(entry.contexts.has("ground"))
+	assert_eq(entry.contexts.ground.anchor, "center")
+
+
 # -- 2026-09-13 per-item composite sheet mapping (item_illustrations.md's
 # own "Per-item composite sheet mapping"): durability art generalizes
 # beyond the original wooden_club/iron_sword/crude_blade three, to a
@@ -342,6 +353,35 @@ func test_iron_legs_entry_has_the_documented_shape():
 
 func test_iron_boots_entry_has_the_documented_shape():
 	_assert_armor_shape("iron_boots")
+
+
+# -- 2026-09-13 placeables batch: sagewerk/storage/stone_dam have no fire
+# (unlike campfire/furnace) and no wear mechanic of their own (unlike
+# equipment), so unlike every other subject touched this session they keep
+# their original single "default" state -- only icon+ground gain real art.
+# No held/equipped (nothing to carry or wear), and "placed" stays out of
+# scope here the same way it does for furnace/campfire's own deferred
+# footprint surface.
+
+func _assert_icon_and_ground_only_shape(item_id: String) -> void:
+	var entry := registry.entry_for(item_id)
+	assert_true(entry.contexts.has("icon"), "%s should declare an icon context" % item_id)
+	assert_true(entry.contexts.has("ground"), "%s should declare a ground context" % item_id)
+	assert_eq(entry.contexts.ground.anchor, "center")
+	assert_false(entry.contexts.has("held"), "%s is a placeable, not carried" % item_id)
+	assert_false(entry.contexts.has("equipped"), "%s is a placeable, not worn" % item_id)
+
+
+func test_sagewerk_entry_has_the_documented_shape():
+	_assert_icon_and_ground_only_shape("sagewerk")
+
+
+func test_storage_entry_has_the_documented_shape():
+	_assert_icon_and_ground_only_shape("storage")
+
+
+func test_stone_dam_entry_has_the_documented_shape():
+	_assert_icon_and_ground_only_shape("stone_dam")
 
 
 # -- self-consistency: every subject's own declared defaults must be real -

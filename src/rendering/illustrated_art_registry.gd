@@ -77,6 +77,7 @@ const _SUBJECTS := {
 		"contexts": {
 			"placed": {"seasonal": true, "anchor": "footprint"},
 			"icon": {"seasonal": false, "anchor": "center"},
+			"ground": {"seasonal": false, "anchor": "center"},
 		},
 		"base_season": "summer",
 		"states": ["unlit", "lit", "embers"],
@@ -244,11 +245,11 @@ const _SUBJECTS := {
 	# 2026-09-13: held is 8 pose variants of pristine only.
 	"fishing_rod": {"contexts": {"icon": {"seasonal": false, "anchor": "center"}, "held": {"seasonal": false, "anchor": "pivot"}, "equipped": {"seasonal": false, "anchor": "pivot"}, "ground": {"seasonal": false, "anchor": "center"}}, "base_season": "any", "states": ["pristine", "used", "worn", "broken"], "base_state": "pristine", "animations": {"still": {"fps": 0, "loop": false}, "pose_b": {"fps": 0, "loop": false}, "pose_c": {"fps": 0, "loop": false}, "pose_d": {"fps": 0, "loop": false}, "pose_e": {"fps": 0, "loop": false}, "pose_f": {"fps": 0, "loop": false}, "pose_g": {"fps": 0, "loop": false}, "pose_h": {"fps": 0, "loop": false}}, "overlays": [], "chroma_key": Color(1.0, 0.0, 1.0), "chroma_key_tolerance": 0.25},
 
-	"sagewerk": {"contexts": {"icon": {"seasonal": false, "anchor": "center"}}, "base_season": "any", "states": ["default"], "base_state": "default", "animations": {"still": {"fps": 0, "loop": false}}, "overlays": [], "chroma_key": Color(1.0, 0.0, 1.0), "chroma_key_tolerance": 0.25},
+	"sagewerk": {"contexts": {"icon": {"seasonal": false, "anchor": "center"}, "ground": {"seasonal": false, "anchor": "center"}}, "base_season": "any", "states": ["default"], "base_state": "default", "animations": {"still": {"fps": 0, "loop": false}}, "overlays": [], "chroma_key": Color(1.0, 0.0, 1.0), "chroma_key_tolerance": 0.25},
 
-	"storage": {"contexts": {"icon": {"seasonal": false, "anchor": "center"}}, "base_season": "any", "states": ["default"], "base_state": "default", "animations": {"still": {"fps": 0, "loop": false}}, "overlays": [], "chroma_key": Color(1.0, 0.0, 1.0), "chroma_key_tolerance": 0.25},
+	"storage": {"contexts": {"icon": {"seasonal": false, "anchor": "center"}, "ground": {"seasonal": false, "anchor": "center"}}, "base_season": "any", "states": ["default"], "base_state": "default", "animations": {"still": {"fps": 0, "loop": false}}, "overlays": [], "chroma_key": Color(1.0, 0.0, 1.0), "chroma_key_tolerance": 0.25},
 
-	"stone_dam": {"contexts": {"icon": {"seasonal": false, "anchor": "center"}}, "base_season": "any", "states": ["default"], "base_state": "default", "animations": {"still": {"fps": 0, "loop": false}}, "overlays": [], "chroma_key": Color(1.0, 0.0, 1.0), "chroma_key_tolerance": 0.25},
+	"stone_dam": {"contexts": {"icon": {"seasonal": false, "anchor": "center"}, "ground": {"seasonal": false, "anchor": "center"}}, "base_season": "any", "states": ["default"], "base_state": "default", "animations": {"still": {"fps": 0, "loop": false}}, "overlays": [], "chroma_key": Color(1.0, 0.0, 1.0), "chroma_key_tolerance": 0.25},
 
 	# 2026-09-13: rough_compass's held row shows a visibly fraying cord by
 	# the broken column -- condition-tied like icon/equipped/ground, not
