@@ -384,6 +384,35 @@ func test_stone_dam_entry_has_the_documented_shape():
 	_assert_icon_and_ground_only_shape("stone_dam")
 
 
+# -- 2026-09-13 tools batch: the final 5 items (lasso, snare, trap,
+# reinforced_rope, climbing_rope) -- every one a carryable tool, so every
+# one gets the full icon/held/equipped/ground row set (item_illustrations.md's
+# own "every tool/weapon gets equipped too" correction), all condition-tied
+# (a rope visibly frays and an iron ring visibly rusts by the broken column;
+# none of these got a pose-variety held row the way e.g. compass did).
+# climbing_rope is a brand-new entry -- it had no registry entry at all
+# before this pass, unlike the other four which had icon-only stubs.
+
+func test_lasso_entry_has_the_documented_shape():
+	_assert_standard_item_shape("lasso", 1)
+
+
+func test_snare_entry_has_the_documented_shape():
+	_assert_standard_item_shape("snare", 1)
+
+
+func test_trap_entry_has_the_documented_shape():
+	_assert_standard_item_shape("trap", 1)
+
+
+func test_reinforced_rope_entry_has_the_documented_shape():
+	_assert_standard_item_shape("reinforced_rope", 1)
+
+
+func test_climbing_rope_entry_has_the_documented_shape():
+	_assert_standard_item_shape("climbing_rope", 1)
+
+
 # -- self-consistency: every subject's own declared defaults must be real -
 #
 # The resolver's own base-case (mask=0, zero axes relaxed) and its base-
