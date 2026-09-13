@@ -731,18 +731,36 @@ Updated here and in `docs/progress.md` as slices land:
   placement rule exist; the live chunk layer/rendering/player verb do not
   yet
 
-**A real, explicit caveat on everything marked ✅ above from "Move-in"
-onward**: written directly, WITHOUT the strict TDD red-first cycle this
-project's own `CLAUDE.md` otherwise mandates, and without running the test
-suite at all — an explicit, direct user instruction ("skip tests") mid-
-session, honored as this project's actual maintainer's call to make. Every
-piece above is a careful, deliberate design grounded in real, verified
-existing APIs (confirmed by direct reads, not guesses), but **none of it
-has been run even once**. Treat it as unverified until a real GUT pass
-(and, before merging, a full regression run) actually confirms it —
-this is flagged here precisely so that verification is not silently
-skipped a second time by a future reader trusting this Status list at
-face value.
+**(2026-09-13) The caveat below is resolved: a real GUT pass has now run.**
+Everything marked ✅ above from "Move-in" onward was written directly,
+WITHOUT the strict TDD red-first cycle this project's own `CLAUDE.md`
+otherwise mandates, and without running the test suite at all — an
+explicit, direct user instruction ("skip tests") mid-session, honored as
+this project's actual maintainer's call to make. That gap is now closed:
+blueprint-learn/build and the hire-a-carpenter fork's own infrastructure
+were exercised directly (23 of the pre-existing tests run in
+`test_earth_chunk_manager.gd`, the remainder within `test_player.gd`'s own
+387/390), and wages/rent/needs-v2-happiness/civic-taxation (section 8-10,
+`step_workforce_economy` and its five sub-steps) got 14 new tests written
+against them for the first time, isolated so only the one mechanism under
+test can move a wallet. **Net result: the shipped code was correct as
+written.** The only defects this pass found were in the new TEST fixtures,
+not the production code -- three tests (and a fourth silently passing for
+the same wrong reason) never called `record_settlement_founded_if_new`
+first, so `SettlementState.status_for(0, 0)` read `STABLE` rather than
+`DECLINING` (an unfounded location genuinely can't decline -- see
+`test_settle_resident_if_new_still_settles_far_from_any_real_settlement`'s
+own pin), meaning "declining" was never actually reachable in those
+fixtures at all. Fixed by founding a real settlement first; all 14 pass
+now. The three residual `test_player.gd` failures are unrelated to this
+feature: two are this worktree's own stale import cache on two
+newly-added building sprites (an environment artifact, not a code bug),
+and one is the already-flagged zero-Rhine-discharge issue.
+
+Not re-verified by this pass, and still worth naming honestly: the 🚧
+Interior furniture line above (never claimed ✅, so outside this caveat's
+original scope) and the hire-a-Builder path's own no-roof gap (named
+correctly already, unaffected by anything tested here).
 
 ## Open questions
 
