@@ -37,7 +37,10 @@ func test_recipe_ids_returns_all_defined_recipes():
 	# /give, the shop, or the old hardcoded starting-kit grant.
 	# + Storm Lantern (docs/concept/lighting.md): lantern (1 more) -- the
 	# weatherproof second light source, upgraded from a torch.
-	assert_eq(ids.size(), 41)
+	# + NPC farm production (docs/concept/npc_farm_production.md): farm and
+	# wooden_fence (2 more) -- a Farmer moves in and works the farm once a
+	# real fence stands nearby, mirroring the Sagewerk.
+	assert_eq(ids.size(), 43)
 
 
 func test_iron_sword_is_craftable_from_ingots_and_a_stick():
@@ -232,6 +235,26 @@ func test_storage_recipe_uses_wood_and_plank():
 	assert_eq(book.recipe_output("storage")["item_id"], "storage")
 	assert_false(book.can_craft("storage", {"wood": 12, "plank": 1}))
 	assert_true(book.can_craft("storage", {"wood": 12, "plank": 4}))
+
+
+## The Farm (docs/concept/npc_farm_production.md): a tilled, fenced plot --
+## cheaper than Storage's own enclosed lumber shed since there is no roof or
+## walls to raise, just wood for fence posts and plant fibre lashing them.
+## No skill gate, matching Storage's own reachability.
+func test_farm_recipe_uses_wood_and_plant_fibre():
+	assert_true(book.recipe_ids().has("farm"), "farm must be craftable")
+	assert_eq(book.recipe_output("farm")["item_id"], "farm")
+	assert_false(book.can_craft("farm", {"wood": 6, "plant_fibre": 3}))
+	assert_true(book.can_craft("farm", {"wood": 6, "plant_fibre": 4}))
+
+
+## The wooden fence (docs/concept/npc_farm_production.md): cheap -- just
+## fence rails and posts, wood only, no skill gate.
+func test_wooden_fence_recipe_uses_wood_only():
+	assert_true(book.recipe_ids().has("wooden_fence"), "wooden_fence must be craftable")
+	assert_eq(book.recipe_output("wooden_fence")["item_id"], "wooden_fence")
+	assert_false(book.can_craft("wooden_fence", {"wood": 2}))
+	assert_true(book.can_craft("wooden_fence", {"wood": 3}))
 
 
 ## The lasso is the entry point to taming (docs/concept/taming.md) and is

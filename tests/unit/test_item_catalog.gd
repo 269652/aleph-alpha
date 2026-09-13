@@ -151,6 +151,31 @@ func test_storage_is_placeable():
 	assert_eq(catalog.make("storage").kind, "placeable")
 
 
+## The Farm (see docs/concept/npc_farm_production.md) is the same placeable
+## kind as campfire/furnace/sagewerk/storage -- a tile-based structure a
+## Farmer moves into, not an inert material.
+func test_farm_is_placeable():
+	assert_true(catalog.has("farm"))
+	assert_eq(catalog.make("farm").kind, "placeable")
+
+
+## Wheat (docs/concept/npc_farm_production.md) is a raw agricultural
+## material -- harvested grain that feeds a downstream product (flour, then
+## bread), the same "material" convention log/wood/stone already use, not
+## the "food" convention wild/farmed produce like carrot/potato use.
+func test_wheat_is_a_material():
+	var item := catalog.make("wheat")
+	assert_eq(item.display_name, "Wheat")
+	assert_eq(item.kind, "material")
+
+
+## The wooden fence (docs/concept/npc_farm_production.md) gates a Farm's
+## Farmer -- the same placeable kind as farm/sagewerk/storage.
+func test_wooden_fence_is_placeable():
+	assert_true(catalog.has("wooden_fence"))
+	assert_eq(catalog.make("wooden_fence").kind, "placeable")
+
+
 ## Named fruit tree species (see docs/concept/flora.md#named-fruit-and-nut-tree-species)
 ## drop their OWN item id -- cherry/apple/walnut -- rather than the generic
 ## "fruit"/"nut" every tree used to drop regardless of species.

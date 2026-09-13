@@ -442,6 +442,41 @@ func test_collect_step_no_ops_with_no_sagewerk_nearby():
 	assert_eq(player.inventory_counts().get("beam", 0), 0)
 
 
+# -- collecting a Farm's real StructureStock straight into inventory ---------
+#
+# docs/concept/npc_farm_production.md: harvested wheat credits the Farm's
+# own StructureStock (see FarmerMarker._perform_action) -- a player with no
+# Storage/Logistics built yet needs the same real, direct collection
+# _collect_step already gives the Sägewerk.
+
+func test_collect_farm_step_withdraws_real_wheat_stock_into_inventory():
+	var tile := player.current_tile()
+	chunk_manager.build_at_global(tile.x + 1, tile.y, "farm")
+	chunk_manager.deposit_to_structure_at(tile.x + 1, tile.y, "wheat", 5)
+
+	player._collect_farm_step()
+
+	assert_eq(player.inventory_counts().get("wheat", 0), 5)
+	assert_eq(chunk_manager.structure_stock_at(tile.x + 1, tile.y, "wheat"), 0)
+
+
+func test_collect_farm_step_no_ops_with_a_nearby_farm_but_nothing_stocked():
+	var tile := player.current_tile()
+	chunk_manager.build_at_global(tile.x + 1, tile.y, "farm")
+
+	player._collect_farm_step()
+
+	assert_eq(player.inventory_counts().get("wheat", 0), 0)
+
+
+func test_collect_farm_step_no_ops_with_no_farm_nearby():
+	chunk_manager.deposit_to_structure_at(0, 0, "wheat", 5)  # nowhere real, no farm built
+
+	player._collect_farm_step()
+
+	assert_eq(player.inventory_counts().get("wheat", 0), 0)
+
+
 # -- catching a real, visible fish flavors the catch message ------------------
 #
 # The abstract fishing minigame (see FishingSession/FishingMinigame) already

@@ -64,6 +64,8 @@ const GrassFrogRenderer = preload("res://src/rendering/grass_frog_renderer.gd")
 const LumberjackMarker = preload("res://src/rendering/lumberjack_marker.gd")
 const LogisticsMarker = preload("res://src/rendering/logistics_marker.gd")
 const StructureStockStore = preload("res://src/emergence/structure_stock_store.gd")
+const IllustratedStructureSprite = preload("res://src/rendering/illustrated_structure_sprite.gd")
+const FarmerMarker = preload("res://src/rendering/farmer_marker.gd")
 
 ## How much of a tile a ground-cover tuft (grass, scrub, lichen) covers.
 ## Well under 1: a clump of grass sits ON the ground, it is not the ground.
@@ -707,6 +709,37 @@ const _SAGEWERK_LOGISTICS_ITEM_IDS := ["beam", "plank"]
 ## whose own search radius could never reach the Storage it was paired for
 ## would be a real worker that can never actually find its destination.
 const SAGEWERK_STORAGE_PAIR_RADIUS_TILES := 20
+
+## Real illustrated-art overlay Sprite2D per placed structure this codebase
+## has real art for (see IllustratedStructureSprite -- farm/sagewerk/
+## storage/wooden_fence today, docs/concept/npc_farm_production.md).
+## chunk_coord -> {local_cell -> Sprite2D}. Purely visual: the underlying
+## ground tile is unchanged (bare earth, same as any other prop-bearing
+## tile -- a tree or mushroom doesn't change its own ground tile either).
+## Every other placeable (campfire/furnace/stone_dam) has no real art wired
+## yet and keeps rendering via its existing baked-into-the-tile-atlas
+## ProceduralStructureSprite look, unaffected by this dict.
+var _structure_art_sprites: Dictionary = {}
+var _illustrated_structure_sprite := IllustratedStructureSprite.new()
+
+## Every placed Farm currently staffed with a real FarmerMarker (see
+## docs/concept/npc_farm_production.md) -- chunk_coord -> {local_cell ->
+## FarmerMarker}, mirroring _sagewerk_lumberjacks' own shape exactly. Unlike
+## the Sagewerk, a placed "farm" tile does NOT automatically get a Farmer:
+## reported directly, "buildings like the farm require a fence and then an
+## NPC can get hired" -- staffing is gated on a real "wooden_fence" standing
+## within FARM_FENCE_GATE_RADIUS_TILES (see _reconcile_farmer_at).
+var _farm_farmers: Dictionary = {}
+
+## How far (in tiles) a wooden_fence must stand from a Farm for a Farmer to
+## move in. Matches SAGEWERK_STORAGE_PAIR_RADIUS_TILES' own magnitude --
+## "the same worksite," not a farm-specific number invented separately.
+const FARM_FENCE_GATE_RADIUS_TILES := SAGEWERK_STORAGE_PAIR_RADIUS_TILES
+
+## Which real items a Farm's Logistics worker gets spawned for -- today's
+## only real Farm output (see FarmerMarker.CROP_ID), matching
+## _SAGEWERK_LOGISTICS_ITEM_IDS' own one-list-per-producer shape.
+const _FARM_LOGISTICS_ITEM_IDS := ["wheat"]
 
 var _scrub_sims: Dictionary = {}  # Vector2i chunk_coord -> DesertScrub
 var _scrub_sprites: Dictionary = {}  # Vector2i chunk_coord -> {local cell Vector2i -> Sprite2D}
@@ -11089,7 +11122,9 @@ func build_at_global(global_x: int, global_y: int, tile_id: String) -> bool:
 	_terrain_renderer.paint(_tile_map_layer, chunk, chunk_coord * CHUNK_SIZE, generator.biome_at_global)
 	_sync_piece_collision(Vector2i(global_x, global_y), tile_id)
 	_sync_sagewerk_lumberjack(chunk_coord, local, previous_tile_id, tile_id)
+	_sync_farm_farmer(chunk_coord, local, previous_tile_id, tile_id)
 	_sync_logistics_workers(chunk_coord, local, previous_tile_id, tile_id)
+	_sync_structure_art(chunk_coord, local, previous_tile_id, tile_id)
 	if previous_tile_id != tile_id:
 		# A different piece now occupies this cell (build_at_global doesn't
 		# check occupancy, see _sync_piece_collision's own doc comment) --
@@ -11118,7 +11153,9 @@ func destroy_at_global(global_x: int, global_y: int) -> bool:
 	_terrain_renderer.paint(_tile_map_layer, chunk, chunk_coord * CHUNK_SIZE, generator.biome_at_global)
 	_remove_piece_collision(Vector2i(global_x, global_y))
 	_sync_sagewerk_lumberjack(chunk_coord, local, previous_tile_id, "")
+	_sync_farm_farmer(chunk_coord, local, previous_tile_id, "")
 	_sync_logistics_workers(chunk_coord, local, previous_tile_id, "")
+	_sync_structure_art(chunk_coord, local, previous_tile_id, "")
 	_sync_flow_boulder(Vector2i(global_x, global_y))
 	# This cell no longer holds a piece at all -- its own statics tracking
 	# (if any) belonged to whatever WAS here, not to bare ground. Clear it
@@ -11386,6 +11423,84 @@ func _despawn_lumberjack_at(chunk_coord: Vector2i, local_cell: Vector2i) -> void
 	by_cell.erase(local_cell)
 
 
+## Keeps `_farm_farmers` in sync with a modification change at `local_cell`
+## (see docs/concept/npc_farm_production.md). Two independent triggers
+## matter, mirroring _sync_logistics_workers' own shape: the tile itself
+## becoming/stopping being a Farm (re-decide staffing for exactly this
+## cell), or a wooden_fence appearing/disappearing anywhere nearby
+## (re-decide staffing for EVERY known real farm tile, since any one of
+## them might have just gained or lost its gating fence).
+func _sync_farm_farmer(
+	chunk_coord: Vector2i, local_cell: Vector2i, previous_tile_id: String, new_tile_id: String
+) -> void:
+	if previous_tile_id == "farm" and new_tile_id != "farm":
+		_despawn_farmer_at(chunk_coord, local_cell)
+	elif new_tile_id == "farm":
+		_reconcile_farmer_at(chunk_coord, local_cell)
+	if previous_tile_id == "wooden_fence" or new_tile_id == "wooden_fence":
+		_reconcile_all_known_farmers()
+
+
+## Re-decides whether the Farm at (chunk_coord, local_cell) should have a
+## Farmer right now: staffed if and only if a real "wooden_fence" stands
+## within FARM_FENCE_GATE_RADIUS_TILES. Safe to call redundantly (a no-op
+## once already in the correct state either way), so callers don't need to
+## know which trigger applies -- mirrors _resync_logistics_for_sagewerk's
+## own reconcile-rather-than-blindly-spawn shape.
+func _reconcile_farmer_at(chunk_coord: Vector2i, local_cell: Vector2i) -> void:
+	var global_cell: Vector2i = chunk_coord * CHUNK_SIZE + local_cell
+	var fenced := has_structure_near(
+		global_cell.x, global_cell.y, "wooden_fence", FARM_FENCE_GATE_RADIUS_TILES
+	)
+	var already_staffed: bool = _farm_farmers.get(chunk_coord, {}).has(local_cell)
+	if fenced and not already_staffed:
+		_spawn_farmer_for(chunk_coord, local_cell)
+	elif not fenced and already_staffed:
+		_despawn_farmer_at(chunk_coord, local_cell)
+
+
+## Re-decides staffing for EVERY real "farm" tile in every currently loaded
+## chunk -- the broad resync a wooden_fence appearing/disappearing anywhere
+## needs, since a farm with no Farmer yet (never fenced) must also become
+## reachable, not just already-staffed ones (unlike _sync_logistics_
+## workers' own "storage changed" trigger, which only ever re-pairs
+## ALREADY-staffed Sägewerks).
+func _reconcile_all_known_farmers() -> void:
+	for chunk_coord in _loaded_chunks:
+		var chunk: Chunk = _loaded_chunks[chunk_coord]
+		for local_cell in chunk.modifications:
+			if chunk.modifications[local_cell] == "farm":
+				_reconcile_farmer_at(chunk_coord, local_cell)
+
+
+## Spawns exactly one FarmerMarker for the Farm at `local_cell`, or does
+## nothing if one already exists there -- "an NPC moves in", once, per
+## fenced Farm instance.
+func _spawn_farmer_for(chunk_coord: Vector2i, local_cell: Vector2i) -> void:
+	if not _farm_farmers.has(chunk_coord):
+		_farm_farmers[chunk_coord] = {}
+	var by_cell: Dictionary = _farm_farmers[chunk_coord]
+	if by_cell.has(local_cell):
+		return
+	var global_cell: Vector2i = chunk_coord * CHUNK_SIZE + local_cell
+	var home := (Vector2(global_cell) + Vector2(0.5, 0.5)) * TerrainRenderer.TILE_SIZE
+	var marker := FarmerMarker.new()
+	marker.earth = self
+	marker.home = home
+	marker.position = home
+	_entities_parent.add_child(marker)
+	by_cell[local_cell] = marker
+
+
+func _despawn_farmer_at(chunk_coord: Vector2i, local_cell: Vector2i) -> void:
+	var by_cell: Dictionary = _farm_farmers.get(chunk_coord, {})
+	var marker: Node = by_cell.get(local_cell)
+	if marker == null:
+		return
+	marker.free()
+	by_cell.erase(local_cell)
+
+
 ## Keeps `_logistics_workers` in sync with a modification change at
 ## `local_cell`. Two independent triggers matter: the tile itself becoming/
 ## stopping being a Sägewerk (re-decide staffing for exactly this cell), or
@@ -11400,10 +11515,15 @@ func _sync_logistics_workers(
 ) -> void:
 	if previous_tile_id == "sagewerk" or new_tile_id == "sagewerk":
 		_resync_logistics_for_sagewerk(chunk_coord, local_cell)
+	if previous_tile_id == "farm" or new_tile_id == "farm":
+		_resync_logistics_for_farm(chunk_coord, local_cell)
 	if previous_tile_id == "storage" or new_tile_id == "storage":
 		for sagewerk_chunk_coord in _sagewerk_lumberjacks:
 			for sagewerk_local_cell in _sagewerk_lumberjacks[sagewerk_chunk_coord]:
 				_resync_logistics_for_sagewerk(sagewerk_chunk_coord, sagewerk_local_cell)
+		for farm_chunk_coord in _farm_farmers:
+			for farm_local_cell in _farm_farmers[farm_chunk_coord]:
+				_resync_logistics_for_farm(farm_chunk_coord, farm_local_cell)
 
 
 ## Re-decides whether the Sägewerk at (chunk_coord, local_cell) -- if one is
@@ -11468,6 +11588,63 @@ func _resync_logistics_for_sagewerk(chunk_coord: Vector2i, local_cell: Vector2i)
 	_logistics_workers[chunk_coord][local_cell] = by_storage
 
 
+## Re-decides whether the Farm at (chunk_coord, local_cell) -- if one is
+## actually staffed right now, per `_farm_farmers` -- should have Logistics
+## workers: one full worker-pair (one per `_FARM_LOGISTICS_ITEM_IDS` entry,
+## today just "wheat") per real Storage currently within
+## SAGEWERK_STORAGE_PAIR_RADIUS_TILES. Mirrors _resync_logistics_for_
+## sagewerk exactly (see that function's own doc comment), just against
+## `_farm_farmers`/`_FARM_LOGISTICS_ITEM_IDS`/`"farm"` instead of their
+## Sägewerk counterparts -- the SAME `_logistics_workers` dict holds both
+## (a farm's own local_cell never collides with a sagewerk's, so they
+## coexist with no key-scheme change needed).
+func _resync_logistics_for_farm(chunk_coord: Vector2i, local_cell: Vector2i) -> void:
+	if not _farm_farmers.get(chunk_coord, {}).has(local_cell):
+		_despawn_logistics_workers_at(chunk_coord, local_cell)
+		return
+
+	var global_cell: Vector2i = chunk_coord * CHUNK_SIZE + local_cell
+	var farm_pixel := (Vector2(global_cell) + Vector2(0.5, 0.5)) * TerrainRenderer.TILE_SIZE
+	var storages_found: Array[Vector2] = nearby_structure_positions(
+		farm_pixel, "storage", float(SAGEWERK_STORAGE_PAIR_RADIUS_TILES) * TerrainRenderer.TILE_SIZE
+	)
+	if storages_found.is_empty():
+		_despawn_logistics_workers_at(chunk_coord, local_cell)
+		return
+
+	var by_storage: Dictionary = _logistics_workers.get(chunk_coord, {}).get(local_cell, {})
+
+	var in_range_keys := {}
+	for storage_pixel in storages_found:
+		var key := _storage_pairing_key(storage_pixel)
+		in_range_keys[key] = true
+		if by_storage.has(key):
+			continue  # already staffed for this specific Storage -- no double-spawn
+		var by_item: Dictionary = {}
+		for item_id in _FARM_LOGISTICS_ITEM_IDS:
+			var marker := LogisticsMarker.new()
+			marker.earth = self
+			marker.item_id = item_id
+			marker.source_structure_id = "farm"
+			marker.storage_structure_id = "storage"
+			marker.search_radius_tiles = SAGEWERK_STORAGE_PAIR_RADIUS_TILES
+			marker.position = farm_pixel
+			marker.preferred_storage_position = storage_pixel
+			_entities_parent.add_child(marker)
+			by_item[item_id] = marker
+		by_storage[key] = by_item
+
+	for key in by_storage.keys().duplicate():
+		if not in_range_keys.has(key):
+			for marker in by_storage[key].values():
+				marker.free()
+			by_storage.erase(key)
+
+	if not _logistics_workers.has(chunk_coord):
+		_logistics_workers[chunk_coord] = {}
+	_logistics_workers[chunk_coord][local_cell] = by_storage
+
+
 ## The stable key one paired Storage resolves to under a Sägewerk's own
 ## `_logistics_workers` entry -- position, not structure id, is the
 ## identity, the exact same "%d_%d" position-keying pattern
@@ -11490,6 +11667,59 @@ func _despawn_logistics_workers_at(chunk_coord: Vector2i, local_cell: Vector2i) 
 	for by_item in by_storage.values():
 		for marker in by_item.values():
 			marker.free()
+	by_cell.erase(local_cell)
+
+
+## Keeps `_structure_art_sprites` in sync with a modification change at
+## `local_cell` (see IllustratedStructureSprite, docs/concept/
+## npc_farm_production.md): a tile that just became a real-art subject
+## (farm/sagewerk/storage/wooden_fence) gets a real overlay Sprite2D
+## standing on it; a tile that just stopped being one (overwritten by
+## something else, or destroyed -- `new_tile_id` is "" for a destroy) has
+## its overlay freed. A tile going from one non-art id to another, or
+## staying the SAME art id (a redundant build_at_global call on an already-
+## built tile), is a no-op either way.
+func _sync_structure_art(
+	chunk_coord: Vector2i, local_cell: Vector2i, previous_tile_id: String, new_tile_id: String
+) -> void:
+	if previous_tile_id != new_tile_id and _illustrated_structure_sprite.has_subject(previous_tile_id):
+		_despawn_structure_art_at(chunk_coord, local_cell)
+	if previous_tile_id != new_tile_id and _illustrated_structure_sprite.has_subject(new_tile_id):
+		_spawn_structure_art_for(chunk_coord, local_cell, new_tile_id)
+
+
+## Spawns exactly one real-art overlay Sprite2D for `subject` at
+## `local_cell`, or does nothing if one already exists there. Sized via
+## IllustratedStructureSprite.footprint_texture (width matches the tile,
+## height scales by the same factor) and bottom-anchored: the sprite's own
+## bottom edge sits at the tile's bottom edge, the same way any
+## bottom-anchored placed-art sprite already would (see
+## IllustratedArtLoader's own "footprint" anchor doc comment).
+func _spawn_structure_art_for(chunk_coord: Vector2i, local_cell: Vector2i, subject: String) -> void:
+	if not _structure_art_sprites.has(chunk_coord):
+		_structure_art_sprites[chunk_coord] = {}
+	var by_cell: Dictionary = _structure_art_sprites[chunk_coord]
+	if by_cell.has(local_cell):
+		return
+	var texture := _illustrated_structure_sprite.footprint_texture(subject, TerrainRenderer.TILE_SIZE)
+	if texture == null:
+		return
+	var global_cell: Vector2i = chunk_coord * CHUNK_SIZE + local_cell
+	var tile_center := (Vector2(global_cell) + Vector2(0.5, 0.5)) * TerrainRenderer.TILE_SIZE
+	var tile_bottom := tile_center.y + TerrainRenderer.TILE_SIZE * 0.5
+	var sprite := Sprite2D.new()
+	sprite.texture = texture
+	sprite.position = Vector2(tile_center.x, tile_bottom - float(texture.get_height()) * 0.5)
+	_entities_parent.add_child(sprite)
+	by_cell[local_cell] = sprite
+
+
+func _despawn_structure_art_at(chunk_coord: Vector2i, local_cell: Vector2i) -> void:
+	var by_cell: Dictionary = _structure_art_sprites.get(chunk_coord, {})
+	var sprite: Node = by_cell.get(local_cell)
+	if sprite == null:
+		return
+	sprite.free()
 	by_cell.erase(local_cell)
 
 
@@ -11967,13 +12197,35 @@ func _load_chunk(chunk_coord: Vector2i) -> void:
 		if chunk.modifications[local_cell] == "sagewerk":
 			_spawn_lumberjack_for(chunk_coord, local_cell)
 
+	# Re-stage every Farm this chunk already had persisted, before this
+	# load -- staffed only if a real wooden_fence is (still) within reach,
+	# the same real gate a freshly-placed Farm gets (see
+	# _reconcile_farmer_at).
+	for local_cell in chunk.modifications:
+		if chunk.modifications[local_cell] == "farm":
+			_reconcile_farmer_at(chunk_coord, local_cell)
+
+	# Re-spawn every real-art overlay sprite this chunk already had
+	# persisted, before this load -- a revisited farm/sagewerk/storage/
+	# wooden_fence looks the same as a freshly-placed one, the same
+	# "re-staffing applies just as much to a revisited worksite" reasoning
+	# as the Lumberjack loop just above.
+	for local_cell in chunk.modifications:
+		var subject: String = chunk.modifications[local_cell]
+		if _illustrated_structure_sprite.has_subject(subject):
+			_spawn_structure_art_for(chunk_coord, local_cell, subject)
+
 	# A freshly (re)loaded chunk can bring either a Sägewerk or a Storage
 	# into range of a Sägewerk that was already staffed -- re-decide every
-	# currently-known Sägewerk's Logistics staffing, the same broad resync
-	# _sync_logistics_workers' own "storage changed" trigger uses.
+	# currently-known Sägewerk's (and Farm's) Logistics staffing, the same
+	# broad resync _sync_logistics_workers' own "storage changed" trigger
+	# uses.
 	for sagewerk_chunk_coord in _sagewerk_lumberjacks:
 		for sagewerk_local_cell in _sagewerk_lumberjacks[sagewerk_chunk_coord]:
 			_resync_logistics_for_sagewerk(sagewerk_chunk_coord, sagewerk_local_cell)
+	for farm_chunk_coord in _farm_farmers:
+		for farm_local_cell in _farm_farmers[farm_chunk_coord]:
+			_resync_logistics_for_farm(farm_chunk_coord, farm_local_cell)
 
 	# The meadow that was already here is what the wind already did (see
 	# MeadowSpread). Two things it needs that a chunk seed cannot give it: the
@@ -12617,18 +12869,32 @@ func _unload_chunk(chunk_coord: Vector2i) -> void:
 		marker.free()
 	_sagewerk_lumberjacks.erase(chunk_coord)
 
+	for marker in _farm_farmers.get(chunk_coord, {}).values():
+		marker.free()
+	_farm_farmers.erase(chunk_coord)
+
 	for by_storage in _logistics_workers.get(chunk_coord, {}).values():
 		for by_item in by_storage.values():
 			for marker in by_item.values():
 				marker.free()
 	_logistics_workers.erase(chunk_coord)
-	# This chunk may have held the Storage (or Sägewerk) a worker elsewhere
-	# was paired against -- re-decide every REMAINING known Sägewerk's
-	# Logistics staffing now that this chunk's own structures are gone,
-	# mirroring _load_chunk's own identical broad resync on the way in.
+	# This chunk may have held the Storage (or Sägewerk/Farm) a worker
+	# elsewhere was paired against -- re-decide every REMAINING known
+	# Sägewerk's (and Farm's) Logistics staffing now that this chunk's own
+	# structures are gone, mirroring _load_chunk's own identical broad
+	# resync on the way in. Also may have held the wooden_fence gating a
+	# REMAINING known Farm elsewhere -- re-decide every one of those too.
 	for sagewerk_chunk_coord in _sagewerk_lumberjacks:
 		for sagewerk_local_cell in _sagewerk_lumberjacks[sagewerk_chunk_coord]:
 			_resync_logistics_for_sagewerk(sagewerk_chunk_coord, sagewerk_local_cell)
+	_reconcile_all_known_farmers()
+	for farm_chunk_coord in _farm_farmers:
+		for farm_local_cell in _farm_farmers[farm_chunk_coord]:
+			_resync_logistics_for_farm(farm_chunk_coord, farm_local_cell)
+
+	for art_sprite in _structure_art_sprites.get(chunk_coord, {}).values():
+		art_sprite.free()
+	_structure_art_sprites.erase(chunk_coord)
 
 	for sprite in _flower_sprites.get(chunk_coord, {}).values():
 		sprite.free()
