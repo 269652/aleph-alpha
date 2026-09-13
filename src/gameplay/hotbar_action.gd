@@ -13,6 +13,7 @@ const EQUIP := "equip"
 const USE := "use"
 const PLACE := "place"
 const FURNISH := "furnish"
+const LEARN := "learn"
 const NONE := "none"
 
 const _ACTION_BY_KIND := {
@@ -23,6 +24,7 @@ const _ACTION_BY_KIND := {
 	"potion": USE,
 	"placeable": PLACE,
 	"furniture": FURNISH,
+	"blueprint": LEARN,
 }
 
 

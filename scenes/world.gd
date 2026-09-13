@@ -3559,7 +3559,8 @@ func _on_console_command(command: String, args: Array) -> void:
 					+ "  /compass  /map  /weatherglass  /almanac  /deed"
 					+ "  /ledger propose|accept|fulfill|breach ...  /charter found <type> <counterparty_id>"
 					+ "  /journal <entity_id>  /workforce assign|slots|free ..."
-					+ "  /furniture place|remove ...  /flowdebug [strokes|off]  /intro"
+					+ "  /furniture place|remove ...  /buildhouse <recipe_id>"
+					+ "  /flowdebug [strokes|off]  /intro"
 				)
 			)
 		"flowdebug":
@@ -3661,6 +3662,8 @@ func _on_console_command(command: String, args: Array) -> void:
 			_handle_workforce_command(args)
 		"furniture":
 			_handle_furniture_command(args, local_player)
+		"buildhouse":
+			_handle_build_house_command(args, local_player)
 		"globalthermonuclearwar":
 			# docs/concept/easter_eggs.md's WarGames Easter egg -- deliberately
 			# NOT listed in /help's output above (pillar 3, undocumented on
@@ -4564,6 +4567,29 @@ func _handle_furniture_command(args: Array, local_player: Player) -> void:
 			_dev_console.log_line("Removed: %s" % removed)
 		_:
 			_dev_console.log_line("Unknown /furniture action '%s'. Try: place, remove" % sub)
+
+
+## /buildhouse <recipe_id> -- docs/concept/workforce.md's own build-vs-hire
+## fork, targeting wherever the player is currently facing (the SAME
+## _tile_targeting.facing_tile every other placement verb already reads).
+## A REAL, IMPORTANT GAP this closes: neither this command nor any other
+## real trigger for _try_build_house_from_blueprint existed anywhere in
+## live gameplay before now -- the whole build/hire/BuilderMarker/move-in/
+## workforce pipeline this session built was reachable only from tests. The
+## dev console is a real, honest interim call site (the same choice
+## /workforce and /furniture above already made) while a real recipe-
+## selection UI (letting the player choose among several KNOWN blueprints
+## without typing a recipe id) remains a separate, still-missing piece.
+func _handle_build_house_command(args: Array, local_player: Player) -> void:
+	if local_player == null:
+		_dev_console.log_line("No local player to build a house for.")
+		return
+	if args.is_empty():
+		_dev_console.log_line("Usage: /buildhouse <recipe_id>  e.g. /buildhouse small_house")
+		return
+	var recipe_id: String = args[0]
+	var built := local_player._try_build_house_from_blueprint(recipe_id)
+	_dev_console.log_line("Built: %s" % built)
 
 
 ## Spawns a clickable ground item where a creature died or a tree dropped
