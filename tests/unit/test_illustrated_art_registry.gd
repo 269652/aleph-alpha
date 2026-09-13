@@ -299,6 +299,51 @@ func test_wooden_club_held_is_pose_variety_with_eight_poses():
 	assert_true(entry.animations.has("block"))
 
 
+# -- 2026-09-13 armor batch: the remaining 7 armor items (3 leather, 4
+# iron), generated fresh via ChatGPT using leather_helm/iron_helm as style
+# references. Same shape as leather_helm throughout -- icon/equipped/ground,
+# no held (you don't swing a chestplate/greaves/boots), 4-state durability --
+# so one shared helper suffices; no held-row semantics to hand-verify here
+# since armor never has a held context at all.
+
+func _assert_armor_shape(item_id: String) -> void:
+	var entry := registry.entry_for(item_id)
+	assert_true(entry.contexts.has("icon"), "%s should declare an icon context" % item_id)
+	assert_true(entry.contexts.has("equipped"), "%s should declare an equipped context" % item_id)
+	assert_true(entry.contexts.has("ground"), "%s should declare a ground context" % item_id)
+	assert_false(entry.contexts.has("held"), "%s is armor, you don't swing it" % item_id)
+	for state in ["pristine", "used", "worn", "broken"]:
+		assert_true(entry.states.has(state), "%s should have the %s state" % [item_id, state])
+
+
+func test_leather_chest_entry_has_the_documented_shape():
+	_assert_armor_shape("leather_chest")
+
+
+func test_leather_legs_entry_has_the_documented_shape():
+	_assert_armor_shape("leather_legs")
+
+
+func test_leather_boots_entry_has_the_documented_shape():
+	_assert_armor_shape("leather_boots")
+
+
+func test_iron_helm_entry_has_the_documented_shape():
+	_assert_armor_shape("iron_helm")
+
+
+func test_iron_chest_entry_has_the_documented_shape():
+	_assert_armor_shape("iron_chest")
+
+
+func test_iron_legs_entry_has_the_documented_shape():
+	_assert_armor_shape("iron_legs")
+
+
+func test_iron_boots_entry_has_the_documented_shape():
+	_assert_armor_shape("iron_boots")
+
+
 # -- self-consistency: every subject's own declared defaults must be real -
 #
 # The resolver's own base-case (mask=0, zero axes relaxed) and its base-
