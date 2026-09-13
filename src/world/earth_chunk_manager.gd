@@ -68,6 +68,8 @@ const LogisticsMarker = preload("res://src/rendering/logistics_marker.gd")
 const StructureStockStore = preload("res://src/emergence/structure_stock_store.gd")
 const IllustratedStructureSprite = preload("res://src/rendering/illustrated_structure_sprite.gd")
 const FarmerMarker = preload("res://src/rendering/farmer_marker.gd")
+const MillMarker = preload("res://src/rendering/mill_marker.gd")
+const BakeryMarker = preload("res://src/rendering/bakery_marker.gd")
 const SettlementDemand = preload("res://src/emergence/settlement_demand.gd")
 
 ## How much of a tile a ground-cover tuft (grass, scrub, lichen) covers.
@@ -750,6 +752,17 @@ var _illustrated_structure_sprite := IllustratedStructureSprite.new()
 ## NPC can get hired" -- staffing is gated on a real "wooden_fence" standing
 ## within FARM_FENCE_GATE_RADIUS_TILES (see _reconcile_farmer_at).
 var _farm_farmers: Dictionary = {}
+
+## The Mill's Miller and the Bakery's Baker (docs/concept/milling_and_
+## baking.md): every placed conversion structure currently staffed with its
+## own StructureConversionMarker -- chunk_coord -> {local_cell -> marker},
+## the SAME shape as _sagewerk_lumberjacks/_farm_farmers, one dict for both
+## trades since they differ only in which marker class moves in (see
+## CONVERSION_WORKER_BY_STRUCTURE). Staffed unconditionally the moment the
+## tile exists, like the Sägewerk (no fence gate -- a quern-house and a
+## bakehouse need no plot to protect).
+var _conversion_workers: Dictionary = {}
+const CONVERSION_WORKER_BY_STRUCTURE := {"mill": MillMarker, "bakery": BakeryMarker}
 
 ## How far (in tiles) a wooden_fence must stand from a Farm for a Farmer to
 ## move in. Matches SAGEWERK_STORAGE_PAIR_RADIUS_TILES' own magnitude --
@@ -12379,6 +12392,7 @@ func build_at_global(global_x: int, global_y: int, tile_id: String) -> bool:
 	_sync_piece_collision(Vector2i(global_x, global_y), tile_id)
 	_sync_sagewerk_lumberjack(chunk_coord, local, previous_tile_id, tile_id)
 	_sync_farm_farmer(chunk_coord, local, previous_tile_id, tile_id)
+	_sync_conversion_worker(chunk_coord, local, previous_tile_id, tile_id)
 	_sync_logistics_workers(chunk_coord, local, previous_tile_id, tile_id)
 	_sync_structure_art(chunk_coord, local, previous_tile_id, tile_id)
 	if previous_tile_id != tile_id:
@@ -12410,6 +12424,7 @@ func destroy_at_global(global_x: int, global_y: int) -> bool:
 	_remove_piece_collision(Vector2i(global_x, global_y))
 	_sync_sagewerk_lumberjack(chunk_coord, local, previous_tile_id, "")
 	_sync_farm_farmer(chunk_coord, local, previous_tile_id, "")
+	_sync_conversion_worker(chunk_coord, local, previous_tile_id, "")
 	_sync_logistics_workers(chunk_coord, local, previous_tile_id, "")
 	_sync_structure_art(chunk_coord, local, previous_tile_id, "")
 	_sync_flow_boulder(Vector2i(global_x, global_y))
@@ -12832,6 +12847,50 @@ func _spawn_farmer_for(chunk_coord: Vector2i, local_cell: Vector2i) -> void:
 
 func _despawn_farmer_at(chunk_coord: Vector2i, local_cell: Vector2i) -> void:
 	var by_cell: Dictionary = _farm_farmers.get(chunk_coord, {})
+	var marker: Node = by_cell.get(local_cell)
+	if marker == null:
+		return
+	marker.free()
+	by_cell.erase(local_cell)
+
+
+## Keeps `_conversion_workers` in sync with a modification change at
+## `local_cell` -- _sync_sagewerk_lumberjack's exact shape, for every
+## structure id in CONVERSION_WORKER_BY_STRUCTURE: a tile that just BECAME
+## a mill/bakery gets its worker (never double-spawned), a tile that just
+## STOPPED being one has it despawned, and a mill overwritten by a bakery
+## swaps workers.
+func _sync_conversion_worker(
+	chunk_coord: Vector2i, local_cell: Vector2i, previous_tile_id: String, new_tile_id: String
+) -> void:
+	if CONVERSION_WORKER_BY_STRUCTURE.has(previous_tile_id) and new_tile_id != previous_tile_id:
+		_despawn_conversion_worker_at(chunk_coord, local_cell)
+	if CONVERSION_WORKER_BY_STRUCTURE.has(new_tile_id):
+		_spawn_conversion_worker_for(chunk_coord, local_cell, new_tile_id)
+
+
+## Spawns exactly one worker for the mill/bakery at `local_cell`, or does
+## nothing if one already exists there -- wired to this world (`earth`)
+## exactly like the Farmer, so what it grinds or bakes actually lands in
+## the building's real StructureStock.
+func _spawn_conversion_worker_for(chunk_coord: Vector2i, local_cell: Vector2i, structure_id: String) -> void:
+	if not _conversion_workers.has(chunk_coord):
+		_conversion_workers[chunk_coord] = {}
+	var by_cell: Dictionary = _conversion_workers[chunk_coord]
+	if by_cell.has(local_cell):
+		return
+	var global_cell: Vector2i = chunk_coord * CHUNK_SIZE + local_cell
+	var home := (Vector2(global_cell) + Vector2(0.5, 0.5)) * TerrainRenderer.TILE_SIZE
+	var marker = CONVERSION_WORKER_BY_STRUCTURE[structure_id].new()
+	marker.earth = self
+	marker.home = home
+	marker.position = home
+	_entities_parent.add_child(marker)
+	by_cell[local_cell] = marker
+
+
+func _despawn_conversion_worker_at(chunk_coord: Vector2i, local_cell: Vector2i) -> void:
+	var by_cell: Dictionary = _conversion_workers.get(chunk_coord, {})
 	var marker: Node = by_cell.get(local_cell)
 	if marker == null:
 		return
@@ -13557,6 +13616,13 @@ func _load_chunk(chunk_coord: Vector2i) -> void:
 		if chunk.modifications[local_cell] == "farm":
 			_reconcile_farmer_at(chunk_coord, local_cell)
 
+	# Re-staff every persisted Mill/Bakery (docs/concept/milling_and_
+	# baking.md) -- unconditional like the Sägewerk's own respawn above.
+	for local_cell in chunk.modifications:
+		var tile_id: String = chunk.modifications[local_cell]
+		if CONVERSION_WORKER_BY_STRUCTURE.has(tile_id):
+			_spawn_conversion_worker_for(chunk_coord, local_cell, tile_id)
+
 	# Re-spawn every real-art overlay sprite this chunk already had
 	# persisted, before this load -- a revisited farm/sagewerk/storage/
 	# wooden_fence looks the same as a freshly-placed one, the same
@@ -14269,6 +14335,10 @@ func _unload_chunk(chunk_coord: Vector2i) -> void:
 	for marker in _farm_farmers.get(chunk_coord, {}).values():
 		marker.free()
 	_farm_farmers.erase(chunk_coord)
+
+	for marker in _conversion_workers.get(chunk_coord, {}).values():
+		marker.free()
+	_conversion_workers.erase(chunk_coord)
 
 	for by_storage in _logistics_workers.get(chunk_coord, {}).values():
 		for by_item in by_storage.values():
