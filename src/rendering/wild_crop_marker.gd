@@ -288,10 +288,19 @@ func _redraw_leaves() -> void:
 func _finish_pull() -> void:
 	if on_harvested.is_valid():
 		on_harvested.call()
-	var item := (
-		_item_catalog.make(crop_id) if _item_catalog.has(crop_id)
-		else Item.new(crop_id, crop_id.capitalize(), "food", 20)
-	)
+	var item: Item
+	if _item_catalog.has(crop_id):
+		# _mass_kg_for (which resolves crop_id's real reference mass, e.g.
+		# carrot 0.07kg / potato 0.17kg) is private to ItemCatalog -- make()
+		# is the public way to get at that reference Item, whose own
+		# mass_kg field is public (see Item.mass_kg). Root Vigor scales
+		# THAT real reference mass, then make_with_mass carries the result
+		# into a real Item the same way EarthChunkManager.catch_nearest_fish
+		# already does for a caught fish's own individually-known mass.
+		var reference := _item_catalog.make(crop_id)
+		item = _item_catalog.make_with_mass(crop_id, reference.mass_kg * vigor_mass_multiplier(vigor))
+	else:
+		item = Item.new(crop_id, crop_id.capitalize(), "food", 20)
 	WorldItemBus.item_dropped.emit(ItemStack.new(item, 1), position)
 	set_process(false)
 	queue_free()

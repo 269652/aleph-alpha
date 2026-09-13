@@ -13,6 +13,7 @@ const HoverTargetFinder = preload("res://src/rendering/hover_target_finder.gd")
 const ProceduralSoilSprite = preload("res://src/rendering/procedural_soil_sprite.gd")
 const IllustratedCropSprite = preload("res://src/rendering/illustrated_crop_sprite.gd")
 const SeasonalFoliage = preload("res://src/rendering/seasonal_foliage.gd")
+const ItemCatalog = preload("res://src/gameplay/item_catalog.gd")
 
 var marker: WildCropMarker
 var _drops: Array = []
@@ -143,6 +144,25 @@ func test_pull_finishes_and_drops_the_harvested_item():
 	assert_eq(_drops.size(), 1)
 	assert_eq(_drops[0].item.id, "carrot")
 	assert_true(marker.is_queued_for_deletion())
+
+
+## The harvested item's REAL mass (docs/concept/wild_crops.md's own "real
+## reference weight" framing, ItemCatalog._PRODUCE_MASS_KG) must actually
+## carry Root Vigor's effect -- a prize specimen is not just a bigger
+## sprite, it is a heavier one, which is what lets it also throw/knock back
+## harder than an ordinary one (Kick/HeldItemThrow already read mass_kg).
+func test_pull_finishes_with_a_vigor_scaled_real_mass():
+	marker.growth = 1.0
+	marker.vigor = 1.0
+	add_child_autofree(marker)
+	marker.begin_pull()
+	marker._process(CropPull.DURATION_SECONDS + 0.01)
+	var reference_mass: float = ItemCatalog.new().make("carrot").mass_kg
+	assert_almost_eq(
+		_drops[0].item.mass_kg,
+		reference_mass * WildCropMarker.vigor_mass_multiplier(1.0),
+		0.0001,
+	)
 
 
 func test_pull_finishing_calls_on_harvested_before_freeing():
