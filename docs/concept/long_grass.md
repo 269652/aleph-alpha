@@ -742,6 +742,116 @@ framebuffer), so several of these needed a real, non-headless, off-screen
     (autumn) blades at 33%, 50% and 67% progress, not a hard snap between
     one uniform color and another.
 
+### A second atlas family: farmed wheat (2026-09-13)
+
+Requested directly: "I added a wheat sprite similar to the long grass
+blades which farmers can sow and harvest on their farm... give it the
+same pathtracing/bending animation as long grass blades (essentially the
+same)." Wheat was already a real, working crop before this: the
+autonomous Farm/Farmer (`npc_farm_production.md`) already tills, waters,
+and harvests real `"wheat"` through `FarmPlot`/`FarmPlotMarker` — but
+`IllustratedCropSprite` (the module that renders a farm plot's crop)
+never had a `"wheat"` entry, so a growing wheat plot showed bare tilled
+soil with nothing visibly growing in it at all. This closes that gap with
+real art, and gives it the bending mechanic above rather than
+`IllustratedCropSprite`'s flat single leaf sprite.
+
+**Real art, three sheets so far** (`assets/sprites/plants/wheat_spring.png`
+/`wheat_summer.png`/`wheat_autumn.png`, no winter delivered yet), each the
+IDENTICAL 10×10-cell, 1254×1254, chroma-keyed convention this doc's own
+grass atlases use — down to a real black background rather than the
+magenta `IllustratedCropSprite`'s carrot/potato sheets use.
+`tools/probe_wheat_sheet_bleed.gd` measured all three directly (mirroring
+the exact methodology `ROW_TOP_BLEED_PX_BY_SEASON` above was measured
+with) and found **zero** cross-row bleed on every row of every sheet — a
+genuine "measured, found none" result, unlike this doc's own grass art.
+
+**One tile is not "several thousand simultaneous cards."** The GPU-
+instanced `MultiMeshInstance2D`/Y-sort-banding machinery above exists
+specifically because grass renders across a whole chunk at field density
+(pillar 4). A single farm plot is one tile — nowhere near that scale — so
+`IllustratedWheatPatch` (`src/rendering/illustrated_wheat_patch.gd`)
+deliberately does NOT reuse that half of this system. Instead it slices
+each sheet into individually-cropped per-(season, row, column) textures
+(the same `SpriteSheetLoader`/`chroma_keyed` pipeline, reusing
+`IllustratedGrassPatch.ATLAS_COLUMNS`/`ATLAS_ROWS`/`DEFAULT_ATLAS_SIZE`/
+`BACKGROUND_KEY` directly rather than restating them), and `FarmPlotMarker`
+draws `IllustratedGrassPatch.CARD_COUNT` (8, reused directly — "essentially
+the same" density, not a separately eyeballed number) ordinary `Sprite2D`
+blade children instead of a MultiMesh — cheap at farm-plot density, and
+fully unit-testable under `--headless` (MultiMesh instance data is NOT,
+per this doc's own `fill_band` doc comment).
+
+**The bend/wind/walker-push shader is the SAME numbers, not a restated
+copy.** `IllustratedWheatPatch.SHADER_CODE` is built from
+`IllustratedGrassPatch.BEND_CURVE_EXPONENT`/`PHASE_SPREAD`/`AMPLITUDE_BASE`/
+`AMPLITUDE_VARIATION`/`AMPLITUDE_FREQUENCY`/`WIND_UV_AMPLITUDE`/
+`WALKER_PUSH_UV_AMPLITUDE` by direct reference, so the two shaders cannot
+silently drift apart on a future re-tune of one without the other — pinned
+by test (`test_illustrated_wheat_patch.gd` asserts the generated shader
+source literally embeds grass's own constant values). One real, necessary
+adaptation: a plain `Sprite2D`'s own local `UV.y` is 0 at the TEXTURE'S
+TOP and 1 at its bottom (standard canvas-item convention) — the OPPOSITE
+of `IllustratedGrassPatch`'s MultiMesh quad, whose own local `UV.y=0` is
+the root/bottom (verified empirically there). Every wheat frame is cropped
+root-at-the-image's-own-bottom like every illustrated sheet in this
+codebase, so wheat's own shader computes `top_t = 1.0 - UV.y` where
+grass's uses `UV.y` directly — the one deliberate, documented divergence,
+not an oversight. Deliberately NOT reused: `IllustratedGrassPatch`'s
+`season_tint` mixing — wheat's three sheets already ARE the season's own
+look (unlike grass's one-sheet-per-season-plus-a-tint-on-top design), so
+tinting on top of an already-seasonal sheet would double-apply the effect.
+
+**Growth picks the row, world season picks the sheet — the same two
+independent axes `atlas_region_for` already uses for grass.**
+`FarmPlot`'s own growth fraction (`time_growing / growth_time`, the exact
+value `IllustratedCropSprite`'s carrot/potato path already computes) maps
+to a row via `IllustratedWheatPatch.row_for_growth` (shoot at 0, full bush
+at `ATLAS_ROWS-1`, same shape as grass's own row math); `EarthChunkManager.
+current_season()` (already computed for the HUD) picks which of the
+delivered sheets to sample, with an undelivered/unrecognised season (today:
+any "winter") falling back to `DEFAULT_SEASON` ("summer" — wheat is
+realistically harvested well before winter, so a standing plot still
+reading golden through an early frost is the honest choice over inventing
+a fourth look with no real art behind it). `EarthChunkManager.
+step_farm_plots` forwards `current_season()` to every plot's own
+`advance()` call unconditionally (costs nothing extra, the same way
+`delta_seconds` itself is passed) — only a wheat crop's own art actually
+reads it.
+
+**One shared material, same as grass's own single instance.**
+`IllustratedWheatPatch.material()` is a module-level static singleton (no
+per-plot instance needed, since there is no per-instance atlas-region data
+to pack the way grass's MultiMesh needs) — `EarthChunkManager.
+set_wind_strength`/`set_grass_walker_position` each gained one line
+forwarding to it directly, so a single write updates every wheat crop on
+every farm in the world at once, exactly like grass's own single shared
+uniform.
+
+**Per-blade placement is scaled to the farm plot's own smaller footprint,**
+not a full open-field tile: `IllustratedWheatPatch.blade_specs_for_seed`
+reuses `IllustratedGrassPatch.card_specs_for_seed`'s exact deterministic
+per-blade offsets (same relative distribution shape, same seed), scaled
+down by the ratio of `ProceduralSoilSprite.SOIL_WORLD_WIDTH` (the real
+tilled-soil-mound width `FarmPlotMarker` already draws under any crop) to
+`IllustratedGrassPatch.WORLD_SIZE` (a full tile) — so wheat's blades spread
+across the mound's real visible footprint instead of spilling past it.
+Blade world size reuses `IllustratedCropSprite.LEAF_WORLD_SIZE` directly
+(the same target carrot/potato leaves already scale to), for the identical
+reason that constant exists: avoiding the "gigantic sprite" bug already
+found and fixed once for tree fruit and again for wild-crop leaves/roots.
+
+**Not independently verified by a live render** the way this doc's own
+grass history repeatedly was (`tools/probe_grass_per_blade_turn.gd` and
+similar) — every piece here is covered by a real, passing headless test
+(atlas slicing, region math, blade placement, shader-constant parity,
+shared-material wiring, the render-path switch on `crop_id`), but the
+actual on-screen bend DIRECTION (root pinned, tip swaying) rests on
+careful UV-orientation reasoning rather than a screenshot. Worth a quick
+in-game look on next launch — if it reads backwards (bending concentrated
+at the ROOT instead of the tip), the fix is a one-line flip of
+`IllustratedWheatPatch`'s `top_t` formula, not a deeper redesign.
+
 ## Status
 
 - ✅ Atlas-backed, GPU-instanced (banded `MultiMeshInstance2D`), per-blade
@@ -809,6 +919,16 @@ framebuffer), so several of these needed a real, non-headless, off-screen
   `test_illustrated_grass_patch.gd`'s `base_render_season`/`snow_overlay_
   threshold_for_seed`/`split_cards_by_snow_overlay` tests and
   `test_earth_chunk_manager.gd`'s `test_sync_grass_sprites_*` tests.
+- ✅ **A second atlas family, farmed wheat, reuses this system's exact
+  bend/wind/walker-push math (by direct constant reference) and atlas grid
+  convention (10×10, chroma-keyed) but NOT its MultiMesh/banding
+  machinery** — see "A second atlas family: farmed wheat" above for the
+  full mechanism, why a single farm plot doesn't need field-scale GPU
+  instancing, and the one deliberate UV-orientation divergence a plain
+  `Sprite2D` needs. `IllustratedWheatPatch`
+  (`src/rendering/illustrated_wheat_patch.gd`), wired into
+  `FarmPlotMarker`/`EarthChunkManager`. Not independently confirmed by a
+  live render — see that section's own closing note.
 - ✅ Growth stage is a real drawn row, not a scaled-down copy of the mature
   art — `IllustratedGrassPatch.atlas_region_for` maps `TallGrass.get_growth`
   (0..1) to one of the sheet's 10 rows, the per-card seed keeps choosing the

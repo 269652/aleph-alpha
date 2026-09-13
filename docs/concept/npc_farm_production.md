@@ -249,6 +249,19 @@ collection fallback, and real illustrated art (farm/sagewerk/storage/
 wooden_fence, replacing the crude procedural look) — see `docs/progress.md`'s
 Farming section for the exact real/tested account.
 
+✅ **The wheat CROP itself now has real art, too** (2026-09-13) — a real,
+honestly-scoped gap this doc's own "Real art" section above never actually
+closed: it covers the Farm/farmhouse structure sprite, not the crop
+growing in each of the Farmer's owned plots. `FarmPlotMarker`/
+`IllustratedCropSprite` (the class rendering every farm plot's crop) had
+no `"wheat"` entry at all until now, so a growing wheat plot showed bare
+tilled soil with nothing visible in it, whether tended by the Farmer or
+(hypothetically) a player. See [long_grass.md](long_grass.md)'s "A second
+atlas family: farmed wheat" for the full mechanism — wheat now renders as
+several small, real bending blades reusing long grass's own path-traced
+wind/walker-push shader math, using three real illustrated sheets
+(spring/summer/autumn) that turn with the world's own calendar season.
+
 ## Open questions
 
 - **Offscreen catch-up.** A Farm's plot state does not yet survive a chunk

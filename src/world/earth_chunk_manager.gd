@@ -41,6 +41,7 @@ const DecorationLod = preload("res://src/rendering/decoration_lod.gd")
 const DisplayScaling = preload("res://src/rendering/display_scaling.gd")
 const ProceduralGrassSprite = preload("res://src/rendering/procedural_grass_sprite.gd")
 const IllustratedGrassPatch = preload("res://src/rendering/illustrated_grass_patch.gd")
+const IllustratedWheatPatch = preload("res://src/rendering/illustrated_wheat_patch.gd")
 const FlowerPatch = preload("res://src/world/flower_patch.gd")
 const SeedDispersal = preload("res://src/world/seed_dispersal.gd")
 const SeedCaching = preload("res://src/gameplay/seed_caching.gd")
@@ -67,6 +68,7 @@ const LogisticsMarker = preload("res://src/rendering/logistics_marker.gd")
 const StructureStockStore = preload("res://src/emergence/structure_stock_store.gd")
 const IllustratedStructureSprite = preload("res://src/rendering/illustrated_structure_sprite.gd")
 const FarmerMarker = preload("res://src/rendering/farmer_marker.gd")
+const SettlementDemand = preload("res://src/emergence/settlement_demand.gd")
 
 ## How much of a tile a ground-cover tuft (grass, scrub, lichen) covers.
 ## Well under 1: a clump of grass sits ON the ground, it is not the ground.
@@ -748,6 +750,12 @@ const FARM_FENCE_GATE_RADIUS_TILES := SAGEWERK_STORAGE_PAIR_RADIUS_TILES
 ## only real Farm output (see FarmerMarker.CROP_ID), matching
 ## _SAGEWERK_LOGISTICS_ITEM_IDS' own one-list-per-producer shape.
 const _FARM_LOGISTICS_ITEM_IDS := ["wheat"]
+
+## How far (in tiles) a real "city_hall" must stand from a query point for
+## city_hall_demands_near to answer at all. Matches SAGEWERK_STORAGE_
+## PAIR_RADIUS_TILES' own magnitude -- "the same settlement," not a
+## City-Hall-specific number invented separately.
+const CITY_HALL_DEMAND_RADIUS_TILES := SAGEWERK_STORAGE_PAIR_RADIUS_TILES
 
 var _scrub_sims: Dictionary = {}  # Vector2i chunk_coord -> DesertScrub
 var _scrub_sprites: Dictionary = {}  # Vector2i chunk_coord -> {local cell Vector2i -> Sprite2D}
@@ -5223,6 +5231,50 @@ func furniture_at_global(global_x: int, global_y: int) -> String:
 	return chunk.furniture_modifications.get(_local_coord(global_x, global_y), "")
 
 
+## Furnishes a just-stamped house with a real, occupation-linked furniture
+## set (see HouseDecor, docs/concept/housing.md's "Occupation-themed decor"
+## section). Called by VillageRenderer right after stamp_structure_at_global
+## has already written the house's own floor/wall pieces into this same
+## chunk -- FurniturePlacement's real interior-floor rule needs those pieces
+## already on the chunk to answer RoomDetector.is_indoors truthfully, the
+## same ordering build_furniture_at_global's own caller already has to
+## respect. `ground_pieces` is the SAME local-cell dict stamp_structure_at_
+## global was given for this house -- never a second floor-detection pass --
+## and `furniture_ids` is tried in order against that house's own real floor
+## cells (in the order they appear in `ground_pieces`), skipping (not
+## aborting on) any cell FurniturePlacement itself refuses, so an odd-shaped
+## or too-small floor still gets partially furnished rather than emptied.
+## Returns how many pieces actually landed, 0 for an unloaded chunk.
+func furnish_house_at_global(
+	chunk_coord: Vector2i, origin_tile: Vector2i, ground_pieces: Dictionary, furniture_ids: Array
+) -> int:
+	var chunk: Chunk = _loaded_chunks.get(chunk_coord)
+	if chunk == null:
+		return 0
+	var floor_cells: Array[Vector2i] = []
+	for local_cell in ground_pieces:
+		if BuildingPiece.category_of(ground_pieces[local_cell]) != BuildingPiece.CATEGORY_FLOOR:
+			continue
+		var global_cell: Vector2i = origin_tile + local_cell
+		if _chunk_coord_for_tile(global_cell) == chunk_coord:
+			floor_cells.append(global_cell)
+	var placer := FurniturePlacement.new()
+	var placed := 0
+	var cell_index := 0
+	for piece_id in furniture_ids:
+		while cell_index < floor_cells.size():
+			var global_cell: Vector2i = floor_cells[cell_index]
+			cell_index += 1
+			var local := _local_coord(global_cell.x, global_cell.y)
+			if placer.can_place(piece_id, local, chunk.modifications, chunk.furniture_modifications):
+				chunk.furniture_modifications[local] = piece_id
+				placed += 1
+				break
+	if placed > 0:
+		_paint_furniture(chunk_coord, chunk)
+	return placed
+
+
 ## World's own ground-item container (see World._ground_items /
 ## _on_item_dropped) -- registered so fruit_near/take_fruit_at (bird
 ## endozoochory, see SeedEndozoochory) can see and consume real, already-
@@ -6146,6 +6198,7 @@ func set_wind_strength(strength: float) -> void:
 	_wind_sway.set_wind_strength(strength)
 	_tree_renderer.set_wind_strength(strength)
 	_illustrated_grass.set_wind_strength(strength)
+	IllustratedWheatPatch.set_wind_strength(strength)
 
 
 ## The season's tint on living green (see SeasonalFoliage, forwarded from
@@ -7049,10 +7102,15 @@ func harvest_farm_plot_at_global(global_x: int, global_y: int) -> Dictionary:
 ## unlike step_wild_crops/step_tall_grass, this deliberately does NOT scale
 ## by SeasonCycle's growth_modifier -- farming.md frames a tilled, tended
 ## plot as the player's own override of the ambient vegetation model, not a
-## wild population subject to the same seasonal modulation.
+## wild population subject to the same seasonal modulation. Also forwards
+## current_season() to every plot -- only a WHEAT crop's own art actually
+## reads it (FarmPlotMarker._redraw_wheat picks which of its three real
+## sheets to sample from), but it costs nothing to pass unconditionally,
+## the same way delta_seconds itself is.
 func step_farm_plots(delta_seconds: float) -> void:
+	var season := current_season()
 	for marker in _farm_plots.values():
-		marker.advance(delta_seconds)
+		marker.advance(delta_seconds, season)
 
 
 func _build_farm_plot_marker(tile: Vector2i) -> FarmPlotMarker:
@@ -7065,9 +7123,14 @@ func _build_farm_plot_marker(tile: Vector2i) -> FarmPlotMarker:
 
 
 ## One shared shader-uniform write per frame makes nearby blades yield to a
-## walker; individual cards intentionally have no process callbacks.
+## walker; individual cards intentionally have no process callbacks. Also
+## pushes to IllustratedWheatPatch's own shared material (see docs/concept/
+## long_grass.md's "A second atlas family: farmed wheat") -- one write here
+## updates every wheat crop on every farm at once, the same "one shared
+## uniform" shape grass's own single call already uses.
 func set_grass_walker_position(world_position: Vector2) -> void:
 	_illustrated_grass.set_walker_position(world_position)
+	IllustratedWheatPatch.set_walker_position(world_position)
 
 
 ## How grown the tall-grass patch at `pixel_position` is (0..1, 1 mature), or
@@ -13355,6 +13418,25 @@ func _apply_settlement_build_decision(chunk_coord: Vector2i) -> void:
 		_construction_project_store, market, chunk_coord, Vector2i.ZERO, household_ids[0],
 		present_structure_ids, _recipe_book, shortfalls, spare_capacity
 	)
+
+
+## A City Hall's own real "compute demands" step (see docs/concept/
+## npc_role_consensus.md's "City Hall" section): [] if no real "city_hall"
+## structure stands within CITY_HALL_DEMAND_RADIUS_TILES of
+## (global_x, global_y) -- a silent, discoverable "nothing to convene
+## about" absence, not an invented placeholder demand. Otherwise reads the
+## SAME real settlement state _apply_settlement_build_decision already
+## does (market.stock, _present_structure_ids_for_settlement_chunk) and
+## hands it to SettlementDemand.demands_for -- no second, parallel needs
+## computation.
+func city_hall_demands_near(global_x: int, global_y: int) -> Array:
+	if not has_structure_near(global_x, global_y, "city_hall", CITY_HALL_DEMAND_RADIUS_TILES):
+		return []
+	var chunk_coord := _chunk_coord_for_tile(Vector2i(global_x, global_y))
+	var settlement_id := EntityRef.for_settlement(chunk_coord)
+	var market := _market_store.market_for(settlement_id)
+	var present_structure_ids := _present_structure_ids_for_settlement_chunk(chunk_coord)
+	return SettlementDemand.demands_for(market.stock, present_structure_ids, _recipe_book)
 
 
 ## Closes docs/concept/timber_construction.md's own previously-named gap:

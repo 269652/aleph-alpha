@@ -56,6 +56,10 @@ const PIECE_IDS: Array[String] = [
 	# Interior furniture (see docs/concept/housing.md). Appended, not
 	# interleaved, per this file's existing convention.
 	"wood_table", "wood_chair", "wood_bed", "wood_rug", "wood_bookshelf",
+	# Two more furniture pieces (docs/concept/housing.md's "Occupation-
+	# themed decor" section) -- needed so the 8 NPC occupations each get a
+	# genuinely distinct set. Appended, not interleaved.
+	"couch", "photo_frame",
 ]
 
 ## Per-piece definition.
@@ -222,6 +226,21 @@ const _PIECES := {
 	"wood_rug": {
 		"category": CATEGORY_FURNITURE, "material": MATERIAL_WOOD,
 		"encloses": false, "walkable": true, "durability": 15.0,
+		"cost": {"wood": 1}, "support_capacity": 0.0,
+	},
+	# A couch seats more than a chair, so it costs and survives more than
+	# one -- between wood_chair and wood_bookshelf on the same progression,
+	# never bed-tier (a couch is a sitting piece, not a sleeping one).
+	"couch": {
+		"category": CATEGORY_FURNITURE, "material": MATERIAL_WOOD,
+		"encloses": false, "walkable": true, "durability": 24.0,
+		"cost": {"wood": 3}, "support_capacity": 0.0,
+	},
+	# The smallest, cheapest, most fragile real piece furnished here -- a
+	# framed picture hung on a wall, even lighter than a woven rug.
+	"photo_frame": {
+		"category": CATEGORY_FURNITURE, "material": MATERIAL_WOOD,
+		"encloses": false, "walkable": true, "durability": 8.0,
 		"cost": {"wood": 1}, "support_capacity": 0.0,
 	},
 }
