@@ -4048,6 +4048,44 @@ func test_update_shows_the_roof_again_once_the_player_leaves_the_room():
 	roof_layer.free()
 
 
+# -- update()'s per-frame lookups are cached, not re-run (FPS regression -----
+# round 15). update() runs every frame; its roof check re-ran a full room
+# flood-fill over the chunk's piece grid, and its geology check a 9-tile
+# biome + entrance scan, for a player standing perfectly still -- ~3.8 ms
+# of every frame measured live. Both keep their exact per-frame semantics:
+# the roof still re-checks when a structure changes around a stationary
+# player (the bug _update_roof_visibility's own doc comment records), it
+# just answers from a cache while nothing it depends on has changed.
+
+func test_update_roof_visibility_reuses_its_room_lookup_while_nothing_changes():
+	var roof_layer := TileMapLayer.new()
+	manager.set_roof_layer(roof_layer)
+	var chunk_coord := _chunk_coord_for_tile(_berlin_tile)
+	manager._load_chunk(chunk_coord)
+	for _i in 3:
+		manager._update_roof_visibility(_berlin_tile)
+	assert_eq(manager.room_lookups, 1, "standing still on an unchanged chunk: one real room lookup, then the cached answer")
+
+	var interior_tile := _stamp_test_hut(chunk_coord)
+	manager._update_roof_visibility(_berlin_tile)
+	assert_eq(manager.room_lookups, 2, "a structure change re-runs the lookup even though the player never moved")
+
+	manager._update_roof_visibility(interior_tile)
+	assert_eq(manager.room_lookups, 3, "and so does a new tile")
+	assert_eq(roof_layer.get_cell_source_id(interior_tile), -1, "the roof over the player's room is hidden, as before")
+	roof_layer.free()
+
+
+func test_update_geology_reveal_rescans_for_a_cave_entrance_only_on_a_new_tile():
+	manager._load_chunk(_chunk_coord_for_tile(_berlin_tile))
+	for _i in 3:
+		manager._update_geology_reveal(_berlin_tile)
+	assert_eq(manager.cave_entrance_scans, 1, "the same tile is scanned once, then answered from the cache")
+
+	manager._update_geology_reveal(_berlin_tile + Vector2i(1, 0))
+	assert_eq(manager.cave_entrance_scans, 2, "a new tile is a new scan")
+
+
 # -- furniture layer (docs/concept/housing.md's "Interior furniture" ---------
 # section): shipped UNTESTED earlier this session (be758897/0f9d3ec3/
 # c3a98c6a, per that doc's own explicit "do not merge on the strength of

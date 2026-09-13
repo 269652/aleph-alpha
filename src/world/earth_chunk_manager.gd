@@ -5317,6 +5317,21 @@ func _piece_grid_for(chunk: Chunk) -> Dictionary:
 	return grid
 
 
+## update()'s per-frame lookups, memoised (FPS regression round 15) -- see
+## _update_roof_visibility and _update_geology_reveal. The two counters are
+## diagnostics pinned by test_update_roof_visibility_reuses_its_room_lookup_
+## while_nothing_changes / test_update_geology_reveal_rescans_for_a_cave_
+## entrance_only_on_a_new_tile: how many REAL lookups have been paid.
+var room_lookups := 0
+var _roof_lookup_chunk = null
+var _roof_lookup_cell := Vector2i.ZERO
+var _roof_lookup_hash := 0
+var _roof_lookup_room: Array = []
+var cave_entrance_scans := 0
+var _cave_scan_tile = null
+var _cave_scan_result = null
+
+
 ## Hides the roof over whichever room (if any) the player is currently
 ## standing in, and restores whichever room was PREVIOUSLY hidden the moment
 ## the player is no longer in it. Called every frame from update(), same as
@@ -5338,7 +5353,26 @@ func _update_roof_visibility(player_global_tile: Vector2i) -> void:
 	var room_cells: Array = []
 	if chunk != null:
 		var local_cell := _local_coord(player_global_tile.x, player_global_tile.y)
-		room_cells = _room_detector.room_containing(local_cell, _piece_grid_for(chunk))
+		# The room lookup is a GDScript flood-fill over the chunk's whole
+		# piece grid, and this runs every frame (FPS regression round 15:
+		# ~3.8 ms of update() a frame for a standing player). It is memoised
+		# on exactly what it reads -- the chunk, the player's cell and the
+		# modifications' own hash -- so the stationary-stamp case the doc
+		# comment above records still re-checks (a stamp changes the hash),
+		# while an unchanged frame answers in O(1) plus one C++ hash.
+		var structure_hash := chunk.modifications.hash()
+		if (
+			chunk_coord == _roof_lookup_chunk and local_cell == _roof_lookup_cell
+			and structure_hash == _roof_lookup_hash
+		):
+			room_cells = _roof_lookup_room
+		else:
+			room_cells = _room_detector.room_containing(local_cell, _piece_grid_for(chunk))
+			room_lookups += 1
+			_roof_lookup_chunk = chunk_coord
+			_roof_lookup_cell = local_cell
+			_roof_lookup_hash = structure_hash
+			_roof_lookup_room = room_cells
 
 	if chunk_coord == _hidden_roof_chunk_coord and room_cells == _hidden_roof_room_cells:
 		return  # nothing changed -- still in the same room (or still outside)
@@ -5379,7 +5413,17 @@ const CAVE_ENTRY_TRIGGER_RADIUS := 1
 ## wired here today (_topsoil_strata); deeper layers are not yet reachable
 ## (see geology.md's Status).
 func _update_geology_reveal(player_global_tile: Vector2i) -> void:
-	var entrance_tile = _nearby_cave_entrance(player_global_tile)
+	# Nine biome reads and entrance rolls a frame for a player who has not
+	# moved (FPS regression round 15) -- entrance placement is a pure
+	# function of the tile, so the answer is kept until the tile changes.
+	var entrance_tile
+	if player_global_tile == _cave_scan_tile:
+		entrance_tile = _cave_scan_result
+	else:
+		entrance_tile = _nearby_cave_entrance(player_global_tile)
+		cave_entrance_scans += 1
+		_cave_scan_tile = player_global_tile
+		_cave_scan_result = entrance_tile
 
 	if entrance_tile == _revealed_cave_entrance_tile:
 		return  # nothing changed -- still at the same entrance (or still away from one)
