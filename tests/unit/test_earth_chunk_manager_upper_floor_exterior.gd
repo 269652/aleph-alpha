@@ -28,6 +28,7 @@ extends GutTest
 const EarthChunkManager = preload("res://src/world/earth_chunk_manager.gd")
 const HouseBlueprint = preload("res://src/gameplay/house_blueprint.gd")
 const BuildingPiece = preload("res://src/gameplay/building_piece.gd")
+const ProceduralBuildingPieceSprite = preload("res://src/rendering/procedural_building_piece_sprite.gd")
 
 const SHAPE := "tower_keep"  # 5x5, the smallest real two-story catalog shape
 const SEED := 7
@@ -105,6 +106,16 @@ func _atlas_for(piece_id: String) -> Vector2i:
 	return manager._terrain_renderer.atlas_coords_for_modification(piece_id)
 
 
+## The tile the exterior band draws a facade cell with: the facade family's
+## UPPER storey (docs/concept/building.md "How a house reads from above",
+## point 6), never the plain interior wall tile.
+func _upper_facade_atlas_for(piece_id: String) -> Vector2i:
+	return manager._terrain_renderer.atlas_coords_for_facade_variant(
+		BuildingPiece.material_of(piece_id), BuildingPiece.category_of(piece_id),
+		ProceduralBuildingPieceSprite.FACADE_UPPER
+	)
+
+
 func _painted(layer: TileMapLayer, global_cell: Vector2i) -> bool:
 	return layer.get_cell_source_id(global_cell) != -1
 
@@ -147,8 +158,12 @@ func test_from_outside_the_upper_facade_band_is_drawn_one_row_up():
 		var shifted: Vector2i = _origin + cell + Vector2i(0, -1)
 		assert_true(_painted(upper_layer, shifted), "facade cell %s should be drawn one row up at %s" % [str(cell), str(shifted)])
 		assert_eq(
+			upper_layer.get_cell_atlas_coords(shifted), _upper_facade_atlas_for(house.upper[cell]),
+			"what is drawn one row up is the FACADE piece itself, as the upper-storey facade variant, not whatever natively sits at that upper cell"
+		)
+		assert_ne(
 			upper_layer.get_cell_atlas_coords(shifted), _atlas_for(house.upper[cell]),
-			"what is drawn one row up must be the FACADE piece itself, not whatever natively sits at that upper cell"
+			"...and never the plain interior wall tile the street should not see"
 		)
 
 

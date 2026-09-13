@@ -271,3 +271,106 @@ func test_stairs_show_a_run_of_treads():
 	var floor_tile: Image = generator.generate_image("wood_floor")
 	var cell_area := TerrainRenderer.ART_TILE_SIZE * TerrainRenderer.ART_TILE_SIZE
 	assert_gt(_pixel_diff_count(image, floor_tile), cell_area / 3, "a flight of stairs fills most of its cell")
+
+
+# -- facade variants: the face a house shows the street ---------------------
+#
+# docs/concept/building.md "How a house reads from above", point 6. Reported
+# directly: NPC buildings "look poor and basic; not like sophisticated
+# architecture." From above, a house's only visible wall is its facade band
+# (the southernmost cells, the roof stops short of them) -- and it was drawn
+# with the same log/brick tile as an interior wall, so a whole village read
+# as brown boxes. A facade cell gets its own art: plaster between dark
+# timbers (wood/timber) or dressed ashlar over a plinth (stone), the roof's
+# own overhang shadow along the top, a sill and shutters on a window, a
+# step under a door -- and the upper storey's band, drawn one row up, its
+# own variant without the ground plinth. Generated per (material, category,
+# storey); pinned here like every other family in this file.
+
+func test_facade_variants_exist_for_every_material_category_and_storey():
+	for material in [BuildingPiece.MATERIAL_WOOD, BuildingPiece.MATERIAL_STONE, BuildingPiece.MATERIAL_TIMBER]:
+		for category in [BuildingPiece.CATEGORY_WALL, BuildingPiece.CATEGORY_WINDOW, BuildingPiece.CATEGORY_DOOR]:
+			for storey in [ProceduralBuildingPieceSprite.FACADE_GROUND, ProceduralBuildingPieceSprite.FACADE_UPPER]:
+				var image: Image = generator.generate_facade_variant_image(material, category, storey)
+				assert_eq(image.get_width(), TerrainRenderer.ART_TILE_SIZE, "%s %s %d" % [material, category, storey])
+				assert_eq(image.get_height(), TerrainRenderer.ART_TILE_SIZE)
+				for y in image.get_height():
+					for x in image.get_width():
+						assert_eq(image.get_pixel(x, y).a, 1.0, "a facade cell is a ground-plane tile, never see-through")
+
+
+func test_a_facade_wall_is_a_different_face_from_the_plain_wall():
+	var cell_area := TerrainRenderer.ART_TILE_SIZE * TerrainRenderer.ART_TILE_SIZE
+	for material in [BuildingPiece.MATERIAL_WOOD, BuildingPiece.MATERIAL_STONE]:
+		var plain: Image = generator.generate_image("%s_wall" % material)
+		var facade: Image = generator.generate_facade_variant_image(material, BuildingPiece.CATEGORY_WALL, ProceduralBuildingPieceSprite.FACADE_GROUND)
+		assert_gt(_pixel_diff_count(plain, facade), cell_area / 2, "%s: the street face must not be the interior wall's tile" % material)
+
+
+func test_the_ground_and_upper_storey_facades_differ():
+	var ground := generator.generate_facade_variant_image(BuildingPiece.MATERIAL_WOOD, BuildingPiece.CATEGORY_WALL, ProceduralBuildingPieceSprite.FACADE_GROUND)
+	var upper := generator.generate_facade_variant_image(BuildingPiece.MATERIAL_WOOD, BuildingPiece.CATEGORY_WALL, ProceduralBuildingPieceSprite.FACADE_UPPER)
+	assert_gt(_pixel_diff_count(ground, upper), TerrainRenderer.ART_TILE_SIZE, "the upper band has no plinth; the two storeys must not be one repeated row")
+
+
+## The roof's overhang casts a shadow down the top of every facade cell --
+## the one cue that turns a flat band into a wall standing under a roof.
+## Pinned against the same face WITHOUT its eave shadow (a door's dark leaf
+## fills the cell's middle, so "top darker than middle" is the wrong
+## contract): every eave row is darker than it would be unshaded, the
+## shadow fades downward, and nothing below the eave rows is touched.
+func test_every_facade_cell_is_shaded_under_the_eave():
+	var rows := ProceduralBuildingPieceSprite.EAVE_SHADOW_ROWS
+	for category in [BuildingPiece.CATEGORY_WALL, BuildingPiece.CATEGORY_WINDOW, BuildingPiece.CATEGORY_DOOR]:
+		var shaded := generator.generate_facade_variant_image(BuildingPiece.MATERIAL_WOOD, category, ProceduralBuildingPieceSprite.FACADE_GROUND)
+		var unshaded := generator.generate_facade_variant_image(BuildingPiece.MATERIAL_WOOD, category, ProceduralBuildingPieceSprite.FACADE_GROUND, false)
+		for y in rows:
+			assert_lt(
+				_mean_brightness_of_rows(shaded, y, y + 1), _mean_brightness_of_rows(unshaded, y, y + 1),
+				"%s row %d: the eave should darken it" % [category, y]
+			)
+		# The fade is a contract on how much each row is darkened, not on the
+		# rows' own content (a door's lintel sits inside the eave rows).
+		var darkening_at_top := _mean_brightness_of_rows(shaded, 0, 1) / _mean_brightness_of_rows(unshaded, 0, 1)
+		var darkening_at_foot := _mean_brightness_of_rows(shaded, rows - 1, rows) / _mean_brightness_of_rows(unshaded, rows - 1, rows)
+		assert_lt(darkening_at_top, darkening_at_foot, "%s: darkest right under the eave, fading down" % category)
+		assert_true(
+			_rows_identical(shaded, unshaded, rows, TerrainRenderer.ART_TILE_SIZE),
+			"%s: below the eave rows the face is untouched by the shadow" % category
+		)
+
+
+func test_a_facade_door_still_carries_a_door_and_a_facade_window_a_pane():
+	var door := generator.generate_facade_variant_image(BuildingPiece.MATERIAL_WOOD, BuildingPiece.CATEGORY_DOOR, ProceduralBuildingPieceSprite.FACADE_GROUND)
+	var window := generator.generate_facade_variant_image(BuildingPiece.MATERIAL_WOOD, BuildingPiece.CATEGORY_WINDOW, ProceduralBuildingPieceSprite.FACADE_GROUND)
+	var wall := generator.generate_facade_variant_image(BuildingPiece.MATERIAL_WOOD, BuildingPiece.CATEGORY_WALL, ProceduralBuildingPieceSprite.FACADE_GROUND)
+	var mid := TerrainRenderer.ART_TILE_SIZE / 2
+	assert_eq(door.get_pixel(mid, mid), generator.generate_image("wood_door").get_pixel(mid, mid), "the door leaf itself is the same door")
+	assert_eq(window.get_pixel(mid + 2, mid + 2), generator.generate_image("wood_window").get_pixel(mid + 2, mid + 2), "the pane is the same glass")
+	assert_gt(_pixel_diff_count(door, wall), TerrainRenderer.ART_TILE_SIZE)
+	assert_gt(_pixel_diff_count(window, wall), TerrainRenderer.ART_TILE_SIZE)
+
+
+func test_facade_variants_are_deterministic():
+	var a := generator.generate_facade_variant_image(BuildingPiece.MATERIAL_STONE, BuildingPiece.CATEGORY_WINDOW, ProceduralBuildingPieceSprite.FACADE_UPPER)
+	var b := generator.generate_facade_variant_image(BuildingPiece.MATERIAL_STONE, BuildingPiece.CATEGORY_WINDOW, ProceduralBuildingPieceSprite.FACADE_UPPER)
+	assert_eq(a.get_data(), b.get_data())
+
+
+func _rows_identical(a: Image, b: Image, from_row: int, to_row: int) -> bool:
+	for y in range(from_row, to_row):
+		for x in a.get_width():
+			if a.get_pixel(x, y) != b.get_pixel(x, y):
+				return false
+	return true
+
+
+func _mean_brightness_of_rows(image: Image, from_row: int, to_row: int) -> float:
+	var total := 0.0
+	var count := 0
+	for y in range(from_row, to_row):
+		for x in image.get_width():
+			var c := image.get_pixel(x, y)
+			total += (c.r + c.g + c.b) / 3.0
+			count += 1
+	return total / float(maxi(count, 1))

@@ -63,6 +63,7 @@ const CaterpillarRenderer = preload("res://src/rendering/caterpillar_renderer.gd
 const MillipedeRenderer = preload("res://src/rendering/millipede_renderer.gd")
 const GrassFrogRenderer = preload("res://src/rendering/grass_frog_renderer.gd")
 const LumberjackMarker = preload("res://src/rendering/lumberjack_marker.gd")
+const ProceduralBuildingPieceSprite = preload("res://src/rendering/procedural_building_piece_sprite.gd")
 const BuilderMarker = preload("res://src/rendering/builder_marker.gd")
 const LogisticsMarker = preload("res://src/rendering/logistics_marker.gd")
 const StructureStockStore = preload("res://src/emergence/structure_stock_store.gd")
@@ -5667,19 +5668,23 @@ func _paint_upper_floor(chunk_coord: Vector2i, chunk: Chunk, house_cells: Dictio
 		return
 	for local in _upper_floor_painted.get(chunk_coord, []):
 		_upper_floor_layer.erase_cell(chunk_coord * CHUNK_SIZE + local)
+	# desired: local cell -> atlas coords. The exterior band is painted from
+	# the facade family's UPPER storey (docs/concept/building.md "How a
+	# house reads from above", point 6 -- a string course instead of the
+	# ground band's plinth, so the two bands read as two storeys, not one
+	# row repeated); the storey seen in place from upstairs is its plain
+	# wall/window art, the same as the ground room's own interior.
 	var desired := {}
 	var upstairs := _current_player_floor == 1
 	for local in chunk.upper_floor_modifications:
 		var piece_id: String = chunk.upper_floor_modifications[local]
 		if house_cells.has(local):
 			if upstairs:
-				desired[local] = piece_id
+				desired[local] = _terrain_renderer.atlas_coords_for_modification(piece_id)
 		elif _is_upper_facade_cell(chunk, local) and local.y > 0:
-			desired[local + Vector2i(0, -1)] = piece_id
+			desired[local + Vector2i(0, -1)] = _upper_facade_atlas_coords(piece_id)
 	for local in desired:
-		_upper_floor_layer.set_cell(
-			chunk_coord * CHUNK_SIZE + local, 0, _terrain_renderer.atlas_coords_for_modification(desired[local])
-		)
+		_upper_floor_layer.set_cell(chunk_coord * CHUNK_SIZE + local, 0, desired[local])
 	_upper_floor_painted[chunk_coord] = desired.keys()
 
 
@@ -5689,6 +5694,18 @@ func _paint_upper_floor(chunk_coord: Vector2i, chunk: Chunk, house_cells: Dictio
 ## chunk is all this layer ever sees).
 func _is_upper_facade_cell(chunk: Chunk, local: Vector2i) -> bool:
 	return not chunk.upper_floor_modifications.has(local + Vector2i(0, 1))
+
+
+## The tile an upper facade cell is drawn with from outside: the facade
+## family's upper-storey variant for a wall/window/door, its plain tile
+## for anything else (nothing else is ever a facade cell in practice).
+func _upper_facade_atlas_coords(piece_id: String) -> Vector2i:
+	var category := BuildingPiece.category_of(piece_id)
+	if TerrainRenderer.FACADE_VARIANT_CATEGORIES.has(category):
+		return _terrain_renderer.atlas_coords_for_facade_variant(
+			BuildingPiece.material_of(piece_id), category, ProceduralBuildingPieceSprite.FACADE_UPPER
+		)
+	return _terrain_renderer.atlas_coords_for_modification(piece_id)
 
 
 ## Interior furniture on the upper storey (docs/concept/housing.md) --

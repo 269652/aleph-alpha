@@ -168,7 +168,7 @@ const ATLAS_COLUMNS := 64
 ## still being decorrelated between neighbouring tiles.
 const _VARIANT_SALT := 90210
 
-const ATLAS_VERSION := "art_resolution_v24_trail_tile"
+const ATLAS_VERSION := "art_resolution_v25_facade_variants"
 
 ## Overridable so tests never touch the real user:// cache (see
 ## TerrainAtlasCache) -- production code (EarthChunkManager) never sets
@@ -753,6 +753,72 @@ func _trail_linear() -> int:
 	return _roof_variant_base_linear() + _roof_variant_family_size()
 
 
+## Facade variants (docs/concept/building.md "How a house reads from
+## above", point 6; ProceduralBuildingPieceSprite.generate_facade_variant_
+## image): the face a house shows the street, one tile per material x
+## category x storey, appended after the trail tile so no other family's
+## index shifts. Which cells USE them is decided at paint time from context
+## (see _atlas_coords_for_piece_in_context), exactly like the roof's pitch.
+const FACADE_VARIANT_MATERIALS: Array[String] = [
+	BuildingPiece.MATERIAL_WOOD, BuildingPiece.MATERIAL_STONE, BuildingPiece.MATERIAL_TIMBER
+]
+const FACADE_VARIANT_CATEGORIES: Array[String] = [
+	BuildingPiece.CATEGORY_WALL, BuildingPiece.CATEGORY_WINDOW, BuildingPiece.CATEGORY_DOOR
+]
+
+
+func _facade_variant_base_linear() -> int:
+	return _trail_linear() + 1
+
+
+func _facade_variant_family_size() -> int:
+	return (
+		FACADE_VARIANT_MATERIALS.size() * FACADE_VARIANT_CATEGORIES.size()
+		* ProceduralBuildingPieceSprite.FACADE_STOREY_COUNT
+	)
+
+
+func _facade_variant_linear(material: String, category: String, storey: int) -> int:
+	var material_ordinal: int = maxi(FACADE_VARIANT_MATERIALS.find(material), 0)
+	var category_ordinal: int = maxi(FACADE_VARIANT_CATEGORIES.find(category), 0)
+	return (
+		_facade_variant_base_linear()
+		+ material_ordinal * FACADE_VARIANT_CATEGORIES.size() * ProceduralBuildingPieceSprite.FACADE_STOREY_COUNT
+		+ category_ordinal * ProceduralBuildingPieceSprite.FACADE_STOREY_COUNT
+		+ storey
+	)
+
+
+func atlas_coords_for_facade_variant(material: String, category: String, storey: int) -> Vector2i:
+	var safe_storey := clampi(storey, 0, ProceduralBuildingPieceSprite.FACADE_STOREY_COUNT - 1)
+	return _grid_coords(_facade_variant_linear(material, category, safe_storey))
+
+
+## Every atlas slot any family reserves -- the last family's end. The one
+## number build_tile_set and the atlas-size test share.
+func _atlas_total_cells() -> int:
+	return _facade_variant_base_linear() + _facade_variant_family_size()
+
+
+## A building piece's tile as it should be painted at `local` in `chunk`:
+## a wall, window or door with nothing of its own building directly south
+## of it is the building's street face -- the southernmost cell of its
+## column, the same rule HouseBlueprint._facade_cells uses to leave that
+## row unroofed -- and is painted from the facade family (ground storey);
+## every other piece is its plain tile. A notched or L-shaped house shows a
+## face on every south-facing run, the same way it is roofed.
+func _atlas_coords_for_piece_in_context(chunk: Chunk, local: Vector2i, tile_id: String) -> Vector2i:
+	if BuildingPiece.has_piece(tile_id):
+		var category := BuildingPiece.category_of(tile_id)
+		if FACADE_VARIANT_CATEGORIES.has(category):
+			var south: String = chunk.modifications.get(local + Vector2i(0, 1), "")
+			if not BuildingPiece.has_piece(south):
+				return atlas_coords_for_facade_variant(
+					BuildingPiece.material_of(tile_id), category, ProceduralBuildingPieceSprite.FACADE_GROUND
+				)
+	return atlas_coords_for_modification(tile_id)
+
+
 func _roof_variant_linear(material: String, band: int, mask: int) -> int:
 	var material_ordinal: int = maxi(ROOF_VARIANT_MATERIALS.find(material), 0)
 	return (
@@ -1054,9 +1120,21 @@ func _build_atlas_pixels(biome_count: int, rows: int) -> Image:
 				)
 				_blit_tile(image, roof_image, _roof_variant_linear(roof_material, band, edge_mask))
 
+	# Facade variants (see _facade_variant_base_linear): one tile per
+	# material x category x storey -- the face a house shows the street,
+	# chosen per cell at paint time from context, like the roof's pitch.
+	for facade_material in FACADE_VARIANT_MATERIALS:
+		for facade_category in FACADE_VARIANT_CATEGORIES:
+			for storey in ProceduralBuildingPieceSprite.FACADE_STOREY_COUNT:
+				var facade_image := _building_piece_sprite_generator.generate_facade_variant_image(
+					facade_material, facade_category, storey
+				)
+				_blit_tile(image, facade_image, _facade_variant_linear(facade_material, facade_category, storey))
+
 	# The trail tile (see TRAIL_TILE_ID) -- flat and hard-edged like every
-	# other modification tile except EARTH_TILE_ID, appended last so it
-	# shifts no other family's index.
+	# other modification tile except EARTH_TILE_ID, appended after every
+	# per-piece family (the facade family above is appended after IT, by
+	# base index), so it shifts no other family's index.
 	var trail_image := Image.create(ART_TILE_SIZE, ART_TILE_SIZE, false, Image.FORMAT_RGBA8)
 	trail_image.fill(TRAIL_COLOR)
 	_blit_tile(image, trail_image, _trail_linear())
@@ -1084,7 +1162,7 @@ func build_tile_set() -> TileSet:
 		return _tile_set_cache[cached_key]
 
 	var biome_count := BiomeClassifier.KNOWN_BIOMES.size()
-	var total_cells := _trail_linear() + 1
+	var total_cells := _atlas_total_cells()
 	var rows := int(ceil(float(total_cells) / ATLAS_COLUMNS))
 
 	var image: Image = null
@@ -1234,7 +1312,7 @@ func paint(
 					else:
 						atlas_coords = atlas_coords_for_earth_blend(earth_blend.partner, earth_blend.directions, variant)
 				else:
-					atlas_coords = atlas_coords_for_modification(tile_id)
+					atlas_coords = _atlas_coords_for_piece_in_context(chunk, local, tile_id)
 			else:
 				var biome_name: String = chunk.biome[y * chunk.width + x]
 				var variant := variant_index_for_position(global.x, global.y)

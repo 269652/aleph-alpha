@@ -20,7 +20,11 @@ extends RefCounted
 ##
 ## Plus the interior pieces (docs/concept/housing.md): seven furniture
 ## tiles and the stairs, each an OBJECT drawn on the room's own floor rather
-## than a ground tile of its own -- see _furniture_image.
+## than a ground tile of its own -- see _furniture_image. And the FACADE
+## family (generate_facade_variant_image): the face a house shows the
+## street, painted from context at paint time like the roof's own pitch
+## variants -- see docs/concept/building.md "How a house reads from above",
+## point 6.
 
 const PixelPalette = preload("res://src/rendering/pixel_palette.gd")
 const BuildingPiece = preload("res://src/gameplay/building_piece.gd")
@@ -406,6 +410,156 @@ func _rim_edges(image: Image, mask: int) -> void:
 		for x in ROOF_RIM_THICKNESS:
 			for y in SIZE:
 				image.set_pixel(SIZE - 1 - x, y, _scaled(image.get_pixel(SIZE - 1 - x, y), ROOF_RIM_DARKEN))
+
+
+## -- Facade variants (docs/concept/building.md "How a house reads from ----
+## -- above", point 6) --------------------------------------------------------
+##
+## Reported directly: NPC buildings "look poor and basic; not like
+## sophisticated architecture." From above, the only wall a house ever
+## shows is its facade band (the southernmost cells, which the roof stops
+## short of) -- and it was painted with the same log/brick tile as an
+## interior wall, so a whole village read as brown boxes with a strip of
+## windows. A facade cell gets its own face: for wood and timber, plaster
+## between dark timbers -- the half-timbered look every real top-down
+## village leans on -- with a diagonal brace in a plain panel; for stone,
+## dressed ashlar courses over a darker plinth. Every variant carries the
+## roof's own overhang shadow down its top rows (EAVE_SHADOW_ROWS), the one
+## cue that turns a flat band into a wall standing UNDER a roof. A window
+## keeps the exact pane _window_image draws, plus a sill and shutters; a
+## door keeps the exact leaf _door_image draws, plus a stone step. The
+## ground storey shows a plinth at its foot; the upper storey (a two-story
+## house's band, drawn one row up over the roof -- see housing.md) shows a
+## string course instead, so two bands never read as one repeated row.
+## Painted from CONTEXT (TerrainRenderer.paint decides which wall cells are
+## facade), so no piece id, no save format and no blueprint changes.
+const FACADE_GROUND := 0
+const FACADE_UPPER := 1
+const FACADE_STOREY_COUNT := 2
+
+## How many rows down from the top the eave's shadow reaches.
+const EAVE_SHADOW_ROWS := 3
+const _EAVE_SHADOW_FACTORS: Array[float] = [0.55, 0.68, 0.84]
+
+const _PLASTER := Color(0.86, 0.80, 0.66)
+const _SHUTTER := Color(0.20, 0.36, 0.24)
+const _TIMBER_FRAME_THICKNESS := 3
+const _PLINTH_ROWS := 5
+const _STEP_ROWS := 3
+
+
+## `with_eave_shadow` exists so the eave's shadow can be pinned against the
+## same face without it; the game always draws the shaded face.
+func generate_facade_variant_image(material: String, category: String, storey: int, with_eave_shadow: bool = true) -> Image:
+	var is_stone := material == BuildingPiece.MATERIAL_STONE
+	var base := _base_color_for(material, is_stone)
+	var image := _facade_wall_image(base, is_stone, storey, category == BuildingPiece.CATEGORY_WALL)
+	match category:
+		BuildingPiece.CATEGORY_WINDOW:
+			_draw_facade_window(image, base)
+		BuildingPiece.CATEGORY_DOOR:
+			_draw_facade_door(image, base, is_stone)
+	if with_eave_shadow:
+		_shade_eave(image)
+	return image
+
+
+## The street face itself, before any opening: half-timbered plaster
+## (wood/timber -- the frame in the material's own wood tone, so a timber
+## house's paler sawn frame still tells against a wood one's) or dressed
+## ashlar (stone), with a plinth (ground) or a string course (upper).
+func _facade_wall_image(base: Color, is_stone: bool, storey: int, with_brace: bool) -> Image:
+	var image := Image.create(SIZE, SIZE, false, Image.FORMAT_RGBA8)
+	if is_stone:
+		var block := _scaled(_STONE_BASE, 1.08)
+		image.fill(block)
+		var joint := _palette.shade(block)
+		for y in SIZE:
+			if y % _BRICK_ROW_HEIGHT == 0:
+				for x in SIZE:
+					image.set_pixel(x, y, joint)
+				continue
+			var row_index := y / _BRICK_ROW_HEIGHT
+			var offset := 0 if row_index % 2 == 0 else _BRICK_JOINT_OFFSET + 2
+			for x in SIZE:
+				if (x + offset) % (_BRICK_JOINT_SPACING + 4) == 0:
+					image.set_pixel(x, y, joint)
+		if storey == FACADE_GROUND:
+			_fill_rect(image, 0, SIZE - _PLINTH_ROWS, SIZE, SIZE, _scaled(_STONE_BASE, 0.78))
+			for x in SIZE:
+				image.set_pixel(x, SIZE - _PLINTH_ROWS, _palette.highlight(_STONE_BASE))
+		else:
+			for x in SIZE:
+				image.set_pixel(x, 4, _palette.highlight(_STONE_BASE))
+				image.set_pixel(x, 5, _palette.shade(_STONE_BASE))
+		return image
+
+	image.fill(_PLASTER)
+	var frame := _scaled(base, 0.72)
+	var t := _TIMBER_FRAME_THICKNESS
+	# Posts at both sides and a beam under the eave; the foot is either the
+	# ground storey's stone plinth or the upper storey's own sill beam.
+	_fill_rect(image, 0, 0, t, SIZE, frame)
+	_fill_rect(image, SIZE - t, 0, SIZE, SIZE, frame)
+	_fill_rect(image, 0, EAVE_SHADOW_ROWS, SIZE, EAVE_SHADOW_ROWS + t, frame)
+	if storey == FACADE_GROUND:
+		_fill_rect(image, 0, SIZE - _PLINTH_ROWS, SIZE, SIZE, _scaled(_STONE_BASE, 0.85))
+		for x in SIZE:
+			image.set_pixel(x, SIZE - _PLINTH_ROWS, _palette.highlight(_STONE_BASE))
+	else:
+		_fill_rect(image, 0, SIZE - t, SIZE, SIZE, frame)
+	if with_brace:
+		# A diagonal brace across the panel -- the half-timber signature.
+		var top := EAVE_SHADOW_ROWS + t
+		var bottom := (SIZE - _PLINTH_ROWS) if storey == FACADE_GROUND else (SIZE - t)
+		for y in range(top, bottom):
+			var fraction := float(y - top) / float(maxi(bottom - top - 1, 1))
+			var x := t + int(round((1.0 - fraction) * float(SIZE - 2 * t - 2)))
+			for dx in 2:
+				if x + dx < SIZE - t:
+					image.set_pixel(x + dx, y, frame)
+	return image
+
+
+func _draw_facade_window(image: Image, base: Color) -> void:
+	# The exact pane _window_image draws (pinned: the glass is the same
+	# glass), then a sill under it and a shutter to each side.
+	for y in range(_PANE_MARGIN, SIZE - _PANE_MARGIN):
+		for x in range(_PANE_MARGIN, SIZE - _PANE_MARGIN):
+			image.set_pixel(x, y, _PANE_COLOR)
+	var mid := SIZE / 2
+	for y in range(_PANE_MARGIN, SIZE - _PANE_MARGIN):
+		image.set_pixel(mid, y, base)
+	for x in range(_PANE_MARGIN, SIZE - _PANE_MARGIN):
+		image.set_pixel(x, mid, base)
+	_outline_rect(image, Vector2i(_PANE_MARGIN, _PANE_MARGIN), SIZE - _PANE_MARGIN * 2)
+	_fill_rect(image, _PANE_MARGIN - 4, _PANE_MARGIN + 1, _PANE_MARGIN - 1, SIZE - _PANE_MARGIN - 1, _SHUTTER)
+	_fill_rect(image, SIZE - _PANE_MARGIN + 1, _PANE_MARGIN + 1, SIZE - _PANE_MARGIN + 4, SIZE - _PANE_MARGIN - 1, _SHUTTER)
+	_fill_rect(image, _PANE_MARGIN - 4, SIZE - _PANE_MARGIN, SIZE - _PANE_MARGIN + 4, SIZE - _PANE_MARGIN + 2, _palette.shade(_PLASTER))
+
+
+func _draw_facade_door(image: Image, base: Color, is_stone: bool) -> void:
+	# The exact leaf _door_image draws (pinned: the door is the same door),
+	# a lintel over it, and a worn stone step at its foot.
+	for y in range(_DOOR_FRAME_MARGIN, SIZE - _DOOR_FRAME_MARGIN):
+		for x in range(_DOOR_FRAME_MARGIN, SIZE - _DOOR_FRAME_MARGIN):
+			image.set_pixel(x, y, _DOOR_COLOR)
+	for x in [_DOOR_FRAME_MARGIN + SIZE / 3, _DOOR_FRAME_MARGIN + 2 * SIZE / 3]:
+		for y in range(_DOOR_FRAME_MARGIN, SIZE - _DOOR_FRAME_MARGIN):
+			image.set_pixel(x, y, _palette.shade(_DOOR_COLOR))
+	image.set_pixel(_DOOR_HANDLE_POS.x, _DOOR_HANDLE_POS.y, _DOOR_HANDLE_COLOR)
+	_outline_rect(image, Vector2i(_DOOR_FRAME_MARGIN, _DOOR_FRAME_MARGIN), SIZE - _DOOR_FRAME_MARGIN * 2)
+	var lintel := _scaled(_STONE_BASE, 0.9) if is_stone else _scaled(base, 0.72)
+	_fill_rect(image, _DOOR_FRAME_MARGIN - 1, _DOOR_FRAME_MARGIN - 1, SIZE - _DOOR_FRAME_MARGIN + 1, _DOOR_FRAME_MARGIN, lintel)
+	_fill_rect(image, _DOOR_FRAME_MARGIN - 2, SIZE - _STEP_ROWS, SIZE - _DOOR_FRAME_MARGIN + 2, SIZE, _scaled(_STONE_BASE, 0.72))
+
+
+## The roof overhangs the wall and shadows its top rows -- darkest right
+## under the eave, fading down into the lit wall.
+func _shade_eave(image: Image) -> void:
+	for y in mini(EAVE_SHADOW_ROWS, SIZE):
+		for x in SIZE:
+			image.set_pixel(x, y, _scaled(image.get_pixel(x, y), _EAVE_SHADOW_FACTORS[y]))
 
 
 static func _scaled(color: Color, factor: float) -> Color:
