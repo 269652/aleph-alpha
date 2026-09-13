@@ -58,6 +58,19 @@ const _STONE_HOUSE_CHANCE_DENOMINATOR := 4
 ## into the water (see _stamp_house).
 const _WATER_AVOIDANCE_SEARCH_RADIUS_TILES := 6
 
+## Draw order for an upper storey's own lit windows (see _stamp_house's
+## `upper_windows`): from outside, an upper storey is only ever its facade
+## band, painted one row UP on a layer that sits ABOVE the roof
+## (EarthChunkManager.UPPER_FLOOR_LAYER_Z_INDEX, 2), so a light for one of
+## its windows has to draw above that layer or it is buried under the very
+## facade it lights -- and below whoever is standing upstairs
+## (EarthChunkManager.UPPER_FLOOR_OCCUPANT_Z_INDEX, 4), or it is painted
+## over the player. Not read off EarthChunkManager directly: this small
+## module deliberately never preloads that large, engine-bound script (see
+## _construction_completion_fraction's own identical reasoning), so the
+## relationship is pinned by test instead (test_village_renderer.gd).
+const UPPER_WINDOW_LIGHT_Z_INDEX := 3
+
 ## How far outside the door a merchant's personal trading stand sits (see
 ## _build_stands_for_merchants) -- close enough to read as "this villager's
 ## own stand", clear of the door cell and the house's wall thickness.
@@ -179,6 +192,12 @@ func spawn_village(
 		if night:
 			for window_position in house.windows:
 				spawned.append(_build_window_light(window_position, tile_size, parent))
+			# An upper storey's own facade windows, already reported one row
+			# up where that facade is actually drawn from outside -- lit on
+			# their own draw order above the upper-floor layer (see
+			# UPPER_WINDOW_LIGHT_Z_INDEX).
+			for window_position in house.upper_windows:
+				spawned.append(_build_window_light(window_position, tile_size, parent, UPPER_WINDOW_LIGHT_Z_INDEX))
 	for landmark_id in settlement.landmarks:
 		spawned.append(_build_landmark(landmark_id, settlement.landmarks[landmark_id], parent))
 	for i in npcs.size():
@@ -249,7 +268,7 @@ func _stamp_house(chunk_coord: Vector2i, index: int, anchor: Vector2, npc: NpcId
 	var raw_origin := anchor_tile - footprint / 2
 
 	if world == null or not world.has_method("stamp_structure_at_global"):
-		return {"door": anchor, "stand": anchor, "windows": []}
+		return {"door": anchor, "stand": anchor, "windows": [], "upper_windows": []}
 
 	var material := (
 		BuildingPiece.MATERIAL_STONE
@@ -258,11 +277,11 @@ func _stamp_house(chunk_coord: Vector2i, index: int, anchor: Vector2, npc: NpcId
 	)
 	var pieces := _house_blueprint.build(blueprint_id, seed_value, material)
 	if pieces.is_empty():
-		return {"door": anchor, "stand": anchor, "windows": []}
+		return {"door": anchor, "stand": anchor, "windows": [], "upper_windows": []}
 
 	var origin_tile = _find_dry_origin(raw_origin, footprint, world)
 	if origin_tile == null:
-		return {"door": anchor, "stand": anchor, "windows": []}  # no dry ground nearby -- skip rather than build in water
+		return {"door": anchor, "stand": anchor, "windows": [], "upper_windows": []}  # no dry ground nearby -- skip rather than build in water
 
 	var roofs := _house_blueprint.build_roofs(blueprint_id, seed_value, material)
 
@@ -312,18 +331,22 @@ func _stamp_house(chunk_coord: Vector2i, index: int, anchor: Vector2, npc: NpcId
 	# gets no upper floor yet either, the same real build order a hired
 	# Builder now follows too (see BuilderMarker.target_upper_pieces).
 	# Duck-typed via has_method exactly like stamp_structure_at_global
-	# itself already is a few lines up. Upper windows feed the SAME
-	# window_positions list ground windows already do -- one caller-visible
-	# list, not a second one nobody reads (see spawn_village's own night-
-	# lighting loop just below this function).
+	# itself already is a few lines up. Upper windows are reported as their
+	# OWN list (`upper_windows`), not appended to the ground floor's: from
+	# outside, an upper storey is only ever its facade band, drawn one row
+	# UP over the roof's front row (docs/concept/building.md "How a house
+	# reads from above", point 5), so its lights go where that band is drawn
+	# and need their own draw order above the upper-floor layer -- see
+	# _upper_facade_window_positions and spawn_village's night-lighting loop.
 	var upper_pieces := {}
+	var upper_window_positions: Array[Vector2] = []
 	if (
 		_house_blueprint.is_two_story(blueprint_id) and stamped_pieces.size() == pieces.size()
 		and world != null and world.has_method("stamp_upper_floor_at_global")
 	):
 		upper_pieces = _house_blueprint.build_upper_floor(blueprint_id, seed_value, material)
 		world.stamp_upper_floor_at_global(chunk_coord, origin_tile, upper_pieces)
-		window_positions.append_array(_window_positions(upper_pieces, origin_tile, tile_size))
+		upper_window_positions = _upper_facade_window_positions(upper_pieces, origin_tile, tile_size)
 
 	# Interior furniture, upper floor (docs/concept/housing.md's "Interior
 	# furniture" / "Occupation-themed decor" sections) -- reported directly
@@ -345,7 +368,10 @@ func _stamp_house(chunk_coord: Vector2i, index: int, anchor: Vector2, npc: NpcId
 			chunk_coord, origin_tile, upper_pieces, HouseDecor.furniture_set_for(npc.occupation)
 		)
 
-	return {"door": door_position, "stand": stand_position, "windows": window_positions}
+	return {
+		"door": door_position, "stand": stand_position,
+		"windows": window_positions, "upper_windows": upper_window_positions,
+	}
 
 
 ## How structurally complete a settlement house should be by the time a
@@ -553,6 +579,28 @@ func _window_positions(pieces: Dictionary, origin_tile: Vector2i, tile_size: int
 	return positions
 
 
+## The upper storey's twin of _window_positions, restricted to the windows
+## that are actually visible from outside and placed where they are
+## actually drawn: from a bird's-eye view an upper storey is only ever its
+## facade band (HouseBlueprint._facade_cells' own southernmost-per-column
+## rule), painted one row UP over the roof's front row -- see EarthChunk
+## Manager._paint_upper_floor and docs/concept/building.md "How a house
+## reads from above", point 5. Its side/back windows are under the roof from
+## outside exactly like the ground floor's own, so they get no exterior
+## light at all (the ground floor's are merely harmless under the roof;
+## up here a light would have to draw ABOVE the roof to reach the facade
+## layer, and would then glow straight through it).
+func _upper_facade_window_positions(upper_pieces: Dictionary, origin_tile: Vector2i, tile_size: int) -> Array[Vector2]:
+	var positions: Array[Vector2] = []
+	var facade := _house_blueprint._facade_cells(upper_pieces)
+	for cell in upper_pieces:
+		if not facade.has(cell) or BuildingPiece.category_of(upper_pieces[cell]) != BuildingPiece.CATEGORY_WINDOW:
+			continue
+		var lit_cell: Vector2i = origin_tile + cell + Vector2i(0, -1)
+		positions.append(Vector2((lit_cell.x + 0.5) * tile_size, (lit_cell.y + 0.5) * tile_size))
+	return positions
+
+
 ## The settlement's shared well/stall/gate, a merchant's personal trading
 ## stand, and a farmer/blacksmith/fisher/herbalist's own workspot prop --
 ## previously all invisible positions NPC schedules walked to, now real,
@@ -580,11 +628,16 @@ func _build_landmark(landmark_id: String, position: Vector2, parent: Node2D) -> 
 ## (see that loop) -- tagged "window_light" the same landmark_id-metadata
 ## way _build_landmark tags its own sprites, so a caller (chiefly tests) can
 ## tell a night light apart from every other spawned prop.
-func _build_window_light(position: Vector2, tile_size: int, parent: Node2D) -> Sprite2D:
+##
+## `z_index` defaults to the ordinary entity draw order every ground-floor
+## window light has always used; an upper storey's own lights pass
+## UPPER_WINDOW_LIGHT_Z_INDEX (see that constant for why they need it).
+func _build_window_light(position: Vector2, tile_size: int, parent: Node2D, z_index: int = 0) -> Sprite2D:
 	var light := Sprite2D.new()
 	light.texture = _window_light_texture(tile_size)
 	light.set_meta("landmark_id", "window_light")
 	light.position = position
+	light.z_index = z_index
 	parent.add_child(light)
 	return light
 

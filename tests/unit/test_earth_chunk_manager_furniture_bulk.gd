@@ -9,9 +9,9 @@ extends GutTest
 ## NEW here: `furnish_upper_floor_at_global`'s own real mechanics -- real
 ## placement validation against the UPPER floor's own grid, the two
 ## floors' real independence at the identical cell, and the upper floor's
-## own real hide-in-lockstep visibility rule (deliberately the OPPOSITE of
-## ground furniture's own "never hidden" rule -- see Chunk.upper_floor_
-## furniture_modifications' own doc comment for why).
+## own "drawn only while you are up there" visibility rule (deliberately the
+## OPPOSITE of ground furniture's own "never hidden" rule -- see Chunk.
+## upper_floor_furniture_modifications' own doc comment for why).
 ##
 ## Uses `_load_chunk` directly rather than `update()` (see CONTRIBUTING.md /
 ## test_earth_chunk_manager.gd's own known-slow-file note).
@@ -69,6 +69,16 @@ func _build_real_upper_room() -> void:
 		manager.build_upper_floor_at_global(global_cell.x, global_cell.y, grid[cell])
 
 
+## The ground-floor twin, at the SAME cells -- furnish_house_at_global runs
+## the identical enclosed-room rule against chunk.modifications, so a bare
+## ground floor cell with nothing around it is (correctly) refused there too.
+func _build_real_ground_room() -> void:
+	var grid := _room_grid(Vector2i(0, 0))
+	for cell in grid:
+		var global_cell: Vector2i = _origin + cell
+		manager.build_at_global(global_cell.x, global_cell.y, grid[cell])
+
+
 func test_furnish_upper_floor_at_global_places_a_real_piece_onto_real_upper_floor():
 	_build_real_upper_room()
 	var placed: int = manager.furnish_upper_floor_at_global(_chunk_coord, _origin, _room_grid(Vector2i(0, 0)), ["wood_bed"])
@@ -96,22 +106,26 @@ func test_furnish_upper_floor_at_global_refuses_a_cell_that_isnt_real_upper_floo
 ## reusing chunk.furniture_modifications for both.
 func test_ground_and_upper_floor_furniture_coexist_independently_at_the_same_cell():
 	_build_real_upper_room()
-	manager.build_at_global(_origin.x, _origin.y, "wood_floor")  # a real ground floor cell at the SAME (x, y)
-	manager.furnish_house_at_global(_chunk_coord, _origin, {Vector2i(0, 0): "wood_floor"}, ["wood_table"])
+	_build_real_ground_room()  # a real ground room at the SAME (x, y) cells
+	manager.furnish_house_at_global(_chunk_coord, _origin, _room_grid(Vector2i(0, 0)), ["wood_table"])
 	manager.furnish_upper_floor_at_global(_chunk_coord, _origin, _room_grid(Vector2i(0, 0)), ["wood_bed"])
 	assert_eq(manager.furniture_at_global(_origin.x, _origin.y), "wood_table")
 	assert_eq(manager.upper_floor_furniture_at_global(_origin.x, _origin.y), "wood_bed")
 
 
-# -- the upper floor's own hide-in-lockstep rule -----------------------------
+# -- the upper floor's own "drawn only while you are up there" rule --------
 #
 # Ground furniture is never hidden by anything (nothing occludes the ground
-# layer's own room from a bird's-eye view). The upper floor's own room
-# genuinely IS hidden while a player stands inside it -- its furniture must
-# hide in the same step, or it would float visibly over bare ground with no
-# walls or floor around it.
+# layer's own room from a bird's-eye view). The upper storey is the opposite
+# way round: from outside it is under the roof, and from the ground floor it
+# is a storey above the room being looked at, so its furniture is only ever
+# drawn while the player is actually standing upstairs in that room -- see
+# test_earth_chunk_manager_upper_floor_exterior.gd for the full three-view
+# contract; these two pin the furniture layer's own half of it against a
+# bare upper room with no ground floor under it at all (the upper storey's
+# OWN room is what counts when you are on floor 1, never the ground one).
 
-func test_upper_floor_furniture_hides_while_the_player_stands_in_that_room():
+func test_upper_floor_furniture_is_drawn_only_while_the_player_stands_upstairs_in_that_room():
 	var upper_floor_layer := TileMapLayer.new()
 	add_child(upper_floor_layer)
 	manager.set_upper_floor_layer(upper_floor_layer)
@@ -121,24 +135,24 @@ func test_upper_floor_furniture_hides_while_the_player_stands_in_that_room():
 
 	_build_real_upper_room()
 	manager.furnish_upper_floor_at_global(_chunk_coord, _origin, _room_grid(Vector2i(0, 0)), ["wood_bed"])
-	assert_ne(
+	assert_eq(
 		upper_floor_furniture_layer.get_cell_source_id(_origin), -1,
-		"precondition: the bed should be painted while nobody is standing in the room"
+		"precondition: the bed is NOT drawn while nobody is upstairs in the room (it is under the roof from outside)"
 	)
 
 	manager.set_current_player_floor(1)
 	manager._update_upper_floor_visibility(_origin)
 
-	assert_eq(
+	assert_ne(
 		upper_floor_furniture_layer.get_cell_source_id(_origin), -1,
-		"the bed should hide in lockstep with the room's own walls/floor while the player stands inside it"
+		"the bed should be drawn in place once the player is actually standing upstairs in the room"
 	)
 
 	upper_floor_layer.free()
 	upper_floor_furniture_layer.free()
 
 
-func test_upper_floor_furniture_reappears_once_the_player_leaves_the_room():
+func test_upper_floor_furniture_disappears_again_once_the_player_leaves_the_room():
 	var upper_floor_layer := TileMapLayer.new()
 	add_child(upper_floor_layer)
 	manager.set_upper_floor_layer(upper_floor_layer)
@@ -150,14 +164,15 @@ func test_upper_floor_furniture_reappears_once_the_player_leaves_the_room():
 	manager.furnish_upper_floor_at_global(_chunk_coord, _origin, _room_grid(Vector2i(0, 0)), ["wood_bed"])
 	manager.set_current_player_floor(1)
 	manager._update_upper_floor_visibility(_origin)
+	assert_ne(upper_floor_furniture_layer.get_cell_source_id(_origin), -1, "precondition: drawn while upstairs")
 
 	# Stepping back downstairs and far away from the room.
 	manager.set_current_player_floor(0)
 	manager._update_upper_floor_visibility(_origin + Vector2i(20, 20))
 
-	assert_ne(
+	assert_eq(
 		upper_floor_furniture_layer.get_cell_source_id(_origin), -1,
-		"the bed should be restored once nobody is standing in the room any more"
+		"the bed should be back under the roof once nobody is upstairs in the room any more"
 	)
 
 	upper_floor_layer.free()

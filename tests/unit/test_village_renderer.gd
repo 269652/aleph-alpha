@@ -1021,10 +1021,19 @@ func test_a_two_story_blueprint_choice_also_stamps_a_real_upper_floor():
 
 ## The whole point of a two-story house per the original request ("windows
 ## in second level... visible from outside") -- night-lighting must see the
-## upper floor's own real windows too, not just the ground floor's.
-func test_a_two_story_blueprint_choice_also_lights_upper_floor_windows():
+## upper floor's own real windows too, not just the ground floor's. And it
+## must see them WHERE they are drawn: from outside, an upper storey is
+## only ever its facade band, painted one row UP over the roof's front row
+## (docs/concept/building.md "How a house reads from above", point 5), so
+## the lights go one row up too, and only for the facade's own windows --
+## the upper storey's side/back windows are under the roof from outside,
+## exactly like the ground floor's own are. Reported separately from the
+## ground list (`upper_windows`) because those lights need their own draw
+## order above the upper-floor layer (see spawn_village).
+func test_a_two_story_house_lights_its_upper_facade_windows_one_row_up():
 	var world := StubWorld.new()
-	renderer._house_blueprint = FakeTwoStoryHouseBlueprint.new()
+	var blueprint := FakeTwoStoryHouseBlueprint.new()
+	renderer._house_blueprint = blueprint
 
 	var npc := NpcIdentity.new(1)
 	var result: Dictionary = renderer._stamp_house(Vector2i(5, 5), 0, Vector2(100, 100), npc, TILE_SIZE, world, 100)
@@ -1034,10 +1043,58 @@ func test_a_two_story_blueprint_choice_also_lights_upper_floor_windows():
 	for cell in ground_pieces:
 		if BuildingPiece.category_of(ground_pieces[cell]) == BuildingPiece.CATEGORY_WINDOW:
 			ground_window_count += 1
-	assert_gt(
-		result.windows.size(), ground_window_count,
-		"a two-story house's own real upper windows should light too, not just the ground floor's"
+	assert_eq(result.windows.size(), ground_window_count, "the ground list stays the ground floor's own windows only")
+
+	var origin_tile: Vector2i = world.upper_stamp_calls[0].origin_tile
+	var upper_pieces: Dictionary = world.upper_stamp_calls[0].upper_pieces
+	var facade: Dictionary = blueprint._facade_cells(upper_pieces)
+	var expected: Array[Vector2] = []
+	for cell in upper_pieces:
+		if facade.has(cell) and BuildingPiece.category_of(upper_pieces[cell]) == BuildingPiece.CATEGORY_WINDOW:
+			var lit_tile: Vector2i = origin_tile + cell + Vector2i(0, -1)
+			expected.append(Vector2((lit_tile.x + 0.5) * TILE_SIZE, (lit_tile.y + 0.5) * TILE_SIZE))
+	assert_gt(expected.size(), 0, "precondition: a real two-story shape has windows on its upper facade")
+	var actual: Array = result.upper_windows.duplicate()
+	actual.sort()
+	expected.sort()
+	assert_eq(actual, expected, "exactly the upper facade's own windows, each one row up")
+
+
+func test_a_single_story_house_reports_no_upper_windows():
+	var world := StubWorld.new()
+	var npc := NpcIdentity.new(7)
+	npc.occupation = "farmer"
+	var result: Dictionary = renderer._stamp_house(Vector2i(9, 9), 0, Vector2(100, 100), npc, TILE_SIZE, world, 100)
+	assert_eq(result.upper_windows, [])
+
+
+## The upper-storey lights draw above the upper-floor layer they belong to
+## (which itself sits above the roof -- EarthChunkManager.UPPER_FLOOR_LAYER_
+## Z_INDEX) and below whoever is standing upstairs, so they are neither
+## buried under the facade band they light nor painted over the player.
+func test_upper_window_lights_are_built_above_the_upper_floor_layer_at_night():
+	const EarthChunkManager = preload("res://src/world/earth_chunk_manager.gd")
+	assert_gt(VillageRenderer.UPPER_WINDOW_LIGHT_Z_INDEX, EarthChunkManager.UPPER_FLOOR_LAYER_Z_INDEX)
+	assert_lt(VillageRenderer.UPPER_WINDOW_LIGHT_Z_INDEX, EarthChunkManager.UPPER_FLOOR_OCCUPANT_Z_INDEX)
+
+	var chunk_coord := _find_settlement_chunk("grassland")
+	renderer._house_blueprint = FakeTwoStoryHouseBlueprint.new()
+	var night_parent := Node2D.new()
+	var night_spawned := renderer.spawn_village(
+		night_parent, chunk_coord, chunk_coord * CHUNK_SIZE, CHUNK_SIZE, TILE_SIZE, "grassland", StubWorld.new(), -10.0
 	)
+
+	var upper_lights := 0
+	var ground_lights := 0
+	for node in night_spawned:
+		if node.has_meta("landmark_id") and node.get_meta("landmark_id") == "window_light":
+			if node.z_index == VillageRenderer.UPPER_WINDOW_LIGHT_Z_INDEX:
+				upper_lights += 1
+			elif node.z_index == 0:
+				ground_lights += 1
+	assert_gt(upper_lights, 0, "every house is two-story here, so some upper facade windows must be lit")
+	assert_gt(ground_lights, 0, "the ground floor's own windows still light at the ordinary entity z")
+	night_parent.free()
 
 
 ## Mirrors the roof's own existing gate exactly: a house still being raised

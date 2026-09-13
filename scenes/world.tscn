@@ -37,10 +37,10 @@ y_sort_enabled = true
 y_sort_enabled = true
 
 [node name="UpperFloor" type="TileMapLayer" parent="."]
-z_index = 1
+z_index = 2
 
 [node name="UpperFloorFurniture" type="TileMapLayer" parent="."]
-z_index = 1
+z_index = 2
 
 [node name="Roof" type="TileMapLayer" parent="."]
 z_index = 1

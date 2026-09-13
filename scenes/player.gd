@@ -4461,6 +4461,15 @@ func _destroy_step() -> void:
 ## nothing ever reads. A single flip here, not an iterate-and-toggle-every-
 ## collision-body-in-the-world scheme, because move_and_slide only ever
 ## resolves against bodies matching THIS body's own mask.
+##
+## And flips z_index the same way: the upper storey is drawn on a layer
+## above the entity layer (EarthChunkManager.UPPER_FLOOR_LAYER_Z_INDEX --
+## it has to sit above the roof so a two-story house's own second facade
+## band reads from outside, see docs/concept/building.md "How a house reads
+## from above"), so while the player is actually up there they must draw
+## above the very floor they stand on, or it paints them over. Back to the
+## ordinary entity z the moment they come down, so Y-sorting against trees,
+## grass and villagers works exactly as before.
 func _floor_transition_step() -> void:
 	if _chunk_manager == null:
 		return
@@ -4476,6 +4485,7 @@ func _floor_transition_step() -> void:
 			EarthChunkManager.UPPER_FLOOR_COLLISION_LAYER if _current_floor == 1
 			else EarthChunkManager.GROUND_FLOOR_COLLISION_LAYER
 		)
+		z_index = EarthChunkManager.UPPER_FLOOR_OCCUPANT_Z_INDEX if _current_floor == 1 else 0
 	_was_on_stairs = on_stairs
 
 

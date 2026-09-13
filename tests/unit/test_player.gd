@@ -3742,3 +3742,50 @@ func test_walking_around_off_stairs_never_changes_the_collision_mask():
 	for i in 5:
 		player._floor_transition_step()
 	assert_eq(player.collision_mask, before, "never touching stairs must never change which floor's collision applies")
+
+
+# -- two-story houses: the player draws ABOVE the upper storey while upstairs --
+#
+# Reported directly after the two-story batch went live: "there are still no
+# 2 story houses... most houses don't even have a door." The upper storey is
+# drawn on its own TileMapLayer ABOVE the entity layer (EarthChunkManager.
+# UPPER_FLOOR_LAYER_Z_INDEX -- it has to sit above the roof so a two-story
+# house's own second facade band reads from outside; see docs/concept/
+# building.md "How a house reads from above"), which means a player standing
+# on floor 1 would be painted OVER by the very floor they stand on unless
+# their own z_index lifts above that layer for exactly as long as they are
+# up there. The same single-property flip _floor_transition_step already
+# does for collision_mask, one more property.
+
+func test_player_starts_at_the_default_z_index_on_the_ground_floor():
+	assert_eq(player.z_index, 0, "a fresh player (floor 0) draws at the ordinary entity z, same as before this feature")
+
+
+func test_stepping_onto_stairs_lifts_the_player_above_the_upper_floor_layer():
+	var tile := _facing_tile()
+	chunk_manager.build_at_global(tile.x, tile.y, "wood_stairs")
+	chunk_manager.build_upper_floor_at_global(tile.x, tile.y, "wood_stairs")
+	player.position = Vector2((tile.x + 0.5) * TILE_SIZE, (tile.y + 0.5) * TILE_SIZE)
+
+	player._floor_transition_step()
+
+	assert_eq(player._current_floor, 1, "precondition: the player should now be on the upper floor")
+	assert_eq(player.z_index, EarthChunkManager.UPPER_FLOOR_OCCUPANT_Z_INDEX)
+	assert_gt(
+		player.z_index, EarthChunkManager.UPPER_FLOOR_LAYER_Z_INDEX,
+		"upstairs, the player must draw above the upper-floor layer or that floor paints over them"
+	)
+
+
+func test_stepping_back_downstairs_restores_the_default_z_index():
+	var tile := _facing_tile()
+	chunk_manager.build_at_global(tile.x, tile.y, "wood_stairs")
+	chunk_manager.build_upper_floor_at_global(tile.x, tile.y, "wood_stairs")
+	player.position = Vector2((tile.x + 0.5) * TILE_SIZE, (tile.y + 0.5) * TILE_SIZE)
+	player._floor_transition_step()  # up
+	player._was_on_stairs = false
+
+	player._floor_transition_step()  # back down
+
+	assert_eq(player._current_floor, 0, "precondition: the player should be back on the ground floor")
+	assert_eq(player.z_index, 0)

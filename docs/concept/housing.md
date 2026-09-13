@@ -135,10 +135,13 @@ floor's own cells, exactly the same "own Dictionary because it coexists
 with what's already at that cell" reasoning `roof_modifications` and
 `furniture_modifications` both already establish. `Chunk.upper_floor_
 modifications` (`Vector2i` local cell -> piece id) is the third such
-layer, painted on its own `UpperFloor` `TileMapLayer` (mirroring
-`EarthChunkManager.set_roof_layer`/`_paint_roof` exactly), placed BEFORE
-`Roof` in `world.tscn`'s node order so the roof still draws on top of the
-upper floor precisely the way it already draws on top of the ground floor.
+layer, painted on its own `UpperFloor` `TileMapLayer` (registered through
+`EarthChunkManager.set_upper_floor_layer`, the same optional fail-open
+shape as `set_roof_layer`) — one that sits ABOVE the roof layer
+(`EarthChunkManager.UPPER_FLOOR_LAYER_Z_INDEX`), the reverse of what a
+naive "floors stack under the roof" order would suggest; see "How it
+reads from above" below for why, and for the correction this paragraph's
+own first version needed.
 
 **No teleport, no scene change — a real shared-coordinate floor toggle.**
 A single new `BuildingPiece`, `wood_stairs` (`CATEGORY_STAIRS`, walkable),
@@ -151,20 +154,54 @@ they currently read/build against. Walking back onto the same stairs cell
 flips it back. This is deliberately the simplest possible "upstairs"
 primitive: one boolean per player, no new scene, no camera cut.
 
-**Windows visible from outside is the real "sophisticated" signal, not
-decoration.** `_update_upper_floor_visibility` is an exact mirror of the
-existing `_update_roof_visibility`/room-hiding logic, one layer up: it
-hides the upper floor's OWN room only when the player is standing on
-floor 1 AND physically inside that specific room (`RoomDetector.room_
-containing` against a new `_upper_floor_piece_grid_for` grid, the same
-enclosure check furniture placement above already reuses). Everywhere
-else — including every other player looking at the house from the ground,
-or the owner standing outside their own house — the upper floor's walls
-and windows render UNCONDITIONALLY. That is what makes a lit window
-visible two stories up from the street: the upper floor is not a secret
-room that pops into existence, it is real geometry that only hides itself
-from the one vantage point (standing inside it) where showing it would
-occlude the player's own view of themselves.
+**How it reads from above — windows visible from outside is the real
+"sophisticated" signal, not decoration.** This paragraph's first version
+had the upper floor's walls and windows "render UNCONDITIONALLY" in
+place, hidden only from a player standing upstairs inside it, on the
+theory that real geometry drawn on top is what makes a lit window visible
+two stories up. Reported directly once it went live: *"there are still no
+2 story houses... also now most houses don't even have a door."* In a flat
+top-down engine, an upper storey drawn in place over an identical
+footprint with identical wall art is *indistinguishable* from a one-story
+house — and its own front wall/window sits exactly over the ground
+floor's door. The corrected contract follows [building.md](building.md)'s
+"How a house reads from above" (its new point 5), decided per house by
+where the player is (`EarthChunkManager._update_upper_floor_visibility`,
+the upper-storey twin of `_update_roof_visibility` — it reuses that
+function's own ground-room result each frame rather than running a second
+`RoomDetector` pass, and uses the upper storey's own real room via
+`_upper_floor_piece_grid_for` when the player is on floor 1):
+
+- **Exterior** (not inside this house): only the upper storey's FACADE
+  band is drawn — the same southernmost-per-column cells `HouseBlueprint.
+  _facade_cells` gives the ground floor, read back off the chunk — each
+  one row UP, over the roof's own front row. So the house reads as
+  roof-above-facade-above-facade: the ground door and windows on the
+  bottom band, the upper storey's windows on the band above, roof above
+  that. Its interior, side and back cells are under the roof from
+  outside exactly as the ground floor's own are, and are not drawn at all.
+  That band is why the `UpperFloor` layer sits ABOVE the roof layer.
+- **Inside, on the ground floor**: nothing of the upper storey is drawn —
+  the band comes off with the roof, and the ground room is the view.
+- **Inside, upstairs**: the whole upper storey is drawn in place, its
+  furniture with it, and the player is lifted above the layer
+  (`Player._floor_transition_step` flips `z_index` to `EarthChunkManager.
+  UPPER_FLOOR_OCCUPANT_Z_INDEX` alongside `collision_mask`) so the very
+  floor they stand on cannot paint over them — while villagers still
+  downstairs are correctly hidden beneath it.
+
+Night lighting follows the drawing: a two-story house's own upper
+windows are lit one row up, where its facade band actually is, on their
+own draw order above the upper-floor layer (`VillageRenderer.
+UPPER_WINDOW_LIGHT_Z_INDEX`), and only the facade's windows — the upper
+storey's side/back windows are under the roof from outside like the
+ground floor's own. Real GUT coverage: `test_earth_chunk_manager_upper_
+floor_exterior.gd` (9 tests: the three views, the door staying uncovered
+— the reported regression itself — furniture only upstairs, leaving the
+house, a neighbouring house keeping its exterior look, and the layer
+z-order pinned as constants rather than eyeballed scene values), 3 new
+`test_player.gd` tests for the z flip, and 3 new `test_village_renderer.
+gd` tests for the shifted, facade-only upper lights.
 
 **Ten real shapes, kept deliberately separate from the single-story
 pool.** `HouseBlueprint.TWO_STORY_BLUEPRINT_IDS` — `townhouse_narrow`,
@@ -209,9 +246,16 @@ already share.
   the hire path to two-story shapes is scoped-out follow-up.
 - **Roof geometry needed NO changes at all.** Since the upper floor
   shares the ground floor's exact footprint, `HouseBlueprint.
-  build_roofs()`'s existing facade-derived roof already correctly caps
-  whichever floor is topmost — this is a case where reusing the existing
-  system required literally zero new code, not an accidental gap.
+  build_roofs()`'s existing facade-derived roof stays exactly as it is —
+  the roof DATA is unchanged and still covers every non-facade cell. What
+  changed at paint time (see "How it reads from above" above) is that the
+  upper storey's own facade band is drawn one row up over the roof's front
+  row, so the roof appears one row shorter with a second wall band beneath
+  it. The original claim that the unchanged roof "already correctly caps
+  whichever floor is topmost" was the wrong half of this: it did, but with
+  the upper storey then painted in place over it, nothing distinguished
+  the two storeys from above. Still zero new roof code, not an accidental
+  gap.
 
 ### Status
 
@@ -459,16 +503,17 @@ named gaps, not a silent claim of full coverage.
   ground floor and a bed on the upper floor can legitimately share the
   exact same (x, y): one Dictionary can only ever hold one piece per
   cell, the same reasoning every other ground/upper pair in this doc
-  already follows. Its visibility rule is the one genuinely new idea here
-  and deliberately the OPPOSITE of ground furniture's: ground furniture is
-  never hidden by anything (nothing occludes the ground layer's own room
-  from a bird's-eye view — only the ROOF, a separate layer above,
-  conditionally hides), but the upper floor's own room genuinely IS
-  hidden while a player stands inside it, so its furniture hides in the
-  SAME step (`_update_upper_floor_visibility` now repaints the furniture
-  layer alongside the wall/window layer) — otherwise a bed would float
-  visibly over bare ground with no walls or floor around it once those
-  are erased. Both calls are gated on the SAME "ground floor fully
+  already follows. Its visibility rule is deliberately the OPPOSITE of
+  ground furniture's: ground furniture is never hidden by anything
+  (nothing occludes the ground layer's own room from a bird's-eye view —
+  only the ROOF, a separate layer above, conditionally hides), while the
+  upper storey's furniture is only ever drawn in place while the player is
+  actually standing upstairs in that room — from outside it is under the
+  roof, and from the ground floor it is a storey above the room being
+  looked at (see "How it reads from above"; this bullet's first version
+  had it the other way round, hiding while occupied and showing from
+  outside, which the same live report corrected). Both calls are gated on
+  the SAME "ground floor fully
   complete" condition the roof/upper-floor already use, and both are
   duck-typed via `has_method` exactly like `stamp_structure_at_global`/
   `stamp_upper_floor_at_global` already are. Real GUT coverage — ground
@@ -481,20 +526,44 @@ named gaps, not a silent claim of full coverage.
   rewritten `test_earth_chunk_manager_furniture_bulk.gd` (5 tests: a real
   piece placed onto the real upper grid; refusal of a cell with no real
   upper-floor piece backing it; the two floors' furniture proven
-  independent at the identical cell; and the hide-in-lockstep rule proven
-  both ways — hides while the room is occupied, restores once vacated).
-  **Named honestly**: this reconciliation — retiring this pass's own
-  ground-floor mechanism, reshaping its upper-floor half, and rewriting
-  the two test files above — was done by hand while merging into `main`,
-  under the same "skip tests" instruction in effect at the time, so
-  unlike the rest of this pass it has NOT yet had a fresh GUT run
-  confirming green since the edit; that verification is still owed, not
-  silently assumed. Still NOT extended: the player's own hand-furnishing
+  independent at the identical cell; and the drawn-only-while-upstairs
+  rule proven both ways — drawn once the player is up there, gone again
+  once they leave). **Named honestly, then closed**: this reconciliation —
+  retiring this pass's own ground-floor mechanism, reshaping its upper-
+  floor half, and rewriting the two test files above — was done by hand
+  while merging into `main` under a "skip tests" instruction, with no GUT
+  run at the time. The owed run happened in the follow-up pass right
+  after ("How it reads from above"), and it found exactly one real
+  problem: the rewritten coexistence test furnished the ground floor
+  against a bare, wall-less floor cell, which `furnish_house_at_global`
+  correctly refuses (the same enclosed-room fixture lesson this pass had
+  already learned once, on the upper side). Fixed in the test, not the
+  code; the file is green (5/5) since. Still NOT extended: the player's own hand-furnishing
   verb (`HotbarAction.FURNISH`/`/furniture place`) still only reaches the
   ground floor's `furniture_modifications` — a player furnishing their
   OWN upper floor by hand is a real, separate, already-named Open
   Question below, not silently assumed solved by this NPC-generation-only
   pass.
+
+- ✅ **A two-story house now READS as one from outside, and keeps its
+  door** — the first live report after the whole batch above merged:
+  *"There are still no 2 story houses and the houses are also still not
+  furnished... also now most houses don't even have a door."* A real
+  probe against four freshly generated villages showed every house had
+  its door and its furniture on the ground layer and the two-story
+  houses were real (74 upper cells in one village) — but 2 of that
+  village's 5 doors were painted over by the upper storey at the same
+  cell, and from above a second storey drawn in place with identical art
+  is invisible as such. Not a data bug: the rendering contract itself was
+  wrong, and is rewritten under "How it reads from above" above (upper
+  storey as a second facade band one row up, over the roof; nothing of it
+  downstairs; all of it, in place, only while actually upstairs), with
+  [building.md](building.md)'s own "How a house reads from above" gaining
+  the rule as its point 5. Chunk unload now also erases the furniture and
+  upper-floor layers for the chunk (a pre-existing gap: only the roof/
+  water/snow overlays were ever erased). All TDD red-first: the new
+  exterior tests were run against the pre-fix code first (0/8, the door
+  test failing for exactly the reported reason) before the fix landed.
 
 **Unlike the batch above (built under an explicit "skip tests" mid-session
 instruction), this pass and its follow-ups all followed this project's
@@ -506,8 +575,9 @@ OUT (real upper-floor collision, the hire/`BuilderMarker` path, procedural
 village generation) plus three more raised directly in review (a hired
 roof, real terrain buildability, and NPC house furniture on both floors).
 **One exception, named honestly**: the furniture item above was
-reconciled by hand during the merge into `main`, and — as that bullet's
-own closing note says — has not yet had its own fresh GUT run since.
+reconciled by hand during the merge into `main` without a GUT run at the
+time — since closed, see that bullet's own note (one test-fixture bug
+found, no code bug).
 
 ### Open questions
 
