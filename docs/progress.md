@@ -21206,3 +21206,81 @@ Full `test_illustrated_art_registry.gd` (50/50), `test_illustrated_art_
 resolver.gd` (11/11) and `test_illustrated_art_loader.gd` (9/9) all green
 after every commit; `--headless --import` re-run clean after each batch.
 
+### Occupation-themed house decor + a real GUT pass for the furniture layer (`concept/housing.md`, 2026-09-13)
+
+The furniture chunk layer, its paint pass, and the player place/remove
+verb had all been shipped a few commits earlier this same day
+(`be758897`/`0f9d3ec3`/`c3a98c6a`) directly per an explicit mid-session
+"skip tests" instruction -- `housing.md`'s own Status list carried an
+explicit "do not merge to `main` on the strength of this Status list
+alone" caveat as a result. This pass both closes most of that gap and
+ships the actual feature requested on top of it: occupation-linked decor,
+so every settlement house a player finds reflects who lives there.
+
+✅ **The owed GUT pass for the pre-existing furniture layer**: 9 new tests
+in `test_earth_chunk_manager.gd`, mirroring the existing roof-layer group
+exactly (same file, same `_stamp_test_hut` fixture for a real enclosed
+floor cell) -- `build_furniture_at_global` writes to `furniture_
+modifications` without touching the floor beneath it, paints onto a real
+`TileMapLayer`, refuses an unenclosed cell; `destroy_furniture_at_global`
+removes the piece and erases the cell; both no-op cleanly for an unloaded
+chunk. All 9 passed against the existing implementation with **no code
+changes needed** -- the pre-existing build/destroy/query verbs and
+`_paint_furniture` were correct as shipped. Still not covered:
+`scenes/player.gd`'s own hotbar-verb arm/build/destroy-ordering behavior,
+and a real save/unload/reload round trip through
+`FURNITURE_MODIFICATIONS_DIR` -- both real, named gaps, not silently
+claimed done.
+
+✅ **Two more furniture pieces**: `couch` and `photo_frame`
+(`BuildingPiece`/`ItemCatalog`), needed so 8 real occupations could each
+get a genuinely distinct set rather than reshuffling the same 5 pieces.
+Same wood-tier conventions throughout; couch sized between a chair and
+the bookshelf, photo_frame the smallest/cheapest/most fragile piece here.
+
+✅ **`HouseDecor.furniture_set_for(occupation)`**: resolves `housing.md`'s
+own "theme matching" Open Question, for the one real per-NPC signal this
+codebase already models -- occupation identity. Deliberately NOT
+wealth-tiered: `village_wages.gd`'s own file doc comment establishes this
+game's economy as deliberately neutral between producer and non-producer
+occupations, so a richer/poorer furniture tier per occupation would have
+contradicted a design decision already made elsewhere. Each of the 8
+sets is reasoned from two real signals already tracked elsewhere
+(`NpcIdentity.WORK_LOCATION_BY_OCCUPATION`, `OccupationProduction`'s own
+recipe table) -- a merchant (stall, customers) and a nurse (well,
+patients) are the two occupations whose work brings other people to
+them, so they get the couch; a herbalist (real recipe: `butterfly_net`,
+a specimen-collecting trade) gets the bookshelf; a guard (gate, sleeps
+between shifts) gets the smallest, barracks-plain set.
+
+✅ **`EarthChunkManager.furnish_house_at_global`**: the real missing link
+between HouseDecor's data and the world. Called by `VillageRenderer.
+_stamp_house` right after `stamp_structure_at_global` writes a house's
+own floor/wall pieces (its own real ordering requirement --
+`FurniturePlacement`'s `is_indoors` check needs those pieces already on
+the chunk), furnished against the SAME `stamped_pieces` dict just given
+to `stamp_structure_at_global`, never a second floor-detection pass.
+Tries each id in the NPC's own set against that house's real floor cells
+in order, skipping (not aborting on) any cell `FurniturePlacement`
+itself refuses, so an odd-shaped or too-small floor still gets partially
+furnished rather than emptied. Duck-typed exactly like `record_
+settlement_founded_if_new` (a `has_method` guard) -- a world stub that
+only implements `stamp_structure_at_global` is skipped, not broken.
+
+TDD red-first throughout this whole pass: `test_house_decor.gd` (6
+tests), the new `furnish_house_at_global` group in
+`test_earth_chunk_manager.gd` (5 tests), and two new tests in
+`test_village_renderer.gd` confirming `_stamp_house` furnishes with the
+NPC's own real set and reads the same pieces dict it just stamped. Every
+new test confirmed failing first (parse error or a 0-call assertion)
+against the pre-existing code, then passed once the real implementation
+landed. `test_building_piece.gd` 33/33, `test_item_catalog.gd` 87/87,
+`test_furniture_placement.gd` 10/10, `test_house_decor.gd` 6/6,
+`test_village_renderer.gd` 41/41 (full file, no regressions).
+
+**Not shipped this pass** (named, not an oversight): `appeal_score`'s
+real formula (occupation theming answers "theme matching" but not
+variety/symmetry/rarity), NPC visits/opinions from a home's appeal,
+multiplayer visiting/rating, and the two furniture-layer test gaps named
+above (player hotbar verb, save/reload round trip).
+
