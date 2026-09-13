@@ -19903,6 +19903,25 @@ hardcoded 2.0.
 
 Branched from fresh `origin/main`, pushed immediately.
 
+## One new curated loading tip; shuffle seed re-searched again (`concept/persistence.md`, 2026-09-14)
+
+Requested directly: add "Solving Navier-Stokes" to the loading tips.
+Added verbatim to `LoadingTips._CURATED_TIPS` (161 → 162) with the file's
+own trailing-period convention. Growing the array by exactly one entry
+changes Fisher-Yates's own swap range at every step of `_shuffled` — the
+same reason a full rewrite of the curated/template content already
+forced one reshuffle before — so the existing `_SHUFFLE_SEED` (1) no
+longer cleared `test_no_long_run_of_the_same_template_in_playback_order`
+against the new pool (three separate 3-long same-template runs
+appeared). Re-searched the exact documented way (a temporary, uncommitted
+probe script trying seeds from 1 upward): `2` is the first that clears
+the bar again. `test_loading_tips.gd` 19/19 (new
+`test_the_navier_stokes_tip_is_in_the_curated_pool`, every pre-existing
+assertion unmodified and green); `test_loading_overlay.gd`/
+`test_loading_spinner.gd` re-run clean, no regression.
+
+Branched from fresh `origin/main`, pushed immediately.
+
 ## The real "Still at 1fps" cause: a per-pixel art-loading loop, not a per-frame system (2026-09-10)
 
 Reported live, again, plainly: *"Can you now try to fix performance
