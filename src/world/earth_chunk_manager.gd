@@ -764,6 +764,31 @@ var _farm_farmers: Dictionary = {}
 var _conversion_workers: Dictionary = {}
 const CONVERSION_WORKER_BY_STRUCTURE := {"mill": MillMarker, "bakery": BakeryMarker}
 
+## Hauling between the bread chain's links (docs/concept/milling_and_
+## baking.md, "Hauling between the links"): each leg is (source structure,
+## item ids, destination structure), worked by the SAME LogisticsMarker
+## the Sägewerk/Farm -> Storage pairing already uses, with a consumer as its
+## destination. Wheat reaches the Mill both straight from a Farm and out
+## of any Storage it was hauled into first (the existing Farm -> Storage
+## pairing keeps running; two haulers on one Farm simply race, the loser
+## aborting its pickup -- see LogisticsMarker), so no wheat is ever
+## stranded in a Storage the Mill can't see. A leg is only staffed while
+## its source is: a Farm with a Farmer, a Mill/Bakery with its worker, a
+## Storage by existing at all.
+const CHAIN_LOGISTICS_LEGS := [
+	{"source": "farm", "items": ["wheat"], "destination": "mill"},
+	{"source": "storage", "items": ["wheat"], "destination": "mill"},
+	{"source": "mill", "items": ["flour"], "destination": "bakery"},
+	{"source": "bakery", "items": ["bread"], "destination": "storage"},
+]
+
+## chunk_coord -> {source_local_cell -> {destination_id -> {destination_
+## pairing_key -> {item_id -> LogisticsMarker}}}}: _logistics_workers' own
+## shape with one more level (the destination KIND) so each leg's pairs are
+## pruned independently -- a Farm's Mill legs and its Storage legs (kept in
+## _logistics_workers) must never prune each other.
+var _chain_logistics_workers: Dictionary = {}
+
 ## How far (in tiles) a wooden_fence must stand from a Farm for a Farmer to
 ## move in. Matches SAGEWERK_STORAGE_PAIR_RADIUS_TILES' own magnitude --
 ## "the same worksite," not a farm-specific number invented separately.
@@ -12921,6 +12946,132 @@ func _sync_logistics_workers(
 		for farm_chunk_coord in _farm_farmers:
 			for farm_local_cell in _farm_farmers[farm_chunk_coord]:
 				_resync_logistics_for_farm(farm_chunk_coord, farm_local_cell)
+	# A wooden_fence appearing/disappearing (re)staffs Farms without any
+	# farm tile changing (see _sync_farm_farmer) -- their own Storage
+	# pairing has to follow the Farmer, the same as every other trigger.
+	if previous_tile_id == "wooden_fence" or new_tile_id == "wooden_fence":
+		for farm_chunk_coord in _farm_farmers:
+			for farm_local_cell in _farm_farmers[farm_chunk_coord]:
+				_resync_logistics_for_farm(farm_chunk_coord, farm_local_cell)
+	_sync_chain_legs(chunk_coord, local_cell, previous_tile_id, new_tile_id)
+
+
+## The bread chain's own trigger (see CHAIN_LOGISTICS_LEGS): a tile that
+## stopped being a leg source drops every leg it had, then -- for ANY
+## change to a source, a destination, or the fence that staffs a Farm --
+## every known source's legs are re-decided, the same broad, idempotent
+## reconcile _sync_logistics_workers' own "storage changed" trigger uses.
+func _sync_chain_legs(
+	chunk_coord: Vector2i, local_cell: Vector2i, previous_tile_id: String, new_tile_id: String
+) -> void:
+	var relevant := {"wooden_fence": true}
+	for leg in CHAIN_LOGISTICS_LEGS:
+		relevant[leg["source"]] = true
+		relevant[leg["destination"]] = true
+	if not relevant.has(previous_tile_id) and not relevant.has(new_tile_id):
+		return
+	if previous_tile_id != new_tile_id and relevant.has(previous_tile_id):
+		_despawn_chain_legs_at(chunk_coord, local_cell)
+	_resync_all_chain_legs()
+
+
+## Re-decides every leg of every currently-known source in every loaded
+## chunk -- safe to call redundantly (a no-op for an already-correct pair).
+func _resync_all_chain_legs() -> void:
+	for chunk_coord in _loaded_chunks:
+		var chunk: Chunk = _loaded_chunks[chunk_coord]
+		for local_cell in chunk.modifications:
+			var tile_id: String = chunk.modifications[local_cell]
+			for leg in CHAIN_LOGISTICS_LEGS:
+				if leg["source"] == tile_id:
+					_resync_chain_leg_for(chunk_coord, local_cell, leg)
+
+
+## Whether the leg's source at this cell has anything to give: a Farm only
+## while a Farmer works it, a Mill/Bakery while its worker stands there, a
+## Storage by existing at all.
+func _is_chain_source_staffed(chunk_coord: Vector2i, local_cell: Vector2i, source_id: String) -> bool:
+	match source_id:
+		"farm":
+			return _farm_farmers.get(chunk_coord, {}).has(local_cell)
+		"storage":
+			return true
+		_:
+			return _conversion_workers.get(chunk_coord, {}).has(local_cell)
+
+
+## _resync_logistics_for_sagewerk's exact reconcile, for one chain leg of
+## one source: one hauler per item per real destination currently within
+## SAGEWERK_STORAGE_PAIR_RADIUS_TILES, a destination that dropped out of
+## range (or was destroyed) losing its own haulers, an already-paired one
+## left alone.
+func _resync_chain_leg_for(chunk_coord: Vector2i, local_cell: Vector2i, leg: Dictionary) -> void:
+	var destination_id: String = leg["destination"]
+	if not _is_chain_source_staffed(chunk_coord, local_cell, leg["source"]):
+		_despawn_chain_legs_at(chunk_coord, local_cell, destination_id)
+		return
+
+	var global_cell: Vector2i = chunk_coord * CHUNK_SIZE + local_cell
+	var source_pixel := (Vector2(global_cell) + Vector2(0.5, 0.5)) * TerrainRenderer.TILE_SIZE
+	var destinations_found: Array[Vector2] = nearby_structure_positions(
+		source_pixel, destination_id, float(SAGEWERK_STORAGE_PAIR_RADIUS_TILES) * TerrainRenderer.TILE_SIZE
+	)
+	if destinations_found.is_empty():
+		_despawn_chain_legs_at(chunk_coord, local_cell, destination_id)
+		return
+
+	var by_destination: Dictionary = (
+		_chain_logistics_workers.get(chunk_coord, {}).get(local_cell, {}).get(destination_id, {})
+	)
+	var in_range_keys := {}
+	for destination_pixel in destinations_found:
+		var key := _storage_pairing_key(destination_pixel)
+		in_range_keys[key] = true
+		if by_destination.has(key):
+			continue  # already staffed for this specific destination -- no double-spawn
+		var by_item: Dictionary = {}
+		for item_id in leg["items"]:
+			var marker := LogisticsMarker.new()
+			marker.earth = self
+			marker.item_id = item_id
+			marker.source_structure_id = leg["source"]
+			marker.storage_structure_id = destination_id
+			marker.search_radius_tiles = SAGEWERK_STORAGE_PAIR_RADIUS_TILES
+			marker.position = source_pixel
+			marker.preferred_storage_position = destination_pixel
+			_entities_parent.add_child(marker)
+			by_item[item_id] = marker
+		by_destination[key] = by_item
+
+	for key in by_destination.keys().duplicate():
+		if not in_range_keys.has(key):
+			for marker in by_destination[key].values():
+				marker.free()
+			by_destination.erase(key)
+
+	if not _chain_logistics_workers.has(chunk_coord):
+		_chain_logistics_workers[chunk_coord] = {}
+	if not _chain_logistics_workers[chunk_coord].has(local_cell):
+		_chain_logistics_workers[chunk_coord][local_cell] = {}
+	_chain_logistics_workers[chunk_coord][local_cell][destination_id] = by_destination
+
+
+## Frees the chain haulers of one source cell -- for one destination kind,
+## or (destination_id "") every leg it has.
+func _despawn_chain_legs_at(chunk_coord: Vector2i, local_cell: Vector2i, destination_id: String = "") -> void:
+	var by_cell: Dictionary = _chain_logistics_workers.get(chunk_coord, {})
+	var by_leg = by_cell.get(local_cell)
+	if by_leg == null:
+		return
+	for leg_destination in by_leg.keys().duplicate():
+		if destination_id != "" and leg_destination != destination_id:
+			continue
+		for by_item in by_leg[leg_destination].values():
+			for marker in by_item.values():
+				marker.free()
+		by_leg.erase(leg_destination)
+	if by_leg.is_empty():
+		by_cell.erase(local_cell)
 
 
 ## Re-decides whether the Sägewerk at (chunk_coord, local_cell) -- if one is
@@ -13644,6 +13795,7 @@ func _load_chunk(chunk_coord: Vector2i) -> void:
 	for farm_chunk_coord in _farm_farmers:
 		for farm_local_cell in _farm_farmers[farm_chunk_coord]:
 			_resync_logistics_for_farm(farm_chunk_coord, farm_local_cell)
+	_resync_all_chain_legs()
 
 	# The meadow that was already here is what the wind already did (see
 	# MeadowSpread). Two things it needs that a chunk seed cannot give it: the
@@ -14345,6 +14497,12 @@ func _unload_chunk(chunk_coord: Vector2i) -> void:
 			for marker in by_item.values():
 				marker.free()
 	_logistics_workers.erase(chunk_coord)
+	for by_leg in _chain_logistics_workers.get(chunk_coord, {}).values():
+		for by_destination in by_leg.values():
+			for by_item in by_destination.values():
+				for marker in by_item.values():
+					marker.free()
+	_chain_logistics_workers.erase(chunk_coord)
 	# This chunk may have held the Storage (or Sägewerk/Farm) a worker
 	# elsewhere was paired against -- re-decide every REMAINING known
 	# Sägewerk's (and Farm's) Logistics staffing now that this chunk's own
@@ -14358,6 +14516,7 @@ func _unload_chunk(chunk_coord: Vector2i) -> void:
 	for farm_chunk_coord in _farm_farmers:
 		for farm_local_cell in _farm_farmers[farm_chunk_coord]:
 			_resync_logistics_for_farm(farm_chunk_coord, farm_local_cell)
+	_resync_all_chain_legs()
 
 	for art_sprite in _structure_art_sprites.get(chunk_coord, {}).values():
 		art_sprite.free()
