@@ -428,17 +428,34 @@ func test_the_dreisam_reads_like_a_real_small_river_not_a_torrent_or_a_puddle():
 
 
 ## The whole point of curating discharge: a big river must actually read as
-## bigger than a small one. The Rhine carries ~267x the Dreisam's flow.
-func test_the_rhine_is_deeper_wider_and_carries_far_more_than_the_dreisam():
+## bigger than a small one. The Danube carries ~594x the Dreisam's flow.
+##
+## river_hydraulics_at_global only recognizes a curated river within the
+## tight RIVER_HALF_WIDTH_TILES (not the wider bank apron used elsewhere),
+## and the Chaikin-smoothed course does not pass exactly through a city's
+## raw lat/lon (corners are cut, RiverCatalog._chaikin_smoothed) -- for a
+## long-waypoint-spacing river like the Danube that gap is tiles wider than
+## RIVER_HALF_WIDTH_TILES, so a raw city coordinate silently misses the
+## curated band and reads all zeros. This is exactly what made the Rhine
+## LOOK broken (see docs/progress.md): not bad Rhine data, a wrong-pattern
+## test coordinate. Same fix as test_world_spawn_location.gd already uses
+## correctly -- take the course point nearest the city, not the city's own
+## raw coordinate.
+func test_the_danube_is_deeper_wider_and_carries_far_more_than_the_dreisam():
 	var geo := GeoCoordinates.new()
-	var dreisam := geo.tile_for_coordinate(
-		48.007669, 7.805657, EarthChunkGenerator.WORLD_WIDTH_TILES, EarthChunkGenerator.WORLD_HEIGHT_TILES
-	)
-	var rhine := geo.tile_for_coordinate(
-		50.93639, 6.95278, EarthChunkGenerator.WORLD_WIDTH_TILES, EarthChunkGenerator.WORLD_HEIGHT_TILES
-	)
+	var width := EarthChunkGenerator.WORLD_WIDTH_TILES
+	var height := EarthChunkGenerator.WORLD_HEIGHT_TILES
+	var dreisam := geo.tile_for_coordinate(48.007669, 7.805657, width, height)
+	var regensburg_centre := geo.tile_for_coordinate(49.017, 12.083, width, height)
+	var danube := Vector2i.ZERO
+	var nearest := INF
+	for point in RiverCatalog.tile_polylines(width, height)["Danube"]:
+		var distance: float = Vector2(regensburg_centre).distance_to(point)
+		if distance < nearest:
+			nearest = distance
+			danube = Vector2i(point)
 	var small := generator.river_hydraulics_at_global(dreisam.x, dreisam.y)
-	var big := generator.river_hydraulics_at_global(rhine.x, rhine.y)
+	var big := generator.river_hydraulics_at_global(danube.x, danube.y)
 	assert_gt(big.discharge_m3_s, small.discharge_m3_s * 50.0)
 	assert_gt(big.width_m, small.width_m)
 	assert_gt(big.depth_m, small.depth_m)
@@ -817,9 +834,9 @@ func test_every_river_answer_carries_a_constant_drift_speed():
 		float(a["drift_speed_m_s"]), float(b["drift_speed_m_s"]), 1e-6,
 		"two tiles of one reach must drift at exactly one speed"
 	)
-	var rhine_source := generator.curated_drift_speed_m_s("Rhine")
-	assert_gt(rhine_source, 0.0)
+	var danube_source := generator.curated_drift_speed_m_s("Danube")
+	assert_gt(danube_source, 0.0)
 	assert_almost_eq(
-		rhine_source, generator.curated_drift_speed_m_s("Rhine"), 1e-12,
+		danube_source, generator.curated_drift_speed_m_s("Danube"), 1e-12,
 		"one speed per curated river, memoised"
 	)
