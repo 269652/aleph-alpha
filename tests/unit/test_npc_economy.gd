@@ -561,3 +561,81 @@ func test_a_working_fisher_does_not_crash_when_world_lacks_the_catch_hook():
 	for i in 200:
 		economy.step(1.0, true, bare_world, Vector2.ZERO)
 	pass_test("a working fisher against a world without record_fish_catch_near should not crash")
+
+
+# -- eating what the village baked (docs/concept/milling_and_baking.md) -----
+#
+# Bread a Bakery bakes and a Storage holds lives in a structure's own stock,
+# not the VillageMarket -- so a hungry villager with nothing on the market
+# stall "walks to the bakehouse": the world is asked, duck-typed, for a
+# structure meal near them, at the SAME meal price and with the SAME
+# all-or-nothing wallet rule VillageMarket.buy_meal keeps. A world without
+# the hook (BareWorld) simply has no bakehouse to offer.
+
+## A world with a bakehouse: offers one structure meal per unit of `loaves`.
+class BakehouseWorld extends StubWorld:
+	var loaves := 0
+	var meals_sold := 0
+	func has_structure_meal_near(_pos: Vector2) -> bool:
+		return loaves > 0
+	func buy_structure_meal_near(_pos: Vector2, wallet) -> String:
+		if loaves <= 0 or not wallet.spend(VillageMarket.VILLAGE_LOCAL_FOOD_PRICE):
+			return ""
+		loaves -= 1
+		meals_sold += 1
+		return "bread"
+
+
+func test_a_hungry_non_producer_eats_bread_from_the_bakehouse_when_the_market_is_bare():
+	var bakehouse := BakehouseWorld.new()
+	bakehouse.loaves = 3
+	var economy := _economy("blacksmith")
+	economy.wallet.add(100)
+	economy.needs.advance(100000.0)
+	assert_true(economy.needs.is_hungry())
+
+	economy.step(0.01, false, bakehouse, Vector2.ZERO)
+
+	assert_false(economy.needs.is_hungry(), "fed from the village's own bread")
+	assert_eq(bakehouse.loaves, 2, "one loaf actually left the shelf")
+	assert_eq(economy.wallet.balance, 100 - VillageMarket.VILLAGE_LOCAL_FOOD_PRICE, "at the same meal price")
+
+
+func test_the_market_stall_is_still_tried_first():
+	market.add_stock("meat", 5.0)
+	var bakehouse := BakehouseWorld.new()
+	bakehouse.loaves = 3
+	var economy := _economy("blacksmith")
+	economy.wallet.add(100)
+	economy.needs.advance(100000.0)
+
+	economy.step(0.01, false, bakehouse, Vector2.ZERO)
+
+	assert_false(economy.needs.is_hungry())
+	assert_eq(bakehouse.loaves, 3, "the stall had meat; the bakehouse was never needed")
+
+
+func test_a_penniless_villager_draws_a_subsistence_wage_for_a_bakehouse_meal_too():
+	# The purse-funded wage used to be gated on the market stall alone
+	# (nothing to buy there -> no wage) -- a villager would have starved next
+	# to a full bakehouse. A structure meal counts as something to buy.
+	var bakehouse := BakehouseWorld.new()
+	bakehouse.loaves = 3
+	NpcEconomy._set_purse(market, 100.0)
+	var economy := _economy("blacksmith")
+	economy.needs.advance(100000.0)
+	assert_eq(economy.wallet.balance, 0, "precondition: no gold of their own")
+
+	economy.step(0.01, false, bakehouse, Vector2.ZERO)
+
+	assert_false(economy.needs.is_hungry())
+	assert_eq(bakehouse.loaves, 2)
+
+
+func test_a_world_without_a_bakehouse_hook_changes_nothing():
+	var economy := _economy("blacksmith")
+	economy.wallet.add(100)
+	economy.needs.advance(100000.0)
+	economy.step(0.01, false, BareWorld.new(), Vector2.ZERO)
+	assert_true(economy.needs.is_hungry())
+	assert_eq(economy.wallet.balance, 100)

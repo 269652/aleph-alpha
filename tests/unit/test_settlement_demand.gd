@@ -26,10 +26,25 @@ func _demand_for(demands: Array, recipe_id: String) -> Dictionary:
 
 
 ## With every real structure-gated recipe's own structure present, there is
-## nothing to demand -- the settlement is fully producer-equipped.
+## nothing to demand -- the settlement is fully producer-equipped. The list
+## grew with the bread chain (docs/concept/milling_and_baking.md): farm/
+## mill/bakery gate grow_wheat/mill_flour/bake_bread.
 func test_no_demands_when_every_gated_structure_is_present():
-	var demands := SettlementDemand.demands_for({}, ["sagewerk", "campfire"], book)
+	var demands := SettlementDemand.demands_for({}, ["sagewerk", "campfire", "farm", "mill", "bakery"], book)
 	assert_eq(demands, [])
+
+
+## The bread chain surfaces as real City Hall demands the moment any of its
+## links is missing -- "wheat needs a farm, flour needs a mill, bread needs
+## a bakery" -- with no chain-specific code here: the chain is resolver
+## data (docs/concept/milling_and_baking.md), and this step already walks
+## every structure-gated recipe.
+func test_a_missing_bread_chain_surfaces_as_three_demands():
+	var demands := SettlementDemand.demands_for({}, ["sagewerk", "campfire"], book)
+	assert_eq(_demand_for(demands, "grow_wheat").get("missing_structure_id"), "farm")
+	assert_eq(_demand_for(demands, "mill_flour").get("missing_structure_id"), "mill")
+	assert_eq(_demand_for(demands, "bake_bread").get("missing_structure_id"), "bakery")
+	assert_eq(demands.size(), 3, "exactly the three chain links, nothing else")
 
 
 ## With NO structures present, the two real sagewerk-gated recipes (see

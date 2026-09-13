@@ -242,6 +242,17 @@ const _ITEMS := {
 	# The wooden fence (see docs/concept/npc_farm_production.md): gates a
 	# Farm's Farmer -- no Farmer moves in until a real fence stands nearby.
 	"wooden_fence": ["Wooden Fence", "placeable", 5, 0.0],
+	# Milling and baking (see docs/concept/milling_and_baking.md): the two
+	# buildings that turn a Farm's wheat into food -- the same placeable
+	# family as farm/sagewerk/storage -- and the chain's two products.
+	# flour is the intermediate, a material exactly like plank/beam sit
+	# between a log and a wall; bread is a real meal, "food", so everything
+	# that already reads kind_of(id) == "food" (SettlementFood, the village
+	# market's meals, eating) sees it with no special-casing.
+	"mill": ["Mill", "placeable", 5, 0.0],
+	"bakery": ["Bakery", "placeable", 5, 0.0],
+	"flour": ["Flour", "material", 40, 0.0],
+	"bread": ["Bread", "food", 20, 0.0],
 	# The City Hall (see docs/concept/civic_construction.md's own "Meeting
 	# Hall" spec, docs/concept/npc_role_consensus.md): a settlement's real
 	# civic seat, where a real "compute demands" step runs. Same placeable

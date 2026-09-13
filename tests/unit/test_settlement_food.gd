@@ -23,6 +23,7 @@ const VillageMarket = preload("res://src/world/village_market.gd")
 const SettlementState = preload("res://src/emergence/settlement_state.gd")
 const SettlementFood = preload("res://src/emergence/settlement_food.gd")
 const EntityRef = preload("res://src/emergence/entity_ref.gd")
+const StructureStock = preload("res://src/emergence/structure_stock.gd")
 
 
 ## Stand-ins for a spawned NpcMarker and its NpcEconomy. The only thing
@@ -212,3 +213,94 @@ func test_village_market_for_is_null_when_no_villager_has_a_market_yet():
 	var chunk := Vector2i(2, 2)
 	var loaded := {chunk: [FakeVillager.new(null), _villager_with_market(null)]}
 	assert_null(SettlementFood.village_market_for(EntityRef.for_settlement(chunk), loaded))
+
+
+# -- structure-held food: the third container (docs/concept/milling_and_ ---
+# -- baking.md, "Food that counts") ------------------------------------------
+#
+## Bread a Bakery bakes, or a Storage holds once hauled, lives in a
+## structure's own StructureStock -- neither market. It is real food the
+## settlement owns, so it counts, filtered through the SAME catalog category
+## as both markets (a Storage also holds lumber and wheat; neither feeds
+## anyone).
+
+func _stock_with(items: Dictionary) -> StructureStock:
+	var stock := StructureStock.new()
+	for item_id in items:
+		stock.add_stock(item_id, items[item_id])
+	return stock
+
+
+func test_food_stock_counts_food_held_in_the_settlements_structures():
+	var storage := _stock_with({"bread": 8, "wood": 20, "wheat": 12})
+	var bakery := _stock_with({"bread": 3, "flour": 4})
+	assert_eq(SettlementFood.food_stock(null, null, null, [storage, bakery]), 11)
+
+
+func test_structure_food_adds_to_both_markets():
+	var market := Market.new()
+	market.add_stock("meat", 5)
+	var village := VillageMarket.new()
+	village.add_stock("fruit", 3.0)
+	var storage := _stock_with({"bread": 8})
+	assert_eq(SettlementFood.food_stock(market, village, null, [storage]), 16)
+	assert_eq(SettlementFood.carrying_capacity(market, village, null, [storage]), 16 / SettlementState.FOOD_PER_HOUSEHOLD)
+
+
+func test_no_structures_at_all_changes_nothing():
+	var market := Market.new()
+	market.add_stock("meat", 5)
+	assert_eq(SettlementFood.food_stock(market, null, null, []), 5)
+	assert_eq(SettlementFood.food_stock(market, null), 5)
+
+
+# -- the food shortfall the build decision can act on ------------------------
+#
+## A DECLINING settlement is short of the one food it can raise by
+## construction: bread (its chain is resolver data -- farm/mill/bakery;
+## meat/fruit/fish are gathered by occupations, never built). The need is
+## exactly the loaves that lift the settlement out of DECLINING, so the
+## decision asks for a real, bounded amount rather than "some food".
+
+func test_no_food_shortfall_while_the_settlement_is_not_declining():
+	var market := Market.new()
+	market.add_stock("meat", 40)  # capacity 10 for 5 households: GROWING
+	assert_eq(SettlementFood.food_shortfall_for(5, market, null), {})
+
+
+func test_no_food_shortfall_for_a_settlement_with_no_households():
+	assert_eq(SettlementFood.food_shortfall_for(0, null, null), {})
+
+
+func test_a_declining_settlement_is_short_of_bread_by_exactly_what_lifts_it_out():
+	var market := Market.new()
+	market.add_stock("meat", 4)  # capacity 1 for 5 households: DECLINING
+	var shortfall: Dictionary = SettlementFood.food_shortfall_for(5, market, null)
+
+	assert_eq(shortfall.get("missing", [])[0]["item_id"], SettlementFood.STAPLE_FOOD_ID)
+	var need: int = shortfall["missing"][0]["need"]
+	assert_gt(need, 0)
+	# Exactly enough: with that many more loaves the settlement is no longer
+	# DECLINING, and with one fewer it still is.
+	var enough := Market.new()
+	enough.add_stock("meat", 4)
+	enough.add_stock("bread", need)
+	assert_ne(SettlementState.status_for(5, SettlementFood.carrying_capacity(enough, null)), SettlementState.DECLINING)
+	var one_short := Market.new()
+	one_short.add_stock("meat", 4)
+	one_short.add_stock("bread", need - 1)
+	assert_eq(SettlementState.status_for(5, SettlementFood.carrying_capacity(one_short, null)), SettlementState.DECLINING)
+
+
+func test_the_food_shortfall_carries_the_shape_the_build_decision_reads():
+	var shortfall: Dictionary = SettlementFood.food_shortfall_for(3, null, null)
+	assert_true(shortfall.has("missing"))
+	assert_eq(shortfall["missing"].size(), 1)
+	assert_true(shortfall["missing"][0].has("item_id"))
+	assert_true(shortfall["missing"][0].has("need"))
+	assert_eq(shortfall.get("kind"), "food")
+
+
+func test_structure_held_bread_counts_toward_clearing_the_shortfall():
+	var storage := _stock_with({"bread": 40})
+	assert_eq(SettlementFood.food_shortfall_for(5, null, null, null, [storage]), {})

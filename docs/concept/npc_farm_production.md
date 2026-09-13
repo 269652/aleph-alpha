@@ -268,18 +268,26 @@ wind/walker-push shader math, using three real illustrated sheets
   unload/reload, the same already-accepted gap the Sägewerk's own log stock
   has today — a real `construction_catchup.gd`-style closed-form integration
   is a genuine follow-up, not attempted here.
-- **Settlement-autonomous "build a farm" decision.** `ConstructionPriority`/
-  `SettlementBuildDecision` do not yet know a Farm exists as a buildable
-  target — reaching that needs a real, non-exploitable way to express
-  wheat's dependency chain (see "Interaction with other docs" above), left
-  open rather than solved with a shortcut.
+- **Settlement-autonomous "build a farm" decision — resolved** by
+  [milling_and_baking.md](milling_and_baking.md) (2026-09-13): wheat's
+  chain is resolver data now (`grow_wheat`, flagged `automated` so it can
+  never be hand-crafted for free — the exact exploit this question refused
+  to paper over), and a `DECLINING` settlement's own bread shortfall raises
+  farm → mill → bakery through `SettlementBuildDecision` on its own. See
+  that doc for the whole mechanism.
 - **Capacity and a second Farmer.** Three plots is a real, if arbitrary,
   cap on how much one Farmer can tend before something occasionally
   withers — a deliberate real constraint (pillar 2), not yet paired with any
   mechanism for a settlement to notice the loss and build a second Farm.
-- **Milling and baking.** Wheat → flour → bread is the obvious next
-  production-chain link (real-world grounding above) and is deliberately
-  not built here — this pass ships the grain, not the chain past it.
+  Still open after [milling_and_baking.md](milling_and_baking.md): the
+  build decision reports *missing* producers, not insufficient throughput,
+  so a village with every link standing has no construction it can take
+  (see that doc's own "Scaling the chain to the need").
+- **Milling and baking — resolved** by
+  [milling_and_baking.md](milling_and_baking.md): a Mill (wheat → flour)
+  and a Bakery (flour → bread, real food), each a Sägewerk-shaped
+  continuous converter with its own worker, fed by the existing Logistics
+  hauler.
 - **Construction/damage/ruin art states.** Each real art sheet already
   draws a full construction → idle → damaged → ruined progression (see
   "Real art" above) — wiring it to a real build-progress/condition system

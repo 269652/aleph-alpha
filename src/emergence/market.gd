@@ -39,6 +39,20 @@ func add_stock(item_id: String, count: int) -> void:
 	stock[item_id] = stock_of(item_id) + count
 
 
+## All-or-nothing draw-down, the SAME contract VillageMarket.remove_stock and
+## StructureStock.remove_stock already keep: false (and nothing taken) when
+## stock is short. Takes a float like VillageMarket's so SettlementConstruction.
+## _handle_ready -- which draws a started project's materials through
+## whichever market EarthChunkManager hands it, this one included -- works
+## against both; counts here stay whole.
+func remove_stock(item_id: String, count: float) -> bool:
+	var whole := int(ceil(count))
+	if stock_of(item_id) < whole:
+		return false
+	stock[item_id] = stock_of(item_id) - whole
+	return true
+
+
 ## Price relative to the neutral REFERENCE_STOCK level: 1.0 at reference,
 ## rising as stock falls below it, falling as stock rises above it -- the
 ## same real number every buyer and every producer sees, so a shortage that

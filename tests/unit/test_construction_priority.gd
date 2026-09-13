@@ -197,3 +197,38 @@ func test_missing_structure_id_is_empty_for_a_skill_only_gate():
 func test_missing_structure_id_names_a_multi_hop_recipes_own_structure():
 	var stock := {"log": 0}
 	assert_eq(priority.missing_structure_id("log_to_balken", stock, [], book), "sagewerk")
+
+
+# -- deepest_missing_structure_id: a chain builds from its root -------------
+#
+## The bread chain (docs/concept/milling_and_baking.md) is the first real
+## multi-structure dependency: bread <- bakery <- flour <- mill <- wheat <-
+## farm. missing_structure_id returns the FIRST structure need in the walk,
+## which is the SHALLOWEST (the bakery) -- a dead building with no flour ever
+## coming. A settlement raising the chain on its own must start from the
+## root: the deepest missing producer. NeedResolver's walk is pre-order, so
+## the last structure need it reports is the deepest along the chain --
+## pinned here against the real recipe book, not assumed.
+
+func test_deepest_missing_structure_id_names_the_root_of_a_whole_missing_chain():
+	assert_eq(priority.deepest_missing_structure_id("bake_bread", {}, [], book), "farm")
+
+
+func test_deepest_missing_structure_id_climbs_the_chain_as_each_link_is_built():
+	assert_eq(priority.deepest_missing_structure_id("bake_bread", {}, ["farm"], book), "mill")
+	assert_eq(priority.deepest_missing_structure_id("bake_bread", {}, ["farm", "mill"], book), "bakery")
+	assert_eq(priority.deepest_missing_structure_id("bake_bread", {}, ["farm", "mill", "bakery"], book), "")
+
+
+func test_deepest_missing_structure_id_agrees_with_missing_structure_id_for_a_single_hop():
+	assert_eq(
+		priority.deepest_missing_structure_id("log_to_balken", {}, [], book),
+		priority.missing_structure_id("log_to_balken", {}, [], book)
+	)
+	assert_eq(priority.deepest_missing_structure_id("no_such_recipe", {}, [], book), "")
+
+
+## The shallowest pick the old function makes for the same chain -- kept as
+## documentation of exactly why the settlement must not use it.
+func test_missing_structure_id_still_names_the_shallowest_link_of_a_chain():
+	assert_eq(priority.missing_structure_id("bake_bread", {}, [], book), "bakery")

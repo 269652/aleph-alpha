@@ -52,7 +52,10 @@ func test_recipe_ids_returns_all_defined_recipes():
 	# + the City Hall (docs/concept/civic_construction.md's own "Meeting
 	# Hall" spec, docs/concept/npc_role_consensus.md): a settlement's real
 	# civic seat (1 more).
-	assert_eq(ids.size(), 57)
+	# + milling and baking (docs/concept/milling_and_baking.md): mill and
+	# bakery structures, plus the chain's three resolver recipes grow_wheat/
+	# mill_flour/bake_bread (5 more).
+	assert_eq(ids.size(), 62)
 
 
 func test_iron_sword_is_craftable_from_ingots_and_a_stick():
@@ -677,3 +680,91 @@ func test_climbing_rope_recipe_uses_only_existing_items():
 	var catalog := ItemCatalog.new()
 	for item_id in _input_item_ids("climbing_rope"):
 		assert_true(catalog.has(item_id), "climbing_rope recipe uses unknown material %s" % item_id)
+
+
+# -- milling and baking (docs/concept/milling_and_baking.md) ------------------
+#
+## The bread chain as resolver data: three recipes that exist so NeedResolver
+## can walk bread -> bakery -> flour -> mill -> wheat -> farm with zero
+## chain-specific code (the SAME role log_to_balken/log_to_planke already
+## play for the Sägewerk), each pinned to the real production constants so
+## the two data sources can never drift.
+
+func test_the_bread_chain_recipes_are_gated_on_their_real_structures():
+	const MillProduction = preload("res://src/world/mill_production.gd")
+	const BakeryProduction = preload("res://src/world/bakery_production.gd")
+
+	assert_eq(book.recipe_output("grow_wheat")["item_id"], "wheat")
+	assert_eq(book.recipe_requires_structure("grow_wheat"), "farm")
+	assert_eq(book.recipe_inputs("grow_wheat"), [], "a plot needs time and water, no consumed input -- FarmPlot's own model")
+
+	assert_eq(book.recipe_output("mill_flour")["item_id"], "flour")
+	assert_eq(book.recipe_requires_structure("mill_flour"), "mill")
+	var mill_inputs := book.recipe_inputs("mill_flour")
+	assert_eq(mill_inputs.size(), 1)
+	assert_eq(mill_inputs[0]["item_id"], "wheat")
+	assert_eq(mill_inputs[0]["count"], int(MillProduction.WHEAT_PER_FLOUR))
+
+	assert_eq(book.recipe_output("bake_bread")["item_id"], "bread")
+	assert_eq(book.recipe_requires_structure("bake_bread"), "bakery")
+	var bake_inputs := book.recipe_inputs("bake_bread")
+	assert_eq(bake_inputs.size(), 1)
+	assert_eq(bake_inputs[0]["item_id"], "flour")
+	assert_eq(bake_inputs[0]["count"], int(BakeryProduction.FLOUR_PER_BREAD))
+
+	assert_eq(book.recipe_for_output("bread"), "bake_bread")
+	assert_eq(book.recipe_for_output("flour"), "mill_flour")
+	assert_eq(book.recipe_for_output("wheat"), "grow_wheat")
+
+
+## "automated": the one new general recipe field -- a recipe a structure's
+## own production performs and a player can never craft by hand. grow_wheat
+## has no input (FarmPlot consumes none), so without it anyone standing near
+## a Farm could craft free wheat forever -- exactly the exploit
+## npc_farm_production.md refused to paper over. mill_flour/bake_bread are
+## NOT automated: a real input carried to a real building is a fair hand
+## craft.
+func test_grow_wheat_is_automated_and_the_rest_of_the_chain_is_not():
+	assert_true(book.recipe_is_automated("grow_wheat"))
+	assert_false(book.recipe_is_automated("mill_flour"))
+	assert_false(book.recipe_is_automated("bake_bread"))
+
+
+func test_recipe_is_automated_defaults_false_for_ordinary_and_unknown_recipes():
+	assert_false(book.recipe_is_automated("iron_sword"))
+	assert_false(book.recipe_is_automated("log_to_balken"))
+	assert_false(book.recipe_is_automated("no_such_recipe"))
+
+
+func test_an_automated_recipe_can_never_be_crafted_by_hand():
+	assert_false(book.can_craft("grow_wheat", {}), "no input to lack, and still never hand-craftable")
+	var result: Dictionary = book.craft("grow_wheat", {})
+	assert_false(result["success"])
+
+
+## The two buildings themselves: skill-UNGATED on purpose (the concept doc's
+## "Why no skill gate, stated plainly" -- a settlement cannot autonomously
+## raise anything skill-gated today), costed by what they are made of: a
+## post mill is mostly timber on a stone base, a bakehouse is a masonry oven
+## under a timber roof.
+func test_mill_and_bakery_are_material_gated_placeables_costed_by_their_own_construction():
+	assert_eq(book.recipe_output("mill")["item_id"], "mill")
+	assert_eq(book.recipe_required_skill("mill"), {})
+	assert_eq(book.recipe_requires_structure("mill"), "")
+	var mill_cost := _cost_by_item(book.recipe_inputs("mill"))
+	assert_gt(mill_cost.get("wood", 0), mill_cost.get("stone", 0), "a mill is mostly timber")
+	assert_gt(mill_cost.get("stone", 0), 0, "...on a stone base carrying the millstones")
+
+	assert_eq(book.recipe_output("bakery")["item_id"], "bakery")
+	assert_eq(book.recipe_required_skill("bakery"), {})
+	assert_eq(book.recipe_requires_structure("bakery"), "")
+	var bakery_cost := _cost_by_item(book.recipe_inputs("bakery"))
+	assert_gt(bakery_cost.get("stone", 0), bakery_cost.get("wood", 0), "a bakehouse is a masonry oven")
+	assert_gt(bakery_cost.get("wood", 0), 0, "...under a timber roof")
+
+
+func _cost_by_item(inputs: Array) -> Dictionary:
+	var cost := {}
+	for input in inputs:
+		cost[input["item_id"]] = input["count"]
+	return cost

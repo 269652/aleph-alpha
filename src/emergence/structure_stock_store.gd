@@ -27,6 +27,14 @@ func stock_for(instance_key: String) -> StructureStock:
 	return _stocks[instance_key]
 
 
+## Every instance key with a stock (created or persisted), so a caller can
+## find the stocks belonging to one settlement's own chunk -- SettlementFood
+## counts the food held on a village's own shelves (docs/concept/milling_
+## and_baking.md). Read-only: the keys, not the stocks.
+func instance_keys() -> Array:
+	return _stocks.keys()
+
+
 ## For persistence -- pure serialization, no FileAccess (same split
 ## EventStore/EventStorePersistence and MarketStore/MarketStorePersistence
 ## already use).

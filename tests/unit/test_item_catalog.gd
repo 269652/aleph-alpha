@@ -226,6 +226,26 @@ func test_city_hall_is_placeable():
 	assert_eq(catalog.make("city_hall").kind, "placeable")
 
 
+## Milling and baking (docs/concept/milling_and_baking.md): the Mill and
+## the Bakery are the same placeable family as farm/sagewerk/storage.
+func test_mill_and_bakery_are_placeable():
+	assert_true(catalog.has("mill"))
+	assert_eq(catalog.make("mill").kind, "placeable")
+	assert_true(catalog.has("bakery"))
+	assert_eq(catalog.make("bakery").kind, "placeable")
+
+
+## Flour is the chain's intermediate -- a material exactly like plank/beam
+## sit between a log and a wall -- and bread is a real meal: "food", so
+## everything that already reads kind_of(id) == "food" (SettlementFood,
+## the village market's meals, eating) sees it with no special-casing.
+func test_flour_is_a_material_and_bread_is_food():
+	assert_eq(catalog.make("flour").kind, "material")
+	assert_eq(catalog.kind_of("flour"), "material")
+	assert_eq(catalog.make("bread").kind, "food")
+	assert_eq(catalog.kind_of("bread"), "food")
+
+
 ## Named fruit tree species (see docs/concept/flora.md#named-fruit-and-nut-tree-species)
 ## drop their OWN item id -- cherry/apple/walnut -- rather than the generic
 ## "fruit"/"nut" every tree used to drop regardless of species.

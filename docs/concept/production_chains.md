@@ -100,7 +100,7 @@ whatever richer recipe representation crafting.md eventually ships.
 
 ## Mechanism
 
-### The two recipe fields
+### The two recipe fields (and a third, later)
 
 `CraftingRecipeBook`'s recipe dict shape gains two OPTIONAL keys:
 
@@ -110,8 +110,22 @@ recipe_id -> {
   "output": {"item_id": String, "count": int},
   "required_skill": {"stat_name": String, "level": float},  # OPTIONAL
   "requires_structure": String,                             # OPTIONAL
+  "automated": bool,                                        # OPTIONAL, see below
 }
 ```
+
+- `automated` (added by [milling_and_baking.md](milling_and_baking.md)):
+  true for a recipe a structure's own production performs — it exists as
+  resolver data so `NeedResolver` can reach that structure — and a player
+  can never craft by hand: `CraftingRecipeBook.can_craft`/`craft` refuse
+  it outright, before any input check, so `Player.craft` inherits the
+  refusal with no gate of its own. Its reason to exist is the one case the
+  "ghost recipe" pattern below could not cover honestly: a producer whose
+  real production consumes NO input (a Farm's wheat — `FarmPlot` needs
+  time and water, nothing consumable). `log_to_balken`/`log_to_planke`
+  stay un-automated because they still cost real logs by hand, which is
+  its own exploit-proofing; `grow_wheat` has no such cost, so it is
+  `automated` instead. False for every recipe with no flag.
 
 - `required_skill` names a `SkillTree` stat and the threshold total_bonus
   must reach — read live via `SkillTree.total_bonus(stat_name,

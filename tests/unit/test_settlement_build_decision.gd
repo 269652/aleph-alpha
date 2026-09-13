@@ -235,3 +235,53 @@ func test_cancellation_never_touches_a_different_chunks_project():
 	)
 
 	assert_eq(elsewhere.status, ConstructionProject.Status.PLANNED)
+
+
+# -- the bread chain: a food shortfall raises the chain from its root -------
+#
+## docs/concept/milling_and_baking.md: a settlement short of bread with none
+## of farm/mill/bakery built must start a FARM project (the deepest missing
+## producer), not a bakery that would never see flour; the next decision,
+## with the farm present, names the mill; then the bakery. Real recipe book,
+## real materials for every link, no skill gates anywhere on the chain.
+
+func _bread_shortfall() -> Array:
+	return [_shortfall([_missing("bread", 12.0)])]
+
+
+func _stock_the_whole_chain() -> void:
+	market.add_stock("wood", 40.0)
+	market.add_stock("stone", 20.0)
+	market.add_stock("plant_fibre", 10.0)
+
+
+func test_a_bread_shortfall_with_nothing_built_starts_a_farm_first():
+	_stock_the_whole_chain()
+	var result := SettlementBuildDecision.decide_and_advance(
+		projects, market, CHUNK, ORIGIN, "household:1", [], book, _bread_shortfall(), 3
+	)
+	assert_eq(result["item_id"], "bread")
+	assert_eq(result["priority"], ConstructionPriority.Priority.READY)
+	assert_not_null(projects.find_project(CHUNK, ORIGIN, "farm"), "the chain is raised from its root")
+	assert_null(projects.find_project(CHUNK, ORIGIN, "bakery"), "never a bakery with no flour ever coming")
+
+
+func test_with_the_farm_present_the_same_shortfall_starts_the_mill_then_the_bakery():
+	_stock_the_whole_chain()
+	SettlementBuildDecision.decide_and_advance(
+		projects, market, CHUNK, ORIGIN, "household:1", ["farm"], book, _bread_shortfall(), 3
+	)
+	assert_not_null(projects.find_project(CHUNK, ORIGIN, "mill"))
+
+	SettlementBuildDecision.decide_and_advance(
+		projects, market, CHUNK + Vector2i(1, 0), ORIGIN, "household:1", ["farm", "mill"], book, _bread_shortfall(), 3
+	)
+	assert_not_null(projects.find_project(CHUNK + Vector2i(1, 0), ORIGIN, "bakery"))
+
+
+func test_with_the_whole_chain_built_a_bread_shortfall_is_not_actionable():
+	_stock_the_whole_chain()
+	var result := SettlementBuildDecision.decide_and_advance(
+		projects, market, CHUNK, ORIGIN, "household:1", ["farm", "mill", "bakery"], book, _bread_shortfall(), 3
+	)
+	assert_eq(result["action"], "no_actionable_shortfall", "the chain exists; bread is a matter of time, not construction")
