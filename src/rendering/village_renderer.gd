@@ -234,6 +234,13 @@ func spawn_village(
 ## the house already fully buildable (see that function's own doc comment),
 ## this stamps the exact same full pieces + roofs as before -- deliberately
 ## behavior-preserving for the common case.
+##
+## Two-story houses (docs/concept/housing.md): if `npc.occupation`'s own
+## HouseBlueprint.choose_blueprint_id lands on a real two-story id (only
+## possible for merchant/blacksmith today -- see BLUEPRINT_POOL_BY_
+## OCCUPATION's own doc comment), this ALSO stamps a real upper storey
+## once the ground floor itself is fully complete -- see the two-story
+## branch near this function's own return.
 func _stamp_house(chunk_coord: Vector2i, index: int, anchor: Vector2, npc: NpcIdentity, tile_size: int, world, npc_count: int) -> Dictionary:
 	var seed_value := hash("%d_%d_house_%d" % [chunk_coord.x, chunk_coord.y, index])
 	var blueprint_id := _house_blueprint.choose_blueprint_id(npc.occupation, npc.genome, seed_value)
@@ -298,6 +305,46 @@ func _stamp_house(chunk_coord: Vector2i, index: int, anchor: Vector2, npc: NpcId
 	# still-under-construction house (fraction < 1.0 above) only lights the
 	# windows it has actually built so far, never one that isn't there yet.
 	var window_positions := _window_positions(stamped_pieces, origin_tile, tile_size)
+
+	# Two-story houses (docs/concept/housing.md): an NPC's own real second
+	# storey, gated on the SAME "ground floor fully complete" condition the
+	# roof itself already uses just above -- a house still being raised
+	# gets no upper floor yet either, the same real build order a hired
+	# Builder now follows too (see BuilderMarker.target_upper_pieces).
+	# Duck-typed via has_method exactly like stamp_structure_at_global
+	# itself already is a few lines up. Upper windows feed the SAME
+	# window_positions list ground windows already do -- one caller-visible
+	# list, not a second one nobody reads (see spawn_village's own night-
+	# lighting loop just below this function).
+	var upper_pieces := {}
+	if (
+		_house_blueprint.is_two_story(blueprint_id) and stamped_pieces.size() == pieces.size()
+		and world != null and world.has_method("stamp_upper_floor_at_global")
+	):
+		upper_pieces = _house_blueprint.build_upper_floor(blueprint_id, seed_value, material)
+		world.stamp_upper_floor_at_global(chunk_coord, origin_tile, upper_pieces)
+		window_positions.append_array(_window_positions(upper_pieces, origin_tile, tile_size))
+
+	# Interior furniture, upper floor (docs/concept/housing.md's "Interior
+	# furniture" / "Occupation-themed decor" sections) -- reported directly
+	# alongside two-story houses themselves ("no room decoration... no do
+	# both floors"): the SAME real, occupation-linked HouseDecor set the
+	# ground floor was just furnished with above, tried again against the
+	# upper floor's own real floor cells via its own real layer (see
+	# furnish_upper_floor_at_global's own doc comment for why
+	# furniture_modifications can't simply be reused for the upper floor
+	# too). Gated on the SAME "ground floor fully complete" condition the
+	# upper floor's own walls just used above -- a still-rising house gets
+	# no upper furniture either. Duck-typed exactly like stamp_upper_
+	# floor_at_global itself already is a few lines up.
+	if (
+		not upper_pieces.is_empty() and world != null
+		and world.has_method("furnish_upper_floor_at_global")
+	):
+		world.furnish_upper_floor_at_global(
+			chunk_coord, origin_tile, upper_pieces, HouseDecor.furniture_set_for(npc.occupation)
+		)
+
 	return {"door": door_position, "stand": stand_position, "windows": window_positions}
 
 
@@ -427,15 +474,24 @@ func _door_facing_direction(door_local: Vector2i, pieces: Dictionary) -> Vector2
 	return Vector2i(1, 0)  # never happens for a real door cell; stays safe regardless
 
 
-## `raw_origin` if its whole footprint is dry land already; otherwise the
-## nearest (by squared distance, deterministic) candidate origin within
-## _WATER_AVOIDANCE_SEARCH_RADIUS_TILES whose whole footprint is dry; null if
-## none qualifies. `world` without biome_at_global (a caller that only cares
-## about stamp_structure_at_global, e.g. an older/duck-typed test double)
-## skips the check entirely and trusts raw_origin, same fail-open shape as
-## every other optional-capability check in this codebase.
+## `raw_origin` if its whole footprint is real, buildable ground already;
+## otherwise the nearest (by squared distance, deterministic) candidate
+## origin within _WATER_AVOIDANCE_SEARCH_RADIUS_TILES whose whole
+## footprint qualifies; null if none does. `world` supporting neither real
+## check (a caller that only cares about stamp_structure_at_global, e.g.
+## an older/duck-typed test double) skips the check entirely and trusts
+## raw_origin, the same fail-open shape as every other optional-capability
+## check in this codebase.
+##
+## Named "_dry" historically (water avoidance was this search's original
+## and only job); it now also avoids forest and standing trees (docs/
+## concept/building.md: "houses / buildings cannot be built on river /
+## water; also not in the forest... must first fell all trees to make
+## space") via the real EarthChunkManager.is_buildable_terrain_at, when
+## the caller provides it -- see _footprint_is_dry's own doc comment for
+## the fallback this keeps for a `world` that only has biome_at_global.
 func _find_dry_origin(raw_origin: Vector2i, footprint: Vector2i, world) -> Variant:
-	if not world.has_method("biome_at_global") or _footprint_is_dry(raw_origin, footprint, world):
+	if not _world_has_a_terrain_check(world) or _footprint_is_dry(raw_origin, footprint, world):
 		return raw_origin
 	var offsets: Array[Vector2i] = []
 	for dy in range(-_WATER_AVOIDANCE_SEARCH_RADIUS_TILES, _WATER_AVOIDANCE_SEARCH_RADIUS_TILES + 1):
@@ -450,11 +506,25 @@ func _find_dry_origin(raw_origin: Vector2i, footprint: Vector2i, world) -> Varia
 	return null
 
 
+func _world_has_a_terrain_check(world) -> bool:
+	return world.has_method("is_buildable_terrain_at") or world.has_method("biome_at_global")
+
+
+## The real, comprehensive EarthChunkManager.is_buildable_terrain_at when
+## `world` provides it (ocean, forest, river, lake, AND standing trees --
+## see that function's own doc comment); otherwise the narrower, original
+## ocean-only biome_at_global check, for a `world` double that predates
+## it (see _world_has_a_terrain_check). Prefers the real check whenever
+## it's available rather than ever running both.
 func _footprint_is_dry(origin: Vector2i, footprint: Vector2i, world) -> bool:
+	var use_real_check: bool = world.has_method("is_buildable_terrain_at")
 	for x in footprint.x:
 		for y in footprint.y:
 			var cell := origin + Vector2i(x, y)
-			if world.biome_at_global(cell.x, cell.y) == CreaturePerception.WATER_BIOME:
+			if use_real_check:
+				if not world.is_buildable_terrain_at(cell.x, cell.y):
+					return false
+			elif world.biome_at_global(cell.x, cell.y) == CreaturePerception.WATER_BIOME:
 				return false
 	return true
 

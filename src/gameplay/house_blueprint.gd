@@ -57,14 +57,60 @@ const _BLUEPRINTS := {
 	"manor_wide": {"footprint": Vector2i(7, 5), "windows": 3},
 	"manor_grand": {"footprint": Vector2i(6, 6), "windows": 4},
 	"manor_L_wide": {"footprint": Vector2i(7, 6), "windows": 2, "notch": Rect2i(0, 4, 3, 2)},
+	# Two-story houses (docs/concept/housing.md's "Two-story houses"
+	# section) -- ten real, distinct SOPHISTICATED shapes, each with a real
+	# second, walkable, furnishable storey (see build_upper_floor/
+	# TWO_STORY_BLUEPRINT_IDS below), not a taller-looking single floor.
+	# `stairs`: the ONE interior floor cell (never a wall/door/window
+	# candidate, so it can never collide with door/window placement) where
+	# a real wood_stairs piece connects this house's ground and upper
+	# layers -- (1, 1) for every entry here, always a real interior cell
+	# for a footprint this size (MINIMUM_FOOTPRINT's own 3x3 floor), so one
+	# shared, simple, verified-safe choice rather than ten hand-checked
+	# ones. Deliberately no `notch` on any of these ten: an L-shaped
+	# two-story house is a real, later, separate variation -- carving a
+	# notch AFTER placing a fixed-coordinate stairs cell risks removing the
+	# very cell the stairs need, which plain rectangles never risk.
+	"townhouse_narrow": {"footprint": Vector2i(5, 7), "windows": 3, "stairs": Vector2i(1, 1)},
+	"merchant_house": {"footprint": Vector2i(6, 6), "windows": 4, "stairs": Vector2i(1, 1)},
+	"guild_hall": {"footprint": Vector2i(7, 7), "windows": 4, "stairs": Vector2i(1, 1)},
+	"riverside_villa": {"footprint": Vector2i(7, 6), "windows": 3, "stairs": Vector2i(1, 1)},
+	"timber_longhouse": {"footprint": Vector2i(9, 5), "windows": 4, "stairs": Vector2i(1, 1)},
+	"artisan_workshop_house": {"footprint": Vector2i(6, 7), "windows": 3, "stairs": Vector2i(1, 1)},
+	"tower_keep": {"footprint": Vector2i(5, 5), "windows": 2, "stairs": Vector2i(1, 1)},
+	"harborside_manor": {"footprint": Vector2i(8, 6), "windows": 5, "stairs": Vector2i(1, 1)},
+	"grand_estate": {"footprint": Vector2i(8, 8), "windows": 6, "stairs": Vector2i(1, 1)},
+	"gambrel_lodge": {"footprint": Vector2i(6, 8), "windows": 4, "stairs": Vector2i(1, 1)},
 }
 
 ## Every blueprint id this catalog knows how to build, in the same order as
 ## `_BLUEPRINTS` (Dictionary key order is insertion order in GDScript).
+## Deliberately does NOT include the ten two-story ids below (see
+## TWO_STORY_BLUEPRINT_IDS' own doc comment for why).
 const BLUEPRINT_IDS: Array[String] = [
 	"hut_tiny", "cottage_small", "cottage_window_pair", "cottage_wide", "cottage_tall",
 	"cottage_bright", "cottage_L_small", "manor_wide", "manor_grand", "manor_L_wide",
 ]
+
+## The ten sophisticated two-story shapes -- kept OUT of the generic
+## BLUEPRINT_IDS fallback deliberately (any occupation with no dedicated
+## pool below stays single-story), but present in BLUEPRINT_POOL_BY_
+## OCCUPATION for the two occupations that already reach for the showiest
+## SINGLE-story options (merchant, blacksmith) -- see that dict's own doc
+## comment. Originally kept out of BOTH entirely, with the procedural
+## village generator's own two-story wiring named as future work ("a real,
+## separate piece of work this pass does not attempt"); that follow-up is
+## exactly what VillageRenderer._stamp_house's own two-story branch below
+## now is (see docs/concept/housing.md), so an NPC villager can genuinely
+## live in one of these too, not just the player.
+const TWO_STORY_BLUEPRINT_IDS: Array[String] = [
+	"townhouse_narrow", "merchant_house", "guild_hall", "riverside_villa", "timber_longhouse",
+	"artisan_workshop_house", "tower_keep", "harborside_manor", "grand_estate", "gambrel_lodge",
+]
+
+
+func is_two_story(blueprint_id: String) -> bool:
+	return TWO_STORY_BLUEPRINT_IDS.has(blueprint_id)
 
 ## Which blueprints an occupation tends toward -- weighted by repetition (a
 ## name appearing more than once in its own pool is picked more often), the
@@ -72,13 +118,50 @@ const BLUEPRINT_IDS: Array[String] = [
 ## biome species pools already use. Ordered plain -> showy within each pool
 ## (see choose_blueprint_id's own showy/plain personality bias). A generic
 ## fallback (the whole catalog) covers any occupation not listed here.
+##
+## Two-story houses (docs/concept/housing.md): merchant and blacksmith --
+## the only two occupations that already reach for the showiest SINGLE-
+## story options above (manor_grand/manor_L_wide, manor_wide) -- get real
+## two-story entries at their own showy tail, via this SAME occupation+
+## personality mechanism, rather than a separate gate. A deliberately
+## curated SUBSET of TWO_STORY_BLUEPRINT_IDS, not all ten: thematically
+## fitting names (a merchant's own guild_hall/harborside_manor/
+## merchant_house; a blacksmith's own artisan_workshop_house/tower_keep),
+## and footprints comparable to the manor tier already sitting here
+## (25-49 tiles) rather than the largest shapes (e.g. grand_estate's 64),
+## which risk visibly overlapping a neighboring villager's house in
+## SettlementGenerator's own fixed ring layout -- a real, named judgment
+## call, not an oversight. The remaining two-story shapes stay reachable
+## only through the player's own deliberate blueprint-crafting choice,
+## where the player picks the exact site and can judge clearance
+## themselves. Farmer/fisher/guard/herbalist stay single-story -- the same
+## plain end of the gradient they already occupy.
+##
+## Weighted MAJORITY two-story (a real repeated-entry weighting, the same
+## "no probability table" convention this whole dict already uses) --
+## reported directly as too rare to reliably find by exploring: a village
+## walked into at random should show one often, not occasionally. Each
+## pool still opens with two real plain/single-story entries (so even a
+## cautious/stoic-dominant roll -- the lower half of choose_blueprint_id's
+## own plain/showy split -- keeps a real, if smaller, chance at one) and
+## is majority two-story from there on, so a bold/greedy roll (the upper
+## half) is now overwhelmingly likely to land on one. See
+## test_house_blueprint.gd's own test_a_merchant_or_blacksmith_village_
+## most_often_shows_a_two_story_house for the measured real hit rate this
+## reshuped pool actually produces, not just an eyeballed intent.
 const BLUEPRINT_POOL_BY_OCCUPATION := {
 	"farmer": ["hut_tiny", "cottage_small", "cottage_small", "cottage_wide"],
 	"fisher": ["hut_tiny", "hut_tiny", "cottage_small", "cottage_tall"],
 	"guard": ["hut_tiny", "cottage_small", "cottage_small", "cottage_tall"],
 	"herbalist": ["cottage_small", "cottage_window_pair", "cottage_bright", "cottage_L_small"],
-	"blacksmith": ["cottage_wide", "cottage_wide", "manor_wide", "cottage_L_small"],
-	"merchant": ["cottage_bright", "manor_wide", "manor_grand", "manor_L_wide"],
+	"blacksmith": [
+		"cottage_wide", "manor_wide",
+		"artisan_workshop_house", "tower_keep", "artisan_workshop_house", "tower_keep", "tower_keep",
+	],
+	"merchant": [
+		"cottage_bright", "manor_grand",
+		"merchant_house", "guild_hall", "harborside_manor", "merchant_house", "guild_hall", "harborside_manor",
+	],
 }
 
 ## Personality traits that nudge a choice toward the SHOWY (larger/later)
@@ -175,6 +258,70 @@ func build(blueprint_id: String, seed_value: int, material: String = BuildingPie
 			pieces[window_cell] = _piece(BuildingPiece.CATEGORY_WINDOW, material)
 			pool.remove_at(pick_index)
 			placed += 1
+
+	# Two-story houses (see TWO_STORY_BLUEPRINT_IDS): a real stairs piece at
+	# the recipe's own fixed interior cell -- a plain floor cell, never a
+	# wall/door/window candidate above, so this can never collide with
+	# anything door/window placement already did. Absent for every ordinary
+	# (single-story) recipe, so this is a genuine no-op for them.
+	if recipe.has("stairs"):
+		var stairs_cell: Vector2i = recipe.stairs
+		if pieces.has(stairs_cell):
+			pieces[stairs_cell] = "wood_stairs"
+
+	return pieces
+
+
+## The upper storey of a two-story house (see TWO_STORY_BLUEPRINT_IDS) --
+## the SAME footprint as build()'s own ground floor (a real second layer
+## stacked at the identical (x, y) cells, not offset elsewhere), so the
+## EXISTING build_roofs() below already caps it correctly with no changes
+## of its own: a roof derived from "this footprint's own facade" already
+## reads as capping whichever real layer is topmost, ground or upper.
+##
+## No door (there is nothing to walk in from up here) -- windows fill that
+## whole extra facade slot instead, so the upper storey's own front reads
+## as real windows all along it, not a blank wall over the entry below.
+## The SAME fixed interior cell the ground floor's own stairs-up sits at
+## carries a real stairs-down piece here, so the one stairwell connects
+## through both layers as the exact same footprint cell (see Player.
+## _current_floor/EarthChunkManager.step_on_stairs).
+##
+## Empty for a single-story blueprint id, or a real catalog entry with no
+## interior cell left after carving (never happens for the ten real
+## catalog entries above; stays safe regardless).
+func build_upper_floor(blueprint_id: String, seed_value: int, material: String = BuildingPiece.MATERIAL_WOOD) -> Dictionary:
+	if not TWO_STORY_BLUEPRINT_IDS.has(blueprint_id) or not _BLUEPRINTS.has(blueprint_id):
+		return {}
+	var recipe: Dictionary = _BLUEPRINTS[blueprint_id]
+	var footprint: Vector2i = recipe.footprint
+
+	var pieces := _rectangle_pieces(footprint, material)
+	if recipe.has("notch"):
+		_carve_notch(pieces, recipe.notch, material)
+
+	var candidates := _wall_candidates(pieces, footprint)
+	var facade := _facade_cells(pieces)
+	var window_pools: Array = [_only_facade(candidates, facade, true), _only_facade(candidates, facade, false)]
+	# +1: no door reserving a facade slot up here, so every real candidate
+	# this storey has is a real window opportunity.
+	var window_count: int = int(recipe.get("windows", 0)) + 1
+	var placed := 0
+	for pool in window_pools:
+		var mutable_pool: Array = pool.duplicate()
+		while placed < window_count and not mutable_pool.is_empty():
+			var pick_index := PixelNoise.range_index(
+				seed_value, placed + 1, footprint.x + footprint.y + 1, mutable_pool.size()
+			)
+			var window_cell: Vector2i = mutable_pool[pick_index]
+			pieces[window_cell] = _piece(BuildingPiece.CATEGORY_WINDOW, material)
+			mutable_pool.remove_at(pick_index)
+			placed += 1
+
+	if recipe.has("stairs"):
+		var stairs_cell: Vector2i = recipe.stairs
+		if pieces.has(stairs_cell):
+			pieces[stairs_cell] = "wood_stairs"
 
 	return pieces
 

@@ -197,6 +197,57 @@ const _RECIPES := {
 		"output": {"item_id": "manor", "count": 1},
 		"required_skill": {"stat_name": "carpentry_level", "level": 3.0},
 	},
+	# Ten sophisticated two-story blueprints (docs/concept/housing.md's "Two-story houses" section) -- a real second, walkable, furnishable storey each (HouseBlueprint.build_upper_floor), reached via the SAME carpentry_level 3.0 ceiling manor already uses (master_joiner) rather than inventing a fourth, harder tier: once a player (or, per workforce.md's own hire-fork, a real master-carpenter NPC) reaches it, this is real VARIETY at that ceiling, not a queue of ever-taller gates. inputs pinned to agree with each shape's own real cost -- ground pieces + roof pieces (the SAME convention small_house/cottage/manor already verify against their own shapes) PLUS the upper storey's own real walls/windows/floor/stairs.
+	"townhouse_narrow": {
+		"inputs": [{"item_id": "wood", "count": 177}],
+		"output": {"item_id": "townhouse_narrow", "count": 1},
+		"required_skill": {"stat_name": "carpentry_level", "level": 3.0},
+	},
+	"merchant_house": {
+		"inputs": [{"item_id": "wood", "count": 179}],
+		"output": {"item_id": "merchant_house", "count": 1},
+		"required_skill": {"stat_name": "carpentry_level", "level": 3.0},
+	},
+	"guild_hall": {
+		"inputs": [{"item_id": "wood", "count": 237}],
+		"output": {"item_id": "guild_hall", "count": 1},
+		"required_skill": {"stat_name": "carpentry_level", "level": 3.0},
+	},
+	"riverside_villa": {
+		"inputs": [{"item_id": "wood", "count": 205}],
+		"output": {"item_id": "riverside_villa", "count": 1},
+		"required_skill": {"stat_name": "carpentry_level", "level": 3.0},
+	},
+	"timber_longhouse": {
+		"inputs": [{"item_id": "wood", "count": 217}],
+		"output": {"item_id": "timber_longhouse", "count": 1},
+		"required_skill": {"stat_name": "carpentry_level", "level": 3.0},
+	},
+	"artisan_workshop_house": {
+		"inputs": [{"item_id": "wood", "count": 207}],
+		"output": {"item_id": "artisan_workshop_house", "count": 1},
+		"required_skill": {"stat_name": "carpentry_level", "level": 3.0},
+	},
+	"tower_keep": {
+		"inputs": [{"item_id": "wood", "count": 129}],
+		"output": {"item_id": "tower_keep", "count": 1},
+		"required_skill": {"stat_name": "carpentry_level", "level": 3.0},
+	},
+	"harborside_manor": {
+		"inputs": [{"item_id": "wood", "count": 231}],
+		"output": {"item_id": "harborside_manor", "count": 1},
+		"required_skill": {"stat_name": "carpentry_level", "level": 3.0},
+	},
+	"grand_estate": {
+		"inputs": [{"item_id": "wood", "count": 303}],
+		"output": {"item_id": "grand_estate", "count": 1},
+		"required_skill": {"stat_name": "carpentry_level", "level": 3.0},
+	},
+	"gambrel_lodge": {
+		"inputs": [{"item_id": "wood", "count": 235}],
+		"output": {"item_id": "gambrel_lodge", "count": 1},
+		"required_skill": {"stat_name": "carpentry_level", "level": 3.0},
+	},
 	# The Sägewerk's own log -> Balken/Planke shaping, mirrored here ONLY so
 	# NeedResolver (docs/concept/production_chains.md) can reason about
 	# beam/plank's real dependency chain -- the Sägewerk's actual, already-

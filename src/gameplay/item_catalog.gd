@@ -336,6 +336,19 @@ const _ITEMS := {
 	# the player's own construction.
 	"blueprint_cottage": ["Blueprint: Cottage", "blueprint", 1, 0.0],
 	"blueprint_manor": ["Blueprint: Manor", "blueprint", 1, 0.0],
+	# Ten sophisticated two-story blueprints (docs/concept/housing.md's
+	# "Two-story houses" section) -- same format/convention as every
+	# blueprint above.
+	"blueprint_townhouse_narrow": ["Blueprint: Narrow Townhouse", "blueprint", 1, 0.0],
+	"blueprint_merchant_house": ["Blueprint: Merchant's House", "blueprint", 1, 0.0],
+	"blueprint_guild_hall": ["Blueprint: Guild Hall", "blueprint", 1, 0.0],
+	"blueprint_riverside_villa": ["Blueprint: Riverside Villa", "blueprint", 1, 0.0],
+	"blueprint_timber_longhouse": ["Blueprint: Timber Longhouse", "blueprint", 1, 0.0],
+	"blueprint_artisan_workshop_house": ["Blueprint: Artisan's Workshop House", "blueprint", 1, 0.0],
+	"blueprint_tower_keep": ["Blueprint: Tower Keep", "blueprint", 1, 0.0],
+	"blueprint_harborside_manor": ["Blueprint: Harborside Manor", "blueprint", 1, 0.0],
+	"blueprint_grand_estate": ["Blueprint: Grand Estate", "blueprint", 1, 0.0],
+	"blueprint_gambrel_lodge": ["Blueprint: Gambrel Lodge", "blueprint", 1, 0.0],
 	# Interior furniture (see docs/concept/housing.md's "Interior furniture"
 	# section) -- the SAME id as its BuildingPiece entry, the same
 	# "one string, no new plumbing on either side" convention "stone_dam"
