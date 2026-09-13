@@ -21464,3 +21464,59 @@ variety/symmetry/rarity), NPC visits/opinions from a home's appeal,
 multiplayer visiting/rating, and the two furniture-layer test gaps named
 above (player hotbar verb, save/reload round trip).
 
+### The remaining 63 "first 100" items get real icon art (`concept/item_illustrations.md`, `concept/illustrated_art_addressing.md`, 2026-09-13)
+
+The 2026-09-13 equipment-first pass above left "the 65 food/material items
+... named as a likely 'derive from existing world sprites' follow-up, not
+started." This pass closes that gap -- 63 of those ids (2 fewer than the
+65 originally estimated: `honey` and `climbing_rope` were the +2 catalog
+ids added *past* the original 100-id list on 2026-09-08, not part of the
+65-item remainder, and stay their own out-of-scope items). Every id now
+has real art on disk at its already-declared `icon`/`any`/`default`
+address -- **zero `illustrated_art_registry.gd` or test changes needed**,
+since all 63 already carried the matching icon-only/`default`-state stub
+from the 2026-09-08 scaffolding pass.
+
+✅ **22 items derived from existing world sprites, not generated fresh**:
+16 mushrooms (8 species × plain/bitten) are center-cell crops of
+`assets/sprites/mushrooms/*.png`'s own 5x5 grid -- confirmed via that
+file's own doc comment to be 25 independent same-scale specimens, not a
+growth-stage progression, so any clean cell works. 6 tree fruits (cherry,
+apple, walnut, acorn, hazelnut, pine) are pixel-rectangle crops from
+`illustrated_tree.gd`'s blob-detected composite sheets -- **not** taken
+from `fruit_for()`'s own "ripe" row, which an Explore agent confirmed by
+running the real project code is wrong for 5 of the 6 species (a
+cross-section for apple, a leaves-only row for walnut, a bare needle
+sprig for pine, a corrupted multi-drawing merge for acorn/hazelnut);
+agent-verified alternative rectangles were used instead. Backgrounds
+normalized to the addressing convention's solid magenta per source's real
+measured format: alpha-onto-magenta compositing for the two real-alpha
+sources (apple, acorn), near-white pixel-threshold keying (225) for the
+four opaque no-alpha sources (cherry, walnut, hazelnut, pine).
+
+✅ **41 items generated fresh** via the same style-referenced ChatGPT
+multi-cell-grid pipeline the equipment-first pass established (existing
+`iron_sword` icon, or a same-family sibling already generated earlier in
+this pass -- `trout`/`wood`/`cooked_fish` -- as the style reference),
+sliced per-cell with PowerShell/System.Drawing: raw materials (wood, log,
+stick, rock, stone, sharp_shard, plant_fibre, iron_ore, copper_ore, coal,
+iron_ingot, copper_ingot, glass_bottle, beam, plank), animal/food staples
+(hide, meat, fang, cooked_meat, fruit, nut, carrot, potato), fish (fish,
+trout, bluegill, koi, goldfish, rare_fish, legendary_fish, cooked_fish,
+cooked_trout, cooked_bluegill, cooked_koi, cooked_goldfish), and misc/
+relic items (terminal_fragment, secret_room_token, wargames_punch_card,
+curious_keepsake, jarred_insect, caged_songbird).
+
+Verified: `--headless --import` (63 files, clean) then
+`test_illustrated_art_registry.gd` (50/50) and `test_item_icon_registry_
+coverage.gd` (4/4), both green with zero code changes -- confirming this
+was pure art addition against already-correct registry shapes. Branched
+`art/first-100-item-icons` from `origin/main`, merged back via the
+temp-worktree pattern (clean fast-forward, no concurrent `main` drift),
+re-verified both suites against the merged `main` state before pushing.
+
+Together with the 2026-09-13 equipment-first pass, this completes the
+original "first 100 items" icon-scaffolding list from 2026-09-08 in
+full -- every one of the 100 ids now has real icon art on disk, not just
+a registry stub.
+
