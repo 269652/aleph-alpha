@@ -170,9 +170,15 @@ practice, not just exist as unread data.
 
 `CraftingRecipeBook` is deliberately wider than "what a player can make at
 a bench": it also carries recipes that exist as *data* for the resolver
-and the construction ledger. The crafting menu (`scenes/crafting_window.gd`)
-therefore does not mirror `recipe_ids()` — `CraftingWindow.bench_recipe_ids()`
-lists a recipe only if BOTH hold:
+and the construction ledger. So no bench-craft surface mirrors
+`recipe_ids()`. The rule is ONE predicate on the book itself —
+`CraftingRecipeBook.is_bench_recipe(recipe_id, item_catalog)` (and
+`bench_recipe_ids(item_catalog)`, its filtered list) — and every surface a
+player reaches a recipe *from* gates on it rather than keeping a copy: the
+crafting menu (`CraftingWindow.bench_recipe_ids()` delegates to it) and
+the dev console's `/craft` (`World._handle_craft_command` refuses before
+`Player.craft` is called and lists bench recipes only). A recipe is a
+bench recipe only if BOTH hold:
 
 - it is not `automated` (`can_craft`/`craft` refuse such a recipe before
   any input check, so a card for it could only ever render permanently
@@ -194,6 +200,13 @@ craft under Structures, and `mill_flour`/`bake_bread`/`log_to_balken`/
 Any future "ledger-only" recipe gets excluded by the same two checks with
 no new special case — the same "declare the field, get the behavior"
 discipline the gates themselves follow.
+
+The refusal deliberately lives at the surfaces, **never inside
+`Player.craft` itself**: `Player._try_build_house_from_blueprint` calls
+`craft()` as its atomic material+skill gate and depends on it consuming
+the wood for exactly the house recipes. A gate in `craft()` would break
+the only door to a house. (The predicate takes the catalog as a parameter,
+duck-typed on `has()`, so the recipe book stays the pure table it is.)
 
 ### NeedResolver: the recursive "what do I actually need" walk
 
@@ -403,6 +416,17 @@ unread data).
 pinned by `tests/unit/test_crafting_window.gd` against the recipe book
 and catalog directly. Before this, the first house recipe's unguarded
 `ItemCatalog.make()` aborted the whole grid — the menu opened empty.
+Same day, the rule moved into the book as
+`CraftingRecipeBook.is_bench_recipe`/`bench_recipe_ids` (the window
+delegates; `test_crafting_recipe_book.gd` tests it directly, including
+that it reads the catalog rather than a hardcoded house list) and the dev
+console's `/craft` gates on the same predicate: a house blueprint or
+automated recipe is refused with a clear message before `Player.craft`
+ever runs, an unknown id says so, and "Known:" lists bench recipes only
+(`test_craft_command_clarity.gd`, source-pinned like the other
+`*_command_clarity` files, plus a guard that `Player.craft` stays
+ungated). Before this, `/craft small_house` burned 30 wood and built
+nothing.
 
 ✅ **NeedResolver** — `src/gameplay/need_resolver.gd`, pure, recursive,
 cycle-guarded (`MAX_DEPTH`, pinned by test). Covers direct stock

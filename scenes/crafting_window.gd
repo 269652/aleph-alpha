@@ -156,18 +156,11 @@ func refresh(inventory_counts: Dictionary) -> void:
 ##   loudly by design, so before this filter the first house recipe took the
 ##   whole grid down with it (0 cards for every recipe).
 ##
-## The same has() guard _display_name/_sprite_id_for/Player.craft already
-## apply, moved up front where the recipe list is decided.
+## The rule itself lives in the book (CraftingRecipeBook.is_bench_recipe /
+## bench_recipe_ids) and is shared with the dev console's /craft, so the
+## menu and the console can never disagree about what a bench craft is.
 func bench_recipe_ids() -> Array:
-	var ids: Array = []
-	for recipe_id in _recipe_book.recipe_ids():
-		if _recipe_book.recipe_is_automated(recipe_id):
-			continue
-		var output := _recipe_book.recipe_output(recipe_id)
-		if not _item_catalog.has(output.get("item_id", "")):
-			continue
-		ids.append(recipe_id)
-	return ids
+	return _recipe_book.bench_recipe_ids(_item_catalog)
 
 
 ## Every bench recipe_id (see bench_recipe_ids), grouped by its output
