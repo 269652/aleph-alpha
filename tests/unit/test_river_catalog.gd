@@ -228,7 +228,7 @@ func test_is_river_tile_false_far_from_any_curated_river():
 ## actually added" drift.
 func test_phase_one_roster_is_present():
 	var expected_rivers := [
-		"Rhine", "Danube", "Elbe", "Weser", "Main",
+		"Danube", "Elbe", "Weser", "Main",
 		"Mosel", "Neckar", "Oder", "Spree", "Isar", "Dreisam"
 	]
 	for river_name in expected_rivers:
@@ -279,7 +279,7 @@ func test_the_reported_bearing_actually_points_downstream():
 	var checked := 0
 	# Walk real course points, straight out of the catalog itself.
 	var courses := RiverCatalog.tile_polylines(width, height)
-	var points: Array = courses["Rhine"]
+	var points: Array = courses["Danube"]
 	for index in range(2, points.size() - 2):
 		var probe: Vector2 = points[index]
 		var here := catalog.nearest_river_at(int(probe.x), int(probe.y), width, height)
@@ -332,7 +332,7 @@ func test_opposite_banks_have_opposite_signs():
 	var width := EarthChunkGenerator.WORLD_WIDTH_TILES
 	var height := EarthChunkGenerator.WORLD_HEIGHT_TILES
 	var courses := RiverCatalog.tile_polylines(width, height)
-	var points: Array = courses["Rhine"]
+	var points: Array = courses["Danube"]
 	var checked := 0
 	for index in range(2, points.size() - 2):
 		var a: Vector2 = points[index]
@@ -348,7 +348,7 @@ func test_opposite_banks_have_opposite_signs():
 		var right := catalog.nearest_river_at(
 			int(mid.x - perp.x * 1.5), int(mid.y - perp.y * 1.5), width, height
 		)
-		if left.name != "Rhine" or right.name != "Rhine":
+		if left.name != "Danube" or right.name != "Danube":
 			continue
 		if absf(left.signed_across_tiles) < 0.5 or absf(right.signed_across_tiles) < 0.5:
 			continue
@@ -612,12 +612,19 @@ func test_adjacent_tiles_never_jump_across_a_segment_flip():
 ## equal channel depth: the winner at a name-flip boundary is whichever
 ## river claims the tile DEEPER (smaller |across|), so the waterline and
 ## cel bands match across the flip and no mirrored rectangle appears --
-## the artefact reported twice from the Rhine-Dreisam confluence corridor.
+## the artefact originally reported from the Rhine-Dreisam confluence
+## corridor. The Rhine was later removed from the curated roster (it never
+## produced correct hydraulics live -- see docs/progress.md), which also
+## removed that corridor's only name-flip boundary; re-pinned at the
+## Isar-Danube confluence near Deggendorf instead (found by sweeping this
+## same window logic around the Isar's own mouth waypoint), the one other
+## place in the roster where two curated courses genuinely run close
+## enough to flip a `nearest_river_at` name.
 func test_the_confluence_handoff_matches_depth_across_the_name_flip():
 	var catalog := RiverCatalog.new()
 	var width := EarthChunkGenerator.WORLD_WIDTH_TILES
 	var height := EarthChunkGenerator.WORLD_HEIGHT_TILES
-	var center := Vector2i(20835, 4662)
+	var center := Vector2i(21404, 4565)
 	var flips := 0
 	var worst := 0.0
 	for dy in range(-16, 17):

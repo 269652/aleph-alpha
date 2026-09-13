@@ -269,7 +269,10 @@ func test_the_droppable_boulder_is_a_dam_category_stone_piece():
 # -- own "pure data" framing exactly. ----------------------------------------
 
 func test_every_furniture_piece_id_is_a_real_piece_in_the_furniture_category():
-	for piece_id in ["wood_table", "wood_chair", "wood_bed", "wood_rug", "wood_bookshelf"]:
+	for piece_id in [
+		"wood_table", "wood_chair", "wood_bed", "wood_rug", "wood_bookshelf",
+		"couch", "photo_frame"
+	]:
 		assert_true(BuildingPiece.has_piece(piece_id), piece_id)
 		assert_true(BuildingPiece.PIECE_IDS.has(piece_id), piece_id)
 		assert_eq(BuildingPiece.category_of(piece_id), BuildingPiece.CATEGORY_FURNITURE, piece_id)
@@ -282,7 +285,10 @@ func test_every_furniture_piece_id_is_a_real_piece_in_the_furniture_category():
 ## room would make furnishing a small house actively worse to live in, and
 ## nothing in housing.md's own spec asks for collision.
 func test_furniture_does_not_enclose_or_support_and_stays_walkable():
-	for piece_id in ["wood_table", "wood_chair", "wood_bed", "wood_rug", "wood_bookshelf"]:
+	for piece_id in [
+		"wood_table", "wood_chair", "wood_bed", "wood_rug", "wood_bookshelf",
+		"couch", "photo_frame"
+	]:
 		assert_false(BuildingPiece.encloses(piece_id), piece_id)
 		assert_true(BuildingPiece.is_walkable(piece_id), piece_id)
 		assert_false(BuildingPiece.is_load_bearing(piece_id), piece_id)
@@ -290,7 +296,10 @@ func test_furniture_does_not_enclose_or_support_and_stays_walkable():
 
 
 func test_furniture_pieces_cost_real_wood():
-	for piece_id in ["wood_table", "wood_chair", "wood_bed", "wood_rug", "wood_bookshelf"]:
+	for piece_id in [
+		"wood_table", "wood_chair", "wood_bed", "wood_rug", "wood_bookshelf",
+		"couch", "photo_frame"
+	]:
 		var cost := BuildingPiece.cost_of(piece_id)
 		assert_true(cost.has("wood"), piece_id)
 		assert_gt(int(cost["wood"]), 0, piece_id)
@@ -304,3 +313,19 @@ func test_furniture_pieces_cost_real_wood():
 func test_a_bed_costs_and_survives_more_than_a_chair():
 	assert_gt(int(BuildingPiece.cost_of("wood_bed")["wood"]), int(BuildingPiece.cost_of("wood_chair")["wood"]))
 	assert_gt(BuildingPiece.durability_of("wood_bed"), BuildingPiece.durability_of("wood_chair"))
+
+
+## A couch seats more than a chair (costs/survives more) but is still a
+## sitting piece, never bed-tier (a bed is the biggest real piece here).
+func test_a_couch_costs_and_survives_more_than_a_chair_but_less_than_a_bed():
+	assert_gt(int(BuildingPiece.cost_of("couch")["wood"]), int(BuildingPiece.cost_of("wood_chair")["wood"]))
+	assert_gt(BuildingPiece.durability_of("couch"), BuildingPiece.durability_of("wood_chair"))
+	assert_lt(int(BuildingPiece.cost_of("couch")["wood"]), int(BuildingPiece.cost_of("wood_bed")["wood"]))
+	assert_lt(BuildingPiece.durability_of("couch"), BuildingPiece.durability_of("wood_bed"))
+
+
+## A photo frame is the smallest, most fragile real piece furnished here --
+## even lighter than a rug, the previous cheapest/most fragile piece.
+func test_a_photo_frame_is_the_cheapest_and_most_fragile_furniture_piece():
+	assert_lte(int(BuildingPiece.cost_of("photo_frame")["wood"]), int(BuildingPiece.cost_of("wood_rug")["wood"]))
+	assert_lt(BuildingPiece.durability_of("photo_frame"), BuildingPiece.durability_of("wood_rug"))

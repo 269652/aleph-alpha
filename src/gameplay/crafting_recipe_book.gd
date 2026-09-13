@@ -297,6 +297,19 @@ const _RECIPES := {
 		"inputs": [{"item_id": "wood", "count": 3}],
 		"output": {"item_id": "wooden_fence", "count": 1},
 	},
+	# The City Hall (see docs/concept/civic_construction.md's own "Meeting
+	# Hall" spec, docs/concept/npc_role_consensus.md): a settlement's real
+	# civic commons -- meaningfully bigger than Storage's own enclosed shed
+	# (12 wood + 4 plank), since it's meant to stand as a permanent
+	# settlement seat (a real stone footing, the same "keep wood off bare
+	# earth" reasoning timber_construction.md's own grounding gives for
+	# footings) with substantial timber framing for a hall large enough to
+	# actually gather in. No skill gate, matching Storage/Farm's own
+	# reachability.
+	"city_hall": {
+		"inputs": [{"item_id": "wood", "count": 20}, {"item_id": "stone", "count": 10}],
+		"output": {"item_id": "city_hall", "count": 1},
+	},
 	# A stone check dam (see docs/concept/rivers.md's "Dams"). Costs `rock`
 	# -- what picking up a pebble and smashing a boulder both yield -- and
 	# NOT mined `stone`, so damming a stream needs only what its own banks

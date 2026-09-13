@@ -56,6 +56,42 @@ weighted formula dressed up to look more finished than it is. Widening it
 to variety/arrangement/theme is this doc's own named follow-up (Open
 Questions), not silently pre-empted here.
 
+### Occupation-themed decor
+
+Resolves this doc's own "theme matching" Open Question, for the one real
+per-NPC signal this codebase already models: occupation identity.
+`HouseDecor.furniture_set_for(occupation)` gives each of `NpcIdentity`'s 8
+real occupations (farmer/blacksmith/merchant/guard/fisher/herbalist/hunter/
+nurse) a distinct set drawn from the same shared furniture pool — every
+occupation, not a couple of signature pieces, per an explicit scope
+decision. Two more pieces (`couch`, `photo_frame`) joined the original
+five so there was enough real variety to make 8 sets genuinely distinct.
+
+Deliberately NOT wealth-tiered: `village_wages.gd`'s own file doc comment
+establishes this game's economy as deliberately neutral between producer
+and non-producer occupations, so a richer/poorer furniture tier per
+occupation would contradict a design decision already made elsewhere.
+Each set is instead reasoned from two real signals this codebase already
+tracks — `NpcIdentity.WORK_LOCATION_BY_OCCUPATION` (where they work) and
+`OccupationProduction`'s own recipe table (what they make) — not invented
+lore: a merchant (stall, customers) and a nurse (well, patients) are the
+two occupations whose real work routinely brings other people to them, so
+they get the couch, the one piece meant for a visitor to sit on; a
+herbalist's own recipe (`butterfly_net`, a specimen-collecting trade) gets
+it the bookshelf; a guard (gate, sleeps between shifts) gets the smallest,
+barracks-plain set.
+
+`EarthChunkManager.furnish_house_at_global` is the new world-write this
+needed: called by `VillageRenderer._stamp_house` right after
+`stamp_structure_at_global` writes a house's own floor/wall pieces (its
+own real ordering requirement — `FurniturePlacement`'s `is_indoors` check
+needs those pieces already on the chunk), furnished against the SAME
+`stamped_pieces` dict just given to `stamp_structure_at_global`, never a
+second floor-detection pass. Tries each id in the NPC's own set against
+that house's real floor cells in order, skipping (not aborting on) any
+cell `FurniturePlacement` itself refuses, so an odd-shaped or too-small
+floor still gets partially furnished rather than emptied.
+
 - **NPCs react to and visit homes.** A high-appeal home draws visits from
   nearby NPCs (per [npc.md](npc.md)'s daily-planner architecture — a visit
   can simply be a plan entry an NPC's schedule includes) and NPCs form real
@@ -85,8 +121,9 @@ simplification trees/creatures already accept.
 ### Status
 
 - ✅ Night lighting (ambient), above.
-- ✅ `BuildingPiece.CATEGORY_FURNITURE` + five real pieces (wood_chair/
-  table/bookshelf/bed/rug) and their matching `ItemCatalog` entries
+- ✅ `BuildingPiece.CATEGORY_FURNITURE` + seven real pieces (wood_chair/
+  table/bookshelf/bed/rug, plus `couch`/`photo_frame` added for occupation
+  theming below) and their matching `ItemCatalog` entries
 - ✅ `FurniturePlacement.can_place`/`refusal_reason` (interior-floor rule,
   its own layer, tested against a real enclosed-room fixture)
 - ✅ `Chunk.furniture_modifications` + its own `TileMapLayer`/paint pass
@@ -95,41 +132,54 @@ simplification trees/creatures already accept.
   persisted the same generic way `roof_modifications` already is, and
   rendered via the ALREADY-real shared atlas (`TerrainRenderer.
   atlas_coords_for_modification` already resolves any `BuildingPiece`,
-  furniture included, since furniture pieces are real `PIECE_IDS` entries)
+  furniture included, since furniture pieces are real `PIECE_IDS` entries).
+  **Now real GUT-tested** (`test_earth_chunk_manager.gd`'s furniture group,
+  9 tests) — see the caveat below on what this does and does not close.
 - ✅ Placing/removing furniture in the world: `EarthChunkManager.
   build_furniture_at_global`/`destroy_furniture_at_global`/
   `furniture_at_global`, gated by `FurniturePlacement` (real interior-floor
-  rule). A real hotbar-armed in-world verb now exists too: a new
-  `HotbarAction.FURNISH` (`"furniture"` kind → its own `_selected_
-  furniture_item`, mirroring `"placeable"`'s own `_selected_placeable_item`
-  exactly, mutually exclusive with it) makes `_build_step` furnish instead
-  of placing/terraforming, and `_destroy_step` checks the furniture layer
-  BEFORE the general modification layer (a table sitting on a floor
-  destroys the table, not the floor under it). The `/furniture place|
-  remove` dev-console command (the same interim-call-site choice
-  `player_citizenship.md`'s own item commands made) stays too, as a second,
-  still-real way to reach the same world model.
-- ⬜ `appeal_score` (the honest placeholder above)
+  rule). A real hotbar-armed in-world verb also exists: `HotbarAction.
+  FURNISH` (`"furniture"` kind → its own `_selected_furniture_item` on
+  `scenes/player.gd`, mirroring `"placeable"`'s own `_selected_placeable_
+  item` exactly, mutually exclusive with it) makes `_build_step` furnish
+  instead of placing/terraforming, and `_destroy_step` checks the
+  furniture layer BEFORE the general modification layer (a table sitting
+  on a floor destroys the table, not the floor under it). The `/furniture
+  place|remove` dev-console command (`scenes/world.gd`) stays too, as a
+  second, still-real way to reach the same world model.
+- ✅ **Occupation-themed decor** (own section above): `HouseDecor.
+  furniture_set_for(occupation)` + `EarthChunkManager.furnish_house_at_
+  global`, wired into `VillageRenderer._stamp_house` — every generated
+  settlement house now carries a real, occupation-linked furniture set,
+  TDD red-first throughout (`test_house_decor.gd` 6/6, the new
+  `furnish_house_at_global` group in `test_earth_chunk_manager.gd` 5/5,
+  `test_village_renderer.gd`'s two new furnishing tests, full file 41/41).
+- ⬜ `appeal_score` (the honest placeholder above) -- occupation-themed
+  decor answers this doc's own "theme matching" question but not "variety/
+  symmetry/rarity"; the formula itself is still unbuilt.
 - ⬜ NPC visits / opinions from a home's appeal
 - ⬜ Multiplayer visiting/rating
 
-**The same explicit caveat as `workforce.md`'s own Status list**: the two
-✅/🚧 items above (the layer/paint pass and the place/remove verb) were
-written directly per an explicit, direct mid-session user instruction
-("skip tests"), without this project's own mandatory strict-TDD red-first
-cycle and without running the test suite at all. Grounded in real,
-independently-verified existing APIs (`TerrainRenderer.atlas_coords_for_
-modification`, `ChunkSerializer.save_modifications`/`load_modifications`,
-`FurniturePlacement`'s own already-tested rule) -- but genuinely unverified
-until a real GUT pass confirms it. Do not merge to `main` on the strength
-of this Status list alone.
+**Partial resolution of the previous caveat below**: the furniture layer/
+paint pass and the place/remove verb were originally shipped directly per
+a mid-session "skip tests" instruction, with no GUT pass at all. This
+session added real coverage for the core world-model surface (build/
+destroy/query verbs + `_paint_furniture` against a real chunk and
+`TileMapLayer`, 9 tests) and for the new generation-time `furnish_house_
+at_global` this pass itself introduces. **Still not covered**: `scenes/
+player.gd`'s own `_selected_furniture_item` arm/build/destroy-ordering
+behavior (`test_player.gd` has zero furniture references), and a real
+save/unload/reload round trip through `FURNITURE_MODIFICATIONS_DIR` (the
+generic `ChunkSerializer` mechanism it reuses is tested, but not exercised
+end-to-end through a furniture-specific unload/reload). Both are real,
+named gaps, not a silent claim of full coverage.
 
 ### Open questions
 
 - Appeal-score formula — what actually counts (variety, symmetry, theme
-  matching, rarity of decor items) and how legible should the scoring be to
-  the player (fully transparent numbers vs. Stardew's opaque
-  quality-heuristic feel)?
+  matching -- now answered by occupation-themed decor above -- rarity of
+  decor items) and how legible should the scoring be to the player (fully
+  transparent numbers vs. Stardew's opaque quality-heuristic feel)?
 - Does a decorated home unlock anything mechanical (better sleep-quality
   bonus feeding [survival.md](survival.md), NPC willingness to be
   [hired](npc.md#hiring--instruction)), or stay a purely social/cosmetic

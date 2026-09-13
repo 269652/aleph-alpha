@@ -70,7 +70,7 @@ tile_is_within_radius` already makes and documents.
 Phase 1 ships Germany's major rivers plus the Dreisam (small, but the one
 this game's spawn point sits on, so it ships regardless of size):
 
-Rhine, Danube, Elbe, Weser, Main, Mosel, Neckar, Oder, Spree, Isar, Dreisam.
+Danube, Elbe, Weser, Main, Mosel, Neckar, Oder, Spree, Isar, Dreisam.
 
 **Explicitly deferred**: every other river on Earth. The catalog structure
 places no limit on this — adding a river is adding one data entry — but
@@ -139,7 +139,7 @@ Curated rivers remain authoritative wherever they reach.
 ### Spawn: a random curated river (2026-09-12)
 
 "Can you set the spawn to a random river?" A new game now begins on a
-random point along a random **curated** river -- the Dreisam, Rhine,
+random point along a random **curated** river -- the Dreisam,
 Danube, Elbe, Weser, Main, Mosel, Neckar, Oder, Spree or Isar -- rather
 than always at Nantes. `src/world/spawn_river_picker.gd` is pure: given
 `RiverCatalog.tile_polylines`, a seeded `RandomNumberGenerator` and an
@@ -538,7 +538,7 @@ That last one **changed existing behaviour honestly**: the player used to
 swim at spawn, because the authored 2.5 m taper said so. Real physics says
 wade. The test that pinned "swimming" was pinning an invention, and now pins
 the real claim (you are in real water) with the swim path proved separately
-against the Rhine.
+against the Danube.
 
 ### Honest limits
 
@@ -1666,6 +1666,46 @@ reasoned away as impossible a second time.
 spawning rules, a reason to fish a stream rather than the sea — is still
 ⬜ Not started. What exists is incidental: ocean-biome water that a curated
 course happens to run through.)
+
+**Update (2026-09-13): that one measured coordinate stopped proving
+anything, for two separate reasons, and neither left a real replacement
+to find.** First, `biome_at_global(20542, 4242)` itself stopped reading
+"ocean" — its elevation sits exactly on the land-side `SEA_LEVEL_MARGIN`
+clamp in `_blend_elevation`, a knife-edge tile that used to fall on the
+sea side of it; the hydrology bake data and the sea-level/fine-detail
+constants involved are unchanged since the coordinate was originally
+pinned, so whatever moved it isn't tracked down here. Second, and
+independently: the Rhine itself was removed from the curated roster
+entirely, a deliberate content decision unrelated to this test (see
+`docs/progress.md`'s "Rivers: the Rhine removed from the curated
+catalog") — so even an ocean-biome tile there would no longer sit near
+any curated course.
+
+Before treating either as one stale pin, it was re-swept exhaustively
+with a new dev tool (`tools/probe_fish_river_fixture.gd`): every tile
+within `RIVER_HALF_WIDTH_TILES + RIVER_BANK_APRON_TILES` of every curated
+river's **entire** smoothed course — not sampled points, the whole
+corridor, ~90,000 candidate tiles across all 11 rivers, back when the
+Rhine was still one of them. Zero cells were both interior ocean biome
+and within a curated river's apron; the nearest real ocean-biome tile to
+the old fixture was 500+ tiles away. The coincidence this section
+describes (64 of 10,743 apron cells qualifying, back on 2026-09-04) no
+longer occurs anywhere in the generated world, on either roster.
+
+The invariant this test exists for is unaffected — `biome_at_global` and
+`nearest_river_at` are still two independent queries with no rule
+preventing both from being true of the same tile at once, which is the
+actual thing "the rivers are full of fish" needed proven. Only the way
+the test demonstrates it changed: it now forces the ocean side with a
+synthetic hydrology bake (`EarthChunkGenerator.set_hydrology`, the same
+seam `test_earth_chunk_generator.gd`'s own `_synthetic_field()` uses), at
+a fixture point re-anchored to the Danube (the biggest remaining curated
+river) now that the Rhine is gone. The river side stays entirely real:
+`RiverCatalog.nearest_river_at` never reads hydrology, so the fixture's
+~0.5-tile distance to the curated Danube course is genuine curated
+geometry, not synthesized. If the real bake or elevation source changes
+again and a natural coincidence becomes findable on some curated course,
+`tools/probe_fish_river_fixture.gd` is there to look for one.
 
 ## The boulder's shore band, not a halo (2026-09-04) — SUPERSEDED
 

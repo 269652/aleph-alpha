@@ -13,6 +13,7 @@ const HouseBlueprint = preload("res://src/gameplay/house_blueprint.gd")
 const ConstructionLabor = preload("res://src/emergence/construction_labor.gd")
 const ConstructionCatchup = preload("res://src/world/construction_catchup.gd")
 const NpcIdentity = preload("res://src/world/npc_identity.gd")
+const HouseDecor = preload("res://src/gameplay/house_decor.gd")
 
 const TILE_SIZE := 16
 const CHUNK_SIZE := 32
@@ -54,6 +55,19 @@ class StubWorld:
 	var founded_calls: Array = []
 	func record_settlement_founded_if_new(chunk_coord: Vector2i, npcs: Array) -> void:
 		founded_calls.append({"chunk_coord": chunk_coord, "npcs": npcs})
+
+	## Records every generation-time furnishing call instead of touching a
+	## real chunk (see EarthChunkManager.furnish_house_at_global, docs/
+	## concept/housing.md's "Occupation-themed decor" section).
+	var furnish_calls: Array = []
+	func furnish_house_at_global(
+		chunk_coord: Vector2i, origin_tile: Vector2i, ground_pieces: Dictionary, furniture_ids: Array
+	) -> int:
+		furnish_calls.append({
+			"chunk_coord": chunk_coord, "origin_tile": origin_tile,
+			"ground_pieces": ground_pieces, "furniture_ids": furniture_ids,
+		})
+		return furniture_ids.size()
 
 
 func before_each():
@@ -864,6 +878,44 @@ func test_stamp_house_stamps_the_full_set_once_completion_reaches_one():
 	var call = world.stamp_calls[0]
 	assert_eq(call.ground_pieces.size(), fake_blueprint.pieces.size())
 	assert_eq(call.roof_pieces.size(), fake_blueprint.roofs.size())
+
+
+# -- occupation-themed decor (docs/concept/housing.md's "Occupation-themed
+# decor" section): _stamp_house furnishes the house it just stamped with
+# its own NPC's real HouseDecor set, once the house's own floor/wall pieces
+# are already on the chunk (furnish_house_at_global's own real ordering
+# requirement -- FurniturePlacement's is_indoors check needs them there).
+
+func test_stamp_house_furnishes_with_the_npcs_own_occupation_set():
+	var world := StubWorld.new()
+	var npc := NpcIdentity.new(42)
+
+	renderer._stamp_house(Vector2i(3, 3), 0, Vector2(100, 100), npc, TILE_SIZE, world, 50)
+
+	assert_eq(world.furnish_calls.size(), 1)
+	var call = world.furnish_calls[0]
+	assert_eq(call.furniture_ids, HouseDecor.furniture_set_for(npc.occupation))
+
+
+## Furnishing must read the SAME stamped_pieces stamp_structure_at_global was
+## just given -- never a second, independent floor-detection pass -- so a
+## partially-built house (see the completion-fraction tests above) is only
+## ever furnished against the floor cells that are actually there.
+func test_stamp_house_furnishes_using_the_same_pieces_it_just_stamped():
+	var world := StubWorld.new()
+	var fake_blueprint := FakeHouseBlueprint.new()
+	fake_blueprint.pieces = _oversized_pieces()
+	fake_blueprint.roofs = {Vector2i(0, 0): "wood_roof"}
+	renderer._house_blueprint = fake_blueprint
+	var npc := NpcIdentity.new(42)
+
+	renderer._stamp_house(Vector2i(3, 3), 0, Vector2(100, 100), npc, TILE_SIZE, world, 1)
+
+	assert_eq(world.stamp_calls.size(), 1)
+	assert_eq(world.furnish_calls.size(), 1)
+	assert_eq(world.furnish_calls[0].ground_pieces, world.stamp_calls[0].ground_pieces)
+	assert_eq(world.furnish_calls[0].origin_tile, world.stamp_calls[0].origin_tile)
+	assert_eq(world.furnish_calls[0].chunk_coord, world.stamp_calls[0].chunk_coord)
 
 
 # -- night lighting: houses show a lit-window state after dark (see

@@ -242,6 +242,14 @@ const _ITEMS := {
 	# The wooden fence (see docs/concept/npc_farm_production.md): gates a
 	# Farm's Farmer -- no Farmer moves in until a real fence stands nearby.
 	"wooden_fence": ["Wooden Fence", "placeable", 5, 0.0],
+	# The City Hall (see docs/concept/civic_construction.md's own "Meeting
+	# Hall" spec, docs/concept/npc_role_consensus.md): a settlement's real
+	# civic seat, where a real "compute demands" step runs. Same placeable
+	# family as farm/sagewerk/storage/wooden_fence -- a single-tile
+	# structure, not yet the richer multi-piece CivicBlueprint shape
+	# civic_construction.md's own fuller Meeting Hall spec describes (see
+	# that doc's own honestly-noted divergence).
+	"city_hall": ["City Hall", "placeable", 5, 0.0],
 	# A stone check dam (see docs/concept/rivers.md). The id is deliberately
 	# the SAME string as its BuildingPiece id: build_at_global writes
 	# whatever id it is handed into chunk.modifications, so sharing one
@@ -338,6 +346,10 @@ const _ITEMS := {
 	"wood_bookshelf": ["Wooden Bookshelf", "furniture", 5, 0.0],
 	"wood_bed": ["Wooden Bed", "furniture", 5, 0.0],
 	"wood_rug": ["Rug", "furniture", 5, 0.0],
+	# Two more furniture pieces (docs/concept/housing.md's "Occupation-
+	# themed decor" section) -- same id-sharing/max-stack convention above.
+	"couch": ["Couch", "furniture", 5, 0.0],
+	"photo_frame": ["Photo Frame", "furniture", 5, 0.0],
 }
 
 

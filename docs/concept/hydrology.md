@@ -424,7 +424,9 @@ so it stays seamless and regenerable.
 parallel to the river several tiles out on the world, never on the
 minimap. The painter writes every tile's signed across-position into the
 flow map, and past a channel's reach `nearest_river_at` falls back to the
-nearest *curated* river (the Rhine, 800 tiles away), whose sign is
+nearest *curated* river (at the time, the Rhine, 800 tiles away -- since
+removed from the roster; some other curated river is the fallback now),
+whose sign is
 arbitrary and whose magnitude clamps to `CLAMP_MAGNITUDE`. The channel
 query's reach had been raised to cover the painter's bleed, but the map
 FILTER reads one texel further (bilinear) or two (the cubic

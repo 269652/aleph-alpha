@@ -155,7 +155,10 @@ func test_blueprint_cottage_is_a_real_non_stackable_blueprint_kind_item():
 ## reach it with no new item-side machinery.
 func test_furniture_items_share_their_building_piece_ids_and_are_placeable_like():
 	const BuildingPiece = preload("res://src/gameplay/building_piece.gd")
-	for piece_id in ["wood_table", "wood_chair", "wood_bed", "wood_rug", "wood_bookshelf"]:
+	for piece_id in [
+		"wood_table", "wood_chair", "wood_bed", "wood_rug", "wood_bookshelf",
+		"couch", "photo_frame"
+	]:
 		assert_true(catalog.has(piece_id), piece_id)
 		assert_eq(catalog.kind_of(piece_id), "furniture", piece_id)
 		var item := catalog.make(piece_id)
@@ -213,6 +216,14 @@ func test_wheat_is_a_material():
 func test_wooden_fence_is_placeable():
 	assert_true(catalog.has("wooden_fence"))
 	assert_eq(catalog.make("wooden_fence").kind, "placeable")
+
+
+## The City Hall (docs/concept/civic_construction.md's own "Meeting Hall"
+## spec, docs/concept/npc_role_consensus.md) -- the same placeable kind as
+## farm/sagewerk/storage/wooden_fence.
+func test_city_hall_is_placeable():
+	assert_true(catalog.has("city_hall"))
+	assert_eq(catalog.make("city_hall").kind, "placeable")
 
 
 ## Named fruit tree species (see docs/concept/flora.md#named-fruit-and-nut-tree-species)

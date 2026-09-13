@@ -1,15 +1,17 @@
 extends RefCounted
 
 ## Real illustrated art for the structures docs/concept/npc_farm_production.md
-## introduced: farm (assets/sprites/buildings/farmhouse.png), sagewerk
-## (.../sawmill.png), storage (.../warehouse.png), and the wooden_fence that
-## gates a Farm's Farmer (assets/sprites/structures/wooden_fence.png).
-## Sliced with a KNOWN FIXED GRID directly, mirroring
-## illustrated_beehive_sprite.gd's own established precedent for a regular
-## sheet, NOT SpriteSheetSlicer.detect_frames' column-gap heuristic (that
-## tool slices a single horizontal strip; these are real 2D grids).
+## and docs/concept/npc_role_consensus.md introduced: farm
+## (assets/sprites/buildings/farmhouse.png), sagewerk (.../sawmill.png),
+## storage (.../warehouse.png), the wooden_fence that gates a Farm's Farmer
+## (assets/sprites/structures/wooden_fence.png), and city_hall
+## (.../city_hall.png), a settlement's real civic seat. Sliced with a KNOWN
+## FIXED GRID directly, mirroring illustrated_beehive_sprite.gd's own
+## established precedent for a regular sheet, NOT SpriteSheetSlicer.
+## detect_frames' column-gap heuristic (that tool slices a single
+## horizontal strip; these are real 2D grids).
 ##
-## Each of the three building sheets is a genuine construction -> idle ->
+## Each of the four building sheets is a genuine construction -> idle ->
 ## damaged -> ruined progression, 5 rows deep (real, useful content for a
 ## future pass) -- but nothing in this codebase yet tracks a single-tile
 ## placeable's build progress or condition the way BuildingPiece walls do
@@ -22,24 +24,27 @@ extends RefCounted
 ## assumption on the building sheets visibly bled into the next row's roof
 ## when actually cropped and viewed) rather than assumed from the sheets'
 ## own 1536x1024 canvas size:
-## - farmhouse.png: 6 columns x 5 rows. sawmill.png/warehouse.png: 8 columns
-##   x 5 rows. Columns divide the 1536px width evenly (256px/192px); rows do
-##   NOT divide the 1024px height evenly (1024/5 = 204.8) -- row boundaries
-##   are computed by cumulative rounding (round(1024*i/5)) so 5 unequal
-##   integer rows still sum exactly to 1024, rather than a flat cell height
-##   that drifts and bleeds into the next row.
+## - farmhouse.png: 6 columns x 5 rows. sawmill.png/warehouse.png/
+##   city_hall.png: 8 columns x 5 rows (city_hall.png verified against the
+##   same crop-and-view check, confirming the identical grid its sheet
+##   shares with sawmill/warehouse). Columns divide the 1536px width evenly
+##   (256px/192px); rows do NOT divide the 1024px height evenly
+##   (1024/5 = 204.8) -- row boundaries are computed by cumulative rounding
+##   (round(1024*i/5)) so 5 unequal integer rows still sum exactly to 1024,
+##   rather than a flat cell height that drifts and bleeds into the next
+##   row.
 ## - wooden_fence.png: 4 columns x 4 rows, both axes dividing 1536x1024
 ##   perfectly evenly (384x256) -- no special rounding needed, but the same
 ##   cumulative-rounding helper is reused for both anyway (a no-op on an
 ##   even division).
 ##
 ## Chroma key: farmhouse.png/wooden_fence.png key on magenta (their real
-## background). sawmill.png/warehouse.png key on near-black (THEIR real
-## background, confirmed by sampling well inside a cell, away from the thin
-## magenta divider line that runs along the sheet's outer edge and every
-## row/column seam) -- magenta is ALSO keyed for these two sheets so a
-## stray sliver of that divider line surviving at a cell's own edge doesn't
-## show up as a colored fringe once cropped.
+## background). sawmill.png/warehouse.png/city_hall.png key on near-black
+## (THEIR real background, confirmed by sampling well inside a cell, away
+## from the thin magenta divider line that runs along the sheet's outer
+## edge and every row/column seam) -- magenta is ALSO keyed for these
+## three sheets so a stray sliver of that divider line surviving at a
+## cell's own edge doesn't show up as a colored fringe once cropped.
 
 const SpriteSheetLoader = preload("res://src/rendering/sprite_sheet_loader.gd")
 
@@ -73,6 +78,10 @@ const _SUBJECTS := {
 	"wooden_fence": {
 		"path": "res://assets/sprites/structures/wooden_fence.png",
 		"columns": 4, "rows": 4, "idle_row": 0, "idle_column": 0, "keys_black": false,
+	},
+	"city_hall": {
+		"path": "res://assets/sprites/buildings/city_hall.png",
+		"columns": 8, "rows": 5, "idle_row": 1, "idle_column": 0, "keys_black": true,
 	},
 }
 
