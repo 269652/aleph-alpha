@@ -67,6 +67,7 @@ const LogisticsMarker = preload("res://src/rendering/logistics_marker.gd")
 const StructureStockStore = preload("res://src/emergence/structure_stock_store.gd")
 const IllustratedStructureSprite = preload("res://src/rendering/illustrated_structure_sprite.gd")
 const FarmerMarker = preload("res://src/rendering/farmer_marker.gd")
+const SettlementDemand = preload("res://src/emergence/settlement_demand.gd")
 
 ## How much of a tile a ground-cover tuft (grass, scrub, lichen) covers.
 ## Well under 1: a clump of grass sits ON the ground, it is not the ground.
@@ -748,6 +749,12 @@ const FARM_FENCE_GATE_RADIUS_TILES := SAGEWERK_STORAGE_PAIR_RADIUS_TILES
 ## only real Farm output (see FarmerMarker.CROP_ID), matching
 ## _SAGEWERK_LOGISTICS_ITEM_IDS' own one-list-per-producer shape.
 const _FARM_LOGISTICS_ITEM_IDS := ["wheat"]
+
+## How far (in tiles) a real "city_hall" must stand from a query point for
+## city_hall_demands_near to answer at all. Matches SAGEWERK_STORAGE_
+## PAIR_RADIUS_TILES' own magnitude -- "the same settlement," not a
+## City-Hall-specific number invented separately.
+const CITY_HALL_DEMAND_RADIUS_TILES := SAGEWERK_STORAGE_PAIR_RADIUS_TILES
 
 var _scrub_sims: Dictionary = {}  # Vector2i chunk_coord -> DesertScrub
 var _scrub_sprites: Dictionary = {}  # Vector2i chunk_coord -> {local cell Vector2i -> Sprite2D}
@@ -13355,6 +13362,25 @@ func _apply_settlement_build_decision(chunk_coord: Vector2i) -> void:
 		_construction_project_store, market, chunk_coord, Vector2i.ZERO, household_ids[0],
 		present_structure_ids, _recipe_book, shortfalls, spare_capacity
 	)
+
+
+## A City Hall's own real "compute demands" step (see docs/concept/
+## npc_role_consensus.md's "City Hall" section): [] if no real "city_hall"
+## structure stands within CITY_HALL_DEMAND_RADIUS_TILES of
+## (global_x, global_y) -- a silent, discoverable "nothing to convene
+## about" absence, not an invented placeholder demand. Otherwise reads the
+## SAME real settlement state _apply_settlement_build_decision already
+## does (market.stock, _present_structure_ids_for_settlement_chunk) and
+## hands it to SettlementDemand.demands_for -- no second, parallel needs
+## computation.
+func city_hall_demands_near(global_x: int, global_y: int) -> Array:
+	if not has_structure_near(global_x, global_y, "city_hall", CITY_HALL_DEMAND_RADIUS_TILES):
+		return []
+	var chunk_coord := _chunk_coord_for_tile(Vector2i(global_x, global_y))
+	var settlement_id := EntityRef.for_settlement(chunk_coord)
+	var market := _market_store.market_for(settlement_id)
+	var present_structure_ids := _present_structure_ids_for_settlement_chunk(chunk_coord)
+	return SettlementDemand.demands_for(market.stock, present_structure_ids, _recipe_book)
 
 
 ## Closes docs/concept/timber_construction.md's own previously-named gap:

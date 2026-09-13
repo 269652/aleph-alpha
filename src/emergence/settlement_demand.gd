@@ -19,9 +19,9 @@ extends RefCounted
 ## ConstructionPriority.missing_structure_id itself (see its own doc
 ## comment), not something this wrapper resolves or hides.
 ##
-## Not yet wired to anything live -- no real Meeting Hall/City Hall
-## structure exists to gate this behind yet (see docs/concept/npc_role_
-## consensus.md's own Status).
+## Wired to a real live caller: EarthChunkManager.city_hall_demands_near
+## gates this behind a real "city_hall" structure standing nearby (see
+## docs/concept/npc_role_consensus.md's own Status).
 
 const ConstructionPriority = preload("res://src/gameplay/construction_priority.gd")
 
