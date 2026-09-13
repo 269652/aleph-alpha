@@ -181,6 +181,44 @@ func test_activate_item_id_learns_a_known_blueprint():
 	assert_true(chunk_manager.has_unlocked_blueprint("small_house"))
 
 
+# -- Direct Builder mode: entering/exiting via a real, standing City Hall -----
+#
+# docs/concept/npc_role_consensus.md's "One building, two roles" section --
+# the same real "near a structure" proximity check _collect_farm_step/
+# _collect_step already use (EarthChunkManager.has_structure_near), reused
+# here rather than reinvented, gating a real Player.direct_builder_mode
+# toggle. The placement UI/Build(R) action this mode is FOR is real, named,
+# out-of-scope follow-up work -- this is only the gate.
+
+func test_try_enter_direct_builder_mode_succeeds_near_a_real_city_hall():
+	var tile := player.current_tile()
+	chunk_manager.build_at_global(tile.x + 1, tile.y, "city_hall")
+
+	var entered := player._try_enter_direct_builder_mode()
+
+	assert_true(entered)
+	assert_true(player.direct_builder_mode)
+
+
+func test_try_enter_direct_builder_mode_fails_with_no_city_hall_nearby():
+	var entered := player._try_enter_direct_builder_mode()
+
+	assert_false(entered)
+	assert_false(player.direct_builder_mode)
+
+
+## Leaving is never gated on still standing near the City Hall you entered
+## through -- a real player walks away from the desk to go place things.
+func test_exit_direct_builder_mode_always_succeeds_even_far_from_any_city_hall():
+	var tile := player.current_tile()
+	chunk_manager.build_at_global(tile.x + 1, tile.y, "city_hall")
+	player._try_enter_direct_builder_mode()
+
+	player._exit_direct_builder_mode()
+
+	assert_false(player.direct_builder_mode)
+
+
 # -- build-input: placement, consumption, and the unarmed regression path -----
 
 func test_build_step_places_bare_earth_when_nothing_is_armed():
