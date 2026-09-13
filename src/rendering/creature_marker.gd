@@ -1632,6 +1632,41 @@ func _animation_step() -> void:
 func _fresh_water_depth_meters(tile: Vector2i) -> float:
 	if _world == null:
 		return 0.0
+	return _fresh_water_depth_at_tile(tile, Time.get_ticks_msec())
+
+
+## How long a tile's fresh-water depth answer is shared before the world is
+## asked again (FPS regression round 15, docs/concept/soil_fauna.md).
+## _apply_submersion asked for the river AND lake depth under a swimming
+## creature on every step, and the river answer is a real hydraulics solve
+## plus the dam backwater walk -- measured live at ~0.3 ms per creature
+## step averaged, up to ~1 ms per swimming step, the largest steady slice
+## of _animation_step. Depth changes on the scale of a player dropping a
+## boulder, so the answers are shared across every creature and refreshed
+## once per second -- the same static-shared-cache shape FishMarker's
+## water and current checks use, keyed to the world that answered
+## (_fresh_water_depth_cache_world) so a different world (every other
+## test, a diorama) never sees another's truth. Pinned by
+## test_repeated_depth_reads_on_one_tile_ask_the_world_once_per_refresh_window.
+const FRESH_WATER_DEPTH_CACHE_REFRESH_SECONDS := 1.0
+static var _fresh_water_depth_cache: Dictionary = {}  # Vector2i tile -> float metres
+static var _fresh_water_depth_cache_at: Dictionary = {}  # Vector2i tile -> msec answered
+static var _fresh_water_depth_cache_world = null
+
+
+## The cached, tile-keyed heart of _fresh_water_depth_meters. `now_msec` is
+## injected rather than read here so a test can age the cache without
+## waiting -- the same idiom FishMarker._is_water_at_tile uses.
+func _fresh_water_depth_at_tile(tile: Vector2i, now_msec: int) -> float:
+	if _fresh_water_depth_cache_world != _world:
+		_fresh_water_depth_cache.clear()
+		_fresh_water_depth_cache_at.clear()
+		_fresh_water_depth_cache_world = _world
+	if (
+		_fresh_water_depth_cache.has(tile)
+		and now_msec - int(_fresh_water_depth_cache_at[tile]) < int(FRESH_WATER_DEPTH_CACHE_REFRESH_SECONDS * 1000.0)
+	):
+		return _fresh_water_depth_cache[tile]
 	var river_depth: float = (
 		_world.river_depth_meters_at_global(tile.x, tile.y)
 		if _world.has_method("river_depth_meters_at_global") else 0.0
@@ -1640,7 +1675,10 @@ func _fresh_water_depth_meters(tile: Vector2i) -> float:
 		_world.lake_depth_meters_at_global(tile.x, tile.y)
 		if _world.has_method("lake_depth_meters_at_global") else 0.0
 	)
-	return maxf(river_depth, lake_depth)
+	var depth := maxf(river_depth, lake_depth)
+	_fresh_water_depth_cache[tile] = depth
+	_fresh_water_depth_cache_at[tile] = now_msec
+	return depth
 
 
 ## Tints whatever part of the body is below the waterline while swimming

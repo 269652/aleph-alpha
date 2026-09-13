@@ -4135,3 +4135,74 @@ func test_a_fresh_marker_has_no_last_crush_step_tile_so_its_first_step_counts():
 	autofree(marker)
 	assert_eq(marker.last_crush_step_tile, Vector2i(-2147483648, -2147483648))
 	assert_ne(marker.last_crush_step_tile, Vector2i.ZERO)
+
+
+# -- shared per-tile fresh-water depth cache (FPS regression round 15) ------
+#
+# _apply_submersion asks the world for the river AND lake depth under a
+# swimming creature on EVERY step, and the river answer is a real hydraulics
+# solve plus the dam backwater walk -- measured live at ~0.3 ms per step
+# averaged over all creatures, up to ~1 ms per swimming step, the largest
+# steady slice of _animation_step. Depth changes on the scale of a player
+# dropping a boulder, so the answers are shared across every creature and
+# refreshed once per FRESH_WATER_DEPTH_CACHE_REFRESH_SECONDS of real time --
+# the same static-shared-cache shape FishMarker's water and current checks
+# use, keyed to the world that answered so no other world's truth leaks.
+
+## A world that counts how often its depth queries are actually asked.
+class CountingDepthWorld:
+	extends StubWorld
+	var queries := 0
+	var river_depth := 1.5
+	var lake_depth := 0.4
+	func river_depth_meters_at_global(_x: int, _y: int) -> float:
+		queries += 1
+		return river_depth
+	func lake_depth_meters_at_global(_x: int, _y: int) -> float:
+		queries += 1
+		return lake_depth
+
+
+func test_the_fresh_water_depth_cache_refresh_interval_is_pinned():
+	assert_eq(CreatureMarker.FRESH_WATER_DEPTH_CACHE_REFRESH_SECONDS, 1.0)
+
+
+func test_repeated_depth_reads_on_one_tile_ask_the_world_once_per_refresh_window():
+	var world := CountingDepthWorld.new()
+	marker.setup(world, TILE_SIZE)
+	var tile := Vector2i(6, 6)
+	assert_eq(marker._fresh_water_depth_at_tile(tile, 1000), 1.5, "the deeper of river and lake, as before")
+	var first_batch := world.queries
+	assert_gt(first_batch, 0, "the first answer had to come from the world")
+	for i in 50:
+		assert_eq(marker._fresh_water_depth_at_tile(tile, 1000 + i), 1.5)
+	assert_eq(world.queries, first_batch, "fifty more answers inside the window cost the world nothing")
+	var window_ms := int(CreatureMarker.FRESH_WATER_DEPTH_CACHE_REFRESH_SECONDS * 1000.0)
+	world.river_depth = 0.2
+	assert_eq(marker._fresh_water_depth_at_tile(tile, 1000 + window_ms + 1), 0.4,
+		"once the window has elapsed the world is asked again and the new depth shows")
+	assert_gt(world.queries, first_batch)
+
+
+func test_a_different_world_never_sees_another_worlds_cached_depth():
+	var deep := CountingDepthWorld.new()
+	marker.setup(deep, TILE_SIZE)
+	assert_eq(marker._fresh_water_depth_at_tile(Vector2i(6, 6), 1000), 1.5)
+	var other := CreatureMarker.new()
+	other.info = CreatureInfo.new("herbivore")
+	add_child(other)
+	autofree(other)
+	var shallow := CountingDepthWorld.new()
+	shallow.river_depth = 0.0
+	shallow.lake_depth = 0.0
+	other.setup(shallow, TILE_SIZE)
+	assert_eq(other._fresh_water_depth_at_tile(Vector2i(6, 6), 1000), 0.0, "the shallow world's own truth, not the deep one's cached")
+
+
+func test_fresh_water_depth_meters_reads_through_the_cache():
+	var world := CountingDepthWorld.new()
+	marker.setup(world, TILE_SIZE)
+	assert_eq(marker._fresh_water_depth_meters(Vector2i(6, 6)), 1.5)
+	var after_first := world.queries
+	marker._fresh_water_depth_meters(Vector2i(6, 6))
+	assert_eq(world.queries, after_first, "the production path is the cached one")
