@@ -222,9 +222,19 @@ func _try_eat(is_working: bool, world, pixel_position: Vector2) -> void:
 		if current_yield > 0.0:
 			needs.feed()  # a free bite from their own active harvest -- see file doc comment
 			return
-	_draw_subsistence_wage()
+	_draw_subsistence_wage(world, pixel_position)
 	if market.buy_meal(wallet) != "":
 		needs.feed()
+		return
+	# Nothing on the stall: the village's own baked bread (docs/concept/
+	# milling_and_baking.md) sits in a Bakery's or Storage's structure
+	# stock, not the VillageMarket -- so "walk to the bakehouse", duck-typed
+	# like every other world read here, at the same meal price and the same
+	# all-or-nothing wallet rule buy_meal keeps (see EarthChunkManager.
+	# buy_structure_meal_near). A world without the hook has no bakehouse.
+	if world != null and world.has_method("buy_structure_meal_near"):
+		if world.buy_structure_meal_near(pixel_position, wallet) != "":
+			needs.feed()
 
 
 ## Draws one subsistence wage from the village purse for a hungry villager
@@ -250,10 +260,10 @@ func _try_eat(is_working: bool, world, pixel_position: Vector2) -> void:
 ## drains a settlement's savings into pockets during the famine it most
 ## needs them. VillageMarket.buy_meal is already all-or-nothing for that
 ## reason -- paying first would sidestep its own refusal.
-func _draw_subsistence_wage() -> void:
+func _draw_subsistence_wage(world = null, pixel_position: Vector2 = Vector2.ZERO) -> void:
 	if wallet.can_afford(VillageWages.subsistence_wage()):
 		return
-	if not market.can_buy_meal():
+	if not market.can_buy_meal() and not _structure_meal_available(world, pixel_position):
 		return
 	var payout := VillageWages.pay_subsistence(purse_of(market))
 	var paid := int(payout["paid"])
@@ -261,3 +271,12 @@ func _draw_subsistence_wage() -> void:
 		return  # the village cannot afford a whole wage -- leave its purse exactly as it was
 	wallet.add(paid)
 	_set_purse(market, float(payout["purse"]))
+
+
+## Whether the village's own structures hold a whole meal near this villager
+## (see _try_eat) -- a bakehouse counts as somewhere a wage buys a meal, so
+## nobody starves next to a full one just because the stall is bare.
+func _structure_meal_available(world, pixel_position: Vector2) -> bool:
+	if world == null or not world.has_method("has_structure_meal_near"):
+		return false
+	return world.has_structure_meal_near(pixel_position)

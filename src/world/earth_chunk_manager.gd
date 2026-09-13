@@ -193,6 +193,7 @@ const CaravanRaid = preload("res://src/emergence/caravan_raid.gd")
 const CaravanMarker = preload("res://src/rendering/caravan_marker.gd")
 const PathScarring = preload("res://src/world/path_scarring.gd")
 const ItemCatalog = preload("res://src/gameplay/item_catalog.gd")
+const VillageMarket = preload("res://src/world/village_market.gd")
 const WorldClockPersistence = preload("res://src/world/world_clock_persistence.gd")
 const SnowBombShader = preload("res://src/rendering/snow_bomb_shader.gd")
 const RoofShape = preload("res://src/rendering/roof_shape.gd")
@@ -13515,6 +13516,68 @@ func deposit_to_structure_at(global_x: int, global_y: int, item_id: String, coun
 ## itself -- returns false (no-op) if less than `count` is present.
 func withdraw_from_structure_at(global_x: int, global_y: int, item_id: String, count: int) -> bool:
 	return _structure_stocks.stock_for(_structure_stock_key(global_x, global_y)).remove_stock(item_id, count)
+
+
+## The bakehouse meal (docs/concept/milling_and_baking.md): how far a hungry
+## villager "walks" to eat from a Storage's or Bakery's own shelf -- their
+## own village, one chunk across, not a specific radius invented here.
+const STRUCTURE_MEAL_RADIUS_TILES := CHUNK_SIZE
+
+## The structures whose own stock a villager may eat from: where baked
+## bread ends up (see CHAIN_LOGISTICS_LEGS) -- a Bakery's shelf and any
+## Storage it was hauled into.
+const STRUCTURE_MEAL_SOURCE_IDS: Array[String] = ["bakery", "storage"]
+
+
+## Whether any STRUCTURE_MEAL_SOURCE_IDS structure within STRUCTURE_MEAL_
+## RADIUS_TILES of `pixel_position` holds a whole unit of real food --
+## NpcEconomy's duck-typed "is there a bakehouse meal to buy" read (its
+## subsistence wage is gated on it, so nobody starves next to a full
+## bakehouse just because the market stall is bare).
+func has_structure_meal_near(pixel_position: Vector2) -> bool:
+	return _structure_meal_tile_near(pixel_position) != null
+
+
+## Buys one meal off the nearest such shelf: VillageMarket.buy_meal's exact
+## contract against StructureStock -- the same VILLAGE_LOCAL_FOOD_PRICE,
+## all-or-nothing (a wallet that cannot pay leaves the shelf and its own
+## balance untouched), returning the item_id eaten or "" if nothing was.
+func buy_structure_meal_near(pixel_position: Vector2, wallet) -> String:
+	var found = _structure_meal_tile_near(pixel_position)
+	if found == null:
+		return ""
+	var tile: Vector2i = found["tile"]
+	var item_id: String = found["item_id"]
+	if not wallet.spend(VillageMarket.VILLAGE_LOCAL_FOOD_PRICE):
+		return ""
+	if not withdraw_from_structure_at(tile.x, tile.y, item_id, 1):
+		return ""
+	return item_id
+
+
+## {tile, item_id} of the nearest meal-holding structure, or null. Nearest
+## first so a villager eats from their own street's bakehouse before the
+## far end of the village's; the first food-typed item on that shelf (in
+## stock order, deterministic like buy_meal's own pick).
+func _structure_meal_tile_near(pixel_position: Vector2):
+	var max_distance := float(STRUCTURE_MEAL_RADIUS_TILES) * TerrainRenderer.TILE_SIZE
+	var best = null
+	var best_distance := INF
+	for structure_id in STRUCTURE_MEAL_SOURCE_IDS:
+		for structure_pixel in nearby_structure_positions(pixel_position, structure_id, max_distance):
+			var distance := pixel_position.distance_to(structure_pixel)
+			if distance >= best_distance:
+				continue
+			var tile := Vector2i(
+				floori(structure_pixel.x / TerrainRenderer.TILE_SIZE), floori(structure_pixel.y / TerrainRenderer.TILE_SIZE)
+			)
+			var stock = _structure_stocks.stock_for(_structure_stock_key(tile.x, tile.y))
+			for item_id in stock.stock:
+				if stock.stock[item_id] >= 1 and _item_catalog.kind_of(item_id) == "food":
+					best = {"tile": tile, "item_id": item_id}
+					best_distance = distance
+					break
+	return best
 
 
 ## All chunk coordinates within `radius` chunks of center (a square/Chebyshev

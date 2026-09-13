@@ -158,3 +158,58 @@ func test_wheat_at_the_farm_is_actually_carried_into_the_mill():
 
 	assert_gt(manager.structure_stock_at(_mill.x, _mill.y, "wheat"), 0, "wheat arrived at the Mill")
 	assert_lt(manager.structure_stock_at(_farm.x, _farm.y, "wheat"), 4, "...and left the Farm -- a transfer, not a copy")
+
+
+
+# -- the bakehouse meal (docs/concept/milling_and_baking.md): a villager ----
+# -- eats structure-held food ------------------------------------------------
+#
+# NpcEconomy._try_eat asks the world, duck-typed, for a structure meal when
+# the market stall is bare -- these are the world's real answers: one whole
+# unit of any kind == "food" item in a Storage's or Bakery's own stock
+# within STRUCTURE_MEAL_RADIUS_TILES, at VillageMarket's own meal price,
+# all-or-nothing like buy_meal.
+
+const Wallet = preload("res://src/gameplay/wallet.gd")
+const VillageMarket = preload("res://src/world/village_market.gd")
+
+
+func _near(tile: Vector2i) -> Vector2:
+	return (Vector2(tile) + Vector2(0.5, 0.5)) * TerrainRenderer.TILE_SIZE
+
+
+func test_bread_on_a_bakerys_shelf_is_a_meal_and_buying_it_takes_one_loaf_at_the_meal_price():
+	manager.build_at_global(_bakery.x, _bakery.y, "bakery")
+	manager.deposit_to_structure_at(_bakery.x, _bakery.y, "bread", 3)
+	var wallet := Wallet.new()
+	wallet.add(10)
+
+	assert_true(manager.has_structure_meal_near(_near(_bakery + Vector2i(2, 2))))
+	assert_eq(manager.buy_structure_meal_near(_near(_bakery + Vector2i(2, 2)), wallet), "bread")
+	assert_eq(manager.structure_stock_at(_bakery.x, _bakery.y, "bread"), 2)
+	assert_eq(wallet.balance, 10 - VillageMarket.VILLAGE_LOCAL_FOOD_PRICE)
+
+
+func test_wheat_and_flour_in_a_storage_are_not_meals():
+	manager.build_at_global(_storage.x, _storage.y, "storage")
+	manager.deposit_to_structure_at(_storage.x, _storage.y, "wheat", 5)
+	manager.deposit_to_structure_at(_storage.x, _storage.y, "flour", 5)
+	assert_false(manager.has_structure_meal_near(_near(_storage)))
+	var wallet := Wallet.new()
+	wallet.add(10)
+	assert_eq(manager.buy_structure_meal_near(_near(_storage), wallet), "")
+	assert_eq(wallet.balance, 10, "a failed purchase never touches the wallet")
+
+
+func test_an_empty_wallet_buys_nothing_and_the_loaf_stays():
+	manager.build_at_global(_storage.x, _storage.y, "storage")
+	manager.deposit_to_structure_at(_storage.x, _storage.y, "bread", 1)
+	assert_eq(manager.buy_structure_meal_near(_near(_storage), Wallet.new()), "")
+	assert_eq(manager.structure_stock_at(_storage.x, _storage.y, "bread"), 1)
+
+
+func test_a_bakehouse_across_the_map_is_not_near():
+	manager.build_at_global(_bakery.x, _bakery.y, "bakery")
+	manager.deposit_to_structure_at(_bakery.x, _bakery.y, "bread", 3)
+	var far := _near(_bakery + Vector2i(EarthChunkManager.STRUCTURE_MEAL_RADIUS_TILES + 8, 0))
+	assert_false(manager.has_structure_meal_near(far))
