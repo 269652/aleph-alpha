@@ -20,8 +20,13 @@ func before_each():
 	generator = SettlementGenerator.new()
 
 
+## "forest" joined ocean/mountain directly per report: "houses / buildings
+## cannot be built on river / water; also not in the forest" -- a real
+## village would spend its whole existence fighting real, standing trees
+## rather than ever finishing a house (see EarthChunkManager.
+## is_buildable_terrain_at for the per-tile version of this same rule).
 func test_settlements_only_appear_on_habitable_biomes():
-	for biome in ["ocean", "mountain"]:
+	for biome in ["ocean", "mountain", "forest"]:
 		var found := false
 		for x in 200:
 			if generator.has_settlement_at(Vector2i(x, 0), biome):

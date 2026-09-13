@@ -292,6 +292,57 @@ returns a winning id; nothing yet acts on it.
 confidence/co-location system — injected directly for now (see "Open
 questions").
 
+⬜ Direct Builder mode (the player-facing half above): the real toggle,
+the blueprint-placement ghost cursor, the per-step "Build (R)" action, and
+generalizing self-build beyond the instant one-shot `craft()` path. None
+of this pass builds any of it yet -- named here so a future session
+building the toggle first (the smallest real slice, per this doc's own
+"one building, two roles" section) has a real spec to build against
+rather than starting from the raw player request again.
+
+## One building, two roles: NPCs read it, the player enters it
+
+Reported directly: *"Combine them... NPCs use it for consensus and the
+Player get's the ANNO world building mode."* One real `city_hall`
+structure, not two competing buildings sharing a name by accident (the
+naming note at the top of this doc already establishes there is exactly
+one) — NPCs read it for the consensus pipeline above; the player instead
+ENTERS it, which is this doc's own new material.
+
+**What "enter" means for a single-tile structure.** `city_hall` is a
+one-tile placeable (`item_catalog.gd`, same shape as `campfire`/`furnace`/
+`storage`/`sagewerk`), not a multi-piece enterable house — so "entering"
+cannot mean walking through a door the way a `HouseBlueprint` house works.
+It means standing within real interaction range of a real, standing
+`city_hall` and triggering a real toggle, the same "near a real structure"
+proximity check `BuilderMarker`/`LogisticsMarker` already use via
+`EarthChunkManager.nearest_structure_position` — reused here, not
+reinvented, for consistency with every other "near a structure" query in
+this codebase.
+
+**What the mode changes.** Toggling `Player.direct_builder_mode` on is the
+real, minimal gate this pass ships: a boolean the player can be in or out
+of, flipped only while genuinely near a real `city_hall`. Everything the
+mode is FOR — a blueprint-placement cursor showing ghost footprints on the
+map, a per-step "Build (R)" contextual action that spends real material
+and takes real time (reusing `ConstructionLabor`/`ConstructionProject`'s
+already-real labor-hours accumulation, the SAME field a hired
+`BuilderMarker` already advances, so a player's own step and a hired
+carpenter's own step credit the identical pool rather than two parallel
+ledgers), and generalizing self-build beyond the instant, one-shot
+`craft()` path `workforce.md` section 2 ships today — is real, named
+scope this doc does NOT build in this pass. Shipping the gate real and
+tested first, before the larger placement UI it unlocks, is this
+project's own established shape for a first slice (see `workforce.md`'s
+own "smallest possible instance of the general case" precedent).
+
+**Reuses, does not fork**: the recipe/skill/material gates a blueprint
+already enforces (`workforce.md` sections 1-3), the `ConstructionProject`/
+`ConstructionProjectStore` ledger, and `ConstructionLabor`'s labor-hours
+formula. Direct Builder mode is a NEW way to REACH those same real
+mechanisms (a placement UI instead of typing a recipe id into
+`/buildhouse`), never a second construction pipeline sitting beside them.
+
 ## Open questions
 
 - **Wiring real familiarity.** The real, live source should be some

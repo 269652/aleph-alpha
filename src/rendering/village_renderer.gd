@@ -58,6 +58,19 @@ const _STONE_HOUSE_CHANCE_DENOMINATOR := 4
 ## into the water (see _stamp_house).
 const _WATER_AVOIDANCE_SEARCH_RADIUS_TILES := 6
 
+## Draw order for an upper storey's own lit windows (see _stamp_house's
+## `upper_windows`): from outside, an upper storey is only ever its facade
+## band, painted one row UP on a layer that sits ABOVE the roof
+## (EarthChunkManager.UPPER_FLOOR_LAYER_Z_INDEX, 2), so a light for one of
+## its windows has to draw above that layer or it is buried under the very
+## facade it lights -- and below whoever is standing upstairs
+## (EarthChunkManager.UPPER_FLOOR_OCCUPANT_Z_INDEX, 4), or it is painted
+## over the player. Not read off EarthChunkManager directly: this small
+## module deliberately never preloads that large, engine-bound script (see
+## _construction_completion_fraction's own identical reasoning), so the
+## relationship is pinned by test instead (test_village_renderer.gd).
+const UPPER_WINDOW_LIGHT_Z_INDEX := 3
+
 ## How far outside the door a merchant's personal trading stand sits (see
 ## _build_stands_for_merchants) -- close enough to read as "this villager's
 ## own stand", clear of the door cell and the house's wall thickness.
@@ -179,6 +192,12 @@ func spawn_village(
 		if night:
 			for window_position in house.windows:
 				spawned.append(_build_window_light(window_position, tile_size, parent))
+			# An upper storey's own facade windows, already reported one row
+			# up where that facade is actually drawn from outside -- lit on
+			# their own draw order above the upper-floor layer (see
+			# UPPER_WINDOW_LIGHT_Z_INDEX).
+			for window_position in house.upper_windows:
+				spawned.append(_build_window_light(window_position, tile_size, parent, UPPER_WINDOW_LIGHT_Z_INDEX))
 	for landmark_id in settlement.landmarks:
 		spawned.append(_build_landmark(landmark_id, settlement.landmarks[landmark_id], parent))
 	for i in npcs.size():
@@ -234,6 +253,13 @@ func spawn_village(
 ## the house already fully buildable (see that function's own doc comment),
 ## this stamps the exact same full pieces + roofs as before -- deliberately
 ## behavior-preserving for the common case.
+##
+## Two-story houses (docs/concept/housing.md): if `npc.occupation`'s own
+## HouseBlueprint.choose_blueprint_id lands on a real two-story id (only
+## possible for merchant/blacksmith today -- see BLUEPRINT_POOL_BY_
+## OCCUPATION's own doc comment), this ALSO stamps a real upper storey
+## once the ground floor itself is fully complete -- see the two-story
+## branch near this function's own return.
 func _stamp_house(chunk_coord: Vector2i, index: int, anchor: Vector2, npc: NpcIdentity, tile_size: int, world, npc_count: int) -> Dictionary:
 	var seed_value := hash("%d_%d_house_%d" % [chunk_coord.x, chunk_coord.y, index])
 	var blueprint_id := _house_blueprint.choose_blueprint_id(npc.occupation, npc.genome, seed_value)
@@ -242,7 +268,7 @@ func _stamp_house(chunk_coord: Vector2i, index: int, anchor: Vector2, npc: NpcId
 	var raw_origin := anchor_tile - footprint / 2
 
 	if world == null or not world.has_method("stamp_structure_at_global"):
-		return {"door": anchor, "stand": anchor, "windows": []}
+		return {"door": anchor, "stand": anchor, "windows": [], "upper_windows": []}
 
 	var material := (
 		BuildingPiece.MATERIAL_STONE
@@ -251,11 +277,11 @@ func _stamp_house(chunk_coord: Vector2i, index: int, anchor: Vector2, npc: NpcId
 	)
 	var pieces := _house_blueprint.build(blueprint_id, seed_value, material)
 	if pieces.is_empty():
-		return {"door": anchor, "stand": anchor, "windows": []}
+		return {"door": anchor, "stand": anchor, "windows": [], "upper_windows": []}
 
 	var origin_tile = _find_dry_origin(raw_origin, footprint, world)
 	if origin_tile == null:
-		return {"door": anchor, "stand": anchor, "windows": []}  # no dry ground nearby -- skip rather than build in water
+		return {"door": anchor, "stand": anchor, "windows": [], "upper_windows": []}  # no dry ground nearby -- skip rather than build in water
 
 	var roofs := _house_blueprint.build_roofs(blueprint_id, seed_value, material)
 
@@ -298,7 +324,54 @@ func _stamp_house(chunk_coord: Vector2i, index: int, anchor: Vector2, npc: NpcId
 	# still-under-construction house (fraction < 1.0 above) only lights the
 	# windows it has actually built so far, never one that isn't there yet.
 	var window_positions := _window_positions(stamped_pieces, origin_tile, tile_size)
-	return {"door": door_position, "stand": stand_position, "windows": window_positions}
+
+	# Two-story houses (docs/concept/housing.md): an NPC's own real second
+	# storey, gated on the SAME "ground floor fully complete" condition the
+	# roof itself already uses just above -- a house still being raised
+	# gets no upper floor yet either, the same real build order a hired
+	# Builder now follows too (see BuilderMarker.target_upper_pieces).
+	# Duck-typed via has_method exactly like stamp_structure_at_global
+	# itself already is a few lines up. Upper windows are reported as their
+	# OWN list (`upper_windows`), not appended to the ground floor's: from
+	# outside, an upper storey is only ever its facade band, drawn one row
+	# UP over the roof's front row (docs/concept/building.md "How a house
+	# reads from above", point 5), so its lights go where that band is drawn
+	# and need their own draw order above the upper-floor layer -- see
+	# _upper_facade_window_positions and spawn_village's night-lighting loop.
+	var upper_pieces := {}
+	var upper_window_positions: Array[Vector2] = []
+	if (
+		_house_blueprint.is_two_story(blueprint_id) and stamped_pieces.size() == pieces.size()
+		and world != null and world.has_method("stamp_upper_floor_at_global")
+	):
+		upper_pieces = _house_blueprint.build_upper_floor(blueprint_id, seed_value, material)
+		world.stamp_upper_floor_at_global(chunk_coord, origin_tile, upper_pieces)
+		upper_window_positions = _upper_facade_window_positions(upper_pieces, origin_tile, tile_size)
+
+	# Interior furniture, upper floor (docs/concept/housing.md's "Interior
+	# furniture" / "Occupation-themed decor" sections) -- reported directly
+	# alongside two-story houses themselves ("no room decoration... no do
+	# both floors"): the SAME real, occupation-linked HouseDecor set the
+	# ground floor was just furnished with above, tried again against the
+	# upper floor's own real floor cells via its own real layer (see
+	# furnish_upper_floor_at_global's own doc comment for why
+	# furniture_modifications can't simply be reused for the upper floor
+	# too). Gated on the SAME "ground floor fully complete" condition the
+	# upper floor's own walls just used above -- a still-rising house gets
+	# no upper furniture either. Duck-typed exactly like stamp_upper_
+	# floor_at_global itself already is a few lines up.
+	if (
+		not upper_pieces.is_empty() and world != null
+		and world.has_method("furnish_upper_floor_at_global")
+	):
+		world.furnish_upper_floor_at_global(
+			chunk_coord, origin_tile, upper_pieces, HouseDecor.furniture_set_for(npc.occupation)
+		)
+
+	return {
+		"door": door_position, "stand": stand_position,
+		"windows": window_positions, "upper_windows": upper_window_positions,
+	}
 
 
 ## How structurally complete a settlement house should be by the time a
@@ -427,15 +500,24 @@ func _door_facing_direction(door_local: Vector2i, pieces: Dictionary) -> Vector2
 	return Vector2i(1, 0)  # never happens for a real door cell; stays safe regardless
 
 
-## `raw_origin` if its whole footprint is dry land already; otherwise the
-## nearest (by squared distance, deterministic) candidate origin within
-## _WATER_AVOIDANCE_SEARCH_RADIUS_TILES whose whole footprint is dry; null if
-## none qualifies. `world` without biome_at_global (a caller that only cares
-## about stamp_structure_at_global, e.g. an older/duck-typed test double)
-## skips the check entirely and trusts raw_origin, same fail-open shape as
-## every other optional-capability check in this codebase.
+## `raw_origin` if its whole footprint is real, buildable ground already;
+## otherwise the nearest (by squared distance, deterministic) candidate
+## origin within _WATER_AVOIDANCE_SEARCH_RADIUS_TILES whose whole
+## footprint qualifies; null if none does. `world` supporting neither real
+## check (a caller that only cares about stamp_structure_at_global, e.g.
+## an older/duck-typed test double) skips the check entirely and trusts
+## raw_origin, the same fail-open shape as every other optional-capability
+## check in this codebase.
+##
+## Named "_dry" historically (water avoidance was this search's original
+## and only job); it now also avoids forest and standing trees (docs/
+## concept/building.md: "houses / buildings cannot be built on river /
+## water; also not in the forest... must first fell all trees to make
+## space") via the real EarthChunkManager.is_buildable_terrain_at, when
+## the caller provides it -- see _footprint_is_dry's own doc comment for
+## the fallback this keeps for a `world` that only has biome_at_global.
 func _find_dry_origin(raw_origin: Vector2i, footprint: Vector2i, world) -> Variant:
-	if not world.has_method("biome_at_global") or _footprint_is_dry(raw_origin, footprint, world):
+	if not _world_has_a_terrain_check(world) or _footprint_is_dry(raw_origin, footprint, world):
 		return raw_origin
 	var offsets: Array[Vector2i] = []
 	for dy in range(-_WATER_AVOIDANCE_SEARCH_RADIUS_TILES, _WATER_AVOIDANCE_SEARCH_RADIUS_TILES + 1):
@@ -450,11 +532,25 @@ func _find_dry_origin(raw_origin: Vector2i, footprint: Vector2i, world) -> Varia
 	return null
 
 
+func _world_has_a_terrain_check(world) -> bool:
+	return world.has_method("is_buildable_terrain_at") or world.has_method("biome_at_global")
+
+
+## The real, comprehensive EarthChunkManager.is_buildable_terrain_at when
+## `world` provides it (ocean, forest, river, lake, AND standing trees --
+## see that function's own doc comment); otherwise the narrower, original
+## ocean-only biome_at_global check, for a `world` double that predates
+## it (see _world_has_a_terrain_check). Prefers the real check whenever
+## it's available rather than ever running both.
 func _footprint_is_dry(origin: Vector2i, footprint: Vector2i, world) -> bool:
+	var use_real_check: bool = world.has_method("is_buildable_terrain_at")
 	for x in footprint.x:
 		for y in footprint.y:
 			var cell := origin + Vector2i(x, y)
-			if world.biome_at_global(cell.x, cell.y) == CreaturePerception.WATER_BIOME:
+			if use_real_check:
+				if not world.is_buildable_terrain_at(cell.x, cell.y):
+					return false
+			elif world.biome_at_global(cell.x, cell.y) == CreaturePerception.WATER_BIOME:
 				return false
 	return true
 
@@ -480,6 +576,28 @@ func _window_positions(pieces: Dictionary, origin_tile: Vector2i, tile_size: int
 		if BuildingPiece.category_of(pieces[cell]) == BuildingPiece.CATEGORY_WINDOW:
 			var global_cell: Vector2i = origin_tile + cell
 			positions.append(Vector2((global_cell.x + 0.5) * tile_size, (global_cell.y + 0.5) * tile_size))
+	return positions
+
+
+## The upper storey's twin of _window_positions, restricted to the windows
+## that are actually visible from outside and placed where they are
+## actually drawn: from a bird's-eye view an upper storey is only ever its
+## facade band (HouseBlueprint._facade_cells' own southernmost-per-column
+## rule), painted one row UP over the roof's front row -- see EarthChunk
+## Manager._paint_upper_floor and docs/concept/building.md "How a house
+## reads from above", point 5. Its side/back windows are under the roof from
+## outside exactly like the ground floor's own, so they get no exterior
+## light at all (the ground floor's are merely harmless under the roof;
+## up here a light would have to draw ABOVE the roof to reach the facade
+## layer, and would then glow straight through it).
+func _upper_facade_window_positions(upper_pieces: Dictionary, origin_tile: Vector2i, tile_size: int) -> Array[Vector2]:
+	var positions: Array[Vector2] = []
+	var facade := _house_blueprint._facade_cells(upper_pieces)
+	for cell in upper_pieces:
+		if not facade.has(cell) or BuildingPiece.category_of(upper_pieces[cell]) != BuildingPiece.CATEGORY_WINDOW:
+			continue
+		var lit_cell: Vector2i = origin_tile + cell + Vector2i(0, -1)
+		positions.append(Vector2((lit_cell.x + 0.5) * tile_size, (lit_cell.y + 0.5) * tile_size))
 	return positions
 
 
@@ -510,11 +628,16 @@ func _build_landmark(landmark_id: String, position: Vector2, parent: Node2D) -> 
 ## (see that loop) -- tagged "window_light" the same landmark_id-metadata
 ## way _build_landmark tags its own sprites, so a caller (chiefly tests) can
 ## tell a night light apart from every other spawned prop.
-func _build_window_light(position: Vector2, tile_size: int, parent: Node2D) -> Sprite2D:
+##
+## `z_index` defaults to the ordinary entity draw order every ground-floor
+## window light has always used; an upper storey's own lights pass
+## UPPER_WINDOW_LIGHT_Z_INDEX (see that constant for why they need it).
+func _build_window_light(position: Vector2, tile_size: int, parent: Node2D, z_index: int = 0) -> Sprite2D:
 	var light := Sprite2D.new()
 	light.texture = _window_light_texture(tile_size)
 	light.set_meta("landmark_id", "window_light")
 	light.position = position
+	light.z_index = z_index
 	parent.add_child(light)
 	return light
 

@@ -26,8 +26,15 @@ const POPULATION := 5
 ## villages read as discoverable landmarks rather than carpeting the map.
 const SETTLEMENT_CHANCE_DENOMINATOR := 30
 
-## Villages need dry, walkable land -- never afloat or on a cliff face.
-const _UNINHABITABLE_BIOMES := {"ocean": true, "mountain": true}
+## Villages need dry, walkable, open land -- never afloat, on a cliff
+## face, or (docs/concept/building.md: "houses / buildings... not in the
+## forest") standing in the forest itself, where the sheer density of real
+## trees would leave a village perpetually fighting to find any footprint
+## the NPCs haven't already had to fell first (see EarthChunkManager.
+## is_buildable_terrain_at/VillageRenderer._find_dry_origin for the SAME
+## rule applied per-tile to individual scattered trees in an otherwise
+## habitable biome).
+const _UNINHABITABLE_BIOMES := {"ocean": true, "mountain": true, "forest": true}
 
 ## Houses ring the village center at roughly this radius -- wide enough that
 ## each house's real footprint (see VillageRenderer._HOUSE_FOOTPRINT, 5x4

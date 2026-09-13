@@ -181,6 +181,44 @@ func test_activate_item_id_learns_a_known_blueprint():
 	assert_true(chunk_manager.has_unlocked_blueprint("small_house"))
 
 
+# -- Direct Builder mode: entering/exiting via a real, standing City Hall -----
+#
+# docs/concept/npc_role_consensus.md's "One building, two roles" section --
+# the same real "near a structure" proximity check _collect_farm_step/
+# _collect_step already use (EarthChunkManager.has_structure_near), reused
+# here rather than reinvented, gating a real Player.direct_builder_mode
+# toggle. The placement UI/Build(R) action this mode is FOR is real, named,
+# out-of-scope follow-up work -- this is only the gate.
+
+func test_try_enter_direct_builder_mode_succeeds_near_a_real_city_hall():
+	var tile := player.current_tile()
+	chunk_manager.build_at_global(tile.x + 1, tile.y, "city_hall")
+
+	var entered := player._try_enter_direct_builder_mode()
+
+	assert_true(entered)
+	assert_true(player.direct_builder_mode)
+
+
+func test_try_enter_direct_builder_mode_fails_with_no_city_hall_nearby():
+	var entered := player._try_enter_direct_builder_mode()
+
+	assert_false(entered)
+	assert_false(player.direct_builder_mode)
+
+
+## Leaving is never gated on still standing near the City Hall you entered
+## through -- a real player walks away from the desk to go place things.
+func test_exit_direct_builder_mode_always_succeeds_even_far_from_any_city_hall():
+	var tile := player.current_tile()
+	chunk_manager.build_at_global(tile.x + 1, tile.y, "city_hall")
+	player._try_enter_direct_builder_mode()
+
+	player._exit_direct_builder_mode()
+
+	assert_false(player.direct_builder_mode)
+
+
 # -- build-input: placement, consumption, and the unarmed regression path -----
 
 func test_build_step_places_bare_earth_when_nothing_is_armed():
@@ -3648,3 +3686,106 @@ func test_a_granted_weapons_mass_matches_the_catalogs_real_mass():
 	player.grant_starter_items(["iron_sword"])
 	assert_eq(player.equipped_item.mass_kg, _item_catalog.make("iron_sword").mass_kg)
 	assert_gt(player.equipped_item.mass_kg, 0.0, "a real iron sword must not be massless")
+
+
+# -- two-story houses: real per-floor collision (docs/concept/housing.md) --
+#
+# Named honestly as a gap when two-story houses first shipped ("no real
+# upper-floor wall collision yet... a player can walk through an upstairs
+# wall today"), closed here directly per a follow-up request to "properly
+# implement" it. EarthChunkManager's own two independent physics layers
+# (GROUND_FLOOR_COLLISION_LAYER / UPPER_FLOOR_COLLISION_LAYER -- see
+# test_earth_chunk_manager_upper_floor_collision.gd) only matter in play if
+# the PLAYER's own collision_mask actually switches between them -- this is
+# that switch, the one piece that makes the whole mechanism real rather
+# than infrastructure nobody reads.
+
+func test_player_starts_on_the_ground_floor_collision_layer_by_default():
+	assert_eq(
+		player.collision_mask, EarthChunkManager.GROUND_FLOOR_COLLISION_LAYER,
+		"a fresh player (floor 0) must collide with ground-floor pieces, the same as before this feature existed"
+	)
+
+
+func test_stepping_onto_stairs_switches_collision_mask_to_the_upper_floor_layer():
+	var tile := _facing_tile()
+	chunk_manager.build_at_global(tile.x, tile.y, "wood_stairs")
+	chunk_manager.build_upper_floor_at_global(tile.x, tile.y, "wood_stairs")
+	player.position = Vector2((tile.x + 0.5) * TILE_SIZE, (tile.y + 0.5) * TILE_SIZE)
+
+	player._floor_transition_step()
+
+	assert_eq(player._current_floor, 1, "precondition: the player should now be on the upper floor")
+	assert_eq(player.collision_mask, EarthChunkManager.UPPER_FLOOR_COLLISION_LAYER)
+
+
+func test_stepping_back_downstairs_restores_the_ground_floor_collision_mask():
+	var tile := _facing_tile()
+	chunk_manager.build_at_global(tile.x, tile.y, "wood_stairs")
+	chunk_manager.build_upper_floor_at_global(tile.x, tile.y, "wood_stairs")
+	player.position = Vector2((tile.x + 0.5) * TILE_SIZE, (tile.y + 0.5) * TILE_SIZE)
+	player._floor_transition_step()  # up
+	# Edge-detection (_was_on_stairs) means standing still on the SAME
+	# stairs cell never flips again on its own -- simulates having
+	# genuinely stepped off and back on, the real way a second real
+	# crossing happens.
+	player._was_on_stairs = false
+
+	player._floor_transition_step()  # back down
+
+	assert_eq(player._current_floor, 0, "precondition: the player should be back on the ground floor")
+	assert_eq(player.collision_mask, EarthChunkManager.GROUND_FLOOR_COLLISION_LAYER)
+
+
+func test_walking_around_off_stairs_never_changes_the_collision_mask():
+	var before := player.collision_mask
+	for i in 5:
+		player._floor_transition_step()
+	assert_eq(player.collision_mask, before, "never touching stairs must never change which floor's collision applies")
+
+
+# -- two-story houses: the player draws ABOVE the upper storey while upstairs --
+#
+# Reported directly after the two-story batch went live: "there are still no
+# 2 story houses... most houses don't even have a door." The upper storey is
+# drawn on its own TileMapLayer ABOVE the entity layer (EarthChunkManager.
+# UPPER_FLOOR_LAYER_Z_INDEX -- it has to sit above the roof so a two-story
+# house's own second facade band reads from outside; see docs/concept/
+# building.md "How a house reads from above"), which means a player standing
+# on floor 1 would be painted OVER by the very floor they stand on unless
+# their own z_index lifts above that layer for exactly as long as they are
+# up there. The same single-property flip _floor_transition_step already
+# does for collision_mask, one more property.
+
+func test_player_starts_at_the_default_z_index_on_the_ground_floor():
+	assert_eq(player.z_index, 0, "a fresh player (floor 0) draws at the ordinary entity z, same as before this feature")
+
+
+func test_stepping_onto_stairs_lifts_the_player_above_the_upper_floor_layer():
+	var tile := _facing_tile()
+	chunk_manager.build_at_global(tile.x, tile.y, "wood_stairs")
+	chunk_manager.build_upper_floor_at_global(tile.x, tile.y, "wood_stairs")
+	player.position = Vector2((tile.x + 0.5) * TILE_SIZE, (tile.y + 0.5) * TILE_SIZE)
+
+	player._floor_transition_step()
+
+	assert_eq(player._current_floor, 1, "precondition: the player should now be on the upper floor")
+	assert_eq(player.z_index, EarthChunkManager.UPPER_FLOOR_OCCUPANT_Z_INDEX)
+	assert_gt(
+		player.z_index, EarthChunkManager.UPPER_FLOOR_LAYER_Z_INDEX,
+		"upstairs, the player must draw above the upper-floor layer or that floor paints over them"
+	)
+
+
+func test_stepping_back_downstairs_restores_the_default_z_index():
+	var tile := _facing_tile()
+	chunk_manager.build_at_global(tile.x, tile.y, "wood_stairs")
+	chunk_manager.build_upper_floor_at_global(tile.x, tile.y, "wood_stairs")
+	player.position = Vector2((tile.x + 0.5) * TILE_SIZE, (tile.y + 0.5) * TILE_SIZE)
+	player._floor_transition_step()  # up
+	player._was_on_stairs = false
+
+	player._floor_transition_step()  # back down
+
+	assert_eq(player._current_floor, 0, "precondition: the player should be back on the ground floor")
+	assert_eq(player.z_index, 0)

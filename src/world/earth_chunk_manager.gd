@@ -277,6 +277,16 @@ const ROOF_MODIFICATIONS_DIR := "user://chunk_roof_modifications"
 ## Where furniture pieces are persisted (see Chunk.furniture_modifications, docs/concept/housing.md) -- the same generic Dictionary save/load ChunkSerializer already uses for `modifications`/`roof_modifications`, just its own directory since furniture shares its cell with the floor beneath it.
 const FURNITURE_MODIFICATIONS_DIR := "user://chunk_furniture_modifications"
 
+## Where a two-story house's upper storey is persisted (see Chunk.upper_floor_modifications, docs/concept/housing.md's "Two-story houses" section) -- the same generic Dictionary save/load ChunkSerializer already uses for `modifications`/`roof_modifications`/`furniture_modifications`, just its own directory since it shares its cell with the ground floor beneath it.
+const UPPER_FLOOR_MODIFICATIONS_DIR := "user://chunk_upper_floor_modifications"
+
+## Where the upper floor's OWN furniture is persisted (see Chunk.
+## upper_floor_furniture_modifications, docs/concept/housing.md's
+## "Interior furniture" section) -- the same generic save/load every
+## other modification dict already uses, its own directory for the same
+## reason FURNITURE_MODIFICATIONS_DIR itself has one.
+const UPPER_FLOOR_FURNITURE_MODIFICATIONS_DIR := "user://chunk_upper_floor_furniture_modifications"
+
 const CHUNK_SIZE := 32
 ## Chunks within this many chunks of the player are generated/painted.
 const LOAD_RADIUS := 2
@@ -973,6 +983,53 @@ var _loaded_villages: Dictionary = {}  # Vector2i chunk_coord -> Array[Node2D]
 ## that chunk's bodies, mirroring _loaded_trees/_loaded_stones.
 var _piece_collision_bodies: Dictionary = {}  # Vector2i chunk_coord -> {Vector2i global_cell -> StaticBody2D}
 
+## Two-story houses (docs/concept/housing.md): real per-floor collision.
+## Ground-floor solid pieces stay on Godot's own default physics layer
+## (bit 1) exactly as before this pair of constants existed -- confirmed
+## nothing anywhere in this project ever sets collision_layer/
+## collision_mask (a repo-wide grep found none), so every pre-existing
+## collision body (trees, stones, ore, ground walls) keeps colliding
+## exactly as it always has, zero blast radius. Upper-floor solid pieces
+## get their OWN bit instead of sharing layer 1, which is what makes "block
+## movement only on the floor you're actually standing on" a single
+## property flip on the PLAYER's own collision_mask (see Player.
+## _floor_transition_step) rather than iterating and toggling every
+## collision body in the loaded world on every staircase crossing. This
+## genuinely matters, not just in principle: a house's ground and upper
+## wall rings share the same (x, y) cells almost everywhere (HouseBlueprint.
+## build_upper_floor reuses build()'s own footprint), EXCEPT at the ground
+## floor's own door cell -- walkable, no collision -- which the upper floor
+## fills with a real solid window instead (there is no second entrance up
+## there). One shared layer could only ever answer that cell one way; two
+## independent layers let each floor be correct on its own terms.
+const GROUND_FLOOR_COLLISION_LAYER := 1
+const UPPER_FLOOR_COLLISION_LAYER := 2
+
+## The draw order that lets a two-story house READ as one from above (docs/
+## concept/building.md's "How a house reads from above", point 5), pinned
+## here as constants rather than eyeballed z_index values in world.tscn
+## (set_roof_layer/set_upper_floor_layer/set_upper_floor_furniture_layer
+## apply them to whatever layer they are handed): the upper storey's own
+## facade band is painted OVER the roof's front row from outside, so the
+## upper-floor layers must sit above the roof layer; and whoever actually
+## stands upstairs (see Player._floor_transition_step) must draw above the
+## very floor they stand on, or it paints them over. VillageRenderer's own
+## upper-window night lights sit between the two (its own
+## UPPER_WINDOW_LIGHT_Z_INDEX), above the facade they belong to and below
+## the player.
+const ROOF_LAYER_Z_INDEX := 1
+const UPPER_FLOOR_LAYER_Z_INDEX := 2
+const UPPER_FLOOR_OCCUPANT_Z_INDEX := 4
+
+## The upper-storey twin of _piece_collision_bodies, one layer up -- a
+## SEPARATE dict (not reusing the ground one), the same "own layer because
+## it coexists with what's already at that cell" reasoning every other
+## ground/upper pair in this file already follows (see e.g. _paint_roof/
+## _paint_upper_floor). A wall cell can carry a real, independent body on
+## BOTH dicts at once -- see UPPER_FLOOR_COLLISION_LAYER's own doc comment
+## for exactly when that happens and why it must.
+var _upper_piece_collision_bodies: Dictionary = {}  # Vector2i chunk_coord -> {Vector2i global_cell -> StaticBody2D}
+
 ## Every placed structure's own real stock -- a Storage building's inventory,
 ## keyed by its own tile position (see docs/concept/timber_construction.md's
 ## "Storage, logistics, and the autonomous dependency chain" section, and
@@ -998,6 +1055,39 @@ var _building_decay := BuildingDecay.new()
 ## than leaving it hidden forever. null chunk_coord means nothing is hidden.
 var _hidden_roof_chunk_coord = null
 var _hidden_roof_room_cells: Array = []
+
+## Two-story houses (docs/concept/housing.md's "Two-story houses" section).
+## Optional upper-storey overlay layer (see set_upper_floor_layer) -- its
+## own TileMapLayer for the same reason _roof_layer needs one: an upper
+## floor shares its cell with the ground floor beneath it.
+var _upper_floor_layer: TileMapLayer = null
+## Which floor the LOCAL PLAYER is currently standing on (0 = ground, 1 =
+## a house's real upper storey) -- set by Player itself the moment it steps
+## on a real wood_stairs piece (see step_on_stairs), read back by
+## _update_upper_floor_visibility so a solo/hosting player's own floor
+## decides what everyone sees rendered. Deliberately NOT per-viewer (no
+## multiplayer camera-per-floor split exists anywhere in this codebase);
+## a real, honest single-player-shaped simplification, matching how
+## _hidden_roof_chunk_coord above is already scoped to one observer.
+var _current_player_floor := 0
+## The SAME "which room is the player in" bookkeeping _hidden_roof_chunk_
+## coord/_hidden_roof_room_cells already keep for the roof layer, one layer
+## up: which house's cells (room + wall ring, local to _upper_view_chunk_
+## coord) are currently drawn in INTERIOR mode rather than the exterior
+## facade-band view every other upper storey gets (see _paint_upper_floor),
+## and which floor the player was on when that was decided -- the floor
+## changes what "interior" draws (nothing on floor 0, everything on floor
+## 1), so a staircase crossing inside the same house must repaint too.
+var _upper_view_chunk_coord = null
+var _upper_view_house_cells: Array = []
+var _upper_view_floor := 0
+## Exactly which local cells each chunk last painted onto the upper-floor
+## and upper-furniture layers, so a repaint can erase precisely those first
+## -- the exterior view paints a facade cell one row UP from where it
+## lives, so "erase every cell in upper_floor_modifications" would leave a
+## stale band behind the moment a house is destroyed or a view flips.
+var _upper_floor_painted: Dictionary = {}
+var _upper_floor_furniture_painted: Dictionary = {}
 
 var _ecosystem_time_accumulator := 0.0
 var _forage_accumulator := 0.0
@@ -1066,7 +1156,8 @@ func update(player_global_tile: Vector2i) -> void:
 		_load_chunk(chunk_coord)
 
 	_evict_far_chunks(center_chunk)
-	_update_roof_visibility(player_global_tile)
+	var ground_room := _update_roof_visibility(player_global_tile)
+	_update_upper_floor_visibility(player_global_tile, ground_room)
 	_update_geology_reveal(player_global_tile)
 
 
@@ -1216,7 +1307,8 @@ func update_with_progress(player_global_tile: Vector2i, on_progress: Callable = 
 		await Engine.get_main_loop().process_frame
 
 	_evict_far_chunks(center_chunk)
-	_update_roof_visibility(player_global_tile)
+	var ground_room := _update_roof_visibility(player_global_tile)
+	_update_upper_floor_visibility(player_global_tile, ground_room)
 	_update_geology_reveal(player_global_tile)
 
 
@@ -1701,6 +1793,19 @@ const BLUEPRINT_RECIPE_BY_ITEM_ID := {
 	"blueprint_small_house": "small_house",
 	"blueprint_cottage": "cottage",
 	"blueprint_manor": "manor",
+	# Ten sophisticated two-story blueprints (docs/concept/housing.md's
+	# "Two-story houses" section) -- item id is always "blueprint_" + the
+	# recipe id, the SAME convention every tier above already uses.
+	"blueprint_townhouse_narrow": "townhouse_narrow",
+	"blueprint_merchant_house": "merchant_house",
+	"blueprint_guild_hall": "guild_hall",
+	"blueprint_riverside_villa": "riverside_villa",
+	"blueprint_timber_longhouse": "timber_longhouse",
+	"blueprint_artisan_workshop_house": "artisan_workshop_house",
+	"blueprint_tower_keep": "tower_keep",
+	"blueprint_harborside_manor": "harborside_manor",
+	"blueprint_grand_estate": "grand_estate",
+	"blueprint_gambrel_lodge": "gambrel_lodge",
 }
 
 
@@ -1751,6 +1856,21 @@ const HOUSE_BLUEPRINT_SHAPE_BY_RECIPE_ID := {
 	"small_house": "hut_tiny",
 	"cottage": "cottage_bright",
 	"manor": "manor_wide",
+	# Ten sophisticated two-story blueprints -- recipe id and shape id are
+	# the SAME string for all ten (see HouseBlueprint.TWO_STORY_BLUEPRINT_
+	# IDS), so this mapping is the identity, still spelled out explicitly
+	# rather than a bare fallback, matching this dict's own established
+	# "explicit and small" convention.
+	"townhouse_narrow": "townhouse_narrow",
+	"merchant_house": "merchant_house",
+	"guild_hall": "guild_hall",
+	"riverside_villa": "riverside_villa",
+	"timber_longhouse": "timber_longhouse",
+	"artisan_workshop_house": "artisan_workshop_house",
+	"tower_keep": "tower_keep",
+	"harborside_manor": "harborside_manor",
+	"grand_estate": "grand_estate",
+	"gambrel_lodge": "gambrel_lodge",
 }
 
 
@@ -1762,14 +1882,29 @@ const HOUSE_BLUEPRINT_SHAPE_BY_RECIPE_ID := {
 ## that was going to be refused anyway.
 ##
 ## Checks, in order: the blueprint must be unlocked, the recipe must map
-## to a real HouseBlueprint shape, the target chunk must be loaded, and
-## every cell the shape would occupy must be genuinely free (no existing
+## to a real HouseBlueprint shape, the target chunk must be loaded, every
+## cell the shape would occupy must be genuinely free (no existing
 ## `modifications` entry there -- you cannot build over an existing
-## structure or terrain feature). Terrain buildability (water/cliff) is
-## deliberately NOT checked yet -- the same simplification BuilderMarker's
-## own `_buildable_ground` already accepts (a bare `return true`), a
-## named, honest gap rather than a silent one; see workforce.md's own
-## Open Questions.
+## structure), and every cell must be real, buildable ground (see
+## is_buildable_terrain_at -- not water, not forest, and no standing tree
+## still in the way; reported directly: "houses / buildings cannot be
+## built on river / water; also not in the forest... must first fell all
+## trees to make space for the building"). BuilderMarker's own
+## `_buildable_ground` now calls the SAME real function, so a hired house
+## is refused on the identical terms a self-built one is.
+##
+## Two-story shapes (docs/concept/housing.md) need no SEPARATE upper-floor
+## occupancy check here: for THIS function's own caller (the player's own
+## self-build path), `upper_floor_modifications` only ever gets written by
+## `stamp_upper_floor_at_global` immediately alongside `stamp_structure_
+## at_global` for the SAME origin_tile+shape (see stamp_house_and_grant_
+## ownership below) -- so an occupied upper floor at a site this function
+## would approve always implies an occupied ground floor at the same cells
+## too, and this function's existing ground-floor-only loop already
+## refuses that. (The hire and village-generator paths call stamp_upper_
+## floor_at_global too, but neither of those goes through this function --
+## see hire_builder_for_house/VillageRenderer._stamp_house's own separate
+## occupancy reasoning.)
 func can_build_house_from_blueprint(recipe_id: String, origin_tile: Vector2i) -> bool:
 	if not has_unlocked_blueprint(recipe_id):
 		return false
@@ -1785,6 +1920,8 @@ func can_build_house_from_blueprint(recipe_id: String, origin_tile: Vector2i) ->
 	for local_cell in ground_pieces:
 		var global_cell: Vector2i = origin_tile + local_cell
 		if modification_at_global(global_cell.x, global_cell.y) != "":
+			return false
+		if not is_buildable_terrain_at(global_cell.x, global_cell.y):
 			return false
 	return true
 
@@ -1837,12 +1974,84 @@ func stamp_house_and_grant_ownership(recipe_id: String, origin_tile: Vector2i, h
 	var ground_pieces := house_blueprint.build(shape_id, seed_value)
 	var roof_pieces := house_blueprint.build_roofs(shape_id, seed_value)
 	stamp_structure_at_global(chunk_coord, origin_tile, ground_pieces, roof_pieces)
+	if house_blueprint.is_two_story(shape_id):
+		var upper_pieces := house_blueprint.build_upper_floor(shape_id, seed_value)
+		stamp_upper_floor_at_global(chunk_coord, origin_tile, upper_pieces)
 
 	var local_origin := origin_tile - chunk_coord * CHUNK_SIZE
 	var project := _construction_project_store.start_project(chunk_coord, local_origin, recipe_id, household_id)
 	_construction_project_store.complete_project(project.id, _household_store)
 	settle_resident_if_new(recipe_id, origin_tile)
 	return project.id
+
+
+## Stamps a two-story house's real upper-floor pieces into chunk.upper_
+## floor_modifications -- mirrors stamp_structure_at_global's own "cells
+## outside chunk_coord are silently skipped" simplification exactly, one
+## layer up. A no-op if chunk_coord isn't currently loaded. Public (no
+## leading underscore, matching stamp_structure_at_global's own naming) --
+## called both by stamp_house_and_grant_ownership below (the player's own
+## blueprint path) and, duck-typed via has_method exactly like
+## stamp_structure_at_global already is, by VillageRenderer's own two-story
+## NPC houses.
+func stamp_upper_floor_at_global(chunk_coord: Vector2i, origin_tile: Vector2i, upper_pieces: Dictionary) -> void:
+	var chunk: Chunk = _loaded_chunks.get(chunk_coord)
+	if chunk == null:
+		return
+	for local_cell in upper_pieces:
+		var global_cell: Vector2i = origin_tile + local_cell
+		if _chunk_coord_for_tile(global_cell) != chunk_coord:
+			continue
+		chunk.upper_floor_modifications[_local_coord(global_cell.x, global_cell.y)] = upper_pieces[local_cell]
+		_sync_upper_piece_collision(global_cell, upper_pieces[local_cell])
+	_paint_upper_floor(chunk_coord, chunk, _upper_view_cells_for(chunk_coord))
+
+
+## The upper floor's own twin of furnish_house_at_global (below this
+## file's own two-story block -- see that function's own doc comment for
+## the full contract, mirrored exactly here one layer up): the SAME real,
+## occupation-linked `furniture_ids` list, tried in order against the
+## upper floor's own real floor cells (from `upper_pieces`, footprint-
+## relative -- NEVER the ground floor's, see BuilderMarker._upper_local_
+## grid_snapshot's own identical reasoning for why the two floors must
+## never be conflated), validated against `chunk.upper_floor_modifications`
+## /`chunk.upper_floor_furniture_modifications` -- its own real layer, not
+## `furniture_modifications` reused, because a table on the ground floor
+## and a bed on the upper floor can legitimately share the exact same
+## (x, y). Repaints with the CURRENT hidden-cells state (unlike ground's
+## own unconditional `_paint_furniture`) so newly-placed upper furniture
+## respects whatever room is already hidden -- see docs/concept/
+## housing.md's own "hide in lockstep" reasoning. Returns how many pieces
+## actually landed, 0 for an unloaded chunk or a single-story house with
+## no upper pieces at all.
+func furnish_upper_floor_at_global(
+	chunk_coord: Vector2i, origin_tile: Vector2i, upper_pieces: Dictionary, furniture_ids: Array
+) -> int:
+	var chunk: Chunk = _loaded_chunks.get(chunk_coord)
+	if chunk == null:
+		return 0
+	var floor_cells: Array[Vector2i] = []
+	for local_cell in upper_pieces:
+		if BuildingPiece.category_of(upper_pieces[local_cell]) != BuildingPiece.CATEGORY_FLOOR:
+			continue
+		var global_cell: Vector2i = origin_tile + local_cell
+		if _chunk_coord_for_tile(global_cell) == chunk_coord:
+			floor_cells.append(global_cell)
+	var placer := FurniturePlacement.new()
+	var placed := 0
+	var cell_index := 0
+	for piece_id in furniture_ids:
+		while cell_index < floor_cells.size():
+			var global_cell: Vector2i = floor_cells[cell_index]
+			cell_index += 1
+			var local := _local_coord(global_cell.x, global_cell.y)
+			if placer.can_place(piece_id, local, chunk.upper_floor_modifications, chunk.upper_floor_furniture_modifications):
+				chunk.upper_floor_furniture_modifications[local] = piece_id
+				placed += 1
+				break
+	if placed > 0:
+		_paint_upper_floor_furniture(chunk_coord, chunk, _upper_view_cells_for(chunk_coord))
+	return placed
 
 
 ## Move-in (docs/concept/workforce.md's "Move-in" section): the moment a
@@ -2050,7 +2259,25 @@ func hire_builder_for_house(
 	var chunk_coord := _chunk_coord_for_tile(origin_tile)
 	var local_origin := origin_tile - chunk_coord * CHUNK_SIZE
 	var seed_value := _house_site_seed(chunk_coord, origin_tile, recipe_id)
-	var ground_pieces := HouseBlueprint.new().build(shape_id, seed_value)
+	var house_blueprint := HouseBlueprint.new()
+	var ground_pieces := house_blueprint.build(shape_id, seed_value)
+	# Two-story houses (docs/concept/housing.md): a hired Builder now raises
+	# the real upper storey too, not just the ground floor -- named honestly
+	# as a gap when this feature first shipped, closed here directly. {} for
+	# every single-story shape (is_two_story false), so BuilderMarker.
+	# target_upper_pieces stays empty and every pre-existing hire is
+	# completely unaffected.
+	var upper_pieces := {}
+	if house_blueprint.is_two_story(shape_id):
+		upper_pieces = house_blueprint.build_upper_floor(shape_id, seed_value)
+	# The roof (docs/concept/timber_construction.md's own long-named "a
+	# hired house gets no roof at all" gap, closed here) -- unconditional,
+	# unlike upper_pieces above: EVERY real house needs a roof, single- or
+	# two-story alike, and build_roofs already derives the right shape for
+	# either case (see its own doc comment -- the ground and upper floors
+	# share an identical footprint, so the facade it caps is the same
+	# either way).
+	var roof_pieces := house_blueprint.build_roofs(shape_id, seed_value)
 
 	var storage_tile := Vector2i(
 		floori(storage_pixel.x / TerrainRenderer.TILE_SIZE), floori(storage_pixel.y / TerrainRenderer.TILE_SIZE)
@@ -2067,6 +2294,8 @@ func hire_builder_for_house(
 	marker.household_store = _household_store
 	marker.target_project = project
 	marker.target_pieces = ground_pieces
+	marker.target_upper_pieces = upper_pieces
+	marker.target_roof_pieces = roof_pieces
 	marker.position = (Vector2(origin_tile) + Vector2(0.5, 0.5)) * TerrainRenderer.TILE_SIZE
 	_entities_parent.add_child(marker)
 	_hired_builders[project.id] = {"marker": marker, "carpenter_household_id": carpenter_household_id}
@@ -5147,6 +5376,7 @@ func set_roof_layer(roof_layer: TileMapLayer) -> void:
 	_roof_layer = roof_layer
 	roof_layer.tile_set = _tile_map_layer.tile_set
 	roof_layer.scale = Vector2.ONE * TerrainRenderer.LAYER_SCALE
+	roof_layer.z_index = ROOF_LAYER_Z_INDEX
 	for chunk_coord in _loaded_chunks:
 		_terrain_renderer.paint_roofs(
 			_roof_layer, _loaded_chunks[chunk_coord], chunk_coord * CHUNK_SIZE, _hidden_cells_for(chunk_coord)
@@ -5280,6 +5510,234 @@ func furnish_house_at_global(
 	return placed
 
 
+## Two-story houses (docs/concept/housing.md's "Two-story houses" section):
+## registers the upper-storey overlay layer, mirroring set_roof_layer/
+## set_furniture_layer's own exact "optional, fail-open" shape. Pinned to
+## UPPER_FLOOR_LAYER_Z_INDEX -- ABOVE the roof, not between Entities and
+## Roof as first shipped: from outside, the only part of an upper storey
+## ever drawn is its facade band, one row up, painted over the roof's own
+## front row (see _paint_upper_floor), which is what makes a two-story house
+## read as one from a bird's-eye view instead of as a one-story house with
+## its door painted over.
+func set_upper_floor_layer(upper_floor_layer: TileMapLayer) -> void:
+	_upper_floor_layer = upper_floor_layer
+	upper_floor_layer.tile_set = _tile_map_layer.tile_set
+	upper_floor_layer.scale = Vector2.ONE * TerrainRenderer.LAYER_SCALE
+	upper_floor_layer.z_index = UPPER_FLOOR_LAYER_Z_INDEX
+	for chunk_coord in _loaded_chunks:
+		_paint_upper_floor(chunk_coord, _loaded_chunks[chunk_coord], _upper_view_cells_for(chunk_coord))
+
+
+## How an upper storey is drawn, per cell, decided by where the player is
+## (docs/concept/building.md's "How a house reads from above", point 5).
+## `house_cells` (local cell keys) is the ONE house the player is currently
+## inside -- its room plus wall ring, see _update_upper_floor_visibility --
+## drawn in INTERIOR mode; every other upper-storey cell in the chunk is
+## drawn in EXTERIOR mode:
+##
+##   exterior: only a FACADE cell (nothing of the same storey directly south
+##       of it -- the same southernmost-per-column rule HouseBlueprint.
+##       _facade_cells uses) is drawn, one row UP from where it lives, so it
+##       sits over the roof's own front row and the house reads as roof-
+##       above-facade-above-facade with the ground door still legible below.
+##       Interior, side and back cells are under the roof from outside, the
+##       same way the ground floor's own are, and are not drawn at all.
+##   interior, floor 0: nothing -- downstairs, the ground room is the view.
+##   interior, floor 1: every cell of the storey, in place.
+##
+## Erases exactly what this chunk painted last time first (_upper_floor_
+## painted), since a facade cell's exterior position is not its own cell.
+func _paint_upper_floor(chunk_coord: Vector2i, chunk: Chunk, house_cells: Dictionary = {}) -> void:
+	if _upper_floor_layer == null:
+		return
+	for local in _upper_floor_painted.get(chunk_coord, []):
+		_upper_floor_layer.erase_cell(chunk_coord * CHUNK_SIZE + local)
+	var desired := {}
+	var upstairs := _current_player_floor == 1
+	for local in chunk.upper_floor_modifications:
+		var piece_id: String = chunk.upper_floor_modifications[local]
+		if house_cells.has(local):
+			if upstairs:
+				desired[local] = piece_id
+		elif _is_upper_facade_cell(chunk, local) and local.y > 0:
+			desired[local + Vector2i(0, -1)] = piece_id
+	for local in desired:
+		_upper_floor_layer.set_cell(
+			chunk_coord * CHUNK_SIZE + local, 0, _terrain_renderer.atlas_coords_for_modification(desired[local])
+		)
+	_upper_floor_painted[chunk_coord] = desired.keys()
+
+
+## The upper storey's own front: a cell with nothing of the same storey
+## directly south of it (HouseBlueprint._facade_cells' own southernmost-per-
+## column rule, read back off the chunk rather than the blueprint, since the
+## chunk is all this layer ever sees).
+func _is_upper_facade_cell(chunk: Chunk, local: Vector2i) -> bool:
+	return not chunk.upper_floor_modifications.has(local + Vector2i(0, 1))
+
+
+## Interior furniture on the upper storey (docs/concept/housing.md) --
+## optional, fail-open like every other overlay layer here.
+var _upper_floor_furniture_layer: TileMapLayer = null
+
+
+func set_upper_floor_furniture_layer(upper_floor_furniture_layer: TileMapLayer) -> void:
+	_upper_floor_furniture_layer = upper_floor_furniture_layer
+	upper_floor_furniture_layer.tile_set = _tile_map_layer.tile_set
+	upper_floor_furniture_layer.scale = Vector2.ONE * TerrainRenderer.LAYER_SCALE
+	upper_floor_furniture_layer.z_index = UPPER_FLOOR_LAYER_Z_INDEX
+	for chunk_coord in _loaded_chunks:
+		_paint_upper_floor_furniture(chunk_coord, _loaded_chunks[chunk_coord], _upper_view_cells_for(chunk_coord))
+
+
+## The upper storey's furniture is only ever drawn in place, and only for the
+## house the player is actually standing upstairs in (`house_cells`, floor 1
+## -- see _paint_upper_floor's own three views): from outside it is under
+## the roof, and from the ground floor it is a storey above the room being
+## looked at. Deliberately UNLIKE ground _paint_furniture, which never hides
+## anything -- nothing ever occludes the ground layer's own room.
+func _paint_upper_floor_furniture(chunk_coord: Vector2i, chunk: Chunk, house_cells: Dictionary = {}) -> void:
+	if _upper_floor_furniture_layer == null:
+		return
+	for local in _upper_floor_furniture_painted.get(chunk_coord, []):
+		_upper_floor_furniture_layer.erase_cell(chunk_coord * CHUNK_SIZE + local)
+	var painted: Array = []
+	if _current_player_floor == 1:
+		for local in chunk.upper_floor_furniture_modifications:
+			if not house_cells.has(local):
+				continue
+			var piece_id: String = chunk.upper_floor_furniture_modifications[local]
+			_upper_floor_furniture_layer.set_cell(
+				chunk_coord * CHUNK_SIZE + local, 0, _terrain_renderer.atlas_coords_for_modification(piece_id)
+			)
+			painted.append(local)
+	_upper_floor_furniture_painted[chunk_coord] = painted
+
+
+func upper_floor_furniture_at_global(global_x: int, global_y: int) -> String:
+	var chunk: Chunk = _loaded_chunks.get(_chunk_coord_for_tile(Vector2i(global_x, global_y)))
+	if chunk == null:
+		return ""
+	return chunk.upper_floor_furniture_modifications.get(_local_coord(global_x, global_y), "")
+
+
+## The local cells `chunk_coord` should currently draw in interior mode --
+## the house the player is inside if it is in this chunk, otherwise nothing
+## (every storey in exterior mode).
+func _upper_view_cells_for(chunk_coord: Vector2i) -> Dictionary:
+	if _upper_view_chunk_coord != chunk_coord:
+		return {}
+	var cells := {}
+	for cell in _upper_view_house_cells:
+		cells[cell] = true
+	return cells
+
+
+## Only the actual BuildingPiece ids in `chunk.upper_floor_modifications` --
+## the SAME real filter _piece_grid_for already applies to the ground
+## layer, needed here so RoomDetector can find the upper storey's own real
+## enclosed room rather than reading the ground floor's.
+func _upper_floor_piece_grid_for(chunk: Chunk) -> Dictionary:
+	var grid := {}
+	for cell in chunk.upper_floor_modifications:
+		var tile_id: String = chunk.upper_floor_modifications[cell]
+		if BuildingPiece.has_piece(tile_id):
+			grid[cell] = tile_id
+	return grid
+
+
+## Which floor the local player is currently standing on -- called by
+## Player itself the moment it steps onto a real wood_stairs piece (see
+## step_on_stairs), never guessed at from here.
+func set_current_player_floor(current_floor: int) -> void:
+	_current_player_floor = current_floor
+
+
+## The upper-storey twin of _update_roof_visibility, one layer up: works out
+## which house (room + wall ring) the player is currently INSIDE -- on the
+## floor they are actually standing on, so the upper storey's own real room
+## when upstairs, the ground room when not -- and repaints so that ONE house
+## is drawn in interior mode while every other upper storey keeps its
+## exterior facade-band look (see _paint_upper_floor for the three views).
+## Called from update() right after _update_roof_visibility, which hands
+## its already-computed ground room in as `ground_room` so the ground-floor
+## case costs no second RoomDetector pass per frame; a caller without one
+## (null) gets it computed here.
+func _update_upper_floor_visibility(player_global_tile: Vector2i, ground_room = null) -> void:
+	if _upper_floor_layer == null:
+		return
+
+	var chunk_coord := _chunk_coord_for_tile(player_global_tile)
+	var chunk: Chunk = _loaded_chunks.get(chunk_coord)
+	var house_cells: Array = []
+	if chunk != null:
+		var local_cell := _local_coord(player_global_tile.x, player_global_tile.y)
+		var room_cells: Array = []
+		var structure: Dictionary = chunk.modifications
+		if _current_player_floor == 1:
+			room_cells = _room_detector.room_containing(local_cell, _upper_floor_piece_grid_for(chunk))
+			structure = chunk.upper_floor_modifications
+		elif ground_room != null:
+			room_cells = ground_room
+		else:
+			room_cells = _room_detector.room_containing(local_cell, _piece_grid_for(chunk))
+		if not room_cells.is_empty():
+			house_cells = RoofShape.revealed_cells(room_cells, structure).keys()
+			house_cells.sort()
+
+	if (
+		chunk_coord == _upper_view_chunk_coord and house_cells == _upper_view_house_cells
+		and _current_player_floor == _upper_view_floor
+	):
+		return  # nothing changed
+
+	# Put whatever was previously drawn in interior mode back to exterior.
+	if _upper_view_chunk_coord != null and _loaded_chunks.has(_upper_view_chunk_coord):
+		var previous_chunk: Chunk = _loaded_chunks[_upper_view_chunk_coord]
+		_paint_upper_floor(_upper_view_chunk_coord, previous_chunk, {})
+		_paint_upper_floor_furniture(_upper_view_chunk_coord, previous_chunk, {})
+
+	_upper_view_floor = _current_player_floor
+	if house_cells.is_empty():
+		_upper_view_chunk_coord = null
+		_upper_view_house_cells = []
+		return
+
+	_upper_view_chunk_coord = chunk_coord
+	_upper_view_house_cells = house_cells
+	_paint_upper_floor(chunk_coord, chunk, _upper_view_cells_for(chunk_coord))
+	_paint_upper_floor_furniture(chunk_coord, chunk, _upper_view_cells_for(chunk_coord))
+
+
+func upper_floor_at_global(global_x: int, global_y: int) -> String:
+	var chunk: Chunk = _loaded_chunks.get(_chunk_coord_for_tile(Vector2i(global_x, global_y)))
+	if chunk == null:
+		return ""
+	return chunk.upper_floor_modifications.get(_local_coord(global_x, global_y), "")
+
+
+## The real floor-to-floor transition (docs/concept/housing.md's "Two-story
+## houses" section): a real wood_stairs piece sits at the SAME cell on both
+## a house's ground and upper layer, so stepping onto it just toggles which
+## of the two layers Player itself reads as "the floor I'm on" -- the
+## player's own WORLD position never changes, matching the same "no
+## teleport, no scene change" shape every other real interaction in this
+## codebase already keeps. Returns the new current floor (0 or 1); a no-op
+## (returns current_floor unchanged) if global_x/global_y isn't really a
+## stairs cell on the floor the caller claims to already be on.
+func step_on_stairs(global_x: int, global_y: int, current_floor: int) -> int:
+	var piece_id := (
+		upper_floor_at_global(global_x, global_y) if current_floor == 1
+		else modification_at_global(global_x, global_y)
+	)
+	if piece_id != "wood_stairs":
+		return current_floor
+	var new_floor := 0 if current_floor == 1 else 1
+	set_current_player_floor(new_floor)
+	return new_floor
+
+
+
 ## World's own ground-item container (see World._ground_items /
 ## _on_item_dropped) -- registered so fruit_near/take_fruit_at (bird
 ## endozoochory, see SeedEndozoochory) can see and consume real, already-
@@ -5344,10 +5802,13 @@ var _cave_scan_result = null
 ## never changed between the load and the stamp). The room-unchanged check
 ## just below already skips the expensive repaint on every frame where
 ## nothing actually needs to change, so this stays cheap regardless.
-func _update_roof_visibility(player_global_tile: Vector2i) -> void:
-	if _roof_layer == null:
-		return
-
+##
+## Returns the ground-floor room the player is standing in (its interior
+## cells, local to the player's chunk; empty when outdoors) whether or not a
+## roof layer is registered, so _update_upper_floor_visibility, called right
+## after it every frame, can reuse the one RoomDetector pass instead of
+## running a second identical one.
+func _update_roof_visibility(player_global_tile: Vector2i) -> Array:
 	var chunk_coord := _chunk_coord_for_tile(player_global_tile)
 	var chunk: Chunk = _loaded_chunks.get(chunk_coord)
 	var room_cells: Array = []
@@ -5374,8 +5835,11 @@ func _update_roof_visibility(player_global_tile: Vector2i) -> void:
 			_roof_lookup_hash = structure_hash
 			_roof_lookup_room = room_cells
 
+	if _roof_layer == null:
+		return room_cells
+
 	if chunk_coord == _hidden_roof_chunk_coord and room_cells == _hidden_roof_room_cells:
-		return  # nothing changed -- still in the same room (or still outside)
+		return room_cells  # nothing changed -- still in the same room (or still outside)
 
 	# Un-hide whatever was previously hidden.
 	if _hidden_roof_chunk_coord != null and _loaded_chunks.has(_hidden_roof_chunk_coord):
@@ -5385,7 +5849,7 @@ func _update_roof_visibility(player_global_tile: Vector2i) -> void:
 	if room_cells.is_empty():
 		_hidden_roof_chunk_coord = null
 		_hidden_roof_room_cells = []
-		return
+		return room_cells
 
 	_hidden_roof_chunk_coord = chunk_coord
 	_hidden_roof_room_cells = room_cells
@@ -5396,6 +5860,7 @@ func _update_roof_visibility(player_global_tile: Vector2i) -> void:
 		_roof_layer, chunk, chunk_coord * CHUNK_SIZE,
 		RoofShape.revealed_cells(room_cells, chunk.modifications)
 	)
+	return room_cells
 
 
 ## How many tiles out from the player a cave entrance still triggers a
@@ -11913,6 +12378,55 @@ func modification_at_global(global_x: int, global_y: int) -> String:
 	return chunk.modifications.get(_local_coord(global_x, global_y), "")
 
 
+## The upper-storey twin of modification_at_global -- mirrors upper_floor_
+## at_global's exact shape, one layer further: the roof piece (if any) at a
+## global tile. `""` for an unloaded chunk or a cell with no roof.
+func roof_at_global(global_x: int, global_y: int) -> String:
+	var chunk: Chunk = _loaded_chunks.get(_chunk_coord_for_tile(Vector2i(global_x, global_y)))
+	if chunk == null:
+		return ""
+	return chunk.roof_modifications.get(_local_coord(global_x, global_y), "")
+
+
+## True if a real, currently-standing tree occupies this exact tile --
+## reported directly ("the NPCs / Player must first fell all trees to make
+## space for the building"): a house may not be sited where a tree still
+## stands, only where the ground is already genuinely clear. Mirrors
+## _clear_vegetation_on_cells' own tree-to-tile reverse lookup exactly (see
+## that function for why _world_tile_for_pixel is the right mapping) --
+## false for an unloaded chunk, the same as every other real-tile query
+## here (nothing is tracked there to find).
+func tree_at_global(global_x: int, global_y: int) -> bool:
+	var chunk_coord := _chunk_coord_for_tile(Vector2i(global_x, global_y))
+	var target := Vector2i(global_x, global_y)
+	for tree in _loaded_trees.get(chunk_coord, []):
+		if is_instance_valid(tree) and _world_tile_for_pixel(tree.position) == target:
+			return true
+	return false
+
+
+## The real, single answer to "may a house be sited on this exact tile" --
+## reported directly: "houses / buildings cannot be built on river / water;
+## also not in the forest... must first fell all trees to make space".
+## A thin aggregator over four already-real, independently-tested
+## primitives (biome_at_global, is_river_at_global, is_lake_at_global,
+## tree_at_global) -- deliberately not a fifth parallel terrain model.
+## "The forest" resolves to the FOREST biome specifically (matching
+## SettlementGenerator's own _UNINHABITABLE_BIOMES, which a real settlement
+## already avoids sitting a whole village in for the same reason) -- a
+## single standing tree elsewhere is a per-cell obstacle (fell it and the
+## cell opens up), not a biome-wide ban.
+func is_buildable_terrain_at(global_x: int, global_y: int) -> bool:
+	var biome := biome_at_global(global_x, global_y)
+	if biome == "ocean" or biome == "forest":
+		return false
+	if is_river_at_global(global_x, global_y) or is_lake_at_global(global_x, global_y):
+		return false
+	if tree_at_global(global_x, global_y):
+		return false
+	return true
+
+
 ## The withering condition (1.0 = new, decaying toward 0.0 -- see
 ## BuildingDecay / docs/concept/timber_construction.md#withering-decay-as-a-
 ## bounded-closed-form-catch-up) of the piece at a global tile. 1.0 for a
@@ -12120,6 +12634,7 @@ func _spawn_piece_collision(global_cell: Vector2i, piece_id: String) -> void:
 	body.position = Vector2(
 		(global_cell.x + 0.5) * TerrainRenderer.TILE_SIZE, (global_cell.y + 0.5) * TerrainRenderer.TILE_SIZE
 	)
+	body.collision_layer = GROUND_FLOOR_COLLISION_LAYER
 	var shape := CollisionShape2D.new()
 	var rect := RectangleShape2D.new()
 	rect.size = Vector2.ONE * TerrainRenderer.TILE_SIZE
@@ -12140,6 +12655,81 @@ func _remove_piece_collision(global_cell: Vector2i) -> void:
 		return
 	body.free()
 	bodies.erase(global_cell)
+
+
+## The upper-storey twin of _sync_piece_collision, one layer up -- see
+## UPPER_FLOOR_COLLISION_LAYER's own doc comment for why this needs its own
+## physics layer rather than reusing the ground body mechanism verbatim.
+func _sync_upper_piece_collision(global_cell: Vector2i, tile_id: String) -> void:
+	_remove_upper_piece_collision(global_cell)
+	if BuildingPiece.has_piece(tile_id) and not BuildingPiece.is_walkable(tile_id):
+		_spawn_upper_piece_collision(global_cell, tile_id)
+
+
+func _spawn_upper_piece_collision(global_cell: Vector2i, piece_id: String) -> void:
+	var body := StaticBody2D.new()
+	body.name = "UpperPieceCollision"
+	body.position = Vector2(
+		(global_cell.x + 0.5) * TerrainRenderer.TILE_SIZE, (global_cell.y + 0.5) * TerrainRenderer.TILE_SIZE
+	)
+	body.collision_layer = UPPER_FLOOR_COLLISION_LAYER
+	var shape := CollisionShape2D.new()
+	var rect := RectangleShape2D.new()
+	rect.size = Vector2.ONE * TerrainRenderer.TILE_SIZE
+	shape.shape = rect
+	body.add_child(shape)
+	_entities_parent.add_child(body)
+	var chunk_coord := _chunk_coord_for_tile(global_cell)
+	if not _upper_piece_collision_bodies.has(chunk_coord):
+		_upper_piece_collision_bodies[chunk_coord] = {}
+	_upper_piece_collision_bodies[chunk_coord][global_cell] = body
+
+
+func _remove_upper_piece_collision(global_cell: Vector2i) -> void:
+	var chunk_coord := _chunk_coord_for_tile(global_cell)
+	var bodies: Dictionary = _upper_piece_collision_bodies.get(chunk_coord, {})
+	var body: Node = bodies.get(global_cell)
+	if body == null:
+		return
+	body.free()
+	bodies.erase(global_cell)
+
+
+## The upper-storey twin of build_at_global, one layer up: a Builder's own
+## per-piece placement hook (see BuilderMarker.target_upper_pieces) and this
+## test suite's own direct entry point, mirroring build_at_global's exact
+## "write the cell, repaint, sync collision" shape. Returns false (no-op) if
+## global_x/global_y isn't in a currently-loaded chunk.
+func build_upper_floor_at_global(global_x: int, global_y: int, tile_id: String) -> bool:
+	var chunk_coord := _chunk_coord_for_tile(Vector2i(global_x, global_y))
+	var chunk: Chunk = _loaded_chunks.get(chunk_coord)
+	if chunk == null:
+		return false
+	var local := _local_coord(global_x, global_y)
+	chunk.upper_floor_modifications[local] = tile_id
+	_paint_upper_floor(chunk_coord, chunk, _upper_view_cells_for(chunk_coord))
+	_sync_upper_piece_collision(Vector2i(global_x, global_y), tile_id)
+	return true
+
+
+## The roof's own per-cell twin of build_upper_floor_at_global -- a
+## Builder's own roof-placement hook (see BuilderMarker.target_roof_
+## pieces, docs/concept/timber_construction.md's own long-named "a hired
+## house gets no roof" gap, closed here). Roof pieces are always walkable
+## (BuildingPiece._PIECES' own "encloses"/"walkable" rows), so unlike
+## build_at_global/build_upper_floor_at_global this never needs to sync a
+## collision body. Returns false (no-op) if global_x/global_y isn't in a
+## currently-loaded chunk.
+func build_roof_at_global(global_x: int, global_y: int, tile_id: String) -> bool:
+	var chunk_coord := _chunk_coord_for_tile(Vector2i(global_x, global_y))
+	var chunk: Chunk = _loaded_chunks.get(chunk_coord)
+	if chunk == null:
+		return false
+	var local := _local_coord(global_x, global_y)
+	chunk.roof_modifications[local] = tile_id
+	if _roof_layer != null:
+		_terrain_renderer.paint_roofs(_roof_layer, chunk, chunk_coord * CHUNK_SIZE, _hidden_cells_for(chunk_coord))
+	return true
 
 
 ## True if a modification tile matching `structure_id` (e.g. "campfire",
@@ -12823,6 +13413,10 @@ func _load_chunk(chunk_coord: Vector2i) -> void:
 	chunk.modifications = _chunk_serializer.load_modifications(_modifications_path(chunk_coord))
 	chunk.roof_modifications = _chunk_serializer.load_modifications(_roof_modifications_path(chunk_coord))
 	chunk.furniture_modifications = _chunk_serializer.load_modifications(_furniture_modifications_path(chunk_coord))
+	chunk.upper_floor_modifications = _chunk_serializer.load_modifications(_upper_floor_modifications_path(chunk_coord))
+	chunk.upper_floor_furniture_modifications = _chunk_serializer.load_modifications(
+		_upper_floor_furniture_modifications_path(chunk_coord)
+	)
 	chunk.planted_trees = _chunk_serializer.load_planted_trees(_planted_trees_path(chunk_coord))
 	_loaded_chunks[chunk_coord] = chunk
 	# Withering catch-up BEFORE the first paint/collision pass below, so a
@@ -12855,6 +13449,14 @@ func _load_chunk(chunk_coord: Vector2i) -> void:
 	if _roof_layer != null:
 		_terrain_renderer.paint_roofs(_roof_layer, chunk, chunk_coord * CHUNK_SIZE, _hidden_cells_for(chunk_coord))
 	_paint_furniture(chunk_coord, chunk)
+	_paint_upper_floor(chunk_coord, chunk, _upper_view_cells_for(chunk_coord))
+	_paint_upper_floor_furniture(chunk_coord, chunk, _upper_view_cells_for(chunk_coord))
+	# The upper-storey twin of the ground restore loop just above, for the
+	# exact same reason: a persisted upper wall/window needs its collision
+	# body back too, not just its paint.
+	for local_cell in _upper_floor_piece_grid_for(chunk):
+		var global_cell: Vector2i = chunk_coord * CHUNK_SIZE + local_cell
+		_sync_upper_piece_collision(global_cell, chunk.upper_floor_modifications[local_cell])
 	_loaded_trees[chunk_coord] = _tree_renderer.spawn_trees(
 		_entities_parent, chunk, chunk_coord * CHUNK_SIZE, TerrainRenderer.TILE_SIZE
 	)
@@ -13603,6 +14205,14 @@ func _unload_chunk(chunk_coord: Vector2i) -> void:
 	if chunk != null and not chunk.furniture_modifications.is_empty():
 		DirAccess.make_dir_recursive_absolute(FURNITURE_MODIFICATIONS_DIR)
 		_chunk_serializer.save_modifications(chunk.furniture_modifications, _furniture_modifications_path(chunk_coord))
+	if chunk != null and not chunk.upper_floor_modifications.is_empty():
+		DirAccess.make_dir_recursive_absolute(UPPER_FLOOR_MODIFICATIONS_DIR)
+		_chunk_serializer.save_modifications(chunk.upper_floor_modifications, _upper_floor_modifications_path(chunk_coord))
+	if chunk != null and not chunk.upper_floor_furniture_modifications.is_empty():
+		DirAccess.make_dir_recursive_absolute(UPPER_FLOOR_FURNITURE_MODIFICATIONS_DIR)
+		_chunk_serializer.save_modifications(
+			chunk.upper_floor_furniture_modifications, _upper_floor_furniture_modifications_path(chunk_coord)
+		)
 
 	# Withering (see _apply_piece_condition_catchup above): snapshot this
 	# chunk's real per-piece condition state and the world-age it was taken
@@ -13638,14 +14248,29 @@ func _unload_chunk(chunk_coord: Vector2i) -> void:
 		_terrain_renderer.erase(_roof_layer, CHUNK_SIZE, chunk_coord * CHUNK_SIZE)
 	if _snow_layer != null:
 		_terrain_renderer.erase(_snow_layer, CHUNK_SIZE, chunk_coord * CHUNK_SIZE)
+	if _furniture_layer != null:
+		_terrain_renderer.erase(_furniture_layer, CHUNK_SIZE, chunk_coord * CHUNK_SIZE)
+	if _upper_floor_layer != null:
+		_terrain_renderer.erase(_upper_floor_layer, CHUNK_SIZE, chunk_coord * CHUNK_SIZE)
+	if _upper_floor_furniture_layer != null:
+		_terrain_renderer.erase(_upper_floor_furniture_layer, CHUNK_SIZE, chunk_coord * CHUNK_SIZE)
+	_upper_floor_painted.erase(chunk_coord)
+	_upper_floor_furniture_painted.erase(chunk_coord)
 	if _hidden_roof_chunk_coord == chunk_coord:
 		_hidden_roof_chunk_coord = null
 		_hidden_roof_room_cells = []
+	if _upper_view_chunk_coord == chunk_coord:
+		_upper_view_chunk_coord = null
+		_upper_view_house_cells = []
 	_loaded_chunks.erase(chunk_coord)
 
 	for body in _piece_collision_bodies.get(chunk_coord, {}).values():
 		body.free()
 	_piece_collision_bodies.erase(chunk_coord)
+
+	for body in _upper_piece_collision_bodies.get(chunk_coord, {}).values():
+		body.free()
+	_upper_piece_collision_bodies.erase(chunk_coord)
 
 	for tree in _loaded_trees.get(chunk_coord, []):
 		tree.free()
@@ -13991,6 +14616,14 @@ func _roof_modifications_path(chunk_coord: Vector2i) -> String:
 
 func _furniture_modifications_path(chunk_coord: Vector2i) -> String:
 	return "%s/%d_%d.bin" % [FURNITURE_MODIFICATIONS_DIR, chunk_coord.x, chunk_coord.y]
+
+
+func _upper_floor_modifications_path(chunk_coord: Vector2i) -> String:
+	return "%s/%d_%d.bin" % [UPPER_FLOOR_MODIFICATIONS_DIR, chunk_coord.x, chunk_coord.y]
+
+
+func _upper_floor_furniture_modifications_path(chunk_coord: Vector2i) -> String:
+	return "%s/%d_%d.bin" % [UPPER_FLOOR_FURNITURE_MODIFICATIONS_DIR, chunk_coord.x, chunk_coord.y]
 
 
 func _planted_trees_path(chunk_coord: Vector2i) -> String:

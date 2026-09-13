@@ -291,11 +291,38 @@ That is again neighbour context, expressed as a 4-bit edge mask over the
 cell's cardinal sides, so the atlas family is (material × band × edge
 mask) rather than one tile per piece id.
 
+**5. A second storey reads as a second facade band — never as a second
+floor painted over the first.** Reported directly once two-story houses
+went live: "there are still no 2 story houses... also now most houses
+don't even have a door." An upper storey shares the ground floor's exact
+footprint (see [housing.md](housing.md)'s "Two-story houses"), and it was
+first drawn in place, on a layer above everything, with the same wall and
+window art — which from a bird's-eye view is *indistinguishable* from a
+one-story house, except that the upper storey's own front wall/window
+sits squarely over the ground floor's door. Real top-down games depict
+height the same way they depict the facade in point 2: a taller building
+shows MORE facade band, stacked. So from outside, the only part of an
+upper storey ever drawn is its own facade cells (the same southernmost-
+per-column rule), each painted one row UP — over the roof's own front row
+— so a two-story house reads as roof-above-facade-above-facade: door and
+ground windows on the bottom band, the upper storey's windows on the band
+above, roof above that. Nothing else of the upper storey is drawn from
+outside; its interior, side and back cells are under the roof exactly as
+the ground floor's own are. That band therefore sits on a layer ABOVE the
+roof (`EarthChunkManager.UPPER_FLOOR_LAYER_Z_INDEX`), and its windows are
+lit one row up too. Entering the house on the ground floor removes the
+upper band along with the roof (downstairs, the ground room is the view);
+going upstairs draws the whole upper storey in place, with the player
+lifted above it (`UPPER_FLOOR_OCCUPANT_Z_INDEX`) so the floor they stand on
+cannot paint over them, and downstairs villagers correctly hidden beneath
+it.
+
 None of this changes the piece vocabulary or what gets persisted — a roof
 is still one `wood_roof`/`stone_roof` chunk modification per cell (see
-Persistence below). All of the above is resolved at PAINT time from the
-neighbouring cells, exactly like terrain blending, so no new piece ids and
-no save-format change are involved.
+Persistence below), and an upper-floor piece is still stored at its own
+cell. All of the above is resolved at PAINT time from the neighbouring
+cells and the player's own position, exactly like terrain blending, so no
+new piece ids and no save-format change are involved.
 
 ### Persistence
 
@@ -343,6 +370,26 @@ modification like any other.
   a whole structure's pieces in one call + one repaint (used by the village
   generator, see below) rather than one `build_at_global` call per cell,
   which would repaint the owning chunk once per cell.
+- ✅ Real terrain buildability (docs/concept/housing.md's own "Real
+  terrain buildability" entry has the full detail) -- reported directly:
+  *"houses / buildings cannot be built on river / water; also not in the
+  forest... the NPCs / Player must first fell all trees to make space for
+  the building."* `EarthChunkManager.is_buildable_terrain_at` (not ocean
+  or forest biome, no river, no lake, no standing tree) is the one real
+  check `can_build_house_from_blueprint` (the player's own instant
+  self-build), `BuilderMarker._buildable_ground` (the hired path -- a
+  permissive `return true` before this), and `VillageRenderer._find_dry_
+  origin` (the village generator -- ocean-only before this, missing
+  rivers/lakes) all now share, refusing/re-siting a placement UPFRONT
+  rather than ever reaching `stamp_structure_at_global` with a tree still
+  standing on the footprint. This is what makes the vegetation-clearing
+  entry immediately below now a defensive fallback rather than the
+  primary mechanism for the player-build and village-generation seams
+  specifically (it still fires for a hypothetical future caller of
+  `stamp_structure_at_global` that skips the new gate, and the hired-
+  builder seam never called it either way, since `BuilderMarker` places
+  pieces one at a time via `build_at_global`, not the bulk path) -- named
+  here so this entry and the one below don't quietly drift apart.
 - ✅ A piece occupies its tile against vegetation (see "Placement rules" and
   "One system, two builders"), tested at all three seams.
   `stamp_structure_at_global` collects the cells it wrote a real

@@ -33,6 +33,19 @@ const CATALOG := {
 	# wood-cost-to-price ratio cottage/small_house already share (~2.75x per
 	# tier) applied to manor_wide's own real 112-wood cost vs. cottage's 82.
 	"blueprint_manor": 300,
+	# Ten sophisticated two-story blueprints (docs/concept/housing.md) --
+	# the SAME wood-cost-to-price ratio manor/cottage already share (~2.68x)
+	# applied to each shape's own real wood cost.
+	"blueprint_townhouse_narrow": 470,
+	"blueprint_merchant_house": 480,
+	"blueprint_guild_hall": 635,
+	"blueprint_riverside_villa": 550,
+	"blueprint_timber_longhouse": 580,
+	"blueprint_artisan_workshop_house": 555,
+	"blueprint_tower_keep": 345,
+	"blueprint_harborside_manor": 620,
+	"blueprint_grand_estate": 810,
+	"blueprint_gambrel_lodge": 630,
 }
 
 

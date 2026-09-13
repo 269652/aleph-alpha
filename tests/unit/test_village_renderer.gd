@@ -45,10 +45,43 @@ class StubWorld:
 			"chunk_coord": chunk_coord, "origin_tile": origin_tile,
 			"ground_pieces": ground_pieces, "roof_pieces": roof_pieces,
 		})
+
+	## Two-story houses (docs/concept/housing.md): records every real upper-
+	## floor stamp instead of touching a real chunk, the SAME reasoning
+	## stamp_structure_at_global's own doc comment above already gives.
+	var upper_stamp_calls: Array = []
+	func stamp_upper_floor_at_global(chunk_coord: Vector2i, origin_tile: Vector2i, upper_pieces: Dictionary) -> void:
+		upper_stamp_calls.append({
+			"chunk_coord": chunk_coord, "origin_tile": origin_tile, "upper_pieces": upper_pieces,
+		})
+
 	func biome_at_global(x: int, y: int) -> String:
 		if water_cells.has(Vector2i(x, y)):
 			return "ocean"
 		return biome
+
+	## Real terrain buildability (docs/concept/building.md) -- a duck-typed
+	## stand-in for EarthChunkManager.is_buildable_terrain_at, present here
+	## so VillageRenderer's OWN preference for the real check (over the
+	## biome_at_global-only fallback above) is directly testable.
+	##
+	## GDScript's has_method sees this method on EVERY StubWorld instance
+	## unconditionally (there is no way to "hide" a method at runtime) --
+	## so once this exists at all, EVERY existing water-avoidance test
+	## above (which manipulates `water_cells` and/or the `biome` fallback
+	## itself -- see biome_at_global) would silently route through here
+	## instead, and must see the identical answer or their own assertions
+	## would break for a reason that has nothing to do with what they're
+	## actually testing. Delegating to biome_at_global (rather than only
+	## re-checking `water_cells`, which misses a test that sets the
+	## fallback `biome` to "ocean" directly with no per-cell overrides at
+	## all) is what keeps every one of those pre-existing tests passing
+	## unchanged.
+	var unbuildable_cells: Dictionary = {}
+	func is_buildable_terrain_at(x: int, y: int) -> bool:
+		if biome_at_global(x, y) == "ocean":
+			return false
+		return not unbuildable_cells.has(Vector2i(x, y))
 
 	## Records every settlement-founded call instead of touching a real event
 	## store (see EarthChunkManager.record_settlement_founded_if_new).
@@ -66,6 +99,20 @@ class StubWorld:
 		furnish_calls.append({
 			"chunk_coord": chunk_coord, "origin_tile": origin_tile,
 			"ground_pieces": ground_pieces, "furniture_ids": furniture_ids,
+		})
+		return furniture_ids.size()
+
+	## The upper floor's own twin, recorded separately -- a two-story
+	## house's ground and upper furniture must never be conflated (see
+	## EarthChunkManager.furnish_upper_floor_at_global's own doc comment
+	## for why).
+	var upper_furnish_calls: Array = []
+	func furnish_upper_floor_at_global(
+		chunk_coord: Vector2i, origin_tile: Vector2i, upper_pieces: Dictionary, furniture_ids: Array
+	) -> int:
+		upper_furnish_calls.append({
+			"chunk_coord": chunk_coord, "origin_tile": origin_tile,
+			"upper_pieces": upper_pieces, "furniture_ids": furniture_ids,
 		})
 		return furniture_ids.size()
 
@@ -315,6 +362,76 @@ func test_a_house_with_no_dry_ground_anywhere_nearby_is_skipped_not_forced_into_
 	world.biome = "ocean"  # the whole chunk is water -- nowhere dry to nudge to
 	renderer.spawn_village(parent, chunk_coord, chunk_coord * CHUNK_SIZE, CHUNK_SIZE, TILE_SIZE, "grassland", world)
 	assert_eq(world.stamp_calls.size(), 0)
+
+
+## Real terrain buildability (docs/concept/building.md): once `world`
+## provides the real EarthChunkManager.is_buildable_terrain_at, it is what
+## actually gates where a house lands -- proven here with cells `world.
+## biome_at_global` would call perfectly fine ("grassland", never "ocean")
+## but `is_buildable_terrain_at` itself refuses (standing in for a real
+## forest cell, a river, or a standing tree the water-only fallback below
+## could never have caught).
+func test_a_house_is_never_stamped_where_the_real_terrain_check_refuses_even_off_water():
+	var chunk_coord := _find_settlement_chunk("grassland")
+	var world := StubWorld.new()
+	var settlement := SettlementGenerator.new().generate_settlement(
+		chunk_coord, chunk_coord * CHUNK_SIZE, CHUNK_SIZE, TILE_SIZE
+	)
+	var max_footprint := _max_catalog_footprint()
+	for anchor in settlement.house_positions:
+		var anchor_tile := Vector2i(floori(anchor.x / TILE_SIZE), floori(anchor.y / TILE_SIZE))
+		var raw_origin := anchor_tile - max_footprint / 2
+		for x in max_footprint.x:
+			for y in max_footprint.y:
+				world.unbuildable_cells[raw_origin + Vector2i(x, y)] = true
+
+	renderer.spawn_village(parent, chunk_coord, chunk_coord * CHUNK_SIZE, CHUNK_SIZE, TILE_SIZE, "grassland", world)
+
+	assert_gt(world.stamp_calls.size(), 0, "precondition: at least one house should still get built where the real check allows")
+	for call in world.stamp_calls:
+		for local_cell in call.ground_pieces:
+			var global_cell: Vector2i = call.origin_tile + local_cell
+			assert_true(
+				world.is_buildable_terrain_at(global_cell.x, global_cell.y),
+				"house piece at %s was stamped on terrain the real check refused" % global_cell
+			)
+
+
+## A duck-typed `world` that predates is_buildable_terrain_at entirely
+## (only ever had biome_at_global, the shape every pre-existing caller of
+## this file used before this feature existed) must keep working via the
+## narrower ocean-only fallback -- _world_has_a_terrain_check's own other
+## branch, otherwise dead code no test would ever actually exercise.
+class LegacyBiomeOnlyWorld:
+	var stamp_calls: Array = []
+	var water_cells: Dictionary = {}
+	func stamp_structure_at_global(chunk_coord: Vector2i, origin_tile: Vector2i, ground_pieces: Dictionary, roof_pieces: Dictionary) -> void:
+		stamp_calls.append({"chunk_coord": chunk_coord, "origin_tile": origin_tile, "ground_pieces": ground_pieces})
+	func biome_at_global(x: int, y: int) -> String:
+		return "ocean" if water_cells.has(Vector2i(x, y)) else "grassland"
+
+
+func test_a_legacy_world_with_only_biome_at_global_still_avoids_water_via_the_fallback():
+	var chunk_coord := _find_settlement_chunk("grassland")
+	var world := LegacyBiomeOnlyWorld.new()
+	var settlement := SettlementGenerator.new().generate_settlement(
+		chunk_coord, chunk_coord * CHUNK_SIZE, CHUNK_SIZE, TILE_SIZE
+	)
+	var max_footprint := _max_catalog_footprint()
+	for anchor in settlement.house_positions:
+		var anchor_tile := Vector2i(floori(anchor.x / TILE_SIZE), floori(anchor.y / TILE_SIZE))
+		var raw_origin := anchor_tile - max_footprint / 2
+		for x in max_footprint.x:
+			for y in max_footprint.y:
+				world.water_cells[raw_origin + Vector2i(x, y)] = true
+
+	renderer.spawn_village(parent, chunk_coord, chunk_coord * CHUNK_SIZE, CHUNK_SIZE, TILE_SIZE, "grassland", world)
+
+	assert_gt(world.stamp_calls.size(), 0, "precondition: at least one house should still get built on dry land nearby")
+	for call in world.stamp_calls:
+		for local_cell in call.ground_pieces:
+			var global_cell: Vector2i = call.origin_tile + local_cell
+			assert_ne(world.biome_at_global(global_cell.x, global_cell.y), "ocean")
 
 
 ## -- merchants get their own personal trading stand (see docs/concept/
@@ -856,6 +973,166 @@ func test_stamp_house_stamps_only_the_partial_prefix_and_no_roof_when_completion
 	assert_eq(door_tile - call.origin_tile, Vector2i(0, 2), "home_position's door should still be the blueprint's real door cell")
 
 
+# -- two-story houses via the procedural village generator (docs/concept/ --
+# -- housing.md) -- named honestly as scoped OUT when two-story houses ----
+# -- first shipped, closed here directly per a follow-up request to -------
+# -- "properly implement" it. ------------------------------------------------
+
+## Forces choose_blueprint_id to a real two-story id while leaving every
+## OTHER real HouseBlueprint method (build/build_roofs/build_upper_floor/
+## is_two_story) genuinely real -- unlike FakeHouseBlueprint above, this
+## exercises the actual two-story geometry, not a synthetic stand-in.
+class FakeTwoStoryHouseBlueprint extends HouseBlueprint:
+	func choose_blueprint_id(_occupation: String, _genome, _seed_value: int) -> String:
+		return "tower_keep"
+
+
+## Mirrors FakeHouseBlueprint's own oversized-piece stand-in, but reports
+## is_two_story true (a real id) with a caller-supplied upper_pieces set --
+## lets the "still under construction" test below drive the real gate
+## without needing an actually-oversized upper floor of its own.
+class FakeTwoStoryOversizedHouseBlueprint extends HouseBlueprint:
+	var pieces: Dictionary
+	var upper_pieces: Dictionary
+	func choose_blueprint_id(_occupation: String, _genome, _seed_value: int) -> String:
+		return "tower_keep"
+	func build(_blueprint_id: String, _seed_value: int, _material: String = "wood") -> Dictionary:
+		return pieces
+	func build_roofs(_blueprint_id: String, _seed_value: int, _material: String = "wood") -> Dictionary:
+		return {}
+	func build_upper_floor(_blueprint_id: String, _seed_value: int, _material: String = "wood") -> Dictionary:
+		return upper_pieces
+
+
+func test_a_two_story_blueprint_choice_also_stamps_a_real_upper_floor():
+	var world := StubWorld.new()
+	renderer._house_blueprint = FakeTwoStoryHouseBlueprint.new()
+
+	var npc := NpcIdentity.new(1)
+	# npc_count 100: comfortably past _construction_completion_fraction's own
+	# real >= 1.0 threshold for a shape this small (see that function's own
+	# doc comment), so the ground floor -- and therefore the upper floor --
+	# is genuinely, fully complete this call, not a partial fraction.
+	renderer._stamp_house(Vector2i(5, 5), 0, Vector2(100, 100), npc, TILE_SIZE, world, 100)
+
+	assert_eq(world.upper_stamp_calls.size(), 1, "a two-story choice should stamp a real upper floor too")
+	assert_false(world.upper_stamp_calls[0].upper_pieces.is_empty(), "the stamped upper floor should be a real, non-empty piece set")
+
+
+## The whole point of a two-story house per the original request ("windows
+## in second level... visible from outside") -- night-lighting must see the
+## upper floor's own real windows too, not just the ground floor's. And it
+## must see them WHERE they are drawn: from outside, an upper storey is
+## only ever its facade band, painted one row UP over the roof's front row
+## (docs/concept/building.md "How a house reads from above", point 5), so
+## the lights go one row up too, and only for the facade's own windows --
+## the upper storey's side/back windows are under the roof from outside,
+## exactly like the ground floor's own are. Reported separately from the
+## ground list (`upper_windows`) because those lights need their own draw
+## order above the upper-floor layer (see spawn_village).
+func test_a_two_story_house_lights_its_upper_facade_windows_one_row_up():
+	var world := StubWorld.new()
+	var blueprint := FakeTwoStoryHouseBlueprint.new()
+	renderer._house_blueprint = blueprint
+
+	var npc := NpcIdentity.new(1)
+	var result: Dictionary = renderer._stamp_house(Vector2i(5, 5), 0, Vector2(100, 100), npc, TILE_SIZE, world, 100)
+
+	var ground_pieces: Dictionary = world.stamp_calls[0].ground_pieces
+	var ground_window_count := 0
+	for cell in ground_pieces:
+		if BuildingPiece.category_of(ground_pieces[cell]) == BuildingPiece.CATEGORY_WINDOW:
+			ground_window_count += 1
+	assert_eq(result.windows.size(), ground_window_count, "the ground list stays the ground floor's own windows only")
+
+	var origin_tile: Vector2i = world.upper_stamp_calls[0].origin_tile
+	var upper_pieces: Dictionary = world.upper_stamp_calls[0].upper_pieces
+	var facade: Dictionary = blueprint._facade_cells(upper_pieces)
+	var expected: Array[Vector2] = []
+	for cell in upper_pieces:
+		if facade.has(cell) and BuildingPiece.category_of(upper_pieces[cell]) == BuildingPiece.CATEGORY_WINDOW:
+			var lit_tile: Vector2i = origin_tile + cell + Vector2i(0, -1)
+			expected.append(Vector2((lit_tile.x + 0.5) * TILE_SIZE, (lit_tile.y + 0.5) * TILE_SIZE))
+	assert_gt(expected.size(), 0, "precondition: a real two-story shape has windows on its upper facade")
+	var actual: Array = result.upper_windows.duplicate()
+	actual.sort()
+	expected.sort()
+	assert_eq(actual, expected, "exactly the upper facade's own windows, each one row up")
+
+
+func test_a_single_story_house_reports_no_upper_windows():
+	var world := StubWorld.new()
+	var npc := NpcIdentity.new(7)
+	npc.occupation = "farmer"
+	var result: Dictionary = renderer._stamp_house(Vector2i(9, 9), 0, Vector2(100, 100), npc, TILE_SIZE, world, 100)
+	assert_eq(result.upper_windows, [])
+
+
+## The upper-storey lights draw above the upper-floor layer they belong to
+## (which itself sits above the roof -- EarthChunkManager.UPPER_FLOOR_LAYER_
+## Z_INDEX) and below whoever is standing upstairs, so they are neither
+## buried under the facade band they light nor painted over the player.
+func test_upper_window_lights_are_built_above_the_upper_floor_layer_at_night():
+	const EarthChunkManager = preload("res://src/world/earth_chunk_manager.gd")
+	assert_gt(VillageRenderer.UPPER_WINDOW_LIGHT_Z_INDEX, EarthChunkManager.UPPER_FLOOR_LAYER_Z_INDEX)
+	assert_lt(VillageRenderer.UPPER_WINDOW_LIGHT_Z_INDEX, EarthChunkManager.UPPER_FLOOR_OCCUPANT_Z_INDEX)
+
+	var chunk_coord := _find_settlement_chunk("grassland")
+	renderer._house_blueprint = FakeTwoStoryHouseBlueprint.new()
+	var night_parent := Node2D.new()
+	var night_spawned := renderer.spawn_village(
+		night_parent, chunk_coord, chunk_coord * CHUNK_SIZE, CHUNK_SIZE, TILE_SIZE, "grassland", StubWorld.new(), -10.0
+	)
+
+	var upper_lights := 0
+	var ground_lights := 0
+	for node in night_spawned:
+		if node.has_meta("landmark_id") and node.get_meta("landmark_id") == "window_light":
+			if node.z_index == VillageRenderer.UPPER_WINDOW_LIGHT_Z_INDEX:
+				upper_lights += 1
+			elif node.z_index == 0:
+				ground_lights += 1
+	assert_gt(upper_lights, 0, "every house is two-story here, so some upper facade windows must be lit")
+	assert_gt(ground_lights, 0, "the ground floor's own windows still light at the ordinary entity z")
+	night_parent.free()
+
+
+## Mirrors the roof's own existing gate exactly: a house still being raised
+## (an oversized set the settlement's npc_count can't fully afford yet, the
+## SAME fixture test_stamp_house_stamps_only_the_partial_prefix_and_no_roof_
+## when_completion_is_below_one above already uses) must get no upper floor
+## either -- a real second storey never appears floating on an unfinished
+## ground floor.
+func test_a_two_story_house_gets_no_upper_floor_yet_while_still_partially_built():
+	var world := StubWorld.new()
+	var fake_blueprint := FakeTwoStoryOversizedHouseBlueprint.new()
+	fake_blueprint.pieces = _oversized_pieces()
+	fake_blueprint.upper_pieces = {Vector2i(0, 0): "wood_floor"}
+	renderer._house_blueprint = fake_blueprint
+
+	var npc := NpcIdentity.new(42)
+	renderer._stamp_house(Vector2i(3, 3), 0, Vector2(100, 100), npc, TILE_SIZE, world, 1)
+
+	assert_true(world.upper_stamp_calls.is_empty(), "no upper floor until the ground floor itself is fully complete")
+
+
+## A single-story choice must never call stamp_upper_floor_at_global at
+## all. Occupation forced to "farmer" directly (a real, plain field --
+## NpcIdentity derives it from its own constructor seed, which this test
+## must not depend on: farmer's own real BLUEPRINT_POOL_BY_OCCUPATION pool
+## must never gain a two-story entry -- see test_modest_occupations_still_
+## never_reach_a_two_story_house in test_house_blueprint.gd -- so this stays
+## deterministic regardless of how the merchant/blacksmith pools grow).
+func test_a_single_story_blueprint_choice_never_stamps_an_upper_floor():
+	var world := StubWorld.new()
+	# The real, default _house_blueprint -- deliberately NOT swapped for a
+	# fake here, so a real seeded single-story choice is what gets tested.
+	var npc := NpcIdentity.new(7)
+	npc.occupation = "farmer"
+	renderer._stamp_house(Vector2i(9, 9), 0, Vector2(100, 100), npc, TILE_SIZE, world, 100)
+	assert_true(world.upper_stamp_calls.is_empty())
+
+
 ## At (or above) 100% completion, _stamp_house's behavior is UNCHANGED from
 ## before this pass: the full pieces and full roofs get stamped, exactly as
 ## every other test in this file (all exercised at
@@ -1031,3 +1308,60 @@ func test_spawn_village_lights_no_windows_at_night_for_a_windowless_blueprint():
 		parent, chunk_coord, chunk_coord * CHUNK_SIZE, CHUNK_SIZE, TILE_SIZE, "grassland", StubWorld.new(), -10.0
 	)
 	assert_eq(_window_light_count(night_spawned), 0, "a windowless blueprint should never show a lit window")
+
+
+# -- interior furniture, upper floor (docs/concept/housing.md) -- reported
+# -- directly alongside two-story houses themselves ("no room decoration"),
+# -- then directly again ("no do both floors") after this pass first tried
+# -- to scope furniture to the ground floor alone. Ground-floor furnishing
+# -- itself (furnish_house_at_global, the real occupation-linked HouseDecor
+# -- set) already has its own real coverage above -- these cover only what's
+# -- NEW here: the upper floor's own real, separate furnish call. ----------
+
+## Two-story houses: a real two-story choice must furnish its OWN upper
+## floor too, not just the ground floor. Its own real call, against the
+## upper floor's OWN real pieces (never the ground floor's -- see
+## EarthChunkManager.furnish_upper_floor_at_global's own doc comment), with
+## the SAME real occupation-linked HouseDecor set the ground floor already
+## got.
+func test_a_two_story_house_furnishes_its_upper_floor_too():
+	var world := StubWorld.new()
+	renderer._house_blueprint = FakeTwoStoryHouseBlueprint.new()
+	var npc := NpcIdentity.new(1)
+	npc.occupation = "farmer"
+
+	renderer._stamp_house(Vector2i(5, 5), 0, Vector2(100, 100), npc, TILE_SIZE, world, 100)
+
+	assert_eq(world.upper_furnish_calls.size(), 1, "a two-story house should furnish its upper floor too")
+	var call = world.upper_furnish_calls[0]
+	assert_eq(call.furniture_ids, HouseDecor.furniture_set_for(npc.occupation))
+	assert_gt(call.upper_pieces.size(), 0, "precondition: the upper floor has real pieces to furnish")
+
+
+## A single-story choice has no upper floor at all -- it must never call
+## the upper-floor furnish verb.
+func test_a_single_story_house_never_furnishes_an_upper_floor():
+	var world := StubWorld.new()
+	var chunk_coord := _find_settlement_chunk("grassland")
+	var npc := NpcIdentity.new(7)
+	npc.occupation = "farmer"
+
+	renderer._stamp_house(chunk_coord, 0, Vector2(100, 100), npc, TILE_SIZE, world, 100)
+
+	assert_true(world.upper_furnish_calls.is_empty())
+
+
+## Mirrors the roof/upper-floor gate exactly: a two-story house still being
+## raised (the SAME oversized-piece-set fixture the roof/partial-completion
+## tests already use) must get no upper-floor furniture yet either.
+func test_a_partially_built_two_story_house_gets_no_upper_furniture_yet():
+	var world := StubWorld.new()
+	var fake_blueprint := FakeTwoStoryOversizedHouseBlueprint.new()
+	fake_blueprint.pieces = _oversized_pieces()
+	fake_blueprint.upper_pieces = {Vector2i(0, 0): "wood_floor"}
+	renderer._house_blueprint = fake_blueprint
+	var npc := NpcIdentity.new(42)
+
+	renderer._stamp_house(Vector2i(3, 3), 0, Vector2(100, 100), npc, TILE_SIZE, world, 1)
+
+	assert_true(world.upper_furnish_calls.is_empty(), "no upper furniture until the house itself is fully complete")

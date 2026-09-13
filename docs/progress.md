@@ -21464,3 +21464,429 @@ variety/symmetry/rarity), NPC visits/opinions from a home's appeal,
 multiplayer visiting/rating, and the two furniture-layer test gaps named
 above (player hotbar verb, save/reload round trip).
 
+### The remaining 63 "first 100" items get real icon art (`concept/item_illustrations.md`, `concept/illustrated_art_addressing.md`, 2026-09-13)
+
+The 2026-09-13 equipment-first pass above left "the 65 food/material items
+... named as a likely 'derive from existing world sprites' follow-up, not
+started." This pass closes that gap -- 63 of those ids (2 fewer than the
+65 originally estimated: `honey` and `climbing_rope` were the +2 catalog
+ids added *past* the original 100-id list on 2026-09-08, not part of the
+65-item remainder, and stay their own out-of-scope items). Every id now
+has real art on disk at its already-declared `icon`/`any`/`default`
+address -- **zero `illustrated_art_registry.gd` or test changes needed**,
+since all 63 already carried the matching icon-only/`default`-state stub
+from the 2026-09-08 scaffolding pass.
+
+✅ **22 items derived from existing world sprites, not generated fresh**:
+16 mushrooms (8 species × plain/bitten) are center-cell crops of
+`assets/sprites/mushrooms/*.png`'s own 5x5 grid -- confirmed via that
+file's own doc comment to be 25 independent same-scale specimens, not a
+growth-stage progression, so any clean cell works. 6 tree fruits (cherry,
+apple, walnut, acorn, hazelnut, pine) are pixel-rectangle crops from
+`illustrated_tree.gd`'s blob-detected composite sheets -- **not** taken
+from `fruit_for()`'s own "ripe" row, which an Explore agent confirmed by
+running the real project code is wrong for 5 of the 6 species (a
+cross-section for apple, a leaves-only row for walnut, a bare needle
+sprig for pine, a corrupted multi-drawing merge for acorn/hazelnut);
+agent-verified alternative rectangles were used instead. Backgrounds
+normalized to the addressing convention's solid magenta per source's real
+measured format: alpha-onto-magenta compositing for the two real-alpha
+sources (apple, acorn), near-white pixel-threshold keying (225) for the
+four opaque no-alpha sources (cherry, walnut, hazelnut, pine).
+
+✅ **41 items generated fresh** via the same style-referenced ChatGPT
+multi-cell-grid pipeline the equipment-first pass established (existing
+`iron_sword` icon, or a same-family sibling already generated earlier in
+this pass -- `trout`/`wood`/`cooked_fish` -- as the style reference),
+sliced per-cell with PowerShell/System.Drawing: raw materials (wood, log,
+stick, rock, stone, sharp_shard, plant_fibre, iron_ore, copper_ore, coal,
+iron_ingot, copper_ingot, glass_bottle, beam, plank), animal/food staples
+(hide, meat, fang, cooked_meat, fruit, nut, carrot, potato), fish (fish,
+trout, bluegill, koi, goldfish, rare_fish, legendary_fish, cooked_fish,
+cooked_trout, cooked_bluegill, cooked_koi, cooked_goldfish), and misc/
+relic items (terminal_fragment, secret_room_token, wargames_punch_card,
+curious_keepsake, jarred_insect, caged_songbird).
+
+Verified: `--headless --import` (63 files, clean) then
+`test_illustrated_art_registry.gd` (50/50) and `test_item_icon_registry_
+coverage.gd` (4/4), both green with zero code changes -- confirming this
+was pure art addition against already-correct registry shapes. Branched
+`art/first-100-item-icons` from `origin/main`, merged back via the
+temp-worktree pattern (clean fast-forward, no concurrent `main` drift),
+re-verified both suites against the merged `main` state before pushing.
+
+Together with the 2026-09-13 equipment-first pass, this completes the
+original "first 100 items" icon-scaffolding list from 2026-09-08 in
+full -- every one of the 100 ids now has real icon art on disk, not just
+a registry stub.
+
+### Critical fix: the whole blueprint/workforce pipeline was reachable by NOTHING in real play -- then the entire batch merged to `main` (2026-09-13)
+
+The user asked to merge the accumulated workforce/housing/governance/
+skill-web batch above into `main` ("Merge it"), then reported back with a
+screenshot after relaunching: *"I can't see new Buildings."* Real bug, not
+a stale build -- `Player._try_learn_blueprint` and `Player._try_build_
+house_from_blueprint`, the two functions every blueprint/house mechanic in
+this whole batch is built on top of, had **zero real call sites anywhere**
+in `player.gd` or `world.gd` outside test files (confirmed by grep). Every
+blueprint recipe, every `HouseBlueprint` shape, all of Manor tier -- fully
+implemented, fully tested in isolation, and completely unreachable from
+actual gameplay, because nothing in the real input path ever called
+either function. Fixed with two small, real entry points rather than a
+rewrite: a new `HotbarAction.LEARN` (`"blueprint"` kind) wired into
+`Player.activate_item_id`'s own match statement so using a blueprint item
+from the hotbar actually calls `_try_learn_blueprint`, and a new
+`/buildhouse <recipe_id>` dev-console command (`world.gd`) that calls
+`_try_build_house_from_blueprint` against the player's own facing tile --
+the same interim console-command pattern this project already uses
+elsewhere (`/furniture`, `player_citizenship.md`'s own item commands) for
+a verb that does not yet have a dedicated placement UI.
+
+**The merge itself**, done through a temporary `git worktree add --detach`
+against `origin/main` (this checkout stayed on the feature branch
+throughout): one real conflict, in `test_crafting_recipe_book.gd`'s own
+hardcoded recipe-count assertion -- `main` had reached 45 (Storm Lantern
+and NPC farm production shipped there independently while this branch was
+in flight) and this branch had reached 43 (its own base plus Manor);
+resolved by combining both doc-comment trails and computing the real
+total, 46, rather than picking either side blind. `origin/main` advanced
+twice more from concurrent sessions during the merge itself (a Stable
+Ledger/wild-crops merge, then a loading-tip-interval fix) -- both
+re-fetched and re-merged cleanly, never force-pushed, per this doc's own
+concurrent-session rules. The blueprint-unreachable hotfix above rode
+along in the same merge. `main` now has the full batch: workforce hiring/
+wages/rent, needs v2, civic taxation, interior furniture, the NPC skill
+web rewrite, and this fix -- all previously described in this section
+existed only on the feature branch until this entry.
+
+### Two-story houses: a real walkable upper floor, ten new blueprints (2026-09-13) -- still UNTESTED
+
+Directly requested once the merged batch above was visible in real play:
+*"I can't see new Buildings; they should be sophisticated; 2 story high
+buildings"* -- then, confirming the approach -- *"a se[p]erate walkabe
+upper floor with interior... stairs and from the outside there should be
+windows in second level... also make a variety of 10 sophisticated
+blueprints."* Full design pillars, mechanism spec, the real simplifications
+taken, and the ten shapes themselves are now written up in
+`docs/concept/housing.md`'s own new "Two-story houses" section rather than
+restated here -- summary only:
+
+- A real second, walkable storey sharing the ground floor's own footprint
+  as a THIRD modification layer (`Chunk.upper_floor_modifications`,
+  alongside the already-real `roof_modifications`/`furniture_
+  modifications`), its own `UpperFloor` `TileMapLayer` painted the same
+  way roofs already are.
+- A shared `wood_stairs` `BuildingPiece` (new `CATEGORY_STAIRS`) at the
+  identical cell on both floors; stepping onto it flips a player-side
+  `_current_floor` between 0/1 (`Player._floor_transition_step` ->
+  `EarthChunkManager.step_on_stairs`) -- no teleport, no scene change, the
+  player's world position never moves.
+- `_update_upper_floor_visibility` mirrors the already-tested `_update_
+  roof_visibility`/room-hiding logic one layer up: the upper room hides
+  ONLY from a player standing inside it on floor 1; everywhere else --
+  critically, seen from outside on the ground -- its walls and windows
+  render unconditionally, which is what makes a lit window visible two
+  stories up actually work.
+- Ten new shapes (`HouseBlueprint.TWO_STORY_BLUEPRINT_IDS`, kept
+  deliberately separate from the single-story `BLUEPRINT_IDS` pool so
+  procedural NPC village houses stay single-story): `townhouse_narrow`,
+  `merchant_house`, `guild_hall`, `riverside_villa`, `timber_longhouse`,
+  `artisan_workshop_house`, `tower_keep`, `harborside_manor`,
+  `grand_estate`, `gambrel_lodge` -- real `ItemCatalog` blueprint items,
+  `shop.gd` prices (~2.68x wood cost, matching Manor's own ratio), and
+  `CraftingRecipeBook` recipes (wood costs computed from the real per-piece
+  formula small_house/cottage/manor already established, not eyeballed),
+  all gated at Manor's own `carpentry_level` 3.0 ceiling -- real variety at
+  the top tier, not a fourth, harder gate. `test_crafting_recipe_book.gd`'s
+  own recipe-count assertion updated 43 -> 53 for the same reason the
+  Manor-tier count was caught and fixed earlier in this batch: a hardcoded
+  total left stale is a guaranteed regression the moment tests run again.
+
+**Named honestly, not silently assumed solved** (full reasoning in
+`housing.md`): no real upper-floor wall collision yet (visual/room-
+detection only -- a player can walk through an upstairs wall today);
+`hire_builder_for_house`/`BuilderMarker` were NOT extended to build second
+floors (player-hands-on only, matching the existing precedent that hired
+builders don't place roofs either); procedural village generation was NOT
+extended to ever place an NPC-owned two-story house. Roof geometry needed
+no changes at all -- since the upper floor shares the ground floor's exact
+footprint, the existing facade-derived roof already caps whichever floor
+is topmost.
+
+**Fully UNTESTED, per the same standing "skip tests for now" instruction**
+as every batch above since it began: written directly against real,
+independently-verified existing APIs and patterns (`_update_roof_
+visibility`'s own already-tested room-hiding logic, mirrored rather than
+reinvented; the real wood-cost-per-piece formula cross-checked against
+already-shipped small_house/cottage/manor numbers before trusting it here)
+-- but not run once, not even the single targeted spot-check the NPC
+skill-web rewrite got. `docs/concept/housing.md` is updated in place with
+the same caveat. Do not merge to `main` without a real GUT pass first.
+
+### Two-story houses, properly implemented: real collision, a Builder that finishes the job, and NPCs who can afford one (2026-09-13)
+
+Directly requested as a follow-up once the untested two-story batch above
+was reviewed: *"properly implement"* the three gaps that batch named
+honestly as scoped out -- real upper-floor wall collision, the hire/
+`BuilderMarker` path, and procedural village generation. Unlike that
+batch, this one followed the project's own mandatory strict-TDD red-first
+cycle throughout: every change below has a real, run, green GUT test
+written before its implementation, not a "written directly, unverified"
+disclosure. Full reasoning, API list, and test names are in
+`docs/concept/housing.md`'s own updated Status list -- summary only:
+
+- **Real upper-floor wall collision.** The genuinely interesting problem
+  wasn't "add a collision body" (the ground floor already has that
+  mechanism) -- it was that a house's ground and upper wall rings share
+  the same (x, y) cells almost everywhere EXCEPT the ground floor's own
+  door, which the upper floor fills with a real solid window instead. One
+  shared collision layer could only ever answer that cell one way. Fixed
+  with a genuinely different Godot physics layer for each floor
+  (`EarthChunkManager.UPPER_FLOOR_COLLISION_LAYER`, bit 2 -- ground stays
+  on the untouched default bit 1) and a single property flip on the
+  PLAYER's own `collision_mask` the instant `_current_floor` changes,
+  rather than iterating and toggling every collision body in the loaded
+  world on every staircase crossing. `test_earth_chunk_manager_upper_
+  floor_collision.gd` (new, 12 tests) and 4 new `test_player.gd` tests
+  proving `collision_mask` itself actually flips on a real floor
+  transition -- the one property the whole two-layer mechanism is FOR,
+  easy to build the rest around and forget to wire up, so it got its own
+  explicit regression test rather than being assumed to follow from the
+  layer constants existing -- plus a full re-run of the pre-existing
+  ground-floor collision suite (10/10, confirming the new explicit
+  `collision_layer = GROUND_FLOOR_COLLISION_LAYER` line changes nothing
+  observable). Deliberately still NOT extended: real structural
+  statics/decay/collapse for the upper floor -- a materially separate
+  system, left as a named, narrower gap than "no collision at all".
+- **`hire_builder_for_house`/`BuilderMarker` build the real upper floor
+  too.** `BuilderMarker.target_upper_pieces` (optional, `{}` by default --
+  every pre-existing single-story hire is completely unaffected) is only
+  ever attempted once every real ground piece is placed, the same
+  real-world build order a house actually goes up in, via its own
+  round-robin seek/withdraw/carry/place cycle checked against the UPPER
+  floor's own real neighbors, never the ground floor's -- a real, isolated
+  regression test proves this specifically, by leaving the ground floor
+  deliberately EMPTY so a bug reading the wrong grid would refuse the
+  upper wall forever rather than accidentally passing. The project's own
+  completion total now sums both floors' real labor, so a two-story hire
+  only reaches COMPLETE once the WHOLE house is real. 4 new tests in
+  `test_builder_marker.gd`. Still not extended: a hired house still gets
+  no roof at all -- the same pre-existing gap this had before two-story
+  houses existed, not something this made worse in kind, only in the
+  absolute wood left idle in Storage.
+- **Procedural village NPC houses can be two-story.** `HouseBlueprint.
+  BLUEPRINT_POOL_BY_OCCUPATION`'s merchant/blacksmith pools (the only two
+  occupations that already reached for the showiest single-story options)
+  each gained a few real two-story entries at their own showy tail -- a
+  deliberately CURATED subset, not all ten: thematically fitting names,
+  and footprints comparable to the manor tier already there rather than
+  the largest shapes, which risk visibly overlapping a neighbor in
+  `SettlementGenerator`'s own fixed ring layout (a named judgment call,
+  not an oversight). `VillageRenderer._stamp_house` stamps the real upper
+  floor once the ground floor itself is fully complete (the SAME gate the
+  roof already uses) and feeds its real windows into the SAME night-
+  lighting list the ground floor's own windows already use -- the
+  original request's own "windows in second level" now genuinely lights
+  up for NPC-owned houses too. 4 new tests in `test_village_renderer.gd` +
+  4 in `test_house_blueprint.gd`, plus both files' full pre-existing
+  suites re-run and still green (43/43, 35/35) confirming zero regression
+  from widening two long-lived pool constants.
+
+All new/changed functions above were built the required way: a failing
+test written first, confirmed red for the stated reason, then the minimum
+implementation to turn it green, then every directly-adjacent pre-existing
+suite re-run to confirm no regression. `docs/concept/housing.md`'s own
+Status and Open Questions are updated in place -- the three gaps this
+entry closes are gone from both, and what's newly, honestly still open
+(upper-floor statics, a hired roof, real upper-floor NPC use, the
+remaining five two-story shapes never reaching the generator) replaces
+them there rather than being silently dropped.
+
+### The hired roof, real terrain buildability, and NPC furniture on both floors (2026-09-13)
+
+A direct follow-up to the pass above, in the same session: *"fix the
+roof"* (the one gap the previous entry left standing), then, mid-work,
+*"there's still no second floor and also no room decoration"* -- a real,
+verified investigation (not a guess) found the two-story CHOICE mechanism
+genuinely does work (merchant/blacksmith villagers land on one roughly a
+third of the time, measured over a real scan), but finding one by
+exploring was genuinely down to luck. Offered two concrete fixes; the
+user picked both. Then, separately: *"houses / buildings cannot be built
+on river / water; also not in the forest... the NPCs / Player must first
+fell all trees to make space for the building"* -- and when the first
+pass of the furniture fix scoped itself to the ground floor only, *"No do
+both floors."* Four real, separately-verified pieces of work, all under
+strict TDD (this session's "skip tests" instruction was never
+reinstated, and none of this pretends it was):
+
+- **The hired roof.** `EarthChunkManager.roof_at_global`/`build_roof_at_
+  global` (the roof's own per-cell read/write pair -- `chunk.roof_
+  modifications` could previously only ever be written in bulk, nothing
+  for a piece-by-piece worker to call). `BuilderMarker` now sequences
+  ground -> upper (if any) -> roof via a `_current_layer` string
+  discriminator, refactored from the two-story pass's own `_current_is_
+  upper` boolean now that there are three real layers, not two. 7 new
+  tests in `test_earth_chunk_manager_roof_pieces.gd`, 4 new in `test_
+  builder_marker.gd`, full pre-existing `test_builder_marker.gd` suite
+  re-run green (17/17).
+
+- **Real terrain buildability.** `EarthChunkManager.tree_at_global`/`is_
+  buildable_terrain_at` (not ocean or forest biome, not a river, not a
+  lake, no standing tree) is now the one real check `can_build_house_
+  from_blueprint` (player self-build), `BuilderMarker._buildable_ground`
+  (hired -- previously a bare `return true`), and `VillageRenderer._find_
+  dry_origin` (village generation -- previously ocean-biome-only, missing
+  rivers/lakes entirely) all share. `SettlementGenerator._UNINHABITABLE_
+  BIOMES` gained `"forest"`. "Fell trees to make space" is real for the
+  player and a hired builder (refused until chopped, the existing axe
+  mechanic); the village generator has no live worker to fell anything,
+  so it searches for already-clear ground instead of the water-only
+  search it had before -- a named, deliberate difference in mechanism,
+  not a gap in outcome. Caught and fixed one real GDScript pitfall along
+  the way: `var x := world.has_method(...)` fails to compile when `world`
+  is untyped (`:=` cannot infer a type from a call on a `Variant`) --
+  needed an explicit `: bool` instead. 8 new tests in a new `test_earth_
+  chunk_manager_buildable_terrain.gd` (each finding one REAL ocean/
+  forest/river/lake/tree/plain-ground example against the live Berlin
+  fixture, no mocked terrain), plus new tests in `test_settlement_
+  generator.gd`/`test_village_renderer.gd`/`test_builder_marker.gd`, and
+  the full pre-existing suites of all three re-run green (10/10, 45/45,
+  17/17) -- the last one mattering most, since it proves Berlin's own
+  real fixture tile is itself real buildable ground under the new check,
+  not a regression waiting in every other test in that file.
+
+- **Two-story commonality.** Measured, not just described: a real 300-
+  seed-per-occupation test now pins that merchant/blacksmith villagers
+  land on a two-story shape a MAJORITY of the time (reshuffled pool
+  weighting), closing the "too rare to find" gap the investigation above
+  surfaced.
+
+- **NPC house furniture, both floors.** New bulk `EarthChunkManager.
+  stamp_furniture_at_global`/`stamp_upper_floor_furniture_at_global`, a
+  genuinely NEW `Chunk.upper_floor_furniture_modifications` layer (a
+  table on the ground floor and a bed on the upper floor can share the
+  exact same (x, y) -- one Dictionary can't hold both), and its own real
+  hide-in-lockstep visibility rule -- deliberately the OPPOSITE of ground
+  furniture's own "never hidden" rule, because the upper floor's own room
+  genuinely IS hidden while a player stands in it, so its furniture must
+  hide in the same step or float over bare ground once the walls around
+  it are erased. `VillageRenderer._furnish_house` (small, seeded, real
+  floor-capacity-bounded) furnishes each floor a house actually has, with
+  a distinctly-salted seed per floor. 6 new `test_village_renderer.gd`
+  tests, a new `test_earth_chunk_manager_furniture_bulk.gd` (6 tests,
+  including the hide-in-lockstep rule proven both directions), full
+  `test_village_renderer.gd` re-run green (51/51). A real, own, one-cell-
+  short-fixture bug caught and fixed along the way: `FurniturePlacement.
+  can_place` genuinely requires an ENCLOSED room (RoomDetector.
+  is_indoors), not merely a bare floor cell with nothing around it -- the
+  first draft of these EarthChunkManager-level tests used single floor
+  cells with no walls and failed for exactly that reason; the production
+  code was correct, the test fixtures were not.
+
+**Follow-up, same merge: reconciled with a concurrent session's own
+independent furniture work.** While merging this branch into `main` (see
+"Occupation-themed house decor..." above, which shipped independently on
+`main` while this branch was in flight), the ground-floor mechanism named
+in the bullet above turned out to collide with `EarthChunkManager.
+furnish_house_at_global`/`HouseDecor.furniture_set_for(occupation)` --
+both would have furnished every house's ground floor back-to-back.
+Resolved by retiring `stamp_furniture_at_global`/`stamp_upper_floor_
+furniture_at_global` and `VillageRenderer._furnish_house` entirely (the
+concurrent session's occupation-themed design was strictly better and
+already tested) and re-shaping only the upper-floor half to match:
+`EarthChunkManager.furnish_upper_floor_at_global(chunk_coord, origin_tile,
+upper_pieces, furniture_ids)` mirrors `furnish_house_at_global`'s own
+list-driven walk/skip/count contract one layer up, called by
+`VillageRenderer._stamp_house` with the SAME `HouseDecor.furniture_set_
+for(npc.occupation)` list the ground floor already uses -- a real
+improvement over this entry's own original flat priority list, not just a
+dedup. The bullet's own "6 new `test_village_renderer.gd` tests" were
+replaced with 3 scoped to the upper floor only (ground-floor coverage
+already exists in the concurrent session's own tests, described above);
+`test_earth_chunk_manager_furniture_bulk.gd` was fully rewritten (5
+tests, all against `furnish_upper_floor_at_global`). **Named honestly**:
+this reconciliation was done by hand during conflict resolution, under
+the same "skip tests" instruction in effect at the time -- it has not yet
+had its own fresh GUT run confirming green since the edit, unlike the
+rest of this entry's own real TDD cycle.
+
+Also relaunched the game mid-investigation after the running instance
+disappeared -- confirmed via a real process-stability poll (not assumed)
+that the fresh launch stays up and responding, so the earlier exit was not
+a crash this pass's own changes caused.
+
+### A two-story house now reads as one from outside -- and keeps its door (2026-09-13)
+
+The first live report after the whole housing batch above merged to
+`main` and relaunched: *"There are still no 2 story houses and the houses
+are also still not furnished... also now most houses don't even have a
+door..."* -- the last part a real regression, not a missing feature.
+
+Investigated with data before touching anything: a throwaway GUT probe
+loaded four freshly generated real villages (scanning outward from the
+Berlin fixture for real settlement chunks) and dumped every layer. Every
+village had all 5 doors on the ground layer and real furniture (12-15
+pieces per 5 houses), and its two-story houses were real (74 upper cells
+in one village) -- but `doors_covered_by_upper=2` there and `=1` in
+another: the upper storey was painted straight over the ground door at
+the same cell. So the data model was fine; the rendering contract was
+wrong. An upper storey shares the ground floor's exact footprint and was
+drawn in place, on a layer above the player, with identical wall/window
+art -- from a bird's-eye view that is *indistinguishable* from a one-story
+house, except for the door it hides. Which also explains the other two
+complaints: the second storey looked like no second storey, and a
+two-story house's furniture (ground floor covered by the upper storey
+even when inside; upper floor under the roof) was never visible either.
+
+The fix is a rendering-contract change, no data or save-format change --
+`docs/concept/building.md`'s "How a house reads from above" gains point 5
+and `housing.md`'s "Two-story houses" section is corrected in place (its
+first version's "walls and windows render UNCONDITIONALLY" paragraph was
+the wrong idea, and now says so):
+
+- **Exterior**: only the upper storey's FACADE band is drawn, one row UP
+  over the roof's own front row (`EarthChunkManager._paint_upper_floor`,
+  facade = no cell of the same storey directly south, read off the chunk),
+  so a two-story house reads as roof-above-facade-above-facade and the
+  ground door stays legible. The `UpperFloor`/`UpperFloorFurniture` layers
+  therefore move ABOVE the roof (`UPPER_FLOOR_LAYER_Z_INDEX` 2 > `ROOF_
+  LAYER_Z_INDEX` 1 -- pinned constants applied by `set_*_layer`, not
+  eyeballed scene values; `world.tscn` updated to match).
+- **Inside, ground floor**: nothing of the upper storey is drawn.
+- **Inside, upstairs**: the whole storey and its furniture in place, and
+  `Player._floor_transition_step` lifts the player's `z_index` to
+  `UPPER_FLOOR_OCCUPANT_Z_INDEX` (4) alongside its existing collision_mask
+  flip, so the floor they stand on cannot paint over them.
+- Night lighting follows: `VillageRenderer._stamp_house` now reports
+  `upper_windows` separately -- only the upper facade's windows, one row
+  up, lit at `UPPER_WINDOW_LIGHT_Z_INDEX` (3, between the facade layer and
+  the player; pinned by test against EarthChunkManager's constants since
+  this module deliberately never preloads that script).
+- `_update_upper_floor_visibility` decides all this per house from the
+  room the player is in on the floor they are actually on; `_update_roof_
+  visibility` now returns its ground-room result so the per-frame cost is
+  still one RoomDetector pass, not two. Chunk unload now also erases the
+  furniture/upper-floor layers (a pre-existing gap: only roof/water/snow
+  overlays were ever erased).
+
+TDD red-first, and verified red for real: the new `test_earth_chunk_
+manager_upper_floor_exterior.gd` (9 tests) was run against the pre-fix
+implementation first -- 0/8 behavioral tests passing, the door test
+failing with exactly the reported symptom and the "only the facade band"
+test seeing all 25 cells painted instead of 5 -- then 9/9 after the fix.
+3 new `test_player.gd` z-flip tests (full file re-run, see below), 3 new
+`test_village_renderer.gd` tests replacing the old "upper windows extend
+the same list" one (full file 52/52), `test_earth_chunk_manager_furniture_
+bulk.gd`'s two visibility tests inverted to the new contract (5/5),
+`test_earth_chunk_manager.gd`'s roof-visibility group (4/4) for the
+return-type change, and `test_earth_chunk_manager_upper_floor_collision.gd`
+(12/12), `test_earth_chunk_manager_roof_pieces.gd` (7/7), `test_builder_
+marker.gd` (17/17) re-run unchanged.
+
+**The owed furniture-reconciliation GUT run from the entry above happened
+here too**, and found exactly one real problem: the rewritten coexistence
+test furnished the ground floor against a bare, wall-less floor cell,
+which `furnish_house_at_global` correctly refuses (the same enclosed-room
+fixture lesson that entry had already learned once, on the upper side).
+Fixed in the test, not the code -- the reconciled production code was
+right as merged.

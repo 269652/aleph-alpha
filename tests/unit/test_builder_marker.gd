@@ -254,6 +254,36 @@ func test_a_refused_placement_is_skipped_and_its_material_returned_not_force_pla
 	)
 
 
+## Real terrain buildability (docs/concept/building.md): `_buildable_ground`
+## used to be a permissive stand-in (always true); it now calls the real
+## EarthChunkManager.is_buildable_terrain_at (already exhaustively tested
+## on its own terms in test_earth_chunk_manager_buildable_terrain.gd), so
+## this is a real, narrow WIRING check -- a real standing tree at the
+## target site must refuse the placement, the same as any other real
+## refusal reason.
+func test_a_hired_builder_refuses_to_place_where_a_real_tree_still_stands():
+	var storage_tile := _berlin_tile + Vector2i(2, 0)
+	manager.build_at_global(storage_tile.x, storage_tile.y, "storage")
+	manager.deposit_to_structure_at(storage_tile.x, storage_tile.y, "wood", 10)
+
+	var fake_tree := Node2D.new()
+	fake_tree.position = Vector2(_berlin_tile) * TerrainRenderer.TILE_SIZE + Vector2(TerrainRenderer.TILE_SIZE, TerrainRenderer.TILE_SIZE) * 0.5
+	manager._loaded_trees[_chunk_coord] = [fake_tree]
+
+	var household := household_store.form_household("npc:1")
+	marker.target_project = _new_project(household.id)
+	marker.target_pieces = {Vector2i(0, 0): "wood_floor"}
+
+	for i in 1600:
+		marker._process(0.25)
+
+	assert_eq(
+		manager.modification_at_global(_berlin_tile.x, _berlin_tile.y), "",
+		"a real standing tree must refuse the placement, never be silently built over"
+	)
+	fake_tree.free()
+
+
 # -- completing every piece drives the real project to COMPLETE --------------
 
 func test_completing_every_piece_completes_the_project_and_grants_the_household_its_property():
@@ -288,4 +318,191 @@ func test_completing_every_piece_completes_the_project_and_grants_the_household_
 		project.labor_hours_accumulated,
 		ConstructionLabor.labor_hours_required_for_pieces(marker.target_pieces),
 		0.001
+	)
+
+
+# -- two-story houses (docs/concept/housing.md): a Builder also raises the --
+# -- real upper storey, not just the ground floor + roof-less shell it was --
+# -- limited to before -- named honestly as a gap when two-story houses ----
+# -- first shipped ("hire_builder_for_house/BuilderMarker were NOT extended --
+# -- to build second floors"), closed here directly per a follow-up request --
+# -- to "properly implement" it. -----------------------------------------------
+
+## Backward compatibility, asserted directly rather than just implied by
+## every test above still passing unmodified: a bare, freshly-constructed
+## marker (every existing single-story hire, forever) has NOTHING to build
+## upstairs by default.
+func test_target_upper_pieces_defaults_to_empty():
+	assert_eq(marker.target_upper_pieces, {})
+
+
+func test_after_the_ground_floor_is_placed_the_builder_places_the_upper_floor_too():
+	var storage_tile := _berlin_tile + Vector2i(2, 0)
+	manager.build_at_global(storage_tile.x, storage_tile.y, "storage")
+	manager.deposit_to_structure_at(storage_tile.x, storage_tile.y, "wood", 10)
+
+	var household := household_store.form_household("npc:1")
+	marker.target_project = _new_project(household.id)
+	marker.target_pieces = {Vector2i(0, 0): "wood_floor"}
+	marker.target_upper_pieces = {Vector2i(0, 0): "wood_floor"}
+
+	for i in 2400:
+		marker._process(0.25)
+		if manager.upper_floor_at_global(_berlin_tile.x, _berlin_tile.y) == "wood_floor":
+			break
+
+	assert_eq(
+		manager.modification_at_global(_berlin_tile.x, _berlin_tile.y), "wood_floor",
+		"the ground piece should be placed (first)"
+	)
+	assert_eq(
+		manager.upper_floor_at_global(_berlin_tile.x, _berlin_tile.y), "wood_floor",
+		"the upper piece should be placed too, not left forever unbuilt"
+	)
+
+
+## Isolates that an UPPER piece's own adjacency is checked against the
+## UPPER floor's real neighbors, never the ground floor's -- ground's
+## target_pieces is deliberately EMPTY here (nothing for the ground-floor
+## seek to ever find, so the marker moves straight to the upper set), so a
+## bug reading the ground grid for this check would see no floor ANYWHERE
+## and refuse the upper wall forever, failing this test's second assertion.
+func test_an_upper_wall_is_checked_against_the_upper_floors_own_neighbors_not_the_ground_floors():
+	var storage_tile := _berlin_tile + Vector2i(2, 0)
+	manager.build_at_global(storage_tile.x, storage_tile.y, "storage")
+	manager.deposit_to_structure_at(storage_tile.x, storage_tile.y, "wood", 20)
+
+	var household := household_store.form_household("npc:1")
+	marker.target_project = _new_project(household.id)
+	marker.target_pieces = {}
+	marker.target_upper_pieces = {
+		Vector2i(0, 0): "wood_floor",
+		Vector2i(0, -1): "wood_wall",
+	}
+	var upper_wall_tile := _berlin_tile + Vector2i(0, -1)
+
+	for i in 3600:
+		marker._process(0.25)
+		if manager.upper_floor_at_global(upper_wall_tile.x, upper_wall_tile.y) == "wood_wall":
+			break
+
+	assert_eq(manager.upper_floor_at_global(_berlin_tile.x, _berlin_tile.y), "wood_floor")
+	assert_eq(
+		manager.upper_floor_at_global(upper_wall_tile.x, upper_wall_tile.y), "wood_wall",
+		"the upper wall should eventually place once the UPPER floor beside it is real, regardless of the (empty) ground layer"
+	)
+
+
+func test_completing_ground_and_upper_pieces_completes_the_project_with_their_combined_labor_total():
+	var storage_tile := _berlin_tile + Vector2i(3, 0)
+	manager.build_at_global(storage_tile.x, storage_tile.y, "storage")
+	manager.deposit_to_structure_at(storage_tile.x, storage_tile.y, "wood", 20)
+
+	var household := household_store.form_household("npc:1")
+	var project := _new_project(household.id)
+	marker.target_project = project
+	marker.target_pieces = {Vector2i(0, 0): "wood_floor"}
+	marker.target_upper_pieces = {Vector2i(0, 0): "wood_floor"}
+
+	for i in 3600:
+		marker._process(0.25)
+		if project.status == ConstructionProject.Status.COMPLETE:
+			break
+
+	assert_eq(manager.modification_at_global(_berlin_tile.x, _berlin_tile.y), "wood_floor")
+	assert_eq(manager.upper_floor_at_global(_berlin_tile.x, _berlin_tile.y), "wood_floor")
+	assert_eq(project.status, ConstructionProject.Status.COMPLETE)
+	assert_almost_eq(
+		project.labor_hours_accumulated,
+		(
+			ConstructionLabor.labor_hours_required_for_pieces(marker.target_pieces)
+			+ ConstructionLabor.labor_hours_required_for_pieces(marker.target_upper_pieces)
+		),
+		0.001,
+		"the project's own real completion total must count BOTH floors' worth of labor, not just the ground floor's"
+	)
+
+
+# -- the roof (docs/concept/timber_construction.md's own long-named "a -----
+# -- hired house gets no roof at all" gap) -- fixed here directly, for -----
+# -- both single-story AND two-story hires: ground -> upper (if any) -> ----
+# -- roof, the same real build order a house actually goes up in. ----------
+
+func test_target_roof_pieces_defaults_to_empty():
+	assert_eq(marker.target_roof_pieces, {})
+
+
+func test_a_single_story_hire_also_gets_a_real_roof():
+	var storage_tile := _berlin_tile + Vector2i(2, 0)
+	manager.build_at_global(storage_tile.x, storage_tile.y, "storage")
+	manager.deposit_to_structure_at(storage_tile.x, storage_tile.y, "wood", 10)
+
+	var household := household_store.form_household("npc:1")
+	marker.target_project = _new_project(household.id)
+	marker.target_pieces = {Vector2i(0, 0): "wood_floor"}
+	marker.target_roof_pieces = {Vector2i(0, 0): "wood_roof"}
+
+	for i in 2400:
+		marker._process(0.25)
+		if manager.roof_at_global(_berlin_tile.x, _berlin_tile.y) == "wood_roof":
+			break
+
+	assert_eq(manager.modification_at_global(_berlin_tile.x, _berlin_tile.y), "wood_floor")
+	assert_eq(
+		manager.roof_at_global(_berlin_tile.x, _berlin_tile.y), "wood_roof",
+		"a single-story hire (no upper floor at all) should still get a real roof"
+	)
+
+
+func test_after_ground_and_upper_are_placed_the_builder_places_the_roof_too():
+	var storage_tile := _berlin_tile + Vector2i(2, 0)
+	manager.build_at_global(storage_tile.x, storage_tile.y, "storage")
+	manager.deposit_to_structure_at(storage_tile.x, storage_tile.y, "wood", 15)
+
+	var household := household_store.form_household("npc:1")
+	marker.target_project = _new_project(household.id)
+	marker.target_pieces = {Vector2i(0, 0): "wood_floor"}
+	marker.target_upper_pieces = {Vector2i(0, 0): "wood_floor"}
+	marker.target_roof_pieces = {Vector2i(0, 0): "wood_roof"}
+
+	for i in 3600:
+		marker._process(0.25)
+		if manager.roof_at_global(_berlin_tile.x, _berlin_tile.y) == "wood_roof":
+			break
+
+	assert_eq(manager.modification_at_global(_berlin_tile.x, _berlin_tile.y), "wood_floor")
+	assert_eq(manager.upper_floor_at_global(_berlin_tile.x, _berlin_tile.y), "wood_floor")
+	assert_eq(
+		manager.roof_at_global(_berlin_tile.x, _berlin_tile.y), "wood_roof",
+		"the roof should go up last, after BOTH the ground and upper floor are real"
+	)
+
+
+func test_completing_ground_upper_and_roof_completes_the_project_with_the_full_combined_labor_total():
+	var storage_tile := _berlin_tile + Vector2i(3, 0)
+	manager.build_at_global(storage_tile.x, storage_tile.y, "storage")
+	manager.deposit_to_structure_at(storage_tile.x, storage_tile.y, "wood", 20)
+
+	var household := household_store.form_household("npc:1")
+	var project := _new_project(household.id)
+	marker.target_project = project
+	marker.target_pieces = {Vector2i(0, 0): "wood_floor"}
+	marker.target_upper_pieces = {Vector2i(0, 0): "wood_floor"}
+	marker.target_roof_pieces = {Vector2i(0, 0): "wood_roof"}
+
+	for i in 4800:
+		marker._process(0.25)
+		if project.status == ConstructionProject.Status.COMPLETE:
+			break
+
+	assert_eq(project.status, ConstructionProject.Status.COMPLETE)
+	assert_almost_eq(
+		project.labor_hours_accumulated,
+		(
+			ConstructionLabor.labor_hours_required_for_pieces(marker.target_pieces)
+			+ ConstructionLabor.labor_hours_required_for_pieces(marker.target_upper_pieces)
+			+ ConstructionLabor.labor_hours_required_for_pieces(marker.target_roof_pieces)
+		),
+		0.001,
+		"the project's own real completion total must count the roof's labor too, not just the two floors'"
 	)

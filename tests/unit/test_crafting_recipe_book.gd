@@ -41,13 +41,18 @@ func test_recipe_ids_returns_all_defined_recipes():
 	# wooden_fence (2 more) -- a Farmer moves in and works the farm once a
 	# real fence stands nearby, mirroring the Sagewerk.
 	# + workforce (docs/concept/workforce.md): small_house, the first
-	# blueprint-gated, multi-piece construction-ledger recipe, cottage, its
-	# second tier, and manor, the third tier reached via carpentry_1/
-	# carpentry_2/master_joiner (3 more).
+	# blueprint-gated, multi-piece construction-ledger recipe, and cottage,
+	# its second tier (2 more), and manor, the third tier reached via
+	# carpentry_1/carpentry_2/master_joiner (1 more).
+	# + two-story houses (docs/concept/housing.md): townhouse_narrow,
+	# merchant_house, guild_hall, riverside_villa, timber_longhouse,
+	# artisan_workshop_house, tower_keep, harborside_manor, grand_estate,
+	# gambrel_lodge -- ten real second-storey shapes at the same
+	# carpentry_level 3.0 ceiling manor already uses (10 more).
 	# + the City Hall (docs/concept/civic_construction.md's own "Meeting
 	# Hall" spec, docs/concept/npc_role_consensus.md): a settlement's real
 	# civic seat (1 more).
-	assert_eq(ids.size(), 47)
+	assert_eq(ids.size(), 57)
 
 
 func test_iron_sword_is_craftable_from_ingots_and_a_stick():
