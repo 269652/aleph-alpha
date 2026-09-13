@@ -46,13 +46,31 @@ const EntityRef = preload("res://src/emergence/entity_ref.gd")
 ## hand-maintained "which items are food" list -- a VillageMarket also holds
 ## construction lumber (see its own remove_stock doc comment), and beams must
 ## not feed anyone.
-static func food_stock(market, village_market, catalog = null) -> int:
+##
+## `structure_stocks` (docs/concept/milling_and_baking.md, "Food that
+## counts") is the THIRD container: the StructureStock of each of the
+## settlement's own structures -- a Storage holding hauled bread, a Bakery
+## with loaves still on its shelf. Whole integer units like the emergence
+## Market's, filtered through the same category (a Storage also holds
+## lumber and wheat; neither feeds anyone). Empty by default so every
+## existing caller reads exactly as before.
+static func food_stock(market, village_market, catalog = null, structure_stocks: Array = []) -> int:
 	var item_catalog = catalog if catalog != null else ItemCatalog.new()
 	var total := 0
 	if market != null:
 		total += SettlementState.food_stock(market, item_catalog)
 	if village_market != null:
 		total += _village_food_stock(village_market, item_catalog)
+	for structure_stock in structure_stocks:
+		total += _structure_food_stock(structure_stock, item_catalog)
+	return total
+
+
+static func _structure_food_stock(structure_stock, item_catalog) -> int:
+	var total := 0
+	for item_id in structure_stock.stock:
+		if item_catalog.kind_of(item_id) == "food":
+			total += int(structure_stock.stock[item_id])
 	return total
 
 
@@ -77,8 +95,44 @@ static func _village_food_stock(village_market, item_catalog) -> int:
 ## FOOD_PER_HOUSEHOLD, applied to a food number that is finally complete.
 ## Pair it with SettlementState.status_for exactly as before; only the
 ## capacity argument changes.
-static func carrying_capacity(market, village_market, catalog = null) -> int:
-	return int(food_stock(market, village_market, catalog) / float(SettlementState.FOOD_PER_HOUSEHOLD))
+static func carrying_capacity(market, village_market, catalog = null, structure_stocks: Array = []) -> int:
+	return int(food_stock(market, village_market, catalog, structure_stocks) / float(SettlementState.FOOD_PER_HOUSEHOLD))
+
+
+## The one food a settlement can raise by CONSTRUCTION -- bread's chain is
+## resolver data (farm/mill/bakery, docs/concept/milling_and_baking.md);
+## meat/fruit/fish are gathered by occupations and never built. So this is
+## what a short settlement asks the build decision for.
+const STAPLE_FOOD_ID := "bread"
+
+
+## The food shortfall a DECLINING settlement hands SettlementBuildDecision
+## (docs/concept/milling_and_baking.md, "The emergent need"): {} while the
+## settlement is not DECLINING (nothing to act on), otherwise a quest-shaped
+## entry -- the SAME {"missing": [{"item_id", "need"}]} shape production_
+## shortfall_quests_for_settlement produces, plus "kind": "food" so a caller
+## can tell it apart -- asking for exactly the loaves that lift the
+## settlement back out of DECLINING: the smallest capacity whose household/
+## capacity ratio is no longer past SettlementState.STABLE_BAND, times
+## FOOD_PER_HOUSEHOLD, minus what is already there (never less than one).
+## A bounded, real amount, not "some food", so the decision's worst-first
+## ranking has a real number to rank.
+static func food_shortfall_for(
+	household_count: int, market, village_market, catalog = null, structure_stocks: Array = []
+) -> Dictionary:
+	var stock := food_stock(market, village_market, catalog, structure_stocks)
+	var capacity := int(stock / float(SettlementState.FOOD_PER_HOUSEHOLD))
+	if SettlementState.status_for(household_count, capacity) != SettlementState.DECLINING:
+		return {}
+	var capacity_target := int(ceil(float(household_count) / (1.0 + SettlementState.STABLE_BAND)))
+	var need := maxi(1, capacity_target * SettlementState.FOOD_PER_HOUSEHOLD - stock)
+	return {
+		"kind": "food",
+		"household_id": "",
+		"occupation": "",
+		"recipe_id": "",
+		"missing": [{"item_id": STAPLE_FOOD_ID, "need": need}],
+	}
 
 
 ## The live VillageMarket belonging to `settlement_id`, or null if that
