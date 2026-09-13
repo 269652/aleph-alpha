@@ -1667,6 +1667,36 @@ spawning rules, a reason to fish a stream rather than the sea — is still
 ⬜ Not started. What exists is incidental: ocean-biome water that a curated
 course happens to run through.)
 
+**Update (2026-09-13): that one measured coordinate stopped existing, and
+no replacement does either.** `biome_at_global(20542, 4242)` now reads
+"grassland" — its elevation sits exactly on the land-side
+`SEA_LEVEL_MARGIN` clamp in `_blend_elevation`, a knife-edge tile that used
+to fall on the sea side of it. Rather than treat this as one stale pin, it
+was re-swept exhaustively with a new dev tool
+(`tools/probe_fish_river_fixture.gd`): every tile within
+`RIVER_HALF_WIDTH_TILES + RIVER_BANK_APRON_TILES` of every curated river's
+**entire** smoothed course — not sampled points, the whole corridor, ~90,000
+candidate tiles across all 11 rivers including the Rhine itself. Zero cells
+are both interior ocean biome and within a curated river's apron today; the
+nearest real ocean-biome tile to the old fixture is 500+ tiles away. The
+hydrology bake data and the sea-level/fine-detail constants involved are
+all unchanged since the coordinate was originally pinned, so whatever moved
+it isn't tracked down here — what is confirmed is that the coincidence
+this section describes (64 of 10,743 apron cells qualifying, back on
+2026-09-04) no longer occurs anywhere in the generated world.
+
+The invariant this test exists for is unaffected — `biome_at_global` and
+`nearest_river_at` are still two independent queries with no rule
+preventing both from being true of the same tile at once, which is the
+actual thing "the rivers are full of fish" needed proven. Only the way the
+test demonstrates it changed: it now forces the ocean side with a
+synthetic hydrology bake (`EarthChunkGenerator.set_hydrology`, the same
+seam `test_earth_chunk_generator.gd`'s own `_synthetic_field()` uses) at
+the same real Rhine coordinate, whose ~0.3-tile distance to the curated
+course is untouched (`RiverCatalog` never reads hydrology). If the real
+bake or elevation source changes again and a natural coincidence becomes
+findable, `tools/probe_fish_river_fixture.gd` is there to look for one.
+
 ## The boulder's shore band, not a halo (2026-09-04) — SUPERSEDED
 
 *Superseded by "Boulders are hydrology" below: the band is no longer a
