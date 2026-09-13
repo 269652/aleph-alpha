@@ -238,8 +238,8 @@ func test_two_fish_of_the_same_species_and_seed_share_one_texture():
 # is_interior_water requires the ocean BIOME -- and concluding that no
 # curated river course could satisfy it. Measuring instead of reading is
 # what corrected it: sweeping the apron band around every curated course,
-# 64 cells qualify for fish and 53 of them are also painted by the river
-# overlay.
+# 64 cells qualified for fish and 53 of them were also painted by the river
+# overlay (2026-09-04).
 #
 # The reason is that the two decisions ask different questions. Fish spawn
 # where the coarse world elevation dips below sea level, which happens along
@@ -249,15 +249,51 @@ func test_two_fish_of_the_same_species_and_seed_share_one_texture():
 # biome AND under the opaque river surface at once: fish swimming in water
 # whose ripples that surface had no term to draw.
 #
-# Pinned here at one measured coordinate rather than by re-sweeping 10k
-# cells, which is far too slow for the suite -- one real example is enough
-# to keep the case from being "fixed" away as impossible again.
+# Originally pinned at one measured coordinate rather than by re-sweeping
+# 10k cells, which is far too slow for the suite -- one real example was
+# meant to be enough to keep the case from being "fixed" away as impossible
+# again.
+#
+# ** That coordinate stopped being ocean biome. ** biome_at_global(20542,
+# 4242) now reads "grassland": its elevation sits at exactly
+# EARTH_SEA_LEVEL + SEA_LEVEL_MARGIN, the LAND-side clamp in
+# _blend_elevation -- a knife-edge tile that used to fall on the sea side of
+# it. Before writing this off as one stale pin, it was re-swept exhaustively:
+# every tile within RIVER_HALF_WIDTH_TILES + RIVER_BANK_APRON_TILES of every
+# curated river's ENTIRE smoothed course (not just sampled points -- the
+# whole corridor, ~90,000 candidate tiles across all 11 rivers including the
+# Rhine itself, see tools/probe_fish_river_fixture.gd) turns up zero cells
+# that are both interior ocean biome and within apron distance, today. The
+# nearest actual ocean-biome tile to this coordinate is 500+ tiles away. The
+# hydrology bake data and the sea-level/fine-detail constants involved are
+# all unchanged since the 2026-09-04 sweep, so whatever moved this
+# coordinate off the sea side isn't pinned down here -- what IS confirmed is
+# that no real map coordinate proves the invariant this test exists for
+# any more.
+#
+# So the ocean side is now forced with a synthetic hydrology bake
+# (EarthChunkGenerator.set_hydrology -- the same seam
+# test_earth_chunk_generator.gd's own _synthetic_field() uses for exactly
+# this "need a controlled sea/land boundary" reason) instead of relying on
+# a naturally-occurring coincidence. The river side is untouched and
+# entirely real: RiverCatalog.nearest_river_at never reads hydrology, so
+# FISH_UNDER_THE_RIVER_SURFACE's ~0.3-tile distance to the real curated
+# Rhine course is exactly what it always was. The invariant under test is
+# unchanged -- biome_at_global and nearest_river_at are independent queries
+# with no rule preventing both from being true at once -- only how the
+# ocean half gets established did.
 
 const EarthChunkGenerator = preload("res://src/world/earth_chunk_generator.gd")
 const RiverCatalog = preload("res://src/world/river_catalog.gd")
 const WaterAreaSurvey = preload("res://src/world/water_area_survey.gd")
+const HydrologyData = preload("res://src/world/hydrology_data.gd")
+const HydrologyField = preload("res://src/world/hydrology_field.gd")
+const DrainageNetwork = preload("res://src/world/drainage_network.gd")
 
-## On the Rhine, found by sweeping every curated course's apron band.
+## On the Rhine -- still a real curated river, still ~0.3 tiles from its
+## real course -- no longer a naturally ocean-biome tile (see the comment
+## above). Paired with _synthetic_sea_field() below, which forces the ocean
+## side without touching this coordinate's very real river-side distance.
 const FISH_UNDER_THE_RIVER_SURFACE := Vector2i(20542, 4242)
 
 const _NEIGHBOR_STEPS := [
@@ -266,9 +302,47 @@ const _NEIGHBOR_STEPS := [
 	Vector2i(-1, 1), Vector2i(0, 1), Vector2i(1, 1),
 ]
 
+## A synthetic bake with one sea row wide enough to blanket
+## FISH_UNDER_THE_RIVER_SURFACE and all eight of its neighbours in solid
+## "sea" -- no half-coverage contour anywhere nearby (see
+## test_the_coastline_is_the_bakes_sea_contour for that mechanism), so no
+## ambiguity about which side of a shoreline any of them land on. Shaped
+## like test_earth_chunk_generator.gd's own _synthetic_field() (a small grid
+## HydrologyField maps over the whole world), simplified down to a plateau
+## with one sea row -- no crater, no outlet, since this fixture needs
+## nothing but "is this cell sea."
+##
+## Row 1 of 7, not row 0: WORLD_HEIGHT_TILES / 7 bands the world into
+## ~2,854-tile strips, and FISH_UNDER_THE_RIVER_SURFACE.y (4242) sits deep
+## inside band 1 (2,854-5,709), well clear of either edge. Confirmed
+## directly against the generator (all 8 neighbours read "ocean" under this
+## field), not just reasoned about.
+const _SYNTHETIC_GRID_SIZE := 7
+const _SYNTHETIC_SEA_LEVEL := 0.25
+const _SYNTHETIC_SEA_ROW := 1
+
+
+func _synthetic_sea_field() -> HydrologyField:
+	var n := _SYNTHETIC_GRID_SIZE
+	var heights := PackedFloat32Array()
+	heights.resize(n * n)
+	heights.fill(0.8)
+	for x in n:
+		heights[_SYNTHETIC_SEA_ROW * n + x] = 0.2
+	var network = DrainageNetwork.new().build(heights, n, n, _SYNTHETIC_SEA_LEVEL)
+	var weights := PackedFloat32Array()
+	weights.resize(n * n)
+	weights.fill(1.0)
+	var data := HydrologyData.new()
+	data.build_from_network(network, network.accumulate_weighted(weights))
+	return HydrologyField.new(
+		data, EarthChunkGenerator.WORLD_WIDTH_TILES, EarthChunkGenerator.WORLD_HEIGHT_TILES
+	)
+
 
 func test_a_river_reach_can_be_both_fish_water_and_under_the_flow_overlay():
 	var generator := EarthChunkGenerator.new()
+	generator.set_hydrology(_synthetic_sea_field())
 	var tile := FISH_UNDER_THE_RIVER_SURFACE
 
 	# The fish side: WaterAreaSurvey.is_interior_water's own rule, asked of
@@ -285,7 +359,8 @@ func test_a_river_reach_can_be_both_fish_water_and_under_the_flow_overlay():
 		)
 
 	# The overlay side: _paint_river_flow_overlay's own gate -- distance to
-	# the nearest curated course, and deliberately no biome check.
+	# the nearest curated course, and deliberately no biome check. Untouched
+	# by the synthetic hydrology above -- RiverCatalog never reads it.
 	var apron := RiverCatalog.RIVER_HALF_WIDTH_TILES + RiverCatalog.RIVER_BANK_APRON_TILES
 	var nearest = generator.river_catalog().nearest_river_at(
 		tile.x, tile.y,
