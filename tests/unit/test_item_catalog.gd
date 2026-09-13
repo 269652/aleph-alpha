@@ -215,12 +215,12 @@ func test_wooden_fence_is_placeable():
 	assert_eq(catalog.make("wooden_fence").kind, "placeable")
 
 
-## The Meeting Hall (docs/concept/civic_construction.md, docs/concept/
-## npc_role_consensus.md) -- the same placeable kind as farm/sagewerk/
-## storage/wooden_fence.
-func test_meeting_hall_is_placeable():
-	assert_true(catalog.has("meeting_hall"))
-	assert_eq(catalog.make("meeting_hall").kind, "placeable")
+## The City Hall (docs/concept/civic_construction.md's own "Meeting Hall"
+## spec, docs/concept/npc_role_consensus.md) -- the same placeable kind as
+## farm/sagewerk/storage/wooden_fence.
+func test_city_hall_is_placeable():
+	assert_true(catalog.has("city_hall"))
+	assert_eq(catalog.make("city_hall").kind, "placeable")
 
 
 ## Named fruit tree species (see docs/concept/flora.md#named-fruit-and-nut-tree-species)

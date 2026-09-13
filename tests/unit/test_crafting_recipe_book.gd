@@ -44,9 +44,9 @@ func test_recipe_ids_returns_all_defined_recipes():
 	# blueprint-gated, multi-piece construction-ledger recipe, cottage, its
 	# second tier, and manor, the third tier reached via carpentry_1/
 	# carpentry_2/master_joiner (3 more).
-	# + the Meeting Hall (docs/concept/civic_construction.md,
-	# docs/concept/npc_role_consensus.md): a settlement's real civic seat
-	# (1 more).
+	# + the City Hall (docs/concept/civic_construction.md's own "Meeting
+	# Hall" spec, docs/concept/npc_role_consensus.md): a settlement's real
+	# civic seat (1 more).
 	assert_eq(ids.size(), 47)
 
 
@@ -348,17 +348,17 @@ func test_wooden_fence_recipe_uses_wood_only():
 	assert_true(book.can_craft("wooden_fence", {"wood": 3}))
 
 
-## The Meeting Hall (docs/concept/civic_construction.md): a real civic
-## commons, meaningfully bigger than Storage's own enclosed shed (12 wood +
-## 4 plank) -- a stone footing for a building meant to stand as a
-## settlement's permanent seat, plus substantial timber framing for a
-## hall large enough to actually gather in. No skill gate, matching
-## Storage/Farm's own reachability.
-func test_meeting_hall_recipe_uses_wood_and_stone():
-	assert_true(book.recipe_ids().has("meeting_hall"), "meeting_hall must be craftable")
-	assert_eq(book.recipe_output("meeting_hall")["item_id"], "meeting_hall")
-	assert_false(book.can_craft("meeting_hall", {"wood": 20, "stone": 9}))
-	assert_true(book.can_craft("meeting_hall", {"wood": 20, "stone": 10}))
+## The City Hall (docs/concept/civic_construction.md's own "Meeting Hall"
+## spec): a real civic commons, meaningfully bigger than Storage's own
+## enclosed shed (12 wood + 4 plank) -- a stone footing for a building
+## meant to stand as a settlement's permanent seat, plus substantial
+## timber framing for a hall large enough to actually gather in. No skill
+## gate, matching Storage/Farm's own reachability.
+func test_city_hall_recipe_uses_wood_and_stone():
+	assert_true(book.recipe_ids().has("city_hall"), "city_hall must be craftable")
+	assert_eq(book.recipe_output("city_hall")["item_id"], "city_hall")
+	assert_false(book.can_craft("city_hall", {"wood": 20, "stone": 9}))
+	assert_true(book.can_craft("city_hall", {"wood": 20, "stone": 10}))
 
 
 ## The lasso is the entry point to taming (docs/concept/taming.md) and is

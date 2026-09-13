@@ -233,7 +233,7 @@ grant — a civic commons).
 
 **Real payoff**: once built, a settlement's already-real formed
 institutions gain a real, discoverable physical seat in the world — a
-`has_structure_near("meeting_hall", ...)` check becomes a real, legible
+`has_structure_near("city_hall", ...)` check becomes a real, legible
 signal (to quests, to dialogue, to a player just walking through) that a
 settlement has real governance, not merely an internal event-store fact
 nothing in the world reflects.
@@ -249,16 +249,18 @@ tested; the winner-gets-reassigned half of that pipeline is not yet built
 
 **Divergence, noted honestly**: the Meeting-Hall-reads-a-demand half above
 is now real — but reachable today via a deliberately SIMPLER construction
-path than this section's own "real trigger" above specifies. `"meeting_hall"`
-is a real `ItemCatalog` placeable (`kind = "placeable"`, the same
-single-tile family `campfire`/`furnace`/`sagewerk`/`storage`/`farm`
-already belong to), built directly via the ordinary crafting recipe + the
-existing `build_at_global` path — not yet the real multi-piece
-`CivicBlueprint` shape or the institution-formation-crossing
-`ConstructionProject` trigger this section specs above. That richer
-version (a real footprint, a real automatic settlement-triggered build,
-the `ConstructionProjectStore.complete_project` injected-`Callable` seam)
-stays a genuine, unbuilt follow-up — this pass's own scope was "wire the
+path than this section's own "real trigger" above specifies, and under
+the real user-facing name "City Hall" (`ItemCatalog`'s `"city_hall"`,
+real art at `assets/sprites/buildings/city_hall.png`) rather than
+"meeting_hall". `"city_hall"` is a real `ItemCatalog` placeable
+(`kind = "placeable"`, the same single-tile family `campfire`/`furnace`/
+`sagewerk`/`storage`/`farm` already belong to), built directly via the
+ordinary crafting recipe + the existing `build_at_global` path — not yet
+the real multi-piece `CivicBlueprint` shape or the institution-formation-
+crossing `ConstructionProject` trigger this section specs above. That
+richer version (a real footprint, a real automatic settlement-triggered
+build, the `ConstructionProjectStore.complete_project` injected-`Callable`
+seam) stays a genuine, unbuilt follow-up — this pass's own scope was "wire the
 already-real demand computation to a buildable Meeting Hall," not "build
 the Meeting Hall's own eventual construction mechanism," and it says so
 plainly rather than quietly reinterpreting this section's spec.

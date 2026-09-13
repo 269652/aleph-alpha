@@ -19,12 +19,12 @@ but unbuilt "who becomes a Builder"/replan-interrupt reassignment gap, and
 [governance.md](governance.md)'s explicitly NPC-decision-free aggregate
 stat.
 
-**Naming note**: nothing in this codebase or its docs is called "City
-Hall" — the existing (design-only) civic-building concept is
-[civic_construction.md](civic_construction.md)'s "Meeting Hall". This doc
-treats "City Hall" as that same building; a future pass can rename the
-user-facing string if the two names should diverge, but they name one
-building here.
+**Naming note**: [civic_construction.md](civic_construction.md)'s own
+design-only civic-building concept is named "Meeting Hall"; this doc
+treats "City Hall" as that same building, and the real, buildable id this
+pass ships (`ItemCatalog`'s `"city_hall"`, real art at `assets/sprites/
+buildings/city_hall.png`) uses the "City Hall" name directly — the two
+names refer to one building, not two competing concepts.
 
 ## Design pillars
 
@@ -185,15 +185,16 @@ shortfall in today's real recipe book (see pillar 4's own honest
 inheritance of that gap), `demands_for` simply returns an empty list — a
 silent, discoverable absence, not an invented placeholder demand.
 
-**Now wired**: `"meeting_hall"` is a real, buildable `ItemCatalog`
-placeable (see `civic_construction.md`'s own honestly-noted divergence —
-the simple single-tile path, not yet the richer institution-formation-
-triggered multi-piece one that doc still specs). `EarthChunkManager.
-meeting_hall_demands_near(global_x, global_y)` returns `[]` when no real
-Meeting Hall stands within `MEETING_HALL_DEMAND_RADIUS_TILES`, and
-otherwise calls `SettlementDemand.demands_for` against the SAME real
-settlement state (`market.stock`, `_present_structure_ids_for_settlement_
-chunk`) `_apply_settlement_build_decision` already reads — a City Hall now
+**Now wired**: `"city_hall"` is a real, buildable `ItemCatalog` placeable,
+with real illustrated art (see `civic_construction.md`'s own
+honestly-noted divergence — the simple single-tile path, not yet the
+richer institution-formation-triggered multi-piece one that doc still
+specs). `EarthChunkManager.city_hall_demands_near(global_x, global_y)`
+returns `[]` when no real City Hall stands within
+`CITY_HALL_DEMAND_RADIUS_TILES`, and otherwise calls `SettlementDemand.
+demands_for` against the SAME real settlement state (`market.stock`,
+`_present_structure_ids_for_settlement_chunk`)
+`_apply_settlement_build_decision` already reads — a City Hall now
 genuinely computes a real demand once built, not just in theory.
 
 ### Redirecting a real villager into the winning role (named follow-up, not this pass)
@@ -272,9 +273,10 @@ step, reusing `ConstructionPriority`/`NeedResolver` over every real
 including the real "wood" (sagewerk) case and the abstract "heat_source"
 case, honestly reported rather than resolved.
 
-✅ `meeting_hall` is a real, buildable `ItemCatalog` placeable, and
-`EarthChunkManager.meeting_hall_demands_near` gates `SettlementDemand.
-demands_for` behind a real one standing nearby — real and tested. See
+✅ `city_hall` is a real, buildable `ItemCatalog` placeable with real
+illustrated art, and `EarthChunkManager.city_hall_demands_near` gates
+`SettlementDemand.demands_for` behind a real one standing nearby — real
+and tested. See
 `civic_construction.md`'s own honestly-noted divergence: this is the
 simple single-tile buildable path, not yet that doc's richer
 institution-formation-triggered multi-piece `CivicBlueprint` construction
