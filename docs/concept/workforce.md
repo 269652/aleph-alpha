@@ -148,19 +148,68 @@ codebase applies everywhere else.
 reads that history back (scans for a `blueprint_learned` event naming
 `recipe_id`) — no new store, `EventStore` already is the store.
 
-**First blueprint: Small House.** Reuses an EXISTING `HouseBlueprint` shape
-as its geometry — the smallest current entry (`"hut"`) — rather than adding
-a new footprint/piece system. Its `ConstructionProject.blueprint_id` is a
-new `CraftingRecipeBook` recipe, `small_house`, whose inputs are the same
-piece materials `HouseBlueprint.build()` already itemizes for that shape
-(wood walls/floor/roof, per `building.md`'s existing piece-cost table) and
-whose `required_skill` is `{"stat_name": "carpentry_level", "level": 1.0}`
-— deliberately ONE full `carpentry_1` node below the Sägewerk's `2.0`, so a
-player's very first blueprint is buildable with a single skill-web
-allocation, not the same two-node bar as a production building. (The exact
-number is a design placeholder pinned by a test at implementation time, not
-asserted as final here — same convention `civic_construction.md`'s own
-"illustrative until implementation" numbers already use.)
+**Blueprint tiers — reusing the WHOLE existing `HouseBlueprint` catalog, not
+just its smallest entry.** Every one of `HouseBlueprint.BLUEPRINT_IDS`' 10
+named shapes (hut_tiny through the L-shaped manors) is already a real,
+tested piece list — this doc's own blueprint items are a THIN unlock layer
+over that existing catalog, never a second geometry system. Each tier gets
+its own `ItemCatalog` blueprint item and its own `CraftingRecipeBook` recipe
+(`blueprint_id` == the recipe id, `output` symbolic, `inputs` pinned to
+agree with that shape's own real piece cost — see `small_house`'s own doc
+comment in `crafting_recipe_book.gd` for the exact pattern every further
+tier repeats).
+
+**✅ Shipped: Small House** (`hut_tiny`, `required_skill` carpentry_level
+`1.0` — one `carpentry_1` node, deliberately one full node below the
+Sägewerk's own `2.0`, so a player's very first blueprint needs only a
+single skill-web allocation).
+
+**A real, honest ceiling worth naming up front.** The player's own
+`carpentry_level` (`SkillTree.total_bonus`) is only ever exactly `0.0`,
+`1.0`, or `2.0` today — `carpentry_1` and `carpentry_2` are the WHOLE
+Artisan carpentry wedge, each worth `+1.0`, with no third node. Any
+`required_skill` level above `2.0` would therefore be permanently
+un-self-buildable by ANY player allocation, not just a hard one — a real
+design trap, not a difficulty knob, unless a genuinely new skill-web node
+is added first (see Open Questions). So every tier THIS pass adds stays at
+one of the two already-reachable thresholds:
+
+- **✅ Shipped: Small House** — `hut_tiny`, level `1.0` (above).
+- **Cottage** — a mid-tier reusing a real, larger, window-bearing shape
+  (`cottage_bright`: 5×5, 3 windows), `required_skill` level `2.0` — the
+  SAME ceiling the Sägewerk itself uses, so "as sophisticated as this
+  project's own existing hardest-to-reach structure," not an invented
+  harder number.
+- **Manor** (`manor_wide`/`manor_grand`/`manor_L_wide`) — deliberately NOT
+  given a recipe this pass. Gating it at `2.0` would make it exactly as
+  hard as Cottage (no real progression beyond two tiers), and gating it
+  higher hits the ceiling above. Named as its own follow-up in Open
+  Questions: a real `carpentry_3` node (ring 3 of the Artisan wedge is
+  already a "notable"-tier slot per `skills.md`'s own ring table, unused
+  today) is the honest way to make a genuinely harder third tier
+  reachable, for both the player and a hired NPC (see below) — not
+  something to fake by reusing the `2.0` threshold for a shape that should
+  read as strictly harder.
+- The remaining cottage variants (`cottage_small`, `cottage_window_pair`,
+  `cottage_wide`, `cottage_tall`, `cottage_L_small`) stay exactly what they
+  already were — real shapes the PROCEDURAL village generator still picks
+  from for NPC-built houses (`choose_blueprint_id`) — without a player-
+  facing blueprint item of their own yet. Adding one for any of them is a
+  direct repeat of the Cottage pattern above, not a new mechanism, so it is
+  deliberately left as an easy, named follow-up rather than shipped
+  speculatively ahead of any player ever asking for that specific shape.
+
+**NPCs building sophisticated houses is not a gap this doc needs to
+close.** The procedural village generator already builds every one of
+these 10 shapes for NPC villagers today, occupation- and personality-
+weighted (`HouseBlueprint.choose_blueprint_id`) — "diverse, sophisticated
+NPC-built houses" is real and shipped, independent of blueprints
+entirely (blueprints are what the PLAYER needs to unlock the same shapes
+for their OWN construction). What genuinely doesn't exist yet is an NPC
+Builder constructing one of these sophisticated shapes FOR the player (the
+hire-a-carpenter path, section 3/5 above) — that inherits whichever tiers
+have a real recipe, automatically, once the hire mechanism itself is
+built; it needs no separate "NPC sophistication" work of its own.
 
 ### 2. Starting a real player-owned construction project
 
@@ -324,22 +373,30 @@ named for later).
 
 ## Status
 
-Nothing in this doc is built yet — this is the spec, written before any
-implementation line, per this project's own doc-before-code discipline.
 Updated here and in `docs/progress.md` as slices land:
 
-- ⬜ `ItemCatalog` blueprint kind + `blueprint_small_house` entry
-- ⬜ `Shop.CATALOG` stocks it
-- ⬜ `ConstructionUnlock` module (event-sourced learn/has_unlocked)
-- ⬜ `Player._try_learn_blueprint`
-- ⬜ `small_house` `CraftingRecipeBook` recipe (`required_skill` carpentry
-  level 1.0, reusing the `"hut"` `HouseBlueprint` shape)
+- ✅ `ItemCatalog` blueprint kind + `blueprint_small_house` entry
+- ✅ `Shop.CATALOG` stocks it
+- ✅ Event-sourced learn/has_unlocked (`EarthChunkManager.record_blueprint_
+  learned_if_new`/`has_unlocked_blueprint` — a pair of methods there rather
+  than the separate `ConstructionUnlock` module first sketched here, to
+  match this file's own established home for every other `record_*_if_new`
+  fact; see that doc comment for the reasoning)
+- ✅ `Player._try_learn_blueprint`
+- ✅ `small_house` `CraftingRecipeBook` recipe (`required_skill` carpentry
+  level 1.0, reusing the `hut_tiny` `HouseBlueprint` shape — corrected from
+  this doc's first-pass "hut" typo)
+- ✅ `NpcIdentity.carpentry_level` from a new `"carpentry_aptitude"`
+  `NpcGenome` trait (a separate skill genome, confirmed not to perturb
+  `personality_trait`/`dominant_trait()`)
+- ⬜ A Cottage tier (`cottage_bright`, level 2.0) — spec'd above, not yet
+  implemented
+- ⬜ A Manor tier — blocked on a real `carpentry_3` node (see Open
+  Questions), not attempted
 - ⬜ Player-facing "start a house project" action (checks: unlock,
   placement, material) creating a real player-owned `ConstructionProject`
 - ⬜ Build-it-yourself path wired to the player's own `SkillTree.
   total_bonus` check (reuses existing hand-placement/`ConstructionLabor`)
-- ⬜ `NpcIdentity.carpentry_level` from a new `"carpentry_aptitude"`
-  `NpcGenome` trait
 - ⬜ Hire-a-Builder path: spare-capacity filter by `carpentry_level`, gold
   cost, settlement-side capacity reduction for the hire's duration
 - ⬜ The first live `BuilderMarker` spawner (player-hired projects only)
@@ -348,9 +405,20 @@ Updated here and in `docs/progress.md` as slices land:
 - ⬜ `worker_slots` on the Sägewerk (starts at the existing implicit 1)
 - ⬜ Workforce assignment record + free-workforce derivation + daily-
   schedule routing to the workplace
+- ⬜ Interior furniture (see `housing.md`'s own newly-real mechanism spec,
+  cross-referenced from here rather than duplicated)
 
 ## Open questions
 
+- **A real `carpentry_3` node**, needed before a genuine third (Manor)
+  blueprint tier can exist at all without either being a fake-harder
+  re-skin of Cottage's own `2.0` or a permanently NPC-only/unbuildable
+  tier. `skills.md`'s own Artisan wedge ring structure already has an
+  unused ring-3 "notable" slot this would naturally occupy — a real,
+  small, precedented skill-web addition, not an invented mechanism — but
+  it touches the already-shipped, tested skill web, so it is deliberately
+  a separate, explicit decision rather than something this pass adds
+  quietly as a side effect of wanting a bigger house.
 - **Growing NPC Carpentry from real work**, closing the gap this doc
   deliberately leaves open (section 4) — waits on `labor_skills.md`'s own
   larger "NPCs accrue skill from `occupation_production.gd`'s loop" item,
