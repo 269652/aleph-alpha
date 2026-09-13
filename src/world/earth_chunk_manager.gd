@@ -12740,6 +12740,12 @@ func _spawn_lumberjack_for(chunk_coord: Vector2i, local_cell: Vector2i) -> void:
 	var global_cell: Vector2i = chunk_coord * CHUNK_SIZE + local_cell
 	var home := (Vector2(global_cell) + Vector2(0.5, 0.5)) * TerrainRenderer.TILE_SIZE
 	var marker := LumberjackMarker.new()
+	# Wired to the world it shapes logs for, exactly like _spawn_farmer_for
+	# below -- without this, _step_production bails every frame and every
+	# beam/plank is silently discarded (test_earth_chunk_manager_structure_
+	# workers.gd pins it, found while building the bread chain on this
+	# template).
+	marker.earth = self
 	marker.home = home
 	marker.position = home
 	_entities_parent.add_child(marker)
