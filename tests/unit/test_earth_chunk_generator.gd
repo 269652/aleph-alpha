@@ -763,18 +763,27 @@ func test_generate_chunk_with_a_bake_still_matches_the_per_tile_queries():
 		floori(float(GREENWICH_TILE.x) / chunk_size), floori(float(GREENWICH_TILE.y) / chunk_size)
 	)
 	var chunk := generator.generate_chunk(chunk_coord, chunk_size)
+	# Elevation is collected into a PackedFloat32Array and compared once after
+	# the loop, same as test_every_generated_cell_is_exactly_the_per_tile_query
+	# above: chunk.elevation is itself a PackedFloat32Array, so a raw float64
+	# per-tile query is NOT equal to the same number after that 32-bit round
+	# trip. Comparing per-cell with assert_eq against the raw double is a
+	# false-failure trap; comparing the packed arrays is what makes this
+	# actually exact instead of quietly failing on a float32 ulp.
+	var expected_elevation := PackedFloat32Array()
 	var found_a_river_cell := false
 	for y in chunk_size:
 		for x in chunk_size:
 			var global_x := chunk_coord.x * chunk_size + x
 			var global_y := chunk_coord.y * chunk_size + y
 			var index := y * chunk_size + x
-			assert_eq(chunk.elevation[index], generator.elevation_at_global(global_x, global_y))
+			expected_elevation.append(generator.elevation_at_global(global_x, global_y))
 			assert_eq(chunk.biome[index], generator.biome_at_global(global_x, global_y))
 			assert_eq(chunk.is_river[index], 1 if generator.is_river_at_global(global_x, global_y) else 0)
 			assert_eq(chunk.is_lake[index], 1 if generator.is_lake_at_global(global_x, global_y) else 0)
 			if chunk.is_river[index] == 1:
 				found_a_river_cell = true
+	assert_eq(chunk.elevation, expected_elevation, "elevation of the baked chunk around Greenwich")
 	assert_true(found_a_river_cell, "the chunk around Greenwich holds the synthetic outlet")
 
 
