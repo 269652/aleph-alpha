@@ -51,6 +51,18 @@ var season_tint := Color.WHITE:
 		season_tint = value
 		_apply_season_tint()
 
+## Root Vigor (see docs/concept/wild_crops.md's "Root Vigor" section and
+## WildCropPatch.get_vigor) -- a heritable size/quality trait, pushed in by
+## the renderer at spawn time exactly the way `growth`/`season_tint` are,
+## never read live from a sim reference this node holds itself. Defaults to
+## 0.5 (the population's own mean) so a hand-built marker in a test/diorama
+## draws and harvests at the population's average size, not an accidental
+## runt or giant.
+var vigor: float = 0.5:
+	set(value):
+		vigor = value
+		_apply_vigor_scale()
+
 ## Invoked once, right before this marker frees itself, so whatever spawned
 ## it (WildCropRenderer) can remove this cell from its owning WildCropPatch.
 ## Left unset (a no-op) for isolated tests/callers that don't need it.
@@ -211,6 +223,10 @@ func begin_pull() -> bool:
 	_soil.visible = true
 	_soil.texture = ProceduralSoilSprite.new().generate_texture(true)
 	return true
+
+
+func _apply_vigor_scale() -> void:
+	pass  # filled in by the leaf-scale-nudge test/implementation below
 
 
 func _apply_season_tint() -> void:

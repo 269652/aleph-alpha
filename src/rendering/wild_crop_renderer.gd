@@ -73,5 +73,6 @@ func _build_marker(
 	marker.crop_id = crop_id
 	marker.sprite_seed = hash("%d_%d_wild_crop" % [tile.x, tile.y])
 	marker.growth = sim.get_growth(cell)
+	marker.vigor = sim.get_vigor(cell)
 	marker.season_tint = season_tint
 	return marker
