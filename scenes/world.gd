@@ -7,6 +7,7 @@ const GroundSlide = preload("res://src/gameplay/ground_slide.gd")
 const RenderResolution = preload("res://src/rendering/render_resolution.gd")
 const DisplayScaling = preload("res://src/rendering/display_scaling.gd")
 const RainOverlay = preload("res://src/rendering/rain_overlay.gd")
+const RiverFlowPass = preload("res://src/rendering/river_flow_pass.gd")
 const NatureSoundscapePlayer = preload("res://src/audio/nature_soundscape_player.gd")
 const AudioSettings = preload("res://src/audio/audio_settings.gd")
 const InteractionSfxPlayer = preload("res://src/audio/interaction_sfx_player.gd")
@@ -412,6 +413,10 @@ const RAIN_INTENSITY_BY_WEATHER := {
 }
 
 var _rain_overlay := RainOverlay.new()
+## The river-flow layer's own render pass (one texel per shader snap cell,
+## see RiverFlowPass) -- adopts $RiverFlowFx in _ready, synced to the
+## camera every client frame.
+var _river_flow_pass := RiverFlowPass.new()
 ## Ambient nature soundscape (docs/concept/soundscape.md) -- same "built
 ## once in _ready(), fed fresh already-computed state every frame" shape as
 ## _rain_overlay just above.
@@ -972,6 +977,10 @@ func _ready() -> void:
 	# base above (see RiverFlowShader, docs/concept/rivers.md -- rivers
 	# previously looked exactly like still ocean water).
 	_chunk_manager.set_river_flow_layer(_river_flow_fx)
+	# The river surface renders at one texel per shader snap cell (see
+	# RiverFlowPass): the manager keeps painting the very same TileMapLayer,
+	# which now lives inside the pass's own viewport.
+	_river_flow_pass.adopt(_river_flow_fx)
 	_chunk_manager.set_snow_layer(_snow_fx)
 	# GPU relief shading: real slope/aspect data shaded by the real, live sun
 	# position (see HillshadeShader, docs/concept/terrain_relief.md).
@@ -5976,6 +5985,19 @@ func _client_process(delta: float) -> void:
 	# clock (which follows the real clock) holds evening players in
 	# permanent night. Real rivers gleam after dark: they reflect the sky.
 	_chunk_manager.set_river_flow_night_lift(sunlight)
+	# The river pass follows the REAL camera every frame (RiverFlowPass):
+	# its texel grid is re-anchored on the camera's snapped top-left, and
+	# the framed world span comes from the same tile-based framing the
+	# decoration radius uses (DisplayScaling: a bigger window shows the
+	# same world at higher fidelity, never more of it).
+	var camera := get_viewport().get_camera_2d()
+	if camera != null:
+		var window_size: Vector2 = _terrain.get_viewport_rect().size
+		var visible_world := Vector2(
+			DisplayScaling.visible_tiles_across(window_size.x, window_size.y),
+			DisplayScaling.visible_tiles_across(window_size.y, window_size.y)
+		) * float(TerrainRenderer.TILE_SIZE)
+		_river_flow_pass.sync(camera.get_screen_center_position() - visible_world * 0.5, visible_world)
 	if _perf_report != null:
 		perf_started = _perf_section("cli_sky", perf_started)
 	# Fetched ONCE per frame and reused by every consumer below (the wader-
