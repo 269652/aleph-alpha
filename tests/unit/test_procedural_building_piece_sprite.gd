@@ -227,3 +227,47 @@ func _mean_brightness(image: Image) -> float:
 			var c := image.get_pixel(x, y)
 			total += (c.r + c.g + c.b) / 3.0
 	return total / float(image.get_width() * image.get_height())
+
+
+# -- furniture and stairs: real objects standing in a room -------------------
+#
+# Reported directly, after NPC houses were furnished: "they are still not
+# furnished". They were -- every furniture piece and the stairs fell through
+# generate_image's category match to the plain wood-floor tile, so a bed was
+# painted as a patch of floor over the floor. test_every_piece_is_visually_
+# distinct_from_every_other above was already red on exactly that. These pin
+# what a furniture tile must be: an object drawn ON the room's floor (the
+# floor shows around it) with a real silhouette of its own.
+
+const FURNITURE_IDS := ["wood_table", "wood_chair", "wood_bed", "wood_rug", "wood_bookshelf", "couch", "photo_frame"]
+
+
+func test_furniture_sits_on_the_room_floor_rather_than_replacing_it():
+	var floor_tile: Image = generator.generate_image("wood_floor")
+	for piece_id in FURNITURE_IDS + ["wood_stairs"]:
+		var image: Image = generator.generate_image(piece_id)
+		assert_eq(image.get_pixel(0, 0), floor_tile.get_pixel(0, 0), "%s: the cell's corner is still the floor it stands on" % piece_id)
+
+
+func test_each_furniture_piece_is_a_substantial_object_not_a_few_pixels():
+	var floor_tile: Image = generator.generate_image("wood_floor")
+	var cell_area := TerrainRenderer.ART_TILE_SIZE * TerrainRenderer.ART_TILE_SIZE
+	for piece_id in FURNITURE_IDS:
+		var diff := _pixel_diff_count(generator.generate_image(piece_id), floor_tile)
+		assert_gt(diff, cell_area / 5, "%s should cover a real share of its cell, not a smudge" % piece_id)
+
+
+## Stairs are the one piece a player has to FIND to reach a second storey --
+## reported as "still only one floor" for as long as they were invisible. A
+## run of treads is several distinct horizontal bands down the cell.
+func test_stairs_show_a_run_of_treads():
+	var image: Image = generator.generate_image("wood_stairs")
+	var mid := TerrainRenderer.ART_TILE_SIZE / 2
+	var bands := 1
+	for y in range(1, TerrainRenderer.ART_TILE_SIZE):
+		if image.get_pixel(mid, y) != image.get_pixel(mid, y - 1):
+			bands += 1
+	assert_gte(bands, 8, "a staircase needs at least four treads and four risers down its middle")
+	var floor_tile: Image = generator.generate_image("wood_floor")
+	var cell_area := TerrainRenderer.ART_TILE_SIZE * TerrainRenderer.ART_TILE_SIZE
+	assert_gt(_pixel_diff_count(image, floor_tile), cell_area / 3, "a flight of stairs fills most of its cell")
