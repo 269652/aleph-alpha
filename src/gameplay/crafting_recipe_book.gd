@@ -518,6 +518,46 @@ func recipe_is_automated(recipe_id: String) -> bool:
 	return bool(recipe.get("automated", false))
 
 
+## The ONE "bench recipe" predicate (docs/concept/production_chains.md
+## "What the crafting menu lists"): may a player craft this recipe BY HAND
+## and walk away with its output? This book is deliberately wider than
+## that -- it also carries the house-blueprint ledger recipes (small_house,
+## cottage, manor, the two-story tiers: their "output" is symbolic of the
+## structure the construction ledger tracks and deliberately NOT an
+## ItemCatalog entry, see the small_house recipe's own doc comment) and
+## "automated" resolver data (recipe_is_automated above). True only if the
+## recipe exists, is not automated, AND item_catalog.has() its output --
+## the same has() guard Player.craft applies one step later, which for a
+## house recipe means craft() consumes the wood and hands back nothing.
+##
+## Every surface a player reaches a recipe FROM (the crafting menu's
+## CraftingWindow.bench_recipe_ids, the dev console's /craft) gates on this
+## one function rather than keeping its own copy, so they cannot drift.
+## Player.craft itself deliberately does NOT: Player._try_build_house_from_
+## blueprint calls craft() as its atomic material+skill gate and depends on
+## it consuming the material for exactly those house recipes.
+##
+## item_catalog is whatever answers has(item_id) -> bool (the real
+## ItemCatalog in play); taken as a parameter so this book stays the pure
+## recipe table it is and pulls in none of the catalog's dependencies.
+func is_bench_recipe(recipe_id: String, item_catalog) -> bool:
+	if not _RECIPES.has(recipe_id):
+		return false
+	if recipe_is_automated(recipe_id):
+		return false
+	return item_catalog.has(_RECIPES[recipe_id]["output"]["item_id"])
+
+
+## recipe_ids() filtered by is_bench_recipe -- the list a bench-craft
+## surface shows or accepts.
+func bench_recipe_ids(item_catalog) -> Array:
+	var ids: Array = []
+	for recipe_id in _RECIPES:
+		if is_bench_recipe(recipe_id, item_catalog):
+			ids.append(recipe_id)
+	return ids
+
+
 ## Reverse lookup: the recipe_id whose output produces `item_id`, or "" if
 ## nothing in this book produces it -- NeedResolver's own bottom case ("go
 ## get it from the world" for a raw/gathered item like log/stone/hide,
