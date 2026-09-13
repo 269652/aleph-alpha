@@ -48,15 +48,36 @@ var _construction_catchup := ConstructionCatchup.new()
 ## visual variety, deterministic per house.
 const _STONE_HOUSE_CHANCE_DENOMINATOR := 4
 
-## How far a house's origin may be nudged off its ring-layout anchor to
-## escape a water pocket (a chunk's dominant biome only gates the whole
-## CHUNK, not every individual cell -- see BiomeClassifier.dominant_biome --
-## so a grassland-dominant chunk can still have a pond/river cutting through
-## it). Comfortably larger than one house footprint's own diagonal, so a
-## small pond doesn't strand a house with nowhere to go; a house that still
-## can't find dry ground within this radius is skipped rather than forced
-## into the water (see _stamp_house).
-const _WATER_AVOIDANCE_SEARCH_RADIUS_TILES := 6
+## How far a house's origin may be moved off its ring-layout anchor to find
+## a clear site (see _find_clear_origin) -- a chunk's dominant biome only
+## gates the whole CHUNK, not every cell (see BiomeClassifier.dominant_
+## biome), so a grassland village can still have a pond, a river bank or a
+## neighbour's house where a ring anchor lands. Was 6 tiles for water alone;
+## a probe over ten real villages near the player found 8 of 50 houses
+## skipped as "no dry ground" at that radius, so it now reaches across most
+## of the chunk (a house still has to stand entirely inside its own chunk,
+## which bounds the search on its own), and a shape that fits nowhere falls
+## back to a smaller one (see _fit_house) before a villager is left homeless.
+const _SITE_SEARCH_RADIUS_TILES := 12
+
+## The shapes a house falls back to, smallest last, when the villager's own
+## chosen shape fits nowhere near its anchor -- a cottage, then the hut. A
+## smaller house in a cramped village beats no house: the probe's eight
+## skipped houses were eight villagers walking home to open ground.
+const _FALLBACK_BLUEPRINT_IDS: Array[String] = ["cottage_small", "hut_tiny"]
+
+## The chunk size the current spawn_village call sites houses within (a
+## house must stand entirely inside its own chunk, or stamp_structure_at_
+## global truncates it -- walls, or the door, simply missing).
+var _chunk_size := 32
+
+## Per-village memo of the world's buildability answer per cell (see
+## _cell_is_buildable): the real EarthChunkManager.is_buildable_terrain_at
+## scans every tree in the chunk on each call, and a cramped village asks
+## about the same few hundred cells for every one of its houses. Cleared at
+## the start of every spawn_village call; occupancy is never cached here
+## (it changes as each house is stamped).
+var _site_cache: Dictionary = {}
 
 ## Draw order for an upper storey's own lit windows (see _stamp_house's
 ## `upper_windows`): from outside, an upper storey is only ever its facade
@@ -170,6 +191,8 @@ func spawn_village(
 	# same known "regenerates identically on revisit, no persistence"
 	# simplification trees/creatures already accept (see docs/progress.md).
 	var market := VillageMarket.new()
+	_chunk_size = chunk_size
+	_site_cache.clear()
 
 	# Tells the world this settlement exists, duck-typed exactly like
 	# stamp_structure_at_global above -- world == null or lacking the method
@@ -234,7 +257,7 @@ func spawn_village(
 ## or floor cell); the stand is one step further out in the same direction,
 ## for a merchant's personal trading stand (see spawn_village). Both fall
 ## back to `anchor` when nothing is actually stamped (no world, an empty
-## footprint, or no dry ground nearby -- see _find_dry_origin), the same
+## footprint, or no dry ground nearby -- see _find_clear_origin), the same
 ## fail-open shape as the rest of this function.
 ##
 ## `npc` (the villager's own NpcIdentity) is what makes the house THEIRS:
@@ -262,10 +285,8 @@ func spawn_village(
 ## branch near this function's own return.
 func _stamp_house(chunk_coord: Vector2i, index: int, anchor: Vector2, npc: NpcIdentity, tile_size: int, world, npc_count: int) -> Dictionary:
 	var seed_value := hash("%d_%d_house_%d" % [chunk_coord.x, chunk_coord.y, index])
-	var blueprint_id := _house_blueprint.choose_blueprint_id(npc.occupation, npc.genome, seed_value)
-	var footprint := _house_blueprint.footprint_for(blueprint_id)
+	var chosen_blueprint_id := _house_blueprint.choose_blueprint_id(npc.occupation, npc.genome, seed_value)
 	var anchor_tile := Vector2i(floori(anchor.x / tile_size), floori(anchor.y / tile_size))
-	var raw_origin := anchor_tile - footprint / 2
 
 	if world == null or not world.has_method("stamp_structure_at_global"):
 		return {"door": anchor, "stand": anchor, "windows": [], "upper_windows": []}
@@ -275,13 +296,15 @@ func _stamp_house(chunk_coord: Vector2i, index: int, anchor: Vector2, npc: NpcId
 		if PixelNoise.value(seed_value, index, 0) % _STONE_HOUSE_CHANCE_DENOMINATOR == 0
 		else BuildingPiece.MATERIAL_WOOD
 	)
-	var pieces := _house_blueprint.build(blueprint_id, seed_value, material)
-	if pieces.is_empty():
-		return {"door": anchor, "stand": anchor, "windows": [], "upper_windows": []}
-
-	var origin_tile = _find_dry_origin(raw_origin, footprint, world)
-	if origin_tile == null:
-		return {"door": anchor, "stand": anchor, "windows": [], "upper_windows": []}  # no dry ground nearby -- skip rather than build in water
+	# The chosen shape at a clear site near its anchor -- or a smaller shape
+	# if that fits nowhere (see _fit_house); only a village with genuinely no
+	# room at all leaves a villager without a house.
+	var fit := _fit_house(anchor_tile, chosen_blueprint_id, seed_value, material, world, chunk_coord)
+	if fit.is_empty():
+		return {"door": anchor, "stand": anchor, "windows": [], "upper_windows": []}  # no clear site anywhere near -- skip rather than build in water or over a neighbour
+	var blueprint_id: String = fit.blueprint_id
+	var pieces: Dictionary = fit.pieces
+	var origin_tile: Vector2i = fit.origin
 
 	var roofs := _house_blueprint.build_roofs(blueprint_id, seed_value, material)
 
@@ -500,59 +523,99 @@ func _door_facing_direction(door_local: Vector2i, pieces: Dictionary) -> Vector2
 	return Vector2i(1, 0)  # never happens for a real door cell; stays safe regardless
 
 
-## `raw_origin` if its whole footprint is real, buildable ground already;
-## otherwise the nearest (by squared distance, deterministic) candidate
-## origin within _WATER_AVOIDANCE_SEARCH_RADIUS_TILES whose whole
-## footprint qualifies; null if none does. `world` supporting neither real
-## check (a caller that only cares about stamp_structure_at_global, e.g.
-## an older/duck-typed test double) skips the check entirely and trusts
-## raw_origin, the same fail-open shape as every other optional-capability
-## check in this codebase.
-##
-## Named "_dry" historically (water avoidance was this search's original
-## and only job); it now also avoids forest and standing trees (docs/
-## concept/building.md: "houses / buildings cannot be built on river /
-## water; also not in the forest... must first fell all trees to make
-## space") via the real EarthChunkManager.is_buildable_terrain_at, when
-## the caller provides it -- see _footprint_is_dry's own doc comment for
-## the fallback this keeps for a `world` that only has biome_at_global.
-func _find_dry_origin(raw_origin: Vector2i, footprint: Vector2i, world) -> Variant:
-	if not _world_has_a_terrain_check(world) or _footprint_is_dry(raw_origin, footprint, world):
-		return raw_origin
-	var offsets: Array[Vector2i] = []
-	for dy in range(-_WATER_AVOIDANCE_SEARCH_RADIUS_TILES, _WATER_AVOIDANCE_SEARCH_RADIUS_TILES + 1):
-		for dx in range(-_WATER_AVOIDANCE_SEARCH_RADIUS_TILES, _WATER_AVOIDANCE_SEARCH_RADIUS_TILES + 1):
-			if dx != 0 or dy != 0:
-				offsets.append(Vector2i(dx, dy))
-	offsets.sort_custom(func(a, b): return a.length_squared() < b.length_squared())
-	for offset in offsets:
-		var candidate := raw_origin + offset
-		if _footprint_is_dry(candidate, footprint, world):
+## Where, and as what, a villager's house actually stands (docs/concept/
+## building.md "Placement rules", "One system, two builders"). Tries the
+## chosen shape first, at its ring anchor or the nearest clear site around
+## it (_find_clear_origin), then each smaller _FALLBACK_BLUEPRINT_IDS shape
+## the same way. Returns {"blueprint_id", "pieces", "origin"} for the first
+## that fits, or {} when nothing does -- the one case a villager is left
+## without a house (reported: 8 of 50 houses skipped in a probe of ten real
+## villages near the player, before the fallbacks existed).
+func _fit_house(
+	anchor_tile: Vector2i, chosen_blueprint_id: String, seed_value: int, material: String, world, chunk_coord: Vector2i
+) -> Dictionary:
+	var ladder: Array[String] = [chosen_blueprint_id]
+	var chosen_footprint := _house_blueprint.footprint_for(chosen_blueprint_id)
+	for fallback_id in _FALLBACK_BLUEPRINT_IDS:
+		var fallback_footprint := _house_blueprint.footprint_for(fallback_id)
+		if fallback_id != chosen_blueprint_id and fallback_footprint.x * fallback_footprint.y < chosen_footprint.x * chosen_footprint.y:
+			ladder.append(fallback_id)
+	for blueprint_id in ladder:
+		var pieces := _house_blueprint.build(blueprint_id, seed_value, material)
+		if pieces.is_empty():
+			continue
+		var raw_origin := anchor_tile - _house_blueprint.footprint_for(blueprint_id) / 2
+		var origin = _find_clear_origin(raw_origin, pieces, world, chunk_coord)
+		if origin != null:
+			return {"blueprint_id": blueprint_id, "pieces": pieces, "origin": origin}
+	return {}
+
+
+## The nearest origin to \`raw_origin\` at which \`pieces\` stand on a CLEAR
+## site, or null within _SITE_SEARCH_RADIUS_TILES. Clear means, for every
+## footprint cell AND the doorstep (the cell the door opens onto -- a door
+## opening onto a river or a neighbour's wall is a house nobody can enter,
+## both found in the probe): entirely inside \`chunk_coord\` (a footprint
+## crossing the chunk edge is silently truncated by stamp_structure_at_
+## global -- a wall or the door simply missing), on buildable ground
+## (_cell_is_buildable), and on nothing the world has already built (world.
+## modification_at_global, when it has one -- an earlier house of this same
+## village has already been stamped by the time the next one looks, so this
+## is what keeps houses off each other). Candidates are tried nearest-first
+## so a house that CAN stand on its anchor does.
+func _find_clear_origin(raw_origin: Vector2i, pieces: Dictionary, world, chunk_coord: Vector2i) -> Variant:
+	var door_local := _door_cell(pieces)
+	var required: Array = pieces.keys()
+	required.append(door_local + _door_facing_direction(door_local, pieces))
+	for offset in _site_offsets():
+		var candidate: Vector2i = raw_origin + offset
+		if _site_is_clear(candidate, required, world, chunk_coord):
 			return candidate
 	return null
 
 
-func _world_has_a_terrain_check(world) -> bool:
-	return world.has_method("is_buildable_terrain_at") or world.has_method("biome_at_global")
+## Every offset within _SITE_SEARCH_RADIUS_TILES, nearest first -- built
+## once and reused by every house of every village.
+static var _cached_site_offsets: Array = []
 
 
-## The real, comprehensive EarthChunkManager.is_buildable_terrain_at when
-## `world` provides it (ocean, forest, river, lake, AND standing trees --
-## see that function's own doc comment); otherwise the narrower, original
-## ocean-only biome_at_global check, for a `world` double that predates
-## it (see _world_has_a_terrain_check). Prefers the real check whenever
-## it's available rather than ever running both.
-func _footprint_is_dry(origin: Vector2i, footprint: Vector2i, world) -> bool:
-	var use_real_check: bool = world.has_method("is_buildable_terrain_at")
-	for x in footprint.x:
-		for y in footprint.y:
-			var cell := origin + Vector2i(x, y)
-			if use_real_check:
-				if not world.is_buildable_terrain_at(cell.x, cell.y):
-					return false
-			elif world.biome_at_global(cell.x, cell.y) == CreaturePerception.WATER_BIOME:
-				return false
+static func _site_offsets() -> Array:
+	if _cached_site_offsets.is_empty():
+		for dy in range(-_SITE_SEARCH_RADIUS_TILES, _SITE_SEARCH_RADIUS_TILES + 1):
+			for dx in range(-_SITE_SEARCH_RADIUS_TILES, _SITE_SEARCH_RADIUS_TILES + 1):
+				_cached_site_offsets.append(Vector2i(dx, dy))
+		_cached_site_offsets.sort_custom(func(a, b): return a.length_squared() < b.length_squared())
+	return _cached_site_offsets
+
+
+func _site_is_clear(origin: Vector2i, required_local_cells: Array, world, chunk_coord: Vector2i) -> bool:
+	var checks_occupancy: bool = world.has_method("modification_at_global")
+	for local in required_local_cells:
+		var cell: Vector2i = origin + local
+		if Vector2i(floori(float(cell.x) / _chunk_size), floori(float(cell.y) / _chunk_size)) != chunk_coord:
+			return false
+		if not _cell_is_buildable(cell, world):
+			return false
+		if checks_occupancy and world.modification_at_global(cell.x, cell.y) != "":
+			return false
 	return true
+
+
+## The world's own real buildability answer for one cell, memoised per
+## village (see _site_cache): EarthChunkManager.is_buildable_terrain_at when
+## the world has it (no water, no forest, no standing tree), the older
+## ocean-only biome_at_global check for a double that predates it, and
+## "yes" for a world with no notion of terrain at all.
+func _cell_is_buildable(cell: Vector2i, world) -> bool:
+	if _site_cache.has(cell):
+		return _site_cache[cell]
+	var buildable := true
+	if world.has_method("is_buildable_terrain_at"):
+		buildable = world.is_buildable_terrain_at(cell.x, cell.y)
+	elif world.has_method("biome_at_global"):
+		buildable = world.biome_at_global(cell.x, cell.y) != CreaturePerception.WATER_BIOME
+	_site_cache[cell] = buildable
+	return buildable
 
 
 func _door_cell(pieces: Dictionary) -> Vector2i:

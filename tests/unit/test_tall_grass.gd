@@ -497,3 +497,34 @@ func test_growth_never_fully_stops_even_at_winters_seasonal_floor():
 	grass.advance(10.0, winter_modifier)
 
 	assert_gt(grass.get_growth(cell), 0.0, "a dormant plant still grows a little, it does not stop")
+
+
+# -- blocked cells: a house's floor is not ground grass can hold -------------
+#
+# Reported directly: "grass must be cut before and can't grow back inside a
+# house." block_cells is what EarthChunkManager calls for every cell a
+# building piece occupies: existing grass and fallen seed there are gone,
+# and neither plant() nor the spread step will ever put grass back.
+
+func test_block_cells_removes_the_grass_and_refuses_new_grass_there():
+	var grass := TallGrass.new(5, WIDTH, HEIGHT, _biome_all("grassland"))
+	assert_gt(grass.get_patch_cells().size(), 0, "precondition: some grass")
+	var cell: Vector2i = grass.get_patch_cells()[0]
+	grass.block_cells([cell])
+	assert_false(grass.has_grass(cell))
+	assert_false(grass.plant(cell))
+
+
+func test_spread_and_fallen_seed_never_enter_a_blocked_cell():
+	var grass := TallGrass.new(5, WIDTH, HEIGHT, _biome_all("grassland"))
+	var blocked: Array = []
+	for y in range(3, 6):
+		for x in range(3, 6):
+			blocked.append(Vector2i(x, y))
+	grass.block_cells(blocked)
+	for i in 300:
+		grass.advance(TallGrass.SPREAD_INTERVAL, 1.0)
+		grass.shed_seed(60.0)
+	for cell in blocked:
+		assert_false(grass.has_grass(cell), "grass spread into a house at %s" % str(cell))
+		assert_false(grass.ground_seed_cells().has(cell), "seed fell inside a house at %s" % str(cell))

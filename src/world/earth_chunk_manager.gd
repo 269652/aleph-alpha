@@ -6156,10 +6156,10 @@ func _paint_river_flow_overlay(chunk_coord: Vector2i, chunk: Chunk) -> void:
 			# have a very different art style", "unify river and pond water".
 			var probe := generator.hydrology_at_global(global.x, global.y)
 			var still_across: float = probe["lake_across"]
-			var still_water: bool = (
-				probe["kind"] == "lake" or probe.get("sea", false) or still_across < LAKE_PAINT_ACROSS
-			)
-			if probe["kind"] != "river" and still_water:
+			# The SAME still-water rule is_water_at_global reads (see
+			# is_still_water_probe) -- what is painted here is, by
+			# construction, exactly what nothing may be built on.
+			if is_still_water_probe(probe):
 				# A river mouth's current runs on into the still water and
 				# fades (HydrologyField.mouth_plume): the texel carries the
 				# mouth's bearing and a fading speed, so the flow lines
@@ -7088,8 +7088,8 @@ func _can_root_at(chunk: Chunk, chunk_coord: Vector2i, position: Vector2) -> boo
 	# only; occupancy by a real building piece is a separate refusal, and the
 	# other two directions of the same rule live in stamp_structure_at_global
 	# and TreeRenderer.spawn_trees.
-	if BuildingPiece.has_piece(chunk.modifications.get(local, "")):
-		return false
+	if BuildingPiece.touches_piece(chunk.modifications, local):
+		return false  # ...and nothing takes root on a house's own one-cell apron either (its doorstep stays clear)
 	# A river's own biome is untouched land (see docs/concept/rivers.md's
 	# Rendering section), so TreeRooting.can_root_in alone can't see it --
 	# the same "trees standing in a lake" bug class this function's own
@@ -12532,14 +12532,53 @@ func tree_at_global(global_x: int, global_y: int) -> bool:
 ## single standing tree elsewhere is a per-cell obstacle (fell it and the
 ## cell opens up), not a biome-wide ban.
 func is_buildable_terrain_at(global_x: int, global_y: int) -> bool:
-	var biome := biome_at_global(global_x, global_y)
-	if biome == "ocean" or biome == "forest":
+	if biome_at_global(global_x, global_y) == "forest":
 		return false
-	if is_river_at_global(global_x, global_y) or is_lake_at_global(global_x, global_y):
+	if is_water_at_global(global_x, global_y):
 		return false
 	if tree_at_global(global_x, global_y):
 		return false
 	return true
+
+
+## The one rule for "is this cell water" (docs/concept/building.md
+## "Placement rules") -- exactly what the live water surface paints, no
+## narrower: the ocean biome, a river tile, a river's bank apron (the
+## overlay paints the whole apron as river), and still water by
+## is_still_water_probe. Reported directly, with a screenshot of a stone
+## house standing in a pond: is_buildable_terrain_at used to ask only
+## is_river_at_global/is_lake_at_global/"ocean", while _paint_river_flow_
+## overlay painted a lake's gentle shore feather, a sea pocket the biome
+## array calls land, and the river banks as water too -- so a house could
+## be sited on a cell drawn blue. Both now read this one function
+## (test_earth_chunk_manager_buildable_terrain.gd pins it cell by cell
+## against the overlay's own decision over the real Berlin radius).
+func is_water_at_global(global_x: int, global_y: int) -> bool:
+	if biome_at_global(global_x, global_y) == "ocean":
+		return true
+	if is_river_at_global(global_x, global_y):
+		return true
+	if is_still_water_probe(generator.hydrology_at_global(global_x, global_y)):
+		return true
+	var nearest: Dictionary = generator.nearest_river_at(global_x, global_y)
+	var half_width: float = float(nearest.get("half_width_tiles", RiverCatalog.RIVER_HALF_WIDTH_TILES))
+	return float(nearest.get("distance_tiles", INF)) <= half_width + RiverCatalog.RIVER_BANK_APRON_TILES
+
+
+## Whether a hydrology probe (EarthChunkGenerator.hydrology_at_global) is
+## STILL water the surface paints: a lake, a sea pocket, or a dry-by-
+## elevation tile inside a gentle shore's own feather (lake_across below
+## LAKE_PAINT_ACROSS -- see that constant). A river probe is flowing water
+## and belongs to the river branch instead, never to this one. Pure, so the
+## rule is pinned as data (test_earth_chunk_manager_water_reclaims.gd) and
+## _paint_river_flow_overlay and is_water_at_global cannot drift apart.
+static func is_still_water_probe(probe: Dictionary) -> bool:
+	if probe.get("kind", "") == "river":
+		return false
+	return (
+		probe.get("kind", "") == "lake" or bool(probe.get("sea", false))
+		or float(probe.get("lake_across", INF)) < LAKE_PAINT_ACROSS
+	)
 
 
 ## The withering condition (1.0 = new, decaying toward 0.0 -- see
@@ -12567,6 +12606,10 @@ func build_at_global(global_x: int, global_y: int, tile_id: String) -> bool:
 	var local := _local_coord(global_x, global_y)
 	var previous_tile_id: String = chunk.modifications.get(local, "")
 	chunk.modifications[local] = tile_id
+	if BuildingPiece.has_piece(tile_id):
+		_block_ground_cover_on_cells(chunk_coord, [local])
+	elif BuildingPiece.has_piece(previous_tile_id):
+		_unblock_ground_cover_on_cells(chunk_coord, [local])
 	_terrain_renderer.paint(_tile_map_layer, chunk, chunk_coord * CHUNK_SIZE, generator.biome_at_global)
 	_sync_piece_collision(Vector2i(global_x, global_y), tile_id)
 	_sync_sagewerk_lumberjack(chunk_coord, local, previous_tile_id, tile_id)
@@ -12599,6 +12642,8 @@ func destroy_at_global(global_x: int, global_y: int) -> bool:
 		return false
 	var previous_tile_id: String = chunk.modifications[local]
 	chunk.modifications.erase(local)
+	if BuildingPiece.has_piece(previous_tile_id):
+		_unblock_ground_cover_on_cells(chunk_coord, [local])
 	_terrain_renderer.paint(_tile_map_layer, chunk, chunk_coord * CHUNK_SIZE, generator.biome_at_global)
 	_remove_piece_collision(Vector2i(global_x, global_y))
 	_sync_sagewerk_lumberjack(chunk_coord, local, previous_tile_id, "")
@@ -12645,6 +12690,23 @@ func stamp_structure_at_global(
 		if BuildingPiece.has_piece(ground_pieces[local_cell]):
 			occupied_cells[global_cell] = true
 	_clear_vegetation_on_cells(chunk_coord, chunk, occupied_cells)
+	# The one-cell apron around the house too -- trees and stones only (the
+	# ground cover may grow right up to the wall): a village clears the ground
+	# around what it builds, so no tree ever stands on a doorstep (docs/
+	# concept/building.md "Placement rules"; BuildingPiece.touches_piece is
+	# the same rule the tree seams read so none grows back there).
+	var apron := {}
+	for global_cell in occupied_cells:
+		for dy in range(-1, 2):
+			for dx in range(-1, 2):
+				var neighbour: Vector2i = global_cell + Vector2i(dx, dy)
+				if not occupied_cells.has(neighbour) and _chunk_coord_for_tile(neighbour) == chunk_coord:
+					apron[neighbour] = true
+	_clear_vegetation_on_cells(chunk_coord, chunk, apron)
+	var occupied_local: Array = []
+	for global_cell in occupied_cells:
+		occupied_local.append(_local_coord(global_cell.x, global_cell.y))
+	_block_ground_cover_on_cells(chunk_coord, occupied_local)
 	for local_cell in roof_pieces:
 		var global_cell: Vector2i = origin_tile + local_cell
 		if _chunk_coord_for_tile(global_cell) != chunk_coord:
@@ -12687,6 +12749,56 @@ func stamp_structure_at_global(
 ## The node is queue_free()d AND dropped from _loaded_trees in the same breath:
 ## _loaded_tree_positions and the forage loop both iterate that registry and
 ## read tree.position without an is_instance_valid guard.
+## The floor of a real building piece grows nothing (docs/concept/building.md
+## "Placement rules"; reported directly: "grass must be cut before and can't
+## grow back inside a house"): every ground-cover sim of the chunk -- tall
+## grass, flowers, desert scrub, tundra lichen -- blocks these local cells
+## (TallGrass.block_cells and its twins: whatever stands there is cleared,
+## and nothing plants, spreads or roots there again), and their sprites are
+## re-synced so the cleared growth disappears in the same frame the
+## structure appears. Trees have their own three seams already (see
+## _clear_vegetation_on_cells); this is the same rule for the ground cover.
+func _block_ground_cover_on_cells(chunk_coord: Vector2i, local_cells: Array) -> void:
+	if local_cells.is_empty():
+		return
+	for sims in [_grass_sims, _flower_patches, _scrub_sims, _lichen_sims]:
+		var sim = sims.get(chunk_coord)
+		if sim != null:
+			sim.block_cells(local_cells)
+	_resync_ground_cover_sprites(chunk_coord)
+
+
+## The reverse, for a destroyed piece: bare ground again, open to the next
+## seed like any other cell.
+func _unblock_ground_cover_on_cells(chunk_coord: Vector2i, local_cells: Array) -> void:
+	for sims in [_grass_sims, _flower_patches, _scrub_sims, _lichen_sims]:
+		var sim = sims.get(chunk_coord)
+		if sim != null:
+			sim.unblock_cells(local_cells)
+
+
+func _resync_ground_cover_sprites(chunk_coord: Vector2i) -> void:
+	if _grass_sims.has(chunk_coord):
+		_sync_grass_sprites(chunk_coord)
+	if _flower_patches.has(chunk_coord):
+		_sync_flower_sprites(chunk_coord)
+	if _scrub_sims.has(chunk_coord):
+		_sync_scrub_sprites(chunk_coord)
+	if _lichen_sims.has(chunk_coord):
+		_sync_lichen_sprites(chunk_coord)
+
+
+## Every local cell of `chunk` a real building piece stands on -- what a
+## fresh ground-cover sim blocks on load, so a persisted house is never
+## briefly full of grass.
+func _built_local_cells(chunk: Chunk) -> Array:
+	var cells: Array = []
+	for local in chunk.modifications:
+		if BuildingPiece.has_piece(chunk.modifications[local]):
+			cells.append(local)
+	return cells
+
+
 func _clear_vegetation_on_cells(
 	chunk_coord: Vector2i, chunk: Chunk, occupied_global_cells: Dictionary
 ) -> void:
@@ -13812,6 +13924,12 @@ func _load_chunk(chunk_coord: Vector2i) -> void:
 	)
 	chunk.planted_trees = _chunk_serializer.load_planted_trees(_planted_trees_path(chunk_coord))
 	_loaded_chunks[chunk_coord] = chunk
+	# Nothing built stands in water -- including what an older save persisted
+	# before the water rule existed (see _reclaim_pieces_standing_in_water).
+	# BEFORE the withering catch-up and every paint/collision pass below, for
+	# the same reason that catch-up runs first: a piece that is gone must be
+	# gone before anything paints or spawns collision for it.
+	_reclaim_pieces_standing_in_water(chunk_coord, chunk)
 	# Withering catch-up BEFORE the first paint/collision pass below, so a
 	# piece that decayed away entirely while this chunk sat unloaded is
 	# already gone from chunk.modifications by the time anything paints or
@@ -13883,10 +14001,16 @@ func _load_chunk(chunk_coord: Vector2i) -> void:
 		_entities_parent, chunk_coord * CHUNK_SIZE, chunk.biome, chunk.width, chunk.height, TerrainRenderer.TILE_SIZE
 	)
 
+	# Every cell a persisted building piece stands on grows nothing (docs/
+	# concept/building.md "Placement rules") -- each fresh ground-cover sim
+	# below blocks them before its first sprite sync, so a reloaded house is
+	# never briefly full of grass.
+	var built_cells := _built_local_cells(chunk)
 	_grass_sims[chunk_coord] = TallGrass.new(
 		hash("%d_%d_tall_grass" % [chunk_coord.x, chunk_coord.y]), chunk.width, chunk.height, chunk.biome,
 		_ground_cover_blockers(chunk)
 	)
+	_grass_sims[chunk_coord].block_cells(built_cells)
 	_grass_sprites[chunk_coord] = {}
 	_grass_sprites_turning[chunk_coord] = {}
 	_sync_grass_sprites(chunk_coord)
@@ -14069,6 +14193,7 @@ func _load_chunk(chunk_coord: Vector2i) -> void:
 		_weather_model.prevailing_wind_direction(PREVAILING_WIND_REGION_SEED),
 		_weather_model.prevailing_wind_strength(PREVAILING_WIND_REGION_SEED)
 	)
+	_flower_patches[chunk_coord].block_cells(built_cells)
 	_flower_sprites[chunk_coord] = {}
 	_seed_sprites[chunk_coord] = {}
 	_sync_flower_sprites(chunk_coord)
@@ -14076,12 +14201,14 @@ func _load_chunk(chunk_coord: Vector2i) -> void:
 	_scrub_sims[chunk_coord] = DesertScrub.new(
 		hash("%d_%d_desert_scrub" % [chunk_coord.x, chunk_coord.y]), chunk.width, chunk.height, chunk.biome
 	)
+	_scrub_sims[chunk_coord].block_cells(built_cells)
 	_scrub_sprites[chunk_coord] = {}
 	_sync_scrub_sprites(chunk_coord)
 
 	_lichen_sims[chunk_coord] = TundraLichen.new(
 		hash("%d_%d_tundra_lichen" % [chunk_coord.x, chunk_coord.y]), chunk.width, chunk.height, chunk.biome
 	)
+	_lichen_sims[chunk_coord].block_cells(built_cells)
 	_lichen_sprites[chunk_coord] = {}
 	_sync_lichen_sprites(chunk_coord)
 
@@ -14643,6 +14770,81 @@ func _place_completed_construction_project(project) -> void:
 			):
 				build_at_global(fence_cell.x, fence_cell.y, "wooden_fence")
 				break
+
+
+## The house pieces the water reclaims (see _reclaim_pieces_standing_in_
+## water): everything a house is made of, on either storey. A dam belongs
+## in water and a boulder IS the river's -- both CATEGORY_DAM, both left
+## alone.
+const _WATER_RECLAIMS_CATEGORIES := {
+	BuildingPiece.CATEGORY_WALL: true, BuildingPiece.CATEGORY_FLOOR: true,
+	BuildingPiece.CATEGORY_DOOR: true, BuildingPiece.CATEGORY_WINDOW: true,
+	BuildingPiece.CATEGORY_ROOF: true, BuildingPiece.CATEGORY_FURNITURE: true,
+	BuildingPiece.CATEGORY_STAIRS: true,
+}
+
+
+## Nothing built stands in water (docs/concept/building.md "Placement
+## rules") -- including what an older save persisted before the water rule
+## existed. Reported directly with a screenshot of a stone house standing in
+## a pond: every house piece on a cell the water surface paints (see
+## is_water_at_global) is removed on load, on every layer -- floor, roof,
+## furniture, both storeys -- and the save rewritten so it stays gone, the
+## way nothing anyone builds in a pond survives the pond. A dam or a
+## boulder belongs in water and is left alone (_WATER_RECLAIMS_CATEGORIES).
+## No-op for a chunk with nothing in water, which is every chunk once the
+## rule holds at build time.
+func _reclaim_pieces_standing_in_water(chunk_coord: Vector2i, chunk: Chunk) -> void:
+	var origin := chunk_coord * CHUNK_SIZE
+	var removed := false
+	for local in chunk.modifications.keys().duplicate():
+		var tile_id: String = chunk.modifications[local]
+		if not BuildingPiece.has_piece(tile_id) or not _WATER_RECLAIMS_CATEGORIES.has(BuildingPiece.category_of(tile_id)):
+			continue
+		var global: Vector2i = origin + local
+		if not is_water_at_global(global.x, global.y):
+			continue
+		chunk.modifications.erase(local)
+		chunk.piece_condition.erase(local)
+		removed = true
+	for layer in [
+		chunk.roof_modifications, chunk.furniture_modifications,
+		chunk.upper_floor_modifications, chunk.upper_floor_furniture_modifications,
+	]:
+		for local in layer.keys().duplicate():
+			var global: Vector2i = origin + local
+			if is_water_at_global(global.x, global.y):
+				layer.erase(local)
+				removed = true
+	if removed:
+		_persist_modifications_now(chunk_coord, chunk)
+
+
+## Writes every modification layer of `chunk` to disk right now -- the same
+## per-layer files _unload_chunk writes on eviction, plus the one thing it
+## does not do: a layer that is now EMPTY has its file removed, so a wash
+## that emptied a chunk does not leave the old file behind to be reloaded
+## and washed again on every visit.
+func _persist_modifications_now(chunk_coord: Vector2i, chunk: Chunk) -> void:
+	var layers := [
+		[chunk.modifications, MODIFICATIONS_DIR, _modifications_path(chunk_coord)],
+		[chunk.roof_modifications, ROOF_MODIFICATIONS_DIR, _roof_modifications_path(chunk_coord)],
+		[chunk.furniture_modifications, FURNITURE_MODIFICATIONS_DIR, _furniture_modifications_path(chunk_coord)],
+		[chunk.upper_floor_modifications, UPPER_FLOOR_MODIFICATIONS_DIR, _upper_floor_modifications_path(chunk_coord)],
+		[
+			chunk.upper_floor_furniture_modifications, UPPER_FLOOR_FURNITURE_MODIFICATIONS_DIR,
+			_upper_floor_furniture_modifications_path(chunk_coord),
+		],
+	]
+	for layer in layers:
+		var data: Dictionary = layer[0]
+		var path: String = layer[2]
+		if data.is_empty():
+			if FileAccess.file_exists(path):
+				DirAccess.remove_absolute(path)
+			continue
+		DirAccess.make_dir_recursive_absolute(layer[1])
+		_chunk_serializer.save_modifications(data, path)
 
 
 ## A property_id convention for HouseholdStore.owner_of, keyed per PIECE

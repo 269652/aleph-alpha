@@ -46,6 +46,10 @@ var _patches: Dictionary = {}
 var _spread_accumulator := 0.0
 var _spread_tick := 0
 
+## Cells nothing may grow on -- the floor of a real building piece (see
+## TallGrass._blocked for the full reasoning; the same rule, the same shape).
+var _blocked: Dictionary = {}
+
 
 func _init(seed_value: int, width: int, height: int, biome: PackedStringArray) -> void:
 	_seed_value = seed_value
@@ -57,6 +61,19 @@ func _init(seed_value: int, width: int, height: int, biome: PackedStringArray) -
 
 func get_patch_cells() -> Array:
 	return _patches.keys()
+
+
+## Marks `cells` as built on: the lichen there is gone, and the spread step
+## never returns to them while the block stands (see TallGrass.block_cells).
+func block_cells(cells: Array) -> void:
+	for cell in cells:
+		_blocked[cell] = true
+		_patches.erase(cell)
+
+
+func unblock_cells(cells: Array) -> void:
+	for cell in cells:
+		_blocked.erase(cell)
 
 
 func has_lichen(cell: Vector2i) -> bool:
@@ -118,6 +135,6 @@ func _step_spread() -> void:
 			continue
 		if _biome[target.y * _width + target.x] != "tundra":
 			continue
-		if _patches.has(target):
+		if _patches.has(target) or _blocked.has(target):
 			continue
 		_patches[target] = 0.0  # spread lichen starts immature and must grow

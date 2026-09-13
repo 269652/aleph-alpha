@@ -161,3 +161,90 @@ func test_is_buildable_terrain_at_is_true_on_plain_dry_treeless_ground():
 		assert_true(manager.is_buildable_terrain_at(cell.x, cell.y))
 		return
 	pass_test("precondition unmet (no plain buildable cell found in the scanned prefix) -- nothing to check")
+
+
+# -- water, by the one rule the water surface is drawn with ------------------
+#
+# Reported directly, with a screenshot of a stone house standing in a pond:
+# "they shouldn't be able to build anything on water tiles." is_buildable_
+# terrain_at asked is_river_at_global/is_lake_at_global/biome == ocean --
+# but the live water surface (_paint_river_flow_overlay) paints MORE than
+# that: a lake's gentle shoreline feather (lake_across < LAKE_PAINT_ACROSS),
+# a sea pocket the biome array calls land (probe.sea), and a river's whole
+# bank apron. A house could be sited on a cell painted blue. is_water_at_
+# global is now the one rule both the overlay and buildability read, pinned
+# here against the overlay's own decision, cell by cell, over the real
+# Berlin radius.
+
+const RiverCatalog = preload("res://src/world/river_catalog.gd")
+
+var _painted_cache = null
+
+
+## Exactly _paint_river_flow_overlay's own paint-or-erase decision.
+func _painted_as_water(cell: Vector2i) -> bool:
+	if manager.biome_at_global(cell.x, cell.y) == "ocean":
+		return true  # the ocean biome's own terrain tile is water art
+	var probe: Dictionary = manager.generator.hydrology_at_global(cell.x, cell.y)
+	var still: bool = (
+		probe["kind"] == "lake" or bool(probe.get("sea", false))
+		or float(probe["lake_across"]) < EarthChunkManager.LAKE_PAINT_ACROSS
+	)
+	if probe["kind"] != "river" and still:
+		return true
+	var nearest: Dictionary = manager.generator.nearest_river_at(cell.x, cell.y)
+	var half_width: float = float(nearest.get("half_width_tiles", RiverCatalog.RIVER_HALF_WIDTH_TILES))
+	return float(nearest.get("distance_tiles", INF)) <= half_width + RiverCatalog.RIVER_BANK_APRON_TILES
+
+
+func _painted_cells() -> Dictionary:
+	if _painted_cache == null:
+		_painted_cache = {}
+		for cell in _each_loaded_cell():
+			_painted_cache[cell] = _painted_as_water(cell)
+	return _painted_cache
+
+
+func test_a_painted_water_cell_the_old_checks_missed_is_no_longer_buildable():
+	var gap = null
+	for cell in _painted_cells():
+		if not _painted_cells()[cell]:
+			continue
+		if (
+			manager.is_river_at_global(cell.x, cell.y) or manager.is_lake_at_global(cell.x, cell.y)
+			or manager.biome_at_global(cell.x, cell.y) == "ocean"
+		):
+			continue
+		gap = cell
+		break
+	assert_not_null(gap, "precondition: the Berlin radius has a painted-water cell the old checks missed (a river bank, a shore feather)")
+	if gap == null:
+		return
+	assert_true(manager.is_water_at_global(gap.x, gap.y), "%s is painted as water, so it IS water" % str(gap))
+	assert_false(manager.is_buildable_terrain_at(gap.x, gap.y), "...and nothing may be built on it")
+
+
+func test_every_cell_the_water_surface_paints_is_water_and_unbuildable():
+	var checked := 0
+	var wrong := 0
+	for cell in _painted_cells():
+		if not _painted_cells()[cell]:
+			continue
+		checked += 1
+		if not manager.is_water_at_global(cell.x, cell.y) or manager.is_buildable_terrain_at(cell.x, cell.y):
+			wrong += 1
+	assert_gt(checked, 0, "precondition: real water in the radius")
+	assert_eq(wrong, 0, "%d painted-water cells read as dry/buildable" % wrong)
+
+
+func test_a_cell_the_water_surface_leaves_dry_is_not_water():
+	var checked := 0
+	var wrong := 0
+	for cell in _painted_cells():
+		if _painted_cells()[cell]:
+			continue
+		checked += 1
+		if manager.is_water_at_global(cell.x, cell.y):
+			wrong += 1
+	assert_gt(checked, 0)
+	assert_eq(wrong, 0, "%d dry cells read as water" % wrong)

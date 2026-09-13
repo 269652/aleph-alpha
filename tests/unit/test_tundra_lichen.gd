@@ -178,3 +178,16 @@ func test_advance_grows_slower_in_winter_than_in_summer_for_the_same_elapsed_tim
 	winter.advance(1.0, winter_modifier)
 
 	assert_gt(summer.get_growth(immature), winter.get_growth(immature))
+
+
+# -- blocked cells (see TallGrass.block_cells): nothing grows on a floor -----
+
+func test_block_cells_removes_lichen_and_spread_never_returns_there():
+	var lichen := TundraLichen.new(5, WIDTH, HEIGHT, _biome_all("tundra"))
+	assert_gt(lichen.get_patch_cells().size(), 0, "precondition: some lichen")
+	var cell: Vector2i = lichen.get_patch_cells()[0]
+	lichen.block_cells([cell])
+	assert_false(lichen.has_lichen(cell))
+	for i in 300:
+		lichen.advance(TundraLichen.SPREAD_INTERVAL, 1.0)
+	assert_false(lichen.has_lichen(cell), "lichen spread back onto a blocked cell")

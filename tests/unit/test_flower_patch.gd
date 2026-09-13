@@ -670,3 +670,35 @@ func test_a_seedling_says_it_is_a_seedling():
 	var grown := patch.label_at(clear, "summer")
 	assert_ne(young, grown, "a seedling and a full bloom read identically")
 	assert_true(young.contains(grown), "a seedling should still say what it is: '%s'" % young)
+
+
+# -- blocked cells: nothing blooms on a house's floor ------------------------
+#
+# The flower twin of TallGrass.block_cells (docs/concept/housing.md, reported
+# directly: "grass must be cut before and can't grow back inside a house"):
+# a blocked cell loses its flower and any seed lying there, and neither
+# plant() nor rooting will ever put one back.
+
+func test_block_cells_removes_the_flower_and_refuses_planting_there():
+	var patch := FlowerPatch.new(3, 32, 32, _grassland(32, 32))
+	assert_gt(patch.get_flower_cells().size(), 0, "precondition: some flowers")
+	var cell: Vector2i = patch.get_flower_cells()[0]
+	var species: String = patch.species_at(cell)
+	patch.block_cells([cell])
+	assert_false(patch.has_flower(cell))
+	assert_false(patch.plant(cell, species))
+
+
+func test_seed_never_roots_in_a_blocked_cell():
+	var patch := FlowerPatch.new(3, 32, 32, _grassland(32, 32))
+	var blocked: Array = []
+	for y in range(10, 14):
+		for x in range(10, 14):
+			blocked.append(Vector2i(x, y))
+	patch.block_cells(blocked)
+	for i in 300:
+		patch.shed_seed(60.0, "summer")
+		patch.root_seeds(1.0, 1.0)
+	for cell in blocked:
+		assert_false(patch.has_flower(cell), "a flower rooted inside a house at %s" % str(cell))
+		assert_false(patch.ground_seed_cells().has(cell), "seed lay inside a house at %s" % str(cell))

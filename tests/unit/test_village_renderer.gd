@@ -45,6 +45,22 @@ class StubWorld:
 			"chunk_coord": chunk_coord, "origin_tile": origin_tile,
 			"ground_pieces": ground_pieces, "roof_pieces": roof_pieces,
 		})
+		for local_cell in ground_pieces:
+			stamped_cells[origin_tile + local_cell] = ground_pieces[local_cell]
+
+	## What already stands on a cell -- the real EarthChunkManager.
+	## modification_at_global, stood in for by whatever an earlier house in
+	## the SAME spawn_village call stamped (stamped_cells, recorded above)
+	## plus anything a test pre-places (occupied_cells). This is what lets
+	## a later house see an earlier one and keep off it (see the "no two
+	## houses share a cell" tests below).
+	var stamped_cells: Dictionary = {}
+	var occupied_cells: Dictionary = {}
+	func modification_at_global(x: int, y: int) -> String:
+		var cell := Vector2i(x, y)
+		if occupied_cells.has(cell):
+			return occupied_cells[cell]
+		return stamped_cells.get(cell, "")
 
 	## Two-story houses (docs/concept/housing.md): records every real upper-
 	## floor stamp instead of touching a real chunk, the SAME reasoning
@@ -872,14 +888,28 @@ func test_every_real_blueprint_reaches_full_completion_at_the_real_settlement_po
 ## falls short of it: 200 floor cells, 200 load-bearing wall cells, 99 window
 ## cells and 1 door cell, 500 non-roof cells total.
 func _oversized_pieces() -> Dictionary:
+	# 500 pieces -- far more than a small settlement can raise in the assumed
+	# time (see the partial-completion tests) -- laid out as a 20x25 block
+	# rather than the 200-wide strip it used to be: a house now has to stand
+	# entirely inside its own 32-tile chunk (see VillageRenderer._find_clear_
+	# origin), and a 200-wide strip fits inside nothing. Same category mix
+	# and the same door cell (0, 2) at install-order index 400, so every
+	# assertion built on those stays exactly as it was.
 	var pieces := {}
-	for x in 200:
+	for x in 20:
 		pieces[Vector2i(x, 0)] = "wood_floor"
-	for x in 200:
+		for y in range(3, 12):
+			pieces[Vector2i(x, y)] = "wood_floor"
+	for x in 20:
 		pieces[Vector2i(x, 1)] = "wood_wall"
+		for y in range(12, 21):
+			pieces[Vector2i(x, y)] = "wood_wall"
 	pieces[Vector2i(0, 2)] = "wood_door"
-	for x in range(1, 100):
+	for x in range(1, 20):
 		pieces[Vector2i(x, 2)] = "wood_window"
+	for y in range(21, 25):
+		for x in 20:
+			pieces[Vector2i(x, y)] = "wood_window"
 	return pieces
 
 
@@ -954,7 +984,7 @@ func test_stamp_house_stamps_only_the_partial_prefix_and_no_roof_when_completion
 	renderer._house_blueprint = fake_blueprint
 
 	var npc := NpcIdentity.new(42)
-	var result: Dictionary = renderer._stamp_house(Vector2i(3, 3), 0, Vector2(100, 100), npc, TILE_SIZE, world, 1)
+	var result: Dictionary = renderer._stamp_house(Vector2i(3, 3), 0, Vector2((3 * CHUNK_SIZE + 16) * TILE_SIZE, (3 * CHUNK_SIZE + 16) * TILE_SIZE), npc, TILE_SIZE, world, 1)
 
 	assert_eq(world.stamp_calls.size(), 1)
 	var call = world.stamp_calls[0]
@@ -1013,7 +1043,7 @@ func test_a_two_story_blueprint_choice_also_stamps_a_real_upper_floor():
 	# real >= 1.0 threshold for a shape this small (see that function's own
 	# doc comment), so the ground floor -- and therefore the upper floor --
 	# is genuinely, fully complete this call, not a partial fraction.
-	renderer._stamp_house(Vector2i(5, 5), 0, Vector2(100, 100), npc, TILE_SIZE, world, 100)
+	renderer._stamp_house(Vector2i(5, 5), 0, Vector2((5 * CHUNK_SIZE + 16) * TILE_SIZE, (5 * CHUNK_SIZE + 16) * TILE_SIZE), npc, TILE_SIZE, world, 100)
 
 	assert_eq(world.upper_stamp_calls.size(), 1, "a two-story choice should stamp a real upper floor too")
 	assert_false(world.upper_stamp_calls[0].upper_pieces.is_empty(), "the stamped upper floor should be a real, non-empty piece set")
@@ -1036,7 +1066,7 @@ func test_a_two_story_house_lights_its_upper_facade_windows_one_row_up():
 	renderer._house_blueprint = blueprint
 
 	var npc := NpcIdentity.new(1)
-	var result: Dictionary = renderer._stamp_house(Vector2i(5, 5), 0, Vector2(100, 100), npc, TILE_SIZE, world, 100)
+	var result: Dictionary = renderer._stamp_house(Vector2i(5, 5), 0, Vector2((5 * CHUNK_SIZE + 16) * TILE_SIZE, (5 * CHUNK_SIZE + 16) * TILE_SIZE), npc, TILE_SIZE, world, 100)
 
 	var ground_pieces: Dictionary = world.stamp_calls[0].ground_pieces
 	var ground_window_count := 0
@@ -1064,7 +1094,7 @@ func test_a_single_story_house_reports_no_upper_windows():
 	var world := StubWorld.new()
 	var npc := NpcIdentity.new(7)
 	npc.occupation = "farmer"
-	var result: Dictionary = renderer._stamp_house(Vector2i(9, 9), 0, Vector2(100, 100), npc, TILE_SIZE, world, 100)
+	var result: Dictionary = renderer._stamp_house(Vector2i(9, 9), 0, Vector2((9 * CHUNK_SIZE + 16) * TILE_SIZE, (9 * CHUNK_SIZE + 16) * TILE_SIZE), npc, TILE_SIZE, world, 100)
 	assert_eq(result.upper_windows, [])
 
 
@@ -1111,7 +1141,7 @@ func test_a_two_story_house_gets_no_upper_floor_yet_while_still_partially_built(
 	renderer._house_blueprint = fake_blueprint
 
 	var npc := NpcIdentity.new(42)
-	renderer._stamp_house(Vector2i(3, 3), 0, Vector2(100, 100), npc, TILE_SIZE, world, 1)
+	renderer._stamp_house(Vector2i(3, 3), 0, Vector2((3 * CHUNK_SIZE + 16) * TILE_SIZE, (3 * CHUNK_SIZE + 16) * TILE_SIZE), npc, TILE_SIZE, world, 1)
 
 	assert_true(world.upper_stamp_calls.is_empty(), "no upper floor until the ground floor itself is fully complete")
 
@@ -1129,7 +1159,7 @@ func test_a_single_story_blueprint_choice_never_stamps_an_upper_floor():
 	# fake here, so a real seeded single-story choice is what gets tested.
 	var npc := NpcIdentity.new(7)
 	npc.occupation = "farmer"
-	renderer._stamp_house(Vector2i(9, 9), 0, Vector2(100, 100), npc, TILE_SIZE, world, 100)
+	renderer._stamp_house(Vector2i(9, 9), 0, Vector2((9 * CHUNK_SIZE + 16) * TILE_SIZE, (9 * CHUNK_SIZE + 16) * TILE_SIZE), npc, TILE_SIZE, world, 100)
 	assert_true(world.upper_stamp_calls.is_empty())
 
 
@@ -1149,7 +1179,7 @@ func test_stamp_house_stamps_the_full_set_once_completion_reaches_one():
 	var npc := NpcIdentity.new(42)
 	# Comfortably many builders -- required (a bit over 1200 hours, see the
 	# precondition above) is trivially covered.
-	renderer._stamp_house(Vector2i(3, 3), 0, Vector2(100, 100), npc, TILE_SIZE, world, 50)
+	renderer._stamp_house(Vector2i(3, 3), 0, Vector2((3 * CHUNK_SIZE + 16) * TILE_SIZE, (3 * CHUNK_SIZE + 16) * TILE_SIZE), npc, TILE_SIZE, world, 50)
 
 	assert_eq(world.stamp_calls.size(), 1)
 	var call = world.stamp_calls[0]
@@ -1167,7 +1197,7 @@ func test_stamp_house_furnishes_with_the_npcs_own_occupation_set():
 	var world := StubWorld.new()
 	var npc := NpcIdentity.new(42)
 
-	renderer._stamp_house(Vector2i(3, 3), 0, Vector2(100, 100), npc, TILE_SIZE, world, 50)
+	renderer._stamp_house(Vector2i(3, 3), 0, Vector2((3 * CHUNK_SIZE + 16) * TILE_SIZE, (3 * CHUNK_SIZE + 16) * TILE_SIZE), npc, TILE_SIZE, world, 50)
 
 	assert_eq(world.furnish_calls.size(), 1)
 	var call = world.furnish_calls[0]
@@ -1186,7 +1216,7 @@ func test_stamp_house_furnishes_using_the_same_pieces_it_just_stamped():
 	renderer._house_blueprint = fake_blueprint
 	var npc := NpcIdentity.new(42)
 
-	renderer._stamp_house(Vector2i(3, 3), 0, Vector2(100, 100), npc, TILE_SIZE, world, 1)
+	renderer._stamp_house(Vector2i(3, 3), 0, Vector2((3 * CHUNK_SIZE + 16) * TILE_SIZE, (3 * CHUNK_SIZE + 16) * TILE_SIZE), npc, TILE_SIZE, world, 1)
 
 	assert_eq(world.stamp_calls.size(), 1)
 	assert_eq(world.furnish_calls.size(), 1)
@@ -1224,7 +1254,7 @@ func test_stamp_house_reports_the_world_position_of_every_stamped_window():
 	renderer._house_blueprint = fake_blueprint
 
 	var npc := NpcIdentity.new(42)
-	var result: Dictionary = renderer._stamp_house(Vector2i(3, 3), 0, Vector2(100, 100), npc, TILE_SIZE, world, 5)
+	var result: Dictionary = renderer._stamp_house(Vector2i(3, 3), 0, Vector2((3 * CHUNK_SIZE + 16) * TILE_SIZE, (3 * CHUNK_SIZE + 16) * TILE_SIZE), npc, TILE_SIZE, world, 5)
 
 	assert_eq(world.stamp_calls.size(), 1)
 	var call = world.stamp_calls[0]
@@ -1247,7 +1277,7 @@ func test_stamp_house_reports_no_windows_for_a_blueprint_that_has_none():
 	renderer._house_blueprint = fake_blueprint
 
 	var npc := NpcIdentity.new(42)
-	var result: Dictionary = renderer._stamp_house(Vector2i(3, 3), 0, Vector2(100, 100), npc, TILE_SIZE, world, 5)
+	var result: Dictionary = renderer._stamp_house(Vector2i(3, 3), 0, Vector2((3 * CHUNK_SIZE + 16) * TILE_SIZE, (3 * CHUNK_SIZE + 16) * TILE_SIZE), npc, TILE_SIZE, world, 5)
 	assert_eq(result.windows, [])
 
 
@@ -1330,7 +1360,7 @@ func test_a_two_story_house_furnishes_its_upper_floor_too():
 	var npc := NpcIdentity.new(1)
 	npc.occupation = "farmer"
 
-	renderer._stamp_house(Vector2i(5, 5), 0, Vector2(100, 100), npc, TILE_SIZE, world, 100)
+	renderer._stamp_house(Vector2i(5, 5), 0, Vector2((5 * CHUNK_SIZE + 16) * TILE_SIZE, (5 * CHUNK_SIZE + 16) * TILE_SIZE), npc, TILE_SIZE, world, 100)
 
 	assert_eq(world.upper_furnish_calls.size(), 1, "a two-story house should furnish its upper floor too")
 	var call = world.upper_furnish_calls[0]
@@ -1362,6 +1392,179 @@ func test_a_partially_built_two_story_house_gets_no_upper_furniture_yet():
 	renderer._house_blueprint = fake_blueprint
 	var npc := NpcIdentity.new(42)
 
-	renderer._stamp_house(Vector2i(3, 3), 0, Vector2(100, 100), npc, TILE_SIZE, world, 1)
+	renderer._stamp_house(Vector2i(3, 3), 0, Vector2((3 * CHUNK_SIZE + 16) * TILE_SIZE, (3 * CHUNK_SIZE + 16) * TILE_SIZE), npc, TILE_SIZE, world, 1)
 
 	assert_true(world.upper_furnish_calls.is_empty(), "no upper furniture until the house itself is fully complete")
+
+
+# -- siting: a house stands whole, on clear ground, with its door usable --
+#
+# Reported directly, with a screenshot, after the two-story batch: "some
+# are built so that you can't enter." A probe over 10 real villages near
+# the player found the causes: houses nudged off water ONTO each other (the
+# dry-ground search never looked at what an earlier house had already
+# stamped), a door opening onto a neighbour's wall under that neighbour's
+# roof, a door opening onto the river, and eight houses skipped outright
+# because the small search radius found no dry footprint. _find_clear_
+# origin replaces _find_dry_origin: a site is a footprint entirely inside
+# its own chunk, on buildable ground the world does not already build on,
+# with the doorstep (the cell the door opens onto) just as clear -- and a
+# shape that fits nowhere falls back to a smaller one before the villager
+# is left homeless.
+
+func _cells_of(call: Dictionary) -> Dictionary:
+	var cells := {}
+	for local_cell in call.ground_pieces:
+		cells[call.origin_tile + local_cell] = true
+	return cells
+
+
+func _first_settlement_chunks(count: int) -> Array:
+	var found: Array = []
+	for x in 400:
+		var coord := Vector2i(x, 3)
+		if _generator.has_settlement_at(coord, "grassland"):
+			found.append(coord)
+			if found.size() >= count:
+				break
+	return found
+
+
+func test_no_two_houses_in_a_village_ever_share_a_cell():
+	for chunk_coord in _first_settlement_chunks(8):
+		var world := StubWorld.new()
+		renderer.spawn_village(parent, chunk_coord, chunk_coord * CHUNK_SIZE, CHUNK_SIZE, TILE_SIZE, "grassland", world)
+		var calls: Array = world.stamp_calls
+		for a in calls.size():
+			for b in range(a + 1, calls.size()):
+				var shared := 0
+				var cells_b := _cells_of(calls[b])
+				for cell in _cells_of(calls[a]):
+					if cells_b.has(cell):
+						shared += 1
+				assert_eq(shared, 0, "chunk %s: houses %d and %d share %d cells" % [str(chunk_coord), a, b, shared])
+
+
+func test_a_house_nudged_off_water_keeps_off_the_house_already_standing_there():
+	var chunk_coord := _find_settlement_chunk("grassland")
+	var world := StubWorld.new()
+	var settlement := SettlementGenerator.new().generate_settlement(
+		chunk_coord, chunk_coord * CHUNK_SIZE, CHUNK_SIZE, TILE_SIZE
+	)
+	# A pre-existing structure squarely on house 0's own raw footprint, and
+	# water everywhere else within a few tiles of it EXCEPT one clear pocket
+	# on the far side of that structure -- the only dry site is past it.
+	var anchor: Vector2 = settlement.house_positions[0]
+	var anchor_tile := Vector2i(floori(anchor.x / TILE_SIZE), floori(anchor.y / TILE_SIZE))
+	var max_footprint := _max_catalog_footprint()
+	var raw_origin := anchor_tile - max_footprint / 2
+	for x in max_footprint.x:
+		for y in max_footprint.y:
+			world.occupied_cells[raw_origin + Vector2i(x, y)] = "wood_wall"
+
+	renderer.spawn_village(parent, chunk_coord, chunk_coord * CHUNK_SIZE, CHUNK_SIZE, TILE_SIZE, "grassland", world)
+
+	assert_gt(world.stamp_calls.size(), 0, "precondition: houses still get built")
+	for call in world.stamp_calls:
+		for cell in _cells_of(call):
+			assert_false(world.occupied_cells.has(cell), "a house was stamped over an existing structure at %s" % str(cell))
+
+
+func test_every_house_stands_entirely_inside_its_own_chunk():
+	for chunk_coord in _first_settlement_chunks(8):
+		var world := StubWorld.new()
+		renderer.spawn_village(parent, chunk_coord, chunk_coord * CHUNK_SIZE, CHUNK_SIZE, TILE_SIZE, "grassland", world)
+		for call in world.stamp_calls:
+			for cell in _cells_of(call):
+				var cell_chunk := Vector2i(floori(float(cell.x) / CHUNK_SIZE), floori(float(cell.y) / CHUNK_SIZE))
+				assert_eq(cell_chunk, chunk_coord, "house cell %s falls outside chunk %s (it would be truncated)" % [str(cell), str(chunk_coord)])
+
+
+func test_a_footprint_that_would_cross_the_chunk_edge_is_moved_inside_it():
+	var chunk_coord := Vector2i(7, 7)
+	var world := StubWorld.new()
+	var pieces := renderer._house_blueprint.build("cottage_wide", 1)  # 6x4
+	# A raw origin two cells from the chunk's east edge: the 6-wide footprint
+	# would spill into the next chunk.
+	var raw_origin := chunk_coord * CHUNK_SIZE + Vector2i(CHUNK_SIZE - 2, 10)
+	var origin = renderer._find_clear_origin(raw_origin, pieces, world, chunk_coord)
+	assert_not_null(origin, "plenty of clear ground inside the chunk")
+	if origin == null:
+		return
+	for cell in pieces:
+		var g: Vector2i = origin + cell
+		assert_eq(Vector2i(floori(float(g.x) / CHUNK_SIZE), floori(float(g.y) / CHUNK_SIZE)), chunk_coord)
+
+
+func test_a_houses_door_opens_onto_clear_ground():
+	var chunk_coord := _find_settlement_chunk("grassland")
+	var world := StubWorld.new()
+	var settlement := SettlementGenerator.new().generate_settlement(
+		chunk_coord, chunk_coord * CHUNK_SIZE, CHUNK_SIZE, TILE_SIZE
+	)
+	# Make the row just south of every raw footprint unbuildable (a river
+	# bank): a door there would open onto water, so the house must move.
+	var max_footprint := _max_catalog_footprint()
+	for anchor in settlement.house_positions:
+		var anchor_tile := Vector2i(floori(anchor.x / TILE_SIZE), floori(anchor.y / TILE_SIZE))
+		var raw_origin := anchor_tile - max_footprint / 2
+		for x in range(-2, max_footprint.x + 2):
+			world.unbuildable_cells[raw_origin + Vector2i(x, max_footprint.y)] = true
+
+	renderer.spawn_village(parent, chunk_coord, chunk_coord * CHUNK_SIZE, CHUNK_SIZE, TILE_SIZE, "grassland", world)
+
+	assert_gt(world.stamp_calls.size(), 0, "precondition")
+	for call in world.stamp_calls:
+		var door_local: Vector2i = renderer._door_cell(call.ground_pieces)
+		var facing: Vector2i = renderer._door_facing_direction(door_local, call.ground_pieces)
+		var doorstep: Vector2i = call.origin_tile + door_local + facing
+		assert_true(world.is_buildable_terrain_at(doorstep.x, doorstep.y), "door at %s opens onto unbuildable ground" % str(doorstep))
+		assert_eq(world.modification_at_global(doorstep.x, doorstep.y), "", "door at %s opens onto another structure" % str(doorstep))
+
+
+## Villagers were left homeless (8 of 50 houses skipped in the probe) when
+## their chosen shape found no dry footprint within the old 6-tile radius.
+## A smaller shape in a smaller pocket beats no house at all.
+func test_a_shape_that_fits_nowhere_falls_back_to_a_smaller_one_before_skipping():
+	var chunk_coord := Vector2i(11, 11)
+	var world := StubWorld.new()
+	# Water everywhere except one 5x6 pocket (a 4x4 hut plus its doorstep
+	# row fits; a 7x5 manor never will).
+	world.biome = "ocean"
+	var pocket_origin := chunk_coord * CHUNK_SIZE + Vector2i(12, 12)
+	for x in 5:
+		for y in 6:
+			world.unbuildable_cells.erase(pocket_origin + Vector2i(x, y))
+	# StubWorld.biome_at_global answers "ocean" for the fallback biome unless
+	# a cell is in water_cells... invert: mark the pocket as land by making
+	# biome grassland and flooding everything else in the chunk.
+	world.biome = "grassland"
+	for x in CHUNK_SIZE:
+		for y in CHUNK_SIZE:
+			var cell := chunk_coord * CHUNK_SIZE + Vector2i(x, y)
+			var in_pocket := cell.x >= pocket_origin.x and cell.x < pocket_origin.x + 5 and cell.y >= pocket_origin.y and cell.y < pocket_origin.y + 6
+			if not in_pocket:
+				world.water_cells[cell] = true
+	var manor := renderer._house_blueprint.build("manor_wide", 3)  # 7x5: cannot fit the pocket
+	var raw_origin := pocket_origin
+
+	var chosen: Dictionary = renderer._fit_house(raw_origin, "manor_wide", 3, BuildingPiece.MATERIAL_WOOD, world, chunk_coord)
+
+	assert_false(chosen.is_empty(), "a smaller shape should have been found for the pocket")
+	if chosen.is_empty():
+		return
+	assert_ne(chosen.blueprint_id, "manor_wide", "the manor cannot fit; a smaller shape was chosen instead")
+	assert_true(renderer._house_blueprint.footprint_for(chosen.blueprint_id).x <= 5)
+	for cell in chosen.pieces:
+		var g: Vector2i = chosen.origin + cell
+		assert_false(world.water_cells.has(g), "the fallback house still stands on dry ground")
+	assert_true(manor.size() > chosen.pieces.size(), "sanity: the fallback really is smaller")
+
+
+func test_a_shape_that_fits_is_kept_rather_than_shrunk():
+	var chunk_coord := Vector2i(11, 12)
+	var world := StubWorld.new()
+	var chosen: Dictionary = renderer._fit_house(
+		chunk_coord * CHUNK_SIZE + Vector2i(10, 10), "manor_wide", 3, BuildingPiece.MATERIAL_WOOD, world, chunk_coord
+	)
+	assert_eq(chosen.get("blueprint_id", ""), "manor_wide", "clear ground everywhere: the chosen shape stands as chosen")
