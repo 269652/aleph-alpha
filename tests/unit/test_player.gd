@@ -39,6 +39,8 @@ const StarterKit = preload("res://src/gameplay/starter_kit.gd")
 const BeeHiveMarker = preload("res://src/rendering/bee_hive_marker.gd")
 const BeeColony = preload("res://src/world/bee_colony.gd")
 const LivesTracker = preload("res://src/gameplay/lives_tracker.gd")
+const PlayerIdentity = preload("res://src/emergence/player_identity.gd")
+const ConstructionProject = preload("res://src/emergence/construction_project.gd")
 
 const TILE_SIZE := TerrainRenderer.TILE_SIZE
 
@@ -443,6 +445,75 @@ func test_try_learn_blueprint_fails_and_keeps_the_item_when_already_known():
 
 func test_try_learn_blueprint_fails_gracefully_with_no_such_item_carried():
 	assert_false(player._try_learn_blueprint("blueprint_small_house"))
+
+
+# -- building a real house from a learned blueprint (docs/concept/ ----------
+# -- workforce.md's "Starting a real player-owned construction project" -----
+# -- and "The fork" sections) -- the build-it-yourself half; hiring an ------
+# -- NPC carpenter is its own, not-yet-built, follow-up. ---------------------
+
+## Checked in an order that never wastes material -- even with enough
+## Carpentry and enough wood on hand, a blueprint that was never learned
+## refuses outright, before either is touched.
+func test_try_build_house_from_blueprint_fails_without_the_blueprint_unlocked():
+	_give("wood", 30)
+	player.allocated_nodes = {"carpentry_1": true}
+
+	assert_false(player._try_build_house_from_blueprint("small_house"))
+
+	assert_eq(player.inventory_counts().get("wood", 0), 30)
+
+
+## required_skill's second real consumer (the first being the sagewerk
+## recipe) -- with the blueprint learned and the material on hand but no
+## Carpentry allocated, Player.craft's own already-correct skill gate
+## refuses, and nothing is consumed.
+func test_try_build_house_from_blueprint_fails_without_enough_carpentry_skill():
+	chunk_manager.record_blueprint_learned_if_new("small_house")
+	_give("wood", 30)
+
+	assert_false(player._try_build_house_from_blueprint("small_house"))
+
+	assert_eq(player.inventory_counts().get("wood", 0), 30)
+
+
+## The whole real path, end to end: blueprint known, one carpentry_1 node
+## allocated (small_house's own required_skill level, one node below the
+## sagewerk's own two-node bar), real wood on hand -- a real house lands
+## in the world, its wood is spent, and the player's own household really
+## owns it.
+func test_try_build_house_from_blueprint_succeeds_and_grants_a_real_house():
+	chunk_manager.record_blueprint_learned_if_new("small_house")
+	_give("wood", 30)
+	player.allocated_nodes = {"carpentry_1": true}
+
+	assert_true(player._try_build_house_from_blueprint("small_house"))
+
+	assert_eq(player.inventory_counts().get("wood", 0), 0)
+	var household := chunk_manager.household_store().household_for(PlayerIdentity.PLAYER_ENTITY_ID)
+	assert_not_null(household, "the player should have a real household once they own real property")
+	assert_eq(household.property.size(), 1)
+	var project := chunk_manager.construction_project_store().get_project(
+		chunk_manager.construction_project_store().to_dicts()[0]["id"]
+	)
+	assert_eq(project.status, ConstructionProject.Status.COMPLETE)
+	assert_eq(project.household_id, household.id)
+
+
+## Refuses cleanly (and spends nothing) when the target footprint has
+## nowhere real to go -- the same "check before touching material"
+## ordering, now exercised through the full player-facing path rather
+## than EarthChunkManager.can_build_house_from_blueprint directly.
+func test_try_build_house_from_blueprint_fails_when_the_footprint_is_occupied():
+	chunk_manager.record_blueprint_learned_if_new("small_house")
+	_give("wood", 30)
+	player.allocated_nodes = {"carpentry_1": true}
+	var target := player._tile_targeting.facing_tile(player.current_tile(), player._last_facing_direction)
+	chunk_manager.build_at_global(target.x, target.y, "campfire")
+
+	assert_false(player._try_build_house_from_blueprint("small_house"))
+
+	assert_eq(player.inventory_counts().get("wood", 0), 30)
 
 
 # -- collecting a Sägewerk's real StructureStock straight into inventory ------

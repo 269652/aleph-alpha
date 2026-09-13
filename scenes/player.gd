@@ -80,6 +80,7 @@ const WorldCoordinates = preload("res://src/world/world_coordinates.gd")
 const EarthChunkGenerator = preload("res://src/world/earth_chunk_generator.gd")
 const TerrainPassability = preload("res://src/gameplay/terrain_passability.gd")
 const EarthChunkManager = preload("res://src/world/earth_chunk_manager.gd")
+const PlayerIdentity = preload("res://src/emergence/player_identity.gd")
 const StoneSize = preload("res://src/world/stone_size.gd")
 const Kick = preload("res://src/gameplay/kick.gd")
 const InputLatch = preload("res://src/gameplay/input_latch.gd")
@@ -1533,6 +1534,34 @@ func _try_learn_blueprint(item_id: String) -> bool:
 	if inventory.remove(item_id, 1) <= 0:
 		return false
 	_chunk_manager.record_blueprint_learned_if_new(recipe_id)
+	return true
+
+
+## Builds `recipe_id`'s house for real, facing tile by facing tile, the way
+## every other placement verb already targets (see BuilderMarker/the simple
+## structure-build flow) -- docs/concept/workforce.md's "Starting a real
+## player-owned construction project" and "The fork" sections (this is the
+## build-it-yourself half; hiring an NPC carpenter when the player's own
+## Carpentry is too low is its own, not-yet-built, follow-up).
+##
+## Ordered so the player's material is never wasted on a placement that was
+## always going to fail: EarthChunkManager.can_build_house_from_blueprint is
+## a pure query, checked BEFORE the atomic, material-consuming craft() call
+## (unchanged -- its own required_skill/inventory gate is exactly what makes
+## "carpentry too low" or "not enough wood" refuse here too, the same
+## sagewerk gate already exercises). Only once craft() has actually
+## succeeded (skill met, wood spent) does the house really land, via
+## stamp_house_and_grant_ownership -- into the player's own household,
+## formed on demand the same idempotent way HouseholdStore.form_household
+## already promises (a second house never creates a second household).
+func _try_build_house_from_blueprint(recipe_id: String) -> bool:
+	var target := _tile_targeting.facing_tile(current_tile(), _last_facing_direction)
+	if not _chunk_manager.can_build_house_from_blueprint(recipe_id, target):
+		return false
+	if not craft(recipe_id):
+		return false
+	var household := _chunk_manager.household_store().form_household(PlayerIdentity.PLAYER_ENTITY_ID)
+	_chunk_manager.stamp_house_and_grant_ownership(recipe_id, target, household.id)
 	return true
 
 
