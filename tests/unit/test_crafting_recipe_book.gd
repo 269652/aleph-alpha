@@ -768,3 +768,73 @@ func _cost_by_item(inputs: Array) -> Dictionary:
 	for input in inputs:
 		cost[input["item_id"]] = input["count"]
 	return cost
+
+
+## "Bench recipe" -- the ONE predicate deciding what a player may craft by
+## hand from this book (docs/concept/production_chains.md "What the crafting
+## menu lists"). The book is deliberately wider than the bench: it also
+## carries the house-blueprint ledger recipes (output symbolic of a
+## structure, never an ItemCatalog item) and "automated" resolver data.
+## Both the crafting menu (CraftingWindow.bench_recipe_ids) and the dev
+## console's /craft gate on THIS, so the two surfaces can never drift --
+## before it, the console routed any id in recipe_ids() straight into
+## Player.craft, which for a house recipe passed the skill gate, consumed
+## the wood, and hand back nothing.
+func test_is_bench_recipe_refuses_house_blueprints_whose_output_is_no_item():
+	const ItemCatalog = preload("res://src/gameplay/item_catalog.gd")
+	var catalog := ItemCatalog.new()
+	for recipe_id in ["small_house", "cottage", "manor", "grand_estate"]:
+		assert_true(book.recipe_ids().has(recipe_id), "%s must still be a real recipe" % recipe_id)
+		assert_false(catalog.has(recipe_id), "%s is a structure, never an item" % recipe_id)
+		assert_false(book.is_bench_recipe(recipe_id, catalog), "%s must not count as a bench recipe" % recipe_id)
+
+
+func test_is_bench_recipe_refuses_automated_recipes_and_unknown_ids():
+	const ItemCatalog = preload("res://src/gameplay/item_catalog.gd")
+	var catalog := ItemCatalog.new()
+	assert_true(catalog.has("wheat"), "precondition: grow_wheat's output IS an item, only the automated flag can refuse it")
+	assert_false(book.is_bench_recipe("grow_wheat", catalog))
+	assert_false(book.is_bench_recipe("no_such_recipe", catalog))
+
+
+## Structures whose output IS a placeable item, and the structure-gated
+## hand crafts of the bread chain, are real bench recipes -- the filter
+## must exclude exactly the two ledger/resolver classes and nothing else.
+func test_is_bench_recipe_accepts_hand_crafts_including_placeable_structures():
+	const ItemCatalog = preload("res://src/gameplay/item_catalog.gd")
+	var catalog := ItemCatalog.new()
+	for recipe_id in ["torch", "sagewerk", "mill", "campfire", "mill_flour", "bake_bread"]:
+		assert_true(book.is_bench_recipe(recipe_id, catalog), "%s is a real bench craft" % recipe_id)
+
+
+## bench_recipe_ids is recipe_ids filtered by the predicate -- derived here
+## independently from the two tested facts it composes.
+func test_bench_recipe_ids_is_recipe_ids_filtered_by_the_predicate():
+	const ItemCatalog = preload("res://src/gameplay/item_catalog.gd")
+	var catalog := ItemCatalog.new()
+	var expected: Array = []
+	for recipe_id in book.recipe_ids():
+		if book.recipe_is_automated(recipe_id):
+			continue
+		if not catalog.has(book.recipe_output(recipe_id)["item_id"]):
+			continue
+		expected.append(recipe_id)
+	var actual: Array = book.bench_recipe_ids(catalog)
+	expected.sort()
+	actual.sort()
+	assert_gt(expected.size(), 0, "the bench set must not be empty or this proves nothing")
+	assert_lt(expected.size(), book.recipe_ids().size(), "the book is wider than the bench on purpose")
+	assert_eq(actual, expected)
+
+
+## The catalog handed in is what decides whether an output is an item --
+## the predicate reads it, rather than keeping its own list of house ids
+## that would go stale the next time a ledger-only recipe is added.
+class OnlyTorchCatalog:
+	func has(item_id: String) -> bool:
+		return item_id == "torch"
+
+
+func test_the_catalog_decides_which_outputs_count_as_items():
+	assert_eq(book.bench_recipe_ids(OnlyTorchCatalog.new()), ["torch"])
+	assert_false(book.is_bench_recipe("sagewerk", OnlyTorchCatalog.new()))

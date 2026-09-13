@@ -267,3 +267,16 @@ func test_refresh_survives_being_called_from_within_a_cards_own_click_handler():
 	card.gui_input.emit(event)  # what a real click ultimately does
 
 	assert_eq(window._cards.size(), card_count_before, "the recipe grid should still show every card, not be corrupted")
+
+
+## The window's list IS the recipe book's own bench predicate
+## (CraftingRecipeBook.bench_recipe_ids) -- the SAME rule the dev console's
+## /craft gates on. One shared predicate rather than a copy per surface, so
+## the menu and the console can never disagree about what a bench craft is.
+func test_the_window_lists_exactly_the_books_bench_recipes():
+	var from_window: Array = window.bench_recipe_ids()
+	var from_book: Array = _recipe_book.bench_recipe_ids(_catalog)
+	from_window.sort()
+	from_book.sort()
+	assert_gt(from_book.size(), 0, "the bench set must not be empty or this proves nothing")
+	assert_eq(from_window, from_book)
