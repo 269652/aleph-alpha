@@ -1645,6 +1645,7 @@ func record_player_settled_if_new(settlement_id: String) -> bool:
 ## OCCUPATION already sets for a similarly small id->id mapping.
 const BLUEPRINT_RECIPE_BY_ITEM_ID := {
 	"blueprint_small_house": "small_house",
+	"blueprint_cottage": "cottage",
 }
 
 

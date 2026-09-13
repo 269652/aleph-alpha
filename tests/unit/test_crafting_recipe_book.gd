@@ -36,8 +36,9 @@ func test_recipe_ids_returns_all_defined_recipes():
 	# (2 more) -- both previously had NO recipe at all, reachable only via
 	# /give, the shop, or the old hardcoded starting-kit grant.
 	# + workforce (docs/concept/workforce.md): small_house, the first
-	# blueprint-gated, multi-piece construction-ledger recipe (1 more).
-	assert_eq(ids.size(), 41)
+	# blueprint-gated, multi-piece construction-ledger recipe, and cottage,
+	# its second tier (2 more).
+	assert_eq(ids.size(), 42)
 
 
 func test_iron_sword_is_craftable_from_ingots_and_a_stick():
@@ -248,6 +249,46 @@ func test_small_house_recipe_inputs_agree_with_the_hut_tiny_blueprints_real_cost
 
 	var inputs := book.recipe_inputs("small_house")
 	assert_eq(inputs.size(), 1, "hut_tiny is an all-wood shape -- one input, no invented second material")
+	assert_eq(inputs[0]["item_id"], "wood")
+	assert_eq(inputs[0]["count"], total_wood)
+
+
+## The second tier (docs/concept/workforce.md's "Blueprint tiers" section):
+## the SAME ceiling the sagewerk recipe itself uses (carpentry_level 2.0),
+## not an invented harder number -- "as sophisticated as this project's own
+## existing hardest-to-reach structure."
+func test_cottage_recipe_requires_the_same_carpentry_ceiling_as_sagewerk():
+	assert_true(book.recipe_ids().has("cottage"))
+	assert_eq(book.recipe_output("cottage")["item_id"], "cottage")
+	var required_skill := book.recipe_required_skill("cottage")
+	assert_eq(required_skill["stat_name"], "carpentry_level")
+	assert_eq(required_skill["level"], book.recipe_required_skill("sagewerk")["level"])
+
+
+## Pinned to agree with HouseBlueprint's own real "cottage_bright" piece
+## list, the same discipline test_small_house_recipe_inputs_agree_with_the_
+## hut_tiny_blueprints_real_cost already applies one tier down.
+## cottage_bright has 3 real windows, but its total cost still does not
+## depend on which seed places them: every wall/window/door/floor/roof
+## piece of the same category costs the same regardless of which specific
+## cell it lands on.
+func test_cottage_recipe_inputs_agree_with_the_cottage_bright_blueprints_real_cost():
+	const HouseBlueprint = preload("res://src/gameplay/house_blueprint.gd")
+	const BuildingPiece = preload("res://src/gameplay/building_piece.gd")
+	var house_blueprint := HouseBlueprint.new()
+	var total_wood := 0
+	for pieces in [house_blueprint.build("cottage_bright", 0), house_blueprint.build_roofs("cottage_bright", 0)]:
+		for cell in pieces:
+			var cost: Dictionary = BuildingPiece.cost_of(pieces[cell])
+			total_wood += int(cost.get("wood", 0))
+	assert_gt(total_wood, 0, "precondition: cottage_bright really does cost real wood")
+	assert_gt(
+		total_wood, book.recipe_inputs("small_house")[0]["count"],
+		"a cottage should cost more than the smaller hut_tiny house"
+	)
+
+	var inputs := book.recipe_inputs("cottage")
+	assert_eq(inputs.size(), 1, "cottage_bright is an all-wood shape -- one input, no invented second material")
 	assert_eq(inputs[0]["item_id"], "wood")
 	assert_eq(inputs[0]["count"], total_wood)
 

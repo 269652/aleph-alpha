@@ -296,6 +296,11 @@ const _ITEMS := {
 	# field_journal): read once via Player._try_learn_blueprint, not
 	# carried in bulk.
 	"blueprint_small_house": ["Blueprint: Small House", "blueprint", 1, 0.0],
+	# Second tier (see docs/concept/workforce.md's "Blueprint tiers"
+	# section) -- the same "cottage_bright" HouseBlueprint shape the
+	# procedural village generator already builds for NPCs, unlocked for
+	# the player's own construction.
+	"blueprint_cottage": ["Blueprint: Cottage", "blueprint", 1, 0.0],
 }
 
 

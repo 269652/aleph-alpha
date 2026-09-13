@@ -169,6 +169,21 @@ const _RECIPES := {
 		"output": {"item_id": "small_house", "count": 1},
 		"required_skill": {"stat_name": "carpentry_level", "level": 1.0},
 	},
+	# The second tier (see docs/concept/workforce.md's "Blueprint tiers"
+	# section) -- reuses the real "cottage_bright" HouseBlueprint shape
+	# (5x5, 3 windows), same framing/format as small_house immediately
+	# above. required_skill is the SAME ceiling the sagewerk recipe itself
+	# uses (carpentry_level 2.0) -- "as sophisticated as this project's own
+	# existing hardest-to-reach structure," not an invented harder number
+	# (see workforce.md's own honest note on why nothing here goes above
+	# 2.0 yet). inputs pinned to agree with cottage_bright's real cost --
+	# see test_cottage_recipe_inputs_agree_with_the_cottage_bright_
+	# blueprints_real_cost.
+	"cottage": {
+		"inputs": [{"item_id": "wood", "count": 82}],
+		"output": {"item_id": "cottage", "count": 1},
+		"required_skill": {"stat_name": "carpentry_level", "level": 2.0},
+	},
 	# The Sägewerk's own log -> Balken/Planke shaping, mirrored here ONLY so
 	# NeedResolver (docs/concept/production_chains.md) can reason about
 	# beam/plank's real dependency chain -- the Sägewerk's actual, already-

@@ -28,6 +28,7 @@ const CATALOG := {
 	"leather_helm": 25,
 	"iron_sword": 60,
 	"blueprint_small_house": 80,
+	"blueprint_cottage": 220,
 }
 
 

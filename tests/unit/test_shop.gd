@@ -36,6 +36,10 @@ func test_shop_sells_the_first_house_blueprint():
 	assert_true(shop.known_item_ids().has("blueprint_small_house"))
 
 
+func test_shop_sells_the_cottage_blueprint():
+	assert_true(shop.known_item_ids().has("blueprint_cottage"))
+
+
 func test_can_afford_true_when_wallet_covers_the_price():
 	var item_id: String = shop.known_item_ids()[0]
 	assert_true(shop.can_afford(shop.price_of(item_id), item_id))

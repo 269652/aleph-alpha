@@ -130,6 +130,14 @@ func test_blueprint_small_house_is_a_real_non_stackable_blueprint_kind_item():
 	assert_gt(item.display_name.length(), 0)
 
 
+## The second tier (docs/concept/workforce.md's "Blueprint tiers" section).
+func test_blueprint_cottage_is_a_real_non_stackable_blueprint_kind_item():
+	assert_true(catalog.has("blueprint_cottage"))
+	assert_eq(catalog.kind_of("blueprint_cottage"), "blueprint")
+	var item := catalog.make("blueprint_cottage")
+	assert_eq(item.max_stack, 1)
+
+
 func test_catalog_has_a_fishing_rod():
 	assert_true(catalog.has("fishing_rod"))
 	assert_eq(catalog.make("fishing_rod").kind, "tool")
