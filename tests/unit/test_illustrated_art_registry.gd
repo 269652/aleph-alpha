@@ -78,6 +78,69 @@ func test_campfires_burn_and_glow_animations_loop():
 	assert_true(entry.animations.glow.loop)
 
 
+# -- 2026-09-13 per-item composite sheet mapping (item_illustrations.md's
+# own "Per-item composite sheet mapping"): durability art generalizes
+# beyond the original wooden_club/iron_sword/crude_blade three, to a
+# fourth "used" state, and which static rows (icon/held/equipped/ground)
+# apply is a function of item kind, not universal.
+
+func test_stone_pickaxe_entry_has_the_documented_shape():
+	# A melee-swung tool: icon, held, ground -- no equipped (a pickaxe is
+	# not worn on the body the way armor or a sheathed blade is).
+	var entry := registry.entry_for("stone_pickaxe")
+	assert_true(entry.contexts.has("icon"))
+	assert_true(entry.contexts.has("held"))
+	assert_eq(entry.contexts.held.anchor, "pivot")
+	assert_true(entry.contexts.has("ground"))
+	assert_false(entry.contexts.has("equipped"), "a pickaxe is not worn on the body")
+	assert_eq(entry.base_state, "pristine")
+	for state in ["pristine", "used", "worn", "broken"]:
+		assert_true(entry.states.has(state), "stone_pickaxe should have the %s state" % state)
+
+
+func test_crude_blade_entry_has_the_documented_shape():
+	# A weapon: the full icon/held/equipped/ground row set, plus a real
+	# attack swing animation -- pristine-state frames only, the same
+	# "worn/attack falls back to pristine/attack" rule the resolver's own
+	# wooden_club worked example already establishes, so no separate
+	# worn/broken attack art is needed here.
+	var entry := registry.entry_for("crude_blade")
+	for context in ["icon", "held", "equipped", "ground"]:
+		assert_true(entry.contexts.has(context), "crude_blade should declare a %s context" % context)
+	for state in ["pristine", "used", "worn", "broken"]:
+		assert_true(entry.states.has(state), "crude_blade should have the %s state" % state)
+	assert_true(entry.animations.has("attack"))
+	assert_eq(entry.animations.attack.fps, 8)
+	assert_false(entry.animations.attack.loop)
+
+
+func test_leather_helm_entry_has_the_documented_shape():
+	# Armor: icon, equipped (worn on the rig slot), ground -- no held, you
+	# don't swing a helmet. Armor wears too (item_durability.md's own
+	# open question, resolved 2026-09-13), so it gets the full 4 states.
+	var entry := registry.entry_for("leather_helm")
+	assert_true(entry.contexts.has("icon"))
+	assert_true(entry.contexts.has("equipped"))
+	assert_true(entry.contexts.has("ground"))
+	assert_false(entry.contexts.has("held"), "you don't swing a helmet")
+	for state in ["pristine", "used", "worn", "broken"]:
+		assert_true(entry.states.has(state), "leather_helm should have the %s state" % state)
+
+
+func test_furnace_entry_shares_campfires_fire_status_vocabulary():
+	# A placeable: furnace's own states are fire-status (unlit/lit/embers),
+	# the same vocabulary campfire already uses -- NOT durability, since a
+	# stone furnace's condition axis is whether it's burning, not wear.
+	var entry := registry.entry_for("furnace")
+	assert_true(entry.contexts.has("placed"))
+	assert_eq(entry.contexts.placed.anchor, "footprint")
+	assert_eq(entry.base_state, "unlit")
+	for state in ["unlit", "lit", "embers"]:
+		assert_true(entry.states.has(state), "furnace should have the %s state" % state)
+	assert_true(entry.animations.has("burn"))
+	assert_true(entry.animations.burn.loop)
+
+
 # -- self-consistency: every subject's own declared defaults must be real -
 #
 # The resolver's own base-case (mask=0, zero axes relaxed) and its base-

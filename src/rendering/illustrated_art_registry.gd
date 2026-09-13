@@ -149,10 +149,18 @@ const _SUBJECTS := {
 	"beam": {"contexts": {"icon": {"seasonal": false, "anchor": "center"}}, "base_season": "any", "states": ["default"], "base_state": "default", "animations": {"still": {"fps": 0, "loop": false}}, "overlays": [], "chroma_key": Color(1.0, 0.0, 1.0), "chroma_key_tolerance": 0.25},
 	"plank": {"contexts": {"icon": {"seasonal": false, "anchor": "center"}}, "base_season": "any", "states": ["default"], "base_state": "default", "animations": {"still": {"fps": 0, "loop": false}}, "overlays": [], "chroma_key": Color(1.0, 0.0, 1.0), "chroma_key_tolerance": 0.25},
 	"saw": {"contexts": {"icon": {"seasonal": false, "anchor": "center"}}, "base_season": "any", "states": ["default"], "base_state": "default", "animations": {"still": {"fps": 0, "loop": false}}, "overlays": [], "chroma_key": Color(1.0, 0.0, 1.0), "chroma_key_tolerance": 0.25},
-	"crude_blade": {"contexts": {"icon": {"seasonal": false, "anchor": "center"}}, "base_season": "any", "states": ["pristine", "worn", "broken"], "base_state": "pristine", "animations": {"still": {"fps": 0, "loop": false}}, "overlays": [], "chroma_key": Color(1.0, 0.0, 1.0), "chroma_key_tolerance": 0.25},
+	# 2026-09-13: the full weapon row set (icon/held/equipped/ground) and a
+	# real attack swing -- pristine-state frames only, the resolver's own
+	# state->base_state fallback already serves them for worn/broken (the
+	# same "a worn club still swings using the pristine frames" rule).
+	"crude_blade": {"contexts": {"icon": {"seasonal": false, "anchor": "center"}, "held": {"seasonal": false, "anchor": "pivot"}, "equipped": {"seasonal": false, "anchor": "pivot"}, "ground": {"seasonal": false, "anchor": "center"}}, "base_season": "any", "states": ["pristine", "used", "worn", "broken"], "base_state": "pristine", "animations": {"still": {"fps": 0, "loop": false}, "attack": {"fps": 8, "loop": false}}, "overlays": [], "chroma_key": Color(1.0, 0.0, 1.0), "chroma_key_tolerance": 0.25},
 
 	"stone": {"contexts": {"icon": {"seasonal": false, "anchor": "center"}}, "base_season": "any", "states": ["default"], "base_state": "default", "animations": {"still": {"fps": 0, "loop": false}}, "overlays": [], "chroma_key": Color(1.0, 0.0, 1.0), "chroma_key_tolerance": 0.25},
-	"stone_pickaxe": {"contexts": {"icon": {"seasonal": false, "anchor": "center"}}, "base_season": "any", "states": ["default"], "base_state": "default", "animations": {"still": {"fps": 0, "loop": false}}, "overlays": [], "chroma_key": Color(1.0, 0.0, 1.0), "chroma_key_tolerance": 0.25},
+	# 2026-09-13 (item_illustrations.md "Per-item composite sheet mapping"):
+	# a melee-swung tool -- icon/held/ground, no equipped, real 4-state
+	# durability (pristine/used/worn/broken) generalized beyond the
+	# original three combat items.
+	"stone_pickaxe": {"contexts": {"icon": {"seasonal": false, "anchor": "center"}, "held": {"seasonal": false, "anchor": "pivot"}, "ground": {"seasonal": false, "anchor": "center"}}, "base_season": "any", "states": ["pristine", "used", "worn", "broken"], "base_state": "pristine", "animations": {"still": {"fps": 0, "loop": false}}, "overlays": [], "chroma_key": Color(1.0, 0.0, 1.0), "chroma_key_tolerance": 0.25},
 	"iron_ore": {"contexts": {"icon": {"seasonal": false, "anchor": "center"}}, "base_season": "any", "states": ["default"], "base_state": "default", "animations": {"still": {"fps": 0, "loop": false}}, "overlays": [], "chroma_key": Color(1.0, 0.0, 1.0), "chroma_key_tolerance": 0.25},
 	"copper_ore": {"contexts": {"icon": {"seasonal": false, "anchor": "center"}}, "base_season": "any", "states": ["default"], "base_state": "default", "animations": {"still": {"fps": 0, "loop": false}}, "overlays": [], "chroma_key": Color(1.0, 0.0, 1.0), "chroma_key_tolerance": 0.25},
 	"coal": {"contexts": {"icon": {"seasonal": false, "anchor": "center"}}, "base_season": "any", "states": ["default"], "base_state": "default", "animations": {"still": {"fps": 0, "loop": false}}, "overlays": [], "chroma_key": Color(1.0, 0.0, 1.0), "chroma_key_tolerance": 0.25},
@@ -174,14 +182,21 @@ const _SUBJECTS := {
 	"rare_fish": {"contexts": {"icon": {"seasonal": false, "anchor": "center"}}, "base_season": "any", "states": ["default"], "base_state": "default", "animations": {"still": {"fps": 0, "loop": false}}, "overlays": [], "chroma_key": Color(1.0, 0.0, 1.0), "chroma_key_tolerance": 0.25},
 	"legendary_fish": {"contexts": {"icon": {"seasonal": false, "anchor": "center"}}, "base_season": "any", "states": ["default"], "base_state": "default", "animations": {"still": {"fps": 0, "loop": false}}, "overlays": [], "chroma_key": Color(1.0, 0.0, 1.0), "chroma_key_tolerance": 0.25},
 
-	"leather_helm": {"contexts": {"icon": {"seasonal": false, "anchor": "center"}}, "base_season": "any", "states": ["default"], "base_state": "default", "animations": {"still": {"fps": 0, "loop": false}}, "overlays": [], "chroma_key": Color(1.0, 0.0, 1.0), "chroma_key_tolerance": 0.25},
+	# 2026-09-13: armor -- icon/equipped/ground, no held (you don't swing a
+	# helmet). Armor wears too (item_durability.md's own open question,
+	# resolved this pass), so it gets the same 4-state vocabulary.
+	"leather_helm": {"contexts": {"icon": {"seasonal": false, "anchor": "center"}, "equipped": {"seasonal": false, "anchor": "pivot"}, "ground": {"seasonal": false, "anchor": "center"}}, "base_season": "any", "states": ["pristine", "used", "worn", "broken"], "base_state": "pristine", "animations": {"still": {"fps": 0, "loop": false}}, "overlays": [], "chroma_key": Color(1.0, 0.0, 1.0), "chroma_key_tolerance": 0.25},
 	"leather_chest": {"contexts": {"icon": {"seasonal": false, "anchor": "center"}}, "base_season": "any", "states": ["default"], "base_state": "default", "animations": {"still": {"fps": 0, "loop": false}}, "overlays": [], "chroma_key": Color(1.0, 0.0, 1.0), "chroma_key_tolerance": 0.25},
 	"leather_legs": {"contexts": {"icon": {"seasonal": false, "anchor": "center"}}, "base_season": "any", "states": ["default"], "base_state": "default", "animations": {"still": {"fps": 0, "loop": false}}, "overlays": [], "chroma_key": Color(1.0, 0.0, 1.0), "chroma_key_tolerance": 0.25},
 	"leather_boots": {"contexts": {"icon": {"seasonal": false, "anchor": "center"}}, "base_season": "any", "states": ["default"], "base_state": "default", "animations": {"still": {"fps": 0, "loop": false}}, "overlays": [], "chroma_key": Color(1.0, 0.0, 1.0), "chroma_key_tolerance": 0.25},
 
 	"iron_ingot": {"contexts": {"icon": {"seasonal": false, "anchor": "center"}}, "base_season": "any", "states": ["default"], "base_state": "default", "animations": {"still": {"fps": 0, "loop": false}}, "overlays": [], "chroma_key": Color(1.0, 0.0, 1.0), "chroma_key_tolerance": 0.25},
 	"copper_ingot": {"contexts": {"icon": {"seasonal": false, "anchor": "center"}}, "base_season": "any", "states": ["default"], "base_state": "default", "animations": {"still": {"fps": 0, "loop": false}}, "overlays": [], "chroma_key": Color(1.0, 0.0, 1.0), "chroma_key_tolerance": 0.25},
-	"furnace": {"contexts": {"icon": {"seasonal": false, "anchor": "center"}}, "base_season": "any", "states": ["default"], "base_state": "default", "animations": {"still": {"fps": 0, "loop": false}}, "overlays": [], "chroma_key": Color(1.0, 0.0, 1.0), "chroma_key_tolerance": 0.25},
+	# 2026-09-13: a placeable -- icon/ground plus its own "placed" surface
+	# (footprint anchor, mirroring campfire exactly), sharing campfire's own
+	# fire-status vocabulary (unlit/lit/embers) rather than durability --
+	# whether a furnace is lit is its condition axis, not wear.
+	"furnace": {"contexts": {"icon": {"seasonal": false, "anchor": "center"}, "ground": {"seasonal": false, "anchor": "center"}, "placed": {"seasonal": false, "anchor": "footprint"}}, "base_season": "any", "states": ["unlit", "lit", "embers"], "base_state": "unlit", "animations": {"still": {"fps": 0, "loop": false}, "burn": {"fps": 8, "loop": true}, "glow": {"fps": 4, "loop": true}}, "overlays": [], "chroma_key": Color(1.0, 0.0, 1.0), "chroma_key_tolerance": 0.25},
 	"iron_helm": {"contexts": {"icon": {"seasonal": false, "anchor": "center"}}, "base_season": "any", "states": ["default"], "base_state": "default", "animations": {"still": {"fps": 0, "loop": false}}, "overlays": [], "chroma_key": Color(1.0, 0.0, 1.0), "chroma_key_tolerance": 0.25},
 	"iron_chest": {"contexts": {"icon": {"seasonal": false, "anchor": "center"}}, "base_season": "any", "states": ["default"], "base_state": "default", "animations": {"still": {"fps": 0, "loop": false}}, "overlays": [], "chroma_key": Color(1.0, 0.0, 1.0), "chroma_key_tolerance": 0.25},
 	"iron_legs": {"contexts": {"icon": {"seasonal": false, "anchor": "center"}}, "base_season": "any", "states": ["default"], "base_state": "default", "animations": {"still": {"fps": 0, "loop": false}}, "overlays": [], "chroma_key": Color(1.0, 0.0, 1.0), "chroma_key_tolerance": 0.25},
