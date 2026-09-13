@@ -104,3 +104,16 @@ func test_to_dicts_and_from_dicts_round_trip_a_whole_store():
 
 	assert_eq(restored.household_for("npc:1").property, ["house:0_0_0"])
 	assert_eq(restored.owner_of("house:0_0_0"), household.id)
+
+
+## A resident household's wallet balance (docs/concept/workforce.md's wages/
+## rent loop) is real, persistent state -- it must round-trip the same way
+## members/property already do, or a household's own gold would silently
+## vanish on every save/load.
+func test_to_dicts_and_from_dicts_round_trip_a_households_wallet_balance():
+	var household := store.form_household("npc:1")
+	household.wallet.add(75)
+
+	var restored := HouseholdStore.from_dicts(store.to_dicts())
+
+	assert_eq(restored.household_for("npc:1").wallet.balance, 75)

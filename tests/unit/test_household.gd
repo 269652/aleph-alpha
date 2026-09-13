@@ -30,3 +30,20 @@ func test_the_household_id_is_derived_from_its_founder():
 func test_a_fresh_household_owns_no_property():
 	var household := Household.for_founder("npc:1")
 	assert_eq(household.property, [])
+
+
+# -- wallet (docs/concept/workforce.md's "Wages: the player pays for a ------
+# -- filled slot" section) -- a resident household needs somewhere real to --
+# -- hold gold that survives its own house's chunk unloading; the SAME real -
+# -- Wallet class Player/NpcEconomy already use, not a second currency type -
+
+func test_a_fresh_household_starts_with_an_empty_wallet():
+	var household := Household.for_founder("npc:1")
+	assert_eq(household.wallet.balance, 0)
+
+
+func test_a_households_wallet_really_holds_and_spends_gold():
+	var household := Household.for_founder("npc:1")
+	household.wallet.add(50)
+	assert_true(household.wallet.spend(20))
+	assert_eq(household.wallet.balance, 30)

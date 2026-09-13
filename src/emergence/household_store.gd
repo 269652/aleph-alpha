@@ -71,7 +71,12 @@ func to_dicts() -> Array:
 	var out: Array = []
 	for id in _households:
 		var household: Household = _households[id]
-		out.append({"id": household.id, "members": household.members, "property": household.property})
+		out.append({
+			"id": household.id,
+			"members": household.members,
+			"property": household.property,
+			"wallet_balance": household.wallet.balance,
+		})
 	return out
 
 
@@ -88,6 +93,7 @@ static func from_dicts(dicts: Array) -> RefCounted:
 			household.members.append(str(member))
 		for property_id in d.get("property", []):
 			household.property.append(str(property_id))
+		household.wallet.add(int(d.get("wallet_balance", 0)))
 
 		store._households[household.id] = household
 		for member in household.members:
