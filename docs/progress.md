@@ -20753,3 +20753,52 @@ the test suite. `docs/concept/workforce.md` and `housing.md` are both
 updated in place to reflect this. Do not merge to `main` without a real GUT
 pass first.
 
+### Needs v2 and civic taxation (2026-09-13) -- still UNTESTED
+
+The user asked directly for the two items the prior pass named as
+"explicitly out of scope" (needs v2, civic/government taxation) to be
+built too. Both real, narrowly-scoped MVPs, not the full genre-scale
+systems those names could imply -- named honestly as such in both
+`workforce.md` and `governance.md`.
+
+- **Needs v2**: `EarthChunkManager.resident_happiness` -- a resident is
+  "unhappy" only when BOTH real signals are bad at once: their own
+  settlement is genuinely `DECLINING` (needs v1's own already-real signal)
+  AND their own house has zero real furniture (`housing.md`'s own already-
+  shipped `appeal_score` formula, `furniture_ids.size()`, read off just
+  that house's real footprint via a new `_house_furniture_count`).
+  Deliberately conjunctive -- a bare house in a thriving settlement is
+  merely undecorated, not a hardship. A REAL consequence, not a cosmetic
+  score: an unhappy, currently-assigned resident quits (unassigned) on
+  `step_workforce_economy`'s own next tick, deterministically (no RNG,
+  matching this codebase's own convention) -- closing `workforce.md`'s own
+  "does a resident ever leave voluntarily" Open Question with a real yes.
+  Explicitly not built: an individual's own live hunger (still reads the
+  settlement's aggregate food stock), real multi-GOODS consumption
+  (clothing/tools/luxuries), a graded happiness scale, or any consequence
+  beyond quitting -- named as "needs v3" in `workforce.md`'s own Open
+  Questions.
+
+- **Civic taxation**: `EarthChunkManager._levy_civic_tax`, the OTHER
+  direction from Rent -- a settlement's own real government (any real
+  `governance_form_for_settlement`, not `Governance.NONE`) taxes the
+  PLAYER's own property within it, on the same tick as wages/rent. Paid
+  into that settlement's own REAL shared purse
+  (`NpcEconomy.PURSE_META` on the older `VillageMarket`, resolved via the
+  SAME `SettlementFood.village_market_for` `_settlement_status_for`
+  already uses -- confirmed this is a DIFFERENT object from `_market_store`'s
+  own newer `Market`, so the deposit had to go to the real one, not the
+  more obvious-looking one) -- a real, spendable wealth-flow, not a number
+  that vanishes. Only reachable while a live NpcEconomy is loaded in that
+  settlement's own chunk (a real, honest gap for a far-away settlement, not
+  a silent write to the wrong object). `governance.md`'s own Status list
+  updated in place: its "taxation... needs a real currency/wealth-flow
+  system that doesn't exist yet" line is now half-true rather than fully
+  true, corrected to say so plainly. A flat rate regardless of governance
+  form, and taxing only the player (never NPC-to-NPC trade/production) --
+  both named as real, separate follow-ups, not silently assumed finished.
+
+Same "skip tests" instruction, same caveat: written directly against real,
+verified APIs, without TDD red-first, without running the suite. Do not
+merge to `main` without a real GUT pass first.
+

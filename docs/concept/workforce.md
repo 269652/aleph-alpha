@@ -669,6 +669,21 @@ Updated here and in `docs/progress.md` as slices land:
 - ✅ Needs v1: rent suspended for residents of a `DECLINING`
   (`SettlementState.status_for`, via a new `_settlement_status_for` helper
   mirroring `legitimacy_for_settlement`'s own derivation) settlement
+- ✅ Needs v2, a narrow real MVP: `EarthChunkManager.resident_happiness` —
+  "unhappy" only when the settlement is genuinely `DECLINING` AND the
+  resident's own house has zero real furniture (`housing.md`'s own
+  `appeal_score` formula, `furniture_ids.size()`, read off just that
+  house's footprint). A real consequence, not a cosmetic score: an
+  unhappy, currently-assigned resident quits on the next tick, closing
+  this doc's own "does a resident ever leave voluntarily" Open Question.
+  Deliberately NOT Anno's full multi-tier luxury-goods system — see Open
+  Questions for what "v3" would still need.
+- ✅ Civic taxation (see `governance.md`'s own updated Status list, cross-
+  referenced from here rather than duplicated): `EarthChunkManager.
+  _levy_civic_tax`, the OTHER direction from Rent above — a settlement's
+  own real government (any real `governance_form_for_settlement`, not
+  `Governance.NONE`) taxes the PLAYER's own property within it, paid into
+  that settlement's real shared purse.
 - 🚧 Interior furniture (see `housing.md`'s own Status list, cross-
   referenced from here rather than duplicated) -- real pieces and a real
   placement rule exist; the live chunk layer/rendering/player verb do not
@@ -749,11 +764,20 @@ face value.
   `Wallet`-to-`Wallet` transfer — real future unification work, deliberately
   not attempted this pass to avoid touching `Contract`'s many other,
   unrelated callers.
-- **Needs v2**: an individual resident's own hunger (not just the
-  settlement's aggregate food stock), multi-good consumption, and a real
-  happiness/satisfaction scalar with actual gameplay consequences (migration,
-  productivity, unrest) — section 10's own named, deliberate scope boundary.
-- **Civic/government taxation** (`governance.md`'s own much larger vision —
-  a settlement's government taxing property, trade, or the player) stays
-  exactly as unbuilt as it already was; this doc's "rent" is a landlord
-  collecting from their own tenants, never a government levying on anyone.
+- **Needs v3** (needs v2 shipped, see Status): an individual resident's own
+  hunger read live (not just the settlement's aggregate food stock, which
+  is what v2 still reads), genuine multi-GOOD consumption (clothing, tools,
+  luxuries — v2's own "furniture" signal is really a proxy for "has this
+  person invested in their home," not a goods-flow economy), a graded
+  happiness scale rather than a binary content/unhappy read, and further
+  consequences beyond quitting (productivity, migration, unrest).
+- **Should civic tax rate vary by governance form** (a merchant oligarchy
+  taxing harder than a cooperative administration, say) — shipped as one
+  flat `CIVIC_TAX_PER_TICK` regardless of which real form a settlement has,
+  deliberately not differentiated without real grounding for the specific
+  numbers a form-by-form split would need.
+- **Trade/production/household civic taxation** (`docs/emergence/
+  03-contracts-property-economy.md`'s own fuller vision: governments
+  taxing NPC-to-NPC trade or production, not just the player's own
+  property) stays exactly as unbuilt as it already was — `_levy_civic_tax`
+  only ever taxes the player.

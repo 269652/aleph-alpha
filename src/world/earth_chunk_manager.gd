@@ -180,6 +180,7 @@ const WorldBossFitness = preload("res://src/gameplay/world_boss_fitness.gd")
 const NpcEncounter = preload("res://src/emergence/npc_encounter.gd")
 const Quest = preload("res://src/emergence/quest.gd")
 const Governance = preload("res://src/emergence/governance.gd")
+const NpcEconomy = preload("res://src/world/npc_economy.gd")
 const RegionalTrade = preload("res://src/emergence/regional_trade.gd")
 const CaravanTrip = preload("res://src/emergence/caravan_trip.gd")
 const CaravanRaid = preload("res://src/emergence/caravan_raid.gd")
@@ -2116,6 +2117,118 @@ func step_workforce_economy(delta_seconds: float, player_wallet) -> void:
 			continue
 		if resident_household.wallet.spend(RENT_PER_TICK):
 			player_wallet.add(RENT_PER_TICK)
+
+	# Needs v2 (see resident_happiness's own doc comment): a genuinely
+	# unhappy assigned resident quits -- deterministic, not a probability
+	# roll, matching this whole codebase's "no RNG" convention (see
+	# crafting_recipe_book.gd's own file header) -- closing workforce.md's
+	# own "does a resident ever leave voluntarily" Open Question with a
+	# real, honest yes.
+	for resident_id in _workforce_assignments.keys():
+		if resident_happiness(resident_id) == "unhappy":
+			unassign_resident(resident_id)
+
+	_levy_civic_tax(player_wallet)
+
+
+## Needs v2 (docs/emergence/03-contracts-property-economy.md and
+## housing.md's own already-shipped `appeal_score` formula, extended into a
+## real gameplay consequence rather than a purely cosmetic number) --
+## deliberately a NARROW, two-factor MVP, not Anno's own full multi-tier
+## luxury-goods happiness system (no such system, or anything resembling
+## "happiness," existed anywhere in this codebase before this pass).
+##
+## "unhappy" only when BOTH real signals are bad at once: the resident's
+## own settlement is genuinely food-short (`SettlementState.DECLINING`,
+## needs v1's own already-real signal) AND their own house has zero real
+## furniture in it (housing.md's own `appeal_score` formula, `furniture_
+## ids.size()`, read directly off this house's own real footprint rather
+## than a second, competing formula). Deliberately conjunctive, not either
+## alone: a bare house in a thriving settlement is merely undecorated, not
+## a real hardship, and a furnished house in a starving settlement is still
+## genuinely fed. "content" for a resident with no real house on record, or
+## whose house's own chunk isn't currently loaded (furniture data is real
+## and persisted, but this reads it live off the loaded chunk rather than
+## paying disk I/O in what may be a hot per-tick loop -- a named, honest
+## simplification, not a silent one).
+func resident_happiness(resident_household_id: String) -> String:
+	var project: ConstructionProject = _construction_project_store.project_for_resident(resident_household_id)
+	if project == null:
+		return "content"
+	var settlement_id := EntityRef.for_settlement(project.chunk_coord)
+	if _settlement_status_for(settlement_id) != SettlementState.DECLINING:
+		return "content"
+	if _house_furniture_count(project) > 0:
+		return "content"
+	return "unhappy"
+
+
+## How many real furniture pieces sit inside this ONE house's own footprint
+## -- the SAME real count housing.md's own appeal_score already is
+## (`furniture_ids.size()`), scoped to just this house rather than a whole
+## settlement. 0 for an unloaded chunk or a recipe with no real house shape
+## (see resident_happiness's own doc comment on why this stays live-only).
+func _house_furniture_count(project: ConstructionProject) -> int:
+	var shape_id: String = HOUSE_BLUEPRINT_SHAPE_BY_RECIPE_ID.get(project.blueprint_id, "")
+	if shape_id == "":
+		return 0
+	var chunk: Chunk = _loaded_chunks.get(project.chunk_coord)
+	if chunk == null:
+		return 0
+	var footprint := HouseBlueprint.new().footprint_for(shape_id)
+	var count := 0
+	for x in footprint.x:
+		for y in footprint.y:
+			if chunk.furniture_modifications.has(project.origin + Vector2i(x, y)):
+				count += 1
+	return count
+
+
+## Civic taxation (`docs/emergence/03-contracts-property-economy.md`'s own
+## "## Taxation" section: "governments can tax property... Later
+## governments can tax property, trade, production, transactions, or
+## households" -- and `governance.md`'s own Open Questions, which names
+## taxation as needing exactly "a real currency/wealth-flow system that
+## doesn't exist yet," now real via Household.wallet). Deliberately the
+## OTHER direction from Rent (the "Rent" section above): rent is the player,
+## as a landlord, collecting from their own tenants; this is a settlement's
+## own real government taxing the PLAYER's own property within it --
+## a settlement with no real government (`Governance.NONE`, the SAME
+## classification `governance_form_for_settlement` already derives from
+## real institution history) has no one to collect a tax, so it simply
+## doesn't. Paid into the SAME shared settlement purse `VillageWages`/
+## `NpcEconomy` already read/write (`NpcEconomy.PURSE_META`) via the
+## generic `Object.set_meta`/`get_meta` Godot already provides on any
+## `VillageMarket` -- a taxed player's gold becomes real, spendable
+## settlement wealth (more subsistence wages the purse can afford), not a
+## number that vanishes into nothing. A real, explicit, flat placeholder
+## rate -- differentiating it by governance form (a merchant oligarchy
+## taxing harder than a cooperative, say) is a real, named follow-up (see
+## Open Questions), not invented here without real grounding.
+const CIVIC_TAX_PER_TICK := 4
+
+
+func _levy_civic_tax(player_wallet) -> void:
+	var player_household := _household_store.household_for(PlayerIdentity.PLAYER_ENTITY_ID)
+	if player_household == null:
+		return
+	for project: ConstructionProject in _construction_project_store.projects_owned_by(player_household.id):
+		var settlement_id := EntityRef.for_settlement(project.chunk_coord)
+		if governance_form_for_settlement(settlement_id) == Governance.NONE:
+			continue
+		# The REAL purse lives on the older VillageMarket (NpcEconomy.
+		# PURSE_META), a different object from _market_store's own newer
+		# Market -- SettlementFood.village_market_for is the SAME resolver
+		# _settlement_status_for already uses to reach it. Only findable
+		# while a live NpcEconomy is loaded in this settlement's own chunk
+		# (a real, honest "nobody's home to collect it" gap for a far-away
+		# settlement, not a silent write to the wrong object).
+		var village_market = SettlementFood.village_market_for(settlement_id, _loaded_villages)
+		if village_market == null:
+			continue
+		if not player_wallet.spend(CIVIC_TAX_PER_TICK):
+			continue
+		village_market.set_meta(NpcEconomy.PURSE_META, NpcEconomy.purse_of(village_market) + CIVIC_TAX_PER_TICK)
 
 
 ## Contracts and their lifecycle (see docs/emergence/03-contracts-property-

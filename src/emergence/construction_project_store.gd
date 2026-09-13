@@ -206,6 +206,34 @@ func projects_with_resident() -> Array:
 	return out
 
 
+## The one real project resident_household_id lives in, or null if it isn't
+## anyone's resident (or was never a real key at all) -- the needs-v2
+## happiness read's own real caller (EarthChunkManager.resident_happiness):
+## it has to find a SPECIFIC resident's own house, not every resident's.
+func project_for_resident(resident_household_id: String) -> ConstructionProject:
+	for id in _projects:
+		var project: ConstructionProject = _projects[id]
+		if project.resident_household_id == resident_household_id:
+			return project
+	return null
+
+
+## Every real, COMPLETE project owned by household_id -- civic taxation's
+## own real caller (EarthChunkManager -- docs/emergence/03-contracts-
+## property-economy.md's own "## Taxation" section): a settlement taxes the
+## PLAYER's real property within it, so this has to enumerate exactly what
+## the player owns, the same way projects_with_resident enumerates every
+## real resident. COMPLETE only -- an abandoned or still-PLANNED/IN_PROGRESS
+## project is not yet real taxable property.
+func projects_owned_by(household_id: String) -> Array:
+	var out: Array = []
+	for id in _projects:
+		var project: ConstructionProject = _projects[id]
+		if project.household_id == household_id and project.status == ConstructionProject.Status.COMPLETE:
+			out.append(project)
+	return out
+
+
 ## The SAME filter as projects_with_resident, narrowed to one chunk -- the
 ## real workforce-availability caller's own need (EarthChunkManager.
 ## free_workforce_in_chunk): a settlement only ever asks about its own
