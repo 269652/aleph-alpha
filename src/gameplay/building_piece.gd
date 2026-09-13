@@ -286,6 +286,19 @@ const _PIECES := {
 }
 
 
+## Bit flags for outward_wall_mask below -- numerically identical to
+## RoofShape.EDGE_NORTH/EAST/SOUTH/WEST BY CONVENTION, not by reference:
+## this file is pure piece data and must not depend on a rendering-layer
+## file (RoofShape).
+const EDGE_NORTH := 1
+const EDGE_EAST := 2
+const EDGE_SOUTH := 4
+const EDGE_WEST := 8
+
+const _EDGE_OFFSETS: Array[Vector2i] = [Vector2i(0, -1), Vector2i(1, 0), Vector2i(0, 1), Vector2i(-1, 0)]
+const _EDGE_BITS: Array[int] = [EDGE_NORTH, EDGE_EAST, EDGE_SOUTH, EDGE_WEST]
+
+
 static func has_piece(piece_id: String) -> bool:
 	return _PIECES.has(piece_id)
 
@@ -337,6 +350,27 @@ static func support_capacity_of(piece_id: String) -> float:
 ## item_id -> count consumed to place this piece. Empty for unknown ids.
 static func cost_of(piece_id: String) -> Dictionary:
 	return _PIECES.get(piece_id, {}).get("cost", {}).duplicate()
+
+
+## Which cardinal sides of `cell` border NOTHING built at all (see
+## docs/concept/building.md "How a house reads from above", point 8):
+## reported directly, "walls are now 1 Tile thick... they should be 1/4
+## tile wide the rest of the 3/4 wall should be made walkable floor". A
+## real wall only needs thickness on the side that actually faces outside
+## this building (or a different room) -- the side facing this SAME wall
+## run, a door/window set into it, or the room's own floor never needs it.
+## A straight run therefore has exactly one outward side; a building's own
+## OUTER CORNER has two at once (an L): the corner cell has no floor
+## neighbour at all (floor sits diagonally -- see HouseBlueprint.
+## _wall_candidates' own "exactly one floor neighbour" rule, which is
+## exactly what excludes corners from ever being a door/window candidate),
+## so both of its missing-neighbour sides read as outward together.
+static func outward_wall_mask(modifications: Dictionary, cell: Vector2i) -> int:
+	var mask := 0
+	for i in _EDGE_OFFSETS.size():
+		if not has_piece(modifications.get(cell + _EDGE_OFFSETS[i], "")):
+			mask |= _EDGE_BITS[i]
+	return mask
 
 
 ## Every piece of one category, in PIECE_IDS order -- for build menus.

@@ -18,6 +18,7 @@ extends GutTest
 
 const IllustratedBuildingPieceSprite = preload("res://src/rendering/illustrated_building_piece_sprite.gd")
 const TerrainRenderer = preload("res://src/rendering/terrain_renderer.gd")
+const BuildingPiece = preload("res://src/gameplay/building_piece.gd")
 
 const _KNOWN_PIECES := [
 	"wood_wall", "wood_door", "wood_window", "wood_floor",
@@ -111,3 +112,91 @@ func test_piece_image_is_deterministic():
 		assert_eq(
 			sprite.piece_image(piece_id).get_data(), sprite.piece_image(piece_id).get_data(), piece_id
 		)
+
+
+# -- thin wall art (docs/concept/building.md "How a house reads from
+# above", point 8): "walls are now 1 Tile thick... they should be 1/4 tile
+# wide the rest of the 3/4 wall should be made walkable floor" -- the
+# sheet's two narrow corner-post columns are a real, purpose-shaped wall
+# TRIM strip for exactly this, per the user's own confirmation.
+
+func test_has_thin_wall_art_for_every_material_with_a_wall_sheet():
+	assert_true(sprite.has_thin_wall_art("wood"))
+	assert_true(sprite.has_thin_wall_art("stone"))
+	assert_false(sprite.has_thin_wall_art("timber"))
+	assert_false(sprite.has_thin_wall_art("not_a_real_material"))
+
+
+func test_thin_wall_strip_image_is_a_real_narrow_vertical_strip():
+	for material in ["wood", "stone"]:
+		var strip := sprite.thin_wall_strip_image(material)
+		assert_not_null(strip, material)
+		assert_eq(strip.get_height(), TerrainRenderer.ART_TILE_SIZE, material)
+		assert_lt(strip.get_width(), TerrainRenderer.ART_TILE_SIZE / 2, "%s: a strip should be well under half the tile wide" % material)
+		var opaque := 0
+		for y in strip.get_height():
+			for x in strip.get_width():
+				if strip.get_pixel(x, y).a >= 0.99:
+					opaque += 1
+		assert_gt(opaque, 20, "%s: the strip should keep real drawn content" % material)
+
+
+func test_thin_wall_strip_is_null_for_a_material_with_no_wall_sheet():
+	assert_null(sprite.thin_wall_strip_image("timber"))
+
+
+## A single outward side: the tile is mostly the floor base, with the trim
+## strip flush against exactly that edge and nowhere else.
+func test_thin_wall_variant_flush_against_a_single_outward_edge():
+	var floor_base := Image.create(TerrainRenderer.ART_TILE_SIZE, TerrainRenderer.ART_TILE_SIZE, false, Image.FORMAT_RGBA8)
+	floor_base.fill(Color(0.5, 0.5, 0.5, 1.0))
+	var west := sprite.thin_wall_variant_image("wood", BuildingPiece.EDGE_WEST, floor_base)
+	assert_eq(west.get_width(), TerrainRenderer.ART_TILE_SIZE)
+	assert_eq(west.get_height(), TerrainRenderer.ART_TILE_SIZE)
+	# The far (east) edge is untouched floor base.
+	assert_eq(west.get_pixel(TerrainRenderer.ART_TILE_SIZE - 1, TerrainRenderer.ART_TILE_SIZE / 2), floor_base.get_pixel(TerrainRenderer.ART_TILE_SIZE - 1, TerrainRenderer.ART_TILE_SIZE / 2))
+	# The near (west) edge should differ from plain floor -- the strip is there.
+	assert_ne(west.get_pixel(0, TerrainRenderer.ART_TILE_SIZE / 2), floor_base.get_pixel(0, TerrainRenderer.ART_TILE_SIZE / 2))
+
+
+func test_thin_wall_variant_differs_per_outward_direction():
+	var floor_base := Image.create(TerrainRenderer.ART_TILE_SIZE, TerrainRenderer.ART_TILE_SIZE, false, Image.FORMAT_RGBA8)
+	floor_base.fill(Color(0.5, 0.5, 0.5, 1.0))
+	var west := sprite.thin_wall_variant_image("wood", BuildingPiece.EDGE_WEST, floor_base)
+	var north := sprite.thin_wall_variant_image("wood", BuildingPiece.EDGE_NORTH, floor_base)
+	var corner := sprite.thin_wall_variant_image("wood", BuildingPiece.EDGE_NORTH | BuildingPiece.EDGE_WEST, floor_base)
+	assert_ne(west.get_data(), north.get_data())
+	assert_ne(west.get_data(), corner.get_data())
+	assert_ne(north.get_data(), corner.get_data())
+
+
+## A corner cell (two outward sides at once) carries the strip on BOTH of
+## them, not just one -- the actual reported shape ("the rest of the wall
+## should be made walkable floor" applies to every outward side a cell
+## has, including a building's own corner).
+func test_thin_wall_variant_at_a_corner_marks_both_outward_edges():
+	var floor_base := Image.create(TerrainRenderer.ART_TILE_SIZE, TerrainRenderer.ART_TILE_SIZE, false, Image.FORMAT_RGBA8)
+	floor_base.fill(Color(0.5, 0.5, 0.5, 1.0))
+	var corner := sprite.thin_wall_variant_image("wood", BuildingPiece.EDGE_NORTH | BuildingPiece.EDGE_WEST, floor_base)
+	assert_ne(corner.get_pixel(0, TerrainRenderer.ART_TILE_SIZE / 2), floor_base.get_pixel(0, TerrainRenderer.ART_TILE_SIZE / 2), "west edge should carry the strip")
+	assert_ne(corner.get_pixel(TerrainRenderer.ART_TILE_SIZE / 2, 0), floor_base.get_pixel(TerrainRenderer.ART_TILE_SIZE / 2, 0), "north edge should carry the strip")
+	# The far corner (south-east) stays untouched floor.
+	assert_eq(
+		corner.get_pixel(TerrainRenderer.ART_TILE_SIZE - 1, TerrainRenderer.ART_TILE_SIZE - 1),
+		floor_base.get_pixel(TerrainRenderer.ART_TILE_SIZE - 1, TerrainRenderer.ART_TILE_SIZE - 1)
+	)
+
+
+func test_thin_wall_variant_with_no_outward_side_is_just_the_floor_base():
+	var floor_base := Image.create(TerrainRenderer.ART_TILE_SIZE, TerrainRenderer.ART_TILE_SIZE, false, Image.FORMAT_RGBA8)
+	floor_base.fill(Color(0.3, 0.6, 0.2, 1.0))
+	var image := sprite.thin_wall_variant_image("wood", 0, floor_base)
+	assert_eq(image.get_data(), floor_base.get_data())
+
+
+func test_thin_wall_variant_is_deterministic():
+	var floor_base := Image.create(TerrainRenderer.ART_TILE_SIZE, TerrainRenderer.ART_TILE_SIZE, false, Image.FORMAT_RGBA8)
+	floor_base.fill(Color(0.5, 0.5, 0.5, 1.0))
+	var a := sprite.thin_wall_variant_image("stone", BuildingPiece.EDGE_SOUTH, floor_base)
+	var b := sprite.thin_wall_variant_image("stone", BuildingPiece.EDGE_SOUTH, floor_base)
+	assert_eq(a.get_data(), b.get_data())

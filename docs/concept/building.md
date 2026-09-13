@@ -380,13 +380,52 @@ biome ground tiles: `IllustratedBuildingPieceSprite.has_piece_art(piece_id)`
 gates whether `TerrainRenderer._piece_image` draws from a real
 user-supplied illustration (`assets/sprites/buildings/wood_wall.png`/
 `stone_wall.png`, a 6-column sheet — door, window, wall, a spare wall
-variant, two spare narrow corner-post variants, only the first three wired
-so far; `wood_floor.png`, a single image) or falls through to
-`ProceduralBuildingPieceSprite.generate_image` exactly as before. A piece
-with no real sheet yet (stone floor, the timber tier, roofs) is untouched.
-This is additive art only — it changes no piece id, no placement rule, and
-no save data, the same guarantee point 6's facade family and the roof
-pitch family (point 3) already keep.
+variant, and two narrow corner-post variants, one of which is point 8's
+own thin-wall trim strip below; `wood_floor.png`, a single image) or falls
+through to `ProceduralBuildingPieceSprite.generate_image` exactly as
+before. A piece with no real sheet yet (stone floor, the timber tier,
+roofs) is untouched. This is additive art only — it changes no piece id,
+no placement rule, and no save data, the same guarantee point 6's facade
+family and the roof pitch family (point 3) already keep.
+
+**8. A wall is only as thick as it needs to be, on the side that actually
+faces outward.** Reported directly, once the illustrated wall art above
+was live: "walls are now 1 Tile thick... they should be 1/4 tile wide the
+rest of the 3/4 wall should be made walkable floor." A wall cell's
+CARDINAL sides split into two kinds: the side(s) facing this same wall run,
+a door/window set into it, or the room's own floor never need thickness at
+all; the side(s) facing nothing built — genuinely outside this building, or
+a different room — are where a wall is actually a wall
+(`BuildingPiece.outward_wall_mask`, a 4-bit N/E/S/W mask read from
+neighbour occupancy alone, the same local, context-only shape `RoofShape.
+_edge_mask` already uses for the roof's own outward rim). A straight run
+has exactly one outward side; a building's own OUTER CORNER has two at
+once — an L, not a single face. Where a side is outward, the room's own
+floor tile shows through for the other three-quarters of the cell, with a
+real trim strip (the illustrated wall sheet's own narrow corner-post
+column, confirmed by the user as art drawn for exactly this) covering the
+remaining quarter — `IllustratedBuildingPieceSprite.thin_wall_variant_
+image(material, mask, floor_base)` composites the strip (rotated 90° for a
+north/south edge) onto whichever side(s) the mask sets, baked as a further
+atlas family (material × mask, appended after the facade family, real
+slots reserved only for a material with real thin-wall art). The identical
+`outward_wall_mask` check drives the COLLISION side in `EarthChunkManager`
+— a straight run's single `CollisionShape2D` is a thin strip flush against
+its own outward edge, a corner gets two overlapping strips (Godot has no
+single L-shaped primitive) — so what is SEEN and what actually blocks
+movement always agree, and a material with no real thin-wall art (the
+timber tier) keeps the old full-tile block on both sides rather than
+looking thin while still colliding as solid. Building or destroying a
+piece re-syncs collision for every WALL neighbour too, not just the
+touched cell — the roof/facade families only ever needed the visual side
+kept in sync (`paint()` already re-derives a whole chunk's art fresh on
+every edit), but a wall's own outward side can change out from under an
+ALREADY-PLACED neighbour when something is built or removed right beside
+it, and only collision (synced per-cell) needed the catch-up. Only plain
+wall cells get this treatment — the facade band (point 6) keeps its own
+elaborate street-face art at full thickness, matching how a real building's
+front face reads, and doors/windows are unaffected outside it (they
+already carry their own inset leaf/pane art, not a flat block).
 
 ### Persistence
 
@@ -519,8 +558,19 @@ modification like any other.
   from above", point 7) — `IllustratedBuildingPieceSprite` replaces the
   procedural pattern for wood/stone wall, door, window and wood floor with
   a real user-supplied illustration; every other piece (stone floor, the
-  timber tier, roofs) is unaffected. `ATLAS_VERSION` bumped to
-  `art_resolution_v26_illustrated_building_pieces`.
+  timber tier, roofs) is unaffected.
+- ✅ Thin walls (see "How a house reads from above", point 8) — reported
+  directly once the illustrated art above was live: "walls are now 1 Tile
+  thick... they should be 1/4 tile wide the rest of the 3/4 wall should be
+  made walkable floor." `BuildingPiece.outward_wall_mask` + `Illustrated
+  BuildingPieceSprite.thin_wall_variant_image` give a wall's own outward
+  side(s) a real trim strip over the room's floor instead of a flat
+  full-tile texture, and `EarthChunkManager`'s collision shrinks to match
+  exactly (a thin strip per outward side, an L at a building's own corner)
+  — gated on the same `has_thin_wall_art` check on both sides, so a
+  material with no real wall sheet (the timber tier) keeps the old
+  full-tile look and block together, never one without the other.
+  `ATLAS_VERSION` bumped to `art_resolution_v27_thin_wall_variants`.
 - ✅ The same rule for boulders and ore, closed on **both** sides.
   `StoneRenderer.spawn_stones` had the identical bug with the identical
   shape — it iterated its cells over `chunk.biome` and never consulted

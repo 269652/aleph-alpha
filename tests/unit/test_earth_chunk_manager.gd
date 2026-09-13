@@ -3980,6 +3980,97 @@ func test_stamp_structure_at_global_does_nothing_for_an_unloaded_chunk():
 	assert_eq(entities_parent.get_child_count(), success_context_before)
 
 
+# -- thin wall collision (docs/concept/building.md "How a house reads -------
+# -- from above", point 8): a wall's own outward side(s) get a real ---------
+# -- 1/4-tile-thick strip, never a full-tile block -- reported directly, ----
+# -- "walls are now 1 Tile thick... they should be 1/4 tile wide the --------
+# -- rest of the 3/4 wall should be made walkable floor" --------------------
+
+func _ring_ground_pieces() -> Dictionary:
+	# A real 3x3 wall ring around one floor cell at local (1,1) -- the same
+	# shape test_building_piece.gd's own outward_wall_mask fixtures use.
+	var pieces := {}
+	for x in 3:
+		for y in 3:
+			var local := Vector2i(x, y)
+			pieces[local] = "wood_floor" if local == Vector2i(1, 1) else "wood_wall"
+	return pieces
+
+
+func _piece_collision_body_at(global_cell: Vector2i) -> StaticBody2D:
+	var expected_position := Vector2(
+		(global_cell.x + 0.5) * TerrainRenderer.TILE_SIZE, (global_cell.y + 0.5) * TerrainRenderer.TILE_SIZE
+	)
+	for child in entities_parent.get_children():
+		if child is StaticBody2D and child.position == expected_position:
+			return child
+	return null
+
+
+func test_a_straight_wall_runs_own_outward_side_gets_a_thin_strip_not_a_full_tile():
+	manager.update(_berlin_tile)
+	var chunk_coord := _chunk_coord_for_tile(_berlin_tile)
+	manager.stamp_structure_at_global(chunk_coord, _berlin_tile, _ring_ground_pieces(), {})
+
+	# Local (0,1): the west edge-middle wall cell -- exactly one outward
+	# side (west).
+	var body := _piece_collision_body_at(_berlin_tile + Vector2i(0, 1))
+	assert_not_null(body, "precondition: the west wall cell has a collision body")
+	var shapes: Array = []
+	for child in body.get_children():
+		if child is CollisionShape2D:
+			shapes.append(child)
+	assert_eq(shapes.size(), 1, "a straight run has exactly one outward side")
+	var rect: RectangleShape2D = shapes[0].shape
+	var thickness := TerrainRenderer.TILE_SIZE * EarthChunkManager.WALL_THICKNESS_FRACTION
+	assert_almost_eq(rect.size.x, thickness, 0.01, "thin on the outward (west/east) axis")
+	assert_almost_eq(rect.size.y, TerrainRenderer.TILE_SIZE, 0.01, "full length along the wall run")
+	assert_lt(rect.size.x * rect.size.y, TerrainRenderer.TILE_SIZE * TerrainRenderer.TILE_SIZE, "must be smaller than the old full-tile block")
+
+
+## A building's own OUTER CORNER has two outward sides at once (an L) --
+## the corner cell must carry TWO thin strips, not one and not a full tile.
+func test_a_buildings_corner_wall_cell_gets_two_thin_strips():
+	manager.update(_berlin_tile)
+	var chunk_coord := _chunk_coord_for_tile(_berlin_tile)
+	manager.stamp_structure_at_global(chunk_coord, _berlin_tile, _ring_ground_pieces(), {})
+
+	# Local (0,0): the top-left corner -- outward to the north AND west.
+	var body := _piece_collision_body_at(_berlin_tile + Vector2i(0, 0))
+	assert_not_null(body, "precondition: the corner wall cell has a collision body")
+	var shapes: Array = []
+	for child in body.get_children():
+		if child is CollisionShape2D:
+			shapes.append(child)
+	assert_eq(shapes.size(), 2, "a building's own corner has two outward sides")
+
+
+## A material with no real thin-wall art (the timber tier) keeps the OLD
+## full-tile block -- the collision must never promise a thickness the
+## visual (gated on the identical has_thin_wall_art check in
+## TerrainRenderer) doesn't actually show.
+func test_a_material_with_no_thin_wall_art_still_gets_the_full_tile_block():
+	manager.update(_berlin_tile)
+	var chunk_coord := _chunk_coord_for_tile(_berlin_tile)
+	var pieces := {}
+	for x in 3:
+		for y in 3:
+			var local := Vector2i(x, y)
+			pieces[local] = "timber_floor" if local == Vector2i(1, 1) else "timber_wall"
+	manager.stamp_structure_at_global(chunk_coord, _berlin_tile, pieces, {})
+
+	var body := _piece_collision_body_at(_berlin_tile + Vector2i(0, 1))
+	assert_not_null(body)
+	var shapes: Array = []
+	for child in body.get_children():
+		if child is CollisionShape2D:
+			shapes.append(child)
+	assert_eq(shapes.size(), 1)
+	var rect: RectangleShape2D = shapes[0].shape
+	assert_almost_eq(rect.size.x, TerrainRenderer.TILE_SIZE, 0.01, "timber has no thin-wall art: the old full-tile block")
+	assert_almost_eq(rect.size.y, TerrainRenderer.TILE_SIZE, 0.01)
+
+
 # -- roof layer: hidden while the player is indoors under it -----------------
 
 func test_roof_pieces_paint_onto_the_roof_layer():

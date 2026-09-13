@@ -46,6 +46,7 @@ extends RefCounted
 const SpriteSheetSlicer = preload("res://src/rendering/sprite_sheet_slicer.gd")
 const SpriteSheetLoader = preload("res://src/rendering/sprite_sheet_loader.gd")
 const TerrainRenderer = preload("res://src/rendering/terrain_renderer.gd")
+const BuildingPiece = preload("res://src/gameplay/building_piece.gd")
 
 const SIZE := TerrainRenderer.ART_TILE_SIZE
 
@@ -78,6 +79,19 @@ const _DISABLED_DIVIDER_GRAY_MIN := 1.01
 const _DOOR_COLUMN := 0
 const _WINDOW_COLUMN := 1
 const _WALL_COLUMN := 2
+## The sheet's own two narrow corner-post columns -- a real wall TRIM
+## strip, confirmed by the user as art for the 1/4-thick wall treatment
+## (see thin_wall_variant_image below). Only the first is wired; the
+## second stays real, unused art held in reserve, matching the second wall
+## colour variant (_WALL_COLUMN's own sibling) directly beside it.
+const _THIN_WALL_COLUMN := 4
+
+## A wall trim strip is drawn this thick against whichever edge(s) of the
+## tile are outward (BuildingPiece.outward_wall_mask) -- one quarter of the
+## tile, matching EarthChunkManager's own collision thickness for the same
+## cells exactly (see WALL_THICKNESS_FRACTION there), so what's SEEN lines
+## up with what's actually solid.
+const THIN_WALL_THICKNESS := SIZE / 4
 
 ## piece_id -> {sheet path, column ordinal (the Nth detected frame, left to
 ## right -- see this file's header doc comment for why an ordinal, not a
@@ -215,3 +229,89 @@ static func _despilled(color: Color) -> Color:
 		clampf(color.r - removed, 0.0, 1.0), color.g,
 		clampf(color.b - removed, 0.0, 1.0), color.a
 	)
+
+
+# -- thin wall art (docs/concept/building.md "How a house reads from
+# above", point 8): "walls are now 1 Tile thick... they should be 1/4 tile
+# wide the rest of the 3/4 wall should be made walkable floor". The
+# sheet's own narrow corner-post column IS the trim strip, confirmed by
+# the user; the room's own floor tile (whatever TerrainRenderer already
+# resolved for that material -- illustrated if available, else procedural)
+# is the base most of the tile shows through as.
+
+## Whether `material` has a real wall sheet to draw a thin-wall trim strip
+## from -- callers must check this before calling thin_wall_strip_image/
+## thin_wall_variant_image and keep the plain full-tile wall otherwise.
+func has_thin_wall_art(material: String) -> bool:
+	return _WALL_PIECES.has("%s_wall" % material)
+
+
+## The narrow corner-post column for `material`, resized to
+## THIN_WALL_THICKNESS wide x SIZE tall -- the one reusable strip every
+## outward edge composites onto a floor base, rotated for a horizontal
+## (north/south) edge by the caller. Null when has_thin_wall_art would
+## answer false.
+func thin_wall_strip_image(material: String) -> Image:
+	if not has_thin_wall_art(material):
+		return null
+	var cache_key := "%s_thin_wall_strip" % material
+	if _cache.has(cache_key):
+		return _cache[cache_key]
+	var path: String = _WALL_PIECES["%s_wall" % material]["path"]
+	var sheet := _keyed_sheet(path)
+	var frames := _row0_frames(path, sheet)
+	if _THIN_WALL_COLUMN >= frames.size():
+		return null
+	var cropped := sheet.get_region(frames[_THIN_WALL_COLUMN])
+	var strip := cropped.duplicate() as Image
+	strip.resize(THIN_WALL_THICKNESS, SIZE, Image.INTERPOLATE_LANCZOS)
+	_cache[cache_key] = strip
+	return strip
+
+
+## `floor_base` (ART_TILE_SIZE, whatever TerrainRenderer already resolved
+## for this material's floor) with `material`'s own trim strip composited
+## flush against every outward side `outward_mask` (BuildingPiece.EDGE_*
+## bits) sets -- a straight wall run gets one side, a building's own
+## corner gets two (an L, drawn as two overlapping strips). `outward_mask
+## == 0` (a wall cell bordering only its own building on every side --
+## shouldn't happen for a real wall, but defensively) returns floor_base
+## untouched, and a material with no thin-wall art returns floor_base
+## untouched too (the plain full-tile wall wins for that material).
+func thin_wall_variant_image(material: String, outward_mask: int, floor_base: Image) -> Image:
+	var image := floor_base.duplicate() as Image
+	if image.get_format() != Image.FORMAT_RGBA8:
+		image.convert(Image.FORMAT_RGBA8)
+	if image.get_width() != SIZE or image.get_height() != SIZE:
+		image.resize(SIZE, SIZE, Image.INTERPOLATE_LANCZOS)
+	var vertical := thin_wall_strip_image(material)
+	if vertical == null:
+		return image
+	var full_rect := Rect2i(Vector2i.ZERO, vertical.get_size())
+	if outward_mask & BuildingPiece.EDGE_WEST != 0:
+		image.blend_rect(vertical, full_rect, Vector2i(0, 0))
+	if outward_mask & BuildingPiece.EDGE_EAST != 0:
+		image.blend_rect(vertical, full_rect, Vector2i(SIZE - vertical.get_width(), 0))
+	if outward_mask & (BuildingPiece.EDGE_NORTH | BuildingPiece.EDGE_SOUTH) != 0:
+		var horizontal := _rotated_90(vertical)
+		var horizontal_rect := Rect2i(Vector2i.ZERO, horizontal.get_size())
+		if outward_mask & BuildingPiece.EDGE_NORTH != 0:
+			image.blend_rect(horizontal, horizontal_rect, Vector2i(0, 0))
+		if outward_mask & BuildingPiece.EDGE_SOUTH != 0:
+			image.blend_rect(horizontal, horizontal_rect, Vector2i(0, SIZE - horizontal.get_height()))
+	return image
+
+
+## A 90-degree clockwise pixel rotation -- Image carries no rotate() of its
+## own. Turns the vertical strip's long axis (its own wood/stone grain
+## direction) horizontal, which is what a strip along the tile's top/bottom
+## edge needs; a symmetric plank/block pattern reads correctly either
+## rotation direction, so CW-vs-CCW is not a meaningful choice here.
+static func _rotated_90(image: Image) -> Image:
+	var w := image.get_width()
+	var h := image.get_height()
+	var rotated := Image.create(h, w, false, image.get_format())
+	for y in h:
+		for x in w:
+			rotated.set_pixel(y, w - 1 - x, image.get_pixel(x, y))
+	return rotated

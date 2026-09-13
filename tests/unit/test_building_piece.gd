@@ -329,3 +329,69 @@ func test_a_couch_costs_and_survives_more_than_a_chair_but_less_than_a_bed():
 func test_a_photo_frame_is_the_cheapest_and_most_fragile_furniture_piece():
 	assert_lte(int(BuildingPiece.cost_of("photo_frame")["wood"]), int(BuildingPiece.cost_of("wood_rug")["wood"]))
 	assert_lt(BuildingPiece.durability_of("photo_frame"), BuildingPiece.durability_of("wood_rug"))
+
+
+# -- outward_wall_mask (docs/concept/building.md "How a house reads from
+# above", point 8): a wall is only as thick as it needs to be on the side
+# that actually faces something that ISN'T this building -- reported
+# directly, "walls are now 1 Tile thick... they should be 1/4 tile wide the
+# rest of the 3/4 wall should be made walkable floor". A side is OUTWARD
+# when nothing built at all sits there; a side facing this same wall run,
+# a door/window in it, or the room's own floor is never outward.
+
+func test_a_straight_wall_run_has_exactly_one_outward_side():
+	# A real 3x3 hut: a full wall RING around one floor cell at (1,1) --
+	# not a plus/cross shape, so each edge-middle wall cell has real wall
+	# neighbours on both sides along its own run, floor on its one interior
+	# side, and nothing at all on its one exterior side.
+	var grid := {
+		Vector2i(0, 0): "wood_wall", Vector2i(1, 0): "wood_wall", Vector2i(2, 0): "wood_wall",
+		Vector2i(0, 1): "wood_wall", Vector2i(1, 1): "wood_floor", Vector2i(2, 1): "wood_wall",
+		Vector2i(0, 2): "wood_wall", Vector2i(1, 2): "wood_wall", Vector2i(2, 2): "wood_wall",
+	}
+	assert_eq(BuildingPiece.outward_wall_mask(grid, Vector2i(0, 1)), BuildingPiece.EDGE_WEST)
+	assert_eq(BuildingPiece.outward_wall_mask(grid, Vector2i(2, 1)), BuildingPiece.EDGE_EAST)
+	assert_eq(BuildingPiece.outward_wall_mask(grid, Vector2i(1, 0)), BuildingPiece.EDGE_NORTH)
+	assert_eq(BuildingPiece.outward_wall_mask(grid, Vector2i(1, 2)), BuildingPiece.EDGE_SOUTH)
+
+
+## A building's own OUTER corner has two outward sides at once (an L), not
+## one -- the corner wall cell of a rectangle has no floor neighbour at all
+## (the floor sits diagonally, per HouseBlueprint._wall_candidates' own
+## "exactly one floor neighbour" rule excluding corners), so BOTH of its
+## missing-neighbour sides must read as outward.
+func test_a_buildings_own_corner_has_two_outward_sides():
+	var grid := {
+		Vector2i(0, 0): "wood_wall", Vector2i(1, 0): "wood_wall",
+		Vector2i(0, 1): "wood_wall", Vector2i(1, 1): "wood_floor",
+	}
+	assert_eq(
+		BuildingPiece.outward_wall_mask(grid, Vector2i(0, 0)),
+		BuildingPiece.EDGE_NORTH | BuildingPiece.EDGE_WEST
+	)
+
+
+func test_a_wall_cell_beside_a_door_or_window_of_the_same_run_is_not_outward_there():
+	var grid := {
+		Vector2i(0, 0): "wood_wall", Vector2i(0, 1): "wood_door", Vector2i(0, 2): "wood_wall",
+		Vector2i(1, 1): "wood_floor",
+	}
+	# (0,1) is the door cell itself -- irrelevant here. (0,0)'s SOUTH
+	# neighbour is the door, part of the same wall run: not outward there.
+	assert_eq(BuildingPiece.outward_wall_mask(grid, Vector2i(0, 0)) & BuildingPiece.EDGE_SOUTH, 0)
+
+
+func test_a_cell_with_a_piece_on_every_side_has_no_outward_sides_at_all():
+	var grid := {
+		Vector2i(1, 1): "wood_wall",
+		Vector2i(1, 0): "wood_wall", Vector2i(1, 2): "wood_wall",
+		Vector2i(0, 1): "wood_wall", Vector2i(2, 1): "wood_wall",
+	}
+	assert_eq(BuildingPiece.outward_wall_mask(grid, Vector2i(1, 1)), 0)
+
+
+func test_edge_bits_are_four_distinct_powers_of_two():
+	var bits := [BuildingPiece.EDGE_NORTH, BuildingPiece.EDGE_EAST, BuildingPiece.EDGE_SOUTH, BuildingPiece.EDGE_WEST]
+	for bit in bits:
+		assert_eq(bit & (bit - 1), 0, "%d should be a single bit" % bit)
+	assert_eq(bits[0] | bits[1] | bits[2] | bits[3], 15)

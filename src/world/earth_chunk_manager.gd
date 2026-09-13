@@ -68,6 +68,7 @@ const BuilderMarker = preload("res://src/rendering/builder_marker.gd")
 const LogisticsMarker = preload("res://src/rendering/logistics_marker.gd")
 const StructureStockStore = preload("res://src/emergence/structure_stock_store.gd")
 const IllustratedStructureSprite = preload("res://src/rendering/illustrated_structure_sprite.gd")
+const IllustratedBuildingPieceSprite = preload("res://src/rendering/illustrated_building_piece_sprite.gd")
 const FarmerMarker = preload("res://src/rendering/farmer_marker.gd")
 const MillMarker = preload("res://src/rendering/mill_marker.gd")
 const BakeryMarker = preload("res://src/rendering/bakery_marker.gd")
@@ -746,6 +747,7 @@ const SAGEWERK_STORAGE_PAIR_RADIUS_TILES := 20
 ## ProceduralStructureSprite look, unaffected by this dict.
 var _structure_art_sprites: Dictionary = {}
 var _illustrated_structure_sprite := IllustratedStructureSprite.new()
+var _illustrated_building_piece := IllustratedBuildingPieceSprite.new()
 
 ## Every placed Farm currently staffed with a real FarmerMarker (see
 ## docs/concept/npc_farm_production.md) -- chunk_coord -> {local_cell ->
@@ -1045,6 +1047,18 @@ var _piece_collision_bodies: Dictionary = {}  # Vector2i chunk_coord -> {Vector2
 ## independent layers let each floor be correct on its own terms.
 const GROUND_FLOOR_COLLISION_LAYER := 1
 const UPPER_FLOOR_COLLISION_LAYER := 2
+
+## docs/concept/building.md "How a house reads from above", point 8:
+## reported directly, "walls are now 1 Tile thick... they should be 1/4
+## tile wide the rest of the 3/4 wall should be made walkable floor". A
+## wall cell's own outward side(s) (BuildingPiece.outward_wall_mask) get a
+## strip this thick instead of a full-tile block -- matches
+## IllustratedBuildingPieceSprite.THIN_WALL_THICKNESS exactly (both are 1/4
+## of their own tile unit, ART_TILE_SIZE there vs TILE_SIZE here), so what
+## is SEEN lines up with what is actually solid. Only applies to a material
+## with real thin-wall art (has_thin_wall_art) -- everything else keeps the
+## old full-tile block, matching TerrainRenderer's identical visual gate.
+const WALL_THICKNESS_FRACTION := 0.25
 
 ## The draw order that lets a two-story house READ as one from above (docs/
 ## concept/building.md's "How a house reads from above", point 5), pinned
@@ -2044,7 +2058,7 @@ func stamp_upper_floor_at_global(chunk_coord: Vector2i, origin_tile: Vector2i, u
 		if _chunk_coord_for_tile(global_cell) != chunk_coord:
 			continue
 		chunk.upper_floor_modifications[_local_coord(global_cell.x, global_cell.y)] = upper_pieces[local_cell]
-		_sync_upper_piece_collision(global_cell, upper_pieces[local_cell])
+		_sync_upper_piece_collision(global_cell, upper_pieces[local_cell], chunk)
 	_paint_upper_floor(chunk_coord, chunk, _upper_view_cells_for(chunk_coord))
 
 
@@ -5680,12 +5694,29 @@ func _paint_upper_floor(chunk_coord: Vector2i, chunk: Chunk, house_cells: Dictio
 		var piece_id: String = chunk.upper_floor_modifications[local]
 		if house_cells.has(local):
 			if upstairs:
-				desired[local] = _terrain_renderer.atlas_coords_for_modification(piece_id)
+				desired[local] = _upper_in_place_atlas_coords(chunk, local, piece_id)
 		elif _is_upper_facade_cell(chunk, local) and local.y > 0:
 			desired[local + Vector2i(0, -1)] = _upper_facade_atlas_coords(piece_id)
 	for local in desired:
 		_upper_floor_layer.set_cell(chunk_coord * CHUNK_SIZE + local, 0, desired[local])
 	_upper_floor_painted[chunk_coord] = desired.keys()
+
+
+## An upper-storey piece as seen IN PLACE from upstairs: a wall cell's own
+## outward side(s) (docs/concept/building.md "How a house reads from
+## above", point 8) get the thin-wall treatment too, read off the upper
+## floor's OWN modifications dict -- the same rule the ground floor's
+## `_atlas_coords_for_piece_in_context` applies, kept as its own small
+## function since the upper storey's exterior-band cells (the facade
+## branch just above this call) never reach here at all.
+func _upper_in_place_atlas_coords(chunk: Chunk, local: Vector2i, piece_id: String) -> Vector2i:
+	if BuildingPiece.category_of(piece_id) == BuildingPiece.CATEGORY_WALL:
+		var material := BuildingPiece.material_of(piece_id)
+		if _illustrated_building_piece.has_thin_wall_art(material):
+			var mask := BuildingPiece.outward_wall_mask(chunk.upper_floor_modifications, local)
+			if mask != 0:
+				return _terrain_renderer.atlas_coords_for_thin_wall_variant(material, mask)
+	return _terrain_renderer.atlas_coords_for_modification(piece_id)
 
 
 ## The upper storey's own front: a cell with nothing of the same storey
@@ -12628,7 +12659,8 @@ func build_at_global(global_x: int, global_y: int, tile_id: String) -> bool:
 	elif BuildingPiece.has_piece(previous_tile_id):
 		_unblock_ground_cover_on_cells(chunk_coord, [local])
 	_terrain_renderer.paint(_tile_map_layer, chunk, chunk_coord * CHUNK_SIZE, generator.biome_at_global)
-	_sync_piece_collision(Vector2i(global_x, global_y), tile_id)
+	_sync_piece_collision(Vector2i(global_x, global_y), tile_id, chunk)
+	_resync_neighboring_wall_collision(chunk_coord, chunk, local)
 	_sync_sagewerk_lumberjack(chunk_coord, local, previous_tile_id, tile_id)
 	_sync_farm_farmer(chunk_coord, local, previous_tile_id, tile_id)
 	_sync_conversion_worker(chunk_coord, local, previous_tile_id, tile_id)
@@ -12663,6 +12695,7 @@ func destroy_at_global(global_x: int, global_y: int) -> bool:
 		_unblock_ground_cover_on_cells(chunk_coord, [local])
 	_terrain_renderer.paint(_tile_map_layer, chunk, chunk_coord * CHUNK_SIZE, generator.biome_at_global)
 	_remove_piece_collision(Vector2i(global_x, global_y))
+	_resync_neighboring_wall_collision(chunk_coord, chunk, local)
 	_sync_sagewerk_lumberjack(chunk_coord, local, previous_tile_id, "")
 	_sync_farm_farmer(chunk_coord, local, previous_tile_id, "")
 	_sync_conversion_worker(chunk_coord, local, previous_tile_id, "")
@@ -12733,7 +12766,7 @@ func stamp_structure_at_global(
 	for local_cell in ground_pieces:
 		var global_cell: Vector2i = origin_tile + local_cell
 		if _chunk_coord_for_tile(global_cell) == chunk_coord:
-			_sync_piece_collision(global_cell, ground_pieces[local_cell])
+			_sync_piece_collision(global_cell, ground_pieces[local_cell], chunk)
 	if _roof_layer != null:
 		_terrain_renderer.paint_roofs(_roof_layer, chunk, chunk_coord * CHUNK_SIZE, _hidden_cells_for(chunk_coord))
 	# One recompute per distinct connected structure would be more precise,
@@ -12868,29 +12901,89 @@ func _clear_vegetation_on_cells(
 ## first -- build_at_global doesn't check occupancy the way
 ## BuildingPlacement.can_place does, so overwriting a wall with a door must
 ## not leave the old wall's collision behind.
-func _sync_piece_collision(global_cell: Vector2i, tile_id: String) -> void:
+## `chunk` provides the context (docs/concept/building.md "How a house
+## reads from above", point 8) a wall cell needs to know its own outward
+## side(s) -- optional and defaulted to null so every pre-existing
+## non-wall call keeps working unchanged; a caller that has no chunk handy
+## for a wall cell just gets the old full-tile block, the same safe
+## fail-open shape this file's other optional context parameters use.
+func _sync_piece_collision(global_cell: Vector2i, tile_id: String, chunk: Chunk = null) -> void:
 	_remove_piece_collision(global_cell)
 	if BuildingPiece.has_piece(tile_id) and not BuildingPiece.is_walkable(tile_id):
-		_spawn_piece_collision(global_cell, tile_id)
+		_spawn_piece_collision(global_cell, tile_id, chunk)
 
 
-func _spawn_piece_collision(global_cell: Vector2i, piece_id: String) -> void:
+func _spawn_piece_collision(global_cell: Vector2i, piece_id: String, chunk: Chunk = null) -> void:
 	var body := StaticBody2D.new()
 	body.name = "PieceCollision"
 	body.position = Vector2(
 		(global_cell.x + 0.5) * TerrainRenderer.TILE_SIZE, (global_cell.y + 0.5) * TerrainRenderer.TILE_SIZE
 	)
 	body.collision_layer = GROUND_FLOOR_COLLISION_LAYER
-	var shape := CollisionShape2D.new()
-	var rect := RectangleShape2D.new()
-	rect.size = Vector2.ONE * TerrainRenderer.TILE_SIZE
-	shape.shape = rect
-	body.add_child(shape)
+	var mask := 0
+	if chunk != null and BuildingPiece.category_of(piece_id) == BuildingPiece.CATEGORY_WALL:
+		var material := BuildingPiece.material_of(piece_id)
+		if _illustrated_building_piece.has_thin_wall_art(material):
+			mask = BuildingPiece.outward_wall_mask(chunk.modifications, _local_coord(global_cell.x, global_cell.y))
+	if mask == 0:
+		_add_full_tile_collision_shape(body)
+	else:
+		_add_thin_wall_collision_shapes(body, mask)
 	_entities_parent.add_child(body)
 	var chunk_coord := _chunk_coord_for_tile(global_cell)
 	if not _piece_collision_bodies.has(chunk_coord):
 		_piece_collision_bodies[chunk_coord] = {}
 	_piece_collision_bodies[chunk_coord][global_cell] = body
+
+
+static func _add_full_tile_collision_shape(body: StaticBody2D) -> void:
+	var shape := CollisionShape2D.new()
+	var rect := RectangleShape2D.new()
+	rect.size = Vector2.ONE * TerrainRenderer.TILE_SIZE
+	shape.shape = rect
+	body.add_child(shape)
+
+
+## One thin strip per outward side `mask` sets -- a straight wall run gets
+## one, a building's own corner two (an L, drawn as two overlapping
+## strips rather than one L-shaped shape Godot has no primitive for).
+static func _add_thin_wall_collision_shapes(body: StaticBody2D, mask: int) -> void:
+	var thickness := TerrainRenderer.TILE_SIZE * WALL_THICKNESS_FRACTION
+	var half := TerrainRenderer.TILE_SIZE / 2.0
+	var near_edge := half - thickness / 2.0
+	if mask & BuildingPiece.EDGE_NORTH != 0:
+		_add_collision_strip(body, Vector2(TerrainRenderer.TILE_SIZE, thickness), Vector2(0, -near_edge))
+	if mask & BuildingPiece.EDGE_SOUTH != 0:
+		_add_collision_strip(body, Vector2(TerrainRenderer.TILE_SIZE, thickness), Vector2(0, near_edge))
+	if mask & BuildingPiece.EDGE_WEST != 0:
+		_add_collision_strip(body, Vector2(thickness, TerrainRenderer.TILE_SIZE), Vector2(-near_edge, 0))
+	if mask & BuildingPiece.EDGE_EAST != 0:
+		_add_collision_strip(body, Vector2(thickness, TerrainRenderer.TILE_SIZE), Vector2(near_edge, 0))
+
+
+static func _add_collision_strip(body: StaticBody2D, size: Vector2, offset: Vector2) -> void:
+	var shape := CollisionShape2D.new()
+	var rect := RectangleShape2D.new()
+	rect.size = size
+	shape.shape = rect
+	shape.position = offset
+	body.add_child(shape)
+
+
+## After a piece is built or destroyed at `local`, a WALL neighbour's own
+## outward side(s) (BuildingPiece.outward_wall_mask) may have just changed
+## -- e.g. a wall built right beside an already-standing one closes off
+## that older wall's own thin strip on the shared side, and destroying a
+## piece can open a new one up. paint() already re-derives the WHOLE
+## chunk's art fresh on every build_at_global/destroy_at_global call, so
+## the visual side never goes stale; only each affected neighbour's
+## COLLISION (synced per-cell, not per-chunk) needs this catch-up.
+func _resync_neighboring_wall_collision(chunk_coord: Vector2i, chunk: Chunk, local: Vector2i) -> void:
+	for offset in [Vector2i(0, -1), Vector2i(1, 0), Vector2i(0, 1), Vector2i(-1, 0)]:
+		var neighbor_local: Vector2i = local + offset
+		var neighbor_tile_id: String = chunk.modifications.get(neighbor_local, "")
+		if BuildingPiece.category_of(neighbor_tile_id) == BuildingPiece.CATEGORY_WALL:
+			_sync_piece_collision(chunk_coord * CHUNK_SIZE + neighbor_local, neighbor_tile_id, chunk)
 
 
 func _remove_piece_collision(global_cell: Vector2i) -> void:
@@ -12906,24 +12999,30 @@ func _remove_piece_collision(global_cell: Vector2i) -> void:
 ## The upper-storey twin of _sync_piece_collision, one layer up -- see
 ## UPPER_FLOOR_COLLISION_LAYER's own doc comment for why this needs its own
 ## physics layer rather than reusing the ground body mechanism verbatim.
-func _sync_upper_piece_collision(global_cell: Vector2i, tile_id: String) -> void:
+func _sync_upper_piece_collision(global_cell: Vector2i, tile_id: String, chunk: Chunk = null) -> void:
 	_remove_upper_piece_collision(global_cell)
 	if BuildingPiece.has_piece(tile_id) and not BuildingPiece.is_walkable(tile_id):
-		_spawn_upper_piece_collision(global_cell, tile_id)
+		_spawn_upper_piece_collision(global_cell, tile_id, chunk)
 
 
-func _spawn_upper_piece_collision(global_cell: Vector2i, piece_id: String) -> void:
+func _spawn_upper_piece_collision(global_cell: Vector2i, piece_id: String, chunk: Chunk = null) -> void:
 	var body := StaticBody2D.new()
 	body.name = "UpperPieceCollision"
 	body.position = Vector2(
 		(global_cell.x + 0.5) * TerrainRenderer.TILE_SIZE, (global_cell.y + 0.5) * TerrainRenderer.TILE_SIZE
 	)
 	body.collision_layer = UPPER_FLOOR_COLLISION_LAYER
-	var shape := CollisionShape2D.new()
-	var rect := RectangleShape2D.new()
-	rect.size = Vector2.ONE * TerrainRenderer.TILE_SIZE
-	shape.shape = rect
-	body.add_child(shape)
+	var mask := 0
+	if chunk != null and BuildingPiece.category_of(piece_id) == BuildingPiece.CATEGORY_WALL:
+		var material := BuildingPiece.material_of(piece_id)
+		if _illustrated_building_piece.has_thin_wall_art(material):
+			mask = BuildingPiece.outward_wall_mask(
+				chunk.upper_floor_modifications, _local_coord(global_cell.x, global_cell.y)
+			)
+	if mask == 0:
+		_add_full_tile_collision_shape(body)
+	else:
+		_add_thin_wall_collision_shapes(body, mask)
 	_entities_parent.add_child(body)
 	var chunk_coord := _chunk_coord_for_tile(global_cell)
 	if not _upper_piece_collision_bodies.has(chunk_coord):
@@ -12954,7 +13053,7 @@ func build_upper_floor_at_global(global_x: int, global_y: int, tile_id: String) 
 	var local := _local_coord(global_x, global_y)
 	chunk.upper_floor_modifications[local] = tile_id
 	_paint_upper_floor(chunk_coord, chunk, _upper_view_cells_for(chunk_coord))
-	_sync_upper_piece_collision(Vector2i(global_x, global_y), tile_id)
+	_sync_upper_piece_collision(Vector2i(global_x, global_y), tile_id, chunk)
 	return true
 
 
@@ -13973,7 +14072,7 @@ func _load_chunk(chunk_coord: Vector2i) -> void:
 	# this point.
 	for local_cell in _piece_grid_for(chunk):
 		var global_cell: Vector2i = chunk_coord * CHUNK_SIZE + local_cell
-		_sync_piece_collision(global_cell, chunk.modifications[local_cell])
+		_sync_piece_collision(global_cell, chunk.modifications[local_cell], chunk)
 	if _roof_layer != null:
 		_terrain_renderer.paint_roofs(_roof_layer, chunk, chunk_coord * CHUNK_SIZE, _hidden_cells_for(chunk_coord))
 	_paint_furniture(chunk_coord, chunk)
@@ -13984,7 +14083,7 @@ func _load_chunk(chunk_coord: Vector2i) -> void:
 	# body back too, not just its paint.
 	for local_cell in _upper_floor_piece_grid_for(chunk):
 		var global_cell: Vector2i = chunk_coord * CHUNK_SIZE + local_cell
-		_sync_upper_piece_collision(global_cell, chunk.upper_floor_modifications[local_cell])
+		_sync_upper_piece_collision(global_cell, chunk.upper_floor_modifications[local_cell], chunk)
 	_loaded_trees[chunk_coord] = _tree_renderer.spawn_trees(
 		_entities_parent, chunk, chunk_coord * CHUNK_SIZE, TerrainRenderer.TILE_SIZE
 	)

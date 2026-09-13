@@ -354,6 +354,10 @@ func test_build_tile_set_creates_one_atlas_tile_per_biome_variant_plus_the_build
 		# facade_variant_image): material x category x storey, appended after
 		# the trail tile for the same reason.
 		+ TerrainRenderer.FACADE_VARIANT_MATERIALS.size() * TerrainRenderer.FACADE_VARIANT_CATEGORIES.size() * ProceduralBuildingPieceSprite.FACADE_STOREY_COUNT
+		# The thin-wall family (see IllustratedBuildingPieceSprite.
+		# thin_wall_variant_image): (material with real thin-wall art) x
+		# outward mask, appended after the facade family for the same reason.
+		+ renderer._thin_wall_materials().size() * TerrainRenderer.THIN_WALL_MASK_COUNT
 	)
 	assert_eq(source.get_tiles_count(), expected)
 
@@ -388,6 +392,10 @@ func test_build_tile_set_total_tile_count_grows_by_exactly_one_tile_per_structur
 		# facade_variant_image): material x category x storey, appended after
 		# the trail tile for the same reason.
 		+ TerrainRenderer.FACADE_VARIANT_MATERIALS.size() * TerrainRenderer.FACADE_VARIANT_CATEGORIES.size() * ProceduralBuildingPieceSprite.FACADE_STOREY_COUNT
+		# The thin-wall family (see IllustratedBuildingPieceSprite.
+		# thin_wall_variant_image): (material with real thin-wall art) x
+		# outward mask, appended after the facade family for the same reason.
+		+ renderer._thin_wall_materials().size() * TerrainRenderer.THIN_WALL_MASK_COUNT
 	)
 	assert_eq(
 		source.get_tiles_count() - tile_count_without_structures_or_pieces - BuildingPiece.PIECE_IDS.size(),
@@ -554,6 +562,10 @@ func test_build_tile_set_total_tile_count_grows_by_exactly_one_tile_per_building
 		# facade_variant_image): material x category x storey, appended after
 		# the trail tile for the same reason.
 		+ TerrainRenderer.FACADE_VARIANT_MATERIALS.size() * TerrainRenderer.FACADE_VARIANT_CATEGORIES.size() * ProceduralBuildingPieceSprite.FACADE_STOREY_COUNT
+		# The thin-wall family (see IllustratedBuildingPieceSprite.
+		# thin_wall_variant_image): (material with real thin-wall art) x
+		# outward mask, appended after the facade family for the same reason.
+		+ renderer._thin_wall_materials().size() * TerrainRenderer.THIN_WALL_MASK_COUNT
 	)
 	assert_eq(source.get_tiles_count() - tile_count_without_pieces, BuildingPiece.PIECE_IDS.size())
 
@@ -2804,8 +2816,13 @@ func test_paint_draws_a_houses_south_face_from_the_facade_family():
 	assert_eq(tile_map_layer.get_cell_atlas_coords(Vector2i(1, 4)), renderer.atlas_coords_for_facade_variant(BuildingPiece.MATERIAL_WOOD, BuildingPiece.CATEGORY_WALL, ground), "bottom-left corner: facade")
 	assert_eq(tile_map_layer.get_cell_atlas_coords(Vector2i(2, 4)), renderer.atlas_coords_for_facade_variant(BuildingPiece.MATERIAL_WOOD, BuildingPiece.CATEGORY_DOOR, ground), "the door: facade door")
 	assert_eq(tile_map_layer.get_cell_atlas_coords(Vector2i(3, 4)), renderer.atlas_coords_for_facade_variant(BuildingPiece.MATERIAL_WOOD, BuildingPiece.CATEGORY_WINDOW, ground), "the front window: facade window")
-	assert_eq(tile_map_layer.get_cell_atlas_coords(Vector2i(1, 2)), renderer.atlas_coords_for_modification("wood_wall"), "a side wall (a wall south of it): plain")
-	assert_eq(tile_map_layer.get_cell_atlas_coords(Vector2i(2, 1)), renderer.atlas_coords_for_modification("wood_wall"), "the back wall (floor south of it): plain")
+	# A side/back wall cell is not the street face, but it DOES have its own
+	# real outward side(s) now (see the thin-wall family below) -- it is
+	# neither the facade tile NOR the old flat plain tile any more.
+	var side_mask := BuildingPiece.outward_wall_mask(chunk.modifications, Vector2i(1, 2))
+	var back_mask := BuildingPiece.outward_wall_mask(chunk.modifications, Vector2i(2, 1))
+	assert_eq(tile_map_layer.get_cell_atlas_coords(Vector2i(1, 2)), renderer.atlas_coords_for_thin_wall_variant(BuildingPiece.MATERIAL_WOOD, side_mask), "a side wall: its own outward (west) side, thin-walled")
+	assert_eq(tile_map_layer.get_cell_atlas_coords(Vector2i(2, 1)), renderer.atlas_coords_for_thin_wall_variant(BuildingPiece.MATERIAL_WOOD, back_mask), "the back wall: its own outward (north) side, thin-walled")
 	assert_eq(tile_map_layer.get_cell_atlas_coords(Vector2i(3, 1)), renderer.atlas_coords_for_modification("wood_window"), "a back window: plain, it is under the roof")
 	assert_eq(tile_map_layer.get_cell_atlas_coords(Vector2i(2, 2)), renderer.atlas_coords_for_modification("wood_floor"), "the floor is the floor")
 
@@ -2838,3 +2855,82 @@ func test_a_notched_house_shows_a_facade_on_every_south_facing_run():
 	assert_eq(tile_map_layer.get_cell_atlas_coords(Vector2i(5, 3)), facade_wall, "the notch's own south face")
 	assert_eq(tile_map_layer.get_cell_atlas_coords(Vector2i(2, 6)), facade_wall, "the wing's south face")
 	assert_eq(tile_map_layer.get_cell_atlas_coords(Vector2i(2, 3)), renderer.atlas_coords_for_modification("wood_floor"), "the wing joins the block here: floor")
+
+
+# -- thin wall variants (docs/concept/building.md "How a house reads from --
+# -- above", point 8): a wall cell's own outward side(s) -----------------
+# -- (BuildingPiece.outward_wall_mask) get a real trim strip over the -----
+# -- room's own floor, instead of a flat, full-tile solid texture --------
+
+func test_every_thin_wall_variant_has_its_own_atlas_slot_apart_from_every_other_family():
+	var seen := {}
+	for mask in 16:
+		var coords := renderer.atlas_coords_for_thin_wall_variant(BuildingPiece.MATERIAL_WOOD, mask)
+		assert_false(seen.has(coords), "wood mask %d collides with %s" % [mask, str(seen.get(coords, ""))])
+		seen[coords] = "wood %d" % mask
+		var stone_coords := renderer.atlas_coords_for_thin_wall_variant(BuildingPiece.MATERIAL_STONE, mask)
+		assert_false(seen.has(stone_coords), "stone mask %d collides with %s" % [mask, str(seen.get(stone_coords, ""))])
+		seen[stone_coords] = "stone %d" % mask
+		assert_ne(coords, renderer.atlas_coords_for_modification("wood_wall"), "must not reuse the plain wall tile")
+		assert_ne(coords, renderer.atlas_coords_for_facade_variant(BuildingPiece.MATERIAL_WOOD, BuildingPiece.CATEGORY_WALL, ProceduralBuildingPieceSprite.FACADE_GROUND), "must not reuse the facade tile")
+
+
+func test_the_atlas_reserves_room_for_the_thin_wall_family_after_the_facade_family():
+	assert_gt(
+		renderer._atlas_total_cells(),
+		renderer._facade_variant_base_linear() + renderer._facade_variant_family_size() - 1,
+		"the thin-wall family is appended after the facade family"
+	)
+
+
+## A material with NO real thin-wall art (timber has no wall sheet at all --
+## see IllustratedBuildingPieceSprite.has_thin_wall_art) keeps the plain
+## full-tile wall it always had: the visual must never promise a thickness
+## the collision (gated on the identical has_thin_wall_art check) doesn't
+## actually give.
+func test_a_material_with_no_thin_wall_art_keeps_the_plain_wall_tile():
+	var tile_set := renderer.build_tile_set()
+	tile_map_layer.tile_set = tile_set
+	var chunk := Chunk.new()
+	chunk.width = 6
+	chunk.height = 6
+	chunk.elevation = PackedFloat32Array()
+	chunk.elevation.resize(36)
+	chunk.biome = PackedStringArray()
+	for i in 36:
+		chunk.biome.append("grassland")
+	for x in range(1, 5):
+		for y in range(1, 5):
+			chunk.modifications[Vector2i(x, y)] = "timber_wall" if (x == 1 or x == 4 or y == 1 or y == 4) else "timber_floor"
+
+	renderer.paint(tile_map_layer, chunk)
+
+	assert_eq(tile_map_layer.get_cell_atlas_coords(Vector2i(1, 2)), renderer.atlas_coords_for_modification("timber_wall"), "timber has no thin-wall art: plain tile")
+
+
+## The reported shape itself: a building's own OUTER CORNER gets thickness
+## on BOTH its outward sides, not just one.
+func test_paint_draws_a_buildings_corner_wall_with_both_outward_sides_marked():
+	var tile_set := renderer.build_tile_set()
+	tile_map_layer.tile_set = tile_set
+	var chunk := Chunk.new()
+	chunk.width = 6
+	chunk.height = 6
+	chunk.elevation = PackedFloat32Array()
+	chunk.elevation.resize(36)
+	chunk.biome = PackedStringArray()
+	for i in 36:
+		chunk.biome.append("grassland")
+	for x in range(1, 5):
+		for y in range(1, 5):
+			chunk.modifications[Vector2i(x, y)] = "wood_wall" if (x == 1 or x == 4 or y == 1 or y == 4) else "wood_floor"
+
+	renderer.paint(tile_map_layer, chunk)
+
+	# (1,1) is the top-left corner: nothing to its north or west.
+	var corner_mask := BuildingPiece.outward_wall_mask(chunk.modifications, Vector2i(1, 1))
+	assert_eq(corner_mask, BuildingPiece.EDGE_NORTH | BuildingPiece.EDGE_WEST)
+	assert_eq(
+		tile_map_layer.get_cell_atlas_coords(Vector2i(1, 1)),
+		renderer.atlas_coords_for_thin_wall_variant(BuildingPiece.MATERIAL_WOOD, corner_mask)
+	)

@@ -169,7 +169,7 @@ const ATLAS_COLUMNS := 64
 ## still being decorrelated between neighbouring tiles.
 const _VARIANT_SALT := 90210
 
-const ATLAS_VERSION := "art_resolution_v26_illustrated_building_pieces"
+const ATLAS_VERSION := "art_resolution_v27_thin_wall_variants"
 
 ## Overridable so tests never touch the real user:// cache (see
 ## TerrainAtlasCache) -- production code (EarthChunkManager) never sets
@@ -796,10 +796,61 @@ func atlas_coords_for_facade_variant(material: String, category: String, storey:
 	return _grid_coords(_facade_variant_linear(material, category, safe_storey))
 
 
+## Thin wall variants (docs/concept/building.md "How a house reads from
+## above", point 8; IllustratedBuildingPieceSprite.thin_wall_variant_image):
+## reported directly, "walls are now 1 Tile thick... they should be 1/4
+## tile wide the rest of the 3/4 wall should be made walkable floor". A
+## wall cell's OWN outward side(s) (BuildingPiece.outward_wall_mask) get a
+## real trim strip over the room's own floor instead of a flat, full-tile
+## texture -- one atlas tile per (material with real thin-wall art) x
+## (outward mask), appended after the facade family. A material with no
+## thin-wall art (the timber tier; any future wall material added without
+## one) reserves no slots and keeps the plain single tile it always had --
+## the visual must never promise a thickness the collision (gated on the
+## identical has_thin_wall_art check, see EarthChunkManager) doesn't
+## actually give.
+const THIN_WALL_MASK_COUNT := 16  # 2^4 -- mask indexes the family directly, same convention ROOF_EDGE_MASK_COUNT uses.
+
+
+## Which materials actually get a thin-wall family -- only those
+## IllustratedBuildingPieceSprite has real trim-strip art for today (wood,
+## stone). Checked once per bake/index call rather than cached: a handful
+## of dictionary lookups against a small fixed candidate list, negligible
+## next to everything else build_tile_set already does per call.
+func _thin_wall_materials() -> Array:
+	var materials: Array = []
+	for material in [BuildingPiece.MATERIAL_WOOD, BuildingPiece.MATERIAL_STONE, BuildingPiece.MATERIAL_TIMBER]:
+		if _illustrated_building_piece.has_thin_wall_art(material):
+			materials.append(material)
+	return materials
+
+
+func _thin_wall_variant_base_linear() -> int:
+	return _facade_variant_base_linear() + _facade_variant_family_size()
+
+
+func _thin_wall_variant_family_size() -> int:
+	return _thin_wall_materials().size() * THIN_WALL_MASK_COUNT
+
+
+func _thin_wall_variant_linear(material: String, mask: int) -> int:
+	var material_ordinal: int = maxi(_thin_wall_materials().find(material), 0)
+	return _thin_wall_variant_base_linear() + material_ordinal * THIN_WALL_MASK_COUNT + mask
+
+
+## The atlas coordinate for a wall cell's own thin-wall variant, given
+## `material` and its outward mask (BuildingPiece.EDGE_* bits, 0-15).
+## Out-of-range/unknown-material values clamp/default rather than index
+## past the family.
+func atlas_coords_for_thin_wall_variant(material: String, mask: int) -> Vector2i:
+	var safe_mask := clampi(mask, 0, THIN_WALL_MASK_COUNT - 1)
+	return _grid_coords(_thin_wall_variant_linear(material, safe_mask))
+
+
 ## Every atlas slot any family reserves -- the last family's end. The one
 ## number build_tile_set and the atlas-size test share.
 func _atlas_total_cells() -> int:
-	return _facade_variant_base_linear() + _facade_variant_family_size()
+	return _thin_wall_variant_base_linear() + _thin_wall_variant_family_size()
 
 
 ## A building piece's tile as it should be painted at `local` in `chunk`:
@@ -818,6 +869,18 @@ func _atlas_coords_for_piece_in_context(chunk: Chunk, local: Vector2i, tile_id: 
 				return atlas_coords_for_facade_variant(
 					BuildingPiece.material_of(tile_id), category, ProceduralBuildingPieceSprite.FACADE_GROUND
 				)
+		# Thin wall variants (see _thin_wall_variant_base_linear): a wall
+		# cell that ISN'T the street face (the branch above already claimed
+		# that case) still has its own real outward side(s) -- side/back/
+		# interior walls all get the trim-strip treatment now, not just a
+		# flat tile. Doors/windows are untouched outside the facade band;
+		# they already carry their own inset leaf/pane art.
+		if category == BuildingPiece.CATEGORY_WALL:
+			var material := BuildingPiece.material_of(tile_id)
+			if _illustrated_building_piece.has_thin_wall_art(material):
+				var mask := BuildingPiece.outward_wall_mask(chunk.modifications, local)
+				if mask != 0:
+					return atlas_coords_for_thin_wall_variant(material, mask)
 	return atlas_coords_for_modification(tile_id)
 
 
@@ -1144,6 +1207,20 @@ func _build_atlas_pixels(biome_count: int, rows: int) -> Image:
 					facade_material, facade_category, storey
 				)
 				_blit_tile(image, facade_image, _facade_variant_linear(facade_material, facade_category, storey))
+
+	# Thin wall variants (see _thin_wall_variant_base_linear): one tile per
+	# (material with real thin-wall art) x outward mask -- the room's own
+	# floor tile (whatever _piece_image already resolved for that
+	# material -- illustrated if available, else procedural, so this stays
+	# in sync automatically) with the material's own trim strip composited
+	# onto every outward side.
+	for thin_wall_material in _thin_wall_materials():
+		var floor_base := _piece_image("%s_floor" % thin_wall_material)
+		for mask in THIN_WALL_MASK_COUNT:
+			var thin_wall_image := _illustrated_building_piece.thin_wall_variant_image(
+				thin_wall_material, mask, floor_base
+			)
+			_blit_tile(image, thin_wall_image, _thin_wall_variant_linear(thin_wall_material, mask))
 
 	# The trail tile (see TRAIL_TILE_ID) -- flat and hard-edged like every
 	# other modification tile except EARTH_TILE_ID, appended after every
