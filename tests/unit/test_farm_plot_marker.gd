@@ -8,6 +8,8 @@ extends GutTest
 
 const FarmPlotMarker = preload("res://src/rendering/farm_plot_marker.gd")
 const FarmPlot = preload("res://src/gameplay/farm_plot.gd")
+const IllustratedGrassPatch = preload("res://src/rendering/illustrated_grass_patch.gd")
+const IllustratedWheatPatch = preload("res://src/rendering/illustrated_wheat_patch.gd")
 
 var marker: FarmPlotMarker
 
@@ -118,3 +120,86 @@ func _grow_to_ready(a_marker: FarmPlotMarker) -> void:
 	for i in 12:
 		a_marker.water()
 		a_marker.advance(step)
+
+
+# -- wheat renders as bending blades, not IllustratedCropSprite's flat -----
+# -- leaves -- see docs/concept/long_grass.md's "A second atlas family: ----
+# -- farmed wheat" and docs/concept/npc_farm_production.md (the autonomous --
+# -- Farm/Farmer already plants and harvests real "wheat", but had no real --
+# -- crop art at all until this) -----------------------------------------
+
+
+func test_current_wheat_season_defaults_sensibly_before_any_advance():
+	add_child_autofree(marker)
+	assert_eq(marker.current_wheat_season(), IllustratedWheatPatch.DEFAULT_SEASON)
+
+
+func test_advance_records_the_season_it_was_given():
+	add_child_autofree(marker)
+	marker.advance(0.0, "autumn")
+	assert_eq(marker.current_wheat_season(), "autumn")
+
+
+func test_advance_still_accepts_no_season_and_ticks_growth_exactly_as_before():
+	add_child_autofree(marker)
+	marker.till_and_plant("carrot", 42)
+	marker.advance(1.0)
+	assert_eq(marker.plot.time_growing, 1.0)
+
+
+func test_a_carrot_plot_does_not_render_as_bending_wheat():
+	add_child_autofree(marker)
+	marker.till_and_plant("carrot", 42)
+	assert_false(marker.is_rendering_bending_wheat())
+
+
+func test_an_empty_plot_does_not_render_as_bending_wheat():
+	add_child_autofree(marker)
+	assert_false(marker.is_rendering_bending_wheat())
+
+
+func test_a_growing_wheat_plot_renders_as_bending_blades():
+	add_child_autofree(marker)
+	marker.till_and_plant("wheat", 42)
+	assert_true(marker.is_rendering_bending_wheat())
+	assert_eq(marker.wheat_blade_count(), IllustratedGrassPatch.CARD_COUNT)
+
+
+func test_a_ready_wheat_plot_still_renders_as_bending_blades():
+	add_child_autofree(marker)
+	marker.till_and_plant("wheat", 42)
+	_grow_to_ready(marker)
+	assert_eq(marker.plot.state, "ready")
+	assert_true(marker.is_rendering_bending_wheat())
+
+
+func test_harvesting_wheat_clears_the_bending_blades():
+	add_child_autofree(marker)
+	marker.till_and_plant("wheat", 42)
+	_grow_to_ready(marker)
+	marker.harvest()
+	assert_eq(marker.plot.state, "empty")
+	assert_false(marker.is_rendering_bending_wheat())
+	assert_eq(marker.wheat_blade_count(), 0)
+
+
+## Replanting the SAME plot with a different crop must fully switch render
+## paths, not leave stale wheat blades sitting behind the new crop's leaves
+## (a real class of bug this codebase has hit before -- stale visuals left
+## over from a previous state).
+func test_replanting_wheat_over_with_carrot_switches_away_from_bending_blades():
+	add_child_autofree(marker)
+	marker.till_and_plant("wheat", 42)
+	_grow_to_ready(marker)
+	marker.harvest()
+	marker.till_and_plant("carrot", 7)
+	assert_false(marker.is_rendering_bending_wheat())
+	assert_eq(marker.wheat_blade_count(), 0)
+
+
+func test_a_withered_wheat_plot_still_renders_blades_tinted_the_same_withered_color():
+	add_child_autofree(marker)
+	marker.till_and_plant("wheat", 42)
+	marker.advance(marker.plot.growth_time * FarmPlot.WATER_GRACE_FRACTION + 0.01)
+	assert_eq(marker.plot.state, "withered")
+	assert_true(marker.is_rendering_bending_wheat())
