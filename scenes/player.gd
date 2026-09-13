@@ -1677,6 +1677,30 @@ func _try_hire_carpenter_for_house(recipe_id: String, target: Vector2i) -> bool:
 	return true
 
 
+## Direct Builder mode (docs/concept/npc_role_consensus.md's "One building,
+## two roles" section): a real toggle gated on standing near a real,
+## standing city_hall -- reusing _has_structure_near_player, the SAME "near
+## a structure" proximity check every other single-tile structure
+## interaction in this file already uses, rather than a second one.
+## Entering requires it; leaving does not (a real player walks away from
+## the desk to go place things, so exiting is never re-gated on still
+## standing there). The blueprint-placement cursor and per-step "Build (R)"
+## action this mode is FOR are real, named, out-of-scope follow-up work
+## (see that doc's own Status list) -- this is only the gate.
+var direct_builder_mode := false
+
+
+func _try_enter_direct_builder_mode() -> bool:
+	if not _has_structure_near_player("city_hall"):
+		return false
+	direct_builder_mode = true
+	return true
+
+
+func _exit_direct_builder_mode() -> void:
+	direct_builder_mode = false
+
+
 ## True while a placed campfire (see EarthChunkManager.has_structure_near) is
 ## within HEAT_SOURCE_RADIUS_TILES of the player's current tile -- a real
 ## world-proximity check, not an inventory count: carrying an unplaced
