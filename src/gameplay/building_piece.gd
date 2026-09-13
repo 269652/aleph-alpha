@@ -73,6 +73,21 @@ const PIECE_IDS: Array[String] = [
 	"wood_stairs",
 ]
 
+## Whether a real piece stands on `cell` or any of its eight neighbours
+## (docs/concept/building.md "Placement rules": a house keeps a one-cell
+## apron clear of trees, so no tree ever stands on its doorstep -- reported
+## directly, a door with a tree in front of it). The one rule all three
+## tree seams read: TreeRenderer.spawn_trees, EarthChunkManager.step_tree_
+## spread, and the village stamp's own clearing. Only a real BuildingPiece
+## counts, exactly like has_piece -- an earth path is not a house.
+static func touches_piece(modifications: Dictionary, cell: Vector2i) -> bool:
+	for dy in range(-1, 2):
+		for dx in range(-1, 2):
+			if has_piece(modifications.get(cell + Vector2i(dx, dy), "")):
+				return true
+	return false
+
+
 ## Per-piece definition.
 ##   category          see CATEGORY_* above
 ##   material          see MATERIAL_*

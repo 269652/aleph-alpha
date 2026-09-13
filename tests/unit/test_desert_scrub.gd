@@ -173,3 +173,16 @@ func test_advance_grows_slower_in_winter_than_in_summer_for_the_same_elapsed_tim
 	winter.advance(1.0, winter_modifier)
 
 	assert_gt(summer.get_growth(immature), winter.get_growth(immature))
+
+
+# -- blocked cells (see TallGrass.block_cells): nothing grows on a floor -----
+
+func test_block_cells_removes_scrub_and_spread_never_returns_there():
+	var scrub := DesertScrub.new(5, WIDTH, HEIGHT, _biome_all("desert"))
+	assert_gt(scrub.get_patch_cells().size(), 0, "precondition: some scrub")
+	var cell: Vector2i = scrub.get_patch_cells()[0]
+	scrub.block_cells([cell])
+	assert_false(scrub.has_scrub(cell))
+	for i in 300:
+		scrub.advance(DesertScrub.SPREAD_INTERVAL, 1.0)
+	assert_false(scrub.has_scrub(cell), "scrub spread back onto a blocked cell")

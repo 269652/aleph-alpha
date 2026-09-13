@@ -111,6 +111,16 @@ var _ground_seeds: Dictionary = {}
 var _shed_accumulator := 0.0
 var _shed_index := 0
 
+## Cells nothing may grow on -- the floor of a real building piece (docs/
+## concept/building.md "Placement rules": "a tile a real piece stands on
+## grows nothing afterwards"; reported directly, "grass must be cut before
+## and can't grow back inside a house"). Vector2i -> true, set through
+## block_cells, which also clears whatever already grew there. Kept as its
+## own set rather than folded into the water blockers passed to _init, so a
+## house stamped AFTER this sim was created (a village generates after the
+## chunk's ground cover does) can block its cells at that moment.
+var _blocked: Dictionary = {}
+
 
 ## `is_river` (see Chunk.is_river) defaults to empty -- every pre-existing
 ## 4-argument call site keeps behaving exactly as before (no rivers), the
@@ -138,6 +148,23 @@ func _is_river_at(x: int, y: int) -> bool:
 
 func get_patch_cells() -> Array:
 	return _patches.keys()
+
+
+## Marks `cells` as built on: the grass and any fallen seed there are gone
+## now, and neither plant() nor the spread step nor a falling seed will
+## ever put grass back while the block stands.
+func block_cells(cells: Array) -> void:
+	for cell in cells:
+		_blocked[cell] = true
+		_patches.erase(cell)
+		_ground_seeds.erase(cell)
+
+
+## The reverse, for a piece that was destroyed: the cell is ordinary ground
+## again and may be colonised like any other.
+func unblock_cells(cells: Array) -> void:
+	for cell in cells:
+		_blocked.erase(cell)
 
 
 func has_grass(cell: Vector2i) -> bool:
@@ -198,7 +225,7 @@ func shed_seed(delta: float) -> void:
 		var cell := parent + offset
 		if cell.x < 0 or cell.x >= _width or cell.y < 0 or cell.y >= _height:
 			continue
-		if _ground_seeds.has(cell):
+		if _ground_seeds.has(cell) or _blocked.has(cell):
 			continue
 		_ground_seeds[cell] = true
 
@@ -226,7 +253,7 @@ func plant(cell: Vector2i) -> bool:
 		return false
 	if _biome[cell.y * _width + cell.x] != "grassland":
 		return false
-	if _patches.has(cell):
+	if _patches.has(cell) or _blocked.has(cell):
 		return false
 	_patches[cell] = 0.0  # planted, not map-seeded: starts as a shoot and must grow
 	return true
@@ -283,6 +310,6 @@ func _step_spread() -> void:
 			continue
 		if _is_river_at(target.x, target.y):
 			continue
-		if _patches.has(target):
+		if _patches.has(target) or _blocked.has(target):
 			continue
 		_patches[target] = 0.0  # spread grass starts immature and must grow

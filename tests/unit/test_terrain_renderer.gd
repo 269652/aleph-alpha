@@ -108,7 +108,7 @@ func _wipe_cache_behavior_files():
 ## "room_for_tile" errors for every grid cell beyond the fake image's
 ## bounds. Mirrors build_tile_set()'s own size math exactly.
 func _full_atlas_size() -> Vector2i:
-	var total_cells: int = renderer._trail_linear() + 1
+	var total_cells: int = renderer._atlas_total_cells()
 	var rows := int(ceil(float(total_cells) / TerrainRenderer.ATLAS_COLUMNS))
 	var art := TerrainRenderer.ART_TILE_SIZE
 	return Vector2i(TerrainRenderer.ATLAS_COLUMNS * art, rows * art)
@@ -348,8 +348,12 @@ func test_build_tile_set_creates_one_atlas_tile_per_biome_variant_plus_the_build
 		# pitched roof rather than one flat tile repeated across a rectangle.
 		+ TerrainRenderer.ROOF_VARIANT_MATERIALS.size() * RoofShape.TOTAL_SHADE_BANDS * TerrainRenderer.ROOF_EDGE_MASK_COUNT
 		# The trail tier's own single flat tile (see TRAIL_TILE_ID),
-		# appended last so it shifts no other family's index.
+		# appended after every family above so it shifts none of their indices.
 		+ 1
+		# The facade family (see ProceduralBuildingPieceSprite.generate_
+		# facade_variant_image): material x category x storey, appended after
+		# the trail tile for the same reason.
+		+ TerrainRenderer.FACADE_VARIANT_MATERIALS.size() * TerrainRenderer.FACADE_VARIANT_CATEGORIES.size() * ProceduralBuildingPieceSprite.FACADE_STOREY_COUNT
 	)
 	assert_eq(source.get_tiles_count(), expected)
 
@@ -378,8 +382,12 @@ func test_build_tile_set_total_tile_count_grows_by_exactly_one_tile_per_structur
 		# pitched roof rather than one flat tile repeated across a rectangle.
 		+ TerrainRenderer.ROOF_VARIANT_MATERIALS.size() * RoofShape.TOTAL_SHADE_BANDS * TerrainRenderer.ROOF_EDGE_MASK_COUNT
 		# The trail tier's own single flat tile (see TRAIL_TILE_ID),
-		# appended last so it shifts no other family's index.
+		# appended after every family above so it shifts none of their indices.
 		+ 1
+		# The facade family (see ProceduralBuildingPieceSprite.generate_
+		# facade_variant_image): material x category x storey, appended after
+		# the trail tile for the same reason.
+		+ TerrainRenderer.FACADE_VARIANT_MATERIALS.size() * TerrainRenderer.FACADE_VARIANT_CATEGORIES.size() * ProceduralBuildingPieceSprite.FACADE_STOREY_COUNT
 	)
 	assert_eq(
 		source.get_tiles_count() - tile_count_without_structures_or_pieces - BuildingPiece.PIECE_IDS.size(),
@@ -540,8 +548,12 @@ func test_build_tile_set_total_tile_count_grows_by_exactly_one_tile_per_building
 		# pitched roof rather than one flat tile repeated across a rectangle.
 		+ TerrainRenderer.ROOF_VARIANT_MATERIALS.size() * RoofShape.TOTAL_SHADE_BANDS * TerrainRenderer.ROOF_EDGE_MASK_COUNT
 		# The trail tier's own single flat tile (see TRAIL_TILE_ID),
-		# appended last so it shifts no other family's index.
+		# appended after every family above so it shifts none of their indices.
 		+ 1
+		# The facade family (see ProceduralBuildingPieceSprite.generate_
+		# facade_variant_image): material x category x storey, appended after
+		# the trail tile for the same reason.
+		+ TerrainRenderer.FACADE_VARIANT_MATERIALS.size() * TerrainRenderer.FACADE_VARIANT_CATEGORIES.size() * ProceduralBuildingPieceSprite.FACADE_STOREY_COUNT
 	)
 	assert_eq(source.get_tiles_count() - tile_count_without_pieces, BuildingPiece.PIECE_IDS.size())
 
@@ -2676,3 +2688,92 @@ func test_the_diagonal_corner_is_found_with_and_without_an_unrelated_blend():
 		with_blend.is_empty(),
 		"the same diagonal corner must still be found when another edge happens to blend"
 	)
+
+
+# -- facade variants (docs/concept/building.md "How a house reads from -----
+# -- above", point 6): a wall/window/door cell with nothing of its own ------
+# -- building directly south of it is the building's street face, and is ---
+# -- painted from its own facade family rather than the interior wall tile --
+
+const ProceduralBuildingPieceSprite = preload("res://src/rendering/procedural_building_piece_sprite.gd")
+
+
+func test_every_facade_variant_has_its_own_atlas_slot_apart_from_every_other_family():
+	var seen := {}
+	for material in TerrainRenderer.FACADE_VARIANT_MATERIALS:
+		for category in TerrainRenderer.FACADE_VARIANT_CATEGORIES:
+			for storey in ProceduralBuildingPieceSprite.FACADE_STOREY_COUNT:
+				var coords := renderer.atlas_coords_for_facade_variant(material, category, storey)
+				assert_false(seen.has(coords), "%s %s %d collides with %s" % [material, category, storey, str(seen.get(coords, ""))])
+				seen[coords] = "%s %s %d" % [material, category, storey]
+				assert_ne(coords, renderer.atlas_coords_for_modification("%s_%s" % [material, category]), "must not reuse the plain piece tile")
+				assert_ne(coords, renderer.atlas_coords_for_modification(TerrainRenderer.TRAIL_TILE_ID))
+				assert_ne(coords, renderer.atlas_coords_for_roof_variant(BuildingPiece.MATERIAL_WOOD, 0, 0))
+
+
+func test_the_atlas_reserves_room_for_the_facade_family_after_the_trail_tile():
+	assert_gt(renderer._atlas_total_cells(), renderer._trail_linear() + 1, "the facade family is appended after the trail tile")
+
+
+## paint() picks the facade variant for exactly the building's street face:
+## the bottom wall row of a hut (nothing of the hut south of it), door and
+## windows included -- never its side walls (a wall cell south of them),
+## never its top wall (floor south of it), never a lone earth path.
+func test_paint_draws_a_houses_south_face_from_the_facade_family():
+	var tile_set := renderer.build_tile_set()
+	tile_map_layer.tile_set = tile_set
+	var chunk := Chunk.new()
+	chunk.width = 6
+	chunk.height = 6
+	chunk.elevation = PackedFloat32Array()
+	chunk.elevation.resize(36)
+	chunk.biome = PackedStringArray()
+	for i in 36:
+		chunk.biome.append("grassland")
+	for x in range(1, 5):
+		for y in range(1, 5):
+			chunk.modifications[Vector2i(x, y)] = "wood_wall" if (x == 1 or x == 4 or y == 1 or y == 4) else "wood_floor"
+	chunk.modifications[Vector2i(2, 4)] = "wood_door"
+	chunk.modifications[Vector2i(3, 4)] = "wood_window"
+	chunk.modifications[Vector2i(3, 1)] = "wood_window"  # a window on the back wall, under the roof
+
+	renderer.paint(tile_map_layer, chunk)
+
+	var ground := ProceduralBuildingPieceSprite.FACADE_GROUND
+	assert_eq(tile_map_layer.get_cell_atlas_coords(Vector2i(1, 4)), renderer.atlas_coords_for_facade_variant(BuildingPiece.MATERIAL_WOOD, BuildingPiece.CATEGORY_WALL, ground), "bottom-left corner: facade")
+	assert_eq(tile_map_layer.get_cell_atlas_coords(Vector2i(2, 4)), renderer.atlas_coords_for_facade_variant(BuildingPiece.MATERIAL_WOOD, BuildingPiece.CATEGORY_DOOR, ground), "the door: facade door")
+	assert_eq(tile_map_layer.get_cell_atlas_coords(Vector2i(3, 4)), renderer.atlas_coords_for_facade_variant(BuildingPiece.MATERIAL_WOOD, BuildingPiece.CATEGORY_WINDOW, ground), "the front window: facade window")
+	assert_eq(tile_map_layer.get_cell_atlas_coords(Vector2i(1, 2)), renderer.atlas_coords_for_modification("wood_wall"), "a side wall (a wall south of it): plain")
+	assert_eq(tile_map_layer.get_cell_atlas_coords(Vector2i(2, 1)), renderer.atlas_coords_for_modification("wood_wall"), "the back wall (floor south of it): plain")
+	assert_eq(tile_map_layer.get_cell_atlas_coords(Vector2i(3, 1)), renderer.atlas_coords_for_modification("wood_window"), "a back window: plain, it is under the roof")
+	assert_eq(tile_map_layer.get_cell_atlas_coords(Vector2i(2, 2)), renderer.atlas_coords_for_modification("wood_floor"), "the floor is the floor")
+
+
+func test_a_notched_house_shows_a_facade_on_every_south_facing_run():
+	var tile_set := renderer.build_tile_set()
+	tile_map_layer.tile_set = tile_set
+	var chunk := Chunk.new()
+	chunk.width = 8
+	chunk.height = 8
+	chunk.elevation = PackedFloat32Array()
+	chunk.elevation.resize(64)
+	chunk.biome = PackedStringArray()
+	for i in 64:
+		chunk.biome.append("grassland")
+	# An L: a 6x3 block on top with a 3x3 wing hanging down at its left --
+	# the right half of the block's bottom wall faces south (the notch), and
+	# so does the wing's own bottom wall.
+	for x in range(1, 7):
+		for y in range(1, 4):
+			chunk.modifications[Vector2i(x, y)] = "wood_wall" if (x == 1 or x == 6 or y == 1 or y == 3) else "wood_floor"
+	for x in range(1, 4):
+		for y in range(3, 7):
+			chunk.modifications[Vector2i(x, y)] = "wood_wall" if (x == 1 or x == 3 or y == 6) else "wood_floor"
+
+	renderer.paint(tile_map_layer, chunk)
+
+	var ground := ProceduralBuildingPieceSprite.FACADE_GROUND
+	var facade_wall := renderer.atlas_coords_for_facade_variant(BuildingPiece.MATERIAL_WOOD, BuildingPiece.CATEGORY_WALL, ground)
+	assert_eq(tile_map_layer.get_cell_atlas_coords(Vector2i(5, 3)), facade_wall, "the notch's own south face")
+	assert_eq(tile_map_layer.get_cell_atlas_coords(Vector2i(2, 6)), facade_wall, "the wing's south face")
+	assert_eq(tile_map_layer.get_cell_atlas_coords(Vector2i(2, 3)), renderer.atlas_coords_for_modification("wood_floor"), "the wing joins the block here: floor")

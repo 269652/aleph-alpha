@@ -98,7 +98,15 @@ choice.
 Rules exist to stop floating nonsense, not to nag:
 
 - A floor may be placed on any buildable ground (not water, not on an
-  existing structure piece).
+  existing structure piece). **Water is one rule, not several:** a cell is
+  water for building exactly when the terrain painter would paint it as
+  water — the ocean biome, a river's channel *plus its bank apron*, a lake,
+  a sea pocket, or a still-water pocket too small to count as a lake but
+  wet enough to paint (`EarthChunkManager.is_water_at_global`, the same
+  predicate the river/lake overlay paints from). Before this the
+  buildability check and the painted surface were two different
+  predicates, and the gap between them is exactly where a stone house with
+  a pond in its living room came from.
 - A wall, door or window must sit on, or orthogonally touch, a floor piece
   — walls belong to a building, not to open wilderness.
 - A roof must sit above a cell that is part of an enclosed room.
@@ -111,6 +119,15 @@ Rules exist to stop floating nonsense, not to nag:
   onto it when the chunk reloads, and no spread or bird-dropped seed takes
   root on it. Only a *real* `BuildingPiece` occupies: an earth path or a
   campfire is a chunk modification too, and neither uproots a tree.
+  The same holds for ground cover: tall grass, flowers, desert scrub and
+  tundra lichen are cleared from every cell a real piece stands on and can
+  neither seed, spread nor regrow there while the piece stands
+  (`block_cells` on each cover simulation, wired at chunk load before the
+  first sprite sync, at stamp and at player build; `unblock_cells` when the
+  piece is destroyed). Trees keep a one-cell **apron** as well: no tree
+  spawns or spreads onto a cell that touches a piece (8-neighbourhood,
+  `BuildingPiece.touches_piece`), because a trunk against the front wall
+  blocks the door as surely as one inside the room.
 
 Placement validity is pure logic over a grid, so it can be asked the same
 question by the player's build cursor and by the NPC village generator.
@@ -140,14 +157,24 @@ placement-validity check above) — a real gap: a house's ring-layout anchor
 could land on a water pocket (a chunk's dominant biome only gates the whole
 chunk, not every individual cell, so a grassland-dominant chunk can still
 have a pond/river cutting through it) and get stamped straight into it.
-`VillageRenderer._find_dry_origin` closes the most visible instance of this
-by mirroring `can_place`'s own "not water" rule before stamping, nudging to
-nearby dry ground (or skipping the house if none is found) — but it is its
-own bespoke check, not a call into `BuildingPlacement` itself, so other
-placement rules (not overlapping an existing piece, walls needing an
-adjacent floor) still aren't enforced for village generation. Full
-unification — the village generator asking `BuildingPlacement` the same
-question the player's build cursor does — remains a follow-up.
+`VillageRenderer._fit_house` closes the visible instances of this before
+stamping: the whole footprint *and the doorstep outside the door* must lie
+inside the chunk, on buildable ground (the one water rule above, no forest
+biome, no standing tree) and free of any existing modification — so a
+house can neither stand in a pond, nor be stamped over a neighbour, nor be
+truncated at a chunk edge. `_find_clear_origin` searches outward from the
+ring-layout anchor, nearest first, across the whole of the house's own
+chunk (the chunk edge is the only bound — two of ten probed villages sit
+in chunks that are ~85% lake, whose only dry ground lay 15-25 tiles from
+most anchors) for the nearest origin that fits; if the chosen shape fits
+nowhere, the villager builds a
+smaller one from `_FALLBACK_BLUEPRINT_IDS` (a small cottage, then a tiny
+hut), and only when not even a hut fits is the house skipped. This is
+still a bespoke check rather than a call into `BuildingPlacement` itself
+(walls needing an adjacent floor is not re-verified — a catalog blueprint
+already guarantees it), so full unification — the village generator asking
+`BuildingPlacement` the same question the player's build cursor does —
+remains a follow-up.
 
 A **second** instance of that gap has now been closed: standing vegetation.
 Reported as a tree with its trunk rooted in a village house's stone floor
@@ -317,6 +344,28 @@ lifted above it (`UPPER_FLOOR_OCCUPANT_Z_INDEX`) so the floor they stand on
 cannot paint over them, and downstairs villagers correctly hidden beneath
 it.
 
+**6. The facade is a *face*, not an interior wall seen from outside.**
+Reported once the catalog, roofs and second storeys were all in: the
+buildings still "look poor and basic; not like sophisticated architecture".
+Points 2 and 5 decide *where* the facade band is, but the band was painted
+with the same log/brick tile as an interior wall — every house was a roof
+over a strip of whatever it was made of. A real street face is its own
+art: half-timbered plaster between dark timbers on a wood or timber house
+(the frame in the material's own tone, so sawn timber still tells against
+rough wood), dressed ashlar over a darker plinth on a stone one; the roof's
+overhang casting a shadow down the top rows of every facade cell (the one
+cue that turns a flat band into a wall standing under a roof); a sill and
+shutters framing a window; a lintel over the door and a worn step at its
+foot. The upper storey's band (point 5) is its own variant — a string
+course or sill beam where the ground storey has its plinth — so two
+stacked bands never read as one repeated row. Like the roof pitch (point
+3) this is resolved at paint time from context, not a new piece id: a
+wall, window or door cell with no building piece directly south of it is
+a facade cell and takes the facade variant
+(`ProceduralBuildingPieceSprite.generate_facade_variant_image`, a material
+× category × storey atlas family baked after the trail tile); every other
+wall cell keeps the plain tile the player sees from inside.
+
 None of this changes the piece vocabulary or what gets persisted — a roof
 is still one `wood_roof`/`stone_roof` chunk modification per cell (see
 Persistence below), and an upper-floor piece is still stored at its own
@@ -378,9 +427,9 @@ modification like any other.
   or forest biome, no river, no lake, no standing tree) is the one real
   check `can_build_house_from_blueprint` (the player's own instant
   self-build), `BuilderMarker._buildable_ground` (the hired path -- a
-  permissive `return true` before this), and `VillageRenderer._find_dry_
-  origin` (the village generator -- ocean-only before this, missing
-  rivers/lakes) all now share, refusing/re-siting a placement UPFRONT
+  permissive `return true` before this), and `VillageRenderer._fit_house`
+  (the village generator -- ocean-only before this, missing rivers/lakes)
+  all now share, refusing/re-siting a placement UPFRONT
   rather than ever reaching `stamp_structure_at_global` with a tree still
   standing on the footprint. This is what makes the vegetation-clearing
   entry immediately below now a defensive fallback rather than the
@@ -405,6 +454,52 @@ modification like any other.
   closing direction 3, a spread or bird-dropped seed sprouting on a floor.
   `TreeRooting.can_root_in` still answers only the BIOME half of "can a tree
   stand here"; occupancy is a separate, second refusal.
+- ✅ Livable village houses — one pass over three reports at once ("still
+  look poor and basic... still not furnished... some are built so that you
+  can't enter", with a screenshot of a stone house with a pond *inside* it;
+  and "they shouldn't be able to build anything on water tiles and trees /
+  grass must be cut before and can't grow back inside a house"):
+  - *Furniture and stairs were there but invisible.* Every furniture id and
+    `wood_stairs` fell through `ProceduralBuildingPieceSprite.generate_
+    image`'s `match` to the plain floor tile, so a fully furnished room
+    drew as bare boards. They have real art now, pinned by the file's own
+    every-piece-visually-distinct test (which was already red on `main`
+    for exactly this reason, and for `stone_dam` == `boulder`).
+  - *One water rule* (see "Placement rules"): `EarthChunkManager.
+    is_water_at_global` is the single predicate behind buildability AND the
+    painted river/lake overlay, so a wet cell can no longer be buildable —
+    before, buildability asked `is_river_at_global`/`is_lake_at_global`
+    while the painter drew water from a wider hydrology probe (sea pockets,
+    small still-water pockets, the river bank apron). A persisted house
+    piece found standing in water on chunk load is washed away and the
+    chunk re-saved (`_reclaim_pieces_standing_in_water`), so worlds saved
+    before this heal on the next visit; dams and boulders are exempt since
+    they belong in water.
+  - *Ground cover is cleared and kept out* (see "Placement rules"):
+    `TallGrass`/`FlowerPatch`/`DesertScrub`/`TundraLichen.block_cells` on
+    every cell a real piece stands on — wired at chunk load (before the
+    first sprite sync), at stamp and at player build, released on destroy
+    — and trees keep the one-cell apron via `BuildingPiece.touches_piece`
+    at all three tree seams (`spawn_trees`, `step_tree_spread`, the
+    stamp's own clearing).
+  - *Siting* (see "One system, two builders"): `_fit_house` /
+    `_find_clear_origin` — footprint + doorstep inside the chunk, buildable
+    and unoccupied, searched nearest-first across the whole chunk (was a
+    6-tile radius, then 12), smaller fallback shapes before a skip. Measured by re-running the real `spawn_village` on ten
+    real settlements around 48.6°N 12.7°E (50 houses): 46 stamped, none
+    truncated, overlapping, in water, unfurnished or with a lost/blocked
+    door; 18 of the 46 are fallback shapes; **4 houses are still skipped**,
+    all in two chunks that are ~85% lake with 126 and 89 buildable cells
+    respectively (one of them a scatter inside forest), so their villagers
+    stand without a house — the honest remaining gap. The real fix there is
+    upstream: `SettlementGenerator.has_settlement_at` gates on the chunk's
+    DOMINANT biome only, which still says "grassland" for a chunk that is
+    mostly a lake; founding a settlement only where enough buildable ground
+    exists is a follow-up (it would move existing villages in saved
+    worlds, so it is not done as a side effect here).
+  - *The facade family* (see "How a house reads from above", point 6).
+  [housing.md](housing.md)'s Status carries the household side of the same
+  pass.
 - ✅ The same rule for boulders and ore, closed on **both** sides.
   `StoneRenderer.spawn_stones` had the identical bug with the identical
   shape — it iterated its cells over `chunk.biome` and never consulted
@@ -448,9 +543,9 @@ modification like any other.
   still points a merchant's personal trading stand at open ground instead
   of a wall. Verified end-to-end against a real loaded chunk (real walls,
   exactly one door, real floor, a roof all present), not just the
-  unit-level piece/placement/room logic. `VillageRenderer._find_dry_origin`
-  nudges a house's origin off a water pocket before stamping (see "One
-  system, two builders" above), and every merchant villager gets a second,
+  unit-level piece/placement/room logic. `VillageRenderer._fit_house` sites
+  a house on clear, dry, in-chunk ground before stamping (see "One system,
+  two builders" above), and every merchant villager gets a second,
   personal trading stand next to their own door (the same "stall" sprite as
   the shared village-square one), not just the one shared landmark.
 - ✅ Per-occupation workspot props close the gap the merchant-stand pass left

@@ -99,6 +99,29 @@ const SECONDS_TO_MATURE := 900.0
 var _wind_direction := Vector2.RIGHT
 var _wind_strength := 0.0
 
+## Cells nothing may grow on -- the floor of a real building piece (see
+## TallGrass._blocked for the full reasoning; the same rule, the same shape).
+var _blocked: Dictionary = {}
+
+
+## Marks `cells` as built on: the flower and any seed lying there are gone
+## now, and neither plant() nor a falling seed nor rooting will ever put one
+## back while the block stands (see TallGrass.block_cells).
+func block_cells(cells: Array) -> void:
+	for cell in cells:
+		_blocked[cell] = true
+		_flowers.erase(cell)
+		_growth.erase(cell)
+		_nectar.erase(cell)
+		_seed.erase(cell)
+		_pollinated.erase(cell)
+		_ground_seeds.erase(cell)
+
+
+func unblock_cells(cells: Array) -> void:
+	for cell in cells:
+		_blocked.erase(cell)
+
 
 func set_wind(direction: Vector2, strength: float) -> void:
 	_wind_direction = direction if direction.length() > 0.0 else Vector2.RIGHT
@@ -261,7 +284,7 @@ func shed_seed(delta: float, season: String) -> void:
 		var cell := parent + offset
 		if cell.x < 0 or cell.x >= _width or cell.y < 0 or cell.y >= _height:
 			continue
-		if _ground_seeds.has(cell):
+		if _ground_seeds.has(cell) or _blocked.has(cell):
 			continue
 		_ground_seeds[cell] = _flowers[parent]
 
@@ -313,7 +336,7 @@ func root_seeds(soil_moisture: float, bare_earth: float) -> void:
 		# in an established plant's shade is outcompeted before it is a plant
 		# (see FlowerEstablishment). Rain roots seed; it does not suspend
 		# competition for light.
-		if not FlowerEstablishment.is_clear(cell, _flowers):
+		if _blocked.has(cell) or not FlowerEstablishment.is_clear(cell, _flowers):
 			continue
 		if _flowers.size() >= MAX_FLOWERS:
 			return
@@ -383,7 +406,7 @@ func plant(cell: Vector2i, species: String) -> bool:
 	# taken, and the ring around it that a seedling could not survive in. A
 	# gate the animal-dispersal path could route around would silently refill
 	# exactly the gaps the baked meadow opens.
-	if not FlowerEstablishment.is_clear(cell, _flowers):
+	if _blocked.has(cell) or not FlowerEstablishment.is_clear(cell, _flowers):
 		return false
 	_flowers[cell] = species
 	_seed[cell] = 1.0

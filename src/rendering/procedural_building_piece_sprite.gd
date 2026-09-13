@@ -17,6 +17,14 @@ extends RefCounted
 ##   door   -- a door-shaped panel set into the wall's own material
 ##   window -- a wall with a pale glass pane inset
 ##   roof   -- a shingle/thatch pattern, distinct from floor's plank look
+##
+## Plus the interior pieces (docs/concept/housing.md): seven furniture
+## tiles and the stairs, each an OBJECT drawn on the room's own floor rather
+## than a ground tile of its own -- see _furniture_image. And the FACADE
+## family (generate_facade_variant_image): the face a house shows the
+## street, painted from context at paint time like the roof's own pitch
+## variants -- see docs/concept/building.md "How a house reads from above",
+## point 6.
 
 const PixelPalette = preload("res://src/rendering/pixel_palette.gd")
 const BuildingPiece = preload("res://src/gameplay/building_piece.gd")
@@ -77,7 +85,11 @@ func generate_image(piece_id: String) -> Image:
 		BuildingPiece.CATEGORY_ROOF:
 			return _roof_image(is_stone)
 		BuildingPiece.CATEGORY_DAM:
-			return _dam_image(base)
+			return _boulder_image(base) if piece_id == "boulder" else _dam_image(base)
+		BuildingPiece.CATEGORY_FURNITURE:
+			return _furniture_image(piece_id, base)
+		BuildingPiece.CATEGORY_STAIRS:
+			return _stairs_image(base)
 		_:
 			return _floor_image(base, is_stone)
 
@@ -156,6 +168,30 @@ func _dam_image(base: Color) -> Image:
 					# generator in this project uses.
 					var lit := dx + dy <= -radius
 					image.set_pixel(x, y, highlight if lit else base)
+	return image
+
+
+## One big river boulder (docs/concept/rivers.md) sitting in the dark water
+## of its own cell -- a single rounded mass lit from the top-left, NOT the
+## dam's heap of many small rubble stones it used to share pixels with
+## (test_every_piece_is_visually_distinct_from_every_other was red on that
+## pair).
+func _boulder_image(base: Color) -> Image:
+	var image := Image.create(SIZE, SIZE, false, Image.FORMAT_RGBA8)
+	image.fill(_palette.shade(_palette.shade(base)))
+	var highlight := _palette.highlight(base)
+	var shadow := _palette.shade(base)
+	var centre := Vector2(SIZE * 0.5, SIZE * 0.52)
+	var radius := SIZE * 0.36
+	for y in SIZE:
+		for x in SIZE:
+			var dx := float(x) - centre.x
+			var dy := float(y) - centre.y
+			if dx * dx + dy * dy * 1.3 > radius * radius:
+				continue
+			var lit := dx + dy <= -radius * 0.45
+			var shaded := dx + dy >= radius * 0.55
+			image.set_pixel(x, y, highlight if lit else (shadow if shaded else base))
 	return image
 
 
@@ -376,6 +412,156 @@ func _rim_edges(image: Image, mask: int) -> void:
 				image.set_pixel(SIZE - 1 - x, y, _scaled(image.get_pixel(SIZE - 1 - x, y), ROOF_RIM_DARKEN))
 
 
+## -- Facade variants (docs/concept/building.md "How a house reads from ----
+## -- above", point 6) --------------------------------------------------------
+##
+## Reported directly: NPC buildings "look poor and basic; not like
+## sophisticated architecture." From above, the only wall a house ever
+## shows is its facade band (the southernmost cells, which the roof stops
+## short of) -- and it was painted with the same log/brick tile as an
+## interior wall, so a whole village read as brown boxes with a strip of
+## windows. A facade cell gets its own face: for wood and timber, plaster
+## between dark timbers -- the half-timbered look every real top-down
+## village leans on -- with a diagonal brace in a plain panel; for stone,
+## dressed ashlar courses over a darker plinth. Every variant carries the
+## roof's own overhang shadow down its top rows (EAVE_SHADOW_ROWS), the one
+## cue that turns a flat band into a wall standing UNDER a roof. A window
+## keeps the exact pane _window_image draws, plus a sill and shutters; a
+## door keeps the exact leaf _door_image draws, plus a stone step. The
+## ground storey shows a plinth at its foot; the upper storey (a two-story
+## house's band, drawn one row up over the roof -- see housing.md) shows a
+## string course instead, so two bands never read as one repeated row.
+## Painted from CONTEXT (TerrainRenderer.paint decides which wall cells are
+## facade), so no piece id, no save format and no blueprint changes.
+const FACADE_GROUND := 0
+const FACADE_UPPER := 1
+const FACADE_STOREY_COUNT := 2
+
+## How many rows down from the top the eave's shadow reaches.
+const EAVE_SHADOW_ROWS := 3
+const _EAVE_SHADOW_FACTORS: Array[float] = [0.55, 0.68, 0.84]
+
+const _PLASTER := Color(0.86, 0.80, 0.66)
+const _SHUTTER := Color(0.20, 0.36, 0.24)
+const _TIMBER_FRAME_THICKNESS := 3
+const _PLINTH_ROWS := 5
+const _STEP_ROWS := 3
+
+
+## `with_eave_shadow` exists so the eave's shadow can be pinned against the
+## same face without it; the game always draws the shaded face.
+func generate_facade_variant_image(material: String, category: String, storey: int, with_eave_shadow: bool = true) -> Image:
+	var is_stone := material == BuildingPiece.MATERIAL_STONE
+	var base := _base_color_for(material, is_stone)
+	var image := _facade_wall_image(base, is_stone, storey, category == BuildingPiece.CATEGORY_WALL)
+	match category:
+		BuildingPiece.CATEGORY_WINDOW:
+			_draw_facade_window(image, base)
+		BuildingPiece.CATEGORY_DOOR:
+			_draw_facade_door(image, base, is_stone)
+	if with_eave_shadow:
+		_shade_eave(image)
+	return image
+
+
+## The street face itself, before any opening: half-timbered plaster
+## (wood/timber -- the frame in the material's own wood tone, so a timber
+## house's paler sawn frame still tells against a wood one's) or dressed
+## ashlar (stone), with a plinth (ground) or a string course (upper).
+func _facade_wall_image(base: Color, is_stone: bool, storey: int, with_brace: bool) -> Image:
+	var image := Image.create(SIZE, SIZE, false, Image.FORMAT_RGBA8)
+	if is_stone:
+		var block := _scaled(_STONE_BASE, 1.08)
+		image.fill(block)
+		var joint := _palette.shade(block)
+		for y in SIZE:
+			if y % _BRICK_ROW_HEIGHT == 0:
+				for x in SIZE:
+					image.set_pixel(x, y, joint)
+				continue
+			var row_index := y / _BRICK_ROW_HEIGHT
+			var offset := 0 if row_index % 2 == 0 else _BRICK_JOINT_OFFSET + 2
+			for x in SIZE:
+				if (x + offset) % (_BRICK_JOINT_SPACING + 4) == 0:
+					image.set_pixel(x, y, joint)
+		if storey == FACADE_GROUND:
+			_fill_rect(image, 0, SIZE - _PLINTH_ROWS, SIZE, SIZE, _scaled(_STONE_BASE, 0.78))
+			for x in SIZE:
+				image.set_pixel(x, SIZE - _PLINTH_ROWS, _palette.highlight(_STONE_BASE))
+		else:
+			for x in SIZE:
+				image.set_pixel(x, 4, _palette.highlight(_STONE_BASE))
+				image.set_pixel(x, 5, _palette.shade(_STONE_BASE))
+		return image
+
+	image.fill(_PLASTER)
+	var frame := _scaled(base, 0.72)
+	var t := _TIMBER_FRAME_THICKNESS
+	# Posts at both sides and a beam under the eave; the foot is either the
+	# ground storey's stone plinth or the upper storey's own sill beam.
+	_fill_rect(image, 0, 0, t, SIZE, frame)
+	_fill_rect(image, SIZE - t, 0, SIZE, SIZE, frame)
+	_fill_rect(image, 0, EAVE_SHADOW_ROWS, SIZE, EAVE_SHADOW_ROWS + t, frame)
+	if storey == FACADE_GROUND:
+		_fill_rect(image, 0, SIZE - _PLINTH_ROWS, SIZE, SIZE, _scaled(_STONE_BASE, 0.85))
+		for x in SIZE:
+			image.set_pixel(x, SIZE - _PLINTH_ROWS, _palette.highlight(_STONE_BASE))
+	else:
+		_fill_rect(image, 0, SIZE - t, SIZE, SIZE, frame)
+	if with_brace:
+		# A diagonal brace across the panel -- the half-timber signature.
+		var top := EAVE_SHADOW_ROWS + t
+		var bottom := (SIZE - _PLINTH_ROWS) if storey == FACADE_GROUND else (SIZE - t)
+		for y in range(top, bottom):
+			var fraction := float(y - top) / float(maxi(bottom - top - 1, 1))
+			var x := t + int(round((1.0 - fraction) * float(SIZE - 2 * t - 2)))
+			for dx in 2:
+				if x + dx < SIZE - t:
+					image.set_pixel(x + dx, y, frame)
+	return image
+
+
+func _draw_facade_window(image: Image, base: Color) -> void:
+	# The exact pane _window_image draws (pinned: the glass is the same
+	# glass), then a sill under it and a shutter to each side.
+	for y in range(_PANE_MARGIN, SIZE - _PANE_MARGIN):
+		for x in range(_PANE_MARGIN, SIZE - _PANE_MARGIN):
+			image.set_pixel(x, y, _PANE_COLOR)
+	var mid := SIZE / 2
+	for y in range(_PANE_MARGIN, SIZE - _PANE_MARGIN):
+		image.set_pixel(mid, y, base)
+	for x in range(_PANE_MARGIN, SIZE - _PANE_MARGIN):
+		image.set_pixel(x, mid, base)
+	_outline_rect(image, Vector2i(_PANE_MARGIN, _PANE_MARGIN), SIZE - _PANE_MARGIN * 2)
+	_fill_rect(image, _PANE_MARGIN - 4, _PANE_MARGIN + 1, _PANE_MARGIN - 1, SIZE - _PANE_MARGIN - 1, _SHUTTER)
+	_fill_rect(image, SIZE - _PANE_MARGIN + 1, _PANE_MARGIN + 1, SIZE - _PANE_MARGIN + 4, SIZE - _PANE_MARGIN - 1, _SHUTTER)
+	_fill_rect(image, _PANE_MARGIN - 4, SIZE - _PANE_MARGIN, SIZE - _PANE_MARGIN + 4, SIZE - _PANE_MARGIN + 2, _palette.shade(_PLASTER))
+
+
+func _draw_facade_door(image: Image, base: Color, is_stone: bool) -> void:
+	# The exact leaf _door_image draws (pinned: the door is the same door),
+	# a lintel over it, and a worn stone step at its foot.
+	for y in range(_DOOR_FRAME_MARGIN, SIZE - _DOOR_FRAME_MARGIN):
+		for x in range(_DOOR_FRAME_MARGIN, SIZE - _DOOR_FRAME_MARGIN):
+			image.set_pixel(x, y, _DOOR_COLOR)
+	for x in [_DOOR_FRAME_MARGIN + SIZE / 3, _DOOR_FRAME_MARGIN + 2 * SIZE / 3]:
+		for y in range(_DOOR_FRAME_MARGIN, SIZE - _DOOR_FRAME_MARGIN):
+			image.set_pixel(x, y, _palette.shade(_DOOR_COLOR))
+	image.set_pixel(_DOOR_HANDLE_POS.x, _DOOR_HANDLE_POS.y, _DOOR_HANDLE_COLOR)
+	_outline_rect(image, Vector2i(_DOOR_FRAME_MARGIN, _DOOR_FRAME_MARGIN), SIZE - _DOOR_FRAME_MARGIN * 2)
+	var lintel := _scaled(_STONE_BASE, 0.9) if is_stone else _scaled(base, 0.72)
+	_fill_rect(image, _DOOR_FRAME_MARGIN - 1, _DOOR_FRAME_MARGIN - 1, SIZE - _DOOR_FRAME_MARGIN + 1, _DOOR_FRAME_MARGIN, lintel)
+	_fill_rect(image, _DOOR_FRAME_MARGIN - 2, SIZE - _STEP_ROWS, SIZE - _DOOR_FRAME_MARGIN + 2, SIZE, _scaled(_STONE_BASE, 0.72))
+
+
+## The roof overhangs the wall and shadows its top rows -- darkest right
+## under the eave, fading down into the lit wall.
+func _shade_eave(image: Image) -> void:
+	for y in mini(EAVE_SHADOW_ROWS, SIZE):
+		for x in SIZE:
+			image.set_pixel(x, y, _scaled(image.get_pixel(x, y), _EAVE_SHADOW_FACTORS[y]))
+
+
 static func _scaled(color: Color, factor: float) -> Color:
 	return Color(
 		clampf(color.r * factor, 0.0, 1.0),
@@ -417,3 +603,225 @@ func _outline_rect(image: Image, top_left: Vector2i, size: int) -> void:
 	for y in range(top_left.y, top_left.y + size):
 		image.set_pixel(top_left.x, y, outline)
 		image.set_pixel(top_left.x + size - 1, y, outline)
+
+
+## -- Furniture and stairs (docs/concept/housing.md "Interior furniture") --
+##
+## Reported directly, after NPC houses were furnished: "they are still not
+## furnished." They were: every furniture id -- and wood_stairs -- fell
+## through generate_image's category match to the plain wood-floor tile, so
+## a bed was painted as a patch of floor over the floor (test_every_piece_
+## is_visually_distinct_from_every_other was red on exactly that), and the
+## stairs a player has to FIND to reach a second storey were invisible.
+##
+## Each piece is an OBJECT standing on the room's own wood floor -- the
+## floor tile is the background and shows around it (pinned by
+## test_furniture_sits_on_the_room_floor) -- with a silhouette and a colour
+## a player tells apart at a glance: a table's pale top on dark legs, a
+## chair's slatted backrest, a bed's white pillow and red blanket in a
+## wooden frame, a rug's woven border and centre diamond, a bookshelf's
+## coloured spines, a couch's cushions between two arms, a photo frame's
+## gilt edge around a little landscape. Deterministic, no RNG, like every
+## other generator in this file; sizes are fractions of SIZE so the art
+## survives an ART_TILE_SIZE change.
+const _MATTRESS := Color(0.92, 0.88, 0.78)
+const _PILLOW := Color(0.98, 0.97, 0.94)
+const _BLANKET := Color(0.62, 0.20, 0.18)
+const _RUG := Color(0.55, 0.18, 0.20)
+const _RUG_PATTERN := Color(0.90, 0.80, 0.60)
+const _COUCH := Color(0.22, 0.42, 0.42)
+const _GILT := Color(0.85, 0.70, 0.30)
+const _PICTURE_SKY := Color(0.55, 0.75, 0.90)
+const _PICTURE_HILLS := Color(0.35, 0.55, 0.25)
+const _PICTURE_SUN := Color(0.98, 0.92, 0.55)
+const _BOOK_SPINES: Array[Color] = [
+	Color(0.60, 0.20, 0.20), Color(0.20, 0.45, 0.30), Color(0.25, 0.30, 0.60),
+	Color(0.80, 0.70, 0.30), Color(0.50, 0.30, 0.50),
+]
+
+
+func _furniture_image(piece_id: String, base: Color) -> Image:
+	var image := _floor_image(_WOOD_BASE, false)
+	match piece_id:
+		"wood_chair":
+			_draw_chair(image, base)
+		"wood_bed":
+			_draw_bed(image, base)
+		"wood_rug":
+			_draw_rug(image)
+		"wood_bookshelf":
+			_draw_bookshelf(image, base)
+		"couch":
+			_draw_couch(image)
+		"photo_frame":
+			_draw_photo_frame(image)
+		_:
+			_draw_table(image, base)  # wood_table, and the fail-safe for a future piece with no art yet
+	return image
+
+
+## A whole flight of stairs down the cell: a run of treads (paler wood,
+## each a step darker than the one above, so the eye reads DOWN) separated
+## by dark risers, between two dark stringers, on the room's own floor.
+## The same cell carries the stairs on both storeys (see docs/concept/
+## housing.md), so this one tile reads as "stairs" from either.
+const _STAIR_STEPS := 5
+
+
+func _stairs_image(base: Color) -> Image:
+	var image := _floor_image(_WOOD_BASE, false)
+	var tread := _palette.highlight(base)
+	var riser := _palette.shade(_palette.shade(base))
+	_fill_rect(image, _px(0.10), _px(0.04), _px(0.16), _px(0.96), riser)
+	_fill_rect(image, _px(0.84), _px(0.04), _px(0.90), _px(0.96), riser)
+	var top := _px(0.06)
+	var bottom := _px(0.94)
+	var step_height := float(bottom - top) / float(_STAIR_STEPS)
+	for i in _STAIR_STEPS:
+		var y0 := top + int(round(step_height * i))
+		var y1 := top + int(round(step_height * (i + 1)))
+		var riser_from := y0 + int(round((y1 - y0) * 0.65))
+		_fill_rect(image, _px(0.16), y0, _px(0.84), riser_from, _scaled(tread, 1.0 - 0.07 * i))
+		_fill_rect(image, _px(0.16), riser_from, _px(0.84), y1, riser)
+	_outline_box(image, _px(0.10), _px(0.04), _px(0.90), _px(0.96))
+	return image
+
+
+func _draw_table(image: Image, base: Color) -> void:
+	var top := _palette.highlight(base)
+	var legs := _palette.shade(_palette.shade(base))
+	_fill_rect(image, _px(0.17), _px(0.62), _px(0.24), _px(0.80), legs)
+	_fill_rect(image, _px(0.76), _px(0.62), _px(0.83), _px(0.80), legs)
+	_fill_rect(image, _px(0.15), _px(0.25), _px(0.85), _px(0.62), top)
+	# Plank grain across the top, the way a tabletop is boarded.
+	var grain := _palette.shade(top)
+	for y in range(_px(0.25) + 3, _px(0.62), 4):
+		for x in range(_px(0.15) + 1, _px(0.85) - 1):
+			image.set_pixel(x, y, grain)
+	_outline_box(image, _px(0.15), _px(0.25), _px(0.85), _px(0.62))
+
+
+func _draw_chair(image: Image, base: Color) -> void:
+	var seat := _palette.highlight(base)
+	var back := _palette.shade(base)
+	var legs := _palette.shade(_palette.shade(base))
+	_fill_rect(image, _px(0.28), _px(0.70), _px(0.35), _px(0.84), legs)
+	_fill_rect(image, _px(0.65), _px(0.70), _px(0.72), _px(0.84), legs)
+	_fill_rect(image, _px(0.25), _px(0.16), _px(0.75), _px(0.34), back)
+	# Two slat gaps in the backrest so it reads as a chair back, not a box.
+	for x in [_px(0.41), _px(0.58)]:
+		for y in range(_px(0.19), _px(0.32)):
+			image.set_pixel(x, y, seat)
+	_fill_rect(image, _px(0.25), _px(0.36), _px(0.75), _px(0.70), seat)
+	_outline_box(image, _px(0.25), _px(0.16), _px(0.75), _px(0.70))
+
+
+func _draw_bed(image: Image, base: Color) -> void:
+	var frame := _palette.shade(base)
+	_fill_rect(image, _px(0.12), _px(0.08), _px(0.88), _px(0.92), frame)
+	_fill_rect(image, _px(0.18), _px(0.13), _px(0.82), _px(0.88), _MATTRESS)
+	_fill_rect(image, _px(0.24), _px(0.16), _px(0.76), _px(0.32), _PILLOW)
+	_fill_rect(image, _px(0.18), _px(0.40), _px(0.82), _px(0.88), _BLANKET)
+	# The turned-back fold of the blanket, one pale line across it.
+	for x in range(_px(0.18), _px(0.82)):
+		image.set_pixel(x, _px(0.46), _scaled(_BLANKET, 1.3))
+	_outline_box(image, _px(0.12), _px(0.08), _px(0.88), _px(0.92))
+
+
+func _draw_rug(image: Image) -> void:
+	var x0 := _px(0.08)
+	var y0 := _px(0.18)
+	var x1 := _px(0.92)
+	var y1 := _px(0.82)
+	_fill_rect(image, x0, y0, x1, y1, _RUG)
+	# A woven border: a pale band one step in from the edge.
+	for x in range(x0 + 3, x1 - 3):
+		image.set_pixel(x, y0 + 3, _RUG_PATTERN)
+		image.set_pixel(x, y1 - 4, _RUG_PATTERN)
+	for y in range(y0 + 3, y1 - 3):
+		image.set_pixel(x0 + 3, y, _RUG_PATTERN)
+		image.set_pixel(x1 - 4, y, _RUG_PATTERN)
+	# A centre diamond, the classic medallion.
+	var cx := (x0 + x1) / 2
+	var cy := (y0 + y1) / 2
+	var radius := _px(0.14)
+	for y in range(cy - radius, cy + radius + 1):
+		for x in range(cx - radius, cx + radius + 1):
+			var d := absi(x - cx) + absi(y - cy)
+			if d <= radius and d > radius - 3:
+				image.set_pixel(x, y, _RUG_PATTERN)
+	# Fabric has no hard outline; a darker selvedge instead.
+	_outline_box(image, x0, y0, x1, y1, _palette.shade(_RUG))
+
+
+func _draw_bookshelf(image: Image, base: Color) -> void:
+	var frame := _palette.shade(base)
+	var back := _palette.shade(frame)
+	_fill_rect(image, _px(0.15), _px(0.06), _px(0.85), _px(0.94), frame)
+	_fill_rect(image, _px(0.19), _px(0.10), _px(0.81), _px(0.90), back)
+	var rows := [[_px(0.12), _px(0.48)], [_px(0.52), _px(0.88)]]
+	var spine := 0
+	for row in rows:
+		var row_top: int = row[0]
+		var row_bottom: int = row[1]
+		var x := _px(0.21)
+		while x + 2 <= _px(0.79):
+			var colour: Color = _BOOK_SPINES[spine % _BOOK_SPINES.size()]
+			# Books of slightly different heights, deterministic per spine.
+			var height_fraction := 0.72 + 0.28 * float((spine * 7) % 5) / 4.0
+			var top := row_bottom - int(round((row_bottom - row_top) * height_fraction))
+			_fill_rect(image, x, top, x + 2, row_bottom, colour)
+			spine += 1
+			x += 3
+		# The shelf plank under each row.
+		for sx in range(_px(0.19), _px(0.81)):
+			image.set_pixel(sx, row_bottom, base)
+	_outline_box(image, _px(0.15), _px(0.06), _px(0.85), _px(0.94))
+
+
+func _draw_couch(image: Image) -> void:
+	var arm := _palette.shade(_COUCH)
+	_fill_rect(image, _px(0.06), _px(0.24), _px(0.16), _px(0.80), arm)
+	_fill_rect(image, _px(0.84), _px(0.24), _px(0.94), _px(0.80), arm)
+	_fill_rect(image, _px(0.16), _px(0.20), _px(0.84), _px(0.36), _scaled(_COUCH, 0.85))
+	_fill_rect(image, _px(0.16), _px(0.36), _px(0.84), _px(0.80), _COUCH)
+	# Two seat cushions: a seam between them and a lit front edge.
+	for y in range(_px(0.36), _px(0.80)):
+		image.set_pixel(_px(0.50), y, arm)
+	for x in range(_px(0.16), _px(0.84)):
+		image.set_pixel(x, _px(0.37), _palette.highlight(_COUCH))
+	_outline_box(image, _px(0.06), _px(0.20), _px(0.94), _px(0.80))
+
+
+func _draw_photo_frame(image: Image) -> void:
+	_fill_rect(image, _px(0.22), _px(0.22), _px(0.78), _px(0.78), _GILT)
+	_fill_rect(image, _px(0.30), _px(0.30), _px(0.70), _px(0.52), _PICTURE_SKY)
+	_fill_rect(image, _px(0.30), _px(0.52), _px(0.70), _px(0.70), _PICTURE_HILLS)
+	_fill_rect(image, _px(0.58), _px(0.36), _px(0.64), _px(0.42), _PICTURE_SUN)
+	_outline_box(image, _px(0.22), _px(0.22), _px(0.78), _px(0.78))
+
+
+## A pixel coordinate at fraction `f` of the tile, so every drawing above is
+## written once for any ART_TILE_SIZE.
+static func _px(f: float) -> int:
+	return int(round(f * SIZE))
+
+
+## Fills [x0, x1) x [y0, y1), clamped to the tile.
+static func _fill_rect(image: Image, x0: int, y0: int, x1: int, y1: int, color: Color) -> void:
+	for y in range(maxi(y0, 0), mini(y1, SIZE)):
+		for x in range(maxi(x0, 0), mini(x1, SIZE)):
+			image.set_pixel(x, y, color)
+
+
+## A one-pixel outline just inside [x0, x1) x [y0, y1) -- the same outline
+## colour _outline_rect uses for a door leaf or a window pane, unless a
+## caller wants its own (a rug's selvedge).
+func _outline_box(image: Image, x0: int, y0: int, x1: int, y1: int, color: Color = Color(0, 0, 0, 0)) -> void:
+	var outline := color if color.a > 0.0 else _palette.outline_color()
+	for x in range(maxi(x0, 0), mini(x1, SIZE)):
+		image.set_pixel(x, y0, outline)
+		image.set_pixel(x, y1 - 1, outline)
+	for y in range(maxi(y0, 0), mini(y1, SIZE)):
+		image.set_pixel(x0, y, outline)
+		image.set_pixel(x1 - 1, y, outline)

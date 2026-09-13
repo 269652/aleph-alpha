@@ -116,7 +116,10 @@ func spawn_trees(
 			# the roof (reported). Only REAL pieces count, the same distinction
 			# EarthChunkManager._piece_grid_for draws: an earth path or a
 			# campfire is a modification too, and neither uproots a tree.
-			if BuildingPiece.has_piece(chunk.modifications.get(Vector2i(x, y), "")):
+			# ...nor on the one-cell apron around one (BuildingPiece.touches_piece):
+			# a village clears the ground around its houses, doorsteps included,
+			# and a reload must not put a tree back in front of a door.
+			if BuildingPiece.touches_piece(chunk.modifications, Vector2i(x, y)):
 				continue
 
 			var position := _stand_position(global_x, global_y, tile_size)
