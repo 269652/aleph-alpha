@@ -6453,12 +6453,30 @@ never a redirected existing villager).
   doesn't paper over). A pure material shortfall with the structure
   already present is deliberately excluded — that stays the existing
   shortfall/regional-trade path's own job. 7/7 green.
-  - 🚧 Civic Construction's own Meeting Hall (above) stays unimplemented,
-    so nothing yet gates `demands_for` behind a real built City Hall, and
-    no live settlement-tick code calls it yet — a real, callable function
-    with no caller, the same honest state `NeedResolver`/
-    `ConstructionPriority` themselves were in before `SettlementBuildDecision`
-    gave them one.
+  - ✅ Now wired to a real live caller — see the `city_hall` bullet below.
+- **`city_hall` placeable + `EarthChunkManager.city_hall_demands_near`**
+  (medium) — ✅ Done — the user supplied a real reference sheet
+  (`assets/sprites/buildings/city_hall.png`, the same 8-column x 5-row
+  construction/idle/damaged/ruined layout `sawmill.png`/`warehouse.png`
+  already proved, verified empirically the same way). `city_hall` is a
+  real `ItemCatalog` placeable (wood 20 + stone 10, no skill gate) with
+  real illustrated art (`IllustratedStructureSprite`'s fifth subject).
+  `city_hall_demands_near(global_x, global_y)` returns `[]` when no real
+  City Hall stands within `CITY_HALL_DEMAND_RADIUS_TILES`, and otherwise
+  calls `SettlementDemand.demands_for` against the SAME real settlement
+  state `_apply_settlement_build_decision` already reads
+  (`market.stock`, `_present_structure_ids_for_settlement_chunk`) — a
+  City Hall now genuinely computes a real demand once built. Real
+  divergence from `civic_construction.md`'s own richer "Meeting Hall"
+  spec, noted honestly in that doc: this is the simple, directly-craftable
+  single-tile path, not yet the institution-formation-triggered
+  multi-piece `CivicBlueprint` construction that doc still specs. Real
+  bug found and fixed while writing the test: a structure built only a
+  couple tiles from the real-world Berlin fixture tile isn't reliably
+  within `SETTLEMENT_STRUCTURE_SCAN_RADIUS_TILES` of the chunk's own
+  CENTER (what `_present_structure_ids_for_settlement_chunk` actually
+  scans from) — fixed by anchoring the test at a real computed
+  chunk-center point instead. 4/4 green.
 - **Redirecting the winning candidate into a real, named worker** (large)
   — ⬜ Not started — the genuinely hard piece: making `NpcRoleConsensus`'s
   winner be an existing `NpcIdentity`/`NpcMarker` who leaves their normal
