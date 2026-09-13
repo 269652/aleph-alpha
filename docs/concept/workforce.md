@@ -334,36 +334,78 @@ Read once the project exists, from the SAME recipe's `required_skill`:
 Both paths converge on the same `ConstructionProject`; `COMPLETE` doesn't
 care which one got it there.
 
-### 4. A real NPC Carpentry number
+### 4. A real NPC Carpentry number — now the real Skill Web, not a formula
 
-NPCs have no numeric skill of any kind today — confirmed absent everywhere
-in the codebase, and `labor_skills.md`'s own fuller vision for "NPCs grow
-skill from real repeated work" is entirely `⬜`. Building that whole
-system is explicitly out of scope here (it is `labor_skills.md`'s own,
-much larger, cross-cutting backlog item, spanning ten skills). What this
-doc needs is much narrower and, per the codebase's own existing tools, is
-close to free:
+**Superseded design, kept below only for its own record.** The first-pass
+version of this section gave NPCs a single deterministic float
+(`genome.traits["carpentry_aptitude"] * 2.0`) capped at `[0, 2)` — real and
+deterministic, but a parallel formula, not the same system the player
+actually uses, and mathematically incapable of ever reaching Manor's own
+`3.0` threshold. Requested directly, and replaced outright rather than
+patched: *"make it so it's not capped... there should be NPCs specializing
+in Carpentry and the Skill Web should also be available for NPCs where
+preference is based on personality and class."*
 
-**`NpcGenome` already IS "a real, continuous, deterministic-from-seed
-number per named trait," generalized on purpose.** Its own doc comment:
-*"the same 'continuous 0..1 gene per trait, deterministic from a seed'
-shape ... generalized to an arbitrary trait-name list passed in by the
-caller ... nothing here is personality-specific."* Adding `"carpentry_
-aptitude"` to whatever trait-name list an NPC's genome is built from costs
-nothing new in `npc_genome.gd` itself — it is exactly the extension point
-that doc comment describes. `NpcIdentity.carpentry_level` (a new, small,
-public float) is then `genome.traits["carpentry_aptitude"] * 2.0`, scaled
-into the SAME `[0, 2]` range `carpentry_1`/`carpentry_2` already put the
-player's own stat in, so the exact same recipe threshold (`level: 1.0`,
-`level: 2.0`, ...) means the same thing whichever side is being checked.
+**NPCs now allocate on the SAME real `SkillWeb` graph the player does** —
+`NpcSkillAllocation.allocate` (`src/world/npc_skill_allocation.gd`), a new,
+small, pure module — via that class's own already-real, already-tested
+primitives (`start_node_for`/`is_reachable`/`point_cost`/`nodes_in_ring`),
+never a parallel reimplementation. `NpcIdentity` gains two new public
+fields (`archetype`, `allocated_nodes`) alongside `carpentry_level`, which
+is now read straight off them via `SkillWeb.total_bonus` — the identical
+function the player's own `Player.skill_bonus` calls. An NPC who
+specializes deeply enough reaches the EXACT same ceiling a player would,
+`master_joiner` included — no separate, lower cap for NPCs.
 
-**Named honestly as an MVP, not the finished design.** This is an innate,
-fixed-at-birth aptitude, not a skill that grows from doing carpentry work —
-the "grows from `occupation_production.gd`'s existing automatic recipe
-loop" vision `labor_skills.md` describes for NPC skills generally stays
-exactly as unbuilt as it already was; wiring real growth into this one
-number later is a named, separate follow-up (see Open Questions), not
-something this pass pretends to have solved.
+**CLASS**, in the request's own word, is the wedge an occupation walks —
+grounded directly in the wedges' own real node names, not an arbitrary
+table: blacksmith → `artisan` (carpentry/masonry/smith all live there),
+merchant → `overseer` (trade_margin/hire_capacity), guard → `warrior`
+(attack_damage/max_health), herbalist and nurse → `herbalist`
+(wound_recovery/disease_resistance), farmer/fisher/hunter → `ranger` (the
+closest real fit for outdoor work — and, for hunter specifically, `ranger`
+already carries its own real `butchering_1`/`butchering_2` nodes). Only
+`artisan` — and so only **blacksmith** NPCs — ever invest in carpentry at
+all; widening which occupations can specialize in it (a dedicated
+"carpenter" occupation, say) is a real, separate follow-up, not attempted
+here.
+
+**PERSONALITY** (the request's second half) picks WHICH node within that
+wedge, when a ring offers more than one real choice: each NPC rolls a
+deterministic "specialty" stat once from their own archetype's real
+`ARCHETYPE_STAT_POOL` (e.g. an Artisan's specialty is one of mining_yield/
+smelting_yield/carpentry_level — the same seeded-pool-index shape
+`HouseBlueprint.choose_blueprint_id` already uses for a house shape), and
+prefers whichever reachable node matches it at every ring, falling back to
+a deterministic pick among the real alternatives when none match (the
+same "soft class, not a cage" shape `classes.md` already establishes for
+the player — a specialty is a strong lean, never a hard gate on a wedge's
+other real nodes).
+
+**How much an NPC ever invests** is `NpcIdentity.SKILL_TRAITS`' own
+existing genome trait — renamed from `carpentry_aptitude` to
+`vocational_dedication` now that it drives investment into WHICHEVER
+archetype an NPC's occupation walks, not carpentry specifically — scaled
+into a small, explicit, bounded points budget (`NpcSkillAllocation.
+MAX_POINTS := 6`, exactly enough for a maximally-dedicated NPC to reach one
+real ring-3 notable, e.g. `master_joiner`, and no further). No RNG
+anywhere, matching this whole codebase's own convention: every choice is a
+deterministic function of seed alone.
+
+**Performance, named rather than assumed fine.** `SkillWeb._init` builds
+an 80+ node graph — real, bounded work, but not something to pay once per
+`NpcIdentity` construction, which happens far more often than once per
+session. `SkillWeb.shared()` (a new, small, cached static accessor, purely
+additive to that already-tested file) builds the graph exactly once;
+`NpcSkillAllocation.allocate` itself does only a small, bounded ring-walk
+per call. Confirmed via a real GUT run (`test_npc_identity.gd`, 15/15) that
+this is correct, not just fast.
+
+**Named honestly as an MVP, not the finished design.** This is still an
+innate, fixed-at-birth allocation, not a skill that grows from doing real
+work — `labor_skills.md`'s own larger "NPCs accrue skill from
+`occupation_production.gd`'s loop" vision stays exactly as unbuilt as it
+already was.
 
 ### 5. Hiring: the first live Builder spawner
 

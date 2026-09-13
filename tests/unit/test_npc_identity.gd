@@ -102,26 +102,34 @@ func test_every_occupation_appears_across_enough_samples():
 
 ## docs/concept/workforce.md's "A real NPC Carpentry number" section: an
 ## innate, seed-derived aptitude, deliberately NOT one of PERSONALITY_TRAITS
-## (a carpentry gene must never be eligible to become an NPC's own dominant
-## PERSONALITY trait -- see test_personality_trait_is_derived_from_the_npcs_
-## own_genome above, which this must not perturb). Scaled into the SAME
-## [0, 2) range carpentry_1/carpentry_2 already put the player's own
-## SkillTree stat in, so the small_house recipe's required_skill threshold
-## (level 1.0) means the same thing on either side of the build-or-hire
-## fork.
+## (a dedication gene must never be eligible to become an NPC's own
+## dominant PERSONALITY trait -- see test_personality_trait_is_derived_
+## from_the_npcs_own_genome above, which this must not perturb). Real
+## SkillWeb nodes, not a fixed [0, 2) formula (see NpcIdentity.carpentry_
+## level's own doc comment on why that cap was removed outright): the
+## real ceiling is now 3.0 (carpentry_1 + carpentry_2 + master_joiner, the
+## SAME notable the player's own skill web can reach), matching Manor's
+## own required_skill threshold, not just small_house's 1.0/cottage's 2.0.
 func test_carpentry_level_is_deterministic_and_in_the_skill_web_range():
 	for seed_value in range(20):
 		var a := NpcIdentity.new(seed_value)
 		var b := NpcIdentity.new(seed_value)
 		assert_eq(a.carpentry_level, b.carpentry_level, "same seed must give the same carpentry_level")
-		assert_between(a.carpentry_level, 0.0, 2.0, "seed %d" % seed_value)
+		assert_between(a.carpentry_level, 0.0, 3.0, "seed %d" % seed_value)
 
 
-func test_carpentry_level_varies_across_npcs_rather_than_being_a_constant():
+## Only blacksmiths ever invest in the Artisan wedge carpentry lives in
+## (see NpcSkillAllocation.ARCHETYPE_BY_OCCUPATION) -- scoped to real
+## blacksmith seeds rather than a bare 20-seed sample, most of which are
+## now a real, correct 0.0 (every other occupation's own wedge has no
+## carpentry_level stat anywhere in it at all).
+func test_carpentry_level_varies_across_blacksmiths_rather_than_being_a_constant():
 	var seen := {}
-	for seed_value in range(20):
-		seen[NpcIdentity.new(seed_value).carpentry_level] = true
-	assert_gt(seen.size(), 1)
+	for seed_value in range(200):
+		var identity := NpcIdentity.new(seed_value)
+		if identity.occupation == "blacksmith":
+			seen[identity.carpentry_level] = true
+	assert_gt(seen.size(), 1, "expected real variance among a real sample of blacksmiths")
 
 
 ## Not a fifth personality trait: PERSONALITY_TRAITS/dominant_trait()/
@@ -129,7 +137,7 @@ func test_carpentry_level_varies_across_npcs_rather_than_being_a_constant():
 func test_carpentry_level_does_not_perturb_personality_trait_selection():
 	for seed_value in range(20):
 		var identity := NpcIdentity.new(seed_value)
-		assert_false(identity.genome.traits.has("carpentry_aptitude"))
+		assert_false(identity.genome.traits.has("vocational_dedication"))
 		assert_eq(identity.personality_trait, identity.genome.dominant_trait())
 
 

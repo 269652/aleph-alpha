@@ -14276,10 +14276,22 @@ func test_find_spare_carpenter_household_finds_a_real_spare_skilled_household():
 	assert_eq(manager.find_spare_carpenter_household(settlement_id, "small_house"), expected_household.id)
 
 
+## Superseded fixture strategy: an earlier pass here searched for a seed
+## with BOTH high carpentry AND a survival occupation. Since
+## NpcSkillAllocation ties carpentry_level to the Artisan wedge specifically
+## (see ARCHETYPE_BY_OCCUPATION), and every survival occupation (farmer/
+## hunter/fisher) walks "ranger" instead -- a wedge with no carpentry_level
+## stat anywhere in it -- that combination is now structurally impossible,
+## not merely hard to find: a real, deterministic seed search widened to
+## 800 confirmed no such seed exists. That is itself a real, additional
+## reason a survival-occupied household is never offered as a carpenter
+## now (they can never actually specialize in it); this test still pins
+## the FUNCTION's own explicit exclusion (checked before carpentry at all)
+## as its own real, load-bearing guard, using any real survival-occupied
+## seed rather than one requiring an impossible combination.
 func test_find_spare_carpenter_household_refuses_a_household_already_working_a_survival_job():
 	var seed_value := _first_seed_matching(func(s):
-		var identity := NpcIdentity.new(s)
-		return identity.carpentry_level >= 1.0 and NpcProduction.PRODUCER_ITEM_BY_OCCUPATION.has(identity.occupation)
+		return NpcProduction.PRODUCER_ITEM_BY_OCCUPATION.has(NpcIdentity.new(s).occupation)
 	)
 	var chunk_coord := Vector2i(31, 31)
 	manager.record_settlement_founded_if_new(chunk_coord, [NpcIdentity.new(seed_value)])
@@ -14312,26 +14324,25 @@ func test_find_spare_carpenter_household_is_empty_for_a_recipe_with_no_required_
 	)
 
 
-## A REAL DISCOVERED LIMIT, surfaced by this verification pass rather than
-## silently missed: NpcIdentity.carpentry_level's own formula
-## (`skill_genome.traits["carpentry_aptitude"] * 2.0`) is mathematically
-## bounded to [0, 2) -- confirmed by that field's own doc comment ("the
-## same [0, 2) range"). The Manor recipe requires 3.0, reachable by the
-## PLAYER via the skill web's master_joiner notable (see workforce.md's own
-## corrected ceiling note), but NO NpcIdentity seed can EVER reach 3.0 --
-## meaning the Manor tier can never be hired out, only self-built. This
-## test pins that real, current behavior rather than assuming the
-## build-vs-hire fork "just works" symmetrically for every tier; see
-## docs/concept/workforce.md's own Open Questions for whether this is the
-## intended "only a true master builds a Manor" design or a real gap.
-func test_find_spare_carpenter_household_can_never_find_a_manor_grade_carpenter():
+## Superseded finding: an earlier pass here pinned "no NpcIdentity seed can
+## ever reach Manor's own 3.0 requirement" as a real, permanent limit.
+## That was true of carpentry_level's OLD direct-formula version
+## (`skill_genome.traits["carpentry_aptitude"] * 2.0`, mathematically
+## bounded to [0, 2)) -- superseded outright by a direct request ("make it
+## so it's not capped... there should be NPCs specializing in Carpentry")
+## that replaced it with real SkillWeb allocation (see NpcSkillAllocation).
+## A sufficiently dedicated, carpentry-specialized blacksmith now reaches
+## the SAME 3.0 ceiling (carpentry_1 + carpentry_2 + master_joiner) the
+## player's own skill web can -- so the Manor tier CAN be hired out after
+## all, the same as the other two tiers.
+func test_find_spare_carpenter_household_can_find_a_real_manor_grade_carpenter():
+	var seed_value := _first_seed_matching(func(s):
+		var identity := NpcIdentity.new(s)
+		return identity.occupation == "blacksmith" and identity.carpentry_level >= 3.0
+	)
 	var chunk_coord := Vector2i(34, 34)
-	# Every one of a handful of real, distinct NPCs -- not cherry-picking
-	# the one seed most likely to fail, a real spread of real identities.
-	var npcs: Array = []
-	for seed_value in range(1, 9):
-		npcs.append(NpcIdentity.new(seed_value))
-		assert_lt(npcs[-1].carpentry_level, 3.0, "precondition: no seed reaches Manor's own 3.0 requirement")
-	manager.record_settlement_founded_if_new(chunk_coord, npcs)
+	manager.record_settlement_founded_if_new(chunk_coord, [NpcIdentity.new(seed_value)])
+	var settlement_id := EntityRef.for_settlement(chunk_coord)
+	var expected_household := manager.household_store().household_for(EntityRef.for_npc(seed_value))
 
-	assert_eq(manager.find_spare_carpenter_household(EntityRef.for_settlement(chunk_coord), "manor"), "")
+	assert_eq(manager.find_spare_carpenter_household(settlement_id, "manor"), expected_household.id)

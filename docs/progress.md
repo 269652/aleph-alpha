@@ -20802,3 +20802,73 @@ Same "skip tests" instruction, same caveat: written directly against real,
 verified APIs, without TDD red-first, without running the suite. Do not
 merge to `main` without a real GUT pass first.
 
+### A real GUT verification pass, then: NPCs get the real Skill Web (2026-09-13)
+
+Between this entry and the one above, the user asked for a real GUT
+verification pass over the whole recent workforce/housing/governance
+batch. That pass ran real tests (Manor tier, worker slots/assignment,
+`find_spare_carpenter_household`), found and fixed one real regression
+(`test_crafting_recipe_book.gd`'s hardcoded recipe count), and surfaced one
+real, permanent-seeming finding: `NpcIdentity.carpentry_level`'s own direct
+formula was mathematically bounded to `[0, 2)`, so no NPC could ever clear
+the Manor recipe's `3.0` threshold -- the Manor tier could be self-built
+but never hired out. The verification pass was stopped mid-way (`"skip
+tests for now"`) before reaching the wages/rent/needs-v2/civic-tax/
+furniture/BuilderMarker/Player-side pieces.
+
+**Then, directly**: *"make it so it's not capped... there should be NPCs
+specializing in Carpentry and the Skill Web should also be available for
+NPCs where preference is based on personality and class."* Superseding the
+just-found limitation outright, not patching around it:
+
+- `SkillWeb.shared()` -- a new, small, cached static accessor on the
+  already-shipped, already-tested player skill web (`src/gameplay/
+  skill_web.gd`), purely additive. The graph (80+ nodes) is identical for
+  every character; only `allocated`/`resonance`/`dna_seed` vary, so one
+  shared instance avoids rebuilding it on every single `NpcIdentity`
+  construction -- named and reasoned about explicitly, not assumed fine,
+  given this project's own long history of exactly this kind of per-entity
+  cost turning into a real FPS regression.
+- `src/world/npc_skill_allocation.gd` (new): deterministic, seed-derived
+  allocation on that SAME shared graph, via its own already-real primitives
+  (`start_node_for`/`is_reachable`/`point_cost`/`nodes_in_ring`) -- never a
+  parallel reimplementation. `ARCHETYPE_BY_OCCUPATION` is CLASS (the
+  request's own word): blacksmith -> artisan, merchant -> overseer, guard
+  -> warrior, herbalist/nurse -> herbalist, farmer/fisher/hunter -> ranger
+  -- grounded in the wedges' own real node names, not an arbitrary table.
+  A seeded "specialty stat" roll from the archetype's own real
+  `ARCHETYPE_STAT_POOL` is PERSONALITY (the request's other half): which
+  node an NPC prefers when a ring offers more than one real choice.
+  `MAX_POINTS := 6`, exactly enough for a maximally-dedicated NPC to reach
+  one real ring-3 notable (e.g. `master_joiner`) and no further.
+- `NpcIdentity` gains real `archetype`/`allocated_nodes` fields (general,
+  not just for carpentry) and reads `carpentry_level` straight off them via
+  `SkillWeb.total_bonus` -- the SAME function the player's own Carpentry
+  stat already reads. `SKILL_TRAITS`' own existing trait renamed
+  `carpentry_aptitude` -> `vocational_dedication` now that it drives
+  investment into WHICHEVER archetype an NPC's occupation walks, not
+  carpentry specifically.
+
+**A real GUT check WAS run for this specific change** (not the broader
+"skip tests" pass) given its blast radius -- `NpcIdentity` is constructed
+far more often, in far more places, than almost anything else in this
+codebase, and a mistake in a foundational rewrite like this is a much
+worse outcome than skipping a routine check. `test_npc_identity.gd`
+(15/15, after fixing two now-stale assertions: the old `[0, 2)` range
+bound and the old `carpentry_aptitude` trait name) and the `find_spare_
+carpenter_household` slice of `test_earth_chunk_manager.gd` (6/6, after
+replacing the now-superseded "can never find a Manor-grade carpenter" test
+with one confirming it now CAN, and fixing a second test whose old fixture
+strategy -- "a seed with both high carpentry and a survival occupation" --
+turned out to be structurally impossible under the new archetype mapping,
+not merely hard to find) both came back green. The rest of the "skip
+tests" batch (wages/rent/needs-v2/civic-tax/furniture/BuilderMarker/
+Player-side) remains exactly as unverified as the entry above already
+says -- this pass did not touch or re-check any of it.
+
+Named honestly, not assumed solved: only blacksmith NPCs can ever
+specialize in carpentry today (the one occupation mapped to the one wedge
+carpentry lives in); widening that, and growing an NPC's own dedication
+from real work rather than fixing it at birth, are both real, separate
+follow-ups in `workforce.md`'s own updated section 4.
+
