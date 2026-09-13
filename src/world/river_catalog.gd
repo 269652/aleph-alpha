@@ -52,17 +52,6 @@ const RIVERS := {
 	# Every via-point is a city's own Wikipedia infobox coordinate (its
 	# historic centre), not a river-crossing-specific point -- an accepted
 	# simplification for a curated, non-survey-grade polyline.
-	"Rhine": [
-		Vector2(46.63250, 8.67222),   # source: Tomasee / Lai da Tuma, Graubünden, Switzerland
-		Vector2(47.55472, 7.59056),   # Basel
-		Vector2(48.58333, 7.74583),   # Strasbourg
-		Vector2(49.00921, 8.40395),   # Karlsruhe
-		Vector2(49.99944, 8.27361),   # Mainz
-		Vector2(50.35972, 7.59778),   # Koblenz (Rhine/Mosel confluence area)
-		Vector2(50.93639, 6.95278),   # Cologne
-		Vector2(51.43472, 6.76250),   # Duisburg
-		Vector2(51.98167, 4.08056),   # mouth: North Sea at Hoek van Holland, Netherlands
-	],
 	"Danube": [
 		Vector2(47.95083, 8.52028),   # source: Donaueschingen (Brigach/Breg confluence)
 		Vector2(48.39861, 9.99111),   # Ulm

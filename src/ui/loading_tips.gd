@@ -256,6 +256,7 @@ const _CURATED_TIPS: Array[String] = [
 	"Somebody double-checked that a full beard renders as a beard, not a face mask. Mostly.",
 	"A grass frog relocated to a pond that did not exist an hour ago. It is thrilled.",
 	"The world's only bridgekeeper has been waiting so long he's started keeping notes.",
+	"Solving Navier-Stokes.",
 ]
 
 ## Requested live: "can you increase the number of tips to 1000?" Hand-
@@ -482,9 +483,17 @@ static func _deduplicated_tagged(tagged: Array) -> Array:
 ## 2026-09-12 after `_CURATED_TIPS`/`_TEMPLATES` were rewritten wholesale
 ## (different array contents shuffle differently even at the same seed,
 ## since Fisher-Yates's own swap range depends on the array): seed 97
-## itself now left a run of exactly 3, so this is the first seed checked,
-## from 1 upward, that clears the bar against the CURRENT content.
-const _SHUFFLE_SEED := 1
+## itself now left a run of exactly 3, so 1 was the first seed checked,
+## from 1 upward, that cleared the bar against that content.
+##
+## Re-searched again (2026-09-14) after adding one more curated tip
+## ("Solving Navier-Stokes.") grew the array by exactly one entry --
+## enough to change Fisher-Yates's own swap range at every step and
+## reshuffle the whole pool differently. Seed 1 itself now left three
+## separate 3-long runs (templates 66, 67, 37); 2 is the first seed
+## checked, from 1 upward, that clears the bar against the CURRENT
+## content.
+const _SHUFFLE_SEED := 2
 
 
 ## A real, deterministic Fisher-Yates over `tagged` (unchanged by this

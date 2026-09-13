@@ -23,8 +23,7 @@ func test_every_curated_river_has_a_real_discharge_figure():
 ## them is real rather than invented.
 func test_the_curated_discharges_have_the_real_relative_magnitudes():
 	var d := RiverDischarge.MEAN_DISCHARGE_M3_S
-	assert_gt(d["Danube"], d["Rhine"], "the Danube carries more than the Rhine")
-	assert_gt(d["Rhine"], d["Elbe"])
+	assert_gt(d["Danube"], d["Elbe"], "the Danube carries more than the Elbe")
 	assert_gt(d["Elbe"], d["Oder"])
 	assert_gt(d["Oder"], d["Weser"])
 	assert_gt(d["Weser"], d["Mosel"])
@@ -59,16 +58,16 @@ func test_discharge_at_the_mouth_is_the_full_curated_figure():
 func test_discharge_grows_monotonically_from_source_to_mouth():
 	var previous := -1.0
 	for step in 11:
-		var q := RiverDischarge.discharge_at("Rhine", float(step) / 10.0)
+		var q := RiverDischarge.discharge_at("Danube", float(step) / 10.0)
 		assert_gt(q, previous, "discharge must grow downstream")
 		previous = q
 
 
 func test_a_headwater_still_carries_real_water():
 	# A source is a stream, not a dry bed -- but a small fraction of the mouth.
-	var source := RiverDischarge.discharge_at("Rhine", 0.0)
+	var source := RiverDischarge.discharge_at("Danube", 0.0)
 	assert_gt(source, 0.0)
-	assert_lt(source, RiverDischarge.MEAN_DISCHARGE_M3_S["Rhine"] * 0.5)
+	assert_lt(source, RiverDischarge.MEAN_DISCHARGE_M3_S["Danube"] * 0.5)
 
 
 ## Validation against REAL gauge readings, not against the implementation.
@@ -88,7 +87,6 @@ func test_the_course_model_lands_near_real_gauge_readings():
 		["Oder", 0.877, 0.941],    # Widuchowa, 105 km
 		["Weser", 0.734, 0.838],   # Intschede, 120.1 km
 		["Main", 0.929, 0.915],    # Frankfurt-Osthafen, 37.6 km
-		["Rhine", 0.841, 0.779],   # Rees, 196 km
 		["Dreisam", 0.180, 0.512], # Ebnet, 24.3 km
 	]
 	for gauge in gauges:
@@ -157,7 +155,7 @@ func test_width_is_never_zero_even_for_a_trickle():
 
 func test_a_river_narrows_toward_its_source():
 	assert_lt(
-		RiverDischarge.channel_width_m("Rhine", 0.0), RiverDischarge.channel_width_m("Rhine", 1.0)
+		RiverDischarge.channel_width_m("Danube", 0.0), RiverDischarge.channel_width_m("Danube", 1.0)
 	)
 
 

@@ -776,6 +776,22 @@ first, green after the one-line change. `test_loading_tips.gd` 18/18,
 `TIP_INTERVAL_SECONDS` symbolically rather than a hardcoded 2.0, so
 nothing else needed touching).
 
+### Revised (2026-09-14): one new curated tip, and the shuffle seed re-searched again
+
+Requested directly: add "Solving Navier-Stokes" to the loading tips.
+Added verbatim to `_CURATED_TIPS` (161 → 162), with the file's own
+trailing-period convention appended. Growing the pool by exactly one
+entry changes Fisher-Yates's own swap range at every step of `_shuffled`
+— the same reason a prior rewrite of the whole curated/template arrays
+already forced a reshuffle once — so `_SHUFFLE_SEED` (1) no longer
+cleared `test_no_long_run_of_the_same_template_in_playback_order`'s own
+bar against the new content (three separate 3-long template runs
+appeared). Re-searched the exact same documented way, a temporary probe
+script trying seeds from 1 upward: `2` is the first that clears it again.
+`test_loading_tips.gd` 19/19 (a new
+`test_the_navier_stokes_tip_is_in_the_curated_pool` pin plus every
+pre-existing assertion, all green).
+
 ## Status / mechanisms
 
 - ✅ `Player.appearance` field + `to_save_dict()`/`apply_save_dict()`, tested

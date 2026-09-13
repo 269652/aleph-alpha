@@ -17,8 +17,6 @@ const GeoCoordinates = preload("res://src/world/geo_coordinates.gd")
 
 const PLACES := {
 	"Nantes (spawn, Loire)": Vector2(47.2031, -1.5469),
-	"Hoek van Holland (Rhine mouth)": Vector2(51.98167, 4.08056),
-	"Cologne (Rhine)": Vector2(50.93639, 6.95278),
 	"Hamburg (Elbe)": Vector2(53.55, 9.99),
 	"Freiburg (Dreisam)": Vector2(47.9990, 7.8421),
 	"Regensburg (Danube)": Vector2(49.017, 12.083),

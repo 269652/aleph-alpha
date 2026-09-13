@@ -2304,7 +2304,7 @@ Three separate live complaints turned out to be the same problem: the HUD grew o
 
 All three rules and their known remaining gaps are specified in [docs/concept/hud.md](concept/hud.md); the pure parts are tested in `tests/unit/test_world_hud.gd`.
 
-✅ **Movement ripples are back on the river surface.** Reported as *"fishes don't produce interferencing ripples anymore in the new unified river water ... players and animals neither ... the old ripples looked nice so we want them back adapted to new water shader"*. Nothing in the ripple machinery had broken: `FishMarker._step_water_ripple`, `Player._step_water_ripples` and `CreatureMarker._step_water_ripple` all still record disturbances on their old schedules, and `WaterShader` still ages and draws them. The cause was a rendering boundary. `EarthChunkManager._paint_water_overlay` is **ocean only** now ("rivers used to be painted here too... the flow overlay is now the river's entire water surface" — its square tiles under the smooth bank curve were the bug it was removed for), and the opaque `RiverFlowShader` that replaced it had no disturbance term at all. Every river wake was being recorded, culled, aged and drawn into a layer that river tiles no longer have. **One buffer, two surfaces**: `WaterShader` keeps ownership of the ring buffer and now exposes what it pushes (`padded_disturbance_positions`/`_ages`/`disturbance_count`); `EarthChunkManager._mirror_disturbances_to_the_river` fans the same three uniforms onto the river material, so there is one lifetime, one cap and one `DISTURBANCE_RADIUS_TILES` cull rather than two that can drift. The packet is the sea's **character for character** (`RiverFlowShader.ripple_packet`, tuning imported from `WaterShader` rather than copied) because a wake must read the same in a river as in the ocean — and signed, so overlapping wakes genuinely interfere rather than only piling up. What is *adapted* is the river part: the ring's centre is carried downstream at the surface pattern's own drift rate (`ripple_center`), since in a current a ripple is concentric about a point that moves with the water; and it is **drawn rather than glowed**, entering the contour field the current lines trace (so the lines bow into arcs and close into rings) and the stroke strength (so crests ink in the existing hand, inheriting the adaptive ink, the moonlight lift and the alpha clamp). It deliberately never touches `frag_across` — that field is the channel's geometry, and a passing fish must not narrow the river or dry a patch of it — and never the cel body, which stays static reconstructed depth for the reason `test_the_body_cels_are_static_depth_only` exists. Both gains are bounded from both sides against the packet's own **scanned** peak rather than an eyeballed amplitude. **Verified where the symptom actually lives**: a new real-GPU test renders two blocks of the same river, quiet and disturbed, *in the same frame* — sharing the frame is the whole experiment, because this surface advects continuously and a first attempt comparing across frames passed with the ripple term deleted outright; same-frame, the difference measures 0.00% with the ripple disabled and a real local ring with it. Both readback tests in `test_river_flow_render_smoke.gd` now skip explicitly under `--headless` (no GPU target, `get_image()` returns null, and the resulting engine error fails the test on its own) — the far-world one had been reporting a shader failure on every headless run for a reason that had nothing to do with the shader. **And fish really are among the causes** — this entry first shipped with a caveat saying they were not, on the grounds that `FishRenderer` spawns on ocean-biome cells only and a river never changes `biome_at_global`'s elevation-derived result. Reported back flatly ("the rivers are full of fish"), and the caveat was wrong: it came from reading the spawn gate and stopping there. Sweeping the apron band around every curated course measures **64 cells that qualify for fish, 53 of them also painted by the river-flow overlay**. The two decisions ask different questions — fish spawn by BIOME (the coarse elevation source puts real reaches below sea level: broad water, lakes a course runs through, the last stretch to a mouth), while `_paint_river_flow_overlay` paints by DISTANCE to the course and consults no biome at all. So those reaches are ocean biome *and* under the opaque surface at once: a second, independent path into the identical symptom, covered by the same fix, since the buffer now reaches the river material regardless of which cells the swimmers are on. Pinned by `test_a_river_reach_can_be_both_fish_water_and_under_the_flow_overlay` — originally at one measured Rhine coordinate rather than by re-sweeping ten thousand cells per run, though that coordinate later stopped reading as ocean biome and an exhaustive re-sweep (2026-09-13, `tools/probe_fish_river_fixture.gd`) found no real map coordinate satisfies both conditions any more, so the test now forces the ocean side with a synthetic hydrology bake at the same real Rhine coordinate instead (see [docs/concept/rivers.md](concept/rivers.md)'s "Fish really do live under the river surface" update). Freshwater fishing as a *designed* mechanic (river species, spawning rules, a reason to fish a stream over the sea) is still ⬜ Not started — what exists is incidental. Specced in [docs/concept/rivers.md](concept/rivers.md)'s "Movement ripples in the river" and "Fish really do live under the river surface"; tested in `tests/unit/test_river_flow_shader.gd`, `tests/unit/test_river_flow_render_smoke.gd`, `tests/unit/test_fish_renderer.gd` and `tests/unit/test_earth_chunk_manager.gd`.
+✅ **Movement ripples are back on the river surface.** Reported as *"fishes don't produce interferencing ripples anymore in the new unified river water ... players and animals neither ... the old ripples looked nice so we want them back adapted to new water shader"*. Nothing in the ripple machinery had broken: `FishMarker._step_water_ripple`, `Player._step_water_ripples` and `CreatureMarker._step_water_ripple` all still record disturbances on their old schedules, and `WaterShader` still ages and draws them. The cause was a rendering boundary. `EarthChunkManager._paint_water_overlay` is **ocean only** now ("rivers used to be painted here too... the flow overlay is now the river's entire water surface" — its square tiles under the smooth bank curve were the bug it was removed for), and the opaque `RiverFlowShader` that replaced it had no disturbance term at all. Every river wake was being recorded, culled, aged and drawn into a layer that river tiles no longer have. **One buffer, two surfaces**: `WaterShader` keeps ownership of the ring buffer and now exposes what it pushes (`padded_disturbance_positions`/`_ages`/`disturbance_count`); `EarthChunkManager._mirror_disturbances_to_the_river` fans the same three uniforms onto the river material, so there is one lifetime, one cap and one `DISTURBANCE_RADIUS_TILES` cull rather than two that can drift. The packet is the sea's **character for character** (`RiverFlowShader.ripple_packet`, tuning imported from `WaterShader` rather than copied) because a wake must read the same in a river as in the ocean — and signed, so overlapping wakes genuinely interfere rather than only piling up. What is *adapted* is the river part: the ring's centre is carried downstream at the surface pattern's own drift rate (`ripple_center`), since in a current a ripple is concentric about a point that moves with the water; and it is **drawn rather than glowed**, entering the contour field the current lines trace (so the lines bow into arcs and close into rings) and the stroke strength (so crests ink in the existing hand, inheriting the adaptive ink, the moonlight lift and the alpha clamp). It deliberately never touches `frag_across` — that field is the channel's geometry, and a passing fish must not narrow the river or dry a patch of it — and never the cel body, which stays static reconstructed depth for the reason `test_the_body_cels_are_static_depth_only` exists. Both gains are bounded from both sides against the packet's own **scanned** peak rather than an eyeballed amplitude. **Verified where the symptom actually lives**: a new real-GPU test renders two blocks of the same river, quiet and disturbed, *in the same frame* — sharing the frame is the whole experiment, because this surface advects continuously and a first attempt comparing across frames passed with the ripple term deleted outright; same-frame, the difference measures 0.00% with the ripple disabled and a real local ring with it. Both readback tests in `test_river_flow_render_smoke.gd` now skip explicitly under `--headless` (no GPU target, `get_image()` returns null, and the resulting engine error fails the test on its own) — the far-world one had been reporting a shader failure on every headless run for a reason that had nothing to do with the shader. **And fish really are among the causes** — this entry first shipped with a caveat saying they were not, on the grounds that `FishRenderer` spawns on ocean-biome cells only and a river never changes `biome_at_global`'s elevation-derived result. Reported back flatly ("the rivers are full of fish"), and the caveat was wrong: it came from reading the spawn gate and stopping there. Sweeping the apron band around every curated course measures **64 cells that qualify for fish, 53 of them also painted by the river-flow overlay**. The two decisions ask different questions — fish spawn by BIOME (the coarse elevation source puts real reaches below sea level: broad water, lakes a course runs through, the last stretch to a mouth), while `_paint_river_flow_overlay` paints by DISTANCE to the course and consults no biome at all. So those reaches are ocean biome *and* under the opaque surface at once: a second, independent path into the identical symptom, covered by the same fix, since the buffer now reaches the river material regardless of which cells the swimmers are on. Pinned by `test_a_river_reach_can_be_both_fish_water_and_under_the_flow_overlay` — originally at one measured Rhine coordinate rather than by re-sweeping ten thousand cells per run, though that coordinate later stopped reading as ocean biome, the Rhine itself was separately removed from the curated roster, and an exhaustive re-sweep (2026-09-13, `tools/probe_fish_river_fixture.gd`) found no real map coordinate satisfies both conditions any more on either roster, so the test now forces the ocean side with a synthetic hydrology bake at a fixture re-anchored to the Danube instead (see [docs/concept/rivers.md](concept/rivers.md)'s "Fish really do live under the river surface" update). Freshwater fishing as a *designed* mechanic (river species, spawning rules, a reason to fish a stream over the sea) is still ⬜ Not started — what exists is incidental. Specced in [docs/concept/rivers.md](concept/rivers.md)'s "Movement ripples in the river" and "Fish really do live under the river surface"; tested in `tests/unit/test_river_flow_shader.gd`, `tests/unit/test_river_flow_render_smoke.gd`, `tests/unit/test_fish_renderer.gd` and `tests/unit/test_earth_chunk_manager.gd`.
 
 ✅ **Ripples, eddies and lines now all move at the water's one visible speed.** Reported in three steps: *"Can you make the river ripples move downstream at water speed?"*, *"eddy swirls also don't move downstream.. a wobble stays in place instead of flowing with the river"*, and *"Ripples now do move downstream, but the lines should move at same speed."* One cause: the drawn surface is moved by TWO terms — the two-phase drag translates the field `ADVECT_STRENGTH` cells every `1/ADVECT_RATE` seconds regardless of the reach (~19.8 world px/s) and the linear drift adds `DRIFT_PX_PER_MPS` per m/s (10 at a typical 0.5 m/s reach) — but the ripple centre was carried by the drift alone and the eddy field by 0.6 of it, so a wake moved at a third of the water and the whirls at a fifth, both reading as standing still while the pulses streamed past. Now one function, `surface_px_per_s` (GLSL + CPU mirror in `RiverFlowShader`), is the water's visible downstream speed, gated by the same still step the strokes use, and both the ring centre and the eddy sample coordinate ride it; `BEND_DRIFT_FRACTION` goes 0.6 → 1.0 so the lines move at exactly the speed the ring is carried at (a deliberate divergence from the "boils lag the surface" grounding, noted in `rivers.md`; the fraction stays as the knob). The surface still deforms through the whirls because the phase drag stretches away from that steady translation and resets. `DRIFT_PX_PER_MPS` and the advection constants are untouched — the surface streams as before, only what is carried on it caught up. Pinned in `test_river_flow_shader.gd` (158/158): the speed's composition and still gate, the shader wiring by source, ring carry == eddy migration == the shared speed, and legibility floors at a 0.5 m/s reach (a wake carried >3.5 tiles in its lifetime, whirls crossing a tile in two seconds). GPU readback smoke test still green. See `rivers.md` "One visible water speed".
 
@@ -11375,11 +11375,13 @@ via `test_world_spawn_location.gd` — then "all big rivers but first
 germany" and a 4-tile minimum width).
 
 - **Curated real river catalog** (medium) — ✅ Done — `river_catalog.gd`:
-  11 real named rivers as simplified (source → real via-points → mouth)
+  10 real named rivers as simplified (source → real via-points → mouth)
   polylines, gathered from Wikipedia/Wikimedia Commons/OpenStreetMap and
   cross-checked the same way the spawn point was — Germany's major rivers
-  (Rhine, Danube, Elbe, Weser, Main, Mosel, Neckar, Oder, Spree, Isar) plus
+  (Danube, Elbe, Weser, Main, Mosel, Neckar, Oder, Spree, Isar) plus
   the Dreisam (small, but the one this game's own spawn point sits on).
+  (Originally 11, including the Rhine — removed 2026-09-13, see its own
+  entry below.)
   `distance_to_nearest_river_tiles` does real point-to-segment projection
   in tile space (the same tradeoff `GeoCoordinates.tile_is_within_radius`
   already makes), not just nearest-waypoint. Rest-of-world roster — ⬜ Not
@@ -19901,6 +19903,25 @@ hardcoded 2.0.
 
 Branched from fresh `origin/main`, pushed immediately.
 
+## One new curated loading tip; shuffle seed re-searched again (`concept/persistence.md`, 2026-09-14)
+
+Requested directly: add "Solving Navier-Stokes" to the loading tips.
+Added verbatim to `LoadingTips._CURATED_TIPS` (161 → 162) with the file's
+own trailing-period convention. Growing the array by exactly one entry
+changes Fisher-Yates's own swap range at every step of `_shuffled` — the
+same reason a full rewrite of the curated/template content already
+forced one reshuffle before — so the existing `_SHUFFLE_SEED` (1) no
+longer cleared `test_no_long_run_of_the_same_template_in_playback_order`
+against the new pool (three separate 3-long same-template runs
+appeared). Re-searched the exact documented way (a temporary, uncommitted
+probe script trying seeds from 1 upward): `2` is the first that clears
+the bar again. `test_loading_tips.gd` 19/19 (new
+`test_the_navier_stokes_tip_is_in_the_curated_pool`, every pre-existing
+assertion unmodified and green); `test_loading_overlay.gd`/
+`test_loading_spinner.gd` re-run clean, no regression.
+
+Branched from fresh `origin/main`, pushed immediately.
+
 ## The real "Still at 1fps" cause: a per-pixel art-loading loop, not a per-frame system (2026-09-10)
 
 Reported live, again, plainly: *"Can you now try to fix performance
@@ -21224,6 +21245,88 @@ their own) get a plain icon+ground pair on their original single
 Full `test_illustrated_art_registry.gd` (50/50), `test_illustrated_art_
 resolver.gd` (11/11) and `test_illustrated_art_loader.gd` (9/9) all green
 after every commit; `--headless --import` re-run clean after each batch.
+
+## Rivers: the Rhine removed from the curated catalog (2026-09-13)
+
+- **Rhine removed from the curated river catalog** (small) — ✅ Done — a
+  deliberate content decision, not itself a bug fix. Removed from
+  `RiverCatalog.RIVERS` and `RiverDischarge`'s
+  `MEAN_DISCHARGE_M3_S`/`CURATED_WIDTH_M` tables. 13 dependent tests
+  across `test_river_discharge.gd` (5), `test_river_catalog.gd` (4),
+  `test_world_spawn_location.gd` (1), `test_player_river_water_state.gd`
+  (1) and `test_earth_chunk_generator.gd` (2, one renamed) repointed to
+  the Danube (the actual biggest remaining river) — except the Rhine's
+  own Rees gauge row in the course-model validation test, which was real
+  independent gauge data and not swappable, so it was deleted outright
+  rather than repointed. `test_the_confluence_handoff_matches_depth_
+  across_the_name_flip` lost its only real name-flip fixture (the
+  Rhine-Dreisam corridor) and was re-pinned at a genuine Isar-Danube
+  confluence near Deggendorf instead (found by sweeping the same window
+  logic around the Isar's own mouth waypoint — 23 flip pairs, worst
+  mismatch 0.51 tiles, well inside the 1.2 tolerance). One test could
+  NOT be repointed: `test_a_river_reach_can_be_both_fish_water_and_
+  under_the_flow_overlay` in `test_fish_renderer.gd` depended on a rare
+  coincidence (ocean biome directly inside a curated river's flow apron)
+  that appears to have been specific to where the Rhine's real course
+  crossed this world's coastline data -- re-swept every remaining
+  river's full course (±3 tiles around all 189 smoothed polyline points)
+  and every remaining sea-mouth river's real-world mouth (±40 tiles),
+  zero hits either way. Marked `pending` rather than given a synthetic
+  fixture, since the test's whole point is proving a real, reachable
+  in-game case exists, not a contrived one. Honest gap, tracked as its
+  own follow-up: a wider or smarter sweep might still find a real
+  replacement.
+
+  **Follow-up, same day: no real replacement exists, so it now runs on a
+  synthetic fixture instead of staying `pending`.** A far more exhaustive
+  sweep (`tools/probe_fish_river_fixture.gd`) walked every curated
+  river's **entire** smoothed course at 1-tile resolution with a ±6-tile
+  perpendicular margin — not ±3 tiles around 189 sampled points, the
+  whole corridor, ~90,000 candidate tiles across all 11 rivers including
+  the Rhine itself — and confirmed zero cells are both interior ocean
+  biome and within a curated river's apron; the nearest real ocean-biome
+  tile to the old fixture is 500+ tiles away. That settles the open
+  question above: this is not a search-thoroughness gap, the coincidence
+  the test depended on (64 of 10,743 apron cells back on 2026-09-04)
+  genuinely no longer occurs anywhere in the generated world, on either
+  river roster. Leaving the test `pending` indefinitely on that basis
+  would not be more honest than the alternative — a synthetic hydrology
+  bake (`EarthChunkGenerator.set_hydrology`, the seam
+  `test_earth_chunk_generator.gd`'s own `_synthetic_field()` already
+  uses) forces the ocean side at a fixture re-anchored to the Danube,
+  while the river side stays completely real (`RiverCatalog.
+  nearest_river_at` never reads hydrology, so the ~0.5-tile distance to
+  the curated Danube course is genuine curated geometry). The invariant
+  under test — `biome_at_global` and `nearest_river_at` are independent
+  queries with no rule preventing both from being true at once — is
+  exercised through the same real production code either way; only the
+  ocean half's origin changed from "found" to "constructed." Full
+  writeup: `concept/rivers.md`'s "Fish really do live under the river
+  surface" update. Verified: `test_fish_renderer.gd` 18/18 (no pending).
+
+  **Correction to two earlier entries in this file** (the ocean-depth-
+  gradualness session and the loading-tips session), which recorded
+  `test_the_rhine_is_deeper_wider_and_carries_far_more_than_the_dreisam`
+  and `test_a_genuinely_large_river_still_resolves_to_swimming` as a
+  "confirmed pre-existing, unrelated" Rhine hydraulics regression: that
+  diagnosis was wrong, and this session found the real cause while
+  fixing the tests' river-name swap. Both tests fed a city's raw lat/lon
+  (Cologne) straight into `river_hydraulics_at_global`/
+  `river_depth_meters_at_global`, which only recognizes a curated river
+  within the tight `RIVER_HALF_WIDTH_TILES` (2 tiles) -- not the wider
+  bank apron used elsewhere. The Chaikin-smoothed course does not pass
+  exactly through a city's raw coordinate (corners are cut), and for a
+  long-waypoint-spacing river that gap is wider than 2 tiles (measured:
+  the raw Regensburg tile sat 14.2 tiles from the smoothed Danube
+  course), so the query silently fell through to the unconfigured
+  hydrology-bake path and read zero. Confirmed by direct measurement,
+  not inference: the course point nearest Regensburg (0.52 tiles away)
+  reads a real, sane 2568 m³/s / 599 m / 1.69 m through the exact same
+  function. This was never Rhine-specific -- any curated river queried
+  by raw city coordinate rather than by its own nearest course point
+  (the pattern `test_world_spawn_location.gd` already used correctly)
+  would show the same false failure. Both tests now use the
+  nearest-course-point pattern and pass for real.
 
 ### Occupation-themed house decor + a real GUT pass for the furniture layer (`concept/housing.md`, 2026-09-13)
 
