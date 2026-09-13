@@ -346,6 +346,18 @@ var _selected_placeable_item: Item
 ## FurniturePlacement's real interior-floor rule) than a placeable's own
 ## build_at_global. Null == nothing armed, same convention as above.
 var _selected_furniture_item: Item
+
+## Two-story houses (docs/concept/housing.md's "Two-story houses" section):
+## which of a house's two real layers the player is currently reading as
+## "the floor I'm standing on" -- 0 = ground, 1 = a real upper storey.
+## World position never changes when this does (see _floor_transition_step);
+## it only changes which of EarthChunkManager's two layers collision-
+## adjacent queries (build/destroy/furniture) resolve against, and which
+## room _update_upper_floor_visibility hides.
+var _current_floor := 0
+## Edge-detection for stepping onto a real wood_stairs cell -- without
+## this, standing still ON one would toggle floors every physics frame.
+var _was_on_stairs := false
 var survival := SurvivalMeters.new()
 ## The player's own real, live, unified body mass -- see docs/concept/
 ## metabolism.md's "one real mass per creature" pillar, applied to the
@@ -2279,6 +2291,7 @@ func _authority_step(delta: float) -> void:
 	_stash_step()
 	_build_step()
 	_destroy_step()
+	_floor_transition_step()
 	_plant_step()
 	_fishing_step(delta)
 	_lasso_step(delta)
@@ -4377,6 +4390,28 @@ func _destroy_step() -> void:
 		if removed_item.kind == "placeable":
 			inventory.add(removed_item, 1)
 			inventory_changed.emit()
+
+
+## Two-story houses (docs/concept/housing.md's "Two-story houses" section):
+## stepping onto a real wood_stairs cell toggles which of a house's two
+## real layers (EarthChunkManager.modification_at_global/upper_floor_at_
+## global) the player currently reads as "the floor I'm on" -- the SAME
+## shared cell carries the stairs on both layers, so no teleport, no scene
+## change, the player's own world position never moves. Edge-detected on
+## _was_on_stairs so standing still on the stairs does not flip floors
+## every physics frame.
+func _floor_transition_step() -> void:
+	if _chunk_manager == null:
+		return
+	var tile := current_tile()
+	var piece_id := (
+		_chunk_manager.upper_floor_at_global(tile.x, tile.y) if _current_floor == 1
+		else _chunk_manager.modification_at_global(tile.x, tile.y)
+	)
+	var on_stairs := piece_id == "wood_stairs"
+	if on_stairs and not _was_on_stairs:
+		_current_floor = _chunk_manager.step_on_stairs(tile.x, tile.y, _current_floor)
+	_was_on_stairs = on_stairs
 
 
 ## The farming loop's own crop for this slice (docs/concept/farming.md) --

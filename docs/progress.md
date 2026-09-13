@@ -20872,3 +20872,106 @@ carpentry lives in); widening that, and growing an NPC's own dedication
 from real work rather than fixing it at birth, are both real, separate
 follow-ups in `workforce.md`'s own updated section 4.
 
+### Critical fix: the whole blueprint/workforce pipeline was reachable by NOTHING in real play -- then the entire batch merged to `main` (2026-09-13)
+
+The user asked to merge the accumulated workforce/housing/governance/
+skill-web batch above into `main` ("Merge it"), then reported back with a
+screenshot after relaunching: *"I can't see new Buildings."* Real bug, not
+a stale build -- `Player._try_learn_blueprint` and `Player._try_build_
+house_from_blueprint`, the two functions every blueprint/house mechanic in
+this whole batch is built on top of, had **zero real call sites anywhere**
+in `player.gd` or `world.gd` outside test files (confirmed by grep). Every
+blueprint recipe, every `HouseBlueprint` shape, all of Manor tier -- fully
+implemented, fully tested in isolation, and completely unreachable from
+actual gameplay, because nothing in the real input path ever called
+either function. Fixed with two small, real entry points rather than a
+rewrite: a new `HotbarAction.LEARN` (`"blueprint"` kind) wired into
+`Player.activate_item_id`'s own match statement so using a blueprint item
+from the hotbar actually calls `_try_learn_blueprint`, and a new
+`/buildhouse <recipe_id>` dev-console command (`world.gd`) that calls
+`_try_build_house_from_blueprint` against the player's own facing tile --
+the same interim console-command pattern this project already uses
+elsewhere (`/furniture`, `player_citizenship.md`'s own item commands) for
+a verb that does not yet have a dedicated placement UI.
+
+**The merge itself**, done through a temporary `git worktree add --detach`
+against `origin/main` (this checkout stayed on the feature branch
+throughout): one real conflict, in `test_crafting_recipe_book.gd`'s own
+hardcoded recipe-count assertion -- `main` had reached 45 (Storm Lantern
+and NPC farm production shipped there independently while this branch was
+in flight) and this branch had reached 43 (its own base plus Manor);
+resolved by combining both doc-comment trails and computing the real
+total, 46, rather than picking either side blind. `origin/main` advanced
+twice more from concurrent sessions during the merge itself (a Stable
+Ledger/wild-crops merge, then a loading-tip-interval fix) -- both
+re-fetched and re-merged cleanly, never force-pushed, per this doc's own
+concurrent-session rules. The blueprint-unreachable hotfix above rode
+along in the same merge. `main` now has the full batch: workforce hiring/
+wages/rent, needs v2, civic taxation, interior furniture, the NPC skill
+web rewrite, and this fix -- all previously described in this section
+existed only on the feature branch until this entry.
+
+### Two-story houses: a real walkable upper floor, ten new blueprints (2026-09-13) -- still UNTESTED
+
+Directly requested once the merged batch above was visible in real play:
+*"I can't see new Buildings; they should be sophisticated; 2 story high
+buildings"* -- then, confirming the approach -- *"a se[p]erate walkabe
+upper floor with interior... stairs and from the outside there should be
+windows in second level... also make a variety of 10 sophisticated
+blueprints."* Full design pillars, mechanism spec, the real simplifications
+taken, and the ten shapes themselves are now written up in
+`docs/concept/housing.md`'s own new "Two-story houses" section rather than
+restated here -- summary only:
+
+- A real second, walkable storey sharing the ground floor's own footprint
+  as a THIRD modification layer (`Chunk.upper_floor_modifications`,
+  alongside the already-real `roof_modifications`/`furniture_
+  modifications`), its own `UpperFloor` `TileMapLayer` painted the same
+  way roofs already are.
+- A shared `wood_stairs` `BuildingPiece` (new `CATEGORY_STAIRS`) at the
+  identical cell on both floors; stepping onto it flips a player-side
+  `_current_floor` between 0/1 (`Player._floor_transition_step` ->
+  `EarthChunkManager.step_on_stairs`) -- no teleport, no scene change, the
+  player's world position never moves.
+- `_update_upper_floor_visibility` mirrors the already-tested `_update_
+  roof_visibility`/room-hiding logic one layer up: the upper room hides
+  ONLY from a player standing inside it on floor 1; everywhere else --
+  critically, seen from outside on the ground -- its walls and windows
+  render unconditionally, which is what makes a lit window visible two
+  stories up actually work.
+- Ten new shapes (`HouseBlueprint.TWO_STORY_BLUEPRINT_IDS`, kept
+  deliberately separate from the single-story `BLUEPRINT_IDS` pool so
+  procedural NPC village houses stay single-story): `townhouse_narrow`,
+  `merchant_house`, `guild_hall`, `riverside_villa`, `timber_longhouse`,
+  `artisan_workshop_house`, `tower_keep`, `harborside_manor`,
+  `grand_estate`, `gambrel_lodge` -- real `ItemCatalog` blueprint items,
+  `shop.gd` prices (~2.68x wood cost, matching Manor's own ratio), and
+  `CraftingRecipeBook` recipes (wood costs computed from the real per-piece
+  formula small_house/cottage/manor already established, not eyeballed),
+  all gated at Manor's own `carpentry_level` 3.0 ceiling -- real variety at
+  the top tier, not a fourth, harder gate. `test_crafting_recipe_book.gd`'s
+  own recipe-count assertion updated 43 -> 53 for the same reason the
+  Manor-tier count was caught and fixed earlier in this batch: a hardcoded
+  total left stale is a guaranteed regression the moment tests run again.
+
+**Named honestly, not silently assumed solved** (full reasoning in
+`housing.md`): no real upper-floor wall collision yet (visual/room-
+detection only -- a player can walk through an upstairs wall today);
+`hire_builder_for_house`/`BuilderMarker` were NOT extended to build second
+floors (player-hands-on only, matching the existing precedent that hired
+builders don't place roofs either); procedural village generation was NOT
+extended to ever place an NPC-owned two-story house. Roof geometry needed
+no changes at all -- since the upper floor shares the ground floor's exact
+footprint, the existing facade-derived roof already caps whichever floor
+is topmost.
+
+**Fully UNTESTED, per the same standing "skip tests for now" instruction**
+as every batch above since it began: written directly against real,
+independently-verified existing APIs and patterns (`_update_roof_
+visibility`'s own already-tested room-hiding logic, mirrored rather than
+reinvented; the real wood-cost-per-piece formula cross-checked against
+already-shipped small_house/cottage/manor numbers before trusting it here)
+-- but not run once, not even the single targeted spot-check the NPC
+skill-web rewrite got. `docs/concept/housing.md` is updated in place with
+the same caveat. Do not merge to `main` without a real GUT pass first.
+

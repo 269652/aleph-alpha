@@ -450,6 +450,7 @@ var _ground_tint := GroundTint.new()
 @onready var _ground_items: Node2D = $GroundItems
 @onready var _roof: TileMapLayer = $Roof
 @onready var _furniture: TileMapLayer = $Furniture
+@onready var _upper_floor: TileMapLayer = $UpperFloor
 ## Players are spawned directly into $Entities (not a separate sibling
 ## container) so they Y-sort against trees/grass/stones -- tall grass or a
 ## tree in front of the player must be able to draw over them, which two
@@ -983,6 +984,10 @@ func _ready() -> void:
 	# Interior furniture (docs/concept/housing.md's "Interior furniture"
 	# section): its own layer for the same reason roofs needed one above.
 	_chunk_manager.set_furniture_layer(_furniture)
+	# Two-story houses (docs/concept/housing.md's "Two-story houses"
+	# section): its own layer, one tier further up, for the same reason
+	# furniture/roofs each needed one.
+	_chunk_manager.set_upper_floor_layer(_upper_floor)
 	# Lets fruit-eating birds (see AmbientFlyerMarker.fruit_world /
 	# docs/concept/flora.md#bird-endozoochory) see and eat the same real,
 	# already-rendered fallen-fruit ground items the player can click on --

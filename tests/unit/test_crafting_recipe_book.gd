@@ -39,7 +39,12 @@ func test_recipe_ids_returns_all_defined_recipes():
 	# blueprint-gated, multi-piece construction-ledger recipe, and cottage,
 	# its second tier (2 more), and manor, the third tier reached via
 	# carpentry_1/carpentry_2/master_joiner (1 more).
-	assert_eq(ids.size(), 43)
+	# + two-story houses (docs/concept/housing.md): townhouse_narrow,
+	# merchant_house, guild_hall, riverside_villa, timber_longhouse,
+	# artisan_workshop_house, tower_keep, harborside_manor, grand_estate,
+	# gambrel_lodge -- ten real second-storey shapes at the same
+	# carpentry_level 3.0 ceiling manor already uses (10 more).
+	assert_eq(ids.size(), 53)
 
 
 func test_iron_sword_is_craftable_from_ingots_and_a_stick():

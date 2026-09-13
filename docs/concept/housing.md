@@ -82,6 +82,101 @@ the moment its chunk streams in, and holds until the chunk unloads and
 reloads — the same "regenerates on revisit, no mid-visit re-evaluation"
 simplification trees/creatures already accept.
 
+### Two-story houses
+
+Requested directly ("they should be sophisticated; 2 story high buildings")
+once the blueprint system in [workforce.md](workforce.md) had real shapes to
+grow beyond single-story small_house/cottage/manor. The player wanted a
+REAL walkable upper floor with interior stairs and real windows visible
+from outside — not a cosmetic second-story facade painted over a
+single-height room.
+
+**A NEW layer, for the exact reason roofs and furniture already needed
+one.** The upper floor occupies the IDENTICAL (x, y) footprint as the
+ground floor beneath it — this is a flat 2D top-down engine with no real
+Z axis, so "upstairs" is drawn as a second tile layer sharing the ground
+floor's own cells, exactly the same "own Dictionary because it coexists
+with what's already at that cell" reasoning `roof_modifications` and
+`furniture_modifications` both already establish. `Chunk.upper_floor_
+modifications` (`Vector2i` local cell -> piece id) is the third such
+layer, painted on its own `UpperFloor` `TileMapLayer` (mirroring
+`EarthChunkManager.set_roof_layer`/`_paint_roof` exactly), placed BEFORE
+`Roof` in `world.tscn`'s node order so the roof still draws on top of the
+upper floor precisely the way it already draws on top of the ground floor.
+
+**No teleport, no scene change — a real shared-coordinate floor toggle.**
+A single new `BuildingPiece`, `wood_stairs` (`CATEGORY_STAIRS`, walkable),
+sits at the SAME cell on both the ground and upper layers. Stepping onto
+it (`Player._floor_transition_step`, called every physics frame the same
+way `_build_step`/`_destroy_step` already are) flips a player-side
+`_current_floor` between 0 and 1 via `EarthChunkManager.step_on_stairs` —
+the player's world position never changes, only which modification layer
+they currently read/build against. Walking back onto the same stairs cell
+flips it back. This is deliberately the simplest possible "upstairs"
+primitive: one boolean per player, no new scene, no camera cut.
+
+**Windows visible from outside is the real "sophisticated" signal, not
+decoration.** `_update_upper_floor_visibility` is an exact mirror of the
+existing `_update_roof_visibility`/room-hiding logic, one layer up: it
+hides the upper floor's OWN room only when the player is standing on
+floor 1 AND physically inside that specific room (`RoomDetector.room_
+containing` against a new `_upper_floor_piece_grid_for` grid, the same
+enclosure check furniture placement above already reuses). Everywhere
+else — including every other player looking at the house from the ground,
+or the owner standing outside their own house — the upper floor's walls
+and windows render UNCONDITIONALLY. That is what makes a lit window
+visible two stories up from the street: the upper floor is not a secret
+room that pops into existence, it is real geometry that only hides itself
+from the one vantage point (standing inside it) where showing it would
+occlude the player's own view of themselves.
+
+**Ten real shapes, kept deliberately separate from the single-story
+pool.** `HouseBlueprint.TWO_STORY_BLUEPRINT_IDS` — `townhouse_narrow`,
+`merchant_house`, `guild_hall`, `riverside_villa`, `timber_longhouse`,
+`artisan_workshop_house`, `tower_keep`, `harborside_manor`,
+`grand_estate`, `gambrel_lodge` — is a SEPARATE array from `BLUEPRINT_
+IDS`/`BLUEPRINT_POOL_BY_OCCUPATION`, so the procedural village
+generator's NPC-owned houses stay single-story only; extending village
+generation to build real second floors for NPCs is named, scoped-out
+follow-up, not an oversight (see Open Questions). Each shape's upper
+floor (`HouseBlueprint.build_upper_floor`) reuses the ground floor's own
+wall-ring/window-placement logic with one extra window slot filled where
+the ground floor's door would be (an upper floor has no door of its own
+— you reach it by the stairs, not a second entrance) and places
+`wood_stairs` at the shape's fixed `stairs` cell. All ten reuse the SAME
+`carpentry_level` 3.0 ceiling `manor` already established — real variety
+at the top tier the skill web can reach, not a fourth, harder gate (see
+`workforce.md`'s own "Blueprint tiers"). Wood cost is ground-floor pieces
++ roof pieces (the same convention small_house/cottage/manor already
+verify against their own shapes) plus the upper storey's own walls,
+windows, floor, and stairs — ranging from `tower_keep`'s 129 wood (a
+compact 5x5 keep) to `grand_estate`'s 303 (an 8x8 manor-and-a-half),
+priced in `shop.gd` at the same ~2.68x wood-to-gold ratio manor/cottage
+already share.
+
+**Deliberate simplifications, named honestly rather than left silent:**
+
+- **No real upper-floor wall collision in v1.** Reusing Godot's existing
+  per-cell static-body collision system for a SECOND simultaneous
+  collision layer at identical world coordinates (ground walls collide on
+  floor 0, upper walls collide only on floor 1, at the same tile) was
+  judged too large and too risky a physics-layer rework for this pass.
+  The upper floor is real for visibility, room-detection, and
+  placement/persistence purposes — a player can walk through its walls
+  today. Real dual-floor collision is Open Questions below, not silently
+  assumed solved.
+- **`hire_builder_for_house`/`BuilderMarker` do not build second floors.**
+  A hired builder still only raises the ground floor and roof, matching
+  the existing precedent that `BuilderMarker` does not build roofs either
+  (`workforce.md`'s own build-or-hire fork). Only the player's own
+  `_try_build_house_from_blueprint` calls `build_upper_floor`. Extending
+  the hire path to two-story shapes is scoped-out follow-up.
+- **Roof geometry needed NO changes at all.** Since the upper floor
+  shares the ground floor's exact footprint, `HouseBlueprint.
+  build_roofs()`'s existing facade-derived roof already correctly caps
+  whichever floor is topmost — this is a case where reusing the existing
+  system required literally zero new code, not an accidental gap.
+
 ### Status
 
 - ✅ Night lighting (ambient), above.
@@ -112,17 +207,35 @@ simplification trees/creatures already accept.
 - ⬜ `appeal_score` (the honest placeholder above)
 - ⬜ NPC visits / opinions from a home's appeal
 - ⬜ Multiplayer visiting/rating
+- ✅ Two-story houses, above: `BuildingPiece.CATEGORY_STAIRS`/`wood_stairs`;
+  `HouseBlueprint.TWO_STORY_BLUEPRINT_IDS`/`is_two_story`/`build_upper_
+  floor`; `Chunk.upper_floor_modifications` + its own `UpperFloor`
+  `TileMapLayer`/paint pass; `EarthChunkManager.set_current_player_floor`/
+  `_update_upper_floor_visibility`/`upper_floor_at_global`/
+  `step_on_stairs`/`_stamp_upper_floor_at_global`; `Player._current_floor`/
+  `_floor_transition_step`; ten new blueprints, `ItemCatalog` entries,
+  `shop.gd` prices, and `CraftingRecipeBook` recipes (all at the manor's
+  own carpentry_level 3.0 ceiling)
+- ⬜ Real upper-floor wall collision (visual/room-detection only for now —
+  named above)
+- ⬜ Hire/`BuilderMarker` path building second floors (player-only for now
+  — named above)
+- ⬜ Procedural village NPC houses ever being two-story (deliberately
+  single-story only for now — named above)
 
-**The same explicit caveat as `workforce.md`'s own Status list**: the two
-✅/🚧 items above (the layer/paint pass and the place/remove verb) were
-written directly per an explicit, direct mid-session user instruction
-("skip tests"), without this project's own mandatory strict-TDD red-first
-cycle and without running the test suite at all. Grounded in real,
-independently-verified existing APIs (`TerrainRenderer.atlas_coords_for_
-modification`, `ChunkSerializer.save_modifications`/`load_modifications`,
-`FurniturePlacement`'s own already-tested rule) -- but genuinely unverified
-until a real GUT pass confirms it. Do not merge to `main` on the strength
-of this Status list alone.
+**The same explicit caveat as `workforce.md`'s own Status list**: the
+✅/🚧 items above (the layer/paint pass and the place/remove verb, and
+now the entire two-story house system) were written directly per an
+explicit, direct mid-session user instruction ("skip tests"), without
+this project's own mandatory strict-TDD red-first cycle and without
+running the test suite at all. Grounded in real, independently-verified
+existing APIs (`TerrainRenderer.atlas_coords_for_modification`,
+`ChunkSerializer.save_modifications`/`load_modifications`,
+`FurniturePlacement`'s own already-tested rule, and — for two-story
+specifically — `_update_roof_visibility`'s own already-tested room-hiding
+logic, mirrored rather than reinvented) -- but genuinely unverified until
+a real GUT pass confirms it. Do not merge to `main` on the strength of
+this Status list alone.
 
 ### Open questions
 
@@ -134,3 +247,17 @@ of this Status list alone.
   bonus feeding [survival.md](survival.md), NPC willingness to be
   [hired](npc.md#hiring--instruction)), or stay a purely social/cosmetic
   system?
+- Real upper-floor wall collision — a second simultaneous per-cell static
+  body layer, gated on `_current_player_floor`, so a player can no longer
+  walk through upstairs walls from either floor?
+- Should `hire_builder_for_house`/`BuilderMarker` ever build second floors,
+  or should two-story houses stay a player-only, hands-on build (mirroring
+  how only the player currently builds roofs by hand too)?
+- Should procedural village generation ever place NPC-owned two-story
+  houses, and if so, do NPCs get any use of the upper floor (sleeping
+  upstairs, a merchant's storeroom) or is it purely a bigger, emptier shell
+  than what a player would furnish?
+- Furniture placement (above) only checks `modifications`' ground floor —
+  should `FurniturePlacement.can_place` also accept `upper_floor_
+  modifications` floor cells, so a player can furnish the upstairs room
+  they just built stairs to?

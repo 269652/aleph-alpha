@@ -31,6 +31,14 @@ const CATEGORY_DAM := "dam"
 ## floor only, via RoomDetector) live in FurniturePlacement, matching this
 ## file's own "pure data, never placement rules" framing.
 const CATEGORY_FURNITURE := "furniture"
+## A floor-to-floor transition (see docs/concept/housing.md's "Two-story
+## houses" section) -- its own category, not a floor variant, because the
+## question it answers is different again: stepping onto one is what moves
+## a player between EarthChunkManager's two real per-house layers
+## (`modifications` and the new `upper_floor_modifications`). Walkable like
+## a floor (you stand on a stair tread), never enclosing (same reasoning
+## floor itself already carries).
+const CATEGORY_STAIRS := "stairs"
 
 ## Materials, in progression order along the existing gather -> craft ->
 ## smelt chain.
@@ -56,6 +64,9 @@ const PIECE_IDS: Array[String] = [
 	# Interior furniture (see docs/concept/housing.md). Appended, not
 	# interleaved, per this file's existing convention.
 	"wood_table", "wood_chair", "wood_bed", "wood_rug", "wood_bookshelf",
+	# Two-story houses (see docs/concept/housing.md). Appended, not
+	# interleaved, per this file's existing convention.
+	"wood_stairs",
 ]
 
 ## Per-piece definition.
@@ -223,6 +234,20 @@ const _PIECES := {
 		"category": CATEGORY_FURNITURE, "material": MATERIAL_WOOD,
 		"encloses": false, "walkable": true, "durability": 15.0,
 		"cost": {"wood": 1}, "support_capacity": 0.0,
+	},
+	# Two-story houses (see docs/concept/housing.md's "Two-story houses"
+	# section) -- the SAME piece id sits at the SAME local cell on both a
+	# house's ground and upper layer (EarthChunkManager.modifications /
+	# upper_floor_modifications), so a stair run needs no separate
+	# up/down piece id: which floor you're currently ON, tracked on the
+	# player, is what "up" or "down" means at that one shared cell.
+	# Costed one step above a door (the next-heaviest structural piece)
+	# for the same "bigger/more complex pieces cost more" progression
+	# every tier above already follows.
+	"wood_stairs": {
+		"category": CATEGORY_STAIRS, "material": MATERIAL_WOOD,
+		"encloses": false, "walkable": true, "durability": 40.0,
+		"cost": {"wood": 4}, "support_capacity": 0.0,
 	},
 }
 

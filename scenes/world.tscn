@@ -36,6 +36,9 @@ y_sort_enabled = true
 [node name="GroundItems" type="Node2D" parent="."]
 y_sort_enabled = true
 
+[node name="UpperFloor" type="TileMapLayer" parent="."]
+z_index = 1
+
 [node name="Roof" type="TileMapLayer" parent="."]
 z_index = 1
 
