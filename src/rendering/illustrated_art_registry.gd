@@ -160,8 +160,12 @@ const _SUBJECTS := {
 	# a tool -- the full icon/held/equipped/ground row set (equipped =
 	# strapped to a belt/back when not in hand, same as any carryable
 	# weapon or tool), real 4-state durability (pristine/used/worn/broken)
-	# generalized beyond the original three combat items.
-	"stone_pickaxe": {"contexts": {"icon": {"seasonal": false, "anchor": "center"}, "held": {"seasonal": false, "anchor": "pivot"}, "equipped": {"seasonal": false, "anchor": "pivot"}, "ground": {"seasonal": false, "anchor": "center"}}, "base_season": "any", "states": ["pristine", "used", "worn", "broken"], "base_state": "pristine", "animations": {"still": {"fps": 0, "loop": false}}, "overlays": [], "chroma_key": Color(1.0, 0.0, 1.0), "chroma_key_tolerance": 0.25},
+	# generalized beyond the original three combat items. Real art
+	# integrated from the 2026-09-08 batch: held has 4 real pose variants
+	# (still/pose_b/pose_c/pose_d) of the pristine state only -- pose
+	# variety, not tied to the durability axis (the resolver's own
+	# state->base_state fallback serves them for used/worn/broken).
+	"stone_pickaxe": {"contexts": {"icon": {"seasonal": false, "anchor": "center"}, "held": {"seasonal": false, "anchor": "pivot"}, "equipped": {"seasonal": false, "anchor": "pivot"}, "ground": {"seasonal": false, "anchor": "center"}}, "base_season": "any", "states": ["pristine", "used", "worn", "broken"], "base_state": "pristine", "animations": {"still": {"fps": 0, "loop": false}, "pose_b": {"fps": 0, "loop": false}, "pose_c": {"fps": 0, "loop": false}, "pose_d": {"fps": 0, "loop": false}}, "overlays": [], "chroma_key": Color(1.0, 0.0, 1.0), "chroma_key_tolerance": 0.25},
 	"iron_ore": {"contexts": {"icon": {"seasonal": false, "anchor": "center"}}, "base_season": "any", "states": ["default"], "base_state": "default", "animations": {"still": {"fps": 0, "loop": false}}, "overlays": [], "chroma_key": Color(1.0, 0.0, 1.0), "chroma_key_tolerance": 0.25},
 	"copper_ore": {"contexts": {"icon": {"seasonal": false, "anchor": "center"}}, "base_season": "any", "states": ["default"], "base_state": "default", "animations": {"still": {"fps": 0, "loop": false}}, "overlays": [], "chroma_key": Color(1.0, 0.0, 1.0), "chroma_key_tolerance": 0.25},
 	"coal": {"contexts": {"icon": {"seasonal": false, "anchor": "center"}}, "base_season": "any", "states": ["default"], "base_state": "default", "animations": {"still": {"fps": 0, "loop": false}}, "overlays": [], "chroma_key": Color(1.0, 0.0, 1.0), "chroma_key_tolerance": 0.25},

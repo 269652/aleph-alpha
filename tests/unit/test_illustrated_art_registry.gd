@@ -96,6 +96,12 @@ func test_stone_pickaxe_entry_has_the_documented_shape():
 	assert_eq(entry.base_state, "pristine")
 	for state in ["pristine", "used", "worn", "broken"]:
 		assert_true(entry.states.has(state), "stone_pickaxe should have the %s state" % state)
+	# held's real art is 4 pose variants of the pristine state only (real
+	# generated art, 2026-09-08 batch integrated 2026-09-13) -- not tied to
+	# the pristine/used/worn/broken axis, the same "pose variety, one state"
+	# shape confirmed for this whole batch.
+	for animation in ["still", "pose_b", "pose_c", "pose_d"]:
+		assert_true(entry.animations.has(animation), "stone_pickaxe should declare the %s animation" % animation)
 
 
 func test_crude_blade_entry_has_the_documented_shape():

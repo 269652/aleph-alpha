@@ -2,16 +2,16 @@
 
 importer="texture"
 type="CompressedTexture2D"
-uid="uid://cxuvkrchwvcdn"
-path="res://.godot/imported/still.png-9c882f2f2032eea901cd03ff482ff655.ctex"
+uid="uid://dy44dhvih5df1"
+path="res://.godot/imported/still.png-b57add41fd89032d025dc9c5dcf8ce4b.ctex"
 metadata={
 "vram_texture": false
 }
 
 [deps]
 
-source_file="res://assets/sprites/stone_pickaxe/held/any/used/still.png"
-dest_files=["res://.godot/imported/still.png-9c882f2f2032eea901cd03ff482ff655.ctex"]
+source_file="res://assets/sprites/stone_pickaxe/equipped/any/worn/still.png"
+dest_files=["res://.godot/imported/still.png-b57add41fd89032d025dc9c5dcf8ce4b.ctex"]
 
 [params]
 
