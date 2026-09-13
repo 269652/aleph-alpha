@@ -21815,3 +21815,78 @@ disappeared -- confirmed via a real process-stability poll (not assumed)
 that the fresh launch stays up and responding, so the earlier exit was not
 a crash this pass's own changes caused.
 
+### A two-story house now reads as one from outside -- and keeps its door (2026-09-13)
+
+The first live report after the whole housing batch above merged to
+`main` and relaunched: *"There are still no 2 story houses and the houses
+are also still not furnished... also now most houses don't even have a
+door..."* -- the last part a real regression, not a missing feature.
+
+Investigated with data before touching anything: a throwaway GUT probe
+loaded four freshly generated real villages (scanning outward from the
+Berlin fixture for real settlement chunks) and dumped every layer. Every
+village had all 5 doors on the ground layer and real furniture (12-15
+pieces per 5 houses), and its two-story houses were real (74 upper cells
+in one village) -- but `doors_covered_by_upper=2` there and `=1` in
+another: the upper storey was painted straight over the ground door at
+the same cell. So the data model was fine; the rendering contract was
+wrong. An upper storey shares the ground floor's exact footprint and was
+drawn in place, on a layer above the player, with identical wall/window
+art -- from a bird's-eye view that is *indistinguishable* from a one-story
+house, except for the door it hides. Which also explains the other two
+complaints: the second storey looked like no second storey, and a
+two-story house's furniture (ground floor covered by the upper storey
+even when inside; upper floor under the roof) was never visible either.
+
+The fix is a rendering-contract change, no data or save-format change --
+`docs/concept/building.md`'s "How a house reads from above" gains point 5
+and `housing.md`'s "Two-story houses" section is corrected in place (its
+first version's "walls and windows render UNCONDITIONALLY" paragraph was
+the wrong idea, and now says so):
+
+- **Exterior**: only the upper storey's FACADE band is drawn, one row UP
+  over the roof's own front row (`EarthChunkManager._paint_upper_floor`,
+  facade = no cell of the same storey directly south, read off the chunk),
+  so a two-story house reads as roof-above-facade-above-facade and the
+  ground door stays legible. The `UpperFloor`/`UpperFloorFurniture` layers
+  therefore move ABOVE the roof (`UPPER_FLOOR_LAYER_Z_INDEX` 2 > `ROOF_
+  LAYER_Z_INDEX` 1 -- pinned constants applied by `set_*_layer`, not
+  eyeballed scene values; `world.tscn` updated to match).
+- **Inside, ground floor**: nothing of the upper storey is drawn.
+- **Inside, upstairs**: the whole storey and its furniture in place, and
+  `Player._floor_transition_step` lifts the player's `z_index` to
+  `UPPER_FLOOR_OCCUPANT_Z_INDEX` (4) alongside its existing collision_mask
+  flip, so the floor they stand on cannot paint over them.
+- Night lighting follows: `VillageRenderer._stamp_house` now reports
+  `upper_windows` separately -- only the upper facade's windows, one row
+  up, lit at `UPPER_WINDOW_LIGHT_Z_INDEX` (3, between the facade layer and
+  the player; pinned by test against EarthChunkManager's constants since
+  this module deliberately never preloads that script).
+- `_update_upper_floor_visibility` decides all this per house from the
+  room the player is in on the floor they are actually on; `_update_roof_
+  visibility` now returns its ground-room result so the per-frame cost is
+  still one RoomDetector pass, not two. Chunk unload now also erases the
+  furniture/upper-floor layers (a pre-existing gap: only roof/water/snow
+  overlays were ever erased).
+
+TDD red-first, and verified red for real: the new `test_earth_chunk_
+manager_upper_floor_exterior.gd` (9 tests) was run against the pre-fix
+implementation first -- 0/8 behavioral tests passing, the door test
+failing with exactly the reported symptom and the "only the facade band"
+test seeing all 25 cells painted instead of 5 -- then 9/9 after the fix.
+3 new `test_player.gd` z-flip tests (full file re-run, see below), 3 new
+`test_village_renderer.gd` tests replacing the old "upper windows extend
+the same list" one (full file 52/52), `test_earth_chunk_manager_furniture_
+bulk.gd`'s two visibility tests inverted to the new contract (5/5),
+`test_earth_chunk_manager.gd`'s roof-visibility group (4/4) for the
+return-type change, and `test_earth_chunk_manager_upper_floor_collision.gd`
+(12/12), `test_earth_chunk_manager_roof_pieces.gd` (7/7), `test_builder_
+marker.gd` (17/17) re-run unchanged.
+
+**The owed furniture-reconciliation GUT run from the entry above happened
+here too**, and found exactly one real problem: the rewritten coexistence
+test furnished the ground floor against a bare, wall-less floor cell,
+which `furnish_house_at_global` correctly refuses (the same enclosed-room
+fixture lesson that entry had already learned once, on the upper side).
+Fixed in the test, not the code -- the reconciled production code was
+right as merged.
