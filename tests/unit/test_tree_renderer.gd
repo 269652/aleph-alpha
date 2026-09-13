@@ -686,7 +686,46 @@ func test_no_tree_spawns_on_a_cell_a_building_piece_occupies():
 		_spawned_on_cell(spawned, cell),
 		"a tree spawned on a cell a building piece already stands on"
 	)
-	assert_eq(spawned.size(), without_house - 1)
+	# The piece's own cell AND its one-cell apron are excluded (see the test
+	# just below), so the count drops by every tree cell within one cell of
+	# it, not by one.
+	assert_eq(spawned.size(), without_house - _tree_cells_within_one_of(chunk, cell))
+
+
+## A house keeps a one-cell apron clear of trees (docs/concept/building.md
+## "Placement rules"; reported directly: a village house with a tree
+## standing in front of its door) -- BuildingPiece.touches_piece is the
+## rule, read here at the spawn seam so a reload never puts a tree back on
+## a doorstep the village stamp cleared.
+func test_no_tree_spawns_on_the_apron_around_a_building_piece_either():
+	var chunk := _make_forest_chunk()
+	var cell := _first_tree_cell(chunk)
+	assert_ne(cell, Vector2i(-1, -1), "this chunk rolled no trees at all")
+	chunk.modifications[cell] = "stone_floor"
+
+	var spawned := renderer.spawn_trees(parent, chunk, CHUNK_ORIGIN, TILE_SIZE)
+
+	for dy in range(-1, 2):
+		for dx in range(-1, 2):
+			assert_false(
+				_spawned_on_cell(spawned, cell + Vector2i(dx, dy)),
+				"a tree spawned on the apron at %s next to a piece at %s" % [str(cell + Vector2i(dx, dy)), str(cell)]
+			)
+
+
+## How many of this chunk's rolled tree cells lie within one cell (eight
+## neighbours plus itself) of `cell` -- the exact number the apron rule
+## removes from spawn_trees' own count.
+func _tree_cells_within_one_of(chunk: Chunk, cell: Vector2i) -> int:
+	var count := 0
+	for y in chunk.height:
+		for x in chunk.width:
+			var here := Vector2i(x, y)
+			if maxi(absi(here.x - cell.x), absi(here.y - cell.y)) > 1:
+				continue
+			if tree_placement.has_tree_at(CHUNK_ORIGIN.x + x, CHUNK_ORIGIN.y + y, chunk.biome[y * chunk.width + x]):
+				count += 1
+	return count
 
 
 ## Reported directly after playtesting: rivers were "still treated like
