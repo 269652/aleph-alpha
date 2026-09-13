@@ -21174,6 +21174,64 @@ carpentry lives in); widening that, and growing an NPC's own dedication
 from real work rather than fixing it at birth, are both real, separate
 follow-ups in `workforce.md`'s own updated section 4.
 
+### The rest of the "skip tests" batch finally gets its real GUT pass (2026-09-13)
+
+Three entries above each end with the same line: "do not merge to `main`
+without a real GUT pass first." The branch (`feat/blueprints-and-workforce`)
+was merged anyway (`8a971308`), and the Skill Web verification pass
+explicitly stopped short of "the rest of the 'skip tests' batch
+(wages/rent/needs-v2/civic-tax/furniture/BuilderMarker/Player-side)."
+This closes that gap: the wages/rent/needs-v2/civic-tax slice
+(`step_workforce_economy` and its five sub-steps) never had a single test
+written against it at all, let alone a passing one.
+
+14 new tests in `test_earth_chunk_manager.gd`, each isolated so only the
+one mechanism under test can move a wallet: wages (paid for a filled slot,
+withheld before the tick interval, skipped without debt when unaffordable),
+rent (collected, suspended for a `DECLINING` settlement per needs v1,
+skipped without going negative when the resident is broke), needs v2
+(both signals read conjunctively, the "not a resident of anything" edge
+case, and the resulting real job-quit), and civic taxation (levied under a
+real government, skipped with `Governance.NONE`, skipped when the player
+can't afford it). Also directly re-run, not modified: 23 of the
+blueprint/hire-carpenter/move-in/workforce-assignment tests from the
+earlier passes above, all green; the remainder live in `test_player.gd`,
+confirmed within its own 387/390 (see below).
+
+**Net finding: the shipped code was correct.** Every genuine defect this
+pass found was in the new test fixtures, not in the three-plus-sessions
+of "skip tests" production code they were written against. Three tests
+(and a fourth silently passing for the same wrong reason) never called
+`record_settlement_founded_if_new`, so `SettlementState.status_for(0, 0)`
+read `STABLE` rather than `DECLINING` -- `test_settle_resident_if_new_
+still_settles_far_from_any_real_settlement` already pins
+`household_count_for_settlement` at exactly 0 for an unfounded location,
+so "declining" was structurally unreachable in those fixtures, not a real
+gate anyone had gotten wrong. Fixed by founding a real settlement first.
+
+`test_player.gd` in full: 387/390, all three failures unrelated to this
+feature -- two are this worktree's own stale import cache on two
+newly-added building sprites (`farmhouse.png`, `sawmill.png` -- an
+environment artifact fixed by `--headless --import`, not a code bug), one
+is the already-flagged zero-Rhine-discharge issue
+(`test_a_genuinely_large_river_still_resolves_to_swimming`, same root
+cause as `test_the_rhine_is_deeper_wider_and_carries_far_more_than_the_
+dreisam` flagged earlier). `docs/concept/workforce.md`'s own caveat
+updated in place with the same finding.
+
+Not touched by this pass, still exactly as unverified as named above:
+interior furniture's live chunk layer/rendering/player verb (marked 🚧,
+never claimed ✅), and two unrelated pre-existing `test_earth_chunk_
+manager.gd` failures noticed in passing while a since-abandoned full-file
+run was in progress (`test_an_in_progress_projects_labor_measurably_
+advances_after_a_real_simulated_chunk_unload_absence` and
+`test_a_completed_projects_placeable_output_is_actually_placed_in_the_
+world`) -- confirmed the diff this merge made to `construction_project.gd`/
+`construction_project_store.gd` is purely additive (new fields/functions,
+no existing method body changed), so these read as pre-existing and
+unrelated rather than a regression from this merge, but neither was
+diagnosed further here.
+
 ### All 33 equipment-first items get real illustrated art (`concept/item_illustrations.md`, `concept/illustrated_art_addressing.md`, `concept/item_durability.md`, 2026-09-13)
 
 The 2026-09-08 icon-only scaffolding pass above deliberately left every

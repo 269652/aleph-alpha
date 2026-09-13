@@ -14704,3 +14704,239 @@ func test_find_spare_carpenter_household_can_find_a_real_manor_grade_carpenter()
 	var expected_household := manager.household_store().household_for(EntityRef.for_npc(seed_value))
 
 	assert_eq(manager.find_spare_carpenter_household(settlement_id, "manor"), expected_household.id)
+
+
+# -- emergence: workforce -- wages, rent, needs v2, civic tax (docs/concept/
+# workforce.md sections 8-10). That doc's own Status list marks every one of
+# these shipped, with an explicit, honest caveat attached: written and
+# merged WITHOUT this project's own TDD red-first cycle and "without running
+# the test suite at all... none of it has been run even once." These are
+# that first real GUT confirmation -- each isolated so only the one
+# mechanism under test can move a wallet, by construction (no OTHER real
+# resident/assignment/ownership exists in that test for step_workforce_
+# economy's other four sub-steps to act on).
+
+const Wallet = preload("res://src/gameplay/wallet.gd")
+
+
+func test_step_workforce_economy_pays_a_real_wage_for_a_filled_slot():
+	var worker_household := manager.household_store().form_household(EntityRef.for_npc(90001))
+	manager.assign_resident_to_workplace(worker_household.id, Vector2i(5, 5))
+	var player_wallet := Wallet.new()
+	player_wallet.add(100)
+
+	manager.step_workforce_economy(EarthChunkManager.WORKFORCE_ECONOMY_INTERVAL, player_wallet)
+
+	assert_eq(player_wallet.balance, 100 - EarthChunkManager.WAGE_PER_TICK, "the player pays for the filled slot")
+	assert_eq(worker_household.wallet.balance, EarthChunkManager.WAGE_PER_TICK, "the resident's household banks it")
+
+
+func test_step_workforce_economy_pays_no_wage_before_the_interval_elapses():
+	var worker_household := manager.household_store().form_household(EntityRef.for_npc(90002))
+	manager.assign_resident_to_workplace(worker_household.id, Vector2i(5, 5))
+	var player_wallet := Wallet.new()
+	player_wallet.add(100)
+
+	manager.step_workforce_economy(EarthChunkManager.WORKFORCE_ECONOMY_INTERVAL - 1.0, player_wallet)
+
+	assert_eq(player_wallet.balance, 100)
+	assert_eq(worker_household.wallet.balance, 0)
+
+
+func test_step_workforce_economy_skips_an_unaffordable_wage_without_debt():
+	var worker_household := manager.household_store().form_household(EntityRef.for_npc(90003))
+	manager.assign_resident_to_workplace(worker_household.id, Vector2i(5, 5))
+	var player_wallet := Wallet.new()
+	player_wallet.add(EarthChunkManager.WAGE_PER_TICK - 1)
+
+	manager.step_workforce_economy(EarthChunkManager.WORKFORCE_ECONOMY_INTERVAL, player_wallet)
+
+	assert_eq(player_wallet.balance, EarthChunkManager.WAGE_PER_TICK - 1, "an unaffordable wage is skipped, not owed")
+	assert_eq(worker_household.wallet.balance, 0)
+
+
+func test_step_workforce_economy_collects_real_rent_from_a_resident():
+	manager.update(Vector2i(0, 0))
+	manager.stamp_house_and_grant_ownership("small_house", Vector2i(1, 1), "household:owner")
+	var resident_id := manager.settle_resident_if_new("small_house", Vector2i(1, 1))
+	var resident_household := manager.household_store().get_household(resident_id)
+	resident_household.wallet.add(100)
+	var settlement_id := EntityRef.for_settlement(Vector2i(0, 0))
+	manager.market_store().market_for(settlement_id).add_stock("meat", 200)  # keeps status off DECLINING
+	var player_wallet := Wallet.new()
+
+	manager.step_workforce_economy(EarthChunkManager.WORKFORCE_ECONOMY_INTERVAL, player_wallet)
+
+	assert_eq(resident_household.wallet.balance, 100 - EarthChunkManager.RENT_PER_TICK)
+	assert_eq(player_wallet.balance, EarthChunkManager.RENT_PER_TICK)
+
+
+## Needs v1 (already-shipped, reused here): a settlement's own real food
+## status gates rent, not just legitimacy. A settlement must actually be
+## FOUNDED (record_settlement_founded_if_new) for this to read DECLINING at
+## all -- test_settle_resident_if_new_still_settles_far_from_any_real_
+## settlement already pins household_count_for_settlement at exactly 0
+## for an unfounded location, and SettlementState.status_for(0, 0) is
+## STABLE, not DECLINING (0 households can't be short of 0 capacity).
+func test_step_workforce_economy_suspends_rent_for_a_declining_settlements_resident():
+	manager.record_settlement_founded_if_new(Vector2i(0, 0), [NpcIdentity.new(1)])
+	manager.update(Vector2i(0, 0))
+	manager.stamp_house_and_grant_ownership("small_house", Vector2i(1, 1), "household:owner")
+	var resident_id := manager.settle_resident_if_new("small_house", Vector2i(1, 1))
+	var resident_household := manager.household_store().get_household(resident_id)
+	resident_household.wallet.add(100)
+	# No stock added -- a founded settlement with an empty market reads
+	# DECLINING, the same real default
+	# test_legitimacy_for_an_empty_market_settlement_is_low already pins.
+	var player_wallet := Wallet.new()
+
+	manager.step_workforce_economy(EarthChunkManager.WORKFORCE_ECONOMY_INTERVAL, player_wallet)
+
+	assert_eq(resident_household.wallet.balance, 100, "needs v1: no rent from a settlement that can't feed them")
+	assert_eq(player_wallet.balance, 0)
+
+
+func test_step_workforce_economy_collects_no_rent_from_an_empty_walleted_resident():
+	manager.update(Vector2i(0, 0))
+	manager.stamp_house_and_grant_ownership("small_house", Vector2i(1, 1), "household:owner")
+	var resident_id := manager.settle_resident_if_new("small_house", Vector2i(1, 1))
+	var resident_household := manager.household_store().get_household(resident_id)
+	var settlement_id := EntityRef.for_settlement(Vector2i(0, 0))
+	manager.market_store().market_for(settlement_id).add_stock("meat", 200)
+	var player_wallet := Wallet.new()
+
+	manager.step_workforce_economy(EarthChunkManager.WORKFORCE_ECONOMY_INTERVAL, player_wallet)
+
+	assert_eq(resident_household.wallet.balance, 0, "Wallet.spend's own all-or-nothing contract: never negative")
+	assert_eq(player_wallet.balance, 0)
+
+
+func test_resident_happiness_is_content_when_the_settlement_is_not_declining():
+	manager.update(Vector2i(0, 0))
+	manager.stamp_house_and_grant_ownership("small_house", Vector2i(1, 1), "household:owner")
+	var resident_id := manager.settle_resident_if_new("small_house", Vector2i(1, 1))
+	var settlement_id := EntityRef.for_settlement(Vector2i(0, 0))
+	manager.market_store().market_for(settlement_id).add_stock("meat", 200)
+
+	assert_eq(manager.resident_happiness(resident_id), "content")
+
+
+## Deliberately conjunctive (see resident_happiness's own doc comment): a
+## furnished house in a starving settlement is still genuinely fed. Founds
+## a real settlement first -- see the rent-suspension test's own doc
+## comment above for why an unfounded location can never actually read
+## DECLINING at all.
+func test_resident_happiness_is_content_with_real_furniture_even_in_a_declining_settlement():
+	manager.record_settlement_founded_if_new(Vector2i(0, 0), [NpcIdentity.new(1)])
+	manager.update(Vector2i(0, 0))
+	manager.stamp_house_and_grant_ownership("small_house", Vector2i(1, 1), "household:owner")
+	var resident_id := manager.settle_resident_if_new("small_house", Vector2i(1, 1))
+	var project = manager.construction_project_store().find_project(Vector2i(0, 0), Vector2i(1, 1), "small_house")
+	manager._loaded_chunks[Vector2i(0, 0)].furniture_modifications[project.origin] = "chair"
+	# No stock added -- the settlement itself still reads DECLINING.
+
+	assert_eq(manager.resident_happiness(resident_id), "content")
+
+
+func test_resident_happiness_is_unhappy_only_when_declining_and_unfurnished_together():
+	manager.record_settlement_founded_if_new(Vector2i(0, 0), [NpcIdentity.new(1)])
+	manager.update(Vector2i(0, 0))
+	manager.stamp_house_and_grant_ownership("small_house", Vector2i(1, 1), "household:owner")
+	var resident_id := manager.settle_resident_if_new("small_house", Vector2i(1, 1))
+	# No stock added (DECLINING) and no furniture placed -- both real signals bad.
+
+	assert_eq(manager.resident_happiness(resident_id), "unhappy")
+
+
+func test_resident_happiness_is_content_for_a_household_that_is_not_a_resident_of_anything():
+	assert_eq(manager.resident_happiness("household:nobody"), "content")
+
+
+func test_step_workforce_economy_unassigns_an_unhappy_residents_job():
+	manager.record_settlement_founded_if_new(Vector2i(0, 0), [NpcIdentity.new(1)])
+	manager.update(Vector2i(0, 0))
+	manager.stamp_house_and_grant_ownership("small_house", Vector2i(1, 1), "household:owner")
+	var resident_id := manager.settle_resident_if_new("small_house", Vector2i(1, 1))
+	manager.assign_resident_to_workplace(resident_id, Vector2i(5, 5))
+	# No stock added (DECLINING) and no furniture placed -- genuinely unhappy.
+	var player_wallet := Wallet.new()
+	player_wallet.add(100)
+
+	manager.step_workforce_economy(EarthChunkManager.WORKFORCE_ECONOMY_INTERVAL, player_wallet)
+
+	assert_false(manager.is_resident_assigned(resident_id), "an unhappy resident quits the job, closing that Open Question")
+
+
+func test_levy_civic_tax_taxes_the_players_own_property_under_a_real_government():
+	var chunk_coord := Vector2i(0, 0)
+	manager.record_settlement_founded_if_new(chunk_coord, [NpcIdentity.new(1), NpcIdentity.new(2)])
+	var household_a: String = manager.household_store().household_for(EntityRef.for_npc(1)).id
+	var household_b: String = manager.household_store().household_for(EntityRef.for_npc(2)).id
+	_fulfill_contracts_between(household_a, household_b, InstitutionFormation.FORMATION_THRESHOLD)
+	manager.attempt_institution_formation("militia", household_a, household_b)
+
+	manager.update(chunk_coord)
+	var player_household := manager.household_store().form_household(PlayerIdentity.PLAYER_ENTITY_ID)
+	manager.stamp_house_and_grant_ownership("small_house", Vector2i(1, 1), player_household.id)
+
+	var village_market_script := preload("res://src/world/village_market.gd")
+	var village_market = village_market_script.new()
+	var economy := _FakeVillagerEconomy.new()
+	economy.market = village_market
+	var villager := _FakeVillager.new()
+	villager.economy = economy
+	manager._loaded_villages[chunk_coord] = [villager]
+
+	var player_wallet := Wallet.new()
+	player_wallet.add(100)
+
+	manager.step_workforce_economy(EarthChunkManager.WORKFORCE_ECONOMY_INTERVAL, player_wallet)
+
+	var npc_economy_script := preload("res://src/world/npc_economy.gd")
+	assert_eq(player_wallet.balance, 100 - EarthChunkManager.CIVIC_TAX_PER_TICK)
+	assert_almost_eq(npc_economy_script.purse_of(village_market), float(EarthChunkManager.CIVIC_TAX_PER_TICK), 0.001)
+
+
+func test_levy_civic_tax_does_nothing_without_a_real_government():
+	var chunk_coord := Vector2i(0, 0)
+	manager.update(chunk_coord)
+	var player_household := manager.household_store().form_household(PlayerIdentity.PLAYER_ENTITY_ID)
+	manager.stamp_house_and_grant_ownership("small_house", Vector2i(1, 1), player_household.id)
+	# No institution ever formed here -- governance_form_for_settlement reads
+	# "none" (Governance.NONE), the same real default
+	# test_governance_form_for_a_settlement_with_no_institutions_is_none pins.
+	var player_wallet := Wallet.new()
+	player_wallet.add(100)
+
+	manager.step_workforce_economy(EarthChunkManager.WORKFORCE_ECONOMY_INTERVAL, player_wallet)
+
+	assert_eq(player_wallet.balance, 100, "no real government in this settlement, nobody to collect the tax")
+
+
+func test_levy_civic_tax_skips_when_the_player_cannot_afford_it():
+	var chunk_coord := Vector2i(0, 0)
+	manager.record_settlement_founded_if_new(chunk_coord, [NpcIdentity.new(1), NpcIdentity.new(2)])
+	var household_a: String = manager.household_store().household_for(EntityRef.for_npc(1)).id
+	var household_b: String = manager.household_store().household_for(EntityRef.for_npc(2)).id
+	_fulfill_contracts_between(household_a, household_b, InstitutionFormation.FORMATION_THRESHOLD)
+	manager.attempt_institution_formation("militia", household_a, household_b)
+
+	manager.update(chunk_coord)
+	var player_household := manager.household_store().form_household(PlayerIdentity.PLAYER_ENTITY_ID)
+	manager.stamp_house_and_grant_ownership("small_house", Vector2i(1, 1), player_household.id)
+
+	var village_market_script := preload("res://src/world/village_market.gd")
+	var village_market = village_market_script.new()
+	var economy := _FakeVillagerEconomy.new()
+	economy.market = village_market
+	var villager := _FakeVillager.new()
+	villager.economy = economy
+	manager._loaded_villages[chunk_coord] = [villager]
+
+	var player_wallet := Wallet.new()  # 0 gold -- can't afford CIVIC_TAX_PER_TICK
+
+	manager.step_workforce_economy(EarthChunkManager.WORKFORCE_ECONOMY_INTERVAL, player_wallet)
+
+	var npc_economy_script := preload("res://src/world/npc_economy.gd")
+	assert_eq(player_wallet.balance, 0)
+	assert_eq(npc_economy_script.purse_of(village_market), 0.0)
