@@ -4279,7 +4279,7 @@ Nothing in this section is implemented yet.
 
 A first crafting loop is now real and wired into live gameplay, though shallow:
 
-- **Base gather-craft-build loop** (medium) — ✅ Done (basic) — `src/gameplay/crafting_recipe_book.gd` defines recipes (inputs → output), wired into `Player.craft()`; there's now a real **crafting UI** (`scenes/crafting_window.gd`, toggle C) — plus the `/craft` console command. Overhauled from a single narrow, right-anchored list of thin text rows into a **centered, card-based catalog** (`UiTheme`-styled, matching the inventory/settings windows rather than reading as a leftover sidebar): recipes are grouped into sections by their output's item kind (Weapons/Tools/Armor/Structures/Cooking/Materials) inside a scrolling, fixed-size window rather than one that grows unbounded with the recipe count; each card shows a real item **thumbnail**, the output name (+ a `x2`-style count badge when a recipe yields more than one), and every required material as its own icon + live **have/need** count, colored green when covered and red when short, so what's blocking a craft is legible at a glance instead of buried in a text string. Unaffordable cards dim and lose their hover/click affordance; affordable ones highlight on hover with a pointing-hand cursor. `Player.craft()` produces the output into the inventory (and, if the inventory is full and consuming inputs didn't free a slot, drops the crafted item at the player's feet rather than silently losing it). The gather side is real too: chop trees (wood+sticks), smash boulders (rock), knap rock-on-rock (sharp shards), harvest tall grass (fibre), and mine ore-bearing boulders with a pickaxe (ore+stone). **Smelting/metalworking** now exists (`src/gameplay/smelting.gd`, tested, see `concept/smelting.md`): ore + coal smelted at a **heat source** (a carried campfire or crafted **furnace**) → iron/copper ingots, which forge a full **iron armor set** that out-protects leather. Real, generalized **recipe gating** now exists too (see `concept/production_chains.md`, new doc): `Player.craft`'s old hardcoded "is this a smelting recipe" special case is gone, replaced by two OPTIONAL, additive `CraftingRecipeBook` fields — `required_skill` (a `SkillTree` stat/level threshold, e.g. the `sagewerk` recipe's real Carpentry gate) and `requires_structure` (a structure id that must be built/nearby, e.g. smelting's own heat-source gate, now data-driven instead of hardcoded) — read generically, so any future recipe gets real gating just by declaring the field.
+- **Base gather-craft-build loop** (medium) — ✅ Done (basic) — `src/gameplay/crafting_recipe_book.gd` defines recipes (inputs → output), wired into `Player.craft()`; there's now a real **crafting UI** (`scenes/crafting_window.gd`, toggle C) — plus the `/craft` console command. Overhauled from a single narrow, right-anchored list of thin text rows into a **centered, card-based catalog** (`UiTheme`-styled, matching the inventory/settings windows rather than reading as a leftover sidebar): recipes are grouped into sections by their output's item kind (Weapons/Tools/Armor/Structures/Cooking/Materials) inside a scrolling, fixed-size window rather than one that grows unbounded with the recipe count; each card shows a real item **thumbnail**, the output name (+ a `x2`-style count badge when a recipe yields more than one), and every required material as its own icon + live **have/need** count, colored green when covered and red when short, so what's blocking a craft is legible at a glance instead of buried in a text string. Unaffordable cards dim and lose their hover/click affordance; affordable ones highlight on hover with a pointing-hand cursor. The menu lists **bench recipes only** (`CraftingWindow.bench_recipe_ids()`, since 2026-09-13): it skips `automated` recipes (a card `can_craft` would refuse forever) and any recipe whose output is not a real `ItemCatalog` item — the house-blueprint "ledger" recipes (`small_house`, `cottage`, `manor`, the two-story tiers), which are built through the blueprint action (`Player._try_build_house_from_blueprint`) and would have burned their wood for nothing if clicked here. `Player.craft()` produces the output into the inventory (and, if the inventory is full and consuming inputs didn't free a slot, drops the crafted item at the player's feet rather than silently losing it). The gather side is real too: chop trees (wood+sticks), smash boulders (rock), knap rock-on-rock (sharp shards), harvest tall grass (fibre), and mine ore-bearing boulders with a pickaxe (ore+stone). **Smelting/metalworking** now exists (`src/gameplay/smelting.gd`, tested, see `concept/smelting.md`): ore + coal smelted at a **heat source** (a carried campfire or crafted **furnace**) → iron/copper ingots, which forge a full **iron armor set** that out-protects leather. Real, generalized **recipe gating** now exists too (see `concept/production_chains.md`, new doc): `Player.craft`'s old hardcoded "is this a smelting recipe" special case is gone, replaced by two OPTIONAL, additive `CraftingRecipeBook` fields — `required_skill` (a `SkillTree` stat/level threshold, e.g. the `sagewerk` recipe's real Carpentry gate) and `requires_structure` (a structure id that must be built/nearby, e.g. smelting's own heat-source gate, now data-driven instead of hardcoded) — read generically, so any future recipe gets real gating just by declaring the field.
 - **Crafting Stations** (small) — 🚧 Partial — `src/gameplay/crafting_station.gd` (tier-gated `can_craft_at`), tested but not wired — `/craft` currently works anywhere, no station placement/proximity check.
 - **Skill-gated crafting progression** (medium) — ⬜ Not started — design landed in
   [concept/labor_skills.md](concept/labor_skills.md) (a use-based Smithing/
@@ -22036,4 +22036,58 @@ real village was watched walking the chain on the clock in this pass --
 the integration test drives the same functions the game's own
 `step_settlements` calls. Also found in passing, not fixed here:
 `tests/unit/test_crafting_window.gd` fails 0/16 on `main` itself
-(flagged as its own task).
+(flagged as its own task -- fixed the same day, see the next section).
+
+### Crafting menu: the house blueprints took the whole grid down (2026-09-13)
+
+The task flagged just above, run down: `tests/unit/test_crafting_window.gd`
+was 0/16 on `main` -- every test logging *"Invalid access to property or
+key 'small_house' on a base object of type 'Dictionary'"* followed by
+*"'kind' on a base object of type 'Nil'"*, and the card-count assertion
+reading `[0] expected to equal [62]`. Not a stale fixture: the window and
+its test last changed 2026-08-28; what moved was the recipe book. The
+workforce/housing batch above added **13 house-blueprint recipes**
+(`small_house`, `cottage`, `manor`, ten two-story tiers) whose
+`output` is, by the `small_house` recipe's own doc comment, "symbolic of
+the structure the ledger tracks and deliberately NOT also an ItemCatalog
+entry -- nothing ever holds a small_house in a bag." `CraftingWindow.
+_grouped_recipe_ids` called `ItemCatalog.make(output.item_id).kind` on
+every recipe unguarded, and `make()` fails loudly for an unknown id *by
+design* (its doc comment says so -- a null item must never propagate into
+an inventory), so the first house recipe aborted the grouping, left
+`_cards` empty, and every later `_cards["torch"]` lookup failed in turn
+(one `small_house` + one `kind`-on-Nil error per `refresh()` call, one
+`torch` error per card lookup that followed -- the pattern in the report).
+Live consequence, not just a
+red test: since those commits the crafting menu (toggle C) opened as an
+empty panel and logged that error every frame it stayed open.
+
+**The fix is a filter, not a guard.** A house card would have been worse
+than a crash: `Player.craft("small_house")` passes the skill gate,
+consumes 30 wood, then skips the output because `has()` is false -- wood
+gone, nothing built. Houses are meant to be reached only through
+`Player._try_build_house_from_blueprint`, which calls `craft()` as its
+atomic material+skill gate and stamps the house itself
+(`concept/workforce.md` section 2). So `CraftingWindow.bench_recipe_ids()`
+now decides the list up front: a recipe gets a card only if it is not
+`automated` (`can_craft` refuses those before any input check -- a card
+could only ever render dimmed; `grow_wheat` was the one live case) AND
+`ItemCatalog.has()` its output (the same guard `_display_name`/
+`_sprite_id_for`/`Player.craft` already applied one step later). Grouping
+reads `kind_of()` instead of `make().kind`. 62 recipes -> 48 cards;
+structures that ARE placeable items (`sagewerk`, `mill`, `bakery`,
+`campfire`, ...) stay under Structures, and `mill_flour`/`bake_bread`
+stay as the real hand crafts they are.
+
+Red-first (`fix/crafting-window-tests`): the expected card set is now
+derived in the test independently of the window's own filter from the two
+tested sources it composes, plus explicit pins that `small_house`/
+`cottage`/`manor`/`grand_estate` and `grow_wheat` get no card; the
+section-header test walks the same set via `kind_of()`. 18/18 green.
+Spec cross-aligned: `concept/production_chains.md` gains a "What the
+crafting menu lists" rule and status line; `concept/workforce.md`'s
+"Blueprint tiers" paragraph now says a tier's recipe never appears in the
+menu. **Not fixed here**: the dev console's `/craft <recipe_id>` still
+routes straight into `Player.craft`, so `/craft small_house` would burn
+the wood the same way -- a dev-only surface, named rather than papered
+over.

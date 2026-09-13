@@ -210,7 +210,14 @@ its own `ItemCatalog` blueprint item and its own `CraftingRecipeBook` recipe
 (`blueprint_id` == the recipe id, `output` symbolic, `inputs` pinned to
 agree with that shape's own real piece cost — see `small_house`'s own doc
 comment in `crafting_recipe_book.gd` for the exact pattern every further
-tier repeats).
+tier repeats). Because that `output` is symbolic — no `ItemCatalog` entry,
+nothing ever holds a house in a bag — a tier's recipe **never appears in
+the crafting menu** (`CraftingWindow.bench_recipe_ids()`, see
+[production_chains.md](production_chains.md)'s "What the crafting menu
+lists"): a card there would let `craft()` consume the wood and hand back
+nothing, since the stamping half of section 2 below lives in
+`_try_build_house_from_blueprint`, not in `craft()`. The blueprint action
+is the only door to a house recipe.
 
 **✅ Shipped: Small House** (`hut_tiny`, `required_skill` carpentry_level
 `1.0` — one `carpentry_1` node, deliberately one full node below the
