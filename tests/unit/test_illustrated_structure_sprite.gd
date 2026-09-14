@@ -130,3 +130,66 @@ func test_footprint_texture_height_matches_the_idle_images_own_aspect_ratio():
 		var expected_height := int(round(16.0 * float(idle_image.get_height()) / float(idle_image.get_width())))
 		var texture := sprite.footprint_texture(subject, 16)
 		assert_eq(texture.get_height(), expected_height, "%s footprint height should scale by the same factor as width" % subject)
+
+
+# -- whole-building entities (docs/concept/building.md "Buildings are -------
+# -- entities; interiors are scenes"): any sheet following the one asset -----
+# -- contract (8 columns x 5 lifecycle rows, black background, magenta ------
+# -- dividers), read by ROW and COLUMN, scaled to a multi-tile footprint. ----
+# -- blacksmith.png is the real fixture -- it is exactly that contract. -------
+
+const _CONTRACT_SHEET := "res://assets/sprites/buildings/blacksmith.png"
+const _COLUMNS := 8
+const _ROWS := 5
+
+
+func test_sheet_frame_image_reads_any_row_and_column_of_a_contract_sheet():
+	var construction := sprite.sheet_frame_image(_CONTRACT_SHEET, _COLUMNS, _ROWS, 0, 0)
+	var ruined := sprite.sheet_frame_image(_CONTRACT_SHEET, _COLUMNS, _ROWS, 4, 7)
+	assert_not_null(construction)
+	assert_not_null(ruined)
+	assert_gt(construction.get_width(), 0)
+	assert_ne(construction.get_data(), ruined.get_data(), "the first construction stage and the last ruin frame are different drawings")
+
+
+func test_sheet_frame_image_is_keyed_to_a_transparent_background():
+	var image := sprite.sheet_frame_image(_CONTRACT_SHEET, _COLUMNS, _ROWS, 2, 0)
+	var transparent := 0
+	var opaque := 0
+	for y in image.get_height():
+		for x in image.get_width():
+			var a := image.get_pixel(x, y).a
+			if a <= 0.01:
+				transparent += 1
+			elif a >= 0.99:
+				opaque += 1
+	assert_gt(transparent, 0, "the black background around the building is keyed away")
+	assert_gt(opaque, 100, "the building itself survives")
+
+
+func test_sheet_frame_image_is_null_for_a_missing_sheet_or_an_out_of_range_cell():
+	assert_null(sprite.sheet_frame_image("res://assets/sprites/buildings/not_a_real_sheet.png", _COLUMNS, _ROWS, 0, 0))
+	assert_null(sprite.sheet_frame_image(_CONTRACT_SHEET, _COLUMNS, _ROWS, _ROWS, 0), "row past the sheet")
+	assert_null(sprite.sheet_frame_image(_CONTRACT_SHEET, _COLUMNS, _ROWS, 0, _COLUMNS), "column past the sheet")
+
+
+## A building standing on a 3-tile-wide footprint is drawn 3 tiles wide --
+## height by the same factor, so a tall building stays tall (the same
+## footprint anchor footprint_texture already keeps for a 1-tile placeable).
+func test_footprint_frame_texture_scales_to_the_footprint_width():
+	var texture := sprite.footprint_frame_texture(_CONTRACT_SHEET, _COLUMNS, _ROWS, 2, 0, 16, 3)
+	assert_not_null(texture)
+	assert_eq(texture.get_width(), 48)
+	var frame := sprite.sheet_frame_image(_CONTRACT_SHEET, _COLUMNS, _ROWS, 2, 0)
+	var expected_height := int(round(48.0 * float(frame.get_height()) / float(frame.get_width())))
+	assert_eq(texture.get_height(), expected_height)
+
+
+func test_footprint_frame_texture_is_null_for_a_missing_sheet():
+	assert_null(sprite.footprint_frame_texture("res://assets/sprites/buildings/not_a_real_sheet.png", _COLUMNS, _ROWS, 2, 0, 16, 2))
+
+
+func test_sheet_frame_image_is_deterministic_and_cached_per_cell():
+	var a := sprite.sheet_frame_image(_CONTRACT_SHEET, _COLUMNS, _ROWS, 1, 3)
+	var b := sprite.sheet_frame_image(_CONTRACT_SHEET, _COLUMNS, _ROWS, 1, 3)
+	assert_eq(a.get_data(), b.get_data())

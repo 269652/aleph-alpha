@@ -1,0 +1,59 @@
+extends GutTest
+
+## ProceduralBuildingPlaceholderSprite: a roof-over-walls box drawn for a
+## building whose real sheet has not landed yet (docs/concept/building.md
+## "Asset contract") -- so the whole-building system is playable and
+## testable without art. Deterministic, same PixelPalette house style as
+## every other procedural generator here.
+
+const ProceduralBuildingPlaceholderSprite = preload("res://src/rendering/procedural_building_placeholder_sprite.gd")
+const TerrainRenderer = preload("res://src/rendering/terrain_renderer.gd")
+
+var generator: ProceduralBuildingPlaceholderSprite
+
+
+func before_each():
+	generator = ProceduralBuildingPlaceholderSprite.new()
+
+
+## Drawn at art resolution, as wide as the footprint and one extra tile
+## tall -- a roof rises above the footprint the way every real sheet's
+## building does.
+func test_image_is_footprint_wide_and_one_tile_taller_than_the_footprint():
+	var image := generator.generate_image(Vector2i(3, 2), 7)
+	assert_eq(image.get_width(), 3 * TerrainRenderer.ART_TILE_SIZE)
+	assert_eq(image.get_height(), (2 + 1) * TerrainRenderer.ART_TILE_SIZE)
+
+
+func test_image_is_mostly_opaque_building():
+	var image := generator.generate_image(Vector2i(2, 2), 1)
+	var opaque := 0
+	for y in image.get_height():
+		for x in image.get_width():
+			if image.get_pixel(x, y).a >= 0.99:
+				opaque += 1
+	assert_gt(opaque, image.get_width() * image.get_height() / 2, "a placeholder is a solid box, not a smudge")
+
+
+## The roof band (top) reads differently from the wall band (bottom) --
+## otherwise the box is a flat rectangle, not a building.
+func test_roof_and_wall_bands_are_visually_distinct():
+	var image := generator.generate_image(Vector2i(2, 2), 3)
+	var mid := image.get_width() / 2
+	var roof := image.get_pixel(mid, TerrainRenderer.ART_TILE_SIZE / 2)
+	var wall := image.get_pixel(mid, image.get_height() - TerrainRenderer.ART_TILE_SIZE / 2)
+	assert_ne(roof, wall)
+
+
+func test_image_is_deterministic_per_seed_and_differs_per_footprint():
+	var a := generator.generate_image(Vector2i(2, 2), 5)
+	var b := generator.generate_image(Vector2i(2, 2), 5)
+	assert_eq(a.get_data(), b.get_data())
+	var wide := generator.generate_image(Vector2i(4, 3), 5)
+	assert_ne(wide.get_size(), a.get_size())
+
+
+func test_footprint_texture_scales_to_the_world_footprint_width():
+	var texture := generator.footprint_texture(Vector2i(3, 2), 9, 16)
+	assert_eq(texture.get_width(), 48)
+	assert_eq(texture.get_height(), 48, "3 wide x (2 + 1 roof) tall at 16px tiles")
