@@ -73,6 +73,24 @@ class StubWorld:
 			occupied_cells[chunk_coord * CHUNK_SIZE + cell] = building_id
 		return true
 
+	## Mirrors the REAL EarthChunkManager.buildings_in_chunk's own record
+	## shape ({"id","facing","seed","condition","progress","owner_household_id",
+	## "chunk_coord","origin_local"}), derived from place_calls -- the SAME
+	## place_building already records -- so a second spawn_village call
+	## against this SAME StubWorld sees its own earlier placements exactly
+	## as a real reload would.
+	func buildings_in_chunk(chunk_coord: Vector2i) -> Array:
+		var out: Array = []
+		for call in place_calls:
+			if call["chunk_coord"] != chunk_coord:
+				continue
+			out.append({
+				"id": call["building_id"], "facing": call["facing"], "seed": call["seed"],
+				"condition": 1.0, "progress": 1.0, "owner_household_id": call["owner_household_id"],
+				"chunk_coord": chunk_coord, "origin_local": call["origin_local"],
+			})
+		return out
+
 	func build_at_global(x: int, y: int, tile_id: String) -> bool:
 		road_cells[Vector2i(x, y)] = tile_id
 		# Mirrors the REAL EarthChunkManager.build_at_global exactly:
@@ -214,6 +232,30 @@ func test_a_buildings_own_doorstep_road_cell_never_blocks_its_own_placement():
 	renderer.spawn_village(parent, coord, coord * CHUNK_SIZE, CHUNK_SIZE, TILE_SIZE, "grassland", world)
 	assert_gt(world.place_calls.size(), 0, "every real village must place at least one real building")
 	assert_eq(world.place_calls.size(), SettlementGenerator.POPULATION, "a village on ample clear grassland should house everyone")
+
+
+## Regression: a real settlement chunk grew a SECOND set of houses on top
+## of the first every time it reloaded, because chunk.buildings persists
+## but VillageLayout had no idea a fresh layout attempt's own preferred
+## spots were already its OWN earlier placements -- it just found new
+## clear ground nearby and placed there too. place_building itself is
+## never called a second time for a chunk that already has real buildings
+## (see VillageRenderer._recover_existing_village); a reload must reuse
+## the exact same place_calls, not add to them.
+func test_reloading_a_settlement_does_not_place_a_second_set_of_buildings():
+	var coord := _find_settlement_chunk("grassland")
+	var world := StubWorld.new()
+	renderer.spawn_village(parent, coord, coord * CHUNK_SIZE, CHUNK_SIZE, TILE_SIZE, "grassland", world)
+	var placed_after_first_load := world.place_calls.size()
+	assert_gt(placed_after_first_load, 0, "precondition: the first load placed real buildings")
+
+	# A second parent, mirroring how a real chunk reload rebuilds the
+	# ephemeral render tree fresh (NPCs/landmarks are never persisted) --
+	# only place_calls (the persisted-equivalent state) must stay put.
+	var second_parent := Node2D.new()
+	renderer.spawn_village(second_parent, coord, coord * CHUNK_SIZE, CHUNK_SIZE, TILE_SIZE, "grassland", world)
+	assert_eq(world.place_calls.size(), placed_after_first_load, "a reload must not place any NEW buildings")
+	second_parent.free()
 
 
 func test_every_placed_building_faces_south_onto_a_real_road_cell():

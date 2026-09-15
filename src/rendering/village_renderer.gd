@@ -140,43 +140,28 @@ func spawn_village(
 	var plots: Array = []
 
 	if world != null and world.has_method("place_building"):
-		var layout_seed := hash("%d_%d_village_layout" % [chunk_coord.x, chunk_coord.y])
-		var is_buildable := func(cell: Vector2i) -> bool:
-			var g: Vector2i = chunk_coord * chunk_size + cell
-			return world.is_buildable_terrain_at(g.x, g.y) if world.has_method("is_buildable_terrain_at") else true
-		var is_occupied := func(cell: Vector2i) -> bool:
-			var g: Vector2i = chunk_coord * chunk_size + cell
-			return world.modification_at_global(g.x, g.y) != "" if world.has_method("modification_at_global") else false
-		var result := _village_layout.layout(building_ids, chunk_size, layout_seed, is_buildable, is_occupied)
-		plots = result["plots"]
-
-		# Buildings BEFORE roads -- place_building's own occupancy check
-		# refuses a plot whose doorstep cell is already non-empty in
-		# chunk.modifications (see its own doc comment), and a plot's
-		# doorstep IS one of VillageLayout's own road_cells. Stamping roads
-		# first would write "trail" into every doorstep before
-		# place_building ever saw it, so EVERY placement would refuse
-		# itself over its own future front step -- a real bug this
-		# ordering had until caught by a real end-to-end EarthChunkManager
-		# probe (test_village_renderer.gd's own StubWorld never caught
-		# this: its build_at_global records road cells into a separate
-		# dict from the one modification_at_global reads, so the two never
-		# actually collided there the way they do for real).
-		for plot in plots:
-			var building_index: int = plot["building_index"]
-			var building_seed := hash("%d_%d_house_%d" % [chunk_coord.x, chunk_coord.y, building_index])
-			world.place_building(chunk_coord, plot["origin"], plot["building_id"], plot["facing"], building_seed, "")
-			var doorstep_global: Vector2i = chunk_coord * chunk_size + plot["doorstep"]
-			var doorstep_position := Vector2(
-				(doorstep_global.x + 0.5) * tile_size, (doorstep_global.y + 0.5) * tile_size
-			)
-			door_positions[building_index] = doorstep_position
-			stand_positions[building_index] = doorstep_position + Vector2(0, _STAND_OFFSET_TILES * tile_size)
-
-		if world.has_method("build_at_global"):
-			for local_cell in result["road_cells"]:
-				var g: Vector2i = chunk_coord * chunk_size + local_cell
-				world.build_at_global(g.x, g.y, TerrainRenderer.TRAIL_TILE_ID)
+		# NPCs/landmarks/market are never persisted (see this function's
+		# own doc comment: "a chunk reload regenerates an empty market"),
+		# so re-deriving them fresh on every load is correct BY DESIGN --
+		# but buildings ARE persisted (Chunk.buildings), and VillageLayout
+		# has no idea a settlement it's laying out fresh already has real
+		# buildings sitting in chunk.modifications from an earlier load.
+		# Without this check, is_occupied would see those cells as
+		# occupied (correctly), VillageLayout would find NEW clear spots
+		# for the SAME building_ids and place them there too, and every
+		# reload would grow the village a second set of houses on top of
+		# the first -- a real bug caught by a real reload probe, not
+		# merely theorized: only re-run placement on a genuinely first
+		# load (no buildings persisted for this chunk yet); on a reload,
+		# recover each villager's OWN existing building instead (see the
+		# else branch below).
+		var existing_buildings: Array = (
+			world.buildings_in_chunk(chunk_coord) if world.has_method("buildings_in_chunk") else []
+		)
+		if existing_buildings.is_empty():
+			_place_new_village(chunk_coord, chunk_size, tile_size, building_ids, world, plots, door_positions, stand_positions)
+		else:
+			_recover_existing_village(chunk_coord, chunk_size, tile_size, npcs.size(), existing_buildings, plots, door_positions, stand_positions)
 
 	# Tells the world this settlement exists, duck-typed exactly like
 	# place_building above -- world == null or lacking the method is
@@ -210,6 +195,87 @@ func spawn_village(
 		if work_tag != "" and not settlement.landmarks.has(work_tag):
 			spawned.append(_build_landmark(work_tag, npc_marker.workspot_position, parent))
 	return spawned
+
+
+## First-ever placement for this settlement (see spawn_village's own
+## existing_buildings gate) -- computes a fresh VillageLayout, places
+## every plot's building, and lays roads. Mutates `plots`/`door_positions`/
+## `stand_positions` in place (GDScript Arrays are reference types, so
+## spawn_village's own locals update directly) rather than returning a
+## tuple.
+func _place_new_village(
+	chunk_coord: Vector2i, chunk_size: int, tile_size: int, building_ids: Array, world,
+	plots: Array, door_positions: Array, stand_positions: Array
+) -> void:
+	var layout_seed := hash("%d_%d_village_layout" % [chunk_coord.x, chunk_coord.y])
+	var is_buildable := func(cell: Vector2i) -> bool:
+		var g: Vector2i = chunk_coord * chunk_size + cell
+		return world.is_buildable_terrain_at(g.x, g.y) if world.has_method("is_buildable_terrain_at") else true
+	var is_occupied := func(cell: Vector2i) -> bool:
+		var g: Vector2i = chunk_coord * chunk_size + cell
+		return world.modification_at_global(g.x, g.y) != "" if world.has_method("modification_at_global") else false
+	var result := _village_layout.layout(building_ids, chunk_size, layout_seed, is_buildable, is_occupied)
+
+	# Buildings BEFORE roads -- place_building's own occupancy check
+	# refuses a plot whose doorstep cell is already non-empty in
+	# chunk.modifications (see its own doc comment), and a plot's doorstep
+	# IS one of VillageLayout's own road_cells. Stamping roads first would
+	# write "trail" into every doorstep before place_building ever saw it,
+	# so EVERY placement would refuse itself over its own future front
+	# step -- a real bug this ordering had until caught by a real
+	# end-to-end EarthChunkManager probe (test_village_renderer.gd's own
+	# StubWorld never caught this: its build_at_global records road cells
+	# into a separate dict from the one modification_at_global reads, so
+	# the two never actually collided there the way they do for real).
+	for plot in result["plots"]:
+		plots.append(plot)
+		var building_index: int = plot["building_index"]
+		var building_seed := hash("%d_%d_house_%d" % [chunk_coord.x, chunk_coord.y, building_index])
+		world.place_building(chunk_coord, plot["origin"], plot["building_id"], plot["facing"], building_seed, "")
+		var doorstep_global: Vector2i = chunk_coord * chunk_size + plot["doorstep"]
+		var doorstep_position := Vector2(
+			(doorstep_global.x + 0.5) * tile_size, (doorstep_global.y + 0.5) * tile_size
+		)
+		door_positions[building_index] = doorstep_position
+		stand_positions[building_index] = doorstep_position + Vector2(0, _STAND_OFFSET_TILES * tile_size)
+
+	if world.has_method("build_at_global"):
+		for local_cell in result["road_cells"]:
+			var g: Vector2i = chunk_coord * chunk_size + local_cell
+			world.build_at_global(g.x, g.y, TerrainRenderer.TRAIL_TILE_ID)
+
+
+## A reload: this settlement's buildings are already persisted from an
+## earlier load (spawn_village's own existing_buildings gate). Matches
+## each villager to their OWN existing building by the SAME deterministic
+## per-index seed place_building was given the first time it was placed --
+## no new persistence needed, since that seed already uniquely identifies
+## "villager i's own house" and is already stored on the building's own
+## record. A villager whose seed matches nothing (should not happen for a
+## village this function itself placed, but a foreign/edited save is
+## possible) simply keeps their fallback ring-anchor position, the same
+## honest "left without a house" shape spawn_village's own doc comment
+## already describes. Mutates in place, same convention as
+## _place_new_village.
+func _recover_existing_village(
+	chunk_coord: Vector2i, chunk_size: int, tile_size: int, npc_count: int,
+	existing_buildings: Array, plots: Array, door_positions: Array, stand_positions: Array
+) -> void:
+	for i in npc_count:
+		var expected_seed := hash("%d_%d_house_%d" % [chunk_coord.x, chunk_coord.y, i])
+		for record in existing_buildings:
+			if record.get("seed", -1) != expected_seed:
+				continue
+			var building_id: String = record["id"]
+			var origin_local: Vector2i = record["origin_local"]
+			plots.append({"building_index": i, "origin": origin_local, "building_id": building_id})
+			var doorstep_global: Vector2i = chunk_coord * chunk_size + origin_local + BuildingCatalog.doorstep_of(building_id)
+			var doorstep_position := Vector2(
+				(doorstep_global.x + 0.5) * tile_size, (doorstep_global.y + 0.5) * tile_size
+			)
+			door_positions[i] = doorstep_position
+			stand_positions[i] = doorstep_position + Vector2(0, _STAND_OFFSET_TILES * tile_size)
+			break
 
 
 ## The settlement's shared well/stall/gate, a merchant's personal trading
