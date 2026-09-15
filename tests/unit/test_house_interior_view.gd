@@ -12,6 +12,7 @@ extends GutTest
 const HouseInteriorView = preload("res://src/rendering/house_interior_view.gd")
 const InteriorTemplates = preload("res://src/gameplay/interior_templates.gd")
 const TerrainRenderer = preload("res://src/rendering/terrain_renderer.gd")
+const DisplayScaling = preload("res://src/rendering/display_scaling.gd")
 
 const TILE_SIZE := 16
 
@@ -116,12 +117,37 @@ func test_is_on_exit_true_near_the_door_false_far_from_it():
 	assert_false(view.is_on_exit(doorstep + Vector2(500, 500)))
 
 
-func test_a_backdrop_covers_the_whole_grid_so_the_outside_world_never_shows_through():
+## A backdrop merely as big as the room's own grid (the old assertion here)
+## is nowhere near enough: the camera is 4x-zoomed and follows the player
+## anywhere in the room, so it frames DisplayScaling's own design-resolution
+## span (1280x720 / 4x zoom = 320x180 world px -- see EarthChunkManager's
+## FRUITING_DETAIL_RADIUS comment for the same figure) around wherever the
+## player stands -- bigger than even the largest room (manor, 176x144px).
+## Reported live: standing in a "small_house" interior still showed the
+## real outside world (grass, NPCs, the exterior building) filling most of
+## the screen around a small patch of floor. The real guarantee is
+## geometric: the backdrop must cover the camera's full view from EVERY
+## point the player can stand, i.e. every corner of the room (the camera-
+## view rectangles swept over the room's interior are bounded by the ones
+## swept from its four corners, since both the room and the camera's own
+## view are axis-aligned rectangles).
+func test_a_backdrop_covers_the_full_camera_view_from_every_corner_of_the_room():
 	view.build("manor", "hunter", 6, Vector2.ZERO, _tile_set, TILE_SIZE, _terrain_renderer)
 	var backdrop := view.backdrop()
 	assert_not_null(backdrop)
-	assert_gte(backdrop.size.x, float(view.size.x * TILE_SIZE))
-	assert_gte(backdrop.size.y, float(view.size.y * TILE_SIZE))
+	var backdrop_rect := Rect2(backdrop.position, backdrop.size)
+	var visible := HouseInteriorView.visible_world_size_px(TILE_SIZE)
+	var half := visible * 0.5
+	var room_size_px := Vector2(view.size) * TILE_SIZE
+	var corners := [
+		Vector2.ZERO, Vector2(room_size_px.x, 0), Vector2(0, room_size_px.y), room_size_px,
+	]
+	for corner in corners:
+		var camera_view := Rect2(corner - half, visible)
+		assert_true(
+			backdrop_rect.encloses(camera_view),
+			"camera view centered at room corner %s (%s) must be fully inside the backdrop (%s)" % [corner, camera_view, backdrop_rect]
+		)
 
 
 func test_z_index_is_above_every_world_layer():
