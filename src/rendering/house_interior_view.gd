@@ -17,6 +17,7 @@ extends Node2D
 
 const InteriorTemplates = preload("res://src/gameplay/interior_templates.gd")
 const TerrainRenderer = preload("res://src/rendering/terrain_renderer.gd")
+const DisplayScaling = preload("res://src/rendering/display_scaling.gd")
 
 ## A new collision layer, not layers 1/2 (EarthChunkManager.
 ## GROUND_FLOOR_COLLISION_LAYER/UPPER_FLOOR_COLLISION_LAYER) -- an interior
@@ -90,9 +91,20 @@ func build(
 	# (not its top-left corner) must land exactly there.
 	position = doorstep_world_position - (Vector2(door_cell) + Vector2(0.5, 0.5)) * tile_size
 
+	# Padded well past the room's own grid (see visible_world_size_px) --
+	# sized to just the grid, this used to leave the real outside world
+	# (grass, NPCs, the exterior building) visible all around a small
+	# patch of floor, since every authored room is smaller than what the
+	# 4x-zoomed camera actually frames. Centering the pad on the room
+	# (rather than only growing right/down from local (0,0)) guarantees
+	# coverage no matter where in the room the player -- and so the
+	# camera, which follows them -- currently stands.
+	var room_size_px := Vector2(size) * tile_size
+	var visible := visible_world_size_px(tile_size)
 	_backdrop = ColorRect.new()
 	_backdrop.color = Color(0.05, 0.04, 0.03)
-	_backdrop.size = Vector2(size) * tile_size
+	_backdrop.position = -visible * 0.5
+	_backdrop.size = room_size_px + visible
 	_backdrop.z_index = -2
 	add_child(_backdrop)
 
@@ -116,6 +128,21 @@ func tile_map_layer() -> TileMapLayer:
 
 func backdrop() -> ColorRect:
 	return _backdrop
+
+
+## How much world the 4x-zoomed camera actually frames at once, in world
+## pixels: DisplayScaling.visible_tiles_across at the DESIGN resolution --
+## the same 320x180 world-px figure EarthChunkManager's own FRUITING_
+## DETAIL_RADIUS comment already derives this way, and the true figure
+## rather than just a fallback, since visible_tiles_across is independent
+## of the real window size BY DESIGN (see that file). Public (not build()'s
+## own private detail) so a test can assert the real coverage guarantee
+## against the exact same number build() pads the backdrop with, rather
+## than a re-derived or eyeballed one.
+static func visible_world_size_px(tile_size: int) -> Vector2:
+	var across := DisplayScaling.visible_tiles_across(DisplayScaling.DESIGN_WIDTH, DisplayScaling.DESIGN_HEIGHT)
+	var down := DisplayScaling.visible_tiles_across(DisplayScaling.DESIGN_HEIGHT, DisplayScaling.DESIGN_HEIGHT)
+	return Vector2(across, down) * tile_size
 
 
 func collision_body_at(local: Vector2i) -> StaticBody2D:
