@@ -376,16 +376,28 @@ var _was_on_stairs := false
 
 ## Enterable house interiors (docs/concept/building.md "Entering"): null
 ## outdoors, the real HouseInteriorView scene the player is currently
-## inside once enter_building has run. World position keeps changing
-## normally the whole time this is set (unlike the two-story floor switch,
-## which stays at the same world position -- an interior is a real,
-## separate place) -- see is_indoors/enter_building/exit_building.
+## inside once enter_building has run. Unlike the two-story floor switch,
+## the real Player node's own world position never changes while this is
+## set -- it stays parked exactly where it was outdoors (at the real
+## doorstep) for the whole visit; InteriorAvatar is what actually walks
+## around inside the isolated SubViewport (see house_interior_view.gd's
+## own doc comment for why) -- see is_indoors/enter_building/exit_building.
 var _interior_view: HouseInteriorView = null
+var _interior_avatar: InteriorAvatar = null
 ## Edge-detection for the "enter" action, the exact same shape
 ## _was_on_stairs already uses above -- without this, holding the key
 ## down while standing on a doorstep/exit cell would toggle indoors/
 ## outdoors every physics frame.
 var _enter_key_was_pressed := false
+
+## Wired once by World alongside setup() (see set_interior_view_host) --
+## the isolated SubViewport/SubViewportContainer an entered house's
+## HouseInteriorView + InteriorAvatar are built into and shown through
+## (see World._build_interior_view). Null-safe throughout: plenty of
+## existing tests construct a bare Player without ever wiring this, and
+## nothing indoors-related may assume it is set.
+var _interior_viewport: SubViewport = null
+var _interior_viewport_container: SubViewportContainer = null
 
 var survival := SurvivalMeters.new()
 ## The player's own real, live, unified body mass -- see docs/concept/
@@ -991,6 +1003,16 @@ func _bind_key_action(action_name: String, keycode: Key) -> void:
 func setup(chunk_manager: EarthChunkManager, tile_size: int) -> void:
 	_chunk_manager = chunk_manager
 	_tile_size = tile_size
+
+
+## Wires the isolated SubViewport an entered house's real content is built
+## into (see World._build_interior_view) -- a separate setter, not a third
+## setup() parameter, so the many existing setup() call sites and their
+## tests are untouched. Optional: plenty of tests construct a bare Player
+## and never call this at all (see _interior_viewport's own doc comment).
+func set_interior_view_host(viewport: SubViewport, container: SubViewportContainer) -> void:
+	_interior_viewport = viewport
+	_interior_viewport_container = container
 
 
 ## No-op once already dead: freezes health at 0 and, since there's no
@@ -2370,32 +2392,27 @@ func _authority_step(delta: float) -> void:
 ## indoors half of _authority_step, reached only when is_indoors() is
 ## true. Skips every terrain/water/weather/wrap/ripple/footstep/build/
 ## destroy/plant/fish/floor-transition/kick concern -- none of them mean
-## anything inside a small authored room with its own real collision --
-## and keeps movement, the character view, survival/metabolism (warmth
-## held at INDOOR_AMBIENT_WARMTH instead of the real outdoor
-## ambient_warmth), mana/spell status, talking, inventory (pickup/stash/
-## action slots), combat and status effects (food buff/venom/mushroom
-## toxin/sickness) exactly as outdoors -- none of those are terrain/
-## water/weather/build/destroy concerns, so there is no reason to gate
-## them just because the player happens to be inside a house right now.
+## anything inside a small authored room -- AND movement/the character
+## view, unlike the outdoor step: the real Player node stays parked right
+## where it is the whole visit (see _interior_view's own doc comment);
+## InteriorAvatar, inside the isolated SubViewport, is what actually moves
+## and renders (see house_interior_view.gd's doc comment for why). Keeps
+## survival/metabolism (warmth held at INDOOR_AMBIENT_WARMTH instead of
+## the real outdoor ambient_warmth), mana/spell status, talking, inventory
+## (pickup/stash/action slots), combat and status effects (food buff/
+## venom/mushroom toxin/sickness) exactly as outdoors -- none of those are
+## movement/terrain/water/weather/build/destroy concerns, so there is no
+## reason to gate them just because the player is inside a house right
+## now. Metabolism activity is pinned to RESTING rather than tracking real
+## movement (browsing your own house is fairly restful either way, and
+## the real Player itself has no movement of its own to read any more) --
+## a small, disclosed simplification, not a regression anyone relies on.
 func _authority_step_indoors(delta: float) -> void:
 	current_mode = "walking"
 	current_water_depth = 0.0
-	current_speed_multiplier = ConditionPenalty.speed_multiplier(survival.fitness) * _spell_speed_multiplier()
-
-	var input_direction := _read_local_input() if _controlled_locally() else _pending_input_direction
-	var desired_velocity := input_direction * current_speed() * current_speed_multiplier
-	if is_rooted():
-		desired_velocity = Vector2.ZERO
-	velocity = _knockback_velocity(desired_velocity, delta)
-	move_and_slide()
-
-	_last_facing_direction = input_direction if input_direction.length() > 0.01 else _last_facing_direction
-	_update_character_view(input_direction)
 
 	survival.advance(delta)
-	var activity := Metabolism.ACTIVITY_MOVING if input_direction.length() > 0.01 else Metabolism.ACTIVITY_RESTING
-	_metabolism.advance(delta, activity)
+	_metabolism.advance(delta, Metabolism.ACTIVITY_RESTING)
 	_regen_mana(delta)
 	_spell_status_step(delta)
 	_shield_step(delta)
@@ -2428,42 +2445,41 @@ func is_indoors() -> bool:
 ## same real check _enter_exit_step's own indoor branch uses) -- World's
 ## own "Leave" prompt needs this rather than merely is_indoors(), since a
 ## room's own door/exit cell is one specific spot, not the whole room.
+## Reads the AVATAR's own local position, not the real Player's -- the
+## avatar is what's actually standing in the room.
 func can_leave_building() -> bool:
-	return _interior_view != null and _interior_view.is_on_exit(position)
+	return _interior_view != null and _interior_view.is_on_exit(_interior_avatar.position)
 
 
-## Swaps the player into `interior_view` (already built -- see
-## _enter_exit_step) -- flips collision_mask to HouseInteriorView's own
-## INTERIOR_COLLISION_LAYER and lifts z_index above it (the two-story
-## floor switch's own mechanism, _floor_transition_step), and places the
-## player one cell INSIDE the door (not on top of it -- landing exactly
-## on the door/exit cell would let the very next _enter_exit_step call
-## immediately trigger Leave again before the player ever sees the room).
-func enter_building(interior_view: HouseInteriorView) -> void:
+## Swaps the player into `interior_view` + `avatar` (both already built and
+## added to the isolated SubViewport -- see _enter_exit_step): the real
+## Player node itself is untouched (no collision/z-index/position change
+## at all -- it simply stays where it already was, outdoors), and the
+## avatar is placed one cell INSIDE the door (not on top of it -- landing
+## exactly on the door/exit cell would let the very next _enter_exit_step
+## call immediately trigger Leave again before the room is ever seen).
+func enter_building(interior_view: HouseInteriorView, avatar: InteriorAvatar) -> void:
 	_interior_view = interior_view
-	collision_mask = HouseInteriorView.INTERIOR_COLLISION_LAYER
-	z_index = HouseInteriorView.INTERIOR_OCCUPANT_Z_INDEX
-	position = interior_view.position + (Vector2(interior_view.door_cell) + Vector2(0.5, -0.5)) * _tile_size
+	_interior_avatar = avatar
+	avatar.position = (Vector2(interior_view.door_cell) + Vector2(0.5, -0.5)) * _tile_size
+	if _interior_viewport_container != null:
+		_interior_viewport_container.show()
 
 
-## Leaves the current interior (a safe no-op if not indoors) -- restores
-## whichever OUTDOOR collision layer/z-index was active before entering
-## (_current_floor's own already-tracked ground/upper state -- entering a
-## building and the legacy two-story stairs mechanism are unrelated, so
-## exiting must not silently force the player back to the ground floor if
-## they happened to be upstairs in a different, older house before
-## walking over here), and puts the player back exactly on the house's
-## real world doorstep.
+## Leaves the current interior (a safe no-op if not indoors). The real
+## Player node never left in the first place (see _interior_view's own
+## doc comment), so there is nothing outdoor to restore -- this only tears
+## down the interior's own content (previously leaked: neither node was
+## ever freed on exit) and hides the isolated viewport again.
 func exit_building() -> void:
 	if _interior_view == null:
 		return
-	position = _interior_view.exit_world_position
+	_interior_view.queue_free()
+	_interior_avatar.queue_free()
 	_interior_view = null
-	collision_mask = (
-		EarthChunkManager.UPPER_FLOOR_COLLISION_LAYER if _current_floor == 1
-		else EarthChunkManager.GROUND_FLOOR_COLLISION_LAYER
-	)
-	z_index = EarthChunkManager.UPPER_FLOOR_OCCUPANT_Z_INDEX if _current_floor == 1 else 0
+	_interior_avatar = null
+	if _interior_viewport_container != null:
+		_interior_viewport_container.hide()
 
 
 ## "Enter"/"Leave" (docs/concept/building.md "Entering") -- its own
@@ -2489,11 +2505,11 @@ func _enter_exit_step() -> void:
 		return
 
 	if is_indoors():
-		if _interior_view.is_on_exit(position):
+		if _interior_view.is_on_exit(_interior_avatar.position):
 			exit_building()
 		return
 
-	if _chunk_manager == null:
+	if _chunk_manager == null or _interior_viewport == null:
 		return
 	var record: Dictionary = _chunk_manager.building_door_near(position, ENTER_RADIUS_TILES)
 	if record.is_empty():
@@ -2503,19 +2519,22 @@ func _enter_exit_step() -> void:
 	var seed_value: int = record["seed"]
 	var occupations := HouseDecor.FURNITURE_SET_BY_OCCUPATION.keys()
 	var occupation: String = occupations[PixelNoise.range_index(seed_value, 0, 1, occupations.size())]
-	var doorstep_global: Vector2i = record["doorstep_global"]
-	var doorstep_world := (Vector2(doorstep_global) + Vector2(0.5, 0.5)) * _tile_size
 
 	var interior_view := HouseInteriorView.new()
 	var renderer := _chunk_manager.terrain_renderer()
-	# Added under the SAME parent Player itself lives under (World adds
-	# Player as a child of a real world-space node -- see World's own
-	# player-spawning code) rather than a UI layer: HouseInteriorView is a
-	# real world-space scene (illustrated tiles, real collision, a real
-	# z-index relative to the rest of the world), not screen-space UI.
-	get_parent().add_child(interior_view)
-	interior_view.build(interior_family, occupation, seed_value, doorstep_world, renderer.build_tile_set(), _tile_size, renderer)
-	enter_building(interior_view)
+	# Built INSIDE the isolated SubViewport (see World._build_interior_view,
+	# house_interior_view.gd's own doc comment) -- not among the real
+	# world's own nodes any more, and not positioned at the real doorstep
+	# either (see build()'s own doc comment): the real outside world must
+	# never be reachable from in here, by construction, not by a backdrop
+	# trying to out-cover it.
+	_interior_viewport.add_child(interior_view)
+	interior_view.build(interior_family, occupation, seed_value, renderer.build_tile_set(), _tile_size, renderer)
+
+	var avatar := InteriorAvatar.new()
+	_interior_viewport.add_child(avatar)
+
+	enter_building(interior_view, avatar)
 
 
 ## Combined weather + exposure movement penalty (see WeatherModel /

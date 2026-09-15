@@ -22641,3 +22641,80 @@ confirmed before this branch merges to `main`.
 
 Slice 5 (player blueprint build re-routed to `place_building`) remains
 the one unstarted piece of the original plan.
+
+### Entering, redesigned: an isolated SubViewport, not a world-space overlay (`concept/building.md` "Entering", 2026-09-15)
+
+**Reported live, twice, against the "Enterable interiors" pass above.**
+First: entering a house still showed the real outside world (grass, NPCs,
+the exterior building) filling most of the screen around a small patch of
+floor — the backdrop was sized to the room's own grid, smaller than every
+room the 4x-zoomed camera actually frames. Fixed once by padding the
+backdrop to cover the camera's full view from any point in the room
+(merged, then immediately found insufficient). Second, harder report:
+even a "fully covering" backdrop just produces "a huge black margin"
+around a small room, and nothing stopped a player from walking through
+the door and on past it without ever pressing the real Leave action — the
+door tile is deliberately walkable, so it alone was never a boundary. The
+user's own diagnosis: **"It should do an actual scene switch; not modify
+the world."**
+
+That's the real fix, not a bigger backdrop. `HouseInteriorView` no longer
+lives among the outdoor world's own nodes at the house's real doorstep at
+all — it's built inside an **isolated `SubViewport`**
+(`World._build_interior_view`), the same real "a separate scene, not
+paint" pattern `main_menu.gd`'s own character-creator diorama already
+proved out (`_build_diorama_view`), stretched full-screen through a
+`SubViewportContainer` (`Control.PRESET_FULL_RECT` — the same guaranteed-
+coverage mechanism `JoustMatchView`'s own arcade overlay already uses, so
+there is no camera-vs-backdrop race to lose in the first place). The
+interior gets its own `Camera2D`, fit to the room's own size (`zoom =
+min(design_resolution / room_size) * a small margin`, the same shape the
+diorama camera's own `zoom = target/footprint` formula uses) instead of
+reusing the outdoor world's fixed 4x zoom — a manor no longer needs the
+same magnification as a cottage, and every room now actually fills the
+screen regardless of how small its own authored grid is.
+
+**The real (possibly networked) Player node is untouched for the whole
+visit** — `enter_building`/`exit_building` no longer flip its
+`collision_mask`/`z_index` or move its `position` at all; it simply stays
+parked outdoors at the real doorstep, so chunk streaming and NPC
+schedules keep exactly the reference point they already had. **A new
+`InteriorAvatar`** (`src/rendering/interior_avatar.gd`, a real
+`CharacterBody2D`, local-only, reads `Input.get_vector` directly rather
+than Player's own authority/proxy/RPC path since it only ever exists for
+whoever is currently standing in their own house) is what actually walks
+around inside the isolated SubViewport, colliding with `HouseInteriorView`'s
+same real wall/furniture bodies as before. `_authority_step_indoors` lost
+its own movement/character-view lines entirely (that's the avatar's job
+now) but keeps survival/metabolism/mana/talking/inventory running exactly
+as before — metabolism activity is pinned to RESTING rather than tracking
+real movement now, a small, disclosed simplification.
+
+**A real, always-present threshold body** one cell past the door (not
+part of any `InteriorTemplates` grid — every template's own grid
+deliberately ends at the door row) is what actually stops a player from
+walking past it uninvited; the door cell itself stays walkable, but
+nothing is reachable beyond it except through the real Leave action.
+
+`HouseInteriorView.build()` dropped its `doorstep_world_position`
+parameter entirely (there is no outdoor coordinate for an isolated view
+to align to any more) and `exit_world_position`/world-space `is_on_exit`
+are gone with it — `is_on_exit` now takes the avatar's own LOCAL
+position. `enter_building`/`exit_building` also fixed a real, unrelated
+leak found while rewriting them: neither the interior view nor (now) the
+avatar was ever freed on Leave before this.
+
+Red-first: `test_house_interior_view.gd` rewritten (dropped the doorstep-
+alignment test, the two backdrop assertions that only ever checked "at
+least the room's own size" — true of the old broken behavior too, see
+[[stub-worlds-must-match-real-occupancy-semantics]] for the same "test
+name promises more than its assertion checks" shape — replaced with a
+tight both-sides bound plus real camera-fit tests), new
+`test_interior_avatar.gd`, `test_player.gd`'s 18-case indoors suite
+rewritten around "the real player never moves," `test_world_interaction_
+prompt_throttle.gd` updated for the new `build()`/`enter_building` shape.
+
+**Named gap, carried over from the pass above, now slightly sharper:**
+the avatar's own appearance is a placeholder square, not the player's
+real `CharacterView` — matching it is a real, separately-scoped follow-up
+this redesign did not need to solve.

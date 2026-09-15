@@ -579,6 +579,12 @@ var _joust_view: JoustMatchView
 ## _check_retro_handheld/_on_handheld_closed below).
 var _retro_handheld := RetroHandheld.new()
 var _handheld_view: HandheldBattleView
+## The isolated host for an entered house's real interior content (see
+## _build_interior_view, house_interior_view.gd's own doc comment) --
+## shown/hidden and given content per visit by Player.enter_building/
+## exit_building, not by anything in this file directly.
+var _interior_viewport: SubViewport
+var _interior_viewport_container: SubViewportContainer
 var _weather_model := WeatherModel.new()
 var _is_dedicated_server := false
 var _minimap_renderer := MinimapRenderer.new()
@@ -1071,6 +1077,7 @@ func _ready() -> void:
 	_build_message_stack()
 	_build_joust_view()
 	_build_handheld_view()
+	_build_interior_view()
 	_build_interaction_prompt()
 	_build_charge_meter()
 
@@ -2467,6 +2474,31 @@ func _build_handheld_view() -> void:
 	_handheld_view.process_mode = Node.PROCESS_MODE_ALWAYS
 	_ui.add_child(_handheld_view)
 	_handheld_view.closed.connect(_on_handheld_closed)
+
+
+## The isolated host for an entered house's real content (see
+## house_interior_view.gd's own doc comment on why it has to be isolated,
+## not painted over the outdoor world) -- the same real "another scene"
+## pattern main_menu.gd's own character-creator diorama already proves out
+## (_build_diorama_view): a SubViewportContainer full-recting over _ui,
+## stretching a fixed-DisplayScaling.DESIGN-resolution SubViewport so
+## HouseInteriorView's own fit-to-room camera (see its _build_camera) maps
+## onto it exactly regardless of the real window's own size. Built once,
+## hidden, empty; Player.enter_building/exit_building show/hide it and add/
+## free its actual content per visit (see Player._enter_exit_step) --
+## UNLIKE Joust/Handheld above, deliberately PROCESS_MODE_INHERIT (the
+## default): entering a house must never pause the world (docs/concept/
+## building.md "Entering").
+func _build_interior_view() -> void:
+	_interior_viewport = SubViewport.new()
+	_interior_viewport.size = Vector2i(DisplayScaling.DESIGN_WIDTH, DisplayScaling.DESIGN_HEIGHT)
+	_interior_viewport.render_target_update_mode = SubViewport.UPDATE_ALWAYS
+	_interior_viewport_container = SubViewportContainer.new()
+	_interior_viewport_container.stretch = true
+	_interior_viewport_container.set_anchors_preset(Control.PRESET_FULL_RECT)
+	_interior_viewport_container.add_child(_interior_viewport)
+	_interior_viewport_container.hide()
+	_ui.add_child(_interior_viewport_container)
 
 
 ## Undocumented on purpose (docs/concept/easter_eggs.md pillar 3 -- no
@@ -4988,6 +5020,7 @@ func _on_peer_connected(peer_id: int) -> void:
 	# EarthChunkManager.register_scent_carrier).
 	_chunk_manager.register_scent_carrier(player)
 	player.setup(_chunk_manager, TerrainRenderer.TILE_SIZE)
+	player.set_interior_view_host(_interior_viewport, _interior_viewport_container)
 	print("[server] peer %d connected, spawned player" % peer_id)
 
 
@@ -5041,6 +5074,7 @@ func _spawn_local_singleplayer() -> void:
 	# EarthChunkManager.register_scent_carrier).
 	_chunk_manager.register_scent_carrier(player)
 	player.setup(_chunk_manager, TerrainRenderer.TILE_SIZE)
+	player.set_interior_view_host(_interior_viewport, _interior_viewport_container)
 
 
 ## Restores a previously saved character (see docs/concept/persistence.md):
@@ -5074,6 +5108,7 @@ func _spawn_local_singleplayer_from_save() -> void:
 	# EarthChunkManager.register_scent_carrier).
 	_chunk_manager.register_scent_carrier(player)
 	player.setup(_chunk_manager, TerrainRenderer.TILE_SIZE)
+	player.set_interior_view_host(_interior_viewport, _interior_viewport_container)
 	# Resumes the world clock BEFORE the first update() -- update() loads
 	# chunks, and chunk-loading reads _world_age_seconds itself (sapling ages,
 	# ecology catchup), so this has to land before that or the loaded-in world
@@ -5866,6 +5901,7 @@ func _server_process() -> void:
 			continue
 		if not player.is_set_up():
 			player.setup(_chunk_manager, TerrainRenderer.TILE_SIZE)
+			player.set_interior_view_host(_interior_viewport, _interior_viewport_container)
 		if not streamed:
 			_chunk_manager.update(player.current_tile())
 			streamed = true
@@ -5899,6 +5935,7 @@ func _client_process(delta: float) -> void:
 		var player := child as Player
 		if player != null and not player.is_set_up():
 			player.setup(_chunk_manager, TerrainRenderer.TILE_SIZE)
+			player.set_interior_view_host(_interior_viewport, _interior_viewport_container)
 
 	# Covers the joining-client version of the same New Game/Load Game
 	# loading stall (see _on_menu_join_requested): unlike those two, a joining

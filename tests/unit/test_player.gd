@@ -52,6 +52,7 @@ var entities_parent: Node2D
 var creatures_parent: Node2D
 var chunk_manager: EarthChunkManager
 var player: Player
+var interior_viewport: SubViewport
 var _item_catalog := ItemCatalog.new()
 
 
@@ -61,6 +62,12 @@ func before_each():
 	creatures_parent = Node2D.new()
 	chunk_manager = EarthChunkManager.new(tile_map_layer, entities_parent, creatures_parent)
 	chunk_manager.update(Vector2i(0, 0))  # loads chunks (-2..2, -2..2) around the origin
+
+	# The isolated host an entered house's real content is built into (see
+	# World._build_interior_view) -- a real SubViewport, not a stub, since
+	# Player._enter_exit_step add_child()s straight into it.
+	interior_viewport = SubViewport.new()
+	add_child(interior_viewport)
 
 	player = PlayerScene.instantiate()
 	# Name it after this (solo) tree's own multiplayer id, matching how
@@ -73,12 +80,15 @@ func before_each():
 	add_child(player)
 	player.position = Vector2(4 * TILE_SIZE, 4 * TILE_SIZE)  # tile (4, 4), inside the loaded area
 	player.setup(chunk_manager, TILE_SIZE)
+	player.set_interior_view_host(interior_viewport, null)
 	player._last_facing_direction = Vector2.DOWN  # faces tile (4, 5)
 
 
 func after_each():
 	remove_child(player)
 	player.free()
+	remove_child(interior_viewport)
+	interior_viewport.free()
 	tile_map_layer.free()
 	entities_parent.free()
 	creatures_parent.free()
@@ -3866,76 +3876,94 @@ func test_stepping_back_downstairs_restores_the_default_z_index():
 
 # -- enterable house interiors (docs/concept/building.md "Entering") --------
 #
-# "Small outside, big inside": entering a whole-building house swaps the
-# player into a real HouseInteriorView scene while they keep moving in
-# real world coordinates the whole time -- the two-story floor switch's
-# own mechanism (collision_mask + z_index), not a pause. is_indoors()/
+# "Small outside, big inside": entering a whole-building house swaps into a
+# real HouseInteriorView, built inside the isolated interior SubViewport
+# (see house_interior_view.gd's own doc comment on why -- the real outdoor
+# world must never show through, and now can't by construction). The real
+# Player node itself never moves and stops rendering its own movement --
+# it just stays parked outdoors at the real doorstep the whole visit;
+# InteriorAvatar is what actually walks around inside. is_indoors()/
 # enter_building/exit_building are the real state Player itself owns;
 # _enter_exit_step is the always-running, its-own-action step (the same
 # shape Talk/Pick already have) that drives them from a real doorstep or
-# a real interior exit cell.
+# the interior's own exit cell.
 
-func _make_interior_view(doorstep: Vector2) -> HouseInteriorView:
+## Builds a real view + avatar inside the test's own interior_viewport (see
+## before_each) and enters the player into them -- the common setup every
+## test below needs, without each one re-deriving it. Reachable afterward
+## via player._interior_view / player._interior_avatar, the same "reach
+## into a private field directly" convention this file's stairs tests
+## already use for _current_floor/_was_on_stairs.
+func _enter_a_real_interior() -> void:
 	var view := HouseInteriorView.new()
 	var renderer := TerrainRenderer.new()
-	view.build("cottage", "farmer", 5, doorstep, renderer.build_tile_set(), TILE_SIZE, renderer)
-	add_child(view)
-	return view
+	view.build("cottage", "farmer", 5, renderer.build_tile_set(), TILE_SIZE, renderer)
+	interior_viewport.add_child(view)
+	var avatar := InteriorAvatar.new()
+	interior_viewport.add_child(avatar)
+	player.enter_building(view, avatar)
 
 
 func test_player_starts_not_indoors():
 	assert_false(player.is_indoors())
 
 
-func test_enter_building_sets_indoors_true_and_the_interior_collision_layer():
-	var view := _make_interior_view(Vector2(500, 500))
-	player.enter_building(view)
+func test_enter_building_sets_indoors_true_and_places_the_avatar_one_cell_inside_the_door():
+	_enter_a_real_interior()
 	assert_true(player.is_indoors())
-	assert_eq(player.collision_mask, HouseInteriorView.INTERIOR_COLLISION_LAYER)
-	assert_eq(player.z_index, HouseInteriorView.INTERIOR_OCCUPANT_Z_INDEX)
-	view.free()
+	var expected: Vector2 = (Vector2(player._interior_view.door_cell) + Vector2(0.5, -0.5)) * TILE_SIZE
+	assert_almost_eq(player._interior_avatar.position.x, expected.x, 0.01)
+	assert_almost_eq(player._interior_avatar.position.y, expected.y, 0.01)
 
 
-func test_enter_building_places_the_player_one_cell_inside_the_door():
-	var view := _make_interior_view(Vector2(500, 500))
-	player.enter_building(view)
-	var expected: Vector2 = view.position + (Vector2(view.door_cell) + Vector2(0.5, -0.5)) * TILE_SIZE
-	assert_almost_eq(player.position.x, expected.x, 0.01)
-	assert_almost_eq(player.position.y, expected.y, 0.01)
-	view.free()
+## The whole point of the isolated-SubViewport redesign (reported live:
+## the real outside world was showing through around a small patch of
+## floor, and a player could just walk out through the door without ever
+## pressing the real Leave action): the real Player's own collision/
+## z-index/position must never change just from entering a building --
+## nothing outdoor is being touched at all any more.
+func test_enter_building_never_touches_the_real_players_own_collision_z_index_or_position():
+	var mask_before := player.collision_mask
+	var z_before := player.z_index
+	var position_before := player.position
+
+	_enter_a_real_interior()
+
+	assert_eq(player.collision_mask, mask_before)
+	assert_eq(player.z_index, z_before)
+	assert_eq(player.position, position_before)
 
 
-func test_exit_building_restores_ground_floor_state_and_the_real_doorstep_position():
-	var view := _make_interior_view(Vector2(500, 500))
-	player.enter_building(view)
+func test_exit_building_clears_indoors_state_and_still_never_touches_the_real_player():
+	var mask_before := player.collision_mask
+	var z_before := player.z_index
+	var position_before := player.position
+	_enter_a_real_interior()
 
 	player.exit_building()
 
 	assert_false(player.is_indoors())
-	assert_eq(player.collision_mask, EarthChunkManager.GROUND_FLOOR_COLLISION_LAYER)
-	assert_eq(player.z_index, 0)
-	assert_eq(player.position, Vector2(500, 500))
-	view.free()
+	assert_eq(player.collision_mask, mask_before)
+	assert_eq(player.z_index, z_before)
+	assert_eq(player.position, position_before)
 
 
-## A player who somehow finished the two-story stairs mechanism THEN
-## entered a building (unusual, but not impossible -- the two are
-## spatially separate but not mutually exclusive states) must come back
-## to the SAME floor they were on before entering, not always ground --
-## exit_building restores whatever _current_floor already tracked, the
-## same state the (unrelated) legacy stairs mechanism itself owns.
-func test_exit_building_restores_the_upper_floor_state_if_that_was_active_before_entering():
+## The legacy two-story stairs mechanism and entering a building are
+## unrelated -- entering/exiting a building must never perturb whichever
+## floor state was already active, since it no longer touches
+## collision_mask/z_index at all (previously this needed real restoring;
+## now the simpler, stronger guarantee is that it's never touched in the
+## first place -- see the test just above).
+func test_a_buildings_own_enter_exit_never_perturbs_the_unrelated_upper_floor_state():
 	player._current_floor = 1
 	player.collision_mask = EarthChunkManager.UPPER_FLOOR_COLLISION_LAYER
 	player.z_index = EarthChunkManager.UPPER_FLOOR_OCCUPANT_Z_INDEX
-	var view := _make_interior_view(Vector2(500, 500))
 
-	player.enter_building(view)
+	_enter_a_real_interior()
 	player.exit_building()
 
 	assert_eq(player.collision_mask, EarthChunkManager.UPPER_FLOOR_COLLISION_LAYER)
 	assert_eq(player.z_index, EarthChunkManager.UPPER_FLOOR_OCCUPANT_Z_INDEX)
-	view.free()
 
 
 func test_exit_building_without_ever_entering_is_a_safe_no_op():
@@ -3945,24 +3973,38 @@ func test_exit_building_without_ever_entering_is_a_safe_no_op():
 	assert_eq(player.position, before)
 
 
+## Neither node is freed by _enter_a_real_interior's own caller -- exit_
+## building owns tearing them down (previously leaked: prior to this
+## redesign neither the view nor anything indoors was ever freed on Leave).
+func test_exit_building_frees_the_interior_view_and_avatar():
+	_enter_a_real_interior()
+	var view := player._interior_view
+	var avatar := player._interior_avatar
+
+	player.exit_building()
+	# queue_free() defers to end-of-frame; not yet freed, but no longer
+	# reachable from the player -- the real, observable contract here.
+	assert_null(player._interior_view)
+	assert_null(player._interior_avatar)
+	assert_true(view.is_queued_for_deletion(), "view must be queued for deletion")
+	assert_true(avatar.is_queued_for_deletion(), "avatar must be queued for deletion")
+
+
 # -- the indoors authority step: real skip/keep behavior ---------------------
 
 func test_indoors_the_player_is_never_in_water_mode_regardless_of_real_terrain():
 	_register_all_keybindings()
-	var view := _make_interior_view(Vector2(500, 500))
-	player.enter_building(view)
+	_enter_a_real_interior()
 
 	player._authority_step(0.1)
 
 	assert_eq(player.current_mode, "walking")
 	assert_eq(player.current_water_depth, 0.0)
-	view.free()
 
 
 func test_indoors_build_and_destroy_never_fire():
 	_register_all_keybindings()
-	var view := _make_interior_view(Vector2(500, 500))
-	player.enter_building(view)
+	_enter_a_real_interior()
 	var target := player.current_tile() + Vector2i(0, 1)
 	assert_eq(chunk_manager.modification_at_global(target.x, target.y), "", "precondition: nothing built there yet")
 
@@ -3971,19 +4013,22 @@ func test_indoors_build_and_destroy_never_fire():
 	Input.action_release("build")
 
 	assert_eq(chunk_manager.modification_at_global(target.x, target.y), "", "build must never fire indoors")
-	view.free()
 
 
-func test_indoors_movement_and_survival_still_advance():
+## The real Player itself has no movement of its own indoors any more (see
+## InteriorAvatar) -- survival must still keep advancing regardless, the
+## same "the world keeps running" guarantee, just no longer coupled to
+## Player's own move_and_slide at all.
+func test_indoors_survival_still_advances_even_though_the_real_player_never_moves():
 	_register_all_keybindings()
-	var view := _make_interior_view(Vector2(500, 500))
-	player.enter_building(view)
+	_enter_a_real_interior()
 	var hunger_before: float = player.survival.hunger
+	var position_before := player.position
 
 	player._authority_step(1.0)
 
 	assert_gt(player.survival.hunger, hunger_before, "survival must keep advancing indoors")
-	view.free()
+	assert_eq(player.position, position_before, "the real player must never move indoors")
 
 
 ## Warmth indoors is a real constant (docs/concept/building.md "Entering":
@@ -3995,27 +4040,23 @@ func test_indoors_movement_and_survival_still_advance():
 ## skipped outright alongside the rest of the terrain/weather concerns.
 func test_indoors_warmth_regulates_toward_a_real_constant():
 	_register_all_keybindings()
-	var view := _make_interior_view(Vector2(500, 500))
-	player.enter_building(view)
+	_enter_a_real_interior()
 	assert_almost_eq(player.survival.warmth, 1.0, 0.001, "precondition: a fresh player starts at full warmth")
 
 	player._authority_step(5.0)
 
 	assert_almost_eq(player.survival.warmth, Player.INDOOR_AMBIENT_WARMTH, 0.05)
-	view.free()
 
 
 func test_indoors_talking_and_inventory_actions_still_run():
 	_register_all_keybindings()
-	var view := _make_interior_view(Vector2(500, 500))
-	player.enter_building(view)
+	_enter_a_real_interior()
 	# No crash and no error is the real contract here -- _talk_step/
 	# _pickup_step/_action_slots_step are each independently, thoroughly
 	# tested elsewhere against the ordinary outdoor path; this only proves
 	# the indoors branch still reaches them at all.
 	player._authority_step(0.1)
 	assert_true(true)
-	view.free()
 
 
 # -- _enter_exit_step: the real doorstep-driven dispatcher -------------------
@@ -4042,18 +4083,30 @@ func test_enter_exit_step_does_nothing_far_from_any_doorstep():
 	assert_false(player.is_indoors())
 
 
-func test_enter_exit_step_leaves_from_the_real_interior_exit_cell():
+func test_enter_exit_step_leaves_from_the_real_interior_exit_cell_and_never_moves_the_real_player():
 	_register_all_keybindings()
-	var view := _make_interior_view(Vector2(500, 500))
-	player.enter_building(view)
+	var origin := Vector2i(14, 14)
+	chunk_manager.place_building(Vector2i(0, 0), origin, "house_small", Vector2i(0, 1), 1, "")
+	var doorstep_global: Vector2i = origin + BuildingCatalog.doorstep_of("house_small")
+	player.position = (Vector2(doorstep_global) + Vector2(0.5, 0.5)) * TILE_SIZE
+	var position_before := player.position
 
-	player.position = view.exit_world_position
 	Input.action_press("enter")
-	player._enter_exit_step()
+	player._enter_exit_step()  # in
+	Input.action_release("enter")
+	assert_true(player.is_indoors(), "precondition: the first press enters")
+
+	# Walk the avatar onto the room's own door cell -- its real local exit
+	# point.
+	var door_center: Vector2 = (Vector2(player._interior_view.door_cell) + Vector2(0.5, 0.5)) * TILE_SIZE
+	player._interior_avatar.position = door_center
+
+	Input.action_press("enter")
+	player._enter_exit_step()  # out
 	Input.action_release("enter")
 
 	assert_false(player.is_indoors())
-	assert_eq(player.position, Vector2(500, 500))
+	assert_eq(player.position, position_before, "the real player must never have moved through the whole visit")
 
 
 func test_enter_exit_step_does_not_re_trigger_while_the_key_stays_held():
