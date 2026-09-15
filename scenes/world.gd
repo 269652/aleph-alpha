@@ -5901,7 +5901,7 @@ func _server_process() -> void:
 			continue
 		if not player.is_set_up():
 			player.setup(_chunk_manager, TerrainRenderer.TILE_SIZE)
-	player.set_interior_view_host(_interior_viewport, _interior_viewport_container)
+			player.set_interior_view_host(_interior_viewport, _interior_viewport_container)
 		if not streamed:
 			_chunk_manager.update(player.current_tile())
 			streamed = true
@@ -5935,7 +5935,7 @@ func _client_process(delta: float) -> void:
 		var player := child as Player
 		if player != null and not player.is_set_up():
 			player.setup(_chunk_manager, TerrainRenderer.TILE_SIZE)
-	player.set_interior_view_host(_interior_viewport, _interior_viewport_container)
+			player.set_interior_view_host(_interior_viewport, _interior_viewport_container)
 
 	# Covers the joining-client version of the same New Game/Load Game
 	# loading stall (see _on_menu_join_requested): unlike those two, a joining
