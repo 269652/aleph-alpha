@@ -38,20 +38,53 @@ class StubWorld:
 	var unbuildable_cells: Dictionary = {}
 	var occupied_cells: Dictionary = {}  # pre-seeded occupancy, e.g. an existing structure
 
+	## Mirrors the REAL EarthChunkManager.place_building's own occupancy
+	## check exactly (footprint cells AND the doorstep must all be
+	## unoccupied, checked against the SAME occupied_cells dict
+	## build_at_global also writes into) -- a stub that always returned
+	## true regardless of prior occupancy could never have caught a real
+	## ordering bug: VillageRenderer used to stamp road cells (which
+	## include every plot's own doorstep) BEFORE calling place_building,
+	## so every real placement refused itself over its own front step.
+	## occupied_cells is GLOBAL-keyed throughout this stub (matching
+	## build_at_global/modification_at_global and
+	## test_a_building_already_occupying_ground_keeps_later_ones_off_it's
+	## own pre-seeding) -- footprint_cells/doorstep_of return LOCAL cells,
+	## so every key here is translated through chunk_coord first; keying
+	## by the raw local cell instead would never collide with what
+	## build_at_global writes (global), silently defeating this whole
+	## check for any chunk_coord other than the origin.
 	func place_building(
 		chunk_coord: Vector2i, origin_local: Vector2i, building_id: String,
 		facing: Vector2i, seed_value: int, owner_household_id: String
 	) -> bool:
+		var footprint_cells: Array = BuildingCatalog.footprint_cells(building_id, origin_local)
+		var required_cells: Array = footprint_cells.duplicate()
+		required_cells.append(origin_local + BuildingCatalog.doorstep_of(building_id))
+		for cell in required_cells:
+			var g: Vector2i = chunk_coord * CHUNK_SIZE + cell
+			if occupied_cells.get(g, "") != "":
+				return false
 		place_calls.append({
 			"chunk_coord": chunk_coord, "origin_local": origin_local, "building_id": building_id,
 			"facing": facing, "seed": seed_value, "owner_household_id": owner_household_id,
 		})
-		for cell in BuildingCatalog.footprint_cells(building_id, origin_local):
-			occupied_cells[cell] = building_id
+		for cell in footprint_cells:
+			occupied_cells[chunk_coord * CHUNK_SIZE + cell] = building_id
 		return true
 
 	func build_at_global(x: int, y: int, tile_id: String) -> bool:
 		road_cells[Vector2i(x, y)] = tile_id
+		# Mirrors the REAL EarthChunkManager.build_at_global exactly:
+		# chunk.modifications[local] = tile_id, unconditionally, with no
+		# occupancy check of its own (see that function's own doc
+		# comment). A stub that only recorded this into a SEPARATE dict
+		# from the one modification_at_global reads let a real ordering
+		# bug slip through undetected: stamping a plot's own doorstep as
+		# a road cell BEFORE calling place_building made every real
+		# placement refuse itself over its own front step, since
+		# place_building's occupancy check reads modification_at_global.
+		occupied_cells[Vector2i(x, y)] = tile_id
 		return true
 
 	func biome_at_global(x: int, y: int) -> String:
@@ -162,6 +195,25 @@ func test_spawn_village_places_a_real_building_for_every_villager():
 	for call in world.place_calls:
 		assert_true(BuildingCatalog.has_building(call["building_id"]), call["building_id"])
 		assert_eq(call["chunk_coord"], coord)
+
+
+## Regression: real gameplay placed ZERO buildings in every real village
+## after the whole-building rewrite, entirely masked in this suite until a
+## real end-to-end EarthChunkManager probe caught it -- VillageRenderer
+## stamped road cells (which include every plot's OWN doorstep) before
+## calling place_building for that same plot, so place_building's real
+## occupancy check (which reads modification_at_global, the SAME dict
+## build_at_global writes into) refused every single placement over its
+## own front step. StubWorld's place_building used to always return true
+## regardless of prior occupancy, so this could never have failed here --
+## both the stub (now a faithful occupancy check) and this explicit test
+## exist so the ordering can never silently regress again.
+func test_a_buildings_own_doorstep_road_cell_never_blocks_its_own_placement():
+	var coord := _find_settlement_chunk("grassland")
+	var world := StubWorld.new()
+	renderer.spawn_village(parent, coord, coord * CHUNK_SIZE, CHUNK_SIZE, TILE_SIZE, "grassland", world)
+	assert_gt(world.place_calls.size(), 0, "every real village must place at least one real building")
+	assert_eq(world.place_calls.size(), SettlementGenerator.POPULATION, "a village on ample clear grassland should house everyone")
 
 
 func test_every_placed_building_faces_south_onto_a_real_road_cell():

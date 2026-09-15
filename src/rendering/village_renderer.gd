@@ -150,11 +150,18 @@ func spawn_village(
 		var result := _village_layout.layout(building_ids, chunk_size, layout_seed, is_buildable, is_occupied)
 		plots = result["plots"]
 
-		if world.has_method("build_at_global"):
-			for local_cell in result["road_cells"]:
-				var g: Vector2i = chunk_coord * chunk_size + local_cell
-				world.build_at_global(g.x, g.y, TerrainRenderer.TRAIL_TILE_ID)
-
+		# Buildings BEFORE roads -- place_building's own occupancy check
+		# refuses a plot whose doorstep cell is already non-empty in
+		# chunk.modifications (see its own doc comment), and a plot's
+		# doorstep IS one of VillageLayout's own road_cells. Stamping roads
+		# first would write "trail" into every doorstep before
+		# place_building ever saw it, so EVERY placement would refuse
+		# itself over its own future front step -- a real bug this
+		# ordering had until caught by a real end-to-end EarthChunkManager
+		# probe (test_village_renderer.gd's own StubWorld never caught
+		# this: its build_at_global records road cells into a separate
+		# dict from the one modification_at_global reads, so the two never
+		# actually collided there the way they do for real).
 		for plot in plots:
 			var building_index: int = plot["building_index"]
 			var building_seed := hash("%d_%d_house_%d" % [chunk_coord.x, chunk_coord.y, building_index])
@@ -165,6 +172,11 @@ func spawn_village(
 			)
 			door_positions[building_index] = doorstep_position
 			stand_positions[building_index] = doorstep_position + Vector2(0, _STAND_OFFSET_TILES * tile_size)
+
+		if world.has_method("build_at_global"):
+			for local_cell in result["road_cells"]:
+				var g: Vector2i = chunk_coord * chunk_size + local_cell
+				world.build_at_global(g.x, g.y, TerrainRenderer.TRAIL_TILE_ID)
 
 	# Tells the world this settlement exists, duck-typed exactly like
 	# place_building above -- world == null or lacking the method is
