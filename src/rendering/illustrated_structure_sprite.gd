@@ -128,6 +128,57 @@ func footprint_texture(subject: String, tile_size: int) -> ImageTexture:
 	return ImageTexture.create_from_image(scaled)
 
 
+# -- whole-building entities (docs/concept/building.md "Buildings are -------
+# -- entities; interiors are scenes"): any sheet following the one asset -----
+# -- contract (BuildingCatalog.SHEET_COLUMNS x SHEET_ROWS lifecycle rows, -----
+# -- black background, magenta dividers), read by ROW and COLUMN and scaled --
+# -- to a multi-tile footprint -- generalizing idle_texture/footprint_texture --
+# -- from "one subject's one idle cell" to "any cell of any contract sheet". --
+
+## "path|row|column" -> keyed Image. Shared across instances like _cache.
+static var _sheet_frame_cache: Dictionary = {}
+
+
+## The (row, column) cell of the contract sheet at `path`, keyed/despilled
+## to a transparent background (black background + magenta dividers, the
+## same treatment sawmill/warehouse/city_hall already get). Null for a
+## sheet that cannot be loaded or a cell outside the grid -- a caller falls
+## back to ProceduralBuildingPlaceholderSprite then, never crashes.
+func sheet_frame_image(path: String, columns: int, rows: int, row: int, column: int) -> Image:
+	if row < 0 or row >= rows or column < 0 or column >= columns:
+		return null
+	var key := "%s|%d|%d" % [path, row, column]
+	if _sheet_frame_cache.has(key):
+		return _sheet_frame_cache[key]
+	var image := SpriteSheetLoader.load_image(path)
+	if image == null:
+		return null
+	var frame := image.get_region(_cell_rect(image, columns, rows, row, column))
+	if frame.get_format() != Image.FORMAT_RGBA8:
+		frame.convert(Image.FORMAT_RGBA8)
+	_key_and_despill(frame, true)
+	_sheet_frame_cache[key] = frame
+	return frame
+
+
+## That cell scaled for a Sprite2D standing on a `footprint_width_tiles`-
+## wide footprint: width exactly `tile_size * footprint_width_tiles`, height
+## by the SAME factor (footprint_texture's own documented anchor, a building
+## taller than its footprint stays taller). Null when the sheet is missing.
+func footprint_frame_texture(
+	path: String, columns: int, rows: int, row: int, column: int, tile_size: int, footprint_width_tiles: int
+) -> ImageTexture:
+	var frame := sheet_frame_image(path, columns, rows, row, column)
+	if frame == null:
+		return null
+	var target_width := tile_size * maxi(footprint_width_tiles, 1)
+	var scale := float(target_width) / float(frame.get_width())
+	var height := maxi(1, int(round(float(frame.get_height()) * scale)))
+	var scaled := frame.duplicate() as Image
+	scaled.resize(target_width, height, Image.INTERPOLATE_LANCZOS)
+	return ImageTexture.create_from_image(scaled)
+
+
 func _build_idle_image(subject: String) -> Image:
 	var entry: Dictionary = _SUBJECTS[subject]
 	var image := SpriteSheetLoader.load_image(entry["path"])

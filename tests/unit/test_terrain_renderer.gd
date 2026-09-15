@@ -650,6 +650,67 @@ func test_ocean_still_falls_back_to_procedural():
 	assert_false(renderer._illustrated_terrain.has_variants("ocean"))
 
 
+# -- illustrated art plumbing (see IllustratedBuildingPieceSprite) -----------
+#
+# The exact same has_X()-gated fallback seam as the biome tests directly
+# above, one level down: a BuildingPiece id (wall/door/window/floor) draws
+# from a real user-supplied illustration when one is registered for it,
+# never a whole biome's worth of art -- so a fake here is keyed by piece id
+# rather than biome name.
+
+class _FakeIllustratedBuildingPiece:
+	var canned_images: Dictionary = {}  # piece_id -> Image
+
+	func has_piece_art(piece_id: String) -> bool:
+		return canned_images.has(piece_id)
+
+	func piece_image(piece_id: String) -> Image:
+		return canned_images.get(piece_id)
+
+	func register(piece_id: String, image: Image) -> void:
+		canned_images[piece_id] = image
+
+
+func test_piece_image_uses_illustrated_art_when_the_piece_has_a_real_sheet():
+	var fake := _FakeIllustratedBuildingPiece.new()
+	var canned := Image.create(4, 4, false, Image.FORMAT_RGBA8)
+	fake.register("wood_wall", canned)
+	renderer._illustrated_building_piece = fake
+	assert_eq(renderer._piece_image("wood_wall"), canned)
+
+
+func test_piece_image_falls_back_to_procedural_when_the_piece_has_no_real_art():
+	var fake := _FakeIllustratedBuildingPiece.new()
+	var canned := Image.create(4, 4, false, Image.FORMAT_RGBA8)
+	fake.register("wood_wall", canned)  # timber_wall is NOT registered
+	renderer._illustrated_building_piece = fake
+	var image: Image = renderer._piece_image("timber_wall")
+	assert_not_null(image)
+	assert_ne(image, canned)
+
+
+## Real end-to-end integration, no fake: a fresh renderer's OWN
+## IllustratedBuildingPieceSprite instance now has real sheets registered
+## for wood/stone wall, door, window and wood floor (see assets/sprites/
+## buildings/*.png) -- so those pieces should draw from their own real
+## illustration rather than the procedural fallback. A piece with no real
+## art yet (stone_floor, timber_wall -- see IllustratedBuildingPieceSprite's
+## own header doc comment) still falls all the way through to procedural.
+func test_real_pieces_with_a_registered_sheet_draw_from_it():
+	for piece_id in ["wood_wall", "wood_door", "wood_window", "wood_floor", "stone_wall", "stone_door", "stone_window"]:
+		var image := renderer._piece_image(piece_id)
+		var expected: Image = renderer._illustrated_building_piece.piece_image(piece_id)
+		assert_not_null(expected, "%s should have produced real illustrated art" % piece_id)
+		assert_eq(image, expected, piece_id)
+
+
+func test_a_piece_with_no_real_art_yet_still_falls_back_to_procedural():
+	for piece_id in ["stone_floor", "timber_wall", "timber_floor", "wood_roof"]:
+		assert_false(renderer._illustrated_building_piece.has_piece_art(piece_id), piece_id)
+		var image := renderer._piece_image(piece_id)
+		assert_not_null(image, piece_id)
+
+
 # -- blending real source images together, not flat synthesized color -------
 #
 # A border between two ILLUSTRATED biomes must dither their real art

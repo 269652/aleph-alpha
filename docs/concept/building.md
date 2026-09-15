@@ -39,15 +39,169 @@ full mechanism, and [npc.md](npc.md#settlement-growth-migration-toward-player-bu
 for how a player-built structure cluster is, mechanically, the same kind of
 settlement as an NPC village once it grows enough to qualify.
 
-## Structure building: pieces, rooms, and enterable houses
+## Buildings are entities; interiors are scenes
 
-The sections above are design philosophy; this is the mechanism spec.
-Terraria-style single-tile placement (bare earth, campfires) already exists.
-This adds **structures**: assemblies of typed pieces that together form a
-real, enterable building — the Valheim/Atlas-style construction the game
-asks for, adapted honestly to a top-down 2D world.
+Decided 2026-09-14, after a full pass of fixes to the piece model below
+(roofs from above, facades, wall thickness, invisible furniture, doors that
+could not be reached) all traced to one root cause: a real building is a
+3D thing, and drawing it as a ring of top-down tiles never reads right.
+The user's call: *"change the housing completely and make them a single
+sprite / entity like in Anno... NPCs would then be able to use algorithms
+to build efficient villages / cities with Anno like constraints. The
+player can enter buildings or houses which would then load and switch to
+the interior scene... so a House small from the outside would be big
+inside."* This section is the spec for that model; the piece model that
+follows it is retained only for structures older saves already contain.
 
-### What "enterable" means in a top-down game
+### Design pillars
+
+1. **One building, one entity.** A building is a `BuildingCatalog` id with
+   a rectangular footprint in tiles, a door cell on its south edge, and a
+   doorstep (the tile just south of the door). It is drawn as ONE sprite
+   standing on its footprint, collides as ONE body covering the footprint,
+   and is owned as ONE property. No cell of it is walked into from outside.
+2. **The exterior is Anno, the interior is Stardew.** Outside, the world is
+   the top-down map it always was and a house is a 3/4-view illustration
+   on it. Entering is a real transition into an authored interior room
+   that can be larger than the footprint, with real walls and furniture the
+   player collides with, and a way back out at its door.
+3. **The sheet is the lifecycle.** Every building sheet is one file,
+   1536×1024, eight columns by five rows, black background, magenta
+   dividers — exactly the convention `assets/sprites/buildings/
+   blacksmith.png` (and farmhouse/sawmill/warehouse/city_hall/brewery)
+   already follow. Row 0: eight construction stages; row 1: ACTIVE
+   (chimney smoke, lit windows — an eight-frame loop); row 2: IDLE; row 3:
+   BURNING; row 4: RUINED. A building's `progress` (construction), the
+   time of day / whether anyone is home (active vs idle), and its
+   `condition` (burning, then ruin) each pick a row; nothing about the
+   lifecycle is invented in code that the art does not already show.
+4. **One system, two builders — still.** The village generator and the
+   player place the same entities from the same catalog through the same
+   `place_building` call and the same `ConstructionProject` ledger; a
+   villager's house and the player's own house are the same kind of thing
+   with different owners.
+5. **Villages are laid out, not scattered.** Buildings stand on streets:
+   a road is laid first, houses take road frontage with their doors facing
+   it, spaced by rule, the plaza (well, stall) sits on the main street and
+   the gate at its end. The layout is a pure, seeded, testable algorithm
+   over a buildability predicate — Anno's constraint style at village
+   scale, with room for growth rules later.
+6. **Nothing the world already knows about buildings changes shape.** A
+   building's anchor cell carries its id in `chunk.modifications` exactly
+   like today's single-tile placeables (campfire, sagewerk, city_hall), and
+   every other footprint cell carries the reserved `building_footprint`
+   marker — so every existing "is structure X within N tiles" scan,
+   occupancy check, settlement census and construction decision keeps
+   working unchanged, and a building persists as chunk data the way
+   everything else does.
+
+### Mechanism
+
+**Catalog** (`BuildingCatalog`, pure data): `house_small` (2×2),
+`house_medium` (3×2), `house_large` (4×3) to start; per id a footprint,
+door (`x = width / 2` on the bottom row), doorstep (door + (0, 1)), sheet
+path (`assets/sprites/buildings/<id>.png`, drawn by a procedural
+placeholder box until the file lands), interior family, capacity, labor
+hours and material cost (the existing house recipes' inputs).
+`choose_house_id(occupation, genome, seed)` is `HouseBlueprint.
+choose_blueprint_id`'s own occupation-pool + personality-nudge rule over
+the new ids, so a village keeps its variety. `occupies(tile_id)` is the one
+predicate the occupancy seams read (ground-cover blocking, the tree apron,
+water reclaim, siting).
+
+**Placement** (`EarthChunkManager.place_building(chunk_coord, origin,
+id, facing, seed, owner)`): writes the anchor id and footprint markers,
+records `Chunk.buildings[origin] = {id, facing, seed, condition, progress,
+owner}` (persisted as its own per-chunk file, like roofs/furniture), spawns
+the node immediately (a `Node2D` at the footprint's bottom-centre so
+Y-sorting is against the building's base — a `Sprite2D` child offset
+upward, and a `StaticBody2D` covering the footprint on the ground collision
+layer), and clears/blocks vegetation on the footprint as a stamped
+structure does today. `remove_building` reverses all of it.
+`building_at_global(x, y)` answers for any footprint cell;
+`building_door_near(pixel, radius)` finds a doorstep for the Enter prompt.
+Facing is south only in this pass (every sheet is drawn south-facing);
+the field exists so a later pass can add other faces.
+
+**Village layout** (`VillageLayout.layout(...)`, pure): one or more
+east–west streets across the chunk's habitable middle, one tile wide,
+laid as the existing `TRAIL_TILE_ID` (the infrastructure doc's Road tier
+finally has an NPC-laid instance); houses take the NORTH side of each
+street so every door faces south onto it (the doorstep IS a road cell),
+one-tile gaps between plots, plaza (well + stall) on the main street's
+middle, gate at its end; the next street opens a house-depth plus two
+tiles further south when the first is full. Every plot's footprint and
+doorstep must be buildable (`is_buildable_terrain_at`) and unmodified;
+a villager whose plot fits nowhere stays homeless, as today, rather than
+being squeezed onto water or forest. `SettlementGenerator` keeps its
+outputs (`house_positions` become doorsteps, which is what every consumer
+used); `VillageRenderer.spawn_village` places buildings instead of
+stamping pieces, sets each villager's home to its doorstep, hides a
+villager who is "at home" (they are inside), and keeps landmarks, workspot
+props, market and settlement founding exactly as before.
+
+**One house id.** Every village house gets a `ConstructionProject`
+(created and completed at once, per [civic_construction.md](civic_construction.md)'s
+"village houses, properly"), so `record_settlement_founded_if_new` grants
+`project.property_id()` (`house_<cx>_<cy>_<ox>_<oy>`) — the single scheme
+player houses already use; the per-cell `_piece_property_id` and the
+per-villager-index id are retired.
+
+**Entering** (`HouseInteriorView`): standing on a doorstep shows
+"Enter"; the interior is an authored `InteriorTemplates` grid (walls,
+floor, door, furniture ids from the existing furniture catalog, several
+variants per interior family × occupation, picked by the house's seed),
+built as a `Node2D` over the world at the house's own position with its
+door aligned to the doorstep, drawn from the existing tile set (the
+illustrated floor/wall/furniture tiles) on a z-index above every world
+layer with an opaque backdrop, its walls and blocking furniture (bed,
+table, bookshelf, couch) as bodies on their own `INTERIOR_COLLISION_LAYER`.
+The player keeps moving in world coordinates with their collision mask
+flipped to that layer and their z-index lifted (the two-story floor
+switch's own mechanism), so chunk streaming, NPC schedules and the clock
+all keep running — **time does not stop indoors.** Indoors, the player's
+step skips every terrain/water/weather/footprint/build/destroy concern
+and keeps movement, survival, talking and inventory; warmth indoors is a
+constant. "Leave" on the interior's door tile puts the player back on the
+doorstep. Predators do not target an indoor player.
+
+**Older saves.** A settlement chunk that has no buildings yet but still
+holds piece-built houses has those pieces (and their roof/furniture/upper
+entries) wiped once on load, excluding any cell covered by a player-owned
+`ConstructionProject`; the village then regenerates as buildings. Player-
+built piece structures stay exactly as they are and keep the legacy
+mechanisms below (rooms, roofs, upper floors) until their owner rebuilds
+them in the new model — nothing of the player's is deleted.
+
+**Retired for houses, named honestly**: per-piece statics and withering
+(a building has one `condition`; ruin is a sheet row, not a collapse
+graph), the roof/facade/upper-floor paint families, room detection for
+"is the player indoors" (an interior is a scene, not a flood fill),
+two-story stairs (an interior template may have more than one room).
+Player piece placement is retired with them; the player's blueprint build
+places a finished building through the same ledger, and hiring a builder
+for a house returns in the construction-over-time pass. See Status.
+
+### Asset contract (what an artist/generator must deliver per building)
+
+- `assets/sprites/buildings/<building_id>.png`, 1536×1024, 8 columns ×
+  5 rows, black background, magenta cell dividers, the building drawn
+  bottom-anchored and south-facing, occupying the cell's width as the
+  footprint's width. Rows: construction ×8, active ×8 (loop), idle ×8
+  (loop or repeats), burning ×8, ruined ×8.
+- Until a file exists for an id, `ProceduralBuildingPlaceholderSprite`
+  draws a roof-over-walls box of the right footprint so the system is
+  playable and testable without art.
+
+## Legacy: structure building from pieces (older player-built structures only)
+
+Everything from here to "Persistence" describes the per-tile piece model
+that preceded the entity model above. It is no longer used for any house
+— village or player — and stays only because older saves contain player-
+built piece structures that must keep working (rooms, roofs, upper floors,
+furniture on their floors). No new mechanism should be built on it.
+
+### What "enterable" meant in the piece model
 
 Valheim and Atlas are 3D: you walk through a door and the walls are simply
 around you. Top-down 2D has no such luxury — a roof drawn over a floor would
@@ -373,6 +527,21 @@ cell. All of the above is resolved at PAINT time from the neighbouring
 cells and the player's own position, exactly like terrain blending, so no
 new piece ids and no save-format change are involved.
 
+**7. Real illustrated art, per piece id, replacing the procedural pattern
+where a real sheet exists.** The same "hand-drawn sheet wins, procedural is
+the fallback" seam `IllustratedTerrainSprite` already established for
+biome ground tiles: `IllustratedBuildingPieceSprite.has_piece_art(piece_id)`
+gates whether `TerrainRenderer._piece_image` draws from a real
+user-supplied illustration (`assets/sprites/buildings/wood_wall.png`/
+`stone_wall.png`, a 6-column sheet — door, window, wall, a spare wall
+variant, two spare narrow corner-post variants, only the first three wired
+so far; `wood_floor.png`, a single image) or falls through to
+`ProceduralBuildingPieceSprite.generate_image` exactly as before. A piece
+with no real sheet yet (stone floor, the timber tier, roofs) is untouched.
+This is additive art only — it changes no piece id, no placement rule, and
+no save data, the same guarantee point 6's facade family and the roof
+pitch family (point 3) already keep.
+
 ### Persistence
 
 Pieces persist through the existing per-chunk modification system (see
@@ -500,6 +669,12 @@ modification like any other.
   - *The facade family* (see "How a house reads from above", point 6).
   [housing.md](housing.md)'s Status carries the household side of the same
   pass.
+- ✅ Real illustrated wall/door/window/floor art (see "How a house reads
+  from above", point 7) — `IllustratedBuildingPieceSprite` replaces the
+  procedural pattern for wood/stone wall, door, window and wood floor with
+  a real user-supplied illustration; every other piece (stone floor, the
+  timber tier, roofs) is unaffected. `ATLAS_VERSION` bumped to
+  `art_resolution_v26_illustrated_building_pieces`.
 - ✅ The same rule for boulders and ore, closed on **both** sides.
   `StoneRenderer.spawn_stones` had the identical bug with the identical
   shape — it iterated its cells over `chunk.biome` and never consulted

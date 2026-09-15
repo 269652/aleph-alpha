@@ -10744,6 +10744,62 @@ func test_reloading_a_settlement_does_not_duplicate_property():
 	assert_eq(household.property.size(), 1)
 
 
+# -- emergence: a real VillageLayout plot list (docs/concept/building.md
+# "One house id") grants ownership through a real ConstructionProject,
+# the SAME property_id() scheme the player's own stamp_house_and_grant_
+# ownership already uses -- one id scheme instead of two. `plots` defaults
+# to [] (every test above this section passes none), which must keep
+# granting the exact old per-index id unchanged -- these tests cover the
+# NEW behavior only when real plots are actually supplied. ------------------
+
+func test_founding_with_a_real_plot_grants_ownership_through_a_construction_project():
+	var chunk_coord := Vector2i(60, 60)
+	var npcs: Array = [NpcIdentity.new(1)]
+	var origin := Vector2i(4, 5)
+	var plots: Array = [{"building_index": 0, "origin": origin, "building_id": "house_small"}]
+	manager.record_settlement_founded_if_new(chunk_coord, npcs, plots)
+
+	var household = manager.household_store().household_for(EntityRef.for_npc(1))
+	var expected_id: String = ConstructionProject.for_site(chunk_coord, origin, "house_small", household.id).property_id()
+	assert_true(household.property.has(expected_id))
+	assert_eq(manager.household_store().owner_of(expected_id), household.id)
+
+
+## The exact id a player's own house-build grants through -- proves village
+## houses and player houses now genuinely share one scheme, not merely two
+## schemes that happen to look similar.
+func test_village_house_ownership_id_matches_the_players_own_scheme():
+	var chunk_coord := Vector2i(62, 62)
+	var origin := Vector2i(2, 2)
+	var plots: Array = [{"building_index": 0, "origin": origin, "building_id": "house_medium"}]
+	manager.record_settlement_founded_if_new(chunk_coord, [NpcIdentity.new(1)], plots)
+	var household = manager.household_store().household_for(EntityRef.for_npc(1))
+
+	assert_true(household.property.has("house:%d_%d_%d_%d" % [chunk_coord.x, chunk_coord.y, origin.x, origin.y]))
+
+
+## A villager with no matching plot (VillageLayout left them without a
+## house, or an older caller supplies no plots at all) keeps the exact old
+## per-index id -- no behavior change for every existing caller above.
+func test_a_villager_with_no_matching_plot_keeps_the_old_house_id_scheme():
+	var chunk_coord := Vector2i(64, 64)
+	var npcs: Array = [NpcIdentity.new(1), NpcIdentity.new(2)]
+	# Only npc 0's own plot was actually placed -- npc 1 was left homeless.
+	var plots: Array = [{"building_index": 0, "origin": Vector2i(1, 1), "building_id": "house_small"}]
+	manager.record_settlement_founded_if_new(chunk_coord, npcs, plots)
+
+	var homeless_household = manager.household_store().household_for(EntityRef.for_npc(2))
+	assert_true(homeless_household.property.has("house:%d_%d_1" % [chunk_coord.x, chunk_coord.y]))
+
+
+func test_an_empty_plots_list_behaves_exactly_like_the_old_two_argument_call():
+	var chunk_coord := Vector2i(66, 66)
+	var npcs: Array = [NpcIdentity.new(1)]
+	manager.record_settlement_founded_if_new(chunk_coord, npcs, [])
+	var household = manager.household_store().household_for(EntityRef.for_npc(1))
+	assert_true(household.property.has("house:%d_%d_0" % [chunk_coord.x, chunk_coord.y]))
+
+
 # -- emergence: the household store persists alongside the others ------------
 
 func test_save_household_store_then_load_household_store_round_trips_live_state():

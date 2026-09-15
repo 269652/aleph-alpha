@@ -68,6 +68,8 @@ const BuilderMarker = preload("res://src/rendering/builder_marker.gd")
 const LogisticsMarker = preload("res://src/rendering/logistics_marker.gd")
 const StructureStockStore = preload("res://src/emergence/structure_stock_store.gd")
 const IllustratedStructureSprite = preload("res://src/rendering/illustrated_structure_sprite.gd")
+const BuildingCatalog = preload("res://src/gameplay/building_catalog.gd")
+const ProceduralBuildingPlaceholderSprite = preload("res://src/rendering/procedural_building_placeholder_sprite.gd")
 const FarmerMarker = preload("res://src/rendering/farmer_marker.gd")
 const MillMarker = preload("res://src/rendering/mill_marker.gd")
 const BakeryMarker = preload("res://src/rendering/bakery_marker.gd")
@@ -291,6 +293,16 @@ const UPPER_FLOOR_MODIFICATIONS_DIR := "user://chunk_upper_floor_modifications"
 ## other modification dict already uses, its own directory for the same
 ## reason FURNITURE_MODIFICATIONS_DIR itself has one.
 const UPPER_FLOOR_FURNITURE_MODIFICATIONS_DIR := "user://chunk_upper_floor_furniture_modifications"
+
+## Where whole-building entity records are persisted (see Chunk.buildings,
+## docs/concept/building.md "Buildings are entities; interiors are
+## scenes") -- the same generic Dictionary save/load ChunkSerializer
+## already uses for every other modification layer; a building's anchor id
+## and footprint markers live in `modifications` itself (see
+## BuildingCatalog.FOOTPRINT_TILE_ID) and need no separate file, this one
+## carries the rest of a building's own state (facing/seed/condition/
+## progress/owner).
+const BUILDINGS_DIR := "user://chunk_buildings"
 
 const CHUNK_SIZE := 32
 ## Chunks within this many chunks of the player are generated/painted.
@@ -746,6 +758,7 @@ const SAGEWERK_STORAGE_PAIR_RADIUS_TILES := 20
 ## ProceduralStructureSprite look, unaffected by this dict.
 var _structure_art_sprites: Dictionary = {}
 var _illustrated_structure_sprite := IllustratedStructureSprite.new()
+var _building_placeholder_sprite := ProceduralBuildingPlaceholderSprite.new()
 
 ## Every placed Farm currently staffed with a real FarmerMarker (see
 ## docs/concept/npc_farm_production.md) -- chunk_coord -> {local_cell ->
@@ -1023,6 +1036,15 @@ var _loaded_villages: Dictionary = {}  # Vector2i chunk_coord -> Array[Node2D]
 ## generic tile-solidity check. Tracked per chunk so unloading frees exactly
 ## that chunk's bodies, mirroring _loaded_trees/_loaded_stones.
 var _piece_collision_bodies: Dictionary = {}  # Vector2i chunk_coord -> {Vector2i global_cell -> StaticBody2D}
+
+## Whole-building entity nodes (docs/concept/building.md "Buildings are
+## entities; interiors are scenes"): one Node2D per placed building,
+## carrying its own Sprite2D + StaticBody2D covering the whole footprint --
+## see _spawn_building_node. Keyed by chunk then ORIGIN local cell (not
+## every footprint cell -- a building is one node, unlike
+## _piece_collision_bodies' per-cell bodies), mirroring _structure_art_
+## sprites' own per-chunk dict shape.
+var _building_nodes: Dictionary = {}  # Vector2i chunk_coord -> {Vector2i origin_local -> Node2D}
 
 ## Two-story houses (docs/concept/housing.md): real per-floor collision.
 ## Ground-floor solid pieces stay on Godot's own default physics layer
@@ -4723,7 +4745,25 @@ func wipe_event_store(path: String = EventStorePersistence.SAVE_PATH) -> void:
 ## store's own state (has this settlement ever recorded anything?) is the
 ## guard, not an in-memory flag -- the same robustness reasoning as every
 ## other "spawn once, persist across reload" system in this file.
-func record_settlement_founded_if_new(chunk_coord: Vector2i, npcs: Array) -> void:
+##
+## `plots` (docs/concept/building.md "One house id"): VillageLayout's own
+## plot list, each carrying `building_index`/`origin`/`building_id` for a
+## REAL placed building -- npc index `i`'s own house is the plot whose
+## `building_index == i`, not merely "house i" by construction, since a
+## villager VillageLayout couldn't fit anywhere is skipped without shifting
+## the indices behind it (see VillageLayout's own doc comment). When a
+## matching plot exists, ownership is granted through a real
+## ConstructionProject started and completed at once -- the SAME
+## property_id() scheme stamp_house_and_grant_ownership already grants the
+## player's own houses through, so a village house and a player house share
+## one id scheme rather than two. Defaults to `[]`, which must behave
+## BYTE-IDENTICAL to before this parameter existed: every caller that only
+## cares about npcs/households/events (the vast majority of this function's
+## own callers, none of them about building ownership specifically) needs no
+## change, and a villager with no matching plot -- whether because `plots`
+## is empty/omitted, or VillageLayout genuinely left them without a house --
+## keeps the exact old per-index id below.
+func record_settlement_founded_if_new(chunk_coord: Vector2i, npcs: Array, plots: Array = []) -> void:
 	var settlement_id := EntityRef.for_settlement(chunk_coord)
 	if not _event_store.events_for_entity(settlement_id).is_empty():
 		return
@@ -4739,6 +4779,10 @@ func record_settlement_founded_if_new(chunk_coord: Vector2i, npcs: Array) -> voi
 	_event_store.append(founded)
 	_memory_store.witness_event(founded, _world_age_seconds)
 
+	var plot_by_building_index := {}
+	for plot in plots:
+		plot_by_building_index[plot["building_index"]] = plot
+
 	for i in npcs.size():
 		var settled := Event.new("npc_settled", _world_age_seconds)
 		settled.actors = [npc_ids[i]]
@@ -4750,16 +4794,21 @@ func record_settlement_founded_if_new(chunk_coord: Vector2i, npcs: Array) -> voi
 		# (see docs/emergence/01/03 "Households"/"Property"). Single-member
 		# because no partnership/reproduction system exists yet to justify
 		# who belongs to whose household (docs/roadmap.md's Emergence
-		# Phase 3 note) -- keyed the same way VillageRenderer._stamp_house
-		# derives that villager's own house seed, so this needs no new
-		# per-house id scheme: house index `i` and npc index `i` are the
-		# same villager by construction (SettlementGenerator.generate_
-		# settlement builds npcs and house_positions in the same loop).
+		# Phase 3 note). Formed unconditionally -- an economic agent exists
+		# even homeless, the same honest state VillageLayout can already
+		# leave a villager in.
 		var household := _household_store.form_household(npc_ids[i])
-		var house_id := EntityRef.for_kind(
-			"house", "%d_%d_%d" % [chunk_coord.x, chunk_coord.y, i]
-		)
-		_household_store.grant_property(household.id, house_id)
+		var plot: Variant = plot_by_building_index.get(i)
+		if plot != null:
+			var project := _construction_project_store.start_project(
+				chunk_coord, plot["origin"], plot["building_id"], household.id
+			)
+			_construction_project_store.complete_project(project.id, _household_store)
+		else:
+			var house_id := EntityRef.for_kind(
+				"house", "%d_%d_%d" % [chunk_coord.x, chunk_coord.y, i]
+			)
+			_household_store.grant_property(household.id, house_id)
 
 
 ## Individual-fidelity fruiting for trees near `player_pixel` (see the "two
@@ -7105,7 +7154,7 @@ func _can_root_at(chunk: Chunk, chunk_coord: Vector2i, position: Vector2) -> boo
 	# only; occupancy by a real building piece is a separate refusal, and the
 	# other two directions of the same rule live in stamp_structure_at_global
 	# and TreeRenderer.spawn_trees.
-	if BuildingPiece.touches_piece(chunk.modifications, local):
+	if BuildingPiece.touches_piece(chunk.modifications, local) or BuildingCatalog.touches_building(chunk.modifications, local):
 		return false  # ...and nothing takes root on a house's own one-cell apron either (its doorstep stays clear)
 	# A river's own biome is untouched land (see docs/concept/rivers.md's
 	# Rendering section), so TreeRooting.can_root_in alone can't see it --
@@ -12749,6 +12798,222 @@ func stamp_structure_at_global(
 			break
 
 
+# -- whole-building entities (docs/concept/building.md "Buildings are -------
+# -- entities; interiors are scenes") ----------------------------------------
+
+## Places a real BuildingCatalog `building_id` with its footprint's
+## top-left at `origin_local` (chunk-local) -- the anchor cell gets the
+## building id itself in `modifications` (so has_structure_near/
+## nearest_structure_position/every existing "is structure X here" scan
+## keeps working with no changes), every other footprint cell gets
+## BuildingCatalog.FOOTPRINT_TILE_ID, `chunk.buildings[origin_local]`
+## records the rest of its state, and the node (sprite + collision) spawns
+## immediately -- unlike stamp_structure_at_global's own pieces, a building
+## has no "wait for the next chunk load" gap to close. False (no-op) when
+## the chunk isn't loaded, `building_id` isn't real, or ANY footprint cell
+## (the door and doorstep included -- see BuildingCatalog.footprint_cells/
+## doorstep_of) is already occupied; a caller (VillageLayout, the player's
+## own blueprint build) is expected to have validated the site already,
+## this is the same defensive re-check build_at_global's own siblings all
+## make.
+func place_building(
+	chunk_coord: Vector2i, origin_local: Vector2i, building_id: String,
+	facing: Vector2i = Vector2i(0, 1), seed_value: int = 0, owner_household_id: String = ""
+) -> bool:
+	var chunk: Chunk = _loaded_chunks.get(chunk_coord)
+	if chunk == null or not BuildingCatalog.has_building(building_id):
+		return false
+	var footprint_cells: Array = BuildingCatalog.footprint_cells(building_id, origin_local)
+	var required_cells: Array = footprint_cells.duplicate()
+	required_cells.append(origin_local + BuildingCatalog.doorstep_of(building_id))
+	for local in required_cells:
+		if chunk.modifications.get(local, "") != "":
+			return false
+	for local in footprint_cells:
+		chunk.modifications[local] = building_id if local == origin_local else BuildingCatalog.FOOTPRINT_TILE_ID
+	chunk.buildings[origin_local] = {
+		"id": building_id, "facing": facing, "seed": seed_value,
+		"condition": 1.0, "progress": 1.0, "owner_household_id": owner_household_id,
+	}
+	var occupied_global := {}
+	for local in footprint_cells:
+		occupied_global[chunk_coord * CHUNK_SIZE + local] = true
+	_clear_vegetation_on_cells(chunk_coord, chunk, occupied_global)
+	_block_ground_cover_on_cells(chunk_coord, footprint_cells)
+	_terrain_renderer.paint(_tile_map_layer, chunk, chunk_coord * CHUNK_SIZE, generator.biome_at_global)
+	_spawn_building_node(chunk_coord, origin_local, chunk.buildings[origin_local])
+	return true
+
+
+## Reverses place_building: clears the anchor id and every footprint
+## marker, forgets the record, unblocks ground cover, frees the node.
+## False when nothing is actually placed at `origin_local`.
+func remove_building(chunk_coord: Vector2i, origin_local: Vector2i) -> bool:
+	var chunk: Chunk = _loaded_chunks.get(chunk_coord)
+	if chunk == null or not chunk.buildings.has(origin_local):
+		return false
+	var building_id: String = chunk.buildings[origin_local]["id"]
+	var footprint_cells: Array = BuildingCatalog.footprint_cells(building_id, origin_local)
+	for local in footprint_cells:
+		chunk.modifications.erase(local)
+	chunk.buildings.erase(origin_local)
+	_unblock_ground_cover_on_cells(chunk_coord, footprint_cells)
+	_terrain_renderer.paint(_tile_map_layer, chunk, chunk_coord * CHUNK_SIZE, generator.biome_at_global)
+	_despawn_building_node(chunk_coord, origin_local)
+	return true
+
+
+## The full building record standing on `(global_x, global_y)` -- ANY
+## footprint cell answers, not just the anchor -- with `chunk_coord` and
+## `origin_local` merged in so a caller can act on it (remove it, compute
+## its doorstep) without a second lookup. {} when no building covers that
+## cell or the chunk isn't loaded.
+func building_at_global(global_x: int, global_y: int) -> Dictionary:
+	var chunk_coord := _chunk_coord_for_tile(Vector2i(global_x, global_y))
+	var chunk: Chunk = _loaded_chunks.get(chunk_coord)
+	if chunk == null:
+		return {}
+	var local := _local_coord(global_x, global_y)
+	var tile_id: String = chunk.modifications.get(local, "")
+	var origin_local: Vector2i
+	if BuildingCatalog.has_building(tile_id):
+		origin_local = local
+	elif tile_id == BuildingCatalog.FOOTPRINT_TILE_ID:
+		var found = _building_origin_owning(chunk, local)
+		if found == null:
+			return {}
+		origin_local = found
+	else:
+		return {}
+	if not chunk.buildings.has(origin_local):
+		return {}
+	var record: Dictionary = chunk.buildings[origin_local].duplicate()
+	record["chunk_coord"] = chunk_coord
+	record["origin_local"] = origin_local
+	return record
+
+
+## Which recorded building's footprint actually contains a
+## FOOTPRINT_TILE_ID cell -- a building's own footprint size varies, so a
+## marker cell cannot derive its anchor by arithmetic alone; scanning the
+## (small, real) set of buildings this chunk actually has is direct and
+## needs no second index.
+func _building_origin_owning(chunk: Chunk, local: Vector2i):
+	for origin_local in chunk.buildings:
+		var building_id: String = chunk.buildings[origin_local]["id"]
+		if BuildingCatalog.footprint_cells(building_id, origin_local).has(local):
+			return origin_local
+	return null
+
+
+## Every building placed in `chunk_coord`, each the same record shape
+## building_at_global returns (chunk_coord/origin_local included). [] for
+## an unloaded chunk.
+func buildings_in_chunk(chunk_coord: Vector2i) -> Array:
+	var chunk: Chunk = _loaded_chunks.get(chunk_coord)
+	if chunk == null:
+		return []
+	var out: Array = []
+	for origin_local in chunk.buildings:
+		var record: Dictionary = chunk.buildings[origin_local].duplicate()
+		record["chunk_coord"] = chunk_coord
+		record["origin_local"] = origin_local
+		out.append(record)
+	return out
+
+
+## The nearest building whose DOORSTEP (not its footprint generally -- see
+## docs/concept/building.md "Buildings are entities") lies within
+## `radius_tiles` of `pixel_position` -- World's own "Enter" interaction
+## prompt reads this, the same chunk_coords_within-bounded scan style
+## nearest_structure_position/nearest_npc_near already use. {} when
+## nothing qualifies; otherwise the building record plus
+## "doorstep_global" (Vector2i).
+func building_door_near(pixel_position: Vector2, radius_tiles: float) -> Dictionary:
+	var radius_px := radius_tiles * TerrainRenderer.TILE_SIZE
+	var nearest_distance := radius_px
+	var nearest: Dictionary = {}
+	for chunk_coord in chunk_coords_within(pixel_position, radius_px):
+		var chunk: Chunk = _loaded_chunks.get(chunk_coord)
+		if chunk == null:
+			continue
+		for origin_local in chunk.buildings:
+			var record: Dictionary = chunk.buildings[origin_local]
+			var doorstep_global: Vector2i = (
+				chunk_coord * CHUNK_SIZE + origin_local + BuildingCatalog.doorstep_of(record["id"])
+			)
+			var doorstep_pixel := (
+				Vector2(doorstep_global) + Vector2(0.5, 0.5)
+			) * TerrainRenderer.TILE_SIZE
+			var distance := pixel_position.distance_to(doorstep_pixel)
+			if distance <= nearest_distance:
+				nearest_distance = distance
+				nearest = record.duplicate()
+				nearest["chunk_coord"] = chunk_coord
+				nearest["origin_local"] = origin_local
+				nearest["doorstep_global"] = doorstep_global
+	return nearest
+
+
+## The building node: a Node2D at the footprint's BOTTOM-CENTRE (so
+## Y-sorting reads against the building's own base, not its geometric
+## centre the way _spawn_structure_art_for's single-tile sprites do today
+## -- the bug this whole-building model fixes), a Sprite2D child from the
+## real sheet if BuildingCatalog.sheet_of resolves to a loadable file, else
+## ProceduralBuildingPlaceholderSprite, and a StaticBody2D covering the
+## whole footprint on the ground collision layer. The door itself is never
+## part of the collision shape's own footprint rect being walked into --
+## entry is the doorstep Enter-prompt (building_door_near), never a gap in
+## the wall.
+func _spawn_building_node(chunk_coord: Vector2i, origin_local: Vector2i, record: Dictionary) -> void:
+	var building_id: String = record["id"]
+	var footprint := BuildingCatalog.footprint_of(building_id)
+	var origin_global: Vector2i = chunk_coord * CHUNK_SIZE + origin_local
+	var footprint_px := Vector2(footprint) * TerrainRenderer.TILE_SIZE
+	var top_left_px := Vector2(origin_global) * TerrainRenderer.TILE_SIZE
+	var bottom_centre := top_left_px + Vector2(footprint_px.x * 0.5, footprint_px.y)
+
+	var node := Node2D.new()
+	node.name = "Building"
+	node.position = bottom_centre
+
+	var sprite := Sprite2D.new()
+	var texture := _illustrated_structure_sprite.footprint_frame_texture(
+		BuildingCatalog.sheet_of(building_id), BuildingCatalog.SHEET_COLUMNS, BuildingCatalog.SHEET_ROWS,
+		BuildingCatalog.ROW_IDLE, 0, TerrainRenderer.TILE_SIZE, footprint.x
+	)
+	if texture == null:
+		texture = _building_placeholder_sprite.footprint_texture(footprint, int(record["seed"]), TerrainRenderer.TILE_SIZE)
+	sprite.texture = texture
+	sprite.position = Vector2(0, -float(texture.get_height()) * 0.5)
+	node.add_child(sprite)
+
+	var body := StaticBody2D.new()
+	body.name = "BuildingCollision"
+	body.collision_layer = GROUND_FLOOR_COLLISION_LAYER
+	var shape := CollisionShape2D.new()
+	var rect := RectangleShape2D.new()
+	rect.size = footprint_px
+	shape.shape = rect
+	shape.position = Vector2(0, -footprint_px.y * 0.5)
+	body.add_child(shape)
+	node.add_child(body)
+
+	_entities_parent.add_child(node)
+	if not _building_nodes.has(chunk_coord):
+		_building_nodes[chunk_coord] = {}
+	_building_nodes[chunk_coord][origin_local] = node
+
+
+func _despawn_building_node(chunk_coord: Vector2i, origin_local: Vector2i) -> void:
+	var by_origin: Dictionary = _building_nodes.get(chunk_coord, {})
+	var node: Node = by_origin.get(origin_local)
+	if node == null:
+		return
+	node.free()
+	by_origin.erase(origin_local)
+
+
 ## Clears whatever stands on `occupied_global_cells` -- trees and loose stone
 ## alike -- and drops any persisted record of it, so a stamped structure is
 ## never built AROUND a standing trunk or boulder
@@ -12811,7 +13076,8 @@ func _resync_ground_cover_sprites(chunk_coord: Vector2i) -> void:
 func _built_local_cells(chunk: Chunk) -> Array:
 	var cells: Array = []
 	for local in chunk.modifications:
-		if BuildingPiece.has_piece(chunk.modifications[local]):
+		var tile_id: String = chunk.modifications[local]
+		if BuildingPiece.has_piece(tile_id) or BuildingCatalog.occupies(tile_id):
 			cells.append(local)
 	return cells
 
@@ -13939,6 +14205,7 @@ func _load_chunk(chunk_coord: Vector2i) -> void:
 	chunk.upper_floor_furniture_modifications = _chunk_serializer.load_modifications(
 		_upper_floor_furniture_modifications_path(chunk_coord)
 	)
+	chunk.buildings = _chunk_serializer.load_modifications(_buildings_path(chunk_coord))
 	chunk.planted_trees = _chunk_serializer.load_planted_trees(_planted_trees_path(chunk_coord))
 	_loaded_chunks[chunk_coord] = chunk
 	# Nothing built stands in water -- including what an older save persisted
@@ -13947,6 +14214,14 @@ func _load_chunk(chunk_coord: Vector2i) -> void:
 	# the same reason that catch-up runs first: a piece that is gone must be
 	# gone before anything paints or spawns collision for it.
 	_reclaim_pieces_standing_in_water(chunk_coord, chunk)
+	_reclaim_buildings_standing_in_water(chunk_coord, chunk)
+	# Old-save migration (see _migrate_piece_village_to_buildings_if_stale's
+	# own doc comment) -- also BEFORE the first paint/collision pass, for the
+	# same reason as the two reclaim calls above: a piece about to be wiped
+	# must already be gone before anything paints or spawns collision for
+	# it, and spawn_village (much later in this function) needs the space
+	# genuinely clear to regenerate the village as real buildings.
+	_migrate_piece_village_to_buildings_if_stale(chunk_coord, chunk)
 	# Withering catch-up BEFORE the first paint/collision pass below, so a
 	# piece that decayed away entirely while this chunk sat unloaded is
 	# already gone from chunk.modifications by the time anything paints or
@@ -13974,6 +14249,13 @@ func _load_chunk(chunk_coord: Vector2i) -> void:
 	for local_cell in _piece_grid_for(chunk):
 		var global_cell: Vector2i = chunk_coord * CHUNK_SIZE + local_cell
 		_sync_piece_collision(global_cell, chunk.modifications[local_cell])
+	# Restores the node (sprite + collision) for every whole-building entity
+	# PERSISTED from a previous session -- freshly placed buildings get
+	# their node immediately inside place_building instead, the same
+	# "fresh vs. restored" split _sync_piece_collision's own comment above
+	# draws for pieces.
+	for origin_local in chunk.buildings:
+		_spawn_building_node(chunk_coord, origin_local, chunk.buildings[origin_local])
 	if _roof_layer != null:
 		_terrain_renderer.paint_roofs(_roof_layer, chunk, chunk_coord * CHUNK_SIZE, _hidden_cells_for(chunk_coord))
 	_paint_furniture(chunk_coord, chunk)
@@ -14811,6 +15093,35 @@ const _WATER_RECLAIMS_CATEGORIES := {
 ## boulder belongs in water and is left alone (_WATER_RECLAIMS_CATEGORIES).
 ## No-op for a chunk with nothing in water, which is every chunk once the
 ## rule holds at build time.
+## The whole-building twin of _reclaim_pieces_standing_in_water: a building
+## whose door or doorstep cell has become water (the layout algorithm
+## validates dry ground at placement time, but terrain rules can still
+## move -- and this is what protects a save made before a hydrology fix
+## the same way the piece reclaim already does) is removed on load rather
+## than left standing over/against a pond. Checking the door/doorstep
+## rather than every footprint cell: a building whose own walls happen to
+## graze a newly-wet corner but whose entrance is still dry stays --
+## unlike a piece structure, a building's interior is never actually the
+## painted ground under it (see HouseInteriorView), so only the ground the
+## player would actually stand on to reach it matters here.
+func _reclaim_buildings_standing_in_water(chunk_coord: Vector2i, chunk: Chunk) -> void:
+	var origin := chunk_coord * CHUNK_SIZE
+	var removed := false
+	for origin_local in chunk.buildings.keys().duplicate():
+		var record: Dictionary = chunk.buildings[origin_local]
+		var building_id: String = record["id"]
+		var door_global: Vector2i = origin + origin_local + BuildingCatalog.door_of(building_id)
+		var doorstep_global: Vector2i = origin + origin_local + BuildingCatalog.doorstep_of(building_id)
+		if not is_water_at_global(door_global.x, door_global.y) and not is_water_at_global(doorstep_global.x, doorstep_global.y):
+			continue
+		for local in BuildingCatalog.footprint_cells(building_id, origin_local):
+			chunk.modifications.erase(local)
+		chunk.buildings.erase(origin_local)
+		removed = true
+	if removed:
+		_persist_modifications_now(chunk_coord, chunk)
+
+
 func _reclaim_pieces_standing_in_water(chunk_coord: Vector2i, chunk: Chunk) -> void:
 	var origin := chunk_coord * CHUNK_SIZE
 	var removed := false
@@ -14837,6 +15148,88 @@ func _reclaim_pieces_standing_in_water(chunk_coord: Vector2i, chunk: Chunk) -> v
 		_persist_modifications_now(chunk_coord, chunk)
 
 
+## Old-save migration (docs/concept/building.md "Older saves"): a
+## settlement chunk that still carries OLD-STYLE piece-built houses -- real
+## house-piece cells in chunk.modifications (and their roof/furniture/
+## upper-floor siblings), from before whole-building village houses
+## existed -- has them wiped ONCE on load, so spawn_village (called much
+## later in _load_chunk) regenerates the same settlement as real
+## whole-building entities instead. Detected the same way every other
+## "stale persisted state" pass in this file is: chunk.buildings (the new
+## registry) is still empty. A chunk whose chunk.buildings is already
+## populated -- whether from a genuinely fresh load under the new code, or
+## an earlier visit that already migrated it -- is untouched; this only
+## ever does real work once per settlement's own lifetime, the same
+## "detect + fix, then it's simply true from then on" shape
+## _reclaim_pieces_standing_in_water already has.
+##
+## A player-built piece structure at the SAME site -- a real, separate
+## mechanism this pass must never touch (docs/concept/building.md
+## "Legacy") -- is protected: every local cell inside a COMPLETE
+## ConstructionProject owned by the player's own household is excluded,
+## the same way _reclaim_pieces_standing_in_water already excludes
+## CATEGORY_DAM from a universal rule. Only COMPLETE projects are
+## checked -- today the only reachable state for a player's own piece
+## house is started-and-completed at once
+## (stamp_house_and_grant_ownership), so there is no real PLANNED/
+## IN_PROGRESS gap where pieces exist without a COMPLETE project backing
+## them yet; the ghost-planning system that would introduce one
+## (docs/concept/civic_construction.md) is design-only, not implemented.
+func _migrate_piece_village_to_buildings_if_stale(chunk_coord: Vector2i, chunk: Chunk) -> void:
+	if not chunk.buildings.is_empty():
+		return
+	if not _settlement_generator.has_settlement_at(chunk_coord, _biome_classifier.dominant_biome(chunk.biome)):
+		return
+
+	var protected_cells := _player_owned_piece_cells_in_chunk(chunk_coord)
+	var removed := false
+	for local in chunk.modifications.keys().duplicate():
+		if protected_cells.has(local):
+			continue
+		var tile_id: String = chunk.modifications[local]
+		if not BuildingPiece.has_piece(tile_id) or not _WATER_RECLAIMS_CATEGORIES.has(BuildingPiece.category_of(tile_id)):
+			continue
+		chunk.modifications.erase(local)
+		chunk.piece_condition.erase(local)
+		removed = true
+	for layer in [
+		chunk.roof_modifications, chunk.furniture_modifications,
+		chunk.upper_floor_modifications, chunk.upper_floor_furniture_modifications,
+	]:
+		for local in layer.keys().duplicate():
+			if protected_cells.has(local):
+				continue
+			layer.erase(local)
+			removed = true
+	if removed:
+		_persist_modifications_now(chunk_coord, chunk)
+
+
+## Every local cell covered by a COMPLETE ConstructionProject the player's
+## own household owns, in `chunk_coord` -- the migration pass above must
+## never touch these. household_for (not form_household) so a chunk with
+## no player activity at all never spuriously creates a player household
+## just by loading it. Mirrors _house_furniture_count's own established
+## "recipe -> HouseBlueprint shape -> footprint" derivation exactly, rather
+## than inventing a second way to size a piece house's footprint.
+func _player_owned_piece_cells_in_chunk(chunk_coord: Vector2i) -> Dictionary:
+	var cells := {}
+	var household = _household_store.household_for(PlayerIdentity.PLAYER_ENTITY_ID)
+	if household == null:
+		return cells
+	for project in _construction_project_store.projects_owned_by(household.id):
+		if project.chunk_coord != chunk_coord:
+			continue
+		var shape_id: String = HOUSE_BLUEPRINT_SHAPE_BY_RECIPE_ID.get(project.blueprint_id, "")
+		if shape_id == "":
+			continue  # a non-house project (e.g. a future civic building) -- no piece footprint to protect here
+		var footprint := HouseBlueprint.new().footprint_for(shape_id)
+		for x in footprint.x:
+			for y in footprint.y:
+				cells[project.origin + Vector2i(x, y)] = true
+	return cells
+
+
 ## Writes every modification layer of `chunk` to disk right now -- the same
 ## per-layer files _unload_chunk writes on eviction, plus the one thing it
 ## does not do: a layer that is now EMPTY has its file removed, so a wash
@@ -14852,6 +15245,7 @@ func _persist_modifications_now(chunk_coord: Vector2i, chunk: Chunk) -> void:
 			chunk.upper_floor_furniture_modifications, UPPER_FLOOR_FURNITURE_MODIFICATIONS_DIR,
 			_upper_floor_furniture_modifications_path(chunk_coord),
 		],
+		[chunk.buildings, BUILDINGS_DIR, _buildings_path(chunk_coord)],
 	]
 	for layer in layers:
 		var data: Dictionary = layer[0]
@@ -14928,6 +15322,9 @@ func _unload_chunk(chunk_coord: Vector2i) -> void:
 		_chunk_serializer.save_modifications(
 			chunk.upper_floor_furniture_modifications, _upper_floor_furniture_modifications_path(chunk_coord)
 		)
+	if chunk != null and not chunk.buildings.is_empty():
+		DirAccess.make_dir_recursive_absolute(BUILDINGS_DIR)
+		_chunk_serializer.save_modifications(chunk.buildings, _buildings_path(chunk_coord))
 
 	# Withering (see _apply_piece_condition_catchup above): snapshot this
 	# chunk's real per-piece condition state and the world-age it was taken
@@ -14986,6 +15383,10 @@ func _unload_chunk(chunk_coord: Vector2i) -> void:
 	for body in _upper_piece_collision_bodies.get(chunk_coord, {}).values():
 		body.free()
 	_upper_piece_collision_bodies.erase(chunk_coord)
+
+	for node in _building_nodes.get(chunk_coord, {}).values():
+		node.free()
+	_building_nodes.erase(chunk_coord)
 
 	for tree in _loaded_trees.get(chunk_coord, []):
 		tree.free()
@@ -15350,6 +15751,10 @@ func _upper_floor_modifications_path(chunk_coord: Vector2i) -> String:
 
 func _upper_floor_furniture_modifications_path(chunk_coord: Vector2i) -> String:
 	return "%s/%d_%d.bin" % [UPPER_FLOOR_FURNITURE_MODIFICATIONS_DIR, chunk_coord.x, chunk_coord.y]
+
+
+func _buildings_path(chunk_coord: Vector2i) -> String:
+	return "%s/%d_%d.bin" % [BUILDINGS_DIR, chunk_coord.x, chunk_coord.y]
 
 
 func _planted_trees_path(chunk_coord: Vector2i) -> String:
