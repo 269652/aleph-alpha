@@ -80,6 +80,10 @@ const WorldCoordinates = preload("res://src/world/world_coordinates.gd")
 const EarthChunkGenerator = preload("res://src/world/earth_chunk_generator.gd")
 const TerrainPassability = preload("res://src/gameplay/terrain_passability.gd")
 const EarthChunkManager = preload("res://src/world/earth_chunk_manager.gd")
+const HouseInteriorView = preload("res://src/rendering/house_interior_view.gd")
+const BuildingCatalog = preload("res://src/gameplay/building_catalog.gd")
+const HouseDecor = preload("res://src/gameplay/house_decor.gd")
+const PixelNoise = preload("res://src/rendering/pixel_noise.gd")
 const PlayerIdentity = preload("res://src/emergence/player_identity.gd")
 const EntityRef = preload("res://src/emergence/entity_ref.gd")
 const StoneSize = preload("res://src/world/stone_size.gd")
@@ -217,6 +221,17 @@ const PICKAXE_POWER := 1.0
 ## Radius (px) within which the pickup action (default E) sweeps up ground
 ## items -- roughly two tiles, so you grab a small pile around you at once.
 const PICKUP_RADIUS := 34.0
+## Radius (tiles -- EarthChunkManager.building_door_near's own unit) within
+## which standing near a real building's doorstep offers "Enter" -- between
+## PICKUP_RADIUS (~2.1 tiles) and TALK_RADIUS (3 tiles) in magnitude, the
+## same order of "close enough to interact with the specific thing here".
+const ENTER_RADIUS_TILES := 2.0
+## Warmth indoors (docs/concept/building.md "Entering": "warmth indoors is
+## a constant") -- a real house shelters you from real outdoor cold/heat,
+## so this is deliberately high (SurvivalMeters.warmth's own 1.0 default
+## is "perfectly warm"), not a copy of whatever the real outdoor
+## ambient_warmth happens to be right now.
+const INDOOR_AMBIENT_WARMTH := 0.8
 ## How long the weapon's swing animation plays, in seconds -- shorter than
 ## ATTACK_COOLDOWN so the blade snaps back to rest before the next swing can
 ## start, rather than looking like it's still mid-swing when idle.
@@ -358,6 +373,20 @@ var _current_floor := 0
 ## Edge-detection for stepping onto a real wood_stairs cell -- without
 ## this, standing still ON one would toggle floors every physics frame.
 var _was_on_stairs := false
+
+## Enterable house interiors (docs/concept/building.md "Entering"): null
+## outdoors, the real HouseInteriorView scene the player is currently
+## inside once enter_building has run. World position keeps changing
+## normally the whole time this is set (unlike the two-story floor switch,
+## which stays at the same world position -- an interior is a real,
+## separate place) -- see is_indoors/enter_building/exit_building.
+var _interior_view: HouseInteriorView = null
+## Edge-detection for the "enter" action, the exact same shape
+## _was_on_stairs already uses above -- without this, holding the key
+## down while standing on a doorstep/exit cell would toggle indoors/
+## outdoors every physics frame.
+var _enter_key_was_pressed := false
+
 var survival := SurvivalMeters.new()
 ## The player's own real, live, unified body mass -- see docs/concept/
 ## metabolism.md's "one real mass per creature" pillar, applied to the
@@ -2259,6 +2288,15 @@ func _authority_step(delta: float) -> void:
 			_respawn()
 		return  # frozen in place until the respawn timer above fires
 
+	# Own dedicated action, always running regardless of indoors/outdoors --
+	# the same shape Talk/Pick already have (see docs/concept/building.md
+	# "Entering").
+	_enter_exit_step()
+
+	if is_indoors():
+		_authority_step_indoors(delta)
+		return
+
 	var tile := current_tile()
 	var water_result := _resolve_water_state(tile, delta)
 	current_mode = water_result.mode
@@ -2326,6 +2364,158 @@ func _authority_step(delta: float) -> void:
 	_shop_step(delta)
 	_action_slots_step()
 	_talk_step(delta)
+
+
+## Enterable house interiors (docs/concept/building.md "Entering"): the
+## indoors half of _authority_step, reached only when is_indoors() is
+## true. Skips every terrain/water/weather/wrap/ripple/footstep/build/
+## destroy/plant/fish/floor-transition/kick concern -- none of them mean
+## anything inside a small authored room with its own real collision --
+## and keeps movement, the character view, survival/metabolism (warmth
+## held at INDOOR_AMBIENT_WARMTH instead of the real outdoor
+## ambient_warmth), mana/spell status, talking, inventory (pickup/stash/
+## action slots), combat and status effects (food buff/venom/mushroom
+## toxin/sickness) exactly as outdoors -- none of those are terrain/
+## water/weather/build/destroy concerns, so there is no reason to gate
+## them just because the player happens to be inside a house right now.
+func _authority_step_indoors(delta: float) -> void:
+	current_mode = "walking"
+	current_water_depth = 0.0
+	current_speed_multiplier = ConditionPenalty.speed_multiplier(survival.fitness) * _spell_speed_multiplier()
+
+	var input_direction := _read_local_input() if _controlled_locally() else _pending_input_direction
+	var desired_velocity := input_direction * current_speed() * current_speed_multiplier
+	if is_rooted():
+		desired_velocity = Vector2.ZERO
+	velocity = _knockback_velocity(desired_velocity, delta)
+	move_and_slide()
+
+	_last_facing_direction = input_direction if input_direction.length() > 0.01 else _last_facing_direction
+	_update_character_view(input_direction)
+
+	survival.advance(delta)
+	var activity := Metabolism.ACTIVITY_MOVING if input_direction.length() > 0.01 else Metabolism.ACTIVITY_RESTING
+	_metabolism.advance(delta, activity)
+	_regen_mana(delta)
+	_spell_status_step(delta)
+	_shield_step(delta)
+	_cast_message_step(delta)
+	survival.regulate_temperature(INDOOR_AMBIENT_WARMTH, wetness, delta)
+
+	_attack_step(delta)
+	_cast_step()
+	_pickup_step(delta)
+	_stash_step()
+	_food_buff_step(delta)
+	_venom_step(delta)
+	_mushroom_toxin_step(delta)
+	_sickness_step(delta)
+	_shop_step(delta)
+	_action_slots_step()
+	_talk_step(delta)
+
+
+## Whether the player is currently inside a real house interior (see
+## enter_building/exit_building) -- World's own "Leave"-vs-"Enter" prompt
+## check, and the seam creature_marker.gd's own predator-targeting gate
+## reads (docs/concept/building.md "Entering": "predators do not target
+## an indoor player").
+func is_indoors() -> bool:
+	return _interior_view != null
+
+
+## Whether standing here, right now, indoors would actually leave (the
+## same real check _enter_exit_step's own indoor branch uses) -- World's
+## own "Leave" prompt needs this rather than merely is_indoors(), since a
+## room's own door/exit cell is one specific spot, not the whole room.
+func can_leave_building() -> bool:
+	return _interior_view != null and _interior_view.is_on_exit(position)
+
+
+## Swaps the player into `interior_view` (already built -- see
+## _enter_exit_step) -- flips collision_mask to HouseInteriorView's own
+## INTERIOR_COLLISION_LAYER and lifts z_index above it (the two-story
+## floor switch's own mechanism, _floor_transition_step), and places the
+## player one cell INSIDE the door (not on top of it -- landing exactly
+## on the door/exit cell would let the very next _enter_exit_step call
+## immediately trigger Leave again before the player ever sees the room).
+func enter_building(interior_view: HouseInteriorView) -> void:
+	_interior_view = interior_view
+	collision_mask = HouseInteriorView.INTERIOR_COLLISION_LAYER
+	z_index = HouseInteriorView.INTERIOR_OCCUPANT_Z_INDEX
+	position = interior_view.position + (Vector2(interior_view.door_cell) + Vector2(0.5, -0.5)) * _tile_size
+
+
+## Leaves the current interior (a safe no-op if not indoors) -- restores
+## whichever OUTDOOR collision layer/z-index was active before entering
+## (_current_floor's own already-tracked ground/upper state -- entering a
+## building and the legacy two-story stairs mechanism are unrelated, so
+## exiting must not silently force the player back to the ground floor if
+## they happened to be upstairs in a different, older house before
+## walking over here), and puts the player back exactly on the house's
+## real world doorstep.
+func exit_building() -> void:
+	if _interior_view == null:
+		return
+	position = _interior_view.exit_world_position
+	_interior_view = null
+	collision_mask = (
+		EarthChunkManager.UPPER_FLOOR_COLLISION_LAYER if _current_floor == 1
+		else EarthChunkManager.GROUND_FLOOR_COLLISION_LAYER
+	)
+	z_index = EarthChunkManager.UPPER_FLOOR_OCCUPANT_Z_INDEX if _current_floor == 1 else 0
+
+
+## "Enter"/"Leave" (docs/concept/building.md "Entering") -- its own
+## dedicated action ("enter"), always running regardless of indoors/
+## outdoors, the same shape Talk/Pick already have. Edge-detected via
+## _enter_key_was_pressed (the exact _was_on_stairs pattern
+## _floor_transition_step already uses) rather than Godot's own
+## just_pressed, so holding the key down never repeatedly toggles
+## indoors/outdoors every physics frame. Outdoors: standing on a real
+## building's own doorstep enters it, picking a deterministic pseudo-
+## occupation from the house's own seed for furniture theming (see
+## InteriorTemplates.furnish) -- the real resident's own occupation isn't
+## wired onto the building record yet (a named, small follow-up; see
+## docs/progress.md), so this is seed-varied rather than tied to a
+## specific villager for now. Indoors: standing on the interior's own
+## exit cell leaves. A single action covers both directions since the two
+## states are mutually exclusive by construction.
+func _enter_exit_step() -> void:
+	var pressed := Input.is_action_pressed("enter")
+	var just_pressed := pressed and not _enter_key_was_pressed
+	_enter_key_was_pressed = pressed
+	if not just_pressed:
+		return
+
+	if is_indoors():
+		if _interior_view.is_on_exit(position):
+			exit_building()
+		return
+
+	if _chunk_manager == null:
+		return
+	var record: Dictionary = _chunk_manager.building_door_near(position, ENTER_RADIUS_TILES)
+	if record.is_empty():
+		return
+	var building_id: String = record["id"]
+	var interior_family := BuildingCatalog.interior_family_of(building_id)
+	var seed_value: int = record["seed"]
+	var occupations := HouseDecor.FURNITURE_SET_BY_OCCUPATION.keys()
+	var occupation: String = occupations[PixelNoise.range_index(seed_value, 0, 1, occupations.size())]
+	var doorstep_global: Vector2i = record["doorstep_global"]
+	var doorstep_world := (Vector2(doorstep_global) + Vector2(0.5, 0.5)) * _tile_size
+
+	var interior_view := HouseInteriorView.new()
+	var renderer := _chunk_manager.terrain_renderer()
+	# Added under the SAME parent Player itself lives under (World adds
+	# Player as a child of a real world-space node -- see World's own
+	# player-spawning code) rather than a UI layer: HouseInteriorView is a
+	# real world-space scene (illustrated tiles, real collision, a real
+	# z-index relative to the rest of the world), not screen-space UI.
+	get_parent().add_child(interior_view)
+	interior_view.build(interior_family, occupation, seed_value, doorstep_world, renderer.build_tile_set(), _tile_size, renderer)
+	enter_building(interior_view)
 
 
 ## Combined weather + exposure movement penalty (see WeatherModel /

@@ -25,6 +25,7 @@ const QuestLogWindow = preload("res://scenes/quest_log_window.gd")
 const ConversationWindow = preload("res://scenes/conversation_window.gd")
 const PlayerScene = preload("res://scenes/player.tscn")
 const TerrainRenderer = preload("res://src/rendering/terrain_renderer.gd")
+const HouseInteriorView = preload("res://src/rendering/house_interior_view.gd")
 
 const TILE_SIZE := TerrainRenderer.TILE_SIZE
 const INTERVAL := World.INTERACTION_PROMPT_REFRESH_INTERVAL
@@ -200,3 +201,53 @@ func test_a_throttled_call_leaves_the_prompts_visibility_untouched():
 		"a throttled call must leave the prompt exactly as it was, not overwrite it"
 	)
 	assert_false(visible_after_real_scan, "sanity: the real scan found nothing, so it should have hidden the prompt")
+
+
+# -- Enter/Leave (docs/concept/building.md "Entering") ----------------------
+#
+# _update_interaction_prompt's own gating logic for the two new branches --
+# is_indoors()/can_leave_building() and building_door_near -- called
+# DIRECTLY (bypassing the throttle accumulator, the same "test the real
+# function, not just its gate" split test_world_hud.gd's own doc comment
+# already draws) so these are unaffected by INTERVAL timing.
+
+func test_no_building_nearby_leaves_the_prompt_hidden():
+	world._update_interaction_prompt(player)
+	assert_false(world._interaction_prompt.visible)
+
+
+func test_indoors_but_not_on_the_exit_cell_hides_the_prompt():
+	var view := HouseInteriorView.new()
+	var renderer := TerrainRenderer.new()
+	view.build("cottage", "farmer", 5, Vector2(2000, 2000), renderer.build_tile_set(), TILE_SIZE, renderer)
+	add_child(view)
+	player.enter_building(view)
+	# enter_building already placed the player one full cell inside the
+	# door (16px) -- HouseInteriorView._EXIT_RADIUS_PX (10px) is
+	# deliberately smaller than that gap specifically so this stays false
+	# right after entering.
+	assert_false(player.can_leave_building(), "precondition: freshly entered, not at the door")
+
+	world._update_interaction_prompt(player)
+
+	assert_false(world._interaction_prompt.visible)
+	view.free()
+
+
+## The "shows a real Enter/Leave prompt" cases (standing exactly on a real
+## doorstep/exit cell) are deliberately NOT covered here: both reach
+## _show_interaction_prompt's own get_viewport().get_canvas_transform()
+## call, and world is (correctly, per this whole file's own established
+## convention) never add_child()'d -- World._ready() is genuinely heavy
+## (SelfIntegrity/LicenseGate/a live GitHub check/a full EarthChunkManager)
+## and every test here deliberately avoids triggering it. This is not a
+## gap specific to Enter/Leave: the pre-existing Talk/Pick branches (see
+## this file's own header comment) have never reached that line in any
+## test either, for the identical reason -- confirmed directly, not
+## assumed: a real attempt crashes with "Cannot call method
+## 'get_canvas_transform' on a null value", the exact null-viewport
+## failure mode the lack of add_child() predicts. The GATING logic above
+## (is_indoors/can_leave_building/building_door_near deciding whether to
+## call _show_interaction_prompt at all) is the real, new, tested surface;
+## whether the resulting Label actually renders on screen is exercised in
+## real play, the same as every other prompt this function shows.

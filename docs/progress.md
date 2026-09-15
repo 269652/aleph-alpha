@@ -22310,10 +22310,10 @@ villages at all). `test_earth_chunk_manager_ground_cover.gd`/
 `..._water_reclaims.gd`/`..._buildable_terrain.gd` re-run clean (8/8,
 5/5, 11/11) to confirm the shared occupancy/water seams still hold.
 
-**Named gaps, not silently deferred.** (1) **No enterable interiors
-yet.** A building today is a flat sprite + one solid collision box;
-"small outside, big inside" (the whole point of the original request) is
-slice 4, unstarted — no `HouseInteriorView`, no player indoors state. (2)
+**Named gaps, not silently deferred.** (1) **~~No enterable interiors
+yet.~~ Shipped 2026-09-15**, see "Enterable interiors" below — a
+building's doorstep now really does lead to "small outside, big inside".
+(2)
 **Player building is untouched.** Blueprint construction still runs
 entirely on the old per-tile `BuildingPiece` pipeline described above;
 the re-route to `place_building` is slice 5, unstarted. (3)
@@ -22521,3 +22521,123 @@ world registry, road layout, VillageRenderer rewrite, NPC hide-at-home,
 one house id, old-save migration. Remaining: slice 4 (enterable
 interiors — `HouseInteriorView`, player indoors state) and slice 5
 (player blueprint re-route to `place_building`).
+
+### Enterable interiors: "small outside, big inside" (`concept/building.md` "Entering", 2026-09-15)
+
+The headline of the original request — "the player can enter buildings
+or houses which would then load and switch to the interior scene... so a
+House small from the outside would be big inside" — is real now.
+Standing on a real building's doorstep and pressing "enter" (a new
+dedicated action, default `N` — every other single letter's default was
+already claimed by something else) swaps the player into a real,
+furnished room while they keep moving in ordinary world coordinates the
+whole time: chunk streaming, NPC schedules and the clock never stop, the
+same "not a pause" property the two-story floor switch already had.
+
+**`InteriorTemplates`** (`src/gameplay/interior_templates.gd`): a real,
+hand-authored room shape per `BuildingCatalog` interior_family (cottage/
+house/manor), 3 variants each (9 real grids total), seed-picked so the
+same house always gets the same interior on every visit. Furniture THEME
+is composed in rather than hand-duplicated per occupation: each shape's
+furniture slots are filled from `HouseDecor.furniture_set_for(occupation)`
+— the same occupation-reasoned table the old per-tile system already
+used — cycling through the set when a shape has more slots than the set
+has items. This is a deliberate scope adaptation from the plan's literal
+"3-4 ASCII grids per interior family × occupation" reading (which would
+have meant 24+ near-duplicate hand-typed grids for the same net result):
+shape-variants × furniture-sets gets the same "several variants, real
+occupation theme" outcome from real, already-tested data. Every template
+is validated directly (not spot-checked): fully enclosed, exactly one
+door on the south/last row (matching the exterior's own door-on-the-
+south convention), every non-wall cell reachable from the door by flood
+fill, every furniture slot on an interior floor cell.
+
+**`HouseInteriorView`** (`src/rendering/house_interior_view.gd`): builds
+an `InteriorTemplates` room as a real scene — an opaque backdrop, a
+`TileMapLayer` sharing the MAIN terrain `TileSet` (the exact illustrated
+wall/floor/furniture tiles the rest of the world already draws with, via
+`TerrainRenderer.atlas_coords_for_modification` — no second art
+pipeline), and real `StaticBody2D` collision on every wall AND every
+"blocking" furniture piece (bed/table/bookshelf/couch — chair/rug/photo
+frame stay walkable, the deliberate opposite of `BuildingPiece.
+is_walkable`'s own blanket-true-outdoors rule, since a small interior
+room is meant to be navigated around its own furniture). Positioned so
+the template's own door cell CENTER lands exactly on the house's real
+world doorstep. New `EarthChunkManager.terrain_renderer()` accessor
+returns the world's own already-built renderer (not a fresh one), so
+entering a house never pays to rebuild the shared tile atlas.
+`INTERIOR_COLLISION_LAYER := 4` (layers 1/2 are `GROUND_FLOOR`/
+`UPPER_FLOOR`), `INTERIOR_Z_INDEX`/`INTERIOR_OCCUPANT_Z_INDEX` (10/11,
+above every real world z-index today).
+
+**Player indoors state** (`scenes/player.gd`): `is_indoors()`/
+`enter_building`/`exit_building` are the real state — entering flips
+`collision_mask`/`z_index` to the interior layer (the two-story floor
+switch's own mechanism) and places the player one cell inside the door;
+leaving restores whichever outdoor floor state (`_current_floor`) was
+active before entering, not always ground, since the legacy two-story
+mechanism and building interiors are unrelated, spatially separate
+states. `_authority_step_indoors` (a new sibling of `_authority_step`)
+skips every terrain/water/weather/wrap/ripple/footstep/build/destroy/
+plant/fish/floor-transition/kick concern and keeps movement, the
+character view, survival/metabolism (warmth held at a real
+`INDOOR_AMBIENT_WARMTH` constant instead of real outdoor
+`ambient_warmth`), mana/spells, talking, inventory, combat and status
+effects exactly as outdoors. `_enter_exit_step`, its own always-running
+step (the same shape Talk/Pick already have), is edge-detected via
+`_enter_key_was_pressed` — the exact `_was_on_stairs` pattern
+`_floor_transition_step` already uses, not Godot's own `just_pressed` —
+so holding the key never repeatedly toggles indoors/outdoors.
+
+**World** (`scenes/world.gd`): `_update_interaction_prompt` gains
+"Enter"/"Leave" — indoors, it's the ONLY branch (no indoor NPC exists
+yet, see the gap below), checked via `Player.can_leave_building()` (near
+the exact exit cell, not merely "somewhere in the room"); outdoors, it
+checks ahead of Talk (no real conflict in practice — an NPC "at home" is
+hidden, see the NPC-hide entry above).
+
+**Predator targeting** (`src/rendering/creature_marker.gd`): a new
+`_outdoor_players_near(radius)` is now the ONE choke point both real
+per-tick `PLAYER_GROUP` reads already shared (stimulus sensing and the
+`fears_players` caution radius), excluding an indoor player from being
+perceived as a threat at all — not merely unreachable once a creature
+has already decided to hunt them, which would still read as pathing up
+to and idling at a wall.
+
+**A real bug caught while writing tests, not merely a test-only fix:**
+the interior's own exit radius (24px) was larger than the one-tile gap
+`enter_building` places the player from the door (16px), so a player
+read as "already at the exit" the instant they walked in — fixed to
+10px, deliberately smaller than that gap.
+
+Red-first throughout (branch `feat/anno-buildings-interiors` off
+`feat/anno-buildings`'s own merge into `main`): `test_interior_templates.gd`
+12/12, `test_house_interior_view.gd` 10/10, `test_player.gd` +18 new
+cases (7/7 + 10/10 scoped runs; stairs/floor tests unaffected 5/5),
+`test_creature_marker.gd` full file 252/252 (`StubPlayer` gained a real
+`is_indoors()` default so every existing PLAYER_GROUP test kept working
+unchanged), `test_world_interaction_prompt_throttle.gd` 9/9,
+`test_earth_chunk_manager_buildings.gd` 19/19, `test_keybindings.gd`
+19/19 (generic over the registry, needed no changes for the new action).
+
+**Named gaps, honestly, not silently dropped:** (1) **Furniture theme is
+seed-varied, not tied to the real resident's own occupation.** The
+building record has no `occupation` field (only `id`/`facing`/`seed`/
+`condition`/`progress`/`owner_household_id`), so `_enter_exit_step`
+derives a deterministic pseudo-occupation from the house's own seed
+instead — a small, real, well-scoped follow-up (add `occupation` to
+`place_building`'s signature and `Chunk.buildings`' own record, passed
+from `VillageRenderer.spawn_village`'s already-known `npcs[building_index]
+.occupation`). (2) **"Residents inside" is not built** — the plan's own
+explicitly-optional feature ("when entering, if the house's villager is
+hidden 'at home', the interior spawns its CharacterView... so the house
+isn't empty at night") is skipped this pass; an entered house is always
+empty regardless of whether its own villager is home. (3) **A full
+`test_player.gd` run was still in progress at the time of the commit
+that shipped this** (the file is large — a real `Player` + real
+`EarthChunkManager` construction per test) — every SCOPED run covering
+the new/adjacent behavior passed; the full run's result will be
+confirmed before this branch merges to `main`.
+
+Slice 5 (player blueprint build re-routed to `place_building`) remains
+the one unstarted piece of the original plan.

@@ -978,14 +978,14 @@ func _process(frame_delta: float) -> void:
 		# threatened by other creatures, and neither rule lives in this scan
 		# any more.
 		_cached_stimuli = _scan_stimuli.duplicate()
-		for player in _nearby_in_group(PLAYER_GROUP, threat_radius):
+		for player in _outdoor_players_near(threat_radius):
 			_cached_stimuli.append(_stimulus_for(player, Ethogram.PLAYER))
 		_cached_stimuli.append_array(_scan_carrion_stimuli())
 		_cached_stimuli.append_array(_scan_smoke_stimuli())
 		_append_tile_stimuli(_cached_stimuli)
 		_cached_threats = _nodes_of(_behavior.threats(_decision_context(null)))
 		_cached_caution_threats = (
-			_nearby_in_group(PLAYER_GROUP, CAUTION_RADIUS) if fears_players() else []
+			_outdoor_players_near(CAUTION_RADIUS) if fears_players() else []
 		)
 		_cached_blockers = _blockers_near(BLOCKER_SCAN_RADIUS)
 		_cached_nearby_herbivores = _nearby_herbivore_creatures()
@@ -2828,6 +2828,22 @@ func _nearby_in_group(group: String, radius: float = SENSE_RADIUS) -> Array:
 			continue
 		if position.distance_to(node.position) <= radius:
 			result.append(node)
+	return result
+
+
+## _nearby_in_group(PLAYER_GROUP, ...), excluding a player who is currently
+## indoors (docs/concept/building.md "Entering": "predators do not target
+## an indoor player") -- the ONE choke point both real per-tick uses of
+## PLAYER_GROUP already share (stimulus sensing and the fears_players
+## caution radius), so an indoor player is never perceived as a threat/
+## stimulus to react to in the first place, rather than merely being
+## unreachable once a creature has already decided to hunt them (which
+## would still read as the creature pathing up to and idling at a wall).
+func _outdoor_players_near(radius: float) -> Array:
+	var result: Array = []
+	for player in _nearby_in_group(PLAYER_GROUP, radius):
+		if not player.is_indoors():
+			result.append(player)
 	return result
 
 

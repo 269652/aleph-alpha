@@ -193,6 +193,45 @@ for a house returns in the construction-over-time pass. See Status.
   draws a roof-over-walls box of the right footprint so the system is
   playable and testable without art.
 
+### Status
+
+- ✅ **Catalog + world registry.** `BuildingCatalog`, `Chunk.buildings`,
+  `EarthChunkManager.place_building`/`remove_building`/`building_at_global`/
+  `buildings_in_chunk`/`building_door_near`, real node + collision, water
+  reclaim on load. Tested (`test_building_catalog.gd`,
+  `test_earth_chunk_manager_buildings.gd`).
+- ✅ **Village layout.** `VillageLayout`'s real road-frontage placement;
+  `VillageRenderer` rewritten around it end to end — chooses each
+  villager's house, places real buildings before roads (a real ordering
+  bug found and fixed here, see `docs/progress.md`), sets each NPC's home
+  to its real doorstep, hides a villager once they've actually arrived
+  home, is idempotent across reloads (a real duplication bug found and
+  fixed, see `docs/progress.md`). Village houses own real property
+  through the same `ConstructionProject`/`HouseholdStore` scheme the
+  player's own houses use ("one house id").
+- ✅ **Older saves.** A settlement chunk still carrying old-style
+  piece-built houses has them wiped once on load and regenerates as
+  whole-building entities in the same load, protecting any player-owned
+  piece structure at the same site.
+- ✅ **Entering.** `InteriorTemplates` (real authored room shapes ×
+  occupation-themed furniture) + `HouseInteriorView` (the real scene:
+  backdrop, shared-tile-set floor/wall/furniture, real collision) +
+  player indoors state (`is_indoors`/`enter_building`/`exit_building`,
+  `_authority_step_indoors`) + World's "Enter"/"Leave" prompt + the
+  predator-targeting gate. Tested end to end (`test_interior_templates.gd`,
+  `test_house_interior_view.gd`, `test_player.gd`, `test_creature_marker.gd`,
+  `test_world_interaction_prompt_throttle.gd`). Two named, honest gaps:
+  furniture theme is seed-varied rather than tied to the real resident's
+  own occupation (the building record carries no `occupation` field yet
+  — a small, well-scoped follow-up); "Residents inside" (spawning the
+  hidden-at-home villager's own `CharacterView` in their furnished room)
+  is not built, an explicitly-optional piece of the original plan.
+- ⬜ **Player building re-route.** Blueprint construction still runs
+  entirely on the legacy per-tile `BuildingPiece` pipeline below —
+  `HOUSE_BLUEPRINT_SHAPE_BY_RECIPE_ID` → `BUILDING_ID_BY_RECIPE_ID` and a
+  `place_building` call in place of `stamp_structure_at_global` is the
+  one piece of the original plan not yet started.
+
 ## Legacy: structure building from pieces (older player-built structures only)
 
 Everything from here to "Persistence" describes the per-tile piece model

@@ -2922,9 +2922,33 @@ func _update_interaction_prompt(local_player: Player) -> void:
 		_interaction_prompt.visible = false
 		return
 
+	# Enterable house interiors (docs/concept/building.md "Entering") --
+	# indoors, the ONLY real prompt is "Leave", and only right on the
+	# interior's own exit cell (can_leave_building, not merely
+	# is_indoors -- a room is bigger than its own doorway). No indoor NPC
+	# exists yet (see "Residents inside", a named, deferred follow-up), so
+	# nothing else in this chain applies while indoors.
+	if local_player.is_indoors():
+		if local_player.can_leave_building():
+			_show_interaction_prompt(
+				"Leave (%s)" % OS.get_keycode_string(_keybindings.keycode_for("enter")), local_player.position
+			)
+		else:
+			_interaction_prompt.visible = false
+		return
+
 	var npc = _chunk_manager.nearest_npc_near(local_player.position, Player.TALK_RADIUS)
 	if npc != null:
 		_show_interaction_prompt("Talk (%s)" % OS.get_keycode_string(_keybindings.keycode_for("talk")), npc.position)
+		return
+
+	var door_record: Dictionary = _chunk_manager.building_door_near(local_player.position, Player.ENTER_RADIUS_TILES)
+	if not door_record.is_empty():
+		var doorstep_global: Vector2i = door_record["doorstep_global"]
+		var doorstep_pixel := (Vector2(doorstep_global) + Vector2(0.5, 0.5)) * TerrainRenderer.TILE_SIZE
+		_show_interaction_prompt(
+			"Enter (%s)" % OS.get_keycode_string(_keybindings.keycode_for("enter")), doorstep_pixel
+		)
 		return
 
 	# Something already in hand: E is now dedicated to charge/release (see
