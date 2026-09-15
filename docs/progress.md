@@ -22310,31 +22310,28 @@ villages at all). `test_earth_chunk_manager_ground_cover.gd`/
 `..._water_reclaims.gd`/`..._buildable_terrain.gd` re-run clean (8/8,
 5/5, 11/11) to confirm the shared occupancy/water seams still hold.
 
-**Named gaps, not silently deferred — three later slices in the same
-plan.** (1) **No enterable interiors yet.** A building today is a flat
-sprite + one solid collision box; "small outside, big inside" (the whole
-point of the request) is slice 4, unstarted — no `HouseInteriorView`, no
-player indoors state. (2) **Player building is untouched.** Blueprint
-construction still runs entirely on the old per-tile `BuildingPiece`
-pipeline described above; the re-route to `place_building` is slice 5,
-unstarted. (3) **~~Village houses currently carry no owner.~~ Fixed
-2026-09-15, see the dated entry below ("One house id, wired").**
-`chunk.buildings`' own `owner_household_id` field is STILL always ""
-(unrelated dead-on-read field, see that entry) — the real fix routes
-through `HouseholdStore`/`ConstructionProjectStore` instead, the channel
-every other reader (taxation, resident happiness) actually uses. (4)
-**Old-save migration is not built.** A settlement chunk whose houses were
-piece-stamped by an earlier save still renders and behaves as pieces on
-load — nothing yet detects and regenerates it as whole-building entities;
-only a FRESH settlement (never before visited under the old code) gets
-the new model today. (5)
-**No NPC hide-when-home.** A villager whose schedule says `home` still
-stands visibly on their own doorstep rather than disappearing inside,
-unlike the conversion-worker table precedent this was meant to follow.
-None of these block what shipped: a fresh village today places real,
-collidable, road-fronted whole-building houses with varied ids per
-occupation — the four gaps above are exactly the plan's remaining slices,
-not scope quietly dropped.
+**Named gaps, not silently deferred.** (1) **No enterable interiors
+yet.** A building today is a flat sprite + one solid collision box;
+"small outside, big inside" (the whole point of the original request) is
+slice 4, unstarted — no `HouseInteriorView`, no player indoors state. (2)
+**Player building is untouched.** Blueprint construction still runs
+entirely on the old per-tile `BuildingPiece` pipeline described above;
+the re-route to `place_building` is slice 5, unstarted. (3)
+**~~Village houses currently carry no owner.~~ Fixed 2026-09-15**, see
+"One house id, wired" below. `chunk.buildings`' own `owner_household_id`
+field is STILL always "" (unrelated dead-on-read field, see that entry)
+— the real fix routes through `HouseholdStore`/`ConstructionProjectStore`
+instead, the channel every other reader (taxation, resident happiness)
+actually uses. (4) **~~Old-save migration is not built.~~ Fixed
+2026-09-15**, see "Old-save migration" below — a settlement chunk whose
+houses were piece-stamped by an earlier save now has them wiped and
+regenerated as whole-building entities on the next load. (5)
+**~~No NPC hide-when-home.~~ Fixed 2026-09-15**, see "NPCs hide while
+home" below.
+This closes out slice 3 of the plan in full (world registry, road
+layout, VillageRenderer rewrite, NPC hide-at-home, one house id,
+old-save migration) — slices 4 (interiors) and 5 (player building
+re-route) remain, as (1) and (2) above name.
 
 ### One house id, wired: village houses now own property through the same ConstructionProject the player's own houses use (2026-09-15)
 
@@ -22386,3 +22383,141 @@ after. Re-ran the three pre-existing settlement-founding/household tests
 that predate this change directly against the new code to confirm zero
 behavior change for the 2-argument form. `test_village_renderer.gd` full
 file 28/28.
+
+### NPCs hide while home (`concept/building.md`, 2026-09-15)
+
+`NpcMarker._process` now sets `visible = false` once an NPC has actually
+arrived (within 1px) at `home_position` on a `"home"`-tagged schedule
+entry, `visible = true` otherwise — keyed on the tag itself, not merely
+"arrived somewhere", so standing at a shared landmark (the stall) never
+hides an NPC, and the urgent-hunger interrupt (which always redirects to
+`"well"`) correctly makes a hungry NPC reappear even if they were home
+when hunger crossed the threshold. `home_position` is now a real house's
+doorstep (see the VillageRenderer rewrite above), so a villager idling/
+sleeping in plain view on their own doorstep every day/night read as
+sleeping outside the front door. Mirrors `EarthChunkManager`'s existing
+conversion-worker "hidden while working inside a structure" pattern
+(`CONVERSION_WORKER_BY_STRUCTURE`/`_sync_conversion_worker`), one rule
+per NPC instead of a table of structures — `CharacterView` and the drop
+shadow are children of `NpcMarker` (`VillageRenderer._build_npc`), so
+Godot's own visibility cascade hides both for free. Tested: 5 new cases
+in `test_npc_marker.gd` (arrived-home-invisible, still-walking-visible,
+at-landmark-visible, reappears-off-home, hunger-interrupt-visible), full
+file 31/31; `test_village_renderer.gd` re-run clean, 27/27 at the time —
+no NpcMarker-visibility assumption anywhere in that suite.
+
+### Two critical bugs: real villages placed zero buildings, and duplicated on every reload (2026-09-15)
+
+Found and fixed while building the old-save migration entry below —
+neither was theorized, both were caught by a real, end-to-end
+`EarthChunkManager` probe against real Earth terrain, something
+`test_village_renderer.gd`'s own `StubWorld`-based suite had never done.
+Both shipped on `feat/anno-buildings`, not yet on `main` at the time of
+writing (see this doc's own top-of-entry note once merged).
+
+**Bug 1: `place_building` refused every real placement, unconditionally.**
+`VillageRenderer.spawn_village` stamped every road cell
+(`world.build_at_global`) BEFORE calling `world.place_building` for that
+street's plots. A plot's own doorstep is ALWAYS one of `VillageLayout`'s
+own `road_cells` (the doorstep IS a road cell, by design), so by the time
+`place_building` ran, its own doorstep was already a non-empty
+`chunk.modifications` entry (`"trail"`) — and `place_building`'s own
+occupancy check (every required cell, footprint AND doorstep, must be
+unmodified) refused every single placement, for every plot, in every
+real village, unconditionally. A real, hash-confirmed, grassland-biome
+settlement chunk near Berlin placed 0/5 buildings before the fix, 5/5
+after, with no other change. `test_village_renderer.gd`'s own
+`StubWorld` could never have caught this: its `build_at_global` recorded
+road cells into a SEPARATE dict from the one `modification_at_global`
+read, so the two never collided there the way real
+`chunk.modifications` makes them collide. Fixed by placing buildings
+BEFORE stamping roads (a plot's doorstep is exactly where its own road
+cell already is once `VillageLayout` has computed the layout, so
+reordering changes nothing about WHERE anything ends up). The stub
+itself was also fixed, not just source: `StubWorld.place_building` now
+performs the same real occupancy check `EarthChunkManager.place_building`
+does, and both it and `build_at_global`/`modification_at_global`
+consistently key `occupied_cells` by GLOBAL coordinates (`place_building`'s
+own writes had silently been LOCAL-keyed even before this session,
+guaranteed never to collide with `build_at_global`'s GLOBAL keys for any
+real `chunk_coord`). New regression test
+`test_a_buildings_own_doorstep_road_cell_never_blocks_its_own_placement`,
+verified red (0/5) against the pre-fix ordering via a real stash/restore
+cycle, green (5/5) after.
+
+**Bug 2: a settlement grew a second set of houses on every reload.**
+`Chunk.buildings` persists, but nothing told `spawn_village` a fresh
+`VillageLayout` attempt's preferred spots were already ITS OWN earlier
+placements — it just found other clear ground nearby (real chunks have
+plenty) and placed there too, without ever removing the first set.
+Confirmed via a real unload/reload probe: a real village went from 5
+buildings to 7 on its very next reload. Root cause: NPCs/landmarks/
+market are never persisted by design (`spawn_village`'s own doc comment:
+"a chunk reload regenerates an empty market") — correct for those, but
+buildings ARE persisted, so the same blanket "regenerate everything
+fresh" no longer held once whole-building houses entered this same
+regeneration path. Fixed: `spawn_village` now checks
+`world.buildings_in_chunk(chunk_coord)` before touching placement at
+all. Empty (a genuinely first load) runs `VillageLayout` and places
+buildings exactly as before (extracted into `_place_new_village`).
+Non-empty (a reload) skips `VillageLayout`/`place_building` entirely and
+recovers each villager's OWN building instead
+(`_recover_existing_village`), matching NPC index to building record by
+the SAME deterministic per-index seed `place_building` was given the
+first time — no new persistence needed, since that seed already uniquely
+identifies "villager i's own house". `StubWorld` gained a real
+`buildings_in_chunk` (mirroring the production shape, derived from its
+own `place_calls`) so a second `spawn_village` call against the same
+stub genuinely exercises the reload path; new test
+`test_reloading_a_settlement_does_not_place_a_second_set_of_buildings`
+calls `spawn_village` twice and asserts `place_calls` never grows on the
+second call.
+
+Both fixes re-verified together: `test_village_renderer.gd` full suite
+30/30, `test_earth_chunk_manager_buildings.gd` 18/18,
+`test_village_layout.gd` 15/15, `test_building_catalog.gd` 19/19.
+
+### Old-save migration (`concept/building.md` "Older saves", 2026-09-15)
+
+A settlement chunk that still carries OLD-STYLE piece-built houses (real
+`BuildingPiece` cells in `chunk.modifications`, from before whole-building
+village houses existed) now has them wiped once on load, and the village
+regenerates as real whole-building entities in the SAME load — completing
+`concept/building.md`'s "Older saves" promise, the last piece of slice 3.
+
+`EarthChunkManager._migrate_piece_village_to_buildings_if_stale` mirrors
+`_reclaim_pieces_standing_in_water`'s own "detect stale state, mutate,
+persist if changed" shape exactly, run at the same point in `_load_chunk`
+(right after the two existing water-reclaim calls, before withering
+catch-up). Detected the same way every other "stale persisted state" pass
+in this file is: `chunk.buildings` is still empty. A player-built piece
+structure at the same site is protected: every local cell inside a
+COMPLETE `ConstructionProject` owned by the player's own household
+(`_player_owned_piece_cells_in_chunk`, mirroring `_house_furniture_count`'s
+own established "recipe -> HouseBlueprint shape -> footprint" derivation)
+is excluded, the same way the water reclaim already excludes
+`CATEGORY_DAM` from its own universal rule.
+
+Building this suite against the real `EarthChunkManager` end to end
+(rather than a stub) is what surfaced the two critical bugs immediately
+above — this migration suite's own real fixture is what caught them, not
+a separate investigation.
+
+Red-first (`test_earth_chunk_manager_village_migration.gd`, 7/7):
+old-style pieces wiped on first load; the village regenerates as real
+buildings in the same load; a chunk with no old-style pieces is
+unaffected; a second load after migration does not re-touch anything; a
+player-owned piece house survives migration untouched; an unrelated old
+NPC house is wiped even when the player owns a different one nearby; a
+non-player household's project does not protect its cells. Fixture finds
+a real, hash-confirmed, grassland-biome settlement chunk near Berlin (the
+same lat/lon -> tile conversion `test_earth_chunk_manager_buildings.gd`'s
+own fixture uses) rather than assuming an arbitrary coordinate's real
+terrain, cached at the script level so the whole file pays for the real
+terrain scan once, not per test.
+
+This closes slice 3 of the Anno-style buildings plan in full: catalog,
+world registry, road layout, VillageRenderer rewrite, NPC hide-at-home,
+one house id, old-save migration. Remaining: slice 4 (enterable
+interiors — `HouseInteriorView`, player indoors state) and slice 5
+(player blueprint re-route to `place_building`).
