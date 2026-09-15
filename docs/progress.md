@@ -5812,11 +5812,17 @@ own top section, "Buildings are entities; interiors are scenes"), NPC
 village houses no longer go through ANY of it: `VillageRenderer` now calls
 `BuildingCatalog`/`VillageLayout`/`EarthChunkManager.place_building`
 instead of `HouseBlueprint`/`_stamp_house`/`_fit_house` (all deleted from
-the renderer). `HouseBlueprint` itself, `house_blueprint.gd`'s sibling
-`building_blueprint.gd`, and `ProceduralHouseSprite` are deleted outright —
-grep-confirmed zero live callers beyond their own tests. The piece
-mechanism remains exactly as documented below for player-built structures
-only, unchanged and still live, until the pending player-blueprint re-route
+the renderer — `HouseBlueprint` itself, `house_blueprint.gd`, is
+otherwise untouched and still fully live: it is now used ONLY by
+player-built structures). **Correction (same day):** an earlier version
+of this note wrongly said `house_blueprint.gd` itself was deleted — it
+was not; the file actually deleted was its more limited, separately-named
+sibling `building_blueprint.gd` (multi-tile footprint fit only, no
+pieces/enclosure — see the "Structure building" bullet below for how the
+two differ), alongside `ProceduralHouseSprite`, both grep-confirmed to
+have zero live callers beyond their own tests. The piece mechanism
+remains exactly as documented below for player-built structures only,
+unchanged and still live, until the pending player-blueprint re-route
 (named a still-open gap in the new dated entry).
 
 - **Tile placement/destruction (building system)** (medium) — ✅ Done — see Phase 3 table above; earth/campfire/furnace are all live, wired to `Player._build_step`/`_arm_placeable`, persisted across unload/reload.
@@ -22280,10 +22286,14 @@ and sets each NPC's home/stand position to the plot's real doorstep — no
 more `_stamp_house`/`_fit_house`/`_find_clear_origin`/window-light nodes,
 all deleted along with the `HouseBlueprint` import. Landmarks, the
 merchant personal stand, workspot props, and shared-market wiring are
-otherwise unchanged. `house_blueprint.gd`, its sibling
-`building_blueprint.gd` (multi-tile footprint fit only, no pieces), and
-`procedural_house_sprite.gd` are deleted outright, each grep-confirmed to
-have zero live callers left beyond their own tests (also deleted).
+otherwise unchanged — `house_blueprint.gd` itself is untouched and stays
+fully live, now serving player-built structures only (see the correction
+note at the top of this doc's "Building" section: an earlier version of
+this entry wrongly said this file was deleted). What IS deleted outright,
+each grep-confirmed to have zero live callers left beyond their own tests
+(also deleted): `building_blueprint.gd` — a separately-named, more
+limited sibling module (multi-tile footprint fit only, no pieces) — and
+`procedural_house_sprite.gd`.
 
 Red-first throughout, branch `feat/anno-buildings` off `origin/main`,
 pushed before writing code. Tests: `test_building_catalog.gd` 19/19 (ids,
