@@ -66,6 +66,37 @@ func test_every_plots_doorstep_equals_its_origin_plus_the_catalogs_doorstep():
 	assert_eq(plot["facing"], Vector2i(0, 1), "faces south, onto the road")
 
 
+## Every plot reports which ORIGINAL building_ids index it came from -- the
+## caller (VillageRenderer, mapping plots back to the npc that ordered
+## each one) cannot assume placed plots are a plain prefix of the request:
+## a building that fits nowhere is skipped without shifting the indices of
+## the ones behind it.
+func test_every_plot_reports_its_original_building_ids_index():
+	var ids := ["house_small", "house_medium", "house_large"]
+	var result := layout.layout(ids, CHUNK_SIZE, 13, _always_buildable, _never_occupied)
+	assert_eq(result["plots"].size(), 3)
+	var seen_indices := []
+	for plot in result["plots"]:
+		assert_eq(ids[plot["building_index"]], plot["building_id"])
+		seen_indices.append(plot["building_index"])
+	seen_indices.sort()
+	assert_eq(seen_indices, [0, 1, 2])
+
+
+## The actual case building_index exists for: a building that can never
+## fit anywhere (every 3rd column is occupied -- never 4 contiguous free
+## columns for house_large, but plenty of 2-wide gaps for house_small)
+## must not stop LATER, smaller buildings from still being tried and
+## placed with their own real index intact.
+func test_an_unplaceable_building_does_not_block_later_ones_from_their_own_index():
+	var is_occupied := func(cell: Vector2i) -> bool: return cell.x % 3 == 0
+	var ids := ["house_large", "house_small"]
+	var result := layout.layout(ids, CHUNK_SIZE, 14, _always_buildable, is_occupied)
+	assert_eq(result["plots"].size(), 1)
+	assert_eq(result["plots"][0]["building_index"], 1)
+	assert_eq(result["plots"][0]["building_id"], "house_small")
+
+
 func test_no_two_plots_footprints_ever_overlap():
 	var ids := ["house_small", "house_small", "house_small", "house_medium", "house_large", "house_small"]
 	var result := layout.layout(ids, CHUNK_SIZE, 4, _always_buildable, _never_occupied)

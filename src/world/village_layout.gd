@@ -44,6 +44,16 @@ const _EDGE_MARGIN_TILES := 2
 ## random" convention SettlementGenerator's own old ring anchors used.
 const _START_JITTER_TILES := 3
 
+## How many consecutive x positions one building may fail at before this
+## module gives up on it and moves to the next -- generous (several times
+## any real footprint+gap in this catalog) without being "the whole
+## street": a building that is structurally impossible everywhere (an
+## occupancy pattern no width of its own can ever clear) must not consume
+## the ENTIRE remaining street width failing forever, which would leave
+## no room left to even TRY any later, possibly perfectly placeable,
+## building on the same street.
+const _MAX_ATTEMPTS_PER_BUILDING := 12
+
 
 func layout(
 	building_ids: Array, chunk_size: int, seed_value: int, is_buildable: Callable, is_occupied: Callable
@@ -61,21 +71,25 @@ func layout(
 	var street_y := chunk_size / 2
 
 	while index < building_ids.size() and street_y < chunk_size - _EDGE_MARGIN_TILES:
-		var street_first_index := index
+		var progressed_this_street := false
 		var x := _EDGE_MARGIN_TILES + start_jitter
+		var street_end := chunk_size - _EDGE_MARGIN_TILES
 		var street_doorstep_xs: Array = []
 		var deepest_footprint_y := 1
-		while x < chunk_size - _EDGE_MARGIN_TILES and index < building_ids.size():
+		var attempts_for_current_index := 0
+		while x < street_end and index < building_ids.size():
 			var building_id: String = building_ids[index]
 			var footprint := BuildingCatalog.footprint_of(building_id)
 			if footprint == Vector2i.ZERO:
 				index += 1  # an unknown id -- skip it, never stall the street on a typo
+				attempts_for_current_index = 0
 				continue
 			var origin := Vector2i(x, street_y - footprint.y)
 			if _fits(building_id, origin, chunk_size, is_buildable, is_occupied, claimed):
 				var doorstep: Vector2i = origin + BuildingCatalog.doorstep_of(building_id)
 				plots.append({
-					"origin": origin, "building_id": building_id, "facing": Vector2i(0, 1), "doorstep": doorstep,
+					"origin": origin, "building_id": building_id, "building_index": index,
+					"facing": Vector2i(0, 1), "doorstep": doorstep,
 				})
 				for cell in BuildingCatalog.footprint_cells(building_id, origin):
 					claimed[cell] = true
@@ -84,15 +98,28 @@ func layout(
 				deepest_footprint_y = maxi(deepest_footprint_y, footprint.y)
 				x += footprint.x + PLOT_GAP_TILES
 				index += 1
+				progressed_this_street = true
+				attempts_for_current_index = 0
 			else:
 				x += 1
+				attempts_for_current_index += 1
+				if attempts_for_current_index >= _MAX_ATTEMPTS_PER_BUILDING:
+					# Given up on this one for GOOD (see _MAX_ATTEMPTS_PER_
+					# BUILDING's own doc comment: the point is only that it
+					# must not consume an entire street's width failing --
+					# never retried on a later street either, so the cost of
+					# one hopeless building stays bounded at exactly this
+					# many wasted attempts, not "one street per hopeless
+					# building" as more streets open for the ones behind it).
+					index += 1
+					attempts_for_current_index = 0
 		# Connects this street's own frontage -- the span BETWEEN its own
 		# placed doorsteps, not the whole street width past the last house.
 		if street_doorstep_xs.size() > 1:
 			street_doorstep_xs.sort()
 			for rx in range(street_doorstep_xs[0], street_doorstep_xs[street_doorstep_xs.size() - 1] + 1):
 				road_cells[Vector2i(rx, street_y)] = true
-		if index == street_first_index:
+		if not progressed_this_street:
 			break  # this street placed nothing at all -- a further one south won't fare any better
 		street_y += deepest_footprint_y + STREET_GAP_TILES
 
