@@ -12955,6 +12955,20 @@ func building_door_near(pixel_position: Vector2, radius_tiles: float) -> Diction
 	return nearest
 
 
+## The real, already-built TerrainRenderer this manager paints the whole
+## world with -- HouseInteriorView's own real need (docs/concept/
+## building.md "Entering"): its interior TileMapLayer must share the
+## SAME illustrated wall/floor/furniture art the rest of the world
+## already uses, and atlas_coords_for_modification is an instance method,
+## not static. Returning the SAME instance (not a fresh one) matters --
+## TerrainRenderer.build_tile_set() caches its own bake, so a caller that
+## calls .build_tile_set() on THIS instance gets the world's own
+## already-built TileSet back rather than paying to rebuild one from
+## scratch on every single Enter.
+func terrain_renderer() -> TerrainRenderer:
+	return _terrain_renderer
+
+
 ## The building node: a Node2D at the footprint's BOTTOM-CENTRE (so
 ## Y-sorting reads against the building's own base, not its geometric
 ## centre the way _spawn_structure_art_for's single-tile sprites do today

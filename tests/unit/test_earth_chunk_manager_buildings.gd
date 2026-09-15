@@ -252,3 +252,13 @@ func test_a_building_on_dry_ground_survives_a_reload():
 	manager._unload_chunk(_chunk_coord)
 	manager._load_chunk(_chunk_coord)
 	assert_false(manager.building_at_global(_global(_origin).x, _global(_origin).y).is_empty())
+
+
+# -- terrain_renderer(): HouseInteriorView's own real need -----------------
+
+## The SAME instance every load already paints the world with -- not a
+## fresh one -- so a caller building HouseInteriorView.build_tile_set()
+## against it hits TerrainRenderer's own process-wide static cache rather
+## than paying to rebuild the atlas from scratch on every Enter.
+func test_terrain_renderer_returns_the_same_instance_every_call():
+	assert_same(manager.terrain_renderer(), manager.terrain_renderer())

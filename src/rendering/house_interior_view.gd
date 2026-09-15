@@ -124,9 +124,13 @@ func collision_body_at(local: Vector2i) -> StaticBody2D:
 
 ## Whether `pixel_position` (world coordinates) is close enough to this
 ## interior's own door/exit cell to leave from -- World's own "Leave"
-## prompt check, the same one-tile-ish radius Player.TALK_RADIUS/
-## PICKUP_RADIUS use for their own proximity prompts.
-const _EXIT_RADIUS_PX := 24.0
+## prompt check. Deliberately SMALLER than one tile (16px): Player.
+## enter_building places the player one full cell (16px) north of the
+## door on entry, and this must stay false there -- a player who has
+## just walked in must not immediately see (or be able to trigger)
+## "Leave" again before ever really being in the room. Standing back at
+## the door cell itself (0px away) always counts.
+const _EXIT_RADIUS_PX := 10.0
 
 func is_on_exit(pixel_position: Vector2) -> bool:
 	return pixel_position.distance_to(exit_world_position) <= _EXIT_RADIUS_PX

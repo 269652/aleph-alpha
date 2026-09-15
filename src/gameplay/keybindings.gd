@@ -26,6 +26,11 @@ const ACTIONS := [
 	# flat SPRINT_SPEED while held (see Player.current_speed).
 	{"action": "sprint", "label": "Sprint", "default": KEY_SHIFT},
 	{"action": "pickup", "label": "Pick Up Nearby Items", "default": KEY_E},
+	# Deliberately its own action, not folded into "pickup" (E), matching
+	# every other verb's own dedicated action -- see docs/concept/
+	# building.md "Entering". Every letter A-Z already defaults to some
+	# other action except M/N/O; N for "eNter" is a real, available key.
+	{"action": "enter", "label": "Enter / Leave Building", "default": KEY_N},
 	{"action": "kick", "label": "Kick Nearby Stone", "default": KEY_K},
 	# The "put this down" complement to E's "pick this up into hand" (see
 	# docs/concept/stone.md's held-item concept, generalized to any real

@@ -86,12 +86,19 @@ class StubPlayer:
 	var damage_taken := 0.0
 	var venom_applications := 0
 	var disease_bites: Array = []
+	# Real Player.is_indoors() default (docs/concept/building.md
+	# "Entering") -- _outdoor_players_near calls this unconditionally on
+	# every PLAYER_GROUP member, so every existing stub needs a real
+	# answer, not just the tests that care about it.
+	var indoors := false
 	func take_damage(amount: float) -> void:
 		damage_taken += amount
 	func apply_venom() -> void:
 		venom_applications += 1
 	func apply_disease_bite(disease_id: String) -> void:
 		disease_bites.append(disease_id)
+	func is_indoors() -> bool:
+		return indoors
 
 
 ## A rigged CreatureWander whose "no resource in sight, range outward to
@@ -1009,6 +1016,23 @@ func test_strong_aggressive_predator_attacks_a_nearby_player():
 	predator._process(0.2)
 
 	assert_gt(player.damage_taken, 0.0, "a strong predator should damage the player")
+
+
+## docs/concept/building.md "Entering": "Predators do not target an indoor
+## player" -- the same close-range setup as the test directly above (which
+## proves a predator WOULD attack this exact player at this exact
+## distance), but is_indoors() gates the player out of _outdoor_players_
+## near entirely, so the predator never even perceives them as a stimulus
+## to hunt in the first place, let alone attacks.
+func test_a_predator_never_attacks_an_indoor_player_even_at_point_blank_range():
+	var predator := _make_predator(Vector2(100, 100))
+	var player := _add_stub_player(Vector2(108, 100))  # within attack range
+	player.indoors = true
+
+	for i in 20:
+		predator._process(0.2)
+
+	assert_eq(player.damage_taken, 0.0, "an indoor player must never be perceived as a threat to attack")
 
 
 ## See docs/concept/ecosystem_dynamics.md's Species roster -- venomous_snake
