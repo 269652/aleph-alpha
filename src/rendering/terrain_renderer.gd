@@ -12,6 +12,7 @@ const TerrainAtlasCache = preload("res://src/rendering/terrain_atlas_cache.gd")
 const ArtResolution = preload("res://src/rendering/art_resolution.gd")
 const PixelNoise = preload("res://src/rendering/pixel_noise.gd")
 const IllustratedTerrainSprite = preload("res://src/rendering/illustrated_terrain_sprite.gd")
+const IllustratedBuildingPieceSprite = preload("res://src/rendering/illustrated_building_piece_sprite.gd")
 const ProceduralHillshadeSprite = preload("res://src/rendering/procedural_hillshade_sprite.gd")
 const ProceduralRiverFlowSprite = preload("res://src/rendering/procedural_river_flow_sprite.gd")
 
@@ -168,7 +169,7 @@ const ATLAS_COLUMNS := 64
 ## still being decorrelated between neighbouring tiles.
 const _VARIANT_SALT := 90210
 
-const ATLAS_VERSION := "art_resolution_v25_facade_variants"
+const ATLAS_VERSION := "art_resolution_v26_illustrated_building_pieces"
 
 ## Overridable so tests never touch the real user:// cache (see
 ## TerrainAtlasCache) -- production code (EarthChunkManager) never sets
@@ -184,6 +185,7 @@ var _hillshade_generator := ProceduralHillshadeSprite.new()
 var _river_flow_generator := ProceduralRiverFlowSprite.new()
 var _atlas_cache := TerrainAtlasCache.new()
 var _illustrated_terrain = IllustratedTerrainSprite.new()
+var _illustrated_building_piece = IllustratedBuildingPieceSprite.new()
 
 
 ## Returns the atlas coordinate for one biome's variant -- the FIRST frame of
@@ -945,6 +947,18 @@ func _biome_frame_image(biome_name: String, variant: int, frame: int) -> Image:
 	return _terrain_sprite_generator.generate_frame_image(biome_name, variant, frame)
 
 
+## One BuildingPiece's pixels for `piece_id`. Illustrated art (see
+## IllustratedBuildingPieceSprite) wins when this piece has a real
+## user-supplied sheet registered; otherwise this is exactly the
+## procedurally generated tile it always was -- the same has_X()-gated
+## fallback seam _biome_frame_image uses for illustrated terrain art, one
+## level down (a single tile rather than a whole animated frame set).
+func _piece_image(piece_id: String) -> Image:
+	if _illustrated_building_piece.has_piece_art(piece_id):
+		return _illustrated_building_piece.piece_image(piece_id)
+	return _building_piece_sprite_generator.generate_image(piece_id)
+
+
 ## A directional-blend border between near_biome/far_biome, dithering their
 ## REAL images together (illustrated where registered, procedural
 ## otherwise -- see _biome_frame_image) via ProceduralTerrainSprite's dither
@@ -1022,7 +1036,7 @@ func _build_atlas_pixels(biome_count: int, rows: int) -> Image:
 		_blit_tile(image, structure_image, _structure_linear(structure_id))
 
 	for piece_id in BuildingPiece.PIECE_IDS:
-		var piece_image := _building_piece_sprite_generator.generate_image(piece_id)
+		var piece_image := _piece_image(piece_id)
 		_blit_tile(image, piece_image, _building_piece_linear(piece_id))
 
 	for near_index in biome_count:
