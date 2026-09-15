@@ -2,18 +2,28 @@ extends Node2D
 
 ## Enterable house interiors (docs/concept/building.md "Entering"): the
 ## real scene an "Enter" prompt swaps the player into -- built once per
-## Enter, freed on Leave. An opaque backdrop, a TileMapLayer sharing the
-## MAIN terrain tile set (the exact illustrated wall/floor/furniture tiles
-## the rest of the world already draws with -- no second art pipeline),
-## and real StaticBody2D collision on every wall AND every "blocking"
-## furniture piece, positioned so InteriorTemplates' own door cell lands
-## exactly on the house's real world doorstep -- walking out the door
-## puts the player back exactly where they entered. Built in code like
-## JoustMatchView/HandheldBattleView (see World._build_joust_view), but
-## deliberately NOT paused -- the player keeps moving in real world
-## coordinates the whole time (see scenes/player.gd's indoors state, the
-## two-story floor-switch's own mechanism), so chunk streaming, NPC
-## schedules and the clock all keep running while a house is entered.
+## Enter, freed on Leave, as the content of an ISOLATED SubViewport (see
+## World._build_interior_view, the same real "another scene, not a paint-
+## over" pattern this codebase already proves out for the character
+## creator's diorama -- main_menu.gd's _build_diorama_view). A TileMapLayer
+## sharing the MAIN terrain tile set (the exact illustrated wall/floor/
+## furniture tiles the rest of the world already draws with -- no second
+## art pipeline), real StaticBody2D collision on every wall AND every
+## "blocking" furniture piece, plus an always-present threshold body one
+## cell past the door so the only way past it is the real Leave action,
+## and this view's own Camera2D fit to the room's own size (see
+## _build_camera) rather than reusing the outdoor world's fixed 4x zoom.
+##
+## Deliberately NOT the real Player node, and not positioned at the
+## house's real world coordinates at all any more (an earlier version was
+## both, and reportedly still showed the real outside world bleeding in
+## around a small patch of floor -- no backdrop sized to only the room's
+## own grid can out-cover a camera that is bigger than every room). The
+## real Player stays exactly where it is outdoors, at the real doorstep,
+## for the whole visit -- see scenes/player.gd's indoors state -- so chunk
+## streaming, NPC schedules and the clock all keep running unaffected.
+## Movement inside is InteriorAvatar's job, a small local-only stand-in
+## that lives only inside this same SubViewport.
 
 const InteriorTemplates = preload("res://src/gameplay/interior_templates.gd")
 const TerrainRenderer = preload("res://src/rendering/terrain_renderer.gd")
@@ -53,58 +63,54 @@ const _BLOCKING_FURNITURE_IDS := {
 ## without re-deriving it.
 var door_cell: Vector2i
 var size: Vector2i
-## The house's real, world-pixel doorstep -- "Leave" sends the player back
-## here (see is_on_exit), and it's exactly where door_cell was aligned to.
-var exit_world_position: Vector2
 
 var _tile_map_layer: TileMapLayer
 var _backdrop: ColorRect
+var _camera: Camera2D
 var _collision_bodies: Dictionary = {}  # local Vector2i -> StaticBody2D
 var _tile_size := 16
 
+## A little room in front of the walls so they never touch the screen
+## edge -- purely cosmetic now (the SubViewport itself is what actually
+## bounds what's visible; this used to have to out-grow the outdoor
+## camera's own view just to hide the real world behind it, which is why
+## it used to need to be enormous -- see visible_world_size_px's own
+## removal). Two tiles reads as a comfortable margin without being showy.
+const _BACKDROP_MARGIN_TILES := 2.0
 
-## Builds the whole interior scene as children of `self`.
-## `doorstep_world_position`: the house's real exterior doorstep in world
-## pixels (EarthChunkManager.building_door_near's own "doorstep_global",
-## converted to pixels) -- InteriorTemplates' own door_cell is aligned
-## exactly there, by positioning `self` so that math falls out naturally
-## rather than translating every child individually. `shared_tile_set`:
-## the SAME TileSet the main terrain TileMapLayer already built (see
-## TerrainRenderer.build_tile_set / EarthChunkManager's own
-## `_tile_map_layer.tile_set = _terrain_renderer.build_tile_set()`) --
-## reused directly, never rebuilt, the same convention every sibling
-## overlay layer (roof/furniture/upper floor) already follows.
+## Leaves a little air around the room instead of touching the screen
+## edge exactly -- the same reasoning DIORAMA_VIEW_SIZE's own fit-camera
+## comment gives, tuned by eye once and then pinned here rather than
+## re-eyeballed.
+const _CAMERA_FIT_MARGIN := 0.85
+
+
+## Builds the whole interior scene as children of `self`, positioned near
+## local (0,0) -- NOT at the house's real world doorstep any more (see
+## this file's own doc comment on why: this view lives inside an isolated
+## SubViewport, not the outdoor world, so there is no outdoor coordinate
+## for it to align to). `shared_tile_set`: the SAME TileSet the main
+## terrain TileMapLayer already built (see TerrainRenderer.build_tile_set
+## / EarthChunkManager's own `_tile_map_layer.tile_set = _terrain_renderer.
+## build_tile_set()`) -- reused directly, never rebuilt, the same
+## convention every sibling overlay layer (roof/furniture/upper floor)
+## already follows.
 func build(
 	interior_family: String, occupation: String, seed_value: int,
-	doorstep_world_position: Vector2, shared_tile_set: TileSet, tile_size: int, terrain_renderer: TerrainRenderer
+	shared_tile_set: TileSet, tile_size: int, terrain_renderer: TerrainRenderer
 ) -> void:
 	var result := InteriorTemplates.furnish(interior_family, occupation, seed_value)
 	size = result["size"]
 	door_cell = result["door_cell"]
 	var cells: Dictionary = result["cells"]
 	_tile_size = tile_size
-	exit_world_position = doorstep_world_position
-
-	# doorstep_world_position is a CELL CENTER (the same +0.5 convention
-	# every doorstep/stand position in this codebase already uses -- see
-	# VillageRenderer's own doorstep_position), so door_cell's own center
-	# (not its top-left corner) must land exactly there.
-	position = doorstep_world_position - (Vector2(door_cell) + Vector2(0.5, 0.5)) * tile_size
-
-	# Padded well past the room's own grid (see visible_world_size_px) --
-	# sized to just the grid, this used to leave the real outside world
-	# (grass, NPCs, the exterior building) visible all around a small
-	# patch of floor, since every authored room is smaller than what the
-	# 4x-zoomed camera actually frames. Centering the pad on the room
-	# (rather than only growing right/down from local (0,0)) guarantees
-	# coverage no matter where in the room the player -- and so the
-	# camera, which follows them -- currently stands.
 	var room_size_px := Vector2(size) * tile_size
-	var visible := visible_world_size_px(tile_size)
+
+	var margin := _BACKDROP_MARGIN_TILES * tile_size
 	_backdrop = ColorRect.new()
 	_backdrop.color = Color(0.05, 0.04, 0.03)
-	_backdrop.position = -visible * 0.5
-	_backdrop.size = room_size_px + visible
+	_backdrop.position = -Vector2.ONE * margin
+	_backdrop.size = room_size_px + Vector2.ONE * margin * 2.0
 	_backdrop.z_index = -2
 	add_child(_backdrop)
 
@@ -119,7 +125,47 @@ func build(
 		if value == "wall" or _BLOCKING_FURNITURE_IDS.has(value):
 			_add_collision_at(local)
 
+	# A real physical stop one cell past the door, always present (not
+	# part of InteriorTemplates' own grid -- every template ends its grid
+	# AT the door row on purpose). Reported live: without this, nothing
+	# stopped a player from just walking through the door and on past it
+	# without ever pressing the real Leave action -- the door tile itself
+	# is deliberately walkable (see _piece_id_for/_BLOCKING_FURNITURE_IDS),
+	# so it alone was never a boundary.
+	_add_collision_at(door_cell + Vector2i(0, 1))
+
+	_camera = _build_camera(room_size_px)
+	add_child(_camera)
+	# No explicit `.current = true` -- Godot activates the first Camera2D
+	# added to a Viewport with no camera current yet automatically (the
+	# same reasoning main_menu.gd's own diorama camera relies on, which
+	# never sets it either); this view's camera is always the only one in
+	# its own isolated SubViewport, so there's never any ambiguity to
+	# resolve. An explicit assignment here throws in a bare --headless
+	# test context ("Invalid assignment of property... on Camera2D") --
+	# the property setter expects an active rendering surface this early
+	# that a real windowed run already has by the time a house is entered.
+
 	z_index = INTERIOR_Z_INDEX
+
+
+## Frames the WHOLE room, however small -- the outdoor world's fixed 4x
+## zoom is what forced the old backdrop to cover a 320x180 world-px view
+## no authored room actually fills (reported live as a "huge black
+## margin" once the backdrop itself was fixed to really cover that view).
+## Fit-to-content, the same shape main_menu.gd's own diorama camera uses
+## (zoom = target size / content size, the smaller axis wins so neither
+## edge crops), against DisplayScaling's design resolution -- the
+## SubViewport this view is built into is always sized to exactly that
+## (see World._build_interior_view), so the fit is exact regardless of
+## the real window's own size.
+func _build_camera(room_size_px: Vector2) -> Camera2D:
+	var camera := Camera2D.new()
+	camera.position = room_size_px * 0.5
+	var target := Vector2(DisplayScaling.DESIGN_WIDTH, DisplayScaling.DESIGN_HEIGHT)
+	var fit := minf(target.x / room_size_px.x, target.y / room_size_px.y) * _CAMERA_FIT_MARGIN
+	camera.zoom = Vector2.ONE * fit
+	return camera
 
 
 func tile_map_layer() -> TileMapLayer:
@@ -130,37 +176,28 @@ func backdrop() -> ColorRect:
 	return _backdrop
 
 
-## How much world the 4x-zoomed camera actually frames at once, in world
-## pixels: DisplayScaling.visible_tiles_across at the DESIGN resolution --
-## the same 320x180 world-px figure EarthChunkManager's own FRUITING_
-## DETAIL_RADIUS comment already derives this way, and the true figure
-## rather than just a fallback, since visible_tiles_across is independent
-## of the real window size BY DESIGN (see that file). Public (not build()'s
-## own private detail) so a test can assert the real coverage guarantee
-## against the exact same number build() pads the backdrop with, rather
-## than a re-derived or eyeballed one.
-static func visible_world_size_px(tile_size: int) -> Vector2:
-	var across := DisplayScaling.visible_tiles_across(DisplayScaling.DESIGN_WIDTH, DisplayScaling.DESIGN_HEIGHT)
-	var down := DisplayScaling.visible_tiles_across(DisplayScaling.DESIGN_HEIGHT, DisplayScaling.DESIGN_HEIGHT)
-	return Vector2(across, down) * tile_size
+func camera() -> Camera2D:
+	return _camera
 
 
 func collision_body_at(local: Vector2i) -> StaticBody2D:
 	return _collision_bodies.get(local)
 
 
-## Whether `pixel_position` (world coordinates) is close enough to this
-## interior's own door/exit cell to leave from -- World's own "Leave"
-## prompt check. Deliberately SMALLER than one tile (16px): Player.
-## enter_building places the player one full cell (16px) north of the
-## door on entry, and this must stay false there -- a player who has
-## just walked in must not immediately see (or be able to trigger)
-## "Leave" again before ever really being in the room. Standing back at
-## the door cell itself (0px away) always counts.
+## Whether `local_position` (this view's OWN local coordinates, i.e. the
+## interior avatar's own `position` -- see InteriorAvatar) is close enough
+## to the room's own door cell to leave from -- World's own "Leave" prompt
+## check. Deliberately SMALLER than one tile (16px): InteriorAvatar spawns
+## one full cell north of the door (see World._enter_building_view), and
+## this must stay false there -- a player who has just walked in must not
+## immediately see (or be able to trigger) "Leave" again before ever
+## really being in the room. Standing back at the door cell itself (0px
+## away) always counts.
 const _EXIT_RADIUS_PX := 10.0
 
-func is_on_exit(pixel_position: Vector2) -> bool:
-	return pixel_position.distance_to(exit_world_position) <= _EXIT_RADIUS_PX
+func is_on_exit(local_position: Vector2) -> bool:
+	var door_center := (Vector2(door_cell) + Vector2(0.5, 0.5)) * _tile_size
+	return local_position.distance_to(door_center) <= _EXIT_RADIUS_PX
 
 
 func _piece_id_for(cell_value: String) -> String:

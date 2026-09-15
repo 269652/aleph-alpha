@@ -147,23 +147,36 @@ props, market and settlement founding exactly as before.
 player houses already use; the per-cell `_piece_property_id` and the
 per-villager-index id are retired.
 
-**Entering** (`HouseInteriorView`): standing on a doorstep shows
-"Enter"; the interior is an authored `InteriorTemplates` grid (walls,
-floor, door, furniture ids from the existing furniture catalog, several
-variants per interior family × occupation, picked by the house's seed),
-built as a `Node2D` over the world at the house's own position with its
-door aligned to the doorstep, drawn from the existing tile set (the
-illustrated floor/wall/furniture tiles) on a z-index above every world
-layer with an opaque backdrop, its walls and blocking furniture (bed,
-table, bookshelf, couch) as bodies on their own `INTERIOR_COLLISION_LAYER`.
-The player keeps moving in world coordinates with their collision mask
-flipped to that layer and their z-index lifted (the two-story floor
-switch's own mechanism), so chunk streaming, NPC schedules and the clock
-all keep running — **time does not stop indoors.** Indoors, the player's
-step skips every terrain/water/weather/footprint/build/destroy concern
-and keeps movement, survival, talking and inventory; warmth indoors is a
-constant. "Leave" on the interior's door tile puts the player back on the
-doorstep. Predators do not target an indoor player.
+**Entering** (`HouseInteriorView`): standing on a doorstep shows "Enter";
+the interior is an authored `InteriorTemplates` grid (walls, floor, door,
+furniture ids from the existing furniture catalog, several variants per
+interior family × occupation, picked by the house's seed), drawn from the
+existing tile set (the illustrated floor/wall/furniture tiles), its walls
+and blocking furniture (bed, table, bookshelf, couch) as bodies on their
+own `INTERIOR_COLLISION_LAYER`, plus a real threshold body one cell past
+the door so nothing but the real Leave action gets a player out. This is
+built inside an **isolated `SubViewport`** (`World._build_interior_view`,
+the same real "a separate scene, not paint" pattern the character
+creator's own diorama already uses), stretched full-screen through a
+`SubViewportContainer` — not a `Node2D` sitting among the outdoor
+world's own nodes any more (an earlier version was exactly that, and the
+real outside world kept showing through around whatever patch of floor a
+backdrop failed to out-cover; no backdrop sized to a room can out-cover a
+camera that is bigger than every room). The interior gets its own
+`Camera2D`, fit to the room's own size (however small) rather than reusing
+the outdoor world's fixed 4x zoom, so the room actually fills the screen.
+The real (possibly networked) Player node is untouched for the whole
+visit — no collision/z-index/position change, it simply stays parked at
+the real doorstep — so chunk streaming, NPC schedules and the clock all
+keep running unaffected — **time does not stop indoors.** `InteriorAvatar`,
+a small local-only stand-in that exists only inside the isolated
+SubViewport, is what actually walks around; the real Player's own step
+still keeps survival, mana, talking and inventory running (warmth indoors
+is a constant) but no longer touches movement or the character view at
+all indoors. "Leave" on the interior's own door cell (checked against the
+avatar's position) frees the interior's content and hides the viewport;
+nothing about the real Player changes. Predators do not target an indoor
+player.
 
 **Older saves.** A settlement chunk that has no buildings yet but still
 holds piece-built houses has those pieces (and their roof/furniture/upper
@@ -215,17 +228,25 @@ for a house returns in the construction-over-time pass. See Status.
   piece structure at the same site.
 - ✅ **Entering.** `InteriorTemplates` (real authored room shapes ×
   occupation-themed furniture) + `HouseInteriorView` (the real scene:
-  backdrop, shared-tile-set floor/wall/furniture, real collision) +
-  player indoors state (`is_indoors`/`enter_building`/`exit_building`,
-  `_authority_step_indoors`) + World's "Enter"/"Leave" prompt + the
-  predator-targeting gate. Tested end to end (`test_interior_templates.gd`,
-  `test_house_interior_view.gd`, `test_player.gd`, `test_creature_marker.gd`,
+  shared-tile-set floor/wall/furniture, real collision including a door
+  threshold, a room-fit `Camera2D`) built inside an isolated `SubViewport`
+  (`World._build_interior_view`) so the real outdoor world can never show
+  through, + `InteriorAvatar` (the local-only stand-in that actually walks
+  around inside it) + player indoors state (`is_indoors`/`enter_building`/
+  `exit_building`, `_authority_step_indoors` — the real Player node itself
+  is never moved or re-collided, only parked) + World's "Enter"/"Leave"
+  prompt + the predator-targeting gate. Tested end to end
+  (`test_interior_templates.gd`, `test_house_interior_view.gd`,
+  `test_interior_avatar.gd`, `test_player.gd`, `test_creature_marker.gd`,
   `test_world_interaction_prompt_throttle.gd`). Two named, honest gaps:
   furniture theme is seed-varied rather than tied to the real resident's
   own occupation (the building record carries no `occupation` field yet
   — a small, well-scoped follow-up); "Residents inside" (spawning the
   hidden-at-home villager's own `CharacterView` in their furnished room)
-  is not built, an explicitly-optional piece of the original plan.
+  is not built, an explicitly-optional piece of the original plan. The
+  avatar's own appearance is a placeholder, not the player's real
+  `CharacterView` — a third named gap from this redesign, not something
+  this pass needed to get right.
 - ⬜ **Player building re-route.** Blueprint construction still runs
   entirely on the legacy per-tile `BuildingPiece` pipeline below —
   `HOUSE_BLUEPRINT_SHAPE_BY_RECIPE_ID` → `BUILDING_ID_BY_RECIPE_ID` and a

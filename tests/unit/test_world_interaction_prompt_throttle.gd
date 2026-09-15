@@ -219,10 +219,12 @@ func test_no_building_nearby_leaves_the_prompt_hidden():
 func test_indoors_but_not_on_the_exit_cell_hides_the_prompt():
 	var view := HouseInteriorView.new()
 	var renderer := TerrainRenderer.new()
-	view.build("cottage", "farmer", 5, Vector2(2000, 2000), renderer.build_tile_set(), TILE_SIZE, renderer)
+	view.build("cottage", "farmer", 5, renderer.build_tile_set(), TILE_SIZE, renderer)
 	add_child(view)
-	player.enter_building(view)
-	# enter_building already placed the player one full cell inside the
+	var avatar := InteriorAvatar.new()
+	add_child(avatar)
+	player.enter_building(view, avatar)
+	# enter_building already placed the avatar one full cell inside the
 	# door (16px) -- HouseInteriorView._EXIT_RADIUS_PX (10px) is
 	# deliberately smaller than that gap specifically so this stays false
 	# right after entering.
@@ -232,6 +234,7 @@ func test_indoors_but_not_on_the_exit_cell_hides_the_prompt():
 
 	assert_false(world._interaction_prompt.visible)
 	view.free()
+	avatar.free()
 
 
 ## The "shows a real Enter/Leave prompt" cases (standing exactly on a real
