@@ -20,6 +20,7 @@ const Taming = preload("res://src/gameplay/taming.gd")
 const AnimalFitness = preload("res://src/world/animal_fitness.gd")
 const TerrainPassability = preload("res://src/gameplay/terrain_passability.gd")
 const EarthChunkGenerator = preload("res://src/world/earth_chunk_generator.gd")
+const GeoCoordinates = preload("res://src/world/geo_coordinates.gd")
 const ConditionPenalty = preload("res://src/gameplay/condition_penalty.gd")
 const Keybindings = preload("res://src/gameplay/keybindings.gd")
 const MinableOre = preload("res://src/rendering/minable_ore.gd")
@@ -111,6 +112,71 @@ func test_a_new_player_starts_completely_unequipped_before_any_grant():
 ## the DOWN facing set in before_each.
 func _facing_tile() -> Vector2i:
 	return player.current_tile() + Vector2i(0, 1)
+
+
+## A real, scanned dry buildable origin for a small_house-sized (hut_tiny,
+## HouseBlueprint._BLUEPRINTS) 3x3 footprint, for the house-blueprint build
+## tests below.
+##
+## before_each's fixed spawn sits in chunk (0,0) -- global tile (0,0) is
+## the real Earth projection's own corner (longitude -180, latitude +90,
+## see GeoCoordinates), so the WHOLE chunk (0,0) neighbourhood is open
+## ocean (confirmed directly: EarthChunkManager.is_buildable_terrain_at
+## false at every tile of the entire loaded radius). Worse, that ocean
+## can't be walked AROUND to find nearby land either: Player.current_tile
+## wraps every coordinate through WorldCoordinates.wrap (posmod against
+## the world size), so a global tile with a negative x or y -- where this
+## corner's nearest real land actually is -- can never be a real player's
+## current_tile() at all; positioning the player there would silently
+## read back as the wrapped tile on the OPPOSITE side of the world instead
+## (confirmed: a probe of every reachable, non-negative tile in the entire
+## loaded radius found zero buildable cells).
+##
+## So this loads one additional, real, definitely-dry chunk -- Berlin,
+## the same anchor test_earth_chunk_manager_buildings.gd's own
+## _a_clear_footprint_origin already uses -- alongside before_each's
+## chunk (0,0) (EarthChunkManager._load_chunk is additive; it never
+## unloads anything), then scans it with that exact same "real dry
+## buildable cell, not a fixed offset" pattern, checking every one of the
+## footprint's cells rather than just its corners. The seed HouseBlueprint.
+## build mixes in only ever picks WHICH wall cells get a door/window,
+## never which cells the shape occupies, so checking this fixed 3x3 is
+## exact for "hut_tiny", not an approximation.
+func _a_clear_house_footprint_origin() -> Vector2i:
+	var footprint := Vector2i(3, 3)
+	var geo := GeoCoordinates.new()
+	var berlin := Vector2i(
+		geo.tile_for_longitude(13.405, EarthChunkGenerator.WORLD_WIDTH_TILES),
+		geo.tile_for_latitude(52.52, EarthChunkGenerator.WORLD_HEIGHT_TILES)
+	)
+	var chunk_coord := Vector2i(
+		floori(float(berlin.x) / EarthChunkManager.CHUNK_SIZE), floori(float(berlin.y) / EarthChunkManager.CHUNK_SIZE)
+	)
+	chunk_manager._load_chunk(chunk_coord)
+	for y in range(2, EarthChunkManager.CHUNK_SIZE - footprint.y - 2):
+		for x in range(2, EarthChunkManager.CHUNK_SIZE - footprint.x - 2):
+			var origin := chunk_coord * EarthChunkManager.CHUNK_SIZE + Vector2i(x, y)
+			var clear := true
+			for lx in range(footprint.x):
+				for ly in range(footprint.y):
+					var g: Vector2i = origin + Vector2i(lx, ly)
+					if not chunk_manager.is_buildable_terrain_at(g.x, g.y) or chunk_manager.modification_at_global(g.x, g.y) != "":
+						clear = false
+						break
+				if not clear:
+					break
+			if clear:
+				return origin
+	fail_test("no clear 3x3 house footprint found in Berlin's chunk")
+	return Vector2i.ZERO
+
+
+## Moves the player to stand just north of `origin`, still facing DOWN --
+## the same facing before_each already sets up -- so _try_build_house_
+## from_blueprint's own facing_tile() target lands exactly on `origin`.
+func _stand_facing(origin: Vector2i) -> void:
+	player.position = Vector2(origin.x * TILE_SIZE, (origin.y - 1) * TILE_SIZE)
+	player._last_facing_direction = Vector2.DOWN
 
 
 ## A full press+release cycle so _build_step's rising-edge latch fires exactly
@@ -516,6 +582,7 @@ func test_try_learn_blueprint_fails_gracefully_with_no_such_item_carried():
 func test_try_build_house_from_blueprint_fails_without_the_blueprint_unlocked():
 	_give("wood", 30)
 	player.allocated_nodes = {"carpentry_1": true}
+	_stand_facing(_a_clear_house_footprint_origin())
 
 	assert_false(player._try_build_house_from_blueprint("small_house"))
 
@@ -529,6 +596,7 @@ func test_try_build_house_from_blueprint_fails_without_the_blueprint_unlocked():
 func test_try_build_house_from_blueprint_fails_without_enough_carpentry_skill():
 	chunk_manager.record_blueprint_learned_if_new("small_house")
 	_give("wood", 30)
+	_stand_facing(_a_clear_house_footprint_origin())
 
 	assert_false(player._try_build_house_from_blueprint("small_house"))
 
@@ -544,6 +612,7 @@ func test_try_build_house_from_blueprint_succeeds_and_grants_a_real_house():
 	chunk_manager.record_blueprint_learned_if_new("small_house")
 	_give("wood", 30)
 	player.allocated_nodes = {"carpentry_1": true}
+	_stand_facing(_a_clear_house_footprint_origin())
 
 	assert_true(player._try_build_house_from_blueprint("small_house"))
 
@@ -566,7 +635,8 @@ func test_try_build_house_from_blueprint_fails_when_the_footprint_is_occupied():
 	chunk_manager.record_blueprint_learned_if_new("small_house")
 	_give("wood", 30)
 	player.allocated_nodes = {"carpentry_1": true}
-	var target := player._tile_targeting.facing_tile(player.current_tile(), player._last_facing_direction)
+	var target := _a_clear_house_footprint_origin()
+	_stand_facing(target)
 	chunk_manager.build_at_global(target.x, target.y, "campfire")
 
 	assert_false(player._try_build_house_from_blueprint("small_house"))
