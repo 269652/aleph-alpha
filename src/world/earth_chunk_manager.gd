@@ -14215,6 +14215,13 @@ func _load_chunk(chunk_coord: Vector2i) -> void:
 	# gone before anything paints or spawns collision for it.
 	_reclaim_pieces_standing_in_water(chunk_coord, chunk)
 	_reclaim_buildings_standing_in_water(chunk_coord, chunk)
+	# Old-save migration (see _migrate_piece_village_to_buildings_if_stale's
+	# own doc comment) -- also BEFORE the first paint/collision pass, for the
+	# same reason as the two reclaim calls above: a piece about to be wiped
+	# must already be gone before anything paints or spawns collision for
+	# it, and spawn_village (much later in this function) needs the space
+	# genuinely clear to regenerate the village as real buildings.
+	_migrate_piece_village_to_buildings_if_stale(chunk_coord, chunk)
 	# Withering catch-up BEFORE the first paint/collision pass below, so a
 	# piece that decayed away entirely while this chunk sat unloaded is
 	# already gone from chunk.modifications by the time anything paints or
@@ -15139,6 +15146,88 @@ func _reclaim_pieces_standing_in_water(chunk_coord: Vector2i, chunk: Chunk) -> v
 				removed = true
 	if removed:
 		_persist_modifications_now(chunk_coord, chunk)
+
+
+## Old-save migration (docs/concept/building.md "Older saves"): a
+## settlement chunk that still carries OLD-STYLE piece-built houses -- real
+## house-piece cells in chunk.modifications (and their roof/furniture/
+## upper-floor siblings), from before whole-building village houses
+## existed -- has them wiped ONCE on load, so spawn_village (called much
+## later in _load_chunk) regenerates the same settlement as real
+## whole-building entities instead. Detected the same way every other
+## "stale persisted state" pass in this file is: chunk.buildings (the new
+## registry) is still empty. A chunk whose chunk.buildings is already
+## populated -- whether from a genuinely fresh load under the new code, or
+## an earlier visit that already migrated it -- is untouched; this only
+## ever does real work once per settlement's own lifetime, the same
+## "detect + fix, then it's simply true from then on" shape
+## _reclaim_pieces_standing_in_water already has.
+##
+## A player-built piece structure at the SAME site -- a real, separate
+## mechanism this pass must never touch (docs/concept/building.md
+## "Legacy") -- is protected: every local cell inside a COMPLETE
+## ConstructionProject owned by the player's own household is excluded,
+## the same way _reclaim_pieces_standing_in_water already excludes
+## CATEGORY_DAM from a universal rule. Only COMPLETE projects are
+## checked -- today the only reachable state for a player's own piece
+## house is started-and-completed at once
+## (stamp_house_and_grant_ownership), so there is no real PLANNED/
+## IN_PROGRESS gap where pieces exist without a COMPLETE project backing
+## them yet; the ghost-planning system that would introduce one
+## (docs/concept/civic_construction.md) is design-only, not implemented.
+func _migrate_piece_village_to_buildings_if_stale(chunk_coord: Vector2i, chunk: Chunk) -> void:
+	if not chunk.buildings.is_empty():
+		return
+	if not _settlement_generator.has_settlement_at(chunk_coord, _biome_classifier.dominant_biome(chunk.biome)):
+		return
+
+	var protected_cells := _player_owned_piece_cells_in_chunk(chunk_coord)
+	var removed := false
+	for local in chunk.modifications.keys().duplicate():
+		if protected_cells.has(local):
+			continue
+		var tile_id: String = chunk.modifications[local]
+		if not BuildingPiece.has_piece(tile_id) or not _WATER_RECLAIMS_CATEGORIES.has(BuildingPiece.category_of(tile_id)):
+			continue
+		chunk.modifications.erase(local)
+		chunk.piece_condition.erase(local)
+		removed = true
+	for layer in [
+		chunk.roof_modifications, chunk.furniture_modifications,
+		chunk.upper_floor_modifications, chunk.upper_floor_furniture_modifications,
+	]:
+		for local in layer.keys().duplicate():
+			if protected_cells.has(local):
+				continue
+			layer.erase(local)
+			removed = true
+	if removed:
+		_persist_modifications_now(chunk_coord, chunk)
+
+
+## Every local cell covered by a COMPLETE ConstructionProject the player's
+## own household owns, in `chunk_coord` -- the migration pass above must
+## never touch these. household_for (not form_household) so a chunk with
+## no player activity at all never spuriously creates a player household
+## just by loading it. Mirrors _house_furniture_count's own established
+## "recipe -> HouseBlueprint shape -> footprint" derivation exactly, rather
+## than inventing a second way to size a piece house's footprint.
+func _player_owned_piece_cells_in_chunk(chunk_coord: Vector2i) -> Dictionary:
+	var cells := {}
+	var household = _household_store.household_for(PlayerIdentity.PLAYER_ENTITY_ID)
+	if household == null:
+		return cells
+	for project in _construction_project_store.projects_owned_by(household.id):
+		if project.chunk_coord != chunk_coord:
+			continue
+		var shape_id: String = HOUSE_BLUEPRINT_SHAPE_BY_RECIPE_ID.get(project.blueprint_id, "")
+		if shape_id == "":
+			continue  # a non-house project (e.g. a future civic building) -- no piece footprint to protect here
+		var footprint := HouseBlueprint.new().footprint_for(shape_id)
+		for x in footprint.x:
+			for y in footprint.y:
+				cells[project.origin + Vector2i(x, y)] = true
+	return cells
 
 
 ## Writes every modification layer of `chunk` to disk right now -- the same
