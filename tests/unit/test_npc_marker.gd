@@ -580,3 +580,89 @@ func test_instruction_at_least_fails_when_real_inventory_is_below_the_threshold(
 	for i in 200:
 		marker._process(1.0)
 	assert_lt(marker.position.distance_to(marker.landmarks["gate"]), 1.0)
+
+
+# -- hidden while home (docs/concept/building.md "Buildings are entities;
+# interiors are scenes": home_position is now a real house's doorstep, not
+# a bare marker -- a villager idling/sleeping in plain view on their own
+# doorstep every day/night read as "sleeping outside the front door".
+# Mirrors EarthChunkManager's existing conversion-worker "hidden while
+# working inside a structure" pattern, one per house instead of a table of
+# structures.) ----------------------------------------------------------
+
+func test_an_npc_who_has_arrived_home_on_a_home_tagged_entry_becomes_invisible():
+	marker.schedule = [
+		{"time_block": "morning", "location_tag": "home", "activity": "idle"},
+		{"time_block": "midday", "location_tag": "home", "activity": "idle"},
+		{"time_block": "evening", "location_tag": "home", "activity": "idle"},
+		{"time_block": "night", "location_tag": "home", "activity": "sleep"},
+	]
+	marker.position = marker.home_position  # already arrived
+	marker._process(0.1)
+	assert_false(marker.visible)
+
+
+func test_an_npc_still_walking_toward_home_stays_visible():
+	marker.schedule = [
+		{"time_block": "morning", "location_tag": "home", "activity": "idle"},
+		{"time_block": "midday", "location_tag": "home", "activity": "idle"},
+		{"time_block": "evening", "location_tag": "home", "activity": "idle"},
+		{"time_block": "night", "location_tag": "home", "activity": "sleep"},
+	]
+	marker.position = Vector2(1000, 1200)  # far from home_position (1000, 1000)
+	marker._process(0.1)
+	assert_true(marker.visible, "must stay visible mid-stride, not vanish before arriving")
+
+
+## Standing AT a shared landmark position must never trip the hidden check --
+## it is keyed on the "home" tag specifically, not merely "arrived somewhere".
+func test_an_npc_at_a_work_landmark_stays_visible():
+	marker.schedule = [
+		{"time_block": "morning", "location_tag": "stall", "activity": "work"},
+		{"time_block": "midday", "location_tag": "stall", "activity": "work"},
+		{"time_block": "evening", "location_tag": "stall", "activity": "work"},
+		{"time_block": "night", "location_tag": "stall", "activity": "work"},
+	]
+	marker.position = marker.landmarks["stall"]
+	marker._process(0.1)
+	assert_true(marker.visible)
+
+
+func test_an_npc_reappears_once_the_schedule_moves_off_home():
+	marker.schedule = [
+		{"time_block": "morning", "location_tag": "home", "activity": "idle"},
+		{"time_block": "midday", "location_tag": "home", "activity": "idle"},
+		{"time_block": "evening", "location_tag": "home", "activity": "idle"},
+		{"time_block": "night", "location_tag": "home", "activity": "sleep"},
+	]
+	marker.position = marker.home_position
+	marker._process(0.1)
+	assert_false(marker.visible, "precondition: hidden while home")
+
+	marker.schedule = [
+		{"time_block": "morning", "location_tag": "field", "activity": "work"},
+		{"time_block": "midday", "location_tag": "field", "activity": "work"},
+		{"time_block": "evening", "location_tag": "field", "activity": "work"},
+		{"time_block": "night", "location_tag": "field", "activity": "work"},
+	]
+	marker._process(0.1)
+	assert_true(marker.visible, "must reappear the same frame the schedule leaves home")
+
+
+## The urgent-hunger interrupt always redirects to "well" (see the hunger
+## section above), so a hungry NPC who happened to be standing at home when
+## hunger crossed the threshold must reappear rather than staying hidden
+## while walking to eat.
+func test_hunger_interrupt_while_home_makes_the_npc_visible_again():
+	var market := VillageMarket.new()
+	marker.setup_economy(market)
+	marker.economy.needs.hunger = 1.0  # unambiguously past HUNGRY_THRESHOLD
+	marker.schedule = [
+		{"time_block": "morning", "location_tag": "home", "activity": "idle"},
+		{"time_block": "midday", "location_tag": "home", "activity": "idle"},
+		{"time_block": "evening", "location_tag": "home", "activity": "idle"},
+		{"time_block": "night", "location_tag": "home", "activity": "sleep"},
+	]
+	marker.position = marker.home_position
+	marker._process(0.1)
+	assert_true(marker.visible, "a hungry NPC redirected to the well must not stay hidden at home")

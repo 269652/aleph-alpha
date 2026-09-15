@@ -19,6 +19,14 @@ const CreaturePerception = preload("res://src/gameplay/creature_perception.gd")
 ## Walking pace -- similar order to CreatureWander.WANDER_SPEED, unhurried.
 const WALK_SPEED := 20.0
 
+## How close (pixels) to home_position counts as "arrived" for the
+## hidden-while-home check below -- move_toward closes in asymptotically
+## and rarely lands on the exact float, so "distance == 0.0" would flicker
+## visible/invisible near the doorstep. Small relative to a single tile
+## (TILE_SIZE 16) and to WALK_SPEED, so it reads as "at the door", not
+## "somewhere on the street".
+const _ARRIVED_HOME_EPSILON_PX := 1.0
+
 ## Real seconds per simulated in-game day, mirroring
 ## EarthChunkManager.SECONDS_PER_SIMULATED_DAY's existing pacing so a
 ## village's daily rhythm runs on the same clock as the rest of the world
@@ -128,10 +136,22 @@ func _process(delta: float) -> void:
 		var action: Variant = NpcInstructionEvaluator.evaluate(instruction_script, _instruction_frame())
 		if action != null:
 			entry = _entry_for_instructed_action(action)
-	var target := _resolve_location(entry.get("location_tag", "home"))
+	var location_tag: String = entry.get("location_tag", "home")
+	var target := _resolve_location(location_tag)
 	var before := position
 	position = position.move_toward(target, WALK_SPEED * delta)
 	_update_animation(position - before)
+	# Hidden once actually arrived home on a "home"-tagged entry -- a house
+	# is now a real whole-building entity (docs/concept/building.md
+	# "Buildings are entities; interiors are scenes"), so a villager
+	# visibly idling/sleeping in plain view on their own doorstep every
+	# night read as "sleeping outside the front door". Mirrors
+	# EarthChunkManager's existing conversion-worker "hidden while working
+	# inside a structure" pattern (CONVERSION_WORKER_BY_STRUCTURE /
+	# _sync_conversion_worker), one rule per NPC instead of a table of
+	# structures. Keyed on the tag, not merely "arrived somewhere", so
+	# standing at a shared landmark (e.g. the stall) never hides an NPC.
+	visible = not (location_tag == "home" and position.distance_to(home_position) < _ARRIVED_HOME_EPSILON_PX)
 	if economy != null:
 		economy.step(delta, entry.get("activity", "") == "work", _world, position)
 
