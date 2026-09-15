@@ -11,6 +11,7 @@ const DropShadow = preload("res://src/rendering/drop_shadow.gd")
 const TreeGrowth = preload("res://src/gameplay/tree_growth.gd")
 const TreeSpecies = preload("res://src/world/tree_species.gd")
 const BuildingPiece = preload("res://src/gameplay/building_piece.gd")
+const BuildingCatalog = preload("res://src/gameplay/building_catalog.gd")
 const SeasonCycle = preload("res://src/world/season_cycle.gd")
 const TreePhenology = preload("res://src/world/tree_phenology.gd")
 
@@ -119,7 +120,7 @@ func spawn_trees(
 			# ...nor on the one-cell apron around one (BuildingPiece.touches_piece):
 			# a village clears the ground around its houses, doorsteps included,
 			# and a reload must not put a tree back in front of a door.
-			if BuildingPiece.touches_piece(chunk.modifications, Vector2i(x, y)):
+			if BuildingPiece.touches_piece(chunk.modifications, Vector2i(x, y)) or BuildingCatalog.touches_building(chunk.modifications, Vector2i(x, y)):
 				continue
 
 			var position := _stand_position(global_x, global_y, tile_size)

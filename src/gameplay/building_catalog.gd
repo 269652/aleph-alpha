@@ -159,6 +159,23 @@ static func occupies(tile_id: String) -> bool:
 	return has_building(tile_id) or tile_id == FOOTPRINT_TILE_ID
 
 
+## Whether a real building (its anchor or any footprint cell) stands on
+## `cell` or any of its eight neighbours -- BuildingPiece.touches_piece's
+## own tree-apron rule (docs/concept/building.md "Placement rules"),
+## generalized to whole-building entities: a house keeps a one-cell apron
+## clear of trees, so no tree ever stands on its doorstep, whether the
+## house is a legacy piece structure or a whole-building entity. Every
+## real tree-apron seam (TreeRenderer.spawn_trees, EarthChunkManager.
+## _can_root_at, the village stamp's own clearing) checks BOTH this and
+## BuildingPiece.touches_piece, never just one.
+static func touches_building(modifications: Dictionary, cell: Vector2i) -> bool:
+	for dy in range(-1, 2):
+		for dx in range(-1, 2):
+			if occupies(modifications.get(cell + Vector2i(dx, dy), "")):
+				return true
+	return false
+
+
 ## Which house a villager builds -- their occupation's own pool, nudged by
 ## their dominant personality trait, seeded so the same villager always
 ## builds the same house.

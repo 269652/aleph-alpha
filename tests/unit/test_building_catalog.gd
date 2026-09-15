@@ -110,6 +110,26 @@ func test_the_footprint_marker_is_not_itself_a_building():
 	assert_false(BuildingCatalog.BUILDING_IDS.has(BuildingCatalog.FOOTPRINT_TILE_ID))
 
 
+# -- touches_building: the tree-apron rule, generalized ---------------------
+
+func test_touches_building_is_true_for_the_cell_itself_and_every_neighbour():
+	var modifications := {Vector2i(5, 5): "house_small"}
+	assert_true(BuildingCatalog.touches_building(modifications, Vector2i(5, 5)), "the cell itself")
+	assert_true(BuildingCatalog.touches_building(modifications, Vector2i(6, 6)), "diagonal neighbour")
+	assert_true(BuildingCatalog.touches_building(modifications, Vector2i(5, 4)), "cardinal neighbour")
+	assert_false(BuildingCatalog.touches_building(modifications, Vector2i(7, 5)), "two cells away")
+
+
+func test_touches_building_is_true_for_a_footprint_marker_cell_too_not_just_the_anchor():
+	var modifications := {Vector2i(5, 5): "house_small", Vector2i(6, 5): BuildingCatalog.FOOTPRINT_TILE_ID}
+	assert_true(BuildingCatalog.touches_building(modifications, Vector2i(6, 4)), "neighbour of the footprint marker cell")
+
+
+func test_touches_building_is_false_for_a_non_building_modification():
+	var modifications := {Vector2i(5, 5): "campfire"}
+	assert_false(BuildingCatalog.touches_building(modifications, Vector2i(5, 5)), "a single-tile placeable is not a building")
+
+
 # -- choose_house_id: HouseBlueprint.choose_blueprint_id's own rule over --
 # -- the new ids (occupation pool, personality nudge, seeded) --------------
 

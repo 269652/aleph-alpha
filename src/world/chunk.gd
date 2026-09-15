@@ -82,6 +82,21 @@ var planted_trees: Array = []
 var structural_instability: Dictionary = {}
 var structural_checked_at: Dictionary = {}
 
+## Whole-building entities (docs/concept/building.md "Buildings are
+## entities; interiors are scenes"): local ORIGIN cell (the footprint's
+## top-left) -> {"id": String (a real BuildingCatalog id), "facing":
+## Vector2i, "seed": int, "condition": float (1.0 = new), "progress": float
+## (1.0 = fully built), "owner_household_id": String}. A building's own
+## OWN layer for the same real reason roof_modifications/furniture_
+## modifications above already need theirs: `modifications` can only ever
+## hold one tile id per cell, and a building's anchor cell already holds
+## its id there (so every existing "is a structure here" scan keeps
+## answering correctly with no changes) -- this dict is the one place the
+## REST of a building's own state (not its mere occupancy) lives. Every
+## other footprint cell besides the origin carries BuildingCatalog.
+## FOOTPRINT_TILE_ID in `modifications`, never an entry of its own here.
+var buildings: Dictionary = {}
+
 ## Withering (see BuildingDecay / docs/concept/timber_construction.md
 ## #withering-decay-as-a-bounded-closed-form-catch-up): each placed piece's
 ## own `condition` (1.0 = new, decaying toward 0.0), keyed like
