@@ -5803,6 +5803,22 @@ section for the cross-aligned, honest-gaps-included summary.
 
 ### Building (`concept/building.md`)
 
+**Villages moved off this pipeline (2026-09-15).** Every bullet below this
+note describes the per-tile piece mechanism (`BuildingPiece`/
+`BuildingPlacement`/`RoomDetector`/`HouseBlueprint`) and is accurate history
+of what it does — but as of the Anno-style whole-building entity pass (see
+the new dated entry near the end of this file and `concept/building.md`'s
+own top section, "Buildings are entities; interiors are scenes"), NPC
+village houses no longer go through ANY of it: `VillageRenderer` now calls
+`BuildingCatalog`/`VillageLayout`/`EarthChunkManager.place_building`
+instead of `HouseBlueprint`/`_stamp_house`/`_fit_house` (all deleted from
+the renderer). `HouseBlueprint` itself, `house_blueprint.gd`'s sibling
+`building_blueprint.gd`, and `ProceduralHouseSprite` are deleted outright —
+grep-confirmed zero live callers beyond their own tests. The piece
+mechanism remains exactly as documented below for player-built structures
+only, unchanged and still live, until the pending player-blueprint re-route
+(named a still-open gap in the new dated entry).
+
 - **Tile placement/destruction (building system)** (medium) — ✅ Done — see Phase 3 table above; earth/campfire/furnace are all live, wired to `Player._build_step`/`_arm_placeable`, persisted across unload/reload.
 - **Structure building: real multi-piece, enterable houses** (large) — ✅ Done (mechanism; not player-reachable yet) — see `concept/building.md`'s Status section for the full breakdown. `building_piece.gd`/`building_placement.gd`/`room_detector.gd`/`house_blueprint.gd` (pure logic, tested) are now wired into rendering (`ProceduralBuildingPieceSprite`, 10 piece tiles in the shared terrain atlas) and `EarthChunkManager` (real wall/window collision via the same StaticBody2D mechanism trees/boulders use; a roof piece paints onto its own `TileMapLayer` and hides over exactly the room the player is standing in, via `RoomDetector.room_containing`; `stamp_structure_at_global` writes a whole structure in one repaint). The older `src/gameplay/building_blueprint.gd` (multi-tile footprint fit/overlap validation only, no pieces/enclosure) is a separate, more limited module, superseded by this for actual house construction. Village houses DO call this (`VillageRenderer._stamp_house`, see the roster-diversity entry immediately below and the NPC section's own house-choice entry) — this line was stale, having said otherwise. Known gap: no player-facing build cursor/piece-selection UI yet (pieces are placeable today only via direct `stamp_structure_at_global`/`build_at_global` calls, not the hotbar).
 - **House blueprint catalog — real shape variety, not one fixed box** (large) — ✅ Done — reported directly: "the houses the npcs build are minimal and don't look neat and diverse... we want Anno 1800 like houses and villages... house blueprints which function as template/recipe... enough different blueprints that every house in a village can look different... NPCs choice though." `house_blueprint.gd` was a single hardcoded generator (one wall-ring box, fixed 5x4, no windows ever placed despite `wood_window`/`stone_window` existing in the piece catalog since the original building pass) — every village house in the game was visually identical apart from wood/stone material. It is now a CATALOG of 10 named shapes (`BLUEPRINT_IDS`: `hut_tiny` through `cottage_small`/`cottage_window_pair`/`cottage_wide`/`cottage_tall`/`cottage_bright`/`manor_wide`/`manor_grand`, plus two genuinely L-shaped ones, `cottage_L_small`/`manor_L_wide`), spanning real footprint sizes (9 to 42 cells), window counts (0 to 4), and — for the L entries — a non-rectangular silhouette. Built from three safe, tested geometric primitives rather than hand-pixeled ASCII floor plans (which could silently produce an unenclosed or two-door house with no obvious symptom): a plain wall-ring rectangle, a corner notch carve (`_carve_notch` — erases the notch's cells entirely and upgrades any newly-exposed floor cell to wall, so the L's own inner corner is a real, sealed boundary, not a hole), and a single general rule for where a door/window may go (`_wall_candidates`: exactly one floor neighbour, at least one missing/exterior neighbour) that correctly excludes both an ordinary rectangle's outer corners (zero floor neighbours) and an L-shape's inner corner (two floor neighbours) without any shape-specific special-casing. Verified for every one of the 10 catalog entries, not spot-checked: each encloses exactly one real room (`RoomDetector`), has exactly one door, stays within its own declared footprint, and is fully roofed except for its own front facade (see "Houses that actually read as houses from above" below — roofs originally covered only floor cells, which is what made a house read inside-out). A follow-up ASCII-render sanity check confirmed both L-shapes read as real, connected L silhouettes, not broken geometry. `VillageRenderer._stamp_house` now computes each house's origin/water-avoidance check against ITS OWN chosen blueprint's footprint rather than one fixed constant, and `_door_facing_direction` (used to place a merchant's personal trading stand) was generalized from "which of a plain box's 4 sides" to "the opposite direction from the door's own actual floor neighbour" — the old box-only logic would have silently pointed a stand at a wall for a door landing on an L-shape's own notch-exposed edge, which isn't one of a rectangle's 4 sides at all. See the NPC section's own entry for how a villager picks which of the 10 to build.
@@ -22178,3 +22194,134 @@ neighbors. Spec cross-aligned in `concept/production_chains.md` ("What the
 crafting menu lists" now names the shared predicate and both surfaces,
 and why the gate must never move into `craft()`) and
 `concept/workforce.md`'s "Blueprint tiers" paragraph.
+
+### Anno-style whole-building village houses: catalog, world registry, road layout (`concept/building.md`, 2026-09-15) — interiors and player building still pending
+
+Reported live, with screenshots, after the piece-house passes above had
+already landed: *"these real buildings don't do well... can we change the
+housing completely and make them a single sprite / entity like in Anno?
+NPCs would then be able to use algorithms to build efficient villages...
+The player can enter buildings which would then load and switch to the
+interior scene... so a House small from the outside would be big inside."*
+Every prior complaint this session (roofs seen from above, wall thickness,
+invisible furniture, unreachable doors) traced to the same root cause: a
+real building rendered as a flat grid of top-down tiles cannot read as a
+building. Decided with the user rather than assumed: player-built houses
+move to the same model too (later slice), interiors are hand-authored
+templates (later slice), and on load a village's OLD piece-built houses
+regenerate as whole-building entities while player-built piece structures
+are left untouched (still pending — see gaps below). This entry covers the
+first two of five planned slices: the building itself as an entity, and an
+Anno-style road-frontage village layout. See `concept/building.md`'s new
+top section, "Buildings are entities; interiors are scenes," for the full
+spec (pillars, asset contract, mechanism) — the old "Structure building:
+pieces, rooms, and enterable houses" section is retitled "Legacy" and
+explicitly closed to new work.
+
+**A building is one entity with a footprint, not an assembly of tiles.**
+New `src/gameplay/building_catalog.gd`: three house ids (`house_small`
+2x2, `house_medium` 3x2, `house_large` 4x3) with a footprint, a door on
+the south edge, a doorstep (the one cell it's entered from), and the same
+8-column x 5-row lifecycle sheet contract (construction/active/idle/
+burning/ruined) the existing illustrated structures (`blacksmith.png`,
+`farmhouse.png`, ...) already use — reusing that pipeline rather than
+building a parallel one. `IllustratedStructureSprite` gained
+`sheet_frame_image`/`footprint_frame_texture` to read any cell of any
+contract sheet scaled to a multi-tile footprint; a procedural
+roof-over-walls placeholder (`procedural_building_placeholder_sprite.gd`)
+draws until the house sheets themselves land. `choose_house_id` mirrors
+the old `HouseBlueprint.choose_blueprint_id`'s per-occupation pool +
+personality nudge, so villages stay varied per class. `occupies(tile_id)`
+is the one predicate every occupancy seam now checks alongside the legacy
+`BuildingPiece.has_piece`: ground-cover blocking, the tree-rooting apron
+(`touches_building`, mirroring `touches_piece`), and siting itself.
+
+**The world registry.** `Chunk.buildings` (origin -> id/facing/seed/
+condition/progress/owner_household_id), persisted like the other
+modification layers. `EarthChunkManager.place_building` writes the anchor
+cell's id into `chunk.modifications` (so every existing "structure near"
+scan keeps working unchanged) and a reserved `FOOTPRINT_TILE_ID` marker
+into the rest of the footprint, refusing an already-occupied footprint or
+doorstep; `remove_building`/`building_at_global`/`buildings_in_chunk`/
+`building_door_near` round it out. A building is one bottom-anchored
+`Node2D` (fixes the old centre-anchor y-sort bug) with a `Sprite2D` sized
+to its real footprint and a `StaticBody2D` covering the WHOLE footprint on
+`GROUND_FLOOR_COLLISION_LAYER` — spawned on load and inside
+`place_building` itself, so a freshly-stamped village house has real
+collision the same frame, not after the next chunk reload. A building
+whose doorstep lands in water is washed away and the chunk re-saved on
+load, the same `_reclaim_pieces_standing_in_water` pattern the piece
+houses already had, now a sibling `_reclaim_buildings_standing_in_water`.
+
+**Villages are laid out, not scattered.** New `src/world/village_layout.gd`
+replaces the old ring entirely: a spine street through the chunk (seeded
+start jitter), buildings on its north side with doors facing south — the
+doorstep IS a road cell, real one-tile gaps between plots, a street that
+fills opens a further one south. Pure and seeded (`is_buildable`/
+`is_occupied` are `Callable`s the renderer supplies from real world state),
+so it's fully unit-tested against stub predicates rather than the live
+world. A real bug surfaced building its own regression test, not by
+inspection: a building that could fit nowhere retried at every x across
+the ENTIRE street before giving up at the very last position, by which
+point no street width remained for the NEXT building to even attempt — and
+"nothing placed this street" then wrongly ended the whole layout. Fixed
+with a `building_index` field (so a skipped building doesn't shift the
+ids behind it) and `_MAX_ATTEMPTS_PER_BUILDING := 12`, a deliberately
+bounded, test-pinned cap on how many positions one hopeless building may
+fail before being skipped for good — never retried on a later street
+either, so the cost of one impossible building stays bounded rather than
+scaling with how many streets open behind it.
+
+**`VillageRenderer` rewritten around it.** `spawn_village` now chooses a
+building id per NPC (`BuildingCatalog.choose_house_id`), lays the whole
+village via `VillageLayout.layout`, stamps road cells as the existing
+`TerrainRenderer.TRAIL_TILE_ID`, calls `world.place_building` per plot,
+and sets each NPC's home/stand position to the plot's real doorstep — no
+more `_stamp_house`/`_fit_house`/`_find_clear_origin`/window-light nodes,
+all deleted along with the `HouseBlueprint` import. Landmarks, the
+merchant personal stand, workspot props, and shared-market wiring are
+otherwise unchanged. `house_blueprint.gd`, its sibling
+`building_blueprint.gd` (multi-tile footprint fit only, no pieces), and
+`procedural_house_sprite.gd` are deleted outright, each grep-confirmed to
+have zero live callers left beyond their own tests (also deleted).
+
+Red-first throughout, branch `feat/anno-buildings` off `origin/main`,
+pushed before writing code. Tests: `test_building_catalog.gd` 19/19 (ids,
+footprint/door/doorstep geometry, sheet contract, `occupies`,
+`touches_building`, `choose_house_id` determinism/variety/occupation
+bias), `test_earth_chunk_manager_buildings.gd` 18/18 (placement, query,
+removal, door-scan, occupancy-seam integration, water reclaim, all
+against a real Berlin chunk fixture), `test_village_layout.gd` 15/15
+(placement, doorstep-is-a-road-cell, facing, no-overlap, real gaps, the
+starvation regression above, determinism), `test_village_renderer.gd`
+rewritten around the new model, 27/27 (down from the old file's ~60 —
+the piece-stamping-specific tests it used to carry no longer apply to
+villages at all). `test_earth_chunk_manager_ground_cover.gd`/
+`..._water_reclaims.gd`/`..._buildable_terrain.gd` re-run clean (8/8,
+5/5, 11/11) to confirm the shared occupancy/water seams still hold.
+
+**Named gaps, not silently deferred — three later slices in the same
+plan.** (1) **No enterable interiors yet.** A building today is a flat
+sprite + one solid collision box; "small outside, big inside" (the whole
+point of the request) is slice 4, unstarted — no `HouseInteriorView`, no
+player indoors state. (2) **Player building is untouched.** Blueprint
+construction still runs entirely on the old per-tile `BuildingPiece`
+pipeline described above; the re-route to `place_building` is slice 5,
+unstarted. (3) **Village houses currently carry no owner.**
+`VillageRenderer` calls `place_building` with `owner_household_id = ""` —
+no `ConstructionProject`/`property_id()` is granted, so the "one unified
+house id" the plan called for is not yet wired (`record_settlement_
+founded_if_new` still only records the settlement-founding event, not
+per-house ownership; `_piece_property_id`'s per-cell scheme is untouched
+and still serves player structures). (4) **Old-save migration is not
+built.** A settlement chunk whose houses were piece-stamped by an earlier
+save still renders and behaves as pieces on load — nothing yet detects
+and regenerates it as whole-building entities; only a FRESH settlement
+(never before visited under the old code) gets the new model today. (5)
+**No NPC hide-when-home.** A villager whose schedule says `home` still
+stands visibly on their own doorstep rather than disappearing inside,
+unlike the conversion-worker table precedent this was meant to follow.
+None of these block what shipped: a fresh village today places real,
+collidable, road-fronted whole-building houses with varied ids per
+occupation — the four gaps above are exactly the plan's remaining slices,
+not scope quietly dropped.
