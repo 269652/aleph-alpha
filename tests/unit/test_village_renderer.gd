@@ -68,8 +68,8 @@ class StubWorld:
 		return occupied_cells.get(Vector2i(x, y), "")
 
 	var founded_calls: Array = []
-	func record_settlement_founded_if_new(chunk_coord: Vector2i, npcs: Array) -> void:
-		founded_calls.append({"chunk_coord": chunk_coord, "npcs": npcs})
+	func record_settlement_founded_if_new(chunk_coord: Vector2i, npcs: Array, plots: Array = []) -> void:
+		founded_calls.append({"chunk_coord": chunk_coord, "npcs": npcs, "plots": plots})
 
 
 func before_each():
@@ -445,6 +445,24 @@ func test_spawning_a_settlement_reports_it_founded():
 	assert_eq(world.founded_calls.size(), 1)
 	assert_eq(world.founded_calls[0]["chunk_coord"], coord)
 	assert_eq(world.founded_calls[0]["npcs"].size(), SettlementGenerator.POPULATION)
+
+
+## The real VillageLayout plots (docs/concept/building.md "One house id")
+## reach the founding call, not an empty default -- EarthChunkManager needs
+## these to grant each villager's REAL house ownership through a
+## ConstructionProject rather than a synthetic per-index id. Every plot's
+## building_index must be a real, in-range villager index, and there must
+## be at least one (this settlement chunk has real buildable ground, so
+## some subset of villagers should always get a real plot).
+func test_founding_is_reported_with_the_real_village_layout_plots():
+	var coord := _find_settlement_chunk("grassland")
+	var world := StubWorld.new()
+	renderer.spawn_village(parent, coord, coord * CHUNK_SIZE, CHUNK_SIZE, TILE_SIZE, "grassland", world)
+	var plots: Array = world.founded_calls[0]["plots"]
+	assert_eq(plots.size(), world.place_calls.size(), "one plot per real placed building, no more no less")
+	assert_gt(plots.size(), 0, "precondition: some villager should have gotten a real plot")
+	for plot in plots:
+		assert_between(plot["building_index"], 0, SettlementGenerator.POPULATION - 1)
 
 
 func test_a_chunk_with_no_settlement_reports_nothing():

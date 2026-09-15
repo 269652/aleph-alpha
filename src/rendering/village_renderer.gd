@@ -115,14 +115,6 @@ func spawn_village(
 	# simplification trees/creatures already accept (see docs/progress.md).
 	var market := VillageMarket.new()
 
-	# Tells the world this settlement exists, duck-typed exactly like
-	# place_building below -- world == null or lacking the method is
-	# skipped rather than crashing. EarthChunkManager owns deciding whether
-	# this is genuinely a FIRST founding (a chunk reload must not re-record
-	# one).
-	if world != null and world.has_method("record_settlement_founded_if_new"):
-		world.record_settlement_founded_if_new(chunk_coord, settlement.npcs)
-
 	var npcs: Array = settlement.npcs
 	# One building id per villager, chosen from their own occupation +
 	# personality (see BuildingCatalog.choose_house_id) -- VillageLayout
@@ -140,6 +132,12 @@ func spawn_village(
 	# already reach.
 	var door_positions: Array[Vector2] = settlement.house_positions.duplicate()
 	var stand_positions: Array[Vector2] = settlement.house_positions.duplicate()
+	# Every plot VillageLayout actually placed -- forwarded to
+	# record_settlement_founded_if_new below so it can grant each villager's
+	# real house ownership through the unified ConstructionProject id scheme
+	# (docs/concept/building.md "One house id") instead of a synthetic one.
+	# Stays empty when there is no world or no real placement happened.
+	var plots: Array = []
 
 	if world != null and world.has_method("place_building"):
 		var layout_seed := hash("%d_%d_village_layout" % [chunk_coord.x, chunk_coord.y])
@@ -150,13 +148,14 @@ func spawn_village(
 			var g: Vector2i = chunk_coord * chunk_size + cell
 			return world.modification_at_global(g.x, g.y) != "" if world.has_method("modification_at_global") else false
 		var result := _village_layout.layout(building_ids, chunk_size, layout_seed, is_buildable, is_occupied)
+		plots = result["plots"]
 
 		if world.has_method("build_at_global"):
 			for local_cell in result["road_cells"]:
 				var g: Vector2i = chunk_coord * chunk_size + local_cell
 				world.build_at_global(g.x, g.y, TerrainRenderer.TRAIL_TILE_ID)
 
-		for plot in result["plots"]:
+		for plot in plots:
 			var building_index: int = plot["building_index"]
 			var building_seed := hash("%d_%d_house_%d" % [chunk_coord.x, chunk_coord.y, building_index])
 			world.place_building(chunk_coord, plot["origin"], plot["building_id"], plot["facing"], building_seed, "")
@@ -166,6 +165,15 @@ func spawn_village(
 			)
 			door_positions[building_index] = doorstep_position
 			stand_positions[building_index] = doorstep_position + Vector2(0, _STAND_OFFSET_TILES * tile_size)
+
+	# Tells the world this settlement exists, duck-typed exactly like
+	# place_building above -- world == null or lacking the method is
+	# skipped rather than crashing. EarthChunkManager owns deciding whether
+	# this is genuinely a FIRST founding (a chunk reload must not re-record
+	# one). `plots` (computed above, possibly empty) lets it grant each
+	# actually-placed house's ownership through the unified id scheme.
+	if world != null and world.has_method("record_settlement_founded_if_new"):
+		world.record_settlement_founded_if_new(chunk_coord, npcs, plots)
 
 	var spawned: Array[Node2D] = []
 	for landmark_id in settlement.landmarks:

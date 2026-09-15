@@ -4745,7 +4745,25 @@ func wipe_event_store(path: String = EventStorePersistence.SAVE_PATH) -> void:
 ## store's own state (has this settlement ever recorded anything?) is the
 ## guard, not an in-memory flag -- the same robustness reasoning as every
 ## other "spawn once, persist across reload" system in this file.
-func record_settlement_founded_if_new(chunk_coord: Vector2i, npcs: Array) -> void:
+##
+## `plots` (docs/concept/building.md "One house id"): VillageLayout's own
+## plot list, each carrying `building_index`/`origin`/`building_id` for a
+## REAL placed building -- npc index `i`'s own house is the plot whose
+## `building_index == i`, not merely "house i" by construction, since a
+## villager VillageLayout couldn't fit anywhere is skipped without shifting
+## the indices behind it (see VillageLayout's own doc comment). When a
+## matching plot exists, ownership is granted through a real
+## ConstructionProject started and completed at once -- the SAME
+## property_id() scheme stamp_house_and_grant_ownership already grants the
+## player's own houses through, so a village house and a player house share
+## one id scheme rather than two. Defaults to `[]`, which must behave
+## BYTE-IDENTICAL to before this parameter existed: every caller that only
+## cares about npcs/households/events (the vast majority of this function's
+## own callers, none of them about building ownership specifically) needs no
+## change, and a villager with no matching plot -- whether because `plots`
+## is empty/omitted, or VillageLayout genuinely left them without a house --
+## keeps the exact old per-index id below.
+func record_settlement_founded_if_new(chunk_coord: Vector2i, npcs: Array, plots: Array = []) -> void:
 	var settlement_id := EntityRef.for_settlement(chunk_coord)
 	if not _event_store.events_for_entity(settlement_id).is_empty():
 		return
@@ -4761,6 +4779,10 @@ func record_settlement_founded_if_new(chunk_coord: Vector2i, npcs: Array) -> voi
 	_event_store.append(founded)
 	_memory_store.witness_event(founded, _world_age_seconds)
 
+	var plot_by_building_index := {}
+	for plot in plots:
+		plot_by_building_index[plot["building_index"]] = plot
+
 	for i in npcs.size():
 		var settled := Event.new("npc_settled", _world_age_seconds)
 		settled.actors = [npc_ids[i]]
@@ -4772,16 +4794,21 @@ func record_settlement_founded_if_new(chunk_coord: Vector2i, npcs: Array) -> voi
 		# (see docs/emergence/01/03 "Households"/"Property"). Single-member
 		# because no partnership/reproduction system exists yet to justify
 		# who belongs to whose household (docs/roadmap.md's Emergence
-		# Phase 3 note) -- keyed the same way VillageRenderer._stamp_house
-		# derives that villager's own house seed, so this needs no new
-		# per-house id scheme: house index `i` and npc index `i` are the
-		# same villager by construction (SettlementGenerator.generate_
-		# settlement builds npcs and house_positions in the same loop).
+		# Phase 3 note). Formed unconditionally -- an economic agent exists
+		# even homeless, the same honest state VillageLayout can already
+		# leave a villager in.
 		var household := _household_store.form_household(npc_ids[i])
-		var house_id := EntityRef.for_kind(
-			"house", "%d_%d_%d" % [chunk_coord.x, chunk_coord.y, i]
-		)
-		_household_store.grant_property(household.id, house_id)
+		var plot: Variant = plot_by_building_index.get(i)
+		if plot != null:
+			var project := _construction_project_store.start_project(
+				chunk_coord, plot["origin"], plot["building_id"], household.id
+			)
+			_construction_project_store.complete_project(project.id, _household_store)
+		else:
+			var house_id := EntityRef.for_kind(
+				"house", "%d_%d_%d" % [chunk_coord.x, chunk_coord.y, i]
+			)
+			_household_store.grant_property(household.id, house_id)
 
 
 ## Individual-fidelity fruiting for trees near `player_pixel` (see the "two

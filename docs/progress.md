@@ -22317,17 +22317,17 @@ point of the request) is slice 4, unstarted — no `HouseInteriorView`, no
 player indoors state. (2) **Player building is untouched.** Blueprint
 construction still runs entirely on the old per-tile `BuildingPiece`
 pipeline described above; the re-route to `place_building` is slice 5,
-unstarted. (3) **Village houses currently carry no owner.**
-`VillageRenderer` calls `place_building` with `owner_household_id = ""` —
-no `ConstructionProject`/`property_id()` is granted, so the "one unified
-house id" the plan called for is not yet wired (`record_settlement_
-founded_if_new` still only records the settlement-founding event, not
-per-house ownership; `_piece_property_id`'s per-cell scheme is untouched
-and still serves player structures). (4) **Old-save migration is not
-built.** A settlement chunk whose houses were piece-stamped by an earlier
-save still renders and behaves as pieces on load — nothing yet detects
-and regenerates it as whole-building entities; only a FRESH settlement
-(never before visited under the old code) gets the new model today. (5)
+unstarted. (3) **~~Village houses currently carry no owner.~~ Fixed
+2026-09-15, see the dated entry below ("One house id, wired").**
+`chunk.buildings`' own `owner_household_id` field is STILL always ""
+(unrelated dead-on-read field, see that entry) — the real fix routes
+through `HouseholdStore`/`ConstructionProjectStore` instead, the channel
+every other reader (taxation, resident happiness) actually uses. (4)
+**Old-save migration is not built.** A settlement chunk whose houses were
+piece-stamped by an earlier save still renders and behaves as pieces on
+load — nothing yet detects and regenerates it as whole-building entities;
+only a FRESH settlement (never before visited under the old code) gets
+the new model today. (5)
 **No NPC hide-when-home.** A villager whose schedule says `home` still
 stands visibly on their own doorstep rather than disappearing inside,
 unlike the conversion-worker table precedent this was meant to follow.
@@ -22335,3 +22335,54 @@ None of these block what shipped: a fresh village today places real,
 collidable, road-fronted whole-building houses with varied ids per
 occupation — the four gaps above are exactly the plan's remaining slices,
 not scope quietly dropped.
+
+### One house id, wired: village houses now own property through the same ConstructionProject the player's own houses use (2026-09-15)
+
+Gap (3) from the entry above, closed. `EarthChunkManager.record_settlement_
+founded_if_new` used to grant every villager a synthetic
+`"house:<cx>_<cy>_<npc index>"` property unconditionally -- a SECOND id
+scheme alongside the real one (`ConstructionProjectStore.start_project` +
+`complete_project`, keyed by `ConstructionProject.property_id()` =
+`"house:<cx>_<cy>_<origin.x>_<origin.y>"`) the player's own
+`stamp_house_and_grant_ownership` already grants through. Worse, the
+per-index scheme assumed "npc index `i`'s house is house `i`", which
+`VillageLayout`'s own `building_index` field (see the entry above) exists
+specifically to say is false -- a skipped, unplaceable building does not
+shift the indices behind it.
+
+`record_settlement_founded_if_new` gained a third parameter, `plots:
+Array = []` -- `VillageRenderer.spawn_village` now passes VillageLayout's
+own real plot list through (each `{building_index, origin, building_id}`).
+For a villager whose OWN plot was actually placed (matched by
+`building_index`), ownership now routes through a real, started-and-
+completed-at-once `ConstructionProject`, the exact mechanism the player's
+own house-build already uses -- one id scheme, not two. A villager with no
+matching plot (VillageLayout genuinely left them homeless, or a caller
+supplies no plots at all) keeps the OLD synthetic id, unchanged -- this
+is deliberate backward compatibility, not a leftover: `plots` defaulting
+to `[]` means every one of this function's ~130 other call sites across
+the economy/dialogue/bread-chain test surface (none of them about
+building ownership) needed zero changes and keep their exact prior
+behavior, verified by re-running the three pre-existing household/
+property tests directly rather than assuming the default preserves them.
+
+Explicitly NOT touched: `chunk.buildings[origin]["owner_household_id"]`
+(written by `place_building`, confirmed dead-on-read everywhere in `src/`)
+and `_piece_property_id`'s per-cell exposure-lookup key (confirmed, by its
+own doc comment, to already never match any real grant -- a pre-existing,
+separate no-op, not a regression from this change). Both are named here
+rather than silently left inconsistent.
+
+Red-first (still on `feat/anno-buildings`): 4 new tests in
+`test_earth_chunk_manager.gd` (a real plot grants ownership through a
+`ConstructionProject`; the granted id matches the player's own scheme
+exactly; a villager with no matching plot keeps the old id; an empty
+`plots` list behaves byte-identical to the old 2-argument call) plus 1 new
+integration test in `test_village_renderer.gd` (the real plots
+`spawn_village` computes actually reach the founding call, one per real
+placed building). All red as a compile-time arity error before the
+change (proving the tests drive real, not-yet-existent behavior), green
+after. Re-ran the three pre-existing settlement-founding/household tests
+that predate this change directly against the new code to confirm zero
+behavior change for the 2-argument form. `test_village_renderer.gd` full
+file 28/28.
