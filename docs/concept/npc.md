@@ -489,6 +489,26 @@ because the code took them:
    lands nothing.** Half a deer is not half a meal, and a wounded animal
    that escapes fed nobody.
 
+**Measured, not assumed** (`tools/probe_village_hunting.gd`, 40 chunk-widths
+east of Berlin, real chunks, real settlements, real spawned creatures): of
+**9 real hunter villagers, 6 (67%) had real quarry within reach** of where
+they actually work, and **none saw no live quarry at all** — around 30
+huntable creatures are loaded at any moment. The distance from a hunter's
+workspot to the nearest real animal ran **16px / 244px / 419px**
+(min/median/max) against a reach of **250px**.
+
+That median lands within 3% of the reach, which is worth stating plainly
+because the reach was not chosen for it: it is `LumberjackMarker`'s own
+search radius, borrowed on the argument that a village worker ranges about
+as far for an animal as for a tree, and test-pinned to it. The measurement
+says that argument was right to within a rounding error. It also says the
+feature is a coin flip per hunter rather than a certainty — the third that
+misses sits at 250–419px and falls back to the aggregate, which is exactly
+what the fallback is for. **The reach is deliberately NOT widened to
+capture them.** Nothing principled sits at 419px; moving it there would be
+tuning a constant to a sample, which is the thing this project's rules
+forbid and the thing the whole borrow-and-pin discipline exists to avoid.
+
 🚧 **A fisher's dock is not sited at water.** `VillageRenderer` places
 every personal workspot prop — a farmer's field, a blacksmith's forge, a
 fisher's dock — on dry ground near that villager's own house, with no

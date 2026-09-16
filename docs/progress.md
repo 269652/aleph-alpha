@@ -23142,6 +23142,31 @@ species reference — exactly what a player butchering that same carcass
 would cut out of it, so a well-fed deer feeds the village better than a
 starved one.
 
+**Real probe** (`tools/probe_village_hunting.gd`, run against the live
+`EarthChunkManager`/`VillageRenderer`/`HuntableQuarry` code, not hand-traced
+— one manager walked 40 chunk-widths east of Berlin, chunks loading and
+evicting around it the way they do for a player): of **9 real hunter
+villagers met, 6 (67%) had real quarry within reach** of where they
+actually work, **none saw no live quarry at all**, and ~30 huntable
+creatures were loaded at any moment. Distance from a hunter's workspot to
+the nearest real animal: **16 / 244 / 419 px** (min/median/max) against a
+**250 px** reach. The median lands within 3% of the reach, and the reach was
+not chosen for it — it is `LumberjackMarker`'s own radius, borrowed and
+test-pinned. Deliberately **not** widened to capture the missing third:
+nothing principled sits at 419px, and moving a constant to fit a sample is
+precisely what this project's no-manual-tuning rule forbids.
+
+Getting that number took three separate probe bugs, each of which produced
+a plausible ZERO rather than an error, and all three are now written into
+the tool's own doc comment for the next probe that spawns real world nodes:
+a `-s` script is compiled before autoloads register (so `preload`ing
+`EarthChunkManager`, which references `WorldItemBus`, fails to compile); a
+SceneTree script's `_init` runs before `root` exists; and `_initialize` can
+add children but `root` is not live yet, so they never get `_ready()` —
+`add_to_group` never runs and every group query comes back empty. That last
+one reported 25 real spawned creature markers as 0 huntable ones and read
+exactly like a broken feature.
+
 Honest gaps and deliberate divergences, each recorded in
 `concept/npc.md`'s own status subsection:
 
