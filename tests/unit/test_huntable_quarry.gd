@@ -24,6 +24,9 @@ extends GutTest
 
 const HuntableQuarry = preload("res://src/gameplay/huntable_quarry.gd")
 const LumberjackMarker = preload("res://src/rendering/lumberjack_marker.gd")
+const CreatureMarker = preload("res://src/rendering/creature_marker.gd")
+const CreatureMass = preload("res://src/world/creature_mass.gd")
+const Butchering = preload("res://src/gameplay/butchering.gd")
 
 
 ## Duck-typed stand-in for a real CreatureMarker: the three things
@@ -32,6 +35,7 @@ const LumberjackMarker = preload("res://src/rendering/lumberjack_marker.gd")
 ## world-duck-typing convention.
 class StubInfo:
 	extends RefCounted
+	var species := "deer"
 	var health := 10.0
 	var is_predator := false
 	var is_world_boss := false
@@ -198,3 +202,83 @@ func test_nearest_defaults_to_the_search_radius():
 	var just_inside := _quarry_at(Vector2(HuntableQuarry.SEARCH_RADIUS_PX - 1.0, 0.0))
 	assert_null(HuntableQuarry.nearest([just_outside], Vector2.ZERO))
 	assert_eq(HuntableQuarry.nearest([just_inside], Vector2.ZERO), just_inside)
+
+
+# -- what a kill actually gives --------------------------------------------
+
+
+## Carries the one extra thing a meat yield needs beyond `info`: the
+## animal's own real live mass (docs/concept/metabolism.md), the same
+## reading CreatureMarker._spawn_carcass_if_eligible uses to set a
+## carcass's mass_ratio.
+class MassiveCreature:
+	extends RefCounted
+	var position := Vector2.ZERO
+	var info = StubInfo.new()
+	var mass_kg := 0.0
+
+	func is_tame() -> bool:
+		return false
+
+	func current_mass_kg() -> float:
+		return mass_kg
+
+
+func _deer_of_mass(ratio: float) -> MassiveCreature:
+	var deer := MassiveCreature.new()
+	deer.info.species = "deer"
+	deer.mass_kg = CreatureMass.mass_kg_for("deer") * ratio
+	return deer
+
+
+func test_an_average_animal_yields_exactly_what_its_carcass_would():
+	# Not a second opinion about how much meat is on a deer: the SAME
+	# Butchering.meat_count a player butchering that very carcass gets.
+	assert_eq(HuntableQuarry.meat_yield_of(_deer_of_mass(1.0)), Butchering.meat_count(0.0, 1.0))
+
+
+func test_a_well_fed_animal_yields_more_meat_than_a_starved_one():
+	var fat := HuntableQuarry.meat_yield_of(_deer_of_mass(1.6))
+	var thin := HuntableQuarry.meat_yield_of(_deer_of_mass(0.4))
+	assert_gt(fat, thin)
+
+
+func test_a_hunter_gets_no_skill_bonus_on_the_cut():
+	# A villager is not a trained butcher -- SkillTree's meat_yield nodes
+	# are the player's to earn (docs/concept/carrion.md), so the villager's
+	# cut is the unbonused one.
+	var deer := _deer_of_mass(1.3)
+	assert_eq(HuntableQuarry.meat_yield_of(deer), Butchering.meat_count(0.0, 1.3))
+
+
+func test_an_animal_that_cannot_report_its_mass_yields_the_flat_count():
+	# Fail-open, same convention as is_tame above.
+	var plain := _quarry_at(Vector2.ZERO)
+	plain.info.species = "deer"
+	assert_eq(HuntableQuarry.meat_yield_of(plain), Butchering.meat_count(0.0, 1.0))
+
+
+func test_nothing_yields_no_meat():
+	assert_eq(HuntableQuarry.meat_yield_of(null), 0)
+
+
+func test_a_creature_with_no_species_record_yields_no_meat():
+	var blank := _quarry_at(Vector2.ZERO)
+	blank.info = null
+	assert_eq(HuntableQuarry.meat_yield_of(blank), 0)
+
+
+# -- the blow, and where to look -------------------------------------------
+
+
+func test_strike_damage_matches_a_predators_own_bite():
+	# A villager with a spear bringing down a deer is doing exactly what a
+	# wolf does to the same deer, so it lands the same blow -- the same
+	# reasoning LumberjackMarker.FELL_DAMAGE gives for matching
+	# Player.BASE_CHOP_DAMAGE ("an axe swing is an axe swing regardless of
+	# who swings it").
+	assert_eq(HuntableQuarry.STRIKE_DAMAGE, CreatureMarker.ATTACK_DAMAGE)
+
+
+func test_quarry_is_looked_for_in_the_creature_group():
+	assert_eq(HuntableQuarry.QUARRY_GROUP_NAME, CreatureMarker.GROUP_NAME)

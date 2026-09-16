@@ -1,7 +1,10 @@
 extends RefCounted
 
-## What a village hunter is allowed to put a spear into, and which one is
-## nearest (see docs/concept/npc.md, "Work against the real world, not
+const Butchering = preload("res://src/gameplay/butchering.gd")
+const CreatureMass = preload("res://src/world/creature_mass.gd")
+
+## What a village hunter is allowed to put a spear into, which one is
+## nearest, and what the kill actually gives (see docs/concept/npc.md, "Work against the real world, not
 ## against a number").
 ##
 ## The predicate half of the hunt: ForagerBehavior decides WHEN a villager
@@ -51,6 +54,22 @@ extends RefCounted
 ## rendering-layer dependency.
 const SEARCH_RADIUS_PX := 250.0
 
+## The group a hunter looks in. CreatureMarker.GROUP_NAME's own value,
+## test-pinned to it (test_quarry_is_looked_for_in_the_creature_group) for
+## the same reason the radius is: named here so this module states where
+## quarry lives without importing the 3000-line marker that puts it there.
+const QUARRY_GROUP_NAME := "creature"
+
+## What one blow from a hunting villager takes off. CreatureMarker.
+## ATTACK_DAMAGE's own value -- a villager bringing a deer down is doing
+## exactly what a wolf does to the same deer, so it lands the same blow.
+## That is LumberjackMarker.FELL_DAMAGE's own reasoning for matching
+## Player.BASE_CHOP_DAMAGE ("an axe swing is an axe swing regardless of who
+## swings it") pointed at the other verb, and it means a hunt takes as long
+## as a predation does rather than as long as a number nobody chose.
+## Test-pinned (test_strike_damage_matches_a_predators_own_bite).
+const STRIKE_DAMAGE := 6.0
+
 
 ## Whether `candidate` is a real, living, wild, ordinary animal a village
 ## hunter may take. False for null, for anything without a species record,
@@ -92,3 +111,36 @@ static func nearest(
 			best = candidate
 			best_distance = distance
 	return best
+
+
+## How much real meat `candidate` carries: exactly what a player butchering
+## that same animal's carcass would cut out of it
+## (Butchering.meat_count), against the animal's OWN live mass at this
+## moment relative to its species reference (docs/concept/metabolism.md) --
+## the same ratio CreatureMarker._spawn_carcass_if_eligible stamps onto the
+## carcass it leaves. A well-fed deer feeds the village better than a
+## starved one, and neither is a number this module invented.
+##
+## No skill bonus: SkillTree's butchering/meat_yield nodes are the player's
+## to earn (docs/concept/carrion.md), so a villager gets the plain cut.
+##
+## 0 for nothing and for anything without a species record. Fail-open on
+## the mass reading itself -- a candidate that cannot report its live mass
+## yields the flat, mass-blind count, which is what every caller predating
+## metabolism already got.
+static func meat_yield_of(candidate) -> int:
+	if candidate == null or not is_instance_valid(candidate):
+		return 0
+	var info = candidate.get("info")
+	if info == null:
+		return 0
+	return Butchering.meat_count(0.0, _mass_ratio_of(candidate, info))
+
+
+static func _mass_ratio_of(candidate, info) -> float:
+	if not candidate.has_method("current_mass_kg"):
+		return 1.0
+	var reference_mass := CreatureMass.mass_kg_for(info.species)
+	if reference_mass <= 0.0:
+		return 1.0
+	return candidate.current_mass_kg() / reference_mass
