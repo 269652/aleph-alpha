@@ -76,7 +76,7 @@ static func advance(
 		)
 	if priority == ConstructionPriority.Priority.SHORTFALL:
 		return _handle_shortfall(project_store, market, chunk_coord, origin, blueprint_id, recipe_book)
-	return _handle_ready(project_store, market, chunk_coord, origin, blueprint_id, household_id, recipe_book)
+	return try_start(project_store, market, chunk_coord, origin, blueprint_id, household_id, recipe_book)
 
 
 static func _handle_build_producer_first(
@@ -134,7 +134,13 @@ static func _handle_shortfall(
 	}
 
 
-static func _handle_ready(
+## The READY branch on its own -- the hysteresis-gated start + draw-down,
+## public for a caller that has already decided WHAT to build and needs
+## none of ConstructionPriority's producer/shortfall reasoning
+## (CivicBuildDecision's town hall: nothing produces a hall, and a waiting
+## civic plan is never abandoned by _handle_shortfall's stock-crash rule).
+## One body, not a duplicate: advance() itself calls this on READY.
+static func try_start(
 	project_store, market, chunk_coord: Vector2i, origin: Vector2i, blueprint_id: String,
 	household_id: String, recipe_book
 ) -> Dictionary:

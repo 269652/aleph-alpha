@@ -83,6 +83,7 @@ const EarthChunkManager = preload("res://src/world/earth_chunk_manager.gd")
 const HouseInteriorView = preload("res://src/rendering/house_interior_view.gd")
 const BuildingCatalog = preload("res://src/gameplay/building_catalog.gd")
 const HouseDecor = preload("res://src/gameplay/house_decor.gd")
+const InteriorTemplates = preload("res://src/gameplay/interior_templates.gd")
 const PixelNoise = preload("res://src/rendering/pixel_noise.gd")
 const PlayerIdentity = preload("res://src/emergence/player_identity.gd")
 const EntityRef = preload("res://src/emergence/entity_ref.gd")
@@ -398,6 +399,17 @@ var _enter_key_was_pressed := false
 ## nothing indoors-related may assume it is set.
 var _interior_viewport: SubViewport = null
 var _interior_viewport_container: SubViewportContainer = null
+## The building record the player is standing inside (see enter_building)
+## -- {} outdoors. The decorate verbs (docs/concept/housing.md
+## "Decorating an entered interior") read its chunk_coord/origin_local to
+## persist what they place, and its owner to decide whether they may.
+var _interior_building: Dictionary = {}
+## What the last decorate press had to say (placed/picked up/refused --
+## see _decorate_step); shown on the talk banner for DECORATE_MESSAGE_
+## DURATION, "" otherwise and always "" outdoors.
+var decorate_message := ""
+var _decorate_message_timer := 0.0
+const DECORATE_MESSAGE_DURATION := 3.0
 
 var survival := SurvivalMeters.new()
 ## The player's own real, live, unified body mass -- see docs/concept/
@@ -2394,6 +2406,84 @@ func _authority_step_indoors(delta: float) -> void:
 	_shop_step(delta)
 	_action_slots_step()
 	_talk_step(delta)
+	_decorate_step(delta)
+
+
+## Decorating your own house (docs/concept/housing.md "Decorating an
+## entered interior") -- the indoor build/destroy verbs, in place of the
+## outdoor _build_step/_destroy_step that never run in here (nothing
+## indoors may reach the outdoor world). The build key with an armed
+## furniture item (the same _arm_furniture/HotbarAction.FURNISH path the
+## outdoor verb reads) places that piece on the cell the avatar faces
+## (InteriorAvatar.facing_cell): persisted on the building record first
+## (EarthChunkManager.place_interior_furniture -- FurniturePlacement's
+## real floor/room rule), then painted and made solid at once
+## (HouseInteriorView.set_furniture), then one item consumed -- never
+## consumed on a refusal. The destroy key picks up whatever the faced cell
+## holds and refunds it. Only in a house the player's own household owns;
+## a villager's house refuses with a message. The same _rising_edge
+## latches the outdoor verbs use, so walking in or out never leaves a
+## half-pressed edge behind. Every outcome lands in decorate_message for
+## DECORATE_MESSAGE_DURATION.
+func _decorate_step(delta: float) -> void:
+	var build_pressed := (
+		Input.is_action_pressed("build") if _controlled_locally() else _pending_build_pressed
+	)
+	var build_just_pressed := _rising_edge("build", build_pressed, _last_build_input_state)
+	_last_build_input_state = build_pressed
+	var destroy_pressed := (
+		Input.is_action_pressed("destroy") if _controlled_locally() else _pending_destroy_pressed
+	)
+	var destroy_just_pressed := _rising_edge("destroy", destroy_pressed, _last_destroy_input_state)
+	_last_destroy_input_state = destroy_pressed
+
+	_decorate_message_timer = maxf(0.0, _decorate_message_timer - delta)
+	if _decorate_message_timer <= 0.0:
+		decorate_message = ""
+
+	if not (build_just_pressed or destroy_just_pressed) or _chunk_manager == null:
+		return
+	if not _owns_building(_interior_building):
+		_say_decorate("This is not your house to decorate.")
+		return
+	var chunk_coord: Vector2i = _interior_building["chunk_coord"]
+	var origin_local: Vector2i = _interior_building["origin_local"]
+	var target := _interior_avatar.facing_cell(_tile_size)
+
+	if build_just_pressed:
+		if _selected_furniture_item == null:
+			_say_decorate("Arm a piece of furniture from the hotbar to place it.")
+			return
+		var piece_id: String = _selected_furniture_item.id
+		if _inventory_counts().get(piece_id, 0) <= 0:
+			_say_decorate("You have no %s left." % _selected_furniture_item.display_name)
+			return
+		if not _chunk_manager.place_interior_furniture(chunk_coord, origin_local, target, piece_id):
+			_say_decorate("That spot cannot hold a %s." % _selected_furniture_item.display_name)
+			return
+		inventory.remove(piece_id, 1)
+		inventory_changed.emit()
+		_interior_view.set_furniture(target, piece_id)
+		_say_decorate("Placed %s." % _selected_furniture_item.display_name)
+		return
+
+	var removed := _chunk_manager.remove_interior_furniture(chunk_coord, origin_local, target)
+	if removed == "":
+		_say_decorate("Nothing of yours to pick up there.")
+		return
+	_interior_view.clear_furniture(target)
+	if _item_catalog.has(removed):
+		var item := _item_catalog.make(removed)
+		inventory.add(item, 1)
+		inventory_changed.emit()
+		_say_decorate("Picked up %s." % item.display_name)
+	else:
+		_say_decorate("Picked up %s." % removed)
+
+
+func _say_decorate(message: String) -> void:
+	decorate_message = message
+	_decorate_message_timer = DECORATE_MESSAGE_DURATION
 
 
 ## Whether the player is currently inside a real house interior (see
@@ -2422,9 +2512,14 @@ func can_leave_building() -> bool:
 ## avatar is placed one cell INSIDE the door (not on top of it -- landing
 ## exactly on the door/exit cell would let the very next _enter_exit_step
 ## call immediately trigger Leave again before the room is ever seen).
-func enter_building(interior_view: HouseInteriorView, avatar: InteriorAvatar) -> void:
+## `record`: the building entered (EarthChunkManager.building_door_near's
+## own record shape, chunk_coord/origin_local included) -- what the
+## decorate verbs act on; {} for a room that belongs to no building (a
+## bare test view).
+func enter_building(interior_view: HouseInteriorView, avatar: InteriorAvatar, record: Dictionary = {}) -> void:
 	_interior_view = interior_view
 	_interior_avatar = avatar
+	_interior_building = record
 	avatar.position = (Vector2(interior_view.door_cell) + Vector2(0.5, -0.5)) * _tile_size
 	if _interior_viewport_container != null:
 		_interior_viewport_container.show()
@@ -2442,8 +2537,26 @@ func exit_building() -> void:
 	_interior_avatar.queue_free()
 	_interior_view = null
 	_interior_avatar = null
+	_interior_building = {}
+	decorate_message = ""
+	_decorate_message_timer = 0.0
 	if _interior_viewport_container != null:
 		_interior_viewport_container.hide()
+
+
+## Whether the player's own household owns `record`'s building -- the one
+## rule for "may I decorate this" (docs/concept/housing.md "Decorating an
+## entered interior"): the record's owner_household_id (the persisted
+## ownership fact place_building/stamp_house_and_grant_ownership wrote)
+## against the player's household. household_for, not form_household:
+## asking never creates a household. A villager's house (owner "") and a
+## room with no record are never yours.
+func _owns_building(record: Dictionary) -> bool:
+	var owner_id: String = record.get("owner_household_id", "")
+	if owner_id == "" or _chunk_manager == null:
+		return false
+	var household = _chunk_manager.household_store().household_for(PlayerIdentity.PLAYER_ENTITY_ID)
+	return household != null and household.id == owner_id
 
 
 ## "Enter"/"Leave" (docs/concept/building.md "Entering") -- its own
@@ -2481,10 +2594,19 @@ func _enter_exit_step() -> void:
 	var building_id: String = record["id"]
 	var interior_family := BuildingCatalog.interior_family_of(building_id)
 	var seed_value: int = record["seed"]
-	var occupation: String = record.get("occupation", "")
-	if occupation == "":
-		var occupations := HouseDecor.FURNITURE_SET_BY_OCCUPATION.keys()
-		occupation = occupations[PixelNoise.range_index(seed_value, 0, 1, occupations.size())]
+	# Your own house is entered bare -- you decorate your own home
+	# (docs/concept/housing.md "Decorating an entered interior"), it never
+	# comes pre-furnished for somebody else; what you have placed so far is
+	# laid over the empty plan (interior_furniture_of).
+	var occupation: String
+	if _owns_building(record):
+		occupation = InteriorTemplates.UNFURNISHED
+	else:
+		occupation = record.get("occupation", "")
+		if occupation == "":
+			var occupations := HouseDecor.FURNITURE_SET_BY_OCCUPATION.keys()
+			occupation = occupations[PixelNoise.range_index(seed_value, 0, 1, occupations.size())]
+	var placed_furniture: Dictionary = _chunk_manager.interior_furniture_of(record["chunk_coord"], record["origin_local"])
 
 	var interior_view := HouseInteriorView.new()
 	var renderer := _chunk_manager.terrain_renderer()
@@ -2495,7 +2617,9 @@ func _enter_exit_step() -> void:
 	# never be reachable from in here, by construction, not by a backdrop
 	# trying to out-cover it.
 	_interior_viewport.add_child(interior_view)
-	interior_view.build(interior_family, occupation, seed_value, renderer.build_tile_set(), _tile_size, renderer)
+	interior_view.build(
+		interior_family, occupation, seed_value, renderer.build_tile_set(), _tile_size, renderer, placed_furniture
+	)
 
 	# The house's own villager stands in their room only while they are
 	# actually home right now (docs/concept/building.md "Residents inside")
@@ -2511,7 +2635,7 @@ func _enter_exit_step() -> void:
 	var outfit := _interior_outfit()
 	avatar.dress(outfit["appearance"], outfit["armor_textures"], outfit["weapon_texture"])
 
-	enter_building(interior_view, avatar)
+	enter_building(interior_view, avatar, record)
 
 
 ## What the indoor avatar must look like to be THIS player (see

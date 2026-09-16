@@ -1279,6 +1279,10 @@ static func backed_up_directories() -> PackedStringArray:
 		EarthChunkManager.ECOLOGY_DIR,
 		EarthChunkManager.KEPT_ANIMALS_DIR,
 		EarthChunkManager.GROWING_JUVENILES_DIR,
+		EarthChunkManager.FURNITURE_MODIFICATIONS_DIR,
+		EarthChunkManager.UPPER_FLOOR_MODIFICATIONS_DIR,
+		EarthChunkManager.UPPER_FLOOR_FURNITURE_MODIFICATIONS_DIR,
+		EarthChunkManager.BUILDINGS_DIR,
 	])
 
 
@@ -1294,6 +1298,7 @@ static func backed_up_files() -> PackedStringArray:
 		EarthChunkManager.MarketStorePersistence.SAVE_PATH,
 		EarthChunkManager.InstitutionStorePersistence.SAVE_PATH,
 		EarthChunkManager.WorldBossStorePersistence.SAVE_PATH,
+		EarthChunkManager.ConstructionProjectStorePersistence.SAVE_PATH,
 		EarthChunkManager.WorldClockPersistence.SAVE_PATH,
 		PlayerSave.SAVE_PATH,
 	])
@@ -1350,6 +1355,18 @@ func _wipe_persisted_world() -> void:
 	# no world identity, so a new world inherited the previous world's
 	# not-yet-mature animals.
 	_world_reset.wipe_directory(EarthChunkManager.GROWING_JUVENILES_DIR)
+	# The remaining chunk layers the building code persists (the exact same
+	# per-chunk <x>_<y>.bin shape as MODIFICATIONS_DIR): furniture and the
+	# two upper-floor layers of legacy piece houses, and every whole-building
+	# entity (docs/concept/building.md -- the villages' houses, the player's
+	# own house with everything placed inside it, a village's City Hall).
+	# Found by test_world_backup_paths.gd's own drift pin while the housing
+	# overhaul landed (2026-09-16): none had joined this wipe, so a new world
+	# loaded the previous world's whole villages back in.
+	_world_reset.wipe_directory(EarthChunkManager.FURNITURE_MODIFICATIONS_DIR)
+	_world_reset.wipe_directory(EarthChunkManager.UPPER_FLOOR_MODIFICATIONS_DIR)
+	_world_reset.wipe_directory(EarthChunkManager.UPPER_FLOOR_FURNITURE_MODIFICATIONS_DIR)
+	_world_reset.wipe_directory(EarthChunkManager.BUILDINGS_DIR)
 	_player_save.wipe()
 	# The event store and memory store are two more pieces of world-scoped
 	# state that must not survive "New Game" -- the same "New Game means new"
@@ -1362,6 +1379,7 @@ func _wipe_persisted_world() -> void:
 	_chunk_manager.wipe_market_store()
 	_chunk_manager.wipe_institution_store()
 	_chunk_manager.wipe_world_boss_store()
+	_chunk_manager.wipe_construction_project_store()
 	# And a brand new world clock: any previous run's persisted clock must not
 	# leak into this one either, then THIS world's clock is set to always the
 	# same starting instant (see EarthChunkManager.
@@ -2448,9 +2466,16 @@ func _update_cast_label(local_player: Player) -> void:
 	_set_message_banner(_cast_banner, local_player.cast_message)
 
 
-## A talk-result banner (see Player._talk_step/NpcGreeting).
+## A talk-result banner (see Player._talk_step/NpcGreeting) -- also the
+## line an indoor decorate press answers on (Player.decorate_message,
+## docs/concept/housing.md "Decorating an entered interior"): both are
+## "what just happened at the hero", and a greeting, being a real
+## conversation, wins the line while it lasts.
 func _update_talk_label(local_player: Player) -> void:
-	_set_message_banner(_talk_banner, local_player.talk_message)
+	var message := local_player.talk_message
+	if message == "":
+		message = local_player.decorate_message
+	_set_message_banner(_talk_banner, message)
 
 
 ## The joust arcade-cabinet overlay (see JoustMatchView's own doc comment)
@@ -5161,6 +5186,7 @@ func _spawn_local_singleplayer_from_save() -> void:
 	_chunk_manager.load_market_store()
 	_chunk_manager.load_institution_store()
 	_chunk_manager.load_world_boss_store()
+	_chunk_manager.load_construction_project_store()
 
 
 ## The world position a player spawning on `tile` should take: the tile's
@@ -5209,6 +5235,7 @@ func _save_local_player(player: Player) -> void:
 	_chunk_manager.save_market_store()
 	_chunk_manager.save_institution_store()
 	_chunk_manager.save_world_boss_store()
+	_chunk_manager.save_construction_project_store()
 	# The world clock too -- without this, New Game's mid-spring starting
 	# point (see EarthChunkManager.reset_world_age_to_mid_spring) would never
 	# actually reach disk, and a Load Game would fall back to the pre-

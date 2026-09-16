@@ -22718,3 +22718,145 @@ prompt_throttle.gd` updated for the new `build()`/`enter_building` shape.
 the avatar's own appearance is a placeholder square, not the player's
 real `CharacterView` — matching it is a real, separately-scoped follow-up
 this redesign did not need to solve.
+
+### Housing overhaul: the real character indoors, residents at home, occupation-driven interiors, a decoratable player house, village roads and plaza, a City Hall the village raises (`concept/building.md`, `housing.md`, `infrastructure.md`, `civic_construction.md`, 2026-09-16)
+
+**Reported live, against the isolated-SubViewport entering pass above:**
+"the indoor scene doesn't use the real character it's just a square...
+please overhaul the complete Housing and indoor decoration System. Also
+the village should build proper Roads a City Hall and so". Scoped with
+the user to: the real character and the resident villager inside;
+occupation-specific multi-room interiors; a player-owned whole-building
+house you decorate from the inside (retiring the piece pipeline for
+houses); real exterior/furniture art via asset contracts (procedural
+placeholders ship, the user generates PNGs); within-village roads with a
+plaza; a City Hall the village builds over time. Ten slices, each
+red-first, each merged to `main` as it landed (slices 1-2 `663d8e55`,
+3-4 `5fcf591c`, 5-8 `498e9e65`, 9-10 with this entry):
+
+1. **Real character indoors** — `InteriorAvatar` hosts the player's own
+   `CharacterView`, dressed by `Player._interior_outfit` (appearance,
+   every worn armor slot, the held weapon) and animated by its own
+   walking. `test_interior_avatar.gd`, `test_player.gd`.
+2. **The house remembers its villager** — `place_building(...,
+   occupation, resident_seed)`, `set_building_resident` (old saves heal on
+   their next village reload), the interior furnished for the REAL
+   occupation. `test_earth_chunk_manager_buildings.gd`,
+   `test_village_renderer.gd`, `test_player.gd`.
+3. **A real Road tier** — `TerrainRenderer.ROAD_TILE_ID` (laid, never
+   worn: `World._step_path_scarring` skips paved cells; nothing grows or
+   roots on it; `Player.ROAD_SPEED_MULTIPLIER` 1.15), the seamless
+   `assets/sprites/terrain/road.png` contract with a cobble placeholder,
+   old villages' trails repaved on load. `test_terrain_renderer.gd`,
+   `test_tree_renderer.gd`, `test_stone_renderer.gd`,
+   `test_world_path_scarring_trail_wiring.gd`,
+   `test_earth_chunk_manager_village_migration.gd`, `test_player.gd`.
+4. **Village layout v2** — `VillageLayout.skeleton` (pure: main street,
+   a paved plaza with the civic plot, well and stall on it, a gate, side
+   streets to a second street with houses on both sides), landmarks
+   derived from it, older villages' plazas re-derived and paved where
+   clear. `test_village_layout.gd`, `test_settlement_generator.gd`,
+   `test_village_renderer.gd`.
+5. **Furniture pieces + asset contracts** — hearth, workbench, anvil,
+   barrel, crate, chest, cupboard, candle as real `BuildingPiece`s/items
+   with procedural placeholders; `assets/sprites/furniture/<piece>.png`
+   gated by `IllustratedBuildingPieceSprite.has_piece_art`; the house
+   sheet contract (`house_small|medium|large.png`, 1536×1024, 8×5).
+   `test_building_piece.gd`, `test_item_catalog.gd`,
+   `test_procedural_building_piece_sprite.gd`,
+   `test_illustrated_building_piece_sprite.gd`.
+6. **Interiors v2** — `InteriorTemplates` grammar `#w.D@BTCRSPKWL`:
+   multi-room plans (three per family), windows, candles with real glow
+   quads, a resident cell, typed slots `HouseDecor.piece_for_slot` fills
+   per occupation (a smith's anvil, a farmer's barrel, a merchant's
+   couch), every plan validated enclosed and reachable.
+   `test_interior_templates.gd`, `test_house_decor.gd`,
+   `test_house_interior_view.gd`.
+7. **Residents inside** — `NpcMarker.is_at_home()`; `nearest_npc_near`
+   skips at-home villagers (a doorstep offers Enter, not Talk through the
+   wall); `resident_marker_for`; `InteriorResident` (the villager's own
+   `CharacterView`, dressed as outdoors, solid) placed by
+   `HouseInteriorView.place_resident` only while they are home; Talk
+   indoors (`Player._talk_target_identity`); World's indoor prompt (Leave
+   on the exit cell, else Talk in reach). `test_npc_marker.gd`,
+   `test_earth_chunk_manager_prompt_scans.gd`, `test_house_interior_view.gd`,
+   `test_world_interaction_prompt_throttle.gd`, `test_player.gd`.
+8. **Player house re-route** — `BUILDING_ID_BY_RECIPE_ID` (small_house /
+   cottage / manor → the three catalog houses; the ten two-story recipes
+   "no whole-building form yet", off the merchant's shelf);
+   `can_build_house_from_blueprint` validates footprint + doorstep (a road
+   doorstep allowed and kept paved); `stamp_house_and_grant_ownership`
+   places ONE real building through the unchanged ledger; `Player.
+   house_build_message` (`/buildhouse` prints it); the instant hire fork
+   (`hire_builder_for_house`, `_try_hire_carpenter_for_house`, the
+   `BuilderMarker` spawner, `HIRE_*`) deleted — hiring returns as
+   construction-over-time. New fast `test_earth_chunk_manager_player_
+   house.gd` (Berlin `_load_chunk` fixture) replaces the slow file's
+   chunk-(0,0) piece-house, move-in and manor groups. `test_player.gd`,
+   `test_shop.gd`.
+9. **Decorating your own house** — an owned house is entered
+   `UNFURNISHED`; furniture placed from inside lives on the building
+   record (`place_interior_furniture`/`remove_interior_furniture`/
+   `interior_furniture_of`, the same `FurniturePlacement` rule against
+   `InteriorTemplates.piece_grid`), persists across reload and re-entry,
+   paints and blocks at once (`HouseInteriorView.set_furniture`/
+   `clear_furniture`/`furniture_at`), through the indoor build/destroy
+   verbs (`Player._decorate_step`, `InteriorAvatar.facing_cell`, feedback
+   on the hero's message line); a villager's house refuses;
+   `resident_happiness` counts the record's interior.
+   `test_earth_chunk_manager_player_house.gd`, `test_house_interior_view.gd`,
+   `test_interior_avatar.gd`, `test_player.gd`.
+10. **City Hall over time** — `BuildingCatalog` `city_hall`
+    (`CIVIC_BUILDING_IDS`, `construction_stage_for`);
+    `SettlementConstruction.try_start` public; `CivicBuildDecision`
+    (`CITY_HALL_MIN_HOUSEHOLDS` 3, spare hands, the village market's
+    gathered wood and stone, settlement-owned); `_civic_plot_origin_for`
+    re-derives the reserved plot from the skeleton; labour waits while
+    the plot is blocked; a construction site from `city_hall.png`'s row 0
+    rises on the plaza and the real building replaces it, doorstep still
+    the street; `has_structure_near` measures to a building's footprint;
+    no double overlay on reload. `test_civic_build_decision.gd`,
+    `test_earth_chunk_manager_city_hall_rising.gd` (a real settlement
+    chunk end to end), `test_building_catalog.gd`,
+    `test_settlement_construction.gd`, `test_player.gd`.
+
+**Found and fixed along the way:** the primary checkout's stale script
+class cache after a new `class_name` (the game stuck on "Loading..." —
+`--headless --path . --import` in every checkout is now part of the merge
+recipe); `-gtest=` is not a GUT flag (it silently runs the whole suite);
+`Camera2D.current` must not be assigned in a headless test (the sole
+camera in a SubViewport auto-activates); manor plans with a door into a
+wall / a sealed room / a dead-end gap, caught by the template validation
+tests; the shared `user://` between a running game and a test run.
+
+**Named, honest gaps:** no exterior house PNGs or furniture PNGs exist
+yet — procedural placeholders draw until the user generates them against
+the contracts in `building.md`; the ten two-story blueprints are
+unbuildable until real two-story sheets join the catalog; the player's
+own house has no construction-over-time and no hire (both return on the
+settlement ledger the City Hall now uses); a City Hall has no
+interior yet ("hall" family falls back to the cottage plan); NPC routing
+still walks straight lines rather than the roads.
+
+**The construction ledger persists now** (a close-out addendum): a City
+Hall takes real hours of labour (45 hours at 8 per spare household per
+3600-second day, after the village has gathered 20 wood + 10 stone), and
+the in-memory `ConstructionProjectStore` threw every hour away on
+restart -- `ConstructionProjectStorePersistence` (the exact sibling of
+`MarketStorePersistence`) + `EarthChunkManager.save/load/reset/wipe_
+construction_project_store`, saved on every autosave, loaded by Load
+Game, wiped and backed up by New Game (`test_construction_project_store_
+persistence.gd`, `test_world_backup_paths.gd`, `test_earth_chunk_manager_
+player_house.gd`), closing `timber_construction.md`'s own "no persistence
+wrapper yet" gap.
+
+**And a real, pre-existing New Game bug, found by running
+`test_world_backup_paths.gd` for the ledger's own backup entry:** its
+drift pin over `EarthChunkManager`'s `*_DIR` constants had been red the
+whole time -- four persisted chunk layers had never joined
+`World._wipe_persisted_world`: furniture, the two upper-floor layers of
+legacy piece houses, and `BUILDINGS_DIR` (every whole-building entity
+since 2026-09-15: the villages' houses, the player's own house with
+everything placed inside it, a village's City Hall). A new world loaded
+the previous world's villages back in. All four are wiped and backed up
+now (`persistence.md` Status).

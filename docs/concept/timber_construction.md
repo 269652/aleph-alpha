@@ -1625,13 +1625,16 @@ close it).
   (see the "Offscreen catch-up" entry above, closed 2026-08-25, a fourth
   follow-up pass) is the real labor-accrual loop that carries a project the
   rest of the way to `COMPLETE`, closing the gap this paragraph used to
-  name. No persistence
-  wrapper (`ConstructionProjectStorePersistence`) or `EarthChunkManager`
-  save/load wiring exists yet — `to_dicts`/`from_dicts` are real and
-  tested in isolation (mirroring `HouseholdStore`'s own split) but nothing
-  currently calls them from a save path, the same "additive capability,
-  no live caller yet" honesty this doc's own `NeedResolver`/`Quest.
-  deeper_need_for` entries already carry. And per this doc's own explicit
+  name. **Persisted since 2026-09-16**: `ConstructionProjectStorePersistence`
+  (`user://emergence_construction_projects.bin`, the exact sibling of
+  `MarketStorePersistence`) + `EarthChunkManager.save/load/reset/wipe_
+  construction_project_store`, saved with the other emergence stores on
+  every autosave, loaded by Load Game, wiped and backed up by New Game
+  (`test_world_backup_paths.gd`) — closing the "to_dicts/from_dicts are
+  real but nothing calls them from a save path" gap this paragraph used
+  to name, because a City Hall takes real hours of labour
+  ([civic_construction.md](civic_construction.md)) and an in-memory
+  ledger threw every hour away on restart. And per this doc's own explicit
   scope for this pass: this real `ConstructionProject`/`ConstructionProjectStore`
   ledger itself is still never wired into `VillageRenderer._stamp_house` or
   any chunk-generation call site — a village house never seeds a real

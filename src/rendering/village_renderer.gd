@@ -298,10 +298,18 @@ func _recover_existing_village(
 ## The two world predicates VillageLayout reads, translated from chunk-
 ## local cells to the world's own global-tile queries -- duck-typed like
 ## every other world call in this file (a world lacking the method is
-## treated as open, buildable ground).
+## treated as open, buildable ground). A village sites on the GROUND
+## (EarthChunkManager.is_buildable_ground_at: water and the forest biome
+## refuse, a standing tree does not -- placing a building or paving a road
+## fells it), not on the player's own fell-the-trees-first rule
+## (is_buildable_terrain_at, the fallback for a world without the ground
+## query): found live, one tree on the plaza square vetoed the whole plaza
+## and the town hall with it in most real settlement chunks.
 func _is_buildable_local(chunk_coord: Vector2i, chunk_size: int, world) -> Callable:
 	return func(cell: Vector2i) -> bool:
 		var g: Vector2i = chunk_coord * chunk_size + cell
+		if world.has_method("is_buildable_ground_at"):
+			return world.is_buildable_ground_at(g.x, g.y)
 		return world.is_buildable_terrain_at(g.x, g.y) if world.has_method("is_buildable_terrain_at") else true
 
 

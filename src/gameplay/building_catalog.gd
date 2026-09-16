@@ -139,6 +139,14 @@ static func sheet_of(building_id: String) -> String:
 	return "res://assets/sprites/buildings/%s.png" % building_id
 
 
+## The construction row's stage column for a project `progress` in [0, 1]
+## -- the sheet contract's own formula (docs/concept/building.md "Building
+## sheets": clampi(floori(progress * 8), 0, 7)), so a rising building
+## shows scaffold at 0 and the roofed shell just before it completes.
+static func construction_stage_for(progress: float) -> int:
+	return clampi(floori(progress * CONSTRUCTION_STAGES), 0, CONSTRUCTION_STAGES - 1)
+
+
 static func interior_family_of(building_id: String) -> String:
 	return _BUILDINGS.get(building_id, {}).get("interior_family", "")
 

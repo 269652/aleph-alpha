@@ -143,6 +143,48 @@ func test_is_buildable_terrain_at_is_false_where_a_real_tree_stands():
 	fake_tree.free()
 
 
+## The village's own siting rule (docs/concept/building.md "Village
+## layout"): a village fells what stands on its plots and square (placing
+## a building or paving a road clears the vegetation there), so a standing
+## tree is not what stops a village -- only ground that can never carry a
+## building (water, the forest biome) is. The player's own rule
+## (is_buildable_terrain_at: fell the trees first) is unchanged.
+func test_is_buildable_ground_at_ignores_a_standing_tree_but_not_water_or_forest():
+	# A real dry, plain cell of the loaded radius, with a tree planted on it
+	# by hand -- the tree is the ONLY thing that could refuse it.
+	var tree_tile := Vector2i.ZERO
+	var found_open := false
+	for cell in _each_loaded_cell():
+		if manager.is_buildable_terrain_at(cell.x, cell.y):
+			tree_tile = cell
+			found_open = true
+			break
+	assert_true(found_open, "precondition: some plain buildable cell in the loaded radius")
+	var chunk_coord := Vector2i(
+		floori(float(tree_tile.x) / EarthChunkManager.CHUNK_SIZE), floori(float(tree_tile.y) / EarthChunkManager.CHUNK_SIZE)
+	)
+	var fake_tree := Node2D.new()
+	fake_tree.position = Vector2(
+		(tree_tile.x + 0.5) * TerrainRenderer.TILE_SIZE, (tree_tile.y + 0.5) * TerrainRenderer.TILE_SIZE
+	)
+	var trees_before = manager._loaded_trees.get(chunk_coord, [])
+	var with_tree: Array[Node2D] = []
+	with_tree.assign(trees_before)
+	with_tree.append(fake_tree)
+	manager._loaded_trees[chunk_coord] = with_tree
+
+	assert_true(manager.is_buildable_ground_at(tree_tile.x, tree_tile.y), "a tree is felled, not built around")
+	assert_false(manager.is_buildable_terrain_at(tree_tile.x, tree_tile.y), "the player's own rule still refuses")
+	manager._loaded_trees[chunk_coord] = trees_before
+	fake_tree.free()
+
+	for cell in _each_loaded_cell():
+		if manager.is_water_at_global(cell.x, cell.y) or manager.biome_at_global(cell.x, cell.y) == "forest":
+			assert_false(manager.is_buildable_ground_at(cell.x, cell.y), "water/forest can never carry a village building")
+			return
+	pass_test("precondition unmet (no water/forest cell in this run's loaded radius) -- nothing to check")
+
+
 ## A cell with none of the four blocking conditions must read as buildable --
 ## the honest "not everything is blocked" counterpart to the five refusal
 ## tests above. Real dry, treeless, plain-biome ground is common, so this

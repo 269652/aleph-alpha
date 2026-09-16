@@ -287,6 +287,21 @@ func test_try_enter_direct_builder_mode_fails_with_no_city_hall_nearby():
 	assert_false(player.direct_builder_mode)
 
 
+## The village's own whole-building City Hall (docs/concept/
+## civic_construction.md "Meeting Hall") gates the desk exactly like the
+## legacy single-tile one -- measured to its footprint, so standing beside
+## its east wall (one cell from the building, four from its anchor cell)
+## counts.
+func test_try_enter_direct_builder_mode_succeeds_beside_a_whole_building_city_hall():
+	var tile := player.current_tile()  # (4, 4): the hall's east wall ends on x = 3
+	var origin := tile + Vector2i(-BuildingCatalog.footprint_of("city_hall").x, 0)
+	assert_true(chunk_manager.place_building(Vector2i(0, 0), origin, "city_hall", Vector2i(0, 1), 1, ""), "precondition")
+	assert_gt(tile.x - origin.x, Player.HEAT_SOURCE_RADIUS_TILES, "precondition: the anchor alone is out of reach")
+
+	assert_true(player._try_enter_direct_builder_mode())
+	assert_true(player.direct_builder_mode)
+
+
 ## Leaving is never gated on still standing near the City Hall you entered
 ## through -- a real player walks away from the desk to go place things.
 func test_exit_direct_builder_mode_always_succeeds_even_far_from_any_city_hall():
@@ -4335,6 +4350,170 @@ func test_talking_indoors_far_from_the_resident_finds_nobody():
 	Input.action_release("talk")
 
 	assert_string_contains(player.talk_message, "No one")
+
+
+# -- decorating your own house (docs/concept/housing.md "Decorating an -------
+# -- entered interior") -----------------------------------------------------
+#
+# A house the player's own household owns is entered UNFURNISHED (you
+# decorate your own home); inside it, the build key with an armed furniture
+# item places that piece on the cell the avatar faces (persisted on the
+# building record, painted at once), and the destroy key picks a placed
+# piece back up. A villager's house is never yours to redecorate.
+
+const InteriorTemplates = preload("res://src/gameplay/interior_templates.gd")
+
+
+func _enter_own_house_placed_at(origin: Vector2i) -> void:
+	_register_all_keybindings()
+	var household := chunk_manager.household_store().form_household(PlayerIdentity.PLAYER_ENTITY_ID)
+	chunk_manager.place_building(Vector2i(0, 0), origin, "house_small", Vector2i(0, 1), 1, household.id)
+	var doorstep_global: Vector2i = origin + BuildingCatalog.doorstep_of("house_small")
+	player.position = (Vector2(doorstep_global) + Vector2(0.5, 0.5)) * TILE_SIZE
+	Input.action_press("enter")
+	player._enter_exit_step()
+	Input.action_release("enter")
+	player._enter_exit_step()
+	assert_true(player.is_indoors(), "precondition: entered")
+
+
+## Stands the avatar one cell north of `cell`, facing down at it.
+func _face_interior_cell(cell: Vector2i) -> void:
+	player._interior_avatar.position = (Vector2(cell) + Vector2(0.5, -0.5)) * TILE_SIZE
+	player._interior_avatar.last_facing_direction = Vector2.DOWN
+
+
+func _a_floor_cell_of_the_entered_house() -> Vector2i:
+	var grid: Dictionary = InteriorTemplates.piece_grid("cottage", 1)
+	for cell in grid:
+		if grid[cell] == "wood_floor":
+			return cell
+	fail_test("no floor cell")
+	return Vector2i.ZERO
+
+
+func _a_wall_cell_of_the_entered_house() -> Vector2i:
+	var grid: Dictionary = InteriorTemplates.piece_grid("cottage", 1)
+	for cell in grid:
+		if grid[cell] == "wood_wall":
+			return cell
+	fail_test("no wall cell")
+	return Vector2i.ZERO
+
+
+func _press_indoors(action: String) -> void:
+	Input.action_press(action)
+	player._authority_step(0.1)
+	Input.action_release(action)
+	player._authority_step(0.1)
+
+
+func test_entering_your_own_house_finds_it_unfurnished():
+	_enter_own_house_placed_at(Vector2i(10, 10))
+	assert_eq(player._interior_view.occupation, InteriorTemplates.UNFURNISHED)
+
+
+func test_a_villagers_house_is_still_furnished_for_them():
+	_enter_the_house_placed_at(Vector2i(10, 10), "merchant", 4242)
+	assert_eq(player._interior_view.occupation, "merchant")
+
+
+func test_placing_furniture_indoors_consumes_the_item_persists_it_and_paints_it():
+	_enter_own_house_placed_at(Vector2i(10, 10))
+	var bed := _item_catalog.make("wood_bed")
+	player.inventory.add(bed, 2)
+	assert_true(player._arm_furniture(bed))
+	var cell := _a_floor_cell_of_the_entered_house()
+	_face_interior_cell(cell)
+
+	_press_indoors("build")
+
+	assert_eq(player.inventory.count_of("wood_bed"), 1, "one bed was placed")
+	assert_eq(chunk_manager.interior_furniture_of(Vector2i(0, 0), Vector2i(10, 10)), {cell: "wood_bed"})
+	assert_eq(player._interior_view.furniture_at(cell), "wood_bed")
+	assert_not_null(player._interior_view.collision_body_at(cell), "a bed blocks at once")
+
+
+func test_picking_up_furniture_indoors_refunds_it_and_clears_the_cell():
+	_enter_own_house_placed_at(Vector2i(10, 10))
+	var chair := _item_catalog.make("wood_chair")
+	player.inventory.add(chair, 1)
+	player._arm_furniture(chair)
+	var cell := _a_floor_cell_of_the_entered_house()
+	_face_interior_cell(cell)
+	_press_indoors("build")
+	assert_eq(player.inventory.count_of("wood_chair"), 0, "precondition: placed")
+
+	_press_indoors("destroy")
+
+	assert_eq(player.inventory.count_of("wood_chair"), 1, "picked back up")
+	assert_eq(chunk_manager.interior_furniture_of(Vector2i(0, 0), Vector2i(10, 10)), {})
+	assert_eq(player._interior_view.furniture_at(cell), "")
+
+
+func test_decorating_a_house_you_do_not_own_is_refused():
+	_enter_the_house_placed_at(Vector2i(10, 10), "farmer", 77)
+	var bed := _item_catalog.make("wood_bed")
+	player.inventory.add(bed, 1)
+	player._arm_furniture(bed)
+	var cell := player._interior_view.resident_cell
+	_face_interior_cell(cell)
+
+	_press_indoors("build")
+
+	assert_eq(player.inventory.count_of("wood_bed"), 1, "nothing consumed")
+	assert_eq(chunk_manager.interior_furniture_of(Vector2i(0, 0), Vector2i(10, 10)), {})
+	assert_string_contains(player.decorate_message.to_lower(), "not your")
+
+
+func test_placing_furniture_against_a_wall_is_refused():
+	_enter_own_house_placed_at(Vector2i(10, 10))
+	var bed := _item_catalog.make("wood_bed")
+	player.inventory.add(bed, 1)
+	player._arm_furniture(bed)
+	_face_interior_cell(_a_wall_cell_of_the_entered_house())
+
+	_press_indoors("build")
+
+	assert_eq(player.inventory.count_of("wood_bed"), 1, "nothing consumed")
+	assert_eq(chunk_manager.interior_furniture_of(Vector2i(0, 0), Vector2i(10, 10)), {})
+
+
+func test_the_build_key_indoors_with_nothing_armed_does_nothing_to_the_house_or_the_world():
+	_enter_own_house_placed_at(Vector2i(10, 10))
+	var outdoor_target := player._tile_targeting.facing_tile(player.current_tile(), player._last_facing_direction)
+	var before := chunk_manager.modification_at_global(outdoor_target.x, outdoor_target.y)
+	_face_interior_cell(_a_floor_cell_of_the_entered_house())
+
+	_press_indoors("build")
+
+	assert_eq(chunk_manager.modification_at_global(outdoor_target.x, outdoor_target.y), before, "indoors never terraforms the world outside")
+	assert_eq(chunk_manager.interior_furniture_of(Vector2i(0, 0), Vector2i(10, 10)), {})
+
+
+func test_placed_furniture_is_still_there_after_leaving_and_re_entering():
+	_enter_own_house_placed_at(Vector2i(10, 10))
+	var table := _item_catalog.make("wood_table")
+	player.inventory.add(table, 1)
+	player._arm_furniture(table)
+	var cell := _a_floor_cell_of_the_entered_house()
+	_face_interior_cell(cell)
+	_press_indoors("build")
+
+	player._interior_avatar.position = (Vector2(player._interior_view.door_cell) + Vector2(0.5, 0.5)) * TILE_SIZE
+	Input.action_press("enter")
+	player._enter_exit_step()  # out
+	Input.action_release("enter")
+	player._enter_exit_step()
+	assert_false(player.is_indoors(), "precondition: left")
+	Input.action_press("enter")
+	player._enter_exit_step()  # back in
+	Input.action_release("enter")
+	player._enter_exit_step()
+	assert_true(player.is_indoors(), "precondition: re-entered")
+
+	assert_eq(player._interior_view.furniture_at(cell), "wood_table", "the table is painted again on re-entry")
+	assert_not_null(player._interior_view.collision_body_at(cell))
 
 
 func test_enter_exit_step_does_nothing_far_from_any_doorstep():

@@ -808,9 +808,18 @@ pre-existing assertion, all green).
   `wipe_directory`, one `.bak` generation — `BACKUP_SUFFIX`), tested
   (`test_world_reset.gd`, including the exact New Game sequence: back up,
   wipe, and the copy is still there); wired into
-  `World._wipe_persisted_world` (player save + all seven `EarthChunkManager`
-  persistence dirs + the seven emergence stores + the world clock) for both
-  New Game and Host Game.
+  `World._wipe_persisted_world` (player save + all eleven `EarthChunkManager`
+  persistence dirs + the eight emergence stores + the world clock) for both
+  New Game and Host Game. **Fixed 2026-09-16:** four chunk layers had
+  never joined the wipe — furniture, the two upper-floor layers of legacy
+  piece houses, and `BUILDINGS_DIR` (every whole-building entity: the
+  villages' houses, the player's own house with everything placed inside
+  it, a village's City Hall) — so a new world loaded the previous world's
+  villages back in; `test_world_backup_paths.gd`'s drift pin over the
+  manager's own `*_DIR` constants had been red the whole time. The
+  settlement construction ledger (`ConstructionProjectStorePersistence`)
+  joined the stores the same day, since a City Hall takes real hours of
+  labour that must survive a restart.
 - ✅ The backup list itself — `World.backed_up_directories()`/
   `backed_up_files()`, each path read from the persistence class that owns it
   rather than restated — tested (`test_world_backup_paths.gd`), including a

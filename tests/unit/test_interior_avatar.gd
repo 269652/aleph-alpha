@@ -166,3 +166,26 @@ func test_stopping_keeps_the_last_facing_but_idles_the_view():
 
 func test_movement_speed_matches_the_players_own_outdoor_walking_speed():
 	assert_eq(InteriorAvatar.SPEED, Player.BASE_SPEED, "indoor movement should not feel like a different game")
+
+
+# -- facing cell: which tile a decorate verb targets (docs/concept/ ----------
+# -- housing.md "Decorating an entered interior") -- the same dominant-axis --
+# -- TileTargeting rule the outdoor build/destroy verbs use, from the -------
+# -- avatar's own cell and last facing. ------------------------------------
+
+func test_facing_cell_starts_one_cell_south_facing_down_like_a_fresh_entry():
+	avatar.position = Vector2(3.5, 2.5) * 16.0
+	assert_eq(avatar.facing_cell(16), Vector2i(3, 3), "a freshly entered avatar faces the room (down)")
+
+
+func test_facing_cell_follows_the_last_walked_direction_and_keeps_it_when_idle():
+	_register_movement_keybindings()
+	avatar.position = Vector2(3.5, 2.5) * 16.0
+
+	Input.action_press("move_left")
+	avatar._physics_process(0.0)
+	Input.action_release("move_left")
+	avatar._physics_process(0.0)
+
+	assert_eq(avatar.last_facing_direction, Vector2.LEFT)
+	assert_eq(avatar.facing_cell(16), Vector2i(2, 2))

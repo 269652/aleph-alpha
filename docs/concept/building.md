@@ -145,9 +145,15 @@ and paves its square on its next load where it is clear
 (`VillageRenderer._lay_plaza_if_missing`) without persisting anything.
 `SettlementGenerator` derives its landmark positions from the same
 skeleton, so props and paving always agree. Every plot's footprint and
-doorstep must be buildable (`is_buildable_terrain_at`) and unmodified;
-a villager whose plot fits nowhere stays homeless, as today, rather than
-being squeezed onto water or forest. `SettlementGenerator` keeps its
+doorstep must be ground that can carry a building
+(`EarthChunkManager.is_buildable_ground_at`: not water, not the forest
+biome — a standing tree does not count, the village fells it when it
+places the building or paves the square; found live (2026-09-16): one
+tree on the 8×6 square vetoed the whole plaza, and the town hall with
+it, in most real settlement chunks) and unmodified; a villager whose
+plot fits nowhere stays homeless, as today, rather than being squeezed
+onto water or forest. The player's own rule stays
+`is_buildable_terrain_at` — fell the trees first. `SettlementGenerator` keeps its
 outputs (`house_positions` become doorsteps, which is what every consumer
 used); `VillageRenderer.spawn_village` places buildings instead of
 stamping pieces, sets each villager's home to its doorstep, hides a
@@ -351,6 +357,18 @@ tile, no dividers, no directional variants (see
   in older saves are untouched (`HOUSE_BLUEPRINT_SHAPE_BY_RECIPE_ID` stays
   for them). Tested (`test_earth_chunk_manager_player_house.gd`,
   `test_player.gd`, `test_shop.gd`).
+- ✅ **City Hall over time** (2026-09-16). The plaza's civic plot
+  (`VillageLayout.skeleton`) is where the village raises its own town
+  hall through the settlement-construction ledger — `CivicBuildDecision`
+  (three households, spare hands, wood and stone gathered into the village
+  market) starts a settlement-owned `ConstructionProject`; labour accrues
+  from spare capacity; a construction site drawn from `city_hall.png`'s
+  row 0 (`BuildingCatalog.construction_stage_for`) stands on the plot and
+  the real `city_hall` building replaces it on completion, its doorstep
+  still the street. Full account in
+  [civic_construction.md](civic_construction.md) "Meeting Hall". Tested
+  (`test_civic_build_decision.gd`,
+  `test_earth_chunk_manager_city_hall_rising.gd`).
 
 ## Legacy: structure building from pieces (older player-built structures only)
 
