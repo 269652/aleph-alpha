@@ -647,48 +647,35 @@ Updated here and in `docs/progress.md` as slices land:
   `EarthChunkManager.can_build_house_from_blueprint`, then material+skill
   via the existing `craft()`) creating a real player-owned, immediately
   `COMPLETE` `ConstructionProject`
-  (`EarthChunkManager.stamp_house_and_grant_ownership`)
+  (`EarthChunkManager.stamp_house_and_grant_ownership`). **Re-routed
+  (2026-09-16, [building.md](building.md) "Player building re-route")**:
+  the stamp now places ONE whole-building catalog house
+  (`BUILDING_ID_BY_RECIPE_ID` → `place_building`) instead of legacy
+  pieces; the ledger, property grant and move-in are unchanged. The ten
+  two-story recipes have no whole-building form yet and refuse with that
+  message (and left `Shop.CATALOG`). Every outcome is reported in
+  `Player.house_build_message` (`/buildhouse` prints it).
 - ✅ Build-it-yourself path — `craft()`'s existing `required_skill` gate
   (`SkillTree.total_bonus`) IS the fork's "is the player's own skill
-  enough" half; the stamped pieces land already `COMPLETE` (instant, like
-  every other player craft action) rather than accruing
-  `ConstructionLabor` hours over time
-- ✅ The hire-a-carpenter half of the fork (section 3):
-  `EarthChunkManager.find_spare_carpenter_household` (a pure query,
-  comparing the SAME `required_skill` against a spare household's
-  `NpcIdentity.carpentry_level`) + `Player._try_hire_carpenter_for_house`
-  (real gold via a real, explicit `HIRE_A_CARPENTER_GOLD_COST` placeholder
-  constant, plus the same real material cost `craft()` would have charged —
-  only the skill requirement is waived).
-- ✅ The first live `BuilderMarker` spawner (section 5), scoped to the
-  player-hired path only, exactly as specified: `EarthChunkManager.
-  hire_builder_for_house` deposits the player's already-paid material into
-  a real nearby Storage (found via the SAME `nearest_structure_position`
-  every other real construction worker already uses — a site with none in
-  reach correctly has no hire to offer), starts a real `IN_PROGRESS`
-  `ConstructionProject` owned by the PLAYER (never the carpenter — see
-  `ConstructionProject`'s own household_id/resident_household_id
-  disambiguation), and spawns a real `BuilderMarker` that withdraws that
-  material and places every real piece over real time, exactly like any
-  other real construction worker in this codebase. Move-in
-  (`settle_resident_if_new`) fires automatically the moment the project
-  actually completes (checked on `step_workforce_economy`'s own periodic
-  tick), the same as the self-build path.
-  **Named honestly, not silently glossed over**: `BuilderMarker` itself
-  is scoped to ground pieces only (its own file header: "roof pieces...
-  out of scope for this pass") — a HIRED house therefore lands with no
-  roof, unlike a self-built one (`stamp_house_and_grant_ownership` stamps
-  both). Giving `BuilderMarker` real roof-building is a separate,
-  not-yet-attempted follow-up (see Open Questions), deliberately not
-  bundled into this pass to avoid modifying that already-tested module's
-  own declared scope.
-- ✅ Hire-a-Builder path: the spare-capacity/`carpentry_level` filter and
-  gold cost are real (above); settlement-side capacity reduction for the
-  hire's duration is real too, narrowly scoped to "the same household is
-  never double-booked onto two hires at once"
-  (`EarthChunkManager._is_household_on_loan`) rather than a change to
-  `SettlementSpareCapacity`'s own settlement-internal construction-decision
-  consumers.
+  enough" half; the house lands already `COMPLETE` (instant, like every
+  other player craft action) rather than accruing `ConstructionLabor`
+  hours over time
+- 🚧 The hire-a-carpenter half of the fork (section 3): the pure query
+  `EarthChunkManager.find_spare_carpenter_household` (comparing the SAME
+  `required_skill` against a spare household's
+  `NpcIdentity.carpentry_level`) stays. **The instant hire itself is
+  retired (2026-09-16)** — `Player._try_hire_carpenter_for_house`,
+  `HIRE_A_CARPENTER_GOLD_COST`, `EarthChunkManager.hire_builder_for_house`,
+  `_hired_builders`/`_is_household_on_loan` and the `BuilderMarker` spawner
+  built a house piece by piece, and a whole-building house has no pieces
+  to build. A build the player cannot do themselves now says so
+  (`Player.HOUSE_HIRE_UNAVAILABLE_MESSAGE`) and spends nothing. Hiring
+  returns as construction-over-time on the same settlement ledger villages
+  raise their own buildings with (`SettlementConstruction`, a construction-
+  site sprite from the sheet's row 0 — see
+  [civic_construction.md](civic_construction.md)); `find_spare_carpenter_
+  household` is exactly the labour-source answer that pass needs.
+  `BuilderMarker` itself (its own tests) stays for legacy piece structures.
 - ✅ Move-in: `player_house_settled` event + household formation
   (deterministic resident identity via `EntityRef.for_npc`, section 6),
   wired automatically into `stamp_house_and_grant_ownership` on project

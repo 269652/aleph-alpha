@@ -149,10 +149,10 @@ func _facing_tile() -> Vector2i:
 ## chunk (0,0) (EarthChunkManager._load_chunk is additive; it never
 ## unloads anything), then scans it with that exact same "real dry
 ## buildable cell, not a fixed offset" pattern, checking every one of the
-## footprint's cells rather than just its corners. The seed HouseBlueprint.
-## build mixes in only ever picks WHICH wall cells get a door/window,
-## never which cells the shape occupies, so checking this fixed 3x3 is
-## exact for "hut_tiny", not an approximation.
+## footprint's cells rather than just its corners. A 3x3 covers
+## house_small's own 2x2 footprint AND its doorstep (BuildingCatalog.
+## doorstep_of: one cell south of the door, at column 1), so a clear 3x3
+## is exactly a clear house_small site.
 func _a_clear_house_footprint_origin() -> Vector2i:
 	var footprint := Vector2i(3, 3)
 	var geo := GeoCoordinates.new()
@@ -583,9 +583,11 @@ func test_try_learn_blueprint_fails_gracefully_with_no_such_item_carried():
 
 
 # -- building a real house from a learned blueprint (docs/concept/ ----------
-# -- workforce.md's "Starting a real player-owned construction project" -----
-# -- and "The fork" sections) -- the build-it-yourself half; hiring an ------
-# -- NPC carpenter is its own, not-yet-built, follow-up. ---------------------
+# -- workforce.md's "Starting a real player-owned construction project"; ----
+# -- building.md "Player building re-route": the blueprint places ONE real --
+# -- whole-building entity, never legacy pieces). Hiring a carpenter is -----
+# -- refused with a message until construction-over-time returns for the ----
+# -- player's own house. ------------------------------------------------------
 
 ## Checked in an order that never wastes material -- even with enough
 ## Carpentry and enough wood on hand, a blueprint that was never learned
@@ -623,7 +625,8 @@ func test_try_build_house_from_blueprint_succeeds_and_grants_a_real_house():
 	chunk_manager.record_blueprint_learned_if_new("small_house")
 	_give("wood", 30)
 	player.allocated_nodes = {"carpentry_1": true}
-	_stand_facing(_a_clear_house_footprint_origin())
+	var target := _a_clear_house_footprint_origin()
+	_stand_facing(target)
 
 	assert_true(player._try_build_house_from_blueprint("small_house"))
 
@@ -636,6 +639,70 @@ func test_try_build_house_from_blueprint_succeeds_and_grants_a_real_house():
 	)
 	assert_eq(project.status, ConstructionProject.Status.COMPLETE)
 	assert_eq(project.household_id, household.id)
+	# A real whole-building entity stands there, owned by the player's own
+	# household -- not a legacy piece assembly.
+	var record := chunk_manager.building_at_global(target.x, target.y)
+	assert_eq(record.get("id", ""), "house_small")
+	assert_eq(record.get("owner_household_id", ""), household.id)
+	assert_string_contains(player.house_build_message, "Built")
+
+
+## Facing UP or LEFT, the footprint (which grows right and down from the
+## facing tile) would cover the player's own tile -- refused with a message
+## before any material is touched, rather than raising a house on top of
+## the hero.
+func test_try_build_house_from_blueprint_refuses_to_build_over_the_player():
+	chunk_manager.record_blueprint_learned_if_new("small_house")
+	_give("wood", 30)
+	player.allocated_nodes = {"carpentry_1": true}
+	var origin := _a_clear_house_footprint_origin()
+	# Stand ON the site's bottom-left cell facing up: the facing tile is the
+	# cell above, and a 2x2 footprint from there covers where we stand.
+	player.position = (Vector2(origin) + Vector2(0.5, 1.5)) * TILE_SIZE
+	player._last_facing_direction = Vector2.UP
+
+	assert_false(player._try_build_house_from_blueprint("small_house"))
+
+	assert_eq(player.inventory_counts().get("wood", 0), 30)
+	assert_string_contains(player.house_build_message, "standing")
+
+
+## The hire fork is gone until construction-over-time returns for the
+## player's own house (docs/concept/building.md "Player building
+## re-route") -- a build the player cannot do themselves says so, spends
+## nothing, and never spawns a builder.
+func test_try_build_house_from_blueprint_without_skill_explains_that_hiring_is_not_available():
+	chunk_manager.record_blueprint_learned_if_new("small_house")
+	_give("wood", 30)
+	_stand_facing(_a_clear_house_footprint_origin())
+
+	assert_false(player._try_build_house_from_blueprint("small_house"))
+
+	assert_eq(player.inventory_counts().get("wood", 0), 30)
+	assert_string_contains(player.house_build_message.to_lower(), "hire")
+	assert_false(player.has_method("_try_hire_carpenter_for_house"), "the instant-hire fork is retired")
+
+
+func test_try_build_house_from_blueprint_refuses_a_recipe_with_no_whole_building_form():
+	chunk_manager.record_blueprint_learned_if_new("townhouse_narrow")
+	_give("wood", 300)
+	player.allocated_nodes = {"carpentry_1": true, "carpentry_2": true, "master_joiner": true}
+	_stand_facing(_a_clear_house_footprint_origin())
+
+	assert_false(player._try_build_house_from_blueprint("townhouse_narrow"))
+
+	assert_eq(player.inventory_counts().get("wood", 0), 300)
+	assert_string_contains(player.house_build_message, "no whole-building form")
+
+
+func test_try_build_house_from_blueprint_message_names_an_unlearned_blueprint():
+	_give("wood", 30)
+	player.allocated_nodes = {"carpentry_1": true}
+	_stand_facing(_a_clear_house_footprint_origin())
+
+	assert_false(player._try_build_house_from_blueprint("small_house"))
+
+	assert_string_contains(player.house_build_message.to_lower(), "learn")
 
 
 ## Refuses cleanly (and spends nothing) when the target footprint has
@@ -4195,6 +4262,79 @@ func test_entering_a_house_with_no_recorded_resident_still_gets_a_real_occupatio
 		HouseDecor.FURNITURE_SET_BY_OCCUPATION.has(player._interior_view.occupation),
 		"got %s" % player._interior_view.occupation
 	)
+
+
+# -- residents inside (docs/concept/building.md "Residents inside") ---------
+#
+# When the house's own villager is at home (hidden outdoors on their
+# doorstep), walking in finds them standing in their room; when they are
+# out, the house is empty. Talking to them indoors works exactly like
+# outdoors -- the same greeting, from the avatar's own position.
+
+func _a_villager_living_at(doorstep_global: Vector2i, seed_value: int, at_home: bool) -> NpcMarker:
+	var villager := NpcMarker.new()
+	villager.identity = NpcIdentity.new(seed_value)
+	villager.identity.occupation = "farmer"
+	var doorstep := (Vector2(doorstep_global) + Vector2(0.5, 0.5)) * TILE_SIZE
+	villager.home_position = doorstep
+	villager.landmarks = {"well": doorstep + Vector2(300, 0), "stall": doorstep + Vector2(300, 50), "gate": doorstep + Vector2(300, 100)}
+	var tag := "home" if at_home else "stall"
+	villager.schedule = [
+		{"time_block": "morning", "location_tag": tag, "activity": "idle"},
+		{"time_block": "midday", "location_tag": tag, "activity": "idle"},
+		{"time_block": "evening", "location_tag": tag, "activity": "idle"},
+		{"time_block": "night", "location_tag": tag, "activity": "idle"},
+	]
+	villager.position = doorstep if at_home else doorstep + Vector2(300, 0)
+	creatures_parent.add_child(villager)
+	villager._process(0.0)
+	chunk_manager._loaded_villages[Vector2i(0, 0)] = [villager]
+	return villager
+
+
+func test_entering_a_house_whose_villager_is_home_finds_them_inside():
+	var origin := Vector2i(10, 10)
+	var doorstep_global: Vector2i = origin + BuildingCatalog.doorstep_of("house_small")
+	var villager := _a_villager_living_at(doorstep_global, 555, true)
+	assert_true(villager.is_at_home(), "precondition")
+	_enter_the_house_placed_at(origin, "farmer", 555)
+	assert_eq(player._interior_view.resident_identity(), villager.identity)
+
+
+func test_entering_a_house_whose_villager_is_out_finds_it_empty():
+	var origin := Vector2i(10, 10)
+	var doorstep_global: Vector2i = origin + BuildingCatalog.doorstep_of("house_small")
+	_a_villager_living_at(doorstep_global, 556, false)
+	_enter_the_house_placed_at(origin, "farmer", 556)
+	assert_null(player._interior_view.resident_identity())
+
+
+func test_talking_indoors_greets_the_resident_when_the_avatar_is_close_to_them():
+	var origin := Vector2i(10, 10)
+	var doorstep_global: Vector2i = origin + BuildingCatalog.doorstep_of("house_small")
+	var villager := _a_villager_living_at(doorstep_global, 557, true)
+	_enter_the_house_placed_at(origin, "farmer", 557)
+	player._interior_avatar.position = player._interior_view.resident_position() + Vector2(TILE_SIZE, 0)
+
+	Input.action_press("talk")
+	player._authority_step(0.1)
+	Input.action_release("talk")
+
+	assert_eq(player.talk_message, NpcGreeting.new().greeting_for(villager.identity))
+
+
+func test_talking_indoors_far_from_the_resident_finds_nobody():
+	var origin := Vector2i(10, 10)
+	var doorstep_global: Vector2i = origin + BuildingCatalog.doorstep_of("house_small")
+	_a_villager_living_at(doorstep_global, 558, true)
+	_enter_the_house_placed_at(origin, "farmer", 558)
+	player._interior_avatar.position = player._interior_view.resident_position() + Vector2(Player.TALK_RADIUS * 3.0, 0)
+
+	Input.action_press("talk")
+	player._authority_step(0.1)
+	Input.action_release("talk")
+
+	assert_string_contains(player.talk_message, "No one")
 
 
 func test_enter_exit_step_does_nothing_far_from_any_doorstep():

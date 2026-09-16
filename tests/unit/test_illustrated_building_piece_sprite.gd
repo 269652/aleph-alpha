@@ -111,3 +111,69 @@ func test_piece_image_is_deterministic():
 		assert_eq(
 			sprite.piece_image(piece_id).get_data(), sprite.piece_image(piece_id).get_data(), piece_id
 		)
+
+
+# -- furniture PNGs: the asset contract (docs/concept/building.md) ---------
+#
+# One square image per furniture piece id at <furniture_dir>/<piece_id>.png
+# (top-down, the object centred, background transparent or black/magenta
+# -- keyed by the same pass the wall sheets use), composited over the wood
+# floor and resized to ART_TILE_SIZE so the tile stays opaque. Until a file
+# exists, has_piece_art answers false and the procedural placeholder draws,
+# exactly the has_X()-gated seam every illustrated-art class here uses.
+
+const _FURNITURE_FIXTURE_DIR := "user://test_furniture_art_fixture"
+
+
+func _write_fixture_png(piece_id: String) -> void:
+	DirAccess.make_dir_recursive_absolute(_FURNITURE_FIXTURE_DIR)
+	var image := Image.create(64, 64, false, Image.FORMAT_RGBA8)
+	image.fill(Color(0, 0, 0, 1))  # the sheets' own near-black background
+	for y in range(16, 48):
+		for x in range(16, 48):
+			image.set_pixel(x, y, Color(0.8, 0.2, 0.2, 1))  # a red object in the middle
+	image.save_png("%s/%s.png" % [_FURNITURE_FIXTURE_DIR, piece_id])
+
+
+func _remove_fixture_png(piece_id: String) -> void:
+	DirAccess.remove_absolute("%s/%s.png" % [_FURNITURE_FIXTURE_DIR, piece_id])
+	IllustratedBuildingPieceSprite.forget_cached("hearth")
+
+
+func test_a_furniture_piece_with_no_png_yet_falls_back_to_the_procedural_placeholder():
+	sprite.furniture_dir = _FURNITURE_FIXTURE_DIR
+	_remove_fixture_png("hearth")
+	assert_false(sprite.has_piece_art("hearth"))
+	assert_null(sprite.piece_image("hearth"))
+
+
+func test_a_furniture_png_dropped_in_lights_up_as_an_opaque_floor_composited_tile():
+	sprite.furniture_dir = _FURNITURE_FIXTURE_DIR
+	_write_fixture_png("hearth")
+	IllustratedBuildingPieceSprite.forget_cached("hearth")
+
+	assert_true(sprite.has_piece_art("hearth"))
+	var image := sprite.piece_image("hearth")
+	assert_not_null(image)
+	assert_eq(image.get_width(), TerrainRenderer.ART_TILE_SIZE)
+	assert_eq(image.get_height(), TerrainRenderer.ART_TILE_SIZE)
+	# The keyed-away background is FILLED by the floor, never left as a hole
+	# in the atlas: every pixel opaque.
+	for y in image.get_height():
+		for x in image.get_width():
+			assert_almost_eq(image.get_pixel(x, y).a, 1.0, 0.001, "pixel (%d,%d) must be opaque" % [x, y])
+	# ...and the object itself survives keying: the centre is red, not floor.
+	var centre := image.get_pixel(image.get_width() / 2, image.get_height() / 2)
+	assert_gt(centre.r, 0.5)
+	assert_lt(centre.g, 0.4)
+	_remove_fixture_png("hearth")
+
+
+## A non-furniture piece never picks up a stray PNG from the furniture
+## directory: the contract is per furniture id only.
+func test_the_furniture_directory_is_only_consulted_for_furniture_pieces():
+	sprite.furniture_dir = _FURNITURE_FIXTURE_DIR
+	_write_fixture_png("stone_floor")
+	IllustratedBuildingPieceSprite.forget_cached("stone_floor")
+	assert_false(sprite.has_piece_art("stone_floor"))
+	DirAccess.remove_absolute("%s/stone_floor.png" % _FURNITURE_FIXTURE_DIR)

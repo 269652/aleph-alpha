@@ -64,7 +64,6 @@ const MillipedeRenderer = preload("res://src/rendering/millipede_renderer.gd")
 const GrassFrogRenderer = preload("res://src/rendering/grass_frog_renderer.gd")
 const LumberjackMarker = preload("res://src/rendering/lumberjack_marker.gd")
 const ProceduralBuildingPieceSprite = preload("res://src/rendering/procedural_building_piece_sprite.gd")
-const BuilderMarker = preload("res://src/rendering/builder_marker.gd")
 const LogisticsMarker = preload("res://src/rendering/logistics_marker.gd")
 const StructureStockStore = preload("res://src/emergence/structure_stock_store.gd")
 const IllustratedStructureSprite = preload("res://src/rendering/illustrated_structure_sprite.gd")
@@ -1937,6 +1936,35 @@ const HOUSE_BLUEPRINT_SHAPE_BY_RECIPE_ID := {
 }
 
 
+## recipe_id -> the BuildingCatalog house a learned blueprint raises
+## (docs/concept/building.md "Player building re-route") -- the player's
+## own house is ONE whole-building entity placed through place_building,
+## the same model every village house already is, never the legacy
+## per-tile piece pipeline HOUSE_BLUEPRINT_SHAPE_BY_RECIPE_ID above still
+## describes for older saves. The ten two-story blueprints map to "" --
+## "no whole-building form yet": their recipe prices are pinned to ten
+## distinct legacy shapes a single catalog house cannot honestly stand in
+## for, so they are refused with that message (and off the merchant's
+## shelf -- see Shop.CATALOG) until the catalog grows real two-story
+## sheets. Explicit "" entries rather than absent keys, so no recipe ever
+## falls through to a stale default.
+const BUILDING_ID_BY_RECIPE_ID := {
+	"small_house": "house_small",
+	"cottage": "house_medium",
+	"manor": "house_large",
+	"townhouse_narrow": "",
+	"merchant_house": "",
+	"guild_hall": "",
+	"riverside_villa": "",
+	"timber_longhouse": "",
+	"artisan_workshop_house": "",
+	"tower_keep": "",
+	"harborside_manor": "",
+	"grand_estate": "",
+	"gambrel_lodge": "",
+}
+
+
 ## A pure query: could `recipe_id`'s house actually be built at
 ## `origin_tile` (its global top-left) right now? Never mutates anything
 ## and never wastes material -- the caller (Player._try_build_house_from_
@@ -1945,48 +1973,45 @@ const HOUSE_BLUEPRINT_SHAPE_BY_RECIPE_ID := {
 ## that was going to be refused anyway.
 ##
 ## Checks, in order: the blueprint must be unlocked, the recipe must map
-## to a real HouseBlueprint shape, the target chunk must be loaded, every
-## cell the shape would occupy must be genuinely free (no existing
-## `modifications` entry there -- you cannot build over an existing
-## structure), and every cell must be real, buildable ground (see
-## is_buildable_terrain_at -- not water, not forest, and no standing tree
-## still in the way; reported directly: "houses / buildings cannot be
+## to a real catalog house (BUILDING_ID_BY_RECIPE_ID), the target chunk
+## must be loaded, and the whole site -- every footprint cell AND the
+## doorstep, all inside that one chunk (a building lives in exactly one
+## chunk's record, place_building's own contract) -- must be real,
+## buildable ground (see is_buildable_terrain_at -- not water, not forest,
+## no standing tree; reported directly: "houses / buildings cannot be
 ## built on river / water; also not in the forest... must first fell all
-## trees to make space for the building"). BuilderMarker's own
-## `_buildable_ground` now calls the SAME real function, so a hired house
-## is refused on the identical terms a self-built one is.
-##
-## Two-story shapes (docs/concept/housing.md) need no SEPARATE upper-floor
-## occupancy check here: for THIS function's own caller (the player's own
-## self-build path), `upper_floor_modifications` only ever gets written by
-## `stamp_upper_floor_at_global` immediately alongside `stamp_structure_
-## at_global` for the SAME origin_tile+shape (see stamp_house_and_grant_
-## ownership below) -- so an occupied upper floor at a site this function
-## would approve always implies an occupied ground floor at the same cells
-## too, and this function's existing ground-floor-only loop already
-## refuses that. (The hire and village-generator paths call stamp_upper_
-## floor_at_global too, but neither of those goes through this function --
-## see hire_builder_for_house/VillageRenderer._stamp_house's own separate
-## occupancy reasoning.)
+## trees to make space for the building") with nothing modified there yet.
+## The one exception: a doorstep that is already a road cell is accepted
+## -- every village house's doorstep IS its street, and a house built
+## along one belongs there (stamp_house_and_grant_ownership keeps it
+## paved).
 func can_build_house_from_blueprint(recipe_id: String, origin_tile: Vector2i) -> bool:
 	if not has_unlocked_blueprint(recipe_id):
 		return false
-	var shape_id: String = HOUSE_BLUEPRINT_SHAPE_BY_RECIPE_ID.get(recipe_id, "")
-	if shape_id == "":
+	var building_id: String = BUILDING_ID_BY_RECIPE_ID.get(recipe_id, "")
+	if building_id == "":
 		return false
 	var chunk_coord := _chunk_coord_for_tile(origin_tile)
 	if not _loaded_chunks.has(chunk_coord):
 		return false
-	var ground_pieces := HouseBlueprint.new().build(shape_id, _house_site_seed(chunk_coord, origin_tile, recipe_id))
-	if ground_pieces.is_empty():
+	for cell in BuildingCatalog.footprint_cells(building_id, origin_tile):
+		if not _house_site_cell_is_clear(chunk_coord, cell, false):
+			return false
+	var doorstep: Vector2i = origin_tile + BuildingCatalog.doorstep_of(building_id)
+	return _house_site_cell_is_clear(chunk_coord, doorstep, true)
+
+
+## One cell of a would-be house site: inside `chunk_coord`, buildable
+## ground, and unmodified -- or, when `road_allowed`, paved as a road.
+func _house_site_cell_is_clear(chunk_coord: Vector2i, cell: Vector2i, road_allowed: bool) -> bool:
+	if _chunk_coord_for_tile(cell) != chunk_coord:
 		return false
-	for local_cell in ground_pieces:
-		var global_cell: Vector2i = origin_tile + local_cell
-		if modification_at_global(global_cell.x, global_cell.y) != "":
-			return false
-		if not is_buildable_terrain_at(global_cell.x, global_cell.y):
-			return false
-	return true
+	if not is_buildable_terrain_at(cell.x, cell.y):
+		return false
+	var tile_id := modification_at_global(cell.x, cell.y)
+	if tile_id == "":
+		return true
+	return road_allowed and TerrainRenderer.is_road_tile(tile_id)
 
 
 ## A real, deterministic seed for `recipe_id`'s house AT this exact site --
@@ -2014,38 +2039,61 @@ func _house_resident_seed(chunk_coord: Vector2i, origin_tile: Vector2i, recipe_i
 
 
 ## The real work, assuming can_build_house_from_blueprint already held --
-## the same "just do it" contract stamp_structure_at_global itself already
-## carries one layer down. Stamps the real shape into the world (ground +
-## roof pieces), then creates and immediately completes a real, player-
-## owned ConstructionProject (docs/concept/workforce.md: instant, like
-## every other player craft action -- the player already has the skill
-## and has already paid the material by the time this is called; contrast
-## the not-yet-built hire-a-carpenter path, which genuinely takes real
-## time because someone else has to walk there and do the work).
+## the same "just do it" contract place_building itself carries one layer
+## down. Places the ONE real whole-building house the recipe maps to
+## (BUILDING_ID_BY_RECIPE_ID -> place_building, owned by `household_id` on
+## the record itself, seeded from the site), then creates and immediately
+## completes a real, player-owned ConstructionProject (docs/concept/
+## workforce.md: instant, like every other player craft action -- the
+## player already has the skill and has already paid the material by the
+## time this is called) and settles the resident, exactly the ledger the
+## legacy piece stamp ran. A road doorstep (see can_build_house_from_
+## blueprint) is lifted for the placement and paved again after it, so a
+## house built along a village street keeps its street.
 ##
 ## Returns the real project id, or "" without touching anything if
-## `recipe_id` doesn't resolve to a real shape (the one check worth
-## repeating here rather than trusting a caller that skipped can_build_
-## house_from_blueprint entirely).
+## `recipe_id` has no whole-building form or the site turns out occupied
+## after all (place_building's own defensive re-check) -- no ledger entry
+## is ever created for a house that never stood.
 func stamp_house_and_grant_ownership(recipe_id: String, origin_tile: Vector2i, household_id: String) -> String:
-	var shape_id: String = HOUSE_BLUEPRINT_SHAPE_BY_RECIPE_ID.get(recipe_id, "")
-	if shape_id == "":
+	var building_id: String = BUILDING_ID_BY_RECIPE_ID.get(recipe_id, "")
+	if building_id == "":
 		return ""
 	var chunk_coord := _chunk_coord_for_tile(origin_tile)
-	var seed_value := _house_site_seed(chunk_coord, origin_tile, recipe_id)
-	var house_blueprint := HouseBlueprint.new()
-	var ground_pieces := house_blueprint.build(shape_id, seed_value)
-	var roof_pieces := house_blueprint.build_roofs(shape_id, seed_value)
-	stamp_structure_at_global(chunk_coord, origin_tile, ground_pieces, roof_pieces)
-	if house_blueprint.is_two_story(shape_id):
-		var upper_pieces := house_blueprint.build_upper_floor(shape_id, seed_value)
-		stamp_upper_floor_at_global(chunk_coord, origin_tile, upper_pieces)
-
 	var local_origin := origin_tile - chunk_coord * CHUNK_SIZE
+	var seed_value := _house_site_seed(chunk_coord, origin_tile, recipe_id)
+	if not _place_building_keeping_the_doorstep_paved(chunk_coord, local_origin, building_id, seed_value, household_id):
+		return ""
+
 	var project := _construction_project_store.start_project(chunk_coord, local_origin, recipe_id, household_id)
 	_construction_project_store.complete_project(project.id, _household_store)
 	settle_resident_if_new(recipe_id, origin_tile)
 	return project.id
+
+
+## place_building for a site whose doorstep may already be a road cell:
+## the road is lifted for the placement (place_building refuses ANY
+## occupied doorstep, by design -- villages lay their streets after their
+## houses for the same reason) and laid again once the house stands, so
+## the doorstep stays exactly the street it was. False, with the road put
+## back, when the placement is refused.
+func _place_building_keeping_the_doorstep_paved(
+	chunk_coord: Vector2i, origin_local: Vector2i, building_id: String, seed_value: int, owner_household_id: String
+) -> bool:
+	var chunk: Chunk = _loaded_chunks.get(chunk_coord)
+	if chunk == null:
+		return false
+	var doorstep_local: Vector2i = origin_local + BuildingCatalog.doorstep_of(building_id)
+	var doorstep_was_road := TerrainRenderer.is_road_tile(chunk.modifications.get(doorstep_local, ""))
+	if doorstep_was_road:
+		chunk.modifications.erase(doorstep_local)
+	var placed := place_building(chunk_coord, origin_local, building_id, Vector2i(0, 1), seed_value, owner_household_id)
+	if doorstep_was_road:
+		chunk.modifications[doorstep_local] = TerrainRenderer.ROAD_TILE_ID
+		if not placed:
+			return false
+		_terrain_renderer.paint(_tile_map_layer, chunk, chunk_coord * CHUNK_SIZE, generator.biome_at_global)
+	return placed
 
 
 ## Stamps a two-story house's real upper-floor pieces into chunk.upper_
@@ -2235,7 +2283,11 @@ func free_workforce_in_chunk(chunk_coord: Vector2i) -> int:
 ## clears recipe_id's required_skill? Returns that household's id, or "" if
 ## none qualify -- a pure query, never mutates anything, the same "just
 ## answer the question" contract can_build_house_from_blueprint itself
-## already keeps for the build-it-yourself half.
+## already keeps for the build-it-yourself half. Its one consumer, the
+## instant piece-by-piece hire (hire_builder_for_house), retired with the
+## piece pipeline for houses (docs/concept/building.md "Player building
+## re-route"); the query stays for the construction-over-time hire that
+## replaces it, which needs exactly this answer.
 ##
 ## "Spare" mirrors SettlementSpareCapacity.for_settlement's OWN filter
 ## exactly (excludes any household whose real occupation is a survival
@@ -2260,8 +2312,6 @@ func find_spare_carpenter_household(settlement_id: String, recipe_id: String) ->
 		var occupation := _occupation_of_household(household_id)
 		if NpcProduction.PRODUCER_ITEM_BY_OCCUPATION.has(occupation):
 			continue  # already working a real survival job -- not spare
-		if _is_household_on_loan(household_id):
-			continue  # already off building someone else's hired house
 		var household := _household_store.get_household(household_id)
 		if household == null or household.members.is_empty():
 			continue
@@ -2272,121 +2322,6 @@ func find_spare_carpenter_household(settlement_id: String, recipe_id: String) ->
 		if carpenter.carpentry_level >= required_level:
 			return household_id
 	return ""
-
-
-## Real Builders spawned for a player's hired carpenter (docs/concept/
-## workforce.md section 5) -- project_id -> {"marker": BuilderMarker,
-## "carpenter_household_id": String}, the same tracked-dict shape
-## _sagewerk_lumberjacks already establishes for a different marker's own
-## lifecycle, extended with which household is on loan.
-var _hired_builders: Dictionary = {}
-
-
-## True while household_id is already off building a hired house --
-## find_spare_carpenter_household's own real "spare" filter, so the SAME
-## household is never offered for a second hire while its first is still
-## in progress (the settlement-side "capacity reduction for the hire's
-## duration" workforce.md's own Status list names -- narrowly scoped to
-## "don't double-book the same household," not a change to
-## SettlementSpareCapacity's own settlement-internal construction-decision
-## consumers).
-func _is_household_on_loan(household_id: String) -> bool:
-	for entry in _hired_builders.values():
-		if entry["carpenter_household_id"] == household_id:
-			return true
-	return false
-
-
-## The build-vs-hire fork's real hire execution (docs/concept/workforce.md
-## sections 3/5) -- called ONLY once Player has already found a qualifying
-## carpenter household, verified a real nearby Storage, and paid+consumed
-## the real gold/material cost (see Player._try_hire_carpenter_for_house).
-## Deposits the ALREADY-consumed material into that real Storage (so the
-## real BuilderMarker below can withdraw it exactly the way every other
-## real construction worker in this codebase already does -- see
-## BuilderMarker._step_withdrawing), starts a real IN_PROGRESS
-## ConstructionProject owned by `owner_household_id` (the PLAYER -- see
-## ConstructionProject's own household_id/resident_household_id
-## disambiguation; `carpenter_household_id` is never the owner), and spawns
-## a real BuilderMarker to build it piece by piece over real time -- the
-## first live BuilderMarker spawner (timber_construction.md's own
-## long-named gap), scoped to this player-hired path only. Returns the
-## real project id.
-func hire_builder_for_house(
-	recipe_id: String, origin_tile: Vector2i, owner_household_id: String, carpenter_household_id: String,
-	consumed_items: Dictionary, storage_pixel: Vector2
-) -> String:
-	var shape_id: String = HOUSE_BLUEPRINT_SHAPE_BY_RECIPE_ID.get(recipe_id, "")
-	if shape_id == "":
-		return ""
-	var chunk_coord := _chunk_coord_for_tile(origin_tile)
-	var local_origin := origin_tile - chunk_coord * CHUNK_SIZE
-	var seed_value := _house_site_seed(chunk_coord, origin_tile, recipe_id)
-	var house_blueprint := HouseBlueprint.new()
-	var ground_pieces := house_blueprint.build(shape_id, seed_value)
-	# Two-story houses (docs/concept/housing.md): a hired Builder now raises
-	# the real upper storey too, not just the ground floor -- named honestly
-	# as a gap when this feature first shipped, closed here directly. {} for
-	# every single-story shape (is_two_story false), so BuilderMarker.
-	# target_upper_pieces stays empty and every pre-existing hire is
-	# completely unaffected.
-	var upper_pieces := {}
-	if house_blueprint.is_two_story(shape_id):
-		upper_pieces = house_blueprint.build_upper_floor(shape_id, seed_value)
-	# The roof (docs/concept/timber_construction.md's own long-named "a
-	# hired house gets no roof at all" gap, closed here) -- unconditional,
-	# unlike upper_pieces above: EVERY real house needs a roof, single- or
-	# two-story alike, and build_roofs already derives the right shape for
-	# either case (see its own doc comment -- the ground and upper floors
-	# share an identical footprint, so the facade it caps is the same
-	# either way).
-	var roof_pieces := house_blueprint.build_roofs(shape_id, seed_value)
-
-	var storage_tile := Vector2i(
-		floori(storage_pixel.x / TerrainRenderer.TILE_SIZE), floori(storage_pixel.y / TerrainRenderer.TILE_SIZE)
-	)
-	for item_id in consumed_items:
-		deposit_to_structure_at(storage_tile.x, storage_tile.y, item_id, int(consumed_items[item_id]))
-
-	var project := _construction_project_store.start_project(chunk_coord, local_origin, recipe_id, owner_household_id)
-	project.status = ConstructionProject.Status.IN_PROGRESS
-
-	var marker := BuilderMarker.new()
-	marker.earth = self
-	marker.project_store = _construction_project_store
-	marker.household_store = _household_store
-	marker.target_project = project
-	marker.target_pieces = ground_pieces
-	marker.target_upper_pieces = upper_pieces
-	marker.target_roof_pieces = roof_pieces
-	marker.position = (Vector2(origin_tile) + Vector2(0.5, 0.5)) * TerrainRenderer.TILE_SIZE
-	_entities_parent.add_child(marker)
-	_hired_builders[project.id] = {"marker": marker, "carpenter_household_id": carpenter_household_id}
-
-	return project.id
-
-
-## Once a hired project actually reaches COMPLETE (the real BuilderMarker
-## placed every real piece -- see ConstructionProjectStore.advance_project_
-## labor_for_piece), this: (1) settles a real resident, the SAME move-in
-## stamp_house_and_grant_ownership's own self-build path already triggers
-## automatically (a hired house is exactly as real a dwelling as a
-## self-built one -- pillar 4), and (2) frees the now-idle BuilderMarker
-## (its own SEEKING phase would otherwise no-op forever once every real
-## piece is placed) and releases its carpenter household back to
-## _is_household_on_loan's own "spare" pool. Called from step_workforce_
-## economy's own periodic tick -- a resident/cleanup landing up to one tick
-## late is a real, harmless, purely cosmetic delay, not a correctness gap.
-func _despawn_completed_hired_builders() -> void:
-	for project_id in _hired_builders.keys():
-		var project: ConstructionProject = _construction_project_store.get_project(project_id)
-		if project == null or project.status != ConstructionProject.Status.COMPLETE:
-			continue
-		settle_resident_if_new(project.blueprint_id, project.chunk_coord * CHUNK_SIZE + project.origin)
-		var marker = _hired_builders[project_id]["marker"]
-		if marker != null:
-			marker.free()
-		_hired_builders.erase(project_id)
 
 
 ## The same real, derived GROWING/STABLE/DECLINING classification
@@ -2456,8 +2391,6 @@ func step_workforce_economy(delta_seconds: float, player_wallet) -> void:
 	_workforce_economy_accumulator -= WORKFORCE_ECONOMY_INTERVAL
 	if _workforce_economy_accumulator >= WORKFORCE_ECONOMY_INTERVAL:
 		_workforce_economy_accumulator = fmod(_workforce_economy_accumulator, WORKFORCE_ECONOMY_INTERVAL)
-
-	_despawn_completed_hired_builders()
 
 	# Wages: every FILLED worker slot draws real gold from the player.
 	# Simply skipped (no debt, no eviction) if the player can't afford it
@@ -2529,17 +2462,24 @@ func resident_happiness(resident_household_id: String) -> String:
 	return "unhappy"
 
 
-## How many real furniture pieces sit inside this ONE house's own footprint
-## -- the SAME real count housing.md's own appeal_score already is
-## (`furniture_ids.size()`), scoped to just this house rather than a whole
-## settlement. 0 for an unloaded chunk or a recipe with no real house shape
-## (see resident_happiness's own doc comment on why this stays live-only).
+## How many real furniture pieces sit inside this ONE house -- the SAME
+## real count housing.md's own appeal_score already is (`furniture_ids.
+## size()`), scoped to just this house rather than a whole settlement. A
+## whole-building house (docs/concept/building.md "Player building
+## re-route") keeps its furniture on its own record's "interior"
+## (docs/concept/housing.md "Decorating an entered interior"), so that is
+## what counts for it; a legacy piece house from an older save still
+## counts the per-tile furniture layer inside its shape's footprint. 0 for
+## an unloaded chunk or a recipe with no real house shape (see
+## resident_happiness's own doc comment on why this stays live-only).
 func _house_furniture_count(project: ConstructionProject) -> int:
-	var shape_id: String = HOUSE_BLUEPRINT_SHAPE_BY_RECIPE_ID.get(project.blueprint_id, "")
-	if shape_id == "":
-		return 0
 	var chunk: Chunk = _loaded_chunks.get(project.chunk_coord)
 	if chunk == null:
+		return 0
+	if chunk.buildings.has(project.origin):
+		return chunk.buildings[project.origin].get("interior", {}).size()
+	var shape_id: String = HOUSE_BLUEPRINT_SHAPE_BY_RECIPE_ID.get(project.blueprint_id, "")
+	if shape_id == "":
 		return 0
 	var footprint := HouseBlueprint.new().footprint_for(shape_id)
 	var count := 0
@@ -12438,11 +12378,39 @@ func nearest_npc_near(pixel_position: Vector2, max_distance: float) -> NpcMarker
 		for node in node_list:
 			if not (node is NpcMarker):
 				continue
+			# A villager who is home is INSIDE their house (docs/concept/
+			# building.md "Residents inside"), not standing on the doorstep
+			# their marker happens to rest on -- reported: "Talk" won over
+			# "Enter" at a doorstep and greeted the villager through the wall.
+			if node.is_at_home():
+				continue
 			var distance: float = pixel_position.distance_to(node.position)
 			if distance <= nearest_distance:
 				nearest = node
 				nearest_distance = distance
 	return nearest
+
+
+## The villager whose house `record` (a building_at_global/building_door_
+## near record: chunk_coord, resident_seed, doorstep_global) is -- found by
+## the NpcIdentity seed the record carries since place_building learned
+## who lives there, or, for an older record not yet healed by its village
+## reload (resident_seed 0), by whoever's home_position IS this doorstep.
+## Null for a house nobody lives in (a player's own, an empty record).
+func resident_marker_for(record: Dictionary) -> NpcMarker:
+	var chunk_coord: Vector2i = record.get("chunk_coord", Vector2i.ZERO)
+	var resident_seed: int = record.get("resident_seed", 0)
+	var doorstep_global: Vector2i = record.get("doorstep_global", Vector2i.ZERO)
+	var doorstep_pixel := (Vector2(doorstep_global) + Vector2(0.5, 0.5)) * TerrainRenderer.TILE_SIZE
+	var by_doorstep: NpcMarker = null
+	for node in _loaded_villages.get(chunk_coord, []):
+		if not (node is NpcMarker) or node.identity == null:
+			continue
+		if resident_seed != 0 and node.identity.seed_value == resident_seed:
+			return node
+		if node.home_position.distance_to(doorstep_pixel) < TerrainRenderer.TILE_SIZE * 0.5:
+			by_doorstep = node
+	return by_doorstep
 
 
 ## Every OTHER villager within `max_distance` of `pixel_position` -- the

@@ -374,6 +374,16 @@ const _ITEMS := {
 	# themed decor" section) -- same id-sharing/max-stack convention above.
 	"couch": ["Couch", "furniture", 5, 0.0],
 	"photo_frame": ["Photo Frame", "furniture", 5, 0.0],
+	# The interior furniture set (docs/concept/building.md "Entering":
+	# occupation-specific rooms) -- same id-sharing/max-stack convention.
+	"hearth": ["Hearth", "furniture", 5, 0.0],
+	"workbench": ["Workbench", "furniture", 5, 0.0],
+	"anvil": ["Anvil", "furniture", 5, 0.0],
+	"barrel": ["Barrel", "furniture", 5, 0.0],
+	"crate": ["Crate", "furniture", 5, 0.0],
+	"chest": ["Chest", "furniture", 5, 0.0],
+	"cupboard": ["Cupboard", "furniture", 5, 0.0],
+	"candle": ["Candle", "furniture", 5, 0.0],
 }
 
 

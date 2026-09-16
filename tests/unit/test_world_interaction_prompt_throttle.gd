@@ -26,6 +26,7 @@ const ConversationWindow = preload("res://scenes/conversation_window.gd")
 const PlayerScene = preload("res://scenes/player.tscn")
 const TerrainRenderer = preload("res://src/rendering/terrain_renderer.gd")
 const HouseInteriorView = preload("res://src/rendering/house_interior_view.gd")
+const NpcIdentity = preload("res://src/world/npc_identity.gd")
 
 const TILE_SIZE := TerrainRenderer.TILE_SIZE
 const INTERVAL := World.INTERACTION_PROMPT_REFRESH_INTERVAL
@@ -233,6 +234,33 @@ func test_indoors_but_not_on_the_exit_cell_hides_the_prompt():
 	world._update_interaction_prompt(player)
 
 	assert_false(world._interaction_prompt.visible)
+	view.free()
+	avatar.free()
+
+
+## The indoors decision itself, as a pure helper (the prompt's own
+## _show_interaction_prompt needs a live viewport this file deliberately
+## never stands up -- see the note below): Leave on the exit cell, a
+## resident within TALK_RADIUS of the avatar anywhere else, otherwise
+## nothing. Leave wins on the exit cell even though a cottage's resident
+## stands within talk reach of its doorway -- the exit cell is a 10px spot
+## you only stand on to leave (see World._indoor_prompt_for).
+func test_indoor_prompt_is_talk_near_the_resident_leave_on_the_exit_and_nothing_elsewhere():
+	var view := HouseInteriorView.new()
+	var renderer := TerrainRenderer.new()
+	view.build("cottage", "farmer", 5, renderer.build_tile_set(), TILE_SIZE, renderer)
+	add_child(view)
+	var avatar := InteriorAvatar.new()
+	add_child(avatar)
+	player.enter_building(view, avatar)
+	assert_eq(world._indoor_prompt_for(player), "", "freshly entered: not at the door, nobody home")
+
+	view.place_resident(NpcIdentity.new(9))
+	avatar.position = view.resident_position() + Vector2(TILE_SIZE, 0)
+	assert_eq(world._indoor_prompt_for(player), "talk")
+
+	avatar.position = (Vector2(view.door_cell) + Vector2(0.5, 0.5)) * TILE_SIZE
+	assert_eq(world._indoor_prompt_for(player), "leave")
 	view.free()
 	avatar.free()
 

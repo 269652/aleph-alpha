@@ -46,6 +46,51 @@ const FURNITURE_SET_BY_OCCUPATION := {
 const _FALLBACK_SET: Array[String] = ["wood_chair", "wood_table"]
 
 
+## InteriorTemplates v2 (docs/concept/building.md "Entering"): what fills a
+## typed slot letter for a given occupation -- the resident's REAL trade
+## decides the room. Every home shares the same basics (a bed, a hearth, a
+## table, a rug, a picture, a candle); the seating (`C`), the storage
+## (`S`) and above all the workshop slot (`W`) are where one household
+## reads differently from the next: a smith's anvil, an herbalist's or
+## nurse's workbench, a farmer's barrel, a fisher's or merchant's crate,
+## a hunter's or guard's chest -- and a merchant or nurse sits on a couch
+## and shelves books where a working household has a chair and a
+## cupboard. Every result is a real CATEGORY_FURNITURE id; an unknown
+## letter or occupation still furnishes something real (a chair / a
+## crate) rather than leaving a hole -- the same fail-open convention
+## furniture_set_for below already keeps.
+const _COUCH_OCCUPATIONS := {"merchant": true, "nurse": true}
+const _BOOKSHELF_OCCUPATIONS := {"herbalist": true, "merchant": true, "nurse": true}
+const _WORKSHOP_PIECE_BY_OCCUPATION := {
+	"blacksmith": "anvil", "herbalist": "workbench", "nurse": "workbench",
+	"farmer": "barrel", "fisher": "crate", "merchant": "crate",
+	"hunter": "chest", "guard": "chest",
+}
+
+static func piece_for_slot(letter: String, occupation: String) -> String:
+	match letter:
+		"B":
+			return "wood_bed"
+		"T":
+			return "wood_table"
+		"R":
+			return "wood_rug"
+		"P":
+			return "photo_frame"
+		"K":
+			return "hearth"
+		"L":
+			return "candle"
+		"C":
+			return "couch" if _COUCH_OCCUPATIONS.has(occupation) else "wood_chair"
+		"S":
+			return "wood_bookshelf" if _BOOKSHELF_OCCUPATIONS.has(occupation) else "cupboard"
+		"W":
+			return _WORKSHOP_PIECE_BY_OCCUPATION.get(occupation, "crate")
+		_:
+			return "wood_chair"
+
+
 ## The real furniture set for `occupation` -- every entry a real
 ## BuildingPiece.CATEGORY_FURNITURE id, safe to feed straight into
 ## EarthChunkManager.furnish_house_at_global.

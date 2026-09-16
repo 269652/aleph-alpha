@@ -151,9 +151,23 @@ func _process(delta: float) -> void:
 	# _sync_conversion_worker), one rule per NPC instead of a table of
 	# structures. Keyed on the tag, not merely "arrived somewhere", so
 	# standing at a shared landmark (e.g. the stall) never hides an NPC.
-	visible = not (location_tag == "home" and position.distance_to(home_position) < _ARRIVED_HOME_EPSILON_PX)
+	_at_home = location_tag == "home" and position.distance_to(home_position) < _ARRIVED_HOME_EPSILON_PX
+	visible = not _at_home
 	if economy != null:
 		economy.step(delta, entry.get("activity", "") == "work", _world, position)
+
+
+## Whether this villager is inside their own house right now -- the exact
+## "arrived home on a home-tagged entry" state the hide rule above reads,
+## exposed so the world can put them in their room when the player walks in
+## (docs/concept/building.md "Residents inside") and so the doorstep scans
+## (EarthChunkManager.nearest_npc_near) skip someone who is actually
+## indoors rather than offering "Talk" through the wall.
+func is_at_home() -> bool:
+	return _at_home
+
+
+var _at_home := false
 
 
 ## Drives the bound CharacterView's walk cycle from the actual movement this

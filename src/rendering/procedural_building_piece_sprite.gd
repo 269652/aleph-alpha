@@ -655,9 +655,161 @@ func _furniture_image(piece_id: String, base: Color) -> Image:
 			_draw_couch(image)
 		"photo_frame":
 			_draw_photo_frame(image)
+		"hearth":
+			_draw_hearth(image)
+		"workbench":
+			_draw_workbench(image, base)
+		"anvil":
+			_draw_anvil(image)
+		"barrel":
+			_draw_barrel(image, base)
+		"crate":
+			_draw_crate(image, base)
+		"chest":
+			_draw_chest(image, base)
+		"cupboard":
+			_draw_cupboard(image, base)
+		"candle":
+			_draw_candle(image)
 		_:
 			_draw_table(image, base)  # wood_table, and the fail-safe for a future piece with no art yet
 	return image
+
+
+# -- the interior furniture set (docs/concept/building.md "Entering") ------
+# Procedural placeholders until assets/sprites/furniture/<id>.png lands (see
+# IllustratedBuildingPieceSprite's furniture contract) -- each a clearly
+# different silhouette and palette, pinned pairwise-distinct by
+# test_procedural_building_piece_sprite.gd.
+
+const _STONE_GREY := Color(0.48, 0.46, 0.44)
+const _EMBER := Color(0.95, 0.45, 0.10)
+const _FLAME := Color(0.98, 0.80, 0.30)
+const _IRON := Color(0.22, 0.22, 0.25)
+const _IRON_LIT := Color(0.42, 0.42, 0.46)
+const _BRASS := Color(0.75, 0.60, 0.25)
+const _CANDLE_WAX := Color(0.95, 0.92, 0.80)
+
+
+## A stone hearth: a grey stone surround with a black firebox, embers and a
+## flame -- the one piece every home has.
+func _draw_hearth(image: Image) -> void:
+	_fill_rect(image, _px(0.08), _px(0.10), _px(0.92), _px(0.90), _STONE_GREY)
+	# Mortar lines between courses of stone.
+	var mortar := _palette.shade(_STONE_GREY)
+	for y in range(_px(0.10), _px(0.90), 5):
+		for x in range(_px(0.08), _px(0.92)):
+			image.set_pixel(x, y, mortar)
+	_fill_rect(image, _px(0.26), _px(0.34), _px(0.74), _px(0.84), Color(0.05, 0.04, 0.03))
+	_fill_rect(image, _px(0.32), _px(0.66), _px(0.68), _px(0.80), _EMBER)
+	# A flame: a narrow lit tongue rising from the embers.
+	_fill_rect(image, _px(0.44), _px(0.44), _px(0.56), _px(0.68), _FLAME)
+	_fill_rect(image, _px(0.40), _px(0.56), _px(0.60), _px(0.68), _EMBER)
+	_outline_box(image, _px(0.08), _px(0.10), _px(0.92), _px(0.90))
+
+
+## A workbench: a heavy plank top with a vice block and scattered tools.
+func _draw_workbench(image: Image, base: Color) -> void:
+	var top := _palette.highlight(base)
+	var legs := _palette.shade(_palette.shade(base))
+	_fill_rect(image, _px(0.12), _px(0.66), _px(0.20), _px(0.88), legs)
+	_fill_rect(image, _px(0.80), _px(0.66), _px(0.88), _px(0.88), legs)
+	_fill_rect(image, _px(0.08), _px(0.34), _px(0.92), _px(0.66), top)
+	# A vice at one end, a saw and a hammer laid on the top.
+	_fill_rect(image, _px(0.10), _px(0.30), _px(0.24), _px(0.44), _IRON)
+	_fill_rect(image, _px(0.36), _px(0.40), _px(0.80), _px(0.44), _IRON_LIT)
+	_fill_rect(image, _px(0.50), _px(0.50), _px(0.58), _px(0.60), _IRON)
+	_fill_rect(image, _px(0.58), _px(0.53), _px(0.76), _px(0.57), _palette.shade(base))
+	_outline_box(image, _px(0.08), _px(0.34), _px(0.92), _px(0.66))
+
+
+## An anvil: the iron horn-and-face silhouette on a log block.
+func _draw_anvil(image: Image) -> void:
+	_fill_rect(image, _px(0.30), _px(0.66), _px(0.70), _px(0.90), _palette.shade(_WOOD_BASE))
+	_fill_rect(image, _px(0.36), _px(0.52), _px(0.64), _px(0.66), _IRON)
+	_fill_rect(image, _px(0.14), _px(0.34), _px(0.86), _px(0.52), _IRON)
+	# The horn tapers off the left; the face catches light on top.
+	_fill_rect(image, _px(0.06), _px(0.38), _px(0.14), _px(0.48), _IRON)
+	for x in range(_px(0.14), _px(0.86)):
+		image.set_pixel(x, _px(0.34), _IRON_LIT)
+	_outline_box(image, _px(0.06), _px(0.34), _px(0.86), _px(0.90), _palette.shade(_IRON))
+
+
+## A barrel seen from above: a round of staves with two iron hoops.
+func _draw_barrel(image: Image, base: Color) -> void:
+	var cx := _px(0.50)
+	var cy := _px(0.50)
+	var radius := _px(0.36)
+	var stave := _palette.shade(base)
+	for y in range(cy - radius, cy + radius + 1):
+		for x in range(cx - radius, cx + radius + 1):
+			var dx := x - cx
+			var dy := y - cy
+			var d2 := dx * dx + dy * dy
+			if d2 > radius * radius:
+				continue
+			var colour := base if (x / 3) % 2 == 0 else stave
+			if d2 > (radius - 2) * (radius - 2) or absi(d2 - (radius / 2) * (radius / 2)) < radius:
+				colour = _IRON
+			if x >= 0 and y >= 0 and x < SIZE and y < SIZE:
+				image.set_pixel(x, y, colour)
+
+
+## A crate: a plank box with a diagonal brace and corner nails.
+func _draw_crate(image: Image, base: Color) -> void:
+	var plank := _palette.highlight(base)
+	var seam := _palette.shade(base)
+	_fill_rect(image, _px(0.14), _px(0.16), _px(0.86), _px(0.88), plank)
+	for y in range(_px(0.16), _px(0.88), 6):
+		for x in range(_px(0.14), _px(0.86)):
+			image.set_pixel(x, y, seam)
+	# The diagonal brace.
+	var x0 := _px(0.14)
+	var span := _px(0.86) - x0
+	for i in span:
+		var y := _px(0.16) + int(round(float(i) / float(span) * (_px(0.88) - _px(0.16))))
+		for t in range(-1, 2):
+			var py := y + t
+			if py >= 0 and py < SIZE:
+				image.set_pixel(x0 + i, py, seam)
+	for corner in [Vector2i(_px(0.18), _px(0.20)), Vector2i(_px(0.80), _px(0.20)), Vector2i(_px(0.18), _px(0.82)), Vector2i(_px(0.80), _px(0.82))]:
+		_fill_rect(image, corner.x, corner.y, corner.x + 2, corner.y + 2, _IRON)
+	_outline_box(image, _px(0.14), _px(0.16), _px(0.86), _px(0.88))
+
+
+## A chest: a dark wooden box with a domed lid band and a brass clasp.
+func _draw_chest(image: Image, base: Color) -> void:
+	var body := _palette.shade(base)
+	_fill_rect(image, _px(0.14), _px(0.24), _px(0.86), _px(0.84), body)
+	_fill_rect(image, _px(0.14), _px(0.24), _px(0.86), _px(0.46), _palette.shade(body))
+	# Iron straps, a brass clasp at the front centre.
+	for x in [_px(0.26), _px(0.74)]:
+		_fill_rect(image, x, _px(0.24), x + 3, _px(0.84), _IRON)
+	_fill_rect(image, _px(0.44), _px(0.44), _px(0.56), _px(0.60), _BRASS)
+	_outline_box(image, _px(0.14), _px(0.24), _px(0.86), _px(0.84))
+
+
+## A cupboard: a tall wardrobe front with two doors and two knobs.
+func _draw_cupboard(image: Image, base: Color) -> void:
+	var frame := _palette.shade(base)
+	var panel := _palette.highlight(base)
+	_fill_rect(image, _px(0.14), _px(0.06), _px(0.86), _px(0.94), frame)
+	_fill_rect(image, _px(0.19), _px(0.12), _px(0.48), _px(0.88), panel)
+	_fill_rect(image, _px(0.52), _px(0.12), _px(0.81), _px(0.88), panel)
+	_fill_rect(image, _px(0.43), _px(0.48), _px(0.47), _px(0.54), _BRASS)
+	_fill_rect(image, _px(0.53), _px(0.48), _px(0.57), _px(0.54), _BRASS)
+	_outline_box(image, _px(0.14), _px(0.06), _px(0.86), _px(0.94))
+
+
+## A candle: a small brass dish, a pale wax stick and a flame -- the light
+## source InteriorTemplates' `L` slots place (see HouseInteriorView's own
+## glow for how it actually lights the room).
+func _draw_candle(image: Image) -> void:
+	_fill_rect(image, _px(0.34), _px(0.70), _px(0.66), _px(0.80), _BRASS)
+	_fill_rect(image, _px(0.44), _px(0.40), _px(0.56), _px(0.70), _CANDLE_WAX)
+	_fill_rect(image, _px(0.47), _px(0.28), _px(0.53), _px(0.40), _FLAME)
+	_fill_rect(image, _px(0.48), _px(0.34), _px(0.52), _px(0.40), _EMBER)
+	_outline_box(image, _px(0.34), _px(0.70), _px(0.66), _px(0.80), _palette.shade(_BRASS))
 
 
 ## A whole flight of stairs down the cell: a run of treads (paler wood,

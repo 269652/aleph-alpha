@@ -162,13 +162,25 @@ player houses already use; the per-cell `_piece_property_id` and the
 per-villager-index id are retired.
 
 **Entering** (`HouseInteriorView`): standing on a doorstep shows "Enter";
-the interior is an authored `InteriorTemplates` grid (walls, floor, door,
-furniture ids from the existing furniture catalog, several variants per
-interior family × occupation, picked by the house's seed), drawn from the
-existing tile set (the illustrated floor/wall/furniture tiles), its walls
-and blocking furniture (bed, table, bookshelf, couch) as bodies on their
-own `INTERIOR_COLLISION_LAYER`, plus a real threshold body one cell past
-the door so nothing but the real Leave action gets a player out. This is
+the interior is an authored `InteriorTemplates` room plan — v2
+(2026-09-16): multi-room (interior partitions with gaps; a cottage's
+bedroom and hearth room, a house's three rooms, a manor's four), windows
+on the outer wall, one or two candles for light, one cell the resident
+stands on when home, and typed slots (bed, table, seat, rug, shelf,
+picture, hearth, workshop piece, light) that `HouseDecor.piece_for_slot`
+fills for the resident's REAL occupation (from the building record — a
+smith's workshop slot is an anvil, a farmer's a barrel, a merchant sits on
+a couch and shelves books where a working household has a chair and a
+cupboard); three plans per family, picked by the house's seed, every plan
+validated (enclosed, one south door, every room reachable). Drawn from the
+existing tile set (the illustrated floor/wall/window/furniture tiles —
+furniture is procedural until its PNG lands, see the asset contract), its
+walls, windows and solid furniture (bed, table, bookshelf, couch, hearth,
+workbench, anvil, barrel, crate, chest, cupboard — a chair, rug, picture
+or candle you walk past) as bodies on their own `INTERIOR_COLLISION_LAYER`,
+each candle an additive `TorchGlow` quad, plus a real threshold body one
+cell past the door so nothing but the real Leave action gets a player
+out. This is
 built inside an **isolated `SubViewport`** (`World._build_interior_view`,
 the same real "a separate scene, not paint" pattern the character
 creator's own diorama already uses), stretched full-screen through a
@@ -192,6 +204,28 @@ avatar's position) frees the interior's content and hides the viewport;
 nothing about the real Player changes. Predators do not target an indoor
 player.
 
+**Residents inside.** The indoor avatar is the player's own character —
+`InteriorAvatar` hosts a real `CharacterView` dressed from the player's
+appearance, every worn armor slot and the held weapon (`Player.
+_interior_outfit`), animated by its own walking. And the house's own
+villager is there when they are home: `EarthChunkManager.
+resident_marker_for(record)` finds the outdoor `NpcMarker` whose identity
+seed the record remembers (older records fall back to the marker whose
+home is this doorstep), and if that marker `is_at_home()` — the very same
+"arrived home on a home-tagged entry" state that hides it outdoors, so a
+villager is never in two places — `HouseInteriorView.place_resident`
+stands an `InteriorResident` on the template's own resident cell: their
+own `CharacterView` dressed by `HeroAppearance` for their occupation and
+seed (identical to the outdoor dressing, so it IS the same person),
+facing the door, idle, solid on the interior layer. A villager who is out
+at the well leaves an honestly empty house. Talking works indoors exactly
+as outdoors (`Player._talk_target_identity`: the resident within the same
+`TALK_RADIUS` of the avatar, the same greeting); World's indoor prompt
+shows "Leave" on the exit cell, else "Talk" within reach of the resident,
+else nothing. Doorstep scans (`nearest_npc_near`) skip at-home villagers,
+so "Enter" is what a doorstep offers rather than a "Talk" through the
+wall.
+
 **Older saves.** A settlement chunk that has no buildings yet but still
 holds piece-built houses has those pieces (and their roof/furniture/upper
 entries) wiped once on load, excluding any cell covered by a player-owned
@@ -209,16 +243,44 @@ Player piece placement is retired with them; the player's blueprint build
 places a finished building through the same ledger, and hiring a builder
 for a house returns in the construction-over-time pass. See Status.
 
-### Asset contract (what an artist/generator must deliver per building)
+### Asset contract (what an artist/generator must deliver)
 
-- `assets/sprites/buildings/<building_id>.png`, 1536×1024, 8 columns ×
-  5 rows, black background, magenta cell dividers, the building drawn
-  bottom-anchored and south-facing, occupying the cell's width as the
-  footprint's width. Rows: construction ×8, active ×8 (loop), idle ×8
-  (loop or repeats), burning ×8, ruined ×8.
-- Until a file exists for an id, `ProceduralBuildingPlaceholderSprite`
-  draws a roof-over-walls box of the right footprint so the system is
-  playable and testable without art.
+Everything below lights up by dropping the file in and bumping
+`TerrainRenderer.ATLAS_VERSION` (tiles) or simply relaunching (sheets);
+there is no registry to edit. Until a file exists, a procedural placeholder
+draws so the system is playable and testable without art.
+
+**Building sheets** — `assets/sprites/buildings/<building_id>.png`
+(`house_small`, `house_medium`, `house_large`, `city_hall` …), 1536×1024,
+8 columns × 5 rows, black background, magenta cell dividers. Rows: 0
+construction ×8 (scaffold → shell → roof, left to right), 1 active ×8 (lit
+windows / chimney smoke loop), 2 idle ×8 (loop or repeats), 3 burning ×8,
+4 ruined ×8. Each cell is scaled on screen so the cell's WIDTH equals the
+footprint's width (`footprint_frame_texture`): a `w`-wide house draws
+16·w px wide and 17·w px tall. The bottom `d` tiles of that height are the
+ground footprint — draw the roof there, seen from the top-down camera —
+and everything above overhangs the row north of the house. The door must
+sit on the bottom edge in column `w/2` (integer division, i.e. right of
+centre for a 2-wide house), the whole facade south-facing. Until the
+file exists, `ProceduralBuildingPlaceholderSprite` draws a roof-over-walls
+box of the right footprint. (Construction progress will pick row 0's
+column from `progress` — `clampi(floori(progress × 8), 0, 7)` — once the
+village raises buildings over time; today only row 2 is shown.)
+
+**Furniture tiles** — `assets/sprites/furniture/<piece_id>.png`, one
+square image per `CATEGORY_FURNITURE` piece id (`wood_bed`, `wood_table`,
+`wood_chair`, `wood_rug`, `wood_bookshelf`, `couch`, `photo_frame`,
+`hearth`, `workbench`, `anvil`, `barrel`, `crate`, `chest`, `cupboard`,
+`candle`), any size ≥ 128 px, top-down, the object centred, background
+transparent or the sheets' own near-black / magenta (keyed by the same
+pass the wall sheets use). `IllustratedBuildingPieceSprite` composites it
+over the wood floor and resizes it to `ART_TILE_SIZE` (32 px), so the tile
+stays opaque; until the file exists, `ProceduralBuildingPieceSprite`
+draws the piece. Only a real furniture id is ever looked up there.
+
+**Road tile** — `assets/sprites/terrain/road.png`, one seamless 32 px
+tile, no dividers, no directional variants (see
+[infrastructure.md](infrastructure.md)).
 
 ### Status
 
@@ -261,20 +323,34 @@ for a house returns in the construction-over-time pass. See Status.
   prompt + the predator-targeting gate. Tested end to end
   (`test_interior_templates.gd`, `test_house_interior_view.gd`,
   `test_interior_avatar.gd`, `test_player.gd`, `test_creature_marker.gd`,
-  `test_world_interaction_prompt_throttle.gd`). Two named, honest gaps:
-  furniture theme is seed-varied rather than tied to the real resident's
-  own occupation (the building record carries no `occupation` field yet
-  — a small, well-scoped follow-up); "Residents inside" (spawning the
-  hidden-at-home villager's own `CharacterView` in their furnished room)
-  is not built, an explicitly-optional piece of the original plan. The
-  avatar's own appearance is a placeholder, not the player's real
-  `CharacterView` — a third named gap from this redesign, not something
-  this pass needed to get right.
-- ⬜ **Player building re-route.** Blueprint construction still runs
-  entirely on the legacy per-tile `BuildingPiece` pipeline below —
-  `HOUSE_BLUEPRINT_SHAPE_BY_RECIPE_ID` → `BUILDING_ID_BY_RECIPE_ID` and a
-  `place_building` call in place of `stamp_structure_at_global` is the
-  one piece of the original plan not yet started.
+  `test_world_interaction_prompt_throttle.gd`). The three gaps this
+  redesign first shipped with are closed (2026-09-16): the avatar is the
+  player's real `CharacterView` with armor and weapon; the interior is
+  furnished for the resident's REAL occupation from the building record;
+  and "Residents inside" is built — the at-home villager stands in their
+  room as an `InteriorResident`, Talk works indoors, doorstep scans skip
+  at-home villagers (`test_npc_marker.gd`,
+  `test_earth_chunk_manager_prompt_scans.gd`).
+- ✅ **Player building re-route** (2026-09-16). A learned blueprint places
+  ONE real catalog house (`EarthChunkManager.BUILDING_ID_BY_RECIPE_ID`:
+  small_house → house_small, cottage → house_medium, manor → house_large)
+  through `place_building`, owned by the player's household on the record
+  itself, and the existing ledger runs unchanged (a COMPLETE
+  `ConstructionProject`, `HouseholdStore` property, move-in).
+  `can_build_house_from_blueprint` validates the whole site — every
+  footprint cell and the doorstep, in one chunk, buildable and empty (a
+  road doorstep is allowed and stays paved). `Player.
+  _try_build_house_from_blueprint` refuses to raise a house over the hero's
+  own tile and leaves its reason or result in `house_build_message`
+  (`/buildhouse` prints it). The ten two-story blueprints map to "" — "no
+  whole-building form yet" — and are off the merchant's shelf until real
+  two-story sheets exist. The instant hire fork (`hire_builder_for_house`
+  and its `BuilderMarker` spawner) is retired with the piece pipeline: a
+  build the player cannot do themselves says that hiring returns with
+  construction-over-time ([workforce.md](workforce.md)). Legacy piece houses
+  in older saves are untouched (`HOUSE_BLUEPRINT_SHAPE_BY_RECIPE_ID` stays
+  for them). Tested (`test_earth_chunk_manager_player_house.gd`,
+  `test_player.gd`, `test_shop.gd`).
 
 ## Legacy: structure building from pieces (older player-built structures only)
 

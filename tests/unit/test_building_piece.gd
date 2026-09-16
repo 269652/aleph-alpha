@@ -329,3 +329,23 @@ func test_a_couch_costs_and_survives_more_than_a_chair_but_less_than_a_bed():
 func test_a_photo_frame_is_the_cheapest_and_most_fragile_furniture_piece():
 	assert_lte(int(BuildingPiece.cost_of("photo_frame")["wood"]), int(BuildingPiece.cost_of("wood_rug")["wood"]))
 	assert_lt(BuildingPiece.durability_of("photo_frame"), BuildingPiece.durability_of("wood_rug"))
+
+
+## The interior furniture set InteriorTemplates v2 draws on (docs/concept/
+## building.md "Entering": occupation-specific rooms -- a hearth in every
+## home, an anvil for the smith, a workbench for the herbalist, barrels,
+## crates and chests for the working households, a cupboard, a candle):
+## real CATEGORY_FURNITURE pieces with a real wood cost, walkable outdoors
+## like every other furniture piece (see that rule's own doc comment), so
+## the existing furnish/place/atlas paths reach them with no new plumbing.
+const _INTERIOR_FURNITURE_IDS := ["hearth", "workbench", "anvil", "barrel", "crate", "chest", "cupboard", "candle"]
+
+func test_the_interior_furniture_set_is_real_wood_costed_furniture():
+	for piece_id in _INTERIOR_FURNITURE_IDS:
+		assert_true(BuildingPiece.has_piece(piece_id), piece_id)
+		assert_true(BuildingPiece.PIECE_IDS.has(piece_id), "%s must be in PIECE_IDS so the atlas reserves it a slot" % piece_id)
+		assert_eq(BuildingPiece.category_of(piece_id), BuildingPiece.CATEGORY_FURNITURE, piece_id)
+		assert_true(BuildingPiece.is_walkable(piece_id), "%s: furniture never blocks OUTDOORS" % piece_id)
+		var cost := BuildingPiece.cost_of(piece_id)
+		assert_false(cost.is_empty(), piece_id)
+		assert_gt(int(cost.get("wood", 0)), 0, "%s costs real wood" % piece_id)

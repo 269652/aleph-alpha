@@ -224,8 +224,17 @@ at the top tier the skill web can reach, not a fourth, harder gate (see
 verify against their own shapes) plus the upper storey's own walls,
 windows, floor, and stairs — ranging from `tower_keep`'s 129 wood (a
 compact 5x5 keep) to `grand_estate`'s 303 (an 8x8 manor-and-a-half),
-priced in `shop.gd` at the same ~2.68x wood-to-gold ratio manor/cottage
-already share.
+priced at the same ~2.68x wood-to-gold ratio manor/cottage already share.
+
+**Status since the whole-building re-route (2026-09-16,
+[building.md](building.md) "Player building re-route").** Player houses
+are whole-building entities now, and the ten two-story shapes have no
+whole-building form yet (`EarthChunkManager.BUILDING_ID_BY_RECIPE_ID`
+maps them to "") — their recipes and items exist, but a build refuses
+with "no whole-building form yet" and they are off `Shop.CATALOG` until
+real two-story sheets join `BuildingCatalog`. Everything below about
+their piece geometry describes the legacy pipeline, which older saves'
+already-built two-story houses keep running on.
 
 **Deliberate simplifications, named honestly rather than left silent:**
 

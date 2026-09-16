@@ -666,3 +666,36 @@ func test_hunger_interrupt_while_home_makes_the_npc_visible_again():
 	marker.position = marker.home_position
 	marker._process(0.1)
 	assert_true(marker.visible, "a hungry NPC redirected to the well must not stay hidden at home")
+
+
+## is_at_home(): the same "arrived home on a home-tagged entry" state the
+## hide rule above reads, exposed so the world can find the villager whose
+## house the player just walked into ("Residents inside", docs/concept/
+## building.md) and so the doorstep scans can skip a villager who is
+## actually inside.
+func test_is_at_home_is_true_exactly_when_hidden_at_home():
+	marker.schedule = [
+		{"time_block": "morning", "location_tag": "home", "activity": "idle"},
+		{"time_block": "midday", "location_tag": "home", "activity": "idle"},
+		{"time_block": "evening", "location_tag": "home", "activity": "idle"},
+		{"time_block": "night", "location_tag": "home", "activity": "sleep"},
+	]
+	marker.position = Vector2(1000, 1200)
+	marker._process(0.1)
+	assert_false(marker.is_at_home(), "still walking home")
+	marker.position = marker.home_position
+	marker._process(0.1)
+	assert_true(marker.is_at_home())
+	assert_false(marker.visible)
+
+
+func test_is_at_home_is_false_at_a_landmark_even_when_standing_still():
+	marker.schedule = [
+		{"time_block": "morning", "location_tag": "stall", "activity": "work"},
+		{"time_block": "midday", "location_tag": "stall", "activity": "work"},
+		{"time_block": "evening", "location_tag": "stall", "activity": "work"},
+		{"time_block": "night", "location_tag": "stall", "activity": "work"},
+	]
+	marker.position = marker.landmarks["stall"]
+	marker._process(0.1)
+	assert_false(marker.is_at_home())

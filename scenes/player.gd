@@ -1625,119 +1625,82 @@ func _try_learn_blueprint(item_id: String) -> bool:
 	return true
 
 
+## What the last _try_build_house_from_blueprint had to say -- why it
+## refused, or what it built -- for whatever surface asked (the /buildhouse
+## console command prints it). "" until the first attempt.
+var house_build_message := ""
+
+## The hire half of the old build-vs-hire fork is gone with the piece
+## pipeline (docs/concept/building.md "Player building re-route"): a hired
+## carpenter built a house piece by piece, and a whole-building house has
+## no pieces to build. It returns as construction-over-time on the same
+## settlement ledger villages already raise their own buildings with; until
+## then a build the player cannot do themselves says exactly that.
+const HOUSE_HIRE_UNAVAILABLE_MESSAGE := (
+	"You lack the Carpentry or material to build this yourself, and you cannot hire a "
+	+ "carpenter until construction-over-time returns for your own house."
+)
+
+
 ## Builds `recipe_id`'s house for real, facing tile by facing tile, the way
-## every other placement verb already targets (see BuilderMarker/the simple
-## structure-build flow) -- docs/concept/workforce.md's "Starting a real
-## player-owned construction project" and "The fork" sections.
+## every other placement verb already targets -- docs/concept/workforce.md's
+## "Starting a real player-owned construction project" and building.md's
+## "Player building re-route": ONE whole-building entity (EarthChunkManager.
+## BUILDING_ID_BY_RECIPE_ID) placed through place_building, never legacy
+## pieces.
 ##
 ## Ordered so the player's material is never wasted on a placement that was
-## always going to fail: EarthChunkManager.can_build_house_from_blueprint is
-## a pure query, checked BEFORE either the atomic, material-consuming
-## craft() call (unchanged -- its own required_skill/inventory gate is
-## exactly what makes "carpentry too low" or "not enough wood" refuse here
-## too, the same sagewerk gate already exercises) or the hire fallback
-## below. Only once one of the two has actually succeeded does the house
-## really land, via stamp_house_and_grant_ownership -- into the player's
-## own household, formed on demand the same idempotent way HouseholdStore.
+## always going to fail: the blueprint must be learned, the recipe must have
+## a whole-building form, the site must not cover the player's own tile
+## (the footprint grows right and down from the facing tile, so facing up
+## or left would raise the house on top of the hero), and
+## EarthChunkManager.can_build_house_from_blueprint (a pure query) must
+## hold -- only THEN the atomic, material-consuming craft() call (unchanged:
+## its own required_skill/inventory gate is exactly what makes "carpentry
+## too low" or "not enough wood" refuse here too, the same sagewerk gate
+## already exercises). Only once that has succeeded does the house really
+## land, via stamp_house_and_grant_ownership -- into the player's own
+## household, formed on demand the same idempotent way HouseholdStore.
 ## form_household already promises (a second house never creates a second
-## household).
-##
-## The fork itself: build it yourself first (unchanged craft() gate); only
-## if that refuses does this fall back to _try_hire_carpenter_for_house,
-## which needs its own real, spare, sufficiently-skilled household and its
-## own real gold+material cost -- see that function's own doc comment.
+## household). Every outcome leaves its reason in house_build_message.
 func _try_build_house_from_blueprint(recipe_id: String) -> bool:
+	if _chunk_manager == null:
+		house_build_message = "No world to build in."
+		return false
+	if not _chunk_manager.has_unlocked_blueprint(recipe_id):
+		house_build_message = "You have not learned the %s blueprint." % recipe_id
+		return false
+	var building_id: String = EarthChunkManager.BUILDING_ID_BY_RECIPE_ID.get(recipe_id, "")
+	if building_id == "":
+		house_build_message = "%s has no whole-building form yet." % recipe_id
+		return false
 	var target := _tile_targeting.facing_tile(current_tile(), _last_facing_direction)
+	if _house_site_covers(building_id, target, current_tile()):
+		house_build_message = "You are standing on the site -- step off it and face where the house should stand."
+		return false
 	if not _chunk_manager.can_build_house_from_blueprint(recipe_id, target):
+		house_build_message = (
+			"That site is not clear: every footprint cell and the doorstep must be empty, buildable ground."
+		)
 		return false
 	if not craft(recipe_id):
-		return _try_hire_carpenter_for_house(recipe_id, target)
+		house_build_message = HOUSE_HIRE_UNAVAILABLE_MESSAGE
+		return false
 	var household := _chunk_manager.household_store().form_household(PlayerIdentity.PLAYER_ENTITY_ID)
-	_chunk_manager.stamp_house_and_grant_ownership(recipe_id, target, household.id)
+	var project_id: String = _chunk_manager.stamp_house_and_grant_ownership(recipe_id, target, household.id)
+	if project_id == "":
+		house_build_message = "The site was taken before the house could stand."
+		return false
+	house_build_message = "Built a %s -- enter it from its doorstep." % building_id
 	return true
 
 
-## A real, explicit, tunable placeholder (docs/concept/workforce.md's own
-## Open Questions: "Hiring cost formula -- flat, distance-scaled, or
-## reputation-scaled? Left exactly as open as timber_construction.md's own
-## hiring design already leaves it") -- a real number the fork can actually
-## charge today, not a blocker on that still-open design question.
-const HIRE_A_CARPENTER_GOLD_COST := 100
-
-
-## The build-vs-hire fork's hire half (docs/concept/workforce.md sections
-## 3/5) -- called ONLY once the player's own Carpentry has already refused
-## (see _try_build_house_from_blueprint). Needs a REAL, spare, sufficiently-
-## skilled household in the target site's own settlement
-## (EarthChunkManager.find_spare_carpenter_household -- a pure query, no
-## live BuilderMarker/instruction-DSL trust gate involved); a settlement
-## with real spare capacity but nobody skilled enough correctly refuses
-## here, same as the doc's own "Both paths" section already specifies.
-##
-## Still charges the real material cost -- a hired carpenter still needs
-## real wood to build with, only the SKILL requirement is waived -- so this
-## deliberately does NOT call craft() (which would re-apply the very skill
-## gate this fork exists to route around); instead it mirrors craft()'s own
-## material-only check-then-consume halves directly, leaving craft() itself
-## completely unchanged for every other caller.
-##
-## A real Builder withdraws its material from a real Storage, the same way
-## every other real construction worker in this codebase already does (see
-## BuilderMarker._step_withdrawing) -- so this ALSO needs a real Storage
-## within the site's own real search radius, checked BEFORE anything is
-## spent, the same "never waste material on a placement that was always
-## going to fail" ordering the whole build-vs-hire fork already keeps. A
-## site with no Storage in reach correctly has no hire to offer, the same
-## shape an under-skilled settlement's own refusal already takes.
-##
-## Once paid, hands off to EarthChunkManager.hire_builder_for_house, which
-## spawns a real BuilderMarker to build the house piece by piece over real
-## time -- the first live BuilderMarker spawner (docs/concept/workforce.md
-## section 5), no longer the instant stand-in this fork originally shipped
-## with.
-const HIRE_STORAGE_SEARCH_RADIUS_TILES := 20
-
-
-func _try_hire_carpenter_for_house(recipe_id: String, target: Vector2i) -> bool:
-	# The same floori(tile / CHUNK_SIZE) EarthChunkManager._chunk_coord_for_tile
-	# itself uses -- inlined rather than reaching into that private method
-	# cross-class, since CHUNK_SIZE is already a real public const.
-	var chunk_coord := Vector2i(
-		floori(float(target.x) / EarthChunkManager.CHUNK_SIZE), floori(float(target.y) / EarthChunkManager.CHUNK_SIZE)
-	)
-	var settlement_id := EntityRef.for_settlement(chunk_coord)
-	var carpenter_household_id := _chunk_manager.find_spare_carpenter_household(settlement_id, recipe_id)
-	if carpenter_household_id == "":
-		return false
-
-	var site_pixel := (Vector2(target) + Vector2(0.5, 0.5)) * TerrainRenderer.TILE_SIZE
-	var storage_pixel = _chunk_manager.nearest_structure_position(
-		site_pixel, "storage", float(HIRE_STORAGE_SEARCH_RADIUS_TILES) * TerrainRenderer.TILE_SIZE
-	)
-	if storage_pixel == null:
-		return false
-
-	if not wallet.can_afford(HIRE_A_CARPENTER_GOLD_COST):
-		return false
-
-	var counts := _inventory_counts()
-	var result := _crafting_recipe_book.craft(recipe_id, counts)
-	if not result.success:
-		return false
-
-	wallet.spend(HIRE_A_CARPENTER_GOLD_COST)
-	var consumed_items := {}
-	for item_id in counts:
-		var consumed: int = counts[item_id] - int(result.remaining_counts.get(item_id, 0))
-		if consumed > 0:
-			inventory.remove(item_id, consumed)
-			consumed_items[item_id] = consumed
-
-	var owner_household := _chunk_manager.household_store().form_household(PlayerIdentity.PLAYER_ENTITY_ID)
-	_chunk_manager.hire_builder_for_house(
-		recipe_id, target, owner_household.id, carpenter_household_id, consumed_items, storage_pixel
-	)
-	return true
+## Whether `building_id`'s footprint or doorstep, placed with its top-left
+## at `origin`, covers `tile`.
+func _house_site_covers(building_id: String, origin: Vector2i, tile: Vector2i) -> bool:
+	if BuildingCatalog.footprint_cells(building_id, origin).has(tile):
+		return true
+	return origin + BuildingCatalog.doorstep_of(building_id) == tile
 
 
 ## Direct Builder mode (docs/concept/npc_role_consensus.md's "One building,
@@ -2533,6 +2496,15 @@ func _enter_exit_step() -> void:
 	# trying to out-cover it.
 	_interior_viewport.add_child(interior_view)
 	interior_view.build(interior_family, occupation, seed_value, renderer.build_tile_set(), _tile_size, renderer)
+
+	# The house's own villager stands in their room only while they are
+	# actually home right now (docs/concept/building.md "Residents inside")
+	# -- the same "arrived home" state that hides their outdoor marker on
+	# the doorstep, so they are never in two places at once and a house
+	# whose villager is out at the well is honestly empty.
+	var resident_marker = _chunk_manager.resident_marker_for(record)
+	if resident_marker != null and resident_marker.is_at_home():
+		interior_view.place_resident(resident_marker.identity)
 
 	var avatar := InteriorAvatar.new()
 	_interior_viewport.add_child(avatar)
@@ -4594,14 +4566,34 @@ func _talk_step(delta: float) -> void:
 	var just_pressed := _rising_edge("talk", talk_pressed, _last_talk_input)
 	_last_talk_input = talk_pressed
 	if just_pressed:
-		var npc = _chunk_manager.nearest_npc_near(position, TALK_RADIUS) if _chunk_manager != null else null
+		var identity = _talk_target_identity()
 		_talk_result_message = (
-			_npc_greeting.greeting_for(npc.identity) if npc != null else "No one to talk to nearby."
+			_npc_greeting.greeting_for(identity) if identity != null else "No one to talk to nearby."
 		)
 		_talk_result_timer = TALK_MESSAGE_DURATION
 
 	_talk_result_timer = maxf(0.0, _talk_result_timer - delta)
 	talk_message = _talk_result_message if _talk_result_timer > 0.0 else ""
+
+
+## Who a Talk press reaches right now, or null: outdoors the nearest
+## villager within TALK_RADIUS of the real player (EarthChunkManager.
+## nearest_npc_near, which skips anyone who is actually indoors); inside a
+## house the room's own resident, if home and within the SAME radius of
+## the indoor avatar (docs/concept/building.md "Residents inside") -- the
+## one greeting rule in two coordinate spaces, never two rules.
+func _talk_target_identity():
+	if is_indoors():
+		var identity = _interior_view.resident_identity()
+		if identity == null:
+			return null
+		if _interior_avatar.position.distance_to(_interior_view.resident_position()) > TALK_RADIUS:
+			return null
+		return identity
+	if _chunk_manager == null:
+		return null
+	var npc = _chunk_manager.nearest_npc_near(position, TALK_RADIUS)
+	return npc.identity if npc != null else null
 
 
 ## Authority-only: on the rising edge of the build input, either places the
