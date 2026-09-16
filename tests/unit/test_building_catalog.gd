@@ -334,3 +334,36 @@ func test_no_catalog_building_is_deeper_than_the_street_pitch_reserves():
 		VillageLayout.STREET_PITCH_TILES, deepest + VillageLayout.STREET_GAP_TILES,
 		"the street pitch must reserve the deepest real footprint plus the gap"
 	)
+
+
+# -- houses are buildings, not items ---------------------------------------
+#
+# A house the village raises for an arriving household goes up through the
+# SAME ConstructionProject ledger every other building does, so it needs a
+# real recipe: without one, recipe_inputs is empty, try_start finds nothing
+# to wait on, ConstructionLabor derives zero hours, and the house completes
+# instantly and for free on the tick it is queued.
+
+func test_every_house_has_a_real_recipe_at_exactly_its_catalog_price():
+	var ConstructionLabor = load("res://src/emergence/construction_labor.gd")
+	var book = CraftingRecipeBook.new()
+	for building_id in BuildingCatalog.BUILDING_IDS:
+		var inputs: Array = book.recipe_inputs(building_id)
+		assert_false(inputs.is_empty(), "%s needs a real recipe to be raised over time" % building_id)
+		var expected := {}
+		for input in inputs:
+			expected[input["item_id"]] = input["count"]
+		assert_eq(BuildingCatalog.cost_of(building_id), expected, "%s: one price, not two" % building_id)
+		assert_gt(ConstructionLabor.labor_hours_required(building_id, book), 0.0, "%s must take real work" % building_id)
+
+
+## A house is a building, not something a player carries home from a
+## workbench. It has no ItemCatalog entry, which is exactly what keeps it
+## off every bench surface -- no extra gate needed.
+func test_no_house_is_ever_offered_at_a_crafting_bench():
+	var book = CraftingRecipeBook.new()
+	var catalog = load("res://src/gameplay/item_catalog.gd").new()
+	var bench: Array = book.bench_recipe_ids(catalog)
+	for building_id in BuildingCatalog.BUILDING_IDS:
+		assert_false(catalog.has(building_id), "%s must not be a carryable item" % building_id)
+		assert_false(bench.has(building_id), "%s must never appear at a bench" % building_id)

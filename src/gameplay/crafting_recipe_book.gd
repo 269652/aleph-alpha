@@ -406,6 +406,31 @@ const _RECIPES := {
 		"inputs": [{"item_id": "wood", "count": 20}, {"item_id": "stone", "count": 10}],
 		"output": {"item_id": "city_hall", "count": 1},
 	},
+	# The three village HOUSES (docs/concept/building.md's whole-building
+	# entities, raised over time by docs/concept/village_growth.md's ladder
+	# for an arriving household). One price, shared with BuildingCatalog.
+	# cost_of and test-pinned there, exactly as city_hall already is.
+	#
+	# Deliberately WITHOUT an ItemCatalog entry, and that absence is the
+	# gate: is_bench_recipe only offers a recipe whose output the item
+	# catalog actually knows, so a house can never turn up on a crafting
+	# bench as something a player carries home. It exists here for one
+	# reason -- a ConstructionProject needs real inputs to wait on and real
+	# material to draw down, and without a recipe a queued house would find
+	# nothing to wait for, derive zero labour hours, and complete instantly
+	# and for free on the tick it was queued.
+	"house_small": {
+		"inputs": [{"item_id": "wood", "count": 12}],
+		"output": {"item_id": "house_small", "count": 1},
+	},
+	"house_medium": {
+		"inputs": [{"item_id": "wood", "count": 20}, {"item_id": "stone", "count": 4}],
+		"output": {"item_id": "house_medium", "count": 1},
+	},
+	"house_large": {
+		"inputs": [{"item_id": "wood", "count": 32}, {"item_id": "stone", "count": 10}],
+		"output": {"item_id": "house_large", "count": 1},
+	},
 	# The growth ladder's remaining rungs (see docs/concept/village_growth.md).
 	# One price per building, shared with BuildingCatalog.cost_of (test-pinned
 	# in test_building_catalog.gd -- one number, not two, exactly as city_hall

@@ -59,7 +59,10 @@ func test_recipe_ids_returns_all_defined_recipes():
 	# farmhouse, warehouse, blacksmith and brewery -- the buildings a village
 	# raises as its population grows, each priced only in the wood/stone/
 	# plant_fibre its own spare hands actually gather (5 more).
-	assert_eq(ids.size(), 67)
+	# + the three village houses, raised over time for an arriving household
+	# by that same ladder -- no ItemCatalog entry, so never bench-craftable
+	# (3 more).
+	assert_eq(ids.size(), 70)
 
 
 func test_iron_sword_is_craftable_from_ingots_and_a_stick():
