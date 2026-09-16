@@ -351,19 +351,36 @@ func _recover_existing_village(
 			break
 
 
-## The two world predicates VillageLayout reads, translated from chunk-
-## local cells to the world's own global-tile queries -- duck-typed like
-## every other world call in this file (a world lacking the method is
-## treated as open, buildable ground). A village sites on the GROUND
-## (EarthChunkManager.is_buildable_ground_at: water and the forest biome
-## refuse, a standing tree does not -- placing a building or paving a road
-## fells it), not on the player's own fell-the-trees-first rule
-## (is_buildable_terrain_at, the fallback for a world without the ground
-## query): found live, one tree on the plaza square vetoed the whole plaza
-## and the town hall with it in most real settlement chunks.
+## Where a VILLAGE may site: anything that is not water.
+##
+## A village fells the trees it needs -- docs/concept/building.md's own
+## "the NPCs / Player must first fell all trees to make space for the
+## building" -- and both real placement paths already do it for real
+## (place_building and build_at_global call _clear_vegetation_on_cells and
+## _block_ground_cover_on_cells on what they write), so wooded ground is
+## ground a village clears, not ground it refuses.
+##
+## This used to ask is_buildable_ground_at, which refuses the forest BIOME
+## outright. Measured on real terrain near 51.2N 13.6E: that cost 10 of 22
+## villages (45%) their plaza, and with no plaza there is no civic plot and
+## so no city hall -- forest was the blocker in every single failing case,
+## water in none of them. Refusing a village its civic centre over trees it
+## would have cleared in an afternoon is the wrong trade.
+##
+## Deliberately scoped to the village generator. The PLAYER's own build
+## gate (is_buildable_terrain_at, which also refuses a tile with a tree
+## still standing on it) is untouched: a player fells trees by hand and
+## should still be told when one is in the way, while a village founding
+## itself simply clears its site.
+##
+## Water is the rule that does not move, and a world that cannot answer
+## any of these is treated as open ground -- the same duck-typed fail-open
+## shape every other world hook in this file uses.
 func _is_buildable_local(chunk_coord: Vector2i, chunk_size: int, world) -> Callable:
 	return func(cell: Vector2i) -> bool:
 		var g: Vector2i = chunk_coord * chunk_size + cell
+		if world.has_method("is_water_at_global"):
+			return not world.is_water_at_global(g.x, g.y)
 		if world.has_method("is_buildable_ground_at"):
 			return world.is_buildable_ground_at(g.x, g.y)
 		return world.is_buildable_terrain_at(g.x, g.y) if world.has_method("is_buildable_terrain_at") else true
