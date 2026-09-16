@@ -89,12 +89,18 @@ func _find_settlement_chunk() -> Vector2i:
 			loads += 1
 			_scrub_chunk(coord)
 			manager._load_chunk(coord)
+			# BOTH: a paved square with a reserved civic plot, AND real
+			# houses. The square alone is not enough -- since the plaza is
+			# CLEARED out of forest while house plots are not, a heavily
+			# wooded chunk can pave its square and still fit no house, and
+			# a village with no households has no growth decision to test.
 			var plot_origin = manager._civic_plot_origin_for(coord)
+			var has_houses := not manager.buildings_in_chunk(coord).is_empty()
 			manager._unload_chunk(coord)
 			_scrub_chunk(coord)
-			if plot_origin != null:
+			if plot_origin != null and has_houses:
 				return coord
-			if loads >= 12:
+			if loads >= 20:
 				break
 	fail_test("no real settlement chunk that laid its plaza found within the scanned neighborhood")
 	return Vector2i.ZERO
@@ -143,6 +149,23 @@ func _raise_the_hall() -> void:
 	manager._place_building_over_roads(_chunk_coord, _civic_origin, "city_hall", 1, _settlement_id)
 
 
+## Every rung BELOW the one a test is about, so the ladder really is
+## pointing at that rung. Without this a test asking about the warehouse is
+## at the mercy of whether this particular chunk happened to have timber in
+## reach: a village with no mill is owed a mill first, correctly, and the
+## warehouse never comes up at all.
+func _raise_everything_below(building_id: String) -> void:
+	_raise_the_hall()
+	for rung in VillageGrowth.LADDER_BUILDING_IDS:
+		if rung == building_id:
+			return
+		if rung == "city_hall" or manager._present_structure_ids_for_settlement_chunk(_chunk_coord).has(rung):
+			continue
+		var origin = manager._growth_site_for(_chunk_coord, rung)
+		assert_not_null(origin, "nowhere to raise %s, which %s waits behind" % [rung, building_id])
+		manager._place_building_over_roads(_chunk_coord, origin, rung, 2, _settlement_id)
+
+
 func _projects_for(building_id: String) -> Array:
 	var out: Array = []
 	for project in manager.construction_project_store().active_projects_in_chunk(_chunk_coord):
@@ -162,7 +185,7 @@ func test_a_village_without_its_hall_yet_queues_no_later_rung():
 
 func test_a_village_with_its_hall_up_queues_the_next_rung_it_is_entitled_to():
 	_stock_everything()
-	_raise_the_hall()
+	_raise_everything_below("warehouse")
 
 	manager._apply_village_growth_decision(_chunk_coord)
 
@@ -174,7 +197,7 @@ func test_a_village_with_its_hall_up_queues_the_next_rung_it_is_entitled_to():
 
 func test_a_growth_building_is_sited_fronting_the_villages_own_street():
 	_stock_everything()
-	_raise_the_hall()
+	_raise_everything_below("warehouse")
 	manager._apply_village_growth_decision(_chunk_coord)
 	var queued: Array = _projects_for("warehouse")
 	assert_eq(queued.size(), 1, "precondition")
@@ -192,7 +215,7 @@ func test_a_growth_building_is_sited_fronting_the_villages_own_street():
 
 func test_the_same_rung_is_never_queued_twice():
 	_stock_everything()
-	_raise_the_hall()
+	_raise_everything_below("warehouse")
 	manager._apply_village_growth_decision(_chunk_coord)
 	manager._apply_village_growth_decision(_chunk_coord)
 	assert_eq(_projects_for("warehouse").size(), 1, "a repeated decision finds its own earlier project")
@@ -233,7 +256,7 @@ func test_an_arriving_household_has_no_roof_until_the_village_builds_one():
 
 func test_a_homeless_household_makes_the_village_owe_a_house_before_any_other_rung():
 	_stock_everything()
-	_raise_the_hall()
+	_raise_everything_below("warehouse")
 	manager.admit_household(_chunk_coord)
 
 	manager._apply_village_growth_decision(_chunk_coord)
@@ -245,7 +268,7 @@ func test_a_homeless_household_makes_the_village_owe_a_house_before_any_other_ru
 
 func test_the_house_is_credited_to_the_household_waiting_for_it():
 	_stock_everything()
-	_raise_the_hall()
+	_raise_everything_below("warehouse")
 	var newcomer := manager.admit_household(_chunk_coord)
 
 	manager._apply_village_growth_decision(_chunk_coord)
@@ -296,7 +319,7 @@ func test_an_unhappy_village_builds_slower_than_a_thriving_one():
 		), 0, "precondition: this village has spare hands to build with at all"
 	)
 	_stock_everything()
-	_raise_the_hall()
+	_raise_everything_below("warehouse")
 	manager._apply_village_growth_decision(_chunk_coord)
 	var queued: Array = _projects_for("warehouse")
 	assert_eq(queued.size(), 1, "precondition: something is actually rising")
@@ -475,7 +498,7 @@ func test_a_villager_who_owns_nothing_here_is_reported_as_owning_nothing():
 
 func test_the_spiral_site_search_never_offers_ground_a_building_is_rising_on():
 	_stock_everything()
-	_raise_the_hall()
+	_raise_everything_below("warehouse")
 	manager._apply_village_growth_decision(_chunk_coord)
 	var queued: Array = _projects_for("warehouse")
 	assert_eq(queued.size(), 1, "precondition")
@@ -489,7 +512,7 @@ func test_the_spiral_site_search_never_offers_ground_a_building_is_rising_on():
 
 func test_a_growth_building_is_never_sited_on_ground_another_project_already_claims():
 	_stock_everything()
-	_raise_the_hall()
+	_raise_everything_below("warehouse")
 	manager._apply_village_growth_decision(_chunk_coord)
 	var first: Array = _projects_for("warehouse")
 	assert_eq(first.size(), 1, "precondition")
@@ -504,3 +527,93 @@ func test_a_growth_building_is_never_sited_on_ground_another_project_already_cla
 	assert_not_null(next_origin, "the village still has frontage somewhere")
 	for cell in BuildingCatalog.footprint_cells("farmhouse", next_origin):
 		assert_false(claimed.has(cell), "cell %s overlaps the rising warehouse" % str(cell))
+
+
+# -- the sawmill really stands, in the real pipeline ----------------------
+#
+# Reported live as missing. The pure siting is tested in
+# test_village_layout.gd and the renderer wiring against a stub in
+# test_village_renderer.gd, but neither proves that a REAL chunk load ends
+# with a real mill in the world -- which is the thing that was doubted.
+
+func _forest_cells_in_chunk() -> Dictionary:
+	var chunk = manager._loaded_chunks.get(_chunk_coord)
+	var forest := {}
+	for y in CHUNK_SIZE:
+		for x in CHUNK_SIZE:
+			if chunk.biome[y * CHUNK_SIZE + x] == "forest":
+				forest[Vector2i(x, y)] = true
+	return forest
+
+
+func _sawmill_record() -> Dictionary:
+	for record in manager.buildings_in_chunk(_chunk_coord):
+		if record.get("id", "") == "sawmill":
+			return record
+	return {}
+
+
+func test_a_real_chunk_load_leaves_a_real_sawmill_standing_at_the_timber():
+	var forest := _forest_cells_in_chunk()
+	if forest.is_empty():
+		pass_test("this village has no timber in reach, so honestly no mill")
+		return
+
+	var mill := _sawmill_record()
+	assert_false(mill.is_empty(), "a village with forest in reach must end its load with a real mill")
+
+	var origin: Vector2i = mill["origin_local"]
+	var near_timber := false
+	for cell in BuildingCatalog.footprint_cells("sawmill", origin):
+		assert_false(forest.has(cell), "the mill stands IN the wood it cuts, at %s" % str(cell))
+		for dy in range(-VillageLayout.INDUSTRY_FOREST_REACH_TILES, VillageLayout.INDUSTRY_FOREST_REACH_TILES + 1):
+			for dx in range(-VillageLayout.INDUSTRY_FOREST_REACH_TILES, VillageLayout.INDUSTRY_FOREST_REACH_TILES + 1):
+				if forest.has(cell + Vector2i(dx, dy)):
+					near_timber = true
+	assert_true(near_timber, "the mill must stand at real timber")
+
+
+## The spur is the part that makes it part of the village -- verified by
+## walking real paved cells in the real chunk, not by trusting a list.
+func test_the_real_sawmill_is_walkable_back_to_the_street_on_road():
+	if _forest_cells_in_chunk().is_empty():
+		pass_test("no mill to walk to")
+		return
+	var mill := _sawmill_record()
+	assert_false(mill.is_empty(), "precondition: a mill stands")
+
+	var doorstep: Vector2i = mill["origin_local"] + BuildingCatalog.doorstep_of("sawmill")
+	var street_y: int = VillageLayout.skeleton(CHUNK_SIZE, VillageLayout.seed_for(_chunk_coord))["street_y"]
+	var chunk = manager._loaded_chunks.get(_chunk_coord)
+
+	assert_true(TerrainRenderer.is_road_tile(chunk.modifications.get(doorstep, "")), "the doorstep itself is paved")
+	var seen := {doorstep: true}
+	var frontier: Array = [doorstep]
+	var reached := false
+	while not frontier.is_empty():
+		var cell: Vector2i = frontier.pop_back()
+		if cell.y == street_y:
+			reached = true
+			break
+		for step in [Vector2i(1, 0), Vector2i(-1, 0), Vector2i(0, 1), Vector2i(0, -1)]:
+			var next_cell: Vector2i = cell + step
+			if seen.has(next_cell):
+				continue
+			if not TerrainRenderer.is_road_tile(chunk.modifications.get(next_cell, "")):
+				continue
+			seen[next_cell] = true
+			frontier.append(next_cell)
+	assert_true(reached, "the mill must be walkable back to the street on real road")
+
+
+## And the square the whole civic system depends on really got paved.
+func test_a_real_chunk_load_leaves_the_plaza_paved():
+	var plaza: Rect2i = VillageLayout.skeleton(CHUNK_SIZE, VillageLayout.seed_for(_chunk_coord))["plaza"]
+	var chunk = manager._loaded_chunks.get(_chunk_coord)
+	for y in range(plaza.position.y, plaza.end.y):
+		for x in range(plaza.position.x, plaza.end.x):
+			var tile: String = chunk.modifications.get(Vector2i(x, y), "")
+			assert_true(
+				TerrainRenderer.is_road_tile(tile) or BuildingCatalog.occupies(tile),
+				"plaza cell (%d,%d) is '%s' -- neither paved nor built on" % [x, y, tile]
+			)
