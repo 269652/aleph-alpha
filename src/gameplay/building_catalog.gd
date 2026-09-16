@@ -164,6 +164,31 @@ const _SHOWY_TRAITS := {"bold": true, "greedy": true}
 const _PLAIN_TRAITS := {"cautious": true, "stoic": true}
 
 
+## A readable name per building, for a readout that has to title itself
+## (HousePanel, EarthChunkManager.household_report_at). Catalog data
+## because that is what it is: a house has no ItemCatalog entry to borrow a
+## display name from, and must not be given one -- an item catalog entry is
+## exactly what would put a house on a crafting bench.
+const _DISPLAY_NAMES := {
+	"house_small": "Cottage",
+	"house_medium": "House",
+	"house_large": "Manor",
+	"city_hall": "City Hall",
+	"warehouse": "Warehouse",
+	"sawmill": "Sawmill",
+	"farmhouse": "Farmhouse",
+	"blacksmith": "Smithy",
+	"brewery": "Brewery",
+}
+
+
+## The readable name, or a title-cased fallback for an id with no entry --
+## a readout that meets an unknown building shows something printable
+## rather than nothing.
+static func display_name_of(building_id: String) -> String:
+	return _DISPLAY_NAMES.get(building_id, building_id.capitalize())
+
+
 static func has_building(building_id: String) -> bool:
 	return _BUILDINGS.has(building_id)
 

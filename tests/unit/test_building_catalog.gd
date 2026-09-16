@@ -367,3 +367,21 @@ func test_no_house_is_ever_offered_at_a_crafting_bench():
 	for building_id in BuildingCatalog.BUILDING_IDS:
 		assert_false(catalog.has(building_id), "%s must not be a carryable item" % building_id)
 		assert_false(bench.has(building_id), "%s must never appear at a bench" % building_id)
+
+
+## A readable name per building, for a readout that has to title itself.
+## Kept in the catalog because it IS catalog data -- a house has no
+## ItemCatalog entry to borrow a display name from (and must not get one,
+## see test_no_house_is_ever_offered_at_a_crafting_bench).
+func test_every_building_has_a_readable_display_name():
+	var seen := {}
+	for building_id in BuildingCatalog.BUILDING_IDS + BuildingCatalog.CIVIC_BUILDING_IDS + BuildingCatalog.PRODUCTION_BUILDING_IDS:
+		var name: String = BuildingCatalog.display_name_of(building_id)
+		assert_ne(name, "", "%s needs a name" % building_id)
+		assert_ne(name, building_id, "%s must read as a name, not an id" % building_id)
+		assert_false(seen.has(name), "two buildings must not share the name %s" % name)
+		seen[name] = true
+
+
+func test_an_unknown_id_still_gets_something_printable():
+	assert_ne(BuildingCatalog.display_name_of("moon_base"), "")

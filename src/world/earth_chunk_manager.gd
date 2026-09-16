@@ -4000,7 +4000,7 @@ func household_report_at(global_x: int, global_y: int) -> Dictionary:
 
 	var report := {
 		"building_id": building_id,
-		"display_name": _item_catalog.make(building_id).display_name if _item_catalog.has(building_id) else building_id,
+		"display_name": BuildingCatalog.display_name_of(building_id),
 		"chunk_coord": chunk_coord,
 		"origin_local": origin_local,
 		"capacity": capacity,
