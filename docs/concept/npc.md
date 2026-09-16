@@ -489,6 +489,18 @@ because the code took them:
    lands nothing.** Half a deer is not half a meal, and a wounded animal
    that escapes fed nobody.
 
+🚧 **A fisher's dock is not sited at water.** `VillageRenderer` places
+every personal workspot prop — a farmer's field, a blacksmith's forge, a
+fisher's dock — on dry ground near that villager's own house, with no
+notion of what the trade needs to be near. So whether a fisher ever
+actually fishes depends on where the village happened to land relative to a
+river or lake, not on anything the dock knows. The fallback keeps them fed
+either way, and the fix belongs to whatever eventually sites work props by
+what the work needs (the hunter has the same shape of problem and is less
+exposed to it, since animals move and water does not). **Unmeasured**: the
+probe covers the hunter's side only, so the rate at which a fisher has real
+water in reach is currently a stated gap, not a number.
+
 **Still open here:** a villager cannot hunt a species whose meat the world
 has no `LootTable` entry for — they can *kill* it, and are paid the same
 `Butchering` yield for it, but it leaves no carcass either way, so the
