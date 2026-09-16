@@ -311,3 +311,110 @@ func test_an_unhappy_village_gathers_less_than_a_thriving_one():
 func test_the_settlements_own_mean_productivity_is_a_real_readable_number():
 	var productivity: float = manager.settlement_productivity(_settlement_id)
 	assert_between(productivity, HouseholdWellbeing.MIN_PRODUCTIVITY, 1.0)
+
+
+# -- the readout: clicking a house (docs/concept/village_growth.md, 5) -----
+#
+# A consumer, never a driver: it reads state that already exists and
+# changes nothing. Every number it reports is derived at the moment it is
+# asked for, so it cannot drift from the simulation.
+
+func _any_house_record() -> Dictionary:
+	for record in manager.buildings_in_chunk(_chunk_coord):
+		if BuildingCatalog.capacity_of(record.get("id", "")) > 0:
+			return record
+	return {}
+
+
+func test_clicking_empty_ground_reports_nothing():
+	var open_cell := _global(Vector2i(0, 0))
+	assert_true(manager.building_at_global(open_cell.x, open_cell.y).is_empty(), "precondition: nothing here")
+	assert_true(manager.household_report_at(open_cell.x, open_cell.y).is_empty())
+
+
+func test_clicking_a_house_reports_its_resident_and_their_household():
+	var house := _any_house_record()
+	assert_false(house.is_empty(), "precondition: a real village has houses")
+	var anchor := _global(house["origin_local"])
+
+	var report: Dictionary = manager.household_report_at(anchor.x, anchor.y)
+
+	assert_eq(report["building_id"], house["id"])
+	assert_eq(report["settlement_id"], _settlement_id)
+	assert_true(report["is_home"], "a house is somebody's home")
+	assert_ne(report["household_id"], "", "a village house belongs to the household living in it")
+	assert_ne(report["resident_name"], "", "the readout names the person, not just the plot")
+	assert_ne(report["resident_occupation"], "")
+
+
+## Any footprint cell answers, not just the anchor -- a click lands
+## wherever the player clicked on the building, not on its corner.
+func test_clicking_any_part_of_a_house_reports_the_same_household():
+	var house := _any_house_record()
+	assert_false(house.is_empty(), "precondition")
+	var anchor_report: Dictionary = manager.household_report_at(_global(house["origin_local"]).x, _global(house["origin_local"]).y)
+	for cell in BuildingCatalog.footprint_cells(house["id"], house["origin_local"]):
+		var g := _global(cell)
+		assert_eq(
+			manager.household_report_at(g.x, g.y).get("household_id", "<none>"), anchor_report["household_id"],
+			"cell %s must report the same household as the anchor" % str(cell)
+		)
+
+
+func test_a_house_reports_every_need_plus_happiness_and_productivity():
+	var house := _any_house_record()
+	assert_false(house.is_empty(), "precondition")
+	var anchor := _global(house["origin_local"])
+
+	var report: Dictionary = manager.household_report_at(anchor.x, anchor.y)
+
+	for need_id in HouseholdWellbeing.NEED_IDS:
+		assert_between(float(report["needs"][need_id]), 0.0, 1.0, "%s must be a real satisfaction" % need_id)
+	assert_between(float(report["happiness"]), 0.0, 1.0)
+	assert_between(float(report["productivity"]), HouseholdWellbeing.MIN_PRODUCTIVITY, 1.0)
+
+
+## Feeding the village really moves the readout -- proof the numbers are
+## derived from live state rather than snapshotted at founding.
+func test_the_readout_follows_the_village_it_reports_on():
+	var house := _any_house_record()
+	assert_false(house.is_empty(), "precondition")
+	var anchor := _global(house["origin_local"])
+	var hungry: float = manager.household_report_at(anchor.x, anchor.y)["happiness"]
+
+	_market().add_stock("cooked_meat", 500.0)
+
+	assert_gt(
+		float(manager.household_report_at(anchor.x, anchor.y)["happiness"]), hungry,
+		"a fed village reads happier the moment it is fed"
+	)
+
+
+## A commons has no household and no needs of its own -- reported honestly
+## as a building of the settlement rather than given invented residents.
+func test_a_civic_building_reports_itself_without_inventing_a_resident():
+	_raise_the_hall()
+	var anchor := _global(_civic_origin)
+
+	var report: Dictionary = manager.household_report_at(anchor.x, anchor.y)
+
+	assert_eq(report["building_id"], "city_hall")
+	assert_false(report["is_home"], "nobody lives in the town hall")
+	assert_eq(report["resident_name"], "")
+	assert_true((report["needs"] as Dictionary).is_empty(), "a hall has no needs of its own")
+	assert_between(float(report["settlement_productivity"]), HouseholdWellbeing.MIN_PRODUCTIVITY, 1.0)
+
+
+func test_the_readout_changes_nothing_it_reports_on():
+	var house := _any_house_record()
+	assert_false(house.is_empty(), "precondition")
+	var anchor := _global(house["origin_local"])
+	var households_before := manager.household_count_for_settlement(_settlement_id)
+	var stock_before: Dictionary = _market().stock.duplicate()
+	var buildings_before := manager.buildings_in_chunk(_chunk_coord).size()
+
+	manager.household_report_at(anchor.x, anchor.y)
+
+	assert_eq(manager.household_count_for_settlement(_settlement_id), households_before)
+	assert_eq(_market().stock, stock_before)
+	assert_eq(manager.buildings_in_chunk(_chunk_coord).size(), buildings_before)

@@ -3965,6 +3965,109 @@ func _food_per_household(settlement_id: String, market, household_count: int) ->
 	return float(stock) / float(household_count)
 
 
+## docs/concept/village_growth.md mechanism 5: everything a readout needs
+## about the building standing on `(global_x, global_y)` -- what it is, who
+## lives there, and how they are doing. {} when no building covers that
+## cell (clicking empty ground reports nothing).
+##
+## A CONSUMER, never a driver: every number here is derived at the moment
+## it is asked for, from state that already exists for its own reasons, so
+## the readout cannot drift from the simulation -- it IS the simulation,
+## read. Calling this changes nothing, and never calling it changes nothing
+## either (pinned by test_earth_chunk_manager_village_growth.gd).
+##
+## A COMMONS (a hall, a mill, a warehouse -- BuildingCatalog.capacity_of
+## == 0) has no household and no needs of its own, and is reported that
+## way: empty `needs`, no resident name, `is_home` false. Inventing
+## residents for a town hall so the panel has something to draw would be
+## exactly the fabrication this project's rules forbid.
+##
+## Hunger is the RESIDENT'S OWN live NpcNeeds clock when that villager is
+## really loaded and walking around, and the settlement-scale reading (how
+## far the village larder falls short) otherwise -- so an occupied village
+## reports the person in front of you, and one whose villagers are not
+## currently spawned still reports something true rather than nothing.
+func household_report_at(global_x: int, global_y: int) -> Dictionary:
+	var record := building_at_global(global_x, global_y)
+	if record.is_empty():
+		return {}
+
+	var building_id: String = record["id"]
+	var chunk_coord: Vector2i = record["chunk_coord"]
+	var origin_local: Vector2i = record["origin_local"]
+	var settlement_id := EntityRef.for_settlement(chunk_coord)
+	var capacity := BuildingCatalog.capacity_of(building_id)
+
+	var report := {
+		"building_id": building_id,
+		"display_name": _item_catalog.make(building_id).display_name if _item_catalog.has(building_id) else building_id,
+		"chunk_coord": chunk_coord,
+		"origin_local": origin_local,
+		"capacity": capacity,
+		"is_home": capacity > 0,
+		"settlement_id": settlement_id,
+		"settlement_productivity": settlement_productivity(settlement_id),
+		"household_id": "",
+		"resident_name": "",
+		"resident_occupation": "",
+		"wallet_balance": 0,
+		"needs": {},
+		"happiness": 0.0,
+		"productivity": 0.0,
+	}
+	if capacity <= 0:
+		return report
+
+	var resident_seed := int(record.get("resident_seed", 0))
+	if resident_seed != 0:
+		var identity := NpcIdentity.new(resident_seed)
+		report["resident_name"] = identity.npc_name
+		report["resident_occupation"] = identity.occupation
+	elif String(record.get("occupation", "")) != "":
+		report["resident_occupation"] = String(record["occupation"])
+
+	var household_id := VillageCensus.household_owning(chunk_coord, origin_local, _household_store)
+	report["household_id"] = household_id
+	var household = _household_store.get_household(household_id) if household_id != "" else null
+	var household_size: int = 1 if household == null else maxi(household.members.size(), 1)
+	report["wallet_balance"] = 0 if household == null else household.wallet.balance
+
+	var household_count := maxi(_households_in_settlement(settlement_id).size(), 1)
+	var food_per_household := _food_per_household(
+		settlement_id, _market_store.market_for(settlement_id), household_count
+	)
+	var wellbeing: Dictionary = HouseholdWellbeing.assess({
+		"hunger": _resident_hunger(chunk_coord, resident_seed, food_per_household),
+		"food_per_household": food_per_household,
+		"house_capacity": capacity,
+		"household_size": household_size,
+		"wallet_balance": report["wallet_balance"],
+		"meal_price": VillageMarket.VILLAGE_LOCAL_FOOD_PRICE,
+		"ladder_share": VillageGrowth.ladder_share(_present_structure_ids_for_settlement_chunk(chunk_coord)),
+	})
+	report["needs"] = wellbeing["needs"]
+	report["happiness"] = wellbeing["happiness"]
+	report["productivity"] = wellbeing["productivity"]
+	return report
+
+
+## This resident's own live hunger if their NpcMarker is really spawned in
+## this chunk, else the settlement-scale reading derived from the larder
+## (see _household_wellbeing_for_settlement for why that is the honest
+## fallback rather than a guess).
+func _resident_hunger(chunk_coord: Vector2i, resident_seed: int, food_per_household: float) -> float:
+	if resident_seed != 0:
+		for node in _loaded_villages.get(chunk_coord, []):
+			if not is_instance_valid(node) or not (node is NpcMarker):
+				continue
+			var marker: NpcMarker = node
+			if marker.identity == null or marker.identity.seed_value != resident_seed:
+				continue
+			if marker.economy != null and marker.economy.needs != null:
+				return clampf(marker.economy.needs.hunger, 0.0, 1.0)
+	return 1.0 - clampf(food_per_household / HouseholdWellbeing.FOOD_STOCK_PER_HOUSEHOLD_TARGET, 0.0, 1.0)
+
+
 ## While a settlement's chunk is loaded, its construction keeps going in
 ## real time: re-take the build decision (a need may have appeared or a
 ## link may have just been placed) and advance every IN_PROGRESS project
