@@ -617,3 +617,69 @@ func test_a_real_chunk_load_leaves_the_plaza_paved():
 				TerrainRenderer.is_road_tile(tile) or BuildingCatalog.occupies(tile),
 				"plaza cell (%d,%d) is '%s' -- neither paved nor built on" % [x, y, tile]
 			)
+
+
+# -- a traveling merchant pays the village (traveling_merchants.md) -------
+#
+# Reported live: "all villagers have 0 gold". The persistent-purse bug was
+# half of it; the other half is that a village's gold came from nowhere --
+# conjured per food unit gathered whether or not anyone ever bought it.
+# Here the outside world turns up and pays for goods it carries away.
+
+const MerchantVisit = preload("res://src/emergence/merchant_visit.gd")
+const NpcEconomy = preload("res://src/world/npc_economy.gd")
+
+
+func test_a_village_with_goods_is_eventually_paid_by_a_merchant():
+	var market = _market()
+	market.add_stock("fish", 60.0)
+	assert_eq(NpcEconomy.purse_of(market), 0.0, "precondition: an empty purse")
+
+	for i in 400:
+		manager._step_merchant_visits(_settlement_id, market)
+
+	assert_gt(NpcEconomy.purse_of(market), 0.0, "somebody carried the catch away and paid for it")
+	assert_lt(market.stock.get("fish", 0.0), 60.0, "and the fish really left the village")
+
+
+func test_a_village_with_nothing_to_sell_is_never_paid():
+	var market = _market()
+	for i in 400:
+		manager._step_merchant_visits(_settlement_id, market)
+	assert_eq(NpcEconomy.purse_of(market), 0.0, "no goods, no merchant, no gold")
+
+
+## The gold and the goods have to balance: this is the one place new money
+## enters a village, so it must enter for a reason.
+func test_the_gold_paid_is_exactly_the_goods_taken():
+	var market = _market()
+	market.add_stock("beam", 40.0)
+	var before: float = market.stock["beam"]
+
+	for i in 200:
+		manager._step_merchant_visits(_settlement_id, market)
+
+	var taken: float = before - float(market.stock.get("beam", 0.0))
+	assert_gt(taken, 0.0, "precondition: a sale happened")
+	assert_almost_eq(
+		NpcEconomy.purse_of(market), taken * MerchantVisit.price_of("beam"), 0.001,
+		"the purse holds exactly what the beams were worth"
+	)
+
+
+## And that gold is spendable: VillageWages pays subsistence out of this
+## same purse, which is what carries a merchant's visit to the villagers
+## who did not catch anything.
+func test_the_gold_lands_in_the_purse_the_village_pays_wages_from():
+	var VillageWages = load("res://src/world/village_wages.gd")
+	var market = _market()
+	market.add_stock("hide", 50.0)
+	for i in 300:
+		manager._step_merchant_visits(_settlement_id, market)
+	var purse := NpcEconomy.purse_of(market)
+	assert_gt(purse, 0.0, "precondition")
+
+	var payout: Dictionary = VillageWages.pay_subsistence(purse)
+
+	assert_gt(int(payout["paid"]), 0, "a villager who caught nothing can still be paid a wage")
+	assert_lt(float(payout["purse"]), purse, "and the village really spent it")

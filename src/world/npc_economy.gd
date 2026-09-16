@@ -96,6 +96,17 @@ static func purse_of(a_market) -> float:
 	return float(a_market.get_meta(PURSE_META, 0.0))
 
 
+## Pays `gold` into a settlement's shared purse -- the public counterpart
+## to purse_of, for money arriving from OUTSIDE the village's own levy
+## (docs/concept/traveling_merchants.md: a merchant buys goods and pays for
+## them). The levy split below keeps its own private setter because it
+## moves gold that is already inside the village; this brings new gold in.
+static func deposit_to_purse(a_market, gold: float) -> void:
+	if a_market == null or gold <= 0.0:
+		return
+	_set_purse(a_market, purse_of(a_market) + gold)
+
+
 static func _set_purse(a_market, gold: float) -> void:
 	if a_market == null:
 		return
