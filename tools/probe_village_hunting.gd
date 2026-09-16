@@ -69,7 +69,7 @@ func _initialize() -> void:
 	var hunters_seen := {}
 	var hunters_with_quarry := {}
 	var distances: Array = []
-	var best_hunter = null
+	var best_hunter
 
 	for step in STEPS:
 		manager.update(berlin + Vector2i(step * CHUNK_SIZE, 0))
@@ -77,7 +77,7 @@ func _initialize() -> void:
 			var key: int = hunter.identity.seed_value
 			hunters_seen[key] = true
 			var quarry = _huntable_quarry.nearest(
-				root.get_tree().get_nodes_in_group(_huntable_quarry.QUARRY_GROUP_NAME),
+				get_nodes_in_group(_huntable_quarry.QUARRY_GROUP_NAME),
 				hunter.workspot_position
 			)
 			if quarry == null:
@@ -85,8 +85,6 @@ func _initialize() -> void:
 			if not hunters_with_quarry.has(key):
 				distances.append(hunter.workspot_position.distance_to(quarry.position))
 			hunters_with_quarry[key] = true
-			if best_hunter == null:
-				best_hunter = hunter
 
 	print("-- real huntable quarry near a real village hunter, walking east from Berlin --")
 	print("chunk-widths walked:                     %d" % STEPS)
@@ -111,10 +109,23 @@ func _initialize() -> void:
 			]
 		)
 
-	if best_hunter != null and is_instance_valid(best_hunter):
+	# Picked from what is loaded NOW, not from somewhere back along the
+	# walk: chunks evict behind a moving player, and a hunter whose chunk
+	# is gone is a detached node that can find nothing -- it would measure
+	# as a village that starved.
+	best_hunter = null
+	for hunter in _hunters_in(manager):
+		var quarry = _huntable_quarry.nearest(
+			get_nodes_in_group(_huntable_quarry.QUARRY_GROUP_NAME), hunter.workspot_position
+		)
+		if quarry != null:
+			best_hunter = hunter
+			break
+	if best_hunter != null and best_hunter.is_inside_tree():
 		_measure_one_hunt(best_hunter, manager)
 	else:
-		print("no hunter with quarry in reach survived to be simulated")
+		print("")
+		print("no hunter with quarry in reach is loaded right now to simulate")
 	quit()
 
 
@@ -124,7 +135,7 @@ func _measure_one_hunt(hunter, manager) -> void:
 	var market = hunter.economy.market
 	var meat_before: float = market.stock.get("meat", 0.0)
 	var hide_before: float = market.stock.get("hide", 0.0)
-	var creatures_before := root.get_tree().get_nodes_in_group(_huntable_quarry.QUARRY_GROUP_NAME).size()
+	var creatures_before := get_nodes_in_group(_huntable_quarry.QUARRY_GROUP_NAME).size()
 	var headcount: float = manager.herbivore_population_near(hunter.workspot_position)
 
 	var elapsed := 0.0
@@ -132,7 +143,7 @@ func _measure_one_hunt(hunter, manager) -> void:
 		hunter._process(SLICE)
 		elapsed += SLICE
 
-	var creatures_after := root.get_tree().get_nodes_in_group(_huntable_quarry.QUARRY_GROUP_NAME).size()
+	var creatures_after := get_nodes_in_group(_huntable_quarry.QUARRY_GROUP_NAME).size()
 	var drip: float = _npc_production.PRODUCTION_RATE_PER_SECOND * headcount * SIMULATED_SECONDS
 	print("")
 	print("-- one real hunter, %.0f simulated seconds --" % SIMULATED_SECONDS)
