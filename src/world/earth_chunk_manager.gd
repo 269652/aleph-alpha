@@ -4094,6 +4094,18 @@ func household_report_at(global_x: int, global_y: int) -> Dictionary:
 	return report
 
 
+## Places a building whose plot IS paved -- the civic seat on the village
+## square (VillageRenderer._place_civic_if_missing). The public face of
+## _place_building_over_roads, which the completed-project path already
+## uses: an ordinary place_building refuses a plot carrying any
+## modification, and the plaza's own paving is exactly that.
+func place_building_over_roads(
+	chunk_coord: Vector2i, origin_local: Vector2i, building_id: String, seed_value: int,
+	owner_household_id: String
+) -> bool:
+	return _place_building_over_roads(chunk_coord, origin_local, building_id, seed_value, owner_household_id)
+
+
 ## This villager's own household's persistent Wallet, or null if they have
 ## no household yet. What a live NpcEconomy earns into and spends from (see
 ## NpcEconomy.bind_household_wallet) -- without it a villager's whole
