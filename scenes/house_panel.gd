@@ -41,7 +41,6 @@ const NEED_LABELS := {
 
 signal closed
 
-var _report: Dictionary = {}
 var _title: Label
 var _subtitle: Label
 var _needs_root: VBoxContainer
@@ -95,7 +94,6 @@ func show_report(report: Dictionary) -> void:
 	if report.is_empty():
 		close()
 		return
-	_report = report
 	_title.text = BuildingCatalog.display_name_of(String(report.get("building_id", "")))
 	_subtitle.text = _subtitle_for(report)
 	_rebuild_need_rows(report.get("needs", {}))
@@ -109,7 +107,6 @@ func show_report(report: Dictionary) -> void:
 func close() -> void:
 	if not visible:
 		return
-	_report = {}
 	visible = false
 	closed.emit()
 
