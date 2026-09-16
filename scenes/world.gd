@@ -2954,19 +2954,27 @@ func _update_interaction_prompt(local_player: Player) -> void:
 		_interaction_prompt.visible = false
 		return
 
-	# Enterable house interiors (docs/concept/building.md "Entering") --
-	# indoors, the ONLY real prompt is "Leave", and only right on the
-	# interior's own exit cell (can_leave_building, not merely
-	# is_indoors -- a room is bigger than its own doorway). No indoor NPC
-	# exists yet (see "Residents inside", a named, deferred follow-up), so
-	# nothing else in this chain applies while indoors.
+	# Enterable house interiors (docs/concept/building.md "Entering"):
+	# indoors, the only two prompts are Talk (the house's own resident,
+	# when home and in reach of the avatar -- "Residents inside") and
+	# Leave (right on the interior's own exit cell -- can_leave_building,
+	# not merely is_indoors: a room is bigger than its own doorway).
+	# Positioned at the real player's own outdoor position: the prompt is
+	# a screen-space label over the hero, and while indoors the screen IS
+	# the interior viewport, so the outdoor anchor just keeps it where the
+	# hero was when they walked in.
 	if local_player.is_indoors():
-		if local_player.can_leave_building():
-			_show_interaction_prompt(
-				"Leave (%s)" % OS.get_keycode_string(_keybindings.keycode_for("enter")), local_player.position
-			)
-		else:
-			_interaction_prompt.visible = false
+		match _indoor_prompt_for(local_player):
+			"talk":
+				_show_interaction_prompt(
+					"Talk (%s)" % OS.get_keycode_string(_keybindings.keycode_for("talk")), local_player.position
+				)
+			"leave":
+				_show_interaction_prompt(
+					"Leave (%s)" % OS.get_keycode_string(_keybindings.keycode_for("enter")), local_player.position
+				)
+			_:
+				_interaction_prompt.visible = false
 		return
 
 	var npc = _chunk_manager.nearest_npc_near(local_player.position, Player.TALK_RADIUS)
@@ -3005,6 +3013,27 @@ func _update_interaction_prompt(local_player: Player) -> void:
 		return
 
 	_interaction_prompt.visible = false
+
+
+## Which prompt an indoors player gets -- "leave" right on the exit cell,
+## else "talk" when the house's own resident is home and within
+## Player.TALK_RADIUS of the interior avatar (the exact reach
+## Player._talk_target_identity greets from, so the prompt never promises
+## a Talk the key would refuse), "" anywhere else in the room. Leave wins
+## on the exit cell: that cell is a 10px stand (HouseInteriorView.
+## _EXIT_RADIUS_PX) you only reach on purpose, while the talk reach is
+## three tiles wide -- in a small cottage the resident is often within it
+## from the doorway, and someone standing in the doorway wants out (the
+## Talk key itself still works there; only the hint is decided here).
+func _indoor_prompt_for(local_player: Player) -> String:
+	if local_player.can_leave_building():
+		return "leave"
+	var view = local_player._interior_view
+	if view.resident_identity() != null:
+		var avatar_position: Vector2 = local_player._interior_avatar.position
+		if avatar_position.distance_to(view.resident_position()) <= Player.TALK_RADIUS:
+			return "talk"
+	return ""
 
 
 ## Gates _update_interaction_prompt behind INTERACTION_PROMPT_REFRESH_INTERVAL

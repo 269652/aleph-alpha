@@ -204,6 +204,28 @@ avatar's position) frees the interior's content and hides the viewport;
 nothing about the real Player changes. Predators do not target an indoor
 player.
 
+**Residents inside.** The indoor avatar is the player's own character —
+`InteriorAvatar` hosts a real `CharacterView` dressed from the player's
+appearance, every worn armor slot and the held weapon (`Player.
+_interior_outfit`), animated by its own walking. And the house's own
+villager is there when they are home: `EarthChunkManager.
+resident_marker_for(record)` finds the outdoor `NpcMarker` whose identity
+seed the record remembers (older records fall back to the marker whose
+home is this doorstep), and if that marker `is_at_home()` — the very same
+"arrived home on a home-tagged entry" state that hides it outdoors, so a
+villager is never in two places — `HouseInteriorView.place_resident`
+stands an `InteriorResident` on the template's own resident cell: their
+own `CharacterView` dressed by `HeroAppearance` for their occupation and
+seed (identical to the outdoor dressing, so it IS the same person),
+facing the door, idle, solid on the interior layer. A villager who is out
+at the well leaves an honestly empty house. Talking works indoors exactly
+as outdoors (`Player._talk_target_identity`: the resident within the same
+`TALK_RADIUS` of the avatar, the same greeting); World's indoor prompt
+shows "Leave" on the exit cell, else "Talk" within reach of the resident,
+else nothing. Doorstep scans (`nearest_npc_near`) skip at-home villagers,
+so "Enter" is what a doorstep offers rather than a "Talk" through the
+wall.
+
 **Older saves.** A settlement chunk that has no buildings yet but still
 holds piece-built houses has those pieces (and their roof/furniture/upper
 entries) wiped once on load, excluding any cell covered by a player-owned
@@ -301,15 +323,14 @@ tile, no dividers, no directional variants (see
   prompt + the predator-targeting gate. Tested end to end
   (`test_interior_templates.gd`, `test_house_interior_view.gd`,
   `test_interior_avatar.gd`, `test_player.gd`, `test_creature_marker.gd`,
-  `test_world_interaction_prompt_throttle.gd`). Two named, honest gaps:
-  furniture theme is seed-varied rather than tied to the real resident's
-  own occupation (the building record carries no `occupation` field yet
-  — a small, well-scoped follow-up); "Residents inside" (spawning the
-  hidden-at-home villager's own `CharacterView` in their furnished room)
-  is not built, an explicitly-optional piece of the original plan. The
-  avatar's own appearance is a placeholder, not the player's real
-  `CharacterView` — a third named gap from this redesign, not something
-  this pass needed to get right.
+  `test_world_interaction_prompt_throttle.gd`). The three gaps this
+  redesign first shipped with are closed (2026-09-16): the avatar is the
+  player's real `CharacterView` with armor and weapon; the interior is
+  furnished for the resident's REAL occupation from the building record;
+  and "Residents inside" is built — the at-home villager stands in their
+  room as an `InteriorResident`, Talk works indoors, doorstep scans skip
+  at-home villagers (`test_npc_marker.gd`,
+  `test_earth_chunk_manager_prompt_scans.gd`).
 - ⬜ **Player building re-route.** Blueprint construction still runs
   entirely on the legacy per-tile `BuildingPiece` pipeline below —
   `HOUSE_BLUEPRINT_SHAPE_BY_RECIPE_ID` → `BUILDING_ID_BY_RECIPE_ID` and a

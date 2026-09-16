@@ -232,3 +232,45 @@ func test_a_bigger_room_gets_a_smaller_zoom_than_a_smaller_room():
 
 	assert_lt(view.camera().zoom.x, cottage_view.camera().zoom.x)
 	cottage_view.free()
+
+
+# -- residents inside (docs/concept/building.md "Entering") ----------------
+#
+# When the house's own villager is at home, they stand in their room --
+# their own CharacterView, dressed exactly the way VillageRenderer dresses
+# them outdoors (HeroAppearance for their occupation + identity seed, so it
+# IS the same person), on the template's own resident cell, solid on the
+# interior collision layer so the player walks around them, not through.
+
+const NpcIdentity = preload("res://src/world/npc_identity.gd")
+
+
+func test_place_resident_stands_the_villager_on_the_resident_cell_as_a_real_character():
+	view.build("cottage", "farmer", 5, _tile_set, TILE_SIZE, _terrain_renderer)
+	var identity := NpcIdentity.new(4242)
+
+	var resident: Node2D = view.place_resident(identity)
+
+	assert_not_null(resident)
+	assert_true(resident.is_inside_tree() and resident.get_parent() == view)
+	var expected := (Vector2(view.resident_cell) + Vector2(0.5, 0.5)) * TILE_SIZE
+	assert_almost_eq(resident.position.x, expected.x, 0.01)
+	assert_almost_eq(resident.position.y, expected.y, 0.01)
+	assert_true(resident.character_view() is CharacterView)
+	assert_eq(view.resident_identity(), identity)
+
+
+func test_a_resident_is_solid_on_the_interior_layer():
+	view.build("cottage", "farmer", 5, _tile_set, TILE_SIZE, _terrain_renderer)
+	var resident: Node2D = view.place_resident(NpcIdentity.new(7))
+	var body: StaticBody2D = null
+	for child in resident.get_children():
+		if child is StaticBody2D:
+			body = child
+	assert_not_null(body, "the resident must block like any solid furniture")
+	assert_eq(body.collision_layer, HouseInteriorView.INTERIOR_COLLISION_LAYER)
+
+
+func test_a_house_with_nobody_home_has_no_resident():
+	view.build("cottage", "farmer", 5, _tile_set, TILE_SIZE, _terrain_renderer)
+	assert_null(view.resident_identity())

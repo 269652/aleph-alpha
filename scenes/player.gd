@@ -2534,6 +2534,15 @@ func _enter_exit_step() -> void:
 	_interior_viewport.add_child(interior_view)
 	interior_view.build(interior_family, occupation, seed_value, renderer.build_tile_set(), _tile_size, renderer)
 
+	# The house's own villager stands in their room only while they are
+	# actually home right now (docs/concept/building.md "Residents inside")
+	# -- the same "arrived home" state that hides their outdoor marker on
+	# the doorstep, so they are never in two places at once and a house
+	# whose villager is out at the well is honestly empty.
+	var resident_marker = _chunk_manager.resident_marker_for(record)
+	if resident_marker != null and resident_marker.is_at_home():
+		interior_view.place_resident(resident_marker.identity)
+
 	var avatar := InteriorAvatar.new()
 	_interior_viewport.add_child(avatar)
 	var outfit := _interior_outfit()
@@ -4594,14 +4603,34 @@ func _talk_step(delta: float) -> void:
 	var just_pressed := _rising_edge("talk", talk_pressed, _last_talk_input)
 	_last_talk_input = talk_pressed
 	if just_pressed:
-		var npc = _chunk_manager.nearest_npc_near(position, TALK_RADIUS) if _chunk_manager != null else null
+		var identity = _talk_target_identity()
 		_talk_result_message = (
-			_npc_greeting.greeting_for(npc.identity) if npc != null else "No one to talk to nearby."
+			_npc_greeting.greeting_for(identity) if identity != null else "No one to talk to nearby."
 		)
 		_talk_result_timer = TALK_MESSAGE_DURATION
 
 	_talk_result_timer = maxf(0.0, _talk_result_timer - delta)
 	talk_message = _talk_result_message if _talk_result_timer > 0.0 else ""
+
+
+## Who a Talk press reaches right now, or null: outdoors the nearest
+## villager within TALK_RADIUS of the real player (EarthChunkManager.
+## nearest_npc_near, which skips anyone who is actually indoors); inside a
+## house the room's own resident, if home and within the SAME radius of
+## the indoor avatar (docs/concept/building.md "Residents inside") -- the
+## one greeting rule in two coordinate spaces, never two rules.
+func _talk_target_identity():
+	if is_indoors():
+		var identity = _interior_view.resident_identity()
+		if identity == null:
+			return null
+		if _interior_avatar.position.distance_to(_interior_view.resident_position()) > TALK_RADIUS:
+			return null
+		return identity
+	if _chunk_manager == null:
+		return null
+	var npc = _chunk_manager.nearest_npc_near(position, TALK_RADIUS)
+	return npc.identity if npc != null else null
 
 
 ## Authority-only: on the rising edge of the build input, either places the

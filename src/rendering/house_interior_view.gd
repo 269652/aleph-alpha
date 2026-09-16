@@ -69,6 +69,8 @@ const _BLOCKING_FURNITURE_IDS := {
 ## eye once and pinned, like every other radius here.
 const INTERIOR_LIGHT_RADIUS_TILES := 3.0
 const TorchGlow = preload("res://src/rendering/torch_glow.gd")
+const InteriorResident = preload("res://src/rendering/interior_resident.gd")
+const NpcIdentity = preload("res://src/world/npc_identity.gd")
 
 ## door_cell/size mirror InteriorTemplates.furnish's own output exactly,
 ## exposed here for callers that need to reason about the room's shape
@@ -90,6 +92,9 @@ var _collision_bodies: Dictionary = {}  # local Vector2i -> StaticBody2D
 var _light_glows: Array = []  # MeshInstance2D per light cell, in template order
 var _tile_size := 16
 var _torch_glow := TorchGlow.new()
+## The villager standing in this room, or null when nobody is home (see
+## place_resident) -- a child of this view, so it is freed with it.
+var _resident: Node2D = null
 
 ## A little room in front of the walls so they never touch the screen
 ## edge -- purely cosmetic now (the SubViewport itself is what actually
@@ -231,6 +236,42 @@ func is_on_exit(local_position: Vector2) -> bool:
 
 func light_glows() -> Array:
 	return _light_glows
+
+
+## Stands the house's own villager on the template's resident cell
+## (docs/concept/building.md "Residents inside") -- called by the player's
+## enter step only when EarthChunkManager.resident_marker_for says that
+## villager is actually at home right now (NpcMarker.is_at_home), so an
+## empty house stays honestly empty. Freed with the view on exit, like
+## every other child here; the outdoor NpcMarker is never touched.
+func place_resident(identity: NpcIdentity) -> Node2D:
+	var resident := InteriorResident.new()
+	resident.position = (Vector2(resident_cell) + Vector2(0.5, 0.5)) * _tile_size
+	resident.z_index = INTERIOR_OCCUPANT_Z_INDEX
+	add_child(resident)
+	resident.present(identity, INTERIOR_COLLISION_LAYER)
+	_resident = resident
+	return resident
+
+
+## Who is home: the placed resident's NpcIdentity, or null when the room is
+## empty -- the indoor Talk verb (Player._talk_step) and World's indoors
+## prompt read this before ever asking resident_position.
+func resident_identity() -> NpcIdentity:
+	if _resident == null:
+		return null
+	return _resident.identity
+
+
+## The resident's own local position (this view's coordinates, i.e. the
+## same space as InteriorAvatar.position, so a plain distance_to between
+## the two is the indoor talk range). Vector2.INF when nobody is home --
+## infinitely far from everything, so a distance check against it is
+## always "out of range" rather than a real corner of the room.
+func resident_position() -> Vector2:
+	if _resident == null:
+		return Vector2.INF
+	return _resident.position
 
 
 func _piece_id_for(cell_value: String) -> String:

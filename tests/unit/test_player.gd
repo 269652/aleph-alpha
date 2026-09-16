@@ -4197,6 +4197,79 @@ func test_entering_a_house_with_no_recorded_resident_still_gets_a_real_occupatio
 	)
 
 
+# -- residents inside (docs/concept/building.md "Residents inside") ---------
+#
+# When the house's own villager is at home (hidden outdoors on their
+# doorstep), walking in finds them standing in their room; when they are
+# out, the house is empty. Talking to them indoors works exactly like
+# outdoors -- the same greeting, from the avatar's own position.
+
+func _a_villager_living_at(doorstep_global: Vector2i, seed_value: int, at_home: bool) -> NpcMarker:
+	var villager := NpcMarker.new()
+	villager.identity = NpcIdentity.new(seed_value)
+	villager.identity.occupation = "farmer"
+	var doorstep := (Vector2(doorstep_global) + Vector2(0.5, 0.5)) * TILE_SIZE
+	villager.home_position = doorstep
+	villager.landmarks = {"well": doorstep + Vector2(300, 0), "stall": doorstep + Vector2(300, 50), "gate": doorstep + Vector2(300, 100)}
+	var tag := "home" if at_home else "stall"
+	villager.schedule = [
+		{"time_block": "morning", "location_tag": tag, "activity": "idle"},
+		{"time_block": "midday", "location_tag": tag, "activity": "idle"},
+		{"time_block": "evening", "location_tag": tag, "activity": "idle"},
+		{"time_block": "night", "location_tag": tag, "activity": "idle"},
+	]
+	villager.position = doorstep if at_home else doorstep + Vector2(300, 0)
+	creatures_parent.add_child(villager)
+	villager._process(0.0)
+	chunk_manager._loaded_villages[Vector2i(0, 0)] = [villager]
+	return villager
+
+
+func test_entering_a_house_whose_villager_is_home_finds_them_inside():
+	var origin := Vector2i(10, 10)
+	var doorstep_global: Vector2i = origin + BuildingCatalog.doorstep_of("house_small")
+	var villager := _a_villager_living_at(doorstep_global, 555, true)
+	assert_true(villager.is_at_home(), "precondition")
+	_enter_the_house_placed_at(origin, "farmer", 555)
+	assert_eq(player._interior_view.resident_identity(), villager.identity)
+
+
+func test_entering_a_house_whose_villager_is_out_finds_it_empty():
+	var origin := Vector2i(10, 10)
+	var doorstep_global: Vector2i = origin + BuildingCatalog.doorstep_of("house_small")
+	_a_villager_living_at(doorstep_global, 556, false)
+	_enter_the_house_placed_at(origin, "farmer", 556)
+	assert_null(player._interior_view.resident_identity())
+
+
+func test_talking_indoors_greets_the_resident_when_the_avatar_is_close_to_them():
+	var origin := Vector2i(10, 10)
+	var doorstep_global: Vector2i = origin + BuildingCatalog.doorstep_of("house_small")
+	var villager := _a_villager_living_at(doorstep_global, 557, true)
+	_enter_the_house_placed_at(origin, "farmer", 557)
+	player._interior_avatar.position = player._interior_view.resident_position() + Vector2(TILE_SIZE, 0)
+
+	Input.action_press("talk")
+	player._authority_step(0.1)
+	Input.action_release("talk")
+
+	assert_eq(player.talk_message, NpcGreeting.new().greeting_for(villager.identity))
+
+
+func test_talking_indoors_far_from_the_resident_finds_nobody():
+	var origin := Vector2i(10, 10)
+	var doorstep_global: Vector2i = origin + BuildingCatalog.doorstep_of("house_small")
+	_a_villager_living_at(doorstep_global, 558, true)
+	_enter_the_house_placed_at(origin, "farmer", 558)
+	player._interior_avatar.position = player._interior_view.resident_position() + Vector2(Player.TALK_RADIUS * 3.0, 0)
+
+	Input.action_press("talk")
+	player._authority_step(0.1)
+	Input.action_release("talk")
+
+	assert_string_contains(player.talk_message, "No one")
+
+
 func test_enter_exit_step_does_nothing_far_from_any_doorstep():
 	_register_all_keybindings()
 	Input.action_press("enter")

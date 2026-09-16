@@ -12438,11 +12438,39 @@ func nearest_npc_near(pixel_position: Vector2, max_distance: float) -> NpcMarker
 		for node in node_list:
 			if not (node is NpcMarker):
 				continue
+			# A villager who is home is INSIDE their house (docs/concept/
+			# building.md "Residents inside"), not standing on the doorstep
+			# their marker happens to rest on -- reported: "Talk" won over
+			# "Enter" at a doorstep and greeted the villager through the wall.
+			if node.is_at_home():
+				continue
 			var distance: float = pixel_position.distance_to(node.position)
 			if distance <= nearest_distance:
 				nearest = node
 				nearest_distance = distance
 	return nearest
+
+
+## The villager whose house `record` (a building_at_global/building_door_
+## near record: chunk_coord, resident_seed, doorstep_global) is -- found by
+## the NpcIdentity seed the record carries since place_building learned
+## who lives there, or, for an older record not yet healed by its village
+## reload (resident_seed 0), by whoever's home_position IS this doorstep.
+## Null for a house nobody lives in (a player's own, an empty record).
+func resident_marker_for(record: Dictionary) -> NpcMarker:
+	var chunk_coord: Vector2i = record.get("chunk_coord", Vector2i.ZERO)
+	var resident_seed: int = record.get("resident_seed", 0)
+	var doorstep_global: Vector2i = record.get("doorstep_global", Vector2i.ZERO)
+	var doorstep_pixel := (Vector2(doorstep_global) + Vector2(0.5, 0.5)) * TerrainRenderer.TILE_SIZE
+	var by_doorstep: NpcMarker = null
+	for node in _loaded_villages.get(chunk_coord, []):
+		if not (node is NpcMarker) or node.identity == null:
+			continue
+		if resident_seed != 0 and node.identity.seed_value == resident_seed:
+			return node
+		if node.home_position.distance_to(doorstep_pixel) < TerrainRenderer.TILE_SIZE * 0.5:
+			by_doorstep = node
+	return by_doorstep
 
 
 ## Every OTHER villager within `max_distance` of `pixel_position` -- the
