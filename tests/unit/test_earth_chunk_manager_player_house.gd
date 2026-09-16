@@ -414,6 +414,138 @@ func _a_second_clear_site_origin(building_id: String, first_origin: Vector2i) ->
 	return Vector2i.ZERO
 
 
+# -- interior furniture: persisted on the building record ------------------
+#
+# docs/concept/housing.md "Decorating an entered interior": what the player
+# places inside their own house lives on the building record itself
+# ("interior": local cell -> furniture id), gated by the SAME
+# FurniturePlacement rule the legacy floor plan used, against the interior
+# template's own piece grid -- and persists with the building.
+
+const InteriorTemplates = preload("res://src/gameplay/interior_templates.gd")
+const BuildingPiece = preload("res://src/gameplay/building_piece.gd")
+
+
+func _a_floor_cell_of(building_id: String, seed_value: int) -> Vector2i:
+	var family := BuildingCatalog.interior_family_of(building_id)
+	var grid: Dictionary = InteriorTemplates.piece_grid(family, seed_value)
+	var door: Vector2i = InteriorTemplates.furnish(family, InteriorTemplates.UNFURNISHED, seed_value)["door_cell"]
+	for cell in grid:
+		if grid[cell] == "wood_floor" and cell != door + Vector2i(0, -1):
+			return cell
+	fail_test("no floor cell in the %s plan" % family)
+	return Vector2i.ZERO
+
+
+func _a_wall_cell_of(building_id: String, seed_value: int) -> Vector2i:
+	var grid: Dictionary = InteriorTemplates.piece_grid(BuildingCatalog.interior_family_of(building_id), seed_value)
+	for cell in grid:
+		if grid[cell] == "wood_wall":
+			return cell
+	fail_test("no wall cell")
+	return Vector2i.ZERO
+
+
+func _place_a_small_house() -> Dictionary:
+	manager.place_building(_chunk_coord, _origin - _chunk_coord * EarthChunkManager.CHUNK_SIZE, "house_small", Vector2i(0, 1), 11, "household:owner")
+	return manager.building_at_global(_origin.x, _origin.y)
+
+
+func test_place_interior_furniture_writes_the_record_and_reports_it():
+	var record := _place_a_small_house()
+	var cell := _a_floor_cell_of("house_small", record["seed"])
+
+	assert_true(manager.place_interior_furniture(_chunk_coord, record["origin_local"], cell, "wood_bed"))
+
+	assert_eq(manager.interior_furniture_of(_chunk_coord, record["origin_local"]), {cell: "wood_bed"})
+	assert_eq(manager.building_at_global(_origin.x, _origin.y)["interior"], {cell: "wood_bed"})
+
+
+func test_place_interior_furniture_refuses_a_wall_cell():
+	var record := _place_a_small_house()
+	var wall := _a_wall_cell_of("house_small", record["seed"])
+	assert_false(manager.place_interior_furniture(_chunk_coord, record["origin_local"], wall, "wood_bed"))
+	assert_eq(manager.interior_furniture_of(_chunk_coord, record["origin_local"]), {})
+
+
+func test_place_interior_furniture_refuses_an_occupied_cell():
+	var record := _place_a_small_house()
+	var cell := _a_floor_cell_of("house_small", record["seed"])
+	manager.place_interior_furniture(_chunk_coord, record["origin_local"], cell, "wood_bed")
+	assert_false(manager.place_interior_furniture(_chunk_coord, record["origin_local"], cell, "wood_table"))
+	assert_eq(manager.interior_furniture_of(_chunk_coord, record["origin_local"])[cell], "wood_bed")
+
+
+func test_place_interior_furniture_refuses_a_non_furniture_piece():
+	var record := _place_a_small_house()
+	var cell := _a_floor_cell_of("house_small", record["seed"])
+	assert_false(manager.place_interior_furniture(_chunk_coord, record["origin_local"], cell, "wood_wall"))
+	assert_false(manager.place_interior_furniture(_chunk_coord, record["origin_local"], cell, "campfire"))
+
+
+func test_place_interior_furniture_refuses_where_no_building_stands():
+	assert_false(manager.place_interior_furniture(_chunk_coord, Vector2i(3, 3), Vector2i(1, 1), "wood_bed"))
+
+
+func test_remove_interior_furniture_returns_the_piece_and_clears_the_cell():
+	var record := _place_a_small_house()
+	var cell := _a_floor_cell_of("house_small", record["seed"])
+	manager.place_interior_furniture(_chunk_coord, record["origin_local"], cell, "wood_chair")
+
+	assert_eq(manager.remove_interior_furniture(_chunk_coord, record["origin_local"], cell), "wood_chair")
+
+	assert_eq(manager.interior_furniture_of(_chunk_coord, record["origin_local"]), {})
+	assert_eq(manager.remove_interior_furniture(_chunk_coord, record["origin_local"], cell), "", "nothing left to remove")
+
+
+func test_interior_furniture_survives_unloading_and_reloading_the_chunk():
+	var record := _place_a_small_house()
+	var cell := _a_floor_cell_of("house_small", record["seed"])
+	manager.place_interior_furniture(_chunk_coord, record["origin_local"], cell, "wood_bed")
+
+	manager._unload_chunk(_chunk_coord)
+	manager._load_chunk(_chunk_coord)
+
+	assert_eq(manager.interior_furniture_of(_chunk_coord, record["origin_local"]), {cell: "wood_bed"})
+
+
+## A record from before "interior" existed (no key at all) accepts a
+## placement -- no migration, readers default to an empty interior.
+func test_a_record_without_an_interior_key_accepts_a_placement():
+	var record := _place_a_small_house()
+	var chunk = manager._loaded_chunks[_chunk_coord]
+	chunk.buildings[record["origin_local"]].erase("interior")
+	var cell := _a_floor_cell_of("house_small", record["seed"])
+
+	assert_eq(manager.interior_furniture_of(_chunk_coord, record["origin_local"]), {})
+	assert_true(manager.place_interior_furniture(_chunk_coord, record["origin_local"], cell, "wood_rug"))
+	assert_eq(manager.interior_furniture_of(_chunk_coord, record["origin_local"]), {cell: "wood_rug"})
+
+
+func test_interior_furniture_of_an_unknown_building_is_empty():
+	assert_eq(manager.interior_furniture_of(_chunk_coord, Vector2i(3, 3)), {})
+
+
+func test_every_furniture_piece_can_be_placed_on_a_floor_cell():
+	var record := _place_a_small_house()
+	var family := BuildingCatalog.interior_family_of("house_small")
+	var grid: Dictionary = InteriorTemplates.piece_grid(family, record["seed"])
+	var floor_cells: Array = []
+	for cell in grid:
+		if grid[cell] == "wood_floor":
+			floor_cells.append(cell)
+	var index := 0
+	for piece_id in BuildingPiece.PIECE_IDS:
+		if BuildingPiece.category_of(piece_id) != BuildingPiece.CATEGORY_FURNITURE:
+			continue
+		assert_true(index < floor_cells.size(), "enough floor for every piece")
+		assert_true(
+			manager.place_interior_furniture(_chunk_coord, record["origin_local"], floor_cells[index], piece_id),
+			"%s on %s" % [piece_id, floor_cells[index]]
+		)
+		index += 1
+
+
 # -- resident happiness reads the building's own interior --------------------
 #
 # housing.md's appeal_score counts real furniture; for a whole-building

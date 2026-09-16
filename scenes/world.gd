@@ -2448,9 +2448,16 @@ func _update_cast_label(local_player: Player) -> void:
 	_set_message_banner(_cast_banner, local_player.cast_message)
 
 
-## A talk-result banner (see Player._talk_step/NpcGreeting).
+## A talk-result banner (see Player._talk_step/NpcGreeting) -- also the
+## line an indoor decorate press answers on (Player.decorate_message,
+## docs/concept/housing.md "Decorating an entered interior"): both are
+## "what just happened at the hero", and a greeting, being a real
+## conversation, wins the line while it lasts.
 func _update_talk_label(local_player: Player) -> void:
-	_set_message_banner(_talk_banner, local_player.talk_message)
+	var message := local_player.talk_message
+	if message == "":
+		message = local_player.decorate_message
+	_set_message_banner(_talk_banner, message)
 
 
 ## The joust arcade-cabinet overlay (see JoustMatchView's own doc comment)

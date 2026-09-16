@@ -95,6 +95,15 @@ var _torch_glow := TorchGlow.new()
 ## The villager standing in this room, or null when nobody is home (see
 ## place_resident) -- a child of this view, so it is freed with it.
 var _resident: Node2D = null
+## What stands on each cell right now: local cell -> furniture id, both the
+## template's own pieces and whatever the player placed (see set_furniture)
+## -- what furniture_at answers.
+var _furniture: Dictionary = {}
+## Every cell that can hold furniture -- the plan's own floor (anything
+## that is not wall, window or door), the exact cells InteriorTemplates.
+## piece_grid reports as wood_floor. A placement anywhere else is ignored.
+var _floor_cells: Dictionary = {}
+var _terrain_renderer: TerrainRenderer
 
 ## A little room in front of the walls so they never touch the screen
 ## edge -- purely cosmetic now (the SubViewport itself is what actually
@@ -120,10 +129,15 @@ const _CAMERA_FIT_MARGIN := 0.85
 ## / EarthChunkManager's own `_tile_map_layer.tile_set = _terrain_renderer.
 ## build_tile_set()`) -- reused directly, never rebuilt, the same
 ## convention every sibling overlay layer (roof/furniture/upper floor)
-## already follows.
+## already follows. `placed_furniture`: what the player put in this house
+## (EarthChunkManager.interior_furniture_of -- local cell -> furniture id,
+## docs/concept/housing.md "Decorating an entered interior"), laid over
+## the plan's floor cells after the template's own pieces; an entry on a
+## wall/window/door cell is ignored.
 func build(
 	interior_family: String, for_occupation: String, seed_value: int,
-	shared_tile_set: TileSet, tile_size: int, terrain_renderer: TerrainRenderer
+	shared_tile_set: TileSet, tile_size: int, terrain_renderer: TerrainRenderer,
+	placed_furniture: Dictionary = {}
 ) -> void:
 	var result := InteriorTemplates.furnish(interior_family, for_occupation, seed_value)
 	occupation = for_occupation
@@ -132,6 +146,7 @@ func build(
 	resident_cell = result["resident_cell"]
 	var cells: Dictionary = result["cells"]
 	_tile_size = tile_size
+	_terrain_renderer = terrain_renderer
 	var room_size_px := Vector2(size) * tile_size
 
 	var margin := _BACKDROP_MARGIN_TILES * tile_size
@@ -149,9 +164,18 @@ func build(
 
 	for local: Vector2i in cells:
 		var value: String = cells[local]
-		_tile_map_layer.set_cell(local, 0, terrain_renderer.atlas_coords_for_modification(_piece_id_for(value)))
-		if value == "wall" or value == "window" or _BLOCKING_FURNITURE_IDS.has(value):
-			_add_collision_at(local)
+		if value == "wall" or value == "window" or value == "door":
+			_tile_map_layer.set_cell(local, 0, terrain_renderer.atlas_coords_for_modification(_piece_id_for(value)))
+			if value != "door":
+				_add_collision_at(local)
+			continue
+		_floor_cells[local] = true
+		_tile_map_layer.set_cell(local, 0, terrain_renderer.atlas_coords_for_modification(_FLOOR_PIECE_ID))
+		if value != "floor":
+			set_furniture(local, value)  # the plan's own piece for this resident
+	for local: Vector2i in placed_furniture:
+		if _floor_cells.has(local) and not _furniture.has(local):
+			set_furniture(local, placed_furniture[local])
 
 	# One additive glow per candle (see INTERIOR_LIGHT_RADIUS_TILES) -- the
 	# outdoor torch's own material and quad shape (World._update_torch_glow),
@@ -272,6 +296,41 @@ func resident_position() -> Vector2:
 	if _resident == null:
 		return Vector2.INF
 	return _resident.position
+
+
+## The furniture standing on `local` -- the plan's own piece or one the
+## player placed -- or "" for bare floor, a wall, a window or the door.
+func furniture_at(local: Vector2i) -> String:
+	return _furniture.get(local, "")
+
+
+## Puts `piece_id` on a floor cell right now -- repainted at once, solid
+## if the piece blocks (see _BLOCKING_FURNITURE_IDS) -- the live half of
+## decorating (Player._decorate_step): the persisted half is
+## EarthChunkManager.place_interior_furniture, which the caller has
+## already cleared this placement with. Replaces whatever was on the cell.
+## Ignored on a cell that is not floor.
+func set_furniture(local: Vector2i, piece_id: String) -> void:
+	if not _floor_cells.has(local):
+		return
+	clear_furniture(local)
+	_furniture[local] = piece_id
+	_tile_map_layer.set_cell(local, 0, _terrain_renderer.atlas_coords_for_modification(piece_id))
+	if _BLOCKING_FURNITURE_IDS.has(piece_id):
+		_add_collision_at(local)
+
+
+## Takes whatever stands on `local` away again: bare floor, no body. A
+## no-op on an empty cell.
+func clear_furniture(local: Vector2i) -> void:
+	if not _furniture.has(local):
+		return
+	_furniture.erase(local)
+	_tile_map_layer.set_cell(local, 0, _terrain_renderer.atlas_coords_for_modification(_FLOOR_PIECE_ID))
+	var body: StaticBody2D = _collision_bodies.get(local)
+	if body != null:
+		_collision_bodies.erase(local)
+		body.queue_free()
 
 
 func _piece_id_for(cell_value: String) -> String:

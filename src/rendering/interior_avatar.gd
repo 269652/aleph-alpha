@@ -23,8 +23,16 @@ class_name InteriorAvatar
 
 const HouseInteriorView = preload("res://src/rendering/house_interior_view.gd")
 const CharacterViewScene = preload("res://scenes/character_view.tscn")
+const TileTargeting = preload("res://src/gameplay/tile_targeting.gd")
 
 const RADIUS := 6.0
+
+## The last direction actually walked (never zeroed at rest -- Player.
+## _last_facing_direction's own rule), what facing_cell reads. Down to
+## start: a freshly entered avatar stands just inside the door facing into
+## the room.
+var last_facing_direction := Vector2.DOWN
+var _tile_targeting := TileTargeting.new()
 
 ## Player.BASE_SPEED is the outdoor walking speed -- reused rather than a
 ## second, separately-tuned number, so indoor movement doesn't feel like a
@@ -112,7 +120,19 @@ func _physics_process(_delta: float) -> void:
 	# keeps the last facing on idle by itself.
 	_character_view.set_facing(input_direction)
 	var moving := input_direction.length() > 0.01
+	if moving:
+		last_facing_direction = input_direction
 	_character_view.is_moving = moving
 	_character_view.set_movement_state(
 		CharacterView.MovementState.WALKING if moving else CharacterView.MovementState.IDLE
 	)
+
+
+## The interior cell a decorate verb targets (docs/concept/housing.md
+## "Decorating an entered interior"): one cell from the avatar's own cell
+## along the dominant axis of last_facing_direction -- TileTargeting's
+## rule, the same one the outdoor build/destroy verbs use, in the room's
+## own local cells.
+func facing_cell(tile_size: int) -> Vector2i:
+	var cell := Vector2i(floori(position.x / tile_size), floori(position.y / tile_size))
+	return _tile_targeting.facing_tile(cell, last_facing_direction)

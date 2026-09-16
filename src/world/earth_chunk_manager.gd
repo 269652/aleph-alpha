@@ -68,6 +68,7 @@ const LogisticsMarker = preload("res://src/rendering/logistics_marker.gd")
 const StructureStockStore = preload("res://src/emergence/structure_stock_store.gd")
 const IllustratedStructureSprite = preload("res://src/rendering/illustrated_structure_sprite.gd")
 const BuildingCatalog = preload("res://src/gameplay/building_catalog.gd")
+const InteriorTemplates = preload("res://src/gameplay/interior_templates.gd")
 const ProceduralBuildingPlaceholderSprite = preload("res://src/rendering/procedural_building_placeholder_sprite.gd")
 const FarmerMarker = preload("res://src/rendering/farmer_marker.gd")
 const MillMarker = preload("res://src/rendering/mill_marker.gd")
@@ -170,6 +171,9 @@ const SettlementSpareCapacity = preload("res://src/emergence/settlement_spare_ca
 const NpcProduction = preload("res://src/world/npc_production.gd")
 const FurniturePlacement = preload("res://src/gameplay/furniture_placement.gd")
 const SettlementBuildDecision = preload("res://src/emergence/settlement_build_decision.gd")
+const CivicBuildDecision = preload("res://src/emergence/civic_build_decision.gd")
+const ConstructionLabor = preload("res://src/emergence/construction_labor.gd")
+const VillageLayout = preload("res://src/world/village_layout.gd")
 const Institution = preload("res://src/emergence/institution.gd")
 const InstitutionStore = preload("res://src/emergence/institution_store.gd")
 const InstitutionStorePersistence = preload("res://src/emergence/institution_store_persistence.gd")
@@ -2062,7 +2066,7 @@ func stamp_house_and_grant_ownership(recipe_id: String, origin_tile: Vector2i, h
 	var chunk_coord := _chunk_coord_for_tile(origin_tile)
 	var local_origin := origin_tile - chunk_coord * CHUNK_SIZE
 	var seed_value := _house_site_seed(chunk_coord, origin_tile, recipe_id)
-	if not _place_building_keeping_the_doorstep_paved(chunk_coord, local_origin, building_id, seed_value, household_id):
+	if not _place_building_over_roads(chunk_coord, local_origin, building_id, seed_value, household_id):
 		return ""
 
 	var project := _construction_project_store.start_project(chunk_coord, local_origin, recipe_id, household_id)
@@ -2071,29 +2075,36 @@ func stamp_house_and_grant_ownership(recipe_id: String, origin_tile: Vector2i, h
 	return project.id
 
 
-## place_building for a site whose doorstep may already be a road cell:
-## the road is lifted for the placement (place_building refuses ANY
-## occupied doorstep, by design -- villages lay their streets after their
-## houses for the same reason) and laid again once the house stands, so
-## the doorstep stays exactly the street it was. False, with the road put
-## back, when the placement is refused.
-func _place_building_keeping_the_doorstep_paved(
+## place_building for a site that may be paved: every road cell under the
+## footprint and the doorstep is lifted for the placement (place_building
+## refuses ANY occupied cell, by design -- villages lay their streets after
+## their houses for the same reason), and the doorstep is laid again once
+## the building stands, so its door still opens onto the street. A house
+## along a village street has only its doorstep on the road (can_build_
+## house_from_blueprint refuses a paved footprint); the town hall rises on
+## the plaza itself, footprint and all. False, with every road put back,
+## when the placement is refused.
+func _place_building_over_roads(
 	chunk_coord: Vector2i, origin_local: Vector2i, building_id: String, seed_value: int, owner_household_id: String
 ) -> bool:
 	var chunk: Chunk = _loaded_chunks.get(chunk_coord)
 	if chunk == null:
 		return false
 	var doorstep_local: Vector2i = origin_local + BuildingCatalog.doorstep_of(building_id)
-	var doorstep_was_road := TerrainRenderer.is_road_tile(chunk.modifications.get(doorstep_local, ""))
-	if doorstep_was_road:
-		chunk.modifications.erase(doorstep_local)
+	var lifted: Array = []
+	for local in BuildingCatalog.footprint_cells(building_id, origin_local) + [doorstep_local]:
+		if TerrainRenderer.is_road_tile(chunk.modifications.get(local, "")):
+			chunk.modifications.erase(local)
+			lifted.append(local)
 	var placed := place_building(chunk_coord, origin_local, building_id, Vector2i(0, 1), seed_value, owner_household_id)
-	if doorstep_was_road:
+	if not placed:
+		for local in lifted:
+			chunk.modifications[local] = TerrainRenderer.ROAD_TILE_ID
+		return false
+	if lifted.has(doorstep_local):
 		chunk.modifications[doorstep_local] = TerrainRenderer.ROAD_TILE_ID
-		if not placed:
-			return false
 		_terrain_renderer.paint(_tile_map_layer, chunk, chunk_coord * CHUNK_SIZE, generator.biome_at_global)
-	return placed
+	return true
 
 
 ## Stamps a two-story house's real upper-floor pieces into chunk.upper_
@@ -3780,6 +3791,7 @@ func _step_settlement_construction(settlement_id: String, household_ids: Array[S
 	if not _loaded_chunks.has(chunk_coord):
 		return
 	_apply_settlement_build_decision(chunk_coord)
+	_apply_civic_build_decision(chunk_coord)
 	_advance_construction_labor(chunk_coord, SETTLEMENT_STEP_INTERVAL)
 ## settlement_id -> SettlementGranary.SeededRegion, cached for the session.
 var _settlement_seeded_region: Dictionary = {}
@@ -12568,11 +12580,25 @@ func tree_at_global(global_x: int, global_y: int) -> bool:
 ## single standing tree elsewhere is a per-cell obstacle (fell it and the
 ## cell opens up), not a biome-wide ban.
 func is_buildable_terrain_at(global_x: int, global_y: int) -> bool:
+	if not is_buildable_ground_at(global_x, global_y):
+		return false
+	if tree_at_global(global_x, global_y):
+		return false
+	return true
+
+
+## The village's own siting rule (docs/concept/building.md "Village
+## layout"): the ground itself, trees or not -- a village fells what stands
+## on its plots and its square (place_building and a road stamp both clear
+## the vegetation there), so a standing tree is never what stops a village,
+## only ground that can never carry a building (water, the forest biome).
+## The player's own rule stays is_buildable_terrain_at: fell the trees
+## first. Found live: one tree on the 8x6 plaza square vetoed the whole
+## plaza -- and with it the town hall -- in most real settlement chunks.
+func is_buildable_ground_at(global_x: int, global_y: int) -> bool:
 	if biome_at_global(global_x, global_y) == "forest":
 		return false
 	if is_water_at_global(global_x, global_y):
-		return false
-	if tree_at_global(global_x, global_y):
 		return false
 	return true
 
@@ -12841,6 +12867,63 @@ func set_building_resident(chunk_coord: Vector2i, origin_local: Vector2i, occupa
 	chunk.buildings[origin_local]["resident_seed"] = resident_seed
 	_persist_modifications_now(chunk_coord, chunk)
 	return true
+
+
+## Furniture the player placed inside a building (docs/concept/housing.md
+## "Decorating an entered interior"): the building record's own
+## "interior" (local interior cell -> furniture id), persisted with the
+## building -- a house keeps what you put in it. Gated by the SAME
+## FurniturePlacement rule the legacy floor plan used (a real furniture
+## piece, on a real floor cell, inside an enclosed room, nothing already
+## there), judged against the interior template's own piece grid
+## (InteriorTemplates.piece_grid for the building's family + seed -- the
+## exact shape HouseInteriorView builds). Persists at once, the same way
+## set_building_resident does. False, nothing written, when no building
+## stands at `origin_local` or the placement is refused. A record from
+## before "interior" existed simply starts empty -- no migration.
+func place_interior_furniture(
+	chunk_coord: Vector2i, origin_local: Vector2i, cell: Vector2i, piece_id: String
+) -> bool:
+	var chunk: Chunk = _loaded_chunks.get(chunk_coord)
+	if chunk == null or not chunk.buildings.has(origin_local):
+		return false
+	var record: Dictionary = chunk.buildings[origin_local]
+	var family := BuildingCatalog.interior_family_of(record["id"])
+	var ground_grid: Dictionary = InteriorTemplates.piece_grid(family, int(record.get("seed", 0)))
+	var placed: Dictionary = record.get("interior", {})
+	if not FurniturePlacement.new().can_place(piece_id, cell, ground_grid, placed):
+		return false
+	placed[cell] = piece_id
+	record["interior"] = placed
+	_persist_modifications_now(chunk_coord, chunk)
+	return true
+
+
+## Takes a placed piece back out of a building's interior -- the piece id
+## it held (so the caller can refund it), or "" when nothing was there.
+func remove_interior_furniture(chunk_coord: Vector2i, origin_local: Vector2i, cell: Vector2i) -> String:
+	var chunk: Chunk = _loaded_chunks.get(chunk_coord)
+	if chunk == null or not chunk.buildings.has(origin_local):
+		return ""
+	var record: Dictionary = chunk.buildings[origin_local]
+	var placed: Dictionary = record.get("interior", {})
+	if not placed.has(cell):
+		return ""
+	var piece_id: String = placed[cell]
+	placed.erase(cell)
+	record["interior"] = placed
+	_persist_modifications_now(chunk_coord, chunk)
+	return piece_id
+
+
+## Everything placed inside the building at `origin_local` (a copy -- local
+## interior cell -> furniture id), {} for an unknown building or one nobody
+## has furnished.
+func interior_furniture_of(chunk_coord: Vector2i, origin_local: Vector2i) -> Dictionary:
+	var chunk: Chunk = _loaded_chunks.get(chunk_coord)
+	if chunk == null or not chunk.buildings.has(origin_local):
+		return {}
+	return chunk.buildings[origin_local].get("interior", {}).duplicate()
 
 
 ## Reverses place_building: clears the anchor id and every footprint
@@ -13291,9 +13374,27 @@ func has_structure_near(global_x: int, global_y: int, structure_id: String, radi
 			if chunk.modifications[local_coord] != structure_id:
 				continue
 			var tile_global: Vector2i = origin + local_coord
-			if _chebyshev_distance(tile_global, query_tile) <= radius:
+			var distance := _chebyshev_distance(tile_global, query_tile)
+			# A whole-building entity (docs/concept/building.md) is its
+			# footprint, not just its anchor cell: "near the City Hall" is
+			# measured to the nearest cell of the hall, the same way a
+			# player standing beside its east wall is beside it.
+			if chunk.buildings.has(local_coord) and BuildingCatalog.has_building(structure_id):
+				distance = _chebyshev_distance_to_footprint(
+					query_tile, tile_global, BuildingCatalog.footprint_of(structure_id)
+				)
+			if distance <= radius:
 				return true
 	return false
+
+
+## Chebyshev distance from `point` to the nearest cell of the rectangle
+## with its top-left at `origin` and `size` cells -- zero inside it.
+func _chebyshev_distance_to_footprint(point: Vector2i, origin: Vector2i, size: Vector2i) -> int:
+	var nearest := Vector2i(
+		clampi(point.x, origin.x, origin.x + size.x - 1), clampi(point.y, origin.y, origin.y + size.y - 1)
+	)
+	return _chebyshev_distance(point, nearest)
 
 
 ## Half the chunk size: the Chebyshev distance from a chunk's own CENTER
@@ -14494,7 +14595,12 @@ func _load_chunk(chunk_coord: Vector2i) -> void:
 	# as the Lumberjack loop just above.
 	for local_cell in chunk.modifications:
 		var subject: String = chunk.modifications[local_cell]
-		if _illustrated_structure_sprite.has_subject(subject):
+		# A whole-building entity's anchor carries the same id a legacy
+		# single-tile placeable did (a City Hall raised on the plaza, see
+		# _place_completed_construction_project) but draws itself through
+		# its own building node -- never a second, single-tile overlay on
+		# top of it.
+		if _illustrated_structure_sprite.has_subject(subject) and not chunk.buildings.has(local_cell):
 			_spawn_structure_art_for(chunk_coord, local_cell, subject)
 
 	# A freshly (re)loaded chunk can bring either a Sägewerk or a Storage
@@ -14713,6 +14819,7 @@ func _load_chunk(chunk_coord: Vector2i) -> void:
 	# call decides to abandon (double-fix cancellation) or start is resolved
 	# before the labor/completion sync below runs against it, not racing it.
 	_apply_settlement_build_decision(chunk_coord)
+	_apply_civic_build_decision(chunk_coord)
 
 	# Construction labor catch-up (see _apply_construction_labor_catchup's
 	# own doc comment) -- last, so it runs against a chunk that is already
@@ -14904,11 +15011,20 @@ func _advance_construction_labor(chunk_coord: Vector2i, elapsed: float) -> void:
 	)
 	var capacity := {"builder_count": float(spare_capacity)}
 	for project in _construction_project_store.in_progress_projects_in_chunk(chunk_coord):
+		# A whole-building project (the town hall on its civic plot, see
+		# _apply_civic_build_decision) is built ON its site: while
+		# something else stands on the plot the crew waits, labour neither
+		# accrues nor completes into a hall with nowhere to stand.
+		var is_building := BuildingCatalog.has_building(project.blueprint_id)
+		if is_building and not _civic_site_is_clear(chunk_coord, project.origin, project.blueprint_id):
+			continue
 		var result: Dictionary = _construction_project_store.advance_project_labor(
 			project.id, elapsed, capacity, _recipe_book, _household_store
 		)
 		if result.get("action", "") == "completed":
 			_place_completed_construction_project(project)
+		elif is_building:
+			_sync_construction_site(chunk_coord, project)
 
 
 ## The real, live chunk-load caller for docs/concept/timber_construction.md's
@@ -14987,6 +15103,72 @@ func _apply_settlement_build_decision(chunk_coord: Vector2i) -> void:
 		_construction_project_store, market, chunk_coord, origin, household_ids[0],
 		present_structure_ids, _recipe_book, shortfalls, spare_capacity
 	)
+
+
+## The village raises its town hall (docs/concept/civic_construction.md
+## "Meeting Hall"; building.md "City Hall over time"): CivicBuildDecision
+## on the plaza's reserved civic plot, right after the ordinary build
+## decision at both of its call sites (the loaded-settlement step and the
+## chunk-load catch-up), from the SAME settlement state -- households,
+## spare hands, the village market (which SettlementGathering stocks with
+## wood and stone over time), the structures present. No-ops for a chunk
+## with no households or no plaza (a village whose square was never clear
+## enough to pave has nowhere to put a hall -- honest, not forced).
+func _apply_civic_build_decision(chunk_coord: Vector2i) -> void:
+	var settlement_id := EntityRef.for_settlement(chunk_coord)
+	var household_ids := _households_in_settlement(settlement_id)
+	if household_ids.is_empty():
+		return
+	var origin = _civic_plot_origin_for(chunk_coord)
+	if origin == null:
+		return
+	var spare_capacity := SettlementSpareCapacity.for_settlement(
+		household_ids.size(), _household_occupations_for_settlement(settlement_id)
+	)
+	CivicBuildDecision.decide_and_advance(
+		_construction_project_store, _market_store.market_for(settlement_id), chunk_coord, origin, settlement_id,
+		_present_structure_ids_for_settlement_chunk(chunk_coord), _recipe_book, household_ids.size(), spare_capacity
+	)
+
+
+## The civic plot's LOCAL origin (VillageLayout.skeleton -- re-derived from
+## the chunk's own seed, nothing persisted, so the reservation self-heals
+## on every load), or null when the plaza was never laid -- the plot is
+## the paved square itself, so every footprint cell must BE a road cell
+## (the main street alone runs under the doorstep whether or not there is
+## a plaza, so the doorstep is no proof; a village whose square was water
+## or forest, its houses standing where the square would have been, has
+## nowhere to put a hall) -- or the plot is no longer clear (see
+## _civic_site_is_clear). Also null while the hall already stands there:
+## the plot is the hall's own footprint then, and CivicBuildDecision's
+## already_standing branch is what answers a second ask.
+func _civic_plot_origin_for(chunk_coord: Vector2i):
+	var chunk: Chunk = _loaded_chunks.get(chunk_coord)
+	if chunk == null:
+		return null
+	var plot: Dictionary = VillageLayout.skeleton(CHUNK_SIZE, VillageLayout.seed_for(chunk_coord))["civic_plot"]
+	var origin_local: Vector2i = plot["origin"]
+	var building_id: String = plot["building_id"]
+	for local in BuildingCatalog.footprint_cells(building_id, origin_local) + [plot["doorstep"]]:
+		if not TerrainRenderer.is_road_tile(chunk.modifications.get(local, "")):
+			return null
+	if not _civic_site_is_clear(chunk_coord, origin_local, building_id):
+		return null
+	return origin_local
+
+
+## Whether `building_id` can rise at LOCAL `origin_local` right now: every
+## footprint cell and the doorstep inside this chunk, real buildable
+## terrain, and either unmodified or paved (the plaza IS paved -- a road
+## cell is exactly what the plot is made of, lifted for the placement and
+## the doorstep laid again after, see _place_building_over_roads).
+func _civic_site_is_clear(chunk_coord: Vector2i, origin_local: Vector2i, building_id: String) -> bool:
+	var cells: Array = BuildingCatalog.footprint_cells(building_id, origin_local)
+	cells.append(origin_local + BuildingCatalog.doorstep_of(building_id))
+	for local in cells:
+		if not _house_site_cell_is_clear(chunk_coord, chunk_coord * CHUNK_SIZE + local, true):
+			return false
+	return true
 
 
 ## Where a settlement raises its next structure: the first LOCAL cell,
@@ -15069,6 +15251,13 @@ func city_hall_demands_near(global_x: int, global_y: int) -> Array:
 ## limitations" already frame a queued producer project's own origin as
 ## "bookkeeping, not real siting."
 func _place_completed_construction_project(project) -> void:
+	# A whole-building entity (the town hall, docs/concept/building.md
+	# "City Hall over time") -- checked BEFORE the placeable branch: its id
+	# is also a legacy single-tile placeable item, and a completed hall is
+	# the real catalog building on its own plot, never that tile.
+	if BuildingCatalog.has_building(project.blueprint_id):
+		_place_completed_building_project(project)
+		return
 	var output: Dictionary = _recipe_book.recipe_output(project.blueprint_id)
 	if output.is_empty():
 		return
@@ -15102,6 +15291,95 @@ func _place_completed_construction_project(project) -> void:
 			):
 				build_at_global(fence_cell.x, fence_cell.y, "wooden_fence")
 				break
+
+
+## A completed whole-building project lands as the real catalog building
+## on its own plot (place_building, owned by the project's own household
+## -- the settlement itself for a hall), the plaza's road lifted from under
+## the footprint and the doorstep laid again so the hall's door still opens
+## onto the street; its construction site (see _sync_construction_site) is
+## gone the same moment. The site was re-checked clear on the very tick
+## that completed it (_advance_construction_labor); if it is taken after
+## all, nothing is placed -- the ledger still reads COMPLETE, an honest
+## edge this pass does not paper over with a second placement algorithm.
+func _place_completed_building_project(project) -> void:
+	_free_construction_site(project.chunk_coord, project.origin)
+	var building_id: String = project.blueprint_id
+	if not _civic_site_is_clear(project.chunk_coord, project.origin, building_id):
+		return
+	var origin_tile: Vector2i = project.chunk_coord * CHUNK_SIZE + project.origin
+	var seed_value := _house_site_seed(project.chunk_coord, origin_tile, building_id)
+	_place_building_over_roads(project.chunk_coord, project.origin, building_id, seed_value, project.household_id)
+
+
+## Construction sites: chunk_coord -> {origin_local -> Node2D}, one per
+## in-progress whole-building project, drawn from the building sheet's
+## own construction row (BuildingCatalog.ROW_CONSTRUCTION, eight stages
+## scaffold -> shell -> roof) at the stage the project's own labour has
+## reached -- the same footprint-anchored node a finished building uses,
+## so the hall visibly rises where it will stand. Freed on completion and
+## on chunk unload; rebuilt by the next labour tick after a reload.
+var _construction_site_nodes: Dictionary = {}
+
+
+func _sync_construction_site(chunk_coord: Vector2i, project) -> void:
+	var building_id: String = project.blueprint_id
+	var required := ConstructionLabor.labor_hours_required(building_id, _recipe_book)
+	var progress := 0.0 if required <= 0.0 else clampf(project.labor_hours_accumulated / required, 0.0, 1.0)
+	var stage := BuildingCatalog.construction_stage_for(progress)
+	var footprint := BuildingCatalog.footprint_of(building_id)
+
+	var node: Node2D = _construction_site_node_at(chunk_coord, project.origin)
+	if node == null:
+		node = Node2D.new()
+		node.name = "ConstructionSite"
+		var footprint_px := Vector2(footprint) * TerrainRenderer.TILE_SIZE
+		var top_left_px := Vector2(chunk_coord * CHUNK_SIZE + project.origin) * TerrainRenderer.TILE_SIZE
+		node.position = top_left_px + Vector2(footprint_px.x * 0.5, footprint_px.y)
+		var sprite := Sprite2D.new()
+		sprite.name = "Stage"
+		node.add_child(sprite)
+		_entities_parent.add_child(node)
+		if not _construction_site_nodes.has(chunk_coord):
+			_construction_site_nodes[chunk_coord] = {}
+		_construction_site_nodes[chunk_coord][project.origin] = node
+		node.set_meta("stage", -1)
+
+	if int(node.get_meta("stage")) == stage:
+		return
+	node.set_meta("stage", stage)
+	var sprite: Sprite2D = node.get_node("Stage")
+	var texture := _illustrated_structure_sprite.footprint_frame_texture(
+		BuildingCatalog.sheet_of(building_id), BuildingCatalog.SHEET_COLUMNS, BuildingCatalog.SHEET_ROWS,
+		BuildingCatalog.ROW_CONSTRUCTION, stage, TerrainRenderer.TILE_SIZE, footprint.x
+	)
+	if texture == null:
+		# No sheet yet: the finished placeholder, faded -- a ghost of what
+		# is coming, growing solid with the work.
+		texture = _building_placeholder_sprite.footprint_texture(footprint, 0, TerrainRenderer.TILE_SIZE)
+		sprite.modulate = Color(1.0, 1.0, 1.0, 0.35 + 0.65 * progress)
+	sprite.texture = texture
+	sprite.position = Vector2(0, -float(texture.get_height()) * 0.5)
+
+
+func _construction_site_node_at(chunk_coord: Vector2i, origin_local: Vector2i) -> Node2D:
+	var node = _construction_site_nodes.get(chunk_coord, {}).get(origin_local)
+	return node if node != null and is_instance_valid(node) else null
+
+
+func _free_construction_site(chunk_coord: Vector2i, origin_local: Vector2i) -> void:
+	var by_origin: Dictionary = _construction_site_nodes.get(chunk_coord, {})
+	var node = by_origin.get(origin_local)
+	if node != null and is_instance_valid(node):
+		node.free()
+	by_origin.erase(origin_local)
+
+
+func _free_construction_sites_in_chunk(chunk_coord: Vector2i) -> void:
+	var by_origin: Dictionary = _construction_site_nodes.get(chunk_coord, {})
+	for origin_local in by_origin.keys():
+		_free_construction_site(chunk_coord, origin_local)
+	_construction_site_nodes.erase(chunk_coord)
 
 
 ## The house pieces the water reclaims (see _reclaim_pieces_standing_in_
@@ -15437,6 +15715,7 @@ func _unload_chunk(chunk_coord: Vector2i) -> void:
 	for node in _building_nodes.get(chunk_coord, {}).values():
 		node.free()
 	_building_nodes.erase(chunk_coord)
+	_free_construction_sites_in_chunk(chunk_coord)
 
 	for tree in _loaded_trees.get(chunk_coord, []):
 		tree.free()

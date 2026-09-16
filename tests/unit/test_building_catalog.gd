@@ -207,3 +207,28 @@ func test_the_city_halls_cost_matches_the_legacy_recipes_inputs():
 		expected[input["item_id"]] = input["count"]
 	assert_eq(BuildingCatalog.cost_of("city_hall"), expected)
 	assert_gt(BuildingCatalog.labor_hours_of("city_hall"), BuildingCatalog.labor_hours_of("house_large"), "a hall is more work than any house")
+
+
+# -- the construction row: which stage a rising building shows ------------
+
+func test_construction_stage_walks_the_eight_columns_from_scaffold_to_roof():
+	assert_eq(BuildingCatalog.construction_stage_for(0.0), 0)
+	assert_eq(BuildingCatalog.construction_stage_for(0.124), 0)
+	assert_eq(BuildingCatalog.construction_stage_for(0.125), 1)
+	assert_eq(BuildingCatalog.construction_stage_for(0.5), 4)
+	assert_eq(BuildingCatalog.construction_stage_for(0.99), 7)
+	assert_eq(BuildingCatalog.construction_stage_for(1.0), 7, "complete never overruns the row")
+	assert_eq(BuildingCatalog.construction_stage_for(-0.5), 0)
+	assert_eq(BuildingCatalog.construction_stage_for(3.0), 7)
+
+
+func test_the_hall_labour_matches_its_recipe_derived_hours():
+	# ConstructionLabor derives a project's hours from its recipe's material
+	# (HOURS_PER_UNIT_MATERIAL per unit); the catalog's own figure for the
+	# hall must be that same number, or the site sprite and the ledger
+	# would disagree on how far along the hall is.
+	var ConstructionLabor = load("res://src/emergence/construction_labor.gd")
+	var book = load("res://src/gameplay/crafting_recipe_book.gd").new()
+	assert_almost_eq(
+		BuildingCatalog.labor_hours_of("city_hall"), ConstructionLabor.labor_hours_required("city_hall", book), 0.001
+	)

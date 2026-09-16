@@ -228,3 +228,34 @@ func test_shortfall_does_not_abandon_an_in_progress_project_whose_material_is_al
 	SettlementConstruction.advance(projects, market, CHUNK, ORIGIN, "wooden_club", "household:1", [], book)
 
 	assert_eq(project.status, ConstructionProject.Status.IN_PROGRESS)
+
+
+# -- try_start: the READY branch on its own -----------------------------------
+#
+# A caller that has already decided WHAT to build and needs only the
+# hysteresis-gated start + draw-down (CivicBuildDecision's town hall, which
+# never goes through ConstructionPriority's producer/shortfall reasoning --
+# nothing produces a hall) reaches the same one body advance() runs on
+# READY, public rather than duplicated.
+
+func test_try_start_starts_and_draws_down_exactly_like_the_ready_branch():
+	market.add_stock("wood", 12.0)
+	market.add_stock("plank", 4.0)
+
+	var result := SettlementConstruction.try_start(projects, market, CHUNK, ORIGIN, "storage", "household:1", book)
+
+	assert_eq(result["action"], "started")
+	var project := projects.find_project(CHUNK, ORIGIN, "storage")
+	assert_eq(project.status, ConstructionProject.Status.IN_PROGRESS)
+	assert_almost_eq(market.stock.get("wood", 0.0), 0.0, 0.001)
+
+
+func test_try_start_waits_on_short_stock_without_drawing_anything():
+	market.add_stock("wood", 11.0)
+	market.add_stock("plank", 4.0)
+
+	var result := SettlementConstruction.try_start(projects, market, CHUNK, ORIGIN, "storage", "household:1", book)
+
+	assert_eq(result["action"], "waiting_on_stock")
+	assert_eq(projects.find_project(CHUNK, ORIGIN, "storage").status, ConstructionProject.Status.PLANNED)
+	assert_almost_eq(market.stock.get("wood", 0.0), 11.0, 0.001)

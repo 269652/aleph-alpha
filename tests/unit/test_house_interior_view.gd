@@ -274,3 +274,92 @@ func test_a_resident_is_solid_on_the_interior_layer():
 func test_a_house_with_nobody_home_has_no_resident():
 	view.build("cottage", "farmer", 5, _tile_set, TILE_SIZE, _terrain_renderer)
 	assert_null(view.resident_identity())
+
+
+# -- decorating your own house (docs/concept/housing.md "Decorating an -------
+# -- entered interior"): an unfurnished plan, placed-furniture overrides, ----
+# -- and live set/clear as the player decorates -----------------------------
+
+func _a_floor_cell(family: String, seed_value: int) -> Vector2i:
+	var grid: Dictionary = InteriorTemplates.piece_grid(family, seed_value)
+	for cell in grid:
+		if grid[cell] == "wood_floor":
+			return cell
+	fail_test("no floor cell")
+	return Vector2i.ZERO
+
+
+func test_an_unfurnished_build_paints_every_slot_as_floor_with_no_lights():
+	view.build("cottage", InteriorTemplates.UNFURNISHED, 5, _tile_set, TILE_SIZE, _terrain_renderer)
+	var floor_atlas := _terrain_renderer.atlas_coords_for_modification("wood_floor")
+	var grid: Dictionary = InteriorTemplates.piece_grid("cottage", 5)
+	for cell in grid:
+		if grid[cell] == "wood_floor":
+			assert_eq(view.tile_map_layer().get_cell_atlas_coords(cell), floor_atlas, str(cell))
+			assert_null(view.collision_body_at(cell), "bare floor never blocks: %s" % cell)
+	assert_eq(view.light_glows().size(), 0)
+
+
+func test_placed_furniture_overrides_are_painted_and_block_when_solid():
+	var bed_cell := _a_floor_cell("cottage", 5)
+	view.build("cottage", InteriorTemplates.UNFURNISHED, 5, _tile_set, TILE_SIZE, _terrain_renderer, {bed_cell: "wood_bed"})
+
+	assert_eq(view.tile_map_layer().get_cell_atlas_coords(bed_cell), _terrain_renderer.atlas_coords_for_modification("wood_bed"))
+	assert_not_null(view.collision_body_at(bed_cell), "a bed is solid")
+	assert_eq(view.furniture_at(bed_cell), "wood_bed")
+
+
+func test_an_override_on_a_wall_cell_is_ignored():
+	var grid: Dictionary = InteriorTemplates.piece_grid("cottage", 5)
+	var wall := Vector2i.ZERO
+	for cell in grid:
+		if grid[cell] == "wood_wall":
+			wall = cell
+			break
+	view.build("cottage", InteriorTemplates.UNFURNISHED, 5, _tile_set, TILE_SIZE, _terrain_renderer, {wall: "wood_bed"})
+
+	assert_eq(view.tile_map_layer().get_cell_atlas_coords(wall), _terrain_renderer.atlas_coords_for_modification("wood_wall"))
+	assert_eq(view.furniture_at(wall), "")
+
+
+func test_set_and_clear_furniture_round_trip():
+	var cell := _a_floor_cell("house", 8)
+	view.build("house", InteriorTemplates.UNFURNISHED, 8, _tile_set, TILE_SIZE, _terrain_renderer)
+	assert_eq(view.furniture_at(cell), "")
+
+	view.set_furniture(cell, "wood_table")
+	assert_eq(view.furniture_at(cell), "wood_table")
+	assert_eq(view.tile_map_layer().get_cell_atlas_coords(cell), _terrain_renderer.atlas_coords_for_modification("wood_table"))
+	assert_not_null(view.collision_body_at(cell), "a table is solid")
+
+	view.clear_furniture(cell)
+	assert_eq(view.furniture_at(cell), "")
+	assert_eq(view.tile_map_layer().get_cell_atlas_coords(cell), _terrain_renderer.atlas_coords_for_modification("wood_floor"))
+	assert_null(view.collision_body_at(cell), "the floor is open again")
+
+
+func test_a_walkable_piece_paints_without_a_body_and_clears_cleanly():
+	var cell := _a_floor_cell("manor", 3)
+	view.build("manor", InteriorTemplates.UNFURNISHED, 3, _tile_set, TILE_SIZE, _terrain_renderer)
+
+	view.set_furniture(cell, "wood_rug")
+	assert_eq(view.furniture_at(cell), "wood_rug")
+	assert_null(view.collision_body_at(cell), "a rug is walked over")
+
+	view.clear_furniture(cell)
+	assert_eq(view.furniture_at(cell), "")
+
+
+func test_furnished_template_pieces_are_reported_by_furniture_at_too():
+	view.build("cottage", "farmer", 5, _tile_set, TILE_SIZE, _terrain_renderer)
+	var expected := InteriorTemplates.furnish("cottage", "farmer", 5)
+	var cells: Dictionary = expected["cells"]
+	var seen := 0
+	for local in cells:
+		var value: String = cells[local]
+		if value in ["wall", "window", "floor", "door"]:
+			assert_eq(view.furniture_at(local), "", str(local))
+		else:
+			seen += 1
+			assert_eq(view.furniture_at(local), value, str(local))
+	assert_gt(seen, 0, "precondition: a furnished plan has furniture")

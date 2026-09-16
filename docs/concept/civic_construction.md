@@ -17,7 +17,8 @@ target, generalized to serve three real owners at once rather than one:
    `VillageRenderer._stamp_house`'s own retirement pass deliberately routed
    around rather than fixed.
 
-Design only — not yet implemented. See "Status" at the end for the exact
+The Meeting Hall (as the "City Hall") is real since 2026-09-16; the rest
+is design only, not yet implemented. See "Status" at the end for the exact
 account of what stays real today vs. what this doc specifies.
 
 ## Design pillars
@@ -260,23 +261,58 @@ That doc's own consensus mechanism (`NpcRoleConsensus`) is real and
 tested; the winner-gets-reassigned half of that pipeline is not yet built
 — see that doc's own Status.
 
-**Divergence, noted honestly**: the Meeting-Hall-reads-a-demand half above
-is now real — but reachable today via a deliberately SIMPLER construction
-path than this section's own "real trigger" above specifies, and under
-the real user-facing name "City Hall" (`ItemCatalog`'s `"city_hall"`,
-real art at `assets/sprites/buildings/city_hall.png`) rather than
-"meeting_hall". `"city_hall"` is a real `ItemCatalog` placeable
-(`kind = "placeable"`, the same single-tile family `campfire`/`furnace`/
-`sagewerk`/`storage`/`farm` already belong to), built directly via the
-ordinary crafting recipe + the existing `build_at_global` path — not yet
-the real multi-piece `CivicBlueprint` shape or the institution-formation-
-crossing `ConstructionProject` trigger this section specs above. That
-richer version (a real footprint, a real automatic settlement-triggered
-build, the `ConstructionProjectStore.complete_project` injected-`Callable`
-seam) stays a genuine, unbuilt follow-up — this pass's own scope was "wire the
-already-real demand computation to a buildable Meeting Hall," not "build
-the Meeting Hall's own eventual construction mechanism," and it says so
-plainly rather than quietly reinterpreting this section's spec.
+**Shipped (2026-09-16), under the real user-facing name "City Hall", as
+a whole-building entity the village raises over time.** The hall is a
+`BuildingCatalog` entry (`city_hall`: a 4×3 footprint, `CIVIC_BUILDING_IDS`
+so no villager is ever handed it to live in, `labor_hours` 45 = its
+recipe's own wood 20 + stone 10 at `ConstructionLabor`'s rate, drawn from
+the real sheet `assets/sprites/buildings/city_hall.png`). Its site is
+reserved at founding: `VillageLayout.skeleton`'s civic plot on the paved
+plaza, its door opening onto the main street ([building.md](building.md)
+"Village layout v2"), re-derived from the chunk's seed on every load so
+the reservation persists without persisting anything.
+
+**The trigger, as this doc's ledger framing wants it, not the
+institution threshold above.** `CivicBuildDecision.decide_and_advance`
+(`src/emergence/civic_build_decision.gd`) runs right after the ordinary
+`SettlementBuildDecision` at both of its call sites (the loaded-settlement
+step and the chunk-load catch-up): a hall already standing → nothing;
+fewer than `CITY_HALL_MIN_HOUSEHOLDS` (3) households → too small; no spare
+hands → no build; else `SettlementConstruction.try_start` — the same
+hysteresis-gated start every other settlement project uses, drawing the
+hall's wood and stone from the village's own market (which its spare hands
+fill over time, `SettlementGathering`), as a `ConstructionProject` owned
+by the settlement itself (`EntityRef.for_settlement` — a commons; the
+property grant is a no-op for it, the "no property grant" this section
+asked for without the injected-callback seam). A waiting civic plan is
+never abandoned by the shortfall rule — a village keeps its plan through
+a lean season. The institution-formation trigger specced above stayed
+unbuilt on purpose: a village of three households wanting a seat is the
+simpler, always-reachable condition, and the institution half can gate a
+later, grander hall.
+
+**Rising, then standing.** `_advance_construction_labor` accrues the
+hall's hours from real spare capacity like any project, but a
+whole-building project is built ON its plot: while anything else stands
+there the crew waits. A construction-site node (the sheet's row 0,
+`BuildingCatalog.construction_stage_for(progress)` — eight stages,
+scaffold to roof; a faded placeholder for a sheet that does not exist yet)
+stands on the plot, anchored like a finished building, freed on
+completion. Complete, `_place_completed_construction_project` checks the
+catalog BEFORE the legacy placeable branch and places the real building
+(`place_building` through `_place_building_over_roads`: the plaza's paving
+lifted from under the footprint, the doorstep laid again). The anchor
+cell carries `"city_hall"` exactly as the single-tile placeable did, so
+`city_hall_demands_near`, `_present_structure_ids_for_settlement_chunk`
+and the Direct Builder gate all find it with no change —
+`has_structure_near` now measures to the nearest footprint cell of a
+whole building rather than its anchor. A reload spawns the building node
+only, never a second single-tile overlay on top. The legacy craftable
+single-tile `city_hall` placeable still exists for the player's own
+direct build; a village never uses it. Tested:
+`test_civic_build_decision.gd`, `test_earth_chunk_manager_city_hall_
+rising.gd` (a real settlement chunk end to end), `test_building_catalog.gd`,
+`test_settlement_construction.gd` (`try_start`).
 
 ### Granary
 
@@ -421,10 +457,20 @@ exists, built for an entirely unrelated reason of its own.
 
 ## Status
 
-⬜ Everything in this doc — design only, from this brainstorm session, not
-yet implemented. Builds on real, already-shipped work
-(`ConstructionProject`/`ConstructionProjectStore`/`BuilderMarker`/
-`SettlementSpareCapacity`/`SettlementBuildDecision`, all real per
-[timber_construction.md](timber_construction.md)'s own Status section) —
-nothing here needed a new foundational mechanism invented, only a generalized
-completion seam and three new real callers.
+- ✅ **Meeting Hall / City Hall raised by the village over time**
+  (2026-09-16, see that section's "Shipped" paragraphs): the catalog
+  entity, the reserved civic plot, `CivicBuildDecision`, the construction
+  site rising through the sheet's row 0, the real building placed on the
+  plaza, the demands query and Direct Builder gate finding it. Divergence
+  from the section's first draft, named there: the trigger is a
+  household threshold + spare hands + gathered material on the ordinary
+  settlement ledger, not the first-institution crossing; ownership is the
+  settlement id rather than an injected completion callback.
+- ⬜ Ghost/planned placement mode, live Builder spawning for settlement
+  projects, player-hired Builders (see that section's own "Where this
+  stands"), Granary, Watchtower — design only. They build on real,
+  already-shipped work (`ConstructionProject`/`ConstructionProjectStore`/
+  `BuilderMarker`/`SettlementSpareCapacity`/`SettlementBuildDecision`, all
+  real per [timber_construction.md](timber_construction.md)'s own Status
+  section); nothing here needs a new foundational mechanism, only new real
+  callers.

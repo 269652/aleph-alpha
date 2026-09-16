@@ -45,6 +45,46 @@ for the ground layer — so a village-generated house and a player-built one
 share the identical furnishing rule, the same way they already share
 `BuildingPlacement`.
 
+### Decorating an entered interior
+
+Since houses became whole-building entities with an interior scene
+([building.md](building.md) "Buildings are entities; interiors are
+scenes", 2026-09-16), the player's OWN house is decorated from the inside,
+standing in the room:
+
+- **Your house is entered bare.** A house the player's household owns
+  (`owner_household_id` on the building record, written by
+  `stamp_house_and_grant_ownership`) is built from its plan with every
+  furniture slot as plain floor and no candles
+  (`InteriorTemplates.UNFURNISHED`) — you decorate your own home, it never
+  comes pre-furnished for somebody else. A villager's house keeps its own
+  furnishing and is never yours to redecorate (refused with a message).
+- **Where the furniture lives.** What you place is on the building record
+  itself — `Chunk.buildings[origin]["interior"]`, local interior cell ->
+  furniture id — so it persists with the building and comes back on every
+  visit and every reload; no separate layer, no migration (an older record
+  simply starts empty). `EarthChunkManager.place_interior_furniture` /
+  `remove_interior_furniture` / `interior_furniture_of` are the whole API,
+  and `resident_happiness` counts THIS for a whole-building house (the
+  legacy `furniture_modifications` layer stays for older piece houses).
+- **The same placement rule as ever.** A placement is judged by the very
+  `FurniturePlacement.can_place` rule above — a real furniture piece, on a
+  real floor cell, inside an enclosed room, nothing already there —
+  against the interior plan's own piece grid (`InteriorTemplates.
+  piece_grid`: walls/windows/door as their pieces, floor everywhere else),
+  so a wall, a window, the door and the cell just outside it all refuse.
+- **The verbs.** Indoors, the build key with an armed furniture item (the
+  hotbar's FURNISH action, exactly as outdoors) places it on the cell the
+  avatar faces (`InteriorAvatar.facing_cell` — the outdoor verbs' own
+  `TileTargeting` rule from the avatar's cell and last walked direction):
+  persisted first, then painted and made solid at once
+  (`HouseInteriorView.set_furniture`), then one item consumed — never
+  consumed on a refusal. The destroy key picks up what the faced cell
+  holds and refunds it (`clear_furniture`). Each press answers on the
+  hero's message line (`Player.decorate_message`: placed / picked up / why
+  not). The outdoor `_build_step`/`_destroy_step` never run indoors, so
+  nothing indoors can touch the world outside.
+
 **Appeal score: honestly minimal for now, not a fabricated formula.**
 `housing.md`'s own Open Questions below already admit the real formula
 (variety, symmetry, theme matching) is unresolved — inventing one now
@@ -302,6 +342,17 @@ already-built two-story houses keep running on.
   TDD red-first throughout (`test_house_decor.gd` 6/6, the new
   `furnish_house_at_global` group in `test_earth_chunk_manager.gd` 5/5,
   `test_village_renderer.gd`'s two new furnishing tests, full file 41/41).
+- ✅ **Decorating an entered interior** (own section above, 2026-09-16):
+  an owned whole-building house is entered `UNFURNISHED`; furniture placed
+  from inside lives on the building record (`place_interior_furniture`/
+  `remove_interior_furniture`/`interior_furniture_of`, the same
+  `FurniturePlacement` rule against `InteriorTemplates.piece_grid`),
+  persists across unload/reload and re-entry, paints and blocks at once
+  (`HouseInteriorView.set_furniture`/`clear_furniture`/`furniture_at`),
+  via the indoor build/destroy verbs (`Player._decorate_step`,
+  `InteriorAvatar.facing_cell`); a villager's house refuses. Tested
+  (`test_earth_chunk_manager_player_house.gd`, `test_house_interior_view.gd`,
+  `test_interior_avatar.gd`, `test_player.gd`).
 - ⬜ `appeal_score` (the honest placeholder above) -- occupation-themed
   decor answers this doc's own "theme matching" question but not "variety/
   symmetry/rarity"; the formula itself is still unbuilt.
