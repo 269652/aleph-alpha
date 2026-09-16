@@ -978,3 +978,127 @@ func test_a_newcomer_stands_at_the_house_their_household_owns():
 			assert_almost_eq(node.home_position.x, expected_position.x, 0.01)
 			assert_almost_eq(node.home_position.y, expected_position.y, 0.01, "home is their own doorstep")
 	assert_true(found, "the newcomer was spawned at all")
+
+
+# -- workspot props stand on real, dry ground -----------------------------
+#
+# Reported from a real session with a screenshot: a farmer's field, a
+# merchant's stall and a blacksmith's forge floating ON a river, and a
+# villager standing in it. Both positions were a blind fixed offset south
+# of the door -- four tiles for a workspot, two for a merchant's stand --
+# with no terrain check of any kind, and a village street that runs along
+# a riverbank puts that offset straight into the water.
+
+func _props_in(spawned: Array) -> Array:
+	var props: Array = []
+	for node in spawned:
+		if node is NpcMarker:
+			continue
+		if node.has_meta("landmark_id"):
+			props.append(node)
+	return props
+
+
+## Everything south of the street is river -- exactly the reported shape.
+func _flood_south_of_the_street(world: StubWorld, coord: Vector2i) -> void:
+	var street_y: int = VillageLayout.skeleton(CHUNK_SIZE, VillageLayout.seed_for(coord))["street_y"]
+	for y in range(street_y + 1, CHUNK_SIZE):
+		for x in CHUNK_SIZE:
+			world.water_cells[coord * CHUNK_SIZE + Vector2i(x, y)] = true
+
+
+func _tile_of(position: Vector2) -> Vector2i:
+	return Vector2i(floori(position.x / TILE_SIZE), floori(position.y / TILE_SIZE))
+
+
+func test_no_prop_and_no_villager_ever_stands_in_water():
+	var coord := _find_settlement_chunk("grassland")
+	var world := StubWorld.new()
+	_flood_south_of_the_street(world, coord)
+
+	var spawned := renderer.spawn_village(parent, coord, coord * CHUNK_SIZE, CHUNK_SIZE, TILE_SIZE, "grassland", world)
+
+	for node in spawned:
+		var tile := _tile_of(node.position)
+		assert_false(
+			world.water_cells.has(tile), "%s stands in the river at %s" % [
+				str(node.get_meta("landmark_id")) if node.has_meta("landmark_id") else "a villager", str(tile)
+			]
+		)
+
+
+func test_a_villagers_workspot_is_never_in_water_either():
+	var coord := _find_settlement_chunk("grassland")
+	var world := StubWorld.new()
+	_flood_south_of_the_street(world, coord)
+
+	var spawned := renderer.spawn_village(parent, coord, coord * CHUNK_SIZE, CHUNK_SIZE, TILE_SIZE, "grassland", world)
+
+	for node in spawned:
+		if node is NpcMarker:
+			assert_false(
+				world.water_cells.has(_tile_of(node.workspot_position)),
+				"a villager would walk into the river to work"
+			)
+
+
+## Dry ground everywhere: the props are still there. The fix must site
+## them, not delete the feature.
+func test_a_village_on_dry_ground_still_gets_its_workspot_props():
+	var coord := _find_settlement_chunk("grassland")
+	var world := StubWorld.new()
+	var spawned := renderer.spawn_village(parent, coord, coord * CHUNK_SIZE, CHUNK_SIZE, TILE_SIZE, "grassland", world)
+	assert_gt(_props_in(spawned).size(), 0, "a dry village still has real workspots")
+
+
+## A PERSONAL prop on the street, or on a house, is as wrong as one in the
+## river. The three SHARED landmarks are the opposite case -- the well and
+## the stall stand on the plaza's own paving and the gate on the street by
+## design -- which is why the two kinds are told apart by their own meta
+## rather than by an id a merchant's personal stand happens to share.
+func test_a_personal_workspot_prop_never_stands_on_a_road_or_a_building():
+	var coord := _find_settlement_chunk("grassland")
+	var world := StubWorld.new()
+	var spawned := renderer.spawn_village(parent, coord, coord * CHUNK_SIZE, CHUNK_SIZE, TILE_SIZE, "grassland", world)
+
+	var personal := 0
+	for node in _props_in(spawned):
+		if not bool(node.get_meta("personal", false)):
+			continue
+		personal += 1
+		var tile := _tile_of(node.position)
+		var existing: String = world.modification_at_global(tile.x, tile.y)
+		assert_eq(existing, "", "%s stands on '%s' at %s" % [node.get_meta("landmark_id"), existing, str(tile)])
+	assert_gt(personal, 0, "precondition: this village has personal workspots at all")
+
+
+## And the shared ones really are on the village's own paving -- the thing
+## that makes a square read as a square.
+func test_the_shared_landmarks_stand_on_the_villages_own_paving():
+	var coord := _find_settlement_chunk("grassland")
+	var world := StubWorld.new()
+	var spawned := renderer.spawn_village(parent, coord, coord * CHUNK_SIZE, CHUNK_SIZE, TILE_SIZE, "grassland", world)
+
+	for node in _props_in(spawned):
+		if bool(node.get_meta("personal", false)):
+			continue
+		var tile := _tile_of(node.position)
+		var existing: String = world.modification_at_global(tile.x, tile.y)
+		assert_true(
+			existing == "" or TerrainRenderer.is_road_tile(existing),
+			"%s stands on '%s'" % [node.get_meta("landmark_id"), existing]
+		)
+
+
+## A merchant's PERSONAL stand is the same rule -- it was the other blind
+## offset, two tiles south of the door.
+func test_a_merchants_personal_stand_is_sited_on_real_ground():
+	var coord := _find_settlement_chunk_with_merchant("grassland")
+	var world := StubWorld.new()
+	_flood_south_of_the_street(world, coord)
+
+	var spawned := renderer.spawn_village(parent, coord, coord * CHUNK_SIZE, CHUNK_SIZE, TILE_SIZE, "grassland", world)
+
+	for node in spawned:
+		if node.has_meta("landmark_id") and node.get_meta("landmark_id") == "stall":
+			assert_false(world.water_cells.has(_tile_of(node.position)), "a stall floating on the river")
