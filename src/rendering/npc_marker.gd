@@ -99,6 +99,17 @@ const QUARRY_KIND_BY_OCCUPATION := {"hunter": "creature", "fisher": "fish"}
 ## touch the deer, a line does not.
 const CAST_DISTANCE_PX := 64.0
 
+## How often a villager actually looks around for quarry, cached in
+## between. CreatureMarker.SENSE_INTERVAL's own value, test-pinned
+## (test_a_villager_looks_around_as_often_as_a_creature_senses): finding
+## quarry means walking the whole creature group, which that marker's own
+## _scan_nearby_creatures doc comment already calls out as O(n^2) across a
+## loaded population, and its answer -- "the expensive part of the AI ...
+## runs at most this often, cached in between, rather than every frame" --
+## is the same answer for the same cost. A villager looking for a deer is
+## the same expensive part of the same AI.
+const QUARRY_SCAN_INTERVAL := 0.25
+
 ## This villager's hunt, or null for anyone whose occupation does not take
 ## real quarry -- the same null-until-wired pattern `economy` above uses,
 ## so a marker built without one behaves byte-for-byte as before. Built by
@@ -120,6 +131,16 @@ var _quarry = null
 ## the world one individual at a time. Set by setup_economy from
 ## QUARRY_KIND_BY_OCCUPATION above.
 var _quarry_kind := ""
+
+## The throttle above: seconds since the last real scan, what it found, and
+## a count of the real scans performed. Starts already due, so the first
+## working frame of a day knows whether quarry is there rather than drawing
+## the conjured drip for an interval while standing next to a deer. The
+## count exists so a test can prove the throttle really holds -- exactly
+## what CreatureMarker._creature_scan_count exists for.
+var _quarry_scan_elapsed := QUARRY_SCAN_INTERVAL
+var _scanned_quarry = null
+var _quarry_scan_count := 0
 
 ## Whether real quarry is available to this villager RIGHT NOW -- committed
 ## to, or merely standing within reach. What NpcEconomy.step reads to know
@@ -388,6 +409,8 @@ func _step_hunt(delta: float, is_working: bool):
 		if _forager.phase != ForagerBehavior.Phase.SEEKING:
 			_forager.abort()
 		_quarry = null
+		_scanned_quarry = null
+		_quarry_scan_elapsed = QUARRY_SCAN_INTERVAL
 		_on_real_quarry = false
 		return null
 	match _forager.phase:
@@ -402,11 +425,12 @@ func _step_hunt(delta: float, is_working: bool):
 			# readiness to walk. Once the interval HAS passed the
 			# Lumberjack's own seeking step scans every frame anyway, so
 			# this costs the same order of work it already did.
-			var found = _find_quarry()
+			var found = _quarry_in_reach(delta)
 			_on_real_quarry = found != null
 			if found == null or not _forager.can_commit():
 				return null
 			_quarry = found
+			_scanned_quarry = null
 			_forager.begin_approach()
 			return _quarry.position
 		ForagerBehavior.Phase.APPROACHING:
@@ -465,11 +489,33 @@ func _find_quarry():
 ## and the node can stop being valid between one frame and the next
 ## (catch_nearest_fish frees its catch outright).
 func _quarry_position():
-	if _quarry == null or not is_instance_valid(_quarry) or _quarry.is_queued_for_deletion():
+	return _position_of(_quarry)
+
+
+## Where `quarry` is, or null if it is not something takeable any more.
+## Shared by the committed target and the cached scan result, because a
+## remembered quarry goes stale in exactly the same ways a committed one
+## does.
+func _position_of(quarry):
+	if quarry == null or not is_instance_valid(quarry) or quarry.is_queued_for_deletion():
 		return null
-	if _quarry_kind == "creature" and not HuntableQuarry.is_quarry(_quarry):
+	if _quarry_kind == "creature" and not HuntableQuarry.is_quarry(quarry):
 		return null
-	return _quarry.position
+	return quarry.position
+
+
+## The nearest quarry, at most one real scan per QUARRY_SCAN_INTERVAL and
+## the last answer in between -- CreatureMarker's own cached-senses shape.
+## The cached answer is re-validated rather than trusted: between two scans
+## a deer can be killed by a wolf and a fish taken by a bird.
+func _quarry_in_reach(delta: float):
+	_quarry_scan_elapsed += delta
+	if _quarry_scan_elapsed < QUARRY_SCAN_INTERVAL:
+		return _scanned_quarry if _position_of(_scanned_quarry) != null else null
+	_quarry_scan_elapsed = 0.0
+	_quarry_scan_count += 1
+	_scanned_quarry = _find_quarry()
+	return _scanned_quarry
 
 
 ## How close counts as being able to take it -- a spear has to touch the
@@ -535,6 +581,10 @@ func _cast_at_quarry() -> void:
 ## clock.
 func _give_up_on_quarry():
 	_quarry = null
+	_scanned_quarry = null
+	# Due again immediately: whatever replaced the lost quarry is worth
+	# knowing about now, not an interval from now.
+	_quarry_scan_elapsed = QUARRY_SCAN_INTERVAL
 	_forager.abort()
 	return null
 

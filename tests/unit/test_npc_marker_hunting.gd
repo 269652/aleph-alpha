@@ -28,6 +28,7 @@ const VillageMarket = preload("res://src/world/village_market.gd")
 const CreatureInfo = preload("res://src/world/creature_info.gd")
 const CreatureMass = preload("res://src/world/creature_mass.gd")
 const Carcass = preload("res://src/rendering/carcass.gd")
+const CreatureMarker = preload("res://src/rendering/creature_marker.gd")
 
 const TILE_SIZE := 16
 
@@ -335,3 +336,38 @@ func test_quarry_that_vanishes_mid_approach_is_given_up():
 	deer.queue_free()
 	_run(30.0)
 	assert_gt(marker.position.x, 0.0, "with nothing left to chase, the schedule resumes")
+
+
+# -- looking around costs something -----------------------------------------
+#
+# Finding quarry means walking the whole creature group, which
+# CreatureMarker's own _scan_nearby_creatures doc comment already calls out
+# as O(n^2) across a loaded population. That marker answers it with
+# SENSE_INTERVAL -- "the expensive part of the AI ... runs at most this
+# often, cached in between" -- and a villager looking for a deer is the
+# same expensive part of the same AI.
+
+
+func test_the_quarry_scan_is_throttled_the_way_every_other_sense_is():
+	_creature_at(Vector2(-100.0, 0.0))
+	var seconds := 1.0
+	var slice := 0.1
+	_run(seconds, slice)
+	assert_gt(marker._quarry_scan_count, 0, "precondition: it really does look around")
+	assert_lte(
+		marker._quarry_scan_count,
+		ceili(seconds / NpcMarker.QUARRY_SCAN_INTERVAL) + 1,
+		"a villager must not walk the whole creature group every single frame"
+	)
+
+
+func test_a_villager_looks_around_as_often_as_a_creature_senses():
+	assert_eq(NpcMarker.QUARRY_SCAN_INTERVAL, CreatureMarker.SENSE_INTERVAL)
+
+
+func test_the_very_first_working_frame_already_knows_whether_quarry_is_there():
+	# Otherwise a hunter draws the conjured drip for the first interval of
+	# every working day, standing next to a deer.
+	_creature_at(Vector2(-100.0, 0.0))
+	_run(0.1, 0.1)
+	assert_almost_eq(market.total_stock(), 0.0, 0.0001)
