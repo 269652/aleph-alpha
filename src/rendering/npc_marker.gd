@@ -66,16 +66,38 @@ var _perception := CreaturePerception.new()
 ## rather than crashing.
 var economy: NpcEconomy = null
 
-## Which occupations work real, individual quarry they walk to and strike
+## Which occupations work real, individual quarry they walk to and take
 ## themselves, rather than only reading their region's aggregate
 ## (docs/concept/npc.md, "Work against the real world, not against a
-## number"). The farmer is deliberately absent and stays absent: there is
-## no crop entity standing in the world to harvest the way there is an
-## animal, and vegetation_density_near is a field, not a thing. Inventing
-## one to make the third producer symmetrical is exactly the premature
-## system that doc warns against -- real crop entities belong to the
+## number") -- and which KIND, because the two are found and taken through
+## different machinery:
+##
+## - "creature": a real CreatureMarker in the shared creature group,
+##   filtered by HuntableQuarry and struck with the same take_damage() a
+##   wolf's own bite calls.
+## - "fish": a real FishMarker, which no group indexes -- the chunk manager
+##   owns those. Found and taken through the two world hooks the player's
+##   own rod and a diving bird already use (nearest_fish_position,
+##   catch_nearest_fish).
+##
+## The farmer is deliberately absent and stays absent: there is no crop
+## entity standing in the world to harvest the way there is an animal or a
+## fish, and vegetation_density_near is a field, not a thing. Inventing one
+## to make the third producer symmetrical is exactly the premature system
+## that doc warns against -- real crop entities belong to the
 ## farm/mill/bakery chain when it comes.
-const REAL_QUARRY_OCCUPATIONS := ["hunter"]
+const QUARRY_KIND_BY_OCCUPATION := {"hunter": "creature", "fisher": "fish"}
+
+## How far a villager's rod reaches over the water, and therefore how close
+## to the fish they walk before stopping on the bank.
+## Player.FISH_CATCH_RADIUS's own value, test-pinned
+## (test_cast_distance_matches_the_players_own_rod): a villager's rod is
+## the player's rod, and that constant's own doc comment already says what
+## the number is for -- "generous enough to cover a pond fish a few tiles
+## out while standing at the shore". Much longer than
+## HuntableQuarry.STRIKE_DISTANCE_PX for the obvious reason: a spear has to
+## touch the deer, a line does not.
+const CAST_DISTANCE_PX := 64.0
 
 ## This villager's hunt, or null for anyone whose occupation does not take
 ## real quarry -- the same null-until-wired pattern `economy` above uses,
@@ -93,6 +115,11 @@ var _forager: ForagerBehavior = null
 ## since it can be killed by a predator, flee, or have its chunk unload
 ## between one frame and the next.
 var _quarry = null
+
+## "creature", "fish", or "" for a villager whose work is not taken from
+## the world one individual at a time. Set by setup_economy from
+## QUARRY_KIND_BY_OCCUPATION above.
+var _quarry_kind := ""
 
 ## Whether real quarry is available to this villager RIGHT NOW -- committed
 ## to, or merely standing within reach. What NpcEconomy.step reads to know
@@ -151,9 +178,8 @@ func setup_economy(market, household_wallet = null) -> void:
 	economy = NpcEconomy.new(identity.seed_value, identity.occupation, market)
 	economy.bind_household_wallet(household_wallet)
 	_quarry = null
-	_forager = (
-		ForagerBehavior.new() if REAL_QUARRY_OCCUPATIONS.has(identity.occupation) else null
-	)
+	_quarry_kind = String(QUARRY_KIND_BY_OCCUPATION.get(identity.occupation, ""))
+	_forager = ForagerBehavior.new() if _quarry_kind != "" else null
 
 
 func _process(delta: float) -> void:
@@ -342,24 +368,28 @@ func face_movement(direction: Vector2) -> void:
 ## whether to run its regional drip (see NpcEconomy.step's on_real_quarry).
 ##
 ## Mirrors LumberjackMarker's own _step_seeking/_step_approaching/
-## _step_felling trio, compressed into one function because a hunt has no
-## carry and no deposit: the catch goes straight into the village market
-## the moment it is taken, and adding a haul for symmetry would mean
+## _step_felling trio, compressed into one function because neither hunt
+## has a carry or a deposit: the catch goes straight into the village
+## market the moment it is taken, and adding a haul for symmetry would mean
 ## inventing a building to haul it to.
+##
+## One skeleton for both quarry kinds, with the three things that genuinely
+## differ behind _find_quarry / _quarry_position / _reach / _take_quarry: a
+## deer and a trout are approached, lost and given up on in exactly the
+## same way, and writing that twice is how the two drift apart.
 func _step_hunt(delta: float, is_working: bool):
 	if _forager == null:
 		return null
 	if not is_working:
-		# Hunting is work. Off the clock -- asleep, eating, socialising, or
-		# following a standing instruction -- the hunt is dropped rather
-		# than paused, so a villager never wakes up still locked onto an
-		# animal that wandered off hours ago.
+		# Working real quarry is work. Off the clock -- asleep, eating,
+		# socialising, or following a standing instruction -- it is dropped
+		# rather than paused, so a villager never wakes up still locked
+		# onto an animal that wandered off hours ago.
 		if _forager.phase != ForagerBehavior.Phase.SEEKING:
 			_forager.abort()
 		_quarry = null
 		_on_real_quarry = false
 		return null
-	_on_real_quarry = true
 	match _forager.phase:
 		ForagerBehavior.Phase.SEEKING:
 			# advance() is a no-op outside TAKING; this is just the
@@ -372,9 +402,7 @@ func _step_hunt(delta: float, is_working: bool):
 			# readiness to walk. Once the interval HAS passed the
 			# Lumberjack's own seeking step scans every frame anyway, so
 			# this costs the same order of work it already did.
-			var found = HuntableQuarry.nearest(
-				get_tree().get_nodes_in_group(HuntableQuarry.QUARRY_GROUP_NAME), position
-			)
+			var found = _find_quarry()
 			_on_real_quarry = found != null
 			if found == null or not _forager.can_commit():
 				return null
@@ -382,34 +410,81 @@ func _step_hunt(delta: float, is_working: bool):
 			_forager.begin_approach()
 			return _quarry.position
 		ForagerBehavior.Phase.APPROACHING:
-			if not HuntableQuarry.is_quarry(_quarry):
+			var approach_position = _quarry_position()
+			if approach_position == null:
 				return _give_up_on_quarry()
-			var approach_position: Vector2 = _quarry.position
-			if position.distance_to(approach_position) <= HuntableQuarry.STRIKE_DISTANCE_PX:
+			_on_real_quarry = true
+			if position.distance_to(approach_position) <= _reach():
 				_forager.arrive()
 			return approach_position
 		ForagerBehavior.Phase.TAKING:
-			if not HuntableQuarry.is_quarry(_quarry):
+			var quarry_position = _quarry_position()
+			if quarry_position == null:
 				return _give_up_on_quarry()
-			var strike_position: Vector2 = _quarry.position
-			# A live animal can break away mid-hunt. Close the gap again
-			# before swinging rather than striking it from across the
-			# meadow -- and the strike clock waits with it, since nobody
-			# winds up a spear at a full run.
-			if position.distance_to(strike_position) > HuntableQuarry.STRIKE_DISTANCE_PX:
-				return strike_position
+			_on_real_quarry = true
+			# Quarry can break away mid-hunt -- a spooked deer runs, a
+			# shoal drifts downstream. Close the gap again rather than
+			# striking from across the meadow, and let the strike clock
+			# wait with it: nobody winds up a spear at a full run.
+			if position.distance_to(quarry_position) > _reach():
+				return quarry_position
 			if _forager.advance(delta):
-				_strike_quarry()
-			return strike_position
+				_take_quarry()
+			# Standing still, not walking the last few pixels onto the
+			# quarry: a hunter plants their feet to strike, and a fisher
+			# who closed the last of a rod's reach would be standing in
+			# the river.
+			return position
 	return null
 
 
-## The quarry is gone -- killed by something else, fled, or its chunk
-## unloaded. Back to looking around, with a fresh look-around clock.
-func _give_up_on_quarry():
-	_quarry = null
-	_forager.abort()
+## The nearest real thing this villager may take right now, or null.
+##
+## A land animal comes out of the shared creature group, filtered by
+## HuntableQuarry. A fish comes out of the chunk manager, which is the only
+## thing that indexes them -- through nearest_fish_position, the hook a
+## diving bird already hunts with. Both duck-typed and fail-open: a world
+## that cannot answer simply has no quarry in it, and the villager keeps to
+## the regional fallback.
+func _find_quarry():
+	match _quarry_kind:
+		"creature":
+			return HuntableQuarry.nearest(
+				get_tree().get_nodes_in_group(HuntableQuarry.QUARRY_GROUP_NAME), position
+			)
+		"fish":
+			if _world == null or not _world.has_method("nearest_fish_position"):
+				return null
+			return _world.nearest_fish_position(position, HuntableQuarry.SEARCH_RADIUS_PX)
 	return null
+
+
+## Where the committed quarry is NOW, or null if it is gone -- killed by
+## something else, fled, taken by another villager, or its chunk unloaded.
+## Re-read every frame rather than remembered: both a deer and a fish move,
+## and the node can stop being valid between one frame and the next
+## (catch_nearest_fish frees its catch outright).
+func _quarry_position():
+	if _quarry == null or not is_instance_valid(_quarry) or _quarry.is_queued_for_deletion():
+		return null
+	if _quarry_kind == "creature" and not HuntableQuarry.is_quarry(_quarry):
+		return null
+	return _quarry.position
+
+
+## How close counts as being able to take it -- a spear has to touch the
+## deer, a line does not.
+func _reach() -> float:
+	return CAST_DISTANCE_PX if _quarry_kind == "fish" else HuntableQuarry.STRIKE_DISTANCE_PX
+
+
+## One blow, or one cast.
+func _take_quarry() -> void:
+	match _quarry_kind:
+		"creature":
+			_strike_quarry()
+		"fish":
+			_cast_at_quarry()
 
 
 ## One blow, through the SAME take_damage() a wolf's own bite and the
@@ -429,6 +504,39 @@ func _strike_quarry() -> void:
 		economy.record_real_catch(meat)
 	_quarry = null
 	_forager.finish_take()
+
+
+## One cast, through the SAME EarthChunkManager.catch_nearest_fish the
+## player's own rod and a diving bird already use -- which frees the real
+## fish and books the harvest against its chunk's aggregate population by
+## itself. Nothing else is recorded here: record_fish_catch_near on top of
+## it would thin the same shoal twice for one fish.
+##
+## One fish is one food unit (NpcProduction.FOOD_UNIT), not a mass-scaled
+## count the way a carcass is: there is no fish equivalent of
+## Butchering.meat_count to read one off, and inventing a conversion would
+## be exactly the invented number this whole change exists to remove.
+##
+## A cast that lands nothing -- the shoal drifted, somebody else got there
+## first -- credits nothing and simply casts again on the next beat.
+func _cast_at_quarry() -> void:
+	if _world == null or not _world.has_method("catch_nearest_fish"):
+		return
+	var caught: Dictionary = _world.catch_nearest_fish(position, CAST_DISTANCE_PX)
+	if String(caught.get("species", "")) == "":
+		return
+	if economy != null:
+		economy.record_real_catch(1)
+	_quarry = null
+	_forager.finish_take()
+
+
+## The quarry is gone. Back to looking around, with a fresh look-around
+## clock.
+func _give_up_on_quarry():
+	_quarry = null
+	_forager.abort()
+	return null
 
 
 ## A hunter carries home the animal it killed. Without this, the same meat
