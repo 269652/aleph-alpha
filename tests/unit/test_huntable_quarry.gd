@@ -321,3 +321,35 @@ func test_strike_distance_matches_the_lumberjacks_own_arrival_distance():
 	# shared. Small relative to a tile (TILE_SIZE 16), since move_toward
 	# closes asymptotically and an exact-equality arrival would never fire.
 	assert_eq(HuntableQuarry.STRIKE_DISTANCE_PX, LumberjackMarker.ARRIVE_DISTANCE_PX)
+
+
+# -- the other half of the animal -------------------------------------------
+
+
+func test_a_kill_yields_the_same_one_hide_butchering_that_carcass_would():
+	assert_eq(HuntableQuarry.hide_yield_of(_deer_of_mass(1.0)), Butchering.HIDE_COUNT)
+
+
+func test_hide_does_not_scale_with_the_animals_condition():
+	# Butchering's own shape: meat_count takes the mass ratio, HIDE_COUNT
+	# is flat. A starved deer is a thinner deer, not a smaller one.
+	assert_eq(
+		HuntableQuarry.hide_yield_of(_deer_of_mass(0.4)),
+		HuntableQuarry.hide_yield_of(_deer_of_mass(1.6))
+	)
+
+
+func test_nothing_yields_no_hide():
+	assert_eq(HuntableQuarry.hide_yield_of(null), 0)
+
+
+func test_a_creature_with_no_species_record_yields_no_hide():
+	var blank := _quarry_at(Vector2.ZERO)
+	blank.info = null
+	assert_eq(HuntableQuarry.hide_yield_of(blank), 0)
+
+
+func test_the_hide_is_butcherings_own_first_part():
+	# Not a second opinion about what comes off a carcass first -- the
+	# same id, so a rename can never leave the two disagreeing.
+	assert_eq(HuntableQuarry.HIDE_ITEM_ID, Butchering.PART_ORDER[0])

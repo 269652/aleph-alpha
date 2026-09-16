@@ -778,3 +778,21 @@ func test_a_producer_on_real_quarry_still_eats_from_their_own_work():
 	assert_true(hunter.needs.is_hungry(), "precondition")
 	hunter.step(0.01, true, world, Vector2.ZERO, true)
 	assert_false(hunter.needs.is_hungry())
+
+
+func test_a_byproduct_reaches_the_market_without_being_paid_for():
+	# A hide feeds nobody and no villager buys one. Its value arrives when
+	# a cart does (MerchantVisit.BUY_LIST), so paying for it at the kill
+	# would be the conjured faucet traveling_merchants.md exists to close,
+	# pointed at a second good.
+	var hunter := _economy("hunter")
+	hunter.record_byproduct("hide", 2)
+	assert_almost_eq(market.stock.get("hide", 0.0), 2.0, 0.0001)
+	assert_almost_eq(NpcEconomy.purse_of(market), 0.0, 0.0001)
+	assert_eq(hunter.wallet.balance, 0)
+
+
+func test_a_byproduct_of_nothing_changes_nothing():
+	var hunter := _economy("hunter")
+	hunter.record_byproduct("hide", 0)
+	assert_almost_eq(market.total_stock(), 0.0, 0.0001)

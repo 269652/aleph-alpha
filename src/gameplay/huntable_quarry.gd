@@ -82,6 +82,13 @@ const STRIKE_DAMAGE := 6.0
 ## never fire at all.
 const STRIKE_DISTANCE_PX := 4.0
 
+## What the hide off a kill is called. Butchering.PART_ORDER's own first
+## entry -- the part a real cut takes off first, and an id ItemCatalog and
+## MerchantVisit.BUY_LIST already both know -- rather than a second string
+## that a rename could leave disagreeing with it. Test-pinned
+## (test_the_hide_is_butcherings_own_first_part).
+const HIDE_ITEM_ID := "hide"
+
 
 ## Whether `candidate` is a real, living, wild, ordinary animal a village
 ## hunter may take. False for null, for anything without a species record,
@@ -158,3 +165,23 @@ static func _mass_ratio_of(candidate, info) -> float:
 	if reference_mass <= 0.0:
 		return 1.0
 	return candidate.current_mass_kg() / reference_mass
+
+
+## The hide off `candidate`: Butchering.HIDE_COUNT, the same one a player
+## butchering that carcass takes off first. Flat, not mass-scaled, because
+## Butchering's own shape is flat -- a starved deer is a thinner deer, not
+## a smaller one.
+##
+## Unlike meat this is not food and no villager buys one; it reaches the
+## village market so that a travelling cart can (MerchantVisit.BUY_LIST has
+## bought hides since it was written, and until a hunter took one, no hide
+## ever reached a village market for a cart to find).
+##
+## 0 for nothing and for anything without a species record, same as
+## meat_yield_of.
+static func hide_yield_of(candidate) -> int:
+	if candidate == null or not is_instance_valid(candidate):
+		return 0
+	if candidate.get("info") == null:
+		return 0
+	return Butchering.HIDE_COUNT

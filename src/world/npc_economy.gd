@@ -201,6 +201,24 @@ func record_real_catch(count: int) -> void:
 	_earn(float(count) * float(NpcProduction.YIELD_TO_GOLD_RATE))
 
 
+## Credits `count` units of something a real take produced ALONGSIDE the
+## food -- the hide off a hunted animal (HuntableQuarry.hide_yield_of).
+##
+## Deliberately pays nothing, unlike record_real_catch. A hide feeds nobody
+## and no villager buys one, so there is no local sale to pay for; its value
+## arrives when a travelling cart buys it out of the market
+## (docs/concept/traveling_merchants.md, MerchantVisit.BUY_LIST). Paying at
+## the kill would be the conjured faucet that doc exists to close, pointed
+## at a second good.
+##
+## Any producer may record one -- the item id says what it is, so this
+## needs no occupation table -- and a count of zero is a no-op.
+func record_byproduct(item_id: String, count: int) -> void:
+	if count <= 0 or item_id == "":
+		return
+	market.add_stock(item_id, float(count))
+
+
 func _gather(delta_seconds: float, world, pixel_position: Vector2) -> void:
 	var rate := _production.yield_per_second(occupation, world, pixel_position)
 	var gathered := rate * delta_seconds

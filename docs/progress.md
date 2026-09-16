@@ -23121,6 +23121,15 @@ skeleton with only four things behind seams (`_find_quarry` /
 approached, lost and given up on identically, and writing that twice is how
 the two drift apart.
 
+✅ **A kill's hide reaches the market too, and nobody pays for it there.**
+`MerchantVisit.BUY_LIST` has bought hides since it was written, and until
+now no hide ever reached a village market for a cart to find — the price
+was live code with no supply behind it. A kill credits
+`Butchering.HIDE_COUNT`, flat rather than mass-scaled because `Butchering`'s
+own shape is flat. Deliberately unpaid at the kill: a hide feeds nobody and
+no villager buys one, so its value arrives when a cart buys it, which is
+exactly the faucet `traveling_merchants.md` exists to close.
+
 ✅ **No number in the hunt was invented.** Every constant is borrowed from
 something already live and **test-pinned to it, never copied as a
 literal**: the search radius and arrival distance from `LumberjackMarker`,

@@ -541,6 +541,7 @@ func _take_quarry() -> void:
 ## half a meal, and a wounded animal that escapes fed nobody.
 func _strike_quarry() -> void:
 	var meat := HuntableQuarry.meat_yield_of(_quarry)
+	var hide := HuntableQuarry.hide_yield_of(_quarry)
 	var kill_position: Vector2 = _quarry.position
 	_quarry.take_damage(HuntableQuarry.STRIKE_DAMAGE)
 	if HuntableQuarry.is_quarry(_quarry):
@@ -548,6 +549,9 @@ func _strike_quarry() -> void:
 	_take_carcass_at(kill_position)
 	if economy != null:
 		economy.record_real_catch(meat)
+		# The hide goes to the market too, unpaid -- a travelling cart is
+		# what a hide is worth anything to (see record_byproduct).
+		economy.record_byproduct(HuntableQuarry.HIDE_ITEM_ID, hide)
 	_end_take()
 
 

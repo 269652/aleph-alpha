@@ -441,6 +441,17 @@ up on identically and writing that twice is how the two drift apart.
   reference ([metabolism.md](metabolism.md)). A well-fed deer feeds the
   village better than a starved one. No skill bonus — SkillTree's
   `meat_yield` nodes are the player's to earn.
+- ✅ **The hide reaches the market too, unpaid.**
+  `MerchantVisit.BUY_LIST` has bought hides since it was written, and until
+  a hunter took one no hide ever reached a village market for a cart to
+  find. A kill now credits `Butchering.HIDE_COUNT` — flat, not mass-scaled,
+  because `Butchering`'s own shape is flat: a starved deer is a thinner
+  deer, not a smaller one. Deliberately **not** paid for at the kill: a hide
+  feeds nobody and no villager buys one, so there is no local sale to pay
+  for, and its value arrives when a cart buys it out of the market
+  ([traveling_merchants.md](traveling_merchants.md)). Paying at the kill
+  would be the conjured faucet that doc exists to close, pointed at a
+  second good.
 - ✅ **No number in the hunt was invented.** Every constant is borrowed
   from something already live and test-pinned to it, never copied as a
   literal: the search radius and arrival distance from the Lumberjack's
