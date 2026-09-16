@@ -110,6 +110,44 @@ func test_place_building_records_facing_seed_condition_progress_owner():
 	assert_eq(record["owner_household_id"], "household_7")
 
 
+## Who lives here (docs/concept/building.md "Entering": the resident's REAL
+## occupation drives the interior, and "Residents inside" needs to find
+## the villager) -- carried on the record itself, since a village's NPCs
+## are regenerated on every load and only the building persists.
+func test_place_building_records_the_residents_occupation_and_seed():
+	manager.place_building(_chunk_coord, _origin, "house_small", Vector2i(0, 1), 42, "", "blacksmith", 9001)
+	var record := manager.building_at_global(_global(_origin).x, _global(_origin).y)
+	assert_eq(record["occupation"], "blacksmith")
+	assert_eq(record["resident_seed"], 9001)
+
+
+## Every existing caller passes six arguments -- a record placed that way
+## must still be well-formed (empty occupation, no resident), never a
+## missing key a reader has to guard against.
+func test_place_building_without_a_resident_records_an_empty_occupation_and_zero_seed():
+	manager.place_building(_chunk_coord, _origin, "house_small", Vector2i(0, 1), 42, "")
+	var record := manager.building_at_global(_global(_origin).x, _global(_origin).y)
+	assert_eq(record["occupation"], "")
+	assert_eq(record["resident_seed"], 0)
+
+
+## The backfill hook for buildings persisted before the record carried a
+## resident (see VillageRenderer._recover_existing_village): sets both
+## fields on an existing record and persists them.
+func test_set_building_resident_backfills_an_existing_record():
+	manager.place_building(_chunk_coord, _origin, "house_small", Vector2i(0, 1), 42, "")
+
+	assert_true(manager.set_building_resident(_chunk_coord, _origin, "fisher", 77))
+
+	var record := manager.building_at_global(_global(_origin).x, _global(_origin).y)
+	assert_eq(record["occupation"], "fisher")
+	assert_eq(record["resident_seed"], 77)
+
+
+func test_set_building_resident_is_false_when_nothing_stands_there():
+	assert_false(manager.set_building_resident(_chunk_coord, _origin, "fisher", 77))
+
+
 func test_place_building_refuses_an_unknown_id():
 	assert_false(manager.place_building(_chunk_coord, _origin, "not_a_building", Vector2i(0, 1), 1, ""))
 	assert_eq(manager.modification_at_global(_global(_origin).x, _global(_origin).y), "")

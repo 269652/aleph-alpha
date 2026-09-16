@@ -44,6 +44,7 @@ const PlayerIdentity = preload("res://src/emergence/player_identity.gd")
 const ConstructionProject = preload("res://src/emergence/construction_project.gd")
 const HouseInteriorView = preload("res://src/rendering/house_interior_view.gd")
 const BuildingCatalog = preload("res://src/gameplay/building_catalog.gd")
+const HouseDecor = preload("res://src/gameplay/house_decor.gd")
 
 const TILE_SIZE := TerrainRenderer.TILE_SIZE
 
@@ -4075,6 +4076,93 @@ func test_enter_exit_step_enters_a_real_building_from_its_own_real_doorstep():
 	assert_true(player.is_indoors())
 
 
+# -- the real character indoors ----------------------------------------------
+#
+# Reported live: "the indoor scene doesn't use the real character, it's just a
+# square." The avatar inside the isolated SubViewport must look like the
+# player -- the same appearance, the same worn armor, the same held weapon --
+# fed from Player's own real state, not re-rolled.
+
+func test_interior_outfit_mirrors_the_players_appearance_armor_and_weapon():
+	var helm := _item_catalog.make("leather_helm")
+	player.inventory.add(helm, 1)
+	assert_true(player.equip_armor(helm), "precondition: a helm is worn")
+	var sword := _item_catalog.make("iron_sword")
+	player.inventory.add(sword, 1)
+	assert_true(player.equip_item(sword), "precondition: a sword is held")
+
+	var outfit: Dictionary = player._interior_outfit()
+
+	assert_eq(outfit["appearance"], player.appearance)
+	var armor: Dictionary = outfit["armor_textures"]
+	assert_true(armor.has("head"), "the worn helm's slot must be in the outfit")
+	assert_false(armor.has("chest"), "a bare slot must not be in the outfit")
+	var expected_helm := ProceduralItemSprite.new().generate_texture("leather_helm")
+	assert_eq(armor["head"].get_image().get_data(), expected_helm.get_image().get_data())
+	var expected_sword := ProceduralItemSprite.new().generate_texture("iron_sword")
+	assert_eq(outfit["weapon_texture"].get_image().get_data(), expected_sword.get_image().get_data())
+
+
+func test_interior_outfit_with_nothing_worn_or_held_is_bare():
+	var outfit: Dictionary = player._interior_outfit()
+	assert_eq(outfit["armor_textures"], {})
+	assert_null(outfit["weapon_texture"])
+
+
+func test_entering_a_building_dresses_the_avatar_as_the_player():
+	_register_all_keybindings()
+	var sword := _item_catalog.make("iron_sword")
+	player.inventory.add(sword, 1)
+	assert_true(player.equip_item(sword), "precondition: a sword is held")
+	var origin := Vector2i(10, 10)
+	chunk_manager.place_building(Vector2i(0, 0), origin, "house_small", Vector2i(0, 1), 1, "")
+	var doorstep_global: Vector2i = origin + BuildingCatalog.doorstep_of("house_small")
+	player.position = (Vector2(doorstep_global) + Vector2(0.5, 0.5)) * TILE_SIZE
+
+	Input.action_press("enter")
+	player._enter_exit_step()
+	Input.action_release("enter")
+
+	assert_true(player.is_indoors(), "precondition: entered")
+	var view: CharacterView = player._interior_avatar.character_view()
+	assert_not_null(view, "the avatar must carry a real CharacterView")
+	assert_true(view.is_slot_equipped("tool"), "the held sword must show on the indoor avatar")
+
+
+# -- whose house it is drives what's inside ----------------------------------
+#
+# docs/concept/building.md "Entering": the resident's REAL occupation (now on
+# the building record, see place_building) drives the interior -- a
+# merchant's house is furnished as a merchant's, not as whatever the house's
+# seed happened to roll.
+
+func _enter_the_house_placed_at(origin: Vector2i, occupation: String, resident_seed: int) -> void:
+	_register_all_keybindings()
+	chunk_manager.place_building(Vector2i(0, 0), origin, "house_small", Vector2i(0, 1), 1, "", occupation, resident_seed)
+	var doorstep_global: Vector2i = origin + BuildingCatalog.doorstep_of("house_small")
+	player.position = (Vector2(doorstep_global) + Vector2(0.5, 0.5)) * TILE_SIZE
+	Input.action_press("enter")
+	player._enter_exit_step()
+	Input.action_release("enter")
+	assert_true(player.is_indoors(), "precondition: entered")
+
+
+func test_entering_a_house_furnishes_it_for_its_own_residents_occupation():
+	_enter_the_house_placed_at(Vector2i(10, 10), "merchant", 4242)
+	assert_eq(player._interior_view.occupation, "merchant")
+
+
+## A record from before the resident fields existed (occupation "") keeps
+## today's fallback -- a deterministic pseudo-occupation from the house's
+## own seed -- so an old save's houses stay furnished rather than bare.
+func test_entering_a_house_with_no_recorded_resident_still_gets_a_real_occupation():
+	_enter_the_house_placed_at(Vector2i(10, 10), "", 0)
+	assert_true(
+		HouseDecor.FURNITURE_SET_BY_OCCUPATION.has(player._interior_view.occupation),
+		"got %s" % player._interior_view.occupation
+	)
+
+
 func test_enter_exit_step_does_nothing_far_from_any_doorstep():
 	_register_all_keybindings()
 	Input.action_press("enter")
@@ -4094,6 +4182,7 @@ func test_enter_exit_step_leaves_from_the_real_interior_exit_cell_and_never_move
 	Input.action_press("enter")
 	player._enter_exit_step()  # in
 	Input.action_release("enter")
+	player._enter_exit_step()  # a released frame, so the edge latch clears (as every real tick does)
 	assert_true(player.is_indoors(), "precondition: the first press enters")
 
 	# Walk the avatar onto the room's own door cell -- its real local exit

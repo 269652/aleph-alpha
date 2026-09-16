@@ -159,9 +159,9 @@ func spawn_village(
 			world.buildings_in_chunk(chunk_coord) if world.has_method("buildings_in_chunk") else []
 		)
 		if existing_buildings.is_empty():
-			_place_new_village(chunk_coord, chunk_size, tile_size, building_ids, world, plots, door_positions, stand_positions)
+			_place_new_village(chunk_coord, chunk_size, tile_size, building_ids, npcs, world, plots, door_positions, stand_positions)
 		else:
-			_recover_existing_village(chunk_coord, chunk_size, tile_size, npcs.size(), existing_buildings, plots, door_positions, stand_positions)
+			_recover_existing_village(chunk_coord, chunk_size, tile_size, npcs, world, existing_buildings, plots, door_positions, stand_positions)
 
 	# Tells the world this settlement exists, duck-typed exactly like
 	# place_building above -- world == null or lacking the method is
@@ -204,7 +204,7 @@ func spawn_village(
 ## spawn_village's own locals update directly) rather than returning a
 ## tuple.
 func _place_new_village(
-	chunk_coord: Vector2i, chunk_size: int, tile_size: int, building_ids: Array, world,
+	chunk_coord: Vector2i, chunk_size: int, tile_size: int, building_ids: Array, npcs: Array, world,
 	plots: Array, door_positions: Array, stand_positions: Array
 ) -> void:
 	var layout_seed := hash("%d_%d_village_layout" % [chunk_coord.x, chunk_coord.y])
@@ -231,7 +231,15 @@ func _place_new_village(
 		plots.append(plot)
 		var building_index: int = plot["building_index"]
 		var building_seed := hash("%d_%d_house_%d" % [chunk_coord.x, chunk_coord.y, building_index])
-		world.place_building(chunk_coord, plot["origin"], plot["building_id"], plot["facing"], building_seed, "")
+		# The house remembers its villager (occupation + NpcIdentity seed --
+		# see place_building): NPCs are regenerated on every load, only the
+		# building persists, and the interior/resident logic needs to know
+		# whose house this is.
+		var resident = npcs[building_index]
+		world.place_building(
+			chunk_coord, plot["origin"], plot["building_id"], plot["facing"], building_seed, "",
+			resident.occupation, resident.seed_value
+		)
 		var doorstep_global: Vector2i = chunk_coord * chunk_size + plot["doorstep"]
 		var doorstep_position := Vector2(
 			(doorstep_global.x + 0.5) * tile_size, (doorstep_global.y + 0.5) * tile_size
@@ -258,10 +266,10 @@ func _place_new_village(
 ## already describes. Mutates in place, same convention as
 ## _place_new_village.
 func _recover_existing_village(
-	chunk_coord: Vector2i, chunk_size: int, tile_size: int, npc_count: int,
+	chunk_coord: Vector2i, chunk_size: int, tile_size: int, npcs: Array, world,
 	existing_buildings: Array, plots: Array, door_positions: Array, stand_positions: Array
 ) -> void:
-	for i in npc_count:
+	for i in npcs.size():
 		var expected_seed := hash("%d_%d_house_%d" % [chunk_coord.x, chunk_coord.y, i])
 		for record in existing_buildings:
 			if record.get("seed", -1) != expected_seed:
@@ -269,6 +277,13 @@ func _recover_existing_village(
 			var building_id: String = record["id"]
 			var origin_local: Vector2i = record["origin_local"]
 			plots.append({"building_index": i, "origin": origin_local, "building_id": building_id})
+			# A record persisted before the house remembered its villager
+			# (see place_building's occupation/resident_seed) heals here: the
+			# per-index seed match above already identifies exactly whose
+			# house it is, so the missing fields are written back once and
+			# an old save's houses read as lived-in from their next visit on.
+			if record.get("resident_seed", 0) == 0 and world.has_method("set_building_resident"):
+				world.set_building_resident(chunk_coord, origin_local, npcs[i].occupation, npcs[i].seed_value)
 			var doorstep_global: Vector2i = chunk_coord * chunk_size + origin_local + BuildingCatalog.doorstep_of(building_id)
 			var doorstep_position := Vector2(
 				(doorstep_global.x + 0.5) * tile_size, (doorstep_global.y + 0.5) * tile_size

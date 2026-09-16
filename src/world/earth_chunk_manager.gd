@@ -12815,10 +12815,16 @@ func stamp_structure_at_global(
 ## doorstep_of) is already occupied; a caller (VillageLayout, the player's
 ## own blueprint build) is expected to have validated the site already,
 ## this is the same defensive re-check build_at_global's own siblings all
-## make.
+## make. `occupation`/`resident_seed`: who lives here (docs/concept/
+## building.md "Entering" -- the resident's real occupation drives the
+## interior, and "Residents inside" has to find the villager whose house
+## this is); NPCs are regenerated on every load and only the building
+## persists, so the building itself remembers its villager. "" / 0 for a
+## house nobody was placed for (a player's own, or any pre-resident save).
 func place_building(
 	chunk_coord: Vector2i, origin_local: Vector2i, building_id: String,
-	facing: Vector2i = Vector2i(0, 1), seed_value: int = 0, owner_household_id: String = ""
+	facing: Vector2i = Vector2i(0, 1), seed_value: int = 0, owner_household_id: String = "",
+	occupation: String = "", resident_seed: int = 0
 ) -> bool:
 	var chunk: Chunk = _loaded_chunks.get(chunk_coord)
 	if chunk == null or not BuildingCatalog.has_building(building_id):
@@ -12834,6 +12840,7 @@ func place_building(
 	chunk.buildings[origin_local] = {
 		"id": building_id, "facing": facing, "seed": seed_value,
 		"condition": 1.0, "progress": 1.0, "owner_household_id": owner_household_id,
+		"occupation": occupation, "resident_seed": resident_seed,
 	}
 	var occupied_global := {}
 	for local in footprint_cells:
@@ -12842,6 +12849,22 @@ func place_building(
 	_block_ground_cover_on_cells(chunk_coord, footprint_cells)
 	_terrain_renderer.paint(_tile_map_layer, chunk, chunk_coord * CHUNK_SIZE, generator.biome_at_global)
 	_spawn_building_node(chunk_coord, origin_local, chunk.buildings[origin_local])
+	return true
+
+
+## Writes who lives in an already-placed building (see place_building's
+## own occupation/resident_seed) -- the backfill hook for a record
+## persisted before those fields existed (VillageRenderer._recover_
+## existing_village heals an old save's houses on their next reload), so
+## it persists at once rather than waiting for the chunk to unload. False
+## when nothing is placed at `origin_local`.
+func set_building_resident(chunk_coord: Vector2i, origin_local: Vector2i, occupation: String, resident_seed: int) -> bool:
+	var chunk: Chunk = _loaded_chunks.get(chunk_coord)
+	if chunk == null or not chunk.buildings.has(origin_local):
+		return false
+	chunk.buildings[origin_local]["occupation"] = occupation
+	chunk.buildings[origin_local]["resident_seed"] = resident_seed
+	_persist_modifications_now(chunk_coord, chunk)
 	return true
 
 
@@ -14220,6 +14243,16 @@ func _load_chunk(chunk_coord: Vector2i) -> void:
 		_upper_floor_furniture_modifications_path(chunk_coord)
 	)
 	chunk.buildings = _chunk_serializer.load_modifications(_buildings_path(chunk_coord))
+	# A record persisted before place_building carried its resident (see
+	# its own occupation/resident_seed) is normalised here once, so no
+	# reader ever has to guard against a missing key -- the backfill of the
+	# real values is VillageRenderer._recover_existing_village's job.
+	for origin_local in chunk.buildings:
+		var record: Dictionary = chunk.buildings[origin_local]
+		if not record.has("occupation"):
+			record["occupation"] = ""
+		if not record.has("resident_seed"):
+			record["resident_seed"] = 0
 	chunk.planted_trees = _chunk_serializer.load_planted_trees(_planted_trees_path(chunk_coord))
 	_loaded_chunks[chunk_coord] = chunk
 	# Nothing built stands in water -- including what an older save persisted

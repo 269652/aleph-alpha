@@ -56,7 +56,8 @@ class StubWorld:
 	## check for any chunk_coord other than the origin.
 	func place_building(
 		chunk_coord: Vector2i, origin_local: Vector2i, building_id: String,
-		facing: Vector2i, seed_value: int, owner_household_id: String
+		facing: Vector2i, seed_value: int, owner_household_id: String,
+		occupation: String = "", resident_seed: int = 0
 	) -> bool:
 		var footprint_cells: Array = BuildingCatalog.footprint_cells(building_id, origin_local)
 		var required_cells: Array = footprint_cells.duplicate()
@@ -68,6 +69,7 @@ class StubWorld:
 		place_calls.append({
 			"chunk_coord": chunk_coord, "origin_local": origin_local, "building_id": building_id,
 			"facing": facing, "seed": seed_value, "owner_household_id": owner_household_id,
+			"occupation": occupation, "resident_seed": resident_seed,
 		})
 		for cell in footprint_cells:
 			occupied_cells[chunk_coord * CHUNK_SIZE + cell] = building_id
@@ -75,10 +77,10 @@ class StubWorld:
 
 	## Mirrors the REAL EarthChunkManager.buildings_in_chunk's own record
 	## shape ({"id","facing","seed","condition","progress","owner_household_id",
-	## "chunk_coord","origin_local"}), derived from place_calls -- the SAME
-	## place_building already records -- so a second spawn_village call
-	## against this SAME StubWorld sees its own earlier placements exactly
-	## as a real reload would.
+	## "occupation","resident_seed","chunk_coord","origin_local"}), derived
+	## from place_calls -- the SAME place_building already records -- so a
+	## second spawn_village call against this SAME StubWorld sees its own
+	## earlier placements exactly as a real reload would.
 	func buildings_in_chunk(chunk_coord: Vector2i) -> Array:
 		var out: Array = []
 		for call in place_calls:
@@ -87,9 +89,24 @@ class StubWorld:
 			out.append({
 				"id": call["building_id"], "facing": call["facing"], "seed": call["seed"],
 				"condition": 1.0, "progress": 1.0, "owner_household_id": call["owner_household_id"],
+				"occupation": call.get("occupation", ""), "resident_seed": call.get("resident_seed", 0),
 				"chunk_coord": chunk_coord, "origin_local": call["origin_local"],
 			})
 		return out
+
+	## Mirrors the REAL EarthChunkManager.set_building_resident: rewrites the
+	## two resident fields on the matching placed record (false when nothing
+	## stands there), so a reload's backfill shows up in buildings_in_chunk
+	## exactly as the real persisted record would.
+	var resident_calls: Array = []
+	func set_building_resident(chunk_coord: Vector2i, origin_local: Vector2i, occupation: String, resident_seed: int) -> bool:
+		for call in place_calls:
+			if call["chunk_coord"] == chunk_coord and call["origin_local"] == origin_local:
+				call["occupation"] = occupation
+				call["resident_seed"] = resident_seed
+				resident_calls.append({"origin_local": origin_local, "occupation": occupation, "resident_seed": resident_seed})
+				return true
+		return false
 
 	func build_at_global(x: int, y: int, tile_id: String) -> bool:
 		road_cells[Vector2i(x, y)] = tile_id
@@ -566,8 +583,66 @@ func test_a_chunk_with_no_settlement_reports_nothing():
 	assert_true(world.founded_calls.is_empty())
 
 
+# -- who lives here: the record carries its own villager --------------------
+#
+# docs/concept/building.md "Entering": the resident's REAL occupation drives
+# the interior, and "Residents inside" has to find the villager whose house
+# this is. NPCs are regenerated on every load; only the building persists,
+# so the building itself must remember its villager (occupation + the
+# NpcIdentity seed), passed at placement from the exact villager the plot
+# was laid out for.
+
+func test_each_placed_building_records_its_own_villagers_occupation_and_seed():
+	var coord := _find_settlement_chunk("grassland")
+	var world := StubWorld.new()
+	renderer.spawn_village(parent, coord, coord * CHUNK_SIZE, CHUNK_SIZE, TILE_SIZE, "grassland", world)
+	var npcs: Array = world.founded_calls[0]["npcs"]
+	var plots: Array = world.founded_calls[0]["plots"]
+	assert_gt(world.place_calls.size(), 0, "precondition: real buildings were placed")
+	for i in world.place_calls.size():
+		var call: Dictionary = world.place_calls[i]
+		var building_index: int = plots[i]["building_index"]
+		assert_eq(call["occupation"], npcs[building_index].occupation, "building %d" % i)
+		assert_eq(call["resident_seed"], npcs[building_index].seed_value, "building %d" % i)
+		assert_ne(call["occupation"], "", "a placed village house is never anonymous")
+
+
+## A save from before the record carried a resident (resident_seed 0)
+## heals on its next reload: the recover path matches each villager to
+## their own house by the per-index seed exactly as before, and writes
+## the missing fields back through set_building_resident. A record that
+## already has its resident is left alone.
+func test_reloading_backfills_a_resident_onto_records_that_lack_one():
+	var coord := _find_settlement_chunk("grassland")
+	var world := StubWorld.new()
+	renderer.spawn_village(parent, coord, coord * CHUNK_SIZE, CHUNK_SIZE, TILE_SIZE, "grassland", world)
+	assert_gt(world.place_calls.size(), 0, "precondition: real buildings were placed")
+	# Simulate the old on-disk shape: every record forgets its resident.
+	var expected_by_origin := {}
+	for call in world.place_calls:
+		expected_by_origin[call["origin_local"]] = {"occupation": call["occupation"], "resident_seed": call["resident_seed"]}
+		call["occupation"] = ""
+		call["resident_seed"] = 0
+
+	var second_parent := Node2D.new()
+	renderer.spawn_village(second_parent, coord, coord * CHUNK_SIZE, CHUNK_SIZE, TILE_SIZE, "grassland", world)
+
+	assert_eq(world.resident_calls.size(), world.place_calls.size(), "every anonymous record gets its villager back")
+	for call in world.resident_calls:
+		var expected: Dictionary = expected_by_origin[call["origin_local"]]
+		assert_eq(call["occupation"], expected["occupation"], str(call["origin_local"]))
+		assert_eq(call["resident_seed"], expected["resident_seed"], str(call["origin_local"]))
+
+	# Third load: nothing left to heal.
+	var third_parent := Node2D.new()
+	renderer.spawn_village(third_parent, coord, coord * CHUNK_SIZE, CHUNK_SIZE, TILE_SIZE, "grassland", world)
+	assert_eq(world.resident_calls.size(), world.place_calls.size(), "a record that already knows its villager is left alone")
+	second_parent.free()
+	third_parent.free()
+
+
 class WorldWithNoFoundingMethod:
-	func place_building(_a, _b, _c, _d, _e, _f) -> bool:
+	func place_building(_a, _b, _c, _d, _e, _f, _g = "", _h = 0) -> bool:
 		return true
 	func is_buildable_terrain_at(_x: int, _y: int) -> bool:
 		return true
