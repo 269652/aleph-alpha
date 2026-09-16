@@ -22834,8 +22834,29 @@ yet — procedural placeholders draw until the user generates them against
 the contracts in `building.md`; the ten two-story blueprints are
 unbuildable until real two-story sheets join the catalog; the player's
 own house has no construction-over-time and no hire (both return on the
-settlement ledger the City Hall now uses); in-memory construction
-projects still lose in-progress labour on a real restart (the civic
-reservation itself self-heals from the skeleton); a City Hall has no
+settlement ledger the City Hall now uses); a City Hall has no
 interior yet ("hall" family falls back to the cottage plan); NPC routing
 still walks straight lines rather than the roads.
+
+**The construction ledger persists now** (a close-out addendum): a City
+Hall takes real hours of labour (45 hours at 8 per spare household per
+3600-second day, after the village has gathered 20 wood + 10 stone), and
+the in-memory `ConstructionProjectStore` threw every hour away on
+restart -- `ConstructionProjectStorePersistence` (the exact sibling of
+`MarketStorePersistence`) + `EarthChunkManager.save/load/reset/wipe_
+construction_project_store`, saved on every autosave, loaded by Load
+Game, wiped and backed up by New Game (`test_construction_project_store_
+persistence.gd`, `test_world_backup_paths.gd`, `test_earth_chunk_manager_
+player_house.gd`), closing `timber_construction.md`'s own "no persistence
+wrapper yet" gap.
+
+**And a real, pre-existing New Game bug, found by running
+`test_world_backup_paths.gd` for the ledger's own backup entry:** its
+drift pin over `EarthChunkManager`'s `*_DIR` constants had been red the
+whole time -- four persisted chunk layers had never joined
+`World._wipe_persisted_world`: furniture, the two upper-floor layers of
+legacy piece houses, and `BUILDINGS_DIR` (every whole-building entity
+since 2026-09-15: the villages' houses, the player's own house with
+everything placed inside it, a village's City Hall). A new world loaded
+the previous world's villages back in. All four are wiped and backed up
+now (`persistence.md` Status).

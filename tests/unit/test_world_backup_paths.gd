@@ -27,6 +27,7 @@ const ContractStorePersistence = preload("res://src/emergence/contract_store_per
 const MarketStorePersistence = preload("res://src/emergence/market_store_persistence.gd")
 const InstitutionStorePersistence = preload("res://src/emergence/institution_store_persistence.gd")
 const WorldBossStorePersistence = preload("res://src/emergence/world_boss_store_persistence.gd")
+const ConstructionProjectStorePersistence = preload("res://src/emergence/construction_project_store_persistence.gd")
 const WorldClockPersistence = preload("res://src/world/world_clock_persistence.gd")
 
 
@@ -62,6 +63,7 @@ func test_every_single_file_store_the_wipe_removes_is_backed_up():
 		MarketStorePersistence.SAVE_PATH,
 		InstitutionStorePersistence.SAVE_PATH,
 		WorldBossStorePersistence.SAVE_PATH,
+		ConstructionProjectStorePersistence.SAVE_PATH,
 		WorldClockPersistence.SAVE_PATH,
 		PlayerSave.SAVE_PATH,
 	]:
@@ -79,7 +81,7 @@ func test_the_backup_lists_cover_exactly_what_the_wipe_destroys():
 		body.count("_world_reset.wipe_directory("),
 		"one backed-up directory per wipe_directory call in _wipe_persisted_world"
 	)
-	# The chunk manager's own wipe_* calls (seven stores plus the world
+	# The chunk manager's own wipe_* calls (eight stores plus the world
 	# clock), plus the player save, which World wipes directly.
 	assert_eq(
 		World.backed_up_files().size(),

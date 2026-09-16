@@ -189,6 +189,7 @@ const SettlementTier = preload("res://src/emergence/settlement_tier.gd")
 const WorldBoss = preload("res://src/emergence/world_boss.gd")
 const WorldBossStore = preload("res://src/emergence/world_boss_store.gd")
 const WorldBossStorePersistence = preload("res://src/emergence/world_boss_store_persistence.gd")
+const ConstructionProjectStorePersistence = preload("res://src/emergence/construction_project_store_persistence.gd")
 const WorldBossFitness = preload("res://src/gameplay/world_boss_fitness.gd")
 const NpcEncounter = preload("res://src/emergence/npc_encounter.gd")
 const Quest = preload("res://src/emergence/quest.gd")
@@ -2759,12 +2760,29 @@ var _recipe_book := CraftingRecipeBook.new()
 ## EcosystemSimulation's per-region state is) so a project's real
 ## labor_hours_accumulated survives a chunk unload/reload with no snapshotting
 ## of its own -- only "how long did this chunk sit unloaded" needs recording
-## (see _unloaded_construction_labor below). No persistence wrapper yet (see
-## that doc's own "Named, honest limitations" -- to_dicts/from_dicts are real
-## but nothing calls them from a save path), the same "additive capability, no
-## live save-path caller yet" honesty _market_store's own sibling stores
-## already carry elsewhere in this file.
+## (see _unloaded_construction_labor below). Persisted since 2026-09-16
+## (ConstructionProjectStorePersistence, saved/loaded/wiped with the other
+## emergence stores by World): a City Hall takes real hours of labour
+## (docs/concept/civic_construction.md), and an in-memory ledger threw
+## every hour away on restart.
 var _construction_project_store := ConstructionProjectStore.new()
+
+
+func save_construction_project_store(path: String = ConstructionProjectStorePersistence.SAVE_PATH) -> void:
+	ConstructionProjectStorePersistence.new().save(_construction_project_store, path)
+
+
+func load_construction_project_store(path: String = ConstructionProjectStorePersistence.SAVE_PATH) -> void:
+	_construction_project_store = ConstructionProjectStorePersistence.new().load_store(path)
+
+
+func reset_construction_project_store() -> void:
+	_construction_project_store = ConstructionProjectStore.new()
+
+
+func wipe_construction_project_store(path: String = ConstructionProjectStorePersistence.SAVE_PATH) -> void:
+	ConstructionProjectStorePersistence.new().wipe(path)
+	reset_construction_project_store()
 
 
 func market_store() -> MarketStore:

@@ -546,6 +546,28 @@ func test_every_furniture_piece_can_be_placed_on_a_floor_cell():
 		index += 1
 
 
+# -- the construction ledger persists (docs/concept/timber_construction.md) --
+
+const _LEDGER_TEST_PATH := "user://test_player_house_construction_projects.bin"
+
+
+func test_the_construction_ledger_survives_a_save_and_load():
+	var project_id := manager.stamp_house_and_grant_ownership("small_house", _origin, "household:owner")
+	var before := manager.construction_project_store().get_project(project_id)
+
+	manager.save_construction_project_store(_LEDGER_TEST_PATH)
+	manager.reset_construction_project_store()
+	assert_null(manager.construction_project_store().get_project(project_id), "precondition: forgotten")
+	manager.load_construction_project_store(_LEDGER_TEST_PATH)
+
+	var after = manager.construction_project_store().get_project(project_id)
+	assert_not_null(after, "the house's own project is back")
+	assert_eq(after.status, before.status)
+	assert_eq(after.resident_household_id, before.resident_household_id)
+	manager.wipe_construction_project_store(_LEDGER_TEST_PATH)
+	assert_false(FileAccess.file_exists(_LEDGER_TEST_PATH))
+
+
 # -- resident happiness reads the building's own interior --------------------
 #
 # housing.md's appeal_score counts real furniture; for a whole-building
