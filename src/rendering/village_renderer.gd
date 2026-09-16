@@ -604,7 +604,13 @@ func _build_npc(
 	if world != null:
 		marker.setup(world, tile_size)
 	if market != null:
-		marker.setup_economy(market)
+		# Their own household's persistent purse, so a villager's working
+		# life survives the chunk unloading under them.
+		var household_wallet = (
+			world.household_wallet_for_villager(identity.seed_value)
+			if world != null and world.has_method("household_wallet_for_villager") else null
+		)
+		marker.setup_economy(market, household_wallet)
 
 	# Villagers use the SAME CharacterView the player does, rather than a
 	# hand-assembled torso-plus-head. Sharing the view means body

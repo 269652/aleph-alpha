@@ -642,3 +642,52 @@ func test_a_world_without_a_bakehouse_hook_changes_nothing():
 	economy.step(0.01, false, BareWorld.new(), Vector2.ZERO)
 	assert_true(economy.needs.is_hungry())
 	assert_eq(economy.wallet.balance, 100)
+
+
+# -- earnings must reach the household that keeps them --------------------
+#
+# Reported live: "all villagers have 0 gold". They were in fact earning --
+# the producer faucet and the subsistence wage both worked -- into a Wallet
+# created fresh inside NpcEconomy, which lives on an NpcMarker that is
+# regenerated from scratch on every chunk load. The persistent Household
+# wallet (HouseholdStore, the unit Household's own doc comment calls "this
+# project's real, persistent unit") never received a single coin, so every
+# villager really did read 0 gold, for good, and the income need with them.
+
+const Household = preload("res://src/emergence/household.gd")
+const EntityRef = preload("res://src/emergence/entity_ref.gd")
+
+
+func test_an_unbound_economy_still_keeps_its_own_wallet():
+	var economy = NpcEconomy.new(1, "hunter", VillageMarket.new())
+	economy.wallet.add(3)
+	assert_eq(economy.wallet.balance, 3, "nothing changes for a villager with no household")
+
+
+func test_binding_a_household_makes_its_wallet_the_one_that_earns():
+	var household = Household.for_founder(EntityRef.for_npc(7))
+	var economy = NpcEconomy.new(7, "hunter", VillageMarket.new())
+
+	economy.bind_household_wallet(household.wallet)
+	economy.wallet.add(5)
+
+	assert_eq(household.wallet.balance, 5, "a villager's earnings land in their household's purse")
+
+
+## Binding must never silently drop coins the villager already had in hand.
+func test_binding_carries_over_what_was_already_earned():
+	var household = Household.for_founder(EntityRef.for_npc(8))
+	var economy = NpcEconomy.new(8, "hunter", VillageMarket.new())
+	economy.wallet.add(4)
+
+	economy.bind_household_wallet(household.wallet)
+
+	assert_eq(household.wallet.balance, 4, "gold in hand at binding time is carried over, not lost")
+	assert_eq(economy.wallet.balance, 4, "and the economy now spends from that same purse")
+
+
+func test_binding_nothing_is_a_harmless_no_op():
+	var economy = NpcEconomy.new(9, "hunter", VillageMarket.new())
+	economy.wallet.add(2)
+	economy.bind_household_wallet(null)
+	assert_eq(economy.wallet.balance, 2)

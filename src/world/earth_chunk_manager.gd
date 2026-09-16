@@ -4051,6 +4051,16 @@ func household_report_at(global_x: int, global_y: int) -> Dictionary:
 	return report
 
 
+## This villager's own household's persistent Wallet, or null if they have
+## no household yet. What a live NpcEconomy earns into and spends from (see
+## NpcEconomy.bind_household_wallet) -- without it a villager's whole
+## working life is kept in a wallet that dies with the chunk, which is
+## exactly why every villager read 0 gold however long they had worked.
+func household_wallet_for_villager(villager_seed: int):
+	var household = _household_store.household_for(EntityRef.for_npc(villager_seed))
+	return null if household == null else household.wallet
+
+
 ## The LOCAL origin of the house `villager_seed`'s household owns in this
 ## chunk, or null. What VillageRenderer asks on reload to stand a villager
 ## at their own front door.

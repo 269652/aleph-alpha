@@ -102,6 +102,33 @@ static func _set_purse(a_market, gold: float) -> void:
 	a_market.set_meta(PURSE_META, gold)
 
 
+## Makes `household_wallet` the purse this villager earns into and spends
+## from, in place of the one created below.
+##
+## Reported live as "all villagers have 0 gold". They were earning all
+## along -- the producer faucet and the subsistence wage both worked -- but
+## into a Wallet created fresh in _init, on an NpcEconomy owned by an
+## NpcMarker that is regenerated from scratch on every chunk load. The
+## persistent Household wallet (HouseholdStore -- the unit Household's own
+## doc comment calls "this project's real, persistent unit") never received
+## a coin, so a villager's whole working life evaporated the moment the
+## player walked away, and every readout of their purse honestly said zero.
+##
+## Whatever was already in hand is carried over rather than dropped: an
+## economy may work for a moment before its household is resolved, and
+## silently losing that gold would be a second, quieter version of the same
+## bug. Passing null is a harmless no-op, so a villager with no household
+## (an isolated test, a world that cannot answer) keeps its own wallet
+## exactly as before.
+func bind_household_wallet(household_wallet) -> void:
+	if household_wallet == null or household_wallet == wallet:
+		return
+	var in_hand := wallet.balance
+	wallet = household_wallet
+	if in_hand > 0:
+		wallet.add(in_hand)
+
+
 func _init(seed_value: int, an_occupation: String, a_market) -> void:
 	needs = NpcNeeds.new(seed_value)
 	wallet = Wallet.new()

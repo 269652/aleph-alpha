@@ -98,8 +98,13 @@ func setup(world, tile_size: int) -> void:
 ## Builds this villager's NpcEconomy from its already-assigned `identity`
 ## (must be set first -- see VillageRenderer._build_npc) and `market`, the
 ## VillageMarket instance shared by every NpcMarker of the same settlement.
-func setup_economy(market) -> void:
+## `household_wallet` is this villager's own persistent household purse
+## (EarthChunkManager.household_wallet_for_villager). Optional and
+## duck-typed like every other world hook here -- null keeps the economy's
+## own ephemeral wallet, which is all an isolated test ever needs.
+func setup_economy(market, household_wallet = null) -> void:
 	economy = NpcEconomy.new(identity.seed_value, identity.occupation, market)
+	economy.bind_household_wallet(household_wallet)
 
 
 func _process(delta: float) -> void:
