@@ -96,6 +96,23 @@ const _FLOOR_PIECES := {
 	"wood_floor": "res://assets/sprites/buildings/wood_floor.png",
 }
 
+## Furniture art (docs/concept/building.md "Asset contract"): one square
+## image per CATEGORY_FURNITURE piece id at `<furniture_dir>/<piece_id>.png`
+## -- top-down, the object centred, background transparent or the sheets'
+## own black/magenta (keyed by the same pass the wall sheets use) --
+## composited over the wood floor and resized to ART_TILE_SIZE so the
+## atlas tile stays opaque. No registry to edit: dropping the file in is
+## what lights it up (after an ATLAS_VERSION bump, like every sheet). The
+## directory is an instance var so a test can point it at a fixture.
+const DEFAULT_FURNITURE_DIR := "res://assets/sprites/furniture"
+const BuildingPiece = preload("res://src/gameplay/building_piece.gd")
+## A plain wood fill for the floor under a furniture piece when the
+## illustrated wood_floor sheet itself is missing -- the tile must never be
+## left with a transparent hole in the atlas.
+const _FALLBACK_FLOOR := Color(0.62, 0.45, 0.28)
+
+var furniture_dir: String = DEFAULT_FURNITURE_DIR
+
 var _slicer := SpriteSheetSlicer.new()
 
 ## piece_id -> the final, cached ART_TILE_SIZE Image.
@@ -106,10 +123,16 @@ static var _keyed_sheet_cache: Dictionary = {}
 ## sheet path -> the row-0 frame Rect2i array detect_frames found, shared
 ## across every piece cropping a column from that sheet.
 static var _row0_frames_cache: Dictionary = {}
+## furniture PNG path -> whether it exists, so has_piece_art (asked once
+## per piece per atlas build, and by every paint) never hits the disk twice
+## for the same file in one process.
+static var _furniture_exists_cache: Dictionary = {}
 
 
 func has_piece_art(piece_id: String) -> bool:
-	return _WALL_PIECES.has(piece_id) or _FLOOR_PIECES.has(piece_id)
+	if _WALL_PIECES.has(piece_id) or _FLOOR_PIECES.has(piece_id):
+		return true
+	return _has_furniture_png(piece_id)
 
 
 ## The real illustrated art for `piece_id`, keyed/despilled/cropped/resized
@@ -125,9 +148,56 @@ func piece_image(piece_id: String) -> Image:
 		image = _wall_piece_image(_WALL_PIECES[piece_id])
 	elif _FLOOR_PIECES.has(piece_id):
 		image = _floor_piece_image(_FLOOR_PIECES[piece_id])
+	elif _has_furniture_png(piece_id):
+		image = _furniture_piece_image(_furniture_png_path(piece_id))
 	if image != null:
 		_cache[piece_id] = image
 	return image
+
+
+## Drops every cached answer for `piece_id` -- a test that writes or
+## removes a fixture PNG mid-process needs the next has_piece_art/
+## piece_image to look again rather than trust the cache.
+static func forget_cached(piece_id: String) -> void:
+	_cache.erase(piece_id)
+	for path in _furniture_exists_cache.keys().duplicate():
+		if path.ends_with("/%s.png" % piece_id):
+			_furniture_exists_cache.erase(path)
+			_keyed_sheet_cache.erase(path)
+
+
+func _furniture_png_path(piece_id: String) -> String:
+	return "%s/%s.png" % [furniture_dir, piece_id]
+
+
+## Only a real CATEGORY_FURNITURE piece ever consults the furniture
+## directory -- a stray file named after a wall piece changes nothing.
+func _has_furniture_png(piece_id: String) -> bool:
+	if BuildingPiece.category_of(piece_id) != BuildingPiece.CATEGORY_FURNITURE:
+		return false
+	var path := _furniture_png_path(piece_id)
+	if not _furniture_exists_cache.has(path):
+		_furniture_exists_cache[path] = ResourceLoader.exists(path) or FileAccess.file_exists(path)
+	return _furniture_exists_cache[path]
+
+
+## The furniture PNG keyed (background punched to alpha 0), resized to the
+## tile, and composited over the wood floor so the finished tile is opaque
+## -- the illustrated wood_floor when it exists, a plain wood fill if not.
+func _furniture_piece_image(path: String) -> Image:
+	var sheet := _keyed_sheet(path)
+	if sheet == null:
+		return null
+	# Plain fill first, the illustrated floor over it, the furniture on top:
+	# whatever the keying pass punched out of either sheet, nothing shows
+	# through as a hole.
+	var tile := Image.create(SIZE, SIZE, false, Image.FORMAT_RGBA8)
+	tile.fill(_FALLBACK_FLOOR)
+	var floor := piece_image("wood_floor") if _FLOOR_PIECES.has("wood_floor") else null
+	if floor != null:
+		tile.blend_rect(floor, Rect2i(0, 0, SIZE, SIZE), Vector2i.ZERO)
+	tile.blend_rect(_resized(sheet), Rect2i(0, 0, SIZE, SIZE), Vector2i.ZERO)
+	return tile
 
 
 func _wall_piece_image(entry: Dictionary) -> Image:

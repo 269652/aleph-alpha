@@ -209,16 +209,44 @@ Player piece placement is retired with them; the player's blueprint build
 places a finished building through the same ledger, and hiring a builder
 for a house returns in the construction-over-time pass. See Status.
 
-### Asset contract (what an artist/generator must deliver per building)
+### Asset contract (what an artist/generator must deliver)
 
-- `assets/sprites/buildings/<building_id>.png`, 1536×1024, 8 columns ×
-  5 rows, black background, magenta cell dividers, the building drawn
-  bottom-anchored and south-facing, occupying the cell's width as the
-  footprint's width. Rows: construction ×8, active ×8 (loop), idle ×8
-  (loop or repeats), burning ×8, ruined ×8.
-- Until a file exists for an id, `ProceduralBuildingPlaceholderSprite`
-  draws a roof-over-walls box of the right footprint so the system is
-  playable and testable without art.
+Everything below lights up by dropping the file in and bumping
+`TerrainRenderer.ATLAS_VERSION` (tiles) or simply relaunching (sheets);
+there is no registry to edit. Until a file exists, a procedural placeholder
+draws so the system is playable and testable without art.
+
+**Building sheets** — `assets/sprites/buildings/<building_id>.png`
+(`house_small`, `house_medium`, `house_large`, `city_hall` …), 1536×1024,
+8 columns × 5 rows, black background, magenta cell dividers. Rows: 0
+construction ×8 (scaffold → shell → roof, left to right), 1 active ×8 (lit
+windows / chimney smoke loop), 2 idle ×8 (loop or repeats), 3 burning ×8,
+4 ruined ×8. Each cell is scaled on screen so the cell's WIDTH equals the
+footprint's width (`footprint_frame_texture`): a `w`-wide house draws
+16·w px wide and 17·w px tall. The bottom `d` tiles of that height are the
+ground footprint — draw the roof there, seen from the top-down camera —
+and everything above overhangs the row north of the house. The door must
+sit on the bottom edge in column `w/2` (integer division, i.e. right of
+centre for a 2-wide house), the whole facade south-facing. Until the
+file exists, `ProceduralBuildingPlaceholderSprite` draws a roof-over-walls
+box of the right footprint. (Construction progress will pick row 0's
+column from `progress` — `clampi(floori(progress × 8), 0, 7)` — once the
+village raises buildings over time; today only row 2 is shown.)
+
+**Furniture tiles** — `assets/sprites/furniture/<piece_id>.png`, one
+square image per `CATEGORY_FURNITURE` piece id (`wood_bed`, `wood_table`,
+`wood_chair`, `wood_rug`, `wood_bookshelf`, `couch`, `photo_frame`,
+`hearth`, `workbench`, `anvil`, `barrel`, `crate`, `chest`, `cupboard`,
+`candle`), any size ≥ 128 px, top-down, the object centred, background
+transparent or the sheets' own near-black / magenta (keyed by the same
+pass the wall sheets use). `IllustratedBuildingPieceSprite` composites it
+over the wood floor and resizes it to `ART_TILE_SIZE` (32 px), so the tile
+stays opaque; until the file exists, `ProceduralBuildingPieceSprite`
+draws the piece. Only a real furniture id is ever looked up there.
+
+**Road tile** — `assets/sprites/terrain/road.png`, one seamless 32 px
+tile, no dividers, no directional variants (see
+[infrastructure.md](infrastructure.md)).
 
 ### Status
 

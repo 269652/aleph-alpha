@@ -71,6 +71,10 @@ const PIECE_IDS: Array[String] = [
 	# Two-story houses (see docs/concept/housing.md). Appended, not
 	# interleaved, per this file's existing convention.
 	"wood_stairs",
+	# The interior furniture set InteriorTemplates v2 draws on (docs/
+	# concept/building.md "Entering": occupation-specific rooms). Appended,
+	# not interleaved.
+	"hearth", "workbench", "anvil", "barrel", "crate", "chest", "cupboard", "candle",
 ]
 
 ## Whether a real piece stands on `cell` or any of its eight neighbours
@@ -282,6 +286,52 @@ const _PIECES := {
 		"category": CATEGORY_STAIRS, "material": MATERIAL_WOOD,
 		"encloses": false, "walkable": true, "durability": 40.0,
 		"cost": {"wood": 4}, "support_capacity": 0.0,
+	},
+	# The interior furniture set (docs/concept/building.md "Entering"):
+	# walkable OUTDOORS like every furniture piece (see is_walkable's own
+	# doc comment) -- HouseInteriorView decides what blocks INSIDE a room.
+	# Costs sit between the existing table (4) and photo frame (1): a
+	# hearth is stone-lined but wood-built here (one material tier, like
+	# the rest of the set); a candle is the cheapest thing in the house.
+	"hearth": {
+		"category": CATEGORY_FURNITURE, "material": MATERIAL_WOOD,
+		"encloses": false, "walkable": true, "durability": 50.0,
+		"cost": {"wood": 3, "stone": 2}, "support_capacity": 0.0,
+	},
+	"workbench": {
+		"category": CATEGORY_FURNITURE, "material": MATERIAL_WOOD,
+		"encloses": false, "walkable": true, "durability": 35.0,
+		"cost": {"wood": 4}, "support_capacity": 0.0,
+	},
+	"anvil": {
+		"category": CATEGORY_FURNITURE, "material": MATERIAL_WOOD,
+		"encloses": false, "walkable": true, "durability": 80.0,
+		"cost": {"wood": 2, "stone": 3}, "support_capacity": 0.0,
+	},
+	"barrel": {
+		"category": CATEGORY_FURNITURE, "material": MATERIAL_WOOD,
+		"encloses": false, "walkable": true, "durability": 25.0,
+		"cost": {"wood": 3}, "support_capacity": 0.0,
+	},
+	"crate": {
+		"category": CATEGORY_FURNITURE, "material": MATERIAL_WOOD,
+		"encloses": false, "walkable": true, "durability": 20.0,
+		"cost": {"wood": 2}, "support_capacity": 0.0,
+	},
+	"chest": {
+		"category": CATEGORY_FURNITURE, "material": MATERIAL_WOOD,
+		"encloses": false, "walkable": true, "durability": 30.0,
+		"cost": {"wood": 3}, "support_capacity": 0.0,
+	},
+	"cupboard": {
+		"category": CATEGORY_FURNITURE, "material": MATERIAL_WOOD,
+		"encloses": false, "walkable": true, "durability": 30.0,
+		"cost": {"wood": 4}, "support_capacity": 0.0,
+	},
+	"candle": {
+		"category": CATEGORY_FURNITURE, "material": MATERIAL_WOOD,
+		"encloses": false, "walkable": true, "durability": 5.0,
+		"cost": {"wood": 1}, "support_capacity": 0.0,
 	},
 }
 

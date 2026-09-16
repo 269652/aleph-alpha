@@ -826,3 +826,14 @@ func test_catalog_knows_honey():
 	var honey := catalog.make("honey")
 	assert_eq(honey.kind, "food")
 	assert_gt(honey.max_stack, 1, "a jar of honey should stack like every other food item")
+
+
+## The interior furniture set (see test_building_piece.gd's own
+## _INTERIOR_FURNITURE_IDS) follows the same "one id, both sides" rule.
+func test_interior_furniture_items_share_their_building_piece_ids():
+	const BuildingPiece = preload("res://src/gameplay/building_piece.gd")
+	for piece_id in ["hearth", "workbench", "anvil", "barrel", "crate", "chest", "cupboard", "candle"]:
+		assert_true(catalog.has(piece_id), piece_id)
+		assert_eq(catalog.kind_of(piece_id), "furniture", piece_id)
+		assert_eq(catalog.make(piece_id).max_stack, 5, piece_id)
+		assert_true(BuildingPiece.has_piece(piece_id), piece_id)
