@@ -1,123 +1,144 @@
 extends RefCounted
 
 ## Authored house interiors (docs/concept/building.md "Entering"): a real
-## room shape per BuildingCatalog interior_family (cottage/house/manor),
+## room plan per BuildingCatalog interior_family (cottage/house/manor),
 ## several variants each, seed-picked so the same house always gets the
 ## same interior on every visit -- "small outside, big inside", the point
-## of the whole pass. Furniture THEME is composed in rather than hand-
-## duplicated per occupation: each shape's `F` slots are filled from
-## HouseDecor.furniture_set_for(occupation) -- the SAME occupation-
-## reasoned table the old per-tile system already used -- cycling through
-## the set when a shape has more slots than the set has items, rather than
-## leaving a slot as bare floor (an empty room reads as unfinished). This
-## is "several variants x 8 occupations" as shape-variants x furniture-
-## sets, not 24+ hand-typed grids repeating the same rooms with different
-## letters.
+## of the whole pass. v2: multi-room plans (a cottage's bedroom and hearth
+## room, a house's bedroom / main room / back room, a manor's four), the
+## resident's REAL occupation deciding what stands in each typed slot
+## (HouseDecor.piece_for_slot -- a smith's workshop slot is an anvil, a
+## farmer's a barrel; a merchant sits on a couch, a farmer on a chair),
+## windows on the outer wall, a candle or two for light, and one cell the
+## resident stands on when they are home.
 ##
-## Grid convention: `#` wall, `.` floor, `D` door (exactly one, on the
-## south/last row -- matches BuildingCatalog's own door-on-the-south-edge
-## convention for the exterior), `F` a furniture slot (always interior,
-## never touching the border). Every template is a real, fully enclosed,
-## single room reachable from the door with no stray disconnected floor
-## (see test_interior_templates.gd's own geometry tests) -- authored by
-## hand as plain rectangles rather than anything fancier, since the
-## interior's OWN shape is not what "several variants" needs to vary on;
-## the furniture theme is.
+## Grid convention (GRAMMAR): `#` wall -- the outer wall or an interior
+## partition (rooms connect through gaps, no interior door piece); `w` a
+## window, outer wall only and never on the door row (the facade); `.`
+## floor; `D` the one exterior door, on the south/last row (matches
+## BuildingCatalog's own door-on-the-south-edge convention); `@` the cell
+## the resident stands on (exactly one, interior floor); slot letters, all
+## interior: `B` bed, `T` table, `C` chair or couch, `R` rug, `S` shelf or
+## cupboard, `P` picture, `K` hearth, `W` the occupation's own workshop
+## piece, `L` a light. Every template is fully enclosed, every non-wall
+## cell reachable from the door, validated directly by
+## test_interior_templates.gd -- authored by hand as plain rectangles.
 
 const HouseDecor = preload("res://src/gameplay/house_decor.gd")
 const PixelNoise = preload("res://src/rendering/pixel_noise.gd")
 
+const GRAMMAR := "#w.D@BTCRSPKWL"
+
+## The "occupation" a player's OWN house is furnished for: every slot is
+## plain floor (no candles either) -- you decorate your own home (docs/
+## concept/housing.md), it does not come pre-furnished for somebody else.
+const UNFURNISHED := "unfurnished"
+
+const _WALL_PIECE_ID := "wood_wall"
+const _WINDOW_PIECE_ID := "wood_window"
+const _FLOOR_PIECE_ID := "wood_floor"
+const _DOOR_PIECE_ID := "wood_door"
+
 const _COTTAGE_VARIANTS: Array = [
 	[
-		"#######",
-		"#.....#",
-		"#.F.F.#",
-		"#.....#",
-		"#.F.F.#",
-		"###D###",
+		"##w###w##",
+		"#B.L#K.T#",
+		"#...#..C#",
+		"#R..#...#",
+		"#....@..#",
+		"#S....W.#",
+		"####D####",
 	],
 	[
-		"#######",
-		"#.....#",
-		"#F...F#",
-		"#.....#",
-		"#F...F#",
-		"#.....#",
-		"###D###",
+		"##w###w##",
+		"#K.T.#B.#",
+		"#..C.#..#",
+		"#....#L.#",
+		"#.@..#..#",
+		"#R....W.#",
+		"####D####",
 	],
 	[
-		"#######",
-		"#.....#",
-		"#..F..#",
-		"#.F.F.#",
-		"#.....#",
-		"###D###",
+		"##w###w##",
+		"#S.....B#",
+		"#...#...#",
+		"#K..#L..#",
+		"#T..#...#",
+		"#C.@....#",
+		"#..W....#",
+		"####D####",
 	],
 ]
 
 const _HOUSE_VARIANTS: Array = [
 	[
-		"#########",
-		"#.......#",
-		"#.F...F.#",
-		"#.......#",
-		"#.F.F.F.#",
-		"#.......#",
-		"####D####",
+		"##w####w###",
+		"#B.L#K..T.#",
+		"#...#.....#",
+		"#R..#..C..#",
+		"#....@....#",
+		"####.######",
+		"#S.W.....P#",
+		"#####D#####",
 	],
 	[
-		"#########",
-		"#.F...F.#",
-		"#.......#",
-		"#.F.F.F.#",
-		"#.......#",
-		"#.F...F.#",
-		"####D####",
+		"###w###w###",
+		"#K..T.#B..#",
+		"#.C...#..L#",
+		"#.....#R..#",
+		"#..@......#",
+		"######.####",
+		"#W.......S#",
+		"#####D#####",
 	],
 	[
-		"#########",
-		"#.......#",
-		"#.F.F.F.#",
-		"#.......#",
-		"#.F...F.#",
-		"#.......#",
-		"####D####",
+		"##w#####w##",
+		"#T..C#S...#",
+		"#K...#..B.#",
+		"#....#..L.#",
+		"#.@.......#",
+		"#.........#",
+		"#R..W...P.#",
+		"#####D#####",
 	],
 ]
 
 const _MANOR_VARIANTS: Array = [
 	[
-		"###########",
-		"#.........#",
-		"#.F.....F.#",
-		"#.........#",
-		"#.F.F.F.F.#",
-		"#.........#",
-		"#.F.....F.#",
-		"#.........#",
-		"#####D#####",
+		"##w###w###w##",
+		"#B.L.#K..T..#",
+		"#....#.....C#",
+		"#R...#......#",
+		"#.....@.....#",
+		"######.######",
+		"#S..W#.P....#",
+		"#....#..C...#",
+		"#.........R.#",
+		"######D######",
 	],
 	[
-		"###########",
-		"#.F.....F.#",
-		"#.........#",
-		"#.F.F.F.F.#",
-		"#.........#",
-		"#.F.....F.#",
-		"#.........#",
-		"#.F.....F.#",
-		"#####D#####",
+		"##w###w###w##",
+		"#K..T.#S...B#",
+		"#..C..#....L#",
+		"#.....#R....#",
+		"#..@........#",
+		"###.###.#####",
+		"#W....#.....#",
+		"#.....#..P..#",
+		"#.....#..C..#",
+		"#######D#####",
 	],
 	[
-		"###########",
-		"#.........#",
-		"#.F.F.F.F.#",
-		"#.........#",
-		"#.F.....F.#",
-		"#.........#",
-		"#.F.F.F.F.#",
-		"#.........#",
-		"#####D#####",
+		"###w###w##w##",
+		"#B..L#T...K.#",
+		"#R...#..C...#",
+		"#....#......#",
+		"#......@....#",
+		"######.######",
+		"#P...#W.....#",
+		"#..S........#",
+		"#....#....C.#",
+		"######D######",
 	],
 ]
 
@@ -129,9 +150,10 @@ const _VARIANTS_BY_FAMILY := {
 
 
 ## An unknown family (should never happen -- BuildingCatalog only ever
-## produces "cottage"/"house"/"manor") falls back to the plainest real
-## shape (cottage) rather than crashing, the same fail-open convention
-## this project uses throughout for an unexpected occupation/id.
+## produces "cottage"/"house"/"manor"; "hall" gets a real plan when the
+## town hall grows an interior) falls back to the plainest real shape
+## (cottage) rather than crashing, the same fail-open convention this
+## project uses throughout for an unexpected occupation/id.
 static func _variants_for(interior_family: String) -> Array:
 	return _VARIANTS_BY_FAMILY.get(interior_family, _COTTAGE_VARIANTS)
 
@@ -165,19 +187,20 @@ static func door_cell_of(grid: Array) -> Vector2i:
 
 
 ## The real, per-house result HouseInteriorView consumes: a flat local
-## Vector2i -> "wall"/"floor"/"door"/<a real BuildingPiece.CATEGORY_
-## FURNITURE id> map, `size` (grid dimensions), and `door_cell` (the local
-## cell HouseInteriorView aligns to the house's real world doorstep).
-## Furniture slots are filled in a fixed, deterministic row-major scan
-## order from HouseDecor.furniture_set_for(occupation), cycling through
-## the set when there are more slots than items.
+## Vector2i -> "wall"/"window"/"floor"/"door"/<a real BuildingPiece.
+## CATEGORY_FURNITURE id> map, `size`, `door_cell` (the local cell
+## HouseInteriorView aligns the exit to), `resident_cell` (where the
+## villager stands when home -- always a floor cell) and `light_cells`
+## (every candle placed). Slots resolve through HouseDecor.piece_for_slot
+## for the resident's own occupation; UNFURNISHED turns every slot into
+## bare floor.
 static func furnish(interior_family: String, occupation: String, seed_value: int) -> Dictionary:
 	var variant_index := choose_variant_index(interior_family, seed_value)
 	var grid := grid_for(interior_family, variant_index)
 	var size := grid_size(grid)
-	var furniture_set := HouseDecor.furniture_set_for(occupation)
 	var cells := {}
-	var furniture_index := 0
+	var resident_cell := Vector2i.ZERO
+	var light_cells: Array = []
 	for y in size.y:
 		var row: String = grid[y]
 		for x in size.x:
@@ -185,11 +208,42 @@ static func furnish(interior_family: String, occupation: String, seed_value: int
 			var ch := row[x]
 			if ch == "#":
 				cells[local] = "wall"
+			elif ch == "w":
+				cells[local] = "window"
 			elif ch == "D":
 				cells[local] = "door"
-			elif ch == "F":
-				cells[local] = furniture_set[furniture_index % furniture_set.size()]
-				furniture_index += 1
-			else:
+			elif ch == "." :
 				cells[local] = "floor"
-	return {"size": size, "door_cell": door_cell_of(grid), "cells": cells, "variant_index": variant_index}
+			elif ch == "@":
+				cells[local] = "floor"
+				resident_cell = local
+			elif occupation == UNFURNISHED:
+				cells[local] = "floor"
+			else:
+				cells[local] = HouseDecor.piece_for_slot(ch, occupation)
+				if ch == "L":
+					light_cells.append(local)
+	return {
+		"size": size, "door_cell": door_cell_of(grid), "cells": cells, "variant_index": variant_index,
+		"resident_cell": resident_cell, "light_cells": light_cells,
+	}
+
+
+## The shape as real BuildingPiece ids -- wall/window/door pieces and
+## wood_floor everywhere else, furniture slots included -- the "ground
+## grid" FurniturePlacement.can_place reads to decide where a player may
+## put a piece inside their own house (docs/concept/housing.md).
+static func piece_grid(interior_family: String, seed_value: int) -> Dictionary:
+	var shape := furnish(interior_family, UNFURNISHED, seed_value)
+	var grid := {}
+	for local in shape["cells"]:
+		match shape["cells"][local]:
+			"wall":
+				grid[local] = _WALL_PIECE_ID
+			"window":
+				grid[local] = _WINDOW_PIECE_ID
+			"door":
+				grid[local] = _DOOR_PIECE_ID
+			_:
+				grid[local] = _FLOOR_PIECE_ID
+	return grid

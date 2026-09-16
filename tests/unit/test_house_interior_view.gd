@@ -157,6 +157,68 @@ func test_camera_is_fit_to_the_rooms_own_size():
 	assert_lte(room_size_px.y, visible.y, "the room's own height must fit in frame")
 
 
+# -- templates v2: windows, the new blocking pieces, lights, the resident cell
+
+func test_a_window_is_painted_as_a_real_window_piece_and_blocks_like_a_wall():
+	view.build("cottage", "farmer", 5, _tile_set, TILE_SIZE, _terrain_renderer)
+	var expected := InteriorTemplates.furnish("cottage", "farmer", 5)
+	var cells: Dictionary = expected["cells"]
+	var windows := 0
+	for local in cells:
+		if cells[local] != "window":
+			continue
+		windows += 1
+		assert_eq(
+			view.tile_map_layer().get_cell_atlas_coords(local),
+			_terrain_renderer.atlas_coords_for_modification("wood_window"), str(local)
+		)
+		assert_not_null(view.collision_body_at(local), "a window is part of the wall: %s" % str(local))
+	assert_gt(windows, 0, "precondition: this template has windows")
+
+
+## A smith's anvil, a hearth, a barrel, a chest, a cupboard block; a candle
+## does not (you walk past a candle on the floor, not through an anvil).
+func test_the_new_workshop_and_storage_pieces_block_but_a_candle_does_not():
+	view.build("cottage", "blacksmith", 5, _tile_set, TILE_SIZE, _terrain_renderer)
+	var expected := InteriorTemplates.furnish("cottage", "blacksmith", 5)
+	var cells: Dictionary = expected["cells"]
+	var checked := {}
+	for local in cells:
+		var value: String = cells[local]
+		match value:
+			"anvil", "hearth":
+				assert_not_null(view.collision_body_at(local), "%s should block" % value)
+				checked[value] = true
+			"candle":
+				assert_null(view.collision_body_at(local), "a candle should not block")
+				checked[value] = true
+	for value in ["anvil", "hearth", "candle"]:
+		assert_true(checked.has(value), "precondition: a %s was actually placed" % value)
+
+
+func test_every_light_cell_gets_a_real_glow_quad_centred_on_it():
+	view.build("house", "nurse", 4, _tile_set, TILE_SIZE, _terrain_renderer)
+	var expected := InteriorTemplates.furnish("house", "nurse", 4)
+	var light_cells: Array = expected["light_cells"]
+	assert_gt(light_cells.size(), 0, "precondition")
+	var glows: Array = view.light_glows()
+	assert_eq(glows.size(), light_cells.size(), "one glow per candle")
+	for i in glows.size():
+		var glow: MeshInstance2D = glows[i]
+		var centre: Vector2 = (Vector2(light_cells[i]) + Vector2(0.5, 0.5)) * TILE_SIZE
+		assert_almost_eq(glow.position.x, centre.x, 0.01)
+		assert_almost_eq(glow.position.y, centre.y, 0.01)
+		assert_not_null(glow.material, "the glow uses the real additive TorchGlow material")
+
+
+func test_the_resident_cell_is_a_real_open_floor_cell_of_the_room():
+	view.build("manor", "hunter", 6, _tile_set, TILE_SIZE, _terrain_renderer)
+	var cell: Vector2i = view.resident_cell
+	assert_eq(cell, InteriorTemplates.furnish("manor", "hunter", 6)["resident_cell"])
+	assert_null(view.collision_body_at(cell), "the resident stands on open floor")
+	assert_true(cell.x > 0 and cell.y > 0 and cell.x < view.size.x - 1 and cell.y < view.size.y - 1)
+
+
 ## A bigger room (manor) needs LESS magnification than a smaller one
 ## (cottage) to still fit the same design resolution -- the concrete,
 ## observable difference the fit-to-content formula exists to produce, as

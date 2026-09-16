@@ -44,6 +44,7 @@ const INTERIOR_Z_INDEX := 10
 const INTERIOR_OCCUPANT_Z_INDEX := 11
 
 const _WALL_PIECE_ID := "wood_wall"
+const _WINDOW_PIECE_ID := "wood_window"
 const _FLOOR_PIECE_ID := "wood_floor"
 const _DOOR_PIECE_ID := "wood_door"
 
@@ -54,9 +55,20 @@ const _DOOR_PIECE_ID := "wood_door"
 ## furniture-id rule (see that file's own doc comment on why furniture
 ## never blocks OUTDOORS): an interior room is small and meant to be
 ## navigated around its own furniture, unlike a sprawling exterior plot.
+## The v2 workshop/storage pieces are solid things you walk around; a
+## candle is not.
 const _BLOCKING_FURNITURE_IDS := {
 	"wood_bed": true, "wood_table": true, "wood_bookshelf": true, "couch": true,
+	"hearth": true, "workbench": true, "anvil": true, "barrel": true,
+	"crate": true, "chest": true, "cupboard": true,
 }
+
+## A candle's glow: the same additive TorchGlow material the player's own
+## torch uses (docs/concept/lighting.md), one quad per light cell, sized to
+## light a room's corner rather than the outdoor torch's 7.5 m -- tuned by
+## eye once and pinned, like every other radius here.
+const INTERIOR_LIGHT_RADIUS_TILES := 3.0
+const TorchGlow = preload("res://src/rendering/torch_glow.gd")
 
 ## door_cell/size mirror InteriorTemplates.furnish's own output exactly,
 ## exposed here for callers that need to reason about the room's shape
@@ -67,12 +79,17 @@ var size: Vector2i
 ## furnish) -- the resident's real one from the building record, or the
 ## seed-derived fallback for a house nobody was recorded for.
 var occupation: String = ""
+## Where the resident stands when they're home (InteriorTemplates' own
+## `@` cell -- always open floor).
+var resident_cell: Vector2i
 
 var _tile_map_layer: TileMapLayer
 var _backdrop: ColorRect
 var _camera: Camera2D
 var _collision_bodies: Dictionary = {}  # local Vector2i -> StaticBody2D
+var _light_glows: Array = []  # MeshInstance2D per light cell, in template order
 var _tile_size := 16
+var _torch_glow := TorchGlow.new()
 
 ## A little room in front of the walls so they never touch the screen
 ## edge -- purely cosmetic now (the SubViewport itself is what actually
@@ -107,6 +124,7 @@ func build(
 	occupation = for_occupation
 	size = result["size"]
 	door_cell = result["door_cell"]
+	resident_cell = result["resident_cell"]
 	var cells: Dictionary = result["cells"]
 	_tile_size = tile_size
 	var room_size_px := Vector2(size) * tile_size
@@ -127,8 +145,14 @@ func build(
 	for local: Vector2i in cells:
 		var value: String = cells[local]
 		_tile_map_layer.set_cell(local, 0, terrain_renderer.atlas_coords_for_modification(_piece_id_for(value)))
-		if value == "wall" or _BLOCKING_FURNITURE_IDS.has(value):
+		if value == "wall" or value == "window" or _BLOCKING_FURNITURE_IDS.has(value):
 			_add_collision_at(local)
+
+	# One additive glow per candle (see INTERIOR_LIGHT_RADIUS_TILES) -- the
+	# outdoor torch's own material and quad shape (World._update_torch_glow),
+	# so a lit room reads the same way a lit night does.
+	for light_cell: Vector2i in result["light_cells"]:
+		_light_glows.append(_add_glow_at(light_cell))
 
 	# A real physical stop one cell past the door, always present (not
 	# part of InteriorTemplates' own grid -- every template ends its grid
@@ -205,14 +229,33 @@ func is_on_exit(local_position: Vector2) -> bool:
 	return local_position.distance_to(door_center) <= _EXIT_RADIUS_PX
 
 
+func light_glows() -> Array:
+	return _light_glows
+
+
 func _piece_id_for(cell_value: String) -> String:
 	if cell_value == "wall":
 		return _WALL_PIECE_ID
+	if cell_value == "window":
+		return _WINDOW_PIECE_ID
 	if cell_value == "floor":
 		return _FLOOR_PIECE_ID
 	if cell_value == "door":
 		return _DOOR_PIECE_ID
 	return cell_value  # already a real furniture id
+
+
+func _add_glow_at(local: Vector2i) -> MeshInstance2D:
+	var radius_px := INTERIOR_LIGHT_RADIUS_TILES * _tile_size
+	var quad := QuadMesh.new()
+	quad.size = Vector2(radius_px, radius_px) * 2.0
+	var glow := MeshInstance2D.new()
+	glow.mesh = quad
+	glow.material = _torch_glow.material()
+	glow.position = (Vector2(local) + Vector2(0.5, 0.5)) * _tile_size
+	glow.z_index = 1  # over the floor and furniture, under the occupant
+	add_child(glow)
+	return glow
 
 
 func _add_collision_at(local: Vector2i) -> void:

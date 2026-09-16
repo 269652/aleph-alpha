@@ -162,13 +162,25 @@ player houses already use; the per-cell `_piece_property_id` and the
 per-villager-index id are retired.
 
 **Entering** (`HouseInteriorView`): standing on a doorstep shows "Enter";
-the interior is an authored `InteriorTemplates` grid (walls, floor, door,
-furniture ids from the existing furniture catalog, several variants per
-interior family × occupation, picked by the house's seed), drawn from the
-existing tile set (the illustrated floor/wall/furniture tiles), its walls
-and blocking furniture (bed, table, bookshelf, couch) as bodies on their
-own `INTERIOR_COLLISION_LAYER`, plus a real threshold body one cell past
-the door so nothing but the real Leave action gets a player out. This is
+the interior is an authored `InteriorTemplates` room plan — v2
+(2026-09-16): multi-room (interior partitions with gaps; a cottage's
+bedroom and hearth room, a house's three rooms, a manor's four), windows
+on the outer wall, one or two candles for light, one cell the resident
+stands on when home, and typed slots (bed, table, seat, rug, shelf,
+picture, hearth, workshop piece, light) that `HouseDecor.piece_for_slot`
+fills for the resident's REAL occupation (from the building record — a
+smith's workshop slot is an anvil, a farmer's a barrel, a merchant sits on
+a couch and shelves books where a working household has a chair and a
+cupboard); three plans per family, picked by the house's seed, every plan
+validated (enclosed, one south door, every room reachable). Drawn from the
+existing tile set (the illustrated floor/wall/window/furniture tiles —
+furniture is procedural until its PNG lands, see the asset contract), its
+walls, windows and solid furniture (bed, table, bookshelf, couch, hearth,
+workbench, anvil, barrel, crate, chest, cupboard — a chair, rug, picture
+or candle you walk past) as bodies on their own `INTERIOR_COLLISION_LAYER`,
+each candle an additive `TorchGlow` quad, plus a real threshold body one
+cell past the door so nothing but the real Leave action gets a player
+out. This is
 built inside an **isolated `SubViewport`** (`World._build_interior_view`,
 the same real "a separate scene, not paint" pattern the character
 creator's own diorama already uses), stretched full-screen through a
