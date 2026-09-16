@@ -418,13 +418,13 @@ func _step_hunt(delta: float, is_working: bool):
 			# advance() is a no-op outside TAKING; this is just the
 			# look-around clock ticking, same as the Lumberjack's own.
 			_forager.advance(delta)
-			# Scanned every working frame, not only once the look-around
+			# Asked every working frame, not only once the look-around
 			# interval is up: the answer decides whether the regional
 			# fallback applies at all (see _on_real_quarry), which is a
 			# question about the region, not about this villager's own
-			# readiness to walk. Once the interval HAS passed the
-			# Lumberjack's own seeking step scans every frame anyway, so
-			# this costs the same order of work it already did.
+			# readiness to walk. The underlying scan is throttled and
+			# cached (see _quarry_in_reach), so asking costs nothing most
+			# frames.
 			var found = _quarry_in_reach(delta)
 			_on_real_quarry = found != null
 			if found == null or not _forager.can_commit():
@@ -548,8 +548,7 @@ func _strike_quarry() -> void:
 	_take_carcass_at(kill_position)
 	if economy != null:
 		economy.record_real_catch(meat)
-	_quarry = null
-	_forager.finish_take()
+	_end_take()
 
 
 ## One cast, through the SAME EarthChunkManager.catch_nearest_fish the
@@ -573,17 +572,26 @@ func _cast_at_quarry() -> void:
 		return
 	if economy != null:
 		economy.record_real_catch(1)
+	_end_take()
+
+
+## The quarry is taken -- back out to look for the next. The scan is due
+## again immediately rather than an interval from now: the rest of the herd
+## is standing right there, and an interval spent not knowing that is an
+## interval of conjured drip after every single kill.
+func _end_take() -> void:
 	_quarry = null
+	_scanned_quarry = null
+	_quarry_scan_elapsed = QUARRY_SCAN_INTERVAL
 	_forager.finish_take()
 
 
-## The quarry is gone. Back to looking around, with a fresh look-around
-## clock.
+## The quarry is gone -- killed by something else, fled, taken by another
+## villager, or its chunk unloaded. Back to looking around, with a fresh
+## look-around clock and, for the same reason as above, a scan due now.
 func _give_up_on_quarry():
 	_quarry = null
 	_scanned_quarry = null
-	# Due again immediately: whatever replaced the lost quarry is worth
-	# knowing about now, not an interval from now.
 	_quarry_scan_elapsed = QUARRY_SCAN_INTERVAL
 	_forager.abort()
 	return null

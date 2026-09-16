@@ -371,3 +371,17 @@ func test_the_very_first_working_frame_already_knows_whether_quarry_is_there():
 	_creature_at(Vector2(-100.0, 0.0))
 	_run(0.1, 0.1)
 	assert_almost_eq(market.total_stock(), 0.0, 0.0001)
+
+
+func test_the_frame_after_a_kill_already_knows_the_next_deer_is_there():
+	# Otherwise every kill is followed by a scan interval of conjured drip
+	# with the rest of the herd standing right there. Asserted on the gate
+	# itself rather than on market stock, because the drip accumulates
+	# sub-unit and a fraction of a food unit never reaches the market to
+	# be seen (NpcEconomy._gather's FOOD_UNIT accumulation loop) -- it is
+	# a real leak that a stock assertion simply cannot observe.
+	var first := _creature_at(Vector2(-20.0, 0.0))
+	_creature_at(Vector2(-40.0, 0.0))
+	_hunt_until_dead(first)
+	_run(0.1, 0.1)
+	assert_true(marker._on_real_quarry, "the herd is still there; the drip must stay off")
