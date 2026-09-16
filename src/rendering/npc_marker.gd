@@ -394,7 +394,7 @@ func face_movement(direction: Vector2) -> void:
 ## market the moment it is taken, and adding a haul for symmetry would mean
 ## inventing a building to haul it to.
 ##
-## One skeleton for both quarry kinds, with the three things that genuinely
+## One skeleton for both quarry kinds, with the four things that genuinely
 ## differ behind _find_quarry / _quarry_position / _reach / _take_quarry: a
 ## deer and a trout are approached, lost and given up on in exactly the
 ## same way, and writing that twice is how the two drift apart.
