@@ -2489,14 +2489,14 @@ func exit_building() -> void:
 ## _floor_transition_step already uses) rather than Godot's own
 ## just_pressed, so holding the key down never repeatedly toggles
 ## indoors/outdoors every physics frame. Outdoors: standing on a real
-## building's own doorstep enters it, picking a deterministic pseudo-
-## occupation from the house's own seed for furniture theming (see
-## InteriorTemplates.furnish) -- the real resident's own occupation isn't
-## wired onto the building record yet (a named, small follow-up; see
-## docs/progress.md), so this is seed-varied rather than tied to a
-## specific villager for now. Indoors: standing on the interior's own
-## exit cell leaves. A single action covers both directions since the two
-## states are mutually exclusive by construction.
+## building's own doorstep enters it, furnished for its resident's REAL
+## occupation (on the building record since place_building learned who
+## lives there); a house nobody was recorded for (a player's own, or an
+## old save not yet healed by its next village reload) falls back to a
+## deterministic pseudo-occupation from the house's own seed so it is
+## never bare. Indoors: standing on the interior's own exit cell leaves. A
+## single action covers both directions since the two states are mutually
+## exclusive by construction.
 func _enter_exit_step() -> void:
 	var pressed := Input.is_action_pressed("enter")
 	var just_pressed := pressed and not _enter_key_was_pressed
@@ -2517,8 +2517,10 @@ func _enter_exit_step() -> void:
 	var building_id: String = record["id"]
 	var interior_family := BuildingCatalog.interior_family_of(building_id)
 	var seed_value: int = record["seed"]
-	var occupations := HouseDecor.FURNITURE_SET_BY_OCCUPATION.keys()
-	var occupation: String = occupations[PixelNoise.range_index(seed_value, 0, 1, occupations.size())]
+	var occupation: String = record.get("occupation", "")
+	if occupation == "":
+		var occupations := HouseDecor.FURNITURE_SET_BY_OCCUPATION.keys()
+		occupation = occupations[PixelNoise.range_index(seed_value, 0, 1, occupations.size())]
 
 	var interior_view := HouseInteriorView.new()
 	var renderer := _chunk_manager.terrain_renderer()

@@ -63,6 +63,10 @@ const _BLOCKING_FURNITURE_IDS := {
 ## without re-deriving it.
 var door_cell: Vector2i
 var size: Vector2i
+## The occupation this room was furnished for (see InteriorTemplates.
+## furnish) -- the resident's real one from the building record, or the
+## seed-derived fallback for a house nobody was recorded for.
+var occupation: String = ""
 
 var _tile_map_layer: TileMapLayer
 var _backdrop: ColorRect
@@ -96,10 +100,11 @@ const _CAMERA_FIT_MARGIN := 0.85
 ## convention every sibling overlay layer (roof/furniture/upper floor)
 ## already follows.
 func build(
-	interior_family: String, occupation: String, seed_value: int,
+	interior_family: String, for_occupation: String, seed_value: int,
 	shared_tile_set: TileSet, tile_size: int, terrain_renderer: TerrainRenderer
 ) -> void:
-	var result := InteriorTemplates.furnish(interior_family, occupation, seed_value)
+	var result := InteriorTemplates.furnish(interior_family, for_occupation, seed_value)
+	occupation = for_occupation
 	size = result["size"]
 	door_cell = result["door_cell"]
 	var cells: Dictionary = result["cells"]

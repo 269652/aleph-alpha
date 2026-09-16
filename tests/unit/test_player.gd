@@ -44,6 +44,7 @@ const PlayerIdentity = preload("res://src/emergence/player_identity.gd")
 const ConstructionProject = preload("res://src/emergence/construction_project.gd")
 const HouseInteriorView = preload("res://src/rendering/house_interior_view.gd")
 const BuildingCatalog = preload("res://src/gameplay/building_catalog.gd")
+const HouseDecor = preload("res://src/gameplay/house_decor.gd")
 
 const TILE_SIZE := TerrainRenderer.TILE_SIZE
 
@@ -4126,6 +4127,40 @@ func test_entering_a_building_dresses_the_avatar_as_the_player():
 	var view: CharacterView = player._interior_avatar.character_view()
 	assert_not_null(view, "the avatar must carry a real CharacterView")
 	assert_true(view.is_slot_equipped("tool"), "the held sword must show on the indoor avatar")
+
+
+# -- whose house it is drives what's inside ----------------------------------
+#
+# docs/concept/building.md "Entering": the resident's REAL occupation (now on
+# the building record, see place_building) drives the interior -- a
+# merchant's house is furnished as a merchant's, not as whatever the house's
+# seed happened to roll.
+
+func _enter_the_house_placed_at(origin: Vector2i, occupation: String, resident_seed: int) -> void:
+	_register_all_keybindings()
+	chunk_manager.place_building(Vector2i(0, 0), origin, "house_small", Vector2i(0, 1), 1, "", occupation, resident_seed)
+	var doorstep_global: Vector2i = origin + BuildingCatalog.doorstep_of("house_small")
+	player.position = (Vector2(doorstep_global) + Vector2(0.5, 0.5)) * TILE_SIZE
+	Input.action_press("enter")
+	player._enter_exit_step()
+	Input.action_release("enter")
+	assert_true(player.is_indoors(), "precondition: entered")
+
+
+func test_entering_a_house_furnishes_it_for_its_own_residents_occupation():
+	_enter_the_house_placed_at(Vector2i(10, 10), "merchant", 4242)
+	assert_eq(player._interior_view.occupation, "merchant")
+
+
+## A record from before the resident fields existed (occupation "") keeps
+## today's fallback -- a deterministic pseudo-occupation from the house's
+## own seed -- so an old save's houses stay furnished rather than bare.
+func test_entering_a_house_with_no_recorded_resident_still_gets_a_real_occupation():
+	_enter_the_house_placed_at(Vector2i(10, 10), "", 0)
+	assert_true(
+		HouseDecor.FURNITURE_SET_BY_OCCUPATION.has(player._interior_view.occupation),
+		"got %s" % player._interior_view.occupation
+	)
 
 
 func test_enter_exit_step_does_nothing_far_from_any_doorstep():
