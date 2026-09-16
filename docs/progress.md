@@ -23106,8 +23106,10 @@ scanning the real creature group, walking to a living wild animal, and
 striking it with the same `take_damage()` a wolf's own bite calls. Four
 exclusions, each grounded: not a predator (`NpcProduction` pays a hunter by
 `herbivore_population_near`, so prey is what a hunter takes), not a world
-boss (`BossAggro` would wake it into the village), not tamed, and alive and
-still really here.
+boss (`BossAggro` would wake it into the village), nothing the player has a
+stake in (`CreatureMarker.is_player_invested`'s own broader line, so a
+half-tamed horse on a rope is off the list well before `Taming.is_tame`'s
+threshold), and alive and still really here.
 
 ✅ **The fisher actually fishes.** Both hooks already existed for the
 player's own rod and for a diving bird — `nearest_fish_position` and

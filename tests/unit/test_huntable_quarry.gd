@@ -72,6 +72,23 @@ class BareCreature:
 	var info = StubInfo.new()
 
 
+## A creature answering the BROADER of the two ownership questions:
+## CreatureMarker.is_player_invested ("whose books is this animal on") is
+## true for anything the player has fed even once or has on a rope, well
+## before Taming.is_tame's trust threshold is reached.
+class InvestedCreature:
+	extends RefCounted
+	var position := Vector2.ZERO
+	var info = StubInfo.new()
+	var invested := true
+
+	func is_tame() -> bool:
+		return false
+
+	func is_player_invested() -> bool:
+		return invested
+
+
 func _quarry_at(at: Vector2) -> StubCreature:
 	var c := StubCreature.new()
 	c.position = at
@@ -103,6 +120,20 @@ func test_a_world_boss_is_not_quarry():
 	var boss := _quarry_at(Vector2.ZERO)
 	boss.info.is_world_boss = true
 	assert_false(HuntableQuarry.is_quarry(boss))
+
+
+func test_an_animal_the_player_has_a_stake_in_is_not_quarry():
+	# A half-tamed horse the player has been feeding, or one on a rope,
+	# is not yet is_tame() -- but it is already off the wild books
+	# (CreatureMarker.is_player_invested's own framing), and spearing it
+	# for the stew would be a bug, not emergence.
+	assert_false(HuntableQuarry.is_quarry(InvestedCreature.new()))
+
+
+func test_an_uninvested_animal_that_answers_the_question_is_still_quarry():
+	var wild := InvestedCreature.new()
+	wild.invested = false
+	assert_true(HuntableQuarry.is_quarry(wild))
 
 
 func test_a_tamed_animal_is_not_quarry():

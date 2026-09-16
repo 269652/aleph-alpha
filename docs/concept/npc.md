@@ -423,9 +423,12 @@ up on identically and writing that twice is how the two drift apart.
   calls. Four exclusions, each grounded rather than chosen: **not a
   predator** (`NpcProduction` pays a hunter by `herbivore_population_near`,
   so prey is what a hunter takes), **not a world boss** (`BossAggro` would
-  wake it into the village), **not tamed** (it belongs to somebody, see
-  [taming.md](taming.md)), and **alive and still really here** (a creature
-  killed earlier in the frame stays in its group until the frame boundary).
+  wake it into the village), **nothing the player has a stake in** — the
+  broader line `CreatureMarker.is_player_invested` already draws, so an
+  animal the player has fed even once or has on a rope is off the list
+  well before `Taming.is_tame`'s threshold ([taming.md](taming.md)) — and
+  **alive and still really here** (a creature killed earlier in the frame
+  stays in its group until the frame boundary).
 - ✅ **The fisher** walks to the water and casts through the two hooks the
   player's own rod and a diving bird already use —
   `nearest_fish_position` and `catch_nearest_fish`, the latter of which

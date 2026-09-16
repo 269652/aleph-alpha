@@ -35,10 +35,14 @@ const CreatureMass = preload("res://src/world/creature_mass.gd")
 ##    out of the plaza and waking one is not a hunt, it is an accident the
 ##    village cannot survive -- and CreatureMarker.take_damage's own boss
 ##    branch makes it a coin-flip whether the blow even lands.
-## 3. **Not tamed.** A tame animal belongs to somebody
-##    (docs/concept/taming.md); Taming.is_tame is the same trust threshold
-##    the player earns. A village that eats the player's tamed mount is a
-##    bug, not emergence.
+## 3. **Not something the player has a stake in.** The line
+##    CreatureMarker.is_player_invested already draws -- "whose books is
+##    this animal on" -- and it is deliberately BROADER than taming: an
+##    animal the player has fed even once, or has on a rope, is off the
+##    wild books well before Taming.is_tame's trust threshold is reached
+##    (docs/concept/taming.md). Both questions are asked, because the
+##    narrower one is what a simpler double exposes and a half-tamed horse
+##    speared for the stew is a bug either way, not emergence.
 ## 4. **Alive, and still really here.** Zero health is a Carcass's job (see
 ##    docs/concept/carrion.md), and a creature killed earlier this frame
 ##    stays in the "creature" group until the frame boundary -- the exact
@@ -95,6 +99,8 @@ static func is_quarry(candidate) -> bool:
 	if info.health <= 0.0:
 		return false
 	if info.is_predator or info.is_world_boss:
+		return false
+	if candidate.has_method("is_player_invested") and candidate.is_player_invested():
 		return false
 	if candidate.has_method("is_tame") and candidate.is_tame():
 		return false
