@@ -63,6 +63,25 @@ func before_each():
 	_civic_doorstep = plot["doorstep"]
 	_scrub()
 	manager._load_chunk(_chunk_coord)
+	_clear_the_founded_hall(_chunk_coord)
+
+
+## Founding now gives a village its civic seat outright
+## (VillageRenderer._place_civic_if_missing): a village the player
+## discovers has been standing for years. THIS file is about the other
+## case -- a village that does not have one yet and raises it over real
+## labour -- so it puts the plot back the way founding found it: lifts the
+## hall and re-lays the square's paving underneath, which is exactly the
+## state the plaza is in before any hall exists.
+func _clear_the_founded_hall(coord: Vector2i) -> void:
+	var origin: Vector2i = VillageLayout.skeleton(CHUNK_SIZE, VillageLayout.seed_for(coord))["civic_plot"]["origin"]
+	if not manager.remove_building(coord, origin):
+		return
+	var cells: Array = BuildingCatalog.footprint_cells("city_hall", origin)
+	cells.append(origin + BuildingCatalog.doorstep_of("city_hall"))
+	for local in cells:
+		var g: Vector2i = coord * CHUNK_SIZE + local
+		manager.build_at_global(g.x, g.y, TerrainRenderer.ROAD_TILE_ID)
 
 
 func after_each():
@@ -106,6 +125,7 @@ func _find_settlement_chunk() -> Vector2i:
 			loads += 1
 			_scrub_chunk(coord)
 			manager._load_chunk(coord)
+			_clear_the_founded_hall(coord)
 			var plot_origin = manager._civic_plot_origin_for(coord)
 			manager._unload_chunk(coord)
 			_scrub_chunk(coord)
