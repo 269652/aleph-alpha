@@ -13404,7 +13404,7 @@ func _spawn_building_node(chunk_coord: Vector2i, origin_local: Vector2i, record:
 	# variant sheet would be thrown away at.
 	var texture := _illustrated_structure_sprite.footprint_frame_texture(
 		sheet["path"], sheet["columns"], sheet["rows"], sheet["row"], sheet["column"],
-		TerrainRenderer.ART_TILE_SIZE, footprint.x
+		TerrainRenderer.ART_TILE_SIZE, footprint.x, sheet["detected_grid"]
 	)
 	if texture == null and sheet["path"] != BuildingCatalog.sheet_of(building_id):
 		# A declared variant sheet that is not on disk yet: fall back to the

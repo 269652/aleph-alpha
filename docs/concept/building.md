@@ -277,8 +277,7 @@ box of the right footprint. (Construction progress will pick row 0's
 column from `progress` — `clampi(floori(progress × 8), 0, 7)` — once the
 village raises buildings over time; today only row 2 is shown.)
 
-**Building variant sheets** — `assets/sprites/buildings/<building_id>_
-variants.png`, a plain **5 columns x 5 rows** grid of 25 complete
+**Building variant sheets** — `assets/sprites/buildings/<sheet name>.png`, a plain **5 columns x 5 rows** grid of 25 complete
 buildings, one per cell, **black background, NO magenta dividers**, each
 house drawn in the same 3/4 top-down view and the same scale as its
 neighbours, its ground footprint at the bottom of its own cell exactly as

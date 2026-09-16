@@ -254,9 +254,9 @@ const VARIANT_SHEET_ROWS := 5
 ## drawn as a cottage would be drawing the wrong building, and each of
 ## those already has its own real lifecycle sheet.
 const _VARIANT_SHEETS := {
-	"house_small": "res://assets/sprites/buildings/house_small_variants.png",
-	"house_medium": "res://assets/sprites/buildings/house_small_variants.png",
-	"house_large": "res://assets/sprites/buildings/house_small_variants.png",
+	"house_small": "res://assets/sprites/buildings/house_1.png",
+	"house_medium": "res://assets/sprites/buildings/house_1.png",
+	"house_large": "res://assets/sprites/buildings/house_1.png",
 }
 
 
@@ -295,12 +295,14 @@ static func finished_sheet_for(building_id: String, seed_value: int) -> Dictiona
 	if variant_sheet == "":
 		return {
 			"path": sheet_of(building_id), "columns": SHEET_COLUMNS, "rows": SHEET_ROWS,
-			"row": ROW_IDLE, "column": 0,
+			"row": ROW_IDLE, "column": 0, "detected_grid": false,
 		}
 	var cell := variant_cell_for(building_id, seed_value)
+	# A variant sheet's cells are found in its own background gutters, not
+	# assumed to sit on an exact pitch (see VariantSheetGrid).
 	return {
 		"path": variant_sheet, "columns": VARIANT_SHEET_COLUMNS, "rows": VARIANT_SHEET_ROWS,
-		"row": cell.y, "column": cell.x,
+		"row": cell.y, "column": cell.x, "detected_grid": true,
 	}
 
 

@@ -409,7 +409,7 @@ func test_every_village_house_draws_from_the_first_tier_cottage_sheet():
 	for building_id in BuildingCatalog.BUILDING_IDS:
 		assert_eq(
 			BuildingCatalog.variant_sheet_of(building_id),
-			"res://assets/sprites/buildings/house_small_variants.png",
+			"res://assets/sprites/buildings/house_1.png",
 			"%s should draw from the village cottage sheet" % building_id
 		)
 

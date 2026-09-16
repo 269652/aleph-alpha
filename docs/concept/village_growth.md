@@ -373,7 +373,7 @@ Implemented 2026-09-16, TDD red-first throughout. See
   repeated. The pipeline, the seeded pick (all 25 test-pinned as reachable)
   and the fallback chain are real and tested; it lights up for all three
   village houses the moment
-  `assets/sprites/buildings/house_small_variants.png` is dropped in, and
+  `assets/sprites/buildings/house_1.png` is dropped in, and
   changes nothing until then. All three share the one sheet on purpose: no
   house had a lifecycle sheet of its own at all, so declaring the art for
   only the smallest tier would leave a street half cottages and half
