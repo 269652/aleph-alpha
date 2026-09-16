@@ -58,6 +58,8 @@ var _hunters_measured := {}
 var _hunters_with_nothing_alive := {}
 var _creature_counts: Array = []
 var _distances: Array = []
+var _simulated := false
+var _hunt_report: Array = []
 
 
 func _initialize() -> void:
@@ -115,6 +117,16 @@ func _sample() -> void:
 			_hunters_measured[key] = true
 		if distance <= _huntable_quarry.SEARCH_RADIUS_PX:
 			_hunters_with_quarry[key] = true
+			# Simulated HERE, the first time a hunter really has quarry in
+			# reach, rather than after the walk: chunks evict behind a
+			# moving player, so by the end of the walk the hunter that had
+			# something to hunt is a detached node that can find nothing.
+			# The cost is that availability sampling past this point sees a
+			# world where one hunter has been working for a few simulated
+			# days -- a handful of animals out of the ~30 loaded.
+			if not _simulated:
+				_simulated = true
+				_measure_one_hunt(hunter)
 
 
 func _report() -> void:
@@ -151,22 +163,12 @@ func _report() -> void:
 			% [_huntable_quarry.SEARCH_RADIUS_PX, _huntable_quarry.SEARCH_RADIUS_PX / 16.0]
 		)
 
-	# Picked from what is loaded NOW, not from somewhere back along the walk:
-	# chunks evict behind a moving player, and a hunter whose chunk is gone
-	# is a detached node that can find nothing.
-	var subject = null
-	for hunter in _hunters_in(_manager):
-		var quarry = _huntable_quarry.nearest(
-			get_nodes_in_group(_huntable_quarry.QUARRY_GROUP_NAME), hunter.workspot_position
-		)
-		if quarry != null:
-			subject = hunter
-			break
-	if subject != null and subject.is_inside_tree():
-		_measure_one_hunt(subject)
-	else:
+	if _hunt_report.is_empty():
 		print("")
-		print("no hunter with quarry in reach is loaded right now to simulate")
+		print("no hunter ever had quarry in reach to simulate")
+		return
+	for line in _hunt_report:
+		print(line)
 
 
 ## Runs one real hunter forward and reports what the village actually got,
@@ -185,13 +187,15 @@ func _measure_one_hunt(hunter) -> void:
 
 	var after := get_nodes_in_group(_huntable_quarry.QUARRY_GROUP_NAME).size()
 	var drip: float = _npc_production.PRODUCTION_RATE_PER_SECOND * headcount * SIMULATED_SECONDS
-	print("")
-	print("-- one real hunter, %.0f simulated seconds --" % SIMULATED_SECONDS)
-	print("regional herbivore headcount:            %.3f" % headcount)
-	print("huntable creatures before / after:       %d / %d" % [before, after])
-	print("real meat into the market:               %.2f" % (market.stock.get("meat", 0.0) - meat_before))
-	print("real hide into the market:               %.2f" % (market.stock.get("hide", 0.0) - hide_before))
-	print("what the old conjured drip would pay:    %.2f" % drip)
+	_hunt_report = [
+		"",
+		"-- one real hunter, %.0f simulated seconds --" % SIMULATED_SECONDS,
+		"regional herbivore headcount:            %.3f" % headcount,
+		"huntable creatures before / after:       %d / %d" % [before, after],
+		"real meat into the market:               %.2f" % (market.stock.get("meat", 0.0) - meat_before),
+		"real hide into the market:               %.2f" % (market.stock.get("hide", 0.0) - hide_before),
+		"what the old conjured drip would pay:    %.2f" % drip,
+	]
 
 
 ## Every hunter villager in every village this manager currently holds.
