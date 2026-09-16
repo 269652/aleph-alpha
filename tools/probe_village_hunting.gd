@@ -180,10 +180,28 @@ func _measure_one_hunt(hunter) -> void:
 	var before := get_nodes_in_group(_huntable_quarry.QUARRY_GROUP_NAME).size()
 	var headcount: float = _manager.herbivore_population_near(hunter.workspot_position)
 
+	# What state this villager is actually IN when found matters more than
+	# the throughput number: a hungry villager's schedule is overridden to
+	# "eat" at the well (NpcMarker._process), which switches is_working off
+	# -- and a villager who is not working neither hunts NOR gathers. With
+	# an empty village market and an empty purse there is nothing to buy
+	# either, so that state is self-sustaining.
+	var hunger_before: float = hunter.economy.needs.hunger
+	var hungry_before: bool = hunter.economy.needs.is_hungry()
+	var market_food_before: float = market.total_stock()
+
 	var elapsed := 0.0
+	var working_ticks := 0
+	var quarry_ticks := 0
+	var total_ticks := 0
 	while elapsed < SIMULATED_SECONDS:
 		hunter._process(SLICE)
 		elapsed += SLICE
+		total_ticks += 1
+		if not hunter.economy.needs.is_hungry():
+			working_ticks += 1
+		if hunter._on_real_quarry:
+			quarry_ticks += 1
 
 	var after := get_nodes_in_group(_huntable_quarry.QUARRY_GROUP_NAME).size()
 	var drip: float = _npc_production.PRODUCTION_RATE_PER_SECOND * headcount * SIMULATED_SECONDS
@@ -195,6 +213,11 @@ func _measure_one_hunt(hunter) -> void:
 		"real meat into the market:               %.2f" % (market.stock.get("meat", 0.0) - meat_before),
 		"real hide into the market:               %.2f" % (market.stock.get("hide", 0.0) - hide_before),
 		"what the old conjured drip would pay:    %.2f" % drip,
+		"hunger when found:                       %.3f (hungry: %s)" % [hunger_before, hungry_before],
+		"village market stock when found:         %.2f" % market_food_before,
+		"ticks not hungry (i.e. free to work):    %d / %d" % [working_ticks, total_ticks],
+		"ticks with real quarry in reach:         %d / %d" % [quarry_ticks, total_ticks],
+		"forager phase at the end:                %d" % hunter._forager.phase,
 	]
 
 
