@@ -473,6 +473,13 @@ func _step_hunt(delta: float, is_working: bool):
 func _find_quarry():
 	match _quarry_kind:
 		"creature":
+			# is_inside_tree(), not get_tree() == null: calling get_tree()
+			# on a detached node is an engine error in itself, so asking
+			# the safe question is the only way to fail quietly. The engine
+			# only runs _process on a node in the tree, but tools and
+			# probes drive markers by hand (tools/probe_village_hunting.gd).
+			if not is_inside_tree():
+				return null
 			return HuntableQuarry.nearest(
 				get_tree().get_nodes_in_group(HuntableQuarry.QUARRY_GROUP_NAME), position
 			)
@@ -616,6 +623,10 @@ func _give_up_on_quarry():
 ## keeps every input it had except the ones a villager personally killed
 ## and carried off.
 func _take_carcass_at(kill_position: Vector2) -> void:
+	if not is_inside_tree():
+		return
+	if not is_inside_tree():
+		return
 	for node in get_tree().get_nodes_in_group(Carcass.GROUP_NAME):
 		if not is_instance_valid(node) or node.is_queued_for_deletion():
 			continue

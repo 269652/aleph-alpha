@@ -404,3 +404,17 @@ func test_a_kill_puts_a_real_hide_in_the_village_market():
 
 func test_a_travelling_cart_is_willing_to_buy_that_hide():
 	assert_true(MerchantVisit.BUY_LIST.has(HuntableQuarry.HIDE_ITEM_ID))
+
+
+func test_a_marker_outside_the_tree_hunts_nothing_rather_than_crashing():
+	# The engine only runs _process on a node in the tree, but tools and
+	# probes drive markers by hand (see tools/probe_village_hunting.gd),
+	# and a detached marker's get_tree() is null. Fail open, the same
+	# convention every other world read on this marker follows.
+	_creature_at(Vector2(-20.0, 0.0))
+	remove_child(marker)
+	marker._process(1.0)
+	marker._process(1.0)
+	marker._process(1.0)
+	assert_false(marker._on_real_quarry, "no tree means nothing to find, not a crash")
+	add_child(marker)
