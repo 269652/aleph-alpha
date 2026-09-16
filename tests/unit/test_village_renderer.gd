@@ -123,15 +123,25 @@ class StubWorld:
 		occupied_cells[Vector2i(x, y)] = tile_id
 		return true
 
+	## Real forest cells, GLOBAL-keyed like everything else in this stub.
+	## A village never sites IN the forest (the real rule --
+	## EarthChunkManager.is_buildable_ground_at refuses the forest biome),
+	## so these read as forest to biome_at_global AND as unbuildable, the
+	## same pair of answers the real world gives.
+	var forest_cells: Dictionary = {}
+
 	func biome_at_global(x: int, y: int) -> String:
 		if water_cells.has(Vector2i(x, y)):
 			return "ocean"
+		if forest_cells.has(Vector2i(x, y)):
+			return "forest"
 		return biome
 
 	func is_buildable_terrain_at(x: int, y: int) -> bool:
-		if biome_at_global(x, y) == "ocean":
+		var cell := Vector2i(x, y)
+		if biome_at_global(x, y) == "ocean" or forest_cells.has(cell):
 			return false
-		return not unbuildable_cells.has(Vector2i(x, y))
+		return not unbuildable_cells.has(cell)
 
 	func modification_at_global(x: int, y: int) -> String:
 		return occupied_cells.get(Vector2i(x, y), "")
@@ -139,6 +149,21 @@ class StubWorld:
 	var founded_calls: Array = []
 	func record_settlement_founded_if_new(chunk_coord: Vector2i, npcs: Array, plots: Array = []) -> void:
 		founded_calls.append({"chunk_coord": chunk_coord, "npcs": npcs, "plots": plots})
+
+	## The settlement's REAL household count (see EarthChunkManager's own
+	## method of this name) -- how many villagers actually live here, which
+	## grows past SettlementGenerator.POPULATION as households move in. 0
+	## means "never recorded", the founding-roster fallback.
+	var household_count := 0
+	func household_count_for_settlement(_settlement_id: String) -> int:
+		return household_count
+
+	## villager seed -> the LOCAL origin of the house their household owns,
+	## mirroring the real EarthChunkManager.house_origin_for_villager. null
+	## for a villager who owns nothing here.
+	var house_origin_by_villager: Dictionary = {}
+	func house_origin_for_villager(_chunk_coord: Vector2i, villager_seed: int):
+		return house_origin_by_villager.get(villager_seed)
 
 
 func before_each():
@@ -742,3 +767,214 @@ func test_a_world_with_no_such_method_does_not_crash():
 	var world := WorldWithNoFoundingMethod.new()
 	var spawned := renderer.spawn_village(parent, coord, coord * CHUNK_SIZE, CHUNK_SIZE, TILE_SIZE, "grassland", world)
 	assert_false(spawned.is_empty())
+
+
+# -- the sawmill at the forest (docs/concept/village_growth.md mechanism 1)
+#
+# A village's works stand at the timber, not on its square, and a real road
+# spur joins them back to the street. Placed at FOUNDING alongside the
+# houses, not raised over time: a village the player discovers has been
+# standing for years, and its mill is part of the fabric it was founded
+# with -- the hall and the later ladder rungs are what it visibly grows
+# during play.
+
+## A band of real forest across the chunk's own southern edge, far enough
+## from the street that a plot at its edge is genuinely outlying.
+func _forest_band(world: StubWorld, coord: Vector2i) -> void:
+	for y in range(CHUNK_SIZE - 7, CHUNK_SIZE):
+		for x in CHUNK_SIZE:
+			world.forest_cells[coord * CHUNK_SIZE + Vector2i(x, y)] = true
+
+
+func _placed(world: StubWorld, building_id: String) -> Array:
+	var out: Array = []
+	for call in world.place_calls:
+		if call["building_id"] == building_id:
+			out.append(call)
+	return out
+
+
+func test_a_village_beside_a_forest_raises_a_sawmill_at_it():
+	var coord := _find_settlement_chunk("grassland")
+	var world := StubWorld.new()
+	_forest_band(world, coord)
+	renderer.spawn_village(parent, coord, coord * CHUNK_SIZE, CHUNK_SIZE, TILE_SIZE, "grassland", world)
+
+	var mills: Array = _placed(world, VillageRenderer.INDUSTRY_BUILDING_ID)
+	assert_eq(mills.size(), 1, "every village with timber in reach gets exactly one mill")
+	var near_forest := false
+	for cell in BuildingCatalog.footprint_cells(VillageRenderer.INDUSTRY_BUILDING_ID, mills[0]["origin_local"]):
+		var g: Vector2i = coord * CHUNK_SIZE + cell
+		assert_false(world.forest_cells.has(g), "the mill never stands IN the wood it cuts")
+		for dy in range(-VillageLayout.INDUSTRY_FOREST_REACH_TILES, VillageLayout.INDUSTRY_FOREST_REACH_TILES + 1):
+			for dx in range(-VillageLayout.INDUSTRY_FOREST_REACH_TILES, VillageLayout.INDUSTRY_FOREST_REACH_TILES + 1):
+				if world.forest_cells.has(g + Vector2i(dx, dy)):
+					near_forest = true
+	assert_true(near_forest, "the mill stands at the timber")
+
+
+func test_the_sawmills_doorstep_is_really_paved_back_to_the_main_street():
+	var coord := _find_settlement_chunk("grassland")
+	var world := StubWorld.new()
+	_forest_band(world, coord)
+	renderer.spawn_village(parent, coord, coord * CHUNK_SIZE, CHUNK_SIZE, TILE_SIZE, "grassland", world)
+	var mills: Array = _placed(world, VillageRenderer.INDUSTRY_BUILDING_ID)
+	assert_eq(mills.size(), 1, "precondition")
+
+	var doorstep: Vector2i = (
+		coord * CHUNK_SIZE + mills[0]["origin_local"]
+		+ BuildingCatalog.doorstep_of(VillageRenderer.INDUSTRY_BUILDING_ID)
+	)
+	var street_y: int = VillageLayout.skeleton(CHUNK_SIZE, VillageLayout.seed_for(coord))["street_y"]
+	var street_global_y: int = coord.y * CHUNK_SIZE + street_y
+
+	# Flood fill over REAL paved cells only -- the mill must be walkable
+	# back to the street on road, not merely near it.
+	var seen := {doorstep: true}
+	var frontier: Array = [doorstep]
+	var reached := false
+	while not frontier.is_empty():
+		var cell: Vector2i = frontier.pop_back()
+		if cell.y == street_global_y:
+			reached = true
+			break
+		for step in [Vector2i(1, 0), Vector2i(-1, 0), Vector2i(0, 1), Vector2i(0, -1)]:
+			var next_cell: Vector2i = cell + step
+			if seen.has(next_cell):
+				continue
+			if not TerrainRenderer.is_road_tile(world.road_cells.get(next_cell, "")):
+				continue
+			seen[next_cell] = true
+			frontier.append(next_cell)
+	assert_true(TerrainRenderer.is_road_tile(world.road_cells.get(doorstep, "")), "the doorstep itself is paved")
+	assert_true(reached, "the spur must reach the street, walking only road")
+
+
+func test_a_village_with_no_timber_in_reach_honestly_raises_no_sawmill():
+	var coord := _find_settlement_chunk("grassland")
+	var world := StubWorld.new()
+	renderer.spawn_village(parent, coord, coord * CHUNK_SIZE, CHUNK_SIZE, TILE_SIZE, "grassland", world)
+	assert_eq(_placed(world, VillageRenderer.INDUSTRY_BUILDING_ID).size(), 0)
+
+
+func test_a_reload_never_raises_a_second_sawmill():
+	var coord := _find_settlement_chunk("grassland")
+	var world := StubWorld.new()
+	_forest_band(world, coord)
+	renderer.spawn_village(parent, coord, coord * CHUNK_SIZE, CHUNK_SIZE, TILE_SIZE, "grassland", world)
+	renderer.spawn_village(parent, coord, coord * CHUNK_SIZE, CHUNK_SIZE, TILE_SIZE, "grassland", world)
+	assert_eq(_placed(world, VillageRenderer.INDUSTRY_BUILDING_ID).size(), 1, "one mill per village, across reloads")
+
+
+## An older village (its houses persisted before the mill existed, or
+## founded when no timber stood in reach) gains one on its next visit --
+## the same self-healing shape _lay_plaza_if_missing already has.
+func test_an_older_village_gains_its_sawmill_on_a_later_visit():
+	var coord := _find_settlement_chunk("grassland")
+	var world := StubWorld.new()
+	renderer.spawn_village(parent, coord, coord * CHUNK_SIZE, CHUNK_SIZE, TILE_SIZE, "grassland", world)
+	assert_eq(_placed(world, VillageRenderer.INDUSTRY_BUILDING_ID).size(), 0, "precondition: no timber at founding")
+	_forest_band(world, coord)
+	renderer.spawn_village(parent, coord, coord * CHUNK_SIZE, CHUNK_SIZE, TILE_SIZE, "grassland", world)
+	assert_eq(_placed(world, VillageRenderer.INDUSTRY_BUILDING_ID).size(), 1)
+
+
+func test_the_sawmill_never_lands_on_a_villagers_house():
+	var coord := _find_settlement_chunk("grassland")
+	var world := StubWorld.new()
+	_forest_band(world, coord)
+	renderer.spawn_village(parent, coord, coord * CHUNK_SIZE, CHUNK_SIZE, TILE_SIZE, "grassland", world)
+	var mills: Array = _placed(world, VillageRenderer.INDUSTRY_BUILDING_ID)
+	assert_eq(mills.size(), 1, "precondition")
+	var mill_cells := {}
+	for cell in BuildingCatalog.footprint_cells(VillageRenderer.INDUSTRY_BUILDING_ID, mills[0]["origin_local"]):
+		mill_cells[cell] = true
+	for call in world.place_calls:
+		if call["building_id"] == VillageRenderer.INDUSTRY_BUILDING_ID:
+			continue
+		for cell in BuildingCatalog.footprint_cells(call["building_id"], call["origin_local"]):
+			assert_false(mill_cells.has(cell), "the mill overlaps a house at %s" % str(cell))
+
+
+# -- a village that grew (docs/concept/village_growth.md mechanism 3) ------
+#
+# Households move in over time (EarthChunkManager.admit_household), and the
+# newcomers have to actually walk around: SettlementGenerator.POPULATION is
+# the FOUNDING roster, and the settlement's real household count is what
+# the renderer spawns.
+
+func _npc_count(spawned: Array) -> int:
+	var count := 0
+	for node in spawned:
+		if node is NpcMarker:
+			count += 1
+	return count
+
+
+func test_a_village_spawns_its_founding_roster_when_nothing_says_otherwise():
+	var coord := _find_settlement_chunk("grassland")
+	var world := StubWorld.new()
+	var spawned := renderer.spawn_village(parent, coord, coord * CHUNK_SIZE, CHUNK_SIZE, TILE_SIZE, "grassland", world)
+	assert_eq(_npc_count(spawned), SettlementGenerator.POPULATION)
+
+
+func test_a_village_that_grew_spawns_the_households_that_moved_in():
+	var coord := _find_settlement_chunk("grassland")
+	var world := StubWorld.new()
+	world.household_count = SettlementGenerator.POPULATION + 3
+	var spawned := renderer.spawn_village(parent, coord, coord * CHUNK_SIZE, CHUNK_SIZE, TILE_SIZE, "grassland", world)
+	assert_eq(_npc_count(spawned), SettlementGenerator.POPULATION + 3, "the newcomers walk around too")
+
+
+## A settlement whose households were never recorded (an isolated test, a
+## world that cannot answer) falls back to the founding roster rather than
+## spawning an empty village.
+func test_a_world_that_cannot_answer_falls_back_to_the_founding_roster():
+	var coord := _find_settlement_chunk("grassland")
+	var world := StubWorld.new()
+	world.household_count = 0
+	var spawned := renderer.spawn_village(parent, coord, coord * CHUNK_SIZE, CHUNK_SIZE, TILE_SIZE, "grassland", world)
+	assert_eq(_npc_count(spawned), SettlementGenerator.POPULATION)
+
+
+## A newcomer's house was raised by the growth ladder, not stamped at
+## founding, so it carries none of the founding per-index seeds. It is
+## found by WHO OWNS IT instead -- otherwise every household that ever
+## moved in would stand forever on the fallback ring anchor, outside the
+## house it actually owns.
+func test_a_newcomer_stands_at_the_house_their_household_owns():
+	var coord := _find_settlement_chunk("grassland")
+	var world := StubWorld.new()
+	# Founded at its founding roster, so index POPULATION genuinely has no
+	# house from that pass -- which is what a real newcomer's situation is.
+	renderer.spawn_village(parent, coord, coord * CHUNK_SIZE, CHUNK_SIZE, TILE_SIZE, "grassland", world)
+	world.household_count = SettlementGenerator.POPULATION + 1
+
+	# The newcomer's own house, raised after founding by the growth ladder:
+	# a real building the world reports as theirs, carrying none of the
+	# founding per-index seeds.
+	var settlement := _generator.generate_settlement(
+		coord, coord * CHUNK_SIZE, CHUNK_SIZE, TILE_SIZE, SettlementGenerator.POPULATION + 1
+	)
+	var newcomer = settlement.npcs[SettlementGenerator.POPULATION]
+	var origin := Vector2i(1, 1)
+	world.place_calls.append({
+		"chunk_coord": coord, "origin_local": origin, "building_id": "house_small",
+		"facing": Vector2i(0, 1), "seed": 999999, "owner_household_id": "",
+		"occupation": "", "resident_seed": 0,
+	})
+	world.house_origin_by_villager[newcomer.seed_value] = origin
+
+	var spawned := renderer.spawn_village(parent, coord, coord * CHUNK_SIZE, CHUNK_SIZE, TILE_SIZE, "grassland", world)
+
+	var expected_doorstep := coord * CHUNK_SIZE + origin + BuildingCatalog.doorstep_of("house_small")
+	var expected_position := Vector2(
+		(expected_doorstep.x + 0.5) * TILE_SIZE, (expected_doorstep.y + 0.5) * TILE_SIZE
+	)
+	var found := false
+	for node in spawned:
+		if node is NpcMarker and node.identity.seed_value == newcomer.seed_value:
+			found = true
+			assert_almost_eq(node.home_position.x, expected_position.x, 0.01)
+			assert_almost_eq(node.home_position.y, expected_position.y, 0.01, "home is their own doorstep")
+	assert_true(found, "the newcomer was spawned at all")

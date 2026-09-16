@@ -232,3 +232,262 @@ func test_the_hall_labour_matches_its_recipe_derived_hours():
 	assert_almost_eq(
 		BuildingCatalog.labor_hours_of("city_hall"), ConstructionLabor.labor_hours_required("city_hall", book), 0.001
 	)
+
+
+# -- the growth ladder's production and civic buildings --------------------
+#
+# docs/concept/village_growth.md's own ladder: a village raises a sawmill,
+# a warehouse, a farmhouse, a blacksmith and a brewery as its population
+# grows, alongside the city hall it already raises. Every one is a real
+# catalog entity with a real sheet on disk, nobody lives in any of them,
+# and every one costs ONLY material a settlement can actually gather for
+# itself (SettlementGathering stocks wood, stone and plant_fibre -- a rung
+# priced in anything else could never be raised autonomously).
+
+const _LADDER_BUILDING_IDS := ["sawmill", "warehouse", "farmhouse", "blacksmith", "brewery"]
+
+
+func test_every_ladder_building_is_a_real_catalog_entity_nobody_lives_in():
+	for building_id in _LADDER_BUILDING_IDS:
+		assert_true(BuildingCatalog.has_building(building_id), "%s must be a real building" % building_id)
+		assert_false(BuildingCatalog.BUILDING_IDS.has(building_id), "%s must never be a home" % building_id)
+		assert_eq(BuildingCatalog.capacity_of(building_id), 0, "nobody lives in the %s" % building_id)
+		assert_ne(BuildingCatalog.interior_family_of(building_id), "", "%s needs an interior family" % building_id)
+
+
+func test_the_production_building_ids_list_is_exactly_the_non_civic_ladder():
+	assert_eq(BuildingCatalog.PRODUCTION_BUILDING_IDS, ["sawmill", "farmhouse", "blacksmith", "brewery"] as Array[String])
+	assert_true(BuildingCatalog.CIVIC_BUILDING_IDS.has("warehouse"), "a warehouse is a commons, not a trade")
+	assert_true(BuildingCatalog.CIVIC_BUILDING_IDS.has("city_hall"))
+
+
+## The sheets already exist in the repo -- this is what makes the ladder
+## art-complete rather than a row of procedural placeholders.
+func test_every_ladder_building_has_a_real_sheet_file_on_disk():
+	for building_id in _LADDER_BUILDING_IDS:
+		var path: String = BuildingCatalog.sheet_of(building_id)
+		assert_eq(path, "res://assets/sprites/buildings/%s.png" % building_id)
+		assert_true(FileAccess.file_exists(path), "%s has no real sheet at %s" % [building_id, path])
+
+
+## Every rung must be payable out of what SettlementGathering actually
+## gathers, or the village can never raise it on its own.
+func test_every_ladder_building_costs_only_material_a_village_can_gather():
+	var SettlementGathering = load("res://src/emergence/settlement_gathering.gd")
+	var gatherable := {}
+	for item_id in ["wood", "stone", "plant_fibre"]:
+		gatherable[item_id] = true
+		assert_gt(
+			float(SettlementGathering.material_delta(1, 86400.0, {})["stock_delta"].get(item_id, 0)), 0.0,
+			"precondition: a village really gathers %s" % item_id
+		)
+	for building_id in _LADDER_BUILDING_IDS + ["city_hall"]:
+		var cost: Dictionary = BuildingCatalog.cost_of(building_id)
+		assert_false(cost.is_empty(), "%s must cost something" % building_id)
+		for item_id in cost:
+			assert_true(gatherable.has(item_id), "%s costs un-gatherable %s" % [building_id, item_id])
+
+
+## Ladder order is also price order: a village pays more for each rung it
+## grows into. Pinned against the ORDER, not any one "correct" price.
+func test_each_ladder_rung_costs_more_material_than_the_one_before_it():
+	var ladder := ["sawmill", "farmhouse", "warehouse", "city_hall", "blacksmith", "brewery"]
+	var previous := 0
+	for building_id in ladder:
+		var total := 0
+		for item_id in BuildingCatalog.cost_of(building_id):
+			total += int(BuildingCatalog.cost_of(building_id)[item_id])
+		assert_gt(total, previous, "%s must cost more material than the rung before it" % building_id)
+		previous = total
+
+
+## Same contract the hall already keeps: the catalog's labour figure and
+## ConstructionLabor's recipe-derived one must agree, or a rising
+## building's sprite and the ledger disagree on how far along it is.
+func test_every_ladder_buildings_cost_and_labour_match_its_recipe():
+	var ConstructionLabor = load("res://src/emergence/construction_labor.gd")
+	var book = CraftingRecipeBook.new()
+	for building_id in _LADDER_BUILDING_IDS:
+		var inputs: Array = book.recipe_inputs(building_id)
+		assert_false(inputs.is_empty(), "%s needs a real recipe" % building_id)
+		var expected := {}
+		for input in inputs:
+			expected[input["item_id"]] = input["count"]
+		assert_eq(BuildingCatalog.cost_of(building_id), expected, "%s cost must be its recipe" % building_id)
+		assert_almost_eq(
+			BuildingCatalog.labor_hours_of(building_id),
+			ConstructionLabor.labor_hours_required(building_id, book), 0.001,
+			"%s labour must be its recipe-derived hours" % building_id
+		)
+
+
+## Every street-placed building must fit the street pitch VillageLayout
+## reserves between one row and the next -- the pitch is derived from the
+## catalog's own deepest footprint, so a deeper entry can never silently
+## make two streets overlap.
+func test_no_catalog_building_is_deeper_than_the_street_pitch_reserves():
+	var VillageLayout = load("res://src/world/village_layout.gd")
+	var deepest := 0
+	for building_id in BuildingCatalog.BUILDING_IDS + BuildingCatalog.CIVIC_BUILDING_IDS + BuildingCatalog.PRODUCTION_BUILDING_IDS:
+		deepest = maxi(deepest, BuildingCatalog.footprint_of(building_id).y)
+	assert_eq(
+		VillageLayout.STREET_PITCH_TILES, deepest + VillageLayout.STREET_GAP_TILES,
+		"the street pitch must reserve the deepest real footprint plus the gap"
+	)
+
+
+# -- houses are buildings, not items ---------------------------------------
+#
+# A house the village raises for an arriving household goes up through the
+# SAME ConstructionProject ledger every other building does, so it needs a
+# real recipe: without one, recipe_inputs is empty, try_start finds nothing
+# to wait on, ConstructionLabor derives zero hours, and the house completes
+# instantly and for free on the tick it is queued.
+
+func test_every_house_has_a_real_recipe_at_exactly_its_catalog_price():
+	var ConstructionLabor = load("res://src/emergence/construction_labor.gd")
+	var book = CraftingRecipeBook.new()
+	for building_id in BuildingCatalog.BUILDING_IDS:
+		var inputs: Array = book.recipe_inputs(building_id)
+		assert_false(inputs.is_empty(), "%s needs a real recipe to be raised over time" % building_id)
+		var expected := {}
+		for input in inputs:
+			expected[input["item_id"]] = input["count"]
+		assert_eq(BuildingCatalog.cost_of(building_id), expected, "%s: one price, not two" % building_id)
+		assert_gt(ConstructionLabor.labor_hours_required(building_id, book), 0.0, "%s must take real work" % building_id)
+
+
+## A house is a building, not something a player carries home from a
+## workbench. It has no ItemCatalog entry, which is exactly what keeps it
+## off every bench surface -- no extra gate needed.
+func test_no_house_is_ever_offered_at_a_crafting_bench():
+	var book = CraftingRecipeBook.new()
+	var catalog = load("res://src/gameplay/item_catalog.gd").new()
+	var bench: Array = book.bench_recipe_ids(catalog)
+	for building_id in BuildingCatalog.BUILDING_IDS:
+		assert_false(catalog.has(building_id), "%s must not be a carryable item" % building_id)
+		assert_false(bench.has(building_id), "%s must never appear at a bench" % building_id)
+
+
+## A readable name per building, for a readout that has to title itself.
+## Kept in the catalog because it IS catalog data -- a house has no
+## ItemCatalog entry to borrow a display name from (and must not get one,
+## see test_no_house_is_ever_offered_at_a_crafting_bench).
+func test_every_building_has_a_readable_display_name():
+	var seen := {}
+	for building_id in BuildingCatalog.BUILDING_IDS + BuildingCatalog.CIVIC_BUILDING_IDS + BuildingCatalog.PRODUCTION_BUILDING_IDS:
+		var name: String = BuildingCatalog.display_name_of(building_id)
+		assert_ne(name, "", "%s needs a name" % building_id)
+		assert_ne(name, building_id, "%s must read as a name, not an id" % building_id)
+		assert_false(seen.has(name), "two buildings must not share the name %s" % name)
+		seen[name] = true
+
+
+func test_an_unknown_id_still_gets_something_printable():
+	assert_ne(BuildingCatalog.display_name_of("moon_base"), "")
+
+
+# -- variant sheets: many real cottages, one building id -------------------
+#
+# A supplied 5x5 sheet of hand-drawn cottage variants (black background, no
+# dividers, one whole house per cell) is what a finished first-tier village
+# house is actually drawn from, picked per building seed -- so a street of
+# cottages reads as a street of different cottages rather than one house
+# repeated. The LIFECYCLE sheet contract (8 columns x 5 rows) is untouched
+# and still what a RISING building's construction row comes from; a variant
+# sheet has no construction/burning/ruined rows and never claims to.
+
+## Every village HOUSE draws from the first-tier cottage sheet. All three
+## share it deliberately: no house had a sheet of its own at all before
+## this, so declaring it for only one tier would leave a village street
+## half beautiful cottages and half procedural boxes. The scaler sizes each
+## cell to its own footprint without distorting it, so a medium or large
+## house is simply a bigger cottage until grander art for those tiers
+## lands, at which point they get their own entries and nothing else
+## changes.
+func test_every_village_house_draws_from_the_first_tier_cottage_sheet():
+	for building_id in BuildingCatalog.BUILDING_IDS:
+		assert_eq(
+			BuildingCatalog.variant_sheet_of(building_id),
+			"res://assets/sprites/buildings/house_1.png",
+			"%s should draw from the village cottage sheet" % building_id
+		)
+
+
+func test_a_building_with_no_variant_sheet_says_so_rather_than_guessing_a_path():
+	for building_id in ["city_hall", "warehouse", "sawmill", "farmhouse", "blacksmith", "brewery", "moon_base"]:
+		assert_eq(BuildingCatalog.variant_sheet_of(building_id), "", "%s has no variant sheet" % building_id)
+
+
+## Two houses of the same tier standing side by side must not be the same
+## cottage -- the whole point of a variant sheet.
+func test_two_houses_with_different_seeds_usually_draw_different_cottages():
+	var distinct := {}
+	for seed_value in range(0, 40):
+		distinct[BuildingCatalog.variant_cell_for("house_small", seed_value)] = true
+	assert_gt(distinct.size(), 5, "forty houses drew only %d distinct cottages" % distinct.size())
+
+
+func test_the_variant_grid_matches_the_supplied_sheets_own_shape():
+	assert_eq(BuildingCatalog.VARIANT_SHEET_COLUMNS, 5)
+	assert_eq(BuildingCatalog.VARIANT_SHEET_ROWS, 5)
+
+
+func test_a_buildings_variant_is_deterministic_from_its_own_seed():
+	for seed_value in [0, 1, 7, -3, 991, 123456789]:
+		assert_eq(
+			BuildingCatalog.variant_cell_for("house_small", seed_value),
+			BuildingCatalog.variant_cell_for("house_small", seed_value),
+			"the same house must always draw as the same cottage"
+		)
+
+
+func test_every_variant_cell_lands_inside_the_grid():
+	for seed_value in range(-50, 200):
+		var cell: Vector2i = BuildingCatalog.variant_cell_for("house_small", seed_value)
+		assert_between(cell.x, 0, BuildingCatalog.VARIANT_SHEET_COLUMNS - 1, "column out of grid for %d" % seed_value)
+		assert_between(cell.y, 0, BuildingCatalog.VARIANT_SHEET_ROWS - 1, "row out of grid for %d" % seed_value)
+
+
+## All twenty-five are actually reachable -- a sheet whose corner variants
+## never turn up is art nobody ever sees.
+func test_every_one_of_the_twenty_five_variants_is_really_reachable():
+	var seen := {}
+	for seed_value in range(0, 4000):
+		seen[BuildingCatalog.variant_cell_for("house_small", seed_value)] = true
+	assert_eq(
+		seen.size(), BuildingCatalog.VARIANT_SHEET_COLUMNS * BuildingCatalog.VARIANT_SHEET_ROWS,
+		"only %d of the 25 variants ever appear" % seen.size()
+	)
+
+
+# -- which sheet a FINISHED building is drawn from -------------------------
+
+func test_a_finished_first_tier_house_is_drawn_from_its_variant_sheet():
+	var sheet: Dictionary = BuildingCatalog.finished_sheet_for("house_small", 42)
+	assert_eq(sheet["path"], BuildingCatalog.variant_sheet_of("house_small"))
+	assert_eq(sheet["columns"], BuildingCatalog.VARIANT_SHEET_COLUMNS)
+	assert_eq(sheet["rows"], BuildingCatalog.VARIANT_SHEET_ROWS)
+	var cell: Vector2i = BuildingCatalog.variant_cell_for("house_small", 42)
+	assert_eq(sheet["row"], cell.y)
+	assert_eq(sheet["column"], cell.x)
+
+
+## Everything without a variant sheet keeps the lifecycle sheet's idle row,
+## exactly as before -- this is additive art, not a change of contract.
+func test_every_other_building_still_comes_from_its_lifecycle_sheets_idle_row():
+	for building_id in ["city_hall", "warehouse", "sawmill", "brewery"]:
+		var sheet: Dictionary = BuildingCatalog.finished_sheet_for(building_id, 7)
+		assert_eq(sheet["path"], BuildingCatalog.sheet_of(building_id))
+		assert_eq(sheet["columns"], BuildingCatalog.SHEET_COLUMNS)
+		assert_eq(sheet["rows"], BuildingCatalog.SHEET_ROWS)
+		assert_eq(sheet["row"], BuildingCatalog.ROW_IDLE)
+		assert_eq(sheet["column"], 0)
+
+
+## A RISING building still comes from the lifecycle sheet's construction
+## row: a variant sheet has no scaffold stages and must never be asked for
+## one.
+func test_a_rising_building_is_never_drawn_from_a_variant_sheet():
+	assert_eq(BuildingCatalog.finished_sheet_for("house_small", 3)["path"], BuildingCatalog.variant_sheet_of("house_small"))
+	assert_ne(BuildingCatalog.sheet_of("house_small"), BuildingCatalog.variant_sheet_of("house_small"))

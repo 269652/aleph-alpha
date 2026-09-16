@@ -22860,3 +22860,190 @@ since 2026-09-15: the villages' houses, the player's own house with
 everything placed inside it, a village's City Hall). A new world loaded
 the previous world's villages back in. All four are wiped and backed up
 now (`persistence.md` Status).
+
+### The Anno-like village: a charter, a ladder, and a village that reads back (see `docs/concept/village_growth.md`)
+
+Reported directly: *"flesh out the Anno-like Village System. There should
+be at least a Sawmill in a near forest, a plaza and a city hall for every
+village all connected with roads. Then as more NPCs move into the town the
+town builds more houses, production and city buildings. It should also be
+possible to click on a house and view the needs, happiness and productivity
+of each house / citizen."* The plaza, the civic plot and the streets were
+already real (`building.md`'s Layout v2, `civic_construction.md`'s Meeting
+Hall); the four things that were not are below. New concept doc:
+`concept/village_growth.md`, written first as the spec.
+
+✅ **Every village with timber in reach is founded with a sawmill at it,
+and a real road runs there.** `VillageLayout.industry_plot` sites the works
+on buildable, unoccupied, NON-forest ground within two tiles of real forest
+and at least a plaza-width-plus-a-street-pitch from the square, nearest
+qualifying site winning. The part that is not negotiable is the spur: an L
+from the doorstep along its own row to a column and up that column to the
+main street, routed around the building's own footprint when the works
+stand south of the street. A site whose spur cannot be laid is refused
+outright -- a mill the village cannot walk to is not a mill. Connectivity is
+verified by a real flood fill over paved cells in both the pure test and the
+renderer test, not by trusting the shape of the returned list. Placed at
+FOUNDING alongside the houses rather than raised over time (a village the
+player discovers has been standing for years; its mill is part of the fabric
+it was founded with), idempotent on the one check that matters -- a real
+sawmill already standing in this chunk -- so a reload never raises a second
+and an older village gains one on its next visit, the same self-healing
+shape `_lay_plaza_if_missing` already had. A village on open steppe honestly
+has none.
+
+**How often that actually fires was measured, not assumed**
+(`tools/probe_village_industry.gd`, 45x45 chunks around 52.52N 13.405E):
+of 52 real settlement chunks, **51 -- 98.1% -- qualify for a sawmill
+plot**. A settlement chunk is grassland-DOMINANT (the biome gate refuses a
+forest-dominant one outright) but still averages 190 real forest cells, so
+"a sawmill in a near forest" is the ordinary case, not the lucky one. The
+single miss did have forest, just none of it reachable from a legal
+outlying, spur-connected site -- honestly no mill, exactly as specified.
+
+✅ **The ladder: what a village owes itself next.** `VillageGrowth.next_
+building` reads the settlement's own real household count (already
+persisted, out of the event graph and `HouseholdStore` -- no second
+population counter was introduced anywhere) and names ONE building:
+a house for any household that has none, ahead of everything else (a
+village shelters its people before it adorns itself), then the first unbuilt
+rung whose threshold is met -- sawmill (1 household), city hall (3, which is
+`CivicBuildDecision`'s own constant rather than a second copy), warehouse
+(4), farmhouse (5), blacksmith (7), brewery (9). Rungs already standing are
+skipped, never re-ordered, so a village that acquired its hall out of order
+still grows into the rest. Thresholds are pinned against the ORDER they
+produce, not against any one "correct" population.
+
+✅ **Five new whole-building catalog entities**, each with its real
+`assets/sprites/buildings/<id>.png` sheet already on disk, capacity 0, and
+ONE price shared between `BuildingCatalog.cost_of` and `CraftingRecipeBook`.
+Two invariants are test-pinned rather than assumed: every rung is priced
+ONLY in wood/stone/plant_fibre -- the exact three materials
+`SettlementGathering`'s spare hands actually gather, so a rung priced in
+anything else could never be raised by a village on its own -- and costs
+rise strictly along ladder order, each building's labour equalling its
+recipe-derived hours so a rising building's construction sprite and the
+ledger cannot disagree about progress. The pass also added the pin
+`VillageLayout`'s own `STREET_PITCH_TILES` comment CLAIMED existed but no
+test held: the pitch must equal the catalog's deepest footprint plus the
+gap, or a deeper entry silently makes two streets overlap.
+
+✅ **The three houses gained recipes.** Not cosmetic: without one, a queued
+house finds nothing to wait on, `ConstructionLabor` derives zero hours, and
+it completes instantly and for free on the tick it is queued. They
+deliberately have NO `ItemCatalog` entry, and that absence is the gate --
+`is_bench_recipe` only offers a recipe whose output the item catalog knows,
+so a house can never turn up at a crafting bench as something a player
+carries home (pinned).
+
+✅ **Households move in, and the ladder gets walked.**
+`VillageImmigration.arrivals` draws at a rate raised by larder surplus and
+by how much of the ladder stands; either gate alone -- no room (no spare
+roof AND nowhere left to build), or a larder below `FED_THRESHOLD` -- stops
+it dead. Arrivals are capped at the room the village really has and the
+excess is LOST rather than banked: households that found no room went
+elsewhere, which is both what really happened and what stops a long absence
+dumping a whole town onto a village the moment the player walks back in
+(pinned by a test that runs ten thousand days through it and still sees
+exactly one arrival). `EarthChunkManager.admit_household` settles the next
+deterministic villager -- `SettlementGenerator`'s own per-index seed
+continued past the founding roster, so an arrival is exactly as reproducible
+as a founder -- with the same `npc_settled` event founding already uses.
+That ONE event is what makes the newcomer visible to
+`household_count_for_settlement`, `SettlementSpareCapacity`,
+`SettlementTier` and the ladder with no further plumbing. They arrive
+without a roof on purpose: the village then owes them one.
+
+✅ **The newcomers actually walk around.** `SettlementGenerator.POPULATION`
+became the FOUNDING roster rather than a ceiling -- `generate_settlement`
+takes the population to build and `VillageRenderer` passes the real
+household count -- with villager `i` still keyed to index `i` whatever the
+population is, so growing a village never shifts who its founders are
+(pinned by generating the same village at two sizes and comparing every
+founder's seed and occupation). On reload a villager is matched to their
+house by OWNERSHIP as well as by the founding per-index seed: a newcomer's
+house was raised by the ladder and carries no founding seed at all, so
+seed-matching alone would leave every household that ever moved in standing
+on a fallback ring anchor outside the house it actually owns.
+
+✅ **Needs, happiness and productivity -- derived, never stored.**
+`HouseholdWellbeing.assess` turns state the simulation already keeps into
+four needs: food is HALF the resident's own belly (`NpcNeeds`) and half the
+village larder, because a full stomach today with nothing in store is
+genuinely not a met need; shelter is a roof first and elbow room after, with
+an overcrowded house scoring below a bare adequate one; income is the purse
+measured in meals it could actually buy; community is exactly how much of
+the ladder stands. Happiness is their weighted mean, food heaviest.
+Productivity is happiness with hunger as a hard drag and a floor at
+`MIN_PRODUCTIVITY` -- a starving household still works, just badly, and a
+zero there would silently stall every mechanism that scales by it. Every
+weight and threshold is pinned by the ORDERING it produces (going hungry
+costs more happiness than lacking a brewery; a hungry household works below
+its own mood), never asserted as a magic number. `mean_productivity` of an
+empty settlement is 1.0, deliberately neutral: "nobody lives here to be
+unhappy" must never read as "everyone here is miserable".
+
+✅ **Productivity is not decoration -- it pays for itself.**
+`EarthChunkManager.settlement_productivity` scales the construction crew's
+own `builder_count`, which closes the loop the whole system is about:
+buildings raise happiness, happiness raises productivity, productivity
+raises the rate at which the next building goes up. Applied to the crew
+rather than the elapsed time, so the same scale reaches both the live step
+and the offline catch-up that shares its body, and because labour hours are
+floats a scaled crew never rounds itself down to no crew at all.
+
+**It was first wired to the GATHERING rate, and a real pre-existing test
+caught that as a design error, not just a broken assertion**
+(`test_earth_chunk_manager_bread_chain.gd`'s "spare hands gather building
+material between assessments" went red): a starving village gathering at
+the productivity floor cannot cut the timber for the farm that would fix
+its hunger -- a doom loop where the villages most in need of building their
+way out are the ones least able to. It is also wrong about people: hunger
+is what MOTIVATES the survival work of cutting wood and picking fieldstone,
+not what slows it. What an unhappy village does worse is RAISE what it
+gathered. Gathering is now explicitly unscaled and pinned by its own test
+alongside the "an unhappy village builds slower" one, so neither half can
+drift back.
+
+✅ **Click a house, read the household.** `household_report_at` answers for
+ANY footprint cell, not just the anchor, so a click lands wherever the
+player clicked. `HousePanel` draws four labelled need bars in weight order,
+each proportional to its need and coloured as a warning below half (a
+village in trouble reads at a glance, not by reading four numbers), then
+happiness, productivity and the household's purse. A COMMONS (hall, mill,
+warehouse) is drawn as what it is -- named, attributed to the settlement,
+showing the village's own productivity, with no needs rows -- rather than
+given invented residents so the panel has something to fill. Hunger is the
+resident's own live `NpcNeeds` clock when that villager is really spawned,
+and the settlement-scale reading otherwise. Pinned as a consumer and never
+a driver: one test asserts that calling it leaves household count, market
+stock and building count untouched; another feeds the village and watches
+the reported happiness rise, proving the numbers are live rather than
+snapshotted at founding.
+
+**Known gaps, stated rather than papered over** (also in that doc's own
+Status):
+
+🚧 **A village only draws new households while its chunk is LOADED.** The
+room half of the gate is read off buildings that really stand, and an
+unloaded chunk has none to read; guessing at them would be exactly the
+invented number this project's rules forbid. Construction keeps its
+unloaded catch-up; immigration has no equivalent yet.
+
+🚧 **Interiors for the new buildings.** `sawmill`/`blacksmith`/`brewery`
+declare a `workshop` family and `farmhouse` a `farmstead` one, and
+`InteriorTemplates` has real plans for `cottage`/`house`/`manor` only -- so
+those, like the already-real `hall`, fall back to the cottage variants.
+Entering a mill shows a cottage interior.
+
+🚧 **A growth house is always the small one.** `VillageGrowth` names the
+catalog's first house for a homeless household rather than running
+`choose_house_id` against the arriving villager's own occupation and
+personality the way the founding roster does. A newcomer building modest is
+defensible; it is still a simplification, not a design decision.
+
+🚧 **The ladder's rungs are buildings, not yet production.** A standing
+sawmill, farmhouse, smithy or brewery is a real building the village raised
+and a real contributor to the `community` need; none of them yet RUNS a
+production chain the way the legacy single-tile `sagewerk`/`farm` do.
+Staffing them is the obvious next pass.

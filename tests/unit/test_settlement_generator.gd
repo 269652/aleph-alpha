@@ -141,3 +141,35 @@ func test_generate_settlement_positions_are_within_the_chunk_bounds():
 	for landmark_pos in settlement.landmarks.values():
 		assert_between(landmark_pos.x, float(origin.x * TILE_SIZE), float((origin.x + CHUNK_SIZE) * TILE_SIZE))
 		assert_between(landmark_pos.y, float(origin.y * TILE_SIZE), float((origin.y + CHUNK_SIZE) * TILE_SIZE))
+
+
+# -- a village that grew (docs/concept/village_growth.md mechanism 3) ------
+#
+# POPULATION is the FOUNDING roster, not a ceiling: once households have
+# moved in (EarthChunkManager.admit_household), the settlement has more
+# villagers than it was founded with, and they have to be generated too.
+
+func test_a_village_generates_exactly_the_population_it_is_asked_for():
+	var coord := _find_settlement_chunk("grassland")
+	var grown: Dictionary = generator.generate_settlement(coord, coord * 32, 32, 16, SettlementGenerator.POPULATION + 3)
+	assert_eq(grown.npcs.size(), SettlementGenerator.POPULATION + 3)
+	assert_eq(grown.house_positions.size(), grown.npcs.size(), "every villager still gets an anchor")
+
+
+## A newcomer is exactly as reproducible as a founder: the same per-index
+## seed, continued past the founding roster, so nobody's identity shifts
+## when the village grows.
+func test_growing_never_changes_who_the_founders_are():
+	var coord := _find_settlement_chunk("grassland")
+	var founded: Dictionary = generator.generate_settlement(coord, coord * 32, 32, 16)
+	var grown: Dictionary = generator.generate_settlement(coord, coord * 32, 32, 16, SettlementGenerator.POPULATION + 2)
+	for i in founded.npcs.size():
+		assert_eq(grown.npcs[i].seed_value, founded.npcs[i].seed_value, "founder %d changed identity" % i)
+		assert_eq(grown.npcs[i].occupation, founded.npcs[i].occupation)
+
+
+func test_omitting_the_population_still_founds_the_original_roster():
+	var coord := _find_settlement_chunk("grassland")
+	assert_eq(
+		generator.generate_settlement(coord, coord * 32, 32, 16).npcs.size(), SettlementGenerator.POPULATION
+	)

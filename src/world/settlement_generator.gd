@@ -18,9 +18,13 @@ extends RefCounted
 const NpcIdentity = preload("res://src/world/npc_identity.gd")
 const VillageLayout = preload("res://src/world/village_layout.gd")
 
-## Fixed villager count per settlement -- small and constant for now rather
-## than population-simulated (see docs/concept/npc.md's lifecycle/aging,
-## still unstarted).
+## The FOUNDING roster: how many villagers a settlement is founded with.
+## Not a ceiling -- docs/concept/village_growth.md's own arrivals mechanism
+## settles further households over time (EarthChunkManager.admit_household),
+## and generate_settlement takes the settlement's real population so those
+## newcomers are generated too. Villager `i` is keyed to index `i` whatever
+## the population is, so growing a village never shifts who its founders
+## are (test-pinned, test_settlement_generator.gd).
 const POPULATION := 5
 
 ## Roughly 1-in-this-many habitable chunks hosts a settlement -- sparse, so
@@ -66,8 +70,13 @@ func has_settlement_at(chunk_coord: Vector2i, dominant_biome: String) -> bool:
 ## NpcIdentity per index), one house anchor position each arranged in a ring
 ## around the chunk's center, and the 3 shared landmark positions. Callers
 ## should only call this after confirming has_settlement_at.
+## `population` defaults to the founding roster; a caller holding the
+## settlement's REAL household count (VillageRenderer, off
+## EarthChunkManager.household_count_for_settlement) passes that instead,
+## so a village that has taken households in generates them too.
 func generate_settlement(
-	chunk_coord: Vector2i, chunk_origin_tiles: Vector2i, chunk_size: int, tile_size: int
+	chunk_coord: Vector2i, chunk_origin_tiles: Vector2i, chunk_size: int, tile_size: int,
+	population: int = POPULATION
 ) -> Dictionary:
 	# The well, stall and gate stand where the village's own street plan
 	# puts them -- on the plaza, at the street's entrance (see
@@ -85,7 +94,7 @@ func generate_settlement(
 
 	var house_positions: Array[Vector2] = []
 	var npcs: Array[NpcIdentity] = []
-	for i in POPULATION:
+	for i in maxi(population, 0):
 		var seed_value := hash("%d_%d_villager_%d" % [chunk_coord.x, chunk_coord.y, i])
 		npcs.append(NpcIdentity.new(seed_value))
 		house_positions.append(_house_position(chunk_coord, center_pos, tile_size, i))
@@ -97,6 +106,10 @@ func generate_settlement(
 ## (seeded per chunk+index) so the layout reads organic while staying exactly
 ## reproducible on revisit.
 func _house_position(chunk_coord: Vector2i, center_pos: Vector2, tile_size: int, index: int) -> Vector2:
+	# Deliberately still spaced by the FOUNDING roster, not the current
+	# population: this is only the fallback anchor for a villager whose plot
+	# fit nowhere, and re-spacing it as the village grows would silently move
+	# every existing villager's fallback position every time one arrived.
 	var base_angle := float(index) / float(POPULATION) * TAU
 	var angle := base_angle + (_unit_float(chunk_coord, index, "angle") - 0.5) * 2.0 * _HOUSE_ANGLE_JITTER
 	var radius_tiles := _HOUSE_RING_RADIUS_TILES + (_unit_float(chunk_coord, index, "radius") - 0.5) * 2.0 * _HOUSE_RADIUS_JITTER_TILES

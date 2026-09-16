@@ -67,6 +67,7 @@ const DialogueMove = preload("res://src/dialogue/dialogue_move.gd")
 const DialogueBeat = preload("res://src/dialogue/dialogue_beat.gd")
 const SkillTreeWindow = preload("res://scenes/skill_tree_window.gd")
 const CreaturePanel = preload("res://scenes/creature_panel.gd")
+const HousePanel = preload("res://scenes/house_panel.gd")
 const PathScarring = preload("res://src/world/path_scarring.gd")
 const PebbleDispersion = preload("res://src/rendering/pebble_dispersion.gd")
 const Karma = preload("res://src/gameplay/karma.gd")
@@ -700,6 +701,14 @@ var _audio_volume := AudioSettings.DEFAULT_VOLUME
 const SimulationSettings = preload("res://src/gameplay/simulation_settings.gd")
 var _simulation_densities: Dictionary = SimulationSettings.default_densities()
 var _death_label: Label
+## The village readout (docs/concept/village_growth.md mechanism 5): a
+## left-click on any building opens HousePanel on it -- the needs,
+## happiness and productivity of the household living there, or, for a
+## commons, what it is and how the village as a whole is doing. A click on
+## anything else closes it. Purely a consumer of EarthChunkManager.
+## household_report_at; opening it changes nothing in the world.
+var _house_panel: HousePanel
+
 var _creature_panels_container: VBoxContainer
 var _hover_tooltip: Label
 var _hover_target_finder := HoverTargetFinder.new()
@@ -1065,6 +1074,7 @@ func _ready() -> void:
 	_build_crafting_window()
 	_build_quest_log_window()
 	_build_conversation_window()
+	_build_house_panel()
 	_build_skill_window()
 	_build_settings_overlay()
 	_build_creature_panels_container()
@@ -3456,6 +3466,8 @@ func _unhandled_input(event: InputEvent) -> void:
 			_refresh_skill_window(lp)
 	elif event.is_action_pressed(SETTINGS_TOGGLE_ACTION):
 		_handle_escape()
+	elif event is InputEventMouseButton and event.pressed and event.button_index == MOUSE_BUTTON_LEFT:
+		_on_world_clicked(_world_position_of(event.position))
 	else:
 		_handle_hotbar_hotkeys(event)
 
@@ -3616,6 +3628,49 @@ func _step_quest_reconciliation(local_player: Player, delta: float) -> void:
 	QuestLog.reconcile(local_player, _chunk_manager.all_production_shortfall_quests())
 
 
+## The village readout, anchored to the screen's top-left under the HUD and
+## hidden until a building is actually clicked (see _on_world_clicked).
+func _build_house_panel() -> void:
+	_house_panel = HousePanel.new()
+	_house_panel.theme = _ui_theme
+	_house_panel.set_anchors_preset(Control.PRESET_CENTER_RIGHT)
+	_house_panel.offset_left = -HousePanel.PANEL_WIDTH - 24.0
+	_house_panel.offset_right = -24.0
+	_house_panel.offset_top = -90.0
+	_house_panel.offset_bottom = 90.0
+	_ui.add_child(_house_panel)
+
+
+## A left-click in the world opens the readout on whatever building was
+## clicked, and closes it on anything else -- clicking bare ground is a real
+## answer ("nothing here"), not a no-op that leaves a stale panel up.
+##
+## Takes a WORLD position, not a screen one: the screen->world conversion
+## needs a live viewport and so stays at the input edge (see
+## _world_position_of), which leaves this -- the part that actually decides
+## anything -- testable without one.
+##
+## Reached from _unhandled_input, so a click the UI already consumed (a
+## hotbar slot, an open window) never gets this far: the panel can only be
+## opened by clicking the WORLD, which is exactly the gesture it is for.
+## Suppressed entirely while a modal is open, matching every other
+## world-space affordance in this file (see _world_hints_allowed).
+func _on_world_clicked(world_position: Vector2) -> void:
+	if _any_gameplay_window_open():
+		return
+	var tile := _tile_for_position(world_position)
+	_house_panel.show_report(_chunk_manager.household_report_at(tile.x, tile.y))
+
+
+## Screen space -> world space for a click. The HUD lives on a CanvasLayer
+## that does not move with the camera, so a click's screen position has to
+## be pushed back through the world viewport's own transform before it
+## means anything in tiles -- the same conversion the hover tooltip's own
+## get_global_mouse_position() does for itself.
+func _world_position_of(screen_position: Vector2) -> Vector2:
+	return get_viewport().get_canvas_transform().affine_inverse() * screen_position
+
+
 func _any_gameplay_window_open() -> bool:
 	return (
 		_inventory_window.visible or _crafting_window.is_open() or _skill_window.is_open()
@@ -3652,6 +3707,7 @@ func _close_gameplay_windows() -> void:
 	_skill_window.visible = false
 	_quest_log_window.visible = false
 	_conversation_window.visible = false
+	_house_panel.close()
 
 
 ## Number keys 1..HOTBAR_SLOT_COUNT (rebindable hotbar_N actions) activate the

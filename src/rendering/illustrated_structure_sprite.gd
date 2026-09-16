@@ -47,6 +47,7 @@ extends RefCounted
 ## cell's own edge doesn't show up as a colored fringe once cropped.
 
 const SpriteSheetLoader = preload("res://src/rendering/sprite_sheet_loader.gd")
+const VariantSheetGrid = preload("res://src/rendering/variant_sheet_grid.gd")
 
 ## Same measured thresholds as illustrated_beehive_sprite.gd/
 ## illustrated_ant_mound_sprite.gd -- reused, not reinvented.
@@ -145,15 +146,35 @@ static var _sheet_frame_cache: Dictionary = {}
 ## sheet that cannot be loaded or a cell outside the grid -- a caller falls
 ## back to ProceduralBuildingPlaceholderSprite then, never crashes.
 func sheet_frame_image(path: String, columns: int, rows: int, row: int, column: int) -> Image:
+	return _frame_image(path, columns, rows, row, column, false)
+
+
+## The same cut for a VARIANT sheet (docs/concept/building.md, "Building
+## variant sheets"), whose cells are found in the sheet's own background
+## gutters rather than assumed to sit on an exact pitch -- see
+## VariantSheetGrid for why an even division is wrong for a hand-drawn
+## grid, and falls back to one anyway when a sheet has no readable gutters.
+func variant_frame_image(path: String, columns: int, rows: int, row: int, column: int) -> Image:
+	return _frame_image(path, columns, rows, row, column, true)
+
+
+## One body for both, differing only in where the cell's rect comes from.
+## Cached per (path, row, column, grid kind), so the gutter scan a detected
+## grid needs is paid once per sheet rather than per building placed.
+func _frame_image(path: String, columns: int, rows: int, row: int, column: int, detected: bool) -> Image:
 	if row < 0 or row >= rows or column < 0 or column >= columns:
 		return null
-	var key := "%s|%d|%d" % [path, row, column]
+	var key := "%s|%d|%d|%s" % [path, row, column, "detected" if detected else "even"]
 	if _sheet_frame_cache.has(key):
 		return _sheet_frame_cache[key]
 	var image := SpriteSheetLoader.load_image(path)
 	if image == null:
 		return null
-	var frame := image.get_region(_cell_rect(image, columns, rows, row, column))
+	var rect := (
+		VariantSheetGrid.cell_rect(image, columns, rows, row, column) if detected
+		else _cell_rect(image, columns, rows, row, column)
+	)
+	var frame := image.get_region(rect)
 	if frame.get_format() != Image.FORMAT_RGBA8:
 		frame.convert(Image.FORMAT_RGBA8)
 	_key_and_despill(frame, true)
@@ -166,9 +187,10 @@ func sheet_frame_image(path: String, columns: int, rows: int, row: int, column: 
 ## by the SAME factor (footprint_texture's own documented anchor, a building
 ## taller than its footprint stays taller). Null when the sheet is missing.
 func footprint_frame_texture(
-	path: String, columns: int, rows: int, row: int, column: int, tile_size: int, footprint_width_tiles: int
+	path: String, columns: int, rows: int, row: int, column: int, tile_size: int, footprint_width_tiles: int,
+	detected_grid: bool = false
 ) -> ImageTexture:
-	var frame := sheet_frame_image(path, columns, rows, row, column)
+	var frame := _frame_image(path, columns, rows, row, column, detected_grid)
 	if frame == null:
 		return null
 	var target_width := tile_size * maxi(footprint_width_tiles, 1)

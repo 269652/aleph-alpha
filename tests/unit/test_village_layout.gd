@@ -339,3 +339,190 @@ func test_a_village_that_fits_on_one_street_lays_no_side_streets():
 			cell.y <= plaza.end.y - 1,
 			"nothing paved south of the plaza when no second street opened (%s)" % str(cell)
 		)
+
+
+# -- the industry plot: a sawmill at the forest, joined by a real road spur
+#
+# docs/concept/village_growth.md mechanism 1. A sawmill stands at the
+# timber, not on the village square -- and a real track is laid to it,
+# because a building the village cannot walk to is not part of the village.
+# Pure and seeded like the rest of this module: stub predicates only.
+
+const _SAWMILL := "sawmill"
+
+
+## Forest filling the chunk's own southern band -- far enough from the
+## street that a plot at its edge is genuinely outlying.
+func _forest_in_the_south(cell: Vector2i) -> bool:
+	return cell.y >= CHUNK_SIZE - 8
+
+
+func _no_forest(_cell: Vector2i) -> bool:
+	return false
+
+
+## Buildable everywhere EXCEPT the forest itself -- the real rule
+## (EarthChunkManager.is_buildable_ground_at refuses the forest biome).
+func _buildable_outside_the_southern_forest(cell: Vector2i) -> bool:
+	return not _forest_in_the_south(cell)
+
+
+func test_no_forest_in_range_means_no_industry_plot():
+	var plot: Dictionary = VillageLayout.industry_plot(
+		_SAWMILL, CHUNK_SIZE, 31, _always_buildable, _no_forest, _never_occupied
+	)
+	assert_true(plot.is_empty(), "a village on open steppe honestly has no sawmill")
+
+
+func test_the_industry_plot_stands_on_buildable_ground_beside_the_forest():
+	var plot: Dictionary = VillageLayout.industry_plot(
+		_SAWMILL, CHUNK_SIZE, 32, _buildable_outside_the_southern_forest, _forest_in_the_south, _never_occupied
+	)
+	assert_false(plot.is_empty(), "a village with forest in range raises its sawmill at it")
+	assert_eq(plot["building_id"], _SAWMILL)
+	var cells: Array = BuildingCatalog.footprint_cells(_SAWMILL, plot["origin"])
+	var near_forest := false
+	for cell in cells:
+		assert_false(_forest_in_the_south(cell), "the mill itself never stands IN the forest")
+		for dy in range(-VillageLayout.INDUSTRY_FOREST_REACH_TILES, VillageLayout.INDUSTRY_FOREST_REACH_TILES + 1):
+			for dx in range(-VillageLayout.INDUSTRY_FOREST_REACH_TILES, VillageLayout.INDUSTRY_FOREST_REACH_TILES + 1):
+				if _forest_in_the_south(cell + Vector2i(dx, dy)):
+					near_forest = true
+	assert_true(near_forest, "the mill must stand within reach of real forest")
+
+
+func test_the_industry_plot_keeps_its_distance_from_the_square():
+	var plot: Dictionary = VillageLayout.industry_plot(
+		_SAWMILL, CHUNK_SIZE, 33, _buildable_outside_the_southern_forest, _forest_in_the_south, _never_occupied
+	)
+	assert_false(plot.is_empty(), "precondition")
+	var plaza: Rect2i = VillageLayout.skeleton(CHUNK_SIZE, 33)["plaza"]
+	var plaza_centre: Vector2i = plaza.position + plaza.size / 2
+	var origin: Vector2i = plot["origin"]
+	var distance: int = maxi(absi(origin.x - plaza_centre.x), absi(origin.y - plaza_centre.y))
+	assert_gte(
+		distance, VillageLayout.INDUSTRY_MIN_PLAZA_DISTANCE_TILES,
+		"the works are outlying, not another plot on the square"
+	)
+
+
+## The whole point of the spur: the doorstep must actually reach the main
+## street, walking only road. Verified by a real flood fill over the spur
+## plus the street row, not by trusting the shape of the returned list.
+func test_the_road_spur_connects_the_doorstep_to_the_main_street():
+	var plot: Dictionary = VillageLayout.industry_plot(
+		_SAWMILL, CHUNK_SIZE, 34, _buildable_outside_the_southern_forest, _forest_in_the_south, _never_occupied
+	)
+	assert_false(plot.is_empty(), "precondition")
+	var bones: Dictionary = VillageLayout.skeleton(CHUNK_SIZE, 34)
+	var street_y: int = bones["street_y"]
+
+	var walkable := {}
+	for cell in plot["road_spur"]:
+		walkable[cell] = true
+	for x in range(bones["street_x0"], bones["street_x1"] + 1):
+		walkable[Vector2i(x, street_y)] = true
+
+	var doorstep: Vector2i = plot["doorstep"]
+	assert_true(walkable.has(doorstep), "the doorstep itself must be road")
+	var seen := {doorstep: true}
+	var frontier: Array = [doorstep]
+	var reached_street := false
+	while not frontier.is_empty():
+		var cell: Vector2i = frontier.pop_back()
+		if cell.y == street_y:
+			reached_street = true
+			break
+		for step in [Vector2i(1, 0), Vector2i(-1, 0), Vector2i(0, 1), Vector2i(0, -1)]:
+			var next_cell: Vector2i = cell + step
+			if walkable.has(next_cell) and not seen.has(next_cell):
+				seen[next_cell] = true
+				frontier.append(next_cell)
+	assert_true(reached_street, "the spur must actually reach the street, walking only road")
+
+
+## A spur must never be laid through the mill it serves.
+func test_the_road_spur_never_runs_through_the_buildings_own_footprint():
+	var plot: Dictionary = VillageLayout.industry_plot(
+		_SAWMILL, CHUNK_SIZE, 35, _buildable_outside_the_southern_forest, _forest_in_the_south, _never_occupied
+	)
+	assert_false(plot.is_empty(), "precondition")
+	var footprint := {}
+	for cell in BuildingCatalog.footprint_cells(_SAWMILL, plot["origin"]):
+		footprint[cell] = true
+	for cell in plot["road_spur"]:
+		assert_false(footprint.has(cell), "spur cell %s runs through the mill" % str(cell))
+
+
+func test_an_unreachable_plot_is_refused_outright():
+	# Forest in range but every cell occupied except the mill's own site --
+	# no spur can be laid, so there is no plot at all rather than a mill
+	# nobody can walk to.
+	var plot: Dictionary = VillageLayout.industry_plot(
+		_SAWMILL, CHUNK_SIZE, 36, _buildable_outside_the_southern_forest, _forest_in_the_south,
+		func(cell: Vector2i) -> bool: return cell.y < CHUNK_SIZE - 12
+	)
+	assert_true(plot.is_empty(), "a mill the village cannot reach is not a mill")
+
+
+func test_the_industry_plot_is_deterministic():
+	var a: Dictionary = VillageLayout.industry_plot(
+		_SAWMILL, CHUNK_SIZE, 37, _buildable_outside_the_southern_forest, _forest_in_the_south, _never_occupied
+	)
+	var b: Dictionary = VillageLayout.industry_plot(
+		_SAWMILL, CHUNK_SIZE, 37, _buildable_outside_the_southern_forest, _forest_in_the_south, _never_occupied
+	)
+	assert_eq(a, b)
+
+
+# -- the next free street plot: where a growth building actually goes ------
+#
+# docs/concept/village_growth.md mechanism 2: a village that owes itself a
+# warehouse (or one more house for an arriving household) puts it on the
+# next free frontage of its own street, not on a spiral-searched patch of
+# wilderness.
+
+func test_the_next_street_plot_fronts_the_street_with_its_doorstep_on_it():
+	var plot: Dictionary = VillageLayout.next_street_plot(
+		"warehouse", CHUNK_SIZE, 41, _always_buildable, _never_occupied
+	)
+	assert_false(plot.is_empty())
+	var street_y: int = VillageLayout.skeleton(CHUNK_SIZE, 41)["street_y"]
+	assert_eq(plot["doorstep"], plot["origin"] + BuildingCatalog.doorstep_of("warehouse"))
+	assert_eq(plot["doorstep"].y, street_y, "a growth building fronts the main street")
+
+
+## The plaza stays the plaza. Once paved it reads as OCCUPIED, and that
+## must never be mistaken for "the square is free to build on".
+func test_a_growth_building_never_lands_on_the_paved_plaza():
+	var plaza: Rect2i = VillageLayout.skeleton(CHUNK_SIZE, 42)["plaza"]
+	var paved := {}
+	for cell in _cells_of(plaza):
+		paved[cell] = true
+	var plot: Dictionary = VillageLayout.next_street_plot(
+		"warehouse", CHUNK_SIZE, 42, _always_buildable, func(cell: Vector2i) -> bool: return paved.has(cell)
+	)
+	assert_false(plot.is_empty(), "a paved square must not stop the village growing")
+	for cell in BuildingCatalog.footprint_cells("warehouse", plot["origin"]) + [plot["doorstep"]]:
+		assert_false(plaza.has_point(cell), "cell %s stands on the village square" % str(cell))
+
+
+func test_the_next_street_plot_skips_ground_already_built_on():
+	var first: Dictionary = VillageLayout.next_street_plot(
+		"house_small", CHUNK_SIZE, 43, _always_buildable, _never_occupied
+	)
+	assert_false(first.is_empty(), "precondition")
+	var taken := {}
+	for cell in BuildingCatalog.footprint_cells("house_small", first["origin"]):
+		taken[cell] = true
+	var second: Dictionary = VillageLayout.next_street_plot(
+		"house_small", CHUNK_SIZE, 43, _always_buildable, func(cell: Vector2i) -> bool: return taken.has(cell)
+	)
+	assert_false(second.is_empty())
+	assert_ne(second["origin"], first["origin"], "the next household gets the NEXT plot, not the same one")
+
+
+func test_no_street_plot_at_all_when_nothing_is_buildable():
+	assert_true(
+		VillageLayout.next_street_plot("warehouse", CHUNK_SIZE, 44, _never_buildable, _never_occupied).is_empty()
+	)

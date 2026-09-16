@@ -406,6 +406,66 @@ const _RECIPES := {
 		"inputs": [{"item_id": "wood", "count": 20}, {"item_id": "stone", "count": 10}],
 		"output": {"item_id": "city_hall", "count": 1},
 	},
+	# The three village HOUSES (docs/concept/building.md's whole-building
+	# entities, raised over time by docs/concept/village_growth.md's ladder
+	# for an arriving household). One price, shared with BuildingCatalog.
+	# cost_of and test-pinned there, exactly as city_hall already is.
+	#
+	# Deliberately WITHOUT an ItemCatalog entry, and that absence is the
+	# gate: is_bench_recipe only offers a recipe whose output the item
+	# catalog actually knows, so a house can never turn up on a crafting
+	# bench as something a player carries home. It exists here for one
+	# reason -- a ConstructionProject needs real inputs to wait on and real
+	# material to draw down, and without a recipe a queued house would find
+	# nothing to wait for, derive zero labour hours, and complete instantly
+	# and for free on the tick it was queued.
+	"house_small": {
+		"inputs": [{"item_id": "wood", "count": 12}],
+		"output": {"item_id": "house_small", "count": 1},
+	},
+	"house_medium": {
+		"inputs": [{"item_id": "wood", "count": 20}, {"item_id": "stone", "count": 4}],
+		"output": {"item_id": "house_medium", "count": 1},
+	},
+	"house_large": {
+		"inputs": [{"item_id": "wood", "count": 32}, {"item_id": "stone", "count": 10}],
+		"output": {"item_id": "house_large", "count": 1},
+	},
+	# The growth ladder's remaining rungs (see docs/concept/village_growth.md).
+	# One price per building, shared with BuildingCatalog.cost_of (test-pinned
+	# in test_building_catalog.gd -- one number, not two, exactly as city_hall
+	# above already shares its price with the catalog). Priced ONLY in
+	# wood/stone/plant_fibre: those are the three materials SettlementGathering
+	# actually gathers, so these are the only ingredients a village can ever
+	# pay a rung with. No skill gate and no structure gate, matching
+	# Storage/Farm/City Hall's own reachability -- the gate on these is
+	# population (VillageGrowth's ladder), not technology.
+	"sawmill": {
+		"inputs": [{"item_id": "wood", "count": 16}, {"item_id": "stone", "count": 4}],
+		"output": {"item_id": "sawmill", "count": 1},
+	},
+	"farmhouse": {
+		"inputs": [
+			{"item_id": "wood", "count": 14}, {"item_id": "stone", "count": 4},
+			{"item_id": "plant_fibre", "count": 6},
+		],
+		"output": {"item_id": "farmhouse", "count": 1},
+	},
+	"warehouse": {
+		"inputs": [{"item_id": "wood", "count": 22}, {"item_id": "plant_fibre", "count": 6}],
+		"output": {"item_id": "warehouse", "count": 1},
+	},
+	"blacksmith": {
+		"inputs": [{"item_id": "wood", "count": 18}, {"item_id": "stone", "count": 16}],
+		"output": {"item_id": "blacksmith", "count": 1},
+	},
+	"brewery": {
+		"inputs": [
+			{"item_id": "wood", "count": 22}, {"item_id": "stone", "count": 12},
+			{"item_id": "plant_fibre", "count": 4},
+		],
+		"output": {"item_id": "brewery", "count": 1},
+	},
 	# A stone check dam (see docs/concept/rivers.md's "Dams"). Costs `rock`
 	# -- what picking up a pebble and smashing a boulder both yield -- and
 	# NOT mined `stone`, so damming a stream needs only what its own banks

@@ -332,3 +332,66 @@ func test_a_building_on_dry_ground_survives_a_reload():
 ## than paying to rebuild the atlas from scratch on every Enter.
 func test_terrain_renderer_returns_the_same_instance_every_call():
 	assert_same(manager.terrain_renderer(), manager.terrain_renderer())
+
+
+# -- art resolution (docs/concept/art_resolution.md) ----------------------
+#
+# The one factor separating "how many art PIXELS a thing is drawn with"
+# from "how much WORLD it occupies". Terrain already paints at
+# ART_TILE_SIZE (DETAIL_MULTIPLIER art pixels per world unit) and scales
+# back by LAYER_SCALE; a building drawn at TILE_SIZE carries HALF the
+# detail per world unit of the ground it stands on -- which is exactly the
+# resolution a finely-drawn cottage variant sheet would be thrown away at.
+
+const ArtResolution = preload("res://src/rendering/art_resolution.gd")
+
+
+func _building_sprite_at(origin_local: Vector2i) -> Sprite2D:
+	var node: Node2D = manager._building_nodes.get(_chunk_coord, {}).get(origin_local)
+	if node == null:
+		return null
+	for child in node.get_children():
+		if child is Sprite2D:
+			return child
+	return null
+
+
+func test_a_buildings_drawn_world_width_is_exactly_its_footprint():
+	assert_true(manager.place_building(_chunk_coord, _origin, "house_large", Vector2i(0, 1), 5, ""))
+	var sprite := _building_sprite_at(_origin)
+	assert_not_null(sprite, "a placed building has a sprite")
+
+	var footprint := BuildingCatalog.footprint_of("house_large")
+	assert_almost_eq(
+		sprite.texture.get_width() * sprite.scale.x, float(footprint.x * TerrainRenderer.TILE_SIZE), 0.01,
+		"the drawn width must be the footprint's own world width, whatever the art resolution"
+	)
+
+
+func test_a_building_carries_the_same_art_detail_per_world_unit_as_the_ground_it_stands_on():
+	assert_true(manager.place_building(_chunk_coord, _origin, "house_large", Vector2i(0, 1), 5, ""))
+	var sprite := _building_sprite_at(_origin)
+	assert_not_null(sprite, "precondition")
+
+	var footprint := BuildingCatalog.footprint_of("house_large")
+	assert_eq(
+		sprite.texture.get_width(), footprint.x * TerrainRenderer.ART_TILE_SIZE,
+		"a building's art must be authored/scaled at the same pixels-per-world-unit as terrain"
+	)
+	assert_almost_eq(sprite.scale.x, ArtResolution.SPRITE_SCALE, 0.001)
+	assert_almost_eq(sprite.scale.y, ArtResolution.SPRITE_SCALE, 0.001)
+
+
+## The sprite is anchored at the footprint's bottom edge, so a building
+## taller than its own ground footprint overhangs NORTH -- unchanged by the
+## resolution bump, and the thing that would break first if the scale were
+## applied to one axis and not the other.
+func test_a_taller_building_still_overhangs_north_of_its_footprint():
+	assert_true(manager.place_building(_chunk_coord, _origin, "house_large", Vector2i(0, 1), 5, ""))
+	var sprite := _building_sprite_at(_origin)
+	assert_not_null(sprite, "precondition")
+	assert_lt(sprite.position.y, 0.0, "the sprite rises from the footprint's bottom edge")
+	assert_almost_eq(
+		sprite.position.y, -sprite.texture.get_height() * 0.5 * sprite.scale.y, 0.01,
+		"anchored at its own bottom edge in WORLD units, not art pixels"
+	)
