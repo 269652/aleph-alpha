@@ -14,12 +14,20 @@ produce ford → ferry → bridge. Trade can produce rest stop → inn → marke
 
 ## Design pillars
 
-1. **Worn, not placed.** Nothing here is authored by hand or spawned by a
-   scripted event. A path exists because feet crossed that ground often
-   enough, and it fades the same way — through disuse, not a despawn timer.
-   This is the same "real mechanism, not scripted spawn" pillar
+1. **Worn, not placed — for paths and trails.** Nothing in the worn tiers
+   is authored by hand or spawned by a scripted event. A path exists
+   because feet crossed that ground often enough, and it fades the same
+   way — through disuse, not a despawn timer. This is the same "real
+   mechanism, not scripted spawn" pillar
    [ecosystem_dynamics.md](ecosystem_dynamics.md) states for fruiting and
    population — applied to the ground itself instead of the biology on it.
+   The one deliberate exception is the **Road** tier (2026-09-16): a road
+   is *laid* — by a settlement, as its streets and plaza
+   ([building.md](building.md) pillar 5, `VillageLayout`) — not worn,
+   because no amount of walking turns dirt into cobbles; that is work a
+   community does. Still not authored by a designer: which village lays
+   which street where is decided by the same seeded, algorithmic layout
+   that sites its houses.
 2. **Real-world grounding: desire paths.** A "desire path" is the actual
    term ecologists and urban planners use for exactly this — a trail worn
    by repeated foot traffic taking the route people actually walk rather
@@ -65,9 +73,28 @@ decreasing with disuse — a real escalation, not three unrelated systems:
   never organically blended into the ground" is this codebase's own
   existing rule for every other modification tile, and ground walked all
   the way to a trail reads as MORE deliberately worn, not less.
-- **Road** — the heaviest, most sustained tier — likely tied to settlement
-  proximity and repeated inter-settlement travel once that exists. Not yet
-  built.
+- **Road** — the built tier, and the one that is *laid* rather than worn
+  (see pillar 1's exception). A settlement lays its streets and plaza as
+  `TerrainRenderer.ROAD_TILE_ID` at founding (`VillageLayout` →
+  `VillageRenderer`), and older saves' trail-drawn streets are repaved on
+  their next load (`EarthChunkManager._migrate_village_trails_to_roads`).
+  A road is a real built surface, exactly like a house's footprint: nothing
+  grows on it (grass, flowers, scrub, lichen are blocked; trees and stones
+  never spawn or root on it; laying a street fells a tree standing in it),
+  it never wears — `World._step_path_scarring` takes no wear on a paved
+  cell and never repaints or reclaims one, so the worn tiers can never
+  overwrite a street — and it walks a little faster:
+  `Player.ROAD_SPEED_MULTIPLIER` (1.15, test-pinned) multiplies into the
+  same per-frame speed chain water, weather, slope and condition already
+  do. Art: ONE seamless full-bleed tile, `assets/sprites/terrain/road.png`,
+  `TerrainRenderer.ART_TILE_SIZE` square (32 px), no dividers, no
+  directional variants (a flat cobble surface that tiles in every
+  direction — corners and crossings would need paint-time neighbour
+  resolution, a later pass); until it exists, `TerrainRenderer.
+  road_tile_image` draws a procedural cobble placeholder, and dropping the
+  PNG in lights it up on the next atlas rebuild (bump `ATLAS_VERSION`).
+  Between-village roads and the worn-route heatmap that would justify
+  them are still the open items below.
 
 Each tier crossing (and the reverse — reclaimed by disuse) is a real,
 `/why`-inspectable event once emergence-substrate wiring reaches it (see
@@ -127,10 +154,25 @@ implemented either, but the two are designed to land together.
   the full mechanism, since one field/renderer pair serves grass, forest,
   and snow alike, distinguished only by which surface each print was
   stamped on.
-- ⬜ Road tier (a higher wear threshold above Trail, its own rendering) —
-  the Trail tier's own ceiling IS `PathScarring.MAX_WEAR`, so a Road tier
-  needs the wear model's own ceiling raised first, not just a new threshold
-  picked below an unreachable one.
+- ✅ **The Road tier, as a LAID surface** (2026-09-16) — `TerrainRenderer.
+  ROAD_TILE_ID`/`is_road_tile`/`road_tile_image` (its own atlas slot,
+  procedural cobble placeholder until `assets/sprites/terrain/road.png`
+  lands), laid by `VillageRenderer` for every `VillageLayout` street cell;
+  built-surface semantics shared with house footprints
+  (`EarthChunkManager._is_built_surface`, `_can_root_at`, `TreeRenderer`/
+  `StoneRenderer` spawn skips); never worn (`World._is_paved` guards every
+  tile-writing branch of `_step_path_scarring`); `Player.
+  ROAD_SPEED_MULTIPLIER`; older saves' trail streets repaved on load. The
+  earlier note here — "needs the wear model's ceiling raised first" —
+  was the worn reading of "road"; that reading is retired: a road is not
+  a wear tier at all. Tested in `test_terrain_renderer.gd`,
+  `test_earth_chunk_manager_buildings.gd`, `test_tree_renderer.gd`,
+  `test_stone_renderer.gd`, `test_world_path_scarring_trail_wiring.gd`,
+  `test_player.gd`, `test_village_renderer.gd`,
+  `test_earth_chunk_manager_village_migration.gd`.
+- ⬜ Between-village roads (routing a street on to the next settlement) and
+  the plaza/side streets a laid-out village frames its road with — see
+  [building.md](building.md) for the layout side.
 - ⬜ Crossings (ford/ferry/bridge) — no "crossing point" concept exists yet.
 - ⬜ Traffic heatmaps, inter-settlement routes, market nodes.
 - ⬜ Infrastructure condition/maintenance/degradation feeding back into

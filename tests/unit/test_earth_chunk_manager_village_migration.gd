@@ -24,6 +24,7 @@ const BuildingPiece = preload("res://src/gameplay/building_piece.gd")
 const PlayerIdentity = preload("res://src/emergence/player_identity.gd")
 const GeoCoordinates = preload("res://src/world/geo_coordinates.gd")
 const EarthChunkGenerator = preload("res://src/world/earth_chunk_generator.gd")
+const TerrainRenderer = preload("res://src/rendering/terrain_renderer.gd")
 
 const CHUNK_SIZE := 32
 
@@ -298,3 +299,45 @@ func test_a_non_player_households_project_does_not_protect_its_cells():
 
 	var g := _global(origin)
 	assert_eq(manager.modification_at_global(g.x, g.y), "", "only the player's own household protects a site")
+
+
+# -- older saves' village streets: trail cells become the real Road tile ----
+#
+# docs/concept/infrastructure.md: before the Road tier existed, VillageRenderer
+# laid every street as the worn TRAIL tile. A settlement chunk (one with real
+# buildings) that still carries trail cells has them repaved as roads on
+# its next load; a chunk with no buildings keeps its trails, since those are
+# genuinely worn ground and not a street at all.
+
+func _seed_persisted_trail(local: Vector2i) -> void:
+	var path := manager._modifications_path(_chunk_coord)
+	var mods: Dictionary = manager._chunk_serializer.load_modifications(path)
+	mods[local] = TerrainRenderer.TRAIL_TILE_ID
+	manager._chunk_serializer.save_modifications(mods, path)
+
+
+func test_a_settlement_chunks_persisted_trail_cells_are_repaved_as_roads_on_load():
+	# First load founds the village (real buildings persist); then simulate
+	# the old on-disk shape by writing a trail cell and reloading.
+	manager._load_chunk(_chunk_coord)
+	assert_false(manager.buildings_in_chunk(_chunk_coord).is_empty(), "precondition: a real village")
+	var origin := _a_dry_local_origin(3)
+	manager._unload_chunk(_chunk_coord)
+	_seed_persisted_trail(origin)
+
+	manager._load_chunk(_chunk_coord)
+
+	var g := _global(origin)
+	assert_eq(manager.modification_at_global(g.x, g.y), TerrainRenderer.ROAD_TILE_ID)
+
+
+func test_a_new_villages_own_streets_are_laid_as_roads_not_trails():
+	manager._load_chunk(_chunk_coord)
+	var chunk = manager._loaded_chunks[_chunk_coord]
+	var roads := 0
+	for local in chunk.modifications:
+		var tile_id: String = chunk.modifications[local]
+		assert_ne(tile_id, TerrainRenderer.TRAIL_TILE_ID, "a freshly laid street must not be a worn trail (%s)" % local)
+		if tile_id == TerrainRenderer.ROAD_TILE_ID:
+			roads += 1
+	assert_gt(roads, 0, "a real village lays real road cells")

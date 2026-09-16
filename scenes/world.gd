@@ -5413,7 +5413,14 @@ func _step_path_scarring(delta: float) -> void:
 		var tile: Vector2i = local_player.current_tile()
 		if tile != _last_scar_step_tile:
 			_last_scar_step_tile = tile
-			if _chunk_manager.snow_depth() <= 0.0 and PATH_SCAR_BIOMES.has(_chunk_manager.biome_at_global(tile.x, tile.y)):
+			# A laid road (docs/concept/infrastructure.md's Road tier) is
+			# never worn: it takes no wear, so it can never be repainted as
+			# a path/trail or reclaimed underneath a village's own street.
+			if (
+				_chunk_manager.snow_depth() <= 0.0
+				and not _is_paved(tile)
+				and PATH_SCAR_BIOMES.has(_chunk_manager.biome_at_global(tile.x, tile.y))
+			):
 				_path_scarring.step_on(tile)
 
 	_scar_refresh_accumulator += delta
@@ -5422,7 +5429,7 @@ func _step_path_scarring(delta: float) -> void:
 	_scar_refresh_accumulator = 0.0
 
 	for tile in _path_scarring.worn_tiles():
-		if not _scarred_tiles.has(tile):
+		if not _scarred_tiles.has(tile) and not _is_paved(tile):
 			if _chunk_manager.build_at_global(tile.x, tile.y, TerrainRenderer.EARTH_TILE_ID):
 				_scarred_tiles[tile] = true
 				# Emergence Phase 8 (see docs/concept/infrastructure.md,
@@ -5440,7 +5447,7 @@ func _step_path_scarring(delta: float) -> void:
 	# already been recorded and painted as an ordinary worn Path -- see
 	# PathScarring.trail_tiles being a subset of worn_tiles.
 	for tile in _path_scarring.trail_tiles():
-		if not _trailed_tiles.has(tile):
+		if not _trailed_tiles.has(tile) and not _is_paved(tile):
 			if _chunk_manager.build_at_global(tile.x, tile.y, TerrainRenderer.TRAIL_TILE_ID):
 				_trailed_tiles[tile] = true
 				_chunk_manager.record_trail_formed_if_new(tile)
@@ -5454,6 +5461,11 @@ func _step_path_scarring(delta: float) -> void:
 	# _CURRENTLY_WORN_EVENTS guard already recognizes a last-seen
 	# trail_formed as a valid reclaim precedent.
 	for tile in _trailed_tiles.keys().duplicate():
+		if _is_paved(tile):
+			# A street laid over a tracked trail: the road owns the cell now
+			# -- forget the trail, never repaint or reclaim it.
+			_trailed_tiles.erase(tile)
+			continue
 		if not _path_scarring.is_trail(tile):
 			_trailed_tiles.erase(tile)
 			if _path_scarring.is_worn(tile):
@@ -5461,10 +5473,19 @@ func _step_path_scarring(delta: float) -> void:
 				_chunk_manager.record_trail_reclaimed(tile)
 
 	for tile in _scarred_tiles.keys().duplicate():
+		if _is_paved(tile):
+			_scarred_tiles.erase(tile)  # same: the road owns it, nothing to reclaim
+			continue
 		if not _path_scarring.is_worn(tile):
 			_chunk_manager.destroy_at_global(tile.x, tile.y)
 			_scarred_tiles.erase(tile)
 			_chunk_manager.record_path_reclaimed(tile)
+
+
+## Whether `tile` is a laid road (docs/concept/infrastructure.md's Road
+## tier): the one modification the wear model above must never touch.
+func _is_paved(tile: Vector2i) -> bool:
+	return TerrainRenderer.is_road_tile(_chunk_manager.modification_at_global(tile.x, tile.y))
 
 
 ## Pebble dispersion (see PebbleDispersion, docs/concept/stone.md): walking

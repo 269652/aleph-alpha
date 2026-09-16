@@ -123,14 +123,28 @@ structure does today. `remove_building` reverses all of it.
 Facing is south only in this pass (every sheet is drawn south-facing);
 the field exists so a later pass can add other faces.
 
-**Village layout** (`VillageLayout.layout(...)`, pure): one or more
-east–west streets across the chunk's habitable middle, one tile wide,
-laid as the existing `TRAIL_TILE_ID` (the infrastructure doc's Road tier
-finally has an NPC-laid instance); houses take the NORTH side of each
-street so every door faces south onto it (the doorstep IS a road cell),
-one-tile gaps between plots, plaza (well + stall) on the main street's
-middle, gate at its end; the next street opens a house-depth plus two
-tiles further south when the first is full. Every plot's footprint and
+**Village layout** (`VillageLayout.layout(...)`, pure): a main east–west
+street through the chunk's middle, paved end to end as the real Road
+tile (`TerrainRenderer.ROAD_TILE_ID` — the infrastructure doc's Road
+tier, a LAID surface that never wears and nothing grows on; older saves'
+trail-drawn streets are repaved on load), with a paved **plaza** at its
+centre (`VillageLayout.skeleton`: 8 tiles wide, three rows north of the
+street and two south) — the **civic plot** on the plaza's north half is
+the town hall's reserved site, its door on the street ([civic_construction.md](civic_construction.md):
+the hall rises there over time), the **well** and the **stall** stand on
+its south half, and a **gate** marks the street's entrance at its west
+end. Houses take the NORTH side of each street so every door faces south
+onto it (the doorstep IS a road cell), one-tile gaps between plots, never
+straddling the plaza; when the main street is full the next opens a
+fixed pitch further south, tied back to the plaza by two side streets
+down its flanks. A village whose square isn't clear (water, forest, an
+old house standing on it) gets no plaza and no hall — honestly, tested —
+rather than a square with a lake in it. The plaza and landmarks are a
+pure function of the chunk and its seed, so an older village re-derives
+and paves its square on its next load where it is clear
+(`VillageRenderer._lay_plaza_if_missing`) without persisting anything.
+`SettlementGenerator` derives its landmark positions from the same
+skeleton, so props and paving always agree. Every plot's footprint and
 doorstep must be buildable (`is_buildable_terrain_at`) and unmodified;
 a villager whose plot fits nowhere stays homeless, as today, rather than
 being squeezed onto water or forest. `SettlementGenerator` keeps its
@@ -221,7 +235,16 @@ for a house returns in the construction-over-time pass. See Status.
   home, is idempotent across reloads (a real duplication bug found and
   fixed, see `docs/progress.md`). Village houses own real property
   through the same `ConstructionProject`/`HouseholdStore` scheme the
-  player's own houses use ("one house id").
+  player's own houses use ("one house id"). **Layout v2 (2026-09-16):**
+  real Road-tier streets paved end to end, a central plaza with the civic
+  plot / well / stall on it, a gate at the street's entrance, side
+  streets to a second street, landmarks derived from the same skeleton,
+  older villages' plazas re-derived and paved on reload where clear
+  (`test_village_layout.gd` 26, `test_settlement_generator.gd`,
+  `test_village_renderer.gd` 36). Each house also remembers its own
+  villager (occupation + identity seed on the record, backfilled for
+  older saves on reload) so the interior is furnished for the real
+  resident.
 - ✅ **Older saves.** A settlement chunk still carrying old-style
   piece-built houses has them wiped once on load and regenerates as
   whole-building entities in the same load, protecting any player-owned

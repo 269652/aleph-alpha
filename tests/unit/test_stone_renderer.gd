@@ -622,6 +622,27 @@ func test_a_non_piece_modification_does_not_stop_a_stone_spawning():
 	assert_eq(spawned.size(), int(baseline["total"]))
 
 
+## A laid road (docs/concept/infrastructure.md's Road tier) IS a built
+## surface, unlike the worn earth/trail tiers the test above pins: a village
+## street must not have a boulder respawn in the middle of it on reload.
+func test_no_stone_spawns_on_a_road_cell():
+	var chunk := _make_grassland_chunk()
+	var cells := stone_placement.stones_in_chunk(
+		CHUNK_ORIGIN, chunk.biome, chunk.width, chunk.height
+	)
+	assert_gt(cells.size(), 0, "precondition: this chunk should roll at least one stone cell")
+	var cell: Vector2i = cells[0]
+	var occupied_tile := Vector2i(CHUNK_ORIGIN.x + cell.x, CHUNK_ORIGIN.y + cell.y)
+	var baseline := _baseline_spawn(chunk, occupied_tile)
+	assert_gt(baseline["on_tile"], 0, "precondition: that cell should carry stone without a road on it")
+
+	chunk.modifications[cell] = TerrainRenderer.ROAD_TILE_ID
+	var spawned := renderer.spawn_stones(parent, chunk, CHUNK_ORIGIN, TILE_SIZE)
+	for node in spawned:
+		assert_ne(_tile_of(node), occupied_tile, "a stone spawned on a road cell")
+	assert_eq(spawned.size(), int(baseline["total"]) - int(baseline["on_tile"]))
+
+
 ## A mountain ore vein is placed by its own separate path
 ## (spawn_mountain_veins, slope-gated) but is called from the same
 ## _load_chunk step and stored in the same _loaded_stones list, so it needs

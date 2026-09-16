@@ -15,6 +15,7 @@ const IllustratedTerrainSprite = preload("res://src/rendering/illustrated_terrai
 const IllustratedBuildingPieceSprite = preload("res://src/rendering/illustrated_building_piece_sprite.gd")
 const ProceduralHillshadeSprite = preload("res://src/rendering/procedural_hillshade_sprite.gd")
 const ProceduralRiverFlowSprite = preload("res://src/rendering/procedural_river_flow_sprite.gd")
+const SpriteSheetLoader = preload("res://src/rendering/sprite_sheet_loader.gd")
 
 ## How many WORLD UNITS one tile occupies. Every gameplay system is built on
 ## this -- player movement/collision, spawn placement, chunk streaming,
@@ -124,6 +125,23 @@ const EARTH_COLOR := Color(0.35, 0.25, 0.15)
 const TRAIL_TILE_ID := "trail"
 const TRAIL_COLOR := Color(0.22, 0.16, 0.1)
 
+## The Road tier (docs/concept/infrastructure.md): unlike path/trail,
+## which are WORN into the ground by feet, a road is LAID -- by a
+## settlement (VillageLayout's streets and plaza) -- so it is a real,
+## placed modification that never wears, blocks vegetation like any
+## built cell, and walks a little faster (Player.ROAD_SPEED_MULTIPLIER).
+## Art: ONE seamless full-bleed tile at ROAD_ART_PATH (ART_TILE_SIZE
+## square, no dividers, no directional variants -- a flat cobble surface
+## tiles in every direction); until that file exists, road_tile_image
+## draws a procedural cobble placeholder so the tier is real today.
+const ROAD_TILE_ID := "road"
+const ROAD_COLOR := Color(0.46, 0.43, 0.39)
+const ROAD_ART_PATH := "res://assets/sprites/terrain/road.png"
+
+
+static func is_road_tile(tile_id: String) -> bool:
+	return tile_id == ROAD_TILE_ID
+
 ## Cardinal directions a blend can be oriented toward -- up/down/left/right,
 ## in this fixed order so mask/atlas indexing is stable.
 const _DIRECTIONS: Array[Vector2i] = [Vector2i(0, -1), Vector2i(0, 1), Vector2i(-1, 0), Vector2i(1, 0)]
@@ -169,7 +187,7 @@ const ATLAS_COLUMNS := 64
 ## still being decorrelated between neighbouring tiles.
 const _VARIANT_SALT := 90210
 
-const ATLAS_VERSION := "art_resolution_v26_illustrated_building_pieces"
+const ATLAS_VERSION := "art_resolution_v27_road_tile"
 
 ## Overridable so tests never touch the real user:// cache (see
 ## TerrainAtlasCache) -- production code (EarthChunkManager) never sets
@@ -209,6 +227,8 @@ func atlas_coords_for_biome(biome_name: String, variant_index: int = 0) -> Vecto
 func atlas_coords_for_modification(tile_id: String) -> Vector2i:
 	if tile_id == TRAIL_TILE_ID:
 		return _grid_coords(_trail_linear())
+	if tile_id == ROAD_TILE_ID:
+		return _grid_coords(_road_linear())
 	if ProceduralStructureSprite.STRUCTURE_IDS.has(tile_id):
 		return _grid_coords(_structure_linear(tile_id))
 	if BuildingPiece.has_piece(tile_id):
@@ -796,10 +816,49 @@ func atlas_coords_for_facade_variant(material: String, category: String, storey:
 	return _grid_coords(_facade_variant_linear(material, category, safe_storey))
 
 
+## Linear atlas index of the single road tile (see ROAD_TILE_ID) --
+## appended after the facade family, the same "shifts no existing index"
+## reasoning _trail_linear's own doc comment gives.
+func _road_linear() -> int:
+	return _facade_variant_base_linear() + _facade_variant_family_size()
+
+
 ## Every atlas slot any family reserves -- the last family's end. The one
 ## number build_tile_set and the atlas-size test share.
 func _atlas_total_cells() -> int:
-	return _facade_variant_base_linear() + _facade_variant_family_size()
+	return _road_linear() + 1
+
+
+## The road tile's own pixels (see ROAD_TILE_ID): the illustrated sheet at
+## ROAD_ART_PATH when it exists, resized to the atlas cell if an artist
+## delivered it larger, else a procedural cobble placeholder -- the base
+## colour with a seeded per-stone light/dark speckle, so it reads as a laid
+## surface rather than the trail's one flat fill.
+func road_tile_image() -> Image:
+	var illustrated := SpriteSheetLoader.load_image(ROAD_ART_PATH)
+	if illustrated != null:
+		illustrated.convert(Image.FORMAT_RGBA8)
+		if illustrated.get_width() != ART_TILE_SIZE or illustrated.get_height() != ART_TILE_SIZE:
+			illustrated.resize(ART_TILE_SIZE, ART_TILE_SIZE, Image.INTERPOLATE_LANCZOS)
+		return illustrated
+	var image := Image.create(ART_TILE_SIZE, ART_TILE_SIZE, false, Image.FORMAT_RGBA8)
+	var stone := maxi(ART_TILE_SIZE / _ROAD_STONES_PER_TILE, 1)
+	for y in ART_TILE_SIZE:
+		for x in ART_TILE_SIZE:
+			var color := ROAD_COLOR
+			if x % stone == 0 or y % stone == 0:
+				color = ROAD_COLOR.darkened(_ROAD_MORTAR_DARKEN)
+			else:
+				var shade := PixelNoise.range_value(_ROAD_SPECKLE_SEED, x / stone, y / stone, -_ROAD_STONE_SHADE, _ROAD_STONE_SHADE)
+				color = ROAD_COLOR.lightened(shade) if shade >= 0.0 else ROAD_COLOR.darkened(-shade)
+			image.set_pixel(x, y, color)
+	return image
+
+
+const _ROAD_SPECKLE_SEED := 7301
+const _ROAD_STONES_PER_TILE := 8
+const _ROAD_MORTAR_DARKEN := 0.25
+const _ROAD_STONE_SHADE := 0.08
 
 
 ## A building piece's tile as it should be painted at `local` in `chunk`:
@@ -1152,6 +1211,10 @@ func _build_atlas_pixels(biome_count: int, rows: int) -> Image:
 	var trail_image := Image.create(ART_TILE_SIZE, ART_TILE_SIZE, false, Image.FORMAT_RGBA8)
 	trail_image.fill(TRAIL_COLOR)
 	_blit_tile(image, trail_image, _trail_linear())
+
+	# The road tile (see ROAD_TILE_ID/road_tile_image), appended after the
+	# facade family -- the last slot the atlas reserves.
+	_blit_tile(image, road_tile_image(), _road_linear())
 
 	return image
 

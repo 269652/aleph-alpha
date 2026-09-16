@@ -692,6 +692,22 @@ func test_no_tree_spawns_on_a_cell_a_building_piece_occupies():
 	assert_eq(spawned.size(), without_house - _tree_cells_within_one_of(chunk, cell))
 
 
+## A laid road (docs/concept/infrastructure.md's Road tier) is a built
+## surface: a village street must never get a tree back in the middle of it
+## on reload. The road's own cell only -- no apron, a road is not a house.
+func test_no_tree_spawns_on_a_road_cell():
+	var chunk := _make_forest_chunk()
+	var cell := _first_tree_cell(chunk)
+	assert_ne(cell, Vector2i(-1, -1), "this chunk rolled no trees at all")
+	var without_road := _expected_tree_count(chunk)
+
+	chunk.modifications[cell] = "road"
+	var spawned := renderer.spawn_trees(parent, chunk, CHUNK_ORIGIN, TILE_SIZE)
+
+	assert_false(_spawned_on_cell(spawned, cell), "a tree spawned on a road cell")
+	assert_eq(spawned.size(), without_road - 1)
+
+
 ## A house keeps a one-cell apron clear of trees (docs/concept/building.md
 ## "Placement rules"; reported directly: a village house with a tree
 ## standing in front of its door) -- BuildingPiece.touches_piece is the

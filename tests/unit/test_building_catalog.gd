@@ -10,6 +10,7 @@ extends GutTest
 const BuildingCatalog = preload("res://src/gameplay/building_catalog.gd")
 const NpcGenome = preload("res://src/world/npc_genome.gd")
 const NpcIdentity = preload("res://src/world/npc_identity.gd")
+const CraftingRecipeBook = preload("res://src/gameplay/crafting_recipe_book.gd")
 
 const _TRAIT_NAMES := ["friendly", "gruff", "curious", "stoic", "greedy", "kind", "cautious", "bold"]
 
@@ -176,3 +177,33 @@ func test_a_merchant_tends_to_a_bigger_house_than_a_farmer():
 		merchant_area += m.x * m.y
 		farmer_area += f.x * f.y
 	assert_gt(merchant_area, farmer_area)
+
+
+# -- civic buildings (docs/concept/civic_construction.md): the City Hall -----
+#
+# A real catalog entity a village raises on its own plaza over time (see
+# VillageLayout.skeleton's civic plot and EarthChunkManager's civic build
+# decision), drawn from the city_hall.png sheet that already follows the
+# asset contract -- and NEVER a house: choose_house_id must not hand a
+# villager a town hall to live in.
+
+func test_the_city_hall_is_a_real_civic_building_and_not_a_house():
+	assert_true(BuildingCatalog.has_building("city_hall"))
+	assert_true(BuildingCatalog.CIVIC_BUILDING_IDS.has("city_hall"))
+	assert_false(BuildingCatalog.BUILDING_IDS.has("city_hall"), "never in the house pool")
+	assert_eq(BuildingCatalog.footprint_of("city_hall"), Vector2i(4, 3))
+	assert_eq(BuildingCatalog.capacity_of("city_hall"), 0, "nobody lives in the town hall")
+	assert_eq(BuildingCatalog.sheet_of("city_hall"), "res://assets/sprites/buildings/city_hall.png")
+	assert_eq(BuildingCatalog.doorstep_of("city_hall"), Vector2i(2, 3), "door on the south edge, doorstep just outside")
+
+
+## Its price is the SAME wood 20 + stone 10 the legacy city_hall placeable
+## recipe already charges (CraftingRecipeBook) -- one number, not two.
+func test_the_city_halls_cost_matches_the_legacy_recipes_inputs():
+	var inputs: Array = CraftingRecipeBook.new().recipe_inputs("city_hall")
+	assert_false(inputs.is_empty(), "precondition: the legacy recipe exists")
+	var expected := {}
+	for input in inputs:
+		expected[input["item_id"]] = input["count"]
+	assert_eq(BuildingCatalog.cost_of("city_hall"), expected)
+	assert_gt(BuildingCatalog.labor_hours_of("city_hall"), BuildingCatalog.labor_hours_of("house_large"), "a hall is more work than any house")

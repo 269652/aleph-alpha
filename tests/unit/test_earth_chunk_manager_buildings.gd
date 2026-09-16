@@ -248,6 +248,38 @@ func test_occupancy_scans_already_used_by_siting_see_the_whole_footprint():
 		assert_ne(manager.modification_at_global(g.x, g.y), "", str(cell))
 
 
+# -- the Road tier (docs/concept/infrastructure.md): a laid surface, so -----
+# -- nothing grows on it -- the same built-cell rule a house's footprint has --
+
+func test_a_road_cell_counts_as_built_so_ground_cover_is_blocked_on_it():
+	var g := _global(_origin)
+	assert_true(manager.build_at_global(g.x, g.y, TerrainRenderer.ROAD_TILE_ID))
+	assert_true(manager._built_local_cells(manager._loaded_chunks[_chunk_coord]).has(_origin))
+
+
+## A trail is worn ground, not a laid surface -- it stays open to grass
+## exactly as before (the worn tiers are untouched by the Road tier).
+func test_a_trail_cell_still_does_not_count_as_built():
+	var g := _global(_origin)
+	assert_true(manager.build_at_global(g.x, g.y, TerrainRenderer.TRAIL_TILE_ID))
+	assert_false(manager._built_local_cells(manager._loaded_chunks[_chunk_coord]).has(_origin))
+
+
+func test_destroying_a_road_cell_opens_it_to_ground_cover_again():
+	var g := _global(_origin)
+	manager.build_at_global(g.x, g.y, TerrainRenderer.ROAD_TILE_ID)
+	assert_true(manager.destroy_at_global(g.x, g.y))
+	assert_false(manager._built_local_cells(manager._loaded_chunks[_chunk_coord]).has(_origin))
+
+
+func test_nothing_takes_root_on_a_road_cell():
+	var g := _global(_origin)
+	manager.build_at_global(g.x, g.y, TerrainRenderer.ROAD_TILE_ID)
+	var chunk = manager._loaded_chunks[_chunk_coord]
+	var pixel := (Vector2(g) + Vector2(0.5, 0.5)) * TerrainRenderer.TILE_SIZE
+	assert_false(manager._can_root_at(chunk, _chunk_coord, pixel))
+
+
 # -- water reclaim: a building whose entrance is wet does not survive a load -
 
 func _water_cell():

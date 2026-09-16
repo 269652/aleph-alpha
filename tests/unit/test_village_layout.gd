@@ -197,3 +197,145 @@ func test_empty_building_list_returns_empty_layout():
 	var result := layout.layout([], CHUNK_SIZE, 12, _always_buildable, _never_occupied)
 	assert_true(result["plots"].is_empty())
 	assert_true(result["road_cells"].is_empty())
+
+
+# -- layout v2: plaza, civic plot, gate, landmarks on the square, side streets
+#
+# docs/concept/building.md pillar 5 ("Villages are laid out, not scattered")
+# made true end to end: the main street's middle is a paved plaza with the
+# civic plot (the City Hall's reserved site, see civic_construction.md), the
+# well and the stall ON it and a gate at the street's end; a second street,
+# when one opens, is tied back to the plaza by side streets. All of it is a
+# pure, seeded function of the chunk, so an older village's plaza can be
+# re-derived on reload without persisting anything (VillageLayout.skeleton).
+
+func _cells_of(rect: Rect2i) -> Array:
+	var out: Array = []
+	for y in range(rect.position.y, rect.end.y):
+		for x in range(rect.position.x, rect.end.x):
+			out.append(Vector2i(x, y))
+	return out
+
+
+func test_seed_for_is_the_renderers_own_layout_seed_formula():
+	assert_eq(VillageLayout.seed_for(Vector2i(3, -4)), hash("3_-4_village_layout"))
+
+
+func test_skeleton_is_deterministic_and_puts_the_main_street_through_the_chunks_middle():
+	var a: Dictionary = VillageLayout.skeleton(CHUNK_SIZE, 42)
+	var b: Dictionary = VillageLayout.skeleton(CHUNK_SIZE, 42)
+	assert_eq(a, b)
+	assert_eq(a["street_y"], CHUNK_SIZE / 2)
+	assert_lt(a["street_x0"], a["street_x1"])
+
+
+func test_a_villages_plaza_is_a_paved_square_straddling_the_main_street():
+	var result := layout.layout(["house_small", "house_medium"], CHUNK_SIZE, 3, _always_buildable, _never_occupied)
+	var plaza: Rect2i = result["plaza"]
+	assert_gt(plaza.size.x * plaza.size.y, 0, "a village on ample ground always gets its plaza")
+	var road_cells: Array = result["road_cells"]
+	for cell in _cells_of(plaza):
+		assert_true(road_cells.has(cell), "plaza cell %s must be paved" % str(cell))
+	var street_y: int = VillageLayout.skeleton(CHUNK_SIZE, 3)["street_y"]
+	assert_true(plaza.position.y <= street_y and street_y < plaza.end.y, "the plaza straddles the street")
+
+
+func test_the_civic_plot_sits_on_the_plaza_and_fronts_the_main_street():
+	var result := layout.layout(["house_small"], CHUNK_SIZE, 3, _always_buildable, _never_occupied)
+	var civic: Dictionary = result["civic_plot"]
+	assert_eq(civic["building_id"], VillageLayout.CIVIC_BUILDING_ID)
+	var plaza: Rect2i = result["plaza"]
+	for cell in BuildingCatalog.footprint_cells(civic["building_id"], civic["origin"]):
+		assert_true(plaza.has_point(cell), "civic footprint cell %s must lie on the plaza" % str(cell))
+	var street_y: int = VillageLayout.skeleton(CHUNK_SIZE, 3)["street_y"]
+	assert_eq(civic["doorstep"], civic["origin"] + BuildingCatalog.doorstep_of(civic["building_id"]))
+	assert_eq(civic["doorstep"].y, street_y, "the hall's door opens onto the main street")
+	assert_true((result["road_cells"] as Array).has(civic["doorstep"]))
+
+
+func test_no_plot_footprint_ever_overlaps_a_road_cell_plaza_included():
+	var ids: Array = []
+	for i in 14:
+		ids.append("house_small" if i % 3 else "house_large")
+	var result := layout.layout(ids, CHUNK_SIZE, 4, _always_buildable, _never_occupied)
+	var road := {}
+	for cell in result["road_cells"]:
+		road[cell] = true
+	assert_gt(result["plots"].size(), 0, "precondition")
+	for plot in result["plots"]:
+		for cell in BuildingCatalog.footprint_cells(plot["building_id"], plot["origin"]):
+			assert_false(road.has(cell), "footprint cell %s stands on a road/plaza cell" % str(cell))
+
+
+func test_the_gate_stands_on_the_main_street_at_its_end_and_no_doorstep_shares_it():
+	var result := layout.layout(["house_small", "house_small", "house_medium"], CHUNK_SIZE, 5, _always_buildable, _never_occupied)
+	var gate: Vector2i = result["landmarks"]["gate"]
+	var skeleton: Dictionary = VillageLayout.skeleton(CHUNK_SIZE, 5)
+	assert_eq(gate.y, skeleton["street_y"])
+	assert_eq(gate.x, skeleton["street_x0"], "the gate marks where the street enters the village")
+	assert_true((result["road_cells"] as Array).has(gate))
+	for plot in result["plots"]:
+		assert_ne(plot["doorstep"], gate, "a house must not open onto the gate itself")
+
+
+func test_the_well_and_the_stall_stand_on_the_plaza_clear_of_the_civic_plot():
+	var result := layout.layout(["house_small"], CHUNK_SIZE, 6, _always_buildable, _never_occupied)
+	var plaza: Rect2i = result["plaza"]
+	var civic: Dictionary = result["civic_plot"]
+	var civic_cells: Array = BuildingCatalog.footprint_cells(civic["building_id"], civic["origin"])
+	for landmark in ["well", "stall"]:
+		var cell: Vector2i = result["landmarks"][landmark]
+		assert_true(plaza.has_point(cell), "%s must stand on the plaza" % landmark)
+		assert_false(civic_cells.has(cell), "%s must not stand where the hall will rise" % landmark)
+		assert_ne(cell, civic["doorstep"], "%s must not block the hall's door" % landmark)
+	assert_ne(result["landmarks"]["well"], result["landmarks"]["stall"])
+
+
+func test_the_main_street_is_paved_along_its_whole_buildable_length():
+	var result := layout.layout(["house_small"], CHUNK_SIZE, 7, _always_buildable, _never_occupied)
+	var skeleton: Dictionary = VillageLayout.skeleton(CHUNK_SIZE, 7)
+	var road_cells: Array = result["road_cells"]
+	for x in range(skeleton["street_x0"], skeleton["street_x1"] + 1):
+		assert_true(road_cells.has(Vector2i(x, skeleton["street_y"])), "street cell x=%d must be paved" % x)
+
+
+func test_no_plaza_when_its_own_site_is_unbuildable_but_houses_still_get_placed():
+	var skeleton: Dictionary = VillageLayout.skeleton(CHUNK_SIZE, 8)
+	var plaza_site: Rect2i = skeleton["plaza"]
+	var not_on_the_square := func(cell: Vector2i) -> bool: return not plaza_site.has_point(cell)
+	var result := layout.layout(["house_small", "house_small"], CHUNK_SIZE, 8, not_on_the_square, _never_occupied)
+	assert_eq(result["plaza"], Rect2i(), "no plaza where the square can't be paved")
+	assert_true((result["civic_plot"] as Dictionary).is_empty(), "no civic plot without a plaza")
+	assert_gt(result["plots"].size(), 0, "houses still line the street")
+	for cell in result["road_cells"]:
+		assert_true(not_on_the_square.call(cell), "nothing paved on unbuildable ground (%s)" % str(cell))
+
+
+func test_side_streets_tie_a_second_street_back_to_the_plaza():
+	var ids: Array = []
+	for i in 20:
+		ids.append("house_small")
+	var result := layout.layout(ids, CHUNK_SIZE, 9, _always_buildable, _never_occupied)
+	var street_ys := {}
+	for plot in result["plots"]:
+		street_ys[plot["doorstep"].y] = true
+	assert_gt(street_ys.size(), 1, "precondition: 20 houses open a second street")
+	var plaza: Rect2i = result["plaza"]
+	var ys: Array = street_ys.keys()
+	ys.sort()
+	var second_street_y: int = ys[1]  # the side streets reach the SECOND street, whatever opens beyond it
+	var road_cells: Array = result["road_cells"]
+	for x in [plaza.position.x, plaza.end.x - 1]:
+		for y in range(plaza.end.y, second_street_y + 1):
+			assert_true(road_cells.has(Vector2i(x, y)), "side street cell %s must be paved" % str(Vector2i(x, y)))
+
+
+func test_a_village_that_fits_on_one_street_lays_no_side_streets():
+	var result := layout.layout(["house_small", "house_small"], CHUNK_SIZE, 10, _always_buildable, _never_occupied)
+	var plaza: Rect2i = result["plaza"]
+	var road_cells: Array = result["road_cells"]
+	for cell in road_cells:
+		assert_true(
+			cell.y <= plaza.end.y - 1,
+			"nothing paved south of the plaza when no second street opened (%s)" % str(cell)
+		)

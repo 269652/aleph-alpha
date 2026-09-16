@@ -354,6 +354,9 @@ func test_build_tile_set_creates_one_atlas_tile_per_biome_variant_plus_the_build
 		# facade_variant_image): material x category x storey, appended after
 		# the trail tile for the same reason.
 		+ TerrainRenderer.FACADE_VARIANT_MATERIALS.size() * TerrainRenderer.FACADE_VARIANT_CATEGORIES.size() * ProceduralBuildingPieceSprite.FACADE_STOREY_COUNT
+		# The Road tier's own single tile (see ROAD_TILE_ID), appended after
+		# the facade family for the same reason.
+		+ 1
 	)
 	assert_eq(source.get_tiles_count(), expected)
 
@@ -388,6 +391,9 @@ func test_build_tile_set_total_tile_count_grows_by_exactly_one_tile_per_structur
 		# facade_variant_image): material x category x storey, appended after
 		# the trail tile for the same reason.
 		+ TerrainRenderer.FACADE_VARIANT_MATERIALS.size() * TerrainRenderer.FACADE_VARIANT_CATEGORIES.size() * ProceduralBuildingPieceSprite.FACADE_STOREY_COUNT
+		# The Road tier's own single tile (see ROAD_TILE_ID), appended after
+		# the facade family for the same reason.
+		+ 1
 	)
 	assert_eq(
 		source.get_tiles_count() - tile_count_without_structures_or_pieces - BuildingPiece.PIECE_IDS.size(),
@@ -439,6 +445,59 @@ func test_atlas_coords_for_trail_is_stable_across_calls():
 		renderer.atlas_coords_for_modification(TerrainRenderer.TRAIL_TILE_ID),
 		renderer.atlas_coords_for_modification(TerrainRenderer.TRAIL_TILE_ID)
 	)
+
+
+# -- the Road tier: laid by settlements, not worn (docs/concept/infrastructure.md)
+
+## A road is a real, placed surface (village streets, see VillageLayout),
+## not a heavily-worn trail -- its own atlas slot, distinct from the trail
+## it used to be drawn as and from every ground tile.
+func test_atlas_coords_for_road_is_distinct_from_trail_earth_and_every_biome_variant():
+	var road_coords := renderer.atlas_coords_for_modification(TerrainRenderer.ROAD_TILE_ID)
+	assert_ne(road_coords, renderer.atlas_coords_for_modification(TerrainRenderer.TRAIL_TILE_ID))
+	assert_ne(road_coords, renderer.atlas_coords_for_modification(TerrainRenderer.EARTH_TILE_ID))
+	for biome_name in BiomeClassifier.KNOWN_BIOMES:
+		for variant in TerrainRenderer.VARIANTS_PER_BIOME:
+			assert_ne(road_coords, renderer.atlas_coords_for_biome(biome_name, variant))
+
+
+func test_atlas_coords_for_road_is_stable_across_calls():
+	assert_eq(
+		renderer.atlas_coords_for_modification(TerrainRenderer.ROAD_TILE_ID),
+		renderer.atlas_coords_for_modification(TerrainRenderer.ROAD_TILE_ID)
+	)
+
+
+## Appended after every existing family (the same "shifts no existing
+## index" reasoning _trail_linear's own doc comment gives), and the atlas
+## reserves exactly one more slot for it -- the one number build_tile_set
+## and the atlas-size math share.
+func test_the_atlas_reserves_exactly_one_slot_for_the_road_tile_after_the_facade_family():
+	assert_eq(renderer._road_linear(), renderer._facade_variant_base_linear() + renderer._facade_variant_family_size())
+	assert_eq(renderer._atlas_total_cells(), renderer._road_linear() + 1)
+
+
+func test_is_road_tile_recognises_only_the_road_id():
+	assert_true(TerrainRenderer.is_road_tile(TerrainRenderer.ROAD_TILE_ID))
+	assert_false(TerrainRenderer.is_road_tile(TerrainRenderer.TRAIL_TILE_ID))
+	assert_false(TerrainRenderer.is_road_tile(TerrainRenderer.EARTH_TILE_ID))
+	assert_false(TerrainRenderer.is_road_tile(""))
+
+
+## Until assets/sprites/terrain/road.png exists (see the asset contract in
+## docs/concept/infrastructure.md), the road draws from a procedural
+## placeholder -- a real cobbled surface, not the trail's flat fill, so the
+## two tiers read as different on the ground even before the art lands.
+func test_road_tile_image_is_art_tile_sized_and_not_a_flat_fill():
+	var image: Image = renderer.road_tile_image()
+	assert_eq(image.get_width(), TerrainRenderer.ART_TILE_SIZE)
+	assert_eq(image.get_height(), TerrainRenderer.ART_TILE_SIZE)
+	var distinct := {}
+	for y in image.get_height():
+		for x in image.get_width():
+			distinct[image.get_pixel(x, y).to_html()] = true
+	assert_gt(distinct.size(), 1, "a cobbled road must not be one flat colour")
+	assert_ne(image.get_pixel(0, 0), TerrainRenderer.TRAIL_COLOR, "the road is not the trail's own colour")
 
 
 func test_atlas_coords_for_campfire_and_furnace_are_distinct_from_each_other():
@@ -554,6 +613,9 @@ func test_build_tile_set_total_tile_count_grows_by_exactly_one_tile_per_building
 		# facade_variant_image): material x category x storey, appended after
 		# the trail tile for the same reason.
 		+ TerrainRenderer.FACADE_VARIANT_MATERIALS.size() * TerrainRenderer.FACADE_VARIANT_CATEGORIES.size() * ProceduralBuildingPieceSprite.FACADE_STOREY_COUNT
+		# The Road tier's own single tile (see ROAD_TILE_ID), appended after
+		# the facade family for the same reason.
+		+ 1
 	)
 	assert_eq(source.get_tiles_count() - tile_count_without_pieces, BuildingPiece.PIECE_IDS.size())
 
@@ -1192,6 +1254,24 @@ func test_paint_uses_the_flat_trail_tile_when_painted():
 	assert_eq(
 		tile_map_layer.get_cell_atlas_coords(Vector2i(0, 0)),
 		renderer.atlas_coords_for_modification(TerrainRenderer.TRAIL_TILE_ID)
+	)
+
+
+func test_paint_uses_the_flat_road_tile_when_painted():
+	var tile_set := renderer.build_tile_set()
+	tile_map_layer.tile_set = tile_set
+	var chunk := Chunk.new()
+	chunk.width = 1
+	chunk.height = 1
+	chunk.elevation = PackedFloat32Array([0.4])
+	chunk.biome = PackedStringArray(["grassland"])
+	chunk.modifications[Vector2i(0, 0)] = TerrainRenderer.ROAD_TILE_ID
+
+	renderer.paint(tile_map_layer, chunk)
+
+	assert_eq(
+		tile_map_layer.get_cell_atlas_coords(Vector2i(0, 0)),
+		renderer.atlas_coords_for_modification(TerrainRenderer.ROAD_TILE_ID)
 	)
 
 

@@ -17,8 +17,15 @@ extends RefCounted
 const PixelNoise = preload("res://src/rendering/pixel_noise.gd")
 const NpcGenome = preload("res://src/world/npc_genome.gd")
 
-## Every building the game knows how to place, in a fixed order.
+## Every HOUSE the game knows how to place, in a fixed order -- the pool
+## choose_house_id draws a villager's home from.
 const BUILDING_IDS: Array[String] = ["house_small", "house_medium", "house_large"]
+
+## Civic buildings (docs/concept/civic_construction.md): real catalog
+## entities a village raises on its own plaza over time (see VillageLayout.
+## skeleton's civic plot), never a home -- kept out of BUILDING_IDS so no
+## villager is ever handed the town hall to live in.
+const CIVIC_BUILDING_IDS: Array[String] = ["city_hall"]
 
 ## The reserved chunk-modification id every NON-anchor footprint cell
 ## carries (the anchor cell carries the building id itself, exactly like a
@@ -63,6 +70,14 @@ const _BUILDINGS := {
 	"house_large": {
 		"footprint": Vector2i(4, 3), "interior_family": "manor", "capacity": 3,
 		"labor_hours": 16.0, "cost": {"wood": 32, "stone": 10},
+	},
+	# The town hall (CIVIC_BUILDING_IDS): the same wood 20 + stone 10 the
+	# legacy single-tile city_hall recipe already charges (CraftingRecipeBook
+	# -- one price, not two), more labour than any house; nobody lives in
+	# it. Drawn from city_hall.png, which already follows the sheet contract.
+	"city_hall": {
+		"footprint": Vector2i(4, 3), "interior_family": "hall", "capacity": 0,
+		"labor_hours": 45.0, "cost": {"wood": 20, "stone": 10},
 	},
 }
 

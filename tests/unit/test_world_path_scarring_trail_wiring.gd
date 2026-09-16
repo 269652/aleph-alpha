@@ -125,3 +125,29 @@ func test_the_snow_gate_guards_stepping_on_not_the_render_or_decay_passes():
 	# The render/reclaim diff pass (worn_tiles) must not be behind the gate
 	# either -- an already-scarred path still repaints/recovers in winter.
 	assert_lt(step_on_at, worn_tiles_at)
+
+
+## The Road tier (docs/concept/infrastructure.md) is LAID, not worn: a
+## village street must never accumulate wear, never be repainted as a
+## path/trail, and never be "reclaimed" (destroyed) when its non-existent
+## wear decays -- every branch of this function that writes a tile must be
+## guarded on the cell not being paved. Reported as the reason the wear
+## model needed a ceiling before roads could exist at all.
+func test_a_paved_road_cell_is_never_worn_repainted_or_reclaimed():
+	var body := _step_path_scarring_body()
+	var step_on_at := body.find("_path_scarring.step_on(")
+	var pave_gate_before_step_on := body.substr(0, step_on_at).find("_is_paved(")
+	assert_gt(pave_gate_before_step_on, -1, "stepping on a paved cell must add no wear at all")
+	# Every later loop that writes a tile (worn paint, trail paint, taper,
+	# reclaim) guards on the same predicate.
+	assert_gte(body.count("_is_paved("), 5, "each tile-writing loop guards on the cell being paved")
+
+
+func test_is_paved_reads_the_real_road_modification():
+	var source := FileAccess.get_file_as_string("res://scenes/world.gd")
+	var start := source.find("func _is_paved(")
+	assert_gt(start, -1, "the predicate must exist")
+	var body_end := source.find("\nfunc ", start + 1)
+	var body := source.substr(start, body_end - start)
+	assert_true(body.contains("TerrainRenderer.is_road_tile("), "paved means the real Road tile, nothing looser")
+	assert_true(body.contains("modification_at_global("), "read from the world's own modifications")

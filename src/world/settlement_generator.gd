@@ -16,6 +16,7 @@ extends RefCounted
 ## not what gets built there.
 
 const NpcIdentity = preload("res://src/world/npc_identity.gd")
+const VillageLayout = preload("res://src/world/village_layout.gd")
 
 ## Fixed villager count per settlement -- small and constant for now rather
 ## than population-simulated (see docs/concept/npc.md's lifecycle/aging,
@@ -45,14 +46,9 @@ const _HOUSE_RING_RADIUS_TILES := 9
 const _HOUSE_RADIUS_JITTER_TILES := 1.5
 const _HOUSE_ANGLE_JITTER := 0.22
 
-## The 3 shared landmarks: the well anchors the village square, the market
-## stall sits just off it, and the gate stands at the settlement's edge
-## between the square and the house ring's northern gap.
-const _LANDMARK_OFFSETS_TILES := {
-	"well": Vector2i(0, 0),
-	"stall": Vector2i(3, 1),
-	"gate": Vector2i(0, -6),
-}
+## The 3 shared landmarks (well, stall, gate) are placed by VillageLayout.
+## skeleton -- on the plaza and at the street's entrance -- see
+## generate_settlement below.
 
 
 ## Deterministic per chunk_coord: whether this chunk hosts a settlement.
@@ -73,13 +69,19 @@ func has_settlement_at(chunk_coord: Vector2i, dominant_biome: String) -> bool:
 func generate_settlement(
 	chunk_coord: Vector2i, chunk_origin_tiles: Vector2i, chunk_size: int, tile_size: int
 ) -> Dictionary:
-	var center_tile := chunk_origin_tiles + Vector2i(chunk_size / 2, chunk_size / 2)
-	var center_pos := Vector2((center_tile.x + 0.5) * tile_size, (center_tile.y + 0.5) * tile_size)
-
+	# The well, stall and gate stand where the village's own street plan
+	# puts them -- on the plaza, at the street's entrance (see
+	# VillageLayout.skeleton) -- so the props and the paving agree, rather
+	# than at fixed offsets from the chunk centre that ignore the street.
+	var skeleton := VillageLayout.skeleton(chunk_size, VillageLayout.seed_for(chunk_coord))
 	var landmarks := {}
-	for landmark in _LANDMARK_OFFSETS_TILES:
-		var offset: Vector2i = _LANDMARK_OFFSETS_TILES[landmark]
-		landmarks[landmark] = center_pos + Vector2(offset.x * tile_size, offset.y * tile_size)
+	for landmark in skeleton["landmarks"]:
+		var cell: Vector2i = chunk_origin_tiles + skeleton["landmarks"][landmark]
+		landmarks[landmark] = Vector2((cell.x + 0.5) * tile_size, (cell.y + 0.5) * tile_size)
+	# The fallback ring (a villager whose plot fits nowhere keeps it, see
+	# VillageRenderer) is centred on the square's own well, so it still
+	# reads as "around the village square".
+	var center_pos: Vector2 = landmarks["well"]
 
 	var house_positions: Array[Vector2] = []
 	var npcs: Array[NpcIdentity] = []
