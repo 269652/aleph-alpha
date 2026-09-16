@@ -170,9 +170,20 @@ implemented either, but the two are designed to land together.
   `test_stone_renderer.gd`, `test_world_path_scarring_trail_wiring.gd`,
   `test_player.gd`, `test_village_renderer.gd`,
   `test_earth_chunk_manager_village_migration.gd`.
-- ⬜ Between-village roads (routing a street on to the next settlement) and
-  the plaza/side streets a laid-out village frames its road with — see
-  [building.md](building.md) for the layout side.
+- ✅ **The road spur to a village's outlying works** (2026-09-16, see
+  [village_growth.md](village_growth.md)) — the first laid road that is not
+  part of the street grid itself. `VillageLayout.industry_plot` routes an L
+  from the sawmill's doorstep, along its own row to a column and up that
+  column, back to the main street, around the building's own footprint when
+  the works stand south of the street; a site whose spur cannot be laid is
+  refused outright, so the village never ends up with works it cannot walk
+  to. Same `ROAD_TILE_ID` and the same built-surface semantics as the
+  streets above — this is a real road, not a worn track. Connectivity is
+  verified by a flood fill over really-paved cells, in both
+  `test_village_layout.gd` and `test_village_renderer.gd`.
+- ⬜ Between-village roads (routing a street on to the next settlement).
+  The plaza and side streets a laid-out village frames its road with are
+  real — see [building.md](building.md) for the layout side.
 - ⬜ Crossings (ford/ferry/bridge) — no "crossing point" concept exists yet.
 - ⬜ Traffic heatmaps, inter-settlement routes, market nodes.
 - ⬜ Infrastructure condition/maintenance/degradation feeding back into

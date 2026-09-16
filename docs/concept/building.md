@@ -313,6 +313,22 @@ tile, no dividers, no directional variants (see
   villager (occupation + identity seed on the record, backfilled for
   older saves on reload) so the interior is furnished for the real
   resident.
+- ✅ **The village grows** (2026-09-16, full detail in
+  [village_growth.md](village_growth.md)). The catalog gained five more
+  whole-building entities — `sawmill`, `farmhouse`, `warehouse`,
+  `blacksmith`, `brewery` — each with its real sheet already on disk and
+  its price shared with `CraftingRecipeBook` rather than duplicated. Every
+  village with timber in reach is founded with a sawmill at the forest
+  edge, joined to the street by a real road spur (`VillageLayout.industry_
+  plot`); as households move in (`VillageImmigration`), the village raises
+  the next rung its size entitles it to (`VillageGrowth`) on the next free
+  street frontage (`VillageLayout.next_street_plot`), houses for homeless
+  households first. The three houses gained recipes so a queued house has
+  real material to wait on and real labour hours to accrue — deliberately
+  with no `ItemCatalog` entry, which is what keeps a house off every
+  crafting bench. Clicking any building opens `HousePanel` on its
+  household's real needs, happiness and productivity
+  (`EarthChunkManager.household_report_at`).
 - ✅ **Older saves.** A settlement chunk still carrying old-style
   piece-built houses has them wiped once on load and regenerates as
   whole-building entities in the same load, protecting any player-owned

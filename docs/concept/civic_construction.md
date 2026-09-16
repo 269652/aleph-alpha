@@ -466,9 +466,19 @@ exists, built for an entirely unrelated reason of its own.
   household threshold + spare hands + gathered material on the ordinary
   settlement ledger, not the first-institution crossing; ownership is the
   settlement id rather than an injected completion callback.
+- ✅ **The Granary, as the Warehouse** (2026-09-16, see
+  [village_growth.md](village_growth.md)): this doc's own "a Granary, a real
+  physical home for `VillageMarket`'s already-real settlement stock" is real
+  as the `warehouse` catalog entity, rung 3 of that doc's growth ladder —
+  raised by the village on its own street frontage once it has four
+  households, owned by the settlement as a commons exactly as the hall is.
+  Named divergence: it is a whole-building `BuildingCatalog` entity raised
+  through the ordinary settlement ledger, not the multi-piece
+  `CivicBlueprint` shape this doc's own Meeting Hall section first drew —
+  the same divergence the City Hall already carries, for the same reason.
 - ⬜ Ghost/planned placement mode, live Builder spawning for settlement
   projects, player-hired Builders (see that section's own "Where this
-  stands"), Granary, Watchtower — design only. They build on real,
+  stands"), Watchtower — design only. They build on real,
   already-shipped work (`ConstructionProject`/`ConstructionProjectStore`/
   `BuilderMarker`/`SettlementSpareCapacity`/`SettlementBuildDecision`, all
   real per [timber_construction.md](timber_construction.md)'s own Status
