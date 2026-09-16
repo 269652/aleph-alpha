@@ -796,3 +796,31 @@ func test_a_byproduct_of_nothing_changes_nothing():
 	var hunter := _economy("hunter")
 	hunter.record_byproduct("hide", 0)
 	assert_almost_eq(market.total_stock(), 0.0, 0.0001)
+
+
+# -- feeding yourself by working (docs/concept/npc.md's free self-feed) ----
+#
+# The condition the free self-feed already turns on, named so that NpcMarker
+# can ask it too. A hungry villager's schedule is overridden to walk to the
+# well and buy a meal -- which is right for a blacksmith and wrong for a
+# hunter, whose food is standing in the woods. Measured live: a villager who
+# goes hungry with an empty village market never works again, because not
+# working is what stops them producing the food they would have bought.
+
+
+func test_a_producer_in_a_living_region_feeds_itself_from_its_own_work():
+	assert_true(_economy("hunter").feeds_itself_from_work(world, Vector2.ZERO))
+
+
+func test_a_producer_whose_region_has_collapsed_cannot_feed_itself():
+	# The famine chain stays intact: nothing left to hunt is nothing to eat.
+	world.herbivore_population = 0.0
+	assert_false(_economy("hunter").feeds_itself_from_work(world, Vector2.ZERO))
+
+
+func test_a_non_producer_never_feeds_itself_from_work():
+	assert_false(_economy("blacksmith").feeds_itself_from_work(world, Vector2.ZERO))
+
+
+func test_a_producer_with_no_world_cannot_feed_itself():
+	assert_false(_economy("hunter").feeds_itself_from_work(null, Vector2.ZERO))

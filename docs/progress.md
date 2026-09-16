@@ -23167,6 +23167,23 @@ add children but `root` is not live yet, so they never get `_ready()` —
 one reported 25 real spawned creature markers as 0 huntable ones and read
 exactly like a broken feature.
 
+✅ **A pre-existing famine deadlock, found by that probe and fixed.** The
+hunger interrupt (`NpcMarker._process`) sends any hungry villager to the
+well to buy a meal. The probe's throughput half measured a real hunter
+going hungry about twelve seconds in, with an empty village market and an
+empty purse, and then never working again for the remaining 227 simulated
+seconds — 125 of 2401 ticks free to work, zero food produced, forager still
+in SEEKING. Not working is exactly what stopped them producing the food
+they had been sent to buy, so the state sustains itself and a village that
+falls into it cannot climb out. Not caused by this pass (the drip was never
+suppressed in that run — quarry was never in reach from where the marker
+actually stood), but reachable enough that it swallowed the measurement.
+The interrupt now skips a producer who can feed itself from its own work
+(`NpcEconomy.feeds_itself_from_work`, the same condition the free self-feed
+already turned on, named rather than restated). A producer whose region has
+genuinely collapsed is sent to the well again, so the famine chain is
+unchanged.
+
 Honest gaps and deliberate divergences, each recorded in
 `concept/npc.md`'s own status subsection:
 

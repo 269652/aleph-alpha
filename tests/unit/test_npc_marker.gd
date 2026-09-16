@@ -699,3 +699,71 @@ func test_is_at_home_is_false_at_a_landmark_even_when_standing_still():
 	marker.position = marker.landmarks["stall"]
 	marker._process(0.1)
 	assert_false(marker.is_at_home())
+
+
+# -- a hungry producer works rather than queuing at an empty well ----------
+#
+# The hunger interrupt above sends any hungry villager to the well. Measured
+# live (tools/probe_village_hunting.gd): a real hunter went hungry about
+# twelve seconds in, with an empty village market and an empty purse, and
+# then never worked again for the remaining 227 simulated seconds -- because
+# the interrupt fires every frame, and not working is exactly what stops
+# them producing the food they were sent to buy. The well had nothing on it
+# and never would.
+#
+# A producer standing in a region that still yields does not need the
+# market: working IS eating for them (see NpcEconomy's free self-feed, which
+# this reuses rather than restates). So the interrupt is for villagers who
+# have to BUY, which is what npc.md describes it as.
+
+
+func _producer_marker_at_work(occupation: String, world: StubWorld) -> void:
+	marker.identity.occupation = occupation
+	marker.setup(world, TILE_SIZE)
+	marker.setup_economy(VillageMarket.new())
+	marker.schedule = [
+		{"time_block": "morning", "location_tag": "workspot", "activity": "work"},
+		{"time_block": "midday", "location_tag": "workspot", "activity": "work"},
+		{"time_block": "evening", "location_tag": "workspot", "activity": "work"},
+		{"time_block": "night", "location_tag": "workspot", "activity": "work"},
+	]
+	marker.economy.needs.hunger = 1.0
+
+
+func test_a_hungry_producer_keeps_working_instead_of_queuing_at_an_empty_well():
+	var world := StubWorld.new()
+	_producer_marker_at_work("hunter", world)
+	var workspot := marker.workspot_position
+	var before := marker.position.distance_to(workspot)
+
+	marker._process(0.5)
+
+	assert_lt(
+		marker.position.distance_to(workspot), before,
+		"a hungry hunter's food is in the woods, not on an empty stall"
+	)
+
+
+func test_a_hungry_producer_whose_region_has_collapsed_still_goes_to_the_well():
+	# The famine chain stays intact: with nothing left to hunt there is
+	# nothing to self-feed on, so the market is the only hope again.
+	var world := StubWorld.new()
+	world.herbivore_population = 0.0
+	_producer_marker_at_work("hunter", world)
+	var well: Vector2 = marker.landmarks["well"]
+	var before := marker.position.distance_to(well)
+
+	marker._process(0.5)
+
+	assert_lt(marker.position.distance_to(well), before)
+
+
+func test_a_hungry_non_producer_still_goes_to_the_well():
+	var world := StubWorld.new()
+	_producer_marker_at_work("blacksmith", world)
+	var well: Vector2 = marker.landmarks["well"]
+	var before := marker.position.distance_to(well)
+
+	marker._process(0.5)
+
+	assert_lt(marker.position.distance_to(well), before, "a blacksmith really does have to buy")

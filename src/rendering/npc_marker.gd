@@ -231,7 +231,23 @@ func _process(delta: float) -> void:
 	# need. Checked BEFORE instruction_script below so an explicit,
 	# player-authored standing instruction still has the final say when it
 	# actually produces an action -- this is only ever the fallback default.
-	if economy != null and economy.needs.is_hungry():
+	# ... unless working IS eating for them. A producer standing in a region
+	# that still yields feeds itself free from its own harvest (see
+	# NpcEconomy.feeds_itself_from_work), so sending it to the stall trades
+	# a meal it already has for one it has to buy. Worse, measured live
+	# (tools/probe_village_hunting.gd): a real hunter went hungry about
+	# twelve seconds in with an empty village market and an empty purse,
+	# and then never worked again for the remaining 227 simulated seconds,
+	# because this interrupt fires every frame and not working is exactly
+	# what stopped them producing the food they had been sent to buy. The
+	# interrupt is for villagers who must BUY, which is what npc.md
+	# describes it as; a producer whose region has genuinely collapsed is
+	# one of them again, so the famine chain stays intact.
+	if (
+		economy != null
+		and economy.needs.is_hungry()
+		and not economy.feeds_itself_from_work(_world, position)
+	):
 		entry = {"time_block": entry.get("time_block", ""), "location_tag": "well", "activity": "eat"}
 	if instruction_script != null:
 		var action: Variant = NpcInstructionEvaluator.evaluate(instruction_script, _instruction_frame())

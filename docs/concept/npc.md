@@ -509,6 +509,26 @@ capture them.** Nothing principled sits at 419px; moving it there would be
 tuning a constant to a sample, which is the thing this project's rules
 forbid and the thing the whole borrow-and-pin discipline exists to avoid.
 
+✅ **A hungry producer works instead of queuing at an empty well** — found
+by the probe above, and a pre-existing deadlock rather than anything this
+change introduced. The hunger interrupt sends any hungry villager to the
+well to buy a meal. Measured live: a real hunter went hungry about twelve
+seconds in, with an empty village market and an empty purse, and then never
+worked again for the remaining 227 simulated seconds — because the
+interrupt fires every frame, and *not working is precisely what stopped
+them producing the food they had been sent to buy*. The well had nothing on
+it and never would. A village that fell into that state could not climb out
+of it.
+
+The interrupt now skips a producer who can feed itself from its own work
+(`NpcEconomy.feeds_itself_from_work`, which is exactly the condition the
+free self-feed already turned on, named rather than restated so the two
+cannot drift). Working *is* eating for a hunter, so sending them to the
+stall trades a meal they already have for one they have to buy. The
+interrupt is for villagers who must BUY, which is what this doc describes
+it as — and a producer whose region has genuinely collapsed is one of them
+again, so the famine chain above stays intact.
+
 🚧 **A fisher's dock is not sited at water.** `VillageRenderer` places
 every personal workspot prop — a farmer's field, a blacksmith's forge, a
 fisher's dock — on dry ground near that villager's own house, with no

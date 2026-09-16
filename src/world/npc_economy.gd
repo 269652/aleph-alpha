@@ -313,12 +313,34 @@ func _deplete_discrete_unit(world, pixel_position: Vector2) -> void:
 		world.record_fish_catch_near(pixel_position, NpcProduction.FOOD_UNIT)
 
 
+## Whether this villager can eat by simply doing their job right now: a
+## producer standing in a region that still yields something real. Exactly
+## the condition the free self-feed below turns on, named rather than
+## restated so the two can never drift.
+##
+## NpcMarker reads it too, and that is the point of naming it. A hungry
+## villager's schedule is interrupted to walk to the well and buy a meal,
+## which is right for a blacksmith and wrong for a hunter, whose food is
+## standing in the woods. Measured live (tools/probe_village_hunting.gd): a
+## real hunter went hungry about twelve seconds in, with an empty village
+## market and an empty purse, and never worked again for the remaining 227
+## simulated seconds -- not working is precisely what stopped them
+## producing the food they had been sent to buy, and the well had nothing
+## on it and never would.
+##
+## False for a non-producer and for a producer whose region has genuinely
+## collapsed, so the famine chain npc.md describes stays intact: nothing
+## left to hunt is still nothing to eat.
+func feeds_itself_from_work(world, pixel_position: Vector2) -> bool:
+	if not _production.is_producer(occupation):
+		return false
+	return _production.yield_per_second(occupation, world, pixel_position) > 0.0
+
+
 func _try_eat(is_working: bool, world, pixel_position: Vector2) -> void:
-	if is_working and _production.is_producer(occupation):
-		var current_yield := _production.yield_per_second(occupation, world, pixel_position)
-		if current_yield > 0.0:
-			needs.feed()  # a free bite from their own active harvest -- see file doc comment
-			return
+	if is_working and feeds_itself_from_work(world, pixel_position):
+		needs.feed()  # a free bite from their own active harvest -- see file doc comment
+		return
 	_draw_subsistence_wage(world, pixel_position)
 	if market.buy_meal(wallet) != "":
 		needs.feed()
