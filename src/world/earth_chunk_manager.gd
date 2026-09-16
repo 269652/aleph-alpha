@@ -172,6 +172,11 @@ const NpcProduction = preload("res://src/world/npc_production.gd")
 const FurniturePlacement = preload("res://src/gameplay/furniture_placement.gd")
 const SettlementBuildDecision = preload("res://src/emergence/settlement_build_decision.gd")
 const CivicBuildDecision = preload("res://src/emergence/civic_build_decision.gd")
+const SettlementConstruction = preload("res://src/emergence/settlement_construction.gd")
+const VillageGrowth = preload("res://src/emergence/village_growth.gd")
+const VillageCensus = preload("res://src/emergence/village_census.gd")
+const VillageImmigration = preload("res://src/emergence/village_immigration.gd")
+const HouseholdWellbeing = preload("res://src/emergence/household_wellbeing.gd")
 const ConstructionLabor = preload("res://src/emergence/construction_labor.gd")
 const VillageLayout = preload("res://src/world/village_layout.gd")
 const Institution = preload("res://src/emergence/institution.gd")
@@ -3528,6 +3533,10 @@ func step_settlements(delta_seconds: float) -> void:
 		# baking.md) -- the SAME interval, so a village near the player builds
 		# in real time rather than only on a reload after an unload.
 		_step_settlement_gathering(settlement_id, market, household_ids)
+		# A fed village with room takes a household in, BEFORE the build
+		# step: a newcomer arriving this tick is owed a house this tick,
+		# not one assessment later.
+		_step_village_immigration(settlement_id, market, household_ids)
 		_step_settlement_construction(settlement_id, household_ids)
 		var capacity := _settlement_capacity(settlement_id, market, village_market)
 		var status := SettlementState.status_for(household_ids.size(), capacity)
@@ -3786,13 +3795,174 @@ func _step_settlement_gathering(settlement_id: String, market, household_ids: Ar
 	var spare_capacity := SettlementSpareCapacity.for_settlement(
 		household_ids.size(), _household_occupations_for_settlement(settlement_id)
 	)
+	# Productivity is not decoration (docs/concept/village_growth.md
+	# mechanism 4): an unhappy village visibly gathers slower, which closes
+	# the loop the whole system is about -- buildings raise happiness,
+	# happiness raises productivity, productivity raises the material that
+	# raises buildings. Applied to the TIME the spare hands are worth
+	# rather than to the whole units out, so the shortfall is carried and
+	# never silently rounded away.
 	var result: Dictionary = SettlementGathering.material_delta(
-		spare_capacity, SETTLEMENT_STEP_INTERVAL, _settlement_material_carry.get(settlement_id, {})
+		spare_capacity,
+		SETTLEMENT_STEP_INTERVAL * settlement_productivity(settlement_id),
+		_settlement_material_carry.get(settlement_id, {})
 	)
 	_settlement_material_carry[settlement_id] = result["carry"]
 	var stock_delta: Dictionary = result["stock_delta"]
 	for item_id in stock_delta:
 		market.add_stock(str(item_id), int(stock_delta[item_id]))
+
+
+## docs/concept/village_growth.md mechanism 3: a fed village with room takes
+## a household in. Called from the same settlement step that gathers and
+## builds, so a village grows on the same clock it works on.
+##
+## **Honest limitation**: a village only draws while its own chunk is
+## LOADED. The room half of the gate (spare roofs, frontage left) is read
+## off buildings that really stand, and an unloaded chunk has none to read
+## -- guessing at them would be exactly the invented number this project's
+## rules forbid. A village therefore grows while the player is near it, the
+## same scope _step_settlement_construction already has.
+func _step_village_immigration(settlement_id: String, market, household_ids: Array) -> void:
+	if household_ids.is_empty():
+		return
+	var chunk_coord := RegionalTrade.chunk_coord_of(settlement_id)
+	if not _loaded_chunks.has(chunk_coord):
+		return
+
+	var census := _village_census_for(chunk_coord, household_ids)
+	var result: Dictionary = VillageImmigration.arrivals(
+		SETTLEMENT_STEP_INTERVAL,
+		_food_per_household(settlement_id, market, household_ids.size()),
+		int(census["spare_house_capacity"]),
+		_growth_site_for(chunk_coord, BuildingCatalog.BUILDING_IDS[0]) != null,
+		VillageGrowth.ladder_share(_present_structure_ids_for_settlement_chunk(chunk_coord)),
+		float(_settlement_immigration_carry.get(settlement_id, 0.0))
+	)
+	_settlement_immigration_carry[settlement_id] = result["carry"]
+	for i in int(result["arrivals"]):
+		admit_household(chunk_coord)
+
+
+## settlement_id -> VillageImmigration's own sub-unit carry, the same
+## per-settlement remainder _settlement_material_carry keeps for gathering.
+var _settlement_immigration_carry: Dictionary = {}
+
+
+## A new household settles here: the NEXT deterministic villager for this
+## settlement (SettlementGenerator's own per-index seed, continued past
+## POPULATION so an arrival is exactly as reproducible as a founder), a
+## real `npc_settled` event naming them, and a real single-member
+## household. Returns the new household's id.
+##
+## The event is what makes the arrival visible to everything else with no
+## further plumbing: _households_in_settlement reads the event graph, so
+## household_count_for_settlement, SettlementSpareCapacity, SettlementTier
+## and VillageGrowth's ladder all see the newcomer immediately. They arrive
+## WITHOUT a house on purpose -- the village then owes them one, which is
+## exactly the ladder's first rung.
+func admit_household(chunk_coord: Vector2i) -> String:
+	var settlement_id := EntityRef.for_settlement(chunk_coord)
+	var index := _villagers_in_settlement(settlement_id).size()
+	var npc_id := EntityRef.for_npc(hash("%d_%d_villager_%d" % [chunk_coord.x, chunk_coord.y, index]))
+	if _household_store.household_for(npc_id) != null:
+		return ""  # already here -- an arrival is never a duplicate of a villager already settled
+
+	var settled := Event.new("npc_settled", _world_age_seconds)
+	settled.actors = [npc_id]
+	settled.witnesses = [settlement_id]
+	_event_store.append(settled)
+	_memory_store.witness_event(settled, _world_age_seconds)
+	return _household_store.form_household(npc_id).id
+
+
+## This settlement's own mean household productivity (HouseholdWellbeing),
+## in [MIN_PRODUCTIVITY, 1] -- what _step_settlement_gathering scales by and
+## what a readout reports. 1.0 for a settlement with no households at all:
+## "nobody lives here to be unhappy" must never read as "everyone here is
+## miserable" (see HouseholdWellbeing.mean_productivity).
+func settlement_productivity(settlement_id: String) -> float:
+	return HouseholdWellbeing.mean_productivity(_household_wellbeing_for_settlement(settlement_id))
+
+
+## One HouseholdWellbeing.assess result per household of `settlement_id`.
+##
+## Hunger is the SETTLEMENT-scale reading -- how far the village's own
+## larder falls short of a full one -- not any one live villager's NpcNeeds
+## clock. At this scale that IS the honest question ("how hungry are these
+## people" is "how much food does this village have"), and it is the only
+## reading available at all for a settlement whose chunk is not loaded and
+## which therefore has no live villagers to ask. A readout about ONE
+## household of a LOADED village passes the real resident's own hunger
+## instead (see household_report_at).
+##
+## `house_capacity` for an unloaded settlement falls back to a household's
+## own size rather than 0: a founded village really did house its founders
+## (record_settlement_founded_if_new), so the roof they were founded with
+## is assumed still standing when the chunk is not there to be read. Any
+## other default would have every unloaded village in the world read as
+## homeless and gather at the productivity floor.
+func _household_wellbeing_for_settlement(settlement_id: String) -> Array:
+	var household_ids := _households_in_settlement(settlement_id)
+	if household_ids.is_empty():
+		return []
+
+	var market := _market_store.market_for(settlement_id)
+	var food_per_household := _food_per_household(settlement_id, market, household_ids.size())
+	var hunger := 1.0 - clampf(
+		food_per_household / HouseholdWellbeing.FOOD_STOCK_PER_HOUSEHOLD_TARGET, 0.0, 1.0
+	)
+
+	var chunk_coord := RegionalTrade.chunk_coord_of(settlement_id)
+	var loaded := _loaded_chunks.has(chunk_coord)
+	var ladder_share := (
+		VillageGrowth.ladder_share(_present_structure_ids_for_settlement_chunk(chunk_coord)) if loaded else 0.0
+	)
+	var capacity_by_household := _house_capacity_by_household(chunk_coord) if loaded else {}
+
+	var out: Array = []
+	for household_id in household_ids:
+		var household = _household_store.get_household(household_id)
+		var size: int = 1 if household == null else maxi(household.members.size(), 1)
+		out.append(HouseholdWellbeing.assess({
+			"hunger": hunger,
+			"food_per_household": food_per_household,
+			"house_capacity": int(capacity_by_household.get(household_id, size)) if loaded else size,
+			"household_size": size,
+			"wallet_balance": 0 if household == null else household.wallet.balance,
+			"meal_price": VillageMarket.VILLAGE_LOCAL_FOOD_PRICE,
+			"ladder_share": ladder_share,
+		}))
+	return out
+
+
+## household_id -> the capacity of the house it owns in this chunk. A
+## household with no house here is simply absent (its caller supplies the
+## homeless 0 or the unloaded fallback).
+func _house_capacity_by_household(chunk_coord: Vector2i) -> Dictionary:
+	var by_household := {}
+	for record in buildings_in_chunk(chunk_coord):
+		var capacity := BuildingCatalog.capacity_of(record.get("id", ""))
+		if capacity <= 0:
+			continue
+		var owner := VillageCensus.household_owning(chunk_coord, record.get("origin_local", Vector2i.ZERO), _household_store)
+		if owner != "":
+			by_household[owner] = maxi(int(by_household.get(owner, 0)), capacity)
+	return by_household
+
+
+## The settlement's real food stock divided across its households -- the
+## SAME both-markets reading step_settlements already classifies a
+## settlement with (SettlementFood.food_stock), so a village's wellbeing
+## and its DECLINING/THRIVING status can never disagree about how fed it is.
+func _food_per_household(settlement_id: String, market, household_count: int) -> float:
+	if household_count <= 0:
+		return 0.0
+	var stock := SettlementFood.food_stock(
+		market, SettlementFood.village_market_for(settlement_id, _loaded_villages),
+		_item_catalog, _settlement_structure_stocks(settlement_id)
+	)
+	return float(stock) / float(household_count)
 
 
 ## While a settlement's chunk is loaded, its construction keeps going in
@@ -3810,6 +3980,7 @@ func _step_settlement_construction(settlement_id: String, household_ids: Array[S
 		return
 	_apply_settlement_build_decision(chunk_coord)
 	_apply_civic_build_decision(chunk_coord)
+	_apply_village_growth_decision(chunk_coord)
 	_advance_construction_labor(chunk_coord, SETTLEMENT_STEP_INTERVAL)
 ## settlement_id -> SettlementGranary.SeededRegion, cached for the session.
 var _settlement_seeded_region: Dictionary = {}
@@ -14838,6 +15009,7 @@ func _load_chunk(chunk_coord: Vector2i) -> void:
 	# before the labor/completion sync below runs against it, not racing it.
 	_apply_settlement_build_decision(chunk_coord)
 	_apply_civic_build_decision(chunk_coord)
+	_apply_village_growth_decision(chunk_coord)
 
 	# Construction labor catch-up (see _apply_construction_labor_catchup's
 	# own doc comment) -- last, so it runs against a chunk that is already
@@ -15147,6 +15319,108 @@ func _apply_civic_build_decision(chunk_coord: Vector2i) -> void:
 		_construction_project_store, _market_store.market_for(settlement_id), chunk_coord, origin, settlement_id,
 		_present_structure_ids_for_settlement_chunk(chunk_coord), _recipe_book, household_ids.size(), spare_capacity
 	)
+
+
+## The village grows (docs/concept/village_growth.md mechanism 2): whatever
+## VillageGrowth's ladder says this settlement owes itself next is queued
+## as a real ConstructionProject on the settlement ledger, at a real site,
+## paid for out of the village's own market by the same
+## SettlementConstruction.try_start the hall already uses -- so a growth
+## building rises visibly on its plot over real labour hours, never stamps
+## itself into existence.
+##
+## Runs alongside _apply_civic_build_decision rather than replacing it: the
+## hall keeps its own live decision (its plaza plot, its already_standing/
+## too_small/no_spare_capacity branches, all tested), so this function
+## deliberately RETURNS when the ladder names the hall rather than queuing
+## a second, differently-sited project for the same building.
+##
+## A HOUSE is credited to the first household still waiting for one
+## (VillageCensus's sorted waiting list) -- so completing it grants that
+## real household its real roof through the existing property scheme.
+## Everything else is a commons, owned by the settlement itself, exactly
+## as CivicBuildDecision already owns the hall.
+func _apply_village_growth_decision(chunk_coord: Vector2i) -> void:
+	var settlement_id := EntityRef.for_settlement(chunk_coord)
+	var household_ids := _households_in_settlement(settlement_id)
+	if household_ids.is_empty():
+		return
+	var census := _village_census_for(chunk_coord, household_ids)
+	var next_building: String = VillageGrowth.next_building(
+		household_ids.size(), int(census["housed_count"]),
+		_present_structure_ids_for_settlement_chunk(chunk_coord)
+	)
+	if next_building == "" or next_building == CivicBuildDecision.CITY_HALL_BUILDING_ID:
+		return  # nothing owed, or the hall -- which has its own live decision
+
+	# The same subsistence rule every other settlement build obeys: a
+	# village whose whole population works a survival occupation builds
+	# nothing, however entitled to it the ladder says it is.
+	var spare_capacity := SettlementSpareCapacity.for_settlement(
+		household_ids.size(), _household_occupations_for_settlement(settlement_id)
+	)
+	if spare_capacity <= 0:
+		return
+
+	var owner_id := settlement_id
+	if BuildingCatalog.BUILDING_IDS.has(next_building):
+		var waiting: Array = census["unhoused_household_ids"]
+		if waiting.is_empty():
+			return
+		owner_id = waiting[0]
+
+	var origin = _growth_site_for(chunk_coord, next_building)
+	if origin == null:
+		return  # nowhere left to put it -- the village simply waits
+	SettlementConstruction.try_start(
+		_construction_project_store, _market_store.market_for(settlement_id),
+		chunk_coord, origin, next_building, owner_id, _recipe_book
+	)
+
+
+## Where a growth building actually goes: the sawmill at the village's own
+## timber (VillageLayout.industry_plot -- the same siting VillageRenderer
+## uses at founding, so a village that lost its mill rebuilds it where a
+## mill belongs), everything else on the next free frontage of the street
+## (VillageLayout.next_street_plot). null when the village has nowhere left.
+##
+## Deterministic and deliberately NOT skipping the site of a live project,
+## for exactly the reason _settlement_build_origin_for gives: a repeated
+## decision lands on the same still-empty plot, finds its own earlier
+## project there, and never queues a second copy somewhere else.
+func _growth_site_for(chunk_coord: Vector2i, building_id: String):
+	if not _loaded_chunks.has(chunk_coord):
+		return null
+	var is_buildable := func(cell: Vector2i) -> bool:
+		var g: Vector2i = chunk_coord * CHUNK_SIZE + cell
+		return is_buildable_ground_at(g.x, g.y)
+	var is_occupied := func(cell: Vector2i) -> bool:
+		var g: Vector2i = chunk_coord * CHUNK_SIZE + cell
+		return modification_at_global(g.x, g.y) != ""
+	var seed_value := VillageLayout.seed_for(chunk_coord)
+
+	if building_id == VillageRenderer.INDUSTRY_BUILDING_ID:
+		var is_forest := func(cell: Vector2i) -> bool:
+			var g: Vector2i = chunk_coord * CHUNK_SIZE + cell
+			return biome_at_global(g.x, g.y) == VillageRenderer.FOREST_BIOME
+		var industry: Dictionary = VillageLayout.industry_plot(
+			building_id, CHUNK_SIZE, seed_value, is_buildable, is_forest, is_occupied
+		)
+		return null if industry.is_empty() else industry["origin"]
+
+	var plot: Dictionary = VillageLayout.next_street_plot(
+		building_id, CHUNK_SIZE, seed_value, is_buildable, is_occupied
+	)
+	return null if plot.is_empty() else plot["origin"]
+
+
+## This settlement's real census (VillageCensus) -- who has a roof, how
+## much spare room stands, who is waiting. Reads the buildings really
+## standing in the chunk, so it is only meaningful for a LOADED one; an
+## unloaded settlement reports an empty village rather than guessing, and
+## every caller here already no-ops on that.
+func _village_census_for(chunk_coord: Vector2i, household_ids: Array) -> Dictionary:
+	return VillageCensus.of(household_ids, buildings_in_chunk(chunk_coord), _household_store)
 
 
 ## The civic plot's LOCAL origin (VillageLayout.skeleton -- re-derived from
