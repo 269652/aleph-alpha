@@ -371,13 +371,23 @@ Implemented 2026-09-16, TDD red-first throughout. See
   black background, no dividers, one picked per building seed, so a street
   of cottages reads as a street of DIFFERENT cottages rather than one house
   repeated. The pipeline, the seeded pick (all 25 test-pinned as reachable)
-  and the fallback chain are real and tested; it lights up for all three
-  village houses the moment
-  `assets/sprites/buildings/house_1.png` is dropped in, and
-  changes nothing until then. All three share the one sheet on purpose: no
-  house had a lifecycle sheet of its own at all, so declaring the art for
-  only the smallest tier would leave a street half cottages and half
-  procedural boxes. A rising building still draws from the
+  and the fallback chain are real and tested, and the sheet is IN
+  (`assets/sprites/buildings/house_1.png`, 1402x1122, 25 cottages). All
+  three house tiers share the one sheet on purpose: no house had a
+  lifecycle sheet of its own at all, so declaring the art for only the
+  smallest tier would leave a street half cottages and half procedural
+  boxes.
+
+  Its grid is DETECTED, not assumed (`VariantSheetGrid`): the sheet's rows
+  sit ~213px apart inside a 1122px image with 45px of blank at the bottom,
+  so an even fifth-of-the-height cut sliced 3% through the first boundary
+  and 8.1% through the last -- shaving a chimney off one cottage and
+  gluing a strip of the next one's grass along another. Cuts are found in
+  the sheet's own background gutters instead; all eight now pass through
+  0.0% art (`tools/probe_house_variant_sheet.gd`).
+  `tools/probe_house_variants_at_game_scale.gd` renders every variant at
+  the true on-screen size (32x27 as a Cottage, 48x41 as a House, 64x54 as
+  a Manor) so the art can be judged at the scale it is actually played at. A rising building still draws from the
   lifecycle sheet's construction row — a variant sheet has no scaffold
   stages. See [building.md](building.md)'s "Building variant sheets" for
   the full contract.
