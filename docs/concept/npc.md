@@ -409,6 +409,79 @@ without pretending it killed anything — the same two-fidelities split
 [ecosystem_dynamics.md](ecosystem_dynamics.md) already draws between
 individual and aggregate simulation.
 
+#### Status — built, and how it actually landed
+
+Both halves are live. `ForagerBehavior` is the pure phase machine
+(`SEEKING → APPROACHING → TAKING`), `HuntableQuarry` is the pure rule set,
+and `NpcMarker` owns the world effect. One skeleton runs both quarry kinds;
+only four things differ (`_find_quarry` / `_quarry_position` / `_reach` /
+`_take_quarry`), because a deer and a trout are approached, lost and given
+up on identically and writing that twice is how the two drift apart.
+
+- ✅ **The hunter** scans the real creature group, walks to a living wild
+  animal and strikes it with the same `take_damage()` a wolf's own bite
+  calls. Four exclusions, each grounded rather than chosen: **not a
+  predator** (`NpcProduction` pays a hunter by `herbivore_population_near`,
+  so prey is what a hunter takes), **not a world boss** (`BossAggro` would
+  wake it into the village), **not tamed** (it belongs to somebody, see
+  [taming.md](taming.md)), and **alive and still really here** (a creature
+  killed earlier in the frame stays in its group until the frame boundary).
+- ✅ **The fisher** walks to the water and casts through the two hooks the
+  player's own rod and a diving bird already use —
+  `nearest_fish_position` and `catch_nearest_fish`, the latter of which
+  frees the real fish and books the harvest against its chunk's aggregate
+  by itself.
+- ✅ **Yield is no longer conjured while real quarry is there.** What the
+  kill is worth is `HuntableQuarry.meat_yield_of`: exactly the
+  `Butchering.meat_count` a player butchering that same carcass would cut
+  out of it, against the animal's own live mass relative to its species
+  reference ([metabolism.md](metabolism.md)). A well-fed deer feeds the
+  village better than a starved one. No skill bonus — SkillTree's
+  `meat_yield` nodes are the player's to earn.
+- ✅ **No number in the hunt was invented.** Every constant is borrowed
+  from something already live and test-pinned to it, never copied as a
+  literal: the search radius and arrival distance from the Lumberjack's
+  own, the strike damage from `CreatureMarker.ATTACK_DAMAGE` (a villager
+  bringing a deer down does what a wolf does to the same deer), the
+  look-around and strike intervals from `LumberjackBehavior`, and the rod's
+  reach from `Player.FISH_CATCH_RADIUS` — a villager's rod is the player's
+  rod.
+
+Four decisions this section did not originally specify, recorded here
+because the code took them:
+
+1. **The regional drip is off whenever quarry is within REACH, not only
+   while a villager is committed to one.** Paid only for committed time, a
+   hunter would still draw most of their income from a number: the drip
+   runs at `PRODUCTION_RATE_PER_SECOND × the regional headcount`, which
+   across a look-around interval and a walk outruns a real deer several
+   times over, and hunting would have stayed decorative. The fallback is
+   for a region with no loaded quarry in it — not a top-up for the seconds
+   between one kill and the next.
+2. **A hunter carries home the animal it killed**, so the carcass
+   `CreatureMarker._die` leaves is removed at the kill site. Otherwise the
+   same meat exists twice: once as village stock and once as a carcass
+   anyone can walk up and butcher. Named simplification: the whole animal
+   goes home, so the guts a real field-dressing leaves behind
+   (`Butchering`'s third part, `CarcassGuts`) are not spawned. Wild deaths
+   — predation, disease, age — still leave their carcasses untouched, so
+   [carrion.md](carrion.md)'s chain keeps every input it had except the
+   ones a villager personally killed and carried off.
+3. **One fish is one food unit**, not a mass-scaled count the way a carcass
+   is — a deliberate asymmetry with the hunter. There is no fish equivalent
+   of `Butchering.meat_count` to read a real conversion off, and inventing
+   one would be exactly the invented number this change exists to remove.
+4. **Nothing is credited for a blow that does not kill, or a cast that
+   lands nothing.** Half a deer is not half a meal, and a wounded animal
+   that escapes fed nobody.
+
+**Still open here:** a villager cannot hunt a species whose meat the world
+has no `LootTable` entry for — they can *kill* it, and are paid the same
+`Butchering` yield for it, but it leaves no carcass either way, so the
+"carried home" rule is a no-op for most of the roster. Widening `LootTable`
+past its four generic entries is [carrion.md](carrion.md)'s to do, not this
+section's.
+
 ### Open questions
 
 - Aging pace — real-time-days-per-life-stage vs. some faster abstracted

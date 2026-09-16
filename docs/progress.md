@@ -23047,3 +23047,124 @@ sawmill, farmhouse, smithy or brewery is a real building the village raised
 and a real contributor to the `community` need; none of them yet RUNS a
 production chain the way the legacy single-tile `sagewerk`/`farm` do.
 Staffing them is the obvious next pass.
+
+### Where a village's gold comes from, and work that happens against the real world (see `docs/concept/traveling_merchants.md`, `docs/concept/npc.md`)
+
+Reported in play, in one message: *"The villagers need real behaviour AI...
+the hunter doesn't hunt the fisher doesn't fish and all villagers have 0
+gold; they need a way to earn income... I'd suggest traveler merchants
+which buys goods like fish, meat, hide, beams etc. ... also there's still
+no City Hall?"* — then, on the follow-up: *"Yes hunting and fishing should
+be simulated against the real world, just like lumberjacking and
+everything else."*
+
+✅ **A villager's earnings now reach the household that keeps them.** "All
+villagers have 0 gold" was two separate faults, and only one of them was a
+design gap. The bug: `NpcEconomy` banked take-home into its OWN ephemeral
+`Wallet`, created per marker, while the household ledger a house panel
+reads holds a different, persistent purse — so every coin a villager
+earned died with its chunk. `NpcEconomy.bind_household_wallet` now binds
+the persistent `Household.wallet` (carrying over whatever was in hand), and
+`VillageRenderer._build_npc` passes it through
+`EarthChunkManager.household_wallet_for_villager`.
+
+✅ **Traveling merchants: gold now arrives because somebody bought
+something.** The design gap underneath the bug was that
+`NpcProduction.YIELD_TO_GOLD_RATE` conjured gold the instant food was
+gathered, whether or not anyone ever bought it. `MerchantVisit` is the
+faucet made honest: a cart arrives at `VISITS_PER_DAY`, draws down a
+village's real surplus (`SURPLUS_DRAW`) up to `CART_CAPACITY`, and pays for
+what it takes. **Every price is derived, not picked**: a beam is
+`LOG_PRICE × 2 × (SagewerkProduction.LOG_COST_PER_BEAM /
+LOG_COST_PER_PLANK)`, riding the mill's own real 3:1 conversion, and raw
+food sits under `VillageMarket.VILLAGE_LOCAL_FOOD_PRICE` and
+`Shop.CATALOG["cooked_meat"]` — `shop.gd` states plainly that `CATALOG` is
+the only place an item has a price, so inventing one here would have been
+"a number with nothing behind it".
+
+✅ **A village is founded with its city hall.** Reported three times, and
+each time it was pacing rather than breakage: a hall costs ~20 wood + 10
+stone + 45 labour-hours, which at `HOURS_PER_BUILDER_PER_DAY` and
+`SECONDS_PER_DAY` is roughly three real hours of play — worse once
+productivity scaling landed. A settlement now founds with its hall
+standing. That broke 29 of 56 tests in three distinct ways, all three real:
+the `city_hall_rising` suite exercises a village WITHOUT a hall (it now
+lifts the founded one and re-lays the paving), the growth suite's site
+finder asked `_civic_plot_origin_for`, which answers null once a hall
+stands (it now checks plaza paving plus real houses), and `_load_chunk`
+ITSELF takes a growth decision, so a founded village queues its next rung
+during `before_each` (tests asserting what ONE decision queued now clear
+the ledger first).
+
+✅ **The hunter actually hunts.** Before this, a hunter walked to a
+decorative prop, stood on it, and food appeared in the market — no animal
+approached, none dead. `NpcMarker` now runs the same three-part split the
+Sägewerk's Lumberjack already used, pointed at the other verb:
+`ForagerBehavior` decides WHEN (`SEEKING → APPROACHING → TAKING`),
+`HuntableQuarry` decides WHAT, and the marker owns the world effect —
+scanning the real creature group, walking to a living wild animal, and
+striking it with the same `take_damage()` a wolf's own bite calls. Four
+exclusions, each grounded: not a predator (`NpcProduction` pays a hunter by
+`herbivore_population_near`, so prey is what a hunter takes), not a world
+boss (`BossAggro` would wake it into the village), not tamed, and alive and
+still really here.
+
+✅ **The fisher actually fishes.** Both hooks already existed for the
+player's own rod and for a diving bird — `nearest_fish_position` and
+`catch_nearest_fish`, the latter of which frees the real fish and books the
+harvest against its chunk's aggregate by itself. What was missing was a
+villager who walked to the water and used them. Both quarry kinds run one
+skeleton with only four things behind seams (`_find_quarry` /
+`_quarry_position` / `_reach` / `_take_quarry`): a deer and a trout are
+approached, lost and given up on identically, and writing that twice is how
+the two drift apart.
+
+✅ **No number in the hunt was invented.** Every constant is borrowed from
+something already live and **test-pinned to it, never copied as a
+literal**: the search radius and arrival distance from `LumberjackMarker`,
+the strike damage from `CreatureMarker.ATTACK_DAMAGE` (a villager bringing
+a deer down does what a wolf does to the same deer), the look-around and
+strike intervals from `LumberjackBehavior`, the rod's reach from
+`Player.FISH_CATCH_RADIUS`, and a kill's meat from
+`Butchering.meat_count` against the animal's own live mass relative to its
+species reference — exactly what a player butchering that same carcass
+would cut out of it, so a well-fed deer feeds the village better than a
+starved one.
+
+Honest gaps and deliberate divergences, each recorded in
+`concept/npc.md`'s own status subsection:
+
+🚧 **A villager can only take what is LOADED.** Creatures and fish exist as
+nodes only in loaded chunks, so an unloaded settlement takes no real
+quarry. The regional-aggregate path stays as its fallback — the same
+two-fidelities split `ecosystem_dynamics.md` already draws.
+
+🚧 **The regional drip is off whenever quarry is within REACH, not only
+while a villager is committed to one.** This is wider than the concept doc
+originally specified, and deliberately: paid only for committed time, a
+hunter would still have drawn most of their income from a number — the drip
+runs at `PRODUCTION_RATE_PER_SECOND × the regional headcount`, which across
+a look-around interval and a walk outruns a real deer several times over,
+and hunting would have stayed decorative.
+
+🚧 **A hunter carries home the whole animal**, so the guts a real
+field-dressing leaves behind (`Butchering`'s third part, `CarcassGuts`) are
+not spawned. Without removing the carcass the same meat would exist twice,
+once as village stock and once as something anyone could walk up and
+butcher. Wild deaths — predation, disease, age — still leave their
+carcasses untouched, so `carrion.md`'s chain keeps every input it had
+except the ones a villager personally killed and carried off. In practice
+this rule is a no-op for most species: `LootTable` has drops for four
+generic entries only, so most kills leave no carcass at all. Widening that
+table is `carrion.md`'s to do.
+
+🚧 **One fish is one food unit**, not a mass-scaled count the way a carcass
+is — a deliberate asymmetry with the hunter. There is no fish equivalent of
+`Butchering.meat_count` to read a real conversion off, and inventing one
+would be the invented number this whole change exists to remove.
+
+⬜ **The farmer is untouched and stays untouched.** There is no crop entity
+standing in the world to harvest the way there is an animal or a fish, and
+`vegetation_density_near` is a field, not a thing. Real crop entities
+belong to the farm/mill/bakery chain (`milling_and_baking.md`) when it
+comes, not to a symmetry argument.
