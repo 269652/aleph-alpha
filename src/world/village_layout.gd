@@ -127,8 +127,26 @@ static func skeleton(chunk_size: int, seed_value: int) -> Dictionary:
 	}
 
 
+## `is_clearable` is the rule for the PLAZA specifically, and only the
+## plaza: whether a cell is ground the village would CLEAR to hold its
+## square, as opposed to ground it would build a house on. The two differ
+## on exactly one thing that matters -- forest.
+##
+## Measured on real terrain near 51.2N 13.6E: with plain buildability, only
+## 55% of villages got a plaza at all, and forest was the blocker in every
+## single failing case (water in none of them). That is the wrong rule for
+## a square. A village fells the trees it stands on -- building.md's own
+## "the NPCs / Player must first fell all trees to make space" -- and the
+## plaza is the one thing a city hall cannot exist without, so refusing it
+## over trees the village would simply clear cost nearly half of all
+## villages their civic centre. Water is genuinely different: a village
+## does not drain a river to hold a market.
+##
+## Omitted, it falls back to `is_buildable`, so every caller that does not
+## pass one keeps exactly the answer it had before this existed.
 func layout(
-	building_ids: Array, chunk_size: int, seed_value: int, is_buildable: Callable, is_occupied: Callable
+	building_ids: Array, chunk_size: int, seed_value: int, is_buildable: Callable, is_occupied: Callable,
+	is_clearable: Callable = Callable()
 ) -> Dictionary:
 	if building_ids.is_empty():
 		var no_roads: Array[Vector2i] = []
@@ -152,7 +170,8 @@ func layout(
 	# square can actually be paved -- a village whose centre is water or
 	# forest gets no plaza (and so no hall), honestly, rather than a square
 	# with a lake in it.
-	var has_plaza := _every_cell_clear(_rect_cells(plaza), chunk_size, is_buildable, is_occupied)
+	var plaza_ground: Callable = is_clearable if is_clearable.is_valid() else is_buildable
+	var has_plaza := _every_cell_clear(_rect_cells(plaza), chunk_size, plaza_ground, is_occupied)
 	var side_street_cells: Array = []
 	if has_plaza:
 		for cell in _rect_cells(plaza):

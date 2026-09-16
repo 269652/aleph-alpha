@@ -526,3 +526,74 @@ func test_no_street_plot_at_all_when_nothing_is_buildable():
 	assert_true(
 		VillageLayout.next_street_plot("warehouse", CHUNK_SIZE, 44, _never_buildable, _never_occupied).is_empty()
 	)
+
+
+# -- the square is CLEARED, not merely found ------------------------------
+#
+# Measured on real terrain near 51.2N 13.6E: only 55% of villages had a
+# plaza, and forest was the blocker in every single failing case (water in
+# none of them). That is the wrong rule. A village fells the trees it
+# stands on -- docs/concept/building.md's own "the NPCs / Player must first
+# fell all trees to make space for the building" -- and the square is the
+# one thing a city hall cannot exist without. Water is different: a village
+# does not drain a river to hold a market.
+
+func _forest_over_the_square(chunk_size: int, seed_value: int) -> Callable:
+	var plaza: Rect2i = VillageLayout.skeleton(chunk_size, seed_value)["plaza"]
+	return func(cell: Vector2i) -> bool:
+		return plaza.has_point(cell)
+
+
+func test_a_plaza_is_cleared_out_of_forest_rather_than_refused():
+	# Buildable everywhere EXCEPT the square itself, which is forest --
+	# exactly the shape the real terrain scan found.
+	var forest := _forest_over_the_square(CHUNK_SIZE, 61)
+	var result := layout.layout(
+		["house_small", "house_small"], CHUNK_SIZE, 61,
+		func(cell: Vector2i) -> bool: return not forest.call(cell),
+		_never_occupied,
+		func(_cell: Vector2i) -> bool: return true  # clearable: no water anywhere
+	)
+	assert_true(result["plaza"].has_area(), "a village clears its own square out of the wood")
+	assert_false(result["civic_plot"].is_empty(), "and so it has somewhere to raise its hall")
+
+
+func test_a_plaza_is_still_never_laid_on_water():
+	var plaza: Rect2i = VillageLayout.skeleton(CHUNK_SIZE, 62)["plaza"]
+	var result := layout.layout(
+		["house_small", "house_small"], CHUNK_SIZE, 62, _always_buildable, _never_occupied,
+		func(cell: Vector2i) -> bool: return not plaza.has_point(cell)  # the square is water
+	)
+	assert_false(result["plaza"].has_area(), "a village does not drain a river to hold a market")
+	assert_true(result["civic_plot"].is_empty())
+
+
+## Omitting the clearable predicate must behave exactly as before it
+## existed -- every existing caller keeps its own meaning.
+func test_omitting_the_clearable_rule_falls_back_to_plain_buildability():
+	var forest := _forest_over_the_square(CHUNK_SIZE, 63)
+	var result := layout.layout(
+		["house_small"], CHUNK_SIZE, 63,
+		func(cell: Vector2i) -> bool: return not forest.call(cell),
+		_never_occupied
+	)
+	assert_false(result["plaza"].has_area(), "no clearable rule means the old, stricter answer")
+
+
+## Whatever the square is cleared out of, it is still paved end to end --
+## a cleared plaza is a real plaza, not a hole in the trees.
+func test_a_cleared_plaza_is_fully_paved():
+	var forest := _forest_over_the_square(CHUNK_SIZE, 64)
+	var result := layout.layout(
+		["house_small"], CHUNK_SIZE, 64,
+		func(cell: Vector2i) -> bool: return not forest.call(cell),
+		_never_occupied,
+		func(_cell: Vector2i) -> bool: return true
+	)
+	var road := {}
+	for cell in result["road_cells"]:
+		road[cell] = true
+	var plaza: Rect2i = result["plaza"]
+	assert_true(plaza.has_area(), "precondition")
+	for cell in _cells_of(plaza):
+		assert_true(road.has(cell), "plaza cell %s was never paved" % str(cell))

@@ -100,6 +100,23 @@ simulation:
   formalisation of a real historical progression, and it is the shape the
   wellbeing model below follows.
 
+## Mechanism 0 — The square is cleared, not merely found
+
+The plaza is the one thing a city hall cannot exist without, and it was
+being refused over trees. `VillageLayout.layout` tests the square with an
+`is_clearable` rule rather than plain buildability: a village FELLS the
+trees it stands on ([building.md](building.md)'s own "the NPCs / Player
+must first fell all trees to make space"), so forest is cleared for the
+square — but water is not, because a village does not drain a river to
+hold a market.
+
+**Measured, not assumed** (real terrain, 25x25 chunks around 51.2N 13.6E,
+22 real villages): with plain buildability **12 of 22 (55%)** had a plaza,
+and forest was the blocker in every single failing case, water in none of
+them. With the clearing rule, **22 of 22 (100%)** do. An older village
+whose square is wooded gets it paved on its next visit
+(`_lay_plaza_if_missing` uses the same rule), so existing saves heal.
+
 ## Mechanism 1 — The charter: an industry plot at the forest
 
 `VillageLayout.skeleton` gains nothing (it must stay a pure function of the

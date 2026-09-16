@@ -254,7 +254,10 @@ func _place_new_village(
 	var layout_seed := VillageLayout.seed_for(chunk_coord)
 	var is_buildable := _is_buildable_local(chunk_coord, chunk_size, world)
 	var is_occupied := _is_occupied_local(chunk_coord, chunk_size, world)
-	var result := _village_layout.layout(building_ids, chunk_size, layout_seed, is_buildable, is_occupied)
+	var result := _village_layout.layout(
+		building_ids, chunk_size, layout_seed, is_buildable, is_occupied,
+		_is_clearable_local(chunk_coord, chunk_size, world)
+	)
 
 	# Buildings BEFORE roads -- place_building's own occupancy check
 	# refuses a plot whose doorstep cell is already non-empty in
@@ -418,6 +421,22 @@ func _place_industry_if_missing(chunk_coord: Vector2i, chunk_size: int, world) -
 		world.build_at_global(g.x, g.y, TerrainRenderer.ROAD_TILE_ID)
 
 
+## Ground the village would CLEAR for its square: anything that is not
+## water. Deliberately laxer than _is_buildable_local, which also refuses
+## the forest biome -- see VillageLayout.layout's own is_clearable for the
+## measurement that made that distinction necessary. A world that cannot
+## answer treats everything as clearable, the same fail-open shape its
+## siblings use.
+func _is_clearable_local(chunk_coord: Vector2i, chunk_size: int, world) -> Callable:
+	return func(cell: Vector2i) -> bool:
+		var g: Vector2i = chunk_coord * chunk_size + cell
+		if world.has_method("is_water_at_global"):
+			return not world.is_water_at_global(g.x, g.y)
+		if world.has_method("is_buildable_ground_at"):
+			return world.is_buildable_ground_at(g.x, g.y)
+		return world.is_buildable_terrain_at(g.x, g.y) if world.has_method("is_buildable_terrain_at") else true
+
+
 ## Whether a chunk-local cell is real forest -- the third predicate
 ## VillageLayout.industry_plot reads, alongside the buildable/occupied pair
 ## above. Duck-typed like every other world call here: a world that cannot
@@ -466,7 +485,10 @@ func _lay_plaza_if_missing(chunk_coord: Vector2i, chunk_size: int, world) -> voi
 	if TerrainRenderer.is_road_tile(world.modification_at_global(doorstep.x, doorstep.y)):
 		return
 	var plaza: Rect2i = skeleton["plaza"]
-	var is_buildable := _is_buildable_local(chunk_coord, chunk_size, world)
+	# The square is CLEARED, not merely found (see VillageLayout.layout's
+	# own is_clearable): an older village whose square is wooded gets it
+	# paved on this visit, exactly as a fresh one would.
+	var is_buildable := _is_clearable_local(chunk_coord, chunk_size, world)
 	var cells: Array = []
 	for y in range(plaza.position.y, plaza.end.y):
 		for x in range(plaza.position.x, plaza.end.x):
