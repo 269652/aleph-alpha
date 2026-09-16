@@ -15519,7 +15519,24 @@ func _growth_site_for(chunk_coord: Vector2i, building_id: String):
 	var is_buildable := func(cell: Vector2i) -> bool:
 		var g: Vector2i = chunk_coord * CHUNK_SIZE + cell
 		return is_buildable_ground_at(g.x, g.y)
+	# Ground another whole-building project is already rising on counts as
+	# occupied even though nothing is modified there yet -- the same
+	# reservation _is_clear_settlement_site reads, from the same source, so
+	# the two sitings cannot claim the same cells (see
+	# _cells_reserved_by_building_projects). A project for THIS SAME
+	# building is deliberately not excluded: a repeated decision must land
+	# on its own earlier site and find its own project, not queue a second
+	# copy somewhere else.
+	var reserved := _cells_reserved_by_building_projects(chunk_coord)
+	for project in _construction_project_store.active_projects_in_chunk(chunk_coord):
+		if project.blueprint_id != building_id:
+			continue
+		for cell in BuildingCatalog.footprint_cells(building_id, project.origin):
+			reserved.erase(cell)
+		reserved.erase(project.origin + BuildingCatalog.doorstep_of(building_id))
 	var is_occupied := func(cell: Vector2i) -> bool:
+		if reserved.has(cell):
+			return true
 		var g: Vector2i = chunk_coord * CHUNK_SIZE + cell
 		return modification_at_global(g.x, g.y) != ""
 	var seed_value := VillageLayout.seed_for(chunk_coord)
@@ -15622,13 +15639,43 @@ func _is_clear_settlement_site(chunk_coord: Vector2i, local: Vector2i) -> bool:
 	if local.x < 1 or local.y < 1 or local.x >= CHUNK_SIZE - 1 or local.y >= CHUNK_SIZE - 1:
 		return false
 	var global_cell: Vector2i = chunk_coord * CHUNK_SIZE + local
+	var reserved := _cells_reserved_by_building_projects(chunk_coord)
 	for dy in range(-1, 2):
 		for dx in range(-1, 2):
 			var x := global_cell.x + dx
 			var y := global_cell.y + dy
 			if not is_buildable_terrain_at(x, y) or modification_at_global(x, y) != "":
 				return false
+			# Ground a whole-building project is already RISING on is
+			# unmodified until the moment it completes, so "no modification
+			# here" is not the same as "free" (see _cells_reserved_by_
+			# building_projects).
+			if reserved.has(local + Vector2i(dx, dy)):
+				return false
 	return true
+
+
+## Every LOCAL cell a live (PLANNED/IN_PROGRESS) whole-building project in
+## this chunk has spoken for -- its footprint and its doorstep.
+##
+## Two siting algorithms look for UNMODIFIED ground in the same chunk:
+## _settlement_build_origin_for's spiral (single-tile structures -- a farm,
+## a mill, a bakery) and VillageLayout.next_street_plot (docs/concept/
+## village_growth.md's growth ladder). A building project that is merely
+## rising has modified NOTHING yet, so without this each would happily site
+## on top of the other's plot -- and the second to complete would find its
+## own site taken and silently place nothing, leaving a COMPLETE ledger
+## entry with no building anywhere. Each siting sees the other's
+## reservations instead.
+func _cells_reserved_by_building_projects(chunk_coord: Vector2i) -> Dictionary:
+	var reserved := {}
+	for project in _construction_project_store.active_projects_in_chunk(chunk_coord):
+		if not BuildingCatalog.has_building(project.blueprint_id):
+			continue
+		for cell in BuildingCatalog.footprint_cells(project.blueprint_id, project.origin):
+			reserved[cell] = true
+		reserved[project.origin + BuildingCatalog.doorstep_of(project.blueprint_id)] = true
+	return reserved
 
 
 ## A City Hall's own real "compute demands" step (see docs/concept/

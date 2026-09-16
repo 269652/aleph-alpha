@@ -435,3 +435,46 @@ func test_the_house_a_villager_owns_is_found_from_their_own_seed():
 
 func test_a_villager_who_owns_nothing_here_is_reported_as_owning_nothing():
 	assert_null(manager.house_origin_for_villager(_chunk_coord, 123456789))
+
+
+# -- two siting algorithms, one patch of ground --------------------------
+#
+# _settlement_build_origin_for (the older spiral, for single-tile
+# structures like a farm or a mill) and VillageLayout.next_street_plot
+# (this pass's street frontage) both look for UNMODIFIED ground, and a
+# building project that is merely rising has not modified anything yet. Two
+# projects on the same cells means the second to complete finds its site
+# taken and silently places nothing -- a COMPLETE ledger entry with no
+# building. Each siting must see the other's reservations.
+
+func test_the_spiral_site_search_never_offers_ground_a_building_is_rising_on():
+	_stock_everything()
+	_raise_the_hall()
+	manager._apply_village_growth_decision(_chunk_coord)
+	var queued: Array = _projects_for("warehouse")
+	assert_eq(queued.size(), 1, "precondition")
+
+	for cell in BuildingCatalog.footprint_cells("warehouse", queued[0].origin):
+		assert_false(
+			manager._is_clear_settlement_site(_chunk_coord, cell),
+			"cell %s is already spoken for by a rising warehouse" % str(cell)
+		)
+
+
+func test_a_growth_building_is_never_sited_on_ground_another_project_already_claims():
+	_stock_everything()
+	_raise_the_hall()
+	manager._apply_village_growth_decision(_chunk_coord)
+	var first: Array = _projects_for("warehouse")
+	assert_eq(first.size(), 1, "precondition")
+	var claimed := {}
+	for cell in BuildingCatalog.footprint_cells("warehouse", first[0].origin):
+		claimed[cell] = true
+
+	# The ladder's NEXT rung has to find its own ground, not share the
+	# warehouse's -- asked for directly, since the ladder itself will not
+	# name a farmhouse until the warehouse actually stands.
+	var next_origin = manager._growth_site_for(_chunk_coord, "farmhouse")
+	assert_not_null(next_origin, "the village still has frontage somewhere")
+	for cell in BuildingCatalog.footprint_cells("farmhouse", next_origin):
+		assert_false(claimed.has(cell), "cell %s overlaps the rising warehouse" % str(cell))
