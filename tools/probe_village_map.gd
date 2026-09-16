@@ -100,13 +100,18 @@ func _char_at(manager, chunk, coord: Vector2i, local: Vector2i, anchors: Diction
 	return "."
 
 
+## Optional args: latitude longitude (defaults to Berlin).
 func _find_village(manager) -> Vector2i:
 	var settlements := SettlementGenerator.new()
 	var classifier := BiomeClassifier.new()
 	var geo := GeoCoordinates.new()
+	var args := OS.get_cmdline_user_args()
+	var latitude := float(args[0]) if args.size() > 0 else 52.52
+	var longitude := float(args[1]) if args.size() > 1 else 13.405
+	print("searching for a village near lat %.3f lon %.3f" % [latitude, longitude])
 	var centre := Vector2i(
-		floori(float(geo.tile_for_longitude(13.405, EarthChunkGenerator.WORLD_WIDTH_TILES)) / float(CHUNK_SIZE)),
-		floori(float(geo.tile_for_latitude(52.52, EarthChunkGenerator.WORLD_HEIGHT_TILES)) / float(CHUNK_SIZE)),
+		floori(float(geo.tile_for_longitude(longitude, EarthChunkGenerator.WORLD_WIDTH_TILES)) / float(CHUNK_SIZE)),
+		floori(float(geo.tile_for_latitude(latitude, EarthChunkGenerator.WORLD_HEIGHT_TILES)) / float(CHUNK_SIZE)),
 	)
 	for radius in range(0, 16):
 		for dy in range(-radius, radius + 1):

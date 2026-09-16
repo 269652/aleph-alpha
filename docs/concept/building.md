@@ -370,6 +370,34 @@ tile, no dividers, no directional variants (see
   crafting bench. Clicking any building opens `HousePanel` on its
   household's real needs, happiness and productivity
   (`EarthChunkManager.household_report_at`).
+- ✅ **A village fells the trees it needs** (2026-09-16). **A named
+  divergence from the "also not in the forest" rule above, for the VILLAGE
+  GENERATOR ONLY.** That rule refuses the forest BIOME outright, and
+  measuring real terrain around 51.2°N 13.6°E showed what it cost: of 22
+  real villages, only 12 (55%) could lay a plaza at all, and forest was the
+  blocker in every single failing case — water in none of them. No plaza
+  means no civic plot, which means no city hall, so nearly half of all
+  villages were losing their civic centre to trees they would have cleared
+  in an afternoon.
+  `VillageRenderer._is_buildable_local` now asks only `is_water_at_global`:
+  a village sites on anything that is not water, for its square, its house
+  plots and its roads alike. That is this doc's own other sentence made
+  true — *"the NPCs / Player must first fell all trees to make space for the
+  building"* — and it is not a promise the code fails to keep, because
+  `place_building` and `build_at_global` already call
+  `_clear_vegetation_on_cells` and `_block_ground_cover_on_cells` on
+  everything they write, and `TreeRenderer.spawn_trees` will not put a tree
+  back on a modified cell. Re-measured after the change: 22 of 22 (100%)
+  lay a plaza, 22 of 22 site a sawmill, and every village places all five
+  of its houses.
+  The **player's** own build gate is deliberately untouched:
+  `is_buildable_terrain_at` still refuses the forest biome and a tile with
+  a tree still standing on it, because a player fells trees by hand and
+  should be told when one is in the way, while a village founding itself
+  simply clears its site. `SettlementGenerator` still refuses to found a
+  village in a forest-DOMINANT chunk at all, so this clears the wooded
+  patches inside an otherwise open chunk rather than carving a town out of
+  deep forest.
 - ✅ **Older saves.** A settlement chunk still carrying old-style
   piece-built houses has them wiped once on load and regenerates as
   whole-building entities in the same load, protecting any player-owned

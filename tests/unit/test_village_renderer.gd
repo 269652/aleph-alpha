@@ -137,6 +137,15 @@ class StubWorld:
 			return "forest"
 		return biome
 
+	## The one water rule (see EarthChunkManager.is_water_at_global) -- what
+	## a village's own siting really asks, now that it fells the trees it
+	## needs rather than refusing ground over them. Mirrors the real one on
+	## BOTH of its sources: an explicitly wet cell, and an ocean biome --
+	## a stub that knew only the first let a village happily settle a chunk
+	## that reads as open sea.
+	func is_water_at_global(x: int, y: int) -> bool:
+		return water_cells.has(Vector2i(x, y)) or biome_at_global(x, y) == "ocean"
+
 	func is_buildable_terrain_at(x: int, y: int) -> bool:
 		var cell := Vector2i(x, y)
 		if biome_at_global(x, y) == "ocean" or forest_cells.has(cell):
@@ -438,14 +447,22 @@ func test_a_building_is_never_placed_in_water():
 	assert_false(spawned.is_empty(), "the village itself (landmarks, NPCs) still spawns")
 
 
+## A village's own terrain refusal is WATER (see VillageRenderer._is_
+## buildable_local): it fells the trees it needs, but it does not drain a
+## river. This used to flood the chunk with a generic `unbuildable` flag,
+## which conflated the two -- the rule being protected is the water one.
 func test_a_building_is_never_placed_where_the_real_terrain_check_refuses():
 	var coord := _find_settlement_chunk("grassland")
 	var world := StubWorld.new()
 	for x in CHUNK_SIZE:
 		for y in CHUNK_SIZE:
-			world.unbuildable_cells[coord * CHUNK_SIZE + Vector2i(x, y)] = true
+			world.water_cells[coord * CHUNK_SIZE + Vector2i(x, y)] = true
 	renderer.spawn_village(parent, coord, coord * CHUNK_SIZE, CHUNK_SIZE, TILE_SIZE, "grassland", world)
-	assert_true(world.place_calls.is_empty(), "an entirely unbuildable chunk should place nothing")
+	assert_true(world.place_calls.is_empty(), "a chunk that is all water should place nothing")
+	for g in world.road_cells:
+		assert_false(
+			TerrainRenderer.is_road_tile(world.road_cells[g]), "a road was paved across open water at %s" % str(g)
+		)
 
 
 func test_a_building_already_occupying_ground_keeps_later_ones_off_it():
@@ -978,3 +995,183 @@ func test_a_newcomer_stands_at_the_house_their_household_owns():
 			assert_almost_eq(node.home_position.x, expected_position.x, 0.01)
 			assert_almost_eq(node.home_position.y, expected_position.y, 0.01, "home is their own doorstep")
 	assert_true(found, "the newcomer was spawned at all")
+
+
+# -- workspot props stand on real, dry ground -----------------------------
+#
+# Reported from a real session with a screenshot: a farmer's field, a
+# merchant's stall and a blacksmith's forge floating ON a river, and a
+# villager standing in it. Both positions were a blind fixed offset south
+# of the door -- four tiles for a workspot, two for a merchant's stand --
+# with no terrain check of any kind, and a village street that runs along
+# a riverbank puts that offset straight into the water.
+
+func _props_in(spawned: Array) -> Array:
+	var props: Array = []
+	for node in spawned:
+		if node is NpcMarker:
+			continue
+		if node.has_meta("landmark_id"):
+			props.append(node)
+	return props
+
+
+## Everything south of the street is river -- exactly the reported shape.
+func _flood_south_of_the_street(world: StubWorld, coord: Vector2i) -> void:
+	var street_y: int = VillageLayout.skeleton(CHUNK_SIZE, VillageLayout.seed_for(coord))["street_y"]
+	for y in range(street_y + 1, CHUNK_SIZE):
+		for x in CHUNK_SIZE:
+			world.water_cells[coord * CHUNK_SIZE + Vector2i(x, y)] = true
+
+
+func _tile_of(position: Vector2) -> Vector2i:
+	return Vector2i(floori(position.x / TILE_SIZE), floori(position.y / TILE_SIZE))
+
+
+func test_no_prop_and_no_villager_ever_stands_in_water():
+	var coord := _find_settlement_chunk("grassland")
+	var world := StubWorld.new()
+	_flood_south_of_the_street(world, coord)
+
+	var spawned := renderer.spawn_village(parent, coord, coord * CHUNK_SIZE, CHUNK_SIZE, TILE_SIZE, "grassland", world)
+
+	for node in spawned:
+		var tile := _tile_of(node.position)
+		assert_false(
+			world.water_cells.has(tile), "%s stands in the river at %s" % [
+				str(node.get_meta("landmark_id")) if node.has_meta("landmark_id") else "a villager", str(tile)
+			]
+		)
+
+
+func test_a_villagers_workspot_is_never_in_water_either():
+	var coord := _find_settlement_chunk("grassland")
+	var world := StubWorld.new()
+	_flood_south_of_the_street(world, coord)
+
+	var spawned := renderer.spawn_village(parent, coord, coord * CHUNK_SIZE, CHUNK_SIZE, TILE_SIZE, "grassland", world)
+
+	for node in spawned:
+		if node is NpcMarker:
+			assert_false(
+				world.water_cells.has(_tile_of(node.workspot_position)),
+				"a villager would walk into the river to work"
+			)
+
+
+## Dry ground everywhere: the props are still there. The fix must site
+## them, not delete the feature.
+func test_a_village_on_dry_ground_still_gets_its_workspot_props():
+	var coord := _find_settlement_chunk("grassland")
+	var world := StubWorld.new()
+	var spawned := renderer.spawn_village(parent, coord, coord * CHUNK_SIZE, CHUNK_SIZE, TILE_SIZE, "grassland", world)
+	assert_gt(_props_in(spawned).size(), 0, "a dry village still has real workspots")
+
+
+## A PERSONAL prop on the street, or on a house, is as wrong as one in the
+## river. The three SHARED landmarks are the opposite case -- the well and
+## the stall stand on the plaza's own paving and the gate on the street by
+## design -- which is why the two kinds are told apart by their own meta
+## rather than by an id a merchant's personal stand happens to share.
+func test_a_personal_workspot_prop_never_stands_on_a_road_or_a_building():
+	var coord := _find_settlement_chunk("grassland")
+	var world := StubWorld.new()
+	var spawned := renderer.spawn_village(parent, coord, coord * CHUNK_SIZE, CHUNK_SIZE, TILE_SIZE, "grassland", world)
+
+	var personal := 0
+	for node in _props_in(spawned):
+		if not bool(node.get_meta("personal", false)):
+			continue
+		personal += 1
+		var tile := _tile_of(node.position)
+		var existing: String = world.modification_at_global(tile.x, tile.y)
+		assert_eq(existing, "", "%s stands on '%s' at %s" % [node.get_meta("landmark_id"), existing, str(tile)])
+	assert_gt(personal, 0, "precondition: this village has personal workspots at all")
+
+
+## And the shared ones really are on the village's own paving -- the thing
+## that makes a square read as a square.
+func test_the_shared_landmarks_stand_on_the_villages_own_paving():
+	var coord := _find_settlement_chunk("grassland")
+	var world := StubWorld.new()
+	var spawned := renderer.spawn_village(parent, coord, coord * CHUNK_SIZE, CHUNK_SIZE, TILE_SIZE, "grassland", world)
+
+	for node in _props_in(spawned):
+		if bool(node.get_meta("personal", false)):
+			continue
+		var tile := _tile_of(node.position)
+		var existing: String = world.modification_at_global(tile.x, tile.y)
+		assert_true(
+			existing == "" or TerrainRenderer.is_road_tile(existing),
+			"%s stands on '%s'" % [node.get_meta("landmark_id"), existing]
+		)
+
+
+## A merchant's PERSONAL stand is the same rule -- it was the other blind
+## offset, two tiles south of the door.
+func test_a_merchants_personal_stand_is_sited_on_real_ground():
+	var coord := _find_settlement_chunk_with_merchant("grassland")
+	var world := StubWorld.new()
+	_flood_south_of_the_street(world, coord)
+
+	var spawned := renderer.spawn_village(parent, coord, coord * CHUNK_SIZE, CHUNK_SIZE, TILE_SIZE, "grassland", world)
+
+	for node in spawned:
+		if node.has_meta("landmark_id") and node.get_meta("landmark_id") == "stall":
+			assert_false(world.water_cells.has(_tile_of(node.position)), "a stall floating on the river")
+
+
+# -- a village fells the trees it needs ------------------------------------
+#
+# Measured on real terrain near 51.2N 13.6E: with forest refused outright,
+# only 12 of 22 villages (55%) got a plaza at all, and FOREST was the
+# blocker in every single failing case -- water in none of them. No plaza
+# means no civic plot, which means no city hall, so nearly half of all
+# villages were losing their civic centre to trees they would simply have
+# cleared.
+#
+# docs/concept/building.md's own words: "the NPCs / Player must first fell
+# all trees to make space for the building". place_building and
+# build_at_global already do exactly that (_clear_vegetation_on_cells,
+# _block_ground_cover_on_cells), so a village siting on wooded ground
+# clears it for real rather than leaving trees standing through walls.
+# Water is the rule that stays: a village does not drain a river.
+
+func _forest_over_the_street(world: StubWorld, coord: Vector2i) -> void:
+	var street_y: int = VillageLayout.skeleton(CHUNK_SIZE, VillageLayout.seed_for(coord))["street_y"]
+	for y in range(street_y - 4, street_y + 4):
+		for x in CHUNK_SIZE:
+			world.forest_cells[coord * CHUNK_SIZE + Vector2i(x, y)] = true
+
+
+func test_a_village_clears_the_wood_for_its_houses_and_its_square():
+	var coord := _find_settlement_chunk("grassland")
+	var world := StubWorld.new()
+	_forest_over_the_street(world, coord)
+
+	renderer.spawn_village(parent, coord, coord * CHUNK_SIZE, CHUNK_SIZE, TILE_SIZE, "grassland", world)
+
+	assert_gt(world.place_calls.size(), 0, "a wooded street is cleared and built on, not abandoned")
+	var plaza: Rect2i = VillageLayout.skeleton(CHUNK_SIZE, VillageLayout.seed_for(coord))["plaza"]
+	var paved := 0
+	for y in range(plaza.position.y, plaza.end.y):
+		for x in range(plaza.position.x, plaza.end.x):
+			var g: Vector2i = coord * CHUNK_SIZE + Vector2i(x, y)
+			if TerrainRenderer.is_road_tile(world.road_cells.get(g, "")):
+				paved += 1
+	assert_eq(paved, plaza.get_area(), "the square is cleared out of the wood and fully paved")
+
+
+## The other half of the same rule, stated from the new side: a chunk that
+## is ENTIRELY wooded is cleared and built on, where before it would have
+## been refused outright and left villagers homeless.
+func test_a_village_clears_an_entirely_wooded_chunk_rather_than_refusing_it():
+	var coord := _find_settlement_chunk("grassland")
+	var world := StubWorld.new()
+	for x in CHUNK_SIZE:
+		for y in CHUNK_SIZE:
+			world.forest_cells[coord * CHUNK_SIZE + Vector2i(x, y)] = true
+
+	renderer.spawn_village(parent, coord, coord * CHUNK_SIZE, CHUNK_SIZE, TILE_SIZE, "grassland", world)
+
+	assert_gt(world.place_calls.size(), 0, "a wooded chunk is cleared and settled, not abandoned")

@@ -52,9 +52,20 @@ const _STAND_OFFSET_TILES := 2
 ## occupations whose work tag isn't one of the settlement's 3 shared
 ## landmarks (see NpcMarker._resolve_location, and this file's own
 ## WORK_LOCATION_BY_OCCUPATION-driven prop spawning in spawn_village).
-## Not attempted as a hard collision guarantee the way road/building
-## siting is -- fine for a decorative prop a few tiles from a door.
 const _WORKSPOT_OFFSET_TILES := 4.0
+
+## How far from its nominal spot a prop or landmark may be nudged to find
+## real, dry ground (see _grounded_position).
+##
+## This exists because the offsets above used to be taken on faith: a
+## workspot was four tiles south of the door and a merchant's stand two,
+## with no terrain check of any kind. Reported from a real session with a
+## screenshot -- a farmer's field, a forge and a stall floating ON a river,
+## and a villager standing in it -- because a village street that runs
+## along a riverbank puts that blind offset straight into the water. Five
+## tiles is enough to step a prop back onto the bank without moving it so
+## far it stops reading as that villager's own.
+const _PROP_SEARCH_RADIUS_TILES := 5
 
 ## The one works every village raises at its own timber (docs/concept/
 ## village_growth.md mechanism 1). Placed at FOUNDING alongside the houses
@@ -189,11 +200,22 @@ func spawn_village(
 	if world != null and world.has_method("record_settlement_founded_if_new"):
 		world.record_settlement_founded_if_new(chunk_coord, npcs, plots)
 
+	# Every shared landmark on real ground before anything reads it -- the
+	# props below AND every villager's schedule resolve through this same
+	# dictionary (NpcMarker.landmarks), so grounding it once fixes both. A
+	# landmark with nowhere real to stand is dropped entirely rather than
+	# left floating; _resolve_location already falls back to the villager's
+	# own workspot for a tag it cannot find.
+	settlement.landmarks = _grounded_landmarks(settlement.landmarks, tile_size, world)
+
 	var spawned: Array[Node2D] = []
 	for landmark_id in settlement.landmarks:
 		spawned.append(_build_landmark(landmark_id, settlement.landmarks[landmark_id], parent))
 	for i in npcs.size():
-		var npc_marker := _build_npc(settlement, i, door_positions[i], tile_size, parent, world, market)
+		var workspot = _grounded_position(
+			door_positions[i] + Vector2(0, _WORKSPOT_OFFSET_TILES * tile_size), tile_size, world, false
+		)
+		var npc_marker := _build_npc(settlement, i, door_positions[i], workspot, tile_size, parent, world, market)
 		spawned.append(npc_marker)
 		# A merchant gets a second, PERSONAL trading stand at their own house,
 		# on top of the one shared village-square stall -- otherwise every
@@ -201,16 +223,21 @@ func spawn_village(
 		# as one shop rather than several villagers who each trade (see
 		# docs/concept/npc.md).
 		if npcs[i].occupation == "merchant":
-			spawned.append(_build_landmark("stall", stand_positions[i], parent))
+			var stand = _grounded_position(stand_positions[i], tile_size, world, false)
+			if stand != null:
+				spawned.append(_build_landmark("stall", stand, parent, true))
 		# Every OTHER occupation whose own work location isn't already one of
 		# the settlement's 3 shared landmarks (merchant/stall and guard/gate
 		# both already have something real there) gets a real prop of their
 		# own at their personal workspot -- a farmer's field, a blacksmith's
 		# forge, a fisher's dock, an herbalist's garden -- instead of an
 		# invisible position they simply stood on empty grass at.
+		# No dry ground for this villager's trade means no prop, rather than
+		# a field on the river. Their workspot then falls back to their own
+		# doorstep (see _build_npc), so they still have somewhere real to be.
 		var work_tag: String = NpcIdentity.WORK_LOCATION_BY_OCCUPATION.get(npcs[i].occupation, "")
-		if work_tag != "" and not settlement.landmarks.has(work_tag):
-			spawned.append(_build_landmark(work_tag, npc_marker.workspot_position, parent))
+		if work_tag != "" and not settlement.landmarks.has(work_tag) and workspot != null:
+			spawned.append(_build_landmark(work_tag, workspot, parent, true))
 	return spawned
 
 
@@ -324,19 +351,36 @@ func _recover_existing_village(
 			break
 
 
-## The two world predicates VillageLayout reads, translated from chunk-
-## local cells to the world's own global-tile queries -- duck-typed like
-## every other world call in this file (a world lacking the method is
-## treated as open, buildable ground). A village sites on the GROUND
-## (EarthChunkManager.is_buildable_ground_at: water and the forest biome
-## refuse, a standing tree does not -- placing a building or paving a road
-## fells it), not on the player's own fell-the-trees-first rule
-## (is_buildable_terrain_at, the fallback for a world without the ground
-## query): found live, one tree on the plaza square vetoed the whole plaza
-## and the town hall with it in most real settlement chunks.
+## Where a VILLAGE may site: anything that is not water.
+##
+## A village fells the trees it needs -- docs/concept/building.md's own
+## "the NPCs / Player must first fell all trees to make space for the
+## building" -- and both real placement paths already do it for real
+## (place_building and build_at_global call _clear_vegetation_on_cells and
+## _block_ground_cover_on_cells on what they write), so wooded ground is
+## ground a village clears, not ground it refuses.
+##
+## This used to ask is_buildable_ground_at, which refuses the forest BIOME
+## outright. Measured on real terrain near 51.2N 13.6E: that cost 10 of 22
+## villages (45%) their plaza, and with no plaza there is no civic plot and
+## so no city hall -- forest was the blocker in every single failing case,
+## water in none of them. Refusing a village its civic centre over trees it
+## would have cleared in an afternoon is the wrong trade.
+##
+## Deliberately scoped to the village generator. The PLAYER's own build
+## gate (is_buildable_terrain_at, which also refuses a tile with a tree
+## still standing on it) is untouched: a player fells trees by hand and
+## should still be told when one is in the way, while a village founding
+## itself simply clears its site.
+##
+## Water is the rule that does not move, and a world that cannot answer
+## any of these is treated as open ground -- the same duck-typed fail-open
+## shape every other world hook in this file uses.
 func _is_buildable_local(chunk_coord: Vector2i, chunk_size: int, world) -> Callable:
 	return func(cell: Vector2i) -> bool:
 		var g: Vector2i = chunk_coord * chunk_size + cell
+		if world.has_method("is_water_at_global"):
+			return not world.is_water_at_global(g.x, g.y)
 		if world.has_method("is_buildable_ground_at"):
 			return world.is_buildable_ground_at(g.x, g.y)
 		return world.is_buildable_terrain_at(g.x, g.y) if world.has_method("is_buildable_terrain_at") else true
@@ -453,6 +497,59 @@ func _lay_plaza_if_missing(chunk_coord: Vector2i, chunk_size: int, world) -> voi
 		world.build_at_global(g.x, g.y, TerrainRenderer.ROAD_TILE_ID)
 
 
+## Every landmark moved onto real ground, dropping any with nowhere to
+## stand. Landmarks may sit on their own PAVING (the well and the stall are
+## on the plaza, the gate is on the street), so a road cell is a legal
+## place for one -- unlike a workspot prop, which must never stand on the
+## road it fronts.
+func _grounded_landmarks(landmarks: Dictionary, tile_size: int, world) -> Dictionary:
+	var grounded := {}
+	for landmark_id in landmarks:
+		var position = _grounded_position(landmarks[landmark_id], tile_size, world, true)
+		if position != null:
+			grounded[landmark_id] = position
+	return grounded
+
+
+## The nearest real, DRY, in-bounds cell to `nominal`, searched outward
+## ring by ring up to _PROP_SEARCH_RADIUS_TILES; null when nothing within
+## reach works. `allow_road` lets a village-square landmark stand on its
+## own paving while keeping a workspot prop off the street and off houses.
+##
+## A world that cannot answer (an isolated rendering test, no world at all)
+## keeps the nominal position -- the same duck-typed fail-open shape every
+## other world hook in this file uses, so nothing that worked without a
+## world starts returning null.
+func _grounded_position(nominal: Vector2, tile_size: int, world, allow_road: bool):
+	if world == null or not world.has_method("modification_at_global"):
+		return nominal
+	var centre := Vector2i(floori(nominal.x / tile_size), floori(nominal.y / tile_size))
+	for radius in range(0, _PROP_SEARCH_RADIUS_TILES + 1):
+		for dy in range(-radius, radius + 1):
+			for dx in range(-radius, radius + 1):
+				if maxi(absi(dx), absi(dy)) != radius:
+					continue  # only this ring; inner ones were already tried
+				var cell := centre + Vector2i(dx, dy)
+				if _prop_cell_is_clear(cell, world, allow_road):
+					return Vector2((cell.x + 0.5) * tile_size, (cell.y + 0.5) * tile_size)
+	return null
+
+
+## Real buildable ground (no water, no forest -- the SAME is_buildable_
+## ground_at rule the village's own plots obey) carrying nothing built,
+## or a road when `allow_road`.
+func _prop_cell_is_clear(cell: Vector2i, world, allow_road: bool) -> bool:
+	if world.has_method("is_buildable_ground_at"):
+		if not world.is_buildable_ground_at(cell.x, cell.y):
+			return false
+	elif world.has_method("is_buildable_terrain_at") and not world.is_buildable_terrain_at(cell.x, cell.y):
+		return false
+	var existing: String = world.modification_at_global(cell.x, cell.y)
+	if existing == "":
+		return true
+	return allow_road and TerrainRenderer.is_road_tile(existing)
+
+
 ## The settlement's shared well/stall/gate, a merchant's personal trading
 ## stand, and a farmer/blacksmith/fisher/herbalist's own workspot prop --
 ## real, visible props NPC schedules walk to. Tagged with its own
@@ -460,10 +557,18 @@ func _lay_plaza_if_missing(chunk_coord: Vector2i, chunk_size: int, world) -> voi
 ## distinct landmark kinds can now exist side by side in the same spawned
 ## list) can tell exactly which prop a given node is without resorting to
 ## comparing raw positions.
-func _build_landmark(landmark_id: String, position: Vector2, parent: Node2D) -> Sprite2D:
+## `personal` marks a prop belonging to ONE villager -- a merchant's own
+## stand, a farmer's own field -- as opposed to one of the settlement's
+## three shared landmarks. The distinction is not cosmetic: a shared
+## landmark stands on the village's own paving by design, while a personal
+## prop must never stand on the road it fronts, and a merchant's personal
+## stand carries the same `stall` id as the square's own, so the id alone
+## cannot tell them apart.
+func _build_landmark(landmark_id: String, position: Vector2, parent: Node2D, personal: bool = false) -> Sprite2D:
 	var landmark := Sprite2D.new()
 	landmark.texture = _landmark_sprite.generate_texture(landmark_id)
 	landmark.set_meta("landmark_id", landmark_id)
+	landmark.set_meta("personal", personal)
 	# Art is authored DETAIL_MULTIPLIER times oversized for pixel detail;
 	# scaling it back keeps the world footprint unchanged (see
 	# docs/concept/art_resolution.md).
@@ -482,14 +587,18 @@ func _build_landmark(landmark_id: String, position: Vector2, parent: Node2D) -> 
 ## NpcMarker.setup so villagers are water-aware (swim animation) exactly
 ## like the player and wild creatures.
 func _build_npc(
-	settlement: Dictionary, index: int, home_position: Vector2, tile_size: int, parent: Node2D, world = null, market = null
+	settlement: Dictionary, index: int, home_position: Vector2, workspot, tile_size: int,
+	parent: Node2D, world = null, market = null
 ) -> NpcMarker:
 	var identity = settlement.npcs[index]
 
 	var marker := NpcMarker.new()
 	marker.identity = identity
 	marker.home_position = home_position
-	marker.workspot_position = home_position + Vector2(0, _WORKSPOT_OFFSET_TILES * tile_size)
+	# A villager whose trade has nowhere dry to happen works at their own
+	# door rather than walking into the river to reach a spot that is not
+	# there. `workspot` is already grounded by the caller.
+	marker.workspot_position = workspot if workspot != null else home_position
 	marker.landmarks = settlement.landmarks
 	marker.position = home_position
 	if world != null:

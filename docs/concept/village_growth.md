@@ -100,6 +100,45 @@ simulation:
   formalisation of a real historical progression, and it is the shape the
   wellbeing model below follows.
 
+## Mechanism 0 — A village fells the trees it needs
+
+The plaza is the one thing a city hall cannot exist without, and it was
+being refused over trees. So was nearly half of every village's housing.
+
+A village's siting rule is now simply **not water**
+(`VillageRenderer._is_buildable_local`), for its square, its house plots
+and its roads alike — [building.md](building.md)'s own *"the NPCs / Player
+must first fell all trees to make space for the building"*, finally applied
+to the generator. Both real placement paths already clear what they write
+(`_clear_vegetation_on_cells`, `_block_ground_cover_on_cells`) and
+`TreeRenderer` will not put a tree back on a modified cell, so this fells
+trees for real rather than leaving them standing through walls. Water is
+the rule that does not move: a village does not drain a river to hold a
+market.
+
+**Measured, not assumed** (real terrain, 25×25 chunks around 51.2°N
+13.6°E, 22 real villages):
+
+| | refusing forest | clearing it |
+|---|---|---|
+| lay a plaza | 12 / 22 (55%) | **22 / 22 (100%)** |
+| site a sawmill | 22 / 22 | 22 / 22 |
+| house all five villagers | not universal | **every village** |
+
+Forest was the blocker in every single failing case and water in none of
+them. The player's own build gate is untouched, and
+`SettlementGenerator` still refuses a forest-DOMINANT chunk outright, so
+this clears the wooded patches inside an otherwise open chunk rather than
+carving a town out of deep forest.
+
+An earlier attempt applied the clearing rule to the SQUARE only. It took
+plaza viability to 100% and cost marginal chunks their houses — once a
+plaza exists, the "never straddle the square" guard skips the street's
+middle span, and where the remainder was forest nothing fit. The village
+was then correctly owed a house before any civic rung and the whole ladder
+stalled. It was caught by this system's own tests, reverted, and re-landed
+as the rule above, which applies to plots as well as the square.
+
 ## Mechanism 1 — The charter: an industry plot at the forest
 
 `VillageLayout.skeleton` gains nothing (it must stay a pure function of the
