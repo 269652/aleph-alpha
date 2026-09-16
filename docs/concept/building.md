@@ -300,9 +300,20 @@ same lifecycle-sheet-then-procedural-placeholder chain as before.
 Only the background may be black: the loader keys out pixels below 0.05 in
 every channel (`IllustratedStructureSprite._BLACK_MAX`), so a near-black
 roof or outline inside the art survives, but a genuinely black one would
-be punched through. Declared today for `house_small` (the first-tier
-village cottage); `house_medium`/`house_large` get their own when their
-own sheets land.
+be punched through.
+
+Declared today for all three village houses, sharing the one first-tier
+cottage sheet. That is deliberate rather than lazy: no house had a
+lifecycle sheet of its own at all, so every village house drew as a
+procedural box — declaring the cottage art for only the smallest tier
+would leave a street half beautiful cottages and half boxes, which reads
+worse than either extreme. The scaler sizes each cell to its own footprint
+without distorting it, so a medium or large house is simply a bigger
+cottage, and a different seed picks a different one of the 25 anyway. When
+grander art for those tiers lands they get their own entries and nothing
+else changes. Nothing that is not a home has one — a hall, a mill or a
+brewery drawn as a cottage would be drawing the wrong building, and each
+already has its own lifecycle sheet.
 
 **Furniture tiles** — `assets/sprites/furniture/<piece_id>.png`, one
 square image per `CATEGORY_FURNITURE` piece id (`wood_bed`, `wood_table`,

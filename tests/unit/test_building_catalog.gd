@@ -397,16 +397,35 @@ func test_an_unknown_id_still_gets_something_printable():
 # and still what a RISING building's construction row comes from; a variant
 # sheet has no construction/burning/ruined rows and never claims to.
 
-func test_the_first_tier_village_house_declares_a_variant_sheet():
-	assert_eq(
-		BuildingCatalog.variant_sheet_of("house_small"),
-		"res://assets/sprites/buildings/house_small_variants.png"
-	)
+## Every village HOUSE draws from the first-tier cottage sheet. All three
+## share it deliberately: no house had a sheet of its own at all before
+## this, so declaring it for only one tier would leave a village street
+## half beautiful cottages and half procedural boxes. The scaler sizes each
+## cell to its own footprint without distorting it, so a medium or large
+## house is simply a bigger cottage until grander art for those tiers
+## lands, at which point they get their own entries and nothing else
+## changes.
+func test_every_village_house_draws_from_the_first_tier_cottage_sheet():
+	for building_id in BuildingCatalog.BUILDING_IDS:
+		assert_eq(
+			BuildingCatalog.variant_sheet_of(building_id),
+			"res://assets/sprites/buildings/house_small_variants.png",
+			"%s should draw from the village cottage sheet" % building_id
+		)
 
 
 func test_a_building_with_no_variant_sheet_says_so_rather_than_guessing_a_path():
-	for building_id in ["house_medium", "house_large", "city_hall", "sawmill", "moon_base"]:
-		assert_eq(BuildingCatalog.variant_sheet_of(building_id), "", "%s has no variant sheet yet" % building_id)
+	for building_id in ["city_hall", "warehouse", "sawmill", "farmhouse", "blacksmith", "brewery", "moon_base"]:
+		assert_eq(BuildingCatalog.variant_sheet_of(building_id), "", "%s has no variant sheet" % building_id)
+
+
+## Two houses of the same tier standing side by side must not be the same
+## cottage -- the whole point of a variant sheet.
+func test_two_houses_with_different_seeds_usually_draw_different_cottages():
+	var distinct := {}
+	for seed_value in range(0, 40):
+		distinct[BuildingCatalog.variant_cell_for("house_small", seed_value)] = true
+	assert_gt(distinct.size(), 5, "forty houses drew only %d distinct cottages" % distinct.size())
 
 
 func test_the_variant_grid_matches_the_supplied_sheets_own_shape():
@@ -457,7 +476,7 @@ func test_a_finished_first_tier_house_is_drawn_from_its_variant_sheet():
 ## Everything without a variant sheet keeps the lifecycle sheet's idle row,
 ## exactly as before -- this is additive art, not a change of contract.
 func test_every_other_building_still_comes_from_its_lifecycle_sheets_idle_row():
-	for building_id in ["house_medium", "city_hall", "sawmill", "brewery"]:
+	for building_id in ["city_hall", "warehouse", "sawmill", "brewery"]:
 		var sheet: Dictionary = BuildingCatalog.finished_sheet_for(building_id, 7)
 		assert_eq(sheet["path"], BuildingCatalog.sheet_of(building_id))
 		assert_eq(sheet["columns"], BuildingCatalog.SHEET_COLUMNS)

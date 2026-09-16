@@ -236,13 +236,27 @@ static func doorstep_of(building_id: String) -> Vector2i:
 const VARIANT_SHEET_COLUMNS := 5
 const VARIANT_SHEET_ROWS := 5
 
-## Which building ids have a real variant sheet. Only the first-tier
-## village house so far -- the supplied art is all one-storey cottages, and
-## claiming it for a manor or a town hall would be drawing the wrong
-## building. house_medium/house_large get their own when their own sheets
-## land; nothing else about them changes in the meantime.
+## Which building ids have a real variant sheet.
+##
+## All three village HOUSES share the first-tier cottage sheet, and that is
+## deliberate rather than lazy: no house had a lifecycle sheet of its own
+## at all, so every village house drew as a procedural box -- declaring the
+## cottage art for only the smallest tier would leave a street half
+## beautiful cottages and half boxes, which reads worse than either
+## extreme. The scaler sizes each cell to its own footprint WITHOUT
+## distorting it (footprint_frame_texture scales height by the same factor
+## as width), so a medium or large house is simply a bigger cottage, and a
+## different seed picks a different one of the 25 anyway. When grander art
+## for those tiers lands they get their own entries here and nothing else
+## changes.
+##
+## Nothing that is not a home has one: a town hall, a mill or a brewery
+## drawn as a cottage would be drawing the wrong building, and each of
+## those already has its own real lifecycle sheet.
 const _VARIANT_SHEETS := {
 	"house_small": "res://assets/sprites/buildings/house_small_variants.png",
+	"house_medium": "res://assets/sprites/buildings/house_small_variants.png",
+	"house_large": "res://assets/sprites/buildings/house_small_variants.png",
 }
 
 

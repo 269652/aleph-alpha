@@ -353,10 +353,13 @@ Implemented 2026-09-16, TDD red-first throughout. See
   black background, no dividers, one picked per building seed, so a street
   of cottages reads as a street of DIFFERENT cottages rather than one house
   repeated. The pipeline, the seeded pick (all 25 test-pinned as reachable)
-  and the fallback chain are real and tested; it lights up for
-  `house_small` the moment
+  and the fallback chain are real and tested; it lights up for all three
+  village houses the moment
   `assets/sprites/buildings/house_small_variants.png` is dropped in, and
-  changes nothing until then. A rising building still draws from the
+  changes nothing until then. All three share the one sheet on purpose: no
+  house had a lifecycle sheet of its own at all, so declaring the art for
+  only the smallest tier would leave a street half cottages and half
+  procedural boxes. A rising building still draws from the
   lifecycle sheet's construction row — a variant sheet has no scaffold
   stages. See [building.md](building.md)'s "Building variant sheets" for
   the full contract.
