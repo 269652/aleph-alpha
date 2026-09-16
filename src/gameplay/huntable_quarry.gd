@@ -70,6 +70,14 @@ const QUARRY_GROUP_NAME := "creature"
 ## Test-pinned (test_strike_damage_matches_a_predators_own_bite).
 const STRIKE_DAMAGE := 6.0
 
+## How close a villager must be to land that blow, and therefore how close
+## counts as having arrived. LumberjackMarker.ARRIVE_DISTANCE_PX's own
+## value, test-pinned: "close enough to work on it" is one rule, not two.
+## Small relative to a tile (TerrainRenderer.TILE_SIZE is 16) because
+## move_toward closes asymptotically -- an exact-equality arrival would
+## never fire at all.
+const STRIKE_DISTANCE_PX := 4.0
+
 
 ## Whether `candidate` is a real, living, wild, ordinary animal a village
 ## hunter may take. False for null, for anything without a species record,

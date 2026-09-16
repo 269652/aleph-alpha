@@ -282,3 +282,11 @@ func test_strike_damage_matches_a_predators_own_bite():
 
 func test_quarry_is_looked_for_in_the_creature_group():
 	assert_eq(HuntableQuarry.QUARRY_GROUP_NAME, CreatureMarker.GROUP_NAME)
+
+
+func test_strike_distance_matches_the_lumberjacks_own_arrival_distance():
+	# "Close enough to work on it" is one rule, not two: the Lumberjack's
+	# own arrival tolerance, for the same reason the search radius is
+	# shared. Small relative to a tile (TILE_SIZE 16), since move_toward
+	# closes asymptotically and an exact-equality arrival would never fire.
+	assert_eq(HuntableQuarry.STRIKE_DISTANCE_PX, LumberjackMarker.ARRIVE_DISTANCE_PX)

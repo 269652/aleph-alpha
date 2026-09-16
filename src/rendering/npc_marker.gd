@@ -15,6 +15,9 @@ const NpcEconomy = preload("res://src/world/npc_economy.gd")
 const NpcInstructionEvaluator = preload("res://src/world/npc_instruction_evaluator.gd")
 const CharacterView = preload("res://scenes/character_view.gd")
 const CreaturePerception = preload("res://src/gameplay/creature_perception.gd")
+const ForagerBehavior = preload("res://src/gameplay/forager_behavior.gd")
+const HuntableQuarry = preload("res://src/gameplay/huntable_quarry.gd")
+const Carcass = preload("res://src/rendering/carcass.gd")
 
 ## Walking pace -- similar order to CreatureWander.WANDER_SPEED, unhurried.
 const WALK_SPEED := 20.0
@@ -63,6 +66,48 @@ var _perception := CreaturePerception.new()
 ## rather than crashing.
 var economy: NpcEconomy = null
 
+## Which occupations work real, individual quarry they walk to and strike
+## themselves, rather than only reading their region's aggregate
+## (docs/concept/npc.md, "Work against the real world, not against a
+## number"). The farmer is deliberately absent and stays absent: there is
+## no crop entity standing in the world to harvest the way there is an
+## animal, and vegetation_density_near is a field, not a thing. Inventing
+## one to make the third producer symmetrical is exactly the premature
+## system that doc warns against -- real crop entities belong to the
+## farm/mill/bakery chain when it comes.
+const REAL_QUARRY_OCCUPATIONS := ["hunter"]
+
+## This villager's hunt, or null for anyone whose occupation does not take
+## real quarry -- the same null-until-wired pattern `economy` above uses,
+## so a marker built without one behaves byte-for-byte as before. Built by
+## setup_economy, which is where the occupation is first read.
+##
+## ForagerBehavior decides WHEN (look around, commit, arrive, strike),
+## HuntableQuarry decides WHAT (a living, wild, non-boss, untamed animal),
+## and this marker owns the world effect, exactly the split
+## LumberjackBehavior/LumberjackMarker already use for the axe.
+var _forager: ForagerBehavior = null
+
+## The real animal this villager has committed to, or null. Never assumed
+## to still be there: every phase re-checks it through HuntableQuarry,
+## since it can be killed by a predator, flee, or have its chunk unload
+## between one frame and the next.
+var _quarry = null
+
+## Whether real quarry is available to this villager RIGHT NOW -- committed
+## to, or merely standing within reach. What NpcEconomy.step reads to know
+## the regional drip does not apply (see its own on_real_quarry doc).
+##
+## Deliberately wider than "currently committed": docs/concept/npc.md keeps
+## the aggregate path as the fallback for a village whose chunks hold NO
+## loaded animals, not as a top-up for the seconds between one kill and the
+## next. Paid only for committed time, a hunter would still draw most of
+## their income from a number -- the drip runs at
+## NpcProduction.PRODUCTION_RATE_PER_SECOND x the regional headcount, which
+## across a look-around interval and a walk outruns a real deer several
+## times over, and hunting would stay decorative.
+var _on_real_quarry := false
+
 ## An optional standing instruction script (docs/concept/
 ## npc_instructions.md, "Execution / wiring") -- null for every NPC by
 ## default, parallel to `economy`'s own null-checked pattern above, so a
@@ -105,6 +150,10 @@ func setup(world, tile_size: int) -> void:
 func setup_economy(market, household_wallet = null) -> void:
 	economy = NpcEconomy.new(identity.seed_value, identity.occupation, market)
 	economy.bind_household_wallet(household_wallet)
+	_quarry = null
+	_forager = (
+		ForagerBehavior.new() if REAL_QUARRY_OCCUPATIONS.has(identity.occupation) else null
+	)
 
 
 func _process(delta: float) -> void:
@@ -142,7 +191,17 @@ func _process(delta: float) -> void:
 		if action != null:
 			entry = _entry_for_instructed_action(action)
 	var location_tag: String = entry.get("location_tag", "home")
+	var is_working: bool = entry.get("activity", "") == "work"
 	var target := _resolve_location(location_tag)
+	# A hunter with a real animal in reach goes to the animal, not to the
+	# decorative prop their schedule calls a workspot (docs/concept/npc.md,
+	# "Work against the real world, not against a number"). Returns null
+	# whenever there is no real quarry in hand, and then the ordinary
+	# schedule target below is unchanged -- which is also the fallback an
+	# unloaded chunk's village keeps running on.
+	var quarry_target = _step_hunt(delta, is_working)
+	if quarry_target != null:
+		target = quarry_target
 	var before := position
 	position = position.move_toward(target, WALK_SPEED * delta)
 	_update_animation(position - before)
@@ -156,10 +215,14 @@ func _process(delta: float) -> void:
 	# _sync_conversion_worker), one rule per NPC instead of a table of
 	# structures. Keyed on the tag, not merely "arrived somewhere", so
 	# standing at a shared landmark (e.g. the stall) never hides an NPC.
-	_at_home = location_tag == "home" and position.distance_to(home_position) < _ARRIVED_HOME_EPSILON_PX
+	_at_home = (
+		quarry_target == null
+		and location_tag == "home"
+		and position.distance_to(home_position) < _ARRIVED_HOME_EPSILON_PX
+	)
 	visible = not _at_home
 	if economy != null:
-		economy.step(delta, entry.get("activity", "") == "work", _world, position)
+		economy.step(delta, is_working, _world, position, _on_real_quarry)
 
 
 ## Whether this villager is inside their own house right now -- the exact
@@ -271,3 +334,121 @@ func bind_character_view(view: Node2D) -> void:
 func face_movement(direction: Vector2) -> void:
 	if _character_view != null:
 		_character_view.set_facing(direction)
+
+
+## One frame of the hunt. Returns where this villager should walk right now
+## because of real quarry, or null when there is none and the ordinary
+## schedule should decide -- which is also what the economy reads to know
+## whether to run its regional drip (see NpcEconomy.step's on_real_quarry).
+##
+## Mirrors LumberjackMarker's own _step_seeking/_step_approaching/
+## _step_felling trio, compressed into one function because a hunt has no
+## carry and no deposit: the catch goes straight into the village market
+## the moment it is taken, and adding a haul for symmetry would mean
+## inventing a building to haul it to.
+func _step_hunt(delta: float, is_working: bool):
+	if _forager == null:
+		return null
+	if not is_working:
+		# Hunting is work. Off the clock -- asleep, eating, socialising, or
+		# following a standing instruction -- the hunt is dropped rather
+		# than paused, so a villager never wakes up still locked onto an
+		# animal that wandered off hours ago.
+		if _forager.phase != ForagerBehavior.Phase.SEEKING:
+			_forager.abort()
+		_quarry = null
+		_on_real_quarry = false
+		return null
+	_on_real_quarry = true
+	match _forager.phase:
+		ForagerBehavior.Phase.SEEKING:
+			# advance() is a no-op outside TAKING; this is just the
+			# look-around clock ticking, same as the Lumberjack's own.
+			_forager.advance(delta)
+			# Scanned every working frame, not only once the look-around
+			# interval is up: the answer decides whether the regional
+			# fallback applies at all (see _on_real_quarry), which is a
+			# question about the region, not about this villager's own
+			# readiness to walk. Once the interval HAS passed the
+			# Lumberjack's own seeking step scans every frame anyway, so
+			# this costs the same order of work it already did.
+			var found = HuntableQuarry.nearest(
+				get_tree().get_nodes_in_group(HuntableQuarry.QUARRY_GROUP_NAME), position
+			)
+			_on_real_quarry = found != null
+			if found == null or not _forager.can_commit():
+				return null
+			_quarry = found
+			_forager.begin_approach()
+			return _quarry.position
+		ForagerBehavior.Phase.APPROACHING:
+			if not HuntableQuarry.is_quarry(_quarry):
+				return _give_up_on_quarry()
+			var approach_position: Vector2 = _quarry.position
+			if position.distance_to(approach_position) <= HuntableQuarry.STRIKE_DISTANCE_PX:
+				_forager.arrive()
+			return approach_position
+		ForagerBehavior.Phase.TAKING:
+			if not HuntableQuarry.is_quarry(_quarry):
+				return _give_up_on_quarry()
+			var strike_position: Vector2 = _quarry.position
+			# A live animal can break away mid-hunt. Close the gap again
+			# before swinging rather than striking it from across the
+			# meadow -- and the strike clock waits with it, since nobody
+			# winds up a spear at a full run.
+			if position.distance_to(strike_position) > HuntableQuarry.STRIKE_DISTANCE_PX:
+				return strike_position
+			if _forager.advance(delta):
+				_strike_quarry()
+			return strike_position
+	return null
+
+
+## The quarry is gone -- killed by something else, fled, or its chunk
+## unloaded. Back to looking around, with a fresh look-around clock.
+func _give_up_on_quarry():
+	_quarry = null
+	_forager.abort()
+	return null
+
+
+## One blow, through the SAME take_damage() a wolf's own bite and the
+## player's own weapon call. Reads the meat off the animal BEFORE the blow,
+## because a fatal one frees the node it would have to be read from.
+##
+## Nothing is credited for a blow that does not kill: half a deer is not
+## half a meal, and a wounded animal that escapes fed nobody.
+func _strike_quarry() -> void:
+	var meat := HuntableQuarry.meat_yield_of(_quarry)
+	var kill_position: Vector2 = _quarry.position
+	_quarry.take_damage(HuntableQuarry.STRIKE_DAMAGE)
+	if HuntableQuarry.is_quarry(_quarry):
+		return  # still standing
+	_take_carcass_at(kill_position)
+	if economy != null:
+		economy.record_real_catch(meat)
+	_quarry = null
+	_forager.finish_take()
+
+
+## A hunter carries home the animal it killed. Without this, the same meat
+## would exist twice: once as this village's market stock and once as a
+## carcass anyone could walk up and butcher (CreatureMarker._die leaves one
+## for every species LootTable has drops for).
+##
+## Scoped to the kill site at STRIKE_DISTANCE_PX, so somebody else's kill
+## lying in the next clearing is not a hunter's to pick up.
+##
+## Named simplification: the whole animal goes home, so the guts a real
+## field-dressing leaves behind (Butchering's third part, CarcassGuts) are
+## not spawned. Wild deaths -- predation, disease, age -- still leave their
+## carcasses untouched, so the carrion chain (docs/concept/carrion.md)
+## keeps every input it had except the ones a villager personally killed
+## and carried off.
+func _take_carcass_at(kill_position: Vector2) -> void:
+	for node in get_tree().get_nodes_in_group(Carcass.GROUP_NAME):
+		if not is_instance_valid(node) or node.is_queued_for_deletion():
+			continue
+		if node.position.distance_to(kill_position) <= HuntableQuarry.STRIKE_DISTANCE_PX:
+			node.queue_free()
+			return
