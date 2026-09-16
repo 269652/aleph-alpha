@@ -12,15 +12,19 @@ class_name InteriorAvatar
 ## INTERIOR_COLLISION_LAYER. Reads input directly rather than going
 ## through Player's whole authority/proxy/RPC machinery: it only ever
 ## exists locally, for the one person currently standing in their own
-## house, so none of that applies. A simple placeholder square, not the
-## real CharacterView -- matching the player's exact outdoor appearance
-## indoors is a named, deliberately deferred follow-up (see
-## docs/progress.md), not something this pass needs to get right.
+## house, so none of that applies.
+##
+## Renders the player's REAL CharacterView -- the same rig, dressed with
+## the same appearance, worn armor and held weapon (see dress) -- fed as
+## plain data from Player._interior_outfit, so it is the same person and
+## not a re-roll (reported live: "it's just a square"). Drives that view
+## from its own movement exactly the way Player._update_character_view
+## does outdoors, minus water (no water inside a house).
 
 const HouseInteriorView = preload("res://src/rendering/house_interior_view.gd")
+const CharacterViewScene = preload("res://scenes/character_view.tscn")
 
 const RADIUS := 6.0
-const _VISUAL_COLOR := Color(0.85, 0.7, 0.5)
 
 ## Player.BASE_SPEED is the outdoor walking speed -- reused rather than a
 ## second, separately-tuned number, so indoor movement doesn't feel like a
@@ -29,6 +33,14 @@ const _VISUAL_COLOR := Color(0.85, 0.7, 0.5)
 ## Player itself references InteriorAvatar the same way, and an explicit
 ## two-way preload between the two would be a real circular-preload risk.
 const SPEED := Player.BASE_SPEED
+
+var _character_view: CharacterView
+## What dress() was handed before this node entered the tree, applied in
+## _ready -- CharacterView.equip_weapon/equip_armor_slot write straight to
+## @onready slots (see character_preview_diorama.gd's _equip_starting_
+## weapon doc comment on the crash that causes), so an outfit handed over
+## early has to wait for the rig to be ready. Null once applied.
+var _pending_outfit: Dictionary = {}
 
 
 func _ready() -> void:
@@ -41,15 +53,66 @@ func _ready() -> void:
 	shape.shape = circle
 	add_child(shape)
 
-	var visual := ColorRect.new()
-	visual.color = _VISUAL_COLOR
-	visual.size = Vector2.ONE * RADIUS * 2.0
-	visual.position = -visual.size * 0.5
-	visual.z_index = HouseInteriorView.INTERIOR_OCCUPANT_Z_INDEX
-	add_child(visual)
+	# The same rig at the same local origin scenes/player.tscn itself uses
+	# (its CharacterView sits at (0,0) under the body), so the character
+	# stands on the collision circle exactly as outdoors.
+	_character_view = CharacterViewScene.instantiate()
+	_character_view.z_index = HouseInteriorView.INTERIOR_OCCUPANT_Z_INDEX
+	add_child(_character_view)
+
+	if not _pending_outfit.is_empty():
+		_apply_outfit(_pending_outfit)
+		_pending_outfit = {}
+
+
+func character_view() -> CharacterView:
+	return _character_view
+
+
+## Dresses the avatar as a real character: `appearance` is a CharacterView
+## appearance dict (Player.appearance / HeroAppearance.appearance_for),
+## `armor_textures` maps a worn slot name ("head"/"chest"/"legs"/"feet",
+## Equipment.SLOTS minus "weapon") to its item texture -- only the slots
+## actually worn, a bare slot is simply absent -- and `weapon_texture` is
+## the held weapon's texture or null for empty hands. Pure data, no Player
+## dependency, so a test can dress one without a Player at all. Safe to
+## call before add_child: applied once _ready has built the rig.
+func dress(appearance: Dictionary, armor_textures: Dictionary, weapon_texture: Texture2D) -> void:
+	var outfit := {
+		"appearance": appearance, "armor_textures": armor_textures, "weapon_texture": weapon_texture,
+	}
+	if _character_view == null:
+		_pending_outfit = outfit
+		return
+	_apply_outfit(outfit)
+
+
+func _apply_outfit(outfit: Dictionary) -> void:
+	# An empty appearance (a Player that never had apply_class run, e.g. a
+	# bare test fixture) keeps the rig's own default look -- exactly what
+	# the outdoor rig shows in that same state -- rather than crashing
+	# inside CharacterView._apply_head on a missing key.
+	var appearance: Dictionary = outfit["appearance"]
+	if not appearance.is_empty():
+		_character_view.apply_appearance(appearance)
+	var armor_textures: Dictionary = outfit["armor_textures"]
+	for slot in armor_textures:
+		_character_view.equip_armor_slot(slot, armor_textures[slot])
+	var weapon_texture: Texture2D = outfit["weapon_texture"]
+	if weapon_texture != null:
+		_character_view.equip_weapon(weapon_texture)
 
 
 func _physics_process(_delta: float) -> void:
 	var input_direction := Input.get_vector("move_left", "move_right", "move_up", "move_down")
 	velocity = input_direction * SPEED
 	move_and_slide()
+
+	# Player._update_character_view's own rules, minus water: set_facing
+	# keeps the last facing on idle by itself.
+	_character_view.set_facing(input_direction)
+	var moving := input_direction.length() > 0.01
+	_character_view.is_moving = moving
+	_character_view.set_movement_state(
+		CharacterView.MovementState.WALKING if moving else CharacterView.MovementState.IDLE
+	)

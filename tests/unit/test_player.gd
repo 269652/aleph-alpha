@@ -4075,6 +4075,59 @@ func test_enter_exit_step_enters_a_real_building_from_its_own_real_doorstep():
 	assert_true(player.is_indoors())
 
 
+# -- the real character indoors ----------------------------------------------
+#
+# Reported live: "the indoor scene doesn't use the real character, it's just a
+# square." The avatar inside the isolated SubViewport must look like the
+# player -- the same appearance, the same worn armor, the same held weapon --
+# fed from Player's own real state, not re-rolled.
+
+func test_interior_outfit_mirrors_the_players_appearance_armor_and_weapon():
+	var helm := _item_catalog.make("leather_helm")
+	player.inventory.add(helm, 1)
+	assert_true(player.equip_armor(helm), "precondition: a helm is worn")
+	var sword := _item_catalog.make("iron_sword")
+	player.inventory.add(sword, 1)
+	assert_true(player.equip_item(sword), "precondition: a sword is held")
+
+	var outfit: Dictionary = player._interior_outfit()
+
+	assert_eq(outfit["appearance"], player.appearance)
+	var armor: Dictionary = outfit["armor_textures"]
+	assert_true(armor.has("head"), "the worn helm's slot must be in the outfit")
+	assert_false(armor.has("chest"), "a bare slot must not be in the outfit")
+	var expected_helm := ProceduralItemSprite.new().generate_texture("leather_helm")
+	assert_eq(armor["head"].get_image().get_data(), expected_helm.get_image().get_data())
+	var expected_sword := ProceduralItemSprite.new().generate_texture("iron_sword")
+	assert_eq(outfit["weapon_texture"].get_image().get_data(), expected_sword.get_image().get_data())
+
+
+func test_interior_outfit_with_nothing_worn_or_held_is_bare():
+	var outfit: Dictionary = player._interior_outfit()
+	assert_eq(outfit["armor_textures"], {})
+	assert_null(outfit["weapon_texture"])
+
+
+func test_entering_a_building_dresses_the_avatar_as_the_player():
+	_register_all_keybindings()
+	var sword := _item_catalog.make("iron_sword")
+	player.inventory.add(sword, 1)
+	assert_true(player.equip_item(sword), "precondition: a sword is held")
+	var origin := Vector2i(10, 10)
+	chunk_manager.place_building(Vector2i(0, 0), origin, "house_small", Vector2i(0, 1), 1, "")
+	var doorstep_global: Vector2i = origin + BuildingCatalog.doorstep_of("house_small")
+	player.position = (Vector2(doorstep_global) + Vector2(0.5, 0.5)) * TILE_SIZE
+
+	Input.action_press("enter")
+	player._enter_exit_step()
+	Input.action_release("enter")
+
+	assert_true(player.is_indoors(), "precondition: entered")
+	var view: CharacterView = player._interior_avatar.character_view()
+	assert_not_null(view, "the avatar must carry a real CharacterView")
+	assert_true(view.is_slot_equipped("tool"), "the held sword must show on the indoor avatar")
+
+
 func test_enter_exit_step_does_nothing_far_from_any_doorstep():
 	_register_all_keybindings()
 	Input.action_press("enter")
@@ -4094,6 +4147,7 @@ func test_enter_exit_step_leaves_from_the_real_interior_exit_cell_and_never_move
 	Input.action_press("enter")
 	player._enter_exit_step()  # in
 	Input.action_release("enter")
+	player._enter_exit_step()  # a released frame, so the edge latch clears (as every real tick does)
 	assert_true(player.is_indoors(), "precondition: the first press enters")
 
 	# Walk the avatar onto the room's own door cell -- its real local exit

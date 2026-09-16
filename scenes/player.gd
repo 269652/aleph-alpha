@@ -2533,8 +2533,30 @@ func _enter_exit_step() -> void:
 
 	var avatar := InteriorAvatar.new()
 	_interior_viewport.add_child(avatar)
+	var outfit := _interior_outfit()
+	avatar.dress(outfit["appearance"], outfit["armor_textures"], outfit["weapon_texture"])
 
 	enter_building(interior_view, avatar)
+
+
+## What the indoor avatar must look like to be THIS player (see
+## InteriorAvatar.dress): the same appearance dict the outdoor rig wears,
+## every worn armor slot's own item texture (generated exactly the way
+## equip_armor already generates it for the outdoor rig, so the two never
+## drift), and the held weapon's texture or null. Plain data so the avatar
+## itself never has to reach into Player.
+func _interior_outfit() -> Dictionary:
+	var armor_textures := {}
+	for slot in Equipment.SLOTS:
+		if slot == "weapon":
+			continue
+		var worn = equipment.equipped_in(slot)
+		if worn != null:
+			armor_textures[slot] = _item_sprite_generator.generate_texture(worn.sprite_id)
+	var weapon_texture: Texture2D = null
+	if equipped_item != null:
+		weapon_texture = _item_sprite_generator.generate_texture(equipped_item.sprite_id)
+	return {"appearance": appearance, "armor_textures": armor_textures, "weapon_texture": weapon_texture}
 
 
 ## Combined weather + exposure movement penalty (see WeatherModel /
