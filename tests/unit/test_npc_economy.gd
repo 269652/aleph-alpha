@@ -691,3 +691,90 @@ func test_binding_nothing_is_a_harmless_no_op():
 	economy.wallet.add(2)
 	economy.bind_household_wallet(null)
 	assert_eq(economy.wallet.balance, 2)
+
+
+# -- real quarry (docs/concept/npc.md, "Work against the real world, not
+# against a number") ---------------------------------------------------
+#
+# A hunter who walks to a real animal and kills it credits what that animal
+# really carried (HuntableQuarry.meat_yield_of) instead of the regional
+# drip, and the drip is switched OFF for as long as they are on real
+# quarry. Both halves matter: crediting a real kill on top of the drip
+# would pay a hunter twice for one animal, and dropping the drip entirely
+# would starve every village whose chunks aren't loaded (npc.md's own named
+# limitation).
+
+
+func test_a_real_catch_puts_the_producers_own_item_in_the_market():
+	var hunter := _economy("hunter")
+	hunter.record_real_catch(3)
+	assert_almost_eq(market.stock.get("meat", 0.0), 3.0, 0.0001)
+
+
+func test_a_real_catch_pays_the_same_rate_a_gathered_unit_does():
+	# A unit of meat is worth a unit of meat however it was obtained -- the
+	# kill changes where food comes from, not what it sells for.
+	var hunter := _economy("hunter")
+	hunter.record_real_catch(4)
+	var gross := 4.0 * float(NpcProduction.YIELD_TO_GOLD_RATE)
+	assert_almost_eq(NpcEconomy.purse_of(market), VillageWages.levy_on(gross), 0.0001)
+
+
+func test_a_real_catch_of_nothing_changes_nothing():
+	var hunter := _economy("hunter")
+	hunter.record_real_catch(0)
+	assert_almost_eq(market.total_stock(), 0.0, 0.0001)
+	assert_almost_eq(NpcEconomy.purse_of(market), 0.0, 0.0001)
+
+
+func test_a_real_catch_does_not_book_the_death_a_second_time():
+	# CreatureMarker._die() is the single choke point every death already
+	# reports through (_book_death_against_the_region) -- its own doc
+	# comment records a merge that left two calls there and counted every
+	# wild death twice. A hunter's kill dies through that same path, so
+	# this must not report it again.
+	var hunter := _economy("hunter")
+	hunter.record_real_catch(2)
+	assert_almost_eq(world.killed_herbivore_amount, 0.0, 0.0001)
+
+
+func test_a_non_producer_cannot_record_a_catch():
+	var blacksmith := _economy("blacksmith")
+	blacksmith.record_real_catch(2)
+	assert_almost_eq(market.total_stock(), 0.0, 0.0001)
+
+
+func test_a_producer_on_real_quarry_does_not_also_gather_the_regional_drip():
+	var hunter := _economy("hunter")
+	for _i in 100:
+		hunter.step(1.0, true, world, Vector2.ZERO, true)
+	assert_almost_eq(market.total_stock(), 0.0, 0.0001, "the drip must be off while real quarry is in hand")
+	assert_almost_eq(
+		world.killed_herbivore_amount, 0.0, 0.0001, "and so must the aggregate kill it books"
+	)
+
+
+func test_a_producer_with_no_quarry_in_hand_still_gathers_the_regional_fallback():
+	# npc.md's named limitation: a villager can only hunt what is LOADED,
+	# so the aggregate path stays for everyone else.
+	var hunter := _economy("hunter")
+	for _i in 100:
+		hunter.step(1.0, true, world, Vector2.ZERO, false)
+	assert_gt(market.total_stock(), 0.0)
+
+
+func test_the_regional_fallback_is_still_the_default_for_callers_that_say_nothing():
+	var hunter := _economy("hunter")
+	for _i in 100:
+		hunter.step(1.0, true, world, Vector2.ZERO)
+	assert_gt(market.total_stock(), 0.0)
+
+
+func test_a_producer_on_real_quarry_still_eats_from_their_own_work():
+	# The free self-feed is about having food in your hands, which a hunter
+	# standing over a fresh kill emphatically does.
+	var hunter := _economy("hunter")
+	hunter.needs.advance(100000.0)
+	assert_true(hunter.needs.is_hungry(), "precondition")
+	hunter.step(0.01, true, world, Vector2.ZERO, true)
+	assert_false(hunter.needs.is_hungry())

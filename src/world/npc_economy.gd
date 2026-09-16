@@ -152,12 +152,53 @@ func _init(seed_value: int, an_occupation: String, a_market) -> void:
 ## `pixel_position` feed NpcProduction's real weather-tied yield read;
 ## `is_working` gates production (and the free self-feed path) to the
 ## "work" schedule activity, not idle/sleep/socialize time.
-func step(delta_seconds: float, is_working: bool, world, pixel_position: Vector2) -> void:
+## `on_real_quarry` switches the regional drip OFF: this producer is
+## currently working a real animal or fish they walked to and struck
+## themselves (docs/concept/npc.md, "Work against the real world, not
+## against a number"), and record_real_catch below is what pays them for
+## it. Crediting both would pay a hunter twice for one deer. Defaults to
+## false, so every caller that predates real quarry -- and every villager
+## whose chunk holds none -- keeps the aggregate fallback npc.md's own
+## "a villager can only hunt what is LOADED" limitation depends on.
+##
+## Deliberately gates only _gather, not _try_eat: a hunter standing over a
+## fresh kill has food in their hands, which is exactly what the free
+## self-feed is about.
+func step(
+	delta_seconds: float,
+	is_working: bool,
+	world,
+	pixel_position: Vector2,
+	on_real_quarry := false
+) -> void:
 	needs.advance(delta_seconds)
-	if is_working and _production.is_producer(occupation):
+	if is_working and not on_real_quarry and _production.is_producer(occupation):
 		_gather(delta_seconds, world, pixel_position)
 	if needs.is_hungry():
 		_try_eat(is_working, world, pixel_position)
+
+
+## Credits `count` whole units of this producer's own real item -- the meat
+## off an animal this villager actually killed, or a fish they actually
+## took (docs/concept/npc.md, "Work against the real world, not against a
+## number") -- to the village market, and pays for them at exactly the rate
+## a gathered unit earns. A unit of meat is worth a unit of meat however it
+## was obtained; the kill changes where food comes from, not its price.
+##
+## Books NO depletion of its own, unlike _gather/_deplete_continuous. A
+## real kill has already reported itself: CreatureMarker._die() is the
+## single choke point every death routes through, and its own doc comment
+## records a merge that left two record_death_at calls there and counted
+## every wild death twice. The same holds for a real fish, taken through
+## EarthChunkManager.record_fish_catch_near. This is the paying half only.
+##
+## A no-op for a non-producer (nothing to credit it as) and for a count of
+## zero (a strike that did not land a kill).
+func record_real_catch(count: int) -> void:
+	if count <= 0 or not _production.is_producer(occupation):
+		return
+	market.add_stock(_production.item_id_for(occupation), float(count))
+	_earn(float(count) * float(NpcProduction.YIELD_TO_GOLD_RATE))
 
 
 func _gather(delta_seconds: float, world, pixel_position: Vector2) -> void:
