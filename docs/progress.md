@@ -22892,6 +22892,15 @@ and an older village gains one on its next visit, the same self-healing
 shape `_lay_plaza_if_missing` already had. A village on open steppe honestly
 has none.
 
+**How often that actually fires was measured, not assumed**
+(`tools/probe_village_industry.gd`, 45x45 chunks around 52.52N 13.405E):
+of 52 real settlement chunks, **51 -- 98.1% -- qualify for a sawmill
+plot**. A settlement chunk is grassland-DOMINANT (the biome gate refuses a
+forest-dominant one outright) but still averages 190 real forest cells, so
+"a sawmill in a near forest" is the ordinary case, not the lucky one. The
+single miss did have forest, just none of it reachable from a legal
+outlying, spur-connected site -- honestly no mill, exactly as specified.
+
 ✅ **The ladder: what a village owes itself next.** `VillageGrowth.next_
 building` reads the settlement's own real household count (already
 persisted, out of the event graph and `HouseholdStore` -- no second

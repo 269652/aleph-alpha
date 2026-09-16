@@ -284,6 +284,13 @@ Implemented 2026-09-16, TDD red-first throughout. See
   and the renderer test: the mill must be walkable back to the street on
   road, not merely near it (`test_village_layout.gd`,
   `test_village_renderer.gd`).
+  **Measured, not assumed** (`tools/probe_village_industry.gd`, 45x45
+  chunks around 52.52N 13.405E): of 52 real settlement chunks, **51 (98.1%)
+  qualify for a sawmill plot**. A settlement chunk is grassland-DOMINANT
+  but averages 190 real forest cells, so "a sawmill in a near forest" is
+  the ordinary case rather than the lucky one. The single miss did have
+  forest, just none of it reachable from a legal outlying, spur-connected
+  site — honestly no mill, exactly as specified.
 - ✅ **Mechanism 2 — the ladder.** `VillageGrowth.next_building` names the
   one building a village owes itself; `EarthChunkManager._apply_village_
   growth_decision` queues it as a real `ConstructionProject` at a real site
