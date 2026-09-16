@@ -25,6 +25,7 @@ const CharacterViewScene = preload("res://scenes/character_view.tscn")
 const CharacterView = preload("res://scenes/character_view.gd")
 const DropShadow = preload("res://src/rendering/drop_shadow.gd")
 const NpcIdentity = preload("res://src/world/npc_identity.gd")
+const CivicBuildDecision = preload("res://src/emergence/civic_build_decision.gd")
 const EntityRef = preload("res://src/emergence/entity_ref.gd")
 const TerrainRenderer = preload("res://src/rendering/terrain_renderer.gd")
 const ArtResolution = preload("res://src/rendering/art_resolution.gd")
@@ -298,6 +299,7 @@ func _place_new_village(
 			world.build_at_global(g.x, g.y, TerrainRenderer.ROAD_TILE_ID)
 
 	_place_industry_if_missing(chunk_coord, chunk_size, world)
+	_place_civic_if_missing(chunk_coord, chunk_size, world)
 
 
 ## A reload: this settlement's buildings are already persisted from an
@@ -318,6 +320,7 @@ func _recover_existing_village(
 ) -> void:
 	_lay_plaza_if_missing(chunk_coord, chunk_size, world)
 	_place_industry_if_missing(chunk_coord, chunk_size, world)
+	_place_civic_if_missing(chunk_coord, chunk_size, world)
 	for i in npcs.size():
 		var expected_seed := hash("%d_%d_house_%d" % [chunk_coord.x, chunk_coord.y, i])
 		# A NEWCOMER's house was raised by the growth ladder, not stamped at
@@ -433,6 +436,59 @@ func _place_industry_if_missing(chunk_coord: Vector2i, chunk_size: int, world) -
 	for local_cell in plot["road_spur"]:
 		var g: Vector2i = chunk_coord * chunk_size + local_cell
 		world.build_at_global(g.x, g.y, TerrainRenderer.ROAD_TILE_ID)
+
+
+## The village's civic seat, standing on the plaza's own reserved plot.
+##
+## Placed at FOUNDING, like the houses and the mill, and for the same
+## reason: a village the player DISCOVERS has been standing for years, and
+## its seat is part of the fabric it was founded with. The over-time build
+## (CivicBuildDecision, EarthChunkManager._apply_civic_build_decision) is
+## real and tested and stays exactly as it is -- it now covers a village
+## that grows INTO the threshold during play, rather than being the only
+## way a hall ever appears.
+##
+## That distinction mattered in practice: reported three times as simply
+## missing. The over-time path needs roughly 20 wood and 10 stone gathered
+## and then 45 labour-hours accrued, which is a couple of real hours beside
+## the village and longer still for a poor one now that productivity scales
+## the crew, so a player who walks into a village never saw a hall at all.
+##
+## Idempotent on the one check that matters -- a real hall already standing
+## in this chunk -- so a reload never raises a second and an older village
+## gains one on its next visit, the same self-healing shape the plaza and
+## the mill already have. A village below the threshold, or one whose
+## square was never paved, honestly gets none.
+func _place_civic_if_missing(chunk_coord: Vector2i, chunk_size: int, world) -> void:
+	if not world.has_method("place_building_over_roads"):
+		return
+	var building_id := CivicBuildDecision.CITY_HALL_BUILDING_ID
+	var standing: Array = world.buildings_in_chunk(chunk_coord) if world.has_method("buildings_in_chunk") else []
+	var houses := 0
+	for record in standing:
+		if record.get("id", "") == building_id:
+			return
+		if BuildingCatalog.capacity_of(record.get("id", "")) > 0:
+			houses += 1
+	if houses < CivicBuildDecision.CITY_HALL_MIN_HOUSEHOLDS:
+		return  # a hamlet of two has no need of a civic seat
+
+	# The plot is the paved square itself, so every one of its cells must
+	# really BE road -- a village whose centre was water or forest never
+	# laid a square, and has nowhere to put a seat.
+	var plot: Dictionary = VillageLayout.skeleton(chunk_size, VillageLayout.seed_for(chunk_coord))["civic_plot"]
+	var origin: Vector2i = plot["origin"]
+	if not world.has_method("modification_at_global"):
+		return
+	for local in BuildingCatalog.footprint_cells(building_id, origin) + [plot["doorstep"]]:
+		var g: Vector2i = chunk_coord * chunk_size + local
+		if not TerrainRenderer.is_road_tile(world.modification_at_global(g.x, g.y)):
+			return
+
+	world.place_building_over_roads(
+		chunk_coord, origin, building_id, hash("%d_%d_city_hall" % [chunk_coord.x, chunk_coord.y]),
+		EntityRef.for_settlement(chunk_coord)
+	)
 
 
 ## Whether a chunk-local cell is real forest -- the third predicate
