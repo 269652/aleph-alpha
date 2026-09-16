@@ -1,0 +1,131 @@
+# Traveling Merchants: Where A Village's Gold Actually Comes From
+
+Compiled from a direct report in play: *"all villagers have 0 gold; they
+need a way to earn income... I'd suggest traveler merchants which buys
+goods like fish, meat, hide, beams etc. — then the villagers can trade
+with each other once they have a way to earn money."*
+
+Two separate problems sit behind that observation, and only one of them
+was a bug.
+
+**The bug** (fixed 2026-09-16, see [Status](#status)): villagers *were*
+earning. `NpcEconomy`'s producer faucet and `VillageWages`' subsistence
+wage both worked — into a `Wallet` created fresh inside `NpcEconomy`, on an
+`NpcMarker` regenerated from scratch on every chunk load. The persistent
+`Household` wallet never received a coin, so a villager's whole working
+life evaporated the moment the player walked away and every readout
+honestly said zero.
+
+**The design gap**, which this doc is about: even with that plumbing
+fixed, the village's gold comes from nowhere. `NpcProduction.
+YIELD_TO_GOLD_RATE` conjures a coin per food unit gathered, whether or not
+anyone ever buys it. That is a placeholder, and it is why a village's
+wealth has never meant anything — there is no outside world paying for
+what the village makes, so gold is neither scarce nor earned.
+
+A traveling merchant is the outside world, arriving on foot.
+
+## Design pillars
+
+1. **Gold enters a village by being paid for something real.** A merchant
+   buys goods that genuinely exist in the settlement's own market and
+   removes them from it. No stock, no sale, no gold. This replaces a
+   faucet that paid for production nobody consumed with a faucet that pays
+   for production somebody carries away.
+2. **The merchant is a visitor, not a fixture.** They arrive, trade, and
+   leave. A village's income is therefore *lumpy* — a good week is a week
+   a merchant came — which is what makes a granary, a surplus and a
+   warehouse worth having, and what makes the [village growth
+   ladder](village_growth.md) feel earned rather than scheduled.
+3. **They buy what a village actually produces.** Fish, meat, hide, beams,
+   planks — the real outputs of `NpcProduction`'s producer occupations and
+   the sawmill's own chain. Nothing on the buy list is an item the village
+   cannot make, and nothing the village makes is unsellable.
+4. **The gold lands where it can be spent.** Payment goes into the
+   settlement purse (`NpcEconomy.PURSE_META`, already real, already what
+   `VillageWages` pays subsistence out of) rather than to one villager, so
+   it reaches non-producers through the wage path that already exists. A
+   village earns collectively and pays its people from what it earned.
+5. **Nothing is conjured and nothing vanishes.** A sale moves goods out and
+   gold in, at one price, both sides recorded. The same "creates and
+   destroys nothing" discipline `VillageWages.deposit`/`take_home_of`
+   already keeps for the levy split.
+6. **Tuned values are tested functions.** Every price, cadence and
+   quantity below is pinned by a test against the behaviour it produces,
+   per this project's no-manual-tuning rule.
+
+## Real-world grounding
+
+- **The itinerant buyer is the oldest rural economy there is.** A village
+  that fishes, hunts and saws timber does not carry its surplus to a city;
+  a dealer walks a circuit, buys at the farm gate below town price, and
+  carries it away. That price gap is his living and the village's only
+  cash.
+- **Cash was scarce and lumpy.** Pre-industrial rural households were not
+  short of *food* — they were short of *coin*, which arrived a few times a
+  year when something was sold. Lumpy income is not a game concession; it
+  is the historical shape.
+- **He buys what travels.** Hide, salted meat, dried fish and sawn timber
+  keep and are worth carrying. This is why the buy list is what it is,
+  rather than "everything".
+
+## Mechanism — arrival
+
+`MerchantVisit` (pure, static, the same shape `VillageImmigration` and
+`SettlementGathering` already use): given elapsed time, how much sellable
+stock a settlement holds, and a per-settlement carry, it answers whether a
+merchant arrives now.
+
+- **Gated on something to buy.** No sellable stock ⇒ no visit. A merchant
+  does not walk to a village with nothing in it.
+- **Cadence** is a rate per day (`VISITS_PER_DAY`), raised by how much
+  sellable stock has piled up — a village sitting on a surplus is worth
+  the detour. Carry-the-fraction between steps, so a short step loses
+  nothing, exactly like the gathering and immigration models.
+- Deliberately **not** tied to the existing `CaravanTrip`, which is a
+  settlement-to-settlement *resupply of goods* with no gold in it. This is
+  a different transaction in the opposite direction.
+
+## Mechanism — the sale
+
+`MerchantVisit.purchase(stock, prices, capacity)` returns what is bought
+and what is paid, and never mutates its inputs:
+
+- Only ids on the **buy list** are considered, worst-price-last so a
+  merchant fills his cart with the valuable goods first.
+- He carries a finite `CART_CAPACITY` in whole units — a village with an
+  enormous surplus sells what fits, and the rest waits for the next visit.
+  This is what keeps a hoard from turning into a windfall.
+- Price per unit is the item's **farm-gate** price: deliberately *below*
+  what the same item sells for at a player-facing shop (`Shop.CATALOG`),
+  because the merchant's margin is his reason to exist. Test-pinned
+  against that catalog so the two can never invert.
+
+The settlement's market loses exactly the goods bought; its purse gains
+exactly the gold paid.
+
+## Mechanism — what the gold is for
+
+Once a purse has real money in it, the paths that spend it are already
+built:
+
+- `VillageWages.pay_subsistence` draws a wage from the purse for any
+  villager who cannot afford a meal — so a merchant's visit feeds the
+  blacksmith, not just the fisher who caught the goods.
+- `VillageMarket.buy_meal` is villager-to-villager trade, already real,
+  and previously starved of buyers with money.
+- The [growth ladder](village_growth.md) already spends *material*;
+  gold gives a later pass something to price construction labour in.
+
+## Status
+
+- ✅ **The persistent-purse bug** (2026-09-16).
+  `NpcEconomy.bind_household_wallet` makes a villager's own `Household`
+  wallet the one they earn into and spend from, carrying over anything
+  already in hand. Wired through `NpcMarker.setup_economy` and
+  `VillageRenderer`, resolved by
+  `EarthChunkManager.household_wallet_for_villager`. Tested in
+  `test_npc_economy.gd`.
+- ⬜ Everything else in this doc is specified here first and implemented in
+  the slices that follow; each entry moves to ✅/🚧 as it lands, and
+  [progress.md](../progress.md) carries the ledger.
