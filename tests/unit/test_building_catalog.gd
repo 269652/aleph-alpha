@@ -385,3 +385,90 @@ func test_every_building_has_a_readable_display_name():
 
 func test_an_unknown_id_still_gets_something_printable():
 	assert_ne(BuildingCatalog.display_name_of("moon_base"), "")
+
+
+# -- variant sheets: many real cottages, one building id -------------------
+#
+# A supplied 5x5 sheet of hand-drawn cottage variants (black background, no
+# dividers, one whole house per cell) is what a finished first-tier village
+# house is actually drawn from, picked per building seed -- so a street of
+# cottages reads as a street of different cottages rather than one house
+# repeated. The LIFECYCLE sheet contract (8 columns x 5 rows) is untouched
+# and still what a RISING building's construction row comes from; a variant
+# sheet has no construction/burning/ruined rows and never claims to.
+
+func test_the_first_tier_village_house_declares_a_variant_sheet():
+	assert_eq(
+		BuildingCatalog.variant_sheet_of("house_small"),
+		"res://assets/sprites/buildings/house_small_variants.png"
+	)
+
+
+func test_a_building_with_no_variant_sheet_says_so_rather_than_guessing_a_path():
+	for building_id in ["house_medium", "house_large", "city_hall", "sawmill", "moon_base"]:
+		assert_eq(BuildingCatalog.variant_sheet_of(building_id), "", "%s has no variant sheet yet" % building_id)
+
+
+func test_the_variant_grid_matches_the_supplied_sheets_own_shape():
+	assert_eq(BuildingCatalog.VARIANT_SHEET_COLUMNS, 5)
+	assert_eq(BuildingCatalog.VARIANT_SHEET_ROWS, 5)
+
+
+func test_a_buildings_variant_is_deterministic_from_its_own_seed():
+	for seed_value in [0, 1, 7, -3, 991, 123456789]:
+		assert_eq(
+			BuildingCatalog.variant_cell_for("house_small", seed_value),
+			BuildingCatalog.variant_cell_for("house_small", seed_value),
+			"the same house must always draw as the same cottage"
+		)
+
+
+func test_every_variant_cell_lands_inside_the_grid():
+	for seed_value in range(-50, 200):
+		var cell: Vector2i = BuildingCatalog.variant_cell_for("house_small", seed_value)
+		assert_between(cell.x, 0, BuildingCatalog.VARIANT_SHEET_COLUMNS - 1, "column out of grid for %d" % seed_value)
+		assert_between(cell.y, 0, BuildingCatalog.VARIANT_SHEET_ROWS - 1, "row out of grid for %d" % seed_value)
+
+
+## All twenty-five are actually reachable -- a sheet whose corner variants
+## never turn up is art nobody ever sees.
+func test_every_one_of_the_twenty_five_variants_is_really_reachable():
+	var seen := {}
+	for seed_value in range(0, 4000):
+		seen[BuildingCatalog.variant_cell_for("house_small", seed_value)] = true
+	assert_eq(
+		seen.size(), BuildingCatalog.VARIANT_SHEET_COLUMNS * BuildingCatalog.VARIANT_SHEET_ROWS,
+		"only %d of the 25 variants ever appear" % seen.size()
+	)
+
+
+# -- which sheet a FINISHED building is drawn from -------------------------
+
+func test_a_finished_first_tier_house_is_drawn_from_its_variant_sheet():
+	var sheet: Dictionary = BuildingCatalog.finished_sheet_for("house_small", 42)
+	assert_eq(sheet["path"], BuildingCatalog.variant_sheet_of("house_small"))
+	assert_eq(sheet["columns"], BuildingCatalog.VARIANT_SHEET_COLUMNS)
+	assert_eq(sheet["rows"], BuildingCatalog.VARIANT_SHEET_ROWS)
+	var cell: Vector2i = BuildingCatalog.variant_cell_for("house_small", 42)
+	assert_eq(sheet["row"], cell.y)
+	assert_eq(sheet["column"], cell.x)
+
+
+## Everything without a variant sheet keeps the lifecycle sheet's idle row,
+## exactly as before -- this is additive art, not a change of contract.
+func test_every_other_building_still_comes_from_its_lifecycle_sheets_idle_row():
+	for building_id in ["house_medium", "city_hall", "sawmill", "brewery"]:
+		var sheet: Dictionary = BuildingCatalog.finished_sheet_for(building_id, 7)
+		assert_eq(sheet["path"], BuildingCatalog.sheet_of(building_id))
+		assert_eq(sheet["columns"], BuildingCatalog.SHEET_COLUMNS)
+		assert_eq(sheet["rows"], BuildingCatalog.SHEET_ROWS)
+		assert_eq(sheet["row"], BuildingCatalog.ROW_IDLE)
+		assert_eq(sheet["column"], 0)
+
+
+## A RISING building still comes from the lifecycle sheet's construction
+## row: a variant sheet has no scaffold stages and must never be asked for
+## one.
+func test_a_rising_building_is_never_drawn_from_a_variant_sheet():
+	assert_eq(BuildingCatalog.finished_sheet_for("house_small", 3)["path"], BuildingCatalog.variant_sheet_of("house_small"))
+	assert_ne(BuildingCatalog.sheet_of("house_small"), BuildingCatalog.variant_sheet_of("house_small"))

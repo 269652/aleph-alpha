@@ -347,6 +347,20 @@ Implemented 2026-09-16, TDD red-first throughout. See
   `test_world_house_panel_wiring.gd`,
   `test_earth_chunk_manager_village_growth.gd`).
 
+- 🚧 **Variant art for the first-tier cottage.** `BuildingCatalog.
+  finished_sheet_for` prefers a per-building VARIANT sheet over the
+  lifecycle sheet's idle row: a plain 5x5 grid of 25 complete cottages,
+  black background, no dividers, one picked per building seed, so a street
+  of cottages reads as a street of DIFFERENT cottages rather than one house
+  repeated. The pipeline, the seeded pick (all 25 test-pinned as reachable)
+  and the fallback chain are real and tested; it lights up for
+  `house_small` the moment
+  `assets/sprites/buildings/house_small_variants.png` is dropped in, and
+  changes nothing until then. A rising building still draws from the
+  lifecycle sheet's construction row — a variant sheet has no scaffold
+  stages. See [building.md](building.md)'s "Building variant sheets" for
+  the full contract.
+
 ### Known gaps, stated rather than papered over
 
 - 🚧 **A village only draws new households while its chunk is LOADED.** The

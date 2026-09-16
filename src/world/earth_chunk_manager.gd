@@ -13387,12 +13387,29 @@ func _spawn_building_node(chunk_coord: Vector2i, origin_local: Vector2i, record:
 	node.position = bottom_centre
 
 	var sprite := Sprite2D.new()
+	# Which picture a FINISHED building has is BuildingCatalog's call (see
+	# finished_sheet_for): a building with a real variant sheet draws its
+	# own seeded variant, so a street of cottages is a street of DIFFERENT
+	# cottages; everything else draws the lifecycle sheet's idle row as
+	# before. A missing file falls through to the placeholder either way,
+	# so a variant sheet that has not been dropped in yet changes nothing.
+	var seed_value := int(record["seed"])
+	var sheet: Dictionary = BuildingCatalog.finished_sheet_for(building_id, seed_value)
 	var texture := _illustrated_structure_sprite.footprint_frame_texture(
-		BuildingCatalog.sheet_of(building_id), BuildingCatalog.SHEET_COLUMNS, BuildingCatalog.SHEET_ROWS,
-		BuildingCatalog.ROW_IDLE, 0, TerrainRenderer.TILE_SIZE, footprint.x
+		sheet["path"], sheet["columns"], sheet["rows"], sheet["row"], sheet["column"],
+		TerrainRenderer.TILE_SIZE, footprint.x
 	)
+	if texture == null and sheet["path"] != BuildingCatalog.sheet_of(building_id):
+		# A declared variant sheet that is not on disk yet: fall back to the
+		# lifecycle sheet before the procedural placeholder, so a building
+		# whose lifecycle art DOES exist keeps it rather than regressing to
+		# a box the moment a variant sheet is declared for it.
+		texture = _illustrated_structure_sprite.footprint_frame_texture(
+			BuildingCatalog.sheet_of(building_id), BuildingCatalog.SHEET_COLUMNS, BuildingCatalog.SHEET_ROWS,
+			BuildingCatalog.ROW_IDLE, 0, TerrainRenderer.TILE_SIZE, footprint.x
+		)
 	if texture == null:
-		texture = _building_placeholder_sprite.footprint_texture(footprint, int(record["seed"]), TerrainRenderer.TILE_SIZE)
+		texture = _building_placeholder_sprite.footprint_texture(footprint, seed_value, TerrainRenderer.TILE_SIZE)
 	sprite.texture = texture
 	sprite.position = Vector2(0, -float(texture.get_height()) * 0.5)
 	node.add_child(sprite)

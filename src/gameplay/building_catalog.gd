@@ -213,6 +213,83 @@ static func doorstep_of(building_id: String) -> Vector2i:
 	return door_of(building_id) + Vector2i(0, 1)
 
 
+# -- variant sheets ------------------------------------------------------
+#
+# A second, SIMPLER kind of sheet, for buildings there are many real drawn
+# versions of: a plain grid of complete buildings, one per cell, black
+# background, NO magenta dividers and no lifecycle rows at all. A finished
+# building picks one cell by its own seed, so a street of cottages reads as
+# a street of DIFFERENT cottages rather than one house repeated down the
+# road -- which is what a real village looks like and what one sheet of 25
+# hand-drawn variants is for.
+#
+# Deliberately NOT a replacement for the lifecycle sheet contract above. A
+# variant sheet has no construction, burning or ruined rows, so a RISING
+# building still draws from the lifecycle sheet's construction row exactly
+# as before (EarthChunkManager._sync_construction_site); only the FINISHED
+# building prefers a variant (see finished_sheet_for). Purely additive: a
+# building with no variant sheet, or one whose file has not been dropped in
+# yet, is untouched and falls through the same
+# lifecycle-sheet-then-procedural-placeholder chain it always did.
+
+## The supplied sheet's own grid: 25 cottages, five by five.
+const VARIANT_SHEET_COLUMNS := 5
+const VARIANT_SHEET_ROWS := 5
+
+## Which building ids have a real variant sheet. Only the first-tier
+## village house so far -- the supplied art is all one-storey cottages, and
+## claiming it for a manor or a town hall would be drawing the wrong
+## building. house_medium/house_large get their own when their own sheets
+## land; nothing else about them changes in the meantime.
+const _VARIANT_SHEETS := {
+	"house_small": "res://assets/sprites/buildings/house_small_variants.png",
+}
+
+
+## This building's variant sheet, or "" for one that has none. Whether the
+## file actually exists yet is the renderer's question, not the catalog's
+## -- a missing sheet falls back through finished_sheet_for's own caller,
+## exactly like a missing lifecycle sheet already does.
+static func variant_sheet_of(building_id: String) -> String:
+	return _VARIANT_SHEETS.get(building_id, "")
+
+
+## Which cell of the variant grid this building draws from, as
+## (column, row) -- deterministic from the building's own seed, so a house
+## always looks like itself across reloads. Column and row are drawn from
+## independent hashes of the same seed so the pair spreads over the whole
+## grid rather than walking a diagonal (test-pinned: all 25 are reachable).
+static func variant_cell_for(building_id: String, seed_value: int) -> Vector2i:
+	var columns := VARIANT_SHEET_COLUMNS
+	var rows := VARIANT_SHEET_ROWS
+	if variant_sheet_of(building_id) == "":
+		return Vector2i.ZERO
+	return Vector2i(
+		PixelNoise.range_index(seed_value, 29, 31, columns),
+		PixelNoise.range_index(seed_value, 37, 41, rows)
+	)
+
+
+## Which sheet cell a FINISHED building of this id and seed is drawn from:
+## `{path, columns, rows, row, column}`. A building with a variant sheet
+## gets its own seeded variant; everything else gets the lifecycle sheet's
+## idle row, exactly as before. One function, so the live building node and
+## any other consumer can never disagree about which picture a finished
+## building has.
+static func finished_sheet_for(building_id: String, seed_value: int) -> Dictionary:
+	var variant_sheet := variant_sheet_of(building_id)
+	if variant_sheet == "":
+		return {
+			"path": sheet_of(building_id), "columns": SHEET_COLUMNS, "rows": SHEET_ROWS,
+			"row": ROW_IDLE, "column": 0,
+		}
+	var cell := variant_cell_for(building_id, seed_value)
+	return {
+		"path": variant_sheet, "columns": VARIANT_SHEET_COLUMNS, "rows": VARIANT_SHEET_ROWS,
+		"row": cell.y, "column": cell.x,
+	}
+
+
 ## Where this building's sheet is expected ("" for an unknown id). Whether
 ## the file actually exists yet is the renderer's question, not the
 ## catalog's -- a missing sheet falls back to ProceduralBuildingPlaceholder

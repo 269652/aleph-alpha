@@ -273,6 +273,33 @@ box of the right footprint. (Construction progress will pick row 0's
 column from `progress` — `clampi(floori(progress × 8), 0, 7)` — once the
 village raises buildings over time; today only row 2 is shown.)
 
+**Building variant sheets** — `assets/sprites/buildings/<building_id>_
+variants.png`, a plain **5 columns x 5 rows** grid of 25 complete
+buildings, one per cell, **black background, NO magenta dividers**, each
+house drawn in the same 3/4 top-down view and the same scale as its
+neighbours, its ground footprint at the bottom of its own cell exactly as
+the lifecycle sheets' cells are. Any pixel size works — the slicer derives
+the cell rect from the image's own dimensions, so a 1400x1100 sheet and a
+2800x2200 one both cut cleanly.
+
+This is a SECOND, simpler contract beside the 8x5 lifecycle sheet above,
+for buildings there are many real drawn versions of. A finished building
+picks its cell from its own seed (`BuildingCatalog.variant_cell_for`), so
+a street of cottages reads as a street of DIFFERENT cottages rather than
+one house repeated down the road. It has no lifecycle rows at all and
+never claims to: a RISING building still draws from the lifecycle sheet's
+construction row, and only the FINISHED building prefers a variant
+(`BuildingCatalog.finished_sheet_for`). Purely additive — a building with
+no variant sheet, or one whose file is not on disk yet, falls through the
+same lifecycle-sheet-then-procedural-placeholder chain as before.
+
+Only the background may be black: the loader keys out pixels below 0.05 in
+every channel (`IllustratedStructureSprite._BLACK_MAX`), so a near-black
+roof or outline inside the art survives, but a genuinely black one would
+be punched through. Declared today for `house_small` (the first-tier
+village cottage); `house_medium`/`house_large` get their own when their
+own sheets land.
+
 **Furniture tiles** — `assets/sprites/furniture/<piece_id>.png`, one
 square image per `CATEGORY_FURNITURE` piece id (`wood_bed`, `wood_table`,
 `wood_chair`, `wood_rug`, `wood_bookshelf`, `couch`, `photo_frame`,
