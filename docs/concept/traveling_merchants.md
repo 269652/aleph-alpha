@@ -126,6 +126,35 @@ built:
   `VillageRenderer`, resolved by
   `EarthChunkManager.household_wallet_for_villager`. Tested in
   `test_npc_economy.gd`.
+- ✅ **The cart itself** (2026-09-16). `MerchantVisit` decides arrival
+  (`VISITS_PER_DAY`, with a carry so a visit is never lost to step
+  granularity), how much of a village's surplus one cart draws
+  (`SURPLUS_DRAW`, capped at `CART_CAPACITY`), and what each good is worth.
+  Wired into the settlement step through
+  `EarthChunkManager._step_merchant_visits`, so gold now arrives because
+  somebody bought something. Every price is derived rather than picked: a
+  beam is `LOG_PRICE × 2 × (SagewerkProduction.LOG_COST_PER_BEAM /
+  LOG_COST_PER_PLANK)`, riding the mill's own real 3:1 conversion, and raw
+  food sits under `VillageMarket.VILLAGE_LOCAL_FOOD_PRICE` and
+  `Shop.CATALOG["cooked_meat"]` — `shop.gd` states plainly that `CATALOG`
+  is the only place an item has a price, so inventing one here would be a
+  number with nothing behind it.
+- ✅ **Hide has a supply now** (2026-09-16). Design pillar 3 above claims
+  "nothing on the buy list is an item the village cannot make", and until
+  villagers hunted real animals that was false of exactly one entry: hide
+  was a live price with nothing behind it. A hunter's kill now credits
+  `Butchering.HIDE_COUNT` into the village market, deliberately unpaid at
+  the kill, precisely so the cart is what a hide is worth anything to (see
+  [npc.md](npc.md#work-against-the-real-world-not-against-a-number)).
+- 🚧 **The gold faucet is narrowed, not closed.** A producer is still paid
+  `NpcProduction.YIELD_TO_GOLD_RATE` per food unit the instant it is
+  gathered or taken, whether or not a cart ever buys it — the faucet this
+  doc exists to make honest. What changed is that a second, real income
+  path now exists beside it and that the one good with no local buyer
+  (hide) goes through the cart alone. Making food income conditional on an
+  actual sale is the next slice, and it needs a village to survive the gap
+  between visits first (a granary, or a purse deep enough to ride out a
+  bad week).
 - ⬜ Everything else in this doc is specified here first and implemented in
   the slices that follow; each entry moves to ✅/🚧 as it lands, and
   [progress.md](../progress.md) carries the ledger.
