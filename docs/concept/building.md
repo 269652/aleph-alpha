@@ -263,7 +263,11 @@ construction ×8 (scaffold → shell → roof, left to right), 1 active ×8 (lit
 windows / chimney smoke loop), 2 idle ×8 (loop or repeats), 3 burning ×8,
 4 ruined ×8. Each cell is scaled on screen so the cell's WIDTH equals the
 footprint's width (`footprint_frame_texture`): a `w`-wide house draws
-16·w px wide and 17·w px tall. The bottom `d` tiles of that height are the
+`ART_TILE_SIZE`·w art px wide, drawn at `ArtResolution.SPRITE_SCALE` so it
+occupies exactly 16·w WORLD units — the same pixels-per-world-unit the
+ground it stands on already paints at (see
+[art_resolution.md](art_resolution.md); buildings drew at 16·w art px
+until 2026-09-16, carrying half the resolution of their own terrain). The bottom `d` tiles of that height are the
 ground footprint — draw the roof there, seen from the top-down camera —
 and everything above overhangs the row north of the house. The door must
 sit on the bottom edge in column `w/2` (integer division, i.e. right of

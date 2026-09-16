@@ -13395,9 +13395,16 @@ func _spawn_building_node(chunk_coord: Vector2i, origin_local: Vector2i, record:
 	# so a variant sheet that has not been dropped in yet changes nothing.
 	var seed_value := int(record["seed"])
 	var sheet: Dictionary = BuildingCatalog.finished_sheet_for(building_id, seed_value)
+	# ART_TILE_SIZE, not TILE_SIZE, and scaled back by SPRITE_SCALE (see
+	# docs/concept/art_resolution.md): the WORLD footprint is identical
+	# either way, but the art carries DETAIL_MULTIPLIER pixels per world
+	# unit -- the same detail per world unit the ground it stands on
+	# already paints at. Drawn at TILE_SIZE, a building carried HALF the
+	# resolution of its own terrain, which is exactly what a finely drawn
+	# variant sheet would be thrown away at.
 	var texture := _illustrated_structure_sprite.footprint_frame_texture(
 		sheet["path"], sheet["columns"], sheet["rows"], sheet["row"], sheet["column"],
-		TerrainRenderer.TILE_SIZE, footprint.x
+		TerrainRenderer.ART_TILE_SIZE, footprint.x
 	)
 	if texture == null and sheet["path"] != BuildingCatalog.sheet_of(building_id):
 		# A declared variant sheet that is not on disk yet: fall back to the
@@ -13406,12 +13413,15 @@ func _spawn_building_node(chunk_coord: Vector2i, origin_local: Vector2i, record:
 		# a box the moment a variant sheet is declared for it.
 		texture = _illustrated_structure_sprite.footprint_frame_texture(
 			BuildingCatalog.sheet_of(building_id), BuildingCatalog.SHEET_COLUMNS, BuildingCatalog.SHEET_ROWS,
-			BuildingCatalog.ROW_IDLE, 0, TerrainRenderer.TILE_SIZE, footprint.x
+			BuildingCatalog.ROW_IDLE, 0, TerrainRenderer.ART_TILE_SIZE, footprint.x
 		)
 	if texture == null:
-		texture = _building_placeholder_sprite.footprint_texture(footprint, seed_value, TerrainRenderer.TILE_SIZE)
+		texture = _building_placeholder_sprite.footprint_texture(
+			footprint, seed_value, TerrainRenderer.ART_TILE_SIZE
+		)
 	sprite.texture = texture
-	sprite.position = Vector2(0, -float(texture.get_height()) * 0.5)
+	sprite.scale = Vector2.ONE * ArtResolution.SPRITE_SCALE
+	sprite.position = Vector2(0, -float(texture.get_height()) * 0.5 * ArtResolution.SPRITE_SCALE)
 	node.add_child(sprite)
 
 	var body := StaticBody2D.new()
@@ -15830,17 +15840,21 @@ func _sync_construction_site(chunk_coord: Vector2i, project) -> void:
 		return
 	node.set_meta("stage", stage)
 	var sprite: Sprite2D = node.get_node("Stage")
+	# The same art resolution the FINISHED building uses (see
+	# _spawn_building_node): a site drawn at a different pixels-per-world-
+	# unit would visibly jump the moment it completed.
 	var texture := _illustrated_structure_sprite.footprint_frame_texture(
 		BuildingCatalog.sheet_of(building_id), BuildingCatalog.SHEET_COLUMNS, BuildingCatalog.SHEET_ROWS,
-		BuildingCatalog.ROW_CONSTRUCTION, stage, TerrainRenderer.TILE_SIZE, footprint.x
+		BuildingCatalog.ROW_CONSTRUCTION, stage, TerrainRenderer.ART_TILE_SIZE, footprint.x
 	)
 	if texture == null:
 		# No sheet yet: the finished placeholder, faded -- a ghost of what
 		# is coming, growing solid with the work.
-		texture = _building_placeholder_sprite.footprint_texture(footprint, 0, TerrainRenderer.TILE_SIZE)
+		texture = _building_placeholder_sprite.footprint_texture(footprint, 0, TerrainRenderer.ART_TILE_SIZE)
 		sprite.modulate = Color(1.0, 1.0, 1.0, 0.35 + 0.65 * progress)
 	sprite.texture = texture
-	sprite.position = Vector2(0, -float(texture.get_height()) * 0.5)
+	sprite.scale = Vector2.ONE * ArtResolution.SPRITE_SCALE
+	sprite.position = Vector2(0, -float(texture.get_height()) * 0.5 * ArtResolution.SPRITE_SCALE)
 
 
 func _construction_site_node_at(chunk_coord: Vector2i, origin_local: Vector2i) -> Node2D:
