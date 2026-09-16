@@ -20,6 +20,7 @@ const MinableOre = preload("res://src/rendering/minable_ore.gd")
 const IllustratedStoneSprite = preload("res://src/rendering/illustrated_stone_sprite.gd")
 const PixelNoise = preload("res://src/rendering/pixel_noise.gd")
 const BuildingPiece = preload("res://src/gameplay/building_piece.gd")
+const TerrainRenderer = preload("res://src/rendering/terrain_renderer.gd")
 
 ## The boulder's WORLD footprint -- derived from its art size, which is
 ## authored DETAIL_MULTIPLIER times oversized (see
@@ -120,9 +121,13 @@ func spawn_stones(
 ## EarthChunkManager._piece_grid_for draws. An earth path or a campfire is a
 ## chunk modification too, and neither clears a boulder (see
 ## test_a_non_piece_modification_does_not_stop_a_stone_spawning, which exists
-## to go red if anyone widens this to `modifications.has`).
+## to go red if anyone widens this to `modifications.has`). A laid road
+## (TerrainRenderer.ROAD_TILE_ID, docs/concept/infrastructure.md's Road
+## tier) is the one other built surface: a village street is placed, not
+## worn, and keeps its boulders off exactly like a floor does.
 func _piece_occupies(chunk: Chunk, local_cell: Vector2i) -> bool:
-	return BuildingPiece.has_piece(chunk.modifications.get(local_cell, ""))
+	var tile_id: String = chunk.modifications.get(local_cell, "")
+	return BuildingPiece.has_piece(tile_id) or TerrainRenderer.is_road_tile(tile_id)
 
 
 ## A loose stone at this position: a boulder to be broken, or a stone small

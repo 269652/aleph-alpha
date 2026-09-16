@@ -7156,6 +7156,8 @@ func _can_root_at(chunk: Chunk, chunk_coord: Vector2i, position: Vector2) -> boo
 	# and TreeRenderer.spawn_trees.
 	if BuildingPiece.touches_piece(chunk.modifications, local) or BuildingCatalog.touches_building(chunk.modifications, local):
 		return false  # ...and nothing takes root on a house's own one-cell apron either (its doorstep stays clear)
+	if TerrainRenderer.is_road_tile(chunk.modifications.get(local, "")):
+		return false  # a laid road is a built surface too (docs/concept/infrastructure.md's Road tier)
 	# A river's own biome is untouched land (see docs/concept/rivers.md's
 	# Rendering section), so TreeRooting.can_root_in alone can't see it --
 	# the same "trees standing in a lake" bug class this function's own
@@ -12672,10 +12674,15 @@ func build_at_global(global_x: int, global_y: int, tile_id: String) -> bool:
 	var local := _local_coord(global_x, global_y)
 	var previous_tile_id: String = chunk.modifications.get(local, "")
 	chunk.modifications[local] = tile_id
-	if BuildingPiece.has_piece(tile_id):
+	if _is_built_surface(tile_id):
 		_block_ground_cover_on_cells(chunk_coord, [local])
-	elif BuildingPiece.has_piece(previous_tile_id):
+	elif _is_built_surface(previous_tile_id):
 		_unblock_ground_cover_on_cells(chunk_coord, [local])
+	if TerrainRenderer.is_road_tile(tile_id):
+		# A laid road is cleared like a building footprint (see
+		# place_building): a tree standing on a street cell is felled by
+		# laying the street, rather than left growing out of the cobbles.
+		_clear_vegetation_on_cells(chunk_coord, chunk, {Vector2i(global_x, global_y): true})
 	_terrain_renderer.paint(_tile_map_layer, chunk, chunk_coord * CHUNK_SIZE, generator.biome_at_global)
 	_sync_piece_collision(Vector2i(global_x, global_y), tile_id)
 	_sync_sagewerk_lumberjack(chunk_coord, local, previous_tile_id, tile_id)
@@ -12708,7 +12715,7 @@ func destroy_at_global(global_x: int, global_y: int) -> bool:
 		return false
 	var previous_tile_id: String = chunk.modifications[local]
 	chunk.modifications.erase(local)
-	if BuildingPiece.has_piece(previous_tile_id):
+	if _is_built_surface(previous_tile_id):
 		_unblock_ground_cover_on_cells(chunk_coord, [local])
 	_terrain_renderer.paint(_tile_map_layer, chunk, chunk_coord * CHUNK_SIZE, generator.biome_at_global)
 	_remove_piece_collision(Vector2i(global_x, global_y))
@@ -13114,9 +13121,19 @@ func _built_local_cells(chunk: Chunk) -> Array:
 	var cells: Array = []
 	for local in chunk.modifications:
 		var tile_id: String = chunk.modifications[local]
-		if BuildingPiece.has_piece(tile_id) or BuildingCatalog.occupies(tile_id):
+		if _is_built_surface(tile_id) or BuildingCatalog.occupies(tile_id):
 			cells.append(local)
 	return cells
+
+
+## A cell nothing grows on: a real building piece, or a laid road (docs/
+## concept/infrastructure.md's Road tier -- a placed surface, unlike the
+## worn path/trail tiers, which stay open ground). The one predicate
+## build_at_global/destroy_at_global/_built_local_cells share for ground
+## cover; buildings (BuildingCatalog.occupies) are checked alongside it
+## where footprints matter.
+func _is_built_surface(tile_id: String) -> bool:
+	return BuildingPiece.has_piece(tile_id) or TerrainRenderer.is_road_tile(tile_id)
 
 
 func _clear_vegetation_on_cells(
@@ -14269,6 +14286,7 @@ func _load_chunk(chunk_coord: Vector2i) -> void:
 	# it, and spawn_village (much later in this function) needs the space
 	# genuinely clear to regenerate the village as real buildings.
 	_migrate_piece_village_to_buildings_if_stale(chunk_coord, chunk)
+	_migrate_village_trails_to_roads(chunk)
 	# Withering catch-up BEFORE the first paint/collision pass below, so a
 	# piece that decayed away entirely while this chunk sat unloaded is
 	# already gone from chunk.modifications by the time anything paints or
@@ -15250,6 +15268,23 @@ func _migrate_piece_village_to_buildings_if_stale(chunk_coord: Vector2i, chunk: 
 			removed = true
 	if removed:
 		_persist_modifications_now(chunk_coord, chunk)
+
+
+## Older saves' village streets (docs/concept/infrastructure.md's Road
+## tier): before the tier existed, VillageRenderer laid every street as
+## the worn TRAIL tile. A chunk with real buildings is a laid-out village,
+## and a laid-out village's only trails ARE its streets -- so they are
+## repaved as the real road tile here, before the first paint/ground-cover
+## pass, the same "heal an old save on its next load" shape the migration
+## just above has. A chunk with no buildings keeps its trails: those are
+## genuinely worn ground, not a street. Nothing persists here -- the chunk
+## saves its modifications on unload as always.
+func _migrate_village_trails_to_roads(chunk: Chunk) -> void:
+	if chunk.buildings.is_empty():
+		return
+	for local in chunk.modifications:
+		if chunk.modifications[local] == TerrainRenderer.TRAIL_TILE_ID:
+			chunk.modifications[local] = TerrainRenderer.ROAD_TILE_ID
 
 
 ## Every local cell covered by a COMPLETE ConstructionProject the player's

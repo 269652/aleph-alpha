@@ -3178,6 +3178,40 @@ func test_terrain_speed_multiplier_matches_terrain_passability_for_the_real_tile
 	assert_almost_eq(player._terrain_speed_multiplier(tile), expected, 0.0001)
 
 
+# -- the Road tier: a laid road walks a little faster (docs/concept/infrastructure.md) -
+
+func test_surface_speed_multiplier_is_the_road_bonus_on_a_road_cell():
+	var tile := player.current_tile()
+	chunk_manager.build_at_global(tile.x, tile.y, TerrainRenderer.ROAD_TILE_ID)
+	assert_almost_eq(player._surface_speed_multiplier(tile), Player.ROAD_SPEED_MULTIPLIER, 0.0001)
+	assert_gt(Player.ROAD_SPEED_MULTIPLIER, 1.0, "a road is a bonus, not a penalty")
+
+
+func test_surface_speed_multiplier_is_neutral_off_a_road():
+	var tile := player.current_tile()
+	assert_almost_eq(player._surface_speed_multiplier(tile), 1.0, 0.0001)
+	# The worn tiers are untouched by the Road tier: a trail is not a road.
+	chunk_manager.build_at_global(tile.x, tile.y, TerrainRenderer.TRAIL_TILE_ID)
+	assert_almost_eq(player._surface_speed_multiplier(tile), 1.0, 0.0001)
+
+
+## The bonus reaches the real per-frame multiplier chain, not just a helper
+## nobody calls: one outdoor authority step on a road cell must land a
+## faster current_speed_multiplier than the same step off it.
+func test_walking_on_a_road_raises_the_real_speed_multiplier():
+	_register_all_keybindings()
+	var tile := player.current_tile()
+	player._authority_step(0.1)
+	var off_road := player.current_speed_multiplier
+
+	chunk_manager.build_at_global(tile.x, tile.y, TerrainRenderer.ROAD_TILE_ID)
+	player._authority_step(0.1)
+
+	# The other factors (condition, weather) drift a hair between two real
+	# steps, so pin the RATIO within 1% rather than an exact product.
+	assert_almost_eq(player.current_speed_multiplier / off_road, Player.ROAD_SPEED_MULTIPLIER, 0.01)
+
+
 func test_terrain_blocks_movement_is_false_when_not_moving():
 	assert_false(player._terrain_blocks_movement(Vector2.ZERO))
 

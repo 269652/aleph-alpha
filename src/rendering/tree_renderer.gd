@@ -12,6 +12,7 @@ const TreeGrowth = preload("res://src/gameplay/tree_growth.gd")
 const TreeSpecies = preload("res://src/world/tree_species.gd")
 const BuildingPiece = preload("res://src/gameplay/building_piece.gd")
 const BuildingCatalog = preload("res://src/gameplay/building_catalog.gd")
+const TerrainRenderer = preload("res://src/rendering/terrain_renderer.gd")
 const SeasonCycle = preload("res://src/world/season_cycle.gd")
 const TreePhenology = preload("res://src/world/tree_phenology.gd")
 
@@ -121,6 +122,11 @@ func spawn_trees(
 			# a village clears the ground around its houses, doorsteps included,
 			# and a reload must not put a tree back in front of a door.
 			if BuildingPiece.touches_piece(chunk.modifications, Vector2i(x, y)) or BuildingCatalog.touches_building(chunk.modifications, Vector2i(x, y)):
+				continue
+			# ...nor on a laid road (docs/concept/infrastructure.md's Road
+			# tier): a village street is a built surface, and a reload must
+			# not put a tree back in the middle of it.
+			if TerrainRenderer.is_road_tile(chunk.modifications.get(Vector2i(x, y), "")):
 				continue
 
 			var position := _stand_position(global_x, global_y, tile_size)

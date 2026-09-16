@@ -125,12 +125,16 @@ the field exists so a later pass can add other faces.
 
 **Village layout** (`VillageLayout.layout(...)`, pure): one or more
 east–west streets across the chunk's habitable middle, one tile wide,
-laid as the existing `TRAIL_TILE_ID` (the infrastructure doc's Road tier
-finally has an NPC-laid instance); houses take the NORTH side of each
-street so every door faces south onto it (the doorstep IS a road cell),
-one-tile gaps between plots, plaza (well + stall) on the main street's
-middle, gate at its end; the next street opens a house-depth plus two
-tiles further south when the first is full. Every plot's footprint and
+laid as the real Road tile (`TerrainRenderer.ROAD_TILE_ID` — the
+infrastructure doc's Road tier, a LAID surface that never wears and
+nothing grows on; older saves' trail-drawn streets are repaved on load);
+houses take the NORTH side of each street so every door faces south onto
+it (the doorstep IS a road cell), one-tile gaps between plots; the next
+street opens a house-depth plus two tiles further south when the first is
+full. (A central plaza with the well and stall on it, a gate at the
+street's end and side streets are the next layout pass — the
+`SettlementGenerator` landmarks still sit at fixed offsets from the chunk
+centre today.) Every plot's footprint and
 doorstep must be buildable (`is_buildable_terrain_at`) and unmodified;
 a villager whose plot fits nowhere stays homeless, as today, rather than
 being squeezed onto water or forest. `SettlementGenerator` keeps its

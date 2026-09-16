@@ -2330,6 +2330,7 @@ func _authority_step(delta: float) -> void:
 		water_result.speed_multiplier
 		* _weather_speed_multiplier()
 		* _terrain_speed_multiplier(tile)
+		* _surface_speed_multiplier(tile)
 		* ConditionPenalty.speed_multiplier(survival.fitness)
 		* _spell_speed_multiplier()
 	)
@@ -2587,6 +2588,23 @@ func _terrain_speed_multiplier(tile: Vector2i) -> float:
 	if _chunk_manager == null:
 		return 1.0
 	return TerrainPassability.speed_multiplier(_chunk_manager.slope_at_global(tile.x, tile.y))
+
+
+## A laid road (docs/concept/infrastructure.md's Road tier -- village
+## streets, TerrainRenderer.ROAD_TILE_ID) walks a little faster than open
+## ground: a small, real reward for using the street, the same "environment
+## scales a movement multiplier" shape _terrain_speed_multiplier above uses.
+## Only the placed Road tier -- the worn path/trail tiers stay neutral, as
+## they always were. Pinned by test_surface_speed_multiplier_is_the_road_
+## bonus_on_a_road_cell.
+const ROAD_SPEED_MULTIPLIER := 1.15
+
+func _surface_speed_multiplier(tile: Vector2i) -> float:
+	if _chunk_manager == null:
+		return 1.0
+	if TerrainRenderer.is_road_tile(_chunk_manager.modification_at_global(tile.x, tile.y)):
+		return ROAD_SPEED_MULTIPLIER
+	return 1.0
 
 
 ## How far ahead (world pixels) to check terrain slope before committing to

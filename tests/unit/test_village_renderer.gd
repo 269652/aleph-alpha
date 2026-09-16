@@ -287,6 +287,17 @@ func test_every_placed_building_faces_south_onto_a_real_road_cell():
 		assert_true(world.road_cells.has(doorstep_global), "doorstep %s should be a real road cell" % str(doorstep_global))
 
 
+## Streets are the Road tier (docs/concept/infrastructure.md) -- a LAID
+## surface with its own tile -- not the worn TRAIL they used to be drawn as.
+func test_every_street_cell_is_laid_as_the_real_road_tile():
+	var coord := _find_settlement_chunk("grassland")
+	var world := StubWorld.new()
+	renderer.spawn_village(parent, coord, coord * CHUNK_SIZE, CHUNK_SIZE, TILE_SIZE, "grassland", world)
+	assert_gt(world.road_cells.size(), 0, "precondition: streets were laid")
+	for cell in world.road_cells:
+		assert_eq(world.road_cells[cell], TerrainRenderer.ROAD_TILE_ID, str(cell))
+
+
 func test_no_two_placed_buildings_ever_overlap():
 	var coord := _find_settlement_chunk("grassland")
 	var world := StubWorld.new()

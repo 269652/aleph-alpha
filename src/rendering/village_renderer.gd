@@ -247,10 +247,15 @@ func _place_new_village(
 		door_positions[building_index] = doorstep_position
 		stand_positions[building_index] = doorstep_position + Vector2(0, _STAND_OFFSET_TILES * tile_size)
 
+	# Streets are the Road tier (docs/concept/infrastructure.md): a LAID
+	# surface with its own tile that never wears, blocks vegetation and
+	# walks a little faster -- not the worn trail they were first drawn as
+	# (older saves' trail streets are repaved on load, see EarthChunkManager.
+	# _migrate_village_trails_to_roads).
 	if world.has_method("build_at_global"):
 		for local_cell in result["road_cells"]:
 			var g: Vector2i = chunk_coord * chunk_size + local_cell
-			world.build_at_global(g.x, g.y, TerrainRenderer.TRAIL_TILE_ID)
+			world.build_at_global(g.x, g.y, TerrainRenderer.ROAD_TILE_ID)
 
 
 ## A reload: this settlement's buildings are already persisted from an
