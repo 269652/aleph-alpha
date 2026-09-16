@@ -21,11 +21,20 @@ const NpcGenome = preload("res://src/world/npc_genome.gd")
 ## choose_house_id draws a villager's home from.
 const BUILDING_IDS: Array[String] = ["house_small", "house_medium", "house_large"]
 
-## Civic buildings (docs/concept/civic_construction.md): real catalog
-## entities a village raises on its own plaza over time (see VillageLayout.
-## skeleton's civic plot), never a home -- kept out of BUILDING_IDS so no
-## villager is ever handed the town hall to live in.
-const CIVIC_BUILDING_IDS: Array[String] = ["city_hall"]
+## Civic buildings (docs/concept/civic_construction.md, docs/concept/
+## village_growth.md): real catalog entities a village raises as a COMMONS
+## -- the hall on its own plaza plot, the warehouse a real physical home
+## for VillageMarket's already-real settlement stock -- never a home, kept
+## out of BUILDING_IDS so no villager is ever handed one to live in.
+const CIVIC_BUILDING_IDS: Array[String] = ["city_hall", "warehouse"]
+
+## Production buildings (docs/concept/village_growth.md's growth ladder):
+## the works a village raises as it grows -- the sawmill at the forest
+## edge first, since timber is the input every later building is made of,
+## then the farmhouse, the blacksmith and finally the brewery, the one
+## rung raised for comfort rather than survival. Also never homes; the
+## trade they house is worked from, not lived in.
+const PRODUCTION_BUILDING_IDS: Array[String] = ["sawmill", "farmhouse", "blacksmith", "brewery"]
 
 ## The reserved chunk-modification id every NON-anchor footprint cell
 ## carries (the anchor cell carries the building id itself, exactly like a
@@ -78,6 +87,56 @@ const _BUILDINGS := {
 	"city_hall": {
 		"footprint": Vector2i(4, 3), "interior_family": "hall", "capacity": 0,
 		"labor_hours": 45.0, "cost": {"wood": 20, "stone": 10},
+	},
+	# The growth ladder (docs/concept/village_growth.md). Every one of
+	# these is priced ONLY in wood/stone/plant_fibre -- the exact three
+	# materials SettlementGathering's spare hands actually gather -- since
+	# a rung priced in anything else could never be raised by a village on
+	# its own (test-pinned, test_building_catalog.gd). Costs rise strictly
+	# along the ladder (sawmill < farmhouse < warehouse < city_hall <
+	# blacksmith < brewery): a village pays more for each rung it grows
+	# into. labor_hours is always ConstructionLabor.HOURS_PER_UNIT_MATERIAL
+	# times the total material, so the rising building's own construction
+	# sprite and the ledger agree on how far along it is.
+	#
+	# The sawmill: the village's first works, sited at the forest edge
+	# rather than on the street (VillageLayout.industry_plot) because that
+	# is where the timber is. Cheapest rung -- a shed, a saw pit and a log
+	# deck, not an enclosed hall.
+	"sawmill": {
+		"footprint": Vector2i(3, 2), "interior_family": "workshop", "capacity": 0,
+		"labor_hours": 30.0, "cost": {"wood": 16, "stone": 4},
+	},
+	# The farmhouse: the village's own food works (docs/concept/
+	# npc_farm_production.md's Farm, raised as a real building rather than
+	# a single tile). Timber frame, a stone footing, fibre for thatch and
+	# lashing -- the cheapest rung that needs all three materials.
+	"farmhouse": {
+		"footprint": Vector2i(3, 2), "interior_family": "farmstead", "capacity": 0,
+		"labor_hours": 36.0, "cost": {"wood": 14, "stone": 4, "plant_fibre": 6},
+	},
+	# The warehouse: a real physical home for VillageMarket's already-real
+	# settlement stock (civic_construction.md's own Granary). Mostly
+	# timber and thatch -- volume to enclose, but no forge and no civic
+	# masonry -- so it lands under the hall.
+	"warehouse": {
+		"footprint": Vector2i(4, 3), "interior_family": "hall", "capacity": 0,
+		"labor_hours": 42.0, "cost": {"wood": 22, "plant_fibre": 6},
+	},
+	# The blacksmith: the first rung that needs stone in real quantity --
+	# a forge, a hearth and a chimney are masonry, not carpentry, which is
+	# exactly why it sits above the civic hall in price.
+	"blacksmith": {
+		"footprint": Vector2i(3, 2), "interior_family": "workshop", "capacity": 0,
+		"labor_hours": 51.0, "cost": {"wood": 18, "stone": 16},
+	},
+	# The brewery: the dearest rung, and the only one raised for comfort
+	# rather than survival -- a masonry mash floor, a timber-framed hall
+	# over it, and fibre for the filtering. A village only builds this
+	# once everything it actually needs already stands.
+	"brewery": {
+		"footprint": Vector2i(3, 3), "interior_family": "workshop", "capacity": 0,
+		"labor_hours": 57.0, "cost": {"wood": 22, "stone": 12, "plant_fibre": 4},
 	},
 }
 

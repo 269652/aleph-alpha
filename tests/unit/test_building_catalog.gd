@@ -232,3 +232,105 @@ func test_the_hall_labour_matches_its_recipe_derived_hours():
 	assert_almost_eq(
 		BuildingCatalog.labor_hours_of("city_hall"), ConstructionLabor.labor_hours_required("city_hall", book), 0.001
 	)
+
+
+# -- the growth ladder's production and civic buildings --------------------
+#
+# docs/concept/village_growth.md's own ladder: a village raises a sawmill,
+# a warehouse, a farmhouse, a blacksmith and a brewery as its population
+# grows, alongside the city hall it already raises. Every one is a real
+# catalog entity with a real sheet on disk, nobody lives in any of them,
+# and every one costs ONLY material a settlement can actually gather for
+# itself (SettlementGathering stocks wood, stone and plant_fibre -- a rung
+# priced in anything else could never be raised autonomously).
+
+const _LADDER_BUILDING_IDS := ["sawmill", "warehouse", "farmhouse", "blacksmith", "brewery"]
+
+
+func test_every_ladder_building_is_a_real_catalog_entity_nobody_lives_in():
+	for building_id in _LADDER_BUILDING_IDS:
+		assert_true(BuildingCatalog.has_building(building_id), "%s must be a real building" % building_id)
+		assert_false(BuildingCatalog.BUILDING_IDS.has(building_id), "%s must never be a home" % building_id)
+		assert_eq(BuildingCatalog.capacity_of(building_id), 0, "nobody lives in the %s" % building_id)
+		assert_ne(BuildingCatalog.interior_family_of(building_id), "", "%s needs an interior family" % building_id)
+
+
+func test_the_production_building_ids_list_is_exactly_the_non_civic_ladder():
+	assert_eq(BuildingCatalog.PRODUCTION_BUILDING_IDS, ["sawmill", "farmhouse", "blacksmith", "brewery"] as Array[String])
+	assert_true(BuildingCatalog.CIVIC_BUILDING_IDS.has("warehouse"), "a warehouse is a commons, not a trade")
+	assert_true(BuildingCatalog.CIVIC_BUILDING_IDS.has("city_hall"))
+
+
+## The sheets already exist in the repo -- this is what makes the ladder
+## art-complete rather than a row of procedural placeholders.
+func test_every_ladder_building_has_a_real_sheet_file_on_disk():
+	for building_id in _LADDER_BUILDING_IDS:
+		var path: String = BuildingCatalog.sheet_of(building_id)
+		assert_eq(path, "res://assets/sprites/buildings/%s.png" % building_id)
+		assert_true(FileAccess.file_exists(path), "%s has no real sheet at %s" % [building_id, path])
+
+
+## Every rung must be payable out of what SettlementGathering actually
+## gathers, or the village can never raise it on its own.
+func test_every_ladder_building_costs_only_material_a_village_can_gather():
+	var SettlementGathering = load("res://src/emergence/settlement_gathering.gd")
+	var gatherable := {}
+	for item_id in ["wood", "stone", "plant_fibre"]:
+		gatherable[item_id] = true
+		assert_gt(
+			float(SettlementGathering.material_delta(1, 86400.0, {})["stock_delta"].get(item_id, 0)), 0.0,
+			"precondition: a village really gathers %s" % item_id
+		)
+	for building_id in _LADDER_BUILDING_IDS + ["city_hall"]:
+		var cost: Dictionary = BuildingCatalog.cost_of(building_id)
+		assert_false(cost.is_empty(), "%s must cost something" % building_id)
+		for item_id in cost:
+			assert_true(gatherable.has(item_id), "%s costs un-gatherable %s" % [building_id, item_id])
+
+
+## Ladder order is also price order: a village pays more for each rung it
+## grows into. Pinned against the ORDER, not any one "correct" price.
+func test_each_ladder_rung_costs_more_material_than_the_one_before_it():
+	var ladder := ["sawmill", "farmhouse", "warehouse", "city_hall", "blacksmith", "brewery"]
+	var previous := 0
+	for building_id in ladder:
+		var total := 0
+		for item_id in BuildingCatalog.cost_of(building_id):
+			total += int(BuildingCatalog.cost_of(building_id)[item_id])
+		assert_gt(total, previous, "%s must cost more material than the rung before it" % building_id)
+		previous = total
+
+
+## Same contract the hall already keeps: the catalog's labour figure and
+## ConstructionLabor's recipe-derived one must agree, or a rising
+## building's sprite and the ledger disagree on how far along it is.
+func test_every_ladder_buildings_cost_and_labour_match_its_recipe():
+	var ConstructionLabor = load("res://src/emergence/construction_labor.gd")
+	var book = CraftingRecipeBook.new()
+	for building_id in _LADDER_BUILDING_IDS:
+		var inputs: Array = book.recipe_inputs(building_id)
+		assert_false(inputs.is_empty(), "%s needs a real recipe" % building_id)
+		var expected := {}
+		for input in inputs:
+			expected[input["item_id"]] = input["count"]
+		assert_eq(BuildingCatalog.cost_of(building_id), expected, "%s cost must be its recipe" % building_id)
+		assert_almost_eq(
+			BuildingCatalog.labor_hours_of(building_id),
+			ConstructionLabor.labor_hours_required(building_id, book), 0.001,
+			"%s labour must be its recipe-derived hours" % building_id
+		)
+
+
+## Every street-placed building must fit the street pitch VillageLayout
+## reserves between one row and the next -- the pitch is derived from the
+## catalog's own deepest footprint, so a deeper entry can never silently
+## make two streets overlap.
+func test_no_catalog_building_is_deeper_than_the_street_pitch_reserves():
+	var VillageLayout = load("res://src/world/village_layout.gd")
+	var deepest := 0
+	for building_id in BuildingCatalog.BUILDING_IDS + BuildingCatalog.CIVIC_BUILDING_IDS + BuildingCatalog.PRODUCTION_BUILDING_IDS:
+		deepest = maxi(deepest, BuildingCatalog.footprint_of(building_id).y)
+	assert_eq(
+		VillageLayout.STREET_PITCH_TILES, deepest + VillageLayout.STREET_GAP_TILES,
+		"the street pitch must reserve the deepest real footprint plus the gap"
+	)
