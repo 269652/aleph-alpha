@@ -217,6 +217,19 @@ generalized to a cross-site delivery) before the Builder starts placing.
 Both are real, both stay available — the player's own choice at hire time,
 not a design fork this doc has to resolve one way.
 
+**Where this stands (2026-09-16).** The first live hire — an instant
+piece-by-piece `BuilderMarker` spawned by `hire_builder_for_house` — was
+retired when the player's own house became a whole-building entity
+([building.md](building.md) "Player building re-route"): a whole building
+has no pieces to place one at a time. The player-hired Builder returns in
+THIS doc's shape instead — one `ConstructionProject` on the same ledger
+the village raises its own buildings with, labour hours accruing over
+time, the construction-site sprite advancing through the building sheet's
+row 0 — reusing `find_spare_carpenter_household` (which stays) as the
+labour source. Until then `Player._try_build_house_from_blueprint`
+refuses a build the player cannot do themselves with a message saying
+exactly that ([workforce.md](workforce.md) Status).
+
 ### Meeting Hall
 
 A new named multi-piece shape (its own footprint/piece layout — a

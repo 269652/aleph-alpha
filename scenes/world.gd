@@ -4695,9 +4695,12 @@ func _handle_furniture_command(args: Array, local_player: Player) -> void:
 			_dev_console.log_line("Unknown /furniture action '%s'. Try: place, remove" % sub)
 
 
-## /buildhouse <recipe_id> -- docs/concept/workforce.md's own build-vs-hire
-## fork, targeting wherever the player is currently facing (the SAME
-## _tile_targeting.facing_tile every other placement verb already reads).
+## /buildhouse <recipe_id> -- docs/concept/workforce.md's own blueprint
+## build (docs/concept/building.md "Player building re-route": one real
+## whole-building house), targeting wherever the player is currently
+## facing (the SAME _tile_targeting.facing_tile every other placement verb
+## already reads), and printing why it refused or what it built
+## (Player.house_build_message).
 ## A REAL, IMPORTANT GAP this closes: neither this command nor any other
 ## real trigger for _try_build_house_from_blueprint existed anywhere in
 ## live gameplay before now -- the whole build/hire/BuilderMarker/move-in/
@@ -4715,7 +4718,7 @@ func _handle_build_house_command(args: Array, local_player: Player) -> void:
 		return
 	var recipe_id: String = args[0]
 	var built := local_player._try_build_house_from_blueprint(recipe_id)
-	_dev_console.log_line("Built: %s" % built)
+	_dev_console.log_line("Built: %s -- %s" % [built, local_player.house_build_message])
 
 
 ## Spawns a clickable ground item where a creature died or a tree dropped

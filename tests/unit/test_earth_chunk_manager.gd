@@ -14435,232 +14435,6 @@ func test_unlocked_blueprints_are_tracked_independently_per_recipe():
 	assert_false(manager.has_unlocked_blueprint("some_other_recipe"))
 
 
-# -- workforce: the player actually builds a house (docs/concept/ -----------
-# workforce.md's "Starting a real player-owned construction project"
-# section) -- can_build_house_from_blueprint is a pure query (never mutates,
-# never wastes anything), stamp_house_and_grant_ownership does the real
-# work assuming validity was already checked, matching stamp_structure_at_
-# global's own "just do it" contract one layer down.
-
-## Nothing about "is this recipe unlocked" needs a loaded chunk at all --
-## checked and refused before this function ever touches _loaded_chunks,
-## so calling it on a totally bare manager (no update() paid for) is a
-## real, cheap, meaningful test rather than a shortcut around a slow one.
-func test_can_build_house_from_blueprint_fails_when_not_unlocked():
-	assert_false(manager.can_build_house_from_blueprint("small_house", Vector2i(5, 5)))
-
-
-func test_can_build_house_from_blueprint_fails_for_a_recipe_with_no_house_shape():
-	manager.record_blueprint_learned_if_new("not_a_house_recipe")
-	assert_false(manager.can_build_house_from_blueprint("not_a_house_recipe", Vector2i(5, 5)))
-
-
-func test_can_build_house_from_blueprint_fails_when_the_chunk_is_not_loaded():
-	manager.record_blueprint_learned_if_new("small_house")
-	assert_false(manager.can_build_house_from_blueprint("small_house", Vector2i(99999, 99999)))
-
-
-## A real loaded chunk, freshly generated, has nowhere already occupied --
-## expensive (a real manager.update()), so this earns its keep by covering
-## both the success path AND the "already occupied" refusal in one fixture,
-## the same way test_player.gd's own expensive-fixture tests already
-## economize.
-func test_can_build_house_from_blueprint_on_a_real_loaded_chunk():
-	manager.record_blueprint_learned_if_new("small_house")
-	manager.update(Vector2i(0, 0))
-
-	assert_true(
-		manager.can_build_house_from_blueprint("small_house", Vector2i(1, 1)),
-		"free ground in a freshly-generated chunk should be buildable"
-	)
-
-	manager.build_at_global(1, 1, "campfire")
-	assert_false(
-		manager.can_build_house_from_blueprint("small_house", Vector2i(1, 1)),
-		"a footprint overlapping an existing structure must be refused"
-	)
-
-
-## Assumes validity was already checked (the same contract stamp_structure_
-## at_global itself already carries) -- this is the "just do it" half, real
-## pieces landing in the real chunk and a real, COMPLETE, owned
-## ConstructionProject coming out the other end.
-func test_stamp_house_and_grant_ownership_stamps_real_pieces_and_grants_property():
-	manager.update(Vector2i(0, 0))
-	var household := manager.household_store().form_household(PlayerIdentity.PLAYER_ENTITY_ID)
-
-	var project_id := manager.stamp_house_and_grant_ownership("small_house", Vector2i(1, 1), household.id)
-
-	assert_ne(project_id, "", "a real project id should come back")
-	var project := manager.construction_project_store().get_project(project_id)
-	assert_not_null(project)
-	assert_eq(project.status, ConstructionProject.Status.COMPLETE)
-	assert_eq(project.household_id, household.id)
-	assert_true(household.property.has(project.property_id()))
-	# The real hut_tiny shape landed for real -- a door somewhere, real
-	# walls, a real floor, not just ledger bookkeeping with nothing in the
-	# world to show for it.
-	assert_eq(manager.modification_at_global(2, 2), "wood_floor")
-
-
-# -- move-in: docs/concept/workforce.md's "Move-in" section -- a narrow, -----
-# -- directly-triggered shortcut, NOT quests.md's full migration system. ----
-# -- settle_resident_if_new forms a real, deterministic-from-site resident --
-# -- household distinct from the OWNING household stamp_house_and_grant_ ----
-# -- ownership already grants property to (see ConstructionProject.own -----
-# -- resident_household_id doc comment for why the two are kept separate). --
-
-func test_settle_resident_if_new_forms_a_real_household():
-	manager.update(Vector2i(0, 0))
-	manager.stamp_house_and_grant_ownership("small_house", Vector2i(1, 1), "household:owner")
-
-	var resident_id := manager.settle_resident_if_new("small_house", Vector2i(1, 1))
-
-	assert_ne(resident_id, "")
-	assert_not_null(manager.household_store().get_household(resident_id))
-
-
-## Idempotent -- a house that already has a resident does not get a second
-## one just because move-in was asked about twice (the same reasoning
-## form_household/record_blueprint_learned_if_new already apply).
-func test_settle_resident_if_new_is_idempotent():
-	manager.update(Vector2i(0, 0))
-	manager.stamp_house_and_grant_ownership("small_house", Vector2i(1, 1), "household:owner")
-
-	var first := manager.settle_resident_if_new("small_house", Vector2i(1, 1))
-	var second := manager.settle_resident_if_new("small_house", Vector2i(1, 1))
-
-	assert_eq(first, second)
-	assert_eq(manager.event_store().events_of_type("player_house_settled").size(), 1)
-
-
-## The resident is deliberately NOT the owner -- a player-built house's
-## owner (the player) and its resident are genuinely different households,
-## unlike a procedurally-generated villager's own house.
-func test_settle_resident_if_new_is_a_different_household_from_the_owner():
-	manager.update(Vector2i(0, 0))
-	var owner := manager.household_store().form_household(PlayerIdentity.PLAYER_ENTITY_ID)
-	manager.stamp_house_and_grant_ownership("small_house", Vector2i(1, 1), owner.id)
-
-	var resident_id := manager.settle_resident_if_new("small_house", Vector2i(1, 1))
-
-	assert_ne(resident_id, owner.id)
-
-
-## Two different sites resolve to two different residents -- deterministic
-## from the site, not a shared constant.
-func test_settle_resident_if_new_gives_different_sites_different_residents():
-	manager.update(Vector2i(0, 0))
-	manager.stamp_house_and_grant_ownership("small_house", Vector2i(1, 1), "household:owner")
-	manager.stamp_house_and_grant_ownership("small_house", Vector2i(6, 1), "household:owner")
-
-	var first := manager.settle_resident_if_new("small_house", Vector2i(1, 1))
-	var second := manager.settle_resident_if_new("small_house", Vector2i(6, 1))
-
-	assert_ne(first, second)
-
-
-func test_settle_resident_if_new_records_a_real_event_naming_its_own_project():
-	manager.update(Vector2i(0, 0))
-	var project_id := manager.stamp_house_and_grant_ownership("small_house", Vector2i(1, 1), "household:owner")
-
-	var resident_id := manager.settle_resident_if_new("small_house", Vector2i(1, 1))
-
-	var settled_events := manager.event_store().events_of_type("player_house_settled")
-	assert_eq(settled_events.size(), 1)
-	assert_eq(settled_events[0].actors, [manager.household_store().get_household(resident_id).members[0]])
-	assert_eq(settled_events[0].tags, [project_id])
-
-
-## The house's own ConstructionProject records who lives there, distinct
-## from who owns it (household_id).
-func test_settle_resident_if_new_sets_the_projects_own_resident_field():
-	manager.update(Vector2i(0, 0))
-	var project_id := manager.stamp_house_and_grant_ownership("small_house", Vector2i(1, 1), "household:owner")
-
-	var resident_id := manager.settle_resident_if_new("small_house", Vector2i(1, 1))
-
-	var project := manager.construction_project_store().get_project(project_id)
-	assert_eq(project.resident_household_id, resident_id)
-	assert_eq(project.household_id, "household:owner")
-
-
-func test_settle_resident_if_new_for_a_site_with_no_real_project_does_nothing():
-	assert_eq(manager.settle_resident_if_new("small_house", Vector2i(1, 1)), "")
-
-
-## A house built inside a REAL, already-founded settlement's chunk makes its
-## resident a real member of that settlement -- mirrors record_player_
-## settled_if_new's own household_count_for_settlement wiring exactly, so
-## every system that already asks "who lives here" (spare capacity,
-## institution thresholds, settlement tier) picks a player-house resident up
-## for free.
-func test_settle_resident_if_new_joins_a_real_settlements_household_count():
-	var chunk_coord := Vector2i(20, 20)
-	manager.record_settlement_founded_if_new(chunk_coord, [NpcIdentity.new(1)])
-	manager.update(chunk_coord)
-	var settlement_id := EntityRef.for_settlement(chunk_coord)
-	var before := manager.household_count_for_settlement(settlement_id)
-
-	manager.stamp_house_and_grant_ownership("small_house", chunk_coord * EarthChunkManager.CHUNK_SIZE + Vector2i(1, 1), "household:owner")
-	manager.settle_resident_if_new("small_house", chunk_coord * EarthChunkManager.CHUNK_SIZE + Vector2i(1, 1))
-
-	assert_eq(manager.household_count_for_settlement(settlement_id), before + 1)
-
-
-## Building far from any real, already-founded settlement still gives the
-## house a real resident (pillar 4: "a house is population, not scenery"
-## holds regardless) -- it just never joins a settlement that, per record_
-## player_settled_if_new's own established reasoning, does not really exist
-## ("a settlement with no history is not a settlement").
-func test_settle_resident_if_new_still_settles_far_from_any_real_settlement():
-	manager.update(Vector2i(0, 0))
-	manager.stamp_house_and_grant_ownership("small_house", Vector2i(1, 1), "household:owner")
-
-	var resident_id := manager.settle_resident_if_new("small_house", Vector2i(1, 1))
-
-	assert_ne(resident_id, "")
-	var settlement_id := EntityRef.for_settlement(Vector2i(0, 0))
-	assert_eq(manager.household_count_for_settlement(settlement_id), 0)
-
-
-## stamp_house_and_grant_ownership itself triggers move-in automatically --
-## "the MOMENT a player-owned house ConstructionProject reaches COMPLETE,"
-## not a second manual step the player/caller could forget.
-func test_stamp_house_and_grant_ownership_settles_a_resident_automatically():
-	manager.update(Vector2i(0, 0))
-	var project_id := manager.stamp_house_and_grant_ownership("small_house", Vector2i(1, 1), "household:owner")
-	var project := manager.construction_project_store().get_project(project_id)
-	assert_ne(project.resident_household_id, "", "a completed house should already have a real resident")
-
-
-# -- the Manor tier (docs/concept/workforce.md's "Blueprint tiers") --------
-# a real GUT verification pass over the whole workforce/housing batch that
-# was written and committed with the strict TDD cycle explicitly skipped --
-# see docs/progress.md's own "UNTESTED" entries for that batch. Everything
-# below is genuine after-the-fact verification, not red-first: a failure
-# here is a real bug to fix, not an expected step of the cycle.
-
-func test_can_build_house_from_blueprint_true_for_manor_once_unlocked():
-	manager.record_blueprint_learned_if_new("manor")
-	manager.update(Vector2i(0, 0))
-	assert_true(manager.can_build_house_from_blueprint("manor", Vector2i(1, 1)))
-
-
-func test_stamp_house_and_grant_ownership_stamps_a_real_manor():
-	manager.update(Vector2i(0, 0))
-	var household := manager.household_store().form_household("npc:manor_owner")
-
-	var project_id := manager.stamp_house_and_grant_ownership("manor", Vector2i(1, 1), household.id)
-
-	var project := manager.construction_project_store().get_project(project_id)
-	assert_eq(project.status, ConstructionProject.Status.COMPLETE)
-	assert_true(household.property.has(project.property_id()))
-	# manor_wide's own real 7x5 footprint -- a door/wall/floor somewhere
-	# inside it, not just ledger bookkeeping with nothing in the world.
-	assert_eq(manager.modification_at_global(2, 2), "wood_floor")
-
-
 # -- worker slots and assignment (docs/concept/workforce.md's "Workforce: --
 # a real, spendable resource" section) --------------------------------------
 
@@ -14716,25 +14490,6 @@ func test_unassign_resident_frees_the_slot_back_up():
 
 func test_unassign_resident_for_a_household_never_assigned_fails_without_mutation():
 	assert_false(manager.unassign_resident("household:never_worked"))
-
-
-## free_workforce_in_chunk reads real, settled residents of player-built
-## houses (section 6) minus those currently assigned -- NOT a bare count of
-## every household anywhere, and NOT the general village-occupation census
-## _households_in_settlement/_occupation_of_household already serve.
-func test_free_workforce_in_chunk_counts_settled_unassigned_residents():
-	manager.update(Vector2i(0, 0))
-	manager.stamp_house_and_grant_ownership("small_house", Vector2i(1, 1), "household:owner")
-	var resident_id := manager.settle_resident_if_new("small_house", Vector2i(1, 1))
-
-	assert_eq(manager.free_workforce_in_chunk(Vector2i(0, 0)), 1)
-
-	manager.assign_resident_to_workplace(resident_id, Vector2i(5, 5))
-
-	assert_eq(
-		manager.free_workforce_in_chunk(Vector2i(0, 0)), 0,
-		"an assigned resident is no longer FREE workforce, even though they are still a real resident"
-	)
 
 
 func test_free_workforce_in_chunk_is_zero_with_no_real_residents():
@@ -14960,14 +14715,16 @@ func test_resident_happiness_is_content_when_the_settlement_is_not_declining():
 ## furnished house in a starving settlement is still genuinely fed. Founds
 ## a real settlement first -- see the rent-suspension test's own doc
 ## comment above for why an unfounded location can never actually read
-## DECLINING at all.
+## DECLINING at all. A whole-building house keeps its furniture on its own
+## record's "interior" (docs/concept/building.md "Player building
+## re-route"), which is what _house_furniture_count counts for it.
 func test_resident_happiness_is_content_with_real_furniture_even_in_a_declining_settlement():
 	manager.record_settlement_founded_if_new(Vector2i(0, 0), [NpcIdentity.new(1)])
 	manager.update(Vector2i(0, 0))
 	manager.stamp_house_and_grant_ownership("small_house", Vector2i(1, 1), "household:owner")
 	var resident_id := manager.settle_resident_if_new("small_house", Vector2i(1, 1))
 	var project = manager.construction_project_store().find_project(Vector2i(0, 0), Vector2i(1, 1), "small_house")
-	manager._loaded_chunks[Vector2i(0, 0)].furniture_modifications[project.origin] = "chair"
+	manager._loaded_chunks[Vector2i(0, 0)].buildings[project.origin]["interior"] = {Vector2i(1, 1): "wood_chair"}
 	# No stock added -- the settlement itself still reads DECLINING.
 
 	assert_eq(manager.resident_happiness(resident_id), "content")

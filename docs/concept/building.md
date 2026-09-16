@@ -331,11 +331,26 @@ tile, no dividers, no directional variants (see
   room as an `InteriorResident`, Talk works indoors, doorstep scans skip
   at-home villagers (`test_npc_marker.gd`,
   `test_earth_chunk_manager_prompt_scans.gd`).
-- ⬜ **Player building re-route.** Blueprint construction still runs
-  entirely on the legacy per-tile `BuildingPiece` pipeline below —
-  `HOUSE_BLUEPRINT_SHAPE_BY_RECIPE_ID` → `BUILDING_ID_BY_RECIPE_ID` and a
-  `place_building` call in place of `stamp_structure_at_global` is the
-  one piece of the original plan not yet started.
+- ✅ **Player building re-route** (2026-09-16). A learned blueprint places
+  ONE real catalog house (`EarthChunkManager.BUILDING_ID_BY_RECIPE_ID`:
+  small_house → house_small, cottage → house_medium, manor → house_large)
+  through `place_building`, owned by the player's household on the record
+  itself, and the existing ledger runs unchanged (a COMPLETE
+  `ConstructionProject`, `HouseholdStore` property, move-in).
+  `can_build_house_from_blueprint` validates the whole site — every
+  footprint cell and the doorstep, in one chunk, buildable and empty (a
+  road doorstep is allowed and stays paved). `Player.
+  _try_build_house_from_blueprint` refuses to raise a house over the hero's
+  own tile and leaves its reason or result in `house_build_message`
+  (`/buildhouse` prints it). The ten two-story blueprints map to "" — "no
+  whole-building form yet" — and are off the merchant's shelf until real
+  two-story sheets exist. The instant hire fork (`hire_builder_for_house`
+  and its `BuilderMarker` spawner) is retired with the piece pipeline: a
+  build the player cannot do themselves says that hiring returns with
+  construction-over-time ([workforce.md](workforce.md)). Legacy piece houses
+  in older saves are untouched (`HOUSE_BLUEPRINT_SHAPE_BY_RECIPE_ID` stays
+  for them). Tested (`test_earth_chunk_manager_player_house.gd`,
+  `test_player.gd`, `test_shop.gd`).
 
 ## Legacy: structure building from pieces (older player-built structures only)
 

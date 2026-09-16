@@ -40,6 +40,27 @@ func test_shop_sells_the_cottage_blueprint():
 	assert_true(shop.known_item_ids().has("blueprint_cottage"))
 
 
+func test_shop_sells_the_manor_blueprint():
+	assert_true(shop.known_item_ids().has("blueprint_manor"))
+
+
+## A merchant never sells a blueprint the player cannot actually build
+## (docs/concept/building.md "Player building re-route": the ten two-story
+## blueprints have no whole-building form yet, so they leave the shelf
+## until the catalog grows one) -- every blueprint on sale maps to a real
+## catalog house.
+func test_every_blueprint_on_sale_raises_a_real_whole_building():
+	var EarthChunkManager = load("res://src/world/earth_chunk_manager.gd")
+	var found := 0
+	for item_id in shop.known_item_ids():
+		if catalog.kind_of(item_id) != "blueprint":
+			continue
+		found += 1
+		var recipe_id: String = EarthChunkManager.BLUEPRINT_RECIPE_BY_ITEM_ID.get(item_id, "")
+		assert_ne(EarthChunkManager.BUILDING_ID_BY_RECIPE_ID.get(recipe_id, ""), "", "%s has no whole-building form" % item_id)
+	assert_eq(found, 3, "exactly the three buildable tiers are on sale")
+
+
 func test_can_afford_true_when_wallet_covers_the_price():
 	var item_id: String = shop.known_item_ids()[0]
 	assert_true(shop.can_afford(shop.price_of(item_id), item_id))
