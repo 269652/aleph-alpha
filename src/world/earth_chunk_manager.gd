@@ -4051,6 +4051,28 @@ func household_report_at(global_x: int, global_y: int) -> Dictionary:
 	return report
 
 
+## The LOCAL origin of the house `villager_seed`'s household owns in this
+## chunk, or null. What VillageRenderer asks on reload to stand a villager
+## at their own front door.
+##
+## Resolved through OWNERSHIP, not through the per-index seed a founding
+## house carries: a newcomer's house was raised by the growth ladder
+## (_apply_village_growth_decision), so it has no founding seed at all, and
+## matching by seed alone would leave every household that ever moved in
+## standing on a fallback ring anchor outside the house it actually owns.
+func house_origin_for_villager(chunk_coord: Vector2i, villager_seed: int):
+	var household = _household_store.household_for(EntityRef.for_npc(villager_seed))
+	if household == null:
+		return null
+	for record in buildings_in_chunk(chunk_coord):
+		if BuildingCatalog.capacity_of(record.get("id", "")) <= 0:
+			continue
+		var origin_local: Vector2i = record.get("origin_local", Vector2i.ZERO)
+		if VillageCensus.household_owning(chunk_coord, origin_local, _household_store) == household.id:
+			return origin_local
+	return null
+
+
 ## This resident's own live hunger if their NpcMarker is really spawned in
 ## this chunk, else the settlement-scale reading derived from the larder
 ## (see _household_wellbeing_for_settlement for why that is the honest

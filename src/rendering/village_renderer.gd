@@ -25,6 +25,7 @@ const CharacterViewScene = preload("res://scenes/character_view.tscn")
 const CharacterView = preload("res://scenes/character_view.gd")
 const DropShadow = preload("res://src/rendering/drop_shadow.gd")
 const NpcIdentity = preload("res://src/world/npc_identity.gd")
+const EntityRef = preload("res://src/emergence/entity_ref.gd")
 const TerrainRenderer = preload("res://src/rendering/terrain_renderer.gd")
 const ArtResolution = preload("res://src/rendering/art_resolution.gd")
 
@@ -110,8 +111,15 @@ func spawn_village(
 ) -> Array[Node2D]:
 	if not _settlement_generator.has_settlement_at(chunk_coord, dominant_biome):
 		return []
+	# The settlement's REAL population, not the founding roster: households
+	# move in over time (docs/concept/village_growth.md mechanism 3), and a
+	# newcomer nobody ever spawns is a household the player can never meet.
+	# 0 (a settlement never recorded, or a world that cannot answer) falls
+	# back to the founding roster rather than spawning an empty village --
+	# the same duck-typed fail-open shape every other world hook here uses.
 	var settlement := _settlement_generator.generate_settlement(
-		chunk_coord, chunk_origin_tiles, chunk_size, tile_size
+		chunk_coord, chunk_origin_tiles, chunk_size, tile_size,
+		_population_for(chunk_coord, world)
 	)
 
 	# One VillageMarket per settlement, shared by every villager built below
@@ -285,8 +293,17 @@ func _recover_existing_village(
 	_place_industry_if_missing(chunk_coord, chunk_size, world)
 	for i in npcs.size():
 		var expected_seed := hash("%d_%d_house_%d" % [chunk_coord.x, chunk_coord.y, i])
+		# A NEWCOMER's house was raised by the growth ladder, not stamped at
+		# founding, so it carries none of the founding per-index seeds. Ask
+		# the world who owns what instead -- without this every household
+		# that ever moved in would stand forever on its fallback ring
+		# anchor, outside the house it actually owns.
+		var owned_origin = (
+			world.house_origin_for_villager(chunk_coord, npcs[i].seed_value)
+			if world.has_method("house_origin_for_villager") else null
+		)
 		for record in existing_buildings:
-			if record.get("seed", -1) != expected_seed:
+			if record.get("seed", -1) != expected_seed and record.get("origin_local") != owned_origin:
 				continue
 			var building_id: String = record["id"]
 			var origin_local: Vector2i = record["origin_local"]
@@ -385,6 +402,18 @@ func _is_forest_local(chunk_coord: Vector2i, chunk_size: int, world) -> Callable
 			return false
 		var g: Vector2i = chunk_coord * chunk_size + cell
 		return world.biome_at_global(g.x, g.y) == FOREST_BIOME
+
+
+## How many villagers actually live here: the settlement's own real
+## household count (EarthChunkManager.household_count_for_settlement, read
+## back out of the persisted event graph), falling back to
+## SettlementGenerator.POPULATION when there is no world, no such method,
+## or nothing recorded yet.
+func _population_for(chunk_coord: Vector2i, world) -> int:
+	if world == null or not world.has_method("household_count_for_settlement"):
+		return SettlementGenerator.POPULATION
+	var count: int = world.household_count_for_settlement(EntityRef.for_settlement(chunk_coord))
+	return count if count > 0 else SettlementGenerator.POPULATION
 
 
 ## The one biome string a sawmill's timber comes from -- SettlementGenerator

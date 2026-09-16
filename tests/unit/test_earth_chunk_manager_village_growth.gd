@@ -418,3 +418,20 @@ func test_the_readout_changes_nothing_it_reports_on():
 	assert_eq(manager.household_count_for_settlement(_settlement_id), households_before)
 	assert_eq(_market().stock, stock_before)
 	assert_eq(manager.buildings_in_chunk(_chunk_coord).size(), buildings_before)
+
+
+## VillageRenderer asks this to put a villager at their own front door on
+## reload. A newcomer's house was raised by the growth ladder and carries
+## none of the founding per-index seeds, so ownership -- not a seed -- is
+## what finds it.
+func test_the_house_a_villager_owns_is_found_from_their_own_seed():
+	var house := _any_house_record()
+	assert_false(house.is_empty(), "precondition: a real village has houses")
+	var resident_seed := int(house.get("resident_seed", 0))
+	assert_ne(resident_seed, 0, "precondition: a founded house remembers its villager")
+
+	assert_eq(manager.house_origin_for_villager(_chunk_coord, resident_seed), house["origin_local"])
+
+
+func test_a_villager_who_owns_nothing_here_is_reported_as_owning_nothing():
+	assert_null(manager.house_origin_for_villager(_chunk_coord, 123456789))

@@ -150,6 +150,21 @@ class StubWorld:
 	func record_settlement_founded_if_new(chunk_coord: Vector2i, npcs: Array, plots: Array = []) -> void:
 		founded_calls.append({"chunk_coord": chunk_coord, "npcs": npcs, "plots": plots})
 
+	## The settlement's REAL household count (see EarthChunkManager's own
+	## method of this name) -- how many villagers actually live here, which
+	## grows past SettlementGenerator.POPULATION as households move in. 0
+	## means "never recorded", the founding-roster fallback.
+	var household_count := 0
+	func household_count_for_settlement(_settlement_id: String) -> int:
+		return household_count
+
+	## villager seed -> the LOCAL origin of the house their household owns,
+	## mirroring the real EarthChunkManager.house_origin_for_villager. null
+	## for a villager who owns nothing here.
+	var house_origin_by_villager: Dictionary = {}
+	func house_origin_for_villager(_chunk_coord: Vector2i, villager_seed: int):
+		return house_origin_by_villager.get(villager_seed)
+
 
 func before_each():
 	renderer = VillageRenderer.new()
@@ -879,3 +894,87 @@ func test_the_sawmill_never_lands_on_a_villagers_house():
 			continue
 		for cell in BuildingCatalog.footprint_cells(call["building_id"], call["origin_local"]):
 			assert_false(mill_cells.has(cell), "the mill overlaps a house at %s" % str(cell))
+
+
+# -- a village that grew (docs/concept/village_growth.md mechanism 3) ------
+#
+# Households move in over time (EarthChunkManager.admit_household), and the
+# newcomers have to actually walk around: SettlementGenerator.POPULATION is
+# the FOUNDING roster, and the settlement's real household count is what
+# the renderer spawns.
+
+func _npc_count(spawned: Array) -> int:
+	var count := 0
+	for node in spawned:
+		if node is NpcMarker:
+			count += 1
+	return count
+
+
+func test_a_village_spawns_its_founding_roster_when_nothing_says_otherwise():
+	var coord := _find_settlement_chunk("grassland")
+	var world := StubWorld.new()
+	var spawned := renderer.spawn_village(parent, coord, coord * CHUNK_SIZE, CHUNK_SIZE, TILE_SIZE, "grassland", world)
+	assert_eq(_npc_count(spawned), SettlementGenerator.POPULATION)
+
+
+func test_a_village_that_grew_spawns_the_households_that_moved_in():
+	var coord := _find_settlement_chunk("grassland")
+	var world := StubWorld.new()
+	world.household_count = SettlementGenerator.POPULATION + 3
+	var spawned := renderer.spawn_village(parent, coord, coord * CHUNK_SIZE, CHUNK_SIZE, TILE_SIZE, "grassland", world)
+	assert_eq(_npc_count(spawned), SettlementGenerator.POPULATION + 3, "the newcomers walk around too")
+
+
+## A settlement whose households were never recorded (an isolated test, a
+## world that cannot answer) falls back to the founding roster rather than
+## spawning an empty village.
+func test_a_world_that_cannot_answer_falls_back_to_the_founding_roster():
+	var coord := _find_settlement_chunk("grassland")
+	var world := StubWorld.new()
+	world.household_count = 0
+	var spawned := renderer.spawn_village(parent, coord, coord * CHUNK_SIZE, CHUNK_SIZE, TILE_SIZE, "grassland", world)
+	assert_eq(_npc_count(spawned), SettlementGenerator.POPULATION)
+
+
+## A newcomer's house was raised by the growth ladder, not stamped at
+## founding, so it carries none of the founding per-index seeds. It is
+## found by WHO OWNS IT instead -- otherwise every household that ever
+## moved in would stand forever on the fallback ring anchor, outside the
+## house it actually owns.
+func test_a_newcomer_stands_at_the_house_their_household_owns():
+	var coord := _find_settlement_chunk("grassland")
+	var world := StubWorld.new()
+	# Founded at its founding roster, so index POPULATION genuinely has no
+	# house from that pass -- which is what a real newcomer's situation is.
+	renderer.spawn_village(parent, coord, coord * CHUNK_SIZE, CHUNK_SIZE, TILE_SIZE, "grassland", world)
+	world.household_count = SettlementGenerator.POPULATION + 1
+
+	# The newcomer's own house, raised after founding by the growth ladder:
+	# a real building the world reports as theirs, carrying none of the
+	# founding per-index seeds.
+	var settlement := _generator.generate_settlement(
+		coord, coord * CHUNK_SIZE, CHUNK_SIZE, TILE_SIZE, SettlementGenerator.POPULATION + 1
+	)
+	var newcomer = settlement.npcs[SettlementGenerator.POPULATION]
+	var origin := Vector2i(1, 1)
+	world.place_calls.append({
+		"chunk_coord": coord, "origin_local": origin, "building_id": "house_small",
+		"facing": Vector2i(0, 1), "seed": 999999, "owner_household_id": "",
+		"occupation": "", "resident_seed": 0,
+	})
+	world.house_origin_by_villager[newcomer.seed_value] = origin
+
+	var spawned := renderer.spawn_village(parent, coord, coord * CHUNK_SIZE, CHUNK_SIZE, TILE_SIZE, "grassland", world)
+
+	var expected_doorstep := coord * CHUNK_SIZE + origin + BuildingCatalog.doorstep_of("house_small")
+	var expected_position := Vector2(
+		(expected_doorstep.x + 0.5) * TILE_SIZE, (expected_doorstep.y + 0.5) * TILE_SIZE
+	)
+	var found := false
+	for node in spawned:
+		if node is NpcMarker and node.identity.seed_value == newcomer.seed_value:
+			found = true
+			assert_almost_eq(node.home_position.x, expected_position.x, 0.01)
+			assert_almost_eq(node.home_position.y, expected_position.y, 0.01, "home is their own doorstep")
+	assert_true(found, "the newcomer was spawned at all")
