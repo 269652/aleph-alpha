@@ -345,6 +345,70 @@ witnesses): no instruction DSL, no hiring or negotiated wages, no
 relationships/trust, no lifecycle/death consequence for sustained hunger yet,
 no migration, no real LLM-backed planning.
 
+### Work against the real world, not against a number
+
+Reported in play: *"the hunter doesn't hunt, the fisher doesn't fish ...
+hunting and fishing should be simulated against the real world, just like
+lumberjacking and everything else."*
+
+That is exactly right, and the codebase already says so about itself. The
+fish-catch hook's own doc comment notes that a caught fish "actually
+depletes the region it came from -- **unlike land hunting**". A hunter
+today walks to a decorative prop four tiles from their door, stands on it,
+and food appears in the village market; no animal is approached and none
+dies. `NpcEconomy._deplete_discrete_unit` handles only the fisher, and
+even that decrements a regional aggregate rather than taking a real fish.
+
+**The Lumberjack is the pattern to follow, and it is already built.**
+`LumberjackBehavior` is a pure phase machine (`SEEKING → APPROACHING →
+FELLING → CARRYING → DEPOSIT`) with no engine dependency, and
+`LumberjackMarker` owns the world effect: it scans
+`ChoppableTree.GROUP_NAME` for a real standing tree, walks to it, and
+swings with the SAME `take_damage()` loop `Player._chop_step` uses. An NPC
+swinging an axe is not a separate mechanic; it is the same one with a
+different caller.
+
+Hunting and fishing become the same mechanic with two more callers:
+
+- **The hunter** scans `CreatureMarker.GROUP_NAME` for a real, living,
+  huntable animal in range, walks to it, and damages it with the same
+  `CreatureMarker.take_damage` the player's own weapon calls. When it
+  dies, that is where the meat comes from — a real animal that was
+  standing there a moment ago and now is not.
+- **The fisher** walks to real water and takes a real `FishMarker` through
+  the hook that already exists for the player's own rod, which frees the
+  fish and records the harvest against its chunk's aggregate population.
+
+What this replaces, and why it is better than what is there:
+
+1. **Yield stops being conjured.** `NpcProduction.yield_per_second` reads
+   the real regional headcount, which is good, but the food it produces
+   appears without anything being taken. After this, a hunter's output is
+   the animals they actually killed.
+2. **Depletion becomes real for land, not just water.** The gap the fish
+   hook's own comment names is closed from the other side.
+3. **It is visible.** The reported complaint is that nothing happens. A
+   villager walking out to a deer and bringing it down is the thing that
+   was missing, and it costs no new art — `CreatureMarker` and the walk
+   cycle are already there.
+
+**Deliberately unchanged:** the farmer. There is no real "crop entity" to
+harvest the way there is a tree, an animal or a fish —
+`vegetation_density_near` is a field, not a thing standing in the world —
+so a farmer keeps reading it. Inventing a crop entity to make the third
+producer symmetrical would be exactly the premature system this doc's own
+framing warns against; the farm/mill/bakery chain
+([milling_and_baking.md](milling_and_baking.md)) is where real crop
+entities belong when they come.
+
+**Named limitation to design around:** a villager can only hunt what is
+LOADED. Creatures and fish exist as nodes only in loaded chunks, so an
+unloaded settlement cannot take real quarry. The regional-aggregate path
+stays as the fallback for those, which keeps an unloaded village fed
+without pretending it killed anything — the same two-fidelities split
+[ecosystem_dynamics.md](ecosystem_dynamics.md) already draws between
+individual and aggregate simulation.
+
 ### Open questions
 
 - Aging pace — real-time-days-per-life-stage vs. some faster abstracted
