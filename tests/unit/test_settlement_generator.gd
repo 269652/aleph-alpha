@@ -9,6 +9,7 @@ extends GutTest
 
 const SettlementGenerator = preload("res://src/world/settlement_generator.gd")
 const NpcIdentity = preload("res://src/world/npc_identity.gd")
+const VillageLayout = preload("res://src/world/village_layout.gd")
 
 const TILE_SIZE := 16
 const CHUNK_SIZE := 32
@@ -114,6 +115,20 @@ func test_houses_stand_clear_of_the_village_square():
 	var min_distance := (SettlementGenerator._HOUSE_RING_RADIUS_TILES - SettlementGenerator._HOUSE_RADIUS_JITTER_TILES) * TILE_SIZE
 	for house in settlement.house_positions:
 		assert_gte(house.distance_to(well), min_distance - 0.01, "house %s crowds the village square" % house)
+
+
+## The well, stall and gate stand where VillageLayout's own skeleton puts
+## them -- ON the paved plaza / at the street's entrance -- not at fixed
+## offsets from the chunk centre that ignore where the street actually is.
+func test_landmarks_stand_where_the_village_layout_skeleton_puts_them():
+	var chunk_coord := _find_settlement_chunk("grassland")
+	var origin := chunk_coord * CHUNK_SIZE
+	var settlement := generator.generate_settlement(chunk_coord, origin, CHUNK_SIZE, TILE_SIZE)
+	var skeleton: Dictionary = VillageLayout.skeleton(CHUNK_SIZE, VillageLayout.seed_for(chunk_coord))
+	for landmark in ["well", "stall", "gate"]:
+		var cell: Vector2i = skeleton["landmarks"][landmark]
+		var expected := Vector2(origin + cell) * TILE_SIZE + Vector2(TILE_SIZE, TILE_SIZE) * 0.5
+		assert_eq(settlement.landmarks[landmark], expected, landmark)
 
 
 func test_generate_settlement_positions_are_within_the_chunk_bounds():

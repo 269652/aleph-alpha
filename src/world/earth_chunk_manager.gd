@@ -5171,8 +5171,8 @@ const MAX_VILLAGE_SEARCH_RADIUS_CHUNKS := 24
 ## outward from `from_tile`'s own chunk -- the discovery half of the
 ## /village dev-console command (see World._handle_village_command).
 ## Returns the settlement's "well" landmark world position (every settlement
-## always has one, its natural teleport target -- see SettlementGenerator's
-## _LANDMARK_OFFSETS_TILES) or null if none is found within
+## always has one, its natural teleport target -- on the plaza, see
+## VillageLayout.skeleton) or null if none is found within
 ## MAX_VILLAGE_SEARCH_RADIUS_CHUNKS. Pure discovery: doesn't load or spawn
 ## the found chunk itself -- update() picks that up normally once the player
 ## arrives.

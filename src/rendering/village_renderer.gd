@@ -207,13 +207,9 @@ func _place_new_village(
 	chunk_coord: Vector2i, chunk_size: int, tile_size: int, building_ids: Array, npcs: Array, world,
 	plots: Array, door_positions: Array, stand_positions: Array
 ) -> void:
-	var layout_seed := hash("%d_%d_village_layout" % [chunk_coord.x, chunk_coord.y])
-	var is_buildable := func(cell: Vector2i) -> bool:
-		var g: Vector2i = chunk_coord * chunk_size + cell
-		return world.is_buildable_terrain_at(g.x, g.y) if world.has_method("is_buildable_terrain_at") else true
-	var is_occupied := func(cell: Vector2i) -> bool:
-		var g: Vector2i = chunk_coord * chunk_size + cell
-		return world.modification_at_global(g.x, g.y) != "" if world.has_method("modification_at_global") else false
+	var layout_seed := VillageLayout.seed_for(chunk_coord)
+	var is_buildable := _is_buildable_local(chunk_coord, chunk_size, world)
+	var is_occupied := _is_occupied_local(chunk_coord, chunk_size, world)
 	var result := _village_layout.layout(building_ids, chunk_size, layout_seed, is_buildable, is_occupied)
 
 	# Buildings BEFORE roads -- place_building's own occupancy check
@@ -274,6 +270,7 @@ func _recover_existing_village(
 	chunk_coord: Vector2i, chunk_size: int, tile_size: int, npcs: Array, world,
 	existing_buildings: Array, plots: Array, door_positions: Array, stand_positions: Array
 ) -> void:
+	_lay_plaza_if_missing(chunk_coord, chunk_size, world)
 	for i in npcs.size():
 		var expected_seed := hash("%d_%d_house_%d" % [chunk_coord.x, chunk_coord.y, i])
 		for record in existing_buildings:
@@ -296,6 +293,53 @@ func _recover_existing_village(
 			door_positions[i] = doorstep_position
 			stand_positions[i] = doorstep_position + Vector2(0, _STAND_OFFSET_TILES * tile_size)
 			break
+
+
+## The two world predicates VillageLayout reads, translated from chunk-
+## local cells to the world's own global-tile queries -- duck-typed like
+## every other world call in this file (a world lacking the method is
+## treated as open, buildable ground).
+func _is_buildable_local(chunk_coord: Vector2i, chunk_size: int, world) -> Callable:
+	return func(cell: Vector2i) -> bool:
+		var g: Vector2i = chunk_coord * chunk_size + cell
+		return world.is_buildable_terrain_at(g.x, g.y) if world.has_method("is_buildable_terrain_at") else true
+
+
+func _is_occupied_local(chunk_coord: Vector2i, chunk_size: int, world) -> Callable:
+	return func(cell: Vector2i) -> bool:
+		var g: Vector2i = chunk_coord * chunk_size + cell
+		return world.modification_at_global(g.x, g.y) != "" if world.has_method("modification_at_global") else false
+
+
+## An older save's village (buildings persisted, laid out before the plaza
+## existed) catches up on reload: the plaza is re-derived from
+## VillageLayout.skeleton -- nothing persisted -- and paved where the whole
+## square is clear (buildable, and either empty or already road). A square
+## with a building standing on it (the old layout put houses right where
+## the plaza now goes) stays unpaved rather than paving through a house,
+## the same honest "no plaza where the square isn't clear" rule the fresh
+## layout itself applies. Idempotent: a village whose civic doorstep is
+## already road has nothing to do.
+func _lay_plaza_if_missing(chunk_coord: Vector2i, chunk_size: int, world) -> void:
+	if not (world.has_method("modification_at_global") and world.has_method("build_at_global")):
+		return
+	var skeleton := VillageLayout.skeleton(chunk_size, VillageLayout.seed_for(chunk_coord))
+	var doorstep: Vector2i = chunk_coord * chunk_size + skeleton["civic_plot"]["doorstep"]
+	if TerrainRenderer.is_road_tile(world.modification_at_global(doorstep.x, doorstep.y)):
+		return
+	var plaza: Rect2i = skeleton["plaza"]
+	var is_buildable := _is_buildable_local(chunk_coord, chunk_size, world)
+	var cells: Array = []
+	for y in range(plaza.position.y, plaza.end.y):
+		for x in range(plaza.position.x, plaza.end.x):
+			var cell := Vector2i(x, y)
+			var g: Vector2i = chunk_coord * chunk_size + cell
+			var existing: String = world.modification_at_global(g.x, g.y)
+			if not is_buildable.call(cell) or (existing != "" and not TerrainRenderer.is_road_tile(existing)):
+				return
+			cells.append(g)
+	for g in cells:
+		world.build_at_global(g.x, g.y, TerrainRenderer.ROAD_TILE_ID)
 
 
 ## The settlement's shared well/stall/gate, a merchant's personal trading

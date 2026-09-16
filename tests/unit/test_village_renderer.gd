@@ -13,6 +13,7 @@ const NpcMarker = preload("res://src/rendering/npc_marker.gd")
 const BuildingCatalog = preload("res://src/gameplay/building_catalog.gd")
 const NpcIdentity = preload("res://src/world/npc_identity.gd")
 const TerrainRenderer = preload("res://src/rendering/terrain_renderer.gd")
+const VillageLayout = preload("res://src/world/village_layout.gd")
 
 const TILE_SIZE := 16
 const CHUNK_SIZE := 32
@@ -285,6 +286,81 @@ func test_every_placed_building_faces_south_onto_a_real_road_cell():
 		var doorstep: Vector2i = call["origin_local"] + BuildingCatalog.doorstep_of(call["building_id"])
 		var doorstep_global: Vector2i = coord * CHUNK_SIZE + doorstep
 		assert_true(world.road_cells.has(doorstep_global), "doorstep %s should be a real road cell" % str(doorstep_global))
+
+
+## A reload (the settlement's buildings already persisted) must not grow
+## the street network either -- the plaza and streets are laid once.
+func test_reloading_a_settlement_lays_no_new_road_cells():
+	var coord := _find_settlement_chunk("grassland")
+	var world := StubWorld.new()
+	renderer.spawn_village(parent, coord, coord * CHUNK_SIZE, CHUNK_SIZE, TILE_SIZE, "grassland", world)
+	var roads_after_first_load := world.road_cells.size()
+	assert_gt(roads_after_first_load, 0, "precondition")
+	var second_parent := Node2D.new()
+	renderer.spawn_village(second_parent, coord, coord * CHUNK_SIZE, CHUNK_SIZE, TILE_SIZE, "grassland", world)
+	assert_eq(world.road_cells.size(), roads_after_first_load)
+	second_parent.free()
+
+
+## An older save's village (buildings persisted, but laid out before the
+## plaza existed) gets its square paved on reload where the square is
+## actually clear -- re-derived from VillageLayout.skeleton, nothing
+## persisted -- so old villages catch up to the layout without a wipe.
+func test_a_reloaded_older_village_gets_its_plaza_paved_where_the_square_is_clear():
+	var coord := _find_settlement_chunk("grassland")
+	var world := StubWorld.new()
+	renderer.spawn_village(parent, coord, coord * CHUNK_SIZE, CHUNK_SIZE, TILE_SIZE, "grassland", world)
+	var skeleton: Dictionary = VillageLayout.skeleton(CHUNK_SIZE, VillageLayout.seed_for(coord))
+	var plaza: Rect2i = skeleton["plaza"]
+	# Simulate the old on-disk shape: the buildings persist, the plaza never
+	# existed. (Only meaningful when this village actually got a plaza.)
+	var plaza_cells: Array = []
+	for y in range(plaza.position.y, plaza.end.y):
+		for x in range(plaza.position.x, plaza.end.x):
+			plaza_cells.append(coord * CHUNK_SIZE + Vector2i(x, y))
+	if not world.road_cells.has(plaza_cells[0]):
+		pass_test("this fixture village has no plaza (its square is not clear) -- nothing to catch up")
+		return
+	for g in plaza_cells:
+		world.road_cells.erase(g)
+		world.occupied_cells.erase(g)
+
+	var second_parent := Node2D.new()
+	renderer.spawn_village(second_parent, coord, coord * CHUNK_SIZE, CHUNK_SIZE, TILE_SIZE, "grassland", world)
+
+	for g in plaza_cells:
+		assert_eq(world.road_cells.get(g, ""), TerrainRenderer.ROAD_TILE_ID, "plaza cell %s must be paved on reload" % str(g))
+	second_parent.free()
+
+
+## ...but never over a house: an old village whose houses stand where the
+## square would go keeps its square unpaved, rather than paving through a
+## building.
+func test_a_reloaded_older_village_keeps_its_square_unpaved_where_a_building_stands_on_it():
+	var coord := _find_settlement_chunk("grassland")
+	var world := StubWorld.new()
+	renderer.spawn_village(parent, coord, coord * CHUNK_SIZE, CHUNK_SIZE, TILE_SIZE, "grassland", world)
+	var skeleton: Dictionary = VillageLayout.skeleton(CHUNK_SIZE, VillageLayout.seed_for(coord))
+	var plaza: Rect2i = skeleton["plaza"]
+	var plaza_cells: Array = []
+	for y in range(plaza.position.y, plaza.end.y):
+		for x in range(plaza.position.x, plaza.end.x):
+			plaza_cells.append(coord * CHUNK_SIZE + Vector2i(x, y))
+	if not world.road_cells.has(plaza_cells[0]):
+		pass_test("this fixture village has no plaza -- nothing to protect")
+		return
+	for g in plaza_cells:
+		world.road_cells.erase(g)
+		world.occupied_cells.erase(g)
+	# An old house stands on one square cell.
+	world.occupied_cells[plaza_cells[5]] = "house_small"
+
+	var second_parent := Node2D.new()
+	renderer.spawn_village(second_parent, coord, coord * CHUNK_SIZE, CHUNK_SIZE, TILE_SIZE, "grassland", world)
+
+	for g in plaza_cells:
+		assert_ne(world.road_cells.get(g, ""), TerrainRenderer.ROAD_TILE_ID, "must not pave a square a house stands on (%s)" % str(g))
+	second_parent.free()
 
 
 ## Streets are the Road tier (docs/concept/infrastructure.md) -- a LAID
