@@ -263,7 +263,11 @@ construction ×8 (scaffold → shell → roof, left to right), 1 active ×8 (lit
 windows / chimney smoke loop), 2 idle ×8 (loop or repeats), 3 burning ×8,
 4 ruined ×8. Each cell is scaled on screen so the cell's WIDTH equals the
 footprint's width (`footprint_frame_texture`): a `w`-wide house draws
-16·w px wide and 17·w px tall. The bottom `d` tiles of that height are the
+`ART_TILE_SIZE`·w art px wide, drawn at `ArtResolution.SPRITE_SCALE` so it
+occupies exactly 16·w WORLD units — the same pixels-per-world-unit the
+ground it stands on already paints at (see
+[art_resolution.md](art_resolution.md); buildings drew at 16·w art px
+until 2026-09-16, carrying half the resolution of their own terrain). The bottom `d` tiles of that height are the
 ground footprint — draw the roof there, seen from the top-down camera —
 and everything above overhangs the row north of the house. The door must
 sit on the bottom edge in column `w/2` (integer division, i.e. right of
@@ -272,6 +276,43 @@ file exists, `ProceduralBuildingPlaceholderSprite` draws a roof-over-walls
 box of the right footprint. (Construction progress will pick row 0's
 column from `progress` — `clampi(floori(progress × 8), 0, 7)` — once the
 village raises buildings over time; today only row 2 is shown.)
+
+**Building variant sheets** — `assets/sprites/buildings/<sheet name>.png`, a plain **5 columns x 5 rows** grid of 25 complete
+buildings, one per cell, **black background, NO magenta dividers**, each
+house drawn in the same 3/4 top-down view and the same scale as its
+neighbours, its ground footprint at the bottom of its own cell exactly as
+the lifecycle sheets' cells are. Any pixel size works — the slicer derives
+the cell rect from the image's own dimensions, so a 1400x1100 sheet and a
+2800x2200 one both cut cleanly.
+
+This is a SECOND, simpler contract beside the 8x5 lifecycle sheet above,
+for buildings there are many real drawn versions of. A finished building
+picks its cell from its own seed (`BuildingCatalog.variant_cell_for`), so
+a street of cottages reads as a street of DIFFERENT cottages rather than
+one house repeated down the road. It has no lifecycle rows at all and
+never claims to: a RISING building still draws from the lifecycle sheet's
+construction row, and only the FINISHED building prefers a variant
+(`BuildingCatalog.finished_sheet_for`). Purely additive — a building with
+no variant sheet, or one whose file is not on disk yet, falls through the
+same lifecycle-sheet-then-procedural-placeholder chain as before.
+
+Only the background may be black: the loader keys out pixels below 0.05 in
+every channel (`IllustratedStructureSprite._BLACK_MAX`), so a near-black
+roof or outline inside the art survives, but a genuinely black one would
+be punched through.
+
+Declared today for all three village houses, sharing the one first-tier
+cottage sheet. That is deliberate rather than lazy: no house had a
+lifecycle sheet of its own at all, so every village house drew as a
+procedural box — declaring the cottage art for only the smallest tier
+would leave a street half beautiful cottages and half boxes, which reads
+worse than either extreme. The scaler sizes each cell to its own footprint
+without distorting it, so a medium or large house is simply a bigger
+cottage, and a different seed picks a different one of the 25 anyway. When
+grander art for those tiers lands they get their own entries and nothing
+else changes. Nothing that is not a home has one — a hall, a mill or a
+brewery drawn as a cottage would be drawing the wrong building, and each
+already has its own lifecycle sheet.
 
 **Furniture tiles** — `assets/sprites/furniture/<piece_id>.png`, one
 square image per `CATEGORY_FURNITURE` piece id (`wood_bed`, `wood_table`,
@@ -313,6 +354,22 @@ tile, no dividers, no directional variants (see
   villager (occupation + identity seed on the record, backfilled for
   older saves on reload) so the interior is furnished for the real
   resident.
+- ✅ **The village grows** (2026-09-16, full detail in
+  [village_growth.md](village_growth.md)). The catalog gained five more
+  whole-building entities — `sawmill`, `farmhouse`, `warehouse`,
+  `blacksmith`, `brewery` — each with its real sheet already on disk and
+  its price shared with `CraftingRecipeBook` rather than duplicated. Every
+  village with timber in reach is founded with a sawmill at the forest
+  edge, joined to the street by a real road spur (`VillageLayout.industry_
+  plot`); as households move in (`VillageImmigration`), the village raises
+  the next rung its size entitles it to (`VillageGrowth`) on the next free
+  street frontage (`VillageLayout.next_street_plot`), houses for homeless
+  households first. The three houses gained recipes so a queued house has
+  real material to wait on and real labour hours to accrue — deliberately
+  with no `ItemCatalog` entry, which is what keeps a house off every
+  crafting bench. Clicking any building opens `HousePanel` on its
+  household's real needs, happiness and productivity
+  (`EarthChunkManager.household_report_at`).
 - ✅ **Older saves.** A settlement chunk still carrying old-style
   piece-built houses has them wiped once on load and regenerates as
   whole-building entities in the same load, protecting any player-owned

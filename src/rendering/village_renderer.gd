@@ -25,6 +25,7 @@ const CharacterViewScene = preload("res://scenes/character_view.tscn")
 const CharacterView = preload("res://scenes/character_view.gd")
 const DropShadow = preload("res://src/rendering/drop_shadow.gd")
 const NpcIdentity = preload("res://src/world/npc_identity.gd")
+const EntityRef = preload("res://src/emergence/entity_ref.gd")
 const TerrainRenderer = preload("res://src/rendering/terrain_renderer.gd")
 const ArtResolution = preload("res://src/rendering/art_resolution.gd")
 
@@ -54,6 +55,15 @@ const _STAND_OFFSET_TILES := 2
 ## Not attempted as a hard collision guarantee the way road/building
 ## siting is -- fine for a decorative prop a few tiles from a door.
 const _WORKSPOT_OFFSET_TILES := 4.0
+
+## The one works every village raises at its own timber (docs/concept/
+## village_growth.md mechanism 1). Placed at FOUNDING alongside the houses
+## rather than raised over time: a village the player discovers has been
+## standing for years, and its mill is part of the fabric it was founded
+## with -- the hall and the ladder's later rungs are what it visibly grows
+## during play (VillageGrowth, EarthChunkManager._apply_village_growth_
+## decision). A village with no timber in reach honestly has none.
+const INDUSTRY_BUILDING_ID := "sawmill"
 
 ## Bright daylight -- spawn_village's own default for `sun_elevation_deg`
 ## when a caller doesn't pass one. Kept (even though this pass's own
@@ -101,8 +111,15 @@ func spawn_village(
 ) -> Array[Node2D]:
 	if not _settlement_generator.has_settlement_at(chunk_coord, dominant_biome):
 		return []
+	# The settlement's REAL population, not the founding roster: households
+	# move in over time (docs/concept/village_growth.md mechanism 3), and a
+	# newcomer nobody ever spawns is a household the player can never meet.
+	# 0 (a settlement never recorded, or a world that cannot answer) falls
+	# back to the founding roster rather than spawning an empty village --
+	# the same duck-typed fail-open shape every other world hook here uses.
 	var settlement := _settlement_generator.generate_settlement(
-		chunk_coord, chunk_origin_tiles, chunk_size, tile_size
+		chunk_coord, chunk_origin_tiles, chunk_size, tile_size,
+		_population_for(chunk_coord, world)
 	)
 
 	# One VillageMarket per settlement, shared by every villager built below
@@ -253,6 +270,8 @@ func _place_new_village(
 			var g: Vector2i = chunk_coord * chunk_size + local_cell
 			world.build_at_global(g.x, g.y, TerrainRenderer.ROAD_TILE_ID)
 
+	_place_industry_if_missing(chunk_coord, chunk_size, world)
+
 
 ## A reload: this settlement's buildings are already persisted from an
 ## earlier load (spawn_village's own existing_buildings gate). Matches
@@ -271,10 +290,20 @@ func _recover_existing_village(
 	existing_buildings: Array, plots: Array, door_positions: Array, stand_positions: Array
 ) -> void:
 	_lay_plaza_if_missing(chunk_coord, chunk_size, world)
+	_place_industry_if_missing(chunk_coord, chunk_size, world)
 	for i in npcs.size():
 		var expected_seed := hash("%d_%d_house_%d" % [chunk_coord.x, chunk_coord.y, i])
+		# A NEWCOMER's house was raised by the growth ladder, not stamped at
+		# founding, so it carries none of the founding per-index seeds. Ask
+		# the world who owns what instead -- without this every household
+		# that ever moved in would stand forever on its fallback ring
+		# anchor, outside the house it actually owns.
+		var owned_origin = (
+			world.house_origin_for_villager(chunk_coord, npcs[i].seed_value)
+			if world.has_method("house_origin_for_villager") else null
+		)
 		for record in existing_buildings:
-			if record.get("seed", -1) != expected_seed:
+			if record.get("seed", -1) != expected_seed and record.get("origin_local") != owned_origin:
 				continue
 			var building_id: String = record["id"]
 			var origin_local: Vector2i = record["origin_local"]
@@ -317,6 +346,80 @@ func _is_occupied_local(chunk_coord: Vector2i, chunk_size: int, world) -> Callab
 	return func(cell: Vector2i) -> bool:
 		var g: Vector2i = chunk_coord * chunk_size + cell
 		return world.modification_at_global(g.x, g.y) != "" if world.has_method("modification_at_global") else false
+
+
+## The village's own works at its own timber, and the road spur that joins
+## them to the street (VillageLayout.industry_plot). Idempotent by the one
+## check that matters -- a real `sawmill` already standing anywhere in this
+## chunk -- so a reload never raises a second one, and an OLDER village
+## (its houses persisted before the mill existed, or founded when no timber
+## stood in reach) gains one on its next visit, the same self-healing shape
+## _lay_plaza_if_missing already has.
+##
+## Building BEFORE the spur, for exactly the reason _place_new_village
+## paves its streets after its houses: place_building refuses a plot whose
+## doorstep is already modified, and the doorstep IS the spur's first cell.
+##
+## No resident: nobody lives in a sawmill (BuildingCatalog.capacity_of ==
+## 0), so the occupation/resident_seed a house record carries are left
+## empty here rather than invented.
+func _place_industry_if_missing(chunk_coord: Vector2i, chunk_size: int, world) -> void:
+	if not world.has_method("place_building"):
+		return
+	if world.has_method("buildings_in_chunk"):
+		for record in world.buildings_in_chunk(chunk_coord):
+			if record.get("id", "") == INDUSTRY_BUILDING_ID:
+				return
+
+	var plot := VillageLayout.industry_plot(
+		INDUSTRY_BUILDING_ID, chunk_size, VillageLayout.seed_for(chunk_coord),
+		_is_buildable_local(chunk_coord, chunk_size, world),
+		_is_forest_local(chunk_coord, chunk_size, world),
+		_is_occupied_local(chunk_coord, chunk_size, world)
+	)
+	if plot.is_empty():
+		return
+
+	var placed: bool = world.place_building(
+		chunk_coord, plot["origin"], INDUSTRY_BUILDING_ID, Vector2i(0, 1),
+		hash("%d_%d_industry" % [chunk_coord.x, chunk_coord.y]), "", "", 0
+	)
+	if not placed or not world.has_method("build_at_global"):
+		return
+	for local_cell in plot["road_spur"]:
+		var g: Vector2i = chunk_coord * chunk_size + local_cell
+		world.build_at_global(g.x, g.y, TerrainRenderer.ROAD_TILE_ID)
+
+
+## Whether a chunk-local cell is real forest -- the third predicate
+## VillageLayout.industry_plot reads, alongside the buildable/occupied pair
+## above. Duck-typed like every other world call here: a world that cannot
+## answer reports no forest, so an isolated rendering test simply gets no
+## mill rather than a crash.
+func _is_forest_local(chunk_coord: Vector2i, chunk_size: int, world) -> Callable:
+	return func(cell: Vector2i) -> bool:
+		if not world.has_method("biome_at_global"):
+			return false
+		var g: Vector2i = chunk_coord * chunk_size + cell
+		return world.biome_at_global(g.x, g.y) == FOREST_BIOME
+
+
+## How many villagers actually live here: the settlement's own real
+## household count (EarthChunkManager.household_count_for_settlement, read
+## back out of the persisted event graph), falling back to
+## SettlementGenerator.POPULATION when there is no world, no such method,
+## or nothing recorded yet.
+func _population_for(chunk_coord: Vector2i, world) -> int:
+	if world == null or not world.has_method("household_count_for_settlement"):
+		return SettlementGenerator.POPULATION
+	var count: int = world.household_count_for_settlement(EntityRef.for_settlement(chunk_coord))
+	return count if count > 0 else SettlementGenerator.POPULATION
+
+
+## The one biome string a sawmill's timber comes from -- SettlementGenerator
+## already treats exactly this string as the forest (its own
+## _UNINHABITABLE_BIOMES), so there is one spelling of it, not two.
+const FOREST_BIOME := "forest"
 
 
 ## An older save's village (buildings persisted, laid out before the plaza

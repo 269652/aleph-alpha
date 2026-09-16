@@ -261,6 +261,17 @@ const _ITEMS := {
 	# civic_construction.md's own fuller Meeting Hall spec describes (see
 	# that doc's own honestly-noted divergence).
 	"city_hall": ["City Hall", "placeable", 5, 0.0],
+	# The growth ladder's buildings (see docs/concept/village_growth.md): a
+	# village raises these as its population grows. Listed here as the same
+	# "placeable" family as city_hall/farm/sagewerk/storage for exactly one
+	# reason -- EarthChunkManager._present_structure_ids_for_settlement_chunk
+	# derives "what already stands here" by scanning every placeable id, and
+	# the ladder's "is this rung already built" question is that same scan.
+	"sawmill": ["Sawmill", "placeable", 5, 0.0],
+	"farmhouse": ["Farmhouse", "placeable", 5, 0.0],
+	"warehouse": ["Warehouse", "placeable", 5, 0.0],
+	"blacksmith": ["Blacksmith", "placeable", 5, 0.0],
+	"brewery": ["Brewery", "placeable", 5, 0.0],
 	# A stone check dam (see docs/concept/rivers.md). The id is deliberately
 	# the SAME string as its BuildingPiece id: build_at_global writes
 	# whatever id it is handed into chunk.modifications, so sharing one

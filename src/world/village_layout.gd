@@ -297,3 +297,249 @@ static func _rect_cells(rect: Rect2i) -> Array:
 		for x in range(rect.position.x, rect.end.x):
 			out.append(Vector2i(x, y))
 	return out
+
+
+# -- the industry plot: a sawmill at the forest ----------------------------
+#
+# docs/concept/village_growth.md mechanism 1. A sawmill stood at the timber,
+# not on the village square, and a real track was laid to it -- the track is
+# not decoration, it is what made the outlying works part of the village.
+# Everything below is the same pure, seeded, predicate-driven shape the rest
+# of this module keeps: no world state is touched, `is_forest` joins
+# `is_buildable`/`is_occupied` as a third caller-supplied Callable (the real
+# one is EarthChunkManager's own biome query).
+
+## How far from the works' own footprint real forest must stand for the
+## site to count as "at the timber". Two tiles: close enough that the log
+## deck genuinely backs onto the trees, loose enough that the mill is not
+## required to share a cell boundary with a biome edge that moves.
+const INDUSTRY_FOREST_REACH_TILES := 2
+## How far (Chebyshev, from the plaza's own centre) the works must stand to
+## read as outlying rather than as one more plot on the square. Larger than
+## the plaza's own half-width plus a street pitch, so a mill can never turn
+## up in the middle of the village.
+const INDUSTRY_MIN_PLAZA_DISTANCE_TILES := PLAZA_WIDTH_TILES / 2 + STREET_PITCH_TILES
+## Kept off the chunk edge for the same reason every other plot is (see
+## _EDGE_MARGIN_TILES) -- the spur needs room to turn, so one tile more.
+const _INDUSTRY_EDGE_MARGIN_TILES := _EDGE_MARGIN_TILES + 1
+
+
+## Where this village's `building_id` works stand, and the road spur that
+## joins them to the main street: `{origin, building_id, doorstep,
+## road_spur}`, or `{}` when no site qualifies.
+##
+## A site qualifies when its whole footprint and doorstep are inside the
+## chunk, buildable, unoccupied and NOT themselves forest; real forest
+## stands within INDUSTRY_FOREST_REACH_TILES of the footprint; the origin
+## is at least INDUSTRY_MIN_PLAZA_DISTANCE_TILES from the plaza's centre;
+## and -- the part that is not negotiable -- a real contiguous spur can
+## actually be laid from the doorstep back to the main street. A mill the
+## village cannot walk to is not a mill, so an unreachable site is refused
+## outright rather than placed and left stranded.
+##
+## Of every qualifying site the NEAREST to the plaza wins (ties broken by
+## y then x, deterministic like everything else here): the works go as
+## close to the village as the timber allows, which is exactly how a real
+## village sited its mill -- at the resource, but no further out than it
+## had to be.
+static func industry_plot(
+	building_id: String, chunk_size: int, seed_value: int,
+	is_buildable: Callable, is_forest: Callable, is_occupied: Callable
+) -> Dictionary:
+	var footprint := BuildingCatalog.footprint_of(building_id)
+	if footprint == Vector2i.ZERO:
+		return {}
+
+	var bones := skeleton(chunk_size, seed_value)
+	var plaza: Rect2i = bones["plaza"]
+	var plaza_centre: Vector2i = plaza.position + plaza.size / 2
+
+	var best: Dictionary = {}
+	var best_key: Array = []
+	var limit := chunk_size - _INDUSTRY_EDGE_MARGIN_TILES
+	for y in range(_INDUSTRY_EDGE_MARGIN_TILES, limit):
+		for x in range(_INDUSTRY_EDGE_MARGIN_TILES, limit):
+			var origin := Vector2i(x, y)
+			var offset: Vector2i = origin - plaza_centre
+			if maxi(absi(offset.x), absi(offset.y)) < INDUSTRY_MIN_PLAZA_DISTANCE_TILES:
+				continue
+			if not _industry_site_qualifies(building_id, origin, chunk_size, is_buildable, is_forest, is_occupied):
+				continue
+			var doorstep: Vector2i = origin + BuildingCatalog.doorstep_of(building_id)
+			var spur = _industry_spur(
+				origin, footprint, doorstep, bones, chunk_size, is_buildable, is_occupied
+			)
+			if spur == null:
+				continue
+			var key: Array = [offset.x * offset.x + offset.y * offset.y, origin.y, origin.x]
+			if best.is_empty() or key < best_key:
+				best_key = key
+				best = {
+					"origin": origin, "building_id": building_id,
+					"doorstep": doorstep, "road_spur": spur,
+				}
+	return best
+
+
+## Footprint + doorstep inside the chunk, buildable, unoccupied and not
+## forest, with real forest within reach of the footprint. The "not forest"
+## check is explicit rather than left to `is_buildable`: the two predicates
+## are independent by contract (a test may stub either), and a works
+## standing IN the wood it cuts is exactly what this is here to prevent.
+static func _industry_site_qualifies(
+	building_id: String, origin: Vector2i, chunk_size: int,
+	is_buildable: Callable, is_forest: Callable, is_occupied: Callable
+) -> bool:
+	var cells: Array = BuildingCatalog.footprint_cells(building_id, origin)
+	var doorstep: Vector2i = origin + BuildingCatalog.doorstep_of(building_id)
+	for cell in cells + [doorstep]:
+		if not _cell_clear(cell, chunk_size, is_buildable, is_occupied) or is_forest.call(cell):
+			return false
+	for cell in cells:
+		for dy in range(-INDUSTRY_FOREST_REACH_TILES, INDUSTRY_FOREST_REACH_TILES + 1):
+			for dx in range(-INDUSTRY_FOREST_REACH_TILES, INDUSTRY_FOREST_REACH_TILES + 1):
+				if is_forest.call(cell + Vector2i(dx, dy)):
+					return true
+	return false
+
+
+## The spur: an L from the doorstep to the main street -- along the
+## doorstep's own row to a column, then along that column to the street.
+## `null` when no column works.
+##
+## Three columns are tried, in order: the doorstep's own (a straight run,
+## the ordinary case for works standing north of the street), then just
+## east and just west of the footprint. Those two exist because a works
+## standing SOUTH of the street has its own building sitting between its
+## south-facing door and the street -- the leg has to route around it, and
+## a spur laid through the mill it serves would be no spur at all.
+##
+## The street row itself is deliberately NOT part of the spur: the main
+## street is already paved end to end by layout() (and re-paved on every
+## reload), so the spur's job is only to reach it.
+static func _industry_spur(
+	origin: Vector2i, footprint: Vector2i, doorstep: Vector2i, bones: Dictionary,
+	chunk_size: int, is_buildable: Callable, is_occupied: Callable
+):
+	var street_y: int = bones["street_y"]
+	var street_x0: int = bones["street_x0"]
+	var street_x1: int = bones["street_x1"]
+	var footprint_cells := {}
+	for y in footprint.y:
+		for x in footprint.x:
+			footprint_cells[origin + Vector2i(x, y)] = true
+
+	for column in [doorstep.x, origin.x + footprint.x, origin.x - 1]:
+		if column < street_x0 or column > street_x1:
+			continue
+		var cells = _spur_cells(doorstep, column, street_y, footprint_cells, chunk_size, is_buildable, is_occupied)
+		if cells != null:
+			return cells
+	return null
+
+
+## One candidate L, or null if any cell of it is unusable. Every cell is
+## checked against the world EXCEPT the doorstep, which the caller has
+## already cleared -- and the street row is excluded entirely (see
+## _industry_spur).
+static func _spur_cells(
+	doorstep: Vector2i, column: int, street_y: int, footprint_cells: Dictionary,
+	chunk_size: int, is_buildable: Callable, is_occupied: Callable
+):
+	var cells: Array[Vector2i] = [doorstep]
+	var step_x := 1 if column >= doorstep.x else -1
+	var x := doorstep.x
+	while x != column:
+		x += step_x
+		cells.append(Vector2i(x, doorstep.y))
+	var step_y := 1 if street_y >= doorstep.y else -1
+	var y := doorstep.y
+	while y + step_y != street_y and y != street_y:
+		y += step_y
+		cells.append(Vector2i(column, y))
+
+	for cell in cells:
+		if footprint_cells.has(cell):
+			return null
+		if cell != doorstep and not _cell_clear(cell, chunk_size, is_buildable, is_occupied):
+			return null
+	return cells
+
+
+# -- the next free street plot: where a growth building goes ---------------
+
+## The FIRST plot `building_id` fits on, walking this village's own streets
+## in exactly the order layout() walks them -- what a village reaches for
+## when it owes itself one more house (an arriving household) or the next
+## rung of docs/concept/village_growth.md's ladder. `{}` when the village
+## has no frontage left.
+##
+## Unlike layout(), the plaza is reserved UNCONDITIONALLY rather than only
+## when its whole square happens to be clear. That difference is the whole
+## reason this is its own function and not a one-building layout() call: a
+## plaza that has already been paved reads as OCCUPIED to `is_occupied`,
+## layout() would conclude there is no plaza at all, and the guard that
+## stops a plot straddling the square would quietly switch itself off --
+## putting the village's next warehouse in the middle of its own market
+## square.
+static func next_street_plot(
+	building_id: String, chunk_size: int, seed_value: int, is_buildable: Callable, is_occupied: Callable
+) -> Dictionary:
+	var footprint := BuildingCatalog.footprint_of(building_id)
+	if footprint == Vector2i.ZERO:
+		return {}
+
+	var bones := skeleton(chunk_size, seed_value)
+	var street_y: int = bones["street_y"]
+	var street_x0: int = bones["street_x0"]
+	var street_x1: int = bones["street_x1"]
+	var plaza: Rect2i = bones["plaza"]
+
+	var street := street_y
+	while street < chunk_size - _EDGE_MARGIN_TILES:
+		var x := street_x0 + _GATE_CLEARANCE_TILES
+		while x + footprint.x <= street_x1:
+			var origin := Vector2i(x, street - footprint.y)
+			# The square is never frontage, paved or not (see this
+			# function's own doc comment).
+			var plaza_west_margin := plaza.position.x - PLOT_GAP_TILES
+			var plaza_east_resume := plaza.end.x + PLOT_GAP_TILES
+			if x < plaza_east_resume and x + footprint.x > plaza_west_margin and _rect_overlaps_rows(plaza, origin, footprint):
+				x = plaza_east_resume
+				continue
+			if _street_plot_fits(building_id, origin, plaza, chunk_size, is_buildable, is_occupied):
+				return {
+					"origin": origin, "building_id": building_id, "facing": Vector2i(0, 1),
+					"doorstep": origin + BuildingCatalog.doorstep_of(building_id),
+				}
+			x += 1
+		street += STREET_PITCH_TILES
+	return {}
+
+
+## Whether the plaza's own rows overlap the rows a plot at `origin` would
+## occupy -- a further street south of the square is genuinely clear of it,
+## so the square must not push plots aside there.
+static func _rect_overlaps_rows(plaza: Rect2i, origin: Vector2i, footprint: Vector2i) -> bool:
+	return origin.y < plaza.end.y and origin.y + footprint.y > plaza.position.y
+
+
+## Every footprint cell clear and off the square; the doorstep clear of the
+## square too, but allowed to be an ALREADY-PAVED road cell -- fronting the
+## street is the point, and the street is already paved by the time any
+## growth building is ever sited.
+static func _street_plot_fits(
+	building_id: String, origin: Vector2i, plaza: Rect2i, chunk_size: int,
+	is_buildable: Callable, is_occupied: Callable
+) -> bool:
+	for cell in BuildingCatalog.footprint_cells(building_id, origin):
+		if plaza.has_area() and plaza.has_point(cell):
+			return false
+		if not _cell_clear(cell, chunk_size, is_buildable, is_occupied):
+			return false
+	var doorstep: Vector2i = origin + BuildingCatalog.doorstep_of(building_id)
+	if plaza.has_area() and plaza.has_point(doorstep):
+		return false
+	if doorstep.x < 0 or doorstep.y < 0 or doorstep.x >= chunk_size or doorstep.y >= chunk_size:
+		return false
+	return is_buildable.call(doorstep)

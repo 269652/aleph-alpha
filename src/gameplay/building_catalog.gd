@@ -21,11 +21,20 @@ const NpcGenome = preload("res://src/world/npc_genome.gd")
 ## choose_house_id draws a villager's home from.
 const BUILDING_IDS: Array[String] = ["house_small", "house_medium", "house_large"]
 
-## Civic buildings (docs/concept/civic_construction.md): real catalog
-## entities a village raises on its own plaza over time (see VillageLayout.
-## skeleton's civic plot), never a home -- kept out of BUILDING_IDS so no
-## villager is ever handed the town hall to live in.
-const CIVIC_BUILDING_IDS: Array[String] = ["city_hall"]
+## Civic buildings (docs/concept/civic_construction.md, docs/concept/
+## village_growth.md): real catalog entities a village raises as a COMMONS
+## -- the hall on its own plaza plot, the warehouse a real physical home
+## for VillageMarket's already-real settlement stock -- never a home, kept
+## out of BUILDING_IDS so no villager is ever handed one to live in.
+const CIVIC_BUILDING_IDS: Array[String] = ["city_hall", "warehouse"]
+
+## Production buildings (docs/concept/village_growth.md's growth ladder):
+## the works a village raises as it grows -- the sawmill at the forest
+## edge first, since timber is the input every later building is made of,
+## then the farmhouse, the blacksmith and finally the brewery, the one
+## rung raised for comfort rather than survival. Also never homes; the
+## trade they house is worked from, not lived in.
+const PRODUCTION_BUILDING_IDS: Array[String] = ["sawmill", "farmhouse", "blacksmith", "brewery"]
 
 ## The reserved chunk-modification id every NON-anchor footprint cell
 ## carries (the anchor cell carries the building id itself, exactly like a
@@ -79,6 +88,56 @@ const _BUILDINGS := {
 		"footprint": Vector2i(4, 3), "interior_family": "hall", "capacity": 0,
 		"labor_hours": 45.0, "cost": {"wood": 20, "stone": 10},
 	},
+	# The growth ladder (docs/concept/village_growth.md). Every one of
+	# these is priced ONLY in wood/stone/plant_fibre -- the exact three
+	# materials SettlementGathering's spare hands actually gather -- since
+	# a rung priced in anything else could never be raised by a village on
+	# its own (test-pinned, test_building_catalog.gd). Costs rise strictly
+	# along the ladder (sawmill < farmhouse < warehouse < city_hall <
+	# blacksmith < brewery): a village pays more for each rung it grows
+	# into. labor_hours is always ConstructionLabor.HOURS_PER_UNIT_MATERIAL
+	# times the total material, so the rising building's own construction
+	# sprite and the ledger agree on how far along it is.
+	#
+	# The sawmill: the village's first works, sited at the forest edge
+	# rather than on the street (VillageLayout.industry_plot) because that
+	# is where the timber is. Cheapest rung -- a shed, a saw pit and a log
+	# deck, not an enclosed hall.
+	"sawmill": {
+		"footprint": Vector2i(3, 2), "interior_family": "workshop", "capacity": 0,
+		"labor_hours": 30.0, "cost": {"wood": 16, "stone": 4},
+	},
+	# The farmhouse: the village's own food works (docs/concept/
+	# npc_farm_production.md's Farm, raised as a real building rather than
+	# a single tile). Timber frame, a stone footing, fibre for thatch and
+	# lashing -- the cheapest rung that needs all three materials.
+	"farmhouse": {
+		"footprint": Vector2i(3, 2), "interior_family": "farmstead", "capacity": 0,
+		"labor_hours": 36.0, "cost": {"wood": 14, "stone": 4, "plant_fibre": 6},
+	},
+	# The warehouse: a real physical home for VillageMarket's already-real
+	# settlement stock (civic_construction.md's own Granary). Mostly
+	# timber and thatch -- volume to enclose, but no forge and no civic
+	# masonry -- so it lands under the hall.
+	"warehouse": {
+		"footprint": Vector2i(4, 3), "interior_family": "hall", "capacity": 0,
+		"labor_hours": 42.0, "cost": {"wood": 22, "plant_fibre": 6},
+	},
+	# The blacksmith: the first rung that needs stone in real quantity --
+	# a forge, a hearth and a chimney are masonry, not carpentry, which is
+	# exactly why it sits above the civic hall in price.
+	"blacksmith": {
+		"footprint": Vector2i(3, 2), "interior_family": "workshop", "capacity": 0,
+		"labor_hours": 51.0, "cost": {"wood": 18, "stone": 16},
+	},
+	# The brewery: the dearest rung, and the only one raised for comfort
+	# rather than survival -- a masonry mash floor, a timber-framed hall
+	# over it, and fibre for the filtering. A village only builds this
+	# once everything it actually needs already stands.
+	"brewery": {
+		"footprint": Vector2i(3, 3), "interior_family": "workshop", "capacity": 0,
+		"labor_hours": 57.0, "cost": {"wood": 22, "stone": 12, "plant_fibre": 4},
+	},
 }
 
 ## Which houses an occupation tends toward -- weighted by repetition, ordered
@@ -105,6 +164,31 @@ const _SHOWY_TRAITS := {"bold": true, "greedy": true}
 const _PLAIN_TRAITS := {"cautious": true, "stoic": true}
 
 
+## A readable name per building, for a readout that has to title itself
+## (HousePanel, EarthChunkManager.household_report_at). Catalog data
+## because that is what it is: a house has no ItemCatalog entry to borrow a
+## display name from, and must not be given one -- an item catalog entry is
+## exactly what would put a house on a crafting bench.
+const _DISPLAY_NAMES := {
+	"house_small": "Cottage",
+	"house_medium": "House",
+	"house_large": "Manor",
+	"city_hall": "City Hall",
+	"warehouse": "Warehouse",
+	"sawmill": "Sawmill",
+	"farmhouse": "Farmhouse",
+	"blacksmith": "Smithy",
+	"brewery": "Brewery",
+}
+
+
+## The readable name, or a title-cased fallback for an id with no entry --
+## a readout that meets an unknown building shows something printable
+## rather than nothing.
+static func display_name_of(building_id: String) -> String:
+	return _DISPLAY_NAMES.get(building_id, building_id.capitalize())
+
+
 static func has_building(building_id: String) -> bool:
 	return _BUILDINGS.has(building_id)
 
@@ -127,6 +211,99 @@ static func door_of(building_id: String) -> Vector2i:
 ## the footprint (a road cell in a laid-out village).
 static func doorstep_of(building_id: String) -> Vector2i:
 	return door_of(building_id) + Vector2i(0, 1)
+
+
+# -- variant sheets ------------------------------------------------------
+#
+# A second, SIMPLER kind of sheet, for buildings there are many real drawn
+# versions of: a plain grid of complete buildings, one per cell, black
+# background, NO magenta dividers and no lifecycle rows at all. A finished
+# building picks one cell by its own seed, so a street of cottages reads as
+# a street of DIFFERENT cottages rather than one house repeated down the
+# road -- which is what a real village looks like and what one sheet of 25
+# hand-drawn variants is for.
+#
+# Deliberately NOT a replacement for the lifecycle sheet contract above. A
+# variant sheet has no construction, burning or ruined rows, so a RISING
+# building still draws from the lifecycle sheet's construction row exactly
+# as before (EarthChunkManager._sync_construction_site); only the FINISHED
+# building prefers a variant (see finished_sheet_for). Purely additive: a
+# building with no variant sheet, or one whose file has not been dropped in
+# yet, is untouched and falls through the same
+# lifecycle-sheet-then-procedural-placeholder chain it always did.
+
+## The supplied sheet's own grid: 25 cottages, five by five.
+const VARIANT_SHEET_COLUMNS := 5
+const VARIANT_SHEET_ROWS := 5
+
+## Which building ids have a real variant sheet.
+##
+## All three village HOUSES share the first-tier cottage sheet, and that is
+## deliberate rather than lazy: no house had a lifecycle sheet of its own
+## at all, so every village house drew as a procedural box -- declaring the
+## cottage art for only the smallest tier would leave a street half
+## beautiful cottages and half boxes, which reads worse than either
+## extreme. The scaler sizes each cell to its own footprint WITHOUT
+## distorting it (footprint_frame_texture scales height by the same factor
+## as width), so a medium or large house is simply a bigger cottage, and a
+## different seed picks a different one of the 25 anyway. When grander art
+## for those tiers lands they get their own entries here and nothing else
+## changes.
+##
+## Nothing that is not a home has one: a town hall, a mill or a brewery
+## drawn as a cottage would be drawing the wrong building, and each of
+## those already has its own real lifecycle sheet.
+const _VARIANT_SHEETS := {
+	"house_small": "res://assets/sprites/buildings/house_1.png",
+	"house_medium": "res://assets/sprites/buildings/house_1.png",
+	"house_large": "res://assets/sprites/buildings/house_1.png",
+}
+
+
+## This building's variant sheet, or "" for one that has none. Whether the
+## file actually exists yet is the renderer's question, not the catalog's
+## -- a missing sheet falls back through finished_sheet_for's own caller,
+## exactly like a missing lifecycle sheet already does.
+static func variant_sheet_of(building_id: String) -> String:
+	return _VARIANT_SHEETS.get(building_id, "")
+
+
+## Which cell of the variant grid this building draws from, as
+## (column, row) -- deterministic from the building's own seed, so a house
+## always looks like itself across reloads. Column and row are drawn from
+## independent hashes of the same seed so the pair spreads over the whole
+## grid rather than walking a diagonal (test-pinned: all 25 are reachable).
+static func variant_cell_for(building_id: String, seed_value: int) -> Vector2i:
+	var columns := VARIANT_SHEET_COLUMNS
+	var rows := VARIANT_SHEET_ROWS
+	if variant_sheet_of(building_id) == "":
+		return Vector2i.ZERO
+	return Vector2i(
+		PixelNoise.range_index(seed_value, 29, 31, columns),
+		PixelNoise.range_index(seed_value, 37, 41, rows)
+	)
+
+
+## Which sheet cell a FINISHED building of this id and seed is drawn from:
+## `{path, columns, rows, row, column}`. A building with a variant sheet
+## gets its own seeded variant; everything else gets the lifecycle sheet's
+## idle row, exactly as before. One function, so the live building node and
+## any other consumer can never disagree about which picture a finished
+## building has.
+static func finished_sheet_for(building_id: String, seed_value: int) -> Dictionary:
+	var variant_sheet := variant_sheet_of(building_id)
+	if variant_sheet == "":
+		return {
+			"path": sheet_of(building_id), "columns": SHEET_COLUMNS, "rows": SHEET_ROWS,
+			"row": ROW_IDLE, "column": 0, "detected_grid": false,
+		}
+	var cell := variant_cell_for(building_id, seed_value)
+	# A variant sheet's cells are found in its own background gutters, not
+	# assumed to sit on an exact pitch (see VariantSheetGrid).
+	return {
+		"path": variant_sheet, "columns": VARIANT_SHEET_COLUMNS, "rows": VARIANT_SHEET_ROWS,
+		"row": cell.y, "column": cell.x, "detected_grid": true,
+	}
 
 
 ## Where this building's sheet is expected ("" for an unknown id). Whether
