@@ -3795,17 +3795,17 @@ func _step_settlement_gathering(settlement_id: String, market, household_ids: Ar
 	var spare_capacity := SettlementSpareCapacity.for_settlement(
 		household_ids.size(), _household_occupations_for_settlement(settlement_id)
 	)
-	# Productivity is not decoration (docs/concept/village_growth.md
-	# mechanism 4): an unhappy village visibly gathers slower, which closes
-	# the loop the whole system is about -- buildings raise happiness,
-	# happiness raises productivity, productivity raises the material that
-	# raises buildings. Applied to the TIME the spare hands are worth
-	# rather than to the whole units out, so the shortfall is carried and
-	# never silently rounded away.
+	# Deliberately NOT scaled by settlement_productivity, unlike the
+	# construction labour it feeds (see _advance_construction_labor): a
+	# hungry village must still be able to cut the timber for the farm that
+	# would fix its hunger. Scaling the gathering itself is a doom loop --
+	# the villages most in need of building their way out become the ones
+	# least able to -- and it is also simply wrong about people: hunger is
+	# what MOTIVATES the survival work of cutting wood and picking stone,
+	# not what slows it. What an unhappy village does worse is RAISE what
+	# it gathered, which is where the scale belongs.
 	var result: Dictionary = SettlementGathering.material_delta(
-		spare_capacity,
-		SETTLEMENT_STEP_INTERVAL * settlement_productivity(settlement_id),
-		_settlement_material_carry.get(settlement_id, {})
+		spare_capacity, SETTLEMENT_STEP_INTERVAL, _settlement_material_carry.get(settlement_id, {})
 	)
 	_settlement_material_carry[settlement_id] = result["carry"]
 	var stock_delta: Dictionary = result["stock_delta"]
@@ -15351,7 +15351,15 @@ func _advance_construction_labor(chunk_coord: Vector2i, elapsed: float) -> void:
 	var spare_capacity := SettlementSpareCapacity.for_settlement(
 		household_count_for_settlement(settlement_id), household_occupations
 	)
-	var capacity := {"builder_count": float(spare_capacity)}
+	# Productivity is not decoration (docs/concept/village_growth.md
+	# mechanism 4): an unhappy village visibly BUILDS slower, which closes
+	# the loop the whole system is about -- buildings raise happiness,
+	# happiness raises productivity, productivity raises the rate at which
+	# the next building goes up. Applied to the builder count rather than
+	# to the elapsed time so the SAME scale reaches both this live step and
+	# the offline catch-up that shares this body, and because labour hours
+	# are floats: a scaled crew never rounds itself down to no crew at all.
+	var capacity := {"builder_count": float(spare_capacity) * settlement_productivity(settlement_id)}
 	for project in _construction_project_store.in_progress_projects_in_chunk(chunk_coord):
 		# A whole-building project (the town hall on its civic plot, see
 		# _apply_civic_build_decision) is built ON its site: while

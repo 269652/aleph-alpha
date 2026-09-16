@@ -221,11 +221,21 @@ just poorly — and reaches 1.0 only for a fed, housed, paid household in a
 village with its civic buildings up.
 
 Productivity is not a decoration: it scales the settlement's own real
-gathering rate (`SettlementGathering.material_delta`), so an unhappy
-village visibly builds slower. That closes the loop — buildings raise
-happiness, happiness raises productivity, productivity raises the material
-that raises buildings — which is precisely the Anno loop this whole doc is
-about.
+construction crew (`_advance_construction_labor`'s `builder_count`), so an
+unhappy village visibly builds slower. That closes the loop — buildings
+raise happiness, happiness raises productivity, productivity raises the
+rate at which the next building goes up — which is precisely the Anno loop
+this whole doc is about.
+
+It deliberately does **not** scale `SettlementGathering`. A hungry village
+must still be able to cut the timber for the farm that would fix its
+hunger; scaling the gathering is a doom loop, where the villages most in
+need of building their way out are the ones least able to. It is also
+simply wrong about people: hunger is what *motivates* the survival work of
+cutting wood and picking fieldstone, not what slows it. What an unhappy
+village does worse is RAISE what it gathered, which is where the scale
+belongs. Both halves are test-pinned — an unhappy village builds slower,
+and gathers exactly as fast.
 
 ## Mechanism 5 — The readout: clicking a house
 
@@ -327,12 +337,20 @@ Implemented 2026-09-16, TDD red-first throughout. See
   threshold is pinned by the ordering it produces (going hungry costs more
   happiness than lacking a brewery; a hungry household works below its own
   mood), never asserted as a magic number. Productivity is not decoration:
-  `EarthChunkManager.settlement_productivity` scales
-  `SettlementGathering`'s own rate, closing the loop — buildings raise
-  happiness, happiness raises productivity, productivity raises the
-  material that raises buildings. Applied to the TIME the spare hands are
-  worth rather than the whole units out, so the shortfall is carried rather
-  than rounded away (`test_household_wellbeing.gd`).
+  `EarthChunkManager.settlement_productivity` scales the construction
+  crew's own `builder_count`, closing the loop — buildings raise happiness,
+  happiness raises productivity, productivity raises the rate at which the
+  next building goes up. Applied to the crew rather than the elapsed time
+  so the same scale reaches both the live step and the offline catch-up
+  that shares its body. **It was first wired to the GATHERING rate
+  instead, and a real pre-existing test caught it**
+  (`test_earth_chunk_manager_bread_chain.gd`'s "spare hands gather building
+  material between assessments"): a starving village gathering at the
+  productivity floor cannot cut the timber for the farm that would fix its
+  hunger, which is a doom loop, and hunger is anyway what MOTIVATES that
+  survival work rather than what slows it. Gathering is now explicitly
+  unscaled, pinned by its own test (`test_household_wellbeing.gd`,
+  `test_earth_chunk_manager_village_growth.gd`).
 - ✅ **Mechanism 5 — the readout.**
   `EarthChunkManager.household_report_at` answers for any footprint cell,
   not just the anchor, and `HousePanel` renders it: four labelled need bars

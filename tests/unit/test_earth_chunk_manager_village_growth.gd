@@ -276,36 +276,62 @@ func test_a_well_fed_village_with_room_eventually_takes_someone_in():
 
 # -- productivity is not decoration: it scales what the village gathers ----
 
-## One step gathers a sub-unit fraction (a real rate per day against a
-## 30-second assessment), so both conditions run long enough for whole
-## units to actually land.
-func _gather_for(steps: int) -> float:
-	var household_ids := manager._households_in_settlement(_settlement_id)
+## Productivity scales what a village BUILDS, not what it gathers. A
+## starving village must still be able to cut the timber for the farm that
+## would fix its hunger -- scaling the gathering itself would be a doom
+## loop, where the villages most in need of building their way out are the
+## ones least able to. It raises what it gathered more slowly instead,
+## which is the real penalty and a recoverable one.
+func _labour_after(steps: int, project) -> float:
 	for i in steps:
-		manager._step_settlement_gathering(_settlement_id, _market(), household_ids)
-	return float(_market().stock.get("wood", 0.0))
+		manager._advance_construction_labor(_chunk_coord, EarthChunkManager.SETTLEMENT_STEP_INTERVAL)
+	return project.labor_hours_accumulated
 
 
-func test_an_unhappy_village_gathers_less_than_a_thriving_one():
+func test_an_unhappy_village_builds_slower_than_a_thriving_one():
 	var household_ids := manager._households_in_settlement(_settlement_id)
 	assert_gt(
 		SettlementSpareCapacity.for_settlement(
 			household_ids.size(), manager._household_occupations_for_settlement(_settlement_id)
-		), 0, "precondition: this village has spare hands to gather with at all"
+		), 0, "precondition: this village has spare hands to build with at all"
 	)
+	_stock_everything()
+	_raise_the_hall()
+	manager._apply_village_growth_decision(_chunk_coord)
+	var queued: Array = _projects_for("warehouse")
+	assert_eq(queued.size(), 1, "precondition: something is actually rising")
 
 	# Destitute: no larder at all, so hunger is total and productivity floors.
-	var destitute_wood := _gather_for(200)
+	var destitute_labour := _labour_after(4, queued[0])
+	assert_gt(destitute_labour, 0.0, "even a miserable village keeps building")
 
-	# Thriving: a full larder, which lifts the food need and with it
-	# happiness and productivity.
+	# Thriving: a full larder lifts the food need, and with it happiness
+	# and productivity.
+	queued[0].labor_hours_accumulated = 0.0
+	_market().add_stock("cooked_meat", 500.0)
+	var thriving_labour := _labour_after(4, queued[0])
+
+	assert_gt(thriving_labour, destitute_labour, "a happier village builds faster")
+
+
+## The material itself is NEVER scaled: a hungry village cuts timber at the
+## same rate as a happy one, because that is what lets it build its way out
+## of being hungry at all.
+func test_a_hungry_village_gathers_material_just_as_fast_as_a_fed_one():
+	var household_ids := manager._households_in_settlement(_settlement_id)
+	for i in 8:
+		manager._step_settlement_gathering(_settlement_id, _market(), household_ids)
+	var hungry_wood: float = _market().stock.get("wood", 0.0)
+	assert_gt(hungry_wood, 0.0, "a hungry village still cuts its own timber")
+
 	_market().stock.clear()
 	manager._settlement_material_carry.clear()
 	_market().add_stock("cooked_meat", 500.0)
-	var thriving_wood := _gather_for(200)
+	for i in 8:
+		manager._step_settlement_gathering(_settlement_id, _market(), household_ids)
+	var fed_wood: float = _market().stock.get("wood", 0.0)
 
-	assert_gt(destitute_wood, 0.0, "even a miserable village gathers something")
-	assert_gt(thriving_wood, destitute_wood, "a happier village gathers faster")
+	assert_almost_eq(fed_wood, hungry_wood, 0.001, "hunger must never slow the gathering")
 
 
 func test_the_settlements_own_mean_productivity_is_a_real_readable_number():

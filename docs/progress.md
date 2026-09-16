@@ -22984,12 +22984,26 @@ empty settlement is 1.0, deliberately neutral: "nobody lives here to be
 unhappy" must never read as "everyone here is miserable".
 
 ✅ **Productivity is not decoration -- it pays for itself.**
-`EarthChunkManager.settlement_productivity` scales `SettlementGathering`'s
-own rate, which closes the loop the whole system is about: buildings raise
-happiness, happiness raises productivity, productivity raises the material
-that raises buildings. Applied to the TIME the spare hands are worth rather
-than to the whole units out, so the shortfall is carried and never silently
-rounded away.
+`EarthChunkManager.settlement_productivity` scales the construction crew's
+own `builder_count`, which closes the loop the whole system is about:
+buildings raise happiness, happiness raises productivity, productivity
+raises the rate at which the next building goes up. Applied to the crew
+rather than the elapsed time, so the same scale reaches both the live step
+and the offline catch-up that shares its body, and because labour hours are
+floats a scaled crew never rounds itself down to no crew at all.
+
+**It was first wired to the GATHERING rate, and a real pre-existing test
+caught that as a design error, not just a broken assertion**
+(`test_earth_chunk_manager_bread_chain.gd`'s "spare hands gather building
+material between assessments" went red): a starving village gathering at
+the productivity floor cannot cut the timber for the farm that would fix
+its hunger -- a doom loop where the villages most in need of building their
+way out are the ones least able to. It is also wrong about people: hunger
+is what MOTIVATES the survival work of cutting wood and picking fieldstone,
+not what slows it. What an unhappy village does worse is RAISE what it
+gathered. Gathering is now explicitly unscaled and pinned by its own test
+alongside the "an unhappy village builds slower" one, so neither half can
+drift back.
 
 ✅ **Click a house, read the household.** `household_report_at` answers for
 ANY footprint cell, not just the anchor, so a click lands wherever the
