@@ -509,6 +509,19 @@ capture them.** Nothing principled sits at 419px; moving it there would be
 tuning a constant to a sample, which is the thing this project's rules
 forbid and the thing the whole borrow-and-pin discipline exists to avoid.
 
+**And it really produces.** Re-run after the deadlock fix below, the same
+hunter over 240 simulated seconds banked **2 meat and 1 hide** — exactly
+one real animal, `Butchering.meat_count` plus `HIDE_COUNT`, taken from a
+deer that was standing there and now is not. Against the **8.86 units** the
+old conjured drip would have paid over the same stretch, so a real hunt is
+roughly a quarter as productive as the faucet it replaces. That is the
+point rather than a shortfall: the drip still runs for the 94.5% of ticks
+where no quarry is in reach of where the hunter actually stands, so the
+real hunt supplements the fallback rather than starving a village. Note the
+gap between **67% of hunters having quarry in reach of their workspot** and
+**5.5% of ticks having it in reach of the marker** — a villager spends most
+of a day at home, asleep, or walking, and only half of it working at all.
+
 ✅ **A hungry producer works instead of queuing at an empty well** — found
 by the probe above, and a pre-existing deadlock rather than anything this
 change introduced. The hunger interrupt sends any hungry villager to the

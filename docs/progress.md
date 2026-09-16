@@ -23167,6 +23167,17 @@ add children but `root` is not live yet, so they never get `_ready()` —
 one reported 25 real spawned creature markers as 0 huntable ones and read
 exactly like a broken feature.
 
+**Throughput, measured after that fix**: the same hunter over 240 simulated
+seconds banked **2 meat and 1 hide** — exactly one real animal
+(`Butchering.meat_count` plus `HIDE_COUNT`) — against the **8.86 units** the
+old conjured drip would have paid over the same stretch. So a real hunt is
+about a quarter as productive as the faucet it replaces, which is the point
+rather than a shortfall: the drip still runs for the 94.5% of ticks where
+no quarry is in reach of where the hunter actually stands. Worth noting the
+gap between 67% of hunters having quarry in reach of their *workspot* and
+5.5% of ticks having it in reach of the *marker* — a villager spends most
+of a day at home, asleep or walking, and only half of it working at all.
+
 ✅ **A pre-existing famine deadlock, found by that probe and fixed.** The
 hunger interrupt (`NpcMarker._process`) sends any hungry villager to the
 well to buy a meal. The probe's throughput half measured a real hunter
