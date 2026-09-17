@@ -112,3 +112,109 @@ func test_chunk_origin_offsets_the_global_coordinates_sampled():
 func test_seed_at_deterministic():
 	var strata := _make()
 	assert_eq(strata.seed_at(9, 9), strata.seed_at(9, 9))
+
+
+# -- natural cave void (see docs/concept/underground.md) --------------------
+#
+# KIND_VOID is a passage water carved, as distinct from KIND_TUNNEL which
+# is a cell a player mined out. Both are walkable; the distinction is real
+# -- nobody took ore out of a natural void, and a tunnel is somebody's
+# working, which is what a claim gets staked on.
+
+const CaveNetwork = preload("res://src/world/cave_network.gd")
+const CavePattern = preload("res://src/world/cave_pattern.gd")
+
+
+func _kind_counts(strata_instance, span: int) -> Dictionary:
+	var counts := {}
+	for y in span:
+		for x in span:
+			var kind: String = strata_instance.cell_kind_at(Vector2i(x, y))
+			counts[kind] = counts.get(kind, 0) + 1
+	return counts
+
+
+func test_void_is_a_distinct_cell_kind():
+	assert_ne(Strata.KIND_VOID, Strata.KIND_TUNNEL)
+	assert_ne(Strata.KIND_VOID, Strata.KIND_SOLID)
+	assert_ne(Strata.KIND_VOID, Strata.KIND_ORE)
+
+
+func test_a_layer_with_no_cave_pattern_has_no_natural_void():
+	# The default, and the existing behaviour every other test here
+	# assumes: insoluble rock is solid rock all the way through.
+	var solid_rock := Strata.new(Strata.LAYER_BEDROCK, Vector2i.ZERO)
+	var counts := _kind_counts(solid_rock, 40)
+	assert_false(counts.has(Strata.KIND_VOID), "a layer with no cave pattern produced void")
+
+
+func test_a_cave_bearing_layer_really_does_have_passages():
+	var cave := Strata.new(
+		Strata.LAYER_BEDROCK, Vector2i.ZERO, CavePattern.PATTERN_NETWORK_MAZE
+	)
+	var counts := _kind_counts(cave, 40)
+	assert_gt(counts.get(Strata.KIND_VOID, 0), 0, "a maze layer generated no passage at all")
+
+
+func test_natural_void_follows_the_cave_networks_own_porosity():
+	var pattern: String = CavePattern.PATTERN_NETWORK_MAZE
+	var cave := Strata.new(Strata.LAYER_BEDROCK, Vector2i.ZERO, pattern)
+	var span := 90
+	var counts := _kind_counts(cave, span)
+	var measured := float(counts.get(Strata.KIND_VOID, 0)) / float(span * span)
+	var expected: float = CaveNetwork.new().porosity_of(pattern)
+	assert_almost_eq(measured, expected, expected * 0.4)
+
+
+func test_a_natural_void_is_never_also_ore():
+	# There is no rock in an open passage, so there is nothing in it to
+	# mine -- void has to win over the ore roll, not sit beside it.
+	var network := CaveNetwork.new()
+	var pattern: String = CavePattern.PATTERN_NETWORK_MAZE
+	var cave := Strata.new(Strata.LAYER_BEDROCK, Vector2i(64, 64), pattern)
+	for y in 30:
+		for x in 30:
+			var global := Vector2i(64 + x, 64 + y)
+			if network.is_void_at(pattern, global.x, global.y):
+				assert_eq(
+					cave.cell_kind_at(Vector2i(x, y)), Strata.KIND_VOID,
+					"cell %s is natural passage but did not read as void" % global
+				)
+
+
+func test_mining_still_reports_a_player_tunnel_not_a_natural_void():
+	var cave := Strata.new(
+		Strata.LAYER_BEDROCK, Vector2i.ZERO, CavePattern.PATTERN_BRANCHWORK
+	)
+	var solid_cell := Vector2i.ZERO
+	for i in 400:
+		var candidate := Vector2i(i % 20, i / 20)
+		if cave.cell_kind_at(candidate) != Strata.KIND_VOID:
+			solid_cell = candidate
+			break
+	cave.mine_at(solid_cell)
+	assert_eq(cave.cell_kind_at(solid_cell), Strata.KIND_TUNNEL)
+
+
+func test_mining_a_natural_passage_leaves_it_a_natural_passage():
+	# Swinging at open air is not work, and must not turn a passage water
+	# carved into a working somebody could claim.
+	var network := CaveNetwork.new()
+	var pattern: String = CavePattern.PATTERN_NETWORK_MAZE
+	var cave := Strata.new(Strata.LAYER_BEDROCK, Vector2i.ZERO, pattern)
+	var void_cell = null
+	for i in 900:
+		var candidate := Vector2i(i % 30, i / 30)
+		if network.is_void_at(pattern, candidate.x, candidate.y):
+			void_cell = candidate
+			break
+	assert_not_null(void_cell, "no natural void found to test against")
+	cave.mine_at(void_cell)
+	assert_eq(cave.cell_kind_at(void_cell), Strata.KIND_VOID)
+
+
+func test_walkable_is_exactly_void_and_tunnel():
+	assert_true(Strata.is_walkable(Strata.KIND_VOID))
+	assert_true(Strata.is_walkable(Strata.KIND_TUNNEL))
+	assert_false(Strata.is_walkable(Strata.KIND_SOLID))
+	assert_false(Strata.is_walkable(Strata.KIND_ORE))
