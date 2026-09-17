@@ -8567,16 +8567,28 @@ carrots out of earth (visually animated)". Supersedes the old
   `test_wild_crop_marker.gd` (25/27 → 27/27) and 1 in `test_dropped_item.gd`
   (14/15 → 15/15). Verified byte-identical: the imported image differs from
   the raw read in 0 of 6,289,008 bytes after RGBA8 normalisation.
-- **Soil mound** (small) — ✅ Done (procedural fallback) —
-  `src/rendering/procedural_soil_sprite.gd`: no AI art exists yet for
-  `ai_sprite_prompts.md`'s soil-pile prompt, so a hand-drawn
-  undisturbed/disturbed mound in the same offline-art style as
-  `ProceduralBobberSprite`, swappable for real art later with no marker
-  changes needed. **Follow-up, reported live: rendered ~1.5 tiles wide** —
-  the raw `SIZE=24` texture was drawn with no scale applied at all, the
-  same "gigantic" bug class `ProceduralItemSprite.WORLD_WIDTH_BY_ID` already
-  fixed once for tree fruit. Fixed with `SOIL_WORLD_WIDTH`/`SOIL_WORLD_SCALE`
-  (pinned below a full tile by test).
+- **Soil mound** (small) — ✅ Done (real illustrated art) —
+  `src/rendering/illustrated_soil_mound_sprite.gd` slices
+  `assets/sprites/terrain/soil_mound.png` (a 3x3 grid of 9 undisturbed-mound
+  variants; gutters near-black and fully opaque rather than chroma-keyed
+  magenta, the same quirk `IllustratedTerrainSprite`'s "soil" entry already
+  hit on the same 1254x1254 template — measured directly off the real PNG
+  with `tools/_probe_soil_mound_grid.gd` rather than assumed to divide
+  evenly) for the UNDISTURBED mound, wired into `WildCropMarker`, keyed
+  per-cell so the same spot always reads the same variant. (`FarmPlotMarker`
+  never gained this: a concurrent session removed its own mound entirely
+  once the bed's full-tile illustrated ground made it redundant — see
+  that class's own `is_showing_soil()`.) `src/rendering/
+  procedural_soil_sprite.gd`'s original hand-drawn mound remains the
+  fallback for the DISTURBED (post-pull) crater, which has no illustrated
+  art yet, and for either state if the sheet is ever missing. **Follow-up,
+  reported live: rendered ~1.5 tiles wide** — the raw `SIZE=24` texture was
+  drawn with no scale applied at all, the same "gigantic" bug class
+  `ProceduralItemSprite.WORLD_WIDTH_BY_ID` already fixed once for tree
+  fruit. Fixed with `SOIL_WORLD_WIDTH`/`SOIL_WORLD_SCALE` (pinned below a
+  full tile by test); the illustrated mound now derives its own scale from
+  `IllustratedSoilMoundSprite.world_scale()` against that same
+  `SOIL_WORLD_WIDTH` footprint instead.
 - **Visible per-patch markers** (medium) — ✅ Done — `src/rendering/wild_crop_marker.gd`
   (`WildCropMarker`) + `src/rendering/wild_crop_renderer.gd`
   (`WildCropRenderer`): one real Node2D per patch cell (sparse, unlike
