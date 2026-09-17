@@ -859,3 +859,24 @@ func test_every_rung_the_village_raises_is_walkable_back_to_its_street():
 		stranded.size(), 0,
 		"%d of %d rungs stand on paving no street reaches: %s" % [stranded.size(), raised.size(), str(stranded)]
 	)
+
+
+
+## TEMPORARY PROBE -- remove once the example rung is settled.
+func test_zzz_probe_growth_state():
+	_stock_everything()
+	_grow_to(VillageGrowth.min_households_for(EXAMPLE_RUNG))
+	_raise_everything_below(EXAMPLE_RUNG)
+	var household_ids := manager._households_in_settlement(_settlement_id)
+	var census := manager._village_census_for(_chunk_coord, household_ids)
+	var present: Array = manager._present_structure_ids_for_settlement_chunk(_chunk_coord)
+	print("PROBE households=%d housed=%d spare=%d next=%s site=%s present=%s" % [
+		household_ids.size(), int(census["housed_count"]),
+		SettlementSpareCapacity.for_settlement(
+			household_ids.size(), manager._household_occupations_for_settlement(_settlement_id)
+		),
+		VillageGrowth.next_building(household_ids.size(), int(census["housed_count"]), present),
+		str(manager._growth_site_for(_chunk_coord, EXAMPLE_RUNG)),
+		str(present),
+	])
+	pass_test("probe")
