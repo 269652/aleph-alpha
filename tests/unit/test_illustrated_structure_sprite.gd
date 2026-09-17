@@ -281,3 +281,68 @@ func test_the_four_rails_are_four_different_pictures():
 		]
 		assert_false(seen.has(signature), "%s is the same picture as another rail" % subject)
 		seen.append(signature)
+
+
+# -- a rail stands on its tile's INNER EDGE --------------------------------
+#
+# Asked for directly, with the two sides arrowed in a screenshot: "move the
+# fences to the inner edge of the enclosure and treat the rest of the tile
+# as street". A rail's art does not sit in the middle of its tile -- its own
+# ground line lands on the edge facing the beds, which is what makes the
+# rest of the tile read as walkable ground. See docs/concept/
+# village_farms.md, "The rail stands on the inner edge".
+#
+# The offset is from footprint_texture's own placement -- bottom-anchored,
+# horizontally centred on the tile (EarthChunkManager._spawn_structure_art_
+# for) -- so a north rail, whose posts already stand on its own south edge,
+# needs no offset at all, and that is exactly the side nobody asked to move.
+
+const _TILE := 32
+
+
+func test_a_north_rail_already_stands_on_its_inner_edge():
+	assert_eq(
+		sprite.footprint_offset("farm_fence_north", _TILE), Vector2.ZERO,
+		"a bottom-anchored north rail's posts already stand on its south edge"
+	)
+
+
+func test_a_south_rail_moves_up_onto_its_own_north_edge():
+	assert_eq(
+		sprite.footprint_offset("farm_fence_south", _TILE), Vector2(0, -_TILE),
+		"the arrow pointed up: a south rail's posts belong on its north edge"
+	)
+
+
+## A run seen from above has no posts to stand on -- its own centre line IS
+## its ground line, so it is centred on the edge rather than based on it.
+func test_a_top_view_run_is_centred_on_the_edge_it_closes():
+	assert_eq(
+		sprite.footprint_offset("farm_fence_east", _TILE), Vector2(-_TILE * 0.5, 0),
+		"an east rail closes the field's east side, so its beds lie west"
+	)
+	assert_eq(
+		sprite.footprint_offset("farm_fence_west", _TILE), Vector2(_TILE * 0.5, 0),
+		"the arrow pointed right: a west rail's beds lie east"
+	)
+
+
+## Everything that is a whole building standing on its own tile is untouched
+## -- only a rail is a line on an edge.
+func test_every_other_subject_still_stands_in_the_middle_of_its_tile():
+	for subject in ["farm", "sagewerk", "storage", "wooden_fence", "city_hall"]:
+		assert_eq(sprite.footprint_offset(subject, _TILE), Vector2.ZERO, subject)
+	assert_eq(sprite.footprint_offset("not_a_subject", _TILE), Vector2.ZERO)
+
+
+## The offset is not a fifth hand-written table of facings: it must move the
+## art along the very direction VillageFarm says the beds lie in.
+func test_the_offset_moves_the_art_toward_the_beds():
+	for facing in ["south", "east", "west"]:
+		var subject: String = VillageFarm.fence_tile_for(facing)
+		var offset: Vector2 = sprite.footprint_offset(subject, _TILE)
+		var inner: Vector2i = VillageFarm.fence_inner_direction(subject)
+		assert_gt(
+			offset.dot(Vector2(inner)), 0.0,
+			"%s's art must move toward its own beds, not away from them" % subject
+		)

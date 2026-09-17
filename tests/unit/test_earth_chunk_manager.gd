@@ -3056,6 +3056,58 @@ func test_open_ground_and_other_tiles_never_read_as_fenced():
 	assert_false(manager.is_fenced_at_global(999999, 999999), "an unloaded chunk fences nothing")
 
 
+## What a creature's movement really asks now (CreatureMarker._fence_blocks_
+## movement): not "is this tile fenced" but "does this STEP cross a rail's
+## inner edge". Asked for directly: "move the fences to the inner edge of
+## the enclosure and treat the rest of the tile as street" -- so the rail
+## tile itself is ordinary ground an animal may stand on, and only the edge
+## the rails are drawn on is shut. See docs/concept/village_farms.md, "The
+## rail stands on the inner edge".
+func test_a_step_across_a_rails_inner_edge_is_blocked():
+	manager.update(_berlin_tile)
+	manager.build_at_global(_berlin_tile.x, _berlin_tile.y, VillageFarm.fence_tile_for("north"))
+	assert_true(
+		manager.fence_blocks_step_global(
+			_berlin_tile.x, _berlin_tile.y, _berlin_tile.x, _berlin_tile.y + 1
+		),
+		"south off a north rail is a step into the beds"
+	)
+
+
+func test_walking_onto_and_along_a_rail_is_never_blocked():
+	manager.update(_berlin_tile)
+	manager.build_at_global(_berlin_tile.x, _berlin_tile.y, VillageFarm.fence_tile_for("north"))
+	assert_false(
+		manager.fence_blocks_step_global(
+			_berlin_tile.x, _berlin_tile.y - 1, _berlin_tile.x, _berlin_tile.y
+		),
+		"walking onto the ring from outside is not crossing the rails"
+	)
+	assert_false(
+		manager.fence_blocks_step_global(
+			_berlin_tile.x, _berlin_tile.y, _berlin_tile.x + 1, _berlin_tile.y
+		),
+		"walking along the ring is what makes the rest of the tile street"
+	)
+	assert_false(
+		manager.fence_blocks_step_global(
+			_berlin_tile.x, _berlin_tile.y, _berlin_tile.x, _berlin_tile.y
+		),
+		"standing still crosses nothing"
+	)
+
+
+func test_open_ground_and_an_unloaded_chunk_block_no_step():
+	manager.update(_berlin_tile)
+	assert_false(
+		manager.fence_blocks_step_global(
+			_berlin_tile.x, _berlin_tile.y, _berlin_tile.x, _berlin_tile.y + 1
+		),
+		"untouched ground"
+	)
+	assert_false(manager.fence_blocks_step_global(999999, 999999, 999999, 1000000))
+
+
 ## Asserts the cell actually changed rather than pinning an exact atlas
 ## coordinate: a real Berlin tile almost always has at least one real,
 ## unmodified land-biome cardinal neighbor, so the earth cell now blends

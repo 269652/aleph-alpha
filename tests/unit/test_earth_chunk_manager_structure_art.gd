@@ -160,3 +160,46 @@ func test_reloading_a_chunk_with_a_persisted_farm_respawns_its_overlay():
 	assert_eq(_structure_art_sprite_count(), 0, "unloading should free the overlay")
 	manager._load_chunk(_berlin_chunk)
 	assert_eq(_structure_art_sprite_count(), 1, "reloading should respawn it")
+
+
+# -- a rail's art stands on its tile's INNER EDGE --------------------------
+#
+# Asked for directly, with the two sides arrowed in a screenshot: "move the
+# fences to the inner edge of the enclosure and treat the rest of the tile
+# as street". The wiring pin for IllustratedStructureSprite.footprint_offset
+# -- an offset nothing applies moves no fence anywhere. See
+# docs/concept/village_farms.md, "The rail stands on the inner edge".
+
+
+## Where the overlay would stand with no offset at all: horizontally centred
+## on the tile, its own bottom edge on the tile's bottom edge.
+func _unoffset_position_for(texture_height: int) -> Vector2:
+	var tile_center := (Vector2(_berlin_tile) + Vector2(0.5, 0.5)) * TerrainRenderer.TILE_SIZE
+	var tile_bottom := tile_center.y + TerrainRenderer.TILE_SIZE * 0.5
+	return Vector2(tile_center.x, tile_bottom - float(texture_height) * 0.5)
+
+
+func test_a_south_rails_overlay_is_lifted_onto_its_own_north_edge():
+	manager.build_at_global(_berlin_tile.x, _berlin_tile.y, "farm_fence_south")
+	var sprite := _structure_art_sprite_at_berlin_tile()
+	assert_eq(
+		sprite.position - _unoffset_position_for(sprite.texture.get_height()),
+		Vector2(0, -TerrainRenderer.TILE_SIZE),
+		"a south rail drawn in the middle of its tile is a fence a tile away from the bed"
+	)
+
+
+func test_a_west_rails_overlay_is_pushed_onto_its_own_east_edge():
+	manager.build_at_global(_berlin_tile.x, _berlin_tile.y, "farm_fence_west")
+	var sprite := _structure_art_sprite_at_berlin_tile()
+	assert_eq(
+		sprite.position - _unoffset_position_for(sprite.texture.get_height()),
+		Vector2(TerrainRenderer.TILE_SIZE * 0.5, 0)
+	)
+
+
+## And the buildings that really do stand on their whole tile are untouched.
+func test_a_farms_overlay_still_stands_in_the_middle_of_its_tile():
+	manager.build_at_global(_berlin_tile.x, _berlin_tile.y, "farm")
+	var sprite := _structure_art_sprite_at_berlin_tile()
+	assert_eq(sprite.position, _unoffset_position_for(sprite.texture.get_height()))

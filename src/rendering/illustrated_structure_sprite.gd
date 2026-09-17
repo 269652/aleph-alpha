@@ -47,6 +47,7 @@ extends RefCounted
 ## cell's own edge doesn't show up as a colored fringe once cropped.
 
 const SpriteSheetLoader = preload("res://src/rendering/sprite_sheet_loader.gd")
+const VillageFarm = preload("res://src/gameplay/village_farm.gd")
 
 ## How a sheet's cells are found. All three are real on disk today:
 ## "even" divides the canvas (the original 8x5 sheets), "gutters" finds the
@@ -167,6 +168,40 @@ func footprint_texture(subject: String, tile_size: int) -> ImageTexture:
 	var scaled := source.duplicate() as Image
 	scaled.resize(width, height, Image.INTERPOLATE_LANCZOS)
 	return ImageTexture.create_from_image(scaled)
+
+
+## Where a subject's footprint_texture really stands INSIDE its own tile,
+## as an offset from the placement every whole-building subject uses:
+## horizontally centred, bottom edge on the tile's bottom edge (see
+## EarthChunkManager._spawn_structure_art_for). Vector2.ZERO for anything
+## that stands on its whole tile, which is every subject but a rail.
+##
+## Asked for directly, with two sides of a real ring arrowed in a
+## screenshot: *"move the fences to the inner edge of the enclosure and
+## treat the rest of the tile as street"*. A rail is a LINE on the edge
+## facing the beds it encloses (VillageFarm.fence_inner_direction), so its
+## art's own GROUND LINE belongs on that edge -- and what counts as its
+## ground line depends on which way the sheet draws that run:
+##
+## - A run drawn broad-side (the North/South columns) stands on its POSTS,
+##   so its ground line is the bottom of its art. Bottom-anchoring already
+##   puts that on the tile's south edge, which IS a north rail's inner edge
+##   -- so a north rail needs no offset at all, and the north side is
+##   exactly the one nobody asked to move. A south rail's inner edge is its
+##   north edge, a whole tile up.
+## - A run seen from above (the East/West columns) has no posts to stand on
+##   -- the band of rail IS the ground line -- so it is CENTRED on the edge
+##   it closes rather than based on it, half a tile across.
+##
+## Derived from the inner direction rather than written out as a fifth table
+## of facings, so a rail cannot be drawn on one edge and block another.
+func footprint_offset(subject: String, tile_size: int) -> Vector2:
+	var inner := VillageFarm.fence_inner_direction(subject)
+	if inner == Vector2i.ZERO:
+		return Vector2.ZERO
+	if inner.y != 0:
+		return Vector2.ZERO if inner.y > 0 else Vector2(0, -float(tile_size))
+	return Vector2(float(inner.x) * float(tile_size) * 0.5, 0.0)
 
 
 # -- whole-building entities (docs/concept/building.md "Buildings are -------

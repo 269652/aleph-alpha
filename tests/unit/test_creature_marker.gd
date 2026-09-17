@@ -42,14 +42,21 @@ class StubWorldWithSlope:
 		return slope
 
 
-## A StubWorld that also answers is_fenced_at_global -- the real
+## A StubWorld that also answers fence_blocks_step_global -- the real
 ## EarthChunkManager does, from the rails a village farmhouse raises round
-## its beds (docs/concept/village_farms.md, "The fence around the beds").
+## its beds (docs/concept/village_farms.md, "The rail stands on the inner
+## edge"). A rail is a LINE on one edge of its own tile, not a solid tile,
+## so what the world is asked is whether a STEP crosses that line -- never
+## whether a tile carries a rail.
 class StubWorldWithFence:
 	extends StubWorld
-	var fenced := false
-	func is_fenced_at_global(_x: int, _y: int) -> bool:
-		return fenced
+	var blocks_step := false
+	## The last step the marker really asked about, as [from_cell, to_cell]
+	## -- so a test can pin that it asks about the step it is taking.
+	var asked_step: Array = []
+	func fence_blocks_step_global(from_x: int, from_y: int, to_x: int, to_y: int) -> bool:
+		asked_step = [Vector2i(from_x, from_y), Vector2i(to_x, to_y)]
+		return blocks_step
 
 
 ## A StubWorld that also answers is_river_at_global/is_lake_at_global -- the
@@ -4245,16 +4252,20 @@ func test_fresh_water_depth_meters_reads_through_the_cache():
 # -- a fence keeps animals out of the crop --------------------------------
 #
 # Asked for directly, with the field circled in a screenshot: "the farmhouse
-# should build a fence around the bed so no animals enter". A rail is solid
-# ground for an animal -- the obstacle _advance's own doc comment has always
-# described ("blocked by an obstacle, once that lands") and nothing had yet
-# supplied. Same "ask before you step" shape as _terrain_blocks_movement
-# just above, against the same look-ahead tile.
+# should build a fence around the bed so no animals enter". Same "ask before
+# you step" shape as _terrain_blocks_movement just above, at the same cost.
+#
+# What is asked changed with "move the fences to the inner edge of the
+# enclosure and treat the rest of the tile as street": a rail is a line on
+# ONE edge of its tile, so the animal asks whether the step it is taking
+# CROSSES that line, and the rail's own tile is ordinary ground it may stand
+# on and walk along. See docs/concept/village_farms.md, "The rail stands on
+# the inner edge".
 
 
 func test_a_fence_blocks_nothing_when_the_creature_is_not_moving():
 	var world := StubWorldWithFence.new()
-	world.fenced = true
+	world.blocks_step = true
 	marker.setup(world, TILE_SIZE)
 	assert_false(marker._fence_blocks_movement(Vector2.ZERO))
 
@@ -4264,25 +4275,39 @@ func test_a_world_that_knows_no_fences_blocks_nothing():
 	assert_false(marker._fence_blocks_movement(Vector2.RIGHT))
 
 
-func test_a_rail_on_the_next_tile_stops_the_animal():
+func test_a_step_across_the_rails_stops_the_animal():
 	var world := StubWorldWithFence.new()
-	world.fenced = true
+	world.blocks_step = true
 	marker.setup(world, TILE_SIZE)
+	marker.position = Vector2(TILE_SIZE - 2, TILE_SIZE * 0.5)
 	assert_true(marker._fence_blocks_movement(Vector2.RIGHT))
 
 
-func test_open_ground_on_the_next_tile_lets_the_animal_through():
+func test_open_ground_ahead_lets_the_animal_through():
 	var world := StubWorldWithFence.new()
-	world.fenced = false
+	world.blocks_step = false
 	marker.setup(world, TILE_SIZE)
+	marker.position = Vector2(TILE_SIZE - 2, TILE_SIZE * 0.5)
 	assert_false(marker._fence_blocks_movement(Vector2.RIGHT))
+
+
+## A rail closes an EDGE, so the animal has to say which edge it is about to
+## cross -- the tile it stands on and the tile it is stepping toward. Asking
+## about the destination alone is the old whole-tile question, and would
+## keep animals off the whole ring the farmer walks.
+func test_the_animal_asks_about_the_step_it_is_really_taking():
+	var world := StubWorldWithFence.new()
+	marker.setup(world, TILE_SIZE)
+	marker.position = Vector2(TILE_SIZE - 2, TILE_SIZE * 0.5)
+	marker._fence_blocks_movement(Vector2.RIGHT)
+	assert_eq(world.asked_step, [Vector2i(0, 0), Vector2i(1, 0)])
 
 
 ## Wiring pin: the gate every intent's movement already funnels through has
 ## to ASK -- a check nothing calls keeps no animal out of anything.
 func test_a_gated_step_into_a_fence_really_does_not_move_the_animal():
 	var world := StubWorldWithFence.new()
-	world.fenced = true
+	world.blocks_step = true
 	marker.info = CreatureInfo.new("deer")
 	marker.setup(world, TILE_SIZE)
 	marker.position = Vector2(100, 100)
@@ -4293,7 +4318,7 @@ func test_a_gated_step_into_a_fence_really_does_not_move_the_animal():
 
 func test_a_gated_step_over_open_ground_still_moves_the_animal():
 	var world := StubWorldWithFence.new()
-	world.fenced = false
+	world.blocks_step = false
 	marker.info = CreatureInfo.new("deer")
 	marker.setup(world, TILE_SIZE)
 	marker.position = Vector2(100, 100)
