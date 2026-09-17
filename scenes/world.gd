@@ -15,6 +15,8 @@ const ViewMode = preload("res://src/gameplay/view_mode.gd")
 const BuildPlan = preload("res://src/world/build_plan.gd")
 const BuildPlanLedger = preload("res://src/world/build_plan_ledger.gd")
 const BuildingCatalog = preload("res://src/gameplay/building_catalog.gd")
+const PlanWireframe = preload("res://src/rendering/plan_wireframe.gd")
+const PlanWireframeLayer = preload("res://src/rendering/plan_wireframe_layer.gd")
 const InteractionSfxPlayer = preload("res://src/audio/interaction_sfx_player.gd")
 const FootstepSound = preload("res://src/audio/footstep_sound.gd")
 const CreatureCallSound = preload("res://src/audio/creature_call_sound.gd")
@@ -1073,6 +1075,7 @@ func _ready() -> void:
 	_apply_simulation_settings()
 
 	_build_hotbar_slots()
+	_build_plan_wireframes()
 	_build_blueprint_palette()
 	_build_view_mode_toggle()
 	_build_spell_bar()
@@ -3527,6 +3530,13 @@ func _unhandled_input(event: InputEvent) -> void:
 	):
 		_plan_blueprint_at(Vector2i((get_global_mouse_position() / TerrainRenderer.TILE_SIZE).floor()))
 		return
+	# ...and the footprint that follows it, coloured by whether it may go
+	# there -- the whole feedback an Anno build cursor gives. Driven from
+	# mouse MOTION rather than from _client_process on purpose: it only
+	# changes when the cursor does, so a per-frame recompute of the same
+	# refusal would be work for nothing on every frame the mouse is still.
+	if event is InputEventMouseMotion:
+		_update_plan_cursor()
 	if event.is_action_pressed(CONSOLE_TOGGLE_ACTION):
 		_dev_console.toggle()
 	elif event.is_action_pressed(INVENTORY_TOGGLE_ACTION):
@@ -5054,6 +5064,7 @@ var _selected_blueprint := ""
 
 var _view_mode_button: Button
 var _blueprint_palette: PanelContainer
+var _plan_wireframes: PlanWireframeLayer
 var _planner_banner: PanelContainer
 
 
@@ -5064,6 +5075,17 @@ var _planner_banner: PanelContainer
 func _show_planner_message(message: String) -> void:
 	if _planner_banner != null:
 		_set_message_banner(_planner_banner, message)
+
+
+## The standing wireframes, in WORLD space -- a child of World itself
+## rather than of $UI, because a plan is a thing standing on the ground
+## (planner_mode.md's pillar 3), not an overlay drawn on the screen. It
+## therefore scrolls with the map and survives leaving planner mode, which
+## is the whole point of being able to walk back to one.
+func _build_plan_wireframes() -> void:
+	_plan_wireframes = PlanWireframeLayer.new()
+	_plan_wireframes.configure(_build_plans, EarthChunkManager.CHUNK_SIZE, TerrainRenderer.TILE_SIZE)
+	add_child(_plan_wireframes)
 
 
 ## The blueprint palette: planner mode's own controls, where the hotbar
@@ -5111,6 +5133,7 @@ func _palette_blueprint_ids() -> Array[String]:
 func _on_blueprint_selected(blueprint_id: String) -> void:
 	_selected_blueprint = blueprint_id
 	_show_planner_message("%s selected -- click the map to plan it." % BuildPlan.display_name_of(blueprint_id))
+	_update_plan_cursor()
 
 
 
@@ -5162,6 +5185,28 @@ func _apply_view_mode() -> void:
 		_blueprint_palette.visible = ViewMode.shows_palette(_view_mode)
 	if not ViewMode.shows_palette(_view_mode):
 		_selected_blueprint = ""
+	_update_plan_cursor()
+
+
+## Redraws the footprint under the cursor, or clears it when planner mode
+## is not showing one.
+##
+## The colour comes from the ledger's OWN refusal reason rather than from a
+## second legality check (see PlanWireframe.cursor_color), so what the
+## cursor shows and what the message would say can never disagree.
+func _update_plan_cursor() -> void:
+	if _plan_wireframes == null:
+		return
+	if not ViewMode.arms_build_cursor(_view_mode) or _selected_blueprint.is_empty():
+		_plan_wireframes.clear_cursor()
+		return
+	var cell := Vector2i((get_global_mouse_position() / TerrainRenderer.TILE_SIZE).floor())
+	var chunk_coord := _chunk_manager.chunk_coord_for_tile(cell)
+	var origin := cell - chunk_coord * EarthChunkManager.CHUNK_SIZE
+	_plan_wireframes.set_cursor(
+		PlanWireframe.world_rect(BuildPlan.footprint_cells(_selected_blueprint, cell), TerrainRenderer.TILE_SIZE),
+		_build_plans.refusal_reason(chunk_coord, origin, _selected_blueprint, _plan_ground_is_buildable)
+	)
 
 
 ## Whether this global cell is ground a blueprint may stand on. The world's
@@ -5195,6 +5240,8 @@ func _plan_blueprint_at(global_cell: Vector2i) -> void:
 		_plan_ground_is_buildable
 	)
 	_show_planner_message("%s planned." % BuildPlan.display_name_of(_selected_blueprint))
+	if _plan_wireframes != null:
+		_plan_wireframes.refresh()
 
 
 ## Builds HOTBAR_SLOT_COUNT empty slot backgrounds once; _update_hotbar fills
