@@ -337,6 +337,68 @@ again.
   is how a village grows its output. Full table in "What a field costs to
   keep" above.
 
+- ✅ **Every farmhouse really joins the village's streets.** Reported in
+  play with a screenshot of a farmhouse standing in open ground: *"There
+  are still Farmhouses not connected by a street"*. Measured before
+  anything was touched, and it was not an edge case — **half** of every
+  growth plot the village offered fronted paving no street reached (80 of
+  160, over 40 seeds × four village sizes). `next_street_plot` walks the
+  *skeleton's* streets, every row the spine could ever open; what `layout`
+  actually paves is narrower, because a further street is paved only once
+  it really got a plot at founding.
+
+  A plot now comes with the paving that joins it — a `road_spur` beside the
+  doorstep, the same `{doorstep, road_spur}` shape `industry_plot` and
+  `outskirt_plot` already hand back — and a plot nothing can reach is not
+  offered at all. The tie-back is the one `layout` itself uses, so a village
+  that grows looks like a village that was founded: an L down a lane column
+  from the spine, then along the new street's row to the door.
+
+  The first version of the tie-back broke **eight** of the growth ladder's
+  own tests, and it took three separate corrections to get them all back --
+  each one a different way of being too strict about where a road may run:
+
+  - The lane's column is **searched**, nearest the door first. Fixing it at
+    the spine's own start reads plausible and is wrong: `layout` lays its
+    gate lane at the start of the run it actually paved, which on a village
+    wedged against water is nowhere near where the skeleton drew the spine.
+    Recovered two of the eight.
+  - The tie-back may **cross** paving the village has already laid --
+    another street's row, an earlier plot's doorstep, the square. Without
+    that, every junction reads as blocked and no second building on a row
+    can reach the first one's lane. This is what keeps every village that
+    had frontage before still offering it (measured: 160 of 160).
+  - The spur is tested against **water only**, never the caller's wider
+    ground rule. The growth ladder builds against `is_buildable_ground_at`,
+    which refuses the forest *biome* outright; testing the spur that way
+    refused the tie-back on wooded ground. A spur is a road, and a village
+    fells the trees it needs to lay one -- the same split `skeleton` already
+    draws for the square. Recovered the remaining five.
+
+  The over-time path is covered too: a rung raised by the growth ladder long
+  after its plot was offered re-derives the same tie-back from the chunk's
+  own seed (`VillageLayout.frontage_spur`), so nothing new is persisted.
+
+- ✅ **A farmhouse fences the beds it works.** Asked for directly, with the
+  field circled: *"the farmhouse should build a fence around the bed so no
+  animals enter"*. `VillageFarm.fence_cells` is the ring, pure geometry with
+  nothing persisted; the renderer raises real rails on every cell of it that
+  can take one, leaving the village's own paving open as the gate. Laid only
+  once every field is known — two farmsteads near each other share the
+  ground between them, so one farm's fence line is the other farm's crop —
+  and before any villager or prop is placed, since a prop is grounded
+  against what is already built.
+
+  The rails really stop animals: `CreatureMarker._fence_blocks_movement` is
+  the same ask-before-you-step check `_terrain_blocks_movement` already is,
+  on the one movement choke point every intent funnels through. Villagers
+  and the player are untouched.
+
+  Each rail carries its facing in its own tile id
+  (`farm_fence_north`/`south`/`east`/`west`), because the tile id is the
+  only thing stored about a rail and the sheet's four orientation columns
+  have to still draw correctly on the next load.
+
 Honest gaps, each real:
 
 - 🚧 **A herb plot renders as bare tilled soil.** `IllustratedCropSprite`
@@ -356,7 +418,17 @@ Honest gaps, each real:
   field from scratch. A closed-form catch-up (the shape
   `chunk_ecology_catchup.gd` uses) is the real fix and is not attempted
   here.
-- ⬜ **Nothing yet notices a village that wants a second farmhouse.** The
+- 🚧 **The gate is a real hole.** Where the fence ring meets the village's
+  paving no rail is raised, because a fence laid across the road would wall
+  the village off from its own farm — so an animal that wanders into the
+  gate cell is inside the field. That is what a farm gate is, and closing it
+  would need a gate mechanic (a rail an animal cannot pass and a person
+  can), which nothing models. The field is bounded by the street on one side
+  only, so the hole is a few tiles wide at most.
+- 🚧 **Rails do not weather or break.** The sheet carries Worn and Destroyed
+  rows and only the Pristine row is ever drawn. Nothing damages a fence, so
+  nothing would ever read them yet.
+- - ⬜ **Nothing yet notices a village that wants a second farmhouse.** The
   village raises one per farming villager and stops. Growing the chain on
   demand is `SettlementBuildDecision`'s to answer, and it reports *missing*
   producers rather than insufficient throughput — the same open question

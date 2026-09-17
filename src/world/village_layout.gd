@@ -762,7 +762,7 @@ static func next_street_plot(
 				var spur = _frontage_spur(
 					doorstep, street, street_y, spine_x0, plaza,
 					BuildingCatalog.footprint_cells(building_id, origin),
-					chunk_size, is_buildable, is_occupied, is_paved
+					chunk_size, is_dry if is_dry.is_valid() else is_buildable, is_occupied, is_paved
 				)
 				if spur != null:
 					return {
@@ -802,6 +802,14 @@ static func next_street_plot(
 ## refused the plot outright. That cost the growth ladder eight of its own
 ## tests before the column was searched.
 ##
+## The ground test is the WATER one (`is_dry`), never whatever wider rule
+## the caller builds against -- the same split skeleton() already draws for
+## the square. A spur is a ROAD, and a village fells the trees it needs to
+## lay one (see VillageRenderer._is_buildable_local, and place_building's own
+## clearing). Measured: testing the spur against the growth ladder's own
+## is_buildable_ground_at, which refuses the forest BIOME outright, refused
+## the tie-back on wooded ground and cost that ladder five of its own tests.
+##
 ## `is_paved` lets the tie-back cross what the village has ALREADY laid --
 ## another street's row, an earlier plot's doorstep, the square. Without it
 ## every junction would read as "occupied" and the second growth building on
@@ -811,7 +819,7 @@ static func next_street_plot(
 static func _frontage_spur(
 	doorstep: Vector2i, street: int, street_y: int, lane_x: int, plaza: Rect2i,
 	footprint_cells: Array, chunk_size: int,
-	is_buildable: Callable, is_occupied: Callable, is_paved: Callable
+	is_dry: Callable, is_occupied: Callable, is_paved: Callable
 ):
 	var none: Array[Vector2i] = []
 	if street == street_y:
@@ -823,7 +831,7 @@ static func _frontage_spur(
 		footprint[cell] = true
 	for column in _lane_columns(doorstep.x, lane_x, chunk_size):
 		var cells := _lane_cells(doorstep, street, street_y, column)
-		if _spur_is_clear(cells, doorstep, footprint, plaza, chunk_size, is_buildable, is_occupied, is_paved):
+		if _spur_is_clear(cells, doorstep, footprint, plaza, chunk_size, is_dry, is_occupied, is_paved):
 			return cells
 	return null
 
@@ -859,7 +867,7 @@ static func _lane_cells(doorstep: Vector2i, street: int, street_y: int, column: 
 
 static func _spur_is_clear(
 	cells: Array, doorstep: Vector2i, footprint: Dictionary, plaza: Rect2i, chunk_size: int,
-	is_buildable: Callable, is_occupied: Callable, is_paved: Callable
+	is_dry: Callable, is_occupied: Callable, is_paved: Callable
 ) -> bool:
 	for cell in cells:
 		if cell == doorstep:
@@ -868,13 +876,43 @@ static func _spur_is_clear(
 			return false  # a lane laid through the building it serves is no lane
 		if cell.x < 0 or cell.y < 0 or cell.x >= chunk_size or cell.y >= chunk_size:
 			return false
-		if not is_buildable.call(cell):
+		if not is_dry.call(cell):
 			return false  # water: a village does not pave a river
 		if plaza.has_area() and plaza.has_point(cell):
 			continue  # the square is already paved, and crossing it is fine
 		if is_occupied.call(cell) and not (is_paved.is_valid() and is_paved.call(cell)):
 			return false
 	return true
+
+
+## The paving that joins a building ALREADY STANDING at `origin` back to the
+## village's own streets -- `[]` when its doorstep is on the spine (paved
+## end to end by layout()), `null` when it fronts no street of this village
+## at all or nothing can reach it.
+##
+## The same tie-back next_street_plot hands out with a plot it OFFERS; this
+## is for the other path, where the plot was offered long ago and the
+## building only goes up now that its labour is done (EarthChunkManager's
+## own growth ladder). Re-derived from the chunk's own seed rather than
+## carried through the construction ledger, so nothing new is persisted and
+## an older project still lands on a connected street.
+static func frontage_spur(
+	building_id: String, origin: Vector2i, chunk_size: int, seed_value: int,
+	is_dry: Callable, is_occupied: Callable, is_paved := Callable()
+):
+	var footprint := BuildingCatalog.footprint_of(building_id)
+	if footprint == Vector2i.ZERO:
+		return null
+	var bones := skeleton(chunk_size, seed_value, is_dry)
+	var street_y: int = bones["street_y"]
+	var doorstep: Vector2i = origin + BuildingCatalog.doorstep_of(building_id)
+	if doorstep.y < street_y or (doorstep.y - street_y) % STREET_PITCH_TILES != 0:
+		return null  # not on one of this village's own street rows at all
+	return _frontage_spur(
+		doorstep, doorstep.y, street_y, bones["street_x0"], bones["plaza"],
+		BuildingCatalog.footprint_cells(building_id, origin),
+		chunk_size, is_dry, is_occupied, is_paved
+	)
 
 
 ## Whether the plaza's own rows overlap the rows a plot at `origin` would

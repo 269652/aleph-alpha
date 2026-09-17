@@ -23751,3 +23751,134 @@ opengl3`. `test_terrain_renderer.gd`, `test_building_piece.gd`,
 `test_village_renderer.gd`, `test_earth_chunk_manager_buildings.gd`,
 `test_snow_trail.gd` and `test_path_scarring.gd` were run as regressions
 over the road/building/path surfaces this reads from: zero failures.
+
+## Every farmhouse joins a street, and fences the beds it works (`concept/village_farms.md`, 2026-09-17)
+
+Reported in play with a screenshot — a farmhouse standing in open ground,
+its field beds circled, a brown outline drawn round them by hand: *"There
+are still Farmhouses not connected by a street ... also the farmhouse should
+build a fence around the bed so no animals enter"*.
+
+### The street: measured first, and it was half of everything
+
+Before touching anything, the invariant was written as a test over 40 seeds
+× four village sizes: a growth plot must front paving the village really
+laid, reachable from its own spine. **80 of 160 plots failed.** Not an edge
+case — a coin flip.
+
+The cause is a real mismatch between two functions that both think they know
+where the streets are. `VillageLayout.next_street_plot` walks the
+*skeleton's* streets: every row the spine could ever open, across the
+spine's whole width. What `layout()` actually **paves** is narrower on both
+counts — one unbroken run of the main street (a village builds on the side
+of the river it can reach), and a further street only once that street
+really got a plot at founding. So the first growth building sited on a fresh
+row got a single paved tile at its door in the middle of a field, which is
+not frontage at all.
+
+A plot now comes with the paving that joins it: `next_street_plot` returns a
+`road_spur` beside the `doorstep` — the same `{doorstep, road_spur}` shape
+`industry_plot` and `outskirt_plot` already hand back — and refuses a plot
+nothing can reach rather than offering frontage onto nothing. The tie-back
+is the one `layout()` itself uses, so a village that grows looks like a
+village that was founded: an L down a lane column from the spine, then along
+the new street's row to the door.
+
+The first version of the tie-back **broke eight of the growth ladder's own
+tests** (32/33 → 24/33 — isolated by neutralising the spur and re-running,
+not by guessing). Getting them all back took three separate corrections,
+each a different way of being too strict about where a road may run:
+
+- **The lane's column is searched, not fixed.** Pinning it at the spine's
+  own start reads plausible and is wrong: `layout()` lays its gate lane at
+  the start of the run it actually paved, which on a village wedged against
+  water is nowhere near where the skeleton drew the spine. Columns are now
+  tried nearest the door first. *Recovered two of the eight.*
+- **The tie-back may cross paving already laid.** Without an `is_paved`
+  predicate every junction — another street's row, an earlier plot's
+  doorstep, the square — reads as blocked ground, and the second building on
+  a row can never reach the first one's lane. This is what keeps every
+  village that had frontage before still offering it: **160 of 160**, pinned
+  by its own test so the fix cannot be quietly paid for in lost growth.
+- **The spur is tested against water, never the caller's ground rule.** The
+  growth ladder builds against `is_buildable_ground_at`, which refuses the
+  forest *biome* outright; testing the spur that way refused the tie-back on
+  wooded ground. A spur is a **road**, and a village fells the trees it
+  needs to lay one — the same split `skeleton()` already draws for the
+  square. *Recovered the remaining five.*
+
+The **village** lays the tie-back; a **player** building their own house
+beside a village street does not (`_place_building_over_roads`' own
+`join_street` flag). They asked for a house, not for the village to pave a
+road they never placed.
+
+The over-time path is covered too: a rung raised by the growth ladder long
+after its plot was offered re-derives the same tie-back from the chunk's own
+seed (`VillageLayout.frontage_spur`), so nothing new is persisted and a
+project queued before any of this existed still lands connected.
+
+### The fence
+
+Spec first (`docs/concept/village_farms.md` gained "The fence around the
+beds"), then red-first in four change sets.
+
+`VillageFarm.fence_cells` is the ring: every cell touching a bed the
+villager actually works, on the diagonal as well as the orthogonal — a ring
+of only the four orthogonal neighbours has an open corner at every turn,
+which is four walls that miss each other. Pure geometry like `field_cells`
+and `owner_of`, nothing persisted, so the same farmhouse fences the same
+ring on every reload. Only the **worked** beds are fenced: you fence what
+you sow, and ten of a farmhouse's fourteen ring tiles are fallow by design.
+
+Three things the suite caught, each a real conflict rather than a detail:
+
+- **Fields and fences are worked out before any villager or prop.** A
+  personal workspot prop is grounded against what is already built, so
+  fencing afterwards dropped rails straight through a farmer's own field
+  prop.
+- **No rail on *any* farmhouse's bed.** Two farmsteads near each other share
+  the ground between them, so one farm's fence line is the other farm's
+  crop.
+- **The village's own paving is never fenced over.** That is the gate — the
+  way the farmer walks in, and the reason a farmhouse takes street frontage
+  at all.
+
+**The rails really stop animals.** `CreatureMarker._fence_blocks_movement`
+is the same ask-before-you-step check `_terrain_blocks_movement` already is,
+against the same look-ahead tile at the same cost — one world query per
+creature per movement decision, never one per candidate direction. It hangs
+off `_advance_gated`, the single choke point every intent's movement
+(wander/flee/seek/hunt/attack/graze) already funnels through. This is the
+obstacle `_advance`'s own doc comment has described since it was written —
+*"blocked by an obstacle, once that lands"* — and nothing had yet supplied
+one. Villagers and the player are untouched: the check lives on
+`CreatureMarker`, so the gate a farmer walks through is a gate only an
+animal finds shut.
+
+**Art.** `assets/sprites/buildings/fence.png` (delivered 2026-09-17, user
+art) is four orientation columns — North (Back), South (Front), East and
+West (Top View) — by three condition rows, magenta dividers with a printed
+label row and a label gutter. Measured before wiring, not assumed:
+`tools/probe_fence_sheet.gd` reads 5×5 divider bands,
+`VariantSheetGrid.art_bands` correctly drops the two label bands leaving the
+4×3 art grid, and every cell was written out and looked at. A rail carries
+its facing in its own **tile id** (`farm_fence_north`/`south`/`east`/`west`)
+because the tile id is the only thing stored about a rail — the same shape
+`BuildingPiece`'s `wall_wood`/`floor_stone` ids already use.
+`IllustratedStructureSprite`'s subject entries gained an optional grid kind,
+so a sheet that prints its own labels is cut on its dividers; everything
+delivered on the older fixed grid keeps the even cut it was measured
+against. Pinned by a test that the four rails really are four *different*
+pictures — reading a label-gutter sheet on an even division hands back the
+same cell four times.
+
+Honest gaps, both real:
+
+🚧 **The gate is a real hole.** An animal that wanders into the gate cell is
+inside the field. That is what a farm gate is; closing it needs a gate
+mechanic (a rail an animal cannot pass and a person can), which nothing
+models. The field is bounded by the street on one side only, so the hole is
+a few tiles wide at most.
+
+🚧 **Rails never weather or break.** The sheet carries Worn and Destroyed
+rows and only Pristine is ever drawn, because nothing damages a fence.
