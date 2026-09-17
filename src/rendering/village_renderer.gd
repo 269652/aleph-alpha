@@ -56,13 +56,6 @@ var _drop_shadow := DropShadow.new()
 ## "south of the doorstep" is simply further down the same road.
 const _STAND_OFFSET_TILES := 2
 
-## The rail a farmhouse fences its beds with (docs/concept/village_farms.md,
-## "The fence around the beds"). Its own tile id rather than the placeable
-## `wooden_fence`, because the two answer different questions: wooden_fence
-## GATES the placeable Farm's Farmer (EarthChunkManager.FARM_FENCE_GATE_
-## RADIUS_TILES), and a village farm's rails standing near a player's Farm
-## must not staff it by accident.
-const FENCE_TILE_ID := "farm_fence"
 
 ## Each villager gets a personal workspot south of their own house, for
 ## occupations whose work tag isn't one of the settlement's 3 shared
@@ -619,8 +612,14 @@ func _fence_the_fields(
 				continue  # the neighbouring farm's crop, not this farm's fence line
 			if not is_buildable.call(cell) or is_occupied.call(cell):
 				continue  # water, a building, or the street -- the street being the gate
+			# The rail's own tile id carries which side of the field it
+			# closes, so the sheet's four orientation columns still draw
+			# correctly on a reload that remembers nothing else about it.
+			var tile_id := VillageFarm.fence_tile_for(VillageFarm.fence_facing(cell, local_beds))
+			if tile_id == "":
+				continue
 			var g: Vector2i = chunk_coord * chunk_size + cell
-			world.build_at_global(g.x, g.y, FENCE_TILE_ID)
+			world.build_at_global(g.x, g.y, tile_id)
 
 
 ## Every farmhouse standing in this chunk, in (y, x) order -- a stable

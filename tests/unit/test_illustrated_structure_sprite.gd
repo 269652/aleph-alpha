@@ -11,7 +11,19 @@ extends GutTest
 
 const IllustratedStructureSprite = preload("res://src/rendering/illustrated_structure_sprite.gd")
 
-const _ALL_SUBJECTS := ["farm", "sagewerk", "storage", "wooden_fence", "city_hall"]
+const VillageFarm = preload("res://src/gameplay/village_farm.gd")
+
+## The four oriented rails a village farmhouse fences its beds with
+## (docs/concept/village_farms.md) -- one subject per facing, each its own
+## column of the same divider-gridded sheet.
+const _FENCE_SUBJECTS := [
+	"farm_fence_north", "farm_fence_south", "farm_fence_east", "farm_fence_west",
+]
+
+const _ALL_SUBJECTS := [
+	"farm", "sagewerk", "storage", "wooden_fence", "city_hall",
+	"farm_fence_north", "farm_fence_south", "farm_fence_east", "farm_fence_west",
+]
 
 var sprite: IllustratedStructureSprite
 
@@ -20,7 +32,7 @@ func before_each():
 	sprite = IllustratedStructureSprite.new()
 
 
-func test_knows_all_five_subjects():
+func test_knows_every_subject():
 	for subject in _ALL_SUBJECTS:
 		assert_true(sprite.has_subject(subject), "%s should be a known subject" % subject)
 
@@ -84,11 +96,11 @@ func test_idle_texture_has_no_surviving_opaque_magenta():
 		assert_eq(magenta_survivors, 0, "%s should have no surviving opaque magenta" % subject)
 
 
-func test_subjects_lists_all_five():
+func test_subjects_lists_every_one():
 	var subjects := sprite.subjects()
 	for subject in _ALL_SUBJECTS:
 		assert_true(subjects.has(subject))
-	assert_eq(subjects.size(), 5)
+	assert_eq(subjects.size(), _ALL_SUBJECTS.size())
 
 
 # -- footprint scaling: a placed structure's art as a Sprite2D standing on --
@@ -243,3 +255,29 @@ func test_a_divider_sheet_scales_to_a_real_footprint():
 	var texture: ImageTexture = sprite.footprint_frame_texture(_LIFECYCLE_SHEET, 8, 10, 3, 2, 32, 2, "dividers")
 	assert_not_null(texture)
 	assert_eq(texture.get_width(), 64, "two tiles wide at 32 art px per tile")
+
+
+# -- the farm fence: one sheet, four orientation columns -------------------
+
+
+## Every facing the rule set can build really has art, under exactly the
+## subject name the tile id implies -- the one link between "a rail was
+## built facing east" and "an east rail is drawn".
+func test_every_rail_the_village_can_build_has_its_own_art():
+	for facing in ["north", "south", "east", "west"]:
+		var subject: String = VillageFarm.fence_tile_for(facing)
+		assert_true(sprite.has_subject(subject), "%s has no art at all" % subject)
+
+
+## And the four are really four different pictures -- a sheet read on the
+## wrong grid would hand back the same cell four times, which is the exact
+## failure an even division of a label-gutter sheet produces.
+func test_the_four_rails_are_four_different_pictures():
+	var seen: Array = []
+	for subject in _FENCE_SUBJECTS:
+		var image := sprite.idle_texture(subject).get_image()
+		var signature := "%d|%d|%s" % [
+			image.get_width(), image.get_height(), Marshalls.raw_to_base64(image.get_data())
+		]
+		assert_false(seen.has(signature), "%s is the same picture as another rail" % subject)
+		seen.append(signature)

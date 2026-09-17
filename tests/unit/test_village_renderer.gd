@@ -464,7 +464,7 @@ func test_every_street_cell_is_laid_as_the_real_road_tile():
 		# and the rails a farmhouse fences its beds with (docs/concept/
 		# village_farms.md). Everything that is not a rail is a street, and
 		# every street is the real Road tile.
-		if tile == VillageRenderer.FENCE_TILE_ID:
+		if VillageFarm.is_fence_tile(tile):
 			continue
 		assert_eq(tile, TerrainRenderer.ROAD_TILE_ID, str(cell))
 		streets += 1
@@ -1938,10 +1938,15 @@ func test_a_farmhouse_raises_a_real_fence_around_the_beds_it_works():
 	assert_gt(farmers.size(), 0, "precondition: somebody in this village farms")
 	var built := _built_tiles(world, coord)
 	var rails := 0
+	var facings: Dictionary = {}
 	for tile_id in built.values():
-		if tile_id == VillageRenderer.FENCE_TILE_ID:
+		if VillageFarm.is_fence_tile(tile_id):
 			rails += 1
+			facings[tile_id] = true
 	assert_gt(rails, 0, "a farm with no fence is a field that feeds deer")
+	# A ring closes on all four sides, so a real fence uses more than one of
+	# the sheet's own orientation columns.
+	assert_gt(facings.size(), 1, "every rail faces the same way -- that is a wall, not a ring")
 
 
 ## Only the beds are enclosed, and the rails stand OUTSIDE them: a rail on a
@@ -1956,8 +1961,8 @@ func test_no_rail_is_ever_built_on_a_bed_a_villager_works():
 	for npc in _farming_markers(spawned, coord):
 		for global_cell in npc.field_cells:
 			var local: Vector2i = (global_cell as Vector2i) - coord * CHUNK_SIZE
-			assert_ne(
-				built.get(local, ""), VillageRenderer.FENCE_TILE_ID,
+			assert_false(
+				VillageFarm.is_fence_tile(built.get(local, "")),
 				"%s is a bed, and a rail through it is a rail through the crop" % str(local)
 			)
 
@@ -1972,8 +1977,8 @@ func test_the_fence_never_closes_over_the_villages_own_street():
 	assert_gt(network.size(), 0, "precondition: this village paved a street")
 	var built := _built_tiles(world, coord)
 	for cell in network:
-		assert_ne(
-			built.get(cell, ""), VillageRenderer.FENCE_TILE_ID,
+		assert_false(
+			VillageFarm.is_fence_tile(built.get(cell, "")),
 			"%s is street, and a fence laid across it walls the village off from its own farm" % str(cell)
 		)
 
@@ -1987,8 +1992,9 @@ func test_a_rail_only_ever_stands_on_ground_that_can_take_one():
 	for call in world.place_calls:
 		for cell in BuildingCatalog.footprint_cells(call["building_id"], call["origin_local"]):
 			footprints[cell] = call["building_id"]
-	for cell in _built_tiles(world, coord):
-		if _built_tiles(world, coord)[cell] != VillageRenderer.FENCE_TILE_ID:
+	var built := _built_tiles(world, coord)
+	for cell in built:
+		if not VillageFarm.is_fence_tile(built[cell]):
 			continue
 		assert_false(footprints.has(cell), "%s is a building, not open ground" % str(cell))
 		assert_true(

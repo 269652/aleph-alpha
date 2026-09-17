@@ -454,3 +454,23 @@ func test_every_rail_faces_away_from_the_field_it_encloses():
 	assert_eq(facings[Vector2i(4, 5)], "south")
 	assert_eq(facings[Vector2i(5, 4)], "east")
 	assert_eq(facings[Vector2i(3, 4)], "west")
+
+
+## A rail's TILE ID carries which way it faces, so the sheet's own four
+## orientation columns survive a reload with nothing else persisted
+## (docs/concept/village_farms.md's art contract).
+func test_every_facing_has_its_own_rail_tile():
+	var ids: Array = []
+	for facing in ["north", "south", "east", "west"]:
+		var tile_id: String = VillageFarm.fence_tile_for(facing)
+		assert_ne(tile_id, "", "%s must have a rail of its own" % facing)
+		assert_false(ids.has(tile_id), "%s reuses another facing's tile" % facing)
+		assert_true(VillageFarm.is_fence_tile(tile_id), "%s must read back as a rail" % tile_id)
+		ids.append(tile_id)
+
+
+func test_a_facing_nobody_drew_has_no_rail():
+	assert_eq(VillageFarm.fence_tile_for(""), "")
+	assert_eq(VillageFarm.fence_tile_for("up"), "")
+	assert_false(VillageFarm.is_fence_tile("road"))
+	assert_false(VillageFarm.is_fence_tile(""))

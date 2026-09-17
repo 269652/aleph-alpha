@@ -25,6 +25,25 @@ const FarmPlot = preload("res://src/gameplay/farm_plot.gd")
 ## The village's farm building -- the catalog's own, never a second id.
 const FARM_BUILDING_ID := "farmhouse"
 
+## The rail a farmhouse fences its beds with, one tile id per facing.
+##
+## Four ids rather than one because the facing has to SURVIVE: nothing about
+## a village farm is persisted, and a rail is an ordinary chunk modification
+## whose id is the only thing stored about it. Carrying the facing in the id
+## is what lets the sheet's own four orientation columns still be drawn on
+## the next load, with no record of which field the rail once belonged to --
+## the same shape BuildingPiece's wall_wood/floor_stone ids already use.
+##
+## Deliberately NOT the placeable `wooden_fence`: that one GATES a player
+## Farm's Farmer (EarthChunkManager.FARM_FENCE_GATE_RADIUS_TILES), and a
+## village farm's rails standing nearby must not staff one by accident.
+const FENCE_TILE_IDS := {
+	"north": "farm_fence_north",
+	"south": "farm_fence_south",
+	"east": "farm_fence_east",
+	"west": "farm_fence_west",
+}
+
 ## What each farming occupation grows. Same table shape NpcMarker.
 ## QUARRY_KIND_BY_OCCUPATION already uses for hunter/fisher; an occupation
 ## absent from it has no field at all, which is the honest answer for every
@@ -341,3 +360,15 @@ static func fence_facing(cell: Vector2i, worked_cells: Array) -> String:
 			if beds.has(cell + Vector2i(dx, dy)):
 				return "north" if dy > 0 else "south"
 	return ""
+
+
+## The rail tile for a facing, or "" for a direction nobody drew.
+static func fence_tile_for(facing: String) -> String:
+	return FENCE_TILE_IDS.get(facing, "")
+
+
+## Whether this tile id is one of a village farm's rails, whichever way it
+## faces -- the one question a creature's movement and the art registry both
+## have to ask, so neither re-lists the ids.
+static func is_fence_tile(tile_id: String) -> bool:
+	return tile_id != "" and FENCE_TILE_IDS.values().has(tile_id)
