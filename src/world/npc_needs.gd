@@ -72,3 +72,23 @@ func feed() -> void:
 ## The need as the behaviour kernel's gate (Drives.gains).
 func gains() -> Dictionary:
 	return _drives.gains()
+
+
+## How urgent one named need is right now, as its own gate -- 0 until it
+## really matters (see Drives.gain). What VillagerBehavior reads per drive
+## when the marker wants one rather than the whole vector.
+func gain(drive: String) -> float:
+	return _drives.gain(drive)
+
+
+## Answers one named need outright, the way feed() answers hunger -- a
+## villager who reached the well has drunk, one who got home has slept.
+func satisfy(drive: String) -> void:
+	_drives.satisfy(drive)
+
+
+## Sets one named need's raw level. For the world to put a villager somewhere
+## in their own cycle (and for tests to stage one), the same way the `hunger`
+## property already allows for that one drive.
+func set_level(drive: String, level: float) -> void:
+	_drives.levels[drive] = clampf(level, 0.0, 1.0)

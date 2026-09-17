@@ -303,3 +303,112 @@ func test_prepared_for_slicing_keys_despills_and_leaves_pixels_exactly_as_before
 	assert_almost_eq(clean.g, 0.6, 0.01)
 	assert_almost_eq(clean.b, 0.25, 0.01)
 	assert_almost_eq(clean.a, 1.0, 0.01)
+
+
+# -- soil: a sheet whose background is BLACK, not magenta ------------------
+#
+# assets/sprites/terrain/soil.png is the tilled ground a farm bed stands on
+# (see docs/concept/village_farms.md, "A bed stands on real tilled earth").
+# Structurally it is exactly like the biome sheets above -- 1254x1254, a 3x3
+# grid of nine variants -- but its gutters are drawn near-BLACK rather than
+# magenta.
+#
+# That single difference defeats the whole pipeline: _prepared_for_slicing
+# punches magenta to alpha, and SpriteSheetSlicer.detect_frames then finds
+# cell dividers by their transparency. A black gutter is opaque and dark, so
+# it reads as neither background nor divider, and the sheet comes back as
+# ONE frame covering the entire image. Measured before this was written, not
+# predicted.
+#
+# Rather than teach the chroma-key pass a second background colour, a sheet
+# may now declare its column bands outright. Both axes of this grid were
+# measured directly, so there is nothing left for content detection to find
+# -- and a full-bleed GROUND tile is the one case where content detection is
+# actively wrong anyway, since cropping to content and rescaling is exactly
+# what must not happen to a tile that has to abut its neighbours.
+
+const SOIL_SHEET := "soil"
+
+
+func test_the_soil_sheet_slices_into_its_nine_real_variants():
+	assert_true(generator.has_variants(SOIL_SHEET), "soil.png should be registered")
+	assert_eq(
+		generator.frame_count_for(SOIL_SHEET),
+		EXPECTED_FRAME_COUNT,
+		"a 3x3 grid is nine variants -- one frame back means the black gutters were never found"
+	)
+
+
+## Every variant has to be real tilled earth, not a slab of the gutter that
+## surrounds it. Checked as "mostly brown-ish and nowhere near black",
+## because the failure this guards is precisely a frame made of background.
+func test_every_soil_variant_is_real_earth_not_gutter():
+	for variant in generator.frame_count_for(SOIL_SHEET):
+		var frame: Image = generator.frame_for(SOIL_SHEET, variant)
+		assert_not_null(frame, "variant %d" % variant)
+		var dark := 0
+		var total := 0
+		for y in frame.get_height():
+			for x in frame.get_width():
+				var c := frame.get_pixel(x, y)
+				total += 1
+				if maxf(c.r, maxf(c.g, c.b)) <= 0.06:
+					dark += 1
+		assert_lt(
+			float(dark) / float(total),
+			0.2,
+			"soil variant %d is %d/%d near-black -- that is gutter, not earth" % [variant, dark, total]
+		)
+
+
+## The whole point of an explicit grid is that it changes NOTHING for the
+## sheets that came before it, which still find their own columns by
+## content. Every biome still slices to nine.
+func test_an_explicit_grid_leaves_every_content_sliced_biome_sheet_alone():
+	for biome_name in LAND_BIOMES:
+		assert_eq(
+			generator.frame_count_for(biome_name),
+			EXPECTED_FRAME_COUNT,
+			"%s should still slice into %d variants" % [biome_name, EXPECTED_FRAME_COUNT]
+		)
+
+
+## The invariant that actually matters for ground art, and the one a frame
+## count cannot express: laid edge to edge, these tiles must not show a seam.
+##
+## Each cell of soil.png is drawn as a CARD with a soft dark vignette around
+## it, not as a seamless texture -- measured down a cell's own edge, mean
+## brightness climbs 0.001 -> 0.33 over roughly thirteen pixels before
+## reaching the interior. Sliced on the raw content bands, every tile
+## therefore carries that rim, and a 3x2 bed renders as six brown squares in
+## a black lattice (confirmed by rendering it, not by reasoning about it).
+##
+## So the slice insets each cell by the vignette's own measured depth. This
+## checks the result rather than the number: the outermost ring of every
+## variant has to be about as bright as the frame as a whole, which is true
+## of continuous earth and false of a dark rim.
+func test_every_soil_variant_tiles_without_a_dark_seam():
+	for variant in generator.frame_count_for(SOIL_SHEET):
+		var frame: Image = generator.frame_for(SOIL_SHEET, variant)
+		var width := frame.get_width()
+		var height := frame.get_height()
+		var edge_total := 0.0
+		var edge_count := 0
+		var whole_total := 0.0
+		for y in height:
+			for x in width:
+				var value: float = frame.get_pixel(x, y).get_luminance()
+				whole_total += value
+				if x == 0 or y == 0 or x == width - 1 or y == height - 1:
+					edge_total += value
+					edge_count += 1
+		var edge_mean := edge_total / float(edge_count)
+		var whole_mean := whole_total / float(width * height)
+		assert_gt(
+			edge_mean,
+			whole_mean * 0.7,
+			(
+				"soil variant %d's border averages %.3f against the tile's own %.3f -- that is the sheet's vignette, and it tiles as a dark lattice"
+				% [variant, edge_mean, whole_mean]
+			)
+		)

@@ -279,6 +279,36 @@ rails/posts and plant_fibre (4) lashing them".
   six of them in a 3×2 bed. `FarmPlotMarker` keys it on what the bed was
   SOWN with rather than on `plot.crop_id`, which harvesting clears: a bare
   mound appearing the moment the wheat comes off is the same blob back.
+- **A bed stands on real tilled earth.** `assets/sprites/terrain/soil.png`
+  is a 3x3 grid of nine hand-drawn tilled-soil tiles; `FarmPlotMarker` draws
+  one of them, full-tile, under everything else it draws. This is what
+  actually answers the mound complaint above. Removing the mound from a
+  wheat bed left the bed standing on the meadow it was tilled out of — six
+  rectangles of untouched grass with wheat coming out of them — because
+  nothing ever drew the ground a bed is. The mound is unchanged and still
+  belongs to root crops (see the bullet above); the soil under it is a
+  separate layer and is always on.
+
+  Which of the nine a bed gets is hashed from its own global tile, so
+  neighbouring beds differ but a given bed is the same every time it is
+  drawn, matching every other seeded art pick in this codebase.
+
+  **This sheet's gutters are BLACK, not magenta**, unlike every other
+  illustrated sheet here. That is not a detail: `IllustratedTerrainSprite`
+  punches magenta to alpha before slicing, and `SpriteSheetSlicer.
+  detect_frames` then finds cell dividers by their transparency. Fed a
+  black-gutter sheet that pipeline finds no dividers at all and returns the
+  whole 1254x1254 image as ONE frame — measured, not predicted.
+
+  Rather than teach the chroma-key pass a second background colour, a sheet
+  may now declare its `column_bands` outright, and soil does: both axes were
+  measured from the file, so there is nothing left for content detection to
+  find. That is the better fit regardless of the gutter colour, because a
+  full-bleed GROUND tile is the one case where content detection is actively
+  wrong — cropping to content and rescaling is precisely what must not
+  happen to a tile that has to abut its neighbours. Sheets without
+  `column_bands` are untouched and still find their columns by content.
+
 - **A street ROW is street, paved or not.** Neither beds nor rails ever land
   on one. The founding layout paves a further street only *between its own
   doorsteps*, so a street row has unpaved gaps in it — and measured on real

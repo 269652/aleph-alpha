@@ -60,6 +60,19 @@ const PixelNoise = preload("res://src/rendering/pixel_noise.gd")
 ## template. Frames are concatenated row-major (row 0 left-to-right, then
 ## row 1, ...) -- variant PICKING is uniform across the whole pool (see
 ## frame_for), so row order only matters for readability, not weighting.
+## How deep the soft dark vignette runs around each of soil.png's own cells.
+## Its cells are drawn as CARDS, not as seamless textures: measured down a
+## cell's edge, mean brightness climbs 0.001 -> 0.33 over about thirteen
+## pixels before it reaches the interior. Sliced on the raw content bands
+## every tile keeps that rim, and a 3x2 bed of them renders as six brown
+## squares in a black lattice -- confirmed by rendering the bed at all three
+## candidate insets and looking at it, not by reasoning about it. Thirteen
+## is where the falloff ends; it costs ~7% off each side of a 388px cell and
+## the result tiles seamlessly. Pinned by
+## test_every_soil_variant_tiles_without_a_dark_seam, which checks the
+## RESULT (no dark border ring) rather than this number.
+const _SOIL_VIGNETTE_INSET := 13
+
 const _SHEETS := {
 	"grassland": {
 		"path": "res://assets/sprites/terrain/grass.png",
@@ -84,6 +97,26 @@ const _SHEETS := {
 	"rainforest": {
 		"path": "res://assets/sprites/terrain/rainforest.png",
 		"row_bands": [Vector2i(5, 414), Vector2i(421, 831), Vector2i(838, 1247)],
+	},
+	## Not a biome: the tilled ground a farm bed stands on (see
+	## docs/concept/village_farms.md, "A bed stands on real tilled earth",
+	## and FarmPlotMarker). Nothing ever looks this up by biome name --
+	## BiomeClassifier has no "soil" -- it is fetched explicitly, and lives
+	## here rather than in a twelfth Illustrated*Sprite class because it is
+	## the same 3x3 grid of full-tile ground art every entry above is.
+	##
+	## The ONLY entry carrying column_bands, and it needs them: this sheet's
+	## gutters are drawn near-BLACK instead of magenta, so the chroma-key
+	## pass leaves them opaque and SpriteSheetSlicer.detect_frames finds no
+	## dividers at all -- measured, the whole 1254x1254 sheet came back as
+	## one frame. Both axes are measured from the file instead. See
+	## _load_frames_from for why an explicit grid is the better fit for
+	## ground art regardless of the gutter colour.
+	"soil": {
+		"path": "res://assets/sprites/terrain/soil.png",
+		"row_bands": [Vector2i(27, 407), Vector2i(429, 799), Vector2i(823, 1218)],
+		"column_bands": [Vector2i(29, 417), Vector2i(436, 818), Vector2i(840, 1227)],
+		"inset": _SOIL_VIGNETTE_INSET,
 	},
 }
 
@@ -233,6 +266,8 @@ const _DISABLED_DIVIDER_GRAY_MIN := 1.01
 
 func _load_frames_from(biome_name: String) -> Array:
 	var sheet: Dictionary = _SHEETS[biome_name]
+	if sheet.has("column_bands"):
+		return _load_gridded_frames_from(sheet)
 	var image := _prepared_for_slicing(SpriteSheetLoader.load_image(sheet["path"]))
 	var images: Array[Image] = []
 	for band in sheet["row_bands"]:
@@ -249,6 +284,49 @@ func _load_frames_from(biome_name: String) -> Array:
 		for frame_image in normalized:
 			_scrub_magenta_fringe(frame_image)
 			images.append(frame_image)
+	return images
+
+
+## Frames cut straight out of a sheet whose BOTH axes are measured (see
+## _SHEETS' own "soil" entry) -- no chroma key, no despill, no content
+## detection, no normalize_frames. Just the nine rects, each resized to
+## CANVAS_SIZE.
+##
+## This exists because that sheet's gutters are black rather than magenta,
+## so the content-detection path finds nothing. But it is the better fit for
+## full-bleed GROUND art on its own merits, and would be even if the gutters
+## were magenta: normalize_frames crops each frame to its own ink and
+## rescales it onto a shared canvas, which is right for a drawing sitting in
+## empty space and WRONG for a tile that has to abut its neighbours -- it
+## would trim whatever happens to be dark at a tile's edge and then stretch
+## what is left, so no two tiles would line up. A ground tile's "content" is
+## the whole cell by definition.
+func _load_gridded_frames_from(sheet: Dictionary) -> Array:
+	var image := SpriteSheetLoader.load_image(sheet["path"])
+	if image == null:
+		return []
+	if image.get_format() != Image.FORMAT_RGBA8:
+		image = image.duplicate() as Image
+		image.convert(Image.FORMAT_RGBA8)
+	var images: Array[Image] = []
+	# Trimmed off every side before the resize, never after: the vignette is
+	# in the SOURCE pixels, so cropping it at 32px would leave a third of a
+	# rim behind and still seam.
+	var inset: int = sheet.get("inset", 0)
+	for row_band in sheet["row_bands"]:
+		var rows: Vector2i = row_band
+		for column_band in sheet["column_bands"]:
+			var columns: Vector2i = column_band
+			var frame := image.get_region(
+				Rect2i(
+					columns.x + inset,
+					rows.x + inset,
+					(columns.y - columns.x) - inset * 2,
+					(rows.y - rows.x) - inset * 2
+				)
+			)
+			frame.resize(CANVAS_SIZE.x, CANVAS_SIZE.y, Image.INTERPOLATE_LANCZOS)
+			images.append(frame)
 	return images
 
 

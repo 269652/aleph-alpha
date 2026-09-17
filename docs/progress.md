@@ -24371,3 +24371,167 @@ Three existing `test_main_menu.gd` navigation tests were changed from a
 hardcoded `wait_process_frames(10)` to waiting on the real condition
 (`_creator_is_open`): that margin was already a guess at one yield-split
 pass's length, and adding a second one made it stale.
+
+## A villager stops being scenery: the ethogram they never had (`concept/npc_social_life.md`, 2026-09-17)
+
+Asked for directly: *"We need to improve the NPC AI Behaviour by an order of
+magnitude ... they should socialize; talk; share rumours; trade goods; give
+quests; cater for their needs; stroll; idk"*.
+
+**Surveyed before designing, and the gap turned out to be precise rather than
+vague.** `Ethogram.BODY_PLANS["villager"]` had **one drive and zero wirings**;
+`BODY_PLANS["mammal"]` had two drives and **seven**. So a deer decided what to
+do from what it needed and what it could sense, while a villager walked a
+fixed four-block schedule with exactly one interrupt — hunger — hand-written
+into `NpcMarker._process`. Meanwhile memory, rumour, trust, dialogue, quests
+and contracts *all already exist, are tested, and are connected to nothing a
+villager does*: `step_npc_encounters` propagates memory between villagers who
+are merely **scheduled** to the same landmark, and no player has ever seen it.
+
+So this is mostly about connecting what is already here, not writing a second
+AI. Spec first (`docs/concept/npc_social_life.md`), then four red-first
+slices.
+
+✅ **The villager ethogram.** Real receptors, four drives (hunger, thirst,
+rest, company) and four wirings. `COMPANY`/`MARKET`/`HOME` join the one shared
+channel basis rather than becoming a villager-only side channel — that is what
+lets a villager be decided by the same `BehaviorKernel` every other body plan
+runs on. Hunger is deliberately untouched (a whole famine chain hangs off its
+exact pace) and is **first** in the wiring order, deliberately *not* the mammal
+order, because a villager who stopped for a drink on the way to buy food is a
+villager that chain no longer describes. Tiredness is one world day and
+company is one schedule block, each pinned to that source. A further test
+asserts every drive is gated by some wiring — a need nothing listens to can
+rise forever and move nobody.
+
+✅ **`VillagerBehavior`**, the sibling of `CreatureBehavior` over the same
+kernel and the same table, keeping no private copy and no opinion about
+priority (wiring order *is* priority). It answers `NOTHING` when nothing is
+pressing, so the schedule still owns the villager — a layer that always had an
+opinion would have *replaced* the schedule rather than interrupting it.
+
+✅ **Needs you can watch.** `_step_needs` is the third walk-target override
+beside `_step_hunt`/`_step_farm` and deliberately last of them: real work
+outranks a need. A thirsty villager walks to the well and **drinking really
+answers it**; a tired one goes home and resting answers it. Answering on
+*arrival* is what stops a villager standing at the well forever.
+
+✅ **Villagers meet in the street and stop to talk.** A lonely villager walks
+to the nearest neighbour; on arrival **both** stop, face each other and stand
+for `CONVERSATION_SECONDS`, and having talked answers the company drive. Both
+sides are put into it or it reads as being talked *at*. A started conversation
+runs to its end — no walking off mid-sentence because quarry wandered past.
+
+Three things the tests caught rather than confirmed:
+
+- **The contract is `Drives.gains()`, not raw levels.** A gain is 0 below a
+  drive's onset and 1 at its threshold; fed raw levels, every villager would be
+  permanently one-thousandth hungry and therefore permanently walking to
+  market. The sub-threshold test was *vacuous* as first written and now runs a
+  real clock and pins the flip to the threshold itself.
+- **A villager gets thirsty before hungry** — 0.03 against 0.02 in the shared
+  mammal profile — so the first place a day sends them is the well. Found by a
+  test that assumed otherwise; kept as its own test, because it is the
+  behaviour rather than the accident.
+- **"Arrived" was one pixel**, which is right for a doorstep and impossible for
+  a person: two villagers never occupy the same pixel, so two standing two
+  pixels apart failed to notice each other. Talking reaches a tile now; places
+  keep the pixel.
+
+Deliberate divergence from the spec, recorded there rather than quietly:
+hunger keeps its dedicated interrupt instead of being routed through the
+wiring layer, because that interrupt carries two guards a famine chain was
+measured into (a producer that feeds itself, a villager with their own field)
+which the generic layer cannot express. Hunger's gain is withheld from the
+villager context so the two layers cannot steer at once.
+
+Tests: `test_ethogram.gd` 47/47, `test_villager_behavior.gd` 13/13 (new),
+`test_npc_marker.gd` 47/47, `test_npc_needs.gd` 10/10, `test_npc_economy.gd`
+66/66, `test_npc_marker_farming.gd` 16/16, `test_drives.gd` 21/21,
+`test_behavior_kernel.gd` 26/26, `test_creature_behavior.gd` 53/53,
+`test_creature_marker.gd` 258/258, `test_village_renderer.gd` 89/89.
+
+**Honestly unbuilt, and next**, in the concept doc's own status list: strolling
+(a villager with nothing pressing still stands on their scheduled spot);
+rumours passing in a meeting through the existing `MemoryStore`/`Rumor` path;
+relationships (familiarity/trust) that weight what a rumour does — the input
+`rumor.gd` names outright as missing; goods changing hands between a surplus
+and a shortfall; and a villager offering a quest from a real shortfall, which
+is `dialogue.md`'s own long-standing ⬜.
+
+## A farm bed stands on real tilled earth (`concept/village_farms.md`, 2026-09-17)
+
+Asked directly: *"Can you wire the new terrain soil.png for beds of
+farmhouses?"* `assets/sprites/terrain/soil.png` had been committed (and,
+like `fence.png` before it, without its `.import` sidecar) and nothing read
+it.
+
+### ✅ What it fixes, which is more than "new art"
+
+The only soil a bed drew was `ProceduralSoilSprite`'s small 10-unit mound,
+and that mound is a ROOT crop's own ground — correctly hidden for wheat
+after *"what's the round procedural dark blob?"*. Which meant a wheat bed
+was six rectangles of the untouched meadow it had been tilled out of, with
+wheat rising straight from the grass. Nothing had ever drawn the ground a
+bed IS. `FarmPlotMarker` now draws a full tile of tilled earth under
+everything, always on; the mound keeps its own separate, unchanged job.
+
+### ✅ An explicit grid, because this sheet's gutters are black
+
+Structurally soil.png is exactly the biome sheets — 1254x1254, a 3x3 grid
+of nine variants — but its gutters are drawn near-BLACK rather than
+magenta. `IllustratedTerrainSprite` punches magenta to alpha before slicing
+and `SpriteSheetSlicer.detect_frames` then finds dividers by transparency,
+so a black gutter reads as neither background nor divider: measured, the
+whole sheet came back as ONE frame.
+
+Rather than teach the chroma-key pass a second background colour, a `_SHEETS`
+entry may now declare `column_bands` outright and skip content detection
+entirely. Both axes were measured from the file. That is the better fit for
+ground art regardless of gutter colour: `normalize_frames` crops each frame
+to its own ink and rescales it, which is right for a drawing in empty space
+and WRONG for a tile that must abut its neighbours. Sheets without
+`column_bands` are untouched and still slice exactly as before, pinned by
+`test_an_explicit_grid_leaves_every_content_sliced_biome_sheet_alone`.
+
+### ✅ The vignette, found by rendering the bed rather than reasoning about it
+
+Each cell of soil.png is drawn as a CARD with a soft dark vignette, not as a
+seamless texture: measured down a cell's edge, mean brightness climbs
+0.001 —> 0.33 over about thirteen pixels. Sliced on the raw content bands
+every tile keeps that rim, and a rendered 3x2 bed came out as six brown
+squares in a black lattice. Rendering the same bed at three candidate insets
+and looking at them settled it: 13 removes the falloff exactly and tiles
+seamlessly, at ~7% off each side of a 388px cell.
+
+Pinned by `test_every_soil_variant_tiles_without_a_dark_seam`, which checks
+the RESULT — the outermost ring of each variant has to be about as bright
+as the tile as a whole — rather than the number 13, so a re-export with a
+different vignette fails the test instead of shipping a lattice.
+
+### ✅ Seeded per bed
+
+Which of the nine a bed gets is hashed from its own global tile, so a 3x2
+patch is not six copies of one tile and any given bed looks the same every
+time it is drawn. The sprite is scaled from the art's OWN pixel width to
+cover exactly `TerrainRenderer.TILE_SIZE`, the same derive-from-the-art rule
+`CharacterPreviewDiorama._build_ground` follows, so a re-export at another
+resolution still covers one tile.
+
+TDD throughout, red first: `test_illustrated_terrain_sprite.gd` +4 (soil
+slices into nine, every variant is earth and not gutter, no dark seam, and
+the biome sheets are unaffected), `test_farm_plot_marker.gd` +4 (a bed draws
+a full tile of earth, it draws beneath both the mound and the crop, a WHEAT
+bed still stands on it, and neighbouring beds differ while each stays
+itself).
+
+### Still open
+
+The soil is drawn by `FarmPlotMarker`, so it follows tilled BEDS — player
+plots as well as village farmhouse ones, which is the honest reading of "a
+tilled bed is tilled earth wherever it is". It is NOT baked into the terrain
+atlas the way road paving is (`TerrainRenderer.ROAD_TILE_ID` plus a
+`chunk.modifications` entry). That would make the ground itself soil rather
+than a sprite laid over it, and would let beds blend with neighbouring
+terrain, but it also entangles beds with the built-tile/occupancy rules that
+`modifications` drives — a much larger change than was asked for here.

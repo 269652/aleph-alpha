@@ -21,6 +21,8 @@ const FarmerBehavior = preload("res://src/gameplay/farmer_behavior.gd")
 const HuntableQuarry = preload("res://src/gameplay/huntable_quarry.gd")
 const Carcass = preload("res://src/rendering/carcass.gd")
 const NpcCondition = preload("res://src/world/npc_condition.gd")
+const VillagerBehavior = preload("res://src/gameplay/villager_behavior.gd")
+const Ethogram = preload("res://src/gameplay/ethogram.gd")
 
 ## Walking pace -- similar order to CreatureWander.WANDER_SPEED, unhurried.
 const WALK_SPEED := 20.0
@@ -360,6 +362,21 @@ func _process(delta: float) -> void:
 	var field_target = _step_farm(delta, is_working)
 	if field_target != null:
 		target = field_target
+	# And a villager with a real NEED of their own answers it, wherever
+	# today's schedule says to be (docs/concept/npc_social_life.md). The same
+	# override shape, for the same reason, as the two above -- the schedule
+	# says where a villager would BE, drives say what they DO. Null for a
+	# villager with nothing pressing, and then the schedule simply stands.
+	#
+	# Deliberately LAST of the three: real work against the real world
+	# outranks a need, so a hunter mid-chase finishes the chase. Hunger is
+	# not here at all -- it keeps the dedicated interrupt above, which
+	# carries guards (a producer who feeds itself, a villager with their own
+	# field) that a whole famine chain was measured into and that this
+	# generic layer has no way to express.
+	var need_target = _step_needs(delta, quarry_target == null and field_target == null)
+	if need_target != null:
+		target = need_target
 	# Only the chase is run, and only while there is still a gap to close:
 	# inside _reach() the hunt returns the villager's own position, so the
 	# spear is never wound up at a sprint. Everything else -- the walk to a
@@ -389,6 +406,142 @@ func _process(delta: float) -> void:
 	visible = not _at_home
 	if economy != null:
 		economy.step(delta, is_working, _world, position, _on_real_quarry or _on_real_field)
+
+
+## How long two villagers stand together once they have met. Long enough to
+## read as a conversation from across the square rather than a collision,
+## short enough that a village does not seize up in gossip -- and it is what
+## the SOCIAL half of the day is made of, so it is pinned by
+## test_a_conversation_really_ends rather than left as a comment.
+const CONVERSATION_SECONDS := 4.0
+
+## How far a villager will go looking for somebody to talk to. Company is the
+## need a villager can always put off (it is last in the ethogram's own
+## villager wirings), so this is deliberately a neighbourly distance and not
+## a village-wide search: you stop for someone you were passing anyway.
+const COMPANY_REACH_PX := 160.0
+
+
+## Whether this villager is mid-conversation right now -- standing still,
+## facing whoever they are talking to. Read by the tests and by anything
+## that wants to know why a villager is not walking.
+func is_talking() -> bool:
+	return _talk_remaining > 0.0
+
+
+## Puts this villager into a conversation. Called on BOTH sides when two
+## meet, because a conversation has two people in it: the one who walked
+## over and the one who was stood there.
+func begin_conversation(with_marker: Node, seconds: float = CONVERSATION_SECONDS) -> void:
+	_talk_remaining = seconds
+	_talking_to = with_marker
+	if economy != null:
+		economy.needs.satisfy(Ethogram.DRIVE_COMPANY)
+
+
+var _talk_remaining := 0.0
+var _talking_to: Node = null
+
+
+## How near a villager has to get before a need counts as answered -- the
+## same "arrived" grain the home check below already uses.
+const NEED_REACH_PX := _ARRIVED_HOME_EPSILON_PX
+
+
+## One frame of catering to this villager's own needs. Returns where they
+## should walk because of a real need, or null when nothing is pressing and
+## the ordinary schedule should decide.
+##
+## The visible half of docs/concept/npc_social_life.md: thirst walks them to
+## the well and drinking really answers it, tiredness walks them home and
+## resting really answers it. A need that is answered the moment they arrive
+## is what stops a villager standing at the well forever.
+##
+## `free_to_answer` is false while a hunter is mid-chase or a farmer is in
+## their own field: real work against the real world outranks a need.
+func _step_needs(delta: float, free_to_answer: bool):
+	if _talk_remaining > 0.0:
+		# Mid-conversation: stand where you are and face them. Returning our
+		# OWN position is how every other override here says "stay put".
+		#
+		# Checked BEFORE free_to_answer on purpose: a villager does not walk
+		# off mid-sentence because quarry wandered past. At CONVERSATION_
+		# SECONDS the most that costs a hunter is four seconds of a chase.
+		_talk_remaining -= delta
+		if _talking_to != null and is_instance_valid(_talking_to):
+			face_movement(_talking_to.position - position)
+		return position
+	if economy == null or not free_to_answer:
+		return null
+	# Built once and kept: the decision names an intent and a place, and the
+	# context is what knows WHO is standing there -- a conversation needs the
+	# villager, not the coordinate.
+	var context := _villager_context()
+	var decision := _behavior.decide(context)
+	var at = decision["target"]
+	if at == null:
+		return null
+	if position.distance_to(at) <= _reach_for(String(decision["intent"])):
+		_answer_need(String(decision["intent"]), context.get("who"))
+		return position if _talk_remaining > 0.0 else null
+	return at
+
+
+## How near counts as arrived, per intent.
+##
+## A PLACE is reached to the pixel (NEED_REACH_PX): a villager stands on
+## their own doorstep. A PERSON never is -- two villagers cannot occupy the
+## same pixel, they stand a body apart -- so talking reaches a tile, which is
+## what "close enough to speak to" means on this grid. Found by a test that
+## put two villagers two pixels apart and watched them fail to notice each
+## other.
+func _reach_for(intent: String) -> float:
+	return float(_tile_size) if intent == VillagerBehavior.SOCIALIZE else NEED_REACH_PX
+
+
+## Reaching the place a need sent you to is what answers it.
+func _answer_need(intent: String, who) -> void:
+	if intent == VillagerBehavior.DRINK:
+		economy.needs.satisfy(Ethogram.DRIVE_THIRST)
+	elif intent == VillagerBehavior.REST:
+		economy.needs.satisfy(Ethogram.DRIVE_REST)
+	elif intent == VillagerBehavior.SOCIALIZE and who != null and is_instance_valid(who):
+		# Both sides, because a conversation has two people in it -- the one
+		# who walked over and the one who was stood there. Without this the
+		# other villager keeps walking and it reads as being talked AT.
+		begin_conversation(who)
+		who.begin_conversation(self)
+
+
+## What this villager needs and what they can see that answers it.
+##
+## Hunger's own gain is deliberately withheld: it keeps the dedicated
+## interrupt in _process, whose guards a famine chain was measured into.
+## Publishing it here too would have both layers steering at once.
+func _villager_context() -> Dictionary:
+	var drives: Dictionary = economy.needs.gains().duplicate()
+	drives[Ethogram.DRIVE_HUNGER] = 0.0
+	var context := {"position": position, "drives": drives, "home": home_position}
+	if landmarks.has("well"):
+		context[Ethogram.WATER] = landmarks["well"]
+	# Somebody to talk to, asked of the world the same duck-typed way every
+	# other world hook here is. One nearest neighbour rather than a list:
+	# you stop for the person you were passing, not for the best of everyone
+	# in the village.
+	var neighbour = _nearest_neighbour()
+	if neighbour != null:
+		context[Ethogram.COMPANY] = [neighbour.position]
+		context["who"] = neighbour
+	return context
+
+
+func _nearest_neighbour():
+	if _world == null or not _world.has_method("nearest_npc_near"):
+		return null
+	return _world.nearest_npc_near(position, COMPANY_REACH_PX, self)
+
+
+var _behavior := VillagerBehavior.new()
 
 
 ## Whether this villager is inside their own house right now -- the exact
