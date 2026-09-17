@@ -49,12 +49,18 @@ extends RefCounted
 ## SpriteSheetSlicer.normalize_frames -- see this file's own test's doc
 ## comment for why: normalize_frames' shared-scale-from-widest-content
 ## behaviour would make the globe itself appear to change size as the
-## "ALEPH ALPHA" wordmark's own ink extent grows across the sequence,
-## which the source art's consistently-framed camera (same globe position/
-## size in every frame, by construction -- see the intro-generation
-## prompt) doesn't need fixed up at all. Do NOT reintroduce
+## "ALEPH ALPHA" wordmark's own ink extent grows across the sequence --
+## it would scale every frame by the TEXT's extent, which is the one thing
+## in frame that genuinely changes on purpose. Do NOT reintroduce
 ## normalize_frames here -- this is a real, deliberate divergence from
 ## every other illustrated-sheet consumer, not an oversight.
+##
+## This used to add "the source art's consistently-framed camera (same
+## globe position/size in every frame, by construction)". That part was an
+## assumption about the generation prompt rather than a measurement, and
+## it is false: the globe really does wander 6px across and 2px down over
+## the 40 frames. It is measured and corrected now -- see globe_centre_of
+## and _build_textures' own registration pass below.
 
 const SpriteSheetLoader = preload("res://src/rendering/sprite_sheet_loader.gd")
 

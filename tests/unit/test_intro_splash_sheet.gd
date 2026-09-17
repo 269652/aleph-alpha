@@ -15,11 +15,13 @@ extends GutTest
 ## does: normalize_frames picks ONE shared scale from the WIDEST/TALLEST
 ## content bounding box across the frames it's given, and here the "ALEPH
 ## ALPHA" wordmark's own ink extent genuinely grows across the sequence --
-## content-cropping and rescaling would make the globe itself appear to
-## change size as the text builds in, which the source art's own
-## consistent camera framing (see the intro-generation prompt) already
-## avoids by construction. Frames are extracted as plain, un-rescaled
-## regions instead.
+## content-cropping and rescaling would scale every frame by the TEXT's
+## own extent, making the globe appear to change size as the words build
+## in. Frames are extracted as plain, un-rescaled regions instead, and the
+## globe is held still by measuring the globe itself (see the frame-
+## stabilisation tests at the end of this file) rather than by trusting
+## the source art to have framed it consistently -- measured, it does
+## not.
 
 const IntroSplashSheet = preload("res://src/rendering/intro_splash_sheet.gd")
 const SpriteSheetLoader = preload("res://src/rendering/sprite_sheet_loader.gd")
