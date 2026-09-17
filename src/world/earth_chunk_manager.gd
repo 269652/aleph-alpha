@@ -6945,12 +6945,16 @@ static func footstep_surface_for(biome: String, snow_lying: bool, underwater: bo
 ## GroundImprint.material_underfoot) -- a laid street is stone even though
 ## the biome under it still reads grassland, exactly as a river leaves the
 ## biome under it alone, so the sound needs it as its own fact rather than
-## inferring it from the biome. Deliberately
-## NOT an audio surface key -- EarthChunkManager (world state) must not
+## inferring it from the biome.
+##
+## Deliberately NOT an audio surface key -- EarthChunkManager (world
+## state) must not
 ## depend on FootstepSound (audio); that dependency runs the other way,
 ## the same direction NatureSoundscapePlayer already reads real world
 ## state rather than World reading audio state. The caller feeds these
-## facts into FootstepSound.surface_for itself.
+## facts into FootstepSound.surface_for itself -- which is also why
+## `ground_material` is the raw material ("stone"), not the sound it maps
+## to ("rock").
 ##
 ## Populated even when the VISUAL footprint has no art for this biome
 ## (see footstep_surface_for's own narrower `_SURFACE_BY_FOOTSTEP_BIOME`)

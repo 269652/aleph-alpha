@@ -23427,20 +23427,44 @@ this per walker would stop a mouse printing on turf — real, but a
 different and unasked change to a documented mechanic, named rather than
 smuggled in.
 
-🚧 **The footstep SOUND on a street is still chosen from the BIOME**, so a
-cobbled street plays the grass clip rather than a stone one
-(`FootstepSound._SURFACE_BY_BIOME` already has a `"rock"` surface the
-paving could feed). Pre-existing, named rather than quietly left: the gate
-sits *after* `record_footstep`'s returned step facts are populated and
-returns them intact, so the step is still heard — only the visual mark is
-absent.
+✅ **And the street sounds like stone now too** (same day) — this pass
+first left that as a named 🚧: the gate sits *after* `record_footstep`'s
+step facts are populated and returns them intact, so the step was still
+heard, but its sound was still chosen from the **biome** — and a road
+never changes the biome under it, exactly as a river doesn't — so cobbles
+played the grass clip. `record_footstep` now resolves
+`material_underfoot` **once** and carries it out as a `ground_material`
+fact used by *both* consumers: the print gate, and
+`FootstepSound.surface_for`, which maps `stone` → `"rock"` and
+`wood`/`timber` → `"wood"`. Resolving it once is the design, not an
+optimisation — two lookups would let the print and the sound disagree
+about what was underfoot. `"soil"` is deliberately unmapped, so untouched
+ground still takes its sound from the biome; snow and standing water keep
+their existing priority above the laid material, because they lie on top
+of a street while a street lies on top of the ground.
+`GroundImprint.takes_a_print` was removed rather than left unused once
+the material was resolved at the call site. See
+[`concept/creature_and_footstep_audio.md`'s "A laid surface sounds like
+what it is laid with"](concept/creature_and_footstep_audio.md).
+
+🚧 **No distinct stone or wooden-floor recording exists**, so `"rock"` and
+`"wood"` both resolve to the generic `default.ogg` (the same honest gap
+already standing for sand and rock — Wikimedia Commons' Foley coverage is
+thin, see `_CLIP_BY_SURFACE`'s own note). The win is that a street stops
+sounding like grass, not that it sounds like cobbles.
 
 Tests: `test_ground_imprint.gd` 16/16 (new), `test_earth_chunk_manager_
-footprints.gd` 29/29 (4 new: the street, an unpaved control walking the
+footprints.gd` 32/32 (7 new: the street, an unpaved control walking the
 identical stride so the paving is the only difference, a snowed-over
-street, and a ~26-stride sustained walk verified to fail
-`[52] expected to equal [26]` with the gate stubbed out, so it
-discriminates rather than passing vacuously), 174/174 green across the whole footprint/footstep suite
+street, a ~26-stride sustained walk verified to fail
+`[52] expected to equal [26]` with the gate stubbed out so it
+discriminates rather than passing vacuously, and 3 for the new
+`ground_material` fact including one proving it is reported even where no
+print is drawn at all), `test_footstep_sound.gd` +6,
+`test_world_footstep_wiring.gd` +1; 152/157 across the whole
+footprint/footstep/audio suite (11 files, the 5 remaining being
+pre-existing GPU-readback smoke tests needing `--rendering-driver
+opengl3`), zero regressions across the whole footprint/footstep suite
 (`test_world_footstep_wiring.gd`, `test_footstep_sound.gd`,
 `test_footstep_gait.gd`, `test_footprint_field.gd`,
 `test_footprint_renderer.gd`, `test_procedural_footprint_sprite.gd`,

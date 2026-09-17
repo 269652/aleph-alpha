@@ -203,10 +203,22 @@ implemented either, but the two are designed to land together.
   `test_earth_chunk_manager_footprints.gd`. See [snow_cover.md's "Ground
   that is too hard to take a
   print"](snow_cover.md#ground-that-is-too-hard-to-take-a-print-2026-09-17).
-- ⬜ The footstep SOUND on a street is still chosen from the BIOME, so a
-  cobbled street plays the grass clip (`FootstepSound._SURFACE_BY_BIOME`
-  already has a `"rock"` surface the paving could feed). Pre-existing;
-  named, not closed, by the footprint pass above.
+- ✅ **A street sounds like stone, not like the grass beside it**
+  (2026-09-17) — the sibling gap the footprint pass above named and
+  left open. `record_footstep` resolves `GroundImprint.material_underfoot`
+  once per step and carries it out as a `ground_material` fact, which
+  `FootstepSound.surface_for` maps (`stone` → `"rock"`, `wood`/`timber`
+  → `"wood"`); `"soil"` stays deliberately unmapped so untouched ground
+  still takes its sound from the biome. One resolution serving both the
+  print and the sound, so the two cannot disagree about what is
+  underfoot. Honest limit: no distinct stone recording has been sourced,
+  so `"rock"` still resolves to the generic step clip — the win is that
+  a street stops sounding like grass, not that it sounds like cobbles.
+  See [creature_and_footstep_audio.md's "A laid surface sounds like what
+  it is laid with"](creature_and_footstep_audio.md#a-laid-surface-sounds-like-what-it-is-laid-with-2026-09-17).
+- ⬜ A real footstep recording for stone and for a wooden floor — both
+  currently share `default.ogg`, the same honest gap already standing for
+  sand and rock (see that doc's `_CLIP_BY_SURFACE`).
 - ⬜ Between-village roads (routing a street on to the next settlement).
   The plaza and side streets a laid-out village frames its road with are
   real — see [building.md](building.md) for the layout side.

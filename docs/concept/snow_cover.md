@@ -577,11 +577,17 @@ in.
 **The step still happened.** The gate sits after `record_footstep`'s
 returned step facts are fully populated and returns them intact, so
 `FootstepSound` still hears a step on a street — only the visual mark is
-absent. A known, named gap that this pass did **not** close: that sound
-is still chosen from the *biome*, so a cobbled street currently plays
-the grass footstep clip rather than a stone one (see
-`FootstepSound._SURFACE_BY_BIOME`, which already has a `"rock"` surface
-the paving could feed). Pre-existing, not introduced here.
+absent.
+
+**Closed since (2026-09-17): the sound now hears the material too.**
+This pass originally left a named gap — the step's sound was still
+chosen from the *biome*, so a cobbled street played the grass clip. It
+no longer does: `record_footstep` resolves `material_underfoot` **once**
+and carries it out as a `ground_material` fact alongside biome/snow/
+underwater, so the print gate and `FootstepSound.surface_for` read the
+same one answer and cannot disagree about what was underfoot. See
+[creature_and_footstep_audio.md's "A laid surface sounds like what it is
+laid with"](creature_and_footstep_audio.md#a-laid-surface-sounds-like-what-it-is-laid-with-2026-09-17).
 
 ### What the CPU still does
 
@@ -919,10 +925,14 @@ for, and why both exist.
   underfoot and prints again. 16/16 new tests, plus 4 new integration
   tests (street, unpaved control, snowed-over street, and a ~26-stride
   sustained walk down a street against the same walk on bare ground) in
-  `test_earth_chunk_manager_footprints.gd` — 29/29 there, 174/174 across
-  the footprint/footstep suite, zero regressions. Known, named gap: the
-  footstep SOUND on a street is still chosen from the biome, so it plays
-  the grass clip.
+  `test_earth_chunk_manager_footprints.gd` — 32/32 there, and 152/157
+  across the whole footprint/footstep/audio suite (11 files; the 5
+  remaining are pre-existing GPU-readback smoke tests that need
+  `--rendering-driver opengl3`), zero regressions. The gap this
+  originally left open — a street still SOUNDING like the grass beside
+  it — was closed the same day; see
+  [creature_and_footstep_audio.md's "A laid surface sounds like what it
+  is laid with"](creature_and_footstep_audio.md#a-laid-surface-sounds-like-what-it-is-laid-with-2026-09-17).
 - ✅ **Footprints depend on real mass, not just surface** (2026-09-09) —
   see "Footprints depend on real mass, not just surface" above. Every
   `CreatureMarker`, not just the player, now leaves a real print (mirrors
