@@ -20,11 +20,13 @@
    the GPU along an eased-in curve whose phase and amplitude both vary across
    a card's own width, so each card's drawn blades bend along their own
    curved path instead of leaning as one rigid parallelogram. The bend moves
-   the card's own GEOMETRY (`vertex()` displaces `VERTEX.x` across a
-   subdivided quad), because displacing only the *sampled texture UV* -- what
-   this originally did -- slides art around inside a quad that never moves,
-   so the quad's own edge cuts the blade off (see "Where a bent blade
-   actually goes"). `fragment()` still path-traces per pixel row, but only
+   the card's own GEOMETRY (`vertex()` walks each vertex along an ARC about
+   its own root, across a subdivided quad): displacing only the *sampled
+   texture UV* -- what this originally did -- slides art around inside a
+   quad that never moves, so the quad's own edge cuts the blade off, and
+   displacing it in a straight line sideways stretches the blade instead of
+   laying it over (see "Where a bent blade actually goes"). `fragment()`
+   still path-traces per pixel row, but only
    the remainder the mesh's own vertices could not carry, so the two stages
    add up to exactly the curve at every pixel. Roots never translate (the
    curve is exactly 0 at a card's own bottom row of vertices), and a walker
@@ -166,6 +168,36 @@ already rejected -- so the card's `QuadMesh` is subdivided
 vertices, 64 triangles): every vertex ROW sits on the real eased-in curve and
 every vertex COLUMN carries its own wind phase and amplitude, so the per-blade
 path-tracing survives the move from the sampling stage onto the geometry.
+
+**A blade bends over; it does not get longer.** The first version of this
+displaced `VERTEX.x` and nothing else, which is a SHEAR: it slides each row
+of the card sideways and leaves that row at exactly the height it started
+at. A blade drawn standing therefore draws as a longer diagonal -- at the
+tuned walker push a tip 16 world units up is moved 26 units across and is
+still 16 up, so a 16-unit blade renders as a 31-unit one. Reported live the
+moment it was seen: *"the grassblades elongate and stretch instead of only
+bending."* Measured on a real render rather than argued: the furthest blade
+pixel from its own root went from 17.9px at rest to **31.4px** under a
+walker, nearly double.
+
+Each vertex now travels along an arc about its own root instead. What is
+held fixed is its distance from that root, and the height falls out of it
+(`y = -sqrt(along^2 - sideways^2)`), clamped at flat -- a blade pushed
+harder than it is long lies on the ground, which is as far as a blade goes,
+and the clamp is also what keeps the root of that square from going
+negative. Same render, same walker, same card: **20.1px**, against 17.9 at
+rest, and the couple of pixels between them are one offset card leaning
+away from the CELL centre the measurement is taken from, not a blade
+growing. Pinned headlessly by `bent_vertex` -- the shader's vertex stage
+mirrored in GDScript, since a shader cannot be measured under `--headless`
+-- and its tests: every vertex, at every height, under every bend the
+shader can produce, keeps its own distance from the root.
+
+Honest about the model: holding the RADIAL distance fixed is the standard
+cheap bend, not a true inextensible beam, which preserves ARC length and
+would bring the tip down a little further still. The difference is small at
+any bend this shader produces, and the property that was actually wrong --
+a blade drawing longer than it is -- is exact either way.
 
 **`fragment()` still path-traces per pixel row -- of the remainder only.**
 Both stages read ONE shared `bend_offset_at()` (a single seam, the same
@@ -869,6 +901,21 @@ framebuffer), so several of these needed a real, non-headless, off-screen
     the constant is left exactly where those live sessions put it, since it
     now buys the lean it always claimed to.
 
+16. **"The grassblades elongate and stretch instead of only bending"**
+    (reported live, immediately after #15 shipped). #15's geometry bend was
+    a pure horizontal displacement, which is a shear: every row keeps the
+    height it started at, so a leaning blade draws as a longer diagonal --
+    measured on a real render at 31.4px of reach where a resting blade has
+    17.9px, on a card 16px tall. Fixed by walking each vertex along an arc
+    about its own root (see "A blade bends over; it does not get longer"
+    above), which lays the tip down as it goes across: 20.1px on the same
+    render. Worth recording as a pattern rather than a one-off: #15 and #16
+    are the same mistake at two different stages -- a displacement applied
+    to one coordinate, when the thing being displaced is a physical object
+    with a length and a footprint. The sampling stage cut the blade off;
+    the geometry stage stretched it; only moving the whole vertex the way a
+    blade actually moves is neither.
+
 ### A second atlas family: farmed wheat (2026-09-13)
 
 Requested directly: "I added a wheat sprite similar to the long grass
@@ -997,9 +1044,12 @@ at the ROOT instead of the tip), the fix is a one-line flip of
   units — see `test_illustrated_grass_patch.gd`'s
   `test_band_height_leaves_a_real_safety_margin_under_the_players_own_
   max_reach`.
-- ✅ A bending blade moves its own GEOMETRY (`vertex()` displaces
-  `VERTEX.x` across a 4×8-subdivided `QuadMesh`), so it is no longer clipped
-  at the card's own edge — see History #15. `fragment()` still resolves the
+- ✅ A bending blade moves its own GEOMETRY (`vertex()` walks each vertex
+  along an arc about its own root, across a 4×8-subdivided `QuadMesh`), so
+  it is neither clipped at the card's own edge (History #15) nor stretched
+  longer than it is (History #16 — measured on a real render: 31.4px of
+  reach under the first, sheared version; 20.1px now, against 17.9 at
+  rest). `fragment()` still resolves the
   curve per pixel row, for the sliver the mesh's vertices cannot carry:
   measured at 0.0197 card widths (1.26 screen px) worst case, down from the
   1.66 card widths (106 px) the sampling stage used to slide on its own, and

@@ -540,6 +540,81 @@ func _worst_mesh_cell_twist(wind_strength: float) -> float:
 	return worst
 
 
+## Reported live, after the geometry bend above landed: "the grassblades
+## elongate and stretch instead of only bending."
+##
+## A purely horizontal displacement is a SHEAR: it slides each row of the
+## card sideways and leaves that row's height exactly where it was. A blade
+## drawn standing up therefore becomes a longer diagonal -- at the real tuned
+## push, a tip 16 world units above its root is moved 26 units sideways and
+## is still 16 up, so the blade a player sees is 31 units long instead of 16.
+## Nothing downstream can hide that: it is the art stretched along its own
+## length.
+##
+## Real grass does not get longer when it bends; the tip comes DOWN as it
+## goes over. So a vertex now travels along an ARC about its own root rather
+## than along a line, and what stays fixed is its distance from that root --
+## which is exactly what this pins, at every height and every bend the shader
+## can produce.
+func test_bending_a_blade_moves_it_along_its_own_length_instead_of_stretching_it():
+	for height_step in 9:
+		var local := Vector2(0.0, -IllustratedGrassPatch.WORLD_SIZE * float(height_step) / 8.0)
+		var length := local.length()
+		for bend_step in range(-10, 11):
+			# Past the real worst case (1.66 card widths) on purpose: a blade
+			# laid flatter than flat must still be a blade, not a longer one.
+			var bend_offset := 2.0 * float(bend_step) / 10.0
+			var bent: Vector2 = IllustratedGrassPatch.bent_vertex(local, bend_offset)
+			assert_almost_eq(
+				bent.length(), length, 0.001,
+				"a blade bent by %f at height %f changed length" % [bend_offset, length]
+			)
+
+
+func test_a_bent_blade_lays_its_tip_over_rather_than_leaving_it_at_full_height():
+	var tip := Vector2(0.0, -IllustratedGrassPatch.WORLD_SIZE)
+	var bent: Vector2 = IllustratedGrassPatch.bent_vertex(tip, 0.5)
+	assert_almost_eq(bent.x, 0.5 * IllustratedGrassPatch.WORLD_SIZE, 0.001, "it still goes sideways by the bend")
+	assert_gt(bent.y, tip.y, "...and comes down as it does, instead of staying at full height")
+
+
+## A blade pushed harder than it is long is flat on the ground -- that is as
+## far as a blade goes. Without the clamp the arc would go imaginary here
+## (sqrt of a negative) and the card would collapse to NaN.
+func test_a_blade_pushed_past_flat_lies_flat_instead_of_going_imaginary():
+	var tip := Vector2(0.0, -IllustratedGrassPatch.WORLD_SIZE)
+	var bent: Vector2 = IllustratedGrassPatch.bent_vertex(tip, 3.0)
+	assert_almost_eq(bent.y, 0.0, 0.001, "flat on the ground")
+	assert_almost_eq(bent.x, IllustratedGrassPatch.WORLD_SIZE, 0.001, "and no further sideways than it is long")
+	assert_false(is_nan(bent.x) or is_nan(bent.y))
+
+
+func test_an_unbent_blade_is_left_exactly_where_it_stands():
+	for height_step in 9:
+		var local := Vector2(1.5, -IllustratedGrassPatch.WORLD_SIZE * float(height_step) / 8.0)
+		var bent: Vector2 = IllustratedGrassPatch.bent_vertex(local, 0.0)
+		assert_almost_eq(bent.x, local.x, 0.0001)
+		assert_almost_eq(bent.y, local.y, 0.0001)
+
+
+## And the root never moves, whatever the wind is doing above it (pillar 3).
+func test_a_blades_root_stays_put_under_any_bend():
+	for bend_step in range(-10, 11):
+		var bent: Vector2 = IllustratedGrassPatch.bent_vertex(Vector2(2.0, 0.0), 2.0 * float(bend_step) / 10.0)
+		assert_almost_eq(bent.x, 2.0, 0.0001)
+		assert_almost_eq(bent.y, 0.0, 0.0001)
+
+
+## The shader has to do the same thing the mirror above measures: a vertex
+## that only ever moves in x is the shear that stretched the blades.
+func test_the_shader_moves_a_bent_vertex_down_as_well_as_sideways():
+	var code: String = IllustratedGrassPatch.SHADER_CODE
+	var vertex_start := code.find("void vertex()")
+	var vertex_body := code.substr(vertex_start, code.find("void fragment()") - vertex_start)
+	assert_string_contains(vertex_body, "VERTEX.y")
+	assert_string_contains(vertex_body, "sqrt")
+
+
 ## The whole point of the fix: a displacement has to be applied to something
 ## that actually MOVES the art, and a fragment-stage UV slide does not -- it
 ## moves art WITHIN a quad that stays exactly where it was, so that quad's
