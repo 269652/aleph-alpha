@@ -154,7 +154,6 @@ func _house_strip_water_fraction(chunk_coord: Vector2i) -> float:
 ## layout found room and something downstream refused it; if it is 0, the
 ## ground itself is what said no.
 func _plots_with_real_water(chunk_coord: Vector2i, villager_count: int) -> int:
-	var manager = _manager
 	var is_buildable := _dry_in(chunk_coord)
 	var never_occupied := func(_cell: Vector2i) -> bool: return false
 	var building_ids: Array = []
