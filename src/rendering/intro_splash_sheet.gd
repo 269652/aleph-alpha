@@ -85,19 +85,17 @@ const _ROW_BANDS: Array[Vector2i] = [
 ## regression check against the real image.
 const _COLUMN_LEFTS: Array[int] = [8, 251, 499, 746, 994, 1242, 1490, 1738]
 
-## ONE fixed crop size, used for every one of the 32 frames -- no
-## per-frame content cropping (see this file's own doc comment above for
-## why). _FRAME_WIDTH is comfortably larger than the widest content any
-## frame's own OLD per-frame detect_frames crop ever measured (234px,
-## across all 32 frames) and comfortably smaller than the tightest real
-## column pitch (246px, the minimum left-to-left gap among _COLUMN_LEFTS)
-## so it can never bleed into the next column. _FRAME_HEIGHT is the
-## tallest of the 4 hand-measured _ROW_BANDS (row 1, 183px) -- already
-## the height every row-1 frame used even before this fix, so this only
-## extends the other 3 rows a further 1-2px down into their own real,
-## measured inter-row gutter (13-14px, see _ROW_BANDS), never into
-## another row's content. Both bounds are re-verified against the real
-## sheet by test_frame_size_has_real_safety_margins, not just claimed in
+## ONE fixed canvas size, shared by all 40 frames -- no per-frame content
+## cropping (see this file's own doc comment above for why). _FRAME_WIDTH
+## is comfortably larger than the widest column of real art measured on
+## this sheet (242px) and no larger than the tightest real column pitch
+## (243px, the minimum left-to-left gap among _COLUMN_LEFTS) so it can
+## never bleed into the next column. _FRAME_HEIGHT is the TALLEST of the 5
+## measured _ROW_BANDS (row 0, 162px); every shorter row is crop-limited
+## to its own art and padded evenly into this canvas rather than stretched
+## to it. Both bounds are re-verified against the real sheet by
+## test_a_frame_never_reaches_into_the_column_beside_it and
+## test_a_frame_never_reaches_into_the_row_below_it, not just claimed in
 ## this comment (see CLAUDE.md: tuned thresholds must be tested, not
 ## eyeballed).
 const _FRAME_WIDTH := 243
@@ -134,27 +132,31 @@ func _build_textures() -> Array[ImageTexture]:
 	var image := _prepared_for_slicing(SpriteSheetLoader.load_image(_SHEET_PATH))
 	var textures: Array[ImageTexture] = []
 	for row in _ROW_BANDS.size():
-		var top: int = _ROW_BANDS[row].x
-		# Never read past this row into the next one's art. The rows of
-		# this sheet are not evenly pitched and their content heights
-		# shrink down it (162/158/158/147/134), so one crop height cannot
-		# both cover the tallest row and stay clear of the shortest gap --
-		# the crop is capped and the frame padded below instead.
-		var limit: int = (
-			_ROW_BANDS[row + 1].x if row + 1 < _ROW_BANDS.size() else image.get_height()
-		)
-		var crop_height: int = mini(_FRAME_HEIGHT, limit - top)
+		var band: Vector2i = _ROW_BANDS[row]
+		# Exactly this row's own measured art, never a pixel of the gutter
+		# or of the row below it. The rows of this sheet are genuinely
+		# different heights (162/158/158/147/134 -- see _ROW_BANDS), so one
+		# crop height cannot serve them all.
+		var art_height: int = mini(_FRAME_HEIGHT, band.y - band.x)
+		# ...and the shortfall against the shared canvas is split EVENLY
+		# above and below, because the globe sits at its own row's middle
+		# in every row. Anchored at the row's top instead, a short row puts
+		# its whole shortfall below the art and the globe climbs the screen
+		# as the sequence plays -- reported in play as "the image is moving
+		# from bottom to top" (see test_every_frame_puts_its_art_at_the_
+		# same_height, confirmed red against exactly that anchoring).
+		var top_pad: int = (_FRAME_HEIGHT - art_height) / 2
 		for left in _COLUMN_LEFTS:
-			var cropped := image.get_region(Rect2i(left, top, _FRAME_WIDTH, crop_height))
+			var cropped := image.get_region(Rect2i(left, band.x, _FRAME_WIDTH, art_height))
 			if cropped.get_format() != Image.FORMAT_RGBA8:
 				cropped.convert(Image.FORMAT_RGBA8)
 			# Every frame is the SAME size whatever its row could spare,
 			# so nothing rescales between rows (see bug #6 above); a short
-			# row simply carries transparent space below its art.
+			# row simply carries transparent space above and below its art.
 			var frame_image := Image.create(_FRAME_WIDTH, _FRAME_HEIGHT, false, Image.FORMAT_RGBA8)
 			frame_image.fill(Color(0.0, 0.0, 0.0, 0.0))
 			frame_image.blit_rect(
-				cropped, Rect2i(0, 0, _FRAME_WIDTH, crop_height), Vector2i.ZERO
+				cropped, Rect2i(0, 0, _FRAME_WIDTH, art_height), Vector2i(0, top_pad)
 			)
 			textures.append(ImageTexture.create_from_image(frame_image))
 	return textures

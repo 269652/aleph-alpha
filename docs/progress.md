@@ -23290,3 +23290,28 @@ standing in the world to harvest the way there is an animal or a fish, and
 `vegetation_density_near` is a field, not a thing. Real crop entities
 belong to the farm/mill/bakery chain (`milling_and_baking.md`) when it
 comes, not to a symmetry argument.
+
+
+## The intro's drift was the anchor, not just the grid (`concept/intro_splash.md`, 2026-09-17)
+
+Reported twice, in the same words both times: *"the new intro has wrong row
+sizes the image is moving from bottom to top"*. The first pass re-measured
+the replaced sheet's grid (5 rows, 40 frames) and fixed *which* pixels each
+frame reads. It did not fix *where in the frame they land* — the shortfall
+between a short row's art and the shared canvas was padded entirely below
+it, i.e. anchored at the frame's top.
+
+✅ **Every frame's art is centred on the shared canvas.** The five row
+bands measure 162/158/158/147/134 px tall while the globe they draw stays
+the same size and sits at its own row's middle, so a top anchor walked the
+globe's centre from y=80.5 (row 0) to y=66.5 (row 4) — 14px of source, ~5.3×
+magnified by the viewport stretch. `IntroSplashSheet._build_textures` now
+crops each row to exactly its own measured art and splits the padding
+evenly above and below. Nothing is rescaled (bug #6's rule still holds) and
+no gutter pixel is read.
+
+Confirmed by compositing column 0 across all five rows at both anchorings
+and comparing them directly, then pinned red-first by
+`test_every_frame_puts_its_art_at_the_same_height` — red against the
+top-anchored build for frames 24–39, green after
+(`test_intro_splash_sheet.gd` 12/12).

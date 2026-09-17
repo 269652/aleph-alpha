@@ -197,16 +197,16 @@ func test_the_pinned_row_tops_are_where_the_sheets_rows_actually_start():
 func test_a_frame_never_reaches_into_the_row_below_it():
 	# What produced the drift: art from the next row pulled into this row's
 	# frame. The CROP is what must stay clear -- the frame canvas is a
-	# fixed size for every row and pads below when a row cannot spare it,
-	# so asserting on _FRAME_HEIGHT alone would be asserting the wrong
-	# quantity. Every row's own art must fit in what its crop can take.
+	# fixed size for every row and pads around a short row's art, so
+	# asserting on _FRAME_HEIGHT alone would be asserting the wrong
+	# quantity. This mirrors _build_textures' own crop exactly.
 	var bands: Array = IntroSplashSheet._ROW_BANDS
 	for i in bands.size():
 		var band: Vector2i = bands[i]
 		var limit: int = int((bands[i + 1] as Vector2i).x) if i + 1 < bands.size() else 793
-		var crop: int = mini(IntroSplashSheet._FRAME_HEIGHT, limit - band.x)
+		var crop: int = mini(IntroSplashSheet._FRAME_HEIGHT, band.y - band.x)
 		assert_lte(band.x + crop, limit, "row %d's crop reaches into what follows it" % i)
-		assert_lte(band.y - band.x, crop, "row %d's own art does not fit in its crop" % i)
+		assert_eq(crop, band.y - band.x, "row %d's own art does not fit in its crop" % i)
 
 
 func test_a_frame_never_reaches_into_the_column_beside_it():
@@ -222,3 +222,44 @@ func test_every_frame_is_inside_the_sheet():
 	var image := SpriteSheetLoader.load_image(IntroSplashSheet._SHEET_PATH)
 	var last_left: int = IntroSplashSheet._COLUMN_LEFTS[IntroSplashSheet._COLUMN_LEFTS.size() - 1]
 	assert_lte(last_left + IntroSplashSheet._FRAME_WIDTH, image.get_width(), "the last column runs off the sheet")
+
+
+## Rows of a built FRAME that carry opaque art, as [top, bottom).
+func _opaque_band(texture: Texture2D) -> Vector2i:
+	var image := texture.get_image()
+	var top := -1
+	var bottom := -1
+	for y in image.get_height():
+		for x in image.get_width():
+			if image.get_pixel(x, y).a > 0.5:
+				if top < 0:
+					top = y
+				bottom = y
+				break
+	return Vector2i(top, bottom)
+
+
+## Reported in play right after the art was replaced: "the new intro has
+## wrong row sizes the image is moving from bottom to top".
+##
+## The rows of this sheet are genuinely DIFFERENT heights -- 162, 158,
+## 158, 147, 134, measured, not assumed (see _ROW_BANDS) -- while the
+## globe they draw stays the same size and sits at its own row's middle.
+## Every frame shares one fixed canvas (test_every_frame_is_the_same_size),
+## so a short row has to pad somewhere, and a frame anchored at its row's
+## TOP puts the whole shortfall below the art: the globe's centre climbs
+## 14px up the source frame across the sequence, magnified ~5.3x by the
+## viewport stretch, which is exactly the reported upward drift. Padding
+## the shortfall EQUALLY above and below leaves the globe where it is.
+func test_every_frame_puts_its_art_at_the_same_height():
+	var frames := sheet.generate_textures()
+	var height: int = frames[0].get_image().get_height()
+	var frame_centre := float(height - 1) / 2.0
+	for i in frames.size():
+		var band := _opaque_band(frames[i])
+		assert_gte(band.x, 0, "frame %d has no opaque art at all" % i)
+		var art_centre := float(band.x + band.y) / 2.0
+		assert_almost_eq(
+			art_centre, frame_centre, 1.0,
+			"frame %d centres its art at %.1f, not %.1f -- art anchored anywhere but the frame's own middle drifts up (or down) the screen as the rows change height" % [i, art_centre, frame_centre]
+		)

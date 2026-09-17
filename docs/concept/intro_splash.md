@@ -1283,6 +1283,14 @@ only old, already-tested behavior restored.
   right" instability. The richer sheet isn't lost, just not integrated —
   recoverable from commit `aad16cff` whenever a version with genuinely
   continuous inter-row rotation exists.
+  **Superseded 2026-09-17:** the art was replaced with a genuinely
+  continuous 8x5 sheet, so the shipped grid is now 40 frames — see
+  "Re-measuring after the art is replaced" below.
+- ✅ **Every frame's art is centred on the shared canvas, not
+  top-anchored.** The rows of the current sheet are different heights
+  while the globe they draw is not, so anchoring at the row's top walked
+  the globe up the screen across the sequence. Pinned by
+  `test_every_frame_puts_its_art_at_the_same_height`.
 
 
 ## Re-measuring after the art is replaced (2026-09-17)
@@ -1303,14 +1311,42 @@ The new sheet is a different grid: **5 rows, not 4** (tops at
 Two things changed beyond the numbers:
 
 - **The rows are not evenly pitched and their content heights shrink down
-  the sheet** (162/158/158/147/134). One crop height cannot both cover the
-  tallest row and stay clear of the shortest gap, so the crop is capped at
-  whatever the row can spare and the frame is **padded below** to a single
-  fixed size. Every frame is still the exact same size — which is what bug
-  #6 was about — without clipping art or pulling in the row beneath.
+  the sheet** (162/158/158/147/134). One crop height cannot cover them
+  all, so each row is cropped to exactly its OWN measured art and the
+  frame is padded to a single fixed canvas (`_FRAME_HEIGHT`, the tallest
+  row). Every frame is still the exact same size — which is what bug #6
+  was about — without clipping art or pulling in the row beneath.
 - **The pinned grid is now checked against the real file at test time**
   (`test_the_pinned_row_tops_are_where_the_sheets_rows_actually_start`).
   That is the test that was missing: the art could change and nothing
   noticed. The next swap fails there instead of shipping a drifting intro.
 
 Re-measure with `tools/probe_intro_sheet.gd` whenever the sheet changes.
+
+### The same report again: the drift was the ANCHOR, not only the grid
+
+Re-measuring the grid fixed *which* pixels each frame reads. It did not
+fix *where in the frame they land*: the shortfall between a short row's
+art and the shared canvas was padded entirely **below** the art, i.e. the
+art was anchored at the frame's top. The report came back unchanged —
+*"the new intro has wrong row sizes the image is moving from bottom to
+top"* — and that anchoring is why.
+
+The globe is drawn at its own row's middle in every row, and stays
+roughly the same size while the rows around it shrink (measured by
+compositing column 0 across all five rows at both anchorings and looking
+at them side by side). Anchored at the top, the globe's centre therefore
+climbs from y=80.5 in row 0 to y=66.5 in row 4 — 14px of source, ~5.3×
+magnified by the viewport stretch, which is the drift that was visible.
+
+The fix is one line of intent: **split the shortfall evenly above and
+below**, so every frame's art is centred on the same canvas centre
+whatever its row's height. Nothing is rescaled (bug #6's rule still
+holds), no gutter pixel is read, and the padding is transparent over the
+splash's own black backdrop, so a short row simply shows a slightly
+smaller black rectangle rather than a moving picture.
+
+Pinned by `test_every_frame_puts_its_art_at_the_same_height`
+(`tests/unit/test_intro_splash_sheet.gd`), confirmed red against the
+top-anchored build (frames 24–39 centred their art at 66.5 instead of
+80.5) before the change.
