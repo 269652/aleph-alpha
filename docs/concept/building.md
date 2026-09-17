@@ -249,6 +249,47 @@ Player piece placement is retired with them; the player's blueprint build
 places a finished building through the same ledger, and hiring a builder
 for a house returns in the construction-over-time pass. See Status.
 
+### When the ground says no: water, a split spine, and a drowned square
+
+`BiomeClassifier` knows nothing of hydrology, so a lake still reads as
+"grassland" and `SettlementGenerator` will happily settle it. Three rules
+keep a village honest about ground it cannot actually build on. All three
+were measured against the real world near lat 48.6 lon 12.7
+(`tools/probe_village_houses_live.gd`, `tools/probe_village_ghost.gd`) and
+reported in play first.
+
+**A site that cannot take a single house is not a village.** When
+`VillageLayout.layout` returns no plot at all, `VillageRenderer` founds
+nothing there — no streets, no mill, no villagers, no settlement record —
+rather than a ghost village nobody can live in. Reported as *"Some
+villages have no houses"*.
+
+**A drowned square costs a square, not the village.** The plaza is the
+only thing further streets used to hang on: side streets ran down its two
+edges, so a village whose centre was water broke out of the growth loop at
+once and stopped at whatever its spine could take. A column of water
+through a chunk does both things at the same time — it drowns the plaza
+AND splits the spine — which is how a riverside village ended up standing
+with three houses and five villagers (reported twice, with a screenshot).
+A village without a square now opens further streets anyway, tied back by
+a **gate lane**: one column at the spine run's own start, reserved before
+the street it reaches is laid out (no plot can want it — every street's
+plots begin `_GATE_CLEARANCE_TILES` east of the spine's start) and paved
+only once that street is actually built on, exactly the rule the side
+streets already followed.
+
+**What counts on reload is a DWELLING, not a building.** A save written
+before the founding gate existed can hold a village's mill and its paving
+and not one home. Any building at all used to send the chunk down the
+recovery branch, which matches villagers to houses that are not there and
+spawns the whole roster regardless — five villagers with nowhere to live,
+measured on two real chunks. `spawn_village` now counts dwellings
+(`BuildingCatalog.capacity_of > 0`): with none, the site is re-laid from
+scratch, so good ground gets its houses raised and bad ground founds
+nothing. The double-placement this branch guards against cannot happen in
+that state either — a village with no house cannot grow a second set of
+them.
+
 ### Asset contract (what an artist/generator must deliver)
 
 Everything below lights up by dropping the file in and bumping

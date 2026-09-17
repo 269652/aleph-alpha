@@ -1443,3 +1443,70 @@ func test_the_renderer_asks_for_real_art_before_drawing_one_itself():
 		renderer.has_method("_landmark_texture"),
 		"the renderer must route a prop's texture through one place that can prefer real art"
 	)
+
+
+# -- a save whose every dwelling is gone -----------------------------------
+#
+# Measured in the real world with tools/probe_village_ghost.gd: chunks
+# (668,143) and (670,144) near lat 48.6 lon 12.7 each stood with five
+# villagers, paved streets, a sawmill, and NOT ONE dwelling -- written by a
+# build from before "a site that cannot take a single house is not a
+# village" shipped. The founding path refuses that site now. The RELOAD
+# path did not: one persisted building, any building, sent it down the
+# recovery branch, which matches villagers to houses that are not there and
+# spawns the whole roster regardless.
+#
+# What counts is a DWELLING, not a building. A village with no home in it
+# is either healed -- the ground may be perfectly good, and the houses
+# simply never got built -- or it is not a village at all.
+
+
+## The village's own mill, and nothing else: exactly what the two measured
+## chunks hold.
+func _seed_a_millsonly_save(world: StubWorld, coord: Vector2i) -> void:
+	world.place_building(coord, Vector2i(2, 2), VillageRenderer.INDUSTRY_BUILDING_ID, Vector2i(0, 1), 1, "")
+
+
+func test_a_saved_village_whose_dwellings_are_all_gone_builds_them_on_good_ground():
+	var coord := _find_settlement_chunk("grassland")
+	var world := StubWorld.new()
+	_seed_a_millsonly_save(world, coord)
+	assert_eq(_house_calls(world).size(), 0, "precondition: this save holds no dwelling at all")
+
+	var spawned := renderer.spawn_village(
+		parent, coord, coord * CHUNK_SIZE, CHUNK_SIZE, TILE_SIZE, "grassland", world
+	)
+	assert_gt(
+		_house_calls(world).size(), 0,
+		"good ground and no home on it: the houses are raised, not shrugged at"
+	)
+	var npc_count := 0
+	for node in spawned:
+		if node is NpcMarker:
+			npc_count += 1
+	assert_eq(npc_count, SettlementGenerator.POPULATION, "and its villagers live there")
+
+
+func test_a_saved_village_with_no_dwelling_on_ground_that_takes_none_spawns_no_villagers():
+	var coord := _find_settlement_chunk("grassland")
+	var world := StubWorld.new()
+	_seed_a_millsonly_save(world, coord)
+	# Water everywhere but the spine itself -- the real shape of chunk
+	# (668,143), whose street row is 24/26 dry while the strip a house
+	# would stand on is 100% water.
+	var street_y: int = VillageLayout.skeleton(CHUNK_SIZE, VillageLayout.seed_for(coord))["street_y"]
+	for y in CHUNK_SIZE:
+		if y == street_y:
+			continue
+		for x in CHUNK_SIZE:
+			world.water_cells[coord * CHUNK_SIZE + Vector2i(x, y)] = true
+
+	var spawned := renderer.spawn_village(
+		parent, coord, coord * CHUNK_SIZE, CHUNK_SIZE, TILE_SIZE, "grassland", world
+	)
+	assert_eq(_house_calls(world).size(), 0, "precondition: this ground really does take no house")
+	var npc_count := 0
+	for node in spawned:
+		if node is NpcMarker:
+			npc_count += 1
+	assert_eq(npc_count, 0, "five villagers with no home between them is not a village")

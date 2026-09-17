@@ -186,14 +186,27 @@ func spawn_village(
 		# for the SAME building_ids and place them there too, and every
 		# reload would grow the village a second set of houses on top of
 		# the first -- a real bug caught by a real reload probe, not
-		# merely theorized: only re-run placement on a genuinely first
-		# load (no buildings persisted for this chunk yet); on a reload,
-		# recover each villager's OWN existing building instead (see the
-		# else branch below).
+		# merely theorized: only re-run placement when no DWELLING is
+		# persisted for this chunk yet; once one is, recover each
+		# villager's OWN existing building instead (see the else branch
+		# below).
 		var existing_buildings: Array = (
 			world.buildings_in_chunk(chunk_coord) if world.has_method("buildings_in_chunk") else []
 		)
-		if existing_buildings.is_empty():
+		# What decides the branch is a DWELLING, not a building. A save can
+		# hold this village's mill and its paving and not one home --
+		# measured in the real world (tools/probe_village_ghost.gd: chunks
+		# (668,143) and (670,144) near lat 48.6 lon 12.7, five villagers
+		# each, zero dwellings), written by a build from before the
+		# founding gate below existed. There is nothing to recover there,
+		# and the double-placement this branch guards against cannot
+		# happen either: a village with no house cannot grow a second set
+		# of them.
+		var existing_dwellings := 0
+		for record in existing_buildings:
+			if BuildingCatalog.capacity_of(record.get("id", "")) > 0:
+				existing_dwellings += 1
+		if existing_dwellings == 0:
 			# A site that cannot take a single house is not a village.
 			# Reported in play ("Some villages have no houses") and
 			# measured against the real world near lat 48.6 lon 12.7
@@ -336,8 +349,8 @@ func _place_new_village(
 	return true
 
 
-## A reload: this settlement's buildings are already persisted from an
-## earlier load (spawn_village's own existing_buildings gate). Matches
+## A reload: this settlement's homes are already persisted from an earlier
+## load (spawn_village's own existing_dwellings gate). Matches
 ## each villager to their OWN existing building by the SAME deterministic
 ## per-index seed place_building was given the first time it was placed --
 ## no new persistence needed, since that seed already uniquely identifies
