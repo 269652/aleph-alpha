@@ -88,8 +88,17 @@ func test_every_plot_reports_its_original_building_ids_index():
 ## columns for house_large, but plenty of 2-wide gaps for house_small)
 ## must not stop LATER, smaller buildings from still being tried and
 ## placed with their own real index intact.
+## REVISED: this used to occupy every third COLUMN, which shreds the spine
+## into two-cell runs -- and a village now builds on one unbroken run of
+## street (see the connectivity section at the end of this file), so that
+## world can no longer host a village at all and stopped expressing what
+## this test is about. The intent is unchanged and now stated more
+## directly: house_large is 4x3 and house_small 2x2, so occupying the one
+## row only the taller building needs makes the large one genuinely
+## unplaceable while leaving the small one a clear, connected street.
 func test_an_unplaceable_building_does_not_block_later_ones_from_their_own_index():
-	var is_occupied := func(cell: Vector2i) -> bool: return cell.x % 3 == 0
+	var third_row_north: int = CHUNK_SIZE / 2 - 3
+	var is_occupied := func(cell: Vector2i) -> bool: return cell.y == third_row_north
 	var ids := ["house_large", "house_small"]
 	var result := layout.layout(ids, CHUNK_SIZE, 14, _always_buildable, is_occupied)
 	assert_eq(result["plots"].size(), 1)
@@ -526,3 +535,104 @@ func test_no_street_plot_at_all_when_nothing_is_buildable():
 	assert_true(
 		VillageLayout.next_street_plot("warehouse", CHUNK_SIZE, 44, _never_buildable, _never_occupied).is_empty()
 	)
+
+
+# -- every house can be walked to (reported in play: "Not all houses are
+# connected by streets.. this should be tested!") --------------------------
+#
+# The street is paved only where the ground allows it, so a river crossing
+# it leaves two paved runs with no path between them. A house on the far
+# run has a doorstep, and paving outside its door, and no way to reach the
+# square -- which is what the report shows: separate islands of paving.
+#
+# The property is simple and worth pinning directly: from any one road
+# cell, walking only on road cells (4-connected, the way anything on foot
+# moves here), you can reach every other road cell AND every house's
+# doorstep. A layout that cannot promise that has not laid a village, it
+# has laid two.
+
+
+## Every road cell reachable from `start` by 4-connected steps over road
+## cells only.
+func _reachable_road_cells(road_cells: Array, start: Vector2i) -> Dictionary:
+	var roads := {}
+	for cell in road_cells:
+		roads[cell] = true
+	var seen := {}
+	var queue: Array = [start]
+	while not queue.is_empty():
+		var cell: Vector2i = queue.pop_back()
+		if seen.has(cell) or not roads.has(cell):
+			continue
+		seen[cell] = true
+		for step in [Vector2i(1, 0), Vector2i(-1, 0), Vector2i(0, 1), Vector2i(0, -1)]:
+			var next: Vector2i = cell + step
+			if roads.has(next) and not seen.has(next):
+				queue.append(next)
+	return seen
+
+
+## A predicate that drowns one full column, the way a real river crossing a
+## chunk does -- the exact shape that splits a street in two.
+func _buildable_except_column(column: int) -> Callable:
+	return func(cell: Vector2i) -> bool:
+		return cell.x != column
+
+
+func test_every_road_cell_is_reachable_from_every_other_on_open_ground():
+	var result := layout.layout(
+		["house_small", "house_small", "house_small", "house_small", "house_small"],
+		CHUNK_SIZE, 1234, _always_buildable, _never_occupied
+	)
+	var roads: Array = result["road_cells"]
+	assert_gt(roads.size(), 0, "precondition: something was paved")
+	var reached := _reachable_road_cells(roads, roads[0])
+	assert_eq(reached.size(), roads.size(), "the paving must be one network, not several islands")
+
+
+func test_every_house_doorstep_is_reachable_from_the_paving():
+	var result := layout.layout(
+		["house_small", "house_small", "house_small", "house_small", "house_small"],
+		CHUNK_SIZE, 4321, _always_buildable, _never_occupied
+	)
+	var roads: Array = result["road_cells"]
+	var reached := _reachable_road_cells(roads, roads[0])
+	for plot in result["plots"]:
+		assert_true(
+			reached.has(plot["doorstep"]),
+			"a house whose door opens onto paving nobody can walk to is a house nobody can reach"
+		)
+
+
+func test_a_river_across_the_street_never_leaves_a_house_stranded():
+	# The reported case: ground that is fine on both sides and impassable
+	# down one column, so the street is paved in two runs.
+	var result := layout.layout(
+		["house_small", "house_small", "house_small", "house_small", "house_small"],
+		CHUNK_SIZE, 99, _buildable_except_column(16), _never_occupied
+	)
+	var roads: Array = result["road_cells"]
+	assert_gt(roads.size(), 0, "precondition: something was paved")
+	var reached := _reachable_road_cells(roads, roads[0])
+	assert_eq(
+		reached.size(), roads.size(),
+		"a village split by a river must pave one side only, not two disconnected halves"
+	)
+	for plot in result["plots"]:
+		assert_true(reached.has(plot["doorstep"]), "every house placed must sit on the connected side")
+
+
+func test_a_village_big_enough_for_a_second_street_is_still_one_network():
+	# A further street south only connects through the side streets beside
+	# the plaza, so a village that outgrows its spine is the other way this
+	# can split.
+	var many: Array = []
+	for i in 12:
+		many.append("house_small")
+	var result := layout.layout(many, CHUNK_SIZE, 777, _always_buildable, _never_occupied)
+	var roads: Array = result["road_cells"]
+	assert_gt(result["plots"].size(), 5, "precondition: this village really did open a second street")
+	var reached := _reachable_road_cells(roads, roads[0])
+	assert_eq(reached.size(), roads.size(), "a second street must join the first, not float south of it")
+	for plot in result["plots"]:
+		assert_true(reached.has(plot["doorstep"]))

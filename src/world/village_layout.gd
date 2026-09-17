@@ -168,8 +168,30 @@ func layout(
 	else:
 		plaza = Rect2i()
 
-	# The main street is paved along its whole buildable length -- a real
-	# street, not just the run between two doorsteps.
+	# The main street is paved along its whole buildable length -- but only
+	# along ONE unbroken length of it. Reported in play: "Not all houses
+	# are connected by streets". Ground that is fine on both sides of a
+	# river and impassable across it used to be paved on both sides, which
+	# is two villages with two islands of paving, and houses on the far
+	# side whose doors opened onto pavement nobody could walk to from the
+	# square. A village builds on the side it can actually reach.
+	var run := _chosen_street_run(
+		street_y, street_x0, street_x1, chunk_size, is_buildable, is_occupied,
+		(plaza.position.x + plaza.size.x / 2) if has_plaza else -1
+	)
+	if run.y < run.x:
+		# Not one buildable cell of street anywhere. Nothing is paved and
+		# nothing is placed -- VillageRenderer reads an empty plot list as
+		# "this is not a village" and founds nothing here.
+		var no_street: Array[Vector2i] = []
+		return {"plots": [], "road_cells": no_street, "plaza": Rect2i(), "civic_plot": {}, "landmarks": {}}
+	# The gate clearance keeps a village off the CHUNK's edge, so it is
+	# measured from the spine the skeleton drew, not from wherever this run
+	# happens to start -- applying it again to a short run would eat the
+	# whole run and leave a street with no houses on it.
+	var spine_x0 := street_x0
+	street_x0 = run.x
+	street_x1 = run.y
 	for x in range(street_x0, street_x1 + 1):
 		var cell := Vector2i(x, street_y)
 		if _cell_clear(cell, chunk_size, is_buildable, is_occupied):
@@ -181,7 +203,7 @@ func layout(
 	var second_street_got_a_plot := false
 	while index < building_ids.size() and current_street_y < chunk_size - _EDGE_MARGIN_TILES:
 		var progressed_this_street := false
-		var x := street_x0 + _GATE_CLEARANCE_TILES
+		var x := maxi(spine_x0 + _GATE_CLEARANCE_TILES, street_x0)
 		var street_doorstep_xs: Array = []
 		var attempts_for_current_index := 0
 		while x < street_x1 and index < building_ids.size():
@@ -232,14 +254,28 @@ func layout(
 					attempts_for_current_index = 0
 		# A further street connects its own frontage -- the span BETWEEN its
 		# own placed doorsteps (the main street is paved end to end above).
-		if current_street_y != street_y and street_doorstep_xs.size() > 1:
+		if current_street_y != street_y and not street_doorstep_xs.is_empty():
 			street_doorstep_xs.sort()
-			for rx in range(street_doorstep_xs[0], street_doorstep_xs[street_doorstep_xs.size() - 1] + 1):
+			# Reach both side streets, not merely the span between this
+			# street's own doorsteps: the side streets beside the plaza are
+			# the ONLY way a further street joins the spine, so a further
+			# street that stops short of them is a row of houses nobody can
+			# walk to (reported in play: "Not all houses are connected by
+			# streets").
+			var from_x: int = mini(street_doorstep_xs[0], plaza.position.x)
+			var to_x: int = maxi(street_doorstep_xs[street_doorstep_xs.size() - 1], plaza.end.x - 1)
+			for rx in range(from_x, to_x + 1):
 				var cell := Vector2i(rx, current_street_y)
 				if _cell_clear(cell, chunk_size, is_buildable, is_occupied) and not claimed.has(cell):
 					road_cells[cell] = true
 		if not progressed_this_street:
 			break  # this street placed nothing at all -- a further one south won't fare any better
+		if not has_plaza:
+			# A further street is reached only through the side streets
+			# beside the square. Without a square there is nothing to hang
+			# them on, so this village stays on its spine rather than
+			# growing a row of houses with no way back.
+			break
 		current_street_y += STREET_PITCH_TILES
 
 	# Side streets only exist to reach a second street -- a village that fit
@@ -250,10 +286,16 @@ func layout(
 
 	var road_array: Array[Vector2i] = []
 	road_array.assign(road_cells.keys())
+	# The gate marks where the street begins, so it moves with it when the
+	# street is a shorter run than the skeleton drew.
+	var landmarks: Dictionary = bones["landmarks"] if has_plaza else {}
+	if landmarks.has("gate"):
+		landmarks = landmarks.duplicate()
+		landmarks["gate"] = Vector2i(street_x0, street_y)
 	return {
 		"plots": plots, "road_cells": road_array, "plaza": plaza,
 		"civic_plot": bones["civic_plot"] if has_plaza else {},
-		"landmarks": bones["landmarks"] if has_plaza else {},
+		"landmarks": landmarks,
 	}
 
 
@@ -543,3 +585,45 @@ static func _street_plot_fits(
 	if doorstep.x < 0 or doorstep.y < 0 or doorstep.x >= chunk_size or doorstep.y >= chunk_size:
 		return false
 	return is_buildable.call(doorstep)
+
+
+## Every unbroken run of buildable street on the spine row, as (x0, x1)
+## pairs. A river crossing the chunk shows up here as two runs.
+static func _street_runs(
+	street_y: int, street_x0: int, street_x1: int, chunk_size: int,
+	is_buildable: Callable, is_occupied: Callable
+) -> Array:
+	var runs: Array = []
+	var start := -1
+	for x in range(street_x0, street_x1 + 2):
+		var clear := (
+			x <= street_x1 and _cell_clear(Vector2i(x, street_y), chunk_size, is_buildable, is_occupied)
+		)
+		if clear:
+			if start < 0:
+				start = x
+		elif start >= 0:
+			runs.append(Vector2i(start, x - 1))
+			start = -1
+	return runs
+
+
+## Which run the village builds on: the one holding its square if it has
+## one (the plaza is already proven clear, so it is always inside a run),
+## otherwise the longest -- the most houses that can stand together and
+## reach each other. Ties go to the westernmost, so the answer stays
+## deterministic for a given chunk. Returns (0, -1) when no street exists
+## at all.
+static func _chosen_street_run(
+	street_y: int, street_x0: int, street_x1: int, chunk_size: int,
+	is_buildable: Callable, is_occupied: Callable, anchor_x: int
+) -> Vector2i:
+	var runs := _street_runs(street_y, street_x0, street_x1, chunk_size, is_buildable, is_occupied)
+	var best := Vector2i(0, -1)
+	for run in runs:
+		var r: Vector2i = run
+		if anchor_x >= 0 and r.x <= anchor_x and anchor_x <= r.y:
+			return r
+		if r.y - r.x > best.y - best.x:
+			best = r
+	return best
