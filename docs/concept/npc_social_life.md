@@ -161,8 +161,20 @@ the code as it lands.
   drink on the way to buy food is a villager that chain no longer describes.
   Tiredness is one world day and company is one schedule block, both pinned
   to those sources rather than eyeballed. `test_ethogram.gd` 47/47.
-- ⬜ **`VillagerBehavior`** — villager context → intent, over
-  `BehaviorKernel`.
+- ✅ **`VillagerBehavior`** — villager context → intent, over
+  `BehaviorKernel`, keeping no private copy of the wiring table and no
+  opinion of its own about priority (wiring order *is* the priority). It is
+  fed `Drives.gains()`, not raw levels: a gain is 0 below a drive's own onset
+  and 1 at its threshold, which is what stops a villager who is
+  one-thousandth hungry from walking to market forever. It answers `NOTHING`
+  when no drive is pressing *and* when nothing is around to answer the one
+  that is — the schedule then simply stands, which is pillar 2.
+
+  Measured, not assumed: over a real `NpcNeeds` clock the first need of a
+  villager's day is **a drink**, because thirst rises faster than hunger
+  (0.03 against 0.02 in the shared mammal profile). Found by a test that
+  assumed hunger came first; kept as its own test, because it is the
+  behaviour rather than the accident. `test_villager_behavior.gd` 13/13.
 - ⬜ **`NpcMarker` acts on the intent** — the intent overrides the schedule
   target the same way the hunt and field overrides already do; `stroll` when
   nothing is pressing.
