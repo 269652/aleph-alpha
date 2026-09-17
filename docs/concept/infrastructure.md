@@ -86,7 +86,14 @@ decreasing with disuse — a real escalation, not three unrelated systems:
   overwrite a street — and it walks a little faster:
   `Player.ROAD_SPEED_MULTIPLIER` (1.15, test-pinned) multiplies into the
   same per-frame speed chain water, weather, slope and condition already
-  do. Art: ONE seamless full-bleed tile, `assets/sprites/terrain/road.png`,
+  do. It also **takes no footprints**, and not because anything tests for
+  "road": setts are granite, whose published indentation hardness is some
+  140 000x the pressure a foot can put on the ground, so the same real
+  comparison that lets soil and snow keep a print refuses one here (see
+  `GroundImprint` and [snow_cover.md's "Ground that is too hard to take a
+  print"](snow_cover.md#ground-that-is-too-hard-to-take-a-print-2026-09-17)).
+  Snow lying on a street is snow underfoot, so a snowed-over street shows
+  tracks again. Art: ONE seamless full-bleed tile, `assets/sprites/terrain/road.png`,
   `TerrainRenderer.ART_TILE_SIZE` square (32 px), no dividers, no
   directional variants (a flat cobble surface that tiles in every
   direction — corners and crossings would need paint-time neighbour
@@ -181,6 +188,25 @@ implemented either, but the two are designed to land together.
   streets above — this is a real road, not a worn track. Connectivity is
   verified by a flood fill over really-paved cells, in both
   `test_village_layout.gd` and `test_village_renderer.gd`.
+- ✅ **A street keeps no footprints** (2026-09-17) — reported live:
+  "walking over cobblestone streets should not leave footprints".
+  `GroundImprint` (`src/world/ground_imprint.gd`) decides it by real
+  indentation physics rather than a tile-id exemption: a footfall's own
+  pressure (real mass over a real plantar area) against the material's own
+  published Vickers hardness, read straight off
+  `MaterialProperties.HARDNESS_HV`. Granite setts win that by five orders
+  of magnitude; built floors fall out of the same rule for free via
+  `BuildingPiece`'s own material column; dug earth and a worn trail stay
+  the soil they were worn out of. Gated in
+  `EarthChunkManager.record_footstep` at the tile the print lands in.
+  15/15 in `test_ground_imprint.gd`, 28/28 in
+  `test_earth_chunk_manager_footprints.gd`. See [snow_cover.md's "Ground
+  that is too hard to take a
+  print"](snow_cover.md#ground-that-is-too-hard-to-take-a-print-2026-09-17).
+- ⬜ The footstep SOUND on a street is still chosen from the BIOME, so a
+  cobbled street plays the grass clip (`FootstepSound._SURFACE_BY_BIOME`
+  already has a `"rock"` surface the paving could feed). Pre-existing;
+  named, not closed, by the footprint pass above.
 - ⬜ Between-village roads (routing a street on to the next settlement).
   The plaza and side streets a laid-out village frames its road with are
   real — see [building.md](building.md) for the layout side.
