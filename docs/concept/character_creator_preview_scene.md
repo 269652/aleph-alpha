@@ -191,6 +191,159 @@ diorama's own `_process`/`SubViewport` rendering pauses while it isn't the
 visible one, so an unwatched hero holds still rather than silently acting
 off-screen.
 
+### Load cost — what the first open actually pays, and how
+
+Pillar 4 above ("cheap enough to run continuously in a menu") was only ever
+about the STEADY-STATE per-frame cost, and it holds: once built, the diorama
+costs one `CharacterStroll` step and a shader-animated meadow. It says
+nothing about the cost of BUILDING the thing, which is a completely separate
+budget, and the one that was actually reported live: *"the character creator
+loads super slow."*
+
+**Measured, not guessed** (`--headless`, `tools/probe_creator_cost.gd`'s own
+one-off instrumentation of `build()`; each figure is one atomic
+sheet-load-plus-slice, which is why the sub-steps are listed rather than a
+single total):
+
+| First-use unit | Cold | Cached |
+| --- | --- | --- |
+| grassland terrain sheet (`IllustratedTerrainSprite`) | ~1000 ms | ~0.002 ms |
+| `CharacterView` + its own rig sheets | ~453 ms | ~4 ms |
+| stone sheet (`StoneRenderer`) | ~494 ms | ~0.04 ms |
+| one bird species (`AmbientFlyerRenderer`), x3 | ~420-460 ms each | ~0.3 ms |
+| one flower species (`ProceduralFlowerSprite`), x6 | ~250-590 ms each | ~1.5 ms |
+| boar sheet (`CreatureRenderer`) | ~359 ms | ~0.2 ms |
+| one butterfly species, x3 | ~10-15 ms each | — |
+| long-grass atlas (`IllustratedGrassPatch`) | ~222 ms | see below |
+
+Two distinct problems, with two distinct fixes — worth separating, because
+only one of them is about making anything faster:
+
+1. **The grass atlas was reloaded on every single build.**
+   `IllustratedGrassPatch`'s own `_textures` cache was a PER-INSTANCE
+   `Dictionary`, and `_build_grass` constructs a fresh
+   `IllustratedGrassPatch` each time, so every `build()` re-read the
+   1254x1254 atlas off disk and re-ran `SpriteSheetSlicer.chroma_keyed` over
+   all ~1.57M of its pixels: ~222 ms, paid again on every DNA reroll, for a
+   byte-identical result. That is a straight bug against this codebase's own
+   established convention — `IllustratedTerrainSprite._frame_cache` and
+   `IllustratedStoneSprite._frame_cache` are both `static var` precisely so
+   that sheet is sliced once per process — and the fix is to make
+   `_textures` static too. It is not diorama-specific: the real world's
+   `EarthChunkManager` only escaped it by holding one long-lived patch
+   instance, so any future second caller would have paid it as well.
+   Pinned by `test_two_patches_share_one_seasons_atlas_texture`.
+
+2. **Everything else is real work that cannot be made faster, only
+   incremental.** A sheet has to be read and sliced once; there is no
+   version of "load the grassland terrain art" that costs less than loading
+   it. What was wrong was that ~3.9 s of it ran as ONE unyielded
+   synchronous block inside `_build_create_screen`, so the window simply
+   stopped painting — the same failure mode, and the same fix, as the
+   class-icon portraits before it (see `intro_splash.md`'s tenth pass, and
+   `IllustratedMushroomSprite.warm_cache` before that).
+
+**The incremental build contract.** `CharacterPreviewDiorama.build_async
+(dna_seed, on_progress)` performs exactly the steps `build()` does, in the
+same order, awaiting `Engine.get_main_loop().process_frame` between each and
+reporting `(done, total, label)` to the optional callback. `build()` itself
+is UNCHANGED and stays fully synchronous — every test, and any caller that
+genuinely needs a finished scene on the next line, still has it — which is
+the same "the cache check is identical either way; only the warming learns
+to wait" split the two warm-cache passes before this one used.
+
+The unit of yielding is one atomic first-use cost, NOT one `_build_*`
+function: flowers, birds and butterflies each load a separate sheet PER
+SPECIES, so those three steps yield per item and report per item. Splitting
+finer than that would be theatre — a sheet's `load()`-and-slice is one
+indivisible operation, and no amount of restructuring around it makes it
+two. So the honest claim this doc makes is bounded: the worst single
+unyielded block drops from ~3.9 s to whatever the largest single sheet
+costs (~0.7 s, the ground — see the third finding below), and every other
+frame in between gets to paint a real progress readout. Pinned by
+`test_build_async_yields_at_least_once_per_reported_step` and
+`test_build_async_produces_the_same_scene_as_the_synchronous_build` — the
+second of which is the one that matters, since an async build that quietly
+drifted into a second, differently-behaving implementation of the same
+scene would be worse than the pause it replaced.
+
+3. **One of those "irreducible" sheet loads turned out to be half
+   avoidable.** Loading the grassland terrain sheet measured ~987 ms, of
+   which the PNG decode is only ~36 ms — the rest is per-pixel GDScript.
+   `IllustratedTerrainSprite._prepared_for_slicing` alone was ~458 ms: a
+   plain `get_pixel`/`set_pixel` double loop over all 1.57M pixels of a
+   1254x1254 sheet, calling the user-defined `_is_magenta`/`_despilled`
+   once each per pixel. That is precisely the technique
+   `SpriteSheetSlicer.chroma_keyed`, `IllustratedMushroomSprite`,
+   `IllustratedAnimalSprite` and `IllustratedStoneSprite` had each already
+   been fixed out of (see `docs/progress.md`'s "Still at 1fps"
+   investigation); this file was a never-migrated duplicate of it.
+   Rewritten as inlined single-pass loops with INTEGER thresholds — every
+   value read out of a `PackedByteArray` already is an integer, so
+   `r >= 140.25` means exactly `r >= 141` — taking `_prepared_for_slicing`
+   to ~180 ms and the whole sheet load to ~691 ms, a 2.5x win on the
+   measurement that matters.
+
+   Pinned COMPARATIVELY rather than by an absolute millisecond ceiling: the
+   test races the real implementation against a naive reference loop in the
+   same process on the same image, and also asserts the two produce
+   byte-identical output. A first attempt used an absolute 200 ms budget
+   calibrated from the 180 ms measurement and went red at 221 ms the first
+   time it ran on a loaded box with nothing changed — a pin that fails on
+   a busy runner teaches people to ignore it.
+
+   **A second change here was tried, measured honestly, and reverted.**
+   `SpriteSheetSlicer.chroma_keyed`'s own doc comment tells every
+   illustrated-art class that a byte-array loop beats `get_pixel`/
+   `set_pixel`, and a "read the bytes, write with `set_pixel`" hybrid looked
+   like a strict improvement on one real sheet (186 ms against the shipped
+   226 ms and a naive 201 ms). Sweeping the background fraction afterwards
+   showed why that was not the win it appeared to be: the hybrid is ~2x
+   faster where most pixels MISS the key and takes the early-out, and
+   genuinely SLOWER where most pixels match and take the write path
+   (337 ms against a naive 275 ms at 100% background). The crossover sits
+   near 46% background, which is roughly where real illustrated sheets
+   live — so the single real-sheet measurement that motivated it was
+   sitting inside the noise around break-even, not above it. Reverted:
+   `chroma_keyed` is shared by nine classes, and a change whose benefit
+   depends on which side of break-even a given sheet falls does not earn
+   that blast radius. The finding is kept here because the next person to
+   read that doc comment deserves to know it is only half true.
+
+4. **A ground plane of 72 tiles needs 9 textures, not 72.** The footprint
+   is 12x6 tiles drawn from a sheet holding 9 variants, and `frame_for`
+   returns the same cached `Image` object for every seed that picks a given
+   variant — so keying on that object's identity collapses 72 GPU uploads
+   of the same handful of 32x32 images down to one each (`_build_ground`).
+
+**Measured end to end**, three runs of each on one machine, base commit vs.
+branch, `build()` called for four successive seeds in one process:
+
+| `build()` | before | after |
+| --- | --- | --- |
+| cold (first ever) | ~4478 ms | ~3999 ms |
+| second seed | ~1503 ms | ~1282 ms |
+| third seed | ~556 ms | ~324 ms |
+| steady-state rebuild | ~252 ms | **~39 ms** |
+
+The cold number moves least, and that is the honest shape of this: most of
+a first build is still per-species sheet loading that has to happen once
+per process no matter who triggers it (the real world would pay it later
+otherwise). What actually changed for a player is the other two things —
+that cost no longer freezes the window, and a DNA reroll, which a player
+does repeatedly, went from a quarter-second stutter to a single frame.
+
+`scenes/main_menu.gd` awaits it from `_ensure_create_screen_built`, right
+after the class-icon warm pass it already awaits, behind the SAME
+`LoadingOverlay` that pass already shows — so the creator's whole first-open
+cost is now one continuous, honest progress readout ("7 / 7 portraits", then
+"11 / 21 scene pieces") rather than two silent freezes back to back.
+`_refresh_appearance` skips its own synchronous `build()` while that first
+build is still pending (`_diorama_build_pending`), so the scene is never
+built twice; every LATER rebuild — a DNA reroll — stays synchronous on
+purpose, because with the atlas fix above a warm rebuild measures ~10 ms,
+which is a frame, not a freeze.
+
 ## Status / mechanisms
 
 - ✅ All four pieces described above are built and tested: seeded layout

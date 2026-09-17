@@ -1861,3 +1861,44 @@ func test_split_cards_by_snow_overlay_only_ever_moves_cards_from_base_to_winter_
 		for seed_value in previous_winter_seeds:
 			assert_true(winter_seeds.has(seed_value), "a card the snow has already caught must stay caught as depth only climbs")
 		previous_winter_seeds = winter_seeds
+
+
+## The atlas is a 1254x1254 sheet that has to be read off disk AND run
+## through SpriteSheetSlicer.chroma_keyed (~1.57M pixels) before a single
+## blade can draw -- measured at ~222ms. `_textures` used to be a plain
+## per-INSTANCE Dictionary, so every `IllustratedGrassPatch.new()` paid that
+## again for a byte-identical result. EarthChunkManager only escaped it by
+## holding one long-lived patch for the whole world; CharacterPreviewDiorama
+## ._build_grass constructs a fresh one on every build, so the character
+## creator paid ~222ms on its first open AND on every DNA reroll (see
+## docs/concept/character_creator_preview_scene.md's own "Load cost"
+## section).
+##
+## Pinned as SHARED IDENTITY, not just "both non-null": the two patches must
+## hand back the very same Texture2D object, which is only true if the cache
+## behind them is `static` -- the same convention IllustratedTerrainSprite.
+## _frame_cache and IllustratedStoneSprite._frame_cache already follow for
+## exactly this reason.
+func test_two_patches_share_one_seasons_atlas_texture():
+	var first := IllustratedGrassPatch.new()
+	var second := IllustratedGrassPatch.new()
+	var first_texture: Texture2D = first.texture_for_season(IllustratedGrassPatch.DEFAULT_SEASON)
+	var second_texture: Texture2D = second.texture_for_season(IllustratedGrassPatch.DEFAULT_SEASON)
+	assert_not_null(first_texture, "the default season's atlas must actually load")
+	assert_same(
+		first_texture,
+		second_texture,
+		"a second IllustratedGrassPatch must reuse the first one's already-sliced atlas, not re-slice it"
+	)
+
+
+## The other half of the same guarantee: different seasons are still
+## different sheets (a static cache keyed wrongly -- or not keyed at all --
+## would collapse them into one and paint winter grass in summer).
+func test_different_seasons_still_get_different_atlas_textures():
+	var patch := IllustratedGrassPatch.new()
+	var summer: Texture2D = patch.texture_for_season("summer")
+	var winter: Texture2D = patch.texture_for_season("winter")
+	assert_not_null(summer)
+	assert_not_null(winter)
+	assert_ne(summer, winter, "each season keeps its own sliced atlas")
