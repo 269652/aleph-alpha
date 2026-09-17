@@ -23195,6 +23195,21 @@ already turned on, named rather than restated). A producer whose region has
 genuinely collapsed is sent to the well again, so the famine chain is
 unchanged.
 
+**Known, pre-existing, and not caused by this pass**: `test_player.gd`
+cannot be run to completion in a headless container. It stalls
+deterministically at `test_grant_starter_items_equips_the_first_weapon_
+choice` (266 of 311 tests, 0 failures) with the process still burning CPU.
+Confirmed by direct A/B: a worktree at `5de33c9`, before any of this
+pass's changes, stalls at the same test. Every test in the remaining tail
+passes when run on its own (`-gunit_test_name`, 47 tests across
+grant_starter_items / stepping / enter_building / exit_building / indoors /
+interior / entering / talking_indoors / enter_exit_step / furniture /
+decorating / build-key / villagers-house / buildings-own / player-starts /
+walking-off-stairs / granted-weapons-mass / default-kit), so the suite is
+verified in two parts rather than one run. The stall is an ordering effect,
+most likely node accumulation across 300 tests: the run's own rate decays
+from ~77 to ~42 tests per five minutes before it stops.
+
 Honest gaps and deliberate divergences, each recorded in
 `concept/npc.md`'s own status subsection:
 
