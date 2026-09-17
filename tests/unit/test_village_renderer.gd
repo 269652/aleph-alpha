@@ -1627,3 +1627,85 @@ func test_two_farmhouses_never_stand_on_each_others_ground():
 			assert_false(seen.has(cell), "two farmhouses overlap at %s" % str(cell))
 			seen[cell] = true
 
+
+
+# -- and every farming villager is handed their OWN farmhouse's field -------
+
+func _farming_markers(spawned: Array, coord: Vector2i) -> Array:
+	var out: Array = []
+	for node in spawned:
+		if node is NpcMarker and VillageFarm.crop_for(node.identity.occupation) != "":
+			out.append(node)
+	return out
+
+
+func test_a_farming_villager_is_handed_a_real_field():
+	var coord := _find_settlement_chunk_with_occupation("grassland", "farmer", 3)
+	var world := StubWorld.new()
+	var spawned := renderer.spawn_village(
+		parent, coord, coord * CHUNK_SIZE, CHUNK_SIZE, TILE_SIZE, "grassland", world
+	)
+	var farmers := _farming_markers(spawned, coord)
+	assert_gt(farmers.size(), 0, "precondition: somebody in this village farms")
+	for npc in farmers:
+		assert_gt(
+			(npc.field_cells as Array).size(), 0,
+			"a %s with a farmhouse and no field would still be farming a number" % npc.identity.occupation
+		)
+
+
+func test_a_villager_who_does_not_farm_is_handed_nothing():
+	var coord := _find_settlement_chunk_with_occupation("grassland", "farmer", 3)
+	var world := StubWorld.new()
+	var spawned := renderer.spawn_village(
+		parent, coord, coord * CHUNK_SIZE, CHUNK_SIZE, TILE_SIZE, "grassland", world
+	)
+	for node in spawned:
+		if node is NpcMarker and VillageFarm.crop_for(node.identity.occupation) == "":
+			assert_eq((node.field_cells as Array).size(), 0, "%s does not farm" % node.identity.occupation)
+
+
+func test_every_field_tile_a_villager_is_given_really_belongs_to_a_farmhouse():
+	var coord := _find_settlement_chunk_with_occupation("grassland", "farmer", 3)
+	var world := StubWorld.new()
+	var spawned := renderer.spawn_village(
+		parent, coord, coord * CHUNK_SIZE, CHUNK_SIZE, TILE_SIZE, "grassland", world
+	)
+	var origins: Array = []
+	for call in _buildings_of(world, VillageFarm.FARM_BUILDING_ID):
+		origins.append(call["origin_local"])
+	for npc in _farming_markers(spawned, coord):
+		for global_cell in npc.field_cells:
+			var local: Vector2i = global_cell - coord * CHUNK_SIZE
+			assert_not_null(
+				VillageFarm.owner_of(local, origins, VillageFarm.FARM_BUILDING_ID),
+				"%s lies beside no farmhouse at all" % str(local)
+			)
+
+
+func test_no_two_villagers_are_handed_the_same_tile():
+	var coord := _find_settlement_chunk_with_occupation("grassland", "herbalist", 5)
+	var world := StubWorld.new()
+	var spawned := renderer.spawn_village(
+		parent, coord, coord * CHUNK_SIZE, CHUNK_SIZE, TILE_SIZE, "grassland", world
+	)
+	var claimed: Dictionary = {}
+	for npc in _farming_markers(spawned, coord):
+		for cell in npc.field_cells:
+			assert_false(claimed.has(cell), "%s was handed to two villagers" % str(cell))
+			claimed[cell] = true
+
+
+func test_no_field_tile_is_water_or_already_built_on():
+	var coord := _find_settlement_chunk_with_occupation("grassland", "farmer", 3)
+	var world := StubWorld.new()
+	var spawned := renderer.spawn_village(
+		parent, coord, coord * CHUNK_SIZE, CHUNK_SIZE, TILE_SIZE, "grassland", world
+	)
+	for npc in _farming_markers(spawned, coord):
+		for cell in npc.field_cells:
+			assert_false(world.is_water_at_global(cell.x, cell.y), "%s is water" % str(cell))
+			assert_eq(
+				world.modification_at_global(cell.x, cell.y), "",
+				"%s already has something standing on it" % str(cell)
+			)

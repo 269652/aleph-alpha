@@ -8125,6 +8125,17 @@ func harvest_farm_plot_at_global(global_x: int, global_y: int) -> Dictionary:
 	return marker.harvest()
 
 
+## The real FarmPlot at a global tile, or null where nobody has ever
+## tilled -- which VillageFarm.action_for reads as "plant this first"
+## rather than as an error. The plot ITSELF, not a copy: a village farmer
+## decides what their field needs by looking at it (docs/concept/
+## village_farms.md, NpcMarker._field_states), and a snapshot would go
+## stale between one frame and the next as the crop grows.
+func farm_plot_at_global(global_x: int, global_y: int):
+	var marker: FarmPlotMarker = _farm_plots.get(Vector2i(global_x, global_y))
+	return marker.plot if marker != null else null
+
+
 ## The world-clock tick hook for the farming loop (see
 ## World._step_ecology_batch, docs/concept/farming.md) -- advances every
 ## farm plot's own growth simulation by `delta_seconds`. Mirrors
