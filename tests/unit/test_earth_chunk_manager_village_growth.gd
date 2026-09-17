@@ -645,12 +645,16 @@ func test_a_growth_building_is_never_sited_on_ground_another_project_already_cla
 	for cell in BuildingCatalog.footprint_cells(rung, first[0].origin):
 		claimed[cell] = true
 
-	# The ladder's NEXT rung has to find its own ground, not share the one
-	# already rising -- asked for directly, since the ladder itself will not
-	# name it until this one actually stands.
-	var after: String = VillageGrowth.LADDER_BUILDING_IDS[
-		VillageGrowth.LADDER_BUILDING_IDS.find(rung) + 1
-	]
+	# The NEXT thing sited has to find its own ground rather than share the
+	# one already rising -- asked for directly, since the ladder will not
+	# name anything else until this rung actually stands.
+	#
+	# A house, not the next ladder rung. The question here is whether the
+	# spiral search respects a live project's claim, and the rung this
+	# village happens to be owed may be the last one on the ladder or simply
+	# too big for what frontage is left -- neither of which is this test's
+	# subject, and both of which made it fail for the wrong reason.
+	var after: String = BuildingCatalog.BUILDING_IDS[0]
 	var next_origin = manager._growth_site_for(_chunk_coord, after)
 	assert_not_null(next_origin, "the village still has frontage somewhere")
 	for cell in BuildingCatalog.footprint_cells(after, next_origin):
