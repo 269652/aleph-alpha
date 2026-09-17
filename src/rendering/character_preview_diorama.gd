@@ -254,12 +254,14 @@ func build(dna_seed: int) -> void:
 ## The same scene as build(), assembled one step at a time with a real frame
 ## between each -- reported live: "the character creator loads super slow".
 ##
-## Nothing here is FASTER. A cold build is ~3.9s and essentially all of it is
-## first-use sprite-sheet loads (see docs/concept/character_creator_preview_
-## scene.md's own "Load cost" table): reading a sheet and slicing it costs
-## what it costs, and no restructuring makes the grassland terrain sheet's
-## own ~1000ms into less work. What this changes is that those ~3.9s stop
-## being ONE unyielded synchronous block that freezes the window -- the same
+## Nothing about yielding makes the work smaller. A cold build is seconds,
+## and essentially all of it is first-use sprite-sheet loads -- reading a
+## sheet and slicing it costs what it costs. (Several of those loads DID get
+## genuinely cheaper in the same pass, but separately and inside the sprite
+## classes themselves; see docs/concept/character_creator_preview_scene.md's
+## own "Load cost" section for the measured breakdown and the paired
+## before/after.) What THIS changes is that the remaining cost stops being
+## ONE unyielded synchronous block that freezes the window -- the same
 ## failure mode, and the same fix, as MainMenu._warm_class_icon_cache and
 ## IllustratedMushroomSprite.warm_cache before it.
 ##

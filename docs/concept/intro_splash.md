@@ -846,6 +846,18 @@ slower machine, or either of those two costs growing independently in
 the future, could reopen exactly the gap this pass closes for the icon
 row specifically.
 
+**Closed for the diorama (2026-09-17).** That caveat turned out to be
+exactly right, and it was reported: *"the character creature loads super
+slow."* The diorama's own build measured ~4.5s cold -- comfortably the
+largest single cost left in the creator, and larger than the icon warming
+this pass fixed. It is now yield-split too, through `CharacterPreview
+Diorama.build_async`, awaited from `_ensure_create_screen_built` and
+reported into this same `LoadingOverlay`. See `docs/concept/character_
+creator_preview_scene.md`'s own "Load cost" section for the measured
+breakdown, the two real bugs found underneath it, and the paired
+before/after. The skill web remains un-yield-split, and remains an honest
+open gap.
+
 ### An eleventh pass: every frame cropped to the same fixed window, not its own content (2026-09-09)
 
 Reported live again, after the eighth pass's own pixel-perfect

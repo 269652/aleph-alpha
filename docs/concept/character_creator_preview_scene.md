@@ -255,17 +255,71 @@ to wait" split the two warm-cache passes before this one used.
 The unit of yielding is one atomic first-use cost, NOT one `_build_*`
 function: flowers, birds and butterflies each load a separate sheet PER
 SPECIES, so those three steps yield per item and report per item. Splitting
-finer than that would be theatre — the terrain sheet's own ~1000 ms is one
-indivisible `load()`-and-slice, and no amount of restructuring around it
-makes it two. So the honest claim this doc makes is bounded: the worst
-single unyielded block drops from ~3.9 s to whatever the largest single
-sheet costs (~1 s, the ground), and every other frame in between gets to
-paint a real progress readout. Pinned by
+finer than that would be theatre — a sheet's `load()`-and-slice is one
+indivisible operation, and no amount of restructuring around it makes it
+two. So the honest claim this doc makes is bounded: the worst single
+unyielded block drops from ~3.9 s to whatever the largest single sheet
+costs (~0.7 s, the ground — see the third finding below), and every other
+frame in between gets to paint a real progress readout. Pinned by
 `test_build_async_yields_at_least_once_per_reported_step` and
 `test_build_async_produces_the_same_scene_as_the_synchronous_build` — the
 second of which is the one that matters, since an async build that quietly
 drifted into a second, differently-behaving implementation of the same
 scene would be worse than the pause it replaced.
+
+3. **Two of those "irreducible" sheet loads turned out to be half
+   avoidable.** Loading the grassland terrain sheet measured ~987 ms, of
+   which the PNG decode is only ~36 ms — the rest is per-pixel GDScript.
+   `IllustratedTerrainSprite._prepared_for_slicing` alone was ~458 ms: a
+   plain `get_pixel`/`set_pixel` double loop over all 1.57M pixels of a
+   1254x1254 sheet, calling the user-defined `_is_magenta`/`_despilled`
+   once each per pixel. That is precisely the technique
+   `SpriteSheetSlicer.chroma_keyed`, `IllustratedMushroomSprite`,
+   `IllustratedAnimalSprite` and `IllustratedStoneSprite` had each already
+   been fixed out of (see `docs/progress.md`'s "Still at 1fps"
+   investigation); this file, and `IllustratedBirdSprite._keyed_image`,
+   were separate never-migrated duplicates of it. Rewritten as inlined
+   single-pass loops with INTEGER thresholds — every value read out of a
+   `PackedByteArray` already is an integer, so `r >= 140.25` means exactly
+   `r >= 141` — taking `_prepared_for_slicing` to ~180 ms and the whole
+   sheet load to ~691 ms. Pinned by budgeted timing tests calibrated from
+   that real before/after pair, plus pixel-level tests that the keying,
+   despill and leave-alone cases still land byte-for-byte where they did.
+
+   Chasing that also **corrected a load-bearing assumption this codebase
+   had written down**: "a byte-array loop beats `get_pixel`/`set_pixel`" is
+   only half true. Reads want the byte array; WRITES lose to a single
+   `Image.set_pixel` call, and on a real illustrated sheet most pixels are
+   the keyed-out background, so most pixels take the write path. Measured
+   over the same images — naive 201 ms / all-bytes 226 ms / hybrid 186 ms
+   on a real mostly-background sheet, and 106 / 82 / 54 ms on one with no
+   matching pixel at all — the all-byte-array `chroma_keyed` was a real
+   REGRESSION on exactly the images it exists for, hidden because its only
+   budgeted pin used the no-match case. It now reads bytes and writes with
+   `set_pixel`, and has a second pin covering the mostly-background case.
+
+4. **A ground plane of 72 tiles needs 9 textures, not 72.** The footprint
+   is 12x6 tiles drawn from a sheet holding 9 variants, and `frame_for`
+   returns the same cached `Image` object for every seed that picks a given
+   variant — so keying on that object's identity collapses 72 GPU uploads
+   of the same handful of 32x32 images down to one each (`_build_ground`).
+
+**Measured end to end**, three runs of each on one machine, base commit vs.
+branch, `build()` called for four successive seeds in one process:
+
+| `build()` | before | after |
+| --- | --- | --- |
+| cold (first ever) | ~4478 ms | ~3999 ms |
+| second seed | ~1503 ms | ~1282 ms |
+| third seed | ~556 ms | ~324 ms |
+| steady-state rebuild | ~252 ms | **~39 ms** |
+
+The cold number moves least, and that is the honest shape of this: most of
+a first build is still per-species sheet loading that has to happen once
+per process no matter who triggers it (the real world would pay it later
+otherwise). What actually changed for a player is the other two things —
+that cost no longer freezes the window, and a DNA reroll, which a player
+does repeatedly, went from a quarter-second stutter to a single frame.
 
 `scenes/main_menu.gd` awaits it from `_ensure_create_screen_built`, right
 after the class-icon warm pass it already awaits, behind the SAME
