@@ -202,7 +202,14 @@ static func _plaza_is_dry(plaza_x0: int, street_y: int, is_dry: Callable) -> boo
 ## did; pass it and the square slides clear of water rather than not
 ## existing. Every caller that can answer it MUST pass the same one, or
 ## two of them derive two different squares for the same village.
+## TEMPORARY PROBE -- remove with the instrumentation in VillageRenderer.
+static var probe_skeleton_calls := 0
+static var probe_layout_passes := 0
+static var probe_predicate_calls := 0
+
+
 static func skeleton(chunk_size: int, seed_value: int, is_dry := Callable()) -> Dictionary:
+	probe_skeleton_calls += 1
 	var street_y := chunk_size / 2
 	var street_x0 := _EDGE_MARGIN_TILES + PixelNoise.range_index(seed_value, 0, 0, _START_JITTER_TILES)
 	var street_x1 := chunk_size - _EDGE_MARGIN_TILES - 1
@@ -298,6 +305,7 @@ func layout(
 	var occupied_answers := {}
 	var buildable := func(cell: Vector2i) -> bool:
 		if not buildable_answers.has(cell):
+			probe_predicate_calls += 1
 			buildable_answers[cell] = bool(is_buildable.call(cell))
 		return buildable_answers[cell]
 	var occupied := func(cell: Vector2i) -> bool:
@@ -305,9 +313,11 @@ func layout(
 			occupied_answers[cell] = bool(is_occupied.call(cell))
 		return occupied_answers[cell]
 
+	probe_layout_passes += 1
 	var planned := _layout_once(building_ids, chunk_size, seed_value, buildable, occupied, true)
 	if houses_everyone(planned, building_ids):
 		return planned
+	probe_layout_passes += 1
 	return _layout_once(building_ids, chunk_size, seed_value, buildable, occupied, false)
 
 
