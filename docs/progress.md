@@ -24538,6 +24538,25 @@ sawmill, and the reason is the doorstep: this plot's door opens straight onto
 the main street, so by the time placement runs its own front step is already
 paved and plain `place_building` refuses it — every time, over itself.
 
+⚠️ **And it goes up BEFORE the works, which is load-bearing rather than
+tidy.** The store's plot is fixed and cannot move; the sawmill is sited
+wherever there is timber and a clear road spur back to the street, searched
+for against what already stands. Placed the other way round the spur gets
+**cut**: raising the store lifts every road cell under its footprint and puts
+back only its doorstep, so a mill whose spur happened to cross the reserved
+plot was left with no road home. Caught by
+`test_the_real_sawmill_is_walkable_back_to_the_street_on_road` — and worth
+naming why no stub-world test could see it: `StubWorld.build_at_global`
+records road cells into a different dictionary from the one
+`modification_at_global` reads, so paving and placement never collide there
+the way they do against the real world.
+
+✅ **A reload raises it too.** `_recover_existing_village` never runs the
+founding placement at all, so a village founded before there was such a thing
+as a store would have come back storeless forever, and "every village has
+one" would only ever have been true of villages founded after this pass. The
+hall is raised on reload for exactly the same reason.
+
 ⚠️ **One honest caveat on "always", found by building it.** The reserved plot
 sits on prime ground a house might have needed. On a cramped site, claiming
 it tipped the layout from "houses everyone" to "houses all but one" — and a

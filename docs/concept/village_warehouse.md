@@ -81,6 +81,26 @@ ladder is ever consulted is not a rung; leaving it in would make
 `next_building` return a target the village already has, which is precisely
 the bug `present_building_ids` exists to avoid.
 
+**The store goes up before the works, and the order is load-bearing.** The
+store stands on a fixed reserved plot beside the square and cannot move; the
+sawmill is sited wherever there is timber and a clear road spur back to the
+street, and that spur is searched for against what is already standing.
+Placed the other way round, a spur laid first gets CUT — raising the store
+lifts every road cell under its footprint and puts back only its doorstep
+(`place_building_over_roads`), so a mill whose spur happened to run across
+the reserved plot was left with no road home. Found by
+`test_the_real_sawmill_is_walkable_back_to_the_street_on_road`, and it is
+worth naming why no stub-world test could have seen it: `StubWorld`'s
+`build_at_global` records road cells into a different dictionary from the
+one `modification_at_global` reads, so paving and placement never actually
+collide there the way they do against the real world.
+
+**A reload raises it too.** `_recover_existing_village` never runs the
+founding placement at all, so a village founded before there was such a
+thing as a store would have come back storeless forever, and pillar 1 would
+only ever have been true of villages founded after this pass. The hall is
+raised on reload for the same reason.
+
 ## Mechanism 2 — The roof is the limit
 
 `VillageMarket` gains a stock ceiling. `add_stock` is the one seam every
@@ -171,8 +191,10 @@ thing anybody ever did.
 ## Status
 
 - ✅ **Mechanism 1 — standing from founding.** `VillageLayout` reserves the
-  plot, `VillageRenderer` raises it, the ladder rung is gone. See the
-  caveat under pillar 1 for what "always" honestly means on a cramped site.
+  plot, `VillageRenderer` raises it — at founding and on reload, and ahead
+  of the sawmill so the mill's road spur is routed around it rather than
+  cut by it — and the ladder rung is gone. See the caveat under pillar 1 for
+  what "always" honestly means on a cramped site.
 - ✅ **Mechanism 2 — the roof is the limit.** `VillageMarket.storage_
   capacity` clamps `add_stock`, defaulting to INF so no existing caller
   changed behaviour, and `EarthChunkManager`'s settlement step sets it every
