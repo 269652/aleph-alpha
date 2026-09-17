@@ -139,6 +139,7 @@ const AmbientFlyerRenderer = preload("res://src/rendering/ambient_flyer_renderer
 const FlyerPersonality = preload("res://src/gameplay/flyer_personality.gd")
 const PiscivoreBirdRenderer = preload("res://src/rendering/piscivore_bird_renderer.gd")
 const VillageRenderer = preload("res://src/rendering/village_renderer.gd")
+const VillageFarm = preload("res://src/gameplay/village_farm.gd")
 const NpcMarker = preload("res://src/rendering/npc_marker.gd")
 const EcosystemSimulation = preload("res://src/world/ecosystem_simulation.gd")
 const ChunkSerializer = preload("res://src/world/chunk_serializer.gd")
@@ -13110,6 +13111,19 @@ func piece_condition_at_global(global_x: int, global_y: int) -> float:
 ## just its owning chunk. Returns false (no-op) if that tile isn't in a
 ## currently-loaded chunk -- building far outside the streamed area isn't
 ## meaningful since nothing there is being rendered or simulated.
+## Whether a village farm's rail stands on this tile (docs/concept/
+## village_farms.md, "The fence around the beds") -- the one question a
+## creature's movement asks of the world before it steps
+## (CreatureMarker._fence_blocks_movement). False for an unloaded chunk,
+## like every other per-tile modification query here.
+##
+## Asked per creature per movement decision, so it is deliberately the same
+## O(1) dictionary lookup modification_at_global already is, with the rail
+## test owned by VillageFarm so nothing here re-lists the four facings.
+func is_fenced_at_global(global_x: int, global_y: int) -> bool:
+	return VillageFarm.is_fence_tile(modification_at_global(global_x, global_y))
+
+
 func build_at_global(global_x: int, global_y: int, tile_id: String) -> bool:
 	var chunk_coord := _chunk_coord_for_tile(Vector2i(global_x, global_y))
 	var chunk: Chunk = _loaded_chunks.get(chunk_coord)

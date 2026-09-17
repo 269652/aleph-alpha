@@ -11,6 +11,7 @@ const TreePlacement = preload("res://src/world/tree_placement.gd")
 const GeoCoordinates = preload("res://src/world/geo_coordinates.gd")
 const EarthChunkGenerator = preload("res://src/world/earth_chunk_generator.gd")
 const TerrainRenderer = preload("res://src/rendering/terrain_renderer.gd")
+const VillageFarm = preload("res://src/gameplay/village_farm.gd")
 const RiverFlowShader = preload("res://src/rendering/river_flow_shader.gd")
 const OpenChannelFlow = preload("res://src/world/open_channel_flow.gd")
 const ProceduralRiverFlowSprite = preload("res://src/rendering/procedural_river_flow_sprite.gd")
@@ -3036,6 +3037,23 @@ func test_build_at_global_sets_a_modification_when_the_chunk_is_loaded():
 func test_build_at_global_fails_when_the_chunk_is_not_loaded():
 	var success := manager.build_at_global(999999, 999999, "earth")
 	assert_false(success)
+
+
+## The one question a creature's movement asks of the world before it steps
+## (CreatureMarker._fence_blocks_movement): is there a farm rail on this
+## tile? See docs/concept/village_farms.md, "The fence around the beds".
+func test_a_tile_carrying_a_farm_rail_reads_as_fenced():
+	manager.update(_berlin_tile)
+	manager.build_at_global(_berlin_tile.x, _berlin_tile.y, VillageFarm.fence_tile_for("south"))
+	assert_true(manager.is_fenced_at_global(_berlin_tile.x, _berlin_tile.y))
+
+
+func test_open_ground_and_other_tiles_never_read_as_fenced():
+	manager.update(_berlin_tile)
+	assert_false(manager.is_fenced_at_global(_berlin_tile.x, _berlin_tile.y), "untouched ground")
+	manager.build_at_global(_berlin_tile.x, _berlin_tile.y, TerrainRenderer.ROAD_TILE_ID)
+	assert_false(manager.is_fenced_at_global(_berlin_tile.x, _berlin_tile.y), "a street is not a fence")
+	assert_false(manager.is_fenced_at_global(999999, 999999), "an unloaded chunk fences nothing")
 
 
 ## Asserts the cell actually changed rather than pinning an exact atlas
