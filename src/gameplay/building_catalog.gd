@@ -122,10 +122,12 @@ const _BUILDINGS := {
 	# masonry -- so it lands under the hall.
 	"warehouse": {
 		# Three wide, not four: reported live ("should be only 3 tiles wide
-		# not 4"), and it matches the art -- warehouse.png is drawn in
-		# SQUARE 192x192 cells, and footprint_frame_texture scales a frame
+		# not 4"), and it matches the art -- warehouse.png's columns are on
+		# an exact 192px pitch, and footprint_frame_texture scales a frame
 		# by its WIDTH (tile_size * footprint_width), so a warehouse
 		# claiming four tiles was drawn a third wider than its own plot.
+		# Pinned end to end by
+		# test_a_finished_warehouse_is_drawn_exactly_three_tiles_across.
 		"footprint": Vector2i(3, 3), "interior_family": "hall", "capacity": 0, "storage": 240,
 		"labor_hours": 42.0, "cost": {"wood": 22, "plant_fibre": 6},
 	},

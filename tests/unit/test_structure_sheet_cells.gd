@@ -12,6 +12,10 @@ extends GutTest
 const IllustratedStructureSprite = preload("res://src/rendering/illustrated_structure_sprite.gd")
 const BuildingCatalog = preload("res://src/gameplay/building_catalog.gd")
 
+## Any tile size: the contract is "the frame is footprint_width tiles
+## across", not a particular pixel count.
+const _TILE := 16
+
 ## Every production/civic sheet on disk today, measured.
 const REAL_SHEET_WIDTH := 1536
 const REAL_SHEET_HEIGHT := 1024
@@ -171,3 +175,40 @@ func test_the_warehouse_is_three_tiles_wide():
 ## 3x3 warehouse matches the square cell its art is drawn in.
 func test_the_warehouse_keeps_its_depth():
 	assert_eq(BuildingCatalog.footprint_of("warehouse").y, 3)
+
+
+## The report, end to end and through the real sheet chain the live
+## building node uses: a finished warehouse is drawn exactly three tiles
+## across. Everything above this is the machinery; this is the number the
+## player actually sees.
+func test_a_finished_warehouse_is_drawn_exactly_three_tiles_across():
+	var sprite := IllustratedStructureSprite.new()
+	var footprint := BuildingCatalog.footprint_of("warehouse")
+	var texture: ImageTexture = null
+	for entry in BuildingCatalog.finished_sheet_chain("warehouse", 0):
+		texture = sprite.footprint_frame_texture(
+			entry["path"], entry["columns"], entry["rows"], entry["row"], entry["column"],
+			_TILE, footprint.x, entry["grid"]
+		)
+		if texture != null:
+			break
+	assert_not_null(texture, "the warehouse has a real sheet to draw from")
+	assert_eq(texture.get_width(), _TILE * 3, "three tiles across, as reported -- not four")
+	assert_eq(texture.get_width(), _TILE * footprint.x, "and it is the catalog footprint that says so")
+
+
+## The other half of the same report ("its scale as well"): four tiles
+## really would have drawn it a third wider, so the fix is worth a third of
+## the building.
+func test_four_tiles_would_have_drawn_it_a_third_wider():
+	var sprite := IllustratedStructureSprite.new()
+	var entry: Dictionary = BuildingCatalog.finished_sheet_chain("warehouse", 0)[-1]
+	var three := sprite.footprint_frame_texture(
+		entry["path"], entry["columns"], entry["rows"], entry["row"], entry["column"],
+		_TILE, 3, entry["grid"]
+	)
+	var four := sprite.footprint_frame_texture(
+		entry["path"], entry["columns"], entry["rows"], entry["row"], entry["column"],
+		_TILE, 4, entry["grid"]
+	)
+	assert_almost_eq(float(four.get_width()) / float(three.get_width()), 4.0 / 3.0, 0.01)
