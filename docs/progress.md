@@ -25377,6 +25377,16 @@ aspect_ratio`, still covers all five subjects unchanged, and
 (pinned) — the grid and the divider trim are separate functions precisely so
 that guarantee keeps meaning what it said.
 
+🚧 **`city_hall` keeps ~100 near-black pixels of divider antialiasing on
+its left edge**, at about 3% luminance. Deliberately left, and both
+alternatives were measured before deciding: widening the near-black key to
+reach them would also remove **30,000+ dark magenta-hued pixels that sit
+well away from any boundary on every sheet** — real shadow and roof art —
+and pushing `CELL_INSET` past 3 to clear them would be a constant tuned to
+one sheet's antialiasing with nothing to pin it to. The visible half of the
+fringe (196 near-white pixels per frame) is gone; this is the half that
+reads as a dark outline.
+
 🚧 **`city_hall` still declares a 4×3 footprint**, so it draws 4 tiles wide
 over a 3-wide plot. Left alone deliberately: its plot is sized by
 `VillageLayout`'s civic slot and changing it would move buildings in

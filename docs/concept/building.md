@@ -379,6 +379,14 @@ windows / chimney smoke loop), 2 idle ×8 (loop or repeats), 3 burning ×8,
 > sheets: at 2% every one resolves to its 5 drawn rows, at 1% `city_hall`
 > splits into 7, at 5% `sawmill` splits into 6.
 >
+> What the inset does NOT clear: where a magenta divider is antialiased
+> against a cell's black background it leaves a tail of near-black
+> magenta-hued pixels a few px inside the boundary (~100 of them on
+> `city_hall`'s left edge, ~3% luminance). Keying those out is not an
+> option — 30,000+ pixels of that same hue and brightness sit well away
+> from any boundary on every sheet, as real shadow and roof art — so the
+> dark half of the fringe stays.
+>
 > The consequence worth stating plainly: **a frame from one of these sheets
 > is not square and the sheets do not agree on a row height.** `sagewerk`'s
 > idle frame is 186×183, `storage`'s 186×169, `city_hall`'s 186×186. That
