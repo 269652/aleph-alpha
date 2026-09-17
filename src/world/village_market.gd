@@ -54,10 +54,65 @@ var stock: Dictionary = {}
 var item_catalog = null
 
 
+## The most stock this settlement can hold at once, across every item
+## (docs/concept/village_warehouse.md, "The roof is the limit"). A village
+## cannot keep more than it has roof for, however good the harvest -- which
+## is what makes a warehouse worth having rather than worth looking at.
+##
+## INF by default, and that default is load-bearing. Every caller that
+## already stocks a market -- SettlementGathering, production, trade, the
+## construction ledger -- keeps behaving exactly as it did, and the ceiling
+## is opted into by the one place that actually knows which buildings stand
+## (EarthChunkManager's settlement step). A cap that defaulted to a NUMBER
+## would have silently rewritten the famine chain, which is real and tested
+## and was not asked to change.
+var storage_capacity: float = INF
+
+
+## Capacity is a property of what STANDS, so a village that loses its
+## warehouse loses the headroom with it.
+##
+## Test-pinned as an ordering with a real floor rather than as two numbers
+## somebody liked (CLAUDE.md: a tuned value is a tested function or a
+## test-pinned constant). The floor is what a household keeps in its own
+## corners; the warehouse figure is a real surplus on top -- enough to bank
+## a season rather than live hand to mouth, which is the whole reason the
+## building exists.
+## The id whose presence raises the roof. Matches VillageLayout's own
+## constant; named here too so this file's rule does not have to reach into
+## a layout module to state what a warehouse is called.
+const WAREHOUSE_BUILDING_ID := "warehouse"
+
+const HOUSEHOLD_CORNERS_CAPACITY := 20.0
+const WAREHOUSE_CAPACITY := 200.0
+
+
+static func capacity_for(has_warehouse: bool) -> float:
+	return WAREHOUSE_CAPACITY if has_warehouse else HOUSEHOLD_CORNERS_CAPACITY
+
+
+## The same rule, read straight off the ids a settlement actually has
+## standing. Lives here rather than inline in EarthChunkManager's settlement
+## loop so the decision that matters -- WHICH building raises the roof -- can
+## be tested without building a world to ask.
+static func capacity_for_structures(present_building_ids: Array) -> float:
+	return capacity_for(present_building_ids.has(WAREHOUSE_BUILDING_ID))
+
+
+## Adds what there is ROOM for, and drops the rest.
+##
+## The overflow is discarded rather than queued on purpose: a full store
+## turning a producer away is the pressure that makes the building worth
+## raising, while banking the surplus invisibly would make the ceiling mean
+## nothing. Measured against total_stock rather than this item's own count,
+## because a roof holds everything under it at once.
 func add_stock(item_id: String, amount: float) -> void:
 	if amount <= 0.0:
 		return
-	stock[item_id] = stock.get(item_id, 0.0) + amount
+	var room := storage_capacity - total_stock()
+	if room <= 0.0:
+		return
+	stock[item_id] = stock.get(item_id, 0.0) + minf(amount, room)
 
 
 ## Withdraws `amount` of item_id -- the real draw-down docs/concept/

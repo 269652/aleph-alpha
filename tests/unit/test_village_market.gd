@@ -188,3 +188,87 @@ func test_an_injected_catalog_decides_what_counts_as_food():
 	var wallet := Wallet.new()
 	wallet.add(100)
 	assert_eq(market.buy_meal(wallet), "emergent_stew")
+
+
+# -- the roof is the limit --------------------------------------------------
+#
+# Mechanism 2 of docs/concept/village_warehouse.md. Before this, a
+# settlement's stock was unbounded: a number on this object that grew
+# forever, with nothing in the world holding it. Now the building holds it.
+#
+# The default is deliberately UNCAPPED. Every caller that already stocks a
+# market -- gathering, production, trade, the construction ledger -- keeps
+# working untouched, and the ceiling is opted into by the one place that
+# actually knows which buildings stand. A cap that defaulted to a number
+# would have silently rewritten the famine chain instead.
+
+
+func test_stock_is_uncapped_until_a_capacity_is_set():
+	market.add_stock("bread", 10_000.0)
+	assert_almost_eq(market.stock["bread"], 10_000.0, 0.01, "no ceiling means no ceiling")
+
+
+func test_a_full_store_turns_the_rest_away():
+	market.storage_capacity = 10.0
+	market.add_stock("bread", 4.0)
+	market.add_stock("bread", 9.0)
+	assert_almost_eq(
+		market.total_stock(), 10.0, 0.01, "a village keeps what it has room for and no more"
+	)
+
+
+## Overflow is DISCARDED, not queued. A full store turning a producer away is
+## the pressure that makes the building worth having; banking the surplus
+## invisibly would make the ceiling meaningless.
+func test_the_overflow_is_gone_not_banked():
+	market.storage_capacity = 5.0
+	market.add_stock("bread", 20.0)
+	market.remove_stock("bread", 5.0)
+	market.add_stock("wood", 1.0)
+	assert_almost_eq(market.total_stock(), 1.0, 0.01, "the 15 that did not fit never existed")
+
+
+## Room freed is room usable again -- the cap is on what is HELD, not on what
+## has ever passed through.
+func test_drawing_stock_down_frees_the_room_again():
+	market.storage_capacity = 10.0
+	market.add_stock("bread", 10.0)
+	assert_true(market.remove_stock("bread", 6.0))
+	market.add_stock("wood", 6.0)
+	assert_almost_eq(market.total_stock(), 10.0, 0.01)
+
+
+## The ceiling is a property of what stands, and a warehouse is what makes
+## the difference. Pinned as an ORDERING plus a real floor, not as two magic
+## numbers: a village with no store still keeps a little, and a village with
+## one keeps materially more.
+func test_a_warehouse_is_what_raises_the_ceiling():
+	var without: float = VillageMarket.capacity_for(false)
+	var with_store: float = VillageMarket.capacity_for(true)
+	assert_gt(without, 0.0, "even a village with no store keeps something in its houses")
+	assert_gt(with_store, without, "the whole point of the building")
+
+
+## The decision itself, kept out of EarthChunkManager's settlement loop so it
+## can be tested without building a world: which of the ids actually standing
+## in a settlement raises its ceiling. Reads the building id from
+## BuildingCatalog rather than a string written here twice.
+func test_the_ceiling_is_read_from_the_buildings_that_actually_stand():
+	assert_almost_eq(
+		VillageMarket.capacity_for_structures(["house_small", "city_hall"]),
+		VillageMarket.HOUSEHOLD_CORNERS_CAPACITY,
+		0.01,
+		"a hall is not a store"
+	)
+	assert_almost_eq(
+		VillageMarket.capacity_for_structures(["house_small", "warehouse"]),
+		VillageMarket.WAREHOUSE_CAPACITY,
+		0.01,
+		"the store is what counts"
+	)
+	assert_almost_eq(
+		VillageMarket.capacity_for_structures([]),
+		VillageMarket.HOUSEHOLD_CORNERS_CAPACITY,
+		0.01,
+		"a village that lost everything still keeps its corners"
+	)

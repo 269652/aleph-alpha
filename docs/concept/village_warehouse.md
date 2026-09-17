@@ -120,8 +120,15 @@ first.
 
 ## Status
 
-- ⬜ **Mechanism 1 — standing from founding.** Not yet built.
-- ⬜ **Mechanism 2 — the roof is the limit.** Not yet built.
+- ✅ **Mechanism 1 — standing from founding.** `VillageLayout` reserves the
+  plot, `VillageRenderer` raises it, the ladder rung is gone. See the
+  caveat under pillar 1 for what "always" honestly means on a cramped site.
+- ✅ **Mechanism 2 — the roof is the limit.** `VillageMarket.storage_
+  capacity` clamps `add_stock`, defaulting to INF so no existing caller
+  changed behaviour, and `EarthChunkManager`'s settlement step sets it every
+  step from the ids actually standing — so losing the warehouse loses the
+  headroom. `capacity_for_structures` keeps that decision testable without
+  building a world.
 - ⬜ **Mechanism 3 — goods are carried in.** Not yet built.
 
 ## Known open questions

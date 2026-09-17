@@ -3568,6 +3568,17 @@ func step_settlements(delta_seconds: float) -> void:
 		# settlement in the world DECLINING forever, which Governance then
 		# read straight back out as illegitimate.
 		var village_market = SettlementFood.village_market_for(settlement_id, _loaded_villages)
+		# What the village can HOLD, from what actually stands in it
+		# (docs/concept/village_warehouse.md, "The roof is the limit").
+		# Refreshed every step rather than set once: a village that loses
+		# its warehouse loses the headroom with it, and one that has just
+		# had it raised gains it. Deliberately NOT SettlementFood.carrying_
+		# capacity, which asks the different question of how many households
+		# the food on hand can feed.
+		if village_market != null:
+			village_market.storage_capacity = VillageMarket.capacity_for_structures(
+				_present_structure_ids_for_settlement_chunk(RegionalTrade.chunk_coord_of(settlement_id))
+			)
 		# BEFORE capacity is read, because this is what finally puts a real
 		# number in front of it (see _step_settlement_granary).
 		_step_settlement_granary(settlement_id, market, village_market, household_ids)
