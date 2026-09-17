@@ -506,3 +506,68 @@ func test_snow_lying_on_a_cobbled_street_takes_a_print_again():
 	var field: FootprintField = manager._footprint_fields[_berlin_chunk]
 	assert_eq(field.count(), 1, "snow lying on the setts is what the foot presses into")
 	assert_eq(field.prints()[0].surface, "snow")
+
+
+## A SUSTAINED walk, not a single stride: the same walker, the same
+## chunk, the same heading, paved in one row and untouched in the other.
+## Covers what the single-stride tests above cannot -- that nothing else
+## in the per-frame path quietly re-adds a print once walking keeps going,
+## and that the street's own refusal is not a one-stride accident.
+##
+## The stride count is derived from how much room the walk really has
+## inside its own chunk rather than hardcoded, so a later change to
+## FootstepGait.STRIDE_LENGTH_PX or CHUNK_SIZE cannot silently walk this
+## test off the loaded chunk (where prints stop being recorded for a
+## reason that has nothing to do with paving).
+func test_a_sustained_walk_marks_bare_ground_and_never_the_street():
+	manager._load_chunk(_berlin_chunk)
+	var centre_tile: Vector2i = _berlin_chunk * EarthChunkManager.CHUNK_SIZE + Vector2i(
+		EarthChunkManager.CHUNK_SIZE / 2, EarthChunkManager.CHUNK_SIZE / 2
+	)
+	var stride := FootstepGait.STRIDE_LENGTH_PX * 1.01
+	var room_px := float(EarthChunkManager.CHUNK_SIZE / 2 - 2) * TerrainRenderer.TILE_SIZE
+	var strides := floori(room_px / stride)
+	if strides < 5 or manager.snow_depth() > 0.0:
+		pass_test("precondition unmet (too little room for a real sustained walk, or snow is lying) -- nothing to check")
+		return
+	var street_y := centre_tile.y + 2
+	# Every tile either walk touches must really be footprint-bearing
+	# ground, or the comparison measures this chunk's own biome edges
+	# rather than the paving (this file's own established honesty about
+	# real, probabilistic terrain -- see _real_footprint_pixel_or_nan).
+	var last_x := centre_tile.x + ceili(strides * stride / TerrainRenderer.TILE_SIZE) + 1
+	for x in range(centre_tile.x - 1, last_x + 1):
+		for y in [centre_tile.y - 1, centre_tile.y, centre_tile.y + 1, street_y - 1, street_y, street_y + 1]:
+			if not ["grassland", "forest"].has(manager.biome_at_global(x, y)):
+				pass_test("precondition unmet (the walked rows aren't all grass/forest this run) -- nothing to check")
+				return
+
+	var field: FootprintField = manager._footprint_fields[_berlin_chunk]
+	var bare_gait := FootstepGait.new()
+	var bare_start := _pixel_for(centre_tile)
+	manager.record_footstep(bare_start, Vector2.RIGHT, bare_gait, CreatureMass.PLAYER_MASS_KG)
+	for i in range(strides):
+		manager.record_footstep(bare_start + Vector2.RIGHT * stride * (i + 1), Vector2.RIGHT, bare_gait, CreatureMass.PLAYER_MASS_KG)
+	assert_eq(field.count(), strides, "untouched ground should keep one print per stride walked")
+
+	# Written straight into the chunk's own modification dict rather than
+	# through build_at_global -- the same shortcut test_terrain_renderer.gd
+	# and test_stone_renderer.gd already take, and here it is a real cost
+	# question rather than a convenience: build_at_global repaints the
+	# WHOLE chunk per cell, which for a street this long ran this one test
+	# past half an hour and took the whole file with it (CONTRIBUTING.md is
+	# explicit that a slow file is a real cost, not a cosmetic one). The
+	# gate reads `modification_at_global`, which reads exactly this dict,
+	# so it sees an identical world either way -- and the three tests above
+	# still pave through the real public build_at_global path, so that
+	# wiring stays covered.
+	var chunk = manager._loaded_chunks[_berlin_chunk]
+	for x in range(centre_tile.x - 1, last_x + 1):
+		for y in [street_y - 1, street_y, street_y + 1]:
+			chunk.modifications[manager._local_coord(x, y)] = TerrainRenderer.ROAD_TILE_ID
+	var street_gait := FootstepGait.new()
+	var street_start := _pixel_for(Vector2i(centre_tile.x, street_y))
+	manager.record_footstep(street_start, Vector2.RIGHT, street_gait, CreatureMass.PLAYER_MASS_KG)
+	for i in range(strides):
+		manager.record_footstep(street_start + Vector2.RIGHT * stride * (i + 1), Vector2.RIGHT, street_gait, CreatureMass.PLAYER_MASS_KG)
+	assert_eq(field.count(), strides, "the street should have added nothing at all to what the bare walk left")
