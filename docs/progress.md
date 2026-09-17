@@ -24131,6 +24131,58 @@ quietly flipping.
 
 232/232 across the farming, market and village suites.
 
+### Houses stand shoulder to shoulder (2026-09-17)
+
+*"Could save some space in villages by omitting the gap between houses."*
+`VillageLayout.PLOT_GAP_TILES` 1 → 0. Measured on a real village with
+`tools/probe_village_map.gd`: one street row went from `hhh.hhhh` to
+`hhhhhhhhhh`, the same ground carrying three more house tiles.
+
+One constant was doing two jobs. The plot gap also set the PLAZA's
+clearance, and the square is a different question — it is never frontage, so
+a house flush against it would stand in the space the square is. Split out
+as `PLAZA_CLEARANCE_TILES`, still 1.
+
+`test_adjacent_plots_on_the_same_street_keep_a_real_gap` asserted exactly
+what was asked to go away (no two footprints even orthogonally adjacent).
+Replaced by the part that was ever load-bearing — they must not OVERLAP —
+plus a new test that they really are flush rather than merely allowed to be.
+The reversal is recorded in the test as the player's, not as a correction.
+
+270/270 across the layout, renderer, room, farm and farming suites.
+
+### The pond finished: fish you can see, and a fisher who works them (2026-09-17)
+
+*"Close the gaps please and finish this properly."* Both remaining ⬜/🚧 rows
+of `village_ponds.md` are ✅.
+
+**Visible fish.** Real `FishMarker`s on the pond's own water, one per whole
+fish, capped at one per tile — six tiles is a pond, not a shoal — synced on
+every stocking, breeding tick and catch, and freed with the chunk. Kept out
+of `_loaded_fish` on purpose: that list is respawned wholesale whenever a
+chunk's aggregate fish population is reconciled, and a pond's own fish would
+have been wiped every time the region's did anything.
+
+**The fisher works it.** `_step_pond` mirrors `_step_farm` exactly — same
+shape, same override in the work tick, same off-the-clock carry. A cast costs
+`FarmerBehavior.WORK_SECONDS`, pinned against it rather than tuned, so
+fishing and farming are one effort. The catch walks the farmer's own chain
+through the farmer's own functions.
+
+`farmhouse_cell` became `stock_building_cell` in the process. It holds a
+farmer's farmhouse and a fisher's cottage, and the name would have been a lie
+in the one place a reader looks to find where a catch went.
+
+**One trap cost three failures that read like real bugs.** `_unload_chunk`
+PERSISTS a chunk's modifications to `user://`, which is keyed only by project
+name — so a dug pond leaked into every later test in the file AND into the
+next run of it from a different worktree, as ground that was already water.
+`test_earth_chunk_manager_ponds.gd` now scrubs its own chunk in
+before_each/after_each, the way `test_earth_chunk_manager_structure_art.gd`'s
+header has warned about since it was written.
+
+274/274 across the seven pond, village and farming suites.
+
 Honest gaps, three real:
 
 🚧 **The gate is a real hole.** An animal that wanders into the gate cell is
@@ -24602,3 +24654,65 @@ atlas the way road paving is (`TerrainRenderer.ROAD_TILE_ID` plus a
 than a sprite laid over it, and would let beds blend with neighbouring
 terrain, but it also entangles beds with the built-tile/occupancy rules that
 `modifications` drives — a much larger change than was asked for here.
+
+
+## The sawmill gets a sawyer (`concept/village_timber.md`, 2026-09-17)
+
+Reported in play: *"The sawmill also never produces any beams and doesn't
+even have a dedicated worker"*, then *"implement the sawmill properly"*.
+
+Both halves were true, and the second explained the first: **no villager had
+that trade at all.** `NpcIdentity.OCCUPATIONS` was farmer, blacksmith,
+merchant, guard, fisher, herbalist, hunter, nurse. A village raised a sawmill
+at its own timber and then had nobody whose job was timber.
+
+**Almost nothing here is new.** `SagewerkProduction` already turned logs into
+beams and planks, with costs and shaping times measured against real joinery
+(hewing a round log square wastes sapwood and is slow; riving boards off it is
+cheap and fast) and pinned by tests. `LumberjackBehavior` was already the
+SEEKING → APPROACHING → FELLING → CARRYING → DEPOSIT machine.
+`ChoppableTree.take_damage` was already how a tree comes down. Every one of
+those served the placeable **tile** `sagewerk`; none of it reached the
+village's own **building**, which was referenced by the founding placement and
+the growth-site search and *nowhere else*.
+
+✅ **`lumberjack` is a real trade**, and the sawmill is a real landmark, so a
+sawyer's schedule resolves to the mill rather than to a decorative workspot.
+
+✅ **`VillageSawmill`** — the pure rule set, the sibling of `VillageFarm`.
+`LOGS_PER_BEAM` is `SagewerkProduction`'s own cost re-exported and pinned to
+it. `TIMBER_REACH_TILES` starts from the reach a mill is *sited* by, because a
+mill placed beside timber must be able to reach that timber. Short of a beam's
+worth the answer is still `FELL` — a sawyer waiting at the mill for logs
+nobody is fetching is a mill that stops the moment it runs down.
+
+✅ **`NpcMarker._step_timber`** — the third sibling of `_step_hunt` and
+`_step_farm`, on the same four seams and the same override ordering. Real
+trees felled with the player's own loop, logs to the mill, and a beam squared
+*at* the mill over real time with the logs really leaving the stock.
+
+✅ **Beams reach the village** through the same store-then-haul the farmhouse
+runs, paid once on arrival. Beams only — the logs a mill holds are its raw
+material, and carrying those off would carry away the thing the mill exists to
+work.
+
+**The cost the spec warned about came due.** Occupation is drawn from
+`OCCUPATIONS` by seed, so adding one re-rolls who is who in every village.
+Three tests had silently depended on seed 1's old trade and started walking to
+a `sawmill` tag their fixtures did not have; each is now pinned to a trade of
+its own with a comment saying why, rather than papered over. That also exposed
+a real gap — the work tag named a place nothing provided — which is why the
+mill became a landmark.
+
+One of my own tests **passed vacuously** before it was fixed: the stub village
+had no forest, so it raised no mill and the assertion never ran. It seeds real
+timber now.
+
+Tests: `test_village_sawmill.gd` 9/9 (new), `test_npc_marker_timber.gd` 15/15
+(new), `test_npc_identity.gd` 18/18, `test_village_renderer.gd` 94/94,
+`test_npc_marker.gd` 47/47, `test_npc_marker_farming.gd` 25/25,
+`test_dialogue_context.gd` 39/39, `test_village_census.gd` 9/9.
+
+Honestly unbuilt: the mill shapes **beams** only — `SagewerkProduction` also
+makes planks, and nothing yet asks for them; and a village with more than one
+sawmill would hand every sawyer the first one.

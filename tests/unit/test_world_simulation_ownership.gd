@@ -72,3 +72,19 @@ func test_the_ecology_batch_advances_wild_crops_like_every_other_plant_sim():
 		body.contains("step_wild_crops"),
 		"wild crops must be advanced by the batch, not only by their own tests"
 	)
+
+
+## A village pond's fish breed on the world's own tick, like every other
+## population (docs/concept/village_ponds.md). Asked for directly: "fish
+## swimming in it which reproduce" -- and a step nothing calls breeds
+## nothing, which is the exact bug the wild-crops case above exists for.
+func test_the_ecology_batch_breeds_the_villages_own_ponds():
+	var source := FileAccess.get_file_as_string("res://scenes/world.gd")
+	var start := source.find("func _step_ecology_batch")
+	assert_gt(start, -1, "the ecology batch must still be called that")
+	var body_end := source.find("\nfunc ", start + 1)
+	var body := source.substr(start, body_end - start)
+	assert_true(
+		body.contains("step_ponds"),
+		"a pond's fish must be bred by the batch, not only by their own tests"
+	)
