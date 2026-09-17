@@ -309,7 +309,7 @@ var _diorama: Node2D
 ## whatever _dna_seed's own default happens to be.
 var _diorama_built_for_seed := -1
 ## True until the creator's FIRST diorama build has finished. That first
-## build is ~3.9s of first-use sprite-sheet loading (see docs/concept/
+## build is ~4s of first-use sprite-sheet loading (see docs/concept/
 ## character_creator_preview_scene.md's own "Load cost" section), so it runs
 ## incrementally, behind the loading overlay, from _ensure_create_screen_
 ## built -- NOT inline from _refresh_appearance, which is synchronous and is
@@ -320,8 +320,9 @@ var _diorama_built_for_seed := -1
 ##
 ## Every LATER rebuild -- a DNA reroll -- stays inline on purpose: with
 ## IllustratedGrassPatch's atlas now shared across instances, a warm rebuild
-## measures ~10ms, which is a frame rather than a freeze, and flashing an
-## overlay for it would read worse than the rebuild itself.
+## measures ~40ms (down from ~250ms), which is a frame or two rather than a
+## freeze, and flashing an overlay for it would read worse than the rebuild
+## itself.
 var _diorama_build_pending := true
 ## The preview panel's own toggle between the live diorama and the old
 ## "standard" full-body static portrait it replaced (asked directly: "add a
@@ -548,7 +549,7 @@ func _ensure_create_screen_built() -> void:
 ## portraits", then "11 / 24 scene pieces: the pond") instead of a spinner
 ## followed by a silent multi-second freeze.
 ##
-## Measured at ~3.9s cold, essentially all of it first-use sprite-sheet
+## Measured at ~4s cold, essentially all of it first-use sprite-sheet
 ## loads (see docs/concept/character_creator_preview_scene.md's own "Load
 ## cost" table). None of that work goes away here -- CharacterPreviewDiorama
 ## .build_async does exactly what build() does, in the same order, from the
