@@ -23882,3 +23882,68 @@ a few tiles wide at most.
 
 🚧 **Rails never weather or break.** The sheet carries Worn and Destroyed
 rows and only Pristine is ever drawn, because nothing damages a fence.
+
+
+## The field becomes a rectangle, so its fence becomes a frame (`concept/village_farms.md`, 2026-09-17)
+
+Reported in play with the ring circled in a screenshot and an arrow drawn
+outward from a side wall: *"The fencing system does not yet work... The
+fence should enclose a 2x3 or 3x2 area ... also the side walls of the fence
+should be moved outwards and corner pieces added so it doesn't look that
+broken"*.
+
+**The root cause was the field, not the fence.** A field was whichever cells
+of the reachable ring happened to be clear, taken nearest-first — and a
+scattered bed set has a ragged border. That ragged border *is* the broken
+fencing in the screenshot. A rectangle has a frame.
+
+`VillageFarm.field_rect` lays out a whole 3×2 or 2×3 (`FIELD_SHAPES`) to the
+sides and downwards of the farmhouse, nearest first, every cell of it
+workable, ties broken by `(y, x)` — nothing persisted, so the same farmhouse
+lays out the same field on every reload.
+
+**Six beds is not a loss.** The earlier ask was a *cap* ("maximized and
+capped to 10 tiles") and this one names the shape inside it. Six is also
+exactly where the measured yield table peaks: 225 wheat per work block
+against 215 for everything from eight to fourteen. The four tiles given up
+were never worth anything.
+
+The frame now closes:
+
+- **Corners are posts, not lengths of rail.** A horizontal rail drawn across
+  a turn is precisely the broken look. The sheet has no corner cell, so a
+  corner is drawn with the same post art the side columns use — which is
+  what a real corner post is.
+- **The side walls stand half a tile further out** than their own tile
+  centre, so the frame surrounds the beds instead of standing on the
+  outermost row. Only the east/west runs move: a north or south rail already
+  lies along the row it closes, and moving a corner would open the frame.
+- **A street row is street, paved or not.** Found by *drawing a whole real
+  village on the grid* (`tools/probe_village_map.gd`, kept) rather than
+  trusting the unit tests: three farmhouses in a row, and the middle two had
+  rails standing in the street with paving either side while the third
+  correctly had none. The founding layout paves a further street only
+  between its own doorsteps, so a street row has unpaved gaps — and treating
+  those as open ground put crops and rails in the middle of the village's
+  own road. Neither beds nor rails may land on one now.
+
+A gate that had quietly stopped asking the right question went with it: a
+farmhouse was sited where `MIN_FIELD_CELLS` *loose* cells were clear.
+Counting and fitting are no longer the same question, so ground with four
+scattered free cells and no rectangle in it would have raised a farmhouse
+whose villager then has nowhere at all to sow. The gate asks `field_rect`
+itself now — a siting rule that can drift from the thing it gates is a
+fieldless farmhouse waiting to happen — and `MIN_FIELD_CELLS` is retired
+rather than left standing with stale docs.
+
+Re-drawn after the fix, both sample villages read correctly: compact 3×2
+fields, frames closed by side walls, a south wall and corner posts, with the
+street above as the north boundary and the gate. The stranding guard across
+fourteen villages still passes, so the stricter rules cost no farmhouse its
+field.
+
+Tests: `test_village_renderer.gd` 89/89, `test_village_farm.gd` 56/56,
+`test_npc_marker_farming.gd` 16/16,
+`test_earth_chunk_manager_structure_art.gd` 13/13,
+`test_illustrated_structure_sprite.gd` 24/24, `test_village_layout.gd`
+63/63, `test_village_finder.gd` 8/8, `test_settlement_generator.gd` 14/14.
