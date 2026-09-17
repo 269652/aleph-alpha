@@ -2195,3 +2195,30 @@ func test_a_village_leaves_no_one_or_two_tile_hole_in_its_own_streets():
 			holes.append("%s: a hole in the street at %s" % [str(coord), str(cell)])
 	assert_gt(checked, 0, "precondition: real villages were laid")
 	assert_eq(holes.size(), 0, "%s" % str(holes.slice(0, 8)))
+
+
+## The last link of "make sure wheat grows and is harvested which increases
+## farmhouse stock which gets transported to city stock": a villager can
+## only fill the farmhouse they work for if they know which one it is.
+## Handed out with the field, by the one thing that knows whose is whose.
+func test_every_farmer_is_told_which_farmhouse_the_field_belongs_to():
+	var coord := _find_settlement_chunk_with_occupation("grassland", "farmer", 3)
+	var world := StubWorld.new()
+	var spawned := renderer.spawn_village(
+		parent, coord, coord * CHUNK_SIZE, CHUNK_SIZE, TILE_SIZE, "grassland", world
+	)
+	var origins: Dictionary = {}
+	for record in world.buildings_in_chunk(coord):
+		if record.get("id", "") == VillageFarm.FARM_BUILDING_ID:
+			origins[coord * CHUNK_SIZE + (record["origin_local"] as Vector2i)] = true
+	assert_gt(origins.size(), 0, "precondition: this village really raised a farmhouse")
+	var checked := 0
+	for npc in _farming_markers(spawned, coord):
+		if npc.field_cells.is_empty():
+			continue
+		checked += 1
+		assert_true(
+			origins.has(npc.farmhouse_cell),
+			"a farmer works a field for %s, which is no farmhouse" % str(npc.farmhouse_cell)
+		)
+	assert_gt(checked, 0, "precondition: somebody was handed a real field")

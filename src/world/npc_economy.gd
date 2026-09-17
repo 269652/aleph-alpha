@@ -220,20 +220,6 @@ func record_real_harvest(item_id: String, count: int) -> void:
 	_earn(float(count) * float(NpcProduction.YIELD_TO_GOLD_RATE))
 
 
-## Pays for a harvest that went into a BUILDING's own store rather than onto
-## the market (docs/concept/building_storage.md).
-##
-## The same pay as record_real_harvest, and deliberately NOT its market
-## credit: the goods are real and they are in the barn, so adding them to the
-## settlement market as well would be counting one harvest twice. Pay is for
-## the work, not the delivery -- which is what keeps a villager able to buy a
-## meal while their crop waits for a cart.
-func record_stored_harvest(item_id: String, count: int) -> void:
-	if count <= 0 or item_id == "":
-		return
-	_earn(float(count) * float(NpcProduction.YIELD_TO_GOLD_RATE))
-
-
 ## Credits `count` units of something a real take produced ALONGSIDE the
 ## food -- the hide off a hunted animal (HuntableQuarry.hide_yield_of).
 ##
