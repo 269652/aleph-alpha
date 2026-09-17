@@ -524,6 +524,7 @@ func _process(delta: float) -> void:
 		and position.distance_to(home_position) < _ARRIVED_HOME_EPSILON_PX
 	)
 	visible = not _at_home
+	_sync_market_stand(is_working)
 	if economy != null:
 		economy.step(delta, is_working, _world, position, _on_real_quarry or _on_real_field)
 
@@ -979,6 +980,60 @@ func _entry_for_instructed_action(action: Dictionary) -> Dictionary:
 ## resolves to the settlement's landmark; anything else (a work tag with no
 ## dedicated building yet, e.g. "field"/"forge") falls back to this NPC's
 ## personal workspot rather than an unresolved position.
+## The market stand this villager sells from, or null for a villager who
+## keeps none (see VillageRenderer, docs/concept/village_market_square.md).
+##
+## Owned by the renderer, driven from here: a stand is up only while its
+## trader is behind it, and this marker is the only thing that knows where
+## its trader is standing this frame.
+##
+## Taken in the moment it is handed over, rather than left at Node2D's own
+## default of visible: a village that loads at night would otherwise flash
+## its whole market up for the one frame before the first _process, and a
+## stand nobody has reached yet is not up. Same setter-does-the-wiring shape
+## as warehouse_position above.
+var market_stand: Node2D = null:
+	set(value):
+		market_stand = value
+		if market_stand != null and is_instance_valid(market_stand):
+			market_stand.visible = false
+
+## How close counts as being behind your own stand: one tile. A trader
+## standing on the square beside their own trestle is selling from it.
+## Derived from the world's own tile size rather than chosen, so a stand's
+## reach cannot drift away from the grid it stands on (pinned by
+## test_a_traders_reach_over_their_own_stand_is_one_tile).
+const STAND_REACH_TILES := 1
+
+
+func market_stand_reach() -> float:
+	return float(_tile_size * STAND_REACH_TILES)
+
+
+## Whether a market stand is UP: its trader is on the clock AND within reach
+## of it.
+##
+## Reported live with an unattended stand in shot: "the market stands should
+## only be put up when an NPC stands behind them to sell goods". A trestle
+## and a board are not architecture -- a real stand is carried out in the
+## morning, stood up for as long as somebody is behind it, and taken in
+## again. Both halves are needed: a merchant passing their own stand on the
+## way home at night is not selling from it.
+static func stand_is_up(is_working: bool, distance_to_stand: float, reach: float) -> bool:
+	return is_working and distance_to_stand <= reach
+
+
+## Puts this villager's own stand up or takes it in, from where they are
+## standing this frame. A villager who keeps no stand is left alone, the
+## same fail-open shape every other world hook here uses.
+func _sync_market_stand(is_working: bool) -> void:
+	if market_stand == null or not is_instance_valid(market_stand):
+		return
+	market_stand.visible = stand_is_up(
+		is_working, position.distance_to(market_stand.position), market_stand_reach()
+	)
+
+
 func _resolve_location(tag: String) -> Vector2:
 	if tag == "home":
 		return home_position
