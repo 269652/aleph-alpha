@@ -263,3 +263,99 @@ func test_every_frame_puts_its_art_at_the_same_height():
 			art_centre, frame_centre, 1.0,
 			"frame %d centres its art at %.1f, not %.1f -- art anchored anywhere but the frame's own middle drifts up (or down) the screen as the rows change height" % [i, art_centre, frame_centre]
 		)
+
+
+# -- frame stabilisation: the globe lands in the same place every frame ---
+# -- (see IntroSplashSheet.globe_centre_of, docs/concept/intro_splash.md's --
+# -- "Frame stabilisation") -- reported in play, repeatedly across this ----
+# -- file's own history: "stabilize the intro video", "it jumps left to ----
+# -- right" ---------------------------------------------------------------
+
+## A synthetic frame: a filled disc (the globe) plus a bright bar that
+## sticks out well past it on ONE side (the "ALEPH ALPHA" wordmark and the
+## light-streak sweep, which really do extend past the globe's own edge --
+## see the real sheet). The disc's centre is the answer; the bar is the
+## trap.
+func _synthetic_globe(centre: Vector2i, radius: int, bar_reach: int) -> Image:
+	var image := Image.create(243, 162, false, Image.FORMAT_RGBA8)
+	image.fill(Color(0.0, 0.0, 0.0, 1.0))  # opaque near-black space, as the real sheet has
+	for y in image.get_height():
+		for x in image.get_width():
+			if Vector2(x - centre.x, y - centre.y).length() <= float(radius):
+				image.set_pixel(x, y, Color(0.2, 0.5, 0.9, 1.0))
+	for x in range(centre.x, mini(centre.x + bar_reach, image.get_width())):
+		for y in range(centre.y - 4, centre.y + 4):
+			image.set_pixel(x, y, Color(1.0, 0.85, 0.2, 1.0))
+	return image
+
+
+## The whole point of the estimator: a plain bounding box of everything
+## bright is dragged sideways by the wordmark, and the wordmark's reach
+## GROWS across the sequence, so a bbox-based registration would itself
+## drift. Taking the MEDIAN of each row's own centre ignores the handful
+## of rows the bar touches and reads the disc.
+func test_the_globe_centre_ignores_a_wordmark_that_sticks_out_past_it():
+	var centre := Vector2i(100, 80)
+	for bar_reach in [0, 30, 60, 90]:
+		var measured := IntroSplashSheet.globe_centre_of(_synthetic_globe(centre, 50, bar_reach))
+		assert_almost_eq(
+			measured.x, float(centre.x), 1.0,
+			"a wordmark reaching %dpx past the globe must not move the measured centre" % bar_reach
+		)
+		assert_almost_eq(measured.y, float(centre.y), 1.0, "nor its vertical centre")
+
+
+func test_the_globe_centre_follows_a_globe_that_really_moved():
+	var moved := IntroSplashSheet.globe_centre_of(_synthetic_globe(Vector2i(120, 70), 50, 40))
+	assert_almost_eq(moved.x, 120.0, 1.0)
+	assert_almost_eq(moved.y, 70.0, 1.0)
+
+
+## The report itself. The source art does NOT draw the globe at the same
+## place in every cell: measured on the real sheet, its centre wanders 6px
+## horizontally and 2px vertically, with a sawtooth jump at every row
+## boundary (the first column of each row sits ~3px left of its
+## neighbours). This sheet is stretched ~5.3x onto the screen, so 6px of
+## source wander reads as ~32px of on-screen sway -- the reported "jumps
+## left to right".
+##
+## Registering every frame on its own measured globe centre removes it at
+## the source. Nothing is rescaled and no frame is re-cropped: the art is
+## simply blitted into its shared canvas at a whole-pixel offset, so the
+## fixed-size-frame rule (test_every_frame_is_the_same_size) and the
+## no-resampling rule both still hold.
+func test_every_frame_puts_the_globe_in_the_same_place():
+	var frames := sheet.generate_textures()
+	var centres: Array[Vector2] = []
+	for frame in frames:
+		centres.append(IntroSplashSheet.globe_centre_of(frame.get_image()))
+	var min_x: float = centres[0].x
+	var max_x: float = centres[0].x
+	var min_y: float = centres[0].y
+	var max_y: float = centres[0].y
+	for centre in centres:
+		min_x = minf(min_x, centre.x)
+		max_x = maxf(max_x, centre.x)
+		min_y = minf(min_y, centre.y)
+		max_y = maxf(max_y, centre.y)
+	assert_lte(
+		max_x - min_x, 1.0,
+		"the globe wanders %.1fpx horizontally across the 40 frames (%.1f..%.1f)" % [max_x - min_x, min_x, max_x]
+	)
+	assert_lte(
+		max_y - min_y, 1.0,
+		"the globe wanders %.1fpx vertically across the 40 frames (%.1f..%.1f)" % [max_y - min_y, min_y, max_y]
+	)
+
+
+## Stabilisation must not sneak a rescale in: a shifted frame is the SAME
+## art, moved by whole pixels, so the globe's own drawn width is untouched
+## by this pass. (It does shrink ~5% across the sequence on its own -- real
+## drift in the art itself, deliberately NOT resampled away; see
+## docs/concept/intro_splash.md's "Frame stabilisation".)
+func test_stabilising_never_resamples_the_art():
+	var frames := sheet.generate_textures()
+	for i in frames.size():
+		var image := frames[i].get_image()
+		assert_eq(image.get_width(), frames[0].get_image().get_width(), "frame %d" % i)
+		assert_eq(image.get_height(), frames[0].get_image().get_height(), "frame %d" % i)

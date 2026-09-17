@@ -117,6 +117,85 @@ const _MAGENTA_GREEN_MAX := 0.15
 ## utility).
 const _MAGENTA_CAST_MARGIN := 0.03
 
+## Anything at or below this luminance is the sheet's own starfield
+## background rather than drawn subject -- the stars themselves are
+## sparse, isolated points, so they move a row's own left/right extent by
+## a pixel or two at most and the median below absorbs them. Low enough
+## that the globe's own shadowed limb still counts as globe: a lit sphere
+## rotating through a terminator is exactly the "moon-phase crescent"
+## effect that made an earlier brightness-only measurement of this sheet
+## read as falsely reassuring (see docs/concept/intro_splash.md's
+## sixteenth pass), so this threshold separates SUBJECT from SPACE, never
+## lit from unlit.
+const _SPACE_LUMINANCE_MAX := 0.15
+
+
+## Where the globe's own centre sits in `image`, in that image's own pixel
+## coordinates.
+##
+## Deliberately NOT a bounding box of everything bright. The "ALEPH ALPHA"
+## wordmark and the light-streak sweep both reach well past the globe's own
+## edge, and their reach GROWS across the sequence as the wordmark builds
+## in -- measured on the real sheet, a bright-bbox reading widens from 135
+## to 162px and drags its own centre 12.5px sideways, so registering on it
+## would lock the frames to the TEXT and make the globe swing instead. That
+## is the same contamination bug #6 already hit from the other direction.
+##
+## Takes the MEDIAN of each row's own left/right midpoint instead: every
+## row that crosses the globe reports the disc's own centre, and the
+## handful of rows the wordmark and streak touch are outvoted rather than
+## averaged in. The vertical centre is the same statistic over columns.
+## Robust by construction, not by tuning -- pinned against a synthetic
+## globe-plus-overhanging-bar by test_the_globe_centre_ignores_a_wordmark_
+## that_sticks_out_past_it.
+static func globe_centre_of(image: Image) -> Vector2:
+	var row_centres: Array[float] = []
+	var column_top: Dictionary = {}
+	var column_bottom: Dictionary = {}
+	for y in image.get_height():
+		var leftmost := -1
+		var rightmost := -1
+		for x in image.get_width():
+			if not _is_subject(image.get_pixel(x, y)):
+				continue
+			if leftmost < 0:
+				leftmost = x
+			rightmost = x
+			if not column_top.has(x):
+				column_top[x] = y
+			column_bottom[x] = y
+		if leftmost >= 0:
+			row_centres.append(float(leftmost + rightmost) / 2.0)
+	var column_centres: Array[float] = []
+	for x in column_top:
+		column_centres.append(float(int(column_top[x]) + int(column_bottom[x])) / 2.0)
+	return Vector2(_median(row_centres), _median(column_centres))
+
+
+## Drawn subject rather than the starfield behind it -- see
+## _SPACE_LUMINANCE_MAX. A fully transparent pixel is the canvas padding a
+## short row carries (see _build_textures), never art.
+static func _is_subject(pixel: Color) -> bool:
+	if pixel.a <= 0.5:
+		return false
+	return pixel.get_luminance() > _SPACE_LUMINANCE_MAX
+
+
+## The middle value, or the mean of the middle two. A median rather than a
+## mean is the entire point of globe_centre_of above: a mean would let the
+## wordmark's own rows pull the answer, which is what this measurement
+## exists to refuse.
+static func _median(values: Array[float]) -> float:
+	if values.is_empty():
+		return 0.0
+	var sorted := values.duplicate()
+	sorted.sort()
+	var count := sorted.size()
+	if count % 2 == 1:
+		return sorted[count / 2]
+	return (sorted[count / 2 - 1] + sorted[count / 2]) / 2.0
+
+
 static var _frame_cache: Array[ImageTexture] = []
 
 
@@ -130,7 +209,9 @@ func generate_textures() -> Array[ImageTexture]:
 
 func _build_textures() -> Array[ImageTexture]:
 	var image := _prepared_for_slicing(SpriteSheetLoader.load_image(_SHEET_PATH))
-	var textures: Array[ImageTexture] = []
+	var crops: Array[Image] = []
+	var top_pads: Array[int] = []
+	var centres: Array[Vector2] = []
 	for row in _ROW_BANDS.size():
 		var band: Vector2i = _ROW_BANDS[row]
 		# Exactly this row's own measured art, never a pixel of the gutter
@@ -143,23 +224,69 @@ func _build_textures() -> Array[ImageTexture]:
 		# in every row. Anchored at the row's top instead, a short row puts
 		# its whole shortfall below the art and the globe climbs the screen
 		# as the sequence plays -- reported in play as "the image is moving
-		# from bottom to top" (see test_every_frame_puts_its_art_at_the_
-		# same_height, confirmed red against exactly that anchoring).
+		# from bottom to top". This is the COARSE correction, per row; the
+		# per-frame registration below removes what it leaves behind.
 		var top_pad: int = (_FRAME_HEIGHT - art_height) / 2
 		for left in _COLUMN_LEFTS:
 			var cropped := image.get_region(Rect2i(left, band.x, _FRAME_WIDTH, art_height))
 			if cropped.get_format() != Image.FORMAT_RGBA8:
 				cropped.convert(Image.FORMAT_RGBA8)
-			# Every frame is the SAME size whatever its row could spare,
-			# so nothing rescales between rows (see bug #6 above); a short
-			# row simply carries transparent space above and below its art.
-			var frame_image := Image.create(_FRAME_WIDTH, _FRAME_HEIGHT, false, Image.FORMAT_RGBA8)
-			frame_image.fill(Color(0.0, 0.0, 0.0, 0.0))
-			frame_image.blit_rect(
-				cropped, Rect2i(0, 0, _FRAME_WIDTH, art_height), Vector2i(0, top_pad)
-			)
-			textures.append(ImageTexture.create_from_image(frame_image))
+			crops.append(cropped)
+			top_pads.append(top_pad)
+			centres.append(globe_centre_of(cropped) + Vector2(0.0, float(top_pad)))
+	# Frame stabilisation, exactly as a video stabiliser does it: every
+	# frame is registered on its own measured subject rather than on the
+	# grid it was cut from. The source art does not draw the globe in the
+	# same place in every cell -- measured, it wanders 6px across and 2px
+	# down, with a sawtooth at every row boundary (each row's first column
+	# sits ~3px left of its neighbours), and this sheet is stretched ~5.3x
+	# onto the screen, so that reads as ~32px of on-screen sway: the
+	# repeatedly-reported "jumps left to right".
+	#
+	# The anchor is the MEDIAN frame centre, not the mean and not frame 0's:
+	# a median is the point that minimises how far the WORST frames have to
+	# travel, so no single oddly-drawn cell drags all forty off their
+	# column.
+	var anchor := _median_point(centres)
+	var textures: Array[ImageTexture] = []
+	for i in crops.size():
+		var cropped: Image = crops[i]
+		# Whole pixels only, and the SAME art: this shifts where a frame is
+		# blitted, it never rescales or re-crops it, so the fixed-size-frame
+		# rule (bug #6) and the no-resampling rule both still hold -- see
+		# test_stabilising_never_resamples_the_art.
+		var shift := Vector2i(
+			roundi(anchor.x - centres[i].x), roundi(anchor.y - centres[i].y)
+		)
+		# Every frame is the SAME size whatever its row could spare,
+		# so nothing rescales between rows (see bug #6 above); a short
+		# row simply carries transparent space above and below its art,
+		# and a shifted one carries a few more transparent pixels on the
+		# side it moved away from. Transparent, not black: IntroSplash
+		# draws on a full black backdrop, so those pixels read as the same
+		# starfield they replace.
+		var frame_image := Image.create(_FRAME_WIDTH, _FRAME_HEIGHT, false, Image.FORMAT_RGBA8)
+		frame_image.fill(Color(0.0, 0.0, 0.0, 0.0))
+		frame_image.blit_rect(
+			cropped, Rect2i(0, 0, cropped.get_width(), cropped.get_height()),
+			Vector2i(shift.x, top_pads[i] + shift.y)
+		)
+		textures.append(ImageTexture.create_from_image(frame_image))
 	return textures
+
+
+## The component-wise median of `points` -- the x that half the frames sit
+## left of and the y that half sit above. Component-wise on purpose: the
+## horizontal and vertical drifts in this sheet have entirely separate
+## causes (a per-column drawing wander, and per-row height differences), so
+## there is nothing to gain from treating them as one joint point.
+static func _median_point(points: Array[Vector2]) -> Vector2:
+	var xs: Array[float] = []
+	var ys: Array[float] = []
+	for point in points:
+		xs.append(point.x)
+		ys.append(point.y)
+	return Vector2(_median(xs), _median(ys))
 
 
 ## Makes the sheet's magenta background genuinely transparent, and
