@@ -20896,6 +20896,115 @@ specced in `concept/rivers.md` "The river surface at snap resolution".
   longer a wall at any river, and the remaining cost is named per class
   per step.
 
+### FPS regression round 16: the same shape as round 14, one index over (2026-09-17)
+
+"At a fresh start FPS is 60-100 but when running the game for a while it
+cripples to 5-10 fps -- is there GC missing?" Write-up in
+`concept/soil_fauna.md` "FPS regression round 16".
+
+- ✅ **Answered: no GC is missing, and none can be.** Godot has no
+  garbage collector -- GDScript is reference-counted. What decays across
+  a session in this project has never been memory; it is work
+  proportional to everything that has ever happened, which is what round
+  14 found and what this round found again.
+- ✅ **Root cause.** Round 14 indexed `events_of_type` and stopped there.
+  The callers asking "what did THIS entity do, of THIS kind" still called
+  `events_for_entity(settlement_id)` -- which materialises every event
+  that entity was ever an actor or witness in -- and filtered by type in
+  GDScript, so each paid the settlement's entire lifetime history for a
+  handful of matches. Three of the fourteen such sites run on the
+  settlement step for every settlement:
+  `_production_counts_for_settlement`, `_households_in_settlement`, and
+  `_villagers_in_settlement` -- the last reached from
+  `_villager_witnesses_of` on every event APPEND, so appending an event
+  cost the settlement's whole history while the history grew with every
+  append.
+- ✅ **Measured before the fix** (`tools/probe_settlement_history_cost.gd`,
+  new): one assessment of one settlement carrying H events of its own
+  ordinary traffic walked exactly `74 + 14.0 * H` events -- 774 at H=50,
+  5,674 at H=400, 7,074 at H=500. Every event a settlement accumulates
+  added fourteen events of work to every future assessment of it, and
+  `step_settlements` pays that for up to
+  `MAX_UNLOADED_SETTLEMENTS_PER_STEP` (20) settlements a tick. Nothing
+  ever shrank.
+- ✅ **`EventStore` gains `_by_entity_type`** ("entity|type" -> ids, in
+  order), maintained in both `append()` and `from_dicts()` -- the same
+  shape `_by_entity` and round 14's `_by_type` already use, and the same
+  restored-save requirement. Reads: `events_for_entity_of_type`,
+  `events_for_entity_of_types` (several types merged back into insertion
+  order, for `SETTLING_EVENT_TYPES`), and `latest_event_for_entity` for
+  the `record_path_worn_if_new`/`record_trail_formed_if_new` family,
+  which only ever read `history.back()`. All fourteen call sites routed.
+- ✅ **The same bug in its purest form, also fixed**: four sites asked
+  "does this entity have ANY history?" by materialising all of it and
+  calling `is_empty()`. One is `record_settlement_founded_if_new`, run on
+  every chunk load carrying a village -- walking back into a known
+  village walked its whole history to notice it already existed (403
+  events for a 400-event history; now under 10). Plus
+  `_record_ruin_from`, the player-house settling guard, and
+  `record_player_settled_if_new`. Also `DialogueContext.settlement_of`,
+  the identical scan on the conversation path (301 events for a
+  300-event history, every time anyone is spoken to; 39/39 dialogue tests
+  still pass).
+- ✅ **Behaviour deliberately unchanged**: the 90 settlement-named tests
+  in `test_earth_chunk_manager.gd` pass unmodified (369 asserts). The two
+  new tests assert COST instead -- one assessment costs less than a
+  single pass over the history, and costs the same at H=500 as at H=50.
+- ✅ **Measured after the fix**, same probe and settlement: **flat at 20
+  events walked** at history depths 0, 100 and 800 (against `74 + 14.0*H`
+  before, i.e. 74 / 1,474 / 11,274 at those depths -- a 560x cut at
+  H=800, and, more to the point, no growth at all). Wall clock for the
+  same call flat at ~1.4 ms.
+- ✅ **A new instrument: `c_ev_read`** on the PERF line. Every other
+  field there is a duration, and a duration cannot say WHY it grew --
+  `s_ecology` climbing 6 → 142 ms looks the same whether a store, a
+  population or anything else is growing. `EventStore` now carries a read
+  odometer (`events_read`/`take_events_read`) and World feeds it to the
+  report every frame, so history-walked-per-frame is readable directly:
+  flat is healthy, climbing is this bug class naming itself. It is also
+  what makes the fix assertable, where GDScript/GUT cannot assert Big-O
+  and a wall clock would be flaky. (+12 `test_event_store.gd`, +5 for the
+  odometer, +1 `test_world_perf_report_wiring.gd`.)
+- 🚧 **Not confirmed in a live session.** Unlike round 14, which watched
+  a real session age, this was found by static reading and proven by a
+  controlled probe. The asymptotic claim is directly measured; the
+  resulting frame rate in a real session is NOT. Confirm with a
+  `--perf-report` run watching `c_ev_read`.
+- ⬜ **The stores are still append-only and unbounded.** `EventStore` and
+  `MemoryStore` grow for the whole session and are serialised in full on
+  every save. This round makes reads cheap; it does not cap what is
+  stored, so a long enough session still grows memory and save time
+  without limit. "What may a world forget?" is a real, separate design
+  question, deliberately not attempted here.
+- 🚧 **Incidentally found, confirmed unrelated** (pre-existing):
+  `test_dialogue_topic.gd`'s
+  `test_every_event_type_..._is_claimed_by_some_topic` fails on
+  `blueprint_learned` and `player_house_settled`. Fails identically with
+  this round's changes reverted (pre-session `earth_chunk_manager.gd` +
+  `dialogue_topic.gd` checked out and re-run: same two types, same 31/33
+  asserts), and this round touches no `Event.new(...)` call -- the
+  emitter count the test scans is 24 before and after. Needs two
+  `DialogueTopic.MEMORY_TOPIC_EVENT_TYPES` entries; a dialogue-content
+  decision, not a performance one.
+- ⬜ **`NpcRecognition.shared_history` still walks the player's whole
+  history** -- and the player is an actor or witness in more events than
+  anything else. Not fixed here: it needs every event involving both
+  parties regardless of TYPE (it counts encounters), so the (entity,
+  type) index does not answer it; a pair index or cached count is a real
+  design decision. Runs on meeting an NPC, so a growing hitch rather
+  than a growing frame cost.
+- ⬜ **`MemoryStore.memories_for` has the same shape**, used by
+  `_exchange_recent_memories` purely to read `.back()`. On the 30-second
+  encounter cadence rather than the settlement step, so real but small
+  next to what was fixed -- named so the next round need not rediscover
+  it.
+- ⬜ **`_settlement_specialization`'s cache is seeded only on a non-empty
+  read**, so a settlement that has never specialised -- nearly all of
+  them, since only two recipes map to a specialisation -- re-reads every
+  step forever instead of caching the "never". Now cheap because the read
+  is indexed; still a negative-caching hole, named rather than left
+  silent.
+
 ### Workforce: blueprints, real construction tiers, and interior furniture -- foundation slices (2026-09-13)
 
 Requested directly: NPCs should sell building blueprints; a player's own

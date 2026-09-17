@@ -287,3 +287,245 @@ func test_all_entity_ids_lists_each_entity_once_even_with_many_events():
 	store.append(e1)
 	store.append(e2)
 	assert_eq(store.all_entity_ids(), ["npc:1"])
+
+
+# -- the (entity, type) index ------------------------------------------------
+#
+# Reported live, again: "at a fresh start FPS is 60-100 but when running the
+# game for a while it cripples to 5-10 fps". Same failure family as the
+# events_of_type scan above (FPS regression round 14), one index over: the
+# callers that had to be fixed there ask "what did THIS entity do, of THIS
+# kind" -- EarthChunkManager._production_counts_for_settlement,
+# _villagers_in_settlement, _households_in_settlement -- and every one of
+# them called events_for_entity(settlement_id) and then filtered the result
+# by type in GDScript.
+#
+# events_for_entity materialises a fresh Array[Event] holding EVERY event
+# that entity was ever an actor or witness in, so the filter cost is the
+# entity's WHOLE lifetime history no matter how few events actually match.
+# A settlement's history grows every settlement step forever -- by design:
+# "SUCCESSES are deliberately NOT guarded ... each one is real goods that
+# were really made" (_settlement_production_outcome) -- so the work per step
+# grows with how long the session has been running, and the total grows
+# quadratically. That is the whole "gets slower the longer you play" shape.
+#
+# These pin the observable contract the index must preserve. The size
+# assertion in test_..._is_unaffected_by_that_entitys_unrelated_event_volume
+# is deliberately stronger than round 14's equivalent: it pins that the read
+# yields ONLY the matching events, which is what makes a caller's own loop
+# cost scale with matches rather than with history.
+
+func test_events_for_entity_of_type_filters_by_both_entity_and_type():
+	var mine := _event("production_succeeded")
+	mine.actors = ["settlement:0_0"]
+	var wrong_type := _event("npc_settled")
+	wrong_type.actors = ["settlement:0_0"]
+	var wrong_entity := _event("production_succeeded")
+	wrong_entity.actors = ["settlement:9_9"]
+	store.append(mine)
+	store.append(wrong_type)
+	store.append(wrong_entity)
+
+	var result := store.events_for_entity_of_type("settlement:0_0", "production_succeeded")
+	assert_eq(result.size(), 1)
+	assert_eq(result[0].id, mine.id)
+
+
+## Witnesses count, exactly as they do for events_for_entity -- the index is
+## a narrowing of that same relation, not a different one.
+func test_events_for_entity_of_type_indexes_witnesses_as_well_as_actors():
+	var witnessed := _event("settlement_founded")
+	witnessed.actors = ["npc:1"]
+	witnessed.witnesses = ["settlement:0_0"]
+	store.append(witnessed)
+	assert_eq(store.events_for_entity_of_type("settlement:0_0", "settlement_founded").size(), 1)
+
+
+func test_events_for_entity_of_type_preserves_insertion_order():
+	for tick in [1.0, 2.0, 3.0]:
+		var event := _event("production_succeeded", tick)
+		event.actors = ["settlement:0_0"]
+		store.append(event)
+	var result := store.events_for_entity_of_type("settlement:0_0", "production_succeeded")
+	assert_eq([result[0].tick, result[1].tick, result[2].tick], [1.0, 2.0, 3.0])
+
+
+func test_events_for_entity_of_type_is_empty_for_an_unknown_entity_or_type():
+	var event := _event("production_succeeded")
+	event.actors = ["settlement:0_0"]
+	store.append(event)
+	assert_eq(store.events_for_entity_of_type("settlement:nope", "production_succeeded"), [])
+	assert_eq(store.events_for_entity_of_type("settlement:0_0", "nope"), [])
+
+
+## The point of the whole index: the answer must not carry -- and so a
+## caller must not walk -- the rest of this entity's own history.
+func test_events_for_entity_of_type_is_unaffected_by_that_entitys_unrelated_event_volume():
+	var settlement := "settlement:0_0"
+	for i in 500:
+		var noise := _event("contract_fulfilled_%d" % (i % 7))
+		noise.actors = [settlement]
+		store.append(noise)
+	var real := _event("production_succeeded")
+	real.actors = [settlement]
+	real.tags = ["cooked_meat"]
+	store.append(real)
+	for i in 500:
+		var noise := _event("contract_fulfilled_%d" % (i % 7))
+		noise.actors = [settlement]
+		store.append(noise)
+
+	assert_eq(store.events_for_entity(settlement).size(), 1001, "history really is that long")
+	var result := store.events_for_entity_of_type(settlement, "production_succeeded")
+	assert_eq(result.size(), 1, "the read yields only the matching event, not the history")
+	assert_eq(result[0].tags, ["cooked_meat"])
+
+
+## The index must be rebuilt on load, not just on live append -- a restored
+## save queried on its very next settlement step must see what happened
+## before the save.
+func test_events_for_entity_of_type_reflects_events_restored_via_from_dicts():
+	var event := _event("npc_settled")
+	event.actors = ["npc:1"]
+	event.witnesses = ["settlement:0_0"]
+	store.append(event)
+	var restored := EventStore.from_dicts(store.to_dicts())
+	assert_eq(restored.events_for_entity_of_type("settlement:0_0", "npc_settled").size(), 1)
+	assert_eq(restored.events_for_entity_of_type("npc:1", "npc_settled").size(), 1)
+
+
+# -- several types at once (_households_in_settlement's SETTLING_EVENT_TYPES) --
+
+## Merged in the store's own insertion order, NOT grouped by type: the
+## caller this exists for (_households_in_settlement) dedupes by household
+## as it walks, so "who settled first" has to stay the real answer.
+func test_events_for_entity_of_types_merges_in_insertion_order():
+	var settlement := "settlement:0_0"
+	var types := ["npc_settled", "player_settled", "npc_settled"]
+	for i in types.size():
+		var event := _event(types[i], float(i))
+		event.actors = ["actor:%d" % i]
+		event.witnesses = [settlement]
+		store.append(event)
+
+	var result := store.events_for_entity_of_types(settlement, ["npc_settled", "player_settled"])
+	assert_eq(result.size(), 3)
+	assert_eq([result[0].tick, result[1].tick, result[2].tick], [0.0, 1.0, 2.0])
+
+
+func test_events_for_entity_of_types_ignores_types_the_entity_never_had():
+	var event := _event("npc_settled")
+	event.witnesses = ["settlement:0_0"]
+	store.append(event)
+	var result := store.events_for_entity_of_types(
+		"settlement:0_0", ["npc_settled", "player_settled", "player_house_settled"]
+	)
+	assert_eq(result.size(), 1)
+
+
+func test_events_for_entity_of_types_is_empty_for_an_unknown_entity():
+	assert_eq(store.events_for_entity_of_types("settlement:nope", ["npc_settled"]), [])
+
+
+# -- the most recent event (the record_path_*_if_new family) ------------------
+
+## record_path_worn_if_new/record_trail_formed_if_new and their reclaim
+## mirrors only ever look at history.back() -- materialising the whole
+## history to read its last element is the same waste one element wide.
+func test_latest_event_for_entity_returns_the_most_recently_appended_one():
+	for tick in [1.0, 2.0, 3.0]:
+		var event := _event("path_worn", tick)
+		event.actors = ["path:4_4"]
+		store.append(event)
+	var latest = store.latest_event_for_entity("path:4_4")
+	assert_not_null(latest)
+	assert_eq(latest.tick, 3.0)
+
+
+func test_latest_event_for_entity_is_null_when_the_entity_has_no_history():
+	assert_null(store.latest_event_for_entity("path:nope"))
+
+
+func test_latest_event_for_entity_survives_from_dicts():
+	var event := _event("trail_formed", 7.0)
+	event.actors = ["path:4_4"]
+	store.append(event)
+	var restored := EventStore.from_dicts(store.to_dicts())
+	assert_eq(restored.latest_event_for_entity("path:4_4").type, "trail_formed")
+
+
+# -- the read odometer --------------------------------------------------------
+#
+# What made "the performance gets worse the longer you play" cost fifteen
+# FPS-regression rounds to chase is that nothing ever reported how much
+# HISTORY a frame walked. PerfReport times sections and counts nodes, but a
+# section climbing from 6 ms to 142 ms over seven minutes looks identical
+# whether the cause is a growing store, a growing population, or a growing
+# anything else -- so each round needed a fresh long session plus a guess.
+#
+# This counts the one thing those rounds all turned out to be: events
+# handed out by a read. It is the store's own cost, in the store's own
+# units, and it is what test_earth_chunk_manager's settlement-assessment
+# bound asserts against -- a deterministic stand-in for the Big-O that
+# GDScript/GUT cannot assert directly.
+
+func test_events_read_counts_the_events_a_whole_entity_read_walked():
+	for i in 10:
+		var event := _event("noise")
+		event.actors = ["settlement:0_0"]
+		store.append(event)
+	store.take_events_read()
+	store.events_for_entity("settlement:0_0")
+	assert_eq(store.events_read(), 10)
+
+
+## The whole point of the narrowed read: it walks the matches, not the
+## history. This is the assertion that would have named round 14's root
+## cause in one line.
+func test_events_read_counts_only_the_matches_for_a_narrowed_read():
+	for i in 10:
+		var event := _event("noise")
+		event.actors = ["settlement:0_0"]
+		store.append(event)
+	var real := _event("production_succeeded")
+	real.actors = ["settlement:0_0"]
+	store.append(real)
+
+	store.take_events_read()
+	store.events_for_entity_of_type("settlement:0_0", "production_succeeded")
+	assert_eq(store.events_read(), 1)
+
+
+func test_events_read_accumulates_across_reads():
+	var event := _event("noise")
+	event.actors = ["settlement:0_0"]
+	store.append(event)
+	store.take_events_read()
+	store.events_for_entity("settlement:0_0")
+	store.events_for_entity("settlement:0_0")
+	assert_eq(store.events_read(), 2)
+
+
+func test_take_events_read_returns_the_count_and_resets_it():
+	var event := _event("noise")
+	event.actors = ["settlement:0_0"]
+	store.append(event)
+	store.take_events_read()
+	store.events_for_entity("settlement:0_0")
+	assert_eq(store.take_events_read(), 1)
+	assert_eq(store.events_read(), 0)
+
+
+## events_of_type and the latest-event read are on the same odometer -- a
+## frame's whole history cost is one number, not one per query shape.
+func test_events_read_covers_events_of_type_and_latest_event_for_entity():
+	for i in 3:
+		var event := _event("drought")
+		event.actors = ["region:0_0"]
+		store.append(event)
+	store.take_events_read()
+	store.events_of_type("drought")
+	assert_eq(store.events_read(), 3)
+	store.take_events_read()
+	store.latest_event_for_entity("region:0_0")
+	assert_eq(store.events_read(), 1, "reading the newest event walks exactly one")

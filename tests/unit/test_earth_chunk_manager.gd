@@ -14842,3 +14842,126 @@ func test_levy_civic_tax_skips_when_the_player_cannot_afford_it():
 	var npc_economy_script := preload("res://src/world/npc_economy.gd")
 	assert_eq(player_wallet.balance, 0)
 	assert_eq(npc_economy_script.purse_of(village_market), 0.0)
+
+
+# -- assessing a settlement must not cost its whole history -------------------
+#
+# Reported live: "at a fresh start FPS is 60-100 but when running the game
+# for a while it cripples to 5-10 fps". FPS regression round 14 fixed the
+# settlement step's whole-STORE scan (events_of_type) and its unbounded
+# per-settlement loop (MAX_UNLOADED_SETTLEMENTS_PER_STEP), but left the
+# per-ENTITY scans: _production_counts_for_settlement,
+# _villagers_in_settlement, _households_in_settlement, and the _recorded_*
+# family all called events_for_entity(settlement_id) -- which materialises
+# every event that settlement was ever an actor or witness in -- and then
+# filtered it by type in GDScript.
+#
+# A settlement's own history only ever grows, and deliberately so:
+# "SUCCESSES are deliberately NOT guarded ... each one is real goods that
+# were really made" (_settlement_production_outcome), and contract outcomes
+# are "the highest-volume real settlement activity in this file". So the
+# cost of one assessment grew with how long the session had been running,
+# every settlement paid it every SETTLEMENT_STEP_INTERVAL, and the total
+# grew quadratically in session length. That is the reported symptom
+# exactly.
+#
+# These two pin the fix as a COST property rather than a behaviour one --
+# every existing settlement test in this file already pins the behaviour,
+# and it is deliberately unchanged. EventStore's read odometer is what
+# makes the cost assertable at all (see EventStore.events_read).
+
+## One assessment of one settlement carrying `history_events` events of
+## ordinary, unrelated settlement traffic. Returns how many events the
+## store handed out doing it.
+func _events_walked_assessing_a_settlement(history_events: int) -> int:
+	var layer := TileMapLayer.new()
+	var entities := Node2D.new()
+	var creatures := Node2D.new()
+	var subject = EarthChunkManager.new(layer, entities, creatures)
+	var chunk_coord := Vector2i(47, 47)
+	subject.record_settlement_founded_if_new(
+		chunk_coord, [NpcIdentity.new(1), NpcIdentity.new(2)]
+	)
+	var settlement_id := EntityRef.for_settlement(chunk_coord)
+	var store = subject.event_store()
+	# Every one of these names the settlement as its actor, so every one
+	# lands in that settlement's entity index -- exactly what the real
+	# contract and production traffic does to it over a long session.
+	var actors: Array[String] = [settlement_id]
+	for i in history_events:
+		var noise = Event.new("contract_fulfilled", 0.0)
+		noise.actors = actors.duplicate()
+		store.append(noise)
+
+	store.take_events_read()
+	subject.step_settlements(EarthChunkManager.SETTLEMENT_STEP_INTERVAL)
+	var walked: int = store.take_events_read()
+
+	layer.free()
+	entities.free()
+	creatures.free()
+	return walked
+
+
+func test_assessing_a_settlement_does_not_walk_its_whole_event_history():
+	var history := 400
+	var walked := _events_walked_assessing_a_settlement(history)
+	assert_lt(
+		walked,
+		history,
+		"one assessment should cost less than a single pass over the settlement's history"
+	)
+
+
+## The property that actually matters, stated directly: an assessment's
+## cost is the same after an hour of play as after a minute. An unfixed
+## implementation walks the history several times over, so this reads as a
+## multiple of the difference; a fixed one reads as equal.
+func test_the_cost_of_assessing_a_settlement_does_not_grow_with_its_history():
+	var short_session := _events_walked_assessing_a_settlement(50)
+	var long_session := _events_walked_assessing_a_settlement(500)
+	assert_eq(
+		short_session,
+		long_session,
+		"assessment cost must not depend on how long the session has been running"
+	)
+
+
+## The same bug class in its purest form: `record_settlement_founded_if_new`
+## runs on every chunk load that carries a village, and its whole job for an
+## already-founded settlement is to notice that and return. It asked "does
+## this settlement have any history?" by MATERIALISING all of it and calling
+## is_empty() on the result -- an O(1) question answered in O(history), on a
+## path that runs every time the player walks back into a village they have
+## already visited. Same for _record_ruin_from and the player-house settling
+## guard. latest_event_for_entity answers it in one lookup.
+func _events_walked_re_founding_a_settlement(history_events: int) -> int:
+	var layer := TileMapLayer.new()
+	var entities := Node2D.new()
+	var creatures := Node2D.new()
+	var subject = EarthChunkManager.new(layer, entities, creatures)
+	var chunk_coord := Vector2i(49, 49)
+	var npcs := [NpcIdentity.new(1), NpcIdentity.new(2)]
+	subject.record_settlement_founded_if_new(chunk_coord, npcs)
+	var settlement_id := EntityRef.for_settlement(chunk_coord)
+	var store = subject.event_store()
+	var actors: Array[String] = [settlement_id]
+	for i in history_events:
+		var noise = Event.new("contract_fulfilled", 0.0)
+		noise.actors = actors.duplicate()
+		store.append(noise)
+
+	store.take_events_read()
+	# The no-op: this settlement already exists, so nothing is recorded.
+	subject.record_settlement_founded_if_new(chunk_coord, npcs)
+	var walked: int = store.take_events_read()
+
+	layer.free()
+	entities.free()
+	creatures.free()
+	return walked
+
+
+func test_re_founding_an_existing_settlement_does_not_walk_its_history():
+	var walked := _events_walked_re_founding_a_settlement(400)
+	assert_lt(walked, 10, "noticing a settlement already exists is one lookup, not a scan")
