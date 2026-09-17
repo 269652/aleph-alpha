@@ -46,9 +46,8 @@ func _initialize() -> void:
 			var facing: String = VillageFarm.fence_facing(rail, beds)
 			rails += 1
 			glyphs[rail] = {
-				"north": "^", "south": "v", "east": ">", "west": "<",
-				"corner_west": "+", "corner_east": "+", "": "?",
-			}[facing]
+				"north": "^", "south": "v", "east": ">", "west": "<", "": "?",
+			}.get(facing, "+")  # every corner, whatever it is called, is a post
 		for y in range(origin.y - 2, origin.y + 8):
 			var row := "   "
 			for x in range(origin.x - 5, origin.x + 8):
