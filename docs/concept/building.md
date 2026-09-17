@@ -1146,6 +1146,27 @@ modification like any other.
 - ⬜ Shelter effects (warmth, safety) for being in an enclosed room, tying
   building into [survival.md](survival.md).
 
+## Houses stand shoulder to shoulder
+
+Suggested directly, with three houses and the gaps between them in shot:
+*"could save some space in villages by omitting the gap between houses"*.
+`VillageLayout.PLOT_GAP_TILES` is **0** — a street's plots are flush, the
+way a village street actually looks, and it is real space: one tile per
+pair, on every street, in every village. Measured on a real village
+(`tools/probe_village_map.gd`), one street row went from `hhh.hhhh` to
+`hhhhhhhhhh`: the same ground carrying three more house tiles.
+
+What is still guarded is what the gap was ever load-bearing for — two plots
+must never **overlap** — and that is the claimed-cells check, not the
+spacing. `test_adjacent_plots_on_the_same_street_never_overlap` asserted the
+opposite until this (no two footprints even orthogonally adjacent), and the
+reversal is the player's, not a correction.
+
+The PLAZA keeps its own one-tile clearance, split out as
+`PLAZA_CLEARANCE_TILES`. It shared the plot-gap constant and is a different
+question: the square is never frontage, so a house flush against it would
+stand in the space the square *is*.
+
 ## Village props: where a stand, a well or a bed gets its real art
 
 Asked for directly, from a screenshot of a village whose houses and city

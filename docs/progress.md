@@ -24119,6 +24119,26 @@ quietly flipping.
 
 232/232 across the farming, market and village suites.
 
+### Houses stand shoulder to shoulder (2026-09-17)
+
+*"Could save some space in villages by omitting the gap between houses."*
+`VillageLayout.PLOT_GAP_TILES` 1 → 0. Measured on a real village with
+`tools/probe_village_map.gd`: one street row went from `hhh.hhhh` to
+`hhhhhhhhhh`, the same ground carrying three more house tiles.
+
+One constant was doing two jobs. The plot gap also set the PLAZA's
+clearance, and the square is a different question — it is never frontage, so
+a house flush against it would stand in the space the square is. Split out
+as `PLAZA_CLEARANCE_TILES`, still 1.
+
+`test_adjacent_plots_on_the_same_street_keep_a_real_gap` asserted exactly
+what was asked to go away (no two footprints even orthogonally adjacent).
+Replaced by the part that was ever load-bearing — they must not OVERLAP —
+plus a new test that they really are flush rather than merely allowed to be.
+The reversal is recorded in the test as the player's, not as a correction.
+
+270/270 across the layout, renderer, room, farm and farming suites.
+
 Honest gaps, three real:
 
 🚧 **The gate is a real hole.** An animal that wanders into the gate cell is
