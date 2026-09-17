@@ -201,6 +201,25 @@ func record_real_catch(count: int) -> void:
 	_earn(float(count) * float(NpcProduction.YIELD_TO_GOLD_RATE))
 
 
+## Credits `count` units of `item_id` really harvested off this villager's
+## own field (docs/concept/village_farms.md) -- stocked in the village
+## market and paid at the same rate a gathered unit earns, exactly like
+## record_real_catch, and with no regional depletion for the same reason:
+## the crop was grown, not taken from a standing population.
+##
+## Separate from record_real_catch for two real reasons, not for symmetry.
+## That one credits whatever PRODUCER_ITEM_BY_OCCUPATION says the
+## occupation DRIPS -- "fruit" for a farmer, which is not the wheat
+## standing in the field -- and the herbalist is not in that table at all,
+## so it would pay them nothing for a crop they really grew. The item id
+## says what it is, so this needs no occupation table.
+func record_real_harvest(item_id: String, count: int) -> void:
+	if count <= 0 or item_id == "":
+		return
+	market.add_stock(item_id, float(count))
+	_earn(float(count) * float(NpcProduction.YIELD_TO_GOLD_RATE))
+
+
 ## Credits `count` units of something a real take produced ALONGSIDE the
 ## food -- the hide off a hunted animal (HuntableQuarry.hide_yield_of).
 ##

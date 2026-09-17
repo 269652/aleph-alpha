@@ -254,6 +254,10 @@ func spawn_village(
 	settlement.landmarks = _grounded_landmarks(settlement.landmarks, tile_size, world)
 
 	var spawned: Array[Node2D] = []
+	# Every villager's own marker, by roster index -- the farm fields below
+	# are handed out per villager, and only this loop knows which marker is
+	# whose.
+	var npc_markers: Array = []
 	for landmark_id in settlement.landmarks:
 		spawned.append(_build_landmark(landmark_id, settlement.landmarks[landmark_id], parent))
 	for i in npcs.size():
@@ -262,6 +266,7 @@ func spawn_village(
 		)
 		var npc_marker := _build_npc(settlement, i, door_positions[i], workspot, tile_size, parent, world, market)
 		spawned.append(npc_marker)
+		npc_markers.append(npc_marker)
 		# A merchant gets a second, PERSONAL trading stand at their own house,
 		# on top of the one shared village-square stall -- otherwise every
 		# merchant in the village routes to the same single stall, which reads
@@ -283,6 +288,7 @@ func spawn_village(
 		var work_tag: String = NpcIdentity.WORK_LOCATION_BY_OCCUPATION.get(npcs[i].occupation, "")
 		if work_tag != "" and not settlement.landmarks.has(work_tag) and workspot != null:
 			spawned.append(_build_landmark(work_tag, workspot, parent, true))
+	_assign_farm_fields(chunk_coord, chunk_size, npcs, npc_markers, world)
 	return spawned
 
 
@@ -491,6 +497,74 @@ func _place_industry_if_missing(chunk_coord: Vector2i, chunk_size: int, world) -
 	for local_cell in plot["road_spur"]:
 		var g: Vector2i = chunk_coord * chunk_size + local_cell
 		world.build_at_global(g.x, g.y, TerrainRenderer.ROAD_TILE_ID)
+
+
+## Hands every villager who farms the field their OWN farmhouse works
+## (docs/concept/village_farms.md). Pairs them in roster order with the
+## farmhouses in (y, x) order, so the same villager gets the same field on
+## every reload without anything being persisted -- exactly the property
+## the ownership rule itself has.
+##
+## A village with more farmers than farmhouses (nowhere left with room for
+## another field) leaves the rest on the regional drip they always had,
+## which is the honest outcome rather than two villagers tending one field.
+func _assign_farm_fields(
+	chunk_coord: Vector2i, chunk_size: int, npcs: Array, npc_markers: Array, world
+) -> void:
+	if world == null or npc_markers.size() < npcs.size():
+		return
+	var origins := _farmhouse_origins(chunk_coord, world)
+	if origins.is_empty():
+		return
+	var is_buildable := _is_buildable_local(chunk_coord, chunk_size, world)
+	var is_occupied := _is_occupied_local(chunk_coord, chunk_size, world)
+	var next_farmhouse := 0
+	for i in npcs.size():
+		if VillageFarm.crop_for(npcs[i].occupation) == "":
+			continue
+		if next_farmhouse >= origins.size():
+			return
+		var origin: Vector2i = origins[next_farmhouse]
+		next_farmhouse += 1
+		npc_markers[i].field_cells = _workable_field_of(
+			origin, origins, chunk_coord, chunk_size, is_buildable, is_occupied
+		)
+
+
+## Every farmhouse standing in this chunk, in (y, x) order -- a stable
+## order the ownership rule and the pairing above can both rely on.
+func _farmhouse_origins(chunk_coord: Vector2i, world) -> Array:
+	if not world.has_method("buildings_in_chunk"):
+		return []
+	var origins: Array = []
+	for record in world.buildings_in_chunk(chunk_coord):
+		if record.get("id", "") == VillageFarm.FARM_BUILDING_ID:
+			origins.append(record["origin_local"])
+	origins.sort_custom(func(a: Vector2i, b: Vector2i) -> bool:
+		return a.y < b.y if a.y != b.y else a.x < b.x
+	)
+	return origins
+
+
+## The GLOBAL tiles a farmhouse at `origin` can really be worked on: the
+## cells of its own ring that IT owns (another farmhouse may be nearer to
+## some of them), inside this chunk, dry, and with nothing standing on them
+## -- the village's own paving included, since a doorstep is a road.
+func _workable_field_of(
+	origin: Vector2i, origins: Array, chunk_coord: Vector2i, chunk_size: int,
+	is_buildable: Callable, is_occupied: Callable
+) -> Array[Vector2i]:
+	var cells: Array[Vector2i] = []
+	for cell in VillageFarm.field_cells(origin, VillageFarm.FARM_BUILDING_ID):
+		var local: Vector2i = cell
+		if local.x < 0 or local.y < 0 or local.x >= chunk_size or local.y >= chunk_size:
+			continue
+		if VillageFarm.owner_of(local, origins, VillageFarm.FARM_BUILDING_ID) != origin:
+			continue
+		if not is_buildable.call(local) or is_occupied.call(local):
+			continue
+		cells.append(chunk_coord * chunk_size + local)
+	return cells
 
 
 ## One farmhouse per villager who actually farms (docs/concept/

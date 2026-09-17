@@ -824,3 +824,49 @@ func test_a_non_producer_never_feeds_itself_from_work():
 
 func test_a_producer_with_no_world_cannot_feed_itself():
 	assert_false(_economy("hunter").feeds_itself_from_work(null, Vector2.ZERO))
+
+
+# -- a real harvest off a village field ------------------------------------
+#
+# docs/concept/village_farms.md. record_real_catch is no use here twice
+# over: it credits whatever PRODUCER_ITEM_BY_OCCUPATION says the occupation
+# drips (the farmer's is "fruit", not the wheat actually standing in the
+# field), and the herbalist is not in that table at all, so it would pay
+# them nothing for a real crop they really grew.
+
+func test_a_real_harvest_stocks_the_crop_that_was_actually_grown():
+	var farmer := _economy("farmer")
+	farmer.record_real_harvest("wheat", 3)
+	assert_almost_eq(market.stock.get("wheat", 0.0), 3.0, 0.0001)
+	assert_almost_eq(
+		market.stock.get("fruit", 0.0), 0.0, 0.0001,
+		"what the region would have dripped is not what the field grew"
+	)
+
+
+func test_a_real_harvest_pays_the_same_rate_a_gathered_unit_does():
+	# A unit of real produce is worth a unit of real produce however it was
+	# obtained -- the same reasoning record_real_catch's own rate test gives.
+	var farmer := _economy("farmer")
+	farmer.record_real_harvest("wheat", 4)
+	var gross := 4.0 * float(NpcProduction.YIELD_TO_GOLD_RATE)
+	assert_almost_eq(NpcEconomy.purse_of(market), VillageWages.levy_on(gross), 0.0001)
+
+
+func test_a_herbalist_is_paid_for_a_real_harvest_though_they_drip_nothing():
+	var herbalist := _economy("herbalist")
+	assert_false(
+		NpcProduction.PRODUCER_ITEM_BY_OCCUPATION.has("herbalist"),
+		"precondition: the regional economy has never paid a herbalist anything"
+	)
+	herbalist.record_real_harvest("herb", 2)
+	assert_almost_eq(market.stock.get("herb", 0.0), 2.0, 0.0001)
+	assert_gt(NpcEconomy.purse_of(market), 0.0, "real work really produced something, so it is paid")
+
+
+func test_a_harvest_of_nothing_changes_nothing():
+	var farmer := _economy("farmer")
+	farmer.record_real_harvest("wheat", 0)
+	farmer.record_real_harvest("", 5)
+	assert_almost_eq(market.total_stock(), 0.0, 0.0001)
+	assert_almost_eq(NpcEconomy.purse_of(market), 0.0, 0.0001)
