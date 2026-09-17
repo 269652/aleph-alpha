@@ -119,3 +119,47 @@ func test_reveal_chamber_nodes_carry_their_own_local_cell_for_mining_writeback()
 	var cells := GeologyChamber.cells_for(entrance)
 	for node in spawned:
 		assert_true(cells.has(node.local_cell))
+
+
+# -- natural cave void: open passage is not something to spawn rock in ------
+# (see docs/concept/underground.md). reveal_chamber already skipped a cell
+# a player had mined out; a cell water carved out is just as open, and
+# spawning a DiggableRock in it would wall off the cave with rock that was
+# never there.
+
+const CavePattern = preload("res://src/world/cave_pattern.gd")
+const CaveNetwork = preload("res://src/world/cave_network.gd")
+
+
+func test_reveal_chamber_spawns_nothing_in_a_natural_passage():
+	# A network maze is the densest real pattern, so a small chamber is
+	# very likely to contain at least one natural void cell to test.
+	var maze := Strata.new(
+		Strata.LAYER_BEDROCK, Vector2i.ZERO, CavePattern.PATTERN_NETWORK_MAZE
+	)
+	var entrance := Vector2i(4, 4)
+	var spawned := renderer.reveal_chamber(
+		parent, maze, entrance, Vector2i.ZERO, TILE_SIZE
+	)
+	for node in spawned:
+		assert_false(
+			Strata.is_walkable(maze.cell_kind_at(node.local_cell)),
+			"spawned diggable rock at %s, which is open passage" % node.local_cell
+		)
+
+
+func test_reveal_chamber_still_covers_every_cell_that_really_is_rock():
+	var maze := Strata.new(
+		Strata.LAYER_BEDROCK, Vector2i.ZERO, CavePattern.PATTERN_NETWORK_MAZE
+	)
+	var entrance := Vector2i(4, 4)
+	var spawned := renderer.reveal_chamber(
+		parent, maze, entrance, Vector2i.ZERO, TILE_SIZE
+	)
+	var spawned_cells := {}
+	for node in spawned:
+		spawned_cells[node.local_cell] = true
+	for cell in GeologyChamber.cells_for(entrance):
+		if Strata.is_walkable(maze.cell_kind_at(cell)):
+			continue
+		assert_true(spawned_cells.has(cell), "solid cell %s was left unspawned" % cell)

@@ -15181,3 +15181,81 @@ func test_the_readout_of_a_building_that_keeps_nothing_says_so():
 	var report := manager.household_report_at(_berlin_tile.x, _berlin_tile.y)
 	assert_eq(int(report["storage_capacity"]), 0)
 	assert_eq((report["stock"] as Dictionary).size(), 0)
+
+
+# -- the underground proper (see docs/concept/underground.md) ----------------
+# Bedrock is the first layer that carries a real cave system rather than
+# only rock to dig. The siting decision itself is tested against known
+# readings in test_cave_siting.gd / test_cave_signals.gd; these cover the
+# wiring -- that a loaded chunk really gets a bedrock Strata with a real
+# pattern, that it is cleared on unload, and that descent refuses to move
+# the player anywhere without a real pitch under them.
+
+const CavePattern = preload("res://src/world/cave_pattern.gd")
+const CaveDescent = preload("res://src/world/cave_descent.gd")
+
+
+func test_loading_a_chunk_creates_a_real_bedrock_strata_instance():
+	manager.update(_berlin_tile)
+	var chunk_coord := _chunk_coord_for_tile(_berlin_tile)
+	var bedrock := manager.bedrock_strata_at(chunk_coord)
+	assert_not_null(bedrock, "a loaded chunk should have a real bedrock Strata instance")
+	assert_eq(bedrock.layer, Strata.LAYER_BEDROCK)
+	assert_true(
+		CavePattern.PATTERNS.has(bedrock.cave_pattern),
+		"bedrock was sited with '%s', which is not a known cave pattern" % bedrock.cave_pattern
+	)
+
+
+func test_strata_for_layer_dispatches_to_the_right_layer():
+	manager.update(_berlin_tile)
+	var chunk_coord := _chunk_coord_for_tile(_berlin_tile)
+	assert_eq(
+		manager.strata_for_layer(Strata.LAYER_TOPSOIL_REGOLITH, chunk_coord).layer,
+		Strata.LAYER_TOPSOIL_REGOLITH
+	)
+	assert_eq(
+		manager.strata_for_layer(Strata.LAYER_BEDROCK, chunk_coord).layer, Strata.LAYER_BEDROCK
+	)
+	assert_null(
+		manager.strata_for_layer(Strata.LAYER_HYDROTHERMAL, chunk_coord),
+		"the deep layers are not built yet -- see underground.md's Status"
+	)
+
+
+func test_unloading_a_chunk_clears_its_bedrock_strata():
+	manager.update(_berlin_tile)
+	var chunk_coord := _chunk_coord_for_tile(_berlin_tile)
+	assert_not_null(manager.bedrock_strata_at(chunk_coord), "precondition: chunk is loaded")
+	manager.update(_berlin_tile + Vector2i(EarthChunkManager.CHUNK_SIZE * 40, 0))
+	assert_null(manager.bedrock_strata_at(chunk_coord))
+
+
+func test_the_player_starts_on_the_surface():
+	assert_eq(manager.player_cave_layer, "", "the player begins above ground")
+
+
+func test_descent_refuses_without_a_real_pitch():
+	# No chunk loaded here at all, so there is certainly no pitch -- the
+	# player must not be moved underground by an unanswerable question.
+	var descended: bool = manager.try_descend(_berlin_tile, CaveDescent.MINIMUM_LIGHT_SOURCES)
+	assert_false(descended)
+	assert_eq(manager.player_cave_layer, "")
+
+
+func test_pitch_at_is_false_where_nothing_is_loaded():
+	assert_false(manager.pitch_at(_berlin_tile))
+
+
+func test_ascending_from_bedrock_returns_to_the_surface():
+	manager.player_cave_layer = Strata.LAYER_BEDROCK
+	assert_true(manager.try_ascend())
+	assert_eq(
+		manager.player_cave_layer, "",
+		"climbing out of bedrock puts the player back above ground, not in the topsoil layer"
+	)
+
+
+func test_ascending_from_the_surface_does_nothing():
+	assert_false(manager.try_ascend())
+	assert_eq(manager.player_cave_layer, "")
