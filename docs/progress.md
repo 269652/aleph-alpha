@@ -24037,6 +24037,33 @@ farming and ground-cover suites. (`test_grass_near_respects_its_radius` is
 risky-not-asserting both before and after these changes — pre-existing,
 untouched here.)
 
+### A corner post stops overshooting its own runs (2026-09-17)
+
+Reported with all three visible corners crossed out: *"the fences still
+aren't optimal"*. A corner cell knew only which side WALL it capped, so its
+art was placed as a full tile of vertical rail — while the run it caps sits
+on that tile's own EDGE. The frame overshot by a whole tile at every corner,
+which is exactly what the crosses were on.
+
+A corner closes two sides, so it has a ground POINT rather than a ground
+line: the corner of its own tile where the two runs meet. `fence_facing`
+names both sides now (`corner_nw`/`ne`/`sw`/`se` in place of
+`corner_west`/`corner_east`), the inner direction is the diagonal, and
+`footprint_offset` centres the post on that point in both axes. It also
+takes the side wall's SCALE instead of being scaled by its own length —
+scaling a post as if it were a run is what made it a tile of rail.
+
+The diagonal direction pays for itself twice: `rails_block_step` can now
+shut exactly the diagonal a corner really faces, where before it shut either
+diagonal on that side.
+
+The old two ids stay recognised (`LEGACY_FENCE_TILE_IDS`) because a rail is
+an ordinary chunk modification — an id that stopped reading as a fence would
+lose its art and stop being overlay-only, painting bare earth on ground a
+player has already visited. Nothing raises one, and a test pins that.
+
+667/667 across the seven fence, farm and village suites.
+
 Honest gaps, three real:
 
 🚧 **The gate is a real hole.** An animal that wanders into the gate cell is
@@ -24431,3 +24458,80 @@ relationships (familiarity/trust) that weight what a rumour does — the input
 `rumor.gd` names outright as missing; goods changing hands between a surplus
 and a shortfall; and a villager offering a quest from a real shortfall, which
 is `dialogue.md`'s own long-standing ⬜.
+
+## A farm bed stands on real tilled earth (`concept/village_farms.md`, 2026-09-17)
+
+Asked directly: *"Can you wire the new terrain soil.png for beds of
+farmhouses?"* `assets/sprites/terrain/soil.png` had been committed (and,
+like `fence.png` before it, without its `.import` sidecar) and nothing read
+it.
+
+### ✅ What it fixes, which is more than "new art"
+
+The only soil a bed drew was `ProceduralSoilSprite`'s small 10-unit mound,
+and that mound is a ROOT crop's own ground — correctly hidden for wheat
+after *"what's the round procedural dark blob?"*. Which meant a wheat bed
+was six rectangles of the untouched meadow it had been tilled out of, with
+wheat rising straight from the grass. Nothing had ever drawn the ground a
+bed IS. `FarmPlotMarker` now draws a full tile of tilled earth under
+everything, always on; the mound keeps its own separate, unchanged job.
+
+### ✅ An explicit grid, because this sheet's gutters are black
+
+Structurally soil.png is exactly the biome sheets — 1254x1254, a 3x3 grid
+of nine variants — but its gutters are drawn near-BLACK rather than
+magenta. `IllustratedTerrainSprite` punches magenta to alpha before slicing
+and `SpriteSheetSlicer.detect_frames` then finds dividers by transparency,
+so a black gutter reads as neither background nor divider: measured, the
+whole sheet came back as ONE frame.
+
+Rather than teach the chroma-key pass a second background colour, a `_SHEETS`
+entry may now declare `column_bands` outright and skip content detection
+entirely. Both axes were measured from the file. That is the better fit for
+ground art regardless of gutter colour: `normalize_frames` crops each frame
+to its own ink and rescales it, which is right for a drawing in empty space
+and WRONG for a tile that must abut its neighbours. Sheets without
+`column_bands` are untouched and still slice exactly as before, pinned by
+`test_an_explicit_grid_leaves_every_content_sliced_biome_sheet_alone`.
+
+### ✅ The vignette, found by rendering the bed rather than reasoning about it
+
+Each cell of soil.png is drawn as a CARD with a soft dark vignette, not as a
+seamless texture: measured down a cell's edge, mean brightness climbs
+0.001 —> 0.33 over about thirteen pixels. Sliced on the raw content bands
+every tile keeps that rim, and a rendered 3x2 bed came out as six brown
+squares in a black lattice. Rendering the same bed at three candidate insets
+and looking at them settled it: 13 removes the falloff exactly and tiles
+seamlessly, at ~7% off each side of a 388px cell.
+
+Pinned by `test_every_soil_variant_tiles_without_a_dark_seam`, which checks
+the RESULT — the outermost ring of each variant has to be about as bright
+as the tile as a whole — rather than the number 13, so a re-export with a
+different vignette fails the test instead of shipping a lattice.
+
+### ✅ Seeded per bed
+
+Which of the nine a bed gets is hashed from its own global tile, so a 3x2
+patch is not six copies of one tile and any given bed looks the same every
+time it is drawn. The sprite is scaled from the art's OWN pixel width to
+cover exactly `TerrainRenderer.TILE_SIZE`, the same derive-from-the-art rule
+`CharacterPreviewDiorama._build_ground` follows, so a re-export at another
+resolution still covers one tile.
+
+TDD throughout, red first: `test_illustrated_terrain_sprite.gd` +4 (soil
+slices into nine, every variant is earth and not gutter, no dark seam, and
+the biome sheets are unaffected), `test_farm_plot_marker.gd` +4 (a bed draws
+a full tile of earth, it draws beneath both the mound and the crop, a WHEAT
+bed still stands on it, and neighbouring beds differ while each stays
+itself).
+
+### Still open
+
+The soil is drawn by `FarmPlotMarker`, so it follows tilled BEDS — player
+plots as well as village farmhouse ones, which is the honest reading of "a
+tilled bed is tilled earth wherever it is". It is NOT baked into the terrain
+atlas the way road paving is (`TerrainRenderer.ROAD_TILE_ID` plus a
+`chunk.modifications` entry). That would make the ground itself soil rather
+than a sprite laid over it, and would let beds blend with neighbouring
+terrain, but it also entangles beds with the built-tile/occupancy rules that
+`modifications` drives — a much larger change than was asked for here.

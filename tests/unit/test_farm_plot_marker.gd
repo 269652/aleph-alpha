@@ -10,6 +10,9 @@ const FarmPlotMarker = preload("res://src/rendering/farm_plot_marker.gd")
 const FarmPlot = preload("res://src/gameplay/farm_plot.gd")
 const IllustratedGrassPatch = preload("res://src/rendering/illustrated_grass_patch.gd")
 const IllustratedWheatPatch = preload("res://src/rendering/illustrated_wheat_patch.gd")
+## The bed's soil has to cover exactly one REAL world tile, not a number of
+## its own -- see test_a_bed_draws_a_full_tile_of_tilled_earth.
+const TerrainRenderer = preload("res://src/rendering/terrain_renderer.gd")
 
 var marker: FarmPlotMarker
 
@@ -248,3 +251,57 @@ func test_replanting_wheat_over_a_root_crop_takes_the_mound_away_again():
 	marker.harvest()
 	marker.till_and_plant("wheat", 42)
 	assert_false(marker.is_showing_soil(), "stale soil left behind the new crop")
+
+
+# -- the tilled ground a bed stands on -------------------------------------
+#
+# See docs/concept/village_farms.md, "A bed stands on real tilled earth".
+# The mound above is a ROOT crop's own ground and is hidden for wheat; that
+# left a wheat bed standing on the untouched meadow it was tilled out of.
+# Nothing ever drew the ground a bed IS. soil.png does.
+
+
+func test_a_bed_draws_a_full_tile_of_tilled_earth():
+	add_child_autofree(marker)
+	var ground: Sprite2D = marker.soil_ground()
+	assert_not_null(ground, "a bed should stand on drawn soil")
+	assert_not_null(ground.texture, "with real art on it")
+	assert_true(ground.visible)
+	var drawn := ground.texture.get_size() * ground.scale
+	assert_almost_eq(
+		drawn.x, float(TerrainRenderer.TILE_SIZE), 0.01, "soil should cover exactly one tile across"
+	)
+	assert_almost_eq(drawn.y, float(TerrainRenderer.TILE_SIZE), 0.01, "and one tile down")
+
+
+## Under the mound and under the crop, always -- it is the ground, so
+## anything a bed grows has to sit on top of it.
+func test_the_tilled_earth_draws_beneath_the_mound_and_the_crop():
+	add_child_autofree(marker)
+	var ground: Sprite2D = marker.soil_ground()
+	assert_lt(ground.z_index, FarmPlotMarker.MOUND_Z_INDEX, "the mound sits ON the soil")
+	assert_lt(ground.z_index, FarmPlotMarker.LEAVES_Z_INDEX, "and so does the crop")
+
+
+## The actual fix. A wheat bed hides the mound (see the tests above), and
+## before this it therefore showed bare meadow with wheat rising out of it.
+func test_a_wheat_bed_still_stands_on_tilled_earth():
+	add_child_autofree(marker)
+	marker.till_and_plant(FarmPlotMarker.WHEAT_CROP_ID, 42)
+
+	assert_false(marker.is_showing_soil(), "the mound stays gone for wheat")
+	assert_true(marker.soil_ground().visible, "but the ground it grows in does not")
+
+
+## Seeded from the bed's own tile, so a 3x2 bed is not six copies of one
+## tile, and any given bed looks the same every time it is drawn -- the same
+## determinism convention every other seeded art pick here follows.
+func test_neighbouring_beds_differ_while_each_bed_stays_itself():
+	var variants := {}
+	for x in 3:
+		for y in 2:
+			var tile := Vector2i(x, y)
+			var first: int = FarmPlotMarker.soil_variant_for(tile)
+			assert_eq(first, FarmPlotMarker.soil_variant_for(tile), "tile %s must be stable" % tile)
+			variants[first] = true
+	assert_gt(variants.size(), 1, "a whole bed of one variant is a tiled-looking bed")

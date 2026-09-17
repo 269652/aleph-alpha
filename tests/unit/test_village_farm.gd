@@ -721,7 +721,7 @@ func test_the_four_corners_of_a_frame_are_posts_not_lengths_of_rail():
 
 
 func test_a_corner_post_has_its_own_rail_tile():
-	var tile_id: String = VillageFarm.fence_tile_for("corner_west")
+	var tile_id: String = VillageFarm.fence_tile_for("corner_nw")
 	assert_ne(tile_id, "", "a corner needs a piece of its own")
 	assert_true(VillageFarm.is_fence_tile(tile_id))
 
@@ -742,25 +742,70 @@ func test_no_cell_of_a_frame_is_left_without_a_piece():
 		assert_ne(VillageFarm.fence_facing(cell, beds), "", "%s got no piece at all" % str(cell))
 
 
-## A corner knows which SIDE of the field it caps, because the side wall it
-## caps is drawn pushed out to that side and a post left on its own tile
-## centre would sit half a tile inboard of the run it belongs to.
-func test_a_corner_knows_which_side_of_the_field_it_caps():
+## A corner knows BOTH sides it caps. The side wall was the first half: that
+## wall is drawn on its own inner edge, and a post that did not know the side
+## would sit half a tile off it. The run is the second, and was missing --
+## reported with all three visible corners crossed out, "the fences still
+## aren't optimal": with only a side, a corner post had no line to stop on
+## and was drawn as a whole tile of vertical rail, so the frame overshot by
+## a tile at every corner.
+func test_a_corner_knows_both_the_sides_it_caps():
 	var beds := _every_rect_cell(Rect2i(4, 4, 3, 2))
-	assert_eq(VillageFarm.fence_facing(Vector2i(3, 3), beds), "corner_west", "north-west")
-	assert_eq(VillageFarm.fence_facing(Vector2i(3, 6), beds), "corner_west", "south-west")
-	assert_eq(VillageFarm.fence_facing(Vector2i(7, 3), beds), "corner_east", "north-east")
-	assert_eq(VillageFarm.fence_facing(Vector2i(7, 6), beds), "corner_east", "south-east")
+	assert_eq(VillageFarm.fence_facing(Vector2i(3, 3), beds), "corner_nw", "north-west")
+	assert_eq(VillageFarm.fence_facing(Vector2i(3, 6), beds), "corner_sw", "south-west")
+	assert_eq(VillageFarm.fence_facing(Vector2i(7, 3), beds), "corner_ne", "north-east")
+	assert_eq(VillageFarm.fence_facing(Vector2i(7, 6), beds), "corner_se", "south-east")
 
 
-func test_both_corner_posts_have_rail_tiles_of_their_own():
-	var west: String = VillageFarm.fence_tile_for("corner_west")
-	var east: String = VillageFarm.fence_tile_for("corner_east")
-	assert_ne(west, "")
-	assert_ne(east, "")
-	assert_ne(west, east, "the two sides are pushed opposite ways, so they cannot share a tile")
-	assert_true(VillageFarm.is_fence_tile(west))
-	assert_true(VillageFarm.is_fence_tile(east))
+## And its direction really points at the beds it corners, on both axes --
+## the same pin the straight runs already have, which is what stops the two
+## halves of the name drifting apart from the geometry.
+func test_a_corners_direction_points_diagonally_at_the_beds():
+	var beds := _every_rect_cell(Rect2i(4, 4, 3, 2))
+	for corner in [Vector2i(3, 3), Vector2i(7, 3), Vector2i(3, 6), Vector2i(7, 6)]:
+		var tile_id: String = VillageFarm.fence_tile_for(VillageFarm.fence_facing(corner, beds))
+		var inner: Vector2i = VillageFarm.fence_inner_direction(tile_id)
+		assert_ne(inner.x, 0, "%s has no side" % str(corner))
+		assert_ne(inner.y, 0, "%s has no run" % str(corner))
+		assert_true(
+			beds.has(corner + inner),
+			"%s's own diagonal must land on the bed it corners, not past it" % str(corner)
+		)
+
+
+func test_every_corner_post_has_a_rail_tile_of_its_own():
+	var seen: Array = []
+	for facing in ["corner_nw", "corner_ne", "corner_sw", "corner_se"]:
+		var tile_id: String = VillageFarm.fence_tile_for(facing)
+		assert_ne(tile_id, "", facing)
+		assert_false(seen.has(tile_id), "%s reuses another corner's tile" % facing)
+		assert_true(VillageFarm.is_fence_tile(tile_id))
+		seen.append(tile_id)
+
+
+## A rail a village raised under the two-id scheme is still a rail: it keeps
+## its art and stays out of the ground cover, because the id is the only
+## thing stored about it and an unrecognised one would paint bare earth on
+## ground somebody has already walked past.
+func test_a_corner_from_the_older_scheme_still_reads_as_a_rail():
+	for tile_id in VillageFarm.LEGACY_FENCE_TILE_IDS:
+		assert_true(VillageFarm.is_fence_tile(tile_id), tile_id)
+		assert_true(VillageFarm.is_fence_corner_tile(tile_id), tile_id)
+		assert_ne(
+			VillageFarm.fence_inner_direction(tile_id), Vector2i.ZERO,
+			"%s still has to know which side it caps, or its art goes nowhere" % tile_id
+		)
+
+
+## And nothing raises one any more.
+func test_no_corner_the_rule_set_names_is_a_legacy_one():
+	var beds := _every_rect_cell(Rect2i(4, 4, 3, 2))
+	for cell in VillageFarm.fence_cells(beds, Vector2i(20, 20), VillageFarm.FARM_BUILDING_ID):
+		var tile_id: String = VillageFarm.fence_tile_for(VillageFarm.fence_facing(cell, beds))
+		assert_false(
+			VillageFarm.LEGACY_FENCE_TILE_IDS.has(tile_id),
+			"%s was raised as %s, which nothing should raise" % [str(cell), tile_id]
+		)
 
 
 ## The claim docs/progress.md's own honest-gap row makes about the merged

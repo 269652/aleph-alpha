@@ -131,6 +131,26 @@ const _SUBJECTS := {
 	# rail being drawn across the turn (reported: "corner pieces added so it
 	# doesn't look that broken"). One per side, drawn from that side's own
 	# column, because each is pushed out with the wall it caps.
+	"farm_fence_corner_nw": {
+		"path": "res://assets/sprites/buildings/fence.png",
+		"columns": 4, "rows": 3, "idle_row": 0, "idle_column": 3,
+		"keys_black": true, "grid": "dividers",
+	},
+	"farm_fence_corner_sw": {
+		"path": "res://assets/sprites/buildings/fence.png",
+		"columns": 4, "rows": 3, "idle_row": 0, "idle_column": 3,
+		"keys_black": true, "grid": "dividers",
+	},
+	"farm_fence_corner_ne": {
+		"path": "res://assets/sprites/buildings/fence.png",
+		"columns": 4, "rows": 3, "idle_row": 0, "idle_column": 2,
+		"keys_black": true, "grid": "dividers",
+	},
+	"farm_fence_corner_se": {
+		"path": "res://assets/sprites/buildings/fence.png",
+		"columns": 4, "rows": 3, "idle_row": 0, "idle_column": 2,
+		"keys_black": true, "grid": "dividers",
+	},
 	"farm_fence_corner_west": {
 		"path": "res://assets/sprites/buildings/fence.png",
 		"columns": 4, "rows": 3, "idle_row": 0, "idle_column": 3,
@@ -207,6 +227,13 @@ func _footprint_scale(subject: String, image: Image, tile_size: int) -> float:
 	# A run travels ACROSS the direction it closes: a rail whose beds lie
 	# north or south runs east-west, and one whose beds lie east or west
 	# runs north-south.
+	#
+	# A CORNER travels neither way -- it is a post on a join. It takes the
+	# side wall's own scale (the vertical run it caps), so its timber is
+	# exactly as thick as the run it meets; scaling it by its own length
+	# instead is what turned a post into a whole tile of rail.
+	if inner.x != 0 and inner.y != 0:
+		return float(tile_size) / float(maxi(art.size.y, 1))
 	if inner.y != 0:
 		return float(tile_size) / float(maxi(art.size.x, 1))
 	return float(tile_size) / float(maxi(art.size.y, 1))
@@ -251,6 +278,19 @@ func footprint_offset(subject: String, tile_size: int) -> Vector2:
 	var image := idle.get_image()
 	var art := _art_rect(subject, image)
 	var scale := _footprint_scale(subject, image, tile_size)
+	var band_left_x := (float(tile_size) - float(image.get_width()) * scale) * 0.5
+	if inner.x != 0 and inner.y != 0:
+		# A CORNER closes two sides, so it has a ground POINT rather than a
+		# ground line: the corner of its own tile where the two runs meet.
+		# Centred on it in BOTH axes -- half the post runs back along each
+		# run it caps and joins them, and nothing hangs a tile past either.
+		var centre_x := band_left_x + (float(art.position.x) + float(art.size.x) * 0.5) * scale
+		var band_top := float(tile_size) - float(image.get_height()) * scale
+		var centre_y := band_top + (float(art.position.y) + float(art.size.y) * 0.5) * scale
+		return Vector2(
+			(float(tile_size) if inner.x > 0 else 0.0) - centre_x,
+			(float(tile_size) if inner.y > 0 else 0.0) - centre_y
+		)
 	if inner.y != 0:
 		# Bottom-anchoring puts the BAND's bottom edge on the tile's bottom
 		# edge, so the posts stand this far above it.
@@ -261,8 +301,7 @@ func footprint_offset(subject: String, tile_size: int) -> Vector2:
 	# The band is centred on the tile -- and is NOT one tile wide once a rail
 	# is scaled by its own run, so where its left edge falls has to be
 	# carried rather than assumed away.
-	var band_left := (float(tile_size) - float(image.get_width()) * scale) * 0.5
-	var centre_x := band_left + (float(art.position.x) + float(art.size.x) * 0.5) * scale
+	var centre_x := band_left_x + (float(art.position.x) + float(art.size.x) * 0.5) * scale
 	if inner.x < 0:
 		return Vector2(-centre_x, 0.0)
 	return Vector2(float(tile_size) - centre_x, 0.0)

@@ -190,6 +190,25 @@ rails/posts and plant_fibre (4) lashing them".
   water, and not the village's paving. `VillageFarm.fence_cells` is that
   rule, pure and derived — like `field_rect` and `owner_of`, it stores
   nothing, so the same farmhouse fences the same ring on every reload.
+- **A corner post has a ground POINT, not a ground line.** Reported with all
+  three visible corners crossed out (*"the fences still aren't optimal"*).
+  A corner knew only which side WALL it capped, so its art was placed as a
+  whole tile of vertical rail with nothing saying where along that tile to
+  stop — and the run it caps sits on that tile's own EDGE, so the frame
+  overshot by a tile at every corner. `fence_facing` names both sides now
+  (`corner_nw`/`ne`/`sw`/`se`), its inner direction is the diagonal, and
+  `footprint_offset` centres the post on that corner of its own tile in both
+  axes: half the post runs back along each run it caps and joins them, and
+  nothing hangs past either. It also takes the side wall's own scale rather
+  than being scaled by its own length — scaling a post as if it were a run
+  is what made it a tile of rail in the first place.
+
+  The two-id corners (`corner_west`/`corner_east`) stay recognised as
+  `LEGACY_FENCE_TILE_IDS`: a rail is an ordinary chunk modification, so an
+  id that stopped reading as a fence would lose its art *and* stop being
+  overlay-only, painting a bare earth square on ground somebody has already
+  walked past. Nothing raises one.
+
 - **The frame closes at the corners.** A border's four diagonal cells are
   **corner posts**, not lengths of rail: drawing a horizontal rail across a
   corner is exactly the "broken" look the report points at. The sheet has no
@@ -260,6 +279,36 @@ rails/posts and plant_fibre (4) lashing them".
   six of them in a 3×2 bed. `FarmPlotMarker` keys it on what the bed was
   SOWN with rather than on `plot.crop_id`, which harvesting clears: a bare
   mound appearing the moment the wheat comes off is the same blob back.
+- **A bed stands on real tilled earth.** `assets/sprites/terrain/soil.png`
+  is a 3x3 grid of nine hand-drawn tilled-soil tiles; `FarmPlotMarker` draws
+  one of them, full-tile, under everything else it draws. This is what
+  actually answers the mound complaint above. Removing the mound from a
+  wheat bed left the bed standing on the meadow it was tilled out of — six
+  rectangles of untouched grass with wheat coming out of them — because
+  nothing ever drew the ground a bed is. The mound is unchanged and still
+  belongs to root crops (see the bullet above); the soil under it is a
+  separate layer and is always on.
+
+  Which of the nine a bed gets is hashed from its own global tile, so
+  neighbouring beds differ but a given bed is the same every time it is
+  drawn, matching every other seeded art pick in this codebase.
+
+  **This sheet's gutters are BLACK, not magenta**, unlike every other
+  illustrated sheet here. That is not a detail: `IllustratedTerrainSprite`
+  punches magenta to alpha before slicing, and `SpriteSheetSlicer.
+  detect_frames` then finds cell dividers by their transparency. Fed a
+  black-gutter sheet that pipeline finds no dividers at all and returns the
+  whole 1254x1254 image as ONE frame — measured, not predicted.
+
+  Rather than teach the chroma-key pass a second background colour, a sheet
+  may now declare its `column_bands` outright, and soil does: both axes were
+  measured from the file, so there is nothing left for content detection to
+  find. That is the better fit regardless of the gutter colour, because a
+  full-bleed GROUND tile is the one case where content detection is actively
+  wrong — cropping to content and rescaling is precisely what must not
+  happen to a tile that has to abut its neighbours. Sheets without
+  `column_bands` are untouched and still find their columns by content.
+
 - **A street ROW is street, paved or not.** Neither beds nor rails ever land
   on one. The founding layout paves a further street only *between its own
   doorsteps*, so a street row has unpaved gaps in it — and measured on real

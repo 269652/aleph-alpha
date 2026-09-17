@@ -1558,3 +1558,53 @@ replace the old `test_display_scale_is_native_no_upscaling`: they pin what
 that ask was actually protecting — an exact integer scale, and a width in
 the range it settled on — rather than the bare literal 1, which is what
 went stale when the art changed shape underneath it.
+
+## Re-measuring a third time: 10x5 at 10fps (2026-09-17)
+
+Reported: *"The intro still doesn't have the correct frame crops"*. The
+sheet was replaced again ("bump resolution") with **half as many frames at
+twice the size** — 1672x941 still, but **10 columns x 5 rows**, not 20x6 —
+and nothing was re-measured, so every crop was taken from a window that had
+not existed since the swap.
+
+Measured off the file on disk, never divided arithmetically:
+
+| | measured |
+|---|---|
+| column lefts | 0, 173, 340, 506, 672, 837, 1003, 1169, 1335, 1502 |
+| row tops | 0, 194, 381, 576, 756 |
+| clean cell widths | 172, 165, 164, 164, 164, 164, 164, 164, 165, 170 |
+| clean cell heights | 192, 185, 194, 178, 185 |
+| caption band | rows 10–21 of every cell (unchanged) |
+| crop | 163 x 149, one tile in, below the caption |
+| frames | 10 x 5 = **50** |
+| captions | 0.00s, 0.10s, 0.90s … 4.80s, 4.90s → **10fps**, five seconds |
+
+The frame rate came from reading the sheet's own printed timestamps, not
+from carrying 24fps over: at 24 the whole intro played in just over two
+seconds.
+
+**Why the guard did not catch it, again.** The grid test *did* go red — it
+had been red on `main` since the swap. What was missing is a tie between the
+grid and the COUNT: `FRAME_COUNT` was a hand-written 120 that agreed with a
+hand-written 20x6 grid, so the two were consistent with each other and
+inconsistent only with the file.
+`test_the_frame_count_is_exactly_the_grid_the_sheet_really_has` now derives
+the count from the measured grid, and
+`test_the_sequencer_runs_at_the_sheets_own_frame_rate` pins the rate the
+captions declare.
+
+**A second, quieter trap.** `SpriteSheetLoader` prefers the IMPORTED
+texture, so a `.godot` cache older than the art serves the OLD sheet through
+the NEW constants — which is exactly what happened while fixing this: the
+grid tests (which read the raw file) reported the new sheet while the crop
+tests (which go through the loader) were still slicing the old one. Run
+`godot --headless --import` after any art swap before trusting a crop test.
+
+**Display scale.** The frames are 163x149 now, so no whole number lands near
+the 243px width the "native size" ask settled on — 1 gives 163, 2 gives 326,
+and 1.5 would reintroduce the fractional-scale shimmer two earlier passes
+fixed. `DISPLAY_SCALE` is **2**, the option that does not go under the 237
+the player accepted; 1 is a one-line change if a smaller intro is wanted.
+The test now asserts that reachable property rather than a literal that
+nothing can satisfy.
