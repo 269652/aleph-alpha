@@ -452,3 +452,80 @@ func test_latest_event_for_entity_survives_from_dicts():
 	store.append(event)
 	var restored := EventStore.from_dicts(store.to_dicts())
 	assert_eq(restored.latest_event_for_entity("path:4_4").type, "trail_formed")
+
+
+# -- the read odometer --------------------------------------------------------
+#
+# What made "the performance gets worse the longer you play" cost fifteen
+# FPS-regression rounds to chase is that nothing ever reported how much
+# HISTORY a frame walked. PerfReport times sections and counts nodes, but a
+# section climbing from 6 ms to 142 ms over seven minutes looks identical
+# whether the cause is a growing store, a growing population, or a growing
+# anything else -- so each round needed a fresh long session plus a guess.
+#
+# This counts the one thing those rounds all turned out to be: events
+# handed out by a read. It is the store's own cost, in the store's own
+# units, and it is what test_earth_chunk_manager's settlement-assessment
+# bound asserts against -- a deterministic stand-in for the Big-O that
+# GDScript/GUT cannot assert directly.
+
+func test_events_read_counts_the_events_a_whole_entity_read_walked():
+	for i in 10:
+		var event := _event("noise")
+		event.actors = ["settlement:0_0"]
+		store.append(event)
+	store.take_events_read()
+	store.events_for_entity("settlement:0_0")
+	assert_eq(store.events_read(), 10)
+
+
+## The whole point of the narrowed read: it walks the matches, not the
+## history. This is the assertion that would have named round 14's root
+## cause in one line.
+func test_events_read_counts_only_the_matches_for_a_narrowed_read():
+	for i in 10:
+		var event := _event("noise")
+		event.actors = ["settlement:0_0"]
+		store.append(event)
+	var real := _event("production_succeeded")
+	real.actors = ["settlement:0_0"]
+	store.append(real)
+
+	store.take_events_read()
+	store.events_for_entity_of_type("settlement:0_0", "production_succeeded")
+	assert_eq(store.events_read(), 1)
+
+
+func test_events_read_accumulates_across_reads():
+	var event := _event("noise")
+	event.actors = ["settlement:0_0"]
+	store.append(event)
+	store.take_events_read()
+	store.events_for_entity("settlement:0_0")
+	store.events_for_entity("settlement:0_0")
+	assert_eq(store.events_read(), 2)
+
+
+func test_take_events_read_returns_the_count_and_resets_it():
+	var event := _event("noise")
+	event.actors = ["settlement:0_0"]
+	store.append(event)
+	store.take_events_read()
+	store.events_for_entity("settlement:0_0")
+	assert_eq(store.take_events_read(), 1)
+	assert_eq(store.events_read(), 0)
+
+
+## events_of_type and the latest-event read are on the same odometer -- a
+## frame's whole history cost is one number, not one per query shape.
+func test_events_read_covers_events_of_type_and_latest_event_for_entity():
+	for i in 3:
+		var event := _event("drought")
+		event.actors = ["region:0_0"]
+		store.append(event)
+	store.take_events_read()
+	store.events_of_type("drought")
+	assert_eq(store.events_read(), 3)
+	store.take_events_read()
+	store.latest_event_for_entity("region:0_0")
+	assert_eq(store.events_read(), 1, "reading the newest event walks exactly one")

@@ -29,6 +29,11 @@ var _by_type: Dictionary = {}
 ## events actually match (see events_for_entity_of_type).
 var _by_entity_type: Dictionary = {}
 var _next_ordinal := 0
+## How many events every read has handed out since the last take -- see
+## events_read(). Pure bookkeeping on a read path that was already
+## allocating an Array per call; one integer add against an append is
+## nothing next to what it makes visible.
+var _events_read := 0
 
 
 ## Assigns a deterministic, sortable id ("evt_<ordinal>_<type>") and indexes
@@ -99,6 +104,32 @@ func _link(cause_id: String, effect_id: String) -> void:
 		cause.consequences.append(effect_id)
 
 
+## How many events this store's reads have handed out since the last
+## take_events_read() -- the store's own cost, in the store's own units.
+##
+## Why an odometer and not just a timer: "the performance gets worse the
+## longer you play" has now cost this project fifteen FPS-regression rounds
+## (docs/concept/soil_fauna.md), and every one of them turned out to be
+## work proportional to everything that had ever happened. PerfReport could
+## always show a SECTION climbing; it could never show WHY, because a
+## growing history and a growing population look identical from a
+## millisecond count. This distinguishes them outright: history walked per
+## frame is flat in a healthy session and climbs in a sick one, whatever
+## the frame rate is doing. Read as the s_/p_ fields' missing third axis
+## (PerfReport's "ev_read").
+func events_read() -> int:
+	return _events_read
+
+
+## The count since the last take, then resets -- the shape PerfReport's own
+## take_sections/take_counts already use, so a report window reads as
+## "history walked per frame" rather than as a number that only ever grows.
+func take_events_read() -> int:
+	var total := _events_read
+	_events_read = 0
+	return total
+
+
 func get_event(event_id: String) -> Event:
 	return _events.get(event_id)
 
@@ -128,6 +159,7 @@ func events_for_entity(entity_id: String) -> Array[Event]:
 	var out: Array[Event] = []
 	for event_id in _by_entity.get(entity_id, []):
 		out.append(_events[event_id])
+	_events_read += out.size()
 	return out
 
 
@@ -207,6 +239,7 @@ func events_for_entity_of_type(entity_id: String, type: String) -> Array[Event]:
 	var out: Array[Event] = []
 	for event_id in _by_entity_type.get(_entity_type_key(entity_id, type), []):
 		out.append(_events[event_id])
+	_events_read += out.size()
 	return out
 
 
@@ -229,6 +262,7 @@ func events_for_entity_of_types(entity_id: String, types: Array) -> Array[Event]
 	var out: Array[Event] = []
 	for event_id in ids:
 		out.append(_events[event_id])
+	_events_read += out.size()
 	return out
 
 
@@ -241,6 +275,7 @@ func latest_event_for_entity(entity_id: String):
 	var ids: Array = _by_entity.get(entity_id, [])
 	if ids.is_empty():
 		return null
+	_events_read += 1
 	return _events[ids[ids.size() - 1]]
 
 
@@ -248,6 +283,7 @@ func events_of_type(type: String) -> Array[Event]:
 	var out: Array[Event] = []
 	for id in _by_type.get(type, []):
 		out.append(_events[id])
+	_events_read += out.size()
 	return out
 
 
@@ -255,6 +291,7 @@ func events_of_type(type: String) -> Array[Event]:
 ## window it borders, not the one after it.
 func events_in_window(t0: float, t1: float) -> Array[Event]:
 	var out: Array[Event] = []
+	_events_read += _order.size()  # this one really does scan everything
 	for id in _order:
 		var event: Event = _events[id]
 		if event.tick >= t0 and event.tick <= t1:
