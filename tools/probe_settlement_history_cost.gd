@@ -27,15 +27,20 @@ extends SceneTree
 ## real (tens of seconds each), so the default sweep is not quick -- pass a
 ## shorter list of depths when iterating.
 
-## Loaded at RUN time, not preloaded: this script `extends SceneTree`, so
-## its own constants resolve while the project's autoloads are still coming
-## up, and preloading EarthChunkManager there yields a bare GDScript whose
-## `new` does not exist yet ("Nonexistent function 'new' in base
-## 'GDScript'"). load() inside _initialize resolves after that.
+const EntityRef = preload("res://src/emergence/entity_ref.gd")
+const Event = preload("res://src/emergence/event.gd")
+const NpcIdentity = preload("res://src/world/npc_identity.gd")
+
+## EarthChunkManager ALONE is loaded at run time rather than preloaded.
+## This script `extends SceneTree`, so its constants resolve while the
+## project's autoloads are still coming up, and preloading this particular
+## script -- the one with the deepest preload graph in the project -- gives
+## back a bare GDScript whose `new` does not exist yet ("Nonexistent
+## function 'new' in base 'GDScript'"). `load()` inside _initialize
+## resolves after the autoloads are up. The three pure RefCounted modules
+## above have no such graph, preload fine, and keep `:=` inference working
+## against them below.
 var EarthChunkManager
-var EntityRef
-var Event
-var NpcIdentity
 
 ## The settlement's history depths to measure at. Deliberately spans an
 ## order of magnitude: a linear cost shows up as a straight line through
@@ -50,9 +55,6 @@ const CHUNK_COORD := Vector2i(47, 47)
 
 func _initialize() -> void:
 	EarthChunkManager = load("res://src/world/earth_chunk_manager.gd")
-	EntityRef = load("res://src/emergence/entity_ref.gd")
-	Event = load("res://src/emergence/event.gd")
-	NpcIdentity = load("res://src/world/npc_identity.gd")
 	var depths: Array = HISTORY_DEPTHS
 	var args := OS.get_cmdline_user_args()
 	if not args.is_empty():
