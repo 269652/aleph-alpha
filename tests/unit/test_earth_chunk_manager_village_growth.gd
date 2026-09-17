@@ -198,17 +198,44 @@ func _raise_the_hall() -> void:
 	manager._place_building_over_roads(_chunk_coord, _civic_origin, "city_hall", 1, _settlement_id)
 
 
-## The rung these machinery tests act on. They are about QUEUEING one
-## project, siting it on a street and never queueing it twice; the rung
-## itself is only ever the example they do it with.
+## The rung these machinery tests act on: whichever one this village is
+## really owed, with everything below it standing and the village grown big
+## enough for the ladder to name it.
 ##
-## Every one of them was written against "warehouse", and every one broke
-## the day the warehouse stopped being something a village climbs to and
-## became something every village is founded with (docs/concept/village_
-## warehouse.md). The sawmill cannot take its place -- it is the one rung
-## sited at the forest rather than on the street -- so the farmhouse, the
-## first street-fronting rung above the hall, does.
-const EXAMPLE_RUNG := "farmhouse"
+## Asked of the ladder rather than named, because a hardcoded rung is a test
+## that silently stops testing anything the day that rung stops being one.
+## That has now happened TWICE. All of these were written against
+## "warehouse", which became something every village is founded with
+## (docs/concept/village_warehouse.md) rather than something it climbs to;
+## naming the farmhouse instead only moved the problem, because the founding
+## raises farmhouses too. Measured on this village: 5 households, all housed,
+## with city_hall, sawmill, farmhouse AND warehouse already standing, and so
+## owed nothing at all -- every assertion about a queued project failing on
+## an empty array.
+##
+## The sawmill is raised and stepped over rather than returned: it is the one
+## rung sited at the forest rather than on the street, and one of these tests
+## asserts street frontage.
+const INDUSTRY_RUNG := "sawmill"
+
+
+func _rung_the_village_is_owed() -> String:
+	_raise_the_hall()
+	for rung in VillageGrowth.LADDER_BUILDING_IDS:
+		if rung == "city_hall":
+			continue  # the hall has its own decision, and is up already
+		if manager._present_structure_ids_for_settlement_chunk(_chunk_coord).has(rung):
+			continue  # already standing, so the ladder walks past it
+		_grow_to(VillageGrowth.min_households_for(rung))
+		var origin = manager._growth_site_for(_chunk_coord, rung)
+		if origin == null:
+			continue  # nowhere to put this one; try the next
+		if rung == INDUSTRY_RUNG:
+			manager._place_building_over_roads(_chunk_coord, origin, rung, 2, _settlement_id)
+			continue
+		return rung
+	fail_test("this village is owed no street-fronting rung it could build")
+	return ""
 
 
 ## Grows this real village until it has `count` households, each with a roof
@@ -242,23 +269,6 @@ func _grow_to(count: int) -> void:
 	fail_test("this village never reached %d households" % count)
 
 
-## Every rung BELOW the one a test is about, so the ladder really is
-## pointing at that rung. Without this a test asking about the farmhouse is
-## at the mercy of whether this particular chunk happened to have timber in
-## reach: a village with no mill is owed a mill first, correctly, and the
-## farmhouse never comes up at all.
-func _raise_everything_below(building_id: String) -> void:
-	_raise_the_hall()
-	for rung in VillageGrowth.LADDER_BUILDING_IDS:
-		if rung == building_id:
-			return
-		if rung == "city_hall" or manager._present_structure_ids_for_settlement_chunk(_chunk_coord).has(rung):
-			continue
-		var origin = manager._growth_site_for(_chunk_coord, rung)
-		assert_not_null(origin, "nowhere to raise %s, which %s waits behind" % [rung, building_id])
-		manager._place_building_over_roads(_chunk_coord, origin, rung, 2, _settlement_id)
-
-
 func _projects_for(building_id: String) -> Array:
 	var out: Array = []
 	for project in manager.construction_project_store().active_projects_in_chunk(_chunk_coord):
@@ -284,12 +294,11 @@ func test_a_village_without_its_hall_yet_queues_no_later_rung():
 
 func test_a_village_with_its_hall_up_queues_the_next_rung_it_is_entitled_to():
 	_stock_everything()
-	_grow_to(VillageGrowth.min_households_for(EXAMPLE_RUNG))
-	_raise_everything_below(EXAMPLE_RUNG)
+	var rung := _rung_the_village_is_owed()
 
 	manager._apply_village_growth_decision(_chunk_coord)
 
-	var queued: Array = _projects_for(EXAMPLE_RUNG)
+	var queued: Array = _projects_for(rung)
 	assert_eq(queued.size(), 1, "the ladder's next rung for a village of this size")
 	assert_eq(
 		queued[0].household_id, _settlement_id,
@@ -300,17 +309,16 @@ func test_a_village_with_its_hall_up_queues_the_next_rung_it_is_entitled_to():
 
 func test_a_growth_building_is_sited_fronting_the_villages_own_street():
 	_stock_everything()
-	_grow_to(VillageGrowth.min_households_for(EXAMPLE_RUNG))
-	_raise_everything_below(EXAMPLE_RUNG)
+	var rung := _rung_the_village_is_owed()
 	manager._apply_village_growth_decision(_chunk_coord)
-	var queued: Array = _projects_for(EXAMPLE_RUNG)
+	var queued: Array = _projects_for(rung)
 	assert_eq(queued.size(), 1, "precondition")
 
 	# The main street or one of the further streets south of it at the
 	# layout's own fixed pitch -- a village whose first frontage is already
 	# full of houses builds on the next street, which is the layout working,
 	# not the siting drifting off the road network.
-	var doorstep: Vector2i = queued[0].origin + BuildingCatalog.doorstep_of(EXAMPLE_RUNG)
+	var doorstep: Vector2i = queued[0].origin + BuildingCatalog.doorstep_of(rung)
 	var street_y: int = VillageLayout.skeleton(CHUNK_SIZE, VillageLayout.seed_for(_chunk_coord))["street_y"]
 	var offset := doorstep.y - street_y
 	assert_gte(offset, 0, "a growth building never fronts north of the main street")
@@ -319,11 +327,10 @@ func test_a_growth_building_is_sited_fronting_the_villages_own_street():
 
 func test_the_same_rung_is_never_queued_twice():
 	_stock_everything()
-	_grow_to(VillageGrowth.min_households_for(EXAMPLE_RUNG))
-	_raise_everything_below(EXAMPLE_RUNG)
+	var rung := _rung_the_village_is_owed()
 	manager._apply_village_growth_decision(_chunk_coord)
 	manager._apply_village_growth_decision(_chunk_coord)
-	assert_eq(_projects_for(EXAMPLE_RUNG).size(), 1, "a repeated decision finds its own earlier project")
+	assert_eq(_projects_for(rung).size(), 1, "a repeated decision finds its own earlier project")
 
 
 ## The subsistence gate (a village whose whole population works a survival
@@ -361,8 +368,7 @@ func test_an_arriving_household_has_no_roof_until_the_village_builds_one():
 
 func test_a_homeless_household_makes_the_village_owe_a_house_before_any_other_rung():
 	_stock_everything()
-	_grow_to(VillageGrowth.min_households_for(EXAMPLE_RUNG))
-	_raise_everything_below(EXAMPLE_RUNG)
+	var rung := _rung_the_village_is_owed()
 	manager.admit_household(_chunk_coord)
 	_clear_ledger()
 
@@ -370,13 +376,14 @@ func test_a_homeless_household_makes_the_village_owe_a_house_before_any_other_ru
 
 	var houses: Array = _projects_for(BuildingCatalog.BUILDING_IDS[0])
 	assert_eq(houses.size(), 1, "shelter outranks every civic and production rung")
-	assert_true(_projects_for(EXAMPLE_RUNG).is_empty(), "every rung waits until everyone has a roof")
+	assert_true(_projects_for(rung).is_empty(), "every rung waits until everyone has a roof")
 
 
 func test_the_house_is_credited_to_the_household_waiting_for_it():
 	_stock_everything()
-	_grow_to(VillageGrowth.min_households_for(EXAMPLE_RUNG))
-	_raise_everything_below(EXAMPLE_RUNG)
+	# The rung itself is not this test's question -- only that the village is
+	# past the point where the ladder would otherwise be owed one.
+	_rung_the_village_is_owed()
 	var newcomer := manager.admit_household(_chunk_coord)
 
 	manager._apply_village_growth_decision(_chunk_coord)
@@ -427,10 +434,9 @@ func test_an_unhappy_village_builds_slower_than_a_thriving_one():
 		), 0, "precondition: this village has spare hands to build with at all"
 	)
 	_stock_everything()
-	_grow_to(VillageGrowth.min_households_for(EXAMPLE_RUNG))
-	_raise_everything_below(EXAMPLE_RUNG)
+	var rung := _rung_the_village_is_owed()
 	manager._apply_village_growth_decision(_chunk_coord)
-	var queued: Array = _projects_for(EXAMPLE_RUNG)
+	var queued: Array = _projects_for(rung)
 	assert_eq(queued.size(), 1, "precondition: something is actually rising")
 
 	# Destitute: no larder at all, so hunger is total and productivity floors.
@@ -607,13 +613,12 @@ func test_a_villager_who_owns_nothing_here_is_reported_as_owning_nothing():
 
 func test_the_spiral_site_search_never_offers_ground_a_building_is_rising_on():
 	_stock_everything()
-	_grow_to(VillageGrowth.min_households_for(EXAMPLE_RUNG))
-	_raise_everything_below(EXAMPLE_RUNG)
+	var rung := _rung_the_village_is_owed()
 	manager._apply_village_growth_decision(_chunk_coord)
-	var queued: Array = _projects_for(EXAMPLE_RUNG)
+	var queued: Array = _projects_for(rung)
 	assert_eq(queued.size(), 1, "precondition")
 
-	for cell in BuildingCatalog.footprint_cells(EXAMPLE_RUNG, queued[0].origin):
+	for cell in BuildingCatalog.footprint_cells(rung, queued[0].origin):
 		assert_false(
 			manager._is_clear_settlement_site(_chunk_coord, cell),
 			"cell %s is already spoken for by a rising rung" % str(cell)
@@ -622,20 +627,19 @@ func test_the_spiral_site_search_never_offers_ground_a_building_is_rising_on():
 
 func test_a_growth_building_is_never_sited_on_ground_another_project_already_claims():
 	_stock_everything()
-	_grow_to(VillageGrowth.min_households_for(EXAMPLE_RUNG))
-	_raise_everything_below(EXAMPLE_RUNG)
+	var rung := _rung_the_village_is_owed()
 	manager._apply_village_growth_decision(_chunk_coord)
-	var first: Array = _projects_for(EXAMPLE_RUNG)
+	var first: Array = _projects_for(rung)
 	assert_eq(first.size(), 1, "precondition")
 	var claimed := {}
-	for cell in BuildingCatalog.footprint_cells(EXAMPLE_RUNG, first[0].origin):
+	for cell in BuildingCatalog.footprint_cells(rung, first[0].origin):
 		claimed[cell] = true
 
 	# The ladder's NEXT rung has to find its own ground, not share the one
 	# already rising -- asked for directly, since the ladder itself will not
 	# name it until this one actually stands.
 	var after: String = VillageGrowth.LADDER_BUILDING_IDS[
-		VillageGrowth.LADDER_BUILDING_IDS.find(EXAMPLE_RUNG) + 1
+		VillageGrowth.LADDER_BUILDING_IDS.find(rung) + 1
 	]
 	var next_origin = manager._growth_site_for(_chunk_coord, after)
 	assert_not_null(next_origin, "the village still has frontage somewhere")
@@ -860,23 +864,3 @@ func test_every_rung_the_village_raises_is_walkable_back_to_its_street():
 		"%d of %d rungs stand on paving no street reaches: %s" % [stranded.size(), raised.size(), str(stranded)]
 	)
 
-
-
-## TEMPORARY PROBE -- remove once the example rung is settled.
-func test_zzz_probe_growth_state():
-	_stock_everything()
-	_grow_to(VillageGrowth.min_households_for(EXAMPLE_RUNG))
-	_raise_everything_below(EXAMPLE_RUNG)
-	var household_ids := manager._households_in_settlement(_settlement_id)
-	var census := manager._village_census_for(_chunk_coord, household_ids)
-	var present: Array = manager._present_structure_ids_for_settlement_chunk(_chunk_coord)
-	print("PROBE households=%d housed=%d spare=%d next=%s site=%s present=%s" % [
-		household_ids.size(), int(census["housed_count"]),
-		SettlementSpareCapacity.for_settlement(
-			household_ids.size(), manager._household_occupations_for_settlement(_settlement_id)
-		),
-		VillageGrowth.next_building(household_ids.size(), int(census["housed_count"]), present),
-		str(manager._growth_site_for(_chunk_coord, EXAMPLE_RUNG)),
-		str(present),
-	])
-	pass_test("probe")
