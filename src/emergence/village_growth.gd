@@ -20,7 +20,7 @@ extends RefCounted
 ##    the FIRST house id so a caller with no villager in hand still gets a
 ##    real answer.
 ## 2. **The next unbuilt rung whose household threshold is met**, in LADDER
-##    order -- sawmill, city hall, warehouse, farmhouse, blacksmith,
+##    order -- sawmill, city hall, farmhouse, blacksmith,
 ##    brewery. Skipped, never re-ordered: a rung already standing is passed
 ##    over and the walk continues, so a village that acquired its hall out
 ##    of order (a player built one) still grows into the rest.
@@ -47,10 +47,17 @@ const CivicBuildDecision = preload("res://src/emergence/civic_build_decision.gd"
 ## village of one owes itself a sawmill -- and it is the one rung sited
 ## away from the street, at the forest (VillageLayout.industry_plot).
 const SAWMILL_MIN_HOUSEHOLDS := 1
-## Rung 3. A storehouse for the settlement stock SettlementGathering and
-## SettlementGranary already fill -- worth roofing once there is more than
-## a hamlet's worth of it (civic_construction.md's own Granary).
-const WAREHOUSE_MIN_HOUSEHOLDS := 4
+## The warehouse used to be rung 3 here, gated at four households. It is not
+## a rung any more: every village is FOUNDED with its store already standing
+## (docs/concept/village_warehouse.md -- VillageLayout reserves the plot
+## beside the square and VillageRenderer raises it), so there is nothing for
+## a village to grow into.
+##
+## Removed rather than lowered to one. A threshold that is always met is a
+## gate that lies to the next reader, and the rung itself would be satisfied
+## before this ladder is ever consulted -- so next_building would go on
+## naming a target the village already has, which is the exact bug
+## present_building_ids exists to prevent.
 ## Rung 4. Food production: the works that let the population keep growing
 ## at all, so it follows directly on the store that holds its harvest.
 const FARMHOUSE_MIN_HOUSEHOLDS := 5
@@ -65,13 +72,12 @@ const BREWERY_MIN_HOUSEHOLDS := 9
 ## CivicBuildDecision's, not a second copy -- that decision is still the
 ## live owner of the hall, and two numbers for one rung could drift.
 const LADDER_BUILDING_IDS: Array[String] = [
-	"sawmill", "city_hall", "warehouse", "farmhouse", "blacksmith", "brewery",
+	"sawmill", "city_hall", "farmhouse", "blacksmith", "brewery",
 ]
 
 const _MIN_HOUSEHOLDS_BY_BUILDING := {
 	"sawmill": SAWMILL_MIN_HOUSEHOLDS,
 	"city_hall": CivicBuildDecision.CITY_HALL_MIN_HOUSEHOLDS,
-	"warehouse": WAREHOUSE_MIN_HOUSEHOLDS,
 	"farmhouse": FARMHOUSE_MIN_HOUSEHOLDS,
 	"blacksmith": BLACKSMITH_MIN_HOUSEHOLDS,
 	"brewery": BREWERY_MIN_HOUSEHOLDS,

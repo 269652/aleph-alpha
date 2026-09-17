@@ -2195,3 +2195,36 @@ func test_a_village_leaves_no_one_or_two_tile_hole_in_its_own_streets():
 			holes.append("%s: a hole in the street at %s" % [str(coord), str(cell)])
 	assert_gt(checked, 0, "precondition: real villages were laid")
 	assert_eq(holes.size(), 0, "%s" % str(holes.slice(0, 8)))
+
+
+# -- every village is founded with a store ----------------------------------
+#
+# See docs/concept/village_warehouse.md. Unlike the hall, which a village of
+# two has no need of, the store has no threshold at all: a settlement keeps
+# one the way it keeps a well. So this asserts the plain "always", not "once
+# big enough".
+
+
+func test_a_founded_village_already_has_its_warehouse():
+	var coord := _find_settlement_chunk("grassland")
+	var world := StubWorld.new()
+	renderer.spawn_village(parent, coord, coord * CHUNK_SIZE, CHUNK_SIZE, TILE_SIZE, "grassland", world)
+	assert_eq(_placed(world, "warehouse").size(), 1, "every village keeps a store")
+
+
+func test_the_warehouse_stands_on_its_own_reserved_plot():
+	var coord := _find_settlement_chunk("grassland")
+	var world := StubWorld.new()
+	renderer.spawn_village(parent, coord, coord * CHUNK_SIZE, CHUNK_SIZE, TILE_SIZE, "grassland", world)
+	var stores: Array = _placed(world, "warehouse")
+	assert_eq(stores.size(), 1, "precondition")
+	var plot: Dictionary = VillageLayout.skeleton(CHUNK_SIZE, VillageLayout.seed_for(coord))["warehouse_plot"]
+	assert_eq(stores[0]["origin_local"], plot["origin"], "on its reserved plot, not anywhere free")
+
+
+func test_a_reload_never_raises_a_second_warehouse():
+	var coord := _find_settlement_chunk("grassland")
+	var world := StubWorld.new()
+	renderer.spawn_village(parent, coord, coord * CHUNK_SIZE, CHUNK_SIZE, TILE_SIZE, "grassland", world)
+	renderer.spawn_village(parent, coord, coord * CHUNK_SIZE, CHUNK_SIZE, TILE_SIZE, "grassland", world)
+	assert_eq(_placed(world, "warehouse").size(), 1, "one store per village, across reloads")

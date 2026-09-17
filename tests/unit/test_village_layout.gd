@@ -1250,3 +1250,69 @@ func test_a_hole_off_a_street_row_is_not_a_street_gap():
 ## The size the report named, pinned rather than left as a comment.
 func test_the_gap_a_village_closes_is_the_one_that_was_asked_for():
 	assert_eq(VillageLayout.STREET_GAP_CLOSE_TILES, 2, "\"a free gap of 1-2 tiles\"")
+
+
+# -- the warehouse: every village keeps a store ----------------------------
+#
+# See docs/concept/village_warehouse.md. A village keeps a store the way it
+# keeps a well -- part of what "a village" means here, not a rung it grows
+# into. So the square reserves a plot for one the same way it reserves the
+# civic plot for the hall, and the founding renderer raises it.
+#
+# It cannot simply join `plots`: those are HOUSE plots, each carrying a
+# building_index the renderer uses to look up npcs[i] for the resident. A
+# warehouse has nobody living in it (capacity 0), so it gets its own
+# reserved plot, exactly as the hall does.
+
+
+func test_the_square_reserves_a_plot_for_the_warehouse():
+	var ids := ["house_small", "house_small", "house_medium"]
+	var result := layout.layout(ids, CHUNK_SIZE, 11, _always_buildable, _never_occupied)
+	var plot: Dictionary = result["warehouse_plot"]
+	assert_false(plot.is_empty(), "a village should reserve somewhere to keep its stock")
+	assert_eq(plot["building_id"], VillageLayout.WAREHOUSE_BUILDING_ID)
+	assert_eq(
+		plot["doorstep"],
+		plot["origin"] + BuildingCatalog.doorstep_of(VillageLayout.WAREHOUSE_BUILDING_ID),
+		"its door is its catalog doorstep, like every other plot's"
+	)
+
+
+## The store is no use if a house is standing in it. Checked against the
+## real house plots AND the hall's own plot, since all three are claimed out
+## of the same square.
+func test_the_warehouses_plot_is_clear_of_the_houses_and_the_hall():
+	var ids := ["house_small", "house_small", "house_medium", "house_small"]
+	var result := layout.layout(ids, CHUNK_SIZE, 12, _always_buildable, _never_occupied)
+	var warehouse: Dictionary = result["warehouse_plot"]
+	var taken := {}
+	for plot in result["plots"]:
+		for cell in _footprint_cells(plot["origin"], plot["building_id"]):
+			taken[cell] = true
+	var civic: Dictionary = result["civic_plot"]
+	if not civic.is_empty():
+		for cell in _footprint_cells(civic["origin"], civic["building_id"]):
+			taken[cell] = true
+	for cell in _footprint_cells(warehouse["origin"], warehouse["building_id"]):
+		assert_false(taken.has(cell), "the warehouse overlaps something else at %s" % str(cell))
+
+
+## ...and inside the chunk it is supposed to be in.
+func test_the_warehouses_plot_stays_inside_the_chunk():
+	var result := layout.layout(["house_small"], CHUNK_SIZE, 13, _always_buildable, _never_occupied)
+	for cell in _footprint_cells(
+		(result["warehouse_plot"] as Dictionary)["origin"],
+		(result["warehouse_plot"] as Dictionary)["building_id"]
+	):
+		var at: Vector2i = cell
+		assert_between(at.x, 0, CHUNK_SIZE - 1, "x of %s" % str(at))
+		assert_between(at.y, 0, CHUNK_SIZE - 1, "y of %s" % str(at))
+
+
+func _footprint_cells(origin: Vector2i, building_id: String) -> Array:
+	var cells: Array = []
+	var footprint := BuildingCatalog.footprint_of(building_id)
+	for dy in footprint.y:
+		for dx in footprint.x:
+			cells.append(origin + Vector2i(dx, dy))
+	return cells

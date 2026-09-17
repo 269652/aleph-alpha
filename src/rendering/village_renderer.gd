@@ -373,6 +373,7 @@ func _place_new_village(
 			world.build_at_global(g.x, g.y, TerrainRenderer.ROAD_TILE_ID)
 
 	_place_industry_if_missing(chunk_coord, chunk_size, world)
+	_place_warehouse_if_missing(chunk_coord, chunk_size, world)
 	_place_civic_if_missing(chunk_coord, chunk_size, world)
 	_place_farms_if_missing(chunk_coord, chunk_size, npcs, world)
 	return true
@@ -887,6 +888,56 @@ func _field_fits_at(
 ## gains one on its next visit, the same self-healing shape the plaza and
 ## the mill already have. A village below the threshold, or one whose
 ## square was never paved, honestly gets none.
+## Every village is founded with a store standing (docs/concept/
+## village_warehouse.md): VillageLayout reserves a plot for it beside the
+## square, and this raises it there.
+##
+## Deliberately has NO household threshold, unlike the hall below. A hamlet
+## of two has no need of a civic seat, but it very much needs somewhere to
+## put the harvest -- that is the whole of pillar 1, and it is why the
+## warehouse left VillageGrowth's ladder rather than moving down it.
+##
+## "If missing" for the same reason the hall's own placement is: this runs
+## on every load, not only at founding, so it must be the thing that decides
+## a store already stands rather than raising a second one beside the first.
+##
+## Uses place_building_over_roads, like the hall and NOT like the sawmill.
+## The reason is the doorstep. This runs after the streets are stamped (see
+## _place_new_village's own "Buildings BEFORE roads" comment), and this
+## plot's door opens straight onto the main street -- so by the time it runs,
+## its own doorstep is already paved, and plain place_building refuses a plot
+## whose doorstep cell is non-empty. It would refuse itself over its own
+## front step, every time. The sawmill escapes this only because
+## industry_plot sites it away from the street and lays its own spur
+## afterwards.
+##
+## Unlike the hall, this does NOT first require every footprint cell to be
+## road: the hall stands ON the paved square, while this stands on ordinary
+## ground beside it. Only the doorstep is shared with the street.
+func _place_warehouse_if_missing(chunk_coord: Vector2i, chunk_size: int, world) -> void:
+	if not world.has_method("place_building_over_roads"):
+		return
+	var building_id := VillageLayout.WAREHOUSE_BUILDING_ID
+	var standing: Array = world.buildings_in_chunk(chunk_coord) if world.has_method("buildings_in_chunk") else []
+	for record in standing:
+		if record.get("id", "") == building_id:
+			return
+
+	var plot: Dictionary = VillageLayout.skeleton(
+		chunk_size, VillageLayout.seed_for(chunk_coord),
+		_is_buildable_local(chunk_coord, chunk_size, world)
+	)["warehouse_plot"]
+	# A village whose square could not be sited has no plot beside it
+	# either -- honest, the same way no plaza means no hall.
+	if plot.is_empty():
+		return
+
+	world.place_building_over_roads(
+		chunk_coord, plot["origin"], building_id,
+		hash("%d_%d_warehouse" % [chunk_coord.x, chunk_coord.y]), ""
+	)
+
+
 func _place_civic_if_missing(chunk_coord: Vector2i, chunk_size: int, world) -> void:
 	if not world.has_method("place_building_over_roads"):
 		return

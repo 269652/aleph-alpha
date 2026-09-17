@@ -21,6 +21,18 @@ This doc makes it storage, and makes it unconditional.
    means here, not a reward for growing into one. The ladder's four-
    household gate is removed rather than lowered, because a gate that is
    always open is a gate that lies to the next reader.
+
+   **One honest caveat on "always", found by building it.** The reserved
+   plot sits on prime ground beside the square — ground a house might have
+   needed. On a cramped site, claiming it can tip the layout from "houses
+   everyone" to "houses all but one", and a site that cannot house its whole
+   roster is founded NOWHERE at all. Reserving a store would then have
+   quietly deleted villages from the world, which is far worse than a
+   village without one. `VillageLayout.layout` therefore plans twice: with
+   the store, and — only if that failed to house everybody — without it. A
+   roomy site gets both. A cramped one houses its people and goes without.
+   Caught by `test_a_building_already_occupying_ground_keeps_later_ones_
+   off_it`, which founded nothing the moment the reservation was added.
 2. **Storage is somewhere, not nowhere.** Before this, a settlement's stock
    had no location: it was a number on a market object. A warehouse gives it
    an address, and that address is what the other two pillars hang off.
