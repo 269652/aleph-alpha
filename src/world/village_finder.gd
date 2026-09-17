@@ -33,11 +33,22 @@ func find_nearest(
 	start_chunk: Vector2i,
 	max_radius_chunks: int,
 	settlement_generator,
-	dominant_biome_for_chunk: Callable
+	dominant_biome_for_chunk: Callable,
+	would_settle := Callable()
 ) -> Variant:
 	for radius in range(max_radius_chunks + 1):
 		for chunk_coord in _ring_chunks(start_chunk, radius):
 			var biome: String = dominant_biome_for_chunk.call(chunk_coord)
-			if settlement_generator.has_settlement_at(chunk_coord, biome):
-				return chunk_coord
+			if not settlement_generator.has_settlement_at(chunk_coord, biome):
+				continue
+			# has_settlement_at is the procedural ROLL -- whether a
+			# settlement is meant to be here -- and knows nothing about
+			# whether the ground can house one. A village only settles
+			# where there is room for all of it (VillageRenderer,
+			# docs/concept/building.md), so the two genuinely disagree, and
+			# sending the player to a chunk where they do is exactly the
+			# reported "It teleports me to where no village is".
+			if would_settle.is_valid() and not would_settle.call(chunk_coord):
+				continue
+			return chunk_coord
 	return null

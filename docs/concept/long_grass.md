@@ -20,11 +20,13 @@
    the GPU along an eased-in curve whose phase and amplitude both vary across
    a card's own width, so each card's drawn blades bend along their own
    curved path instead of leaning as one rigid parallelogram. The bend moves
-   the card's own GEOMETRY (`vertex()` displaces `VERTEX.x` across a
-   subdivided quad), because displacing only the *sampled texture UV* -- what
-   this originally did -- slides art around inside a quad that never moves,
-   so the quad's own edge cuts the blade off (see "Where a bent blade
-   actually goes"). `fragment()` still path-traces per pixel row, but only
+   the card's own GEOMETRY (`vertex()` walks each vertex along an ARC about
+   its own root, across a subdivided quad): displacing only the *sampled
+   texture UV* -- what this originally did -- slides art around inside a
+   quad that never moves, so the quad's own edge cuts the blade off, and
+   displacing it in a straight line sideways stretches the blade instead of
+   laying it over (see "Where a bent blade actually goes"). `fragment()`
+   still path-traces per pixel row, but only
    the remainder the mesh's own vertices could not carry, so the two stages
    add up to exactly the curve at every pixel. Roots never translate (the
    curve is exactly 0 at a card's own bottom row of vertices), and a walker
@@ -166,6 +168,102 @@ already rejected -- so the card's `QuadMesh` is subdivided
 vertices, 64 triangles): every vertex ROW sits on the real eased-in curve and
 every vertex COLUMN carries its own wind phase and amplitude, so the per-blade
 path-tracing survives the move from the sampling stage onto the geometry.
+
+**A blade bends over; it does not get longer.** This took three goes, and
+the first two were the same error measured against a different reference
+point. Each was reported live, and each was measured on a real render
+(`tools/probe_grass_bend_clipping.gd`, which now draws all four generations
+in one frame) rather than argued: one card, planted at a known root, with a
+walker in it, measuring the furthest blade pixel from that card's own root.
+The card is 16px tall and its art reaches 14.3px at rest.
+
+| generation | reach under a boot | what it did |
+| --- | --- | --- |
+| sampling only | 12.2px | never left the quad: it CUT the blade off |
+| shear | 27.5px | `VERTEX.x` alone -- rows keep their height, so a leaning blade draws as a longer diagonal |
+| column arc | 13.2px | each COLUMN rotated about the point beneath it |
+| rotation | 14.1px | the whole card rotates about its own root |
+
+The shear is the one that reads as *"the grassblades elongate and stretch
+instead of only bending"*: nearly double the resting reach. The column arc
+fixed that for a blade drawn straight up a column, and left a real hole --
+it rotates each column about the ground point below it, so a leaf drawn
+DIAGONALLY across the card (which is what this atlas is full of: fans of
+long leaves radiating from a tuft's base) has its far end swung sideways
+while its base stays put. A leaf from the root to the top corner is 17.9
+units long and can draw up to 24 that way. Reported again, with a
+screenshot: *"but it's still super elongated."*
+
+**The whole card now rotates about its own root** -- its local origin, the
+bottom centre the instance is planted at -- so every point keeps its
+distance from that root by construction, in every column, whichever
+direction the art drew its leaves in. The lean is an angle taken from the
+same tuned displacement everything else is expressed in (`asin(sideways /
+radius)`, the rotation that puts a point on the card's centre line exactly
+the intended distance across, so the amplitudes above still mean what their
+own tests say), and clamping that ratio to ±1 before the `asin` is what
+stops a blade bending past flat -- as far as a blade goes -- while keeping
+the angle real. Measured: 14.1px under a boot against 14.1px at rest, the
+only generation whose reach does not move at all.
+
+Pinned headlessly by `bent_vertex` -- the shader's vertex stage mirrored in
+GDScript, since a shader cannot be measured under `--headless` -- sweeping
+every column and height of the card against every bend the shader can
+produce, plus the diagonal-leaf case on its own so a regression names the
+shape it broke. The root row itself is pinned through the COMPOSITION that
+actually runs (`bend_offset` into `bent_vertex`), not by handing
+`bent_vertex` a bend the root row can never carry: `bend_curve` is exactly
+0 there, which is what keeps the card's whole bottom edge planted.
+
+Honest about the model and about what the measurement can and cannot say: a
+real blade bends into a curve, its tip ending slightly nearer the root than
+a rigid rotation puts it, and this is the standard cheap billboard bend
+rather than a beam solver. And the card measured above does not happen to
+carry opaque art in its top corners, so the column arc's own stretch does
+not show in ITS number -- what the table proves is that the rotation cannot
+stretch any art, not that the column arc always did.
+
+**A blade lies flat; it does not grow into the ground.** A rotation about the
+root stops anything stretching, and then happily carries a point PAST
+horizontal: a leaf already pointing up and to the side starts at a real angle
+from upright, so it reaches flat before the ones above it and keeps going,
+swinging below the ground its own roots stand on and folding the card under
+itself. Reported live with a screenshot: *"it still stretches when it's bent
+below the base of the grass entity."* The lean is therefore clamped at the
+horizon per POINT, not per card -- measured without it, a point ends up a
+full 8 world units below its own base. Pinned by
+`test_bending_never_carries_a_blade_below_its_own_base`, which sweeps every
+column and height against every bend the shader can produce, and confirmed
+to bite by removing the clamp and watching it fail.
+
+**How hard a walker pushes is an ANGLE now.** `WALKER_PUSH_UV_AMPLITUDE`
+climbed to 1.5 card widths across several live rounds (History #6) while the
+bend was still a UV slide that CLIPPED -- past one card width all more
+amplitude bought was more of the blade erased rather than more lean, so
+"more" kept reading as "still not enough". Against a rotation the same number
+says something else entirely: 1.0 at the tip IS flat on the ground, and 1.5
+is flat with room to spare, so every tuft a player walked past slammed down
+and sprang back up behind them. Reported: *"reduce the intensity of the
+bend... it feels wobbly as you walk through."* The tuned value is
+`MAX_WALKER_LEAN_DEGREES` and the amplitude is derived from it as
+`sin(lean)`, which is exactly what `bent_vertex` takes the `asin` of to get
+the angle back. One number, expressed as the thing it actually controls, so
+it cannot be read as "more is more" a third time.
+
+That angle is itself tied to something real rather than a feeling. It went
+in at 35 degrees -- a deliberate step back from a bend that laid every tuft
+flat -- and came back as *"now the grassblades don't part enough they should
+visible part about the width of the char"*. So the rule is now exactly that:
+**a walker parts the grass by their own width.** The character's body is
+26px at `CharacterView`'s own computed `SCALE`, 12.45 world units against a
+16-unit card, and the lean whose tip travels that far is
+`asin(12.45 / 16)` = 51.1 degrees; at 35 a tip moved 9.2 units, about three
+quarters of a character. `test_a_walker_parts_the_grass_by_about_their_own_
+width` computes the character's real width and asserts the tip reaches it,
+so a change to the character's own size fails there rather than quietly
+drifting apart from the grass. Ambient wind is untouched by this: at
+`WIND_UV_AMPLITUDE` a tip sways about 5 degrees on a clear day and 9 in a
+storm, which was never what felt wobbly.
 
 **`fragment()` still path-traces per pixel row -- of the remainder only.**
 Both stages read ONE shared `bend_offset_at()` (a single seam, the same
@@ -869,6 +967,59 @@ framebuffer), so several of these needed a real, non-headless, off-screen
     the constant is left exactly where those live sessions put it, since it
     now buys the lean it always claimed to.
 
+16. **"The grassblades elongate and stretch instead of only bending"**
+    (reported live, immediately after #15 shipped). #15's geometry bend was
+    a pure horizontal displacement, which is a shear: every row keeps the
+    height it started at, so a leaning blade draws as a longer diagonal --
+    measured on a real render at 31.4px of reach where a resting blade has
+    17.9px, on a card 16px tall. Fixed by walking each vertex along an arc
+    about its own root (see "A blade bends over; it does not get longer"
+    above), which lays the tip down as it goes across: 20.1px on the same
+    render. Worth recording as a pattern rather than a one-off: #15 and #16
+    are the same mistake at two different stages -- a displacement applied
+    to one coordinate, when the thing being displaced is a physical object
+    with a length and a footprint. The sampling stage cut the blade off;
+    the geometry stage stretched it; only moving the whole vertex the way a
+    blade actually moves is neither.
+
+17. **"But it's still super elongated"** (reported live with a screenshot,
+    after #16's arc shipped). #16 held each vertex's own HEIGHT fixed, which
+    rotates every COLUMN of the card about the point directly beneath it --
+    right for a blade drawn straight up one column, wrong for the fans of
+    long DIAGONAL leaves this atlas is actually full of, whose far ends swing
+    sideways while their bases stay put (a 17.9-unit leaf can draw 24 that
+    way). Fixed by rotating the whole card about its own root, which holds
+    every point's distance from that root by construction -- see "A blade
+    bends over; it does not get longer" above for the four-generation
+    measurement. Three reports, one lesson, stated plainly so a fourth pass
+    does not have to rediscover it: a bend is a ROTATION of the thing about
+    the point it grows from, and every cheaper approximation of it
+    (displacing one coordinate, holding one coordinate) breaks on whichever
+    part of the art the approximation was not thinking about.
+
+18. **"It still stretches when it's bent below the base of the grass
+    entity" / "reduce the intensity of the bend... it feels wobbly as you
+    walk through"** (reported live with a screenshot, after #17's rotation
+    shipped). Two things, one cause underneath: the rotation was free to
+    carry a point past horizontal, and the amplitude driving it was still
+    the one tuned for a mechanism that clipped. A leaf already pointing up
+    and to the side reaches flat before the ones above it and then swings
+    BELOW the ground its roots stand on, folding the card under itself --
+    measured at a full 8 world units below the base with the clamp removed.
+    And at `WALKER_PUSH_UV_AMPLITUDE = 1.5` every tuft a player passed was
+    pushed to flat and beyond, because against a rotation 1.0 already IS
+    flat. Fixed by clamping the lean at the horizon per point, and by making
+    the tuned value the ANGLE it controls (`MAX_WALKER_LEAN_DEGREES`) with
+    the amplitude derived from it. That angle went in at 35 degrees and came
+    straight back as "now the grassblades don't part enough they should
+    visible part about the width of the char", which is a measurable target:
+    it is 51.1 degrees now, the lean whose tip travels one character's own
+    width, pinned against `CharacterView`'s real size rather than eyeballed. Worth noting for the next re-tune:
+    three of this system's own reports (#6's ladder, #15, this one) are the
+    same story -- a number tuned against a mechanism that was hiding the
+    effect it was supposed to produce, and then inherited unchanged by the
+    mechanism that finally produced it.
+
 ### A second atlas family: farmed wheat (2026-09-13)
 
 Requested directly: "I added a wheat sprite similar to the long grass
@@ -997,9 +1148,17 @@ at the ROOT instead of the tip), the fix is a one-line flip of
   units — see `test_illustrated_grass_patch.gd`'s
   `test_band_height_leaves_a_real_safety_margin_under_the_players_own_
   max_reach`.
-- ✅ A bending blade moves its own GEOMETRY (`vertex()` displaces
-  `VERTEX.x` across a 4×8-subdivided `QuadMesh`), so it is no longer clipped
-  at the card's own edge — see History #15. `fragment()` still resolves the
+- ✅ A bending blade moves its own GEOMETRY: the card rotates about its own
+  root across a 4×8-subdivided `QuadMesh`, so it is neither clipped at the
+  card's edge (History #15) nor stretched longer than it is (History #16
+  and #17), nor folded below its own base (History #18 — the lean is clamped
+  at the horizon per point; without that a point measures 8 world units under
+  the ground its roots stand on). How hard a walker pushes is a tuned ANGLE
+  now -- `MAX_WALKER_LEAN_DEGREES = 51.1`, the lean whose tip travels one
+  character's width (12.45 world units), with the UV amplitude derived from
+  it. The old 1.5 card widths meant "flat on the ground and then some" once
+  the bend became a rotation; 35 read as not enough; a character's width is
+  the thing that was actually being asked for. `fragment()` still resolves the
   curve per pixel row, for the sliver the mesh's vertices cannot carry:
   measured at 0.0197 card widths (1.26 screen px) worst case, down from the
   1.66 card widths (106 px) the sampling stage used to slide on its own, and

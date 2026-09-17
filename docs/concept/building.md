@@ -258,11 +258,23 @@ were measured against the real world near lat 48.6 lon 12.7
 (`tools/probe_village_houses_live.gd`, `tools/probe_village_ghost.gd`) and
 reported in play first.
 
-**A site that cannot take a single house is not a village.** When
-`VillageLayout.layout` returns no plot at all, `VillageRenderer` founds
-nothing there — no streets, no mill, no villagers, no settlement record —
-rather than a ghost village nobody can live in. Reported as *"Some
-villages have no houses"*.
+**A village only settles where there is room for all of it.** When
+`VillageLayout.layout` cannot house the whole roster, `VillageRenderer`
+founds nothing there — no streets, no mill, no villagers, no settlement
+record — rather than a village nobody can live in. Reported first as *"Some
+villages have no houses"*, and tightened from "not one house" to "not every
+house" when a riverside chunk ended up with a market square and a single
+cottage: *"They should only settle where there's enough space and the
+square wins; houses should just be moved further away connected by
+streets"*.
+
+That rule only makes sense because the layout really does look: **a street
+that places nothing no longer ends the village.** It can come up empty
+because the square took the whole spine, or because that row happens to be
+water; neither means the village has nowhere to live, so the walk carries
+on to the next street. It stays bounded by the chunk without a break —
+a further street only opens while it is inside the edge margin, and only
+when the gate lane reaching it is really clear.
 
 **The square slides rather than drowns.** The plaza was pinned to the
 chunk's exact middle, so a river through that middle meant no square — and

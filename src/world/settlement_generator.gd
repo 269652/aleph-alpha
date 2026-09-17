@@ -17,6 +17,7 @@ extends RefCounted
 
 const NpcIdentity = preload("res://src/world/npc_identity.gd")
 const VillageLayout = preload("res://src/world/village_layout.gd")
+const BuildingCatalog = preload("res://src/gameplay/building_catalog.gd")
 
 ## The FOUNDING roster: how many villagers a settlement is founded with.
 ## Not a ceiling -- docs/concept/village_growth.md's own arrivals mechanism
@@ -123,3 +124,19 @@ func _house_position(chunk_coord: Vector2i, center_pos: Vector2, tile_size: int,
 
 func _unit_float(chunk_coord: Vector2i, index: int, salt: String) -> float:
 	return float(absi(hash("%d_%d_house_%d_%s" % [chunk_coord.x, chunk_coord.y, index, salt])) % 10000) / 10000.0
+
+
+## The house each villager of `npcs` would be given at `chunk_coord`, by
+## the SAME per-index seed VillageRenderer stamps them with.
+##
+## Shared so that anything asking "would a village fit here" asks about the
+## houses that would really be built -- the village finder asks exactly
+## that before sending a player somewhere (EarthChunkManager.
+## find_nearest_village), and a second copy of this rule would let it
+## answer about different houses than the ones the renderer then places.
+static func house_ids_for(chunk_coord: Vector2i, npcs: Array) -> Array:
+	var ids: Array = []
+	for i in npcs.size():
+		var seed_value := hash("%d_%d_house_%d" % [chunk_coord.x, chunk_coord.y, i])
+		ids.append(BuildingCatalog.choose_house_id(npcs[i].occupation, npcs[i].genome, seed_value))
+	return ids

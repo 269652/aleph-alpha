@@ -93,6 +93,37 @@ const _SUBJECTS := {
 		"path": "res://assets/sprites/buildings/city_hall.png",
 		"columns": 8, "rows": 5, "idle_row": 1, "idle_column": 0, "keys_black": true,
 	},
+	# The rails a village farmhouse fences its beds with (docs/concept/
+	# village_farms.md, "The fence around the beds"). One sheet, four
+	# orientation columns by three condition rows, on the DIVIDER grid: the
+	# sheet prints its own column labels across the top and its row labels
+	# down a gutter at the left, so an even division would cut every cell
+	# across the label bands. Row 0 is Pristine -- a freshly raised fence.
+	# Written out per column rather than built by a helper: GDScript cannot
+	# call a function in a const initialiser another script reads. The
+	# columns are the sheet's own printed order -- North (Back), South
+	# (Front), East (Top View), West (Top View) -- pinned by
+	# test_the_four_rails_are_four_different_pictures.
+	"farm_fence_north": {
+		"path": "res://assets/sprites/buildings/fence.png",
+		"columns": 4, "rows": 3, "idle_row": 0, "idle_column": 0,
+		"keys_black": true, "grid": "dividers",
+	},
+	"farm_fence_south": {
+		"path": "res://assets/sprites/buildings/fence.png",
+		"columns": 4, "rows": 3, "idle_row": 0, "idle_column": 1,
+		"keys_black": true, "grid": "dividers",
+	},
+	"farm_fence_east": {
+		"path": "res://assets/sprites/buildings/fence.png",
+		"columns": 4, "rows": 3, "idle_row": 0, "idle_column": 2,
+		"keys_black": true, "grid": "dividers",
+	},
+	"farm_fence_west": {
+		"path": "res://assets/sprites/buildings/fence.png",
+		"columns": 4, "rows": 3, "idle_row": 0, "idle_column": 3,
+		"keys_black": true, "grid": "dividers",
+	},
 }
 
 static var _cache: Dictionary = {}  # subject -> ImageTexture
@@ -265,7 +296,13 @@ static func _span(band: Vector2i) -> int:
 func _build_idle_image(subject: String) -> Image:
 	var entry: Dictionary = _SUBJECTS[subject]
 	var image := SpriteSheetLoader.load_image(entry["path"])
-	var cell := _cell_rect(image, entry["columns"], entry["rows"], entry["idle_row"], entry["idle_column"])
+	# A sheet that prints its own labels is cut on its dividers, not by even
+	# division -- see the farm_fence entries. Everything delivered on the
+	# older fixed grid keeps the even cut it was measured against.
+	var cell := _cell_rect_for(
+		entry["path"], image, entry["columns"], entry["rows"],
+		entry["idle_row"], entry["idle_column"], entry.get("grid", GRID_EVEN)
+	)
 	var frame := image.get_region(cell)
 	if frame.get_format() != Image.FORMAT_RGBA8:
 		frame.convert(Image.FORMAT_RGBA8)

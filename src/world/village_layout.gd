@@ -84,6 +84,17 @@ const _GATE_CLEARANCE_TILES := 2
 const _MAX_ATTEMPTS_PER_BUILDING := 12
 
 
+## Whether a layout really houses everyone it was given -- the ONE
+## definition of "enough space" (docs/concept/building.md: "A village only
+## settles where there is room for all of it").
+##
+## Shared by the founding gate and by the village finder, because the two
+## disagreeing is what sends a player to empty ground: reported in play as
+## "It teleports me to where no village is".
+static func houses_everyone(result: Dictionary, building_ids: Array) -> bool:
+	return (result["plots"] as Array).size() >= building_ids.size()
+
+
 ## The one layout seed per chunk -- the exact formula VillageRenderer used
 ## to compute inline, moved here so every consumer (renderer, recover path,
 ## civic build decision) derives the same skeleton for the same chunk.
@@ -115,7 +126,17 @@ static func plaza_x0_for(
 	var centred: int = chunk_size / 2 - PLAZA_WIDTH_TILES / 2
 	if not is_dry.is_valid():
 		return centred
-	var westmost: int = maxi(_EDGE_MARGIN_TILES, street_x0)
+	# The chunk's own edge margin, and nothing else. This used to also
+	# take street_x0 -- the spine's decorative SEED JITTER
+	# (_EDGE_MARGIN_TILES + 0..2, so villages don't all start at the
+	# identical column) -- and on chunk (661,139) near lat 49.8 lon 10.6
+	# that vetoed the only dry square placements this village had, at x=1
+	# and x=2, because its jitter happened to start the street at x=3.
+	# Reported three times as "no plaza, no city hall". A decorative jitter
+	# is not a reason a village cannot have a market square; skeleton()
+	# starts the spine at whichever of the two is further west instead, so
+	# the street always reaches its own square.
+	var westmost: int = _EDGE_MARGIN_TILES
 	var eastmost: int = mini(chunk_size - _EDGE_MARGIN_TILES, street_x1 + 1) - PLAZA_WIDTH_TILES
 	for offset in range(0, chunk_size):
 		for candidate in ([centred] if offset == 0 else [centred - offset, centred + offset]):
@@ -166,6 +187,10 @@ static func skeleton(chunk_size: int, seed_value: int, is_dry := Callable()) -> 
 	var street_x0 := _EDGE_MARGIN_TILES + PixelNoise.range_index(seed_value, 0, 0, _START_JITTER_TILES)
 	var street_x1 := chunk_size - _EDGE_MARGIN_TILES - 1
 	var plaza_x0 := plaza_x0_for(chunk_size, street_y, street_x0, street_x1, is_dry)
+	# A square sited west of where the jitter put the spine's start pulls
+	# that start west with it: a square the street stops short of is a
+	# square nobody walks to.
+	street_x0 = mini(street_x0, plaza_x0)
 	var plaza := Rect2i(
 		plaza_x0, street_y - PLAZA_ROWS_NORTH,
 		PLAZA_WIDTH_TILES, PLAZA_ROWS_NORTH + 1 + PLAZA_ROWS_SOUTH
@@ -274,7 +299,6 @@ func layout(
 	# tie-back that ties something back" rule side_street_cells follows.
 	var pending_lane_cells: Array = []
 	while index < building_ids.size() and current_street_y < chunk_size - _EDGE_MARGIN_TILES:
-		var progressed_this_street := false
 		var x := maxi(spine_x0 + _GATE_CLEARANCE_TILES, street_x0)
 		var street_doorstep_xs: Array = []
 		var attempts_for_current_index := 0
@@ -307,7 +331,6 @@ func layout(
 				street_doorstep_xs.append(doorstep.x)
 				x += footprint.x + PLOT_GAP_TILES
 				index += 1
-				progressed_this_street = true
 				attempts_for_current_index = 0
 				if current_street_y != street_y:
 					second_street_got_a_plot = true
@@ -349,24 +372,19 @@ func layout(
 			for cell in pending_lane_cells:
 				road_cells[cell] = true
 			pending_lane_cells.clear()
-		if not progressed_this_street:
-			# A spine whose whole run is taken by the SQUARE placed nothing
-			# for that reason, not because the village has nowhere to live:
-			# its houses belong on the next street, reached by the gate lane
-			# below. Measured on chunk (661,139) near lat 49.8 lon 10.6,
-			# whose dry pocket is about nine tiles -- just the square and no
-			# more -- where breaking here left a village with a market
-			# square and not one house.
-			#
-			# Bounded, and deliberately: only the spine gets this, and only
-			# while nothing at all has been placed. A further street that
-			# places nothing still ends the village, so a chunk is never
-			# walked to the bottom placing nothing.
-			var blocked_by_the_square: bool = (
-				has_plaza and current_street_y == street_y and plots.is_empty()
-			)
-			if not blocked_by_the_square:
-				break
+		# A street that places nothing no longer ends the village. Asked for
+		# directly: "the square wins; houses should just be moved further
+		# away connected by streets". A street can come up empty because
+		# the square took the whole spine, or because that row happens to
+		# be water -- neither means this village has nowhere to live, and
+		# giving up there is what left a riverside village with a market
+		# square and one house (chunk (661,139) near lat 49.8 lon 10.6).
+		#
+		# The walk stays bounded by the chunk without needing a break: a
+		# further street only opens while it is inside the edge margin
+		# (the loop's own condition), and only when the gate lane reaching
+		# it is really clear -- so looking further costs iterations and
+		# nothing else.
 		var next_street_y := current_street_y + STREET_PITCH_TILES
 		# EVERY further street is tied back by the gate lane, square or no
 		# square. Without a square there is nothing else to hang one on --
@@ -697,7 +715,8 @@ static func _spur_cells(
 ## square.
 static func next_street_plot(
 	building_id: String, chunk_size: int, seed_value: int, is_buildable: Callable,
-	is_occupied: Callable, is_dry := Callable(), accepts_origin := Callable()
+	is_occupied: Callable, is_dry := Callable(), accepts_origin := Callable(),
+	is_paved := Callable()
 ) -> Dictionary:
 	var footprint := BuildingCatalog.footprint_of(building_id)
 	if footprint == Vector2i.ZERO:
@@ -711,6 +730,7 @@ static func next_street_plot(
 	var street_x1: int = bones["street_x1"]
 	var plaza: Rect2i = bones["plaza"]
 
+	var spine_x0 := street_x0
 	var street := street_y
 	while street < chunk_size - _EDGE_MARGIN_TILES:
 		var x := street_x0 + _GATE_CLEARANCE_TILES
@@ -734,13 +754,165 @@ static func next_street_plot(
 				# the next frontage that does work.
 				and (not accepts_origin.is_valid() or accepts_origin.call(origin))
 			):
-				return {
-					"origin": origin, "building_id": building_id, "facing": Vector2i(0, 1),
-					"doorstep": origin + BuildingCatalog.doorstep_of(building_id),
-				}
+				# ... and the paving that makes this a STREET plot rather
+				# than a plot on a row nobody ever paved (see
+				# _frontage_spur). A plot the village cannot join is not
+				# frontage, so the walk simply goes on.
+				var doorstep: Vector2i = origin + BuildingCatalog.doorstep_of(building_id)
+				var spur = _frontage_spur(
+					doorstep, street, street_y, spine_x0, plaza,
+					BuildingCatalog.footprint_cells(building_id, origin),
+					chunk_size, is_dry if is_dry.is_valid() else is_buildable, is_occupied, is_paved
+				)
+				if spur != null:
+					return {
+						"origin": origin, "building_id": building_id, "facing": Vector2i(0, 1),
+						"doorstep": doorstep, "road_spur": spur,
+					}
 			x += 1
 		street += STREET_PITCH_TILES
 	return {}
+
+
+## The paving that JOINS a plot at `doorstep` to the village it belongs to,
+## beyond its own front step -- `[]` when the doorstep already stands on the
+## village's own paving, `null` when nothing can reach it.
+##
+## Reported in play, with a screenshot of a farmhouse standing in open
+## ground: "There are still Farmhouses not connected by a street". The cause
+## is a real mismatch, and it stranded HALF of every growth plot offered
+## (measured: 80 of 160 over 40 seeds x four village sizes, by
+## test_the_next_street_plot_always_fronts_paving_the_village_really_laid).
+## next_street_plot walks the SKELETON's streets -- every row the spine
+## could ever open. What layout() actually PAVES is narrower: a further
+## street is paved only once it really got a plot at founding. So the first
+## growth building sited on a fresh row got a single paved tile at its door
+## in the middle of a field, which is not frontage at all.
+##
+## The tie-back is the one layout() already uses for exactly this, so a
+## village that grows looks like a village that was founded: an L down a
+## LANE COLUMN from the spine, then east or west along this street's own row
+## to the door -- the same shape _industry_spur lays for the sawmill.
+##
+## The lane's column is SEARCHED, nearest the door first, rather than fixed
+## at the spine's own start. Fixing it there was measured and it is wrong on
+## real ground: layout() lays its own gate lane at the start of the RUN it
+## actually paved, which on a village wedged against water is nowhere near
+## where the skeleton drew the spine -- and a single blocked column then
+## refused the plot outright. That cost the growth ladder eight of its own
+## tests before the column was searched.
+##
+## The ground test is the WATER one (`is_dry`), never whatever wider rule
+## the caller builds against -- the same split skeleton() already draws for
+## the square. A spur is a ROAD, and a village fells the trees it needs to
+## lay one (see VillageRenderer._is_buildable_local, and place_building's own
+## clearing). Measured: testing the spur against the growth ladder's own
+## is_buildable_ground_at, which refuses the forest BIOME outright, refused
+## the tie-back on wooded ground and cost that ladder five of its own tests.
+##
+## `is_paved` lets the tie-back cross what the village has ALREADY laid --
+## another street's row, an earlier plot's doorstep, the square. Without it
+## every junction would read as "occupied" and the second growth building on
+## a row could never reach the first one's lane. A caller that cannot answer
+## it gets the conservative answer (clear ground only), which is correct,
+## just more easily defeated.
+static func _frontage_spur(
+	doorstep: Vector2i, street: int, street_y: int, lane_x: int, plaza: Rect2i,
+	footprint_cells: Array, chunk_size: int,
+	is_dry: Callable, is_occupied: Callable, is_paved: Callable
+):
+	var none: Array[Vector2i] = []
+	if street == street_y:
+		# The spine itself: paved end to end by layout(), and re-paved on
+		# every reload. Nothing to add.
+		return none
+	var footprint := {}
+	for cell in footprint_cells:
+		footprint[cell] = true
+	for column in _lane_columns(doorstep.x, lane_x, chunk_size):
+		var cells := _lane_cells(doorstep, street, street_y, column)
+		if _spur_is_clear(cells, doorstep, footprint, plaza, chunk_size, is_dry, is_occupied, is_paved):
+			return cells
+	return null
+
+
+## Which columns to try a lane down, nearest the door first -- the door's
+## own column is the straight run and the ordinary answer, and the spine's
+## own start is tried too because that is the column layout() itself
+## reserves and no plot may take.
+static func _lane_columns(doorstep_x: int, lane_x: int, chunk_size: int) -> Array:
+	var columns: Array = []
+	for offset in range(0, chunk_size):
+		for x in ([doorstep_x] if offset == 0 else [doorstep_x + offset, doorstep_x - offset]):
+			if x >= 0 and x < chunk_size and not columns.has(x):
+				columns.append(x)
+	if not columns.has(lane_x) and lane_x >= 0 and lane_x < chunk_size:
+		columns.append(lane_x)
+	return columns
+
+
+## One candidate L: down `column` from just south of the spine to this
+## street's row, then along that row to the door.
+static func _lane_cells(doorstep: Vector2i, street: int, street_y: int, column: int) -> Array[Vector2i]:
+	var cells: Array[Vector2i] = []
+	for y in range(street_y + 1, street + 1):
+		cells.append(Vector2i(column, y))
+	var step := 1 if doorstep.x >= column else -1
+	var x := column
+	while x != doorstep.x:
+		x += step
+		cells.append(Vector2i(x, street))
+	return cells
+
+
+static func _spur_is_clear(
+	cells: Array, doorstep: Vector2i, footprint: Dictionary, plaza: Rect2i, chunk_size: int,
+	is_dry: Callable, is_occupied: Callable, is_paved: Callable
+) -> bool:
+	for cell in cells:
+		if cell == doorstep:
+			continue
+		if footprint.has(cell):
+			return false  # a lane laid through the building it serves is no lane
+		if cell.x < 0 or cell.y < 0 or cell.x >= chunk_size or cell.y >= chunk_size:
+			return false
+		if not is_dry.call(cell):
+			return false  # water: a village does not pave a river
+		if plaza.has_area() and plaza.has_point(cell):
+			continue  # the square is already paved, and crossing it is fine
+		if is_occupied.call(cell) and not (is_paved.is_valid() and is_paved.call(cell)):
+			return false
+	return true
+
+
+## The paving that joins a building ALREADY STANDING at `origin` back to the
+## village's own streets -- `[]` when its doorstep is on the spine (paved
+## end to end by layout()), `null` when it fronts no street of this village
+## at all or nothing can reach it.
+##
+## The same tie-back next_street_plot hands out with a plot it OFFERS; this
+## is for the other path, where the plot was offered long ago and the
+## building only goes up now that its labour is done (EarthChunkManager's
+## own growth ladder). Re-derived from the chunk's own seed rather than
+## carried through the construction ledger, so nothing new is persisted and
+## an older project still lands on a connected street.
+static func frontage_spur(
+	building_id: String, origin: Vector2i, chunk_size: int, seed_value: int,
+	is_dry: Callable, is_occupied: Callable, is_paved := Callable()
+):
+	var footprint := BuildingCatalog.footprint_of(building_id)
+	if footprint == Vector2i.ZERO:
+		return null
+	var bones := skeleton(chunk_size, seed_value, is_dry)
+	var street_y: int = bones["street_y"]
+	var doorstep: Vector2i = origin + BuildingCatalog.doorstep_of(building_id)
+	if doorstep.y < street_y or (doorstep.y - street_y) % STREET_PITCH_TILES != 0:
+		return null  # not on one of this village's own street rows at all
+	return _frontage_spur(
+		doorstep, doorstep.y, street_y, bones["street_x0"], bones["plaza"],
+		BuildingCatalog.footprint_cells(building_id, origin),
+		chunk_size, is_dry, is_occupied, is_paved
+	)
 
 
 ## Whether the plaza's own rows overlap the rows a plot at `origin` would

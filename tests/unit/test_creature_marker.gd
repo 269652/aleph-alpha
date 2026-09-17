@@ -42,6 +42,16 @@ class StubWorldWithSlope:
 		return slope
 
 
+## A StubWorld that also answers is_fenced_at_global -- the real
+## EarthChunkManager does, from the rails a village farmhouse raises round
+## its beds (docs/concept/village_farms.md, "The fence around the beds").
+class StubWorldWithFence:
+	extends StubWorld
+	var fenced := false
+	func is_fenced_at_global(_x: int, _y: int) -> bool:
+		return fenced
+
+
 ## A StubWorld that also answers is_river_at_global/is_lake_at_global -- the
 ## two checks FishMarker._is_fresh_water_tile already uses and CreatureMarker
 ## needs too (see _is_fresh_water_tile): plain biome_at_global never reports
@@ -4230,3 +4240,62 @@ func test_fresh_water_depth_meters_reads_through_the_cache():
 	var after_first := world.queries
 	marker._fresh_water_depth_meters(Vector2i(6, 6))
 	assert_eq(world.queries, after_first, "the production path is the cached one")
+
+
+# -- a fence keeps animals out of the crop --------------------------------
+#
+# Asked for directly, with the field circled in a screenshot: "the farmhouse
+# should build a fence around the bed so no animals enter". A rail is solid
+# ground for an animal -- the obstacle _advance's own doc comment has always
+# described ("blocked by an obstacle, once that lands") and nothing had yet
+# supplied. Same "ask before you step" shape as _terrain_blocks_movement
+# just above, against the same look-ahead tile.
+
+
+func test_a_fence_blocks_nothing_when_the_creature_is_not_moving():
+	var world := StubWorldWithFence.new()
+	world.fenced = true
+	marker.setup(world, TILE_SIZE)
+	assert_false(marker._fence_blocks_movement(Vector2.ZERO))
+
+
+func test_a_world_that_knows_no_fences_blocks_nothing():
+	marker.setup(StubWorld.new(), TILE_SIZE)
+	assert_false(marker._fence_blocks_movement(Vector2.RIGHT))
+
+
+func test_a_rail_on_the_next_tile_stops_the_animal():
+	var world := StubWorldWithFence.new()
+	world.fenced = true
+	marker.setup(world, TILE_SIZE)
+	assert_true(marker._fence_blocks_movement(Vector2.RIGHT))
+
+
+func test_open_ground_on_the_next_tile_lets_the_animal_through():
+	var world := StubWorldWithFence.new()
+	world.fenced = false
+	marker.setup(world, TILE_SIZE)
+	assert_false(marker._fence_blocks_movement(Vector2.RIGHT))
+
+
+## Wiring pin: the gate every intent's movement already funnels through has
+## to ASK -- a check nothing calls keeps no animal out of anything.
+func test_a_gated_step_into_a_fence_really_does_not_move_the_animal():
+	var world := StubWorldWithFence.new()
+	world.fenced = true
+	marker.info = CreatureInfo.new("deer")
+	marker.setup(world, TILE_SIZE)
+	marker.position = Vector2(100, 100)
+	marker._advance_gated(Vector2.RIGHT, 100.0, 0.5, false)
+	assert_eq(marker.position, Vector2(100, 100), "a deer walked through the rails")
+	assert_false(marker._is_moving, "and it should stand, not walk on the spot")
+
+
+func test_a_gated_step_over_open_ground_still_moves_the_animal():
+	var world := StubWorldWithFence.new()
+	world.fenced = false
+	marker.info = CreatureInfo.new("deer")
+	marker.setup(world, TILE_SIZE)
+	marker.position = Vector2(100, 100)
+	marker._advance_gated(Vector2.RIGHT, 100.0, 0.5, false)
+	assert_gt(marker.position.x, 100.0, "open ground must still be open")

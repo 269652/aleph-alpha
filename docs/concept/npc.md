@@ -418,6 +418,86 @@ without pretending it killed anything — the same two-fidelities split
 [ecosystem_dynamics.md](ecosystem_dynamics.md) already draws between
 individual and aggregate simulation.
 
+### A hunter runs, and the run is paid for in stamina
+
+Asked for directly: *"Hunters should run and running costs stamina which
+slowly recovers based on fitness."*
+
+Everything a villager does happens at one unhurried `WALK_SPEED` (20 px/s),
+which is right for a walk to the well and wrong for the one thing in a
+villager's day that is a chase. A deer that has seen you leaves at
+`CreatureMarker.FLEE_SPEED` — 40 px/s, exactly twice a villager's walk — so
+a hunter who had committed to a real animal could only ever take one that
+had not noticed them, or one that had already calmed down. The hunt's own
+code said so all along: *"a spooked deer runs... let the strike clock wait
+with it: nobody winds up a spear at a full run"* — a full run nothing in
+this game could actually do.
+
+**A hunter closing on a real animal runs.** `RUN_SPEED` is exactly twice
+`WALK_SPEED`, which is not a new number: it is the same doubling the
+player's own sprint already uses (`Player.SPRINT_SPEED == BASE_SPEED * 2`),
+cross-pinned by test so the two cannot drift. At 40 px/s a running hunter
+MATCHES a fleeing deer rather than out-running it, and that is the honest
+outcome rather than a limitation: a human does not out-sprint a deer. A kill
+comes from the animal's own fear running out before the hunter's legs do --
+persistence hunting, the one athletic thing our species is actually built
+for.
+
+**Only at the chase, and therefore only the hunter.** The run is a property
+of the BEHAVIOUR, not of a job title: it happens while closing on a
+*creature* quarry, so it falls out of `QUARRY_KIND_BY_OCCUPATION` that the
+hunter is the only one who ever does it — a fisher's quarry is a fish
+(nobody sprints at a trout, and a rod already reaches `CAST_DISTANCE_PX`
+without closing), and the walk to a well, a field, a stall or home is a walk
+for everybody including the hunter. Striking is still done standing: inside
+`_reach()` the hunt already returns the villager's own position, so the last
+few pixels are never run and the spear is never wound up at a sprint.
+
+**Running spends stamina, and fitness decides how fast it comes back.**
+[survival.md](survival.md)'s own stamina scope — "a lighter, traversal-only
+resource" that gates movement and never combat — is the rule here too, and a
+villager's meters are the player's own rather than a parallel invention:
+`NpcCondition` holds a `stamina` and a `fitness` in exactly
+`SurvivalMeters`' shape and reuses its constants by direct reference
+(`STAMINA_REGEN_PER_SECOND`, `FITNESS_DROP_PER_SECOND`,
+`FITNESS_RECOVER_PER_SECOND`, `EXHAUSTED_THRESHOLD`, `STARVING_THRESHOLD`).
+
+- **What a run costs** is derived from the MET-style activity tiers
+  `Metabolism` already burns calories at, not from a second guess: walking
+  is `ACTIVITY_MOVING` and running is `ACTIVITY_EXERTION`, so a run costs
+  the walk's own break-even rate times that real ratio (5.0 / 1.75 ≈ 2.86).
+  In practice a rested hunter has about five and a half seconds of running
+  in them — 220 px, which is most of `HuntableQuarry.SEARCH_RADIUS_PX`, so
+  one full bar covers about one full-radius approach.
+- **Exhaustion is latched, not a flicker.** At `EXHAUSTED_THRESHOLD` a
+  hunter drops to a walk and stays there until their wind is fully back
+  (stamina 1.0), rather than resuming the instant one frame of recovery
+  lifts them a hair above the line — the same "drop well below it, and come
+  well back over it" asymmetry `ConstructionStartHysteresis` already uses,
+  and the reason it needs no second tuned constant.
+- **Fitness is the same accumulator of neglect it is for the player**, fed
+  by the villager's own real hunger (`NpcNeeds`): it falls while they are
+  starving and recovers otherwise. Its consumer is
+  `ConditionPenalty.stamina_regen_multiplier`, a pillar effect
+  [survival.md](survival.md) already specified and listed as unbuilt —
+  unbuilt *precisely* because nothing spent stamina yet. A hunter who runs
+  is the missing sink, so the effect is real for the first time: a well-fed
+  hunter has their wind back in about 16 seconds, a starving one takes four
+  times as long, and the loop closes — hungry means slow to recover means
+  less hunting means hungrier.
+
+**Deliberately not in this pass**, so none of it reads as an oversight: the
+PLAYER's own sprint still spends nothing ([survival.md](survival.md)'s own
+open item — the input and the speed exist, the sink does not, and wiring it
+is a change to a mature tuned meter rather than a free ride on this one);
+`ConditionPenalty.speed_multiplier`, fitness's other consumer, still applies
+only to the player, so a villager's fitness does not yet slow their walk;
+`CharacterView` has no RUNNING animation state (IDLE/WALKING/SWIMMING), so a
+running hunter is a fast walk cycle rather than a different gait; and a
+villager's stamina is not persisted — it is a live per-marker meter that
+resets when the chunk reloads, exactly as their hunger and their schedule
+already do.
+
 #### Status — built, and how it actually landed
 
 Both halves are live. `ForagerBehavior` is the pure phase machine

@@ -56,6 +56,7 @@ var _drop_shadow := DropShadow.new()
 ## "south of the doorstep" is simply further down the same road.
 const _STAND_OFFSET_TILES := 2
 
+
 ## Each villager gets a personal workspot south of their own house, for
 ## occupations whose work tag isn't one of the settlement's 3 shared
 ## landmarks (see NpcMarker._resolve_location, and this file's own
@@ -160,10 +161,7 @@ func spawn_village(
 	# One building id per villager, chosen from their own occupation +
 	# personality (see BuildingCatalog.choose_house_id) -- VillageLayout
 	# only decides WHERE each one actually lands, never WHICH.
-	var building_ids: Array = []
-	for i in npcs.size():
-		var seed_value := hash("%d_%d_house_%d" % [chunk_coord.x, chunk_coord.y, i])
-		building_ids.append(BuildingCatalog.choose_house_id(npcs[i].occupation, npcs[i].genome, seed_value))
+	var building_ids: Array = SettlementGenerator.house_ids_for(chunk_coord, npcs)
 
 	# door_positions[i]/stand_positions[i] default to the villager's own
 	# old ring anchor -- overwritten below for every plot VillageLayout
@@ -258,6 +256,11 @@ func spawn_village(
 	# are handed out per villager, and only this loop knows which marker is
 	# whose.
 	var npc_markers: Array = []
+	# The fields and their fences are worked out BEFORE any prop is placed,
+	# because a personal workspot prop is grounded against what is already
+	# built (see _grounded_position): fencing afterwards would drop rails
+	# through a farmer's own field prop and a blacksmith's forge.
+	var farm_fields := _fenced_farm_fields(chunk_coord, chunk_size, world)
 	for landmark_id in settlement.landmarks:
 		spawned.append(_build_landmark(landmark_id, settlement.landmarks[landmark_id], parent))
 	for i in npcs.size():
@@ -288,7 +291,7 @@ func spawn_village(
 		var work_tag: String = NpcIdentity.WORK_LOCATION_BY_OCCUPATION.get(npcs[i].occupation, "")
 		if work_tag != "" and not settlement.landmarks.has(work_tag) and workspot != null:
 			spawned.append(_build_landmark(work_tag, workspot, parent, true))
-	_assign_farm_fields(chunk_coord, chunk_size, npcs, npc_markers, world)
+	_hand_out_farm_fields(npcs, npc_markers, farm_fields)
 	return spawned
 
 
@@ -312,7 +315,14 @@ func _place_new_village(
 	var is_buildable := _is_buildable_local(chunk_coord, chunk_size, world)
 	var is_occupied := _is_occupied_local(chunk_coord, chunk_size, world)
 	var result := _village_layout.layout(building_ids, chunk_size, layout_seed, is_buildable, is_occupied)
-	if (result["plots"] as Array).is_empty():
+	# EVERY villager, not merely one. Asked for directly: "They should only
+	# settle where there's enough space and the square wins; houses should
+	# just be moved further away connected by streets". The layout already
+	# walks street after street looking for that room, so a roster it still
+	# cannot house is a site that genuinely has none -- and founding there
+	# is what left a riverside chunk with a market square and one house
+	# (chunk (661,139) near lat 49.8 lon 10.6).
+	if not VillageLayout.houses_everyone(result, building_ids):
 		return false
 
 	# Buildings BEFORE roads -- place_building's own occupancy check
@@ -456,6 +466,19 @@ func _is_occupied_local(chunk_coord: Vector2i, chunk_size: int, world) -> Callab
 		return world.modification_at_global(g.x, g.y) != "" if world.has_method("modification_at_global") else false
 
 
+## Whether this cell is paving the village has ALREADY laid -- what lets a
+## growth plot's tie-back cross a street it meets rather than reading that
+## junction as blocked ground (VillageLayout._frontage_spur). A world that
+## cannot answer reports nothing paved, which costs the tie-back reach and
+## never invents a road that is not there.
+func _is_paved_local(chunk_coord: Vector2i, chunk_size: int, world) -> Callable:
+	return func(cell: Vector2i) -> bool:
+		if not world.has_method("modification_at_global"):
+			return false
+		var g: Vector2i = chunk_coord * chunk_size + cell
+		return world.modification_at_global(g.x, g.y) == TerrainRenderer.ROAD_TILE_ID
+
+
 ## The village's own works at its own timber, and the road spur that joins
 ## them to the street (VillageLayout.industry_plot). Idempotent by the one
 ## check that matters -- a real `sawmill` already standing anywhere in this
@@ -499,36 +522,104 @@ func _place_industry_if_missing(chunk_coord: Vector2i, chunk_size: int, world) -
 		world.build_at_global(g.x, g.y, TerrainRenderer.ROAD_TILE_ID)
 
 
+## Every farmhouse's own field, worked out and FENCED (docs/concept/
+## village_farms.md): `{origin -> the global cells that farmhouse works}`,
+## in the same (y, x) order _farmhouse_origins returns.
+##
+## Called before any villager or prop is placed, because both are grounded
+## against what is already built: a prop placed first would have rails
+## dropped through it, and a villager's own field has to exist before they
+## can be handed it.
+func _fenced_farm_fields(chunk_coord: Vector2i, chunk_size: int, world) -> Dictionary:
+	if world == null:
+		return {}
+	var origins := _farmhouse_origins(chunk_coord, world)
+	if origins.is_empty():
+		return {}
+	var is_buildable := _is_buildable_local(chunk_coord, chunk_size, world)
+	var is_occupied := _is_occupied_local(chunk_coord, chunk_size, world)
+	var fields: Dictionary = {}
+	for origin in origins:
+		fields[origin] = _workable_field_of(
+			origin, origins, chunk_coord, chunk_size, is_buildable, is_occupied
+		)
+	_fence_the_fields(chunk_coord, chunk_size, fields, is_buildable, is_occupied, world)
+	return fields
+
+
 ## Hands every villager who farms the field their OWN farmhouse works
 ## (docs/concept/village_farms.md). Pairs them in roster order with the
-## farmhouses in (y, x) order, so the same villager gets the same field on
-## every reload without anything being persisted -- exactly the property
-## the ownership rule itself has.
+## farmhouses in (y, x) order -- the order _farmhouse_origins already
+## guarantees -- so the same villager gets the same field on every reload
+## without anything being persisted, exactly the property the ownership rule
+## itself has.
 ##
 ## A village with more farmers than farmhouses (nowhere left with room for
 ## another field) leaves the rest on the regional drip they always had,
 ## which is the honest outcome rather than two villagers tending one field.
-func _assign_farm_fields(
-	chunk_coord: Vector2i, chunk_size: int, npcs: Array, npc_markers: Array, world
-) -> void:
-	if world == null or npc_markers.size() < npcs.size():
+func _hand_out_farm_fields(npcs: Array, npc_markers: Array, fields: Dictionary) -> void:
+	if fields.is_empty() or npc_markers.size() < npcs.size():
 		return
-	var origins := _farmhouse_origins(chunk_coord, world)
-	if origins.is_empty():
-		return
-	var is_buildable := _is_buildable_local(chunk_coord, chunk_size, world)
-	var is_occupied := _is_occupied_local(chunk_coord, chunk_size, world)
+	var origins: Array = fields.keys()
 	var next_farmhouse := 0
 	for i in npcs.size():
 		if VillageFarm.crop_for(npcs[i].occupation) == "":
 			continue
 		if next_farmhouse >= origins.size():
 			return
-		var origin: Vector2i = origins[next_farmhouse]
+		npc_markers[i].field_cells = fields[origins[next_farmhouse]]
 		next_farmhouse += 1
-		npc_markers[i].field_cells = _workable_field_of(
-			origin, origins, chunk_coord, chunk_size, is_buildable, is_occupied
-		)
+
+
+## Raises each farmhouse's real fence around the beds its villager works
+## (docs/concept/village_farms.md, "The fence around the beds"; asked for
+## directly: "the farmhouse should build a fence around the bed so no
+## animals enter").
+##
+## Laid only AFTER every field has been worked out, and never on ANY
+## farmhouse's bed: two farmsteads near each other share the ground between
+## them, so one farm's fence line can be the other farm's crop, and fencing
+## as we go would put rails through it.
+##
+## Cells the village has already built on are left exactly as they are.
+## Where that cell is the village's own paving, that is the GATE -- the way
+## the farmer walks in, and the reason a farmhouse takes street frontage at
+## all. A fence laid across the road would wall the village off from its own
+## farm.
+##
+## Idempotent by the same shape everything else here uses: a rail already
+## standing reads as occupied and is skipped, so a reload re-derives the
+## same ring and builds nothing twice.
+func _fence_the_fields(
+	chunk_coord: Vector2i, chunk_size: int, fields: Dictionary,
+	is_buildable: Callable, is_occupied: Callable, world
+) -> void:
+	if not world.has_method("build_at_global") or fields.is_empty():
+		return
+	var beds: Dictionary = {}
+	for origin in fields:
+		for global_cell in fields[origin]:
+			beds[(global_cell as Vector2i) - chunk_coord * chunk_size] = true
+	for origin in fields:
+		var local_beds: Array = []
+		for global_cell in fields[origin]:
+			local_beds.append((global_cell as Vector2i) - chunk_coord * chunk_size)
+		for rail in VillageFarm.fence_cells(local_beds, origin, VillageFarm.FARM_BUILDING_ID):
+			var cell: Vector2i = rail
+			if cell.x < 0 or cell.y < 0 or cell.x >= chunk_size or cell.y >= chunk_size:
+				continue
+			if beds.has(cell):
+				continue  # the neighbouring farm's crop, not this farm's fence line
+			if not is_buildable.call(cell) or is_occupied.call(cell):
+				continue  # water, a building, or the street -- the street being the gate
+			# The rail's own tile id carries which side of the field it
+			# closes, so the sheet's four orientation columns still draw
+			# correctly on a reload that remembers nothing else about it.
+			var tile_id := VillageFarm.fence_tile_for(VillageFarm.fence_facing(cell, local_beds))
+			if tile_id == "":
+				continue
+			var g: Vector2i = chunk_coord * chunk_size + cell
+			world.build_at_global(g.x, g.y, tile_id)
 
 
 ## Every farmhouse standing in this chunk, in (y, x) order -- a stable
@@ -613,6 +704,7 @@ func _place_farms_if_missing(chunk_coord: Vector2i, chunk_size: int, npcs: Array
 
 	var is_buildable := _is_buildable_local(chunk_coord, chunk_size, world)
 	var is_occupied := _is_occupied_local(chunk_coord, chunk_size, world)
+	var is_paved := _is_paved_local(chunk_coord, chunk_size, world)
 	var renderer := self
 	var accepts_origin := func(origin: Vector2i) -> bool:
 		return (
@@ -622,7 +714,7 @@ func _place_farms_if_missing(chunk_coord: Vector2i, chunk_size: int, npcs: Array
 	for index in range(standing, wanted):
 		var plot: Dictionary = VillageLayout.next_street_plot(
 			VillageFarm.FARM_BUILDING_ID, chunk_size, VillageLayout.seed_for(chunk_coord),
-			is_buildable, is_occupied, is_buildable, accepts_origin
+			is_buildable, is_occupied, is_buildable, accepts_origin, is_paved
 		)
 		if plot.is_empty():
 			# No frontage left -- which on a village hemmed in by water is

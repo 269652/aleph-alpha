@@ -139,6 +139,7 @@ const AmbientFlyerRenderer = preload("res://src/rendering/ambient_flyer_renderer
 const FlyerPersonality = preload("res://src/gameplay/flyer_personality.gd")
 const PiscivoreBirdRenderer = preload("res://src/rendering/piscivore_bird_renderer.gd")
 const VillageRenderer = preload("res://src/rendering/village_renderer.gd")
+const VillageFarm = preload("res://src/gameplay/village_farm.gd")
 const NpcMarker = preload("res://src/rendering/npc_marker.gd")
 const EcosystemSimulation = preload("res://src/world/ecosystem_simulation.gd")
 const ChunkSerializer = preload("res://src/world/chunk_serializer.gd")
@@ -2092,8 +2093,16 @@ func stamp_house_and_grant_ownership(recipe_id: String, origin_tile: Vector2i, h
 ## house_from_blueprint refuses a paved footprint); the town hall rises on
 ## the plaza itself, footprint and all. False, with every road put back,
 ## when the placement is refused.
+## `join_street` lays the paving that ties the new building back to the
+## village's own streets (see _lay_frontage_spur). True for what the VILLAGE
+## raises -- the growth ladder's rungs, and whatever VillageRenderer places
+## through the public wrapper below. Deliberately FALSE for a player's own
+## house (stamp_house_and_grant_ownership): a player who builds beside a
+## village street asked for a house, not for the village to lay a road they
+## never placed.
 func _place_building_over_roads(
-	chunk_coord: Vector2i, origin_local: Vector2i, building_id: String, seed_value: int, owner_household_id: String
+	chunk_coord: Vector2i, origin_local: Vector2i, building_id: String, seed_value: int,
+	owner_household_id: String, join_street: bool = false
 ) -> bool:
 	var chunk: Chunk = _loaded_chunks.get(chunk_coord)
 	if chunk == null:
@@ -2112,7 +2121,42 @@ func _place_building_over_roads(
 	if lifted.has(doorstep_local):
 		chunk.modifications[doorstep_local] = TerrainRenderer.ROAD_TILE_ID
 		_terrain_renderer.paint(_tile_map_layer, chunk, chunk_coord * CHUNK_SIZE, generator.biome_at_global)
+	if join_street:
+		_lay_frontage_spur(chunk_coord, origin_local, building_id)
 	return true
+
+
+## Lays the paving that joins a building just raised on village frontage
+## back to the village's own streets (VillageLayout.frontage_spur).
+##
+## A further street is paved by the founding layout only once it really got
+## a plot, so the FIRST building the growth ladder raises on a fresh row
+## used to get one paved tile at its door and nothing else -- reported in
+## play: "There are still Farmhouses not connected by a street". The plot
+## that was offered came with this same tie-back; a project raised over real
+## labour hours re-derives it here from the chunk's own seed rather than
+## carrying it through the construction ledger, so nothing new is persisted
+## and a project queued before this existed still lands connected.
+##
+## A building that fronts no street of this village (the hall on its square,
+## a mill out at the timber with its own spur) gets nothing, which is the
+## honest answer rather than a lane to nowhere.
+func _lay_frontage_spur(chunk_coord: Vector2i, origin_local: Vector2i, building_id: String) -> void:
+	var is_occupied := func(cell: Vector2i) -> bool:
+		var g: Vector2i = chunk_coord * CHUNK_SIZE + cell
+		return modification_at_global(g.x, g.y) != ""
+	var is_paved := func(cell: Vector2i) -> bool:
+		var g: Vector2i = chunk_coord * CHUNK_SIZE + cell
+		return TerrainRenderer.is_road_tile(modification_at_global(g.x, g.y))
+	var spur = VillageLayout.frontage_spur(
+		building_id, origin_local, CHUNK_SIZE, VillageLayout.seed_for(chunk_coord),
+		_is_dry_local(chunk_coord), is_occupied, is_paved
+	)
+	if spur == null:
+		return
+	for local_cell in spur:
+		var g: Vector2i = chunk_coord * CHUNK_SIZE + (local_cell as Vector2i)
+		build_at_global(g.x, g.y, TerrainRenderer.ROAD_TILE_ID)
 
 
 ## Stamps a two-story house's real upper-floor pieces into chunk.upper_
@@ -4099,7 +4143,9 @@ func place_building_over_roads(
 	chunk_coord: Vector2i, origin_local: Vector2i, building_id: String, seed_value: int,
 	owner_household_id: String
 ) -> bool:
-	return _place_building_over_roads(chunk_coord, origin_local, building_id, seed_value, owner_household_id)
+	return _place_building_over_roads(
+		chunk_coord, origin_local, building_id, seed_value, owner_household_id, true
+	)
 
 
 ## This villager's own household's persistent Wallet, or null if they have
@@ -5495,6 +5541,35 @@ func is_weather_forced() -> bool:
 const MAX_VILLAGE_SEARCH_RADIUS_CHUNKS := 24
 
 
+## Whether a village would really settle in this chunk -- the SAME
+## question VillageRenderer answers at founding (does the layout house the
+## whole roster), asked without loading or spawning anything.
+##
+## has_settlement_at only says a settlement is MEANT to be here; it knows
+## nothing about the ground. Since a village only settles where there is
+## room for all of it, the two disagree on exactly the chunks a player must
+## not be sent to -- reported in play as "It teleports me to where no
+## village is".
+##
+## Occupancy is deliberately "nothing built": this asks the founding-time
+## question, which is the one that decides whether a village is ever there
+## at all. Run only for chunks that already passed the settlement roll (one
+## in SETTLEMENT_CHANCE_DENOMINATOR), so the ring search pays for a layout
+## rarely rather than per chunk.
+func _village_would_settle(chunk_coord: Vector2i) -> bool:
+	var is_dry := _is_dry_local(chunk_coord)
+	var settlement := _settlement_generator.generate_settlement(
+		chunk_coord, chunk_coord * CHUNK_SIZE, CHUNK_SIZE, TerrainRenderer.TILE_SIZE,
+		SettlementGenerator.POPULATION, is_dry
+	)
+	var building_ids: Array = SettlementGenerator.house_ids_for(chunk_coord, settlement.npcs)
+	var result: Dictionary = VillageLayout.new().layout(
+		building_ids, CHUNK_SIZE, VillageLayout.seed_for(chunk_coord),
+		is_dry, func(_cell: Vector2i) -> bool: return false
+	)
+	return VillageLayout.houses_everyone(result, building_ids)
+
+
 ## Nearest chunk hosting a settlement (see SettlementGenerator), searching
 ## outward from `from_tile`'s own chunk -- the discovery half of the
 ## /village dev-console command (see World._handle_village_command).
@@ -5512,7 +5587,8 @@ func find_nearest_village(from_tile: Vector2i) -> Variant:
 		_settlement_generator,
 		func(chunk_coord: Vector2i) -> String:
 			var chunk := generator.generate_chunk(chunk_coord, CHUNK_SIZE)
-			return _biome_classifier.dominant_biome(chunk.biome)
+			return _biome_classifier.dominant_biome(chunk.biome),
+		_village_would_settle
 	)
 	if found_chunk == null:
 		return null
@@ -13080,6 +13156,19 @@ func piece_condition_at_global(global_x: int, global_y: int) -> float:
 ## just its owning chunk. Returns false (no-op) if that tile isn't in a
 ## currently-loaded chunk -- building far outside the streamed area isn't
 ## meaningful since nothing there is being rendered or simulated.
+## Whether a village farm's rail stands on this tile (docs/concept/
+## village_farms.md, "The fence around the beds") -- the one question a
+## creature's movement asks of the world before it steps
+## (CreatureMarker._fence_blocks_movement). False for an unloaded chunk,
+## like every other per-tile modification query here.
+##
+## Asked per creature per movement decision, so it is deliberately the same
+## O(1) dictionary lookup modification_at_global already is, with the rail
+## test owned by VillageFarm so nothing here re-lists the four facings.
+func is_fenced_at_global(global_x: int, global_y: int) -> bool:
+	return VillageFarm.is_fence_tile(modification_at_global(global_x, global_y))
+
+
 func build_at_global(global_x: int, global_y: int, tile_id: String) -> bool:
 	var chunk_coord := _chunk_coord_for_tile(Vector2i(global_x, global_y))
 	var chunk: Chunk = _loaded_chunks.get(chunk_coord)
@@ -15686,8 +15775,17 @@ func _growth_site_for(chunk_coord: Vector2i, building_id: String):
 		)
 		return null if industry.is_empty() else industry["origin"]
 
+	# is_paved lets the plot's own tie-back cross the paving this village
+	# has ALREADY laid -- another street's row, an earlier plot's doorstep,
+	# the square. Without it every junction reads as blocked ground and the
+	# ladder runs out of frontage the moment the second street exists (see
+	# VillageLayout._frontage_spur).
+	var is_paved := func(cell: Vector2i) -> bool:
+		var g: Vector2i = chunk_coord * CHUNK_SIZE + cell
+		return TerrainRenderer.is_road_tile(modification_at_global(g.x, g.y))
 	var plot: Dictionary = VillageLayout.next_street_plot(
-		building_id, CHUNK_SIZE, seed_value, is_buildable, is_occupied, _is_dry_local(chunk_coord)
+		building_id, CHUNK_SIZE, seed_value, is_buildable, is_occupied,
+		_is_dry_local(chunk_coord), Callable(), is_paved
 	)
 	return null if plot.is_empty() else plot["origin"]
 
@@ -15933,7 +16031,9 @@ func _place_completed_building_project(project) -> void:
 		return
 	var origin_tile: Vector2i = project.chunk_coord * CHUNK_SIZE + project.origin
 	var seed_value := _house_site_seed(project.chunk_coord, origin_tile, building_id)
-	_place_building_over_roads(project.chunk_coord, project.origin, building_id, seed_value, project.household_id)
+	_place_building_over_roads(
+		project.chunk_coord, project.origin, building_id, seed_value, project.household_id, true
+	)
 
 
 ## Construction sites: chunk_coord -> {origin_local -> Node2D}, one per

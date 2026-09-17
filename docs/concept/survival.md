@@ -249,6 +249,24 @@ Status:
   "debuffs, not death" pillar is structurally unreachable until a traversal
   sink exists, which is exactly why `ConditionPenalty` deliberately has no
   exhaustion branch — it would be untestable-in-play dead code.
+- ✅ (2026-09-17) **A villager hunter is the first real stamina sink in the
+  game**, and it arrived from the other side: asked for directly, *"Hunters
+  should run and running costs stamina which slowly recovers based on
+  fitness."* A hunter closing on real quarry runs, and pays for it out of a
+  stamina meter that is this section's own — same range, same regen rate,
+  same exhaustion line, `SurvivalMeters`' constants reused by direct
+  reference (`NpcCondition`, see [npc.md](npc.md)'s "A hunter runs, and the
+  run is paid for in stamina"). Two consequences for THIS doc:
+  `ConditionPenalty` now has the second of the pillar's four effect kinds —
+  `stamina_regen_multiplier`, "poor condition slows how fast your wind comes
+  back", listed above as unbuilt precisely because nothing spent stamina —
+  and the exhaustion half of "debuffs, not death" is reachable and tested in
+  play for the first time, for villagers. It is still unreachable for the
+  PLAYER: sprint exists as a mechanic now (`Player.SPRINT_SPEED`, held
+  `sprint` action) but still spends nothing, so a healthy player's stamina
+  is still pinned at 1.0. Wiring that is the same open item it always was —
+  it changes a mature, tuned meter, which is why this pass deliberately did
+  not take a free ride on it.
 
 ### Open questions
 

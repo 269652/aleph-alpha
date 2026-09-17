@@ -365,3 +365,112 @@ func test_asking_for_no_cells_or_an_unknown_building_gives_none():
 	var ring: Array = VillageFarm.field_cells(Vector2i.ZERO, VillageFarm.FARM_BUILDING_ID)
 	assert_eq(VillageFarm.nearest_cells(ring, Vector2i.ZERO, VillageFarm.FARM_BUILDING_ID, 0), [])
 	assert_eq(VillageFarm.nearest_cells(ring, Vector2i.ZERO, "not_a_building", 4), [])
+
+
+# -- the fence around the beds ---------------------------------------------
+#
+# Asked for directly, with the field circled in a screenshot: "the farmhouse
+# should build a fence around the bed so no animals enter". See
+# docs/concept/village_farms.md, "The fence around the beds".
+
+
+func test_a_single_bed_is_ringed_by_all_eight_neighbours():
+	var origin := Vector2i(20, 20)  # far from the beds, so nothing is dropped as footprint
+	var fence: Array = VillageFarm.fence_cells(
+		[Vector2i(4, 4)], origin, VillageFarm.FARM_BUILDING_ID
+	)
+	var expected: Array = []
+	for dy in [-1, 0, 1]:
+		for dx in [-1, 0, 1]:
+			if dx == 0 and dy == 0:
+				continue
+			expected.append(Vector2i(4 + dx, 4 + dy))
+	expected.sort()
+	var got: Array = fence.duplicate()
+	got.sort()
+	assert_eq(got, expected, "a fence goes round a bed on the diagonal too, or its corners are open")
+
+
+func test_no_rail_ever_stands_on_a_bed_the_villager_works():
+	var origin := Vector2i(6, 5)
+	var worked: Array = VillageFarm.nearest_cells(
+		VillageFarm.field_cells(origin, VillageFarm.FARM_BUILDING_ID), origin,
+		VillageFarm.FARM_BUILDING_ID, VillageFarm.MAX_WORKED_CELLS
+	)
+	assert_gt(worked.size(), 0, "precondition: a real field")
+	for cell in VillageFarm.fence_cells(worked, origin, VillageFarm.FARM_BUILDING_ID):
+		assert_false(worked.has(cell), "a rail through %s is a rail through the crop" % str(cell))
+
+
+func test_no_rail_ever_stands_on_the_farmhouse_itself():
+	var origin := Vector2i(6, 5)
+	var worked: Array = VillageFarm.nearest_cells(
+		VillageFarm.field_cells(origin, VillageFarm.FARM_BUILDING_ID), origin,
+		VillageFarm.FARM_BUILDING_ID, VillageFarm.MAX_WORKED_CELLS
+	)
+	var footprint: Array = BuildingCatalog.footprint_cells(VillageFarm.FARM_BUILDING_ID, origin)
+	for cell in VillageFarm.fence_cells(worked, origin, VillageFarm.FARM_BUILDING_ID):
+		assert_false(
+			footprint.has(cell),
+			"%s is the farmhouse's own wall -- the building closes that side, not a rail" % str(cell)
+		)
+
+
+## A block of beds is fenced round the OUTSIDE only: a 2x2 block has twelve
+## cells touching it, and not one rail stands between two beds.
+func test_a_block_of_beds_is_fenced_round_the_outside_only():
+	var beds: Array = [Vector2i(4, 4), Vector2i(5, 4), Vector2i(4, 5), Vector2i(5, 5)]
+	var fence: Array = VillageFarm.fence_cells(beds, Vector2i(20, 20), VillageFarm.FARM_BUILDING_ID)
+	assert_eq(fence.size(), 12, "a 2x2 block of beds has exactly twelve cells touching it")
+	for cell in fence:
+		assert_false(beds.has(cell), "%s is a bed, not a fence line" % str(cell))
+
+
+func test_a_farmhouse_with_no_beds_raises_no_fence():
+	assert_eq(VillageFarm.fence_cells([], Vector2i(6, 5), VillageFarm.FARM_BUILDING_ID), [])
+	assert_eq(VillageFarm.fence_cells([Vector2i(4, 4)], Vector2i(6, 5), "not_a_building"), [])
+
+
+func test_the_same_field_fences_the_same_ring_every_time():
+	var origin := Vector2i(6, 5)
+	var worked: Array = VillageFarm.nearest_cells(
+		VillageFarm.field_cells(origin, VillageFarm.FARM_BUILDING_ID), origin,
+		VillageFarm.FARM_BUILDING_ID, VillageFarm.MAX_WORKED_CELLS
+	)
+	assert_eq(
+		VillageFarm.fence_cells(worked, origin, VillageFarm.FARM_BUILDING_ID),
+		VillageFarm.fence_cells(worked, origin, VillageFarm.FARM_BUILDING_ID)
+	)
+
+
+## Every rail knows which side of the field it stands on, so the sheet's own
+## four orientation columns can be drawn (docs/concept/village_farms.md).
+func test_every_rail_faces_away_from_the_field_it_encloses():
+	var beds: Array = [Vector2i(4, 4)]
+	var facings: Dictionary = {}
+	for cell in VillageFarm.fence_cells(beds, Vector2i(20, 20), VillageFarm.FARM_BUILDING_ID):
+		facings[cell] = VillageFarm.fence_facing(cell, beds)
+	assert_eq(facings[Vector2i(4, 3)], "north", "a rail above the bed closes its north side")
+	assert_eq(facings[Vector2i(4, 5)], "south")
+	assert_eq(facings[Vector2i(5, 4)], "east")
+	assert_eq(facings[Vector2i(3, 4)], "west")
+
+
+## A rail's TILE ID carries which way it faces, so the sheet's own four
+## orientation columns survive a reload with nothing else persisted
+## (docs/concept/village_farms.md's art contract).
+func test_every_facing_has_its_own_rail_tile():
+	var ids: Array = []
+	for facing in ["north", "south", "east", "west"]:
+		var tile_id: String = VillageFarm.fence_tile_for(facing)
+		assert_ne(tile_id, "", "%s must have a rail of its own" % facing)
+		assert_false(ids.has(tile_id), "%s reuses another facing's tile" % facing)
+		assert_true(VillageFarm.is_fence_tile(tile_id), "%s must read back as a rail" % tile_id)
+		ids.append(tile_id)
+
+
+func test_a_facing_nobody_drew_has_no_rail():
+	assert_eq(VillageFarm.fence_tile_for(""), "")
+	assert_eq(VillageFarm.fence_tile_for("up"), "")
+	assert_false(VillageFarm.is_fence_tile("road"))
+	assert_false(VillageFarm.is_fence_tile(""))
