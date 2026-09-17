@@ -177,6 +177,15 @@ func test_pressing_replay_intro_emits_replay_intro_requested():
 # forces `menu`'s own creator open already, since that is what the REST of
 # this file needs (see its own comment).
 
+## "The creator has finished opening" -- every yield of BOTH of _ensure_
+## create_screen_built's yield-split passes is done and the screen is
+## actually on screen. The single condition the fire-and-forget navigation
+## tests above wait on, so none of them has to know how many frames either
+## pass currently takes.
+func _creator_is_open(m: MainMenu) -> bool:
+	return m._create_screen != null and m._create_screen.visible and not m._diorama_build_pending
+
+
 func test_the_character_creator_is_not_built_until_the_player_navigates_to_it():
 	var fresh := MainMenu.new()
 	fresh.save_path = TEST_SAVE_PATH
@@ -200,12 +209,16 @@ func test_pressing_new_game_builds_the_character_creator():
 	add_child_autofree(fresh)
 
 	_find_button(fresh._root_screen, "New Game").pressed.emit()
-	# _ensure_create_screen_built is a coroutine now (see its own doc
-	# comment) -- .pressed.emit() only runs it up to its first real
-	# suspension point, not to completion, so the button callback itself
-	# can stay a plain fire-and-forget call. 10 frames is a safe margin
-	# over the 7 real yields _warm_class_icon_cache needs for a cold cache.
-	await wait_process_frames(10)
+	# _ensure_create_screen_built is a coroutine (see its own doc comment)
+	# -- .pressed.emit() only runs it up to its first real suspension point,
+	# not to completion, so the button callback itself can stay a plain
+	# fire-and-forget call. Waited on the real CONDITION rather than a fixed
+	# frame count: the coroutine's own length is the sum of two independent
+	# yield-split passes (7 class portraits, then one frame per diorama
+	# build step), and a hardcoded margin silently goes stale the moment
+	# either of those changes -- which is exactly what happened to the
+	# original 10-frame one when the diorama's build learned to yield.
+	await wait_until(func(): return _creator_is_open(fresh), 30)
 
 	assert_not_null(fresh._create_screen, "New Game should build the creator")
 	assert_true(fresh._create_screen.visible, "and show it")
@@ -230,7 +243,7 @@ func test_pressing_host_game_also_builds_the_character_creator():
 
 	_find_button(fresh._root_screen, "Host Game (LAN)").pressed.emit()
 	# See test_pressing_new_game_builds_the_character_creator's own comment.
-	await wait_process_frames(10)
+	await wait_until(func(): return _creator_is_open(fresh), 30)
 
 	assert_not_null(fresh._create_screen, "Host Game should build the creator")
 	assert_true(fresh._create_screen.visible)
@@ -244,7 +257,7 @@ func test_navigating_to_the_creator_twice_does_not_rebuild_it():
 
 	_find_button(fresh._root_screen, "New Game").pressed.emit()
 	# See test_pressing_new_game_builds_the_character_creator's own comment.
-	await wait_process_frames(10)
+	await wait_until(func(): return _creator_is_open(fresh), 30)
 	var first_screen := fresh._create_screen
 	var first_diorama := fresh._diorama
 
@@ -969,12 +982,12 @@ func test_the_loading_overlay_shows_while_the_create_screen_first_builds():
 		fresh._loading_overlay.visible,
 		"the overlay should be showing while the creator's real first-time cost runs"
 	)
-	# Drains the rest of _warm_class_icon_cache's own remaining yields (see
-	# test_pressing_new_game_builds_the_character_creator's identical 10-
-	# frame margin) before this test ends and add_child_autofree frees
-	# `fresh` -- otherwise the still-suspended coroutine resumes against an
+	# Drains the rest of _ensure_create_screen_built's own remaining yields
+	# (the class-icon warm pass, then the diorama's own per-step ones)
+	# before this test ends and add_child_autofree frees `fresh` --
+	# otherwise the still-suspended coroutine resumes against an
 	# already-freed object.
-	await wait_process_frames(10)
+	await wait_until(func(): return _creator_is_open(fresh), 30)
 
 
 ## The overlay must not still be sitting there, visible, once the creator is
@@ -1409,3 +1422,84 @@ func test_starting_a_game_sends_the_current_starter_item_selection():
 	# for the same two-step convention).
 	var params = get_signal_parameters(menu, "start_requested", 0)
 	assert_eq(params[4], StarterKit.DEFAULT_CHOICES)
+
+
+# -- the creator's diorama is built incrementally, not synchronously -------
+#
+# Reported live: "the character creator loads super slow". The sixth pass
+# deferred WHEN the creator gets built and the tenth yield-split the 7 class
+# portraits, but both named the diorama as an explicitly-deferred remaining
+# gap. Measured (docs/concept/character_creator_preview_scene.md's own "Load
+# cost" section): a cold CharacterPreviewDiorama.build() is ~3.9s, and it ran
+# as ONE unyielded block inside the fully-synchronous _build_create_screen,
+# reached via _select_class -> _refresh_appearance. Nothing on screen could
+# repaint for the duration -- including the loading overlay that had just
+# been shown.
+
+
+## The synchronous construction pass must leave the diorama's SCENE unbuilt.
+## The diorama NODE itself is still built here -- it is part of the panel's
+## layout, and every existing size/visibility test depends on it existing --
+## but nothing inside it may be assembled until the incremental pass runs.
+func test_building_the_create_screen_does_not_also_build_the_diorama_scene():
+	var fresh := MainMenu.new()
+	fresh.save_path = TEST_SAVE_PATH
+	fresh.reroll_save_path = TEST_REROLL_SAVE_PATH
+	add_child_autofree(fresh)
+
+	fresh._create_screen = fresh._build_create_screen()
+
+	assert_not_null(fresh._diorama, "the diorama node is part of the panel and is still built")
+	assert_null(
+		fresh._diorama.character_view,
+		"but its ~3.9s of scene assembly must not run inside a synchronous build"
+	)
+	assert_eq(fresh._diorama_built_for_seed, -1, "no seed should have been built yet")
+
+
+## ...and the incremental pass must then actually finish it, so a player who
+## navigates in gets a live, strolling hero rather than an empty box.
+func test_ensure_create_screen_built_finishes_the_dioramas_scene():
+	var fresh := MainMenu.new()
+	fresh.save_path = TEST_SAVE_PATH
+	fresh.reroll_save_path = TEST_REROLL_SAVE_PATH
+	add_child_autofree(fresh)
+
+	await fresh._ensure_create_screen_built()
+
+	assert_not_null(fresh._diorama.character_view, "the hero should be in the scene")
+	assert_gt(fresh._diorama.ground_tiles.size(), 0, "and standing on real ground")
+	assert_eq(fresh._diorama_built_for_seed, fresh._dna_seed, "built for the current DNA seed")
+	assert_false(fresh._diorama_build_pending, "and no longer waiting on a first build")
+
+
+## The whole point of yielding: the overlay shows real, moving progress for
+## the diorama's own steps -- the same readout the 7 class portraits already
+## get -- rather than one silent freeze following another. The step's own
+## label is shown too, since a diorama step is "the pond" or "the hero"
+## rather than one more of a single uniform unit.
+func test_the_loading_overlay_reports_the_dioramas_own_build_progress():
+	var fresh := MainMenu.new()
+	fresh.save_path = TEST_SAVE_PATH
+	fresh.reroll_save_path = TEST_REROLL_SAVE_PATH
+	add_child_autofree(fresh)
+	fresh._loading_overlay.show_with_text("Building character creator...")
+
+	fresh._on_diorama_build_progress(3, 21, "the pond")
+
+	var text := fresh._loading_overlay.status_text()
+	assert_true(text.contains("3 / 21"), "real counts, not a spinner: %s" % text)
+	assert_true(text.contains("the pond"), "and what it is actually building: %s" % text)
+
+
+## A DNA reroll stays SYNCHRONOUS on purpose. Once the first build has warmed
+## every sheet, and with IllustratedGrassPatch's atlas now shared across
+## instances, a rebuild measures ~10ms -- a frame, not a freeze -- so paying
+## it inline keeps the reroll instant instead of flashing an overlay for it.
+func test_a_dna_reroll_still_rebuilds_the_diorama_inline():
+	menu._dna_seed += 1
+
+	menu._refresh_appearance()
+
+	assert_eq(menu._diorama_built_for_seed, menu._dna_seed, "the rerolled seed should be built")
+	assert_not_null(menu._diorama.character_view)

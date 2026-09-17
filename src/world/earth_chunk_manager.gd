@@ -8201,12 +8201,26 @@ func crush_walnut_near(pixel_position: Vector2, momentum_kg_m_s: float) -> bool:
 ## withered plot is (re)planted. Returns whether planting happened.
 func till_and_plant_farm_plot_at_global(global_x: int, global_y: int, crop_id: String) -> bool:
 	var tile := Vector2i(global_x, global_y)
-	if _loaded_chunks.get(_chunk_coord_for_tile(tile)) == null:
+	var chunk_coord := _chunk_coord_for_tile(tile)
+	if _loaded_chunks.get(chunk_coord) == null:
 		return false
 	if not _farm_plots.has(tile):
 		_farm_plots[tile] = _build_farm_plot_marker(tile)
 	var seed_value := hash("%d_%d_farm_plot" % [tile.x, tile.y])
-	return _farm_plots[tile].till_and_plant(crop_id, seed_value)
+	if not _farm_plots[tile].till_and_plant(crop_id, seed_value):
+		return false
+	# Asked for directly: "long grass should be cleared before planting".
+	# TILLING is what clears it, so the clearing happens only when the till
+	# really took -- a bed refused because a live crop is already standing on
+	# it was never worked, and must not scythe the ground anyway.
+	#
+	# Exactly the rule a building's own floor already has (docs/concept/
+	# building.md "Placement rules": "grass must be cut before and can't grow
+	# back inside a house"), through the same seam: whatever tall grass,
+	# flowers, scrub or lichen stood here is gone, and none of them seeds,
+	# spreads or falls back into worked ground while the bed stands.
+	_block_ground_cover_on_cells(chunk_coord, [tile - chunk_coord * CHUNK_SIZE])
+	return true
 
 
 ## Tends (re-waters) the growing plot at a global tile, resetting its
@@ -13166,16 +13180,38 @@ func piece_condition_at_global(global_x: int, global_y: int) -> float:
 ## currently-loaded chunk -- building far outside the streamed area isn't
 ## meaningful since nothing there is being rendered or simulated.
 ## Whether a village farm's rail stands on this tile (docs/concept/
-## village_farms.md, "The fence around the beds") -- the one question a
-## creature's movement asks of the world before it steps
-## (CreatureMarker._fence_blocks_movement). False for an unloaded chunk,
-## like every other per-tile modification query here.
+## village_farms.md, "The fence around the beds"). False for an unloaded
+## chunk, like every other per-tile modification query here.
 ##
-## Asked per creature per movement decision, so it is deliberately the same
-## O(1) dictionary lookup modification_at_global already is, with the rail
-## test owned by VillageFarm so nothing here re-lists the four facings.
+## Deliberately the same O(1) dictionary lookup modification_at_global
+## already is, with the rail test owned by VillageFarm so nothing here
+## re-lists the four facings. NOT what a creature asks before it steps --
+## a rail is a line on one edge of this tile, not a tile an animal may not
+## stand on, so movement asks fence_blocks_step_global below.
 func is_fenced_at_global(global_x: int, global_y: int) -> bool:
 	return VillageFarm.is_fence_tile(modification_at_global(global_x, global_y))
+
+
+## Whether stepping from one global tile to the next CROSSES a rail's inner
+## edge -- the one question a creature's movement asks of the world before
+## it steps (CreatureMarker._fence_blocks_movement).
+##
+## Asked for directly, with two sides of a real ring arrowed in a
+## screenshot: *"move the fences to the inner edge of the enclosure and
+## treat the rest of the tile as street"*. A rail's own tile is ordinary
+## walkable ground -- an animal may stand on the ring and walk along it --
+## and only the edge the rails are drawn on is shut, on both sides of it
+## (see VillageFarm.rails_block_step, which owns the rule).
+##
+## Two O(1) lookups per creature per movement decision rather than one: the
+## cell it stands on and the cell it is heading for, because an EDGE is a
+## fact about a pair of cells and cannot be read off either alone.
+func fence_blocks_step_global(from_x: int, from_y: int, to_x: int, to_y: int) -> bool:
+	return VillageFarm.rails_block_step(
+		modification_at_global(from_x, from_y),
+		modification_at_global(to_x, to_y),
+		Vector2i(to_x - from_x, to_y - from_y)
+	)
 
 
 func build_at_global(global_x: int, global_y: int, tile_id: String) -> bool:
@@ -13716,14 +13752,28 @@ func _built_local_cells(chunk: Chunk) -> Array:
 	return cells
 
 
-## A cell nothing grows on: a real building piece, or a laid road (docs/
+## A cell nothing grows on: a real building piece, a laid road (docs/
 ## concept/infrastructure.md's Road tier -- a placed surface, unlike the
-## worn path/trail tiers, which stay open ground). The one predicate
-## build_at_global/destroy_at_global/_built_local_cells share for ground
-## cover; buildings (BuildingCatalog.occupies) are checked alongside it
-## where footprints matter.
+## worn path/trail tiers, which stay open ground), or a village farm's own
+## rail. The one predicate build_at_global/destroy_at_global/
+## _built_local_cells share for ground cover; buildings
+## (BuildingCatalog.occupies) are checked alongside it where footprints
+## matter.
+##
+## The rails are here because of a direct report: *"the grass should be
+## cleared on the fence tiles as well"*. A frame was being raised straight
+## through standing long grass, so a fence line read as a row of posts lost
+## in a meadow -- the same thing tilling a bed already fixes for the ground
+## inside the frame (see till_and_plant_farm_plot_at_global). Unlike a bed,
+## a rail gives its ground back when it is pulled out: destroy_at_global
+## shares this predicate, so a torn-out fence line is ordinary ground again
+## rather than a permanent scar.
 func _is_built_surface(tile_id: String) -> bool:
-	return BuildingPiece.has_piece(tile_id) or TerrainRenderer.is_road_tile(tile_id)
+	return (
+		BuildingPiece.has_piece(tile_id)
+		or TerrainRenderer.is_road_tile(tile_id)
+		or VillageFarm.is_fence_tile(tile_id)
+	)
 
 
 func _clear_vegetation_on_cells(
@@ -14454,6 +14504,12 @@ func _sync_structure_art(
 ## bottom edge sits at the tile's bottom edge, the same way any
 ## bottom-anchored placed-art sprite already would (see
 ## IllustratedArtLoader's own "footprint" anchor doc comment).
+##
+## Then shifted by the subject's own footprint_offset, which is zero for
+## everything that stands on its whole tile and non-zero only for a farm
+## rail -- a LINE on the edge facing the beds it encloses rather than a
+## thing standing in the middle of its own tile (see that function, and
+## docs/concept/village_farms.md, "The rail stands on the inner edge").
 func _spawn_structure_art_for(chunk_coord: Vector2i, local_cell: Vector2i, subject: String) -> void:
 	if not _structure_art_sprites.has(chunk_coord):
 		_structure_art_sprites[chunk_coord] = {}
@@ -14468,33 +14524,12 @@ func _spawn_structure_art_for(chunk_coord: Vector2i, local_cell: Vector2i, subje
 	var tile_bottom := tile_center.y + TerrainRenderer.TILE_SIZE * 0.5
 	var sprite := Sprite2D.new()
 	sprite.texture = texture
-	sprite.position = Vector2(
-		tile_center.x + _structure_art_x_offset(subject),
-		tile_bottom - float(texture.get_height()) * 0.5
+	sprite.position = (
+		Vector2(tile_center.x, tile_bottom - float(texture.get_height()) * 0.5)
+		+ _illustrated_structure_sprite.footprint_offset(subject, TerrainRenderer.TILE_SIZE)
 	)
 	_entities_parent.add_child(sprite)
 	by_cell[local_cell] = sprite
-
-
-## How far sideways a subject's art stands from its own tile centre.
-##
-## Zero for everything but a farm fence's two SIDE walls, which are pushed
-## half a tile outward so the frame surrounds the beds instead of standing
-## on the outermost row of them. Reported in play, with the broken ring
-## circled: "the side walls of the fence should be moved outwards and corner
-## pieces added so it doesn't look that broken".
-##
-## The two corner posts move WITH the wall each caps -- a post left on its
-## own tile centre would sit half a tile inboard of the run it belongs to,
-## which is a visibly broken joint. A north or south rail does not move: it
-## already lies along the row it closes.
-func _structure_art_x_offset(subject: String) -> float:
-	var half_tile := float(TerrainRenderer.TILE_SIZE) * 0.5
-	if subject == VillageFarm.fence_tile_for("east") or subject == VillageFarm.fence_tile_for("corner_east"):
-		return half_tile
-	if subject == VillageFarm.fence_tile_for("west") or subject == VillageFarm.fence_tile_for("corner_west"):
-		return -half_tile
-	return 0.0
 
 
 func _despawn_structure_art_at(chunk_coord: Vector2i, local_cell: Vector2i) -> void:

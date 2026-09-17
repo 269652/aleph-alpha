@@ -2056,14 +2056,21 @@ func test_the_field_a_villager_works_is_a_whole_rectangle():
 			assert_eq(cells.size(), size.x * size.y, "the rectangle has a hole in it")
 
 
-## A village never sows or fences across its own street ROWS -- paved or
-## not. Measured on real villages (tools/probe_village_map.gd): the founding
-## layout paves a further street only between its own doorsteps, so a street
-## row has unpaved gaps in it, and a rail dropped into one of those stands in
-## the middle of the street with paving either side. Worse, it made the
-## frames inconsistent -- a field under a paved stretch got no north wall
-## (the street is its boundary) while the one beside it got a rail.
-func test_no_bed_and_no_rail_ever_lands_on_one_of_the_villages_street_rows():
+## A village never SOWS across its own street ROWS -- paved or not. Measured
+## on real villages (tools/probe_village_map.gd): the founding layout paves a
+## further street only between its own doorsteps, so a street row has unpaved
+## gaps in it, and a crop dropped into one of those grows in the middle of
+## the street with paving either side.
+##
+## RAILS were once held to the same rule and are not any more: a field sits
+## below the house it belongs to, so one whole side of its frame lands on the
+## next street row, and holding rails to it left that side open -- reported
+## with the bed circled, "it's still not fully enclosing the bed". A rail
+## along the edge of a road is a fence beside a road; a crop in the roadway
+## is not a crop. The gate is the PAVING, which is occupied ground and stops
+## a rail on its own (see
+## test_a_fields_frame_closes_on_every_side_that_is_not_paving_or_a_building).
+func test_no_bed_ever_lands_on_one_of_the_villages_street_rows():
 	var offenders: Array = []
 	var checked := 0
 	for coord in _settlement_chunks_with_farmers(3, 8):
@@ -2080,11 +2087,111 @@ func test_no_bed_and_no_rail_ever_lands_on_one_of_the_villages_street_rows():
 				var local: Vector2i = (global_cell as Vector2i) - coord * CHUNK_SIZE
 				if on_a_street.call(local.y):
 					offenders.append("%s: a bed at %s is on a street row" % [str(coord), str(local)])
-		for cell in _built_tiles(world, coord):
-			if not VillageFarm.is_fence_tile(_built_tiles(world, coord)[cell]):
-				continue
-			checked += 1
-			if on_a_street.call((cell as Vector2i).y):
-				offenders.append("%s: a rail at %s stands in the street" % [str(coord), str(cell)])
-	assert_gt(checked, 0, "precondition: real fields and real rails were laid")
+	assert_gt(checked, 0, "precondition: real fields were laid")
 	assert_eq(offenders.size(), 0, "%s" % str(offenders.slice(0, 6)))
+
+
+## Reported in play with the bed circled: *"it's still not fully enclosing
+## the bed"*. A frame was leaving a whole SIDE open wherever that side fell
+## on one of the village's street ROWS -- and measured on real villages
+## (tools/probe_village_map.gd), most of those cells carry no paving at all:
+## a 3-wide `.....` gap directly under a field, with the frame closed on
+## every other side. An unpaved gap is not a gate. The gate is the paving.
+##
+## States the frame as a whole rather than re-deriving the placement rule:
+## every cell of a field's own ring carries a rail unless there is a real
+## reason it cannot -- it is somebody's bed, it is the farmhouse, it is
+## paved (which IS the gate), or it is ground nothing may stand on.
+func test_a_fields_frame_closes_on_every_side_that_is_not_paving_or_a_building():
+	var open_sides: Array = []
+	var checked := 0
+	for coord in _settlement_chunks_with_farmers(3, 8):
+		var world := StubWorld.new()
+		var spawned := renderer.spawn_village(
+			parent, coord, coord * CHUNK_SIZE, CHUNK_SIZE, TILE_SIZE, "grassland", world
+		)
+		var built := _built_tiles(world, coord)
+		var beds: Dictionary = {}
+		var markers := _farming_markers(spawned, coord)
+		for npc in markers:
+			for global_cell in npc.field_cells:
+				beds[(global_cell as Vector2i) - coord * CHUNK_SIZE] = true
+		for npc in markers:
+			var local_beds: Array = []
+			for global_cell in npc.field_cells:
+				local_beds.append((global_cell as Vector2i) - coord * CHUNK_SIZE)
+			if local_beds.is_empty():
+				continue
+			var origin: Vector2i = _nearest_farmhouse_origin(world, coord, local_beds)
+			for rail in VillageFarm.fence_cells(local_beds, origin, VillageFarm.FARM_BUILDING_ID):
+				var cell: Vector2i = rail
+				if cell.x < 0 or cell.y < 0 or cell.x >= CHUNK_SIZE or cell.y >= CHUNK_SIZE:
+					continue
+				if beds.has(cell):
+					continue  # a neighbour's crop, not this frame
+				# What the RENDERER sees standing there, not just what it
+				# built: a farmhouse's own footprint closes a side without
+				# any rail, and that occupancy lives in the same place the
+				# placement rule reads it from.
+				var standing: String = world.modification_at_global(
+					coord.x * CHUNK_SIZE + cell.x, coord.y * CHUNK_SIZE + cell.y
+				)
+				if standing == "":
+					standing = built.get(cell, "")
+				if standing == TerrainRenderer.ROAD_TILE_ID:
+					continue  # real paving: this is the gate
+				if standing != "" and not VillageFarm.is_fence_tile(standing):
+					continue  # a building or another structure closes it
+				checked += 1
+				if not VillageFarm.is_fence_tile(standing):
+					open_sides.append("%s: the frame is open at %s" % [str(coord), str(cell)])
+	assert_gt(checked, 0, "precondition: real fields with real ring cells were laid")
+	assert_eq(open_sides.size(), 0, "%s" % str(open_sides.slice(0, 8)))
+
+
+## The farmhouse this field belongs to -- the one whose own walls the ring
+## is measured against.
+func _nearest_farmhouse_origin(world: StubWorld, coord: Vector2i, local_beds: Array) -> Vector2i:
+	var best := Vector2i.ZERO
+	var best_distance := 0x7FFFFFFF
+	for record in world.buildings_in_chunk(coord):
+		if record.get("id", "") != VillageFarm.FARM_BUILDING_ID:
+			continue
+		var origin: Vector2i = record["origin_local"]
+		var distance := 0x7FFFFFFF
+		for bed in local_beds:
+			var d: int = absi((bed as Vector2i).x - origin.x) + absi((bed as Vector2i).y - origin.y)
+			distance = mini(distance, d)
+		if distance < best_distance:
+			best_distance = distance
+			best = origin
+	return best
+
+
+## Asked for directly, with the broken stretch in shot: "When there's only a
+## free gap of 1-2 tiles between two street tiles it should close the gap
+## between them". The founding layout paves only between the doorsteps it
+## actually joined, so a real village's street rows come out as paved
+## stretches with one- and two-tile holes punched through them.
+func test_a_village_leaves_no_one_or_two_tile_hole_in_its_own_streets():
+	var holes: Array = []
+	var checked := 0
+	for coord in _settlement_chunks_with_farmers(3, 8):
+		var world := StubWorld.new()
+		renderer.spawn_village(
+			parent, coord, coord * CHUNK_SIZE, CHUNK_SIZE, TILE_SIZE, "grassland", world
+		)
+		var street_y: int = VillageLayout.skeleton(CHUNK_SIZE, VillageLayout.seed_for(coord))["street_y"]
+		var is_paved := func(cell: Vector2i) -> bool:
+			var g: Vector2i = coord * CHUNK_SIZE + cell
+			return world.modification_at_global(g.x, g.y) == TerrainRenderer.ROAD_TILE_ID
+		var is_free := func(cell: Vector2i) -> bool:
+			var g: Vector2i = coord * CHUNK_SIZE + cell
+			return world.modification_at_global(g.x, g.y) == ""
+		checked += 1
+		for cell in VillageLayout.short_street_gap_cells(
+			is_paved, is_free, CHUNK_SIZE, street_y, VillageLayout.STREET_GAP_CLOSE_TILES
+		):
+			holes.append("%s: a hole in the street at %s" % [str(coord), str(cell)])
+	assert_gt(checked, 0, "precondition: real villages were laid")
+	assert_eq(holes.size(), 0, "%s" % str(holes.slice(0, 8)))

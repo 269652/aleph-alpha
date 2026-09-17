@@ -23873,7 +23873,171 @@ against. Pinned by a test that the four rails really are four *different*
 pictures — reading a label-gutter sheet on an even division hands back the
 same cell four times.
 
-Honest gaps, both real:
+### The rail moved onto the inner edge (2026-09-17)
+
+Reported straight after, with the ring's west and south sides arrowed in a
+screenshot: *"move the fences to the inner edge of the enclosure and treat
+the rest of the tile as street … the brown squares should still be street
+when a fence is put"*. The brown squares had a single cause: `farm_fence_*`
+is neither a `ProceduralStructureSprite` structure nor a `BuildingPiece`,
+so every rail cell fell through `atlas_coords_for_modification`'s
+unknown-id fallback to the plain-earth slot and painted a raw dug square,
+with the rail art floating in the middle of it.
+
+Spec first (`village_farms.md` gained "The rail stands on the inner edge"),
+then red-first in three change sets, one per half of the mechanic:
+
+- **The rail is a line, not a tile.** `VillageFarm.fence_inner_direction` is
+  which way the beds lie from a rail — the inverse of what the facing names,
+  and pinned against `fence_facing` itself rather than written out twice, so
+  a rail can never be drawn on one edge and block another.
+  `rails_block_step` turns the old whole-tile occupancy question into a
+  crossing one: blocked leaving a rail cell over its own inner edge or
+  entering one over that same edge from the field side, free otherwise. A
+  diagonal crosses both its edges and is blocked whenever either component
+  would be.
+- **The ground is untouched.** `TerrainRenderer.OVERLAY_ONLY_TILE_IDS` names
+  the modifications drawn ON the ground rather than replacing it, and
+  `_replaces_the_ground` gates the two places that cared — `paint()` and
+  `_neighbor_biomes`. The second one is not optional: without it an earth
+  cell beside the ring still reads it as modified and refuses to blend, and
+  a hard dithered seam runs right round the field. Listed in the renderer
+  and pinned to `VillageFarm.FENCE_TILE_IDS` by test, keeping that module
+  free of gameplay — the same shape `MIN_FIELD_CELLS` uses the other way.
+- **The art stands on the edge.**
+  `IllustratedStructureSprite.footprint_offset` puts a rail's own ground
+  line on the edge facing its beds, branching on how the sheet draws that
+  run rather than on a table of facings: a broad-side run (North/South)
+  stands on its **posts**, so the bottom of its wood is its ground line; a
+  top-view run (East/West) has none — the band of rail *is* the ground line
+  — so its **centre line** lands on the edge.
+
+  MEASURED off the art (`_art_rect`), and the first pass got this wrong by
+  assuming it from the cell instead: `fence.png` draws every run centred in
+  its own cell with real margin all round, so bottom-anchoring leaves a
+  rail's posts ~0.2 tile short of the edge, and the guess that a *north*
+  rail therefore already stood on its own south edge was off by exactly
+  that. The independent measurement in
+  `test_a_broadside_runs_posts_stand_on_the_edge_facing_the_beds` — its own
+  brown-pixel rule over the delivered sheet, sharing no code with what it
+  checks — is what caught it, landing the north rail at 51.4 of 64 instead
+  of 64. `Image.get_used_rect` could not have supplied the measurement:
+  a pixel part way between the sheet's magenta divider and its black
+  background is neither magenta enough nor black enough to key, survives at
+  full alpha, and makes the used rect the whole cell every time — so
+  `_is_art_pixel` keys on that leftover being magenta-*cast* (blue at least
+  as strong as green), which real wood and iron never are.
+
+**And the runs were still a row of separate pieces** until *"also scale"*.
+Every whole building scales its cell width to the tile; a rail cannot,
+because the sheet draws each run centred in its cell with margin at both
+ends, and that margin becomes the gap between one rail and the next —
+measured at 52 of 64 across and 39 of 64 down. `_footprint_scale` scales a
+rail so its own wood spans one tile along the direction its run travels, so
+consecutive rails meet. Its band then exceeds the tile, so the
+footprint-width contract narrowed to whole buildings, the aspect-ratio
+contract was restated against the texture's own width rather than the tile
+(one factor on both axes is what it was ever really saying), and the x
+placement now carries where the band's left edge falls instead of assuming
+it is zero.
+
+`CreatureMarker._fence_blocks_movement` now asks about the step it is really
+taking — the cell under the animal and the cell its look-ahead lands in —
+because an edge is a fact about a pair of cells and cannot be read off
+either alone. Same single world query per movement decision as before, at
+the same choke point.
+
+Red confirmed at every layer before any of it existed: `fence_inner_direction`
+and `rails_block_step` parse-errored, `is_overlay_only_modification` parse-
+errored, `footprint_offset` failed 5 tests, the overlay sat at offset zero
+(2), the marker asked a world that no longer answers (3),
+`fence_blocks_step_global` was verified red by renaming it and re-running,
+and the corrected ground-line rule went red again (3) against the measured
+art before it went green.
+Green: 49/49 `test_village_farm`, 179/179 `test_terrain_renderer`, 29/29
+`test_illustrated_structure_sprite`, 12/12 `test_earth_chunk_manager_
+structure_art`, 259/259 `test_creature_marker`, the fence subset of
+`test_earth_chunk_manager`, and 260/260 across the four neighbouring
+village/item suites as a regression check.
+
+### Closing the frame, clearing the ground, and losing the blob (2026-09-17)
+
+Three things reported off one screenshot of a real village.
+
+**The frame was open on one side.** Looked at rather than guessed:
+`tools/probe_village_map.gd` on real villages shows a field sitting below
+the house it belongs to, so one whole side of its frame lands on the next
+street ROW — and rails were held off every street row, paved or not, while
+most of those cells carry no paving at all. A field's south side read
+`.....`, a three-wide hole with the frame closed on every other side. Rails
+may now stand on an unpaved street-row cell; paving is occupied ground and
+still stops one on its own, which is the gate. Sowing in a street row stays
+forbidden — a crop in the roadway is what that rule was really about. The
+new test states the frame as a whole (every ring cell carries a rail unless
+a bed, a building, paving or impossible ground stops it) rather than
+re-deriving the placement rule; it failed on 10 open cells across 8 real
+villages and named every one.
+
+**Long grass was not cleared before planting.** `till_and_plant_farm_plot_
+at_global` now blocks the chunk's ground cover on the tilled cell, through
+the same `_block_ground_cover_on_cells` seam a building's floor already
+uses. Only when the till really takes: a bed refused because a live crop
+stands on it was never worked.
+
+**The round dark blob was `ProceduralSoilSprite`.** It is a root crop's own
+ground — the root grows in the mound, and pulling one leaves the crater its
+DISTURBED state draws — and just a dark circle under bending wheat, six of
+them in a 3×2 bed. Hidden for a wheat bed, kept for the crops it was drawn
+for. Keyed on what the bed was SOWN with, not `plot.crop_id`: harvesting
+clears the crop, and a first pass keyed on `crop_id` grew the mound back the
+instant the wheat came off — caught by
+`test_a_harvested_wheat_bed_still_shows_no_mound`, which is why that test
+exists.
+
+test_village_renderer 90/90, test_farm_plot_marker 13/13,
+test_earth_chunk_manager_farm_plots 17/17, and 152/152 across the six
+farming and grass suites.
+
+### The street closes its own holes, and a rail clears its own ground (2026-09-17)
+
+Two more off a real village screenshot.
+
+**"When there's only a free gap of 1-2 tiles between two street tiles it
+should close the gap between them."** A village paves a street row only
+between the doorsteps it actually joined, and each farmhouse paves its own
+doorstep as it goes up, so a finished row is paved stretches with holes
+punched through them — the new test found a one-tile hole in all eight real
+villages it looked at, every one at the same relative spot.
+`VillageLayout.short_street_gap_cells` is the rule, pure and derived from the
+skeleton: a run of unpaved cells with paving on BOTH sides, at most
+`STREET_GAP_CLOSE_TILES` (2) long, free for its whole length. A run reaching
+the chunk edge has nothing on its far side to join; a run with something
+standing in it is closed whole or not at all.
+
+The ORDER is the part worth recording. It was first run before the farms and
+did nothing for the case that prompted it, because a farmhouse paves its own
+doorstep as it is placed — the hole only exists once the farms are down. It
+now runs at one seam: after every last cell of paving, and before the first
+rail. Both directions matter. Too early and the hole is not there yet; too
+late and the gap already carries a fence across a road. The probe shows the
+before and after plainly: `+vvv+:::^:::` became `+vvv+:::::::`, the rail
+replaced by the paving that belongs there, with the frame still closed on
+its own three sides.
+
+**"The grass should be cleared on the fence tiles as well."** A rail joins
+`_is_built_surface` beside a building piece and a laid road, so
+`build_at_global` clears the ground cover under it and `destroy_at_global`
+gives it back — a torn-out fence line is ordinary ground again, unlike a
+tilled bed, which stays worked. That asymmetry is deliberate: a bed is
+ground somebody worked, a rail is a thing standing on it.
+
+test_village_layout 71/71 (8 new), test_village_renderer 91/91,
+test_earth_chunk_manager_farm_plots 19/19, 290/290 across eight layout,
+farming and ground-cover suites. (`test_grass_near_respects_its_radius` is
+risky-not-asserting both before and after these changes — pre-existing,
+untouched here.)
+
+Honest gaps, three real:
 
 🚧 **The gate is a real hole.** An animal that wanders into the gate cell is
 inside the field. That is what a farm gate is; closing it needs a gate
@@ -23883,6 +24047,23 @@ a few tiles wide at most.
 
 🚧 **Rails never weather or break.** The sheet carries Worn and Destroyed
 rows and only Pristine is ever drawn, because nothing damages a fence.
+
+🚧 **A rail closes exactly one of its own sides.** The trade the edge rule
+makes. A rail's tile id carries one facing, so `fence_inner_direction` names
+one edge, where the old whole-tile rule made the cell solid and closed every
+side of it at once. A **rectangular** field (which is now the only kind —
+see the section below) is not hurt by it: no ring cell of a rectangle
+touches beds on two orthogonal sides, and its four diagonal-only cells are
+`corner_west`/`corner_east` posts whose inner direction is the x component
+of the diagonal into the crop, so that diagonal stays blocked while walking
+on round the turn does not — pinned by
+`test_the_ring_of_a_rectangular_field_is_walkable_all_the_way_round` and
+`test_a_corner_of_a_rectangular_field_still_refuses_the_diagonal_into_the_crop`.
+What is genuinely open is a bed reached diagonally past a cell that faces
+beds two ways, which a rectangle cannot produce but a hand-placed or
+future non-rectangular field could. The fix is the same one the bend's art
+still wants: a rail id carrying a SET of closed edges, with corner art to
+match (`docs/concept/village_farms.md`, `docs/art/ai_sprite_prompts.md` §13).
 
 
 ## The field becomes a rectangle, so its fence becomes a frame (`concept/village_farms.md`, 2026-09-17)
@@ -23949,6 +24130,220 @@ Tests: `test_village_renderer.gd` 89/89, `test_village_farm.gd` 56/56,
 `test_illustrated_structure_sprite.gd` 24/24, `test_village_layout.gd`
 63/63, `test_village_finder.gd` 8/8, `test_settlement_generator.gd` 14/14.
 
+### Frame stabilisation for the intro: already stable, measured (see `docs/concept/intro_splash.md` "Frame stabilisation", 2026-09-17)
+
+Asked directly: *"Can you frame stabilize the intro sprite animation?"* —
+the same thing this feature had been re-reported for repeatedly.
+
+✅ **On the sheet shipping now it is already stable, and that is now
+measured rather than assumed.** The globe's right limb sits at exactly the
+same column in all 100 frames past the fade-in — **zero spread**. The
+fixed crop from a measured grid is doing the whole job, so no registration
+pass was added.
+
+✅ **The measurement is geometry, not lighting — which is the whole
+trap.** The current art crops the sphere at the left frame edge, so its
+right limb is the only edge of it in shot, and the limb is geometry while
+almost everything else here is lighting that moves on purpose (an
+Earth-at-night turning into daylight, terminator sweeping across the
+disc). A centre-of-lit-pixels reading moves **~35px** over the sequence
+while the globe has not moved at all — large enough to look exactly like
+the reported jitter, and acting on it would have registered every frame
+against the terminator and genuinely shoved the globe around. Same
+"moon-phase crescent" effect as the sixteenth pass, from the opposite
+direction: there it hid drift, here it invents it.
+
+✅ **Kept as a regression test rather than dropped as a no-op.**
+`test_the_globe_holds_the_same_position_in_every_frame` asserts what is
+already true, which is normally a smell; it earns its place because this
+feature's history is four art swaps, at least two of which shipped a
+visibly drifting intro that only a player caught. Paired with
+`test_the_limb_measurement_would_notice_a_frame_that_moved` — the same
+ruler over a real frame shifted 3px, required to read 3px — because a
+stability test whose measurement cannot see movement is worth nothing.
+
+🚧 **A per-frame registration pass was built, verified, and thrown away.**
+Against the *previous* 8×5 sheet it cut a real 6.0px horizontal and 2.0px
+vertical wander to 1.0px each. That sheet was replaced while the work was
+in flight; on the current art the same estimator reads the terminator
+rather than the globe, so it was dropped rather than carried over. The
+code is in the branch history if a future sheet needs it.
+
+Two process notes, both of which cost real time here and are written into
+the concept doc so the next reader does not repeat them:
+**re-import before measuring** (`SpriteSheetLoader` prefers Godot's
+imported resource, so a stale `.godot` cache silently serves the OLD art
+through the NEW grid constants — this produced 20 "blank" frames and
+magenta ink in 76 others and read convincingly as a broken sheet), and
+**render the frames and look at them** before concluding anything about
+drift.
+
+Tests: `test_intro_splash_sheet.gd` 16/16 (2 new), 46/46 across all five
+intro test files.
+
+## The character creator's load: one real bug, one freeze, and a never-migrated per-pixel loop (`concept/character_creator_preview_scene.md`, 2026-09-17)
+
+Reported live: *"The character creature loads super slow and needs a
+general overhaul."* Measured before touching anything (a throwaway
+`--headless` probe that instrumented `CharacterPreviewDiorama.build()`
+step by step, since deleted): a cold build is **~4.5s**, and a WARM one
+— every DNA reroll — was still **~250ms**. Both real, both with
+distinct causes.
+
+### ✅ The grass atlas was re-sliced on every single build (`illustrated_grass_patch.gd`)
+
+`IllustratedGrassPatch._textures` was a per-INSTANCE `Dictionary`, and
+`_build_grass` constructs a fresh patch each build, so every `build()`
+re-read the 1254x1254 season sheet off disk and re-ran
+`SpriteSheetSlicer.chroma_keyed` over all ~1.57M of its pixels for a
+byte-identical result: **~222ms, every time**. A straight bug against this
+codebase's own convention — `IllustratedTerrainSprite._frame_cache` and
+`IllustratedStoneSprite._frame_cache` are both `static var` for exactly
+this reason. Not diorama-specific either: `EarthChunkManager` only escaped
+it by happening to hold one long-lived patch for the whole world, so any
+second caller would have paid it too. Now `static`, with a public
+`texture_for_season()` so the sharing is directly assertable rather than
+only visible as a side effect on a `MultiMeshInstance2D`.
+
+### ✅ The remaining ~3.9s is real work, and now runs incrementally (`character_preview_diorama.gd`, `scenes/main_menu.gd`)
+
+Almost all of a cold build is first-use sprite-sheet loading, and it ran as
+ONE unyielded block inside the fully-synchronous `_build_create_screen`
+(reached via `_select_class` —> `_refresh_appearance`), so nothing could
+repaint for its duration — including the `LoadingOverlay` that had just
+been shown for the class portraits. This is the gap `concept/
+intro_splash.md`'s sixth and tenth passes each named and each explicitly
+deferred; its own caveat (*"either of those two costs growing
+independently in the future could reopen exactly the gap this pass
+closes"*) turned out to be exactly right.
+
+`build_async(dna_seed, on_progress)` performs the same steps in the same
+order from ONE shared `_build_steps()` list, awaiting a frame between each
+and reporting `(done, total, label)`. `build()` is unchanged and still
+fully synchronous. The unit of yielding is one atomic first-use cost, not
+one `_build_*` function: flowers, birds and butterflies each load a
+separate sheet PER SPECIES (~250-590ms per flower species, ~420-460ms per
+bird), so `_build_birds`/`_build_flowers`/`_build_butterflies` became
+`_build_bird`/`_build_flower`/`_build_butterfly` and expand to one step
+per item.
+
+`MainMenu._ensure_create_screen_built` awaits `_build_diorama_
+incrementally()` after the screen itself is built, reporting into the SAME
+overlay the portrait pass already uses — so the whole first open is one
+continuous readout ("7 / 7 portraits", then "11 / 21 scene pieces: the
+pond") instead of a spinner followed by a silent multi-second freeze.
+`_diorama_build_pending` keeps `_refresh_appearance` out of the way until
+that first build lands so the scene is never built twice; a DNA reroll
+stays inline on purpose, since a warm rebuild is now a frame.
+
+### ✅ A never-migrated per-pixel loop (`illustrated_terrain_sprite.gd`)
+
+Chasing the largest single step — the grassland ground — found that its
+~987ms sheet load is only ~36ms of PNG decode. `IllustratedTerrainSprite
+._prepared_for_slicing` alone was ~458ms: a plain `get_pixel`/`set_pixel`
+double loop over 1.57M pixels calling the user-defined `_is_magenta`/
+`_despilled` once each per pixel — the exact technique `SpriteSheetSlicer
+.chroma_keyed`, `IllustratedMushroomSprite`, `IllustratedAnimalSprite` and
+`IllustratedStoneSprite` had each already been fixed out of (see the "Still
+at 1fps" investigation above). This file was a never-migrated duplicate.
+
+Rewritten as single inlined passes with INTEGER thresholds — every value
+read out of a `PackedByteArray` already is an integer, so `r >= 140.25`
+means exactly `r >= 141`, and `cast > 7.65` means exactly `cast >= 8`.
+`_prepared_for_slicing` **458ms —> 180ms**, whole sheet load
+**987ms —> 691ms**.
+
+Pinned COMPARATIVELY, not by an absolute ceiling: the test races the real
+implementation against a naive reference in the same process on the same
+image, and asserts they produce byte-identical output. The first attempt
+used an absolute 200ms budget calibrated from the real 180ms measurement,
+and it went red at 221ms the first time it ran on a loaded box with nothing
+changed. A timing pin that fails on a busy runner teaches people to ignore
+it, so the pin now measures the code rather than the machine.
+
+### ⬜ A second per-pixel change was tried, measured, and reverted (`sprite_sheet_slicer.gd`)
+
+`chroma_keyed`'s own doc comment tells every illustrated-art class in this
+codebase that a `PackedByteArray` loop beats `get_pixel`/`set_pixel`. A
+"read the bytes, write with `set_pixel`" hybrid looked like a strict
+improvement when measured on one real sheet: 186ms, against the shipped
+byte-array version's 226ms and a naive loop's 201ms. `IllustratedBirdSprite
+._keyed_image` was de-duplicated onto it at the same time.
+
+Sweeping the background fraction afterwards showed that was not the win it
+appeared to be. The hybrid is ~2x faster where most pixels MISS the key and
+take the early-out, and genuinely SLOWER where most pixels match and take
+the write path (337ms against a naive 275ms at 100% background). The
+crossover sits near 46% background — roughly where real illustrated sheets
+live — so the single real-sheet measurement that motivated the change was
+sitting inside the noise around break-even rather than above it.
+
+Both the hybrid and the bird de-duplication are reverted. `chroma_keyed` is
+shared by nine classes, and a change whose benefit depends on which side of
+break-even a given sheet falls does not earn that blast radius. The finding
+is recorded in `concept/character_creator_preview_scene.md` because the next
+person to read that doc comment deserves to know it is only half true.
+
+### ✅ 72 ground tiles, 9 textures (`character_preview_diorama.gd`)
+
+The ground plane is 12x6 tiles drawn from a sheet holding 9 variants, and
+`frame_for` returns the same cached `Image` object for every seed picking a
+given variant — so one `ImageTexture` per tile was uploading the same
+handful of 32x32 images eight times over. Keyed on that object's identity
+instead. The test bounds itself against the sheet's own real frame count
+(a new `IllustratedTerrainSprite.frame_count_for`), and requires MORE than
+one texture, so a future bug flattening the whole ground onto a single
+variant fails rather than reading as a great cache hit rate.
+
+### Measured end to end
+
+Three runs of each on one machine, base commit vs. branch, `build()` called
+for four successive seeds in one process:
+
+| `build()` | before | after |
+| --- | --- | --- |
+| cold (first ever) | ~4478ms | ~3999ms |
+| second seed | ~1503ms | ~1282ms |
+| third seed | ~556ms | ~324ms |
+| steady-state rebuild | ~252ms | **~39ms** |
+
+Honestly: the cold number moves least, because most of a first build is
+still per-species sheet loading that happens once per process no matter who
+triggers it (the real world would pay it later anyway). What changed for a
+player is the other two things — that cost no longer freezes the window,
+and a DNA reroll went from a quarter-second stutter to a single frame.
+
+### Still open
+
+The skill web (`_build_skills_tab`) is still built fully synchronously, and
+is still the one remaining un-yield-split cost the sixth pass named — ~250ms
+in `_build_create_screen`, far smaller than the diorama was, but not zero.
+The OTHER illustrated-sprite classes that carry their own copy of the
+naive `_prepared_for_slicing` loop (`illustrated_beehive_sprite.gd`,
+`illustrated_caterpillar_sprite.gd`, `illustrated_bee_sprite.gd`,
+`illustrated_worm_sprite.gd`, `illustrated_ant_mound_sprite.gd`,
+`illustrated_grass_frog_sprite.gd`, `intro_splash_sheet.gd`,
+`illustrated_millipede_sprite.gd`, `illustrated_structure_sprite.gd`) were
+NOT migrated by this pass — none of them is in the character creator's own
+path, and each needs its own budgeted pin and its own pixel-parity test to
+migrate honestly rather than by search-and-replace.
+
+TDD throughout, red first. New tests: `test_illustrated_grass_patch.gd` +2
+(shared atlas identity, and that seasons still differ),
+`test_character_preview_diorama.gd` +5 (build_async scene parity against
+the synchronous build, progress 0—>total, at least one frame per step,
+per-item yielding for flowers/birds/butterflies, ground texture sharing),
+`test_main_menu.gd` +4 (the synchronous build leaves the scene unbuilt,
+`_ensure_create_screen_built` finishes it, the overlay reports diorama
+progress, and a reroll still rebuilds inline),
+`test_illustrated_terrain_sprite.gd` +3 (a comparative speed-and-parity
+race against the naive loop, a per-frame scrub pin, and a pixel-level
+key/despill/leave-alone parity test).
+
+Three existing `test_main_menu.gd` navigation tests were changed from a
+hardcoded `wait_process_frames(10)` to waiting on the real condition
+(`_creator_is_open`): that margin was already a guess at one yield-split
+pass's length, and adding a second one made it stale.
 
 ## A villager stops being scenery: the ethogram they never had (`concept/npc_social_life.md`, 2026-09-17)
 

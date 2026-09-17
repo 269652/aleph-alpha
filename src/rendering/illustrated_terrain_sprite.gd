@@ -196,6 +196,15 @@ func frame_for(biome_name: String, seed_value: int) -> Image:
 	return frames[index]
 
 
+## How many distinct variant frames `biome_name`'s sheet actually holds (0
+## for a biome with no sheet). Public so callers that build one node per
+## tile can bound their own texture reuse against the real art rather than
+## a hardcoded count -- see CharacterPreviewDiorama._build_ground, whose 72
+## ground tiles share one texture per variant.
+func frame_count_for(biome_name: String) -> int:
+	return _frames_for(biome_name).size()
+
+
 func _frames_for(biome_name: String) -> Array:
 	if not has_variants(biome_name):
 		return []
@@ -247,14 +256,40 @@ func _load_frames_from(biome_name: String) -> Array:
 ## see IllustratedStoneSprite._scrub_magenta_fringe's own doc comment for why
 ## this two-pass (pure-magenta-as-background, softer-cast-as-despill) shape
 ## is needed even once the source sheet has already been despilled.
+## One pass over the frame's own raw PackedByteArray, with the magenta test
+## and the despill BOTH inlined -- see _prepared_for_slicing below for the
+## full reasoning and the measurement behind it. Pinned by
+## test_scrub_magenta_fringe_completes_quickly_at_real_frame_resolution.
 func _scrub_magenta_fringe(image: Image) -> void:
-	for y in image.get_height():
-		for x in image.get_width():
-			var pixel := image.get_pixel(x, y)
-			if _is_magenta(pixel):
-				image.set_pixel(x, y, Color(0, 0, 0, 0))
-			else:
-				image.set_pixel(x, y, _despilled(pixel))
+	var width := image.get_width()
+	var height := image.get_height()
+	var data := image.get_data()
+	var red_min_byte := MAGENTA_RED_MIN * 255.0
+	var blue_min_byte := MAGENTA_BLUE_MIN * 255.0
+	var skew_min_byte := MAGENTA_SKEW_MIN * 255.0
+	var cast_margin_byte := MAGENTA_CAST_MARGIN * 255.0
+	var i := 0
+	for _pixel in width * height:
+		var r := float(data[i])
+		var g := float(data[i + 1])
+		var b := float(data[i + 2])
+		if r >= red_min_byte and b >= blue_min_byte and (r + b) * 0.5 - g >= skew_min_byte:
+			data[i] = 0
+			data[i + 1] = 0
+			data[i + 2] = 0
+			data[i + 3] = 0
+		else:
+			var cast: float = minf(r - g, b - g)
+			if cast > cast_margin_byte:
+				var removed := cast - cast_margin_byte
+				data[i] = clampi(roundi(r - removed), 0, 255)
+				data[i + 2] = clampi(roundi(b - removed), 0, 255)
+		i += 4
+	# set_data, not create_from_data: callers hold this exact Image (see
+	# _load_frames_from, which scrubs each already-sliced frame in place and
+	# appends THAT object), so handing back a new one would silently drop
+	# the scrub.
+	image.set_data(width, height, false, Image.FORMAT_RGBA8, data)
 
 
 ## Makes a sheet's background genuinely transparent before it reaches
@@ -270,14 +305,68 @@ func _prepared_for_slicing(image: Image) -> Image:
 		prepared.convert(Image.FORMAT_RGBA8)
 	if had_alpha_channel:
 		return prepared
-	for y in prepared.get_height():
-		for x in prepared.get_width():
-			var pixel := prepared.get_pixel(x, y)
-			if _is_magenta(pixel):
-				prepared.set_pixel(x, y, Color(pixel.r, pixel.g, pixel.b, 0.0))
-			else:
-				prepared.set_pixel(x, y, _despilled(pixel))
-	return prepared
+	# One pass over the raw PackedByteArray with BOTH per-pixel checks
+	# inlined -- no call to _is_magenta/_despilled in the loop body, only
+	# built-in global functions (minf/clampi/roundi). This is the same fix,
+	# for the same reason, that SpriteSheetSlicer.chroma_keyed and
+	# IllustratedStoneSprite._prepared_for_slicing already carry: the
+	# bottleneck is GDScript's own per-call overhead for a user-defined
+	# function, which a 1254x1254 loop pays 1.57M times, NOT get_pixel
+	# itself (see SpriteSheetSlicer.chroma_keyed's own doc comment for the
+	# measured three-way comparison that established this).
+	#
+	# This file was a separate, never-fixed duplicate of that exact naive
+	# technique -- measured at ~458ms of the grassland sheet's own ~987ms
+	# first load, which the character creator pays on its first open
+	# because its diorama stands on real grassland ground (see docs/concept/
+	# character_creator_preview_scene.md's "Load cost" section). Pinned by
+	# test_prepared_for_slicing_completes_quickly_at_real_sheet_resolution.
+	#
+	# The per-pixel semantics are _is_magenta/_despilled's, byte-for-byte:
+	# both sides of every comparison are scaled by the same 255, so the
+	# 0-255 integer compare means exactly what the original 0.0-1.0 float
+	# one did. Note the SKEW test rather than a per-channel green maximum --
+	# that is this class's own magenta rule (see MAGENTA_SKEW_MIN), and why
+	# IllustratedStoneSprite's otherwise-identical loop could not simply be
+	# copied here.
+	var width := prepared.get_width()
+	var height := prepared.get_height()
+	var data := prepared.get_data()
+	# INTEGER thresholds, because every value read out of a PackedByteArray
+	# already is one: `r >= 140.25` over integers means exactly `r >= 141`,
+	# i.e. ceili, and `cast > 7.65` means exactly `cast >= 8`, i.e.
+	# floori + 1. Converting the thresholds once up here rather than
+	# converting three bytes to float 1.57M times down there is worth a
+	# real, measured chunk of this loop (see the budgeted pin).
+	var red_min_byte := ceili(MAGENTA_RED_MIN * 255.0)
+	var blue_min_byte := ceili(MAGENTA_BLUE_MIN * 255.0)
+	# The skew test is (r + b) / 2 - g >= SKEW_MIN; doubled through, it is
+	# r + b - 2g >= 2 * SKEW_MIN, which keeps the whole comparison in ints.
+	var double_skew_min_byte := ceili(MAGENTA_SKEW_MIN * 2.0 * 255.0)
+	var cast_margin_byte := MAGENTA_CAST_MARGIN * 255.0
+	var min_cast_byte := floori(cast_margin_byte) + 1
+	var i := 0
+	for _pixel in width * height:
+		var r: int = data[i]
+		var g: int = data[i + 1]
+		var b: int = data[i + 2]
+		if r >= red_min_byte and b >= blue_min_byte and r + b - 2 * g >= double_skew_min_byte:
+			# Alpha only -- RGB is deliberately left intact, matching the
+			# Color(pixel.r, pixel.g, pixel.b, 0.0) this replaces (unlike
+			# _scrub_magenta_fringe above, which zeroes all four).
+			data[i + 3] = 0
+		else:
+			var cast := mini(r - g, b - g)
+			if cast >= min_cast_byte:
+				# Floats again here, and only here: this branch is cold
+				# (real ground has no magenta cast on most of its pixels)
+				# and the rounding has to land exactly where the original
+				# Color-based despill's own float math did.
+				var removed := float(cast) - cast_margin_byte
+				data[i] = clampi(roundi(float(r) - removed), 0, 255)
+				data[i + 2] = clampi(roundi(float(b) - removed), 0, 255)
+		i += 4
+	return Image.create_from_data(width, height, false, Image.FORMAT_RGBA8, data)
 
 
 ## `color` with any magenta-direction cast removed -- see

@@ -1151,3 +1151,102 @@ func test_tying_a_growth_plot_back_to_the_street_costs_the_village_no_frontage()
 				offered += 1
 	assert_eq(asked, 160, "precondition: the same 40 seeds x four village sizes measured above")
 	assert_eq(offered, asked, "a village that had frontage before the spur still has it")
+
+
+# -- a short gap in a street is not a gap, it is a street -------------------
+#
+# Asked for directly, with the broken stretch in shot: "When there's only a
+# free gap of 1-2 tiles between two street tiles it should close the gap
+# between them". The founding layout paves only between its own doorsteps,
+# so a street row comes out as paved stretches with holes punched through
+# it -- and a one-tile hole in a road reads as a mistake, not as a junction.
+
+
+func test_a_one_tile_hole_between_two_paved_cells_is_closed():
+	var paved := {Vector2i(2, 5): true, Vector2i(4, 5): true}
+	var cells := VillageLayout.short_street_gap_cells(
+		func(cell: Vector2i) -> bool: return paved.has(cell),
+		func(_cell: Vector2i) -> bool: return true,
+		10, 5, VillageLayout.STREET_GAP_CLOSE_TILES
+	)
+	assert_eq(cells, [Vector2i(3, 5)])
+
+
+func test_a_two_tile_hole_is_closed_as_well():
+	var paved := {Vector2i(1, 5): true, Vector2i(4, 5): true}
+	var cells := VillageLayout.short_street_gap_cells(
+		func(cell: Vector2i) -> bool: return paved.has(cell),
+		func(_cell: Vector2i) -> bool: return true,
+		10, 5, VillageLayout.STREET_GAP_CLOSE_TILES
+	)
+	assert_eq(cells, [Vector2i(2, 5), Vector2i(3, 5)])
+
+
+## Three is a real break in the street, not a hole in one -- the village
+## genuinely does not pave there and closing it would invent a road.
+func test_a_longer_break_is_left_exactly_as_it_is():
+	var paved := {Vector2i(1, 5): true, Vector2i(5, 5): true}
+	var cells := VillageLayout.short_street_gap_cells(
+		func(cell: Vector2i) -> bool: return paved.has(cell),
+		func(_cell: Vector2i) -> bool: return true,
+		10, 5, VillageLayout.STREET_GAP_CLOSE_TILES
+	)
+	assert_eq(cells, [])
+
+
+## A run that reaches the edge of the chunk is not BETWEEN two street tiles
+## -- there is nothing on the far side of it to join.
+func test_an_open_end_is_not_a_gap():
+	var paved := {Vector2i(2, 5): true}
+	var cells := VillageLayout.short_street_gap_cells(
+		func(cell: Vector2i) -> bool: return paved.has(cell),
+		func(_cell: Vector2i) -> bool: return true,
+		10, 5, VillageLayout.STREET_GAP_CLOSE_TILES
+	)
+	assert_eq(cells, [])
+
+
+## FREE, as asked. A gap with a house or a rock standing in it is not a hole
+## in the road; paving it would pave over whatever is there.
+func test_a_gap_that_is_not_free_is_left_alone():
+	var paved := {Vector2i(1, 5): true, Vector2i(4, 5): true}
+	var cells := VillageLayout.short_street_gap_cells(
+		func(cell: Vector2i) -> bool: return paved.has(cell),
+		func(cell: Vector2i) -> bool: return cell != Vector2i(3, 5),
+		10, 5, VillageLayout.STREET_GAP_CLOSE_TILES
+	)
+	assert_eq(cells, [], "a gap is closed whole or not at all")
+
+
+## Every street row of the village, not just the first.
+func test_gaps_are_closed_on_every_street_row():
+	var street_y := 4
+	var second := street_y + VillageLayout.STREET_PITCH_TILES
+	var paved := {
+		Vector2i(1, street_y): true, Vector2i(3, street_y): true,
+		Vector2i(6, second): true, Vector2i(8, second): true,
+	}
+	var cells := VillageLayout.short_street_gap_cells(
+		func(cell: Vector2i) -> bool: return paved.has(cell),
+		func(_cell: Vector2i) -> bool: return true,
+		20, street_y, VillageLayout.STREET_GAP_CLOSE_TILES
+	)
+	assert_true(cells.has(Vector2i(2, street_y)), "the first street row")
+	assert_true(cells.has(Vector2i(7, second)), "the next street row down")
+
+
+## Nothing off a street row is ever paved by this -- it closes streets, it
+## does not lay new ones.
+func test_a_hole_off_a_street_row_is_not_a_street_gap():
+	var paved := {Vector2i(1, 6): true, Vector2i(3, 6): true}
+	var cells := VillageLayout.short_street_gap_cells(
+		func(cell: Vector2i) -> bool: return paved.has(cell),
+		func(_cell: Vector2i) -> bool: return true,
+		10, 5, VillageLayout.STREET_GAP_CLOSE_TILES
+	)
+	assert_eq(cells, [])
+
+
+## The size the report named, pinned rather than left as a comment.
+func test_the_gap_a_village_closes_is_the_one_that_was_asked_for():
+	assert_eq(VillageLayout.STREET_GAP_CLOSE_TILES, 2, "\"a free gap of 1-2 tiles\"")

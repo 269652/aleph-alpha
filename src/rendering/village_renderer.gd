@@ -260,6 +260,12 @@ func spawn_village(
 	# because a personal workspot prop is grounded against what is already
 	# built (see _grounded_position): fencing afterwards would drop rails
 	# through a farmer's own field prop and a blacksmith's forge.
+	# After every last cell of paving is down -- a farmhouse paves its own
+	# doorstep as it is placed, and that is exactly what turns a long break
+	# in a street row into a short one -- and before the first rail, so a
+	# hole that becomes paving is a gate rather than somewhere a fence is
+	# then laid across the road.
+	_close_short_street_gaps(chunk_coord, chunk_size, world)
 	var farm_fields := _fenced_farm_fields(chunk_coord, chunk_size, world)
 	for landmark_id in settlement.landmarks:
 		spawned.append(_build_landmark(landmark_id, settlement.landmarks[landmark_id], parent))
@@ -541,6 +547,41 @@ func _is_street_row(chunk_coord: Vector2i, chunk_size: int, world, y: int) -> bo
 	return y >= street_y and (y - street_y) % VillageLayout.STREET_PITCH_TILES == 0
 
 
+## Paves over the short holes this village leaves in its own street rows
+## (see VillageLayout.short_street_gap_cells). Asked for directly, with the
+## broken stretch in shot: *"When there's only a free gap of 1-2 tiles
+## between two street tiles it should close the gap between them"* -- the
+## founding layout paves only between the doorsteps it actually joined, so
+## every real village came out with a one-tile hole punched through its own
+## street.
+##
+## Run AFTER every last cell of paving is down -- the works, the hall, and
+## each farmhouse's own doorstep, which is laid as that farmhouse is placed
+## and is exactly what turns a long break in a street row into a short one
+## -- and BEFORE the first rail, so a field's frame is decided against the
+## finished street: a hole that becomes paving is a gate, not somewhere to
+## stand a fence across a road.
+##
+## Idempotent like everything else here: a cell already paved is no longer a
+## gap, so a reload closes the same holes and builds nothing twice.
+func _close_short_street_gaps(chunk_coord: Vector2i, chunk_size: int, world) -> void:
+	if world == null or not world.has_method("build_at_global"):
+		return
+	var is_buildable := _is_buildable_local(chunk_coord, chunk_size, world)
+	var is_occupied := _is_occupied_local(chunk_coord, chunk_size, world)
+	var is_free := func(cell: Vector2i) -> bool:
+		return is_buildable.call(cell) and not is_occupied.call(cell)
+	var street_y: int = VillageLayout.skeleton(
+		chunk_size, VillageLayout.seed_for(chunk_coord), is_buildable
+	)["street_y"]
+	for cell in VillageLayout.short_street_gap_cells(
+		_is_paved_local(chunk_coord, chunk_size, world), is_free,
+		chunk_size, street_y, VillageLayout.STREET_GAP_CLOSE_TILES
+	):
+		var g: Vector2i = chunk_coord * chunk_size + cell
+		world.build_at_global(g.x, g.y, TerrainRenderer.ROAD_TILE_ID)
+
+
 ## Every farmhouse's own field, worked out and FENCED (docs/concept/
 ## village_farms.md): `{origin -> the global cells that farmhouse works}`,
 ## in the same (y, x) order _farmhouse_origins returns.
@@ -631,8 +672,18 @@ func _fence_the_fields(
 				continue  # the neighbouring farm's crop, not this farm's fence line
 			if not is_buildable.call(cell) or is_occupied.call(cell):
 				continue  # water, a building, or paving -- the paving being the gate
-			if _is_street_row(chunk_coord, chunk_size, world, cell.y):
-				continue  # an unpaved gap in a street row is still street
+			# Deliberately NOT skipped for standing on a street ROW, the way
+			# a BED is (_workable_field_of). Reported with the bed circled:
+			# "it's still not fully enclosing the bed" -- a field sits below
+			# the house it belongs to, so one whole side of its frame lands
+			# on the next street row, and measured on real villages
+			# (tools/probe_village_map.gd) most of those cells carry no
+			# paving at all: a 3-wide gap under a field with the frame
+			# closed on every other side. An unpaved gap is not a gate, and
+			# a rail along the edge of a road is a fence beside a road. The
+			# gate is the PAVING, which is_occupied already leaves open
+			# above. Sowing in a street row stays forbidden: a crop in the
+			# roadway is the thing that rule was really about.
 			# The rail's own tile id carries which side of the field it
 			# closes, so the sheet's four orientation columns still draw
 			# correctly on a reload that remembers nothing else about it.

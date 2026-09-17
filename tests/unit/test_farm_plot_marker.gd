@@ -203,3 +203,48 @@ func test_a_withered_wheat_plot_still_renders_blades_tinted_the_same_withered_co
 	marker.advance(marker.plot.growth_time * FarmPlot.WATER_GRACE_FRACTION + 0.01)
 	assert_eq(marker.plot.state, "withered")
 	assert_true(marker.is_rendering_bending_wheat())
+
+
+# -- a wheat bed is wheat, not a mound -------------------------------------
+#
+# Reported with the beds circled: "what's the round procedural dark blob?
+# Can you remove it and keep just the wheat please". ProceduralSoilSprite's
+# mound sits under every plot. Under a ROOT crop it is the crop's own
+# ground -- the root is in the mound, and a pulled root leaves a crater in
+# it -- but under a field of bending wheat it is just a dark circle, six of
+# them in a 3x2 bed.
+
+
+func test_a_wheat_plot_shows_no_soil_mound_at_all():
+	add_child_autofree(marker)
+	marker.till_and_plant("wheat", 42)
+	assert_false(marker.is_showing_soil(), "a wheat bed reads as wheat, not as a blob")
+
+
+## Including once it has been cut: a harvested bed keeps its crop_id, and a
+## bare mound appearing the moment the wheat comes off would be the same
+## blob back again.
+func test_a_harvested_wheat_bed_still_shows_no_mound():
+	add_child_autofree(marker)
+	marker.till_and_plant("wheat", 42)
+	_grow_to_ready(marker)
+	marker.harvest()
+	assert_eq(marker.plot.state, "empty")
+	assert_false(marker.is_showing_soil())
+
+
+## And the crops the mound was actually drawn for keep it.
+func test_a_root_crop_keeps_the_mound_its_root_grows_in():
+	add_child_autofree(marker)
+	marker.till_and_plant("carrot", 7)
+	assert_true(marker.is_showing_soil(), "a carrot's root is IN the mound")
+
+
+func test_replanting_wheat_over_a_root_crop_takes_the_mound_away_again():
+	add_child_autofree(marker)
+	marker.till_and_plant("carrot", 7)
+	assert_true(marker.is_showing_soil())
+	_grow_to_ready(marker)
+	marker.harvest()
+	marker.till_and_plant("wheat", 42)
+	assert_false(marker.is_showing_soil(), "stale soil left behind the new crop")
