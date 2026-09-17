@@ -173,3 +173,60 @@ func test_omitting_the_population_still_founds_the_original_roster():
 	assert_eq(
 		generator.generate_settlement(coord, coord * 32, 32, 16).npcs.size(), SettlementGenerator.POPULATION
 	)
+
+
+# -- every village has somebody who farms -----------------------------------
+
+const VillageFarm = preload("res://src/gameplay/village_farm.gd")
+
+
+## Reported live with the village in shot: "No Farmhouses".
+##
+## The siting was working the whole time. Measured across real settlement
+## chunks (tools/probe_village_contents.gd): every village that WANTED a
+## farmhouse and could be founded at all got exactly one. What was missing
+## was anybody to want it -- occupations are drawn uniformly from nine, and
+## five villagers miss both farmer and herbalist often enough that two of
+## three founded villages had neither.
+##
+## A pre-industrial village that nobody farms in is not a village; it is what
+## the surrounding fields are FOR. So a roster that rolled no food producer
+## gets one.
+func test_every_village_has_somebody_who_farms():
+	var checked := 0
+	for i in 40:
+		var coord := Vector2i(600 + i, 140 + (i % 7))
+		var settlement := generator.generate_settlement(coord, coord * CHUNK_SIZE, CHUNK_SIZE, TILE_SIZE)
+		var farmers := 0
+		for npc in settlement.npcs:
+			if VillageFarm.crop_for(npc.occupation) != "":
+				farmers += 1
+		assert_gt(farmers, 0, "the village at %s has nobody who farms" % str(coord))
+		checked += 1
+	assert_eq(checked, 40, "precondition: every sampled chunk really produced a roster")
+
+
+## Only the rosters that needed it, though -- a village that already rolled a
+## farmer or a herbalist keeps exactly the villagers it rolled, so this
+## cannot quietly turn every settlement into farmers.
+func test_a_village_that_already_farms_is_left_alone():
+	var touched := 0
+	for i in 40:
+		var coord := Vector2i(700 + i, 150 + (i % 5))
+		var settlement := generator.generate_settlement(coord, coord * CHUNK_SIZE, CHUNK_SIZE, TILE_SIZE)
+		var occupations := {}
+		for npc in settlement.npcs:
+			occupations[npc.occupation] = int(occupations.get(npc.occupation, 0)) + 1
+		var food := int(occupations.get("farmer", 0)) + int(occupations.get("herbalist", 0))
+		if food > 1:
+			touched += 1
+	assert_gt(touched, 0, "some villages should still roll more than one food producer of their own")
+
+
+func test_the_roster_is_still_deterministic_for_a_chunk():
+	var coord := Vector2i(613, 141)
+	var first := generator.generate_settlement(coord, coord * CHUNK_SIZE, CHUNK_SIZE, TILE_SIZE)
+	var second := generator.generate_settlement(coord, coord * CHUNK_SIZE, CHUNK_SIZE, TILE_SIZE)
+	for i in first.npcs.size():
+		assert_eq(first.npcs[i].occupation, second.npcs[i].occupation)
+		assert_eq(first.npcs[i].npc_name, second.npcs[i].npc_name)

@@ -156,11 +156,20 @@ var allocated_nodes: Dictionary
 var carpentry_level: float
 
 
-func _init(a_seed_value: int) -> void:
+## `forced_occupation` overrides the one this seed would have rolled, for a
+## caller that has to guarantee a trade exists somewhere -- see
+## SettlementGenerator's own "a village that nobody farms in is not a
+## village". Everything downstream (archetype, skill allocation, the house
+## the catalog picks) is derived BELOW this line, so a forced trade is a
+## real villager of that trade rather than a relabelled one.
+func _init(a_seed_value: int, forced_occupation: String = "") -> void:
 	seed_value = a_seed_value
 	npc_name = _NAME_FIRST[_index(seed_value, "name_first", _NAME_FIRST.size())] + \
 		_NAME_SECOND[_index(seed_value, "name_second", _NAME_SECOND.size())]
-	occupation = OCCUPATIONS[_index(seed_value, "occupation", OCCUPATIONS.size())]
+	occupation = (
+		forced_occupation if OCCUPATIONS.has(forced_occupation)
+		else OCCUPATIONS[_index(seed_value, "occupation", OCCUPATIONS.size())]
+	)
 	genome = NpcGenome.new(seed_value, PERSONALITY_TRAITS)
 	personality_trait = genome.dominant_trait()
 	need = NEEDS[_index(seed_value, "need", NEEDS.size())]

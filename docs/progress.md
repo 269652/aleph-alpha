@@ -25312,7 +25312,144 @@ Tests: `test_wage_payment.gd` 6/6 (new), `test_world_planner_mode_wiring.gd`
 +4, 145/145 across the planner, wage, wallet, hiring, construction-store and
 catchup suites — zero regressions. `world.gd` confirmed to compile.
 
-### The building sheets' rows were cropped off the rows the art is drawn on (see `docs/concept/building.md` "Building sheets", 2026-09-17)
+## A herbalist's bed grows, withers and is harvested invisibly (`concept/village_farms.md`, 2026-09-17)
+
+Reported live with the field in shot: *"it plows the soil but then the soil
+mound sprites don't appear and nothing gets planted, nothing grows and
+nothing gets harvested"*.
+
+**Measured before anything was touched** (`tools/probe_village_farming.gd`,
+a real village east of Berlin, driven through a real stretch of work):
+every part of it *was* happening.
+
+```
+FARMER occupation=herbalist crop=herb cells=6
+  CELL (21710, 4118) state=growing crop=herb sown=herb grown=29.5/57.2 soil_visible=true leaves_visible=true blades=0
+  CELL (21709, 4118) state=withered ...
+  village market stock={ "herb": 8.0 }
+```
+
+Beds sown, crops grown, beds withered, 8 real herbs banked into the village
+market — and not one of them ever drawn. `IllustratedCropSprite` has sheets
+for **carrot and potato only**, so `leaf_texture("herb", ...)` returned null
+and `FarmPlotMarker` put a **visible** `Sprite2D` carrying **no texture**
+over a full tile of bare tilled earth. A visible sprite with a null texture
+draws nothing while claiming to draw something; from the player's side that
+is indistinguishable from a broken farming loop. `village_farms.md` had
+carried this as an honest gap ("A herb plot renders as bare tilled soil").
+
+✅ **`ProceduralHerbSprite`.** An upright culinary herb — stem, leaf pairs
+climbing it, side shoots as it matures, a flowering tip when ripe — in
+`ProceduralLandmarkSprite`'s own `HERB_COLOR`, so a herbalist's bed and a
+herbalist's `garden` workspot prop read as the same plant rather than two.
+Hand-drawn in the same offline-art style as `ProceduralSoilSprite`, behind
+`IllustratedCropSprite.has_crop()`, so real art replaces it later with no
+marker change. Its three stages are the same three
+`IllustratedCropSprite.growth_stage_index` already maps onto, and its world
+width is `LEAF_WORLD_SIZE` itself — a herb bed and a carrot bed at two
+scales would be the "huge potato crops" bug again.
+
+✅ **The cross-pin is the real fix.**
+`test_every_crop_a_village_farm_sows_really_draws_something` runs off
+`VillageFarm.CROP_BY_OCCUPATION` itself, so a NEW crop a village can sow but
+a bed cannot draw fails there rather than in somebody's screenshot. A crop
+with neither illustrated nor procedural art now leaves the sprite **hidden**
+rather than visible-and-textureless, and `FarmPlotMarker.is_drawing_a_crop`
+asks "is there really art on screen", not "is the node visible".
+
+Also answered, since it was reported in the same sentence: the **soil mound
+is gone on purpose**, not missing. It was removed after three separate
+reports about "the brown blob", once real illustrated tilled earth covered
+the whole tile under every bed — `is_showing_soil()` is kept as a named,
+tested fact that no bed ever draws one.
+
+Tests: `test_procedural_herb_sprite.gd` 10/10 (new),
+`test_farm_plot_marker.gd` 34/34, `test_illustrated_crop_sprite.gd`,
+`test_earth_chunk_manager_farm_plots.gd`, `test_player_farming.gd` — 88/88
+across the five.
+
+## The market moves onto the market square (`concept/village_market_square.md`, 2026-09-17)
+
+Reported live with a stand in shot, pitched in long grass well off the
+paving: *"the market stands should only be put up when an NPC stands behind
+them to sell goods ... also the stand should clear long grass around it and
+be placed on the plaza anyways"*.
+
+Both halves were one bug. A merchant's stand was pitched two tiles south of
+that merchant's own front door — and **nobody ever stood behind one**,
+because `NpcMarker._resolve_location` sends every merchant to
+`landmarks["stall"]`, the square's single stall. A stand a player walked
+past was decoration by construction.
+
+✅ **`VillageLayout.market_stand_cells`.** Stands walk west from the
+square's own stall along the plaza's southern row, two tiles apart so two
+stands never read as one long counter. The square's stall is always the
+**first** of them, so the one trading spot a schedule can name by tag is a
+stand somebody works. Returns what fits; a village with no square gets none.
+
+✅ **A stand is up only while its trader is behind it.**
+`NpcMarker.stand_is_up(is_working, distance, reach)` — on the clock AND
+within a tile — driven from the marker, which is the only thing that knows
+where its trader is standing this frame. No group scan, one distance check
+per merchant. Taken in the moment it is handed over, so a village loading at
+night never flashes its market up for a frame.
+
+✅ **One trader, one stand.** Merchant *i* gets stand *i* and a **copy** of
+the landmark dictionary with `stall` pointing at it — overriding the shared
+one in place would send every villager in the village to one trestle.
+
+✅ **The long grass is gone because the square is paved**, with no second
+mechanism to keep in step: paving is a built surface
+(`EarthChunkManager._is_built_surface`) and every ground-cover sim already
+clears and keeps clearing one. `_market_stand_positions` filters planned
+cells against what is *really* paved, so a village whose square never got
+laid pitches no market rather than stands on bare ground.
+
+Four tests were **superseded and rewritten rather than deleted**, each
+saying what replaced it: the two that pinned "one shared stall plus one per
+merchant", the one that forbade a personal prop on paving (a market stand is
+the one that belongs there), and the flooded-square siting test. A fifth,
+`test_a_village_with_nobody_who_farms_raises_no_farmhouse`, was failing on an
+**unreachable precondition** since `_ensure_somebody_farms` landed — it hunted
+the map for a village that rolled nobody who farms, and there is no longer
+one. It now drives `_place_farms_if_missing` against a hand-built roster, so
+the rule stays pinned instead of silently not running.
+
+Tests: `test_village_layout.gd` 84/84 (+8), `test_village_renderer.gd`
+110/110 (+5 new, 5 rewritten), `test_npc_marker_market_stand.gd` 7/7 (new),
+`test_npc_marker.gd` 52/52.
+
+✅ **A trader who cannot eat still works** — a deadlock the permanent,
+unattended stall had been hiding. **Measured** with the whole settlement
+ticked (ticking one villager alone is a broken measurement, not a finding:
+nobody else gathers, so the market stays empty by construction): the stand
+was up for **5 of 1801 ticks**, and not because the siting was wrong — the
+merchant got within 6.1px of it, well inside the 16px reach. They were
+hungry for 1589 of those ticks with an empty purse, so the hunger interrupt
+overrode all 825 of their scheduled "work at the stall" ticks and sent them
+to a well with nothing on it. They never worked, never earned, and stayed
+hungry for ever.
+
+`NpcEconomy.can_obtain_a_meal` is the general form of the rule
+`npc_marker.gd`'s own comment already states — *the interrupt is for
+villagers who must BUY* — and now gates it: a meal has to be within reach
+AND payable (out of the villager's own purse, or the village's subsistence
+wage). The producer/own-field guards written for the identical hunter
+deadlock cover neither a merchant, a blacksmith, a guard nor a nurse.
+**Re-measured on the same village: 0% → 30% of the day-night cycle with the
+stand up.** The famine chain is untouched — that village is genuinely poor
+and its merchant is still hungry 1589/1801, but now hungry *at work*.
+
+Four hunger tests in `test_npc_marker.gd` built an EMPTY `VillageMarket` and
+then asserted the villager walks to the well. Their intent ("a villager who
+must buy goes and buys") is right and kept; the empty stall was incidental,
+so they now stock it — see `_stock_the_stall`.
+
+Tests: `test_npc_economy.gd` 80/80 (+5), `test_npc_marker_market_stand.gd`
+9/9 (+2), `test_npc_marker.gd` 52/52, and 352/352 across the seven marker,
+economy, schedule, renderer and layout suites.
+
+## The building sheets' rows were cropped off the rows the art is drawn on (see `docs/concept/building.md` "Building sheets", 2026-09-17)
 
 Reported in play: *"The warehouse has the rows cropped wrongly and its
 scale as well. should be only 3 tiles wide not 4."*

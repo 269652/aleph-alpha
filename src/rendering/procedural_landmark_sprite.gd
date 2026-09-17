@@ -19,7 +19,12 @@ const LANDMARK_IDS: Array[String] = [
 
 const SIZES := {
 	"well": Vector2i(40, 44),
-	"stall": Vector2i(52, 44),
+	# Two tiles wide: a market stall is a table under an awning, about as
+	# wide as a small room. It was 52 -- 3.25 tiles on a 16-pixel grid, wider
+	# than the cottages it sells in front of. Reported live with the village
+	# in shot: "the stands are way too big". Height follows the same aspect
+	# the art was drawn at, so nothing is squashed to fit.
+	"stall": Vector2i(32, 27),
 	"gate": Vector2i(48, 52),
 	"field": Vector2i(48, 40),
 	"forge": Vector2i(44, 44),

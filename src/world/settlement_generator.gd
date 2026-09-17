@@ -15,6 +15,7 @@ extends RefCounted
 ## roughly on the anchor. This module only decides WHERE that anchor sits,
 ## not what gets built there.
 
+const VillageFarm = preload("res://src/gameplay/village_farm.gd")
 const NpcIdentity = preload("res://src/world/npc_identity.gd")
 const VillageLayout = preload("res://src/world/village_layout.gd")
 const BuildingCatalog = preload("res://src/gameplay/building_catalog.gd")
@@ -27,6 +28,10 @@ const BuildingCatalog = preload("res://src/gameplay/building_catalog.gd")
 ## the population is, so growing a village never shifts who its founders
 ## are (test-pinned, test_settlement_generator.gd).
 const POPULATION := 5
+
+## The trade a village falls back on when its roster rolled nobody who works
+## the land -- see _ensure_somebody_farms.
+const FARMING_TRADE := "farmer"
 
 ## Roughly 1-in-this-many habitable chunks hosts a settlement -- sparse, so
 ## villages read as discoverable landmarks rather than carpeting the map.
@@ -105,7 +110,32 @@ func generate_settlement(
 		npcs.append(NpcIdentity.new(seed_value))
 		house_positions.append(_house_position(chunk_coord, center_pos, tile_size, i))
 
+	_ensure_somebody_farms(npcs)
+
 	return {"house_positions": house_positions, "landmarks": landmarks, "npcs": npcs}
+
+
+## A village that nobody farms in is not a village -- the fields around it
+## are what it is FOR.
+##
+## Occupations are drawn uniformly from nine, so five villagers miss both
+## farmer and herbalist often. Measured on real settlement chunks
+## (tools/probe_village_contents.gd): two of three founded villages had
+## neither, which is what "No Farmhouses" actually was. The farmhouse siting
+## was working the whole time -- every village that wanted one and could be
+## founded got exactly one; there was simply nobody to want it.
+##
+## Only a roster that rolled NO food producer is touched, and it is always
+## the LAST villager who takes up farming, so this is deterministic per
+## chunk and leaves every earlier villager exactly as they rolled.
+static func _ensure_somebody_farms(npcs: Array) -> void:
+	if npcs.is_empty():
+		return
+	for npc in npcs:
+		if VillageFarm.crop_for(npc.occupation) != "":
+			return
+	var last: int = npcs.size() - 1
+	npcs[last] = NpcIdentity.new(npcs[last].seed_value, FARMING_TRADE)
 
 
 ## A ring position with a small deterministic per-house radius/angle jitter

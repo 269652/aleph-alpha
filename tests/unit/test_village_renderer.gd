@@ -575,18 +575,28 @@ func test_spawn_village_does_not_crash_without_a_world():
 	assert_eq(npc_count, SettlementGenerator.POPULATION, "every villager still gets a marker, falling back to their ring anchor as home")
 
 
-func test_merchant_villagers_get_a_personal_trading_stand_near_their_own_house():
+## SUPERSEDED, and kept as a statement of what replaced it. A merchant used
+## to get a personal stand pitched two tiles south of their own front door,
+## on top of one shared village-square stall that stood there for ever
+## whether or not anybody traded. Reported live with such a stand in shot:
+## "the market stands should only be put up when an NPC stands behind them
+## to sell goods ... also the stand should ... be placed on the plaza
+## anyways". A merchant's stand is a cell OF the square now, and the
+## square's own stall is the first of them rather than a fourth thing
+## standing beside three others -- see "the market square's stands" at the
+## end of this file.
+func test_a_merchant_gets_a_stand_of_their_own_on_the_square():
 	var coord := _find_settlement_chunk_with_merchant("grassland")
 	var world := StubWorld.new()
 	var spawned := renderer.spawn_village(parent, coord, coord * CHUNK_SIZE, CHUNK_SIZE, TILE_SIZE, "grassland", world)
-	var stall_count := 0
-	for node in spawned:
-		if node.get_meta("landmark_id", "") == "stall":
-			stall_count += 1
-	assert_gte(stall_count, 2, "the shared village stall plus at least one merchant's own personal stand")
+	assert_false(_stall_nodes(spawned).is_empty(), "a village with a merchant has a market")
 
 
-func test_non_merchant_villagers_do_not_get_a_personal_trading_stand():
+## There is no longer a shared stall standing in ADDITION to the merchants'
+## own: the square's stall IS the first merchant's stand. So the count is
+## one per merchant, capped by what the square has room for -- and a village
+## nobody trades in pitches nothing at all.
+func test_a_village_pitches_one_stand_per_merchant_and_no_more():
 	var coord := _find_settlement_chunk("grassland")
 	var world := StubWorld.new()
 	var spawned := renderer.spawn_village(parent, coord, coord * CHUNK_SIZE, CHUNK_SIZE, TILE_SIZE, "grassland", world)
@@ -595,11 +605,7 @@ func test_non_merchant_villagers_do_not_get_a_personal_trading_stand():
 	for npc in settlement.npcs:
 		if npc.occupation == "merchant":
 			merchant_count += 1
-	var stall_count := 0
-	for node in spawned:
-		if node.get_meta("landmark_id", "") == "stall":
-			stall_count += 1
-	assert_eq(stall_count, 1 + merchant_count, "one shared stall plus exactly one per merchant")
+	assert_eq(_stall_nodes(spawned).size(), merchant_count, "exactly one stand per merchant")
 
 
 func test_farmer_blacksmith_fisher_and_herbalist_each_get_their_own_workspot_prop():
@@ -681,17 +687,23 @@ func test_villagers_are_given_the_world_so_they_can_tell_when_theyre_in_water():
 
 
 ## A landmark_id can legitimately tag MORE than one spawned node -- e.g.
-## "stall" is both the settlement's own shared landmark AND the tag
-## VillageRenderer gives a merchant's personal trading stand (a separate
-## node at the merchant's own stand position). So this only requires that
-## SOME node carrying the id sits at the shared landmark's position, not
-## that EVERY node carrying it does.
+## "stall" is the tag on every one of a village's market stands. So this
+## only requires that SOME node carrying the id sits at the landmark's
+## position, not that EVERY node carrying it does.
+##
+## "stall" is excluded outright: it is no longer an always-drawn landmark.
+## A market stand is furniture, up only while its trader is behind it, and a
+## village nobody trades in has none at all -- see "the market square's
+## stands" at the end of this file. Which stands exist, and where, is pinned
+## there instead.
 func test_landmarks_are_rendered_as_sprites_at_their_positions():
 	var coord := _find_settlement_chunk("grassland")
 	var world := StubWorld.new()
 	var spawned := renderer.spawn_village(parent, coord, coord * CHUNK_SIZE, CHUNK_SIZE, TILE_SIZE, "grassland", world)
 	var settlement := _generator.generate_settlement(coord, coord * CHUNK_SIZE, CHUNK_SIZE, TILE_SIZE)
 	for landmark_id in settlement.landmarks:
+		if landmark_id == "stall":
+			continue
 		var found := false
 		for node in spawned:
 			if node.get_meta("landmark_id", "") == landmark_id and node is Sprite2D:
@@ -1203,6 +1215,13 @@ func test_a_personal_workspot_prop_never_stands_on_a_road_or_a_building():
 	for node in _props_in(spawned):
 		if not bool(node.get_meta("personal", false)):
 			continue
+		# A market stand is the one personal prop that BELONGS on the
+		# paving: it is a cell of the village square (see "the market
+		# square's stands" at the end of this file, and
+		# test_a_market_stand_stands_on_the_villages_own_paving, which is
+		# this same rule the other way round for it).
+		if node.get_meta("landmark_id", "") == "stall":
+			continue
 		personal += 1
 		var tile := _tile_of(node.position)
 		var existing: String = world.modification_at_global(tile.x, tile.y)
@@ -1230,16 +1249,23 @@ func test_the_shared_landmarks_stand_on_the_villages_own_paving():
 
 ## A merchant's PERSONAL stand is the same rule -- it was the other blind
 ## offset, two tiles south of the door.
-func test_a_merchants_personal_stand_is_sited_on_real_ground():
+## A drowned square has no market to pitch, rather than stalls floating on
+## the river. Nothing is dropped silently that a player would miss: the
+## merchants are still there and still trade (their schedule keeps
+## resolving the square's own trading spot), there is simply no trestle
+## standing in the water.
+func test_a_merchants_stand_is_never_pitched_on_water():
 	var coord := _find_settlement_chunk_with_merchant("grassland")
 	var world := StubWorld.new()
 	_flood_south_of_the_street(world, coord)
 
 	var spawned := renderer.spawn_village(parent, coord, coord * CHUNK_SIZE, CHUNK_SIZE, TILE_SIZE, "grassland", world)
 
-	for node in spawned:
-		if node.has_meta("landmark_id") and node.get_meta("landmark_id") == "stall":
-			assert_false(world.water_cells.has(_tile_of(node.position)), "a stall floating on the river")
+	var drowned := 0
+	for node in _stall_nodes(spawned):
+		if world.water_cells.has(_tile_of(node.position)):
+			drowned += 1
+	assert_eq(drowned, 0, "a stall floating on the river")
 
 
 # -- a village fells the trees it needs ------------------------------------
@@ -1644,22 +1670,23 @@ func test_a_village_raises_one_farmhouse_for_every_villager_who_farms():
 	)
 
 
+## Driven against a hand-built roster rather than by hunting the map for a
+## village that happens to have rolled nobody who farms: SettlementGenerator.
+## _ensure_somebody_farms makes that precondition unreachable now (every
+## village gets somebody who works the land -- see docs/concept/
+## village_farms.md), and a test whose precondition can never be met is a
+## test that silently stops testing. The RULE it pins is still real, so it
+## is exercised where it lives.
 func test_a_village_with_nobody_who_farms_raises_no_farmhouse():
-	var coord := Vector2i.ZERO
-	var found := false
-	for x in 400:
-		var candidate := Vector2i(x, 4)
-		if not _generator.has_settlement_at(candidate, "grassland"):
-			continue
-		if _farming_villager_count(candidate) == 0:
-			coord = candidate
-			found = true
-			break
-	assert_true(found, "precondition: a settlement chunk whose whole roster happens not to farm")
-	if not found:
-		return
+	var coord := _find_settlement_chunk("grassland")
 	var world := StubWorld.new()
-	renderer.spawn_village(parent, coord, coord * CHUNK_SIZE, CHUNK_SIZE, TILE_SIZE, "grassland", world)
+	var nobody_farms: Array = [
+		NpcIdentity.new(1, "blacksmith"), NpcIdentity.new(2, "guard"),
+		NpcIdentity.new(3, "merchant"), NpcIdentity.new(4, "nurse"),
+	]
+	for npc in nobody_farms:
+		assert_eq(VillageFarm.crop_for(npc.occupation), "", "precondition: %s does not farm" % npc.occupation)
+	renderer._place_farms_if_missing(coord, CHUNK_SIZE, nobody_farms, world)
 	assert_eq(
 		_buildings_of(world, VillageFarm.FARM_BUILDING_ID).size(), 0,
 		"a farmhouse nobody would ever work is a building the village should not own"
@@ -2502,3 +2529,139 @@ func test_a_village_founded_without_a_store_is_given_one_on_reload():
 
 	renderer.spawn_village(parent, coord, coord * CHUNK_SIZE, CHUNK_SIZE, TILE_SIZE, "grassland", world)
 	assert_eq(_placed(world, "warehouse").size(), 1, "a village that lacks a store is given one")
+
+
+# -- the market square's stands -------------------------------------------
+#
+# Reported live with a stand in shot, pitched in long grass well off the
+# paving: "the market stands should only be put up when an NPC stands behind
+# them to sell goods ... also the stand should clear long grass around it
+# and be placed on the plaza anyways".
+#
+# Both halves were one bug. A merchant's personal stand was pitched two
+# tiles south of that merchant's own front door -- out in the meadow -- and
+# nobody ever stood behind it, because NpcMarker._resolve_location sends
+# every merchant to landmarks["stall"], the square's single stall. So the
+# stand a player walked past was decoration by construction.
+#
+# A market is where the market is: every stand is a cell OF the square (see
+# VillageLayout.market_stand_cells), each merchant trades at their own, and
+# a stand is up only while its merchant is behind it (NpcMarker.stand_is_up).
+
+
+func _stall_nodes(spawned: Array) -> Array:
+	var out: Array = []
+	for node in spawned:
+		if node.get_meta("landmark_id", "") == "stall":
+			out.append(node)
+	return out
+
+
+func _merchant_markers(spawned: Array) -> Array:
+	var out: Array = []
+	for node in spawned:
+		if node is NpcMarker and node.identity.occupation == "merchant":
+			out.append(node)
+	return out
+
+
+func test_every_market_stand_stands_on_the_village_square():
+	var coord := _find_settlement_chunk_with_merchant("grassland")
+	var world := StubWorld.new()
+	var spawned := renderer.spawn_village(parent, coord, coord * CHUNK_SIZE, CHUNK_SIZE, TILE_SIZE, "grassland", world)
+	var skeleton: Dictionary = VillageLayout.skeleton(CHUNK_SIZE, VillageLayout.seed_for(coord))
+	var plaza: Rect2i = skeleton["plaza"]
+	var stalls := _stall_nodes(spawned)
+	assert_false(stalls.is_empty(), "a village with a merchant has a market")
+	for node in stalls:
+		var local: Vector2i = _tile_of(node.position) - coord * CHUNK_SIZE
+		assert_true(plaza.has_point(local), "a stand at %s is off the square" % str(local))
+
+
+## ...and the square is paved, which is the whole of "clear the long grass
+## around it": every ground-cover sim in the chunk blocks a built surface
+## (EarthChunkManager._is_built_surface covers road tiles, and
+## _block_ground_cover_on_cells is what clears and keeps clearing them). A
+## stand standing on the village's own paving therefore has no tall grass,
+## flowers, scrub or lichen under it or beside it, with no second clearing
+## mechanism of its own.
+func test_a_market_stand_stands_on_the_villages_own_paving():
+	var coord := _find_settlement_chunk_with_merchant("grassland")
+	var world := StubWorld.new()
+	var spawned := renderer.spawn_village(parent, coord, coord * CHUNK_SIZE, CHUNK_SIZE, TILE_SIZE, "grassland", world)
+	var roads := _road_cells_of(world)
+	for node in _stall_nodes(spawned):
+		assert_true(
+			roads.has(_tile_of(node.position)),
+			"a stand at %s stands on bare ground, not on the square's paving" % str(_tile_of(node.position))
+		)
+
+
+func test_each_merchant_trades_at_a_stand_of_their_own():
+	var coord := _find_settlement_chunk_with_merchant("grassland")
+	var world := StubWorld.new()
+	var spawned := renderer.spawn_village(parent, coord, coord * CHUNK_SIZE, CHUNK_SIZE, TILE_SIZE, "grassland", world)
+	var seen := {}
+	for merchant in _merchant_markers(spawned):
+		assert_not_null(merchant.market_stand, "a merchant with no stand has nothing to sell from")
+		assert_eq(
+			merchant.landmarks["stall"], merchant.market_stand.position,
+			"a merchant's schedule must send them to their OWN stand"
+		)
+		assert_false(seen.has(merchant.market_stand), "two merchants behind one stand")
+		seen[merchant.market_stand] = true
+
+
+## A village nobody trades in has no market -- which is the point of the
+## whole change: a stand with nobody behind it should not be standing.
+func test_a_village_with_no_merchant_pitches_no_market_stand():
+	var coord := _find_settlement_chunk_without_merchant("grassland")
+	var world := StubWorld.new()
+	var spawned := renderer.spawn_village(parent, coord, coord * CHUNK_SIZE, CHUNK_SIZE, TILE_SIZE, "grassland", world)
+	assert_true(_stall_nodes(spawned).is_empty(), "nobody sells here, so nothing is pitched")
+
+
+## Every stand starts taken in, whatever hour the chunk loaded at -- see
+## NpcMarker.market_stand's own setter.
+func test_a_freshly_spawned_market_stand_is_taken_in():
+	var coord := _find_settlement_chunk_with_merchant("grassland")
+	var world := StubWorld.new()
+	var spawned := renderer.spawn_village(parent, coord, coord * CHUNK_SIZE, CHUNK_SIZE, TILE_SIZE, "grassland", world)
+	for node in _stall_nodes(spawned):
+		assert_false(node.visible, "a stand nobody has reached yet is not up")
+
+
+func _find_settlement_chunk_without_merchant(biome: String) -> Vector2i:
+	for x in 400:
+		var coord := Vector2i(x, 3)  # a row of its own, like the other _find_* helpers
+		if not _generator.has_settlement_at(coord, biome):
+			continue
+		var settlement := _generator.generate_settlement(coord, coord * CHUNK_SIZE, CHUNK_SIZE, TILE_SIZE)
+		var has_merchant := false
+		for npc in settlement.npcs:
+			if npc.occupation == "merchant":
+				has_merchant = true
+		if not has_merchant:
+			return coord
+	fail_test("no settlement chunk without a merchant found within 400 chunks")
+	return Vector2i.ZERO
+
+
+## The square's canonical trading spot IS the first stand: a villager who
+## resolves the `stall` tag -- and every merchant past the ones the square
+## had room for -- must walk to somewhere a stand really stands.
+func test_the_stall_tag_resolves_to_a_real_stand():
+	var coord := _find_settlement_chunk_with_merchant("grassland")
+	var world := StubWorld.new()
+	var spawned := renderer.spawn_village(parent, coord, coord * CHUNK_SIZE, CHUNK_SIZE, TILE_SIZE, "grassland", world)
+	var stalls := _stall_nodes(spawned)
+	assert_false(stalls.is_empty(), "precondition: this village has a market")
+	var positions := {}
+	for node in stalls:
+		positions[node.position] = true
+	for node in spawned:
+		if node is NpcMarker:
+			assert_true(
+				positions.has(node.landmarks["stall"]),
+				"%s would walk to a trading spot with no stand on it" % node.identity.npc_name
+			)

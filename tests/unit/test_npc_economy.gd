@@ -1003,3 +1003,76 @@ func test_a_take_that_already_happened_is_never_dropped_for_want_of_hands():
 	assert_almost_eq(farmer.burden(), 1.0, 0.0, "and it presses")
 	farmer.deliver_load()
 	assert_almost_eq(market.stock.get("wheat", 0.0), float(over), 0.0001, "the whole harvest arrives")
+
+
+# -- walking to the market only helps if there is a meal to be had ---------
+#
+# MEASURED on a real village (tools/probe_village_market.gd, the whole
+# settlement ticked, not just the one villager): a merchant was HUNGRY for
+# 1589 of 1801 ticks with an empty purse, and reached their own trading spot
+# on 9 of them. Their schedule said "work at the stall" for 825 ticks;
+# NpcMarker's hunger interrupt overrode every one of them and sent them to
+# the well, where there was nothing they could pay for, so they never worked,
+# never earned, and stayed hungry -- for ever.
+#
+# That is the SAME deadlock npc_marker.gd's own comments already record for
+# a hunter ("went hungry about twelve seconds in with an empty village
+# market and an empty purse, and then never worked again for the remaining
+# 227 simulated seconds"), and the guard added for it only covers producers
+# and villagers with a field. A merchant, a blacksmith, a guard and a nurse
+# are none of those.
+#
+# The honest general rule is the one that comment already states: the
+# interrupt is for villagers who must BUY. A villager who cannot buy gains
+# nothing by standing at the well and loses the only thing that could change
+# either number.
+
+
+func test_a_villager_cannot_obtain_a_meal_from_an_empty_market():
+	var market := VillageMarket.new()
+	var economy := NpcEconomy.new(1, "merchant", market)
+	economy.wallet.add(100)
+	assert_false(economy.can_obtain_a_meal(), "there is nothing on the stall to buy")
+
+
+func test_a_villager_who_can_pay_can_obtain_a_meal():
+	var market := VillageMarket.new()
+	market.add_stock("fish", 5.0)
+	var economy := NpcEconomy.new(1, "merchant", market)
+	economy.wallet.add(100)
+	assert_true(economy.can_obtain_a_meal())
+
+
+## Food on the stall they cannot pay for, and a village purse with nothing
+## in it to advance them: walking over achieves nothing.
+func test_a_broke_villager_in_a_broke_village_cannot_obtain_a_meal():
+	var market := VillageMarket.new()
+	market.add_stock("fish", 5.0)
+	var economy := NpcEconomy.new(1, "merchant", market)
+	assert_eq(economy.wallet.balance, 0, "precondition: broke")
+	assert_false(economy.can_obtain_a_meal(), "nobody can advance them the price")
+
+
+## ...but a village whose purse CAN advance them the subsistence wage really
+## can feed them, so the walk is worth making.
+func test_a_broke_villager_whose_village_can_advance_a_wage_can_obtain_a_meal():
+	var market := VillageMarket.new()
+	market.add_stock("fish", 5.0)
+	market.set_meta(NpcEconomy.PURSE_META, 100.0)
+	var economy := NpcEconomy.new(1, "merchant", market)
+	assert_eq(economy.wallet.balance, 0, "precondition: broke")
+	assert_true(economy.can_obtain_a_meal())
+
+
+## And the answer has to be a QUERY: asking it must not move a single coin,
+## or the check would feed people by being asked.
+func test_asking_whether_a_meal_can_be_had_moves_nothing():
+	var market := VillageMarket.new()
+	market.add_stock("fish", 5.0)
+	market.set_meta(NpcEconomy.PURSE_META, 100.0)
+	var economy := NpcEconomy.new(1, "merchant", market)
+	economy.can_obtain_a_meal()
+	economy.can_obtain_a_meal()
+	assert_eq(economy.wallet.balance, 0, "the wallet must be untouched")
+	assert_eq(NpcEconomy.purse_of(market), 100.0, "the purse must be untouched")
+	assert_eq(market.stock.get("fish", 0.0), 5.0, "the stall must be untouched")

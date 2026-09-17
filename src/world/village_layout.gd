@@ -276,6 +276,65 @@ static func skeleton(chunk_size: int, seed_value: int, is_dry := Callable()) -> 
 	}
 
 
+## How far apart two market stands are pitched along the square's south row
+## -- one clear cell between them, so a shopper can walk between two stalls
+## and two stands never read as one long counter. Pinned by
+## test_no_two_market_stands_share_a_cell_or_touch.
+const MARKET_STAND_PITCH_TILES := 2
+
+
+## Where this village's market stands stand: cells OF the square, west from
+## the square's own stall along its southern row.
+##
+## Reported live with a stand in shot out in the meadow: "the market stands
+## should only be put up when an NPC stands behind them to sell goods ...
+## also the stand should clear long grass around it and be placed on the
+## plaza anyways". A merchant's personal stand used to be pitched two tiles
+## south of that merchant's own front door, which is not a market -- and
+## nobody ever stood behind it either, because NpcMarker._resolve_location
+## sends every merchant to landmarks["stall"], the square's single stall. A
+## market is where the market is.
+##
+## The square's own stall is always the FIRST of them, so the one canonical
+## trading spot a schedule, a quest or a dialogue can name by tag is a real
+## stand somebody works, rather than a fourth thing standing beside three
+## others.
+##
+## Returns what FITS, which may be fewer than asked for -- a village with
+## more merchants than its square has room for leaves the rest trading at
+## the square's own stall, the same honest shortfall VillageRenderer already
+## accepts for a village with more farmers than farmhouse plots. A village
+## whose square never got laid (nowhere dry for one, see plaza_x0_for) has
+## nowhere to pitch a market at all and gets none, rather than stands in the
+## river.
+##
+## Pure and seedless: the square already IS a seeded function of the chunk,
+## so nothing about a market needs persisting to come back identically.
+static func market_stand_cells(skeleton: Dictionary, count: int) -> Array:
+	if count <= 0 or not skeleton.has("plaza") or not skeleton.has("landmarks"):
+		return []
+	var plaza: Rect2i = skeleton["plaza"]
+	if not plaza.has_area():
+		return []
+	var landmarks: Dictionary = skeleton["landmarks"]
+	if not landmarks.has("stall"):
+		return []
+	var first: Vector2i = landmarks["stall"]
+	if not plaza.has_point(first):
+		return []
+	var well = landmarks.get("well", null)
+	var cells: Array = []
+	var x := first.x
+	while cells.size() < count and x >= plaza.position.x:
+		var cell := Vector2i(x, first.y)
+		# The well is on the square too, and a stall pitched in it would be
+		# a stall in the water.
+		if cell != well:
+			cells.append(cell)
+		x -= MARKET_STAND_PITCH_TILES
+	return cells
+
+
 ## The village plan for this chunk.
 ##
 ## Two passes, and the second one matters: the store's reserved plot sits on

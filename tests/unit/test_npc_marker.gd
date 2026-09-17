@@ -355,6 +355,13 @@ func test_process_advances_hunger_through_the_bound_economy():
 func test_urgent_hunger_redirects_the_npc_toward_the_well_regardless_of_schedule():
 	var market := VillageMarket.new()
 	marker.setup_economy(market)
+	# A REAL meal on the stall, and the gold for it: the hunger interrupt
+	# only fires when there is actually something to buy at the end of the
+	# walk (NpcEconomy.can_obtain_a_meal). These tests have always meant
+	# "a villager who must buy goes and buys"; the empty market they used to
+	# build was incidental, and with it the villager now correctly keeps
+	# working rather than queueing at a stall with nothing on it.
+	_stock_the_stall(market)
 	# Scheduled to be at the (distant) workspot all day -- with no interrupt,
 	# the NPC would walk there and stay, ignoring hunger entirely.
 	marker.schedule = [
@@ -668,6 +675,7 @@ func test_an_npc_reappears_once_the_schedule_moves_off_home():
 func test_hunger_interrupt_while_home_makes_the_npc_visible_again():
 	var market := VillageMarket.new()
 	marker.setup_economy(market)
+	_stock_the_stall(market)  # see _stock_the_stall -- there must be a meal to walk to
 	marker.economy.needs.hunger = 1.0  # unambiguously past HUNGRY_THRESHOLD
 	marker.schedule = [
 		{"time_block": "morning", "location_tag": "home", "activity": "idle"},
@@ -732,7 +740,9 @@ func test_is_at_home_is_false_at_a_landmark_even_when_standing_still():
 func _producer_marker_at_work(occupation: String, world: StubWorld) -> void:
 	marker.identity.occupation = occupation
 	marker.setup(world, TILE_SIZE)
-	marker.setup_economy(VillageMarket.new())
+	var market := VillageMarket.new()
+	marker.setup_economy(market)
+	_stock_the_stall(market)
 	marker.schedule = [
 		{"time_block": "morning", "location_tag": "workspot", "activity": "work"},
 		{"time_block": "midday", "location_tag": "workspot", "activity": "work"},
@@ -1057,3 +1067,18 @@ func test_a_village_with_no_store_offers_a_villager_nowhere_to_carry_to():
 	_quiet_every_need()
 	assert_null(marker.warehouse_position, "precondition: no store by default")
 	assert_false(marker._villager_context().has(Ethogram.WAREHOUSE))
+
+
+## A real meal on the village stall and the gold to pay for it.
+##
+## The hunger interrupt only fires when there is something to buy at the end
+## of the walk (NpcEconomy.can_obtain_a_meal, added after a real village was
+## measured: a merchant hungry for 1589 of 1801 ticks with an empty purse
+## spent every one of their 825 scheduled work ticks queueing at a well with
+## nothing on it, so they never worked, never earned, and stayed hungry for
+## ever). A test that means "a villager who must buy goes and buys" has to
+## put something there to buy.
+func _stock_the_stall(market) -> void:
+	market.add_stock("fish", 5.0)
+	if marker.economy != null:
+		marker.economy.wallet.add(100)
