@@ -27,6 +27,7 @@ const EarthChunkGenerator = preload("res://src/world/earth_chunk_generator.gd")
 const GeoCoordinates = preload("res://src/world/geo_coordinates.gd")
 const TerrainRenderer = preload("res://src/rendering/terrain_renderer.gd")
 const IllustratedStructureSprite = preload("res://src/rendering/illustrated_structure_sprite.gd")
+const VillageFarm = preload("res://src/gameplay/village_farm.gd")
 
 var manager: EarthChunkManager
 var tile_map_layer: TileMapLayer
@@ -164,11 +165,14 @@ func test_reloading_a_chunk_with_a_persisted_farm_respawns_its_overlay():
 
 # -- a rail's art stands on its tile's INNER EDGE --------------------------
 #
-# Asked for directly, with the two sides arrowed in a screenshot: "move the
+# Asked for directly, with two sides arrowed in a screenshot: "move the
 # fences to the inner edge of the enclosure and treat the rest of the tile
-# as street". The wiring pin for IllustratedStructureSprite.footprint_offset
-# -- an offset nothing applies moves no fence anywhere. See
-# docs/concept/village_farms.md, "The rail stands on the inner edge".
+# as street". The WIRING pin for IllustratedStructureSprite.footprint_offset
+# -- an offset nothing applies moves no fence anywhere. Where that offset
+# should land is measured against the real art over in
+# test_illustrated_structure_sprite.gd; what is checked here is only that
+# the overlay really carries it. See docs/concept/village_farms.md, "The
+# rail stands on the inner edge".
 
 
 ## Where the overlay would stand with no offset at all: horizontally centred
@@ -179,23 +183,19 @@ func _unoffset_position_for(texture_height: int) -> Vector2:
 	return Vector2(tile_center.x, tile_bottom - float(texture_height) * 0.5)
 
 
-func test_a_south_rails_overlay_is_lifted_onto_its_own_north_edge():
-	manager.build_at_global(_berlin_tile.x, _berlin_tile.y, "farm_fence_south")
-	var sprite := _structure_art_sprite_at_berlin_tile()
-	assert_eq(
-		sprite.position - _unoffset_position_for(sprite.texture.get_height()),
-		Vector2(0, -TerrainRenderer.TILE_SIZE),
-		"a south rail drawn in the middle of its tile is a fence a tile away from the bed"
-	)
-
-
-func test_a_west_rails_overlay_is_pushed_onto_its_own_east_edge():
-	manager.build_at_global(_berlin_tile.x, _berlin_tile.y, "farm_fence_west")
-	var sprite := _structure_art_sprite_at_berlin_tile()
-	assert_eq(
-		sprite.position - _unoffset_position_for(sprite.texture.get_height()),
-		Vector2(TerrainRenderer.TILE_SIZE * 0.5, 0)
-	)
+func test_every_rails_overlay_really_carries_its_own_inner_edge_offset():
+	var art := IllustratedStructureSprite.new()
+	for facing in ["north", "south", "east", "west"]:
+		var subject: String = VillageFarm.fence_tile_for(facing)
+		manager.build_at_global(_berlin_tile.x, _berlin_tile.y, subject)
+		var sprite := _structure_art_sprite_at_berlin_tile()
+		var offset: Vector2 = art.footprint_offset(subject, TerrainRenderer.TILE_SIZE)
+		assert_ne(offset, Vector2.ZERO, "%s should not be drawn where a building would be" % subject)
+		assert_eq(
+			sprite.position, _unoffset_position_for(sprite.texture.get_height()) + offset,
+			"%s's overlay is drawn in the middle of its tile, not on its inner edge" % subject
+		)
+		manager.destroy_at_global(_berlin_tile.x, _berlin_tile.y)
 
 
 ## And the buildings that really do stand on their whole tile are untouched.

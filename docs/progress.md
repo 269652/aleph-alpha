@@ -23907,13 +23907,26 @@ then red-first in three change sets, one per half of the mechanic:
 - **The art stands on the edge.**
   `IllustratedStructureSprite.footprint_offset` puts a rail's own ground
   line on the edge facing its beds, branching on how the sheet draws that
-  run rather than on a fifth table of facings: a broad-side run (North/
-  South) stands on its posts, so bottom-anchoring already lands a *north*
-  rail correctly and a *south* rail lifts a whole tile; a top-view run
-  (East/West) has no posts, so its band is centred on the edge, half a tile
-  across. Exactly the two moves the screenshot arrowed, and nothing for the
-  side it did not — which is the check that the rule is the real one rather
-  than four numbers fitted to a picture.
+  run rather than on a table of facings: a broad-side run (North/South)
+  stands on its **posts**, so the bottom of its wood is its ground line; a
+  top-view run (East/West) has none — the band of rail *is* the ground line
+  — so its **centre line** lands on the edge.
+
+  MEASURED off the art (`_art_rect`), and the first pass got this wrong by
+  assuming it from the cell instead: `fence.png` draws every run centred in
+  its own cell with real margin all round, so bottom-anchoring leaves a
+  rail's posts ~0.2 tile short of the edge, and the guess that a *north*
+  rail therefore already stood on its own south edge was off by exactly
+  that. The independent measurement in
+  `test_a_broadside_runs_posts_stand_on_the_edge_facing_the_beds` — its own
+  brown-pixel rule over the delivered sheet, sharing no code with what it
+  checks — is what caught it, landing the north rail at 51.4 of 64 instead
+  of 64. `Image.get_used_rect` could not have supplied the measurement:
+  a pixel part way between the sheet's magenta divider and its black
+  background is neither magenta enough nor black enough to key, survives at
+  full alpha, and makes the used rect the whole cell every time — so
+  `_is_art_pixel` keys on that leftover being magenta-*cast* (blue at least
+  as strong as green), which real wood and iron never are.
 
 `CreatureMarker._fence_blocks_movement` now asks about the step it is really
 taking — the cell under the animal and the cell its look-ahead lands in —
@@ -23924,8 +23937,10 @@ the same choke point.
 Red confirmed at every layer before any of it existed: `fence_inner_direction`
 and `rails_block_step` parse-errored, `is_overlay_only_modification` parse-
 errored, `footprint_offset` failed 5 tests, the overlay sat at offset zero
-(2), the marker asked a world that no longer answers (3), and
-`fence_blocks_step_global` was verified red by renaming it and re-running.
+(2), the marker asked a world that no longer answers (3),
+`fence_blocks_step_global` was verified red by renaming it and re-running,
+and the corrected ground-line rule went red again (3) against the measured
+art before it went green.
 Green: 49/49 `test_village_farm`, 179/179 `test_terrain_renderer`, 29/29
 `test_illustrated_structure_sprite`, 12/12 `test_earth_chunk_manager_
 structure_art`, 259/259 `test_creature_marker`, the fence subset of

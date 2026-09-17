@@ -241,13 +241,20 @@ and the rest of its own tile is ordinary ground.
   which is the whole story of the brown square.
 - **Where the art stands.** `IllustratedStructureSprite.footprint_offset`
   puts a rail's own ground line on that edge, and what counts as its ground
-  line depends on how the sheet draws the run. A broad-side run (the
-  North/South columns) stands on its posts, so bottom-anchoring already
-  lands a *north* rail on its inner edge and a *south* rail lifts a whole
-  tile; a top-view run (East/West) has no posts — the band of rail is its
-  own ground line — so it is centred on the edge, half a tile across.
-  Exactly the two moves the screenshot arrowed, and nothing at all for the
-  side it did not.
+  line depends on how the sheet draws the run: a broad-side run (the
+  North/South columns) stands on its **posts**, so the bottom of its wood is
+  its ground line; a top-view run (East/West) has no posts — the band of
+  rail *is* the ground line — so its **centre line** lands on the edge
+  instead. Measured off the art with `_art_rect`, not assumed from the cell:
+  `fence.png` draws every run centred in its own cell with real margin all
+  round, so bottom-anchoring alone leaves a rail's posts about a fifth of a
+  tile short of the edge they belong on. A first pass assumed a *north* rail
+  already stood on its own south edge and was wrong by exactly that margin.
+  `Image.get_used_rect` cannot supply the measurement — a pixel part way
+  between the sheet's magenta divider and its black background survives the
+  chroma key at full alpha and makes the used rect the whole cell — so
+  `_is_art_pixel` keys on that leftover being magenta-*cast* (blue at least
+  as strong as green) where real wood and iron never are.
 - **What an animal may do.** `VillageFarm.rails_block_step` replaces the old
   "is this tile fenced" question with "does this step cross the rails",
   asked of the PAIR of cells a step joins

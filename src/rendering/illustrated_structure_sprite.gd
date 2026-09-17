@@ -170,8 +170,8 @@ func footprint_texture(subject: String, tile_size: int) -> ImageTexture:
 	return ImageTexture.create_from_image(scaled)
 
 
-## Where a subject's footprint_texture really stands INSIDE its own tile,
-## as an offset from the placement every whole-building subject uses:
+## Where a subject's footprint_texture really stands INSIDE its own tile, as
+## an offset from the placement every whole-building subject uses:
 ## horizontally centred, bottom edge on the tile's bottom edge (see
 ## EarthChunkManager._spawn_structure_art_for). Vector2.ZERO for anything
 ## that stands on its whole tile, which is every subject but a rail.
@@ -184,14 +184,18 @@ func footprint_texture(subject: String, tile_size: int) -> ImageTexture:
 ## ground line depends on which way the sheet draws that run:
 ##
 ## - A run drawn broad-side (the North/South columns) stands on its POSTS,
-##   so its ground line is the bottom of its art. Bottom-anchoring already
-##   puts that on the tile's south edge, which IS a north rail's inner edge
-##   -- so a north rail needs no offset at all, and the north side is
-##   exactly the one nobody asked to move. A south rail's inner edge is its
-##   north edge, a whole tile up.
+##   so its ground line is the bottom of its wood.
 ## - A run seen from above (the East/West columns) has no posts to stand on
 ##   -- the band of rail IS the ground line -- so it is CENTRED on the edge
-##   it closes rather than based on it, half a tile across.
+##   it closes rather than based on it.
+##
+## MEASURED off the art, not assumed from the cell: `fence.png` draws every
+## run centred in its own cell with real margin all round, so bottom-
+## anchoring alone leaves a rail's posts a fifth of a tile short of the edge
+## they are meant to stand on. A first pass here assumed a north rail
+## already stood on its own south edge and was wrong by exactly that
+## margin -- test_a_broadside_runs_posts_stand_on_the_edge_facing_the_beds
+## finds the real wood independently and pins where it lands.
 ##
 ## Derived from the inner direction rather than written out as a fifth table
 ## of facings, so a rail cannot be drawn on one edge and block another.
@@ -199,9 +203,93 @@ func footprint_offset(subject: String, tile_size: int) -> Vector2:
 	var inner := VillageFarm.fence_inner_direction(subject)
 	if inner == Vector2i.ZERO:
 		return Vector2.ZERO
+	var idle := idle_texture(subject)
+	if idle == null:
+		return Vector2.ZERO
+	var image := idle.get_image()
+	var art := _art_rect(subject, image)
+	var scale := float(tile_size) / float(image.get_width())
 	if inner.y != 0:
-		return Vector2.ZERO if inner.y > 0 else Vector2(0, -float(tile_size))
-	return Vector2(float(inner.x) * float(tile_size) * 0.5, 0.0)
+		# Bottom-anchoring puts the BAND's bottom edge on the tile's bottom
+		# edge, so the posts stand this far above it.
+		var foot_above_bottom := float(image.get_height() - art.position.y - art.size.y) * scale
+		if inner.y > 0:
+			return Vector2(0.0, foot_above_bottom)
+		return Vector2(0.0, foot_above_bottom - float(tile_size))
+	# The band is centred on the tile, so the run's own centre line sits
+	# here, measured from the tile's left edge.
+	var centre_x := (float(art.position.x) + float(art.size.x) * 0.5) * scale
+	if inner.x < 0:
+		return Vector2(-centre_x, 0.0)
+	return Vector2(float(tile_size) - centre_x, 0.0)
+
+
+## How bright a pixel must be to count as this art rather than as the chroma
+## key's own leftovers -- see _is_art_pixel.
+const _ART_MIN_BRIGHTNESS := 0.2
+
+## What share of a row or column must be art before that line counts as part
+## of the art at all. Not a single pixel: the same "share of the line" shape
+## VariantSheetGrid.DIVIDER_LINE_SHARE already uses, so one surviving speck
+## of key fringe cannot stretch the rect to the whole cell. Measured against
+## the real sheet: the thinnest real line of a top-view run still fills ~13%
+## of its own row, and the emptiest row inside a broad-side run still has
+## its two posts at ~12%, both an order of magnitude above this.
+const _ART_LINE_SHARE := 0.03
+
+## subject -> the Rect2i _art_rect measured for it. The scan is two passes
+## over a ~330x275 cell, and every rail a village raises asks for the same
+## four answers.
+static var _art_rect_cache: Dictionary = {}
+
+
+## Whether a pixel of a keyed cell is REAL art rather than what the chroma
+## key left behind.
+##
+## Image.get_used_rect cannot answer this: a pixel part way between the
+## sheet's magenta divider and its black background -- (128, 0, 128) and its
+## neighbours -- is neither magenta enough nor black enough for
+## _key_and_despill, survives at full alpha, and makes the used rect the
+## whole cell every single time. What it is, though, is MAGENTA-CAST: blue
+## at least as strong as green. Every real pixel of this art is wood or an
+## iron fitting, brown or neutral grey, and in both green is at least blue.
+static func _is_art_pixel(pixel: Color) -> bool:
+	return pixel.a >= 0.5 and pixel.r >= _ART_MIN_BRIGHTNESS and pixel.g >= pixel.b
+
+
+## The tight rect of a keyed cell's real art, in that cell's own pixels --
+## the whole cell if nothing in it reads as art, which leaves a subject this
+## cannot measure placed exactly where it always was.
+func _art_rect(subject: String, image: Image) -> Rect2i:
+	if _art_rect_cache.has(subject):
+		return _art_rect_cache[subject]
+	var width := image.get_width()
+	var height := image.get_height()
+	var min_x := width
+	var max_x := -1
+	var min_y := height
+	var max_y := -1
+	for y in height:
+		var in_row := 0
+		for x in width:
+			if _is_art_pixel(image.get_pixel(x, y)):
+				in_row += 1
+		if float(in_row) / float(width) >= _ART_LINE_SHARE:
+			min_y = mini(min_y, y)
+			max_y = maxi(max_y, y)
+	for x in width:
+		var in_column := 0
+		for y in height:
+			if _is_art_pixel(image.get_pixel(x, y)):
+				in_column += 1
+		if float(in_column) / float(height) >= _ART_LINE_SHARE:
+			min_x = mini(min_x, x)
+			max_x = maxi(max_x, x)
+	var rect := Rect2i(0, 0, width, height)
+	if max_x >= min_x and max_y >= min_y:
+		rect = Rect2i(min_x, min_y, max_x - min_x + 1, max_y - min_y + 1)
+	_art_rect_cache[subject] = rect
+	return rect
 
 
 # -- whole-building entities (docs/concept/building.md "Buildings are -------
