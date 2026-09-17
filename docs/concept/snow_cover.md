@@ -916,9 +916,10 @@ for, and why both exist.
   setts, ~140 000× past what a foot can press with — keeps no mark,
   with no test for `"road"` anywhere in the footprint path. Built floors
   fall out of the same rule for free; snow lying on a street is snow
-  underfoot and prints again. 15/15 new tests, plus 3 new integration
-  tests (street, unpaved control, snowed-over street) in
-  `test_earth_chunk_manager_footprints.gd` — 28/28 there, 174/174 across
+  underfoot and prints again. 16/16 new tests, plus 4 new integration
+  tests (street, unpaved control, snowed-over street, and a ~26-stride
+  sustained walk down a street against the same walk on bare ground) in
+  `test_earth_chunk_manager_footprints.gd` — 29/29 there, 174/174 across
   the footprint/footstep suite, zero regressions. Known, named gap: the
   footstep SOUND on a street is still chosen from the biome, so it plays
   the grass clip.

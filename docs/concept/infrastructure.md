@@ -199,7 +199,7 @@ implemented either, but the two are designed to land together.
   `BuildingPiece`'s own material column; dug earth and a worn trail stay
   the soil they were worn out of. Gated in
   `EarthChunkManager.record_footstep` at the tile the print lands in.
-  15/15 in `test_ground_imprint.gd`, 28/28 in
+  16/16 in `test_ground_imprint.gd`, 29/29 in
   `test_earth_chunk_manager_footprints.gd`. See [snow_cover.md's "Ground
   that is too hard to take a
   print"](snow_cover.md#ground-that-is-too-hard-to-take-a-print-2026-09-17).

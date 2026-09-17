@@ -23435,10 +23435,12 @@ sits *after* `record_footstep`'s returned step facts are populated and
 returns them intact, so the step is still heard — only the visual mark is
 absent.
 
-Tests: `test_ground_imprint.gd` 15/15 (new), `test_earth_chunk_manager_
-footprints.gd` 28/28 (3 new: the street, an unpaved control walking the
-identical stride so the paving is the only difference, and a snowed-over
-street), 174/174 green across the whole footprint/footstep suite
+Tests: `test_ground_imprint.gd` 16/16 (new), `test_earth_chunk_manager_
+footprints.gd` 29/29 (4 new: the street, an unpaved control walking the
+identical stride so the paving is the only difference, a snowed-over
+street, and a ~26-stride sustained walk verified to fail
+`[52] expected to equal [26]` with the gate stubbed out, so it
+discriminates rather than passing vacuously), 174/174 green across the whole footprint/footstep suite
 (`test_world_footstep_wiring.gd`, `test_footstep_sound.gd`,
 `test_footstep_gait.gd`, `test_footprint_field.gd`,
 `test_footprint_renderer.gd`, `test_procedural_footprint_sprite.gd`,
