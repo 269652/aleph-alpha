@@ -39,6 +39,17 @@ const CROP_BY_OCCUPATION := {"farmer": "wheat", "herbalist": "herb"}
 ## worker (FarmerMarker) so the two cannot drift apart.
 const WATER_BEFORE_WITHER_FRACTION := 0.5
 
+## How much workable ground a farmhouse's own field ring must really have
+## before a village raises one there -- a farmhouse with nowhere to farm is
+## a farmhouse that should not have been built. NOT a fresh guess: it is
+## the plot count the placeable Farm's own worker already tends
+## (FarmerMarker.PLOT_COUNT), which is the one number in this codebase that
+## has been measured against what a single farmer can actually keep
+## watered. Pinned to it by test_the_smallest_worthwhile_field_is_what_one_
+## farmer_can_already_tend rather than preloaded here, so this module stays
+## free of any rendering dependency.
+const MIN_FIELD_CELLS := 3
+
 
 ## The ring of tiles directly around `building_id`'s footprint at `origin`
 ## -- its field. Row-major from the north-west corner, so the order is

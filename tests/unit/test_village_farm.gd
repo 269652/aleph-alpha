@@ -218,3 +218,24 @@ func test_nothing_to_do_on_a_field_that_needs_nothing():
 
 func test_an_empty_field_asks_for_nothing():
 	assert_eq(VillageFarm.next_action([]), -1)
+
+
+## MIN_FIELD_CELLS is not a fresh guess -- it is the already-measured plot
+## count one farmer can keep watered (see VillageFarm's own doc comment).
+## Pinned here rather than preloaded there so the pure rule set keeps no
+## rendering dependency (CLAUDE.md: tuned values are tested functions or
+## test-pinned constants).
+func test_the_smallest_worthwhile_field_is_what_one_farmer_can_already_tend():
+	var FarmerMarker = load("res://src/rendering/farmer_marker.gd")
+	assert_eq(VillageFarm.MIN_FIELD_CELLS, FarmerMarker.PLOT_COUNT)
+	assert_lte(
+		VillageFarm.MIN_FIELD_CELLS,
+		VillageFarm.field_cells(Vector2i.ZERO, VillageFarm.FARM_BUILDING_ID).size(),
+		"a field ring that could never meet its own minimum would refuse every site"
+	)
+
+
+## The two share one watering margin rather than two copies of it.
+func test_the_placeable_farms_worker_waters_on_the_same_margin():
+	var FarmerMarker = load("res://src/rendering/farmer_marker.gd")
+	assert_eq(FarmerMarker.WATER_BEFORE_WITHER_FRACTION, VillageFarm.WATER_BEFORE_WITHER_FRACTION)

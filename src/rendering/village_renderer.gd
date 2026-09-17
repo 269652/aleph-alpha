@@ -15,6 +15,7 @@ extends RefCounted
 
 const SettlementGenerator = preload("res://src/world/settlement_generator.gd")
 const VillageLayout = preload("res://src/world/village_layout.gd")
+const VillageFarm = preload("res://src/gameplay/village_farm.gd")
 const BuildingCatalog = preload("res://src/gameplay/building_catalog.gd")
 const NpcMarker = preload("res://src/rendering/npc_marker.gd")
 const VillageMarket = preload("res://src/world/village_market.gd")
@@ -351,6 +352,7 @@ func _place_new_village(
 
 	_place_industry_if_missing(chunk_coord, chunk_size, world)
 	_place_civic_if_missing(chunk_coord, chunk_size, world)
+	_place_farms_if_missing(chunk_coord, chunk_size, npcs, world)
 	return true
 
 
@@ -373,6 +375,7 @@ func _recover_existing_village(
 	_lay_plaza_if_missing(chunk_coord, chunk_size, world)
 	_place_industry_if_missing(chunk_coord, chunk_size, world)
 	_place_civic_if_missing(chunk_coord, chunk_size, world)
+	_place_farms_if_missing(chunk_coord, chunk_size, npcs, world)
 	for i in npcs.size():
 		var expected_seed := hash("%d_%d_house_%d" % [chunk_coord.x, chunk_coord.y, i])
 		# A NEWCOMER's house was raised by the growth ladder, not stamped at
@@ -488,6 +491,94 @@ func _place_industry_if_missing(chunk_coord: Vector2i, chunk_size: int, world) -
 	for local_cell in plot["road_spur"]:
 		var g: Vector2i = chunk_coord * chunk_size + local_cell
 		world.build_at_global(g.x, g.y, TerrainRenderer.ROAD_TILE_ID)
+
+
+## One farmhouse per villager who actually farms (docs/concept/
+## village_farms.md). A farmer and a herbalist in the same village get one
+## each -- that is what "so you can build multiple farms" means, and it is
+## why the field's ownership rule has to be per-farmhouse.
+##
+## Sited on the village's own street frontage like any other growth
+## building, with ONE added condition: the ground around it must really
+## have room for a field (VillageFarm.MIN_FIELD_CELLS of its own ring
+## workable). A farmhouse with nowhere to farm is a farmhouse that should
+## not have been raised, so a rejected frontage simply keeps the walk
+## going rather than settling for it.
+##
+## Idempotent on how many already stand, the same self-healing shape
+## _place_industry_if_missing and _lay_plaza_if_missing already have: a
+## reload never raises a second set, and an older village whose farmer
+## never had a farmhouse gains one on its next visit.
+##
+## The doorstep is paved AFTER the building goes up, for exactly the reason
+## _place_new_village places its houses before its roads: place_building
+## refuses a plot whose doorstep is already modified.
+func _place_farms_if_missing(chunk_coord: Vector2i, chunk_size: int, npcs: Array, world) -> void:
+	if world == null or not world.has_method("place_building"):
+		return
+	var wanted := 0
+	for npc in npcs:
+		if VillageFarm.crop_for(npc.occupation) != "":
+			wanted += 1
+	if wanted == 0:
+		return  # nobody here farms, so nothing here needs a farmhouse
+	var standing := 0
+	if world.has_method("buildings_in_chunk"):
+		for record in world.buildings_in_chunk(chunk_coord):
+			if record.get("id", "") == VillageFarm.FARM_BUILDING_ID:
+				standing += 1
+
+	var is_buildable := _is_buildable_local(chunk_coord, chunk_size, world)
+	var is_occupied := _is_occupied_local(chunk_coord, chunk_size, world)
+	var renderer := self
+	var accepts_origin := func(origin: Vector2i) -> bool:
+		return (
+			renderer._field_room_at(origin, chunk_size, is_buildable, is_occupied)
+			>= VillageFarm.MIN_FIELD_CELLS
+		)
+	for index in range(standing, wanted):
+		var plot: Dictionary = VillageLayout.next_street_plot(
+			VillageFarm.FARM_BUILDING_ID, chunk_size, VillageLayout.seed_for(chunk_coord),
+			is_buildable, is_occupied, is_buildable, accepts_origin
+		)
+		if plot.is_empty():
+			return  # no frontage left with room for a field -- honestly, no farm
+		# Over the paving, not beside it: a street-frontage plot's own
+		# doorstep IS a road cell by the time this runs (the streets were
+		# laid at founding), and an ordinary place_building refuses a plot
+		# whose doorstep is already modified -- the exact rule
+		# _place_new_village orders its own houses-before-roads around.
+		# _place_civic_if_missing already reaches for the same tool.
+		var building_seed := hash("%d_%d_farmhouse_%d" % [chunk_coord.x, chunk_coord.y, index])
+		var placed: bool = (
+			world.place_building_over_roads(
+				chunk_coord, plot["origin"], VillageFarm.FARM_BUILDING_ID, building_seed, ""
+			)
+			if world.has_method("place_building_over_roads")
+			else world.place_building(
+				chunk_coord, plot["origin"], VillageFarm.FARM_BUILDING_ID, plot["facing"],
+				building_seed, "", "", 0
+			)
+		)
+		if not placed:
+			return
+		if world.has_method("build_at_global"):
+			var doorstep: Vector2i = chunk_coord * chunk_size + plot["doorstep"]
+			world.build_at_global(doorstep.x, doorstep.y, TerrainRenderer.ROAD_TILE_ID)
+
+
+## How many cells of the field ring a farmhouse at `origin` would really be
+## able to work: inside the chunk, not water, nothing already built on it.
+func _field_room_at(
+	origin: Vector2i, chunk_size: int, is_buildable: Callable, is_occupied: Callable
+) -> int:
+	var room := 0
+	for cell in VillageFarm.field_cells(origin, VillageFarm.FARM_BUILDING_ID):
+		if cell.x < 0 or cell.y < 0 or cell.x >= chunk_size or cell.y >= chunk_size:
+			continue
+		if is_buildable.call(cell) and not is_occupied.call(cell):
+			room += 1
+	return room
 
 
 ## The village's civic seat, standing on the plaza's own reserved plot.
