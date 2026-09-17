@@ -713,3 +713,128 @@ func test_the_hero_stops_rippling_once_it_holds_still_in_the_water():
 			new_ripple_while_still = true
 		previous_count = current_count
 	assert_false(new_ripple_while_still, "a new ripple was recorded while the hero was holding still, already arrived, in the water")
+
+
+# -- incremental build ---------------------------------------------------
+#
+# Reported live: "the character creator loads super slow". Measured (see
+# docs/concept/character_creator_preview_scene.md's own "Load cost"
+# section): a cold build() is ~3.9s, essentially all of it first-use
+# sprite-sheet loads -- real work that cannot be made cheaper, only
+# incremental. build_async runs the SAME steps in the SAME order, yielding
+# a frame between each, so the window keeps painting and a real progress
+# readout can be shown instead of a freeze.
+
+
+## The one that actually matters: an async build that quietly drifted into a
+## second, differently-behaving implementation of the same scene would be
+## worse than the pause it replaced. Compared against this file's own
+## before_each diorama, built synchronously from the same seed -- same
+## counts AND same positions, since the layout behind both is seeded.
+func test_build_async_produces_the_same_scene_as_the_synchronous_build():
+	var incremental: Node2D = CharacterPreviewDioramaScript.new()
+	add_child(incremental)
+	await incremental.build_async(42)
+
+	assert_eq(incremental.ground_tiles.size(), diorama.ground_tiles.size(), "ground")
+	assert_eq(incremental.tree_nodes.size(), diorama.tree_nodes.size(), "trees")
+	assert_eq(incremental.pebble_nodes.size(), diorama.pebble_nodes.size(), "pebbles")
+	assert_eq(incremental.fish_nodes.size(), diorama.fish_nodes.size(), "fish")
+	assert_eq(incremental.bird_nodes.size(), diorama.bird_nodes.size(), "birds")
+	assert_eq(incremental.flower_nodes.size(), diorama.flower_nodes.size(), "flowers")
+	assert_eq(incremental.worm_nodes.size(), diorama.worm_nodes.size(), "worms")
+	assert_eq(incremental.butterfly_nodes.size(), diorama.butterfly_nodes.size(), "butterflies")
+	assert_not_null(incremental.boar_node, "boar")
+	assert_not_null(incremental.character_view, "hero")
+	assert_true(incremental.character_view.is_inside_tree())
+	for i in diorama.tree_nodes.size():
+		assert_eq(incremental.tree_nodes[i].position, diorama.tree_nodes[i].position, "tree %d" % i)
+	for i in diorama.pebble_nodes.size():
+		assert_eq(incremental.pebble_nodes[i].position, diorama.pebble_nodes[i].position, "pebble %d" % i)
+
+	remove_child(incremental)
+	incremental.free()
+
+
+## The progress contract the loading overlay reads: an opening 0/N so the
+## bar starts at zero rather than jumping, a monotonic climb, a total that
+## never moves mid-build, a non-empty label on every step (the overlay says
+## what it is building, not just a number), and a final report with every
+## step done.
+func test_build_async_reports_progress_from_zero_through_every_step():
+	var reports: Array = []
+	var incremental: Node2D = CharacterPreviewDioramaScript.new()
+	add_child(incremental)
+	await incremental.build_async(
+		7, func(done: int, total: int, label: String): reports.append([done, total, label])
+	)
+
+	assert_gt(reports.size(), 1, "a single report is not progress")
+	assert_eq(int(reports[0][0]), 0, "the first report is the 0/N the overlay opens on")
+	var total := int(reports[0][1])
+	assert_gt(total, 0)
+	assert_eq(int(reports[reports.size() - 1][0]), total, "the last report has every step done")
+	for i in reports.size():
+		assert_eq(int(reports[i][1]), total, "the total must not move mid-build")
+		assert_false(str(reports[i][2]).is_empty(), "every step names what it is building")
+		if i > 0:
+			assert_true(
+				int(reports[i][0]) >= int(reports[i - 1][0]), "progress must never go backwards"
+			)
+
+	remove_child(incremental)
+	incremental.free()
+
+
+## Yielding is the whole point, so it is pinned directly rather than
+## inferred from the progress reports: at least one real frame has to pass
+## per reported step, otherwise "incremental" is a readout over a build
+## that still blocks.
+func test_build_async_yields_at_least_once_per_reported_step():
+	# An Array, not an int -- GDScript lambdas capture locals by value, so a
+	# plain counter would stay 0 no matter how many frames passed.
+	var frames := [0]
+	var count_frame := func(): frames[0] += 1
+	get_tree().process_frame.connect(count_frame)
+
+	var total := [0]
+	var incremental: Node2D = CharacterPreviewDioramaScript.new()
+	add_child(incremental)
+	await incremental.build_async(11, func(_done: int, step_total: int, _label: String): total[0] = step_total)
+	get_tree().process_frame.disconnect(count_frame)
+
+	assert_gt(total[0], 0)
+	assert_true(
+		frames[0] >= total[0],
+		"expected at least one frame per step, got %d frames for %d steps" % [frames[0], total[0]]
+	)
+
+	remove_child(incremental)
+	incremental.free()
+
+
+## Flowers, birds and butterflies each load a SEPARATE sheet per SPECIES
+## (~250-590ms per flower species, ~420-460ms per bird species -- see the
+## concept doc's own Load cost table), so treating each of those three as
+## ONE step would still freeze for seconds inside it. The step count has to
+## exceed the per-item count of all three combined, which is only possible
+## if they yield per item.
+func test_build_async_yields_per_flower_bird_and_butterfly_not_just_per_step():
+	var per_item: int = (
+		diorama.flower_nodes.size() + diorama.bird_nodes.size() + diorama.butterfly_nodes.size()
+	)
+	assert_gt(per_item, 0, "the fixture scene must actually have some of this life in it")
+
+	var total := [0]
+	var incremental: Node2D = CharacterPreviewDioramaScript.new()
+	add_child(incremental)
+	await incremental.build_async(42, func(_d: int, step_total: int, _l: String): total[0] = step_total)
+
+	assert_gt(
+		total[0],
+		per_item,
+		"each flower/bird/butterfly species loads its own sheet, so each needs its own step"
+	)
+
+	remove_child(incremental)
+	incremental.free()
