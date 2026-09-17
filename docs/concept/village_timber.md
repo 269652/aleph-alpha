@@ -1,0 +1,125 @@
+# Village Timber — the sawmill, and the villager whose trade it is
+
+Reported in play: *"The sawmill also never produces any beams and doesn't
+even have a dedicated worker"*, then: *"implement the sawmill properly"*.
+
+## What this is not
+
+Not a new production model. `SagewerkProduction` already turns a log
+stockpile into beams and planks over time, with both costs and both shaping
+times measured against real joinery (hewing a round log square wastes
+sapwood and is slow; riving boards off it is cheap and fast) and pinned by
+tests rather than eyeballed. That module is the sawmill's own behaviour and
+is reused whole.
+
+Not a new worker loop either. `LumberjackBehavior` is already the phase
+machine for exactly this job — SEEKING → APPROACHING → FELLING → CARRYING →
+DEPOSIT — and `ChoppableTree.take_damage` is already how a tree comes down,
+"the same mechanic with a different caller" that the tile-scale Lumberjack
+uses.
+
+## The gap, stated precisely
+
+Both of those serve the **placeable tile** `sagewerk`, which the player
+builds and which spawns its own narrow `LumberjackMarker`.
+
+The village's whole-building **`sawmill`** has none of it.
+`VillageRenderer.INDUSTRY_BUILDING_ID` is placed at founding and referenced
+by the growth-site search, and **nowhere else**. Nothing works it, nothing
+produces at it, nothing is stored in it.
+
+And there is a reason no villager works it: **no villager has that trade.**
+`NpcIdentity.OCCUPATIONS` is farmer, blacksmith, merchant, guard, fisher,
+herbalist, hunter, nurse. A village raises a sawmill at its own timber and
+then has nobody whose job is timber.
+
+## Design pillars
+
+1. **A trade, not a machine.** The sawmill produces because a *person* works
+   it, the same way the farmhouse produces because a farmer walks out to a
+   field. A building that converts stock on a timer with nobody in it is the
+   thing this project keeps replacing.
+2. **Reuse the tile-scale pieces whole.** `SagewerkProduction` for the
+   conversion, `LumberjackBehavior` for the phases, `ChoppableTree` for the
+   felling. A second timber model would drift from the first.
+3. **Real trees, felled for real.** A villager's axe is the same axe: the
+   log exists because a tree came down, not because a number went up. The
+   same "work against the real world" rule
+   [npc.md](npc.md) already holds the hunter and the farmer to.
+4. **The sawmill holds what it makes**, and the village gets it when someone
+   carries it in — the chain [building_storage.md](building_storage.md)
+   already establishes for the farmhouse.
+
+## Real-world grounding
+
+A village sawmill sits where the timber is, and a sawyer's day is two jobs,
+not one: get logs to the mill, and work the mill. The felling happens out in
+the wood, the shaping happens at the building, and the beams stack up at the
+mill until they are wanted. Squaring a beam is slow, skilled work that wastes
+material; sawing boards is quick and wastes little — which is why a beam
+costs three logs and a plank one.
+
+## Mechanism
+
+### The trade
+
+`lumberjack` joins `NpcIdentity.OCCUPATIONS`. This is a real change to every
+village's roster — the occupation of each villager is drawn from that list by
+seed, so adding to it re-rolls who is who everywhere. That is the honest cost
+of a village having a timber trade at all, and it is stated rather than
+hidden.
+
+### `VillageSawmill` — the pure rule set
+
+The sibling of `VillageFarm`, and deliberately the same shape: which building
+is the sawmill, which occupation works it, how far a lumberjack ranges for
+timber, and what wants doing next.
+
+- `next_action(log_stock)` → `"fell"` when the mill wants logs, `"shape"`
+  when it has enough to square a beam. Grounded on
+  `SagewerkProduction.LOG_COST_PER_BEAM`, never a second number.
+- A lumberjack ranges for trees within a real radius of the mill, so a
+  village fells its own wood rather than stripping the map.
+
+### The villager's work
+
+`NpcMarker._step_timber(delta, is_working)` — the third sibling of
+`_step_hunt` and `_step_farm`, built on the same four seams (find → position
+→ reach → act) and returning a walk target or null exactly as they do, so it
+plugs into the same override chain with the same "real work outranks a need"
+ordering.
+
+- **Fell:** walk to the nearest standing tree in range and bring it down with
+  the same `ChoppableTree.take_damage` loop the player's own axe uses. The
+  log goes into the sawmill's stock.
+- **Shape:** at the mill, with enough logs in it, work `SagewerkProduction`
+  forward and put the beam into the sawmill's own stock.
+
+### The beams reach the village
+
+The sawmill's stock is carried to the village the same way the farmhouse's
+is, through the same haul.
+
+## Status
+
+Written before implementation, per CLAUDE.md. Corrected as each slice lands.
+
+- ⬜ **`lumberjack` is a real village trade.**
+- ⬜ **`VillageSawmill`**, the pure rule set.
+- ⬜ **`NpcMarker._step_timber`** — real trees felled, logs to the mill,
+  beams shaped.
+- ⬜ **The renderer tells a lumberjack which sawmill is theirs.**
+- ⬜ **Beams reach the village stock.**
+
+## Interaction with other docs
+
+- [timber_construction.md](timber_construction.md) — the tile-scale
+  Sägewerk, `SagewerkProduction`, `LumberjackBehavior`, and the hewing/riving
+  grounding every number here comes from.
+- [village_farms.md](village_farms.md) — the farmhouse this is modelled on,
+  beat for beat.
+- [building_storage.md](building_storage.md) — the store-then-haul chain the
+  beams travel.
+- [npc.md](npc.md) — "Work against the real world, not against a number".
+- [production_chains.md](production_chains.md) — where beams and planks go
+  once the village has them.
