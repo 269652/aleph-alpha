@@ -1,25 +1,25 @@
 extends GutTest
 
-## Real illustrated art for the boot intro splash (assets/sprites/intro.png)
-## -- see docs/concept/intro_splash.md. Same "hand/AI-illustrated sheet ->
-## SpriteSheetSlicer -> cached frames" shape as IllustratedWormSprite, but
-## the sheet's own grid is NOT perfectly regular (AI-generated at
-## 1983x793, not evenly divisible by the prompted 8 columns x 4 rows --
-## confirmed with tools/probe_intro_sheet.gd), so this hand-measures the 4
-## ROW bands (pinned constants) and reuses SpriteSheetSlicer.detect_frames
-## for the columns within each band, rather than assuming arithmetic
-## division the way the worm sheet's own (genuinely regular) grid can.
+## Real art for the boot intro splash (assets/sprites/intro.png) -- see
+## docs/concept/intro_splash.md's "Re-measuring again: a contact sheet, not
+## a sprite sheet".
+##
+## Unlike every other illustrated sheet in this codebase, this one is not a
+## chroma-keyed sprite sheet at all: it is a 1672x941 CONTACT SHEET exported
+## straight out of the source animation, 20 columns x 6 rows of 120 frames
+## on opaque black, with the export tool's own chrome drawn on top -- a
+## light-grey grid line between every pair of cells, and each cell's
+## timestamp burned into its top-left corner. So the grid is hand-measured
+## from those lines (pinned constants, re-derived here from the real file),
+## not assumed by arithmetic division: it divides evenly on neither axis.
 ##
 ## Deliberately does NOT run frames through SpriteSheetSlicer.
-## normalize_frames the way every other illustrated sheet in this codebase
-## does: normalize_frames picks ONE shared scale from the WIDEST/TALLEST
-## content bounding box across the frames it's given, and here the "ALEPH
-## ALPHA" wordmark's own ink extent genuinely grows across the sequence --
-## content-cropping and rescaling would make the globe itself appear to
-## change size as the text builds in, which the source art's own
-## consistent camera framing (see the intro-generation prompt) already
-## avoids by construction. Frames are extracted as plain, un-rescaled
-## regions instead.
+## normalize_frames the way every other illustrated sheet does:
+## normalize_frames picks ONE shared scale from the WIDEST/TALLEST content
+## bounding box across the frames it's given, and here the globe grows and
+## the "aleph alpha" wordmark builds in across the sequence -- rescaling
+## would make the globe itself appear to change size. Frames are extracted
+## as plain, un-rescaled regions instead.
 
 const IntroSplashSheet = preload("res://src/rendering/intro_splash_sheet.gd")
 const SpriteSheetLoader = preload("res://src/rendering/sprite_sheet_loader.gd")

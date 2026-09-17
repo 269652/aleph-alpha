@@ -31,7 +31,8 @@ extends RefCounted
 ## cells). Nothing about the old one survives: there is no magenta on this
 ## sheet at all, so there is no chroma-key or despill pass here any more --
 ## the background is opaque black space, and it is meant to stay that way.
-## See docs/concept/intro_splash.md's "A fourteenth pass".
+## See docs/concept/intro_splash.md's "Re-measuring again: a contact
+## sheet, not a sprite sheet".
 ##
 ## Every one of the 120 frames is cropped to the SAME fixed-size window
 ## (_FRAME_WIDTH x _FRAME_HEIGHT) -- deliberately NOT SpriteSheetSlicer

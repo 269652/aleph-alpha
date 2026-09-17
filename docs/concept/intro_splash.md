@@ -1362,3 +1362,136 @@ Pinned by `test_every_frame_puts_its_art_at_the_same_height`
 (`tests/unit/test_intro_splash_sheet.gd`), confirmed red against the
 top-anchored build (frames 24–39 centred their art at 66.5 instead of
 80.5) before the change.
+
+
+## Re-measuring again: a contact sheet, not a sprite sheet (2026-09-17)
+
+Reported in play, the same day the section above was written, after
+`intro.png` was swapped a SECOND time: *"the intro has new resolution
+please fix the cropping properly"*.
+
+The section above added tests specifically so that the next art swap would
+fail loudly instead of shipping a mis-crop. **They did not catch this
+one**, and the reason is worth recording: they measured the sheet by
+looking for rows that were entirely MAGENTA, because every illustrated
+sheet in this codebase up to that point had a magenta background with real
+gutters keyed out of it. This replacement has no magenta anywhere. The
+helper found no gutters at all, concluded the whole image was one row, and
+the assertion it fed compared a five-element array against a one-element
+one — a failure, but one that reads as "the pinned rows are stale"
+rather than "your measuring instrument does not fit this sheet."
+
+**The replacement is a different KIND of artefact, not just a different
+size.** It is a contact sheet exported straight out of the source
+animation:
+
+| | old | new |
+| --- | --- | --- |
+| resolution | 1983x793 | 1672x941 |
+| grid | 8 x 5 | 20 x 6 |
+| frames | 40 | **120** |
+| background | magenta, keyed out | opaque black space |
+| cell separation | real gutters | drawn grey grid lines, 1-3px |
+| frame shape | 243x162 landscape | 79x151 portrait (9:16 source) |
+| chrome | none | each cell's timestamp burned into its corner |
+
+Nothing about the old sheet survived. Every crop landed at the wrong
+offset, and the last column of every row ran 309px off the right-hand
+edge, so the final frame of each row came out blank. Two thirds of the
+animation never played at all, because `FRAME_COUNT` still said 40.
+
+### The chrome pulls the crop in two directions
+
+The grid lines are not art: a crop that includes one shows a pale bar down
+the frame's edge. Every crop therefore sits strictly INSIDE them
+(`_COLUMN_WINDOW_LEFTS`/`_ROW_WINDOW_TOPS`, measured from the real lines).
+
+The timestamps are the opposite case. They are drawn ON TOP of real frame
+content — the starfield runs edge to edge underneath them — so there is
+no margin to crop them out of; removing them costs the top ~14% of every
+frame. Asked directly, with the trade spelled out, the answer was to keep
+them: *"Just crop with timestamp"*. They then turn out to be the single
+most useful thing on the sheet, see below.
+
+### Three measurements, none of them assumed
+
+1. **The grid does not divide evenly on either axis** (1672/20 = 83.6,
+   941/6 = 156.8), the lines are 1-3px wide and not evenly spaced, and the
+   cells therefore genuinely differ in width (79-83px). Measured with
+   `tools/probe_intro_sheet.gd`, which had to be rewritten for the same
+   reason the tests did.
+2. **One fixed 79x151 window for all 120 frames**, sized to the SMALLEST
+   cell so it can never pull in the line beside it — the narrowest column
+   is the last one, which the sheet's own right edge cuts short. The window
+   is CENTRED horizontally in each cell rather than left-anchored: the
+   globe sits at its cell's middle, and with cells differing by up to 4px,
+   left-anchoring would shift it by up to 2px column to column,
+   reintroducing in a new form exactly the wobble the eleventh pass
+   removed.
+3. **Row 0 needed +1px that no other row did.** It has no grid line above
+   it — its cell is flush with the sheet's top edge — while every other
+   row's cell begins ~1.5px inside the line above it. A crop anchored on
+   the raw inter-line span put row 0's content one pixel higher than the
+   other five. This was measured, not theorised: the export draws each
+   cell's timestamp at a constant offset below its own cell top, and row
+   0's landed on frame row 11 where the rest landed on 10.
+
+### The timestamp is the alignment instrument
+
+A full-bleed sheet defeats the previous pass's alignment test entirely.
+That test found each frame's opaque-pixel bounds and asserted they were
+centred; here every pixel is opaque, so it measures the whole frame,
+centres trivially, and **passes vacuously on any crop whatsoever**,
+including a badly drifting one.
+
+The burned-in timestamps replace it. They sit at a constant offset in every
+cell by construction, so if the crop is aligned they land on the same rows
+of all 120 built frames — and if it drifts, they move. Tolerance is
+exactly 1px, and that pixel belongs to the art rather than the crop: the
+labels are different strings, so their glyphs put different amounts of ink
+on the topmost antialiased row, and frames sharing one window still report
+first-ink rows of 10 and 11. The drift this replaces was 14px.
+
+### Timing is read off the art now
+
+The timestamps run 0.00s, 0.04s, 0.08s ... 4.96s: steps of 1/24s across all
+120 cells. So `FPS` is 24 and the sequence is 5.0s, both taken from the
+sheet rather than chosen. The previous 10.0 was deliberate — a fast
+readback would fight a hand-illustrated PIXEL-ART sheet (see
+`pixel_art_engine.md`) — and that reasoning was right for the art it was
+written against and simply does not apply to a rendered 24fps animation of
+a rotating globe. At 10fps these 120 frames would stretch a five-second
+intro to twelve.
+
+### Two things removed
+
+The magenta chroma-key and despill pass is gone. There is no magenta on
+this sheet, so it was a no-op — and an expensive one, a naive
+`get_pixel`/`set_pixel` loop over all 1.57M pixels of the sheet, the exact
+technique measured and fixed out of four other classes the same day (see
+`character_creator_preview_scene.md`'s "Load cost" section). The guard test
+stays, so magenta art returning fails loudly rather than silently
+rendering a pink background.
+
+`DISPLAY_SCALE` moves 1 —> 3. The twelfth pass pinned it to exactly 1 on an
+explicit ask — *"still too big.. make it native size / resolution"* — but
+"native" was never really about the number 1; it was about the on-screen
+size that number produced against 243x162 landscape art. Against 79x151
+portrait frames, 1:1 would obey the letter of that ask while shrinking the
+intro to a 79px-wide thumbnail. 3 restores the width that ask actually
+shipped and stays a whole number, so the pixel-perfect property the eighth
+and twelfth passes established is intact. Chosen by the player when the
+trade was put to them, not inferred.
+
+### Status
+
+- ✅ 120 frames build, all 79x151, none carrying a grid line, none blank.
+- ✅ Verified as a rendered filmstrip across the whole sequence, not only
+  by assertion: crescent —> full Earth —> light sweep —> wordmark —>
+  golden burst, with the globe holding its position throughout.
+- ✅ `test_intro_splash_sheet.gd` 11/11, `test_intro_splash.gd` 16/16,
+  `test_intro_splash_sequencer.gd` 7/7, plus the three world-wiring suites.
+- ⬜ The timestamps and grid lines are still burned into the shipped art.
+  Cropping around them is correct but it is working around a QA export, not
+  a clean sprite sheet; a re-export without the chrome would let the crop
+  take the full cell and gain back the ~14% currently spent on the label.

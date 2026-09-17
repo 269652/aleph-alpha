@@ -166,10 +166,10 @@ func test_display_size_is_smaller_than_the_prior_character_panel_sized_box():
 
 
 ## A twelfth pass (2026-09-09) pinned DISPLAY_SCALE to exactly 1, on an
-## explicit ask: "still too big.. make it native size / resolution". A
-## fourteenth pass (2026-09-17) raises it to 3, and the reason that is not a
-## regression of the twelfth is that "native" was never really about the
-## NUMBER 1 -- it was about the on-screen size that number produced against
+## explicit ask: "still too big.. make it native size / resolution". The
+## second art-replacement pass (2026-09-17) raises it to 3, and the reason
+## that is not a regression of the twelfth is that "native" was never really
+## about the NUMBER 1 -- it was about the on-screen size that number produced against
 ## the art of the day, which was a 243x162 landscape frame.
 ##
 ## The replacement sheet's frames are 79x151 PORTRAIT (see IntroSplashSheet

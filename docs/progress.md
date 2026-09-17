@@ -23910,3 +23910,124 @@ Three existing `test_main_menu.gd` navigation tests were changed from a
 hardcoded `wait_process_frames(10)` to waiting on the real condition
 (`_creator_is_open`): that margin was already a guess at one yield-split
 pass's length, and adding a second one made it stale.
+
+
+## The intro's second art swap: a contact sheet, not a sprite sheet (`concept/intro_splash.md`, 2026-09-17)
+
+Reported in play: *"The intro has new resolution please fix the cropping
+properly."* `assets/sprites/intro.png` had been replaced (commit `cb6b014`)
+and nothing that reads it was updated, so the intro was playing garbage.
+
+### ✅ The grid is re-measured and re-pinned (`intro_splash_sheet.gd`)
+
+The replacement is a different KIND of artefact, not just a different size
+— a contact sheet exported straight out of the source animation:
+
+| | old | new |
+| --- | --- | --- |
+| resolution | 1983x793 | 1672x941 |
+| grid | 8 x 5 | 20 x 6 |
+| frames | 40 | **120** |
+| background | magenta, keyed out | opaque black space |
+| cell separation | real gutters | drawn grey grid lines, 1-3px |
+| frame shape | 243x162 landscape | 79x151 portrait (9:16 source) |
+| chrome | none | each cell's timestamp burned into its corner |
+
+Every crop landed at the wrong offset and the last column of every row ran
+309px off the right-hand edge, so the final frame of each row came out
+blank; two thirds of the animation never played at all, because
+`FRAME_COUNT` still said 40.
+
+Measured, never assumed (the grid divides evenly on neither axis —
+1672/20 = 83.6, 941/6 = 156.8, and the cells genuinely differ in width,
+79-83px). One fixed 79x151 window for all 120 frames, sized to the smallest
+cell so it can never pull in the line beside it, **centred horizontally**
+in each cell (the globe sits at its cell's middle; left-anchoring would
+shift it up to 2px column to column, reintroducing the wobble the eleventh
+pass removed) and **top-anchored vertically** (the art is anchored to the
+cell top, and the last row's interior is 19px taller only because the sheet
+has trailing black beneath it).
+
+**Row 0 needed +1px that no other row did** — it has no grid line above
+it, so its cell is flush with the sheet's top edge while every other row's
+begins ~1.5px inside the line above. Found by measuring the timestamp,
+which the export draws at a constant offset in every cell: row 0's landed
+on frame row 11 where the rest landed on 10.
+
+### ✅ The previous swap's own regression tests could not catch this one
+
+The section added to `concept/intro_splash.md` earlier the same day exists
+precisely so the next art swap fails loudly. It did not fire usefully,
+and why is worth recording: it measured the sheet by looking for rows that
+were entirely MAGENTA. This sheet has none, so the helper reported the
+whole image as a single row — a failure, but one reading as "the pinned
+rows are stale" rather than "the measuring instrument does not fit this
+sheet". It now finds the grey grid lines instead.
+
+Worse, the previous pass's ALIGNMENT test passed **vacuously**: it found
+each frame's opaque-pixel bounds and asserted they were centred, and on a
+full-bleed sheet every pixel is opaque, so it measures the whole frame,
+centres trivially, and accepts any crop whatsoever. Replaced by the
+burned-in timestamps, which sit at a constant offset in every cell and so
+land on identical rows of all 120 frames when the crop is aligned
+(`test_every_frame_lands_its_timestamp_label_on_the_same_rows`). Tolerance
+is exactly 1px and that pixel is the art's, not the crop's: the labels are
+different strings, so their glyphs put different ink on the topmost
+antialiased row. The drift it replaces was 14px.
+
+### ✅ Timing is read off the art (`intro_splash_sequencer.gd`)
+
+The timestamps run 0.00s to 4.96s in steps of 1/24s across all 120 cells,
+so `FPS` is 24 and the sequence is 5.0s — taken from the sheet, not
+chosen. The previous 10.0 was a deliberate "keep a pixel-art sheet from
+reading too smoothly" choice that was right for the art it was written
+against and does not apply to a rendered 24fps globe animation; at 10fps
+these 120 frames would stretch a five-second intro to twelve.
+
+### ✅ The magenta chroma-key pass is gone (`intro_splash_sheet.gd`)
+
+No magenta on this sheet, so it was a no-op — and an expensive one: a
+naive `get_pixel`/`set_pixel` loop over all 1.57M pixels, the exact
+technique measured and fixed out of four other classes the same day (see
+the character-creator load entry above). The guard test stays, so magenta
+art returning fails loudly rather than rendering a pink background.
+
+### ✅ `DISPLAY_SCALE` 1 —> 3 (`scenes/intro_splash.gd`)
+
+The twelfth pass pinned it to exactly 1 on an explicit ask — *"still too
+big.. make it native size / resolution"* — but "native" was never about the
+number 1; it was about the on-screen size that number produced against
+243x162 landscape art. Against 79x151 portrait frames, 1:1 would obey the
+letter of that ask while shrinking the intro to a 79px-wide thumbnail. 3
+restores the width that ask actually shipped (237 against 243) and stays a
+whole number, so the pixel-perfect property the eighth and twelfth passes
+established is intact. Chosen by the player when the trade was put to them.
+
+### ✅ `tools/probe_intro_sheet.gd` rewritten
+
+It looked for magenta gutters too, so the tool the concept doc and the
+sheet's own comments both name as "re-measure with this" was useless for
+exactly the job it exists to do. It now finds grid lines using the same
+rule the regression test does, so probe and test cannot disagree about
+where the grid is, and it reports the per-row label alignment that surfaced
+the row-0 offset. Re-run against the shipped art, it reproduces every
+pinned constant exactly.
+
+### Verification
+
+Rendered as a filmstrip across the whole sequence, not only asserted:
+crescent → full Earth → light sweep → wordmark → golden burst, globe
+holding its position throughout, no grid line on any frame edge.
+`test_intro_splash_sheet.gd` 11/11, `test_intro_splash.gd` 16/16,
+`test_intro_splash_sequencer.gd` 7/7, `test_world_intro_splash_after_load_
+fanout.gd` 5/5, `test_world_play_intro_splash_frame_gate.gd` 3/3,
+`test_world_replay_intro_wiring.gd` 5/5.
+
+### Still open
+
+The timestamps and grid lines are burned into the shipped art. Cropping
+around them is correct, but it is working around a QA export rather than a
+clean sprite sheet: a re-export without the chrome would let the crop take
+the full cell and win back the ~14% of every frame currently spent on the
+label band. Flagged, not fixed — keeping the timestamps was the explicit
+call when the trade was put directly ("Just crop with timestamp").
