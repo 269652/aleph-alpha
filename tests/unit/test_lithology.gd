@@ -167,3 +167,55 @@ func test_km_per_tile_agrees_with_the_world_generator_scale():
 		Lithology.KM_PER_TILE, generator_km_per_tile, 0.0001,
 		"Lithology's world scale drifted from EarthChunkGenerator.TILES_PER_DEGREE"
 	)
+
+
+# -- permeable cover over a soluble unit -----------------------------------
+#
+# The one control that decides between Palmer's branchwork and his network
+# maze: bare karst concentrates its own rain into point recharge, while
+# carbonate buried under permeable insoluble cover takes genuinely diffuse
+# recharge. "Outcrop" means exposed, so exposed karst is the commoner
+# case -- which is also why branchwork dominates Palmer's survey.
+
+func test_cover_is_deterministic():
+	for i in 50:
+		assert_eq(
+			lithology.has_permeable_cover_at(i * 311, i * 97),
+			lithology.has_permeable_cover_at(i * 311, i * 97)
+		)
+
+
+func test_cover_is_a_province_scale_fact_not_a_per_tile_one():
+	var base := Vector2i(Lithology.PROVINCE_TILES * 11, Lithology.PROVINCE_TILES * 5)
+	var expected: bool = lithology.has_permeable_cover_at(base.x, base.y)
+	for offset in [Vector2i(1, 0), Vector2i(0, 2), Vector2i(Lithology.PROVINCE_TILES - 1, 1)]:
+		assert_eq(
+			lithology.has_permeable_cover_at(base.x + offset.x, base.y + offset.y), expected
+		)
+
+
+func test_exposed_karst_is_the_commoner_case():
+	var covered := 0
+	for i in 600:
+		if lithology.has_permeable_cover_at(i * Lithology.PROVINCE_TILES, 0):
+			covered += 1
+	var share := float(covered) / 600.0
+	assert_lt(share, 0.5, "more karst came out covered than exposed")
+	assert_almost_eq(share, Lithology.PERMEABLE_COVER_SHARE, 0.06)
+
+
+func test_cover_is_independent_of_the_rock_underneath():
+	# Cover is a separate depositional history from the bedrock's own, so
+	# it must not correlate with which rock it happens to sit on.
+	var covered_carbonate := 0
+	var carbonate := 0
+	for i in 800:
+		var x := i * Lithology.PROVINCE_TILES
+		if Lithology.CARBONATES.has(lithology.rock_at(x, 0, 0.5)):
+			carbonate += 1
+			if lithology.has_permeable_cover_at(x, 0):
+				covered_carbonate += 1
+	assert_gt(carbonate, 30, "not enough carbonate provinces sampled to say anything")
+	assert_almost_eq(
+		float(covered_carbonate) / float(carbonate), Lithology.PERMEABLE_COVER_SHARE, 0.12
+	)

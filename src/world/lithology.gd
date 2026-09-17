@@ -93,6 +93,26 @@ const OROGEN_CRYSTALLINE_FRACTION := 0.65
 const SHALE_FRACTION_OF_CLASTIC := 0.60
 const GNEISS_FRACTION_OF_CRYSTALLINE := 0.50
 
+## How much of the soluble rock on this planet lies under permeable but
+## insoluble cover rather than being exposed at the surface.
+##
+## This is the one control that decides between Palmer's branchwork and
+## his network maze: bare karst concentrates its own rain into point
+## recharge through its epikarst, while carbonate buried under permeable
+## cover takes genuinely diffuse recharge. "Outcrop" means exposed, so
+## exposed karst is the commoner case -- which is also why branchwork
+## dominates Palmer's survey.
+##
+## The least-anchored constant in this stack, and flagged as such rather
+## than dressed up: the exposed/covered split of global karst is not a
+## figure this project has a single measured source for the way it has
+## Goldscheider's 15.2% for carbonate outcrop itself. It is set to land
+## the resulting pattern mix near Palmer's own surveyed ~57% branchwork
+## within CaveSiting's documented sweep, which is a real measurement but
+## one reached through assumptions that sweep names out loud.
+const PERMEABLE_COVER_SHARE := 0.32
+
+
 ## Relative dissolution rate, limestone = 1.0. Gypsum's equilibrium
 ## solubility (~2.4 g/L) is about an order of magnitude above CO2-charged
 ## limestone (~0.25 g/L); dolomite dissolves about an order of magnitude
@@ -154,6 +174,17 @@ func rock_at(global_x: int, global_y: int, relief: float) -> String:
 ## 0.0 for anything that does not dissolve (including an unknown rock).
 func solubility_of(rock: String) -> float:
 	return SOLUBILITY.get(rock, 0.0)
+
+
+## Whether this province's soluble rock lies under permeable insoluble
+## cover. Province-scale and deterministic like rock_at, but rolled
+## independently of it: cover is a separate depositional history from the
+## bedrock's own, so it must not correlate with which rock it sits on.
+func has_permeable_cover_at(global_x: int, global_y: int) -> bool:
+	var province_x := _province_index(global_x)
+	var province_y := _province_index(global_y)
+	var roll := PixelNoise.unit(hash("lithology_cover"), province_x, province_y)
+	return roll < PERMEABLE_COVER_SHARE
 
 
 func _province_index(tile: int) -> int:
