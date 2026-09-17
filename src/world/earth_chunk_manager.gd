@@ -1837,12 +1837,10 @@ func claim_property_with_deed(property_id: String, settlement_id: String = "") -
 ## counting it twice would be a free way to push a hamlet over a tier threshold
 ## or an institution over its formation minimum with nobody moving in.
 func record_player_settled_if_new(settlement_id: String) -> bool:
-	var history := _event_store.events_for_entity(settlement_id)
-	if history.is_empty():
+	if _event_store.latest_event_for_entity(settlement_id) == null:
 		return false
-	for event in history:
-		if event.type == "player_settled":
-			return false
+	if not _event_store.events_for_entity_of_type(settlement_id, "player_settled").is_empty():
+		return false
 
 	# The ACTOR is the player's entity id, not their household id, so
 	# _households_in_settlement can resolve it through the same
@@ -2225,7 +2223,7 @@ func settle_resident_if_new(recipe_id: String, origin_tile: Vector2i) -> String:
 	settled.actors = [resident_id]
 	settled.tags = [project.id]
 	var settlement_id := EntityRef.for_settlement(chunk_coord)
-	if not _event_store.events_for_entity(settlement_id).is_empty():
+	if _event_store.latest_event_for_entity(settlement_id) != null:
 		settled.witnesses = [settlement_id]
 	_event_store.append(settled)
 	_memory_store.witness_event(settled, _world_age_seconds)
@@ -3017,7 +3015,7 @@ func dissolve_institution(institution_id: String) -> bool:
 ## harmless no-op rather than a duplicate founding.
 func _record_ruin_from(ruin_key: String, cause_event_id: String) -> void:
 	var ruin_id := EntityRef.for_kind("ruin", ruin_key)
-	if not _event_store.events_for_entity(ruin_id).is_empty():
+	if _event_store.latest_event_for_entity(ruin_id) != null:
 		return
 	var event := Event.new("ruin_formed", _world_age_seconds)
 	event.actors.append(ruin_id)
@@ -5094,7 +5092,7 @@ func wipe_event_store(path: String = EventStorePersistence.SAVE_PATH) -> void:
 ## keeps the exact old per-index id below.
 func record_settlement_founded_if_new(chunk_coord: Vector2i, npcs: Array, plots: Array = []) -> void:
 	var settlement_id := EntityRef.for_settlement(chunk_coord)
-	if not _event_store.events_for_entity(settlement_id).is_empty():
+	if _event_store.latest_event_for_entity(settlement_id) != null:
 		return
 
 	var npc_ids: Array[String] = []

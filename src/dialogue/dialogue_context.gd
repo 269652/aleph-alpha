@@ -463,8 +463,8 @@ static func household_bank_for(npc_id: String) -> String:
 static func settlement_of(npc_id: String, event_store) -> String:
 	if event_store == null:
 		return ""
-	for event in event_store.events_for_entity(npc_id):
-		if event.type == "npc_settled" and not event.witnesses.is_empty():
+	for event in event_store.events_for_entity_of_type(npc_id, "npc_settled"):
+		if not event.witnesses.is_empty():
 			return event.witnesses[0]
 	return ""
 

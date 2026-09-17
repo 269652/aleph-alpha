@@ -4440,6 +4440,150 @@ the GPU is no longer a wall at any river, and the frame no longer has a
 part that was being called noise. The path is now the creature step
 costs, and it is measured per class per step.
 
+### FPS regression round 16: the same shape as round 14, one index over (2026-09-17)
+
+"At a fresh start FPS is 60-100 but when running the game for a while it
+cripples to 5-10 fps -- is there GC missing?"
+
+**No GC is missing, and none can be.** Godot has no garbage collector:
+GDScript is reference-counted, `RefCounted` dies the moment its last
+reference does, and a `Node` lives until something frees it. There is no
+collector to be absent, no heap to fill, and nothing a collection pass
+would reclaim here. What decays across a session in this project has
+never been memory; it is WORK PROPORTIONAL TO EVERYTHING THAT HAS EVER
+HAPPENED -- which is exactly what round 14 found, and exactly what this
+round found again, one index over.
+
+**Root cause.** Round 14 fixed `events_of_type`, which scanned the whole
+store, by adding a type index (`_by_type`). It left the other half
+untouched: the callers that ask "what did THIS entity do, of THIS kind"
+all called `events_for_entity(settlement_id)` and then filtered the
+result by type in GDScript. `events_for_entity` MATERIALISES a fresh
+`Array[Event]` holding every event that entity was ever an actor or
+witness in, so the filter costs the entity's entire lifetime history
+however few events actually match.
+
+Fourteen call sites had that shape. Three of them run on the settlement
+step for every settlement, every `SETTLEMENT_STEP_INTERVAL`:
+
+- `_production_counts_for_settlement` -- walks the whole history counting
+  `production_succeeded`. Called by `_step_settlement_classification`
+  (every settlement, every step) and again by
+  `production_shortfall_quests_for_settlement`.
+- `_villagers_in_settlement` -- walks the whole history for
+  `npc_settled`. Reached from `_villager_witnesses_of`, which runs on
+  EVERY settlement event append, so appending an event cost the
+  settlement's whole history and the history grew with every append:
+  quadratic on its own.
+- `_households_in_settlement` -- walks the whole history for the three
+  `SETTLING_EVENT_TYPES`. Fifteen call sites.
+
+And a settlement's history only ever grows, deliberately:
+"SUCCESSES are deliberately NOT guarded ... each one is real goods that
+were really made" (`_settlement_production_outcome`), while contract
+outcomes are "the highest-volume real settlement activity in this file"
+(`_record_contract_event`). Both comments are correct about the MEMORY
+side they were written for; neither is a bound on the EVENT side, and it
+is the event side these reads walk.
+
+**Measured, before the fix** (`tools/probe_settlement_history_cost.gd`,
+and the two cost tests in `test_earth_chunk_manager.gd`): one assessment
+of one settlement carrying H events of its own ordinary traffic walked
+
+    events walked = 74 + 14.0 * H
+
+exactly -- 774 at H=50, 5,674 at H=400, 7,074 at H=500. Every single
+event a settlement accumulates adds FOURTEEN events of work to every
+future assessment of that settlement, for the rest of the session. With
+`MAX_UNLOADED_SETTLEMENTS_PER_STEP` at 20, a step pays that twenty times
+over. Nothing about it ever shrinks, which is the reported symptom
+exactly: fine at a fresh start, unplayable an hour in.
+
+**Fix: the intersection index.** `EventStore` gains `_by_entity_type`
+("entity|type" -> event ids, in order), maintained in both `append()`
+and `from_dicts()` -- the same "append indexes, read reads the index"
+shape `_by_entity` and round 14's `_by_type` already use, and the same
+restored-save requirement. Three new reads sit on it:
+`events_for_entity_of_type`, `events_for_entity_of_types` (several types
+merged back into the store's own insertion order, for
+`SETTLING_EVENT_TYPES`), and `latest_event_for_entity` for the
+`record_path_worn_if_new` / `record_trail_formed_if_new` family, which
+only ever read `history.back()` and were building the whole history to
+get it. An entity that is both actor and witness of one event is still
+indexed twice, exactly as `events_for_entity` always returned it, so
+narrowing by type cannot silently change a count a caller depended on.
+
+**The same bug in its purest form, also fixed.** Four sites asked "does
+this entity have ANY history?" by materialising all of it and calling
+`is_empty()` on the result -- an O(1) question answered in O(history).
+One of them is `record_settlement_founded_if_new`, which runs on every
+chunk load that carries a village: walking back into a village already
+visited walked its whole history to notice it already existed (measured:
+403 events for a 400-event history, now under 10). The others are
+`_record_ruin_from`, the player-house settling guard, and
+`record_player_settled_if_new`. `latest_event_for_entity` answers all
+four in one lookup. `DialogueContext.settlement_of` had the identical
+per-entity scan on the conversation path -- an NPC's settlement recovered
+by walking everything that ever happened to them, measured at 301 events
+for a 300-event history, every time anyone was spoken to.
+
+**A new instrument, and the real lesson of fifteen rounds.** Every field
+a PERF line prints is a duration, and a duration cannot say WHY it grew:
+`s_ecology` climbing 6 -> 142 ms looks identical whether the cause is a
+growing store, a growing population, or anything else. That is why each
+of these rounds has cost a long session plus a guess. `EventStore` now
+carries a read odometer (`events_read`/`take_events_read`: how many
+events the reads actually handed out), World feeds it to the report every
+frame, and the PERF line carries `c_ev_read` -- history walked per frame.
+Flat across a session is healthy; climbing is this exact bug class,
+naming itself. It is also what makes the fix testable at all: the two
+cost tests assert on walked counts, which is deterministic, where
+GDScript/GUT cannot assert Big-O and a wall clock would be flaky.
+
+**Honest limits of this round.**
+
+- The behaviour is deliberately unchanged, so the existing settlement
+  tests are the behavioural evidence (they pass unmodified) and the new
+  tests are purely about cost. No new behaviour was added or intended.
+- This was found and proven by static reading plus a controlled probe,
+  NOT by a long live session -- unlike round 14, which watched a real
+  session age. The asymptotic claim is directly measured; the resulting
+  frame-rate improvement in a real session is NOT, and should be
+  confirmed with a `--perf-report` run watching `c_ev_read`.
+- The stores themselves are still append-only and unbounded.
+  `EventStore` and `MemoryStore` grow for the whole session and are
+  serialised in full on every save. This round makes reads cheap; it does
+  not cap what is stored, and a long enough session still grows memory
+  and save time without limit. That is a real, separate, larger design
+  question (what may a world forget?) and is deliberately not attempted
+  here.
+- `NpcRecognition.shared_history` still walks the PLAYER's whole event
+  history, and the player is an actor or witness in more events than
+  anything else in the world. It is not fixed here because it genuinely
+  needs every event involving both parties REGARDLESS of type -- it
+  counts encounters -- so the (entity, type) index does not answer it. It
+  needs either a pair index or a cached count, which is a real design
+  decision rather than a drop-in. It runs on meeting an NPC, not per
+  frame, so it is a growing hitch rather than a growing frame cost.
+- `MemoryStore.memories_for` has the same materialise-everything shape
+  and is used by `_exchange_recent_memories` purely to read `.back()`.
+  Left alone this round: it is on the 30-second NPC-encounter cadence
+  rather than the settlement step, so it is real but small next to what
+  was fixed. Named so the next round does not have to find it again.
+- Eleven further call sites of the same shape were routed through the
+  index as well (`_recorded_settlement_status`/`_tier`/`_specialization`,
+  `_recorded_production_outcome`, `_recorded_contract_outcome`,
+  `_settlement_of_party`, `has_unlocked_blueprint`, and the four
+  path/trail recorders). Those are guarded by session-lifetime caches or
+  are not per-step, so they were never the dominant cost -- they are
+  fixed because they are the same bug, not because they were measured.
+- `_settlement_specialization`'s cache is seeded only on a NON-EMPTY
+  read, so a settlement that has never specialised -- nearly all of them,
+  since only two recipes map to a specialisation at all -- re-reads every
+  step forever rather than caching the "never". Now cheap, because the
+  read is indexed; still a negative-caching hole, and named here rather
+  than silently left.
+
 ### In-flight foragers survive an unload; their trip's outcome does not (2026-09-09)
 
 The ant side of `bees.md`'s own identical section, by that exact name --

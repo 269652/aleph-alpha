@@ -14925,3 +14925,43 @@ func test_the_cost_of_assessing_a_settlement_does_not_grow_with_its_history():
 		long_session,
 		"assessment cost must not depend on how long the session has been running"
 	)
+
+
+## The same bug class in its purest form: `record_settlement_founded_if_new`
+## runs on every chunk load that carries a village, and its whole job for an
+## already-founded settlement is to notice that and return. It asked "does
+## this settlement have any history?" by MATERIALISING all of it and calling
+## is_empty() on the result -- an O(1) question answered in O(history), on a
+## path that runs every time the player walks back into a village they have
+## already visited. Same for _record_ruin_from and the player-house settling
+## guard. latest_event_for_entity answers it in one lookup.
+func _events_walked_re_founding_a_settlement(history_events: int) -> int:
+	var layer := TileMapLayer.new()
+	var entities := Node2D.new()
+	var creatures := Node2D.new()
+	var subject = EarthChunkManager.new(layer, entities, creatures)
+	var chunk_coord := Vector2i(49, 49)
+	var npcs := [NpcIdentity.new(1), NpcIdentity.new(2)]
+	subject.record_settlement_founded_if_new(chunk_coord, npcs)
+	var settlement_id := EntityRef.for_settlement(chunk_coord)
+	var store = subject.event_store()
+	var actors: Array[String] = [settlement_id]
+	for i in history_events:
+		var noise = Event.new("contract_fulfilled", 0.0)
+		noise.actors = actors.duplicate()
+		store.append(noise)
+
+	store.take_events_read()
+	# The no-op: this settlement already exists, so nothing is recorded.
+	subject.record_settlement_founded_if_new(chunk_coord, npcs)
+	var walked: int = store.take_events_read()
+
+	layer.free()
+	entities.free()
+	creatures.free()
+	return walked
+
+
+func test_re_founding_an_existing_settlement_does_not_walk_its_history():
+	var walked := _events_walked_re_founding_a_settlement(400)
+	assert_lt(walked, 10, "noticing a settlement already exists is one lookup, not a scan")
