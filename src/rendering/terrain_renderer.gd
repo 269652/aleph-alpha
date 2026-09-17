@@ -142,6 +142,36 @@ const ROAD_ART_PATH := "res://assets/sprites/terrain/road.png"
 static func is_road_tile(tile_id: String) -> bool:
 	return tile_id == ROAD_TILE_ID
 
+
+## Modifications that are drawn as an OVERLAY standing on the ground rather
+## than replacing it (EarthChunkManager._spawn_structure_art_for): the cell
+## keeps whatever tile it already showed, and paint() leaves it exactly as
+## it found it.
+##
+## Asked for directly, with two sides of a real fence ring arrowed in a
+## screenshot: *"move the fences to the inner edge of the enclosure and
+## treat the rest of the tile as street ... the brown squares should still
+## be street when a fence is put"*. A village farm's rails are neither a
+## structure nor a building piece, so they were falling through
+## atlas_coords_for_modification's unknown-id fallback to the plain-earth
+## slot -- which is what drew the raw brown square under every rail and cut
+## a bare dug ring round every field. A rail is a LINE on one edge of its
+## own tile (VillageFarm.fence_inner_direction), not a surface, so it has no
+## ground tile of its own to paint at all.
+##
+## Listed here rather than preloaded from VillageFarm so this renderer keeps
+## its existing freedom from that gameplay module -- the same shape
+## VillageFarm.MIN_FIELD_CELLS already uses in the other direction, and
+## pinned to VillageFarm.FENCE_TILE_IDS by
+## test_a_farm_rail_is_an_overlay_and_never_paints_a_ground_tile_of_its_own.
+const OVERLAY_ONLY_TILE_IDS: Array[String] = [
+	"farm_fence_north", "farm_fence_south", "farm_fence_east", "farm_fence_west",
+]
+
+
+static func is_overlay_only_modification(tile_id: String) -> bool:
+	return OVERLAY_ONLY_TILE_IDS.has(tile_id)
+
 ## Cardinal directions a blend can be oriented toward -- up/down/left/right,
 ## in this fixed order so mask/atlas indexing is stable.
 const _DIRECTIONS: Array[Vector2i] = [Vector2i(0, -1), Vector2i(0, 1), Vector2i(-1, 0), Vector2i(1, 0)]
@@ -1378,7 +1408,7 @@ func paint(
 			var local := Vector2i(x, y)
 			var global := origin + local
 			var atlas_coords: Vector2i
-			if chunk.modifications.has(local):
+			if _replaces_the_ground(chunk, local):
 				var tile_id: String = chunk.modifications[local]
 				if tile_id == EARTH_TILE_ID:
 					var variant := variant_index_for_position(global.x, global.y)
@@ -1561,6 +1591,16 @@ func paint_roofs(
 ## has no visibility into a neighboring chunk's modifications at all, the
 ## same pre-existing blind spot the ordinary biome-to-biome blend/corner
 ## system already has at chunk seams.
+## Whether `local` carries a modification that really takes the place of the
+## ground -- true for every modification except an overlay-only one (see
+## OVERLAY_ONLY_TILE_IDS), which stands ON the ground and leaves the cell
+## showing, and blending like, the real terrain it was built on.
+func _replaces_the_ground(chunk: Chunk, local: Vector2i) -> bool:
+	if not chunk.modifications.has(local):
+		return false
+	return not is_overlay_only_modification(chunk.modifications[local])
+
+
 func _neighbor_biomes(
 	chunk: Chunk, x: int, y: int, origin: Vector2i, global_biome_lookup: Callable,
 	exclude_modified_neighbors: bool = false
@@ -1570,7 +1610,7 @@ func _neighbor_biomes(
 		var nx: int = x + direction.x
 		var ny: int = y + direction.y
 		if nx >= 0 and nx < chunk.width and ny >= 0 and ny < chunk.height:
-			if exclude_modified_neighbors and chunk.modifications.has(Vector2i(nx, ny)):
+			if exclude_modified_neighbors and _replaces_the_ground(chunk, Vector2i(nx, ny)):
 				continue
 			neighbors[direction] = chunk.biome[ny * chunk.width + nx]
 		elif global_biome_lookup.is_valid():
