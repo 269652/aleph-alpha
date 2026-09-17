@@ -189,6 +189,79 @@ sub-second reaction). Each step:
 4. Roll `check_hawk_call` once per refresh and fire the one-shot player if it
    hits.
 
+## Diagnosing silence (2026-09-17)
+
+Reported live: *"The game has no sound anymore"*, and then, after the
+obvious checks: *"still completely mute everywhere, I checked windows
+settings, the process is not muted."*
+
+A mute has several possible causes here and **they are indistinguishable
+from the player's chair** — every one of them produces exactly "no sound",
+with the process still holding an open audio device. Worse, each round of
+"try this, is it fixed?" costs a launch. `AudioDiagnostics`
+(`src/audio/audio_diagnostics.gd`, pure) turns one launch into an answer:
+`World._log_audio_diagnostics()` gathers the real facts right after
+`_apply_audio_volume()` and prints them, with every cause that fits named
+in words.
+
+### The causes it knows, and why each one is real
+
+Each is a path that genuinely exists in this codebase, not a guess at what
+might go wrong:
+
+- **The Master bus at the silent floor.** `AudioSettings.volume_to_bus_db`
+  maps a setting of 0 to `SILENT_BUS_DB` (−80 dB), and
+  `_save_audio_settings` persists it to `user://keybindings.cfg`. One
+  slider drag to zero silences the whole game across every future restart.
+  This is the single most likely cause, and **the only thing in this
+  codebase that can silence everything at once** — `_apply_audio_volume`
+  is the one and only line in the entire repo that touches `AudioServer`.
+- **The audio players never reaching the tree.** `World._ready()` returns
+  early at the license gate and again at the GitHub identity check, both
+  *before* `add_child(_nature_soundscape.build())`. A game that took
+  either path has no audio nodes at all rather than quiet ones.
+- **Streams that failed to load.** Every clip in this game is `load()`ed
+  at **runtime**, never `preload()`ed — so a resource missing from a built
+  copy leaves a silent player with no error a player would ever see,
+  rather than failing the build. `missing_streams` walks the soundscape
+  root and names them.
+- **A paused tree.** Neither `NatureSoundscapePlayer.build()` nor
+  `InteractionSfxPlayer.build()` sets `process_mode`, so both stop dead
+  while `get_tree().paused` is true — which it is on the main menu
+  (`world.gd`'s `_show_main_menu`) and for as long as the settings overlay
+  is open. There is no sound on the menu, by construction.
+- **No "Master" bus at all**, so the volume was written to a bus index of
+  −1.
+
+### Two deliberate design choices
+
+**Every cause present is reported, not just the first.** They stack — a
+paused tree and a zero volume are entirely possible together — and a
+report that names one at a time costs a launch per cause.
+
+**The report's own ABSENCE is diagnostic.** It is printed immediately
+after `_apply_audio_volume()`, which is itself after the audio players are
+added. A boot that returned early at the license gate or the identity
+check prints nothing here at all — so "no audio diagnostics block in the
+log" is itself the answer, and a different one from "block present,
+Master bus at −80".
+
+It is unconditional rather than behind a debug flag: it is a handful of
+lines once per launch, and a diagnostic a player has to enable first is
+one they will not have enabled on the launch that went wrong.
+
+### Status
+
+- ✅ **`AudioDiagnostics`** (2026-09-17) — 13 tests, every branch reachable
+  headlessly because every fact is passed in rather than read from a live
+  `AudioServer`. `root()`/`root_in_tree()` added to both audio players
+  (4 more tests), which distinguish *never built* from *built but never
+  added* — the two look identical to a null check and mean different
+  things.
+- ⬜ **The cause of the reported mute is not yet known.** This pass builds
+  the instrument, not the fix; the log from one launch says which of the
+  causes above it is.
+
 ## Status
 
 - ✅ **The pure `layer_mix` mixing logic, the layer registry, and 11 real

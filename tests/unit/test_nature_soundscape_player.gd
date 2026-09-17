@@ -231,3 +231,33 @@ func test_walking_away_from_water_ramps_the_river_layer_back_down():
 	)  # settle fully, far
 	var river: AudioStreamPlayer = root.get_node(NatureSoundscape.RIVER_LAYER)
 	assert_false(river.playing)
+
+
+# -- the two accessors the audio diagnostic reads (see AudioDiagnostics, --
+# -- World._log_audio_diagnostics) -- reported live: "the game has no ----
+# -- sound anymore... completely mute everywhere" -------------------------
+
+## Before build(), there is no node -- and saying so honestly is the point:
+## a boot that returned early (the license gate, the identity check) never
+## calls build() at all, and that is exactly what the diagnostic reports.
+func test_the_root_is_absent_and_not_in_the_tree_before_build():
+	var player := NatureSoundscapePlayer.new()
+	assert_null(player.root())
+	assert_false(player.root_in_tree())
+
+
+## Built but never added is its own distinct state -- the node exists, so a
+## null check alone would call this healthy.
+func test_a_built_but_unadded_root_is_not_in_the_tree():
+	var player := NatureSoundscapePlayer.new()
+	var root := player.build()
+	assert_eq(player.root(), root)
+	assert_false(player.root_in_tree(), "built is not the same as added")
+	root.free()
+
+
+func test_a_root_that_really_reached_the_tree_says_so():
+	var player := NatureSoundscapePlayer.new()
+	var root := player.build()
+	add_child_autofree(root)
+	assert_true(player.root_in_tree())

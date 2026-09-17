@@ -25073,3 +25073,240 @@ player.gd` 25/25 (7 new), `test_world_creature_and_footstep_audio_wiring.gd`
 9/9, `test_world_footstep_wiring.gd` 7/7,
 `test_earth_chunk_manager_footprints.gd` 32/32,
 `test_nature_soundscape_player.gd` 18/18.
+
+### Diagnosing a silent game (see `docs/concept/soundscape.md` "Diagnosing silence", 2026-09-17)
+
+Reported live: *"The game has no sound anymore"*, then *"still completely
+mute everywhere, I checked windows settings, the process is not muted."*
+
+✅ **`AudioDiagnostics`** (`src/audio/audio_diagnostics.gd`, pure) names
+every cause of silence that fits the real facts, printed by
+`World._log_audio_diagnostics()` at every boot. A mute has several possible
+causes here and they are indistinguishable from the player's chair, so each
+"try this" round was costing a launch.
+
+✅ **The causes it knows are paths that really exist**, not guesses: the
+Master bus at `SILENT_BUS_DB` (−80 dB) because the persisted master volume
+is 0 — the only thing in this codebase that can silence everything at once,
+since `_apply_audio_volume` is the single line in the whole repo touching
+`AudioServer`; the audio players never reaching the tree because
+`World._ready()` returned early at the license gate or the GitHub identity
+check, both *before* `add_child(_nature_soundscape.build())`; streams that
+failed to load, which matters because every clip is `load()`ed at **runtime**
+rather than preloaded, so a missing resource is silent instead of fatal; a
+paused tree, which stops all sound because neither audio builder sets
+`process_mode`; and a missing "Master" bus.
+
+✅ **Two deliberate choices.** Every cause present is reported rather than
+just the first, because they stack and one-at-a-time costs a launch each.
+And **the report's own absence is diagnostic** — it prints after
+`_apply_audio_volume()`, so a boot that returned early prints nothing here,
+which is a different answer from "present, Master at −80".
+
+✅ **`root()`/`root_in_tree()` on both audio players** — they distinguish
+*never built* from *built but never added*, which look identical to a null
+check and mean different things (the second is what an early return looks
+like from outside).
+
+⬜ **The cause of the reported mute is still unknown.** This builds the
+instrument, not the fix. Static analysis found nothing wrong: 144/144 audio
+tests green, all 29 referenced clips present on disk, `_ready`'s audio
+wiring intact and correctly ordered, and the reported footstep change
+provably unable to silence ambient audio. One launch's log will say which
+cause it is.
+
+Tests: `test_audio_diagnostics.gd` 13/13 (new),
+`test_nature_soundscape_player.gd` +3, `test_interaction_sfx_player.gd` +1,
+144/144 across the ten audio test files.
+
+### Planner mode: laying out a settlement before building it (see `docs/concept/planner_mode.md`, 2026-09-17)
+
+Asked directly: *"a view toggle to the top besides the minimap which
+toggles RPG Mode (hotbar) with a Planner mode, where the character can
+place blueprints like pavement; houses; sawmills etc. directly on the map
+similar to how it works in Anno 1800 ... then when leaving the plan mode he
+can go to one of the wireframes and hire an NPC to build it or build it
+himself."*
+
+✅ **The spec first**, per CLAUDE.md, with the pillar the whole design turns
+on: **planning is not building.** Placing a blueprint costs nothing, spends
+nothing and changes no terrain; every material and labour hour still falls
+when somebody raises it, through the systems that already exist. That split
+is what stops planner mode becoming a second, cheaper way to build, and it
+is pinned by a test that the placement path contains no `build_at_global`,
+`place_building`, `spend` or `remove_item`.
+
+✅ **`ViewMode`** — the two modes and what each owns. Two claims are stated
+as tested functions rather than left in comments: the hotbar and the palette
+are never both up (two click targets over one world is the confusion the
+toggle removes), and **neither mode pauses the world** — you lay a
+settlement out while it is still alive around you, unlike the settings
+overlay which really does pause.
+
+✅ **`BuildPlan`/`BuildPlanLedger`** — the standing wireframes as world
+state. Deterministic ids from site+blueprint (the `ConstructionProject`/
+`Household` idiom, so no counter to protect and re-planning is idempotent);
+refusals carry reasons; buildability arrives as a `Callable`, the seam
+`BuildingPlacement` already established so water and cliff rules stay with
+the world. An unknown blueprint refuses outright rather than guessing a 1×1
+— a wireframe standing where nothing can ever be built is worse than a
+refusal.
+
+✅ **The toggle beside the minimap, the palette, and click-to-plan.** The
+palette is built from the real `BuildingCatalog`, so sawmill/warehouse/
+blacksmith/brewery come for free and it cannot drift from what the world can
+actually raise. Every "what does this mode show" answer is read from
+`ViewMode` rather than decided again in `World`.
+
+🚧 **A planned site is currently invisible.** The plans are real and
+`plans_in(chunk)` exists for exactly this, but nothing draws them yet — the
+biggest remaining gap, and the next slice.
+
+🚧 **Plans do not survive a reload.** The ledger lives in `World`; pillar 3
+says they must persist, since walking back to one later is the whole point.
+
+🚧 **Walking up to a wireframe to build or hire is not wired.** The pieces
+exist (`ConstructionProject`'s `PLANNED` status, `ConstructionLabor`,
+`HiringGate.can_hire`); the proximity check and the choice itself do not.
+
+🚧 **No cursor footprint preview.** `refusal_reason` already answers it per
+cell; nothing draws the Anno-style green/red ghost yet.
+
+Tests: `test_view_mode.gd` 9/9 (new), `test_build_plan_ledger.gd` 15/15
+(new), `test_world_planner_mode_wiring.gd` 7/7 (new), 108/108 including the
+`building_catalog`/`building_placement`/`world_hud` suites they touch;
+`world.gd` confirmed to still compile by booting it.
+
+### Planner mode, slice 2: the gaps closed (see `docs/concept/planner_mode.md`, 2026-09-17)
+
+Asked: *"Fix the gaps"* — the four open items the first slice named.
+
+✅ **Wireframes are visible.** `PlanWireframe` (pure geometry and colour) +
+`PlanWireframeLayer` (a thin Node2D that only iterates and draws). The one
+piece of real logic a drawing node would carry — turning a plan's chunk and
+local origin into a world rect — lives in the model where a test reaches it
+without a viewport. A child of `World`, not `$UI`, on the ground-effects
+tier: a plan stands on the ground, not on the screen.
+
+✅ **The cursor answers.** One colour vocabulary serves the ghost and the
+wireframe it becomes, since they are the same thing a moment apart. The
+colour comes from the ledger's own refusal *reason*, so the cursor and the
+message can never disagree. Allowed and refused differ in **hue**, pinned by
+a test — it is the only feedback the cursor gives.
+
+✅ **Plans survive a reload.** `BuildPlanPersistence` mirrors
+`WorldClockPersistence`'s shape. One file, not per-chunk directories: tens of
+records read whole, not thousands per chunk. **JSON rather than `store_var`**
+because a malformed `get_var` raises an uncatchable engine error, and a file
+truncated by a crash must degrade to "no plans" rather than take the boot
+down. Loading replays rows into a real ledger, so its overlap refusal still
+knows what it loaded — otherwise every reload would silently allow a second
+plan on top of an existing one.
+
+✅ **Walking up to a wireframe raises it.** `PlanRaising` carries the reach,
+the building's own **real catalog cost** (the same numbers a village pays, so
+a player and a villager never disagree about what a sawmill costs), what you
+are short of so the prompt can say it, and hiring through the **same
+`HiringGate`** every other wage relationship uses rather than a softer rule
+invented for construction. Pillar 1 pays out here: planning charged nothing,
+and the cost falls at the moment somebody builds.
+
+🚧 **Choosing which NPC to hire is not wired** — `can_hire_builder` is real
+and tested and `raising_request` already carries `Labour.HIRED`, but nothing
+picks the villager yet, so the prompt says so plainly rather than pretending.
+
+🚧 **Raising does not yet open a `ConstructionProject`** — the cost check is
+honest; turning it into labour hours against `ConstructionLabor` is next.
+
+Tests: `test_plan_wireframe.gd` 10/10, `test_plan_raising.gd` 12/12,
+`test_build_plan_persistence.gd` 7/7 (all new), 118/118 across the planner
+suite plus `building_catalog`/`hiring_gate`; `world.gd` confirmed to compile.
+
+### Planner mode, slice 3: hiring, and the live trust value it needed (2026-09-17)
+
+Asked: *"Fix the gaps"* — the two the previous slice left open.
+
+✅ **Raising opens a real `ConstructionProject`**, through the same
+`ConstructionProjectStore.start_project` every village build already uses.
+A player-raised building is the same kind of project a villager-raised one
+is, not a parallel one — and `start_project` is idempotent by site, so
+raising twice cannot reset a project already under way. The plan is
+cancelled and re-saved as it becomes a project; leaving it would draw a
+blueprint over its own building.
+
+✅ **Hiring works — and the reason it could not was a documented gap in the
+NPC system, not in planner mode.** `docs/concept/npc_instructions.md` says
+it plainly: *"nowhere on a real NpcIdentity/NpcMarker actually holds a live
+trust value for hiring_gate.gd to read"*, which is why the whole hiring path
+was unreachable in a live game. `NpcTrustStore` is that value — the
+"minimal, deliberately player-only trust scalar" that doc already specifies,
+not the NPC-NPC relationship web — keyed by `NpcIdentity.seed_value` so it
+survives a marker despawning with its chunk.
+
+✅ **Three conversations, pinned rather than eyeballed.** Baseline 0.2 to
+`HIRE_THRESHOLD` 0.5 is a 0.3 gap, and a conversation is worth 0.1, so
+somebody takes a job from you on the **third** real conversation and never
+on a first meeting. A test pins the step against the threshold so the two
+cannot drift apart and quietly make "three conversations" a lie. Talking is
+the only thing that raises it — otherwise nobody would ever become hireable
+and the gate would refuse forever.
+
+🚧 **The wage is offered, not paid.** `BUILDER_WAGE` clears the minimum
+(pinned by a test, because an offer that could not clear its own minimum
+would make hiring refuse for a reason the player can neither see nor fix),
+but `npc_instructions.md` lists "any actual wage-payment flow" as unbuilt
+for the whole NPC system — so no gold moves yet, and this says so rather
+than pretending the transaction happened.
+
+🚧 **A hired villager does not yet walk to the site and work.**
+`ConstructionLabor` and `BuilderMarker` exist; connecting a project to a
+villager's own day belongs with `concept/workforce.md` and is the next
+slice.
+
+Tests: `test_npc_trust_store.gd` 7/7 (new), `test_world_planner_mode_wiring.gd`
++4, 89/89 across the planner and hiring suites, and 158/158 across the
+construction/NPC/HUD/catalog suites this wires into — zero regressions.
+`world.gd` confirmed to compile.
+
+### Planner mode, slice 4: the wage really moves, and a hired build is worked (2026-09-17)
+
+Asked: *"Fix 1. and 2."* — the wage that was offered but not paid, and the
+hired villager who did not work.
+
+✅ **Gold really moves.** `WagePayment.pay` debits the player's purse and
+credits the hired villager's own household wallet. It is ONE function
+rather than a spend and an add at the call site, and that is the whole
+point: a debit that succeeded next to a credit that did not is money
+destroyed, and a credit without a debit is money invented. Conservation is
+pinned by a test, as is the refusal path — an unaffordable wage moves
+nothing and charges nobody, and a villager with no household (a real state:
+`household_wallet_for_villager` returns null for one) is not paid out of
+nowhere. Payment happens **before** the job is taken.
+
+✅ **A hired build is worked, not spawned** — the way
+`concept/building.md` says hiring must return: *"a build the player cannot
+do themselves says that hiring returns with construction-over-time"*. That
+doc retired the instant-hire fork on purpose, so this does not bring it
+back. A hired build opens **IN_PROGRESS** (`advance_project_labor` only
+advances an in-progress project, so one left PLANNED would silently never
+move) and accrues hours through the same `ConstructionProjectStore` and
+`ConstructionCatchup` a settlement's own builds use — 8 hours per builder
+per in-game day, so a hired villager earns exactly what a settlement's
+spare hand does rather than on a private schedule.
+
+✅ **One clock, read.** Hired builds advance against
+`world_age_seconds()`, never an accumulated frame delta — the rule
+`step_snow`'s own doc comment already states, and the reason a `/season`
+leap does not leave a half-built house frozen. Pinned by a test that the
+function contains no `delta`. Stepped from `_step_ecology_batch` alongside
+every other slow world system, because a build in progress is world state
+rather than something that should only advance while somebody watches.
+
+🚧 **The hired villager has no visible walk to the site.** The hours are
+real and the building completes, but the NPC does not path there and
+animate. `BuilderMarker` exists for exactly this and is still unconsumed by
+live gameplay — wiring it belongs with `concept/workforce.md`, not here.
+
+Tests: `test_wage_payment.gd` 6/6 (new), `test_world_planner_mode_wiring.gd`
++4, 145/145 across the planner, wage, wallet, hiring, construction-store and
+catchup suites — zero regressions. `world.gd` confirmed to compile.
