@@ -254,3 +254,121 @@ func test_the_well_sheet_is_a_five_by_five_grid_between_its_dividers():
 	assert_not_null(image, "precondition: the sheet is on disk")
 	assert_eq(VariantSheetGrid.divider_bands(image, true).size(), 5)
 	assert_eq(VariantSheetGrid.divider_bands(image, false).size(), 5)
+
+
+# -- content bands: the production sheets' irregular rows -------------------
+
+## warehouse.png/sawmill.png/city_hall.png/blacksmith.png draw their cells
+## on an exact 192px COLUMN pitch but on genuinely IRREGULAR rows -- the
+## real row boundaries on warehouse.png sit at 188, 376, 566 and 786, so
+## neither an even fifth of the 1024px canvas (204.8) nor the column's own
+## 192 pitch lands on them. Cutting on either clips a building: a 192 pitch
+## takes 13 rows off the bottom of city_hall's idle frame and 26 off
+## blacksmith's last row.
+##
+## Neither existing finder reads these sheets. row_bands looks for DARK
+## gutters, but the margin around these cells is magenta; art_bands looks
+## for MAGENTA divider lines, but the line between these rows is near-white.
+## So content_bands asks the question directly: which lines hold ART -- not
+## the dark cell background, not the magenta margin, not a light rule line.
+
+const _BG := Color(0, 0, 0, 1)
+const _MARGIN := Color(1, 0, 1, 1)
+const _RULE := Color(0.99, 0.98, 1, 1)
+const _ART := Color(0.4, 0.3, 0.2, 1)
+
+
+func _striped_sheet(stripes: Array) -> Image:
+	var height := 0
+	for stripe in stripes:
+		height += int(stripe[1])
+	var image := Image.create(20, height, false, Image.FORMAT_RGBA8)
+	var y := 0
+	for stripe in stripes:
+		for _i in int(stripe[1]):
+			for x in 20:
+				image.set_pixel(x, y, stripe[0])
+			y += 1
+	return image
+
+
+func test_content_bands_finds_art_between_a_margin_a_background_and_a_rule_line():
+	var image := _striped_sheet([
+		[_RULE, 2], [_MARGIN, 8], [_ART, 8], [_RULE, 2], [_BG, 8], [_ART, 8], [_MARGIN, 4],
+	])
+	var bands := VariantSheetGrid.content_bands(image, 2, true)
+	assert_eq(bands.size(), 2)
+	assert_eq(bands[0], Vector2i(10, 17), "the first band is the art, not the margin above it")
+	assert_eq(bands[1], Vector2i(28, 35), "the second band is the art, not the rule line above it")
+
+
+## The same contract row_bands/art_bands already keep: a sheet this cannot
+## read still cuts, just evenly. Detection is an improvement, never a
+## precondition.
+func test_content_bands_falls_back_to_even_division_when_the_count_does_not_match():
+	var image := _striped_sheet([[_ART, 8], [_BG, 8], [_ART, 8]])
+	var bands := VariantSheetGrid.content_bands(image, 5, true)
+	assert_eq(bands.size(), 5)
+	assert_eq(bands[0].x, 0)
+	assert_eq(bands[4].y, 23)
+
+
+func test_content_bands_reads_the_other_axis_too():
+	var image := _striped_sheet([[_ART, 8]])
+	# A 20x8 sheet of solid art is one band across as well as one band down.
+	assert_eq(VariantSheetGrid.content_bands(image, 1, false), [Vector2i(0, 19)])
+
+
+## A speck is not a row. The same MIN_BAND_THICKNESS row_bands uses, so a
+## stray bright pixel in the margin cannot become a cell of its own.
+func test_content_bands_ignores_a_band_too_thin_to_be_a_row():
+	var image := _striped_sheet([[_ART, 8], [_BG, 6], [_ART, 2], [_BG, 6], [_ART, 8]])
+	var bands := VariantSheetGrid.content_bands(image, 2, true)
+	assert_eq(bands.size(), 2, "the 2px speck in the middle is not a third row")
+	assert_eq(bands[0], Vector2i(0, 7))
+	assert_eq(bands[1], Vector2i(22, 29))
+
+
+## The real sheets, measured. Every sheet on the fixed-grid contract draws
+## 5 lifecycle rows, and content_bands must find exactly those 5 -- this is
+## what pins CONTENT_ART_SHARE, which is a tuned threshold and so belongs
+## in a test rather than in a comment. At 1% city_hall reads 7 rows and
+## farmhouse 6; at 5% sawmill reads 6 and city_hall 7 again.
+const _FIXED_GRID_SHEETS := [
+	"res://assets/sprites/buildings/warehouse.png",
+	"res://assets/sprites/buildings/sawmill.png",
+	"res://assets/sprites/buildings/city_hall.png",
+	"res://assets/sprites/buildings/farmhouse.png",
+	"res://assets/sprites/buildings/blacksmith.png",
+]
+
+
+func test_content_bands_reads_five_rows_from_every_fixed_grid_sheet():
+	for path in _FIXED_GRID_SHEETS:
+		var image: Image = SpriteSheetLoader.load_image(path)
+		var bands := VariantSheetGrid.content_bands(image, 5, true)
+		assert_eq(bands.size(), 5, "%s draws 5 lifecycle rows" % path)
+		var previous := -1
+		for band in bands:
+			assert_gt(band.x, previous, "%s: bands run top to bottom and never overlap" % path)
+			assert_gt(band.y, band.x, "%s: a band is a row, not a line" % path)
+			previous = band.y
+
+
+## The rows really are irregular -- if they were not, an even division
+## would have been right all along and none of this machinery would be
+## needed. warehouse.png's own five rows differ by more than a third of a
+## row in height.
+func test_the_fixed_grid_sheets_rows_are_genuinely_irregular():
+	var image: Image = SpriteSheetLoader.load_image(_FIXED_GRID_SHEETS[0])
+	var bands := VariantSheetGrid.content_bands(image, 5, true)
+	var smallest := 1 << 30
+	var largest := 0
+	for band in bands:
+		var height: int = band.y - band.x + 1
+		smallest = mini(smallest, height)
+		largest = maxi(largest, height)
+	assert_gt(
+		float(largest - smallest) / float(largest), 0.1,
+		"warehouse.png's rows are not on any single pitch"
+	)
