@@ -28,6 +28,10 @@ const BODY_PLAN := "villager"
 const EAT := "eat"
 const DRINK := "drink"
 const REST := "rest"
+## Carrying a full load to the village store (docs/concept/village_warehouse
+## .md mechanism 3). Unlike the other three this answers no need of the
+## villager's own -- what presses is what is in their hands.
+const HAUL := "haul"
 const SOCIALIZE := "socialize"
 
 ## No drive pressing, or nothing around to answer the one that is. Not a
@@ -57,6 +61,9 @@ var _receptors := {}
 ##   market    Vector2 or absent -- where food is bought
 ##   home      Vector2 or absent -- this villager's own house
 ##   water     Vector2 or absent -- the well
+##   warehouse Vector2 or absent -- the village store's door, for a villager
+##             whose settlement has one (see village_warehouse.md pillar 1's
+##             caveat: a cramped site houses its people and goes without)
 ##
 ## Returns {"intent", "target"}: the intent is NOTHING with a null target
 ## whenever the schedule should simply stand.
@@ -65,7 +72,7 @@ func decide(context: Dictionary) -> Dictionary:
 		_wirings = Ethogram.wirings_for(BODY_PLAN)
 		_receptors = Ethogram.express("", {}, BODY_PLAN)
 	var decision := BehaviorKernel.decide(
-		_wirings, _receptors, context.get("drives", {}),
+		_wirings, _receptors, _drives(context),
 		context.get("position", Vector2.ZERO), _stimuli(context)
 	)
 	var intent := String(decision["intent"])
@@ -79,6 +86,29 @@ func decide(context: Dictionary) -> Dictionary:
 	return {"intent": intent, "target": stimulus["position"]}
 
 
+## Every gate this villager's wirings name, and NOTHING the caller did not
+## report.
+##
+## The kernel reads a gate absent from the drive vector as WIDE OPEN (1.0),
+## which is right where it was written -- the mammal adapter publishes every
+## drive it runs, so an absent one means "this wiring is ungated". A villager
+## has one gate that is never published: burden is not on the Drives clock at
+## all (Ethogram.drive_profile has no entry for it), so NpcNeeds.gains() has
+## never heard of it and never will. Left to the kernel's default, every
+## villager within sight of a store would set off to haul an imaginary load,
+## ahead of ever taking a drink. Here an unreported need presses nobody,
+## which is the contract the stimuli below already keep for places: what the
+## caller did not say is not there.
+func _drives(context: Dictionary) -> Dictionary:
+	var reported: Dictionary = context.get("drives", {})
+	var drives := {}
+	for wiring in _wirings:
+		var gate := String(wiring.get("gate", ""))
+		if gate != "":
+			drives[gate] = float(reported.get(gate, 0.0))
+	return drives
+
+
 ## What this villager can sense right now, in the kernel's own stimulus
 ## shape. A channel the caller did not report is simply absent, which is what
 ## makes "lonely with nobody around" come back as NOTHING rather than as a
@@ -87,7 +117,7 @@ func _stimuli(context: Dictionary) -> Array:
 	var stimuli: Array = []
 	for at in context.get("company", []):
 		_append(stimuli, at, Ethogram.COMPANY)
-	for channel in [Ethogram.MARKET, Ethogram.HOME, Ethogram.WATER]:
+	for channel in [Ethogram.MARKET, Ethogram.HOME, Ethogram.WATER, Ethogram.WAREHOUSE]:
 		var at = context.get(channel)
 		if at != null:
 			_append(stimuli, at, channel)
