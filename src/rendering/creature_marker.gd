@@ -2345,6 +2345,36 @@ func _terrain_blocks_movement(heading: Vector2) -> bool:
 	return not TerrainPassability.is_passable(slope)
 
 
+## Whether the step a creature is about to take CROSSES a farm rail
+## (docs/concept/village_farms.md, "The rail stands on the inner edge";
+## asked for directly: "the farmhouse should build a fence around the bed so
+## no animals enter").
+##
+## The SAME ask-before-you-step shape as _terrain_blocks_movement just
+## above, against the same look-ahead tile and at the same cost -- one world
+## query per creature per movement decision, never one per candidate
+## direction. A rail is not ground an animal cannot stand on: it is a LINE
+## on the edge of its tile facing the beds, so the ring round a field is
+## ordinary ground an animal may walk, and only crossing into the crop is
+## shut ("move the fences to the inner edge of the enclosure and treat the
+## rest of the tile as street").
+##
+## Which is why the world is asked about a PAIR of tiles -- the one under
+## the creature now and the one the look-ahead lands in. An edge is a fact
+## about both, and asking about the destination alone is the old whole-tile
+## question that kept animals off the whole ring.
+##
+## Villagers and the player are untouched: this lives on CreatureMarker, so
+## the gate a farmer walks through is a gate only an animal finds shut.
+func _fence_blocks_movement(heading: Vector2) -> bool:
+	if _world == null or not _world.has_method("fence_blocks_step_global") or heading.length() < 0.01:
+		return false
+	var here := Vector2i(floori(position.x / _tile_size), floori(position.y / _tile_size))
+	var look_ahead := position + heading.normalized() * MOVEMENT_LOOKAHEAD
+	var tile := Vector2i(floori(look_ahead.x / _tile_size), floori(look_ahead.y / _tile_size))
+	return _world.fence_blocks_step_global(here.x, here.y, tile.x, tile.y)
+
+
 ## Moves along `desired` only if the step is actually clear (see
 ## CreatureMovementGate) -- steering around a tree/stone when one is in the
 ## way, and standing still when nothing is open at all, rather than moving
@@ -2381,7 +2411,7 @@ func _advance_gated(desired: Vector2, speed: float, delta: float, avoid_threats:
 	# whatever heading obstacle/threat avoidance above already settled on --
 	# see _terrain_blocks_movement's own doc comment for why this stays a
 	# single slope query rather than one per candidate direction.
-	if heading != Vector2.ZERO and _terrain_blocks_movement(heading):
+	if heading != Vector2.ZERO and (_terrain_blocks_movement(heading) or _fence_blocks_movement(heading)):
 		heading = Vector2.ZERO
 	_last_gated_heading = heading
 	if heading == Vector2.ZERO:

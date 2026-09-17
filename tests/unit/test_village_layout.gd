@@ -1030,3 +1030,124 @@ func test_and_every_one_of_them_is_still_connected():
 			reached.has(plot["doorstep"]),
 			"a house at %s nobody can walk to" % str(plot["origin"])
 		)
+
+
+# -- frontage a village really paved ---------------------------------------
+#
+# Reported in play, with a screenshot of a farmhouse standing in open ground
+# with its field beds beside it: "There are still Farmhouses not connected
+# by a street".
+
+
+## Everything `layout` claimed for this village: its paving and every plot's
+## own footprint -- exactly what the renderer hands `next_street_plot` as
+## `is_occupied` once the village is standing.
+func _claimed_after(result: Dictionary) -> Dictionary:
+	var claimed: Dictionary = {}
+	for cell in result["road_cells"]:
+		claimed[cell] = true
+	for plot in result["plots"]:
+		for cell in BuildingCatalog.footprint_cells(plot["building_id"], plot["origin"]):
+			claimed[cell] = true
+	return claimed
+
+
+## The paving a villager could actually WALK to from the village's own main
+## street, 4-connected. Paving that reaches this set is a street; an island
+## of paving somewhere else is not.
+func _paving_reachable_from_the_spine(paved: Dictionary, seed_value: int) -> Dictionary:
+	var bones: Dictionary = VillageLayout.skeleton(CHUNK_SIZE, seed_value)
+	var frontier: Array = []
+	var seen: Dictionary = {}
+	for x in range(bones["street_x0"], bones["street_x1"] + 1):
+		var cell := Vector2i(x, bones["street_y"])
+		if paved.has(cell) and not seen.has(cell):
+			seen[cell] = true
+			frontier.append(cell)
+	while not frontier.is_empty():
+		var cell: Vector2i = frontier.pop_back()
+		for step in [Vector2i(1, 0), Vector2i(-1, 0), Vector2i(0, 1), Vector2i(0, -1)]:
+			var next: Vector2i = cell + step
+			if paved.has(next) and not seen.has(next):
+				seen[next] = true
+				frontier.append(next)
+	return seen
+
+
+## `next_street_plot` walks the SKELETON's streets -- every row the spine
+## could ever open, across the spine's whole width. What `layout` really
+## paved is narrower on both counts: one unbroken run of the main street (a
+## village builds on the side of the river it can reach), and a further
+## street only once that street actually got a plot. A plot whose doorstep
+## falls outside that is frontage onto nothing, and the growth building
+## raised there -- a farmhouse, in the report -- stands in open ground with
+## a single paved tile at its door.
+func test_the_next_street_plot_always_fronts_paving_the_village_really_laid():
+	var stranded: Array = []
+	var refused: Array = []
+	var checked := 0
+	for seed_value in 40:
+		for houses in [3, 5, 8, 11]:
+			var ids: Array = []
+			for i in houses:
+				ids.append("house_small")
+			var result := layout.layout(ids, CHUNK_SIZE, seed_value, _always_buildable, _never_occupied)
+			if (result["plots"] as Array).is_empty():
+				continue
+			var claimed := _claimed_after(result)
+			var paved: Dictionary = {}
+			for cell in result["road_cells"]:
+				paved[cell] = true
+			var is_occupied := func(cell: Vector2i) -> bool: return claimed.has(cell)
+			var is_paved := func(cell: Vector2i) -> bool: return paved.has(cell)
+			var plot: Dictionary = VillageLayout.next_street_plot(
+				"farmhouse", CHUNK_SIZE, seed_value, _always_buildable, is_occupied,
+				Callable(), Callable(), is_paved
+			)
+			if plot.is_empty():
+				refused.append("seed %d / %d houses" % [seed_value, houses])
+				continue
+			checked += 1
+			# Exactly what the village then lays down: the doorstep, and the
+			# spur that ties it back (VillageRenderer._place_farms_if_missing).
+			paved[plot["doorstep"]] = true
+			for cell in plot.get("road_spur", []):
+				paved[cell] = true
+			if not _paving_reachable_from_the_spine(paved, seed_value).has(plot["doorstep"]):
+				stranded.append("seed %d / %d houses: doorstep %s" % [seed_value, houses, str(plot["doorstep"])])
+	assert_gt(checked, 0, "precondition: at least one village had frontage left to offer")
+	assert_eq(
+		stranded.size(), 0,
+		"%d of %d plots front paving no street reaches: %s" % [stranded.size(), checked, str(stranded.slice(0, 6))]
+	)
+
+
+## The tie-back must not cost the village its growth: a plot refused because
+## nothing can reach it is a household left homeless. Pinned against the
+## count BEFORE the spur existed -- every one of those 160 villages still
+## has somewhere to put its next building.
+func test_tying_a_growth_plot_back_to_the_street_costs_the_village_no_frontage():
+	var offered := 0
+	var asked := 0
+	for seed_value in 40:
+		for houses in [3, 5, 8, 11]:
+			var ids: Array = []
+			for i in houses:
+				ids.append("house_small")
+			var result := layout.layout(ids, CHUNK_SIZE, seed_value, _always_buildable, _never_occupied)
+			if (result["plots"] as Array).is_empty():
+				continue
+			asked += 1
+			var claimed := _claimed_after(result)
+			var paved: Dictionary = {}
+			for cell in result["road_cells"]:
+				paved[cell] = true
+			var is_occupied := func(cell: Vector2i) -> bool: return claimed.has(cell)
+			var is_paved := func(cell: Vector2i) -> bool: return paved.has(cell)
+			if not VillageLayout.next_street_plot(
+				"farmhouse", CHUNK_SIZE, seed_value, _always_buildable, is_occupied,
+				Callable(), Callable(), is_paved
+			).is_empty():
+				offered += 1
+	assert_eq(asked, 160, "precondition: the same 40 seeds x four village sizes measured above")
+	assert_eq(offered, asked, "a village that had frontage before the spur still has it")

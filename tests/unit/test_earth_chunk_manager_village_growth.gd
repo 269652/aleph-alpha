@@ -736,3 +736,65 @@ func test_the_gold_lands_in_the_purse_the_village_pays_wages_from():
 
 	assert_gt(int(payout["paid"]), 0, "a villager who caught nothing can still be paid a wage")
 	assert_lt(float(payout["purse"]), purse, "and the village really spent it")
+
+
+# -- and a growth building really joins the streets it fronts --------------
+#
+# Reported in play, with a screenshot: "There are still Farmhouses not
+# connected by a street". The founding layout only paves a further street
+# once that street really got a plot, so the FIRST building raised on a
+# fresh row used to get a single paved tile at its door and nothing else
+# (see VillageLayout._frontage_spur).
+
+
+## Whether `cell` can be walked back to the village's main street over real
+## road tiles -- the same walk test_the_real_sawmill_is_walkable_back_to_
+## the_street_on_road already makes for the mill.
+func _walkable_back_to_the_street(cell: Vector2i) -> bool:
+	var street_y: int = VillageLayout.skeleton(CHUNK_SIZE, VillageLayout.seed_for(_chunk_coord))["street_y"]
+	var chunk = manager._loaded_chunks.get(_chunk_coord)
+	if chunk == null or not TerrainRenderer.is_road_tile(chunk.modifications.get(cell, "")):
+		return false
+	var seen := {cell: true}
+	var frontier: Array = [cell]
+	while not frontier.is_empty():
+		var at: Vector2i = frontier.pop_back()
+		if at.y == street_y:
+			return true
+		for step in [Vector2i(1, 0), Vector2i(-1, 0), Vector2i(0, 1), Vector2i(0, -1)]:
+			var next_cell: Vector2i = at + step
+			if seen.has(next_cell):
+				continue
+			if not TerrainRenderer.is_road_tile(chunk.modifications.get(next_cell, "")):
+				continue
+			seen[next_cell] = true
+			frontier.append(next_cell)
+	return false
+
+
+func test_every_rung_the_village_raises_is_walkable_back_to_its_street():
+	_stock_everything()
+	var raised: Array = []
+	var stranded: Array = []
+	for rung in VillageGrowth.LADDER_BUILDING_IDS:
+		if rung == "city_hall":
+			continue
+		if manager._present_structure_ids_for_settlement_chunk(_chunk_coord).has(rung):
+			continue
+		var origin = manager._growth_site_for(_chunk_coord, rung)
+		if origin == null:
+			continue
+		# The PUBLIC wrapper, which is what the village itself places
+		# through -- a player's own house deliberately gets no street laid
+		# for it (see _place_building_over_roads' own join_street flag).
+		if not manager.place_building_over_roads(_chunk_coord, origin, rung, 2, _settlement_id):
+			continue
+		raised.append(rung)
+		var doorstep: Vector2i = origin + BuildingCatalog.doorstep_of(rung)
+		if not _walkable_back_to_the_street(doorstep):
+			stranded.append("%s at %s opens onto %s" % [rung, str(origin), str(doorstep)])
+	assert_gt(raised.size(), 0, "precondition: the village raised at least one rung")
+	assert_eq(
+		stranded.size(), 0,
+		"%d of %d rungs stand on paving no street reaches: %s" % [stranded.size(), raised.size(), str(stranded)]
+	)

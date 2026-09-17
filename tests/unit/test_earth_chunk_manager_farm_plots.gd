@@ -189,3 +189,61 @@ func test_the_plot_read_back_is_the_one_that_really_advances():
 		plot.time_growing, before,
 		"a copy would not move -- a farmer must be reading the plot the world is simulating"
 	)
+
+
+# -- a bed is cleared before it is sown -------------------------------------
+#
+# Asked for directly: "long grass should be cleared before planting". A
+# village's beds were being tilled straight through whatever tall grass,
+# flowers, scrub or lichen already stood on them, so a farmer planted wheat
+# into a meadow and the meadow kept growing over it. The same rule a
+# building's own floor already has (docs/concept/building.md "Placement
+# rules": "grass must be cut before and can't grow back inside a house"),
+# applied where a crop goes in.
+
+
+## A real tile of this chunk that tall grass actually grows on, or (-1, -1)
+## when this chunk has none to clear.
+func _a_grassy_tile() -> Vector2i:
+	var chunk_coord := manager._chunk_coord_for_tile(_berlin_tile)
+	var sim = manager._grass_sims.get(chunk_coord)
+	if sim == null:
+		return Vector2i(-1, -1)
+	for local in sim.get_patch_cells():
+		return chunk_coord * EarthChunkManager.CHUNK_SIZE + (local as Vector2i)
+	return Vector2i(-1, -1)
+
+
+func test_tilling_a_bed_clears_the_long_grass_standing_on_it():
+	var tile := _a_grassy_tile()
+	assert_ne(tile, Vector2i(-1, -1), "precondition: this chunk grows tall grass somewhere")
+	var chunk_coord := manager._chunk_coord_for_tile(tile)
+	var local: Vector2i = tile - chunk_coord * EarthChunkManager.CHUNK_SIZE
+	var sim = manager._grass_sims[chunk_coord]
+	assert_true(sim.has_grass(local), "precondition: grass really stands here")
+
+	manager.till_and_plant_farm_plot_at_global(tile.x, tile.y, "wheat")
+
+	assert_false(sim.has_grass(local), "the wheat was planted into standing long grass")
+
+
+## And it stays cleared: a bed is worked ground, so nothing seeds, spreads or
+## falls back into it the way it would on open ground.
+func test_long_grass_does_not_grow_back_into_a_bed():
+	var tile := _a_grassy_tile()
+	assert_ne(tile, Vector2i(-1, -1), "precondition: this chunk grows tall grass somewhere")
+	var chunk_coord := manager._chunk_coord_for_tile(tile)
+	var local: Vector2i = tile - chunk_coord * EarthChunkManager.CHUNK_SIZE
+
+	manager.till_and_plant_farm_plot_at_global(tile.x, tile.y, "wheat")
+
+	assert_false(
+		manager._grass_sims[chunk_coord].plant(local),
+		"grass grew back over a sown bed"
+	)
+
+
+## Tilling nowhere near a loaded chunk must stay the no-op it already is,
+## not reach into a sim that is not there.
+func test_tilling_outside_a_loaded_chunk_clears_nothing_and_does_not_crash():
+	assert_false(manager.till_and_plant_farm_plot_at_global(999999, 999999, "wheat"))

@@ -267,7 +267,7 @@ second of which is the one that matters, since an async build that quietly
 drifted into a second, differently-behaving implementation of the same
 scene would be worse than the pause it replaced.
 
-3. **Two of those "irreducible" sheet loads turned out to be half
+3. **One of those "irreducible" sheet loads turned out to be half
    avoidable.** Loading the grassland terrain sheet measured ~987 ms, of
    which the PNG decode is only ~36 ms — the rest is per-pixel GDScript.
    `IllustratedTerrainSprite._prepared_for_slicing` alone was ~458 ms: a
@@ -277,26 +277,38 @@ scene would be worse than the pause it replaced.
    `SpriteSheetSlicer.chroma_keyed`, `IllustratedMushroomSprite`,
    `IllustratedAnimalSprite` and `IllustratedStoneSprite` had each already
    been fixed out of (see `docs/progress.md`'s "Still at 1fps"
-   investigation); this file, and `IllustratedBirdSprite._keyed_image`,
-   were separate never-migrated duplicates of it. Rewritten as inlined
-   single-pass loops with INTEGER thresholds — every value read out of a
-   `PackedByteArray` already is an integer, so `r >= 140.25` means exactly
-   `r >= 141` — taking `_prepared_for_slicing` to ~180 ms and the whole
-   sheet load to ~691 ms. Pinned by budgeted timing tests calibrated from
-   that real before/after pair, plus pixel-level tests that the keying,
-   despill and leave-alone cases still land byte-for-byte where they did.
+   investigation); this file was a never-migrated duplicate of it.
+   Rewritten as inlined single-pass loops with INTEGER thresholds — every
+   value read out of a `PackedByteArray` already is an integer, so
+   `r >= 140.25` means exactly `r >= 141` — taking `_prepared_for_slicing`
+   to ~180 ms and the whole sheet load to ~691 ms, a 2.5x win on the
+   measurement that matters.
 
-   Chasing that also **corrected a load-bearing assumption this codebase
-   had written down**: "a byte-array loop beats `get_pixel`/`set_pixel`" is
-   only half true. Reads want the byte array; WRITES lose to a single
-   `Image.set_pixel` call, and on a real illustrated sheet most pixels are
-   the keyed-out background, so most pixels take the write path. Measured
-   over the same images — naive 201 ms / all-bytes 226 ms / hybrid 186 ms
-   on a real mostly-background sheet, and 106 / 82 / 54 ms on one with no
-   matching pixel at all — the all-byte-array `chroma_keyed` was a real
-   REGRESSION on exactly the images it exists for, hidden because its only
-   budgeted pin used the no-match case. It now reads bytes and writes with
-   `set_pixel`, and has a second pin covering the mostly-background case.
+   Pinned COMPARATIVELY rather than by an absolute millisecond ceiling: the
+   test races the real implementation against a naive reference loop in the
+   same process on the same image, and also asserts the two produce
+   byte-identical output. A first attempt used an absolute 200 ms budget
+   calibrated from the 180 ms measurement and went red at 221 ms the first
+   time it ran on a loaded box with nothing changed — a pin that fails on
+   a busy runner teaches people to ignore it.
+
+   **A second change here was tried, measured honestly, and reverted.**
+   `SpriteSheetSlicer.chroma_keyed`'s own doc comment tells every
+   illustrated-art class that a byte-array loop beats `get_pixel`/
+   `set_pixel`, and a "read the bytes, write with `set_pixel`" hybrid looked
+   like a strict improvement on one real sheet (186 ms against the shipped
+   226 ms and a naive 201 ms). Sweeping the background fraction afterwards
+   showed why that was not the win it appeared to be: the hybrid is ~2x
+   faster where most pixels MISS the key and takes the early-out, and
+   genuinely SLOWER where most pixels match and take the write path
+   (337 ms against a naive 275 ms at 100% background). The crossover sits
+   near 46% background, which is roughly where real illustrated sheets
+   live — so the single real-sheet measurement that motivated it was
+   sitting inside the noise around break-even, not above it. Reverted:
+   `chroma_keyed` is shared by nine classes, and a change whose benefit
+   depends on which side of break-even a given sheet falls does not earn
+   that blast radius. The finding is kept here because the next person to
+   read that doc comment deserves to know it is only half true.
 
 4. **A ground plane of 72 tiles needs 9 textures, not 72.** The footprint
    is 12x6 tiles drawn from a sheet holding 9 variants, and `frame_for`

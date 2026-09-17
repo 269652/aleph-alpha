@@ -1,25 +1,25 @@
 extends GutTest
 
-## Real art for the boot intro splash (assets/sprites/intro.png) -- see
-## docs/concept/intro_splash.md's "Re-measuring again: a contact sheet, not
-## a sprite sheet".
-##
-## Unlike every other illustrated sheet in this codebase, this one is not a
-## chroma-keyed sprite sheet at all: it is a 1672x941 CONTACT SHEET exported
-## straight out of the source animation, 20 columns x 6 rows of 120 frames
-## on opaque black, with the export tool's own chrome drawn on top -- a
-## light-grey grid line between every pair of cells, and each cell's
-## timestamp burned into its top-left corner. So the grid is hand-measured
-## from those lines (pinned constants, re-derived here from the real file),
-## not assumed by arithmetic division: it divides evenly on neither axis.
+## Real illustrated art for the boot intro splash (assets/sprites/intro.png)
+## -- see docs/concept/intro_splash.md. Same "hand/AI-illustrated sheet ->
+## SpriteSheetSlicer -> cached frames" shape as IllustratedWormSprite, but
+## the sheet's own grid is NOT perfectly regular (AI-generated at
+## 1983x793, not evenly divisible by the prompted 8 columns x 4 rows --
+## confirmed with tools/probe_intro_sheet.gd), so this hand-measures the 4
+## ROW bands (pinned constants) and reuses SpriteSheetSlicer.detect_frames
+## for the columns within each band, rather than assuming arithmetic
+## division the way the worm sheet's own (genuinely regular) grid can.
 ##
 ## Deliberately does NOT run frames through SpriteSheetSlicer.
-## normalize_frames the way every other illustrated sheet does:
-## normalize_frames picks ONE shared scale from the WIDEST/TALLEST content
-## bounding box across the frames it's given, and here the globe grows and
-## the "aleph alpha" wordmark builds in across the sequence -- rescaling
-## would make the globe itself appear to change size. Frames are extracted
-## as plain, un-rescaled regions instead.
+## normalize_frames the way every other illustrated sheet in this codebase
+## does: normalize_frames picks ONE shared scale from the WIDEST/TALLEST
+## content bounding box across the frames it's given, and here the "ALEPH
+## ALPHA" wordmark's own ink extent genuinely grows across the sequence --
+## content-cropping and rescaling would make the globe itself appear to
+## change size as the text builds in, which the source art's own
+## consistent camera framing (see the intro-generation prompt) already
+## avoids by construction. Frames are extracted as plain, un-rescaled
+## regions instead.
 
 const IntroSplashSheet = preload("res://src/rendering/intro_splash_sheet.gd")
 const SpriteSheetLoader = preload("res://src/rendering/sprite_sheet_loader.gd")
@@ -69,7 +69,7 @@ func test_frames_have_no_leftover_magenta_background():
 ## a stack of copies of one drawing.
 func test_first_and_last_frames_differ():
 	var frames := sheet.generate_textures()
-	assert_ne(frames[0].get_image().get_data(), frames[frames.size() - 1].get_image().get_data())
+	assert_ne(frames[0].get_image().get_data(), frames[31].get_image().get_data())
 
 
 ## Every frame must differ from its own immediate neighbour
@@ -138,175 +138,298 @@ func _has_opaque_pixels(texture: Texture2D) -> bool:
 
 # -- the pinned grid must match the sheet that is actually on disk --------
 #
-# Reported in play after the art was replaced a SECOND time: "the intro has
-# new resolution please fix the cropping properly".
+# Reported in play after the intro art was replaced: "the new intro has
+# wrong row sizes the image is moving from bottom to top".
 #
-# The replacement is a different KIND of sheet, not just a different size
-# (see IntroSplashSheet's own class doc comment): 1672x941 instead of
-# 1983x793, a 20x6 grid of 120 frames instead of 8x5 of 40, and -- the part
-# that broke every measurement helper here -- an opaque BLACK background
-# with light-grey GRID LINES drawn between cells, instead of a magenta
-# background with gutters keyed out of it. The old helper below looked for
-# rows that were entirely magenta; on this sheet there are none at all, so
-# it measured the whole image as one row.
+# _ROW_BANDS and _COLUMN_LEFTS are measured constants, pinned once against
+# the sheet as it was (see this file's own doc comment and
+# tools/probe_intro_sheet.gd). Nothing checked they still described the
+# file, so replacing intro.png left every row cropped at the OLD row's
+# offset -- drifting further down the sheet row by row, which reads on
+# screen as the picture climbing upward.
 #
 # These measure the real sheet at test time and compare, so the next art
-# swap fails here instead of shipping a mis-cropped intro.
+# swap fails here instead of shipping a drifting intro.
 
 
-## A grid line is a run of near-neutral, clearly-lit pixels spanning most of
-## the sheet -- the contact-sheet chrome drawn BETWEEN cells. Real frame art
-## on this sheet is either near-black space or saturated blue/gold globe, so
-## "bright AND unsaturated across most of the line" picks out the chrome and
-## nothing else. Returns the runs as [first, last] index pairs.
-func _grid_line_runs(image: Image, horizontal: bool) -> Array:
-	var width := image.get_width()
-	var height := image.get_height()
-	var outer: int = height if horizontal else width
-	var inner: int = width if horizontal else height
-	var runs: Array = []
-	var start := -1
+## A grid line is drawn across EVERYTHING, so every pixel along it is
+## light; content lines always have some black in them. The MINIMUM along a
+## line is therefore what separates the two, and a mean cannot: by the end
+## of this animation the globe is brighter than the dividers are.
+func _line_minimum(image: Image, index: int, along_rows: bool) -> float:
+	var inner: int = image.get_width() if along_rows else image.get_height()
+	var lowest := 1.0
+	for j in inner:
+		var x: int = j if along_rows else index
+		var y: int = index if along_rows else j
+		var pixel := image.get_pixel(x, y)
+		lowest = minf(lowest, maxf(pixel.r, maxf(pixel.g, pixel.b)))
+	return lowest
+
+
+## Where each cell starts: the sheet's own edge, then the first pixel AFTER
+## each divider run ends -- not its centre, since a line is 1-3px wide and a
+## crop starting inside one carries that ink. Mirrors tools/probe_intro_grid.gd.
+func _measured_cell_starts(image: Image, along_rows: bool) -> Array:
+	var outer: int = image.get_height() if along_rows else image.get_width()
+	var starts: Array = [0]
 	var previous := -99
+	var in_run := false
 	for i in outer:
-		var hits := 0
-		for j in range(0, inner, 2):
-			var c: Color = image.get_pixel(j, i) if horizontal else image.get_pixel(i, j)
-			var brightest: float = maxf(c.r, maxf(c.g, c.b))
-			var darkest: float = minf(c.r, minf(c.g, c.b))
-			if brightest > 0.18 and (brightest - darkest) < 0.08:
-				hits += 1
-		if float(hits) / float(inner / 2) > 0.45:
-			if i != previous + 1:
-				if start >= 0:
-					runs.append([start, previous])
-				start = i
-			previous = i
-	if start >= 0:
-		runs.append([start, previous])
-	return runs
+		if _line_minimum(image, i, along_rows) < IntroSplashSheet.DIVIDER_BRIGHTNESS:
+			continue
+		if i != previous + 1 and in_run:
+			starts.append(previous + 1)
+		in_run = true
+		previous = i
+	if in_run:
+		starts.append(previous + 1)
+	return starts
 
 
-## The sheet's own SHAPE, re-counted from the real file: 19 vertical lines
-## make 20 columns, 5 horizontal lines make 6 rows, one cell per frame. A
-## re-export at another grid -- which is exactly what happened here, twice --
-## fails this instead of shipping a mis-crop.
-func test_the_sheets_real_grid_is_the_one_the_slicing_assumes():
-	var image := SpriteSheetLoader.load_image(IntroSplashSheet._SHEET_PATH)
-	assert_not_null(image, "precondition: the sheet loads")
-	var columns: int = _grid_line_runs(image, false).size() + 1
-	var rows: int = _grid_line_runs(image, true).size() + 1
-	assert_eq(columns, IntroSplashSheet._COLUMN_WINDOW_LEFTS.size(), "columns on the sheet")
-	assert_eq(rows, IntroSplashSheet._ROW_WINDOW_TOPS.size(), "rows on the sheet")
+## The sheet as it is ON DISK. Deliberately not SpriteSheetLoader (which
+## prefers the imported texture, and a stale import cache is how a swapped
+## sheet got past this guard once) and not Image.load_from_file (which warns
+## on a res:// path, and an engine warning fails a GUT run).
+func _sheet_from_disk() -> Image:
+	var image := Image.new()
+	image.load_png_from_buffer(FileAccess.get_file_as_bytes(IntroSplashSheet._SHEET_PATH))
+	return image
+
+
+## The guard that exists precisely to catch the sheet being replaced -- and
+## did not, when it was (2026-09-17, a 1983x793 sheet of 8x5 frames swapped
+## for a 1672x941 contact sheet of 20x6). Two holes, both closed here:
+##
+## 1. It loaded through SpriteSheetLoader, which prefers the IMPORTED
+##    texture. A stale .godot import cache hands back the art the constants
+##    were measured FROM, so the comparison could not fail. It reads the raw
+##    file now, which is the thing that actually changed.
+## 2. It detected MAGENTA gutters. The replacement is drawn on black with
+##    thin light grid lines and no magenta anywhere, so the detector saw one
+##    band covering the whole sheet and the assertion passed vacuously.
+##
+## Re-measure with tools/probe_intro_grid.gd whenever the sheet changes.
+func test_the_pinned_grid_is_where_the_sheets_own_cells_actually_are():
+	var image := _sheet_from_disk()
+	assert_gt(image.get_width(), 0, "precondition: the sheet loads from disk")
 	assert_eq(
-		columns * rows,
-		IntroSplashSequencer.FRAME_COUNT,
-		"the sequencer plays a different number of frames than the sheet holds"
+		IntroSplashSheet._COLUMN_LEFTS, _measured_cell_starts(image, false),
+		"the pinned columns no longer describe assets/sprites/intro.png -- re-measure with tools/probe_intro_grid.gd"
+	)
+	assert_eq(
+		IntroSplashSheet._ROW_TOPS, _measured_cell_starts(image, true),
+		"the pinned rows no longer describe assets/sprites/intro.png -- re-measure with tools/probe_intro_grid.gd"
 	)
 
 
-## Every window has to land wholly inside the sheet -- the previous art swap
-## left the last column's crop running 309px off the right-hand edge, which
-## is why the final frame of every row came out blank.
+## Every cell of the contact sheet has its own timestamp printed inside its
+## top edge ("0.00s" ... "4.96s"), white on black. Cropping from the cell's
+## own top puts that caption on screen over the globe, which is half of what
+## "the new intro crops are still not correct" was about.
+##
+## Asserted STRUCTURALLY -- the crop begins below where the caption really
+## is -- rather than by looking for white ink in the finished frames. That
+## was the first attempt and it does not work: measured on this sheet, the
+## caption is (0.91, 0.92, 0.91) and the blown-out core of a late flare is
+## (1.00, 0.99, 0.98), so no brightness or neutrality rule separates them.
+## Where the caption BAND sits is measurable, and that is what this pins.
+##
+## Measured in the FIRST cells of row 0 -- 0.00s, 0.04s, 0.08s, where the
+## globe is still a barely-lit crescent -- so the only bright thing there is
+## the timestamp itself. Row 0's later cells are already bright enough by
+## 0.75s to read as "caption" to any brightness rule, and the row divider
+## that ends the band is bright too; both were measured, not assumed.
+func test_the_crop_starts_below_the_sheets_own_timestamp_caption():
+	var image := _sheet_from_disk()
+	var last_ink := -1
+	for left in [IntroSplashSheet._COLUMN_LEFTS[0], IntroSplashSheet._COLUMN_LEFTS[1], IntroSplashSheet._COLUMN_LEFTS[2]]:
+		# Exactly the columns the crop itself reads, and only the top of the
+		# cell: scanning the whole row band would find the row divider that
+		# ends it, which is bright too and is not a caption.
+		var from_x: int = int(left) + IntroSplashSheet._CELL_INSET
+		var right: int = from_x + IntroSplashSheet._FRAME_WIDTH
+		for y in range(0, 40):
+			for x in range(from_x, right):
+				var pixel := image.get_pixel(x, y)
+				if pixel.r > 0.75 and pixel.g > 0.75 and pixel.b > 0.75:
+					last_ink = maxi(last_ink, y)
+					break
+	assert_gt(last_ink, 0, "precondition: row 0's cells really do carry caption ink")
+	assert_gt(
+		IntroSplashSheet._CAPTION_HEIGHT, last_ink,
+		"the crop starts at row %d of a cell, but the caption runs to row %d" % [
+			IntroSplashSheet._CAPTION_HEIGHT, last_ink
+		]
+	)
+
+
+## ...and the other half: no frame may carry the grid's own divider ink up
+## its side. That one IS checkable from the finished frames, because a
+## divider is a straight line the full height of the frame where art never
+## is -- measured at column 9, where the line is 2px wide but the detector
+## reads it as 1, which is why the crop keeps _CELL_INSET clear of it.
+func test_no_frame_carries_the_grids_own_divider_up_its_edge():
+	var frames := IntroSplashSheet.new().generate_textures()
+	assert_gt(frames.size(), 0, "precondition: frames were built")
+	for index in frames.size():
+		var image: Image = frames[index].get_image()
+		for x in [0, image.get_width() - 1]:
+			var lit := 0
+			for y in image.get_height():
+				var pixel := image.get_pixel(x, y)
+				if maxf(pixel.r, maxf(pixel.g, pixel.b)) > 0.35:
+					lit += 1
+			assert_lt(
+				lit, image.get_height() / 2,
+				"frame %d's column %d is lit down half its height -- that is a divider, not art" % [index, x]
+			)
+
+
+func test_a_frame_never_reaches_into_the_row_below_it():
+	# What produced the drift once: art from the next row pulled into this
+	# row's frame. Mirrors _build_textures' own crop exactly -- from the
+	# cell's top, past the caption, one fixed height.
+	var tops: Array = IntroSplashSheet._ROW_TOPS
+	var sheet_height: int = _sheet_from_disk().get_height()
+	for i in tops.size():
+		var top: int = int(tops[i])
+		var limit: int = int(tops[i + 1]) - 1 if i + 1 < tops.size() else sheet_height
+		assert_lte(
+			top + IntroSplashSheet._CAPTION_HEIGHT + IntroSplashSheet._FRAME_HEIGHT, limit,
+			"row %d's crop reaches into what follows it" % i
+		)
+
+
+func test_a_frame_never_reaches_into_the_column_beside_it():
+	var lefts: Array = IntroSplashSheet._COLUMN_LEFTS
+	for i in range(lefts.size() - 1):
+		assert_lte(
+			IntroSplashSheet._FRAME_WIDTH, int(lefts[i + 1]) - int(lefts[i]),
+			"column %d's crop reaches into column %d" % [i, i + 1]
+		)
+
+
 func test_every_frame_is_inside_the_sheet():
 	var image := SpriteSheetLoader.load_image(IntroSplashSheet._SHEET_PATH)
-	for left in IntroSplashSheet._COLUMN_WINDOW_LEFTS:
-		assert_lte(
-			int(left) + IntroSplashSheet._FRAME_WIDTH, image.get_width(),
-			"a pinned column runs off the sheet"
-		)
-	for top in IntroSplashSheet._ROW_WINDOW_TOPS:
-		assert_lte(
-			int(top) + IntroSplashSheet._FRAME_HEIGHT, image.get_height(),
-			"a pinned row runs off the sheet"
-		)
+	var last_left: int = IntroSplashSheet._COLUMN_LEFTS[IntroSplashSheet._COLUMN_LEFTS.size() - 1]
+	assert_lte(last_left + IntroSplashSheet._FRAME_WIDTH, image.get_width(), "the last column runs off the sheet")
 
 
-## The heart of "fix the cropping properly": not one pixel of the
-## contact-sheet chrome may survive into a frame. A grid line is a bright,
-## near-neutral vertical or horizontal STREAK; a frame that swallowed one
-## shows it as a pale bar down its own edge. Checked on the built frames
-## themselves, not on the crop arithmetic, so it holds whatever the crop
-## does internally.
-func test_no_frame_carries_a_slice_of_the_grid_line():
-	var frames := sheet.generate_textures()
-	for i in frames.size():
-		var frame: Image = frames[i].get_image()
-		for x in [0, frame.get_width() - 1]:
-			assert_false(
-				_is_grey_streak(frame, x, true),
-				"frame %d keeps a grid line down its %s edge" % [i, "left" if x == 0 else "right"]
-			)
-		for y in [0, frame.get_height() - 1]:
-			assert_false(
-				_is_grey_streak(frame, y, false),
-				"frame %d keeps a grid line across its %s edge" % [i, "top" if y == 0 else "bottom"]
-			)
+## Rows of a built FRAME that carry opaque art, as [top, bottom).
+func _opaque_band(texture: Texture2D) -> Vector2i:
+	var image := texture.get_image()
+	var top := -1
+	var bottom := -1
+	for y in image.get_height():
+		for x in image.get_width():
+			if image.get_pixel(x, y).a > 0.5:
+				if top < 0:
+					top = y
+				bottom = y
+				break
+	return Vector2i(top, bottom)
 
 
-## Most of one row/column of `frame` being bright and near-neutral -- the
-## same rule _grid_line_runs uses on the sheet, applied to a built frame.
-func _is_grey_streak(frame: Image, index: int, vertical: bool) -> bool:
-	var extent: int = frame.get_height() if vertical else frame.get_width()
-	var hits := 0
-	for j in extent:
-		var c: Color = frame.get_pixel(index, j) if vertical else frame.get_pixel(j, index)
-		var brightest: float = maxf(c.r, maxf(c.g, c.b))
-		var darkest: float = minf(c.r, minf(c.g, c.b))
-		if brightest > 0.18 and (brightest - darkest) < 0.08:
-			hits += 1
-	return float(hits) / float(extent) > 0.45
-
-
-## The alignment invariant, and the one that actually catches a drifting
-## crop. Every cell of this contact sheet carries its own timestamp burned
-## in at the SAME offset below its own cell top (the export tool drew it
-## there), so if the crop is aligned that label lands on the same row of all
-## 120 built frames. A crop anchored a few pixels off per row is exactly
-## what "the image is moving from bottom to top" looked like the last time
-## this art was replaced -- this measures it directly, instead of inferring
-## it from opaque-pixel bounds, which a full-bleed sheet like this one
-## cannot distinguish at all (every pixel is opaque, so a bounds test passes
-## vacuously here).
+## Reported in play right after the art was replaced: "the new intro has
+## wrong row sizes the image is moving from bottom to top".
 ##
-## Tolerance is exactly 1px, and that 1px is the art's, not the crop's: the
-## labels are different strings ("0.00s" vs "1.25s"), so their glyphs put
-## different amounts of ink on the topmost antialiased row -- measured
-## directly, frames sharing ONE window and therefore ONE crop still report
-## first-ink rows of 10 and 11. Anything beyond that spread is the crop
-## moving, which is what this guards. The real drift it replaces was 14px.
-##
-## The label is kept in frame deliberately, not cropped away -- asked
-## directly, when offered the choice: "Just crop with timestamp".
-func test_every_frame_lands_its_timestamp_label_on_the_same_rows():
+## The rows of this sheet are genuinely DIFFERENT heights -- 162, 158,
+## 158, 147, 134, measured, not assumed (see _ROW_BANDS) -- while the
+## globe they draw stays the same size and sits at its own row's middle.
+## Every frame shares one fixed canvas (test_every_frame_is_the_same_size),
+## so a short row has to pad somewhere, and a frame anchored at its row's
+## TOP puts the whole shortfall below the art: the globe's centre climbs
+## 14px up the source frame across the sequence, magnified ~5.3x by the
+## viewport stretch, which is exactly the reported upward drift. Padding
+## the shortfall EQUALLY above and below leaves the globe where it is.
+func test_every_frame_puts_its_art_at_the_same_height():
 	var frames := sheet.generate_textures()
-	var highest := 999
-	var lowest := -1
+	var height: int = frames[0].get_image().get_height()
+	var frame_centre := float(height - 1) / 2.0
 	for i in frames.size():
-		var top: int = _label_rows(frames[i].get_image()).x
-		assert_gte(top, 0, "frame %d shows no timestamp label at all" % i)
-		highest = mini(highest, top)
-		lowest = maxi(lowest, top)
+		var band := _opaque_band(frames[i])
+		assert_gte(band.x, 0, "frame %d has no opaque art at all" % i)
+		var art_centre := float(band.x + band.y) / 2.0
+		assert_almost_eq(
+			art_centre, frame_centre, 1.0,
+			"frame %d centres its art at %.1f, not %.1f -- art anchored anywhere but the frame's own middle drifts up (or down) the screen as the rows change height" % [i, art_centre, frame_centre]
+		)
+
+
+# -- frame stabilisation: the globe holds still frame to frame -------------
+# -- (see docs/concept/intro_splash.md's "Frame stabilisation") -----------
+
+## The globe's RIGHT LIMB -- for the widest row, the rightmost pixel with
+## any light in it at all.
+##
+## Deliberately the limb rather than the globe's centre, and deliberately a
+## near-black threshold. This art crops the sphere at the LEFT frame edge,
+## so the right limb is the only edge of it actually in shot; and the limb
+## is geometry, where every brightness-based reading here is lighting. The
+## terminator sweeps right across the disc as the Earth turns into
+## daylight, so a centre-of-lit-pixels measurement moves ~35px over the
+## sequence while the globe itself has not moved at all -- the same
+## "moon-phase crescent" trap that made an earlier measurement of the
+## PREVIOUS sheet read as falsely reassuring (see this doc's sixteenth
+## pass), reached here from the opposite direction.
+func _globe_right_limb(texture: Texture2D) -> int:
+	var image := texture.get_image()
+	var limb := -1
+	for y in image.get_height():
+		for x in image.get_width():
+			if image.get_pixel(x, y).get_luminance() > 0.02:
+				limb = maxi(limb, x)
+	return limb
+
+
+## Frames before this have not faded up out of black yet, so the globe's
+## own edge is genuinely not in the picture to hold still. Measured: the
+## limb is already at its final position by frame 20 of 120, and the
+## sequence runs at 24fps, so this is the first ~0.83s.
+const _FADE_IN_FRAMES := 20
+
+
+## The report this was chased for, over and over: "stabilize the intro
+## video", "it jumps left to right". On THIS sheet it does not. Measured
+## across all 100 frames past the fade-in, the globe's right limb sits at
+## exactly the same column in every one of them -- zero spread, not merely
+## a small one. The fixed crop from a measured grid is already doing the
+## whole job here, and nothing further is needed.
+##
+## Kept as a regression test rather than deleted as a no-op: this file's
+## own history is four separate art swaps, at least two of which shipped a
+## visibly drifting intro. The next one fails here.
+func test_the_globe_holds_the_same_position_in_every_frame():
+	var frames := sheet.generate_textures()
+	assert_gt(frames.size(), _FADE_IN_FRAMES, "precondition: there are frames past the fade-in")
+	var lowest := 9999
+	var highest := -1
+	for i in range(_FADE_IN_FRAMES, frames.size()):
+		var limb := _globe_right_limb(frames[i])
+		assert_gte(limb, 0, "frame %d has no lit pixel at all, past the fade-in" % i)
+		lowest = mini(lowest, limb)
+		highest = maxi(highest, limb)
 	assert_lte(
-		lowest - highest, 1,
-		"the timestamp sits as high as row %d in one frame and as low as row %d in another -- the crop is drifting between cells" % [highest, lowest]
+		highest - lowest, 1,
+		"the globe's own edge wanders %dpx across the frames past the fade-in (%d..%d) -- this sheet drifts" % [
+			highest - lowest, lowest, highest
+		]
 	)
 
 
-## First and last row carrying label text: >=4 near-white pixels within the
-## left 48px, in the top 30 rows. Bounded to where the label is drawn so the
-## globe's own bright limb (which reaches the top of a frame only lower down,
-## from y~36) can never be counted as text.
-func _label_rows(frame: Image) -> Vector2i:
-	var first := -1
-	var last := -1
-	for y in mini(30, frame.get_height()):
-		var run := 0
-		for x in range(4, mini(48, frame.get_width())):
-			var c := frame.get_pixel(x, y)
-			if minf(c.r, minf(c.g, c.b)) > 0.60:
-				run += 1
-		if run >= 4:
-			if first < 0:
-				first = y
-			last = y
-	return Vector2i(first, last)
+## ...and the measurement really would notice. A test that the art holds
+## still is worth nothing if its own ruler cannot see movement, so the same
+## helper is run over a real frame shifted by a known amount.
+func test_the_limb_measurement_would_notice_a_frame_that_moved():
+	var frames := sheet.generate_textures()
+	var original := frames[frames.size() - 1].get_image()
+	var shifted := Image.create(original.get_width(), original.get_height(), false, original.get_format())
+	shifted.fill(Color(0.0, 0.0, 0.0, 1.0))
+	# Left by 3px: the limb must come back 3px lower, or the ruler is blind.
+	shifted.blit_rect(
+		original, Rect2i(3, 0, original.get_width() - 3, original.get_height()), Vector2i(0, 0)
+	)
+	var moved := _globe_right_limb(ImageTexture.create_from_image(shifted))
+	var still := _globe_right_limb(frames[frames.size() - 1])
+	assert_eq(moved, still - 3, "a 3px shift must read as a 3px shift")

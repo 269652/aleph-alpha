@@ -161,6 +161,236 @@ With no farmhouse (an unloaded chunk, a village too small to have raised
 one), `_step_farm` returns null and the villager keeps the schedule and the
 regional drip they always had.
 
+### The fence around the beds
+
+Asked for directly, with the field circled in a screenshot: *"the farmhouse
+should build a fence around the bed so no animals enter"*.
+
+A farm without a fence is a field that feeds deer. The village raises the
+fence **with** the farmhouse, out of the same timber the farmhouse's own
+cost already pays for — the identical argument
+[npc_farm_production.md](npc_farm_production.md) already makes for the
+placeable Farm's gate, whose recipe cost *is* "wood (6) for fence
+rails/posts and plant_fibre (4) lashing them".
+
+- **What is enclosed:** the beds the villager actually works — a **compact
+  rectangle**, `FIELD_SHAPES` (3×2 or 2×3, whichever fits), not a scattered
+  handful of whatever ground happened to be clear. Asked for directly, with
+  the broken ring circled in a screenshot: *"The fence should enclose a 2x3
+  or 3x2 area"*. A ragged bed set has a ragged ring, and a ragged ring is
+  what reads as broken fencing.
+
+  Six beds is also what the yield measurements already pointed at: six
+  peaked at 225 wheat per work block and everything from eight to fourteen
+  sat at 215 (see "What a field costs to keep"). The shape the report asks
+  for and the shape the measurement asks for are the same shape.
+- **Where the rails stand:** the rectangle's own **border** — every cell
+  touching a bed, on the diagonal as well as the orthogonal so the corners
+  close, that is not itself a bed, not the farmhouse's own footprint, not
+  water, and not the village's paving. `VillageFarm.fence_cells` is that
+  rule, pure and derived — like `field_rect` and `owner_of`, it stores
+  nothing, so the same farmhouse fences the same ring on every reload.
+- **The frame closes at the corners.** A border's four diagonal cells are
+  **corner posts**, not lengths of rail: drawing a horizontal rail across a
+  corner is exactly the "broken" look the report points at. The sheet has no
+  corner cell of its own, so a corner is drawn with the post art the side
+  columns use, which is what a real corner post is. A post knows *which
+  side* it caps (`corner_west`/`corner_east`), because it has to stand on
+  the same line as the wall below it — one left on its own tile centre would
+  sit half a tile off the run it caps, which is a broken joint of its own.
+- **The side walls sit on the frame's inner edge.** The two vertical walls
+  are drawn on the edge of their own tile that faces the beds. This
+  **reverses** an earlier pass, which pushed them half a tile the other way
+  on the report *"the side walls of the fence should be moved outwards and
+  corner pieces added so it doesn't look that broken"*; the later ask, with
+  the west and south sides arrowed toward the beds, is *"move the fences to
+  the inner edge of the enclosure and treat the rest of the tile as
+  street"*. Everything but the sign survived that reversal: the two walls
+  still move by the same distance in opposite directions, and a corner post
+  still stands exactly where the wall it caps does. See "The rail stands on
+  the inner edge" below, which is the general rule both are now cases of.
+- **The gate** is where the ring meets the village's own PAVING, and only
+  there. No rail is raised on a paved cell: the farmer walks in over the
+  street their farmhouse fronts, which is the whole reason a farmhouse takes
+  frontage at all. A fence laid across the road would wall the village off
+  from its own farm.
+
+  A rail may stand on an unpaved cell of a street ROW, though, unlike a bed.
+  Reported with the bed circled, *"it's still not fully enclosing the bed"*:
+  a field sits below the house it belongs to, so one whole side of its frame
+  lands on the next street row, and holding rails to the beds' own street-row
+  rule left that side open — measured on real villages, a three-wide `.....`
+  gap with the frame closed on every other side. An unpaved gap is not a
+  gate, and a rail along the edge of a road is a fence beside a road. Sowing
+  in a street row stays forbidden, which is what that rule was really about:
+  a crop in the roadway is not a crop.
+
+- **A bed is cleared before it is sown.** Asked for directly: *"long grass
+  should be cleared before planting"*. Tilling a bed blocks the chunk's
+  ground cover on that cell — tall grass, flowers, desert scrub, tundra
+  lichen — through the same seam a building's own floor already uses
+  ([building.md](building.md)'s *"grass must be cut before and can't grow
+  back inside a house"*), so a farmer no longer plants wheat into a standing
+  meadow that then grows over it. The clearing happens only when the till
+  really takes: a bed refused because a live crop is already on it was never
+  worked, and must not scythe the ground anyway. Worked ground stays worked
+  — nothing seeds, spreads or falls back into it — which is deliberate and
+  is the same permanence a house floor has; a bed nobody ever returns to
+  does not regrow its meadow.
+
+- **A wheat bed shows no soil mound.** Reported with the beds circled:
+  *"what's the round procedural dark blob? Can you remove it and keep just
+  the wheat"*. `ProceduralSoilSprite`'s mound is a ROOT crop's own ground —
+  the root grows inside it, and pulling one leaves the crater its DISTURBED
+  state draws — but under a field of bending wheat it is just a dark circle,
+  six of them in a 3×2 bed. `FarmPlotMarker` keys it on what the bed was
+  SOWN with rather than on `plot.crop_id`, which harvesting clears: a bare
+  mound appearing the moment the wheat comes off is the same blob back.
+- **A street ROW is street, paved or not.** Neither beds nor rails ever land
+  on one. The founding layout paves a further street only *between its own
+  doorsteps*, so a street row has unpaved gaps in it — and measured on real
+  villages, a village that treats those gaps as open ground plants crops and
+  drops rails in the middle of its own road with paving either side. It also
+  made the frames inconsistent: a field under a paved stretch correctly got
+  no north wall, because the street is its boundary, while the field beside
+  it got a rail. Derived from the skeleton (`street_y` plus
+  `STREET_PITCH_TILES`), so it costs nothing and needs nothing stored.
+- **What it does:** a rail shuts one LINE, not one tile.
+  `CreatureMarker` refuses the step that would carry an animal across the
+  rails and slides along them rather than sticking against them — the
+  obstacle its own `_advance` doc comment has always described ("blocked
+  by an obstacle, once that lands") and nothing had yet supplied.
+  Villagers and the player walk through freely; the fence is a stock
+  fence, not a wall. See "The rail stands on the inner edge" below.
+- **The rails are real tiles**, `farm_fence`, persisted as ordinary chunk
+  modifications like every other placeable. They weather and break like
+  anything else made of wood, because the sheet has the frames for it.
+
+**Art contract.** `assets/sprites/buildings/fence.png`, 1536×1024, magenta
+dividers with a printed label row across the top and a label gutter down
+the left — the same grid the house lifecycle sheets use
+(`VariantSheetGrid.art_bands`). Four orientation columns by three condition
+rows, in the sheet's own printed order:
+
+|            | North (Back) | South (Front) | East (Top View) | West (Top View) |
+|-----------:|:------------:|:-------------:|:---------------:|:---------------:|
+| Pristine (0) | 0,0 | 1,0 | 2,0 | 3,0 |
+| Worn (1)     | 0,1 | 1,1 | 2,1 | 3,1 |
+| Destroyed (2)| 0,2 | 1,2 | 2,2 | 3,2 |
+
+A rail picks its column from which side of the enclosure it stands on, so a
+run along the field's north edge is drawn back-on and a run down its east
+edge is drawn as a post-and-rail seen from above.
+
+### The rail stands on the inner edge
+
+Asked for directly, with the west and south sides of a real ring arrowed in
+a screenshot: *"move the fences to the inner edge of the enclosure and treat
+the rest of the tile as street … the brown squares should still be street
+when a fence is put"*.
+
+A rail used to be a whole tile: ground no animal could stand on, painted as
+a bare earth square over whatever was already there. That drew a dug brown
+moat round every field with the rails floating in the middle of it. A rail
+is a **line on one edge** instead — the edge facing the beds it encloses —
+and the rest of its own tile is ordinary ground.
+
+- **Which edge.** `VillageFarm.fence_inner_direction` is the inverse of what
+  the facing names: a rail closing the field's *north* side stands north of
+  the beds, so its rails lie on its own *south* edge. Pinned against
+  `fence_facing` itself rather than written out a second time, so a rail can
+  never be drawn on one edge and block another.
+- **The ground is untouched.** A rail paints no tile of its own. It is in
+  `TerrainRenderer.OVERLAY_ONLY_TILE_IDS`, so `paint()` leaves the cell
+  showing the terrain it was raised on, and `_neighbor_biomes` lets a
+  neighbouring earth cell blend toward it like the real ground it still is —
+  without that second half a fenced ring cuts a hard dithered seam right
+  round the field. Before this the four rail ids were simply unknown to
+  `atlas_coords_for_modification` and fell through its plain-earth fallback,
+  which is the whole story of the brown square.
+- **Where the art stands.** `IllustratedStructureSprite.footprint_offset`
+  puts a rail's own ground line on that edge, and what counts as its ground
+  line depends on how the sheet draws the run: a broad-side run (the
+  North/South columns) stands on its **posts**, so the bottom of its wood is
+  its ground line; a top-view run (East/West) has no posts — the band of
+  rail *is* the ground line — so its **centre line** lands on the edge
+  instead. Measured off the art with `_art_rect`, not assumed from the cell:
+  `fence.png` draws every run centred in its own cell with real margin all
+  round, so bottom-anchoring alone leaves a rail's posts about a fifth of a
+  tile short of the edge they belong on. A first pass assumed a *north* rail
+  already stood on its own south edge and was wrong by exactly that margin.
+  `Image.get_used_rect` cannot supply the measurement — a pixel part way
+  between the sheet's magenta divider and its black background survives the
+  chroma key at full alpha and makes the used rect the whole cell — so
+  `_is_art_pixel` keys on that leftover being magenta-*cast* (blue at least
+  as strong as green) where real wood and iron never are.
+- **And a run is scaled by its RUN.** Asked for in one word once the rails
+  landed on their edges: *"also scale"*. Every whole building scales its
+  cell WIDTH to the tile, which is the footprint anchor. A rail cannot: the
+  sheet draws each run centred in its own cell with real margin at both
+  ends, so a cell scaled by its width leaves that margin as a gap between
+  one rail and the next — measured, 52 of 64 across for a broad-side run and
+  39 of 64 down for a top-view one, which reads as a row of separate pieces
+  rather than a fence line. `_footprint_scale` scales a rail so its own wood
+  spans exactly one tile along the direction its run travels (east-west for
+  a rail whose beds lie north or south, north-south for one whose beds lie
+  east or west), so consecutive rails meet and the frame closes. Its band is
+  then wider than the tile it stands on, which is why the footprint-width
+  contract now speaks for whole buildings only, and why the placement
+  carries where the band's left edge falls instead of assuming it away.
+- **What an animal may do.** `VillageFarm.rails_block_step` replaces the old
+  "is this tile fenced" question with "does this step cross the rails",
+  asked of the PAIR of cells a step joins
+  (`EarthChunkManager.fence_blocks_step_global`, and
+  `CreatureMarker._fence_blocks_movement` asks it of the cell under the
+  animal and the cell its look-ahead lands in). Stepping onto the ring,
+  along it, or away from the beds is free; crossing the rails is shut from
+  both sides, so an animal already in the crop cannot walk out either. A
+  diagonal crosses both of its own edges and is blocked whenever either
+  component would be, so nothing slips round a corner that no cardinal step
+  can pass.
+- **Except a corner post, which shuts only the diagonal.** A corner's beds
+  are diagonal, so the diagonal is the only way through it into the crop;
+  its cardinal neighbours are the two runs it caps, and stopping a step
+  along a run would stop an animal walking the ring — the opposite of what
+  was asked. Nothing is opened by the exception: every cardinal way in is
+  still shut by the run's own rail. A first pass missed it and turned
+  animals back at all four corners, which
+  `test_the_ring_of_a_rectangular_field_is_walkable_all_the_way_round`
+  caught.
+
+The ring is therefore a real perimeter path — the ground it was raised on,
+walkable, with rails along its inner edge — rather than a band of dug earth.
+The placeable `wooden_fence` is deliberately NOT part of this: it is a prop
+standing on its own tile like a campfire, and bare earth under a prop is
+this codebase's existing convention
+([npc_farm_production.md](npc_farm_production.md)).
+
+**The corners are a second sheet, not a fifth column.** The ring closes on
+the diagonal, so four cells of every ring have only a diagonal bed and no
+side of the enclosure to name — `fence_facing` sends them to `north`/
+`south` today, which lays a straight rail across the bend. The fix is
+`assets/sprites/buildings/fence_corners.png`, the identical contract
+(1536×1024, magenta rules, printed labels, `VariantSheetGrid.art_bands`)
+with the four columns being the corner of the enclosure rather than its
+side:
+
+|            | NW | NE | SW | SE |
+|-----------:|:--:|:--:|:--:|:--:|
+| Pristine (0) | 0,0 | 1,0 | 2,0 | 3,0 |
+| Worn (1)     | 0,1 | 1,1 | 2,1 | 3,1 |
+| Destroyed (2)| 0,2 | 1,2 | 2,2 | 3,2 |
+
+A corner cell is one shared post with two HALF runs leaving it, each drawn
+as the straight column it must butt against (NW = a North back-on run
+exiting right, plus a West top-view run exiting down) and each cut flush at
+the cell edge so the rails line up with the neighbouring tile's. Separate
+sheet rather than extra columns because the existing four columns are
+`fence.png`'s own printed order, pinned by
+`test_the_four_rails_are_four_different_pictures` — widening that sheet
+would rewrite art already on disk. The generation prompt lives in
+[../art/ai_sprite_prompts.md](../art/ai_sprite_prompts.md) §13.
+
 ### What a field costs to keep
 
 A day is `ChunkEcologyCatchup.SECONDS_PER_DAY` = 3600 s in four
@@ -286,6 +516,85 @@ again.
   is how a village grows its output. Full table in "What a field costs to
   keep" above.
 
+- ✅ **Every farmhouse really joins the village's streets.** Reported in
+  play with a screenshot of a farmhouse standing in open ground: *"There
+  are still Farmhouses not connected by a street"*. Measured before
+  anything was touched, and it was not an edge case — **half** of every
+  growth plot the village offered fronted paving no street reached (80 of
+  160, over 40 seeds × four village sizes). `next_street_plot` walks the
+  *skeleton's* streets, every row the spine could ever open; what `layout`
+  actually paves is narrower, because a further street is paved only once
+  it really got a plot at founding.
+
+  A plot now comes with the paving that joins it — a `road_spur` beside the
+  doorstep, the same `{doorstep, road_spur}` shape `industry_plot` and
+  `outskirt_plot` already hand back — and a plot nothing can reach is not
+  offered at all. The tie-back is the one `layout` itself uses, so a village
+  that grows looks like a village that was founded: an L down a lane column
+  from the spine, then along the new street's row to the door.
+
+  The first version of the tie-back broke **eight** of the growth ladder's
+  own tests, and it took three separate corrections to get them all back --
+  each one a different way of being too strict about where a road may run:
+
+  - The lane's column is **searched**, nearest the door first. Fixing it at
+    the spine's own start reads plausible and is wrong: `layout` lays its
+    gate lane at the start of the run it actually paved, which on a village
+    wedged against water is nowhere near where the skeleton drew the spine.
+    Recovered two of the eight.
+  - The tie-back may **cross** paving the village has already laid --
+    another street's row, an earlier plot's doorstep, the square. Without
+    that, every junction reads as blocked and no second building on a row
+    can reach the first one's lane. This is what keeps every village that
+    had frontage before still offering it (measured: 160 of 160).
+  - The spur is tested against **water only**, never the caller's wider
+    ground rule. The growth ladder builds against `is_buildable_ground_at`,
+    which refuses the forest *biome* outright; testing the spur that way
+    refused the tie-back on wooded ground. A spur is a road, and a village
+    fells the trees it needs to lay one -- the same split `skeleton` already
+    draws for the square. Recovered the remaining five.
+
+  The over-time path is covered too: a rung raised by the growth ladder long
+  after its plot was offered re-derives the same tie-back from the chunk's
+  own seed (`VillageLayout.frontage_spur`), so nothing new is persisted.
+
+- ✅ **A farmhouse fences the beds it works.** Asked for directly, with the
+  field circled: *"the farmhouse should build a fence around the bed so no
+  animals enter"*. `VillageFarm.fence_cells` is the ring, pure geometry with
+  nothing persisted; the renderer raises real rails on every cell of it that
+  can take one, leaving the village's own paving open as the gate. Laid only
+  once every field is known — two farmsteads near each other share the
+  ground between them, so one farm's fence line is the other farm's crop —
+  and before any villager or prop is placed, since a prop is grounded
+  against what is already built.
+
+  The rails really stop animals: `CreatureMarker._fence_blocks_movement` is
+  the same ask-before-you-step check `_terrain_blocks_movement` already is,
+  on the one movement choke point every intent funnels through. Villagers
+  and the player are untouched.
+
+  Each rail carries its facing in its own tile id
+  (`farm_fence_north`/`south`/`east`/`west`), because the tile id is the
+  only thing stored about a rail and the sheet's four orientation columns
+  have to still draw correctly on the next load.
+
+- ✅ **A rail stands on its tile's inner edge, and the rest of that tile is
+  ordinary ground.** Asked for directly, with the west and south sides of a
+  real ring arrowed: *"move the fences to the inner edge of the enclosure
+  and treat the rest of the tile as street … the brown squares should still
+  be street when a fence is put"*. Three halves of one change, each driven
+  red first: the rails paint no ground tile at all
+  (`TerrainRenderer.OVERLAY_ONLY_TILE_IDS`, which also stops a neighbouring
+  earth cell reading the ring as modified and dithering a seam round the
+  field); the art moves onto the edge facing the beds
+  (`IllustratedStructureSprite.footprint_offset`, derived from
+  `VillageFarm.fence_inner_direction`, one branch per projection the sheet
+  uses); and movement asks whether a STEP crosses the rails
+  (`VillageFarm.rails_block_step` via
+  `EarthChunkManager.fence_blocks_step_global`) instead of whether a tile
+  carries one, so an animal may stand on the ring and walk along it and only
+  the crop is shut. See "The rail stands on the inner edge" above.
+
 Honest gaps, each real:
 
 - 🚧 **A herb plot renders as bare tilled soil.** `IllustratedCropSprite`
@@ -305,6 +614,35 @@ Honest gaps, each real:
   field from scratch. A closed-form catch-up (the shape
   `chunk_ecology_catchup.gd` uses) is the real fix and is not attempted
   here.
+- 🚧 **The gate is a real hole.** Where the fence ring meets the village's
+  paving no rail is raised, because a fence laid across the road would wall
+  the village off from its own farm — so an animal that wanders into the
+  gate cell is inside the field. That is what a farm gate is, and closing it
+  would need a gate mechanic (a rail an animal cannot pass and a person
+  can), which nothing models. The field is bounded by the street on one side
+  only, so the hole is a few tiles wide at most.
+- 🚧 **Rails do not weather or break.** The sheet carries Worn and Destroyed
+  rows and only the Pristine row is ever drawn. Nothing damages a fence, so
+  nothing would ever read them yet.
+- 🚧 **A rail closes exactly one of its own sides.** `fence_cells` closes
+  the ring on the diagonal, but a rail's tile id carries one facing, so
+  `fence_inner_direction` names one edge — where the old whole-tile rule
+  simply made the cell solid and closed every side of it at once. On a
+  **rectangular** field the four corner cells each touch exactly one bed,
+  diagonally, and `fence_facing`'s vertical answer is always one of that
+  diagonal's own two components, so the diagonal into the crop is still
+  blocked; the cost is one step *along* the ring at each corner, so the
+  perimeter path is walkable except at its four turns. On a **concave**
+  outline (a notch or an L — `nearest_cells` returns whatever shape the
+  ground allows) one rail cell can face beds on two different sides: it
+  closes the first side `fence_facing` names and leaves the second open.
+  The bend also still *draws* as a straight run, for the same reason.
+
+  All of it is one missing thing: a rail id carrying a SET of closed edges
+  (a corner, a T) with art to match. The contract for `fence_corners.png` is
+  above and its prompt is written
+  ([../art/ai_sprite_prompts.md](../art/ai_sprite_prompts.md) §13); no corner
+  art exists on disk yet, so nothing is wired.
 - ⬜ **Nothing yet notices a village that wants a second farmhouse.** The
   village raises one per farming villager and stops. Growing the chain on
   demand is `SettlementBuildDecision`'s to answer, and it reports *missing*

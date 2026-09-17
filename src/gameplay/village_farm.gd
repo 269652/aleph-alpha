@@ -25,6 +25,33 @@ const FarmPlot = preload("res://src/gameplay/farm_plot.gd")
 ## The village's farm building -- the catalog's own, never a second id.
 const FARM_BUILDING_ID := "farmhouse"
 
+## The rail a farmhouse fences its beds with, one tile id per facing.
+##
+## Four ids rather than one because the facing has to SURVIVE: nothing about
+## a village farm is persisted, and a rail is an ordinary chunk modification
+## whose id is the only thing stored about it. Carrying the facing in the id
+## is what lets the sheet's own four orientation columns still be drawn on
+## the next load, with no record of which field the rail once belonged to --
+## the same shape BuildingPiece's wall_wood/floor_stone ids already use.
+##
+## Deliberately NOT the placeable `wooden_fence`: that one GATES a player
+## Farm's Farmer (EarthChunkManager.FARM_FENCE_GATE_RADIUS_TILES), and a
+## village farm's rails standing nearby must not staff one by accident.
+const FENCE_TILE_IDS := {
+	"north": "farm_fence_north",
+	"south": "farm_fence_south",
+	"east": "farm_fence_east",
+	"west": "farm_fence_west",
+	"corner_west": "farm_fence_corner_west",
+	"corner_east": "farm_fence_corner_east",
+}
+
+## The shapes a farmhouse's field may take -- asked for directly, with the
+## broken ring circled in a screenshot: "The fence should enclose a 2x3 or
+## 3x2 area". Six beds either way, which is also exactly where the measured
+## yield table peaks (see MAX_WORKED_CELLS).
+const FIELD_SHAPES: Array[Vector2i] = [Vector2i(3, 2), Vector2i(2, 3)]
+
 ## What each farming occupation grows. Same table shape NpcMarker.
 ## QUARRY_KIND_BY_OCCUPATION already uses for hunter/fisher; an occupation
 ## absent from it has no field at all, which is the honest answer for every
@@ -38,17 +65,6 @@ const CROP_BY_OCCUPATION := {"farmer": "wheat", "herbalist": "herb"}
 ## once a plant has started to droop. Shared with the placeable Farm's own
 ## worker (FarmerMarker) so the two cannot drift apart.
 const WATER_BEFORE_WITHER_FRACTION := 0.5
-
-## How much workable ground a farmhouse's own field ring must really have
-## before a village raises one there -- a farmhouse with nowhere to farm is
-## a farmhouse that should not have been built. NOT a fresh guess: it is
-## the plot count the placeable Farm's own worker already tends
-## (FarmerMarker.PLOT_COUNT), which is the one number in this codebase that
-## has been measured against what a single farmer can actually keep
-## watered. Pinned to it by test_the_smallest_worthwhile_field_is_what_one_
-## farmer_can_already_tend rather than preloaded here, so this module stays
-## free of any rendering dependency.
-const MIN_FIELD_CELLS := 3
 
 ## How much ground one villager can actually keep alive at once -- and
 ## therefore the most any single farmhouse hands its worker, however much
@@ -75,7 +91,14 @@ const MIN_FIELD_CELLS := 3
 ## This is exactly why a village grows its output by raising a SECOND
 ## farmhouse rather than a bigger field, which is the shape the report
 ## asked for ("so you can build multiple farms").
-const MAX_WORKED_CELLS := 10
+##
+## Six, not ten, since the field became a compact rectangle (FIELD_SHAPES).
+## Both answers point the same way and neither is a fresh guess: the report
+## asked for "a 2x3 or 3x2 area", and six is where the measured yield table
+## PEAKS -- 225 wheat per work block against 215 for everything from eight
+## to fourteen (see "What a field costs to keep" in the concept doc). The
+## four tiles this gives up were never worth anything.
+const MAX_WORKED_CELLS := 6
 
 ## How far out from the farmhouse a field may reach. Not the field's size
 ## -- MAX_WORKED_CELLS is that -- but how far the search looks for cells
@@ -259,3 +282,284 @@ static func next_action(plots: Array) -> int:
 			worst = used
 			thirstiest = i
 	return thirstiest
+
+
+## The fence line around the beds a villager actually works (see
+## docs/concept/village_farms.md, "The fence around the beds"): every cell
+## TOUCHING a worked bed that is not itself a bed and not the farmhouse's
+## own footprint, nearest-of-(y, x) order so the same field fences the same
+## ring every time with nothing persisted.
+##
+## Asked for directly, with the field circled in a screenshot: "the
+## farmhouse should build a fence around the bed so no animals enter". A
+## farm without a fence is a field that feeds deer.
+##
+## Diagonal neighbours count. A ring of only the four orthogonal ones has
+## an open corner at every turn, which is not a fence -- it is four walls
+## that miss each other.
+##
+## Only the WORKED beds are fenced, never the whole reachable ring: you
+## fence what you sow, and the fallow part of a farmhouse's ring
+## (MAX_WORKED_CELLS leaves ten of fourteen tiles fallow -- see that
+## constant) is not the farm's yard.
+##
+## Pure geometry, exactly like field_cells and owner_of. Whether a rail can
+## really stand on a given cell -- water, paving, something already built
+## there -- is the caller's question, and the caller leaving the paving open
+## is what makes the gate.
+static func fence_cells(worked_cells: Array, origin: Vector2i, building_id: String) -> Array:
+	var footprint := BuildingCatalog.footprint_of(building_id)
+	if footprint == Vector2i.ZERO or worked_cells.is_empty():
+		return []
+	var beds: Dictionary = {}
+	for cell in worked_cells:
+		beds[cell] = true
+	var rails: Dictionary = {}
+	for cell in worked_cells:
+		var bed: Vector2i = cell
+		for dy in [-1, 0, 1]:
+			for dx in [-1, 0, 1]:
+				if dx == 0 and dy == 0:
+					continue
+				var rail := bed + Vector2i(dx, dy)
+				if beds.has(rail):
+					continue  # a rail between two beds fences nothing
+				if _ring_distance(rail, origin, footprint) == 0:
+					continue  # the farmhouse's own wall closes that side
+				rails[rail] = true
+	var ordered: Array = rails.keys()
+	ordered.sort_custom(func(a: Vector2i, b: Vector2i) -> bool:
+		return a.y < b.y if a.y != b.y else a.x < b.x
+	)
+	return ordered
+
+
+## Which side of the field this rail stands on -- "north", "south", "east"
+## or "west", or "" for a cell that touches no bed at all. The sheet has one
+## orientation column per answer (docs/concept/village_farms.md's art
+## contract), so a run along the field's north edge is drawn back-on and a
+## run down its east edge as posts seen from above.
+##
+## Measured from the bed the rail actually touches: a rail NORTH of a bed
+## closes that bed's north side. A corner touches beds on two sides at once,
+## and takes the vertical answer -- a corner post is drawn as part of the
+## run it caps, and the north/south art is the piece that reads as a fence
+## rather than a single post.
+static func fence_facing(cell: Vector2i, worked_cells: Array) -> String:
+	var beds: Dictionary = {}
+	for bed in worked_cells:
+		beds[bed] = true
+	# A cell touched only on the DIAGONAL caps two runs at once: it is a
+	# corner post, not a length of rail. Checked first, because a rail drawn
+	# across a corner is exactly the broken look the report points at
+	# ("corner pieces added so it doesn't look that broken").
+	var orthogonal := 0
+	for step in [Vector2i(0, 1), Vector2i(0, -1), Vector2i(-1, 0), Vector2i(1, 0)]:
+		if beds.has(cell + step):
+			orthogonal += 1
+	if orthogonal == 0:
+		# Which SIDE the corner caps matters: the side wall below it is drawn
+		# on its own inner edge (fence_inner_direction, applied by
+		# IllustratedStructureSprite.footprint_offset), so a post that did
+		# not know its side would sit half a tile off the run it caps -- a
+		# visibly broken joint, and the opposite of what "corner pieces added
+		# so it doesn't look that broken" asked for.
+		for dy in [1, -1]:
+			for dx in [1, -1]:
+				if beds.has(cell + Vector2i(dx, dy)):
+					return "corner_west" if dx > 0 else "corner_east"
+		return ""
+	if beds.has(cell + Vector2i(0, 1)):
+		return "north"
+	if beds.has(cell + Vector2i(0, -1)):
+		return "south"
+	if beds.has(cell + Vector2i(-1, 0)):
+		return "east"
+	return "west"
+
+
+## The rail tile for a facing, or "" for a direction nobody drew.
+static func fence_tile_for(facing: String) -> String:
+	return FENCE_TILE_IDS.get(facing, "")
+
+
+## Whether this tile id is one of a village farm's rails, whichever way it
+## faces -- the one question a creature's movement and the art registry both
+## have to ask, so neither re-lists the ids.
+static func is_fence_tile(tile_id: String) -> bool:
+	return tile_id != "" and FENCE_TILE_IDS.values().has(tile_id)
+
+
+## Which way the beds lie from a rail cell -- and therefore which of that
+## cell's own four edges the rails are actually DRAWN on, and the only line
+## an animal may not cross. Vector2i.ZERO for anything that is not a rail.
+##
+## Asked for directly, with two sides of a real ring arrowed in a
+## screenshot: *"move the fences to the inner edge of the enclosure and
+## treat the rest of the tile as street"*. A rail used to be a whole solid
+## tile -- ground no animal could stand on, painted as a bare earth square
+## over whatever was already there. It is a LINE on ONE edge now, so the
+## rest of its own tile is ordinary walkable ground and the ring round a
+## field reads as the path the farmer walks rather than a brown moat.
+##
+## The direction is the INVERSE of what the facing names: a rail closing the
+## field's NORTH side stands north of the beds, so its beds -- and its rails
+## -- lie SOUTH of it. That is the same relation fence_facing measures in
+## the other direction, and
+## test_the_inner_edge_really_points_at_the_bed_the_rail_encloses pins the
+## two against each other rather than trusting two hand-written tables.
+## A corner post caps one of the two SIDE walls, so it takes that wall's own
+## inner edge: a corner_west caps the west run and its beds lie east, a
+## corner_east caps the east run and its beds lie west. That is what keeps
+## the post on the same line as the run it caps instead of half a tile off
+## it, and it is also the honest answer for what an animal may cross there
+## -- the diagonal into the crop is blocked (that diagonal's x component IS
+## this direction), while walking on along the ring past the turn is not.
+const FENCE_INNER_DIRECTIONS := {
+	"north": Vector2i(0, 1),
+	"south": Vector2i(0, -1),
+	"east": Vector2i(-1, 0),
+	"west": Vector2i(1, 0),
+	"corner_west": Vector2i(1, 0),
+	"corner_east": Vector2i(-1, 0),
+}
+
+
+## The facing a rail's tile id carries, or "" for anything that is not a
+## rail -- the reverse of fence_tile_for, so nothing re-lists the ids.
+static func fence_facing_of(tile_id: String) -> String:
+	if tile_id == "":
+		return ""
+	for facing in FENCE_TILE_IDS:
+		if FENCE_TILE_IDS[facing] == tile_id:
+			return facing
+	return ""
+
+
+static func fence_inner_direction(tile_id: String) -> Vector2i:
+	return FENCE_INNER_DIRECTIONS.get(fence_facing_of(tile_id), Vector2i.ZERO)
+
+
+## Whether this rail is a corner POST rather than a length of rail -- a cell
+## the beds touch only on the DIAGONAL, capping the two runs that meet
+## there (see fence_facing).
+static func is_fence_corner_tile(tile_id: String) -> bool:
+	return fence_facing_of(tile_id).begins_with("corner")
+
+
+## Whether a step from one cell to the next CROSSES a rail's inner edge --
+## the one thing a rail stops. `step` is the move as a cell delta (only its
+## sign per axis matters); `from_tile_id`/`to_tile_id` are the modifications
+## standing on each end of it.
+##
+## Blocked when the animal LEAVES a rail cell over that cell's own inner
+## edge, or ENTERS a rail cell over ITS inner edge -- the same line, walked
+## from the field side. Never otherwise, and that is precisely what makes
+## the rest of a rail's tile ordinary ground: stepping onto the ring, along
+## it, or away from the beds is all free, so the ring is a path an animal
+## may walk and a farmer may work from.
+##
+## A diagonal crosses both of its own edges, so it is blocked whenever
+## either component would be -- an animal must not slip round a corner of
+## the ring that no cardinal step can pass.
+static func rails_block_step(from_tile_id: String, to_tile_id: String, step: Vector2i) -> bool:
+	return _rail_stops_step(from_tile_id, step) or _rail_stops_step(to_tile_id, -step)
+
+
+## Whether the rail on ONE end of a step stops it, seen from that rail's own
+## cell -- so the destination is asked with the step reversed, which is the
+## same line walked from the field side.
+##
+## A CORNER post is the exception, and a load-bearing one: its beds are
+## diagonal, so the only way through it into the crop is a diagonal. Its
+## cardinal neighbours are the two runs it caps, and stopping a step along a
+## run stops an animal walking the ring -- the exact opposite of "treat the
+## rest of the tile as street", and caught by
+## test_the_ring_of_a_rectangular_field_is_walkable_all_the_way_round, which
+## a first pass failed at all four corners. Nothing is opened by it: every
+## cardinal way in is still shut by the run's own rail.
+static func _rail_stops_step(tile_id: String, step: Vector2i) -> bool:
+	var inner := fence_inner_direction(tile_id)
+	if inner == Vector2i.ZERO or step == Vector2i.ZERO:
+		return false
+	var crosses := (
+		(inner.x != 0 and signi(step.x) == inner.x)
+		or (inner.y != 0 and signi(step.y) == inner.y)
+	)
+	if not crosses:
+		return false
+	if is_fence_corner_tile(tile_id):
+		return step.x != 0 and step.y != 0
+	return true
+
+
+## The compact rectangle of beds a farmhouse at `origin` works, or null when
+## no shape fits anywhere in reach.
+##
+## Asked for directly, with the broken ring circled in a screenshot: "The
+## fence should enclose a 2x3 or 3x2 area". A field used to be whichever
+## cells of the reachable ring happened to be clear, taken nearest-first --
+## and a scattered bed set has a RAGGED border, which is exactly what reads
+## as broken fencing. A rectangle has a frame.
+##
+## Sited by the same rule the ring followed: to the sides and DOWNWARDS of
+## the farmhouse, never north (a village house fronts the street with its
+## door south, so the ground above it is the next row of buildings), nearest
+## the building first, ties broken by (y, x) so the same farmhouse lays out
+## the same field on every reload with nothing persisted.
+##
+## `is_free` answers for ONE cell: is this ground this farmhouse may sow?
+## The caller owns what that means -- inside the chunk, dry, unbuilt, and
+## owned by this farmhouse rather than its neighbour. Every cell of a
+## rectangle must pass, because a field with a rock in the middle of it is
+## not the rectangle that was asked for.
+static func field_rect(origin: Vector2i, building_id: String, is_free: Callable):
+	var footprint := BuildingCatalog.footprint_of(building_id)
+	if footprint == Vector2i.ZERO:
+		return null
+	var best = null
+	var best_key: Array = []
+	var centre := Vector2(origin) + Vector2(footprint) * 0.5
+	for shape in FIELD_SHAPES:
+		var size: Vector2i = shape
+		for top in range(origin.y, origin.y + footprint.y + FIELD_REACH_TILES):
+			for left in range(origin.x - FIELD_REACH_TILES, origin.x + footprint.x + FIELD_REACH_TILES):
+				var rect := Rect2i(left, top, size.x, size.y)
+				if not _rect_is_free(rect, origin, footprint, is_free):
+					continue
+				var key: Array = [
+					_rect_reach(rect, origin, footprint),
+					(rect.get_center() as Vector2i as Vector2).distance_squared_to(centre),
+					rect.position.y, rect.position.x, size.y, size.x,
+				]
+				if best == null or key < best_key:
+					best = rect
+					best_key = key
+	return best
+
+
+## Every cell of `rect` is ground this farmhouse may really sow: not north
+## of the building, not under it, and accepted by the caller's own rule.
+static func _rect_is_free(
+	rect: Rect2i, origin: Vector2i, footprint: Vector2i, is_free: Callable
+) -> bool:
+	for y in range(rect.position.y, rect.end.y):
+		for x in range(rect.position.x, rect.end.x):
+			var cell := Vector2i(x, y)
+			if cell.y < origin.y:
+				return false  # north of a farmhouse is the next row of buildings
+			if _ring_distance(cell, origin, footprint) == 0:
+				return false  # the building stands here
+			if not is_free.call(cell):
+				return false
+	return true
+
+
+## How far the WHOLE rectangle stands from the farmhouse's own walls -- its
+## nearest cell, so a field that touches the building beats one a tile out.
+static func _rect_reach(rect: Rect2i, origin: Vector2i, footprint: Vector2i) -> int:
+	var nearest := 0x7FFFFFFF
+	for y in range(rect.position.y, rect.end.y):
+		for x in range(rect.position.x, rect.end.x):
+			nearest = mini(nearest, _ring_distance(Vector2i(x, y), origin, footprint))
+	return nearest

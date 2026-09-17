@@ -8,26 +8,23 @@ extends RefCounted
 ## stays fully headless-testable the same way LeafLitterRenderer's own
 ## static timing functions are (see that file's own doc comment).
 
-## 120 frames: a 20-column x 6-row contact sheet (see IntroSplashSheet).
-## Pinned against the sheet's own real grid by
-## test_the_sheets_real_grid_is_the_one_the_slicing_assumes, so the two can
-## never silently disagree about how many frames exist -- which is exactly
-## what the previous art swap left behind (40 here against 120 on the
-## sheet, so two thirds of the animation simply never played).
+## 120 frames: the sheet is a 20-column x 6-row contact sheet (see
+## IntroSplashSheet). Cross-pinned to what the sheet really yields by
+## test_frame_count_matches_the_sequencer, which is what catches the art
+## being replaced with a differently-shaped one -- as it was twice in one
+## day (8x5 -> 20x6).
 const FRAME_COUNT := 120
 
-## The sheet STATES its own frame rate, so this is read off the art rather
-## than chosen: every cell carries its own timestamp burned in by the
-## export, running 0.00s, 0.04s, 0.08s ... 4.96s -- steps of 1/24 s across
-## all 120 cells, i.e. 24fps and a 5.0s sequence.
+## The rate the sheet itself declares: every cell carries its own timestamp,
+## and they run 0.00s to 4.96s in steps of 1/24 -- 24fps, five seconds.
 ##
-## This replaces a deliberately chunky 10.0, whose reasoning was that a
-## fast readback would fight a hand-illustrated PIXEL-ART sheet (see
-## docs/concept/pixel_art_engine.md). That reasoning was sound for the art
-## it was written against and simply does not apply to this one: the
-## replacement is a rendered 24fps animation of a rotating globe, not
-## pixel art, and playing its 120 frames at 10fps would stretch a 5-second
-## intro to 12 seconds.
+## It was 10fps while the art was a hand-illustrated 40-frame sheet, chosen
+## deliberately chunky so a smooth readback would not fight this game's
+## 16-bit house style (docs/concept/pixel_art_engine.md). That reasoning
+## does not carry over: this art is a photoreal globe rendered at 24, and
+## playing it at 10 would both stutter its own rotation and stretch a
+## five-second intro to twelve. Honouring the timing the art was authored
+## at is the one number that cannot be wrong.
 const FPS := 24.0
 
 

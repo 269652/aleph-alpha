@@ -11,6 +11,7 @@ const TreePlacement = preload("res://src/world/tree_placement.gd")
 const GeoCoordinates = preload("res://src/world/geo_coordinates.gd")
 const EarthChunkGenerator = preload("res://src/world/earth_chunk_generator.gd")
 const TerrainRenderer = preload("res://src/rendering/terrain_renderer.gd")
+const VillageFarm = preload("res://src/gameplay/village_farm.gd")
 const RiverFlowShader = preload("res://src/rendering/river_flow_shader.gd")
 const OpenChannelFlow = preload("res://src/world/open_channel_flow.gd")
 const ProceduralRiverFlowSprite = preload("res://src/rendering/procedural_river_flow_sprite.gd")
@@ -3036,6 +3037,75 @@ func test_build_at_global_sets_a_modification_when_the_chunk_is_loaded():
 func test_build_at_global_fails_when_the_chunk_is_not_loaded():
 	var success := manager.build_at_global(999999, 999999, "earth")
 	assert_false(success)
+
+
+## The one question a creature's movement asks of the world before it steps
+## (CreatureMarker._fence_blocks_movement): is there a farm rail on this
+## tile? See docs/concept/village_farms.md, "The fence around the beds".
+func test_a_tile_carrying_a_farm_rail_reads_as_fenced():
+	manager.update(_berlin_tile)
+	manager.build_at_global(_berlin_tile.x, _berlin_tile.y, VillageFarm.fence_tile_for("south"))
+	assert_true(manager.is_fenced_at_global(_berlin_tile.x, _berlin_tile.y))
+
+
+func test_open_ground_and_other_tiles_never_read_as_fenced():
+	manager.update(_berlin_tile)
+	assert_false(manager.is_fenced_at_global(_berlin_tile.x, _berlin_tile.y), "untouched ground")
+	manager.build_at_global(_berlin_tile.x, _berlin_tile.y, TerrainRenderer.ROAD_TILE_ID)
+	assert_false(manager.is_fenced_at_global(_berlin_tile.x, _berlin_tile.y), "a street is not a fence")
+	assert_false(manager.is_fenced_at_global(999999, 999999), "an unloaded chunk fences nothing")
+
+
+## What a creature's movement really asks now (CreatureMarker._fence_blocks_
+## movement): not "is this tile fenced" but "does this STEP cross a rail's
+## inner edge". Asked for directly: "move the fences to the inner edge of
+## the enclosure and treat the rest of the tile as street" -- so the rail
+## tile itself is ordinary ground an animal may stand on, and only the edge
+## the rails are drawn on is shut. See docs/concept/village_farms.md, "The
+## rail stands on the inner edge".
+func test_a_step_across_a_rails_inner_edge_is_blocked():
+	manager.update(_berlin_tile)
+	manager.build_at_global(_berlin_tile.x, _berlin_tile.y, VillageFarm.fence_tile_for("north"))
+	assert_true(
+		manager.fence_blocks_step_global(
+			_berlin_tile.x, _berlin_tile.y, _berlin_tile.x, _berlin_tile.y + 1
+		),
+		"south off a north rail is a step into the beds"
+	)
+
+
+func test_walking_onto_and_along_a_rail_is_never_blocked():
+	manager.update(_berlin_tile)
+	manager.build_at_global(_berlin_tile.x, _berlin_tile.y, VillageFarm.fence_tile_for("north"))
+	assert_false(
+		manager.fence_blocks_step_global(
+			_berlin_tile.x, _berlin_tile.y - 1, _berlin_tile.x, _berlin_tile.y
+		),
+		"walking onto the ring from outside is not crossing the rails"
+	)
+	assert_false(
+		manager.fence_blocks_step_global(
+			_berlin_tile.x, _berlin_tile.y, _berlin_tile.x + 1, _berlin_tile.y
+		),
+		"walking along the ring is what makes the rest of the tile street"
+	)
+	assert_false(
+		manager.fence_blocks_step_global(
+			_berlin_tile.x, _berlin_tile.y, _berlin_tile.x, _berlin_tile.y
+		),
+		"standing still crosses nothing"
+	)
+
+
+func test_open_ground_and_an_unloaded_chunk_block_no_step():
+	manager.update(_berlin_tile)
+	assert_false(
+		manager.fence_blocks_step_global(
+			_berlin_tile.x, _berlin_tile.y, _berlin_tile.x, _berlin_tile.y + 1
+		),
+		"untouched ground"
+	)
+	assert_false(manager.fence_blocks_step_global(999999, 999999, 999999, 1000000))
 
 
 ## Asserts the cell actually changed rather than pinning an exact atlas

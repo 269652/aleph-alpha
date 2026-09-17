@@ -188,33 +188,62 @@ func test_loading_a_sheet_does_not_log_an_engine_warning():
 # of any real world.
 
 
+## A naive per-pixel get_pixel/set_pixel despill -- the exact shape this
+## class carried until it was rewritten, kept here only as a yardstick.
+##
+## The pin below is COMPARATIVE, not an absolute millisecond ceiling, and
+## that is deliberate. An absolute ceiling measures the machine as much as
+## the code: pinned at 200ms from a real 180ms measurement, this went red at
+## 221ms the first time it ran on a loaded box with the implementation
+## untouched, and a test that fails on a busy runner teaches people to
+## ignore it. Racing the real implementation against this reference in the
+## SAME process, on the SAME image, cancels the machine out -- both sides
+## slow down together -- and the gap being guarded here is large enough to
+## survive that honestly: 458ms against 180ms on the real grassland sheet,
+## a 2.5x win, not a margin inside the noise.
+static func _naively_prepared(image: Image) -> Image:
+	var prepared := image.duplicate() as Image
+	if prepared.get_format() != Image.FORMAT_RGBA8:
+		prepared.convert(Image.FORMAT_RGBA8)
+	for y in prepared.get_height():
+		for x in prepared.get_width():
+			var pixel := prepared.get_pixel(x, y)
+			if IllustratedTerrainSprite._is_magenta(pixel):
+				prepared.set_pixel(x, y, Color(pixel.r, pixel.g, pixel.b, 0.0))
+			else:
+				prepared.set_pixel(x, y, IllustratedTerrainSprite._despilled(pixel))
+	return prepared
+
+
 ## Real sheet resolution (1254x1254 -- see _SHEETS' own doc comment), format
 ## RGB8 with no alpha channel, which is the path every real terrain sheet
 ## takes today. Uniform non-magenta fill: this loop has no early-out or
 ## bounding box, so every pixel costs the same fixed handful of comparisons
 ## regardless of content and a solid fill is a faithful worst case, not an
-## artificially easy one (mirrors test_illustrated_stone_sprite.gd's own
-## identical budgeted pin).
-func test_prepared_for_slicing_completes_quickly_at_real_sheet_resolution():
+## artificially easy one.
+func test_prepared_for_slicing_beats_the_naive_loop_it_replaced():
 	var width := 1254
 	var height := 1254
 	var image := Image.create(width, height, false, Image.FORMAT_RGB8)
 	image.fill(Color(0.5, 0.5, 0.5))
-	var start_usec := Time.get_ticks_usec()
-	generator._prepared_for_slicing(image)
-	var elapsed_ms := (Time.get_ticks_usec() - start_usec) / 1000.0
-	# 200ms: comfortably above the byte-array, fully-inlined implementation
-	# and far below the ~458ms the naive get_pixel/set_pixel-per-Color loop
-	# it replaces measured on this same sheet size. Same calibration shape
-	# as IllustratedStoneSprite's own 900ms pin, tightened because this
-	# measurement is a real before/after pair rather than a first guess.
+
+	var reference_start := Time.get_ticks_usec()
+	var reference := _naively_prepared(image)
+	var reference_usec := Time.get_ticks_usec() - reference_start
+	var actual_start := Time.get_ticks_usec()
+	var actual: Image = generator._prepared_for_slicing(image)
+	var actual_usec := Time.get_ticks_usec() - actual_start
+
 	assert_lt(
-		elapsed_ms,
-		200.0,
+		actual_usec,
+		reference_usec,
 		(
-			"despilling one %dx%d sheet took %.0fms -- a naive per-pixel get_pixel/set_pixel loop regressed back in"
-			% [width, height, elapsed_ms]
+			"_prepared_for_slicing (%dus) is no faster than the naive per-pixel loop it replaced (%dus)"
+			% [actual_usec, reference_usec]
 		)
+	)
+	assert_eq(
+		actual.get_data(), reference.get_data(), "...and it must produce the identical image"
 	)
 
 

@@ -80,9 +80,20 @@ tallest content bounding box across the frames it's handed; here, the
 "ALEPH ALPHA" wordmark's own ink extent genuinely grows across the
 sequence as it builds in, so content-cropping and rescaling would make
 the globe itself appear to change size as more text enters frame — an
-artifact the source art's own consistently-framed camera (same globe
-position and size in every frame, by construction — see the intro's own
-generation prompt) doesn't need fixed up at all. This is a real, deliberate
+artifact the source art's own roughly-consistent camera framing doesn't
+need fixed up that way.
+
+**Corrected 2026-09-17:** this used to justify itself with *"the source
+art's consistently-framed camera (same globe position and size in every
+frame, by construction — see the intro's own generation prompt)"*. A
+prompt asking for a fixed camera is not the same as an AI honouring one,
+and that sentence was an assumption about the prompt rather than a
+measurement — on the 8x5 sheet it was measurably false (the globe wandered
+6px across and 2px down). It happens to hold on the sheet shipping now,
+but only because somebody measured it: see "Frame stabilisation" below.
+The reason to skip `normalize_frames` never rested on it anyway — scaling
+by content extent would scale every frame by the TEXT's extent, which is
+the one thing in frame that changes on purpose. This is a real, deliberate
 divergence from the established pattern, not an oversight — the divergence
 itself is what avoids the bug `normalize_frames` exists to prevent for a
 *different* shape of sheet (posed creature frames of varying natural
@@ -1139,6 +1150,84 @@ the 32-frame sheet, unchanged by this revert) are the real regression
 coverage here rather than new tests -- there is no NEW behavior to pin,
 only old, already-tested behavior restored.
 
+## A third art swap, and the guard that should have caught it (2026-09-17)
+
+Reported again: *"the new intro crops are still not correct."* The sheet had
+been replaced a SECOND time, inside an unrelated commit, and this time it
+was not a re-cut of the same thing — it is a different kind of file
+altogether:
+
+| | before | now |
+| --- | --- | --- |
+| size | 1983x793 | 1672x941 |
+| grid | 8 columns x 5 rows, 40 frames | 20 columns x 6 rows, **120 frames** |
+| background | chroma-key magenta | black |
+| separators | magenta gutters | thin light grid lines, 1-3px, not a uniform width |
+| extra ink | none | **a timestamp caption printed inside every cell** ("0.00s" ... "4.96s") |
+
+So the old constants cropped an 8x5 grid out of a 20x6 contact sheet: every
+frame read a slice of the wrong cell, and the columns ran out to x=1738 on a
+sheet only 1672 wide.
+
+**The guard test did not fire, and that is the more important half.** The
+previous pass added `test_the_pinned_row_tops_are_where_the_sheets_rows_
+actually_start` precisely so "the art changed and nothing noticed" could not
+happen twice. It had two holes:
+
+- It loaded through `SpriteSheetLoader`, which prefers the IMPORTED texture.
+  A stale `.godot` import cache hands back the art the constants were
+  measured from, so the comparison cannot fail. It reads the file on disk
+  now — through a buffer, since `Image.load_from_file` warns on a `res://`
+  path and an engine warning fails a GUT run.
+- It detected MAGENTA gutters. This sheet has none, so the detector found a
+  single band covering everything and the assertion passed vacuously against
+  a sheet it could not see.
+
+It now measures the grid the sheet actually has. A drawn line is light all
+the way along, while content always has some black in it, so a line's
+MINIMUM brightness is what identifies it — a mean cannot, because by the end
+of this animation the globe is brighter than the dividers.
+
+**What the crop does now.** Cells start at the first pixel AFTER each
+divider run, plus one pixel of inset: the lines are not a uniform width down
+their length (measured at column 9: 2px where the detector reads 1), and a
+crop that starts on one carries a bright stripe up its own side. From the
+cell's top it skips `_CAPTION_HEIGHT` = 28 rows, measured: caption ink
+occupies rows 10-20 of every cell and the earliest globe pixel in any cell
+is row 40. The window is 79x122 — the tightest CLEAN cell (80x151, bounded
+by where the next divider begins rather than where the next cell starts)
+less the inset and the caption. Unlike the previous sheet, whose rows were
+genuinely different heights and needed per-row padding, every cell here
+supplies that same window from the same offset, and the globe sits 40-46
+rows below its own cell's top in every row — measured — so one offset keeps
+it still.
+
+`IntroSplashSequencer.FRAME_COUNT` is 120 and `FPS` is 24, which is the
+cadence the sheet itself declares in its captions (0.00s to 4.96s in steps
+of 1/24). The 10fps it played at before was chosen to be deliberately chunky
+against hand-illustrated art; this is a photoreal render, and at 10fps its
+own rotation would stutter and a five-second intro would take twelve.
+
+**Two things this pass deliberately did not change**, so neither reads as an
+oversight:
+
+- **On-screen size.** `DISPLAY_SCALE` is still 1 — "native size /
+  resolution", asked for explicitly in the twelfth pass. It means something
+  different now: a frame is 79x122 where it used to be 243x162, so the globe
+  draws about a third of its old width. Two is the scale that restores its
+  old presence, and nearest-neighbour at a whole multiple stays crisp, but
+  that is a look decision rather than a correctness one.
+- **The magenta path.** Nothing is keyed out of a black-backed sheet, so
+  `_prepared_for_slicing`/`_despilled` are gone from the build. `_is_magenta`
+  and `test_frames_have_no_leftover_magenta_background` stay as the
+  tripwire: a future magenta-backed sheet fails there instead of shipping
+  with its own background painted into every frame.
+
+Re-measure with `tools/probe_intro_grid.gd`; look at the result with
+`tools/probe_intro_frames.gd`, which lays the real frames out side by side
+on a magenta backdrop so a wrong cell, a caught divider or a kept caption is
+obvious.
+
 ## Status
 
 - ✅ Real illustrated 32-frame sheet, measured and sliced (not
@@ -1363,135 +1452,109 @@ Pinned by `test_every_frame_puts_its_art_at_the_same_height`
 top-anchored build (frames 24–39 centred their art at 66.5 instead of
 80.5) before the change.
 
+## Frame stabilisation (2026-09-17)
 
-## Re-measuring again: a contact sheet, not a sprite sheet (2026-09-17)
+Asked directly: *"Can you frame stabilize the intro sprite animation?"* —
+the same thing this file had been re-reported for repeatedly
+(*"stabilize the intro video"*, *"it jumps left to right"*).
 
-Reported in play, the same day the section above was written, after
-`intro.png` was swapped a SECOND time: *"the intro has new resolution
-please fix the cropping properly"*.
+**On the sheet shipping now, it is already stable, and that is measured
+rather than assumed.** The globe's right limb sits at **exactly the same
+column in all 100 frames past the fade-in — zero spread**, not merely a
+small one. The fixed crop from a measured grid (see "A third art swap"
+above) is doing the whole job; no registration pass is needed, and one
+was deliberately not added.
 
-The section above added tests specifically so that the next art swap would
-fail loudly instead of shipping a mis-crop. **They did not catch this
-one**, and the reason is worth recording: they measured the sheet by
-looking for rows that were entirely MAGENTA, because every illustrated
-sheet in this codebase up to that point had a magenta background with real
-gutters keyed out of it. This replacement has no magenta anywhere. The
-helper found no gutters at all, concluded the whole image was one row, and
-the assertion it fed compared a five-element array against a one-element
-one — a failure, but one that reads as "the pinned rows are stale"
-rather than "your measuring instrument does not fit this sheet."
+### The measurement is geometry, not lighting — and that is the whole trap
 
-**The replacement is a different KIND of artefact, not just a different
-size.** It is a contact sheet exported straight out of the source
-animation:
+The current art crops the sphere at the **left frame edge**, so its right
+limb is the only edge of it actually in shot. The limb is geometry. Almost
+everything else measurable here is lighting, and the lighting moves on
+purpose: this is an Earth-at-night turning into daylight, so the
+terminator sweeps right across the disc over the sequence.
 
-| | old | new |
-| --- | --- | --- |
-| resolution | 1983x793 | 1672x941 |
-| grid | 8 x 5 | 20 x 6 |
-| frames | 40 | **120** |
-| background | magenta, keyed out | opaque black space |
-| cell separation | real gutters | drawn grey grid lines, 1-3px |
-| frame shape | 243x162 landscape | 79x151 portrait (9:16 source) |
-| chrome | none | each cell's timestamp burned into its corner |
+A centre-of-lit-pixels reading therefore moves **~35px** across these
+frames while the globe itself has not moved at all. That is not a subtle
+error — it is large enough to look exactly like the reported jitter, and
+acting on it would have registered every frame against the *terminator*
+and genuinely shoved the globe around. It is the same "moon-phase
+crescent" effect that made an earlier measurement of the 45-frame sheet
+read as falsely reassuring (the sixteenth pass above), reached from the
+opposite direction: there it hid drift, here it invents it.
 
-Nothing about the old sheet survived. Every crop landed at the wrong
-offset, and the last column of every row ran 309px off the right-hand
-edge, so the final frame of each row came out blank. Two thirds of the
-animation never played at all, because `FRAME_COUNT` still said 40.
+This is why the threshold is near-black (0.02) rather than a
+mid-brightness one: it separates *sphere from space*, never *lit from
+unlit*.
 
-### The chrome pulls the crop in two directions
+### Why this is a test and not a no-op
 
-The grid lines are not art: a crop that includes one shows a pale bar down
-the frame's edge. Every crop therefore sits strictly INSIDE them
-(`_COLUMN_WINDOW_LEFTS`/`_ROW_WINDOW_TOPS`, measured from the real lines).
+`test_the_globe_holds_the_same_position_in_every_frame` asserts what is
+already true, which is normally a smell. It earns its place because this
+file's own history is four art swaps, at least two of which shipped a
+visibly drifting intro that only a player caught. The next swap fails
+here instead.
 
-The timestamps are the opposite case. They are drawn ON TOP of real frame
-content — the starfield runs edge to edge underneath them — so there is
-no margin to crop them out of; removing them costs the top ~14% of every
-frame. Asked directly, with the trade spelled out, the answer was to keep
-them: *"Just crop with timestamp"*. They then turn out to be the single
-most useful thing on the sheet, see below.
+Paired with `test_the_limb_measurement_would_notice_a_frame_that_moved`,
+which runs the same ruler over a real frame shifted 3px and requires it to
+read 3px: a stability test whose own measurement cannot see movement is
+worth nothing.
 
-### Three measurements, none of them assumed
+### What was tried and thrown away
 
-1. **The grid does not divide evenly on either axis** (1672/20 = 83.6,
-   941/6 = 156.8), the lines are 1-3px wide and not evenly spaced, and the
-   cells therefore genuinely differ in width (79-83px). Measured with
-   `tools/probe_intro_sheet.gd`, which had to be rewritten for the same
-   reason the tests did.
-2. **One fixed 79x151 window for all 120 frames**, sized to the SMALLEST
-   cell so it can never pull in the line beside it — the narrowest column
-   is the last one, which the sheet's own right edge cuts short. The window
-   is CENTRED horizontally in each cell rather than left-anchored: the
-   globe sits at its cell's middle, and with cells differing by up to 4px,
-   left-anchoring would shift it by up to 2px column to column,
-   reintroducing in a new form exactly the wobble the eleventh pass
-   removed.
-3. **Row 0 needed +1px that no other row did.** It has no grid line above
-   it — its cell is flush with the sheet's top edge — while every other
-   row's cell begins ~1.5px inside the line above it. A crop anchored on
-   the raw inter-line span put row 0's content one pixel higher than the
-   other five. This was measured, not theorised: the export draws each
-   cell's timestamp at a constant offset below its own cell top, and row
-   0's landed on frame row 11 where the rest landed on 10.
+A per-frame registration pass (measure each frame's globe, blit at a
+whole-pixel offset — what a video stabiliser does) was built and verified
+against the **previous** 8×5 sheet, where it cut a real 6.0px horizontal
+and 2.0px vertical wander down to 1.0px each. That sheet was replaced
+while the work was in flight. On the current art the same estimator reads
+the terminator rather than the globe, so it was dropped rather than
+carried over — the code is in this branch's history if a future sheet ever
+needs it again.
 
-### The timestamp is the alignment instrument
+Two process notes worth keeping, both cost real time here:
 
-A full-bleed sheet defeats the previous pass's alignment test entirely.
-That test found each frame's opaque-pixel bounds and asserted they were
-centred; here every pixel is opaque, so it measures the whole frame,
-centres trivially, and **passes vacuously on any crop whatsoever**,
-including a badly drifting one.
-
-The burned-in timestamps replace it. They sit at a constant offset in every
-cell by construction, so if the crop is aligned they land on the same rows
-of all 120 built frames — and if it drifts, they move. Tolerance is
-exactly 1px, and that pixel belongs to the art rather than the crop: the
-labels are different strings, so their glyphs put different amounts of ink
-on the topmost antialiased row, and frames sharing one window still report
-first-ink rows of 10 and 11. The drift this replaces was 14px.
-
-### Timing is read off the art now
-
-The timestamps run 0.00s, 0.04s, 0.08s ... 4.96s: steps of 1/24s across all
-120 cells. So `FPS` is 24 and the sequence is 5.0s, both taken from the
-sheet rather than chosen. The previous 10.0 was deliberate — a fast
-readback would fight a hand-illustrated PIXEL-ART sheet (see
-`pixel_art_engine.md`) — and that reasoning was right for the art it was
-written against and simply does not apply to a rendered 24fps animation of
-a rotating globe. At 10fps these 120 frames would stretch a five-second
-intro to twelve.
-
-### Two things removed
-
-The magenta chroma-key and despill pass is gone. There is no magenta on
-this sheet, so it was a no-op — and an expensive one, a naive
-`get_pixel`/`set_pixel` loop over all 1.57M pixels of the sheet, the exact
-technique measured and fixed out of four other classes the same day (see
-`character_creator_preview_scene.md`'s "Load cost" section). The guard test
-stays, so magenta art returning fails loudly rather than silently
-rendering a pink background.
-
-`DISPLAY_SCALE` moves 1 —> 3. The twelfth pass pinned it to exactly 1 on an
-explicit ask — *"still too big.. make it native size / resolution"* — but
-"native" was never really about the number 1; it was about the on-screen
-size that number produced against 243x162 landscape art. Against 79x151
-portrait frames, 1:1 would obey the letter of that ask while shrinking the
-intro to a 79px-wide thumbnail. 3 restores the width that ask actually
-shipped and stays a whole number, so the pixel-perfect property the eighth
-and twelfth passes established is intact. Chosen by the player when the
-trade was put to them, not inferred.
+- **Re-import before measuring anything.** `SpriteSheetLoader` prefers
+  Godot's *imported* resource over the raw PNG, so a stale `.godot` cache
+  silently serves the OLD art through the NEW grid constants. That
+  produced 20 "blank" frames and magenta ink in 76 others, and read
+  convincingly as a broken sheet. `godot --headless --import` first.
+- **Render the frames and look at them** before concluding anything about
+  drift. The contact sheet showed in one glance that the globe is cropped
+  at the frame edge and lit by a sweeping terminator — the two facts that
+  decide which measurement is valid here.
 
 ### Status
 
-- ✅ 120 frames build, all 79x151, none carrying a grid line, none blank.
-- ✅ Verified as a rendered filmstrip across the whole sequence, not only
-  by assertion: crescent —> full Earth —> light sweep —> wordmark —>
-  golden burst, with the globe holding its position throughout.
-- ✅ `test_intro_splash_sheet.gd` 11/11, `test_intro_splash.gd` 16/16,
-  `test_intro_splash_sequencer.gd` 7/7, plus the three world-wiring suites.
-- ⬜ The timestamps and grid lines are still burned into the shipped art.
-  Cropping around them is correct but it is working around a QA export, not
-  a clean sprite sheet; a re-export without the chrome would let the crop
-  take the full cell and gain back the ~14% currently spent on the label.
+- ✅ **The globe holds still in every frame past the fade-in** (2026-09-17)
+  — measured, zero spread, pinned by
+  `test_the_globe_holds_the_same_position_in_every_frame` plus a
+  ruler-sensitivity check. 16/16 in `test_intro_splash_sheet.gd`.
+- ⬜ **The first ~0.83s (frames 0–19) is a fade up out of black** and has
+  no globe edge in frame to hold still. Not a defect; named so the next
+  reader does not measure it and think something is wrong.
+
+
+## Display scale, re-decided for a portrait frame (2026-09-17)
+
+A twelfth pass pinned `DISPLAY_SCALE` to exactly 1 on an explicit ask —
+*"still too big.. make it native size / resolution"*. The art swaps since
+then never revisited it, and they should have: "native" was never really
+about the number 1, it was about the on-screen size that number produced
+against the art of the day, which was a **243x162 landscape** frame.
+
+Today's frames are **79x122 portrait** (see "A third art swap" above — the
+new source animation is 9:16, cropped below its own timestamp caption). At
+1:1 that renders the whole intro as a 79px-wide thumbnail: obeying the
+letter of that ask while destroying what it asked for.
+
+`DISPLAY_SCALE` is 3. That restores the on-screen WIDTH the twelfth pass
+actually shipped (79 * 3 = 237, against the 243 it had) and stays a whole
+number, so the pixel-perfect, shimmer-free property the eighth and twelfth
+passes both established is untouched. Put to the player with the trade
+spelled out, they chose it.
+
+`test_display_scale_is_a_whole_number_so_the_upscale_stays_pixel_perfect`
+and `test_the_intro_still_renders_at_about_the_width_that_ask_settled_on`
+replace the old `test_display_scale_is_native_no_upscaling`: they pin what
+that ask was actually protecting — an exact integer scale, and a width in
+the range it settled on — rather than the bare literal 1, which is what
+went stale when the art changed shape underneath it.

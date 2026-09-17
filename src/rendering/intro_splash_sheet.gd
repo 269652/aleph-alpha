@@ -2,103 +2,135 @@ extends RefCounted
 
 ## Real illustrated art for the boot intro splash (see
 ## docs/concept/intro_splash.md, IntroSplashSequencer, scenes/
-## intro_splash.gd).
+## intro_splash.gd). Same "hand/AI-illustrated sheet -> SpriteSheetSlicer
+## -> cached frames" shape as IllustratedWormSprite, IllustratedDecomposer
+## Sprite etc.
 ##
-## assets/sprites/intro.png is a CONTACT SHEET, 1672x941: a 20-column x
-## 6-row grid of 120 frames exported straight out of the source animation,
-## with the export tool's own chrome drawn on top of it -- a light-grey grid
-## line between every pair of cells, and each cell's own timestamp ("0.00s"
-## through "4.96s") burned into its top-left corner. Those timestamps are
-## 1/24 s apart, which is where IntroSplashSequencer.FPS comes from: this
-## sheet states its own frame rate, it is not a style choice any more.
+## assets/sprites/intro.png is 1983x793 -- AI-generated against an 8-column
+## x 4-row prompt, but NOT evenly divisible by that grid (1983/8=247.875,
+## 793/4=198.25), unlike worm.png's genuinely regular grid. Rather than
+## assume arithmetic division (would misalign later frames by several
+## pixels, compounding row to row), both the row bands AND the column left
+## edges below were measured directly with tools/probe_intro_sheet.gd and
+## a dedicated verification probe (throwaway, since deleted -- see bug #6
+## below) and are pinned here as real, confirmed constants.
 ##
-## The chrome matters to the slicing in two different ways, and they pull in
-## opposite directions:
+## Every one of the 32 frames is cropped to the SAME fixed-size window
+## (_FRAME_WIDTH x _FRAME_HEIGHT), anchored at its own row's top and its
+## own column's left edge -- deliberately NOT SpriteSheetSlicer.
+## detect_frames' own per-frame CONTENT-based crop, which this file used
+## until bug #6 (2026-09-09, see docs/concept/intro_splash.md). That
+## crop measured each frame's own left/right content boundary
+## independently, and while the underlying 8-column GRID itself turned out
+## to already be fixed (row 0, 2 and 3 each independently re-detect the
+## identical column lefts pinned below), the RIGHT edge drifted by up to
+## 2px frame to frame -- driven by the light-streak sweep and the growing
+## "ALEPH ALPHA" wordmark's own ink extent, both of which are real content
+## that varies in exactly the columns detect_frames scans, even though the
+## globe itself sits at a consistent position/size in every frame by
+## construction (see the intro-generation prompt). IntroSplash's own
+## TextureRect (STRETCH_KEEP_ASPECT_COVERED + EXPAND_IGNORE_SIZE) scales
+## and re-centers each frame independently based on that frame's own size,
+## so a couple pixels of source-crop instability, magnified by the ~5.5x
+## this sheet gets stretched by at the project's default 1280x720
+## viewport, read as visible on-screen "wobble" -- confirmed both by
+## direct measurement (widths ranged 232-234px, heights stepped
+## 181/183/182/182px across the 32 frames) and by rendering the actual
+## STRETCH_KEEP_ASPECT_COVERED transform for a consecutive run of frames.
 ##
-##  - The GRID LINES are not art. A crop that includes one shows a pale bar
-##    down the edge of the frame, so every crop below stays strictly INSIDE
-##    the lines (see _COLUMN_INTERIORS/_ROW_INTERIORS, measured from the
-##    real lines, and test_no_frame_carries_a_slice_of_the_grid_line).
-##  - The TIMESTAMPS are kept. They sit on top of real frame content rather
-##    than in a margin of their own -- the starfield runs edge to edge under
-##    them -- so cropping them away would cut the top ~14% off every frame.
-##    Asked directly, when offered the choice: "Just crop with timestamp".
-##    They also turn out to be the single best alignment witness this sheet
-##    has (see test_every_frame_lands_its_timestamp_label_on_the_same_rows).
+## A single fixed crop window per frame -- same width, same height, no
+## per-frame content detection at all -- removes that instability at the
+## source rather than trying to re-stabilize a content-based measurement.
+## See test_every_frame_is_the_same_size (tests/unit/
+## test_intro_splash_sheet.gd) for the regression coverage, confirmed red
+## against the old per-frame detect_frames crop before this fix.
 ##
-## This replaced an earlier, completely different sheet (1983x793, an 8x5
-## grid of 40 frames on a MAGENTA background with real gutters between
-## cells). Nothing about the old one survives: there is no magenta on this
-## sheet at all, so there is no chroma-key or despill pass here any more --
-## the background is opaque black space, and it is meant to stay that way.
-## See docs/concept/intro_splash.md's "Re-measuring again: a contact
-## sheet, not a sprite sheet".
-##
-## Every one of the 120 frames is cropped to the SAME fixed-size window
-## (_FRAME_WIDTH x _FRAME_HEIGHT) -- deliberately NOT SpriteSheetSlicer
-## .detect_frames' own per-frame CONTENT-based crop, which this file used
-## until bug #6 (2026-09-09). That crop measured each frame's own content
-## boundary independently, and a couple of pixels of instability, magnified
-## by the display upscale, read on screen as "wobble". A single fixed window
-## removes that at the source. See test_every_frame_is_the_same_size.
-##
-## Frames are extracted as PLAIN regions, never run through
-## SpriteSheetSlicer.normalize_frames: that function picks ONE shared scale
-## from the widest content across the frames it is given, and here the globe
-## grows and the "aleph alpha" wordmark builds in, so normalizing would make
-## the globe itself appear to change size. Do NOT reintroduce it -- this is
-## a deliberate divergence from every other illustrated-sheet consumer, not
-## an oversight.
+## Frames are extracted as PLAIN regions, not run through
+## SpriteSheetSlicer.normalize_frames -- see this file's own test's doc
+## comment for why: normalize_frames' shared-scale-from-widest-content
+## behaviour would make the globe itself appear to change size as the
+## "ALEPH ALPHA" wordmark's own ink extent grows across the sequence,
+## which the source art's consistently-framed camera (same globe position/
+## size in every frame, by construction -- see the intro-generation
+## prompt) doesn't need fixed up at all. Do NOT reintroduce
+## normalize_frames here -- this is a real, deliberate divergence from
+## every other illustrated-sheet consumer, not an oversight.
 
 const SpriteSheetLoader = preload("res://src/rendering/sprite_sheet_loader.gd")
 
 const _SHEET_PATH := "res://assets/sprites/intro.png"
 
-## The x of each column's crop window, and the y of each row's -- measured
-## from the real file with tools/probe_intro_sheet.gd, never assumed by
-## arithmetic division. The grid does not divide evenly (1672/20 = 83.6,
-## 941/6 = 156.8), the grey lines are 1-3px wide and not evenly spaced, and
-## the cells themselves therefore differ in width by up to 4px.
+## The sheet is a CONTACT SHEET: 20 columns x 6 rows of frames drawn on
+## black, separated by thin light grid lines, with its own timestamp
+## ("0.00s" ... "4.96s", 24fps) printed inside the top of every cell.
+## Measured with tools/probe_intro_grid.gd against the file on disk, never
+## divided arithmetically: the drawn lines drift up to 2px from an even
+## 1672/20 split, which at this cell size is a visible wobble.
 ##
-## Horizontally each window is CENTRED in its own cell: the globe sits at
-## its cell's middle, so anchoring at the left edge instead would shift it
-## by up to 2px from column to column -- reintroducing, in a new form,
-## exactly the frame-to-frame wobble a fixed window exists to remove.
-##
-## Vertically each window is anchored to where the ART actually starts,
-## which is NOT simply "just below the line above". Row 0 has no grid line
-## above it at all -- its cell is flush with the sheet's own top edge --
-## while every other row's cell begins ~1.5px inside the line above it, so
-## a crop anchored on the raw inter-line span puts row 0's content 1px
-## higher than the other five. That is measured, not theorised: the export
-## draws each cell's timestamp at a constant offset below its own cell top,
-## and row 0's landed on frame row 11 where every other row's landed on 10.
-## +1 on row 0 alone puts all six on the same row. See
-## test_every_frame_lands_its_timestamp_label_on_the_same_rows, which is
-## the direct proof and would fail the moment any of these drifts.
-const _COLUMN_WINDOW_LEFTS: Array[int] = [
-	1, 85, 168, 252, 337, 420, 503, 587, 671, 755,
-	839, 923, 1008, 1092, 1175, 1258, 1342, 1426, 1510, 1593,
+## Re-measure whenever the art changes. test_the_pinned_grid_is_where_the_
+## sheets_own_cells_actually_are compares these against the real file every
+## run, so the next swap fails there instead of shipping.
+## Each is the first pixel AFTER its divider ends, not the divider's own
+## centre: a drawn line is 1-3px wide, and a crop that starts inside one
+## carries that ink in its own first column.
+const _COLUMN_LEFTS: Array[int] = [
+	0, 83, 167, 250, 335, 418, 501, 585, 669, 753,
+	837, 921, 1005, 1090, 1173, 1257, 1340, 1424, 1509, 1592,
 ]
-const _ROW_WINDOW_TOPS: Array[int] = [1, 155, 309, 463, 617, 771]
+const _ROW_TOPS: Array[int] = [0, 155, 309, 462, 617, 770]
 
-## ONE fixed window, shared by all 120 frames -- sized to the SMALLEST cell
-## on the sheet so it fits inside every one of them and can never pull in
-## the grid line beside it. The narrowest column is the last, which the
-## sheet's own right edge cuts short at 79px; the shortest row is 151px.
-## Verified against the real lines by
-## test_no_frame_carries_a_slice_of_the_grid_line (on the built frames, not
-## on this arithmetic) rather than asserted in this comment -- CLAUDE.md: a
-## tuned value is a tested function or a test-pinned constant, never an
-## eyeballed comment.
+## How light a line has to be at its DARKEST pixel to be one of the sheet's
+## own grid lines rather than content. A line is drawn across everything, so
+## every pixel along it is light; content always has some black in it. A
+## MEAN cannot tell them apart -- by the end of this animation the globe is
+## brighter than the dividers -- which is why the measurement, and the test
+## that re-checks it, both key on the minimum.
+const DIVIDER_BRIGHTNESS := 0.18
+
+## The timestamp caption printed inside each cell's top edge. Measured: the
+## ink occupies rows 11..21 of every cell, and the earliest globe pixel in
+## any cell is row 40, so 28 clears the caption with margin and takes
+## nothing from the art. Cropping from the cell's own top instead puts
+## "0.04s" on screen over the globe.
+const _CAPTION_HEIGHT := 28
+
+## One pixel in from every measured cell edge. The drawn lines are not a
+## uniform width down their length -- measured at column 9, the divider is
+## 2px (0.52 and 0.76 bright) where the line-minimum detector reads it as
+## 1px, because further down it fades under the threshold -- so a crop that
+## starts exactly at the measured edge carries that second pixel as a bright
+## stripe up its own side. One pixel of margin costs nothing and cannot be
+## caught out by a line that thickens somewhere this did not sample.
+const _CELL_INSET := 1
+
+## ONE fixed crop, shared by all 120 frames -- no per-frame content
+## detection (see this file's own doc comment for why). Both are bounded by
+## the CLEAN extent of the tightest cell -- from its own start to where the
+## next divider begins, not to where the next cell starts -- less the inset
+## above: 80px wide (the last column, which ends at the sheet's edge) and
+## 151px tall (rows 2 and 4), less the caption. Unlike the previous sheet, whose rows were
+## genuinely different heights, every cell here can supply this same window
+## from the same offset -- and the globe sits 40-46 rows below its own
+## cell's top in every row, measured, so one offset keeps it still.
 const _FRAME_WIDTH := 79
-const _FRAME_HEIGHT := 151
+const _FRAME_HEIGHT := 122
+
+## Chroma-keyed opaque magenta, the convention every other illustrated
+## sheet in this codebase uses. The sheet delivered on 2026-09-17 does NOT:
+## it is drawn on black, so nothing is keyed out of it and the build path
+## no longer prepares or despills anything. This stays as the tripwire --
+## test_frames_have_no_leftover_magenta_background still runs, so a future
+## magenta-backed sheet fails there rather than shipping with its own
+## background painted into every frame.
+const _MAGENTA_RED_MIN := 0.85
+const _MAGENTA_BLUE_MIN := 0.85
+const _MAGENTA_GREEN_MAX := 0.15
 
 static var _frame_cache: Array[ImageTexture] = []
 
 
 ## Every frame in play order (row 0 left-to-right, then row 1, ...),
-## sliced once and cached thereafter.
+## sliced+despilled once and cached thereafter.
 func generate_textures() -> Array[ImageTexture]:
 	if _frame_cache.is_empty():
 		_frame_cache = _build_textures()
@@ -110,14 +142,20 @@ func _build_textures() -> Array[ImageTexture]:
 	if image == null:
 		return []
 	if image.get_format() != Image.FORMAT_RGBA8:
-		image = image.duplicate() as Image
 		image.convert(Image.FORMAT_RGBA8)
 	var textures: Array[ImageTexture] = []
-	for top in _ROW_WINDOW_TOPS:
-		for left in _COLUMN_WINDOW_LEFTS:
-			textures.append(
-				ImageTexture.create_from_image(
-					image.get_region(Rect2i(left, top, _FRAME_WIDTH, _FRAME_HEIGHT))
-				)
-			)
+	for top in _ROW_TOPS:
+		for left in _COLUMN_LEFTS:
+			# A plain region from a fixed offset inside the cell: past the
+			# caption, and the same window everywhere so nothing rescales
+			# or drifts between frames.
+			textures.append(ImageTexture.create_from_image(
+				image.get_region(Rect2i(
+					left + _CELL_INSET, top + _CAPTION_HEIGHT, _FRAME_WIDTH, _FRAME_HEIGHT
+				))
+			))
 	return textures
+
+
+static func _is_magenta(color: Color) -> bool:
+	return color.r >= _MAGENTA_RED_MIN and color.b >= _MAGENTA_BLUE_MIN and color.g <= _MAGENTA_GREEN_MAX

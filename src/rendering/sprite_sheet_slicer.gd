@@ -51,11 +51,6 @@ const DEFAULT_MIN_DIVIDER_WIDTH := 1
 
 ## Whether this pixel is background: either transparent, or part of the pale
 ## divider line between frames.
-## Allocated once rather than per keyed pixel -- chroma_keyed's write
-## path runs for most of a real sheet's pixels.
-const TRANSPARENT := Color(0, 0, 0, 0)
-
-
 static func is_empty(
 	color: Color,
 	alpha_threshold: float = DEFAULT_ALPHA_THRESHOLD,
@@ -119,36 +114,6 @@ static func is_empty(
 ## keep passing, and illustrated_mushroom_sprite.gd's own identical fix
 ## (same reported bug, found first in that file's own duplicate of this
 ## exact technique) for the fuller live-measurement writeup.
-## A later, MEASURED correction to the account above, which is right about
-## its cause but was generalized one step too far. "Read the bytes, write
-## the bytes" is only half optimal, because reads and writes have opposite
-## cost profiles here:
-##
-##   - READING a pixel as 3 PackedByteArray lookups genuinely beats
-##     Image.get_pixel (which allocates a Color) -- and the read runs for
-##     EVERY pixel.
-##   - WRITING one as 4 PackedByteArray stores genuinely LOSES to a single
-##     Image.set_pixel C++ call -- and on a real illustrated sheet the write
-##     runs for most pixels, because most of a sheet IS the keyed-out
-##     background.
-##
-## The all-byte-array version was therefore a real regression on exactly the
-## images this function exists for, which went unnoticed because the only
-## budgeted pin used an image with NO matching pixels at all -- the one case
-## where the write path never runs. Measured over the same images (see
-## test_sprite_sheet_slicer.gd's own two pins, and this commit's message):
-##
-##   | image                              | naive | all-bytes | hybrid |
-##   | real 1536x1024 sheet, mostly key   | 201ms |   226ms   | 186ms  |
-##   | 1254x1254, no matching pixel       | 106ms |    82ms   |  54ms  |
-##
-## So: byte-array reads, set_pixel writes, and integer thresholds, since
-## every value read out of a PackedByteArray already is an integer --
-## |v - key| <= tol over integers is exactly `v >= ceili(key - tol) and
-## v <= floori(key + tol)`, which removes three float conversions and three
-## absf calls from every pixel. The per-channel short-circuit is nested
-## rather than chained so a non-background pixel (the common case inside a
-## drawing) stops after its first lookup.
 static func chroma_keyed(image: Image, key: Color, tolerance: float) -> Image:
 	var keyed: Image = image.duplicate()
 	if keyed.get_format() != Image.FORMAT_RGBA8:
@@ -156,25 +121,23 @@ static func chroma_keyed(image: Image, key: Color, tolerance: float) -> Image:
 	var width := keyed.get_width()
 	var height := keyed.get_height()
 	var data := keyed.get_data()
+	var key_r := key.r * 255.0
+	var key_g := key.g * 255.0
+	var key_b := key.b * 255.0
 	var byte_tolerance := tolerance * 255.0
-	var red_low := ceili(key.r * 255.0 - byte_tolerance)
-	var red_high := floori(key.r * 255.0 + byte_tolerance)
-	var green_low := ceili(key.g * 255.0 - byte_tolerance)
-	var green_high := floori(key.g * 255.0 + byte_tolerance)
-	var blue_low := ceili(key.b * 255.0 - byte_tolerance)
-	var blue_high := floori(key.b * 255.0 + byte_tolerance)
-	var index := 0
-	for y in height:
-		for x in width:
-			var channel: int = data[index]
-			if channel >= red_low and channel <= red_high:
-				channel = data[index + 1]
-				if channel >= green_low and channel <= green_high:
-					channel = data[index + 2]
-					if channel >= blue_low and channel <= blue_high:
-						keyed.set_pixel(x, y, TRANSPARENT)
-			index += 4
-	return keyed
+	var i := 0
+	for _pixel in width * height:
+		if (
+			absf(float(data[i]) - key_r) <= byte_tolerance
+			and absf(float(data[i + 1]) - key_g) <= byte_tolerance
+			and absf(float(data[i + 2]) - key_b) <= byte_tolerance
+		):
+			data[i] = 0
+			data[i + 1] = 0
+			data[i + 2] = 0
+			data[i + 3] = 0
+		i += 4
+	return Image.create_from_data(width, height, false, Image.FORMAT_RGBA8, data)
 
 
 ## The frames in the band of rows between `top_y` and `bottom_y`.

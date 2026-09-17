@@ -22,7 +22,7 @@ const IntroSplashSequencer = preload("res://src/rendering/intro_splash_sequencer
 ## IntroSplashSheet cropped each frame to its OWN content and the real size
 ## varied by a pixel or two frame to frame. The eleventh pass (docs/concept/
 ## intro_splash.md) replaced that with ONE fixed crop window
-## (IntroSplashSheet._FRAME_WIDTH/_FRAME_HEIGHT, 79x151 against today's
+## (IntroSplashSheet._FRAME_WIDTH/_FRAME_HEIGHT, 79x122 against today's
 ## sheet, 240x183 against the one that pass was written for) applied
 ## identically to every frame -- this constant went stale the moment that
 ## shipped, and
@@ -61,9 +61,10 @@ const _NATIVE_FRAME_SIZE := Vector2(IntroSplashSheet._FRAME_WIDTH, IntroSplashSh
 ## pass set it to
 ## 1 on an explicit ask -- "still too big.. make it native size /
 ## resolution" -- but "native" then meant a 243x162 landscape frame. The
-## replacement sheet's frames are 79x151 PORTRAIT (see IntroSplashSheet:
-## the new source animation is 9:16), so 1:1 would render the whole intro
-## as a 79px-wide thumbnail, far smaller than anything that ask was about.
+## replacement sheet's frames are 79x122 PORTRAIT (see IntroSplashSheet:
+## the new source animation is 9:16, cropped below its own timestamp
+## caption), so 1:1 would render the whole intro as a 79px-wide thumbnail,
+## far smaller than anything that ask was about.
 ## 3 restores the on-screen WIDTH the twelfth pass actually shipped
 ## (79 * 3 = 237, against the 243 it had) while staying an exact integer
 ## multiple, so the pixel-perfect, shimmer-free property that pass and the

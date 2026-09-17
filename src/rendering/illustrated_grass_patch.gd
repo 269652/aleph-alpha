@@ -103,7 +103,42 @@ const AMPLITUDE_FREQUENCY := 6.0
 ## sampled pixels do change - reported live as "bigger bushes don't part".
 ## Both amplitudes are sized for the busier case.
 const WIND_UV_AMPLITUDE := 0.09
-const WALKER_PUSH_UV_AMPLITUDE := 1.5
+
+## How far a walker may lay a blade over at the very hardest -- the tuned
+## value for the walker's own push, expressed as the ANGLE it actually is
+## now that the bend is a rotation (see bent_vertex).
+##
+## It used to be 1.5 CARD WIDTHS, climbed there across several live rounds
+## (History #6) while the bend was still a UV slide that CLIPPED: past one
+## card width, more amplitude bought more of the blade erased rather than
+## more lean, so "more" kept reading as "still not enough". Against a
+## rotation the same number says something else entirely -- 1.0 at the tip IS
+## flat on the ground, and 1.5 is flat with room to spare, so every tuft a
+## player walked past slammed flat and sprang back up behind them. Reported:
+## "reduce the intensity of the bend... it feels wobbly as you walk through."
+##
+## Tuned to a real thing rather than a feeling, after 35 degrees read as
+## "now the grassblades don't part enough they should visible part about the
+## width of the char": a walker parts the grass by THEIR OWN WIDTH. The
+## character's body is 26px at CharacterView's own computed SCALE, 12.45
+## world units against a 16-unit card, and the lean whose tip travels that
+## far is asin(12.45 / 16) = 51.1 degrees. At 35 a tip moved 9.2 units --
+## three quarters of a character, which is what "not enough" was.
+##
+## Pinned from both sides: test_a_walker_parts_the_grass_by_about_their_own_
+## width computes the character's real width and asserts the tip reaches it
+## (so a change to the character's size fails here rather than drifting),
+## and test_a_walkers_push_leans_a_blade_over_without_laying_it_flat holds
+## it clear of both ends -- never flat, never subtle.
+const MAX_WALKER_LEAN_DEGREES := 51.1
+
+## The displacement that reaches that lean -- sin of it, which is exactly
+## what bent_vertex takes asin of to get the angle back. Derived rather than
+## kept as a second number beside the angle, so the two cannot drift
+## (test_the_push_amplitude_is_that_lean_and_not_a_number_of_its_own).
+## A `static var` for the same reason NpcCondition's derived rates are: a
+## const initializer cannot call a function.
+static var WALKER_PUSH_UV_AMPLITUDE: float = sin(deg_to_rad(MAX_WALKER_LEAN_DEGREES))
 
 ## How finely a card's own quad is cut up so its GEOMETRY can follow the bend
 ## curve. `mesh()` feeds these straight to QuadMesh's own subdivide_width/
@@ -262,7 +297,14 @@ static func bent_vertex(local_position: Vector2, bend_offset: float) -> Vector2:
 	# its own test says -- applied as a rotation to every point, whatever
 	# column it sits in.
 	var lean: float = asin(clampf(bend_offset * WORLD_SIZE / radius, -1.0, 1.0))
-	var from_upright: float = atan2(local_position.x, -local_position.y) + lean
+	# Clamped at the horizon, per POINT rather than per card: a leaf already
+	# pointing up and to the side starts at a real angle from upright, so it
+	# reaches flat before the ones above it and would carry on past, swinging
+	# below the ground its own roots stand on and folding the card under
+	# itself. A blade lies flat; it does not grow into the ground.
+	var from_upright: float = clampf(
+		atan2(local_position.x, -local_position.y) + lean, -PI * 0.5, PI * 0.5
+	)
 	return Vector2(radius * sin(from_upright), -radius * cos(from_upright))
 
 
@@ -427,7 +469,13 @@ void vertex() {
 	float radius = length(VERTEX);
 	if (radius > 0.0001) {
 		float lean = asin(clamp(v_geometry_bend * %s / radius, -1.0, 1.0));
-		float from_upright = atan(VERTEX.x, -VERTEX.y) + lean;
+		// Clamped at the horizon per POINT: a leaf that already points up and
+		// to the side reaches flat before the ones above it, and would carry
+		// on below the ground its roots stand on, folding the card under
+		// itself. A blade lies flat; it does not grow into the ground.
+		float from_upright = clamp(
+			atan(VERTEX.x, -VERTEX.y) + lean, -radians(90.0), radians(90.0)
+		);
 		VERTEX = vec2(radius * sin(from_upright), -radius * cos(from_upright));
 	}
 }

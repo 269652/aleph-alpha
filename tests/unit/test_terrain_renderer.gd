@@ -12,6 +12,7 @@ const ProceduralHillshadeSprite = preload("res://src/rendering/procedural_hillsh
 const ProceduralRiverFlowSprite = preload("res://src/rendering/procedural_river_flow_sprite.gd")
 const GroundTint = preload("res://src/rendering/ground_tint.gd")
 const SeasonalFoliage = preload("res://src/rendering/seasonal_foliage.gd")
+const VillageFarm = preload("res://src/gameplay/village_farm.gd")
 
 ## Shared across every test in this file (see docs/concept/
 ## art_resolution.md#boot-performance): the first build_tile_set() call
@@ -2918,3 +2919,84 @@ func test_a_notched_house_shows_a_facade_on_every_south_facing_run():
 	assert_eq(tile_map_layer.get_cell_atlas_coords(Vector2i(5, 3)), facade_wall, "the notch's own south face")
 	assert_eq(tile_map_layer.get_cell_atlas_coords(Vector2i(2, 6)), facade_wall, "the wing's south face")
 	assert_eq(tile_map_layer.get_cell_atlas_coords(Vector2i(2, 3)), renderer.atlas_coords_for_modification("wood_floor"), "the wing joins the block here: floor")
+
+
+# -- a farm rail does not replace the ground it stands on ------------------
+#
+# Asked for directly, with the two sides arrowed in a screenshot: "move the
+# fences to the inner edge of the enclosure and treat the rest of the tile
+# as street ... the brown squares should still be street when a fence is
+# put". Every rail cell was painting the plain-earth fallback slot (the id
+# is neither a structure nor a building piece, so atlas_coords_for_
+# modification fell through), which is what drew the raw brown square under
+# every rail. A rail is an OVERLAY -- IllustratedStructureSprite art
+# standing on whatever ground was already there -- so paint() leaves that
+# ground exactly as it found it. See docs/concept/village_farms.md, "The
+# rail stands on the inner edge".
+
+
+func test_a_farm_rail_is_an_overlay_and_never_paints_a_ground_tile_of_its_own():
+	for facing in VillageFarm.FENCE_TILE_IDS:
+		assert_true(
+			TerrainRenderer.is_overlay_only_modification(VillageFarm.fence_tile_for(facing)),
+			"a %s rail must leave the ground it stands on alone" % facing
+		)
+
+
+func test_every_other_modification_still_paints_its_own_tile():
+	assert_false(TerrainRenderer.is_overlay_only_modification(TerrainRenderer.EARTH_TILE_ID))
+	assert_false(TerrainRenderer.is_overlay_only_modification(TerrainRenderer.ROAD_TILE_ID))
+	assert_false(TerrainRenderer.is_overlay_only_modification(TerrainRenderer.TRAIL_TILE_ID))
+	assert_false(TerrainRenderer.is_overlay_only_modification("campfire"))
+	assert_false(TerrainRenderer.is_overlay_only_modification("wood_wall"))
+	assert_false(TerrainRenderer.is_overlay_only_modification(""), "an unmodified cell is not an overlay")
+
+
+## The real paint, not just the predicate: a fenced cell paints EXACTLY what
+## the same cell paints with no rail on it at all.
+func test_paint_leaves_a_fenced_cell_showing_its_own_ground():
+	var tile_set := renderer.build_tile_set()
+	tile_map_layer.tile_set = tile_set
+	var chunk := _make_chunk()
+
+	renderer.paint(tile_map_layer, chunk)
+	var bare := tile_map_layer.get_cell_atlas_coords(Vector2i(0, 0))
+
+	chunk.modifications[Vector2i(0, 0)] = VillageFarm.fence_tile_for("north")
+	renderer.paint(tile_map_layer, chunk)
+
+	assert_eq(
+		tile_map_layer.get_cell_atlas_coords(Vector2i(0, 0)), bare,
+		"a rail must not turn the ground it stands on into a bare earth square"
+	)
+	assert_ne(bare, renderer.atlas_coords_for_modification(TerrainRenderer.EARTH_TILE_ID))
+
+
+## The blend side of the same fact: an earth cell beside a rail blends
+## toward it like the real, unmodified ground it now shows -- otherwise a
+## fenced ring would cut a hard dithered seam round the whole field.
+func test_an_earth_cell_blends_toward_a_fenced_neighbor_like_open_ground():
+	var tile_set := renderer.build_tile_set()
+	tile_map_layer.tile_set = tile_set
+	var chunk := Chunk.new()
+	chunk.width = 3
+	chunk.height = 3
+	chunk.elevation = PackedFloat32Array([0.4, 0.4, 0.4, 0.4, 0.4, 0.4, 0.4, 0.4, 0.4])
+	chunk.biome = PackedStringArray([
+		"grassland", "grassland", "grassland",
+		"grassland", "grassland", "grassland",
+		"grassland", "grassland", "grassland",
+	])
+	chunk.modifications[Vector2i(1, 1)] = TerrainRenderer.EARTH_TILE_ID
+	chunk.modifications[Vector2i(0, 1)] = VillageFarm.fence_tile_for("east")
+
+	renderer.paint(tile_map_layer, chunk)
+
+	var variant := renderer.variant_index_for_position(1, 1)
+	assert_eq(
+		tile_map_layer.get_cell_atlas_coords(Vector2i(1, 1)),
+		renderer.atlas_coords_for_earth_blend(
+			"grassland", [Vector2i(0, -1), Vector2i(0, 1), Vector2i(-1, 0), Vector2i(1, 0)], variant
+		),
+		"the rail's own cell is still real grassland, so all four edges blend"
+	)
