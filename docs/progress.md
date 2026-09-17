@@ -23960,6 +23960,44 @@ structure_art`, 259/259 `test_creature_marker`, the fence subset of
 `test_earth_chunk_manager`, and 260/260 across the four neighbouring
 village/item suites as a regression check.
 
+### Closing the frame, clearing the ground, and losing the blob (2026-09-17)
+
+Three things reported off one screenshot of a real village.
+
+**The frame was open on one side.** Looked at rather than guessed:
+`tools/probe_village_map.gd` on real villages shows a field sitting below
+the house it belongs to, so one whole side of its frame lands on the next
+street ROW — and rails were held off every street row, paved or not, while
+most of those cells carry no paving at all. A field's south side read
+`.....`, a three-wide hole with the frame closed on every other side. Rails
+may now stand on an unpaved street-row cell; paving is occupied ground and
+still stops one on its own, which is the gate. Sowing in a street row stays
+forbidden — a crop in the roadway is what that rule was really about. The
+new test states the frame as a whole (every ring cell carries a rail unless
+a bed, a building, paving or impossible ground stops it) rather than
+re-deriving the placement rule; it failed on 10 open cells across 8 real
+villages and named every one.
+
+**Long grass was not cleared before planting.** `till_and_plant_farm_plot_
+at_global` now blocks the chunk's ground cover on the tilled cell, through
+the same `_block_ground_cover_on_cells` seam a building's floor already
+uses. Only when the till really takes: a bed refused because a live crop
+stands on it was never worked.
+
+**The round dark blob was `ProceduralSoilSprite`.** It is a root crop's own
+ground — the root grows in the mound, and pulling one leaves the crater its
+DISTURBED state draws — and just a dark circle under bending wheat, six of
+them in a 3×2 bed. Hidden for a wheat bed, kept for the crops it was drawn
+for. Keyed on what the bed was SOWN with, not `plot.crop_id`: harvesting
+clears the crop, and a first pass keyed on `crop_id` grew the mound back the
+instant the wheat came off — caught by
+`test_a_harvested_wheat_bed_still_shows_no_mound`, which is why that test
+exists.
+
+test_village_renderer 90/90, test_farm_plot_marker 13/13,
+test_earth_chunk_manager_farm_plots 17/17, and 152/152 across the six
+farming and grass suites.
+
 Honest gaps, three real:
 
 🚧 **The gate is a real hole.** An animal that wanders into the gate cell is
