@@ -24305,3 +24305,81 @@ Three existing `test_main_menu.gd` navigation tests were changed from a
 hardcoded `wait_process_frames(10)` to waiting on the real condition
 (`_creator_is_open`): that margin was already a guess at one yield-split
 pass's length, and adding a second one made it stale.
+
+
+## A farm bed stands on real tilled earth (`concept/village_farms.md`, 2026-09-17)
+
+Asked directly: *"Can you wire the new terrain soil.png for beds of
+farmhouses?"* `assets/sprites/terrain/soil.png` had been committed (and,
+like `fence.png` before it, without its `.import` sidecar) and nothing read
+it.
+
+### ✅ What it fixes, which is more than "new art"
+
+The only soil a bed drew was `ProceduralSoilSprite`'s small 10-unit mound,
+and that mound is a ROOT crop's own ground — correctly hidden for wheat
+after *"what's the round procedural dark blob?"*. Which meant a wheat bed
+was six rectangles of the untouched meadow it had been tilled out of, with
+wheat rising straight from the grass. Nothing had ever drawn the ground a
+bed IS. `FarmPlotMarker` now draws a full tile of tilled earth under
+everything, always on; the mound keeps its own separate, unchanged job.
+
+### ✅ An explicit grid, because this sheet's gutters are black
+
+Structurally soil.png is exactly the biome sheets — 1254x1254, a 3x3 grid
+of nine variants — but its gutters are drawn near-BLACK rather than
+magenta. `IllustratedTerrainSprite` punches magenta to alpha before slicing
+and `SpriteSheetSlicer.detect_frames` then finds dividers by transparency,
+so a black gutter reads as neither background nor divider: measured, the
+whole sheet came back as ONE frame.
+
+Rather than teach the chroma-key pass a second background colour, a `_SHEETS`
+entry may now declare `column_bands` outright and skip content detection
+entirely. Both axes were measured from the file. That is the better fit for
+ground art regardless of gutter colour: `normalize_frames` crops each frame
+to its own ink and rescales it, which is right for a drawing in empty space
+and WRONG for a tile that must abut its neighbours. Sheets without
+`column_bands` are untouched and still slice exactly as before, pinned by
+`test_an_explicit_grid_leaves_every_content_sliced_biome_sheet_alone`.
+
+### ✅ The vignette, found by rendering the bed rather than reasoning about it
+
+Each cell of soil.png is drawn as a CARD with a soft dark vignette, not as a
+seamless texture: measured down a cell's edge, mean brightness climbs
+0.001 —> 0.33 over about thirteen pixels. Sliced on the raw content bands
+every tile keeps that rim, and a rendered 3x2 bed came out as six brown
+squares in a black lattice. Rendering the same bed at three candidate insets
+and looking at them settled it: 13 removes the falloff exactly and tiles
+seamlessly, at ~7% off each side of a 388px cell.
+
+Pinned by `test_every_soil_variant_tiles_without_a_dark_seam`, which checks
+the RESULT — the outermost ring of each variant has to be about as bright
+as the tile as a whole — rather than the number 13, so a re-export with a
+different vignette fails the test instead of shipping a lattice.
+
+### ✅ Seeded per bed
+
+Which of the nine a bed gets is hashed from its own global tile, so a 3x2
+patch is not six copies of one tile and any given bed looks the same every
+time it is drawn. The sprite is scaled from the art's OWN pixel width to
+cover exactly `TerrainRenderer.TILE_SIZE`, the same derive-from-the-art rule
+`CharacterPreviewDiorama._build_ground` follows, so a re-export at another
+resolution still covers one tile.
+
+TDD throughout, red first: `test_illustrated_terrain_sprite.gd` +4 (soil
+slices into nine, every variant is earth and not gutter, no dark seam, and
+the biome sheets are unaffected), `test_farm_plot_marker.gd` +4 (a bed draws
+a full tile of earth, it draws beneath both the mound and the crop, a WHEAT
+bed still stands on it, and neighbouring beds differ while each stays
+itself).
+
+### Still open
+
+The soil is drawn by `FarmPlotMarker`, so it follows tilled BEDS — player
+plots as well as village farmhouse ones, which is the honest reading of "a
+tilled bed is tilled earth wherever it is". It is NOT baked into the terrain
+atlas the way road paving is (`TerrainRenderer.ROAD_TILE_ID` plus a
+`chunk.modifications` entry). That would make the ground itself soil rather
+than a sprite laid over it, and would let beds blend with neighbouring
+terrain, but it also entangles beds with the built-tile/occupancy rules that
+`modifications` drives — a much larger change than was asked for here.
