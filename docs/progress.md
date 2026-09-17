@@ -23227,20 +23227,31 @@ load`. Symmetric A/B with only this pass's two changed source files swapped
 to their `5de33c9` versions: 1/3 and 0/1 either way, identical. Water
 overlay and ambient-flyer promotion touch nothing this pass changed.
 
-**Known, pre-existing, and not caused by this pass**: `test_player.gd`
-cannot be run to completion in a headless container. It stalls
-deterministically at `test_grant_starter_items_equips_the_first_weapon_
-choice` (266 of 311 tests, 0 failures) with the process still burning CPU.
-Confirmed by direct A/B: a worktree at `5de33c9`, before any of this
-pass's changes, stalls at the same test. Every test in the remaining tail
-passes when run on its own (`-gunit_test_name`, 47 tests across
-grant_starter_items / stepping / enter_building / exit_building / indoors /
-interior / entering / talking_indoors / enter_exit_step / furniture /
-decorating / build-key / villagers-house / buildings-own / player-starts /
-walking-off-stairs / granted-weapons-mass / default-kit), so the suite is
-verified in two parts rather than one run. The stall is an ordering effect,
-most likely node accumulation across 300 tests: the run's own rate decays
-from ~77 to ~42 tests per five minutes before it stops.
+**The two largest suites cannot be run to completion here, and the reason
+is measured rather than guessed: the process is OOM-killed.** The kernel
+log is explicit -- `Memory cgroup out of memory: Killed process
+(Godot_v4.7.2-st) total-vm:14508980kB, anon-rss:13967984kB`. Roughly 14 GB
+of resident nodes accumulate across a few hundred tests, which is also what
+produces the symptoms that look like a hang first: the run's rate decays
+(in `test_player.gd`, ~77 to ~42 tests per five minutes), then it thrashes,
+then it dies with no GUT summary line at all. Anyone chasing this should
+start here rather than at the test it happened to stop on.
+
+- `test_player.gd` stops at `test_grant_starter_items_equips_the_first_
+  weapon_choice`, 266 of 311, 0 failures. **Pre-existing, proven by direct
+  A/B**: a worktree at `5de33c9`, before any of this pass, stops at the
+  same test. Every test in the remaining tail passes run on its own
+  (`-gunit_test_name`, 47 tests across grant_starter_items / stepping /
+  enter_building / exit_building / indoors / interior / entering /
+  talking_indoors / enter_exit_step / furniture / decorating / build-key /
+  villagers-house / buildings-own / player-starts / walking-off-stairs /
+  granted-weapons-mass / default-kit), so the suite is verified in two
+  parts rather than one run.
+- `test_earth_chunk_manager.gd` reaches 376 of 758 before the same death,
+  with exactly the four failing tests listed below and nothing new. Its
+  village/NPC-facing coverage lives in the dedicated suites that DO run to
+  completion (`..._village_growth` 32/32, `..._village_migration` 9/9,
+  `..._prompt_scans` 13/13, `test_village_renderer` 59/59).
 
 Honest gaps and deliberate divergences, each recorded in
 `concept/npc.md`'s own status subsection:
