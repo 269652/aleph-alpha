@@ -133,7 +133,19 @@ and the overflow is simply not kept.
   can carry a real surplus.
 
 The ceiling is a property of the settlement's buildings, not a constant, so
-a village that loses its warehouse loses the headroom with it. Overflow is
+a village that loses its warehouse loses the headroom with it — but it is
+applied **only while the settlement's chunk is loaded**. Not being able to
+see a village must never read as "it has no warehouse". Without that guard
+every settlement the player was not standing in had its market clamped to a
+household's corners and everything above silently discarded, because the
+structure scan answers "nothing stands here" for an unloaded chunk.
+
+And it is read straight off the chunk's own building records rather than
+through `has_structure_near`, which walks every modification of nine chunks
+once per placeable id in the catalog. Occasionally, for a build decision,
+that is affordable; every settlement every step it is not, and it gets worse
+as villages pave themselves — reported live as the frame rate decaying over
+time. Overflow is
 discarded rather than queued: a full store turns a producer away, which is
 the pressure that makes the building worth having.
 
