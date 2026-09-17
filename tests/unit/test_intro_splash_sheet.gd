@@ -15,13 +15,11 @@ extends GutTest
 ## does: normalize_frames picks ONE shared scale from the WIDEST/TALLEST
 ## content bounding box across the frames it's given, and here the "ALEPH
 ## ALPHA" wordmark's own ink extent genuinely grows across the sequence --
-## content-cropping and rescaling would scale every frame by the TEXT's
-## own extent, making the globe appear to change size as the words build
-## in. Frames are extracted as plain, un-rescaled regions instead, and the
-## globe is held still by measuring the globe itself (see the frame-
-## stabilisation tests at the end of this file) rather than by trusting
-## the source art to have framed it consistently -- measured, it does
-## not.
+## content-cropping and rescaling would make the globe itself appear to
+## change size as the text builds in, which the source art's own
+## consistent camera framing (see the intro-generation prompt) already
+## avoids by construction. Frames are extracted as plain, un-rescaled
+## regions instead.
 
 const IntroSplashSheet = preload("res://src/rendering/intro_splash_sheet.gd")
 const SpriteSheetLoader = preload("res://src/rendering/sprite_sheet_loader.gd")
@@ -359,97 +357,79 @@ func test_every_frame_puts_its_art_at_the_same_height():
 		)
 
 
-# -- frame stabilisation: the globe lands in the same place every frame ---
-# -- (see IntroSplashSheet.globe_centre_of, docs/concept/intro_splash.md's --
-# -- "Frame stabilisation") -- reported in play, repeatedly across this ----
-# -- file's own history: "stabilize the intro video", "it jumps left to ----
-# -- right" ---------------------------------------------------------------
+# -- frame stabilisation: the globe holds still frame to frame -------------
+# -- (see docs/concept/intro_splash.md's "Frame stabilisation") -----------
 
-## A synthetic frame: a filled disc (the globe) plus a bright bar that
-## sticks out well past it on ONE side (the "ALEPH ALPHA" wordmark and the
-## light-streak sweep, which really do extend past the globe's own edge --
-## see the real sheet). The disc's centre is the answer; the bar is the
-## trap.
-func _synthetic_globe(centre: Vector2i, radius: int, bar_reach: int) -> Image:
-	var image := Image.create(243, 162, false, Image.FORMAT_RGBA8)
-	image.fill(Color(0.0, 0.0, 0.0, 1.0))  # opaque near-black space, as the real sheet has
+## The globe's RIGHT LIMB -- for the widest row, the rightmost pixel with
+## any light in it at all.
+##
+## Deliberately the limb rather than the globe's centre, and deliberately a
+## near-black threshold. This art crops the sphere at the LEFT frame edge,
+## so the right limb is the only edge of it actually in shot; and the limb
+## is geometry, where every brightness-based reading here is lighting. The
+## terminator sweeps right across the disc as the Earth turns into
+## daylight, so a centre-of-lit-pixels measurement moves ~35px over the
+## sequence while the globe itself has not moved at all -- the same
+## "moon-phase crescent" trap that made an earlier measurement of the
+## PREVIOUS sheet read as falsely reassuring (see this doc's sixteenth
+## pass), reached here from the opposite direction.
+func _globe_right_limb(texture: Texture2D) -> int:
+	var image := texture.get_image()
+	var limb := -1
 	for y in image.get_height():
 		for x in image.get_width():
-			if Vector2(x - centre.x, y - centre.y).length() <= float(radius):
-				image.set_pixel(x, y, Color(0.2, 0.5, 0.9, 1.0))
-	for x in range(centre.x, mini(centre.x + bar_reach, image.get_width())):
-		for y in range(centre.y - 4, centre.y + 4):
-			image.set_pixel(x, y, Color(1.0, 0.85, 0.2, 1.0))
-	return image
+			if image.get_pixel(x, y).get_luminance() > 0.02:
+				limb = maxi(limb, x)
+	return limb
 
 
-## The whole point of the estimator: a plain bounding box of everything
-## bright is dragged sideways by the wordmark, and the wordmark's reach
-## GROWS across the sequence, so a bbox-based registration would itself
-## drift. Taking the MEDIAN of each row's own centre ignores the handful
-## of rows the bar touches and reads the disc.
-func test_the_globe_centre_ignores_a_wordmark_that_sticks_out_past_it():
-	var centre := Vector2i(100, 80)
-	for bar_reach in [0, 30, 60, 90]:
-		var measured := IntroSplashSheet.globe_centre_of(_synthetic_globe(centre, 50, bar_reach))
-		assert_almost_eq(
-			measured.x, float(centre.x), 1.0,
-			"a wordmark reaching %dpx past the globe must not move the measured centre" % bar_reach
-		)
-		assert_almost_eq(measured.y, float(centre.y), 1.0, "nor its vertical centre")
+## Frames before this have not faded up out of black yet, so the globe's
+## own edge is genuinely not in the picture to hold still. Measured: the
+## limb is already at its final position by frame 20 of 120, and the
+## sequence runs at 24fps, so this is the first ~0.83s.
+const _FADE_IN_FRAMES := 20
 
 
-func test_the_globe_centre_follows_a_globe_that_really_moved():
-	var moved := IntroSplashSheet.globe_centre_of(_synthetic_globe(Vector2i(120, 70), 50, 40))
-	assert_almost_eq(moved.x, 120.0, 1.0)
-	assert_almost_eq(moved.y, 70.0, 1.0)
-
-
-## The report itself. The source art does NOT draw the globe at the same
-## place in every cell: measured on the real sheet, its centre wanders 6px
-## horizontally and 2px vertically, with a sawtooth jump at every row
-## boundary (the first column of each row sits ~3px left of its
-## neighbours). This sheet is stretched ~5.3x onto the screen, so 6px of
-## source wander reads as ~32px of on-screen sway -- the reported "jumps
-## left to right".
+## The report this was chased for, over and over: "stabilize the intro
+## video", "it jumps left to right". On THIS sheet it does not. Measured
+## across all 100 frames past the fade-in, the globe's right limb sits at
+## exactly the same column in every one of them -- zero spread, not merely
+## a small one. The fixed crop from a measured grid is already doing the
+## whole job here, and nothing further is needed.
 ##
-## Registering every frame on its own measured globe centre removes it at
-## the source. Nothing is rescaled and no frame is re-cropped: the art is
-## simply blitted into its shared canvas at a whole-pixel offset, so the
-## fixed-size-frame rule (test_every_frame_is_the_same_size) and the
-## no-resampling rule both still hold.
-func test_every_frame_puts_the_globe_in_the_same_place():
+## Kept as a regression test rather than deleted as a no-op: this file's
+## own history is four separate art swaps, at least two of which shipped a
+## visibly drifting intro. The next one fails here.
+func test_the_globe_holds_the_same_position_in_every_frame():
 	var frames := sheet.generate_textures()
-	var centres: Array[Vector2] = []
-	for frame in frames:
-		centres.append(IntroSplashSheet.globe_centre_of(frame.get_image()))
-	var min_x: float = centres[0].x
-	var max_x: float = centres[0].x
-	var min_y: float = centres[0].y
-	var max_y: float = centres[0].y
-	for centre in centres:
-		min_x = minf(min_x, centre.x)
-		max_x = maxf(max_x, centre.x)
-		min_y = minf(min_y, centre.y)
-		max_y = maxf(max_y, centre.y)
+	assert_gt(frames.size(), _FADE_IN_FRAMES, "precondition: there are frames past the fade-in")
+	var lowest := 9999
+	var highest := -1
+	for i in range(_FADE_IN_FRAMES, frames.size()):
+		var limb := _globe_right_limb(frames[i])
+		assert_gte(limb, 0, "frame %d has no lit pixel at all, past the fade-in" % i)
+		lowest = mini(lowest, limb)
+		highest = maxi(highest, limb)
 	assert_lte(
-		max_x - min_x, 1.0,
-		"the globe wanders %.1fpx horizontally across the 40 frames (%.1f..%.1f)" % [max_x - min_x, min_x, max_x]
-	)
-	assert_lte(
-		max_y - min_y, 1.0,
-		"the globe wanders %.1fpx vertically across the 40 frames (%.1f..%.1f)" % [max_y - min_y, min_y, max_y]
+		highest - lowest, 1,
+		"the globe's own edge wanders %dpx across the frames past the fade-in (%d..%d) -- this sheet drifts" % [
+			highest - lowest, lowest, highest
+		]
 	)
 
 
-## Stabilisation must not sneak a rescale in: a shifted frame is the SAME
-## art, moved by whole pixels, so the globe's own drawn width is untouched
-## by this pass. (It does shrink ~5% across the sequence on its own -- real
-## drift in the art itself, deliberately NOT resampled away; see
-## docs/concept/intro_splash.md's "Frame stabilisation".)
-func test_stabilising_never_resamples_the_art():
+## ...and the measurement really would notice. A test that the art holds
+## still is worth nothing if its own ruler cannot see movement, so the same
+## helper is run over a real frame shifted by a known amount.
+func test_the_limb_measurement_would_notice_a_frame_that_moved():
 	var frames := sheet.generate_textures()
-	for i in frames.size():
-		var image := frames[i].get_image()
-		assert_eq(image.get_width(), frames[0].get_image().get_width(), "frame %d" % i)
-		assert_eq(image.get_height(), frames[0].get_image().get_height(), "frame %d" % i)
+	var original := frames[frames.size() - 1].get_image()
+	var shifted := Image.create(original.get_width(), original.get_height(), false, original.get_format())
+	shifted.fill(Color(0.0, 0.0, 0.0, 1.0))
+	# Left by 3px: the limb must come back 3px lower, or the ruler is blind.
+	shifted.blit_rect(
+		original, Rect2i(3, 0, original.get_width() - 3, original.get_height()), Vector2i(0, 0)
+	)
+	var moved := _globe_right_limb(ImageTexture.create_from_image(shifted))
+	var still := _globe_right_limb(frames[frames.size() - 1])
+	assert_eq(moved, still - 3, "a 3px shift must read as a 3px shift")

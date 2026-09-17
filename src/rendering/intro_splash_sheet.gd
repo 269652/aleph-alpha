@@ -49,18 +49,12 @@ extends RefCounted
 ## SpriteSheetSlicer.normalize_frames -- see this file's own test's doc
 ## comment for why: normalize_frames' shared-scale-from-widest-content
 ## behaviour would make the globe itself appear to change size as the
-## "ALEPH ALPHA" wordmark's own ink extent grows across the sequence --
-## it would scale every frame by the TEXT's extent, which is the one thing
-## in frame that genuinely changes on purpose. Do NOT reintroduce
+## "ALEPH ALPHA" wordmark's own ink extent grows across the sequence,
+## which the source art's consistently-framed camera (same globe position/
+## size in every frame, by construction -- see the intro-generation
+## prompt) doesn't need fixed up at all. Do NOT reintroduce
 ## normalize_frames here -- this is a real, deliberate divergence from
 ## every other illustrated-sheet consumer, not an oversight.
-##
-## This used to add "the source art's consistently-framed camera (same
-## globe position/size in every frame, by construction)". That part was an
-## assumption about the generation prompt rather than a measurement, and
-## it is false: the globe really does wander 6px across and 2px down over
-## the 40 frames. It is measured and corrected now -- see globe_centre_of
-## and _build_textures' own registration pass below.
 
 const SpriteSheetLoader = preload("res://src/rendering/sprite_sheet_loader.gd")
 
@@ -131,85 +125,6 @@ const _FRAME_HEIGHT := 122
 const _MAGENTA_RED_MIN := 0.85
 const _MAGENTA_BLUE_MIN := 0.85
 const _MAGENTA_GREEN_MAX := 0.15
-
-## Anything at or below this luminance is the sheet's own starfield
-## background rather than drawn subject -- the stars themselves are
-## sparse, isolated points, so they move a row's own left/right extent by
-## a pixel or two at most and the median below absorbs them. Low enough
-## that the globe's own shadowed limb still counts as globe: a lit sphere
-## rotating through a terminator is exactly the "moon-phase crescent"
-## effect that made an earlier brightness-only measurement of this sheet
-## read as falsely reassuring (see docs/concept/intro_splash.md's
-## sixteenth pass), so this threshold separates SUBJECT from SPACE, never
-## lit from unlit.
-const _SPACE_LUMINANCE_MAX := 0.15
-
-
-## Where the globe's own centre sits in `image`, in that image's own pixel
-## coordinates.
-##
-## Deliberately NOT a bounding box of everything bright. The "ALEPH ALPHA"
-## wordmark and the light-streak sweep both reach well past the globe's own
-## edge, and their reach GROWS across the sequence as the wordmark builds
-## in -- measured on the real sheet, a bright-bbox reading widens from 135
-## to 162px and drags its own centre 12.5px sideways, so registering on it
-## would lock the frames to the TEXT and make the globe swing instead. That
-## is the same contamination bug #6 already hit from the other direction.
-##
-## Takes the MEDIAN of each row's own left/right midpoint instead: every
-## row that crosses the globe reports the disc's own centre, and the
-## handful of rows the wordmark and streak touch are outvoted rather than
-## averaged in. The vertical centre is the same statistic over columns.
-## Robust by construction, not by tuning -- pinned against a synthetic
-## globe-plus-overhanging-bar by test_the_globe_centre_ignores_a_wordmark_
-## that_sticks_out_past_it.
-static func globe_centre_of(image: Image) -> Vector2:
-	var row_centres: Array[float] = []
-	var column_top: Dictionary = {}
-	var column_bottom: Dictionary = {}
-	for y in image.get_height():
-		var leftmost := -1
-		var rightmost := -1
-		for x in image.get_width():
-			if not _is_subject(image.get_pixel(x, y)):
-				continue
-			if leftmost < 0:
-				leftmost = x
-			rightmost = x
-			if not column_top.has(x):
-				column_top[x] = y
-			column_bottom[x] = y
-		if leftmost >= 0:
-			row_centres.append(float(leftmost + rightmost) / 2.0)
-	var column_centres: Array[float] = []
-	for x in column_top:
-		column_centres.append(float(int(column_top[x]) + int(column_bottom[x])) / 2.0)
-	return Vector2(_median(row_centres), _median(column_centres))
-
-
-## Drawn subject rather than the starfield behind it -- see
-## _SPACE_LUMINANCE_MAX. A fully transparent pixel is the canvas padding a
-## short row carries (see _build_textures), never art.
-static func _is_subject(pixel: Color) -> bool:
-	if pixel.a <= 0.5:
-		return false
-	return pixel.get_luminance() > _SPACE_LUMINANCE_MAX
-
-
-## The middle value, or the mean of the middle two. A median rather than a
-## mean is the entire point of globe_centre_of above: a mean would let the
-## wordmark's own rows pull the answer, which is what this measurement
-## exists to refuse.
-static func _median(values: Array[float]) -> float:
-	if values.is_empty():
-		return 0.0
-	var sorted := values.duplicate()
-	sorted.sort()
-	var count := sorted.size()
-	if count % 2 == 1:
-		return sorted[count / 2]
-	return (sorted[count / 2 - 1] + sorted[count / 2]) / 2.0
-
 
 static var _frame_cache: Array[ImageTexture] = []
 

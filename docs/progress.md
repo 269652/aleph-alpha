@@ -23884,66 +23884,53 @@ a few tiles wide at most.
 🚧 **Rails never weather or break.** The sheet carries Worn and Destroyed
 rows and only Pristine is ever drawn, because nothing damages a fence.
 
-### Frame stabilisation for the intro: registering on the globe, not on the grid (see `docs/concept/intro_splash.md` "Frame stabilisation", 2026-09-17)
+### Frame stabilisation for the intro: already stable, measured (see `docs/concept/intro_splash.md` "Frame stabilisation", 2026-09-17)
 
 Asked directly: *"Can you frame stabilize the intro sprite animation?"* —
-the same complaint this feature had already been re-reported for several
-times (*"stabilize the intro video"*, *"it jumps left to right"*).
+the same thing this feature had been re-reported for repeatedly.
 
-✅ **The remaining drift was inside the cell, not in the grid.** Every
-earlier pass fixed the *crop*: bug #6 gave each frame one fixed-size
-window instead of a per-frame content crop, and the pass before this one
-centred each row's own art on the shared canvas instead of top-anchoring
-it. Both were real, and neither could reach this, because the art simply
-does not draw the globe in the same place in every cell. Measured on the
-built frames: the globe's centre wanders **6.0px horizontally**
-(117.0–123.0) and **2.0px vertically** (84.0–86.0) across the 40 frames,
-with a sawtooth at every row boundary — each row's first column sits ~3px
-left of its neighbours. At this sheet's ~5.3× screen stretch that is
-~32px of on-screen sway.
+✅ **On the sheet shipping now it is already stable, and that is now
+measured rather than assumed.** The globe's right limb sits at exactly the
+same column in all 100 frames past the fade-in — **zero spread**. The
+fixed crop from a measured grid is doing the whole job, so no registration
+pass was added.
 
-✅ **`IntroSplashSheet.globe_centre_of`, and a two-pass build.** Frames
-are cropped and measured, then composed at a whole-pixel offset from the
-**median** frame centre (a median, not a mean and not frame 0's, so one
-oddly-drawn cell cannot drag all forty off their column). Nothing is
-rescaled or re-cropped, so the fixed-size-frame rule and the
-no-`normalize_frames` rule both still hold. After: **1.0px in both axes**,
-summed frame-to-frame delta 40.0 → 16.0.
+✅ **The measurement is geometry, not lighting — which is the whole
+trap.** The current art crops the sphere at the left frame edge, so its
+right limb is the only edge of it in shot, and the limb is geometry while
+almost everything else here is lighting that moves on purpose (an
+Earth-at-night turning into daylight, terminator sweeping across the
+disc). A centre-of-lit-pixels reading moves **~35px** over the sequence
+while the globe has not moved at all — large enough to look exactly like
+the reported jitter, and acting on it would have registered every frame
+against the terminator and genuinely shoved the globe around. Same
+"moon-phase crescent" effect as the sixteenth pass, from the opposite
+direction: there it hid drift, here it invents it.
 
-✅ **The estimator is a median of per-row midpoints, not a bounding box** —
-and that is the whole design. The wordmark and light-streak reach past the
-globe and their reach *grows* as the sequence plays, so a bright-pixel
-bbox widens 135→162px and drags its own centre 12.5px sideways;
-registering on it would lock the frames to the text and swing the globe
-instead, which is bug #6 from the other side. Rows crossing the globe all
-report the disc's centre and the few rows the text touches are outvoted.
-Pinned against a synthetic globe-plus-overhanging-bar at four bar lengths
-rather than asserted.
+✅ **Kept as a regression test rather than dropped as a no-op.**
+`test_the_globe_holds_the_same_position_in_every_frame` asserts what is
+already true, which is normally a smell; it earns its place because this
+feature's history is four art swaps, at least two of which shipped a
+visibly drifting intro that only a player caught. Paired with
+`test_the_limb_measurement_would_notice_a_frame_that_moved` — the same
+ruler over a real frame shifted 3px, required to read 3px — because a
+stability test whose measurement cannot see movement is worth nothing.
 
-✅ **A false claim in the docs is corrected, not left standing.**
-`concept/intro_splash.md`, `intro_splash_sheet.gd` and the test file all
-stated the globe sits at the same position and size in every frame *"by
-construction — see the intro-generation prompt"*, and that justified
-skipping any registration. It was an assumption about what the prompt
-asked for, never a measurement, and it is false. A prompt asking for a
-fixed camera is not the same as an AI honouring one.
+🚧 **A per-frame registration pass was built, verified, and thrown away.**
+Against the *previous* 8×5 sheet it cut a real 6.0px horizontal and 2.0px
+vertical wander to 1.0px each. That sheet was replaced while the work was
+in flight; on the current art the same estimator reads the terminator
+rather than the globe, so it was dropped rather than carried over. The
+code is in the branch history if a future sheet needs it.
 
-🚧 **1.0px of jitter remains**, in both axes — measured centres land on
-half-pixel boundaries and the shift is whole-pixel, so this is
-quantisation, not a missed case. Closing it needs sub-pixel resampling of
-pixel art: blur and shimmer for ~5 screen px, a bad trade on a
-16-bit-styled sheet.
+Two process notes, both of which cost real time here and are written into
+the concept doc so the next reader does not repeat them:
+**re-import before measuring** (`SpriteSheetLoader` prefers Godot's
+imported resource, so a stale `.godot` cache silently serves the OLD art
+through the NEW grid constants — this produced 20 "blank" frames and
+magenta ink in 76 others and read convincingly as a broken sheet), and
+**render the frames and look at them** before concluding anything about
+drift.
 
-🚧 **The globe's drawn width shrinks ~5% across the sequence** (median row
-width 119px → 113px) — real drift in the art, deliberately left as drawn.
-A smooth ramp over the full ~4s reads as a slow push-in rather than
-jitter, and normalising it would mean resampling every frame.
-
-Verified by rendering the real 40-frame contact sheet before and after and
-looking at it, not by the test alone. Tests: `test_intro_splash_sheet.gd`
-16/16 (4 new — two synthetic robustness tests for the estimator, the real
-40-frame stabilisation check confirmed red first with its real numbers,
-and a no-resampling guard), 46/46 across all five intro test files
-(`test_intro_splash.gd`, `test_intro_splash_sequencer.gd`,
-`test_world_intro_splash_after_load_fanout.gd`,
-`test_world_play_intro_splash_frame_gate.gd`).
+Tests: `test_intro_splash_sheet.gd` 16/16 (2 new), 46/46 across all five
+intro test files.
