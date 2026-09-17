@@ -17080,6 +17080,15 @@ func _restore_growing_juveniles(chunk_coord: Vector2i) -> void:
 		_loaded_creatures[chunk_coord].append(creature)
 
 
+## The chunk a global tile falls in. A public wrapper over the private
+## helper below rather than a second copy of the same floor division --
+## planner mode needs it to turn a clicked world cell into a
+## chunk+local-origin site (see BuildPlan), and duplicating the arithmetic
+## in World is exactly how two answers to one question drift apart.
+func chunk_coord_for_tile(global_tile: Vector2i) -> Vector2i:
+	return _chunk_coord_for_tile(global_tile)
+
+
 func _chunk_coord_for_tile(global_tile: Vector2i) -> Vector2i:
 	return Vector2i(
 		floori(float(global_tile.x) / CHUNK_SIZE), floori(float(global_tile.y) / CHUNK_SIZE)

@@ -11,6 +11,10 @@ const RiverFlowPass = preload("res://src/rendering/river_flow_pass.gd")
 const NatureSoundscapePlayer = preload("res://src/audio/nature_soundscape_player.gd")
 const AudioSettings = preload("res://src/audio/audio_settings.gd")
 const AudioDiagnostics = preload("res://src/audio/audio_diagnostics.gd")
+const ViewMode = preload("res://src/gameplay/view_mode.gd")
+const BuildPlan = preload("res://src/world/build_plan.gd")
+const BuildPlanLedger = preload("res://src/world/build_plan_ledger.gd")
+const BuildingCatalog = preload("res://src/gameplay/building_catalog.gd")
 const InteractionSfxPlayer = preload("res://src/audio/interaction_sfx_player.gd")
 const FootstepSound = preload("res://src/audio/footstep_sound.gd")
 const CreatureCallSound = preload("res://src/audio/creature_call_sound.gd")
@@ -1069,6 +1073,8 @@ func _ready() -> void:
 	_apply_simulation_settings()
 
 	_build_hotbar_slots()
+	_build_blueprint_palette()
+	_build_view_mode_toggle()
 	_build_spell_bar()
 	_build_dev_console()
 	_build_inventory_window()
@@ -2472,6 +2478,7 @@ func _build_message_stack() -> void:
 	_talk_banner = _make_message_banner(14)
 	_easter_egg_banner = _make_message_banner(14)
 	_cast_banner = _make_message_banner(16)
+	_planner_banner = _make_message_banner(16)
 	# A sighting is an ambient world event rather than something the player
 	# did, and reads in its own cooler ink -- the one per-banner difference.
 	(_easter_egg_banner.get_child(0) as Label).add_theme_color_override(
@@ -5016,6 +5023,165 @@ func _update_survival_bar(local_player: Player) -> void:
 	var warmth_state := "Freezing" if s.is_freezing() else ("Cold" if s.is_cold() else "Warmth")
 	_warmth_label.text = meter_label_text(warmth_state, s.warmth)
 	_wallet_label.text = "Gold: %d" % local_player.wallet.balance
+
+
+## Which view the player is commanding the world through (see ViewMode,
+## docs/concept/planner_mode.md). RPG mode is the game as it has always
+## been; planner mode swaps the hotbar for a blueprint palette and arms a
+## build cursor over the map.
+var _view_mode: int = ViewMode.DEFAULT
+
+## Every blueprint laid out but not yet built -- the standing wireframes.
+## World state, not screen state (planner_mode.md's pillar 3): they outlive
+## leaving planner mode, because walking back to one later is the point.
+var _build_plans := BuildPlanLedger.new()
+
+## Which blueprint the palette has selected, "" for none.
+var _selected_blueprint := ""
+
+var _view_mode_button: Button
+var _blueprint_palette: PanelContainer
+var _planner_banner: PanelContainer
+
+
+## Whatever planner mode last had to say -- a refusal with its reason, or a
+## confirmation. Uses the existing message stack rather than a banner of
+## its own design, so it is legible over any terrain like every other
+## message (docs/concept/hud.md's pillar 1).
+func _show_planner_message(message: String) -> void:
+	if _planner_banner != null:
+		_set_message_banner(_planner_banner, message)
+
+
+## The blueprint palette: planner mode's own controls, where the hotbar
+## sits in rpg mode. One button per thing the game can already raise --
+## pavement plus the real BuildingCatalog, never a parallel list that could
+## drift from what is actually buildable (planner_mode.md's "one
+## vocabulary").
+func _build_blueprint_palette() -> void:
+	_blueprint_palette = PanelContainer.new()
+	_blueprint_palette.theme = _ui_theme
+	_blueprint_palette.set_anchors_preset(Control.PRESET_CENTER_BOTTOM)
+	_blueprint_palette.offset_left = -260.0
+	_blueprint_palette.offset_right = 260.0
+	_blueprint_palette.offset_top = -96.0
+	_blueprint_palette.offset_bottom = -8.0
+	_ui.add_child(_blueprint_palette)
+
+	var row := HBoxContainer.new()
+	row.add_theme_constant_override("separation", 4)
+	_blueprint_palette.add_child(row)
+	for blueprint_id in _palette_blueprint_ids():
+		var button := Button.new()
+		button.theme = _ui_theme
+		button.text = BuildPlan.display_name_of(blueprint_id)
+		button.toggle_mode = true
+		button.pressed.connect(_on_blueprint_selected.bind(blueprint_id))
+		row.add_child(button)
+	_blueprint_palette.visible = false
+
+
+## Pavement first (the cheapest, most-used thing a player lays), then every
+## real catalog building. Read from BuildingCatalog rather than listed here
+## so a building added to the game shows up in the palette for free.
+func _palette_blueprint_ids() -> Array[String]:
+	var ids: Array[String] = [BuildPlan.PAVEMENT_BLUEPRINT_ID]
+	for building_id in BuildingCatalog.BUILDING_IDS:
+		ids.append(building_id)
+	for building_id in BuildingCatalog.PRODUCTION_BUILDING_IDS:
+		ids.append(building_id)
+	for building_id in BuildingCatalog.CIVIC_BUILDING_IDS:
+		ids.append(building_id)
+	return ids
+
+
+func _on_blueprint_selected(blueprint_id: String) -> void:
+	_selected_blueprint = blueprint_id
+	_show_planner_message("%s selected -- click the map to plan it." % BuildPlan.display_name_of(blueprint_id))
+
+
+
+
+## The mode toggle, top-right and immediately LEFT of the minimap -- asked
+## directly: "a view toggle to the top besides the minimap". $UI/Minimap
+## owns offset_left -170 .. -8 of that corner, so beside it means clearing
+## -170; under it is already taken by the karma card (offset_top 178).
+##
+## A themed card rather than a bare Button, per docs/concept/hud.md's own
+## pillar 1: which mode you are in carries meaning, and nothing that
+## carries meaning may be drawn as bare text over the world.
+func _build_view_mode_toggle() -> void:
+	var panel := PanelContainer.new()
+	panel.theme = _ui_theme
+	panel.set_anchors_preset(Control.PRESET_TOP_RIGHT)
+	panel.offset_left = -300.0
+	panel.offset_top = 8.0
+	panel.offset_right = -178.0
+	panel.offset_bottom = 40.0
+	_ui.add_child(panel)
+
+	_view_mode_button = Button.new()
+	_view_mode_button.theme = _ui_theme
+	_view_mode_button.pressed.connect(_toggle_view_mode)
+	panel.add_child(_view_mode_button)
+	_apply_view_mode()
+
+
+## Flips the mode. Deliberately does NOT touch get_tree().paused: planner
+## mode changes what the player COMMANDS, never what the world DOES
+## (planner_mode.md's pillar 4) -- time runs, creatures walk and weather
+## turns while you lay a settlement out, unlike the settings overlay which
+## really is a pause screen.
+func _toggle_view_mode() -> void:
+	_view_mode = ViewMode.toggled(_view_mode)
+	_apply_view_mode()
+
+
+## Shows whatever the mode owns. Every answer is READ from ViewMode rather
+## than decided again here: a second `if` over the same two cases is how a
+## tested model and the real HUD drift apart.
+func _apply_view_mode() -> void:
+	if _view_mode_button != null:
+		_view_mode_button.text = ViewMode.toggle_label(_view_mode)
+	if _hotbar != null:
+		_hotbar.visible = ViewMode.shows_hotbar(_view_mode)
+	if _blueprint_palette != null:
+		_blueprint_palette.visible = ViewMode.shows_palette(_view_mode)
+	if not ViewMode.shows_palette(_view_mode):
+		_selected_blueprint = ""
+
+
+## Whether this global cell is ground a blueprint may stand on. The world's
+## OWN real answer, handed to the ledger as a Callable exactly as
+## BuildingPlacement takes one -- water and cliff rules belong here, with
+## the world, not in the rules of construction.
+func _plan_ground_is_buildable(global_cell: Vector2i) -> bool:
+	return _chunk_manager.is_buildable_terrain_at(global_cell.x, global_cell.y)
+
+
+## Lays the selected blueprint down at a global cell, or shows why it may
+## not go there.
+##
+## Plants an INTENTION and nothing else (planner_mode.md's pillar 1):
+## no terrain is written, no material is spent, no project is started --
+## all of that falls when somebody actually raises the wireframe, which is
+## what keeps planner mode from being a second, cheaper way to build.
+func _plan_blueprint_at(global_cell: Vector2i) -> void:
+	if _selected_blueprint.is_empty():
+		return
+	var chunk_coord := _chunk_manager.chunk_coord_for_tile(global_cell)
+	var origin := global_cell - chunk_coord * EarthChunkManager.CHUNK_SIZE
+	var refusal := _build_plans.refusal_reason(
+		chunk_coord, origin, _selected_blueprint, _plan_ground_is_buildable
+	)
+	if not refusal.is_empty():
+		_show_planner_message(refusal)
+		return
+	_build_plans.plan(
+		chunk_coord, origin, _selected_blueprint, _chunk_manager.world_age_seconds(),
+		_plan_ground_is_buildable
+	)
+	_show_planner_message("%s planned." % BuildPlan.display_name_of(_selected_blueprint))
 
 
 ## Builds HOTBAR_SLOT_COUNT empty slot backgrounds once; _update_hotbar fills
