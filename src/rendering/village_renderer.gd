@@ -160,10 +160,7 @@ func spawn_village(
 	# One building id per villager, chosen from their own occupation +
 	# personality (see BuildingCatalog.choose_house_id) -- VillageLayout
 	# only decides WHERE each one actually lands, never WHICH.
-	var building_ids: Array = []
-	for i in npcs.size():
-		var seed_value := hash("%d_%d_house_%d" % [chunk_coord.x, chunk_coord.y, i])
-		building_ids.append(BuildingCatalog.choose_house_id(npcs[i].occupation, npcs[i].genome, seed_value))
+	var building_ids: Array = SettlementGenerator.house_ids_for(chunk_coord, npcs)
 
 	# door_positions[i]/stand_positions[i] default to the villager's own
 	# old ring anchor -- overwritten below for every plot VillageLayout
@@ -319,7 +316,7 @@ func _place_new_village(
 	# cannot house is a site that genuinely has none -- and founding there
 	# is what left a riverside chunk with a market square and one house
 	# (chunk (661,139) near lat 49.8 lon 10.6).
-	if (result["plots"] as Array).size() < building_ids.size():
+	if not VillageLayout.houses_everyone(result, building_ids):
 		return false
 
 	# Buildings BEFORE roads -- place_building's own occupancy check

@@ -5495,6 +5495,35 @@ func is_weather_forced() -> bool:
 const MAX_VILLAGE_SEARCH_RADIUS_CHUNKS := 24
 
 
+## Whether a village would really settle in this chunk -- the SAME
+## question VillageRenderer answers at founding (does the layout house the
+## whole roster), asked without loading or spawning anything.
+##
+## has_settlement_at only says a settlement is MEANT to be here; it knows
+## nothing about the ground. Since a village only settles where there is
+## room for all of it, the two disagree on exactly the chunks a player must
+## not be sent to -- reported in play as "It teleports me to where no
+## village is".
+##
+## Occupancy is deliberately "nothing built": this asks the founding-time
+## question, which is the one that decides whether a village is ever there
+## at all. Run only for chunks that already passed the settlement roll (one
+## in SETTLEMENT_CHANCE_DENOMINATOR), so the ring search pays for a layout
+## rarely rather than per chunk.
+func _village_would_settle(chunk_coord: Vector2i) -> bool:
+	var is_dry := _is_dry_local(chunk_coord)
+	var settlement := _settlement_generator.generate_settlement(
+		chunk_coord, chunk_coord * CHUNK_SIZE, CHUNK_SIZE, TerrainRenderer.TILE_SIZE,
+		SettlementGenerator.POPULATION, is_dry
+	)
+	var building_ids: Array = SettlementGenerator.house_ids_for(chunk_coord, settlement.npcs)
+	var result: Dictionary = VillageLayout.new().layout(
+		building_ids, CHUNK_SIZE, VillageLayout.seed_for(chunk_coord),
+		is_dry, func(_cell: Vector2i) -> bool: return false
+	)
+	return VillageLayout.houses_everyone(result, building_ids)
+
+
 ## Nearest chunk hosting a settlement (see SettlementGenerator), searching
 ## outward from `from_tile`'s own chunk -- the discovery half of the
 ## /village dev-console command (see World._handle_village_command).
@@ -5512,7 +5541,8 @@ func find_nearest_village(from_tile: Vector2i) -> Variant:
 		_settlement_generator,
 		func(chunk_coord: Vector2i) -> String:
 			var chunk := generator.generate_chunk(chunk_coord, CHUNK_SIZE)
-			return _biome_classifier.dominant_biome(chunk.biome)
+			return _biome_classifier.dominant_biome(chunk.biome),
+		_village_would_settle
 	)
 	if found_chunk == null:
 		return null

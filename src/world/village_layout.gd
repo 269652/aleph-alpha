@@ -84,6 +84,17 @@ const _GATE_CLEARANCE_TILES := 2
 const _MAX_ATTEMPTS_PER_BUILDING := 12
 
 
+## Whether a layout really houses everyone it was given -- the ONE
+## definition of "enough space" (docs/concept/building.md: "A village only
+## settles where there is room for all of it").
+##
+## Shared by the founding gate and by the village finder, because the two
+## disagreeing is what sends a player to empty ground: reported in play as
+## "It teleports me to where no village is".
+static func houses_everyone(result: Dictionary, building_ids: Array) -> bool:
+	return (result["plots"] as Array).size() >= building_ids.size()
+
+
 ## The one layout seed per chunk -- the exact formula VillageRenderer used
 ## to compute inline, moved here so every consumer (renderer, recover path,
 ## civic build decision) derives the same skeleton for the same chunk.
