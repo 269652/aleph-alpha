@@ -2054,3 +2054,37 @@ func test_the_field_a_villager_works_is_a_whole_rectangle():
 				"%s beds span %s, which is not a shape that was asked for" % [str(coord), str(size)]
 			)
 			assert_eq(cells.size(), size.x * size.y, "the rectangle has a hole in it")
+
+
+## A village never sows or fences across its own street ROWS -- paved or
+## not. Measured on real villages (tools/probe_village_map.gd): the founding
+## layout paves a further street only between its own doorsteps, so a street
+## row has unpaved gaps in it, and a rail dropped into one of those stands in
+## the middle of the street with paving either side. Worse, it made the
+## frames inconsistent -- a field under a paved stretch got no north wall
+## (the street is its boundary) while the one beside it got a rail.
+func test_no_bed_and_no_rail_ever_lands_on_one_of_the_villages_street_rows():
+	var offenders: Array = []
+	var checked := 0
+	for coord in _settlement_chunks_with_farmers(3, 8):
+		var world := StubWorld.new()
+		var spawned := renderer.spawn_village(
+			parent, coord, coord * CHUNK_SIZE, CHUNK_SIZE, TILE_SIZE, "grassland", world
+		)
+		var street_y: int = VillageLayout.skeleton(CHUNK_SIZE, VillageLayout.seed_for(coord))["street_y"]
+		var on_a_street := func(y: int) -> bool:
+			return y >= street_y and (y - street_y) % VillageLayout.STREET_PITCH_TILES == 0
+		for npc in _farming_markers(spawned, coord):
+			for global_cell in npc.field_cells:
+				checked += 1
+				var local: Vector2i = (global_cell as Vector2i) - coord * CHUNK_SIZE
+				if on_a_street.call(local.y):
+					offenders.append("%s: a bed at %s is on a street row" % [str(coord), str(local)])
+		for cell in _built_tiles(world, coord):
+			if not VillageFarm.is_fence_tile(_built_tiles(world, coord)[cell]):
+				continue
+			checked += 1
+			if on_a_street.call((cell as Vector2i).y):
+				offenders.append("%s: a rail at %s stands in the street" % [str(coord), str(cell)])
+	assert_gt(checked, 0, "precondition: real fields and real rails were laid")
+	assert_eq(offenders.size(), 0, "%s" % str(offenders.slice(0, 6)))

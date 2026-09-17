@@ -522,6 +522,25 @@ func _place_industry_if_missing(chunk_coord: Vector2i, chunk_size: int, world) -
 		world.build_at_global(g.x, g.y, TerrainRenderer.ROAD_TILE_ID)
 
 
+## Whether `y` is one of this village's own street ROWS -- paved or not.
+##
+## The founding layout paves a further street only between its own
+## doorsteps, so a street row has unpaved GAPS in it. Those gaps are still
+## street: a village that sows or fences in one puts crops and rails in the
+## middle of its own road, with paving either side (measured on real
+## villages -- tools/probe_village_map.gd), and it made the field frames
+## inconsistent, since a field under a paved stretch correctly got no north
+## wall while the one beside it got a rail.
+##
+## Derived from the skeleton, so it costs nothing and needs nothing stored.
+func _is_street_row(chunk_coord: Vector2i, chunk_size: int, world, y: int) -> bool:
+	var bones := VillageLayout.skeleton(
+		chunk_size, VillageLayout.seed_for(chunk_coord), _is_buildable_local(chunk_coord, chunk_size, world)
+	)
+	var street_y: int = bones["street_y"]
+	return y >= street_y and (y - street_y) % VillageLayout.STREET_PITCH_TILES == 0
+
+
 ## Every farmhouse's own field, worked out and FENCED (docs/concept/
 ## village_farms.md): `{origin -> the global cells that farmhouse works}`,
 ## in the same (y, x) order _farmhouse_origins returns.
@@ -541,7 +560,7 @@ func _fenced_farm_fields(chunk_coord: Vector2i, chunk_size: int, world) -> Dicti
 	var fields: Dictionary = {}
 	for origin in origins:
 		fields[origin] = _workable_field_of(
-			origin, origins, chunk_coord, chunk_size, is_buildable, is_occupied
+			origin, origins, chunk_coord, chunk_size, is_buildable, is_occupied, world
 		)
 	_fence_the_fields(chunk_coord, chunk_size, fields, is_buildable, is_occupied, world)
 	return fields
@@ -611,7 +630,9 @@ func _fence_the_fields(
 			if beds.has(cell):
 				continue  # the neighbouring farm's crop, not this farm's fence line
 			if not is_buildable.call(cell) or is_occupied.call(cell):
-				continue  # water, a building, or the street -- the street being the gate
+				continue  # water, a building, or paving -- the paving being the gate
+			if _is_street_row(chunk_coord, chunk_size, world, cell.y):
+				continue  # an unpaved gap in a street row is still street
 			# The rail's own tile id carries which side of the field it
 			# closes, so the sheet's four orientation columns still draw
 			# correctly on a reload that remembers nothing else about it.
@@ -649,13 +670,16 @@ func _farmhouse_origins(chunk_coord: Vector2i, world) -> Array:
 ## border, and that is what read as broken fencing in play.
 func _workable_field_of(
 	origin: Vector2i, origins: Array, chunk_coord: Vector2i, chunk_size: int,
-	is_buildable: Callable, is_occupied: Callable
+	is_buildable: Callable, is_occupied: Callable, world
 ) -> Array[Vector2i]:
+	var renderer := self
 	var is_free := func(cell: Vector2i) -> bool:
 		if cell.x < 0 or cell.y < 0 or cell.x >= chunk_size or cell.y >= chunk_size:
 			return false
 		if VillageFarm.owner_of(cell, origins, VillageFarm.FARM_BUILDING_ID) != origin:
 			return false  # the neighbouring farmstead's ground, not this one's
+		if renderer._is_street_row(chunk_coord, chunk_size, world, cell.y):
+			return false  # a village does not sow in its own road
 		return is_buildable.call(cell) and not is_occupied.call(cell)
 	var rect = VillageFarm.field_rect(origin, VillageFarm.FARM_BUILDING_ID, is_free)
 	var worked: Array[Vector2i] = []
@@ -707,7 +731,9 @@ func _place_farms_if_missing(chunk_coord: Vector2i, chunk_size: int, npcs: Array
 	var is_paved := _is_paved_local(chunk_coord, chunk_size, world)
 	var renderer := self
 	var accepts_origin := func(origin: Vector2i) -> bool:
-		return renderer._field_fits_at(origin, chunk_size, is_buildable, is_occupied)
+		return renderer._field_fits_at(
+			origin, chunk_coord, chunk_size, world, is_buildable, is_occupied
+		)
 	for index in range(standing, wanted):
 		var plot: Dictionary = VillageLayout.next_street_plot(
 			VillageFarm.FARM_BUILDING_ID, chunk_size, VillageLayout.seed_for(chunk_coord),
@@ -776,10 +802,14 @@ func _place_farms_if_missing(chunk_coord: Vector2i, chunk_size: int, npcs: Array
 ## here: no other farmhouse stands yet at siting time, and the field this
 ## one finally works is re-derived once they all do.
 func _field_fits_at(
-	origin: Vector2i, chunk_size: int, is_buildable: Callable, is_occupied: Callable
+	origin: Vector2i, chunk_coord: Vector2i, chunk_size: int, world,
+	is_buildable: Callable, is_occupied: Callable
 ) -> bool:
+	var renderer := self
 	var is_free := func(cell: Vector2i) -> bool:
 		if cell.x < 0 or cell.y < 0 or cell.x >= chunk_size or cell.y >= chunk_size:
+			return false
+		if renderer._is_street_row(chunk_coord, chunk_size, world, cell.y):
 			return false
 		return is_buildable.call(cell) and not is_occupied.call(cell)
 	return VillageFarm.field_rect(origin, VillageFarm.FARM_BUILDING_ID, is_free) != null

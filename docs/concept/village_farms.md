@@ -204,6 +204,15 @@ rails/posts and plant_fibre (4) lashing them".
   raised there: the farmer walks in over the street their farmhouse fronts,
   which is the whole reason a farmhouse takes frontage at all. A fence laid
   across the road would wall the village off from its own farm.
+- **A street ROW is street, paved or not.** Neither beds nor rails ever land
+  on one. The founding layout paves a further street only *between its own
+  doorsteps*, so a street row has unpaved gaps in it — and measured on real
+  villages, a village that treats those gaps as open ground plants crops and
+  drops rails in the middle of its own road with paving either side. It also
+  made the frames inconsistent: a field under a paved stretch correctly got
+  no north wall, because the street is its boundary, while the field beside
+  it got a rail. Derived from the skeleton (`street_y` plus
+  `STREET_PITCH_TILES`), so it costs nothing and needs nothing stored.
 - **What it does:** a rail is solid ground for an animal.
   `CreatureMarker` refuses a step onto a fenced cell and slides along the
   rail rather than sticking against it — the obstacle its own `_advance`
