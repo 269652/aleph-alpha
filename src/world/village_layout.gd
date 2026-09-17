@@ -650,7 +650,7 @@ static func _spur_cells(
 ## square.
 static func next_street_plot(
 	building_id: String, chunk_size: int, seed_value: int, is_buildable: Callable,
-	is_occupied: Callable, is_dry := Callable()
+	is_occupied: Callable, is_dry := Callable(), accepts_origin := Callable()
 ) -> Dictionary:
 	var footprint := BuildingCatalog.footprint_of(building_id)
 	if footprint == Vector2i.ZERO:
@@ -676,7 +676,17 @@ static func next_street_plot(
 			if x < plaza_east_resume and x + footprint.x > plaza_west_margin and _rect_overlaps_rows(plaza, origin, footprint):
 				x = plaza_east_resume
 				continue
-			if _street_plot_fits(building_id, origin, plaza, chunk_size, is_buildable, is_occupied):
+			if (
+				_street_plot_fits(building_id, origin, plaza, chunk_size, is_buildable, is_occupied)
+				# A caller may have a further condition of its own about the
+				# GROUND AROUND a plot rather than the plot itself -- a
+				# farmhouse needs room for its field (docs/concept/
+				# village_farms.md), and a farmhouse with nowhere to farm is
+				# a farmhouse that should not have been raised. A rejected
+				# origin simply keeps the walk going, so the village finds
+				# the next frontage that does work.
+				and (not accepts_origin.is_valid() or accepts_origin.call(origin))
+			):
 				return {
 					"origin": origin, "building_id": building_id, "facing": Vector2i(0, 1),
 					"doorstep": origin + BuildingCatalog.doorstep_of(building_id),

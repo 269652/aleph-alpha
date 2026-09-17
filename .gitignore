@@ -11,6 +11,20 @@
 export.cfg
 export_presets.cfg
 
+# The headless Godot build a test run needs. .github/workflows/tests.yml
+# downloads the engine to exactly this path, and running the suite the same
+# way locally (see CONTRIBUTING.md) lands ~140MB of engine binary in the
+# working tree -- close enough to a real source path that a broad `git add`
+# would happily commit it.
+godot-bin/
+
+# Probe render output. tools/probe_*.gd write their PNGs beside themselves
+# (tools/grass_turn_renders/, tools/grass_bend_renders/); the probe SCRIPT is
+# the artifact worth keeping -- its images are evidence for one session's own
+# finding, recorded in that probe's own header and in docs/, not something to
+# re-commit every time somebody re-runs it.
+tools/*_renders/
+
 # Imported translations (automatically generated from CSV files)
 *.translation
 
