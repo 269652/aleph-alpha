@@ -124,8 +124,21 @@ second lookup of its own.
 Written before implementation, per CLAUDE.md. Corrected against the code as
 each slice lands.
 
-- ⬜ **Every building has a stock and a capacity** — `storage_capacity_of`,
-  `building_stock_at`, persisted through the existing store.
+- ✅ **Every building has a stock and a capacity.**
+  `BuildingCatalog.storage_capacity_of` reads a `storage` field sitting
+  beside each entry's footprint and cost, so a capacity cannot drift from the
+  building it belongs to. The numbers are **ratios**, each pinned by a test
+  that says what the ratio is *for*: a workplace holds more than a home, and
+  the warehouse holds more than anything that feeds it.
+
+  `building_stock_at` / `building_inventory_at` / `building_room_at` /
+  `deposit_to_building_at` / `withdraw_from_building_at` reuse the existing
+  `StructureStockStore` with nothing changed, keyed by the **building's own
+  origin** — every cell of a 3×2 farmhouse answers with the same stock,
+  because a barn does not have six separate corners of grain. Room is shared
+  across all item ids (a barn is full when it is full), a deposit returns how
+  many it actually took, and a full building takes none. `test_building_
+  catalog.gd` 55/55, `test_earth_chunk_manager.gd` building stock 17/17.
 - ⬜ **An Inventory tab on the building popover.**
 - ⬜ **Production stockpiles into its own building** rather than teleporting
   into the settlement market.

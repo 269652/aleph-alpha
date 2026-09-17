@@ -14787,6 +14787,78 @@ func withdraw_from_structure_at(global_x: int, global_y: int, item_id: String, c
 	return _structure_stocks.stock_for(_structure_stock_key(global_x, global_y)).remove_stock(item_id, count)
 
 
+## -- a BUILDING's own stock (docs/concept/building_storage.md) --------------
+##
+## The same StructureStock the tile-scale economy above already uses, at a
+## third scale -- which is exactly what StructureStock's own doc comment says
+## it is for ("there is exactly one stock shape in this codebase"). Keyed by
+## the BUILDING's own origin tile rather than whichever cell the caller
+## named, so every cell of a 3x2 farmhouse answers with the same stock; a
+## barn does not have six separate corners of grain.
+
+
+## The key a building's stock lives under, or "" for open ground.
+func _building_stock_key(global_x: int, global_y: int) -> String:
+	var record := building_at_global(global_x, global_y)
+	if record.is_empty():
+		return ""
+	var origin: Vector2i = record["chunk_coord"] * CHUNK_SIZE + record["origin_local"]
+	return _structure_stock_key(origin.x, origin.y)
+
+
+## `item_id`'s count in the stock of the building covering this tile. 0 for
+## open ground and for a building nothing has been put into.
+func building_stock_at(global_x: int, global_y: int, item_id: String) -> int:
+	var key := _building_stock_key(global_x, global_y)
+	return 0 if key == "" else _structure_stocks.stock_for(key).stock_of(item_id)
+
+
+## Everything the building covering this tile is holding, as item_id -> int
+## -- what the click-a-building readout draws as its Inventory. Empty for
+## open ground.
+func building_inventory_at(global_x: int, global_y: int) -> Dictionary:
+	var key := _building_stock_key(global_x, global_y)
+	return {} if key == "" else (_structure_stocks.stock_for(key).stock as Dictionary).duplicate()
+
+
+## How much room is left in the building covering this tile, across ALL item
+## ids together: a barn is full when it is full, whatever is in it.
+func building_room_at(global_x: int, global_y: int) -> int:
+	var record := building_at_global(global_x, global_y)
+	if record.is_empty():
+		return 0
+	var capacity := BuildingCatalog.storage_capacity_of(String(record["id"]))
+	var held := 0
+	for count in building_inventory_at(global_x, global_y).values():
+		held += int(count)
+	return maxi(capacity - held, 0)
+
+
+## Puts goods into the building covering this tile and returns HOW MANY IT
+## TOOK -- what fits, never more. A partial deposit is the honest answer for
+## a barn with room for three of the five you are carrying, and a full
+## building taking none of it is the pressure that makes hauling matter
+## (docs/concept/building_storage.md pillar 3).
+func deposit_to_building_at(global_x: int, global_y: int, item_id: String, count: int) -> int:
+	if count <= 0 or item_id == "":
+		return 0
+	var key := _building_stock_key(global_x, global_y)
+	if key == "":
+		return 0
+	var taken := mini(count, building_room_at(global_x, global_y))
+	if taken <= 0:
+		return 0
+	_structure_stocks.stock_for(key).add_stock(item_id, taken)
+	return taken
+
+
+## Takes goods out of the building covering this tile. All-or-nothing,
+## mirroring StructureStock.remove_stock itself.
+func withdraw_from_building_at(global_x: int, global_y: int, item_id: String, count: int) -> bool:
+	var key := _building_stock_key(global_x, global_y)
+	return false if key == "" else _structure_stocks.stock_for(key).remove_stock(item_id, count)
+
+
 ## A meal from the village's own stores (docs/concept/milling_and_
 ## baking.md): how far a hungry villager "walks" to eat from a Storage's or
 ## Bakery's own shelf -- their own village, one chunk across, not a
