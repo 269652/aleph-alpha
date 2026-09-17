@@ -2107,10 +2107,35 @@ func _on_graphics_option_changed(setting: String, value: String) -> void:
 ## sharpness back but scales the whole frame's pixel cost with it. The design
 ## size stays the layout reference either way, so the player never sees more
 ## or less of the world for changing this.
+## Keeps the content scale following the window, however the window
+## changed. Reported in play: "the river is clipped to the windows original
+## size when toggling fullscreen" -- the river renders into a SubViewport
+## of its own (RiverFlowPass) sized from how much world the frame shows,
+## which comes from get_viewport_rect().size, which follows the content
+## scale. That scale is computed from the window's size below, and used to
+## be recomputed ONLY when the resolution option changed, so a fullscreen
+## toggle left it describing the old window and the river kept the old
+## frame -- a rectangle of river with the rest of the frame drawn around
+## it.
+##
+## Connected to the window's own size_changed rather than to the fullscreen
+## toggle, because dragging a window's edge and moving it to another
+## monitor are the same problem. Idempotent, and guarded so a World built
+## without a window (an isolated test) simply never connects.
+func _follow_window_resizes(window: Window) -> void:
+	if window == null:
+		return
+	if not window.size_changed.is_connected(_apply_render_resolution):
+		window.size_changed.connect(_apply_render_resolution)
+
+
 func _apply_render_resolution() -> void:
 	var window := get_window()
 	if window == null:
 		return
+	# Setting the content scale and keeping it current are one job: every
+	# path that sets it also starts following the window.
+	_follow_window_resizes(window)
 	if RenderResolution.is_native(_graphics_resolution):
 		window.content_scale_mode = Window.CONTENT_SCALE_MODE_CANVAS_ITEMS
 		window.content_scale_size = Vector2i.ZERO
