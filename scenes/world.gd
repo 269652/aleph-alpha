@@ -10,6 +10,17 @@ const RainOverlay = preload("res://src/rendering/rain_overlay.gd")
 const RiverFlowPass = preload("res://src/rendering/river_flow_pass.gd")
 const NatureSoundscapePlayer = preload("res://src/audio/nature_soundscape_player.gd")
 const AudioSettings = preload("res://src/audio/audio_settings.gd")
+const AudioDiagnostics = preload("res://src/audio/audio_diagnostics.gd")
+const ViewMode = preload("res://src/gameplay/view_mode.gd")
+const BuildPlan = preload("res://src/world/build_plan.gd")
+const BuildPlanLedger = preload("res://src/world/build_plan_ledger.gd")
+const BuildingCatalog = preload("res://src/gameplay/building_catalog.gd")
+const PlanWireframe = preload("res://src/rendering/plan_wireframe.gd")
+const PlanWireframeLayer = preload("res://src/rendering/plan_wireframe_layer.gd")
+const PlanRaising = preload("res://src/gameplay/plan_raising.gd")
+const BuildPlanPersistence = preload("res://src/world/build_plan_persistence.gd")
+const NpcTrustStore = preload("res://src/world/npc_trust_store.gd")
+const WagePayment = preload("res://src/gameplay/wage_payment.gd")
 const InteractionSfxPlayer = preload("res://src/audio/interaction_sfx_player.gd")
 const FootstepSound = preload("res://src/audio/footstep_sound.gd")
 const CreatureCallSound = preload("res://src/audio/creature_call_sound.gd")
@@ -1063,10 +1074,15 @@ func _ready() -> void:
 	_apply_graphics()
 	_load_audio_settings()
 	_apply_audio_volume()
+	_log_audio_diagnostics()
 	_load_simulation_settings()
 	_apply_simulation_settings()
 
 	_build_hotbar_slots()
+	_build_plans = _build_plan_store.load_ledger()
+	_build_plan_wireframes()
+	_build_blueprint_palette()
+	_build_view_mode_toggle()
 	_build_spell_bar()
 	_build_dev_console()
 	_build_inventory_window()
@@ -1340,6 +1356,9 @@ func _wipe_persisted_world() -> void:
 	_world_reset.wipe_directory(EarthChunkManager.MODIFICATIONS_DIR)
 	_world_reset.wipe_directory(EarthChunkManager.PLANTED_TREES_DIR)
 	_world_reset.wipe_directory(EarthChunkManager.FISH_POPULATION_DIR)
+	# Plans are world state like any other, so a new world starts without
+	# the previous one's wireframes standing in it.
+	_build_plan_store.wipe()
 	# Roofs are chunk modifications like any other (the same per-chunk
 	# <x>_<y>.bin shape as MODIFICATIONS_DIR, written by the same building
 	# code) -- they were just added later than the three lines above and
@@ -1762,6 +1781,10 @@ func _on_talk_pressed(local_player: Player) -> void:
 	var npc := _chunk_manager.nearest_npc_near(local_player.position, Player.TALK_RADIUS)
 	if npc == null:
 		return
+	# Getting to know somebody is what earns the right to offer them work
+	# (see NpcTrustStore): three real conversations, never a first meeting.
+	if npc.identity != null:
+		_npc_trust.record_conversation(npc.identity.seed_value)
 	_open_conversation_with(npc, local_player)
 
 
@@ -2187,6 +2210,39 @@ func _on_audio_volume_changed(value: float) -> void:
 	_save_audio_settings()
 
 
+## One line per audio fact in the log at every boot, and a named cause
+## when any of them explains silence (see AudioDiagnostics). Reported
+## live: "The game has no sound anymore... completely mute everywhere, I
+## checked windows settings, the process is not muted" -- a mute has
+## several possible causes here and they are indistinguishable from the
+## player's chair, so this turns one launch into an answer.
+##
+## Placed immediately after _apply_audio_volume(), which is itself after
+## the audio players are added, so ITS OWN ABSENCE from the log is
+## diagnostic too: _ready() returns early at the license gate and at the
+## GitHub identity check, both before any of that, and a boot that took
+## either path prints nothing here at all.
+##
+## Unconditional rather than behind a debug flag: it is a handful of lines
+## once per launch, and a diagnostic a player has to enable first is one
+## they will not have enabled on the launch that went wrong.
+func _log_audio_diagnostics() -> void:
+	var master := AudioServer.get_bus_index("Master")
+	for line in AudioDiagnostics.report_lines({
+		"master_bus_index": master,
+		"master_db": AudioServer.get_bus_volume_db(master) if master >= 0 else 0.0,
+		"master_muted": AudioServer.is_bus_mute(master) if master >= 0 else false,
+		"volume_setting": _audio_volume,
+		"output_device": AudioServer.get_output_device(),
+		"mix_rate_hz": AudioServer.get_mix_rate(),
+		"soundscape_in_tree": _nature_soundscape.root_in_tree(),
+		"sfx_in_tree": _interaction_sfx.root_in_tree(),
+		"missing_streams": AudioDiagnostics.missing_streams(_nature_soundscape.root()),
+		"paused": get_tree().paused,
+	}):
+		print(line)
+
+
 ## Master bus, not a per-layer scale inside NatureSoundscapePlayer --
 ## see _audio_volume's own doc comment for why this belongs to the whole
 ## game rather than to any one system.
@@ -2437,6 +2493,7 @@ func _build_message_stack() -> void:
 	_talk_banner = _make_message_banner(14)
 	_easter_egg_banner = _make_message_banner(14)
 	_cast_banner = _make_message_banner(16)
+	_planner_banner = _make_message_banner(16)
 	# A sighting is an ambient world event rather than something the player
 	# did, and reads in its own cooler ink -- the one per-banner difference.
 	(_easter_egg_banner.get_child(0) as Label).add_theme_color_override(
@@ -3472,6 +3529,26 @@ func _update_creature_panels(local_player: Player, delta: float) -> void:
 func _unhandled_input(event: InputEvent) -> void:
 	if not _world_ready:
 		return
+	# Planner mode's own click: plant the selected blueprint on the cell
+	# under the cursor. Gated on ViewMode.arms_build_cursor rather than on
+	# the mode id directly -- the model owns "is the cursor live", and a
+	# stray left-click while swinging a sword in rpg mode must never plan a
+	# house.
+	if (
+		ViewMode.arms_build_cursor(_view_mode)
+		and event is InputEventMouseButton
+		and event.pressed
+		and event.button_index == MOUSE_BUTTON_LEFT
+	):
+		_plan_blueprint_at(Vector2i((get_global_mouse_position() / TerrainRenderer.TILE_SIZE).floor()))
+		return
+	# ...and the footprint that follows it, coloured by whether it may go
+	# there -- the whole feedback an Anno build cursor gives. Driven from
+	# mouse MOTION rather than from _client_process on purpose: it only
+	# changes when the cursor does, so a per-frame recompute of the same
+	# refusal would be work for nothing on every frame the mouse is still.
+	if event is InputEventMouseMotion:
+		_update_plan_cursor()
 	if event.is_action_pressed(CONSOLE_TOGGLE_ACTION):
 		_dev_console.toggle()
 	elif event.is_action_pressed(INVENTORY_TOGGLE_ACTION):
@@ -3483,7 +3560,13 @@ func _unhandled_input(event: InputEvent) -> void:
 	elif event.is_action_pressed(TALK_ACTION):
 		var talker := _players.get_node_or_null(str(multiplayer.get_unique_id())) as Player
 		if talker != null:
-			_on_talk_pressed(talker)
+			# Standing at a wireframe, the interact key raises it; anywhere
+			# else it still talks. Plan first because a wireframe you are
+			# standing on is unambiguous, while an NPC in talking range is
+			# the commoner case everywhere else -- and _raise_plan_within_
+			# reach reports whether it found one, so nothing is swallowed.
+			if not _raise_plan_within_reach(talker):
+				_on_talk_pressed(talker)
 	elif event.is_action_pressed(SKILLS_TOGGLE_ACTION):
 		_skill_window.toggle()
 		var lp := _players.get_node_or_null(str(multiplayer.get_unique_id())) as Player
@@ -3545,6 +3628,10 @@ func _handle_escape() -> void:
 ## Per slice: cheap, and the things the lapse exists to show.
 ##
 func _step_ecology_batch(delta: float, focus_player: Player) -> void:
+	# Hired builds accrue their hours here, alongside every other slow
+	# world system -- a build in progress is world state, not something
+	# that should only advance while somebody is looking at it.
+	_step_hired_builds()
 	_ecology_focus_player = focus_player
 	if _ecology_steps.is_empty():
 		_ecology_steps = {
@@ -4984,6 +5071,357 @@ func _update_survival_bar(local_player: Player) -> void:
 	var warmth_state := "Freezing" if s.is_freezing() else ("Cold" if s.is_cold() else "Warmth")
 	_warmth_label.text = meter_label_text(warmth_state, s.warmth)
 	_wallet_label.text = "Gold: %d" % local_player.wallet.balance
+
+
+## Which view the player is commanding the world through (see ViewMode,
+## docs/concept/planner_mode.md). RPG mode is the game as it has always
+## been; planner mode swaps the hotbar for a blueprint palette and arms a
+## build cursor over the map.
+var _view_mode: int = ViewMode.DEFAULT
+
+## Every blueprint laid out but not yet built -- the standing wireframes.
+## World state, not screen state (planner_mode.md's pillar 3): they outlive
+## leaving planner mode, because walking back to one later is the point.
+var _build_plans := BuildPlanLedger.new()
+
+## Which blueprint the palette has selected, "" for none.
+var _selected_blueprint := ""
+
+var _view_mode_button: Button
+var _blueprint_palette: PanelContainer
+var _plan_wireframes: PlanWireframeLayer
+
+## Plans on disk. A wireframe is world state (planner_mode.md's pillar 3),
+## so it has to outlive a reload -- walking back to one later is the whole
+## point of planning ahead.
+var _build_plan_store := BuildPlanPersistence.new()
+
+## What each villager thinks of the player -- the live trust value
+## docs/concept/npc_instructions.md named as the reason the hiring path was
+## unreachable in a live game. Keyed by NpcIdentity.seed_value, so it
+## survives a marker despawning with its chunk.
+var _npc_trust := NpcTrustStore.new()
+
+## Builds the player commissioned and paid for: project id -> how many
+## hired villagers are working it. Labour accrues against these every
+## ecology batch, which is how docs/concept/building.md's "hiring returns
+## with construction-over-time" actually happens -- a hired house is
+## WORKED, never spawned.
+var _hired_builds: Dictionary = {}
+
+## When each hired build last had labour added, so elapsed time is measured
+## against the world clock rather than accumulated per frame -- the same
+## "one clock, read it, do not keep a second one" rule step_snow's own doc
+## comment already states.
+var _hired_build_advanced_at: Dictionary = {}
+
+## What the player offers a villager to raise a wireframe, and the least
+## any villager will take. Both are tuned values, so they are pinned by
+## test_the_offered_wage_clears_the_minimum rather than asserted here: an
+## offer that could not clear its own minimum would make hiring refuse for
+## a reason the player can neither see nor fix.
+const BUILDER_WAGE := 5.0
+const BUILDER_MINIMUM_WAGE := 1.0
+var _planner_banner: PanelContainer
+
+
+## Whatever planner mode last had to say -- a refusal with its reason, or a
+## confirmation. Uses the existing message stack rather than a banner of
+## its own design, so it is legible over any terrain like every other
+## message (docs/concept/hud.md's pillar 1).
+func _show_planner_message(message: String) -> void:
+	if _planner_banner != null:
+		_set_message_banner(_planner_banner, message)
+
+
+## The standing wireframes, in WORLD space -- a child of World itself
+## rather than of $UI, because a plan is a thing standing on the ground
+## (planner_mode.md's pillar 3), not an overlay drawn on the screen. It
+## therefore scrolls with the map and survives leaving planner mode, which
+## is the whole point of being able to walk back to one.
+func _build_plan_wireframes() -> void:
+	_plan_wireframes = PlanWireframeLayer.new()
+	_plan_wireframes.configure(_build_plans, EarthChunkManager.CHUNK_SIZE, TerrainRenderer.TILE_SIZE)
+	add_child(_plan_wireframes)
+
+
+## The blueprint palette: planner mode's own controls, where the hotbar
+## sits in rpg mode. One button per thing the game can already raise --
+## pavement plus the real BuildingCatalog, never a parallel list that could
+## drift from what is actually buildable (planner_mode.md's "one
+## vocabulary").
+func _build_blueprint_palette() -> void:
+	_blueprint_palette = PanelContainer.new()
+	_blueprint_palette.theme = _ui_theme
+	_blueprint_palette.set_anchors_preset(Control.PRESET_CENTER_BOTTOM)
+	_blueprint_palette.offset_left = -260.0
+	_blueprint_palette.offset_right = 260.0
+	_blueprint_palette.offset_top = -96.0
+	_blueprint_palette.offset_bottom = -8.0
+	_ui.add_child(_blueprint_palette)
+
+	var row := HBoxContainer.new()
+	row.add_theme_constant_override("separation", 4)
+	_blueprint_palette.add_child(row)
+	for blueprint_id in _palette_blueprint_ids():
+		var button := Button.new()
+		button.theme = _ui_theme
+		button.text = BuildPlan.display_name_of(blueprint_id)
+		button.toggle_mode = true
+		button.pressed.connect(_on_blueprint_selected.bind(blueprint_id))
+		row.add_child(button)
+	_blueprint_palette.visible = false
+
+
+## Pavement first (the cheapest, most-used thing a player lays), then every
+## real catalog building. Read from BuildingCatalog rather than listed here
+## so a building added to the game shows up in the palette for free.
+func _palette_blueprint_ids() -> Array[String]:
+	var ids: Array[String] = [BuildPlan.PAVEMENT_BLUEPRINT_ID]
+	for building_id in BuildingCatalog.BUILDING_IDS:
+		ids.append(building_id)
+	for building_id in BuildingCatalog.PRODUCTION_BUILDING_IDS:
+		ids.append(building_id)
+	for building_id in BuildingCatalog.CIVIC_BUILDING_IDS:
+		ids.append(building_id)
+	return ids
+
+
+func _on_blueprint_selected(blueprint_id: String) -> void:
+	_selected_blueprint = blueprint_id
+	_show_planner_message("%s selected -- click the map to plan it." % BuildPlan.display_name_of(blueprint_id))
+	_update_plan_cursor()
+
+
+
+
+## The mode toggle, top-right and immediately LEFT of the minimap -- asked
+## directly: "a view toggle to the top besides the minimap". $UI/Minimap
+## owns offset_left -170 .. -8 of that corner, so beside it means clearing
+## -170; under it is already taken by the karma card (offset_top 178).
+##
+## A themed card rather than a bare Button, per docs/concept/hud.md's own
+## pillar 1: which mode you are in carries meaning, and nothing that
+## carries meaning may be drawn as bare text over the world.
+func _build_view_mode_toggle() -> void:
+	var panel := PanelContainer.new()
+	panel.theme = _ui_theme
+	panel.set_anchors_preset(Control.PRESET_TOP_RIGHT)
+	panel.offset_left = -300.0
+	panel.offset_top = 8.0
+	panel.offset_right = -178.0
+	panel.offset_bottom = 40.0
+	_ui.add_child(panel)
+
+	_view_mode_button = Button.new()
+	_view_mode_button.theme = _ui_theme
+	_view_mode_button.pressed.connect(_toggle_view_mode)
+	panel.add_child(_view_mode_button)
+	_apply_view_mode()
+
+
+## Flips the mode. Deliberately does NOT touch get_tree().paused: planner
+## mode changes what the player COMMANDS, never what the world DOES
+## (planner_mode.md's pillar 4) -- time runs, creatures walk and weather
+## turns while you lay a settlement out, unlike the settings overlay which
+## really is a pause screen.
+func _toggle_view_mode() -> void:
+	_view_mode = ViewMode.toggled(_view_mode)
+	_apply_view_mode()
+
+
+## Shows whatever the mode owns. Every answer is READ from ViewMode rather
+## than decided again here: a second `if` over the same two cases is how a
+## tested model and the real HUD drift apart.
+func _apply_view_mode() -> void:
+	if _view_mode_button != null:
+		_view_mode_button.text = ViewMode.toggle_label(_view_mode)
+	if _hotbar != null:
+		_hotbar.visible = ViewMode.shows_hotbar(_view_mode)
+	if _blueprint_palette != null:
+		_blueprint_palette.visible = ViewMode.shows_palette(_view_mode)
+	if not ViewMode.shows_palette(_view_mode):
+		_selected_blueprint = ""
+	_update_plan_cursor()
+
+
+## Redraws the footprint under the cursor, or clears it when planner mode
+## is not showing one.
+##
+## The colour comes from the ledger's OWN refusal reason rather than from a
+## second legality check (see PlanWireframe.cursor_color), so what the
+## cursor shows and what the message would say can never disagree.
+func _update_plan_cursor() -> void:
+	if _plan_wireframes == null:
+		return
+	if not ViewMode.arms_build_cursor(_view_mode) or _selected_blueprint.is_empty():
+		_plan_wireframes.clear_cursor()
+		return
+	var cell := Vector2i((get_global_mouse_position() / TerrainRenderer.TILE_SIZE).floor())
+	var chunk_coord := _chunk_manager.chunk_coord_for_tile(cell)
+	var origin := cell - chunk_coord * EarthChunkManager.CHUNK_SIZE
+	_plan_wireframes.set_cursor(
+		PlanWireframe.world_rect(BuildPlan.footprint_cells(_selected_blueprint, cell), TerrainRenderer.TILE_SIZE),
+		_build_plans.refusal_reason(chunk_coord, origin, _selected_blueprint, _plan_ground_is_buildable)
+	)
+
+
+## Raises the wireframe the player is standing at, if there is one.
+##
+## This is where planner_mode.md's pillar 1 pays out: planning charged
+## nothing, and the building's own REAL catalog cost -- the same numbers a
+## village pays for the same building -- falls here, at the moment somebody
+## actually builds. A player who cannot afford it is told what they are
+## short of rather than silently refused.
+func _raise_plan_within_reach(builder: Player) -> bool:
+	if _plan_wireframes == null or builder == null:
+		return false
+	var player_cell := Vector2i((builder.position / TerrainRenderer.TILE_SIZE).floor())
+	var plan = PlanRaising.plan_within_reach(_build_plans, player_cell, EarthChunkManager.CHUNK_SIZE)
+	if plan == null:
+		return false
+	# Somebody you know well enough, standing close enough to take the job,
+	# is offered it first: hiring is the whole point of walking up to a
+	# wireframe with a villager beside you, and it does not ask the player
+	# to carry the materials themselves.
+	var hired := _chunk_manager.nearest_npc_near(builder.position, Player.TALK_RADIUS)
+	if hired != null and hired.identity != null and PlanRaising.can_hire_builder(
+		_npc_trust.trust_of(hired.identity.seed_value), BUILDER_WAGE, BUILDER_MINIMUM_WAGE
+	):
+		# The wage really moves before the job is taken: a villager who was
+		# never paid must not end up working, and a player who cannot afford
+		# the wage is told so rather than silently getting free labour.
+		if not WagePayment.pay(
+			builder.wallet,
+			_chunk_manager.household_wallet_for_villager(hired.identity.seed_value),
+			int(BUILDER_WAGE)
+		):
+			_show_planner_message("You cannot pay %s the %d gold they want for this." % [
+				hired.identity.npc_name, int(BUILDER_WAGE)
+			])
+			return true
+		var project = _open_raising_project(plan, PlanRaising.Labour.HIRED)
+		if project != null:
+			_hired_builds[project.id] = 1.0
+			_hired_build_advanced_at[project.id] = _chunk_manager.world_age_seconds()
+		_show_planner_message("%s takes the job for %d gold: %s." % [
+			hired.identity.npc_name, int(BUILDER_WAGE), BuildPlan.display_name_of(plan.blueprint_id)
+		])
+		return true
+	var missing: Dictionary = PlanRaising.missing_materials(plan.blueprint_id, _carried_counts(builder, plan.blueprint_id))
+	if not missing.is_empty():
+		var shortfall: Array[String] = []
+		for item_id in missing:
+			shortfall.append("%s x%d" % [item_id, missing[item_id]])
+		_show_planner_message("Need %s to raise this %s." % [
+			", ".join(shortfall), BuildPlan.display_name_of(plan.blueprint_id)
+		])
+		return true
+	_open_raising_project(plan, PlanRaising.Labour.PLAYER)
+	_show_planner_message("Raising %s yourself." % BuildPlan.display_name_of(plan.blueprint_id))
+	return true
+
+
+## Opens the real ConstructionProject behind a raised wireframe, and takes
+## the wireframe down.
+##
+## Both ways of raising land here (planner_mode.md's pillar 5: they are the
+## same construction paid for differently), through the SAME
+## ConstructionProjectStore.start_project every village build already uses
+## -- a player-raised building must be the same kind of project a
+## villager-raised one is, not a parallel one. start_project is idempotent
+## by site, so this cannot reset a project already under way.
+func _open_raising_project(plan, labour: int):
+	var request: Dictionary = PlanRaising.raising_request(plan, labour)
+	# A hired build is under way from the moment somebody takes the job;
+	# advance_project_labor only advances an IN_PROGRESS project, so a hired
+	# one left PLANNED would silently never progress.
+	var project = (
+		_chunk_manager.begin_hired_build_project(
+			request["chunk_coord"], request["origin"], request["blueprint_id"], ""
+		)
+		if labour == PlanRaising.Labour.HIRED
+		else _chunk_manager.start_build_project(
+			request["chunk_coord"], request["origin"], request["blueprint_id"], ""
+		)
+	)
+	# The wireframe has become a real project, so the plan that stood for it
+	# is done -- leaving it would draw a blueprint over its own building.
+	_build_plans.cancel(plan.id)
+	_build_plan_store.save(_build_plans)
+	if _plan_wireframes != null:
+		_plan_wireframes.refresh()
+	return project
+
+
+## Adds the hours a hired villager put in since this build was last looked
+## at, and reports the ones that finished.
+##
+## Measured against the world clock rather than accumulated per frame: one
+## clock, read it, never keep a second one that has to be kept in step --
+## the rule step_snow's own doc comment already states, and the reason a
+## /season leap does not leave a half-built house frozen.
+func _step_hired_builds() -> void:
+	if _hired_builds.is_empty():
+		return
+	var now: float = _chunk_manager.world_age_seconds()
+	for project_id in _hired_builds.keys():
+		var since: float = now - float(_hired_build_advanced_at.get(project_id, now))
+		_hired_build_advanced_at[project_id] = now
+		var outcome: Dictionary = _chunk_manager.advance_hired_build(
+			project_id, since, float(_hired_builds[project_id])
+		)
+		if outcome.get("action", "") == "completed":
+			_hired_builds.erase(project_id)
+			_hired_build_advanced_at.erase(project_id)
+			_show_planner_message("The builders are finished.")
+
+
+## What the builder is carrying, item id -> count, in the shape
+## PlanRaising.missing_materials expects. Asked per material the blueprint
+## actually needs (Inventory.count_of) rather than by walking every stack:
+## a cost names two or three items, and an inventory holds far more.
+func _carried_counts(builder: Player, blueprint_id: String) -> Dictionary:
+	var counts: Dictionary = {}
+	for item_id in BuildingCatalog.cost_of(blueprint_id):
+		counts[item_id] = builder.inventory.count_of(item_id)
+	return counts
+
+
+## Whether this global cell is ground a blueprint may stand on. The world's
+## OWN real answer, handed to the ledger as a Callable exactly as
+## BuildingPlacement takes one -- water and cliff rules belong here, with
+## the world, not in the rules of construction.
+func _plan_ground_is_buildable(global_cell: Vector2i) -> bool:
+	return _chunk_manager.is_buildable_terrain_at(global_cell.x, global_cell.y)
+
+
+## Lays the selected blueprint down at a global cell, or shows why it may
+## not go there.
+##
+## Plants an INTENTION and nothing else (planner_mode.md's pillar 1):
+## no terrain is written, no material is spent, no project is started --
+## all of that falls when somebody actually raises the wireframe, which is
+## what keeps planner mode from being a second, cheaper way to build.
+func _plan_blueprint_at(global_cell: Vector2i) -> void:
+	if _selected_blueprint.is_empty():
+		return
+	var chunk_coord := _chunk_manager.chunk_coord_for_tile(global_cell)
+	var origin := global_cell - chunk_coord * EarthChunkManager.CHUNK_SIZE
+	var refusal := _build_plans.refusal_reason(
+		chunk_coord, origin, _selected_blueprint, _plan_ground_is_buildable
+	)
+	if not refusal.is_empty():
+		_show_planner_message(refusal)
+		return
+	_build_plans.plan(
+		chunk_coord, origin, _selected_blueprint, _chunk_manager.world_age_seconds(),
+		_plan_ground_is_buildable
+	)
+	_show_planner_message("%s planned." % BuildPlan.display_name_of(_selected_blueprint))
+	_build_plan_store.save(_build_plans)
+	if _plan_wireframes != null:
+		_plan_wireframes.refresh()
 
 
 ## Builds HOTBAR_SLOT_COUNT empty slot backgrounds once; _update_hotbar fills

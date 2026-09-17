@@ -17465,6 +17465,59 @@ func _restore_growing_juveniles(chunk_coord: Vector2i) -> void:
 		_loaded_creatures[chunk_coord].append(creature)
 
 
+## The chunk a global tile falls in. A public wrapper over the private
+## helper below rather than a second copy of the same floor division --
+## planner mode needs it to turn a clicked world cell into a
+## chunk+local-origin site (see BuildPlan), and duplicating the arithmetic
+## in World is exactly how two answers to one question drift apart.
+## Advances a player-commissioned build by real elapsed time, and completes
+## it when the hours are in.
+##
+## `builder_count` is how many people are working it -- the same capacity
+## shape ConstructionCatchup reads everywhere else (8 hours per builder per
+## in-game day), so a hired villager earns exactly what a settlement's own
+## spare hand does rather than on a private schedule.
+##
+## This is what docs/concept/building.md means by retiring the instant hire
+## fork: "a build the player cannot do themselves says that hiring returns
+## with construction-over-time". A hired house is not spawned; it is worked.
+func advance_hired_build(project_id: String, elapsed_seconds: float, builder_count: float) -> Dictionary:
+	return _construction_project_store.advance_project_labor(
+		project_id, elapsed_seconds, {"builder_count": builder_count}, _recipe_book, _household_store
+	)
+
+
+## Opens (or returns) a real construction project for a site the PLAYER
+## chose, rather than one a settlement decided on its own.
+##
+## The same ConstructionProjectStore.start_project every village build
+## already goes through -- idempotent by site+blueprint, so raising a
+## wireframe twice does not reset the progress of the first. Exposed
+## because planner mode (docs/concept/planner_mode.md) lets a player raise
+## a plan, and a player-raised building must be the same kind of project a
+## villager-raised one is, not a parallel one.
+func start_build_project(
+	chunk_coord: Vector2i, origin: Vector2i, blueprint_id: String, household_id: String
+) -> ConstructionProject:
+	return _construction_project_store.start_project(chunk_coord, origin, blueprint_id, household_id)
+
+
+## The same project, already under way -- what a HIRED build opens, because
+## somebody is working it from the moment they take the job.
+## advance_project_labor only advances an IN_PROGRESS project, so a hired
+## build that stayed PLANNED would silently never progress.
+func begin_hired_build_project(
+	chunk_coord: Vector2i, origin: Vector2i, blueprint_id: String, household_id: String
+) -> ConstructionProject:
+	var project := start_build_project(chunk_coord, origin, blueprint_id, household_id)
+	project.status = ConstructionProject.Status.IN_PROGRESS
+	return project
+
+
+func chunk_coord_for_tile(global_tile: Vector2i) -> Vector2i:
+	return _chunk_coord_for_tile(global_tile)
+
+
 func _chunk_coord_for_tile(global_tile: Vector2i) -> Vector2i:
 	return Vector2i(
 		floori(float(global_tile.x) / CHUNK_SIZE), floori(float(global_tile.y) / CHUNK_SIZE)
