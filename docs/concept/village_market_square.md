@@ -1,0 +1,133 @@
+# The village market square
+
+*Reported live with a stand in shot, pitched in long grass well off the
+paving:*
+
+> the market stands should only be put up when an NPC stands behind them to
+> sell goods ... also the stand should clear long grass around it and be
+> placed on the plaza anyways
+
+Both halves of that were one bug, and the bug was that a market stand was
+never a market at all. A merchant's stand was pitched two tiles south of
+that merchant's own front door, out in the meadow — and *nobody ever stood
+behind one*, because `NpcMarker._resolve_location` sends every merchant to
+`landmarks["stall"]`, the square's single stall. A stand a player walked
+past was decoration by construction.
+
+## Design pillars
+
+- **A market is where the market is.** A stand is a cell OF the village
+  square ([village_growth.md](village_growth.md)'s street-village
+  grounding: *"a widened square at the middle carrying the well, the market
+  stall and the civic building"*), not a prop beside somebody's house. The
+  square already exists, is already paved, and is already where a villager's
+  schedule sends them to trade.
+- **A stand is furniture, not architecture.** A trestle and a board are
+  carried out in the morning, stood up for as long as there is somebody
+  behind them, and taken in again. An empty square at night has no stalls on
+  it — which is exactly what makes a market read as a market rather than as
+  scenery.
+- **One trader, one stand.** Several merchants in one village are several
+  villagers who each trade, not one shop — the same reason the personal
+  stand existed in the first place. What changes is *where*: side by side on
+  the square, the way a real market row works.
+- **No second mechanism for the grass.** The square is paved, paving is a
+  built surface, and every ground-cover sim in the chunk already clears and
+  keeps clearing a built surface. Siting a stand on the square IS clearing
+  the long grass around it.
+
+## Real-world grounding
+
+A medieval market is a *place* before it is a building: a widened street or
+a square, held on market days, with traders' trestles set up in rows across
+paving that exists precisely so the ground does not turn to mud. The stalls
+themselves are demountable — that is what a "stall" was — and the square is
+empty between markets. Permanent market *halls* are a later and much richer
+settlement's answer; a village of five households has boards and trestles.
+
+## Mechanism
+
+### Where the stands are
+
+`VillageLayout.market_stand_cells(skeleton, count)` walks **west from the
+square's own stall** along the plaza's southern row, `MARKET_STAND_PITCH_
+TILES` (2) apart so a shopper can walk between two stalls and two stands
+never read as one long counter.
+
+- The square's own `stall` landmark is always the **first** stand, so the
+  one canonical trading spot a schedule, a quest or a dialogue can name by
+  tag is a real stand somebody works, rather than a fourth thing standing
+  beside three others.
+- The well is skipped: it is on the square too, and a stall pitched in it
+  would be a stall in the water.
+- It returns **what fits**. A village with more merchants than its square
+  has room for leaves the rest trading at the square's own spot — the same
+  honest shortfall [village_farms.md](village_farms.md) already accepts for
+  a village with more farmers than farmhouse plots.
+- Pure and seedless. The square already IS a seeded function of the chunk,
+  so nothing about a market needs persisting to come back identically.
+
+`VillageRenderer._market_stand_positions` then filters those cells against
+what is **really paved** (`modification_at_global` → `is_road_tile`), rather
+than against the plan: a village whose square never got laid (nowhere dry
+for one, see `VillageLayout.plaza_x0_for`) has no market to pitch, and a
+stand on bare ground is the thing this replaced.
+
+### When a stand is up
+
+`NpcMarker.stand_is_up(is_working, distance, reach)` — its trader is on the
+clock **and** within `STAND_REACH_TILES` (one tile) of it. Both halves
+matter: a merchant passing their own stand on the way home at night is not
+selling from it.
+
+The marker drives it, because the marker is the only thing that knows where
+its trader is standing this frame — no per-frame group scan, no polling, one
+distance check per merchant. A stand is taken in the moment it is handed
+over (`market_stand`'s own setter), so a village loading at night never
+flashes its whole market up for the frame before the first `_process`.
+
+### Who trades at which
+
+`VillageRenderer` hands merchant *i* the *i*-th stand and gives that marker
+a **copy** of the settlement's landmark dictionary with `stall` pointing at
+their own stand — overriding the shared dictionary in place would send every
+villager in the village to one merchant's trestle.
+
+## Status
+
+- ✅ **Every stand is a cell of the square**, filtered against real paving.
+  `test_every_market_stand_stands_on_the_village_square`,
+  `test_a_market_stand_stands_on_the_villages_own_paving`.
+- ✅ **A stand is up only while its trader is behind it**, and starts taken
+  in. `test_npc_marker_market_stand.gd` 7/7,
+  `test_a_freshly_spawned_market_stand_is_taken_in`.
+- ✅ **One stand per merchant, each trading at their own.**
+  `test_each_merchant_trades_at_a_stand_of_their_own`,
+  `test_a_village_pitches_one_stand_per_merchant_and_no_more`.
+- ✅ **A village nobody trades in has no market.**
+  `test_a_village_with_no_merchant_pitches_no_market_stand` — which is the
+  point of the whole change: a stand with nobody behind it should not be
+  standing.
+- ✅ **The long grass is gone because the square is paved**, not because a
+  stand carries a clearing rule of its own. `EarthChunkManager.
+  _is_built_surface` covers road tiles and `_block_ground_cover_on_cells` is
+  what clears and keeps clearing them, for tall grass, flowers, scrub and
+  lichen alike.
+- ✅ **A stall is 2 tiles wide**, not 3.25 — reported separately ("the
+  stands are way too big") and pinned by
+  `test_a_stall_is_two_tiles_wide_not_wider_than_a_cottage`.
+
+Honest gaps, each real:
+
+- 🚧 **A stand is up or down, never being set up.** There is no carrying-out
+  animation and no goods on the boards: the sprite appears when its trader
+  arrives and vanishes when they leave. What a stand is *selling* is the
+  village market's stock (`VillageMarket`), which nothing draws on the
+  trestle.
+- 🚧 **Stands are a single row.** `market_stand_cells` only ever walks the
+  plaza's southern row, so a village with more merchants than that row holds
+  runs out of stands while the square still has empty rows. A second row would
+  need a rule for which side of it a trader stands on.
+- 🚧 **A player cannot buy at a stand.** Trading with a village is
+  `Player.sell_food_to_village` and the dialogue/market path; standing in
+  front of a merchant's trestle is not yet a way in.

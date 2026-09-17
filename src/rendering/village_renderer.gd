@@ -291,7 +291,21 @@ func spawn_village(
 	# already claimed for its beds, and the beds are only known once
 	# _fenced_farm_fields has worked them out.
 	var fisher_ponds := _dig_fisher_ponds_if_missing(chunk_coord, chunk_size, world)
+	# Where this village's market really is: cells OF its square, one per
+	# merchant (see VillageLayout.market_stand_cells). Worked out before the
+	# landmark loop because the square's own stall IS the first of them --
+	# it is pitched with the rest below and only while somebody is behind
+	# it, rather than standing empty on the paving for ever.
+	var merchant_indices: Array[int] = []
+	for i in npcs.size():
+		if npcs[i].occupation == "merchant":
+			merchant_indices.append(i)
+	var market_stands := _market_stand_positions(
+		chunk_coord, chunk_size, tile_size, world, merchant_indices.size()
+	)
 	for landmark_id in settlement.landmarks:
+		if landmark_id == "stall":
+			continue  # pitched with the market below, and only when tended
 		spawned.append(_build_landmark(landmark_id, settlement.landmarks[landmark_id], parent))
 	for i in npcs.size():
 		var workspot = _grounded_position(
@@ -302,15 +316,33 @@ func spawn_village(
 		)
 		spawned.append(npc_marker)
 		npc_markers.append(npc_marker)
-		# A merchant gets a second, PERSONAL trading stand at their own house,
-		# on top of the one shared village-square stall -- otherwise every
-		# merchant in the village routes to the same single stall, which reads
-		# as one shop rather than several villagers who each trade (see
-		# docs/concept/npc.md).
-		if npcs[i].occupation == "merchant":
-			var stand = _grounded_position(stand_positions[i], tile_size, world, false)
-			if stand != null:
-				spawned.append(_build_landmark("stall", stand, parent, true))
+		# A merchant trades at their OWN stand, on the village square (see
+		# docs/concept/village_market_square.md). Reported live with a stand
+		# in shot, pitched in long grass well off the paving: "the market
+		# stands should only be put up when an NPC stands behind them to
+		# sell goods ... also the stand should ... be placed on the plaza
+		# anyways". Both halves were one bug -- a personal stand used to be
+		# pitched two tiles south of that merchant's own front door, out in
+		# the meadow, and nobody ever stood behind it because
+		# NpcMarker._resolve_location sends every merchant to
+		# landmarks["stall"], the square's single stall.
+		#
+		# A merchant with no stand (a square with less room than the village
+		# has merchants) keeps trading at the square's own spot, which is
+		# the same honest shortfall a village with more farmers than
+		# farmhouse plots already accepts.
+		var stand_slot := merchant_indices.find(i)
+		if stand_slot >= 0 and stand_slot < market_stands.size():
+			var stand_position: Vector2 = market_stands[stand_slot]
+			var stand := _build_landmark("stall", stand_position, parent, true)
+			spawned.append(stand)
+			# A COPY, not the settlement's shared dictionary: overriding the
+			# tag in place would send every villager in the village to this
+			# one merchant's trestle.
+			var own_landmarks: Dictionary = settlement.landmarks.duplicate()
+			own_landmarks["stall"] = stand_position
+			npc_marker.landmarks = own_landmarks
+			npc_marker.market_stand = stand
 		# Every OTHER occupation whose own work location isn't already one of
 		# the settlement's 3 shared landmarks (merchant/stall and guard/gate
 		# both already have something real there) gets a real prop of their
@@ -723,6 +755,46 @@ func _close_short_street_gaps(chunk_coord: Vector2i, chunk_size: int, world) -> 
 	):
 		var g: Vector2i = chunk_coord * chunk_size + cell
 		world.build_at_global(g.x, g.y, TerrainRenderer.ROAD_TILE_ID)
+
+
+## Where this village's market stands stand, in world pixels -- `count` of
+## them, on the square's own paved cells (see VillageLayout.
+## market_stand_cells and docs/concept/village_market_square.md).
+##
+## Filtered against what is REALLY paved rather than against the plan: a
+## village whose square never got laid (nowhere dry for one, see
+## VillageLayout.plaza_x0_for) has no market to pitch, and a stand on bare
+## ground is exactly the thing this replaced. That filter is also the whole
+## of "clear the long grass around it": paving is a built surface
+## (EarthChunkManager._is_built_surface), and every ground-cover sim in the
+## chunk blocks a built surface, so a stand on the square's own stones has
+## no tall grass, flowers, scrub or lichen under it or beside it -- with no
+## second clearing mechanism of its own to keep in step.
+##
+## A world that cannot answer (an isolated rendering test with no paving at
+## all) keeps every planned cell, the same duck-typed fail-open shape every
+## other world hook in this file uses.
+func _market_stand_positions(
+	chunk_coord: Vector2i, chunk_size: int, tile_size: int, world, count: int
+) -> Array[Vector2]:
+	var positions: Array[Vector2] = []
+	# No world means no paving and so no square to pitch a market on -- and
+	# _bones cannot even be asked, since the skeleton's own siting predicate
+	# reads the ground. Same guard every other world-reading step here has.
+	if count <= 0 or world == null:
+		return positions
+	var cells: Array = VillageLayout.market_stand_cells(_bones(chunk_coord, chunk_size, world), count)
+	var can_ask: bool = world != null and world.has_method("modification_at_global")
+	for cell in cells:
+		var global_cell: Vector2i = chunk_coord * chunk_size + cell
+		if can_ask and not TerrainRenderer.is_road_tile(
+			world.modification_at_global(global_cell.x, global_cell.y)
+		):
+			continue
+		positions.append(
+			Vector2((global_cell.x + 0.5) * tile_size, (global_cell.y + 0.5) * tile_size)
+		)
+	return positions
 
 
 ## Every farmhouse's own field, worked out and FENCED (docs/concept/
