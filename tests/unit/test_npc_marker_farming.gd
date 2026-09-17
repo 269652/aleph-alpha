@@ -422,3 +422,42 @@ func test_the_cap_is_exactly_the_field_a_farmhouse_is_sited_for():
 			"a farmhouse raised for ground it may not then work would be a contradiction"
 		)
 
+
+
+# -- a farmer is never dragged off their own field --------------------------
+#
+# Reported in play: "No crops (wheat) grow and get harvested.. it plants then
+# nothing happens it worked before". Caused by the needs layer
+# (docs/concept/npc_social_life.md): _step_farm returns null BETWEEN actions
+# -- while seeking, and during the re-commit pause -- and in exactly those
+# frames the villager read as free, so thirst (which crosses its threshold
+# every ~16s) walked them to the well. They planted, left, and the bed
+# withered before they came back.
+
+
+func test_a_farmer_between_two_beds_is_still_at_work():
+	_give_a_field()
+	marker.economy.needs.set_level("thirst", 1.0)
+	# Mid-job but with nothing to walk to this instant: exactly the frame
+	# that used to read as idle.
+	marker._step_farm(0.1, true)
+	assert_true(marker.is_on_real_work(), "a farmer working a field is at work every frame of it")
+	assert_null(
+		marker._step_needs(0.1, not marker.is_on_real_work()),
+		"and is not sent to the well from the middle of their own field"
+	)
+
+
+## The regression itself, end to end: a thirsty farmer with a real field
+## keeps working it instead of walking away. The well is deliberately in the
+## opposite direction from the field, so "walked off" is unambiguous.
+func test_a_thirsty_farmer_keeps_farming():
+	_give_a_field()
+	marker.landmarks = {"well": HOME + Vector2(600, 0), "stall": WORKSPOT, "gate": WORKSPOT}
+	marker.economy.needs.set_level("thirst", 1.0)
+	_run(12.0)
+	assert_gt(
+		marker.position.distance_to(marker.landmarks["well"]), 400.0,
+		"a thirsty farmer with a field to work does not walk off to the well"
+	)
+	assert_gt(world.plots.size(), 0, "and really got beds planted while they were at it")
