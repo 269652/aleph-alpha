@@ -202,12 +202,7 @@ static func _plaza_is_dry(plaza_x0: int, street_y: int, is_dry: Callable) -> boo
 ## did; pass it and the square slides clear of water rather than not
 ## existing. Every caller that can answer it MUST pass the same one, or
 ## two of them derive two different squares for the same village.
-## TEMPORARY PROBE -- remove with the instrumentation in VillageRenderer.
-static var probe_skeleton_calls := 0
-
-
 static func skeleton(chunk_size: int, seed_value: int, is_dry := Callable()) -> Dictionary:
-	probe_skeleton_calls += 1
 	var street_y := chunk_size / 2
 	var street_x0 := _EDGE_MARGIN_TILES + PixelNoise.range_index(seed_value, 0, 0, _START_JITTER_TILES)
 	var street_x1 := chunk_size - _EDGE_MARGIN_TILES - 1

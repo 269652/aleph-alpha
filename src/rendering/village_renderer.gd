@@ -182,8 +182,6 @@ func spawn_village(
 	# Stays empty when there is no world or no real placement happened.
 	var plots: Array = []
 
-	var _probe_t0 := Time.get_ticks_msec()
-	var _probe_skel0: int = VillageLayout.probe_skeleton_calls
 	if world != null and world.has_method("place_building"):
 		# NPCs/landmarks/market are never persisted (see this function's
 		# own doc comment: "a chunk reload regenerates an empty market"),
@@ -280,11 +278,8 @@ func spawn_village(
 	# in a street row into a short one -- and before the first rail, so a
 	# hole that becomes paving is a gate rather than somewhere a fence is
 	# then laid across the road.
-	var _t2 := Time.get_ticks_msec()
 	_close_short_street_gaps(chunk_coord, chunk_size, world)
-	print("PROBE close_gaps=%dms" % [Time.get_ticks_msec() - _t2]); _t2 = Time.get_ticks_msec()
 	var farm_fields := _fenced_farm_fields(chunk_coord, chunk_size, world)
-	print("PROBE fenced_fields=%dms" % [Time.get_ticks_msec() - _t2])
 	for landmark_id in settlement.landmarks:
 		spawned.append(_build_landmark(landmark_id, settlement.landmarks[landmark_id], parent))
 	for i in npcs.size():
@@ -318,13 +313,6 @@ func spawn_village(
 		if work_tag != "" and not settlement.landmarks.has(work_tag) and workspot != null:
 			spawned.append(_build_landmark(work_tag, workspot, parent, true))
 	_hand_out_farm_fields(npcs, npc_markers, farm_fields)
-	print("PROBE spawn_village total=%dms skeleton_calls=%d layout_passes=%d predicate_calls=%d plots=%d" % [
-		Time.get_ticks_msec() - _probe_t0,
-		VillageLayout.probe_skeleton_calls - _probe_skel0,
-		VillageLayout.probe_layout_passes,
-		VillageLayout.probe_predicate_calls,
-		plots.size(),
-	])
 	return spawned
 
 
@@ -347,9 +335,7 @@ func _place_new_village(
 	var layout_seed := VillageLayout.seed_for(chunk_coord)
 	var is_buildable := _is_buildable_local(chunk_coord, chunk_size, world)
 	var is_occupied := _is_occupied_local(chunk_coord, chunk_size, world)
-	var _probe_layout_t0 := Time.get_ticks_msec()
 	var result := _village_layout.layout(building_ids, chunk_size, layout_seed, is_buildable, is_occupied)
-	print("PROBE layout=%dms" % [Time.get_ticks_msec() - _probe_layout_t0])
 	# EVERY villager, not merely one. Asked for directly: "They should only
 	# settle where there's enough space and the square wins; houses should
 	# just be moved further away connected by streets". The layout already
@@ -413,15 +399,10 @@ func _place_new_village(
 	# street_on_road, which no stub-world test could see -- StubWorld's
 	# build_at_global records road cells into a different dict from the one
 	# modification_at_global reads, so the two never collide there.
-	var _t := Time.get_ticks_msec()
 	_place_warehouse_if_missing(chunk_coord, chunk_size, world)
-	print("PROBE warehouse=%dms" % [Time.get_ticks_msec() - _t]); _t = Time.get_ticks_msec()
 	_place_industry_if_missing(chunk_coord, chunk_size, world)
-	print("PROBE industry=%dms" % [Time.get_ticks_msec() - _t]); _t = Time.get_ticks_msec()
 	_place_civic_if_missing(chunk_coord, chunk_size, world)
-	print("PROBE civic=%dms" % [Time.get_ticks_msec() - _t]); _t = Time.get_ticks_msec()
 	_place_farms_if_missing(chunk_coord, chunk_size, npcs, world)
-	print("PROBE farms=%dms" % [Time.get_ticks_msec() - _t])
 	return true
 
 
