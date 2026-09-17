@@ -151,11 +151,31 @@ each slice lands.
   nothing in it — while an empty barn still shows, because "nothing in it
   right now" is worth reading. Opens on Household, so the readout's own
   answer to "who lives here" stays first. `test_house_panel.gd` 23/23.
-- ⬜ **Production stockpiles into its own building** rather than teleporting
-  into the settlement market.
+- 🚧 **Production stockpiles into its own building.** A farmer's harvest goes
+  into the farmhouse they cut it for (`NpcMarker.workplace_origin`, set by
+  `VillageRenderer` when it hands out fields), and the villager is paid at the
+  scythe either way — pillar 5, which is what keeps the famine chain intact
+  while goods stop teleporting. `NpcEconomy.record_stored_harvest` pays
+  without crediting the market, because goods in the barn added to the market
+  as well would be one harvest counted twice.
+
+  **Interim rule, deliberate:** whatever will not FIT still reaches the
+  market. A full barn that swallowed the harvest would starve a village for
+  want of a cart, and hauling is what will empty it. Until then the barn
+  fills first and the surplus goes where it always went.
+
+  Still only the farmhouse: the sawmill has no worker to produce anything
+  (see below), and a villager's own goods do not yet go home.
 - ⬜ **Workers haul loads to the warehouse**, and that is what feeds the
   market.
 - ⬜ **A villager's own goods live in their house.**
+- ⬜ **The sawmill produces nothing and has no worker at all.** Reported in
+  play: *"The sawmill also never produces any beams and doesn't even have a
+  dedicated worker"*. Confirmed by survey — `INDUSTRY_BUILDING_ID` is placed
+  by `VillageRenderer` and referenced by the growth-site search, and nowhere
+  else. The tile-scale `sagewerk` has a real `LumberjackMarker`; the village's
+  whole-building `sawmill` is decoration. It needs what the farmhouse got: a
+  villager who works it against real trees, storing beams in its own barn.
 
 ## Interaction with other docs
 

@@ -392,7 +392,7 @@ func _process(delta: float) -> void:
 	# carries guards (a producer who feeds itself, a villager with their own
 	# field) that a whole famine chain was measured into and that this
 	# generic layer has no way to express.
-	var need_target = _step_needs(delta, quarry_target == null and field_target == null)
+	var need_target = _step_needs(delta, not is_on_real_work())
 	if need_target != null:
 		target = need_target
 	# Only the chase is run, and only while there is still a gap to close:
@@ -438,6 +438,25 @@ const CONVERSATION_SECONDS := 4.0
 ## villager wirings), so this is deliberately a neighbourly distance and not
 ## a village-wide search: you stop for someone you were passing anyway.
 const COMPANY_REACH_PX := 160.0
+
+
+## Whether this villager is doing REAL work against the real world right
+## now -- working a field of their own, or on a real quarry.
+##
+## Reported in play: "No crops (wheat) grow and get harvested.. it plants
+## then nothing happens it worked before". The needs layer used to read
+## "busy" as "_step_farm returned somewhere to walk THIS FRAME", and
+## _step_farm returns null between actions -- while seeking, and through the
+## re-commit pause. In those frames a farmer read as idle, so thirst (which
+## crosses its threshold roughly every sixteen seconds) walked them to the
+## well; they planted a bed, left, and it withered before they came back.
+##
+## These two flags are the real answer, and they already existed for exactly
+## this distinction: NpcEconomy reads the same pair to know whether to run
+## the regional drip, precisely because "has a job on" is not the same
+## question as "is walking somewhere".
+func is_on_real_work() -> bool:
+	return _on_real_quarry or _on_real_field
 
 
 ## Whether this villager is mid-conversation right now -- standing still,
