@@ -72,13 +72,21 @@ func build() -> Node:
 ## reads noticeably hotter than every other sourced clip, reported live
 ## as "way too loud").
 ##
-## Passes `surface` through as well as its clip path: most of the sourced
-## clips are long recordings of somebody WALKING rather than single steps,
-## and reading one step out of one needs to know which (see FootstepSound's
-## own "one step out of a recording of many").
+## Takes a different one of that surface's real recorded steps each time
+## (see FootstepSound.step_clip_path_for): several exist per surface
+## precisely so that walking on one kind of ground is not the same sample
+## repeating, which is half of "they sound weak and not natural" as
+## reported. The other half is the level, which volume_db_for now carries
+## as a measured per-surface gain rather than a guess.
+##
+## Passes `surface` through as well as the chosen clip: it is what marks
+## this as a footstep rather than a one-off like the mushroom crush, and so
+## what earns it the per-step pitch variation.
 func play_footstep(surface: String) -> void:
 	_play_footstep_clip(
-		FootstepSound.clip_path_for(surface), FootstepSound.volume_db_for(surface), surface
+		FootstepSound.step_clip_path_for(surface, randf()),
+		FootstepSound.volume_db_for(surface),
+		surface
 	)
 
 
@@ -124,16 +132,19 @@ func play_mushroom_crush() -> AudioStreamPlayer:
 ## than passing 0.0 explicitly -- always full volume regardless of
 ## whichever surface last used this voice.
 ##
-## `surface` is what makes a step sound like a step rather than like the
-## same recording restarted (reported live: "they sound weak and not
-## natural"). Most sourced clips are minutes of somebody walking, not one
-## step, so a step is read as a WINDOW into one: it starts somewhere else
-## in the recording each time (FootstepSound.offset_for), at a slightly
-## different pitch (FootstepSound.pitch_scale_for), and closes again after
-## one step's worth (FootstepSound.STEP_WINDOW_SECONDS) instead of leaving
-## the rest of a stranger's walk playing underneath the next one. An empty
-## surface -- the default -- means "this is not a surface step": played
-## whole, from the top, unpitched.
+## `surface` marks this as a footstep, which is what earns it the per-step
+## pitch nudge (FootstepSound.pitch_scale_for). An empty surface -- the
+## default -- means "this is not a surface step": played whole, from the
+## top, at the clip's own pitch.
+##
+## Whether the clip has to be WINDOWED is asked of the clip itself, not of
+## the surface (FootstepSound.is_walking_bed/offset_for). A real one-shot
+## is played whole from its own beginning; a long recording of somebody
+## walking is started somewhere else in itself each time and closed again
+## after one step's worth (FootstepSound.STEP_WINDOW_SECONDS), instead of
+## leaving the rest of a stranger's walk playing underneath the next step.
+## Every surface the game can actually put underfoot has real one-shots
+## now, so the windowing is what the fallback recording gets.
 ##
 ## Pitch is set UNCONDITIONALLY for exactly the reason volume_db is above:
 ## the pool reuses voices, and a pitch left behind by a previous step must
@@ -155,10 +166,10 @@ func _play_footstep_clip(
 	voice.stream = load(clip_path)
 	voice.volume_db = volume_db
 	voice.pitch_scale = 1.0 if surface.is_empty() else FootstepSound.pitch_scale_for(randf())
-	voice.play(FootstepSound.offset_for(surface, randf()))
+	voice.play(FootstepSound.offset_for(clip_path, randf()))
 
 	var cap := max_seconds
-	if cap <= 0.0 and FootstepSound.is_walking_bed(surface):
+	if cap <= 0.0 and FootstepSound.is_walking_bed(clip_path):
 		cap = FootstepSound.STEP_WINDOW_SECONDS
 	# is_inside_tree, not an assumption: a capped sound needs a real tree to
 	# get a timer from, and a bed step asks for one on EVERY step rather
