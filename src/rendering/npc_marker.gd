@@ -173,6 +173,13 @@ var _quarry_kind := ""
 ## had.
 var field_cells: Array[Vector2i] = []
 
+## The GLOBAL origin tile of the building this villager works out of -- the
+## farmhouse whose field they tend, the sawmill they cut at. What they
+## produce is stored there rather than teleported into a settlement-wide
+## number (docs/concept/building_storage.md). (-1, -1) for a villager with
+## no workplace of their own, who keeps the market they always had.
+var workplace_origin := Vector2i(-1, -1)
+
 ## This villager's farm work, or null for anyone who does not farm -- the
 ## same null-until-wired shape `_forager` above uses, built by
 ## setup_economy where the occupation is first read. The very same
@@ -849,7 +856,7 @@ func _work_field_cell() -> void:
 			var count: int = int(result.get("count", 0))
 			var crop_id: String = String(result.get("crop_id", _field_crop))
 			if count > 0 and economy != null:
-				economy.record_real_harvest(crop_id, count)
+				_store_or_sell(crop_id, count)
 		"plant":
 			if _world.has_method("till_and_plant_farm_plot_at_global"):
 				_world.till_and_plant_farm_plot_at_global(cell.x, cell.y, _field_crop)
@@ -857,6 +864,28 @@ func _work_field_cell() -> void:
 			if _world.has_method("water_farm_plot_at_global"):
 				_world.water_farm_plot_at_global(cell.x, cell.y)
 	_water_the_beds_around(cell)
+
+
+## What a villager just produced goes into the building they produced it for
+## -- the farmhouse's own barn (docs/concept/building_storage.md) -- and the
+## villager is paid either way.
+##
+## Pay is for the WORK, not the delivery (pillar 5). That split is what lets
+## goods stop teleporting without touching the famine chain that hangs off a
+## villager being able to buy a meal.
+##
+## Whatever will not FIT still reaches the market. A full barn that swallowed
+## the harvest would starve a village for want of a cart, and hauling (the
+## next slice) is what will empty it; until then the barn fills first and the
+## surplus goes where it always went. Recorded as the interim rule it is.
+func _store_or_sell(item_id: String, count: int) -> void:
+	var stored := 0
+	if workplace_origin.x >= 0 and _world != null and _world.has_method("deposit_to_building_at"):
+		stored = int(_world.deposit_to_building_at(workplace_origin.x, workplace_origin.y, item_id, count))
+	if stored > 0:
+		economy.record_stored_harvest(item_id, stored)
+	if count - stored > 0:
+		economy.record_real_harvest(item_id, count - stored)
 
 
 ## Whatever the farmer just did on `cell`, the beds around it get wet too.

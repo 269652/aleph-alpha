@@ -461,3 +461,86 @@ func test_a_thirsty_farmer_keeps_farming():
 		"a thirsty farmer with a field to work does not walk off to the well"
 	)
 	assert_gt(world.plots.size(), 0, "and really got beds planted while they were at it")
+
+
+# -- a harvest goes into the farmhouse it was grown for ---------------------
+#
+# Reported in play: "The Farmhous Wheat stock should increase". See
+# docs/concept/building_storage.md: a harvest used to teleport straight into
+# a settlement-wide market number and never sit anywhere.
+
+
+## A world that also answers the building-stock questions the real
+## EarthChunkManager does, so a harvest has somewhere to go.
+class StubBarnWorld:
+	extends StubFarmWorld
+	var barn: Dictionary = {}
+	var barn_room := 60
+	var barn_origin := Vector2i(-1, -1)
+
+	func building_origin_at(global_x: int, _global_y: int):
+		return null if barn_origin.x < 0 else barn_origin
+
+	func building_room_at(_global_x: int, _global_y: int) -> int:
+		var held := 0
+		for count in barn.values():
+			held += int(count)
+		return maxi(barn_room - held, 0)
+
+	func deposit_to_building_at(_global_x: int, _global_y: int, item_id: String, count: int) -> int:
+		var taken: int = mini(count, building_room_at(0, 0))
+		if taken > 0:
+			barn[item_id] = int(barn.get(item_id, 0)) + taken
+		return taken
+
+
+func _barn_world() -> StubBarnWorld:
+	var built := StubBarnWorld.new()
+	built.barn_origin = Vector2i(3, 3)
+	return built
+
+
+func test_a_harvest_is_stored_in_the_farmhouse():
+	world = _barn_world()
+	marker = _build_marker("farmer")
+	marker.workplace_origin = Vector2i(3, 3)
+	_give_a_field()
+	_run(160.0)
+	assert_gt(
+		int((world as StubBarnWorld).barn.get("wheat", 0)), 0,
+		"the wheat a farmer cut is in the farmhouse they cut it for"
+	)
+
+
+## Pay is for the WORK, not the delivery -- the villager still earns at the
+## scythe, which is what keeps the famine chain intact while the goods stop
+## teleporting (docs/concept/building_storage.md pillar 5).
+func test_a_farmer_is_still_paid_for_what_they_cut():
+	world = _barn_world()
+	marker = _build_marker("farmer")
+	marker.workplace_origin = Vector2i(3, 3)
+	_give_a_field()
+	var before := marker.economy.wallet.balance
+	_run(160.0)
+	assert_gt(marker.economy.wallet.balance, before, "a farmer is paid for the work")
+
+
+## A full barn does not swallow the harvest: what will not fit still reaches
+## the market, so a village never starves because its barn was full. An
+## interim rule until hauling lands, and recorded as one.
+func test_what_will_not_fit_in_a_full_barn_still_reaches_the_market():
+	world = _barn_world()
+	(world as StubBarnWorld).barn_room = 0
+	marker = _build_marker("farmer")
+	marker.workplace_origin = Vector2i(3, 3)
+	_give_a_field()
+	_run(160.0)
+	assert_eq(int((world as StubBarnWorld).barn.get("wheat", 0)), 0, "precondition: the barn is full")
+	assert_gt(float(market.stock.get("wheat", 0.0)), 0.0, "and the wheat still got somewhere")
+
+
+## A farmer with no farmhouse of their own keeps the market they always had.
+func test_a_farmer_with_no_farmhouse_still_stocks_the_market():
+	_give_a_field()
+	_run(160.0)
+	assert_gt(float(market.stock.get("wheat", 0.0)), 0.0)

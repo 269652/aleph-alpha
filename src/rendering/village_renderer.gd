@@ -297,7 +297,7 @@ func spawn_village(
 		var work_tag: String = NpcIdentity.WORK_LOCATION_BY_OCCUPATION.get(npcs[i].occupation, "")
 		if work_tag != "" and not settlement.landmarks.has(work_tag) and workspot != null:
 			spawned.append(_build_landmark(work_tag, workspot, parent, true))
-	_hand_out_farm_fields(npcs, npc_markers, farm_fields)
+	_hand_out_farm_fields(chunk_coord, chunk_size, npcs, npc_markers, farm_fields)
 	return spawned
 
 
@@ -617,7 +617,9 @@ func _fenced_farm_fields(chunk_coord: Vector2i, chunk_size: int, world) -> Dicti
 ## A village with more farmers than farmhouses (nowhere left with room for
 ## another field) leaves the rest on the regional drip they always had,
 ## which is the honest outcome rather than two villagers tending one field.
-func _hand_out_farm_fields(npcs: Array, npc_markers: Array, fields: Dictionary) -> void:
+func _hand_out_farm_fields(
+	chunk_coord: Vector2i, chunk_size: int, npcs: Array, npc_markers: Array, fields: Dictionary
+) -> void:
 	if fields.is_empty() or npc_markers.size() < npcs.size():
 		return
 	var origins: Array = fields.keys()
@@ -627,7 +629,13 @@ func _hand_out_farm_fields(npcs: Array, npc_markers: Array, fields: Dictionary) 
 			continue
 		if next_farmhouse >= origins.size():
 			return
-		npc_markers[i].field_cells = fields[origins[next_farmhouse]]
+		var farmhouse: Vector2i = origins[next_farmhouse]
+		npc_markers[i].field_cells = fields[farmhouse]
+		# What they cut is stored in the farmhouse they cut it for
+		# (docs/concept/building_storage.md), so the villager needs to know
+		# which building is theirs -- in GLOBAL tiles, like everything else
+		# the world is asked about.
+		npc_markers[i].workplace_origin = chunk_coord * chunk_size + farmhouse
 		next_farmhouse += 1
 
 
