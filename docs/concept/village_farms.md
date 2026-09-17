@@ -173,15 +173,33 @@ cost already pays for — the identical argument
 placeable Farm's gate, whose recipe cost *is* "wood (6) for fence
 rails/posts and plant_fibre (4) lashing them".
 
-- **What is enclosed:** the beds the villager actually works — the capped
-  `MAX_WORKED_CELLS` set, not the whole 14-tile ring. You fence what you
-  sow, and the fallow part of the ring is not the farm's yard.
-- **Where the rails stand:** every cell touching a worked bed, on the
-  diagonal as well as the orthogonal so the corners close, that is not
-  itself a worked bed, not the farmhouse's own footprint, not water, and
-  not the village's paving. `VillageFarm.fence_cells` is that rule, pure
-  and derived — like `field_cells` and `owner_of`, it stores nothing, so
-  the same farmhouse fences the same ring on every reload.
+- **What is enclosed:** the beds the villager actually works — a **compact
+  rectangle**, `FIELD_SHAPES` (3×2 or 2×3, whichever fits), not a scattered
+  handful of whatever ground happened to be clear. Asked for directly, with
+  the broken ring circled in a screenshot: *"The fence should enclose a 2x3
+  or 3x2 area"*. A ragged bed set has a ragged ring, and a ragged ring is
+  what reads as broken fencing.
+
+  Six beds is also what the yield measurements already pointed at: six
+  peaked at 225 wheat per work block and everything from eight to fourteen
+  sat at 215 (see "What a field costs to keep"). The shape the report asks
+  for and the shape the measurement asks for are the same shape.
+- **Where the rails stand:** the rectangle's own **border** — every cell
+  touching a bed, on the diagonal as well as the orthogonal so the corners
+  close, that is not itself a bed, not the farmhouse's own footprint, not
+  water, and not the village's paving. `VillageFarm.fence_cells` is that
+  rule, pure and derived — like `field_rect` and `owner_of`, it stores
+  nothing, so the same farmhouse fences the same ring on every reload.
+- **The frame closes at the corners.** A border's four diagonal cells are
+  **corner posts**, not lengths of rail: drawing a horizontal rail across a
+  corner is exactly the "broken" look the report points at. The sheet has no
+  corner cell of its own, so a corner is drawn with the post art the side
+  columns use, which is what a real corner post is.
+- **The side walls sit on the outside.** The two vertical walls are drawn
+  half a tile further out than their own tile centre, so the frame reads as
+  surrounding the beds rather than standing on top of the outermost row.
+  Asked for directly: *"the side walls of the fence should be moved
+  outwards and corner pieces added so it doesn't look that broken"*.
 - **The gate** is where the ring meets the village's own paving. No rail is
   raised there: the farmer walks in over the street their farmhouse fronts,
   which is the whole reason a farmhouse takes frontage at all. A fence laid

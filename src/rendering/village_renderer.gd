@@ -637,33 +637,33 @@ func _farmhouse_origins(chunk_coord: Vector2i, world) -> Array:
 	return origins
 
 
-## The GLOBAL tiles a farmhouse at `origin` can really be worked on: the
-## cells of its own ring that IT owns (another farmhouse may be nearer to
-## some of them), inside this chunk, dry, and with nothing standing on them
-## -- the village's own paving included, since a doorstep is a road.
+## The GLOBAL tiles a farmhouse at `origin` really works: the compact
+## rectangle VillageFarm.field_rect lays out (3x2 or 2x3 -- asked for
+## directly, and where the yield table peaks), over ground that IT owns
+## (another farmhouse may be nearer to some of it), inside this chunk, dry,
+## and with nothing standing on it -- the village's own paving included,
+## since a doorstep is a road.
+##
+## Empty for a farmhouse with no room for a whole rectangle anywhere in
+## reach, which is the honest answer: a ragged handful of cells has a ragged
+## border, and that is what read as broken fencing in play.
 func _workable_field_of(
 	origin: Vector2i, origins: Array, chunk_coord: Vector2i, chunk_size: int,
 	is_buildable: Callable, is_occupied: Callable
 ) -> Array[Vector2i]:
-	var cells: Array[Vector2i] = []
-	for cell in VillageFarm.field_cells(origin, VillageFarm.FARM_BUILDING_ID):
-		var local: Vector2i = cell
-		if local.x < 0 or local.y < 0 or local.x >= chunk_size or local.y >= chunk_size:
-			continue
-		if VillageFarm.owner_of(local, origins, VillageFarm.FARM_BUILDING_ID) != origin:
-			continue
-		if not is_buildable.call(local) or is_occupied.call(local):
-			continue
-		cells.append(local)
-	# Only as much ground as one villager can actually keep alive: past
-	# VillageFarm.MAX_WORKED_CELLS the walking circuit outruns the crop's
-	# own wither grace and a bigger field yields NOTHING (measured -- see
-	# that constant). A village grows its output with a second farmhouse.
+	var is_free := func(cell: Vector2i) -> bool:
+		if cell.x < 0 or cell.y < 0 or cell.x >= chunk_size or cell.y >= chunk_size:
+			return false
+		if VillageFarm.owner_of(cell, origins, VillageFarm.FARM_BUILDING_ID) != origin:
+			return false  # the neighbouring farmstead's ground, not this one's
+		return is_buildable.call(cell) and not is_occupied.call(cell)
+	var rect = VillageFarm.field_rect(origin, VillageFarm.FARM_BUILDING_ID, is_free)
 	var worked: Array[Vector2i] = []
-	for local in VillageFarm.nearest_cells(
-		cells, origin, VillageFarm.FARM_BUILDING_ID, VillageFarm.MAX_WORKED_CELLS
-	):
-		worked.append(chunk_coord * chunk_size + (local as Vector2i))
+	if rect == null:
+		return worked
+	for y in range((rect as Rect2i).position.y, (rect as Rect2i).end.y):
+		for x in range((rect as Rect2i).position.x, (rect as Rect2i).end.x):
+			worked.append(chunk_coord * chunk_size + Vector2i(x, y))
 	return worked
 
 
@@ -674,10 +674,10 @@ func _workable_field_of(
 ##
 ## Sited on the village's own street frontage like any other growth
 ## building, with ONE added condition: the ground around it must really
-## have room for a field (VillageFarm.MIN_FIELD_CELLS of its own ring
-## workable). A farmhouse with nowhere to farm is a farmhouse that should
-## not have been raised, so a rejected frontage simply keeps the walk
-## going rather than settling for it.
+## have room for a whole field rectangle (see _field_fits_at). A farmhouse
+## with nowhere to farm is a farmhouse that should not have been raised, so
+## a rejected frontage simply keeps the walk going rather than settling for
+## it.
 ##
 ## Idempotent on how many already stand, the same self-healing shape
 ## _place_industry_if_missing and _lay_plaza_if_missing already have: a
@@ -707,10 +707,7 @@ func _place_farms_if_missing(chunk_coord: Vector2i, chunk_size: int, npcs: Array
 	var is_paved := _is_paved_local(chunk_coord, chunk_size, world)
 	var renderer := self
 	var accepts_origin := func(origin: Vector2i) -> bool:
-		return (
-			renderer._field_room_at(origin, chunk_size, is_buildable, is_occupied)
-			>= VillageFarm.MIN_FIELD_CELLS
-		)
+		return renderer._field_fits_at(origin, chunk_size, is_buildable, is_occupied)
 	for index in range(standing, wanted):
 		var plot: Dictionary = VillageLayout.next_street_plot(
 			VillageFarm.FARM_BUILDING_ID, chunk_size, VillageLayout.seed_for(chunk_coord),
@@ -762,18 +759,30 @@ func _place_farms_if_missing(chunk_coord: Vector2i, chunk_size: int, npcs: Array
 				world.build_at_global(g.x, g.y, TerrainRenderer.ROAD_TILE_ID)
 
 
-## How many cells of the field ring a farmhouse at `origin` would really be
-## able to work: inside the chunk, not water, nothing already built on it.
-func _field_room_at(
+## Whether a farmhouse at `origin` would really have somewhere to sow: a
+## whole 3x2 or 2x3 rectangle of its own, inside the chunk, not water, with
+## nothing standing on it.
+##
+## This used to count LOOSE cells of the reachable ring against a minimum.
+## Counting and fitting stopped being the same question when
+## the field became a rectangle (docs/concept/village_farms.md): ground with
+## four scattered free cells and no rectangle in it would raise a farmhouse
+## whose villager then has nowhere at all to sow.
+##
+## Deliberately asks the SAME function that lays the field out
+## (VillageFarm.field_rect), rather than a second rule that agrees with it
+## today -- a siting gate that can drift from the thing it gates is a
+## farmhouse with no field waiting to happen. Ownership is not consulted
+## here: no other farmhouse stands yet at siting time, and the field this
+## one finally works is re-derived once they all do.
+func _field_fits_at(
 	origin: Vector2i, chunk_size: int, is_buildable: Callable, is_occupied: Callable
-) -> int:
-	var room := 0
-	for cell in VillageFarm.field_cells(origin, VillageFarm.FARM_BUILDING_ID):
+) -> bool:
+	var is_free := func(cell: Vector2i) -> bool:
 		if cell.x < 0 or cell.y < 0 or cell.x >= chunk_size or cell.y >= chunk_size:
-			continue
-		if is_buildable.call(cell) and not is_occupied.call(cell):
-			room += 1
-	return room
+			return false
+		return is_buildable.call(cell) and not is_occupied.call(cell)
+	return VillageFarm.field_rect(origin, VillageFarm.FARM_BUILDING_ID, is_free) != null
 
 
 ## The village's civic seat, standing on the plaza's own reserved plot.

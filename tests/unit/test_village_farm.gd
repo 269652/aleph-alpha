@@ -56,8 +56,13 @@ func test_the_field_offers_more_ground_than_one_farmhouse_will_work():
 	)
 
 
-func test_the_field_is_capped_at_ten_tiles():
-	assert_eq(VillageFarm.MAX_WORKED_CELLS, 10, "asked for directly: capped to 10 tiles")
+## The earlier ask was a CAP -- "maximized and capped to 10 tiles" -- and
+## the later one names the shape inside it: "The fence should enclose a 2x3
+## or 3x2 area". Six respects the cap and is where the measured yield table
+## peaks, so both asks and the measurement agree.
+func test_the_field_is_the_rectangle_that_was_asked_for_and_inside_the_old_cap():
+	assert_eq(VillageFarm.MAX_WORKED_CELLS, 6, "a 3x2 or 2x3 area")
+	assert_lte(VillageFarm.MAX_WORKED_CELLS, 10, "and still inside the cap asked for earlier")
 
 
 func test_the_field_can_always_offer_a_full_cap_on_open_ground():
@@ -297,19 +302,20 @@ func test_an_empty_field_asks_for_nothing():
 	assert_eq(VillageFarm.next_action([]), -1)
 
 
-## MIN_FIELD_CELLS is not a fresh guess -- it is the already-measured plot
-## count one farmer can keep watered (see VillageFarm's own doc comment).
-## Pinned here rather than preloaded there so the pure rule set keeps no
-## rendering dependency (CLAUDE.md: tuned values are tested functions or
-## test-pinned constants).
-func test_the_smallest_worthwhile_field_is_what_one_farmer_can_already_tend():
+## The field is never SMALLER than the plot count one farmer is already
+## known to keep watered (FarmerMarker.PLOT_COUNT -- the one number in this
+## codebase measured against that). A village farmhouse hands its villager
+## a whole rectangle or nothing at all, so this is the floor that rectangle
+## has to clear. Pinned here rather than preloaded there so the pure rule
+## set keeps no rendering dependency (CLAUDE.md: tuned values are tested
+## functions or test-pinned constants).
+func test_a_field_is_never_smaller_than_what_one_farmer_can_already_tend():
 	var FarmerMarker = load("res://src/rendering/farmer_marker.gd")
-	assert_eq(VillageFarm.MIN_FIELD_CELLS, FarmerMarker.PLOT_COUNT)
-	assert_lte(
-		VillageFarm.MIN_FIELD_CELLS,
-		VillageFarm.field_cells(Vector2i.ZERO, VillageFarm.FARM_BUILDING_ID).size(),
-		"a field ring that could never meet its own minimum would refuse every site"
-	)
+	for shape in VillageFarm.FIELD_SHAPES:
+		assert_gte(
+			(shape as Vector2i).x * (shape as Vector2i).y, FarmerMarker.PLOT_COUNT,
+			"%s is less ground than one farmer already tends by hand" % str(shape)
+		)
 
 
 ## The two share one watering margin rather than two copies of it.
@@ -474,3 +480,137 @@ func test_a_facing_nobody_drew_has_no_rail():
 	assert_eq(VillageFarm.fence_tile_for("up"), "")
 	assert_false(VillageFarm.is_fence_tile("road"))
 	assert_false(VillageFarm.is_fence_tile(""))
+
+
+# -- the field is a compact rectangle, and its fence a closed frame --------
+#
+# Reported in play with the broken ring circled in a screenshot: "The
+# fencing system does not yet work... The fence should enclose a 2x3 or 3x2
+# area ... also the side walls of the fence should be moved outwards and
+# corner pieces added so it doesn't look that broken". See
+# docs/concept/village_farms.md, "The fence around the beds".
+
+
+func _every_rect_cell(rect: Rect2i) -> Array:
+	var cells: Array = []
+	for y in range(rect.position.y, rect.end.y):
+		for x in range(rect.position.x, rect.end.x):
+			cells.append(Vector2i(x, y))
+	return cells
+
+
+func test_the_shapes_a_field_may_take_are_the_two_that_were_asked_for():
+	assert_eq(VillageFarm.FIELD_SHAPES.size(), 2)
+	assert_true(VillageFarm.FIELD_SHAPES.has(Vector2i(3, 2)), "3x2")
+	assert_true(VillageFarm.FIELD_SHAPES.has(Vector2i(2, 3)), "2x3")
+
+
+## Six beds -- and not a fresh guess: it is what the yield table already
+## peaked at (see MAX_WORKED_CELLS's own measured numbers).
+func test_a_field_is_six_beds_however_it_is_turned():
+	for shape in VillageFarm.FIELD_SHAPES:
+		assert_eq((shape as Vector2i).x * (shape as Vector2i).y, VillageFarm.MAX_WORKED_CELLS)
+
+
+func test_a_farmhouse_on_open_ground_really_gets_a_rectangle():
+	var origin := Vector2i(10, 10)
+	var rect = VillageFarm.field_rect(
+		origin, VillageFarm.FARM_BUILDING_ID, func(_cell: Vector2i) -> bool: return true
+	)
+	assert_not_null(rect, "open ground must fit a field")
+	assert_true(
+		VillageFarm.FIELD_SHAPES.has((rect as Rect2i).size),
+		"%s is not one of the shapes that were asked for" % str((rect as Rect2i).size)
+	)
+
+
+## Never north: a village house fronts the street with its door south, so
+## the ground above a farmhouse is the next row of buildings.
+func test_a_field_never_reaches_north_of_the_farmhouse():
+	var origin := Vector2i(10, 10)
+	var rect: Rect2i = VillageFarm.field_rect(
+		origin, VillageFarm.FARM_BUILDING_ID, func(_cell: Vector2i) -> bool: return true
+	)
+	assert_gte(rect.position.y, origin.y, "the field starts no higher than the farmhouse itself")
+
+
+func test_a_field_never_lies_under_the_farmhouse():
+	var origin := Vector2i(10, 10)
+	var rect: Rect2i = VillageFarm.field_rect(
+		origin, VillageFarm.FARM_BUILDING_ID, func(_cell: Vector2i) -> bool: return true
+	)
+	var footprint: Array = BuildingCatalog.footprint_cells(VillageFarm.FARM_BUILDING_ID, origin)
+	for cell in _every_rect_cell(rect):
+		assert_false(footprint.has(cell), "%s is the farmhouse itself" % str(cell))
+
+
+## Every cell of the rectangle must be workable -- a field with a rock or a
+## river in the middle of it is not the rectangle that was asked for.
+func test_a_rectangle_is_only_offered_where_every_one_of_its_cells_is_free():
+	var origin := Vector2i(10, 10)
+	var blocked := Vector2i(11, 13)
+	var rect = VillageFarm.field_rect(
+		origin, VillageFarm.FARM_BUILDING_ID,
+		func(cell: Vector2i) -> bool: return cell != blocked
+	)
+	assert_not_null(rect, "there is still room elsewhere for a field")
+	assert_false(_every_rect_cell(rect).has(blocked), "the field was laid over blocked ground")
+
+
+func test_ground_that_fits_no_rectangle_at_all_gets_no_field():
+	assert_null(VillageFarm.field_rect(
+		Vector2i(10, 10), VillageFarm.FARM_BUILDING_ID,
+		func(_cell: Vector2i) -> bool: return false
+	))
+	assert_null(VillageFarm.field_rect(
+		Vector2i(10, 10), "not_a_building", func(_cell: Vector2i) -> bool: return true
+	))
+
+
+func test_the_same_farmhouse_lays_out_the_same_rectangle_every_time():
+	var free := func(_cell: Vector2i) -> bool: return true
+	assert_eq(
+		VillageFarm.field_rect(Vector2i(7, 4), VillageFarm.FARM_BUILDING_ID, free),
+		VillageFarm.field_rect(Vector2i(7, 4), VillageFarm.FARM_BUILDING_ID, free)
+	)
+
+
+# -- and the frame round it closes -----------------------------------------
+
+
+func test_a_rectangles_fence_is_exactly_its_own_border():
+	var beds := _every_rect_cell(Rect2i(4, 4, 3, 2))
+	var fence: Array = VillageFarm.fence_cells(beds, Vector2i(20, 20), VillageFarm.FARM_BUILDING_ID)
+	# A 3x2 block sits inside a 5x4 border: 5*4 - 3*2 = 14 cells.
+	assert_eq(fence.size(), 14, "a 3x2 field has a fourteen-cell border round it")
+
+
+func test_the_four_corners_of_a_frame_are_posts_not_lengths_of_rail():
+	var beds := _every_rect_cell(Rect2i(4, 4, 3, 2))
+	for corner in [Vector2i(3, 3), Vector2i(7, 3), Vector2i(3, 6), Vector2i(7, 6)]:
+		assert_eq(
+			VillageFarm.fence_facing(corner, beds), "corner",
+			"%s caps two runs at once -- a rail drawn across it is the broken look" % str(corner)
+		)
+
+
+func test_a_corner_post_has_its_own_rail_tile():
+	var tile_id: String = VillageFarm.fence_tile_for("corner")
+	assert_ne(tile_id, "", "a corner needs a piece of its own")
+	assert_true(VillageFarm.is_fence_tile(tile_id))
+
+
+func test_each_wall_of_a_frame_faces_the_way_it_closes():
+	var beds := _every_rect_cell(Rect2i(4, 4, 3, 2))
+	assert_eq(VillageFarm.fence_facing(Vector2i(5, 3), beds), "north", "above the beds")
+	assert_eq(VillageFarm.fence_facing(Vector2i(5, 6), beds), "south", "below the beds")
+	assert_eq(VillageFarm.fence_facing(Vector2i(7, 4), beds), "east", "right of the beds")
+	assert_eq(VillageFarm.fence_facing(Vector2i(3, 4), beds), "west", "left of the beds")
+
+
+## Every cell of the border gets a real piece -- a frame with an unanswered
+## cell in it is a frame with a hole in it.
+func test_no_cell_of_a_frame_is_left_without_a_piece():
+	var beds := _every_rect_cell(Rect2i(4, 4, 2, 3))
+	for cell in VillageFarm.fence_cells(beds, Vector2i(20, 20), VillageFarm.FARM_BUILDING_ID):
+		assert_ne(VillageFarm.fence_facing(cell, beds), "", "%s got no piece at all" % str(cell))

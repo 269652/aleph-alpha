@@ -1671,13 +1671,15 @@ func test_every_farmhouse_stands_where_its_own_field_really_fits():
 	var farmhouses := _buildings_of(world, VillageFarm.FARM_BUILDING_ID)
 	assert_gt(farmhouses.size(), 0, "precondition: a farmhouse was raised")
 	for call in farmhouses:
-		var workable := 0
-		for cell in VillageFarm.field_cells(call["origin_local"], VillageFarm.FARM_BUILDING_ID):
+		# The whole rectangle, not a count of loose cells: those stopped
+		# being the same question when the field became a 3x2.
+		var is_free := func(cell: Vector2i) -> bool:
+			if cell.x < 0 or cell.y < 0 or cell.x >= CHUNK_SIZE or cell.y >= CHUNK_SIZE:
+				return false
 			var g: Vector2i = coord * CHUNK_SIZE + cell
-			if not world.is_water_at_global(g.x, g.y) and world.modification_at_global(g.x, g.y) == "":
-				workable += 1
-		assert_gte(
-			workable, VillageFarm.MIN_FIELD_CELLS,
+			return not world.is_water_at_global(g.x, g.y) and world.modification_at_global(g.x, g.y) == ""
+		assert_not_null(
+			VillageFarm.field_rect(call["origin_local"], VillageFarm.FARM_BUILDING_ID, is_free),
 			"a farmhouse with nowhere to farm is a farmhouse that should not have been raised"
 		)
 
@@ -2003,3 +2005,52 @@ func test_a_rail_only_ever_stands_on_ground_that_can_take_one():
 		)
 		var g: Vector2i = coord * CHUNK_SIZE + cell
 		assert_false(world.is_water_at_global(g.x, g.y), "%s is water" % str(cell))
+
+
+## A farmhouse is only raised where a whole RECTANGLE fits, not merely where
+## a few loose cells are clear. The two stopped being the same question when
+## the field became a 3x2 (docs/concept/village_farms.md): ground with four
+## scattered free cells and no rectangle in it would raise a farmhouse whose
+## villager then has nowhere at all to sow.
+func test_every_farmhouse_raised_really_gets_a_field_to_work():
+	var stranded: Array = []
+	var seen := 0
+	for coord in _settlement_chunks_with_farmers(3, 14):
+		var world := StubWorld.new()
+		var spawned := renderer.spawn_village(
+			parent, coord, coord * CHUNK_SIZE, CHUNK_SIZE, TILE_SIZE, "grassland", world
+		)
+		for _call in _buildings_of(world, VillageFarm.FARM_BUILDING_ID):
+			seen += 1
+		for npc in _farming_markers(spawned, coord):
+			if (npc.field_cells as Array).is_empty():
+				stranded.append("%s: a %s has a farmhouse and no field" % [str(coord), npc.identity.occupation])
+	assert_gt(seen, 0, "precondition: farmhouses were raised")
+	assert_eq(
+		stranded.size(), 0,
+		"a farmhouse with nowhere to sow should never have been raised: %s" % str(stranded.slice(0, 4))
+	)
+
+
+## And what a villager is handed really is the rectangle that was asked for.
+func test_the_field_a_villager_works_is_a_whole_rectangle():
+	for coord in _settlement_chunks_with_farmers(3, 4):
+		var world := StubWorld.new()
+		var spawned := renderer.spawn_village(
+			parent, coord, coord * CHUNK_SIZE, CHUNK_SIZE, TILE_SIZE, "grassland", world
+		)
+		for npc in _farming_markers(spawned, coord):
+			var cells: Array = npc.field_cells
+			if cells.is_empty():
+				continue
+			var min_cell: Vector2i = cells[0]
+			var max_cell: Vector2i = cells[0]
+			for cell in cells:
+				min_cell = Vector2i(mini(min_cell.x, cell.x), mini(min_cell.y, cell.y))
+				max_cell = Vector2i(maxi(max_cell.x, cell.x), maxi(max_cell.y, cell.y))
+			var size := max_cell - min_cell + Vector2i.ONE
+			assert_true(
+				VillageFarm.FIELD_SHAPES.has(size),
+				"%s beds span %s, which is not a shape that was asked for" % [str(coord), str(size)]
+			)
+			assert_eq(cells.size(), size.x * size.y, "the rectangle has a hole in it")

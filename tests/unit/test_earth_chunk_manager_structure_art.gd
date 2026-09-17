@@ -26,6 +26,7 @@ const EarthChunkManager = preload("res://src/world/earth_chunk_manager.gd")
 const EarthChunkGenerator = preload("res://src/world/earth_chunk_generator.gd")
 const GeoCoordinates = preload("res://src/world/geo_coordinates.gd")
 const TerrainRenderer = preload("res://src/rendering/terrain_renderer.gd")
+const VillageFarm = preload("res://src/gameplay/village_farm.gd")
 const IllustratedStructureSprite = preload("res://src/rendering/illustrated_structure_sprite.gd")
 
 var manager: EarthChunkManager
@@ -160,3 +161,51 @@ func test_reloading_a_chunk_with_a_persisted_farm_respawns_its_overlay():
 	assert_eq(_structure_art_sprite_count(), 0, "unloading should free the overlay")
 	manager._load_chunk(_berlin_chunk)
 	assert_eq(_structure_art_sprite_count(), 1, "reloading should respawn it")
+
+
+# -- a farm fence's side walls stand on the OUTSIDE of the frame -----------
+#
+# Reported in play with the broken ring circled: "the side walls of the
+# fence should be moved outwards and corner pieces added so it doesn't look
+# that broken". A vertical rail drawn on its own tile centre sits on top of
+# the outermost row of beds instead of framing them.
+
+
+func _art_x_for(tile_id: String) -> float:
+	manager.build_at_global(_berlin_tile.x, _berlin_tile.y, tile_id)
+	var sprite := _structure_art_sprite_at_berlin_tile()
+	assert_not_null(sprite, "%s should have real art" % tile_id)
+	return sprite.position.x
+
+
+func test_a_north_or_south_rail_stands_on_its_own_tile_centre():
+	var centre := (float(_berlin_tile.x) + 0.5) * TerrainRenderer.TILE_SIZE
+	assert_almost_eq(_art_x_for(VillageFarm.fence_tile_for("north")), centre, 0.001)
+	assert_almost_eq(_art_x_for(VillageFarm.fence_tile_for("south")), centre, 0.001)
+
+
+func test_a_west_rail_is_pushed_out_to_the_frames_own_left_edge():
+	var centre := (float(_berlin_tile.x) + 0.5) * TerrainRenderer.TILE_SIZE
+	assert_lt(
+		_art_x_for(VillageFarm.fence_tile_for("west")), centre,
+		"the left wall must frame the beds, not stand on them"
+	)
+
+
+func test_an_east_rail_is_pushed_out_to_the_frames_own_right_edge():
+	var centre := (float(_berlin_tile.x) + 0.5) * TerrainRenderer.TILE_SIZE
+	assert_gt(
+		_art_x_for(VillageFarm.fence_tile_for("east")), centre,
+		"the right wall must frame the beds, not stand on them"
+	)
+
+
+## And the two side walls are pushed out by the SAME distance, in opposite
+## directions -- a frame with one wall further out than the other is the
+## lopsided look this is meant to fix.
+func test_the_two_side_walls_are_pushed_out_by_the_same_distance():
+	var centre := (float(_berlin_tile.x) + 0.5) * TerrainRenderer.TILE_SIZE
+	var west := centre - _art_x_for(VillageFarm.fence_tile_for("west"))
+	var east := _art_x_for(VillageFarm.fence_tile_for("east")) - centre
+	assert_almost_eq(west, east, 0.001)
+	assert_almost_eq(west, TerrainRenderer.TILE_SIZE * 0.5, 0.001, "half a tile out")
