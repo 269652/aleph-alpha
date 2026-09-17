@@ -3514,6 +3514,19 @@ func _update_creature_panels(local_player: Player, delta: float) -> void:
 func _unhandled_input(event: InputEvent) -> void:
 	if not _world_ready:
 		return
+	# Planner mode's own click: plant the selected blueprint on the cell
+	# under the cursor. Gated on ViewMode.arms_build_cursor rather than on
+	# the mode id directly -- the model owns "is the cursor live", and a
+	# stray left-click while swinging a sword in rpg mode must never plan a
+	# house.
+	if (
+		ViewMode.arms_build_cursor(_view_mode)
+		and event is InputEventMouseButton
+		and event.pressed
+		and event.button_index == MOUSE_BUTTON_LEFT
+	):
+		_plan_blueprint_at(Vector2i((get_global_mouse_position() / TerrainRenderer.TILE_SIZE).floor()))
+		return
 	if event.is_action_pressed(CONSOLE_TOGGLE_ACTION):
 		_dev_console.toggle()
 	elif event.is_action_pressed(INVENTORY_TOGGLE_ACTION):

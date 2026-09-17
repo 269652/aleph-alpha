@@ -79,3 +79,17 @@ func test_planning_does_not_build_or_spend_anything():
 			body.contains(forbidden),
 			"planning must not %s -- the cost falls when somebody raises it" % forbidden
 		)
+
+
+## A click on the map plants a blueprint -- but ONLY while planner mode has
+## armed the cursor. The gate is the point: a stray left-click while
+## swinging a sword in rpg mode must never plan a house, which is exactly
+## why ViewMode.arms_build_cursor exists rather than the mode being checked
+## ad hoc.
+func test_a_click_plans_only_while_the_build_cursor_is_armed():
+	var body := _function_body("_unhandled_input")
+	assert_true(body.contains("_plan_blueprint_at("), "a click must reach the placement path")
+	assert_true(
+		body.contains("ViewMode.arms_build_cursor("),
+		"and must be gated on the mode arming the cursor, not on the mode id directly"
+	)

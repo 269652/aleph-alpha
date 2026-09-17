@@ -24148,3 +24148,61 @@ cause it is.
 Tests: `test_audio_diagnostics.gd` 13/13 (new),
 `test_nature_soundscape_player.gd` +3, `test_interaction_sfx_player.gd` +1,
 144/144 across the ten audio test files.
+
+### Planner mode: laying out a settlement before building it (see `docs/concept/planner_mode.md`, 2026-09-17)
+
+Asked directly: *"a view toggle to the top besides the minimap which
+toggles RPG Mode (hotbar) with a Planner mode, where the character can
+place blueprints like pavement; houses; sawmills etc. directly on the map
+similar to how it works in Anno 1800 ... then when leaving the plan mode he
+can go to one of the wireframes and hire an NPC to build it or build it
+himself."*
+
+✅ **The spec first**, per CLAUDE.md, with the pillar the whole design turns
+on: **planning is not building.** Placing a blueprint costs nothing, spends
+nothing and changes no terrain; every material and labour hour still falls
+when somebody raises it, through the systems that already exist. That split
+is what stops planner mode becoming a second, cheaper way to build, and it
+is pinned by a test that the placement path contains no `build_at_global`,
+`place_building`, `spend` or `remove_item`.
+
+✅ **`ViewMode`** — the two modes and what each owns. Two claims are stated
+as tested functions rather than left in comments: the hotbar and the palette
+are never both up (two click targets over one world is the confusion the
+toggle removes), and **neither mode pauses the world** — you lay a
+settlement out while it is still alive around you, unlike the settings
+overlay which really does pause.
+
+✅ **`BuildPlan`/`BuildPlanLedger`** — the standing wireframes as world
+state. Deterministic ids from site+blueprint (the `ConstructionProject`/
+`Household` idiom, so no counter to protect and re-planning is idempotent);
+refusals carry reasons; buildability arrives as a `Callable`, the seam
+`BuildingPlacement` already established so water and cliff rules stay with
+the world. An unknown blueprint refuses outright rather than guessing a 1×1
+— a wireframe standing where nothing can ever be built is worse than a
+refusal.
+
+✅ **The toggle beside the minimap, the palette, and click-to-plan.** The
+palette is built from the real `BuildingCatalog`, so sawmill/warehouse/
+blacksmith/brewery come for free and it cannot drift from what the world can
+actually raise. Every "what does this mode show" answer is read from
+`ViewMode` rather than decided again in `World`.
+
+🚧 **A planned site is currently invisible.** The plans are real and
+`plans_in(chunk)` exists for exactly this, but nothing draws them yet — the
+biggest remaining gap, and the next slice.
+
+🚧 **Plans do not survive a reload.** The ledger lives in `World`; pillar 3
+says they must persist, since walking back to one later is the whole point.
+
+🚧 **Walking up to a wireframe to build or hire is not wired.** The pieces
+exist (`ConstructionProject`'s `PLANNED` status, `ConstructionLabor`,
+`HiringGate.can_hire`); the proximity check and the choice itself do not.
+
+🚧 **No cursor footprint preview.** `refusal_reason` already answers it per
+cell; nothing draws the Anno-style green/red ghost yet.
+
+Tests: `test_view_mode.gd` 9/9 (new), `test_build_plan_ledger.gd` 15/15
+(new), `test_world_planner_mode_wiring.gd` 7/7 (new), 108/108 including the
+`building_catalog`/`building_placement`/`world_hud` suites they touch;
+`world.gd` confirmed to still compile by booting it.

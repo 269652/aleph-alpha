@@ -126,12 +126,39 @@ planning cost nothing (pillar 1).
 
 ## Status
 
-- ⬜ Everything below is the spec, written before the code per CLAUDE.md.
-  The implementation lands in slices; each slice updates this list and
-  `docs/progress.md` rather than claiming the whole.
-- ⬜ `ViewMode` and the HUD toggle.
-- ⬜ `BuildPlan`/`BuildPlanLedger` and placement refusal.
-- ⬜ The blueprint palette, and the cursor that follows the grid.
-- ⬜ Wireframe rendering in the world.
-- ⬜ Persistence across save/load and chunk unload.
-- ⬜ Walking up to a wireframe: build-it-yourself, and hire-an-NPC.
+The spec above was written before the code, per CLAUDE.md. It lands in
+slices; this list says exactly which are real rather than claiming the
+whole.
+
+- ✅ **`ViewMode`** (2026-09-17) — the two modes, the toggle, and what each
+  owns. Two claims are stated as tested functions rather than left in
+  comments: the hotbar and palette are never both up, and *neither mode
+  pauses the world*. 9/9.
+- ✅ **`BuildPlan`/`BuildPlanLedger`** — standing wireframes, deterministic
+  ids from site+blueprint (the `ConstructionProject`/`Household` idiom),
+  refusals with reasons for unknown blueprints, unbuildable ground and
+  overlap. Buildability arrives as a `Callable`, the seam
+  `BuildingPlacement` already established. 15/15.
+- ✅ **The toggle, beside the minimap**, and the blueprint palette built
+  from the real `BuildingCatalog` (pavement + `BUILDING_IDS` +
+  `PRODUCTION_BUILDING_IDS` + `CIVIC_BUILDING_IDS`), so a building added
+  to the game appears in the palette for free.
+- ✅ **Click-to-plan**, gated on `ViewMode.arms_build_cursor` so a stray
+  click in rpg mode can never plan a house, with the refusal reason shown
+  rather than silently doing nothing. Pillar 1 is pinned by a test that
+  the placement path contains no `build_at_global`, `place_building`,
+  `spend` or `remove_item`.
+- ⬜ **Wireframe rendering.** The plans are real world state and the ledger
+  answers `plans_in(chunk)` for exactly this, but nothing draws them yet —
+  so a planned site is currently invisible on the map. This is the next
+  slice and the biggest remaining gap.
+- ⬜ **Persistence across save/load and chunk unload.** The ledger lives in
+  `World` for now, so plans do not survive a reload. Pillar 3 says they
+  must.
+- ⬜ **Walking up to a wireframe: build-it-yourself, and hire-an-NPC.** The
+  pieces it needs already exist (`ConstructionProject`'s `PLANNED` status,
+  `ConstructionLabor`, `HiringGate.can_hire`); what is missing is the
+  proximity check and the choice itself.
+- ⬜ **A footprint that follows the cursor and colours itself** by whether
+  it may be placed, the way Anno's does. `refusal_reason` already answers
+  it per cell; nothing draws it yet.
