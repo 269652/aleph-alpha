@@ -1891,8 +1891,10 @@ const BLUEPRINT_RECIPE_BY_ITEM_ID := {
 ## event history answers this correctly with no separate reload path
 ## needed.
 func has_unlocked_blueprint(recipe_id: String) -> bool:
-	for event in _event_store.events_for_entity(PlayerIdentity.PLAYER_ENTITY_ID):
-		if event.type == "blueprint_learned" and event.tags.has(recipe_id):
+	for event in _event_store.events_for_entity_of_type(
+		PlayerIdentity.PLAYER_ENTITY_ID, "blueprint_learned"
+	):
+		if event.tags.has(recipe_id):
 			return true
 	return false
 
@@ -2738,11 +2740,11 @@ func _contract_outcome_is_news(event_type: String, parties: Array[String]) -> bo
 func _recorded_contract_outcome(sorted_parties: Array[String]) -> String:
 	if sorted_parties.is_empty():
 		return ""
-	var history := _event_store.events_for_entity(sorted_parties[0])
+	var history := _event_store.events_for_entity_of_types(
+		sorted_parties[0], _CONTRACT_OUTCOME_EVENTS
+	)
 	for i in range(history.size() - 1, -1, -1):
 		var event: Event = history[i]
-		if not _CONTRACT_OUTCOME_EVENTS.has(event.type):
-			continue
 		var actors: Array[String] = []
 		for actor in event.actors:
 			actors.append(actor)
@@ -2903,11 +2905,11 @@ var _settlement_production_outcome: Dictionary = {}
 ## a settlement runs one recipe per occupation, so "how it went" is only
 ## meaningful for this settlement AND this recipe.
 func _recorded_production_outcome(settlement_id: String, recipe_id: String) -> String:
-	var history := _event_store.events_for_entity(settlement_id)
+	var history := _event_store.events_for_entity_of_types(
+		settlement_id, ["production_failed", "production_succeeded"]
+	)
 	for i in range(history.size() - 1, -1, -1):
 		var event: Event = history[i]
-		if event.type != "production_failed" and event.type != "production_succeeded":
-			continue
 		if event.tags.is_empty() or event.tags[0] != recipe_id:
 			continue
 		return "failed" if event.type == "production_failed" else "succeeded"
@@ -3437,15 +3439,13 @@ var _settlement_specialization: Dictionary = {}
 ## so a future settlement_became_<something-else> can never be mistaken for
 ## a tier the classifier would ever produce.
 func _recorded_settlement_tier(settlement_id: String) -> String:
-	var history := _event_store.events_for_entity(settlement_id)
-	for i in range(history.size() - 1, -1, -1):
-		var event: Event = history[i]
-		if not event.type.begins_with("settlement_became_"):
-			continue
-		var tier := event.type.substr("settlement_became_".length())
-		if SettlementTier.TIERS.has(tier):
-			return tier
-	return ""
+	var types: Array = []
+	for tier in SettlementTier.TIERS:
+		types.append("settlement_became_%s" % tier)
+	var history := _event_store.events_for_entity_of_types(settlement_id, types)
+	if history.is_empty():
+		return ""
+	return history.back().type.substr("settlement_became_".length())
 
 
 ## What `settlement_id` was last actually event-sourced as specializing in,
@@ -3455,11 +3455,10 @@ func _recorded_settlement_tier(settlement_id: String) -> String:
 ## settlement_specialized -- which nothing writes -- reads as never having
 ## specialized rather than as an empty specialization.
 func _recorded_settlement_specialization(settlement_id: String) -> String:
-	var history := _event_store.events_for_entity(settlement_id)
+	var history := _event_store.events_for_entity_of_type(settlement_id, "settlement_specialized")
 	for i in range(history.size() - 1, -1, -1):
-		var event: Event = history[i]
-		if event.type == "settlement_specialized" and not event.tags.is_empty():
-			return event.tags[0]
+		if not history[i].tags.is_empty():
+			return history[i].tags[0]
 	return ""
 
 
@@ -3647,15 +3646,13 @@ func step_settlements(delta_seconds: float) -> void:
 ## NOT a status: only the three SettlementState.STATUSES count, so a
 ## settlement that has been founded and never assessed still reads "".
 func _recorded_settlement_status(settlement_id: String) -> String:
-	var history := _event_store.events_for_entity(settlement_id)
-	for i in range(history.size() - 1, -1, -1):
-		var event: Event = history[i]
-		if not event.type.begins_with("settlement_"):
-			continue
-		var status := event.type.substr("settlement_".length())
-		if SettlementState.STATUSES.has(status):
-			return status
-	return ""
+	var types: Array = []
+	for status in SettlementState.STATUSES:
+		types.append("settlement_%s" % status)
+	var history := _event_store.events_for_entity_of_types(settlement_id, types)
+	if history.is_empty():
+		return ""
+	return history.back().type.substr("settlement_".length())
 
 
 ## Counts one more consecutive assessment of `status` for this settlement
@@ -4782,8 +4779,8 @@ func _resolve_caravan_raid(trip: CaravanTrip, raid_position: Vector2) -> void:
 ## PRODUCES, not what it merely attempted.
 func _production_counts_for_settlement(settlement_id: String) -> Dictionary:
 	var counts := {}
-	for event in _event_store.events_for_entity(settlement_id):
-		if event.type != "production_succeeded" or event.tags.is_empty():
+	for event in _event_store.events_for_entity_of_type(settlement_id, "production_succeeded"):
+		if event.tags.is_empty():
 			continue
 		var recipe_id: String = event.tags[0]
 		counts[recipe_id] = counts.get(recipe_id, 0) + 1
@@ -4832,8 +4829,8 @@ func household_count_for_settlement(settlement_id: String) -> int:
 ## duplicate founding for a path already known to be worn.
 func record_path_worn_if_new(tile: Vector2i) -> void:
 	var path_id := EntityRef.for_kind("path", "%d_%d" % [tile.x, tile.y])
-	var history := _event_store.events_for_entity(path_id)
-	if not history.is_empty() and history.back().type == "path_worn":
+	var latest = _event_store.latest_event_for_entity(path_id)
+	if latest != null and latest.type == "path_worn":
 		return
 	var event := Event.new("path_worn", _world_age_seconds)
 	event.actors.append(path_id)
@@ -4858,8 +4855,8 @@ func record_path_worn_if_new(tile: Vector2i) -> void:
 ## refusing it because the last-seen tier was the deeper one.
 func record_path_reclaimed(tile: Vector2i) -> void:
 	var path_id := EntityRef.for_kind("path", "%d_%d" % [tile.x, tile.y])
-	var history := _event_store.events_for_entity(path_id)
-	if history.is_empty() or not _CURRENTLY_WORN_EVENTS.has(history.back().type):
+	var latest = _event_store.latest_event_for_entity(path_id)
+	if latest == null or not _CURRENTLY_WORN_EVENTS.has(latest.type):
 		return
 	var event := Event.new("path_reclaimed", _world_age_seconds)
 	event.actors.append(path_id)
@@ -4886,8 +4883,8 @@ const _CURRENTLY_WORN_EVENTS := ["path_worn", "trail_formed"]
 ## only fires on the actual formation transition.
 func record_trail_formed_if_new(tile: Vector2i) -> void:
 	var path_id := EntityRef.for_kind("path", "%d_%d" % [tile.x, tile.y])
-	var history := _event_store.events_for_entity(path_id)
-	if not history.is_empty() and history.back().type == "trail_formed":
+	var latest = _event_store.latest_event_for_entity(path_id)
+	if latest != null and latest.type == "trail_formed":
 		return
 	var event := Event.new("trail_formed", _world_age_seconds)
 	event.actors.append(path_id)
@@ -4902,8 +4899,8 @@ func record_trail_formed_if_new(tile: Vector2i) -> void:
 ## fires while the path's most recent event actually IS a trail formation.
 func record_trail_reclaimed(tile: Vector2i) -> void:
 	var path_id := EntityRef.for_kind("path", "%d_%d" % [tile.x, tile.y])
-	var history := _event_store.events_for_entity(path_id)
-	if history.is_empty() or history.back().type != "trail_formed":
+	var latest = _event_store.latest_event_for_entity(path_id)
+	if latest == null or latest.type != "trail_formed":
 		return
 	var event := Event.new("trail_reclaimed", _world_age_seconds)
 	event.actors.append(path_id)
@@ -4946,8 +4943,8 @@ const SETTLING_EVENT_TYPES := ["npc_settled", "player_settled", "player_house_se
 func _households_in_settlement(settlement_id: String) -> Array[String]:
 	var household_ids: Array[String] = []
 	var seen := {}
-	for event in _event_store.events_for_entity(settlement_id):
-		if not SETTLING_EVENT_TYPES.has(event.type) or event.actors.is_empty():
+	for event in _event_store.events_for_entity_of_types(settlement_id, SETTLING_EVENT_TYPES):
+		if event.actors.is_empty():
 			continue
 		var household := _household_store.household_for(event.actors[0])
 		if household == null or seen.has(household.id):
@@ -4971,8 +4968,8 @@ func _households_in_settlement(settlement_id: String) -> Array[String]:
 ## from it -- exactly the settlements whose news is worth hearing later.
 func _villagers_in_settlement(settlement_id: String) -> Array[String]:
 	var npc_ids: Array[String] = []
-	for event in _event_store.events_for_entity(settlement_id):
-		if event.type != "npc_settled" or event.actors.is_empty():
+	for event in _event_store.events_for_entity_of_type(settlement_id, "npc_settled"):
+		if event.actors.is_empty():
 			continue
 		npc_ids.append(event.actors[0])
 	return npc_ids
@@ -4997,8 +4994,8 @@ func _settlement_of_party(party_id: String) -> String:
 		npc_id = household.members[0]
 	if EntityRef.kind_of(npc_id) != "npc":
 		return ""
-	for event in _event_store.events_for_entity(npc_id):
-		if event.type == "npc_settled" and not event.witnesses.is_empty():
+	for event in _event_store.events_for_entity_of_type(npc_id, "npc_settled"):
+		if not event.witnesses.is_empty():
 			return event.witnesses[0]
 	return ""
 
