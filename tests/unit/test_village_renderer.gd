@@ -687,17 +687,23 @@ func test_villagers_are_given_the_world_so_they_can_tell_when_theyre_in_water():
 
 
 ## A landmark_id can legitimately tag MORE than one spawned node -- e.g.
-## "stall" is both the settlement's own shared landmark AND the tag
-## VillageRenderer gives a merchant's personal trading stand (a separate
-## node at the merchant's own stand position). So this only requires that
-## SOME node carrying the id sits at the shared landmark's position, not
-## that EVERY node carrying it does.
+## "stall" is the tag on every one of a village's market stands. So this
+## only requires that SOME node carrying the id sits at the landmark's
+## position, not that EVERY node carrying it does.
+##
+## "stall" is excluded outright: it is no longer an always-drawn landmark.
+## A market stand is furniture, up only while its trader is behind it, and a
+## village nobody trades in has none at all -- see "the market square's
+## stands" at the end of this file. Which stands exist, and where, is pinned
+## there instead.
 func test_landmarks_are_rendered_as_sprites_at_their_positions():
 	var coord := _find_settlement_chunk("grassland")
 	var world := StubWorld.new()
 	var spawned := renderer.spawn_village(parent, coord, coord * CHUNK_SIZE, CHUNK_SIZE, TILE_SIZE, "grassland", world)
 	var settlement := _generator.generate_settlement(coord, coord * CHUNK_SIZE, CHUNK_SIZE, TILE_SIZE)
 	for landmark_id in settlement.landmarks:
+		if landmark_id == "stall":
+			continue
 		var found := false
 		for node in spawned:
 			if node.get_meta("landmark_id", "") == landmark_id and node is Sprite2D:
@@ -2639,3 +2645,23 @@ func _find_settlement_chunk_without_merchant(biome: String) -> Vector2i:
 			return coord
 	fail_test("no settlement chunk without a merchant found within 400 chunks")
 	return Vector2i.ZERO
+
+
+## The square's canonical trading spot IS the first stand: a villager who
+## resolves the `stall` tag -- and every merchant past the ones the square
+## had room for -- must walk to somewhere a stand really stands.
+func test_the_stall_tag_resolves_to_a_real_stand():
+	var coord := _find_settlement_chunk_with_merchant("grassland")
+	var world := StubWorld.new()
+	var spawned := renderer.spawn_village(parent, coord, coord * CHUNK_SIZE, CHUNK_SIZE, TILE_SIZE, "grassland", world)
+	var stalls := _stall_nodes(spawned)
+	assert_false(stalls.is_empty(), "precondition: this village has a market")
+	var positions := {}
+	for node in stalls:
+		positions[node.position] = true
+	for node in spawned:
+		if node is NpcMarker:
+			assert_true(
+				positions.has(node.landmarks["stall"]),
+				"%s would walk to a trading spot with no stand on it" % node.identity.npc_name
+			)

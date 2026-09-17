@@ -303,6 +303,13 @@ func spawn_village(
 	var market_stands := _market_stand_positions(
 		chunk_coord, chunk_size, tile_size, world, merchant_indices.size()
 	)
+	# The square's canonical trading spot IS the first stand, not a cell
+	# beside it: a villager who resolves the `stall` tag (and every merchant
+	# past the ones the square had room for) must walk to somewhere a stand
+	# really stands. Without this the tag keeps the planned cell, which
+	# _grounded_landmarks may already have nudged off it.
+	if not market_stands.is_empty():
+		settlement.landmarks["stall"] = market_stands[0]
 	for landmark_id in settlement.landmarks:
 		if landmark_id == "stall":
 			continue  # pitched with the market below, and only when tended
