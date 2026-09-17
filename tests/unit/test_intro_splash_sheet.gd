@@ -152,61 +152,153 @@ func _has_opaque_pixels(texture: Texture2D) -> bool:
 # swap fails here instead of shipping a drifting intro.
 
 
-## Rows of the sheet that are entirely background, i.e. the gutters -- the
-## same magenta rule the slicer itself keys on. Returns each content band
-## as [top, bottom).
-func _measured_row_bands(image: Image) -> Array:
-	var bands: Array = []
-	var top := -1
-	for y in image.get_height():
-		var is_gutter := true
-		for x in image.get_width():
-			if not IntroSplashSheet._is_magenta(image.get_pixel(x, y)):
-				is_gutter = false
-				break
-		if is_gutter:
-			if top >= 0:
-				bands.append(Vector2i(top, y))
-				top = -1
-		elif top < 0:
-			top = y
-	if top >= 0:
-		bands.append(Vector2i(top, image.get_height()))
-	return bands
+## A grid line is drawn across EVERYTHING, so every pixel along it is
+## light; content lines always have some black in them. The MINIMUM along a
+## line is therefore what separates the two, and a mean cannot: by the end
+## of this animation the globe is brighter than the dividers are.
+func _line_minimum(image: Image, index: int, along_rows: bool) -> float:
+	var inner: int = image.get_width() if along_rows else image.get_height()
+	var lowest := 1.0
+	for j in inner:
+		var x: int = j if along_rows else index
+		var y: int = index if along_rows else j
+		var pixel := image.get_pixel(x, y)
+		lowest = minf(lowest, maxf(pixel.r, maxf(pixel.g, pixel.b)))
+	return lowest
 
 
-func test_the_pinned_row_tops_are_where_the_sheets_rows_actually_start():
-	var image := SpriteSheetLoader.load_image(IntroSplashSheet._SHEET_PATH)
-	assert_not_null(image, "precondition: the sheet loads")
-	var measured := _measured_row_bands(image)
-	var real_tops: Array = []
-	for band in measured:
-		# A one-pixel sliver at the sheet's edge is an artefact of the
-		# render, not a row of art.
-		if (band as Vector2i).y - (band as Vector2i).x > 8:
-			real_tops.append((band as Vector2i).x)
-	var pinned_tops: Array = []
-	for band in IntroSplashSheet._ROW_BANDS:
-		pinned_tops.append((band as Vector2i).x)
+## Where each cell starts: the sheet's own edge, then the first pixel AFTER
+## each divider run ends -- not its centre, since a line is 1-3px wide and a
+## crop starting inside one carries that ink. Mirrors tools/probe_intro_grid.gd.
+func _measured_cell_starts(image: Image, along_rows: bool) -> Array:
+	var outer: int = image.get_height() if along_rows else image.get_width()
+	var starts: Array = [0]
+	var previous := -99
+	var in_run := false
+	for i in outer:
+		if _line_minimum(image, i, along_rows) < IntroSplashSheet.DIVIDER_BRIGHTNESS:
+			continue
+		if i != previous + 1 and in_run:
+			starts.append(previous + 1)
+		in_run = true
+		previous = i
+	if in_run:
+		starts.append(previous + 1)
+	return starts
+
+
+## The sheet as it is ON DISK. Deliberately not SpriteSheetLoader (which
+## prefers the imported texture, and a stale import cache is how a swapped
+## sheet got past this guard once) and not Image.load_from_file (which warns
+## on a res:// path, and an engine warning fails a GUT run).
+func _sheet_from_disk() -> Image:
+	var image := Image.new()
+	image.load_png_from_buffer(FileAccess.get_file_as_bytes(IntroSplashSheet._SHEET_PATH))
+	return image
+
+
+## The guard that exists precisely to catch the sheet being replaced -- and
+## did not, when it was (2026-09-17, a 1983x793 sheet of 8x5 frames swapped
+## for a 1672x941 contact sheet of 20x6). Two holes, both closed here:
+##
+## 1. It loaded through SpriteSheetLoader, which prefers the IMPORTED
+##    texture. A stale .godot import cache hands back the art the constants
+##    were measured FROM, so the comparison could not fail. It reads the raw
+##    file now, which is the thing that actually changed.
+## 2. It detected MAGENTA gutters. The replacement is drawn on black with
+##    thin light grid lines and no magenta anywhere, so the detector saw one
+##    band covering the whole sheet and the assertion passed vacuously.
+##
+## Re-measure with tools/probe_intro_grid.gd whenever the sheet changes.
+func test_the_pinned_grid_is_where_the_sheets_own_cells_actually_are():
+	var image := _sheet_from_disk()
+	assert_gt(image.get_width(), 0, "precondition: the sheet loads from disk")
 	assert_eq(
-		pinned_tops, real_tops,
-		"the pinned rows no longer describe assets/sprites/intro.png -- re-measure with tools/probe_intro_sheet.gd"
+		IntroSplashSheet._COLUMN_LEFTS, _measured_cell_starts(image, false),
+		"the pinned columns no longer describe assets/sprites/intro.png -- re-measure with tools/probe_intro_grid.gd"
+	)
+	assert_eq(
+		IntroSplashSheet._ROW_TOPS, _measured_cell_starts(image, true),
+		"the pinned rows no longer describe assets/sprites/intro.png -- re-measure with tools/probe_intro_grid.gd"
 	)
 
 
+## Every cell of the contact sheet has its own timestamp printed inside its
+## top edge ("0.00s" ... "4.96s"), white on black. Cropping from the cell's
+## own top puts that caption on screen over the globe, which is half of what
+## "the new intro crops are still not correct" was about.
+##
+## Asserted STRUCTURALLY -- the crop begins below where the caption really
+## is -- rather than by looking for white ink in the finished frames. That
+## was the first attempt and it does not work: measured on this sheet, the
+## caption is (0.91, 0.92, 0.91) and the blown-out core of a late flare is
+## (1.00, 0.99, 0.98), so no brightness or neutrality rule separates them.
+## Where the caption BAND sits is measurable, and that is what this pins.
+##
+## Measured in the FIRST cells of row 0 -- 0.00s, 0.04s, 0.08s, where the
+## globe is still a barely-lit crescent -- so the only bright thing there is
+## the timestamp itself. Row 0's later cells are already bright enough by
+## 0.75s to read as "caption" to any brightness rule, and the row divider
+## that ends the band is bright too; both were measured, not assumed.
+func test_the_crop_starts_below_the_sheets_own_timestamp_caption():
+	var image := _sheet_from_disk()
+	var last_ink := -1
+	for left in [IntroSplashSheet._COLUMN_LEFTS[0], IntroSplashSheet._COLUMN_LEFTS[1], IntroSplashSheet._COLUMN_LEFTS[2]]:
+		# Exactly the columns the crop itself reads, and only the top of the
+		# cell: scanning the whole row band would find the row divider that
+		# ends it, which is bright too and is not a caption.
+		var from_x: int = int(left) + IntroSplashSheet._CELL_INSET
+		var right: int = from_x + IntroSplashSheet._FRAME_WIDTH
+		for y in range(0, 40):
+			for x in range(from_x, right):
+				var pixel := image.get_pixel(x, y)
+				if pixel.r > 0.75 and pixel.g > 0.75 and pixel.b > 0.75:
+					last_ink = maxi(last_ink, y)
+					break
+	assert_gt(last_ink, 0, "precondition: row 0's cells really do carry caption ink")
+	assert_gt(
+		IntroSplashSheet._CAPTION_HEIGHT, last_ink,
+		"the crop starts at row %d of a cell, but the caption runs to row %d" % [
+			IntroSplashSheet._CAPTION_HEIGHT, last_ink
+		]
+	)
+
+
+## ...and the other half: no frame may carry the grid's own divider ink up
+## its side. That one IS checkable from the finished frames, because a
+## divider is a straight line the full height of the frame where art never
+## is -- measured at column 9, where the line is 2px wide but the detector
+## reads it as 1, which is why the crop keeps _CELL_INSET clear of it.
+func test_no_frame_carries_the_grids_own_divider_up_its_edge():
+	var frames := IntroSplashSheet.new().generate_textures()
+	assert_gt(frames.size(), 0, "precondition: frames were built")
+	for index in frames.size():
+		var image: Image = frames[index].get_image()
+		for x in [0, image.get_width() - 1]:
+			var lit := 0
+			for y in image.get_height():
+				var pixel := image.get_pixel(x, y)
+				if maxf(pixel.r, maxf(pixel.g, pixel.b)) > 0.35:
+					lit += 1
+			assert_lt(
+				lit, image.get_height() / 2,
+				"frame %d's column %d is lit down half its height -- that is a divider, not art" % [index, x]
+			)
+
+
 func test_a_frame_never_reaches_into_the_row_below_it():
-	# What produced the drift: art from the next row pulled into this row's
-	# frame. The CROP is what must stay clear -- the frame canvas is a
-	# fixed size for every row and pads around a short row's art, so
-	# asserting on _FRAME_HEIGHT alone would be asserting the wrong
-	# quantity. This mirrors _build_textures' own crop exactly.
-	var bands: Array = IntroSplashSheet._ROW_BANDS
-	for i in bands.size():
-		var band: Vector2i = bands[i]
-		var limit: int = int((bands[i + 1] as Vector2i).x) if i + 1 < bands.size() else 793
-		var crop: int = mini(IntroSplashSheet._FRAME_HEIGHT, band.y - band.x)
-		assert_lte(band.x + crop, limit, "row %d's crop reaches into what follows it" % i)
-		assert_eq(crop, band.y - band.x, "row %d's own art does not fit in its crop" % i)
+	# What produced the drift once: art from the next row pulled into this
+	# row's frame. Mirrors _build_textures' own crop exactly -- from the
+	# cell's top, past the caption, one fixed height.
+	var tops: Array = IntroSplashSheet._ROW_TOPS
+	var sheet_height: int = _sheet_from_disk().get_height()
+	for i in tops.size():
+		var top: int = int(tops[i])
+		var limit: int = int(tops[i + 1]) - 1 if i + 1 < tops.size() else sheet_height
+		assert_lte(
+			top + IntroSplashSheet._CAPTION_HEIGHT + IntroSplashSheet._FRAME_HEIGHT, limit,
+			"row %d's crop reaches into what follows it" % i
+		)
 
 
 func test_a_frame_never_reaches_into_the_column_beside_it():

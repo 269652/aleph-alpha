@@ -60,62 +60,71 @@ const SpriteSheetLoader = preload("res://src/rendering/sprite_sheet_loader.gd")
 
 const _SHEET_PATH := "res://assets/sprites/intro.png"
 
-## [top_y, bottom_y) per row, top to bottom exactly as drawn -- measured,
-## not eyeballed (see this file's own doc comment above). Only top_y (each
-## band's own `.x`) is actually used as a crop anchor now; bottom_y still
-## documents the real measured row extent and drives _FRAME_HEIGHT's own
-## derivation below.
-const _ROW_BANDS: Array[Vector2i] = [
-	Vector2i(7, 169),
-	Vector2i(174, 332),
-	Vector2i(337, 495),
-	Vector2i(500, 647),
-	Vector2i(652, 786),
+## The sheet is a CONTACT SHEET: 20 columns x 6 rows of frames drawn on
+## black, separated by thin light grid lines, with its own timestamp
+## ("0.00s" ... "4.96s", 24fps) printed inside the top of every cell.
+## Measured with tools/probe_intro_grid.gd against the file on disk, never
+## divided arithmetically: the drawn lines drift up to 2px from an even
+## 1672/20 split, which at this cell size is a visible wobble.
+##
+## Re-measure whenever the art changes. test_the_pinned_grid_is_where_the_
+## sheets_own_cells_actually_are compares these against the real file every
+## run, so the next swap fails there instead of shipping.
+## Each is the first pixel AFTER its divider ends, not the divider's own
+## centre: a drawn line is 1-3px wide, and a crop that starts inside one
+## carries that ink in its own first column.
+const _COLUMN_LEFTS: Array[int] = [
+	0, 83, 167, 250, 335, 418, 501, 585, 669, 753,
+	837, 921, 1005, 1090, 1173, 1257, 1340, 1424, 1509, 1592,
 ]
+const _ROW_TOPS: Array[int] = [0, 155, 309, 462, 617, 770]
 
-## Left edge (source-image space) of each of the 8 columns, identical
-## across all 4 rows by construction -- the AI drew one consistent column
-## grid, reused for every row. Measured from row 0 (SpriteSheetSlicer.
-## detect_frames on its own row band): the one row with neither the
-## light-streak sweep nor any wordmark ink yet, so nothing biases a
-## content-based measurement. Rows 2 and 3 independently re-detect this
-## EXACT same array; only row 1 (mid-sequence, both streak and the first
-## wordmark letters already present) drifts by 1px at a single column --
-## see test_column_lefts_match_a_content_free_measurement for the
-## regression check against the real image.
-const _COLUMN_LEFTS: Array[int] = [8, 251, 499, 746, 994, 1242, 1490, 1738]
+## How light a line has to be at its DARKEST pixel to be one of the sheet's
+## own grid lines rather than content. A line is drawn across everything, so
+## every pixel along it is light; content always has some black in it. A
+## MEAN cannot tell them apart -- by the end of this animation the globe is
+## brighter than the dividers -- which is why the measurement, and the test
+## that re-checks it, both key on the minimum.
+const DIVIDER_BRIGHTNESS := 0.18
 
-## ONE fixed canvas size, shared by all 40 frames -- no per-frame content
-## cropping (see this file's own doc comment above for why). _FRAME_WIDTH
-## is comfortably larger than the widest column of real art measured on
-## this sheet (242px) and no larger than the tightest real column pitch
-## (243px, the minimum left-to-left gap among _COLUMN_LEFTS) so it can
-## never bleed into the next column. _FRAME_HEIGHT is the TALLEST of the 5
-## measured _ROW_BANDS (row 0, 162px); every shorter row is crop-limited
-## to its own art and padded evenly into this canvas rather than stretched
-## to it. Both bounds are re-verified against the real sheet by
-## test_a_frame_never_reaches_into_the_column_beside_it and
-## test_a_frame_never_reaches_into_the_row_below_it, not just claimed in
-## this comment (see CLAUDE.md: tuned thresholds must be tested, not
-## eyeballed).
-const _FRAME_WIDTH := 243
-const _FRAME_HEIGHT := 162
+## The timestamp caption printed inside each cell's top edge. Measured: the
+## ink occupies rows 11..21 of every cell, and the earliest globe pixel in
+## any cell is row 40, so 28 clears the caption with margin and takes
+## nothing from the art. Cropping from the cell's own top instead puts
+## "0.04s" on screen over the globe.
+const _CAPTION_HEIGHT := 28
 
-## Chroma-keyed opaque magenta -- identical thresholds to every other
-## illustrated sheet in this codebase (e.g. IllustratedWormSprite),
-## confirmed against this sheet's own corner pixel with
-## tools/probe_intro_sheet.gd.
+## One pixel in from every measured cell edge. The drawn lines are not a
+## uniform width down their length -- measured at column 9, the divider is
+## 2px (0.52 and 0.76 bright) where the line-minimum detector reads it as
+## 1px, because further down it fades under the threshold -- so a crop that
+## starts exactly at the measured edge carries that second pixel as a bright
+## stripe up its own side. One pixel of margin costs nothing and cannot be
+## caught out by a line that thickens somewhere this did not sample.
+const _CELL_INSET := 1
+
+## ONE fixed crop, shared by all 120 frames -- no per-frame content
+## detection (see this file's own doc comment for why). Both are bounded by
+## the CLEAN extent of the tightest cell -- from its own start to where the
+## next divider begins, not to where the next cell starts -- less the inset
+## above: 80px wide (the last column, which ends at the sheet's edge) and
+## 151px tall (rows 2 and 4), less the caption. Unlike the previous sheet, whose rows were
+## genuinely different heights, every cell here can supply this same window
+## from the same offset -- and the globe sits 40-46 rows below its own
+## cell's top in every row, measured, so one offset keeps it still.
+const _FRAME_WIDTH := 79
+const _FRAME_HEIGHT := 122
+
+## Chroma-keyed opaque magenta, the convention every other illustrated
+## sheet in this codebase uses. The sheet delivered on 2026-09-17 does NOT:
+## it is drawn on black, so nothing is keyed out of it and the build path
+## no longer prepares or despills anything. This stays as the tripwire --
+## test_frames_have_no_leftover_magenta_background still runs, so a future
+## magenta-backed sheet fails there rather than shipping with its own
+## background painted into every frame.
 const _MAGENTA_RED_MIN := 0.85
 const _MAGENTA_BLUE_MIN := 0.85
 const _MAGENTA_GREEN_MAX := 0.15
-
-## Despill margin -- identical technique and reasoning to
-## IllustratedWormSprite._despilled/IllustratedDecomposerSprite's own,
-## reused verbatim rather than reinvented (this codebase's own established
-## convention: this exact small technique is already duplicated across
-## seven illustrated-sheet classes rather than pulled into a shared
-## utility).
-const _MAGENTA_CAST_MARGIN := 0.03
 
 static var _frame_cache: Array[ImageTexture] = []
 
@@ -129,71 +138,24 @@ func generate_textures() -> Array[ImageTexture]:
 
 
 func _build_textures() -> Array[ImageTexture]:
-	var image := _prepared_for_slicing(SpriteSheetLoader.load_image(_SHEET_PATH))
+	var image := SpriteSheetLoader.load_image(_SHEET_PATH)
+	if image == null:
+		return []
+	if image.get_format() != Image.FORMAT_RGBA8:
+		image.convert(Image.FORMAT_RGBA8)
 	var textures: Array[ImageTexture] = []
-	for row in _ROW_BANDS.size():
-		var band: Vector2i = _ROW_BANDS[row]
-		# Exactly this row's own measured art, never a pixel of the gutter
-		# or of the row below it. The rows of this sheet are genuinely
-		# different heights (162/158/158/147/134 -- see _ROW_BANDS), so one
-		# crop height cannot serve them all.
-		var art_height: int = mini(_FRAME_HEIGHT, band.y - band.x)
-		# ...and the shortfall against the shared canvas is split EVENLY
-		# above and below, because the globe sits at its own row's middle
-		# in every row. Anchored at the row's top instead, a short row puts
-		# its whole shortfall below the art and the globe climbs the screen
-		# as the sequence plays -- reported in play as "the image is moving
-		# from bottom to top" (see test_every_frame_puts_its_art_at_the_
-		# same_height, confirmed red against exactly that anchoring).
-		var top_pad: int = (_FRAME_HEIGHT - art_height) / 2
+	for top in _ROW_TOPS:
 		for left in _COLUMN_LEFTS:
-			var cropped := image.get_region(Rect2i(left, band.x, _FRAME_WIDTH, art_height))
-			if cropped.get_format() != Image.FORMAT_RGBA8:
-				cropped.convert(Image.FORMAT_RGBA8)
-			# Every frame is the SAME size whatever its row could spare,
-			# so nothing rescales between rows (see bug #6 above); a short
-			# row simply carries transparent space above and below its art.
-			var frame_image := Image.create(_FRAME_WIDTH, _FRAME_HEIGHT, false, Image.FORMAT_RGBA8)
-			frame_image.fill(Color(0.0, 0.0, 0.0, 0.0))
-			frame_image.blit_rect(
-				cropped, Rect2i(0, 0, _FRAME_WIDTH, art_height), Vector2i(0, top_pad)
-			)
-			textures.append(ImageTexture.create_from_image(frame_image))
+			# A plain region from a fixed offset inside the cell: past the
+			# caption, and the same window everywhere so nothing rescales
+			# or drifts between frames.
+			textures.append(ImageTexture.create_from_image(
+				image.get_region(Rect2i(
+					left + _CELL_INSET, top + _CAPTION_HEIGHT, _FRAME_WIDTH, _FRAME_HEIGHT
+				))
+			))
 	return textures
-
-
-## Makes the sheet's magenta background genuinely transparent, and
-## despills the magenta cast baked into every antialiased edge around it,
-## before the image ever reaches SpriteSheetSlicer -- mirrors
-## IllustratedWormSprite._prepared_for_slicing exactly.
-func _prepared_for_slicing(image: Image) -> Image:
-	var prepared := image.duplicate() as Image
-	if prepared.get_format() != Image.FORMAT_RGBA8:
-		prepared.convert(Image.FORMAT_RGBA8)
-	for y in prepared.get_height():
-		for x in prepared.get_width():
-			var pixel := prepared.get_pixel(x, y)
-			if _is_magenta(pixel):
-				prepared.set_pixel(x, y, Color(pixel.r, pixel.g, pixel.b, 0.0))
-			else:
-				prepared.set_pixel(x, y, _despilled(pixel))
-	return prepared
 
 
 static func _is_magenta(color: Color) -> bool:
 	return color.r >= _MAGENTA_RED_MIN and color.b >= _MAGENTA_BLUE_MIN and color.g <= _MAGENTA_GREEN_MAX
-
-
-## `color` with any magenta-direction cast removed -- identical technique
-## to IllustratedWormSprite._despilled. A pixel with no cast (a genuine
-## dark tone -- the sheet's own starfield/space background) passes through
-## completely unchanged.
-static func _despilled(color: Color) -> Color:
-	var cast: float = minf(color.r - color.g, color.b - color.g)
-	if cast <= _MAGENTA_CAST_MARGIN:
-		return color
-	var removed := cast - _MAGENTA_CAST_MARGIN
-	return Color(
-		clampf(color.r - removed, 0.0, 1.0), color.g,
-		clampf(color.b - removed, 0.0, 1.0), color.a
-	)
