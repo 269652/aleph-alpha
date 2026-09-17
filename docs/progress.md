@@ -23195,6 +23195,15 @@ already turned on, named rather than restated). A producer whose region has
 genuinely collapsed is sent to the well again, so the famine chain is
 unchanged.
 
+**Also pre-existing, verified by the same method**: three failures in
+`test_earth_chunk_manager.gd` — `test_water_overlay_marks_shore_cells_
+differently_from_non_touching_cells`, `test_water_overlay_uses_ring_tiles_
+for_cells_a_few_tiles_from_shore` and
+`test_refresh_creatures_promotes_blackbirds_once_population_rises_after_
+load`. Symmetric A/B with only this pass's two changed source files swapped
+to their `5de33c9` versions: 1/3 and 0/1 either way, identical. Water
+overlay and ambient-flyer promotion touch nothing this pass changed.
+
 **Known, pre-existing, and not caused by this pass**: `test_player.gd`
 cannot be run to completion in a headless container. It stalls
 deterministically at `test_grant_starter_items_equips_the_first_weapon_
