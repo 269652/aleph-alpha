@@ -1370,6 +1370,32 @@ func test_nearest_npc_near_returns_null_when_out_of_range():
 	npc.free()
 
 
+## A villager looking for COMPANY asks this same question from their own
+## position (docs/concept/npc_social_life.md), and would otherwise always
+## find themselves standing zero pixels away. `excluding` is what lets one
+## lookup serve both the player's talk prompt and a villager's own search.
+func test_a_villager_looking_for_company_never_finds_themselves():
+	manager.update(_berlin_tile)
+	var seeker := _add_fake_npc(Vector2(100, 100))
+	var neighbour := NpcMarker.new()
+	neighbour.identity = NpcIdentity.new(2)
+	neighbour.position = Vector2(130, 100)
+	creatures_parent.add_child(neighbour)
+	manager._loaded_villages[Vector2i(0, 0)] = [seeker, neighbour]
+
+	assert_eq(manager.nearest_npc_near(seeker.position, 10.0), seeker, "precondition: it finds itself")
+	assert_eq(
+		manager.nearest_npc_near(seeker.position, 100.0, seeker), neighbour,
+		"excluding themselves, the nearest villager is the neighbour"
+	)
+	assert_null(
+		manager.nearest_npc_near(seeker.position, 10.0, seeker),
+		"and nobody else is in reach at all"
+	)
+	seeker.free()
+	neighbour.free()
+
+
 func test_nearest_npc_near_returns_null_when_no_settlement_loaded():
 	assert_null(manager.nearest_npc_near(Vector2(100, 100), 10000.0))
 
