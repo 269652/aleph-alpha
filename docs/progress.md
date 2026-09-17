@@ -23960,6 +23960,44 @@ structure_art`, 259/259 `test_creature_marker`, the fence subset of
 `test_earth_chunk_manager`, and 260/260 across the four neighbouring
 village/item suites as a regression check.
 
+### Closing the frame, clearing the ground, and losing the blob (2026-09-17)
+
+Three things reported off one screenshot of a real village.
+
+**The frame was open on one side.** Looked at rather than guessed:
+`tools/probe_village_map.gd` on real villages shows a field sitting below
+the house it belongs to, so one whole side of its frame lands on the next
+street ROW — and rails were held off every street row, paved or not, while
+most of those cells carry no paving at all. A field's south side read
+`.....`, a three-wide hole with the frame closed on every other side. Rails
+may now stand on an unpaved street-row cell; paving is occupied ground and
+still stops one on its own, which is the gate. Sowing in a street row stays
+forbidden — a crop in the roadway is what that rule was really about. The
+new test states the frame as a whole (every ring cell carries a rail unless
+a bed, a building, paving or impossible ground stops it) rather than
+re-deriving the placement rule; it failed on 10 open cells across 8 real
+villages and named every one.
+
+**Long grass was not cleared before planting.** `till_and_plant_farm_plot_
+at_global` now blocks the chunk's ground cover on the tilled cell, through
+the same `_block_ground_cover_on_cells` seam a building's floor already
+uses. Only when the till really takes: a bed refused because a live crop
+stands on it was never worked.
+
+**The round dark blob was `ProceduralSoilSprite`.** It is a root crop's own
+ground — the root grows in the mound, and pulling one leaves the crater its
+DISTURBED state draws — and just a dark circle under bending wheat, six of
+them in a 3×2 bed. Hidden for a wheat bed, kept for the crops it was drawn
+for. Keyed on what the bed was SOWN with, not `plot.crop_id`: harvesting
+clears the crop, and a first pass keyed on `crop_id` grew the mound back the
+instant the wheat came off — caught by
+`test_a_harvested_wheat_bed_still_shows_no_mound`, which is why that test
+exists.
+
+test_village_renderer 90/90, test_farm_plot_marker 13/13,
+test_earth_chunk_manager_farm_plots 17/17, and 152/152 across the six
+farming and grass suites.
+
 Honest gaps, three real:
 
 🚧 **The gate is a real hole.** An animal that wanders into the gate cell is
@@ -24103,3 +24141,167 @@ drift.
 
 Tests: `test_intro_splash_sheet.gd` 16/16 (2 new), 46/46 across all five
 intro test files.
+
+## The character creator's load: one real bug, one freeze, and a never-migrated per-pixel loop (`concept/character_creator_preview_scene.md`, 2026-09-17)
+
+Reported live: *"The character creature loads super slow and needs a
+general overhaul."* Measured before touching anything (a throwaway
+`--headless` probe that instrumented `CharacterPreviewDiorama.build()`
+step by step, since deleted): a cold build is **~4.5s**, and a WARM one
+— every DNA reroll — was still **~250ms**. Both real, both with
+distinct causes.
+
+### ✅ The grass atlas was re-sliced on every single build (`illustrated_grass_patch.gd`)
+
+`IllustratedGrassPatch._textures` was a per-INSTANCE `Dictionary`, and
+`_build_grass` constructs a fresh patch each build, so every `build()`
+re-read the 1254x1254 season sheet off disk and re-ran
+`SpriteSheetSlicer.chroma_keyed` over all ~1.57M of its pixels for a
+byte-identical result: **~222ms, every time**. A straight bug against this
+codebase's own convention — `IllustratedTerrainSprite._frame_cache` and
+`IllustratedStoneSprite._frame_cache` are both `static var` for exactly
+this reason. Not diorama-specific either: `EarthChunkManager` only escaped
+it by happening to hold one long-lived patch for the whole world, so any
+second caller would have paid it too. Now `static`, with a public
+`texture_for_season()` so the sharing is directly assertable rather than
+only visible as a side effect on a `MultiMeshInstance2D`.
+
+### ✅ The remaining ~3.9s is real work, and now runs incrementally (`character_preview_diorama.gd`, `scenes/main_menu.gd`)
+
+Almost all of a cold build is first-use sprite-sheet loading, and it ran as
+ONE unyielded block inside the fully-synchronous `_build_create_screen`
+(reached via `_select_class` —> `_refresh_appearance`), so nothing could
+repaint for its duration — including the `LoadingOverlay` that had just
+been shown for the class portraits. This is the gap `concept/
+intro_splash.md`'s sixth and tenth passes each named and each explicitly
+deferred; its own caveat (*"either of those two costs growing
+independently in the future could reopen exactly the gap this pass
+closes"*) turned out to be exactly right.
+
+`build_async(dna_seed, on_progress)` performs the same steps in the same
+order from ONE shared `_build_steps()` list, awaiting a frame between each
+and reporting `(done, total, label)`. `build()` is unchanged and still
+fully synchronous. The unit of yielding is one atomic first-use cost, not
+one `_build_*` function: flowers, birds and butterflies each load a
+separate sheet PER SPECIES (~250-590ms per flower species, ~420-460ms per
+bird), so `_build_birds`/`_build_flowers`/`_build_butterflies` became
+`_build_bird`/`_build_flower`/`_build_butterfly` and expand to one step
+per item.
+
+`MainMenu._ensure_create_screen_built` awaits `_build_diorama_
+incrementally()` after the screen itself is built, reporting into the SAME
+overlay the portrait pass already uses — so the whole first open is one
+continuous readout ("7 / 7 portraits", then "11 / 21 scene pieces: the
+pond") instead of a spinner followed by a silent multi-second freeze.
+`_diorama_build_pending` keeps `_refresh_appearance` out of the way until
+that first build lands so the scene is never built twice; a DNA reroll
+stays inline on purpose, since a warm rebuild is now a frame.
+
+### ✅ A never-migrated per-pixel loop (`illustrated_terrain_sprite.gd`)
+
+Chasing the largest single step — the grassland ground — found that its
+~987ms sheet load is only ~36ms of PNG decode. `IllustratedTerrainSprite
+._prepared_for_slicing` alone was ~458ms: a plain `get_pixel`/`set_pixel`
+double loop over 1.57M pixels calling the user-defined `_is_magenta`/
+`_despilled` once each per pixel — the exact technique `SpriteSheetSlicer
+.chroma_keyed`, `IllustratedMushroomSprite`, `IllustratedAnimalSprite` and
+`IllustratedStoneSprite` had each already been fixed out of (see the "Still
+at 1fps" investigation above). This file was a never-migrated duplicate.
+
+Rewritten as single inlined passes with INTEGER thresholds — every value
+read out of a `PackedByteArray` already is an integer, so `r >= 140.25`
+means exactly `r >= 141`, and `cast > 7.65` means exactly `cast >= 8`.
+`_prepared_for_slicing` **458ms —> 180ms**, whole sheet load
+**987ms —> 691ms**.
+
+Pinned COMPARATIVELY, not by an absolute ceiling: the test races the real
+implementation against a naive reference in the same process on the same
+image, and asserts they produce byte-identical output. The first attempt
+used an absolute 200ms budget calibrated from the real 180ms measurement,
+and it went red at 221ms the first time it ran on a loaded box with nothing
+changed. A timing pin that fails on a busy runner teaches people to ignore
+it, so the pin now measures the code rather than the machine.
+
+### ⬜ A second per-pixel change was tried, measured, and reverted (`sprite_sheet_slicer.gd`)
+
+`chroma_keyed`'s own doc comment tells every illustrated-art class in this
+codebase that a `PackedByteArray` loop beats `get_pixel`/`set_pixel`. A
+"read the bytes, write with `set_pixel`" hybrid looked like a strict
+improvement when measured on one real sheet: 186ms, against the shipped
+byte-array version's 226ms and a naive loop's 201ms. `IllustratedBirdSprite
+._keyed_image` was de-duplicated onto it at the same time.
+
+Sweeping the background fraction afterwards showed that was not the win it
+appeared to be. The hybrid is ~2x faster where most pixels MISS the key and
+take the early-out, and genuinely SLOWER where most pixels match and take
+the write path (337ms against a naive 275ms at 100% background). The
+crossover sits near 46% background — roughly where real illustrated sheets
+live — so the single real-sheet measurement that motivated the change was
+sitting inside the noise around break-even rather than above it.
+
+Both the hybrid and the bird de-duplication are reverted. `chroma_keyed` is
+shared by nine classes, and a change whose benefit depends on which side of
+break-even a given sheet falls does not earn that blast radius. The finding
+is recorded in `concept/character_creator_preview_scene.md` because the next
+person to read that doc comment deserves to know it is only half true.
+
+### ✅ 72 ground tiles, 9 textures (`character_preview_diorama.gd`)
+
+The ground plane is 12x6 tiles drawn from a sheet holding 9 variants, and
+`frame_for` returns the same cached `Image` object for every seed picking a
+given variant — so one `ImageTexture` per tile was uploading the same
+handful of 32x32 images eight times over. Keyed on that object's identity
+instead. The test bounds itself against the sheet's own real frame count
+(a new `IllustratedTerrainSprite.frame_count_for`), and requires MORE than
+one texture, so a future bug flattening the whole ground onto a single
+variant fails rather than reading as a great cache hit rate.
+
+### Measured end to end
+
+Three runs of each on one machine, base commit vs. branch, `build()` called
+for four successive seeds in one process:
+
+| `build()` | before | after |
+| --- | --- | --- |
+| cold (first ever) | ~4478ms | ~3999ms |
+| second seed | ~1503ms | ~1282ms |
+| third seed | ~556ms | ~324ms |
+| steady-state rebuild | ~252ms | **~39ms** |
+
+Honestly: the cold number moves least, because most of a first build is
+still per-species sheet loading that happens once per process no matter who
+triggers it (the real world would pay it later anyway). What changed for a
+player is the other two things — that cost no longer freezes the window,
+and a DNA reroll went from a quarter-second stutter to a single frame.
+
+### Still open
+
+The skill web (`_build_skills_tab`) is still built fully synchronously, and
+is still the one remaining un-yield-split cost the sixth pass named — ~250ms
+in `_build_create_screen`, far smaller than the diorama was, but not zero.
+The OTHER illustrated-sprite classes that carry their own copy of the
+naive `_prepared_for_slicing` loop (`illustrated_beehive_sprite.gd`,
+`illustrated_caterpillar_sprite.gd`, `illustrated_bee_sprite.gd`,
+`illustrated_worm_sprite.gd`, `illustrated_ant_mound_sprite.gd`,
+`illustrated_grass_frog_sprite.gd`, `intro_splash_sheet.gd`,
+`illustrated_millipede_sprite.gd`, `illustrated_structure_sprite.gd`) were
+NOT migrated by this pass — none of them is in the character creator's own
+path, and each needs its own budgeted pin and its own pixel-parity test to
+migrate honestly rather than by search-and-replace.
+
+TDD throughout, red first. New tests: `test_illustrated_grass_patch.gd` +2
+(shared atlas identity, and that seasons still differ),
+`test_character_preview_diorama.gd` +5 (build_async scene parity against
+the synchronous build, progress 0—>total, at least one frame per step,
+per-item yielding for flowers/birds/butterflies, ground texture sharing),
+`test_main_menu.gd` +4 (the synchronous build leaves the scene unbuilt,
+`_ensure_create_screen_built` finishes it, the overlay reports diorama
+progress, and a reroll still rebuilds inline),
+`test_illustrated_terrain_sprite.gd` +3 (a comparative speed-and-parity
+race against the naive loop, a per-frame scrub pin, and a pixel-level
+key/despill/leave-alone parity test).
+
+Three existing `test_main_menu.gd` navigation tests were changed from a
+hardcoded `wait_process_frames(10)` to waiting on the real condition
+(`_creator_is_open`): that margin was already a guess at one yield-split
+pass's length, and adding a second one made it stale.

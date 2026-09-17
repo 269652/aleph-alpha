@@ -631,8 +631,18 @@ func _fence_the_fields(
 				continue  # the neighbouring farm's crop, not this farm's fence line
 			if not is_buildable.call(cell) or is_occupied.call(cell):
 				continue  # water, a building, or paving -- the paving being the gate
-			if _is_street_row(chunk_coord, chunk_size, world, cell.y):
-				continue  # an unpaved gap in a street row is still street
+			# Deliberately NOT skipped for standing on a street ROW, the way
+			# a BED is (_workable_field_of). Reported with the bed circled:
+			# "it's still not fully enclosing the bed" -- a field sits below
+			# the house it belongs to, so one whole side of its frame lands
+			# on the next street row, and measured on real villages
+			# (tools/probe_village_map.gd) most of those cells carry no
+			# paving at all: a 3-wide gap under a field with the frame
+			# closed on every other side. An unpaved gap is not a gate, and
+			# a rail along the edge of a road is a fence beside a road. The
+			# gate is the PAVING, which is_occupied already leaves open
+			# above. Sowing in a street row stays forbidden: a crop in the
+			# roadway is the thing that rule was really about.
 			# The rail's own tile id carries which side of the field it
 			# closes, so the sheet's four orientation columns still draw
 			# correctly on a reload that remembers nothing else about it.

@@ -28,7 +28,7 @@ const AmbientFlyerRenderer = preload("res://src/rendering/ambient_flyer_renderer
 ## Richer scene life (reported live: "We need flowers, butterflies, worms").
 ## Both are plain art generators with no chunk/biome dependency (see
 ## EarthChunkManager._sync_flower_sprites/_sync_worm_sprites, the same inline-
-## Sprite2D pattern _build_flowers/_build_worms below mirror) -- no dedicated
+## Sprite2D pattern _build_flower/_build_worms below mirror) -- no dedicated
 ## "spawn one at a position" renderer exists for either, unlike fish/trees/
 ## birds, so this diorama builds the Sprite2D itself.
 const ProceduralFlowerSprite = preload("res://src/rendering/procedural_flower_sprite.gd")
@@ -245,6 +245,58 @@ var _fight_swing_remaining := 0.0
 ## while the stroll target itself is freshly randomized regardless --
 ## ambient motion, not part of the hero's own identity.
 func build(dna_seed: int) -> void:
+	_begin_build(dna_seed)
+	for step in _build_steps():
+		step["run"].call()
+	_finish_build()
+
+
+## The same scene as build(), assembled one step at a time with a real frame
+## between each -- reported live: "the character creator loads super slow".
+##
+## Nothing about yielding makes the work smaller. A cold build is seconds,
+## and essentially all of it is first-use sprite-sheet loads -- reading a
+## sheet and slicing it costs what it costs. (Several of those loads DID get
+## genuinely cheaper in the same pass, but separately and inside the sprite
+## classes themselves; see docs/concept/character_creator_preview_scene.md's
+## own "Load cost" section for the measured breakdown and the paired
+## before/after.) What THIS changes is that the remaining cost stops being
+## ONE unyielded synchronous block that freezes the window -- the same
+## failure mode, and the same fix, as MainMenu._warm_class_icon_cache and
+## IllustratedMushroomSprite.warm_cache before it.
+##
+## build() itself is deliberately UNCHANGED in behaviour and stays fully
+## synchronous -- every test, and any caller that needs a finished scene on
+## the next line, still has it. Both run the SAME _build_steps() list in the
+## SAME order, so the two can never drift into different scenes (pinned by
+## test_build_async_produces_the_same_scene_as_the_synchronous_build); only
+## this one waits between steps.
+##
+## `on_progress` is called as (done: int, total: int, label: String),
+## starting at (0, total, ...) so a progress bar opens at zero rather than
+## jumping -- mirroring MainMenu._warm_class_icon_cache's own (loaded, total)
+## convention, with a label added since a step here is "the pond" or "the
+## hero" rather than one more of a single uniform unit.
+func build_async(dna_seed: int, on_progress: Callable = Callable()) -> void:
+	_begin_build(dna_seed)
+	var steps := _build_steps()
+	var total := steps.size()
+	if on_progress.is_valid():
+		on_progress.call(0, total, String(steps[0]["label"]))
+	for i in total:
+		steps[i]["run"].call()
+		if on_progress.is_valid():
+			on_progress.call(i + 1, total, String(steps[i]["label"]))
+		await Engine.get_main_loop().process_frame
+	_finish_build()
+
+
+## Tears the previous generation down and reseeds, up to and including the
+## layout -- everything both build paths must do before the first step runs.
+## The layout is generated HERE rather than as a step of its own because
+## _build_steps reads it (flowers/birds/butterflies expand to one step per
+## item) and because it is pure math: 0.3ms, nothing to yield for.
+func _begin_build(dna_seed: int) -> void:
 	# Immediate free, not queue_free -- this runs synchronously from build(),
 	# never from a signal/callback on one of these children itself, so
 	# there is nothing an immediate free could interrupt mid-handler. A
@@ -287,20 +339,62 @@ func build(dna_seed: int) -> void:
 	_rng.seed = dna_seed
 
 	_layout = CharacterPreviewLayout.generate(dna_seed, FOOTPRINT)
-	_build_ground()
-	_build_grass()
-	_build_pond()
-	_build_pebbles()
-	_build_fish()
-	_build_trees()
-	_build_birds()
-	_build_flowers()
-	_build_worms()
-	_build_butterflies()
-	_build_boar()
-	_build_character()
-	_build_bobber()
 
+
+## Every unit of build work, in order, each as {label, run} -- ONE list read
+## by both build() and build_async() so the synchronous and incremental
+## paths can never assemble different scenes.
+##
+## The unit is one ATOMIC first-use cost, not one _build_* function. Flowers,
+## birds and butterflies each load a separate sheet PER SPECIES (~250-590ms
+## per flower species, ~420-460ms per bird species -- see the concept doc's
+## own Load cost table), so those three expand to one step per item;
+## collapsing them back into one step each would leave build_async yielding
+## around multi-second blocks and calling itself incremental. Splitting
+## FINER than this would be theatre: the ground's own ~1000ms is a single
+## indivisible load()-and-slice of the grassland sheet, and nothing
+## restructures that into two.
+##
+## Labels are player-facing (the loading overlay shows them), which is why
+## they read "the pond" rather than "_build_pond".
+func _build_steps() -> Array[Dictionary]:
+	var steps: Array[Dictionary] = []
+	steps.append({"label": "the ground", "run": _build_ground})
+	steps.append({"label": "the meadow", "run": _build_grass})
+	steps.append({"label": "the pond", "run": _build_pond})
+	steps.append({"label": "pebbles", "run": _build_pebbles})
+	steps.append({"label": "fish", "run": _build_fish})
+	steps.append({"label": "trees", "run": _build_trees})
+	# One renderer/generator per BUILD, captured by the per-item lambdas
+	# below rather than reconstructed per item -- cheap either way (every
+	# sheet cache behind them is static), but it keeps one build's worth of
+	# per-instance state, e.g. StoneRenderer._texture_cache's shape, in one
+	# place.
+	var flyer_renderer := AmbientFlyerRenderer.new()
+	for bird_position in _layout.bird_positions:
+		steps.append({"label": "birds", "run": func(): _build_bird(flyer_renderer, bird_position)})
+	var flower_generator := ProceduralFlowerSprite.new()
+	for flower_position in _layout.flower_positions:
+		steps.append(
+			{"label": "flowers", "run": func(): _build_flower(flower_generator, flower_position)}
+		)
+	steps.append({"label": "worms", "run": _build_worms})
+	for butterfly_position in _layout.butterfly_positions:
+		steps.append(
+			{
+				"label": "butterflies",
+				"run": func(): _build_butterfly(flyer_renderer, butterfly_position)
+			}
+		)
+	steps.append({"label": "a boar", "run": _build_boar})
+	steps.append({"label": "the hero", "run": _build_character})
+	steps.append({"label": "the hero's gear", "run": _build_bobber})
+	return steps
+
+
+## The stroll/action state every step above has to exist before -- picking a
+## first action reads character_view's own position.
+func _finish_build() -> void:
 	_stroll_target = character_view.position
 	_fishing_spot = _compute_fishing_spot()
 	var first_action := CharacterActionPicker.pick_next(_rng)
@@ -557,6 +651,17 @@ func _build_ground() -> void:
 	var procedural := ProceduralTerrainSprite.new()
 	var columns := int(ceil(FOOTPRINT.x / GROUND_TILE_WORLD_SIZE))
 	var rows := int(ceil(FOOTPRINT.y / GROUND_TILE_WORLD_SIZE))
+	# One ImageTexture per distinct variant IMAGE, not per tile. A 12x6
+	# footprint is 72 tiles drawn from a sheet holding only 9 variants
+	# (IllustratedTerrainSprite's own 3x3 grids), and frame_for hands back
+	# the SAME cached Image object every time a seed picks a given variant
+	# -- so keying on that object's identity collapses 72 GPU uploads of the
+	# same handful of 32x32 images down to one each. Local to this build,
+	# not static: the textures die with the generation of tiles that used
+	# them (see _begin_build's own immediate free), and re-deriving nine of
+	# them costs microseconds once the sheet itself is cached.
+	# Pinned by test_ground_tiles_share_one_texture_per_distinct_variant.
+	var textures_by_image := {}
 	for row in rows:
 		for column in columns:
 			# Hash-derived per cell, so the same hero always stands on the
@@ -568,9 +673,12 @@ func _build_ground() -> void:
 				if illustrated.has_variants(GROUND_BIOME)
 				else procedural.generate_frame_image(GROUND_BIOME, tile_seed, 0)
 			)
+			var image_id := image.get_instance_id()
+			if not textures_by_image.has(image_id):
+				textures_by_image[image_id] = ImageTexture.create_from_image(image)
 			var tile := Sprite2D.new()
 			tile.name = "Ground%d_%d" % [column, row]
-			tile.texture = ImageTexture.create_from_image(image)
+			tile.texture = textures_by_image[image_id]
 			tile.centered = false
 			# Derived from the art's OWN width, not a hard-coded
 			# TerrainRenderer.LAYER_SCALE: illustrated tiles are
@@ -974,14 +1082,15 @@ func _build_trees() -> void:
 ## OWN z_index above ground clutter (see test_a_flyer_draws_above_ground_
 ## clutter) -- nothing extra needed here for draw order, unlike the pond/
 ## grass below it.
-func _build_birds() -> void:
-	var flyer_renderer := AmbientFlyerRenderer.new()
-	for bird_position in _layout.bird_positions:
-		var seed_value := hash(bird_position)
-		var pool := AmbientFlyerRenderer.BIRD_SPECIES_POOL
-		var species: String = pool[absi(seed_value) % pool.size()]
-		var bird := flyer_renderer.build_bird(self, species, bird_position, seed_value, BIRD_WANDER_RADIUS)
-		bird_nodes.append(bird)
+## One bird, not the whole flock: each SPECIES loads its own illustrated
+## sheet on first use (~420-460ms, measured -- see the concept doc's Load
+## cost table), so this is the unit _build_steps yields around.
+func _build_bird(flyer_renderer: AmbientFlyerRenderer, bird_position: Vector2) -> void:
+	var seed_value := hash(bird_position)
+	var pool := AmbientFlyerRenderer.BIRD_SPECIES_POOL
+	var species: String = pool[absi(seed_value) % pool.size()]
+	var bird := flyer_renderer.build_bird(self, species, bird_position, seed_value, BIRD_WANDER_RADIUS)
+	bird_nodes.append(bird)
 
 
 ## Flowers scattered through the meadow (reported live, alongside more scene
@@ -993,18 +1102,19 @@ func _build_birds() -> void:
 ## real values from, so nectar/withered stay at their own "full bloom"
 ## defaults (1.0/false) -- the same "permanently grown" convention every
 ## other diorama plant (grass, trees) already follows.
-func _build_flowers() -> void:
-	var generator := ProceduralFlowerSprite.new()
-	for flower_position in _layout.flower_positions:
-		var seed_value := hash(flower_position)
-		var species: String = FlowerSpecies.IDS[absi(seed_value) % FlowerSpecies.IDS.size()]
-		var sprite := Sprite2D.new()
-		sprite.texture = generator.generate_texture(species, seed_value)
-		sprite.scale = Vector2.ONE * ProceduralFlowerSprite.plant_scale_for(species, seed_value)
-		sprite.offset.y = -float(ProceduralFlowerSprite.SIZE.y) * 0.5
-		sprite.position = flower_position
-		add_child(sprite)
-		flower_nodes.append(sprite)
+## One flower, for the same reason _build_bird is one bird: a flower species
+## costs ~250-590ms the first time it is generated (measured), and the
+## diorama's meadow draws several different ones.
+func _build_flower(generator: ProceduralFlowerSprite, flower_position: Vector2) -> void:
+	var seed_value := hash(flower_position)
+	var species: String = FlowerSpecies.IDS[absi(seed_value) % FlowerSpecies.IDS.size()]
+	var sprite := Sprite2D.new()
+	sprite.texture = generator.generate_texture(species, seed_value)
+	sprite.scale = Vector2.ONE * ProceduralFlowerSprite.plant_scale_for(species, seed_value)
+	sprite.offset.y = -float(ProceduralFlowerSprite.SIZE.y) * 0.5
+	sprite.position = flower_position
+	add_child(sprite)
+	flower_nodes.append(sprite)
 
 
 ## Worms lying in the grass -- same "no chunk dependency, thin Sprite2D
@@ -1028,15 +1138,16 @@ func _build_worms() -> void:
 ## AmbientFlyerRenderer.build_flyer is already a ready-made non-bird wrapper
 ## (used in production for flies on carcasses), so this needs no new
 ## rendering code at all -- the same "reuse the real thing" contract
-## _build_birds already follows.
-func _build_butterflies() -> void:
-	var flyer_renderer := AmbientFlyerRenderer.new()
-	for butterfly_position in _layout.butterfly_positions:
-		var seed_value := hash(butterfly_position)
-		var pool := AmbientFlyerRenderer.TRUE_BUTTERFLY_SPECIES_POOL
-		var species: String = pool[absi(seed_value) % pool.size()]
-		var butterfly := flyer_renderer.build_flyer(self, species, butterfly_position, seed_value)
-		butterfly_nodes.append(butterfly)
+## _build_bird already follows.
+## One butterfly -- the cheapest of the three per-species steps (~10-15ms
+## each, measured) but split the same way for consistency, and because
+## nothing guarantees a future species stays that cheap.
+func _build_butterfly(flyer_renderer: AmbientFlyerRenderer, butterfly_position: Vector2) -> void:
+	var seed_value := hash(butterfly_position)
+	var pool := AmbientFlyerRenderer.TRUE_BUTTERFLY_SPECIES_POOL
+	var species: String = pool[absi(seed_value) % pool.size()]
+	var butterfly := flyer_renderer.build_flyer(self, species, butterfly_position, seed_value)
+	butterfly_nodes.append(butterfly)
 
 
 ## One ambient boar for the hero to spar with (see the FIGHT action) --

@@ -120,7 +120,7 @@ const POND_EDGE_MARGIN := 4.0
 ## already have. Fly overhead, so unlike every ground placement above they
 ## don't need is_clear() obstacle avoidance -- just a starting point
 ## somewhere inside the scene for their own home-tethered wander (see
-## CharacterPreviewDiorama._build_birds).
+## CharacterPreviewDiorama._build_bird).
 const BIRD_COUNT := 2
 
 ## Richer scene life (reported live, alongside the character-action request

@@ -67,6 +67,13 @@ var _wheat_blades: Array[Sprite2D] = []
 ## something real on the very first _redraw().
 var _season := IllustratedWheatPatch.DEFAULT_SEASON
 
+## What this bed was last SOWN with, which outlives plot.crop_id: harvesting
+## clears the crop, and the ground a bed was last worked as is what it still
+## looks like afterwards. Without it a cut wheat bed grew its soil mound
+## back the moment the wheat came off -- caught by
+## test_a_harvested_wheat_bed_still_shows_no_mound.
+var _sown_crop_id := ""
+
 
 func _ready() -> void:
 	add_to_group(GROUP_NAME)
@@ -105,6 +112,7 @@ func till_and_plant(crop_id: String, seed_value: int) -> bool:
 	if plot.state == "growing" or plot.state == "ready":
 		return false
 	plot.plant(crop_id, seed_value)
+	_sown_crop_id = crop_id
 	_redraw()
 	return true
 
@@ -151,9 +159,27 @@ func wheat_blade_count() -> int:
 	return count
 
 
+## Whether this plot is drawing ProceduralSoilSprite's mound of tilled
+## earth under its crop.
+func is_showing_soil() -> bool:
+	return _soil != null and _soil.visible
+
+
 func _redraw() -> void:
 	if _leaves == null:
 		return  # not _ready() yet
+	# Reported with the beds circled: "what's the round procedural dark
+	# blob? Can you remove it and keep just the wheat please". The mound is
+	# a ROOT crop's own ground -- its root grows inside it, and pulling one
+	# leaves the crater ProceduralSoilSprite's DISTURBED state draws -- but
+	# under a field of bending wheat it is just a dark circle, six of them
+	# in a 3x2 bed. Keyed on the crop rather than removed outright, so the
+	# crops the mound was drawn for keep it.
+	#
+	# Against what the bed was SOWN with, not plot.crop_id: harvesting
+	# clears the crop, and a bare mound appearing the moment the wheat came
+	# off is the same blob back again.
+	_soil.visible = _sown_crop_id != WHEAT_CROP_ID
 	if plot.crop_id == WHEAT_CROP_ID:
 		_leaves.visible = false
 		_redraw_wheat()

@@ -8201,12 +8201,26 @@ func crush_walnut_near(pixel_position: Vector2, momentum_kg_m_s: float) -> bool:
 ## withered plot is (re)planted. Returns whether planting happened.
 func till_and_plant_farm_plot_at_global(global_x: int, global_y: int, crop_id: String) -> bool:
 	var tile := Vector2i(global_x, global_y)
-	if _loaded_chunks.get(_chunk_coord_for_tile(tile)) == null:
+	var chunk_coord := _chunk_coord_for_tile(tile)
+	if _loaded_chunks.get(chunk_coord) == null:
 		return false
 	if not _farm_plots.has(tile):
 		_farm_plots[tile] = _build_farm_plot_marker(tile)
 	var seed_value := hash("%d_%d_farm_plot" % [tile.x, tile.y])
-	return _farm_plots[tile].till_and_plant(crop_id, seed_value)
+	if not _farm_plots[tile].till_and_plant(crop_id, seed_value):
+		return false
+	# Asked for directly: "long grass should be cleared before planting".
+	# TILLING is what clears it, so the clearing happens only when the till
+	# really took -- a bed refused because a live crop is already standing on
+	# it was never worked, and must not scythe the ground anyway.
+	#
+	# Exactly the rule a building's own floor already has (docs/concept/
+	# building.md "Placement rules": "grass must be cut before and can't grow
+	# back inside a house"), through the same seam: whatever tall grass,
+	# flowers, scrub or lichen stood here is gone, and none of them seeds,
+	# spreads or falls back into worked ground while the bed stands.
+	_block_ground_cover_on_cells(chunk_coord, [tile - chunk_coord * CHUNK_SIZE])
+	return true
 
 
 ## Tends (re-waters) the growing plot at a global tile, resetting its

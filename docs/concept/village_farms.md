@@ -209,10 +209,43 @@ rails/posts and plant_fibre (4) lashing them".
   still move by the same distance in opposite directions, and a corner post
   still stands exactly where the wall it caps does. See "The rail stands on
   the inner edge" below, which is the general rule both are now cases of.
-- **The gate** is where the ring meets the village's own paving. No rail is
-  raised there: the farmer walks in over the street their farmhouse fronts,
-  which is the whole reason a farmhouse takes frontage at all. A fence laid
-  across the road would wall the village off from its own farm.
+- **The gate** is where the ring meets the village's own PAVING, and only
+  there. No rail is raised on a paved cell: the farmer walks in over the
+  street their farmhouse fronts, which is the whole reason a farmhouse takes
+  frontage at all. A fence laid across the road would wall the village off
+  from its own farm.
+
+  A rail may stand on an unpaved cell of a street ROW, though, unlike a bed.
+  Reported with the bed circled, *"it's still not fully enclosing the bed"*:
+  a field sits below the house it belongs to, so one whole side of its frame
+  lands on the next street row, and holding rails to the beds' own street-row
+  rule left that side open — measured on real villages, a three-wide `.....`
+  gap with the frame closed on every other side. An unpaved gap is not a
+  gate, and a rail along the edge of a road is a fence beside a road. Sowing
+  in a street row stays forbidden, which is what that rule was really about:
+  a crop in the roadway is not a crop.
+
+- **A bed is cleared before it is sown.** Asked for directly: *"long grass
+  should be cleared before planting"*. Tilling a bed blocks the chunk's
+  ground cover on that cell — tall grass, flowers, desert scrub, tundra
+  lichen — through the same seam a building's own floor already uses
+  ([building.md](building.md)'s *"grass must be cut before and can't grow
+  back inside a house"*), so a farmer no longer plants wheat into a standing
+  meadow that then grows over it. The clearing happens only when the till
+  really takes: a bed refused because a live crop is already on it was never
+  worked, and must not scythe the ground anyway. Worked ground stays worked
+  — nothing seeds, spreads or falls back into it — which is deliberate and
+  is the same permanence a house floor has; a bed nobody ever returns to
+  does not regrow its meadow.
+
+- **A wheat bed shows no soil mound.** Reported with the beds circled:
+  *"what's the round procedural dark blob? Can you remove it and keep just
+  the wheat"*. `ProceduralSoilSprite`'s mound is a ROOT crop's own ground —
+  the root grows inside it, and pulling one leaves the crater its DISTURBED
+  state draws — but under a field of bending wheat it is just a dark circle,
+  six of them in a 3×2 bed. `FarmPlotMarker` keys it on what the bed was
+  SOWN with rather than on `plot.crop_id`, which harvesting clears: a bare
+  mound appearing the moment the wheat comes off is the same blob back.
 - **A street ROW is street, paved or not.** Neither beds nor rails ever land
   on one. The founding layout paves a further street only *between its own
   doorsteps*, so a street row has unpaved gaps in it — and measured on real

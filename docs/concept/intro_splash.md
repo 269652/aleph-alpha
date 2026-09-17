@@ -857,6 +857,18 @@ slower machine, or either of those two costs growing independently in
 the future, could reopen exactly the gap this pass closes for the icon
 row specifically.
 
+**Closed for the diorama (2026-09-17).** That caveat turned out to be
+exactly right, and it was reported: *"the character creature loads super
+slow."* The diorama's own build measured ~4.5s cold -- comfortably the
+largest single cost left in the creator, and larger than the icon warming
+this pass fixed. It is now yield-split too, through `CharacterPreview
+Diorama.build_async`, awaited from `_ensure_create_screen_built` and
+reported into this same `LoadingOverlay`. See `docs/concept/character_
+creator_preview_scene.md`'s own "Load cost" section for the measured
+breakdown, the two real bugs found underneath it, and the paired
+before/after. The skill web remains un-yield-split, and remains an honest
+open gap.
+
 ### An eleventh pass: every frame cropped to the same fixed window, not its own content (2026-09-09)
 
 Reported live again, after the eighth pass's own pixel-perfect
@@ -1519,3 +1531,30 @@ Two process notes worth keeping, both cost real time here:
 - ⬜ **The first ~0.83s (frames 0–19) is a fade up out of black** and has
   no globe edge in frame to hold still. Not a defect; named so the next
   reader does not measure it and think something is wrong.
+
+
+## Display scale, re-decided for a portrait frame (2026-09-17)
+
+A twelfth pass pinned `DISPLAY_SCALE` to exactly 1 on an explicit ask —
+*"still too big.. make it native size / resolution"*. The art swaps since
+then never revisited it, and they should have: "native" was never really
+about the number 1, it was about the on-screen size that number produced
+against the art of the day, which was a **243x162 landscape** frame.
+
+Today's frames are **79x122 portrait** (see "A third art swap" above — the
+new source animation is 9:16, cropped below its own timestamp caption). At
+1:1 that renders the whole intro as a 79px-wide thumbnail: obeying the
+letter of that ask while destroying what it asked for.
+
+`DISPLAY_SCALE` is 3. That restores the on-screen WIDTH the twelfth pass
+actually shipped (79 * 3 = 237, against the 243 it had) and stays a whole
+number, so the pixel-perfect, shimmer-free property the eighth and twelfth
+passes both established is untouched. Put to the player with the trade
+spelled out, they chose it.
+
+`test_display_scale_is_a_whole_number_so_the_upscale_stays_pixel_perfect`
+and `test_the_intro_still_renders_at_about_the_width_that_ask_settled_on`
+replace the old `test_display_scale_is_native_no_upscaling`: they pin what
+that ask was actually protecting — an exact integer scale, and a width in
+the range it settled on — rather than the bare literal 1, which is what
+went stale when the art changed shape underneath it.

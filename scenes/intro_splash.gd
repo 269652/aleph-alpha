@@ -22,8 +22,10 @@ const IntroSplashSequencer = preload("res://src/rendering/intro_splash_sequencer
 ## IntroSplashSheet cropped each frame to its OWN content and the real size
 ## varied by a pixel or two frame to frame. The eleventh pass (docs/concept/
 ## intro_splash.md) replaced that with ONE fixed crop window
-## (IntroSplashSheet._FRAME_WIDTH/_FRAME_HEIGHT, 240x183) applied identically
-## to every frame -- this constant went stale the moment that shipped, and
+## (IntroSplashSheet._FRAME_WIDTH/_FRAME_HEIGHT, 79x122 against today's
+## sheet, 240x183 against the one that pass was written for) applied
+## identically to every frame -- this constant went stale the moment that
+## shipped, and
 ## the mismatch is what a twelfth pass's "not stabilized again" report
 ## traced back to (see that pass's own note on DISPLAY_SCALE below).
 ## test_native_frame_size_matches_the_sheets_own_real_fixed_crop_size pins
@@ -54,7 +56,21 @@ const _NATIVE_FRAME_SIZE := Vector2(IntroSplashSheet._FRAME_WIDTH, IntroSplashSh
 ## structurally harmless going forward: at a true 1:1 scale there is no
 ## scale factor left for a mismatched reference size to distort into a
 ## non-integer, shimmer-inducing one.
-const DISPLAY_SCALE := 1
+## The second art-replacement pass (2026-09-17, see docs/concept/
+## intro_splash.md's "Re-measuring again") sets this to 3. The twelfth
+## pass set it to
+## 1 on an explicit ask -- "still too big.. make it native size /
+## resolution" -- but "native" then meant a 243x162 landscape frame. The
+## replacement sheet's frames are 79x122 PORTRAIT (see IntroSplashSheet:
+## the new source animation is 9:16, cropped below its own timestamp
+## caption), so 1:1 would render the whole intro as a 79px-wide thumbnail,
+## far smaller than anything that ask was about.
+## 3 restores the on-screen WIDTH the twelfth pass actually shipped
+## (79 * 3 = 237, against the 243 it had) while staying an exact integer
+## multiple, so the pixel-perfect, shimmer-free property that pass and the
+## eighth pass both established is kept intact. Chosen by the player when
+## the trade was put to them directly, not inferred.
+const DISPLAY_SCALE := 3
 const DISPLAY_SIZE := _NATIVE_FRAME_SIZE * DISPLAY_SCALE
 
 var _frames: Array[ImageTexture] = []
