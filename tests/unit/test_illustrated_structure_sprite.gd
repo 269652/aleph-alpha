@@ -23,6 +23,7 @@ const _FENCE_SUBJECTS := [
 const _ALL_SUBJECTS := [
 	"farm", "sagewerk", "storage", "wooden_fence", "city_hall",
 	"farm_fence_north", "farm_fence_south", "farm_fence_east", "farm_fence_west",
+	"farm_fence_corner_west", "farm_fence_corner_east",
 ]
 
 var sprite: IllustratedStructureSprite
@@ -264,7 +265,7 @@ func test_a_divider_sheet_scales_to_a_real_footprint():
 ## subject name the tile id implies -- the one link between "a rail was
 ## built facing east" and "an east rail is drawn".
 func test_every_rail_the_village_can_build_has_its_own_art():
-	for facing in ["north", "south", "east", "west"]:
+	for facing in ["north", "south", "east", "west", "corner_west", "corner_east"]:
 		var subject: String = VillageFarm.fence_tile_for(facing)
 		assert_true(sprite.has_subject(subject), "%s has no art at all" % subject)
 
@@ -380,7 +381,7 @@ func test_a_top_view_runs_centre_line_lands_on_the_edge_facing_the_beds():
 ## Every rail really moves -- including the north one the first attempt at
 ## this wrongly left alone.
 func test_every_rail_is_moved_off_the_middle_of_its_tile():
-	for facing in ["north", "south", "east", "west"]:
+	for facing in VillageFarm.FENCE_TILE_IDS:
 		var subject: String = VillageFarm.fence_tile_for(facing)
 		assert_ne(
 			sprite.footprint_offset(subject, _TILE), Vector2.ZERO,
@@ -390,7 +391,7 @@ func test_every_rail_is_moved_off_the_middle_of_its_tile():
 
 ## And it moves TOWARD the beds, never away from them.
 func test_the_offset_moves_the_art_toward_the_beds():
-	for facing in ["north", "south", "east", "west"]:
+	for facing in VillageFarm.FENCE_TILE_IDS:
 		var subject: String = VillageFarm.fence_tile_for(facing)
 		var offset: Vector2 = sprite.footprint_offset(subject, _TILE)
 		var inner: Vector2i = VillageFarm.fence_inner_direction(subject)

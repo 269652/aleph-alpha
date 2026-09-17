@@ -166,6 +166,7 @@ static func is_road_tile(tile_id: String) -> bool:
 ## test_a_farm_rail_is_an_overlay_and_never_paints_a_ground_tile_of_its_own.
 const OVERLAY_ONLY_TILE_IDS: Array[String] = [
 	"farm_fence_north", "farm_fence_south", "farm_fence_east", "farm_fence_west",
+	"farm_fence_corner_west", "farm_fence_corner_east",
 ]
 
 

@@ -2936,7 +2936,7 @@ func test_a_notched_house_shows_a_facade_on_every_south_facing_run():
 
 
 func test_a_farm_rail_is_an_overlay_and_never_paints_a_ground_tile_of_its_own():
-	for facing in ["north", "south", "east", "west"]:
+	for facing in VillageFarm.FENCE_TILE_IDS:
 		assert_true(
 			TerrainRenderer.is_overlay_only_modification(VillageFarm.fence_tile_for(facing)),
 			"a %s rail must leave the ground it stands on alone" % facing

@@ -173,19 +173,55 @@ cost already pays for — the identical argument
 placeable Farm's gate, whose recipe cost *is* "wood (6) for fence
 rails/posts and plant_fibre (4) lashing them".
 
-- **What is enclosed:** the beds the villager actually works — the capped
-  `MAX_WORKED_CELLS` set, not the whole 14-tile ring. You fence what you
-  sow, and the fallow part of the ring is not the farm's yard.
-- **Where the rails stand:** every cell touching a worked bed, on the
-  diagonal as well as the orthogonal so the corners close, that is not
-  itself a worked bed, not the farmhouse's own footprint, not water, and
-  not the village's paving. `VillageFarm.fence_cells` is that rule, pure
-  and derived — like `field_cells` and `owner_of`, it stores nothing, so
-  the same farmhouse fences the same ring on every reload.
+- **What is enclosed:** the beds the villager actually works — a **compact
+  rectangle**, `FIELD_SHAPES` (3×2 or 2×3, whichever fits), not a scattered
+  handful of whatever ground happened to be clear. Asked for directly, with
+  the broken ring circled in a screenshot: *"The fence should enclose a 2x3
+  or 3x2 area"*. A ragged bed set has a ragged ring, and a ragged ring is
+  what reads as broken fencing.
+
+  Six beds is also what the yield measurements already pointed at: six
+  peaked at 225 wheat per work block and everything from eight to fourteen
+  sat at 215 (see "What a field costs to keep"). The shape the report asks
+  for and the shape the measurement asks for are the same shape.
+- **Where the rails stand:** the rectangle's own **border** — every cell
+  touching a bed, on the diagonal as well as the orthogonal so the corners
+  close, that is not itself a bed, not the farmhouse's own footprint, not
+  water, and not the village's paving. `VillageFarm.fence_cells` is that
+  rule, pure and derived — like `field_rect` and `owner_of`, it stores
+  nothing, so the same farmhouse fences the same ring on every reload.
+- **The frame closes at the corners.** A border's four diagonal cells are
+  **corner posts**, not lengths of rail: drawing a horizontal rail across a
+  corner is exactly the "broken" look the report points at. The sheet has no
+  corner cell of its own, so a corner is drawn with the post art the side
+  columns use, which is what a real corner post is. A post knows *which
+  side* it caps (`corner_west`/`corner_east`), because it has to stand on
+  the same line as the wall below it — one left on its own tile centre would
+  sit half a tile off the run it caps, which is a broken joint of its own.
+- **The side walls sit on the frame's inner edge.** The two vertical walls
+  are drawn on the edge of their own tile that faces the beds. This
+  **reverses** an earlier pass, which pushed them half a tile the other way
+  on the report *"the side walls of the fence should be moved outwards and
+  corner pieces added so it doesn't look that broken"*; the later ask, with
+  the west and south sides arrowed toward the beds, is *"move the fences to
+  the inner edge of the enclosure and treat the rest of the tile as
+  street"*. Everything but the sign survived that reversal: the two walls
+  still move by the same distance in opposite directions, and a corner post
+  still stands exactly where the wall it caps does. See "The rail stands on
+  the inner edge" below, which is the general rule both are now cases of.
 - **The gate** is where the ring meets the village's own paving. No rail is
   raised there: the farmer walks in over the street their farmhouse fronts,
   which is the whole reason a farmhouse takes frontage at all. A fence laid
   across the road would wall the village off from its own farm.
+- **A street ROW is street, paved or not.** Neither beds nor rails ever land
+  on one. The founding layout paves a further street only *between its own
+  doorsteps*, so a street row has unpaved gaps in it — and measured on real
+  villages, a village that treats those gaps as open ground plants crops and
+  drops rails in the middle of its own road with paving either side. It also
+  made the frames inconsistent: a field under a paved stretch correctly got
+  no north wall, because the street is its boundary, while the field beside
+  it got a rail. Derived from the skeleton (`street_y` plus
+  `STREET_PITCH_TILES`), so it costs nothing and needs nothing stored.
 - **What it does:** a rail shuts one LINE, not one tile.
   `CreatureMarker` refuses the step that would carry an animal across the
   rails and slides along them rather than sticking against them — the
@@ -266,6 +302,15 @@ and the rest of its own tile is ordinary ground.
   diagonal crosses both of its own edges and is blocked whenever either
   component would be, so nothing slips round a corner that no cardinal step
   can pass.
+- **Except a corner post, which shuts only the diagonal.** A corner's beds
+  are diagonal, so the diagonal is the only way through it into the crop;
+  its cardinal neighbours are the two runs it caps, and stopping a step
+  along a run would stop an animal walking the ring — the opposite of what
+  was asked. Nothing is opened by the exception: every cardinal way in is
+  still shut by the run's own rail. A first pass missed it and turned
+  animals back at all four corners, which
+  `test_the_ring_of_a_rectangular_field_is_walkable_all_the_way_round`
+  caught.
 
 The ring is therefore a real perimeter path — the ground it was raised on,
 walkable, with rails along its inner edge — rather than a band of dug earth.

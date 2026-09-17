@@ -26,8 +26,8 @@ const EarthChunkManager = preload("res://src/world/earth_chunk_manager.gd")
 const EarthChunkGenerator = preload("res://src/world/earth_chunk_generator.gd")
 const GeoCoordinates = preload("res://src/world/geo_coordinates.gd")
 const TerrainRenderer = preload("res://src/rendering/terrain_renderer.gd")
-const IllustratedStructureSprite = preload("res://src/rendering/illustrated_structure_sprite.gd")
 const VillageFarm = preload("res://src/gameplay/village_farm.gd")
+const IllustratedStructureSprite = preload("res://src/rendering/illustrated_structure_sprite.gd")
 
 var manager: EarthChunkManager
 var tile_map_layer: TileMapLayer
@@ -203,3 +203,79 @@ func test_a_farms_overlay_still_stands_in_the_middle_of_its_tile():
 	manager.build_at_global(_berlin_tile.x, _berlin_tile.y, "farm")
 	var sprite := _structure_art_sprite_at_berlin_tile()
 	assert_eq(sprite.position, _unoffset_position_for(sprite.texture.get_height()))
+
+
+# -- a farm fence's side walls stand on the frame's INNER edge -------------
+#
+# This section used to pin the opposite direction, from an earlier report
+# ("the side walls of the fence should be moved outwards and corner pieces
+# added so it doesn't look that broken"). The later ask, with the west and
+# south sides arrowed toward the beds, reverses it: "move the fences to the
+# inner edge of the enclosure and treat the rest of the tile as street".
+# What survives from the first report is everything except the sign -- the
+# two side walls still move by the same distance in opposite directions, a
+# corner post still lines up exactly with the wall it caps, and a north or
+# south rail still stands on its own tile centre horizontally.
+
+
+func _art_x_for(tile_id: String) -> float:
+	manager.build_at_global(_berlin_tile.x, _berlin_tile.y, tile_id)
+	var sprite := _structure_art_sprite_at_berlin_tile()
+	assert_not_null(sprite, "%s should have real art" % tile_id)
+	return sprite.position.x
+
+
+func test_a_north_or_south_rail_stands_on_its_own_tile_centre():
+	var centre := (float(_berlin_tile.x) + 0.5) * TerrainRenderer.TILE_SIZE
+	assert_almost_eq(_art_x_for(VillageFarm.fence_tile_for("north")), centre, 0.001)
+	assert_almost_eq(_art_x_for(VillageFarm.fence_tile_for("south")), centre, 0.001)
+
+
+func test_a_west_rail_stands_on_its_own_east_edge_where_its_beds_are():
+	var centre := (float(_berlin_tile.x) + 0.5) * TerrainRenderer.TILE_SIZE
+	assert_gt(
+		_art_x_for(VillageFarm.fence_tile_for("west")), centre,
+		"a west rail's beds lie east, so its rails belong on its east edge"
+	)
+
+
+func test_an_east_rail_stands_on_its_own_west_edge_where_its_beds_are():
+	var centre := (float(_berlin_tile.x) + 0.5) * TerrainRenderer.TILE_SIZE
+	assert_lt(
+		_art_x_for(VillageFarm.fence_tile_for("east")), centre,
+		"an east rail's beds lie west, so its rails belong on its west edge"
+	)
+
+
+## And the two side walls move by the SAME distance in opposite directions
+## -- a frame with one wall further in than the other is the lopsided look
+## the first report was about, and reversing the direction does not excuse
+## it. Not exact: each wall is placed on its own art's measured centre line
+## (IllustratedStructureSprite.footprint_offset) and the sheet's two
+## top-view cells are not drawn pixel-identically, so they differ by well
+## under one screen pixel rather than by nothing at all.
+func test_the_two_side_walls_move_in_by_the_same_distance():
+	var centre := (float(_berlin_tile.x) + 0.5) * TerrainRenderer.TILE_SIZE
+	var west := _art_x_for(VillageFarm.fence_tile_for("west")) - centre
+	var east := centre - _art_x_for(VillageFarm.fence_tile_for("east"))
+	assert_almost_eq(west, east, 0.5)
+	assert_almost_eq(west, TerrainRenderer.TILE_SIZE * 0.5, 0.5, "half a tile in")
+
+
+## A corner post caps a side wall, so it stands exactly where that wall
+## does -- a post half a tile off the run it caps is a visibly broken joint,
+## which is what "corner pieces added so it doesn't look that broken" asked
+## to be rid of, whichever way the walls move.
+func test_a_corner_post_lines_up_with_the_side_wall_it_caps():
+	var centre := (float(_berlin_tile.x) + 0.5) * TerrainRenderer.TILE_SIZE
+	var west_wall := _art_x_for(VillageFarm.fence_tile_for("west"))
+	var east_wall := _art_x_for(VillageFarm.fence_tile_for("east"))
+	assert_almost_eq(
+		_art_x_for(VillageFarm.fence_tile_for("corner_west")), west_wall, 0.001,
+		"a west corner stands exactly where the west wall below it does"
+	)
+	assert_almost_eq(
+		_art_x_for(VillageFarm.fence_tile_for("corner_east")), east_wall, 0.001,
+		"an east corner stands exactly where the east wall below it does"
+	)
+	assert_ne(west_wall, centre, "precondition: the side walls really do move")

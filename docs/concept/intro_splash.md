@@ -80,9 +80,20 @@ tallest content bounding box across the frames it's handed; here, the
 "ALEPH ALPHA" wordmark's own ink extent genuinely grows across the
 sequence as it builds in, so content-cropping and rescaling would make
 the globe itself appear to change size as more text enters frame — an
-artifact the source art's own consistently-framed camera (same globe
-position and size in every frame, by construction — see the intro's own
-generation prompt) doesn't need fixed up at all. This is a real, deliberate
+artifact the source art's own roughly-consistent camera framing doesn't
+need fixed up that way.
+
+**Corrected 2026-09-17:** this used to justify itself with *"the source
+art's consistently-framed camera (same globe position and size in every
+frame, by construction — see the intro's own generation prompt)"*. A
+prompt asking for a fixed camera is not the same as an AI honouring one,
+and that sentence was an assumption about the prompt rather than a
+measurement — on the 8x5 sheet it was measurably false (the globe wandered
+6px across and 2px down). It happens to hold on the sheet shipping now,
+but only because somebody measured it: see "Frame stabilisation" below.
+The reason to skip `normalize_frames` never rested on it anyway — scaling
+by content extent would scale every frame by the TEXT's extent, which is
+the one thing in frame that changes on purpose. This is a real, deliberate
 divergence from the established pattern, not an oversight — the divergence
 itself is what avoids the bug `normalize_frames` exists to prevent for a
 *different* shape of sheet (posed creature frames of varying natural
@@ -1428,3 +1439,83 @@ Pinned by `test_every_frame_puts_its_art_at_the_same_height`
 (`tests/unit/test_intro_splash_sheet.gd`), confirmed red against the
 top-anchored build (frames 24–39 centred their art at 66.5 instead of
 80.5) before the change.
+
+## Frame stabilisation (2026-09-17)
+
+Asked directly: *"Can you frame stabilize the intro sprite animation?"* —
+the same thing this file had been re-reported for repeatedly
+(*"stabilize the intro video"*, *"it jumps left to right"*).
+
+**On the sheet shipping now, it is already stable, and that is measured
+rather than assumed.** The globe's right limb sits at **exactly the same
+column in all 100 frames past the fade-in — zero spread**, not merely a
+small one. The fixed crop from a measured grid (see "A third art swap"
+above) is doing the whole job; no registration pass is needed, and one
+was deliberately not added.
+
+### The measurement is geometry, not lighting — and that is the whole trap
+
+The current art crops the sphere at the **left frame edge**, so its right
+limb is the only edge of it actually in shot. The limb is geometry. Almost
+everything else measurable here is lighting, and the lighting moves on
+purpose: this is an Earth-at-night turning into daylight, so the
+terminator sweeps right across the disc over the sequence.
+
+A centre-of-lit-pixels reading therefore moves **~35px** across these
+frames while the globe itself has not moved at all. That is not a subtle
+error — it is large enough to look exactly like the reported jitter, and
+acting on it would have registered every frame against the *terminator*
+and genuinely shoved the globe around. It is the same "moon-phase
+crescent" effect that made an earlier measurement of the 45-frame sheet
+read as falsely reassuring (the sixteenth pass above), reached from the
+opposite direction: there it hid drift, here it invents it.
+
+This is why the threshold is near-black (0.02) rather than a
+mid-brightness one: it separates *sphere from space*, never *lit from
+unlit*.
+
+### Why this is a test and not a no-op
+
+`test_the_globe_holds_the_same_position_in_every_frame` asserts what is
+already true, which is normally a smell. It earns its place because this
+file's own history is four art swaps, at least two of which shipped a
+visibly drifting intro that only a player caught. The next swap fails
+here instead.
+
+Paired with `test_the_limb_measurement_would_notice_a_frame_that_moved`,
+which runs the same ruler over a real frame shifted 3px and requires it to
+read 3px: a stability test whose own measurement cannot see movement is
+worth nothing.
+
+### What was tried and thrown away
+
+A per-frame registration pass (measure each frame's globe, blit at a
+whole-pixel offset — what a video stabiliser does) was built and verified
+against the **previous** 8×5 sheet, where it cut a real 6.0px horizontal
+and 2.0px vertical wander down to 1.0px each. That sheet was replaced
+while the work was in flight. On the current art the same estimator reads
+the terminator rather than the globe, so it was dropped rather than
+carried over — the code is in this branch's history if a future sheet ever
+needs it again.
+
+Two process notes worth keeping, both cost real time here:
+
+- **Re-import before measuring anything.** `SpriteSheetLoader` prefers
+  Godot's *imported* resource over the raw PNG, so a stale `.godot` cache
+  silently serves the OLD art through the NEW grid constants. That
+  produced 20 "blank" frames and magenta ink in 76 others, and read
+  convincingly as a broken sheet. `godot --headless --import` first.
+- **Render the frames and look at them** before concluding anything about
+  drift. The contact sheet showed in one glance that the globe is cropped
+  at the frame edge and lit by a sweeping terminator — the two facts that
+  decide which measurement is valid here.
+
+### Status
+
+- ✅ **The globe holds still in every frame past the fade-in** (2026-09-17)
+  — measured, zero spread, pinned by
+  `test_the_globe_holds_the_same_position_in_every_frame` plus a
+  ruler-sensitivity check. 16/16 in `test_intro_splash_sheet.gd`.
+- ⬜ **The first ~0.83s (frames 0–19) is a fade up out of black** and has
+  no globe edge in frame to hold still. Not a defect; named so the next
+  reader does not measure it and think something is wrong.

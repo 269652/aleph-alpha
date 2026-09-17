@@ -1,136 +1,120 @@
 extends SceneTree
 
-## Dev tool: prints an ASCII map of a REAL generated village, so the whole
-## of docs/concept/village_growth.md's charter can be seen at once -- the
-## street, the paved plaza, the civic plot, every house, and the sawmill at
-## the forest with its road spur back to the street.
-##
-## Usage: godot --headless -s tools/probe_village_map.gd
+## The whole village, drawn on the grid: what does a player actually see?
+## Reported with a screenshot of rails scattered over half the village.
+## Uses the REAL settlement generator and the REAL VillageRenderer against a
+## stub world (flat ground), so the layout, the farmhouses, the fields and
+## every rail are the ones the game would place.
 
-const EarthChunkManager = preload("res://src/world/earth_chunk_manager.gd")
-const EarthChunkGenerator = preload("res://src/world/earth_chunk_generator.gd")
-const GeoCoordinates = preload("res://src/world/geo_coordinates.gd")
-const SettlementGenerator = preload("res://src/world/settlement_generator.gd")
-const BiomeClassifier = preload("res://src/world/biome_classifier.gd")
-const BuildingCatalog = preload("res://src/gameplay/building_catalog.gd")
-const TerrainRenderer = preload("res://src/rendering/terrain_renderer.gd")
-const VillageLayout = preload("res://src/world/village_layout.gd")
-const EntityRef = preload("res://src/emergence/entity_ref.gd")
+const CHUNK_SIZE := 32
+const TILE_SIZE := 16
 
-const CHUNK_SIZE := EarthChunkManager.CHUNK_SIZE
+class StubWorld:
+	var place_calls: Array = []
+	var built: Dictionary = {}
+	var occupied: Dictionary = {}
+	var BuildingCatalog = load("res://src/gameplay/building_catalog.gd")
 
-## One letter per building id, so a map shows WHAT stands where rather than
-## an undifferentiated block of walls.
-const _BUILDING_CHARS := {
-	"house_small": "h", "house_medium": "H", "house_large": "M",
-	"city_hall": "C", "warehouse": "W", "sawmill": "S",
-	"farmhouse": "F", "blacksmith": "B", "brewery": "R",
-}
+	func place_building(chunk_coord, origin_local, building_id, facing, seed_value, owner, occupation = "", resident = 0) -> bool:
+		var cells: Array = BuildingCatalog.footprint_cells(building_id, origin_local)
+		for cell in cells + [origin_local + BuildingCatalog.doorstep_of(building_id)]:
+			if occupied.get(chunk_coord * CHUNK_SIZE + cell, "") != "":
+				return false
+		place_calls.append({"origin_local": origin_local, "building_id": building_id, "chunk_coord": chunk_coord,
+			"facing": facing, "seed": seed_value, "owner_household_id": owner, "occupation": occupation, "resident_seed": resident})
+		for cell in cells:
+			occupied[chunk_coord * CHUNK_SIZE + cell] = building_id
+		return true
+
+	func place_building_over_roads(chunk_coord, origin_local, building_id, seed_value, owner) -> bool:
+		for cell in BuildingCatalog.footprint_cells(building_id, origin_local):
+			occupied.erase(chunk_coord * CHUNK_SIZE + cell)
+		occupied.erase(chunk_coord * CHUNK_SIZE + origin_local + BuildingCatalog.doorstep_of(building_id))
+		return place_building(chunk_coord, origin_local, building_id, Vector2i(0, 1), seed_value, owner)
+
+	func buildings_in_chunk(chunk_coord) -> Array:
+		var out: Array = []
+		for call in place_calls:
+			out.append({"id": call["building_id"], "origin_local": call["origin_local"], "chunk_coord": chunk_coord,
+				"facing": call["facing"], "seed": call["seed"], "condition": 1.0, "progress": 1.0,
+				"owner_household_id": call["owner_household_id"], "occupation": call["occupation"], "resident_seed": call["resident_seed"]})
+		return out
+
+	func build_at_global(x: int, y: int, tile_id: String) -> bool:
+		built[Vector2i(x, y)] = tile_id
+		occupied[Vector2i(x, y)] = tile_id
+		return true
+
+	func biome_at_global(_x, _y) -> String: return "grassland"
+	func is_water_at_global(_x, _y) -> bool: return false
+	func is_buildable_terrain_at(_x, _y) -> bool: return true
+	func modification_at_global(x, y) -> String: return occupied.get(Vector2i(x, y), "")
+	func record_settlement_founded_if_new(_c, _n, _p = []) -> void: pass
+	func household_count_for_settlement(_s) -> int: return 0
+	func house_origin_for_villager(_c, _s): return null
+	func set_building_resident(_c, _o, _oc, _r) -> bool: return true
 
 
 func _initialize() -> void:
-	var tile_map_layer := TileMapLayer.new()
-	var entities := Node2D.new()
-	var creatures := Node2D.new()
-	root.add_child(tile_map_layer)
-	root.add_child(entities)
-	var manager := EarthChunkManager.new(tile_map_layer, entities, creatures)
+	var SettlementGenerator = load("res://src/world/settlement_generator.gd")
+	var VillageRenderer = load("res://src/rendering/village_renderer.gd")
+	var VillageFarm = load("res://src/gameplay/village_farm.gd")
+	var BuildingCatalog = load("res://src/gameplay/building_catalog.gd")
+	var TerrainRenderer = load("res://src/rendering/terrain_renderer.gd")
+	var generator = SettlementGenerator.new()
 
-	var coord := _find_village(manager)
-	if coord == Vector2i.MAX:
-		print("no settlement chunk found in the scanned neighbourhood")
-		quit()
-		return
-	_scrub(manager, coord)
-	manager._load_chunk(coord)
+	var shown := 0
+	for x in 400:
+		if shown >= 2:
+			break
+		var coord := Vector2i(x, 3)
+		if not generator.has_settlement_at(coord, "grassland"):
+			continue
+		var settlement = generator.generate_settlement(coord, coord * CHUNK_SIZE, CHUNK_SIZE, TILE_SIZE)
+		var farms := 0
+		for npc in settlement.npcs:
+			if VillageFarm.crop_for(npc.occupation) != "":
+				farms += 1
+		if farms < 2:
+			continue
+		shown += 1
+		var world = StubWorld.new()
+		var parent := Node2D.new()
+		root.add_child(parent)
+		var renderer = VillageRenderer.new()
+		var spawned = renderer.spawn_village(parent, coord, coord * CHUNK_SIZE, CHUNK_SIZE, TILE_SIZE, "grassland", world)
 
-	var chunk = manager._loaded_chunks.get(coord)
-	if chunk == null:
-		print("chunk failed to load")
-		quit()
-		return
-	var anchors := {}
-	for origin_local in chunk.buildings:
-		anchors[origin_local] = chunk.buildings[origin_local]["id"]
+		var glyphs := {}
+		for cell in world.built:
+			var tile: String = world.built[cell]
+			var local: Vector2i = (cell as Vector2i) - coord * CHUNK_SIZE
+			if tile == TerrainRenderer.ROAD_TILE_ID:
+				glyphs[local] = ":"
+			elif VillageFarm.is_fence_tile(tile):
+				glyphs[local] = {"farm_fence_north": "^", "farm_fence_south": "v",
+					"farm_fence_east": ">", "farm_fence_west": "<",
+					"farm_fence_corner_west": "+", "farm_fence_corner_east": "+"}[tile]
+		for call in world.place_calls:
+			var letter := "B"
+			if call["building_id"] == VillageFarm.FARM_BUILDING_ID:
+				letter = "F"
+			elif call["building_id"].begins_with("house"):
+				letter = "h"
+			for cell in BuildingCatalog.footprint_cells(call["building_id"], call["origin_local"]):
+				glyphs[cell] = letter
+		var beds := 0
+		for node in spawned:
+			if node.get("field_cells") == null:
+				continue
+			for g in node.field_cells:
+				glyphs[(g as Vector2i) - coord * CHUNK_SIZE] = "#"
+				beds += 1
 
-	print("village at chunk %s  (households: %d)" % [
-		str(coord), manager.household_count_for_settlement(EntityRef.for_settlement(coord))
-	])
-	print("legend: '=' road/plaza  'T' forest  '~' water  '.' open ground")
-	print("        h/H/M house  C city hall  W warehouse  S sawmill  F farmhouse  B smithy  R brewery")
-	print("        (a capital marks the building's own anchor cell)")
-	print("")
-	for y in CHUNK_SIZE:
-		var line := ""
-		for x in CHUNK_SIZE:
-			line += _char_at(manager, chunk, coord, Vector2i(x, y), anchors)
-		print(line)
-
-	var mills := 0
-	for origin_local in anchors:
-		if anchors[origin_local] == "sawmill":
-			mills += 1
-	print("")
-	print("sawmill standing: %s" % ("yes" if mills > 0 else "no -- no timber in reach"))
-	print("plaza laid: %s" % ("yes" if manager._civic_plot_origin_for(coord) != null else "no (or the hall already stands on it)"))
-	_scrub(manager, coord)
+		print("== chunk ", coord, "  villagers ", settlement.npcs.size(), "  farmers ", farms, "  beds ", beds)
+		for y in CHUNK_SIZE:
+			var row := "  "
+			for cx in CHUNK_SIZE:
+				row += glyphs.get(Vector2i(cx, y), ".")
+			print(row)
+		parent.free()
 	quit()
-
-
-func _char_at(manager, chunk, coord: Vector2i, local: Vector2i, anchors: Dictionary) -> String:
-	if anchors.has(local):
-		return _BUILDING_CHARS.get(anchors[local], "?").to_upper()
-	var tile: String = chunk.modifications.get(local, "")
-	if tile == BuildingCatalog.FOOTPRINT_TILE_ID:
-		# Which building's footprint this is -- walk back to its anchor.
-		for origin_local in anchors:
-			for cell in BuildingCatalog.footprint_cells(anchors[origin_local], origin_local):
-				if cell == local:
-					return _BUILDING_CHARS.get(anchors[origin_local], "?").to_lower()
-		return "#"
-	if TerrainRenderer.is_road_tile(tile):
-		return "="
-	if tile != "":
-		return "*"
-	var g: Vector2i = coord * CHUNK_SIZE + local
-	if manager.is_water_at_global(g.x, g.y):
-		return "~"
-	if manager.biome_at_global(g.x, g.y) == "forest":
-		return "T"
-	return "."
-
-
-## Optional args: latitude longitude (defaults to Berlin).
-func _find_village(manager) -> Vector2i:
-	var settlements := SettlementGenerator.new()
-	var classifier := BiomeClassifier.new()
-	var geo := GeoCoordinates.new()
-	var args := OS.get_cmdline_user_args()
-	var latitude := float(args[0]) if args.size() > 0 else 52.52
-	var longitude := float(args[1]) if args.size() > 1 else 13.405
-	print("searching for a village near lat %.3f lon %.3f" % [latitude, longitude])
-	var centre := Vector2i(
-		floori(float(geo.tile_for_longitude(longitude, EarthChunkGenerator.WORLD_WIDTH_TILES)) / float(CHUNK_SIZE)),
-		floori(float(geo.tile_for_latitude(latitude, EarthChunkGenerator.WORLD_HEIGHT_TILES)) / float(CHUNK_SIZE)),
-	)
-	for radius in range(0, 16):
-		for dy in range(-radius, radius + 1):
-			for dx in range(-radius, radius + 1):
-				if maxi(absi(dx), absi(dy)) != radius:
-					continue
-				var coord := centre + Vector2i(dx, dy)
-				if not settlements.has_settlement_at(coord, "grassland"):
-					continue
-				var chunk = manager.generator.generate_chunk(coord, CHUNK_SIZE)
-				if settlements.has_settlement_at(coord, classifier.dominant_biome(chunk.biome)):
-					return coord
-	return Vector2i.MAX
-
-
-func _scrub(manager, coord: Vector2i) -> void:
-	for path in [
-		manager._modifications_path(coord), manager._buildings_path(coord),
-		manager._roof_modifications_path(coord), manager._furniture_modifications_path(coord),
-	]:
-		if FileAccess.file_exists(path):
-			DirAccess.remove_absolute(path)
