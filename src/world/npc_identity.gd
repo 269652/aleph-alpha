@@ -45,10 +45,16 @@ const OCCUPATIONS: Array[String] = [
 ## until VillageRenderer started rendering one at each such villager's own
 ## workspot (reported: the previous personal-stand-only pass left "no
 ## per-occupation building beyond the shared landmarks and a merchant's own
-## stand" as a known gap). hunter's own "hunting_ground" tag has no
-## dedicated art of its own yet -- ProceduralLandmarkSprite falls back to
-## the well sprite for any unrecognized landmark id, so a hunter's workspot
-## still gets a real, visible (if not yet bespoke) prop rather than nothing.
+## stand" as a known gap).
+##
+## Every tag here must be one ProceduralLandmarkSprite can actually DRAW,
+## and that is pinned by test (test_procedural_landmark_sprite.gd's
+## test_every_occupation_works_at_a_prop_this_catalog_can_actually_draw),
+## not left to review: an id the catalog does not know falls back to the
+## WELL's drawing, silently, and "hunting_ground" did exactly that until
+## 2026-09-17 -- reported live as "there are 3 wells and one stand all over
+## the place", because every hunter in a village stood what looked like
+## another well out behind the houses. It has its own drying rack now.
 const WORK_LOCATION_BY_OCCUPATION := {
 	"farmer": "field",
 	"blacksmith": "forge",
