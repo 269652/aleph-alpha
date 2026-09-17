@@ -24,6 +24,7 @@ extends Node2D
 const FarmPlot = preload("res://src/gameplay/farm_plot.gd")
 const IllustratedCropSprite = preload("res://src/rendering/illustrated_crop_sprite.gd")
 const ProceduralSoilSprite = preload("res://src/rendering/procedural_soil_sprite.gd")
+const ProceduralHerbSprite = preload("res://src/rendering/procedural_herb_sprite.gd")
 const IllustratedWheatPatch = preload("res://src/rendering/illustrated_wheat_patch.gd")
 const IllustratedGrassPatch = preload("res://src/rendering/illustrated_grass_patch.gd")
 ## The tilled ground a bed stands on -- see docs/concept/village_farms.md's
@@ -40,6 +41,11 @@ const TerrainRenderer = preload("res://src/rendering/terrain_renderer.gd")
 ## is false, so leaf_texture returned null -- a growing wheat plot showed
 ## bare tilled soil with nothing visibly growing in it).
 const WHEAT_CROP_ID := "wheat"
+
+## The crop_id drawn by ProceduralHerbSprite rather than by illustrated art.
+## docs/concept/village_farms.md carried "A herb plot renders as bare tilled
+## soil" as an honest gap for exactly as long as this was missing.
+const HERB_CROP_ID := "herb"
 
 const GROUP_NAME := "farm_plot"
 
@@ -65,6 +71,7 @@ const WITHERED_TINT := Color(0.55, 0.5, 0.38)
 var plot := FarmPlot.new()
 
 static var _illustrated := IllustratedCropSprite.new()
+static var _herb := ProceduralHerbSprite.new()
 static var _wheat := IllustratedWheatPatch.new()
 static var _terrain := IllustratedTerrainSprite.new()
 ## variant index -> the soil texture for it, shared by every bed that rolls
@@ -186,6 +193,23 @@ func wheat_blade_count() -> int:
 	return count
 
 
+## Whether this bed really has crop ART on screen right now -- a VISIBLE
+## sprite carrying a real texture.
+##
+## Deliberately not "is the sprite visible": a Sprite2D whose texture is
+## null is visible and draws nothing, which is exactly how a herbalist's bed
+## grew, withered and was harvested for a whole work block with the player
+## seeing only bare soil (see test_every_crop_a_village_farm_sows_really_
+## draws_something, and tools/probe_village_farming.gd for the measurement).
+func is_drawing_a_crop() -> bool:
+	if _leaves != null and _leaves.visible and _leaves.texture != null:
+		return true
+	for blade in _wheat_blades:
+		if blade.visible and blade.texture != null:
+			return true
+	return false
+
+
 ## Whether this plot draws a mound of tilled earth under its crop.
 ##
 ## Always false now, and kept as a named fact rather than deleted: it is
@@ -285,16 +309,28 @@ func _redraw() -> void:
 		_redraw_wheat()
 		return
 	_hide_wheat_blades()
-	_leaves.visible = plot.state != "empty"
-	if not _leaves.visible:
+	if plot.state == "empty":
+		_leaves.visible = false
 		return
 	var fraction := 1.0
 	if plot.state == "growing":
 		fraction = clampf(plot.time_growing / plot.growth_time, 0.0, 1.0)
-	_leaves.scale = Vector2.ONE * _illustrated.leaf_world_scale(plot.crop_id)
-	_leaves.texture = _illustrated.leaf_texture(
-		plot.crop_id, IllustratedCropSprite.growth_stage_index(fraction)
-	)
+	var stage := IllustratedCropSprite.growth_stage_index(fraction)
+	# Illustrated art where it exists, the procedural herb where it does
+	# not. A crop with NEITHER leaves the sprite hidden rather than visible-
+	# and-textureless: that combination draws nothing while claiming to draw
+	# something, which is exactly how a herbalist's bed grew, withered and
+	# was harvested for a whole work block with the player seeing only bare
+	# soil (see is_drawing_a_crop, and tools/probe_village_farming.gd).
+	if _illustrated.has_crop(plot.crop_id):
+		_leaves.scale = Vector2.ONE * _illustrated.leaf_world_scale(plot.crop_id)
+		_leaves.texture = _illustrated.leaf_texture(plot.crop_id, stage)
+	elif plot.crop_id == HERB_CROP_ID:
+		_leaves.scale = Vector2.ONE * ProceduralHerbSprite.world_scale()
+		_leaves.texture = _herb.generate_texture(stage)
+	else:
+		_leaves.texture = null
+	_leaves.visible = _leaves.texture != null
 	_leaves.modulate = WITHERED_TINT if plot.state == "withered" else Color.WHITE
 
 

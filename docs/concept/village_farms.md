@@ -713,16 +713,43 @@ again.
   carries one, so an animal may stand on the ring and walk along it and only
   the crop is shut. See "The rail stands on the inner edge" above.
 
+- ✅ **A herb bed is visible.** Reported in play with the field in shot:
+  *"it plows the soil but then the soil mound sprites don't appear and
+  nothing gets planted, nothing grows and nothing gets harvested"* — and
+  measured before anything was touched (`tools/probe_village_farming.gd`,
+  against a real village east of Berlin): every part of it WAS happening.
+  The field's villager was a **herbalist**, every bed really was sown
+  (`sown=herb`), the crop really grew (`grown=29.5/57.2`), beds really
+  withered, and 8 real herbs really reached the village market over one
+  stretch of work. None of it was ever drawn.
+
+  `IllustratedCropSprite` has sheets for carrot and potato only, so
+  `leaf_texture("herb", ...)` returned null — and `FarmPlotMarker` put a
+  **visible** `Sprite2D` carrying **no texture** over a full tile of bare
+  tilled earth. A visible sprite with a null texture draws nothing while
+  claiming to draw something, which from the player's side is
+  indistinguishable from a field where the farming loop is broken.
+
+  Closed by `ProceduralHerbSprite`: an upright culinary herb (stem, leaf
+  pairs climbing it, side shoots as it matures, a flowering tip when ripe)
+  in `ProceduralLandmarkSprite`'s own `HERB_COLOR`, so a herbalist's bed and
+  a herbalist's `garden` workspot prop read as the same plant rather than
+  two. Hand-drawn in the same offline-art style as `ProceduralSoilSprite`,
+  behind `IllustratedCropSprite.has_crop()`, so real art can replace it
+  later with no marker change.
+
+  The cross-pin matters more than the sprite:
+  `test_every_crop_a_village_farm_sows_really_draws_something` is driven off
+  `VillageFarm.CROP_BY_OCCUPATION` itself, so a NEW crop a village can sow
+  but a bed cannot draw fails there rather than in somebody's screenshot.
+  A crop with neither illustrated nor procedural art now leaves the sprite
+  **hidden** rather than visible-and-textureless.
+
 Honest gaps, each real:
 
-- 🚧 **A herb plot renders as bare tilled soil.** `IllustratedCropSprite`
-  has entries for carrot and potato, and `FarmPlotMarker` has a dedicated
-  wheat path; an unregistered crop's `leaf_texture` returns null, so herbs
-  grow invisibly. Exactly the gap
-  [npc_farm_production.md](npc_farm_production.md) recorded for wheat before
-  [long_grass.md](long_grass.md)'s wheat atlas closed it — an asset
-  question, not a logic one. `herb` has no inventory art either and falls
-  back to the procedural item sprite.
+- 🚧 **`herb` has no INVENTORY art** and falls back to the procedural item
+  sprite. The plant in the bed is drawn now (see "A herb bed is visible"
+  below); the item in a bag still is not.
 - 🚧 **Ten of a farmhouse's fourteen ring tiles lie fallow.** That is the
   measured capacity above, not an oversight, but it does mean a farmhouse
   visibly works only part of its own yard. A second worker per farmhouse

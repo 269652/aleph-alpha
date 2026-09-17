@@ -345,3 +345,58 @@ func test_a_root_crop_keeps_its_tilled_ground():
 	add_child_autofree(marker)
 	marker.till_and_plant("carrot", 7)
 	assert_true(marker.is_showing_tilled_ground())
+
+
+# -- every crop a village really sows has to be visible on the bed ---------
+
+const VillageFarm = preload("res://src/gameplay/village_farm.gd")
+
+
+## Reported live with the field in shot: "it plows the soil but then the
+## soil mound sprites don't appear and nothing gets planted, nothing grows
+## and nothing gets harvested".
+##
+## MEASURED on a real village before anything was touched
+## (tools/probe_village_farming.gd): the field's villager was a HERBALIST,
+## every bed really was sown (`sown=herb`), the crop really grew
+## (`grown=29.5/57.2`), beds really withered and 8 real herbs reached the
+## village market over one stretch of work. Not one of them was ever drawn:
+## IllustratedCropSprite has entries for carrot and potato only, so
+## leaf_texture("herb", ...) returns null -- and a Sprite2D that is VISIBLE
+## with a null texture draws nothing at all, over a full tile of bare
+## tilled soil. From the player's side that is indistinguishable from a
+## field where nothing happens.
+##
+## So this is the cross-pin, driven off VillageFarm's own table rather than
+## a hand-copied list: a crop a village can sow that its bed cannot draw
+## fails HERE, not in somebody's screenshot.
+func test_every_crop_a_village_farm_sows_really_draws_something():
+	for occupation in VillageFarm.CROP_BY_OCCUPATION:
+		var crop_id: String = VillageFarm.CROP_BY_OCCUPATION[occupation]
+		var bed := FarmPlotMarker.new()
+		add_child_autofree(bed)
+		assert_true(bed.till_and_plant(crop_id, 11), "%s should plant" % crop_id)
+		assert_true(
+			bed.is_drawing_a_crop(),
+			"a %s bed grows, withers and is harvested invisibly" % crop_id
+		)
+
+
+## ...and it must still be drawn once it is ripe, not only as a seedling.
+func test_every_crop_a_village_farm_sows_is_still_drawn_when_ready():
+	for occupation in VillageFarm.CROP_BY_OCCUPATION:
+		var crop_id: String = VillageFarm.CROP_BY_OCCUPATION[occupation]
+		var bed := FarmPlotMarker.new()
+		add_child_autofree(bed)
+		bed.till_and_plant(crop_id, 11)
+		_grow_to_ready(bed)
+		assert_eq(bed.plot.state, "ready", crop_id)
+		assert_true(bed.is_drawing_a_crop(), "a ripe %s bed draws nothing" % crop_id)
+
+
+## A visible sprite carrying no texture is the exact shape of the bug above,
+## so the query a bed answers has to be "is there really art on screen",
+## not "is the node visible".
+func test_an_empty_bed_draws_no_crop():
+	add_child_autofree(marker)
+	assert_false(marker.is_drawing_a_crop(), "nothing is sown, so nothing is drawn")
