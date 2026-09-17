@@ -1,7 +1,12 @@
 # Godot 4+ specific ignores
 .godot/
 .import/
-*.import
+# NOT *.import: Godot 4 keeps each asset's import settings and its stable
+# UID in a <asset>.png.import file beside the asset, and expects it
+# committed. All 877 of this project's .import files ARE tracked -- a
+# .gitignore rule never affects files git already follows -- so the rule
+# was doing nothing except waiting to swallow the NEXT asset somebody
+# added. Removed rather than left as a trap.
 *.uid
 export.cfg
 export_presets.cfg
