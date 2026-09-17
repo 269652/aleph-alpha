@@ -245,11 +245,14 @@ found via `Player._pull_step`'s melee-range sweep, identical shape to
   frames + 7 root/tuber color variants each), sliced by
   `IllustratedCropSprite` (chroma-key + `SpriteSheetSlicer`, mirroring
   `sheep.png`'s recipe).
-- ✅ Soil mound: procedural (`ProceduralSoilSprite`) — no AI art exists yet
-  for `ai_sprite_prompts.md`'s 2b soil-pile prompt; a hand-drawn fallback in
-  the same "offline procedural art" style as every other not-yet-AI-
-  illustrated object in this codebase (`ProceduralBobberSprite` and
-  friends). Swappable for real art later with no sim/marker changes needed.
+- ✅ Soil mound: real illustrated art (`IllustratedSoilMoundSprite`, sliced
+  from `assets/sprites/terrain/soil_mound.png`, a 3x3 grid of 9 undisturbed-
+  mound variants) for the UNDISTURBED (still-planted) mound, keyed by each
+  cell's own seed the same deterministic way every other illustrated-art
+  pick in this codebase is. The DISTURBED (post-pull) crater has no
+  illustrated art yet, so it still falls back to `ProceduralSoilSprite`'s
+  hand-drawn crater — swappable for real art later with no sim/marker
+  changes needed, same as before.
   **Shown only once the ground has actually been disturbed** (reported live:
   "the potatoes and carrots still render a brown blob which is not supposed
   to be there"). A tilled mound is a FARMING artifact, and this doc's own

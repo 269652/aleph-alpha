@@ -137,3 +137,77 @@ func test_reopening_on_another_house_replaces_the_previous_reading():
 	assert_eq(panel.title_text(), BuildingCatalog.display_name_of("house_small"))
 	assert_true(panel.subtitle_text().contains("Bren Ash"))
 	assert_false(panel.subtitle_text().contains("Mara Fenn"), "no stale reading left behind")
+
+
+# -- the Inventory tab (docs/concept/building_storage.md) -------------------
+#
+# Asked for directly: "it should be visible as inventory tab in the popover
+# when you click a building". Drawn from the report like everything else
+# here -- the panel reaches for nothing of its own.
+
+
+func _stocked_report(stock: Dictionary, capacity: int = 60) -> Dictionary:
+	return _home_report({"stock": stock, "storage_capacity": capacity})
+
+
+func test_a_building_with_goods_in_it_offers_an_inventory_tab():
+	panel.show_report(_stocked_report({"wheat": 12, "wood": 3}))
+	assert_true(panel.has_inventory_tab(), "a building holding goods shows them")
+
+
+func test_the_inventory_tab_lists_every_kind_of_goods_and_its_count():
+	panel.show_report(_stocked_report({"wheat": 12, "wood": 3}))
+	var rows := panel.inventory_rows()
+	assert_eq(rows.size(), 2)
+	var by_item := {}
+	for row in rows:
+		by_item[row["item_id"]] = int(row["count"])
+	assert_eq(by_item.get("wheat", 0), 12)
+	assert_eq(by_item.get("wood", 0), 3)
+
+
+## Goods are named the way the rest of the game names them, not by raw id.
+func test_the_inventory_names_goods_the_way_the_game_does():
+	panel.show_report(_stocked_report({"wheat": 1}))
+	var items = load("res://src/gameplay/item_catalog.gd").new()
+	assert_eq(panel.inventory_rows()[0]["label"], items.display_name_of("wheat"))
+
+
+## How full it is, because "12 wheat" means nothing without the barn's size
+## -- and a full barn is the whole reason hauling exists.
+func test_the_inventory_says_how_full_the_building_is():
+	panel.show_report(_stocked_report({"wheat": 45}, 60))
+	assert_eq(panel.inventory_summary_text(), "Stored: 45 / 60")
+
+
+func test_a_full_building_says_so():
+	panel.show_report(_stocked_report({"wheat": 60}, 60))
+	assert_true(panel.inventory_is_full(), "a full barn is why anyone hauls anything")
+
+
+func test_a_building_below_its_own_capacity_is_not_full():
+	panel.show_report(_stocked_report({"wheat": 59}, 60))
+	assert_false(panel.inventory_is_full())
+
+
+## A building that keeps no goods has no tab at all, rather than an empty
+## one: a town hall is not a barn with nothing in it.
+func test_a_building_that_keeps_no_goods_has_no_inventory_tab():
+	panel.show_report(_home_report({"stock": {}, "storage_capacity": 0}))
+	assert_false(panel.has_inventory_tab())
+
+
+## An EMPTY barn still has a tab -- it holds goods, it just has none right
+## now, and that is a fact worth showing.
+func test_an_empty_barn_still_shows_its_inventory():
+	panel.show_report(_stocked_report({}, 60))
+	assert_true(panel.has_inventory_tab())
+	assert_eq(panel.inventory_rows().size(), 0)
+	assert_eq(panel.inventory_summary_text(), "Stored: 0 / 60")
+
+
+## An older report with no stock in it at all must not crash the panel --
+## the same fail-soft every other field here already has.
+func test_a_report_that_says_nothing_about_stock_shows_no_tab():
+	panel.show_report(_home_report())
+	assert_false(panel.has_inventory_tab())

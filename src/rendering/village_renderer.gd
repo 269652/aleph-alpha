@@ -16,6 +16,8 @@ extends RefCounted
 const SettlementGenerator = preload("res://src/world/settlement_generator.gd")
 const VillageLayout = preload("res://src/world/village_layout.gd")
 const VillageFarm = preload("res://src/gameplay/village_farm.gd")
+const VillagePond = preload("res://src/gameplay/village_pond.gd")
+const VillageSawmill = preload("res://src/gameplay/village_sawmill.gd")
 const BuildingCatalog = preload("res://src/gameplay/building_catalog.gd")
 const NpcMarker = preload("res://src/rendering/npc_marker.gd")
 const VillageMarket = preload("res://src/world/village_market.gd")
@@ -84,6 +86,11 @@ const _PROP_SEARCH_RADIUS_TILES := 5
 ## during play (VillageGrowth, EarthChunkManager._apply_village_growth_
 ## decision). A village with no timber in reach honestly has none.
 const INDUSTRY_BUILDING_ID := "sawmill"
+
+## The villager who digs a pond (docs/concept/village_ponds.md). A fisher
+## lives in an ordinary house, so their own house is what carries this and
+## what the pond is sited against.
+const FISHER_OCCUPATION := "fisher"
 
 ## Bright daylight -- spawn_village's own default for `sun_elevation_deg`
 ## when a caller doesn't pass one. Kept (even though this pass's own
@@ -280,6 +287,10 @@ func spawn_village(
 	# then laid across the road.
 	_close_short_street_gaps(chunk_coord, chunk_size, world)
 	var farm_fields := _fenced_farm_fields(chunk_coord, chunk_size, world)
+	# After the farms: a pond must not be dug through ground a farmhouse has
+	# already claimed for its beds, and the beds are only known once
+	# _fenced_farm_fields has worked them out.
+	var fisher_ponds := _dig_fisher_ponds_if_missing(chunk_coord, chunk_size, world)
 	for landmark_id in settlement.landmarks:
 		spawned.append(_build_landmark(landmark_id, settlement.landmarks[landmark_id], parent))
 	for i in npcs.size():
@@ -312,8 +323,45 @@ func spawn_village(
 		var work_tag: String = NpcIdentity.WORK_LOCATION_BY_OCCUPATION.get(npcs[i].occupation, "")
 		if work_tag != "" and not settlement.landmarks.has(work_tag) and workspot != null:
 			spawned.append(_build_landmark(work_tag, workspot, parent, true))
-	_hand_out_farm_fields(npcs, npc_markers, farm_fields)
+	_hand_out_farm_fields(npcs, npc_markers, farm_fields, chunk_coord, chunk_size)
+	_hand_out_fisher_ponds(npcs, npc_markers, fisher_ponds, chunk_coord, chunk_size)
+	_hand_out_the_sawmill(npcs, npc_markers, chunk_coord, chunk_size, world)
 	return spawned
+
+
+## Tells every villager whose trade is timber which sawmill is theirs
+## (docs/concept/village_timber.md). One mill per village, so unlike the
+## farmhouses there is nothing to pair off -- every sawyer works the one the
+## village raised.
+##
+## A village with no timber in reach raised no mill, and its sawyer honestly
+## has no sawmill work; they keep the regional drip every villager without a
+## worksite already lives on.
+func _hand_out_the_sawmill(
+	npcs: Array, npc_markers: Array, chunk_coord: Vector2i, chunk_size: int, world
+) -> void:
+	if world == null or not world.has_method("buildings_in_chunk") or npc_markers.size() < npcs.size():
+		return
+	var mill = null
+	for record in world.buildings_in_chunk(chunk_coord):
+		if record.get("id", "") == VillageSawmill.SAWMILL_BUILDING_ID:
+			mill = record["origin_local"]
+			break
+	if mill == null:
+		return
+	# The mill is also a real place on the village's own map, so a sawyer's
+	# schedule resolves to it like a merchant's resolves to the stall.
+	# Without this their work tag names somewhere that does not exist and
+	# they fall back to a decorative workspot.
+	var footprint := BuildingCatalog.footprint_of(VillageSawmill.SAWMILL_BUILDING_ID)
+	var mill_centre := Vector2(
+		(float((mill as Vector2i).x + chunk_coord.x * chunk_size) + float(footprint.x) * 0.5) * TerrainRenderer.TILE_SIZE,
+		(float((mill as Vector2i).y + chunk_coord.y * chunk_size) + float(footprint.y) * 0.5) * TerrainRenderer.TILE_SIZE
+	)
+	for i in npcs.size():
+		npc_markers[i].landmarks["sawmill"] = mill_centre
+		if VillageSawmill.works_timber(npcs[i].occupation):
+			npc_markers[i].sawmill_cell = chunk_coord * chunk_size + (mill as Vector2i)
 
 
 ## First-ever placement for this settlement (see spawn_village's own
@@ -703,7 +751,9 @@ func _fenced_farm_fields(chunk_coord: Vector2i, chunk_size: int, world) -> Dicti
 ## A village with more farmers than farmhouses (nowhere left with room for
 ## another field) leaves the rest on the regional drip they always had,
 ## which is the honest outcome rather than two villagers tending one field.
-func _hand_out_farm_fields(npcs: Array, npc_markers: Array, fields: Dictionary) -> void:
+func _hand_out_farm_fields(
+	npcs: Array, npc_markers: Array, fields: Dictionary, chunk_coord: Vector2i, chunk_size: int
+) -> void:
 	if fields.is_empty() or npc_markers.size() < npcs.size():
 		return
 	var origins: Array = fields.keys()
@@ -713,8 +763,148 @@ func _hand_out_farm_fields(npcs: Array, npc_markers: Array, fields: Dictionary) 
 			continue
 		if next_farmhouse >= origins.size():
 			return
-		npc_markers[i].field_cells = fields[origins[next_farmhouse]]
+		var origin: Vector2i = origins[next_farmhouse]
+		npc_markers[i].field_cells = fields[origin]
+		# WHICH farmhouse, not just which ground: a harvest fills the
+		# farmhouse this villager works for, and the village gets it when
+		# they carry it in (NpcMarker._store_harvest /
+		# haul_farmhouse_stock_to_village). Global, like field_cells --
+		# `fields` is keyed by the LOCAL origin _farmhouse_origins returns.
+		npc_markers[i].stock_building_cell = chunk_coord * chunk_size + origin
 		next_farmhouse += 1
+
+
+## Digs every fisher's own pond, fenced like a farmhouse's beds (see
+## docs/concept/village_ponds.md). Asked for directly: *"The Fisher should
+## build a similar 3x2 enclosure but filled with water and a pond with river
+## water physics and fish swimming in it which reproduce"*.
+##
+## Sited against the fisher's OWN house, which is the building that carries
+## their occupation -- a fisher lives in an ordinary house, so there is no
+## separate building to hang this on the way a farmhouse carries a field.
+##
+## Idempotent by the same shape everything else here uses: a cell that is
+## already water reads as occupied, so `is_free` refuses it, no rectangle
+## fits over a pond that is already there, and a reload digs nothing twice.
+func _dig_fisher_ponds_if_missing(chunk_coord: Vector2i, chunk_size: int, world) -> Dictionary:
+	var ponds: Dictionary = {}
+	if world == null or not world.has_method("build_at_global"):
+		return ponds
+	if not world.has_method("buildings_in_chunk"):
+		return ponds
+	var is_buildable := _is_buildable_local(chunk_coord, chunk_size, world)
+	var is_occupied := _is_occupied_local(chunk_coord, chunk_size, world)
+	var is_free := func(cell: Vector2i) -> bool:
+		if cell.x < 0 or cell.y < 0 or cell.x >= chunk_size or cell.y >= chunk_size:
+			return false
+		return is_buildable.call(cell) and not is_occupied.call(cell)
+	for record in world.buildings_in_chunk(chunk_coord):
+		if String(record.get("occupation", "")) != FISHER_OCCUPATION:
+			continue
+		var origin: Vector2i = record["origin_local"]
+		var building_id: String = record.get("id", "")
+		if _has_pond_already(chunk_coord, chunk_size, world, origin, building_id):
+			ponds[origin] = _pond_water_near(chunk_coord, chunk_size, world, origin, building_id)
+			continue
+		var water: Array = VillagePond.pond_cells(origin, building_id, is_free)
+		if water.is_empty():
+			continue  # no room beside this house -- honestly, no pond
+		ponds[origin] = water
+		for cell in water:
+			var g: Vector2i = chunk_coord * chunk_size + (cell as Vector2i)
+			world.build_at_global(g.x, g.y, VillagePond.POND_TILE_ID)
+		# Stocked as it is dug: empty water is a hole, and a pond's fish only
+		# breed from fish that are already in it (VillagePond.step is
+		# logistic, so nothing grows from nothing). A village stocks its own
+		# pond, which is what a village actually does.
+		if world.has_method("stock_pond_at"):
+			var first: Vector2i = chunk_coord * chunk_size + (water[0] as Vector2i)
+			world.stock_pond_at(first.x, first.y)
+		# The frame, on the field's own rule and through the field's own
+		# skips: another farm's crop, a building, paving (the gate), and
+		# ground nothing may stand on.
+		for rail in VillageFarm.fence_cells(water, origin, building_id):
+			var cell: Vector2i = rail
+			if not is_free.call(cell):
+				continue
+			var tile_id := VillageFarm.fence_tile_for(VillageFarm.fence_facing(cell, water))
+			if tile_id == "":
+				continue
+			var g: Vector2i = chunk_coord * chunk_size + cell
+			world.build_at_global(g.x, g.y, tile_id)
+	return ponds
+
+
+## The water already standing in this house's own reach, in the same local
+## cells pond_cells would have returned -- what a RELOAD hands the fisher,
+## since the pond was dug on an earlier visit and is not dug again.
+func _pond_water_near(
+	chunk_coord: Vector2i, chunk_size: int, world, origin: Vector2i, building_id: String
+) -> Array:
+	var water: Array = []
+	if not world.has_method("modification_at_global"):
+		return water
+	for cell in VillageFarm.field_cells(origin, building_id):
+		var local: Vector2i = cell
+		if local.x < 0 or local.y < 0 or local.x >= chunk_size or local.y >= chunk_size:
+			continue
+		var g: Vector2i = chunk_coord * chunk_size + local
+		if VillagePond.is_pond_tile(world.modification_at_global(g.x, g.y)):
+			water.append(local)
+	return water
+
+
+## Hands every fisher the water they work and the building they fill -- the
+## same pairing, in the same roster order, that _hand_out_farm_fields does
+## for a farmer, and for the same reason: this is the only thing that knows
+## whose pond is whose.
+func _hand_out_fisher_ponds(
+	npcs: Array, npc_markers: Array, ponds: Dictionary, chunk_coord: Vector2i, chunk_size: int
+) -> void:
+	if ponds.is_empty() or npc_markers.size() < npcs.size():
+		return
+	var origins: Array = ponds.keys()
+	var next_pond := 0
+	for i in npcs.size():
+		if npcs[i].occupation != FISHER_OCCUPATION:
+			continue
+		if next_pond >= origins.size():
+			return
+		var origin: Vector2i = origins[next_pond]
+		var water: Array = ponds[origin]
+		next_pond += 1
+		if water.is_empty():
+			continue
+		var global_water: Array[Vector2i] = []
+		for cell in water:
+			global_water.append(chunk_coord * chunk_size + (cell as Vector2i))
+		npc_markers[i].pond_cells = global_water
+		# Their own house is the building they fill: a fisher lives in an
+		# ordinary one, so the pond's own origin IS their stock building.
+		npc_markers[i].stock_building_cell = chunk_coord * chunk_size + origin
+
+
+## Whether this house already has water in reach.
+##
+## "A pond cell is occupied, so no pond fits there again" is NOT enough on
+## its own, and a reload proved it: the cells of the pond already dug are
+## refused, another rectangle in the same reach still fits, and the fisher
+## gets a SECOND pond every time the chunk loads. The question a reload has
+## to ask is whether this house has a pond at all, not whether one
+## particular rectangle is free.
+func _has_pond_already(
+	chunk_coord: Vector2i, chunk_size: int, world, origin: Vector2i, building_id: String
+) -> bool:
+	if not world.has_method("modification_at_global"):
+		return false
+	for cell in VillageFarm.field_cells(origin, building_id):
+		var local: Vector2i = cell
+		if local.x < 0 or local.y < 0 or local.x >= chunk_size or local.y >= chunk_size:
+			continue
+		var g: Vector2i = chunk_coord * chunk_size + local
+		if VillagePond.is_pond_tile(world.modification_at_global(g.x, g.y)):
+			return true
+	return false
 
 
 ## Raises each farmhouse's real fence around the beds its villager works

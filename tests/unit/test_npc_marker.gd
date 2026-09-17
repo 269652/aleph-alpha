@@ -177,7 +177,12 @@ func test_position_moves_toward_the_resolved_target():
 	assert_lt(marker.position.distance_to(marker.home_position), before_distance)
 
 
+## Pinned to a trade whose own work tag is one of this fixture's landmarks:
+## the run below spans a day rollover, so whatever the planner says for this
+## villager's trade is what actually gets walked, and the tag under test
+## would otherwise be replaced by their own.
 func test_resolves_a_landmark_tag_to_the_shared_landmark_position():
+	marker.identity.occupation = "merchant"
 	marker.schedule = [
 		{"time_block": "morning", "location_tag": "stall", "activity": "work"},
 		{"time_block": "midday", "location_tag": "stall", "activity": "work"},
@@ -468,7 +473,12 @@ func test_default_instruction_script_is_null():
 ## landmark-resolution behavior test_resolves_a_landmark_tag_to_the_shared_
 ## landmark_position already pins, just re-asserted here alongside the new
 ## instruction-script tests as the explicit "untouched" proof.
+## Pinned to a trade whose work tag is a real shared landmark. Seed 1's
+## occupation is not this test's subject -- it is about what an instruction
+## script does and does not override -- and the day-rollover replan means
+## whatever the planner says for that trade is what actually gets walked.
 func test_no_instruction_script_walks_the_planner_entry_unchanged():
+	marker.identity.occupation = "merchant"
 	marker.schedule = [
 		{"time_block": "morning", "location_tag": "stall", "activity": "work"},
 		{"time_block": "midday", "location_tag": "stall", "activity": "work"},
@@ -503,6 +513,7 @@ func test_instruction_script_overrides_the_planner_entry_when_a_rule_matches():
 
 
 func test_instruction_script_falls_back_to_the_planner_entry_when_no_rule_matches():
+	marker.identity.occupation = "merchant"
 	marker.instruction_script = _instruction_ast(
 		"instruct \"X\" {\n"
 		+ "    if inventory_at_least(wood, 999): haul(wood, well)\n"

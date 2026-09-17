@@ -42,9 +42,22 @@ const FENCE_TILE_IDS := {
 	"south": "farm_fence_south",
 	"east": "farm_fence_east",
 	"west": "farm_fence_west",
-	"corner_west": "farm_fence_corner_west",
-	"corner_east": "farm_fence_corner_east",
+	"corner_nw": "farm_fence_corner_nw",
+	"corner_ne": "farm_fence_corner_ne",
+	"corner_sw": "farm_fence_corner_sw",
+	"corner_se": "farm_fence_corner_se",
 }
+
+## Rails a village RAISED under an older scheme and may still have standing.
+## Nothing produces one any more -- fence_facing names a corner by both the
+## sides it caps now, because one of them is which run's line the post has
+## to sit on (see FENCE_INNER_DIRECTIONS). They stay recognised because a
+## rail is an ordinary chunk modification: an id that stopped reading as a
+## fence would lose its art AND stop being overlay-only, painting a bare
+## earth square on ground somebody has already walked past.
+const LEGACY_FENCE_TILE_IDS: Array[String] = [
+	"farm_fence_corner_west", "farm_fence_corner_east",
+]
 
 ## The shapes a farmhouse's field may take -- asked for directly, with the
 ## broken ring circled in a screenshot: "The fence should enclose a 2x3 or
@@ -367,7 +380,12 @@ static func fence_facing(cell: Vector2i, worked_cells: Array) -> String:
 		for dy in [1, -1]:
 			for dx in [1, -1]:
 				if beds.has(cell + Vector2i(dx, dy)):
-					return "corner_west" if dx > 0 else "corner_east"
+					# Both sides, not just the side wall: a corner post has
+					# a ground POINT, not a ground line, and the run it sits
+					# on is the one named by dy.
+					if dx > 0:
+						return "corner_nw" if dy > 0 else "corner_sw"
+					return "corner_ne" if dy > 0 else "corner_se"
 		return ""
 	if beds.has(cell + Vector2i(0, 1)):
 		return "north"
@@ -387,7 +405,9 @@ static func fence_tile_for(facing: String) -> String:
 ## faces -- the one question a creature's movement and the art registry both
 ## have to ask, so neither re-lists the ids.
 static func is_fence_tile(tile_id: String) -> bool:
-	return tile_id != "" and FENCE_TILE_IDS.values().has(tile_id)
+	if tile_id == "":
+		return false
+	return FENCE_TILE_IDS.values().has(tile_id) or LEGACY_FENCE_TILE_IDS.has(tile_id)
 
 
 ## Which way the beds lie from a rail cell -- and therefore which of that
@@ -408,20 +428,37 @@ static func is_fence_tile(tile_id: String) -> bool:
 ## the other direction, and
 ## test_the_inner_edge_really_points_at_the_bed_the_rail_encloses pins the
 ## two against each other rather than trusting two hand-written tables.
-## A corner post caps one of the two SIDE walls, so it takes that wall's own
-## inner edge: a corner_west caps the west run and its beds lie east, a
-## corner_east caps the east run and its beds lie west. That is what keeps
-## the post on the same line as the run it caps instead of half a tile off
-## it, and it is also the honest answer for what an animal may cross there
-## -- the diagonal into the crop is blocked (that diagonal's x component IS
-## this direction), while walking on along the ring past the turn is not.
+## A run closes ONE side, so its inner direction is one axis: the edge of its
+## own tile that faces the beds, and the line its rails are drawn on.
+##
+## A CORNER closes two at once, so its direction is the diagonal and what it
+## names is a POINT -- the corner of its own tile where the two runs meet.
+## Reported with all three visible corners crossed out ("the fences still
+## aren't optimal"): while a corner knew only which side WALL it capped, its
+## art was placed as a full tile of vertical rail with nothing saying where
+## along that tile to stop, so the frame overshot by a whole tile at every
+## corner. The second component is what stops that.
+##
+## It is also the honest answer for what an animal may cross there: the one
+## way through a corner into the crop is that diagonal, and walking on round
+## the turn is not blocked at all.
 const FENCE_INNER_DIRECTIONS := {
 	"north": Vector2i(0, 1),
 	"south": Vector2i(0, -1),
 	"east": Vector2i(-1, 0),
 	"west": Vector2i(1, 0),
-	"corner_west": Vector2i(1, 0),
-	"corner_east": Vector2i(-1, 0),
+	"corner_nw": Vector2i(1, 1),
+	"corner_ne": Vector2i(-1, 1),
+	"corner_sw": Vector2i(1, -1),
+	"corner_se": Vector2i(-1, -1),
+}
+
+## What a LEGACY corner knew: one axis, which is all a two-id corner ever
+## carried. Enough to keep one drawn and out of the ground cover; not enough
+## to sit it on the join, which is why the scheme changed.
+const LEGACY_FENCE_INNER_DIRECTIONS := {
+	"farm_fence_corner_west": Vector2i(1, 0),
+	"farm_fence_corner_east": Vector2i(-1, 0),
 }
 
 
@@ -437,13 +474,18 @@ static func fence_facing_of(tile_id: String) -> String:
 
 
 static func fence_inner_direction(tile_id: String) -> Vector2i:
-	return FENCE_INNER_DIRECTIONS.get(fence_facing_of(tile_id), Vector2i.ZERO)
+	var facing := fence_facing_of(tile_id)
+	if facing == "":
+		return LEGACY_FENCE_INNER_DIRECTIONS.get(tile_id, Vector2i.ZERO)
+	return FENCE_INNER_DIRECTIONS.get(facing, Vector2i.ZERO)
 
 
 ## Whether this rail is a corner POST rather than a length of rail -- a cell
 ## the beds touch only on the DIAGONAL, capping the two runs that meet
 ## there (see fence_facing).
 static func is_fence_corner_tile(tile_id: String) -> bool:
+	if LEGACY_FENCE_TILE_IDS.has(tile_id):
+		return true
 	return fence_facing_of(tile_id).begins_with("corner")
 
 
@@ -489,7 +531,10 @@ static func _rail_stops_step(tile_id: String, step: Vector2i) -> bool:
 	if not crosses:
 		return false
 	if is_fence_corner_tile(tile_id):
-		return step.x != 0 and step.y != 0
+		# The one way through a corner into the crop is the diagonal it
+		# actually faces. Its cardinal neighbours are the two runs it caps,
+		# and stopping a step along a run stops an animal walking the ring.
+		return signi(step.x) == inner.x and signi(step.y) == inner.y
 	return true
 
 

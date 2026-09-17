@@ -147,3 +147,33 @@ func test_carpentry_level_does_not_perturb_personality_trait_selection():
 func test_hunter_and_nurse_are_valid_occupations():
 	assert_true(NpcIdentity.OCCUPATIONS.has("hunter"))
 	assert_true(NpcIdentity.OCCUPATIONS.has("nurse"))
+
+
+# -- a village has a timber trade (docs/concept/village_timber.md) ----------
+#
+# Reported in play: "The sawmill also never produces any beams and doesn't
+# even have a dedicated worker". A village raised a sawmill at its own
+# timber and then had nobody whose job was timber.
+
+
+func test_a_lumberjack_is_a_real_village_trade():
+	assert_true(
+		NpcIdentity.OCCUPATIONS.has("lumberjack"),
+		"a village that raises a sawmill needs somebody whose trade it is"
+	)
+
+
+func test_a_lumberjack_works_at_the_sawmill():
+	assert_eq(
+		NpcIdentity.WORK_LOCATION_BY_OCCUPATION.get("lumberjack", ""), "sawmill",
+		"their day is spent at the mill, not at a prop somewhere else"
+	)
+
+
+## Every trade answers, so a villager never has a day with nowhere in it.
+func test_every_occupation_still_names_where_its_day_is_spent():
+	for occupation in NpcIdentity.OCCUPATIONS:
+		assert_ne(
+			String(NpcIdentity.WORK_LOCATION_BY_OCCUPATION.get(occupation, "")), "",
+			"%s has nowhere to work" % occupation
+		)

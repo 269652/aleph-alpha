@@ -91,9 +91,10 @@ func _initialize() -> void:
 			if tile == TerrainRenderer.ROAD_TILE_ID:
 				glyphs[local] = ":"
 			elif VillageFarm.is_fence_tile(tile):
-				glyphs[local] = {"farm_fence_north": "^", "farm_fence_south": "v",
+				glyphs[local] = {
+					"farm_fence_north": "^", "farm_fence_south": "v",
 					"farm_fence_east": ">", "farm_fence_west": "<",
-					"farm_fence_corner_west": "+", "farm_fence_corner_east": "+"}[tile]
+				}.get(tile, "+")  # every corner, whatever it is called, is a post
 		for call in world.place_calls:
 			var letter := "B"
 			if call["building_id"] == VillageFarm.FARM_BUILDING_ID:

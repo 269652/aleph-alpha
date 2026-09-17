@@ -18,6 +18,12 @@ extends PanelContainer
 
 const HouseholdWellbeing = preload("res://src/emergence/household_wellbeing.gd")
 const BuildingCatalog = preload("res://src/gameplay/building_catalog.gd")
+const ItemCatalog = preload("res://src/gameplay/item_catalog.gd")
+
+## One catalog instance for the readout's own naming -- ItemCatalog is
+## instance-based, and a panel listing a barn should not allocate a whole
+## Item just to read a label off it.
+var _items := ItemCatalog.new()
 
 const PANEL_WIDTH := 236.0
 const BAR_WIDTH := 150.0
@@ -80,6 +86,28 @@ func _ready() -> void:
 	_purse.modulate = Color(1, 1, 1, 0.75)
 	root.add_child(_purse)
 
+	# The Inventory tab (docs/concept/building_storage.md). A TAB rather than
+	# one more row, because what a building HOLDS is a different question
+	# from who lives there and how they are doing -- and because a barn's
+	# contents would otherwise push the needs rows off a 236px panel.
+	_tabs = HBoxContainer.new()
+	_tabs.add_theme_constant_override("separation", 6)
+	root.add_child(_tabs)
+	_household_tab = _build_tab_button("Household", true)
+	_inventory_tab = _build_tab_button("Inventory", false)
+
+	_inventory_root = VBoxContainer.new()
+	_inventory_root.add_theme_constant_override("separation", 2)
+	root.add_child(_inventory_root)
+
+	_inventory_summary = Label.new()
+	_inventory_summary.add_theme_font_size_override("font_size", 11)
+	_inventory_root.add_child(_inventory_summary)
+
+	_inventory_rows_root = VBoxContainer.new()
+	_inventory_rows_root.add_theme_constant_override("separation", 1)
+	_inventory_root.add_child(_inventory_rows_root)
+
 	var hint := Label.new()
 	hint.add_theme_font_size_override("font_size", 10)
 	hint.modulate = Color(1, 1, 1, 0.45)
@@ -101,6 +129,7 @@ func show_report(report: Dictionary) -> void:
 	var wallet := int(report.get("wallet_balance", 0))
 	_purse.visible = bool(report.get("is_home", false))
 	_purse.text = "Purse: %d gold" % wallet
+	_rebuild_inventory(report)
 	visible = true
 
 
@@ -213,3 +242,113 @@ func purse_text() -> String:
 ## drawn in, "value": the satisfaction itself}. Empty for a commons.
 func need_rows() -> Dictionary:
 	return _need_rows.duplicate(true)
+
+
+# -- the Inventory tab -------------------------------------------------------
+
+
+var _tabs: HBoxContainer
+var _household_tab: Button
+var _inventory_tab: Button
+var _inventory_root: VBoxContainer
+var _inventory_summary: Label
+var _inventory_rows_root: VBoxContainer
+var _inventory: Dictionary = {}
+var _storage_capacity := 0
+
+
+func _build_tab_button(text: String, pressed: bool) -> Button:
+	var button := Button.new()
+	button.text = text
+	button.toggle_mode = true
+	button.button_pressed = pressed
+	button.focus_mode = Control.FOCUS_NONE
+	button.add_theme_font_size_override("font_size", 11)
+	button.pressed.connect(func() -> void: _select_tab(button == _inventory_tab))
+	_tabs.add_child(button)
+	return button
+
+
+## Which half of the panel is showing. Only ever one, and the buttons stay
+## in step with it rather than each tracking its own state.
+func _select_tab(inventory: bool) -> void:
+	_household_tab.button_pressed = not inventory
+	_inventory_tab.button_pressed = inventory
+	_inventory_root.visible = inventory
+	_needs_root.visible = not inventory
+	_summary.visible = not inventory
+	_purse.visible = not inventory and bool(_is_home)
+
+
+var _is_home := false
+
+
+## A building that keeps NO goods has no tab at all, rather than an empty
+## one: a town hall is not a barn with nothing in it. An empty barn does
+## still show, because "nothing in it right now" is a fact worth reading.
+func _rebuild_inventory(report: Dictionary) -> void:
+	_is_home = bool(report.get("is_home", false))
+	_storage_capacity = int(report.get("storage_capacity", 0))
+	_inventory = (report.get("stock", {}) as Dictionary).duplicate()
+	var offered := _storage_capacity > 0
+	_tabs.visible = offered
+	if not offered:
+		_select_tab(false)
+		_inventory_root.visible = false
+		return
+	var held := 0
+	for count in _inventory.values():
+		held += int(count)
+	_inventory_summary.text = "Stored: %d / %d" % [held, _storage_capacity]
+	for child in _inventory_rows_root.get_children():
+		child.queue_free()
+		_inventory_rows_root.remove_child(child)
+	for item_id in _sorted_item_ids():
+		var row := Label.new()
+		row.add_theme_font_size_override("font_size", 11)
+		row.text = "%s  x%d" % [_items.display_name_of(item_id), int(_inventory[item_id])]
+		_inventory_rows_root.add_child(row)
+	# Opening on Household keeps the readout's own answer to "who lives
+	# here" first; the tab is there for whoever wants the barn.
+	_select_tab(false)
+
+
+## Stable and readable: by item id, so the same barn lists the same way
+## every time it is opened rather than in whatever order a Dictionary hands
+## its keys back.
+func _sorted_item_ids() -> Array:
+	var ids: Array = _inventory.keys()
+	ids.sort()
+	return ids
+
+
+## Whether this building offers an Inventory tab at all.
+func has_inventory_tab() -> bool:
+	return _storage_capacity > 0
+
+
+## What the tab lists, as {item_id, label, count} -- the rendered rows, in
+## the order they are drawn.
+func inventory_rows() -> Array:
+	var rows: Array = []
+	for item_id in _sorted_item_ids():
+		rows.append({
+			"item_id": item_id,
+			"label": _items.display_name_of(item_id),
+			"count": int(_inventory[item_id]),
+		})
+	return rows
+
+
+func inventory_summary_text() -> String:
+	return _inventory_summary.text
+
+
+## A full barn is the whole reason hauling exists, so the panel says so.
+func inventory_is_full() -> bool:
+	if _storage_capacity <= 0:
+		return false
+	var held := 0
+	for count in _inventory.values():
+		held += int(count)
+	return held >= _storage_capacity

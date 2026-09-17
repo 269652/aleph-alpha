@@ -15,6 +15,8 @@ const NpcIdentity = preload("res://src/world/npc_identity.gd")
 const TerrainRenderer = preload("res://src/rendering/terrain_renderer.gd")
 const VillageLayout = preload("res://src/world/village_layout.gd")
 const VillageFarm = preload("res://src/gameplay/village_farm.gd")
+const VillagePond = preload("res://src/gameplay/village_pond.gd")
+const VillageSawmill = preload("res://src/gameplay/village_sawmill.gd")
 const ProceduralLandmarkSprite = preload("res://src/rendering/procedural_landmark_sprite.gd")
 
 const TILE_SIZE := 16
@@ -161,6 +163,14 @@ class StubWorld:
 
 	func modification_at_global(x: int, y: int) -> String:
 		return occupied_cells.get(Vector2i(x, y), "")
+
+	## Every tile stock_pond_at was called for -- the real
+	## EarthChunkManager's own entry point for putting a fisher's stocking
+	## into the water they just dug.
+	var stocked_ponds: Array = []
+
+	func stock_pond_at(x: int, y: int) -> void:
+		stocked_ponds.append(Vector2i(x, y))
 
 	## Mirrors EarthChunkManager.place_building_over_roads: the civic plot
 	## is the paved square itself, so an ordinary place_building would
@@ -460,11 +470,12 @@ func test_every_street_cell_is_laid_as_the_real_road_tile():
 	var streets := 0
 	for cell in world.built_tiles:
 		var tile: String = world.built_tiles[cell]
-		# A village builds exactly two things onto its own ground: streets,
-		# and the rails a farmhouse fences its beds with (docs/concept/
-		# village_farms.md). Everything that is not a rail is a street, and
-		# every street is the real Road tile.
-		if VillageFarm.is_fence_tile(tile):
+		# A village builds three things onto its own ground: streets, the
+		# rails a farmhouse fences its beds with (docs/concept/
+		# village_farms.md) and the water a fisher digs (docs/concept/
+		# village_ponds.md). Everything that is neither a rail nor a pond is
+		# a street, and every street is the real Road tile.
+		if VillageFarm.is_fence_tile(tile) or VillagePond.is_pond_tile(tile):
 			continue
 		assert_eq(tile, TerrainRenderer.ROAD_TILE_ID, str(cell))
 		streets += 1
@@ -2195,6 +2206,193 @@ func test_a_village_leaves_no_one_or_two_tile_hole_in_its_own_streets():
 			holes.append("%s: a hole in the street at %s" % [str(coord), str(cell)])
 	assert_gt(checked, 0, "precondition: real villages were laid")
 	assert_eq(holes.size(), 0, "%s" % str(holes.slice(0, 8)))
+
+
+## The last link of "make sure wheat grows and is harvested which increases
+## farmhouse stock which gets transported to city stock": a villager can
+## only fill the farmhouse they work for if they know which one it is.
+## Handed out with the field, by the one thing that knows whose is whose.
+func test_every_farmer_is_told_which_farmhouse_the_field_belongs_to():
+	var coord := _find_settlement_chunk_with_occupation("grassland", "farmer", 3)
+	var world := StubWorld.new()
+	var spawned := renderer.spawn_village(
+		parent, coord, coord * CHUNK_SIZE, CHUNK_SIZE, TILE_SIZE, "grassland", world
+	)
+	var origins: Dictionary = {}
+	for record in world.buildings_in_chunk(coord):
+		if record.get("id", "") == VillageFarm.FARM_BUILDING_ID:
+			origins[coord * CHUNK_SIZE + (record["origin_local"] as Vector2i)] = true
+	assert_gt(origins.size(), 0, "precondition: this village really raised a farmhouse")
+	var checked := 0
+	for npc in _farming_markers(spawned, coord):
+		if npc.field_cells.is_empty():
+			continue
+		checked += 1
+		assert_true(
+			origins.has(npc.stock_building_cell),
+			"a farmer works a field for %s, which is no farmhouse" % str(npc.stock_building_cell)
+		)
+	assert_gt(checked, 0, "precondition: somebody was handed a real field")
+
+
+## A fisher digs their own water where a farmer sows their own beds -- see
+## docs/concept/village_ponds.md. Asked for directly: "The Fisher should
+## build a similar 3x2 enclosure but filled with water".
+func test_a_fisher_gets_a_real_fenced_pond_beside_their_own_house():
+	var coord := _find_settlement_chunk_with_occupation("grassland", "fisher", 3)
+	var world := StubWorld.new()
+	renderer.spawn_village(
+		parent, coord, coord * CHUNK_SIZE, CHUNK_SIZE, TILE_SIZE, "grassland", world
+	)
+	var built := _built_tiles(world, coord)
+	var water: Array = []
+	for cell in built:
+		if VillagePond.is_pond_tile(built[cell]):
+			water.append(cell)
+	assert_gt(water.size(), 0, "the village's fisher has nowhere to fish")
+
+	var min_cell: Vector2i = water[0]
+	var max_cell: Vector2i = water[0]
+	for cell in water:
+		min_cell = Vector2i(mini(min_cell.x, (cell as Vector2i).x), mini(min_cell.y, (cell as Vector2i).y))
+		max_cell = Vector2i(maxi(max_cell.x, (cell as Vector2i).x), maxi(max_cell.y, (cell as Vector2i).y))
+	var size := max_cell - min_cell + Vector2i.ONE
+	assert_true(VillageFarm.FIELD_SHAPES.has(size), "a pond spans %s, not a shape that was asked for" % str(size))
+	assert_eq(water.size(), size.x * size.y, "the pond has a hole in it")
+
+
+## And it is FENCED, like the field it is modelled on -- the ask says "a
+## similar 3x2 enclosure", and an enclosure is the frame.
+func test_a_fishers_pond_is_fenced_like_a_field():
+	var coord := _find_settlement_chunk_with_occupation("grassland", "fisher", 3)
+	var world := StubWorld.new()
+	renderer.spawn_village(
+		parent, coord, coord * CHUNK_SIZE, CHUNK_SIZE, TILE_SIZE, "grassland", world
+	)
+	var built := _built_tiles(world, coord)
+	var water: Array = []
+	for cell in built:
+		if VillagePond.is_pond_tile(built[cell]):
+			water.append(cell)
+	assert_gt(water.size(), 0, "precondition: a pond was really dug")
+	var rails := 0
+	for cell in VillageFarm.fence_cells(water, Vector2i.ZERO, VillageFarm.FARM_BUILDING_ID):
+		if VillageFarm.is_fence_tile(built.get(cell, "")):
+			rails += 1
+	assert_gt(rails, 0, "a pond with no frame at all is not an enclosure")
+
+
+## Nothing is dug twice: a reload re-derives the same pond and builds
+## nothing on top of it.
+func test_digging_a_pond_twice_leaves_it_exactly_as_it_was():
+	var coord := _find_settlement_chunk_with_occupation("grassland", "fisher", 3)
+	var world := StubWorld.new()
+	renderer.spawn_village(parent, coord, coord * CHUNK_SIZE, CHUNK_SIZE, TILE_SIZE, "grassland", world)
+	var first := _built_tiles(world, coord).duplicate(true)
+	renderer.spawn_village(parent, coord, coord * CHUNK_SIZE, CHUNK_SIZE, TILE_SIZE, "grassland", world)
+	assert_eq(_built_tiles(world, coord), first, "a reload changed the village")
+
+
+## A dug pond is STOCKED: empty water is a hole, and the ask is fish
+## swimming in it. The village puts the fisher's own stocking in as it digs.
+func test_a_dug_pond_is_stocked_with_real_fish():
+	var coord := _find_settlement_chunk_with_occupation("grassland", "fisher", 3)
+	var world := StubWorld.new()
+	renderer.spawn_village(
+		parent, coord, coord * CHUNK_SIZE, CHUNK_SIZE, TILE_SIZE, "grassland", world
+	)
+	var built := _built_tiles(world, coord)
+	var water: Array = []
+	for cell in built:
+		if VillagePond.is_pond_tile(built[cell]):
+			water.append(cell)
+	assert_gt(water.size(), 0, "precondition: a pond was dug")
+	assert_gt(world.stocked_ponds.size(), 0, "the fisher's pond was left empty")
+	var stocked_in_water := false
+	for tile in world.stocked_ponds:
+		if water.has((tile as Vector2i) - coord * CHUNK_SIZE):
+			stocked_in_water = true
+	assert_true(stocked_in_water, "something was stocked, but not the pond")
+# -- the village sawmill has a worker (docs/concept/village_timber.md) ------
+#
+# Reported in play: "The sawmill also never produces any beams and doesn't
+# even have a dedicated worker".
+
+
+func _lumberjack_markers(spawned: Array) -> Array:
+	var out: Array = []
+	for node in spawned:
+		if node is NpcMarker and node.identity.occupation == VillageSawmill.OCCUPATION:
+			out.append(node)
+	return out
+
+
+func test_a_lumberjack_is_told_which_sawmill_is_theirs():
+	var coord := _find_settlement_chunk_with_occupation("grassland", VillageSawmill.OCCUPATION, 3)
+	var world := StubWorld.new()
+	# Real timber, or the village honestly raises no mill and the test would
+	# pass without ever asking its own question.
+	_forest_band(world, coord)
+	var spawned := renderer.spawn_village(
+		parent, coord, coord * CHUNK_SIZE, CHUNK_SIZE, TILE_SIZE, "grassland", world
+	)
+	var mills := _buildings_of(world, VillageSawmill.SAWMILL_BUILDING_ID)
+	assert_gt(mills.size(), 0, "precondition: a village beside timber raised its mill")
+	var sawyers := _lumberjack_markers(spawned)
+	assert_gt(sawyers.size(), 0, "precondition: somebody in this village works timber")
+	var expected: Vector2i = coord * CHUNK_SIZE + mills[0]["origin_local"]
+	for sawyer in sawyers:
+		assert_eq(
+			sawyer.sawmill_cell, expected,
+			"a sawyer works the mill their own village raised"
+		)
+
+
+## A villager who is not a lumberjack is never handed one, or every trade
+## would be felling trees.
+func test_nobody_else_is_handed_a_sawmill():
+	var coord := _find_settlement_chunk_with_occupation("grassland", VillageSawmill.OCCUPATION, 3)
+	var world := StubWorld.new()
+	_forest_band(world, coord)
+	var spawned := renderer.spawn_village(
+		parent, coord, coord * CHUNK_SIZE, CHUNK_SIZE, TILE_SIZE, "grassland", world
+	)
+	for node in spawned:
+		if node is NpcMarker and node.identity.occupation != VillageSawmill.OCCUPATION:
+			assert_eq(
+				node.sawmill_cell, NpcMarker.NO_SAWMILL,
+				"%s does not work timber" % node.identity.occupation
+			)
+
+
+## A fisher is told which water is theirs and which building they fill --
+## the last link of the pond chain, and the same handout a farmer gets.
+func test_every_fisher_is_given_their_own_pond_and_their_own_house():
+	var coord := _find_settlement_chunk_with_occupation("grassland", "fisher", 3)
+	var world := StubWorld.new()
+	var spawned := renderer.spawn_village(
+		parent, coord, coord * CHUNK_SIZE, CHUNK_SIZE, TILE_SIZE, "grassland", world
+	)
+	var built := _built_tiles(world, coord)
+	var water: Dictionary = {}
+	for cell in built:
+		if VillagePond.is_pond_tile(built[cell]):
+			water[coord * CHUNK_SIZE + (cell as Vector2i)] = true
+	assert_gt(water.size(), 0, "precondition: a pond was dug")
+	var checked := 0
+	for node in spawned:
+		if not (node is NpcMarker) or node.identity.occupation != "fisher":
+			continue
+		if node.pond_cells.is_empty():
+			continue
+		checked += 1
+		for cell in node.pond_cells:
+			assert_true(water.has(cell), "a fisher was handed %s, which is not water" % str(cell))
+		assert_ne(
+			node.stock_building_cell, NpcMarker.NO_STOCK_BUILDING,
+			"a fisher with a pond and nowhere to put the catch"
+		)
+	assert_gt(checked, 0, "no fisher was handed a pond at all")
 
 
 # -- every village is founded with a store ----------------------------------

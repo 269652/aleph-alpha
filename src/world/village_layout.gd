@@ -38,7 +38,22 @@ const BuildingCatalog = preload("res://src/gameplay/building_catalog.gd")
 const PixelNoise = preload("res://src/rendering/pixel_noise.gd")
 
 ## Real gap between two adjacent plots on the same street.
-const PLOT_GAP_TILES := 1
+##
+## Zero: houses stand shoulder to shoulder, the way a village street
+## actually looks. Suggested directly, with three houses and the gaps
+## between them in shot -- *"could save some space in villages by omitting
+## the gap between houses"* -- and it is real space: one tile per pair, on
+## every street, in every village. What is still guarded is that two plots
+## never OVERLAP, which is what the claimed-cells check has always been for
+## (see test_adjacent_plots_on_the_same_street_never_overlap).
+const PLOT_GAP_TILES := 0
+
+## How far a plot keeps clear of the PLAZA, which is a different question
+## that used to share the constant above. The square is never frontage: a
+## house flush against it would stand in the space the square is. Kept at
+## one tile where the plot gap went to zero, because nothing about the
+## suggestion was about the square.
+const PLAZA_CLEARANCE_TILES := 1
 ## Real gap between one street's own row of buildings and the next one
 ## south of it, on top of the deepest building in the catalog -- the pitch
 ## between two streets is fixed (STREET_PITCH_TILES) so side streets know
@@ -401,8 +416,8 @@ func _layout_once(
 			# reach the square's western margin jumps to its eastern side
 			# (one gap clear), so the square itself never burns attempts.
 			if has_plaza and current_street_y == street_y:
-				var plaza_west_margin := plaza.position.x - PLOT_GAP_TILES
-				var plaza_east_resume := plaza.end.x + PLOT_GAP_TILES
+				var plaza_west_margin := plaza.position.x - PLAZA_CLEARANCE_TILES
+				var plaza_east_resume := plaza.end.x + PLAZA_CLEARANCE_TILES
 				if x < plaza_east_resume and x + footprint.x > plaza_west_margin:
 					x = plaza_east_resume
 					continue
@@ -827,8 +842,8 @@ static func next_street_plot(
 			var origin := Vector2i(x, street - footprint.y)
 			# The square is never frontage, paved or not (see this
 			# function's own doc comment).
-			var plaza_west_margin := plaza.position.x - PLOT_GAP_TILES
-			var plaza_east_resume := plaza.end.x + PLOT_GAP_TILES
+			var plaza_west_margin := plaza.position.x - PLAZA_CLEARANCE_TILES
+			var plaza_east_resume := plaza.end.x + PLAZA_CLEARANCE_TILES
 			if x < plaza_east_resume and x + footprint.x > plaza_west_margin and _rect_overlaps_rows(plaza, origin, footprint):
 				x = plaza_east_resume
 				continue

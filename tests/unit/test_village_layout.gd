@@ -116,24 +116,58 @@ func test_no_two_plots_footprints_ever_overlap():
 			claimed[cell] = true
 
 
-## At least a one-tile gap between adjacent plots on the same street --
-## measured directly, not assumed: no two plots' footprints are even
-## ORTHOGONALLY adjacent.
-func test_adjacent_plots_on_the_same_street_keep_a_real_gap():
+## Houses on the same street stand SHOULDER TO SHOULDER. Suggested directly,
+## with three houses and the gaps between them in shot: *"could save some
+## space in villages by omitting the gap between houses"*.
+##
+## This asserted the opposite until 2026-09-17 -- that no two footprints were
+## even orthogonally adjacent -- and that one tile between every pair is the
+## space the suggestion is about. What has to survive is the part that was
+## ever load-bearing: they must not OVERLAP.
+func test_adjacent_plots_on_the_same_street_never_overlap():
 	var ids := ["house_small", "house_small", "house_small"]
 	var result := layout.layout(ids, CHUNK_SIZE, 5, _always_buildable, _never_occupied)
 	var plots: Array = result["plots"]
 	for a in plots.size():
 		for b in range(a + 1, plots.size()):
-			if plots[a]["origin"].y != plots[b]["origin"].y:
-				continue  # different streets
 			var cells_a: Dictionary = {}
 			for cell in BuildingCatalog.footprint_cells(plots[a]["building_id"], plots[a]["origin"]):
 				cells_a[cell] = true
 			for cell in BuildingCatalog.footprint_cells(plots[b]["building_id"], plots[b]["origin"]):
-				for dx in range(-1, 2):
-					for dy in range(-1, 2):
-						assert_false(cells_a.has(cell + Vector2i(dx, dy)), "plots %d/%d touch or overlap" % [a, b])
+				assert_false(cells_a.has(cell), "plots %d/%d overlap at %s" % [a, b, str(cell)])
+
+
+## And they really are flush, not merely allowed to be: a row of houses on
+## one street leaves no empty column between one footprint and the next.
+func test_houses_on_one_street_stand_shoulder_to_shoulder():
+	var ids := ["house_small", "house_small", "house_small"]
+	var result := layout.layout(ids, CHUNK_SIZE, 5, _always_buildable, _never_occupied)
+	var by_street: Dictionary = {}
+	for plot in result["plots"]:
+		var row: int = (plot["origin"] as Vector2i).y
+		by_street[row] = by_street.get(row, [])
+		by_street[row].append(plot)
+	var pairs := 0
+	for row in by_street:
+		var row_plots: Array = by_street[row]
+		row_plots.sort_custom(func(a, b): return (a["origin"] as Vector2i).x < (b["origin"] as Vector2i).x)
+		for i in range(1, row_plots.size()):
+			var previous: Dictionary = row_plots[i - 1]
+			var width: int = BuildingCatalog.footprint_of(previous["building_id"]).x
+			pairs += 1
+			assert_eq(
+				(row_plots[i]["origin"] as Vector2i).x,
+				(previous["origin"] as Vector2i).x + width,
+				"a gap was left between two houses on the same street"
+			)
+	assert_gt(pairs, 0, "precondition: two houses really did share a street")
+
+
+## The plaza keeps its own clearance, which is a different thing that shared
+## one constant with the plot gap: a house flush against the square would
+## stand in the space the square IS.
+func test_the_plaza_keeps_a_margin_even_though_houses_do_not():
+	assert_gt(VillageLayout.PLAZA_CLEARANCE_TILES, 0, "the square is not frontage")
 
 
 func test_a_building_that_fits_nowhere_is_simply_absent_from_plots():

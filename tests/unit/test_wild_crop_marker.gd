@@ -11,6 +11,7 @@ const WildCropMarker = preload("res://src/rendering/wild_crop_marker.gd")
 const CropPull = preload("res://src/gameplay/crop_pull.gd")
 const HoverTargetFinder = preload("res://src/rendering/hover_target_finder.gd")
 const ProceduralSoilSprite = preload("res://src/rendering/procedural_soil_sprite.gd")
+const IllustratedSoilMoundSprite = preload("res://src/rendering/illustrated_soil_mound_sprite.gd")
 const IllustratedCropSprite = preload("res://src/rendering/illustrated_crop_sprite.gd")
 const SeasonalFoliage = preload("res://src/rendering/seasonal_foliage.gd")
 const ItemCatalog = preload("res://src/gameplay/item_catalog.gd")
@@ -256,10 +257,37 @@ func test_process_is_a_no_op_when_not_pulling():
 # so it visibly emerges from the ground as it's pulled rather than popping
 ## instantly visible the moment the swing lands.
 
+## Real illustrated mound art now exists (see IllustratedSoilMoundSprite) --
+## the undisturbed mound (still planted, not yet pulled) draws it instead
+## of ProceduralSoilSprite's fallback, at that art's own measured world
+## scale rather than the procedural generator's fixed one.
 func test_soil_is_scaled_to_its_declared_world_width():
 	marker.growth = 1.0
 	add_child_autofree(marker)
-	assert_almost_eq(marker._soil.scale.x, ProceduralSoilSprite.SOIL_WORLD_SCALE, 0.0001)
+	assert_almost_eq(marker._soil.scale.x, IllustratedSoilMoundSprite.new().world_scale(), 0.0001)
+
+
+func test_undisturbed_soil_uses_the_real_illustrated_mound_art():
+	marker.growth = 1.0
+	add_child_autofree(marker)
+	assert_eq(
+		Vector2i(marker._soil.texture.get_width(), marker._soil.texture.get_height()),
+		IllustratedSoilMoundSprite.CANVAS_SIZE
+	)
+
+
+## Two crops with the same sprite_seed should pick the same mound variant --
+## the same determinism guarantee IllustratedSoilMoundSprite.frame_for itself
+## already pins, checked here through the marker.
+func test_same_seed_picks_the_same_mound_variant():
+	var other := WildCropMarker.new()
+	other.crop_id = "carrot"
+	other.sprite_seed = marker.sprite_seed
+	marker.growth = 1.0
+	other.growth = 1.0
+	add_child_autofree(marker)
+	add_child_autofree(other)
+	assert_eq(marker._soil.texture, other._soil.texture)
 
 
 func test_root_is_assembled_from_the_start_but_fully_hidden():
@@ -512,6 +540,17 @@ func test_the_revealed_earth_uses_the_disturbed_texture():
 		marker._soil.texture.get_image().get_data(), disturbed.get_data(),
 		"the ground should read as freshly dug, not as an untouched mound"
 	)
+
+
+## The disturbed crater has no illustrated art of its own (see
+## IllustratedSoilMoundSprite's own doc comment) -- pulling has to reset the
+## scale back to the procedural generator's own, since it was left at the
+## illustrated mound's larger CANVAS_SIZE-relative scale while planted.
+func test_pulling_resets_the_scale_to_the_procedural_disturbed_textures_own():
+	marker.growth = 1.0
+	add_child_autofree(marker)
+	marker.begin_pull()
+	assert_almost_eq(marker._soil.scale.x, ProceduralSoilSprite.SOIL_WORLD_SCALE, 0.0001)
 
 
 ## A failed pull (the crop is not mature) must not leave torn earth behind --

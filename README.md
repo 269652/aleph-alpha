@@ -13,9 +13,7 @@ A single-player-first survival RPG set on a real, simulated Earth — actual ele
 
 Walk these woods in autumn and every birch is going gold at its own pace, leaves catching the wind on the way down in a way nobody keyframed by hand. The path underfoot is there because feet wore it in, one crossing at a time. A kingfisher holds its perch over the river because the water holds fish and the bank gives it a ledge to dive from — not because a designer decided a kingfisher belonged there. Snow comes and goes with the season it belongs to, not a switch somebody flips.
 
-![In Game Spring](./screenshots/ingame.png)
 ![In Game Autumn](./screenshots/ingame-2.png)
-![In Game Winter](./screenshots/ingame-3.png)
 
 Built solo/part-time in Godot 4 (GDScript), strict test-driven development
 throughout — come see what that looks like after a few hundred nights and

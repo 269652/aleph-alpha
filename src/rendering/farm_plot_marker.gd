@@ -76,11 +76,10 @@ static var _terrain := IllustratedTerrainSprite.new()
 static var _soil_textures: Dictionary = {}
 
 ## The full-tile tilled earth under everything (see _build_soil_ground).
-## Distinct from _soil, which is ProceduralSoilSprite's small MOUND -- a
-## root crop's own ground, hidden for wheat. This one is never hidden: a
-## bed is tilled earth whatever is (or is not) growing in it.
+## Never hidden: a bed is tilled earth whatever is (or is not) growing in
+## it. This is the ONLY soil a bed draws now -- ProceduralSoilSprite's small
+## mound is gone (see is_showing_soil).
 var _soil_ground: Sprite2D
-var _soil: Sprite2D
 var _leaves: Sprite2D
 ## Real Sprite2D children for a wheat crop's own small cluster of bending
 ## blades -- ordinary sprites, not GPU-instanced MultiMesh, since a single
@@ -109,12 +108,6 @@ func _ready() -> void:
 	add_to_group(GROUP_NAME)
 
 	_build_soil_ground()
-
-	_soil = Sprite2D.new()
-	_soil.texture = ProceduralSoilSprite.new().generate_texture(false)
-	_soil.scale = Vector2.ONE * ProceduralSoilSprite.SOIL_WORLD_SCALE
-	_soil.z_index = MOUND_Z_INDEX
-	add_child(_soil)
 
 	_leaves = Sprite2D.new()
 	_leaves.z_index = LEAVES_Z_INDEX
@@ -193,11 +186,24 @@ func wheat_blade_count() -> int:
 	return count
 
 
-## Whether this plot is drawing ProceduralSoilSprite's mound of tilled
-## earth under its crop. NOT about the ground the bed stands on -- see
-## soil_ground(), which is always shown.
+## Whether this plot draws a mound of tilled earth under its crop.
+##
+## Always false now, and kept as a named fact rather than deleted: it is
+## what the two reports about "the brown blob" were about, and a test that
+## no bed ever draws one is worth more than a function nobody can ask.
+##
+## Reported with the beds circled: "remove the brown mound blob we have
+## illustrated soil now". Real illustrated tilled earth covers the whole
+## tile under every bed (see soil_ground), so the mound had nothing left to
+## do -- and a HERB bed, which is not wheat, was still drawing one with no
+## crop art over it: a brown blob on brown ground.
 func is_showing_soil() -> bool:
-	return _soil != null and _soil.visible
+	return false
+
+
+## Whether this bed is drawing its full tile of tilled earth.
+func is_showing_tilled_ground() -> bool:
+	return _soil_ground != null and _soil_ground.visible
 
 
 ## The full tile of tilled earth this bed stands on.
@@ -254,18 +260,26 @@ func _build_soil_ground() -> void:
 func _redraw() -> void:
 	if _leaves == null:
 		return  # not _ready() yet
-	# Reported with the beds circled: "what's the round procedural dark
-	# blob? Can you remove it and keep just the wheat please". The mound is
-	# a ROOT crop's own ground -- its root grows inside it, and pulling one
-	# leaves the crater ProceduralSoilSprite's DISTURBED state draws -- but
-	# under a field of bending wheat it is just a dark circle, six of them
-	# in a 3x2 bed. Keyed on the crop rather than removed outright, so the
-	# crops the mound was drawn for keep it.
+	# Reported three times, about two different browns. First the mound:
+	# "what's the round procedural dark blob? Can you remove it and keep
+	# just the wheat please". Then again once a full tile of soil.png was
+	# put under every bed ("now there are brown blobs instead of the planted
+	# wheat") -- that sheet's cells carry a soft dark vignette, so a tile of
+	# it under wheat reads as a blob rather than as ground -- and a third
+	# time, of the mound itself: "remove the brown mound blob we have
+	# illustrated soil now".
 	#
-	# Against what the bed was SOWN with, not plot.crop_id: harvesting
-	# clears the crop, and a bare mound appearing the moment the wheat came
-	# off is the same blob back again.
-	_soil.visible = _sown_crop_id != WHEAT_CROP_ID
+	# So the MOUND is gone outright for every crop (see is_showing_soil),
+	# and the illustrated ground is kept for a root crop and hidden under
+	# wheat. A wheat bed is wheat; a root crop keeps the earth its root
+	# grows in.
+	#
+	# Against what the bed was SOWN with, not plot.crop_id: harvesting clears
+	# the crop, and bare ground appearing the moment the wheat comes off is
+	# the same blob back again.
+	var is_wheat := _sown_crop_id == WHEAT_CROP_ID
+	if _soil_ground != null:
+		_soil_ground.visible = not is_wheat
 	if plot.crop_id == WHEAT_CROP_ID:
 		_leaves.visible = false
 		_redraw_wheat()

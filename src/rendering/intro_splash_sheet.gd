@@ -6,16 +6,14 @@ extends RefCounted
 ## -> cached frames" shape as IllustratedWormSprite, IllustratedDecomposer
 ## Sprite etc.
 ##
-## assets/sprites/intro.png is 1983x793 -- AI-generated against an 8-column
-## x 4-row prompt, but NOT evenly divisible by that grid (1983/8=247.875,
-## 793/4=198.25), unlike worm.png's genuinely regular grid. Rather than
-## assume arithmetic division (would misalign later frames by several
-## pixels, compounding row to row), both the row bands AND the column left
-## edges below were measured directly with tools/probe_intro_sheet.gd and
-## a dedicated verification probe (throwaway, since deleted -- see bug #6
-## below) and are pinned here as real, confirmed constants.
+## assets/sprites/intro.png is 1672x941 -- a 10-column x 5-row contact
+## sheet, NOT evenly divisible by that grid (1672/10=167.2, 941/5=188.2).
+## Rather than assume arithmetic division (would misalign later frames by
+## several pixels, compounding row to row), both the row tops AND the column
+## left edges below are measured directly off the file and pinned here as
+## real, confirmed constants, with tests that re-measure them every run.
 ##
-## Every one of the 32 frames is cropped to the SAME fixed-size window
+## Every one of the 50 frames is cropped to the SAME fixed-size window
 ## (_FRAME_WIDTH x _FRAME_HEIGHT), anchored at its own row's top and its
 ## own column's left edge -- deliberately NOT SpriteSheetSlicer.
 ## detect_frames' own per-frame CONTENT-based crop, which this file used
@@ -60,12 +58,21 @@ const SpriteSheetLoader = preload("res://src/rendering/sprite_sheet_loader.gd")
 
 const _SHEET_PATH := "res://assets/sprites/intro.png"
 
-## The sheet is a CONTACT SHEET: 20 columns x 6 rows of frames drawn on
+## The sheet is a CONTACT SHEET: 10 columns x 5 rows of frames drawn on
 ## black, separated by thin light grid lines, with its own timestamp
-## ("0.00s" ... "4.96s", 24fps) printed inside the top of every cell.
-## Measured with tools/probe_intro_grid.gd against the file on disk, never
-## divided arithmetically: the drawn lines drift up to 2px from an even
-## 1672/20 split, which at this cell size is a visible wobble.
+## ("0.00s" ... "4.90s", 10fps) printed inside the top of every cell.
+## Measured against the file on disk, never divided arithmetically: the
+## drawn lines drift up to 2px from an even 1672/10 split, which at this
+## cell size is a visible wobble.
+##
+## 10x5, not the 20x6 this used to say. The sheet was replaced a third time
+## ("bump resolution", 2026-09-17) with half as many frames at twice the
+## size, and nothing re-measured -- so every crop was taken from a window
+## that had not existed since the swap, which is what "the intro still
+## doesn't have the correct frame crops" was. The grid is now tied to the
+## file by test_the_frame_count_is_exactly_the_grid_the_sheet_really_has as
+## well as by the two that compare these arrays, so a fourth swap cannot
+## leave the count behind.
 ##
 ## Re-measure whenever the art changes. test_the_pinned_grid_is_where_the_
 ## sheets_own_cells_actually_are compares these against the real file every
@@ -74,10 +81,9 @@ const _SHEET_PATH := "res://assets/sprites/intro.png"
 ## centre: a drawn line is 1-3px wide, and a crop that starts inside one
 ## carries that ink in its own first column.
 const _COLUMN_LEFTS: Array[int] = [
-	0, 83, 167, 250, 335, 418, 501, 585, 669, 753,
-	837, 921, 1005, 1090, 1173, 1257, 1340, 1424, 1509, 1592,
+	0, 173, 340, 506, 672, 837, 1003, 1169, 1335, 1502,
 ]
-const _ROW_TOPS: Array[int] = [0, 155, 309, 462, 617, 770]
+const _ROW_TOPS: Array[int] = [0, 194, 381, 576, 756]
 
 ## How light a line has to be at its DARKEST pixel to be one of the sheet's
 ## own grid lines rather than content. A line is drawn across everything, so
@@ -103,17 +109,20 @@ const _CAPTION_HEIGHT := 28
 ## caught out by a line that thickens somewhere this did not sample.
 const _CELL_INSET := 1
 
-## ONE fixed crop, shared by all 120 frames -- no per-frame content
+## ONE fixed crop, shared by all 50 frames -- no per-frame content
 ## detection (see this file's own doc comment for why). Both are bounded by
 ## the CLEAN extent of the tightest cell -- from its own start to where the
 ## next divider begins, not to where the next cell starts -- less the inset
-## above: 80px wide (the last column, which ends at the sheet's edge) and
-## 151px tall (rows 2 and 4), less the caption. Unlike the previous sheet, whose rows were
-## genuinely different heights, every cell here can supply this same window
-## from the same offset -- and the globe sits 40-46 rows below its own
-## cell's top in every row, measured, so one offset keeps it still.
-const _FRAME_WIDTH := 79
-const _FRAME_HEIGHT := 122
+## above, and for the height less the caption too.
+##
+## Measured on the sheet on disk: the clean cell widths are
+## 172/165/164/164/164/164/164/164/165/170, so the tightest is 164 and the
+## window is 163 wide; the clean cell heights are 192/185/194/178/185, so
+## the tightest is 178 and the window is 178 - 28 - 1 = 149 tall. Every cell
+## can supply that same window from the same offset, which is what keeps the
+## globe still from frame to frame.
+const _FRAME_WIDTH := 163
+const _FRAME_HEIGHT := 149
 
 ## Chroma-keyed opaque magenta, the convention every other illustrated
 ## sheet in this codebase uses. The sheet delivered on 2026-09-17 does NOT:

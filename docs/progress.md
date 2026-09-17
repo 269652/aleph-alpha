@@ -8567,16 +8567,28 @@ carrots out of earth (visually animated)". Supersedes the old
   `test_wild_crop_marker.gd` (25/27 → 27/27) and 1 in `test_dropped_item.gd`
   (14/15 → 15/15). Verified byte-identical: the imported image differs from
   the raw read in 0 of 6,289,008 bytes after RGBA8 normalisation.
-- **Soil mound** (small) — ✅ Done (procedural fallback) —
-  `src/rendering/procedural_soil_sprite.gd`: no AI art exists yet for
-  `ai_sprite_prompts.md`'s soil-pile prompt, so a hand-drawn
-  undisturbed/disturbed mound in the same offline-art style as
-  `ProceduralBobberSprite`, swappable for real art later with no marker
-  changes needed. **Follow-up, reported live: rendered ~1.5 tiles wide** —
-  the raw `SIZE=24` texture was drawn with no scale applied at all, the
-  same "gigantic" bug class `ProceduralItemSprite.WORLD_WIDTH_BY_ID` already
-  fixed once for tree fruit. Fixed with `SOIL_WORLD_WIDTH`/`SOIL_WORLD_SCALE`
-  (pinned below a full tile by test).
+- **Soil mound** (small) — ✅ Done (real illustrated art) —
+  `src/rendering/illustrated_soil_mound_sprite.gd` slices
+  `assets/sprites/terrain/soil_mound.png` (a 3x3 grid of 9 undisturbed-mound
+  variants; gutters near-black and fully opaque rather than chroma-keyed
+  magenta, the same quirk `IllustratedTerrainSprite`'s "soil" entry already
+  hit on the same 1254x1254 template — measured directly off the real PNG
+  with `tools/_probe_soil_mound_grid.gd` rather than assumed to divide
+  evenly) for the UNDISTURBED mound, wired into `WildCropMarker`, keyed
+  per-cell so the same spot always reads the same variant. (`FarmPlotMarker`
+  never gained this: a concurrent session removed its own mound entirely
+  once the bed's full-tile illustrated ground made it redundant — see
+  that class's own `is_showing_soil()`.) `src/rendering/
+  procedural_soil_sprite.gd`'s original hand-drawn mound remains the
+  fallback for the DISTURBED (post-pull) crater, which has no illustrated
+  art yet, and for either state if the sheet is ever missing. **Follow-up,
+  reported live: rendered ~1.5 tiles wide** — the raw `SIZE=24` texture was
+  drawn with no scale applied at all, the same "gigantic" bug class
+  `ProceduralItemSprite.WORLD_WIDTH_BY_ID` already fixed once for tree
+  fruit. Fixed with `SOIL_WORLD_WIDTH`/`SOIL_WORLD_SCALE` (pinned below a
+  full tile by test); the illustrated mound now derives its own scale from
+  `IllustratedSoilMoundSprite.world_scale()` against that same
+  `SOIL_WORLD_WIDTH` footprint instead.
 - **Visible per-patch markers** (medium) — ✅ Done — `src/rendering/wild_crop_marker.gd`
   (`WildCropMarker`) + `src/rendering/wild_crop_renderer.gd`
   (`WildCropRenderer`): one real Node2D per patch cell (sparse, unlike
@@ -24037,6 +24049,140 @@ farming and ground-cover suites. (`test_grass_near_respects_its_radius` is
 risky-not-asserting both before and after these changes — pre-existing,
 untouched here.)
 
+### A corner post stops overshooting its own runs (2026-09-17)
+
+Reported with all three visible corners crossed out: *"the fences still
+aren't optimal"*. A corner cell knew only which side WALL it capped, so its
+art was placed as a full tile of vertical rail — while the run it caps sits
+on that tile's own EDGE. The frame overshot by a whole tile at every corner,
+which is exactly what the crosses were on.
+
+A corner closes two sides, so it has a ground POINT rather than a ground
+line: the corner of its own tile where the two runs meet. `fence_facing`
+names both sides now (`corner_nw`/`ne`/`sw`/`se` in place of
+`corner_west`/`corner_east`), the inner direction is the diagonal, and
+`footprint_offset` centres the post on that point in both axes. It also
+takes the side wall's SCALE instead of being scaled by its own length —
+scaling a post as if it were a run is what made it a tile of rail.
+
+The diagonal direction pays for itself twice: `rails_block_step` can now
+shut exactly the diagonal a corner really faces, where before it shut either
+diagonal on that side.
+
+The old two ids stay recognised (`LEGACY_FENCE_TILE_IDS`) because a rail is
+an ordinary chunk modification — an id that stopped reading as a fence would
+lose its art and stop being overlay-only, painting bare earth on ground a
+player has already visited. Nothing raises one, and a test pins that.
+
+667/667 across the seven fence, farm and village suites.
+
+### The frame stops covering the crop (2026-09-17)
+
+*"At the bottom it still overlaps half a tile"* — the third and last report
+in the sequence that started with "move the fences to the inner edge".
+
+A south rail's posts stood on its own north edge, which is right for a fence
+seen from the front, but the body rises from there and it rose over the
+bottom row of beds: measured, 34px of a 64px tile. One rule replaces the
+per-facing reasoning: a rail's wood sits INSIDE its own tile, flush against
+the edge facing the beds — every facing, and both axes of a corner. The same
+fence, half a tile nearer the viewer, covering nothing.
+
+That also collapsed `footprint_offset` from three branches (broad-side run,
+top-view run, corner) into one: measure where the wood lands unoffset, then
+push it to the edge or edges the inner direction names. The three special
+cases were three ways of saying the same thing badly.
+
+Skipped at the user's request: the wider fence/village regression sweep.
+test_illustrated_structure_sprite is 36/36 on this change; the other six
+suites were green on the commit before it and were not re-run.
+
+### The harvest reaches the farmhouse, and the farmhouse reaches the village (2026-09-17)
+
+*"Make sure wheat grows and is harvested which increases farmhouse stock
+which gets transported to city stock."* Grown and cut were real; the middle
+was not. A villager's harvest was credited straight to the village market,
+so the farmhouse never held anything and nothing was ever carried.
+
+`NpcMarker._store_harvest` deposits a cut crop into the farmhouse's own
+`StructureStock` — the same per-building stock the placeable Farm and the
+Sägewerk already use — and `haul_farmhouse_stock_to_village` moves the whole
+lot into the market at the end of the work block. It reaches the market
+through the same `record_real_harvest` a farmer without a farmhouse uses, so
+it is stocked and paid ONCE, on arrival rather than at the scythe;
+`test_a_harvest_is_not_sold_before_it_is_carried` is the pin that keeps the
+new link from becoming a second faucet. `VillageRenderer` hands
+`farmhouse_cell` out beside `field_cells`, being the only thing that knows
+whose farmhouse is whose.
+
+The end of the work block is the trigger, and the first choice was wrong: I
+went for `_step_farm`'s "nothing left to do" branch, which never reliably
+fires — a field with beds in it always has something worth a visit
+(`next_action`'s thirstiest-bed fallback). The off-the-clock branch is
+reached every day whatever the crop cycle is doing.
+
+**And the blobs, again.** A full tile of `soil.png` had been put under every
+bed to stop wheat rising out of bare meadow; its cells carry a soft dark
+vignette, so under a bed it reads as a brown blob — the same complaint the
+mound got, from a different sprite. Hidden for wheat, kept for root crops.
+That REVERSES `test_a_wheat_bed_still_stands_on_tilled_earth` on the
+player's own later instruction, and the test now says so in place of
+quietly flipping.
+
+232/232 across the farming, market and village suites.
+
+### Houses stand shoulder to shoulder (2026-09-17)
+
+*"Could save some space in villages by omitting the gap between houses."*
+`VillageLayout.PLOT_GAP_TILES` 1 → 0. Measured on a real village with
+`tools/probe_village_map.gd`: one street row went from `hhh.hhhh` to
+`hhhhhhhhhh`, the same ground carrying three more house tiles.
+
+One constant was doing two jobs. The plot gap also set the PLAZA's
+clearance, and the square is a different question — it is never frontage, so
+a house flush against it would stand in the space the square is. Split out
+as `PLAZA_CLEARANCE_TILES`, still 1.
+
+`test_adjacent_plots_on_the_same_street_keep_a_real_gap` asserted exactly
+what was asked to go away (no two footprints even orthogonally adjacent).
+Replaced by the part that was ever load-bearing — they must not OVERLAP —
+plus a new test that they really are flush rather than merely allowed to be.
+The reversal is recorded in the test as the player's, not as a correction.
+
+270/270 across the layout, renderer, room, farm and farming suites.
+
+### The pond finished: fish you can see, and a fisher who works them (2026-09-17)
+
+*"Close the gaps please and finish this properly."* Both remaining ⬜/🚧 rows
+of `village_ponds.md` are ✅.
+
+**Visible fish.** Real `FishMarker`s on the pond's own water, one per whole
+fish, capped at one per tile — six tiles is a pond, not a shoal — synced on
+every stocking, breeding tick and catch, and freed with the chunk. Kept out
+of `_loaded_fish` on purpose: that list is respawned wholesale whenever a
+chunk's aggregate fish population is reconciled, and a pond's own fish would
+have been wiped every time the region's did anything.
+
+**The fisher works it.** `_step_pond` mirrors `_step_farm` exactly — same
+shape, same override in the work tick, same off-the-clock carry. A cast costs
+`FarmerBehavior.WORK_SECONDS`, pinned against it rather than tuned, so
+fishing and farming are one effort. The catch walks the farmer's own chain
+through the farmer's own functions.
+
+`farmhouse_cell` became `stock_building_cell` in the process. It holds a
+farmer's farmhouse and a fisher's cottage, and the name would have been a lie
+in the one place a reader looks to find where a catch went.
+
+**One trap cost three failures that read like real bugs.** `_unload_chunk`
+PERSISTS a chunk's modifications to `user://`, which is keyed only by project
+name — so a dug pond leaked into every later test in the file AND into the
+next run of it from a different worktree, as ground that was already water.
+`test_earth_chunk_manager_ponds.gd` now scrubs its own chunk in
+before_each/after_each, the way `test_earth_chunk_manager_structure_art.gd`'s
+header has warned about since it was written.
+
+274/274 across the seven pond, village and farming suites.
+
 Honest gaps, three real:
 
 🚧 **The gate is a real hole.** An animal that wanders into the gate cell is
@@ -24690,3 +24836,64 @@ TDD throughout, red first: `test_village_layout` 74/74, `test_village_growth`
 - **Nothing comes back OUT of the store on foot.** A hungry villager still
   buys their meal from the abstract market wherever they are standing. The
   goods now arrive somewhere; they still leave from nowhere.
+
+## The sawmill gets a sawyer (`concept/village_timber.md`, 2026-09-17)
+
+Reported in play: *"The sawmill also never produces any beams and doesn't
+even have a dedicated worker"*, then *"implement the sawmill properly"*.
+
+Both halves were true, and the second explained the first: **no villager had
+that trade at all.** `NpcIdentity.OCCUPATIONS` was farmer, blacksmith,
+merchant, guard, fisher, herbalist, hunter, nurse. A village raised a sawmill
+at its own timber and then had nobody whose job was timber.
+
+**Almost nothing here is new.** `SagewerkProduction` already turned logs into
+beams and planks, with costs and shaping times measured against real joinery
+(hewing a round log square wastes sapwood and is slow; riving boards off it is
+cheap and fast) and pinned by tests. `LumberjackBehavior` was already the
+SEEKING → APPROACHING → FELLING → CARRYING → DEPOSIT machine.
+`ChoppableTree.take_damage` was already how a tree comes down. Every one of
+those served the placeable **tile** `sagewerk`; none of it reached the
+village's own **building**, which was referenced by the founding placement and
+the growth-site search and *nowhere else*.
+
+✅ **`lumberjack` is a real trade**, and the sawmill is a real landmark, so a
+sawyer's schedule resolves to the mill rather than to a decorative workspot.
+
+✅ **`VillageSawmill`** — the pure rule set, the sibling of `VillageFarm`.
+`LOGS_PER_BEAM` is `SagewerkProduction`'s own cost re-exported and pinned to
+it. `TIMBER_REACH_TILES` starts from the reach a mill is *sited* by, because a
+mill placed beside timber must be able to reach that timber. Short of a beam's
+worth the answer is still `FELL` — a sawyer waiting at the mill for logs
+nobody is fetching is a mill that stops the moment it runs down.
+
+✅ **`NpcMarker._step_timber`** — the third sibling of `_step_hunt` and
+`_step_farm`, on the same four seams and the same override ordering. Real
+trees felled with the player's own loop, logs to the mill, and a beam squared
+*at* the mill over real time with the logs really leaving the stock.
+
+✅ **Beams reach the village** through the same store-then-haul the farmhouse
+runs, paid once on arrival. Beams only — the logs a mill holds are its raw
+material, and carrying those off would carry away the thing the mill exists to
+work.
+
+**The cost the spec warned about came due.** Occupation is drawn from
+`OCCUPATIONS` by seed, so adding one re-rolls who is who in every village.
+Three tests had silently depended on seed 1's old trade and started walking to
+a `sawmill` tag their fixtures did not have; each is now pinned to a trade of
+its own with a comment saying why, rather than papered over. That also exposed
+a real gap — the work tag named a place nothing provided — which is why the
+mill became a landmark.
+
+One of my own tests **passed vacuously** before it was fixed: the stub village
+had no forest, so it raised no mill and the assertion never ran. It seeds real
+timber now.
+
+Tests: `test_village_sawmill.gd` 9/9 (new), `test_npc_marker_timber.gd` 15/15
+(new), `test_npc_identity.gd` 18/18, `test_village_renderer.gd` 94/94,
+`test_npc_marker.gd` 47/47, `test_npc_marker_farming.gd` 25/25,
+`test_dialogue_context.gd` 39/39, `test_village_census.gd` 9/9.
+
+Honestly unbuilt: the mill shapes **beams** only — `SagewerkProduction` also
+makes planks, and nothing yet asks for them; and a village with more than one
+sawmill would hand every sawyer the first one.
