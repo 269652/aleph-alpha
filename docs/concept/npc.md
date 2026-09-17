@@ -392,14 +392,23 @@ What this replaces, and why it is better than what is there:
    was missing, and it costs no new art — `CreatureMarker` and the walk
    cycle are already there.
 
-**Deliberately unchanged:** the farmer. There is no real "crop entity" to
-harvest the way there is a tree, an animal or a fish —
+**Deliberately unchanged at the time:** the farmer. There was no real
+"crop entity" to harvest the way there is a tree, an animal or a fish —
 `vegetation_density_near` is a field, not a thing standing in the world —
-so a farmer keeps reading it. Inventing a crop entity to make the third
-producer symmetrical would be exactly the premature system this doc's own
-framing warns against; the farm/mill/bakery chain
-([milling_and_baking.md](milling_and_baking.md)) is where real crop
-entities belong when they come.
+so a farmer kept reading it. Inventing a crop entity to make the third
+producer symmetrical would have been exactly the premature system this
+doc's own framing warns against.
+
+**Resolved 2026-09-17 by [village_farms.md](village_farms.md)**, and not by
+inventing that entity: a village farmer now works real `FarmPlot` tiles
+that already existed for the player's own hand-tilled farming, on ground a
+real `farmhouse` building owns. The herbalist joins them on the same
+mechanism, growing herbs. Both are paid for what their own field actually
+yielded (`NpcEconomy.record_real_harvest`), and the regional drip is off
+for the whole work block while a villager has a field — the same rule a
+real hunt already follows. A farmer with no farmhouse still falls back to
+`vegetation_density_near` exactly as before, so nothing that depended on
+the aggregate lost it.
 
 **Named limitation to design around:** a villager can only hunt what is
 LOADED. Creatures and fish exist as nodes only in loaded chunks, so an

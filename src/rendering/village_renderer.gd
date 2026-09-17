@@ -563,8 +563,17 @@ func _workable_field_of(
 			continue
 		if not is_buildable.call(local) or is_occupied.call(local):
 			continue
-		cells.append(chunk_coord * chunk_size + local)
-	return cells
+		cells.append(local)
+	# Only as much ground as one villager can actually keep alive: past
+	# VillageFarm.MAX_WORKED_CELLS the walking circuit outruns the crop's
+	# own wither grace and a bigger field yields NOTHING (measured -- see
+	# that constant). A village grows its output with a second farmhouse.
+	var worked: Array[Vector2i] = []
+	for local in VillageFarm.nearest_cells(
+		cells, origin, VillageFarm.FARM_BUILDING_ID, VillageFarm.MAX_WORKED_CELLS
+	):
+		worked.append(chunk_coord * chunk_size + (local as Vector2i))
+	return worked
 
 
 ## One farmhouse per villager who actually farms (docs/concept/

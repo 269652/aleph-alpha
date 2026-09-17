@@ -262,6 +262,21 @@ several small, real bending blades reusing long grass's own path-traced
 wind/walker-push shader math, using three real illustrated sheets
 (spring/summer/autumn) that turn with the world's own calendar season.
 
+## A village counterpart, 2026-09-17
+
+[village_farms.md](village_farms.md) gives the VILLAGE's own farmer and
+herbalist occupations real farmhouses and real fields. It is a separate
+mechanism for a separate actor — a full `NpcMarker` with a schedule, hunger
+and a wallet, not this doc's narrow-purpose `FarmerMarker` — and it reuses
+`FarmPlot`, `FarmPlotMarker` and `FarmerBehavior` unchanged.
+
+One thing moved rather than being copied: the till/water/harvest priority
+that lived in `FarmerMarker._next_action_plot_index`/`_action_kind_for` is
+now `VillageFarm.action_for`/`next_action`, which this doc's own Farmer
+delegates to. `WATER_BEFORE_WITHER_FRACTION` is shared the same way. Two
+workers tending by two slightly different rules was the drift worth
+avoiding.
+
 ## Open questions
 
 - **Offscreen catch-up.** A Farm's plot state does not yet survive a chunk

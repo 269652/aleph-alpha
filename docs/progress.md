@@ -23363,3 +23363,76 @@ Tests: `test_village_layout.gd` 50/50, `test_village_renderer.gd` 68/68,
 `test_village_finder.gd`, `test_village_census.gd`,
 `test_settlement_build_decision.gd`, `test_discovered_settlements.gd` all
 green.
+
+
+## Village farms: a farmhouse, its own field, and the villager who works it (`concept/village_farms.md`, 2026-09-17)
+
+Reported in play: *"The village needs a farmer which grows wheat like in
+Anno... every tile of wheat planted adjacent to a farm house may be tied to
+a farm house (so you can build multiple farms) ... similar to a farmer the
+herbalist should build a farm house and plant herbs ... the farm houses are
+separate buildings and the farmer / herbalist goes to work regularly"*.
+
+Before this the village farmer walked to a decorative "field" prop, stood on
+it, and fruit appeared in the market — no ground was tilled and nothing
+grew. The herbalist had nothing at all. Spec first
+(`docs/concept/village_farms.md`), then four red-first change sets.
+
+✅ **`VillageFarm`, the pure rule set.** The field ring is derived from
+`BuildingCatalog`'s own footprint (14 tiles around the 3×2 farmhouse);
+`owner_of` is total and deterministic, so two farmhouses in one village each
+work their own ground, no tile answers to two owners, and nothing is
+persisted — the same "re-derive it" property the plaza has. The
+harvest > plant > water priority moved here from `FarmerMarker`, which now
+delegates, so the placeable Farm's worker and a village farmer tend by one
+rule rather than two copies.
+
+✅ **`herb` is a real item**, driven by a failing test that every crop a
+village grows must be something the world can hold. It also closes a gap
+`occupation_production.gd` named outright: `CookingRecipeBook`'s
+`fish_herb` → *Herbed Fish* had always asked for an ingredient
+`ItemCatalog` did not have.
+
+✅ **One farmhouse per farming villager**, on street frontage with real room
+for a field (`VillageLayout.next_street_plot` gained an optional
+`accepts_origin` predicate). Placed *over* the paving like the city hall —
+found by probe, not by reading: the first attempt sited the farmhouse
+correctly and then silently placed nothing, because a frontage plot's own
+doorstep is already a road cell and `place_building` refuses that.
+
+✅ **The villager really works it.** `NpcMarker._step_farm` is the hunter's
+shape applied to ground rather than to individuals, on the same
+`FarmerBehavior` machine and the same `FarmPlot` lifecycle a player's own
+plot uses. A harvest is stocked and paid through the new
+`NpcEconomy.record_real_harvest`; the regional drip is off for the whole
+work block while a villager has a field.
+
+✅ **Capacity is measured, not capped by hand.** Over one real work block
+(900 s) the yield does not taper past the limit — it falls off a cliff,
+because a circuit longer than the wither grace means every plot dies before
+it ripens: 2 cells → 34 wheat, 3 → 90, 4 → 90, 5 → 2, 6 → 0.
+`VillageFarm.MAX_WORKED_CELLS` is 4, pinned by two tests against a line of
+tiles (the worst case for a walking circuit). **That is the mechanism that
+makes a second farmhouse worth building**, which is the shape the report
+asked for.
+
+One thing the tests found rather than the design: a hungry herbalist
+deadlocked. They are in no producer table, so the drip never fed them, and
+an empty market could not either — they walked to the well, failed to buy,
+and never returned to the field that would have stocked it. A villager with
+a field of their own now feeds themselves from work, the same branch that
+already existed to avoid exactly this famine.
+
+Honest gaps, recorded in the concept doc's own status: a herb plot renders
+as bare tilled soil (`IllustratedCropSprite` has no `herb` entry — an asset
+question, the same one wheat had before its atlas landed); ten of a
+farmhouse's fourteen ring tiles lie fallow, which is the measured capacity
+and not an oversight; plot state still does not survive a chunk unload; and
+nothing yet notices a village that wants a second farmhouse.
+
+Tests: `test_village_farm.gd` 29/29 (new), `test_npc_marker_farming.gd`
+14/14 (new), `test_village_renderer.gd` 78/78,
+`test_earth_chunk_manager_farm_plots.gd` 14/14, `test_npc_economy.gd` 66/66,
+`test_npc_marker.gd` 36/36, hunting 25/25, fishing 15/15,
+`test_farmer_marker.gd` 7/7, `test_village_layout.gd` 50/50,
+`test_item_catalog.gd` 91/91, `test_cooking_recipe_book.gd` 13/13.

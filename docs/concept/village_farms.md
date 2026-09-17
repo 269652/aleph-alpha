@@ -209,18 +209,82 @@ again.
 
 ## Status
 
-⬜ Everything below is the plan; this section is rewritten to ✅/🚧 against
-what actually lands, per CLAUDE.md.
+- ✅ **`VillageFarm`, the pure rule set.** `field_cells` derives the ring
+  from `BuildingCatalog`'s own footprint (5×4 minus the 3×2 the farmhouse
+  stands on = 14 tiles); `owner_of` is total and deterministic (nearest
+  footprint centre, ties by lower `(y, x)`), so no tile ever answers to two
+  farmhouses and nothing is persisted; `crop_for` gives the farmer wheat and
+  the herbalist herbs; `action_for`/`next_action` carry the harvest > plant >
+  water priority, which `FarmerMarker` now delegates to instead of keeping
+  its own copy. `test_village_farm.gd` 29/29.
+- ✅ **`herb` is a real item.** Driven by a failing test that every crop a
+  village grows must be something the world can hold. It also closes a gap
+  another file named outright: `CookingRecipeBook`'s `fish_herb` → *Herbed
+  Fish* has always asked for an ingredient `ItemCatalog` did not have.
+- ✅ **One farmhouse per farming villager**, sited on street frontage with
+  real room for a field. `VillageLayout.next_street_plot` gained an optional
+  `accepts_origin` predicate for exactly that. Placed *over* the paving
+  (`place_building_over_roads`), like the city hall — a frontage plot's own
+  doorstep is already a road cell by then, and an ordinary `place_building`
+  refuses that. Idempotent, so a reload raises no second set and an older
+  village gains its farmhouses on the next visit.
+- ✅ **`NpcMarker._step_farm`.** The villager walks out to their own field
+  during their work block and really tills, waters and harvests it through
+  the same `FarmPlot` lifecycle a player's own plot uses. Each farming
+  villager is handed the cells their own farmhouse owns, paired in roster
+  order against farmhouses in `(y, x)` order so the same villager gets the
+  same field on every reload. `test_npc_marker_farming.gd` 14/14.
+- ✅ **A harvest is real village stock and real pay.**
+  `NpcEconomy.record_real_harvest` credits the crop actually grown at the
+  same rate a gathered unit earns. `record_real_catch` could not do this
+  job: it credits whatever the occupation *drips* ("fruit" for a farmer,
+  not the wheat in the field), and the herbalist is in no producer table at
+  all. The regional drip is off for the whole work block while a villager
+  has a field, exactly as a real hunt switches it off.
+- ✅ **Field capacity is measured, not capped by hand.** Over one real work
+  block (900 s) the yield does not taper past the limit — it falls off a
+  cliff, because a circuit longer than the wither grace means every plot
+  dies before it ripens and the farmer spends the block replanting ground
+  that dies again:
 
-- ⬜ `VillageFarm` pure module: field ring from the catalog footprint,
-  per-farmhouse ownership with a deterministic tie-break, crop by
-  occupation, the shared `next_action` priority.
-- ⬜ A real `herb` item, and herb crop art.
-- ⬜ One farmhouse per farming villager, sited where its field fits, raised
-  by the same self-healing path as the sawmill.
-- ⬜ `NpcMarker._step_farm`: the villager walks out to their own field
-  during their work block and really tills, waters and harvests it.
-- ⬜ A harvest credits the village market, and the regional drip is off
-  while real field work is in reach.
-- ⬜ A measured yield-per-work-block figure, pinned by a test rather than
-  claimed here.
+  | field | wheat per work block |
+  |------:|---------------------:|
+  |     2 |                   34 |
+  |     3 |                   90 |
+  |     4 |                   90 |
+  |     5 |                    2 |
+  |     6 |                    0 |
+
+  `VillageFarm.MAX_WORKED_CELLS` is 4, pinned by
+  `test_a_field_of_the_capped_size_really_produces_over_a_work_block` and
+  `test_one_tile_more_than_the_cap_collapses_to_nothing` against a LINE of
+  tiles — the worst case for a walking circuit, so the cap is conservative
+  for a real ring. A farmhouse hands its villager the four cells nearest
+  itself and leaves the rest of its ring fallow. **This is the mechanism
+  that makes a second farmhouse worth building**, which is the shape the
+  report asked for.
+
+Honest gaps, each real:
+
+- 🚧 **A herb plot renders as bare tilled soil.** `IllustratedCropSprite`
+  has entries for carrot and potato, and `FarmPlotMarker` has a dedicated
+  wheat path; an unregistered crop's `leaf_texture` returns null, so herbs
+  grow invisibly. Exactly the gap
+  [npc_farm_production.md](npc_farm_production.md) recorded for wheat before
+  [long_grass.md](long_grass.md)'s wheat atlas closed it — an asset
+  question, not a logic one. `herb` has no inventory art either and falls
+  back to the procedural item sprite.
+- 🚧 **Ten of a farmhouse's fourteen ring tiles lie fallow.** That is the
+  measured capacity above, not an oversight, but it does mean a farmhouse
+  visibly works only part of its own yard. A second worker per farmhouse
+  would be the honest way to use the rest, and nothing models one.
+- 🚧 **Plot state does not survive a chunk unload**, the same already-
+  accepted gap the placeable Farm carries: a revisited village re-tills its
+  field from scratch. A closed-form catch-up (the shape
+  `chunk_ecology_catchup.gd` uses) is the real fix and is not attempted
+  here.
+- ⬜ **Nothing yet notices a village that wants a second farmhouse.** The
+  village raises one per farming villager and stops. Growing the chain on
+  demand is `SettlementBuildDecision`'s to answer, and it reports *missing*
+  producers rather than insufficient throughput — the same open question
+  [npc_farm_production.md](npc_farm_production.md) already records.

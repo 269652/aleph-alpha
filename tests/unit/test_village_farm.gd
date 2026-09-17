@@ -239,3 +239,52 @@ func test_the_smallest_worthwhile_field_is_what_one_farmer_can_already_tend():
 func test_the_placeable_farms_worker_waters_on_the_same_margin():
 	var FarmerMarker = load("res://src/rendering/farmer_marker.gd")
 	assert_eq(FarmerMarker.WATER_BEFORE_WITHER_FRACTION, VillageFarm.WATER_BEFORE_WITHER_FRACTION)
+
+
+# -- only as much ground as one villager can keep ---------------------------
+
+func test_the_worked_field_is_capped_at_what_one_villager_can_keep():
+	var origin := Vector2i(10, 10)
+	var ring: Array = VillageFarm.field_cells(origin, VillageFarm.FARM_BUILDING_ID)
+	assert_gt(ring.size(), VillageFarm.MAX_WORKED_CELLS, "precondition: the ring is bigger than the cap")
+	var worked: Array = VillageFarm.nearest_cells(
+		ring, origin, VillageFarm.FARM_BUILDING_ID, VillageFarm.MAX_WORKED_CELLS
+	)
+	assert_eq(worked.size(), VillageFarm.MAX_WORKED_CELLS)
+	for cell in worked:
+		assert_true(ring.has(cell), "%s is not even part of this farmhouse's ring" % str(cell))
+
+
+func test_the_cells_kept_are_the_ones_nearest_the_farmhouse():
+	var origin := Vector2i(10, 10)
+	var footprint := BuildingCatalog.footprint_of(VillageFarm.FARM_BUILDING_ID)
+	var centre := Vector2(origin) + Vector2(footprint) * 0.5
+	var ring: Array = VillageFarm.field_cells(origin, VillageFarm.FARM_BUILDING_ID)
+	var worked: Array = VillageFarm.nearest_cells(
+		ring, origin, VillageFarm.FARM_BUILDING_ID, VillageFarm.MAX_WORKED_CELLS
+	)
+	var furthest_kept := 0.0
+	for cell in worked:
+		furthest_kept = maxf(furthest_kept, (Vector2(cell) + Vector2(0.5, 0.5)).distance_to(centre))
+	for cell in ring:
+		if worked.has(cell):
+			continue
+		assert_gte(
+			(Vector2(cell) + Vector2(0.5, 0.5)).distance_to(centre), furthest_kept - 0.0001,
+			"%s was dropped although it lies closer than a cell that was kept" % str(cell)
+		)
+
+
+func test_the_same_farmhouse_keeps_the_same_cells_every_time():
+	var origin := Vector2i(7, 4)
+	var ring: Array = VillageFarm.field_cells(origin, VillageFarm.FARM_BUILDING_ID)
+	assert_eq(
+		VillageFarm.nearest_cells(ring, origin, VillageFarm.FARM_BUILDING_ID, 4),
+		VillageFarm.nearest_cells(ring, origin, VillageFarm.FARM_BUILDING_ID, 4)
+	)
+
+
+func test_asking_for_no_cells_or_an_unknown_building_gives_none():
+	var ring: Array = VillageFarm.field_cells(Vector2i.ZERO, VillageFarm.FARM_BUILDING_ID)
+	assert_eq(VillageFarm.nearest_cells(ring, Vector2i.ZERO, VillageFarm.FARM_BUILDING_ID, 0), [])
+	assert_eq(VillageFarm.nearest_cells(ring, Vector2i.ZERO, "not_a_building", 4), [])

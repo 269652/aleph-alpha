@@ -276,3 +276,69 @@ func test_a_farmer_with_no_field_still_earns_from_the_region():
 		market.stock.get("fruit", 0.0), 0.0,
 		"the regional fallback is what a village with no farmhouse still lives on"
 	)
+
+
+# -- how much ground one villager can actually keep -------------------------
+#
+# MEASURED, not asserted (CLAUDE.md: tuned values are tested functions or
+# test-pinned constants). A villager walks at NpcMarker.WALK_SPEED and
+# kneels for FarmerBehavior.WORK_SECONDS per plot, against a wither grace of
+# half a 20-60s growth time. Over one real work block
+# (ChunkEcologyCatchup.SECONDS_PER_DAY / NpcSchedule.TIME_BLOCKS.size() =
+# 900s) the yield falls off a cliff, sharply and at a specific size:
+#
+#     2 cells ->  34 wheat     5 cells ->   2 wheat
+#     3 cells ->  90 wheat     6 cells ->   0 wheat
+#     4 cells ->  90 wheat
+#
+# Past four the circuit takes longer than the grace window, so plots wither
+# faster than they ripen and the farmer spends the whole block replanting
+# ground that dies again -- a bigger field yields NOTHING, not less. That
+# is why VillageFarm.MAX_WORKED_CELLS exists and why a village grows its
+# output by raising a second farmhouse rather than a bigger field.
+
+const WORK_BLOCK_SECONDS := 900.0
+
+
+## `size` tiles in a row -- the worst real case for a walking circuit, and
+## deliberately so: the ring around a 3x2 farmhouse is more compact than a
+## line, so a cap measured on a line is conservative for a real field.
+func _field_of(size: int) -> Array[Vector2i]:
+	var cells: Array[Vector2i] = []
+	for i in size:
+		cells.append(Vector2i(-10 + i, 0))
+	return cells
+
+
+func _wheat_off_a_field(size: int) -> float:
+	remove_child(marker)
+	marker.free()
+	market = VillageMarket.new()
+	world = StubFarmWorld.new()
+	marker = _build_marker("farmer")
+	marker.field_cells = _field_of(size)
+	_run(WORK_BLOCK_SECONDS, 0.1)
+	return market.stock.get("wheat", 0.0)
+
+
+func test_a_field_of_the_capped_size_really_produces_over_a_work_block():
+	assert_gt(
+		_wheat_off_a_field(VillageFarm.MAX_WORKED_CELLS), 0.0,
+		"the cap has to be a size that actually yields, or a farmhouse is decoration"
+	)
+
+
+func test_one_tile_more_than_the_cap_collapses_to_nothing():
+	var capped := _wheat_off_a_field(VillageFarm.MAX_WORKED_CELLS)
+	var over := _wheat_off_a_field(VillageFarm.MAX_WORKED_CELLS + 1)
+	assert_lt(
+		over, capped,
+		"past the cap the circuit outruns the wither grace: a bigger field yields LESS, not more"
+	)
+
+
+func test_the_cap_is_at_least_what_a_farmhouse_is_sited_for():
+	assert_gte(
+		VillageFarm.MAX_WORKED_CELLS, VillageFarm.MIN_FIELD_CELLS,
+		"a farmhouse raised on ground it may not then work would be a contradiction"
+	)

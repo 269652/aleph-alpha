@@ -50,6 +50,33 @@ const WATER_BEFORE_WITHER_FRACTION := 0.5
 ## free of any rendering dependency.
 const MIN_FIELD_CELLS := 3
 
+## How much ground one villager can actually keep alive at once -- and
+## therefore the most any single farmhouse hands its worker, however much
+## clear ground its ring happens to have.
+##
+## MEASURED, not chosen. A villager walks at NpcMarker.WALK_SPEED and
+## kneels for FarmerBehavior.WORK_SECONDS per plot, against a wither grace
+## of half a 20-60s growth time (FarmPlot.WATER_GRACE_FRACTION). Over one
+## real work block the yield does not taper past the limit -- it falls off
+## a cliff, because a circuit longer than the grace window means every plot
+## dies before it ripens and the farmer spends the whole block replanting
+## ground that dies again:
+##
+##     2 cells ->  34 wheat     5 cells ->   2 wheat
+##     3 cells ->  90 wheat     6 cells ->   0 wheat
+##     4 cells ->  90 wheat
+##
+## Pinned by test_a_field_of_the_capped_size_really_produces_over_a_work_
+## block and test_one_tile_more_than_the_cap_collapses_to_nothing
+## (tests/unit/test_npc_marker_farming.gd), against a LINE of tiles -- the
+## worst real case for a walking circuit, so the cap is conservative for a
+## real farmhouse ring, which is more compact.
+##
+## This is exactly why a village grows its output by raising a SECOND
+## farmhouse rather than a bigger field, which is the shape the report
+## asked for ("so you can build multiple farms").
+const MAX_WORKED_CELLS := 4
+
 
 ## The ring of tiles directly around `building_id`'s footprint at `origin`
 ## -- its field. Row-major from the north-west corner, so the order is
@@ -69,6 +96,28 @@ static func field_cells(origin: Vector2i, building_id: String) -> Array:
 				continue  # the building stands here -- not field
 			cells.append(Vector2i(x, y))
 	return cells
+
+
+## The `limit` cells of `cells` a villager should actually work: the ones
+## nearest the farmhouse itself, so the circuit between them stays short
+## (see MAX_WORKED_CELLS -- a longer circuit than the wither grace yields
+## nothing at all). Measured to the footprint's own centre, ties broken by
+## (y, x), so the same farmhouse hands out the same field every time with
+## nothing persisted.
+static func nearest_cells(cells: Array, origin: Vector2i, building_id: String, limit: int) -> Array:
+	var footprint := BuildingCatalog.footprint_of(building_id)
+	if footprint == Vector2i.ZERO or limit <= 0:
+		return []
+	var centre := Vector2(origin) + Vector2(footprint) * 0.5
+	var ordered: Array = cells.duplicate()
+	ordered.sort_custom(func(a: Vector2i, b: Vector2i) -> bool:
+		var da := (Vector2(a) + Vector2(0.5, 0.5)).distance_squared_to(centre)
+		var db := (Vector2(b) + Vector2(0.5, 0.5)).distance_squared_to(centre)
+		if not is_equal_approx(da, db):
+			return da < db
+		return a.y < b.y if a.y != b.y else a.x < b.x
+	)
+	return ordered.slice(0, mini(limit, ordered.size()))
 
 
 ## Which farmhouse in `origins` works `cell`, or null when none does.
