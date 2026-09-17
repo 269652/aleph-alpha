@@ -17,8 +17,13 @@ extends RefCounted
 ## is quoted in kgf/mm^2, which IS a pressure (see KPA_PER_HV), and a
 ## walker's own mass is `CreatureMass`'s own real, cited figure. Laid
 ## granite setts lose that comparison by roughly five orders of
-## magnitude, which is why a cobbled street takes no print -- not because
-## anything anywhere tests for "road".
+## magnitude, which is why a cobbled street takes no print.
+##
+## The road tile IS named once, in `material_underfoot` below -- but only
+## to answer what a paved cell is MADE OF (setts, i.e. stone). Nothing
+## anywhere asks whether a road should have footprints; that follows from
+## the material, like it does for every other surface, which is what
+## makes a timber floor fall out of the same rule for free.
 ##
 ## Deliberately says nothing about how BIG a print is: that is already
 ## mass's job (`CreatureMass.linear_scale_for_mass_ratio`, see

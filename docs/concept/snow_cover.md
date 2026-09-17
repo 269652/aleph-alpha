@@ -490,8 +490,9 @@ solve.
 
 Reported live: *"walking over cobblestone streets should not leave
 footprints"*, answered with: *"this should work out of the box through
-physics."* It does now — and there is no test for `"road"` anywhere in
-the footprint path.
+physics."* It does now. The road tile is named exactly once, to say
+what a paved cell is made *of*; nothing anywhere asks whether a road
+should have footprints.
 
 **The physics is already in the codebase.** A footprint IS an
 indentation, and *indentation hardness* is by definition the mean

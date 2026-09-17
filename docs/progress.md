@@ -23370,8 +23370,11 @@ Reported in play: *"walking over cobblestone streets should not leave
 footprints"*, followed by: *"this should work out of the box through
 physics."*
 
-✅ **It does, and there is no test for `"road"` anywhere in the footprint
-path.** A footprint IS an indentation, and *indentation hardness* is by
+✅ **It does, and nothing anywhere asks whether a road should have
+footprints.** The road tile is named exactly once, to say what a paved
+cell is made *of* (setts, i.e. stone); the rest follows from the
+material, which is why a timber floor falls out of the same rule for
+free. A footprint IS an indentation, and *indentation hardness* is by
 definition the mean contact pressure it takes to leave one — so the whole
 question is one comparison, and both sides of it were already real
 published numbers this project keeps. `MaterialProperties.HARDNESS_HV`

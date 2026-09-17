@@ -86,8 +86,8 @@ decreasing with disuse — a real escalation, not three unrelated systems:
   overwrite a street — and it walks a little faster:
   `Player.ROAD_SPEED_MULTIPLIER` (1.15, test-pinned) multiplies into the
   same per-frame speed chain water, weather, slope and condition already
-  do. It also **takes no footprints**, and not because anything tests for
-  "road": setts are granite, whose published indentation hardness is some
+  do. It also **takes no footprints**, and not because anything asks
+  whether a road should have them: setts are granite, whose published indentation hardness is some
   140 000x the pressure a foot can put on the ground, so the same real
   comparison that lets soil and snow keep a print refuses one here (see
   `GroundImprint` and [snow_cover.md's "Ground that is too hard to take a
