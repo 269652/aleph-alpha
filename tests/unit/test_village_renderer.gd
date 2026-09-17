@@ -2272,3 +2272,31 @@ func test_a_villager_of_a_reloaded_village_still_knows_the_door():
 			checked += 1
 			assert_not_null(node.warehouse_position, "a reloaded village still has its store")
 	assert_gt(checked, 0, "precondition: somebody lives here")
+
+
+## A village founded before there was such a thing as a store still gets
+## one on its next load. The reload branch never runs the founding
+## placement at all, so without this an older save would come back
+## storeless forever and pillar 1's "every village has one" would only ever
+## be true of villages founded after this pass -- the same reason the hall
+## is raised on reload too.
+func test_a_village_founded_without_a_store_is_given_one_on_reload():
+	var coord := _find_settlement_chunk("grassland")
+	var world := StubWorld.new()
+	renderer.spawn_village(parent, coord, coord * CHUNK_SIZE, CHUNK_SIZE, TILE_SIZE, "grassland", world)
+	assert_eq(_placed(world, "warehouse").size(), 1, "precondition: this village really raised one")
+
+	# Wind it back to an older save: the store was never raised at all, and
+	# its ground is free again.
+	var kept: Array = []
+	for call in world.place_calls:
+		if call["building_id"] == "warehouse":
+			for cell in BuildingCatalog.footprint_cells("warehouse", call["origin_local"]):
+				world.occupied_cells.erase(coord * CHUNK_SIZE + cell)
+			continue
+		kept.append(call)
+	world.place_calls = kept
+	assert_eq(_placed(world, "warehouse").size(), 0, "precondition: this save has no store")
+
+	renderer.spawn_village(parent, coord, coord * CHUNK_SIZE, CHUNK_SIZE, TILE_SIZE, "grassland", world)
+	assert_eq(_placed(world, "warehouse").size(), 1, "a village that lacks a store is given one")

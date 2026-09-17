@@ -383,8 +383,20 @@ func _place_new_village(
 			var g: Vector2i = chunk_coord * chunk_size + local_cell
 			world.build_at_global(g.x, g.y, TerrainRenderer.ROAD_TILE_ID)
 
-	_place_industry_if_missing(chunk_coord, chunk_size, world)
+	# The store BEFORE the works, and the order is load-bearing. The store
+	# stands on a fixed reserved plot beside the square and cannot move; the
+	# works is sited wherever there is timber and a clear road spur back to
+	# the street, and that spur is searched for against what is already
+	# standing. Placed the other way round, a spur laid first gets CUT: the
+	# store's own placement lifts every road cell under its footprint (see
+	# place_building_over_roads) and restores only its doorstep, so a mill
+	# whose spur happened to run through the reserved plot was left with no
+	# road home. Caught by test_the_real_sawmill_is_walkable_back_to_the_
+	# street_on_road, which no stub-world test could see -- StubWorld's
+	# build_at_global records road cells into a different dict from the one
+	# modification_at_global reads, so the two never collide there.
 	_place_warehouse_if_missing(chunk_coord, chunk_size, world)
+	_place_industry_if_missing(chunk_coord, chunk_size, world)
 	_place_civic_if_missing(chunk_coord, chunk_size, world)
 	_place_farms_if_missing(chunk_coord, chunk_size, npcs, world)
 	return true
@@ -407,6 +419,13 @@ func _recover_existing_village(
 	existing_buildings: Array, plots: Array, door_positions: Array, stand_positions: Array
 ) -> void:
 	_lay_plaza_if_missing(chunk_coord, chunk_size, world)
+	# Every village keeps a store, including one founded before there was
+	# such a thing to keep (docs/concept/village_warehouse.md pillar 1).
+	# Without this an older save would reload forever without one, since
+	# this branch never runs the founding placement at all -- the same
+	# reason the hall is raised here too. Ahead of the works for the same
+	# road-spur reason _place_new_village gives.
+	_place_warehouse_if_missing(chunk_coord, chunk_size, world)
 	_place_industry_if_missing(chunk_coord, chunk_size, world)
 	_place_civic_if_missing(chunk_coord, chunk_size, world)
 	_place_farms_if_missing(chunk_coord, chunk_size, npcs, world)
