@@ -985,3 +985,21 @@ func test_a_load_is_a_quarter_of_what_a_village_keeps_without_a_store():
 		VillageMarket.WAREHOUSE_CAPACITY / NpcEconomy.CARRY_LIMIT, 40.0, 0.0001,
 		"a warehouse is forty trips deep"
 	)
+
+
+## A take that ALREADY HAPPENED is never refused for want of hands. The
+## continuous drip stops at a full load (test_full_hands_gather_nothing)
+## because it costs the region something every frame it runs -- but a crop
+## that has been cut or an animal that has been killed is done, and refusing
+## to hold it would delete it rather than leave it standing. So a villager
+## can finish a work block carrying more than a tidy load, and delivers the
+## lot. Bounded in practice: a field has finitely many plots.
+func test_a_take_that_already_happened_is_never_dropped_for_want_of_hands():
+	var farmer := _economy("farmer")
+	farmer.carry_limit = NpcEconomy.CARRY_LIMIT
+	var over := int(NpcEconomy.CARRY_LIMIT) * 3
+	farmer.record_real_harvest("wheat", over)
+	assert_almost_eq(farmer.carried_total(), float(over), 0.0001, "the whole harvest is in hand")
+	assert_almost_eq(farmer.burden(), 1.0, 0.0, "and it presses")
+	farmer.deliver_load()
+	assert_almost_eq(market.stock.get("wheat", 0.0), float(over), 0.0001, "the whole harvest arrives")

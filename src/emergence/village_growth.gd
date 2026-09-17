@@ -58,13 +58,15 @@ const SAWMILL_MIN_HOUSEHOLDS := 1
 ## before this ladder is ever consulted -- so next_building would go on
 ## naming a target the village already has, which is the exact bug
 ## present_building_ids exists to prevent.
-## Rung 4. Food production: the works that let the population keep growing
-## at all, so it follows directly on the store that holds its harvest.
+## Rung 3. Food production: the works that let the population keep growing
+## at all, and the first thing a village builds once it has a hall. (It used
+## to be rung 4, behind the store; the store is founded with the village
+## now, so its harvest already has a roof waiting for it.)
 const FARMHOUSE_MIN_HOUSEHOLDS := 5
-## Rung 5. Tools, and the first rung needing stone in real quantity -- a
+## Rung 4. Tools, and the first rung needing stone in real quantity -- a
 ## village supports a full-time smith only once it is past subsistence.
 const BLACKSMITH_MIN_HOUSEHOLDS := 7
-## Rung 6. The one rung raised for comfort rather than survival; a village
+## Rung 5. The one rung raised for comfort rather than survival; a village
 ## only builds this once everything it actually needs already stands.
 const BREWERY_MIN_HOUSEHOLDS := 9
 
