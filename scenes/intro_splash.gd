@@ -54,7 +54,18 @@ const _NATIVE_FRAME_SIZE := Vector2(IntroSplashSheet._FRAME_WIDTH, IntroSplashSh
 ## structurally harmless going forward: at a true 1:1 scale there is no
 ## scale factor left for a mismatched reference size to distort into a
 ## non-integer, shimmer-inducing one.
-const DISPLAY_SCALE := 1
+## A fourteenth pass (2026-09-17) sets this to 3. The twelfth pass set it to
+## 1 on an explicit ask -- "still too big.. make it native size /
+## resolution" -- but "native" then meant a 243x162 landscape frame. The
+## replacement sheet's frames are 79x151 PORTRAIT (see IntroSplashSheet:
+## the new source animation is 9:16), so 1:1 would render the whole intro
+## as a 79px-wide thumbnail, far smaller than anything that ask was about.
+## 3 restores the on-screen WIDTH the twelfth pass actually shipped
+## (79 * 3 = 237, against the 243 it had) while staying an exact integer
+## multiple, so the pixel-perfect, shimmer-free property that pass and the
+## eighth pass both established is kept intact. Chosen by the player when
+## the trade was put to them directly, not inferred.
+const DISPLAY_SCALE := 3
 const DISPLAY_SIZE := _NATIVE_FRAME_SIZE * DISPLAY_SCALE
 
 var _frames: Array[ImageTexture] = []

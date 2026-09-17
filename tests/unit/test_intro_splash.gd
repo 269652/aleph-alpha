@@ -165,19 +165,38 @@ func test_display_size_is_smaller_than_the_prior_character_panel_sized_box():
 	assert_lt(IntroSplash.DISPLAY_SIZE.y, 620.0)
 
 
-## A twelfth pass (2026-09-09): reported live, twice in the same message --
-## "not stabilized again" (the eleventh pass's fixed-crop-window fix DID
-## hold; what regressed was THIS reference constant going stale the moment
-## that fix shipped -- see the next test) and "still too big.. make it
-## native size / resolution". DISPLAY_SCALE=1 pins the second, explicit ask
-## directly: the on-screen box is exactly _NATIVE_FRAME_SIZE, no upscaling
-## at all, so there is no scale factor left for a filter-driven artifact to
-## ride on regardless of how carefully _NATIVE_FRAME_SIZE itself is kept in
-## sync.
-func test_display_scale_is_native_no_upscaling():
+## A twelfth pass (2026-09-09) pinned DISPLAY_SCALE to exactly 1, on an
+## explicit ask: "still too big.. make it native size / resolution". A
+## fourteenth pass (2026-09-17) raises it to 3, and the reason that is not a
+## regression of the twelfth is that "native" was never really about the
+## NUMBER 1 -- it was about the on-screen size that number produced against
+## the art of the day, which was a 243x162 landscape frame.
+##
+## The replacement sheet's frames are 79x151 PORTRAIT (see IntroSplashSheet
+## -- the new source animation is 9:16), so holding DISPLAY_SCALE at 1 would
+## have silently shrunk the intro to a 79px-wide thumbnail: obeying the
+## letter of that ask while breaking what it asked for. Put to the player
+## directly with the trade spelled out, they chose 3.
+##
+## What this test actually guards, then, is the property both the eighth and
+## twelfth passes were really protecting -- a WHOLE-number scale, so the
+## upscale lands on exact pixels and no filter-driven shimmer can ride on a
+## fractional factor -- plus the on-screen width staying in the range that
+## ask settled on, rather than the bare literal.
+func test_display_scale_is_a_whole_number_so_the_upscale_stays_pixel_perfect():
 	assert_eq(
-		IntroSplash.DISPLAY_SCALE, 1,
-		"native size means no upscaling at all, not merely a smaller multiple"
+		IntroSplash.DISPLAY_SCALE, int(IntroSplash.DISPLAY_SCALE),
+		"a fractional scale is exactly the shimmer the eighth pass fixed"
+	)
+	assert_gte(IntroSplash.DISPLAY_SCALE, 1)
+
+
+## The twelfth pass's "native size" ask shipped a 243px-wide intro. The art
+## changed shape underneath it; the width it settled on did not.
+func test_the_intro_still_renders_at_about_the_width_that_ask_settled_on():
+	assert_almost_eq(
+		IntroSplash.DISPLAY_SIZE.x, 243.0, 12.0,
+		"the on-screen width drifted away from what the 'native size' ask actually shipped"
 	)
 
 

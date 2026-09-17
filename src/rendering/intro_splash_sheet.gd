@@ -2,126 +2,102 @@ extends RefCounted
 
 ## Real illustrated art for the boot intro splash (see
 ## docs/concept/intro_splash.md, IntroSplashSequencer, scenes/
-## intro_splash.gd). Same "hand/AI-illustrated sheet -> SpriteSheetSlicer
-## -> cached frames" shape as IllustratedWormSprite, IllustratedDecomposer
-## Sprite etc.
+## intro_splash.gd).
 ##
-## assets/sprites/intro.png is 1983x793 -- AI-generated against an 8-column
-## x 4-row prompt, but NOT evenly divisible by that grid (1983/8=247.875,
-## 793/4=198.25), unlike worm.png's genuinely regular grid. Rather than
-## assume arithmetic division (would misalign later frames by several
-## pixels, compounding row to row), both the row bands AND the column left
-## edges below were measured directly with tools/probe_intro_sheet.gd and
-## a dedicated verification probe (throwaway, since deleted -- see bug #6
-## below) and are pinned here as real, confirmed constants.
+## assets/sprites/intro.png is a CONTACT SHEET, 1672x941: a 20-column x
+## 6-row grid of 120 frames exported straight out of the source animation,
+## with the export tool's own chrome drawn on top of it -- a light-grey grid
+## line between every pair of cells, and each cell's own timestamp ("0.00s"
+## through "4.96s") burned into its top-left corner. Those timestamps are
+## 1/24 s apart, which is where IntroSplashSequencer.FPS comes from: this
+## sheet states its own frame rate, it is not a style choice any more.
 ##
-## Every one of the 32 frames is cropped to the SAME fixed-size window
-## (_FRAME_WIDTH x _FRAME_HEIGHT), anchored at its own row's top and its
-## own column's left edge -- deliberately NOT SpriteSheetSlicer.
-## detect_frames' own per-frame CONTENT-based crop, which this file used
-## until bug #6 (2026-09-09, see docs/concept/intro_splash.md). That
-## crop measured each frame's own left/right content boundary
-## independently, and while the underlying 8-column GRID itself turned out
-## to already be fixed (row 0, 2 and 3 each independently re-detect the
-## identical column lefts pinned below), the RIGHT edge drifted by up to
-## 2px frame to frame -- driven by the light-streak sweep and the growing
-## "ALEPH ALPHA" wordmark's own ink extent, both of which are real content
-## that varies in exactly the columns detect_frames scans, even though the
-## globe itself sits at a consistent position/size in every frame by
-## construction (see the intro-generation prompt). IntroSplash's own
-## TextureRect (STRETCH_KEEP_ASPECT_COVERED + EXPAND_IGNORE_SIZE) scales
-## and re-centers each frame independently based on that frame's own size,
-## so a couple pixels of source-crop instability, magnified by the ~5.5x
-## this sheet gets stretched by at the project's default 1280x720
-## viewport, read as visible on-screen "wobble" -- confirmed both by
-## direct measurement (widths ranged 232-234px, heights stepped
-## 181/183/182/182px across the 32 frames) and by rendering the actual
-## STRETCH_KEEP_ASPECT_COVERED transform for a consecutive run of frames.
+## The chrome matters to the slicing in two different ways, and they pull in
+## opposite directions:
 ##
-## A single fixed crop window per frame -- same width, same height, no
-## per-frame content detection at all -- removes that instability at the
-## source rather than trying to re-stabilize a content-based measurement.
-## See test_every_frame_is_the_same_size (tests/unit/
-## test_intro_splash_sheet.gd) for the regression coverage, confirmed red
-## against the old per-frame detect_frames crop before this fix.
+##  - The GRID LINES are not art. A crop that includes one shows a pale bar
+##    down the edge of the frame, so every crop below stays strictly INSIDE
+##    the lines (see _COLUMN_INTERIORS/_ROW_INTERIORS, measured from the
+##    real lines, and test_no_frame_carries_a_slice_of_the_grid_line).
+##  - The TIMESTAMPS are kept. They sit on top of real frame content rather
+##    than in a margin of their own -- the starfield runs edge to edge under
+##    them -- so cropping them away would cut the top ~14% off every frame.
+##    Asked directly, when offered the choice: "Just crop with timestamp".
+##    They also turn out to be the single best alignment witness this sheet
+##    has (see test_every_frame_lands_its_timestamp_label_on_the_same_rows).
 ##
-## Frames are extracted as PLAIN regions, not run through
-## SpriteSheetSlicer.normalize_frames -- see this file's own test's doc
-## comment for why: normalize_frames' shared-scale-from-widest-content
-## behaviour would make the globe itself appear to change size as the
-## "ALEPH ALPHA" wordmark's own ink extent grows across the sequence,
-## which the source art's consistently-framed camera (same globe position/
-## size in every frame, by construction -- see the intro-generation
-## prompt) doesn't need fixed up at all. Do NOT reintroduce
-## normalize_frames here -- this is a real, deliberate divergence from
-## every other illustrated-sheet consumer, not an oversight.
+## This replaced an earlier, completely different sheet (1983x793, an 8x5
+## grid of 40 frames on a MAGENTA background with real gutters between
+## cells). Nothing about the old one survives: there is no magenta on this
+## sheet at all, so there is no chroma-key or despill pass here any more --
+## the background is opaque black space, and it is meant to stay that way.
+## See docs/concept/intro_splash.md's "A fourteenth pass".
+##
+## Every one of the 120 frames is cropped to the SAME fixed-size window
+## (_FRAME_WIDTH x _FRAME_HEIGHT) -- deliberately NOT SpriteSheetSlicer
+## .detect_frames' own per-frame CONTENT-based crop, which this file used
+## until bug #6 (2026-09-09). That crop measured each frame's own content
+## boundary independently, and a couple of pixels of instability, magnified
+## by the display upscale, read on screen as "wobble". A single fixed window
+## removes that at the source. See test_every_frame_is_the_same_size.
+##
+## Frames are extracted as PLAIN regions, never run through
+## SpriteSheetSlicer.normalize_frames: that function picks ONE shared scale
+## from the widest content across the frames it is given, and here the globe
+## grows and the "aleph alpha" wordmark builds in, so normalizing would make
+## the globe itself appear to change size. Do NOT reintroduce it -- this is
+## a deliberate divergence from every other illustrated-sheet consumer, not
+## an oversight.
 
 const SpriteSheetLoader = preload("res://src/rendering/sprite_sheet_loader.gd")
 
 const _SHEET_PATH := "res://assets/sprites/intro.png"
 
-## [top_y, bottom_y) per row, top to bottom exactly as drawn -- measured,
-## not eyeballed (see this file's own doc comment above). Only top_y (each
-## band's own `.x`) is actually used as a crop anchor now; bottom_y still
-## documents the real measured row extent and drives _FRAME_HEIGHT's own
-## derivation below.
-const _ROW_BANDS: Array[Vector2i] = [
-	Vector2i(7, 169),
-	Vector2i(174, 332),
-	Vector2i(337, 495),
-	Vector2i(500, 647),
-	Vector2i(652, 786),
+## The x of each column's crop window, and the y of each row's -- measured
+## from the real file with tools/probe_intro_sheet.gd, never assumed by
+## arithmetic division. The grid does not divide evenly (1672/20 = 83.6,
+## 941/6 = 156.8), the grey lines are 1-3px wide and not evenly spaced, and
+## the cells themselves therefore differ in width by up to 4px.
+##
+## Horizontally each window is CENTRED in its own cell: the globe sits at
+## its cell's middle, so anchoring at the left edge instead would shift it
+## by up to 2px from column to column -- reintroducing, in a new form,
+## exactly the frame-to-frame wobble a fixed window exists to remove.
+##
+## Vertically each window is anchored to where the ART actually starts,
+## which is NOT simply "just below the line above". Row 0 has no grid line
+## above it at all -- its cell is flush with the sheet's own top edge --
+## while every other row's cell begins ~1.5px inside the line above it, so
+## a crop anchored on the raw inter-line span puts row 0's content 1px
+## higher than the other five. That is measured, not theorised: the export
+## draws each cell's timestamp at a constant offset below its own cell top,
+## and row 0's landed on frame row 11 where every other row's landed on 10.
+## +1 on row 0 alone puts all six on the same row. See
+## test_every_frame_lands_its_timestamp_label_on_the_same_rows, which is
+## the direct proof and would fail the moment any of these drifts.
+const _COLUMN_WINDOW_LEFTS: Array[int] = [
+	1, 85, 168, 252, 337, 420, 503, 587, 671, 755,
+	839, 923, 1008, 1092, 1175, 1258, 1342, 1426, 1510, 1593,
 ]
+const _ROW_WINDOW_TOPS: Array[int] = [1, 155, 309, 463, 617, 771]
 
-## Left edge (source-image space) of each of the 8 columns, identical
-## across all 4 rows by construction -- the AI drew one consistent column
-## grid, reused for every row. Measured from row 0 (SpriteSheetSlicer.
-## detect_frames on its own row band): the one row with neither the
-## light-streak sweep nor any wordmark ink yet, so nothing biases a
-## content-based measurement. Rows 2 and 3 independently re-detect this
-## EXACT same array; only row 1 (mid-sequence, both streak and the first
-## wordmark letters already present) drifts by 1px at a single column --
-## see test_column_lefts_match_a_content_free_measurement for the
-## regression check against the real image.
-const _COLUMN_LEFTS: Array[int] = [8, 251, 499, 746, 994, 1242, 1490, 1738]
-
-## ONE fixed canvas size, shared by all 40 frames -- no per-frame content
-## cropping (see this file's own doc comment above for why). _FRAME_WIDTH
-## is comfortably larger than the widest column of real art measured on
-## this sheet (242px) and no larger than the tightest real column pitch
-## (243px, the minimum left-to-left gap among _COLUMN_LEFTS) so it can
-## never bleed into the next column. _FRAME_HEIGHT is the TALLEST of the 5
-## measured _ROW_BANDS (row 0, 162px); every shorter row is crop-limited
-## to its own art and padded evenly into this canvas rather than stretched
-## to it. Both bounds are re-verified against the real sheet by
-## test_a_frame_never_reaches_into_the_column_beside_it and
-## test_a_frame_never_reaches_into_the_row_below_it, not just claimed in
-## this comment (see CLAUDE.md: tuned thresholds must be tested, not
-## eyeballed).
-const _FRAME_WIDTH := 243
-const _FRAME_HEIGHT := 162
-
-## Chroma-keyed opaque magenta -- identical thresholds to every other
-## illustrated sheet in this codebase (e.g. IllustratedWormSprite),
-## confirmed against this sheet's own corner pixel with
-## tools/probe_intro_sheet.gd.
-const _MAGENTA_RED_MIN := 0.85
-const _MAGENTA_BLUE_MIN := 0.85
-const _MAGENTA_GREEN_MAX := 0.15
-
-## Despill margin -- identical technique and reasoning to
-## IllustratedWormSprite._despilled/IllustratedDecomposerSprite's own,
-## reused verbatim rather than reinvented (this codebase's own established
-## convention: this exact small technique is already duplicated across
-## seven illustrated-sheet classes rather than pulled into a shared
-## utility).
-const _MAGENTA_CAST_MARGIN := 0.03
+## ONE fixed window, shared by all 120 frames -- sized to the SMALLEST cell
+## on the sheet so it fits inside every one of them and can never pull in
+## the grid line beside it. The narrowest column is the last, which the
+## sheet's own right edge cuts short at 79px; the shortest row is 151px.
+## Verified against the real lines by
+## test_no_frame_carries_a_slice_of_the_grid_line (on the built frames, not
+## on this arithmetic) rather than asserted in this comment -- CLAUDE.md: a
+## tuned value is a tested function or a test-pinned constant, never an
+## eyeballed comment.
+const _FRAME_WIDTH := 79
+const _FRAME_HEIGHT := 151
 
 static var _frame_cache: Array[ImageTexture] = []
 
 
 ## Every frame in play order (row 0 left-to-right, then row 1, ...),
-## sliced+despilled once and cached thereafter.
+## sliced once and cached thereafter.
 func generate_textures() -> Array[ImageTexture]:
 	if _frame_cache.is_empty():
 		_frame_cache = _build_textures()
@@ -129,71 +105,18 @@ func generate_textures() -> Array[ImageTexture]:
 
 
 func _build_textures() -> Array[ImageTexture]:
-	var image := _prepared_for_slicing(SpriteSheetLoader.load_image(_SHEET_PATH))
+	var image := SpriteSheetLoader.load_image(_SHEET_PATH)
+	if image == null:
+		return []
+	if image.get_format() != Image.FORMAT_RGBA8:
+		image = image.duplicate() as Image
+		image.convert(Image.FORMAT_RGBA8)
 	var textures: Array[ImageTexture] = []
-	for row in _ROW_BANDS.size():
-		var band: Vector2i = _ROW_BANDS[row]
-		# Exactly this row's own measured art, never a pixel of the gutter
-		# or of the row below it. The rows of this sheet are genuinely
-		# different heights (162/158/158/147/134 -- see _ROW_BANDS), so one
-		# crop height cannot serve them all.
-		var art_height: int = mini(_FRAME_HEIGHT, band.y - band.x)
-		# ...and the shortfall against the shared canvas is split EVENLY
-		# above and below, because the globe sits at its own row's middle
-		# in every row. Anchored at the row's top instead, a short row puts
-		# its whole shortfall below the art and the globe climbs the screen
-		# as the sequence plays -- reported in play as "the image is moving
-		# from bottom to top" (see test_every_frame_puts_its_art_at_the_
-		# same_height, confirmed red against exactly that anchoring).
-		var top_pad: int = (_FRAME_HEIGHT - art_height) / 2
-		for left in _COLUMN_LEFTS:
-			var cropped := image.get_region(Rect2i(left, band.x, _FRAME_WIDTH, art_height))
-			if cropped.get_format() != Image.FORMAT_RGBA8:
-				cropped.convert(Image.FORMAT_RGBA8)
-			# Every frame is the SAME size whatever its row could spare,
-			# so nothing rescales between rows (see bug #6 above); a short
-			# row simply carries transparent space above and below its art.
-			var frame_image := Image.create(_FRAME_WIDTH, _FRAME_HEIGHT, false, Image.FORMAT_RGBA8)
-			frame_image.fill(Color(0.0, 0.0, 0.0, 0.0))
-			frame_image.blit_rect(
-				cropped, Rect2i(0, 0, _FRAME_WIDTH, art_height), Vector2i(0, top_pad)
+	for top in _ROW_WINDOW_TOPS:
+		for left in _COLUMN_WINDOW_LEFTS:
+			textures.append(
+				ImageTexture.create_from_image(
+					image.get_region(Rect2i(left, top, _FRAME_WIDTH, _FRAME_HEIGHT))
+				)
 			)
-			textures.append(ImageTexture.create_from_image(frame_image))
 	return textures
-
-
-## Makes the sheet's magenta background genuinely transparent, and
-## despills the magenta cast baked into every antialiased edge around it,
-## before the image ever reaches SpriteSheetSlicer -- mirrors
-## IllustratedWormSprite._prepared_for_slicing exactly.
-func _prepared_for_slicing(image: Image) -> Image:
-	var prepared := image.duplicate() as Image
-	if prepared.get_format() != Image.FORMAT_RGBA8:
-		prepared.convert(Image.FORMAT_RGBA8)
-	for y in prepared.get_height():
-		for x in prepared.get_width():
-			var pixel := prepared.get_pixel(x, y)
-			if _is_magenta(pixel):
-				prepared.set_pixel(x, y, Color(pixel.r, pixel.g, pixel.b, 0.0))
-			else:
-				prepared.set_pixel(x, y, _despilled(pixel))
-	return prepared
-
-
-static func _is_magenta(color: Color) -> bool:
-	return color.r >= _MAGENTA_RED_MIN and color.b >= _MAGENTA_BLUE_MIN and color.g <= _MAGENTA_GREEN_MAX
-
-
-## `color` with any magenta-direction cast removed -- identical technique
-## to IllustratedWormSprite._despilled. A pixel with no cast (a genuine
-## dark tone -- the sheet's own starfield/space background) passes through
-## completely unchanged.
-static func _despilled(color: Color) -> Color:
-	var cast: float = minf(color.r - color.g, color.b - color.g)
-	if cast <= _MAGENTA_CAST_MARGIN:
-		return color
-	var removed := cast - _MAGENTA_CAST_MARGIN
-	return Color(
-		clampf(color.r - removed, 0.0, 1.0), color.g,
-		clampf(color.b - removed, 0.0, 1.0), color.a
-	)
