@@ -171,3 +171,41 @@ func test_no_magenta_divider_survives_into_a_wells_frame():
 					pixel.r >= 0.85 and pixel.b >= 0.85 and pixel.g <= 0.15,
 					"a divider line survived into the frame at %d,%d" % [x, y]
 				)
+
+
+# -- and it is drawn at the size that prop really is ------------------------
+#
+# The well cell is ~274x206 source pixels while a well is 40x44 WORLD units
+# (ProceduralLandmarkSprite.SIZES). Drawn at ArtResolution.SPRITE_SCALE
+# alone, the supplied art would stand about three times as wide as the
+# procedural well it replaces -- exactly the failure IllustratedCropSprite
+# already hit twice ("huge potato crops above soil"). A prop's art is
+# scaled to the prop's own size, never assumed to have been authored at it.
+
+func test_a_props_supplied_art_is_scaled_to_the_size_that_prop_really_is():
+	var IllustratedStructureSprite = load("res://src/rendering/illustrated_structure_sprite.gd")
+	var ArtResolution = load("res://src/rendering/art_resolution.gd")
+	var image: Image = LandmarkSheet.world_scaled_image("well", 11, IllustratedStructureSprite.new())
+	assert_not_null(image)
+	var size: Vector2i = ProceduralLandmarkSprite.SIZES["well"]
+	assert_eq(
+		image.get_width(), ArtResolution.art_size(size).x,
+		"a well must be a well's width, whatever size the sheet was drawn at"
+	)
+
+
+func test_scaling_a_prop_never_distorts_it():
+	var IllustratedStructureSprite = load("res://src/rendering/illustrated_structure_sprite.gd")
+	var raw: Image = LandmarkSheet.frame_image("well", 11, IllustratedStructureSprite.new())
+	var scaled: Image = LandmarkSheet.world_scaled_image("well", 11, IllustratedStructureSprite.new())
+	assert_almost_eq(
+		float(scaled.get_height()) / float(scaled.get_width()),
+		float(raw.get_height()) / float(raw.get_width()),
+		0.02,
+		"height follows width by the same factor -- a squashed well is the wrong well"
+	)
+
+
+func test_a_prop_with_no_art_has_nothing_to_scale():
+	var IllustratedStructureSprite = load("res://src/rendering/illustrated_structure_sprite.gd")
+	assert_null(LandmarkSheet.world_scaled_image("stall", 3, IllustratedStructureSprite.new()))

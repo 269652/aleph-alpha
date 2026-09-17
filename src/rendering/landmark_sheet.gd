@@ -1,6 +1,8 @@
 extends RefCounted
 
 const SpriteSheetLoader = preload("res://src/rendering/sprite_sheet_loader.gd")
+const ProceduralLandmarkSprite = preload("res://src/rendering/procedural_landmark_sprite.gd")
+const ArtResolution = preload("res://src/rendering/art_resolution.gd")
 
 ## Where a village prop's real art lives, and what happens until it does.
 ##
@@ -127,3 +129,30 @@ static func frame_image(landmark_id: String, seed_value: int, illustrator) -> Im
 	return illustrator.variant_frame_image(
 		sheet_path_for(landmark_id), grid.x, grid.y, cell.y, cell.x
 	)
+
+
+## The prop's art scaled to the size that prop really is: width exactly
+## ArtResolution.art_size of the prop's own world width
+## (ProceduralLandmarkSprite.SIZES), height by the SAME factor so nothing
+## is distorted. Null when no art has been supplied.
+##
+## Supplied art is NOT assumed to have been authored at the prop's size.
+## The well sheet's cells are ~274x206 source pixels while a well is 40x44
+## world units; drawn at ArtResolution.SPRITE_SCALE alone it would stand
+## about three times as wide as the procedural well it replaces -- the
+## exact failure IllustratedCropSprite already hit twice and documents at
+## length ("huge potato crops above soil", and again after a re-tune).
+## Measuring the art and scaling it to the world is the fix that stuck
+## there, and it is the rule here.
+static func world_scaled_image(landmark_id: String, seed_value: int, illustrator) -> Image:
+	var frame := frame_image(landmark_id, seed_value, illustrator)
+	if frame == null:
+		return null
+	var world_size: Vector2i = ProceduralLandmarkSprite.SIZES.get(landmark_id, Vector2i(20, 20))
+	var target_width: int = maxi(ArtResolution.art_size(world_size).x, 1)
+	if frame.get_width() == target_width:
+		return frame
+	var scale := float(target_width) / float(frame.get_width())
+	var scaled := frame.duplicate() as Image
+	scaled.resize(target_width, maxi(1, int(round(float(frame.get_height()) * scale))), Image.INTERPOLATE_LANCZOS)
+	return scaled

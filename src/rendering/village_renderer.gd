@@ -918,7 +918,10 @@ func _build_landmark(landmark_id: String, position: Vector2, parent: Node2D, per
 ## plain single-image sheet has one cell whatever the seed.
 func _landmark_texture(landmark_id: String, position: Vector2) -> Texture2D:
 	var seed_value := hash("%d_%d_prop" % [int(position.x), int(position.y)])
-	var image := LandmarkSheet.frame_image(landmark_id, seed_value, _structure_sprite)
+	# Scaled to the size that prop really is, never assumed to have been
+	# authored at it -- see LandmarkSheet.world_scaled_image, and the
+	# "huge potato crops" history it cites.
+	var image := LandmarkSheet.world_scaled_image(landmark_id, seed_value, _structure_sprite)
 	if image != null:
 		return ImageTexture.create_from_image(image)
 	return _landmark_sprite.generate_texture(landmark_id)
