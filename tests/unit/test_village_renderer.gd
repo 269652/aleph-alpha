@@ -2228,3 +2228,47 @@ func test_a_reload_never_raises_a_second_warehouse():
 	renderer.spawn_village(parent, coord, coord * CHUNK_SIZE, CHUNK_SIZE, TILE_SIZE, "grassland", world)
 	renderer.spawn_village(parent, coord, coord * CHUNK_SIZE, CHUNK_SIZE, TILE_SIZE, "grassland", world)
 	assert_eq(_placed(world, "warehouse").size(), 1, "one store per village, across reloads")
+
+
+func test_a_villager_of_a_village_with_a_store_knows_where_to_carry_to():
+	var coord := _find_settlement_chunk("grassland")
+	var world := StubWorld.new()
+	var spawned := renderer.spawn_village(
+		parent, coord, coord * CHUNK_SIZE, CHUNK_SIZE, TILE_SIZE, "grassland", world
+	)
+	var stores: Array = _placed(world, "warehouse")
+	assert_eq(stores.size(), 1, "precondition: this village really has a store")
+	var door_global: Vector2i = (
+		coord * CHUNK_SIZE + stores[0]["origin_local"] + BuildingCatalog.doorstep_of("warehouse")
+	)
+	var door := Vector2((door_global.x + 0.5) * TILE_SIZE, (door_global.y + 0.5) * TILE_SIZE)
+
+	var villagers := 0
+	for node in spawned:
+		if not (node is NpcMarker):
+			continue
+		villagers += 1
+		assert_eq(node.warehouse_position, door, "a villager carries to the real door, not the footprint")
+		assert_gt(
+			node.economy.carry_limit, 0.0,
+			"a village with a store is a village whose take is carried to it"
+		)
+	assert_gt(villagers, 0, "precondition: somebody lives here")
+
+
+## Derived from what really STANDS, not from the plan: the reload branch
+## (_recover_existing_village) never runs the founding placement at all, and
+## a villager of a village loaded from a save must still know its door.
+func test_a_villager_of_a_reloaded_village_still_knows_the_door():
+	var coord := _find_settlement_chunk("grassland")
+	var world := StubWorld.new()
+	renderer.spawn_village(parent, coord, coord * CHUNK_SIZE, CHUNK_SIZE, TILE_SIZE, "grassland", world)
+	var reloaded := renderer.spawn_village(
+		parent, coord, coord * CHUNK_SIZE, CHUNK_SIZE, TILE_SIZE, "grassland", world
+	)
+	var checked := 0
+	for node in reloaded:
+		if node is NpcMarker:
+			checked += 1
+			assert_not_null(node.warehouse_position, "a reloaded village still has its store")
+	assert_gt(checked, 0, "precondition: somebody lives here")

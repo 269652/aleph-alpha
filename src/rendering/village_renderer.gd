@@ -251,6 +251,15 @@ func spawn_village(
 	# own workspot for a tag it cannot find.
 	settlement.landmarks = _grounded_landmarks(settlement.landmarks, tile_size, world)
 
+	# The door of this settlement's store, for every villager built below
+	# (docs/concept/village_warehouse.md mechanism 3). Read off the building
+	# that really STANDS, not off the plan: a cramped site houses its people
+	# and goes without one (pillar 1's caveat), and the reload branch never
+	# runs the founding placement at all. null is the honest answer for a
+	# village with no store, and a villager who gets it keeps stocking the
+	# market outright.
+	var warehouse_door = _warehouse_door(chunk_coord, chunk_size, tile_size, world)
+
 	var spawned: Array[Node2D] = []
 	# Every villager's own marker, by roster index -- the farm fields below
 	# are handed out per villager, and only this loop knows which marker is
@@ -273,7 +282,9 @@ func spawn_village(
 		var workspot = _grounded_position(
 			door_positions[i] + Vector2(0, _WORKSPOT_OFFSET_TILES * tile_size), tile_size, world, false
 		)
-		var npc_marker := _build_npc(settlement, i, door_positions[i], workspot, tile_size, parent, world, market)
+		var npc_marker := _build_npc(
+			settlement, i, door_positions[i], workspot, tile_size, parent, world, market, warehouse_door
+		)
 		spawned.append(npc_marker)
 		npc_markers.append(npc_marker)
 		# A merchant gets a second, PERSONAL trading stand at their own house,
@@ -938,6 +949,29 @@ func _place_warehouse_if_missing(chunk_coord: Vector2i, chunk_size: int, world) 
 	)
 
 
+## Where this settlement's store opens onto the street, in world pixels, or
+## null when no store stands here.
+##
+## Read off world.buildings_in_chunk rather than off VillageLayout, because
+## the plan and the ground disagree on purpose: the layout reserves a plot
+## only when the site can spare it, the placement can still be refused, and
+## a village loaded from a save never re-runs either. What a villager walks
+## to has to be a building that is really there.
+func _warehouse_door(chunk_coord: Vector2i, chunk_size: int, tile_size: int, world):
+	if world == null or not world.has_method("buildings_in_chunk"):
+		return null
+	var building_id := VillageLayout.WAREHOUSE_BUILDING_ID
+	for record in world.buildings_in_chunk(chunk_coord):
+		if record.get("id", "") != building_id:
+			continue
+		var door_global: Vector2i = (
+			chunk_coord * chunk_size + record["origin_local"]
+			+ BuildingCatalog.doorstep_of(building_id)
+		)
+		return Vector2((door_global.x + 0.5) * tile_size, (door_global.y + 0.5) * tile_size)
+	return null
+
+
 func _place_civic_if_missing(chunk_coord: Vector2i, chunk_size: int, world) -> void:
 	if not world.has_method("place_building_over_roads"):
 		return
@@ -1188,7 +1222,7 @@ func _landmark_texture(landmark_id: String, position: Vector2) -> Texture2D:
 ## like the player and wild creatures.
 func _build_npc(
 	settlement: Dictionary, index: int, home_position: Vector2, workspot, tile_size: int,
-	parent: Node2D, world = null, market = null
+	parent: Node2D, world = null, market = null, warehouse_door = null
 ) -> NpcMarker:
 	var identity = settlement.npcs[index]
 
@@ -1200,6 +1234,9 @@ func _build_npc(
 	# there. `workspot` is already grounded by the caller.
 	marker.workspot_position = workspot if workspot != null else home_position
 	marker.landmarks = settlement.landmarks
+	# Before setup_economy, which reads it to decide whether this villager
+	# carries their take to a door or stocks the village where they stand.
+	marker.warehouse_position = warehouse_door
 	marker.position = home_position
 	if world != null:
 		marker.setup(world, tile_size)

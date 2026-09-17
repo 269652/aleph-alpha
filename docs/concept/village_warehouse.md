@@ -46,6 +46,13 @@ This doc makes it storage, and makes it unconditional.
    on — hauling is a drive like thirst, answered by an address like the
    well — rather than a second, parallel movement system.
 
+   The caveat under pillar 1 reaches here too, and it decides the default.
+   A village with no store has nowhere to carry to, so its producers keep
+   stocking it where they stand, exactly as they always did. Carrying is
+   what a store BUYS a village, not a tax every village pays; otherwise
+   "this site had no room for a warehouse" would have quietly meant "this
+   village starves".
+
 ## Real-world grounding
 
 A granary is the oldest civic building there is, and it predates the town
@@ -102,7 +109,9 @@ new mechanic.
 A villager carrying a load walks it to the warehouse door and deposits it
 there. This is a wiring on the villager ethogram, not a new system:
 `VillagerBehavior` says so in its own header — *"Adding a wiring to
-BODY_PLANS['villager'] is all it takes to add a behaviour here"*.
+BODY_PLANS['villager'] is all it takes to add a behaviour here"* — and this
+is the first behaviour actually added that way, which is the claim finally
+being tested.
 
 - **The channel:** `WAREHOUSE`, beside `MARKET`/`HOME`/`WATER`. The address
   a loaded villager steers toward, reported by the caller exactly as the
@@ -110,13 +119,54 @@ BODY_PLANS['villager'] is all it takes to add a behaviour here"*.
 - **The drive:** burden. Unlike hunger or thirst it does not rise on a
   timer; its gain is what the villager is actually carrying, reported by
   the caller. That keeps the ethogram's contract (a drive is a gain in
-  0..1) while making "I am full" the thing that presses.
+  0..1) while making "I am full" the thing that presses. It is deliberately
+  a STEP and not a ramp: the haul wiring is the only one listening on the
+  store, so any gain above zero fires it, and a ramp would send a villager
+  off with one apple in hand and they would never work again.
 - **The priority:** below the survival drives and above company. A villager
   does not starve holding a sack, and does not stop for a chat with one.
 
 Nothing here replaces the abstract stock. A deposit is still
 `VillageMarket.add_stock`; what changes is that something walked there
 first.
+
+### Four things building it settled
+
+**An unreported need used to press hardest of all.** `BehaviorKernel` reads
+a gate that is absent from the drive vector as WIDE OPEN — right where it
+was written, since the mammal adapter publishes every drive it runs, so an
+absent one means "this wiring is ungated". Burden is the one villager gate
+nothing publishes: it is on no clock, so `Drives.gains()` has never heard of
+it and never will. Left alone, every villager within sight of a store would
+have set off to haul an imaginary load, ahead of ever taking a drink.
+`VillagerBehavior` now reads an unreported need as pressing nobody — the
+same contract its stimuli already kept for places, where a channel the
+caller did not report is simply not there.
+
+**Full hands gather nothing.** Not "the surplus is discarded": every unit a
+producer gathers costs the region a real herbivore, crop or fish through
+`NpcEconomy`'s own depletion calls. A producer who kept working with nowhere
+to put the take would go on killing for units nobody can hold. The walk to
+the store is what makes room, which is the point.
+
+**Carrying is opt-in, from the ground rather than the plan.**
+`NpcEconomy.carry_limit` defaults to 0.0 — do not carry, stock the village
+where you stand — and is raised only for a villager whose settlement really
+has a store. That is the same shape mechanism 2 gave `storage_capacity`, for
+the same reason: a limit that depends on which buildings stand belongs to
+whoever knows that. It also keeps pillar 1's caveat honest in the one place
+it matters most — a cramped village with no store must still be stocked, or
+"no room for a warehouse" would quietly become "famine". `VillageRenderer`
+reads the door off `buildings_in_chunk`, not off `VillageLayout`: the plan
+and the ground disagree on purpose, and a reloaded village never re-runs
+the founding placement at all.
+
+**How big a load is.** One villager's trip is a quarter of what a village
+keeps without a store — four trips fill a storeless village, forty fill one
+with a roof. That second ratio is the tuned number, and it is tuned by what
+it says about the BUILDING: a store that took one trip to fill would not be
+worth raising, and one that took a thousand would make hauling the only
+thing anybody ever did.
 
 ## Status
 
@@ -129,7 +179,15 @@ first.
   step from the ids actually standing — so losing the warehouse loses the
   headroom. `capacity_for_structures` keeps that decision testable without
   building a world.
-- ⬜ **Mechanism 3 — goods are carried in.** Not yet built.
+- ✅ **Mechanism 3 — goods are carried in.** `Ethogram` gained the
+  `WAREHOUSE` channel and the `DRIVE_BURDEN` gate (wired under every
+  survival need, over company, and with no `drives` profile entry so no
+  clock can raise it); `VillagerBehavior` gained the `HAUL` intent purely by
+  that wiring existing. `NpcEconomy` holds the take in `carried` until
+  `deliver_load`, and `NpcMarker` walks a loaded villager to
+  `warehouse_position` and empties their hands on arrival —
+  `VillageRenderer` hands every villager the door of the store that really
+  stands in their chunk.
 
 ## Known open questions
 

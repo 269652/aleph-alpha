@@ -68,7 +68,16 @@ var landmarks: Dictionary = {}
 ## `landmarks` -- that dictionary is the settlement's three SHARED landmarks,
 ## and every reader of it treats a key as a schedule location_tag with a prop
 ## to draw. The store already has a real building standing on it.
-var warehouse_position = null
+##
+## Setting it is also what decides whether this villager CARRIES at all: a
+## store to walk to is the whole reason a load is held rather than stocked
+## on the spot. Through a setter and again from setup_economy so the two can
+## be assigned in either order -- VillageRenderer sets the door first, an
+## isolated test may not.
+var warehouse_position = null:
+	set(value):
+		warehouse_position = value
+		_apply_carry_limit()
 var schedule: Array = []
 
 var _elapsed_time := 0.0
@@ -285,6 +294,16 @@ func setup_economy(market, household_wallet = null) -> void:
 	_field_index = -1
 	_on_real_field = false
 	_farmer = FarmerBehavior.new() if _field_crop != "" else null
+	_apply_carry_limit()
+
+
+## A villager with a store to carry to holds their take until they reach it;
+## one without keeps stocking the village outright, which is what a
+## settlement that went without a store still needs them to do.
+func _apply_carry_limit() -> void:
+	if economy == null:
+		return
+	economy.carry_limit = NpcEconomy.CARRY_LIMIT if warehouse_position != null else 0.0
 
 
 func _process(delta: float) -> void:

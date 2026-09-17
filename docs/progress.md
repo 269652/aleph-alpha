@@ -24508,3 +24508,130 @@ atlas the way road paving is (`TerrainRenderer.ROAD_TILE_ID` plus a
 than a sprite laid over it, and would let beds blend with neighbouring
 terrain, but it also entangles beds with the built-tile/occupancy rules that
 `modifications` drives — a much larger change than was asked for here.
+
+## Every village keeps a store, and somebody walks the goods to it (`concept/village_warehouse.md`, 2026-09-17)
+
+Asked for directly: *"Villages should also always build a Warehouse to keep
+stocks."* Clarified in two answers that shaped everything below — the store
+**stands from founding** rather than being earned, and it is a store in both
+senses: it **gates how much a village may keep** *and* **villagers really
+haul goods to it**.
+
+**Surveyed before designing, and the building turned out to be a prop.** A
+`warehouse` already existed: a real `BuildingCatalog` entity (4x3, wood 22 +
+plant_fibre 6, 42 labour hours), classed civic beside `city_hall`, and rung 3
+of `VillageGrowth`'s ladder behind a four-household gate. What it had was no
+connection to stock *at all* — `VillageMarket.stock` and `SettlementGranary`
+ran entirely abstractly and neither knew nor cared whether a warehouse stood.
+It was a building that looked like storage.
+
+✅ **Mechanism 1 — it stands from founding.** `VillageLayout` reserves a
+second plot on the plaza beside the one the `city_hall` already had, and
+`VillageRenderer._place_warehouse_if_missing` raises it with the houses and
+the well — not queued, not paid for, not owed. The ladder rung and
+`WAREHOUSE_MIN_HOUSEHOLDS` are **removed** rather than lowered: a rung that
+is satisfied before the ladder is ever consulted is not a rung, and leaving
+it in would make `next_building` return a target the village already has.
+
+Placement uses `place_building_over_roads`, like the hall and unlike the
+sawmill, and the reason is the doorstep: this plot's door opens straight onto
+the main street, so by the time placement runs its own front step is already
+paved and plain `place_building` refuses it — every time, over itself.
+
+⚠️ **One honest caveat on "always", found by building it.** The reserved plot
+sits on prime ground a house might have needed. On a cramped site, claiming
+it tipped the layout from "houses everyone" to "houses all but one" — and a
+site that cannot house its whole roster is founded **nowhere at all**.
+Reserving a store had therefore started quietly *deleting villages from the
+world*, which is far worse than a village without one. `VillageLayout.layout`
+now plans twice: with the store, and — only if that failed to house everybody
+— without it. A roomy site gets both; a cramped one houses its people and
+goes without. Caught by
+`test_a_building_already_occupying_ground_keeps_later_ones_off_it`, which
+founded nothing the moment the reservation was added.
+
+✅ **Mechanism 2 — the roof is the limit.** `VillageMarket.storage_capacity`
+clamps `add_stock`, the one seam every deposit already passed through:
+`HOUSEHOLD_CORNERS_CAPACITY` (20) for a village that keeps its stock in
+its corners, `WAREHOUSE_CAPACITY` (200) for one with a roof for it. It
+defaults to `INF`, so no existing caller — gathering, production, trade, the
+construction ledger — changed behaviour; `EarthChunkManager`'s settlement
+step sets it every step from the building ids **actually standing**, so a
+village that loses its warehouse loses the headroom with it. Overflow is
+discarded rather than queued: a full store turns a producer away, which is
+the pressure that makes the building worth having.
+
+This deliberately does **not** touch `SettlementFood.carrying_capacity`,
+despite the name. That one asks how many households the food on hand can
+*feed*; this asks how much stock the village may *hold*. Two different
+questions sharing an English word, and conflating them would stack a brand
+new mechanic on top of a famine chain that is already real and already
+tested.
+
+✅ **Mechanism 3 — goods are carried in.** A villager with full hands walks
+the load to the store door and puts it down there. Built as a **wiring on
+the existing villager ethogram**, not a second movement system:
+`Ethogram` gained the `WAREHOUSE` channel on the one shared basis and the
+`DRIVE_BURDEN` gate, and `VillagerBehavior` gained its `HAUL` intent purely
+by that wiring existing — its header has always claimed that was all it took,
+and this is the first behaviour actually added that way. `NpcEconomy` holds
+the take in `carried` until `deliver_load`; `NpcMarker` walks a loaded
+villager to `warehouse_position` and empties their hands on arrival, the same
+"arriving is what answers it" rule the well and the bed already run on.
+
+Burden is the one villager gate with **no clock**: it has no `drive_profile`
+entry anywhere, so `Drives` cannot raise it while a villager stands still.
+What presses is what is really in their hands.
+
+### What building mechanism 3 settled
+
+**An unreported need used to press hardest of all.** `BehaviorKernel` reads a
+gate absent from the drive vector as **wide open** — correct where it was
+written, since the mammal adapter publishes every drive it runs, so an absent
+one means "ungated". Burden is the one gate nothing publishes. Left alone,
+every villager in sight of a store would have hauled an imaginary load,
+forever, *ahead of ever taking a drink*. `VillagerBehavior` now reads an
+unreported need as pressing nobody — the same contract its stimuli already
+kept for places.
+
+**burden() is a step, not a ramp.** The haul wiring is the only one listening
+on the store, so any gain above zero fires it; a ramp would send a villager
+off with one apple in hand and they would never do a day's work again.
+
+**Full hands gather nothing.** Not "the surplus is discarded" — every unit a
+producer gathers costs the region a real herbivore, crop or fish through
+`NpcEconomy`'s depletion calls, so a producer working with nowhere to put the
+take would go on killing for units nobody can hold.
+
+**Carrying is opt-in, and read off the ground rather than the plan.**
+`carry_limit` defaults to 0.0 (stock the village where you stand) and is
+raised only for a villager whose settlement really has a store — the same
+shape mechanism 2 gave `storage_capacity`, and the one place pillar 1's
+caveat matters most: a cramped village with no store must still be stocked,
+or "no room for a warehouse" would quietly have meant "famine".
+`VillageRenderer._warehouse_door` reads `buildings_in_chunk`, not
+`VillageLayout`, because the plan and the ground disagree on purpose and a
+reloaded village never re-runs the founding placement at all.
+
+**How big a load is.** One trip is a quarter of what a village keeps without
+a store: four trips fill a storeless village, forty fill one with a roof.
+That second ratio is the tuned number and it is tuned by what it says about
+the *building* — a store filled in one trip would not be worth raising.
+
+TDD throughout, red first: `test_village_layout` 74/74, `test_village_growth`
+16/16, `test_village_renderer` 96/96, `test_village_market` 25/25,
+`test_settlement_granary` 20/20, `test_settlement_food` 28/28,
+`test_ethogram` + `test_villager_behavior` 72/72, `test_npc_economy` 74/74,
+`test_npc_marker` 52/52.
+
+### Still open
+
+- **What counts toward the ceiling.** Mechanism 2 caps stock as a whole. A
+  per-item ceiling (grain and iron do not share a shelf) is the obvious
+  refinement and was deliberately not attempted first.
+- **Who hauls.** Every villager has the wiring. Whether hauling should belong
+  to an occupation instead — a carter, a porter — is a question for once it
+  is visibly running.
+- **Nothing comes back OUT of the store on foot.** A hungry villager still
+  buys their meal from the abstract market wherever they are standing. The
+  goods now arrive somewhere; they still leave from nowhere.
