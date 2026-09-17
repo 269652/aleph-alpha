@@ -1855,21 +1855,44 @@ func _paving_reachable_from_the_spine(world: StubWorld, coord: Vector2i) -> Dict
 	return seen
 
 
+## Every settlement chunk in `row` whose roster includes a farmer, up to
+## `limit` of them -- one village can easily have frontage on its own main
+## street (paved end to end) and prove nothing about the further rows,
+## which is where the report's farmhouse actually stood.
+func _settlement_chunks_with_farmers(row: int, limit: int) -> Array:
+	var found: Array = []
+	for x in 400:
+		var coord := Vector2i(x, row)
+		if not _generator.has_settlement_at(coord, "grassland"):
+			continue
+		if _farming_villager_count(coord) > 0:
+			found.append(coord)
+			if found.size() >= limit:
+				break
+	return found
+
+
 func test_every_farmhouse_doorstep_really_joins_the_villages_own_streets():
-	var coord := _find_settlement_chunk_with_occupation("grassland", "farmer", 3)
-	var world := StubWorld.new()
-	renderer.spawn_village(parent, coord, coord * CHUNK_SIZE, CHUNK_SIZE, TILE_SIZE, "grassland", world)
-	var farmhouses := _buildings_of(world, VillageFarm.FARM_BUILDING_ID)
-	assert_gt(farmhouses.size(), 0, "precondition: a farmhouse was raised")
-	var network := _paving_reachable_from_the_spine(world, coord)
-	for call in farmhouses:
-		var doorstep: Vector2i = (
-			call["origin_local"] + BuildingCatalog.doorstep_of(VillageFarm.FARM_BUILDING_ID)
-		)
-		assert_true(
-			network.has(doorstep),
-			(
-				"the farmhouse at %s opens onto %s, which no street reaches -- "
-				+ "a farm nobody can walk to is not part of the village"
-			) % [str(call["origin_local"]), str(doorstep)]
-		)
+	var coords := _settlement_chunks_with_farmers(3, 6)
+	assert_gt(coords.size(), 0, "precondition: settlement chunks with a farmer in them")
+	var farmhouses_seen := 0
+	var stranded: Array = []
+	for coord in coords:
+		var world := StubWorld.new()
+		renderer.spawn_village(parent, coord, coord * CHUNK_SIZE, CHUNK_SIZE, TILE_SIZE, "grassland", world)
+		var network := _paving_reachable_from_the_spine(world, coord)
+		for call in _buildings_of(world, VillageFarm.FARM_BUILDING_ID):
+			farmhouses_seen += 1
+			var doorstep: Vector2i = (
+				call["origin_local"] + BuildingCatalog.doorstep_of(VillageFarm.FARM_BUILDING_ID)
+			)
+			if not network.has(doorstep):
+				stranded.append("%s: farmhouse %s opens onto %s" % [str(coord), str(call["origin_local"]), str(doorstep)])
+	assert_gt(farmhouses_seen, 0, "precondition: farmhouses were raised")
+	assert_eq(
+		stranded.size(), 0,
+		(
+			"%d of %d farmhouses open onto paving no street reaches -- a farm "
+			+ "nobody can walk to is not part of the village: %s"
+		) % [stranded.size(), farmhouses_seen, str(stranded.slice(0, 4))]
+	)
