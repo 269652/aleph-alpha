@@ -288,7 +288,6 @@ func layout(
 	# tie-back that ties something back" rule side_street_cells follows.
 	var pending_lane_cells: Array = []
 	while index < building_ids.size() and current_street_y < chunk_size - _EDGE_MARGIN_TILES:
-		var progressed_this_street := false
 		var x := maxi(spine_x0 + _GATE_CLEARANCE_TILES, street_x0)
 		var street_doorstep_xs: Array = []
 		var attempts_for_current_index := 0
@@ -321,7 +320,6 @@ func layout(
 				street_doorstep_xs.append(doorstep.x)
 				x += footprint.x + PLOT_GAP_TILES
 				index += 1
-				progressed_this_street = true
 				attempts_for_current_index = 0
 				if current_street_y != street_y:
 					second_street_got_a_plot = true
@@ -363,24 +361,19 @@ func layout(
 			for cell in pending_lane_cells:
 				road_cells[cell] = true
 			pending_lane_cells.clear()
-		if not progressed_this_street:
-			# A spine whose whole run is taken by the SQUARE placed nothing
-			# for that reason, not because the village has nowhere to live:
-			# its houses belong on the next street, reached by the gate lane
-			# below. Measured on chunk (661,139) near lat 49.8 lon 10.6,
-			# whose dry pocket is about nine tiles -- just the square and no
-			# more -- where breaking here left a village with a market
-			# square and not one house.
-			#
-			# Bounded, and deliberately: only the spine gets this, and only
-			# while nothing at all has been placed. A further street that
-			# places nothing still ends the village, so a chunk is never
-			# walked to the bottom placing nothing.
-			var blocked_by_the_square: bool = (
-				has_plaza and current_street_y == street_y and plots.is_empty()
-			)
-			if not blocked_by_the_square:
-				break
+		# A street that places nothing no longer ends the village. Asked for
+		# directly: "the square wins; houses should just be moved further
+		# away connected by streets". A street can come up empty because
+		# the square took the whole spine, or because that row happens to
+		# be water -- neither means this village has nowhere to live, and
+		# giving up there is what left a riverside village with a market
+		# square and one house (chunk (661,139) near lat 49.8 lon 10.6).
+		#
+		# The walk stays bounded by the chunk without needing a break: a
+		# further street only opens while it is inside the edge margin
+		# (the loop's own condition), and only when the gate lane reaching
+		# it is really clear -- so looking further costs iterations and
+		# nothing else.
 		var next_street_y := current_street_y + STREET_PITCH_TILES
 		# EVERY further street is tied back by the gate lane, square or no
 		# square. Without a square there is nothing else to hang one on --

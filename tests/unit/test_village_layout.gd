@@ -967,3 +967,66 @@ func test_a_village_whose_only_dry_ground_is_at_the_margin_gets_its_square():
 	assert_true((result["plaza"] as Rect2i).has_area(), "a square, at last")
 	assert_false((result["civic_plot"] as Dictionary).is_empty(), "and somewhere to put a hall")
 	assert_gt(result["plots"].size(), 0, "and people still live there")
+
+
+# -- houses move further out rather than being given up on ----------------
+#
+# Asked for directly: "the square wins; houses should just be moved further
+# away connected by streets". A street that places nothing used to end the
+# village outright, so a village whose near ground was water simply lost the
+# houses it could have put two streets further out.
+#
+# The walk is bounded by the chunk either way (a further street only opens
+# while it is inside the edge margin, and only when the gate lane reaching
+# it is clear), so looking further costs nothing but iterations.
+
+
+## Buildable everywhere except the rows a street's own plots would need,
+## for the FIRST `blocked_streets` streets -- EXCEPT along the lane column,
+## which has to stay walkable or the far ground is not reachable at all
+## (and then the village should not settle there, which is a different
+## rule).
+func _near_streets_blocked(street_y: int, blocked_streets: int, lane_x: int) -> Callable:
+	return func(cell: Vector2i) -> bool:
+		if cell.x == lane_x:
+			return true
+		for i in blocked_streets:
+			var street: int = street_y + i * VillageLayout.STREET_PITCH_TILES
+			if cell.y == street - 1 or cell.y == street - 2:
+				return false
+		return true
+
+
+func test_houses_go_two_streets_out_when_the_near_ones_cannot_take_them():
+	var street_y: int = VillageLayout.skeleton(CHUNK_SIZE, 51)["street_y"]
+	var five := ["house_small", "house_small", "house_small", "house_small", "house_small"]
+	var result := layout.layout(
+		five, CHUNK_SIZE, 51,
+		_near_streets_blocked(street_y, 2, VillageLayout.skeleton(CHUNK_SIZE, 51)["street_x0"]),
+		_never_occupied
+	)
+	assert_gt(result["plots"].size(), 0, "a village does not give up on the ground it can still use")
+	var furthest := street_y
+	for plot in result["plots"]:
+		furthest = maxi(furthest, (plot["origin"] as Vector2i).y)
+	assert_gt(
+		furthest, street_y + VillageLayout.STREET_PITCH_TILES,
+		"the houses went past the streets that could not take them"
+	)
+
+
+func test_and_every_one_of_them_is_still_connected():
+	var street_y: int = VillageLayout.skeleton(CHUNK_SIZE, 51)["street_y"]
+	var five := ["house_small", "house_small", "house_small", "house_small", "house_small"]
+	var result := layout.layout(
+		five, CHUNK_SIZE, 51,
+		_near_streets_blocked(street_y, 2, VillageLayout.skeleton(CHUNK_SIZE, 51)["street_x0"]),
+		_never_occupied
+	)
+	var roads: Array = result["road_cells"]
+	var reached := _reachable_road_cells(roads, result["plots"][0]["doorstep"])
+	for plot in result["plots"]:
+		assert_true(
+			reached.has(plot["doorstep"]),
+			"a house at %s nobody can walk to" % str(plot["origin"])
+		)
