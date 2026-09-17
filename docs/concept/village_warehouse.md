@@ -4,7 +4,8 @@ Asked directly: *"Villages should also always build a Warehouse to keep
 stocks."*
 
 A `warehouse` already existed before this doc: a real `BuildingCatalog`
-entity (4x3, wood 22 + plant_fibre 6, 42 labour hours, capacity 0), classed
+entity (3x3 — 4x3 until 2026-09-17, see building.md's "Building
+sheets"; wood 22 + plant_fibre 6, 42 labour hours, capacity 0), classed
 civic beside `city_hall`, and rung 3 of `VillageGrowth`'s ladder behind a
 four-household threshold. What it did NOT have was any connection to stock
 at all — `VillageMarket.stock` and `SettlementGranary` ran entirely

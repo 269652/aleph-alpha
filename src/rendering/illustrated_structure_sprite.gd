@@ -27,16 +27,21 @@ extends RefCounted
 ## - farmhouse.png: 6 columns x 5 rows. sawmill.png/warehouse.png/
 ##   city_hall.png: 8 columns x 5 rows (city_hall.png verified against the
 ##   same crop-and-view check, confirming the identical grid its sheet
-##   shares with sawmill/warehouse). Columns divide the 1536px width evenly
-##   (256px/192px); rows do NOT divide the 1024px height evenly
-##   (1024/5 = 204.8) -- row boundaries are computed by cumulative rounding
-##   (round(1024*i/5)) so 5 unequal integer rows still sum exactly to 1024,
-##   rather than a flat cell height that drifts and bleeds into the next
-##   row.
-## - wooden_fence.png: 4 columns x 4 rows, both axes dividing 1536x1024
-##   perfectly evenly (384x256) -- no special rounding needed, but the same
-##   cumulative-rounding helper is reused for both anyway (a no-op on an
-##   even division).
+##   shares with sawmill/warehouse). wooden_fence.png: 4 columns x 4 rows.
+## - The COLUMNS are on an exact pitch: 1536/8 is 192 and 1536/6 is 256,
+##   and profiling the sheets confirms the art in every column really does
+##   start ~12px inside one of 0, 192, 384 ... 1344. So a column is cut by
+##   even division, minus CELL_INSET for the rule line the sheets draw on
+##   the boundary.
+## - The ROWS are on NO pitch at all, and two different wrong guesses were
+##   shipped before that was measured. warehouse.png's drawn row
+##   boundaries sit at 188, 376, 566 and 786; sawmill.png's at 190, 387,
+##   578 and 789; city_hall.png's and blacksmith.png's elsewhere again.
+##   An even fifth of the canvas (204.8) clipped 9px off sagewerk's roof;
+##   the column pitch (192) clipped 13px off city_hall's footings, 26 off
+##   blacksmith's last row, and cut wooden_fence's 256px rows at 384. So
+##   rows are READ OFF THE SHEET by VariantSheetGrid.content_bands, which
+##   falls back to even division on any sheet it cannot resolve.
 ##
 ## Chroma key: farmhouse.png/wooden_fence.png key on magenta (their real
 ## background). sawmill.png/warehouse.png/city_hall.png key on near-black
@@ -511,13 +516,26 @@ func _cell_rect_for(
 				_span(_band(path, image, columns, grid, false)[column]),
 				_span(_band(path, image, rows, grid, true)[row])
 			)
-	return _cell_rect(image, columns, rows, row, column)
+	# The even grid is even on ONE axis. Columns really are on a pitch
+	# (1536/8 is exactly 192, and every column's art starts ~12px inside
+	# it); rows are not, so they are read off the sheet itself.
+	var band: Vector2i = _band(path, image, rows, _CONTENT_ROWS, true)[clampi(row, 0, rows - 1)]
+	var cell := _cell_rect(image, columns, rows, row, column)
+	return Rect2i(cell.position.x, band.x, cell.size.x, band.y - band.x + 1)
+
+
+## Cache key for the row bands read off a fixed-grid sheet's own art. Not
+## one of the GRID_* kinds a subject declares -- it is how the rows of the
+## GRID_EVEN kind are found, not a grid a caller can ask for.
+const _CONTENT_ROWS := "content_rows"
 
 
 func _band(path: String, image: Image, count: int, grid: String, horizontal: bool) -> Array:
 	var key := "%s|%s|%d|%s" % [path, grid, count, "rows" if horizontal else "columns"]
 	if not _grid_band_cache.has(key):
-		if grid == GRID_DIVIDERS:
+		if grid == _CONTENT_ROWS:
+			_grid_band_cache[key] = VariantSheetGrid.content_bands(image, count, horizontal)
+		elif grid == GRID_DIVIDERS:
 			_grid_band_cache[key] = VariantSheetGrid.art_bands(image, count, horizontal)
 		else:
 			_grid_band_cache[key] = (
@@ -555,21 +573,19 @@ func _cell_rect(image: Image, columns: int, rows: int, row: int, column: int) ->
 	return even_cell_crop(image.get_width(), image.get_height(), columns, rows, row, column)
 
 
-## Where cell (row, column) sits on a sheet whose cells are drawn on an
-## even grid -- SQUARE cells, sized by the column pitch, anchored top-left.
+## The COLUMN grid: square cells sized by the column pitch, anchored
+## top-left. Only the horizontal half of this rect is used for a real
+## frame -- the vertical half comes from the sheet's own drawn rows (see
+## this file's header) -- but it stays square so the two axes can be
+## compared, and so the inset below trims the same amount either way.
 ##
-## The square part is the whole correction, and it is measured rather than
-## assumed. Every production/civic sheet on disk is 1536x1024: 1536/8 is
-## exactly 192, but 1024/5 is 204.8, so dividing the canvas evenly on BOTH
-## axes walked every row after the first progressively further down the
-## sheet (0, +13, +26, +38, +51px) -- at a 192px cell, a quarter of a cell
-## of the next row's art. Reported live as "the warehouse has the rows
-## cropped wrongly". The art really is drawn in square 192x192 cells with
-## the remaining 64px of canvas left as slack, confirmed by profiling the
-## real gutters (they sit at 192, 384, 576, not at 205, 410, 614).
+## The pitch is measured, not assumed: every production/civic sheet on
+## disk is 1536x1024, 1536/8 is exactly 192, and the art in each column
+## starts ~12px inside one of 0, 192, 384 ... 1344 on all four 8-column
+## sheets.
 ##
-## A sheet whose canvas ALREADY matches its grid exactly is cut exactly as
-## before (pinned by
+## A sheet whose canvas ALREADY matches its grid exactly is divided exactly
+## as before (pinned by
 ## test_a_sheet_that_already_divided_evenly_is_cut_exactly_as_before), so
 ## this only changes what was wrong.
 ##

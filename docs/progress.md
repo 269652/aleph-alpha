@@ -24664,7 +24664,8 @@ senses: it **gates how much a village may keep** *and* **villagers really
 haul goods to it**.
 
 **Surveyed before designing, and the building turned out to be a prop.** A
-`warehouse` already existed: a real `BuildingCatalog` entity (4x3, wood 22 +
+`warehouse` already existed: a real `BuildingCatalog` entity (4x3 then, 3x3
+since — see the sheet-rows entry below; wood 22 +
 plant_fibre 6, 42 labour hours), classed civic beside `city_hall`, and rung 3
 of `VillageGrowth`'s ladder behind a four-household gate. What it had was no
 connection to stock *at all* — `VillageMarket.stock` and `SettlementGranary`
@@ -25311,53 +25312,80 @@ Tests: `test_wage_payment.gd` 6/6 (new), `test_world_planner_mode_wiring.gd`
 +4, 145/145 across the planner, wage, wallet, hiring, construction-store and
 catchup suites — zero regressions. `world.gd` confirmed to compile.
 
-### The building sheets' rows were cropped off the grid the art is drawn on (see `docs/concept/building.md` "Building sheets", 2026-09-17)
+### The building sheets' rows were cropped off the rows the art is drawn on (see `docs/concept/building.md` "Building sheets", 2026-09-17)
 
 Reported in play: *"The warehouse has the rows cropped wrongly and its
 scale as well. should be only 3 tiles wide not 4."*
 
-✅ **Two separate faults, both measured rather than guessed.**
+✅ **Three faults. The row one took two wrong answers before it was
+actually measured, and that history is recorded here rather than tidied
+away.**
 
-**The rows.** Every production/civic sheet is 1536×1024. 1536/8 is exactly
-192, but **1024/5 is 204.8** — and `_cell_rect` divided the canvas evenly on
-both axes, so every row after the first was cropped progressively further
-down the sheet (0, +13, +26, +38, +51px), up to a quarter of a cell into the
-next row's art. Profiling the sheets' own gutters puts the real row
-boundaries at **192, 384, 576** — a 192 pitch — with 5×192 = 960 and the
-remaining **64px of canvas left as slack**. `IllustratedStructureSprite.
-even_cell_rect` now cuts square cells sized by the column pitch, anchored
-top-left, clamped to the canvas. A sheet whose canvas already matches its
-grid is cut exactly as before (pinned), so the rule only changes what was
-wrong — and it fixes `sawmill`, `farmhouse`, `blacksmith`, `brewery` and
-`city_hall` too, not just the warehouse.
+**The rows — and two shipped guesses.** Every production/civic sheet is
+1536×1024. `_cell_rect` first divided the canvas evenly on both axes:
+1024/5 is **204.8**, so every row after the first was cropped progressively
+further down (0, +13, +26, +38, +51px). The first fix read the sheets'
+gutters, found boundaries at 192, 384, 576, and cut on a **192 pitch** — but
+that was the COLUMN profile read as if it were the row profile. Scanning
+each axis separately settles it:
+
+- **Columns really are on a pitch.** 1536/8 = 192, and the art in every
+  column starts ~12px inside one of 0, 192, 384 … 1344, on all four
+  8-column sheets. Columns are still cut by even division.
+- **Rows are on no pitch at all.** The drawn boundaries are at 188, 376,
+  566, 786 on `warehouse`; 190, 387, 578, 789 on `sawmill`; elsewhere again
+  on `city_hall` and `blacksmith`. The 204.8 cut clipped 9px off `sawmill`'s
+  roof; the 192 cut clipped 13px off `city_hall`'s footings, 26px off
+  `blacksmith`'s last row, and cut `wooden_fence`'s real 256px rows at 384 —
+  a regression the 192 fix introduced and this one removes.
+
+So rows are now **read off the sheet**: `VariantSheetGrid.content_bands`
+(new) finds the bands holding real drawing — not the dark cell background,
+not the magenta margin, not the rule line between cells — and falls back to
+even division on any sheet it cannot resolve, the same "still cuts, just
+evenly" contract `row_bands`/`art_bands` already keep. Its `CONTENT_ART_SHARE`
+is pinned against all five real sheets rather than eyeballed: at 2% every one
+resolves to its 5 drawn rows, at 1% `city_hall` splits into 7 and `farmhouse`
+into 6, at 5% `sawmill` splits into 6.
+
+**The divider fringe.** The sheets draw a thin near-white rule line on every
+cell boundary and around the canvas. It is neither magenta nor near-black,
+so neither chroma key removes it, and a cell cut exactly on the grid kept it
+as a hard opaque hairline up its own edge — 196 such pixels on `sagewerk`'s
+idle frame. `even_cell_crop` takes `CELL_INSET` = 3px off all four edges
+(the line measures 1–3px and the art starts 8px in, both measured), and
+`inset_for_cell` declines the inset on any cell too small to spare
+`MAX_INSET_SHARE` = 10% of itself. 0 fringe pixels on all three black-keyed
+sheets afterwards.
 
 **The scale.** `footprint_frame_texture` scales a frame so its WIDTH equals
 `tile_size × footprint_width`, so a warehouse declaring 4 tiles was drawn a
 third wider than its own plot. Its footprint is now `Vector2i(3, 3)` — 3
-wide as reported, and square, which is what its art is drawn in.
+wide as reported.
 
-✅ **A test that had the bug written into it is corrected, not worked
+✅ **Two tests that had a bug written into them are corrected, not worked
 around.** `test_footprint_texture_preserves_aspect_ratio_taller_than_the_tile`
-asserted these cells are "192 wide x ~205 tall" and that a width-anchored
-scale therefore leaves the height greater than one tile. ~205 is 1024/5 —
-the even division itself — so the test was pinning the mis-crop as the
-contract. It now asserts what the art really is (square cells stay square);
-the general scaling rule it referenced,
-`test_footprint_texture_height_matches_the_idle_images_own_aspect_ratio`,
-still covers all five subjects unchanged.
+asserted these cells are "192 wide × ~205 tall" — ~205 being the even
+division itself, so the test pinned the mis-crop as the contract. It was
+rewritten to assert square 192×192 cells, which was the second wrong guess.
+It now pins the property no pitch can have: the three same-size sheets are
+cut to **three different heights** (`sagewerk` 186×183, `storage` 186×169,
+`city_hall` 186×186), because each artist drew a different row. The general
+scaling rule, `test_footprint_texture_height_matches_the_idle_images_own_
+aspect_ratio`, still covers all five subjects unchanged, and
+`even_cell_rect` still divides an already-even sheet exactly as before
+(pinned) — the grid and the divider trim are separate functions precisely so
+that guarantee keeps meaning what it said.
 
-Verified by rendering all 40 warehouse cells through the real crop and
-looking at them — every building sits cleanly inside its cell with no
-bleed from the row below.
+🚧 **`city_hall` still declares a 4×3 footprint**, so it draws 4 tiles wide
+over a 3-wide plot. Left alone deliberately: its plot is sized by
+`VillageLayout`'s civic slot and changing it would move buildings in
+existing villages. Named rather than silently changed.
 
-🚧 **`city_hall` still declares a 4×3 footprint against square art**, so it
-draws 4 tiles tall over a 3-tall plot. Left alone deliberately: its plot is
-sized by `VillageLayout`'s civic slot and changing it would move buildings
-in existing villages. Named rather than silently changed.
-
-Tests: `test_structure_sheet_cells.gd` 7/7 (new),
-`test_illustrated_structure_sprite.gd` green, 205/207 across the sheet,
-catalog, village-layout and village-growth suites — the 2 failures are
-`test_building_catalog.gd`'s pre-existing "lumberjack" occupation-pool
-failure, which arrived with main's own recent work and which this branch
-does not touch.
+Tests: `test_structure_sheet_cells.gd` 14/14 (new),
+`test_variant_sheet_grid.gd` 21/21 (+6, including the real-sheet threshold
+pin), `test_illustrated_structure_sprite.gd` 39/39 (+3). Pre-existing
+failures on `main` that this branch does not touch: `test_building_catalog.
+gd`'s "lumberjack" occupation-pool failure, and a parse error in
+`test_earth_chunk_manager_far_chunk_advance.gd` (a test double's `advance`
+signature no longer matches its parent) — both identical to `origin/main`.
