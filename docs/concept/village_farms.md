@@ -225,9 +225,23 @@ rails/posts and plant_fibre (4) lashing them".
   in a street row stays forbidden, which is what that rule was really about:
   a crop in the roadway is not a crop.
 
-- **A bed is cleared before it is sown.** Asked for directly: *"long grass
-  should be cleared before planting"*. Tilling a bed blocks the chunk's
-  ground cover on that cell — tall grass, flowers, desert scrub, tundra
+  A *short* unpaved gap is not one of those cells at all any more: the
+  village closes it as street before any rail is raised
+  ([infrastructure.md](infrastructure.md), "A village closes the short holes
+  in its own streets"), so the frame meets real paving there and takes it as
+  a gate. That ordering is what stops the two rules colliding into a fence
+  laid across a road.
+
+- **A bed is cleared before it is sown, and so is its fence line.** Asked
+  for directly: *"long grass should be cleared before planting"*, then
+  *"the grass should be cleared on the fence tiles as well"* — a frame was
+  being raised straight through standing long grass, so the fence line read
+  as a row of posts lost in a meadow. A rail is one of
+  `EarthChunkManager._is_built_surface`'s own cells now, alongside a
+  building piece and a laid road, so raising one clears what stands there
+  and pulling one out gives the ground back: a torn-out fence line is
+  ordinary ground again, not a permanent scar. Tilling a bed blocks the
+  chunk's ground cover on that cell — tall grass, flowers, desert scrub, tundra
   lichen — through the same seam a building's own floor already uses
   ([building.md](building.md)'s *"grass must be cut before and can't grow
   back inside a house"*), so a farmer no longer plants wheat into a standing

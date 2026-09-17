@@ -13743,14 +13743,28 @@ func _built_local_cells(chunk: Chunk) -> Array:
 	return cells
 
 
-## A cell nothing grows on: a real building piece, or a laid road (docs/
+## A cell nothing grows on: a real building piece, a laid road (docs/
 ## concept/infrastructure.md's Road tier -- a placed surface, unlike the
-## worn path/trail tiers, which stay open ground). The one predicate
-## build_at_global/destroy_at_global/_built_local_cells share for ground
-## cover; buildings (BuildingCatalog.occupies) are checked alongside it
-## where footprints matter.
+## worn path/trail tiers, which stay open ground), or a village farm's own
+## rail. The one predicate build_at_global/destroy_at_global/
+## _built_local_cells share for ground cover; buildings
+## (BuildingCatalog.occupies) are checked alongside it where footprints
+## matter.
+##
+## The rails are here because of a direct report: *"the grass should be
+## cleared on the fence tiles as well"*. A frame was being raised straight
+## through standing long grass, so a fence line read as a row of posts lost
+## in a meadow -- the same thing tilling a bed already fixes for the ground
+## inside the frame (see till_and_plant_farm_plot_at_global). Unlike a bed,
+## a rail gives its ground back when it is pulled out: destroy_at_global
+## shares this predicate, so a torn-out fence line is ordinary ground again
+## rather than a permanent scar.
 func _is_built_surface(tile_id: String) -> bool:
-	return BuildingPiece.has_piece(tile_id) or TerrainRenderer.is_road_tile(tile_id)
+	return (
+		BuildingPiece.has_piece(tile_id)
+		or TerrainRenderer.is_road_tile(tile_id)
+		or VillageFarm.is_fence_tile(tile_id)
+	)
 
 
 func _clear_vegetation_on_cells(

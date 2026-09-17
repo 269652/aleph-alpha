@@ -48,6 +48,20 @@ const STREET_GAP_TILES := 2
 ## the fixed row distance between one street and the next. Pinned by
 ## test_village_layout.gd against the catalog itself.
 const STREET_PITCH_TILES := 3 + STREET_GAP_TILES
+
+## The widest hole in a street row a village will simply pave over.
+##
+## Asked for directly, with the broken stretch in shot: *"When there's only
+## a free gap of 1-2 tiles between two street tiles it should close the gap
+## between them"*. A street row is paved only between the doorsteps the
+## founding layout actually joined, so it comes out as paved stretches with
+## holes punched through them -- and a one- or two-tile hole in a road reads
+## as a mistake rather than as a junction. Three is a real break the village
+## genuinely did not pave, and closing it would be inventing a road.
+##
+## Pinned by test_the_gap_a_village_closes_is_the_one_that_was_asked_for
+## rather than left as a number in a comment.
+const STREET_GAP_CLOSE_TILES := 2
 ## Kept off the chunk's own edge -- a plot flush against the border risks
 ## its footprint or doorstep spilling into the next chunk once translated
 ## to global coordinates (the same chunk-edge caution the old ring layout
@@ -1003,3 +1017,56 @@ static func _chosen_street_run(
 		if r.y - r.x > best.y - best.x:
 			best = r
 	return best
+
+
+## The cells that CLOSE short holes in this village's own street rows (see
+## STREET_GAP_CLOSE_TILES), in (y, x) order so the same village always
+## closes the same gaps with nothing stored.
+##
+## A run of unpaved cells is a HOLE only when paving stands immediately on
+## both sides of it: a run that reaches the edge of the chunk has nothing on
+## its far side to join, and is where the street genuinely ends. A hole is
+## closed whole or not at all -- a run with anything standing in it (`is_free`
+## says no) is ground somebody is using, not a gap in a road.
+##
+## Pure: `is_paved` and `is_free` answer for one local cell each, the same
+## Callable shape VillageFarm.field_rect and _cell_clear already take, so
+## this needs no world to test and invents nothing that is not already
+## derivable from the skeleton.
+static func short_street_gap_cells(
+	is_paved: Callable, is_free: Callable, chunk_size: int, street_y: int, max_gap: int
+) -> Array:
+	var cells: Array = []
+	if chunk_size <= 0 or max_gap <= 0:
+		return cells
+	var y := street_y
+	while y < chunk_size:
+		if y >= 0:
+			_close_row_gaps(cells, is_paved, is_free, chunk_size, y, max_gap)
+		y += STREET_PITCH_TILES
+	return cells
+
+
+static func _close_row_gaps(
+	cells: Array, is_paved: Callable, is_free: Callable, chunk_size: int, y: int, max_gap: int
+) -> void:
+	var x := 0
+	while x < chunk_size:
+		if is_paved.call(Vector2i(x, y)):
+			x += 1
+			continue
+		var start := x
+		while x < chunk_size and not is_paved.call(Vector2i(x, y)):
+			x += 1
+		# `x` now sits on the first paved cell after the run, or past the end.
+		if start == 0 or x >= chunk_size:
+			continue  # an open end: nothing on the far side to join
+		if x - start > max_gap:
+			continue  # a real break in the street, not a hole in one
+		var run: Array = []
+		for gap_x in range(start, x):
+			if not is_free.call(Vector2i(gap_x, y)):
+				run.clear()
+				break
+			run.append(Vector2i(gap_x, y))
+		cells.append_array(run)
