@@ -8,17 +8,24 @@ extends RefCounted
 ## stays fully headless-testable the same way LeafLitterRenderer's own
 ## static timing functions are (see that file's own doc comment).
 
-## 32 frames: an 8-column x 4-row illustrated sheet (see IntroSplashSheet),
-## the same grid shape as this project's other illustrated animation
-## sheets (e.g. worm.png).
-const FRAME_COUNT := 40
+## 120 frames: the sheet is a 20-column x 6-row contact sheet (see
+## IntroSplashSheet). Cross-pinned to what the sheet really yields by
+## test_frame_count_matches_the_sequencer, which is what catches the art
+## being replaced with a differently-shaped one -- as it was twice in one
+## day (8x5 -> 20x6).
+const FRAME_COUNT := 120
 
-## Deliberately chunky, not smooth -- a fast 24-30fps readback would fight
-## the sheet's own hand-illustrated pixel-art style (see
-## docs/concept/pixel_art_engine.md: "16-bit-styled game"), the same
-## "hard-edged steps, not a continuous blend" reasoning that governs every
-## other pixel-art timing constant in this codebase.
-const FPS := 10.0
+## The rate the sheet itself declares: every cell carries its own timestamp,
+## and they run 0.00s to 4.96s in steps of 1/24 -- 24fps, five seconds.
+##
+## It was 10fps while the art was a hand-illustrated 40-frame sheet, chosen
+## deliberately chunky so a smooth readback would not fight this game's
+## 16-bit house style (docs/concept/pixel_art_engine.md). That reasoning
+## does not carry over: this art is a photoreal globe rendered at 24, and
+## playing it at 10 would both stutter its own rotation and stretch a
+## five-second intro to twelve. Honouring the timing the art was authored
+## at is the one number that cannot be wrong.
+const FPS := 24.0
 
 
 ## Which of the FRAME_COUNT frames should be showing after `elapsed_seconds`

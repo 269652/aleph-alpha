@@ -3,6 +3,7 @@ extends GutTest
 const IllustratedGrassPatch = preload("res://src/rendering/illustrated_grass_patch.gd")
 const SeasonalFoliage = preload("res://src/rendering/seasonal_foliage.gd")
 const GroundTint = preload("res://src/rendering/ground_tint.gd")
+const CharacterView = preload("res://scenes/character_view.gd")
 const SpriteSheetLoader = preload("res://src/rendering/sprite_sheet_loader.gd")
 const SpriteSheetSlicer = preload("res://src/rendering/sprite_sheet_slicer.gd")
 ## Cross-pins rather than restated numbers: the bend the card has to make
@@ -673,6 +674,27 @@ func test_a_walkers_push_leans_a_blade_over_without_laying_it_flat():
 	)
 
 
+## Reported live: "now the grassblades don't part enough they should
+## visible part about the width of the char."
+##
+## That is a real, measurable target rather than a feeling, so the lean is
+## pinned to it here rather than eyeballed: a walker parts the grass by
+## their own width. The character's body is 26px wide at CharacterView's own
+## computed SCALE -- 12.45 world units against a 16-unit card -- so the tip
+## of a blade has to travel that far, which is a 51-degree lean. At the 35
+## degrees the previous round tuned to (a deliberate step back from a bend
+## that laid every tuft flat) a tip moved 9.2 units, about three quarters of
+## a character: visible, and less than asked for.
+func test_a_walker_parts_the_grass_by_about_their_own_width():
+	var character_width: float = float(CharacterView.BODY_SIZE.x) * CharacterView.SCALE
+	var tip := Vector2(0.0, -IllustratedGrassPatch.WORLD_SIZE)
+	var bent: Vector2 = IllustratedGrassPatch.bent_vertex(tip, IllustratedGrassPatch.WALKER_PUSH_UV_AMPLITUDE)
+	assert_almost_eq(
+		bent.x, character_width, 0.15,
+		"the hardest push should carry a blade's tip about one character's width aside"
+	)
+
+
 ## The amplitude is DERIVED from that angle, not a second number kept beside
 ## it: sin(lean) is exactly the displacement the rotation needs to reach it
 ## (see bent_vertex, which takes asin of the same ratio back out).
@@ -1033,8 +1055,8 @@ func test_walker_push_amplitude_matches_its_own_tuned_constant_not_a_debug_crank
 	# is for is unchanged -- a debug crank must fail loudly -- so it pins the
 	# angle exactly, and pins the amplitude far away from the 5.0 that shipped
 	# once.
-	assert_eq(IllustratedGrassPatch.MAX_WALKER_LEAN_DEGREES, 35.0)
-	assert_almost_eq(IllustratedGrassPatch.WALKER_PUSH_UV_AMPLITUDE, 0.5736, 0.0001)
+	assert_eq(IllustratedGrassPatch.MAX_WALKER_LEAN_DEGREES, 51.1)
+	assert_almost_eq(IllustratedGrassPatch.WALKER_PUSH_UV_AMPLITUDE, 0.7782, 0.0001)
 	assert_lt(IllustratedGrassPatch.WALKER_PUSH_UV_AMPLITUDE, 1.0, "a rotation cannot be pushed past flat anyway")
 
 

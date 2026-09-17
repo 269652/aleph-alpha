@@ -245,11 +245,23 @@ says something else entirely: 1.0 at the tip IS flat on the ground, and 1.5
 is flat with room to spare, so every tuft a player walked past slammed down
 and sprang back up behind them. Reported: *"reduce the intensity of the
 bend... it feels wobbly as you walk through."* The tuned value is
-`MAX_WALKER_LEAN_DEGREES` (35 degrees -- a lean nobody can miss and nothing a
-player can flatten) and the amplitude is derived from it as `sin(lean)`,
-which is exactly what `bent_vertex` takes the `asin` of to get the angle
-back. One number, expressed as the thing it actually controls, so it cannot
-be read as "more is more" a third time. Ambient wind is untouched by this: at
+`MAX_WALKER_LEAN_DEGREES` and the amplitude is derived from it as
+`sin(lean)`, which is exactly what `bent_vertex` takes the `asin` of to get
+the angle back. One number, expressed as the thing it actually controls, so
+it cannot be read as "more is more" a third time.
+
+That angle is itself tied to something real rather than a feeling. It went
+in at 35 degrees -- a deliberate step back from a bend that laid every tuft
+flat -- and came back as *"now the grassblades don't part enough they should
+visible part about the width of the char"*. So the rule is now exactly that:
+**a walker parts the grass by their own width.** The character's body is
+26px at `CharacterView`'s own computed `SCALE`, 12.45 world units against a
+16-unit card, and the lean whose tip travels that far is
+`asin(12.45 / 16)` = 51.1 degrees; at 35 a tip moved 9.2 units, about three
+quarters of a character. `test_a_walker_parts_the_grass_by_about_their_own_
+width` computes the character's real width and asserts the tip reaches it,
+so a change to the character's own size fails there rather than quietly
+drifting apart from the grass. Ambient wind is untouched by this: at
 `WIND_UV_AMPLITUDE` a tip sways about 5 degrees on a clear day and 9 in a
 storm, which was never what felt wobbly.
 
@@ -997,8 +1009,12 @@ framebuffer), so several of these needed a real, non-headless, off-screen
     And at `WALKER_PUSH_UV_AMPLITUDE = 1.5` every tuft a player passed was
     pushed to flat and beyond, because against a rotation 1.0 already IS
     flat. Fixed by clamping the lean at the horizon per point, and by making
-    the tuned value the ANGLE it controls (`MAX_WALKER_LEAN_DEGREES = 35`)
-    with the amplitude derived from it. Worth noting for the next re-tune:
+    the tuned value the ANGLE it controls (`MAX_WALKER_LEAN_DEGREES`) with
+    the amplitude derived from it. That angle went in at 35 degrees and came
+    straight back as "now the grassblades don't part enough they should
+    visible part about the width of the char", which is a measurable target:
+    it is 51.1 degrees now, the lean whose tip travels one character's own
+    width, pinned against `CharacterView`'s real size rather than eyeballed. Worth noting for the next re-tune:
     three of this system's own reports (#6's ladder, #15, this one) are the
     same story -- a number tuned against a mechanism that was hiding the
     effect it was supposed to produce, and then inherited unchanged by the
@@ -1138,9 +1154,11 @@ at the ROOT instead of the tip), the fix is a one-line flip of
   and #17), nor folded below its own base (History #18 — the lean is clamped
   at the horizon per point; without that a point measures 8 world units under
   the ground its roots stand on). How hard a walker pushes is a tuned ANGLE
-  now, `MAX_WALKER_LEAN_DEGREES = 35`, with the UV amplitude derived from it:
-  the old 1.5 card widths meant "flat on the ground and then some" once the
-  bend became a rotation. `fragment()` still resolves the
+  now -- `MAX_WALKER_LEAN_DEGREES = 51.1`, the lean whose tip travels one
+  character's width (12.45 world units), with the UV amplitude derived from
+  it. The old 1.5 card widths meant "flat on the ground and then some" once
+  the bend became a rotation; 35 read as not enough; a character's width is
+  the thing that was actually being asked for. `fragment()` still resolves the
   curve per pixel row, for the sliver the mesh's vertices cannot carry:
   measured at 0.0197 card widths (1.26 screen px) worst case, down from the
   1.66 card widths (106 px) the sampling stage used to slide on its own, and

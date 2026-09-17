@@ -1127,6 +1127,84 @@ the 32-frame sheet, unchanged by this revert) are the real regression
 coverage here rather than new tests -- there is no NEW behavior to pin,
 only old, already-tested behavior restored.
 
+## A third art swap, and the guard that should have caught it (2026-09-17)
+
+Reported again: *"the new intro crops are still not correct."* The sheet had
+been replaced a SECOND time, inside an unrelated commit, and this time it
+was not a re-cut of the same thing — it is a different kind of file
+altogether:
+
+| | before | now |
+| --- | --- | --- |
+| size | 1983x793 | 1672x941 |
+| grid | 8 columns x 5 rows, 40 frames | 20 columns x 6 rows, **120 frames** |
+| background | chroma-key magenta | black |
+| separators | magenta gutters | thin light grid lines, 1-3px, not a uniform width |
+| extra ink | none | **a timestamp caption printed inside every cell** ("0.00s" ... "4.96s") |
+
+So the old constants cropped an 8x5 grid out of a 20x6 contact sheet: every
+frame read a slice of the wrong cell, and the columns ran out to x=1738 on a
+sheet only 1672 wide.
+
+**The guard test did not fire, and that is the more important half.** The
+previous pass added `test_the_pinned_row_tops_are_where_the_sheets_rows_
+actually_start` precisely so "the art changed and nothing noticed" could not
+happen twice. It had two holes:
+
+- It loaded through `SpriteSheetLoader`, which prefers the IMPORTED texture.
+  A stale `.godot` import cache hands back the art the constants were
+  measured from, so the comparison cannot fail. It reads the file on disk
+  now — through a buffer, since `Image.load_from_file` warns on a `res://`
+  path and an engine warning fails a GUT run.
+- It detected MAGENTA gutters. This sheet has none, so the detector found a
+  single band covering everything and the assertion passed vacuously against
+  a sheet it could not see.
+
+It now measures the grid the sheet actually has. A drawn line is light all
+the way along, while content always has some black in it, so a line's
+MINIMUM brightness is what identifies it — a mean cannot, because by the end
+of this animation the globe is brighter than the dividers.
+
+**What the crop does now.** Cells start at the first pixel AFTER each
+divider run, plus one pixel of inset: the lines are not a uniform width down
+their length (measured at column 9: 2px where the detector reads 1), and a
+crop that starts on one carries a bright stripe up its own side. From the
+cell's top it skips `_CAPTION_HEIGHT` = 28 rows, measured: caption ink
+occupies rows 10-20 of every cell and the earliest globe pixel in any cell
+is row 40. The window is 79x122 — the tightest CLEAN cell (80x151, bounded
+by where the next divider begins rather than where the next cell starts)
+less the inset and the caption. Unlike the previous sheet, whose rows were
+genuinely different heights and needed per-row padding, every cell here
+supplies that same window from the same offset, and the globe sits 40-46
+rows below its own cell's top in every row — measured — so one offset keeps
+it still.
+
+`IntroSplashSequencer.FRAME_COUNT` is 120 and `FPS` is 24, which is the
+cadence the sheet itself declares in its captions (0.00s to 4.96s in steps
+of 1/24). The 10fps it played at before was chosen to be deliberately chunky
+against hand-illustrated art; this is a photoreal render, and at 10fps its
+own rotation would stutter and a five-second intro would take twelve.
+
+**Two things this pass deliberately did not change**, so neither reads as an
+oversight:
+
+- **On-screen size.** `DISPLAY_SCALE` is still 1 — "native size /
+  resolution", asked for explicitly in the twelfth pass. It means something
+  different now: a frame is 79x122 where it used to be 243x162, so the globe
+  draws about a third of its old width. Two is the scale that restores its
+  old presence, and nearest-neighbour at a whole multiple stays crisp, but
+  that is a look decision rather than a correctness one.
+- **The magenta path.** Nothing is keyed out of a black-backed sheet, so
+  `_prepared_for_slicing`/`_despilled` are gone from the build. `_is_magenta`
+  and `test_frames_have_no_leftover_magenta_background` stay as the
+  tripwire: a future magenta-backed sheet fails there instead of shipping
+  with its own background painted into every frame.
+
+Re-measure with `tools/probe_intro_grid.gd`; look at the result with
+`tools/probe_intro_frames.gd`, which lays the real frames out side by side
+on a magenta backdrop so a wrong cell, a caught divider or a kept caption is
+obvious.
+
 ## Status
 
 - ✅ Real illustrated 32-frame sheet, measured and sliced (not
