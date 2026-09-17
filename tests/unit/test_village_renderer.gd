@@ -15,6 +15,7 @@ const NpcIdentity = preload("res://src/world/npc_identity.gd")
 const TerrainRenderer = preload("res://src/rendering/terrain_renderer.gd")
 const VillageLayout = preload("res://src/world/village_layout.gd")
 const VillageFarm = preload("res://src/gameplay/village_farm.gd")
+const ProceduralLandmarkSprite = preload("res://src/rendering/procedural_landmark_sprite.gd")
 
 const TILE_SIZE := 16
 const CHUNK_SIZE := 32
@@ -209,6 +210,22 @@ func _find_settlement_chunk(biome: String) -> Vector2i:
 		if _generator.has_settlement_at(coord, biome):
 			return coord
 	fail_test("no settlement chunk found within 400 chunks")
+	return Vector2i.ZERO
+
+
+## A chunk whose fixed 5-villager roster happens to include at least one
+## hunter -- the occupation whose workspot prop used to be drawn as a
+## second well (see test_no_prop_but_the_villages_own_well_is_drawn_as_one).
+func _find_settlement_chunk_with_hunter(biome: String) -> Vector2i:
+	for x in 400:
+		var coord := Vector2i(x, 3)  # a row of its own, like the merchant helper below
+		if not _generator.has_settlement_at(coord, biome):
+			continue
+		var settlement := _generator.generate_settlement(coord, coord * CHUNK_SIZE, CHUNK_SIZE, TILE_SIZE)
+		for npc in settlement.npcs:
+			if npc.occupation == "hunter":
+				return coord
+	fail_test("no settlement chunk with a hunter found within 400 chunks")
 	return Vector2i.ZERO
 
 
@@ -570,6 +587,41 @@ func test_farmer_blacksmith_fisher_and_herbalist_each_get_their_own_workspot_pro
 		if prop_ids.has(node.get_meta("landmark_id", "")):
 			found += 1
 	assert_eq(found, expected)
+
+
+## Reported live: "there are 3 wells and one stand all over the place."
+##
+## A village has exactly ONE well, on its own square (docs/concept/
+## village_growth.md's street-village grounding). The extra ones were
+## HUNTERS. Measured on the real load path rather than deduced
+## (tools/probe_village_props.gd, over real settlements near lat 48.6):
+## every hunter in the roster stood a prop out behind the houses whose id
+## was "hunting_ground" -- correct, and invisible to every existing prop
+## test, because all of them check the id. What a player SEES is the
+## texture, and "hunting_ground" had no drawing of its own, so it fell
+## through ProceduralLandmarkSprite's unknown-id fallback to the WELL's.
+## A village rolling two hunters therefore showed three wells.
+##
+## So this test asserts on what is drawn, not on what it is called: nothing
+## in a village but the village's own well may be drawn as a well.
+func test_no_prop_but_the_villages_own_well_is_drawn_as_one():
+	var coord := _find_settlement_chunk_with_hunter("grassland")
+	var world := StubWorld.new()
+	var spawned := renderer.spawn_village(parent, coord, coord * CHUNK_SIZE, CHUNK_SIZE, TILE_SIZE, "grassland", world)
+
+	var well_drawing := ProceduralLandmarkSprite.new().generate_image("well").get_data()
+	var hunter_props := 0
+	for node in spawned:
+		var landmark_id: String = node.get_meta("landmark_id", "")
+		if landmark_id == "" or landmark_id == "well":
+			continue
+		if landmark_id == "hunting_ground":
+			hunter_props += 1
+		assert_ne(
+			node.texture.get_image().get_data(), well_drawing,
+			"a %s prop is drawn as the village's well" % landmark_id
+		)
+	assert_gt(hunter_props, 0, "precondition: this village really does have a hunter's own prop standing in it")
 
 
 func test_workspot_props_land_at_the_villagers_own_workspot_position():
