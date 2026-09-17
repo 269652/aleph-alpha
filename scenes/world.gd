@@ -6393,7 +6393,7 @@ func _client_process(delta: float) -> void:
 	var footstep := _chunk_manager.record_footstep(local_player.position, local_player.facing_direction())
 	if not footstep.is_empty():
 		_interaction_sfx.play_footstep(
-			FootstepSound.surface_for(footstep.biome, footstep.snow_lying, footstep.underwater)
+			FootstepSound.surface_for(footstep.biome, footstep.snow_lying, footstep.underwater, footstep.ground_material)
 		)
 	# Individually-simulated creatures pack it down too, reusing the exact
 	# same SnowTrail data and shared GPU mask the player's own tread does

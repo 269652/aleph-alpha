@@ -23638,3 +23638,115 @@ Tests: `test_village_farm.gd` 34/34, `test_npc_marker_farming.gd` 16/16,
 `test_village_layout.gd` 56/56, `test_village_renderer.gd` 78/78,
 `test_npc_marker.gd` 36/36, `test_farmer_marker.gd` 7/7,
 `test_earth_chunk_manager_farm.gd` 7/7.
+
+### Ground too hard to indent keeps no print (see `docs/concept/snow_cover.md` "Ground that is too hard to take a print", `docs/concept/infrastructure.md` Road tier, 2026-09-17)
+
+Reported in play: *"walking over cobblestone streets should not leave
+footprints"*, followed by: *"this should work out of the box through
+physics."*
+
+✅ **It does, and nothing anywhere asks whether a road should have
+footprints.** The road tile is named exactly once, to say what a paved
+cell is made *of* (setts, i.e. stone); the rest follows from the
+material, which is why a timber floor falls out of the same rule for
+free. A footprint IS an indentation, and *indentation hardness* is by
+definition the mean contact pressure it takes to leave one — so the whole
+question is one comparison, and both sides of it were already real
+published numbers this project keeps. `MaterialProperties.HARDNESS_HV`
+quotes Vickers in kgf/mm², which *is* a pressure (one standard gravity
+times a kilogram over a square millimetre, 9.80665 MPa per HV), so granite
+reads 700 HV = 6.9 GPa straight off that column — read, never restated, so
+there cannot be two granite hardnesses in one codebase. A footfall is the
+walker's own real mass over its own plantar contact area, with area
+following the **square** of a linear dimension while mass follows its
+**cube** (the same relation `CreatureMass.linear_scale_for_mass_ratio`
+already encodes in the other direction), so pressure rises only as the
+**cube root** of mass: the 70 kg reference walker over a real 140 cm² sole
+presses with ≈49 kPa. Laid setts win that by ~140 000×.
+
+✅ **`GroundImprint`** (`src/world/ground_imprint.gd`) is that paragraph
+written out: `footfall_pressure_kpa(mass)`,
+`indentation_hardness_kpa(material)`, `yields_to_footfall(material)`,
+`material_underfoot(tile_id, snow_lying)`, `takes_a_print(tile_id,
+snow_lying)`. Soft ground carries real figures of its own rather than
+winning by absence — settled snow's ram hardness (5 kPa, published range
+1–10) and soft cohesive topsoil's unconfined compressive strength (25 kPa,
+the very-soft/soft boundary of the standard consistency classification) —
+both below an ordinary step, which is why prints exist at all.
+`EarthChunkManager.record_footstep` asks it once, at the tile the **print**
+lands in, after the surface lookup and before the field write.
+
+✅ **Three consequences fall out of the one rule, none of them a special
+case.** Snow lies on top of everything, streets included (mirroring
+`footstep_surface_for`'s own snow-first precedence), so a snowed-over
+street takes tracks again. A built piece is whatever `BuildingPiece`'s own
+material column says it is built of, so timber and stone floors stop
+taking prints for free. Dug earth and a `PathScarring`-worn trail stay the
+soil they were worn out of — a trail is made *by* feet, so it keeps taking
+theirs. Unlisted ground resists nothing, mirroring
+`MaterialProperties.DEFAULT_PROPERTIES`' own rule ("not having measured
+something is not a reason to call it iron") in the direction that matters
+for ground.
+
+✅ **Nothing about print SIZE changed.** Mass still scales the mark (see
+"Footprints depend on real mass, not just surface"); this only answers the
+prior question of whether there is a mark to scale. The verdict is stated
+per MATERIAL rather than per walker, and the two sides of that choice are
+honestly different sizes. The **built** side is not close at any mass:
+timber is the softest thing anything here is built of (36 MPa) and a
+500 kg horse at ~94 kPa is still ~380× short of it, granite a further
+~190× beyond timber — nothing that walks reaches a laid surface. The
+**soft** side is a deliberate simplification: soil's 25 kPa is below the
+reference walker's footfall but *above* a 20 g mouse's ~3 kPa, so asking
+this per walker would stop a mouse printing on turf — real, but a
+different and unasked change to a documented mechanic, named rather than
+smuggled in.
+
+✅ **And the street sounds like stone now too** (same day) — this pass
+first left that as a named 🚧: the gate sits *after* `record_footstep`'s
+step facts are populated and returns them intact, so the step was still
+heard, but its sound was still chosen from the **biome** — and a road
+never changes the biome under it, exactly as a river doesn't — so cobbles
+played the grass clip. `record_footstep` now resolves
+`material_underfoot` **once** and carries it out as a `ground_material`
+fact used by *both* consumers: the print gate, and
+`FootstepSound.surface_for`, which maps `stone` → `"rock"` and
+`wood`/`timber` → `"wood"`. Resolving it once is the design, not an
+optimisation — two lookups would let the print and the sound disagree
+about what was underfoot. `"soil"` is deliberately unmapped, so untouched
+ground still takes its sound from the biome; snow and standing water keep
+their existing priority above the laid material, because they lie on top
+of a street while a street lies on top of the ground.
+`GroundImprint.takes_a_print` was removed rather than left unused once
+the material was resolved at the call site. See
+[`concept/creature_and_footstep_audio.md`'s "A laid surface sounds like
+what it is laid with"](concept/creature_and_footstep_audio.md).
+
+🚧 **No distinct stone or wooden-floor recording exists**, so `"rock"` and
+`"wood"` both resolve to the generic `default.ogg` (the same honest gap
+already standing for sand and rock — Wikimedia Commons' Foley coverage is
+thin, see `_CLIP_BY_SURFACE`'s own note). The win is that a street stops
+sounding like grass, not that it sounds like cobbles.
+
+Tests: `test_ground_imprint.gd` 16/16 (new), `test_earth_chunk_manager_
+footprints.gd` 32/32 (7 new: the street, an unpaved control walking the
+identical stride so the paving is the only difference, a snowed-over
+street, a ~26-stride sustained walk verified to fail
+`[52] expected to equal [26]` with the gate stubbed out so it
+discriminates rather than passing vacuously, and 3 for the new
+`ground_material` fact including one proving it is reported even where no
+print is drawn at all), `test_footstep_sound.gd` +6,
+`test_world_footstep_wiring.gd` +1. 152/157 across the whole
+footprint/footstep/audio suite — `test_earth_chunk_manager_footprints.gd`,
+`test_ground_imprint.gd`, `test_footstep_sound.gd`,
+`test_world_footstep_wiring.gd`, `test_footstep_gait.gd`,
+`test_footprint_field.gd`, `test_footprint_renderer.gd`,
+`test_footprint_renderer_smoke.gd`, `test_procedural_footprint_sprite.gd`,
+`test_world_creature_and_footstep_audio_wiring.gd`,
+`test_interaction_sfx_player.gd` — with zero failures; the 5 remaining are
+pre-existing GPU-readback smoke tests that need `--rendering-driver
+opengl3`. `test_terrain_renderer.gd`, `test_building_piece.gd`,
+`test_world_path_scarring_trail_wiring.gd`, `test_player.gd`,
+`test_village_renderer.gd`, `test_earth_chunk_manager_buildings.gd`,
+`test_snow_trail.gd` and `test_path_scarring.gd` were run as regressions
+over the road/building/path surfaces this reads from: zero failures.
