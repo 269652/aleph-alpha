@@ -207,7 +207,11 @@ const _LIFECYCLE_SHEET := "res://assets/sprites/buildings/house_1_1.png"
 
 func test_a_divider_sheets_cell_is_cut_where_its_own_lines_are():
 	var VariantSheetGrid = load("res://src/rendering/variant_sheet_grid.gd")
-	var image := Image.load_from_file(_LIFECYCLE_SHEET)
+	var SpriteSheetLoader = load("res://src/rendering/sprite_sheet_loader.gd")
+	# Loaded the way the game loads it, not Image.load_from_file: these
+	# sheets have .import sidecars now, so the raw path is both the wrong
+	# one and a warning.
+	var image: Image = SpriteSheetLoader.load_image(_LIFECYCLE_SHEET)
 	assert_not_null(image, "precondition: the sheet is on disk")
 	if image.get_format() != Image.FORMAT_RGBA8:
 		image.convert(Image.FORMAT_RGBA8)

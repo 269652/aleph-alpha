@@ -14,6 +14,18 @@ extends GutTest
 ## back to even division when a sheet genuinely has none.
 
 const VariantSheetGrid = preload("res://src/rendering/variant_sheet_grid.gd")
+const SpriteSheetLoader = preload("res://src/rendering/sprite_sheet_loader.gd")
+
+
+## The sheet as the GAME loads it (SpriteSheetLoader prefers the imported
+## resource and falls back to the raw file), not Image.load_from_file --
+## which on a file that now has an .import sidecar is both the wrong path
+## and a warning Godot rightly emits.
+func _sheet(name: String) -> Image:
+	var image := SpriteSheetLoader.load_image("res://assets/sprites/buildings/%s.png" % name)
+	if image != null and image.get_format() != Image.FORMAT_RGBA8:
+		image.convert(Image.FORMAT_RGBA8)
+	return image
 
 
 ## A sheet with `count` content bands separated by real gutters: content
@@ -192,10 +204,8 @@ func test_asking_for_more_cells_than_the_sheet_has_falls_back_to_even_division()
 
 
 func test_the_real_lifecycle_sheet_carries_a_label_row_a_label_column_and_a_margin():
-	var image := Image.load_from_file("res://assets/sprites/buildings/house_1_1.png")
+	var image := _sheet("house_1_1")
 	assert_not_null(image, "precondition: the sheet is on disk")
-	if image.get_format() != Image.FORMAT_RGBA8:
-		image.convert(Image.FORMAT_RGBA8)
 	assert_eq(
 		VariantSheetGrid.divider_bands(image, true).size(), 11,
 		"ten rows of art, plus the column-label row across the top"
@@ -207,9 +217,7 @@ func test_the_real_lifecycle_sheet_carries_a_label_row_a_label_column_and_a_marg
 
 
 func test_the_real_lifecycle_sheets_art_window_skips_the_labels():
-	var image := Image.load_from_file("res://assets/sprites/buildings/house_1_1.png")
-	if image.get_format() != Image.FORMAT_RGBA8:
-		image.convert(Image.FORMAT_RGBA8)
+	var image := _sheet("house_1_1")
 	var rows: Array = VariantSheetGrid.art_bands(image, 10, true)
 	var columns: Array = VariantSheetGrid.art_bands(image, 8, false)
 	assert_eq(rows.size(), 10)
@@ -227,9 +235,7 @@ func test_the_real_lifecycle_sheets_art_window_skips_the_labels():
 
 
 func test_every_cell_of_the_real_lifecycle_sheet_holds_real_art():
-	var image := Image.load_from_file("res://assets/sprites/buildings/house_1_1.png")
-	if image.get_format() != Image.FORMAT_RGBA8:
-		image.convert(Image.FORMAT_RGBA8)
+	var image := _sheet("house_1_1")
 	for row in 10:
 		for column in 8:
 			var rect := VariantSheetGrid.divider_cell_rect(image, 8, 10, row, column)
@@ -244,9 +250,7 @@ func test_every_cell_of_the_real_lifecycle_sheet_holds_real_art():
 
 
 func test_the_well_sheet_is_a_five_by_five_grid_between_its_dividers():
-	var image := Image.load_from_file("res://assets/sprites/buildings/well.png")
+	var image := _sheet("well")
 	assert_not_null(image, "precondition: the sheet is on disk")
-	if image.get_format() != Image.FORMAT_RGBA8:
-		image.convert(Image.FORMAT_RGBA8)
 	assert_eq(VariantSheetGrid.divider_bands(image, true).size(), 5)
 	assert_eq(VariantSheetGrid.divider_bands(image, false).size(), 5)
