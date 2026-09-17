@@ -102,9 +102,11 @@ const GROUND_HARDNESS_KPA := {
 ## follows its CUBE -- the same real geometric relationship
 ## `CreatureMass.linear_scale_for_mass_ratio` already encodes in the other
 ## direction -- so the area scales as the 2/3 power of the mass ratio and
-## the PRESSURE rises only as its cube root. Eight times the animal
-## presses just twice as hard, which is why the verdict below can be
-## stated per material rather than per walker (see yields_to_footfall).
+## the PRESSURE rises only as its cube root: eight times the animal
+## presses just twice as hard. That compression is what keeps a built
+## surface out of reach of EVERYTHING that walks rather than merely of
+## light things -- see yields_to_footfall, which states both sides of
+## that argument, including the one it does not win outright.
 ##
 ## Zero (never a division by zero or a negative pressure) for a
 ## non-positive mass -- the same "narrows, never crashes" contract
