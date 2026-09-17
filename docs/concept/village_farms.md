@@ -291,6 +291,20 @@ and the rest of its own tile is ordinary ground.
   chroma key at full alpha and makes the used rect the whole cell — so
   `_is_art_pixel` keys on that leftover being magenta-*cast* (blue at least
   as strong as green) where real wood and iron never are.
+- **And a run is scaled by its RUN.** Asked for in one word once the rails
+  landed on their edges: *"also scale"*. Every whole building scales its
+  cell WIDTH to the tile, which is the footprint anchor. A rail cannot: the
+  sheet draws each run centred in its own cell with real margin at both
+  ends, so a cell scaled by its width leaves that margin as a gap between
+  one rail and the next — measured, 52 of 64 across for a broad-side run and
+  39 of 64 down for a top-view one, which reads as a row of separate pieces
+  rather than a fence line. `_footprint_scale` scales a rail so its own wood
+  spans exactly one tile along the direction its run travels (east-west for
+  a rail whose beds lie north or south, north-south for one whose beds lie
+  east or west), so consecutive rails meet and the frame closes. Its band is
+  then wider than the tile it stands on, which is why the footprint-width
+  contract now speaks for whole buildings only, and why the placement
+  carries where the band's left edge falls instead of assuming it away.
 - **What an animal may do.** `VillageFarm.rails_block_step` replaces the old
   "is this tile fenced" question with "does this step cross the rails",
   asked of the PAIR of cells a step joins

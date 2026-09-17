@@ -23928,6 +23928,19 @@ then red-first in three change sets, one per half of the mechanic:
   `_is_art_pixel` keys on that leftover being magenta-*cast* (blue at least
   as strong as green), which real wood and iron never are.
 
+**And the runs were still a row of separate pieces** until *"also scale"*.
+Every whole building scales its cell width to the tile; a rail cannot,
+because the sheet draws each run centred in its cell with margin at both
+ends, and that margin becomes the gap between one rail and the next —
+measured at 52 of 64 across and 39 of 64 down. `_footprint_scale` scales a
+rail so its own wood spans one tile along the direction its run travels, so
+consecutive rails meet. Its band then exceeds the tile, so the
+footprint-width contract narrowed to whole buildings, the aspect-ratio
+contract was restated against the texture's own width rather than the tile
+(one factor on both axes is what it was ever really saying), and the x
+placement now carries where the band's left edge falls instead of assuming
+it is zero.
+
 `CreatureMarker._fence_blocks_movement` now asks about the step it is really
 taking — the cell under the animal and the cell its look-ahead lands in —
 because an edge is a fact about a pair of cells and cannot be read off

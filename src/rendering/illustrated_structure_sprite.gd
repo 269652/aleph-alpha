@@ -178,12 +178,38 @@ func footprint_texture(subject: String, tile_size: int) -> ImageTexture:
 	if idle == null:
 		return null
 	var source := idle.get_image()
-	var scale := float(tile_size) / float(source.get_width())
+	var scale := _footprint_scale(subject, source, tile_size)
 	var width := maxi(1, int(round(float(source.get_width()) * scale)))
 	var height := maxi(1, int(round(float(source.get_height()) * scale)))
 	var scaled := source.duplicate() as Image
 	scaled.resize(width, height, Image.INTERPOLATE_LANCZOS)
 	return ImageTexture.create_from_image(scaled)
+
+
+## How much a subject's own cell is scaled to stand on a tile.
+##
+## A whole building scales its WIDTH to the tile, which is the footprint
+## anchor footprint_texture documents and every one of them still uses.
+##
+## A RAIL scales by its RUN instead. Asked for in one word, after the rails
+## landed on their inner edges: *"also scale"*. The sheet draws every run
+## centred in its own cell with real margin at both ends, so a cell scaled
+## by its width leaves that margin as a GAP between one rail and the next --
+## measured, 52 of 64 across for a broad-side run and 39 of 64 down for a
+## top-view one, which reads as a row of separate pieces rather than a fence
+## line. Scaling so the run's own WOOD spans exactly one tile along the
+## direction it travels is what makes consecutive rails meet.
+func _footprint_scale(subject: String, image: Image, tile_size: int) -> float:
+	var inner := VillageFarm.fence_inner_direction(subject)
+	if inner == Vector2i.ZERO:
+		return float(tile_size) / float(image.get_width())
+	var art := _art_rect(subject, image)
+	# A run travels ACROSS the direction it closes: a rail whose beds lie
+	# north or south runs east-west, and one whose beds lie east or west
+	# runs north-south.
+	if inner.y != 0:
+		return float(tile_size) / float(maxi(art.size.x, 1))
+	return float(tile_size) / float(maxi(art.size.y, 1))
 
 
 ## Where a subject's footprint_texture really stands INSIDE its own tile, as
@@ -224,7 +250,7 @@ func footprint_offset(subject: String, tile_size: int) -> Vector2:
 		return Vector2.ZERO
 	var image := idle.get_image()
 	var art := _art_rect(subject, image)
-	var scale := float(tile_size) / float(image.get_width())
+	var scale := _footprint_scale(subject, image, tile_size)
 	if inner.y != 0:
 		# Bottom-anchoring puts the BAND's bottom edge on the tile's bottom
 		# edge, so the posts stand this far above it.
@@ -232,9 +258,11 @@ func footprint_offset(subject: String, tile_size: int) -> Vector2:
 		if inner.y > 0:
 			return Vector2(0.0, foot_above_bottom)
 		return Vector2(0.0, foot_above_bottom - float(tile_size))
-	# The band is centred on the tile, so the run's own centre line sits
-	# here, measured from the tile's left edge.
-	var centre_x := (float(art.position.x) + float(art.size.x) * 0.5) * scale
+	# The band is centred on the tile -- and is NOT one tile wide once a rail
+	# is scaled by its own run, so where its left edge falls has to be
+	# carried rather than assumed away.
+	var band_left := (float(tile_size) - float(image.get_width()) * scale) * 0.5
+	var centre_x := band_left + (float(art.position.x) + float(art.size.x) * 0.5) * scale
 	if inner.x < 0:
 		return Vector2(-centre_x, 0.0)
 	return Vector2(float(tile_size) - centre_x, 0.0)

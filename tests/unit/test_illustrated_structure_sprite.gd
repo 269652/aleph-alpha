@@ -115,8 +115,14 @@ func test_footprint_texture_is_null_for_an_unknown_subject():
 	assert_null(sprite.footprint_texture("not_a_real_subject", 16))
 
 
+## Every WHOLE BUILDING, which is what the footprint anchor is about. A rail
+## is deliberately not one of them any more: it scales by its own run so
+## consecutive rails meet, which makes its band wider than the tile it
+## stands on (see "and a run is scaled by its RUN" below).
 func test_footprint_texture_width_matches_the_tile_size():
 	for subject in _ALL_SUBJECTS:
+		if VillageFarm.is_fence_tile(subject):
+			continue
 		var texture := sprite.footprint_texture(subject, 16)
 		assert_eq(texture.get_width(), 16, "%s footprint width should match tile_size" % subject)
 
@@ -137,12 +143,25 @@ func test_footprint_texture_preserves_aspect_ratio_taller_than_the_tile():
 		assert_gt(texture.get_height(), 16, "%s footprint height should stay taller than one tile" % subject)
 
 
+## The scaling contract that covers all of them, rails included: ONE factor
+## for both axes, so nothing is ever squashed. Stated against the texture's
+## own width rather than against the tile, because what that factor is
+## differs -- a building scales its width to the tile, a rail scales its run
+## to the tile -- while "the same factor on both axes" does not.
 func test_footprint_texture_height_matches_the_idle_images_own_aspect_ratio():
 	for subject in _ALL_SUBJECTS:
 		var idle_image := sprite.idle_texture(subject).get_image()
-		var expected_height := int(round(16.0 * float(idle_image.get_height()) / float(idle_image.get_width())))
 		var texture := sprite.footprint_texture(subject, 16)
-		assert_eq(texture.get_height(), expected_height, "%s footprint height should scale by the same factor as width" % subject)
+		var expected_height := (
+			float(texture.get_width()) * float(idle_image.get_height()) / float(idle_image.get_width())
+		)
+		# Within a pixel, not exact: both axes are rounded to whole pixels
+		# from ONE real factor, so back-deriving that factor from the
+		# already-rounded width cannot land on the nose at a 16px tile.
+		assert_almost_eq(
+			float(texture.get_height()), expected_height, 1.0,
+			"%s footprint height should scale by the same factor as width" % subject
+		)
 
 
 # -- whole-building entities (docs/concept/building.md "Buildings are -------
@@ -317,7 +336,8 @@ const _EDGE_TOLERANCE := 1.5
 ## rect the whole cell every time.
 func _wood_rect_in_tile_units(subject: String) -> Rect2:
 	var image := sprite.idle_texture(subject).get_image()
-	var scale := float(_TILE) / float(image.get_width())
+	var texture := sprite.footprint_texture(subject, _TILE)
+	var scale := float(texture.get_width()) / float(image.get_width())
 	var min_x := image.get_width()
 	var min_y := image.get_height()
 	var max_x := -1
@@ -342,12 +362,17 @@ func _wood_rect_in_tile_units(subject: String) -> Rect2:
 ## tile's own top edge and x from its left edge: footprint_texture is
 ## bottom-anchored and centred on the tile (EarthChunkManager._spawn_
 ## structure_art_for), then shifted by footprint_offset.
+##
+## The band is measured from the REAL texture rather than assumed to be one
+## tile wide -- a rail is scaled by its own run, not by its cell width, so
+## its band is wider than the tile it stands on.
 func _placed_wood_rect(subject: String) -> Rect2:
-	var image := sprite.idle_texture(subject).get_image()
-	var band_height := float(image.get_height()) * float(_TILE) / float(image.get_width())
+	var texture := sprite.footprint_texture(subject, _TILE)
+	var band := Vector2(float(texture.get_width()), float(texture.get_height()))
 	var wood := _wood_rect_in_tile_units(subject)
+	var band_origin := Vector2((float(_TILE) - band.x) * 0.5, float(_TILE) - band.y)
 	var offset: Vector2 = sprite.footprint_offset(subject, _TILE)
-	return Rect2(wood.position + Vector2(0.0, float(_TILE) - band_height) + offset, wood.size)
+	return Rect2(wood.position + band_origin + offset, wood.size)
 
 
 ## A broad-side run stands on its POSTS, so the bottom of its wood is its
@@ -407,3 +432,52 @@ func test_every_other_subject_still_stands_in_the_middle_of_its_tile():
 	for subject in ["farm", "sagewerk", "storage", "wooden_fence", "city_hall"]:
 		assert_eq(sprite.footprint_offset(subject, _TILE), Vector2.ZERO, subject)
 	assert_eq(sprite.footprint_offset("not_a_subject", _TILE), Vector2.ZERO)
+
+
+# -- and a run is scaled by its RUN, so consecutive rails meet --------------
+#
+# Asked for directly, in one word, after seeing the rails land on the edge:
+# "also scale". The sheet draws each run centred in its own cell with real
+# margin at both ends, so a cell scaled by its own WIDTH leaves that margin
+# as a gap between one rail and the next and the fence reads as a row of
+# separate pieces instead of a line. A rail is scaled so its own wood spans
+# exactly one tile along the direction its run travels.
+
+
+func test_a_broadside_runs_wood_spans_exactly_one_tile_across():
+	for facing in ["north", "south"]:
+		var placed := _placed_wood_rect(VillageFarm.fence_tile_for(facing))
+		assert_almost_eq(
+			placed.size.x, float(_TILE), _EDGE_TOLERANCE,
+			"a %s run must meet the next one along its row, with no gap and no overlap" % facing
+		)
+
+
+func test_a_top_view_runs_wood_spans_exactly_one_tile_down():
+	for facing in ["east", "west", "corner_west", "corner_east"]:
+		var placed := _placed_wood_rect(VillageFarm.fence_tile_for(facing))
+		assert_almost_eq(
+			placed.size.y, float(_TILE), _EDGE_TOLERANCE,
+			"a %s run must meet the next one down its column" % facing
+		)
+
+
+## Scaling by the run must not break where the run STANDS -- the ground line
+## is still on the inner edge, which is the pair of facts that together make
+## a closed frame.
+func test_scaling_by_the_run_keeps_every_rail_on_its_own_inner_edge():
+	assert_almost_eq(_placed_wood_rect("farm_fence_north").end.y, float(_TILE), _EDGE_TOLERANCE)
+	assert_almost_eq(_placed_wood_rect("farm_fence_south").end.y, 0.0, _EDGE_TOLERANCE)
+	for facing in ["east", "corner_east"]:
+		var east := _placed_wood_rect(VillageFarm.fence_tile_for(facing))
+		assert_almost_eq(east.position.x + east.size.x * 0.5, 0.0, _EDGE_TOLERANCE, facing)
+	for facing in ["west", "corner_west"]:
+		var west := _placed_wood_rect(VillageFarm.fence_tile_for(facing))
+		assert_almost_eq(west.position.x + west.size.x * 0.5, float(_TILE), _EDGE_TOLERANCE, facing)
+
+
+## Everything that is a whole building still scales by its own width, the
+## way it always has.
+func test_a_building_still_scales_its_width_to_the_tile():
+	for subject in ["farm", "sagewerk", "storage", "wooden_fence", "city_hall"]:
+		assert_eq(sprite.footprint_texture(subject, _TILE).get_width(), _TILE, subject)
