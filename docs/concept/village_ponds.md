@@ -86,10 +86,27 @@ village actually does.
   rectangle in the same reach still fits and the fisher got a second pond on
   every chunk load. `_has_pond_already` asks whether the house has water at
   all.
-- ⬜ **Fish that live there and breed.** The water is real and carries a
-  current, so a fish put in one already swims and drifts; what does not exist
-  yet is a pond POPULATION — stocking, a carrying capacity derived from the
-  water, and growth toward it on the ecology tick.
+- ✅ **Fish that live there and breed.** A pond holds its own stock, keyed
+  by the ANCHOR cell of that body of water (its top-left, found by flooding
+  it) — one pond is one stock however many cells it has, rather than six
+  buckets. `VillagePond.carrying_capacity`/`step` are the world's OWN
+  `AquaticPopulationModel`, not a second curve: a pond is a small body of
+  water, and fish in it breed for the same reasons and at the same rate as
+  fish anywhere else. `EarthChunkManager.step_ponds` runs it on the world's
+  ecology tick, wired into `_step_ecology_batch` and pinned there by a
+  source-contract test — a step nothing calls breeds nothing, which is a bug
+  this repo has already shipped once with wild crops.
+
+  **Stocking is a real act.** Growth is logistic, so nothing grows from
+  nothing: water nobody stocked stays empty however long it ticks. The
+  village stocks the pond as it digs it, and stocking an already-stocked
+  pond changes nothing — a fisher stocks a pond, they do not keep stocking
+  it.
+- 🚧 **Fish you can SEE in it.** The population is real and breeding; what is
+  not wired is `FishRenderer` spawning markers on pond cells to match it. A
+  fish placed in a pond already swims and drifts correctly (the water answers
+  `is_water_at_global` and `is_river_at_global`), so this is a spawn/despawn
+  sync, not new physics.
 - ⬜ **The fisher works it.** Catching from their own pond into their own
   house's stock and on to the village, reusing the chain
   [village_farms.md](village_farms.md)'s "Grown, stored, carried" describes.

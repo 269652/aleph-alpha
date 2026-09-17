@@ -16,6 +16,7 @@ extends RefCounted
 ## Pure, like VillageFarm: geometry in, cells out, nothing stored.
 
 const VillageFarm = preload("res://src/gameplay/village_farm.gd")
+const AquaticPopulationModel = preload("res://src/world/aquatic_population_model.gd")
 
 ## What a dug pond cell persists as. An ordinary chunk modification, exactly
 ## like a rail -- the id is the only thing stored about it, which is what
@@ -59,3 +60,32 @@ static func pond_cells(origin: Vector2i, building_id: String, is_free: Callable)
 ## corner posts included.
 static func fence_cells(origin: Vector2i, building_id: String, is_free: Callable) -> Array:
 	return VillageFarm.fence_cells(pond_cells(origin, building_id, is_free), origin, building_id)
+
+
+## How many fish a fisher puts in when they stock a pond.
+##
+## Two, because logistic growth from nothing is nothing: an unstocked pond
+## stays empty however good its water is, which is the honest behaviour (a
+## village pond is stocked deliberately -- see docs/concept/village_ponds.md)
+## and also what makes the stocking a real act rather than decoration. One
+## fish is a pet. Pinned by test_a_stocking_is_enough_fish_to_breed.
+const STOCKING_FISH := 2
+
+## The pond's own population model. The world's OWN aquatic one, not a second
+## model: a pond is a small body of water, and fish in it breed for the same
+## reasons and at the same rate as fish anywhere else
+## (docs/concept/fishing.md's aquatic population model). A pond with its own
+## curve would be one more thing to keep in step with open water.
+static var _fish := AquaticPopulationModel.new()
+
+
+## How many fish this much pond water can feed at `temperature` (normalized
+## [0, 1], the Chunk.temperature convention).
+static func carrying_capacity(water_cells: int, temperature: float) -> float:
+	return _fish.carrying_capacity(float(maxi(water_cells, 0)), temperature)
+
+
+## The population after `delta_days` of breeding toward that ceiling. Zero in
+## stays zero out -- a pond nobody stocked grows nothing.
+static func step(population: float, water_cells: int, temperature: float, delta_days: float) -> float:
+	return _fish.step(population, carrying_capacity(water_cells, temperature), delta_days)

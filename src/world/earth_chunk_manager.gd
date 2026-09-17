@@ -141,6 +141,7 @@ const PiscivoreBirdRenderer = preload("res://src/rendering/piscivore_bird_render
 const VillageRenderer = preload("res://src/rendering/village_renderer.gd")
 const VillageFarm = preload("res://src/gameplay/village_farm.gd")
 const VillagePond = preload("res://src/gameplay/village_pond.gd")
+const AquaticPopulationModel = preload("res://src/world/aquatic_population_model.gd")
 const NpcMarker = preload("res://src/rendering/npc_marker.gd")
 const EcosystemSimulation = preload("res://src/world/ecosystem_simulation.gd")
 const ChunkSerializer = preload("res://src/world/chunk_serializer.gd")
@@ -8273,6 +8274,111 @@ func farm_plot_at_global(global_x: int, global_y: int):
 ## reads it (FarmPlotMarker._redraw_wheat picks which of its three real
 ## sheets to sample from), but it costs nothing to pass unconditionally,
 ## the same way delta_seconds itself is.
+## Every village pond's own fish stock, keyed by chunk then by the pond's
+## own ANCHOR cell -- the top-left cell of that body of water, found by
+## flooding it (see _pond_anchor). One pond is one stock however many cells
+## it has, which is what makes "a pond" a thing rather than six buckets.
+##
+## Not persisted, like the farm plots beside it and for the same reason: a
+## revisited village re-stocks rather than remembering
+## (docs/concept/village_ponds.md's own status list).
+var _pond_fish: Dictionary = {}
+
+
+## Puts a fisher's stocking of fish into the pond this cell belongs to (see
+## docs/concept/village_ponds.md). A no-op on dry ground, and on a pond that
+## already holds fish -- a fisher stocks a pond, they do not keep stocking
+## it.
+func stock_pond_at(global_x: int, global_y: int) -> void:
+	var anchor = _pond_anchor(global_x, global_y)
+	if anchor == null:
+		return
+	var chunk_coord := _chunk_coord_for_tile(anchor)
+	var by_anchor: Dictionary = _pond_fish.get(chunk_coord, {})
+	if by_anchor.has(anchor):
+		return
+	by_anchor[anchor] = float(VillagePond.STOCKING_FISH)
+	_pond_fish[chunk_coord] = by_anchor
+
+
+## How many fish the pond this cell belongs to is holding -- 0.0 for dry
+## ground, and for water nobody has stocked.
+func pond_fish_at(global_x: int, global_y: int) -> float:
+	var anchor = _pond_anchor(global_x, global_y)
+	if anchor == null:
+		return 0.0
+	return float(_pond_fish.get(_chunk_coord_for_tile(anchor), {}).get(anchor, 0.0))
+
+
+## Breeds every stocked pond toward what its own water can feed, on the
+## world's own ecology tick (scenes/world.gd's tick table).
+func step_ponds(delta_seconds: float) -> void:
+	if _pond_fish.is_empty():
+		return
+	var days := delta_seconds / ChunkEcologyCatchup.SECONDS_PER_DAY
+	if days <= 0.0:
+		return
+	for chunk_coord in _pond_fish:
+		var by_anchor: Dictionary = _pond_fish[chunk_coord]
+		for anchor in by_anchor:
+			var cells := _pond_cells_from(anchor)
+			if cells.is_empty():
+				continue  # filled in since it was stocked
+			by_anchor[anchor] = VillagePond.step(
+				float(by_anchor[anchor]), cells.size(),
+				_pond_temperature(anchor), days
+			)
+
+
+## The water temperature a pond's fish live at -- its own chunk's, the same
+## normalized [0, 1] value every other aquatic population reads.
+func _pond_temperature(anchor: Vector2i) -> float:
+	var chunk: Chunk = _loaded_chunks.get(_chunk_coord_for_tile(anchor))
+	if chunk == null:
+		return AquaticPopulationModel.OPTIMAL_TEMPERATURE
+	return float(chunk.temperature[_local_index(anchor.x, anchor.y)])
+
+
+## Every cell of the body of water this one belongs to, flood-filled over
+## pond tiles. Bounded in practice -- a village pond is six cells -- and
+## bounded in code by _POND_FLOOD_LIMIT so a hand-dug lake cannot make this
+## walk the world.
+const _POND_FLOOD_LIMIT := 256
+
+
+func _pond_cells_from(start: Vector2i) -> Array:
+	if not is_pond_at_global(start.x, start.y):
+		return []
+	var seen: Dictionary = {start: true}
+	var queue: Array = [start]
+	var out: Array = []
+	while not queue.is_empty() and out.size() < _POND_FLOOD_LIMIT:
+		var cell: Vector2i = queue.pop_back()
+		out.append(cell)
+		for step in [Vector2i(1, 0), Vector2i(-1, 0), Vector2i(0, 1), Vector2i(0, -1)]:
+			var next: Vector2i = cell + step
+			if seen.has(next) or not is_pond_at_global(next.x, next.y):
+				continue
+			seen[next] = true
+			queue.append(next)
+	return out
+
+
+## The one cell that stands for a whole pond: its top-left, so every cell of
+## the same water agrees on which stock is theirs however the flood happened
+## to walk it. Null for dry ground.
+func _pond_anchor(global_x: int, global_y: int):
+	var cells := _pond_cells_from(Vector2i(global_x, global_y))
+	if cells.is_empty():
+		return null
+	var anchor: Vector2i = cells[0]
+	for cell in cells:
+		var c: Vector2i = cell
+		if c.y < anchor.y or (c.y == anchor.y and c.x < anchor.x):
+			anchor = c
+	return anchor
+
+
 func step_farm_plots(delta_seconds: float) -> void:
 	var season := current_season()
 	for marker in _farm_plots.values():

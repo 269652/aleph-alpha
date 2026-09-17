@@ -3578,6 +3578,9 @@ func _step_ecology_batch(delta: float, focus_player: Player) -> void:
 			"wild_crops": _chunk_manager.step_wild_crops,
 			"wild_mushrooms": _chunk_manager.step_wild_mushrooms,
 			"farm_plots": _chunk_manager.step_farm_plots,
+			# A village pond's own fish stock breeds toward what its water
+			# can feed (docs/concept/village_ponds.md).
+			"ponds": _chunk_manager.step_ponds,
 			# Ant mounds and bee colonies forage as populations (AntColony,
 			# docs/concept/bees.md) -- economies that move over simulated days.
 			"ants": _chunk_manager.step_ants,

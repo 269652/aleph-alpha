@@ -686,6 +686,13 @@ func _dig_fisher_ponds_if_missing(chunk_coord: Vector2i, chunk_size: int, world)
 		for cell in water:
 			var g: Vector2i = chunk_coord * chunk_size + (cell as Vector2i)
 			world.build_at_global(g.x, g.y, VillagePond.POND_TILE_ID)
+		# Stocked as it is dug: empty water is a hole, and a pond's fish only
+		# breed from fish that are already in it (VillagePond.step is
+		# logistic, so nothing grows from nothing). A village stocks its own
+		# pond, which is what a village actually does.
+		if world.has_method("stock_pond_at"):
+			var first: Vector2i = chunk_coord * chunk_size + (water[0] as Vector2i)
+			world.stock_pond_at(first.x, first.y)
 		# The frame, on the field's own rule and through the field's own
 		# skips: another farm's crop, a building, paving (the gate), and
 		# ground nothing may stand on.

@@ -61,3 +61,68 @@ func test_the_water_has_a_tile_id_of_its_own():
 		VillageFarm.is_fence_tile(VillagePond.POND_TILE_ID),
 		"water is not a rail -- it replaces the ground rather than standing on it"
 	)
+
+
+# -- fish that live there, and go on living there --------------------------
+#
+# "...and fish swimming in it which reproduce". A pond stocked once and
+# fished flat is a bucket; a pond whose fish breed toward what the water can
+# feed is a fishery (docs/concept/village_ponds.md).
+#
+# The population model is the world's OWN aquatic one, not a second one: a
+# pond is a small body of water, and fish in it breed for the same reasons
+# and at the same rate as fish anywhere else.
+
+const AquaticPopulationModel = preload("res://src/world/aquatic_population_model.gd")
+
+const MILD := 0.55  # AquaticPopulationModel.OPTIMAL_TEMPERATURE
+
+
+func test_a_ponds_ceiling_is_the_worlds_own_aquatic_one_for_that_much_water():
+	var cells := 6
+	assert_almost_eq(
+		VillagePond.carrying_capacity(cells, MILD),
+		AquaticPopulationModel.new().carrying_capacity(float(cells), MILD),
+		0.0001,
+		"a pond with a ceiling of its own is a second model to keep in step"
+	)
+
+
+func test_more_water_feeds_more_fish():
+	assert_gt(
+		VillagePond.carrying_capacity(6, MILD), VillagePond.carrying_capacity(4, MILD),
+		"a bigger pond has to feed more"
+	)
+
+
+## Cold or hot water feeds fewer, exactly as open water does.
+func test_water_a_fish_cannot_thrive_in_feeds_fewer():
+	assert_lt(VillagePond.carrying_capacity(6, 0.05), VillagePond.carrying_capacity(6, MILD))
+
+
+## A pond is STOCKED, not spontaneous: nothing swims in water nobody put
+## fish into, however good the water is.
+func test_an_unstocked_pond_never_grows_fish_from_nothing():
+	var population := VillagePond.step(0.0, 6, MILD, 30.0)
+	assert_almost_eq(population, 0.0, 0.0001, "fish appeared in water nobody stocked")
+
+
+func test_a_stocked_pond_breeds_toward_what_its_water_can_feed():
+	var ceiling := VillagePond.carrying_capacity(6, MILD)
+	var population := float(VillagePond.STOCKING_FISH)
+	assert_lt(population, ceiling, "precondition: a stocking is below the ceiling")
+	for _day in 40:
+		population = VillagePond.step(population, 6, MILD, 1.0)
+	assert_gt(population, float(VillagePond.STOCKING_FISH), "the stock never bred")
+	assert_lte(population, ceiling + 0.0001, "a pond cannot feed more than its water can")
+
+
+## And it does not overshoot: a pond already at its ceiling stays there.
+func test_a_full_pond_stays_full():
+	var ceiling := VillagePond.carrying_capacity(6, MILD)
+	assert_almost_eq(VillagePond.step(ceiling, 6, MILD, 10.0), ceiling, 0.0001)
+
+
+## Two is the smallest stocking that can breed at all -- one fish is a pet.
+func test_a_stocking_is_enough_fish_to_breed():
+	assert_gte(VillagePond.STOCKING_FISH, 2, "one fish cannot reproduce")

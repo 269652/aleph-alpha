@@ -163,6 +163,14 @@ class StubWorld:
 	func modification_at_global(x: int, y: int) -> String:
 		return occupied_cells.get(Vector2i(x, y), "")
 
+	## Every tile stock_pond_at was called for -- the real
+	## EarthChunkManager's own entry point for putting a fisher's stocking
+	## into the water they just dug.
+	var stocked_ponds: Array = []
+
+	func stock_pond_at(x: int, y: int) -> void:
+		stocked_ponds.append(Vector2i(x, y))
+
 	## Mirrors EarthChunkManager.place_building_over_roads: the civic plot
 	## is the paved square itself, so an ordinary place_building would
 	## refuse it over its own paving.
@@ -2281,3 +2289,25 @@ func test_digging_a_pond_twice_leaves_it_exactly_as_it_was():
 	var first := _built_tiles(world, coord).duplicate(true)
 	renderer.spawn_village(parent, coord, coord * CHUNK_SIZE, CHUNK_SIZE, TILE_SIZE, "grassland", world)
 	assert_eq(_built_tiles(world, coord), first, "a reload changed the village")
+
+
+## A dug pond is STOCKED: empty water is a hole, and the ask is fish
+## swimming in it. The village puts the fisher's own stocking in as it digs.
+func test_a_dug_pond_is_stocked_with_real_fish():
+	var coord := _find_settlement_chunk_with_occupation("grassland", "fisher", 3)
+	var world := StubWorld.new()
+	renderer.spawn_village(
+		parent, coord, coord * CHUNK_SIZE, CHUNK_SIZE, TILE_SIZE, "grassland", world
+	)
+	var built := _built_tiles(world, coord)
+	var water: Array = []
+	for cell in built:
+		if VillagePond.is_pond_tile(built[cell]):
+			water.append(cell)
+	assert_gt(water.size(), 0, "precondition: a pond was dug")
+	assert_gt(world.stocked_ponds.size(), 0, "the fisher's pond was left empty")
+	var stocked_in_water := false
+	for tile in world.stocked_ponds:
+		if water.has((tile as Vector2i) - coord * CHUNK_SIZE):
+			stocked_in_water = true
+	assert_true(stocked_in_water, "something was stocked, but not the pond")
