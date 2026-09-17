@@ -91,17 +91,103 @@ static func seed_for(chunk_coord: Vector2i) -> int:
 	return hash("%d_%d_village_layout" % [chunk_coord.x, chunk_coord.y])
 
 
+## Where the square actually stands: centred on the street's middle by
+## design, and slid along the street -- west and east alternately, nearest
+## first -- to the first column where the WHOLE square is dry when it
+## isn't. Reported in play, twice, with a screenshot: a riverside village
+## with no square and no hall, because the square was pinned to the chunk's
+## exact middle and a river ran through it. The square is 8 tiles wide in a
+## 32-tile chunk; there is real room beside the water, and standing it
+## there is more honest than standing nowhere.
+##
+## `is_dry` is deliberately a WATER test, not the general buildable/
+## occupied pair every other function here takes. Every consumer of this
+## square (the founding layout, the reload's re-paving, the civic plot, the
+## growth ladder's own next plot) has to derive the SAME rectangle with
+## nothing persisted, so the input must be the one thing that never changes
+## once the world is seeded: trees get felled and ground gets built on,
+## rivers do not move. An invalid/omitted Callable keeps the designed
+## centre, which is also what happens when nowhere is dry -- layout() then
+## finds the square unclear and honestly lays none.
+static func plaza_x0_for(
+	chunk_size: int, street_y: int, street_x0: int, street_x1: int, is_dry: Callable
+) -> int:
+	var centred: int = chunk_size / 2 - PLAZA_WIDTH_TILES / 2
+	if not is_dry.is_valid():
+		return centred
+	var westmost: int = maxi(_EDGE_MARGIN_TILES, street_x0)
+	var eastmost: int = mini(chunk_size - _EDGE_MARGIN_TILES, street_x1 + 1) - PLAZA_WIDTH_TILES
+	for offset in range(0, chunk_size):
+		for candidate in ([centred] if offset == 0 else [centred - offset, centred + offset]):
+			if candidate < westmost or candidate > eastmost:
+				continue
+			if not _plaza_is_dry(candidate, street_y, is_dry):
+				continue
+			if not _run_has_room_beside_the_square(candidate, street_y, street_x0, street_x1, is_dry):
+				continue
+			return candidate
+	return centred
+
+
+## Whether the unbroken dry stretch of street holding a square at
+## `plaza_x0` is long enough to carry the square AND at least one house
+## beside it. A square that swallows its whole street is worse than no
+## square: the houses are the village, the square is what it builds around
+## them. Caught for real by
+## test_no_plaza_when_its_own_site_is_unbuildable_but_houses_still_get_
+## placed, where sliding into a ten-cell run left nowhere to live.
+static func _run_has_room_beside_the_square(
+	plaza_x0: int, street_y: int, street_x0: int, street_x1: int, is_dry: Callable
+) -> bool:
+	var west := plaza_x0
+	while west - 1 >= street_x0 and is_dry.call(Vector2i(west - 1, street_y)):
+		west -= 1
+	var east := plaza_x0 + PLAZA_WIDTH_TILES - 1
+	while east + 1 <= street_x1 and is_dry.call(Vector2i(east + 1, street_y)):
+		east += 1
+	return east - west + 1 >= PLAZA_WIDTH_TILES + PLOT_GAP_TILES + narrowest_plot_width()
+
+
+## The narrowest house the catalog can offer -- what "room for one house"
+## means above. Read from BuildingCatalog rather than written down, so a
+## new, narrower house id changes this by itself.
+static func narrowest_plot_width() -> int:
+	var narrowest := 0
+	for building_id in BuildingCatalog.BUILDING_IDS:
+		var width: int = BuildingCatalog.footprint_of(building_id).x
+		if narrowest == 0 or width < narrowest:
+			narrowest = width
+	return narrowest
+
+
+## Whether every cell of the square standing at `plaza_x0` is dry -- the
+## same rectangle skeleton() builds (PLAZA_ROWS_NORTH above the street row
+## through PLAZA_ROWS_SOUTH below it), asked of nothing but `is_dry`.
+static func _plaza_is_dry(plaza_x0: int, street_y: int, is_dry: Callable) -> bool:
+	for y in range(street_y - PLAZA_ROWS_NORTH, street_y + PLAZA_ROWS_SOUTH + 1):
+		for x in range(plaza_x0, plaza_x0 + PLAZA_WIDTH_TILES):
+			if not is_dry.call(Vector2i(x, y)):
+				return false
+	return true
+
+
 ## Everything about a village's shape that depends only on the chunk and
 ## its seed, before any building is placed: the main street row and its
 ## x-span, the plaza rectangle, the civic plot (origin/doorstep of the town
 ## hall's reserved site) and the three landmark cells (well, stall, gate).
 ## Pure: two calls with the same inputs are equal, so a reload re-derives
 ## exactly the plaza it laid at founding.
-static func skeleton(chunk_size: int, seed_value: int) -> Dictionary:
+##
+## `is_dry` (optional) is a WATER test only -- see plaza_x0_for. Omit it
+## and the square stands at the chunk's exact middle, exactly as it always
+## did; pass it and the square slides clear of water rather than not
+## existing. Every caller that can answer it MUST pass the same one, or
+## two of them derive two different squares for the same village.
+static func skeleton(chunk_size: int, seed_value: int, is_dry := Callable()) -> Dictionary:
 	var street_y := chunk_size / 2
 	var street_x0 := _EDGE_MARGIN_TILES + PixelNoise.range_index(seed_value, 0, 0, _START_JITTER_TILES)
 	var street_x1 := chunk_size - _EDGE_MARGIN_TILES - 1
-	var plaza_x0 := chunk_size / 2 - PLAZA_WIDTH_TILES / 2
+	var plaza_x0 := plaza_x0_for(chunk_size, street_y, street_x0, street_x1, is_dry)
 	var plaza := Rect2i(
 		plaza_x0, street_y - PLAZA_ROWS_NORTH,
 		PLAZA_WIDTH_TILES, PLAZA_ROWS_NORTH + 1 + PLAZA_ROWS_SOUTH
@@ -134,7 +220,11 @@ func layout(
 		var no_roads: Array[Vector2i] = []
 		return {"plots": [], "road_cells": no_roads, "plaza": Rect2i(), "civic_plot": {}, "landmarks": {}}
 
-	var bones := skeleton(chunk_size, seed_value)
+	# VillageRenderer's own is_buildable IS the water test (see
+	# VillageRenderer._is_buildable_local: a village fells the trees it
+	# needs, so water is the only ground it refuses), which is exactly what
+	# the square's siting wants -- see plaza_x0_for.
+	var bones := skeleton(chunk_size, seed_value, is_buildable)
 	var street_y: int = bones["street_y"]
 	var street_x0: int = bones["street_x0"]
 	var street_x1: int = bones["street_x1"]
@@ -270,7 +360,7 @@ func layout(
 			# streets beside the square, or the gate lane when there is no
 			# square -- has to be REACHED by this street's own paving, or
 			# the tie-back ends one cell short of the thing it ties.
-			var tie_x0: int = plaza.position.x if has_plaza else street_x0
+			var tie_x0: int = mini(plaza.position.x, street_x0) if has_plaza else street_x0
 			var tie_x1: int = (plaza.end.x - 1) if has_plaza else street_x0
 			var from_x: int = mini(street_doorstep_xs[0], tie_x0)
 			var to_x: int = maxi(street_doorstep_xs[street_doorstep_xs.size() - 1], tie_x1)
@@ -284,24 +374,28 @@ func layout(
 		if not progressed_this_street:
 			break  # this street placed nothing at all -- a further one south won't fare any better
 		var next_street_y := current_street_y + STREET_PITCH_TILES
-		if not has_plaza:
-			# No square to hang side streets on -- but the village still
-			# has a gate, and a lane from it reaches a further street just
-			# as well. Reported in play, twice: a riverside village stuck
-			# at three houses with five villagers, because a drowned
-			# square used to end its growth outright rather than merely
-			# cost it a square. The lane is claimed BEFORE anything is
-			# placed on the street it reaches, so no plot can take it.
-			var lane := _gate_lane_cells(
-				street_x0, current_street_y, next_street_y, chunk_size, is_buildable, is_occupied
-			)
-			if lane.is_empty():
-				# Nothing clear to walk down: this village really does stay
-				# on its spine rather than grow a row nobody can reach.
-				break
-			for cell in lane:
-				claimed[cell] = true
-			pending_lane_cells.append_array(lane)
+		# EVERY further street is tied back by the gate lane, square or no
+		# square. Without a square there is nothing else to hang one on --
+		# reported in play, twice: a riverside village stuck at three
+		# houses with five villagers, because a drowned square used to end
+		# its growth outright rather than merely cost it a square. WITH a
+		# square it is still needed past the second street, because the
+		# side streets beside the square only reach that far: a third
+		# street hung on nothing was a real disconnected row (caught by
+		# test_a_river_across_the_street_never_leaves_a_house_stranded the
+		# moment a village grew that big). The lane is claimed BEFORE
+		# anything is placed on the street it reaches, so no plot can take
+		# it.
+		var lane := _gate_lane_cells(
+			street_x0, current_street_y, next_street_y, chunk_size, is_buildable, is_occupied
+		)
+		if lane.is_empty():
+			# Nothing clear to walk down: this village stays where it is
+			# rather than grow a row nobody can reach.
+			break
+		for cell in lane:
+			claimed[cell] = true
+		pending_lane_cells.append_array(lane)
 		current_street_y = next_street_y
 
 	# Side streets only exist to reach a second street -- a village that fit
@@ -412,13 +506,17 @@ const _INDUSTRY_EDGE_MARGIN_TILES := _EDGE_MARGIN_TILES + 1
 ## had to be.
 static func industry_plot(
 	building_id: String, chunk_size: int, seed_value: int,
-	is_buildable: Callable, is_forest: Callable, is_occupied: Callable
+	is_buildable: Callable, is_forest: Callable, is_occupied: Callable,
+	is_dry := Callable()
 ) -> Dictionary:
 	var footprint := BuildingCatalog.footprint_of(building_id)
 	if footprint == Vector2i.ZERO:
 		return {}
 
-	var bones := skeleton(chunk_size, seed_value)
+	# `is_dry` only when the caller's own is_buildable is NOT the water
+	# test -- the growth ladder's refuses forest too, and a square sited
+	# against that would not be the square the village was founded with.
+	var bones := skeleton(chunk_size, seed_value, is_dry if is_dry.is_valid() else is_buildable)
 	var plaza: Rect2i = bones["plaza"]
 	var plaza_centre: Vector2i = plaza.position + plaza.size / 2
 
@@ -551,13 +649,16 @@ static func _spur_cells(
 ## putting the village's next warehouse in the middle of its own market
 ## square.
 static func next_street_plot(
-	building_id: String, chunk_size: int, seed_value: int, is_buildable: Callable, is_occupied: Callable
+	building_id: String, chunk_size: int, seed_value: int, is_buildable: Callable,
+	is_occupied: Callable, is_dry := Callable()
 ) -> Dictionary:
 	var footprint := BuildingCatalog.footprint_of(building_id)
 	if footprint == Vector2i.ZERO:
 		return {}
 
-	var bones := skeleton(chunk_size, seed_value)
+	# See industry_plot: the square's own siting wants the water test, not
+	# whatever wider ground rule this caller happens to build against.
+	var bones := skeleton(chunk_size, seed_value, is_dry if is_dry.is_valid() else is_buildable)
 	var street_y: int = bones["street_y"]
 	var street_x0: int = bones["street_x0"]
 	var street_x1: int = bones["street_x1"]

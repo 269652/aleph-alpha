@@ -264,6 +264,28 @@ nothing there — no streets, no mill, no villagers, no settlement record —
 rather than a ghost village nobody can live in. Reported as *"Some
 villages have no houses"*.
 
+**The square slides rather than drowns.** The plaza was pinned to the
+chunk's exact middle, so a river through that middle meant no square — and
+with no square there is no civic plot, and so no city hall, ever.
+`VillageLayout.plaza_x0_for` slides it along the street, west and east
+alternately, nearest first, to the first column where the whole square is
+dry AND its own unbroken stretch of street still has room for the square
+plus at least one house (`narrowest_plot_width()`, read off the catalog —
+a square that swallows its whole street is worse than no square). Nowhere
+dry and it stays at the designed centre, where `layout` finds it unclear
+and honestly lays none.
+
+The predicate is deliberately a WATER test (`is_dry`), not the general
+buildable/occupied pair. Every consumer of a village's square — the
+founding layout, the reload's re-paving, the civic plot, the growth
+ladder's next plot, the well/stall/gate props — has to derive the same
+rectangle with nothing persisted, so the input must be the one thing that
+never changes once the world is seeded: trees get felled and ground gets
+built on, rivers do not move. `skeleton`, `industry_plot`,
+`next_street_plot` and `SettlementGenerator.generate_settlement` all take
+it optionally; omitted, the square stands at its designed centre exactly
+as before.
+
 **A drowned square costs a square, not the village.** The plaza is the
 only thing further streets used to hang on: side streets ran down its two
 edges, so a village whose centre was water broke out of the growth loop at

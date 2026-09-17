@@ -652,9 +652,15 @@ func test_a_village_big_enough_for_a_second_street_is_still_one_network():
 ## street just as well as a side street does.
 func test_a_village_with_no_square_still_houses_everyone_it_arrived_with():
 	var five := ["house_small", "house_small", "house_small", "house_small", "house_small"]
-	var result := layout.layout(
-		five, CHUNK_SIZE, 99, _buildable_except_column(CHUNK_SIZE / 2), _never_occupied
-	)
+	# Water down the chunk's middle AND across the row the square's own
+	# northern edge needs. The square can slide along the street (see
+	# plaza_x0_for) but never off that row, so this village really has
+	# nowhere to put one -- while a 2-deep house, standing on the two rows
+	# directly north of the street, still fits perfectly well.
+	var street_y: int = VillageLayout.skeleton(CHUNK_SIZE, 99)["street_y"]
+	var no_square := func(cell: Vector2i) -> bool:
+		return cell.x != CHUNK_SIZE / 2 and cell.y != street_y - VillageLayout.PLAZA_ROWS_NORTH
+	var result := layout.layout(five, CHUNK_SIZE, 99, no_square, _never_occupied)
 	var plaza: Rect2i = result["plaza"]
 	assert_false(plaza.has_area(), "precondition: the water really does drown this village's square")
 	assert_eq(
@@ -669,3 +675,108 @@ func test_a_village_with_no_square_still_houses_everyone_it_arrived_with():
 			"house at %s opens onto paving nobody can walk to" % str(plot["origin"])
 		)
 	assert_eq(reached.size(), roads.size(), "the paving must stay one network, not two islands")
+
+
+# -- the square slides rather than drowns -----------------------------------
+#
+# Reported in play with a screenshot, twice: a riverside village with no
+# square and no hall. The square was pinned to the chunk's exact middle, so
+# a river through that middle meant no square at all -- and with no square
+# there is no civic plot, and so no city hall, ever.
+#
+# The square is 8 tiles wide in a 32-tile chunk. There is real room beside
+# the water; standing the square there is far more honest than standing
+# nowhere. `is_dry` is deliberately a WATER test, not the general
+# buildable/occupied pair: every caller must derive the SAME square, and
+# water is the only input that never changes once the world is seeded --
+# trees get felled, ground gets built on, rivers do not move.
+
+
+func test_a_square_drowned_at_the_chunks_middle_slides_along_the_street():
+	var bones: Dictionary = VillageLayout.skeleton(
+		CHUNK_SIZE, 99, _buildable_except_column(CHUNK_SIZE / 2)
+	)
+	var plaza: Rect2i = bones["plaza"]
+	assert_true(plaza.has_area(), "precondition: a square is still drawn")
+	assert_true(
+		plaza.end.x <= CHUNK_SIZE / 2 or plaza.position.x > CHUNK_SIZE / 2,
+		"the square at %s still straddles the water at column %d" % [str(plaza), CHUNK_SIZE / 2]
+	)
+
+
+func test_the_civic_plot_and_landmarks_slide_with_the_square():
+	var bones: Dictionary = VillageLayout.skeleton(
+		CHUNK_SIZE, 99, _buildable_except_column(CHUNK_SIZE / 2)
+	)
+	var plaza: Rect2i = bones["plaza"]
+	var civic_origin: Vector2i = bones["civic_plot"]["origin"]
+	var footprint := BuildingCatalog.footprint_of(VillageLayout.CIVIC_BUILDING_ID)
+	assert_gte(civic_origin.x, plaza.position.x, "the hall must stand on its own square")
+	assert_lte(civic_origin.x + footprint.x, plaza.end.x, "the hall must stand on its own square")
+	for landmark_id in ["well", "stall"]:
+		var cell: Vector2i = bones["landmarks"][landmark_id]
+		assert_true(
+			plaza.has_point(cell),
+			"%s at %s left the square behind at %s" % [landmark_id, str(cell), str(plaza)]
+		)
+
+
+func test_a_square_with_dry_ground_under_it_does_not_move():
+	var centred: Dictionary = VillageLayout.skeleton(CHUNK_SIZE, 99)
+	var checked: Dictionary = VillageLayout.skeleton(CHUNK_SIZE, 99, _always_buildable)
+	assert_eq(checked["plaza"], centred["plaza"], "dry ground: the square keeps its designed place")
+	assert_eq(checked["civic_plot"], centred["civic_plot"])
+	assert_eq(checked["landmarks"], centred["landmarks"])
+
+
+func test_the_slid_square_is_the_same_square_every_time_it_is_asked_for():
+	var a: Dictionary = VillageLayout.skeleton(CHUNK_SIZE, 99, _buildable_except_column(CHUNK_SIZE / 2))
+	var b: Dictionary = VillageLayout.skeleton(CHUNK_SIZE, 99, _buildable_except_column(CHUNK_SIZE / 2))
+	assert_eq(a["plaza"], b["plaza"])
+	assert_eq(a["civic_plot"], b["civic_plot"])
+	assert_eq(a["landmarks"], b["landmarks"])
+
+
+func test_a_village_with_nowhere_dry_for_a_square_keeps_its_designed_one_and_lays_none():
+	var result := layout.layout(
+		["house_small"], CHUNK_SIZE, 99, _never_buildable, _never_occupied
+	)
+	assert_true((result["plaza"] as Rect2i).size == Vector2i.ZERO, "no square is laid at all")
+	assert_true((result["civic_plot"] as Dictionary).is_empty(), "and no civic plot with it")
+
+
+func test_a_village_whose_middle_is_water_still_gets_a_square_and_a_civic_plot():
+	var five := ["house_small", "house_small", "house_small", "house_small", "house_small"]
+	var result := layout.layout(
+		five, CHUNK_SIZE, 99, _buildable_except_column(CHUNK_SIZE / 2), _never_occupied
+	)
+	assert_true((result["plaza"] as Rect2i).has_area(), "a riverside village can still have its square")
+	assert_false((result["civic_plot"] as Dictionary).is_empty(), "and therefore somewhere to put a hall")
+	assert_eq(result["plots"].size(), five.size(), "and it still houses everyone")
+
+
+## The "room beside the square" rule is a real measurement off the
+## catalog, not a number written down here (CLAUDE.md: tuned values are
+## tested functions or test-pinned constants).
+func test_the_narrowest_plot_width_is_read_from_the_catalog():
+	var narrowest := 0
+	for building_id in BuildingCatalog.BUILDING_IDS:
+		var width: int = BuildingCatalog.footprint_of(building_id).x
+		if narrowest == 0 or width < narrowest:
+			narrowest = width
+	assert_eq(VillageLayout.narrowest_plot_width(), narrowest)
+	assert_gt(narrowest, 0, "a catalog with no house in it would make the rule meaningless")
+
+
+func test_a_square_never_takes_the_whole_street_it_slid_into():
+	# A run only just wide enough for the square itself: the square stays
+	# where it was designed (and layout() then honestly lays none) rather
+	# than standing on the only ground the village had to live on.
+	var street_y: int = VillageLayout.skeleton(CHUNK_SIZE, 8)["street_y"]
+	var only_a_short_run := func(cell: Vector2i) -> bool:
+		return cell.x >= 4 and cell.x < 4 + VillageLayout.PLAZA_WIDTH_TILES
+	var slid: int = VillageLayout.plaza_x0_for(CHUNK_SIZE, street_y, 2, CHUNK_SIZE - 3, only_a_short_run)
+	assert_eq(
+		slid, CHUNK_SIZE / 2 - VillageLayout.PLAZA_WIDTH_TILES / 2,
+		"a square with no room for a single house beside it is not sited there"
+	)

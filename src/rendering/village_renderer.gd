@@ -137,7 +137,12 @@ func spawn_village(
 	# the same duck-typed fail-open shape every other world hook here uses.
 	var settlement := _settlement_generator.generate_settlement(
 		chunk_coord, chunk_origin_tiles, chunk_size, tile_size,
-		_population_for(chunk_coord, world)
+		_population_for(chunk_coord, world),
+		# The square's own siting (VillageLayout.plaza_x0_for) -- the well,
+		# stall and gate must be derived from the SAME square the layout
+		# and the paving below use, or a riverside village's props stand
+		# where its square isn't.
+		_is_buildable_local(chunk_coord, chunk_size, world) if world != null else Callable()
 	)
 
 	# One VillageMarket per settlement, shared by every villager built below
@@ -523,7 +528,10 @@ func _place_civic_if_missing(chunk_coord: Vector2i, chunk_size: int, world) -> v
 	# The plot is the paved square itself, so every one of its cells must
 	# really BE road -- a village whose centre was water or forest never
 	# laid a square, and has nowhere to put a seat.
-	var plot: Dictionary = VillageLayout.skeleton(chunk_size, VillageLayout.seed_for(chunk_coord))["civic_plot"]
+	var plot: Dictionary = VillageLayout.skeleton(
+		chunk_size, VillageLayout.seed_for(chunk_coord),
+		_is_buildable_local(chunk_coord, chunk_size, world)
+	)["civic_plot"]
 	var origin: Vector2i = plot["origin"]
 	if not world.has_method("modification_at_global"):
 		return
@@ -581,12 +589,14 @@ const FOREST_BIOME := "forest"
 func _lay_plaza_if_missing(chunk_coord: Vector2i, chunk_size: int, world) -> void:
 	if not (world.has_method("modification_at_global") and world.has_method("build_at_global")):
 		return
-	var skeleton := VillageLayout.skeleton(chunk_size, VillageLayout.seed_for(chunk_coord))
+	var is_buildable := _is_buildable_local(chunk_coord, chunk_size, world)
+	var skeleton := VillageLayout.skeleton(
+		chunk_size, VillageLayout.seed_for(chunk_coord), is_buildable
+	)
 	var doorstep: Vector2i = chunk_coord * chunk_size + skeleton["civic_plot"]["doorstep"]
 	if TerrainRenderer.is_road_tile(world.modification_at_global(doorstep.x, doorstep.y)):
 		return
 	var plaza: Rect2i = skeleton["plaza"]
-	var is_buildable := _is_buildable_local(chunk_coord, chunk_size, world)
 	var cells: Array = []
 	for y in range(plaza.position.y, plaza.end.y):
 		for x in range(plaza.position.x, plaza.end.x):

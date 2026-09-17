@@ -76,13 +76,18 @@ func has_settlement_at(chunk_coord: Vector2i, dominant_biome: String) -> bool:
 ## so a village that has taken households in generates them too.
 func generate_settlement(
 	chunk_coord: Vector2i, chunk_origin_tiles: Vector2i, chunk_size: int, tile_size: int,
-	population: int = POPULATION
+	population: int = POPULATION, is_dry := Callable()
 ) -> Dictionary:
 	# The well, stall and gate stand where the village's own street plan
 	# puts them -- on the plaza, at the street's entrance (see
 	# VillageLayout.skeleton) -- so the props and the paving agree, rather
 	# than at fixed offsets from the chunk centre that ignore the street.
-	var skeleton := VillageLayout.skeleton(chunk_size, VillageLayout.seed_for(chunk_coord))
+	# `is_dry` is the square's own siting predicate (VillageLayout.
+	# plaza_x0_for): a square whose designed centre is water slides along
+	# the street, and the well/stall/gate must slide with it or the props
+	# and the paving disagree. A caller with no world to ask omits it and
+	# gets the designed centre, exactly as before.
+	var skeleton := VillageLayout.skeleton(chunk_size, VillageLayout.seed_for(chunk_coord), is_dry)
 	var landmarks := {}
 	for landmark in skeleton["landmarks"]:
 		var cell: Vector2i = chunk_origin_tiles + skeleton["landmarks"][landmark]

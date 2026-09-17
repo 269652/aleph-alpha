@@ -23315,3 +23315,51 @@ and comparing them directly, then pinned red-first by
 `test_every_frame_puts_its_art_at_the_same_height` — red against the
 top-anchored build for frames 24–39, green after
 (`test_intro_splash_sheet.gd` 12/12).
+
+
+## Villages on water: three rules, all reported in play (`concept/building.md`, 2026-09-17)
+
+Reported with screenshots: *"Some villages have no houses"*, then *"There's
+also another village with only 2 houses and no plaza / hall"*, then *"The
+same village still has only 2 houses"*. All three are the same root:
+`BiomeClassifier` knows nothing of hydrology, so a lake or a river reads as
+grassland and `SettlementGenerator` settles it.
+
+✅ **A drowned square costs a square, not the rest of the village.** Further
+streets used to hang only on the two side streets beside the plaza, so a
+village whose centre was water broke out of the growth loop at once and
+stopped at whatever its spine could take — and a column of water through a
+chunk drowns the plaza AND splits the spine at the same time, which is
+exactly the reported three-houses-five-villagers riverside village. A
+**gate lane** (`VillageLayout._gate_lane_cells`) now ties every further
+street back to the spine: one column at the spine run's own start, claimed
+before the street it reaches is laid out, paved only once that street is
+actually built on. It also fixed a latent disconnection — the side streets
+only ever reached the SECOND street, so a village that grew to a third
+street had a row nobody could walk to.
+
+✅ **The square slides rather than drowns** (`VillageLayout.plaza_x0_for`).
+Nearest dry column along the street, west and east alternately, and only
+one whose own unbroken stretch of street still has room for the square plus
+a house (`narrowest_plot_width()`, measured off `BuildingCatalog`, pinned by
+`test_the_narrowest_plot_width_is_read_from_the_catalog`). The predicate is
+a water test, threaded through every consumer so they all derive the same
+square with nothing persisted.
+
+✅ **A reload counts homes, not buildings.** Measured with
+`tools/probe_village_ghost.gd`: chunks (668,143) and (670,144) near lat
+48.6 lon 12.7 each stood with five villagers, paved streets, a sawmill and
+zero dwellings — persisted by a build from before the founding gate
+existed. Any building at all sent the chunk down the recovery branch, which
+spawns the whole roster regardless. `spawn_village` now branches on
+`BuildingCatalog.capacity_of > 0`: with no dwelling the site is laid out
+from scratch, so good ground gets its houses raised and ground that takes
+none founds nothing. Verified against the real stale save — both chunks go
+from 5 villagers to 0; on a clean world the same walk meets 3 villages, all
+five-dwelling, all with a plaza and a hall.
+
+Tests: `test_village_layout.gd` 50/50, `test_village_renderer.gd` 68/68,
+`test_settlement_generator.gd` 14/14, `test_civic_build_decision.gd` 10/10,
+`test_village_finder.gd`, `test_village_census.gd`,
+`test_settlement_build_decision.gd`, `test_discovered_settlements.gd` all
+green.

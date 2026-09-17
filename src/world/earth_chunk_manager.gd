@@ -4698,7 +4698,8 @@ func _attempt_regional_resupply(
 func _well_position_for_settlement(settlement_id: String) -> Vector2:
 	var chunk_coord := RegionalTrade.chunk_coord_of(settlement_id)
 	var settlement := _settlement_generator.generate_settlement(
-		chunk_coord, chunk_coord * CHUNK_SIZE, CHUNK_SIZE, TerrainRenderer.TILE_SIZE
+		chunk_coord, chunk_coord * CHUNK_SIZE, CHUNK_SIZE, TerrainRenderer.TILE_SIZE,
+		SettlementGenerator.POPULATION, _is_dry_local(chunk_coord)
 	)
 	return settlement.landmarks.well
 
@@ -5520,7 +5521,8 @@ func find_nearest_village(from_tile: Vector2i) -> Variant:
 	if found_chunk == null:
 		return null
 	var settlement := _settlement_generator.generate_settlement(
-		found_chunk, found_chunk * CHUNK_SIZE, CHUNK_SIZE, TerrainRenderer.TILE_SIZE
+		found_chunk, found_chunk * CHUNK_SIZE, CHUNK_SIZE, TerrainRenderer.TILE_SIZE,
+		SettlementGenerator.POPULATION, _is_dry_local(found_chunk)
 	)
 	return settlement.landmarks.well
 
@@ -15646,12 +15648,13 @@ func _growth_site_for(chunk_coord: Vector2i, building_id: String):
 			var g: Vector2i = chunk_coord * CHUNK_SIZE + cell
 			return biome_at_global(g.x, g.y) == VillageRenderer.FOREST_BIOME
 		var industry: Dictionary = VillageLayout.industry_plot(
-			building_id, CHUNK_SIZE, seed_value, is_buildable, is_forest, is_occupied
+			building_id, CHUNK_SIZE, seed_value, is_buildable, is_forest, is_occupied,
+			_is_dry_local(chunk_coord)
 		)
 		return null if industry.is_empty() else industry["origin"]
 
 	var plot: Dictionary = VillageLayout.next_street_plot(
-		building_id, CHUNK_SIZE, seed_value, is_buildable, is_occupied
+		building_id, CHUNK_SIZE, seed_value, is_buildable, is_occupied, _is_dry_local(chunk_coord)
 	)
 	return null if plot.is_empty() else plot["origin"]
 
@@ -15663,6 +15666,28 @@ func _growth_site_for(chunk_coord: Vector2i, building_id: String):
 ## every caller here already no-ops on that.
 func _village_census_for(chunk_coord: Vector2i, household_ids: Array) -> Dictionary:
 	return VillageCensus.of(household_ids, buildings_in_chunk(chunk_coord), _household_store)
+
+
+## The square's own siting predicate (VillageLayout.plaza_x0_for): dry
+## ground, and nothing else. A village's square slides clear of water
+## rather than not existing, and EVERY consumer of that square -- the
+## founding layout, the reload's re-paving, the civic plot, the growth
+## ladder's next plot, the well/stall/gate props -- has to derive the same
+## rectangle from the same input, with nothing persisted. Water is the one
+## input that never changes once the world is seeded: trees get felled and
+## ground gets built on, rivers do not move.
+##
+## One narrow caveat, deliberately accepted: is_water_at_global's OCEAN
+## branch reads the chunk's own biome array and so answers "not ocean" for
+## an unloaded chunk, while its river/lake/sea-probe branches are pure
+## generator. A settlement whose square is ocean would fail the founding
+## gate anyway (VillageRenderer.spawn_village); what this can cost is a
+## slightly different square for an UNLOADED coastal settlement asked only
+## for its well position.
+func _is_dry_local(chunk_coord: Vector2i) -> Callable:
+	return func(cell: Vector2i) -> bool:
+		var g: Vector2i = chunk_coord * CHUNK_SIZE + cell
+		return not is_water_at_global(g.x, g.y)
 
 
 ## The civic plot's LOCAL origin (VillageLayout.skeleton -- re-derived from
@@ -15680,7 +15705,9 @@ func _civic_plot_origin_for(chunk_coord: Vector2i):
 	var chunk: Chunk = _loaded_chunks.get(chunk_coord)
 	if chunk == null:
 		return null
-	var plot: Dictionary = VillageLayout.skeleton(CHUNK_SIZE, VillageLayout.seed_for(chunk_coord))["civic_plot"]
+	var plot: Dictionary = VillageLayout.skeleton(
+		CHUNK_SIZE, VillageLayout.seed_for(chunk_coord), _is_dry_local(chunk_coord)
+	)["civic_plot"]
 	var origin_local: Vector2i = plot["origin"]
 	var building_id: String = plot["building_id"]
 	for local in BuildingCatalog.footprint_cells(building_id, origin_local) + [plot["doorstep"]]:
