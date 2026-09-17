@@ -321,7 +321,16 @@ func spawn_village(
 		# a field on the river. Their workspot then falls back to their own
 		# doorstep (see _build_npc), so they still have somewhere real to be.
 		var work_tag: String = NpcIdentity.WORK_LOCATION_BY_OCCUPATION.get(npcs[i].occupation, "")
-		if work_tag != "" and not settlement.landmarks.has(work_tag) and workspot != null:
+		# ...unless their workplace is a real BUILDING the village already
+		# raises. A lumberjack works at the sawmill, and the sawmill is not a
+		# prop: asking for one falls back to the well art, so every
+		# lumberjack was standing a second, spurious well in the middle of
+		# the village. The mill _place_industry_if_missing raised is where
+		# they work.
+		if (
+			work_tag != "" and not settlement.landmarks.has(work_tag)
+			and not BuildingCatalog.has_building(work_tag) and workspot != null
+		):
 			spawned.append(_build_landmark(work_tag, workspot, parent, true))
 	_hand_out_farm_fields(npcs, npc_markers, farm_fields, chunk_coord, chunk_size)
 	_hand_out_fisher_ponds(npcs, npc_markers, fisher_ponds, chunk_coord, chunk_size)
