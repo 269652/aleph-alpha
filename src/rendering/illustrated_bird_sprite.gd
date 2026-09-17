@@ -361,18 +361,26 @@ func _build_textures(path: String, bands: Array) -> Array:
 func _keyed_image(path: String) -> Image:
 	if _image_cache.has(path):
 		return _image_cache[path]
-	var raw := SpriteSheetLoader.load_image(path)
-	var keyed: Image = raw.duplicate()
-	if keyed.get_format() != Image.FORMAT_RGBA8:
-		keyed.convert(Image.FORMAT_RGBA8)
-	for y in keyed.get_height():
-		for x in keyed.get_width():
-			var c: Color = keyed.get_pixel(x, y)
-			if (
-				absf(c.r - CHROMA_KEY.r) <= CHROMA_KEY_TOLERANCE
-				and absf(c.g - CHROMA_KEY.g) <= CHROMA_KEY_TOLERANCE
-				and absf(c.b - CHROMA_KEY.b) <= CHROMA_KEY_TOLERANCE
-			):
-				keyed.set_pixel(x, y, Color(0, 0, 0, 0))
+	var keyed := key_out_background(SpriteSheetLoader.load_image(path))
 	_image_cache[path] = keyed
 	return keyed
+
+
+## `image` with its magenta ground made fully transparent.
+##
+## This used to be a hand-written per-pixel get_pixel/set_pixel double loop
+## here -- a duplicate of SpriteSheetSlicer.chroma_keyed with the identical
+## per-channel-tolerance semantics and the identical "matched pixels become
+## Color(0,0,0,0)" result, but written in the exact naive shape that shared
+## function had ALREADY been fixed out of (see its own doc comment: the cost
+## is GDScript's per-call overhead in a multi-megapixel loop, not get_pixel).
+## Nothing about that fix reached this copy, and these sheets are 1536x1024,
+## so every bird SPECIES paid it on first use -- measured at ~420-460ms each,
+## three of them in the character creator's own diorama alone (see docs/
+## concept/character_creator_preview_scene.md's "Load cost" section).
+##
+## Now one call to the shared, already-budget-pinned implementation. Public
+## and static so both halves of that claim -- the speed and the pixels --
+## are directly testable without reaching through _keyed_image's own cache.
+static func key_out_background(image: Image) -> Image:
+	return SpriteSheetSlicer.chroma_keyed(image, CHROMA_KEY, CHROMA_KEY_TOLERANCE)
