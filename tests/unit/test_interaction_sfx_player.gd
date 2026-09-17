@@ -197,3 +197,120 @@ func _find_playing_voice(expected_clip_path: String) -> AudioStreamPlayer:
 		if voice.playing and voice.stream != null and voice.stream.resource_path == expected_clip_path:
 			return voice
 	return null
+
+
+# -- one step out of a recording of many ------------------------------------
+#
+# The wiring half of "they sound weak and not natural" (see
+# FootstepSound's own "one step out of a recording of many"): an offset and
+# a pitch nothing applies changes nothing about how a step sounds.
+
+
+func test_a_step_into_a_walking_bed_starts_somewhere_other_than_the_top():
+	add_child_autofree(player.build())
+	var starts: Dictionary = {}
+	for _step in 24:
+		var voice := player._play_footstep_clip(
+			FootstepSound.clip_path_for("forest"), 0.0, "forest"
+		)
+		assert_not_null(voice)
+		starts[snappedf(voice.get_playback_position(), 0.01)] = true
+	assert_gt(
+		starts.size(), 1,
+		"every forest step started in the same place, which is what made them identical"
+	)
+
+
+## A real one-shot is played whole, from its own beginning: grass.ogg IS one
+## step, and starting it late would clip the only step it has.
+func test_a_one_shot_still_starts_at_its_own_beginning():
+	add_child_autofree(player.build())
+	for _step in 8:
+		var voice := player._play_footstep_clip(
+			FootstepSound.clip_path_for("grass"), 0.0, "grass"
+		)
+		assert_almost_eq(voice.get_playback_position(), 0.0, 0.05)
+
+
+func test_no_two_steps_land_on_exactly_the_same_pitch():
+	add_child_autofree(player.build())
+	var pitches: Dictionary = {}
+	for _step in 24:
+		var voice := player._play_footstep_clip(
+			FootstepSound.clip_path_for("forest"), 0.0, "forest"
+		)
+		pitches[snappedf(voice.pitch_scale, 0.001)] = true
+	assert_gt(pitches.size(), 1, "every step played at the same pitch")
+
+
+## And the swing stays inside what FootstepSound allows -- a voice is reused
+## across surfaces, so a pitch left from a previous call must never ride
+## along, exactly like the volume it already sets unconditionally.
+func test_every_step_is_pitched_inside_the_allowed_swing():
+	add_child_autofree(player.build())
+	for _step in 24:
+		var voice := player._play_footstep_clip(
+			FootstepSound.clip_path_for("forest"), 0.0, "forest"
+		)
+		assert_gte(voice.pitch_scale, 1.0 - FootstepSound.PITCH_VARIATION - 0.0001)
+		assert_lte(voice.pitch_scale, 1.0 + FootstepSound.PITCH_VARIATION + 0.0001)
+
+
+## A mushroom crush is its own one-shot and must not be pitch-shifted by
+## whatever surface last used the voice -- the same reuse guard the volume
+## already has.
+func test_a_mushroom_crush_plays_at_its_own_pitch():
+	add_child_autofree(player.build())
+	for _step in 8:
+		player._play_footstep_clip(FootstepSound.clip_path_for("forest"), 0.0, "forest")
+	var voice := player.play_mushroom_crush()
+	if voice != null:
+		assert_almost_eq(voice.pitch_scale, 1.0, 0.0001, "a crush inherited a footstep's pitch")
+
+
+## One step is one step. A bed is 41 seconds of somebody walking, so a step
+## read out of one has to be CLOSED again -- otherwise the rest of that
+## stranger's walk keeps playing under your own next step, four voices deep,
+## until the pool's round-robin happens to cut it off. A real wall-clock
+## wait, like test_mushroom_crush_stops_itself_after_its_own_max_duration.
+func test_a_step_into_a_bed_stops_after_one_steps_worth_of_it():
+	add_child_autofree(player.build())
+	var voice := player._play_footstep_clip(FootstepSound.clip_path_for("forest"), 0.0, "forest")
+	assert_true(voice.playing, "the premise: it must actually be playing right after the step")
+
+	await wait_seconds(FootstepSound.STEP_WINDOW_SECONDS + 0.15)
+
+	assert_false(voice.playing, "41 seconds of someone else's walk kept playing under the next step")
+
+
+## ...and a real one-shot is never cut: grass.ogg is already one step, well
+## inside the window, and stopping it early would clip its own tail.
+func test_a_one_shot_is_left_to_play_itself_out():
+	add_child_autofree(player.build())
+	var voice := player._play_footstep_clip(FootstepSound.clip_path_for("grass"), 0.0, "grass")
+	assert_true(voice.playing)
+	assert_lt(
+		FootstepSound.CLIP_LENGTH_SECONDS["grass"], FootstepSound.STEP_WINDOW_SECONDS,
+		"the premise: a one-shot ends before the window would ever close it"
+	)
+
+
+## Closing the window must close THIS step's window, not whichever step
+## happens to hold the voice when the timer goes off. The pool is 4 deep and
+## recycles, so a fifth step lands back on voice 0 while voice 0's first
+## window is still counting down -- and a timer that just calls stop() would
+## cut the new step off after a fraction of its own window.
+func test_a_recycled_voice_is_not_cut_short_by_the_previous_steps_window():
+	add_child_autofree(player.build())
+	for _step in InteractionSfxPlayer.FOOTSTEP_POOL_SIZE:
+		player._play_footstep_clip(FootstepSound.clip_path_for("forest"), 0.0, "forest")
+
+	# Late in the first step's window, but before it closes.
+	await wait_seconds(FootstepSound.STEP_WINDOW_SECONDS * 0.8)
+	var recycled := player._play_footstep_clip(FootstepSound.clip_path_for("forest"), 0.0, "forest")
+	assert_true(recycled.playing, "the premise: the recycled voice took the new step")
+
+	# Past the point the FIRST step's window closes, well inside the new one's.
+	await wait_seconds(FootstepSound.STEP_WINDOW_SECONDS * 0.4)
+
+	assert_true(recycled.playing, "the previous step's timer cut this step short")
