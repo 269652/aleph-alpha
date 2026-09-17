@@ -524,13 +524,14 @@ func test_a_building_is_never_placed_where_the_real_terrain_check_refuses():
 func test_a_building_already_occupying_ground_keeps_later_ones_off_it():
 	var coord := _find_settlement_chunk("grassland")
 	var world := StubWorld.new()
-	# Occupy almost the entire chunk, leaving only a small real pocket free.
-	for x in CHUNK_SIZE:
+	# A real occupied block, but not so much of the chunk that no village
+	# can settle here at all -- a site that cannot house its whole roster
+	# is founded nowhere now, and then this would assert nothing.
+	for x in 8:
 		for y in CHUNK_SIZE:
-			var cell := coord * CHUNK_SIZE + Vector2i(x, y)
-			if not (x >= 14 and x < 20 and y >= 14 and y < 18):
-				world.occupied_cells[cell] = "existing_structure"
+			world.occupied_cells[coord * CHUNK_SIZE + Vector2i(x, y)] = "existing_structure"
 	renderer.spawn_village(parent, coord, coord * CHUNK_SIZE, CHUNK_SIZE, TILE_SIZE, "grassland", world)
+	assert_gt(world.place_calls.size(), 0, "precondition: this village really was founded")
 	for call in world.place_calls:
 		for cell in BuildingCatalog.footprint_cells(call["building_id"], call["origin_local"]):
 			var global_cell: Vector2i = coord * CHUNK_SIZE + cell
@@ -1761,3 +1762,52 @@ func test_no_field_tile_is_water_or_already_built_on():
 				world.modification_at_global(cell.x, cell.y), "",
 				"%s already has something standing on it" % str(cell)
 			)
+
+
+# -- a village only settles where there is room for all of it --------------
+#
+# Asked for directly: "They should only settle where there's enough space
+# and the square wins; houses should just be moved further away connected
+# by streets". A site that can take the square but only some of the roster
+# is not a site for a village -- it is how a riverside chunk ended up with
+# a market square and one house.
+
+
+func test_a_village_founds_nothing_where_it_cannot_house_everyone():
+	var coord := _find_settlement_chunk("grassland")
+	var world := StubWorld.new()
+	# Dry only where two or three houses fit, nowhere near enough for the
+	# whole roster however far out the streets go.
+	var street_y: int = VillageLayout.skeleton(CHUNK_SIZE, VillageLayout.seed_for(coord))["street_y"]
+	for y in CHUNK_SIZE:
+		for x in CHUNK_SIZE:
+			if y >= street_y - 2 and y <= street_y and x >= 4 and x < 12:
+				continue
+			world.water_cells[coord * CHUNK_SIZE + Vector2i(x, y)] = true
+
+	var spawned := renderer.spawn_village(
+		parent, coord, coord * CHUNK_SIZE, CHUNK_SIZE, TILE_SIZE, "grassland", world
+	)
+	var npc_count := 0
+	for node in spawned:
+		if node is NpcMarker:
+			npc_count += 1
+	assert_eq(npc_count, 0, "a site that houses only part of a village is not a village site")
+	assert_eq(world.place_calls.size(), 0, "and nothing at all is built there")
+
+
+func test_a_village_with_room_for_everyone_is_founded_as_before():
+	var coord := _find_settlement_chunk("grassland")
+	var world := StubWorld.new()
+	var spawned := renderer.spawn_village(
+		parent, coord, coord * CHUNK_SIZE, CHUNK_SIZE, TILE_SIZE, "grassland", world
+	)
+	var npc_count := 0
+	for node in spawned:
+		if node is NpcMarker:
+			npc_count += 1
+	assert_eq(npc_count, SettlementGenerator.POPULATION, "open ground still founds a whole village")
+	assert_eq(
+		_house_calls(world).size(), SettlementGenerator.POPULATION,
+		"and every villager in it has a house"
+	)

@@ -105,6 +105,7 @@ const LeafLitterRenderer = preload("res://src/rendering/leaf_litter_renderer.gd"
 const FootstepGait = preload("res://src/gameplay/footstep_gait.gd")
 const FootprintField = preload("res://src/world/footprint_field.gd")
 const FootprintRenderer = preload("res://src/rendering/footprint_renderer.gd")
+const GroundImprint = preload("res://src/world/ground_imprint.gd")
 const CreatureMass = preload("res://src/world/creature_mass.gd")
 const SimulationSettings = preload("res://src/gameplay/simulation_settings.gd")
 
@@ -1837,12 +1838,10 @@ func claim_property_with_deed(property_id: String, settlement_id: String = "") -
 ## counting it twice would be a free way to push a hamlet over a tier threshold
 ## or an institution over its formation minimum with nobody moving in.
 func record_player_settled_if_new(settlement_id: String) -> bool:
-	var history := _event_store.events_for_entity(settlement_id)
-	if history.is_empty():
+	if _event_store.latest_event_for_entity(settlement_id) == null:
 		return false
-	for event in history:
-		if event.type == "player_settled":
-			return false
+	if not _event_store.events_for_entity_of_type(settlement_id, "player_settled").is_empty():
+		return false
 
 	# The ACTOR is the player's entity id, not their household id, so
 	# _households_in_settlement can resolve it through the same
@@ -1891,8 +1890,10 @@ const BLUEPRINT_RECIPE_BY_ITEM_ID := {
 ## event history answers this correctly with no separate reload path
 ## needed.
 func has_unlocked_blueprint(recipe_id: String) -> bool:
-	for event in _event_store.events_for_entity(PlayerIdentity.PLAYER_ENTITY_ID):
-		if event.type == "blueprint_learned" and event.tags.has(recipe_id):
+	for event in _event_store.events_for_entity_of_type(
+		PlayerIdentity.PLAYER_ENTITY_ID, "blueprint_learned"
+	):
+		if event.tags.has(recipe_id):
 			return true
 	return false
 
@@ -2223,7 +2224,7 @@ func settle_resident_if_new(recipe_id: String, origin_tile: Vector2i) -> String:
 	settled.actors = [resident_id]
 	settled.tags = [project.id]
 	var settlement_id := EntityRef.for_settlement(chunk_coord)
-	if not _event_store.events_for_entity(settlement_id).is_empty():
+	if _event_store.latest_event_for_entity(settlement_id) != null:
 		settled.witnesses = [settlement_id]
 	_event_store.append(settled)
 	_memory_store.witness_event(settled, _world_age_seconds)
@@ -2738,11 +2739,11 @@ func _contract_outcome_is_news(event_type: String, parties: Array[String]) -> bo
 func _recorded_contract_outcome(sorted_parties: Array[String]) -> String:
 	if sorted_parties.is_empty():
 		return ""
-	var history := _event_store.events_for_entity(sorted_parties[0])
+	var history := _event_store.events_for_entity_of_types(
+		sorted_parties[0], _CONTRACT_OUTCOME_EVENTS
+	)
 	for i in range(history.size() - 1, -1, -1):
 		var event: Event = history[i]
-		if not _CONTRACT_OUTCOME_EVENTS.has(event.type):
-			continue
 		var actors: Array[String] = []
 		for actor in event.actors:
 			actors.append(actor)
@@ -2903,11 +2904,11 @@ var _settlement_production_outcome: Dictionary = {}
 ## a settlement runs one recipe per occupation, so "how it went" is only
 ## meaningful for this settlement AND this recipe.
 func _recorded_production_outcome(settlement_id: String, recipe_id: String) -> String:
-	var history := _event_store.events_for_entity(settlement_id)
+	var history := _event_store.events_for_entity_of_types(
+		settlement_id, ["production_failed", "production_succeeded"]
+	)
 	for i in range(history.size() - 1, -1, -1):
 		var event: Event = history[i]
-		if event.type != "production_failed" and event.type != "production_succeeded":
-			continue
 		if event.tags.is_empty() or event.tags[0] != recipe_id:
 			continue
 		return "failed" if event.type == "production_failed" else "succeeded"
@@ -3015,7 +3016,7 @@ func dissolve_institution(institution_id: String) -> bool:
 ## harmless no-op rather than a duplicate founding.
 func _record_ruin_from(ruin_key: String, cause_event_id: String) -> void:
 	var ruin_id := EntityRef.for_kind("ruin", ruin_key)
-	if not _event_store.events_for_entity(ruin_id).is_empty():
+	if _event_store.latest_event_for_entity(ruin_id) != null:
 		return
 	var event := Event.new("ruin_formed", _world_age_seconds)
 	event.actors.append(ruin_id)
@@ -3437,15 +3438,13 @@ var _settlement_specialization: Dictionary = {}
 ## so a future settlement_became_<something-else> can never be mistaken for
 ## a tier the classifier would ever produce.
 func _recorded_settlement_tier(settlement_id: String) -> String:
-	var history := _event_store.events_for_entity(settlement_id)
-	for i in range(history.size() - 1, -1, -1):
-		var event: Event = history[i]
-		if not event.type.begins_with("settlement_became_"):
-			continue
-		var tier := event.type.substr("settlement_became_".length())
-		if SettlementTier.TIERS.has(tier):
-			return tier
-	return ""
+	var types: Array = []
+	for tier in SettlementTier.TIERS:
+		types.append("settlement_became_%s" % tier)
+	var history := _event_store.events_for_entity_of_types(settlement_id, types)
+	if history.is_empty():
+		return ""
+	return history.back().type.substr("settlement_became_".length())
 
 
 ## What `settlement_id` was last actually event-sourced as specializing in,
@@ -3455,11 +3454,10 @@ func _recorded_settlement_tier(settlement_id: String) -> String:
 ## settlement_specialized -- which nothing writes -- reads as never having
 ## specialized rather than as an empty specialization.
 func _recorded_settlement_specialization(settlement_id: String) -> String:
-	var history := _event_store.events_for_entity(settlement_id)
+	var history := _event_store.events_for_entity_of_type(settlement_id, "settlement_specialized")
 	for i in range(history.size() - 1, -1, -1):
-		var event: Event = history[i]
-		if event.type == "settlement_specialized" and not event.tags.is_empty():
-			return event.tags[0]
+		if not history[i].tags.is_empty():
+			return history[i].tags[0]
 	return ""
 
 
@@ -3647,15 +3645,13 @@ func step_settlements(delta_seconds: float) -> void:
 ## NOT a status: only the three SettlementState.STATUSES count, so a
 ## settlement that has been founded and never assessed still reads "".
 func _recorded_settlement_status(settlement_id: String) -> String:
-	var history := _event_store.events_for_entity(settlement_id)
-	for i in range(history.size() - 1, -1, -1):
-		var event: Event = history[i]
-		if not event.type.begins_with("settlement_"):
-			continue
-		var status := event.type.substr("settlement_".length())
-		if SettlementState.STATUSES.has(status):
-			return status
-	return ""
+	var types: Array = []
+	for status in SettlementState.STATUSES:
+		types.append("settlement_%s" % status)
+	var history := _event_store.events_for_entity_of_types(settlement_id, types)
+	if history.is_empty():
+		return ""
+	return history.back().type.substr("settlement_".length())
 
 
 ## Counts one more consecutive assessment of `status` for this settlement
@@ -4782,8 +4778,8 @@ func _resolve_caravan_raid(trip: CaravanTrip, raid_position: Vector2) -> void:
 ## PRODUCES, not what it merely attempted.
 func _production_counts_for_settlement(settlement_id: String) -> Dictionary:
 	var counts := {}
-	for event in _event_store.events_for_entity(settlement_id):
-		if event.type != "production_succeeded" or event.tags.is_empty():
+	for event in _event_store.events_for_entity_of_type(settlement_id, "production_succeeded"):
+		if event.tags.is_empty():
 			continue
 		var recipe_id: String = event.tags[0]
 		counts[recipe_id] = counts.get(recipe_id, 0) + 1
@@ -4832,8 +4828,8 @@ func household_count_for_settlement(settlement_id: String) -> int:
 ## duplicate founding for a path already known to be worn.
 func record_path_worn_if_new(tile: Vector2i) -> void:
 	var path_id := EntityRef.for_kind("path", "%d_%d" % [tile.x, tile.y])
-	var history := _event_store.events_for_entity(path_id)
-	if not history.is_empty() and history.back().type == "path_worn":
+	var latest = _event_store.latest_event_for_entity(path_id)
+	if latest != null and latest.type == "path_worn":
 		return
 	var event := Event.new("path_worn", _world_age_seconds)
 	event.actors.append(path_id)
@@ -4858,8 +4854,8 @@ func record_path_worn_if_new(tile: Vector2i) -> void:
 ## refusing it because the last-seen tier was the deeper one.
 func record_path_reclaimed(tile: Vector2i) -> void:
 	var path_id := EntityRef.for_kind("path", "%d_%d" % [tile.x, tile.y])
-	var history := _event_store.events_for_entity(path_id)
-	if history.is_empty() or not _CURRENTLY_WORN_EVENTS.has(history.back().type):
+	var latest = _event_store.latest_event_for_entity(path_id)
+	if latest == null or not _CURRENTLY_WORN_EVENTS.has(latest.type):
 		return
 	var event := Event.new("path_reclaimed", _world_age_seconds)
 	event.actors.append(path_id)
@@ -4886,8 +4882,8 @@ const _CURRENTLY_WORN_EVENTS := ["path_worn", "trail_formed"]
 ## only fires on the actual formation transition.
 func record_trail_formed_if_new(tile: Vector2i) -> void:
 	var path_id := EntityRef.for_kind("path", "%d_%d" % [tile.x, tile.y])
-	var history := _event_store.events_for_entity(path_id)
-	if not history.is_empty() and history.back().type == "trail_formed":
+	var latest = _event_store.latest_event_for_entity(path_id)
+	if latest != null and latest.type == "trail_formed":
 		return
 	var event := Event.new("trail_formed", _world_age_seconds)
 	event.actors.append(path_id)
@@ -4902,8 +4898,8 @@ func record_trail_formed_if_new(tile: Vector2i) -> void:
 ## fires while the path's most recent event actually IS a trail formation.
 func record_trail_reclaimed(tile: Vector2i) -> void:
 	var path_id := EntityRef.for_kind("path", "%d_%d" % [tile.x, tile.y])
-	var history := _event_store.events_for_entity(path_id)
-	if history.is_empty() or history.back().type != "trail_formed":
+	var latest = _event_store.latest_event_for_entity(path_id)
+	if latest == null or latest.type != "trail_formed":
 		return
 	var event := Event.new("trail_reclaimed", _world_age_seconds)
 	event.actors.append(path_id)
@@ -4946,8 +4942,8 @@ const SETTLING_EVENT_TYPES := ["npc_settled", "player_settled", "player_house_se
 func _households_in_settlement(settlement_id: String) -> Array[String]:
 	var household_ids: Array[String] = []
 	var seen := {}
-	for event in _event_store.events_for_entity(settlement_id):
-		if not SETTLING_EVENT_TYPES.has(event.type) or event.actors.is_empty():
+	for event in _event_store.events_for_entity_of_types(settlement_id, SETTLING_EVENT_TYPES):
+		if event.actors.is_empty():
 			continue
 		var household := _household_store.household_for(event.actors[0])
 		if household == null or seen.has(household.id):
@@ -4971,8 +4967,8 @@ func _households_in_settlement(settlement_id: String) -> Array[String]:
 ## from it -- exactly the settlements whose news is worth hearing later.
 func _villagers_in_settlement(settlement_id: String) -> Array[String]:
 	var npc_ids: Array[String] = []
-	for event in _event_store.events_for_entity(settlement_id):
-		if event.type != "npc_settled" or event.actors.is_empty():
+	for event in _event_store.events_for_entity_of_type(settlement_id, "npc_settled"):
+		if event.actors.is_empty():
 			continue
 		npc_ids.append(event.actors[0])
 	return npc_ids
@@ -4997,8 +4993,8 @@ func _settlement_of_party(party_id: String) -> String:
 		npc_id = household.members[0]
 	if EntityRef.kind_of(npc_id) != "npc":
 		return ""
-	for event in _event_store.events_for_entity(npc_id):
-		if event.type == "npc_settled" and not event.witnesses.is_empty():
+	for event in _event_store.events_for_entity_of_type(npc_id, "npc_settled"):
+		if not event.witnesses.is_empty():
 			return event.witnesses[0]
 	return ""
 
@@ -5097,7 +5093,7 @@ func wipe_event_store(path: String = EventStorePersistence.SAVE_PATH) -> void:
 ## keeps the exact old per-index id below.
 func record_settlement_founded_if_new(chunk_coord: Vector2i, npcs: Array, plots: Array = []) -> void:
 	var settlement_id := EntityRef.for_settlement(chunk_coord)
-	if not _event_store.events_for_entity(settlement_id).is_empty():
+	if _event_store.latest_event_for_entity(settlement_id) != null:
 		return
 
 	var npc_ids: Array[String] = []
@@ -5499,6 +5495,35 @@ func is_weather_forced() -> bool:
 const MAX_VILLAGE_SEARCH_RADIUS_CHUNKS := 24
 
 
+## Whether a village would really settle in this chunk -- the SAME
+## question VillageRenderer answers at founding (does the layout house the
+## whole roster), asked without loading or spawning anything.
+##
+## has_settlement_at only says a settlement is MEANT to be here; it knows
+## nothing about the ground. Since a village only settles where there is
+## room for all of it, the two disagree on exactly the chunks a player must
+## not be sent to -- reported in play as "It teleports me to where no
+## village is".
+##
+## Occupancy is deliberately "nothing built": this asks the founding-time
+## question, which is the one that decides whether a village is ever there
+## at all. Run only for chunks that already passed the settlement roll (one
+## in SETTLEMENT_CHANCE_DENOMINATOR), so the ring search pays for a layout
+## rarely rather than per chunk.
+func _village_would_settle(chunk_coord: Vector2i) -> bool:
+	var is_dry := _is_dry_local(chunk_coord)
+	var settlement := _settlement_generator.generate_settlement(
+		chunk_coord, chunk_coord * CHUNK_SIZE, CHUNK_SIZE, TerrainRenderer.TILE_SIZE,
+		SettlementGenerator.POPULATION, is_dry
+	)
+	var building_ids: Array = SettlementGenerator.house_ids_for(chunk_coord, settlement.npcs)
+	var result: Dictionary = VillageLayout.new().layout(
+		building_ids, CHUNK_SIZE, VillageLayout.seed_for(chunk_coord),
+		is_dry, func(_cell: Vector2i) -> bool: return false
+	)
+	return VillageLayout.houses_everyone(result, building_ids)
+
+
 ## Nearest chunk hosting a settlement (see SettlementGenerator), searching
 ## outward from `from_tile`'s own chunk -- the discovery half of the
 ## /village dev-console command (see World._handle_village_command).
@@ -5516,7 +5541,8 @@ func find_nearest_village(from_tile: Vector2i) -> Variant:
 		_settlement_generator,
 		func(chunk_coord: Vector2i) -> String:
 			var chunk := generator.generate_chunk(chunk_coord, CHUNK_SIZE)
-			return _biome_classifier.dominant_biome(chunk.biome)
+			return _biome_classifier.dominant_biome(chunk.biome),
+		_village_would_settle
 	)
 	if found_chunk == null:
 		return null
@@ -6935,16 +6961,25 @@ static func footstep_surface_for(biome: String, snow_lying: bool, underwater: bo
 ## as before (see snow_depth()/tread_snow_at, PathScarring.step_on); this
 ## is a purely additive VISUAL layer stamped on top of whatever those
 ## mechanisms already do underneath.
-## Returns the raw biome/snow/underwater facts behind a real step (empty
-## Dictionary when nothing happened this call -- baseline, teleport, or no
-## stride due yet) so a caller can trigger a footstep SOUND at the exact
-## same real per-step cadence the visual print already uses, without
-## re-deriving FootstepGait's own accumulator a second time. Deliberately
-## NOT an audio surface key -- EarthChunkManager (world state) must not
+## Returns the raw biome/snow/underwater/ground-material facts behind a
+## real step (empty Dictionary when nothing happened this call --
+## baseline, teleport, or no stride due yet) so a caller can trigger a
+## footstep SOUND at the exact same real per-step cadence the visual print
+## already uses, without re-deriving FootstepGait's own accumulator a
+## second time. `ground_material` is what the foot actually touches (see
+## GroundImprint.material_underfoot) -- a laid street is stone even though
+## the biome under it still reads grassland, exactly as a river leaves the
+## biome under it alone, so the sound needs it as its own fact rather than
+## inferring it from the biome.
+##
+## Deliberately NOT an audio surface key -- EarthChunkManager (world
+## state) must not
 ## depend on FootstepSound (audio); that dependency runs the other way,
 ## the same direction NatureSoundscapePlayer already reads real world
 ## state rather than World reading audio state. The caller feeds these
-## facts into FootstepSound.surface_for itself.
+## facts into FootstepSound.surface_for itself -- which is also why
+## `ground_material` is the raw material ("stone"), not the sound it maps
+## to ("rock").
 ##
 ## Populated even when the VISUAL footprint has no art for this biome
 ## (see footstep_surface_for's own narrower `_SURFACE_BY_FOOTSTEP_BIOME`)
@@ -6973,6 +7008,14 @@ func record_footstep(
 	var tile := _world_tile_for_pixel(pixel_position)
 	var underwater := is_river_at_global(tile.x, tile.y) or is_lake_at_global(tile.x, tile.y)
 	var snow_lying := _snow_depth > 0.0
+	# What the foot actually touches here -- the biome's own soil, the snow
+	# lying on top of it, or something LAID (see GroundImprint.
+	# material_underfoot). Resolved ONCE, for both consumers: the print gate
+	# below reads it to decide whether this ground can be indented at all,
+	# and the returned facts carry it out to FootstepSound so a laid street
+	# stops sounding like the grass beside it. One step, one ground -- the
+	# print and the sound cannot disagree about what was underfoot.
+	var ground_material := GroundImprint.material_underfoot(modification_at_global(tile.x, tile.y), snow_lying)
 	# biome_at_global(tile.x, tile.y) stays INLINE in the footstep_surface_for
 	# call below (not hoisted into a shared variable) -- test_record_
 	# footstep_passes_a_third_argument_to_footstep_surface_for's own source-
@@ -6986,9 +7029,24 @@ func record_footstep(
 		"biome": biome_at_global(tile.x, tile.y),
 		"snow_lying": snow_lying,
 		"underwater": underwater,
+		"ground_material": ground_material,
 	}
 	var surface := footstep_surface_for(biome_at_global(tile.x, tile.y), snow_lying, underwater)
 	if surface.is_empty():
+		return result
+	# Whether that ground gives way at all is a real indentation-hardness
+	# question rather than a biome one -- see GroundImprint, which compares
+	# a real footfall's own pressure against the material's own published
+	# one. A laid cobbled street is granite setts, orders of magnitude past
+	# anything a foot can press with, so it keeps no mark at all (reported
+	# live: "walking over cobblestone streets should not leave
+	# footprints").
+	#
+	# Deliberately AFTER `result` is fully populated and returned intact:
+	# a step on a street really did happen, so FootstepSound still hears it
+	# (see this function's own doc comment on why the returned facts are
+	# wider than the visual print's own coverage). Only the MARK is absent.
+	if not GroundImprint.yields_to_footfall(ground_material):
 		return result
 	var print_position := pixel_position + FootstepGait.print_offset(heading, side)
 	var chunk_coord := _chunk_coord_for_tile(_world_tile_for_pixel(print_position))

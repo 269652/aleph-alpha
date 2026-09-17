@@ -65,3 +65,36 @@ func test_passes_each_candidate_chunks_own_biome_to_the_settlement_check():
 		return "grassland"
 	finder.find_nearest(Vector2i(0, 0), 1, stub, biome_for)
 	assert_true(seen_biomes.has(Vector2i(1, 0)), "the settlement check must see the real per-chunk biome")
+
+
+# -- a settlement the world will not actually build is not a destination ---
+#
+# Reported in play: "It teleports me to where no village is".
+# has_settlement_at is the procedural roll -- whether a settlement is meant
+# to be here -- and it knows nothing about whether the ground can house
+# one. Since a village only settles where there is room for all of it
+# (VillageRenderer, docs/concept/building.md), the two can disagree, and
+# the finder was sending the player to the chunks where they do.
+
+
+func test_a_settlement_the_ground_cannot_take_is_passed_over():
+	var stub := StubSettlementGenerator.new()
+	stub.settlement_chunks[Vector2i(1, 0)] = true  # nearer, but unbuildable
+	stub.settlement_chunks[Vector2i(4, 0)] = true
+	var would_settle := func(chunk_coord: Vector2i) -> bool: return chunk_coord != Vector2i(1, 0)
+	var found: Variant = finder.find_nearest(Vector2i.ZERO, 10, stub, _grassland, would_settle)
+	assert_eq(found, Vector2i(4, 0), "the nearest village that is really there, not the nearest roll")
+
+
+func test_nothing_is_found_when_no_settlement_can_be_built():
+	var stub := StubSettlementGenerator.new()
+	stub.settlement_chunks[Vector2i(2, 0)] = true
+	stub.settlement_chunks[Vector2i(3, 3)] = true
+	var never := func(_chunk_coord: Vector2i) -> bool: return false
+	assert_null(finder.find_nearest(Vector2i.ZERO, 6, stub, _grassland, never))
+
+
+func test_without_the_extra_condition_it_searches_exactly_as_before():
+	var stub := StubSettlementGenerator.new()
+	stub.settlement_chunks[Vector2i(2, 0)] = true
+	assert_eq(finder.find_nearest(Vector2i.ZERO, 10, stub, _grassland), Vector2i(2, 0))

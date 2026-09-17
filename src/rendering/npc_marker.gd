@@ -199,6 +199,10 @@ var _on_real_field := false
 ## another tile size.
 const FIELD_REACH_TILES := 0.5
 
+## How far the water runs from the bed a farmer is working: one tile, the
+## beds they could reach without moving. See _water_the_beds_around.
+const TEND_REACH_TILES := 1
+
 ## The throttle above: seconds since the last real scan, what it found, and
 ## a count of the real scans performed. Starts already due, so the first
 ## working frame of a day knows whether quarry is there rather than drawing
@@ -680,6 +684,32 @@ func _work_field_cell() -> void:
 		"water":
 			if _world.has_method("water_farm_plot_at_global"):
 				_world.water_farm_plot_at_global(cell.x, cell.y)
+	_water_the_beds_around(cell)
+
+
+## Whatever the farmer just did on `cell`, the beds around it get wet too.
+##
+## A field capped at ten tiles is more ground than one villager can walk in
+## one wither grace -- measured at ZERO wheat per work block without this,
+## because every plot died before it ripened and the whole block went on
+## replanting ground that died again. The answer is not a bigger number, it
+## is what a farmer actually does: you water a BED and the water runs to
+## the beds beside it. One trip with a can, or along a furrow, wets the
+## ground around where you are standing; it does not wet one plant.
+##
+## The bed itself is included: a visit with nothing else to do on it is
+## still a tending visit, which is what VillageFarm.next_action's own
+## thirstiest-bed fallback sends the farmer out for.
+##
+## Only this villager's OWN field, and only within TEND_REACH_TILES, so a
+## farmer never tends their neighbour's ground from across the village.
+func _water_the_beds_around(cell: Vector2i) -> void:
+	if not _world.has_method("water_farm_plot_at_global"):
+		return
+	for other in field_cells:
+		if absi(other.x - cell.x) > TEND_REACH_TILES or absi(other.y - cell.y) > TEND_REACH_TILES:
+			continue
+		_world.water_farm_plot_at_global(other.x, other.y)
 
 
 ## This field's plots, in field_cells order -- null for ground nobody has

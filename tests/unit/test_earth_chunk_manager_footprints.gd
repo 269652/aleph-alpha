@@ -16,6 +16,7 @@ const GeoCoordinates = preload("res://src/world/geo_coordinates.gd")
 const FootstepGait = preload("res://src/gameplay/footstep_gait.gd")
 const FootprintField = preload("res://src/world/footprint_field.gd")
 const CreatureMass = preload("res://src/world/creature_mass.gd")
+const GroundImprint = preload("res://src/world/ground_imprint.gd")
 
 var manager: EarthChunkManager
 var tile_map_layer: TileMapLayer
@@ -428,4 +429,205 @@ func test_a_heavier_creature_leaves_a_larger_print_than_a_lighter_one():
 	assert_lt(
 		field.prints()[0].size_scale, field.prints()[1].size_scale,
 		"the horse's own print should read larger than the mouse's"
+	)
+
+
+# -- a laid road takes no print: real indentation physics, not a tile-id ---
+# -- exemption (see GroundImprint, docs/concept/infrastructure.md's Road ---
+# -- tier) -- reported live: "walking over cobblestone streets should not --
+# -- leave footprints" -----------------------------------------------------
+
+## Paves every cell a whole stride's walk could possibly touch, so the
+## step being ON the street is unambiguous regardless of where in its own
+## tile `pixel` falls or how a stride's length divides into TILE_SIZE.
+func _pave_around(pixel: Vector2, step: Vector2) -> void:
+	for anchor in [pixel, pixel + step]:
+		var tile := manager._world_tile_for_pixel(anchor)
+		for dx in range(-1, 2):
+			for dy in range(-1, 2):
+				manager.build_at_global(tile.x + dx, tile.y + dy, TerrainRenderer.ROAD_TILE_ID)
+
+
+## The report itself. A road is LAID granite setts (docs/concept/
+## infrastructure.md's Road tier -- "a flat cobble surface"), whose
+## indentation hardness is orders of magnitude past the pressure any foot
+## can put on it, so no mark is left behind at all -- even though the
+## grassland/forest BIOME underneath still reads exactly as before.
+func test_walking_over_a_cobbled_street_leaves_no_print():
+	manager._load_chunk(_berlin_chunk)
+	var pixel := _real_footprint_pixel_or_nan()
+	if is_nan(pixel.x):
+		pass_test("precondition unmet (this chunk's real biome/season this run isn't grass/forest snow-free) -- nothing to check")
+		return
+	var step := Vector2.UP * (FootstepGait.STRIDE_LENGTH_PX + 1.0)
+	_pave_around(pixel, step)
+	manager.record_footstep(pixel, Vector2.UP)  # baseline
+	manager.record_footstep(pixel + step, Vector2.UP)
+	var field: FootprintField = manager._footprint_fields[_berlin_chunk]
+	assert_eq(field.count(), 0, "a cobbled street is too hard to take a footprint")
+
+
+## The control for the test above, walking the IDENTICAL stride on the
+## IDENTICAL ground with the paving as the only difference -- so the
+## assertion above can only be explained by the road itself, not by this
+## chunk's own biome, season, or stride arithmetic.
+func test_the_same_stride_on_unpaved_ground_still_leaves_its_print():
+	manager._load_chunk(_berlin_chunk)
+	var pixel := _real_footprint_pixel_or_nan()
+	if is_nan(pixel.x):
+		pass_test("precondition unmet (this chunk's real biome/season this run isn't grass/forest snow-free) -- nothing to check")
+		return
+	var step := Vector2.UP * (FootstepGait.STRIDE_LENGTH_PX + 1.0)
+	manager.record_footstep(pixel, Vector2.UP)  # baseline
+	manager.record_footstep(pixel + step, Vector2.UP)
+	var field: FootprintField = manager._footprint_fields[_berlin_chunk]
+	assert_eq(field.count(), 1, "the same stride on unpaved ground must still leave its print")
+
+
+## Snow lies ON TOP of a street like it lies on everything else (snow_
+## depth() is a single global scalar -- see footstep_surface_for's own
+## snow-first precedence), and snow is soft. What the foot actually
+## touches on a snowed-over street is the snow, not the setts, so the
+## print comes back.
+func test_snow_lying_on_a_cobbled_street_takes_a_print_again():
+	manager._load_chunk(_berlin_chunk)
+	var centre_tile: Vector2i = _berlin_chunk * EarthChunkManager.CHUNK_SIZE + Vector2i(
+		EarthChunkManager.CHUNK_SIZE / 2, EarthChunkManager.CHUNK_SIZE / 2
+	)
+	var biome := manager.biome_at_global(centre_tile.x, centre_tile.y)
+	if not ["grassland", "forest"].has(biome):
+		pass_test("precondition unmet (this chunk's real biome this run isn't grass/forest) -- nothing to check")
+		return
+	var pixel := _pixel_for(centre_tile)
+	var step := Vector2.UP * (FootstepGait.STRIDE_LENGTH_PX + 1.0)
+	_pave_around(pixel, step)
+	manager._snow_depth = 0.5
+	manager.record_footstep(pixel, Vector2.UP)  # baseline
+	manager.record_footstep(pixel + step, Vector2.UP)
+	var field: FootprintField = manager._footprint_fields[_berlin_chunk]
+	assert_eq(field.count(), 1, "snow lying on the setts is what the foot presses into")
+	assert_eq(field.prints()[0].surface, "snow")
+
+
+## A SUSTAINED walk, not a single stride: the same walker, the same
+## chunk, the same heading, paved in one row and untouched in the other.
+## Covers what the single-stride tests above cannot -- that nothing else
+## in the per-frame path quietly re-adds a print once walking keeps going,
+## and that the street's own refusal is not a one-stride accident.
+##
+## The stride count is derived from how much room the walk really has
+## inside its own chunk rather than hardcoded, so a later change to
+## FootstepGait.STRIDE_LENGTH_PX or CHUNK_SIZE cannot silently walk this
+## test off the loaded chunk (where prints stop being recorded for a
+## reason that has nothing to do with paving).
+func test_a_sustained_walk_marks_bare_ground_and_never_the_street():
+	manager._load_chunk(_berlin_chunk)
+	var centre_tile: Vector2i = _berlin_chunk * EarthChunkManager.CHUNK_SIZE + Vector2i(
+		EarthChunkManager.CHUNK_SIZE / 2, EarthChunkManager.CHUNK_SIZE / 2
+	)
+	var stride := FootstepGait.STRIDE_LENGTH_PX * 1.01
+	var room_px := float(EarthChunkManager.CHUNK_SIZE / 2 - 2) * TerrainRenderer.TILE_SIZE
+	var strides := floori(room_px / stride)
+	if strides < 5 or manager.snow_depth() > 0.0:
+		pass_test("precondition unmet (too little room for a real sustained walk, or snow is lying) -- nothing to check")
+		return
+	var street_y := centre_tile.y + 2
+	# Every tile either walk touches must really be footprint-bearing
+	# ground, or the comparison measures this chunk's own biome edges
+	# rather than the paving (this file's own established honesty about
+	# real, probabilistic terrain -- see _real_footprint_pixel_or_nan).
+	var last_x := centre_tile.x + ceili(strides * stride / TerrainRenderer.TILE_SIZE) + 1
+	for x in range(centre_tile.x - 1, last_x + 1):
+		for y in [centre_tile.y - 1, centre_tile.y, centre_tile.y + 1, street_y - 1, street_y, street_y + 1]:
+			if not ["grassland", "forest"].has(manager.biome_at_global(x, y)):
+				pass_test("precondition unmet (the walked rows aren't all grass/forest this run) -- nothing to check")
+				return
+
+	var field: FootprintField = manager._footprint_fields[_berlin_chunk]
+	var bare_gait := FootstepGait.new()
+	var bare_start := _pixel_for(centre_tile)
+	manager.record_footstep(bare_start, Vector2.RIGHT, bare_gait, CreatureMass.PLAYER_MASS_KG)
+	for i in range(strides):
+		manager.record_footstep(bare_start + Vector2.RIGHT * stride * (i + 1), Vector2.RIGHT, bare_gait, CreatureMass.PLAYER_MASS_KG)
+	assert_eq(field.count(), strides, "untouched ground should keep one print per stride walked")
+
+	# Written straight into the chunk's own modification dict rather than
+	# through build_at_global -- the same shortcut test_terrain_renderer.gd
+	# and test_stone_renderer.gd already take, and here it is a real cost
+	# question rather than a convenience: build_at_global repaints the
+	# WHOLE chunk per cell, which for a street this long ran this one test
+	# past half an hour and took the whole file with it (CONTRIBUTING.md is
+	# explicit that a slow file is a real cost, not a cosmetic one). The
+	# gate reads `modification_at_global`, which reads exactly this dict,
+	# so it sees an identical world either way -- and the three tests above
+	# still pave through the real public build_at_global path, so that
+	# wiring stays covered.
+	var chunk = manager._loaded_chunks[_berlin_chunk]
+	for x in range(centre_tile.x - 1, last_x + 1):
+		for y in [street_y - 1, street_y, street_y + 1]:
+			chunk.modifications[manager._local_coord(x, y)] = TerrainRenderer.ROAD_TILE_ID
+	var street_gait := FootstepGait.new()
+	var street_start := _pixel_for(Vector2i(centre_tile.x, street_y))
+	manager.record_footstep(street_start, Vector2.RIGHT, street_gait, CreatureMass.PLAYER_MASS_KG)
+	for i in range(strides):
+		manager.record_footstep(street_start + Vector2.RIGHT * stride * (i + 1), Vector2.RIGHT, street_gait, CreatureMass.PLAYER_MASS_KG)
+	assert_eq(field.count(), strides, "the street should have added nothing at all to what the bare walk left")
+
+
+# -- the step facts carry what the ground is MADE OF, so the footstep -----
+# -- SOUND can stop taking a laid street for the grass beside it (see -----
+# -- FootstepSound.surface_for, docs/concept/creature_and_footstep_audio. --
+# -- md) -- the same GroundImprint answer the print gate itself reads, ----
+# -- never a second, separately-derived one ------------------------------
+
+func test_the_step_facts_report_untouched_ground_as_soil():
+	manager._load_chunk(_berlin_chunk)
+	var pixel := _real_footprint_pixel_or_nan()
+	if is_nan(pixel.x):
+		pass_test("precondition unmet (this chunk's real biome/season this run isn't grass/forest snow-free) -- nothing to check")
+		return
+	manager.record_footstep(pixel, Vector2.UP)  # baseline
+	var step := Vector2.UP * (FootstepGait.STRIDE_LENGTH_PX + 1.0)
+	var result: Dictionary = manager.record_footstep(pixel + step, Vector2.UP)
+	assert_eq(result.get("ground_material"), GroundImprint.SOIL)
+
+
+## The point of the whole fact: a street really is stone underfoot, even
+## though the biome beneath it still reads grassland/forest.
+func test_the_step_facts_report_a_paved_street_as_stone():
+	manager._load_chunk(_berlin_chunk)
+	var pixel := _real_footprint_pixel_or_nan()
+	if is_nan(pixel.x):
+		pass_test("precondition unmet (this chunk's real biome/season this run isn't grass/forest snow-free) -- nothing to check")
+		return
+	var step := Vector2.UP * (FootstepGait.STRIDE_LENGTH_PX + 1.0)
+	_pave_around(pixel, step)
+	manager.record_footstep(pixel, Vector2.UP)  # baseline
+	var result: Dictionary = manager.record_footstep(pixel + step, Vector2.UP)
+	assert_eq(result.get("ground_material"), "stone")
+	assert_true(
+		["grassland", "forest"].has(result.get("biome")),
+		"the biome underneath is untouched by paving -- that is exactly why the material has to be reported separately"
+	)
+
+
+## A step that lands where no print could ever be drawn still reports what
+## it landed on -- the returned facts are deliberately WIDER than the
+## visual print's own coverage (see record_footstep's own doc comment), and
+## the sound must not silently inherit the narrower visual gap.
+func test_the_step_facts_carry_the_material_even_when_no_print_is_drawn():
+	manager._load_chunk(_berlin_chunk)
+	var centre_tile: Vector2i = _berlin_chunk * EarthChunkManager.CHUNK_SIZE + Vector2i(
+		EarthChunkManager.CHUNK_SIZE / 2, EarthChunkManager.CHUNK_SIZE / 2
+	)
+	var pixel := _pixel_for(centre_tile)
+	var step := Vector2.UP * (FootstepGait.STRIDE_LENGTH_PX + 1.0)
+	_pave_around(pixel, step)
+	manager.record_footstep(pixel, Vector2.UP)  # baseline
+	var result: Dictionary = manager.record_footstep(pixel + step, Vector2.UP)
+	var field: FootprintField = manager._footprint_fields[_berlin_chunk]
+	assert_eq(field.count(), 0, "the premise: a street draws no print at all")
+	assert_eq(
+		result.get("ground_material"), "snow" if manager.snow_depth() > 0.0 else "stone",
+		"and the step is still reported, so it can still be heard"
 	)

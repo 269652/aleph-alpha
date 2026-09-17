@@ -20897,6 +20897,115 @@ specced in `concept/rivers.md` "The river surface at snap resolution".
   longer a wall at any river, and the remaining cost is named per class
   per step.
 
+### FPS regression round 16: the same shape as round 14, one index over (2026-09-17)
+
+"At a fresh start FPS is 60-100 but when running the game for a while it
+cripples to 5-10 fps -- is there GC missing?" Write-up in
+`concept/soil_fauna.md` "FPS regression round 16".
+
+- ✅ **Answered: no GC is missing, and none can be.** Godot has no
+  garbage collector -- GDScript is reference-counted. What decays across
+  a session in this project has never been memory; it is work
+  proportional to everything that has ever happened, which is what round
+  14 found and what this round found again.
+- ✅ **Root cause.** Round 14 indexed `events_of_type` and stopped there.
+  The callers asking "what did THIS entity do, of THIS kind" still called
+  `events_for_entity(settlement_id)` -- which materialises every event
+  that entity was ever an actor or witness in -- and filtered by type in
+  GDScript, so each paid the settlement's entire lifetime history for a
+  handful of matches. Three of the fourteen such sites run on the
+  settlement step for every settlement:
+  `_production_counts_for_settlement`, `_households_in_settlement`, and
+  `_villagers_in_settlement` -- the last reached from
+  `_villager_witnesses_of` on every event APPEND, so appending an event
+  cost the settlement's whole history while the history grew with every
+  append.
+- ✅ **Measured before the fix** (`tools/probe_settlement_history_cost.gd`,
+  new): one assessment of one settlement carrying H events of its own
+  ordinary traffic walked exactly `74 + 14.0 * H` events -- 774 at H=50,
+  5,674 at H=400, 7,074 at H=500. Every event a settlement accumulates
+  added fourteen events of work to every future assessment of it, and
+  `step_settlements` pays that for up to
+  `MAX_UNLOADED_SETTLEMENTS_PER_STEP` (20) settlements a tick. Nothing
+  ever shrank.
+- ✅ **`EventStore` gains `_by_entity_type`** ("entity|type" -> ids, in
+  order), maintained in both `append()` and `from_dicts()` -- the same
+  shape `_by_entity` and round 14's `_by_type` already use, and the same
+  restored-save requirement. Reads: `events_for_entity_of_type`,
+  `events_for_entity_of_types` (several types merged back into insertion
+  order, for `SETTLING_EVENT_TYPES`), and `latest_event_for_entity` for
+  the `record_path_worn_if_new`/`record_trail_formed_if_new` family,
+  which only ever read `history.back()`. All fourteen call sites routed.
+- ✅ **The same bug in its purest form, also fixed**: four sites asked
+  "does this entity have ANY history?" by materialising all of it and
+  calling `is_empty()`. One is `record_settlement_founded_if_new`, run on
+  every chunk load carrying a village -- walking back into a known
+  village walked its whole history to notice it already existed (403
+  events for a 400-event history; now under 10). Plus
+  `_record_ruin_from`, the player-house settling guard, and
+  `record_player_settled_if_new`. Also `DialogueContext.settlement_of`,
+  the identical scan on the conversation path (301 events for a
+  300-event history, every time anyone is spoken to; 39/39 dialogue tests
+  still pass).
+- ✅ **Behaviour deliberately unchanged**: the 90 settlement-named tests
+  in `test_earth_chunk_manager.gd` pass unmodified (369 asserts). The two
+  new tests assert COST instead -- one assessment costs less than a
+  single pass over the history, and costs the same at H=500 as at H=50.
+- ✅ **Measured after the fix**, same probe and settlement: **flat at 20
+  events walked** at history depths 0, 100 and 800 (against `74 + 14.0*H`
+  before, i.e. 74 / 1,474 / 11,274 at those depths -- a 560x cut at
+  H=800, and, more to the point, no growth at all). Wall clock for the
+  same call flat at ~1.4 ms.
+- ✅ **A new instrument: `c_ev_read`** on the PERF line. Every other
+  field there is a duration, and a duration cannot say WHY it grew --
+  `s_ecology` climbing 6 → 142 ms looks the same whether a store, a
+  population or anything else is growing. `EventStore` now carries a read
+  odometer (`events_read`/`take_events_read`) and World feeds it to the
+  report every frame, so history-walked-per-frame is readable directly:
+  flat is healthy, climbing is this bug class naming itself. It is also
+  what makes the fix assertable, where GDScript/GUT cannot assert Big-O
+  and a wall clock would be flaky. (+12 `test_event_store.gd`, +5 for the
+  odometer, +1 `test_world_perf_report_wiring.gd`.)
+- 🚧 **Not confirmed in a live session.** Unlike round 14, which watched
+  a real session age, this was found by static reading and proven by a
+  controlled probe. The asymptotic claim is directly measured; the
+  resulting frame rate in a real session is NOT. Confirm with a
+  `--perf-report` run watching `c_ev_read`.
+- ⬜ **The stores are still append-only and unbounded.** `EventStore` and
+  `MemoryStore` grow for the whole session and are serialised in full on
+  every save. This round makes reads cheap; it does not cap what is
+  stored, so a long enough session still grows memory and save time
+  without limit. "What may a world forget?" is a real, separate design
+  question, deliberately not attempted here.
+- 🚧 **Incidentally found, confirmed unrelated** (pre-existing):
+  `test_dialogue_topic.gd`'s
+  `test_every_event_type_..._is_claimed_by_some_topic` fails on
+  `blueprint_learned` and `player_house_settled`. Fails identically with
+  this round's changes reverted (pre-session `earth_chunk_manager.gd` +
+  `dialogue_topic.gd` checked out and re-run: same two types, same 31/33
+  asserts), and this round touches no `Event.new(...)` call -- the
+  emitter count the test scans is 24 before and after. Needs two
+  `DialogueTopic.MEMORY_TOPIC_EVENT_TYPES` entries; a dialogue-content
+  decision, not a performance one.
+- ⬜ **`NpcRecognition.shared_history` still walks the player's whole
+  history** -- and the player is an actor or witness in more events than
+  anything else. Not fixed here: it needs every event involving both
+  parties regardless of TYPE (it counts encounters), so the (entity,
+  type) index does not answer it; a pair index or cached count is a real
+  design decision. Runs on meeting an NPC, so a growing hitch rather
+  than a growing frame cost.
+- ⬜ **`MemoryStore.memories_for` has the same shape**, used by
+  `_exchange_recent_memories` purely to read `.back()`. On the 30-second
+  encounter cadence rather than the settlement step, so real but small
+  next to what was fixed -- named so the next round need not rediscover
+  it.
+- ⬜ **`_settlement_specialization`'s cache is seeded only on a non-empty
+  read**, so a settlement that has never specialised -- nearly all of
+  them, since only two recipes map to a specialisation -- re-reads every
+  step forever instead of caching the "never". Now cheap because the read
+  is indexed; still a negative-caching hole, named rather than left
+  silent.
+
 ### Workforce: blueprints, real construction tiers, and interior furniture -- foundation slices (2026-09-13)
 
 Requested directly: NPCs should sell building blueprints; a player's own
@@ -23486,3 +23595,159 @@ Tests: `test_variant_sheet_grid.gd` 15/15, `test_building_lifecycle_sheet.gd`
 `test_illustrated_structure_sprite.gd` 22/22, `test_landmark_sheet.gd`
 18/18, `test_earth_chunk_manager_buildings.gd` 30/30,
 `test_village_renderer.gd` 78/78.
+
+
+## Village fields: ten tiles, sideways and downwards, and two fixes to make them yield (`concept/village_farms.md`, 2026-09-17)
+
+Asked for directly: *"The space the farmhouse utilizes should be maximized
+and capped to 10 tiles .. each farmhouse needs to be connected by a
+street... so in this case the farmhouses should be placed adjacent to the
+main street and the fields be placed sideways and downwards of it"*, after
+*"There's another village with just 3 houses, no plaza, no city hall, no
+farmers"*.
+
+✅ **The "no farmers" village, diagnosed by measurement.** Reproduced on a
+clean world at the reported coordinates: chunk (661,139), 3 dwellings, no
+plaza, no hall, no farmhouse — 70% of the ground a house would stand on is
+water, so 3 houses and no square is honest there. The farmhouse was not:
+`next_street_plot` returns nothing at all for a 3×2 farmhouse on that
+cramped site, while **sixty** origins elsewhere in the same chunk fit one,
+every one with a full field. The ground was never the problem; the siting
+rule was. `VillageLayout.outskirt_plot` now shares the sawmill's own scan —
+open ground, nearest the square, with a paved spur home — so a farmstead
+with no frontage still stands, still connected to a street.
+
+✅ **The field is directed, not a ring.** Out to the sides and downwards,
+never north (a village house fronts the street with its door south, so the
+ground above a farmhouse is the next row of buildings). Offered
+nearest-first out to `FIELD_REACH_TILES`, filtered by the caller, capped at
+`MAX_WORKED_CELLS` = 10 — the biggest field that actually fits.
+
+✅ **Two fixes that turned zero into 215.** A ten-tile field yielded nothing
+at first, and measuring said why: watering came LAST in the priority, so a
+farmer with any bare bed planted instead of saving a dying one, and with
+nothing past its threshold the farmer stood still. A three-tile field ran
+**108 replants, 72 waterings and zero harvests**. Now a visit waters the
+beds around it (one tile — you water a bed, and it runs to the beds beside
+it), watering comes before planting, and a farmer with nothing urgent tends
+the thirstiest bed. Measured wheat per work block afterwards: 3→170, 4→208,
+6→225, 8→215, 10→215, 14→215. About eight times the ambient drip, and
+saturating around six to eight tiles — which is why a second farmhouse, not
+a bigger field, is how a village grows output.
+
+Tests: `test_village_farm.gd` 34/34, `test_npc_marker_farming.gd` 16/16,
+`test_village_layout.gd` 56/56, `test_village_renderer.gd` 78/78,
+`test_npc_marker.gd` 36/36, `test_farmer_marker.gd` 7/7,
+`test_earth_chunk_manager_farm.gd` 7/7.
+
+### Ground too hard to indent keeps no print (see `docs/concept/snow_cover.md` "Ground that is too hard to take a print", `docs/concept/infrastructure.md` Road tier, 2026-09-17)
+
+Reported in play: *"walking over cobblestone streets should not leave
+footprints"*, followed by: *"this should work out of the box through
+physics."*
+
+✅ **It does, and nothing anywhere asks whether a road should have
+footprints.** The road tile is named exactly once, to say what a paved
+cell is made *of* (setts, i.e. stone); the rest follows from the
+material, which is why a timber floor falls out of the same rule for
+free. A footprint IS an indentation, and *indentation hardness* is by
+definition the mean contact pressure it takes to leave one — so the whole
+question is one comparison, and both sides of it were already real
+published numbers this project keeps. `MaterialProperties.HARDNESS_HV`
+quotes Vickers in kgf/mm², which *is* a pressure (one standard gravity
+times a kilogram over a square millimetre, 9.80665 MPa per HV), so granite
+reads 700 HV = 6.9 GPa straight off that column — read, never restated, so
+there cannot be two granite hardnesses in one codebase. A footfall is the
+walker's own real mass over its own plantar contact area, with area
+following the **square** of a linear dimension while mass follows its
+**cube** (the same relation `CreatureMass.linear_scale_for_mass_ratio`
+already encodes in the other direction), so pressure rises only as the
+**cube root** of mass: the 70 kg reference walker over a real 140 cm² sole
+presses with ≈49 kPa. Laid setts win that by ~140 000×.
+
+✅ **`GroundImprint`** (`src/world/ground_imprint.gd`) is that paragraph
+written out: `footfall_pressure_kpa(mass)`,
+`indentation_hardness_kpa(material)`, `yields_to_footfall(material)`,
+`material_underfoot(tile_id, snow_lying)`, `takes_a_print(tile_id,
+snow_lying)`. Soft ground carries real figures of its own rather than
+winning by absence — settled snow's ram hardness (5 kPa, published range
+1–10) and soft cohesive topsoil's unconfined compressive strength (25 kPa,
+the very-soft/soft boundary of the standard consistency classification) —
+both below an ordinary step, which is why prints exist at all.
+`EarthChunkManager.record_footstep` asks it once, at the tile the **print**
+lands in, after the surface lookup and before the field write.
+
+✅ **Three consequences fall out of the one rule, none of them a special
+case.** Snow lies on top of everything, streets included (mirroring
+`footstep_surface_for`'s own snow-first precedence), so a snowed-over
+street takes tracks again. A built piece is whatever `BuildingPiece`'s own
+material column says it is built of, so timber and stone floors stop
+taking prints for free. Dug earth and a `PathScarring`-worn trail stay the
+soil they were worn out of — a trail is made *by* feet, so it keeps taking
+theirs. Unlisted ground resists nothing, mirroring
+`MaterialProperties.DEFAULT_PROPERTIES`' own rule ("not having measured
+something is not a reason to call it iron") in the direction that matters
+for ground.
+
+✅ **Nothing about print SIZE changed.** Mass still scales the mark (see
+"Footprints depend on real mass, not just surface"); this only answers the
+prior question of whether there is a mark to scale. The verdict is stated
+per MATERIAL rather than per walker, and the two sides of that choice are
+honestly different sizes. The **built** side is not close at any mass:
+timber is the softest thing anything here is built of (36 MPa) and a
+500 kg horse at ~94 kPa is still ~380× short of it, granite a further
+~190× beyond timber — nothing that walks reaches a laid surface. The
+**soft** side is a deliberate simplification: soil's 25 kPa is below the
+reference walker's footfall but *above* a 20 g mouse's ~3 kPa, so asking
+this per walker would stop a mouse printing on turf — real, but a
+different and unasked change to a documented mechanic, named rather than
+smuggled in.
+
+✅ **And the street sounds like stone now too** (same day) — this pass
+first left that as a named 🚧: the gate sits *after* `record_footstep`'s
+step facts are populated and returns them intact, so the step was still
+heard, but its sound was still chosen from the **biome** — and a road
+never changes the biome under it, exactly as a river doesn't — so cobbles
+played the grass clip. `record_footstep` now resolves
+`material_underfoot` **once** and carries it out as a `ground_material`
+fact used by *both* consumers: the print gate, and
+`FootstepSound.surface_for`, which maps `stone` → `"rock"` and
+`wood`/`timber` → `"wood"`. Resolving it once is the design, not an
+optimisation — two lookups would let the print and the sound disagree
+about what was underfoot. `"soil"` is deliberately unmapped, so untouched
+ground still takes its sound from the biome; snow and standing water keep
+their existing priority above the laid material, because they lie on top
+of a street while a street lies on top of the ground.
+`GroundImprint.takes_a_print` was removed rather than left unused once
+the material was resolved at the call site. See
+[`concept/creature_and_footstep_audio.md`'s "A laid surface sounds like
+what it is laid with"](concept/creature_and_footstep_audio.md).
+
+🚧 **No distinct stone or wooden-floor recording exists**, so `"rock"` and
+`"wood"` both resolve to the generic `default.ogg` (the same honest gap
+already standing for sand and rock — Wikimedia Commons' Foley coverage is
+thin, see `_CLIP_BY_SURFACE`'s own note). The win is that a street stops
+sounding like grass, not that it sounds like cobbles.
+
+Tests: `test_ground_imprint.gd` 16/16 (new), `test_earth_chunk_manager_
+footprints.gd` 32/32 (7 new: the street, an unpaved control walking the
+identical stride so the paving is the only difference, a snowed-over
+street, a ~26-stride sustained walk verified to fail
+`[52] expected to equal [26]` with the gate stubbed out so it
+discriminates rather than passing vacuously, and 3 for the new
+`ground_material` fact including one proving it is reported even where no
+print is drawn at all), `test_footstep_sound.gd` +6,
+`test_world_footstep_wiring.gd` +1. 152/157 across the whole
+footprint/footstep/audio suite — `test_earth_chunk_manager_footprints.gd`,
+`test_ground_imprint.gd`, `test_footstep_sound.gd`,
+`test_world_footstep_wiring.gd`, `test_footstep_gait.gd`,
+`test_footprint_field.gd`, `test_footprint_renderer.gd`,
+`test_footprint_renderer_smoke.gd`, `test_procedural_footprint_sprite.gd`,
+`test_world_creature_and_footstep_audio_wiring.gd`,
+`test_interaction_sfx_player.gd` — with zero failures; the 5 remaining are
+pre-existing GPU-readback smoke tests that need `--rendering-driver
+opengl3`. `test_terrain_renderer.gd`, `test_building_piece.gd`,
+`test_world_path_scarring_trail_wiring.gd`, `test_player.gd`,
+`test_village_renderer.gd`, `test_earth_chunk_manager_buildings.gd`,
+`test_snow_trail.gd` and `test_path_scarring.gd` were run as regressions
+over the road/building/path surfaces this reads from: zero failures.

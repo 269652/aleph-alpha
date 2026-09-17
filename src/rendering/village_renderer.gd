@@ -160,10 +160,7 @@ func spawn_village(
 	# One building id per villager, chosen from their own occupation +
 	# personality (see BuildingCatalog.choose_house_id) -- VillageLayout
 	# only decides WHERE each one actually lands, never WHICH.
-	var building_ids: Array = []
-	for i in npcs.size():
-		var seed_value := hash("%d_%d_house_%d" % [chunk_coord.x, chunk_coord.y, i])
-		building_ids.append(BuildingCatalog.choose_house_id(npcs[i].occupation, npcs[i].genome, seed_value))
+	var building_ids: Array = SettlementGenerator.house_ids_for(chunk_coord, npcs)
 
 	# door_positions[i]/stand_positions[i] default to the villager's own
 	# old ring anchor -- overwritten below for every plot VillageLayout
@@ -312,7 +309,14 @@ func _place_new_village(
 	var is_buildable := _is_buildable_local(chunk_coord, chunk_size, world)
 	var is_occupied := _is_occupied_local(chunk_coord, chunk_size, world)
 	var result := _village_layout.layout(building_ids, chunk_size, layout_seed, is_buildable, is_occupied)
-	if (result["plots"] as Array).is_empty():
+	# EVERY villager, not merely one. Asked for directly: "They should only
+	# settle where there's enough space and the square wins; houses should
+	# just be moved further away connected by streets". The layout already
+	# walks street after street looking for that room, so a roster it still
+	# cannot house is a site that genuinely has none -- and founding there
+	# is what left a riverside chunk with a market square and one house
+	# (chunk (661,139) near lat 49.8 lon 10.6).
+	if not VillageLayout.houses_everyone(result, building_ids):
 		return false
 
 	# Buildings BEFORE roads -- place_building's own occupancy check

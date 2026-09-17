@@ -84,6 +84,17 @@ const _GATE_CLEARANCE_TILES := 2
 const _MAX_ATTEMPTS_PER_BUILDING := 12
 
 
+## Whether a layout really houses everyone it was given -- the ONE
+## definition of "enough space" (docs/concept/building.md: "A village only
+## settles where there is room for all of it").
+##
+## Shared by the founding gate and by the village finder, because the two
+## disagreeing is what sends a player to empty ground: reported in play as
+## "It teleports me to where no village is".
+static func houses_everyone(result: Dictionary, building_ids: Array) -> bool:
+	return (result["plots"] as Array).size() >= building_ids.size()
+
+
 ## The one layout seed per chunk -- the exact formula VillageRenderer used
 ## to compute inline, moved here so every consumer (renderer, recover path,
 ## civic build decision) derives the same skeleton for the same chunk.
@@ -115,7 +126,17 @@ static func plaza_x0_for(
 	var centred: int = chunk_size / 2 - PLAZA_WIDTH_TILES / 2
 	if not is_dry.is_valid():
 		return centred
-	var westmost: int = maxi(_EDGE_MARGIN_TILES, street_x0)
+	# The chunk's own edge margin, and nothing else. This used to also
+	# take street_x0 -- the spine's decorative SEED JITTER
+	# (_EDGE_MARGIN_TILES + 0..2, so villages don't all start at the
+	# identical column) -- and on chunk (661,139) near lat 49.8 lon 10.6
+	# that vetoed the only dry square placements this village had, at x=1
+	# and x=2, because its jitter happened to start the street at x=3.
+	# Reported three times as "no plaza, no city hall". A decorative jitter
+	# is not a reason a village cannot have a market square; skeleton()
+	# starts the spine at whichever of the two is further west instead, so
+	# the street always reaches its own square.
+	var westmost: int = _EDGE_MARGIN_TILES
 	var eastmost: int = mini(chunk_size - _EDGE_MARGIN_TILES, street_x1 + 1) - PLAZA_WIDTH_TILES
 	for offset in range(0, chunk_size):
 		for candidate in ([centred] if offset == 0 else [centred - offset, centred + offset]):
@@ -123,41 +144,19 @@ static func plaza_x0_for(
 				continue
 			if not _plaza_is_dry(candidate, street_y, is_dry):
 				continue
-			if not _run_has_room_beside_the_square(candidate, street_y, street_x0, street_x1, is_dry):
-				continue
+			# This used to also demand a run wide enough for the square PLUS
+			# a house beside it, on the reasoning that a square swallowing
+			# its whole street leaves the village nowhere to live. Measured
+			# on chunk (661,139) near lat 49.8 lon 10.6 -- reported three
+			# times as "no plaza, no city hall" -- that trade is the wrong
+			# way round: the dry pocket there is about nine tiles, the
+			# square fits on it, and the rule made the village take three
+			# houses and no square instead. A house does not have to stand
+			# on the spine; a village that fills its spine opens a further
+			# street and reaches it by the gate lane. A square can only ever
+			# straddle a street.
 			return candidate
 	return centred
-
-
-## Whether the unbroken dry stretch of street holding a square at
-## `plaza_x0` is long enough to carry the square AND at least one house
-## beside it. A square that swallows its whole street is worse than no
-## square: the houses are the village, the square is what it builds around
-## them. Caught for real by
-## test_no_plaza_when_its_own_site_is_unbuildable_but_houses_still_get_
-## placed, where sliding into a ten-cell run left nowhere to live.
-static func _run_has_room_beside_the_square(
-	plaza_x0: int, street_y: int, street_x0: int, street_x1: int, is_dry: Callable
-) -> bool:
-	var west := plaza_x0
-	while west - 1 >= street_x0 and is_dry.call(Vector2i(west - 1, street_y)):
-		west -= 1
-	var east := plaza_x0 + PLAZA_WIDTH_TILES - 1
-	while east + 1 <= street_x1 and is_dry.call(Vector2i(east + 1, street_y)):
-		east += 1
-	return east - west + 1 >= PLAZA_WIDTH_TILES + PLOT_GAP_TILES + narrowest_plot_width()
-
-
-## The narrowest house the catalog can offer -- what "room for one house"
-## means above. Read from BuildingCatalog rather than written down, so a
-## new, narrower house id changes this by itself.
-static func narrowest_plot_width() -> int:
-	var narrowest := 0
-	for building_id in BuildingCatalog.BUILDING_IDS:
-		var width: int = BuildingCatalog.footprint_of(building_id).x
-		if narrowest == 0 or width < narrowest:
-			narrowest = width
-	return narrowest
 
 
 ## Whether every cell of the square standing at `plaza_x0` is dry -- the
@@ -188,6 +187,10 @@ static func skeleton(chunk_size: int, seed_value: int, is_dry := Callable()) -> 
 	var street_x0 := _EDGE_MARGIN_TILES + PixelNoise.range_index(seed_value, 0, 0, _START_JITTER_TILES)
 	var street_x1 := chunk_size - _EDGE_MARGIN_TILES - 1
 	var plaza_x0 := plaza_x0_for(chunk_size, street_y, street_x0, street_x1, is_dry)
+	# A square sited west of where the jitter put the spine's start pulls
+	# that start west with it: a square the street stops short of is a
+	# square nobody walks to.
+	street_x0 = mini(street_x0, plaza_x0)
 	var plaza := Rect2i(
 		plaza_x0, street_y - PLAZA_ROWS_NORTH,
 		PLAZA_WIDTH_TILES, PLAZA_ROWS_NORTH + 1 + PLAZA_ROWS_SOUTH
@@ -296,7 +299,6 @@ func layout(
 	# tie-back that ties something back" rule side_street_cells follows.
 	var pending_lane_cells: Array = []
 	while index < building_ids.size() and current_street_y < chunk_size - _EDGE_MARGIN_TILES:
-		var progressed_this_street := false
 		var x := maxi(spine_x0 + _GATE_CLEARANCE_TILES, street_x0)
 		var street_doorstep_xs: Array = []
 		var attempts_for_current_index := 0
@@ -329,7 +331,6 @@ func layout(
 				street_doorstep_xs.append(doorstep.x)
 				x += footprint.x + PLOT_GAP_TILES
 				index += 1
-				progressed_this_street = true
 				attempts_for_current_index = 0
 				if current_street_y != street_y:
 					second_street_got_a_plot = true
@@ -371,8 +372,19 @@ func layout(
 			for cell in pending_lane_cells:
 				road_cells[cell] = true
 			pending_lane_cells.clear()
-		if not progressed_this_street:
-			break  # this street placed nothing at all -- a further one south won't fare any better
+		# A street that places nothing no longer ends the village. Asked for
+		# directly: "the square wins; houses should just be moved further
+		# away connected by streets". A street can come up empty because
+		# the square took the whole spine, or because that row happens to
+		# be water -- neither means this village has nowhere to live, and
+		# giving up there is what left a riverside village with a market
+		# square and one house (chunk (661,139) near lat 49.8 lon 10.6).
+		#
+		# The walk stays bounded by the chunk without needing a break: a
+		# further street only opens while it is inside the edge margin
+		# (the loop's own condition), and only when the gate lane reaching
+		# it is really clear -- so looking further costs iterations and
+		# nothing else.
 		var next_street_y := current_street_y + STREET_PITCH_TILES
 		# EVERY further street is tied back by the gate lane, square or no
 		# square. Without a square there is nothing else to hang one on --

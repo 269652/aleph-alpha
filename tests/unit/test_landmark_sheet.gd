@@ -120,7 +120,8 @@ func test_a_well_keeps_the_same_look_across_reloads():
 func test_the_wells_cells_are_cut_between_its_own_magenta_lines():
 	var VariantSheetGrid = load("res://src/rendering/variant_sheet_grid.gd")
 	var IllustratedStructureSprite = load("res://src/rendering/illustrated_structure_sprite.gd")
-	var image := Image.load_from_file(LandmarkSheet.sheet_path_for("well"))
+	var SpriteSheetLoader = load("res://src/rendering/sprite_sheet_loader.gd")
+	var image: Image = SpriteSheetLoader.load_image(LandmarkSheet.sheet_path_for("well"))
 	assert_not_null(image, "precondition: the sheet loads")
 	if image.get_format() != Image.FORMAT_RGBA8:
 		image.convert(Image.FORMAT_RGBA8)
