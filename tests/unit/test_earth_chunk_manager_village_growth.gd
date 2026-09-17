@@ -266,6 +266,16 @@ func _grow_to(count: int) -> void:
 			fail_test("nowhere left to house a newcomer")
 			return
 		manager._place_building_over_roads(_chunk_coord, origin, house_id, 3 + attempt, household_id)
+		# Placing the house is not what houses anybody. Residency is resolved
+		# through the property-id scheme (VillageCensus.household_owning ->
+		# HouseholdStore.owner_of), never through the building record's own
+		# owner field -- so without this grant every newcomer stayed
+		# UNHOUSED, the ladder went on owing a house ahead of every rung, and
+		# no test below ever saw the rung it was asking about. Exactly what
+		# record_settlement_founded_if_new does for the founding roster.
+		manager._household_store.grant_property(
+			household_id, ConstructionProject.for_site(_chunk_coord, origin, "", "").property_id()
+		)
 	fail_test("this village never reached %d households" % count)
 
 
