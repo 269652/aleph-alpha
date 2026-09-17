@@ -23436,3 +23436,51 @@ Tests: `test_village_farm.gd` 29/29 (new), `test_npc_marker_farming.gd`
 `test_npc_marker.gd` 36/36, hunting 25/25, fishing 15/15,
 `test_farmer_marker.gd` 7/7, `test_village_layout.gd` 50/50,
 `test_item_catalog.gd` 91/91, `test_cooking_recipe_book.gd` 13/13.
+
+
+## The new house sheets, their construction animation, and the well (`concept/building.md`, 2026-09-17)
+
+Six sheets delivered: `house_1_1.png` .. `house_1_5.png` and `well.png`.
+Asked for: *"Pull and wire the new house variation sprites with proper
+construction animations and the well sprite"*.
+
+✅ **A third, richer sheet contract, measured rather than assumed.** The
+house sheets are 8x10 with magenta divider lines, a column-label row across
+the top, a row-label gutter down the left and a blank margin on the right —
+an even division of the canvas cuts every cell in the wrong place.
+`VariantSheetGrid.divider_bands` reports every band between the lines and
+`art_bands` picks the consecutive run whose cells are most ALIKE in size,
+so the labels and the margin are skipped without anyone writing down where
+they sit. Pinned against the real files: all 80 cells of `house_1_1.png`
+hold real art, and `well.png` reads as a clean 5x5.
+
+✅ **A real 24-frame construction animation.** The sheets print their own
+row meanings (Build Foundation / Frames / Construction, three idle rows,
+two damaged, two destroyed) and `BuildingLifecycleSheet` is those labels.
+A house picks one of the five variations from its seed and keeps it: it
+rises through that variation's 24 build frames and then stands in one of
+the same variation's 24 idle cells. The house you watched go up is the
+house that is there. Verified by rendering all 24 frames plus the idle
+frame at real game scale and looking at them.
+
+✅ **One ordered chain instead of a special case.**
+`BuildingCatalog.finished_sheet_chain`/`construction_sheet_chain` return
+every sheet a building could be drawn from, best first, each naming how its
+grid is read (`even`, `gutters`, `dividers`). The renderer takes the first
+file really on disk, so a house falls back to the flat 25-cottage sheet and
+then to the old 8x5 one without ever regressing to a procedural box for want
+of one file. `detected_grid` (a bool) became `grid` (a name) because all
+three kinds are now real.
+
+✅ **The well has real art.** 25 wells in a 5x5 grid with magenta dividers,
+delivered into the buildings folder rather than the landmarks one.
+`LandmarkSheet` now declares per id what a prop's delivered art does
+differently — its path, its grid, how its cells are found — rather than
+assuming the defaults. A well picks its own from its seed; its background
+and every divider line are keyed out, asserted numerically rather than eyeballed.
+
+Tests: `test_variant_sheet_grid.gd` 15/15, `test_building_lifecycle_sheet.gd`
+16/16 (new), `test_building_catalog.gd` 49/49,
+`test_illustrated_structure_sprite.gd` 22/22, `test_landmark_sheet.gd`
+18/18, `test_earth_chunk_manager_buildings.gd` 30/30,
+`test_village_renderer.gd` 78/78.

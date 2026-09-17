@@ -377,6 +377,59 @@ else changes. Nothing that is not a home has one — a hall, a mill or a
 brewery drawn as a cottage would be drawing the wrong building, and each
 already has its own lifecycle sheet.
 
+**Building lifecycle variation sheets** — `assets/sprites/buildings/<name>.png`,
+**8 columns x 10 rows**, cells separated by real **magenta divider lines**,
+with a row of column labels across the top, a column of row labels down the
+left and a blank margin on the right. Any pixel size works: the cells are
+found between the divider lines, and the art window is the consecutive run
+of bands whose sizes are most alike, so the label bands and the margin are
+skipped without anyone writing down where they sit
+(`VariantSheetGrid.art_bands`, measured by
+`tools/probe_building_lifecycle_sheet.gd`). The sheets print their own row
+meanings, and those are the contract:
+
+| row | meaning | row | meaning |
+|----:|---------|----:|---------|
+| 0 | Build (Foundation) | 5 | Idle 3 (Variants) |
+| 1 | Build (Frames) | 6 | Damaged (1) |
+| 2 | Build (Construction) | 7 | Damaged (2) |
+| 3 | Complete (Idle 1) | 8 | Destroyed (1) |
+| 4 | Idle 2 (Details) | 9 | Destroyed (2) |
+
+This is the THIRD and richest contract beside the two above, and it is the
+one that gives a building a real **construction animation**: three build
+rows of eight frames is 24 frames, walked left to right and row by row as
+the site's own labour accrues (`BuildingLifecycleSheet.build_cell_for`),
+where the 8x5 sheet's single construction row had eight. Three idle rows
+are 24 finished looks on top, so a street of cottages is a street of
+different cottages AND each one is the same house it was while it was
+rising (`idle_cell_for`).
+
+A building picks ONE of its declared variation sheets from its own seed and
+keeps it for life (`BuildingLifecycleSheet.sheet_for`). Declared today for
+all three village houses, sharing the five first-tier cottage sheets
+(`house_1_1.png` .. `house_1_5.png`), for the same reason given for the flat
+variant sheet above. Nothing that is not a home has one.
+
+Which picture a building actually gets is one ordered chain, best first
+(`BuildingCatalog.finished_sheet_chain` / `construction_sheet_chain`), each
+entry naming how its own grid is read — `even`, `gutters` or `dividers`.
+The renderer takes the first whose file is really on disk, so declaring art
+that has not been dropped in yet changes nothing, and a missing file never
+drops a building back to a procedural box while better art exists. The flat
+variant sheet is deliberately absent from the construction chain: it draws
+25 finished cottages and no scaffold.
+
+**Village prop sheets** — `assets/sprites/landmarks/<landmark_id>.png` by
+default, one drawing per prop, background keyed out
+(`LandmarkSheet`). A prop whose delivered art differs declares the
+difference per id rather than having it assumed: where the file actually
+is, whether it is a grid of variants, and how that grid's cells are found.
+The **well** (delivered 2026-09-17) differs on all three — 25 wells in a
+5x5 grid with magenta divider lines, in `assets/sprites/buildings/well.png`
+beside the house sheets it was drawn alongside — and a well picks its own
+from its seed, so no two wells in a region need be the same well.
+
 **Furniture tiles** — `assets/sprites/furniture/<piece_id>.png`, one
 square image per `CATEGORY_FURNITURE` piece id (`wood_bed`, `wood_table`,
 `wood_chair`, `wood_rug`, `wood_bookshelf`, `couch`, `photo_frame`,

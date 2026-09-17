@@ -41,16 +41,36 @@ const SHEET_DIR := "res://assets/sprites/landmarks/"
 ## picked up like any other.
 const EXTRA_PROP_IDS: Array[String] = ["hunting_ground"]
 
-## Props whose art is a grid of variants rather than one drawing, as
-## (columns, rows). Empty by default: every prop is one image until someone
-## decides a particular one is worth varying.
-const _SHEET_GRIDS := {}
+## Props whose delivered art does not match this module's own defaults --
+## one drawing, in SHEET_DIR, cells found in dark gutters. Everything a
+## sheet does differently is declared here rather than assumed, per id:
+##
+##   path   where the file actually is, when it is not SHEET_DIR/<id>.png
+##   grid   (columns, rows) when the art is a grid of variants, not one
+##          drawing
+##   cells  how that grid's cells are found -- see
+##          IllustratedStructureSprite's GRID_* names
+##
+## The well's sheet (delivered 2026-09-17) differs on all three: 25 wells
+## in a 5x5 grid with magenta divider lines, sitting in the buildings
+## folder beside the house sheets it was drawn alongside. Measured with
+## tools/probe_building_lifecycle_sheet.gd, not assumed.
+const _SHEETS := {
+	"well": {
+		"path": "res://assets/sprites/buildings/well.png",
+		"grid": Vector2i(5, 5),
+		"cells": "dividers",
+	},
+}
 
 
-## Where this prop's art file goes, or "" for an id that is not a prop.
+## Where this prop's art file is, or "" for an id that is not a prop.
 static func sheet_path_for(landmark_id: String) -> String:
 	if landmark_id == "":
 		return ""
+	var declared: Dictionary = _SHEETS.get(landmark_id, {})
+	if declared.has("path"):
+		return declared["path"]
 	return SHEET_DIR + landmark_id + ".png"
 
 
@@ -65,7 +85,14 @@ static func has_sheet(landmark_id: String) -> bool:
 
 ## This prop's variant grid: one cell unless it declares otherwise.
 static func grid_of(landmark_id: String) -> Vector2i:
-	return _SHEET_GRIDS.get(landmark_id, Vector2i.ONE)
+	return _SHEETS.get(landmark_id, {}).get("grid", Vector2i.ONE)
+
+
+## How this prop's grid cells are found. Dark gutters by default, which is
+## what the building variant sheets already use; a sheet that draws real
+## divider lines between its cells says so.
+static func cells_of(landmark_id: String) -> String:
+	return _SHEETS.get(landmark_id, {}).get("cells", "gutters")
 
 
 ## Which cell of this prop's grid a given seed draws.
@@ -93,6 +120,10 @@ static func frame_image(landmark_id: String, seed_value: int, illustrator) -> Im
 		return null
 	var grid := grid_of(landmark_id)
 	var cell := variant_cell_for(landmark_id, seed_value)
+	if cells_of(landmark_id) == "dividers":
+		return illustrator.divider_frame_image(
+			sheet_path_for(landmark_id), grid.x, grid.y, cell.y, cell.x
+		)
 	return illustrator.variant_frame_image(
 		sheet_path_for(landmark_id), grid.x, grid.y, cell.y, cell.x
 	)
