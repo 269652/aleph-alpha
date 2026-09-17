@@ -151,8 +151,16 @@ existed is the step between: a villager *offering* it and the player
 Written before implementation, per CLAUDE.md. Each entry is corrected against
 the code as it lands.
 
-- ⬜ **The villager ethogram** — drives (`thirst`, `rest`, `company`) and
-  wirings on `BODY_PLANS["villager"]`.
+- ✅ **The villager ethogram.** `BODY_PLANS["villager"]` carries real
+  receptors, four drives and four wirings. `COMPANY`/`MARKET`/`HOME` join the
+  one shared channel basis rather than becoming a villager-only side channel,
+  which is what lets a villager be decided by the same `BehaviorKernel` every
+  other body plan runs on. Hunger is untouched on purpose — a whole famine
+  chain hangs off its exact pace — and the wiring order puts it first,
+  deliberately *not* the mammal order, because a villager who stopped for a
+  drink on the way to buy food is a villager that chain no longer describes.
+  Tiredness is one world day and company is one schedule block, both pinned
+  to those sources rather than eyeballed. `test_ethogram.gd` 47/47.
 - ⬜ **`VillagerBehavior`** — villager context → intent, over
   `BehaviorKernel`.
 - ⬜ **`NpcMarker` acts on the intent** — the intent overrides the schedule

@@ -83,4 +83,8 @@ func test_the_numbers_are_the_ethograms_villager_profile():
 	assert_almost_eq(NpcNeeds.HUNGER_RATE_PER_SECOND, 1.0 / profile["hunger"]["rise_seconds"], 0.000001)
 	assert_almost_eq(NpcNeeds.HUNGRY_THRESHOLD, profile["hunger"]["threshold"], 0.0)
 	assert_almost_eq(NpcNeeds.START_STAGGER, profile["hunger"]["stagger"], 0.0)
-	assert_eq(needs.gains().keys(), ["hunger"])
+	# All four now, not hunger alone: a villager really gets thirsty, tired
+	# and lonely (docs/concept/npc_social_life.md), and every one of them is
+	# on the same drive vector underneath.
+	assert_eq(needs.gains().keys(), profile.keys())
+	assert_true(needs.gains().has("hunger"))

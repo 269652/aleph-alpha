@@ -58,9 +58,22 @@ const MATE := "mate"  # my courtship partner
 ## (§9's "opportunistic scavenging" gap).
 const CARRION := "carrion"
 
+## What a village is made of, as a villager's own senses report it (see
+## docs/concept/npc_social_life.md). A villager is an animal with a job, so
+## these are ordinary channels on the one shared basis rather than a
+## villager-only side channel -- which is what lets a villager be decided by
+## the same BehaviorKernel every other body plan already runs on.
+##
+## WATER is not repeated here: the village well IS water, and a villager
+## drinks from the same channel a deer does.
+const COMPANY := "company"  # another villager, near enough to talk to
+const MARKET := "market"  # where food is bought: the stall, or the square
+const HOME := "home"  # this villager's own house
+
 const SMELL_CHANNELS: Array[String] = [SUGAR, DECAY, GREEN, MUSK, SMOKE]
 const CHANNELS: Array[String] = [
-	SUGAR, DECAY, GREEN, MUSK, SMOKE, PREDATOR, PLAYER, FLESH, FORAGE, WATER, MATE, CARRION
+	SUGAR, DECAY, GREEN, MUSK, SMOKE, PREDATOR, PLAYER, FLESH, FORAGE, WATER, MATE, CARRION,
+	COMPANY, MARKET, HOME,
 ]
 
 # -- drives ------------------------------------------------------------------
@@ -71,6 +84,11 @@ const DRIVE_FEAR := "fear"
 const DRIVE_THIRST := "thirst"
 const DRIVE_HUNGER := "hunger"
 const DRIVE_COURTSHIP := "courtship"
+## A villager's own two (docs/concept/npc_social_life.md). Named here beside
+## the others rather than in a villager-only table, for the same reason the
+## channels are: one basis, one kernel, one set of names.
+const DRIVE_REST := "rest"
+const DRIVE_COMPANY := "company"
 
 ## Below this score an animal is not interested enough in a smell to cross a
 ## field for it (ScentForaging's MIN_INTEREST, now the smell wiring's floor).
@@ -208,10 +226,60 @@ const BODY_PLANS := {
 			{"gate": DRIVE_COURTSHIP, "channels": [MATE], "approach": "court"},
 		],
 	},
+	# A villager is an animal with a job (docs/concept/npc_social_life.md).
+	# This plan used to carry hunger and NOTHING else -- no wirings at all --
+	# so a deer decided what to do from what it needed and what it sensed,
+	# while a villager walked a fixed four-block schedule with one hunger
+	# interrupt hand-written into NpcMarker. Everything below is the ethogram
+	# a villager never got.
 	"villager": {
-		"drives": {
-			DRIVE_HUNGER: {"rise_seconds": 1.0 / 0.02, "threshold": 0.5, "meal": 1.0, "stagger": 0.45},
+		"receptors": {
+			# A villager is not deciding whether a thing is dangerous, so
+			# these are flat: what matters is that each channel is expressed
+			# at all (so a wiring can listen on it) and that everything a
+			# villager walks toward really draws them.
+			"sensitivity": {COMPANY: 1.0, MARKET: 1.0, HOME: 1.0, WATER: 1.0},
+			"valence": {COMPANY: 1.0, MARKET: 1.0, HOME: 1.0, WATER: 1.0},
 		},
+		"drives": {
+			# Unchanged, and deliberately so: a whole famine chain hangs off
+			# this exact pace (NpcEconomy, the village market, the producer
+			# self-feed rule). Adding needs beside hunger must not retune it.
+			DRIVE_HUNGER: {"rise_seconds": 1.0 / 0.02, "threshold": 0.5, "meal": 1.0, "stagger": 0.45},
+			# Thirst at the mammal pace -- a villager drinks from the same
+			# world, at the same rate, as anything else living in it.
+			DRIVE_THIRST: {"rise_seconds": 1.0 / 0.03, "threshold": 0.5, "meal": 1.0, "stagger": 0.45},
+			# Tiredness is a DAY'S LENGTH, not a number somebody liked: a
+			# villager tires over one world day and sleeps it off, which is
+			# what makes "go home at night" a need rather than a clock.
+			DRIVE_REST: {
+				"rise_seconds": SeasonCycle.SECONDS_PER_DAY, "threshold": 0.5, "meal": 1.0,
+				"stagger": 0.45,
+			},
+			# Company runs four times a day -- once per NpcSchedule time
+			# block, which is the grain the whole day is already cut into.
+			# Written as the literal quarter rather than by importing the
+			# schedule, because GDScript cannot call into another script from
+			# a const initialiser; pinned to TIME_BLOCKS.size() by
+			# test_a_villager_wants_company_once_per_block_of_the_day.
+			DRIVE_COMPANY: {
+				"rise_seconds": SeasonCycle.SECONDS_PER_DAY / 4.0, "threshold": 0.5, "meal": 1.0,
+				"stagger": 0.45,
+			},
+		},
+		# First match wins, so this order IS the priority. Deliberately not
+		# the mammal order (thirst above hunger): a villager who stopped for
+		# a drink or a chat on the way to buy food is a villager the famine
+		# chain no longer describes, and that chain is already real and
+		# already tested. Company comes last because it is the need a
+		# villager can always put off -- which is exactly why it reads as
+		# sociable rather than compulsive.
+		"wirings": [
+			{"gate": DRIVE_HUNGER, "channels": [MARKET], "approach": "eat"},
+			{"gate": DRIVE_THIRST, "channels": [WATER], "approach": "drink"},
+			{"gate": DRIVE_REST, "channels": [HOME], "approach": "rest"},
+			{"gate": DRIVE_COMPANY, "channels": [COMPANY], "approach": "socialize"},
+		],
 	},
 	"bird": {
 		"drives": {

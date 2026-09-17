@@ -300,6 +300,7 @@ func test_the_smell_wiring_carries_the_interest_floor():
 # -- slice 3: drive profiles are species data ----------------------------------
 
 const SeasonCycle = preload("res://src/world/season_cycle.gd")
+const NpcSchedule = preload("res://src/world/npc_schedule.gd")
 
 
 ## The land-mammal clock is what CreatureNeeds always ran: hunger over 50 s,
@@ -314,14 +315,22 @@ func test_the_mammal_profile_is_the_creature_needs_clock():
 	assert_gte(profile["hunger"]["meal"], 1.0, "a meal resets a mammal")
 
 
-## A villager runs on the same lived-experience pace as any other creature
-## and has no thirst to simulate (docs/concept/npc.md).
-func test_the_villager_profile_is_hunger_only_at_the_mammal_pace():
+## A villager runs on the same lived-experience pace as any other creature.
+##
+## This used to also assert a villager had NO thirst -- true when the only
+## villager-side consumer was NpcEconomy's hunger, and "simulating an unused
+## thirst would misrepresent what this pass does" (npc_needs.gd). A villager
+## now really walks to the well and drinks (docs/concept/npc_social_life.md),
+## so thirst has a consumer and the absence is no longer the honest claim.
+func test_a_villager_gets_hungry_at_the_same_pace_as_any_other_creature():
 	var profile := Ethogram.drive_profile("", "villager")
 	assert_true(profile.has("hunger"))
-	assert_false(profile.has("thirst"))
 	assert_almost_eq(profile["hunger"]["rise_seconds"], 1.0 / 0.02, 0.0001)
 	assert_almost_eq(profile["hunger"]["stagger"], 0.45, 0.0)
+	assert_almost_eq(
+		profile["thirst"]["rise_seconds"], Ethogram.drive_profile("", "mammal")["thirst"]["rise_seconds"],
+		0.0001, "a villager drinks from the same world at the same rate as anything else in it"
+	)
 
 
 ## A songbird eats through the day (BirdDigestion): an empty crop fills by
@@ -408,3 +417,97 @@ func test_the_boldest_gene_caps_the_floor_at_one_tile_away():
 func test_fear_floor_is_clamped_outside_the_unit_gene_range():
 	assert_eq(Ethogram.fear_floor(1.5), Ethogram.fear_floor(1.0))
 	assert_eq(Ethogram.fear_floor(-1.0), 0.0)
+
+
+# -- the villager body plan: an animal with a job ---------------------------
+#
+# Asked for directly: "We need to improve the NPC AI Behaviour by an order of
+# magnitude ... they should socialize; talk; share rumours; trade goods; give
+# quests; cater for their needs; stroll". The villager plan used to carry one
+# drive and NO wirings at all, so a deer decided what to do from what it
+# needed and what it sensed while a villager walked a fixed schedule. See
+# docs/concept/npc_social_life.md.
+
+
+func test_a_villager_senses_the_things_a_village_is_made_of():
+	for channel in [Ethogram.COMPANY, Ethogram.MARKET, Ethogram.HOME]:
+		assert_true(
+			Ethogram.CHANNELS.has(channel),
+			"%s must be part of the one basis, or nothing can express it" % channel
+		)
+
+
+func test_a_villager_expresses_every_channel_its_own_wirings_listen_on():
+	var receptors := Ethogram.express("", {}, "villager")
+	var sensitivity: Dictionary = receptors["sensitivity"]
+	for wiring in Ethogram.wirings_for("villager"):
+		for channel in wiring["channels"]:
+			assert_true(
+				sensitivity.has(channel),
+				"a villager wiring listens on %s but no receptor expresses it" % channel
+			)
+
+
+## Everything a villager walks TOWARD has to attract, or the wiring that
+## names it fires and then sends them the other way.
+func test_everything_a_villager_seeks_really_draws_them():
+	var valence: Dictionary = Ethogram.express("", {}, "villager")["valence"]
+	for channel in [Ethogram.COMPANY, Ethogram.MARKET, Ethogram.HOME, Ethogram.WATER]:
+		assert_gt(float(valence.get(channel, 0.0)), 0.0, "%s must draw a villager" % channel)
+
+
+func test_a_villager_has_the_four_needs_a_day_is_made_of():
+	var profile := Ethogram.drive_profile("", "villager")
+	for drive in [
+		Ethogram.DRIVE_HUNGER, Ethogram.DRIVE_THIRST,
+		Ethogram.DRIVE_REST, Ethogram.DRIVE_COMPANY,
+	]:
+		assert_true(profile.has(drive), "a villager needs %s" % drive)
+
+
+## Hunger keeps the pace it always had. This is the one drive a whole
+## famine chain already hangs off (NpcEconomy, the market, the producer
+## self-feed rule), so adding needs beside it must not retune it.
+func test_adding_needs_never_retuned_the_hunger_a_famine_depends_on():
+	var profile := Ethogram.drive_profile("", "villager")
+	assert_almost_eq(profile["hunger"]["rise_seconds"], 1.0 / 0.02, 0.0001)
+	assert_almost_eq(profile["hunger"]["threshold"], 0.5, 0.0)
+	assert_almost_eq(profile["hunger"]["stagger"], 0.45, 0.0)
+
+
+## Tiredness is a day's length, not a number somebody liked: a villager
+## tires over one real world day (SeasonCycle.SECONDS_PER_DAY) and sleeps it
+## off, which is what makes "go home at night" a need rather than a clock.
+func test_a_villager_tires_over_exactly_one_world_day():
+	var profile := Ethogram.drive_profile("", "villager")
+	assert_almost_eq(profile["rest"]["rise_seconds"], SeasonCycle.SECONDS_PER_DAY, 0.0001)
+
+
+## Company runs four times a day -- one per NpcSchedule time block, which is
+## the grain the whole day is already cut into.
+func test_a_villager_wants_company_once_per_block_of_the_day():
+	var profile := Ethogram.drive_profile("", "villager")
+	assert_almost_eq(
+		profile["company"]["rise_seconds"],
+		SeasonCycle.SECONDS_PER_DAY / float(NpcSchedule.TIME_BLOCKS.size()), 0.0001
+	)
+
+
+## Every need a villager has is reachable: a drive with no wiring listening
+## on it can rise forever and never change what anybody does.
+func test_every_villager_need_really_drives_something():
+	var gated := {}
+	for wiring in Ethogram.wirings_for("villager"):
+		gated[wiring.get("gate", "")] = true
+	for drive in Ethogram.drive_profile("", "villager"):
+		assert_true(gated.has(drive), "%s rises forever and moves nobody" % drive)
+
+
+## Hunger outranks everything. Deliberately NOT the mammal order (which puts
+## thirst first): a whole famine chain hangs off a villager going to buy food
+## the moment they are hungry, and a villager who stopped for a drink or a
+## chat on the way is a villager the chain no longer describes.
+func test_a_hungry_villager_answers_hunger_before_anything_else():
+	var wirings := Ethogram.wirings_for("villager")
+	assert_gt(wirings.size(), 0, "precondition: a villager has wirings at all")
+	assert_eq(wirings[0]["gate"], Ethogram.DRIVE_HUNGER)
