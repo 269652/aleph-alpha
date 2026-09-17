@@ -138,16 +138,27 @@ static func indentation_hardness_kpa(material: String) -> float:
 
 ## Whether ground of this material gives way under a real footfall.
 ##
-## Stated per MATERIAL rather than per walker on purpose, and the margins
-## are what make that sound: every soft surface here is FAR below the
-## reference footfall and every built one is three to five orders of
-## magnitude above it (pinned by
-## test_no_animal_in_this_world_can_indent_laid_stone), so no walker in
-## this game -- from a 3-milligram ant to a 500kg horse, a range that
-## moves the pressure by barely a factor of 60 either side -- lands on the
-## other side of any of these lines than the player does. Mass keeps doing
-## exactly what it already did: it scales how big the mark is, not whether
-## there is one (see this file's own header).
+## Stated per MATERIAL rather than per walker, and the two sides of that
+## choice are honestly different sizes.
+##
+## The BUILT side is not close at ANY mass. Timber is the softest thing
+## anything here is built of, 36 MPa, and the heaviest species
+## `CreatureMass` tabulates -- a 500kg horse, pressing with ~94 kPa
+## against the reference walker's own ~49 -- is still some 380x short of
+## it; granite is a further ~190x beyond timber. Nothing that walks in
+## this world reaches a laid surface, so a street is a street for every
+## one of them (pinned by
+## test_no_animal_in_this_world_can_indent_laid_stone and
+## test_not_even_the_heaviest_walker_reaches_the_softest_built_material).
+##
+## The SOFT side is a deliberate simplification, and says so: soil's 25
+## kPa sits below the reference walker's own footfall but ABOVE a light
+## enough animal's (a 20g mouse presses with only ~3 kPa), so asking this
+## per walker would stop a mouse leaving a print on turf. That is a real
+## effect -- and a different, unasked change to a documented mechanic, in
+## which mass scales how big the mark is and never whether there is one
+## (see docs/concept/snow_cover.md's "Footprints depend on real mass, not
+## just surface"). This pass deliberately leaves that alone.
 static func yields_to_footfall(material: String) -> bool:
 	return indentation_hardness_kpa(material) <= reference_footfall_pressure_kpa()
 

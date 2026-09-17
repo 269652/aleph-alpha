@@ -23413,12 +23413,16 @@ for ground.
 ✅ **Nothing about print SIZE changed.** Mass still scales the mark (see
 "Footprints depend on real mass, not just surface"); this only answers the
 prior question of whether there is a mark to scale. The verdict is stated
-per MATERIAL rather than per walker, and the margins are what make that
-sound rather than a shortcut: the entire real mass range this game
-tabulates — a 3 mg ant to a 500 kg horse — moves the footfall by only
-~550× in total, while every line here is separated by three to five orders
-of magnitude, so nothing that walks lands on the other side of any of them
-from where the player does.
+per MATERIAL rather than per walker, and the two sides of that choice are
+honestly different sizes. The **built** side is not close at any mass:
+timber is the softest thing anything here is built of (36 MPa) and a
+500 kg horse at ~94 kPa is still ~380× short of it, granite a further
+~190× beyond timber — nothing that walks reaches a laid surface. The
+**soft** side is a deliberate simplification: soil's 25 kPa is below the
+reference walker's footfall but *above* a 20 g mouse's ~3 kPa, so asking
+this per walker would stop a mouse printing on turf — real, but a
+different and unasked change to a documented mechanic, named rather than
+smuggled in.
 
 🚧 **The footstep SOUND on a street is still chosen from the BIOME**, so a
 cobbled street plays the grass clip rather than a stone one

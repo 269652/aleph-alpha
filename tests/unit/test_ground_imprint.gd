@@ -120,6 +120,24 @@ func test_no_animal_in_this_world_can_indent_laid_stone():
 	assert_false(GroundImprint.yields_to_footfall("stone"))
 
 
+## Pins the other half of the margin GroundImprint.yields_to_footfall's
+## own doc comment rests its per-material verdict on: it is not granite
+## alone that is out of reach, it is the SOFTEST thing anything here is
+## built of, for the HEAVIEST thing that walks.
+func test_not_even_the_heaviest_walker_reaches_the_softest_built_material():
+	var heaviest_footfall := GroundImprint.footfall_pressure_kpa(CreatureMass.mass_kg_for("horse"))
+	var softest_built := GroundImprint.indentation_hardness_kpa("timber")
+	for material in ["stone", "wood"]:
+		assert_gte(
+			GroundImprint.indentation_hardness_kpa(material), softest_built,
+			"%s must not be softer than timber, or this test pins the wrong floor" % material
+		)
+	assert_gt(
+		softest_built, heaviest_footfall * 100.0,
+		"a 500kg horse is still two orders of magnitude short of denting a timber floor"
+	)
+
+
 func test_soft_ground_yields_but_built_materials_do_not():
 	for material in [GroundImprint.SOIL, GroundImprint.SNOW]:
 		assert_true(GroundImprint.yields_to_footfall(material), material)

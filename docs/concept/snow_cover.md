@@ -551,19 +551,27 @@ a hard surface that silently swallows prints.
 **print** lands in (not the walker's own — that is where the mark would
 physically be), after the surface lookup and before the field write.
 
-**Deliberately a per-MATERIAL verdict, not a per-walker one**, and the
-margins are what make that sound rather than a shortcut: every soft
-surface is far below the reference footfall and every built one is three
-to five orders of magnitude above it, while the entire real mass range
-this game tabulates — a 3 mg ant to a 500 kg horse — moves the pressure
-by only about 550× in total. Nothing in that range lands on the other
-side of any of these lines from where the player does. **Mass keeps
-doing exactly what it already did**: it scales how big the mark is (see
-"Footprints depend on real mass, not just surface" above), not whether
-there is one. Asking the comparison per walker instead would erase a
-mouse's own print on turf — a real effect, but a *different*, unasked
-change to a documented mechanic, so it is named here rather than
-smuggled in.
+**Deliberately a per-MATERIAL verdict, not a per-walker one** — and the
+two sides of that choice are honestly different sizes, so both are
+stated rather than averaged into one confident sentence.
+
+The **built** side is not close at any mass. Timber is the softest thing
+anything here is built of, 36 MPa, and the heaviest species
+`CreatureMass` tabulates — a 500 kg horse at ~94 kPa — is still some
+380× short of it, with granite a further ~190× beyond timber
+(`test_not_even_the_heaviest_walker_reaches_the_softest_built_material`).
+Nothing that walks in this world reaches a laid surface, so a street is
+a street for every one of them.
+
+The **soft** side is a deliberate simplification. Soil's 25 kPa sits
+below the reference walker's own footfall but *above* a light enough
+animal's — a 20 g mouse presses with only ~3 kPa — so asking the
+comparison per walker would stop a mouse leaving a print on turf. That
+is a real effect, and a *different*, unasked change to a documented
+mechanic: today **mass scales how big the mark is, never whether there
+is one** (see "Footprints depend on real mass, not just surface" above).
+This pass leaves that alone, and names it here rather than smuggling it
+in.
 
 **The step still happened.** The gate sits after `record_footstep`'s
 returned step facts are fully populated and returns them intact, so
