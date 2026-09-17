@@ -269,11 +269,23 @@ chunk's exact middle, so a river through that middle meant no square — and
 with no square there is no civic plot, and so no city hall, ever.
 `VillageLayout.plaza_x0_for` slides it along the street, west and east
 alternately, nearest first, to the first column where the whole square is
-dry AND its own unbroken stretch of street still has room for the square
-plus at least one house (`narrowest_plot_width()`, read off the catalog —
-a square that swallows its whole street is worse than no square). Nowhere
-dry and it stays at the designed centre, where `layout` finds it unclear
-and honestly lays none.
+dry. Nowhere dry and it stays at the designed centre, where `layout` finds
+it unclear and honestly lays none.
+
+It briefly also demanded a run wide enough for the square *plus a house
+beside it*, on the reasoning that a square swallowing its whole street
+leaves the village nowhere to live. Measured on chunk (661,139) near lat
+49.8 lon 10.6 — reported three times as "no plaza, no city hall" — that
+trade is the wrong way round. The dry pocket there is about nine tiles, the
+square fits on it, and the rule made the village take three houses and no
+square instead. **A house does not have to stand on the spine**; a village
+that fills its spine opens a further street and reaches it by the gate
+lane. A square can only ever straddle a street. So the rule is gone, and
+its consequence is handled where it belongs: a spine whose whole run is
+taken by the square no longer ends the village — its houses go to the next
+street. That exception is deliberately bounded to the spine and to a
+village that has placed nothing at all, so a chunk is never walked to the
+bottom placing nothing.
 
 The predicate is deliberately a WATER test (`is_dry`), not the general
 buildable/occupied pair. Every consumer of a village's square — the
