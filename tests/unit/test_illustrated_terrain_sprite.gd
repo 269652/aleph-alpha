@@ -169,3 +169,108 @@ func test_loading_a_sheet_does_not_log_an_engine_warning():
 	IllustratedTerrainSprite._frame_cache.clear()
 	generator.frame_for("grassland", 7)
 	assert_engine_error_count(0, "loading a terrain sheet should not warn")
+
+
+# -- _prepared_for_slicing / _scrub_magenta_fringe performance -------------
+#
+# This class's own despill loops were a SEPARATE, never-fixed duplicate of
+# the exact naive per-pixel Image.get_pixel/set_pixel technique already fixed
+# in SpriteSheetSlicer/IllustratedMushroomSprite/IllustratedAnimalSprite/
+# IllustratedStoneSprite (see docs/progress.md's "Still at 1fps" per-pixel
+# art-loading investigation, 2026-09-10) -- none of those fixes touched this
+# file's own local reimplementation.
+#
+# Measured directly (docs/concept/character_creator_preview_scene.md's "Load
+# cost" section): loading the grassland sheet costs ~987ms, of which the
+# PNG decode itself is only ~36ms and _prepared_for_slicing alone is ~458ms.
+# That lands squarely in the character creator's own first open -- its
+# diorama stands on real grassland ground -- as well as in the first chunk
+# of any real world.
+
+
+## Real sheet resolution (1254x1254 -- see _SHEETS' own doc comment), format
+## RGB8 with no alpha channel, which is the path every real terrain sheet
+## takes today. Uniform non-magenta fill: this loop has no early-out or
+## bounding box, so every pixel costs the same fixed handful of comparisons
+## regardless of content and a solid fill is a faithful worst case, not an
+## artificially easy one (mirrors test_illustrated_stone_sprite.gd's own
+## identical budgeted pin).
+func test_prepared_for_slicing_completes_quickly_at_real_sheet_resolution():
+	var width := 1254
+	var height := 1254
+	var image := Image.create(width, height, false, Image.FORMAT_RGB8)
+	image.fill(Color(0.5, 0.5, 0.5))
+	var start_usec := Time.get_ticks_usec()
+	generator._prepared_for_slicing(image)
+	var elapsed_ms := (Time.get_ticks_usec() - start_usec) / 1000.0
+	# 200ms: comfortably above the byte-array, fully-inlined implementation
+	# and far below the ~458ms the naive get_pixel/set_pixel-per-Color loop
+	# it replaces measured on this same sheet size. Same calibration shape
+	# as IllustratedStoneSprite's own 900ms pin, tightened because this
+	# measurement is a real before/after pair rather than a first guess.
+	assert_lt(
+		elapsed_ms,
+		200.0,
+		(
+			"despilling one %dx%d sheet took %.0fms -- a naive per-pixel get_pixel/set_pixel loop regressed back in"
+			% [width, height, elapsed_ms]
+		)
+	)
+
+
+## CANVAS_SIZE (32x32) -- the per-FRAME cleanup pass, called once per sliced
+## frame (9 per sheet, one per variant).
+func test_scrub_magenta_fringe_completes_quickly_at_real_frame_resolution():
+	var image := Image.create(
+		IllustratedTerrainSprite.CANVAS_SIZE.x, IllustratedTerrainSprite.CANVAS_SIZE.y, false, Image.FORMAT_RGBA8
+	)
+	image.fill(Color(0.5, 0.5, 0.5, 1.0))
+	var start_usec := Time.get_ticks_usec()
+	generator._scrub_magenta_fringe(image)
+	var elapsed_ms := (Time.get_ticks_usec() - start_usec) / 1000.0
+	assert_lt(
+		elapsed_ms,
+		5.0,
+		(
+			"scrubbing one %dx%d frame took %.2fms -- a naive per-pixel get_pixel/set_pixel loop regressed back in"
+			% [IllustratedTerrainSprite.CANVAS_SIZE.x, IllustratedTerrainSprite.CANVAS_SIZE.y, elapsed_ms]
+		)
+	)
+
+
+## Speed is worthless if the pixels change. Pins the three cases the loop
+## actually distinguishes, against this class's OWN thresholds
+## (MAGENTA_RED_MIN/MAGENTA_BLUE_MIN/MAGENTA_SKEW_MIN -- note the skew test,
+## which is what makes this genuinely different from IllustratedStoneSprite's
+## per-channel green-max version and why its loop cannot just be copied).
+func test_prepared_for_slicing_keys_despills_and_leaves_pixels_exactly_as_before():
+	var image := Image.create(3, 1, false, Image.FORMAT_RGB8)
+	# A true magenta divider pixel: red and blue both over the gate, and the
+	# red/blue average well clear of green.
+	image.set_pixel(0, 0, Color(1.0, 0.0, 1.0))
+	# A soft magenta CAST on a green-ish ground pixel: not magenta by the
+	# gates above, but red and blue both sit above green by more than
+	# MAGENTA_CAST_MARGIN, so the despill has to pull them down to it.
+	image.set_pixel(1, 0, Color(0.5, 0.2, 0.5))
+	# Clean ground: green dominant, nothing to remove.
+	image.set_pixel(2, 0, Color(0.2, 0.6, 0.25))
+
+	var prepared: Image = generator._prepared_for_slicing(image)
+
+	assert_almost_eq(prepared.get_pixel(0, 0).a, 0.0, 0.01, "a magenta divider pixel must go transparent")
+	var despilled := prepared.get_pixel(1, 0)
+	assert_almost_eq(despilled.g, 0.2, 0.01, "green is never touched by the despill")
+	assert_almost_eq(
+		despilled.r, 0.2 + IllustratedTerrainSprite.MAGENTA_CAST_MARGIN, 0.01,
+		"red is pulled down to exactly the cast margin above green"
+	)
+	assert_almost_eq(
+		despilled.b, 0.2 + IllustratedTerrainSprite.MAGENTA_CAST_MARGIN, 0.01,
+		"and so is blue"
+	)
+	assert_almost_eq(despilled.a, 1.0, 0.01, "a despilled pixel stays opaque")
+	var clean := prepared.get_pixel(2, 0)
+	assert_almost_eq(clean.r, 0.2, 0.01, "clean ground is left alone")
+	assert_almost_eq(clean.g, 0.6, 0.01)
+	assert_almost_eq(clean.b, 0.25, 0.01)
+	assert_almost_eq(clean.a, 1.0, 0.01)
