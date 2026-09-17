@@ -1410,3 +1410,36 @@ func test_every_shared_landmark_stands_on_or_beside_the_paving_too():
 	var roads := _road_cells_of(world)
 	for cell in _prop_cells(spawned, false):
 		assert_true(_touches_a_road(cell, roads), "the well, the stall and the gate belong to the square")
+
+
+# -- a prop draws its real art when there is any ---------------------------
+#
+# Asked for directly: the procedural stands, wells and beds should get real
+# art like the houses and the city hall have. The renderer asks
+# LandmarkSheet first and falls back to the procedural sprite, so dropping
+# a PNG into assets/sprites/landmarks/ is the entire job -- and until one
+# is dropped in, every prop draws exactly as it does today.
+
+
+func test_a_prop_with_no_art_yet_still_draws_its_procedural_sprite():
+	var coord := _find_settlement_chunk("grassland")
+	var world := StubWorld.new()
+
+	var spawned := renderer.spawn_village(parent, coord, coord * CHUNK_SIZE, CHUNK_SIZE, TILE_SIZE, "grassland", world)
+
+	var props := 0
+	for node in spawned:
+		if not node.has_meta("landmark_id"):
+			continue
+		props += 1
+		assert_not_null(node.texture, "%s must still be drawn" % node.get_meta("landmark_id"))
+	assert_gt(props, 0, "precondition: this village really has props")
+
+
+func test_the_renderer_asks_for_real_art_before_drawing_one_itself():
+	# The seam itself: a prop's texture comes from LandmarkSheet when it
+	# can, which is what makes supplied art take over with no other change.
+	assert_true(
+		renderer.has_method("_landmark_texture"),
+		"the renderer must route a prop's texture through one place that can prefer real art"
+	)

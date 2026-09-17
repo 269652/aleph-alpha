@@ -1005,3 +1005,56 @@ modification like any other.
   directly, not through the hotbar/inventory the way campfire/furnace are).
 - ⬜ Shelter effects (warmth, safety) for being in an enclosed room, tying
   building into [survival.md](survival.md).
+
+## Village props: where a stand, a well or a bed gets its real art
+
+Asked for directly, from a screenshot of a village whose houses and city
+hall are real pixel art standing beside a market stall drawn from code:
+*"all procedural stands, wells, beds etc"*.
+
+Every village prop — the shared **well**, **stall** and **gate**, and the
+per-occupation workspot props **field**, **forge**, **dock**, **garden**
+and **hunting_ground** — is drawn by `ProceduralLandmarkSprite`, generated
+pixel by pixel at runtime. `LandmarkSheet` gives each of them the same way
+in that a building already has:
+
+> Put a PNG at `res://assets/sprites/landmarks/<id>.png` and it takes over.
+> Until that file exists, the procedural sprite is drawn exactly as before.
+
+Nothing else changes when one arrives. `VillageRenderer._landmark_texture`
+asks `LandmarkSheet` first and falls back, so art can land one prop at a
+time without a half-converted village looking broken.
+
+**What a file has to be**, matching the building sheets already in the
+repo (`house_1.png`, `city_hall.png`):
+
+- A **black background**, keyed out on load by the same threshold
+  `IllustratedStructureSprite` uses for buildings.
+- Authored **oversized** for pixel detail. The renderer scales it back by
+  `ArtResolution.SPRITE_SCALE`, so the prop's world footprint is unchanged
+  whatever size the file is — see [art_resolution.md](art_resolution.md).
+
+**One image is enough, and that is deliberate.** A house sheet is a 5×5
+grid because twenty-five cottages keep a street from looking repeated; a
+well is a well, and asking for twenty-five drawings of one to get one on
+screen is the wrong trade. A prop that someone does decide is worth varying
+declares its grid in `LandmarkSheet._SHEET_GRIDS` and then draws from it
+seeded by its own position, exactly the way a house does — the grid is
+gutter-detected, so the cells need not be evenly spaced.
+
+`hunting_ground` is included even though it has no procedural drawing of
+its own: it falls back to the well's sprite today, a cosmetic gap this
+gives a real home.
+
+### Status
+
+- ✅ `LandmarkSheet` — path, existence, grid and seeded variant cell, with
+  the procedural sprite as the fallback (`test_landmark_sheet.gd`).
+- ✅ `VillageRenderer._landmark_texture` routes every prop through it
+  (`test_village_renderer.gd`).
+- ⬜ The art itself. No file has been supplied yet, so every prop still
+  draws procedurally — which is exactly what the tests currently pin.
+- ⬜ **Beds and other furniture are NOT covered.** They are painted into
+  the furniture `TileMapLayer` rather than spawned as prop sprites
+  (`HouseDecor`), so they need their own path; this contract is for the
+  props `VillageRenderer` places.

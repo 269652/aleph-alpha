@@ -24,6 +24,8 @@ const HeroAppearance = preload("res://src/rendering/hero_appearance.gd")
 const CharacterViewScene = preload("res://scenes/character_view.tscn")
 const CharacterView = preload("res://scenes/character_view.gd")
 const DropShadow = preload("res://src/rendering/drop_shadow.gd")
+const LandmarkSheet = preload("res://src/rendering/landmark_sheet.gd")
+const IllustratedStructureSprite = preload("res://src/rendering/illustrated_structure_sprite.gd")
 const NpcIdentity = preload("res://src/world/npc_identity.gd")
 const CivicBuildDecision = preload("res://src/emergence/civic_build_decision.gd")
 const EntityRef = preload("res://src/emergence/entity_ref.gd")
@@ -38,6 +40,10 @@ const ArtResolution = preload("res://src/rendering/art_resolution.gd")
 var _settlement_generator := SettlementGenerator.new()
 var _village_layout := VillageLayout.new()
 var _landmark_sprite := ProceduralLandmarkSprite.new()
+## Owns the sheet loading, black keying and per-sheet frame cache a
+## prop's real art is read through (see LandmarkSheet.frame_image) --
+## the same one buildings already draw their variants with.
+var _structure_sprite := IllustratedStructureSprite.new()
 var _character_sprite := ProceduralCharacterSprite.new()
 var _appearance := HeroAppearance.new()
 var _drop_shadow := DropShadow.new()
@@ -688,7 +694,7 @@ func _prop_cell_is_clear(cell: Vector2i, world, allow_road: bool) -> bool:
 ## cannot tell them apart.
 func _build_landmark(landmark_id: String, position: Vector2, parent: Node2D, personal: bool = false) -> Sprite2D:
 	var landmark := Sprite2D.new()
-	landmark.texture = _landmark_sprite.generate_texture(landmark_id)
+	landmark.texture = _landmark_texture(landmark_id, position)
 	landmark.set_meta("landmark_id", landmark_id)
 	landmark.set_meta("personal", personal)
 	# Art is authored DETAIL_MULTIPLIER times oversized for pixel detail;
@@ -700,6 +706,25 @@ func _build_landmark(landmark_id: String, position: Vector2, parent: Node2D, per
 	landmark.add_child(_drop_shadow.make_shadow(int(size.x * 0.8), size.y * 0.5 - 1.0))
 	parent.add_child(landmark)
 	return landmark
+
+
+## A prop's real art if any has been supplied for it, and its procedural
+## drawing otherwise (see LandmarkSheet, which owns where that art lives
+## and what it has to look like). Asked for directly: the stands, wells and
+## beds look out of place beside the pixel art the houses and the city hall
+## now have, and this is the one place a supplied PNG takes over -- nothing
+## else has to change when one arrives.
+##
+## Seeded from the prop's own position so a village with two of the same
+## prop does not draw the same variant twice, and so a prop looks like
+## itself across reloads. Only matters for a prop whose art is a grid; a
+## plain single-image sheet has one cell whatever the seed.
+func _landmark_texture(landmark_id: String, position: Vector2) -> Texture2D:
+	var seed_value := hash("%d_%d_prop" % [int(position.x), int(position.y)])
+	var image := LandmarkSheet.frame_image(landmark_id, seed_value, _structure_sprite)
+	if image != null:
+		return ImageTexture.create_from_image(image)
+	return _landmark_sprite.generate_texture(landmark_id)
 
 
 ## `home_position` is this villager's own house's DOORSTEP position (the
