@@ -976,18 +976,22 @@ func test_a_villager_busy_with_real_work_answers_no_need_at_all():
 # direct deposit they always had.
 
 
-## A producer with a store to carry to, hands already full.
-func _loaded_producer_at(store: Vector2) -> void:
+## A villager with a store to carry to, hands already full. Credited
+## through record_real_harvest rather than record_real_catch because that
+## one is gated on being a PRODUCER, and this marker's occupation is
+## whatever its seed gave it -- a blacksmith would have been handed nothing
+## and the test would have passed vacuously on empty hands.
+func _loaded_villager_at(store: Vector2) -> void:
 	_quiet_every_need()
 	marker.economy.market = VillageMarket.new()
 	marker.warehouse_position = store
 	marker.economy.carry_limit = NpcEconomy.CARRY_LIMIT
-	marker.economy.record_real_catch(int(NpcEconomy.CARRY_LIMIT))
+	marker.economy.record_real_harvest("wheat", int(NpcEconomy.CARRY_LIMIT))
 
 
 func test_a_villager_with_full_hands_walks_to_the_store():
 	var store := Vector2(700, 700)
-	_loaded_producer_at(store)
+	_loaded_villager_at(store)
 	assert_almost_eq(marker.economy.burden(), 1.0, 0.0, "precondition: their hands really are full")
 	var before := marker.position.distance_to(store)
 	marker._process(0.5)
@@ -998,7 +1002,7 @@ func test_a_villager_with_full_hands_walks_to_the_store():
 ## warehouse forever holding it -- the same "arriving is what answers it"
 ## rule the well and the bed already run on.
 func test_reaching_the_door_really_puts_the_load_down():
-	_loaded_producer_at(Vector2(700, 700))
+	_loaded_villager_at(Vector2(700, 700))
 	var in_hand := marker.economy.carried_total()
 	marker.position = marker.warehouse_position
 	marker._process(0.1)

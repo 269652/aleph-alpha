@@ -62,6 +62,13 @@ var home_position := Vector2.ZERO
 ## yet.
 var workspot_position := Vector2.ZERO
 var landmarks: Dictionary = {}
+## The door of this settlement's store, or null when it has none (see
+## docs/concept/village_warehouse.md pillar 1's caveat: a cramped site
+## houses its people and goes without). Deliberately NOT a fourth entry in
+## `landmarks` -- that dictionary is the settlement's three SHARED landmarks,
+## and every reader of it treats a key as a schedule location_tag with a prop
+## to draw. The store already has a real building standing on it.
+var warehouse_position = null
 var schedule: Array = []
 
 var _elapsed_time := 0.0
@@ -505,6 +512,12 @@ func _answer_need(intent: String, who) -> void:
 		economy.needs.satisfy(Ethogram.DRIVE_THIRST)
 	elif intent == VillagerBehavior.REST:
 		economy.needs.satisfy(Ethogram.DRIVE_REST)
+	elif intent == VillagerBehavior.HAUL:
+		# Reaching the door is what puts the load down, the same way reaching
+		# the well is what answers the thirst. This is the moment a village's
+		# stock actually arrives somewhere (village_warehouse.md mechanism 3);
+		# until now it had no location at all.
+		economy.deliver_load()
 	elif intent == VillagerBehavior.SOCIALIZE and who != null and is_instance_valid(who):
 		# Both sides, because a conversation has two people in it -- the one
 		# who walked over and the one who was stood there. Without this the
@@ -521,9 +534,18 @@ func _answer_need(intent: String, who) -> void:
 func _villager_context() -> Dictionary:
 	var drives: Dictionary = economy.needs.gains().duplicate()
 	drives[Ethogram.DRIVE_HUNGER] = 0.0
+	# What this villager is CARRYING, which is not on any clock and so is
+	# absent from gains() by construction. It has to be published explicitly:
+	# BehaviorKernel reads an unmentioned gate as wide open, and though
+	# VillagerBehavior now closes that door on its own side, a marker that
+	# stayed silent would still be telling a villager nothing about their own
+	# hands.
+	drives[Ethogram.DRIVE_BURDEN] = economy.burden()
 	var context := {"position": position, "drives": drives, "home": home_position}
 	if landmarks.has("well"):
 		context[Ethogram.WATER] = landmarks["well"]
+	if warehouse_position != null:
+		context[Ethogram.WAREHOUSE] = warehouse_position
 	# Somebody to talk to, asked of the world the same duck-typed way every
 	# other world hook here is. One nearest neighbour rather than a list:
 	# you stop for the person you were passing, not for the best of everyone
