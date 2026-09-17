@@ -258,9 +258,17 @@ picked up off the ground was never struck.
   already holding something, since E no longer sweeps in that state.
 - ⬜ Visible damage state on a part-smashed boulder (currently only the final
   break is shown)
-- ⬜ Stone type varying by biome (granite, limestone, sandstone) -- today all
-  loose stone is the same grey granite (illustrated pebble/cobble/boulder art
-  aside)
+- 🚧 Stone type varying by biome (granite, limestone, sandstone) -- today
+  all loose stone is still the same grey granite (illustrated
+  pebble/cobble/boulder art aside). **But the framing here was wrong, and
+  is corrected rather than merely still open**: the real control on what
+  rock a place is made of is not biome, it is LITHOLOGY. Limestone country
+  is limestone country whether forest or grassland grows on top of it.
+  `Lithology` (`src/world/lithology.gd`, see
+  [underground.md](underground.md)) now answers that question for real --
+  eight rock types at province scale, weighted to the measured global
+  carbonate share -- so what remains is wiring loose surface stone to READ
+  it, plus per-rock-type art, rather than designing the model.
 - ⬜ A thrown stone that misses/passes a creature is simply respawned as a
   loose stone at its landing spot rather than animated flying there, and
   isn't re-registered into EarthChunkManager's own per-chunk bookkeeping --

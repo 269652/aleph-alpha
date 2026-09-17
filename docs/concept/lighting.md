@@ -13,6 +13,21 @@ alongside it rather than fight it.
    starlight + skyglow give real usable outdoor vision even with the sun
    fully below the horizon. A carried light source is what turns "dim and
    readable" into "genuinely lit," not what turns "black" into "visible."
+   **This pillar is OUTDOOR-only, and underground it inverts.** The
+   justification above is moonlight, starlight and skyglow; none of those
+   exists below a cave's twilight zone, so the justification does not
+   travel down there and neither does the rule.
+   [underground.md](underground.md) specifies the deep cave zone as
+   rendering at true black, with a carried light the only thing that makes
+   it navigable -- a principled exception applying this same physical
+   reasoning to a place where the physics gives the opposite answer, not a
+   contradiction of it. `CaveZonation.daylight_fraction_at` returns
+   EXACTLY zero past the twilight boundary, not asymptotically small,
+   because a floor that never quite reached zero would quietly make a
+   torch cosmetic again. Implementation status: the zonation model is
+   built and tested, and nothing renders from it yet -- see
+   underground.md's Status.
+
 2. **A light source adds, it does not fight the global tint.** The
    day/night cycle is one global multiply over the whole screen
    (`CanvasModulate`) — the same mechanism every sprite in the game

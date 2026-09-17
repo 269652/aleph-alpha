@@ -376,29 +376,112 @@ Non-creature content, all of it grounded:
 
 ## Status
 
-Nothing in this doc below the geology substrate is implemented yet; this
-section is the honest ledger and will be updated as slices land.
+The whole generation and ecology stack below is built and tested; the
+engine binding is partial, and the honest headline is that **descent is
+reachable through the chunk manager's API but is not yet playable** --
+nothing in the game calls it, and the underground does not yet look like
+one.
 
-- ✅ **Substrate already in place** (from [geology.md](geology.md), not this
-  doc): four configured `Strata` layers with real per-layer ore weighting,
-  `TunnelSupport`'s real span-squared collapse model, `GeologyHazards`' foul
-  air and flood risk, `CaveEntrancePlacement`, and the topsoil/regolith layer
-  wired end-to-end and playable.
-- ⬜ `Lithology`, `CaveRecharge`, `CavePattern`, `CaveNetwork`,
-  `CaveZonation`, chemosynthetic energy, and cutoff grade -- all specified
-  above, none built.
-- ⬜ `Strata.KIND_VOID`, and the pitch/descent wiring from topsoil/regolith
-  into bedrock. This is `geology.md`'s own standing ⬜ gap, restated here with
-  the structure it was missing.
-- ⬜ True-black rendering below the twilight zone, and the light gate on
-  descent.
-- ⬜ The underground clade: no creature pools, no chemosynthetic energy
-  budget, no spawning.
-- ⬜ Claims, gates, and lapse -- the whole "instancing without instances"
+### Built and tested
+
+- ✅ **`Lithology`** -- province-scale bedrock rock type (40km provinces),
+  weighted so the global carbonate share is Goldscheider et al.'s measured
+  15.2%, relief-independent by construction because alpine karst is real.
+  Relief redistributes only the clastic/crystalline remainder. Real
+  relative dissolution rates, four rock types at exactly zero. Also
+  `has_permeable_cover_at`, the control that decides branchwork vs maze.
+- ✅ **`CaveRecharge`** -- Palmer's five recharge modes from real world
+  signals, with causal precedence (hypogenic beats everything, then the
+  coastal mixing zone, then how surface water gets in). Bare karst
+  resolves to point recharge via its own epikarst.
+- ✅ **`CavePattern`** -- the five Palmer patterns, keyed off recharge and
+  not rock type, with `PATTERN_NONE` for anything insoluble.
+- ✅ **`CaveNetwork`** -- the void field. Porosity derived from real cave
+  surveys (Mammoth, Optymistychna, Lechuguilla) times real mean passage
+  width. Conduits are banded by distance to a field contour so they come
+  out constant-width and connected; the frequency is calibrated so the
+  generated passage WIDTH independently lands on the surveyed width while
+  the threshold holds the surveyed porosity -- two unrelated survey
+  numbers agreeing.
+- ✅ **`CaveZonation`** -- the four real zones, daylight exactly zero below
+  the twilight zone, and the deep zone holding the locality's mean annual
+  surface temperature in both directions.
+- ✅ **`ChemosyntheticEnergy`** -- few/old/enormous from a real energy
+  budget. Kleiber's law for attainable mass; the longevity exponent fitted
+  to the olm end of a real comparison pair and independently reproducing
+  the surface end it was never fitted to.
+- ✅ **`CaveDescent`** -- the pitch rule, the light gate, and walking the
+  layer stack.
+- ✅ **`CaveSiting`** + **`CaveSignals`** -- the composition, and the
+  translation from this world's real readings (slope degrees, biome,
+  scanned ocean distance) into it. The generated global mix measures
+  16.8% cave-bearing and 60.3% branchwork against Palmer's surveyed 57%.
+- ✅ **`Strata.KIND_VOID`** -- natural passage, distinct from a player's
+  `KIND_TUNNEL`, winning over both mined state and ore, and immune to
+  `mine_at` because swinging at open air is not work.
+- ✅ **`GeologyRenderer.reveal_chamber`** skips any open cell, not just a
+  mined one -- spawning rock in a natural passage would wall off a cave
+  with rock that was never there.
+- ✅ **`EarthChunkManager`** -- every loaded chunk now gets a real bedrock
+  `Strata` sited from its own lithology and hydrology; `strata_for_layer`,
+  `pitch_at`, `try_descend`, `try_ascend` and `player_cave_layer` exist and
+  are tested, and `_update_underground_reveal` reveals the player's
+  surroundings in whichever layer they are in.
+
+### Not built
+
+- ⬜ **The input binding, which is what "playable" turns on.** Nothing
+  calls `try_descend`/`try_ascend` -- no key, no prompt, no automatic
+  trigger. Deliberately left rather than auto-triggered inside `update()`:
+  with no visual transition yet (below), a player silently flipped
+  underground would have no way to understand what happened, which is
+  worse than not being wired at all.
+- ⬜ **The underground does not look like one.** No cave floor, no hiding
+  of the surface terrain, and no true-black rendering below the twilight
+  zone. `CaveZonation` computes the darkness and the temperature and
+  nothing reads either. Today a descent would read as "rock appears around
+  you", not "you are in a cave" -- this is the single biggest remaining
+  piece of work.
+- ⬜ **Finding a pitch is currently impractical.** A pitch needs a
+  walkable topsoil cell over natural bedrock void, but the topsoil chamber
+  is a fixed 3x3 pocket (`GeologyChamber.CHAMBER_RADIUS` is 1), so there
+  are at most nine cells to try. The chamber needs to grow as the player
+  mines outward before the dig-to-find-the-way-down loop this doc
+  describes can actually happen.
+- ⬜ Deep bedrock and hydrothermal `Strata` instances are configured but
+  not built per chunk, so layers 3 and 4 remain unreachable.
+- ⬜ Cutoff grade -- specified above, not implemented, so depth is not yet
+  a real economic trade.
+- ⬜ The underground clade: no creature pools keyed by zone and chemical
+  flux, no spawning, no snottites. `ChemosyntheticEnergy` answers what the
+  budget allows and nothing consumes the answer.
+- ⬜ Claims, gates and lapse -- the whole "instancing without instances"
   mechanism is design only.
-- ⬜ Lava tubes (basalt), specified above and deliberately not folded into the
-  solutional model.
-- ⬜ Saltpetre, speleothems-as-archives, chemosynthetic food, and cold storage.
+- ⬜ Lava tubes (basalt), specified above and deliberately not folded into
+  the solutional model.
+- ⬜ Saltpetre, speleothems-as-climate-archives, chemosynthetic food, and
+  cold storage.
+- ⬜ `PATTERN_RAMIFORM` generates its rooms but not the branching side
+  passages that join them, so a hypogenic cave is currently chambers
+  without the connections Palmer describes.
+
+### Honestly weaker than it looks
+
+- `CaveSignals.hydrothermal_proximity_at` is a **placeholder**. This world
+  has no tectonics or heat-flow field, so hypogenic settings are rolled
+  per province at a plausible minority share. Every ramiform cave in the
+  game is therefore sited by a die roll, not by geology.
+- `Lithology.PERMEABLE_COVER_SHARE` is the least-anchored constant in the
+  stack. The exposed/covered split of global karst has no single measured
+  source here the way carbonate outcrop does; it is set to land the
+  pattern mix on Palmer's surveyed branchwork share within a sweep whose
+  own assumptions are named in the test.
+- `CaveNetwork`'s spongework passage density is not taken from a named
+  survey, unlike the other four patterns.
+- The play-scale/map-scale split (~1.426 m per tile for passages, ~1km per
+  tile for biomes and oceans) is the project's existing deliberate scale
+  fiction. Every conversion here says which scale it uses, but the two
+  genuinely coexist and that is a standing trap.
 
 ## Open questions
 
