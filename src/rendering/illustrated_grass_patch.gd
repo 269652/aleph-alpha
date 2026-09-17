@@ -125,7 +125,7 @@ const WALKER_PUSH_UV_AMPLITUDE := 1.5
 ## art past a card's edge and clip it (History "Where a bent blade actually
 ## goes"). Measured across the real worst case (storm wind, a walker standing
 ## on the card) that leftover is ~0.02 card widths -- about 1.3 screen px at
-## the shipped 64-px-wide card -- versus the 1.66 CARD WIDTHS (110 px) the
+## the shipped 64-px-wide card -- versus the 1.66 CARD WIDTHS (106 px) the
 ## sampling stage used to carry on its own. Height gets more resolution than
 ## width because the eased-in curve runs UP a blade while the wind's own
 ## spread across a card is much gentler. Finer still is available but not

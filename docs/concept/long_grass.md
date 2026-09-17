@@ -199,6 +199,15 @@ above the ~4×4 px floor where small triangles start wasting whole rasterizer
 quads. Finer subdivision would shrink the leftover sliver further; 4×8 is
 where it stops being visible (~1 px) without pushing cells toward that floor.
 
+Checked and deliberately left alone: a vertex-displaced quad can reach past
+the canvas item rect Godot culls its band against, so a band whose rect sits
+just off-screen could in principle drop a blade bent into view. It cannot
+bite here -- the view-distance culling above already keeps every card within
+the camera's own span plus 2 tiles, so a band with any visible card overlaps
+the screen regardless, and the walker push (the only term large enough to
+matter) is ~0 at the screen's edge anyway, the player being at its centre.
+No `custom_aabb` needed.
+
 **Not independently verified by a live render.** Every claim above is pinned
 by a real headless test (the residual bound, the shader's structure, the
 mesh's subdivision and triangle count, roots staying exactly put), and the
