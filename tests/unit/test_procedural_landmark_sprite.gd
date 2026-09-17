@@ -4,6 +4,7 @@ extends GutTest
 ## VillageRenderer) -- previously invisible positions NPCs walked to.
 
 const ProceduralLandmarkSprite = preload("res://src/rendering/procedural_landmark_sprite.gd")
+const NpcIdentity = preload("res://src/world/npc_identity.gd")
 
 var generator := ProceduralLandmarkSprite.new()
 
@@ -113,6 +114,58 @@ func test_garden_has_both_soil_and_its_own_herb_color():
 	assert_false(
 		_has_color_near(image, ProceduralLandmarkSprite.CROP_COLOR),
 		"garden herbs should read as their own thing, not a farmer's crop"
+	)
+
+
+## Reported live: "there are 3 wells and one stand all over the place."
+## A village has exactly ONE well, on its own square (docs/concept/
+## village_growth.md's street-village grounding: "a widened square at the
+## middle carrying the well, the market stall and the civic building").
+## The other two were HUNTERS: a hunter's workspot prop is tagged
+## "hunting_ground", which had no drawing of its own and so fell through
+## generate_image's unknown-id fallback to the WELL's -- measured on the
+## real load path, not deduced (tools/probe_village_props.gd: every hunter
+## in every sampled village stood a second well-looking prop out in the
+## fields behind the houses, and a village rolling two hunters showed
+## three wells in total).
+##
+## The fallback below is still right for a genuinely unknown id; what was
+## wrong is that a real, shipped occupation's own workspot was reaching it.
+func test_a_hunters_workspot_prop_is_not_drawn_as_the_villages_own_well():
+	assert_ne(
+		generator.generate_image("hunting_ground").get_data(),
+		generator.generate_image("well").get_data(),
+		"a hunter's spot must be its own thing, not a second well"
+	)
+
+
+## The cross-pin that would have caught the above: every occupation this
+## game actually ships works somewhere, and VillageRenderer renders a prop
+## at that tag for any of them the settlement's shared landmarks do not
+## already cover. A tag this catalog cannot draw does not fail loudly -- it
+## quietly draws a well, which is exactly how three of them ended up in one
+## village. Driven off NpcIdentity's own table rather than a hand-copied
+## list, so a NEW occupation with a new work tag fails here instead of in
+## somebody's screenshot.
+func test_every_occupation_works_at_a_prop_this_catalog_can_actually_draw():
+	for occupation in NpcIdentity.WORK_LOCATION_BY_OCCUPATION:
+		var work_tag: String = NpcIdentity.WORK_LOCATION_BY_OCCUPATION[occupation]
+		assert_true(
+			ProceduralLandmarkSprite.LANDMARK_IDS.has(work_tag),
+			"%s works at '%s', which this catalog cannot draw -- it would fall back to the well" % [occupation, work_tag]
+		)
+
+
+## A hunter's spot reads as a hunter's: a wooden rack with a hide stretched
+## on it (the drying rack a real hunter's kill actually ends up on), so it
+## cannot be mistaken for the well, the stall's awning, or a farmer's crop.
+func test_hunting_ground_has_both_wood_and_hide_pixels():
+	var image := generator.generate_image("hunting_ground")
+	assert_true(_has_color_near(image, ProceduralLandmarkSprite.WOOD_COLOR), "the rack should be wooden")
+	assert_true(_has_color_near(image, ProceduralLandmarkSprite.HIDE_COLOR), "a hide should hang on it")
+	assert_false(
+		_has_color_near(image, ProceduralLandmarkSprite.WATER_COLOR),
+		"nothing on a hunter's rack is the well's dark water"
 	)
 
 

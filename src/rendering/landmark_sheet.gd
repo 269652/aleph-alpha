@@ -17,9 +17,8 @@ const ArtResolution = preload("res://src/rendering/art_resolution.gd")
 ## ## What to draw, and where to put it
 ##
 ## One PNG per prop at `res://assets/sprites/landmarks/<id>.png`, for the
-## ids in ProceduralLandmarkSprite.LANDMARK_IDS plus "hunting_ground" (a
-## hunter's own prop, which has never had art and falls back to the well's
-## sprite today). Same sheet conventions the building art already uses:
+## ids in ProceduralLandmarkSprite.LANDMARK_IDS (plus EXTRA_PROP_IDS, empty
+## today). Same sheet conventions the building art already uses:
 ## a BLACK background, which is keyed out (IllustratedStructureSprite's own
 ## black threshold), and art authored oversized for pixel detail -- the
 ## renderer scales it back by ArtResolution.SPRITE_SCALE so the world
@@ -37,11 +36,15 @@ const ArtResolution = preload("res://src/rendering/art_resolution.gd")
 
 const SHEET_DIR := "res://assets/sprites/landmarks/"
 
-## The hunter's own prop, absent from ProceduralLandmarkSprite.LANDMARK_IDS
-## because it has no procedural drawing of its own -- it falls back to the
-## well's sprite today (a known cosmetic gap). Art dropped in for it is
-## picked up like any other.
-const EXTRA_PROP_IDS: Array[String] = ["hunting_ground"]
+## Props that can take real art without ProceduralLandmarkSprite knowing how
+## to draw them. Empty since 2026-09-17: "hunting_ground" was the only
+## entry, and it is in LANDMARK_IDS now -- an id this catalog cannot draw
+## silently falls back to the WELL's sprite, which put a second and third
+## well in every village with hunters in it (reported live; see that
+## catalog's own _hunting_ground_image). Kept as a real, empty seam rather
+## than deleted: a prop whose art arrives before anyone draws it belongs
+## here, and there is then one obvious place to say so.
+const EXTRA_PROP_IDS: Array[String] = []
 
 ## Props whose delivered art does not match this module's own defaults --
 ## one drawing, in SHEET_DIR, cells found in dark gutters. Everything a
