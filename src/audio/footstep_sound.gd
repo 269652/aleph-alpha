@@ -132,6 +132,87 @@ static func clip_path_for(surface: String) -> String:
 	return String(_CLIP_BY_SURFACE.get(surface, _DEFAULT_CLIP_PATH))
 
 
+# -- one step out of a recording of many ------------------------------------
+#
+# Reported live: *"Can you find better sounds for the footsteps on every
+# terrain? They sound weak and not natural"*.
+#
+# Measured before touching anything (tools/probe_footstep_levels.gd), and the
+# LENGTHS were the whole explanation. A footstep one-shot is ~0.2-0.5s, and
+# only grass.ogg is one:
+#
+#     grass.ogg            0.25s   a real one-shot
+#     default.ogg          3.64s   somebody walking
+#     snow.mp3            13.72s   somebody walking
+#     forest_twigs.ogg    41.67s   somebody walking, for three quarters of a minute
+#
+# Every step played its clip from 0.0. So a forest step was the same
+# fraction of the same run-in, at the same pitch, every single time --
+# quiet where the recording had not reached a real impact yet, which is
+# "weak", and mechanically identical where it had, which is "not natural".
+# The pool's own round-robin then cut each one off mid-ring a second and a
+# half later, when four more steps had gone by.
+#
+# None of that wants better recordings. A 41-second recording of walking is
+# already full of real, varied footsteps, recorded on the real surface; it
+# just has to be READ one step at a time. So: a window into the bed, a
+# different place in it every step, and a few percent of pitch either way.
+
+## How long ONE step is allowed to sound. A real footstep's impact and decay
+## is a couple of hundred milliseconds; much beyond that and the tails of
+## four voices pile up into a crowd walking behind you, which is the overlap
+## the pool's recycling used to cut off mid-ring.
+const STEP_WINDOW_SECONDS := 0.45
+
+## How far a step's pitch may swing either way. Small on purpose: a footstep
+## that swings a whole semitone reads as a different person's boot rather
+## than the same boot on a different patch of ground. Pinned between
+## audible and absurd by test_the_pitch_swing_stays_subtle.
+const PITCH_VARIATION := 0.06
+
+## Every clip's REAL length, measured off the files with
+## tools/probe_footstep_levels.gd. Re-measured against those files on every
+## run by test_the_pinned_clip_lengths_are_the_real_files_own, because the
+## offsets below are derived from them: a swapped clip nobody re-measured
+## would start reading steps off the end of itself.
+const CLIP_LENGTH_SECONDS := {
+	"grass": 0.25,
+	"default": 3.64,
+	"snow": 13.72,
+	"forest": 41.67,
+}
+
+
+## Whether this surface's clip is a recording of somebody WALKING, which one
+## step is a window into -- rather than a single recorded step, which is
+## played whole.
+##
+## Twice the step window is the line: a clip that cannot hold two
+## non-overlapping steps has no second step to offer, so there is nothing to
+## vary and reading it from anywhere but its own beginning would only clip
+## the one step it has.
+static func is_walking_bed(surface: String) -> bool:
+	return float(CLIP_LENGTH_SECONDS.get(surface, 0.0)) > STEP_WINDOW_SECONDS * 2.0
+
+
+## Where in the clip this step starts. `roll` is [0, 1] -- the caller's own
+## randomness, kept out of here so this stays pure and testable.
+##
+## Zero for a real one-shot: it is already the step. For a bed, anywhere
+## that still leaves a whole window of recording ahead of it, so a step
+## never fades out because it ran off the end.
+static func offset_for(surface: String, roll: float) -> float:
+	if not is_walking_bed(surface):
+		return 0.0
+	var length: float = float(CLIP_LENGTH_SECONDS.get(surface, 0.0))
+	return clampf(roll, 0.0, 1.0) * maxf(length - STEP_WINDOW_SECONDS, 0.0)
+
+
+## This step's pitch. `roll` is [0, 1]; 0.5 is the clip's own pitch.
+static func pitch_scale_for(roll: float) -> float:
+	return 1.0 + (clampf(roll, 0.0, 1.0) - 0.5) * 2.0 * PITCH_VARIATION
+
+
 ## A mushroom crushed underfoot (see `World`'s own `crush_mushroom_at`
 ## call site) asks for its own distinct one-shot, not the ordinary surface
 ## step sound -- "walking over a mushroom should produce a correct sound",

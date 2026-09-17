@@ -164,3 +164,98 @@ func test_grass_footsteps_play_quieter_than_the_default_volume():
 func test_every_other_surface_plays_at_the_default_volume():
 	for surface in ["snow", "forest", "underwater", "default", "sand", "rock", "lava"]:
 		assert_eq(FootstepSound.volume_db_for(surface), 0.0, surface)
+
+
+# -- a long recording is not a footstep ------------------------------------
+#
+# Reported live: "Can you find better sounds for the footsteps on every
+# terrain? They sound weak and not natural".
+#
+# Measured before changing anything (tools/probe_footstep_levels.gd), and the
+# lengths were the whole explanation: a footstep one-shot is ~0.2-0.5s, and
+# only grass.ogg is one. forest_twigs.ogg is 41.67s, snow.mp3 13.72s,
+# default.ogg 3.64s -- long recordings of somebody walking continuously, and
+# every step played them from 0.0. So each step was the same fraction of the
+# same run-in, at the same pitch, identically, forever: quiet where the
+# recording had not reached a real impact yet ("weak"), and mechanically
+# identical when it had ("not natural").
+#
+# The clips do not need replacing for that. A long recording of walking is
+# full of real, varied footsteps -- it just has to be READ as one step at a
+# time.
+
+
+func test_a_long_recording_is_treated_as_a_bed_of_many_steps():
+	assert_true(FootstepSound.is_walking_bed("forest"), "41s of walking is not one step")
+	assert_true(FootstepSound.is_walking_bed("snow"))
+	assert_true(FootstepSound.is_walking_bed("default"))
+
+
+func test_a_real_one_shot_is_left_alone():
+	assert_false(FootstepSound.is_walking_bed("grass"), "a quarter-second clip IS one step")
+
+
+## A bed is read at a different place every step, which is where the variety
+## comes from: the recording already holds dozens of real, different steps.
+func test_every_step_into_a_bed_starts_somewhere_else():
+	var first := FootstepSound.offset_for("forest", 0.0)
+	var middle := FootstepSound.offset_for("forest", 0.5)
+	var last := FootstepSound.offset_for("forest", 1.0)
+	assert_almost_eq(first, 0.0, 0.0001, "the first roll starts at the top")
+	assert_gt(middle, first)
+	assert_gt(last, middle)
+
+
+## ...and never so late that the window would run off the end of the clip,
+## which would be a step that fades into nothing.
+func test_a_step_never_starts_so_late_that_it_runs_out_of_recording():
+	for surface in ["forest", "snow", "default"]:
+		var latest: float = FootstepSound.offset_for(surface, 1.0)
+		assert_lte(
+			latest + FootstepSound.STEP_WINDOW_SECONDS,
+			FootstepSound.CLIP_LENGTH_SECONDS[surface] + 0.0001,
+			"%s's last step runs off the end" % surface
+		)
+
+
+func test_a_one_shot_always_starts_at_its_own_beginning():
+	for roll in [0.0, 0.5, 1.0]:
+		assert_almost_eq(FootstepSound.offset_for("grass", roll), 0.0, 0.0001)
+
+
+## The other half of "not natural": the same sample at the same pitch every
+## step reads as a machine. A few percent either way is the standard cure.
+func test_no_two_steps_land_on_the_same_pitch():
+	var low := FootstepSound.pitch_scale_for(0.0)
+	var high := FootstepSound.pitch_scale_for(1.0)
+	assert_lt(low, 1.0, "the low roll should pitch down")
+	assert_gt(high, 1.0, "the high roll should pitch up")
+	assert_almost_eq(FootstepSound.pitch_scale_for(0.5), 1.0, 0.0001, "the middle is unaltered")
+
+
+## Small: a footstep that swings a whole semitone reads as a different
+## person's boot, not as the same boot on a different patch of ground.
+func test_the_pitch_swing_stays_subtle():
+	assert_lt(FootstepSound.PITCH_VARIATION, 0.12, "more than this is a different boot")
+	assert_gt(FootstepSound.PITCH_VARIATION, 0.01, "less than this is inaudible")
+
+
+## A step is allowed to sound for about as long as a real one does. Longer
+## and the tails of four voices pile into a crowd walking behind you; that
+## overlap is what the pool's own recycling used to cut off mid-ring.
+func test_one_step_sounds_for_about_as_long_as_a_step():
+	assert_gte(FootstepSound.STEP_WINDOW_SECONDS, 0.2)
+	assert_lte(FootstepSound.STEP_WINDOW_SECONDS, 0.6)
+
+
+## The lengths are MEASURED off the real files every run, not trusted: the
+## offsets above are derived from them, so a swapped clip that nobody
+## re-measured would silently start reading steps off the end of it.
+func test_the_pinned_clip_lengths_are_the_real_files_own():
+	for surface in FootstepSound.CLIP_LENGTH_SECONDS:
+		var stream = load(FootstepSound.clip_path_for(surface))
+		assert_not_null(stream, surface)
+		assert_almost_eq(
+			stream.get_length(), float(FootstepSound.CLIP_LENGTH_SECONDS[surface]), 0.05,
+			"%s is not the length it is pinned at -- re-measure with tools/probe_footstep_levels.gd" % surface
+		)
