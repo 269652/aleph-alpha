@@ -24557,6 +24557,42 @@ as a store would have come back storeless forever, and "every village has
 one" would only ever have been true of villages founded after this pass. The
 hall is raised on reload for exactly the same reason.
 
+⚠️ **And it walked village founding into a latent quadratic — 29s to 415s.**
+The store takes prime street frontage (intended: a farmstead belongs on the
+outskirts with its field), so `next_street_plot` stops finding room for a
+farmhouse and every farmstead searches the whole chunk instead. Each
+candidate field ring then asked `VillageRenderer._is_street_row` about every
+one of its cells, and that function recomputed the **entire**
+`VillageLayout.skeleton` — including the column scan for somewhere dry to put
+the square — on every call. Its own comment said deriving from the skeleton
+"costs nothing".
+
+Measured rather than reasoned about, and the first two guesses were both
+wrong: an A/B against the branch base gave 29s vs 415s, a bisect put it on
+the founding commit, and a memo on the two-pass layout (the obvious suspect)
+changed nothing. Instrumenting the phases is what found it — `layout` was
+2ms of the 415s; `_place_farms_if_missing` was ~380s of it, with 106,722
+skeleton calls behind it.
+
+`VillageRenderer` now caches the skeleton and the ground predicate for the
+life of one `spawn_village` call — safe because both derive from ground, and
+ground does not move while a village is being founded; occupancy and paving
+are deliberately **not** cached, since those genuinely change as buildings go
+down and a stale answer would let two plots claim one cell.
+
+| phase | before | after |
+| --- | --- | --- |
+| `layout` | 2ms | 1ms |
+| warehouse | 87ms | 83ms |
+| sawmill | 243ms | 205ms |
+| `_place_farms_if_missing` | ~380s | 565ms |
+| fenced fields | 1120ms | 1044ms |
+| `spawn_village` total | 25.6s | 4.4s |
+| skeleton calls | 106,722 | 10 |
+
+End to end on the test that first showed it: 415s before, **30s** after,
+against **29s** at the branch base.
+
 ⚠️ **One honest caveat on "always", found by building it.** The reserved plot
 sits on prime ground a house might have needed. On a cramped site, claiming
 it tipped the layout from "houses everyone" to "houses all but one" — and a

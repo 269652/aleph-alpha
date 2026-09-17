@@ -101,6 +101,26 @@ thing as a store would have come back storeless forever, and pillar 1 would
 only ever have been true of villages founded after this pass. The hall is
 raised on reload for the same reason.
 
+**The store takes street frontage, and farmsteads move to the outskirts.**
+That is the intended consequence, not a side effect: prime ground beside
+the square goes to the building that has to be beside the square, and a
+farmstead belongs on the edge with its field anyway (`outskirt_plot` exists
+for exactly that, and `village_farms.md` already prefers it for a village
+hemmed in by water).
+
+It is worth recording because of what it exposed. `next_street_plot` stops
+finding room for a farmhouse, so every farmstead now searches the whole
+chunk — and `_field_fits_at` asked `VillageRenderer._is_street_row` about
+every cell of every candidate field ring, which recomputed the entire
+`VillageLayout.skeleton`, scan for a dry square and all, **per cell**. One
+founding made 106,722 skeleton calls; village founding went from 29s to
+415s on a real chunk load, a 14x regression. The store did not cause that
+— it walked the village onto a path that had been quietly quadratic all
+along. `VillageRenderer` now caches the skeleton and the ground predicate
+for the life of one founding (both derived from ground, which does not move
+while a village is being built), and founding is back to parity: 30s, with
+`spawn_village` itself down from 25.6s to 4.4s and 10 skeleton calls.
+
 ## Mechanism 2 — The roof is the limit
 
 `VillageMarket` gains a stock ceiling. `add_stock` is the one seam every
