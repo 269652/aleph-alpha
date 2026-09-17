@@ -28,8 +28,18 @@ const NpcSkillAllocation = preload("res://src/world/npc_skill_allocation.gd")
 ## OTHER occupation too (see NpcIdentity._index's modulo pick) -- every
 ## existing occupation test loops the module's own const arrays rather than
 ## hardcoding a seed->occupation expectation, so that reshuffle is harmless.
+## Every trade a villager can be born to.
+##
+## `lumberjack` was added late, and knowingly: a village raises a sawmill at
+## its own timber (VillageRenderer.INDUSTRY_BUILDING_ID) and had nobody whose
+## job was timber, so the mill stood there producing nothing (reported in
+## play, see docs/concept/village_timber.md). Occupation is drawn from this
+## list by seed, so adding to it RE-ROLLS who is who in every village -- a
+## real, world-wide change to generated content, accepted because a village
+## with a sawmill and no sawyer is the worse answer.
 const OCCUPATIONS: Array[String] = [
 	"farmer", "blacksmith", "merchant", "guard", "fisher", "herbalist", "hunter", "nurse",
+	"lumberjack",
 ]
 
 ## Which location_tag an occupation works at during the day -- the single
@@ -64,6 +74,10 @@ const WORK_LOCATION_BY_OCCUPATION := {
 	"herbalist": "garden",
 	"hunter": "hunting_ground",
 	"nurse": "well",
+	# The mill itself, not a prop beside it: the sawmill is a real building
+	# the village already raised, and the villager's own work override takes
+	# them out to real trees anyway (docs/concept/village_timber.md).
+	"lumberjack": "sawmill",
 }
 
 const PERSONALITY_TRAITS: Array[String] = [

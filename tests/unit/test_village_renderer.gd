@@ -16,6 +16,7 @@ const TerrainRenderer = preload("res://src/rendering/terrain_renderer.gd")
 const VillageLayout = preload("res://src/world/village_layout.gd")
 const VillageFarm = preload("res://src/gameplay/village_farm.gd")
 const VillagePond = preload("res://src/gameplay/village_pond.gd")
+const VillageSawmill = preload("res://src/gameplay/village_sawmill.gd")
 const ProceduralLandmarkSprite = preload("res://src/rendering/procedural_landmark_sprite.gd")
 
 const TILE_SIZE := 16
@@ -469,11 +470,12 @@ func test_every_street_cell_is_laid_as_the_real_road_tile():
 	var streets := 0
 	for cell in world.built_tiles:
 		var tile: String = world.built_tiles[cell]
-		# A village builds exactly two things onto its own ground: streets,
-		# and the rails a farmhouse fences its beds with (docs/concept/
-		# village_farms.md). Everything that is not a rail is a street, and
-		# every street is the real Road tile.
-		if VillageFarm.is_fence_tile(tile):
+		# A village builds three things onto its own ground: streets, the
+		# rails a farmhouse fences its beds with (docs/concept/
+		# village_farms.md) and the water a fisher digs (docs/concept/
+		# village_ponds.md). Everything that is neither a rail nor a pond is
+		# a street, and every street is the real Road tile.
+		if VillageFarm.is_fence_tile(tile) or VillagePond.is_pond_tile(tile):
 			continue
 		assert_eq(tile, TerrainRenderer.ROAD_TILE_ID, str(cell))
 		streets += 1
@@ -2311,3 +2313,53 @@ func test_a_dug_pond_is_stocked_with_real_fish():
 		if water.has((tile as Vector2i) - coord * CHUNK_SIZE):
 			stocked_in_water = true
 	assert_true(stocked_in_water, "something was stocked, but not the pond")
+# -- the village sawmill has a worker (docs/concept/village_timber.md) ------
+#
+# Reported in play: "The sawmill also never produces any beams and doesn't
+# even have a dedicated worker".
+
+
+func _lumberjack_markers(spawned: Array) -> Array:
+	var out: Array = []
+	for node in spawned:
+		if node is NpcMarker and node.identity.occupation == VillageSawmill.OCCUPATION:
+			out.append(node)
+	return out
+
+
+func test_a_lumberjack_is_told_which_sawmill_is_theirs():
+	var coord := _find_settlement_chunk_with_occupation("grassland", VillageSawmill.OCCUPATION, 3)
+	var world := StubWorld.new()
+	# Real timber, or the village honestly raises no mill and the test would
+	# pass without ever asking its own question.
+	_forest_band(world, coord)
+	var spawned := renderer.spawn_village(
+		parent, coord, coord * CHUNK_SIZE, CHUNK_SIZE, TILE_SIZE, "grassland", world
+	)
+	var mills := _buildings_of(world, VillageSawmill.SAWMILL_BUILDING_ID)
+	assert_gt(mills.size(), 0, "precondition: a village beside timber raised its mill")
+	var sawyers := _lumberjack_markers(spawned)
+	assert_gt(sawyers.size(), 0, "precondition: somebody in this village works timber")
+	var expected: Vector2i = coord * CHUNK_SIZE + mills[0]["origin_local"]
+	for sawyer in sawyers:
+		assert_eq(
+			sawyer.sawmill_cell, expected,
+			"a sawyer works the mill their own village raised"
+		)
+
+
+## A villager who is not a lumberjack is never handed one, or every trade
+## would be felling trees.
+func test_nobody_else_is_handed_a_sawmill():
+	var coord := _find_settlement_chunk_with_occupation("grassland", VillageSawmill.OCCUPATION, 3)
+	var world := StubWorld.new()
+	_forest_band(world, coord)
+	var spawned := renderer.spawn_village(
+		parent, coord, coord * CHUNK_SIZE, CHUNK_SIZE, TILE_SIZE, "grassland", world
+	)
+	for node in spawned:
+		if node is NpcMarker and node.identity.occupation != VillageSawmill.OCCUPATION:
+			assert_eq(
+				node.sawmill_cell, NpcMarker.NO_SAWMILL,
+				"%s does not work timber" % node.identity.occupation
+			)
