@@ -35,16 +35,28 @@ func _initialize() -> void:
 		for dx in range(-1, 2):
 			ring.append(centre + Vector2i(dx, dy))
 
+	# Counted by WALKING THE TREE, not read off Performance. Those monitors
+	# only refresh on a frame boundary and a -s script never yields one, so
+	# they hand back the same stale snapshot every lap -- six identical lines
+	# that look exactly like "no leak" and mean nothing. What is really under
+	# the parents, plus what the manager still believes is loaded, is data.
 	for lap in 6:
 		for coord in ring:
 			manager._load_chunk(coord)
+		var loaded_entities := _descendants(entities)
+		var loaded_creatures := _descendants(creatures)
 		for coord in ring:
 			manager._unload_chunk(coord)
-		print("LAP %d nodes=%d objects=%d orphans=%d static_mem=%.1fMB" % [
-			lap,
-			int(Performance.get_monitor(Performance.OBJECT_NODE_COUNT)),
-			int(Performance.get_monitor(Performance.OBJECT_COUNT)),
-			int(Performance.get_monitor(Performance.OBJECT_ORPHAN_NODE_COUNT)),
-			Performance.get_monitor(Performance.MEMORY_STATIC) / 1048576.0,
+		print("LAP %d after_load(entities=%d creatures=%d) after_unload(entities=%d creatures=%d) chunks=%d" % [
+			lap, loaded_entities, loaded_creatures,
+			_descendants(entities), _descendants(creatures),
+			(manager._loaded_chunks as Dictionary).size(),
 		])
 	quit()
+
+
+func _descendants(node: Node) -> int:
+	var total := node.get_child_count()
+	for child in node.get_children():
+		total += _descendants(child)
+	return total
