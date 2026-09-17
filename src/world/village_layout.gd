@@ -115,7 +115,17 @@ static func plaza_x0_for(
 	var centred: int = chunk_size / 2 - PLAZA_WIDTH_TILES / 2
 	if not is_dry.is_valid():
 		return centred
-	var westmost: int = maxi(_EDGE_MARGIN_TILES, street_x0)
+	# The chunk's own edge margin, and nothing else. This used to also
+	# take street_x0 -- the spine's decorative SEED JITTER
+	# (_EDGE_MARGIN_TILES + 0..2, so villages don't all start at the
+	# identical column) -- and on chunk (661,139) near lat 49.8 lon 10.6
+	# that vetoed the only dry square placements this village had, at x=1
+	# and x=2, because its jitter happened to start the street at x=3.
+	# Reported three times as "no plaza, no city hall". A decorative jitter
+	# is not a reason a village cannot have a market square; skeleton()
+	# starts the spine at whichever of the two is further west instead, so
+	# the street always reaches its own square.
+	var westmost: int = _EDGE_MARGIN_TILES
 	var eastmost: int = mini(chunk_size - _EDGE_MARGIN_TILES, street_x1 + 1) - PLAZA_WIDTH_TILES
 	for offset in range(0, chunk_size):
 		for candidate in ([centred] if offset == 0 else [centred - offset, centred + offset]):
@@ -166,6 +176,10 @@ static func skeleton(chunk_size: int, seed_value: int, is_dry := Callable()) -> 
 	var street_x0 := _EDGE_MARGIN_TILES + PixelNoise.range_index(seed_value, 0, 0, _START_JITTER_TILES)
 	var street_x1 := chunk_size - _EDGE_MARGIN_TILES - 1
 	var plaza_x0 := plaza_x0_for(chunk_size, street_y, street_x0, street_x1, is_dry)
+	# A square sited west of where the jitter put the spine's start pulls
+	# that start west with it: a square the street stops short of is a
+	# square nobody walks to.
+	street_x0 = mini(street_x0, plaza_x0)
 	var plaza := Rect2i(
 		plaza_x0, street_y - PLAZA_ROWS_NORTH,
 		PLAZA_WIDTH_TILES, PLAZA_ROWS_NORTH + 1 + PLAZA_ROWS_SOUTH

@@ -911,3 +911,59 @@ func test_and_its_houses_go_on_a_further_street():
 	var reached := _reachable_road_cells(roads, result["plots"][0]["doorstep"])
 	for plot in result["plots"]:
 		assert_true(reached.has(plot["doorstep"]), "and every one of them is still reachable")
+
+
+# -- the street's own jitter must not veto the square ----------------------
+#
+# Measured on chunk (661,139) near lat 49.8 lon 10.6, reported three times
+# as "no plaza, no city hall". The only dry placements of an 8x6 square on
+# that village's street row were at x=1 and x=2, and the search's western
+# bound was max(_EDGE_MARGIN_TILES=2, street_x0). street_x0 is the spine's
+# own SEED JITTER (_EDGE_MARGIN_TILES + 0..2, so villages don't all start
+# at the identical column) -- and it happened to be 3 there, vetoing a
+# square that sits perfectly well inside the chunk's own margin.
+#
+# A decorative jitter is not a reason a village cannot have a market
+# square. The square is bounded by the chunk's edge margin, and the spine
+# starts at whichever is further west -- so the street always reaches its
+# own square.
+
+
+func test_a_square_may_stand_at_the_chunks_own_margin():
+	var band := func(cell: Vector2i) -> bool:
+		return (
+			cell.x >= VillageLayout._EDGE_MARGIN_TILES
+			and cell.x < VillageLayout._EDGE_MARGIN_TILES + VillageLayout.PLAZA_WIDTH_TILES
+		)
+	var bones: Dictionary = VillageLayout.skeleton(CHUNK_SIZE, 41, band)
+	assert_eq(
+		(bones["plaza"] as Rect2i).position.x, VillageLayout._EDGE_MARGIN_TILES,
+		"the square stands on the only dry ground there is"
+	)
+
+
+func test_the_street_always_reaches_its_own_square():
+	for seed_value in [41, 42, 43, 44, 45]:
+		var band := func(cell: Vector2i) -> bool:
+			return (
+			cell.x >= VillageLayout._EDGE_MARGIN_TILES
+			and cell.x < VillageLayout._EDGE_MARGIN_TILES + VillageLayout.PLAZA_WIDTH_TILES
+		)
+		var bones: Dictionary = VillageLayout.skeleton(CHUNK_SIZE, seed_value, band)
+		assert_lte(
+			int(bones["street_x0"]), (bones["plaza"] as Rect2i).position.x,
+			"a square the street stops short of is a square nobody walks to"
+		)
+
+
+func test_a_village_whose_only_dry_ground_is_at_the_margin_gets_its_square():
+	var band := func(cell: Vector2i) -> bool:
+		return (
+			cell.x >= VillageLayout._EDGE_MARGIN_TILES
+			and cell.x < VillageLayout._EDGE_MARGIN_TILES + VillageLayout.PLAZA_WIDTH_TILES
+		)
+	var five := ["house_small", "house_small", "house_small", "house_small", "house_small"]
+	var result := layout.layout(five, CHUNK_SIZE, 41, band, _never_occupied)
+	assert_true((result["plaza"] as Rect2i).has_area(), "a square, at last")
+	assert_false((result["civic_plot"] as Dictionary).is_empty(), "and somewhere to put a hall")
+	assert_gt(result["plots"].size(), 0, "and people still live there")
