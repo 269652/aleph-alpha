@@ -63,6 +63,7 @@ extends RefCounted
 const NpcNeeds = preload("res://src/world/npc_needs.gd")
 const NpcProduction = preload("res://src/world/npc_production.gd")
 const VillageWages = preload("res://src/world/village_wages.gd")
+const VillageMarket = preload("res://src/world/village_market.gd")
 const Wallet = preload("res://src/gameplay/wallet.gd")
 
 ## Metadata key under which a settlement's shared purse balance is kept on
@@ -85,6 +86,40 @@ var _accumulated_yield := 0.0
 ## round every producer's income to zero and silently hand the whole gross
 ## to the purse.
 var _take_home_carry := 0.0
+
+# -- the load in a villager's hands (village_warehouse.md mechanism 3) ------
+
+## How many trips fill a village that has no store at all -- one person's
+## load against VillageMarket.HOUSEHOLD_CORNERS_CAPACITY. This is the tuned
+## number of the whole mechanic, and it is tuned by what it implies about
+## the BUILDING: a load that filled a storeless village in one trip would
+## make the warehouse pointless, and one that took a hundred would make
+## hauling the only thing a villager ever did. Four trips fill a village
+## that keeps its stock in its corners; forty fill one that has a roof for
+## it. Pinned, with that second ratio, by
+## test_a_load_is_a_quarter_of_what_a_village_keeps_without_a_store.
+const TRIPS_TO_FILL_A_STORELESS_VILLAGE := 4
+
+## What one villager carries in one trip, in the same units as market stock.
+const CARRY_LIMIT := (
+	VillageMarket.HOUSEHOLD_CORNERS_CAPACITY / float(TRIPS_TO_FILL_A_STORELESS_VILLAGE)
+)
+
+## What this villager is holding and has not put down yet; item_id -> units.
+var carried: Dictionary = {}
+
+## How much this villager may hold before their hands are full. 0.0 -- the
+## default -- means they do not carry at all, and everything they take goes
+## straight into the village's stock the way it always did. That covers
+## every caller written before a warehouse existed AND every village whose
+## site could not spare the ground for one (village_warehouse.md, pillar 1's
+## caveat): nowhere to carry to must never mean nothing is stocked.
+##
+## Deliberately the same shape as VillageMarket.storage_capacity, for the
+## same reason: a limit that depends on which buildings are standing belongs
+## to whoever knows that, not to the object that has to respect it.
+## VillageRenderer opts a villager in when a store really stands.
+var carry_limit: float = 0.0
 
 
 ## The shared purse of the settlement `a_market` belongs to, in gold. Static
@@ -197,7 +232,7 @@ func step(
 func record_real_catch(count: int) -> void:
 	if count <= 0 or not _production.is_producer(occupation):
 		return
-	market.add_stock(_production.item_id_for(occupation), float(count))
+	_stock(_production.item_id_for(occupation), float(count))
 	_earn(float(count) * float(NpcProduction.YIELD_TO_GOLD_RATE))
 
 
@@ -216,7 +251,7 @@ func record_real_catch(count: int) -> void:
 func record_real_harvest(item_id: String, count: int) -> void:
 	if count <= 0 or item_id == "":
 		return
-	market.add_stock(item_id, float(count))
+	_stock(item_id, float(count))
 	_earn(float(count) * float(NpcProduction.YIELD_TO_GOLD_RATE))
 
 
@@ -235,20 +270,79 @@ func record_real_harvest(item_id: String, count: int) -> void:
 func record_byproduct(item_id: String, count: int) -> void:
 	if count <= 0 or item_id == "":
 		return
-	market.add_stock(item_id, float(count))
+	_stock(item_id, float(count))
 
 
 func _gather(delta_seconds: float, world, pixel_position: Vector2) -> void:
+	# Full hands take nothing more. Not "the surplus is discarded": every
+	# unit gathered costs the region a real herbivore, crop or fish through
+	# the two depletion calls below, so a producer who kept working with
+	# nowhere to put the take would go on killing for units nobody can hold.
+	# The walk to the store is what makes room, which is the whole point.
+	if _hands_are_full():
+		return
 	var rate := _production.yield_per_second(occupation, world, pixel_position)
 	var gathered := rate * delta_seconds
 	_accumulated_yield += gathered
 	_deplete_continuous(world, pixel_position, gathered)
 
 	while _accumulated_yield >= NpcProduction.FOOD_UNIT:
+		if _hands_are_full():
+			break
 		_accumulated_yield -= NpcProduction.FOOD_UNIT
-		market.add_stock(_production.item_id_for(occupation), NpcProduction.FOOD_UNIT)
+		_stock(_production.item_id_for(occupation), NpcProduction.FOOD_UNIT)
 		_earn(float(NpcProduction.YIELD_TO_GOLD_RATE))
 		_deplete_discrete_unit(world, pixel_position)
+
+
+## What this villager is holding, in the same units as market stock.
+func carried_total() -> float:
+	var total := 0.0
+	for item_id in carried:
+		total += float(carried[item_id])
+	return total
+
+
+## The gate Ethogram.DRIVE_BURDEN reads: 0 until this villager's hands are
+## full, 1 the moment they are.
+##
+## A STEP, not a ramp, and that is not a simplification. The haul wiring is
+## the only one listening on the store, so any gain above zero fires it --
+## a ramp would send a villager off with one apple in hand and they would
+## never do a day's work again. What presses is being full.
+func burden() -> float:
+	return 1.0 if _hands_are_full() else 0.0
+
+
+## Puts everything in this villager's hands into the village's stock: what
+## reaching the store door does (NpcMarker._answer_need). Returns how much
+## was really delivered.
+##
+## The market's own ceiling still applies through add_stock, so a full store
+## turns a full villager away exactly as it already turns a producer away
+## (village_warehouse.md mechanism 2). With no market to deliver into,
+## nothing is delivered and the load stays in hand rather than evaporating.
+func deliver_load() -> float:
+	if market == null:
+		return 0.0
+	var delivered := carried_total()
+	for item_id in carried:
+		market.add_stock(item_id, float(carried[item_id]))
+	carried.clear()
+	return delivered
+
+
+func _hands_are_full() -> bool:
+	return carry_limit > 0.0 and carried_total() >= carry_limit
+
+
+## The one seam every deposit this villager makes passes through: into the
+## village's stock outright, or into their own hands first when they carry.
+func _stock(item_id: String, amount: float) -> void:
+	if carry_limit <= 0.0:
+		market.add_stock(item_id, amount)
+		return
+	carried[item_id] = float(carried.get(item_id, 0.0)) + amount
 
 
 ## Splits one food unit's gross gold between the village purse and this
