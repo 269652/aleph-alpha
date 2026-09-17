@@ -24,6 +24,32 @@ var manager: EarthChunkManager
 var _tile: Vector2i
 
 
+## Removes the REAL persisted modifications for the Berlin chunk this whole
+## file anchors on. Narrow on purpose (never the shared directory), and
+## mirrors test_earth_chunk_manager_structure_art.gd's identically-named
+## helper.
+##
+## Not optional here: one test unloads a chunk, _unload_chunk PERSISTS that
+## chunk's modifications to user://, and user:// is keyed only by the
+## project name -- so a dug pond leaked into every later test in this file
+## AND into the next run of it, in a different worktree, as ground that was
+## already water. It cost three failures that read like real bugs before
+## being recognised as the hazard that file's own header documents.
+func _forget_persisted_chunk() -> void:
+	var chunk_coord := Vector2i(
+		floori(float(_tile.x) / EarthChunkManager.CHUNK_SIZE),
+		floori(float(_tile.y) / EarthChunkManager.CHUNK_SIZE)
+	)
+	for dir in [
+		EarthChunkManager.MODIFICATIONS_DIR,
+		EarthChunkManager.ROOF_MODIFICATIONS_DIR,
+		EarthChunkManager.PLANTED_TREES_DIR,
+	]:
+		var path := "%s/%d_%d.bin" % [dir, chunk_coord.x, chunk_coord.y]
+		if FileAccess.file_exists(path):
+			DirAccess.remove_absolute(path)
+
+
 func before_each():
 	tile_map_layer = TileMapLayer.new()
 	entities_parent = Node2D.new()
@@ -37,10 +63,12 @@ func before_each():
 		geo.tile_for_longitude(13.405, EarthChunkGenerator.WORLD_WIDTH_TILES),
 		geo.tile_for_latitude(52.52, EarthChunkGenerator.WORLD_HEIGHT_TILES)
 	)
+	_forget_persisted_chunk()
 	manager.update(_tile)
 
 
 func after_each():
+	_forget_persisted_chunk()
 	remove_child(entities_parent)
 	entities_parent.free()
 	creatures_parent.free()
@@ -178,3 +206,104 @@ func test_stocking_an_already_stocked_pond_changes_nothing():
 func test_dry_ground_can_neither_be_stocked_nor_report_fish():
 	manager.stock_pond_at(_tile.x, _tile.y)
 	assert_almost_eq(manager.pond_fish_at(_tile.x, _tile.y), 0.0, 0.0001)
+
+
+# -- fish you can actually see ---------------------------------------------
+#
+# "...and fish swimming in it". A stock that only exists as a number is a
+# spreadsheet. The markers are the fish: real FishMarkers standing on the
+# pond's own water, kept in step with the population that breeds.
+
+
+func test_water_nobody_stocked_shows_no_fish():
+	_dig_pond(_a_pond())
+	assert_eq(manager.pond_fish_marker_count_at(_tile.x, _tile.y), 0)
+
+
+func test_stocking_a_pond_puts_visible_fish_in_it():
+	_dig_pond(_a_pond())
+	manager.stock_pond_at(_tile.x, _tile.y)
+	assert_eq(
+		manager.pond_fish_marker_count_at(_tile.x, _tile.y), VillagePond.STOCKING_FISH,
+		"the stock is a number with nothing swimming in it"
+	)
+
+
+func test_every_fish_stands_on_the_ponds_own_water():
+	var cells := _a_pond()
+	_dig_pond(cells)
+	manager.stock_pond_at(_tile.x, _tile.y)
+	var markers: Array = manager.pond_fish_markers_at(_tile.x, _tile.y)
+	assert_gt(markers.size(), 0, "precondition: fish were put in")
+	for fish in markers:
+		var tile := Vector2i(
+			floori((fish as Node2D).position.x / 16.0), floori((fish as Node2D).position.y / 16.0)
+		)
+		assert_true(cells.has(tile), "a fish is standing at %s, which is not the pond" % str(tile))
+
+
+## As the stock breeds, more of it is visible.
+func test_a_breeding_pond_shows_more_fish_over_time():
+	_dig_pond(_a_pond())
+	manager.stock_pond_at(_tile.x, _tile.y)
+	var before: int = manager.pond_fish_marker_count_at(_tile.x, _tile.y)
+	for _day in 30:
+		manager.step_ponds(3600.0)
+	assert_gt(
+		manager.pond_fish_marker_count_at(_tile.x, _tile.y), before,
+		"the stock bred but the water still shows the same fish"
+	)
+
+
+## One fish per cell at most: six tiles of water is a pond, not a shoal.
+func test_a_pond_never_shows_more_fish_than_it_has_water():
+	var cells := _a_pond()
+	_dig_pond(cells)
+	manager.stock_pond_at(_tile.x, _tile.y)
+	for _day in 200:
+		manager.step_ponds(3600.0)
+	assert_lte(manager.pond_fish_marker_count_at(_tile.x, _tile.y), cells.size())
+
+
+## And they go away with the chunk, like every other loaded thing.
+func test_unloading_a_chunk_takes_its_pond_fish_with_it():
+	_dig_pond(_a_pond())
+	manager.stock_pond_at(_tile.x, _tile.y)
+	assert_gt(manager.pond_fish_marker_count_at(_tile.x, _tile.y), 0)
+	manager._unload_chunk(manager._chunk_coord_for_tile(_tile))
+	assert_eq(manager.pond_fish_markers_at(_tile.x, _tile.y).size(), 0)
+
+
+## A catch takes a real fish out of the water: one off the stock, and one
+## fewer swimming. Empty water yields nothing -- a pond you have fished out
+## is fished out until it breeds back.
+func test_catching_takes_a_fish_out_of_the_pond():
+	_dig_pond(_a_pond())
+	manager.stock_pond_at(_tile.x, _tile.y)
+	var before: float = manager.pond_fish_at(_tile.x, _tile.y)
+	var fish_before: int = manager.pond_fish_marker_count_at(_tile.x, _tile.y)
+
+	assert_true(manager.catch_pond_fish_at(_tile.x, _tile.y), "there were fish to catch")
+
+	assert_almost_eq(manager.pond_fish_at(_tile.x, _tile.y), before - 1.0, 0.0001)
+	assert_eq(manager.pond_fish_marker_count_at(_tile.x, _tile.y), fish_before - 1)
+
+
+func test_an_empty_pond_yields_no_catch():
+	_dig_pond(_a_pond())
+	assert_false(manager.catch_pond_fish_at(_tile.x, _tile.y), "water nobody stocked gave a fish")
+
+
+func test_dry_ground_yields_no_catch():
+	assert_false(manager.catch_pond_fish_at(_tile.x, _tile.y))
+
+
+## A pond fished down to less than one whole fish has none to give, and
+## breeds back from what is left rather than from nothing.
+func test_a_pond_cannot_be_fished_below_nothing():
+	_dig_pond(_a_pond())
+	manager.stock_pond_at(_tile.x, _tile.y)
+	for _attempt in 20:
+		manager.catch_pond_fish_at(_tile.x, _tile.y)
+	assert_gte(manager.pond_fish_at(_tile.x, _tile.y), 0.0, "a pond went into debt")
+	assert_false(manager.catch_pond_fish_at(_tile.x, _tile.y))

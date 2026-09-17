@@ -102,11 +102,28 @@ village actually does.
   village stocks the pond as it digs it, and stocking an already-stocked
   pond changes nothing — a fisher stocks a pond, they do not keep stocking
   it.
-- 🚧 **Fish you can SEE in it.** The population is real and breeding; what is
-  not wired is `FishRenderer` spawning markers on pond cells to match it. A
-  fish placed in a pond already swims and drifts correctly (the water answers
-  `is_water_at_global` and `is_river_at_global`), so this is a spawn/despawn
-  sync, not new physics.
-- ⬜ **The fisher works it.** Catching from their own pond into their own
-  house's stock and on to the village, reusing the chain
-  [village_farms.md](village_farms.md)'s "Grown, stored, carried" describes.
+- ✅ **Fish you can SEE in it.** Real `FishMarker`s stand on the pond's own
+  water, one per whole fish and at most one per tile — six tiles is a pond,
+  not a shoal. Kept in step with the stock on every stocking, breeding tick
+  and catch, and freed with the chunk. Deliberately NOT in `_loaded_fish`:
+  that list is respawned wholesale whenever a chunk's aggregate fish
+  population is reconciled, which would wipe a pond's own fish every time the
+  region's did anything.
+- ✅ **The fisher works it.** `_step_pond` is the fisher's own work tick, the
+  same shape and the same override `_step_farm` has: on the clock they stand
+  over their water and cast, off it the cast is dropped and what their house
+  holds goes to the village. A cast costs `FarmerBehavior.WORK_SECONDS` —
+  what a piece of field work already costs, so fishing and farming are one
+  effort rather than two tunings to keep in step.
+
+  The catch walks the chain [village_farms.md](village_farms.md) already
+  describes, through the same functions: `_store_harvest` into the fisher's
+  own house, `haul_stock_to_village` at the end of the block. The field that
+  holds it is `stock_building_cell` now, renamed from `farmhouse_cell` —
+  it is a farmer's farmhouse and a fisher's cottage, and a field called
+  farmhouse_cell holding a cottage would be a lie in the one place a reader
+  goes to check where a catch went.
+
+  A pond fished below one whole fish gives nothing until it breeds back, and
+  a fisher with no pond keeps the open water their quarry model already gives
+  them.

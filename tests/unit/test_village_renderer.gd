@@ -2229,8 +2229,8 @@ func test_every_farmer_is_told_which_farmhouse_the_field_belongs_to():
 			continue
 		checked += 1
 		assert_true(
-			origins.has(npc.farmhouse_cell),
-			"a farmer works a field for %s, which is no farmhouse" % str(npc.farmhouse_cell)
+			origins.has(npc.stock_building_cell),
+			"a farmer works a field for %s, which is no farmhouse" % str(npc.stock_building_cell)
 		)
 	assert_gt(checked, 0, "precondition: somebody was handed a real field")
 
@@ -2363,3 +2363,33 @@ func test_nobody_else_is_handed_a_sawmill():
 				node.sawmill_cell, NpcMarker.NO_SAWMILL,
 				"%s does not work timber" % node.identity.occupation
 			)
+
+
+## A fisher is told which water is theirs and which building they fill --
+## the last link of the pond chain, and the same handout a farmer gets.
+func test_every_fisher_is_given_their_own_pond_and_their_own_house():
+	var coord := _find_settlement_chunk_with_occupation("grassland", "fisher", 3)
+	var world := StubWorld.new()
+	var spawned := renderer.spawn_village(
+		parent, coord, coord * CHUNK_SIZE, CHUNK_SIZE, TILE_SIZE, "grassland", world
+	)
+	var built := _built_tiles(world, coord)
+	var water: Dictionary = {}
+	for cell in built:
+		if VillagePond.is_pond_tile(built[cell]):
+			water[coord * CHUNK_SIZE + (cell as Vector2i)] = true
+	assert_gt(water.size(), 0, "precondition: a pond was dug")
+	var checked := 0
+	for node in spawned:
+		if not (node is NpcMarker) or node.identity.occupation != "fisher":
+			continue
+		if node.pond_cells.is_empty():
+			continue
+		checked += 1
+		for cell in node.pond_cells:
+			assert_true(water.has(cell), "a fisher was handed %s, which is not water" % str(cell))
+		assert_ne(
+			node.stock_building_cell, NpcMarker.NO_STOCK_BUILDING,
+			"a fisher with a pond and nowhere to put the catch"
+		)
+	assert_gt(checked, 0, "no fisher was handed a pond at all")

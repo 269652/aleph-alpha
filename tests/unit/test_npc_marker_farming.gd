@@ -18,6 +18,7 @@ extends GutTest
 ## without a field earns from the region exactly as before.
 
 const NpcMarker = preload("res://src/rendering/npc_marker.gd")
+const FarmerBehavior = preload("res://src/gameplay/farmer_behavior.gd")
 const NpcIdentity = preload("res://src/world/npc_identity.gd")
 const NpcPlanner = preload("res://src/world/npc_planner.gd")
 const VillageMarket = preload("res://src/world/village_market.gd")
@@ -478,7 +479,7 @@ func _ready_bed(marker_under_test: NpcMarker, cell: Vector2i) -> void:
 func test_a_harvest_fills_the_farmhouses_own_stock():
 	var farmhouse := Vector2i(10, 10)
 	var bed := Vector2i(11, 12)
-	marker.farmhouse_cell = farmhouse
+	marker.stock_building_cell = farmhouse
 	marker.field_cells = [bed]
 	_ready_bed(marker, bed)
 
@@ -497,7 +498,7 @@ func test_a_harvest_fills_the_farmhouses_own_stock():
 func test_a_harvest_is_not_sold_before_it_is_carried():
 	var farmhouse := Vector2i(10, 10)
 	var bed := Vector2i(11, 12)
-	marker.farmhouse_cell = farmhouse
+	marker.stock_building_cell = farmhouse
 	marker.field_cells = [bed]
 	_ready_bed(marker, bed)
 
@@ -510,14 +511,14 @@ func test_a_harvest_is_not_sold_before_it_is_carried():
 func test_the_farmhouse_stock_is_carried_into_the_villages_own_stock():
 	var farmhouse := Vector2i(10, 10)
 	var bed := Vector2i(11, 12)
-	marker.farmhouse_cell = farmhouse
+	marker.stock_building_cell = farmhouse
 	marker.field_cells = [bed]
 	_ready_bed(marker, bed)
 	marker._field_index = 0
 	marker._work_field_cell()
 	var grown: int = world.stock_at(farmhouse, "wheat")
 
-	marker.haul_farmhouse_stock_to_village()
+	marker.haul_stock_to_village()
 
 	assert_eq(world.stock_at(farmhouse, "wheat"), 0, "the farmhouse kept it")
 	assert_almost_eq(_market_stock("wheat"), float(grown), 0.001, "the village never got it")
@@ -527,7 +528,7 @@ func test_the_farmhouse_stock_is_carried_into_the_villages_own_stock():
 ## always had, rather than growing wheat into nowhere.
 func test_a_farmer_with_no_farmhouse_still_sells_what_they_grow():
 	var bed := Vector2i(11, 12)
-	marker.farmhouse_cell = NpcMarker.NO_FARMHOUSE
+	marker.stock_building_cell = NpcMarker.NO_STOCK_BUILDING
 	marker.field_cells = [bed]
 	_ready_bed(marker, bed)
 
@@ -538,8 +539,8 @@ func test_a_farmer_with_no_farmhouse_still_sells_what_they_grow():
 
 
 func test_hauling_an_empty_farmhouse_is_a_no_op():
-	marker.farmhouse_cell = Vector2i(10, 10)
-	marker.haul_farmhouse_stock_to_village()
+	marker.stock_building_cell = Vector2i(10, 10)
+	marker.haul_stock_to_village()
 	assert_eq(_market_stock("wheat"), 0.0)
 
 
@@ -550,7 +551,7 @@ func test_hauling_an_empty_farmhouse_is_a_no_op():
 ## not a moment that reliably arrives).
 func test_a_farmer_carries_the_farmhouse_stock_in_at_the_end_of_the_work_block():
 	var farmhouse := Vector2i(10, 10)
-	marker.farmhouse_cell = farmhouse
+	marker.stock_building_cell = farmhouse
 	marker.field_cells = [Vector2i(11, 12)]
 	world.deposit_to_structure_at(farmhouse.x, farmhouse.y, "wheat", 4)
 
@@ -564,7 +565,7 @@ func test_a_farmer_carries_the_farmhouse_stock_in_at_the_end_of_the_work_block()
 ## crop reaches the village when the day's work ends, not mid-row.
 func test_nothing_is_carried_in_while_the_block_is_still_running():
 	var farmhouse := Vector2i(10, 10)
-	marker.farmhouse_cell = farmhouse
+	marker.stock_building_cell = farmhouse
 	marker.field_cells = [Vector2i(11, 12)]
 	world.deposit_to_structure_at(farmhouse.x, farmhouse.y, "wheat", 4)
 
@@ -612,3 +613,150 @@ func test_a_thirsty_farmer_keeps_farming():
 	assert_gt(world.plots.size(), 0, "and really got beds planted while they were at it")
 
 
+
+
+# -- the fisher works their own pond ---------------------------------------
+#
+# The other half of "the Fisher should build a similar 3x2 enclosure ... with
+# fish swimming in it": a pond nobody fishes is scenery. The catch goes the
+# same way a harvest does -- into the villager's own building, and on to the
+# village when they carry it in (docs/concept/village_ponds.md).
+
+
+class StubPondWorld:
+	extends StubFarmWorld
+	var pond: Dictionary = {}  # Vector2i -> true
+	var fish := 0.0
+	var catch_calls := 0
+
+	func is_pond_at_global(x: int, y: int) -> bool:
+		return pond.has(Vector2i(x, y))
+
+	func pond_fish_at(_x: int, _y: int) -> float:
+		return fish
+
+	func catch_pond_fish_at(_x: int, _y: int) -> bool:
+		if fish < 1.0:
+			return false
+		fish -= 1.0
+		catch_calls += 1
+		return true
+
+
+func _fisher_with_a_pond(water: Array, stocked: float) -> Array:
+	var pond_world := StubPondWorld.new()
+	for cell in water:
+		pond_world.pond[cell] = true
+	pond_world.fish = stocked
+	var fisher := _build_marker("fisher")
+	fisher.setup(pond_world, 16)
+	fisher.pond_cells.assign(water)
+	fisher.stock_building_cell = Vector2i(10, 10)
+	return [fisher, pond_world]
+
+
+func test_a_fisher_catches_a_real_fish_out_of_their_own_pond():
+	var pair := _fisher_with_a_pond([Vector2i(11, 12)], 3.0)
+	var fisher: NpcMarker = pair[0]
+	var pond_world: StubPondWorld = pair[1]
+
+	fisher._work_pond()
+
+	assert_eq(pond_world.catch_calls, 1, "the fisher never cast")
+	assert_almost_eq(pond_world.fish, 2.0, 0.0001, "the pond kept its fish")
+	fisher.free()
+
+
+## And it goes where a harvest goes: the villager's own building first.
+func test_a_catch_fills_the_fishers_own_house():
+	var pair := _fisher_with_a_pond([Vector2i(11, 12)], 3.0)
+	var fisher: NpcMarker = pair[0]
+	var pond_world: StubPondWorld = pair[1]
+
+	fisher._work_pond()
+
+	assert_eq(pond_world.stock_at(Vector2i(10, 10), "fish"), 1, "the catch went nowhere")
+	fisher.free()
+
+
+func test_an_empty_pond_gives_the_fisher_nothing():
+	var pair := _fisher_with_a_pond([Vector2i(11, 12)], 0.0)
+	var fisher: NpcMarker = pair[0]
+	var pond_world: StubPondWorld = pair[1]
+
+	fisher._work_pond()
+
+	assert_eq(pond_world.catch_calls, 0)
+	assert_eq(pond_world.stock_at(Vector2i(10, 10), "fish"), 0, "a fish came out of empty water")
+	fisher.free()
+
+
+## A fisher with no pond is the fisher they always were -- they still fish
+## the open water their quarry model already gives them.
+func test_a_fisher_with_no_pond_catches_nothing_from_one():
+	var pair := _fisher_with_a_pond([], 5.0)
+	var fisher: NpcMarker = pair[0]
+	var pond_world: StubPondWorld = pair[1]
+
+	fisher._work_pond()
+
+	assert_eq(pond_world.catch_calls, 0)
+	fisher.free()
+
+
+## And the carry is the same carry: what the house holds reaches the village
+## at the end of the work block, through the chain the farmer already uses.
+func test_a_fishers_catch_reaches_the_village_when_they_carry_it_in():
+	var pair := _fisher_with_a_pond([Vector2i(11, 12)], 3.0)
+	var fisher: NpcMarker = pair[0]
+	var pond_world: StubPondWorld = pair[1]
+	fisher.setup_economy(market)
+	fisher._work_pond()
+	assert_eq(pond_world.stock_at(Vector2i(10, 10), "fish"), 1, "precondition: a real catch")
+
+	fisher.haul_stock_to_village()
+
+	assert_eq(pond_world.stock_at(Vector2i(10, 10), "fish"), 0, "the house kept it")
+	assert_almost_eq(_market_stock("fish"), 1.0, 0.001, "the village never got it")
+	fisher.free()
+
+
+## The wiring: a fisher standing at their own pond on the clock really
+## works it. A _work_pond nothing calls catches nothing, which is the same
+## class of bug the ecology batch's own source-contract test exists for.
+func test_a_fisher_on_the_clock_really_works_their_pond():
+	var pair := _fisher_with_a_pond([Vector2i(11, 12)], 3.0)
+	var fisher: NpcMarker = pair[0]
+	var pond_world: StubPondWorld = pair[1]
+	fisher.setup_economy(market)
+	fisher.position = Vector2(11.5 * 16.0, 12.5 * 16.0)  # standing over the water
+
+	for _tick in 40:
+		fisher._step_pond(0.5, true)
+
+	assert_gt(pond_world.catch_calls, 0, "a fisher stood over their own pond all day and caught nothing")
+	fisher.free()
+
+
+## Off the clock they do not fish, and what the house holds goes to the
+## village -- the same end-of-block carry the farmer has.
+func test_a_fisher_off_the_clock_carries_their_catch_in_and_stops_fishing():
+	var pair := _fisher_with_a_pond([Vector2i(11, 12)], 3.0)
+	var fisher: NpcMarker = pair[0]
+	var pond_world: StubPondWorld = pair[1]
+	fisher.setup_economy(market)
+	pond_world.deposit_to_structure_at(10, 10, "fish", 2)
+
+	fisher._step_pond(0.5, false)
+
+	assert_eq(pond_world.catch_calls, 0, "a fisher fished in their sleep")
+	assert_eq(pond_world.stock_at(Vector2i(10, 10), "fish"), 0, "the house kept it overnight")
+	assert_almost_eq(_market_stock("fish"), 2.0, 0.001, "the village never got it")
+	fisher.free()
+
+
+## The cast time is not a fresh number: a cast costs a villager what a piece
+## of field work already costs them, so fishing and farming are the same
+## effort per action rather than two tunings to keep in step.
+func test_a_cast_costs_what_a_piece_of_field_work_costs():
+	assert_eq(NpcMarker.CAST_SECONDS, FarmerBehavior.WORK_SECONDS)

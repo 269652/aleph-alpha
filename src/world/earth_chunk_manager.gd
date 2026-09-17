@@ -8299,6 +8299,7 @@ func stock_pond_at(global_x: int, global_y: int) -> void:
 		return
 	by_anchor[anchor] = float(VillagePond.STOCKING_FISH)
 	_pond_fish[chunk_coord] = by_anchor
+	_sync_pond_fish_markers(chunk_coord, anchor)
 
 
 ## How many fish the pond this cell belongs to is holding -- 0.0 for dry
@@ -8308,6 +8309,91 @@ func pond_fish_at(global_x: int, global_y: int) -> float:
 	if anchor == null:
 		return 0.0
 	return float(_pond_fish.get(_chunk_coord_for_tile(anchor), {}).get(anchor, 0.0))
+
+
+## The real FishMarkers swimming in each pond, keyed the same way the stock
+## is: chunk, then the pond's own anchor cell. Kept OUT of _loaded_fish on
+## purpose -- that list is respawned wholesale whenever a chunk's aggregate
+## fish population is reconciled, which would wipe a pond's own fish every
+## time the region's did anything.
+var _pond_fish_markers: Dictionary = {}
+
+## At most one fish per tile of water. Six tiles is a pond, not a shoal, and
+## a marker per unit of a population that can exceed its own cell count
+## would pile fish on top of each other.
+const _POND_FISH_PER_CELL := 1
+
+
+## The fish really swimming in the pond this cell belongs to.
+func pond_fish_markers_at(global_x: int, global_y: int) -> Array:
+	var anchor = _pond_anchor(global_x, global_y)
+	if anchor == null:
+		return []
+	return _pond_fish_markers.get(_chunk_coord_for_tile(anchor), {}).get(anchor, [])
+
+
+func pond_fish_marker_count_at(global_x: int, global_y: int) -> int:
+	return pond_fish_markers_at(global_x, global_y).size()
+
+
+## Brings the fish you can SEE in one pond into line with the stock it
+## holds: one marker per whole fish, capped at one per tile of water, each
+## standing on a real cell of that pond.
+##
+## Spawn and free rather than reposition -- a pond gains or loses a fish
+## rarely (a breeding tick, a catch), and FishMarker owns its own swimming
+## from wherever it is put down.
+func _sync_pond_fish_markers(chunk_coord: Vector2i, anchor: Vector2i) -> void:
+	var cells := _pond_cells_from(anchor)
+	var by_anchor: Dictionary = _pond_fish_markers.get(chunk_coord, {})
+	var markers: Array = by_anchor.get(anchor, [])
+	var stock: float = float(_pond_fish.get(chunk_coord, {}).get(anchor, 0.0))
+	var wanted: int = mini(int(floor(stock)), cells.size() * _POND_FISH_PER_CELL)
+	while markers.size() > wanted:
+		var extra = markers.pop_back()
+		if is_instance_valid(extra):
+			extra.free()
+	while markers.size() < wanted and not cells.is_empty():
+		var cell: Vector2i = cells[markers.size() % cells.size()]
+		var centre := (Vector2(cell) + Vector2(0.5, 0.5)) * TerrainRenderer.TILE_SIZE
+		var seed_value := hash("%d_%d_pond_fish_%d" % [cell.x, cell.y, markers.size()])
+		var species: String = FishRenderer.SPECIES_POOL[
+			absi(seed_value) % FishRenderer.SPECIES_POOL.size()
+		]
+		markers.append(_fish_renderer.spawn_fish_at(_creatures_parent, species, centre, seed_value))
+	by_anchor[anchor] = markers
+	_pond_fish_markers[chunk_coord] = by_anchor
+
+
+## Frees every pond fish of a chunk that is going away.
+func _free_pond_fish_markers(chunk_coord: Vector2i) -> void:
+	for markers in _pond_fish_markers.get(chunk_coord, {}).values():
+		for fish in markers:
+			if is_instance_valid(fish):
+				fish.free()
+	_pond_fish_markers.erase(chunk_coord)
+
+
+## Takes one fish out of the pond this cell belongs to: one off the stock,
+## and one fewer swimming in it. False when there is not a whole fish left
+## to take, or when this is not a pond at all.
+##
+## All-or-nothing on a WHOLE fish, mirroring withdraw_from_structure_at:
+## half a fish is not a catch, and a pond fished down to a fraction breeds
+## back from what is left rather than from nothing.
+func catch_pond_fish_at(global_x: int, global_y: int) -> bool:
+	var anchor = _pond_anchor(global_x, global_y)
+	if anchor == null:
+		return false
+	var chunk_coord := _chunk_coord_for_tile(anchor)
+	var by_anchor: Dictionary = _pond_fish.get(chunk_coord, {})
+	var stock: float = float(by_anchor.get(anchor, 0.0))
+	if stock < 1.0:
+		return false
+	by_anchor[anchor] = stock - 1.0
+	_pond_fish[chunk_coord] = by_anchor
+	_sync_pond_fish_markers(chunk_coord, anchor)
+	return true
 
 
 ## Breeds every stocked pond toward what its own water can feed, on the
@@ -8328,6 +8414,7 @@ func step_ponds(delta_seconds: float) -> void:
 				float(by_anchor[anchor]), cells.size(),
 				_pond_temperature(anchor), days
 			)
+			_sync_pond_fish_markers(chunk_coord, anchor)
 
 
 ## The water temperature a pond's fish live at -- its own chunk's, the same
@@ -17013,6 +17100,7 @@ func _unload_chunk(chunk_coord: Vector2i) -> void:
 			creature.free()
 	_loaded_creatures.erase(chunk_coord)
 
+	_free_pond_fish_markers(chunk_coord)
 	for fish in _loaded_fish.get(chunk_coord, []):
 		fish.free()
 	_loaded_fish.erase(chunk_coord)

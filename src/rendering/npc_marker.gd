@@ -178,14 +178,23 @@ var _quarry_kind := ""
 ## had.
 var field_cells: Array[Vector2i] = []
 
-## The sentinel farmhouse_cell carries when this villager has none -- a
-## village that has not raised one yet, or a farmer there was no room for.
+## The sentinel stock_building_cell carries when this villager has none -- a
+## village that has not raised one yet, or a villager there was no room for.
 ## Not Vector2i.ZERO: that is a real world tile.
-const NO_FARMHOUSE := Vector2i(-2147483648, -2147483648)
+const NO_STOCK_BUILDING := Vector2i(-2147483648, -2147483648)
 
-## The GLOBAL tile of the farmhouse whose field this is, or NO_FARMHOUSE.
-## Assigned by VillageRenderer alongside field_cells, which is the only
-## thing that knows which farmhouse is whose.
+## The GLOBAL tile of the building this villager fills with what they
+## produce, or NO_STOCK_BUILDING. A farmer's own farmhouse; a fisher's own
+## house, since a fisher lives in an ordinary one and there is no separate
+## building to hang a pond on (docs/concept/village_ponds.md).
+##
+## Named for the JOB it does rather than for the farmer who had it first:
+## the harvest chain below is the same chain for both, and a field called
+## farmhouse_cell holding a fisher's cottage would be a lie in the one place
+## a reader goes to check where a catch went.
+##
+## Assigned by VillageRenderer alongside the ground this villager works,
+## which is the only thing that knows whose is whose.
 ##
 ## What a harvest needs, and what it did not have. Asked for directly:
 ## *"make sure wheat grows and is harvested which increases farmhouse stock
@@ -193,15 +202,15 @@ const NO_FARMHOUSE := Vector2i(-2147483648, -2147483648)
 ## exist -- a villager's harvest went straight into the village market, so
 ## the farmhouse they grew it for never held a grain of it and nothing was
 ## ever carried anywhere. See _work_field_cell and
-## haul_farmhouse_stock_to_village.
-var farmhouse_cell: Vector2i = NO_FARMHOUSE
+## haul_stock_to_village.
+var stock_building_cell: Vector2i = NO_STOCK_BUILDING
 
 ## The sentinel sawmill_cell carries when this villager has none.
 const NO_SAWMILL := Vector2i(-2147483648, -2147483648)
 
 ## The GLOBAL tile of the sawmill this villager works, or NO_SAWMILL
 ## (docs/concept/village_timber.md). Assigned by VillageRenderer, the only
-## thing that knows which mill is whose -- the same shape farmhouse_cell has.
+## thing that knows which mill is whose -- the same shape stock_building_cell has.
 ##
 ## Reported in play: "The sawmill also never produces any beams and doesn't
 ## even have a dedicated worker".
@@ -410,6 +419,11 @@ func _process(delta: float) -> void:
 	var field_target = _step_farm(delta, is_working)
 	if field_target != null:
 		target = field_target
+	# And a fisher with a pond of their own works it, for exactly the same
+	# reason and with the same override (docs/concept/village_ponds.md).
+	var pond_target = _step_pond(delta, is_working)
+	if pond_target != null:
+		target = pond_target
 	# And a villager with a real NEED of their own answers it, wherever
 	# today's schedule says to be (docs/concept/npc_social_life.md). The same
 	# override shape, for the same reason, as the two above -- the schedule
@@ -646,7 +660,7 @@ func _shape_a_beam(delta: float) -> void:
 
 ## Carries the mill's finished BEAMS into the village's own stock -- the
 ## other half of the chain, and the same one the farmhouse already runs
-## (haul_farmhouse_stock_to_village): cut in the wood, squared at the mill,
+## (haul_stock_to_village): cut in the wood, squared at the mill,
 ## carried to the village.
 ##
 ## Beams only. The logs a mill is holding are its own raw material, and
@@ -1062,7 +1076,7 @@ func _step_farm(delta: float, is_working: bool):
 		# is doing -- a field with beds in it always has SOMETHING worth a
 		# visit (VillageFarm.next_action's thirstiest-bed fallback), so
 		# "nothing left to do" never reliably arrives.
-		haul_farmhouse_stock_to_village()
+		haul_stock_to_village()
 		return null
 	# A villager with a farmhouse has real work whether or not any single
 	# plot wants attention this instant, so the regional drip is off for
@@ -1119,7 +1133,7 @@ func _work_field_cell() -> void:
 
 ## Where a cut crop goes: into the FARMHOUSE this villager works for, which
 ## is what the village later carries to market (see
-## haul_farmhouse_stock_to_village).
+## haul_stock_to_village).
 ##
 ## A farmer with no farmhouse -- a village that has not raised one, or one
 ## there was no room for -- keeps the behaviour they always had and sells it
@@ -1127,14 +1141,78 @@ func _work_field_cell() -> void:
 ## vanish, which is worse than the missing link this closes.
 func _store_harvest(crop_id: String, count: int) -> void:
 	if (
-		farmhouse_cell != NO_FARMHOUSE
+		stock_building_cell != NO_STOCK_BUILDING
 		and _world != null
 		and _world.has_method("deposit_to_structure_at")
 	):
-		_world.deposit_to_structure_at(farmhouse_cell.x, farmhouse_cell.y, crop_id, count)
+		_world.deposit_to_structure_at(stock_building_cell.x, stock_building_cell.y, crop_id, count)
 		return
 	if economy != null:
 		economy.record_real_harvest(crop_id, count)
+
+
+## How long a fisher works one cast before it lands a fish. Not a fresh
+## number: it is FarmerBehavior.WORK_SECONDS, the time this codebase already
+## measured for "a villager kneels over a thing and does a piece of work",
+## reused so a cast and a planting cost a villager the same effort. Pinned
+## against it by test_a_cast_costs_what_a_piece_of_field_work_costs.
+const CAST_SECONDS := FarmerBehavior.WORK_SECONDS
+
+## Seconds into the current cast.
+var _cast_elapsed := 0.0
+
+
+## A fisher's own pond work, or null for everyone else -- the same shape
+## _step_farm has, and the same override it gets in the work tick.
+##
+## Off the clock the cast is dropped rather than paused (a villager never
+## wakes up mid-cast), and what their house is holding goes to the village:
+## the same end-of-block carry a farmer's harvest gets, through the same
+## function.
+func _step_pond(delta: float, is_working: bool):
+	if pond_cells.is_empty():
+		return null
+	if not is_working:
+		_cast_elapsed = 0.0
+		haul_stock_to_village()
+		return null
+	_cast_elapsed += delta
+	if _cast_elapsed >= CAST_SECONDS:
+		_cast_elapsed = 0.0
+		_work_pond()
+	return _cell_centre(pond_cells[0])
+
+
+## The GLOBAL tiles of this villager's own pond, or empty for everyone who
+## does not have one (docs/concept/village_ponds.md). Handed out by
+## VillageRenderer beside stock_building_cell, the same way a farmer's
+## field_cells is.
+var pond_cells: Array[Vector2i] = []
+
+## What a pond yields. The catalog's own fish, and the same id
+## NpcProduction.PRODUCER_ITEM_BY_OCCUPATION already pays a fisher in -- a
+## pond that produced some other "pond fish" would be a second good nobody
+## eats or buys.
+const POND_CATCH_ITEM := "fish"
+
+
+## Takes one fish out of this villager's own pond and puts it in their own
+## building -- the fisher's half of the chain the farmer's harvest already
+## walks (docs/concept/village_farms.md's "Grown, stored, carried").
+##
+## A no-op for a villager with no pond, an empty pond, or a world that
+## cannot answer: the same fail-open shape every other world hook here uses,
+## and a fisher without a pond keeps the open water their quarry model
+## already gives them.
+func _work_pond() -> void:
+	if pond_cells.is_empty() or _world == null:
+		return
+	if not _world.has_method("catch_pond_fish_at"):
+		return
+	var water: Vector2i = pond_cells[0]
+	if not _world.catch_pond_fish_at(water.x, water.y):
+		return  # fished out until it breeds back
+	_store_harvest(POND_CATCH_ITEM, 1)
 
 
 ## Carries what the farmhouse is holding into the village's own stock -- the
@@ -1149,16 +1227,18 @@ func _store_harvest(crop_id: String, count: int) -> void:
 ## villager either carries what is there or has nothing to carry. A no-op
 ## for a villager with no farmhouse, an empty one, or a world that cannot
 ## answer -- the same fail-open shape every other world hook here uses.
-func haul_farmhouse_stock_to_village() -> void:
-	if farmhouse_cell == NO_FARMHOUSE or economy == null or _world == null:
+func haul_stock_to_village() -> void:
+	if stock_building_cell == NO_STOCK_BUILDING or economy == null or _world == null:
 		return
 	if not _world.has_method("withdraw_from_structure_at"):
 		return
 	var crop := _field_crop if _field_crop != "" else VillageFarm.crop_for(identity.occupation)
+	if crop == "" and not pond_cells.is_empty():
+		crop = POND_CATCH_ITEM  # a fisher's building holds fish, not a crop
 	if crop == "":
 		return
 	var carried := 0
-	while _world.withdraw_from_structure_at(farmhouse_cell.x, farmhouse_cell.y, crop, 1):
+	while _world.withdraw_from_structure_at(stock_building_cell.x, stock_building_cell.y, crop, 1):
 		carried += 1
 	if carried > 0:
 		economy.record_real_harvest(crop, carried)

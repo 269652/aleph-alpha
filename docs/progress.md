@@ -24139,6 +24139,38 @@ The reversal is recorded in the test as the player's, not as a correction.
 
 270/270 across the layout, renderer, room, farm and farming suites.
 
+### The pond finished: fish you can see, and a fisher who works them (2026-09-17)
+
+*"Close the gaps please and finish this properly."* Both remaining ⬜/🚧 rows
+of `village_ponds.md` are ✅.
+
+**Visible fish.** Real `FishMarker`s on the pond's own water, one per whole
+fish, capped at one per tile — six tiles is a pond, not a shoal — synced on
+every stocking, breeding tick and catch, and freed with the chunk. Kept out
+of `_loaded_fish` on purpose: that list is respawned wholesale whenever a
+chunk's aggregate fish population is reconciled, and a pond's own fish would
+have been wiped every time the region's did anything.
+
+**The fisher works it.** `_step_pond` mirrors `_step_farm` exactly — same
+shape, same override in the work tick, same off-the-clock carry. A cast costs
+`FarmerBehavior.WORK_SECONDS`, pinned against it rather than tuned, so
+fishing and farming are one effort. The catch walks the farmer's own chain
+through the farmer's own functions.
+
+`farmhouse_cell` became `stock_building_cell` in the process. It holds a
+farmer's farmhouse and a fisher's cottage, and the name would have been a lie
+in the one place a reader looks to find where a catch went.
+
+**One trap cost three failures that read like real bugs.** `_unload_chunk`
+PERSISTS a chunk's modifications to `user://`, which is keyed only by project
+name — so a dug pond leaked into every later test in the file AND into the
+next run of it from a different worktree, as ground that was already water.
+`test_earth_chunk_manager_ponds.gd` now scrubs its own chunk in
+before_each/after_each, the way `test_earth_chunk_manager_structure_art.gd`'s
+header has warned about since it was written.
+
+274/274 across the seven pond, village and farming suites.
+
 Honest gaps, three real:
 
 🚧 **The gate is a real hole.** An animal that wanders into the gate cell is
