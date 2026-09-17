@@ -193,3 +193,49 @@ func test_sheet_frame_image_is_deterministic_and_cached_per_cell():
 	var a := sprite.sheet_frame_image(_CONTRACT_SHEET, _COLUMNS, _ROWS, 1, 3)
 	var b := sprite.sheet_frame_image(_CONTRACT_SHEET, _COLUMNS, _ROWS, 1, 3)
 	assert_eq(a.get_data(), b.get_data())
+
+
+# -- sheets whose cells are divided by magenta lines ------------------------
+#
+# The house lifecycle sheets (house_1_1.png .. house_1_5.png) and well.png
+# divide their cells with real magenta lines and carry label bands that are
+# not art -- see VariantSheetGrid.art_bands. A cell of one is cut between
+# those lines, never by dividing the canvas.
+
+const _LIFECYCLE_SHEET := "res://assets/sprites/buildings/house_1_1.png"
+
+
+func test_a_divider_sheets_cell_is_cut_where_its_own_lines_are():
+	var VariantSheetGrid = load("res://src/rendering/variant_sheet_grid.gd")
+	var image := Image.load_from_file(_LIFECYCLE_SHEET)
+	assert_not_null(image, "precondition: the sheet is on disk")
+	if image.get_format() != Image.FORMAT_RGBA8:
+		image.convert(Image.FORMAT_RGBA8)
+	var expected: Rect2i = VariantSheetGrid.divider_cell_rect(image, 8, 10, 3, 2)
+	var frame: Image = sprite.divider_frame_image(_LIFECYCLE_SHEET, 8, 10, 3, 2)
+	assert_not_null(frame, "the sheet's own cell must be readable")
+	assert_eq(frame.get_size(), Vector2i(expected.size.x, expected.size.y))
+
+
+## An even division of this canvas would be a whole label band out.
+func test_an_even_division_would_cut_a_divider_sheet_in_the_wrong_place():
+	var even: Image = sprite.sheet_frame_image(_LIFECYCLE_SHEET, 8, 10, 3, 2)
+	var divided: Image = sprite.divider_frame_image(_LIFECYCLE_SHEET, 8, 10, 3, 2)
+	assert_not_null(even)
+	assert_not_null(divided)
+	assert_ne(
+		even.get_size(), divided.get_size(),
+		"if these agreed, the sheet would not need divider-aware slicing at all"
+	)
+
+
+func test_a_divider_sheets_frames_are_cached_per_cell():
+	var first: Image = sprite.divider_frame_image(_LIFECYCLE_SHEET, 8, 10, 4, 1)
+	var second: Image = sprite.divider_frame_image(_LIFECYCLE_SHEET, 8, 10, 4, 1)
+	assert_true(first == second, "the same cell must not be re-sliced every time it is asked for")
+
+
+func test_a_divider_sheet_scales_to_a_real_footprint():
+	var texture: ImageTexture = sprite.footprint_frame_texture(_LIFECYCLE_SHEET, 8, 10, 3, 2, 32, 2, "dividers")
+	assert_not_null(texture)
+	assert_eq(texture.get_width(), 64, "two tiles wide at 32 art px per tile")

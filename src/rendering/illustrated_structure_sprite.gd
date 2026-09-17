@@ -47,6 +47,15 @@ extends RefCounted
 ## cell's own edge doesn't show up as a colored fringe once cropped.
 
 const SpriteSheetLoader = preload("res://src/rendering/sprite_sheet_loader.gd")
+
+## How a sheet's cells are found. All three are real on disk today:
+## "even" divides the canvas (the original 8x5 sheets), "gutters" finds the
+## dark bands between cells (house_1.png), "dividers" finds the bands
+## between magenta lines and skips the label bands around them
+## (house_1_1.png .. house_1_5.png, well.png).
+const GRID_EVEN := "even"
+const GRID_GUTTERS := "gutters"
+const GRID_DIVIDERS := "dividers"
 const VariantSheetGrid = preload("res://src/rendering/variant_sheet_grid.gd")
 
 ## Same measured thresholds as illustrated_beehive_sprite.gd/
@@ -146,7 +155,7 @@ static var _sheet_frame_cache: Dictionary = {}
 ## sheet that cannot be loaded or a cell outside the grid -- a caller falls
 ## back to ProceduralBuildingPlaceholderSprite then, never crashes.
 func sheet_frame_image(path: String, columns: int, rows: int, row: int, column: int) -> Image:
-	return _frame_image(path, columns, rows, row, column, false)
+	return _frame_image(path, columns, rows, row, column, GRID_EVEN)
 
 
 ## The same cut for a VARIANT sheet (docs/concept/building.md, "Building
@@ -155,25 +164,33 @@ func sheet_frame_image(path: String, columns: int, rows: int, row: int, column: 
 ## VariantSheetGrid for why an even division is wrong for a hand-drawn
 ## grid, and falls back to one anyway when a sheet has no readable gutters.
 func variant_frame_image(path: String, columns: int, rows: int, row: int, column: int) -> Image:
-	return _frame_image(path, columns, rows, row, column, true)
+	return _frame_image(path, columns, rows, row, column, GRID_GUTTERS)
 
 
-## One body for both, differing only in where the cell's rect comes from.
-## Cached per (path, row, column, grid kind), so the gutter scan a detected
-## grid needs is paid once per sheet rather than per building placed.
-func _frame_image(path: String, columns: int, rows: int, row: int, column: int, detected: bool) -> Image:
+## The same cut for a sheet that draws a real MAGENTA LINE between one cell
+## and the next, and carries label bands that are not art at all
+## (house_1_1.png .. house_1_5.png, well.png -- see VariantSheetGrid.
+## art_bands and docs/concept/building.md, "Building lifecycle variation
+## sheets"). Dividing such a canvas evenly is a whole label band out.
+func divider_frame_image(path: String, columns: int, rows: int, row: int, column: int) -> Image:
+	return _frame_image(path, columns, rows, row, column, GRID_DIVIDERS)
+
+
+## One body for all three, differing only in where the cell's rect comes
+## from. Cached per (path, row, column, grid kind), so the band scan a
+## detected grid needs is paid once per sheet rather than per building
+## placed -- and the bands themselves are cached again below, since a
+## divider scan walks the whole 1536x1024 image.
+func _frame_image(path: String, columns: int, rows: int, row: int, column: int, grid: String) -> Image:
 	if row < 0 or row >= rows or column < 0 or column >= columns:
 		return null
-	var key := "%s|%d|%d|%s" % [path, row, column, "detected" if detected else "even"]
+	var key := "%s|%d|%d|%s" % [path, row, column, grid]
 	if _sheet_frame_cache.has(key):
 		return _sheet_frame_cache[key]
 	var image := SpriteSheetLoader.load_image(path)
 	if image == null:
 		return null
-	var rect := (
-		VariantSheetGrid.cell_rect(image, columns, rows, row, column) if detected
-		else _cell_rect(image, columns, rows, row, column)
-	)
+	var rect := _cell_rect_for(path, image, columns, rows, row, column, grid)
 	var frame := image.get_region(rect)
 	if frame.get_format() != Image.FORMAT_RGBA8:
 		frame.convert(Image.FORMAT_RGBA8)
@@ -188,9 +205,9 @@ func _frame_image(path: String, columns: int, rows: int, row: int, column: int, 
 ## taller than its footprint stays taller). Null when the sheet is missing.
 func footprint_frame_texture(
 	path: String, columns: int, rows: int, row: int, column: int, tile_size: int, footprint_width_tiles: int,
-	detected_grid: bool = false
+	grid: String = GRID_EVEN
 ) -> ImageTexture:
-	var frame := _frame_image(path, columns, rows, row, column, detected_grid)
+	var frame := _frame_image(path, columns, rows, row, column, grid)
 	if frame == null:
 		return null
 	var target_width := tile_size * maxi(footprint_width_tiles, 1)
@@ -199,6 +216,50 @@ func footprint_frame_texture(
 	var scaled := frame.duplicate() as Image
 	scaled.resize(target_width, height, Image.INTERPOLATE_LANCZOS)
 	return ImageTexture.create_from_image(scaled)
+
+
+## Band detection is a full scan of a 1536x1024 image, so its answer is
+## kept per (path, grid kind, axis, count) -- a village placing five houses
+## off one sheet scans it once, not ten times.
+var _grid_band_cache: Dictionary = {}
+
+
+func _cell_rect_for(
+	path: String, image: Image, columns: int, rows: int, row: int, column: int, grid: String
+) -> Rect2i:
+	match grid:
+		GRID_GUTTERS:
+			return Rect2i(
+				_band(path, image, columns, grid, false)[column].x,
+				_band(path, image, rows, grid, true)[row].x,
+				_span(_band(path, image, columns, grid, false)[column]),
+				_span(_band(path, image, rows, grid, true)[row])
+			)
+		GRID_DIVIDERS:
+			return Rect2i(
+				_band(path, image, columns, grid, false)[column].x,
+				_band(path, image, rows, grid, true)[row].x,
+				_span(_band(path, image, columns, grid, false)[column]),
+				_span(_band(path, image, rows, grid, true)[row])
+			)
+	return _cell_rect(image, columns, rows, row, column)
+
+
+func _band(path: String, image: Image, count: int, grid: String, horizontal: bool) -> Array:
+	var key := "%s|%s|%d|%s" % [path, grid, count, "rows" if horizontal else "columns"]
+	if not _grid_band_cache.has(key):
+		if grid == GRID_DIVIDERS:
+			_grid_band_cache[key] = VariantSheetGrid.art_bands(image, count, horizontal)
+		else:
+			_grid_band_cache[key] = (
+				VariantSheetGrid.row_bands(image, count) if horizontal
+				else VariantSheetGrid.column_bands(image, count)
+			)
+	return _grid_band_cache[key]
+
+
+static func _span(band: Vector2i) -> int:
+	return band.y - band.x + 1
 
 
 func _build_idle_image(subject: String) -> Image:

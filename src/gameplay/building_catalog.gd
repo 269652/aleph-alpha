@@ -15,6 +15,7 @@ extends RefCounted
 ## read this file and never the other way round.
 
 const PixelNoise = preload("res://src/rendering/pixel_noise.gd")
+const BuildingLifecycleSheet = preload("res://src/rendering/building_lifecycle_sheet.gd")
 const NpcGenome = preload("res://src/world/npc_genome.gd")
 
 ## Every HOUSE the game knows how to place, in a fixed order -- the pool
@@ -284,26 +285,81 @@ static func variant_cell_for(building_id: String, seed_value: int) -> Vector2i:
 	)
 
 
-## Which sheet cell a FINISHED building of this id and seed is drawn from:
-## `{path, columns, rows, row, column}`. A building with a variant sheet
-## gets its own seeded variant; everything else gets the lifecycle sheet's
-## idle row, exactly as before. One function, so the live building node and
-## any other consumer can never disagree about which picture a finished
+## Every sheet a FINISHED building of this id and seed could be drawn
+## from, BEST FIRST: `{path, columns, rows, row, column, grid}`. The
+## renderer walks the chain and takes the first whose file is really on
+## disk, so declaring art that has not been dropped in yet changes
+## nothing.
+##
+## For a house that is: its own lifecycle VARIATION sheet's idle cell
+## (house_1_1.png .. house_1_5.png -- the same house it was while it was
+## rising, see BuildingLifecycleSheet), then the flat 25-cottage variant
+## sheet, then the old 8x5 sheet's idle row. Everything else has only the
+## last of those.
+##
+## `grid` says how that sheet's cells are found, because all three kinds
+## are now real: "even" divides the canvas, "gutters" finds dark bands
+## between cells, "dividers" finds the bands between magenta lines (see
+## VariantSheetGrid).
+static func finished_sheet_chain(building_id: String, seed_value: int) -> Array:
+	var chain: Array = []
+	var variation := BuildingLifecycleSheet.sheet_for(building_id, seed_value)
+	if variation != "":
+		var idle := BuildingLifecycleSheet.idle_cell_for(seed_value)
+		chain.append({
+			"path": variation,
+			"columns": BuildingLifecycleSheet.COLUMNS, "rows": BuildingLifecycleSheet.ROWS,
+			"row": idle.y, "column": idle.x, "grid": "dividers",
+		})
+	var variant_sheet := variant_sheet_of(building_id)
+	if variant_sheet != "":
+		var cell := variant_cell_for(building_id, seed_value)
+		chain.append({
+			"path": variant_sheet, "columns": VARIANT_SHEET_COLUMNS, "rows": VARIANT_SHEET_ROWS,
+			"row": cell.y, "column": cell.x, "grid": "gutters",
+		})
+	chain.append({
+		"path": sheet_of(building_id), "columns": SHEET_COLUMNS, "rows": SHEET_ROWS,
+		"row": ROW_IDLE, "column": 0, "grid": "even",
+	})
+	return chain
+
+
+## The best of that chain. One function, so the live building node and any
+## other consumer can never disagree about which picture a finished
 ## building has.
 static func finished_sheet_for(building_id: String, seed_value: int) -> Dictionary:
-	var variant_sheet := variant_sheet_of(building_id)
-	if variant_sheet == "":
-		return {
-			"path": sheet_of(building_id), "columns": SHEET_COLUMNS, "rows": SHEET_ROWS,
-			"row": ROW_IDLE, "column": 0, "detected_grid": false,
-		}
-	var cell := variant_cell_for(building_id, seed_value)
-	# A variant sheet's cells are found in its own background gutters, not
-	# assumed to sit on an exact pitch (see VariantSheetGrid).
-	return {
-		"path": variant_sheet, "columns": VARIANT_SHEET_COLUMNS, "rows": VARIANT_SHEET_ROWS,
-		"row": cell.y, "column": cell.x, "detected_grid": true,
-	}
+	return finished_sheet_chain(building_id, seed_value)[0]
+
+
+## The same for a building that is still RISING, at `progress` in [0, 1].
+##
+## A house walks its own variation's 24 real build frames -- foundation,
+## frames, construction -- so it rises as the house it is going to be.
+## Everything else keeps the old 8x5 sheet's single construction row, eight
+## stages left to right, exactly as before.
+##
+## The flat variant sheet never appears here and must not: it draws 25
+## FINISHED cottages and no scaffold at all.
+static func construction_sheet_chain(building_id: String, seed_value: int, progress: float) -> Array:
+	var chain: Array = []
+	var variation := BuildingLifecycleSheet.sheet_for(building_id, seed_value)
+	if variation != "":
+		var cell := BuildingLifecycleSheet.build_cell_for(progress)
+		chain.append({
+			"path": variation,
+			"columns": BuildingLifecycleSheet.COLUMNS, "rows": BuildingLifecycleSheet.ROWS,
+			"row": cell.y, "column": cell.x, "grid": "dividers",
+		})
+	chain.append({
+		"path": sheet_of(building_id), "columns": SHEET_COLUMNS, "rows": SHEET_ROWS,
+		"row": ROW_CONSTRUCTION, "column": construction_stage_for(progress), "grid": "even",
+	})
+	return chain
+
+
+static func construction_sheet_for(building_id: String, seed_value: int, progress: float) -> Dictionary:
+	return construction_sheet_chain(building_id, seed_value, progress)[0]
 
 
 ## Where this building's sheet is expected ("" for an unknown id). Whether
