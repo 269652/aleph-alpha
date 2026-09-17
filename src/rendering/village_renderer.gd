@@ -625,7 +625,21 @@ func _place_farms_if_missing(chunk_coord: Vector2i, chunk_size: int, npcs: Array
 			is_buildable, is_occupied, is_buildable, accepts_origin
 		)
 		if plot.is_empty():
-			return  # no frontage left with room for a field -- honestly, no farm
+			# No frontage left -- which on a village hemmed in by water is
+			# the normal case, not the rare one. Measured on chunk
+			# (661,139) near lat 49.8 lon 10.6, reported in play as "no
+			# farmers": next_street_plot returns nothing at all there for a
+			# 3x2 farmhouse, while SIXTY origins elsewhere in the same
+			# chunk fit one, every one with a full field ring. A farmstead
+			# does not need frontage the way a house does; it needs open
+			# ground and a path home, which is what the sawmill's own
+			# siting already gives.
+			plot = VillageLayout.outskirt_plot(
+				VillageFarm.FARM_BUILDING_ID, chunk_size, VillageLayout.seed_for(chunk_coord),
+				is_buildable, is_occupied, accepts_origin, is_buildable
+			)
+		if plot.is_empty():
+			return  # nowhere at all with room for a field -- honestly, no farm
 		# Over the paving, not beside it: a street-frontage plot's own
 		# doorstep IS a road cell by the time this runs (the streets were
 		# laid at founding), and an ordinary place_building refuses a plot
@@ -646,8 +660,14 @@ func _place_farms_if_missing(chunk_coord: Vector2i, chunk_size: int, npcs: Array
 		if not placed:
 			return
 		if world.has_method("build_at_global"):
-			var doorstep: Vector2i = chunk_coord * chunk_size + plot["doorstep"]
-			world.build_at_global(doorstep.x, doorstep.y, TerrainRenderer.ROAD_TILE_ID)
+			# The doorstep, and the path back to the street when this
+			# farmstead stands away from it (outskirt_plot's own spur --
+			# a farm nobody can walk to is not part of the village).
+			var paving: Array = [plot["doorstep"]]
+			paving.append_array(plot.get("road_spur", []))
+			for local_cell in paving:
+				var g: Vector2i = chunk_coord * chunk_size + (local_cell as Vector2i)
+				world.build_at_global(g.x, g.y, TerrainRenderer.ROAD_TILE_ID)
 
 
 ## How many cells of the field ring a farmhouse at `origin` would really be
