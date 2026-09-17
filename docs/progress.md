@@ -23998,6 +23998,45 @@ test_village_renderer 90/90, test_farm_plot_marker 13/13,
 test_earth_chunk_manager_farm_plots 17/17, and 152/152 across the six
 farming and grass suites.
 
+### The street closes its own holes, and a rail clears its own ground (2026-09-17)
+
+Two more off a real village screenshot.
+
+**"When there's only a free gap of 1-2 tiles between two street tiles it
+should close the gap between them."** A village paves a street row only
+between the doorsteps it actually joined, and each farmhouse paves its own
+doorstep as it goes up, so a finished row is paved stretches with holes
+punched through them — the new test found a one-tile hole in all eight real
+villages it looked at, every one at the same relative spot.
+`VillageLayout.short_street_gap_cells` is the rule, pure and derived from the
+skeleton: a run of unpaved cells with paving on BOTH sides, at most
+`STREET_GAP_CLOSE_TILES` (2) long, free for its whole length. A run reaching
+the chunk edge has nothing on its far side to join; a run with something
+standing in it is closed whole or not at all.
+
+The ORDER is the part worth recording. It was first run before the farms and
+did nothing for the case that prompted it, because a farmhouse paves its own
+doorstep as it is placed — the hole only exists once the farms are down. It
+now runs at one seam: after every last cell of paving, and before the first
+rail. Both directions matter. Too early and the hole is not there yet; too
+late and the gap already carries a fence across a road. The probe shows the
+before and after plainly: `+vvv+:::^:::` became `+vvv+:::::::`, the rail
+replaced by the paving that belongs there, with the frame still closed on
+its own three sides.
+
+**"The grass should be cleared on the fence tiles as well."** A rail joins
+`_is_built_surface` beside a building piece and a laid road, so
+`build_at_global` clears the ground cover under it and `destroy_at_global`
+gives it back — a torn-out fence line is ordinary ground again, unlike a
+tilled bed, which stays worked. That asymmetry is deliberate: a bed is
+ground somebody worked, a rail is a thing standing on it.
+
+test_village_layout 71/71 (8 new), test_village_renderer 91/91,
+test_earth_chunk_manager_farm_plots 19/19, 290/290 across eight layout,
+farming and ground-cover suites. (`test_grass_near_respects_its_radius` is
+risky-not-asserting both before and after these changes — pre-existing,
+untouched here.)
+
 Honest gaps, three real:
 
 🚧 **The gate is a real hole.** An animal that wanders into the gate cell is

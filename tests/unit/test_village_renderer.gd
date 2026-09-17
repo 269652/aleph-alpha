@@ -2166,3 +2166,32 @@ func _nearest_farmhouse_origin(world: StubWorld, coord: Vector2i, local_beds: Ar
 			best_distance = distance
 			best = origin
 	return best
+
+
+## Asked for directly, with the broken stretch in shot: "When there's only a
+## free gap of 1-2 tiles between two street tiles it should close the gap
+## between them". The founding layout paves only between the doorsteps it
+## actually joined, so a real village's street rows come out as paved
+## stretches with one- and two-tile holes punched through them.
+func test_a_village_leaves_no_one_or_two_tile_hole_in_its_own_streets():
+	var holes: Array = []
+	var checked := 0
+	for coord in _settlement_chunks_with_farmers(3, 8):
+		var world := StubWorld.new()
+		renderer.spawn_village(
+			parent, coord, coord * CHUNK_SIZE, CHUNK_SIZE, TILE_SIZE, "grassland", world
+		)
+		var street_y: int = VillageLayout.skeleton(CHUNK_SIZE, VillageLayout.seed_for(coord))["street_y"]
+		var is_paved := func(cell: Vector2i) -> bool:
+			var g: Vector2i = coord * CHUNK_SIZE + cell
+			return world.modification_at_global(g.x, g.y) == TerrainRenderer.ROAD_TILE_ID
+		var is_free := func(cell: Vector2i) -> bool:
+			var g: Vector2i = coord * CHUNK_SIZE + cell
+			return world.modification_at_global(g.x, g.y) == ""
+		checked += 1
+		for cell in VillageLayout.short_street_gap_cells(
+			is_paved, is_free, CHUNK_SIZE, street_y, VillageLayout.STREET_GAP_CLOSE_TILES
+		):
+			holes.append("%s: a hole in the street at %s" % [str(coord), str(cell)])
+	assert_gt(checked, 0, "precondition: real villages were laid")
+	assert_eq(holes.size(), 0, "%s" % str(holes.slice(0, 8)))

@@ -16,6 +16,7 @@ const EarthChunkManager = preload("res://src/world/earth_chunk_manager.gd")
 const EarthChunkGenerator = preload("res://src/world/earth_chunk_generator.gd")
 const GeoCoordinates = preload("res://src/world/geo_coordinates.gd")
 const FarmPlot = preload("res://src/gameplay/farm_plot.gd")
+const VillageFarm = preload("res://src/gameplay/village_farm.gd")
 
 var tile_map_layer: TileMapLayer
 var entities_parent: Node2D
@@ -247,3 +248,35 @@ func test_long_grass_does_not_grow_back_into_a_bed():
 ## not reach into a sim that is not there.
 func test_tilling_outside_a_loaded_chunk_clears_nothing_and_does_not_crash():
 	assert_false(manager.till_and_plant_farm_plot_at_global(999999, 999999, "wheat"))
+
+
+## The rails too, not just the beds. Asked for directly: "the grass should
+## be cleared on the fence tiles as well" -- a frame was being raised
+## straight through standing long grass, so the fence line read as a row of
+## posts lost in a meadow.
+func test_raising_a_rail_clears_the_long_grass_standing_on_it():
+	var tile := _a_grassy_tile()
+	assert_ne(tile, Vector2i(-1, -1), "precondition: this chunk grows tall grass somewhere")
+	var chunk_coord := manager._chunk_coord_for_tile(tile)
+	var local: Vector2i = tile - chunk_coord * EarthChunkManager.CHUNK_SIZE
+	var sim = manager._grass_sims[chunk_coord]
+	assert_true(sim.has_grass(local), "precondition: grass really stands here")
+
+	manager.build_at_global(tile.x, tile.y, VillageFarm.fence_tile_for("north"))
+
+	assert_false(sim.has_grass(local), "a rail was raised through standing long grass")
+	assert_false(sim.plant(local), "grass grew back over a rail")
+
+
+## And a rail that is torn out gives its ground back, the way a destroyed
+## building piece already does -- a fence line is not a permanent scar.
+func test_pulling_a_rail_out_lets_the_ground_grow_again():
+	var tile := _a_grassy_tile()
+	assert_ne(tile, Vector2i(-1, -1), "precondition: this chunk grows tall grass somewhere")
+	var chunk_coord := manager._chunk_coord_for_tile(tile)
+	var local: Vector2i = tile - chunk_coord * EarthChunkManager.CHUNK_SIZE
+
+	manager.build_at_global(tile.x, tile.y, VillageFarm.fence_tile_for("north"))
+	manager.destroy_at_global(tile.x, tile.y)
+
+	assert_true(manager._grass_sims[chunk_coord].plant(local), "the ground stayed scorched")
