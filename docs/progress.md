@@ -25417,3 +25417,33 @@ the rule stays pinned instead of silently not running.
 Tests: `test_village_layout.gd` 84/84 (+8), `test_village_renderer.gd`
 110/110 (+5 new, 5 rewritten), `test_npc_marker_market_stand.gd` 7/7 (new),
 `test_npc_marker.gd` 52/52.
+
+✅ **A trader who cannot eat still works** — a deadlock the permanent,
+unattended stall had been hiding. **Measured** with the whole settlement
+ticked (ticking one villager alone is a broken measurement, not a finding:
+nobody else gathers, so the market stays empty by construction): the stand
+was up for **5 of 1801 ticks**, and not because the siting was wrong — the
+merchant got within 6.1px of it, well inside the 16px reach. They were
+hungry for 1589 of those ticks with an empty purse, so the hunger interrupt
+overrode all 825 of their scheduled "work at the stall" ticks and sent them
+to a well with nothing on it. They never worked, never earned, and stayed
+hungry for ever.
+
+`NpcEconomy.can_obtain_a_meal` is the general form of the rule
+`npc_marker.gd`'s own comment already states — *the interrupt is for
+villagers who must BUY* — and now gates it: a meal has to be within reach
+AND payable (out of the villager's own purse, or the village's subsistence
+wage). The producer/own-field guards written for the identical hunter
+deadlock cover neither a merchant, a blacksmith, a guard nor a nurse.
+**Re-measured on the same village: 0% → 30% of the day-night cycle with the
+stand up.** The famine chain is untouched — that village is genuinely poor
+and its merchant is still hungry 1589/1801, but now hungry *at work*.
+
+Four hunger tests in `test_npc_marker.gd` built an EMPTY `VillageMarket` and
+then asserted the villager walks to the well. Their intent ("a villager who
+must buy goes and buys") is right and kept; the empty stall was incidental,
+so they now stock it — see `_stock_the_stall`.
+
+Tests: `test_npc_economy.gd` 80/80 (+5), `test_npc_marker_market_stand.gd`
+9/9 (+2), `test_npc_marker.gd` 52/52, and 352/352 across the seven marker,
+economy, schedule, renderer and layout suites.

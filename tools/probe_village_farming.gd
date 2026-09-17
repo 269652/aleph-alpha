@@ -79,6 +79,8 @@ func _sample() -> void:
 	if farmers.is_empty():
 		return
 	_measured = true
+	for chunk_coord in _manager._loaded_villages:
+		_report_market(chunk_coord)
 	for farmer in farmers:
 		_measure(farmer)
 
@@ -113,14 +115,49 @@ func _measure(farmer) -> void:
 			continue
 		var plot = marker.plot
 		_report_lines.append(
-			"  CELL %s state=%s crop=%s sown=%s grown=%.1f/%.1f soil_visible=%s leaves_visible=%s blades=%d"
+			"  CELL %s state=%s crop=%s sown=%s grown=%.1f/%.1f soil_visible=%s draws_a_crop=%s blades=%d"
 			% [
 				str(cell), plot.state, plot.crop_id, marker._sown_crop_id,
 				plot.time_growing, plot.growth_time,
 				str(marker.is_showing_tilled_ground()),
-				str(marker._leaves != null and marker._leaves.visible),
+				str(marker.is_drawing_a_crop()),
 				marker.wheat_blade_count(),
 			]
 		)
 	if farmer.economy != null and farmer.economy.market != null:
 		_report_lines.append("  village market stock=%s" % str(farmer.economy.market.stock))
+
+
+func _report_market(chunk_coord: Vector2i) -> void:
+	var stands: Array = []
+	for node in _manager._loaded_villages.get(chunk_coord, []):
+		if is_instance_valid(node) and node.has_meta("landmark_id") and node.get_meta("landmark_id") == "stall":
+			stands.append(node)
+	for node in stands:
+		var tile := Vector2i(int(node.position.x) / 16, int(node.position.y) / 16)
+		_report_lines.append(
+			"  STAND at %s visible=%s paving='%s'"
+			% [str(tile), str(node.visible), _manager.modification_at_global(tile.x, tile.y)]
+		)
+	if not stands.is_empty():
+		return
+	var merchants := 0
+	var villagers := 0
+	for node in _manager._loaded_villages.get(chunk_coord, []):
+		if is_instance_valid(node) and node.has_method("setup_economy"):
+			villagers += 1
+			if node.identity != null and node.identity.occupation == "merchant":
+				merchants += 1
+	if villagers == 0:
+		return
+	var VillageLayout = load("res://src/world/village_layout.gd")
+	var skeleton: Dictionary = VillageLayout.skeleton(32, VillageLayout.seed_for(chunk_coord))
+	var planned: Array = VillageLayout.market_stand_cells(skeleton, maxi(merchants, 1))
+	var paving: Array = []
+	for cell in planned:
+		var g: Vector2i = chunk_coord * 32 + cell
+		paving.append("%s='%s'" % [str(cell), _manager.modification_at_global(g.x, g.y)])
+	_report_lines.append(
+		"  STAND none at %s -- villagers=%d merchants=%d planned=%s"
+		% [str(chunk_coord), villagers, merchants, str(paving)]
+	)

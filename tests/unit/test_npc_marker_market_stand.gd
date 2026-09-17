@@ -126,3 +126,53 @@ func _sleep_all_day() -> void:
 	]
 	marker.schedule = schedule
 	marker.set_planner(FixedPlanner.new(schedule))
+
+
+# -- a stand nobody can reach because its trader is queueing at an empty ---
+# -- well ------------------------------------------------------------------
+#
+# MEASURED on a real village once the stands were on the square
+# (tools/probe_village_market.gd, the whole settlement ticked): the stand was
+# up for 5 of 1801 ticks. Not because the siting was wrong -- the merchant
+# got within 6.1px of it, well inside the 16px reach -- but because they were
+# HUNGRY for 1589 of those ticks with an empty purse, and NpcMarker's hunger
+# interrupt overrode all 825 of their scheduled "work at the stall" ticks and
+# sent them to the well, which had nothing they could pay for.
+#
+# That is the same deadlock this file's own neighbour already records for a
+# hunter; the guards written for it (a producer who feeds itself, a villager
+# with a field) cover neither a merchant nor any other non-producer. See
+# NpcEconomy.can_obtain_a_meal.
+
+const VillageMarket = preload("res://src/world/village_market.gd")
+const NpcEconomy = preload("res://src/world/npc_economy.gd")
+
+
+func test_a_hungry_trader_who_cannot_buy_anything_keeps_working():
+	var market := VillageMarket.new()  # nothing on the stall, no purse
+	marker.setup_economy(market)
+	marker.economy.needs.hunger = 1.0
+	assert_true(marker.economy.needs.is_hungry(), "precondition: hungry")
+	assert_false(marker.economy.can_obtain_a_meal(), "precondition: nothing to be had")
+	_work_all_day()
+	marker.position = stand.position
+	marker._process(0.1)
+	assert_true(
+		stand.visible,
+		"a villager who cannot buy must keep working -- work is the only thing that can change that"
+	)
+
+
+## ...and the interrupt still does its job when there really is a meal to be
+## had: a hungry villager who can pay leaves their stand and goes to eat.
+func test_a_hungry_trader_who_can_buy_still_goes_to_eat():
+	var market := VillageMarket.new()
+	market.add_stock("fish", 5.0)
+	marker.setup_economy(market)
+	marker.economy.wallet.add(100)
+	marker.economy.needs.hunger = 1.0
+	assert_true(marker.economy.can_obtain_a_meal(), "precondition: a meal is really there")
+	_work_all_day()
+	marker.position = stand.position
+	marker._process(0.1)
+	assert_false(stand.visible, "they have left the stand to eat")

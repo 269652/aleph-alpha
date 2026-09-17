@@ -117,6 +117,31 @@ villager in the village to one merchant's trestle.
   stands are way too big") and pinned by
   `test_a_stall_is_two_tiles_wide_not_wider_than_a_cottage`.
 
+- ✅ **A trader who cannot eat still works.** Putting the stands on the
+  square exposed a deadlock that the permanent, unattended stall had been
+  hiding. **Measured** (`tools/probe_village_market.gd`, a real village with
+  the whole settlement ticked): the stand was up for **5 of 1801 ticks** —
+  not because the siting was wrong (the merchant got within 6.1px of it,
+  well inside the 16px reach) but because they were HUNGRY for 1589 of those
+  ticks with an empty purse, so `NpcMarker`'s hunger interrupt overrode all
+  825 of their scheduled "work at the stall" ticks and sent them to a well
+  with nothing on it. They never worked, never earned, and stayed hungry for
+  ever.
+
+  That is the same deadlock `npc_marker.gd` already records for a hunter
+  ("went hungry about twelve seconds in ... and then never worked again for
+  the remaining 227 simulated seconds"); the guards written for it cover
+  only producers and villagers with a field, and a merchant, a blacksmith, a
+  guard and a nurse are none of those. `NpcEconomy.can_obtain_a_meal` is the
+  honest general form of the rule that comment already states — *the
+  interrupt is for villagers who must BUY* — and now gates it. **Measured
+  again on the same village: 0% → 30% of the day-night cycle with the stand
+  up.**
+
+  The famine chain is untouched: this village is genuinely poor (2 fish, an
+  empty purse) and its merchant is still hungry 1589/1801. What changed is
+  that they are hungry AT WORK, where something might yet come of it.
+
 Honest gaps, each real:
 
 - 🚧 **A stand is up or down, never being set up.** There is no carrying-out

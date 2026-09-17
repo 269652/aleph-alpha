@@ -450,6 +450,40 @@ func feeds_itself_from_work(world, pixel_position: Vector2) -> bool:
 	return _production.yield_per_second(occupation, world, pixel_position) > 0.0
 
 
+## Whether walking to the market would ACTUALLY get this villager a meal:
+## there is a whole unit of real food within reach, and either they can pay
+## for it or their village can advance them the subsistence wage that buys
+## one.
+##
+## A pure query -- it moves no gold, no stock and no purse, so asking must
+## never feed anybody.
+##
+## This is the gate on NpcMarker's hunger interrupt, and the honest general
+## form of the rule that file's own comments already state: "The interrupt is
+## for villagers who must BUY." A villager who CANNOT buy gains nothing by
+## standing at the well and loses the work that is the only thing able to
+## change either number.
+##
+## MEASURED on a real village (tools/probe_village_market.gd, with the whole
+## settlement ticked rather than one villager alone): a merchant was hungry
+## for 1589 of 1801 ticks with an empty purse, and their schedule's 825
+## "work at the stall" ticks were overridden on every single one of them.
+## The producer/own-field guards already on that interrupt were written for
+## exactly this deadlock and cover neither a merchant, a blacksmith, a guard
+## nor a nurse.
+##
+## The famine chain npc.md describes is untouched: a village with nothing to
+## eat still starves. What changes is that its villagers starve AT WORK,
+## where they might yet produce something, rather than queueing at a stall
+## with nothing on it.
+func can_obtain_a_meal(world = null, pixel_position: Vector2 = Vector2.ZERO) -> bool:
+	if not market.can_buy_meal() and not _structure_meal_available(world, pixel_position):
+		return false
+	if wallet.can_afford(VillageWages.subsistence_wage()):
+		return true
+	return VillageWages.can_pay_subsistence(purse_of(market))
+
+
 func _try_eat(is_working: bool, world, pixel_position: Vector2) -> void:
 	if is_working and feeds_itself_from_work(world, pixel_position):
 		needs.feed()  # a free bite from their own active harvest -- see file doc comment

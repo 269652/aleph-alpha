@@ -444,6 +444,19 @@ func _process(delta: float) -> void:
 		# deadlock the producer branch already exists to avoid.
 		and not _works_their_own_field()
 		and not economy.feeds_itself_from_work(_world, position)
+		# ...and there has to BE a meal at the end of the walk. The two
+		# guards above were written for exactly this deadlock and cover only
+		# producers and villagers with a field; a merchant, a blacksmith, a
+		# guard and a nurse are none of those. MEASURED on a real village
+		# (tools/probe_village_market.gd, the whole settlement ticked): a
+		# merchant was hungry for 1589 of 1801 ticks with an empty purse,
+		# and every one of their 825 scheduled "work at the stall" ticks was
+		# overridden and spent at a well with nothing on it -- so they never
+		# worked, never earned, and stayed hungry for ever. The interrupt is
+		# for villagers who must BUY (see above); a villager who CANNOT buy
+		# gains nothing by going and loses the only thing that could change
+		# either number. See NpcEconomy.can_obtain_a_meal.
+		and economy.can_obtain_a_meal(_world, position)
 	):
 		entry = {"time_block": entry.get("time_block", ""), "location_tag": "well", "activity": "eat"}
 	if instruction_script != null:
