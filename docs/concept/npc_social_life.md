@@ -175,9 +175,25 @@ the code as it lands.
   (0.03 against 0.02 in the shared mammal profile). Found by a test that
   assumed hunger came first; kept as its own test, because it is the
   behaviour rather than the accident. `test_villager_behavior.gd` 13/13.
-- ⬜ **`NpcMarker` acts on the intent** — the intent overrides the schedule
-  target the same way the hunt and field overrides already do; `stroll` when
-  nothing is pressing.
+- 🚧 **`NpcMarker` acts on the intent.** `_step_needs` is the third override
+  beside `_step_hunt` and `_step_farm`, and deliberately the last of them:
+  real work against the real world outranks a need, so a hunter mid-chase
+  finishes the chase. A thirsty villager walks to the well and **drinking
+  really answers it**; a tired one goes home and resting answers it — a need
+  answered on arrival is what stops a villager standing at the well forever.
+  With nothing pressing the layer returns null and the schedule simply
+  stands. `test_npc_marker.gd` 41/41.
+
+  **Divergence from the spec above, deliberate:** hunger is *not* routed
+  through the wiring layer and keeps its dedicated interrupt in `_process`.
+  That interrupt carries two guards a famine chain was measured into — a
+  producer who feeds itself from its own harvest, and a villager with their
+  own field — which this generic layer has no way to express. Its own gain
+  is withheld from the villager context so the two layers cannot steer at
+  once. Hunger being first in the wiring order keeps the two consistent.
+
+  Still open in this slice: `stroll` (the kernel's `wander`) is not wired, so
+  a villager with nothing pressing still stands on their scheduled spot.
 - ⬜ **A real meeting** — two free villagers in reach stop, face each other,
   and hold a conversation for a real number of seconds.
 - ⬜ **Rumours pass in meetings**, through the existing `MemoryStore`/`Rumor`

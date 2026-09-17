@@ -767,3 +767,89 @@ func test_a_hungry_non_producer_still_goes_to_the_well():
 	marker._process(0.5)
 
 	assert_lt(marker.position.distance_to(well), before, "a blacksmith really does have to buy")
+
+
+# -- a villager acts on what they need -------------------------------------
+#
+# Asked for directly: "improve the NPC AI Behaviour by an order of magnitude
+# ... cater for their needs; stroll". See docs/concept/npc_social_life.md:
+# the schedule says where a villager would BE, drives say what they DO, and
+# a drive overrides the schedule's walk target exactly as the hunt and field
+# overrides already do.
+
+const VillagerBehavior = preload("res://src/gameplay/villager_behavior.gd")
+
+
+## Puts one drive of the marker's own real needs past its threshold.
+func _make_urgent(drive: String) -> void:
+	marker.economy = NpcEconomy.new(1, marker.identity.occupation, null)
+	marker.economy.needs.set_level(drive, 1.0)
+
+
+func _quiet_every_need() -> void:
+	marker.economy = NpcEconomy.new(1, marker.identity.occupation, null)
+	for drive in marker.economy.needs.gains():
+		marker.economy.needs.set_level(drive, 0.0)
+
+
+func test_a_thirsty_villager_walks_to_the_well_not_their_workspot():
+	_quiet_every_need()
+	_make_urgent("thirst")
+	var before := marker.position
+	marker._process(0.5)
+	assert_lt(
+		marker.position.distance_to(marker.landmarks["well"]),
+		before.distance_to(marker.landmarks["well"]),
+		"a thirsty villager heads for the well"
+	)
+
+
+func test_a_tired_villager_goes_home():
+	_quiet_every_need()
+	marker.position = Vector2(900, 900)
+	_make_urgent("rest")
+	var before := marker.position
+	marker._process(0.5)
+	assert_lt(
+		marker.position.distance_to(marker.home_position),
+		before.distance_to(marker.home_position),
+		"a tired villager heads home"
+	)
+
+
+## Drinking really answers the need, or a villager stands at the well
+## forever: the well is reached, the drive falls, and the schedule gets its
+## villager back.
+func test_reaching_the_well_really_slakes_the_thirst():
+	_quiet_every_need()
+	_make_urgent("thirst")
+	marker.position = marker.landmarks["well"]
+	assert_gt(marker.economy.needs.gains()["thirst"], 0.0, "precondition: really thirsty")
+	marker._process(0.5)
+	assert_eq(marker.economy.needs.gains()["thirst"], 0.0, "a villager who reached the well drank")
+
+
+func test_sleeping_at_home_really_answers_the_tiredness():
+	_quiet_every_need()
+	_make_urgent("rest")
+	marker.position = marker.home_position
+	marker._process(0.5)
+	assert_eq(marker.economy.needs.gains()["rest"], 0.0, "a villager who got home rested")
+
+
+## Pillar 2: with nothing pressing, the schedule still owns the villager.
+func test_a_villager_with_no_urgent_need_still_keeps_their_schedule():
+	_quiet_every_need()
+	marker.schedule = [
+		{"time_block": "morning", "location_tag": "gate", "activity": "work"},
+		{"time_block": "midday", "location_tag": "gate", "activity": "work"},
+		{"time_block": "evening", "location_tag": "gate", "activity": "work"},
+		{"time_block": "night", "location_tag": "gate", "activity": "work"},
+	]
+	var before := marker.position
+	marker._process(0.5)
+	assert_lt(
+		marker.position.distance_to(marker.landmarks["gate"]),
+		before.distance_to(marker.landmarks["gate"]),
+		"nothing pressing, so the schedule stands"
+	)

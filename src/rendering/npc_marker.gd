@@ -21,6 +21,8 @@ const FarmerBehavior = preload("res://src/gameplay/farmer_behavior.gd")
 const HuntableQuarry = preload("res://src/gameplay/huntable_quarry.gd")
 const Carcass = preload("res://src/rendering/carcass.gd")
 const NpcCondition = preload("res://src/world/npc_condition.gd")
+const VillagerBehavior = preload("res://src/gameplay/villager_behavior.gd")
+const Ethogram = preload("res://src/gameplay/ethogram.gd")
 
 ## Walking pace -- similar order to CreatureWander.WANDER_SPEED, unhurried.
 const WALK_SPEED := 20.0
@@ -360,6 +362,21 @@ func _process(delta: float) -> void:
 	var field_target = _step_farm(delta, is_working)
 	if field_target != null:
 		target = field_target
+	# And a villager with a real NEED of their own answers it, wherever
+	# today's schedule says to be (docs/concept/npc_social_life.md). The same
+	# override shape, for the same reason, as the two above -- the schedule
+	# says where a villager would BE, drives say what they DO. Null for a
+	# villager with nothing pressing, and then the schedule simply stands.
+	#
+	# Deliberately LAST of the three: real work against the real world
+	# outranks a need, so a hunter mid-chase finishes the chase. Hunger is
+	# not here at all -- it keeps the dedicated interrupt above, which
+	# carries guards (a producer who feeds itself, a villager with their own
+	# field) that a whole famine chain was measured into and that this
+	# generic layer has no way to express.
+	var need_target = _step_needs(delta, quarry_target == null and field_target == null)
+	if need_target != null:
+		target = need_target
 	# Only the chase is run, and only while there is still a gap to close:
 	# inside _reach() the hunt returns the villager's own position, so the
 	# spear is never wound up at a sprint. Everything else -- the walk to a
@@ -389,6 +406,60 @@ func _process(delta: float) -> void:
 	visible = not _at_home
 	if economy != null:
 		economy.step(delta, is_working, _world, position, _on_real_quarry or _on_real_field)
+
+
+## How near a villager has to get before a need counts as answered -- the
+## same "arrived" grain the home check below already uses.
+const NEED_REACH_PX := _ARRIVED_HOME_EPSILON_PX
+
+
+## One frame of catering to this villager's own needs. Returns where they
+## should walk because of a real need, or null when nothing is pressing and
+## the ordinary schedule should decide.
+##
+## The visible half of docs/concept/npc_social_life.md: thirst walks them to
+## the well and drinking really answers it, tiredness walks them home and
+## resting really answers it. A need that is answered the moment they arrive
+## is what stops a villager standing at the well forever.
+##
+## `free_to_answer` is false while a hunter is mid-chase or a farmer is in
+## their own field: real work against the real world outranks a need.
+func _step_needs(_delta: float, free_to_answer: bool):
+	if economy == null or not free_to_answer:
+		return null
+	var decision := _behavior.decide(_villager_context())
+	var at = decision["target"]
+	if at == null:
+		return null
+	if position.distance_to(at) <= NEED_REACH_PX:
+		_answer_need(String(decision["intent"]))
+		return null
+	return at
+
+
+## Reaching the place a need sent you to is what answers it.
+func _answer_need(intent: String) -> void:
+	if intent == VillagerBehavior.DRINK:
+		economy.needs.satisfy(Ethogram.DRIVE_THIRST)
+	elif intent == VillagerBehavior.REST:
+		economy.needs.satisfy(Ethogram.DRIVE_REST)
+
+
+## What this villager needs and what they can see that answers it.
+##
+## Hunger's own gain is deliberately withheld: it keeps the dedicated
+## interrupt in _process, whose guards a famine chain was measured into.
+## Publishing it here too would have both layers steering at once.
+func _villager_context() -> Dictionary:
+	var drives: Dictionary = economy.needs.gains().duplicate()
+	drives[Ethogram.DRIVE_HUNGER] = 0.0
+	var context := {"position": position, "drives": drives, "home": home_position}
+	if landmarks.has("well"):
+		context[Ethogram.WATER] = landmarks["well"]
+	return context
+
+
+var _behavior := VillagerBehavior.new()
 
 
 ## Whether this villager is inside their own house right now -- the exact

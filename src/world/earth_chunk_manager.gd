@@ -12876,7 +12876,14 @@ func merchant_market_near(pixel_position: Vector2, max_distance: float):
 ## (see NpcGreeting, the "Talk (key)" prompt). Same shape as has_merchant_near
 ## but returns the marker itself since the talk prompt/greeting need the
 ## NPC's identity, not just a yes/no.
-func nearest_npc_near(pixel_position: Vector2, max_distance: float) -> NpcMarker:
+## `excluding` drops one marker from the search. A villager looking for
+## COMPANY asks this same question from their OWN position (docs/concept/
+## npc_social_life.md) and would otherwise always find themselves standing
+## zero pixels away -- one lookup serves both the player's talk prompt and a
+## villager's own search rather than two walks of the same chunk lists.
+func nearest_npc_near(
+	pixel_position: Vector2, max_distance: float, excluding: NpcMarker = null
+) -> NpcMarker:
 	var nearest: NpcMarker = null
 	var nearest_distance := max_distance
 	# Only the chunks a max_distance square can touch (FPS regression round
@@ -12891,6 +12898,8 @@ func nearest_npc_near(pixel_position: Vector2, max_distance: float) -> NpcMarker
 			# their marker happens to rest on -- reported: "Talk" won over
 			# "Enter" at a doorstep and greeted the villager through the wall.
 			if node.is_at_home():
+				continue
+			if node == excluding:
 				continue
 			var distance: float = pixel_position.distance_to(node.position)
 			if distance <= nearest_distance:
