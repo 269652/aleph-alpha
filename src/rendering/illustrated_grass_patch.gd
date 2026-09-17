@@ -117,10 +117,20 @@ const WIND_UV_AMPLITUDE := 0.09
 ## player walked past slammed flat and sprang back up behind them. Reported:
 ## "reduce the intensity of the bend... it feels wobbly as you walk through."
 ##
-## 35 degrees is a lean nobody can miss and nothing a player can flatten.
-## Pinned by test_a_walkers_push_leans_a_blade_over_without_laying_it_flat,
-## which also holds it away from both ends: never flat, never subtle.
-const MAX_WALKER_LEAN_DEGREES := 35.0
+## Tuned to a real thing rather than a feeling, after 35 degrees read as
+## "now the grassblades don't part enough they should visible part about the
+## width of the char": a walker parts the grass by THEIR OWN WIDTH. The
+## character's body is 26px at CharacterView's own computed SCALE, 12.45
+## world units against a 16-unit card, and the lean whose tip travels that
+## far is asin(12.45 / 16) = 51.1 degrees. At 35 a tip moved 9.2 units --
+## three quarters of a character, which is what "not enough" was.
+##
+## Pinned from both sides: test_a_walker_parts_the_grass_by_about_their_own_
+## width computes the character's real width and asserts the tip reaches it
+## (so a change to the character's size fails here rather than drifting),
+## and test_a_walkers_push_leans_a_blade_over_without_laying_it_flat holds
+## it clear of both ends -- never flat, never subtle.
+const MAX_WALKER_LEAN_DEGREES := 51.1
 
 ## The displacement that reaches that lean -- sin of it, which is exactly
 ## what bent_vertex takes asin of to get the angle back. Derived rather than
