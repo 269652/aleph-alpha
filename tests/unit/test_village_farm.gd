@@ -43,14 +43,42 @@ func test_the_farmhouse_is_the_catalogs_own_production_building():
 
 # -- the field -------------------------------------------------------------
 
-func test_the_field_is_the_ring_of_tiles_around_the_farmhouse():
+## Asked for directly: "The space the farmhouse utilizes should be
+## maximized and capped to 10 tiles ... the fields be placed sideways and
+## downwards of it". So the field is a DIRECTED region, not a ring: a
+## village house fronts the street with its door south, and the ground
+## north of a farmhouse is the next row of buildings.
+func test_the_field_offers_more_ground_than_one_farmhouse_will_work():
+	var cells: Array = VillageFarm.field_cells(Vector2i(10, 10), VillageFarm.FARM_BUILDING_ID)
+	assert_gt(
+		cells.size(), VillageFarm.MAX_WORKED_CELLS,
+		"the caller filters for water and paving, so there must be more offered than kept"
+	)
+
+
+func test_the_field_is_capped_at_ten_tiles():
+	assert_eq(VillageFarm.MAX_WORKED_CELLS, 10, "asked for directly: capped to 10 tiles")
+
+
+func test_the_field_can_always_offer_a_full_cap_on_open_ground():
+	var cells: Array = VillageFarm.field_cells(Vector2i(20, 20), VillageFarm.FARM_BUILDING_ID)
+	assert_gte(
+		cells.size(), VillageFarm.MAX_WORKED_CELLS,
+		"a reach too short to offer the cap would cap the field below its own cap"
+	)
+
+
+func test_the_field_is_offered_nearest_the_farmhouse_first():
 	var origin := Vector2i(10, 10)
 	var footprint := BuildingCatalog.footprint_of(VillageFarm.FARM_BUILDING_ID)
 	var cells: Array = VillageFarm.field_cells(origin, VillageFarm.FARM_BUILDING_ID)
-	# Measured off the catalog, never written down: the rectangle one tile
-	# out on every side, minus the ground the building itself stands on.
-	var expected := (footprint.x + 2) * (footprint.y + 2) - footprint.x * footprint.y
-	assert_eq(cells.size(), expected, "the field ring is derived from the catalog footprint")
+	var previous := 0
+	for cell in cells:
+		var dx: int = maxi(maxi(origin.x - cell.x, cell.x - (origin.x + footprint.x - 1)), 0)
+		var dy: int = maxi(maxi(origin.y - cell.y, cell.y - (origin.y + footprint.y - 1)), 0)
+		var reach: int = maxi(dx, dy)
+		assert_gte(reach, previous, "%s is nearer than a cell already offered" % str(cell))
+		previous = reach
 
 
 func test_no_field_cell_stands_under_the_farmhouse():
@@ -62,13 +90,25 @@ func test_no_field_cell_stands_under_the_farmhouse():
 		assert_false(under.has(cell), "%s is under the farmhouse, not beside it" % str(cell))
 
 
-func test_every_field_cell_touches_the_farmhouse():
+func test_the_field_lies_to_the_sides_and_below_never_above():
 	var origin := Vector2i(0, 0)
 	var footprint := BuildingCatalog.footprint_of(VillageFarm.FARM_BUILDING_ID)
+	var below := 0
+	var beside := 0
 	for cell in VillageFarm.field_cells(origin, VillageFarm.FARM_BUILDING_ID):
-		var dx: int = maxi(origin.x - cell.x, cell.x - (origin.x + footprint.x - 1))
-		var dy: int = maxi(origin.y - cell.y, cell.y - (origin.y + footprint.y - 1))
-		assert_eq(maxi(maxi(dx, 0), maxi(dy, 0)), 1, "%s does not touch the farmhouse" % str(cell))
+		assert_gte(
+			cell.y, origin.y,
+			"%s is north of the farmhouse, where the next row of buildings goes" % str(cell)
+		)
+		var dx: int = maxi(maxi(origin.x - cell.x, cell.x - (origin.x + footprint.x - 1)), 0)
+		var dy: int = maxi(maxi(origin.y - cell.y, cell.y - (origin.y + footprint.y - 1)), 0)
+		assert_lte(maxi(dx, dy), VillageFarm.FIELD_REACH_TILES, "%s is out of reach" % str(cell))
+		if cell.y >= origin.y + footprint.y:
+			below += 1
+		if cell.x < origin.x or cell.x >= origin.x + footprint.x:
+			beside += 1
+	assert_gt(below, 0, "downwards")
+	assert_gt(beside, 0, "and sideways")
 
 
 func test_the_field_has_no_duplicate_cells():
@@ -93,6 +133,7 @@ func test_a_building_the_catalog_does_not_know_has_no_field():
 func test_a_lone_farmhouse_owns_every_cell_of_its_own_field():
 	var origin := Vector2i(10, 10)
 	for cell in VillageFarm.field_cells(origin, VillageFarm.FARM_BUILDING_ID):
+		# (no other farmhouse here, so every offered cell is really its own)
 		assert_eq(
 			VillageFarm.owner_of(cell, [origin], VillageFarm.FARM_BUILDING_ID), origin,
 			"%s lies beside the only farmhouse there is" % str(cell)
@@ -117,9 +158,15 @@ func test_two_farmhouses_never_share_a_tile():
 	var west := Vector2i(10, 10)
 	var east := Vector2i(10 + footprint.x + 1, 10)
 	var origins := [west, east]
+	var under: Dictionary = {}
+	for origin in origins:
+		for cell in BuildingCatalog.footprint_cells(VillageFarm.FARM_BUILDING_ID, origin):
+			under[cell] = true
 	var claimed: Dictionary = {}
 	for origin in origins:
 		for cell in VillageFarm.field_cells(origin, VillageFarm.FARM_BUILDING_ID):
+			if under.has(cell):
+				continue  # the other farmhouse stands here -- it is not field
 			var owner = VillageFarm.owner_of(cell, origins, VillageFarm.FARM_BUILDING_ID)
 			assert_not_null(owner, "%s lies beside a farmhouse and must belong to one" % str(cell))
 			if claimed.has(cell):
@@ -135,9 +182,9 @@ func test_two_farmhouses_never_share_a_tile():
 func test_the_nearer_farmhouse_takes_contested_ground():
 	var footprint := BuildingCatalog.footprint_of(VillageFarm.FARM_BUILDING_ID)
 	var near := Vector2i(10, 10)
-	var far := Vector2i(10, 10 + footprint.y + 2)
-	# A cell hugging `near`'s own north edge: adjacent to `near` only.
-	var cell := Vector2i(10, 9)
+	var far := Vector2i(10 + footprint.x + 6, 10)
+	# A cell hugging `near`'s own west side: in `near`'s field only.
+	var cell := Vector2i(9, 10)
 	assert_eq(VillageFarm.owner_of(cell, [near, far], VillageFarm.FARM_BUILDING_ID), near)
 	assert_eq(VillageFarm.owner_of(cell, [far, near], VillageFarm.FARM_BUILDING_ID), near,
 		"the answer cannot depend on what order the farmhouses were listed in")
@@ -203,18 +250,118 @@ func test_a_growing_plot_is_watered_once_it_has_used_up_its_margin():
 	assert_eq(VillageFarm.action_for(plot), "water", "a real farmer waters ahead of visible wilting")
 
 
-func test_harvest_beats_planting_beats_watering():
-	var plots: Array = [_growing_plot(9999.0), _plot_in_state("empty"), _plot_in_state("ready")]
+## Harvest, then SAVE what is already growing, then break new ground.
+##
+## The order used to be harvest > plant > water, and measuring a real work
+## block showed what that costs: a field of any size usually has an empty
+## or withered bed somewhere, so the farmer planted instead of watering,
+## every bed died on the vine, and the whole block went into replanting
+## ground that died again. A 3-tile field yielded ZERO wheat that way.
+##
+## A bed already sown is work already done. Watering it costs one trip;
+## losing it costs the whole cycle.
+func test_harvest_beats_saving_a_bed_which_beats_breaking_new_ground():
+	var plots: Array = [_plot_in_state("empty"), _growing_plot(9999.0), _plot_in_state("ready")]
 	assert_eq(VillageFarm.next_action(plots), 2, "getting real value off the field wins")
 	plots[2] = _growing_plot(0.0)
-	assert_eq(VillageFarm.next_action(plots), 1, "starting the next cycle beats routine tending")
+	assert_eq(VillageFarm.next_action(plots), 1, "a bed about to die beats an empty one")
 	plots[1] = _growing_plot(0.0)
-	assert_eq(VillageFarm.next_action(plots), 0, "and the thirstiest plot is what is left")
+	assert_eq(VillageFarm.next_action(plots), 0, "and with nothing dying, break new ground")
 
 
-func test_nothing_to_do_on_a_field_that_needs_nothing():
-	assert_eq(VillageFarm.next_action([_growing_plot(0.0), _growing_plot(0.0)]), -1)
+## A farmer standing in their own field always has something to do. With
+## nothing ripe, nothing dying and nothing bare, they tend the THIRSTIEST
+## bed -- which is what keeps a field alive at all.
+##
+## Measured, and this is why: with the farmer idling between thresholds, a
+## three-tile field over a real work block ran 108 replants, 72 waterings
+## and ZERO harvests. Beds died faster than the circuit came back round,
+## and once they were out of step the watering that comes with each visit
+## could not help either -- a withered bed cannot be watered.
+func test_a_farmer_with_nothing_urgent_tends_the_thirstiest_bed():
+	var fresh := _growing_plot(0.0)
+	var thirsty := _growing_plot(fresh.growth_time * FarmPlot.WATER_GRACE_FRACTION * 0.3)
+	assert_eq(VillageFarm.next_action([fresh, thirsty]), 1)
+	assert_eq(VillageFarm.next_action([thirsty, fresh]), 0)
+
+
+func test_an_empty_field_asks_for_nothing_at_all():
+	assert_eq(VillageFarm.next_action([]), -1)
+
+
+func test_a_field_of_nothing_but_ready_beds_still_harvests_first():
+	assert_eq(VillageFarm.next_action([_growing_plot(0.0), _plot_in_state("ready")]), 1)
 
 
 func test_an_empty_field_asks_for_nothing():
 	assert_eq(VillageFarm.next_action([]), -1)
+
+
+## MIN_FIELD_CELLS is not a fresh guess -- it is the already-measured plot
+## count one farmer can keep watered (see VillageFarm's own doc comment).
+## Pinned here rather than preloaded there so the pure rule set keeps no
+## rendering dependency (CLAUDE.md: tuned values are tested functions or
+## test-pinned constants).
+func test_the_smallest_worthwhile_field_is_what_one_farmer_can_already_tend():
+	var FarmerMarker = load("res://src/rendering/farmer_marker.gd")
+	assert_eq(VillageFarm.MIN_FIELD_CELLS, FarmerMarker.PLOT_COUNT)
+	assert_lte(
+		VillageFarm.MIN_FIELD_CELLS,
+		VillageFarm.field_cells(Vector2i.ZERO, VillageFarm.FARM_BUILDING_ID).size(),
+		"a field ring that could never meet its own minimum would refuse every site"
+	)
+
+
+## The two share one watering margin rather than two copies of it.
+func test_the_placeable_farms_worker_waters_on_the_same_margin():
+	var FarmerMarker = load("res://src/rendering/farmer_marker.gd")
+	assert_eq(FarmerMarker.WATER_BEFORE_WITHER_FRACTION, VillageFarm.WATER_BEFORE_WITHER_FRACTION)
+
+
+# -- only as much ground as one villager can keep ---------------------------
+
+func test_the_worked_field_is_capped_at_what_one_villager_can_keep():
+	var origin := Vector2i(10, 10)
+	var ring: Array = VillageFarm.field_cells(origin, VillageFarm.FARM_BUILDING_ID)
+	assert_gt(ring.size(), VillageFarm.MAX_WORKED_CELLS, "precondition: the ring is bigger than the cap")
+	var worked: Array = VillageFarm.nearest_cells(
+		ring, origin, VillageFarm.FARM_BUILDING_ID, VillageFarm.MAX_WORKED_CELLS
+	)
+	assert_eq(worked.size(), VillageFarm.MAX_WORKED_CELLS)
+	for cell in worked:
+		assert_true(ring.has(cell), "%s is not even part of this farmhouse's ring" % str(cell))
+
+
+func test_the_cells_kept_are_the_ones_nearest_the_farmhouse():
+	var origin := Vector2i(10, 10)
+	var footprint := BuildingCatalog.footprint_of(VillageFarm.FARM_BUILDING_ID)
+	var centre := Vector2(origin) + Vector2(footprint) * 0.5
+	var ring: Array = VillageFarm.field_cells(origin, VillageFarm.FARM_BUILDING_ID)
+	var worked: Array = VillageFarm.nearest_cells(
+		ring, origin, VillageFarm.FARM_BUILDING_ID, VillageFarm.MAX_WORKED_CELLS
+	)
+	var furthest_kept := 0.0
+	for cell in worked:
+		furthest_kept = maxf(furthest_kept, (Vector2(cell) + Vector2(0.5, 0.5)).distance_to(centre))
+	for cell in ring:
+		if worked.has(cell):
+			continue
+		assert_gte(
+			(Vector2(cell) + Vector2(0.5, 0.5)).distance_to(centre), furthest_kept - 0.0001,
+			"%s was dropped although it lies closer than a cell that was kept" % str(cell)
+		)
+
+
+func test_the_same_farmhouse_keeps_the_same_cells_every_time():
+	var origin := Vector2i(7, 4)
+	var ring: Array = VillageFarm.field_cells(origin, VillageFarm.FARM_BUILDING_ID)
+	assert_eq(
+		VillageFarm.nearest_cells(ring, origin, VillageFarm.FARM_BUILDING_ID, 4),
+		VillageFarm.nearest_cells(ring, origin, VillageFarm.FARM_BUILDING_ID, 4)
+	)
+
+
+func test_asking_for_no_cells_or_an_unknown_building_gives_none():
+	var ring: Array = VillageFarm.field_cells(Vector2i.ZERO, VillageFarm.FARM_BUILDING_ID)
+	assert_eq(VillageFarm.nearest_cells(ring, Vector2i.ZERO, VillageFarm.FARM_BUILDING_ID, 0), [])
+	assert_eq(VillageFarm.nearest_cells(ring, Vector2i.ZERO, "not_a_building", 4), [])

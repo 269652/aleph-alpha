@@ -8120,6 +8120,17 @@ func harvest_farm_plot_at_global(global_x: int, global_y: int) -> Dictionary:
 	return marker.harvest()
 
 
+## The real FarmPlot at a global tile, or null where nobody has ever
+## tilled -- which VillageFarm.action_for reads as "plant this first"
+## rather than as an error. The plot ITSELF, not a copy: a village farmer
+## decides what their field needs by looking at it (docs/concept/
+## village_farms.md, NpcMarker._field_states), and a snapshot would go
+## stale between one frame and the next as the crop grows.
+func farm_plot_at_global(global_x: int, global_y: int):
+	var marker: FarmPlotMarker = _farm_plots.get(Vector2i(global_x, global_y))
+	return marker.plot if marker != null else null
+
+
 ## The world-clock tick hook for the farming loop (see
 ## World._step_ecology_batch, docs/concept/farming.md) -- advances every
 ## farm plot's own growth simulation by `delta_seconds`. Mirrors
@@ -13456,7 +13467,6 @@ func _spawn_building_node(chunk_coord: Vector2i, origin_local: Vector2i, record:
 	# before. A missing file falls through to the placeholder either way,
 	# so a variant sheet that has not been dropped in yet changes nothing.
 	var seed_value := int(record["seed"])
-	var sheet: Dictionary = BuildingCatalog.finished_sheet_for(building_id, seed_value)
 	# ART_TILE_SIZE, not TILE_SIZE, and scaled back by SPRITE_SCALE (see
 	# docs/concept/art_resolution.md): the WORLD footprint is identical
 	# either way, but the art carries DETAIL_MULTIPLIER pixels per world
@@ -13464,19 +13474,14 @@ func _spawn_building_node(chunk_coord: Vector2i, origin_local: Vector2i, record:
 	# already paints at. Drawn at TILE_SIZE, a building carried HALF the
 	# resolution of its own terrain, which is exactly what a finely drawn
 	# variant sheet would be thrown away at.
-	var texture := _illustrated_structure_sprite.footprint_frame_texture(
-		sheet["path"], sheet["columns"], sheet["rows"], sheet["row"], sheet["column"],
-		TerrainRenderer.ART_TILE_SIZE, footprint.x, sheet["detected_grid"]
+	# Best art first, falling back down the chain: a house's own lifecycle
+	# variation (which is the same house it rose as), then the flat
+	# 25-cottage variant sheet, then the old 8x5 sheet's idle row. Art that
+	# has been declared but not dropped in yet simply does not stop the
+	# chain, so nothing ever regresses to a box for want of one file.
+	var texture := _first_texture_of(
+		BuildingCatalog.finished_sheet_chain(building_id, seed_value), footprint.x
 	)
-	if texture == null and sheet["path"] != BuildingCatalog.sheet_of(building_id):
-		# A declared variant sheet that is not on disk yet: fall back to the
-		# lifecycle sheet before the procedural placeholder, so a building
-		# whose lifecycle art DOES exist keeps it rather than regressing to
-		# a box the moment a variant sheet is declared for it.
-		texture = _illustrated_structure_sprite.footprint_frame_texture(
-			BuildingCatalog.sheet_of(building_id), BuildingCatalog.SHEET_COLUMNS, BuildingCatalog.SHEET_ROWS,
-			BuildingCatalog.ROW_IDLE, 0, TerrainRenderer.ART_TILE_SIZE, footprint.x
-		)
 	if texture == null:
 		texture = _building_placeholder_sprite.footprint_texture(
 			footprint, seed_value, TerrainRenderer.ART_TILE_SIZE
@@ -15912,7 +15917,13 @@ func _sync_construction_site(chunk_coord: Vector2i, project) -> void:
 	var building_id: String = project.blueprint_id
 	var required := ConstructionLabor.labor_hours_required(building_id, _recipe_book)
 	var progress := 0.0 if required <= 0.0 else clampf(project.labor_hours_accumulated / required, 0.0, 1.0)
-	var stage := BuildingCatalog.construction_stage_for(progress)
+	# A house rises through its OWN variation's 24 real build frames --
+	# foundation, frames, construction -- so the site is visibly the house
+	# it is going to be. Everything else keeps the 8x5 sheet's single
+	# construction row. See BuildingCatalog.construction_sheet_chain.
+	var seed_value := _house_site_seed(chunk_coord, chunk_coord * CHUNK_SIZE + project.origin, building_id)
+	var chain: Array = BuildingCatalog.construction_sheet_chain(building_id, seed_value, progress)
+	var cell := Vector2i(int(chain[0]["column"]), int(chain[0]["row"]))
 	var footprint := BuildingCatalog.footprint_of(building_id)
 
 	var node: Node2D = _construction_site_node_at(chunk_coord, project.origin)
@@ -15929,19 +15940,16 @@ func _sync_construction_site(chunk_coord: Vector2i, project) -> void:
 		if not _construction_site_nodes.has(chunk_coord):
 			_construction_site_nodes[chunk_coord] = {}
 		_construction_site_nodes[chunk_coord][project.origin] = node
-		node.set_meta("stage", -1)
+		node.set_meta("stage", Vector2i(-1, -1))
 
-	if int(node.get_meta("stage")) == stage:
+	if node.get_meta("stage") == cell:
 		return
-	node.set_meta("stage", stage)
+	node.set_meta("stage", cell)
 	var sprite: Sprite2D = node.get_node("Stage")
 	# The same art resolution the FINISHED building uses (see
 	# _spawn_building_node): a site drawn at a different pixels-per-world-
 	# unit would visibly jump the moment it completed.
-	var texture := _illustrated_structure_sprite.footprint_frame_texture(
-		BuildingCatalog.sheet_of(building_id), BuildingCatalog.SHEET_COLUMNS, BuildingCatalog.SHEET_ROWS,
-		BuildingCatalog.ROW_CONSTRUCTION, stage, TerrainRenderer.ART_TILE_SIZE, footprint.x
-	)
+	var texture := _first_texture_of(chain, footprint.x)
 	if texture == null:
 		# No sheet yet: the finished placeholder, faded -- a ghost of what
 		# is coming, growing solid with the work.
@@ -15950,6 +15958,27 @@ func _sync_construction_site(chunk_coord: Vector2i, project) -> void:
 	sprite.texture = texture
 	sprite.scale = Vector2.ONE * ArtResolution.SPRITE_SCALE
 	sprite.position = Vector2(0, -float(texture.get_height()) * 0.5 * ArtResolution.SPRITE_SCALE)
+
+
+## The first sheet of `chain` (BuildingCatalog.finished_sheet_chain /
+## construction_sheet_chain) whose file is really on disk, as a texture
+## scaled to a `footprint_width_tiles`-wide footprint -- null when none of
+## them is, which is the caller's cue to draw the procedural placeholder.
+##
+## ART_TILE_SIZE, not TILE_SIZE, and scaled back by SPRITE_SCALE (see
+## docs/concept/art_resolution.md): the WORLD footprint is identical either
+## way, but the art then carries DETAIL_MULTIPLIER pixels per world unit --
+## the same detail per world unit the ground it stands on already paints
+## at. A finely drawn sheet at TILE_SIZE would be thrown away.
+func _first_texture_of(chain: Array, footprint_width_tiles: int) -> ImageTexture:
+	for entry in chain:
+		var texture := _illustrated_structure_sprite.footprint_frame_texture(
+			entry["path"], entry["columns"], entry["rows"], entry["row"], entry["column"],
+			TerrainRenderer.ART_TILE_SIZE, footprint_width_tiles, entry["grid"]
+		)
+		if texture != null:
+			return texture
+	return null
 
 
 func _construction_site_node_at(chunk_coord: Vector2i, origin_local: Vector2i) -> Node2D:

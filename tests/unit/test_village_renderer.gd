@@ -14,6 +14,8 @@ const BuildingCatalog = preload("res://src/gameplay/building_catalog.gd")
 const NpcIdentity = preload("res://src/world/npc_identity.gd")
 const TerrainRenderer = preload("res://src/rendering/terrain_renderer.gd")
 const VillageLayout = preload("res://src/world/village_layout.gd")
+const VillageFarm = preload("res://src/gameplay/village_farm.gd")
+const ProceduralLandmarkSprite = preload("res://src/rendering/procedural_landmark_sprite.gd")
 
 const TILE_SIZE := 16
 const CHUNK_SIZE := 32
@@ -208,6 +210,22 @@ func _find_settlement_chunk(biome: String) -> Vector2i:
 		if _generator.has_settlement_at(coord, biome):
 			return coord
 	fail_test("no settlement chunk found within 400 chunks")
+	return Vector2i.ZERO
+
+
+## A chunk whose fixed 5-villager roster happens to include at least one
+## hunter -- the occupation whose workspot prop used to be drawn as a
+## second well (see test_no_prop_but_the_villages_own_well_is_drawn_as_one).
+func _find_settlement_chunk_with_hunter(biome: String) -> Vector2i:
+	for x in 400:
+		var coord := Vector2i(x, 3)  # a row of its own, like the merchant helper below
+		if not _generator.has_settlement_at(coord, biome):
+			continue
+		var settlement := _generator.generate_settlement(coord, coord * CHUNK_SIZE, CHUNK_SIZE, TILE_SIZE)
+		for npc in settlement.npcs:
+			if npc.occupation == "hunter":
+				return coord
+	fail_test("no settlement chunk with a hunter found within 400 chunks")
 	return Vector2i.ZERO
 
 
@@ -569,6 +587,41 @@ func test_farmer_blacksmith_fisher_and_herbalist_each_get_their_own_workspot_pro
 		if prop_ids.has(node.get_meta("landmark_id", "")):
 			found += 1
 	assert_eq(found, expected)
+
+
+## Reported live: "there are 3 wells and one stand all over the place."
+##
+## A village has exactly ONE well, on its own square (docs/concept/
+## village_growth.md's street-village grounding). The extra ones were
+## HUNTERS. Measured on the real load path rather than deduced
+## (tools/probe_village_props.gd, over real settlements near lat 48.6):
+## every hunter in the roster stood a prop out behind the houses whose id
+## was "hunting_ground" -- correct, and invisible to every existing prop
+## test, because all of them check the id. What a player SEES is the
+## texture, and "hunting_ground" had no drawing of its own, so it fell
+## through ProceduralLandmarkSprite's unknown-id fallback to the WELL's.
+## A village rolling two hunters therefore showed three wells.
+##
+## So this test asserts on what is drawn, not on what it is called: nothing
+## in a village but the village's own well may be drawn as a well.
+func test_no_prop_but_the_villages_own_well_is_drawn_as_one():
+	var coord := _find_settlement_chunk_with_hunter("grassland")
+	var world := StubWorld.new()
+	var spawned := renderer.spawn_village(parent, coord, coord * CHUNK_SIZE, CHUNK_SIZE, TILE_SIZE, "grassland", world)
+
+	var well_drawing := ProceduralLandmarkSprite.new().generate_image("well").get_data()
+	var hunter_props := 0
+	for node in spawned:
+		var landmark_id: String = node.get_meta("landmark_id", "")
+		if landmark_id == "" or landmark_id == "well":
+			continue
+		if landmark_id == "hunting_ground":
+			hunter_props += 1
+		assert_ne(
+			node.texture.get_image().get_data(), well_drawing,
+			"a %s prop is drawn as the village's well" % landmark_id
+		)
+	assert_gt(hunter_props, 0, "precondition: this village really does have a hunter's own prop standing in it")
 
 
 func test_workspot_props_land_at_the_villagers_own_workspot_position():
@@ -1510,3 +1563,201 @@ func test_a_saved_village_with_no_dwelling_on_ground_that_takes_none_spawns_no_v
 		if node is NpcMarker:
 			npc_count += 1
 	assert_eq(npc_count, 0, "five villagers with no home between them is not a village")
+
+
+# -- farmhouses: one per farming villager ----------------------------------
+#
+# Reported in play: "The village needs a farmer which grows wheat like in
+# Anno... similar to a farmer the herbalist should build a farm house and
+# plant herbs ... the farm houses are separate buildings". See
+# docs/concept/village_farms.md.
+
+
+## A settlement chunk whose fixed roster happens to include `occupation` --
+## seeded per villager, so not every settlement chunk has one.
+func _find_settlement_chunk_with_occupation(biome: String, occupation: String, row: int) -> Vector2i:
+	for x in 400:
+		var coord := Vector2i(x, row)
+		if not _generator.has_settlement_at(coord, biome):
+			continue
+		var settlement := _generator.generate_settlement(coord, coord * CHUNK_SIZE, CHUNK_SIZE, TILE_SIZE)
+		for npc in settlement.npcs:
+			if npc.occupation == occupation:
+				return coord
+	fail_test("no settlement chunk with a %s found within 400 chunks" % occupation)
+	return Vector2i.ZERO
+
+
+func _buildings_of(world: StubWorld, building_id: String) -> Array:
+	var out: Array = []
+	for call in world.place_calls:
+		if call["building_id"] == building_id:
+			out.append(call)
+	return out
+
+
+func _farming_villager_count(coord: Vector2i) -> int:
+	var settlement := _generator.generate_settlement(coord, coord * CHUNK_SIZE, CHUNK_SIZE, TILE_SIZE)
+	var count := 0
+	for npc in settlement.npcs:
+		if VillageFarm.crop_for(npc.occupation) != "":
+			count += 1
+	return count
+
+
+func test_a_village_raises_one_farmhouse_for_every_villager_who_farms():
+	var coord := _find_settlement_chunk_with_occupation("grassland", "farmer", 3)
+	var world := StubWorld.new()
+	renderer.spawn_village(parent, coord, coord * CHUNK_SIZE, CHUNK_SIZE, TILE_SIZE, "grassland", world)
+	var expected := _farming_villager_count(coord)
+	assert_gt(expected, 0, "precondition: somebody in this village farms")
+	assert_eq(
+		_buildings_of(world, VillageFarm.FARM_BUILDING_ID).size(), expected,
+		"a farmer and a herbalist each want their own farmhouse -- that is what makes two fields"
+	)
+
+
+func test_a_village_with_nobody_who_farms_raises_no_farmhouse():
+	var coord := Vector2i.ZERO
+	var found := false
+	for x in 400:
+		var candidate := Vector2i(x, 4)
+		if not _generator.has_settlement_at(candidate, "grassland"):
+			continue
+		if _farming_villager_count(candidate) == 0:
+			coord = candidate
+			found = true
+			break
+	assert_true(found, "precondition: a settlement chunk whose whole roster happens not to farm")
+	if not found:
+		return
+	var world := StubWorld.new()
+	renderer.spawn_village(parent, coord, coord * CHUNK_SIZE, CHUNK_SIZE, TILE_SIZE, "grassland", world)
+	assert_eq(
+		_buildings_of(world, VillageFarm.FARM_BUILDING_ID).size(), 0,
+		"a farmhouse nobody would ever work is a building the village should not own"
+	)
+
+
+func test_a_reload_never_raises_a_second_farmhouse():
+	var coord := _find_settlement_chunk_with_occupation("grassland", "farmer", 3)
+	var world := StubWorld.new()
+	renderer.spawn_village(parent, coord, coord * CHUNK_SIZE, CHUNK_SIZE, TILE_SIZE, "grassland", world)
+	var after_first := _buildings_of(world, VillageFarm.FARM_BUILDING_ID).size()
+	renderer.spawn_village(parent, coord, coord * CHUNK_SIZE, CHUNK_SIZE, TILE_SIZE, "grassland", world)
+	assert_eq(_buildings_of(world, VillageFarm.FARM_BUILDING_ID).size(), after_first)
+
+
+func test_every_farmhouse_stands_where_its_own_field_really_fits():
+	var coord := _find_settlement_chunk_with_occupation("grassland", "farmer", 3)
+	var world := StubWorld.new()
+	renderer.spawn_village(parent, coord, coord * CHUNK_SIZE, CHUNK_SIZE, TILE_SIZE, "grassland", world)
+	var farmhouses := _buildings_of(world, VillageFarm.FARM_BUILDING_ID)
+	assert_gt(farmhouses.size(), 0, "precondition: a farmhouse was raised")
+	for call in farmhouses:
+		var workable := 0
+		for cell in VillageFarm.field_cells(call["origin_local"], VillageFarm.FARM_BUILDING_ID):
+			var g: Vector2i = coord * CHUNK_SIZE + cell
+			if not world.is_water_at_global(g.x, g.y) and world.modification_at_global(g.x, g.y) == "":
+				workable += 1
+		assert_gte(
+			workable, VillageFarm.MIN_FIELD_CELLS,
+			"a farmhouse with nowhere to farm is a farmhouse that should not have been raised"
+		)
+
+
+func test_two_farmhouses_never_stand_on_each_others_ground():
+	var coord := _find_settlement_chunk_with_occupation("grassland", "farmer", 3)
+	var world := StubWorld.new()
+	renderer.spawn_village(parent, coord, coord * CHUNK_SIZE, CHUNK_SIZE, TILE_SIZE, "grassland", world)
+	var origins: Array = []
+	for call in _buildings_of(world, VillageFarm.FARM_BUILDING_ID):
+		origins.append(call["origin_local"])
+	var seen: Dictionary = {}
+	for origin in origins:
+		for cell in BuildingCatalog.footprint_cells(VillageFarm.FARM_BUILDING_ID, origin):
+			assert_false(seen.has(cell), "two farmhouses overlap at %s" % str(cell))
+			seen[cell] = true
+
+
+
+# -- and every farming villager is handed their OWN farmhouse's field -------
+
+func _farming_markers(spawned: Array, coord: Vector2i) -> Array:
+	var out: Array = []
+	for node in spawned:
+		if node is NpcMarker and VillageFarm.crop_for(node.identity.occupation) != "":
+			out.append(node)
+	return out
+
+
+func test_a_farming_villager_is_handed_a_real_field():
+	var coord := _find_settlement_chunk_with_occupation("grassland", "farmer", 3)
+	var world := StubWorld.new()
+	var spawned := renderer.spawn_village(
+		parent, coord, coord * CHUNK_SIZE, CHUNK_SIZE, TILE_SIZE, "grassland", world
+	)
+	var farmers := _farming_markers(spawned, coord)
+	assert_gt(farmers.size(), 0, "precondition: somebody in this village farms")
+	for npc in farmers:
+		assert_gt(
+			(npc.field_cells as Array).size(), 0,
+			"a %s with a farmhouse and no field would still be farming a number" % npc.identity.occupation
+		)
+
+
+func test_a_villager_who_does_not_farm_is_handed_nothing():
+	var coord := _find_settlement_chunk_with_occupation("grassland", "farmer", 3)
+	var world := StubWorld.new()
+	var spawned := renderer.spawn_village(
+		parent, coord, coord * CHUNK_SIZE, CHUNK_SIZE, TILE_SIZE, "grassland", world
+	)
+	for node in spawned:
+		if node is NpcMarker and VillageFarm.crop_for(node.identity.occupation) == "":
+			assert_eq((node.field_cells as Array).size(), 0, "%s does not farm" % node.identity.occupation)
+
+
+func test_every_field_tile_a_villager_is_given_really_belongs_to_a_farmhouse():
+	var coord := _find_settlement_chunk_with_occupation("grassland", "farmer", 3)
+	var world := StubWorld.new()
+	var spawned := renderer.spawn_village(
+		parent, coord, coord * CHUNK_SIZE, CHUNK_SIZE, TILE_SIZE, "grassland", world
+	)
+	var origins: Array = []
+	for call in _buildings_of(world, VillageFarm.FARM_BUILDING_ID):
+		origins.append(call["origin_local"])
+	for npc in _farming_markers(spawned, coord):
+		for global_cell in npc.field_cells:
+			var local: Vector2i = global_cell - coord * CHUNK_SIZE
+			assert_not_null(
+				VillageFarm.owner_of(local, origins, VillageFarm.FARM_BUILDING_ID),
+				"%s lies beside no farmhouse at all" % str(local)
+			)
+
+
+func test_no_two_villagers_are_handed_the_same_tile():
+	var coord := _find_settlement_chunk_with_occupation("grassland", "herbalist", 5)
+	var world := StubWorld.new()
+	var spawned := renderer.spawn_village(
+		parent, coord, coord * CHUNK_SIZE, CHUNK_SIZE, TILE_SIZE, "grassland", world
+	)
+	var claimed: Dictionary = {}
+	for npc in _farming_markers(spawned, coord):
+		for cell in npc.field_cells:
+			assert_false(claimed.has(cell), "%s was handed to two villagers" % str(cell))
+			claimed[cell] = true
+
+
+func test_no_field_tile_is_water_or_already_built_on():
+	var coord := _find_settlement_chunk_with_occupation("grassland", "farmer", 3)
+	var world := StubWorld.new()
+	var spawned := renderer.spawn_village(
+		parent, coord, coord * CHUNK_SIZE, CHUNK_SIZE, TILE_SIZE, "grassland", world
+	)
+	for npc in _farming_markers(spawned, coord):
+		for cell in npc.field_cells:
+			assert_false(world.is_water_at_global(cell.x, cell.y), "%s is water" % str(cell))
+			assert_eq(
+				world.modification_at_global(cell.x, cell.y), "",
+				"%s already has something standing on it" % str(cell)
+			)

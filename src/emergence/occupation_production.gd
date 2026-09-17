@@ -84,8 +84,11 @@ extends RefCounted
 ##   choice. The obvious recipe for a village-care role is CookingRecipeBook's
 ##   health_regen dish, and it is unreachable twice over: that book is keyed
 ##   by sorted INGREDIENT sets and yields dish_ids, not CraftingRecipeBook
-##   recipe ids Market.produce can run at all, and ItemCatalog has no "herb"
-##   item to cook with in the first place. What is left with real care
+##   recipe ids Market.produce can run at all. (The second half of that
+##   reason expired on 2026-09-17: ItemCatalog gained a real "herb" item,
+##   grown by a village herbalist on their own farmhouse's field -- see
+##   docs/concept/village_farms.md. The FIRST half still holds, so the
+##   choice below is unchanged.) What is left with real care
 ##   mechanics under it is the hearth: cold is a genuinely modelled harm
 ##   (SurvivalMeters.is_cold drains fitness) and the campfire is the heat
 ##   source both Player._has_heat_source and CampfireCooking recognise --

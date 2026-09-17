@@ -520,6 +520,59 @@ static func industry_plot(
 	var plaza: Rect2i = bones["plaza"]
 	var plaza_centre: Vector2i = plaza.position + plaza.size / 2
 
+	var qualifies := func(origin: Vector2i) -> bool:
+		return _industry_site_qualifies(
+			building_id, origin, chunk_size, is_buildable, is_forest, is_occupied
+		)
+	return _sited_plot(building_id, chunk_size, bones, is_buildable, is_occupied, qualifies)
+
+
+## A plot on the village's OUTSKIRTS: anywhere clear in the chunk, clear of
+## the square, with a real road spur back to the street -- the same siting
+## the sawmill already gets, offered to any caller with its own condition
+## about what makes a site good.
+##
+## Reported in play as "no farmers", and measured: on a village wedged
+## against a river (chunk (661,139) near lat 49.8 lon 10.6) next_street_plot
+## returns nothing at all for a 3x2 farmhouse, while SIXTY origins elsewhere
+## in the same chunk fit one, every one with a full field ring. A farmstead
+## does not need street frontage the way a house does -- it needs open
+## ground and a path home, which is exactly what this gives it.
+##
+## `accepts_origin` is the caller's own extra condition (a farmhouse asks
+## for room for its field); omitted, any clear site qualifies.
+static func outskirt_plot(
+	building_id: String, chunk_size: int, seed_value: int,
+	is_buildable: Callable, is_occupied: Callable,
+	accepts_origin := Callable(), is_dry := Callable()
+) -> Dictionary:
+	if BuildingCatalog.footprint_of(building_id) == Vector2i.ZERO:
+		return {}
+	var bones := skeleton(chunk_size, seed_value, is_dry if is_dry.is_valid() else is_buildable)
+	var qualifies := func(origin: Vector2i) -> bool:
+		for cell in (
+			BuildingCatalog.footprint_cells(building_id, origin)
+			+ [origin + BuildingCatalog.doorstep_of(building_id)]
+		):
+			if not _cell_clear(cell, chunk_size, is_buildable, is_occupied):
+				return false
+		return not accepts_origin.is_valid() or accepts_origin.call(origin)
+	return _sited_plot(building_id, chunk_size, bones, is_buildable, is_occupied, qualifies)
+
+
+## The scan both siting rules share: every origin inside the chunk's own
+## margin and clear of the square, that `qualifies` accepts and that can
+## really be reached by a road spur -- the NEAREST to the square winning
+## (ties by y then x, deterministic like everything else here). The works,
+## or the farmstead, goes as close to the village as its own condition
+## allows, which is exactly how a real one was sited.
+static func _sited_plot(
+	building_id: String, chunk_size: int, bones: Dictionary,
+	is_buildable: Callable, is_occupied: Callable, qualifies: Callable
+) -> Dictionary:
+	var footprint := BuildingCatalog.footprint_of(building_id)
+	var plaza: Rect2i = bones["plaza"]
+	var plaza_centre: Vector2i = plaza.position + plaza.size / 2
 	var best: Dictionary = {}
 	var best_key: Array = []
 	var limit := chunk_size - _INDUSTRY_EDGE_MARGIN_TILES
@@ -529,7 +582,7 @@ static func industry_plot(
 			var offset: Vector2i = origin - plaza_centre
 			if maxi(absi(offset.x), absi(offset.y)) < INDUSTRY_MIN_PLAZA_DISTANCE_TILES:
 				continue
-			if not _industry_site_qualifies(building_id, origin, chunk_size, is_buildable, is_forest, is_occupied):
+			if not qualifies.call(origin):
 				continue
 			var doorstep: Vector2i = origin + BuildingCatalog.doorstep_of(building_id)
 			var spur = _industry_spur(
@@ -650,7 +703,7 @@ static func _spur_cells(
 ## square.
 static func next_street_plot(
 	building_id: String, chunk_size: int, seed_value: int, is_buildable: Callable,
-	is_occupied: Callable, is_dry := Callable()
+	is_occupied: Callable, is_dry := Callable(), accepts_origin := Callable()
 ) -> Dictionary:
 	var footprint := BuildingCatalog.footprint_of(building_id)
 	if footprint == Vector2i.ZERO:
@@ -676,7 +729,17 @@ static func next_street_plot(
 			if x < plaza_east_resume and x + footprint.x > plaza_west_margin and _rect_overlaps_rows(plaza, origin, footprint):
 				x = plaza_east_resume
 				continue
-			if _street_plot_fits(building_id, origin, plaza, chunk_size, is_buildable, is_occupied):
+			if (
+				_street_plot_fits(building_id, origin, plaza, chunk_size, is_buildable, is_occupied)
+				# A caller may have a further condition of its own about the
+				# GROUND AROUND a plot rather than the plot itself -- a
+				# farmhouse needs room for its field (docs/concept/
+				# village_farms.md), and a farmhouse with nowhere to farm is
+				# a farmhouse that should not have been raised. A rejected
+				# origin simply keeps the walk going, so the village finds
+				# the next frontage that does work.
+				and (not accepts_origin.is_valid() or accepts_origin.call(origin))
+			):
 				return {
 					"origin": origin, "building_id": building_id, "facing": Vector2i(0, 1),
 					"doorstep": origin + BuildingCatalog.doorstep_of(building_id),

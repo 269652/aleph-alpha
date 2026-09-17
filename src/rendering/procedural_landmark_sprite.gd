@@ -13,7 +13,9 @@ extends RefCounted
 
 const PixelPalette = preload("res://src/rendering/pixel_palette.gd")
 
-const LANDMARK_IDS: Array[String] = ["well", "stall", "gate", "field", "forge", "dock", "garden"]
+const LANDMARK_IDS: Array[String] = [
+	"well", "stall", "gate", "field", "forge", "dock", "garden", "hunting_ground",
+]
 
 const SIZES := {
 	"well": Vector2i(40, 44),
@@ -23,6 +25,7 @@ const SIZES := {
 	"forge": Vector2i(44, 44),
 	"dock": Vector2i(48, 48),
 	"garden": Vector2i(44, 36),
+	"hunting_ground": Vector2i(44, 44),
 }
 
 const STONE_COLOR := Color(0.58, 0.58, 0.62)
@@ -35,6 +38,10 @@ const SOIL_COLOR := Color(0.32, 0.22, 0.13)
 const CROP_COLOR := Color(0.42, 0.68, 0.18)
 const EMBER_COLOR := Color(0.95, 0.42, 0.08)
 const HERB_COLOR := Color(0.55, 0.32, 0.62)
+## A hide stretched on a hunter's drying rack -- pale scraped leather, well
+## clear of the stall's own two awning colours and of anything on the well,
+## so a hunter's spot cannot be mistaken for either at a glance.
+const HIDE_COLOR := Color(0.72, 0.6, 0.44)
 
 var _palette := PixelPalette.new()
 
@@ -59,6 +66,8 @@ func generate_image(landmark_id: String) -> Image:
 			return _dock_image()
 		"garden":
 			return _garden_image()
+		"hunting_ground":
+			return _hunting_ground_image()
 		_:
 			return _well_image()
 
@@ -207,6 +216,68 @@ func _garden_image() -> Image:
 				image.set_pixel(gx + 1, gy, _palette.highlight(HERB_COLOR))
 			if gy - 1 >= margin:
 				image.set_pixel(gx, gy - 1, _palette.shade(HERB_COLOR))
+	_outline_against_transparent(image, size)
+	return image
+
+
+## A hunter's own workspot: a drying rack -- two posts, a crossbar, and a
+## hide stretched and laced across it, which is where a real kill actually
+## ends up. Deliberately a rack rather than a raised hide/Hochsitz: at this
+## size a tall ladder-and-platform silhouette reads as the village GATE's
+## own arch, and two props a villager walks between must not look alike.
+##
+## Reported live: "there are 3 wells and one stand all over the place."
+## This prop is why -- "hunting_ground" had no drawing of its own, so it
+## fell through generate_image's unknown-id fallback and every hunter in a
+## village stood what looked like another well out behind the houses (see
+## docs/concept/npc.md, and tools/probe_village_props.gd for the real
+## measurement).
+func _hunting_ground_image() -> Image:
+	var size: Vector2i = SIZES["hunting_ground"]
+	var image := Image.create(size.x, size.y, false, Image.FORMAT_RGBA8)
+	var post_top := 6
+	var ground := size.y - 4
+	var left_post := 5
+	var right_post := size.x - 7
+
+	# Two posts driven into the ground, with a crossbar spanning their tops.
+	for y in range(post_top, ground):
+		for x in [left_post, left_post + 1, right_post, right_post + 1]:
+			image.set_pixel(x, y, WOOD_COLOR if y % 3 != 0 else _palette.shade(WOOD_COLOR))
+	for x in range(left_post, right_post + 2):
+		image.set_pixel(x, post_top, _palette.highlight(WOOD_COLOR))
+		image.set_pixel(x, post_top + 1, WOOD_COLOR)
+
+	# The hide itself: hung from the crossbar, widest across its middle and
+	# tapering toward the legs, the way a stretched skin actually hangs.
+	var hide_top := post_top + 3
+	var hide_bottom := ground - 6
+	var span := float(hide_bottom - hide_top)
+	var centre := (left_post + right_post + 2) / 2.0
+	for y in range(hide_top, hide_bottom):
+		var along := float(y - hide_top) / span  # 0 at the crossbar, 1 at the hem
+		# Widest across the shoulders a third of the way down and tapering to
+		# a narrow tail -- the shape a skin actually takes on a rack. A
+		# symmetric oval instead read as a drum head in a real render.
+		var half: float = (size.x * 0.32) * clampf(1.0 - 2.7 * pow(along - 0.3, 2.0), 0.22, 1.0)
+		for x in range(int(centre - half), int(centre + half) + 1):
+			if x <= left_post + 1 or x >= right_post:
+				continue
+			var edge: bool = x < int(centre - half) + 2 or x > int(centre + half) - 2
+			image.set_pixel(x, y, _palette.shade(HIDE_COLOR) if edge else HIDE_COLOR)
+	# The forelegs, splayed out either side where the skin is pegged widest.
+	var leg_y := hide_top + int(span * 0.3)
+	for offset in range(0, 4):
+		var leg_half: float = size.x * 0.32 + float(offset)
+		for x in [int(centre - leg_half), int(centre + leg_half)]:
+			if x > left_post + 1 and x < right_post:
+				image.set_pixel(x, leg_y + offset / 2, _palette.shade(HIDE_COLOR))
+
+	# Lacing: the cords that hold it out to the frame, one every few rows.
+	for y in range(hide_top + 2, hide_bottom, 4):
+		image.set_pixel(left_post + 2, y, _palette.shade(WOOD_COLOR))
+		image.set_pixel(right_post - 1, y, _palette.shade(WOOD_COLOR))
+
 	_outline_against_transparent(image, size)
 	return image
 
