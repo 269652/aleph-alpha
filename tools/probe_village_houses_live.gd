@@ -89,8 +89,13 @@ func _sample() -> void:
 		for record in _manager.buildings_in_chunk(chunk_coord):
 			if record["id"] == "city_hall":
 				has_hall = true
+		# WITH the square's own dry predicate: since 2026-09-17 a village's
+		# square slides clear of water (VillageLayout.plaza_x0_for), so
+		# asking skeleton() without it measures the rectangle the square
+		# was DESIGNED at rather than the one it stands on -- which reads
+		# a village that really does have a square as having none.
 		var bones: Dictionary = _village_layout_script.skeleton(
-			CHUNK_SIZE, _village_layout_script.seed_for(chunk_coord)
+			CHUNK_SIZE, _village_layout_script.seed_for(chunk_coord), _dry_in(chunk_coord)
 		)
 		var plaza: Rect2i = bones["plaza"]
 		var paved := 0
@@ -111,6 +116,15 @@ func _sample() -> void:
 		}
 
 
+## The square's own siting predicate, the same one EarthChunkManager._is_
+## dry_local builds -- see VillageLayout.plaza_x0_for.
+func _dry_in(chunk_coord: Vector2i) -> Callable:
+	var manager = _manager
+	return func(cell: Vector2i) -> bool:
+		var g: Vector2i = chunk_coord * CHUNK_SIZE + cell
+		return not manager.is_water_at_global(g.x, g.y)
+
+
 ## How much of the strip a house would actually stand on -- the rows just
 ## north of the main street, along its whole length -- the REAL load path
 ## calls water. is_water_at_global is much stricter than a chunk's biome
@@ -118,7 +132,7 @@ func _sample() -> void:
 ## a river's half width plus RiverCatalog.RIVER_BANK_APRON_TILES.
 func _house_strip_water_fraction(chunk_coord: Vector2i) -> float:
 	var bones: Dictionary = _village_layout_script.skeleton(
-		CHUNK_SIZE, _village_layout_script.seed_for(chunk_coord)
+		CHUNK_SIZE, _village_layout_script.seed_for(chunk_coord), _dry_in(chunk_coord)
 	)
 	var street_y: int = bones["street_y"]
 	var total := 0
@@ -141,9 +155,7 @@ func _house_strip_water_fraction(chunk_coord: Vector2i) -> float:
 ## ground itself is what said no.
 func _plots_with_real_water(chunk_coord: Vector2i, villager_count: int) -> int:
 	var manager = _manager
-	var is_buildable := func(cell: Vector2i) -> bool:
-		var g: Vector2i = chunk_coord * CHUNK_SIZE + cell
-		return not manager.is_water_at_global(g.x, g.y)
+	var is_buildable := _dry_in(chunk_coord)
 	var never_occupied := func(_cell: Vector2i) -> bool: return false
 	var building_ids: Array = []
 	for i in villager_count:
