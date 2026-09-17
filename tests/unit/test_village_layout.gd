@@ -636,3 +636,36 @@ func test_a_village_big_enough_for_a_second_street_is_still_one_network():
 	assert_eq(reached.size(), roads.size(), "a second street must join the first, not float south of it")
 	for plot in result["plots"]:
 		assert_true(reached.has(plot["doorstep"]))
+
+
+## Reported in play, twice, with a screenshot: a riverside village standing
+## with three houses, no square and no hall, while five villagers lived
+## there. A column of water through the chunk's own middle is exactly that
+## shape -- it drowns the square (so `has_plaza` is false) AND splits the
+## spine, leaving a run long enough for three houses and no more.
+##
+## A village with no square used to stop there: further streets were tied
+## back to the spine ONLY by the two side streets beside the square, so
+## without one there was nothing to hang them on and the loop broke. That
+## is an honest rule about CONNECTIVITY, but the wrong conclusion -- the
+## village still has a gate, and a lane from the gate reaches a further
+## street just as well as a side street does.
+func test_a_village_with_no_square_still_houses_everyone_it_arrived_with():
+	var five := ["house_small", "house_small", "house_small", "house_small", "house_small"]
+	var result := layout.layout(
+		five, CHUNK_SIZE, 99, _buildable_except_column(CHUNK_SIZE / 2), _never_occupied
+	)
+	var plaza: Rect2i = result["plaza"]
+	assert_false(plaza.has_area(), "precondition: the water really does drown this village's square")
+	assert_eq(
+		result["plots"].size(), five.size(),
+		"a village with no square must still house everyone who arrived with it"
+	)
+	var roads: Array = result["road_cells"]
+	var reached := _reachable_road_cells(roads, result["plots"][0]["doorstep"])
+	for plot in result["plots"]:
+		assert_true(
+			reached.has(plot["doorstep"]),
+			"house at %s opens onto paving nobody can walk to" % str(plot["origin"])
+		)
+	assert_eq(reached.size(), roads.size(), "the paving must stay one network, not two islands")

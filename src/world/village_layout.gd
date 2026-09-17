@@ -201,6 +201,10 @@ func layout(
 	var index := 0
 	var current_street_y := street_y
 	var second_street_got_a_plot := false
+	# Cells of the gate lane reaching the street about to be laid, held
+	# back until that street is actually built on -- the same "only pave a
+	# tie-back that ties something back" rule side_street_cells follows.
+	var pending_lane_cells: Array = []
 	while index < building_ids.size() and current_street_y < chunk_size - _EDGE_MARGIN_TILES:
 		var progressed_this_street := false
 		var x := maxi(spine_x0 + _GATE_CLEARANCE_TILES, street_x0)
@@ -262,21 +266,43 @@ func layout(
 			# street that stops short of them is a row of houses nobody can
 			# walk to (reported in play: "Not all houses are connected by
 			# streets").
-			var from_x: int = mini(street_doorstep_xs[0], plaza.position.x)
-			var to_x: int = maxi(street_doorstep_xs[street_doorstep_xs.size() - 1], plaza.end.x - 1)
+			# Whatever ties this street back to the spine -- the two side
+			# streets beside the square, or the gate lane when there is no
+			# square -- has to be REACHED by this street's own paving, or
+			# the tie-back ends one cell short of the thing it ties.
+			var tie_x0: int = plaza.position.x if has_plaza else street_x0
+			var tie_x1: int = (plaza.end.x - 1) if has_plaza else street_x0
+			var from_x: int = mini(street_doorstep_xs[0], tie_x0)
+			var to_x: int = maxi(street_doorstep_xs[street_doorstep_xs.size() - 1], tie_x1)
 			for rx in range(from_x, to_x + 1):
 				var cell := Vector2i(rx, current_street_y)
 				if _cell_clear(cell, chunk_size, is_buildable, is_occupied) and not claimed.has(cell):
 					road_cells[cell] = true
+			for cell in pending_lane_cells:
+				road_cells[cell] = true
+			pending_lane_cells.clear()
 		if not progressed_this_street:
 			break  # this street placed nothing at all -- a further one south won't fare any better
+		var next_street_y := current_street_y + STREET_PITCH_TILES
 		if not has_plaza:
-			# A further street is reached only through the side streets
-			# beside the square. Without a square there is nothing to hang
-			# them on, so this village stays on its spine rather than
-			# growing a row of houses with no way back.
-			break
-		current_street_y += STREET_PITCH_TILES
+			# No square to hang side streets on -- but the village still
+			# has a gate, and a lane from it reaches a further street just
+			# as well. Reported in play, twice: a riverside village stuck
+			# at three houses with five villagers, because a drowned
+			# square used to end its growth outright rather than merely
+			# cost it a square. The lane is claimed BEFORE anything is
+			# placed on the street it reaches, so no plot can take it.
+			var lane := _gate_lane_cells(
+				street_x0, current_street_y, next_street_y, chunk_size, is_buildable, is_occupied
+			)
+			if lane.is_empty():
+				# Nothing clear to walk down: this village really does stay
+				# on its spine rather than grow a row nobody can reach.
+				break
+			for cell in lane:
+				claimed[cell] = true
+			pending_lane_cells.append_array(lane)
+		current_street_y = next_street_y
 
 	# Side streets only exist to reach a second street -- a village that fit
 	# on its main street keeps the ground south of the plaza open.
@@ -585,6 +611,26 @@ static func _street_plot_fits(
 	if doorstep.x < 0 or doorstep.y < 0 or doorstep.x >= chunk_size or doorstep.y >= chunk_size:
 		return false
 	return is_buildable.call(doorstep)
+
+
+## The lane a village with no square walks down to reach a further street:
+## one column at the spine run's own start, from just below `from_y` to
+## `to_y` inclusive. Empty when any cell of it is blocked -- a lane with a
+## hole in it is not a lane. Chosen at the run's start because that column
+## is the one place no plot can ever want: every street's own plots begin
+## at least _GATE_CLEARANCE_TILES east of the spine's start, and the lane
+## is claimed before the street it reaches is laid out regardless.
+static func _gate_lane_cells(
+	lane_x: int, from_y: int, to_y: int, chunk_size: int,
+	is_buildable: Callable, is_occupied: Callable
+) -> Array:
+	var cells: Array = []
+	for y in range(from_y + 1, to_y + 1):
+		var cell := Vector2i(lane_x, y)
+		if not _cell_clear(cell, chunk_size, is_buildable, is_occupied):
+			return []
+		cells.append(cell)
+	return cells
 
 
 ## Every unbroken run of buildable street on the spine row, as (x0, x1)
