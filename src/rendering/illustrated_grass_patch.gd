@@ -215,6 +215,41 @@ static func mesh_bend_offset(uv: Vector2, wind_phase: float, push: float, wind_s
 	return lerpf(lower, upper, along_v)
 
 
+## Where one of a card's own mesh vertices actually lands once the bend has
+## moved it -- the shader's vertex() stage mirrored in GDScript so the
+## geometry can be measured headlessly. `local_position` is the vertex in the
+## mesh's own local space (root at y=0, tip at y=-WORLD_SIZE, x across the
+## card) and `bend_offset` is that point's displacement in CARD WIDTHS.
+##
+## A vertex travels along an ARC about its own root, not along a line.
+## Reported live after the first geometry bend shipped: "the grassblades
+## elongate and stretch instead of only bending" -- and they did, because a
+## purely horizontal displacement is a shear, which leaves every row at the
+## height it started at. A tip pushed 26 world units sideways while staying
+## 16 up is a 31-unit blade where a 16-unit one is standing: the art
+## stretched along its own length, exactly as reported. Real grass does not
+## gain length when it goes over; its tip comes DOWN. So what is held fixed
+## here is the vertex's distance from its own root, and the height falls out
+## of that (`y = -sqrt(along^2 - sideways^2)`).
+##
+## HONEST about the model: holding the RADIAL distance fixed is the standard
+## cheap bend, not a true inextensible beam, which preserves ARC length and
+## would bring the tip down a little further still. The difference is small
+## at any bend this shader produces, and the property that actually matters
+## -- a blade never draws longer than it is -- is exact either way.
+##
+## Clamped at flat: a blade pushed harder than it is long lies on the ground,
+## because that is as far as a blade goes. Without it the arc would go
+## imaginary (a negative under the root) and the card would collapse to NaN.
+static func bent_vertex(local_position: Vector2, bend_offset: float) -> Vector2:
+	var along: float = -local_position.y  # this vertex's own distance from the root
+	var sideways: float = clampf(bend_offset * WORLD_SIZE, -along, along)
+	return Vector2(
+		local_position.x + sideways,
+		-sqrt(maxf(along * along - sideways * sideways, 0.0))
+	)
+
+
 ## What is left for the SAMPLING stage once the geometry has moved: the exact
 ## curve minus what the mesh actually carried (the shader's fragment() does
 ## precisely this subtraction, reading the geometry's own interpolated
@@ -364,8 +399,21 @@ void vertex() {
 	// bottom row of vertices stays put however hard the tip leans. Converted
 	// from card widths into the mesh's own local units (its instance
 	// transform is a pure translation, so local units ARE world units here).
+	// A vertex travels along an ARC about its own root, not along a line: a
+	// purely horizontal displacement is a shear, which leaves every row at
+	// the height it started at and so draws a leaning blade LONGER than the
+	// standing one (reported live: "the grassblades elongate and stretch
+	// instead of only bending"). Holding each vertex's own distance from the
+	// root fixed instead lays the tip over as it goes across, and the height
+	// falls out of it. Clamped at flat, which is as far as a blade goes --
+	// and which also keeps the root under the sqrt from going negative.
+	// Mirrored exactly by bent_vertex() in illustrated_grass_patch.gd, which
+	// is where this is measured, since a shader cannot be.
 	v_geometry_bend = bend_offset_at(UV, v_root);
-	VERTEX.x += v_geometry_bend * %s;
+	float along = -VERTEX.y;
+	float sideways = clamp(v_geometry_bend * %s, -along, along);
+	VERTEX.x += sideways;
+	VERTEX.y = -sqrt(max(along * along - sideways * sideways, 0.0));
 }
 
 void fragment() {
