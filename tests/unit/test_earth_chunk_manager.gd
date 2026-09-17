@@ -15158,3 +15158,26 @@ func test_a_building_reports_everything_it_is_holding():
 	var held := manager.building_inventory_at(_berlin_tile.x, _berlin_tile.y)
 	assert_eq(held.get("wheat", 0), 4)
 	assert_eq(held.get("wood", 0), 2)
+
+
+## The click-a-building readout carries what the building is holding, so the
+## popover's Inventory tab is drawn from the report like everything else it
+## shows (docs/concept/building_storage.md; HousePanel is a pure consumer).
+func test_the_building_readout_carries_what_the_building_holds():
+	_place_test_farmhouse()
+	manager.deposit_to_building_at(_berlin_tile.x, _berlin_tile.y, "wheat", 7)
+	var report := manager.household_report_at(_berlin_tile.x, _berlin_tile.y)
+	assert_eq(int(report["storage_capacity"]), BuildingCatalog.storage_capacity_of("farmhouse"))
+	assert_eq(int((report["stock"] as Dictionary).get("wheat", 0)), 7)
+
+
+## A building that keeps no goods says so, rather than being left out and
+## making the panel guess.
+func test_the_readout_of_a_building_that_keeps_nothing_says_so():
+	manager.update(_berlin_tile)
+	var chunk_coord := manager._chunk_coord_for_tile(_berlin_tile)
+	var origin_local := manager._local_coord(_berlin_tile.x, _berlin_tile.y)
+	assert_true(manager.place_building(chunk_coord, origin_local, "city_hall", Vector2i(0, 1), 1, ""))
+	var report := manager.household_report_at(_berlin_tile.x, _berlin_tile.y)
+	assert_eq(int(report["storage_capacity"]), 0)
+	assert_eq((report["stock"] as Dictionary).size(), 0)

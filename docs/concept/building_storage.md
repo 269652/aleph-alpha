@@ -139,7 +139,18 @@ each slice lands.
   across all item ids (a barn is full when it is full), a deposit returns how
   many it actually took, and a full building takes none. `test_building_
   catalog.gd` 55/55, `test_earth_chunk_manager.gd` building stock 17/17.
-- ⬜ **An Inventory tab on the building popover.**
+- ✅ **An Inventory tab on the building popover.** `household_report_at`
+  carries `stock` and `storage_capacity` on **every** report — home or
+  commons, because a barn and a workshop are exactly the buildings that hold
+  things and neither is a home — and `HousePanel` draws a real tab from it,
+  reaching for nothing of its own as its own contract requires. It lists each
+  kind of goods by the name the rest of the game uses, says how full the
+  building is ("Stored: 45 / 60", since a count means nothing without the
+  barn's size), and flags a full one. A building that keeps no goods has **no
+  tab at all** rather than an empty one — a town hall is not a barn with
+  nothing in it — while an empty barn still shows, because "nothing in it
+  right now" is worth reading. Opens on Household, so the readout's own
+  answer to "who lives here" stays first. `test_house_panel.gd` 23/23.
 - ⬜ **Production stockpiles into its own building** rather than teleporting
   into the settlement market.
 - ⬜ **Workers haul loads to the warehouse**, and that is what feeds the

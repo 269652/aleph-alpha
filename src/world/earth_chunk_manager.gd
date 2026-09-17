@@ -4097,6 +4097,12 @@ func household_report_at(global_x: int, global_y: int) -> Dictionary:
 		"needs": {},
 		"happiness": 0.0,
 		"productivity": 0.0,
+		# What this building is holding, for the readout's Inventory tab
+		# (docs/concept/building_storage.md). Carried on EVERY report, home
+		# or commons, because a barn and a workshop are exactly the
+		# buildings that hold things and neither is a home.
+		"storage_capacity": BuildingCatalog.storage_capacity_of(building_id),
+		"stock": building_inventory_at(global_x, global_y),
 	}
 	if capacity <= 0:
 		return report
