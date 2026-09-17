@@ -221,7 +221,19 @@ thing anybody ever did.
   step from the ids actually standing — so losing the warehouse loses the
   headroom. `capacity_for_structures` keeps that decision testable without
   building a world.
-- ✅ **Mechanism 3 — goods are carried in.** `Ethogram` gained the
+- 🚧 **Mechanism 3 — goods are carried in. Built, tested, and switched
+  OFF in a live village** (`NpcMarker.HAULING_CARRY_LIMIT` is 0.0).
+  Reported immediately after 0.0.2: *"no stock gets produced anywhere"*.
+  Turning carrying on puts the villager's hands in the middle of a chain
+  another pass had just built — `_step_farm` empties the farmhouse straight
+  into `record_real_harvest`, which with a carry limit goes to the hands
+  rather than the market — and a producer who GATHERS stops dead once their
+  hands are full, because `_gather` takes nothing more. Nothing caught it:
+  every marker a test builds sets no `warehouse_position`, so `carry_limit`
+  stayed 0 and both sides passed honestly in isolation.
+
+  What follows is all real and all still there; only the caller that opts a
+  live villager in is off. `Ethogram` gained the
   `WAREHOUSE` channel and the `DRIVE_BURDEN` gate (wired under every
   survival need, over company, and with no `drives` profile entry so no
   clock can raise it); `VillagerBehavior` gained the `HAUL` intent purely by
