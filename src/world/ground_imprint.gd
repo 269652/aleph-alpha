@@ -173,6 +173,14 @@ static func yields_to_footfall(material: String) -> bool:
 ## What a foot actually touches at a cell whose modification is `tile_id`
 ## ("" for untouched ground).
 ##
+## The world resolves this ONCE per step (see `EarthChunkManager.
+## record_footstep`) and feeds it to both consumers: `yields_to_footfall`
+## above, which decides whether a print is left, and `FootstepSound.
+## surface_for`, which decides what the step sounds like. Deliberately not
+## folded into a single "does this cell take a print" helper -- that would
+## make the caller resolve the same ground twice, and the print and the
+## sound could then disagree about what was underfoot.
+##
 ## Snow first, mirroring `EarthChunkManager.footstep_surface_for`'s own
 ## snow-first precedence exactly and for the same real reason: snow lies
 ## ON TOP of whatever is underneath it, streets included, so a snowed-over
@@ -192,9 +200,3 @@ static func material_underfoot(tile_id: String, snow_lying: bool) -> String:
 	if BuildingPiece.has_piece(tile_id):
 		return BuildingPiece.material_of(tile_id)
 	return SOIL
-
-
-## The one call the world makes (see `EarthChunkManager.record_footstep`):
-## does a footfall on this cell leave a mark behind?
-static func takes_a_print(tile_id: String, snow_lying: bool) -> bool:
-	return yields_to_footfall(material_underfoot(tile_id, snow_lying))

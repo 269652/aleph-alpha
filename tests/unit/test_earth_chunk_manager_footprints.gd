@@ -16,6 +16,7 @@ const GeoCoordinates = preload("res://src/world/geo_coordinates.gd")
 const FootstepGait = preload("res://src/gameplay/footstep_gait.gd")
 const FootprintField = preload("res://src/world/footprint_field.gd")
 const CreatureMass = preload("res://src/world/creature_mass.gd")
+const GroundImprint = preload("res://src/world/ground_imprint.gd")
 
 var manager: EarthChunkManager
 var tile_map_layer: TileMapLayer
@@ -571,3 +572,62 @@ func test_a_sustained_walk_marks_bare_ground_and_never_the_street():
 	for i in range(strides):
 		manager.record_footstep(street_start + Vector2.RIGHT * stride * (i + 1), Vector2.RIGHT, street_gait, CreatureMass.PLAYER_MASS_KG)
 	assert_eq(field.count(), strides, "the street should have added nothing at all to what the bare walk left")
+
+
+# -- the step facts carry what the ground is MADE OF, so the footstep -----
+# -- SOUND can stop taking a laid street for the grass beside it (see -----
+# -- FootstepSound.surface_for, docs/concept/creature_and_footstep_audio. --
+# -- md) -- the same GroundImprint answer the print gate itself reads, ----
+# -- never a second, separately-derived one ------------------------------
+
+func test_the_step_facts_report_untouched_ground_as_soil():
+	manager._load_chunk(_berlin_chunk)
+	var pixel := _real_footprint_pixel_or_nan()
+	if is_nan(pixel.x):
+		pass_test("precondition unmet (this chunk's real biome/season this run isn't grass/forest snow-free) -- nothing to check")
+		return
+	manager.record_footstep(pixel, Vector2.UP)  # baseline
+	var step := Vector2.UP * (FootstepGait.STRIDE_LENGTH_PX + 1.0)
+	var result: Dictionary = manager.record_footstep(pixel + step, Vector2.UP)
+	assert_eq(result.get("ground_material"), GroundImprint.SOIL)
+
+
+## The point of the whole fact: a street really is stone underfoot, even
+## though the biome beneath it still reads grassland/forest.
+func test_the_step_facts_report_a_paved_street_as_stone():
+	manager._load_chunk(_berlin_chunk)
+	var pixel := _real_footprint_pixel_or_nan()
+	if is_nan(pixel.x):
+		pass_test("precondition unmet (this chunk's real biome/season this run isn't grass/forest snow-free) -- nothing to check")
+		return
+	var step := Vector2.UP * (FootstepGait.STRIDE_LENGTH_PX + 1.0)
+	_pave_around(pixel, step)
+	manager.record_footstep(pixel, Vector2.UP)  # baseline
+	var result: Dictionary = manager.record_footstep(pixel + step, Vector2.UP)
+	assert_eq(result.get("ground_material"), "stone")
+	assert_true(
+		["grassland", "forest"].has(result.get("biome")),
+		"the biome underneath is untouched by paving -- that is exactly why the material has to be reported separately"
+	)
+
+
+## A step that lands where no print could ever be drawn still reports what
+## it landed on -- the returned facts are deliberately WIDER than the
+## visual print's own coverage (see record_footstep's own doc comment), and
+## the sound must not silently inherit the narrower visual gap.
+func test_the_step_facts_carry_the_material_even_when_no_print_is_drawn():
+	manager._load_chunk(_berlin_chunk)
+	var centre_tile: Vector2i = _berlin_chunk * EarthChunkManager.CHUNK_SIZE + Vector2i(
+		EarthChunkManager.CHUNK_SIZE / 2, EarthChunkManager.CHUNK_SIZE / 2
+	)
+	var pixel := _pixel_for(centre_tile)
+	var step := Vector2.UP * (FootstepGait.STRIDE_LENGTH_PX + 1.0)
+	_pave_around(pixel, step)
+	manager.record_footstep(pixel, Vector2.UP)  # baseline
+	var result: Dictionary = manager.record_footstep(pixel + step, Vector2.UP)
+	var field: FootprintField = manager._footprint_fields[_berlin_chunk]
+	assert_eq(field.count(), 0, "the premise: a street draws no print at all")
+	assert_eq(
+		result.get("ground_material"), "snow" if manager.snow_depth() > 0.0 else "stone",
+		"and the step is still reported, so it can still be heard"
+	)

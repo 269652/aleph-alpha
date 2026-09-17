@@ -6936,11 +6936,16 @@ static func footstep_surface_for(biome: String, snow_lying: bool, underwater: bo
 ## as before (see snow_depth()/tread_snow_at, PathScarring.step_on); this
 ## is a purely additive VISUAL layer stamped on top of whatever those
 ## mechanisms already do underneath.
-## Returns the raw biome/snow/underwater facts behind a real step (empty
-## Dictionary when nothing happened this call -- baseline, teleport, or no
-## stride due yet) so a caller can trigger a footstep SOUND at the exact
-## same real per-step cadence the visual print already uses, without
-## re-deriving FootstepGait's own accumulator a second time. Deliberately
+## Returns the raw biome/snow/underwater/ground-material facts behind a
+## real step (empty Dictionary when nothing happened this call --
+## baseline, teleport, or no stride due yet) so a caller can trigger a
+## footstep SOUND at the exact same real per-step cadence the visual print
+## already uses, without re-deriving FootstepGait's own accumulator a
+## second time. `ground_material` is what the foot actually touches (see
+## GroundImprint.material_underfoot) -- a laid street is stone even though
+## the biome under it still reads grassland, exactly as a river leaves the
+## biome under it alone, so the sound needs it as its own fact rather than
+## inferring it from the biome. Deliberately
 ## NOT an audio surface key -- EarthChunkManager (world state) must not
 ## depend on FootstepSound (audio); that dependency runs the other way,
 ## the same direction NatureSoundscapePlayer already reads real world
@@ -6974,6 +6979,14 @@ func record_footstep(
 	var tile := _world_tile_for_pixel(pixel_position)
 	var underwater := is_river_at_global(tile.x, tile.y) or is_lake_at_global(tile.x, tile.y)
 	var snow_lying := _snow_depth > 0.0
+	# What the foot actually touches here -- the biome's own soil, the snow
+	# lying on top of it, or something LAID (see GroundImprint.
+	# material_underfoot). Resolved ONCE, for both consumers: the print gate
+	# below reads it to decide whether this ground can be indented at all,
+	# and the returned facts carry it out to FootstepSound so a laid street
+	# stops sounding like the grass beside it. One step, one ground -- the
+	# print and the sound cannot disagree about what was underfoot.
+	var ground_material := GroundImprint.material_underfoot(modification_at_global(tile.x, tile.y), snow_lying)
 	# biome_at_global(tile.x, tile.y) stays INLINE in the footstep_surface_for
 	# call below (not hoisted into a shared variable) -- test_record_
 	# footstep_passes_a_third_argument_to_footstep_surface_for's own source-
@@ -6987,28 +7000,27 @@ func record_footstep(
 		"biome": biome_at_global(tile.x, tile.y),
 		"snow_lying": snow_lying,
 		"underwater": underwater,
+		"ground_material": ground_material,
 	}
 	var surface := footstep_surface_for(biome_at_global(tile.x, tile.y), snow_lying, underwater)
 	if surface.is_empty():
 		return result
-	var print_position := pixel_position + FootstepGait.print_offset(heading, side)
-	var print_tile := _world_tile_for_pixel(print_position)
-	# Whether the ground gives way at all is a real indentation-hardness
+	# Whether that ground gives way at all is a real indentation-hardness
 	# question rather than a biome one -- see GroundImprint, which compares
 	# a real footfall's own pressure against the material's own published
 	# one. A laid cobbled street is granite setts, orders of magnitude past
 	# anything a foot can press with, so it keeps no mark at all (reported
 	# live: "walking over cobblestone streets should not leave
-	# footprints"). Asked at the tile the PRINT lands in, not the walker's
-	# own, because that is where the mark would physically be.
+	# footprints").
 	#
 	# Deliberately AFTER `result` is fully populated and returned intact:
 	# a step on a street really did happen, so FootstepSound still hears it
 	# (see this function's own doc comment on why the returned facts are
 	# wider than the visual print's own coverage). Only the MARK is absent.
-	if not GroundImprint.takes_a_print(modification_at_global(print_tile.x, print_tile.y), snow_lying):
+	if not GroundImprint.yields_to_footfall(ground_material):
 		return result
-	var chunk_coord := _chunk_coord_for_tile(print_tile)
+	var print_position := pixel_position + FootstepGait.print_offset(heading, side)
+	var chunk_coord := _chunk_coord_for_tile(_world_tile_for_pixel(print_position))
 	var field: FootprintField = _footprint_fields.get(chunk_coord)
 	if field == null:
 		return result

@@ -183,11 +183,20 @@ func test_snow_lies_on_top_of_whatever_is_underneath():
 	assert_eq(GroundImprint.material_underfoot("stone_floor", true), GroundImprint.SNOW)
 
 
-# -- the one call the world actually makes ---------------------------------
+# -- the two calls composed, the way the world composes them ---------------
 
-func test_takes_a_print_answers_the_whole_question_in_one_call():
-	assert_true(GroundImprint.takes_a_print("", false), "untouched ground")
-	assert_false(GroundImprint.takes_a_print(TerrainRenderer.ROAD_TILE_ID, false), "a cobbled street")
-	assert_true(GroundImprint.takes_a_print(TerrainRenderer.ROAD_TILE_ID, true), "snow on that same street")
-	assert_true(GroundImprint.takes_a_print(TerrainRenderer.TRAIL_TILE_ID, false), "a worn trail")
-	assert_false(GroundImprint.takes_a_print("timber_floor", false), "a timber floor")
+## The end-to-end table, read the way `EarthChunkManager.record_footstep`
+## reads it: resolve what is underfoot once, then ask whether THAT gives
+## way. Every row here is a real cell a walker can stand on.
+func _takes_a_print(tile_id: String, snow_lying: bool) -> bool:
+	return GroundImprint.yields_to_footfall(GroundImprint.material_underfoot(tile_id, snow_lying))
+
+
+func test_the_whole_table_of_ground_a_walker_can_stand_on():
+	assert_true(_takes_a_print("", false), "untouched ground")
+	assert_false(_takes_a_print(TerrainRenderer.ROAD_TILE_ID, false), "a cobbled street")
+	assert_true(_takes_a_print(TerrainRenderer.ROAD_TILE_ID, true), "snow on that same street")
+	assert_true(_takes_a_print(TerrainRenderer.TRAIL_TILE_ID, false), "a worn trail")
+	assert_true(_takes_a_print(TerrainRenderer.EARTH_TILE_ID, false), "dug earth")
+	assert_false(_takes_a_print("timber_floor", false), "a timber floor")
+	assert_false(_takes_a_print("stone_floor", false), "a stone floor")
