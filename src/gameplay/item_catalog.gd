@@ -156,6 +156,12 @@ const _ITEMS := {
 	"carrot": ["Carrot", "food", 20, 0.0],
 	# The other wild root crop -- see docs/concept/wild_crops.md.
 	"potato": ["Potato", "food", 20, 0.0],
+	# What a village herbalist grows on their own farmhouse's field (see
+	# docs/concept/village_farms.md). Also the ingredient CookingRecipeBook's
+	# fish_herb -> Herbed Fish recipe has always asked for and never had --
+	# occupation_production.gd names that gap in as many words ("ItemCatalog
+	# has no 'herb' item to cook with in the first place").
+	"herb": ["Herb", "food", 20, 0.0],
 	# Woodworking chain (see docs/concept/woodworking.md): a bare felled
 	# trunk bucks into logs by hand, or (saw + trained Carpentry) is sawn
 	# whole into beam/plank instead.
@@ -488,6 +494,8 @@ func make_with_mass(item_id: String, mass_kg: float) -> Item:
 const _PRODUCE_MASS_KG := {
 	"carrot": 0.07,
 	"potato": 0.17,
+	# herb: a cut bunch of fresh culinary herbs is around 20-25g.
+	"herb": 0.02,
 }
 
 ## Real average whole-specimen mass, kilograms, foraged fresh -- the same

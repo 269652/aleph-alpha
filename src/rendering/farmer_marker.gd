@@ -30,6 +30,7 @@ const FarmPlotMarker = preload("res://src/rendering/farm_plot_marker.gd")
 const FarmPlot = preload("res://src/gameplay/farm_plot.gd")
 const TerrainRenderer = preload("res://src/rendering/terrain_renderer.gd")
 const ProceduralLumberjackSprite = preload("res://src/rendering/procedural_lumberjack_sprite.gd")
+const VillageFarm = preload("res://src/gameplay/village_farm.gd")
 
 const GROUP_NAME := "farmer"
 
@@ -52,8 +53,9 @@ const CROP_ID := "wheat"
 ## wither grace window (FarmPlot.WATER_GRACE_FRACTION) -- real margin
 ## before the actual wither point, grounded in a real farmer checking crops
 ## on a walking circuit and watering ahead of visible wilting, not only
-## once a plant has already started to droop.
-const WATER_BEFORE_WITHER_FRACTION := 0.5
+## once a plant has already started to droop. Shared with the village's own
+## farms (docs/concept/village_farms.md) rather than spelled twice.
+const WATER_BEFORE_WITHER_FRACTION := VillageFarm.WATER_BEFORE_WITHER_FRACTION
 
 ## Where this Farmer's Farm stands -- both its plots' anchor and where
 ## harvested wheat credits the Farm's own StructureStock (see
@@ -157,32 +159,23 @@ func _perform_action(index: int) -> void:
 ## Priority: a ready plot (harvest -- get real value off the field) beats
 ## an empty/withered plot (plant -- start the next cycle) beats a growing
 ## plot at real risk of withering (water it) -- -1 if no owned plot needs
-## any action right now.
+## any action right now. The rule itself lives in VillageFarm, shared with
+## the village's own farms (docs/concept/village_farms.md) so a Farm's
+## worker and a village farmer cannot end up tending by two different
+## rules; this only unwraps FarmPlotMarker to the FarmPlot underneath.
 func _next_action_plot_index() -> int:
-	for i in _plots.size():
-		if _action_kind_for(_plots[i]) == "harvest":
-			return i
-	for i in _plots.size():
-		if _action_kind_for(_plots[i]) == "plant":
-			return i
-	for i in _plots.size():
-		if _action_kind_for(_plots[i]) == "water":
-			return i
-	return -1
+	return VillageFarm.next_action(_plot_states())
 
 
 func _action_kind_for(plot_marker: FarmPlotMarker) -> String:
-	var plot: FarmPlot = plot_marker.plot
-	if plot.state == "ready":
-		return "harvest"
-	if plot.state == "empty" or plot.state == "withered":
-		return "plant"
-	if (
-		plot.state == "growing"
-		and plot.time_since_watered >= plot.growth_time * FarmPlot.WATER_GRACE_FRACTION * WATER_BEFORE_WITHER_FRACTION
-	):
-		return "water"
-	return ""
+	return VillageFarm.action_for(plot_marker.plot)
+
+
+func _plot_states() -> Array:
+	var states: Array = []
+	for plot_marker in _plots:
+		states.append(plot_marker.plot)
+	return states
 
 
 func _tile_for(pixel_position: Vector2) -> Vector2i:
