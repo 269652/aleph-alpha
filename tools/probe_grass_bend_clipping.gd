@@ -49,7 +49,13 @@ const SHIPPED := "rotation (shipped)"
 const _SHIPPED_BLOCK := """	float radius = length(VERTEX);
 	if (radius > 0.0001) {
 		float lean = asin(clamp(v_geometry_bend * 16.0 / radius, -1.0, 1.0));
-		float from_upright = atan(VERTEX.x, -VERTEX.y) + lean;
+		// Clamped at the horizon per POINT: a leaf that already points up and
+		// to the side reaches flat before the ones above it, and would carry
+		// on below the ground its roots stand on, folding the card under
+		// itself. A blade lies flat; it does not grow into the ground.
+		float from_upright = clamp(
+			atan(VERTEX.x, -VERTEX.y) + lean, -radians(90.0), radians(90.0)
+		);
 		VERTEX = vec2(radius * sin(from_upright), -radius * cos(from_upright));
 	}"""
 
@@ -67,6 +73,15 @@ static func generations() -> Array:
 	VERTEX.x += sideways;
 	VERTEX.y = -sqrt(max(along * along - sideways * sideways, 0.0));""",
 		},
+		{
+			"label": "free rotation",
+			"block": """	float radius = length(VERTEX);
+	if (radius > 0.0001) {
+		float lean = asin(clamp(v_geometry_bend * 16.0 / radius, -1.0, 1.0));
+		float from_upright = atan(VERTEX.x, -VERTEX.y) + lean;
+		VERTEX = vec2(radius * sin(from_upright), -radius * cos(from_upright));
+	}""",
+		},
 		{"label": SHIPPED, "block": _SHIPPED_BLOCK},
 	]
 
@@ -80,6 +95,19 @@ static func shader_for(generation: Dictionary) -> Shader:
 	var shader := Shader.new()
 	shader.code = code
 	return shader
+
+
+## How far BELOW its own base a panel draws -- the fold reported as "it still
+## stretches when it's bent below the base of the grass entity". A blade lies
+## flat at worst, so this should be zero however hard it is pushed.
+static func below_base(image: Image, root: Vector2, from_x: int, to_x: int) -> float:
+	var lowest := 0.0
+	for y in image.get_height():
+		for x in range(from_x, to_x):
+			var pixel := image.get_pixel(x, y)
+			if pixel.a > 0.05 and pixel.v > 0.2:
+				lowest = maxf(lowest, float(y) - root.y)
+	return lowest
 
 
 ## How far the furthest blade pixel in this panel is from the root its cards
@@ -163,11 +191,12 @@ func _init() -> void:
 		var img: Image = viewport.get_texture().get_image()
 		var reaches: Array[String] = []
 		for i in panels.size():
-			reaches.append("%s %.1fpx" % [
+			reaches.append("%s %.1f/%.1f" % [
 				panels[i]["label"],
 				blade_reach(img, panels[i]["ground"], PANEL * i, PANEL * (i + 1)),
+				below_base(img, panels[i]["ground"], PANEL * i, PANEL * (i + 1)),
 			])
-		print("%s: furthest blade pixel from its own root -- %s  (a card is %.0fpx tall)" % [
+		print("%s: reach / below-base, px -- %s  (a card is %.0fpx tall; both should stay put)" % [
 			push_label, " | ".join(reaches), IllustratedGrassPatch.WORLD_SIZE
 		])
 		img.resize(img.get_width() * 4, img.get_height() * 4, Image.INTERPOLATE_NEAREST)
