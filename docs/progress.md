@@ -24103,3 +24103,48 @@ drift.
 
 Tests: `test_intro_splash_sheet.gd` 16/16 (2 new), 46/46 across all five
 intro test files.
+
+### Diagnosing a silent game (see `docs/concept/soundscape.md` "Diagnosing silence", 2026-09-17)
+
+Reported live: *"The game has no sound anymore"*, then *"still completely
+mute everywhere, I checked windows settings, the process is not muted."*
+
+✅ **`AudioDiagnostics`** (`src/audio/audio_diagnostics.gd`, pure) names
+every cause of silence that fits the real facts, printed by
+`World._log_audio_diagnostics()` at every boot. A mute has several possible
+causes here and they are indistinguishable from the player's chair, so each
+"try this" round was costing a launch.
+
+✅ **The causes it knows are paths that really exist**, not guesses: the
+Master bus at `SILENT_BUS_DB` (−80 dB) because the persisted master volume
+is 0 — the only thing in this codebase that can silence everything at once,
+since `_apply_audio_volume` is the single line in the whole repo touching
+`AudioServer`; the audio players never reaching the tree because
+`World._ready()` returned early at the license gate or the GitHub identity
+check, both *before* `add_child(_nature_soundscape.build())`; streams that
+failed to load, which matters because every clip is `load()`ed at **runtime**
+rather than preloaded, so a missing resource is silent instead of fatal; a
+paused tree, which stops all sound because neither audio builder sets
+`process_mode`; and a missing "Master" bus.
+
+✅ **Two deliberate choices.** Every cause present is reported rather than
+just the first, because they stack and one-at-a-time costs a launch each.
+And **the report's own absence is diagnostic** — it prints after
+`_apply_audio_volume()`, so a boot that returned early prints nothing here,
+which is a different answer from "present, Master at −80".
+
+✅ **`root()`/`root_in_tree()` on both audio players** — they distinguish
+*never built* from *built but never added*, which look identical to a null
+check and mean different things (the second is what an early return looks
+like from outside).
+
+⬜ **The cause of the reported mute is still unknown.** This builds the
+instrument, not the fix. Static analysis found nothing wrong: 144/144 audio
+tests green, all 29 referenced clips present on disk, `_ready`'s audio
+wiring intact and correctly ordered, and the reported footstep change
+provably unable to silence ambient audio. One launch's log will say which
+cause it is.
+
+Tests: `test_audio_diagnostics.gd` 13/13 (new),
+`test_nature_soundscape_player.gd` +3, `test_interaction_sfx_player.gd` +1,
+144/144 across the ten audio test files.

@@ -130,3 +130,22 @@ func play_creature_call(species: String, world_position: Vector2) -> void:
 	voice.global_position = world_position
 	voice.stream = load(clip_path)
 	voice.play()
+
+
+## The node `build()` made, or null before it has run. Read by
+## `AudioDiagnostics.missing_streams`, which walks it for streams that
+## failed to resolve -- every clip here is load()ed at runtime, so a
+## missing resource leaves a silent player rather than raising.
+func root() -> Node:
+	return _root
+
+
+## Whether that node really reached the scene tree.
+##
+## False both before `build()` and when a caller built it but never added
+## it, and the difference matters: `World._ready()` returns early at the
+## license gate and at the GitHub identity check, both BEFORE
+## `add_child(build())`, so a game that took either path has no audio at
+## all rather than quiet audio (see AudioDiagnostics).
+func root_in_tree() -> bool:
+	return _root != null and _root.is_inside_tree()

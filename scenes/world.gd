@@ -10,6 +10,7 @@ const RainOverlay = preload("res://src/rendering/rain_overlay.gd")
 const RiverFlowPass = preload("res://src/rendering/river_flow_pass.gd")
 const NatureSoundscapePlayer = preload("res://src/audio/nature_soundscape_player.gd")
 const AudioSettings = preload("res://src/audio/audio_settings.gd")
+const AudioDiagnostics = preload("res://src/audio/audio_diagnostics.gd")
 const InteractionSfxPlayer = preload("res://src/audio/interaction_sfx_player.gd")
 const FootstepSound = preload("res://src/audio/footstep_sound.gd")
 const CreatureCallSound = preload("res://src/audio/creature_call_sound.gd")
@@ -1063,6 +1064,7 @@ func _ready() -> void:
 	_apply_graphics()
 	_load_audio_settings()
 	_apply_audio_volume()
+	_log_audio_diagnostics()
 	_load_simulation_settings()
 	_apply_simulation_settings()
 
@@ -2185,6 +2187,39 @@ func _on_audio_volume_changed(value: float) -> void:
 	_audio_volume = AudioSettings.sanitize_volume(value)
 	_apply_audio_volume()
 	_save_audio_settings()
+
+
+## One line per audio fact in the log at every boot, and a named cause
+## when any of them explains silence (see AudioDiagnostics). Reported
+## live: "The game has no sound anymore... completely mute everywhere, I
+## checked windows settings, the process is not muted" -- a mute has
+## several possible causes here and they are indistinguishable from the
+## player's chair, so this turns one launch into an answer.
+##
+## Placed immediately after _apply_audio_volume(), which is itself after
+## the audio players are added, so ITS OWN ABSENCE from the log is
+## diagnostic too: _ready() returns early at the license gate and at the
+## GitHub identity check, both before any of that, and a boot that took
+## either path prints nothing here at all.
+##
+## Unconditional rather than behind a debug flag: it is a handful of lines
+## once per launch, and a diagnostic a player has to enable first is one
+## they will not have enabled on the launch that went wrong.
+func _log_audio_diagnostics() -> void:
+	var master := AudioServer.get_bus_index("Master")
+	for line in AudioDiagnostics.report_lines({
+		"master_bus_index": master,
+		"master_db": AudioServer.get_bus_volume_db(master) if master >= 0 else 0.0,
+		"master_muted": AudioServer.is_bus_mute(master) if master >= 0 else false,
+		"volume_setting": _audio_volume,
+		"output_device": AudioServer.get_output_device(),
+		"mix_rate_hz": AudioServer.get_mix_rate(),
+		"soundscape_in_tree": _nature_soundscape.root_in_tree(),
+		"sfx_in_tree": _interaction_sfx.root_in_tree(),
+		"missing_streams": AudioDiagnostics.missing_streams(_nature_soundscape.root()),
+		"paused": get_tree().paused,
+	}):
+		print(line)
 
 
 ## Master bus, not a per-layer scale inside NatureSoundscapePlayer --
