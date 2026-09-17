@@ -223,6 +223,36 @@ carry opaque art in its top corners, so the column arc's own stretch does
 not show in ITS number -- what the table proves is that the rotation cannot
 stretch any art, not that the column arc always did.
 
+**A blade lies flat; it does not grow into the ground.** A rotation about the
+root stops anything stretching, and then happily carries a point PAST
+horizontal: a leaf already pointing up and to the side starts at a real angle
+from upright, so it reaches flat before the ones above it and keeps going,
+swinging below the ground its own roots stand on and folding the card under
+itself. Reported live with a screenshot: *"it still stretches when it's bent
+below the base of the grass entity."* The lean is therefore clamped at the
+horizon per POINT, not per card -- measured without it, a point ends up a
+full 8 world units below its own base. Pinned by
+`test_bending_never_carries_a_blade_below_its_own_base`, which sweeps every
+column and height against every bend the shader can produce, and confirmed
+to bite by removing the clamp and watching it fail.
+
+**How hard a walker pushes is an ANGLE now.** `WALKER_PUSH_UV_AMPLITUDE`
+climbed to 1.5 card widths across several live rounds (History #6) while the
+bend was still a UV slide that CLIPPED -- past one card width all more
+amplitude bought was more of the blade erased rather than more lean, so
+"more" kept reading as "still not enough". Against a rotation the same number
+says something else entirely: 1.0 at the tip IS flat on the ground, and 1.5
+is flat with room to spare, so every tuft a player walked past slammed down
+and sprang back up behind them. Reported: *"reduce the intensity of the
+bend... it feels wobbly as you walk through."* The tuned value is
+`MAX_WALKER_LEAN_DEGREES` (35 degrees -- a lean nobody can miss and nothing a
+player can flatten) and the amplitude is derived from it as `sin(lean)`,
+which is exactly what `bent_vertex` takes the `asin` of to get the angle
+back. One number, expressed as the thing it actually controls, so it cannot
+be read as "more is more" a third time. Ambient wind is untouched by this: at
+`WIND_UV_AMPLITUDE` a tip sways about 5 degrees on a clear day and 9 in a
+storm, which was never what felt wobbly.
+
 **`fragment()` still path-traces per pixel row -- of the remainder only.**
 Both stages read ONE shared `bend_offset_at()` (a single seam, the same
 reasoning `cards_for_cell` uses for banding-vs-placement -- two copies of this
@@ -955,6 +985,25 @@ framebuffer), so several of these needed a real, non-headless, off-screen
     (displacing one coordinate, holding one coordinate) breaks on whichever
     part of the art the approximation was not thinking about.
 
+18. **"It still stretches when it's bent below the base of the grass
+    entity" / "reduce the intensity of the bend... it feels wobbly as you
+    walk through"** (reported live with a screenshot, after #17's rotation
+    shipped). Two things, one cause underneath: the rotation was free to
+    carry a point past horizontal, and the amplitude driving it was still
+    the one tuned for a mechanism that clipped. A leaf already pointing up
+    and to the side reaches flat before the ones above it and then swings
+    BELOW the ground its roots stand on, folding the card under itself --
+    measured at a full 8 world units below the base with the clamp removed.
+    And at `WALKER_PUSH_UV_AMPLITUDE = 1.5` every tuft a player passed was
+    pushed to flat and beyond, because against a rotation 1.0 already IS
+    flat. Fixed by clamping the lean at the horizon per point, and by making
+    the tuned value the ANGLE it controls (`MAX_WALKER_LEAN_DEGREES = 35`)
+    with the amplitude derived from it. Worth noting for the next re-tune:
+    three of this system's own reports (#6's ladder, #15, this one) are the
+    same story -- a number tuned against a mechanism that was hiding the
+    effect it was supposed to produce, and then inherited unchanged by the
+    mechanism that finally produced it.
+
 ### A second atlas family: farmed wheat (2026-09-13)
 
 Requested directly: "I added a wheat sprite similar to the long grass
@@ -1086,9 +1135,12 @@ at the ROOT instead of the tip), the fix is a one-line flip of
 - ✅ A bending blade moves its own GEOMETRY: the card rotates about its own
   root across a 4×8-subdivided `QuadMesh`, so it is neither clipped at the
   card's edge (History #15) nor stretched longer than it is (History #16
-  and #17). Measured on a real render, one card against its own root with a
-  boot in it: 27.5px of reach sheared, 13.2px per-column, 14.1px rotating —
-  against 14.3px at rest. `fragment()` still resolves the
+  and #17), nor folded below its own base (History #18 — the lean is clamped
+  at the horizon per point; without that a point measures 8 world units under
+  the ground its roots stand on). How hard a walker pushes is a tuned ANGLE
+  now, `MAX_WALKER_LEAN_DEGREES = 35`, with the UV amplitude derived from it:
+  the old 1.5 card widths meant "flat on the ground and then some" once the
+  bend became a rotation. `fragment()` still resolves the
   curve per pixel row, for the sliver the mesh's vertices cannot carry:
   measured at 0.0197 card widths (1.26 screen px) worst case, down from the
   1.66 card widths (106 px) the sampling stage used to slide on its own, and

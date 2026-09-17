@@ -494,9 +494,14 @@ func test_bending_never_slides_a_blade_further_sideways_than_its_own_card_can_sh
 						absf(IllustratedGrassPatch.sampled_bend_offset(uv, wind_phase, push, storm_wind))
 					)
 
-	# Precondition: the tuned bend really is strong enough to run a blade
-	# clean off its own card. That is the reported bug, not a hypothetical.
-	assert_gt(worst_total, 1.0, "precondition: the real tuned bend exceeds a whole card width")
+	# Precondition: the tuned bend is still a large fraction of a card, so
+	# carrying it in the sampling stage would still run a blade off its own
+	# edge. It USED to exceed a whole card width (1.66) -- the retune to a
+	# 35-degree lean (MAX_WALKER_LEAN_DEGREES) brought that down to about
+	# three quarters of one, which is what this now pins rather than the old
+	# number, since the old number was itself part of the bug.
+	assert_gt(worst_total, 0.5, "precondition: the real tuned bend is still most of a card width")
+	assert_lt(worst_total, 1.0, "...and no longer more than a whole one, which as a rotation would be flat")
 
 	# A GPU interpolates each mesh cell as two AFFINE triangles, not
 	# bilinearly (what mesh_bend_offset models) -- the two differ by at most
@@ -606,6 +611,77 @@ func test_bending_never_moves_a_point_away_from_the_cards_own_root():
 						local, bend_offset, bent.length(), local.length()
 					]
 				)
+
+
+## Reported live with a screenshot: "it still stretches when it's bent below
+## the base of the grass entity."
+##
+## Rotating about the card's own root is what stopped a leaf drawing longer
+## than it is -- but a rotation alone happily carries a point PAST horizontal.
+## A leaf already pointing up and to the right starts at a real angle from
+## upright, so it reaches flat before the ones above it do and then keeps
+## going, swinging BELOW the ground its own roots stand on. The card folds
+## under itself there, and art drawn across that fold smears.
+##
+## A blade lies flat; it does not grow into the ground. So every point stays
+## at or above its own base, at every bend the shader can produce.
+func test_bending_never_carries_a_blade_below_its_own_base():
+	var half_width: float = IllustratedGrassPatch.WORLD_SIZE * 0.5
+	for column_step in 9:
+		for height_step in 9:
+			var local := Vector2(
+				-half_width + IllustratedGrassPatch.WORLD_SIZE * float(column_step) / 8.0,
+				-IllustratedGrassPatch.WORLD_SIZE * float(height_step) / 8.0
+			)
+			for bend_step in range(-10, 11):
+				var bend_offset := 2.0 * float(bend_step) / 10.0
+				var bent: Vector2 = IllustratedGrassPatch.bent_vertex(local, bend_offset)
+				assert_lte(
+					bent.y, 0.0001,
+					"a point at %s bent by %f ended up %f below its own base" % [local, bend_offset, bent.y]
+				)
+
+
+## Reported live in the same breath: "also reduce the intensity of the bend...
+## it feels wobbly as you walk through."
+##
+## WALKER_PUSH_UV_AMPLITUDE climbed to 1.5 card widths back when the bend was
+## a UV slide that CLIPPED (History #6, #15): past one card width all more
+## amplitude bought was more of the blade erased, so "more" kept reading as
+## "still not enough". As a ROTATION the same number means something else
+## entirely -- a push of 1.0 at the tip is already flat on the ground, and 1.5
+## is flat with room to spare, so every tuft a player walked past slammed down
+## and sprang back up behind them.
+##
+## The tuned value is an ANGLE now and the amplitude is derived from it, which
+## is what stops it being read as "more is more" a third time.
+func test_a_walkers_push_leans_a_blade_over_without_laying_it_flat():
+	var tip := Vector2(0.0, -IllustratedGrassPatch.WORLD_SIZE)
+	var bent: Vector2 = IllustratedGrassPatch.bent_vertex(tip, IllustratedGrassPatch.WALKER_PUSH_UV_AMPLITUDE)
+	var lean_degrees: float = rad_to_deg(atan2(bent.x, -bent.y))
+	assert_almost_eq(
+		lean_degrees, IllustratedGrassPatch.MAX_WALKER_LEAN_DEGREES, 0.001,
+		"the hardest push a walker can give is exactly the tuned lean"
+	)
+	assert_lt(
+		IllustratedGrassPatch.MAX_WALKER_LEAN_DEGREES, 90.0,
+		"a walker leans grass aside; flat on the ground is what made it feel wobbly"
+	)
+	assert_gt(
+		IllustratedGrassPatch.MAX_WALKER_LEAN_DEGREES, 20.0,
+		"...and it still has to be unmistakable, which is what every earlier round asked for"
+	)
+
+
+## The amplitude is DERIVED from that angle, not a second number kept beside
+## it: sin(lean) is exactly the displacement the rotation needs to reach it
+## (see bent_vertex, which takes asin of the same ratio back out).
+func test_the_push_amplitude_is_that_lean_and_not_a_number_of_its_own():
+	assert_almost_eq(
+		IllustratedGrassPatch.WALKER_PUSH_UV_AMPLITUDE,
+		sin(deg_to_rad(IllustratedGrassPatch.MAX_WALKER_LEAN_DEGREES)),
+		0.000001
+	)
 
 
 ## The case the screenshot is actually of: the diagonal leaf, not the
@@ -951,7 +1027,15 @@ func test_walker_push_amplitude_matches_its_own_tuned_constant_not_a_debug_crank
 	# sway (see docs/concept/long_grass.md's History) - the earlier small
 	# nudges (0.6, 0.7) apparently still read as weak in practice, so this
 	# jump is deliberately much larger rather than another small increment.
-	assert_eq(IllustratedGrassPatch.WALKER_PUSH_UV_AMPLITUDE, 1.5)
+	# Re-pinned 2026-09-17: the tuned value is MAX_WALKER_LEAN_DEGREES now and
+	# the amplitude is derived from it (see that constant's own doc comment
+	# for why 1.5 card widths stopped meaning what it used to). What this test
+	# is for is unchanged -- a debug crank must fail loudly -- so it pins the
+	# angle exactly, and pins the amplitude far away from the 5.0 that shipped
+	# once.
+	assert_eq(IllustratedGrassPatch.MAX_WALKER_LEAN_DEGREES, 35.0)
+	assert_almost_eq(IllustratedGrassPatch.WALKER_PUSH_UV_AMPLITUDE, 0.5736, 0.0001)
+	assert_lt(IllustratedGrassPatch.WALKER_PUSH_UV_AMPLITUDE, 1.0, "a rotation cannot be pushed past flat anyway")
 
 
 func test_bend_curve_pins_the_root_and_reaches_full_displacement_at_the_tip():
