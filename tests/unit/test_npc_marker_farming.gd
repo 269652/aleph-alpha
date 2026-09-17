@@ -396,8 +396,9 @@ func test_a_field_of_the_capped_size_really_produces_over_a_work_block():
 	)
 
 
-## The cap is a design limit that was asked for ("capped to 10 tiles"),
-## not a measured cliff any more -- watering the beds around the one being
+## The cap is a design limit that was asked for (first "capped to 10
+## tiles", then the shape inside it: "a 2x3 or 3x2 area"), not a measured
+## cliff any more -- watering the beds around the one being
 ## worked is what removed the cliff. What still has to be measured is that
 ## a field of that size is worth having: a farmhouse must beat the ambient
 ## regional drip its villager would otherwise have lived on, or it is
@@ -414,9 +415,10 @@ func test_a_capped_field_is_worth_more_than_the_drip_it_replaces():
 	)
 
 
-func test_the_cap_is_at_least_what_a_farmhouse_is_sited_for():
-	assert_gte(
-		VillageFarm.MAX_WORKED_CELLS, VillageFarm.MIN_FIELD_CELLS,
-		"a farmhouse raised on ground it may not then work would be a contradiction"
-	)
+func test_the_cap_is_exactly_the_field_a_farmhouse_is_sited_for():
+	for shape in VillageFarm.FIELD_SHAPES:
+		assert_eq(
+			(shape as Vector2i).x * (shape as Vector2i).y, VillageFarm.MAX_WORKED_CELLS,
+			"a farmhouse raised for ground it may not then work would be a contradiction"
+		)
 

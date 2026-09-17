@@ -14459,9 +14459,33 @@ func _spawn_structure_art_for(chunk_coord: Vector2i, local_cell: Vector2i, subje
 	var tile_bottom := tile_center.y + TerrainRenderer.TILE_SIZE * 0.5
 	var sprite := Sprite2D.new()
 	sprite.texture = texture
-	sprite.position = Vector2(tile_center.x, tile_bottom - float(texture.get_height()) * 0.5)
+	sprite.position = Vector2(
+		tile_center.x + _structure_art_x_offset(subject),
+		tile_bottom - float(texture.get_height()) * 0.5
+	)
 	_entities_parent.add_child(sprite)
 	by_cell[local_cell] = sprite
+
+
+## How far sideways a subject's art stands from its own tile centre.
+##
+## Zero for everything but a farm fence's two SIDE walls, which are pushed
+## half a tile outward so the frame surrounds the beds instead of standing
+## on the outermost row of them. Reported in play, with the broken ring
+## circled: "the side walls of the fence should be moved outwards and corner
+## pieces added so it doesn't look that broken".
+##
+## The two corner posts move WITH the wall each caps -- a post left on its
+## own tile centre would sit half a tile inboard of the run it belongs to,
+## which is a visibly broken joint. A north or south rail does not move: it
+## already lies along the row it closes.
+func _structure_art_x_offset(subject: String) -> float:
+	var half_tile := float(TerrainRenderer.TILE_SIZE) * 0.5
+	if subject == VillageFarm.fence_tile_for("east") or subject == VillageFarm.fence_tile_for("corner_east"):
+		return half_tile
+	if subject == VillageFarm.fence_tile_for("west") or subject == VillageFarm.fence_tile_for("corner_west"):
+		return -half_tile
+	return 0.0
 
 
 func _despawn_structure_art_at(chunk_coord: Vector2i, local_cell: Vector2i) -> void:

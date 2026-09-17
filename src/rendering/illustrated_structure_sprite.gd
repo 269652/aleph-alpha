@@ -124,6 +124,22 @@ const _SUBJECTS := {
 		"columns": 4, "rows": 3, "idle_row": 0, "idle_column": 3,
 		"keys_black": true, "grid": "dividers",
 	},
+	# A corner caps two runs at once. The sheet has no corner cell of its
+	# own, so it is drawn with the same post art the side columns use --
+	# which is what a real corner post is, and is what stops a horizontal
+	# rail being drawn across the turn (reported: "corner pieces added so it
+	# doesn't look that broken"). One per side, drawn from that side's own
+	# column, because each is pushed out with the wall it caps.
+	"farm_fence_corner_west": {
+		"path": "res://assets/sprites/buildings/fence.png",
+		"columns": 4, "rows": 3, "idle_row": 0, "idle_column": 3,
+		"keys_black": true, "grid": "dividers",
+	},
+	"farm_fence_corner_east": {
+		"path": "res://assets/sprites/buildings/fence.png",
+		"columns": 4, "rows": 3, "idle_row": 0, "idle_column": 2,
+		"keys_black": true, "grid": "dividers",
+	},
 }
 
 static var _cache: Dictionary = {}  # subject -> ImageTexture
