@@ -649,6 +649,17 @@ func _build_ground() -> void:
 	var procedural := ProceduralTerrainSprite.new()
 	var columns := int(ceil(FOOTPRINT.x / GROUND_TILE_WORLD_SIZE))
 	var rows := int(ceil(FOOTPRINT.y / GROUND_TILE_WORLD_SIZE))
+	# One ImageTexture per distinct variant IMAGE, not per tile. A 12x6
+	# footprint is 72 tiles drawn from a sheet holding only 9 variants
+	# (IllustratedTerrainSprite's own 3x3 grids), and frame_for hands back
+	# the SAME cached Image object every time a seed picks a given variant
+	# -- so keying on that object's identity collapses 72 GPU uploads of the
+	# same handful of 32x32 images down to one each. Local to this build,
+	# not static: the textures die with the generation of tiles that used
+	# them (see _begin_build's own immediate free), and re-deriving nine of
+	# them costs microseconds once the sheet itself is cached.
+	# Pinned by test_ground_tiles_share_one_texture_per_distinct_variant.
+	var textures_by_image := {}
 	for row in rows:
 		for column in columns:
 			# Hash-derived per cell, so the same hero always stands on the
@@ -660,9 +671,12 @@ func _build_ground() -> void:
 				if illustrated.has_variants(GROUND_BIOME)
 				else procedural.generate_frame_image(GROUND_BIOME, tile_seed, 0)
 			)
+			var image_id := image.get_instance_id()
+			if not textures_by_image.has(image_id):
+				textures_by_image[image_id] = ImageTexture.create_from_image(image)
 			var tile := Sprite2D.new()
 			tile.name = "Ground%d_%d" % [column, row]
-			tile.texture = ImageTexture.create_from_image(image)
+			tile.texture = textures_by_image[image_id]
 			tile.centered = false
 			# Derived from the art's OWN width, not a hard-coded
 			# TerrainRenderer.LAYER_SCALE: illustrated tiles are

@@ -7,6 +7,9 @@ const HeroAppearance = preload("res://src/rendering/hero_appearance.gd")
 ## The real world's own tile size -- the diorama's ground has to agree with
 ## it, not restate a number of its own (see the ground tests below).
 const TerrainRenderer = preload("res://src/rendering/terrain_renderer.gd")
+## The sheet the ground tiles are actually drawn from -- the texture-sharing
+## test below bounds itself against its real variant count, not a number.
+const IllustratedTerrainSprite = preload("res://src/rendering/illustrated_terrain_sprite.gd")
 
 var diorama: Node2D
 
@@ -838,3 +841,34 @@ func test_build_async_yields_per_flower_bird_and_butterfly_not_just_per_step():
 
 	remove_child(incremental)
 	incremental.free()
+
+
+## The ground is 72 tiles drawn from a sheet that holds only 9 distinct
+## variants (IllustratedTerrainSprite's own 3x3 grids), so building an
+## ImageTexture per TILE uploaded the same handful of 32x32 images to the
+## GPU eight times over. Textures are shared per distinct variant instead --
+## the diorama's whole ground plane is at most one texture per variant the
+## sheet actually has.
+##
+## Bounded against the frames the sheet itself provides rather than a
+## hardcoded 9, and required to be more than one so a future bug that
+## collapsed every tile onto a SINGLE variant (a flat, obviously-wrong
+## ground) fails here too rather than reading as a great cache hit rate.
+func test_ground_tiles_share_one_texture_per_distinct_variant():
+	var textures := {}
+	for tile in diorama.ground_tiles:
+		textures[tile.texture.get_instance_id()] = true
+	var variant_count: int = IllustratedTerrainSprite.new().frame_count_for(
+		CharacterPreviewDioramaScript.GROUND_BIOME
+	)
+	assert_gt(variant_count, 1, "the grassland sheet should offer real variety to begin with")
+	assert_gt(diorama.ground_tiles.size(), variant_count, "premise: more tiles than variants")
+	assert_lte(
+		textures.size(),
+		variant_count,
+		(
+			"%d tiles produced %d textures for a sheet with only %d variants"
+			% [diorama.ground_tiles.size(), textures.size(), variant_count]
+		)
+	)
+	assert_gt(textures.size(), 1, "sharing must not collapse the whole ground onto one variant")

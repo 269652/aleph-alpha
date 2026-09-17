@@ -196,6 +196,15 @@ func frame_for(biome_name: String, seed_value: int) -> Image:
 	return frames[index]
 
 
+## How many distinct variant frames `biome_name`'s sheet actually holds (0
+## for a biome with no sheet). Public so callers that build one node per
+## tile can bound their own texture reuse against the real art rather than
+## a hardcoded count -- see CharacterPreviewDiorama._build_ground, whose 72
+## ground tiles share one texture per variant.
+func frame_count_for(biome_name: String) -> int:
+	return _frames_for(biome_name).size()
+
+
 func _frames_for(biome_name: String) -> Array:
 	if not has_variants(biome_name):
 		return []
