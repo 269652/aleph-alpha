@@ -15,12 +15,20 @@
    each band Y-sorts as a unit against the player/creatures. Coarser than
    per-blade, but a walker still reads as correctly in front of or behind
    the grass around them as they move through a field.
-3. **Motion is cheap, physical, and path-traced per blade.** Wind and nearby
-   walkers bend blade tops on the GPU by displacing the *sampled texture UV*
-   per pixel row, not by shearing the card's geometry, so each card's drawn
-   blades bend along a curved path that follows their own silhouette instead
-   of leaning as one rigid parallelogram. Roots never translate, and a
-   walker leaves a short-lived wake. Ambient wind sway scales with the same
+3. **Motion is cheap, physical, and path-traced per blade -- and a bent
+   blade has somewhere to go.** Wind and nearby walkers bend blade tops on
+   the GPU along an eased-in curve whose phase and amplitude both vary across
+   a card's own width, so each card's drawn blades bend along their own
+   curved path instead of leaning as one rigid parallelogram. The bend moves
+   the card's own GEOMETRY (`vertex()` displaces `VERTEX.x` across a
+   subdivided quad), because displacing only the *sampled texture UV* -- what
+   this originally did -- slides art around inside a quad that never moves,
+   so the quad's own edge cuts the blade off (see "Where a bent blade
+   actually goes"). `fragment()` still path-traces per pixel row, but only
+   the remainder the mesh's own vertices could not carry, so the two stages
+   add up to exactly the curve at every pixel. Roots never translate (the
+   curve is exactly 0 at a card's own bottom row of vertices), and a walker
+   leaves a short-lived wake. Ambient wind sway scales with the same
    live wind strength driving the water's shimmer and every other swaying
    plant (`WeatherModel.wind_strength_for` via
    `EarthChunkManager.set_wind_strength`) — calmer on a clear day, harder in
@@ -98,23 +106,25 @@ same mechanism, real seed 7: 6 of its 8 cards, whose real offset.y is
 +6.8, land in the next band over, while the other 2, whose real offset.y
 is -6.8, stay in the cell's own nominal band).
 
-The shader's `fragment()` stage computes a bend curve
+The shader's shared `bend_offset_at()` -- read by BOTH of its stages, see
+"Where a bent blade actually goes" below -- computes a bend curve
 `bend_curve(top_t) = pow(top_t, BEND_CURVE_EXPONENT)`, where `top_t` runs
 from 0 at the root to 1 at the tip - `UV.y` directly (a shared `QuadMesh`'s
 own UV is local `[0, 1]` per instance, verified empirically; this is
 *unlike* a region-mapped `Sprite2D`'s UV, which is atlas-relative, the
 source of an earlier bug - see History). Because the exponent is above 1,
 the curve eases in: the root stays essentially pinned and displacement
-concentrates near the tip, unlike a per-vertex shear (which can only ever
-interpolate linearly between a quad's 4 corners). Wind phase and amplitude
-both vary with `UV.x` (`blade_phase`, `blade_amplitude_scale`), so blades
-drawn side by side within one card sway with different timing instead of
-moving as a single rigid shape - approximating independent blades without
-needing per-blade geometry. The same curve gates a radial, directionally-
-away push around the player's world position, so a walker's "parting"
-reaction reads as clearly stronger than ambient wind sway
-(`WALKER_PUSH_UV_AMPLITUDE > WIND_UV_AMPLITUDE`, tested). `EarthChunkManager`
-updates the one shared player-position uniform once per frame.
+concentrates near the tip, unlike a straight shear (which can only ever ramp
+linearly from root to tip, however many vertices it is drawn with). Wind
+phase and amplitude both vary with `UV.x` (`blade_phase`,
+`blade_amplitude_scale`), so blades drawn side by side within one card sway
+with different timing instead of moving as a single rigid shape -
+approximating independent blades without needing per-blade geometry. The
+same curve gates a radial, directionally-away push around the player's
+world position, so a walker's "parting" reaction reads as clearly stronger
+than ambient wind sway (`WALKER_PUSH_UV_AMPLITUDE > WIND_UV_AMPLITUDE`,
+tested). `EarthChunkManager` updates the one shared player-position uniform
+once per frame.
 
 `IllustratedGrassPatch`'s ambient wind term also carries a `wind_strength`
 uniform (default `1.0`, calibrated to `WeatherModel.wind_strength_for
@@ -128,6 +138,88 @@ scales it multiplicatively, so today's tuned look is exactly reproduced on
 a clear day and visibly stronger in worse weather. `WALKER_PUSH_UV_AMPLITUDE`
 is deliberately NOT scaled by it — parting is the walker's own reaction to
 being nearby, not a function of ambient wind.
+
+### Where a bent blade actually goes (2026-09-17)
+
+Reported live: "the long grass blades are clipped on the left and right when
+they bend." The bend used to live entirely in the SAMPLING stage: `fragment()`
+slid the sampled column sideways by `bend_offset` inside a card's own fixed,
+never-moving quad, and any fragment whose true (unclamped) sample position
+left that quad's own `[0, 1]` region was discarded by the edge-smear guard
+(History #13) -- precisely a hard vertical cut through a bent blade, on
+whichever side the bend pushed toward. Measured at the real tuned constants
+(`WIND_UV_AMPLITUDE` × storm wind × max `amplitude_scale` +
+`WALKER_PUSH_UV_AMPLITUDE`), that slide reaches **1.66 card widths -- about
+106 screen px inside a card only 64 px wide** (`WORLD_SIZE` ×
+`Player.CAMERA_ZOOM`), so most of a strongly bent blade was cut away rather
+than drawn leaning. It is very likely also why History #6's repeated re-tunes
+of `WALKER_PUSH_UV_AMPLITUDE` kept reading as "still not enough" -- not
+separately confirmed against those sessions, but past the first card width
+more amplitude can only ever buy more cut, never more lean.
+
+**A bent blade now moves real geometry.** `vertex()` displaces `VERTEX.x` by
+the same curve, so the art travels WITH the mesh and cannot be cut off by an
+edge that moves along with it. A plain quad has only four corners to move, and
+four corners can express nothing but the flat parallelogram shear History #1
+already rejected -- so the card's `QuadMesh` is subdivided
+(`BEND_MESH_SUBDIVIDE_WIDTH`/`BEND_MESH_SUBDIVIDE_DEPTH`: 4×8 cells, 45
+vertices, 64 triangles): every vertex ROW sits on the real eased-in curve and
+every vertex COLUMN carries its own wind phase and amplitude, so the per-blade
+path-tracing survives the move from the sampling stage onto the geometry.
+
+**`fragment()` still path-traces per pixel row -- of the remainder only.**
+Both stages read ONE shared `bend_offset_at()` (a single seam, the same
+reasoning `cards_for_cell` uses for banding-vs-placement -- two copies of this
+formula could drift into disagreeing about where a blade is). `vertex()`
+writes what it actually applied into a `varying`, which the rasterizer
+interpolates exactly the way it interpolates the displaced vertices
+themselves; `fragment()` subtracts that from the exact curve at its own pixel
+and sample-shifts only the difference. Geometry + sampling therefore equals
+the exact curve at every pixel, not merely at a vertex -- and the only part
+that can still slide art past a region edge is that difference, measured at
+**0.0197 card widths (1.26 screen px)** across the real worst case (storm
+wind, a walker standing right on the card), down from 106 px. Pinned by
+`test_bending_never_slides_a_blade_further_sideways_than_its_own_card_can_show`,
+which measures it through a GDScript mirror of the shader's own formula
+(`bend_offset`/`mesh_bend_offset`/`sampled_bend_offset`), since the headless
+renderer can only compile this GLSL, never sample it. The mirror models the
+mesh's interpolation bilinearly while a GPU splits each cell into two affine
+triangles; the two differ by at most a quarter of a cell's own twist term, so
+that term is measured off the real corners and added to the bound rather than
+assumed away.
+
+**What this costs, honestly.** Fill rate -- pillar 4's real constraint -- is
+unchanged: a sheared quad covers the same area it did upright, and the same
+single draw call per band still draws it. What it does cost is vertex work: 45
+vertices per card instead of 4, and 64 small triangles instead of 2, plus the
+bend math now running per vertex as well as per fragment (the fragment stage
+needs the exact value in order to subtract the interpolated one). At the
+shipped 64×64-screen-px card, one of those cells is ~16×8 px -- comfortably
+above the ~4×4 px floor where small triangles start wasting whole rasterizer
+quads. Finer subdivision would shrink the leftover sliver further; 4×8 is
+where it stops being visible (~1 px) without pushing cells toward that floor.
+
+**Not independently verified by a live render.** Every claim above is pinned
+by a real headless test (the residual bound, the shader's structure, the
+mesh's subdivision and triangle count, roots staying exactly put), and the
+GLSL genuinely compiles under the headless runner -- confirmed directly, not
+assumed: a deliberately broken line in this same shader fails the suite loudly
+with `SHADER ERROR`. But this doc's own History is full of grass bugs only a
+real, non-headless render could see, and none was available in the session
+that made this change. Worth a look on next launch: if a strongly bent blade
+now reads as *stretched* rather than leaning, the answer is a finer
+`BEND_MESH_SUBDIVIDE_*`, not a redesign.
+
+**Wheat is deliberately not changed in the same pass, and has diverged.**
+`IllustratedWheatPatch` draws ordinary `Sprite2D` blades (two triangles, no
+subdividable mesh -- see "A second atlas family: farmed wheat"), so it cannot
+take this fix as written and still bends by sliding its own sampled UV: a
+wheat blade under a strong walker push can still clip at its own frame's edge,
+exactly the way grass did. The two shaders still share every tuned constant by
+direct reference, which is what that section's parity claim was actually about
+-- but they no longer share the mechanism. A real, scoped-out follow-up (it
+needs `FarmPlotMarker`'s blades to become `MeshInstance2D`s), recorded here
+rather than left for the next reader to trip over.
 
 Every card in a band shares one atlas texture and one `ShaderMaterial`, so
 each instance's own atlas sub-rect (which ~125×125px cell of the 10×10
@@ -742,6 +834,23 @@ framebuffer), so several of these needed a real, non-headless, off-screen
     (autumn) blades at 33%, 50% and 67% progress, not a hard snap between
     one uniform color and another.
 
+15. **"The long grass blades are clipped on the left and right when they
+    bend"** (reported live). The bend was applied to the SAMPLED UV alone, so
+    a card's own never-moving quad clipped whatever the bend carried past its
+    edge — see "Where a bent blade actually goes" above for the mechanism and
+    the measured numbers (1.66 card widths of slide inside a 64-px-wide card,
+    now 1.26 px). Two things this re-frames rather than contradicts. History
+    #13's edge-smear discard was never the cause, but it IS what turned the
+    overflow into a clean vertical cut instead of the stretched edge pixel it
+    replaced — the right fix for the artifact it was aimed at, hiding a
+    bigger one behind it. And History #6's ladder of "still not enough"
+    re-tunes (`WALKER_PUSH_UV_AMPLITUDE` 0.45 → 0.6 → 0.7 → 1.5) was, by
+    the end, climbing past the point where extra amplitude could only buy
+    extra cut (an inference from the arithmetic, not a re-test of those
+    sessions);
+    the constant is left exactly where those live sessions put it, since it
+    now buys the lean it always claimed to.
+
 ### A second atlas family: farmed wheat (2026-09-13)
 
 Requested directly: "I added a wheat sprite similar to the long grass
@@ -789,18 +898,22 @@ copy.** `IllustratedWheatPatch.SHADER_CODE` is built from
 `WALKER_PUSH_UV_AMPLITUDE` by direct reference, so the two shaders cannot
 silently drift apart on a future re-tune of one without the other — pinned
 by test (`test_illustrated_wheat_patch.gd` asserts the generated shader
-source literally embeds grass's own constant values). One real, necessary
-adaptation: a plain `Sprite2D`'s own local `UV.y` is 0 at the TEXTURE'S
-TOP and 1 at its bottom (standard canvas-item convention) — the OPPOSITE
-of `IllustratedGrassPatch`'s MultiMesh quad, whose own local `UV.y=0` is
-the root/bottom (verified empirically there). Every wheat frame is cropped
-root-at-the-image's-own-bottom like every illustrated sheet in this
-codebase, so wheat's own shader computes `top_t = 1.0 - UV.y` where
-grass's uses `UV.y` directly — the one deliberate, documented divergence,
-not an oversight. Deliberately NOT reused: `IllustratedGrassPatch`'s
-`season_tint` mixing — wheat's three sheets already ARE the season's own
-look (unlike grass's one-sheet-per-season-plus-a-tint-on-top design), so
-tinting on top of an already-seasonal sheet would double-apply the effect.
+source literally embeds grass's own constant values). SUPERSEDED IN PART
+(2026-09-17): the shared NUMBERS still hold, but grass's own shader has
+since moved its bend onto real geometry while wheat's `Sprite2D` blades
+cannot — see "Where a bent blade actually goes" for what that leaves open
+here. One real, necessary adaptation: a plain `Sprite2D`'s own local `UV.y`
+is 0 at the TEXTURE'S TOP and 1 at its bottom (standard canvas-item
+convention) — the OPPOSITE of `IllustratedGrassPatch`'s MultiMesh quad,
+whose own local `UV.y=0` is the root/bottom (verified empirically there).
+Every wheat frame is cropped root-at-the-image's-own-bottom like every
+illustrated sheet in this codebase, so wheat's own shader computes `top_t =
+1.0 - UV.y` where grass's uses `UV.y` directly — the one deliberate,
+documented divergence, not an oversight. Deliberately NOT reused:
+`IllustratedGrassPatch`'s `season_tint` mixing — wheat's three sheets
+already ARE the season's own look (unlike grass's
+one-sheet-per-season-plus-a-tint-on-top design), so tinting on top of an
+already-seasonal sheet would double-apply the effect.
 
 **Growth picks the row, world season picks the sheet — the same two
 independent axes `atlas_region_for` already uses for grass.**
@@ -866,6 +979,17 @@ at the ROOT instead of the tip), the fix is a one-line flip of
   units — see `test_illustrated_grass_patch.gd`'s
   `test_band_height_leaves_a_real_safety_margin_under_the_players_own_
   max_reach`.
+- ✅ A bending blade moves its own GEOMETRY (`vertex()` displaces
+  `VERTEX.x` across a 4×8-subdivided `QuadMesh`), so it is no longer clipped
+  at the card's own edge — see History #15. `fragment()` still resolves the
+  curve per pixel row, for the sliver the mesh's vertices cannot carry:
+  measured at 0.0197 card widths (1.26 screen px) worst case, down from the
+  1.66 card widths (106 px) the sampling stage used to slide on its own, and
+  pinned by `test_bending_never_slides_a_blade_further_sideways_than_its_own_
+  card_can_show`. Fill rate and draw calls are unchanged; vertex count is
+  not (4 → 45 per card). ⬜ Still unverified by a real, non-headless render,
+  unlike the entry above it, and ⬜ `IllustratedWheatPatch` still bends the
+  old (clippable) way — see "Where a bent blade actually goes" for both.
 - ✅ The walker-position uniform updates every frame for every client
   (host and connected), not just whichever peer owns the ecosystem
   simulation — see History #5.
