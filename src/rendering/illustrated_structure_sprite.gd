@@ -406,6 +406,45 @@ func divider_frame_image(path: String, columns: int, rows: int, row: int, column
 	return _frame_image(path, columns, rows, row, column, GRID_DIVIDERS)
 
 
+## The same cut for a sheet whose per-cell own content reads as a false
+## extra divider to the generic band scan -- assets/sprites/buildings/
+## stand.png (the "stall" landmark) draws each cell as a roof/awning over
+## an open gap over a table, and that gap is near-full-width magenta in
+## every one of the 5 columns at once, so VariantSheetGrid.art_bands' own
+## "least size-varied run of `count` consecutive bands" heuristic prefers
+## grabbing the size-consistent noise slivers beside every true divider
+## over the genuinely different-sized roof/table halves it was supposed to
+## find (measured directly: tools/_probe_stand_bands.gd's raw
+## divider_bands come back as 16 row / 11 column entries for a real 5x5
+## grid, not 5). `row_bands`/`column_bands` are measured off the real file
+## and pinned here instead -- the same "generic detector cannot help,
+## explicit bands can" call illustrated_terrain_sprite.gd's "soil" entry
+## already made for its own near-black gutters.
+func explicit_frame_image(
+	path: String, row_bands: Array, column_bands: Array, row: int, column: int
+) -> Image:
+	if row < 0 or row >= row_bands.size() or column < 0 or column >= column_bands.size():
+		return null
+	var key := "%s|explicit|%d|%d" % [path, row, column]
+	if _sheet_frame_cache.has(key):
+		return _sheet_frame_cache[key]
+	var image := SpriteSheetLoader.load_image(path)
+	if image == null:
+		return null
+	var row_band: Vector2i = row_bands[row]
+	var column_band: Vector2i = column_bands[column]
+	var rect := Rect2i(
+		column_band.x, row_band.x,
+		column_band.y - column_band.x + 1, row_band.y - row_band.x + 1
+	)
+	var frame := image.get_region(rect)
+	if frame.get_format() != Image.FORMAT_RGBA8:
+		frame.convert(Image.FORMAT_RGBA8)
+	_key_and_despill(frame, true)
+	_sheet_frame_cache[key] = frame
+	return frame
+
+
 ## One body for all three, differing only in where the cell's rect comes
 ## from. Cached per (path, row, column, grid kind), so the band scan a
 ## detected grid needs is paid once per sheet rather than per building

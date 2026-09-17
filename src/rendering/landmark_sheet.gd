@@ -56,15 +56,34 @@ const EXTRA_PROP_IDS: Array[String] = []
 ##   cells  how that grid's cells are found -- see
 ##          IllustratedStructureSprite's GRID_* names
 ##
-## The well's sheet (delivered 2026-09-17) differs on all three: 25 wells
-## in a 5x5 grid with magenta divider lines, sitting in the buildings
-## folder beside the house sheets it was drawn alongside. Measured with
-## tools/probe_building_lifecycle_sheet.gd, not assumed.
+## The stall's sheet (delivered 2026-09-17, filed as stand.png rather than
+## stall.png) is also a 5x5 grid with magenta divider lines, but its own
+## content defeats the generic divider-band scan: every cell draws an
+## open gap between the roof and the table that reads as a near-full-
+## width false divider, splitting each real row into two disparate-sized
+## halves the generic "least size-varied run" heuristic cannot
+## distinguish from real dividers (see IllustratedStructureSprite.
+## explicit_frame_image's own doc comment). row_bands/column_bands are
+## measured directly off the file with tools/_probe_stand_bands.gd and
+## pinned here instead of trusted to the generic scan.
 const _SHEETS := {
 	"well": {
 		"path": "res://assets/sprites/buildings/well.png",
 		"grid": Vector2i(5, 5),
 		"cells": "dividers",
+	},
+	"stall": {
+		"path": "res://assets/sprites/buildings/stand.png",
+		"grid": Vector2i(5, 5),
+		"cells": "explicit",
+		"row_bands": [
+			Vector2i(45, 225), Vector2i(286, 473), Vector2i(524, 721),
+			Vector2i(770, 966), Vector2i(1016, 1215),
+		],
+		"column_bands": [
+			Vector2i(30, 227), Vector2i(281, 475), Vector2i(534, 726),
+			Vector2i(778, 975), Vector2i(1027, 1226),
+		],
 	},
 }
 
@@ -125,6 +144,11 @@ static func frame_image(landmark_id: String, seed_value: int, illustrator) -> Im
 		return null
 	var grid := grid_of(landmark_id)
 	var cell := variant_cell_for(landmark_id, seed_value)
+	var declared: Dictionary = _SHEETS.get(landmark_id, {})
+	if cells_of(landmark_id) == "explicit":
+		return illustrator.explicit_frame_image(
+			sheet_path_for(landmark_id), declared["row_bands"], declared["column_bands"], cell.y, cell.x
+		)
 	if cells_of(landmark_id) == "dividers":
 		return illustrator.divider_frame_image(
 			sheet_path_for(landmark_id), grid.x, grid.y, cell.y, cell.x

@@ -1199,8 +1199,13 @@ rule that let it through is pinned by test: every work tag in
   the procedural sprite as the fallback (`test_landmark_sheet.gd`).
 - ✅ `VillageRenderer._landmark_texture` routes every prop through it
   (`test_village_renderer.gd`).
-- ⬜ The art itself. No file has been supplied yet, so every prop still
-  draws procedurally — which is exactly what the tests currently pin.
+- 🚧 The art itself. `well.png` and `stall.png` (delivered as
+  `assets/sprites/buildings/stand.png` — a 5×5 grid, magenta-keyed rather
+  than black-background like the building sheets, gutters measured
+  directly off the real PNG with `tools/_probe_stand_bands.gd`/
+  `_probe_stand_frame.gd`) are both real now; every other prop
+  (`gate`/`field`/`forge`/`dock`/`garden`/`hunting_ground`) still draws
+  procedurally, which is exactly what the tests currently pin.
 - ⬜ **Beds and other furniture are NOT covered.** They are painted into
   the furniture `TileMapLayer` rather than spawned as prop sprites
   (`HouseDecor`), so they need their own path; this contract is for the
