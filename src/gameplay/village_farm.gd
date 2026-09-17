@@ -359,10 +359,11 @@ static func fence_facing(cell: Vector2i, worked_cells: Array) -> String:
 			orthogonal += 1
 	if orthogonal == 0:
 		# Which SIDE the corner caps matters: the side wall below it is drawn
-		# pushed outward (EarthChunkManager._structure_art_x_offset), so a
-		# post that did not know its side would sit half a tile inboard of
-		# the run it caps -- a visibly broken joint, and the opposite of what
-		# "corner pieces added so it doesn't look that broken" asked for.
+		# on its own inner edge (fence_inner_direction, applied by
+		# IllustratedStructureSprite.footprint_offset), so a post that did
+		# not know its side would sit half a tile off the run it caps -- a
+		# visibly broken joint, and the opposite of what "corner pieces added
+		# so it doesn't look that broken" asked for.
 		for dy in [1, -1]:
 			for dx in [1, -1]:
 				if beds.has(cell + Vector2i(dx, dy)):
@@ -387,6 +388,109 @@ static func fence_tile_for(facing: String) -> String:
 ## have to ask, so neither re-lists the ids.
 static func is_fence_tile(tile_id: String) -> bool:
 	return tile_id != "" and FENCE_TILE_IDS.values().has(tile_id)
+
+
+## Which way the beds lie from a rail cell -- and therefore which of that
+## cell's own four edges the rails are actually DRAWN on, and the only line
+## an animal may not cross. Vector2i.ZERO for anything that is not a rail.
+##
+## Asked for directly, with two sides of a real ring arrowed in a
+## screenshot: *"move the fences to the inner edge of the enclosure and
+## treat the rest of the tile as street"*. A rail used to be a whole solid
+## tile -- ground no animal could stand on, painted as a bare earth square
+## over whatever was already there. It is a LINE on ONE edge now, so the
+## rest of its own tile is ordinary walkable ground and the ring round a
+## field reads as the path the farmer walks rather than a brown moat.
+##
+## The direction is the INVERSE of what the facing names: a rail closing the
+## field's NORTH side stands north of the beds, so its beds -- and its rails
+## -- lie SOUTH of it. That is the same relation fence_facing measures in
+## the other direction, and
+## test_the_inner_edge_really_points_at_the_bed_the_rail_encloses pins the
+## two against each other rather than trusting two hand-written tables.
+## A corner post caps one of the two SIDE walls, so it takes that wall's own
+## inner edge: a corner_west caps the west run and its beds lie east, a
+## corner_east caps the east run and its beds lie west. That is what keeps
+## the post on the same line as the run it caps instead of half a tile off
+## it, and it is also the honest answer for what an animal may cross there
+## -- the diagonal into the crop is blocked (that diagonal's x component IS
+## this direction), while walking on along the ring past the turn is not.
+const FENCE_INNER_DIRECTIONS := {
+	"north": Vector2i(0, 1),
+	"south": Vector2i(0, -1),
+	"east": Vector2i(-1, 0),
+	"west": Vector2i(1, 0),
+	"corner_west": Vector2i(1, 0),
+	"corner_east": Vector2i(-1, 0),
+}
+
+
+## The facing a rail's tile id carries, or "" for anything that is not a
+## rail -- the reverse of fence_tile_for, so nothing re-lists the ids.
+static func fence_facing_of(tile_id: String) -> String:
+	if tile_id == "":
+		return ""
+	for facing in FENCE_TILE_IDS:
+		if FENCE_TILE_IDS[facing] == tile_id:
+			return facing
+	return ""
+
+
+static func fence_inner_direction(tile_id: String) -> Vector2i:
+	return FENCE_INNER_DIRECTIONS.get(fence_facing_of(tile_id), Vector2i.ZERO)
+
+
+## Whether this rail is a corner POST rather than a length of rail -- a cell
+## the beds touch only on the DIAGONAL, capping the two runs that meet
+## there (see fence_facing).
+static func is_fence_corner_tile(tile_id: String) -> bool:
+	return fence_facing_of(tile_id).begins_with("corner")
+
+
+## Whether a step from one cell to the next CROSSES a rail's inner edge --
+## the one thing a rail stops. `step` is the move as a cell delta (only its
+## sign per axis matters); `from_tile_id`/`to_tile_id` are the modifications
+## standing on each end of it.
+##
+## Blocked when the animal LEAVES a rail cell over that cell's own inner
+## edge, or ENTERS a rail cell over ITS inner edge -- the same line, walked
+## from the field side. Never otherwise, and that is precisely what makes
+## the rest of a rail's tile ordinary ground: stepping onto the ring, along
+## it, or away from the beds is all free, so the ring is a path an animal
+## may walk and a farmer may work from.
+##
+## A diagonal crosses both of its own edges, so it is blocked whenever
+## either component would be -- an animal must not slip round a corner of
+## the ring that no cardinal step can pass.
+static func rails_block_step(from_tile_id: String, to_tile_id: String, step: Vector2i) -> bool:
+	return _rail_stops_step(from_tile_id, step) or _rail_stops_step(to_tile_id, -step)
+
+
+## Whether the rail on ONE end of a step stops it, seen from that rail's own
+## cell -- so the destination is asked with the step reversed, which is the
+## same line walked from the field side.
+##
+## A CORNER post is the exception, and a load-bearing one: its beds are
+## diagonal, so the only way through it into the crop is a diagonal. Its
+## cardinal neighbours are the two runs it caps, and stopping a step along a
+## run stops an animal walking the ring -- the exact opposite of "treat the
+## rest of the tile as street", and caught by
+## test_the_ring_of_a_rectangular_field_is_walkable_all_the_way_round, which
+## a first pass failed at all four corners. Nothing is opened by it: every
+## cardinal way in is still shut by the run's own rail.
+static func _rail_stops_step(tile_id: String, step: Vector2i) -> bool:
+	var inner := fence_inner_direction(tile_id)
+	if inner == Vector2i.ZERO or step == Vector2i.ZERO:
+		return false
+	var crosses := (
+		(inner.x != 0 and signi(step.x) == inner.x)
+		or (inner.y != 0 and signi(step.y) == inner.y)
+	)
+	if not crosses:
+		return false
+	if is_fence_corner_tile(tile_id):
+		return step.x != 0 and step.y != 0
+	return true
 
 
 ## The compact rectangle of beds a farmhouse at `origin` works, or null when

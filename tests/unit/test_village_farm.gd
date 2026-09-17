@@ -482,6 +482,132 @@ func test_a_facing_nobody_drew_has_no_rail():
 	assert_false(VillageFarm.is_fence_tile(""))
 
 
+# -- a rail is a LINE on its own inner edge, not a solid tile --------------
+#
+# Asked for directly, with the two sides arrowed in a screenshot: "move the
+# fences to the inner edge of the enclosure and treat the rest of the tile
+# as street ... the brown squares should still be street when a fence is
+# put". A rail cell is ordinary ground an animal may stand on and walk
+# along; what it may not do is CROSS the edge the rails are actually drawn
+# on. See docs/concept/village_farms.md, "The rail stands on the inner
+# edge".
+
+
+## Which of a rail cell's own four edges the rails are drawn on -- the edge
+## facing the beds it encloses.
+func test_every_rail_knows_which_of_its_own_edges_faces_the_beds():
+	assert_eq(
+		VillageFarm.fence_inner_direction(VillageFarm.fence_tile_for("north")), Vector2i(0, 1),
+		"a rail closing the field's north side has its beds to the south"
+	)
+	assert_eq(VillageFarm.fence_inner_direction(VillageFarm.fence_tile_for("south")), Vector2i(0, -1))
+	assert_eq(VillageFarm.fence_inner_direction(VillageFarm.fence_tile_for("east")), Vector2i(-1, 0))
+	assert_eq(VillageFarm.fence_inner_direction(VillageFarm.fence_tile_for("west")), Vector2i(1, 0))
+
+
+func test_anything_that_is_not_a_rail_has_no_inner_edge():
+	assert_eq(VillageFarm.fence_inner_direction(""), Vector2i.ZERO)
+	assert_eq(VillageFarm.fence_inner_direction("road"), Vector2i.ZERO)
+	assert_eq(VillageFarm.fence_inner_direction("farmhouse"), Vector2i.ZERO)
+
+
+## Not a second, independently-written table: the inner edge must be exactly
+## the direction the bed really lies in from that rail, or the art stands on
+## the wrong edge and the barrier closes the wrong side.
+func test_the_inner_edge_really_points_at_the_bed_the_rail_encloses():
+	var beds: Array = [Vector2i(4, 4)]
+	for cell in [Vector2i(4, 3), Vector2i(4, 5), Vector2i(5, 4), Vector2i(3, 4)]:
+		var tile_id: String = VillageFarm.fence_tile_for(VillageFarm.fence_facing(cell, beds))
+		assert_eq(
+			cell + VillageFarm.fence_inner_direction(tile_id), Vector2i(4, 4),
+			"%s's inner edge must face the bed it encloses" % str(cell)
+		)
+
+
+## The rail stops a CROSSING, not an occupancy: an animal walking onto the
+## ring is fine, an animal stepping over the rails is not.
+func test_stepping_across_a_rails_inner_edge_is_blocked():
+	var north: String = VillageFarm.fence_tile_for("north")
+	assert_true(
+		VillageFarm.rails_block_step(north, "", Vector2i(0, 1)),
+		"south off a north rail is a step into the beds"
+	)
+	assert_true(
+		VillageFarm.rails_block_step("", north, Vector2i(0, -1)),
+		"north into a north rail is a step out of the beds"
+	)
+	var west: String = VillageFarm.fence_tile_for("west")
+	assert_true(VillageFarm.rails_block_step(west, "", Vector2i(1, 0)), "east off a west rail")
+	assert_true(VillageFarm.rails_block_step("", west, Vector2i(-1, 0)), "west into a west rail")
+
+
+## The whole point of the change: the rest of the rail's tile is ordinary
+## walkable ground.
+func test_walking_onto_and_along_a_rail_is_never_blocked():
+	var north: String = VillageFarm.fence_tile_for("north")
+	assert_false(
+		VillageFarm.rails_block_step(north, north, Vector2i(1, 0)),
+		"an animal may walk the ring along its own run"
+	)
+	assert_false(
+		VillageFarm.rails_block_step("", north, Vector2i(0, 1)),
+		"walking ONTO a rail cell from outside is not crossing its rails"
+	)
+	assert_false(
+		VillageFarm.rails_block_step(north, "", Vector2i(0, -1)),
+		"stepping away from the beds is free"
+	)
+	assert_false(VillageFarm.rails_block_step("", "", Vector2i(0, 1)), "open ground blocks nothing")
+	assert_false(VillageFarm.rails_block_step(north, north, Vector2i.ZERO), "standing still crosses nothing")
+
+
+## A diagonal step crosses both of its own edges, so it is blocked whenever
+## either component would be -- an animal must not slip round a corner of
+## the ring that a cardinal step cannot pass.
+func test_a_diagonal_step_over_a_rails_inner_edge_is_blocked_too():
+	var west: String = VillageFarm.fence_tile_for("west")
+	assert_true(
+		VillageFarm.rails_block_step(west, "", Vector2i(1, 1)),
+		"a diagonal whose east component still crosses the rails"
+	)
+	assert_false(
+		VillageFarm.rails_block_step(west, "", Vector2i(-1, 1)),
+		"a diagonal away from the rails is free"
+	)
+
+
+## The claim docs/concept/village_farms.md's own honest-gap row makes, pinned
+## rather than eyeballed: a rail carries ONE facing, so it closes one of its
+## own sides -- and on a rectangular field that is still enough at the
+## corners, because fence_facing's vertical answer for a diagonal-only cell
+## is always one of that diagonal's own two components.
+func test_a_corner_of_a_rectangular_field_still_refuses_the_diagonal_into_the_crop():
+	var beds: Array = [Vector2i(4, 4), Vector2i(5, 4), Vector2i(4, 5), Vector2i(5, 5)]
+	var bed_set: Dictionary = {}
+	for bed in beds:
+		bed_set[bed] = true
+	var rails: Dictionary = {}
+	for cell in VillageFarm.fence_cells(beds, Vector2i(20, 20), VillageFarm.FARM_BUILDING_ID):
+		rails[cell] = VillageFarm.fence_tile_for(VillageFarm.fence_facing(cell, beds))
+	var corners := 0
+	for cell in rails:
+		var has_orthogonal_bed := false
+		for side in [Vector2i(1, 0), Vector2i(-1, 0), Vector2i(0, 1), Vector2i(0, -1)]:
+			if bed_set.has(cell + side):
+				has_orthogonal_bed = true
+		if has_orthogonal_bed:
+			continue
+		for diagonal in [Vector2i(1, 1), Vector2i(1, -1), Vector2i(-1, 1), Vector2i(-1, -1)]:
+			if not bed_set.has(cell + diagonal):
+				continue
+			corners += 1
+			assert_true(
+				VillageFarm.rails_block_step(rails[cell], "", diagonal),
+				"%s must still refuse the diagonal into the crop" % str(cell)
+			)
+	assert_eq(corners, 4, "a rectangular field has exactly four diagonal-only corner rails")
+
+
 # -- the field is a compact rectangle, and its fence a closed frame --------
 #
 # Reported in play with the broken ring circled in a screenshot: "The
@@ -635,3 +761,47 @@ func test_both_corner_posts_have_rail_tiles_of_their_own():
 	assert_ne(west, east, "the two sides are pushed opposite ways, so they cannot share a tile")
 	assert_true(VillageFarm.is_fence_tile(west))
 	assert_true(VillageFarm.is_fence_tile(east))
+
+
+## The claim docs/progress.md's own honest-gap row makes about the merged
+## rule, pinned rather than asserted: with the field a rectangle
+## (FIELD_SHAPES) and its diagonal cells real corner posts, an animal can
+## walk the whole ring without ever being turned back -- which is what
+## "treat the rest of the tile as street" asked for -- while every way INTO
+## the crop stays shut.
+func test_the_ring_of_a_rectangular_field_is_walkable_all_the_way_round():
+	var beds: Array = []
+	for y in range(4, 6):
+		for x in range(4, 7):
+			beds.append(Vector2i(x, y))  # a real 3x2 field
+	var rails: Dictionary = {}
+	for cell in VillageFarm.fence_cells(beds, Vector2i(20, 20), VillageFarm.FARM_BUILDING_ID):
+		rails[cell] = VillageFarm.fence_tile_for(VillageFarm.fence_facing(cell, beds))
+	assert_gt(rails.size(), 8, "precondition: a real ring round a 3x2 field")
+	for cell in rails:
+		for step in [Vector2i(1, 0), Vector2i(-1, 0), Vector2i(0, 1), Vector2i(0, -1)]:
+			if not rails.has(cell + step):
+				continue  # not a step along the ring
+			assert_false(
+				VillageFarm.rails_block_step(rails[cell], rails[cell + step], step),
+				"the ring turns an animal back at %s -> %s" % [str(cell), str(cell + step)]
+			)
+
+
+## And the other half of the same claim: no cell of that ring faces beds on
+## two orthogonal sides, which is the case one facing per rail could not
+## close.
+func test_no_rail_of_a_rectangular_field_has_to_close_two_sides_at_once():
+	var beds: Array = []
+	for y in range(4, 6):
+		for x in range(4, 7):
+			beds.append(Vector2i(x, y))
+	var bed_set: Dictionary = {}
+	for bed in beds:
+		bed_set[bed] = true
+	for cell in VillageFarm.fence_cells(beds, Vector2i(20, 20), VillageFarm.FARM_BUILDING_ID):
+		var orthogonal := 0
+		for step in [Vector2i(1, 0), Vector2i(-1, 0), Vector2i(0, 1), Vector2i(0, -1)]:
+			if bed_set.has(cell + step):
+				orthogonal += 1
+		assert_lt(orthogonal, 2, "%s faces beds on %d sides and can only close one" % [str(cell), orthogonal])

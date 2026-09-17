@@ -23873,7 +23873,94 @@ against. Pinned by a test that the four rails really are four *different*
 pictures — reading a label-gutter sheet on an even division hands back the
 same cell four times.
 
-Honest gaps, both real:
+### The rail moved onto the inner edge (2026-09-17)
+
+Reported straight after, with the ring's west and south sides arrowed in a
+screenshot: *"move the fences to the inner edge of the enclosure and treat
+the rest of the tile as street … the brown squares should still be street
+when a fence is put"*. The brown squares had a single cause: `farm_fence_*`
+is neither a `ProceduralStructureSprite` structure nor a `BuildingPiece`,
+so every rail cell fell through `atlas_coords_for_modification`'s
+unknown-id fallback to the plain-earth slot and painted a raw dug square,
+with the rail art floating in the middle of it.
+
+Spec first (`village_farms.md` gained "The rail stands on the inner edge"),
+then red-first in three change sets, one per half of the mechanic:
+
+- **The rail is a line, not a tile.** `VillageFarm.fence_inner_direction` is
+  which way the beds lie from a rail — the inverse of what the facing names,
+  and pinned against `fence_facing` itself rather than written out twice, so
+  a rail can never be drawn on one edge and block another.
+  `rails_block_step` turns the old whole-tile occupancy question into a
+  crossing one: blocked leaving a rail cell over its own inner edge or
+  entering one over that same edge from the field side, free otherwise. A
+  diagonal crosses both its edges and is blocked whenever either component
+  would be.
+- **The ground is untouched.** `TerrainRenderer.OVERLAY_ONLY_TILE_IDS` names
+  the modifications drawn ON the ground rather than replacing it, and
+  `_replaces_the_ground` gates the two places that cared — `paint()` and
+  `_neighbor_biomes`. The second one is not optional: without it an earth
+  cell beside the ring still reads it as modified and refuses to blend, and
+  a hard dithered seam runs right round the field. Listed in the renderer
+  and pinned to `VillageFarm.FENCE_TILE_IDS` by test, keeping that module
+  free of gameplay — the same shape `MIN_FIELD_CELLS` uses the other way.
+- **The art stands on the edge.**
+  `IllustratedStructureSprite.footprint_offset` puts a rail's own ground
+  line on the edge facing its beds, branching on how the sheet draws that
+  run rather than on a table of facings: a broad-side run (North/South)
+  stands on its **posts**, so the bottom of its wood is its ground line; a
+  top-view run (East/West) has none — the band of rail *is* the ground line
+  — so its **centre line** lands on the edge.
+
+  MEASURED off the art (`_art_rect`), and the first pass got this wrong by
+  assuming it from the cell instead: `fence.png` draws every run centred in
+  its own cell with real margin all round, so bottom-anchoring leaves a
+  rail's posts ~0.2 tile short of the edge, and the guess that a *north*
+  rail therefore already stood on its own south edge was off by exactly
+  that. The independent measurement in
+  `test_a_broadside_runs_posts_stand_on_the_edge_facing_the_beds` — its own
+  brown-pixel rule over the delivered sheet, sharing no code with what it
+  checks — is what caught it, landing the north rail at 51.4 of 64 instead
+  of 64. `Image.get_used_rect` could not have supplied the measurement:
+  a pixel part way between the sheet's magenta divider and its black
+  background is neither magenta enough nor black enough to key, survives at
+  full alpha, and makes the used rect the whole cell every time — so
+  `_is_art_pixel` keys on that leftover being magenta-*cast* (blue at least
+  as strong as green), which real wood and iron never are.
+
+**And the runs were still a row of separate pieces** until *"also scale"*.
+Every whole building scales its cell width to the tile; a rail cannot,
+because the sheet draws each run centred in its cell with margin at both
+ends, and that margin becomes the gap between one rail and the next —
+measured at 52 of 64 across and 39 of 64 down. `_footprint_scale` scales a
+rail so its own wood spans one tile along the direction its run travels, so
+consecutive rails meet. Its band then exceeds the tile, so the
+footprint-width contract narrowed to whole buildings, the aspect-ratio
+contract was restated against the texture's own width rather than the tile
+(one factor on both axes is what it was ever really saying), and the x
+placement now carries where the band's left edge falls instead of assuming
+it is zero.
+
+`CreatureMarker._fence_blocks_movement` now asks about the step it is really
+taking — the cell under the animal and the cell its look-ahead lands in —
+because an edge is a fact about a pair of cells and cannot be read off
+either alone. Same single world query per movement decision as before, at
+the same choke point.
+
+Red confirmed at every layer before any of it existed: `fence_inner_direction`
+and `rails_block_step` parse-errored, `is_overlay_only_modification` parse-
+errored, `footprint_offset` failed 5 tests, the overlay sat at offset zero
+(2), the marker asked a world that no longer answers (3),
+`fence_blocks_step_global` was verified red by renaming it and re-running,
+and the corrected ground-line rule went red again (3) against the measured
+art before it went green.
+Green: 49/49 `test_village_farm`, 179/179 `test_terrain_renderer`, 29/29
+`test_illustrated_structure_sprite`, 12/12 `test_earth_chunk_manager_
+structure_art`, 259/259 `test_creature_marker`, the fence subset of
+`test_earth_chunk_manager`, and 260/260 across the four neighbouring
+village/item suites as a regression check.
+
+Honest gaps, three real:
 
 🚧 **The gate is a real hole.** An animal that wanders into the gate cell is
 inside the field. That is what a farm gate is; closing it needs a gate
@@ -23883,6 +23970,23 @@ a few tiles wide at most.
 
 🚧 **Rails never weather or break.** The sheet carries Worn and Destroyed
 rows and only Pristine is ever drawn, because nothing damages a fence.
+
+🚧 **A rail closes exactly one of its own sides.** The trade the edge rule
+makes. A rail's tile id carries one facing, so `fence_inner_direction` names
+one edge, where the old whole-tile rule made the cell solid and closed every
+side of it at once. A **rectangular** field (which is now the only kind —
+see the section below) is not hurt by it: no ring cell of a rectangle
+touches beds on two orthogonal sides, and its four diagonal-only cells are
+`corner_west`/`corner_east` posts whose inner direction is the x component
+of the diagonal into the crop, so that diagonal stays blocked while walking
+on round the turn does not — pinned by
+`test_the_ring_of_a_rectangular_field_is_walkable_all_the_way_round` and
+`test_a_corner_of_a_rectangular_field_still_refuses_the_diagonal_into_the_crop`.
+What is genuinely open is a bed reached diagonally past a cell that faces
+beds two ways, which a rectangle cannot produce but a hand-placed or
+future non-rectangular field could. The fix is the same one the bend's art
+still wants: a rail id carrying a SET of closed edges, with corner art to
+match (`docs/concept/village_farms.md`, `docs/art/ai_sprite_prompts.md` §13).
 
 
 ## The field becomes a rectangle, so its fence becomes a frame (`concept/village_farms.md`, 2026-09-17)
