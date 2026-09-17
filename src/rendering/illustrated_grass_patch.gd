@@ -105,6 +105,39 @@ const AMPLITUDE_FREQUENCY := 6.0
 const WIND_UV_AMPLITUDE := 0.09
 const WALKER_PUSH_UV_AMPLITUDE := 1.5
 
+## How finely a card's own quad is cut up so its GEOMETRY can follow the bend
+## curve. `mesh()` feeds these straight to QuadMesh's own subdivide_width/
+## subdivide_depth (PlaneMesh calls a quad's vertical axis "depth"), giving
+## (WIDTH + 1) x (DEPTH + 1) = 4 x 8 cells, 45 vertices and 64 triangles per
+## card.
+##
+## Why subdivide at all: the bend is applied to VERTEX.x in the shader's own
+## vertex() (see _build_shader_code), because that is the only stage that can
+## actually MOVE a blade -- and an undivided quad has only its own four
+## corners to move, which can express nothing but the flat parallelogram
+## shear docs/concept/long_grass.md's History #1 already rejected. Every
+## vertex ROW here instead sits on the real eased-in curve, and every vertex
+## COLUMN carries its own wind phase/amplitude, so the per-blade path-tracing
+## survives the move from the sampling stage to the geometry.
+##
+## Why THESE numbers: what the mesh cannot represent between its own vertices
+## falls back to the sampling stage, which is the only stage that can slide
+## art past a card's edge and clip it (History "Where a bent blade actually
+## goes"). Measured across the real worst case (storm wind, a walker standing
+## on the card) that leftover is ~0.02 card widths -- about 1.3 screen px at
+## the shipped 64-px-wide card -- versus the 1.66 CARD WIDTHS (110 px) the
+## sampling stage used to carry on its own. Height gets more resolution than
+## width because the eased-in curve runs UP a blade while the wind's own
+## spread across a card is much gentler. Finer still is available but not
+## free: 4 x 8 keeps a cell at ~16 x 8 screen px, comfortably above the ~4x4
+## floor where small triangles start wasting whole rasterizer quads, and
+## fill rate itself is unchanged either way (a sheared quad covers the same
+## area it did upright). Pinned by
+## test_bending_never_slides_a_blade_further_sideways_than_its_own_card_can_show
+## and test_the_bend_mesh_is_subdivided_so_its_geometry_can_follow_the_curve.
+const BEND_MESH_SUBDIVIDE_WIDTH := 3
+const BEND_MESH_SUBDIVIDE_DEPTH := 7
+
 ## The shader's own wind_strength default: calibrated to
 ## WeatherModel.wind_strength_for("clear") == 1.0 (see weather_model.gd), the
 ## majority weather state (CLEAR_THRESHOLD), so WIND_UV_AMPLITUDE above stays
@@ -124,6 +157,77 @@ static func blade_phase(uv_x: float) -> float:
 
 static func blade_amplitude_scale(uv_x: float) -> float:
 	return AMPLITUDE_BASE + AMPLITUDE_VARIATION * sin(uv_x * AMPLITUDE_FREQUENCY)
+
+## The shader's own bend_offset_at(), mirrored in GDScript so the split
+## between what the MESH carries and what the SAMPLING stage is left with can
+## be measured headlessly (the renderer under --headless is a null one, so
+## the GLSL itself can only be compiled, never sampled -- see fill_band).
+## Returns the horizontal displacement at one point on a card, in CARD
+## WIDTHS, exactly as the shader computes it.
+##
+## `wind_phase` collapses the shader's own `TIME * wind_speed + root.x *
+## 0.071 + root.y * 0.043` into one scalar: every term in it is constant
+## across a single card, so a caller sweeping wind_phase over [0, TAU) covers
+## every moment and every root position at once. `push` is likewise the
+## shader's own `away.x * wake * WALKER_PUSH_UV_AMPLITUDE`, constant per card
+## and bounded by +/-WALKER_PUSH_UV_AMPLITUDE.
+static func bend_offset(uv: Vector2, wind_phase: float, push: float, wind_strength: float = DEFAULT_WIND_STRENGTH) -> float:
+	var wind: float = sin(wind_phase + blade_phase(uv.x)) * WIND_UV_AMPLITUDE * wind_strength * blade_amplitude_scale(uv.x)
+	return (wind + push) * bend_curve(uv.y)
+
+
+## How much of that displacement the card's own GEOMETRY carries at `uv`:
+## the mesh evaluates the exact curve at each of its own vertices (the shader
+## displaces VERTEX.x by it) and the rasterizer interpolates between them, so
+## this is bend_offset interpolated across whichever mesh cell `uv` falls in.
+##
+## Modelled BILINEARLY, while a GPU splits each cell into two triangles and
+## interpolates each affinely -- the two differ by at most a quarter of that
+## cell's own twist term (the bilinear uv coefficient), which is small enough
+## here to add as an explicit correction where it matters rather than hide:
+## see test_bending_never_slides_a_blade_further_sideways_than_its_own_card_
+## can_show, which measures the twist off this same function's own corners
+## instead of assuming it away. Exact (not a model) at every vertex, which is
+## what makes the residual below meaningful.
+static func mesh_bend_offset(uv: Vector2, wind_phase: float, push: float, wind_strength: float = DEFAULT_WIND_STRENGTH) -> float:
+	var columns := BEND_MESH_SUBDIVIDE_WIDTH + 1
+	var rows := BEND_MESH_SUBDIVIDE_DEPTH + 1
+	var scaled_u: float = clampf(uv.x, 0.0, 1.0) * float(columns)
+	var scaled_v: float = clampf(uv.y, 0.0, 1.0) * float(rows)
+	var column := mini(int(scaled_u), columns - 1)
+	var row := mini(int(scaled_v), rows - 1)
+	var along_u: float = scaled_u - float(column)
+	var along_v: float = scaled_v - float(row)
+	var left: float = float(column) / float(columns)
+	var right: float = float(column + 1) / float(columns)
+	var bottom: float = float(row) / float(rows)
+	var top: float = float(row + 1) / float(rows)
+	var lower: float = lerpf(
+		bend_offset(Vector2(left, bottom), wind_phase, push, wind_strength),
+		bend_offset(Vector2(right, bottom), wind_phase, push, wind_strength),
+		along_u
+	)
+	var upper: float = lerpf(
+		bend_offset(Vector2(left, top), wind_phase, push, wind_strength),
+		bend_offset(Vector2(right, top), wind_phase, push, wind_strength),
+		along_u
+	)
+	return lerpf(lower, upper, along_v)
+
+
+## What is left for the SAMPLING stage once the geometry has moved: the exact
+## curve minus what the mesh actually carried (the shader's fragment() does
+## precisely this subtraction, reading the geometry's own interpolated
+## displacement back out of a varying). The two add up to the exact curve at
+## every pixel, so path-tracing per pixel row is preserved -- but only this
+## remainder can slide art sideways INSIDE a card that is not moving with it,
+## so only this remainder can run a blade off its own region edge and be
+## discarded (the edge-smear guard in fragment()). That makes it the number
+## worth bounding, and it is: see BEND_MESH_SUBDIVIDE_WIDTH's own doc comment
+## for the measured worst case.
+static func sampled_bend_offset(uv: Vector2, wind_phase: float, push: float, wind_strength: float = DEFAULT_WIND_STRENGTH) -> float:
+	return bend_offset(uv, wind_phase, push, wind_strength) - mesh_bend_offset(uv, wind_phase, push, wind_strength)
+
 
 ## Which Y-band (0..BAND_COUNT-1) a row at `local_y` (within its own chunk,
 ## 0..chunk_size-1) belongs to. `local_y` is `float`, not `int`: a CELL's
@@ -206,14 +310,62 @@ varying vec2 v_root;
 // fragment gave visible speckle noise even with zero bend math involved;
 // INSTANCE_CUSTOM via a varying gave a clean, solid, correct sample).
 varying vec4 v_region;
+// How far this card's own geometry was ACTUALLY displaced at this point, in
+// card widths -- written in vertex() right where it moves VERTEX.x, so the
+// rasterizer interpolates it between vertices exactly the way it interpolates
+// the displaced vertices themselves. fragment() subtracts it from the exact
+// curve and sample-shifts only the remainder, so the two stages add up to the
+// bend instead of both applying it.
+varying float v_geometry_bend;
+
+// ONE bend formula, read by BOTH stages -- vertex() to move the geometry,
+// fragment() to resolve whatever the mesh could not carry, per pixel. A
+// single seam, so the two can never drift into disagreeing about where a
+// blade is (the same reasoning cards_for_cell uses for banding-vs-placement).
+// `blade_uv` is the card's own local UV (root at y=0, tip at y=1) and `root`
+// its instance origin in world space: a global function cannot read either
+// stage's own built-ins, so each stage passes its own.
+float bend_offset_at(vec2 blade_uv, vec2 root) {
+	// Path-trace the blade along a curve rather than a straight shear: the
+	// exponent is above 1, so this eases in -- the root stays essentially
+	// pinned and displacement concentrates near the tip, the way a real blade
+	// bends under wind load. Phase and amplitude both vary with blade_uv.x,
+	// so blades drawn side by side within one card sway with different timing
+	// instead of moving as one rigid shape.
+	float bend = pow(clamp(blade_uv.y, 0.0, 1.0), %s);
+	float phase = blade_uv.x * %s;
+	float amplitude_scale = %s + %s * sin(blade_uv.x * %s);
+
+	vec2 from_walker = root - player_world_position;
+	float distance_to_walker = length(from_walker);
+	vec2 away = from_walker / max(distance_to_walker, 0.001);
+	float wake = 1.0 - smoothstep(0.0, walker_radius, distance_to_walker);
+
+	float wind = sin(TIME * wind_speed + root.x * 0.071 + root.y * 0.043 + phase) * %s * wind_strength * amplitude_scale;
+	float push = away.x * wake * %s;
+	return (wind + push) * bend;
+}
 
 void vertex() {
-	// Roots never translate: this is the only geometry touch, and it reads
-	// the local origin (this instance's own transform origin - MultiMesh
-	// folds per-instance transforms into MODEL_MATRIX per draw), not
-	// VERTEX, so it stays fixed regardless of bend.
+	// A card's ROOT, in world space: read off the local origin (this
+	// instance's own transform origin - MultiMesh folds per-instance
+	// transforms into MODEL_MATRIX per draw) rather than off VERTEX, so it
+	// keeps naming the card's own ground position even now that VERTEX
+	// itself moves with the bend below.
 	v_root = (MODEL_MATRIX * vec4(vec2(0.0), 0.0, 1.0)).xy;
 	v_region = INSTANCE_CUSTOM;
+
+	// The bend happens HERE, to real geometry, because a bent blade has to
+	// have somewhere to go: displacing the SAMPLED column instead slides art
+	// around inside a quad that never moves, so the quad's own edge cuts the
+	// blade off (reported live: "the long grass blades are clipped on the
+	// left and right when they bend"). Roots still never translate --
+	// bend_offset_at is exactly 0 at blade_uv.y == 0, so this quad's own
+	// bottom row of vertices stays put however hard the tip leans. Converted
+	// from card widths into the mesh's own local units (its instance
+	// transform is a pure translation, so local units ARE world units here).
+	v_geometry_bend = bend_offset_at(UV, v_root);
+	VERTEX.x += v_geometry_bend * %s;
 }
 
 void fragment() {
@@ -226,21 +378,16 @@ void fragment() {
 	vec2 region_uv1 = v_region.ba;
 	vec2 region_size = max(region_uv1 - region_uv0, vec2(0.0001));
 
-	// Path-trace the blade by displacing the *sample* UV per pixel row
-	// instead of shearing the quad's geometry, so the bend follows a
-	// smooth curve and each drawn blade in the card can lean differently.
-	float bend = pow(clamp(UV.y, 0.0, 1.0), %s);
-	float phase = UV.x * %s;
-	float amplitude_scale = %s + %s * sin(UV.x * %s);
-
-	vec2 from_walker = v_root - player_world_position;
-	float distance_to_walker = length(from_walker);
-	vec2 away = from_walker / max(distance_to_walker, 0.001);
-	float wake = 1.0 - smoothstep(0.0, walker_radius, distance_to_walker);
-
-	float wind = sin(TIME * wind_speed + v_root.x * 0.071 + v_root.y * 0.043 + phase) * %s * wind_strength * amplitude_scale;
-	float push = away.x * wake * %s;
-	float bend_offset = (wind + push) * bend;
+	// Whatever the mesh's own vertices could NOT represent of the curve: the
+	// exact displacement at this pixel, minus the interpolated one the
+	// geometry already applied (v_geometry_bend). Resolving that remainder
+	// per pixel row keeps the total exactly on the curve at every fragment,
+	// not just at a vertex -- while leaving the sampling stage a sliver
+	// (measured: ~0.02 card widths, about 1.3 screen px, at storm wind with a
+	// walker standing on the card) instead of the whole 1.66-card-width bend
+	// it used to slide on its own, which is what ran blades clean off their
+	// own card edge. See sampled_bend_offset.
+	float bend_offset = bend_offset_at(UV, v_root) - v_geometry_bend;
 
 	// Sample-space Y is flipped relative to mesh-space UV.y (the atlas art
 	// is authored root-at-bottom-of-cell/tip-at-top, but mesh UV.y=0 is the
@@ -289,7 +436,7 @@ void fragment() {
 	float greenness = clamp((COLOR.g - max(COLOR.r, COLOR.b)) * %s, 0.0, 1.0);
 	COLOR.rgb = mix(COLOR.rgb, COLOR.rgb * season_tint, greenness);
 }
-""" % [BEND_CURVE_EXPONENT, PHASE_SPREAD, AMPLITUDE_BASE, AMPLITUDE_VARIATION, AMPLITUDE_FREQUENCY, WIND_UV_AMPLITUDE, WALKER_PUSH_UV_AMPLITUDE, SeasonalFoliage.GREENNESS_GAIN]
+""" % [BEND_CURVE_EXPONENT, PHASE_SPREAD, AMPLITUDE_BASE, AMPLITUDE_VARIATION, AMPLITUDE_FREQUENCY, WIND_UV_AMPLITUDE, WALKER_PUSH_UV_AMPLITUDE, WORLD_SIZE, SeasonalFoliage.GREENNESS_GAIN]
 
 var _material: ShaderMaterial
 ## Lazily-loaded, cached per season (see SEASON_ATLAS_PATHS) -- replaces a
@@ -562,6 +709,13 @@ func mesh() -> QuadMesh:
 		# pushes the quad toward larger screen/world Y (down), so this
 		# needs to be negative to grow up.
 		_mesh.center_offset = Vector3(0.0, -WORLD_SIZE * 0.5, 0.0)
+		# The bend moves this mesh's own vertices now (see the shader's
+		# vertex()), so it needs vertices to move: four corners can only ever
+		# shear flat, and everything they cannot express falls back to the
+		# sampling stage, which is what used to clip bent blades off at a
+		# card's edge. See BEND_MESH_SUBDIVIDE_WIDTH's own doc comment.
+		_mesh.subdivide_width = BEND_MESH_SUBDIVIDE_WIDTH
+		_mesh.subdivide_depth = BEND_MESH_SUBDIVIDE_DEPTH
 	return _mesh
 
 func set_walker_position(world_position: Vector2) -> void:

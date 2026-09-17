@@ -5,6 +5,12 @@ const SeasonalFoliage = preload("res://src/rendering/seasonal_foliage.gd")
 const GroundTint = preload("res://src/rendering/ground_tint.gd")
 const SpriteSheetLoader = preload("res://src/rendering/sprite_sheet_loader.gd")
 const SpriteSheetSlicer = preload("res://src/rendering/sprite_sheet_slicer.gd")
+## Cross-pins rather than restated numbers: the bend the card has to make
+## room for is bounded by the strongest wind this world actually blows, and
+## "how much is that on screen" is the shipped camera's own zoom -- see
+## test_bending_never_slides_a_blade_further_sideways_than_its_own_card_can_show.
+const WeatherModel = preload("res://src/world/weather_model.gd")
+const Player = preload("res://scenes/player.gd")
 
 
 ## Width is always a full, un-inset cell (bleed only ever runs vertically,
@@ -436,6 +442,226 @@ func test_shader_discards_a_fragment_that_bends_past_its_own_regions_edge():
 	assert_string_contains(fragment_body, "raw_local_x < 0.0")
 	assert_string_contains(fragment_body, "raw_local_x > 1.0")
 	assert_string_contains(fragment_body, "COLOR.a = 0.0")
+
+
+# -- the bend needs somewhere the art can actually GO ----------------------
+# (see docs/concept/long_grass.md's "Where a bent blade actually goes")
+
+
+## Reported live: "The long grass blades are clipped on the left and right
+## when they bend."
+##
+## Root cause, in one number: the bend used to live ENTIRELY in the sampling
+## stage. fragment() slid the SAMPLED column sideways by `bend_offset` inside
+## a card's own fixed, never-moving quad, so the art had nowhere to travel --
+## every fragment whose true (unclamped) sample position left the card's own
+## [0, 1] region got discarded by the edge-smear guard above, which is
+## precisely a hard vertical cut through a bent blade. At the real tuned
+## constants that slide reaches WIND_UV_AMPLITUDE * storm wind *
+## max(amplitude_scale) + WALKER_PUSH_UV_AMPLITUDE ~= 1.66 CARD WIDTHS --
+## about 106 screen px of sideways travel inside a card only 64 px wide
+## (WORLD_SIZE * Player.CAMERA_ZOOM), so most of a strongly bent blade was
+## cut away rather than drawn leaning.
+##
+## The fix hands the bend to the card's own GEOMETRY: vertex() displaces
+## VERTEX.x across a subdivided quad (BEND_MESH_SUBDIVIDE_*), so the art
+## travels WITH the mesh and cannot be cut off by an edge that moves along
+## with it. What is left to the sampling stage is only the sliver the mesh's
+## own interpolation between its vertices cannot represent
+## (`sampled_bend_offset`) -- and since that sliver is now the ONLY thing
+## that can still slide art past a region edge, it is what this test bounds,
+## measured across the real worst case (storm wind, a walker standing right
+## on the card) rather than assumed.
+func test_bending_never_slides_a_blade_further_sideways_than_its_own_card_can_show():
+	var storm_wind: float = WeatherModel.new().wind_strength_for("storm")
+	var card_screen_px: float = IllustratedGrassPatch.WORLD_SIZE * Player.CAMERA_ZOOM.x
+
+	var worst_total := 0.0
+	var worst_sampled := 0.0
+	for phase_step in 12:
+		var wind_phase: float = TAU * float(phase_step) / 12.0
+		for push_step in range(-2, 3):
+			var push: float = IllustratedGrassPatch.WALKER_PUSH_UV_AMPLITUDE * float(push_step) / 2.0
+			for u_step in 41:
+				for v_step in 41:
+					var uv := Vector2(float(u_step) / 40.0, float(v_step) / 40.0)
+					worst_total = maxf(
+						worst_total,
+						absf(IllustratedGrassPatch.bend_offset(uv, wind_phase, push, storm_wind))
+					)
+					worst_sampled = maxf(
+						worst_sampled,
+						absf(IllustratedGrassPatch.sampled_bend_offset(uv, wind_phase, push, storm_wind))
+					)
+
+	# Precondition: the tuned bend really is strong enough to run a blade
+	# clean off its own card. That is the reported bug, not a hypothetical.
+	assert_gt(worst_total, 1.0, "precondition: the real tuned bend exceeds a whole card width")
+
+	# A GPU interpolates each mesh cell as two AFFINE triangles, not
+	# bilinearly (what mesh_bend_offset models) -- the two differ by at most
+	# a quarter of that cell's own twist term, so it is added here rather
+	# than quietly assumed away. See mesh_bend_offset's own doc comment.
+	var worst_px: float = (worst_sampled + _worst_mesh_cell_twist(storm_wind) * 0.25) * card_screen_px
+	assert_lt(
+		worst_px, 2.0,
+		"what the sampling stage can still slide (and so still clip) must be a couple of screen pixels, not most of a card: %f px" % worst_px
+	)
+	# ...and pin it, not just a floor: this is a measured number, so a future
+	# re-tune that quietly loses an order of magnitude of it should say so.
+	assert_gt(worst_px, 0.5, "pin the real measured number, not just an upper bound: %f px" % worst_px)
+
+
+## Worst |twist| (the bilinear uv coefficient) of any one mesh cell, over the
+## same worst-case sweep its caller uses -- see there for why a triangle-
+## interpolating GPU makes this the honest correction term on a bilinear
+## model of what the mesh carries.
+func _worst_mesh_cell_twist(wind_strength: float) -> float:
+	var columns: int = IllustratedGrassPatch.BEND_MESH_SUBDIVIDE_WIDTH + 1
+	var rows: int = IllustratedGrassPatch.BEND_MESH_SUBDIVIDE_DEPTH + 1
+	var worst := 0.0
+	for phase_step in 12:
+		var wind_phase: float = TAU * float(phase_step) / 12.0
+		for push_step in range(-2, 3):
+			var push: float = IllustratedGrassPatch.WALKER_PUSH_UV_AMPLITUDE * float(push_step) / 2.0
+			for column in columns:
+				for row in rows:
+					var x0: float = float(column) / float(columns)
+					var x1: float = float(column + 1) / float(columns)
+					var y0: float = float(row) / float(rows)
+					var y1: float = float(row + 1) / float(rows)
+					var twist: float = (
+						IllustratedGrassPatch.bend_offset(Vector2(x0, y0), wind_phase, push, wind_strength)
+						- IllustratedGrassPatch.bend_offset(Vector2(x1, y0), wind_phase, push, wind_strength)
+						- IllustratedGrassPatch.bend_offset(Vector2(x0, y1), wind_phase, push, wind_strength)
+						+ IllustratedGrassPatch.bend_offset(Vector2(x1, y1), wind_phase, push, wind_strength)
+					)
+					worst = maxf(worst, absf(twist))
+	return worst
+
+
+## The whole point of the fix: a displacement has to be applied to something
+## that actually MOVES the art, and a fragment-stage UV slide does not -- it
+## moves art WITHIN a quad that stays exactly where it was, so that quad's
+## own edge cuts it off. vertex() is the only stage that can move geometry,
+## so that is where the bend now lands.
+func test_the_bend_moves_the_cards_own_geometry_not_just_its_sampled_uv():
+	var code: String = IllustratedGrassPatch.SHADER_CODE
+	var vertex_start := code.find("void vertex()")
+	var fragment_start := code.find("void fragment()")
+	var vertex_body := code.substr(vertex_start, fragment_start - vertex_start)
+	assert_string_contains(vertex_body, "VERTEX.x")
+	# ...in the card's own world units: a UV-space offset means nothing to
+	# geometry until it is scaled by how wide the card really is.
+	assert_string_contains(vertex_body, "* %s" % IllustratedGrassPatch.WORLD_SIZE)
+	# The fragment stage must then subtract exactly what the geometry already
+	# did, or both stages would apply the same bend and double it.
+	var fragment_body := code.substr(fragment_start)
+	assert_string_contains(fragment_body, "- v_geometry_bend")
+
+
+## Both stages read ONE bend formula (the shader's own bend_offset_at), so
+## the sliver fragment() is left to sample-shift is genuinely "the exact
+## curve minus what the mesh already carried" rather than two independently
+## drifting copies of the same math -- the same single-seam reasoning
+## cards_for_cell uses for banding-vs-placement.
+func test_both_shader_stages_read_the_same_single_bend_formula():
+	var code: String = IllustratedGrassPatch.SHADER_CODE
+	assert_eq(code.count("float bend_offset_at("), 1, "exactly one definition of the bend, not one per stage")
+	var vertex_start := code.find("void vertex()")
+	var fragment_start := code.find("void fragment()")
+	assert_string_contains(code.substr(vertex_start, fragment_start - vertex_start), "bend_offset_at(UV,")
+	assert_string_contains(code.substr(fragment_start), "bend_offset_at(UV,")
+
+
+## A single undivided quad has only its own four corners to move, so a
+## geometry bend on it could never be more than the flat parallelogram shear
+## docs/concept/long_grass.md's History #1 already rejected -- every bit of
+## curvature (and of the per-blade phase spread across UV.x) would fall
+## straight back to the sampling stage, which is exactly what clipped. The
+## mesh is subdivided so its own vertices can sit ON the bend curve instead.
+func test_the_bend_mesh_is_subdivided_so_its_geometry_can_follow_the_curve():
+	var patch := IllustratedGrassPatch.new()
+	var mesh := patch.mesh()
+	assert_eq(mesh.subdivide_width, IllustratedGrassPatch.BEND_MESH_SUBDIVIDE_WIDTH)
+	assert_eq(mesh.subdivide_depth, IllustratedGrassPatch.BEND_MESH_SUBDIVIDE_DEPTH)
+	assert_gt(
+		IllustratedGrassPatch.BEND_MESH_SUBDIVIDE_DEPTH, IllustratedGrassPatch.BEND_MESH_SUBDIVIDE_WIDTH,
+		"the curve runs UP a blade, so the vertical axis (PlaneMesh calls it depth) is where the resolution is actually needed"
+	)
+	# The card itself is unchanged: same world footprint, same root-at-its-
+	# own-bottom-edge origin (instances_for_cards' root pinning depends on it).
+	assert_eq(mesh.size, Vector2(IllustratedGrassPatch.WORLD_SIZE, IllustratedGrassPatch.WORLD_SIZE))
+	assert_eq(mesh.center_offset, Vector3(0.0, -IllustratedGrassPatch.WORLD_SIZE * 0.5, 0.0))
+	# Subdivision is not free: every card in every band draws this one mesh,
+	# so its triangle count is a real per-card cost (pillar 4 -- fill rate is
+	# unchanged, since a sheared quad covers the same area, but vertex work
+	# and small-triangle rasterization are not). Measured off the real mesh
+	# rather than assumed from the constants.
+	var indices: PackedInt32Array = mesh.surface_get_arrays(0)[Mesh.ARRAY_INDEX]
+	assert_eq(
+		indices.size() / 3, 64,
+		"one card stays at 64 triangles -- at the shipped 64x64-screen-px card that is a ~16x8 px cell per quad, still comfortably above the ~4x4 px floor where small triangles start wasting whole rasterizer quads"
+	)
+
+
+## "Roots never translate" (pillar 3) is now a statement about the MESH, not
+## only about a sampled UV: the bottom row of vertices has to land at exactly
+## zero displacement, or a card would visibly slide off its own ground
+## position (the position instances_for_cards pinned it to) as it bends.
+func test_neither_stage_displaces_a_blades_root():
+	for u_step in 9:
+		var uv := Vector2(float(u_step) / 8.0, 0.0)
+		assert_eq(
+			IllustratedGrassPatch.bend_offset(uv, 1.0, IllustratedGrassPatch.WALKER_PUSH_UV_AMPLITUDE, 1.8), 0.0,
+			"the exact bend is zero at the root"
+		)
+		assert_eq(
+			IllustratedGrassPatch.sampled_bend_offset(uv, 1.0, IllustratedGrassPatch.WALKER_PUSH_UV_AMPLITUDE, 1.8), 0.0,
+			"...so nothing is left over for the sampling stage to slide there either"
+		)
+
+
+## The mirror the residual above is measured through has to actually BE the
+## mesh's own interpolation, which means it is exact (zero residual) at every
+## vertex of that mesh -- if this drifts, the bound above is measuring a
+## curve nothing renders.
+func test_the_mesh_carries_the_whole_bend_at_its_own_vertices():
+	var columns: int = IllustratedGrassPatch.BEND_MESH_SUBDIVIDE_WIDTH + 1
+	var rows: int = IllustratedGrassPatch.BEND_MESH_SUBDIVIDE_DEPTH + 1
+	for column in range(columns + 1):
+		for row in range(rows + 1):
+			var uv := Vector2(float(column) / float(columns), float(row) / float(rows))
+			assert_almost_eq(
+				IllustratedGrassPatch.sampled_bend_offset(uv, 2.0, 0.9, 1.4), 0.0, 0.000001,
+				"a mesh vertex sits exactly ON the bend curve, so nothing is left for the sampling stage there"
+			)
+
+
+## The GDScript mirror and the GLSL the GPU actually runs have to agree, or
+## the bound above measures a formula nothing renders. Pinned against the
+## same three published pieces the shader's own bend_offset_at() is built
+## from (bend_curve/blade_phase/blade_amplitude_scale, each already pinned by
+## its own test above), plus the two tuned amplitudes.
+func test_bend_offset_mirrors_the_shaders_own_wind_and_push_terms():
+	# With no wind at all, a tip's displacement IS the walker's own push...
+	assert_almost_eq(IllustratedGrassPatch.bend_offset(Vector2(0.3, 1.0), 0.0, 0.7, 0.0), 0.7, 0.000001)
+	# ...following the same eased-in curve back down the blade.
+	assert_almost_eq(
+		IllustratedGrassPatch.bend_offset(Vector2(0.3, 0.5), 0.0, 0.7, 0.0),
+		0.7 * IllustratedGrassPatch.bend_curve(0.5), 0.000001
+	)
+	# Wind rides on the card's own phase/amplitude spread across UV.x and
+	# scales with the live wind strength, exactly like the shader's own
+	# `float wind =` line (pinned separately by
+	# test_ambient_wind_sway_scales_by_the_live_wind_strength_uniform).
+	var expected: float = (
+		sin(1.1 + IllustratedGrassPatch.blade_phase(0.3))
+		* IllustratedGrassPatch.WIND_UV_AMPLITUDE * 1.4
+		* IllustratedGrassPatch.blade_amplitude_scale(0.3)
+		+ 0.7
+	) * IllustratedGrassPatch.bend_curve(1.0)
+	assert_almost_eq(IllustratedGrassPatch.bend_offset(Vector2(0.3, 1.0), 1.1, 0.7, 1.4), expected, 0.000001)
 
 
 ## The player's own real max reach above their feet/root -- HeadSlot, the
@@ -1080,15 +1306,22 @@ func test_set_season_tint_survives_being_called_before_the_material_is_built():
 ## new greenness gain in the wrong slot would silently bake the wrong numbers
 ## into the bend math -- a shader that still compiles and just looks wrong.
 ## This pins the tuned constants that would move if that happened.
+## The bend math moved into the shader's own shared bend_offset_at() (see
+## test_both_shader_stages_read_the_same_single_bend_formula), which takes the
+## card's local UV as a plain `blade_uv` parameter -- a global shader function
+## cannot read a stage built-in like UV. Same three terms, same tuned
+## constants, one name deeper: what this test exists to catch (a debug crank
+## shipped in place of a tuned value, see the History entry above) is
+## unchanged by that.
 func test_the_bend_math_still_carries_its_own_tuned_constants():
 	var code: String = IllustratedGrassPatch.SHADER_CODE
 	assert_string_contains(
-		code, "pow(clamp(UV.y, 0.0, 1.0), %s)" % IllustratedGrassPatch.BEND_CURVE_EXPONENT
+		code, "pow(clamp(blade_uv.y, 0.0, 1.0), %s)" % IllustratedGrassPatch.BEND_CURVE_EXPONENT
 	)
-	assert_string_contains(code, "UV.x * %s" % IllustratedGrassPatch.PHASE_SPREAD)
+	assert_string_contains(code, "blade_uv.x * %s" % IllustratedGrassPatch.PHASE_SPREAD)
 	assert_string_contains(
 		code,
-		"%s + %s * sin(UV.x * %s)" % [
+		"%s + %s * sin(blade_uv.x * %s)" % [
 			IllustratedGrassPatch.AMPLITUDE_BASE,
 			IllustratedGrassPatch.AMPLITUDE_VARIATION,
 			IllustratedGrassPatch.AMPLITUDE_FREQUENCY,
