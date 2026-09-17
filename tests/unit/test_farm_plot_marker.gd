@@ -400,3 +400,35 @@ func test_every_crop_a_village_farm_sows_is_still_drawn_when_ready():
 func test_an_empty_bed_draws_no_crop():
 	add_child_autofree(marker)
 	assert_false(marker.is_drawing_a_crop(), "nothing is sown, so nothing is drawn")
+
+
+## A herb grows UP out of the bed it is rooted in.
+##
+## ProceduralHerbSprite draws the plant filling its canvas from the bottom
+## row up (its stem reaches the last row on purpose), so a centred sprite
+## would bury the lower half of every herb in the soil. The illustrated
+## crops can be centred because their sheets are authored with the plant
+## high in the canvas above a baseline; a procedural sprite that fills its
+## own canvas cannot. Same root-pinned offset the wheat blades already use
+## for exactly this reason (see _redraw_wheat).
+func test_a_herb_is_rooted_at_the_bed_not_sunk_into_it():
+	add_child_autofree(marker)
+	marker.till_and_plant("herb", 3)
+	var leaves: Sprite2D = marker._leaves
+	assert_false(leaves.centered, "a plant pinned by its middle is half underground")
+	assert_almost_eq(
+		leaves.offset.y, -float(leaves.texture.get_height()), 0.001,
+		"the plant's own bottom row sits on the bed"
+	)
+	assert_almost_eq(
+		leaves.offset.x, -float(leaves.texture.get_width()) * 0.5, 0.001,
+		"and it stands in the middle of it"
+	)
+
+
+## ...while an illustrated crop keeps the centring its own sheet baseline
+## was authored for -- this must not become one rule for both.
+func test_an_illustrated_crop_keeps_its_own_centring():
+	add_child_autofree(marker)
+	marker.till_and_plant("carrot", 3)
+	assert_true(marker._leaves.centered, "carrot art is authored around a baseline")

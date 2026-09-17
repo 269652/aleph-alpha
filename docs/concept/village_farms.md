@@ -738,6 +738,13 @@ again.
   behind `IllustratedCropSprite.has_crop()`, so real art can replace it
   later with no marker change.
 
+  **Root-pinned, not centred.** A procedural herb fills its own canvas from
+  the bottom row up, so centring it would bury the lower half of every plant
+  in the soil. The illustrated crops keep their centring, because their
+  sheets are authored with the plant high in the canvas above a baseline —
+  one rule for both would be wrong for one of them. Same offset the wheat
+  blades already use for the same reason.
+
   The cross-pin matters more than the sprite:
   `test_every_crop_a_village_farm_sows_really_draws_something` is driven off
   `VillageFarm.CROP_BY_OCCUPATION` itself, so a NEW crop a village can sow

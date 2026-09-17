@@ -325,9 +325,24 @@ func _redraw() -> void:
 	if _illustrated.has_crop(plot.crop_id):
 		_leaves.scale = Vector2.ONE * _illustrated.leaf_world_scale(plot.crop_id)
 		_leaves.texture = _illustrated.leaf_texture(plot.crop_id, stage)
+		# Centred, because those sheets are authored with the plant high in
+		# the canvas above their own baseline (IllustratedCropSprite.
+		# LEAF_BASELINE_Y) -- the centring IS what puts the root on the bed.
+		_leaves.centered = true
+		_leaves.offset = Vector2.ZERO
 	elif plot.crop_id == HERB_CROP_ID:
 		_leaves.scale = Vector2.ONE * ProceduralHerbSprite.world_scale()
 		_leaves.texture = _herb.generate_texture(stage)
+		# A procedural herb FILLS its own canvas from the bottom row up (its
+		# stem reaches the last row on purpose), so centring would bury the
+		# lower half of every plant in the soil. Root-pinned instead, the
+		# same offset the wheat blades already use for the same reason (see
+		# _redraw_wheat's own note about IllustratedGrassPatch's centre_
+		# offset invariant).
+		_leaves.centered = false
+		_leaves.offset = Vector2(
+			-_leaves.texture.get_width() * 0.5, -_leaves.texture.get_height()
+		)
 	else:
 		_leaves.texture = null
 	_leaves.visible = _leaves.texture != null
