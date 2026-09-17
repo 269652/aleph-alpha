@@ -121,7 +121,12 @@ const _BUILDINGS := {
 	# timber and thatch -- volume to enclose, but no forge and no civic
 	# masonry -- so it lands under the hall.
 	"warehouse": {
-		"footprint": Vector2i(4, 3), "interior_family": "hall", "capacity": 0, "storage": 240,
+		# Three wide, not four: reported live ("should be only 3 tiles wide
+		# not 4"), and it matches the art -- warehouse.png is drawn in
+		# SQUARE 192x192 cells, and footprint_frame_texture scales a frame
+		# by its WIDTH (tile_size * footprint_width), so a warehouse
+		# claiming four tiles was drawn a third wider than its own plot.
+		"footprint": Vector2i(3, 3), "interior_family": "hall", "capacity": 0, "storage": 240,
 		"labor_hours": 42.0, "cost": {"wood": 22, "plant_fibre": 6},
 	},
 	# The blacksmith: the first rung that needs stone in real quantity --

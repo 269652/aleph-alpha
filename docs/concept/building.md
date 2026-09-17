@@ -345,10 +345,28 @@ draws so the system is playable and testable without art.
 
 **Building sheets** — `assets/sprites/buildings/<building_id>.png`
 (`house_small`, `house_medium`, `house_large`, `city_hall` …), 1536×1024,
-8 columns × 5 rows, black background, magenta cell dividers. Rows: 0
+8 columns × 5 rows of **square 192×192 cells anchored at the top-left**,
+black background, magenta cell dividers. Rows: 0
 construction ×8 (scaffold → shell → roof, left to right), 1 active ×8 (lit
 windows / chimney smoke loop), 2 idle ×8 (loop or repeats), 3 burning ×8,
-4 ruined ×8. Each cell is scaled on screen so the cell's WIDTH equals the
+4 ruined ×8.
+
+> **The cell is square, and the canvas is bigger than the grid**
+> (corrected 2026-09-17). 1536/8 is exactly 192, but 1024/5 is **204.8** —
+> so a sheet cut by dividing the canvas evenly on both axes walked every
+> row after the first progressively further down (0, +13, +26, +38, +51px),
+> up to a quarter of a cell into the next row's art. Reported live: *"the
+> warehouse has the rows cropped wrongly."* The art is really drawn on a
+> 192 pitch — profiling the sheets' own gutters puts the row boundaries at
+> 192, 384 and 576 — with 5×192 = 960 and the remaining **64px of canvas
+> left as slack** below the grid. `IllustratedStructureSprite.
+> even_cell_rect` cuts square cells sized by the column pitch; a sheet whose
+> canvas already matches its grid is cut exactly as before, so the rule only
+> changes what was wrong. It applies to every one of these sheets, not just
+> the warehouse: `sawmill`, `farmhouse`, `blacksmith`, `brewery`,
+> `city_hall` and `warehouse` are all 1536×1024.
+
+Each cell is scaled on screen so the cell's WIDTH equals the
 footprint's width (`footprint_frame_texture`): a `w`-wide house draws
 `ART_TILE_SIZE`·w art px wide, drawn at `ArtResolution.SPRITE_SCALE` so it
 occupies exactly 16·w WORLD units — the same pixels-per-world-unit the

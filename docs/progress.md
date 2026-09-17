@@ -25310,3 +25310,54 @@ live gameplay — wiring it belongs with `concept/workforce.md`, not here.
 Tests: `test_wage_payment.gd` 6/6 (new), `test_world_planner_mode_wiring.gd`
 +4, 145/145 across the planner, wage, wallet, hiring, construction-store and
 catchup suites — zero regressions. `world.gd` confirmed to compile.
+
+### The building sheets' rows were cropped off the grid the art is drawn on (see `docs/concept/building.md` "Building sheets", 2026-09-17)
+
+Reported in play: *"The warehouse has the rows cropped wrongly and its
+scale as well. should be only 3 tiles wide not 4."*
+
+✅ **Two separate faults, both measured rather than guessed.**
+
+**The rows.** Every production/civic sheet is 1536×1024. 1536/8 is exactly
+192, but **1024/5 is 204.8** — and `_cell_rect` divided the canvas evenly on
+both axes, so every row after the first was cropped progressively further
+down the sheet (0, +13, +26, +38, +51px), up to a quarter of a cell into the
+next row's art. Profiling the sheets' own gutters puts the real row
+boundaries at **192, 384, 576** — a 192 pitch — with 5×192 = 960 and the
+remaining **64px of canvas left as slack**. `IllustratedStructureSprite.
+even_cell_rect` now cuts square cells sized by the column pitch, anchored
+top-left, clamped to the canvas. A sheet whose canvas already matches its
+grid is cut exactly as before (pinned), so the rule only changes what was
+wrong — and it fixes `sawmill`, `farmhouse`, `blacksmith`, `brewery` and
+`city_hall` too, not just the warehouse.
+
+**The scale.** `footprint_frame_texture` scales a frame so its WIDTH equals
+`tile_size × footprint_width`, so a warehouse declaring 4 tiles was drawn a
+third wider than its own plot. Its footprint is now `Vector2i(3, 3)` — 3
+wide as reported, and square, which is what its art is drawn in.
+
+✅ **A test that had the bug written into it is corrected, not worked
+around.** `test_footprint_texture_preserves_aspect_ratio_taller_than_the_tile`
+asserted these cells are "192 wide x ~205 tall" and that a width-anchored
+scale therefore leaves the height greater than one tile. ~205 is 1024/5 —
+the even division itself — so the test was pinning the mis-crop as the
+contract. It now asserts what the art really is (square cells stay square);
+the general scaling rule it referenced,
+`test_footprint_texture_height_matches_the_idle_images_own_aspect_ratio`,
+still covers all five subjects unchanged.
+
+Verified by rendering all 40 warehouse cells through the real crop and
+looking at them — every building sits cleanly inside its cell with no
+bleed from the row below.
+
+🚧 **`city_hall` still declares a 4×3 footprint against square art**, so it
+draws 4 tiles tall over a 3-tall plot. Left alone deliberately: its plot is
+sized by `VillageLayout`'s civic slot and changing it would move buildings
+in existing villages. Named rather than silently changed.
+
+Tests: `test_structure_sheet_cells.gd` 7/7 (new),
+`test_illustrated_structure_sprite.gd` green, 205/207 across the sheet,
+catalog, village-layout and village-growth suites — the 2 failures are
+`test_building_catalog.gd`'s pre-existing "lumberjack" occupation-pool
+failure, which arrived with main's own recent work and which this branch
+does not touch.

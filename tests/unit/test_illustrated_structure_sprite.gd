@@ -129,20 +129,34 @@ func test_footprint_texture_width_matches_the_tile_size():
 		assert_eq(texture.get_width(), 16, "%s footprint width should match tile_size" % subject)
 
 
-## sagewerk/storage/city_hall's own source cells are visibly taller than
-## wide (192 wide x ~205 tall, the same 8-column grid all three sheets
-## share) -- a uniform scale-by-width factor should therefore leave the
-## scaled height GREATER than tile_size, not squashed down to it, the
-## whole point of the footprint anchor over a plain square resize.
-## farm/wooden_fence's own cells are wider than tall (a landscape house
-## scene; a horizontal fence rail) -- their footprint height legitimately
-## comes out smaller than tile_size, a real difference in the source art,
-## not a bug (see test_footprint_texture_height_matches_the_idle_images_
-## own_aspect_ratio for the actual scaling contract that covers all five).
-func test_footprint_texture_preserves_aspect_ratio_taller_than_the_tile():
+## sagewerk/storage/city_hall's own source cells are SQUARE -- 192x192 on
+## the 1536x1024 sheets all three share.
+##
+## **Corrected 2026-09-17.** This used to assert their cells are "192 wide
+## x ~205 tall" and therefore that a width-anchored scale leaves the height
+## GREATER than tile_size. That premise was the bug itself written down as
+## a contract: ~205 is 1024/5, the even canvas division, and the art is not
+## drawn on it. Profiling the sheets' own gutters puts the row boundaries
+## at 192, 384 and 576 -- a 192 pitch, with the remaining 64px of canvas
+## left as slack -- so every row after the first was being cropped
+## progressively further down, up to 51px into the next row's art. Reported
+## live as "the warehouse has the rows cropped wrongly". See
+## IllustratedStructureSprite.even_cell_rect.
+##
+## What the test was really protecting survives: a width-anchored scale
+## that preserves the source aspect rather than squashing to a fixed box.
+## With a square source cell that means a square texture, which is what is
+## asserted now. farm/wooden_fence's own cells are wider than tall (a
+## landscape house scene; a horizontal fence rail) and are covered, with
+## these three, by test_footprint_texture_height_matches_the_idle_images_
+## own_aspect_ratio -- the general scaling contract.
+func test_footprint_texture_keeps_the_square_source_cells_square():
 	for subject in ["sagewerk", "storage", "city_hall"]:
 		var texture := sprite.footprint_texture(subject, 16)
-		assert_gt(texture.get_height(), 16, "%s footprint height should stay taller than one tile" % subject)
+		assert_eq(
+			texture.get_height(), texture.get_width(),
+			"%s is drawn in a square source cell, so its footprint texture stays square" % subject
+		)
 
 
 ## The scaling contract that covers all of them, rails included: ONE factor

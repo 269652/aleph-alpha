@@ -553,13 +553,37 @@ func _build_idle_image(subject: String) -> Image:
 ## comment for why a flat division would bleed on these sheets' real
 ## non-evenly-divisible row count.
 func _cell_rect(image: Image, columns: int, rows: int, row: int, column: int) -> Rect2i:
-	var w := image.get_width()
-	var h := image.get_height()
-	var x0 := int(round(float(w) * column / columns))
-	var x1 := int(round(float(w) * (column + 1) / columns))
-	var y0 := int(round(float(h) * row / rows))
-	var y1 := int(round(float(h) * (row + 1) / rows))
-	return Rect2i(x0, y0, x1 - x0, y1 - y0)
+	return even_cell_rect(image.get_width(), image.get_height(), columns, rows, row, column)
+
+
+## Where cell (row, column) sits on a sheet whose cells are drawn on an
+## even grid -- SQUARE cells, sized by the column pitch, anchored top-left.
+##
+## The square part is the whole correction, and it is measured rather than
+## assumed. Every production/civic sheet on disk is 1536x1024: 1536/8 is
+## exactly 192, but 1024/5 is 204.8, so dividing the canvas evenly on BOTH
+## axes walked every row after the first progressively further down the
+## sheet (0, +13, +26, +38, +51px) -- at a 192px cell, a quarter of a cell
+## of the next row's art. Reported live as "the warehouse has the rows
+## cropped wrongly". The art really is drawn in square 192x192 cells with
+## the remaining 64px of canvas left as slack, confirmed by profiling the
+## real gutters (they sit at 192, 384, 576, not at 205, 410, 614).
+##
+## A sheet whose canvas ALREADY matches its grid exactly is cut exactly as
+## before (pinned by
+## test_a_sheet_that_already_divided_evenly_is_cut_exactly_as_before), so
+## this only changes what was wrong.
+##
+## Clamped to the canvas: a sheet smaller than its own declared grid asks
+## for pixels that do not exist otherwise, and get_region on an
+## out-of-bounds rect is not something to find out about at draw time.
+static func even_cell_rect(
+	width: int, height: int, columns: int, rows: int, row: int, column: int
+) -> Rect2i:
+	var cell: int = maxi(1, int(float(width) / float(maxi(columns, 1))))
+	var x0: int = mini(column * cell, maxi(width - 1, 0))
+	var y0: int = mini(row * cell, maxi(height - 1, 0))
+	return Rect2i(x0, y0, mini(cell, width - x0), mini(cell, height - y0))
 
 
 func _key_and_despill(image: Image, keys_black: bool) -> void:
