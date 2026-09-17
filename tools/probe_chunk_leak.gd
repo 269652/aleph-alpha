@@ -22,10 +22,10 @@ func _initialize() -> void:
 	root.add_child(tile_map_layer)
 	root.add_child(entities)
 	root.add_child(creatures)
-	var manager := EarthChunkManager.new(tile_map_layer, entities, creatures)
+	var manager = EarthChunkManager.new(tile_map_layer, entities, creatures)
 
 	var geo := GeoCoordinates.new()
-	var size := EarthChunkManager.CHUNK_SIZE
+	var size: int = EarthChunkManager.CHUNK_SIZE
 	var centre := Vector2i(
 		floori(float(geo.tile_for_longitude(9.6, EarthChunkGenerator.WORLD_WIDTH_TILES)) / float(size)),
 		floori(float(geo.tile_for_latitude(48.1, EarthChunkGenerator.WORLD_HEIGHT_TILES)) / float(size)),
