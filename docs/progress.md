@@ -24064,6 +24064,27 @@ player has already visited. Nothing raises one, and a test pins that.
 
 667/667 across the seven fence, farm and village suites.
 
+### The frame stops covering the crop (2026-09-17)
+
+*"At the bottom it still overlaps half a tile"* — the third and last report
+in the sequence that started with "move the fences to the inner edge".
+
+A south rail's posts stood on its own north edge, which is right for a fence
+seen from the front, but the body rises from there and it rose over the
+bottom row of beds: measured, 34px of a 64px tile. One rule replaces the
+per-facing reasoning: a rail's wood sits INSIDE its own tile, flush against
+the edge facing the beds — every facing, and both axes of a corner. The same
+fence, half a tile nearer the viewer, covering nothing.
+
+That also collapsed `footprint_offset` from three branches (broad-side run,
+top-view run, corner) into one: measure where the wood lands unoffset, then
+push it to the edge or edges the inner direction names. The three special
+cases were three ways of saying the same thing badly.
+
+Skipped at the user's request: the wider fence/village regression sweep.
+test_illustrated_structure_sprite is 36/36 on this change; the other six
+suites were green on the commit before it and were not re-run.
+
 Honest gaps, three real:
 
 🚧 **The gate is a real hole.** An animal that wanders into the gate cell is

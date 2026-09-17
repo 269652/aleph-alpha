@@ -190,6 +190,17 @@ rails/posts and plant_fibre (4) lashing them".
   water, and not the village's paving. `VillageFarm.fence_cells` is that
   rule, pure and derived — like `field_rect` and `owner_of`, it stores
   nothing, so the same farmhouse fences the same ring on every reload.
+- **A rail's wood sits INSIDE its own tile, flush against the edge facing
+  the beds.** The one rule the whole frame follows, and the last of three
+  reports to arrive at it: *"at the bottom it still overlaps half a tile"*.
+  A south rail's posts standing on its own north edge reads correctly as a
+  fence seen from the front, but the body then rises over the bottom row of
+  beds and hides half a tile of crop — measured, 34px of a 64px tile. Flush
+  from the inside puts the same fence half a tile nearer the viewer and
+  covers nothing. `footprint_offset` applies it to every facing, and to both
+  axes of a corner, so the frame touches the crop on every side without ever
+  covering it.
+
 - **A corner post has a ground POINT, not a ground line.** Reported with all
   three visible corners crossed out (*"the fences still aren't optimal"*).
   A corner knew only which side WALL it capped, so its art was placed as a

@@ -245,29 +245,31 @@ func _footprint_scale(subject: String, image: Image, tile_size: int) -> float:
 ## EarthChunkManager._spawn_structure_art_for). Vector2.ZERO for anything
 ## that stands on its whole tile, which is every subject but a rail.
 ##
-## Asked for directly, with two sides of a real ring arrowed in a
-## screenshot: *"move the fences to the inner edge of the enclosure and
-## treat the rest of the tile as street"*. A rail is a LINE on the edge
-## facing the beds it encloses (VillageFarm.fence_inner_direction), so its
-## art's own GROUND LINE belongs on that edge -- and what counts as its
-## ground line depends on which way the sheet draws that run:
+## A rail's wood sits inside its own tile, FLUSH against the edge facing the
+## beds it encloses (VillageFarm.fence_inner_direction) -- one rule for
+## every facing, and for a corner, which is flush against both of its. The
+## frame then touches the crop on every side without ever covering it.
 ##
-## - A run drawn broad-side (the North/South columns) stands on its POSTS,
-##   so its ground line is the bottom of its wood.
-## - A run seen from above (the East/West columns) has no posts to stand on
-##   -- the band of rail IS the ground line -- so it is CENTRED on the edge
-##   it closes rather than based on it.
+## Three reports got here, each one narrowing it:
 ##
-## MEASURED off the art, not assumed from the cell: `fence.png` draws every
-## run centred in its own cell with real margin all round, so bottom-
-## anchoring alone leaves a rail's posts a fifth of a tile short of the edge
-## they are meant to stand on. A first pass here assumed a north rail
-## already stood on its own south edge and was wrong by exactly that
-## margin -- test_a_broadside_runs_posts_stand_on_the_edge_facing_the_beds
-## finds the real wood independently and pins where it lands.
+## - *"move the fences to the inner edge of the enclosure"* -- a rail was
+##   drawn in the middle of its tile, a whole tile from the bed.
+## - *"the fences still aren't optimal"*, corners crossed out -- a corner
+##   knew one axis, so it was placed as a whole tile of vertical rail while
+##   the run it caps sat on that tile's edge.
+## - *"at the bottom it still overlaps half a tile"* -- this. A SOUTH rail's
+##   posts standing on its own north edge is a fence seen from the front and
+##   reads correctly, but the body then rises over the bottom row of beds
+##   and hides half a tile of crop. Flush from the inside puts the same
+##   fence half a tile nearer the viewer and covers nothing.
 ##
-## Derived from the inner direction rather than written out as a fifth table
-## of facings, so a rail cannot be drawn on one edge and block another.
+## The offsets are MEASURED off the art (_art_rect), never assumed from the
+## cell: `fence.png` draws every run centred in its own cell with real
+## margin all round, and an earlier pass that assumed the cell's own edge
+## was where the wood ended was wrong by a fifth of a tile.
+##
+## Derived from the inner direction rather than a table of facings, so a
+## rail cannot be drawn against one edge and block another.
 func footprint_offset(subject: String, tile_size: int) -> Vector2:
 	var inner := VillageFarm.fence_inner_direction(subject)
 	if inner == Vector2i.ZERO:
@@ -278,33 +280,24 @@ func footprint_offset(subject: String, tile_size: int) -> Vector2:
 	var image := idle.get_image()
 	var art := _art_rect(subject, image)
 	var scale := _footprint_scale(subject, image, tile_size)
-	var band_left_x := (float(tile_size) - float(image.get_width()) * scale) * 0.5
-	if inner.x != 0 and inner.y != 0:
-		# A CORNER closes two sides, so it has a ground POINT rather than a
-		# ground line: the corner of its own tile where the two runs meet.
-		# Centred on it in BOTH axes -- half the post runs back along each
-		# run it caps and joins them, and nothing hangs a tile past either.
-		var centre_x := band_left_x + (float(art.position.x) + float(art.size.x) * 0.5) * scale
-		var band_top := float(tile_size) - float(image.get_height()) * scale
-		var centre_y := band_top + (float(art.position.y) + float(art.size.y) * 0.5) * scale
-		return Vector2(
-			(float(tile_size) if inner.x > 0 else 0.0) - centre_x,
-			(float(tile_size) if inner.y > 0 else 0.0) - centre_y
-		)
-	if inner.y != 0:
-		# Bottom-anchoring puts the BAND's bottom edge on the tile's bottom
-		# edge, so the posts stand this far above it.
-		var foot_above_bottom := float(image.get_height() - art.position.y - art.size.y) * scale
-		if inner.y > 0:
-			return Vector2(0.0, foot_above_bottom)
-		return Vector2(0.0, foot_above_bottom - float(tile_size))
-	# The band is centred on the tile -- and is NOT one tile wide once a rail
-	# is scaled by its own run, so where its left edge falls has to be
-	# carried rather than assumed away.
-	var centre_x := band_left_x + (float(art.position.x) + float(art.size.x) * 0.5) * scale
-	if inner.x < 0:
-		return Vector2(-centre_x, 0.0)
-	return Vector2(float(tile_size) - centre_x, 0.0)
+	# Where the wood lands with no offset at all: the band is centred on the
+	# tile and bottom-anchored (EarthChunkManager._spawn_structure_art_for),
+	# and is NOT one tile wide once a rail is scaled by its own run, so where
+	# its edges fall has to be carried rather than assumed away.
+	var band_left := (float(tile_size) - float(image.get_width()) * scale) * 0.5
+	var band_top := float(tile_size) - float(image.get_height()) * scale
+	var left := band_left + float(art.position.x) * scale
+	var top := band_top + float(art.position.y) * scale
+	var offset := Vector2.ZERO
+	if inner.x > 0:
+		offset.x = float(tile_size) - (left + float(art.size.x) * scale)
+	elif inner.x < 0:
+		offset.x = -left
+	if inner.y > 0:
+		offset.y = float(tile_size) - (top + float(art.size.y) * scale)
+	elif inner.y < 0:
+		offset.y = -top
+	return offset
 
 
 ## How bright a pixel must be to count as this art rather than as the chroma
