@@ -128,3 +128,125 @@ func test_the_real_cottage_sheet_slices_without_cutting_a_single_house():
 		assert_lt(rows[i].y, rows[i + 1].x, "row %d runs into row %d" % [i, i + 1])
 	var columns: Array = VariantSheetGrid.column_bands(image, 5)
 	assert_eq(columns.size(), 5, "five real columns of cottages")
+
+
+# -- sheets that divide their cells with MAGENTA LINES ----------------------
+#
+# The sheets delivered 2026-09-17 (house_1_1.png .. house_1_5.png, well.png)
+# separate their cells with magenta divider lines rather than with dark
+# gutters, and the house sheets additionally carry a row of COLUMN LABELS
+# across the top and a column of ROW LABELS down the left, plus a blank
+# margin on the right -- all of them real, divider-separated bands that are
+# not art. Measured with tools/probe_building_lifecycle_sheet.gd, never
+# assumed.
+
+
+## A sheet whose content bands are separated by 3px magenta divider lines,
+## with one line before the first band and one after the last -- exactly
+## how the real sheets are drawn.
+func _divided(sizes: Array, horizontal: bool) -> Image:
+	var line := 3
+	var total := line
+	for size in sizes:
+		total += int(size) + line
+	var short_side := 40
+	var image := Image.create_empty(
+		short_side if horizontal else total, total if horizontal else short_side, false, Image.FORMAT_RGBA8
+	)
+	image.fill(Color.MAGENTA)
+	var at := line
+	for size in sizes:
+		for step in int(size):
+			for other in short_side:
+				if horizontal:
+					image.set_pixel(other, at + step, Color.WHITE)
+				else:
+					image.set_pixel(at + step, other, Color.WHITE)
+		at += int(size) + line
+	return image
+
+
+func test_divider_bands_finds_every_cell_between_the_magenta_lines():
+	var bands: Array = VariantSheetGrid.divider_bands(_divided([10, 20, 30], true), true)
+	assert_eq(bands.size(), 3)
+	assert_eq(bands[0], Vector2i(3, 12))
+	assert_eq(bands[1], Vector2i(16, 35))
+	assert_eq(bands[2], Vector2i(39, 68))
+
+
+func test_the_art_window_is_the_run_whose_cells_are_most_alike():
+	# A label gutter, four art cells, a blank margin -- the real shape.
+	var image := _divided([30, 100, 101, 99, 100, 40], true)
+	var bands: Array = VariantSheetGrid.art_bands(image, 4, true)
+	assert_eq(bands.size(), 4)
+	for band in bands:
+		var size: int = (band as Vector2i).y - (band as Vector2i).x + 1
+		assert_between(size, 99, 101, "%s is a label or a margin, not an art cell" % str(band))
+
+
+func test_asking_for_more_cells_than_the_sheet_has_falls_back_to_even_division():
+	var image := _divided([10, 20], true)
+	var bands: Array = VariantSheetGrid.art_bands(image, 5, true)
+	assert_eq(bands.size(), 5, "an unreadable sheet still cuts, just evenly")
+	assert_eq(bands[0].x, 0, "an even division starts at the very top")
+
+
+func test_the_real_lifecycle_sheet_carries_a_label_row_a_label_column_and_a_margin():
+	var image := Image.load_from_file("res://assets/sprites/buildings/house_1_1.png")
+	assert_not_null(image, "precondition: the sheet is on disk")
+	if image.get_format() != Image.FORMAT_RGBA8:
+		image.convert(Image.FORMAT_RGBA8)
+	assert_eq(
+		VariantSheetGrid.divider_bands(image, true).size(), 11,
+		"ten rows of art, plus the column-label row across the top"
+	)
+	assert_eq(
+		VariantSheetGrid.divider_bands(image, false).size(), 10,
+		"eight columns of art, plus the row-label gutter and the right margin"
+	)
+
+
+func test_the_real_lifecycle_sheets_art_window_skips_the_labels():
+	var image := Image.load_from_file("res://assets/sprites/buildings/house_1_1.png")
+	if image.get_format() != Image.FORMAT_RGBA8:
+		image.convert(Image.FORMAT_RGBA8)
+	var rows: Array = VariantSheetGrid.art_bands(image, 10, true)
+	var columns: Array = VariantSheetGrid.art_bands(image, 8, false)
+	assert_eq(rows.size(), 10)
+	assert_eq(columns.size(), 8)
+	assert_gt(
+		(rows[0] as Vector2i).x, 40,
+		"the first art row must start below the column-label row, not at the top of the sheet"
+	)
+	assert_gt(
+		(columns[0] as Vector2i).x, 110,
+		"the first art column must start right of the row-label gutter"
+	)
+	var last: Vector2i = columns[columns.size() - 1]
+	assert_lt(last.y, image.get_width() - 40, "the blank right margin is not an art column")
+
+
+func test_every_cell_of_the_real_lifecycle_sheet_holds_real_art():
+	var image := Image.load_from_file("res://assets/sprites/buildings/house_1_1.png")
+	if image.get_format() != Image.FORMAT_RGBA8:
+		image.convert(Image.FORMAT_RGBA8)
+	for row in 10:
+		for column in 8:
+			var rect := VariantSheetGrid.divider_cell_rect(image, 8, 10, row, column)
+			var cell := image.get_region(rect)
+			var lit := 0
+			for y in range(0, cell.get_height(), 4):
+				for x in range(0, cell.get_width(), 4):
+					var pixel := cell.get_pixel(x, y)
+					if pixel.r > 0.2 or pixel.g > 0.2 or pixel.b > 0.2:
+						lit += 1
+			assert_gt(lit, 0, "cell (row %d, column %d) is empty -- the grid is cutting in the wrong place" % [row, column])
+
+
+func test_the_well_sheet_is_a_five_by_five_grid_between_its_dividers():
+	var image := Image.load_from_file("res://assets/sprites/buildings/well.png")
+	assert_not_null(image, "precondition: the sheet is on disk")
+	if image.get_format() != Image.FORMAT_RGBA8:
+		image.convert(Image.FORMAT_RGBA8)
+	assert_eq(VariantSheetGrid.divider_bands(image, true).size(), 5)
+	assert_eq(VariantSheetGrid.divider_bands(image, false).size(), 5)
