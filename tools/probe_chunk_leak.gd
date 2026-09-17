@@ -5,11 +5,17 @@ extends SceneTree
 ## A frame rate that starts at 60 and slides to 15 is something ACCUMULATING;
 ## this says whether it is nodes, objects or memory, and how fast.
 
-const EarthChunkManager = preload("res://src/world/earth_chunk_manager.gd")
+## EarthChunkManager ALONE is loaded at run time rather than preloaded, for
+## the reason probe_settlement_history_cost.gd already documents: a tool
+## script is compiled while the autoloads are still coming up, and this is
+## the script with the deepest preload graph in the project, so preloading it
+## fails to compile ("Identifier not found: WorldItemBus"). The two below
+## have no such graph.
 const EarthChunkGenerator = preload("res://src/world/earth_chunk_generator.gd")
 const GeoCoordinates = preload("res://src/world/geo_coordinates.gd")
 
-func _init() -> void:
+func _initialize() -> void:
+	var EarthChunkManager = load("res://src/world/earth_chunk_manager.gd")
 	var tile_map_layer := TileMapLayer.new()
 	var entities := Node2D.new()
 	var creatures := Node2D.new()
