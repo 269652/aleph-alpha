@@ -24251,3 +24251,49 @@ honest; turning it into labour hours against `ConstructionLabor` is next.
 Tests: `test_plan_wireframe.gd` 10/10, `test_plan_raising.gd` 12/12,
 `test_build_plan_persistence.gd` 7/7 (all new), 118/118 across the planner
 suite plus `building_catalog`/`hiring_gate`; `world.gd` confirmed to compile.
+
+### Planner mode, slice 3: hiring, and the live trust value it needed (2026-09-17)
+
+Asked: *"Fix the gaps"* — the two the previous slice left open.
+
+✅ **Raising opens a real `ConstructionProject`**, through the same
+`ConstructionProjectStore.start_project` every village build already uses.
+A player-raised building is the same kind of project a villager-raised one
+is, not a parallel one — and `start_project` is idempotent by site, so
+raising twice cannot reset a project already under way. The plan is
+cancelled and re-saved as it becomes a project; leaving it would draw a
+blueprint over its own building.
+
+✅ **Hiring works — and the reason it could not was a documented gap in the
+NPC system, not in planner mode.** `docs/concept/npc_instructions.md` says
+it plainly: *"nowhere on a real NpcIdentity/NpcMarker actually holds a live
+trust value for hiring_gate.gd to read"*, which is why the whole hiring path
+was unreachable in a live game. `NpcTrustStore` is that value — the
+"minimal, deliberately player-only trust scalar" that doc already specifies,
+not the NPC-NPC relationship web — keyed by `NpcIdentity.seed_value` so it
+survives a marker despawning with its chunk.
+
+✅ **Three conversations, pinned rather than eyeballed.** Baseline 0.2 to
+`HIRE_THRESHOLD` 0.5 is a 0.3 gap, and a conversation is worth 0.1, so
+somebody takes a job from you on the **third** real conversation and never
+on a first meeting. A test pins the step against the threshold so the two
+cannot drift apart and quietly make "three conversations" a lie. Talking is
+the only thing that raises it — otherwise nobody would ever become hireable
+and the gate would refuse forever.
+
+🚧 **The wage is offered, not paid.** `BUILDER_WAGE` clears the minimum
+(pinned by a test, because an offer that could not clear its own minimum
+would make hiring refuse for a reason the player can neither see nor fix),
+but `npc_instructions.md` lists "any actual wage-payment flow" as unbuilt
+for the whole NPC system — so no gold moves yet, and this says so rather
+than pretending the transaction happened.
+
+🚧 **A hired villager does not yet walk to the site and work.**
+`ConstructionLabor` and `BuilderMarker` exist; connecting a project to a
+villager's own day belongs with `concept/workforce.md` and is the next
+slice.
+
+Tests: `test_npc_trust_store.gd` 7/7 (new), `test_world_planner_mode_wiring.gd`
++4, 89/89 across the planner and hiring suites, and 158/158 across the
+construction/NPC/HUD/catalog suites this wires into — zero regressions.
+`world.gd` confirmed to compile.

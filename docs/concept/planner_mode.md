@@ -174,10 +174,32 @@ whole.
   blueprint; only who supplies the hours differs. Bound to the interact
   key, which raises a wireframe you are standing at and otherwise still
   talks. 12/12.
-- 🚧 **Choosing an NPC to hire is not wired.** `can_hire_builder` is real
-  and tested and `raising_request` already carries `Labour.HIRED`, but
-  nothing yet picks *which* villager you are offering the job to, so the
-  prompt currently says so plainly instead of pretending.
-- 🚧 **Raising does not yet open a `ConstructionProject`.** The prompt
-  reports the cost check honestly; turning that into real labour hours
-  against `ConstructionLabor` is the next slice.
+- ✅ **Hiring a villager to build it** (2026-09-17) — and closing the gap
+  that made it unreachable. `docs/concept/npc_instructions.md` named the
+  blocker outright: *"nowhere on a real NpcIdentity/NpcMarker actually
+  holds a live trust value for hiring_gate.gd to read"*. `NpcTrustStore`
+  is that value — the "minimal, player-only trust scalar" that doc already
+  specifies, keyed by `NpcIdentity.seed_value` so it survives a marker
+  despawning with its chunk. **Three real conversations** earn it: the
+  baseline (0.2) to `HIRE_THRESHOLD` (0.5) is a 0.3 gap and a conversation
+  is worth 0.1, pinned by a test so the step and the threshold cannot
+  drift apart and quietly make "three conversations" a lie. A villager
+  standing close enough and willing is offered the job first, because
+  hiring is the point of walking up with somebody beside you — and it does
+  not ask the player to carry the materials themselves.
+- ✅ **Raising opens a real `ConstructionProject`** — through the same
+  `ConstructionProjectStore.start_project` every village build already
+  uses, so a player-raised building is the same kind of project a
+  villager-raised one is rather than a parallel one. Idempotent by site, so
+  raising twice cannot reset a project already under way. The plan is
+  cancelled and re-saved as it becomes a project, or a blueprint would be
+  drawn over its own building.
+- ⬜ **The wage is offered, not yet paid.** `BUILDER_WAGE` clears the
+  minimum (pinned), and `docs/concept/npc_instructions.md` lists "any
+  actual wage-payment flow" as unbuilt for the whole NPC system, not just
+  here — so no gold moves yet. Naming it rather than pretending the
+  transaction happened.
+- ⬜ **A hired villager does not yet walk to the site and work.**
+  `ConstructionLabor` and `BuilderMarker` exist; connecting the project to
+  a villager's own day is the next slice, and belongs with
+  `docs/concept/workforce.md` rather than here.

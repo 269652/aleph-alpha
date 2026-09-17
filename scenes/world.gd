@@ -19,6 +19,7 @@ const PlanWireframe = preload("res://src/rendering/plan_wireframe.gd")
 const PlanWireframeLayer = preload("res://src/rendering/plan_wireframe_layer.gd")
 const PlanRaising = preload("res://src/gameplay/plan_raising.gd")
 const BuildPlanPersistence = preload("res://src/world/build_plan_persistence.gd")
+const NpcTrustStore = preload("res://src/world/npc_trust_store.gd")
 const InteractionSfxPlayer = preload("res://src/audio/interaction_sfx_player.gd")
 const FootstepSound = preload("res://src/audio/footstep_sound.gd")
 const CreatureCallSound = preload("res://src/audio/creature_call_sound.gd")
@@ -1779,6 +1780,10 @@ func _on_talk_pressed(local_player: Player) -> void:
 	var npc := _chunk_manager.nearest_npc_near(local_player.position, Player.TALK_RADIUS)
 	if npc == null:
 		return
+	# Getting to know somebody is what earns the right to offer them work
+	# (see NpcTrustStore): three real conversations, never a first meeting.
+	if npc.identity != null:
+		_npc_trust.record_conversation(npc.identity.seed_value)
 	_open_conversation_with(npc, local_player)
 
 
@@ -5082,6 +5087,20 @@ var _plan_wireframes: PlanWireframeLayer
 ## so it has to outlive a reload -- walking back to one later is the whole
 ## point of planning ahead.
 var _build_plan_store := BuildPlanPersistence.new()
+
+## What each villager thinks of the player -- the live trust value
+## docs/concept/npc_instructions.md named as the reason the hiring path was
+## unreachable in a live game. Keyed by NpcIdentity.seed_value, so it
+## survives a marker despawning with its chunk.
+var _npc_trust := NpcTrustStore.new()
+
+## What the player offers a villager to raise a wireframe, and the least
+## any villager will take. Both are tuned values, so they are pinned by
+## test_the_offered_wage_clears_the_minimum rather than asserted here: an
+## offer that could not clear its own minimum would make hiring refuse for
+## a reason the player can neither see nor fix.
+const BUILDER_WAGE := 5.0
+const BUILDER_MINIMUM_WAGE := 1.0
 var _planner_banner: PanelContainer
 
 
@@ -5240,6 +5259,19 @@ func _raise_plan_within_reach(builder: Player) -> bool:
 	var plan = PlanRaising.plan_within_reach(_build_plans, player_cell, EarthChunkManager.CHUNK_SIZE)
 	if plan == null:
 		return false
+	# Somebody you know well enough, standing close enough to take the job,
+	# is offered it first: hiring is the whole point of walking up to a
+	# wireframe with a villager beside you, and it does not ask the player
+	# to carry the materials themselves.
+	var hired := _chunk_manager.nearest_npc_near(builder.position, Player.TALK_RADIUS)
+	if hired != null and hired.identity != null and PlanRaising.can_hire_builder(
+		_npc_trust.trust_of(hired.identity.seed_value), BUILDER_WAGE, BUILDER_MINIMUM_WAGE
+	):
+		_open_raising_project(plan, PlanRaising.Labour.HIRED)
+		_show_planner_message("%s takes the job: %s." % [
+			hired.identity.npc_name, BuildPlan.display_name_of(plan.blueprint_id)
+		])
+		return true
 	var missing: Dictionary = PlanRaising.missing_materials(plan.blueprint_id, _carried_counts(builder, plan.blueprint_id))
 	if not missing.is_empty():
 		var shortfall: Array[String] = []
@@ -5249,10 +5281,31 @@ func _raise_plan_within_reach(builder: Player) -> bool:
 			", ".join(shortfall), BuildPlan.display_name_of(plan.blueprint_id)
 		])
 		return true
-	_show_planner_message(
-		"Raising %s. (Hiring a builder instead is not wired yet.)" % BuildPlan.display_name_of(plan.blueprint_id)
-	)
+	_open_raising_project(plan, PlanRaising.Labour.PLAYER)
+	_show_planner_message("Raising %s yourself." % BuildPlan.display_name_of(plan.blueprint_id))
 	return true
+
+
+## Opens the real ConstructionProject behind a raised wireframe, and takes
+## the wireframe down.
+##
+## Both ways of raising land here (planner_mode.md's pillar 5: they are the
+## same construction paid for differently), through the SAME
+## ConstructionProjectStore.start_project every village build already uses
+## -- a player-raised building must be the same kind of project a
+## villager-raised one is, not a parallel one. start_project is idempotent
+## by site, so this cannot reset a project already under way.
+func _open_raising_project(plan, labour: int) -> void:
+	var request: Dictionary = PlanRaising.raising_request(plan, labour)
+	_chunk_manager.start_build_project(
+		request["chunk_coord"], request["origin"], request["blueprint_id"], ""
+	)
+	# The wireframe has become a real project, so the plan that stood for it
+	# is done -- leaving it would draw a blueprint over its own building.
+	_build_plans.cancel(plan.id)
+	_build_plan_store.save(_build_plans)
+	if _plan_wireframes != null:
+		_plan_wireframes.refresh()
 
 
 ## What the builder is carrying, item id -> count, in the shape

@@ -17085,6 +17085,21 @@ func _restore_growing_juveniles(chunk_coord: Vector2i) -> void:
 ## planner mode needs it to turn a clicked world cell into a
 ## chunk+local-origin site (see BuildPlan), and duplicating the arithmetic
 ## in World is exactly how two answers to one question drift apart.
+## Opens (or returns) a real construction project for a site the PLAYER
+## chose, rather than one a settlement decided on its own.
+##
+## The same ConstructionProjectStore.start_project every village build
+## already goes through -- idempotent by site+blueprint, so raising a
+## wireframe twice does not reset the progress of the first. Exposed
+## because planner mode (docs/concept/planner_mode.md) lets a player raise
+## a plan, and a player-raised building must be the same kind of project a
+## villager-raised one is, not a parallel one.
+func start_build_project(
+	chunk_coord: Vector2i, origin: Vector2i, blueprint_id: String, household_id: String
+) -> ConstructionProject:
+	return _construction_project_store.start_project(chunk_coord, origin, blueprint_id, household_id)
+
+
 func chunk_coord_for_tile(global_tile: Vector2i) -> Vector2i:
 	return _chunk_coord_for_tile(global_tile)
 

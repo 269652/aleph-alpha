@@ -93,3 +93,49 @@ func test_a_click_plans_only_while_the_build_cursor_is_armed():
 		body.contains("ViewMode.arms_build_cursor("),
 		"and must be gated on the mode arming the cursor, not on the mode id directly"
 	)
+
+
+## The offered wage must clear the minimum any villager will take, or
+## hiring refuses for a reason the player can neither see nor fix. Both are
+## tuned values, so the relationship between them is pinned rather than
+## asserted in a comment (CLAUDE.md).
+func test_the_offered_wage_clears_the_minimum():
+	var source := _source()
+	var offered := _constant_value(source, "BUILDER_WAGE")
+	var minimum := _constant_value(source, "BUILDER_MINIMUM_WAGE")
+	assert_gt(minimum, 0.0, "a minimum of zero would make the wage check meaningless")
+	assert_gte(offered, minimum, "the player's own offer must be one a villager would take")
+
+
+func _constant_value(source: String, name: String) -> float:
+	var marker := "const %s := " % name
+	var start := source.find(marker)
+	assert_gt(start, -1, "%s must still exist" % name)
+	var line_end := source.find("\n", start)
+	return float(source.substr(start + marker.length(), line_end - start - marker.length()))
+
+
+## Raising a wireframe must open the SAME kind of project a village build
+## opens, not a parallel one -- and must take the plan down, or a blueprint
+## would be drawn over its own building.
+func test_raising_opens_a_real_project_and_clears_the_plan():
+	var body := _function_body("_open_raising_project")
+	assert_true(body.contains("start_build_project("), "a real ConstructionProject, not a parallel record")
+	assert_true(body.contains("_build_plans.cancel("), "the wireframe is done once it is a project")
+	assert_true(body.contains("_build_plan_store.save("), "and that must survive a reload")
+
+
+## Hiring reads the live trust value, which is the whole point of
+## NpcTrustStore existing -- a hard-coded trust would make the gate
+## decorative.
+func test_hiring_reads_the_live_trust_value():
+	var body := _function_body("_raise_plan_within_reach")
+	assert_true(body.contains("_npc_trust.trust_of("), "the villager's own opinion of the player")
+	assert_true(body.contains("PlanRaising.can_hire_builder("), "through the shared gate")
+
+
+## Trust is earned by talking, which is the only thing that raises it --
+## otherwise nobody would ever become hireable and the gate would refuse
+## forever.
+func test_talking_is_what_earns_trust():
+	assert_true(_function_body("_on_talk_pressed").contains("_npc_trust.record_conversation("))
