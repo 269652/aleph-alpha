@@ -23195,6 +23195,29 @@ already turned on, named rather than restated). A producer whose region has
 genuinely collapsed is sent to the well again, so the famine chain is
 unchanged.
 
+✅ **A regression from the earlier village arc, found and fixed here.**
+`test_a_completed_project_whose_output_is_not_placeable_places_nothing_and_
+does_not_crash` passed before that arc and failed after it, isolated by
+running it alone at `ee6312f~1` (1/1) and at HEAD (0/1). Cause: a crew is
+now scaled by its village's real productivity
+(`EarthChunkManager._advance_construction_labor`, mechanism 4 of
+`concept/village_growth.md`), and a settlement founded a moment ago has an
+empty market, so its households read as unfed and it builds at a fraction
+of full speed. The test's one-day precondition was calibrated to unscaled
+labour; it now waits the same two days its sibling test already does, and
+what it is ABOUT — a completed non-placeable output places nothing — is
+unchanged and still asserted. **The wider consequence is worth stating:
+every newly founded village builds at that reduced rate, because an empty
+market is exactly the state a new village is in. That is the real reason
+the city hall took so long to appear** — the pacing answer given earlier
+was right, and this is the mechanism behind it.
+
+**Pre-existing and untouched**:
+`test_a_completed_projects_placeable_output_is_actually_placed_in_the_world`
+fails at HEAD and equally at `ee6312f~1`, before the village arc. It fails
+LESS now — the project reaches COMPLETE where it previously did not, and
+only the placement assertion fails.
+
 **Also pre-existing, verified by the same method**: three failures in
 `test_earth_chunk_manager.gd` — `test_water_overlay_marks_shore_cells_
 differently_from_non_touching_cells`, `test_water_overlay_uses_ring_tiles_

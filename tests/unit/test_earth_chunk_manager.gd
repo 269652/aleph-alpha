@@ -3850,7 +3850,17 @@ func test_a_completed_project_whose_output_is_not_placeable_places_nothing_and_d
 	)
 	project.status = ConstructionProject.Status.IN_PROGRESS
 
-	_unload_wait_and_reload(EarthChunkManager.REAL_SECONDS_PER_ECOLOGICAL_DAY * 1.0)
+	# Two days, not one, and the same two the sibling test above uses. A
+	# crew is now scaled by its village's real productivity (see
+	# _advance_construction_labor, docs/concept/village_growth.md mechanism
+	# 4: an unhappy village visibly builds slower), and a settlement founded
+	# a moment ago has an empty market, so its households read as unfed and
+	# its crew works at a fraction of full speed. One day of that no longer
+	# clears even this recipe's small requirement. What this test is ABOUT
+	# is unchanged -- that a completed non-placeable output places nothing --
+	# and reaching COMPLETE is its precondition, asserted below rather than
+	# assumed.
+	_unload_wait_and_reload(EarthChunkManager.REAL_SECONDS_PER_ECOLOGICAL_DAY * 2.0)
 
 	assert_eq(project.status, ConstructionProject.Status.COMPLETE)
 	var global_cell := chunk_coord * EarthChunkManager.CHUNK_SIZE + local_origin
