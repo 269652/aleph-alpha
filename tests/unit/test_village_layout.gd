@@ -308,16 +308,27 @@ func test_the_main_street_is_paved_along_its_whole_buildable_length():
 		assert_true(road_cells.has(Vector2i(x, skeleton["street_y"])), "street cell x=%d must be paved" % x)
 
 
-func test_no_plaza_when_its_own_site_is_unbuildable_but_houses_still_get_placed():
+## Superseded in part: the square SLIDES now (see plaza_x0_for), so ground
+## blocked where it was designed no longer means no square at all -- it
+## means the square moves. What still has to hold, and is the real
+## invariant, is that the village is still a village: houses placed, and
+## nothing paved on ground it was told it cannot use.
+func test_a_blocked_square_site_moves_the_square_and_still_houses_people():
 	var skeleton: Dictionary = VillageLayout.skeleton(CHUNK_SIZE, 8)
 	var plaza_site: Rect2i = skeleton["plaza"]
 	var not_on_the_square := func(cell: Vector2i) -> bool: return not plaza_site.has_point(cell)
 	var result := layout.layout(["house_small", "house_small"], CHUNK_SIZE, 8, not_on_the_square, _never_occupied)
-	assert_eq(result["plaza"], Rect2i(), "no plaza where the square can't be paved")
-	assert_true((result["civic_plot"] as Dictionary).is_empty(), "no civic plot without a plaza")
 	assert_gt(result["plots"].size(), 0, "houses still line the street")
 	for cell in result["road_cells"]:
 		assert_true(not_on_the_square.call(cell), "nothing paved on unbuildable ground (%s)" % str(cell))
+	var plaza: Rect2i = result["plaza"]
+	if plaza.has_area():
+		for y in range(plaza.position.y, plaza.end.y):
+			for x in range(plaza.position.x, plaza.end.x):
+				assert_true(
+					not_on_the_square.call(Vector2i(x, y)),
+					"the square moved onto ground it was told it cannot use"
+				)
 
 
 func test_side_streets_tie_a_second_street_back_to_the_plaza():
@@ -755,33 +766,6 @@ func test_a_village_whose_middle_is_water_still_gets_a_square_and_a_civic_plot()
 	assert_eq(result["plots"].size(), five.size(), "and it still houses everyone")
 
 
-## The "room beside the square" rule is a real measurement off the
-## catalog, not a number written down here (CLAUDE.md: tuned values are
-## tested functions or test-pinned constants).
-func test_the_narrowest_plot_width_is_read_from_the_catalog():
-	var narrowest := 0
-	for building_id in BuildingCatalog.BUILDING_IDS:
-		var width: int = BuildingCatalog.footprint_of(building_id).x
-		if narrowest == 0 or width < narrowest:
-			narrowest = width
-	assert_eq(VillageLayout.narrowest_plot_width(), narrowest)
-	assert_gt(narrowest, 0, "a catalog with no house in it would make the rule meaningless")
-
-
-func test_a_square_never_takes_the_whole_street_it_slid_into():
-	# A run only just wide enough for the square itself: the square stays
-	# where it was designed (and layout() then honestly lays none) rather
-	# than standing on the only ground the village had to live on.
-	var street_y: int = VillageLayout.skeleton(CHUNK_SIZE, 8)["street_y"]
-	var only_a_short_run := func(cell: Vector2i) -> bool:
-		return cell.x >= 4 and cell.x < 4 + VillageLayout.PLAZA_WIDTH_TILES
-	var slid: int = VillageLayout.plaza_x0_for(CHUNK_SIZE, street_y, 2, CHUNK_SIZE - 3, only_a_short_run)
-	assert_eq(
-		slid, CHUNK_SIZE / 2 - VillageLayout.PLAZA_WIDTH_TILES / 2,
-		"a square with no room for a single house beside it is not sited there"
-	)
-
-
 # -- a plot on the outskirts, when the street has no room left --------------
 #
 # Measured in the real world (chunk (661,139) near lat 49.8 lon 10.6): a
@@ -875,3 +859,55 @@ func test_nowhere_buildable_means_no_outskirt_plot():
 			"farmhouse", CHUNK_SIZE, 26, _never_buildable, _never_occupied
 		).is_empty()
 	)
+
+
+# -- a narrow village keeps its square AND its houses ----------------------
+#
+# Measured on chunk (661,139) near lat 49.8 lon 10.6, reported three times
+# ("no plaza, no city hall"). The square fits on DRY ground right where the
+# street already runs -- two placements of it -- and was never laid, because
+# the dry pocket is about nine tiles wide and the siting rule demanded a run
+# wide enough for the square PLUS a house beside it. So the village took
+# three houses and lost its square.
+#
+# That trade is the wrong way round. A house does not have to stand on the
+# spine: a village that fills its spine opens a further street south and
+# reaches it by the gate lane, which is exactly what that machinery is for.
+# The square, on the other hand, can only ever straddle a street.
+
+
+## Buildable in one narrow north-south band, just wide enough for a square.
+func _only_a_narrow_band(from_x: int, width: int) -> Callable:
+	return func(cell: Vector2i) -> bool:
+		return cell.x >= from_x and cell.x < from_x + width
+
+
+func test_a_village_whose_spine_only_fits_the_square_still_gets_one():
+	var band := _only_a_narrow_band(4, VillageLayout.PLAZA_WIDTH_TILES + 1)
+	var five := ["house_small", "house_small", "house_small", "house_small", "house_small"]
+	var result := layout.layout(five, CHUNK_SIZE, 31, band, _never_occupied)
+	assert_true(
+		(result["plaza"] as Rect2i).has_area(),
+		"the square fits on this street, so the village has one"
+	)
+	assert_false((result["civic_plot"] as Dictionary).is_empty(), "and somewhere to put a hall")
+
+
+func test_and_its_houses_go_on_a_further_street():
+	var band := _only_a_narrow_band(4, VillageLayout.PLAZA_WIDTH_TILES + 1)
+	var five := ["house_small", "house_small", "house_small", "house_small", "house_small"]
+	var result := layout.layout(five, CHUNK_SIZE, 31, band, _never_occupied)
+	assert_gt(
+		result["plots"].size(), 0,
+		"a square that leaves the village nowhere to live is not worth having"
+	)
+	var street_y: int = VillageLayout.skeleton(CHUNK_SIZE, 31)["street_y"]
+	var below := 0
+	for plot in result["plots"]:
+		if (plot["origin"] as Vector2i).y > street_y:
+			below += 1
+	assert_gt(below, 0, "the houses the spine could not take went to a further street")
+	var roads: Array = result["road_cells"]
+	var reached := _reachable_road_cells(roads, result["plots"][0]["doorstep"])
+	for plot in result["plots"]:
+		assert_true(reached.has(plot["doorstep"]), "and every one of them is still reachable")
