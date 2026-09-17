@@ -571,6 +571,53 @@ func test_bending_a_blade_moves_it_along_its_own_length_instead_of_stretching_it
 			)
 
 
+## Reported live WITH A SCREENSHOT, after the arc bend below shipped: "but
+## it's still super elongated."
+##
+## The arc was measured against the wrong root. It held each vertex's own
+## HEIGHT fixed, which rotates every vertical column of the card about the
+## point directly beneath it -- fine for a blade drawn straight up a single
+## column, and wrong for the art this atlas actually holds: a fan of long
+## leaves radiating DIAGONALLY from the tuft's own base. A leaf running from
+## the card's root to its top corner is sqrt(8^2 + 16^2) = 17.9 units long;
+## under per-column rotation its far end swings sideways while its base
+## stays put, so at the tuned walker push it draws 24 units long -- a third
+## longer, dragged out sideways, which is exactly what the screenshot shows.
+##
+## What has to be preserved is every point's distance from THE CARD'S OWN
+## ROOT (local origin, the bottom centre the instance is planted at), not
+## from whatever sits below it. Then a leaf radiating from that base keeps
+## its length whichever way the tuft leans, and this holds for every point
+## of the card at once rather than one column at a time.
+func test_bending_never_moves_a_point_away_from_the_cards_own_root():
+	var half_width: float = IllustratedGrassPatch.WORLD_SIZE * 0.5
+	for column_step in 9:
+		for height_step in 9:
+			var local := Vector2(
+				-half_width + IllustratedGrassPatch.WORLD_SIZE * float(column_step) / 8.0,
+				-IllustratedGrassPatch.WORLD_SIZE * float(height_step) / 8.0
+			)
+			for bend_step in range(-10, 11):
+				var bend_offset := 2.0 * float(bend_step) / 10.0
+				var bent: Vector2 = IllustratedGrassPatch.bent_vertex(local, bend_offset)
+				assert_almost_eq(
+					bent.length(), local.length(), 0.001,
+					"a point at %s bent by %f is now %f from the root instead of %f" % [
+						local, bend_offset, bent.length(), local.length()
+					]
+				)
+
+
+## The case the screenshot is actually of: the diagonal leaf, not the
+## vertical one. Pinned separately from the sweep above so a regression here
+## names the shape it broke rather than one sample among hundreds.
+func test_a_leaf_drawn_across_the_card_keeps_its_length_when_the_tuft_leans():
+	var leaf_tip := Vector2(IllustratedGrassPatch.WORLD_SIZE * 0.5, -IllustratedGrassPatch.WORLD_SIZE)
+	var bent: Vector2 = IllustratedGrassPatch.bent_vertex(leaf_tip, 0.5)
+	assert_almost_eq(bent.length(), leaf_tip.length(), 0.001, "a leaning leaf is the same leaf")
+	assert_lt(bent.y, 0.0, "and it is still off the ground, not laid out flat by a half-strength bend")
+
+
 func test_a_bent_blade_lays_its_tip_over_rather_than_leaving_it_at_full_height():
 	var tip := Vector2(0.0, -IllustratedGrassPatch.WORLD_SIZE)
 	var bent: Vector2 = IllustratedGrassPatch.bent_vertex(tip, 0.5)
@@ -598,21 +645,43 @@ func test_an_unbent_blade_is_left_exactly_where_it_stands():
 
 
 ## And the root never moves, whatever the wind is doing above it (pillar 3).
+##
+## Asked of the COMPOSITION that actually runs, not of bent_vertex alone.
+## The card rotates about its own origin, so that origin is fixed by
+## construction -- but the rest of the card's bottom EDGE sits at a real
+## radius from it and would swing up off the ground if it were ever handed a
+## bend. It never is: bend_curve is exactly 0 at the root row, so the real
+## bend there is 0 whatever the wind and the walker are doing. Feeding
+## bent_vertex a bend the root row can never carry (which is what the earlier
+## version of this test did) measures a case the shader cannot produce.
 func test_a_blades_root_stays_put_under_any_bend():
-	for bend_step in range(-10, 11):
-		var bent: Vector2 = IllustratedGrassPatch.bent_vertex(Vector2(2.0, 0.0), 2.0 * float(bend_step) / 10.0)
-		assert_almost_eq(bent.x, 2.0, 0.0001)
-		assert_almost_eq(bent.y, 0.0, 0.0001)
+	var half_width: float = IllustratedGrassPatch.WORLD_SIZE * 0.5
+	for column_step in 9:
+		var across := float(column_step) / 8.0
+		var on_the_ground := Vector2(-half_width + IllustratedGrassPatch.WORLD_SIZE * across, 0.0)
+		for phase_step in 8:
+			var wind_phase: float = TAU * float(phase_step) / 8.0
+			for push_step in range(-2, 3):
+				var push: float = IllustratedGrassPatch.WALKER_PUSH_UV_AMPLITUDE * float(push_step) / 2.0
+				# The real bend this point is handed: UV.y = 0 IS the root row.
+				var bend: float = IllustratedGrassPatch.bend_offset(Vector2(across, 0.0), wind_phase, push, 1.8)
+				var bent: Vector2 = IllustratedGrassPatch.bent_vertex(on_the_ground, bend)
+				assert_almost_eq(bent.x, on_the_ground.x, 0.0001)
+				assert_almost_eq(bent.y, 0.0, 0.0001)
 
 
 ## The shader has to do the same thing the mirror above measures: a vertex
-## that only ever moves in x is the shear that stretched the blades.
-func test_the_shader_moves_a_bent_vertex_down_as_well_as_sideways():
+## that only ever moves in x is the shear that stretched every blade, and one
+## that moves x and y independently is the per-column version that stretched
+## the diagonal ones. What both lacked is a rotation about the card's own
+## root, which is what these three pieces are.
+func test_the_shader_rotates_a_bent_vertex_about_the_cards_own_root():
 	var code: String = IllustratedGrassPatch.SHADER_CODE
 	var vertex_start := code.find("void vertex()")
 	var vertex_body := code.substr(vertex_start, code.find("void fragment()") - vertex_start)
-	assert_string_contains(vertex_body, "VERTEX.y")
-	assert_string_contains(vertex_body, "sqrt")
+	assert_string_contains(vertex_body, "length(VERTEX)")  # the radius it is held at
+	assert_string_contains(vertex_body, "atan(VERTEX.x, -VERTEX.y)")  # its angle from upright
+	assert_string_contains(vertex_body, "VERTEX = vec2(")  # and the whole vertex placed, not nudged
 
 
 ## The whole point of the fix: a displacement has to be applied to something

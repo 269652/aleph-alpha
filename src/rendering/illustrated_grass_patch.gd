@@ -221,33 +221,49 @@ static func mesh_bend_offset(uv: Vector2, wind_phase: float, push: float, wind_s
 ## mesh's own local space (root at y=0, tip at y=-WORLD_SIZE, x across the
 ## card) and `bend_offset` is that point's displacement in CARD WIDTHS.
 ##
-## A vertex travels along an ARC about its own root, not along a line.
-## Reported live after the first geometry bend shipped: "the grassblades
-## elongate and stretch instead of only bending" -- and they did, because a
-## purely horizontal displacement is a shear, which leaves every row at the
-## height it started at. A tip pushed 26 world units sideways while staying
-## 16 up is a 31-unit blade where a 16-unit one is standing: the art
-## stretched along its own length, exactly as reported. Real grass does not
-## gain length when it goes over; its tip comes DOWN. So what is held fixed
-## here is the vertex's distance from its own root, and the height falls out
-## of that (`y = -sqrt(along^2 - sideways^2)`).
+## The whole card ROTATES about its own root; nothing is displaced along a
+## line. This took two live reports to get right, and both were the same
+## error measured against a different reference point:
 ##
-## HONEST about the model: holding the RADIAL distance fixed is the standard
-## cheap bend, not a true inextensible beam, which preserves ARC length and
-## would bring the tip down a little further still. The difference is small
-## at any bend this shader produces, and the property that actually matters
-## -- a blade never draws longer than it is -- is exact either way.
+## 1. "The grassblades elongate and stretch instead of only bending."
+##    Displacing VERTEX.x alone is a SHEAR -- every row keeps the height it
+##    started at, so a tip pushed 26 world units sideways while staying 16 up
+##    draws a 31-unit blade where a 16-unit one is planted.
+## 2. "But it's still super elongated", with a screenshot. That first fix
+##    held each vertex's own HEIGHT fixed, which rotates every COLUMN of the
+##    card about the point directly beneath it. Right for a blade drawn
+##    straight up one column; wrong for the art this atlas actually holds, a
+##    fan of long leaves radiating DIAGONALLY from the tuft's base. A leaf
+##    from the root to the top corner is 17.9 units long, and with its far
+##    end swinging sideways while its base stayed put it drew up to 24 --
+##    dragged out sideways, exactly what the screenshot showed.
 ##
-## Clamped at flat: a blade pushed harder than it is long lies on the ground,
-## because that is as far as a blade goes. Without it the arc would go
-## imaginary (a negative under the root) and the card would collapse to NaN.
+## What has to stay fixed is every point's distance from THE CARD'S OWN ROOT
+## (the local origin, the bottom centre the instance is planted at), and a
+## rotation about that root gives exactly that -- for every point at once, in
+## every column, whichever direction the art drew its leaves in.
+##
+## The lean is taken as an ANGLE from the same tuned displacement everything
+## else here is expressed in: asin(sideways / radius) is the rotation that
+## puts a point on the card's centre line the intended distance across.
+## Clamping that ratio to +/-1 before the asin is what stops a blade bending
+## past flat -- as far as a blade goes -- and keeps the angle real.
+##
+## HONEST about the model: a real blade bends into a curve, its tip ending
+## slightly nearer the root than a rigid rotation puts it. This is the
+## standard cheap billboard bend; the property that was wrong twice over --
+## a blade drawing longer than it is -- is exact here.
 static func bent_vertex(local_position: Vector2, bend_offset: float) -> Vector2:
-	var along: float = -local_position.y  # this vertex's own distance from the root
-	var sideways: float = clampf(bend_offset * WORLD_SIZE, -along, along)
-	return Vector2(
-		local_position.x + sideways,
-		-sqrt(maxf(along * along - sideways * sideways, 0.0))
-	)
+	var radius: float = local_position.length()
+	if radius < 0.0001:
+		return local_position  # the root itself, which never moves
+	# The lean that puts a point on the card's own centre line exactly the
+	# intended distance sideways -- so every amplitude above still means what
+	# its own test says -- applied as a rotation to every point, whatever
+	# column it sits in.
+	var lean: float = asin(clampf(bend_offset * WORLD_SIZE / radius, -1.0, 1.0))
+	var from_upright: float = atan2(local_position.x, -local_position.y) + lean
+	return Vector2(radius * sin(from_upright), -radius * cos(from_upright))
 
 
 ## What is left for the SAMPLING stage once the geometry has moved: the exact
@@ -399,21 +415,21 @@ void vertex() {
 	// bottom row of vertices stays put however hard the tip leans. Converted
 	// from card widths into the mesh's own local units (its instance
 	// transform is a pure translation, so local units ARE world units here).
-	// A vertex travels along an ARC about its own root, not along a line: a
-	// purely horizontal displacement is a shear, which leaves every row at
-	// the height it started at and so draws a leaning blade LONGER than the
-	// standing one (reported live: "the grassblades elongate and stretch
-	// instead of only bending"). Holding each vertex's own distance from the
-	// root fixed instead lays the tip over as it goes across, and the height
-	// falls out of it. Clamped at flat, which is as far as a blade goes --
-	// and which also keeps the root under the sqrt from going negative.
+	// The card ROTATES about its own root (its local origin, the bottom
+	// centre it is planted at), so every point keeps its distance from that
+	// root and no leaf can draw longer than it is, whichever direction the
+	// art drew it in. Displacing x alone shears the card and stretches every
+	// blade; holding each COLUMN's own height instead stretches the diagonal
+	// leaves this atlas is full of. Both were reported live, in that order.
 	// Mirrored exactly by bent_vertex() in illustrated_grass_patch.gd, which
-	// is where this is measured, since a shader cannot be.
+	// is where it is measured, since a shader cannot be.
 	v_geometry_bend = bend_offset_at(UV, v_root);
-	float along = -VERTEX.y;
-	float sideways = clamp(v_geometry_bend * %s, -along, along);
-	VERTEX.x += sideways;
-	VERTEX.y = -sqrt(max(along * along - sideways * sideways, 0.0));
+	float radius = length(VERTEX);
+	if (radius > 0.0001) {
+		float lean = asin(clamp(v_geometry_bend * %s / radius, -1.0, 1.0));
+		float from_upright = atan(VERTEX.x, -VERTEX.y) + lean;
+		VERTEX = vec2(radius * sin(from_upright), -radius * cos(from_upright));
+	}
 }
 
 void fragment() {
