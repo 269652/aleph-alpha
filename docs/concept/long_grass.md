@@ -169,35 +169,59 @@ vertices, 64 triangles): every vertex ROW sits on the real eased-in curve and
 every vertex COLUMN carries its own wind phase and amplitude, so the per-blade
 path-tracing survives the move from the sampling stage onto the geometry.
 
-**A blade bends over; it does not get longer.** The first version of this
-displaced `VERTEX.x` and nothing else, which is a SHEAR: it slides each row
-of the card sideways and leaves that row at exactly the height it started
-at. A blade drawn standing therefore draws as a longer diagonal -- at the
-tuned walker push a tip 16 world units up is moved 26 units across and is
-still 16 up, so a 16-unit blade renders as a 31-unit one. Reported live the
-moment it was seen: *"the grassblades elongate and stretch instead of only
-bending."* Measured on a real render rather than argued: the furthest blade
-pixel from its own root went from 17.9px at rest to **31.4px** under a
-walker, nearly double.
+**A blade bends over; it does not get longer.** This took three goes, and
+the first two were the same error measured against a different reference
+point. Each was reported live, and each was measured on a real render
+(`tools/probe_grass_bend_clipping.gd`, which now draws all four generations
+in one frame) rather than argued: one card, planted at a known root, with a
+walker in it, measuring the furthest blade pixel from that card's own root.
+The card is 16px tall and its art reaches 14.3px at rest.
 
-Each vertex now travels along an arc about its own root instead. What is
-held fixed is its distance from that root, and the height falls out of it
-(`y = -sqrt(along^2 - sideways^2)`), clamped at flat -- a blade pushed
-harder than it is long lies on the ground, which is as far as a blade goes,
-and the clamp is also what keeps the root of that square from going
-negative. Same render, same walker, same card: **20.1px**, against 17.9 at
-rest, and the couple of pixels between them are one offset card leaning
-away from the CELL centre the measurement is taken from, not a blade
-growing. Pinned headlessly by `bent_vertex` -- the shader's vertex stage
-mirrored in GDScript, since a shader cannot be measured under `--headless`
--- and its tests: every vertex, at every height, under every bend the
-shader can produce, keeps its own distance from the root.
+| generation | reach under a boot | what it did |
+| --- | --- | --- |
+| sampling only | 12.2px | never left the quad: it CUT the blade off |
+| shear | 27.5px | `VERTEX.x` alone -- rows keep their height, so a leaning blade draws as a longer diagonal |
+| column arc | 13.2px | each COLUMN rotated about the point beneath it |
+| rotation | 14.1px | the whole card rotates about its own root |
 
-Honest about the model: holding the RADIAL distance fixed is the standard
-cheap bend, not a true inextensible beam, which preserves ARC length and
-would bring the tip down a little further still. The difference is small at
-any bend this shader produces, and the property that was actually wrong --
-a blade drawing longer than it is -- is exact either way.
+The shear is the one that reads as *"the grassblades elongate and stretch
+instead of only bending"*: nearly double the resting reach. The column arc
+fixed that for a blade drawn straight up a column, and left a real hole --
+it rotates each column about the ground point below it, so a leaf drawn
+DIAGONALLY across the card (which is what this atlas is full of: fans of
+long leaves radiating from a tuft's base) has its far end swung sideways
+while its base stays put. A leaf from the root to the top corner is 17.9
+units long and can draw up to 24 that way. Reported again, with a
+screenshot: *"but it's still super elongated."*
+
+**The whole card now rotates about its own root** -- its local origin, the
+bottom centre the instance is planted at -- so every point keeps its
+distance from that root by construction, in every column, whichever
+direction the art drew its leaves in. The lean is an angle taken from the
+same tuned displacement everything else is expressed in (`asin(sideways /
+radius)`, the rotation that puts a point on the card's centre line exactly
+the intended distance across, so the amplitudes above still mean what their
+own tests say), and clamping that ratio to ±1 before the `asin` is what
+stops a blade bending past flat -- as far as a blade goes -- while keeping
+the angle real. Measured: 14.1px under a boot against 14.1px at rest, the
+only generation whose reach does not move at all.
+
+Pinned headlessly by `bent_vertex` -- the shader's vertex stage mirrored in
+GDScript, since a shader cannot be measured under `--headless` -- sweeping
+every column and height of the card against every bend the shader can
+produce, plus the diagonal-leaf case on its own so a regression names the
+shape it broke. The root row itself is pinned through the COMPOSITION that
+actually runs (`bend_offset` into `bent_vertex`), not by handing
+`bent_vertex` a bend the root row can never carry: `bend_curve` is exactly
+0 there, which is what keeps the card's whole bottom edge planted.
+
+Honest about the model and about what the measurement can and cannot say: a
+real blade bends into a curve, its tip ending slightly nearer the root than
+a rigid rotation puts it, and this is the standard cheap billboard bend
+rather than a beam solver. And the card measured above does not happen to
+carry opaque art in its top corners, so the column arc's own stretch does
+not show in ITS number -- what the table proves is that the rotation cannot
+stretch any art, not that the column arc always did.
 
 **`fragment()` still path-traces per pixel row -- of the remainder only.**
 Both stages read ONE shared `bend_offset_at()` (a single seam, the same
@@ -916,6 +940,21 @@ framebuffer), so several of these needed a real, non-headless, off-screen
     the geometry stage stretched it; only moving the whole vertex the way a
     blade actually moves is neither.
 
+17. **"But it's still super elongated"** (reported live with a screenshot,
+    after #16's arc shipped). #16 held each vertex's own HEIGHT fixed, which
+    rotates every COLUMN of the card about the point directly beneath it --
+    right for a blade drawn straight up one column, wrong for the fans of
+    long DIAGONAL leaves this atlas is actually full of, whose far ends swing
+    sideways while their bases stay put (a 17.9-unit leaf can draw 24 that
+    way). Fixed by rotating the whole card about its own root, which holds
+    every point's distance from that root by construction -- see "A blade
+    bends over; it does not get longer" above for the four-generation
+    measurement. Three reports, one lesson, stated plainly so a fourth pass
+    does not have to rediscover it: a bend is a ROTATION of the thing about
+    the point it grows from, and every cheaper approximation of it
+    (displacing one coordinate, holding one coordinate) breaks on whichever
+    part of the art the approximation was not thinking about.
+
 ### A second atlas family: farmed wheat (2026-09-13)
 
 Requested directly: "I added a wheat sprite similar to the long grass
@@ -1044,12 +1083,12 @@ at the ROOT instead of the tip), the fix is a one-line flip of
   units — see `test_illustrated_grass_patch.gd`'s
   `test_band_height_leaves_a_real_safety_margin_under_the_players_own_
   max_reach`.
-- ✅ A bending blade moves its own GEOMETRY (`vertex()` walks each vertex
-  along an arc about its own root, across a 4×8-subdivided `QuadMesh`), so
-  it is neither clipped at the card's own edge (History #15) nor stretched
-  longer than it is (History #16 — measured on a real render: 31.4px of
-  reach under the first, sheared version; 20.1px now, against 17.9 at
-  rest). `fragment()` still resolves the
+- ✅ A bending blade moves its own GEOMETRY: the card rotates about its own
+  root across a 4×8-subdivided `QuadMesh`, so it is neither clipped at the
+  card's edge (History #15) nor stretched longer than it is (History #16
+  and #17). Measured on a real render, one card against its own root with a
+  boot in it: 27.5px of reach sheared, 13.2px per-column, 14.1px rotating —
+  against 14.3px at rest. `fragment()` still resolves the
   curve per pixel row, for the sliver the mesh's vertices cannot carry:
   measured at 0.0197 card widths (1.26 screen px) worst case, down from the
   1.66 card widths (106 px) the sampling stage used to slide on its own, and
