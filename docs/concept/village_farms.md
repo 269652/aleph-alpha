@@ -186,12 +186,13 @@ rails/posts and plant_fibre (4) lashing them".
   raised there: the farmer walks in over the street their farmhouse fronts,
   which is the whole reason a farmhouse takes frontage at all. A fence laid
   across the road would wall the village off from its own farm.
-- **What it does:** a rail is solid ground for an animal.
-  `CreatureMarker` refuses a step onto a fenced cell and slides along the
-  rail rather than sticking against it — the obstacle its own `_advance`
-  doc comment has always described ("blocked by an obstacle, once that
-  lands") and nothing had yet supplied. Villagers and the player walk
-  through freely; the fence is a stock fence, not a wall.
+- **What it does:** a rail shuts one LINE, not one tile.
+  `CreatureMarker` refuses the step that would carry an animal across the
+  rails and slides along them rather than sticking against them — the
+  obstacle its own `_advance` doc comment has always described ("blocked
+  by an obstacle, once that lands") and nothing had yet supplied.
+  Villagers and the player walk through freely; the fence is a stock
+  fence, not a wall. See "The rail stands on the inner edge" below.
 - **The rails are real tiles**, `farm_fence`, persisted as ordinary chunk
   modifications like every other placeable. They weather and break like
   anything else made of wood, because the sheet has the frames for it.
@@ -211,6 +212,60 @@ rows, in the sheet's own printed order:
 A rail picks its column from which side of the enclosure it stands on, so a
 run along the field's north edge is drawn back-on and a run down its east
 edge is drawn as a post-and-rail seen from above.
+
+### The rail stands on the inner edge
+
+Asked for directly, with the west and south sides of a real ring arrowed in
+a screenshot: *"move the fences to the inner edge of the enclosure and treat
+the rest of the tile as street … the brown squares should still be street
+when a fence is put"*.
+
+A rail used to be a whole tile: ground no animal could stand on, painted as
+a bare earth square over whatever was already there. That drew a dug brown
+moat round every field with the rails floating in the middle of it. A rail
+is a **line on one edge** instead — the edge facing the beds it encloses —
+and the rest of its own tile is ordinary ground.
+
+- **Which edge.** `VillageFarm.fence_inner_direction` is the inverse of what
+  the facing names: a rail closing the field's *north* side stands north of
+  the beds, so its rails lie on its own *south* edge. Pinned against
+  `fence_facing` itself rather than written out a second time, so a rail can
+  never be drawn on one edge and block another.
+- **The ground is untouched.** A rail paints no tile of its own. It is in
+  `TerrainRenderer.OVERLAY_ONLY_TILE_IDS`, so `paint()` leaves the cell
+  showing the terrain it was raised on, and `_neighbor_biomes` lets a
+  neighbouring earth cell blend toward it like the real ground it still is —
+  without that second half a fenced ring cuts a hard dithered seam right
+  round the field. Before this the four rail ids were simply unknown to
+  `atlas_coords_for_modification` and fell through its plain-earth fallback,
+  which is the whole story of the brown square.
+- **Where the art stands.** `IllustratedStructureSprite.footprint_offset`
+  puts a rail's own ground line on that edge, and what counts as its ground
+  line depends on how the sheet draws the run. A broad-side run (the
+  North/South columns) stands on its posts, so bottom-anchoring already
+  lands a *north* rail on its inner edge and a *south* rail lifts a whole
+  tile; a top-view run (East/West) has no posts — the band of rail is its
+  own ground line — so it is centred on the edge, half a tile across.
+  Exactly the two moves the screenshot arrowed, and nothing at all for the
+  side it did not.
+- **What an animal may do.** `VillageFarm.rails_block_step` replaces the old
+  "is this tile fenced" question with "does this step cross the rails",
+  asked of the PAIR of cells a step joins
+  (`EarthChunkManager.fence_blocks_step_global`, and
+  `CreatureMarker._fence_blocks_movement` asks it of the cell under the
+  animal and the cell its look-ahead lands in). Stepping onto the ring,
+  along it, or away from the beds is free; crossing the rails is shut from
+  both sides, so an animal already in the crop cannot walk out either. A
+  diagonal crosses both of its own edges and is blocked whenever either
+  component would be, so nothing slips round a corner that no cardinal step
+  can pass.
+
+The ring is therefore a real perimeter path — the ground it was raised on,
+walkable, with rails along its inner edge — rather than a band of dug earth.
+The placeable `wooden_fence` is deliberately NOT part of this: it is a prop
+standing on its own tile like a campfire, and bare earth under a prop is
+this codebase's existing convention
+([npc_farm_production.md](npc_farm_production.md)).
 
 **The corners are a second sheet, not a fifth column.** The ring closes on
 the diagonal, so four cells of every ring have only a diagonal bed and no
@@ -424,6 +479,23 @@ again.
   only thing stored about a rail and the sheet's four orientation columns
   have to still draw correctly on the next load.
 
+- ✅ **A rail stands on its tile's inner edge, and the rest of that tile is
+  ordinary ground.** Asked for directly, with the west and south sides of a
+  real ring arrowed: *"move the fences to the inner edge of the enclosure
+  and treat the rest of the tile as street … the brown squares should still
+  be street when a fence is put"*. Three halves of one change, each driven
+  red first: the rails paint no ground tile at all
+  (`TerrainRenderer.OVERLAY_ONLY_TILE_IDS`, which also stops a neighbouring
+  earth cell reading the ring as modified and dithering a seam round the
+  field); the art moves onto the edge facing the beds
+  (`IllustratedStructureSprite.footprint_offset`, derived from
+  `VillageFarm.fence_inner_direction`, one branch per projection the sheet
+  uses); and movement asks whether a STEP crosses the rails
+  (`VillageFarm.rails_block_step` via
+  `EarthChunkManager.fence_blocks_step_global`) instead of whether a tile
+  carries one, so an animal may stand on the ring and walk along it and only
+  the crop is shut. See "The rail stands on the inner edge" above.
+
 Honest gaps, each real:
 
 - 🚧 **A herb plot renders as bare tilled soil.** `IllustratedCropSprite`
@@ -453,13 +525,25 @@ Honest gaps, each real:
 - 🚧 **Rails do not weather or break.** The sheet carries Worn and Destroyed
   rows and only the Pristine row is ever drawn. Nothing damages a fence, so
   nothing would ever read them yet.
-- 🚧 **The corners are drawn as straight rail.** `fence_cells` closes the
-  ring on the diagonal, but `fence.png` has only the four straight runs, so
-  `fence_facing` sends a diagonal-only cell to `north`/`south` and the bend
-  reads as a rail lying across it. The art contract for
-  `fence_corners.png` is above and its prompt is written
-  ([../art/ai_sprite_prompts.md](../art/ai_sprite_prompts.md) §13); no
-  corner art exists on disk yet, so nothing is wired.
+- 🚧 **A rail closes exactly one of its own sides.** `fence_cells` closes
+  the ring on the diagonal, but a rail's tile id carries one facing, so
+  `fence_inner_direction` names one edge — where the old whole-tile rule
+  simply made the cell solid and closed every side of it at once. On a
+  **rectangular** field the four corner cells each touch exactly one bed,
+  diagonally, and `fence_facing`'s vertical answer is always one of that
+  diagonal's own two components, so the diagonal into the crop is still
+  blocked; the cost is one step *along* the ring at each corner, so the
+  perimeter path is walkable except at its four turns. On a **concave**
+  outline (a notch or an L — `nearest_cells` returns whatever shape the
+  ground allows) one rail cell can face beds on two different sides: it
+  closes the first side `fence_facing` names and leaves the second open.
+  The bend also still *draws* as a straight run, for the same reason.
+
+  All of it is one missing thing: a rail id carrying a SET of closed edges
+  (a corner, a T) with art to match. The contract for `fence_corners.png` is
+  above and its prompt is written
+  ([../art/ai_sprite_prompts.md](../art/ai_sprite_prompts.md) §13); no corner
+  art exists on disk yet, so nothing is wired.
 - ⬜ **Nothing yet notices a village that wants a second farmhouse.** The
   village raises one per farming villager and stops. Growing the chain on
   demand is `SettlementBuildDecision`'s to answer, and it reports *missing*

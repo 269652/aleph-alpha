@@ -568,3 +568,35 @@ func test_a_diagonal_step_over_a_rails_inner_edge_is_blocked_too():
 		VillageFarm.rails_block_step(west, "", Vector2i(-1, 1)),
 		"a diagonal away from the rails is free"
 	)
+
+
+## The claim docs/concept/village_farms.md's own honest-gap row makes, pinned
+## rather than eyeballed: a rail carries ONE facing, so it closes one of its
+## own sides -- and on a rectangular field that is still enough at the
+## corners, because fence_facing's vertical answer for a diagonal-only cell
+## is always one of that diagonal's own two components.
+func test_a_corner_of_a_rectangular_field_still_refuses_the_diagonal_into_the_crop():
+	var beds: Array = [Vector2i(4, 4), Vector2i(5, 4), Vector2i(4, 5), Vector2i(5, 5)]
+	var bed_set: Dictionary = {}
+	for bed in beds:
+		bed_set[bed] = true
+	var rails: Dictionary = {}
+	for cell in VillageFarm.fence_cells(beds, Vector2i(20, 20), VillageFarm.FARM_BUILDING_ID):
+		rails[cell] = VillageFarm.fence_tile_for(VillageFarm.fence_facing(cell, beds))
+	var corners := 0
+	for cell in rails:
+		var has_orthogonal_bed := false
+		for side in [Vector2i(1, 0), Vector2i(-1, 0), Vector2i(0, 1), Vector2i(0, -1)]:
+			if bed_set.has(cell + side):
+				has_orthogonal_bed = true
+		if has_orthogonal_bed:
+			continue
+		for diagonal in [Vector2i(1, 1), Vector2i(1, -1), Vector2i(-1, 1), Vector2i(-1, -1)]:
+			if not bed_set.has(cell + diagonal):
+				continue
+			corners += 1
+			assert_true(
+				VillageFarm.rails_block_step(rails[cell], "", diagonal),
+				"%s must still refuse the diagonal into the crop" % str(cell)
+			)
+	assert_eq(corners, 4, "a rectangular field has exactly four diagonal-only corner rails")
