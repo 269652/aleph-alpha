@@ -20,9 +20,23 @@ const VillageFarm = preload("res://src/gameplay/village_farm.gd")
 const FarmerBehavior = preload("res://src/gameplay/farmer_behavior.gd")
 const HuntableQuarry = preload("res://src/gameplay/huntable_quarry.gd")
 const Carcass = preload("res://src/rendering/carcass.gd")
+const NpcCondition = preload("res://src/world/npc_condition.gd")
 
 ## Walking pace -- similar order to CreatureWander.WANDER_SPEED, unhurried.
 const WALK_SPEED := 20.0
+
+## Chasing pace, for the one part of a villager's day that is a chase (see
+## docs/concept/npc.md, "A hunter runs, and the run is paid for in stamina").
+##
+## Exactly twice the walk, which is not a new number: it is the same
+## doubling the player's own sprint already is of their own base speed
+## (Player.SPRINT_SPEED == BASE_SPEED * 2), cross-pinned by test so the two
+## cannot drift into two different ideas of what running means. It also
+## lands exactly on CreatureMarker.FLEE_SPEED, so a running hunter keeps
+## pace with a bolting deer instead of out-sprinting it -- the honest
+## outcome: a kill comes from the animal's fear running out before the
+## hunter's legs do.
+const RUN_SPEED := WALK_SPEED * 2.0
 
 ## How close (pixels) to home_position counts as "arrived" for the
 ## hidden-while-home check below -- move_toward closes in asymptotically
@@ -131,6 +145,12 @@ const QUARRY_SCAN_INTERVAL := 0.25
 ## and this marker owns the world effect, exactly the split
 ## LumberjackBehavior/LumberjackMarker already use for the axe.
 var _forager: ForagerBehavior = null
+
+## This villager's own stamina and fitness (NpcCondition). Public like
+## `economy`: what a body has left is worth reading from outside, and the
+## hunt tests drive it directly. Live per-marker state, not persisted --
+## the same lifetime their schedule and their hunger already have.
+var condition := NpcCondition.new()
 
 ## The real animal this villager has committed to, or null. Never assumed
 ## to still be there: every phase re-checks it through HuntableQuarry,
@@ -336,8 +356,15 @@ func _process(delta: float) -> void:
 	var field_target = _step_farm(delta, is_working)
 	if field_target != null:
 		target = field_target
+	# Only the chase is run, and only while there is still a gap to close:
+	# inside _reach() the hunt returns the villager's own position, so the
+	# spear is never wound up at a sprint. Everything else -- the walk to a
+	# field, a stall, the well or home, and every villager who is not a
+	# hunter -- is the unhurried walk it always was.
+	var running := _is_chasing_at_a_run(quarry_target)
+	condition.advance(delta, economy.needs.hunger if economy != null else 0.0, running)
 	var before := position
-	position = position.move_toward(target, WALK_SPEED * delta)
+	position = position.move_toward(target, (RUN_SPEED if running else WALK_SPEED) * delta)
 	_update_animation(position - before)
 	# Hidden once actually arrived home on a "home"-tagged entry -- a house
 	# is now a real whole-building entity (docs/concept/building.md
@@ -548,6 +575,26 @@ func _step_hunt(delta: float, is_working: bool):
 			# the river.
 			return position
 	return null
+
+
+## Whether this frame is spent running down real quarry.
+##
+## A property of the BEHAVIOUR rather than of a job title: it asks for a
+## CREATURE quarry being closed on, which by QUARRY_KIND_BY_OCCUPATION makes
+## the hunter the only villager it can ever be true for. A fisher's quarry is
+## a fish -- nobody sprints at a trout, and a rod already reaches
+## CAST_DISTANCE_PX without closing the gap at all.
+##
+## False once inside _reach(): the strike is made standing (see _step_hunt's
+## own "nobody winds up a spear at a full run"), so those last few pixels
+## cost no wind. False with no wind left, which is what drops a blown hunter
+## back to a walk mid-chase -- they keep following, they just stop gaining.
+func _is_chasing_at_a_run(quarry_target) -> bool:
+	if _quarry_kind != "creature" or quarry_target == null:
+		return false
+	if position.distance_to(quarry_target) <= _reach():
+		return false
+	return condition.can_run()
 
 
 ## Whether this villager has real ground of their own to work -- a farming

@@ -31,6 +31,8 @@ const Carcass = preload("res://src/rendering/carcass.gd")
 const CreatureMarker = preload("res://src/rendering/creature_marker.gd")
 const Butchering = preload("res://src/gameplay/butchering.gd")
 const MerchantVisit = preload("res://src/emergence/merchant_visit.gd")
+const SurvivalMeters = preload("res://src/gameplay/survival_meters.gd")
+const NpcCondition = preload("res://src/world/npc_condition.gd")
 
 const TILE_SIZE := 16
 
@@ -418,3 +420,102 @@ func test_a_marker_outside_the_tree_hunts_nothing_rather_than_crashing():
 	marker._process(1.0)
 	assert_false(marker._on_real_quarry, "no tree means nothing to find, not a crash")
 	add_child(marker)
+
+
+# -- a hunter runs, and the run is paid for in stamina ----------------------
+#
+# Asked for directly: "Hunters should run and running costs stamina which
+# slowly recovers based on fitness." See docs/concept/npc.md, "A hunter runs,
+# and the run is paid for in stamina": a deer that has seen you leaves at
+# CreatureMarker.FLEE_SPEED, twice a villager's walk, so a hunter who only
+# ever walked could take nothing that had noticed them.
+
+
+## Far enough that the measured frames are all spent closing the gap, and
+## inside HuntableQuarry.SEARCH_RADIUS_PX so it is really found.
+const CHASE_DISTANCE_PX := 200.0
+
+## One frame, the same slice _run walks in. Paces are measured over a single
+## one on purpose: stepping a loop of 0.1s slices accumulates float error and
+## lands an extra frame in, which is exactly enough to make a pace check read
+## 22px where the walk is 20.
+const _FRAME := 0.1
+
+
+func test_a_hunter_closing_on_a_real_animal_runs():
+	_creature_at(Vector2(-CHASE_DISTANCE_PX, 0.0))
+	_run(ForagerBehavior.REHUNT_SECONDS + 0.2)  # long enough to commit, no longer
+	# ONE frame, so this measures a pace exactly rather than accumulating
+	# float error over a loop of them.
+	var before := marker.position
+	marker._process(_FRAME)
+	assert_almost_eq(
+		before.distance_to(marker.position), NpcMarker.RUN_SPEED * _FRAME, 0.001,
+		"a committed hunter closes the gap at a run, not at a stroll"
+	)
+
+
+func test_a_villager_walking_their_own_schedule_never_runs():
+	_run(ForagerBehavior.REHUNT_SECONDS + 0.2)
+	var before := marker.position
+	marker._process(_FRAME)
+	assert_almost_eq(
+		before.distance_to(marker.position), NpcMarker.WALK_SPEED * _FRAME, 0.001,
+		"with no animal anywhere, the walk to work is still a walk"
+	)
+
+
+func test_running_at_an_animal_spends_the_hunters_wind():
+	_creature_at(Vector2(-CHASE_DISTANCE_PX, 0.0))
+	_run(ForagerBehavior.REHUNT_SECONDS + 1.2)
+	assert_lt(marker.condition.stamina, 1.0, "the chase has to cost something")
+
+
+func test_a_blown_hunter_drops_back_to_a_walk():
+	_creature_at(Vector2(-CHASE_DISTANCE_PX, 0.0))
+	_run(ForagerBehavior.REHUNT_SECONDS + 0.2)
+	# Blown, by the meter's own rule rather than by poking a flag.
+	while marker.condition.can_run():
+		marker.condition.advance(0.1, 0.0, true)
+	var before := marker.position
+	marker._process(_FRAME)
+	assert_almost_eq(
+		before.distance_to(marker.position), NpcMarker.WALK_SPEED * _FRAME, 0.001,
+		"out of wind, a hunter keeps following at a walk rather than stopping dead"
+	)
+
+
+## Not a new eyeballed number: a hunter's run is the same doubling of their
+## own pace that the player's sprint already is of theirs.
+func test_a_hunters_run_is_the_same_doubling_the_players_own_sprint_is():
+	assert_almost_eq(
+		NpcMarker.RUN_SPEED / NpcMarker.WALK_SPEED,
+		Player.SPRINT_SPEED / Player.BASE_SPEED,
+		0.0001,
+		"one idea of what running means, not two"
+	)
+
+
+## And it lands exactly on a fleeing deer's own speed, which is the honest
+## outcome rather than a limitation: a human does not out-sprint a deer, so a
+## kill comes from the animal's fear running out before the hunter's legs do.
+func test_a_running_hunter_keeps_pace_with_a_fleeing_animal_rather_than_out_running_it():
+	assert_almost_eq(NpcMarker.RUN_SPEED, CreatureMarker.FLEE_SPEED, 0.0001)
+
+
+## The scale sanity check the cost constant's own doc comment claims: one
+## full bar of wind is about one full-radius approach, so a hunter who spots
+## something at the edge of their range can actually reach it.
+func test_a_full_bar_of_wind_covers_most_of_a_hunters_own_search_radius():
+	var run_seconds: float = (
+		(1.0 - SurvivalMeters.EXHAUSTED_THRESHOLD) / NpcCondition.RUN_STAMINA_PER_SECOND
+	)
+	var reach_px: float = run_seconds * NpcMarker.RUN_SPEED
+	assert_gt(
+		reach_px, HuntableQuarry.SEARCH_RADIUS_PX * 0.8,
+		"a bar that could not cross the hunter's own search radius would make running pointless"
+	)
+	assert_lt(
+		reach_px, HuntableQuarry.SEARCH_RADIUS_PX * 1.5,
+		"...and one that crossed it several times over would make stamina pointless"
+	)
