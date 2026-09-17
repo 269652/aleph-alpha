@@ -20,7 +20,7 @@ const ProceduralLandmarkSprite = preload("res://src/rendering/procedural_landmar
 
 
 func test_a_props_sheet_has_a_predictable_path():
-	assert_eq(LandmarkSheet.sheet_path_for("well"), "res://assets/sprites/landmarks/well.png")
+	assert_eq(LandmarkSheet.sheet_path_for("stall"), "res://assets/sprites/landmarks/stall.png")
 
 
 func test_every_procedural_prop_has_somewhere_its_art_can_go():
@@ -35,8 +35,13 @@ func test_the_hunters_own_prop_is_covered_too():
 	assert_ne(LandmarkSheet.sheet_path_for("hunting_ground"), "")
 
 
+## The well's art landed 2026-09-17; the rest of the props are still drawn
+## from code, and that fallback is what this pins.
 func test_a_prop_with_no_file_yet_reports_no_sheet():
-	assert_false(LandmarkSheet.has_sheet("well"), "no art has been supplied yet, so nothing overrides the sprite")
+	assert_false(
+		LandmarkSheet.has_sheet("stall"),
+		"no art has been supplied for the stall yet, so nothing overrides its sprite"
+	)
 
 
 func test_an_unknown_id_has_no_sheet_and_no_path():
@@ -48,12 +53,12 @@ func test_an_unknown_id_has_no_sheet_and_no_path():
 
 
 func test_a_plain_sheet_is_one_cell():
-	assert_eq(LandmarkSheet.grid_of("well"), Vector2i(1, 1))
+	assert_eq(LandmarkSheet.grid_of("stall"), Vector2i(1, 1))
 
 
 func test_the_only_cell_of_a_plain_sheet_is_the_one_chosen():
 	for seed_value in [0, 1, 7, 99, -4]:
-		assert_eq(LandmarkSheet.variant_cell_for("well", seed_value), Vector2i.ZERO)
+		assert_eq(LandmarkSheet.variant_cell_for("stall", seed_value), Vector2i.ZERO)
 
 
 func test_a_declared_grid_spreads_its_seeds_over_every_cell():
@@ -73,3 +78,135 @@ func test_a_declared_grid_spreads_its_seeds_over_every_cell():
 func test_the_same_seed_always_picks_the_same_cell():
 	var first: Vector2i = LandmarkSheet.variant_cell_for_grid(12345, Vector2i(5, 5))
 	assert_eq(LandmarkSheet.variant_cell_for_grid(12345, Vector2i(5, 5)), first)
+
+
+# -- the well, whose art was delivered 2026-09-17 --------------------------
+#
+# Delivered into assets/sprites/buildings/ rather than assets/sprites/
+# landmarks/, as a 5x5 grid of 25 wells with MAGENTA divider lines between
+# the cells (measured, tools/probe_building_lifecycle_sheet.gd). All three
+# of those differ from this module's own defaults, so all three are
+# declared per id rather than assumed.
+
+func test_the_well_has_real_art_now():
+	assert_true(LandmarkSheet.has_sheet("well"), "the sheet was delivered -- it should be found")
+
+
+func test_the_wells_art_is_read_from_where_it_was_actually_delivered():
+	var path := LandmarkSheet.sheet_path_for("well")
+	assert_eq(path, "res://assets/sprites/buildings/well.png")
+	assert_true(FileAccess.file_exists(path), "and the file is really there")
+
+
+func test_the_well_is_a_grid_of_twenty_five():
+	assert_eq(LandmarkSheet.grid_of("well"), Vector2i(5, 5))
+
+
+func test_every_one_of_the_twenty_five_wells_is_reachable():
+	var seen: Dictionary = {}
+	for seed_value in 4000:
+		seen[LandmarkSheet.variant_cell_for("well", seed_value)] = true
+	assert_eq(seen.size(), 25, "a well nobody's seed can reach is art nobody will ever see")
+
+
+func test_a_well_keeps_the_same_look_across_reloads():
+	for seed_value in [2, 88, 4242]:
+		assert_eq(
+			LandmarkSheet.variant_cell_for("well", seed_value),
+			LandmarkSheet.variant_cell_for("well", seed_value)
+		)
+
+
+func test_the_wells_cells_are_cut_between_its_own_magenta_lines():
+	var VariantSheetGrid = load("res://src/rendering/variant_sheet_grid.gd")
+	var IllustratedStructureSprite = load("res://src/rendering/illustrated_structure_sprite.gd")
+	var SpriteSheetLoader = load("res://src/rendering/sprite_sheet_loader.gd")
+	var image: Image = SpriteSheetLoader.load_image(LandmarkSheet.sheet_path_for("well"))
+	assert_not_null(image, "precondition: the sheet loads")
+	if image.get_format() != Image.FORMAT_RGBA8:
+		image.convert(Image.FORMAT_RGBA8)
+	var cell: Vector2i = LandmarkSheet.variant_cell_for("well", 11)
+	var expected: Rect2i = VariantSheetGrid.divider_cell_rect(image, 5, 5, cell.y, cell.x)
+	var frame: Image = LandmarkSheet.frame_image("well", 11, IllustratedStructureSprite.new())
+	assert_not_null(frame, "the well's own art must actually come back")
+	assert_eq(frame.get_size(), Vector2i(expected.size.x, expected.size.y))
+
+
+func test_a_prop_with_no_declared_sheet_still_looks_in_the_landmarks_folder():
+	for landmark_id in ProceduralLandmarkSprite.LANDMARK_IDS:
+		if landmark_id == "well":
+			continue
+		assert_eq(
+			LandmarkSheet.sheet_path_for(landmark_id),
+			"res://assets/sprites/landmarks/%s.png" % landmark_id,
+			"%s has no delivered art, so its door stays where it always was" % landmark_id
+		)
+
+
+func test_the_wells_own_background_is_keyed_out():
+	var IllustratedStructureSprite = load("res://src/rendering/illustrated_structure_sprite.gd")
+	var frame: Image = LandmarkSheet.frame_image("well", 11, IllustratedStructureSprite.new())
+	assert_not_null(frame)
+	var transparent := 0
+	var opaque := 0
+	for y in range(0, frame.get_height(), 3):
+		for x in range(0, frame.get_width(), 3):
+			if frame.get_pixel(x, y).a < 0.5:
+				transparent += 1
+			else:
+				opaque += 1
+	assert_gt(transparent, 0, "a well on an opaque black card would be a black card in the grass")
+	assert_gt(opaque, 0, "and the well itself must still be there")
+
+
+func test_no_magenta_divider_survives_into_a_wells_frame():
+	var IllustratedStructureSprite = load("res://src/rendering/illustrated_structure_sprite.gd")
+	for seed_value in [1, 2, 3, 4, 5]:
+		var frame: Image = LandmarkSheet.frame_image("well", seed_value, IllustratedStructureSprite.new())
+		for y in range(0, frame.get_height(), 2):
+			for x in range(0, frame.get_width(), 2):
+				var pixel := frame.get_pixel(x, y)
+				if pixel.a < 0.5:
+					continue
+				assert_false(
+					pixel.r >= 0.85 and pixel.b >= 0.85 and pixel.g <= 0.15,
+					"a divider line survived into the frame at %d,%d" % [x, y]
+				)
+
+
+# -- and it is drawn at the size that prop really is ------------------------
+#
+# The well cell is ~274x206 source pixels while a well is 40x44 WORLD units
+# (ProceduralLandmarkSprite.SIZES). Drawn at ArtResolution.SPRITE_SCALE
+# alone, the supplied art would stand about three times as wide as the
+# procedural well it replaces -- exactly the failure IllustratedCropSprite
+# already hit twice ("huge potato crops above soil"). A prop's art is
+# scaled to the prop's own size, never assumed to have been authored at it.
+
+func test_a_props_supplied_art_is_scaled_to_the_size_that_prop_really_is():
+	var IllustratedStructureSprite = load("res://src/rendering/illustrated_structure_sprite.gd")
+	var ArtResolution = load("res://src/rendering/art_resolution.gd")
+	var image: Image = LandmarkSheet.world_scaled_image("well", 11, IllustratedStructureSprite.new())
+	assert_not_null(image)
+	var size: Vector2i = ProceduralLandmarkSprite.SIZES["well"]
+	assert_eq(
+		image.get_width(), ArtResolution.art_size(size).x,
+		"a well must be a well's width, whatever size the sheet was drawn at"
+	)
+
+
+func test_scaling_a_prop_never_distorts_it():
+	var IllustratedStructureSprite = load("res://src/rendering/illustrated_structure_sprite.gd")
+	var raw: Image = LandmarkSheet.frame_image("well", 11, IllustratedStructureSprite.new())
+	var scaled: Image = LandmarkSheet.world_scaled_image("well", 11, IllustratedStructureSprite.new())
+	assert_almost_eq(
+		float(scaled.get_height()) / float(scaled.get_width()),
+		float(raw.get_height()) / float(raw.get_width()),
+		0.02,
+		"height follows width by the same factor -- a squashed well is the wrong well"
+	)
+
+
+func test_a_prop_with_no_art_has_nothing_to_scale():
+	var IllustratedStructureSprite = load("res://src/rendering/illustrated_structure_sprite.gd")
+	assert_null(LandmarkSheet.world_scaled_image("stall", 3, IllustratedStructureSprite.new()))

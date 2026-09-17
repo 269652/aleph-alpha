@@ -117,3 +117,25 @@ func test_ready_adds_the_frame_end_sentinel_and_process_opens_the_span():
 	var opened_at := body.find("_perf_report.mark_frame_start(perf_started)")
 	assert_gt(opened_at, -1, "World stamps the top of its own _process as the frame start")
 	assert_lt(opened_at, body.find("_simulation_scheduler.advance(delta)"), "before any work, so the span covers the scheduler too")
+
+
+## FPS regression round 16: the number that would have named rounds 14 and
+## 16 in one run instead of two long sessions plus a guess apiece.
+##
+## Every section a PERF line prints is a DURATION, and a duration cannot
+## say why it grew -- a section climbing from 6 ms to 142 ms over seven
+## minutes looks the same whether the cause is a store that keeps growing,
+## a population that keeps growing, or anything else. `c_ev_read` is how
+## many events the frame's reads actually walked (see
+## EventStore.events_read), so the store's own contribution is separable at
+## a glance: flat across a session is healthy, climbing is the
+## work-proportional-to-all-of-history shape that has now caused this
+## regression twice.
+func test_process_reports_how_much_event_history_each_frame_walked():
+	var body := _body_of("_process")
+	assert_true(
+		body.contains(
+			'_perf_report.add_count("ev_read", _chunk_manager.event_store().take_events_read())'
+		),
+		"history walked per frame is reported, so a growing store shows up as itself"
+	)

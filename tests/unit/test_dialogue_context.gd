@@ -743,6 +743,33 @@ func test_the_settlement_is_recovered_from_the_npc_settled_event_when_not_suppli
 	assert_eq(frame["settlement_id"], SETTLEMENT)
 
 
+## FPS regression round 16: the same shape as EarthChunkManager's own
+## per-entity scans. An NPC is an actor or witness in everything that
+## happens to them, and their history only grows -- so recovering their
+## settlement by materialising ALL of it and filtering for npc_settled
+## costs a whole conversation's worth of history every time someone is
+## spoken to. The indexed read costs the matches.
+func test_recovering_the_settlement_does_not_walk_the_npcs_whole_history():
+	var event_store := EventStore.new()
+	var settled := Event.new("npc_settled", 1.0)
+	settled.actors.append(_npc_id())
+	settled.witnesses.append(SETTLEMENT)
+	event_store.append(settled)
+	var actors: Array[String] = [_npc_id()]
+	for i in 300:
+		var noise := Event.new("contract_fulfilled", 0.0)
+		noise.actors = actors.duplicate()
+		event_store.append(noise)
+
+	event_store.take_events_read()
+	assert_eq(DialogueContext.settlement_of(_npc_id(), event_store), SETTLEMENT)
+	assert_lt(
+		event_store.events_read(),
+		10,
+		"recovering the settlement reads the npc_settled events, not the history"
+	)
+
+
 # -- who else is standing here -----------------------------------------------
 
 func test_co_present_neighbours_are_flattened_and_never_include_the_speaker():

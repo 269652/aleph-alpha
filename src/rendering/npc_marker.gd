@@ -16,6 +16,8 @@ const NpcInstructionEvaluator = preload("res://src/world/npc_instruction_evaluat
 const CharacterView = preload("res://scenes/character_view.gd")
 const CreaturePerception = preload("res://src/gameplay/creature_perception.gd")
 const ForagerBehavior = preload("res://src/gameplay/forager_behavior.gd")
+const VillageFarm = preload("res://src/gameplay/village_farm.gd")
+const FarmerBehavior = preload("res://src/gameplay/farmer_behavior.gd")
 const HuntableQuarry = preload("res://src/gameplay/huntable_quarry.gd")
 const Carcass = preload("res://src/rendering/carcass.gd")
 
@@ -80,9 +82,18 @@ var economy: NpcEconomy = null
 ##   own rod and a diving bird already use (nearest_fish_position,
 ##   catch_nearest_fish).
 ##
-## The farmer is deliberately absent and stays absent: there is no crop
-## entity standing in the world to harvest the way there is an animal or a
-## fish, and vegetation_density_near is a field, not a thing. Inventing one
+## The farmer and the herbalist are absent from THIS table and stay
+## absent -- but no longer because they have nothing real to work. They
+## work ground rather than individuals: a fixed field of tiles their own
+## farmhouse owns, found by geometry rather than by scanning, and tended
+## through the FarmPlot lifecycle instead of struck. See _step_farm below
+## and docs/concept/village_farms.md. What follows was the reason before
+## that existed, and is kept because it still explains why they are not
+## quarry:
+##
+## there is no crop entity standing in the world to harvest the way there
+## is an animal or a fish, and vegetation_density_near is a field, not a
+## thing. Inventing one
 ## to make the third producer symmetrical is exactly the premature system
 ## that doc warns against -- real crop entities belong to the
 ## farm/mill/bakery chain when it comes.
@@ -131,6 +142,46 @@ var _quarry = null
 ## the world one individual at a time. Set by setup_economy from
 ## QUARRY_KIND_BY_OCCUPATION above.
 var _quarry_kind := ""
+
+## The GLOBAL tiles this villager's own farmhouse owns and they therefore
+## work (docs/concept/village_farms.md). Assigned by VillageRenderer, which
+## is the only thing that knows which farmhouse is whose; empty for every
+## villager who does not farm, and for a farmer whose village has not
+## raised a farmhouse yet -- who then keeps the regional drip they always
+## had.
+var field_cells: Array[Vector2i] = []
+
+## This villager's farm work, or null for anyone who does not farm -- the
+## same null-until-wired shape `_forager` above uses, built by
+## setup_economy where the occupation is first read. The very same
+## FarmerBehavior phase machine the placeable Farm's own worker runs
+## (docs/concept/npc_farm_production.md): walking out to a bed, kneeling
+## over it and getting up again is one action whoever is doing it.
+var _farmer: FarmerBehavior = null
+
+## What this villager's field grows ("wheat"/"herb"), or "" -- from
+## VillageFarm.CROP_BY_OCCUPATION.
+var _field_crop := ""
+
+## Index into `field_cells` of the tile currently committed to, or -1.
+var _field_index := -1
+
+## Whether real field work is in hand right now. Gates the regional
+## production drip exactly as _on_real_quarry does for the hunter: a
+## villager is paid for what their own ground actually yielded, never for
+## that AND an ambient number at the same time.
+var _on_real_field := false
+
+## How close counts as standing on a plot: half a tile, so a villager on
+## the tile is working it rather than walking the last few pixels onto its
+## exact centre. In tiles, against the real tile size setup() was given,
+## rather than a pixel count that would silently mean something else at
+## another tile size.
+const FIELD_REACH_TILES := 0.5
+
+## How far the water runs from the bed a farmer is working: one tile, the
+## beds they could reach without moving. See _water_the_beds_around.
+const TEND_REACH_TILES := 1
 
 ## The throttle above: seconds since the last real scan, what it found, and
 ## a count of the real scans performed. Starts already due, so the first
@@ -201,6 +252,10 @@ func setup_economy(market, household_wallet = null) -> void:
 	_quarry = null
 	_quarry_kind = String(QUARRY_KIND_BY_OCCUPATION.get(identity.occupation, ""))
 	_forager = ForagerBehavior.new() if _quarry_kind != "" else null
+	_field_crop = VillageFarm.crop_for(identity.occupation)
+	_field_index = -1
+	_on_real_field = false
+	_farmer = FarmerBehavior.new() if _field_crop != "" else null
 
 
 func _process(delta: float) -> void:
@@ -246,6 +301,18 @@ func _process(delta: float) -> void:
 	if (
 		economy != null
 		and economy.needs.is_hungry()
+		# A villager with a field of their own feeds themselves from work
+		# exactly as a producer whose region still yields does: the crop
+		# they are standing in becomes real market stock they can buy from,
+		# so this interrupt would pull them off the very work that answers
+		# it. For a herbalist that is not a nicety but the difference
+		# between working and starving -- they are not in
+		# NpcProduction.PRODUCER_ITEM_BY_OCCUPATION at all, so the drip
+		# never fed them, and a market with nothing in it cannot either:
+		# hungry, they would walk to the well, fail to buy, and never
+		# return to the field that would have stocked it. The same famine
+		# deadlock the producer branch already exists to avoid.
+		and not _works_their_own_field()
 		and not economy.feeds_itself_from_work(_world, position)
 	):
 		entry = {"time_block": entry.get("time_block", ""), "location_tag": "well", "activity": "eat"}
@@ -265,6 +332,14 @@ func _process(delta: float) -> void:
 	var quarry_target = _step_hunt(delta, is_working)
 	if quarry_target != null:
 		target = quarry_target
+	# A farmer or a herbalist with a real field of their own goes out to it
+	# rather than to the decorative prop their schedule calls a workspot --
+	# the same override, for the same reason, as the hunter's above (see
+	# docs/concept/village_farms.md). Null for everyone else, and for a
+	# village that has not raised a farmhouse yet.
+	var field_target = _step_farm(delta, is_working)
+	if field_target != null:
+		target = field_target
 	var before := position
 	position = position.move_toward(target, WALK_SPEED * delta)
 	_update_animation(position - before)
@@ -280,12 +355,13 @@ func _process(delta: float) -> void:
 	# standing at a shared landmark (e.g. the stall) never hides an NPC.
 	_at_home = (
 		quarry_target == null
+		and field_target == null
 		and location_tag == "home"
 		and position.distance_to(home_position) < _ARRIVED_HOME_EPSILON_PX
 	)
 	visible = not _at_home
 	if economy != null:
-		economy.step(delta, is_working, _world, position, _on_real_quarry)
+		economy.step(delta, is_working, _world, position, _on_real_quarry or _on_real_field)
 
 
 ## Whether this villager is inside their own house right now -- the exact
@@ -476,6 +552,140 @@ func _step_hunt(delta: float, is_working: bool):
 			# the river.
 			return position
 	return null
+
+
+## Whether this villager has real ground of their own to work -- a farming
+## occupation AND a farmhouse whose field they were actually given.
+func _works_their_own_field() -> bool:
+	return _farmer != null and _field_crop != "" and not field_cells.is_empty()
+
+
+## The tile of this villager's own field they should be at right now, or
+## null when they have no field, are off the clock, or have nothing to do
+## on it this instant.
+##
+## Deliberately the same shape as _step_hunt above and the placeable Farm's
+## own worker below it, but the differences are real and are why this is
+## not folded into either: a field tile cannot flee, be killed by a wolf,
+## or be taken by somebody else mid-walk, so there is no "the target is
+## gone" branch at all -- the ground is still there. What DOES change under
+## the villager is what the ground NEEDS, which is re-read on arrival
+## rather than remembered from when they set out.
+##
+## Every world call is duck-typed and fails closed: a world that cannot
+## answer simply has no field in it, and the villager keeps the schedule
+## and the regional drip they always had.
+func _step_farm(delta: float, is_working: bool):
+	if _farmer == null or _field_crop == "" or field_cells.is_empty() or _world == null:
+		return null
+	if not is_working:
+		# Off the clock -- asleep, eating, socialising -- the field is
+		# dropped rather than paused, so a villager never wakes up still
+		# walking to a bed they chose the evening before.
+		if _farmer.phase != FarmerBehavior.Phase.SEEKING:
+			_farmer.abort()
+		_field_index = -1
+		_on_real_field = false
+		return null
+	# A villager with a farmhouse has real work whether or not any single
+	# plot wants attention this instant, so the regional drip is off for
+	# the whole work block rather than flickering with the crop cycle.
+	_on_real_field = true
+	match _farmer.phase:
+		FarmerBehavior.Phase.SEEKING:
+			_farmer.advance(delta)  # a no-op outside WORKING; ticks the re-commit clock
+			var index := VillageFarm.next_action(_field_states())
+			if index == -1 or not _farmer.can_commit():
+				return null
+			_field_index = index
+			_farmer.begin_approach()
+			return _cell_centre(field_cells[index])
+		FarmerBehavior.Phase.APPROACHING:
+			var approach := _cell_centre(field_cells[_field_index])
+			if position.distance_to(approach) <= _field_reach():
+				_farmer.arrive()
+			return approach
+		FarmerBehavior.Phase.WORKING:
+			if _farmer.advance(delta):
+				_work_field_cell()
+				_field_index = -1
+				_farmer.finish_work()
+			# Standing over the bed, not walking the last pixels onto its
+			# exact centre: you kneel where you are.
+			return position
+	return null
+
+
+## Whatever the committed tile needs RIGHT NOW -- re-read rather than
+## remembered, since a crop can ripen or wither during the walk out to it.
+func _work_field_cell() -> void:
+	if _field_index < 0 or _field_index >= field_cells.size():
+		return
+	var cell: Vector2i = field_cells[_field_index]
+	match VillageFarm.action_for(_field_plot_at(cell)):
+		"harvest":
+			if not _world.has_method("harvest_farm_plot_at_global"):
+				return
+			var result: Dictionary = _world.harvest_farm_plot_at_global(cell.x, cell.y)
+			var count: int = int(result.get("count", 0))
+			var crop_id: String = String(result.get("crop_id", _field_crop))
+			if count > 0 and economy != null:
+				economy.record_real_harvest(crop_id, count)
+		"plant":
+			if _world.has_method("till_and_plant_farm_plot_at_global"):
+				_world.till_and_plant_farm_plot_at_global(cell.x, cell.y, _field_crop)
+		"water":
+			if _world.has_method("water_farm_plot_at_global"):
+				_world.water_farm_plot_at_global(cell.x, cell.y)
+	_water_the_beds_around(cell)
+
+
+## Whatever the farmer just did on `cell`, the beds around it get wet too.
+##
+## A field capped at ten tiles is more ground than one villager can walk in
+## one wither grace -- measured at ZERO wheat per work block without this,
+## because every plot died before it ripened and the whole block went on
+## replanting ground that died again. The answer is not a bigger number, it
+## is what a farmer actually does: you water a BED and the water runs to
+## the beds beside it. One trip with a can, or along a furrow, wets the
+## ground around where you are standing; it does not wet one plant.
+##
+## The bed itself is included: a visit with nothing else to do on it is
+## still a tending visit, which is what VillageFarm.next_action's own
+## thirstiest-bed fallback sends the farmer out for.
+##
+## Only this villager's OWN field, and only within TEND_REACH_TILES, so a
+## farmer never tends their neighbour's ground from across the village.
+func _water_the_beds_around(cell: Vector2i) -> void:
+	if not _world.has_method("water_farm_plot_at_global"):
+		return
+	for other in field_cells:
+		if absi(other.x - cell.x) > TEND_REACH_TILES or absi(other.y - cell.y) > TEND_REACH_TILES:
+			continue
+		_world.water_farm_plot_at_global(other.x, other.y)
+
+
+## This field's plots, in field_cells order -- null for ground nobody has
+## tilled yet, which VillageFarm.action_for reads as "plant this first".
+func _field_states() -> Array:
+	var states: Array = []
+	for cell in field_cells:
+		states.append(_field_plot_at(cell))
+	return states
+
+
+func _field_plot_at(cell: Vector2i):
+	if not _world.has_method("farm_plot_at_global"):
+		return null
+	return _world.farm_plot_at_global(cell.x, cell.y)
+
+
+func _cell_centre(cell: Vector2i) -> Vector2:
+	return Vector2((float(cell.x) + 0.5) * _tile_size, (float(cell.y) + 0.5) * _tile_size)
+
+
+func _field_reach() -> float:
+	return float(_tile_size) * FIELD_REACH_TILES
 
 
 ## The nearest real thing this villager may take right now, or null.

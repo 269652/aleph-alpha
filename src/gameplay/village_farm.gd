@@ -50,25 +50,113 @@ const WATER_BEFORE_WITHER_FRACTION := 0.5
 ## free of any rendering dependency.
 const MIN_FIELD_CELLS := 3
 
-
-## The ring of tiles directly around `building_id`'s footprint at `origin`
-## -- its field. Row-major from the north-west corner, so the order is
-## deterministic. Empty for a building the catalog does not know.
+## How much ground one villager can actually keep alive at once -- and
+## therefore the most any single farmhouse hands its worker, however much
+## clear ground its ring happens to have.
 ##
-## The ring is DERIVED from the catalog footprint rather than written down:
-## the rectangle one tile out on every side, minus the ground the building
-## itself stands on. For the 3x2 farmhouse that is 5x4 - 6 = 14 tiles.
+## MEASURED, not chosen. A villager walks at NpcMarker.WALK_SPEED and
+## kneels for FarmerBehavior.WORK_SECONDS per plot, against a wither grace
+## of half a 20-60s growth time (FarmPlot.WATER_GRACE_FRACTION). Over one
+## real work block the yield does not taper past the limit -- it falls off
+## a cliff, because a circuit longer than the grace window means every plot
+## dies before it ripens and the farmer spends the whole block replanting
+## ground that dies again:
+##
+##     2 cells ->  34 wheat     5 cells ->   2 wheat
+##     3 cells ->  90 wheat     6 cells ->   0 wheat
+##     4 cells ->  90 wheat
+##
+## Pinned by test_a_field_of_the_capped_size_really_produces_over_a_work_
+## block and test_one_tile_more_than_the_cap_collapses_to_nothing
+## (tests/unit/test_npc_marker_farming.gd), against a LINE of tiles -- the
+## worst real case for a walking circuit, so the cap is conservative for a
+## real farmhouse ring, which is more compact.
+##
+## This is exactly why a village grows its output by raising a SECOND
+## farmhouse rather than a bigger field, which is the shape the report
+## asked for ("so you can build multiple farms").
+const MAX_WORKED_CELLS := 10
+
+## How far out from the farmhouse a field may reach. Not the field's size
+## -- MAX_WORKED_CELLS is that -- but how far the search looks for cells
+## worth working when the near ones are water, road or already built on.
+## Pinned by test_the_field_can_always_offer_a_full_cap_on_open_ground: a
+## reach that could not offer MAX_WORKED_CELLS even on empty ground would
+## cap the field below its own cap.
+const FIELD_REACH_TILES := 3
+
+
+## The ground a farmhouse at `origin` may work: out to the SIDES and
+## DOWNWARDS of it, never north, nearest to the building first. Empty for a
+## building the catalog does not know.
+##
+## Asked for directly: "the farmhouses should be placed adjacent to the
+## main street and the fields be placed sideways and downwards of it". A
+## village house fronts the street with its door south, so the ground north
+## of a farmhouse is the next row of buildings, not somewhere to sow --
+## which is why the field is a directed region and not the ring this used
+## to return.
+##
+## More candidates are offered than any farmhouse will work: the caller
+## filters them for water, paving and what is already built on, then takes
+## the first MAX_WORKED_CELLS (see nearest_cells). Offering them nearest
+## first is what makes that "the biggest field that actually fits", rather
+## than whichever cells happened to come up.
 static func field_cells(origin: Vector2i, building_id: String) -> Array:
 	var footprint := BuildingCatalog.footprint_of(building_id)
 	if footprint == Vector2i.ZERO:
 		return []
 	var cells: Array = []
-	for y in range(origin.y - 1, origin.y + footprint.y + 1):
-		for x in range(origin.x - 1, origin.x + footprint.x + 1):
-			if x >= origin.x and x < origin.x + footprint.x and y >= origin.y and y < origin.y + footprint.y:
+	for y in range(origin.y, origin.y + footprint.y + FIELD_REACH_TILES):
+		for x in range(origin.x - FIELD_REACH_TILES, origin.x + footprint.x + FIELD_REACH_TILES):
+			var cell := Vector2i(x, y)
+			if _ring_distance(cell, origin, footprint) == 0:
 				continue  # the building stands here -- not field
-			cells.append(Vector2i(x, y))
-	return cells
+			cells.append(cell)
+	return _ordered_by_nearness(cells, origin, footprint)
+
+
+## Nearest the farmhouse first: by real distance out from its own walls,
+## then by distance from its centre, then (y, x) so the answer never
+## depends on which order the cells were generated in.
+static func _ordered_by_nearness(cells: Array, origin: Vector2i, footprint: Vector2i) -> Array:
+	var centre := Vector2(origin) + Vector2(footprint) * 0.5
+	var ordered: Array = cells.duplicate()
+	ordered.sort_custom(func(a: Vector2i, b: Vector2i) -> bool:
+		var ra := _ring_distance(a, origin, footprint)
+		var rb := _ring_distance(b, origin, footprint)
+		if ra != rb:
+			return ra < rb
+		var da := (Vector2(a) + Vector2(0.5, 0.5)).distance_squared_to(centre)
+		var db := (Vector2(b) + Vector2(0.5, 0.5)).distance_squared_to(centre)
+		if not is_equal_approx(da, db):
+			return da < db
+		return a.y < b.y if a.y != b.y else a.x < b.x
+	)
+	return ordered
+
+
+## Whether `cell` is ground a farmhouse at `origin` could work at all: out
+## to the sides or downwards, within reach, and not under the building.
+static func _is_field_cell(cell: Vector2i, origin: Vector2i, footprint: Vector2i) -> bool:
+	if cell.y < origin.y:
+		return false  # north of a farmhouse is the next row of buildings
+	var reach := _ring_distance(cell, origin, footprint)
+	return reach >= 1 and reach <= FIELD_REACH_TILES
+
+
+## The `limit` cells of `cells` a villager should actually work: the ones
+## nearest the farmhouse itself, so the circuit between them stays short
+## (see MAX_WORKED_CELLS -- a longer circuit than the wither grace yields
+## nothing at all). Measured to the footprint's own centre, ties broken by
+## (y, x), so the same farmhouse hands out the same field every time with
+## nothing persisted.
+static func nearest_cells(cells: Array, origin: Vector2i, building_id: String, limit: int) -> Array:
+	var footprint := BuildingCatalog.footprint_of(building_id)
+	if footprint == Vector2i.ZERO or limit <= 0:
+		return []
+	var ordered := _ordered_by_nearness(cells, origin, footprint)
+	return ordered.slice(0, mini(limit, ordered.size()))
 
 
 ## Which farmhouse in `origins` works `cell`, or null when none does.
@@ -88,14 +176,14 @@ static func owner_of(cell: Vector2i, origins: Array, building_id: String):
 	var best_key: Array = []
 	for candidate in origins:
 		var origin: Vector2i = candidate
-		var reach := _ring_distance(cell, origin, footprint)
-		if reach == 0:
+		if _ring_distance(cell, origin, footprint) == 0:
 			return null  # the cell is under a farmhouse, whichever one it is
-		if reach != 1:
+		if not _is_field_cell(cell, origin, footprint):
 			continue
 		var centre := Vector2(origin) + Vector2(footprint) * 0.5
 		var key: Array = [
-			reach, (Vector2(cell) + Vector2(0.5, 0.5)).distance_squared_to(centre), origin.y, origin.x
+			_ring_distance(cell, origin, footprint),
+			(Vector2(cell) + Vector2(0.5, 0.5)).distance_squared_to(centre), origin.y, origin.x
 		]
 		if best == null or key < best_key:
 			best = origin
@@ -138,12 +226,36 @@ static func action_for(plot) -> String:
 
 
 ## Which plot to work next: a ready one (harvest -- get real value off the
-## field) beats an empty or withered one (plant -- start the next cycle)
-## beats a growing one near its wither point (water it). -1 when nothing on
-## this field needs attention.
+## field), then a growing one near its wither point (water it -- a bed
+## already sown is work already done), then an empty or withered one
+## (plant -- break new ground). -1 when nothing on this field needs
+## attention.
+##
+## Watering used to come LAST, and measuring a real work block showed what
+## that cost: a field of any size usually has an empty or withered bed
+## somewhere, so the farmer planted instead of watering, every bed died on
+## the vine, and the whole block went into replanting ground that died
+## again. A three-tile field yielded ZERO wheat that way. Watering a sown
+## bed costs one trip; losing it costs the entire growth cycle.
 static func next_action(plots: Array) -> int:
-	for kind in ["harvest", "plant", "water"]:
+	for kind in ["harvest", "water", "plant"]:
 		for i in plots.size():
 			if action_for(plots[i]) == kind:
 				return i
-	return -1
+	# Nothing ripe, nothing dying, nothing bare -- so tend the THIRSTIEST
+	# bed rather than stand still. A farmer in their own field always has
+	# something to do, and this is what keeps a field alive: measured with
+	# the farmer idling between thresholds, a three-tile field over a real
+	# work block ran 108 replants, 72 waterings and ZERO harvests, because
+	# beds died faster than the circuit came back round.
+	var thirstiest := -1
+	var worst := -1.0
+	for i in plots.size():
+		var plot = plots[i]
+		if plot == null or plot.state != "growing" or plot.growth_time <= 0.0:
+			continue
+		var used: float = plot.time_since_watered / (plot.growth_time * FarmPlot.WATER_GRACE_FRACTION)
+		if used > worst:
+			worst = used
+			thirstiest = i
+	return thirstiest

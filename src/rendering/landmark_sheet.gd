@@ -1,6 +1,8 @@
 extends RefCounted
 
 const SpriteSheetLoader = preload("res://src/rendering/sprite_sheet_loader.gd")
+const ProceduralLandmarkSprite = preload("res://src/rendering/procedural_landmark_sprite.gd")
+const ArtResolution = preload("res://src/rendering/art_resolution.gd")
 
 ## Where a village prop's real art lives, and what happens until it does.
 ##
@@ -15,9 +17,8 @@ const SpriteSheetLoader = preload("res://src/rendering/sprite_sheet_loader.gd")
 ## ## What to draw, and where to put it
 ##
 ## One PNG per prop at `res://assets/sprites/landmarks/<id>.png`, for the
-## ids in ProceduralLandmarkSprite.LANDMARK_IDS plus "hunting_ground" (a
-## hunter's own prop, which has never had art and falls back to the well's
-## sprite today). Same sheet conventions the building art already uses:
+## ids in ProceduralLandmarkSprite.LANDMARK_IDS (plus EXTRA_PROP_IDS, empty
+## today). Same sheet conventions the building art already uses:
 ## a BLACK background, which is keyed out (IllustratedStructureSprite's own
 ## black threshold), and art authored oversized for pixel detail -- the
 ## renderer scales it back by ArtResolution.SPRITE_SCALE so the world
@@ -35,22 +36,46 @@ const SpriteSheetLoader = preload("res://src/rendering/sprite_sheet_loader.gd")
 
 const SHEET_DIR := "res://assets/sprites/landmarks/"
 
-## The hunter's own prop, absent from ProceduralLandmarkSprite.LANDMARK_IDS
-## because it has no procedural drawing of its own -- it falls back to the
-## well's sprite today (a known cosmetic gap). Art dropped in for it is
-## picked up like any other.
-const EXTRA_PROP_IDS: Array[String] = ["hunting_ground"]
+## Props that can take real art without ProceduralLandmarkSprite knowing how
+## to draw them. Empty since 2026-09-17: "hunting_ground" was the only
+## entry, and it is in LANDMARK_IDS now -- an id this catalog cannot draw
+## silently falls back to the WELL's sprite, which put a second and third
+## well in every village with hunters in it (reported live; see that
+## catalog's own _hunting_ground_image). Kept as a real, empty seam rather
+## than deleted: a prop whose art arrives before anyone draws it belongs
+## here, and there is then one obvious place to say so.
+const EXTRA_PROP_IDS: Array[String] = []
 
-## Props whose art is a grid of variants rather than one drawing, as
-## (columns, rows). Empty by default: every prop is one image until someone
-## decides a particular one is worth varying.
-const _SHEET_GRIDS := {}
+## Props whose delivered art does not match this module's own defaults --
+## one drawing, in SHEET_DIR, cells found in dark gutters. Everything a
+## sheet does differently is declared here rather than assumed, per id:
+##
+##   path   where the file actually is, when it is not SHEET_DIR/<id>.png
+##   grid   (columns, rows) when the art is a grid of variants, not one
+##          drawing
+##   cells  how that grid's cells are found -- see
+##          IllustratedStructureSprite's GRID_* names
+##
+## The well's sheet (delivered 2026-09-17) differs on all three: 25 wells
+## in a 5x5 grid with magenta divider lines, sitting in the buildings
+## folder beside the house sheets it was drawn alongside. Measured with
+## tools/probe_building_lifecycle_sheet.gd, not assumed.
+const _SHEETS := {
+	"well": {
+		"path": "res://assets/sprites/buildings/well.png",
+		"grid": Vector2i(5, 5),
+		"cells": "dividers",
+	},
+}
 
 
-## Where this prop's art file goes, or "" for an id that is not a prop.
+## Where this prop's art file is, or "" for an id that is not a prop.
 static func sheet_path_for(landmark_id: String) -> String:
 	if landmark_id == "":
 		return ""
+	var declared: Dictionary = _SHEETS.get(landmark_id, {})
+	if declared.has("path"):
+		return declared["path"]
 	return SHEET_DIR + landmark_id + ".png"
 
 
@@ -65,7 +90,14 @@ static func has_sheet(landmark_id: String) -> bool:
 
 ## This prop's variant grid: one cell unless it declares otherwise.
 static func grid_of(landmark_id: String) -> Vector2i:
-	return _SHEET_GRIDS.get(landmark_id, Vector2i.ONE)
+	return _SHEETS.get(landmark_id, {}).get("grid", Vector2i.ONE)
+
+
+## How this prop's grid cells are found. Dark gutters by default, which is
+## what the building variant sheets already use; a sheet that draws real
+## divider lines between its cells says so.
+static func cells_of(landmark_id: String) -> String:
+	return _SHEETS.get(landmark_id, {}).get("cells", "gutters")
 
 
 ## Which cell of this prop's grid a given seed draws.
@@ -93,6 +125,37 @@ static func frame_image(landmark_id: String, seed_value: int, illustrator) -> Im
 		return null
 	var grid := grid_of(landmark_id)
 	var cell := variant_cell_for(landmark_id, seed_value)
+	if cells_of(landmark_id) == "dividers":
+		return illustrator.divider_frame_image(
+			sheet_path_for(landmark_id), grid.x, grid.y, cell.y, cell.x
+		)
 	return illustrator.variant_frame_image(
 		sheet_path_for(landmark_id), grid.x, grid.y, cell.y, cell.x
 	)
+
+
+## The prop's art scaled to the size that prop really is: width exactly
+## ArtResolution.art_size of the prop's own world width
+## (ProceduralLandmarkSprite.SIZES), height by the SAME factor so nothing
+## is distorted. Null when no art has been supplied.
+##
+## Supplied art is NOT assumed to have been authored at the prop's size.
+## The well sheet's cells are ~274x206 source pixels while a well is 40x44
+## world units; drawn at ArtResolution.SPRITE_SCALE alone it would stand
+## about three times as wide as the procedural well it replaces -- the
+## exact failure IllustratedCropSprite already hit twice and documents at
+## length ("huge potato crops above soil", and again after a re-tune).
+## Measuring the art and scaling it to the world is the fix that stuck
+## there, and it is the rule here.
+static func world_scaled_image(landmark_id: String, seed_value: int, illustrator) -> Image:
+	var frame := frame_image(landmark_id, seed_value, illustrator)
+	if frame == null:
+		return null
+	var world_size: Vector2i = ProceduralLandmarkSprite.SIZES.get(landmark_id, Vector2i(20, 20))
+	var target_width: int = maxi(ArtResolution.art_size(world_size).x, 1)
+	if frame.get_width() == target_width:
+		return frame
+	var scale := float(target_width) / float(frame.get_width())
+	var scaled := frame.duplicate() as Image
+	scaled.resize(target_width, maxi(1, int(round(float(frame.get_height()) * scale))), Image.INTERPOLATE_LANCZOS)
+	return scaled

@@ -780,3 +780,98 @@ func test_a_square_never_takes_the_whole_street_it_slid_into():
 		slid, CHUNK_SIZE / 2 - VillageLayout.PLAZA_WIDTH_TILES / 2,
 		"a square with no room for a single house beside it is not sited there"
 	)
+
+
+# -- a plot on the outskirts, when the street has no room left --------------
+#
+# Measured in the real world (chunk (661,139) near lat 49.8 lon 10.6): a
+# village wedged against a river, three houses, and next_street_plot with no
+# extra condition at all returns {} for a 3x2 farmhouse -- while SIXTY
+# origins elsewhere in the same chunk fit one, every one of them with a full
+# field ring around it. Reported in play as "no farmers".
+#
+# A farmstead does not need street frontage the way a house does. It needs
+# open ground and a path home, which is exactly what industry_plot already
+# gives the sawmill.
+
+
+## The two rows a street plot's own footprint needs, taken on EVERY street
+## the village could open -- a village whose frontage is genuinely full,
+## while the ground north of its spine is still wide open.
+func _all_frontage_taken(street_y: int) -> Callable:
+	return func(cell: Vector2i) -> bool:
+		if cell.y >= street_y:
+			var into: int = (cell.y - street_y) % VillageLayout.STREET_PITCH_TILES
+			return into == VillageLayout.STREET_PITCH_TILES - 1 or into == VillageLayout.STREET_PITCH_TILES - 2
+		return street_y - cell.y <= 2
+
+
+func test_an_outskirt_plot_is_found_where_no_street_frontage_is_left():
+	var street_y: int = VillageLayout.skeleton(CHUNK_SIZE, 21)["street_y"]
+	var occupied := _all_frontage_taken(street_y)
+	assert_true(
+		VillageLayout.next_street_plot(
+			"farmhouse", CHUNK_SIZE, 21, _always_buildable, occupied
+		).is_empty(),
+		"precondition: this village really has no frontage left"
+	)
+	var plot: Dictionary = VillageLayout.outskirt_plot(
+		"farmhouse", CHUNK_SIZE, 21, _always_buildable, occupied
+	)
+	assert_false(plot.is_empty(), "there is open ground here -- a farmstead can stand on it")
+	assert_eq(plot["building_id"], "farmhouse")
+
+
+func test_an_outskirt_plot_comes_with_a_real_path_back():
+	var plot: Dictionary = VillageLayout.outskirt_plot(
+		"farmhouse", CHUNK_SIZE, 22, _always_buildable, _never_occupied
+	)
+	assert_false(plot.is_empty())
+	var spur: Array = plot["road_spur"]
+	assert_gt(spur.size(), 0, "a farmstead nobody can walk to is not part of the village")
+	assert_eq(spur[0], plot["doorstep"], "the path starts at the door")
+	var street_y: int = VillageLayout.skeleton(CHUNK_SIZE, 22)["street_y"]
+	var reaches_street := false
+	for cell in spur:
+		if (cell as Vector2i).y == street_y - 1 or (cell as Vector2i).y == street_y:
+			reaches_street = true
+	assert_true(reaches_street, "and ends at the street")
+
+
+func test_an_outskirt_plot_honours_the_callers_own_condition():
+	var refuses := func(_origin: Vector2i) -> bool: return false
+	assert_true(
+		VillageLayout.outskirt_plot(
+			"farmhouse", CHUNK_SIZE, 23, _always_buildable, _never_occupied, refuses
+		).is_empty(),
+		"a site the caller refuses is not a site"
+	)
+
+
+func test_an_outskirt_plot_never_stands_on_the_square():
+	var bones: Dictionary = VillageLayout.skeleton(CHUNK_SIZE, 24, _always_buildable)
+	var plaza: Rect2i = bones["plaza"]
+	var plot: Dictionary = VillageLayout.outskirt_plot(
+		"farmhouse", CHUNK_SIZE, 24, _always_buildable, _never_occupied
+	)
+	assert_false(plot.is_empty())
+	for cell in BuildingCatalog.footprint_cells("farmhouse", plot["origin"]):
+		assert_false(plaza.has_point(cell), "%s is the market square" % str(cell))
+
+
+func test_an_outskirt_plot_is_the_same_plot_every_time():
+	var a: Dictionary = VillageLayout.outskirt_plot(
+		"farmhouse", CHUNK_SIZE, 25, _always_buildable, _never_occupied
+	)
+	var b: Dictionary = VillageLayout.outskirt_plot(
+		"farmhouse", CHUNK_SIZE, 25, _always_buildable, _never_occupied
+	)
+	assert_eq(a, b, "nothing is persisted, so the rule must re-derive the same plot")
+
+
+func test_nowhere_buildable_means_no_outskirt_plot():
+	assert_true(
+		VillageLayout.outskirt_plot(
+			"farmhouse", CHUNK_SIZE, 26, _never_buildable, _never_occupied
+		).is_empty()
+	)

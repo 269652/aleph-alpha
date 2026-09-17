@@ -1838,12 +1838,10 @@ func claim_property_with_deed(property_id: String, settlement_id: String = "") -
 ## counting it twice would be a free way to push a hamlet over a tier threshold
 ## or an institution over its formation minimum with nobody moving in.
 func record_player_settled_if_new(settlement_id: String) -> bool:
-	var history := _event_store.events_for_entity(settlement_id)
-	if history.is_empty():
+	if _event_store.latest_event_for_entity(settlement_id) == null:
 		return false
-	for event in history:
-		if event.type == "player_settled":
-			return false
+	if not _event_store.events_for_entity_of_type(settlement_id, "player_settled").is_empty():
+		return false
 
 	# The ACTOR is the player's entity id, not their household id, so
 	# _households_in_settlement can resolve it through the same
@@ -1892,8 +1890,10 @@ const BLUEPRINT_RECIPE_BY_ITEM_ID := {
 ## event history answers this correctly with no separate reload path
 ## needed.
 func has_unlocked_blueprint(recipe_id: String) -> bool:
-	for event in _event_store.events_for_entity(PlayerIdentity.PLAYER_ENTITY_ID):
-		if event.type == "blueprint_learned" and event.tags.has(recipe_id):
+	for event in _event_store.events_for_entity_of_type(
+		PlayerIdentity.PLAYER_ENTITY_ID, "blueprint_learned"
+	):
+		if event.tags.has(recipe_id):
 			return true
 	return false
 
@@ -2224,7 +2224,7 @@ func settle_resident_if_new(recipe_id: String, origin_tile: Vector2i) -> String:
 	settled.actors = [resident_id]
 	settled.tags = [project.id]
 	var settlement_id := EntityRef.for_settlement(chunk_coord)
-	if not _event_store.events_for_entity(settlement_id).is_empty():
+	if _event_store.latest_event_for_entity(settlement_id) != null:
 		settled.witnesses = [settlement_id]
 	_event_store.append(settled)
 	_memory_store.witness_event(settled, _world_age_seconds)
@@ -2739,11 +2739,11 @@ func _contract_outcome_is_news(event_type: String, parties: Array[String]) -> bo
 func _recorded_contract_outcome(sorted_parties: Array[String]) -> String:
 	if sorted_parties.is_empty():
 		return ""
-	var history := _event_store.events_for_entity(sorted_parties[0])
+	var history := _event_store.events_for_entity_of_types(
+		sorted_parties[0], _CONTRACT_OUTCOME_EVENTS
+	)
 	for i in range(history.size() - 1, -1, -1):
 		var event: Event = history[i]
-		if not _CONTRACT_OUTCOME_EVENTS.has(event.type):
-			continue
 		var actors: Array[String] = []
 		for actor in event.actors:
 			actors.append(actor)
@@ -2904,11 +2904,11 @@ var _settlement_production_outcome: Dictionary = {}
 ## a settlement runs one recipe per occupation, so "how it went" is only
 ## meaningful for this settlement AND this recipe.
 func _recorded_production_outcome(settlement_id: String, recipe_id: String) -> String:
-	var history := _event_store.events_for_entity(settlement_id)
+	var history := _event_store.events_for_entity_of_types(
+		settlement_id, ["production_failed", "production_succeeded"]
+	)
 	for i in range(history.size() - 1, -1, -1):
 		var event: Event = history[i]
-		if event.type != "production_failed" and event.type != "production_succeeded":
-			continue
 		if event.tags.is_empty() or event.tags[0] != recipe_id:
 			continue
 		return "failed" if event.type == "production_failed" else "succeeded"
@@ -3016,7 +3016,7 @@ func dissolve_institution(institution_id: String) -> bool:
 ## harmless no-op rather than a duplicate founding.
 func _record_ruin_from(ruin_key: String, cause_event_id: String) -> void:
 	var ruin_id := EntityRef.for_kind("ruin", ruin_key)
-	if not _event_store.events_for_entity(ruin_id).is_empty():
+	if _event_store.latest_event_for_entity(ruin_id) != null:
 		return
 	var event := Event.new("ruin_formed", _world_age_seconds)
 	event.actors.append(ruin_id)
@@ -3438,15 +3438,13 @@ var _settlement_specialization: Dictionary = {}
 ## so a future settlement_became_<something-else> can never be mistaken for
 ## a tier the classifier would ever produce.
 func _recorded_settlement_tier(settlement_id: String) -> String:
-	var history := _event_store.events_for_entity(settlement_id)
-	for i in range(history.size() - 1, -1, -1):
-		var event: Event = history[i]
-		if not event.type.begins_with("settlement_became_"):
-			continue
-		var tier := event.type.substr("settlement_became_".length())
-		if SettlementTier.TIERS.has(tier):
-			return tier
-	return ""
+	var types: Array = []
+	for tier in SettlementTier.TIERS:
+		types.append("settlement_became_%s" % tier)
+	var history := _event_store.events_for_entity_of_types(settlement_id, types)
+	if history.is_empty():
+		return ""
+	return history.back().type.substr("settlement_became_".length())
 
 
 ## What `settlement_id` was last actually event-sourced as specializing in,
@@ -3456,11 +3454,10 @@ func _recorded_settlement_tier(settlement_id: String) -> String:
 ## settlement_specialized -- which nothing writes -- reads as never having
 ## specialized rather than as an empty specialization.
 func _recorded_settlement_specialization(settlement_id: String) -> String:
-	var history := _event_store.events_for_entity(settlement_id)
+	var history := _event_store.events_for_entity_of_type(settlement_id, "settlement_specialized")
 	for i in range(history.size() - 1, -1, -1):
-		var event: Event = history[i]
-		if event.type == "settlement_specialized" and not event.tags.is_empty():
-			return event.tags[0]
+		if not history[i].tags.is_empty():
+			return history[i].tags[0]
 	return ""
 
 
@@ -3648,15 +3645,13 @@ func step_settlements(delta_seconds: float) -> void:
 ## NOT a status: only the three SettlementState.STATUSES count, so a
 ## settlement that has been founded and never assessed still reads "".
 func _recorded_settlement_status(settlement_id: String) -> String:
-	var history := _event_store.events_for_entity(settlement_id)
-	for i in range(history.size() - 1, -1, -1):
-		var event: Event = history[i]
-		if not event.type.begins_with("settlement_"):
-			continue
-		var status := event.type.substr("settlement_".length())
-		if SettlementState.STATUSES.has(status):
-			return status
-	return ""
+	var types: Array = []
+	for status in SettlementState.STATUSES:
+		types.append("settlement_%s" % status)
+	var history := _event_store.events_for_entity_of_types(settlement_id, types)
+	if history.is_empty():
+		return ""
+	return history.back().type.substr("settlement_".length())
 
 
 ## Counts one more consecutive assessment of `status` for this settlement
@@ -4783,8 +4778,8 @@ func _resolve_caravan_raid(trip: CaravanTrip, raid_position: Vector2) -> void:
 ## PRODUCES, not what it merely attempted.
 func _production_counts_for_settlement(settlement_id: String) -> Dictionary:
 	var counts := {}
-	for event in _event_store.events_for_entity(settlement_id):
-		if event.type != "production_succeeded" or event.tags.is_empty():
+	for event in _event_store.events_for_entity_of_type(settlement_id, "production_succeeded"):
+		if event.tags.is_empty():
 			continue
 		var recipe_id: String = event.tags[0]
 		counts[recipe_id] = counts.get(recipe_id, 0) + 1
@@ -4833,8 +4828,8 @@ func household_count_for_settlement(settlement_id: String) -> int:
 ## duplicate founding for a path already known to be worn.
 func record_path_worn_if_new(tile: Vector2i) -> void:
 	var path_id := EntityRef.for_kind("path", "%d_%d" % [tile.x, tile.y])
-	var history := _event_store.events_for_entity(path_id)
-	if not history.is_empty() and history.back().type == "path_worn":
+	var latest = _event_store.latest_event_for_entity(path_id)
+	if latest != null and latest.type == "path_worn":
 		return
 	var event := Event.new("path_worn", _world_age_seconds)
 	event.actors.append(path_id)
@@ -4859,8 +4854,8 @@ func record_path_worn_if_new(tile: Vector2i) -> void:
 ## refusing it because the last-seen tier was the deeper one.
 func record_path_reclaimed(tile: Vector2i) -> void:
 	var path_id := EntityRef.for_kind("path", "%d_%d" % [tile.x, tile.y])
-	var history := _event_store.events_for_entity(path_id)
-	if history.is_empty() or not _CURRENTLY_WORN_EVENTS.has(history.back().type):
+	var latest = _event_store.latest_event_for_entity(path_id)
+	if latest == null or not _CURRENTLY_WORN_EVENTS.has(latest.type):
 		return
 	var event := Event.new("path_reclaimed", _world_age_seconds)
 	event.actors.append(path_id)
@@ -4887,8 +4882,8 @@ const _CURRENTLY_WORN_EVENTS := ["path_worn", "trail_formed"]
 ## only fires on the actual formation transition.
 func record_trail_formed_if_new(tile: Vector2i) -> void:
 	var path_id := EntityRef.for_kind("path", "%d_%d" % [tile.x, tile.y])
-	var history := _event_store.events_for_entity(path_id)
-	if not history.is_empty() and history.back().type == "trail_formed":
+	var latest = _event_store.latest_event_for_entity(path_id)
+	if latest != null and latest.type == "trail_formed":
 		return
 	var event := Event.new("trail_formed", _world_age_seconds)
 	event.actors.append(path_id)
@@ -4903,8 +4898,8 @@ func record_trail_formed_if_new(tile: Vector2i) -> void:
 ## fires while the path's most recent event actually IS a trail formation.
 func record_trail_reclaimed(tile: Vector2i) -> void:
 	var path_id := EntityRef.for_kind("path", "%d_%d" % [tile.x, tile.y])
-	var history := _event_store.events_for_entity(path_id)
-	if history.is_empty() or history.back().type != "trail_formed":
+	var latest = _event_store.latest_event_for_entity(path_id)
+	if latest == null or latest.type != "trail_formed":
 		return
 	var event := Event.new("trail_reclaimed", _world_age_seconds)
 	event.actors.append(path_id)
@@ -4947,8 +4942,8 @@ const SETTLING_EVENT_TYPES := ["npc_settled", "player_settled", "player_house_se
 func _households_in_settlement(settlement_id: String) -> Array[String]:
 	var household_ids: Array[String] = []
 	var seen := {}
-	for event in _event_store.events_for_entity(settlement_id):
-		if not SETTLING_EVENT_TYPES.has(event.type) or event.actors.is_empty():
+	for event in _event_store.events_for_entity_of_types(settlement_id, SETTLING_EVENT_TYPES):
+		if event.actors.is_empty():
 			continue
 		var household := _household_store.household_for(event.actors[0])
 		if household == null or seen.has(household.id):
@@ -4972,8 +4967,8 @@ func _households_in_settlement(settlement_id: String) -> Array[String]:
 ## from it -- exactly the settlements whose news is worth hearing later.
 func _villagers_in_settlement(settlement_id: String) -> Array[String]:
 	var npc_ids: Array[String] = []
-	for event in _event_store.events_for_entity(settlement_id):
-		if event.type != "npc_settled" or event.actors.is_empty():
+	for event in _event_store.events_for_entity_of_type(settlement_id, "npc_settled"):
+		if event.actors.is_empty():
 			continue
 		npc_ids.append(event.actors[0])
 	return npc_ids
@@ -4998,8 +4993,8 @@ func _settlement_of_party(party_id: String) -> String:
 		npc_id = household.members[0]
 	if EntityRef.kind_of(npc_id) != "npc":
 		return ""
-	for event in _event_store.events_for_entity(npc_id):
-		if event.type == "npc_settled" and not event.witnesses.is_empty():
+	for event in _event_store.events_for_entity_of_type(npc_id, "npc_settled"):
+		if not event.witnesses.is_empty():
 			return event.witnesses[0]
 	return ""
 
@@ -5098,7 +5093,7 @@ func wipe_event_store(path: String = EventStorePersistence.SAVE_PATH) -> void:
 ## keeps the exact old per-index id below.
 func record_settlement_founded_if_new(chunk_coord: Vector2i, npcs: Array, plots: Array = []) -> void:
 	var settlement_id := EntityRef.for_settlement(chunk_coord)
-	if not _event_store.events_for_entity(settlement_id).is_empty():
+	if _event_store.latest_event_for_entity(settlement_id) != null:
 		return
 
 	var npc_ids: Array[String] = []
@@ -8156,6 +8151,17 @@ func harvest_farm_plot_at_global(global_x: int, global_y: int) -> Dictionary:
 	if marker == null:
 		return {"crop_id": "", "count": 0}
 	return marker.harvest()
+
+
+## The real FarmPlot at a global tile, or null where nobody has ever
+## tilled -- which VillageFarm.action_for reads as "plant this first"
+## rather than as an error. The plot ITSELF, not a copy: a village farmer
+## decides what their field needs by looking at it (docs/concept/
+## village_farms.md, NpcMarker._field_states), and a snapshot would go
+## stale between one frame and the next as the crop grows.
+func farm_plot_at_global(global_x: int, global_y: int):
+	var marker: FarmPlotMarker = _farm_plots.get(Vector2i(global_x, global_y))
+	return marker.plot if marker != null else null
 
 
 ## The world-clock tick hook for the farming loop (see
@@ -13494,7 +13500,6 @@ func _spawn_building_node(chunk_coord: Vector2i, origin_local: Vector2i, record:
 	# before. A missing file falls through to the placeholder either way,
 	# so a variant sheet that has not been dropped in yet changes nothing.
 	var seed_value := int(record["seed"])
-	var sheet: Dictionary = BuildingCatalog.finished_sheet_for(building_id, seed_value)
 	# ART_TILE_SIZE, not TILE_SIZE, and scaled back by SPRITE_SCALE (see
 	# docs/concept/art_resolution.md): the WORLD footprint is identical
 	# either way, but the art carries DETAIL_MULTIPLIER pixels per world
@@ -13502,19 +13507,14 @@ func _spawn_building_node(chunk_coord: Vector2i, origin_local: Vector2i, record:
 	# already paints at. Drawn at TILE_SIZE, a building carried HALF the
 	# resolution of its own terrain, which is exactly what a finely drawn
 	# variant sheet would be thrown away at.
-	var texture := _illustrated_structure_sprite.footprint_frame_texture(
-		sheet["path"], sheet["columns"], sheet["rows"], sheet["row"], sheet["column"],
-		TerrainRenderer.ART_TILE_SIZE, footprint.x, sheet["detected_grid"]
+	# Best art first, falling back down the chain: a house's own lifecycle
+	# variation (which is the same house it rose as), then the flat
+	# 25-cottage variant sheet, then the old 8x5 sheet's idle row. Art that
+	# has been declared but not dropped in yet simply does not stop the
+	# chain, so nothing ever regresses to a box for want of one file.
+	var texture := _first_texture_of(
+		BuildingCatalog.finished_sheet_chain(building_id, seed_value), footprint.x
 	)
-	if texture == null and sheet["path"] != BuildingCatalog.sheet_of(building_id):
-		# A declared variant sheet that is not on disk yet: fall back to the
-		# lifecycle sheet before the procedural placeholder, so a building
-		# whose lifecycle art DOES exist keeps it rather than regressing to
-		# a box the moment a variant sheet is declared for it.
-		texture = _illustrated_structure_sprite.footprint_frame_texture(
-			BuildingCatalog.sheet_of(building_id), BuildingCatalog.SHEET_COLUMNS, BuildingCatalog.SHEET_ROWS,
-			BuildingCatalog.ROW_IDLE, 0, TerrainRenderer.ART_TILE_SIZE, footprint.x
-		)
 	if texture == null:
 		texture = _building_placeholder_sprite.footprint_texture(
 			footprint, seed_value, TerrainRenderer.ART_TILE_SIZE
@@ -15950,7 +15950,13 @@ func _sync_construction_site(chunk_coord: Vector2i, project) -> void:
 	var building_id: String = project.blueprint_id
 	var required := ConstructionLabor.labor_hours_required(building_id, _recipe_book)
 	var progress := 0.0 if required <= 0.0 else clampf(project.labor_hours_accumulated / required, 0.0, 1.0)
-	var stage := BuildingCatalog.construction_stage_for(progress)
+	# A house rises through its OWN variation's 24 real build frames --
+	# foundation, frames, construction -- so the site is visibly the house
+	# it is going to be. Everything else keeps the 8x5 sheet's single
+	# construction row. See BuildingCatalog.construction_sheet_chain.
+	var seed_value := _house_site_seed(chunk_coord, chunk_coord * CHUNK_SIZE + project.origin, building_id)
+	var chain: Array = BuildingCatalog.construction_sheet_chain(building_id, seed_value, progress)
+	var cell := Vector2i(int(chain[0]["column"]), int(chain[0]["row"]))
 	var footprint := BuildingCatalog.footprint_of(building_id)
 
 	var node: Node2D = _construction_site_node_at(chunk_coord, project.origin)
@@ -15967,19 +15973,16 @@ func _sync_construction_site(chunk_coord: Vector2i, project) -> void:
 		if not _construction_site_nodes.has(chunk_coord):
 			_construction_site_nodes[chunk_coord] = {}
 		_construction_site_nodes[chunk_coord][project.origin] = node
-		node.set_meta("stage", -1)
+		node.set_meta("stage", Vector2i(-1, -1))
 
-	if int(node.get_meta("stage")) == stage:
+	if node.get_meta("stage") == cell:
 		return
-	node.set_meta("stage", stage)
+	node.set_meta("stage", cell)
 	var sprite: Sprite2D = node.get_node("Stage")
 	# The same art resolution the FINISHED building uses (see
 	# _spawn_building_node): a site drawn at a different pixels-per-world-
 	# unit would visibly jump the moment it completed.
-	var texture := _illustrated_structure_sprite.footprint_frame_texture(
-		BuildingCatalog.sheet_of(building_id), BuildingCatalog.SHEET_COLUMNS, BuildingCatalog.SHEET_ROWS,
-		BuildingCatalog.ROW_CONSTRUCTION, stage, TerrainRenderer.ART_TILE_SIZE, footprint.x
-	)
+	var texture := _first_texture_of(chain, footprint.x)
 	if texture == null:
 		# No sheet yet: the finished placeholder, faded -- a ghost of what
 		# is coming, growing solid with the work.
@@ -15988,6 +15991,27 @@ func _sync_construction_site(chunk_coord: Vector2i, project) -> void:
 	sprite.texture = texture
 	sprite.scale = Vector2.ONE * ArtResolution.SPRITE_SCALE
 	sprite.position = Vector2(0, -float(texture.get_height()) * 0.5 * ArtResolution.SPRITE_SCALE)
+
+
+## The first sheet of `chain` (BuildingCatalog.finished_sheet_chain /
+## construction_sheet_chain) whose file is really on disk, as a texture
+## scaled to a `footprint_width_tiles`-wide footprint -- null when none of
+## them is, which is the caller's cue to draw the procedural placeholder.
+##
+## ART_TILE_SIZE, not TILE_SIZE, and scaled back by SPRITE_SCALE (see
+## docs/concept/art_resolution.md): the WORLD footprint is identical either
+## way, but the art then carries DETAIL_MULTIPLIER pixels per world unit --
+## the same detail per world unit the ground it stands on already paints
+## at. A finely drawn sheet at TILE_SIZE would be thrown away.
+func _first_texture_of(chain: Array, footprint_width_tiles: int) -> ImageTexture:
+	for entry in chain:
+		var texture := _illustrated_structure_sprite.footprint_frame_texture(
+			entry["path"], entry["columns"], entry["rows"], entry["row"], entry["column"],
+			TerrainRenderer.ART_TILE_SIZE, footprint_width_tiles, entry["grid"]
+		)
+		if texture != null:
+			return texture
+	return null
 
 
 func _construction_site_node_at(chunk_coord: Vector2i, origin_local: Vector2i) -> Node2D:

@@ -5450,6 +5450,14 @@ func _process(delta: float) -> void:
 	# other field is the engine's own last-frame monitor.
 	if _perf_report != null:
 		_perf_report.add_section("sched", Time.get_ticks_usec() - perf_started)
+		# How many events this frame's reads walked (FPS regression round
+		# 16, see EventStore.events_read). Every other field here is a
+		# duration, and a duration cannot say WHY it grew -- this one can,
+		# because work proportional to everything that has ever happened
+		# is the only thing that makes it climb across a session. Taken
+		# every frame so the report window averages it per frame like any
+		# other count.
+		_perf_report.add_count("ev_read", _chunk_manager.event_store().take_events_read())
 		var step_profile := _simulation_scheduler.take_step_profile()
 		for key in step_profile:
 			_perf_report.add_section("step_" + key, step_profile[key]["usec"])

@@ -8,6 +8,7 @@ extends GutTest
 ## contract (8 columns x 5 lifecycle rows) blacksmith.png already does.
 
 const BuildingCatalog = preload("res://src/gameplay/building_catalog.gd")
+const BuildingLifecycleSheet = preload("res://src/rendering/building_lifecycle_sheet.gd")
 const NpcGenome = preload("res://src/world/npc_genome.gd")
 const NpcIdentity = preload("res://src/world/npc_identity.gd")
 const CraftingRecipeBook = preload("res://src/gameplay/crafting_recipe_book.gd")
@@ -463,14 +464,69 @@ func test_every_one_of_the_twenty_five_variants_is_really_reachable():
 
 # -- which sheet a FINISHED building is drawn from -------------------------
 
-func test_a_finished_first_tier_house_is_drawn_from_its_variant_sheet():
+## Superseded 2026-09-17: a finished house now prefers its own LIFECYCLE
+## variation sheet (house_1_1.png .. house_1_5.png), which carries the same
+## house it was while it was rising. The flat house_1.png variant sheet
+## stays as the fallback below it.
+func test_a_finished_first_tier_house_is_drawn_from_its_lifecycle_variation():
 	var sheet: Dictionary = BuildingCatalog.finished_sheet_for("house_small", 42)
-	assert_eq(sheet["path"], BuildingCatalog.variant_sheet_of("house_small"))
-	assert_eq(sheet["columns"], BuildingCatalog.VARIANT_SHEET_COLUMNS)
-	assert_eq(sheet["rows"], BuildingCatalog.VARIANT_SHEET_ROWS)
-	var cell: Vector2i = BuildingCatalog.variant_cell_for("house_small", 42)
+	assert_eq(sheet["path"], BuildingLifecycleSheet.sheet_for("house_small", 42))
+	assert_eq(sheet["columns"], BuildingLifecycleSheet.COLUMNS)
+	assert_eq(sheet["rows"], BuildingLifecycleSheet.ROWS)
+	var cell: Vector2i = BuildingLifecycleSheet.idle_cell_for(42)
 	assert_eq(sheet["row"], cell.y)
 	assert_eq(sheet["column"], cell.x)
+	assert_eq(sheet["grid"], "dividers", "these sheets divide their cells with magenta lines")
+
+
+func test_the_flat_variant_sheet_is_still_there_under_the_lifecycle_one():
+	var chain: Array = BuildingCatalog.finished_sheet_chain("house_small", 42)
+	assert_gte(chain.size(), 3, "lifecycle variation, then the flat variant sheet, then the 8x5 sheet")
+	assert_eq(chain[0]["path"], BuildingLifecycleSheet.sheet_for("house_small", 42))
+	assert_eq(chain[1]["path"], BuildingCatalog.variant_sheet_of("house_small"))
+	assert_eq(chain[1]["grid"], "gutters", "house_1.png separates its cells with dark gutters")
+	assert_eq(chain[2]["path"], BuildingCatalog.sheet_of("house_small"))
+	assert_eq(chain[2]["grid"], "even")
+
+
+func test_a_rising_house_walks_its_own_variations_build_frames():
+	for progress in [0.0, 0.3, 0.7, 1.0]:
+		var sheet: Dictionary = BuildingCatalog.construction_sheet_for("house_small", 42, progress)
+		assert_eq(
+			sheet["path"], BuildingLifecycleSheet.sheet_for("house_small", 42),
+			"a house must rise as the house it is going to be, not as a different one"
+		)
+		var cell: Vector2i = BuildingLifecycleSheet.build_cell_for(progress)
+		assert_eq(sheet["row"], cell.y)
+		assert_eq(sheet["column"], cell.x)
+		assert_true(BuildingLifecycleSheet.BUILD_ROWS.has(sheet["row"]))
+
+
+func test_a_rising_building_with_no_variations_keeps_the_old_construction_row():
+	var sheet: Dictionary = BuildingCatalog.construction_sheet_for("city_hall", 7, 0.5)
+	assert_eq(sheet["path"], BuildingCatalog.sheet_of("city_hall"))
+	assert_eq(sheet["row"], BuildingCatalog.ROW_CONSTRUCTION)
+	assert_eq(sheet["column"], BuildingCatalog.construction_stage_for(0.5))
+	assert_eq(sheet["grid"], "even")
+
+
+func test_a_rising_house_falls_back_to_the_old_construction_row_too():
+	var chain: Array = BuildingCatalog.construction_sheet_chain("house_small", 42, 0.5)
+	assert_gte(chain.size(), 2)
+	assert_eq(chain[chain.size() - 1]["path"], BuildingCatalog.sheet_of("house_small"))
+	assert_eq(chain[chain.size() - 1]["row"], BuildingCatalog.ROW_CONSTRUCTION)
+
+
+func test_every_sheet_choice_names_how_its_grid_is_read():
+	for building_id in ["house_small", "city_hall", "sawmill"]:
+		for entry in (
+			BuildingCatalog.finished_sheet_chain(building_id, 5)
+			+ BuildingCatalog.construction_sheet_chain(building_id, 5, 0.4)
+		):
+			assert_true(
+				["even", "gutters", "dividers"].has(entry["grid"]),
+				"%s names its grid as %s, which nothing knows how to read" % [building_id, entry["grid"]]
+			)
 
 
 ## Everything without a variant sheet keeps the lifecycle sheet's idle row,
@@ -488,6 +544,13 @@ func test_every_other_building_still_comes_from_its_lifecycle_sheets_idle_row():
 ## A RISING building still comes from the lifecycle sheet's construction
 ## row: a variant sheet has no scaffold stages and must never be asked for
 ## one.
-func test_a_rising_building_is_never_drawn_from_a_variant_sheet():
-	assert_eq(BuildingCatalog.finished_sheet_for("house_small", 3)["path"], BuildingCatalog.variant_sheet_of("house_small"))
-	assert_ne(BuildingCatalog.sheet_of("house_small"), BuildingCatalog.variant_sheet_of("house_small"))
+## Still true of the FLAT variant sheet, which has no scaffold stages at
+## all. The lifecycle variation sheets are a different thing entirely --
+## they carry their own build rows, which is the whole point of them.
+func test_a_rising_building_is_never_drawn_from_the_flat_variant_sheet():
+	for progress in [0.0, 0.5, 1.0]:
+		for entry in BuildingCatalog.construction_sheet_chain("house_small", 3, progress):
+			assert_ne(
+				entry["path"], BuildingCatalog.variant_sheet_of("house_small"),
+				"the flat variant sheet draws 25 FINISHED cottages and no scaffold"
+			)

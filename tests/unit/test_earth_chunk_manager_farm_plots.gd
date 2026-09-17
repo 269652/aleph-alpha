@@ -155,3 +155,37 @@ func test_a_harvested_plot_can_be_planted_again():
 
 	assert_true(replanted)
 	assert_eq(plot.crop_id, "potato")
+
+
+# -- reading a plot back, which is what a village farmer works off ----------
+#
+# A village farmer decides what to do next by looking at the plots of their
+# own field (VillageFarm.next_action over NpcMarker._field_states) -- see
+# docs/concept/village_farms.md. Until now nothing outside this manager
+# could see a plot at all: _farm_plots is private and the three verbs only
+# ever answered "did it work".
+
+func test_untilled_ground_reads_back_as_no_plot_at_all():
+	assert_null(
+		manager.farm_plot_at_global(_berlin_tile.x + 3, _berlin_tile.y + 3),
+		"ground nobody has ever tilled is not an empty plot -- it is no plot"
+	)
+
+
+func test_a_planted_tile_reads_back_as_the_real_growing_plot():
+	assert_true(manager.till_and_plant_farm_plot_at_global(_berlin_tile.x, _berlin_tile.y, "wheat"))
+	var plot = manager.farm_plot_at_global(_berlin_tile.x, _berlin_tile.y)
+	assert_not_null(plot)
+	assert_eq(plot.crop_id, "wheat")
+	assert_eq(plot.state, "growing")
+
+
+func test_the_plot_read_back_is_the_one_that_really_advances():
+	assert_true(manager.till_and_plant_farm_plot_at_global(_berlin_tile.x, _berlin_tile.y, "wheat"))
+	var plot = manager.farm_plot_at_global(_berlin_tile.x, _berlin_tile.y)
+	var before: float = plot.time_growing
+	manager.step_farm_plots(0.5)
+	assert_gt(
+		plot.time_growing, before,
+		"a copy would not move -- a farmer must be reading the plot the world is simulating"
+	)
