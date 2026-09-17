@@ -194,8 +194,18 @@ the code as it lands.
 
   Still open in this slice: `stroll` (the kernel's `wander`) is not wired, so
   a villager with nothing pressing still stands on their scheduled spot.
-- ⬜ **A real meeting** — two free villagers in reach stop, face each other,
-  and hold a conversation for a real number of seconds.
+- ✅ **A real meeting.** A lonely villager walks to the nearest neighbour
+  within `COMPANY_REACH_PX`; on arrival BOTH stop, face each other and stand
+  for `CONVERSATION_SECONDS`, and the conversation is what answers the
+  company drive. Both sides are put into it, or it reads as being talked
+  *at*. A conversation that has started runs to its end — a villager does not
+  walk off mid-sentence because quarry wandered past — which at four seconds
+  costs a hunter at most four seconds of a chase.
+
+  Found by a test rather than reasoned about: "arrived" was one pixel, which
+  is right for a doorstep and impossible for a person, because two villagers
+  never occupy the same pixel. Talking reaches a tile — what "close enough to
+  speak to" means on this grid. `test_npc_marker.gd` 47/47.
 - ⬜ **Rumours pass in meetings**, through the existing `MemoryStore`/`Rumor`
   path.
 - ⬜ **Relationships** — familiarity and trust between two villagers, moved by

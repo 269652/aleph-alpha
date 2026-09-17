@@ -853,3 +853,110 @@ func test_a_villager_with_no_urgent_need_still_keeps_their_schedule():
 		before.distance_to(marker.landmarks["gate"]),
 		"nothing pressing, so the schedule stands"
 	)
+
+
+# -- villagers meet, and a meeting takes real time -------------------------
+#
+# Asked for directly: "they should socialize; talk". Design pillar 4 of
+# docs/concept/npc_social_life.md: if it happens, you can see it happen --
+# two villagers stop walking, stand together and face each other for a real
+# number of seconds. Invisible bookkeeping is not behaviour.
+
+
+## A world that answers the one question a villager asks when looking for
+## company, the same duck-typed shape every other _world hook here uses.
+class StubNeighbourhood:
+	var neighbour: NpcMarker = null
+	func nearest_npc_near(_at: Vector2, max_distance: float, excluding = null) -> NpcMarker:
+		if neighbour == null or neighbour == excluding:
+			return null
+		return neighbour if _at.distance_to(neighbour.position) <= max_distance else null
+
+
+func _neighbour_at(at: Vector2) -> NpcMarker:
+	var other := NpcMarker.new()
+	other.identity = NpcIdentity.new(7)
+	other.home_position = Vector2(2000, 2000)
+	other.workspot_position = Vector2(2000, 2000)
+	other.position = at
+	add_child(other)
+	_extra.append(other)
+	var world := StubNeighbourhood.new()
+	world.neighbour = other
+	marker.setup(world, TILE_SIZE)
+	return other
+
+
+func test_a_lonely_villager_walks_toward_a_neighbour():
+	_quiet_every_need()
+	_make_urgent("company")
+	var other := _neighbour_at(Vector2(1120, 1000))  # inside COMPANY_REACH_PX, outside talking range
+	var before := marker.position
+	marker._process(0.5)
+	assert_lt(
+		marker.position.distance_to(other.position), before.distance_to(other.position),
+		"a lonely villager goes to find somebody"
+	)
+
+
+func test_reaching_a_neighbour_starts_a_real_conversation():
+	_quiet_every_need()
+	_make_urgent("company")
+	var other := _neighbour_at(marker.position + Vector2(2, 0))
+	marker._process(0.1)
+	assert_true(marker.is_talking(), "they stopped to talk")
+	assert_true(other.is_talking(), "and so did the other one -- a conversation has two sides")
+
+
+func test_a_conversation_stops_them_both_walking():
+	_quiet_every_need()
+	_make_urgent("company")
+	var other := _neighbour_at(marker.position + Vector2(2, 0))
+	marker._process(0.1)
+	var stood_at := marker.position
+	var other_stood_at := other.position
+	marker._process(0.25)
+	other._process(0.25)
+	assert_eq(marker.position, stood_at, "a villager mid-conversation does not wander off")
+	assert_eq(other.position, other_stood_at, "and neither does the one they are talking to")
+
+
+func test_a_conversation_really_ends():
+	_quiet_every_need()
+	_make_urgent("company")
+	_neighbour_at(marker.position + Vector2(2, 0))
+	marker._process(0.1)
+	assert_true(marker.is_talking(), "precondition: talking")
+	marker._process(NpcMarker.CONVERSATION_SECONDS + 0.1)
+	assert_false(marker.is_talking(), "a conversation that never ended would freeze a villager forever")
+
+
+func test_talking_is_what_answers_the_need_for_company():
+	_quiet_every_need()
+	_make_urgent("company")
+	_neighbour_at(marker.position + Vector2(2, 0))
+	assert_gt(marker.economy.needs.gains()["company"], 0.0, "precondition: lonely")
+	marker._process(0.1)
+	assert_eq(
+		marker.economy.needs.gains()["company"], 0.0,
+		"a villager who has just had a conversation is not lonely"
+	)
+
+
+## Real work against the real world outranks a need: a hunter mid-chase and
+## a farmer in their own field are not pulled away to chat, or to drink, or
+## to go home. Asserted on the rule itself rather than by staging a live
+## hunt, because what the rule says is exactly "not free to answer".
+func test_a_villager_busy_with_real_work_answers_no_need_at_all():
+	_quiet_every_need()
+	_make_urgent("company")
+	_neighbour_at(marker.position + Vector2(2, 0))
+	# Busy first: once a conversation has started it runs to its end (a
+	# villager does not walk off mid-sentence), so asking the other way round
+	# would be asking a talking villager whether they are busy.
+	assert_null(
+		marker._step_needs(0.1, false),
+		"mid-chase or mid-field, a villager finishes the work first"
+	)
+	assert_false(marker.is_talking(), "and never started a conversation at all")
+	assert_not_null(marker._step_needs(0.1, true), "but free, that same villager would go and talk")
