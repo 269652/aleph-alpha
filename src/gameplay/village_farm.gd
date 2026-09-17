@@ -372,3 +372,66 @@ static func fence_tile_for(facing: String) -> String:
 ## have to ask, so neither re-lists the ids.
 static func is_fence_tile(tile_id: String) -> bool:
 	return tile_id != "" and FENCE_TILE_IDS.values().has(tile_id)
+
+
+## Which way the beds lie from a rail cell -- and therefore which of that
+## cell's own four edges the rails are actually DRAWN on, and the only line
+## an animal may not cross. Vector2i.ZERO for anything that is not a rail.
+##
+## Asked for directly, with two sides of a real ring arrowed in a
+## screenshot: *"move the fences to the inner edge of the enclosure and
+## treat the rest of the tile as street"*. A rail used to be a whole solid
+## tile -- ground no animal could stand on, painted as a bare earth square
+## over whatever was already there. It is a LINE on ONE edge now, so the
+## rest of its own tile is ordinary walkable ground and the ring round a
+## field reads as the path the farmer walks rather than a brown moat.
+##
+## The direction is the INVERSE of what the facing names: a rail closing the
+## field's NORTH side stands north of the beds, so its beds -- and its rails
+## -- lie SOUTH of it. That is the same relation fence_facing measures in
+## the other direction, and
+## test_the_inner_edge_really_points_at_the_bed_the_rail_encloses pins the
+## two against each other rather than trusting two hand-written tables.
+const FENCE_INNER_DIRECTIONS := {
+	"north": Vector2i(0, 1),
+	"south": Vector2i(0, -1),
+	"east": Vector2i(-1, 0),
+	"west": Vector2i(1, 0),
+}
+
+
+static func fence_inner_direction(tile_id: String) -> Vector2i:
+	if tile_id == "":
+		return Vector2i.ZERO
+	for facing in FENCE_TILE_IDS:
+		if FENCE_TILE_IDS[facing] == tile_id:
+			return FENCE_INNER_DIRECTIONS.get(facing, Vector2i.ZERO)
+	return Vector2i.ZERO
+
+
+## Whether a step from one cell to the next CROSSES a rail's inner edge --
+## the one thing a rail stops. `step` is the move as a cell delta (only its
+## sign per axis matters); `from_tile_id`/`to_tile_id` are the modifications
+## standing on each end of it.
+##
+## Blocked when the animal LEAVES a rail cell over that cell's own inner
+## edge, or ENTERS a rail cell over ITS inner edge -- the same line, walked
+## from the field side. Never otherwise, and that is precisely what makes
+## the rest of a rail's tile ordinary ground: stepping onto the ring, along
+## it, or away from the beds is all free, so the ring is a path an animal
+## may walk and a farmer may work from.
+##
+## A diagonal crosses both of its own edges, so it is blocked whenever
+## either component would be -- an animal must not slip round a corner of
+## the ring that no cardinal step can pass.
+static func rails_block_step(from_tile_id: String, to_tile_id: String, step: Vector2i) -> bool:
+	var from_inner := fence_inner_direction(from_tile_id)
+	var to_inner := fence_inner_direction(to_tile_id)
+	if from_inner == Vector2i.ZERO and to_inner == Vector2i.ZERO:
+		return false
+	for axis in [Vector2i(signi(step.x), 0), Vector2i(0, signi(step.y))]:
+		if axis == Vector2i.ZERO:
+			continue
+		if from_inner == axis or to_inner == -axis:
+			return true
+	return false
