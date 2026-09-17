@@ -23,6 +23,8 @@ const _FENCE_SUBJECTS := [
 const _ALL_SUBJECTS := [
 	"farm", "sagewerk", "storage", "wooden_fence", "city_hall",
 	"farm_fence_north", "farm_fence_south", "farm_fence_east", "farm_fence_west",
+	"farm_fence_corner_nw", "farm_fence_corner_sw",
+	"farm_fence_corner_ne", "farm_fence_corner_se",
 	"farm_fence_corner_west", "farm_fence_corner_east",
 ]
 
@@ -284,8 +286,17 @@ func test_a_divider_sheet_scales_to_a_real_footprint():
 ## subject name the tile id implies -- the one link between "a rail was
 ## built facing east" and "an east rail is drawn".
 func test_every_rail_the_village_can_build_has_its_own_art():
-	for facing in ["north", "south", "east", "west", "corner_west", "corner_east"]:
+	for facing in VillageFarm.FENCE_TILE_IDS:
 		var subject: String = VillageFarm.fence_tile_for(facing)
+		assert_true(sprite.has_subject(subject), "%s has no art at all" % subject)
+
+
+## Including the ones nothing raises any more. A rail already standing on
+## ground somebody has walked past is an ordinary chunk modification, and an
+## id that lost its art would also stop being overlay-only and paint a bare
+## earth square there.
+func test_every_rail_an_older_village_may_still_have_standing_keeps_its_art():
+	for subject in VillageFarm.LEGACY_FENCE_TILE_IDS:
 		assert_true(sprite.has_subject(subject), "%s has no art at all" % subject)
 
 
@@ -454,7 +465,7 @@ func test_a_broadside_runs_wood_spans_exactly_one_tile_across():
 
 
 func test_a_top_view_runs_wood_spans_exactly_one_tile_down():
-	for facing in ["east", "west", "corner_west", "corner_east"]:
+	for facing in ["east", "west"]:
 		var placed := _placed_wood_rect(VillageFarm.fence_tile_for(facing))
 		assert_almost_eq(
 			placed.size.y, float(_TILE), _EDGE_TOLERANCE,
@@ -468,10 +479,10 @@ func test_a_top_view_runs_wood_spans_exactly_one_tile_down():
 func test_scaling_by_the_run_keeps_every_rail_on_its_own_inner_edge():
 	assert_almost_eq(_placed_wood_rect("farm_fence_north").end.y, float(_TILE), _EDGE_TOLERANCE)
 	assert_almost_eq(_placed_wood_rect("farm_fence_south").end.y, 0.0, _EDGE_TOLERANCE)
-	for facing in ["east", "corner_east"]:
+	for facing in ["east", "corner_ne", "corner_se"]:
 		var east := _placed_wood_rect(VillageFarm.fence_tile_for(facing))
 		assert_almost_eq(east.position.x + east.size.x * 0.5, 0.0, _EDGE_TOLERANCE, facing)
-	for facing in ["west", "corner_west"]:
+	for facing in ["west", "corner_nw", "corner_sw"]:
 		var west := _placed_wood_rect(VillageFarm.fence_tile_for(facing))
 		assert_almost_eq(west.position.x + west.size.x * 0.5, float(_TILE), _EDGE_TOLERANCE, facing)
 
@@ -481,3 +492,60 @@ func test_scaling_by_the_run_keeps_every_rail_on_its_own_inner_edge():
 func test_a_building_still_scales_its_width_to_the_tile():
 	for subject in ["farm", "sagewerk", "storage", "wooden_fence", "city_hall"]:
 		assert_eq(sprite.footprint_texture(subject, _TILE).get_width(), _TILE, subject)
+
+
+# -- a corner post caps the runs, it does not extend past them --------------
+#
+# Reported with all three visible corners crossed out: "The fences still
+# aren't optimal". A corner cell sits diagonally outside the beds, and its
+# art was a full TILE of vertical rail -- while the run it caps sits on that
+# tile's own EDGE, so the frame overshot by a whole tile at every corner.
+#
+# A corner closes two sides at once, so unlike a run it has a ground POINT
+# rather than a ground line: the point where the two runs meet, which is the
+# corner of its own tile facing the beds.
+
+
+## The corners a village RAISES -- not the legacy ids, which knew one axis
+## and are kept only so older ground keeps its art (see
+## VillageFarm.LEGACY_FENCE_TILE_IDS).
+func _corner_subjects() -> Array:
+	var out: Array = []
+	for facing in VillageFarm.FENCE_TILE_IDS:
+		var subject: String = VillageFarm.fence_tile_for(facing)
+		if VillageFarm.is_fence_corner_tile(subject):
+			out.append(subject)
+	return out
+
+
+func test_a_corner_post_sits_on_the_point_where_its_two_runs_meet():
+	var corners := _corner_subjects()
+	assert_gt(corners.size(), 0, "precondition: the sheet has corner posts")
+	for subject in corners:
+		var inner: Vector2i = VillageFarm.fence_inner_direction(subject)
+		assert_ne(inner.x, 0, "%s must know which side wall it caps" % subject)
+		assert_ne(inner.y, 0, "%s must know which run it caps, or it cannot sit on the join" % subject)
+		var placed := _placed_wood_rect(subject)
+		var corner_x := float(_TILE) if inner.x > 0 else 0.0
+		var corner_y := float(_TILE) if inner.y > 0 else 0.0
+		assert_almost_eq(
+			placed.position.x + placed.size.x * 0.5, corner_x, _EDGE_TOLERANCE,
+			"%s is not on its own corner across" % subject
+		)
+		assert_almost_eq(
+			placed.position.y + placed.size.y * 0.5, corner_y, _EDGE_TOLERANCE,
+			"%s is not on its own corner down -- it overshoots the run it caps" % subject
+		)
+
+
+## Concretely, the thing that was on screen: no corner post may hang a whole
+## tile past the run it caps.
+func test_a_corner_post_never_hangs_a_tile_past_the_run_it_caps():
+	for subject in _corner_subjects():
+		var inner: Vector2i = VillageFarm.fence_inner_direction(subject)
+		var placed := _placed_wood_rect(subject)
+		var past := (placed.position.y + placed.size.y) if inner.y < 0 else -placed.position.y
+		assert_lt(
+			past, float(_TILE) * 0.6,
+			"%s hangs %.0fpx past its own run, on a %dpx tile" % [subject, past, _TILE]
+		)

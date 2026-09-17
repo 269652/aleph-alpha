@@ -24037,6 +24037,33 @@ farming and ground-cover suites. (`test_grass_near_respects_its_radius` is
 risky-not-asserting both before and after these changes — pre-existing,
 untouched here.)
 
+### A corner post stops overshooting its own runs (2026-09-17)
+
+Reported with all three visible corners crossed out: *"the fences still
+aren't optimal"*. A corner cell knew only which side WALL it capped, so its
+art was placed as a full tile of vertical rail — while the run it caps sits
+on that tile's own EDGE. The frame overshot by a whole tile at every corner,
+which is exactly what the crosses were on.
+
+A corner closes two sides, so it has a ground POINT rather than a ground
+line: the corner of its own tile where the two runs meet. `fence_facing`
+names both sides now (`corner_nw`/`ne`/`sw`/`se` in place of
+`corner_west`/`corner_east`), the inner direction is the diagonal, and
+`footprint_offset` centres the post on that point in both axes. It also
+takes the side wall's SCALE instead of being scaled by its own length —
+scaling a post as if it were a run is what made it a tile of rail.
+
+The diagonal direction pays for itself twice: `rails_block_step` can now
+shut exactly the diagonal a corner really faces, where before it shut either
+diagonal on that side.
+
+The old two ids stay recognised (`LEGACY_FENCE_TILE_IDS`) because a rail is
+an ordinary chunk modification — an id that stopped reading as a fence would
+lose its art and stop being overlay-only, painting bare earth on ground a
+player has already visited. Nothing raises one, and a test pins that.
+
+667/667 across the seven fence, farm and village suites.
+
 Honest gaps, three real:
 
 🚧 **The gate is a real hole.** An animal that wanders into the gate cell is

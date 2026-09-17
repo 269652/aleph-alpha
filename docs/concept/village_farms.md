@@ -190,6 +190,25 @@ rails/posts and plant_fibre (4) lashing them".
   water, and not the village's paving. `VillageFarm.fence_cells` is that
   rule, pure and derived — like `field_rect` and `owner_of`, it stores
   nothing, so the same farmhouse fences the same ring on every reload.
+- **A corner post has a ground POINT, not a ground line.** Reported with all
+  three visible corners crossed out (*"the fences still aren't optimal"*).
+  A corner knew only which side WALL it capped, so its art was placed as a
+  whole tile of vertical rail with nothing saying where along that tile to
+  stop — and the run it caps sits on that tile's own EDGE, so the frame
+  overshot by a tile at every corner. `fence_facing` names both sides now
+  (`corner_nw`/`ne`/`sw`/`se`), its inner direction is the diagonal, and
+  `footprint_offset` centres the post on that corner of its own tile in both
+  axes: half the post runs back along each run it caps and joins them, and
+  nothing hangs past either. It also takes the side wall's own scale rather
+  than being scaled by its own length — scaling a post as if it were a run
+  is what made it a tile of rail in the first place.
+
+  The two-id corners (`corner_west`/`corner_east`) stay recognised as
+  `LEGACY_FENCE_TILE_IDS`: a rail is an ordinary chunk modification, so an
+  id that stopped reading as a fence would lose its art *and* stop being
+  overlay-only, painting a bare earth square on ground somebody has already
+  walked past. Nothing raises one.
+
 - **The frame closes at the corners.** A border's four diagonal cells are
   **corner posts**, not lengths of rail: drawing a horizontal rail across a
   corner is exactly the "broken" look the report points at. The sheet has no
