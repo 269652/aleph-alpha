@@ -1158,9 +1158,16 @@ declares its grid in `LandmarkSheet._SHEET_GRIDS` and then draws from it
 seeded by its own position, exactly the way a house does — the grid is
 gutter-detected, so the cells need not be evenly spaced.
 
-`hunting_ground` is included even though it has no procedural drawing of
-its own: it falls back to the well's sprite today, a cosmetic gap this
-gives a real home.
+`hunting_ground` was for a while the one prop with no drawing of its own,
+and that was not the harmless cosmetic gap it was recorded as: an id this
+catalog does not know falls back to the **well's** sprite, so every hunter
+in a village stood what looked like a second well out behind the houses —
+reported live as *"there are 3 wells and one stand all over the place"* and
+measured on the real load path with `tools/probe_village_props.gd`. It has
+its own drawing now (a drying rack with a hide stretched on it), and the
+rule that let it through is pinned by test: every work tag in
+`NpcIdentity.WORK_LOCATION_BY_OCCUPATION` must be one
+`ProceduralLandmarkSprite` can actually draw.
 
 ### Status
 
