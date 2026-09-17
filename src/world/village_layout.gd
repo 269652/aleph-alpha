@@ -204,8 +204,6 @@ static func _plaza_is_dry(plaza_x0: int, street_y: int, is_dry: Callable) -> boo
 ## two of them derive two different squares for the same village.
 ## TEMPORARY PROBE -- remove with the instrumentation in VillageRenderer.
 static var probe_skeleton_calls := 0
-static var probe_layout_passes := 0
-static var probe_predicate_calls := 0
 
 
 static func skeleton(chunk_size: int, seed_value: int, is_dry := Callable()) -> Dictionary:
@@ -284,41 +282,13 @@ static func skeleton(chunk_size: int, seed_value: int, is_dry := Callable()) -> 
 ## gets both; a cramped one houses its people and goes without. See
 ## docs/concept/village_warehouse.md's own pillar 1 for the honest caveat
 ## this puts on "always".
-## Both passes ask the same questions of the same cells, and the answers are
-## expensive: VillageRenderer's is_buildable bottoms out in
-## EarthChunkManager.is_water_at_global, a real hydrology probe, and a pass
-## that FAILS is the costly one -- it walks every street to the chunk edge
-## trying every remaining building at every x. Measured before this memo
-## existed: one real chunk load went from 29s to over 420s the day the
-## second pass was added, a 14x regression in village founding that no
-## stub-world test could see.
-##
-## Memoising is exact rather than an approximation. Both predicates are
-## read-only functions of ground that does not move: nothing is placed into
-## the world until after layout() has returned, and terrain is generated
-## deterministically. One memo per call, so nothing is cached across chunks
-## or across a world that has since been built on.
 func layout(
 	building_ids: Array, chunk_size: int, seed_value: int, is_buildable: Callable, is_occupied: Callable
 ) -> Dictionary:
-	var buildable_answers := {}
-	var occupied_answers := {}
-	var buildable := func(cell: Vector2i) -> bool:
-		if not buildable_answers.has(cell):
-			probe_predicate_calls += 1
-			buildable_answers[cell] = bool(is_buildable.call(cell))
-		return buildable_answers[cell]
-	var occupied := func(cell: Vector2i) -> bool:
-		if not occupied_answers.has(cell):
-			occupied_answers[cell] = bool(is_occupied.call(cell))
-		return occupied_answers[cell]
-
-	probe_layout_passes += 1
-	var planned := _layout_once(building_ids, chunk_size, seed_value, buildable, occupied, true)
+	var planned := _layout_once(building_ids, chunk_size, seed_value, is_buildable, is_occupied, true)
 	if houses_everyone(planned, building_ids):
 		return planned
-	probe_layout_passes += 1
-	return _layout_once(building_ids, chunk_size, seed_value, buildable, occupied, false)
+	return _layout_once(building_ids, chunk_size, seed_value, is_buildable, is_occupied, false)
 
 
 func _layout_once(

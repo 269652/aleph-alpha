@@ -131,8 +131,10 @@ func spawn_village(
 ) -> Array[Node2D]:
 	if not _settlement_generator.has_settlement_at(chunk_coord, dominant_biome):
 		return []
-	# One founding, one set of ground answers (see _buildable_memo).
+	# One founding, one set of ground answers and one square (see
+	# _buildable_memo and _skeleton_memo).
 	_buildable_memo.clear()
+	_skeleton_memo.clear()
 	# The settlement's REAL population, not the founding roster: households
 	# move in over time (docs/concept/village_growth.md mechanism 3), and a
 	# newcomer nobody ever spawns is a household the player can never meet.
@@ -525,6 +527,32 @@ func _recover_existing_village(
 ## founded, which is what makes THIS one exact.
 var _buildable_memo: Dictionary = {}
 
+## This village's own skeleton, computed once per founding rather than once
+## per question.
+##
+## VillageLayout.skeleton is pure for a given chunk and ground, but it is not
+## CHEAP: it scans columns looking for somewhere dry to put the square.
+## _is_street_row's own comment used to say that deriving from it "costs
+## nothing" -- measured, one real founding made 106,722 skeleton calls, and
+## that one line was 21 of the 25 seconds the village took. _field_fits_at
+## asks _is_street_row about every cell of every candidate field ring, and a
+## farmstead pushed off the street searches the whole chunk for a ring.
+##
+## Safe for exactly the reason _buildable_memo is: the square is derived from
+## ground, and ground does not move while a village is being founded.
+var _skeleton_memo: Dictionary = {}
+
+
+## The skeleton for this chunk, from the cache above.
+func _bones(chunk_coord: Vector2i, chunk_size: int, world) -> Dictionary:
+	var key := Vector3i(chunk_coord.x, chunk_coord.y, chunk_size)
+	if not _skeleton_memo.has(key):
+		_skeleton_memo[key] = VillageLayout.skeleton(
+			chunk_size, VillageLayout.seed_for(chunk_coord),
+			_is_buildable_local(chunk_coord, chunk_size, world)
+		)
+	return _skeleton_memo[key]
+
 
 func _is_buildable_local(chunk_coord: Vector2i, chunk_size: int, world) -> Callable:
 	var memo := _buildable_memo
@@ -615,12 +643,12 @@ func _place_industry_if_missing(chunk_coord: Vector2i, chunk_size: int, world) -
 ## inconsistent, since a field under a paved stretch correctly got no north
 ## wall while the one beside it got a rail.
 ##
-## Derived from the skeleton, so it costs nothing and needs nothing stored.
+## Derived from the skeleton, so it needs nothing stored -- but it does NOT
+## cost nothing, which this comment claimed for a long time and which cost a
+## founding 21 seconds. It goes through _bones, which computes the skeleton
+## once per founding; called directly it is a column scan per cell.
 func _is_street_row(chunk_coord: Vector2i, chunk_size: int, world, y: int) -> bool:
-	var bones := VillageLayout.skeleton(
-		chunk_size, VillageLayout.seed_for(chunk_coord), _is_buildable_local(chunk_coord, chunk_size, world)
-	)
-	var street_y: int = bones["street_y"]
+	var street_y: int = _bones(chunk_coord, chunk_size, world)["street_y"]
 	return y >= street_y and (y - street_y) % VillageLayout.STREET_PITCH_TILES == 0
 
 
