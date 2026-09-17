@@ -43,18 +43,21 @@ func _initialize() -> void:
 			for record in manager.buildings_in_chunk(coord):
 				var id: String = record.get("id", "")
 				counts[id] = int(counts.get(id, 0)) + 1
+			# The roster read from the SAME source _place_farms_if_missing
+			# counts, not from the scene tree: walking the spawned markers
+			# reported nobody farming even in the village that HAS a farmhouse,
+			# which only gets built when somebody does -- a broken measurement,
+			# not a finding.
+			var settlement := gen.generate_settlement(
+				coord, coord * size, size, 16, SettlementGenerator.POPULATION
+			)
 			var occupations := {}
-			var stack: Array = entities.get_children()
-			while not stack.is_empty():
-				var node: Node = stack.pop_back()
-				stack.append_array(node.get_children())
-				var ident = node.get("identity")
-				if ident != null:
-					var occ: String = ident.occupation
-					occupations[occ] = int(occupations.get(occ, 0)) + 1
+			for npc in settlement.npcs:
+				occupations[npc.occupation] = int(occupations.get(npc.occupation, 0)) + 1
 			var wants_farm := int(occupations.get("farmer", 0)) + int(occupations.get("herbalist", 0))
-			print("VILLAGE %s farmhouses=%d wanted_by=%d buildings=%s occupations=%s" % [
-				str(coord), int(counts.get("farmhouse", 0)), wants_farm, str(counts), str(occupations)
+			print("VILLAGE %s farmhouses=%d wanted_by=%d fishers=%d buildings=%s occupations=%s" % [
+				str(coord), int(counts.get("farmhouse", 0)), wants_farm,
+				int(occupations.get("fisher", 0)), str(counts), str(occupations)
 			])
 			manager._unload_chunk(coord)
 			found += 1
