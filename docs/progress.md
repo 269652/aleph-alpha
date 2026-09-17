@@ -24704,3 +24704,103 @@ Tests: `test_village_sawmill.gd` 9/9 (new), `test_npc_marker_timber.gd` 15/15
 Honestly unbuilt: the mill shapes **beams** only — `SagewerkProduction` also
 makes planks, and nothing yet asks for them; and a village with more than one
 sawmill would hand every sawyer the first one.
+
+---
+
+## 2026-09-17 — Footsteps: a recording of walking is not a footstep
+
+Reported live: *"Can you find better sounds for the footsteps on every
+terrain? They sound weak and not natural"*. Nobody in this environment can
+hear the game, so the measurable half got measured first — and it turned out
+to be the entire explanation.
+
+| clip | length | RMS | peak |
+|---|---|---|---|
+| `grass.ogg` | 0.25s | −12.59 dBFS | −0.74 dBFS |
+| `default.ogg` | 3.64s | −47.63 dBFS | −17.86 dBFS |
+| `snow.mp3` | 13.72s | −38.42 dBFS | −10.34 dBFS |
+| `forest_twigs.ogg` | 41.67s | −41.26 dBFS | −15.93 dBFS |
+
+One recording per surface, 35 dB apart end to end, and only one of the four
+an actual footstep. So: **weak**, because every step played its clip from
+`0.0` and a forest step was forever the same fraction of the same run-in,
+before the recording had reached a real impact; **not natural**, because one
+recording per surface means every step is literally the same sample at the
+same pitch; and **cut off**, because the 4-voice pool's round-robin then
+truncated each step mid-ring. It also explains, retroactively, why the
+eyeballed −12 dB that answered *"the grass footsteps are way too loud"* on
+2026-09-10 never fixed the rest: it closed barely a third of a 35 dB gap.
+
+✅ **Every surface has a pool of 5–10 real, isolated footstep one-shots.**
+grass 9, wood 9, rock 10 (gravel), underwater 5 (feet going *into* water),
+default 9 (boots), sand 6 (Fantozzi's, CC0), snow 8 (Corsica_S's 42, CC0),
+forest 8 — the last cut out of this repository's **own** 41-second forest
+recording at its real footfalls, same file and licence and forest. Its quiet
+floor measures −51.6 dBFS against footfalls around −24, so the crickets in
+it sit 27 dB under a step rather than riding along.
+
+✅ **The levels are measured, not chosen.** One gain per pool, so its mean
+lands on a common target — per pool rather than per clip on purpose, so a
+soft step stays softer than a hard one *within* a surface while no surface
+is louder than another. Target: **−24.59 dBFS RMS**, which is not a taste
+call either. `grass.ogg` measures −12.59 and was signed off at −12.0, so
+that is the one footstep level already agreed to. Solving grass's nine clips
+from scratch landed on −12.0 for it **independently** — the by-ear number
+and the measured one agree, which is the strongest evidence the target is
+right. Spread is now **2.4 dB**, down from 35.
+
+✅ **The measurement is bound to the code.** `tools/prepare_footstep_
+oneshots.py` writes `assets/audio/footsteps/steps/levels.json` (length, RMS,
+peak per clip, plus the derived gain), and
+`test_every_surfaces_volume_is_the_gain_the_pipeline_measured` pins
+`FootstepSound._VOLUME_DB_BY_SURFACE` against it. Godot cannot return raw
+samples from a compressed stream, so the decode-level measurement genuinely
+has to live in a manifest; what the suite re-measures itself every run is
+every clip's real **length**, which is what catches a swapped clip.
+
+✅ **Per-step variation, and windowing where it still belongs.** ±6% pitch
+per step, applied unconditionally for the same reason `volume_db` already
+was (the pool reuses voices, so a previous step's pitch must never ride
+along — a mushroom crush included). Whether a clip must be read one step at
+a time is now a fact about the **clip**, not the surface, so
+`is_walking_bed`/`offset_for` are keyed by path: one-shots play whole, the
+fallback recording is still windowed at `STEP_WINDOW_SECONDS` 0.45s.
+
+**The real cadence was measured, not assumed**, and it mattered:
+`FootstepGait.STRIDE_LENGTH_PX` 8.415 at `Player.BASE_SPEED` 40 px/s is a
+step every **0.210s**, and **0.105s** sprinting. With a 4-voice pool the
+fifth step lands back on voice 0 while voice 0's window is still counting
+down, so a window-closing timer that just called `stop()` would cut the
+*new* step short — exactly the mid-ring truncation the window exists to
+remove. It checks a per-voice token instead. Each of the four new
+behaviours was re-verified by mutating it back out and watching its own
+test fail.
+
+🚧 **A laid cobbled street sounds like gravel, not like cobbles.** `"rock"`
+covers tundra, mountain *and* laid stone; gravel is right for two of those
+three. Splitting a `stone` surface out of `"rock"` is the remaining step,
+and the clips are already cached for it (that pack's `tile/`, 9; Fantozzi's
+`Stone`, 6).
+
+⬜ **Whether it actually sounds better is unverified.** Nothing in this
+environment can hear it. Lengths, levels, variation and windowing are
+objective and tested; "natural" needs a listener.
+
+**Two long-standing notes in this repository were wrong, and are retired.**
+`assets/audio/footsteps/CREDITS.md` recorded that "real audio-editing
+tooling to trim the FILE itself isn't available in this environment" —
+several decisions were shaped by that, and `pip install imageio-ffmpeg
+py7zr` disproves it: a real ffmpeg 7 and a 7z reader, as plain wheels, no
+system packages. And the sand/rock gap that same file blamed on a failed
+search needed no new search at all: OpenGameArt's grass pack had a gravel
+folder in it, and Fantozzi's Footsteps — a pack an earlier session had
+already downloaded and correctly rejected *for grass* — has six real sand
+steps. What was missing was a second look, not a source.
+
+Also removed: `snow.mp3`, and `grass.ogg` (byte-identical to what now ships
+as `steps/grass_00.ogg`, which git records as the rename it is).
+
+Tests: `test_footstep_sound.gd` 40/40 (13 new), `test_interaction_sfx_
+player.gd` 25/25 (7 new), `test_world_creature_and_footstep_audio_wiring.gd`
+9/9, `test_world_footstep_wiring.gd` 7/7,
+`test_earth_chunk_manager_footprints.gd` 32/32.
