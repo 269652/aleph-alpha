@@ -23484,3 +23484,47 @@ Tests: `test_variant_sheet_grid.gd` 15/15, `test_building_lifecycle_sheet.gd`
 `test_illustrated_structure_sprite.gd` 22/22, `test_landmark_sheet.gd`
 18/18, `test_earth_chunk_manager_buildings.gd` 30/30,
 `test_village_renderer.gd` 78/78.
+
+
+## Village fields: ten tiles, sideways and downwards, and two fixes to make them yield (`concept/village_farms.md`, 2026-09-17)
+
+Asked for directly: *"The space the farmhouse utilizes should be maximized
+and capped to 10 tiles .. each farmhouse needs to be connected by a
+street... so in this case the farmhouses should be placed adjacent to the
+main street and the fields be placed sideways and downwards of it"*, after
+*"There's another village with just 3 houses, no plaza, no city hall, no
+farmers"*.
+
+✅ **The "no farmers" village, diagnosed by measurement.** Reproduced on a
+clean world at the reported coordinates: chunk (661,139), 3 dwellings, no
+plaza, no hall, no farmhouse — 70% of the ground a house would stand on is
+water, so 3 houses and no square is honest there. The farmhouse was not:
+`next_street_plot` returns nothing at all for a 3×2 farmhouse on that
+cramped site, while **sixty** origins elsewhere in the same chunk fit one,
+every one with a full field. The ground was never the problem; the siting
+rule was. `VillageLayout.outskirt_plot` now shares the sawmill's own scan —
+open ground, nearest the square, with a paved spur home — so a farmstead
+with no frontage still stands, still connected to a street.
+
+✅ **The field is directed, not a ring.** Out to the sides and downwards,
+never north (a village house fronts the street with its door south, so the
+ground above a farmhouse is the next row of buildings). Offered
+nearest-first out to `FIELD_REACH_TILES`, filtered by the caller, capped at
+`MAX_WORKED_CELLS` = 10 — the biggest field that actually fits.
+
+✅ **Two fixes that turned zero into 215.** A ten-tile field yielded nothing
+at first, and measuring said why: watering came LAST in the priority, so a
+farmer with any bare bed planted instead of saving a dying one, and with
+nothing past its threshold the farmer stood still. A three-tile field ran
+**108 replants, 72 waterings and zero harvests**. Now a visit waters the
+beds around it (one tile — you water a bed, and it runs to the beds beside
+it), watering comes before planting, and a farmer with nothing urgent tends
+the thirstiest bed. Measured wheat per work block afterwards: 3→170, 4→208,
+6→225, 8→215, 10→215, 14→215. About eight times the ambient drip, and
+saturating around six to eight tiles — which is why a second farmhouse, not
+a bigger field, is how a village grows output.
+
+Tests: `test_village_farm.gd` 34/34, `test_npc_marker_farming.gd` 16/16,
+`test_village_layout.gd` 56/56, `test_village_renderer.gd` 78/78,
+`test_npc_marker.gd` 36/36, `test_farmer_marker.gd` 7/7,
+`test_earth_chunk_manager_farm.gd` 7/7.

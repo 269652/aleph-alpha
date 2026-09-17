@@ -54,6 +54,9 @@ class StubFarmWorld:
 	var biome := "grassland"
 	var plots: Dictionary = {}  # Vector2i -> FarmPlot
 	var refuse_planting := false
+	var plant_calls := 0
+	var water_calls := 0
+	var harvest_calls := 0
 
 	func biome_at_global(_x: int, _y: int) -> String:
 		return biome
@@ -81,6 +84,7 @@ class StubFarmWorld:
 		if plot.state == "growing" or plot.state == "ready":
 			return false
 		plot.plant(crop_id, hash(tile))
+		plant_calls += 1
 		return true
 
 	func water_farm_plot_at_global(x: int, y: int) -> bool:
@@ -88,13 +92,17 @@ class StubFarmWorld:
 		if plot == null or plot.state != "growing":
 			return false
 		plot.water()
+		water_calls += 1
 		return true
 
 	func harvest_farm_plot_at_global(x: int, y: int) -> Dictionary:
 		var plot: FarmPlot = plots.get(Vector2i(x, y))
 		if plot == null:
 			return {"crop_id": "", "count": 0}
-		return plot.harvest()
+		var result := plot.harvest()
+		if int(result.get("count", 0)) > 0:
+			harvest_calls += 1
+		return result
 
 	func advance_plots(delta: float) -> void:
 		for plot in plots.values():
@@ -278,24 +286,84 @@ func test_a_farmer_with_no_field_still_earns_from_the_region():
 	)
 
 
+# -- one trip waters the beds around it -------------------------------------
+#
+# A field capped at ten tiles (asked for directly) is more ground than a
+# villager can walk in one wither grace: a circuit of ten costs about ten
+# times FarmerBehavior.WORK_SECONDS plus the walking, against a grace of
+# half a 20-60s growth time. Measured at zero wheat per work block before
+# this rule existed.
+#
+# The rule is not a bigger number, it is what a farmer actually does: you
+# water a BED, and the water runs to the beds beside it. One trip with a
+# can, or along a furrow, wets the ground around where you are standing --
+# it does not wet one plant.
+
+func test_tending_a_bed_waters_the_beds_beside_it():
+	_give_a_field()
+	assert_true(_run_until_planted())
+	# Everything thirsty but still alive, so the next real action is a
+	# watering trip rather than a replant.
+	for plot in world.plots.values():
+		# Past the watering margin, but with real headroom before the
+		# wither point -- a withered bed cannot be watered at all, which
+		# would measure the wrong thing.
+		plot.time_since_watered = plot.growth_time * FarmPlot.WATER_GRACE_FRACTION * 0.6
+	var before: Array = []
+	for tile in FIELD_TILES:
+		before.append((world.plots[tile] as FarmPlot).time_since_watered)
+	_run(8.0)
+	var refreshed := 0
+	for i in FIELD_TILES.size():
+		if (world.plots[FIELD_TILES[i]] as FarmPlot).time_since_watered < float(before[i]):
+			refreshed += 1
+	assert_gt(
+		refreshed, 1,
+		"one trip must refresh more than the single bed the farmer is kneeling on"
+	)
+
+
+func test_the_water_does_not_run_across_the_whole_field():
+	marker.field_cells = [Vector2i(0, 0), Vector2i(1, 0), Vector2i(5, 0)]
+	for cell in marker.field_cells:
+		world.till_and_plant_farm_plot_at_global(cell.x, cell.y, "wheat")
+	for plot in world.plots.values():
+		plot.time_since_watered = 5.0
+	marker._water_the_beds_around(Vector2i(0, 0))
+	assert_eq(
+		(world.plots[Vector2i(1, 0)] as FarmPlot).time_since_watered, 0.0,
+		"the bed beside the one being worked gets wet"
+	)
+	assert_eq(
+		(world.plots[Vector2i(5, 0)] as FarmPlot).time_since_watered, 5.0,
+		"the bed across the field does not -- a farmer waters where they stand"
+	)
+
+
 # -- how much ground one villager can actually keep -------------------------
 #
 # MEASURED, not asserted (CLAUDE.md: tuned values are tested functions or
-# test-pinned constants). A villager walks at NpcMarker.WALK_SPEED and
-# kneels for FarmerBehavior.WORK_SECONDS per plot, against a wither grace of
-# half a 20-60s growth time. Over one real work block
+# test-pinned constants). Over one real work block
 # (ChunkEcologyCatchup.SECONDS_PER_DAY / NpcSchedule.TIME_BLOCKS.size() =
-# 900s) the yield falls off a cliff, sharply and at a specific size:
+# 900s), wheat harvested against field size:
 #
-#     2 cells ->  34 wheat     5 cells ->   2 wheat
-#     3 cells ->  90 wheat     6 cells ->   0 wheat
-#     4 cells ->  90 wheat
+#     3 cells -> 170     8 cells -> 215
+#     4 cells -> 208    10 cells -> 215
+#     6 cells -> 225    14 cells -> 215
 #
-# Past four the circuit takes longer than the grace window, so plots wither
-# faster than they ripen and the farmer spends the whole block replanting
-# ground that dies again -- a bigger field yields NOTHING, not less. That
-# is why VillageFarm.MAX_WORKED_CELLS exists and why a village grows its
-# output by raising a second farmhouse rather than a bigger field.
+# Two things that curve shows. A ten-tile field -- the size asked for --
+# really does produce, at about eight times the ambient drip it replaces.
+# And the yield SATURATES around six to eight: past that the farmer cannot
+# walk further in the time the crop gives them, so the extra tiles are
+# ground they never reach. The cap is the limit that was asked for; the
+# saturation is the reason a village grows its output by raising a second
+# farmhouse rather than a bigger field.
+#
+# It took two real fixes to get here, both found by measuring rather than
+# reading. Watering used to come LAST in the priority, so a farmer with any
+# bare bed planted instead of saving a dying one; and with nothing past its
+# threshold the farmer stood still. A three-tile field ran 108 replants, 72
+# waterings and ZERO harvests that way.
 
 const WORK_BLOCK_SECONDS := 900.0
 
@@ -328,12 +396,21 @@ func test_a_field_of_the_capped_size_really_produces_over_a_work_block():
 	)
 
 
-func test_one_tile_more_than_the_cap_collapses_to_nothing():
-	var capped := _wheat_off_a_field(VillageFarm.MAX_WORKED_CELLS)
-	var over := _wheat_off_a_field(VillageFarm.MAX_WORKED_CELLS + 1)
-	assert_lt(
-		over, capped,
-		"past the cap the circuit outruns the wither grace: a bigger field yields LESS, not more"
+## The cap is a design limit that was asked for ("capped to 10 tiles"),
+## not a measured cliff any more -- watering the beds around the one being
+## worked is what removed the cliff. What still has to be measured is that
+## a field of that size is worth having: a farmhouse must beat the ambient
+## regional drip its villager would otherwise have lived on, or it is
+## decoration.
+func test_a_capped_field_is_worth_more_than_the_drip_it_replaces():
+	var NpcProduction = load("res://src/world/npc_production.gd")
+	var harvested := _wheat_off_a_field(VillageFarm.MAX_WORKED_CELLS)
+	var dripped: float = (
+		float(NpcProduction.PRODUCTION_RATE_PER_SECOND) * 0.6 * WORK_BLOCK_SECONDS
+	)
+	assert_gt(
+		harvested, dripped,
+		"a real field must out-earn the number it replaces, or nobody should build one"
 	)
 
 
@@ -342,3 +419,4 @@ func test_the_cap_is_at_least_what_a_farmhouse_is_sited_for():
 		VillageFarm.MAX_WORKED_CELLS, VillageFarm.MIN_FIELD_CELLS,
 		"a farmhouse raised on ground it may not then work would be a contradiction"
 	)
+
