@@ -25529,10 +25529,20 @@ over a 3-wide plot. Left alone deliberately: its plot is sized by
 `VillageLayout`'s civic slot and changing it would move buildings in
 existing villages. Named rather than silently changed.
 
-Tests: `test_structure_sheet_cells.gd` 14/14 (new),
+Tests: `test_structure_sheet_cells.gd` 16/16 (new),
 `test_variant_sheet_grid.gd` 21/21 (+6, including the real-sheet threshold
-pin), `test_illustrated_structure_sprite.gd` 39/39 (+3). Pre-existing
-failures on `main` that this branch does not touch: `test_building_catalog.
-gd`'s "lumberjack" occupation-pool failure, and a parse error in
-`test_earth_chunk_manager_far_chunk_advance.gd` (a test double's `advance`
-signature no longer matches its parent) — both identical to `origin/main`.
+pin), `test_illustrated_structure_sprite.gd` 39/39 (+3), and **456/458
+across the fourteen building, sheet, village-layout, village-growth,
+village-renderer and structure-art suites after merging `origin/main` in**.
+
+Both remaining failures are pre-existing on `main`, and each was proved so
+by reverting the single file this branch touches and watching it fail
+identically:
+
+| Failure | Proof it is not this branch's |
+| --- | --- |
+| `test_building_catalog.gd` — `test_every_occupation_has_a_pool_and_can_choose_more_than_one_house` ("lumberjack") | Fails with `src/gameplay/building_catalog.gd` checked out from `origin/main` |
+| `test_earth_chunk_manager_structure_art.gd` — `test_the_two_side_walls_move_in_by_the_same_distance` (6.34 vs 8.0) | Fails with `src/rendering/illustrated_structure_sprite.gd` checked out from `13ad8dd`, the copy `main` already carries; this branch does not touch the test, `earth_chunk_manager.gd` or `village_farm.gd` |
+
+The parse error in `test_earth_chunk_manager_far_chunk_advance.gd` reported
+earlier is gone — `main`'s own `956590a` fixed that test double.
