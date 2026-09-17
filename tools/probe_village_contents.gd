@@ -8,6 +8,7 @@ const EarthChunkGenerator = preload("res://src/world/earth_chunk_generator.gd")
 const GeoCoordinates = preload("res://src/world/geo_coordinates.gd")
 const SettlementGenerator = preload("res://src/world/settlement_generator.gd")
 const BiomeClassifier = preload("res://src/world/biome_classifier.gd")
+const EntityRef = preload("res://src/emergence/entity_ref.gd")
 
 func _initialize() -> void:
 	var EarthChunkManager = load("res://src/world/earth_chunk_manager.gd")
@@ -48,9 +49,15 @@ func _initialize() -> void:
 			# reported nobody farming even in the village that HAS a farmhouse,
 			# which only gets built when somebody does -- a broken measurement,
 			# not a finding.
-			var settlement := gen.generate_settlement(
-				coord, coord * size, size, 16, SettlementGenerator.POPULATION
-			)
+			# The population VillageRenderer would really have used, not the
+			# founding default. Households are persisted in user://, which
+			# this probe does not scrub, so a chunk loaded by an EARLIER run
+			# comes back with a real count -- and a roster generated at the
+			# default five then describes a village that was never spawned.
+			# That is what made (652,144) report a pond with "0 fishers".
+			var households: int = manager.household_count_for_settlement(EntityRef.for_settlement(coord))
+			var population: int = households if households > 0 else SettlementGenerator.POPULATION
+			var settlement := gen.generate_settlement(coord, coord * size, size, 16, population)
 			var occupations := {}
 			for npc in settlement.npcs:
 				occupations[npc.occupation] = int(occupations.get(npc.occupation, 0)) + 1
@@ -59,13 +66,13 @@ func _initialize() -> void:
 			# buildings, so buildings_in_chunk cannot see one. Counting the
 			# cells directly is the only reading that means anything.
 			var pond_cells := 0
-			var chunk = manager._loaded_chunks.get(coord)
-			if chunk != null:
-				for local in chunk.modifications:
-					if chunk.modifications[local] == "pond_water":
+			var loaded = manager._loaded_chunks.get(coord)
+			if loaded != null:
+				for local in loaded.modifications:
+					if loaded.modifications[local] == "pond_water":
 						pond_cells += 1
-			print("VILLAGE %s farmhouses=%d wanted_by=%d fishers=%d pond_cells=%d buildings=%s occupations=%s" % [
-				str(coord), int(counts.get("farmhouse", 0)), wants_farm,
+			print("VILLAGE %s pop=%d farmhouses=%d wanted_by=%d fishers=%d pond_cells=%d buildings=%s occupations=%s" % [
+				str(coord), population, int(counts.get("farmhouse", 0)), wants_farm,
 				int(occupations.get("fisher", 0)), pond_cells, str(counts), str(occupations)
 			])
 			manager._unload_chunk(coord)
