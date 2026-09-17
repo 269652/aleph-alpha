@@ -25007,7 +25007,18 @@ steps. What was missing was a second look, not a source.
 Also removed: `snow.mp3`, and `grass.ogg` (byte-identical to what now ships
 as `steps/grass_00.ogg`, which git records as the rename it is).
 
+**One of my own tests asked the wrong question**, and said so out loud
+rather than being loosened: it searched for a *playing* voice carrying one
+of the pool's clips, and failed on the last clip of the sand pool on every
+run. Correctly — in a tight loop all four voices are legitimately mid-step,
+so that search reports the lowest-indexed clip still sounding, not the one
+this step chose. `play_footstep` now returns the voice it started (like
+`play_mushroom_crush`), the tests read the clip off that, and the misleading
+helper is gone. Both then failed as intended when the choice was mutated
+back to a fixed index.
+
 Tests: `test_footstep_sound.gd` 40/40 (13 new), `test_interaction_sfx_
 player.gd` 25/25 (7 new), `test_world_creature_and_footstep_audio_wiring.gd`
 9/9, `test_world_footstep_wiring.gd` 7/7,
-`test_earth_chunk_manager_footprints.gd` 32/32.
+`test_earth_chunk_manager_footprints.gd` 32/32,
+`test_nature_soundscape_player.gd` 18/18.

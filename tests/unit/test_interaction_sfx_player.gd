@@ -74,9 +74,12 @@ func test_call_voices_attenuate_over_the_same_radius_calls_are_eligible_within()
 
 func test_play_footstep_loads_and_plays_the_surface_clip():
 	add_child_autofree(player.build())
-	player.play_footstep("forest")
-	assert_not_null(
-		_find_playing_step("forest"), "expected some footstep voice to be playing a forest step"
+	var voice := player.play_footstep("forest")
+	assert_not_null(voice, "expected play_footstep to start a voice")
+	assert_true(voice.playing)
+	assert_true(
+		FootstepSound.step_variants_for("forest").has(voice.stream.resource_path),
+		"a forest step played %s" % voice.stream.resource_path
 	)
 
 
@@ -159,8 +162,7 @@ func test_mushroom_crush_stops_itself_after_its_own_max_duration():
 
 func test_play_footstep_applies_the_surfaces_own_volume_adjustment():
 	add_child_autofree(player.build())
-	player.play_footstep("grass")
-	var voice := _find_playing_step("grass")
+	var voice := player.play_footstep("grass")
 	assert_not_null(voice)
 	assert_eq(voice.volume_db, FootstepSound.volume_db_for("grass"))
 
@@ -175,8 +177,7 @@ func test_play_footstep_does_not_inherit_a_previous_surfaces_quieter_volume():
 	add_child_autofree(player.build())
 	for i in InteractionSfxPlayer.FOOTSTEP_POOL_SIZE:
 		player.play_footstep("grass")
-	player.play_footstep("snow")
-	var voice := _find_playing_step("snow")
+	var voice := player.play_footstep("snow")
 	assert_not_null(voice)
 	assert_eq(voice.volume_db, FootstepSound.volume_db_for("snow"))
 	assert_ne(
@@ -195,16 +196,6 @@ func test_play_mushroom_crush_does_not_inherit_a_previous_surfaces_quieter_volum
 	var voice := _find_playing_voice(FootstepSound.MUSHROOM_CRUSH_CLIP_PATH)
 	assert_not_null(voice)
 	assert_eq(voice.volume_db, 0.0, "must not inherit grass's quieter volume from a reused pool voice")
-
-
-## Any of a surface's real steps -- which one is the pool's business, and
-## the point of the pool is that it is not always the same one.
-func _find_playing_step(surface: String) -> AudioStreamPlayer:
-	for path in FootstepSound.step_variants_for(surface):
-		var voice := _find_playing_voice(path)
-		if voice != null:
-			return voice
-	return null
 
 
 func _find_playing_voice(expected_clip_path: String) -> AudioStreamPlayer:
@@ -334,12 +325,18 @@ func test_a_recycled_voice_is_not_cut_short_by_the_previous_steps_window():
 ## The whole reason the pools exist: consecutive steps on the SAME ground
 ## must not be the same recording over and over. Reported live: "they sound
 ## weak and not natural".
+##
+## Reads the clip off the voice play_footstep RETURNS, not off whichever
+## voice is found playing. An earlier version of this searched the pool for
+## a playing voice and failed consistently on one variant -- correctly: in a
+## tight loop all four voices are legitimately mid-step, so that search
+## reported the lowest-indexed clip still sounding rather than the one this
+## step took, and the last clip in a pool could never win it.
 func test_consecutive_steps_on_one_surface_do_not_all_play_the_same_recording():
 	add_child_autofree(player.build())
 	var heard: Dictionary = {}
 	for _step in 60:
-		player.play_footstep("grass")
-		var voice := _find_playing_step("grass")
+		var voice := player.play_footstep("grass")
 		assert_not_null(voice, "a grass step played nothing")
 		heard[voice.stream.resource_path] = true
 	assert_gt(
@@ -354,8 +351,7 @@ func test_enough_steps_reach_every_recording_in_the_pool():
 	add_child_autofree(player.build())
 	var heard: Dictionary = {}
 	for _step in 400:
-		player.play_footstep("sand")
-		heard[_find_playing_step("sand").stream.resource_path] = true
+		heard[player.play_footstep("sand").stream.resource_path] = true
 	assert_eq(
 		heard.size(), FootstepSound.step_variants_for("sand").size(),
 		"some of the sand pool never plays"

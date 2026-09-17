@@ -82,8 +82,12 @@ func build() -> Node:
 ## Passes `surface` through as well as the chosen clip: it is what marks
 ## this as a footstep rather than a one-off like the mushroom crush, and so
 ## what earns it the per-step pitch variation.
-func play_footstep(surface: String) -> void:
-	_play_footstep_clip(
+## Returns the voice it started, like play_mushroom_crush -- which clip a
+## step took is otherwise unanswerable from outside, since several voices
+## are legitimately mid-step at any moment and none of them is "the
+## current one".
+func play_footstep(surface: String) -> AudioStreamPlayer:
+	return _play_footstep_clip(
 		FootstepSound.step_clip_path_for(surface, randf()),
 		FootstepSound.volume_db_for(surface),
 		surface

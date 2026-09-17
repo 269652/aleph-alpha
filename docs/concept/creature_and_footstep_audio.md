@@ -269,6 +269,14 @@ no longer true: `pip install imageio-ffmpeg py7zr` brings a real ffmpeg and
 a 7z reader as plain wheels, no system packages. Trimming, cutting,
 transcoding and loudness measurement are all available to a future pass.
 
+`play_footstep` returns the voice it started, like `play_mushroom_crush`.
+That is not cosmetic: which clip a step took is otherwise unanswerable from
+outside, because several voices are legitimately mid-step at any moment and
+none of them is "the current one". The first version of the pool-coverage
+test searched for a playing voice instead and failed consistently on the
+last clip of a pool -- correctly, since that search reports the
+lowest-indexed clip still sounding rather than the one this step chose.
+
 TDD: `test_footstep_sound.gd` 40/40 (13 new, covering pool depth, every
 variant really loading, every variant really being one step long, the roll
 reaching the whole pool at both extremes, the measured gains matching the
