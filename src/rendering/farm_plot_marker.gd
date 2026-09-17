@@ -200,6 +200,11 @@ func is_showing_soil() -> bool:
 	return _soil != null and _soil.visible
 
 
+## Whether this bed is drawing its full tile of tilled earth.
+func is_showing_tilled_ground() -> bool:
+	return _soil_ground != null and _soil_ground.visible
+
+
 ## The full tile of tilled earth this bed stands on.
 ##
 ## Before this, the only soil a bed drew was ProceduralSoilSprite's small
@@ -265,7 +270,21 @@ func _redraw() -> void:
 	# Against what the bed was SOWN with, not plot.crop_id: harvesting
 	# clears the crop, and a bare mound appearing the moment the wheat came
 	# off is the same blob back again.
-	_soil.visible = _sown_crop_id != WHEAT_CROP_ID
+	# Both of them, and for the same reason. Reported once about
+	# ProceduralSoilSprite's MOUND ("what's the round procedural dark blob?
+	# ... keep just the wheat"), then again once a full tile of soil.png was
+	# put under every bed ("now there are brown blobs instead of the planted
+	# wheat") -- that sheet's cells carry a soft dark vignette, so a tile of
+	# it under wheat reads as a blob rather than as ground. A wheat bed is
+	# wheat; a root crop keeps the earth its root grows in.
+	#
+	# Against what the bed was SOWN with, not plot.crop_id: harvesting clears
+	# the crop, and bare ground appearing the moment the wheat comes off is
+	# the same blob back again.
+	var is_wheat := _sown_crop_id == WHEAT_CROP_ID
+	_soil.visible = not is_wheat
+	if _soil_ground != null:
+		_soil_ground.visible = not is_wheat
 	if plot.crop_id == WHEAT_CROP_ID:
 		_leaves.visible = false
 		_redraw_wheat()

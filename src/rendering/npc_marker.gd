@@ -173,6 +173,24 @@ var _quarry_kind := ""
 ## had.
 var field_cells: Array[Vector2i] = []
 
+## The sentinel farmhouse_cell carries when this villager has none -- a
+## village that has not raised one yet, or a farmer there was no room for.
+## Not Vector2i.ZERO: that is a real world tile.
+const NO_FARMHOUSE := Vector2i(-2147483648, -2147483648)
+
+## The GLOBAL tile of the farmhouse whose field this is, or NO_FARMHOUSE.
+## Assigned by VillageRenderer alongside field_cells, which is the only
+## thing that knows which farmhouse is whose.
+##
+## What a harvest needs, and what it did not have. Asked for directly:
+## *"make sure wheat grows and is harvested which increases farmhouse stock
+## which gets transported to city stock"*. The middle of that chain did not
+## exist -- a villager's harvest went straight into the village market, so
+## the farmhouse they grew it for never held a grain of it and nothing was
+## ever carried anywhere. See _work_field_cell and
+## haul_farmhouse_stock_to_village.
+var farmhouse_cell: Vector2i = NO_FARMHOUSE
+
 ## This villager's farm work, or null for anyone who does not farm -- the
 ## same null-until-wired shape `_forager` above uses, built by
 ## setup_economy where the occupation is first read. The very same
@@ -786,6 +804,13 @@ func _step_farm(delta: float, is_working: bool):
 			_farmer.abort()
 		_field_index = -1
 		_on_real_field = false
+		# ...and what the farmhouse is holding goes to the village. The end
+		# of the work block is the moment a day's cut crop is carried in,
+		# and it is the one point reached every day whatever the crop cycle
+		# is doing -- a field with beds in it always has SOMETHING worth a
+		# visit (VillageFarm.next_action's thirstiest-bed fallback), so
+		# "nothing left to do" never reliably arrives.
+		haul_farmhouse_stock_to_village()
 		return null
 	# A villager with a farmhouse has real work whether or not any single
 	# plot wants attention this instant, so the regional drip is off for
@@ -829,8 +854,8 @@ func _work_field_cell() -> void:
 			var result: Dictionary = _world.harvest_farm_plot_at_global(cell.x, cell.y)
 			var count: int = int(result.get("count", 0))
 			var crop_id: String = String(result.get("crop_id", _field_crop))
-			if count > 0 and economy != null:
-				economy.record_real_harvest(crop_id, count)
+			if count > 0:
+				_store_harvest(crop_id, count)
 		"plant":
 			if _world.has_method("till_and_plant_farm_plot_at_global"):
 				_world.till_and_plant_farm_plot_at_global(cell.x, cell.y, _field_crop)
@@ -838,6 +863,53 @@ func _work_field_cell() -> void:
 			if _world.has_method("water_farm_plot_at_global"):
 				_world.water_farm_plot_at_global(cell.x, cell.y)
 	_water_the_beds_around(cell)
+
+
+## Where a cut crop goes: into the FARMHOUSE this villager works for, which
+## is what the village later carries to market (see
+## haul_farmhouse_stock_to_village).
+##
+## A farmer with no farmhouse -- a village that has not raised one, or one
+## there was no room for -- keeps the behaviour they always had and sells it
+## where they stand. A harvest that had nowhere to go would otherwise simply
+## vanish, which is worse than the missing link this closes.
+func _store_harvest(crop_id: String, count: int) -> void:
+	if (
+		farmhouse_cell != NO_FARMHOUSE
+		and _world != null
+		and _world.has_method("deposit_to_structure_at")
+	):
+		_world.deposit_to_structure_at(farmhouse_cell.x, farmhouse_cell.y, crop_id, count)
+		return
+	if economy != null:
+		economy.record_real_harvest(crop_id, count)
+
+
+## Carries what the farmhouse is holding into the village's own stock -- the
+## other half of the chain: grown in the field, stored at the farmhouse,
+## carried to the village.
+##
+## Credited through the SAME record_real_harvest a farmer without a
+## farmhouse uses, so the crop reaches the market and is paid for exactly
+## once, at the moment it actually arrives rather than at the scythe.
+##
+## All-or-nothing per crop, mirroring withdraw_from_structure_at itself: the
+## villager either carries what is there or has nothing to carry. A no-op
+## for a villager with no farmhouse, an empty one, or a world that cannot
+## answer -- the same fail-open shape every other world hook here uses.
+func haul_farmhouse_stock_to_village() -> void:
+	if farmhouse_cell == NO_FARMHOUSE or economy == null or _world == null:
+		return
+	if not _world.has_method("withdraw_from_structure_at"):
+		return
+	var crop := _field_crop if _field_crop != "" else VillageFarm.crop_for(identity.occupation)
+	if crop == "":
+		return
+	var carried := 0
+	while _world.withdraw_from_structure_at(farmhouse_cell.x, farmhouse_cell.y, crop, 1):
+		carried += 1
+	if carried > 0:
+		economy.record_real_harvest(crop, carried)
 
 
 ## Whatever the farmer just did on `cell`, the beds around it get wet too.

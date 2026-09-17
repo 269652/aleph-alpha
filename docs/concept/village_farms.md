@@ -282,7 +282,18 @@ rails/posts and plant_fibre (4) lashing them".
   is the same permanence a house floor has; a bed nobody ever returns to
   does not regrow its meadow.
 
-- **A wheat bed shows no soil mound.** Reported with the beds circled:
+- **A wheat bed shows no ground of its own at all.** Reported twice, about
+  two different sprites. First `ProceduralSoilSprite`'s MOUND (*"what's the
+  round procedural dark blob? Can you remove it and keep just the wheat"*);
+  then, once a full tile of `soil.png` was put under every bed to stop wheat
+  rising out of bare meadow, *"now there are brown blobs instead of the
+  planted wheat ... remove the blobs"* — that sheet's cells carry a soft dark
+  vignette, so a tile of it under a bed reads as a blob rather than as
+  ground. Both are hidden for wheat and both kept for a root crop, whose
+  root really is in that earth. This **reverses** the tilled-tile pass on
+  the player's own later instruction, not as a correction of it.
+
+- **(Superseded) A wheat bed shows no soil mound.** Reported with the beds circled:
   *"what's the round procedural dark blob? Can you remove it and keep just
   the wheat"*. `ProceduralSoilSprite`'s mound is a ROOT crop's own ground —
   the root grows inside it, and pulling one leaves the crater its DISTURBED
@@ -464,6 +475,39 @@ sheet rather than extra columns because the existing four columns are
 `test_the_four_rails_are_four_different_pictures` — widening that sheet
 would rewrite art already on disk. The generation prompt lives in
 [../art/ai_sprite_prompts.md](../art/ai_sprite_prompts.md) §13.
+
+### Grown, stored, carried: where a harvest actually goes
+
+Asked for directly: *"make sure wheat grows and is harvested which increases
+farmhouse stock which gets transported to city stock"*. The middle of that
+chain did not exist. A villager's harvest went straight into the village
+market, so the farmhouse they grew it for never held a grain of it and
+nothing was ever carried anywhere.
+
+1. **Grown** in the beds — `FarmPlot` on a real world tick, unchanged.
+2. **Cut** by the villager on their circuit (`NpcMarker._work_field_cell`).
+3. **Stored at the farmhouse** — `_store_harvest` deposits into that
+   building's own `StructureStock` (`EarthChunkManager.deposit_to_structure_at`),
+   the same per-building stock the placeable Farm and the Sägewerk already
+   use. The villager knows *which* farmhouse because `VillageRenderer` hands
+   `farmhouse_cell` out with `field_cells` — it is the only thing that knows
+   whose is whose.
+4. **Carried to the village** at the end of the work block
+   (`haul_farmhouse_stock_to_village`, from `_step_farm`'s off-the-clock
+   branch). The whole crop moves, and reaches the market through the same
+   `record_real_harvest` a farmer without a farmhouse uses — so it is
+   stocked and paid **once**, when it arrives rather than when it is cut.
+
+Two edges, both deliberate:
+
+- **A farmer with no farmhouse** — a village that has not raised one, or one
+  there was no room for — sells where they stand, exactly as before. A
+  harvest with nowhere to go would otherwise vanish, which is worse than the
+  missing link this closes.
+- **The end of the work block is the moment**, not "when there is nothing
+  left to do". A field with beds in it always has *something* worth a visit
+  (`next_action`'s thirstiest-bed fallback), so an idle moment never
+  reliably arrives; the end of the block does, every day.
 
 ### What a field costs to keep
 

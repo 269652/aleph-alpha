@@ -108,6 +108,27 @@ class StubFarmWorld:
 		for plot in plots.values():
 			plot.advance(delta)
 
+	## A building's own stock, keyed by its tile -- the same two calls
+	## EarthChunkManager really offers (deposit_to_structure_at /
+	## withdraw_from_structure_at), stubbed over a plain dictionary.
+	var structure_stock: Dictionary = {}  # Vector2i -> {item_id: count}
+
+	func deposit_to_structure_at(x: int, y: int, item_id: String, count: int) -> void:
+		var tile := Vector2i(x, y)
+		var stock: Dictionary = structure_stock.get(tile, {})
+		stock[item_id] = int(stock.get(item_id, 0)) + count
+		structure_stock[tile] = stock
+
+	func withdraw_from_structure_at(x: int, y: int, item_id: String, count: int) -> bool:
+		var stock: Dictionary = structure_stock.get(Vector2i(x, y), {})
+		if int(stock.get(item_id, 0)) < count:
+			return false
+		stock[item_id] = int(stock[item_id]) - count
+		return true
+
+	func stock_at(tile: Vector2i, item_id: String) -> int:
+		return int((structure_stock.get(tile, {}) as Dictionary).get(item_id, 0))
+
 
 var marker: NpcMarker
 var market: VillageMarket
@@ -422,3 +443,131 @@ func test_the_cap_is_exactly_the_field_a_farmhouse_is_sited_for():
 			"a farmhouse raised for ground it may not then work would be a contradiction"
 		)
 
+
+
+# -- the harvest goes to the farmhouse, and the farmhouse to the village ----
+#
+# Asked for directly: "make sure wheat grows and is harvested which increases
+# farmhouse stock which gets transported to city stock". The middle of that
+# chain did not exist -- a villager's harvest was credited straight to the
+# village market, so a farmhouse never held anything and nothing was ever
+# carried anywhere.
+
+
+## What the village is holding of one good -- VillageMarket keeps its stock
+## in a plain dictionary, so this reads it the same way the market itself
+## does rather than inventing an accessor for a test.
+func _market_stock(item_id: String) -> float:
+	return float(market.stock.get(item_id, 0.0))
+
+
+func _ready_bed(marker_under_test: NpcMarker, cell: Vector2i) -> void:
+	world.till_and_plant_farm_plot_at_global(cell.x, cell.y, "wheat")
+	var plot: FarmPlot = world.plots[cell]
+	# Watered as it grows: one jump of a whole growth_time outruns the
+	# wither grace and kills the bed instead of ripening it.
+	var step := plot.growth_time * 0.2
+	for _i in 12:
+		if plot.state != "growing":
+			break
+		plot.water()
+		plot.advance(step)
+	assert_eq(plot.state, "ready", "precondition: a real bed really ripened")
+
+
+func test_a_harvest_fills_the_farmhouses_own_stock():
+	var farmhouse := Vector2i(10, 10)
+	var bed := Vector2i(11, 12)
+	marker.farmhouse_cell = farmhouse
+	marker.field_cells = [bed]
+	_ready_bed(marker, bed)
+
+	marker._field_index = 0
+	marker._work_field_cell()
+
+	assert_gt(
+		world.stock_at(farmhouse, "wheat"), 0,
+		"the wheat went somewhere other than the farmhouse that grew it"
+	)
+
+
+## And it is not ALSO sold on the spot -- a harvest counted twice is a
+## faucet, and the whole point of the farmhouse holding it is that the
+## village gets it when it is carried, not when it is cut.
+func test_a_harvest_is_not_sold_before_it_is_carried():
+	var farmhouse := Vector2i(10, 10)
+	var bed := Vector2i(11, 12)
+	marker.farmhouse_cell = farmhouse
+	marker.field_cells = [bed]
+	_ready_bed(marker, bed)
+
+	marker._field_index = 0
+	marker._work_field_cell()
+
+	assert_eq(_market_stock("wheat"), 0.0, "the village was credited at the scythe")
+
+
+func test_the_farmhouse_stock_is_carried_into_the_villages_own_stock():
+	var farmhouse := Vector2i(10, 10)
+	var bed := Vector2i(11, 12)
+	marker.farmhouse_cell = farmhouse
+	marker.field_cells = [bed]
+	_ready_bed(marker, bed)
+	marker._field_index = 0
+	marker._work_field_cell()
+	var grown: int = world.stock_at(farmhouse, "wheat")
+
+	marker.haul_farmhouse_stock_to_village()
+
+	assert_eq(world.stock_at(farmhouse, "wheat"), 0, "the farmhouse kept it")
+	assert_almost_eq(_market_stock("wheat"), float(grown), 0.001, "the village never got it")
+
+
+## A farmer whose village has no farmhouse yet keeps the behaviour they
+## always had, rather than growing wheat into nowhere.
+func test_a_farmer_with_no_farmhouse_still_sells_what_they_grow():
+	var bed := Vector2i(11, 12)
+	marker.farmhouse_cell = NpcMarker.NO_FARMHOUSE
+	marker.field_cells = [bed]
+	_ready_bed(marker, bed)
+
+	marker._field_index = 0
+	marker._work_field_cell()
+
+	assert_gt(_market_stock("wheat"), 0.0, "a harvest with nowhere to store it vanished")
+
+
+func test_hauling_an_empty_farmhouse_is_a_no_op():
+	marker.farmhouse_cell = Vector2i(10, 10)
+	marker.haul_farmhouse_stock_to_village()
+	assert_eq(_market_stock("wheat"), 0.0)
+
+
+## The wiring: a villager really does carry it in. The end of the work block
+## is the moment -- the field is dropped there anyway, and it is the one
+## point that is reached every day whatever the crop cycle is doing (a field
+## with beds in it always has SOMETHING worth a visit, so "nothing to do" is
+## not a moment that reliably arrives).
+func test_a_farmer_carries_the_farmhouse_stock_in_at_the_end_of_the_work_block():
+	var farmhouse := Vector2i(10, 10)
+	marker.farmhouse_cell = farmhouse
+	marker.field_cells = [Vector2i(11, 12)]
+	world.deposit_to_structure_at(farmhouse.x, farmhouse.y, "wheat", 4)
+
+	marker._step_farm(0.1, false)
+
+	assert_eq(world.stock_at(farmhouse, "wheat"), 0, "the farmhouse kept it overnight")
+	assert_almost_eq(_market_stock("wheat"), 4.0, 0.001, "the village never got it")
+
+
+## And nothing is carried while the villager is still out working -- the
+## crop reaches the village when the day's work ends, not mid-row.
+func test_nothing_is_carried_in_while_the_block_is_still_running():
+	var farmhouse := Vector2i(10, 10)
+	marker.farmhouse_cell = farmhouse
+	marker.field_cells = [Vector2i(11, 12)]
+	world.deposit_to_structure_at(farmhouse.x, farmhouse.y, "wheat", 4)
+
+	marker._step_farm(0.1, true)
+
+	assert_eq(world.stock_at(farmhouse, "wheat"), 4, "it left the farmhouse mid-shift")

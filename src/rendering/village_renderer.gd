@@ -297,7 +297,7 @@ func spawn_village(
 		var work_tag: String = NpcIdentity.WORK_LOCATION_BY_OCCUPATION.get(npcs[i].occupation, "")
 		if work_tag != "" and not settlement.landmarks.has(work_tag) and workspot != null:
 			spawned.append(_build_landmark(work_tag, workspot, parent, true))
-	_hand_out_farm_fields(npcs, npc_markers, farm_fields)
+	_hand_out_farm_fields(npcs, npc_markers, farm_fields, chunk_coord, chunk_size)
 	return spawned
 
 
@@ -617,7 +617,9 @@ func _fenced_farm_fields(chunk_coord: Vector2i, chunk_size: int, world) -> Dicti
 ## A village with more farmers than farmhouses (nowhere left with room for
 ## another field) leaves the rest on the regional drip they always had,
 ## which is the honest outcome rather than two villagers tending one field.
-func _hand_out_farm_fields(npcs: Array, npc_markers: Array, fields: Dictionary) -> void:
+func _hand_out_farm_fields(
+	npcs: Array, npc_markers: Array, fields: Dictionary, chunk_coord: Vector2i, chunk_size: int
+) -> void:
 	if fields.is_empty() or npc_markers.size() < npcs.size():
 		return
 	var origins: Array = fields.keys()
@@ -627,7 +629,14 @@ func _hand_out_farm_fields(npcs: Array, npc_markers: Array, fields: Dictionary) 
 			continue
 		if next_farmhouse >= origins.size():
 			return
-		npc_markers[i].field_cells = fields[origins[next_farmhouse]]
+		var origin: Vector2i = origins[next_farmhouse]
+		npc_markers[i].field_cells = fields[origin]
+		# WHICH farmhouse, not just which ground: a harvest fills the
+		# farmhouse this villager works for, and the village gets it when
+		# they carry it in (NpcMarker._store_harvest /
+		# haul_farmhouse_stock_to_village). Global, like field_cells --
+		# `fields` is keyed by the LOCAL origin _farmhouse_origins returns.
+		npc_markers[i].farmhouse_cell = chunk_coord * chunk_size + origin
 		next_farmhouse += 1
 
 

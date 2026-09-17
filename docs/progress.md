@@ -24085,6 +24085,40 @@ Skipped at the user's request: the wider fence/village regression sweep.
 test_illustrated_structure_sprite is 36/36 on this change; the other six
 suites were green on the commit before it and were not re-run.
 
+### The harvest reaches the farmhouse, and the farmhouse reaches the village (2026-09-17)
+
+*"Make sure wheat grows and is harvested which increases farmhouse stock
+which gets transported to city stock."* Grown and cut were real; the middle
+was not. A villager's harvest was credited straight to the village market,
+so the farmhouse never held anything and nothing was ever carried.
+
+`NpcMarker._store_harvest` deposits a cut crop into the farmhouse's own
+`StructureStock` — the same per-building stock the placeable Farm and the
+Sägewerk already use — and `haul_farmhouse_stock_to_village` moves the whole
+lot into the market at the end of the work block. It reaches the market
+through the same `record_real_harvest` a farmer without a farmhouse uses, so
+it is stocked and paid ONCE, on arrival rather than at the scythe;
+`test_a_harvest_is_not_sold_before_it_is_carried` is the pin that keeps the
+new link from becoming a second faucet. `VillageRenderer` hands
+`farmhouse_cell` out beside `field_cells`, being the only thing that knows
+whose farmhouse is whose.
+
+The end of the work block is the trigger, and the first choice was wrong: I
+went for `_step_farm`'s "nothing left to do" branch, which never reliably
+fires — a field with beds in it always has something worth a visit
+(`next_action`'s thirstiest-bed fallback). The off-the-clock branch is
+reached every day whatever the crop cycle is doing.
+
+**And the blobs, again.** A full tile of `soil.png` had been put under every
+bed to stop wheat rising out of bare meadow; its cells carry a soft dark
+vignette, so under a bed it reads as a brown blob — the same complaint the
+mound got, from a different sprite. Hidden for wheat, kept for root crops.
+That REVERSES `test_a_wheat_bed_still_stands_on_tilled_earth` on the
+player's own later instruction, and the test now says so in place of
+quietly flipping.
+
+232/232 across the farming, market and village suites.
+
 Honest gaps, three real:
 
 🚧 **The gate is a real hole.** An animal that wanders into the gate cell is
