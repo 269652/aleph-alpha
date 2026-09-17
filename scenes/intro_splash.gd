@@ -22,8 +22,10 @@ const IntroSplashSequencer = preload("res://src/rendering/intro_splash_sequencer
 ## IntroSplashSheet cropped each frame to its OWN content and the real size
 ## varied by a pixel or two frame to frame. The eleventh pass (docs/concept/
 ## intro_splash.md) replaced that with ONE fixed crop window
-## (IntroSplashSheet._FRAME_WIDTH/_FRAME_HEIGHT, 240x183) applied identically
-## to every frame -- this constant went stale the moment that shipped, and
+## (IntroSplashSheet._FRAME_WIDTH/_FRAME_HEIGHT, 163x149 against today's
+## sheet, 240x183 against the one that pass was written for) applied
+## identically to every frame -- this constant went stale the moment that
+## shipped, and
 ## the mismatch is what a twelfth pass's "not stabilized again" report
 ## traced back to (see that pass's own note on DISPLAY_SCALE below).
 ## test_native_frame_size_matches_the_sheets_own_real_fixed_crop_size pins
@@ -54,7 +56,28 @@ const _NATIVE_FRAME_SIZE := Vector2(IntroSplashSheet._FRAME_WIDTH, IntroSplashSh
 ## structurally harmless going forward: at a true 1:1 scale there is no
 ## scale factor left for a mismatched reference size to distort into a
 ## non-integer, shimmer-inducing one.
-const DISPLAY_SCALE := 1
+## The THIRD art-replacement pass (2026-09-17, "bump resolution") sets this
+## to 2. History, because the number keeps moving under the same ask:
+##
+## - The twelfth pass set it to 1 on an explicit ask -- "still too big..
+##   make it native size / resolution" -- when "native" meant a 243x162
+##   frame.
+## - The second replacement's frames were 79x122, so 1:1 would have been a
+##   79px thumbnail; 3 restored the width that ask actually shipped
+##   (79 * 3 = 237 against 243). Chosen by the player with the trade spelled
+##   out.
+## - This sheet's frames are 163x149 -- twice the size again. NO whole
+##   number lands near 243 any more: 1 gives 163, 2 gives 326, and 1.5 would
+##   give 244.5 at the cost of the fractional-scale shimmer the eighth and
+##   twelfth passes both fixed. That property is not worth trading for 1.5px
+##   of width, so the choice is between 163 and 326.
+##
+## 2 is the one that does not go UNDER what the player accepted (237): 163
+## would be smaller than the size that ask settled on, and "too big" was
+## always the complaint being answered, never "too small". Flagged for the
+## player rather than treated as settled -- it is their call, and 1 is a
+## one-line change.
+const DISPLAY_SCALE := 2
 const DISPLAY_SIZE := _NATIVE_FRAME_SIZE * DISPLAY_SCALE
 
 var _frames: Array[ImageTexture] = []

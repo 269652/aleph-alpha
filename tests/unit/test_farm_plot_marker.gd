@@ -10,6 +10,9 @@ const FarmPlotMarker = preload("res://src/rendering/farm_plot_marker.gd")
 const FarmPlot = preload("res://src/gameplay/farm_plot.gd")
 const IllustratedGrassPatch = preload("res://src/rendering/illustrated_grass_patch.gd")
 const IllustratedWheatPatch = preload("res://src/rendering/illustrated_wheat_patch.gd")
+## The bed's soil has to cover exactly one REAL world tile, not a number of
+## its own -- see test_a_bed_draws_a_full_tile_of_tilled_earth.
+const TerrainRenderer = preload("res://src/rendering/terrain_renderer.gd")
 
 var marker: FarmPlotMarker
 
@@ -203,3 +206,142 @@ func test_a_withered_wheat_plot_still_renders_blades_tinted_the_same_withered_co
 	marker.advance(marker.plot.growth_time * FarmPlot.WATER_GRACE_FRACTION + 0.01)
 	assert_eq(marker.plot.state, "withered")
 	assert_true(marker.is_rendering_bending_wheat())
+
+
+# -- no bed draws a mound any more -----------------------------------------
+#
+# Reported with the beds circled, twice. First: "what's the round procedural
+# dark blob? Can you remove it and keep just the wheat please" -- answered
+# then by hiding ProceduralSoilSprite's mound for WHEAT only, since under a
+# root crop the mound was the crop's own ground.
+#
+# Then: "remove the brown mound blob we have illustrated soil now". Real
+# illustrated tilled earth (soil.png, nine variants) now covers the whole
+# tile under every bed, so the mound has nothing left to do -- and a herb
+# bed, which is not wheat, was still drawing one with no crop art over it:
+# a brown blob on brown ground, which is exactly what the screenshot shows.
+# The mound is gone entirely rather than hidden for a second crop id.
+
+
+func test_no_crop_draws_a_mound_any_more():
+	add_child_autofree(marker)
+	for crop_id in ["wheat", "herb", "carrot", "potato"]:
+		marker.till_and_plant(crop_id, 42)
+		assert_false(
+			marker.is_showing_soil(),
+			"%s stands on illustrated tilled earth, not on a blob" % crop_id
+		)
+
+
+func test_a_harvested_bed_draws_no_mound_either():
+	add_child_autofree(marker)
+	marker.till_and_plant("carrot", 7)
+	_grow_to_ready(marker)
+	marker.harvest()
+	assert_eq(marker.plot.state, "empty")
+	assert_false(marker.is_showing_soil())
+
+
+## Removing the mound must not take the illustrated tilled earth with it --
+## a root crop still stands on real ground.
+##
+## Wheat is deliberately NOT the case asserted here: the soil sheet's own
+## cells carry a soft dark vignette, so a tile of it under wheat reads as a
+## blob too, and it is hidden there on its own report ("now there are brown
+## blobs instead of the planted wheat"). Two different browns, two reports,
+## two rules.
+func test_a_root_crop_still_stands_on_real_tilled_earth():
+	add_child_autofree(marker)
+	marker.till_and_plant("carrot", 7)
+	assert_not_null(marker.soil_ground(), "a root crop grows in real earth")
+	assert_true(marker.soil_ground().visible)
+	assert_false(marker.is_showing_soil(), "and still draws no mound")
+
+
+
+# -- the tilled ground a bed stands on -------------------------------------
+#
+# See docs/concept/village_farms.md, "A bed stands on real tilled earth".
+# The mound above is a ROOT crop's own ground and is hidden for wheat; that
+# left a wheat bed standing on the untouched meadow it was tilled out of.
+# Nothing ever drew the ground a bed IS. soil.png does.
+
+
+func test_a_bed_draws_a_full_tile_of_tilled_earth():
+	add_child_autofree(marker)
+	var ground: Sprite2D = marker.soil_ground()
+	assert_not_null(ground, "a bed should stand on drawn soil")
+	assert_not_null(ground.texture, "with real art on it")
+	assert_true(ground.visible)
+	var drawn := ground.texture.get_size() * ground.scale
+	assert_almost_eq(
+		drawn.x, float(TerrainRenderer.TILE_SIZE), 0.01, "soil should cover exactly one tile across"
+	)
+	assert_almost_eq(drawn.y, float(TerrainRenderer.TILE_SIZE), 0.01, "and one tile down")
+
+
+## Under the mound and under the crop, always -- it is the ground, so
+## anything a bed grows has to sit on top of it.
+func test_the_tilled_earth_draws_beneath_the_mound_and_the_crop():
+	add_child_autofree(marker)
+	var ground: Sprite2D = marker.soil_ground()
+	assert_lt(ground.z_index, FarmPlotMarker.MOUND_Z_INDEX, "the mound sits ON the soil")
+	assert_lt(ground.z_index, FarmPlotMarker.LEAVES_Z_INDEX, "and so does the crop")
+
+
+## This asserted the OPPOSITE until 2026-09-17, and the reversal is the
+## player's, not a correction: the tilled tile was added because hiding the
+## mound left wheat rising out of bare meadow, and the answer to that was
+## *"now there are brown blobs instead of the planted wheat ... remove the
+## blobs"*. soil.png's cells carry a soft dark vignette, so a tile of it
+## under a bed reads as a brown blob rather than as ground -- which is the
+## same complaint the mound got, from a different sprite.
+##
+## A root crop keeps both (see the tests above): its root really is in that
+## earth, and nothing was ever reported about those.
+func test_a_wheat_bed_stands_on_neither_the_mound_nor_the_tilled_tile():
+	add_child_autofree(marker)
+	marker.till_and_plant(FarmPlotMarker.WHEAT_CROP_ID, 42)
+
+	assert_false(marker.is_showing_soil(), "the mound stays gone for wheat")
+	assert_false(marker.soil_ground().visible, "and so does the tile under it")
+
+
+## Seeded from the bed's own tile, so a 3x2 bed is not six copies of one
+## tile, and any given bed looks the same every time it is drawn -- the same
+## determinism convention every other seeded art pick here follows.
+func test_neighbouring_beds_differ_while_each_bed_stays_itself():
+	var variants := {}
+	for x in 3:
+		for y in 2:
+			var tile := Vector2i(x, y)
+			var first: int = FarmPlotMarker.soil_variant_for(tile)
+			assert_eq(first, FarmPlotMarker.soil_variant_for(tile), "tile %s must be stable" % tile)
+			variants[first] = true
+	assert_gt(variants.size(), 1, "a whole bed of one variant is a tiled-looking bed")
+
+
+## Reported again once a full-tile tilled ground was added under every bed:
+## "now there are brown blobs instead of the planted wheat". The soil sheet's
+## cells carry a soft dark vignette, so a tile of it under a wheat bed reads
+## as a brown blob rather than as ground -- the same complaint the mound got,
+## from a different sprite. Same answer: a wheat bed is wheat.
+func test_a_wheat_bed_shows_no_tilled_ground_either():
+	add_child_autofree(marker)
+	marker.till_and_plant("wheat", 42)
+	assert_false(marker.is_showing_tilled_ground(), "a wheat bed reads as wheat, not as a blob")
+
+
+func test_a_harvested_wheat_bed_still_shows_no_tilled_ground():
+	add_child_autofree(marker)
+	marker.till_and_plant("wheat", 42)
+	_grow_to_ready(marker)
+	marker.harvest()
+	assert_false(marker.is_showing_tilled_ground())
+
+
+## And a root crop keeps the ground it is grown in.
+func test_a_root_crop_keeps_its_tilled_ground():
+	add_child_autofree(marker)
+	marker.till_and_plant("carrot", 7)
+	assert_true(marker.is_showing_tilled_ground())

@@ -190,6 +190,36 @@ rails/posts and plant_fibre (4) lashing them".
   water, and not the village's paving. `VillageFarm.fence_cells` is that
   rule, pure and derived — like `field_rect` and `owner_of`, it stores
   nothing, so the same farmhouse fences the same ring on every reload.
+- **A rail's wood sits INSIDE its own tile, flush against the edge facing
+  the beds.** The one rule the whole frame follows, and the last of three
+  reports to arrive at it: *"at the bottom it still overlaps half a tile"*.
+  A south rail's posts standing on its own north edge reads correctly as a
+  fence seen from the front, but the body then rises over the bottom row of
+  beds and hides half a tile of crop — measured, 34px of a 64px tile. Flush
+  from the inside puts the same fence half a tile nearer the viewer and
+  covers nothing. `footprint_offset` applies it to every facing, and to both
+  axes of a corner, so the frame touches the crop on every side without ever
+  covering it.
+
+- **A corner post has a ground POINT, not a ground line.** Reported with all
+  three visible corners crossed out (*"the fences still aren't optimal"*).
+  A corner knew only which side WALL it capped, so its art was placed as a
+  whole tile of vertical rail with nothing saying where along that tile to
+  stop — and the run it caps sits on that tile's own EDGE, so the frame
+  overshot by a tile at every corner. `fence_facing` names both sides now
+  (`corner_nw`/`ne`/`sw`/`se`), its inner direction is the diagonal, and
+  `footprint_offset` centres the post on that corner of its own tile in both
+  axes: half the post runs back along each run it caps and joins them, and
+  nothing hangs past either. It also takes the side wall's own scale rather
+  than being scaled by its own length — scaling a post as if it were a run
+  is what made it a tile of rail in the first place.
+
+  The two-id corners (`corner_west`/`corner_east`) stay recognised as
+  `LEGACY_FENCE_TILE_IDS`: a rail is an ordinary chunk modification, so an
+  id that stopped reading as a fence would lose its art *and* stop being
+  overlay-only, painting a bare earth square on ground somebody has already
+  walked past. Nothing raises one.
+
 - **The frame closes at the corners.** A border's four diagonal cells are
   **corner posts**, not lengths of rail: drawing a horizontal rail across a
   corner is exactly the "broken" look the report points at. The sheet has no
@@ -209,10 +239,98 @@ rails/posts and plant_fibre (4) lashing them".
   still move by the same distance in opposite directions, and a corner post
   still stands exactly where the wall it caps does. See "The rail stands on
   the inner edge" below, which is the general rule both are now cases of.
-- **The gate** is where the ring meets the village's own paving. No rail is
-  raised there: the farmer walks in over the street their farmhouse fronts,
-  which is the whole reason a farmhouse takes frontage at all. A fence laid
-  across the road would wall the village off from its own farm.
+- **The gate** is where the ring meets the village's own PAVING, and only
+  there. No rail is raised on a paved cell: the farmer walks in over the
+  street their farmhouse fronts, which is the whole reason a farmhouse takes
+  frontage at all. A fence laid across the road would wall the village off
+  from its own farm.
+
+  A rail may stand on an unpaved cell of a street ROW, though, unlike a bed.
+  Reported with the bed circled, *"it's still not fully enclosing the bed"*:
+  a field sits below the house it belongs to, so one whole side of its frame
+  lands on the next street row, and holding rails to the beds' own street-row
+  rule left that side open — measured on real villages, a three-wide `.....`
+  gap with the frame closed on every other side. An unpaved gap is not a
+  gate, and a rail along the edge of a road is a fence beside a road. Sowing
+  in a street row stays forbidden, which is what that rule was really about:
+  a crop in the roadway is not a crop.
+
+  A *short* unpaved gap is not one of those cells at all any more: the
+  village closes it as street before any rail is raised
+  ([infrastructure.md](infrastructure.md), "A village closes the short holes
+  in its own streets"), so the frame meets real paving there and takes it as
+  a gate. That ordering is what stops the two rules colliding into a fence
+  laid across a road.
+
+- **A bed is cleared before it is sown, and so is its fence line.** Asked
+  for directly: *"long grass should be cleared before planting"*, then
+  *"the grass should be cleared on the fence tiles as well"* — a frame was
+  being raised straight through standing long grass, so the fence line read
+  as a row of posts lost in a meadow. A rail is one of
+  `EarthChunkManager._is_built_surface`'s own cells now, alongside a
+  building piece and a laid road, so raising one clears what stands there
+  and pulling one out gives the ground back: a torn-out fence line is
+  ordinary ground again, not a permanent scar. Tilling a bed blocks the
+  chunk's ground cover on that cell — tall grass, flowers, desert scrub, tundra
+  lichen — through the same seam a building's own floor already uses
+  ([building.md](building.md)'s *"grass must be cut before and can't grow
+  back inside a house"*), so a farmer no longer plants wheat into a standing
+  meadow that then grows over it. The clearing happens only when the till
+  really takes: a bed refused because a live crop is already on it was never
+  worked, and must not scythe the ground anyway. Worked ground stays worked
+  — nothing seeds, spreads or falls back into it — which is deliberate and
+  is the same permanence a house floor has; a bed nobody ever returns to
+  does not regrow its meadow.
+
+- **A wheat bed shows no ground of its own at all.** Reported twice, about
+  two different sprites. First `ProceduralSoilSprite`'s MOUND (*"what's the
+  round procedural dark blob? Can you remove it and keep just the wheat"*);
+  then, once a full tile of `soil.png` was put under every bed to stop wheat
+  rising out of bare meadow, *"now there are brown blobs instead of the
+  planted wheat ... remove the blobs"* — that sheet's cells carry a soft dark
+  vignette, so a tile of it under a bed reads as a blob rather than as
+  ground. Both are hidden for wheat and both kept for a root crop, whose
+  root really is in that earth. This **reverses** the tilled-tile pass on
+  the player's own later instruction, not as a correction of it.
+
+- **(Superseded) A wheat bed shows no soil mound.** Reported with the beds circled:
+  *"what's the round procedural dark blob? Can you remove it and keep just
+  the wheat"*. `ProceduralSoilSprite`'s mound is a ROOT crop's own ground —
+  the root grows inside it, and pulling one leaves the crater its DISTURBED
+  state draws — but under a field of bending wheat it is just a dark circle,
+  six of them in a 3×2 bed. `FarmPlotMarker` keys it on what the bed was
+  SOWN with rather than on `plot.crop_id`, which harvesting clears: a bare
+  mound appearing the moment the wheat comes off is the same blob back.
+- **A bed stands on real tilled earth.** `assets/sprites/terrain/soil.png`
+  is a 3x3 grid of nine hand-drawn tilled-soil tiles; `FarmPlotMarker` draws
+  one of them, full-tile, under everything else it draws. This is what
+  actually answers the mound complaint above. Removing the mound from a
+  wheat bed left the bed standing on the meadow it was tilled out of — six
+  rectangles of untouched grass with wheat coming out of them — because
+  nothing ever drew the ground a bed is. The mound is unchanged and still
+  belongs to root crops (see the bullet above); the soil under it is a
+  separate layer and is always on.
+
+  Which of the nine a bed gets is hashed from its own global tile, so
+  neighbouring beds differ but a given bed is the same every time it is
+  drawn, matching every other seeded art pick in this codebase.
+
+  **This sheet's gutters are BLACK, not magenta**, unlike every other
+  illustrated sheet here. That is not a detail: `IllustratedTerrainSprite`
+  punches magenta to alpha before slicing, and `SpriteSheetSlicer.
+  detect_frames` then finds cell dividers by their transparency. Fed a
+  black-gutter sheet that pipeline finds no dividers at all and returns the
+  whole 1254x1254 image as ONE frame — measured, not predicted.
+
+  Rather than teach the chroma-key pass a second background colour, a sheet
+  may now declare its `column_bands` outright, and soil does: both axes were
+  measured from the file, so there is nothing left for content detection to
+  find. That is the better fit regardless of the gutter colour, because a
+  full-bleed GROUND tile is the one case where content detection is actively
+  wrong — cropping to content and rescaling is precisely what must not
+  happen to a tile that has to abut its neighbours. Sheets without
+  `column_bands` are untouched and still find their columns by content.
+
 - **A street ROW is street, paved or not.** Neither beds nor rails ever land
   on one. The founding layout paves a further street only *between its own
   doorsteps*, so a street row has unpaved gaps in it — and measured on real
@@ -357,6 +475,39 @@ sheet rather than extra columns because the existing four columns are
 `test_the_four_rails_are_four_different_pictures` — widening that sheet
 would rewrite art already on disk. The generation prompt lives in
 [../art/ai_sprite_prompts.md](../art/ai_sprite_prompts.md) §13.
+
+### Grown, stored, carried: where a harvest actually goes
+
+Asked for directly: *"make sure wheat grows and is harvested which increases
+farmhouse stock which gets transported to city stock"*. The middle of that
+chain did not exist. A villager's harvest went straight into the village
+market, so the farmhouse they grew it for never held a grain of it and
+nothing was ever carried anywhere.
+
+1. **Grown** in the beds — `FarmPlot` on a real world tick, unchanged.
+2. **Cut** by the villager on their circuit (`NpcMarker._work_field_cell`).
+3. **Stored at the farmhouse** — `_store_harvest` deposits into that
+   building's own `StructureStock` (`EarthChunkManager.deposit_to_structure_at`),
+   the same per-building stock the placeable Farm and the Sägewerk already
+   use. The villager knows *which* farmhouse because `VillageRenderer` hands
+   `farmhouse_cell` out with `field_cells` — it is the only thing that knows
+   whose is whose.
+4. **Carried to the village** at the end of the work block
+   (`haul_farmhouse_stock_to_village`, from `_step_farm`'s off-the-clock
+   branch). The whole crop moves, and reaches the market through the same
+   `record_real_harvest` a farmer without a farmhouse uses — so it is
+   stocked and paid **once**, when it arrives rather than when it is cut.
+
+Two edges, both deliberate:
+
+- **A farmer with no farmhouse** — a village that has not raised one, or one
+  there was no room for — sells where they stand, exactly as before. A
+  harvest with nowhere to go would otherwise vanish, which is worse than the
+  missing link this closes.
+- **The end of the work block is the moment**, not "when there is nothing
+  left to do". A field with beds in it always has *something* worth a visit
+  (`next_action`'s thirstiest-bed fallback), so an idle moment never
+  reliably arrives; the end of the block does, every day.
 
 ### What a field costs to keep
 

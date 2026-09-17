@@ -553,7 +553,20 @@ void fragment() {
 var _material: ShaderMaterial
 ## Lazily-loaded, cached per season (see SEASON_ATLAS_PATHS) -- replaces a
 ## single shared `_texture` now that there are four sheets to choose between.
-var _textures: Dictionary = {}
+##
+## STATIC, keyed by season, shared across every instance -- the same
+## convention IllustratedTerrainSprite._frame_cache and IllustratedStone
+## Sprite._frame_cache already follow, and for the same reason. Reading one
+## season's 1254x1254 sheet off disk and running SpriteSheetSlicer.chroma_
+## keyed over its ~1.57M pixels measures ~222ms, and the result is a pure
+## function of the path: two instances that both want "summer" want the
+## byte-identical texture. While this was per-INSTANCE, only a caller that
+## happened to hold ONE long-lived patch (EarthChunkManager._illustrated_
+## grass) escaped paying it repeatedly -- CharacterPreviewDiorama._build_
+## grass builds a fresh patch on every build(), so the character creator
+## paid it on first open AND on every DNA reroll (see docs/concept/
+## character_creator_preview_scene.md's own "Load cost" section).
+static var _textures: Dictionary = {}
 var _mesh: QuadMesh
 ## Last live wind strength pushed in (see set_wind_strength) -- applied to
 ## material() at BUILD time too, so a caller that sets the live wind before
@@ -943,6 +956,15 @@ const BACKGROUND_KEY_TOLERANCE := 0.05
 ## Lazily loads and caches the atlas texture for one season, falling back to
 ## DEFAULT_SEASON for a name SEASON_ATLAS_PATHS doesn't recognise (mirrors
 ## SeasonalFoliage.tint_for_season's own fallback).
+## The sliced, chroma-keyed atlas for `season` (or DEFAULT_SEASON's, for an
+## unknown one), loading and caching it on first use. Public so the sharing
+## guarantee above is directly testable -- see test_two_patches_share_one_
+## seasons_atlas_texture -- rather than only observable through fill_band's
+## own side effects on a MultiMeshInstance2D.
+func texture_for_season(season: String) -> Texture2D:
+	return _texture_for(season)
+
+
 func _texture_for(season: String) -> Texture2D:
 	if not _textures.has(season):
 		var path: String = SEASON_ATLAS_PATHS.get(season, SEASON_ATLAS_PATHS[DEFAULT_SEASON])

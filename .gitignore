@@ -51,3 +51,8 @@ my_private_key.pem
 # App in a real Authorization Code flow against actual GitHub users.
 .env
 
+
+# Source packs downloaded by tools/prepare_footstep_oneshots.py -- the
+# footstep one-shots it builds from them are committed; the multi-megabyte
+# archives they came out of are not.
+.cache/

@@ -169,3 +169,246 @@ func test_loading_a_sheet_does_not_log_an_engine_warning():
 	IllustratedTerrainSprite._frame_cache.clear()
 	generator.frame_for("grassland", 7)
 	assert_engine_error_count(0, "loading a terrain sheet should not warn")
+
+
+# -- _prepared_for_slicing / _scrub_magenta_fringe performance -------------
+#
+# This class's own despill loops were a SEPARATE, never-fixed duplicate of
+# the exact naive per-pixel Image.get_pixel/set_pixel technique already fixed
+# in SpriteSheetSlicer/IllustratedMushroomSprite/IllustratedAnimalSprite/
+# IllustratedStoneSprite (see docs/progress.md's "Still at 1fps" per-pixel
+# art-loading investigation, 2026-09-10) -- none of those fixes touched this
+# file's own local reimplementation.
+#
+# Measured directly (docs/concept/character_creator_preview_scene.md's "Load
+# cost" section): loading the grassland sheet costs ~987ms, of which the
+# PNG decode itself is only ~36ms and _prepared_for_slicing alone is ~458ms.
+# That lands squarely in the character creator's own first open -- its
+# diorama stands on real grassland ground -- as well as in the first chunk
+# of any real world.
+
+
+## A naive per-pixel get_pixel/set_pixel despill -- the exact shape this
+## class carried until it was rewritten, kept here only as a yardstick.
+##
+## The pin below is COMPARATIVE, not an absolute millisecond ceiling, and
+## that is deliberate. An absolute ceiling measures the machine as much as
+## the code: pinned at 200ms from a real 180ms measurement, this went red at
+## 221ms the first time it ran on a loaded box with the implementation
+## untouched, and a test that fails on a busy runner teaches people to
+## ignore it. Racing the real implementation against this reference in the
+## SAME process, on the SAME image, cancels the machine out -- both sides
+## slow down together -- and the gap being guarded here is large enough to
+## survive that honestly: 458ms against 180ms on the real grassland sheet,
+## a 2.5x win, not a margin inside the noise.
+static func _naively_prepared(image: Image) -> Image:
+	var prepared := image.duplicate() as Image
+	if prepared.get_format() != Image.FORMAT_RGBA8:
+		prepared.convert(Image.FORMAT_RGBA8)
+	for y in prepared.get_height():
+		for x in prepared.get_width():
+			var pixel := prepared.get_pixel(x, y)
+			if IllustratedTerrainSprite._is_magenta(pixel):
+				prepared.set_pixel(x, y, Color(pixel.r, pixel.g, pixel.b, 0.0))
+			else:
+				prepared.set_pixel(x, y, IllustratedTerrainSprite._despilled(pixel))
+	return prepared
+
+
+## Real sheet resolution (1254x1254 -- see _SHEETS' own doc comment), format
+## RGB8 with no alpha channel, which is the path every real terrain sheet
+## takes today. Uniform non-magenta fill: this loop has no early-out or
+## bounding box, so every pixel costs the same fixed handful of comparisons
+## regardless of content and a solid fill is a faithful worst case, not an
+## artificially easy one.
+func test_prepared_for_slicing_beats_the_naive_loop_it_replaced():
+	var width := 1254
+	var height := 1254
+	var image := Image.create(width, height, false, Image.FORMAT_RGB8)
+	image.fill(Color(0.5, 0.5, 0.5))
+
+	var reference_start := Time.get_ticks_usec()
+	var reference := _naively_prepared(image)
+	var reference_usec := Time.get_ticks_usec() - reference_start
+	var actual_start := Time.get_ticks_usec()
+	var actual: Image = generator._prepared_for_slicing(image)
+	var actual_usec := Time.get_ticks_usec() - actual_start
+
+	assert_lt(
+		actual_usec,
+		reference_usec,
+		(
+			"_prepared_for_slicing (%dus) is no faster than the naive per-pixel loop it replaced (%dus)"
+			% [actual_usec, reference_usec]
+		)
+	)
+	assert_eq(
+		actual.get_data(), reference.get_data(), "...and it must produce the identical image"
+	)
+
+
+## CANVAS_SIZE (32x32) -- the per-FRAME cleanup pass, called once per sliced
+## frame (9 per sheet, one per variant).
+func test_scrub_magenta_fringe_completes_quickly_at_real_frame_resolution():
+	var image := Image.create(
+		IllustratedTerrainSprite.CANVAS_SIZE.x, IllustratedTerrainSprite.CANVAS_SIZE.y, false, Image.FORMAT_RGBA8
+	)
+	image.fill(Color(0.5, 0.5, 0.5, 1.0))
+	var start_usec := Time.get_ticks_usec()
+	generator._scrub_magenta_fringe(image)
+	var elapsed_ms := (Time.get_ticks_usec() - start_usec) / 1000.0
+	assert_lt(
+		elapsed_ms,
+		5.0,
+		(
+			"scrubbing one %dx%d frame took %.2fms -- a naive per-pixel get_pixel/set_pixel loop regressed back in"
+			% [IllustratedTerrainSprite.CANVAS_SIZE.x, IllustratedTerrainSprite.CANVAS_SIZE.y, elapsed_ms]
+		)
+	)
+
+
+## Speed is worthless if the pixels change. Pins the three cases the loop
+## actually distinguishes, against this class's OWN thresholds
+## (MAGENTA_RED_MIN/MAGENTA_BLUE_MIN/MAGENTA_SKEW_MIN -- note the skew test,
+## which is what makes this genuinely different from IllustratedStoneSprite's
+## per-channel green-max version and why its loop cannot just be copied).
+func test_prepared_for_slicing_keys_despills_and_leaves_pixels_exactly_as_before():
+	var image := Image.create(3, 1, false, Image.FORMAT_RGB8)
+	# A true magenta divider pixel: red and blue both over the gate, and the
+	# red/blue average well clear of green.
+	image.set_pixel(0, 0, Color(1.0, 0.0, 1.0))
+	# A soft magenta CAST on a green-ish ground pixel: not magenta by the
+	# gates above, but red and blue both sit above green by more than
+	# MAGENTA_CAST_MARGIN, so the despill has to pull them down to it.
+	image.set_pixel(1, 0, Color(0.5, 0.2, 0.5))
+	# Clean ground: green dominant, nothing to remove.
+	image.set_pixel(2, 0, Color(0.2, 0.6, 0.25))
+
+	var prepared: Image = generator._prepared_for_slicing(image)
+
+	assert_almost_eq(prepared.get_pixel(0, 0).a, 0.0, 0.01, "a magenta divider pixel must go transparent")
+	var despilled := prepared.get_pixel(1, 0)
+	assert_almost_eq(despilled.g, 0.2, 0.01, "green is never touched by the despill")
+	assert_almost_eq(
+		despilled.r, 0.2 + IllustratedTerrainSprite.MAGENTA_CAST_MARGIN, 0.01,
+		"red is pulled down to exactly the cast margin above green"
+	)
+	assert_almost_eq(
+		despilled.b, 0.2 + IllustratedTerrainSprite.MAGENTA_CAST_MARGIN, 0.01,
+		"and so is blue"
+	)
+	assert_almost_eq(despilled.a, 1.0, 0.01, "a despilled pixel stays opaque")
+	var clean := prepared.get_pixel(2, 0)
+	assert_almost_eq(clean.r, 0.2, 0.01, "clean ground is left alone")
+	assert_almost_eq(clean.g, 0.6, 0.01)
+	assert_almost_eq(clean.b, 0.25, 0.01)
+	assert_almost_eq(clean.a, 1.0, 0.01)
+
+
+# -- soil: a sheet whose background is BLACK, not magenta ------------------
+#
+# assets/sprites/terrain/soil.png is the tilled ground a farm bed stands on
+# (see docs/concept/village_farms.md, "A bed stands on real tilled earth").
+# Structurally it is exactly like the biome sheets above -- 1254x1254, a 3x3
+# grid of nine variants -- but its gutters are drawn near-BLACK rather than
+# magenta.
+#
+# That single difference defeats the whole pipeline: _prepared_for_slicing
+# punches magenta to alpha, and SpriteSheetSlicer.detect_frames then finds
+# cell dividers by their transparency. A black gutter is opaque and dark, so
+# it reads as neither background nor divider, and the sheet comes back as
+# ONE frame covering the entire image. Measured before this was written, not
+# predicted.
+#
+# Rather than teach the chroma-key pass a second background colour, a sheet
+# may now declare its column bands outright. Both axes of this grid were
+# measured directly, so there is nothing left for content detection to find
+# -- and a full-bleed GROUND tile is the one case where content detection is
+# actively wrong anyway, since cropping to content and rescaling is exactly
+# what must not happen to a tile that has to abut its neighbours.
+
+const SOIL_SHEET := "soil"
+
+
+func test_the_soil_sheet_slices_into_its_nine_real_variants():
+	assert_true(generator.has_variants(SOIL_SHEET), "soil.png should be registered")
+	assert_eq(
+		generator.frame_count_for(SOIL_SHEET),
+		EXPECTED_FRAME_COUNT,
+		"a 3x3 grid is nine variants -- one frame back means the black gutters were never found"
+	)
+
+
+## Every variant has to be real tilled earth, not a slab of the gutter that
+## surrounds it. Checked as "mostly brown-ish and nowhere near black",
+## because the failure this guards is precisely a frame made of background.
+func test_every_soil_variant_is_real_earth_not_gutter():
+	for variant in generator.frame_count_for(SOIL_SHEET):
+		var frame: Image = generator.frame_for(SOIL_SHEET, variant)
+		assert_not_null(frame, "variant %d" % variant)
+		var dark := 0
+		var total := 0
+		for y in frame.get_height():
+			for x in frame.get_width():
+				var c := frame.get_pixel(x, y)
+				total += 1
+				if maxf(c.r, maxf(c.g, c.b)) <= 0.06:
+					dark += 1
+		assert_lt(
+			float(dark) / float(total),
+			0.2,
+			"soil variant %d is %d/%d near-black -- that is gutter, not earth" % [variant, dark, total]
+		)
+
+
+## The whole point of an explicit grid is that it changes NOTHING for the
+## sheets that came before it, which still find their own columns by
+## content. Every biome still slices to nine.
+func test_an_explicit_grid_leaves_every_content_sliced_biome_sheet_alone():
+	for biome_name in LAND_BIOMES:
+		assert_eq(
+			generator.frame_count_for(biome_name),
+			EXPECTED_FRAME_COUNT,
+			"%s should still slice into %d variants" % [biome_name, EXPECTED_FRAME_COUNT]
+		)
+
+
+## The invariant that actually matters for ground art, and the one a frame
+## count cannot express: laid edge to edge, these tiles must not show a seam.
+##
+## Each cell of soil.png is drawn as a CARD with a soft dark vignette around
+## it, not as a seamless texture -- measured down a cell's own edge, mean
+## brightness climbs 0.001 -> 0.33 over roughly thirteen pixels before
+## reaching the interior. Sliced on the raw content bands, every tile
+## therefore carries that rim, and a 3x2 bed renders as six brown squares in
+## a black lattice (confirmed by rendering it, not by reasoning about it).
+##
+## So the slice insets each cell by the vignette's own measured depth. This
+## checks the result rather than the number: the outermost ring of every
+## variant has to be about as bright as the frame as a whole, which is true
+## of continuous earth and false of a dark rim.
+func test_every_soil_variant_tiles_without_a_dark_seam():
+	for variant in generator.frame_count_for(SOIL_SHEET):
+		var frame: Image = generator.frame_for(SOIL_SHEET, variant)
+		var width := frame.get_width()
+		var height := frame.get_height()
+		var edge_total := 0.0
+		var edge_count := 0
+		var whole_total := 0.0
+		for y in height:
+			for x in width:
+				var value: float = frame.get_pixel(x, y).get_luminance()
+				whole_total += value
+				if x == 0 or y == 0 or x == width - 1 or y == height - 1:
+					edge_total += value
+					edge_count += 1
+		var edge_mean := edge_total / float(edge_count)
+		var whole_mean := whole_total / float(width * height)
+		assert_gt(
+			edge_mean,
+			whole_mean * 0.7,
+			(
+				"soil variant %d's border averages %.3f against the tile's own %.3f -- that is the sheet's vignette, and it tiles as a dark lattice"
+				% [variant, edge_mean, whole_mean]
+			)
+		)

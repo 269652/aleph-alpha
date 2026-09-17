@@ -140,6 +140,8 @@ const FlyerPersonality = preload("res://src/gameplay/flyer_personality.gd")
 const PiscivoreBirdRenderer = preload("res://src/rendering/piscivore_bird_renderer.gd")
 const VillageRenderer = preload("res://src/rendering/village_renderer.gd")
 const VillageFarm = preload("res://src/gameplay/village_farm.gd")
+const VillagePond = preload("res://src/gameplay/village_pond.gd")
+const AquaticPopulationModel = preload("res://src/world/aquatic_population_model.gd")
 const NpcMarker = preload("res://src/rendering/npc_marker.gd")
 const EcosystemSimulation = preload("res://src/world/ecosystem_simulation.gd")
 const ChunkSerializer = preload("res://src/world/chunk_serializer.gd")
@@ -3568,6 +3570,25 @@ func step_settlements(delta_seconds: float) -> void:
 		# settlement in the world DECLINING forever, which Governance then
 		# read straight back out as illegitimate.
 		var village_market = SettlementFood.village_market_for(settlement_id, _loaded_villages)
+		# What the village can HOLD, from what actually stands in it
+		# (docs/concept/village_warehouse.md, "The roof is the limit").
+		# Refreshed every step rather than set once: a village that loses
+		# its warehouse loses the headroom with it, and one that has just
+		# had it raised gains it. Deliberately NOT SettlementFood.carrying_
+		# capacity, which asks the different question of how many households
+		# the food on hand can feed.
+		#
+		# ONLY while the chunk is LOADED, and that guard is the whole point.
+		# Not being able to see a village must never read as "it has no
+		# warehouse": without it, every settlement the player is not standing
+		# in had its market clamped to a household's corners and everything
+		# above that silently discarded, because has_structure_near answers
+		# false for an unloaded chunk.
+		var settlement_chunk := RegionalTrade.chunk_coord_of(settlement_id)
+		if village_market != null and _loaded_chunks.has(settlement_chunk):
+			village_market.storage_capacity = VillageMarket.capacity_for_structures(
+				_standing_building_ids_in_chunk(settlement_chunk)
+			)
 		# BEFORE capacity is read, because this is what finally puts a real
 		# number in front of it (see _step_settlement_granary).
 		_step_settlement_granary(settlement_id, market, village_market, household_ids)
@@ -4097,6 +4118,12 @@ func household_report_at(global_x: int, global_y: int) -> Dictionary:
 		"needs": {},
 		"happiness": 0.0,
 		"productivity": 0.0,
+		# What this building is holding, for the readout's Inventory tab
+		# (docs/concept/building_storage.md). Carried on EVERY report, home
+		# or commons, because a barn and a workshop are exactly the
+		# buildings that hold things and neither is a home.
+		"storage_capacity": BuildingCatalog.storage_capacity_of(building_id),
+		"stock": building_inventory_at(global_x, global_y),
 	}
 	if capacity <= 0:
 		return report
@@ -7118,7 +7145,11 @@ func step_footprints() -> void:
 		# absolute world clock, so a chunk nobody can see loses nothing by
 		# advancing once per interval instead of every frame.
 		if visible or _world_age_seconds - float(_footprint_far_advanced_at.get(chunk_coord, -INF)) >= FAR_CHUNK_ADVANCE_SECONDS:
-			field.advance(_world_age_seconds)
+			# Rain hurries a print away (docs/concept/snow_cover.md's
+			# "Footprints"): the wetness is sampled per step rather than
+			# stored per print, because a print cannot know what weather is
+			# coming.
+			field.advance(_world_age_seconds, _rain_wetness)
 			_footprint_far_advanced_at[chunk_coord] = _world_age_seconds
 		# A typed Dictionary cannot hold the Nil a missing entry returns --
 		# every real chunk has its renderers, but a field injected on its own
@@ -7297,8 +7328,17 @@ func _paint_snow_presence(chunk_coord: Vector2i, chunk: Chunk) -> void:
 			_snow_layer.set_cell(global, 0, SnowBombShader.PRESENCE_ATLAS_COORD)
 
 
+## How hard it is raining right now, 0 dry and 1 a downpour -- pushed in by
+## set_rain below and read by step_footprints, because a footprint field
+## knows how to weather faster when it is wet but cannot know THAT it is
+## wet. Starts dry: a world nobody has told about the weather must not age
+## its prints as though it had rained.
+var _rain_wetness := 0.0
+
+
 func set_rain(raining: bool) -> void:
 	var intensity := 1.0 if raining else 0.0
+	_rain_wetness = intensity
 	if _water_material != null:
 		_water_material.set_shader_parameter("rain_intensity", intensity)
 	# Rivers/lakes/the sea all render on the ONE river flow overlay in real
@@ -8201,12 +8241,26 @@ func crush_walnut_near(pixel_position: Vector2, momentum_kg_m_s: float) -> bool:
 ## withered plot is (re)planted. Returns whether planting happened.
 func till_and_plant_farm_plot_at_global(global_x: int, global_y: int, crop_id: String) -> bool:
 	var tile := Vector2i(global_x, global_y)
-	if _loaded_chunks.get(_chunk_coord_for_tile(tile)) == null:
+	var chunk_coord := _chunk_coord_for_tile(tile)
+	if _loaded_chunks.get(chunk_coord) == null:
 		return false
 	if not _farm_plots.has(tile):
 		_farm_plots[tile] = _build_farm_plot_marker(tile)
 	var seed_value := hash("%d_%d_farm_plot" % [tile.x, tile.y])
-	return _farm_plots[tile].till_and_plant(crop_id, seed_value)
+	if not _farm_plots[tile].till_and_plant(crop_id, seed_value):
+		return false
+	# Asked for directly: "long grass should be cleared before planting".
+	# TILLING is what clears it, so the clearing happens only when the till
+	# really took -- a bed refused because a live crop is already standing on
+	# it was never worked, and must not scythe the ground anyway.
+	#
+	# Exactly the rule a building's own floor already has (docs/concept/
+	# building.md "Placement rules": "grass must be cut before and can't grow
+	# back inside a house"), through the same seam: whatever tall grass,
+	# flowers, scrub or lichen stood here is gone, and none of them seeds,
+	# spreads or falls back into worked ground while the bed stands.
+	_block_ground_cover_on_cells(chunk_coord, [tile - chunk_coord * CHUNK_SIZE])
+	return true
 
 
 ## Tends (re-waters) the growing plot at a global tile, resetting its
@@ -8252,6 +8306,198 @@ func farm_plot_at_global(global_x: int, global_y: int):
 ## reads it (FarmPlotMarker._redraw_wheat picks which of its three real
 ## sheets to sample from), but it costs nothing to pass unconditionally,
 ## the same way delta_seconds itself is.
+## Every village pond's own fish stock, keyed by chunk then by the pond's
+## own ANCHOR cell -- the top-left cell of that body of water, found by
+## flooding it (see _pond_anchor). One pond is one stock however many cells
+## it has, which is what makes "a pond" a thing rather than six buckets.
+##
+## Not persisted, like the farm plots beside it and for the same reason: a
+## revisited village re-stocks rather than remembering
+## (docs/concept/village_ponds.md's own status list).
+var _pond_fish: Dictionary = {}
+
+
+## Puts a fisher's stocking of fish into the pond this cell belongs to (see
+## docs/concept/village_ponds.md). A no-op on dry ground, and on a pond that
+## already holds fish -- a fisher stocks a pond, they do not keep stocking
+## it.
+func stock_pond_at(global_x: int, global_y: int) -> void:
+	var anchor = _pond_anchor(global_x, global_y)
+	if anchor == null:
+		return
+	var chunk_coord := _chunk_coord_for_tile(anchor)
+	var by_anchor: Dictionary = _pond_fish.get(chunk_coord, {})
+	if by_anchor.has(anchor):
+		return
+	by_anchor[anchor] = float(VillagePond.STOCKING_FISH)
+	_pond_fish[chunk_coord] = by_anchor
+	_sync_pond_fish_markers(chunk_coord, anchor)
+
+
+## How many fish the pond this cell belongs to is holding -- 0.0 for dry
+## ground, and for water nobody has stocked.
+func pond_fish_at(global_x: int, global_y: int) -> float:
+	var anchor = _pond_anchor(global_x, global_y)
+	if anchor == null:
+		return 0.0
+	return float(_pond_fish.get(_chunk_coord_for_tile(anchor), {}).get(anchor, 0.0))
+
+
+## The real FishMarkers swimming in each pond, keyed the same way the stock
+## is: chunk, then the pond's own anchor cell. Kept OUT of _loaded_fish on
+## purpose -- that list is respawned wholesale whenever a chunk's aggregate
+## fish population is reconciled, which would wipe a pond's own fish every
+## time the region's did anything.
+var _pond_fish_markers: Dictionary = {}
+
+## At most one fish per tile of water. Six tiles is a pond, not a shoal, and
+## a marker per unit of a population that can exceed its own cell count
+## would pile fish on top of each other.
+const _POND_FISH_PER_CELL := 1
+
+
+## The fish really swimming in the pond this cell belongs to.
+func pond_fish_markers_at(global_x: int, global_y: int) -> Array:
+	var anchor = _pond_anchor(global_x, global_y)
+	if anchor == null:
+		return []
+	return _pond_fish_markers.get(_chunk_coord_for_tile(anchor), {}).get(anchor, [])
+
+
+func pond_fish_marker_count_at(global_x: int, global_y: int) -> int:
+	return pond_fish_markers_at(global_x, global_y).size()
+
+
+## Brings the fish you can SEE in one pond into line with the stock it
+## holds: one marker per whole fish, capped at one per tile of water, each
+## standing on a real cell of that pond.
+##
+## Spawn and free rather than reposition -- a pond gains or loses a fish
+## rarely (a breeding tick, a catch), and FishMarker owns its own swimming
+## from wherever it is put down.
+func _sync_pond_fish_markers(chunk_coord: Vector2i, anchor: Vector2i) -> void:
+	var cells := _pond_cells_from(anchor)
+	var by_anchor: Dictionary = _pond_fish_markers.get(chunk_coord, {})
+	var markers: Array = by_anchor.get(anchor, [])
+	var stock: float = float(_pond_fish.get(chunk_coord, {}).get(anchor, 0.0))
+	var wanted: int = mini(int(floor(stock)), cells.size() * _POND_FISH_PER_CELL)
+	while markers.size() > wanted:
+		var extra = markers.pop_back()
+		if is_instance_valid(extra):
+			extra.free()
+	while markers.size() < wanted and not cells.is_empty():
+		var cell: Vector2i = cells[markers.size() % cells.size()]
+		var centre := (Vector2(cell) + Vector2(0.5, 0.5)) * TerrainRenderer.TILE_SIZE
+		var seed_value := hash("%d_%d_pond_fish_%d" % [cell.x, cell.y, markers.size()])
+		var species: String = FishRenderer.SPECIES_POOL[
+			absi(seed_value) % FishRenderer.SPECIES_POOL.size()
+		]
+		markers.append(_fish_renderer.spawn_fish_at(_creatures_parent, species, centre, seed_value))
+	by_anchor[anchor] = markers
+	_pond_fish_markers[chunk_coord] = by_anchor
+
+
+## Frees every pond fish of a chunk that is going away.
+func _free_pond_fish_markers(chunk_coord: Vector2i) -> void:
+	for markers in _pond_fish_markers.get(chunk_coord, {}).values():
+		for fish in markers:
+			if is_instance_valid(fish):
+				fish.free()
+	_pond_fish_markers.erase(chunk_coord)
+
+
+## Takes one fish out of the pond this cell belongs to: one off the stock,
+## and one fewer swimming in it. False when there is not a whole fish left
+## to take, or when this is not a pond at all.
+##
+## All-or-nothing on a WHOLE fish, mirroring withdraw_from_structure_at:
+## half a fish is not a catch, and a pond fished down to a fraction breeds
+## back from what is left rather than from nothing.
+func catch_pond_fish_at(global_x: int, global_y: int) -> bool:
+	var anchor = _pond_anchor(global_x, global_y)
+	if anchor == null:
+		return false
+	var chunk_coord := _chunk_coord_for_tile(anchor)
+	var by_anchor: Dictionary = _pond_fish.get(chunk_coord, {})
+	var stock: float = float(by_anchor.get(anchor, 0.0))
+	if stock < 1.0:
+		return false
+	by_anchor[anchor] = stock - 1.0
+	_pond_fish[chunk_coord] = by_anchor
+	_sync_pond_fish_markers(chunk_coord, anchor)
+	return true
+
+
+## Breeds every stocked pond toward what its own water can feed, on the
+## world's own ecology tick (scenes/world.gd's tick table).
+func step_ponds(delta_seconds: float) -> void:
+	if _pond_fish.is_empty():
+		return
+	var days := delta_seconds / ChunkEcologyCatchup.SECONDS_PER_DAY
+	if days <= 0.0:
+		return
+	for chunk_coord in _pond_fish:
+		var by_anchor: Dictionary = _pond_fish[chunk_coord]
+		for anchor in by_anchor:
+			var cells := _pond_cells_from(anchor)
+			if cells.is_empty():
+				continue  # filled in since it was stocked
+			by_anchor[anchor] = VillagePond.step(
+				float(by_anchor[anchor]), cells.size(),
+				_pond_temperature(anchor), days
+			)
+			_sync_pond_fish_markers(chunk_coord, anchor)
+
+
+## The water temperature a pond's fish live at -- its own chunk's, the same
+## normalized [0, 1] value every other aquatic population reads.
+func _pond_temperature(anchor: Vector2i) -> float:
+	var chunk: Chunk = _loaded_chunks.get(_chunk_coord_for_tile(anchor))
+	if chunk == null:
+		return AquaticPopulationModel.OPTIMAL_TEMPERATURE
+	return float(chunk.temperature[_local_index(anchor.x, anchor.y)])
+
+
+## Every cell of the body of water this one belongs to, flood-filled over
+## pond tiles. Bounded in practice -- a village pond is six cells -- and
+## bounded in code by _POND_FLOOD_LIMIT so a hand-dug lake cannot make this
+## walk the world.
+const _POND_FLOOD_LIMIT := 256
+
+
+func _pond_cells_from(start: Vector2i) -> Array:
+	if not is_pond_at_global(start.x, start.y):
+		return []
+	var seen: Dictionary = {start: true}
+	var queue: Array = [start]
+	var out: Array = []
+	while not queue.is_empty() and out.size() < _POND_FLOOD_LIMIT:
+		var cell: Vector2i = queue.pop_back()
+		out.append(cell)
+		for step in [Vector2i(1, 0), Vector2i(-1, 0), Vector2i(0, 1), Vector2i(0, -1)]:
+			var next: Vector2i = cell + step
+			if seen.has(next) or not is_pond_at_global(next.x, next.y):
+				continue
+			seen[next] = true
+			queue.append(next)
+	return out
+
+
+## The one cell that stands for a whole pond: its top-left, so every cell of
+## the same water agrees on which stock is theirs however the flood happened
+## to walk it. Null for dry ground.
+func _pond_anchor(global_x: int, global_y: int):
+	var cells := _pond_cells_from(Vector2i(global_x, global_y))
+	if cells.is_empty():
+		return null
+	var anchor: Vector2i = cells[0]
+	for cell in cells:
+		var c: Vector2i = cell
+		if c.y < anchor.y or (c.y == anchor.y and c.x < anchor.x):
+			anchor = c
+	return anchor
+
+
 func step_farm_plots(delta_seconds: float) -> void:
 	var season := current_season()
 	for marker in _farm_plots.values():
@@ -12088,7 +12334,17 @@ func gradient_at_global(global_x: int, global_y: int) -> Vector2:
 ## above; unlike biome_at_global below, needs no loaded-chunk cache since a
 ## river is never stored per-chunk (see _paint_water_overlay).
 func is_river_at_global(global_x: int, global_y: int) -> bool:
+	if is_pond_at_global(global_x, global_y):
+		return true
 	return generator.is_river_at_global(global_x, global_y)
+
+
+## Whether a village's own dug pond stands on this tile (docs/concept/
+## village_ponds.md, VillagePond). An ordinary chunk modification, like a
+## rail -- the id is the only thing stored about it, which is what lets a
+## pond survive a reload with no record of the fisher who dug it.
+func is_pond_at_global(global_x: int, global_y: int) -> bool:
+	return VillagePond.is_pond_tile(modification_at_global(global_x, global_y))
 
 
 ## A tile under a baked lake's surface (docs/concept/hydrology.md) -- an
@@ -12876,7 +13132,14 @@ func merchant_market_near(pixel_position: Vector2, max_distance: float):
 ## (see NpcGreeting, the "Talk (key)" prompt). Same shape as has_merchant_near
 ## but returns the marker itself since the talk prompt/greeting need the
 ## NPC's identity, not just a yes/no.
-func nearest_npc_near(pixel_position: Vector2, max_distance: float) -> NpcMarker:
+## `excluding` drops one marker from the search. A villager looking for
+## COMPANY asks this same question from their OWN position (docs/concept/
+## npc_social_life.md) and would otherwise always find themselves standing
+## zero pixels away -- one lookup serves both the player's talk prompt and a
+## villager's own search rather than two walks of the same chunk lists.
+func nearest_npc_near(
+	pixel_position: Vector2, max_distance: float, excluding: NpcMarker = null
+) -> NpcMarker:
 	var nearest: NpcMarker = null
 	var nearest_distance := max_distance
 	# Only the chunks a max_distance square can touch (FPS regression round
@@ -12891,6 +13154,8 @@ func nearest_npc_near(pixel_position: Vector2, max_distance: float) -> NpcMarker
 			# their marker happens to rest on -- reported: "Talk" won over
 			# "Enter" at a doorstep and greeted the villager through the wall.
 			if node.is_at_home():
+				continue
+			if node == excluding:
 				continue
 			var distance: float = pixel_position.distance_to(node.position)
 			if distance <= nearest_distance:
@@ -13094,6 +13359,8 @@ func is_buildable_terrain_at(global_x: int, global_y: int) -> bool:
 func is_buildable_ground_at(global_x: int, global_y: int) -> bool:
 	if biome_at_global(global_x, global_y) == "forest":
 		return false
+	if is_pond_at_global(global_x, global_y):
+		return false  # the fisher's own water is not somewhere to put a house
 	if is_water_at_global(global_x, global_y):
 		return false
 	return true
@@ -13112,6 +13379,14 @@ func is_buildable_ground_at(global_x: int, global_y: int) -> bool:
 ## (test_earth_chunk_manager_buildable_terrain.gd pins it cell by cell
 ## against the overlay's own decision over the real Berlin radius).
 func is_water_at_global(global_x: int, global_y: int) -> bool:
+	# A dug pond is water the moment it is dug, and is the ONLY water the
+	# generator knows nothing about -- everything below asks the generated
+	# world (docs/concept/village_ponds.md, "Built water"). Answering it
+	# here is what gives a pond the whole stack for free: creatures refuse
+	# it, the surface paints it, and is_river_at_global above carries its
+	# flow to anything that floats.
+	if is_pond_at_global(global_x, global_y):
+		return true
 	if biome_at_global(global_x, global_y) == "ocean":
 		return true
 	if is_river_at_global(global_x, global_y):
@@ -13729,14 +14004,28 @@ func _built_local_cells(chunk: Chunk) -> Array:
 	return cells
 
 
-## A cell nothing grows on: a real building piece, or a laid road (docs/
+## A cell nothing grows on: a real building piece, a laid road (docs/
 ## concept/infrastructure.md's Road tier -- a placed surface, unlike the
-## worn path/trail tiers, which stay open ground). The one predicate
-## build_at_global/destroy_at_global/_built_local_cells share for ground
-## cover; buildings (BuildingCatalog.occupies) are checked alongside it
-## where footprints matter.
+## worn path/trail tiers, which stay open ground), or a village farm's own
+## rail. The one predicate build_at_global/destroy_at_global/
+## _built_local_cells share for ground cover; buildings
+## (BuildingCatalog.occupies) are checked alongside it where footprints
+## matter.
+##
+## The rails are here because of a direct report: *"the grass should be
+## cleared on the fence tiles as well"*. A frame was being raised straight
+## through standing long grass, so a fence line read as a row of posts lost
+## in a meadow -- the same thing tilling a bed already fixes for the ground
+## inside the frame (see till_and_plant_farm_plot_at_global). Unlike a bed,
+## a rail gives its ground back when it is pulled out: destroy_at_global
+## shares this predicate, so a torn-out fence line is ordinary ground again
+## rather than a permanent scar.
 func _is_built_surface(tile_id: String) -> bool:
-	return BuildingPiece.has_piece(tile_id) or TerrainRenderer.is_road_tile(tile_id)
+	return (
+		BuildingPiece.has_piece(tile_id)
+		or TerrainRenderer.is_road_tile(tile_id)
+		or VillageFarm.is_fence_tile(tile_id)
+	)
 
 
 func _clear_vegetation_on_cells(
@@ -13966,6 +14255,29 @@ const SETTLEMENT_STRUCTURE_SCAN_RADIUS_TILES := CHUNK_SIZE / 2
 ## construction.md's "Deciding what to build, and who builds it" section),
 ## derived the SAME has_structure_near chunk-scan style every other real
 ## structure-presence check in this file already uses.
+## The distinct BUILDING ids standing in this chunk, read straight off its
+## own building records.
+##
+## Deliberately NOT _present_structure_ids_for_settlement_chunk below, which
+## asks has_structure_near once per placeable id in the catalog -- and
+## has_structure_near walks every modification of NINE chunks, which means
+## every road tile, rail and wall a village has ever laid. That is affordable
+## for a build decision taken occasionally. It is not affordable for every
+## settlement on every step, which is where the stock ceiling runs, and it
+## gets steadily worse as a world fills in and villages pave more of
+## themselves. Reported live as the frame rate decaying over time.
+func _standing_building_ids_in_chunk(chunk_coord: Vector2i) -> Array:
+	var chunk: Chunk = _loaded_chunks.get(chunk_coord)
+	if chunk == null:
+		return []
+	var seen := {}
+	for origin_local in chunk.buildings:
+		var building_id: String = chunk.buildings[origin_local].get("id", "")
+		if building_id != "":
+			seen[building_id] = true
+	return seen.keys()
+
+
 func _present_structure_ids_for_settlement_chunk(chunk_coord: Vector2i) -> Array:
 	var center := chunk_coord * CHUNK_SIZE + Vector2i(CHUNK_SIZE / 2, CHUNK_SIZE / 2)
 	var present: Array = []
@@ -14748,6 +15060,78 @@ func deposit_to_structure_at(global_x: int, global_y: int, item_id: String, coun
 ## itself -- returns false (no-op) if less than `count` is present.
 func withdraw_from_structure_at(global_x: int, global_y: int, item_id: String, count: int) -> bool:
 	return _structure_stocks.stock_for(_structure_stock_key(global_x, global_y)).remove_stock(item_id, count)
+
+
+## -- a BUILDING's own stock (docs/concept/building_storage.md) --------------
+##
+## The same StructureStock the tile-scale economy above already uses, at a
+## third scale -- which is exactly what StructureStock's own doc comment says
+## it is for ("there is exactly one stock shape in this codebase"). Keyed by
+## the BUILDING's own origin tile rather than whichever cell the caller
+## named, so every cell of a 3x2 farmhouse answers with the same stock; a
+## barn does not have six separate corners of grain.
+
+
+## The key a building's stock lives under, or "" for open ground.
+func _building_stock_key(global_x: int, global_y: int) -> String:
+	var record := building_at_global(global_x, global_y)
+	if record.is_empty():
+		return ""
+	var origin: Vector2i = record["chunk_coord"] * CHUNK_SIZE + record["origin_local"]
+	return _structure_stock_key(origin.x, origin.y)
+
+
+## `item_id`'s count in the stock of the building covering this tile. 0 for
+## open ground and for a building nothing has been put into.
+func building_stock_at(global_x: int, global_y: int, item_id: String) -> int:
+	var key := _building_stock_key(global_x, global_y)
+	return 0 if key == "" else _structure_stocks.stock_for(key).stock_of(item_id)
+
+
+## Everything the building covering this tile is holding, as item_id -> int
+## -- what the click-a-building readout draws as its Inventory. Empty for
+## open ground.
+func building_inventory_at(global_x: int, global_y: int) -> Dictionary:
+	var key := _building_stock_key(global_x, global_y)
+	return {} if key == "" else (_structure_stocks.stock_for(key).stock as Dictionary).duplicate()
+
+
+## How much room is left in the building covering this tile, across ALL item
+## ids together: a barn is full when it is full, whatever is in it.
+func building_room_at(global_x: int, global_y: int) -> int:
+	var record := building_at_global(global_x, global_y)
+	if record.is_empty():
+		return 0
+	var capacity := BuildingCatalog.storage_capacity_of(String(record["id"]))
+	var held := 0
+	for count in building_inventory_at(global_x, global_y).values():
+		held += int(count)
+	return maxi(capacity - held, 0)
+
+
+## Puts goods into the building covering this tile and returns HOW MANY IT
+## TOOK -- what fits, never more. A partial deposit is the honest answer for
+## a barn with room for three of the five you are carrying, and a full
+## building taking none of it is the pressure that makes hauling matter
+## (docs/concept/building_storage.md pillar 3).
+func deposit_to_building_at(global_x: int, global_y: int, item_id: String, count: int) -> int:
+	if count <= 0 or item_id == "":
+		return 0
+	var key := _building_stock_key(global_x, global_y)
+	if key == "":
+		return 0
+	var taken := mini(count, building_room_at(global_x, global_y))
+	if taken <= 0:
+		return 0
+	_structure_stocks.stock_for(key).add_stock(item_id, taken)
+	return taken
+
+
+## Takes goods out of the building covering this tile. All-or-nothing,
+## mirroring StructureStock.remove_stock itself.
+func withdraw_from_building_at(global_x: int, global_y: int, item_id: String, count: int) -> bool:
+	var key := _building_stock_key(global_x, global_y)
+	return false if key == "" else _structure_stocks.stock_for(key).remove_stock(item_id, count)
 
 
 ## A meal from the village's own stores (docs/concept/milling_and_
@@ -16771,6 +17155,7 @@ func _unload_chunk(chunk_coord: Vector2i) -> void:
 			creature.free()
 	_loaded_creatures.erase(chunk_coord)
 
+	_free_pond_fish_markers(chunk_coord)
 	for fish in _loaded_fish.get(chunk_coord, []):
 		fish.free()
 	_loaded_fish.erase(chunk_coord)

@@ -38,7 +38,22 @@ const BuildingCatalog = preload("res://src/gameplay/building_catalog.gd")
 const PixelNoise = preload("res://src/rendering/pixel_noise.gd")
 
 ## Real gap between two adjacent plots on the same street.
-const PLOT_GAP_TILES := 1
+##
+## Zero: houses stand shoulder to shoulder, the way a village street
+## actually looks. Suggested directly, with three houses and the gaps
+## between them in shot -- *"could save some space in villages by omitting
+## the gap between houses"* -- and it is real space: one tile per pair, on
+## every street, in every village. What is still guarded is that two plots
+## never OVERLAP, which is what the claimed-cells check has always been for
+## (see test_adjacent_plots_on_the_same_street_never_overlap).
+const PLOT_GAP_TILES := 0
+
+## How far a plot keeps clear of the PLAZA, which is a different question
+## that used to share the constant above. The square is never frontage: a
+## house flush against it would stand in the space the square is. Kept at
+## one tile where the plot gap went to zero, because nothing about the
+## suggestion was about the square.
+const PLAZA_CLEARANCE_TILES := 1
 ## Real gap between one street's own row of buildings and the next one
 ## south of it, on top of the deepest building in the catalog -- the pitch
 ## between two streets is fixed (STREET_PITCH_TILES) so side streets know
@@ -48,6 +63,20 @@ const STREET_GAP_TILES := 2
 ## the fixed row distance between one street and the next. Pinned by
 ## test_village_layout.gd against the catalog itself.
 const STREET_PITCH_TILES := 3 + STREET_GAP_TILES
+
+## The widest hole in a street row a village will simply pave over.
+##
+## Asked for directly, with the broken stretch in shot: *"When there's only
+## a free gap of 1-2 tiles between two street tiles it should close the gap
+## between them"*. A street row is paved only between the doorsteps the
+## founding layout actually joined, so it comes out as paved stretches with
+## holes punched through them -- and a one- or two-tile hole in a road reads
+## as a mistake rather than as a junction. Three is a real break the village
+## genuinely did not pave, and closing it would be inventing a road.
+##
+## Pinned by test_the_gap_a_village_closes_is_the_one_that_was_asked_for
+## rather than left as a number in a comment.
+const STREET_GAP_CLOSE_TILES := 2
 ## Kept off the chunk's own edge -- a plot flush against the border risks
 ## its footprint or doorstep spilling into the next chunk once translated
 ## to global coordinates (the same chunk-edge caution the old ring layout
@@ -69,6 +98,12 @@ const PLAZA_WIDTH_TILES := 8
 const PLAZA_ROWS_NORTH := 3
 const PLAZA_ROWS_SOUTH := 2
 const CIVIC_BUILDING_ID := "city_hall"
+## The store every village keeps, reserved beside the square and raised at
+## founding (docs/concept/village_warehouse.md). Its own plot rather than
+## one of `plots`, for the same reason the hall has one: those carry a
+## building_index the renderer uses to look up npcs[i] for a resident, and
+## nobody lives in a warehouse.
+const WAREHOUSE_BUILDING_ID := "warehouse"
 ## The first house stands this many cells east of the gate, so no doorstep
 ## ever lands on the gate cell itself and the entrance reads as an entrance.
 const _GATE_CLEARANCE_TILES := 2
@@ -203,6 +238,30 @@ static func skeleton(chunk_size: int, seed_value: int, is_dry := Callable()) -> 
 		"origin": civic_origin, "building_id": CIVIC_BUILDING_ID,
 		"doorstep": civic_origin + BuildingCatalog.doorstep_of(CIVIC_BUILDING_ID),
 	}
+	# The store stands on the street's north side, immediately east of the
+	# square: the same rows as the hall (PLAZA_ROWS_NORTH is exactly a
+	# building's depth here), so its own south edge is the street and its
+	# door opens onto it like every other door in the village. Beside the
+	# plaza rather than inside it because the square is PLAZA_WIDTH_TILES
+	# wide and the hall already takes four of those from the middle --
+	# there is no four-wide gap left in it.
+	var warehouse_footprint := BuildingCatalog.footprint_of(WAREHOUSE_BUILDING_ID)
+	var warehouse_origin := Vector2i(plaza.end.x, street_y - warehouse_footprint.y)
+	# ...or west of the square, when east would hang off the chunk. Checked
+	# against the chunk rather than assumed: the plaza's own x is seed-
+	# jittered (see _START_JITTER_TILES), so how much room is left beside it
+	# genuinely varies village to village.
+	if warehouse_origin.x + warehouse_footprint.x > chunk_size:
+		warehouse_origin = Vector2i(plaza.position.x - warehouse_footprint.x, warehouse_origin.y)
+	var warehouse_plot := {}
+	if warehouse_origin.x >= 0 and warehouse_origin.y >= 0:
+		warehouse_plot = {
+			"origin": warehouse_origin,
+			"building_id": WAREHOUSE_BUILDING_ID,
+			"doorstep": warehouse_origin + BuildingCatalog.doorstep_of(WAREHOUSE_BUILDING_ID),
+			"facing": Vector2i(0, 1),
+		}
+
 	# Well and stall on the plaza's south half, clear of the street row (so
 	# they never block the hall's door) and of each other.
 	var landmarks := {
@@ -212,16 +271,43 @@ static func skeleton(chunk_size: int, seed_value: int, is_dry := Callable()) -> 
 	}
 	return {
 		"street_y": street_y, "street_x0": street_x0, "street_x1": street_x1,
-		"plaza": plaza, "civic_plot": civic_plot, "landmarks": landmarks,
+		"plaza": plaza, "civic_plot": civic_plot, "warehouse_plot": warehouse_plot,
+		"landmarks": landmarks,
 	}
 
 
+## The village plan for this chunk.
+##
+## Two passes, and the second one matters: the store's reserved plot sits on
+## prime ground beside the square, which is ground a house might have needed.
+## On a cramped site, claiming it can tip the layout from "houses everyone"
+## to "houses all but one" -- and a site that cannot house its whole roster
+## is founded NOWHERE (see VillageRenderer._place_new_village). Reserving a
+## warehouse would then have quietly deleted villages from the world, which
+## is a far worse outcome than a village without a store. Caught by
+## test_a_building_already_occupying_ground_keeps_later_ones_off_it, which
+## founded nothing the moment this reservation was added.
+##
+## So: prefer the store, but never at the cost of the village. A roomy site
+## gets both; a cramped one houses its people and goes without. See
+## docs/concept/village_warehouse.md's own pillar 1 for the honest caveat
+## this puts on "always".
 func layout(
 	building_ids: Array, chunk_size: int, seed_value: int, is_buildable: Callable, is_occupied: Callable
 ) -> Dictionary:
+	var planned := _layout_once(building_ids, chunk_size, seed_value, is_buildable, is_occupied, true)
+	if houses_everyone(planned, building_ids):
+		return planned
+	return _layout_once(building_ids, chunk_size, seed_value, is_buildable, is_occupied, false)
+
+
+func _layout_once(
+	building_ids: Array, chunk_size: int, seed_value: int, is_buildable: Callable, is_occupied: Callable,
+	reserve_warehouse: bool
+) -> Dictionary:
 	if building_ids.is_empty():
 		var no_roads: Array[Vector2i] = []
-		return {"plots": [], "road_cells": no_roads, "plaza": Rect2i(), "civic_plot": {}, "landmarks": {}}
+		return {"plots": [], "road_cells": no_roads, "plaza": Rect2i(), "civic_plot": {}, "warehouse_plot": {}, "landmarks": {}}
 
 	# VillageRenderer's own is_buildable IS the water test (see
 	# VillageRenderer._is_buildable_local: a village fells the trees it
@@ -261,6 +347,23 @@ func layout(
 	else:
 		plaza = Rect2i()
 
+	# The store's cells are claimed right after the square's, and for the
+	# same reason: `claimed` is what stops a later house plot taking ground
+	# this village has already spoken for. Dropped, rather than moved, if
+	# the ground beside the square will not take it -- a village with
+	# nowhere to put a store honestly has none, the same way a village whose
+	# centre is water gets no plaza and so no hall.
+	var warehouse_plot: Dictionary = bones["warehouse_plot"] if reserve_warehouse else {}
+	if not warehouse_plot.is_empty():
+		var warehouse_cells := _rect_cells(
+			Rect2i(warehouse_plot["origin"], BuildingCatalog.footprint_of(WAREHOUSE_BUILDING_ID))
+		)
+		if _every_cell_clear(warehouse_cells, chunk_size, is_buildable, is_occupied):
+			for cell in warehouse_cells:
+				claimed[cell] = true
+		else:
+			warehouse_plot = {}
+
 	# The main street is paved along its whole buildable length -- but only
 	# along ONE unbroken length of it. Reported in play: "Not all houses
 	# are connected by streets". Ground that is fine on both sides of a
@@ -277,7 +380,7 @@ func layout(
 		# nothing is placed -- VillageRenderer reads an empty plot list as
 		# "this is not a village" and founds nothing here.
 		var no_street: Array[Vector2i] = []
-		return {"plots": [], "road_cells": no_street, "plaza": Rect2i(), "civic_plot": {}, "landmarks": {}}
+		return {"plots": [], "road_cells": no_street, "plaza": Rect2i(), "civic_plot": {}, "warehouse_plot": {}, "landmarks": {}}
 	# The gate clearance keeps a village off the CHUNK's edge, so it is
 	# measured from the spine the skeleton drew, not from wherever this run
 	# happens to start -- applying it again to a short run would eat the
@@ -313,8 +416,8 @@ func layout(
 			# reach the square's western margin jumps to its eastern side
 			# (one gap clear), so the square itself never burns attempts.
 			if has_plaza and current_street_y == street_y:
-				var plaza_west_margin := plaza.position.x - PLOT_GAP_TILES
-				var plaza_east_resume := plaza.end.x + PLOT_GAP_TILES
+				var plaza_west_margin := plaza.position.x - PLAZA_CLEARANCE_TILES
+				var plaza_east_resume := plaza.end.x + PLAZA_CLEARANCE_TILES
 				if x < plaza_east_resume and x + footprint.x > plaza_west_margin:
 					x = plaza_east_resume
 					continue
@@ -427,6 +530,7 @@ func layout(
 	return {
 		"plots": plots, "road_cells": road_array, "plaza": plaza,
 		"civic_plot": bones["civic_plot"] if has_plaza else {},
+		"warehouse_plot": warehouse_plot,
 		"landmarks": landmarks,
 	}
 
@@ -738,8 +842,8 @@ static func next_street_plot(
 			var origin := Vector2i(x, street - footprint.y)
 			# The square is never frontage, paved or not (see this
 			# function's own doc comment).
-			var plaza_west_margin := plaza.position.x - PLOT_GAP_TILES
-			var plaza_east_resume := plaza.end.x + PLOT_GAP_TILES
+			var plaza_west_margin := plaza.position.x - PLAZA_CLEARANCE_TILES
+			var plaza_east_resume := plaza.end.x + PLAZA_CLEARANCE_TILES
 			if x < plaza_east_resume and x + footprint.x > plaza_west_margin and _rect_overlaps_rows(plaza, origin, footprint):
 				x = plaza_east_resume
 				continue
@@ -1003,3 +1107,56 @@ static func _chosen_street_run(
 		if r.y - r.x > best.y - best.x:
 			best = r
 	return best
+
+
+## The cells that CLOSE short holes in this village's own street rows (see
+## STREET_GAP_CLOSE_TILES), in (y, x) order so the same village always
+## closes the same gaps with nothing stored.
+##
+## A run of unpaved cells is a HOLE only when paving stands immediately on
+## both sides of it: a run that reaches the edge of the chunk has nothing on
+## its far side to join, and is where the street genuinely ends. A hole is
+## closed whole or not at all -- a run with anything standing in it (`is_free`
+## says no) is ground somebody is using, not a gap in a road.
+##
+## Pure: `is_paved` and `is_free` answer for one local cell each, the same
+## Callable shape VillageFarm.field_rect and _cell_clear already take, so
+## this needs no world to test and invents nothing that is not already
+## derivable from the skeleton.
+static func short_street_gap_cells(
+	is_paved: Callable, is_free: Callable, chunk_size: int, street_y: int, max_gap: int
+) -> Array:
+	var cells: Array = []
+	if chunk_size <= 0 or max_gap <= 0:
+		return cells
+	var y := street_y
+	while y < chunk_size:
+		if y >= 0:
+			_close_row_gaps(cells, is_paved, is_free, chunk_size, y, max_gap)
+		y += STREET_PITCH_TILES
+	return cells
+
+
+static func _close_row_gaps(
+	cells: Array, is_paved: Callable, is_free: Callable, chunk_size: int, y: int, max_gap: int
+) -> void:
+	var x := 0
+	while x < chunk_size:
+		if is_paved.call(Vector2i(x, y)):
+			x += 1
+			continue
+		var start := x
+		while x < chunk_size and not is_paved.call(Vector2i(x, y)):
+			x += 1
+		# `x` now sits on the first paved cell after the run, or past the end.
+		if start == 0 or x >= chunk_size:
+			continue  # an open end: nothing on the far side to join
+		if x - start > max_gap:
+			continue  # a real break in the street, not a hole in one
+		var run: Array = []
+		for gap_x in range(start, x):
+			if not is_free.call(Vector2i(gap_x, y)):
+				run.clear()
+				break
+			run.append(Vector2i(gap_x, y))
+		cells.append_array(run)

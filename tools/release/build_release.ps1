@@ -197,9 +197,21 @@ try {
 
     # -- Publish to GitHub Releases ------------------------------------------
 
+    # $ErrorActionPreference = 'Stop' (see ReleaseCommon.ps1) turns gh's own
+    # "release not found" stderr line into a terminating error even though
+    # a non-zero exit here is the EXPECTED, handled outcome (no release
+    # yet) -- the same stderr-vs-exit-code trap Invoke-NativeChecked's own
+    # doc comment already covers for other commands in this file, just not
+    # previously applied to this one. Scoped to just this check with the
+    # same temporary-'Continue' pattern, not a second Invoke-NativeChecked
+    # wrapper, since the exit code here is a real branch, not a failure.
     $releaseExists = $true
+    $previousErrorActionPreference = $ErrorActionPreference
+    $ErrorActionPreference = 'Continue'
+    $global:LASTEXITCODE = 0
     & gh release view $tag *> $null
     if ($LASTEXITCODE -ne 0) { $releaseExists = $false }
+    $ErrorActionPreference = $previousErrorActionPreference
 
     if ($releaseExists) {
         Invoke-Checked "Updating existing GitHub release $tag" {

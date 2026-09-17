@@ -60,6 +60,19 @@ const PixelNoise = preload("res://src/rendering/pixel_noise.gd")
 ## template. Frames are concatenated row-major (row 0 left-to-right, then
 ## row 1, ...) -- variant PICKING is uniform across the whole pool (see
 ## frame_for), so row order only matters for readability, not weighting.
+## How deep the soft dark vignette runs around each of soil.png's own cells.
+## Its cells are drawn as CARDS, not as seamless textures: measured down a
+## cell's edge, mean brightness climbs 0.001 -> 0.33 over about thirteen
+## pixels before it reaches the interior. Sliced on the raw content bands
+## every tile keeps that rim, and a 3x2 bed of them renders as six brown
+## squares in a black lattice -- confirmed by rendering the bed at all three
+## candidate insets and looking at it, not by reasoning about it. Thirteen
+## is where the falloff ends; it costs ~7% off each side of a 388px cell and
+## the result tiles seamlessly. Pinned by
+## test_every_soil_variant_tiles_without_a_dark_seam, which checks the
+## RESULT (no dark border ring) rather than this number.
+const _SOIL_VIGNETTE_INSET := 13
+
 const _SHEETS := {
 	"grassland": {
 		"path": "res://assets/sprites/terrain/grass.png",
@@ -84,6 +97,26 @@ const _SHEETS := {
 	"rainforest": {
 		"path": "res://assets/sprites/terrain/rainforest.png",
 		"row_bands": [Vector2i(5, 414), Vector2i(421, 831), Vector2i(838, 1247)],
+	},
+	## Not a biome: the tilled ground a farm bed stands on (see
+	## docs/concept/village_farms.md, "A bed stands on real tilled earth",
+	## and FarmPlotMarker). Nothing ever looks this up by biome name --
+	## BiomeClassifier has no "soil" -- it is fetched explicitly, and lives
+	## here rather than in a twelfth Illustrated*Sprite class because it is
+	## the same 3x3 grid of full-tile ground art every entry above is.
+	##
+	## The ONLY entry carrying column_bands, and it needs them: this sheet's
+	## gutters are drawn near-BLACK instead of magenta, so the chroma-key
+	## pass leaves them opaque and SpriteSheetSlicer.detect_frames finds no
+	## dividers at all -- measured, the whole 1254x1254 sheet came back as
+	## one frame. Both axes are measured from the file instead. See
+	## _load_frames_from for why an explicit grid is the better fit for
+	## ground art regardless of the gutter colour.
+	"soil": {
+		"path": "res://assets/sprites/terrain/soil.png",
+		"row_bands": [Vector2i(27, 407), Vector2i(429, 799), Vector2i(823, 1218)],
+		"column_bands": [Vector2i(29, 417), Vector2i(436, 818), Vector2i(840, 1227)],
+		"inset": _SOIL_VIGNETTE_INSET,
 	},
 }
 
@@ -196,6 +229,15 @@ func frame_for(biome_name: String, seed_value: int) -> Image:
 	return frames[index]
 
 
+## How many distinct variant frames `biome_name`'s sheet actually holds (0
+## for a biome with no sheet). Public so callers that build one node per
+## tile can bound their own texture reuse against the real art rather than
+## a hardcoded count -- see CharacterPreviewDiorama._build_ground, whose 72
+## ground tiles share one texture per variant.
+func frame_count_for(biome_name: String) -> int:
+	return _frames_for(biome_name).size()
+
+
 func _frames_for(biome_name: String) -> Array:
 	if not has_variants(biome_name):
 		return []
@@ -224,6 +266,8 @@ const _DISABLED_DIVIDER_GRAY_MIN := 1.01
 
 func _load_frames_from(biome_name: String) -> Array:
 	var sheet: Dictionary = _SHEETS[biome_name]
+	if sheet.has("column_bands"):
+		return _load_gridded_frames_from(sheet)
 	var image := _prepared_for_slicing(SpriteSheetLoader.load_image(sheet["path"]))
 	var images: Array[Image] = []
 	for band in sheet["row_bands"]:
@@ -243,18 +287,87 @@ func _load_frames_from(biome_name: String) -> Array:
 	return images
 
 
+## Frames cut straight out of a sheet whose BOTH axes are measured (see
+## _SHEETS' own "soil" entry) -- no chroma key, no despill, no content
+## detection, no normalize_frames. Just the nine rects, each resized to
+## CANVAS_SIZE.
+##
+## This exists because that sheet's gutters are black rather than magenta,
+## so the content-detection path finds nothing. But it is the better fit for
+## full-bleed GROUND art on its own merits, and would be even if the gutters
+## were magenta: normalize_frames crops each frame to its own ink and
+## rescales it onto a shared canvas, which is right for a drawing sitting in
+## empty space and WRONG for a tile that has to abut its neighbours -- it
+## would trim whatever happens to be dark at a tile's edge and then stretch
+## what is left, so no two tiles would line up. A ground tile's "content" is
+## the whole cell by definition.
+func _load_gridded_frames_from(sheet: Dictionary) -> Array:
+	var image := SpriteSheetLoader.load_image(sheet["path"])
+	if image == null:
+		return []
+	if image.get_format() != Image.FORMAT_RGBA8:
+		image = image.duplicate() as Image
+		image.convert(Image.FORMAT_RGBA8)
+	var images: Array[Image] = []
+	# Trimmed off every side before the resize, never after: the vignette is
+	# in the SOURCE pixels, so cropping it at 32px would leave a third of a
+	# rim behind and still seam.
+	var inset: int = sheet.get("inset", 0)
+	for row_band in sheet["row_bands"]:
+		var rows: Vector2i = row_band
+		for column_band in sheet["column_bands"]:
+			var columns: Vector2i = column_band
+			var frame := image.get_region(
+				Rect2i(
+					columns.x + inset,
+					rows.x + inset,
+					(columns.y - columns.x) - inset * 2,
+					(rows.y - rows.x) - inset * 2
+				)
+			)
+			frame.resize(CANVAS_SIZE.x, CANVAS_SIZE.y, Image.INTERPOLATE_LANCZOS)
+			images.append(frame)
+	return images
+
+
 ## A second, final cleanup pass over each already-cropped-and-resized frame --
 ## see IllustratedStoneSprite._scrub_magenta_fringe's own doc comment for why
 ## this two-pass (pure-magenta-as-background, softer-cast-as-despill) shape
 ## is needed even once the source sheet has already been despilled.
+## One pass over the frame's own raw PackedByteArray, with the magenta test
+## and the despill BOTH inlined -- see _prepared_for_slicing below for the
+## full reasoning and the measurement behind it. Pinned by
+## test_scrub_magenta_fringe_completes_quickly_at_real_frame_resolution.
 func _scrub_magenta_fringe(image: Image) -> void:
-	for y in image.get_height():
-		for x in image.get_width():
-			var pixel := image.get_pixel(x, y)
-			if _is_magenta(pixel):
-				image.set_pixel(x, y, Color(0, 0, 0, 0))
-			else:
-				image.set_pixel(x, y, _despilled(pixel))
+	var width := image.get_width()
+	var height := image.get_height()
+	var data := image.get_data()
+	var red_min_byte := MAGENTA_RED_MIN * 255.0
+	var blue_min_byte := MAGENTA_BLUE_MIN * 255.0
+	var skew_min_byte := MAGENTA_SKEW_MIN * 255.0
+	var cast_margin_byte := MAGENTA_CAST_MARGIN * 255.0
+	var i := 0
+	for _pixel in width * height:
+		var r := float(data[i])
+		var g := float(data[i + 1])
+		var b := float(data[i + 2])
+		if r >= red_min_byte and b >= blue_min_byte and (r + b) * 0.5 - g >= skew_min_byte:
+			data[i] = 0
+			data[i + 1] = 0
+			data[i + 2] = 0
+			data[i + 3] = 0
+		else:
+			var cast: float = minf(r - g, b - g)
+			if cast > cast_margin_byte:
+				var removed := cast - cast_margin_byte
+				data[i] = clampi(roundi(r - removed), 0, 255)
+				data[i + 2] = clampi(roundi(b - removed), 0, 255)
+		i += 4
+	# set_data, not create_from_data: callers hold this exact Image (see
+	# _load_frames_from, which scrubs each already-sliced frame in place and
+	# appends THAT object), so handing back a new one would silently drop
+	# the scrub.
+	image.set_data(width, height, false, Image.FORMAT_RGBA8, data)
 
 
 ## Makes a sheet's background genuinely transparent before it reaches
@@ -270,14 +383,68 @@ func _prepared_for_slicing(image: Image) -> Image:
 		prepared.convert(Image.FORMAT_RGBA8)
 	if had_alpha_channel:
 		return prepared
-	for y in prepared.get_height():
-		for x in prepared.get_width():
-			var pixel := prepared.get_pixel(x, y)
-			if _is_magenta(pixel):
-				prepared.set_pixel(x, y, Color(pixel.r, pixel.g, pixel.b, 0.0))
-			else:
-				prepared.set_pixel(x, y, _despilled(pixel))
-	return prepared
+	# One pass over the raw PackedByteArray with BOTH per-pixel checks
+	# inlined -- no call to _is_magenta/_despilled in the loop body, only
+	# built-in global functions (minf/clampi/roundi). This is the same fix,
+	# for the same reason, that SpriteSheetSlicer.chroma_keyed and
+	# IllustratedStoneSprite._prepared_for_slicing already carry: the
+	# bottleneck is GDScript's own per-call overhead for a user-defined
+	# function, which a 1254x1254 loop pays 1.57M times, NOT get_pixel
+	# itself (see SpriteSheetSlicer.chroma_keyed's own doc comment for the
+	# measured three-way comparison that established this).
+	#
+	# This file was a separate, never-fixed duplicate of that exact naive
+	# technique -- measured at ~458ms of the grassland sheet's own ~987ms
+	# first load, which the character creator pays on its first open
+	# because its diorama stands on real grassland ground (see docs/concept/
+	# character_creator_preview_scene.md's "Load cost" section). Pinned by
+	# test_prepared_for_slicing_completes_quickly_at_real_sheet_resolution.
+	#
+	# The per-pixel semantics are _is_magenta/_despilled's, byte-for-byte:
+	# both sides of every comparison are scaled by the same 255, so the
+	# 0-255 integer compare means exactly what the original 0.0-1.0 float
+	# one did. Note the SKEW test rather than a per-channel green maximum --
+	# that is this class's own magenta rule (see MAGENTA_SKEW_MIN), and why
+	# IllustratedStoneSprite's otherwise-identical loop could not simply be
+	# copied here.
+	var width := prepared.get_width()
+	var height := prepared.get_height()
+	var data := prepared.get_data()
+	# INTEGER thresholds, because every value read out of a PackedByteArray
+	# already is one: `r >= 140.25` over integers means exactly `r >= 141`,
+	# i.e. ceili, and `cast > 7.65` means exactly `cast >= 8`, i.e.
+	# floori + 1. Converting the thresholds once up here rather than
+	# converting three bytes to float 1.57M times down there is worth a
+	# real, measured chunk of this loop (see the budgeted pin).
+	var red_min_byte := ceili(MAGENTA_RED_MIN * 255.0)
+	var blue_min_byte := ceili(MAGENTA_BLUE_MIN * 255.0)
+	# The skew test is (r + b) / 2 - g >= SKEW_MIN; doubled through, it is
+	# r + b - 2g >= 2 * SKEW_MIN, which keeps the whole comparison in ints.
+	var double_skew_min_byte := ceili(MAGENTA_SKEW_MIN * 2.0 * 255.0)
+	var cast_margin_byte := MAGENTA_CAST_MARGIN * 255.0
+	var min_cast_byte := floori(cast_margin_byte) + 1
+	var i := 0
+	for _pixel in width * height:
+		var r: int = data[i]
+		var g: int = data[i + 1]
+		var b: int = data[i + 2]
+		if r >= red_min_byte and b >= blue_min_byte and r + b - 2 * g >= double_skew_min_byte:
+			# Alpha only -- RGB is deliberately left intact, matching the
+			# Color(pixel.r, pixel.g, pixel.b, 0.0) this replaces (unlike
+			# _scrub_magenta_fringe above, which zeroes all four).
+			data[i + 3] = 0
+		else:
+			var cast := mini(r - g, b - g)
+			if cast >= min_cast_byte:
+				# Floats again here, and only here: this branch is cold
+				# (real ground has no magenta cast on most of its pixels)
+				# and the rounding has to land exactly where the original
+				# Color-based despill's own float math did.
+				var removed := float(cast) - cast_margin_byte
+				data[i] = clampi(roundi(float(r) - removed), 0, 255)
+				data[i + 2] = clampi(roundi(float(b) - removed), 0, 255)
+		i += 4
+	return Image.create_from_data(width, height, false, Image.FORMAT_RGBA8, data)
 
 
 ## `color` with any magenta-direction cast removed -- see

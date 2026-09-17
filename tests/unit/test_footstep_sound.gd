@@ -95,26 +95,28 @@ func test_the_material_argument_defaults_to_leaving_every_caller_unchanged():
 
 func test_every_surface_key_resolves_to_a_real_non_empty_clip_path():
 	for surface in ["grass", "forest", "snow", "underwater", "sand", "rock", "wood", "default"]:
-		var path: String = FootstepSound.clip_path_for(surface)
+		var path: String = FootstepSound.step_clip_path_for(surface, 0.0)
 		assert_true(path.begins_with("res://"), "%s should map to a real resource path" % surface)
 
 
-func test_an_unknown_surface_falls_back_to_the_default_clip():
-	assert_eq(FootstepSound.clip_path_for("lava"), FootstepSound.clip_path_for("default"))
+func test_an_unknown_surface_falls_back_to_the_one_general_walking_recording():
+	assert_eq(FootstepSound.step_clip_path_for("lava", 0.0), FootstepSound.FALLBACK_CLIP_PATH)
 
 
 ## Reported live: "so river wading should be used for 'underwater walks'"
 ## -- a real, distinct water sound, not the same generic dry-land walking
-## clip every other unsourced surface shares. Reuses river.ogg (the
-## ambient river-proximity layer's own real flowing-water recording, see
-## docs/concept/soundscape.md) rather than a second, separately-licensed
-## file -- the same water, the same real reason to be heard, whether it's
-## the continuous bed nearby or the one-shot underfoot when you're
-## actually standing in it.
-func test_underwater_gets_a_real_distinct_water_clip_not_the_default():
-	var path := FootstepSound.clip_path_for("underwater")
-	assert_ne(path, FootstepSound.clip_path_for("default"))
-	assert_true(path.begins_with("res://"))
+## clip every other unsourced surface shared. That was answered at the time
+## by pointing underwater at `river.ogg`, the ambient river-proximity
+## layer's own flowing-water recording, because it was the only water in
+## the project. It now plays real recordings of feet going INTO water
+## instead (see CREDITS.md) -- which is what wading actually is, where
+## `river.ogg` is a river heard from the bank. `river.ogg` keeps its
+## ambient job untouched.
+func test_underwater_gets_real_water_steps_not_the_general_walking_recording():
+	for path in FootstepSound.step_variants_for("underwater"):
+		assert_ne(path, FootstepSound.FALLBACK_CLIP_PATH)
+		assert_true(path.begins_with("res://"))
+	assert_gte(FootstepSound.step_variants_for("underwater").size(), 5)
 
 
 ## Requested directly ("find a styrofoam crushing sound and use it for the
@@ -139,28 +141,287 @@ func test_mushroom_crush_clip_path_points_at_the_real_sourced_recording():
 ## path, not just "non-default", mirroring the mushroom-crush test above --
 ## the current convention in this file now that both departures from the
 ## Commons-only pattern are real, named sources rather than a gap.
-func test_grass_clip_path_points_at_the_real_sourced_recording():
-	assert_eq(FootstepSound.clip_path_for("grass"), "res://assets/audio/footsteps/grass.ogg")
+## The pack that recording came from held nine numbered grass variations
+## and only the first was ever copied in, because the lookup was one path
+## per surface. All nine ship now; `steps/grass_00.ogg` is byte-for-byte
+## the file this test used to name.
+func test_grass_steps_point_at_the_real_sourced_recordings():
+	var pool := FootstepSound.step_variants_for("grass")
+	assert_eq(pool.size(), 9, "the pack's nine grass variations")
+	for path in pool:
+		assert_true(path.begins_with("res://assets/audio/footsteps/steps/grass_"), path)
 
 
 # -- per-surface volume: distinct sourced clips were never level-matched --
 
 ## Reported live: "The grass footsteps are way too loud... can you make
-## them fainter?" Real audio-editing tooling to re-normalize the source
-## recording's own level isn't available in this environment (the same
-## constraint already named elsewhere in this file for trimming/codec
-## fixes) -- corrected in PLAYBACK instead, the same "cap it in code, not
-## the asset" shape MUSHROOM_CRUSH_MAX_DURATION_SECONDS already
-## established for the crush sound's own length.
+## them fainter?" -12.0 dB was the answer then, arrived at by ear. Kept as
+## its own test because the pipeline, decoding grass's nine clips and
+## solving for the level every OTHER surface is also matched to, landed on
+## -12.0 for grass independently -- so this is now a check that a measured
+## result still agrees with the one a person heard.
 func test_grass_footsteps_play_quieter_than_the_default_volume():
-	assert_lt(FootstepSound.volume_db_for("grass"), 0.0)
+	assert_almost_eq(FootstepSound.volume_db_for("grass"), -12.0, 0.05)
 
 
-## Every OTHER surface's clip was sourced from the same two places
-## (Wikimedia Commons, Pixabay) at a level nobody has reported as
-## mismatched -- only grass gets an adjustment; everything else,
-## including an unrecognized surface, stays at the plain default (0dB,
-## i.e. unchanged) rather than silently drifting too.
-func test_every_other_surface_plays_at_the_default_volume():
-	for surface in ["snow", "forest", "underwater", "default", "sand", "rock", "lava"]:
-		assert_eq(FootstepSound.volume_db_for(surface), 0.0, surface)
+## A surface nobody has recorded plays at the plain default (0dB) rather
+## than silently drifting quieter or louder. Every REAL surface has a
+## measured gain -- see test_every_surfaces_volume_is_the_gain_the_pipeline_
+## measured, which is what pins those.
+func test_an_unrecognized_surface_plays_at_the_default_volume():
+	assert_eq(FootstepSound.volume_db_for("lava"), 0.0)
+
+
+# -- a long recording is not a footstep ------------------------------------
+#
+# Reported live: "Can you find better sounds for the footsteps on every
+# terrain? They sound weak and not natural".
+#
+# Measured before changing anything (tools/probe_footstep_levels.gd), and the
+# lengths were the whole explanation: a footstep one-shot is ~0.2-0.5s, and
+# only grass.ogg is one. forest_twigs.ogg is 41.67s, snow.mp3 13.72s,
+# default.ogg 3.64s -- long recordings of somebody walking continuously, and
+# every step played them from 0.0. So each step was the same fraction of the
+# same run-in, at the same pitch, identically, forever: quiet where the
+# recording had not reached a real impact yet ("weak"), and mechanically
+# identical when it had ("not natural").
+#
+# The clips do not need replacing for that. A long recording of walking is
+# full of real, varied footsteps -- it just has to be READ as one step at a
+# time.
+
+
+func test_a_long_recording_is_treated_as_a_bed_of_many_steps():
+	assert_true(
+		FootstepSound.is_walking_bed(FootstepSound.FALLBACK_CLIP_PATH),
+		"3.64s of walking is not one step"
+	)
+
+
+func test_a_real_one_shot_is_left_alone():
+	assert_false(
+		FootstepSound.is_walking_bed("res://assets/audio/footsteps/steps/grass_00.ogg"),
+		"a quarter-second clip IS one step"
+	)
+
+
+## A bed is read at a different place every step, which is where the variety
+## comes from: the recording already holds dozens of real, different steps.
+func test_every_step_into_a_bed_starts_somewhere_else():
+	var bed := FootstepSound.FALLBACK_CLIP_PATH
+	var first := FootstepSound.offset_for(bed, 0.0)
+	var middle := FootstepSound.offset_for(bed, 0.5)
+	var last := FootstepSound.offset_for(bed, 1.0)
+	assert_almost_eq(first, 0.0, 0.0001, "the first roll starts at the top")
+	assert_gt(middle, first)
+	assert_gt(last, middle)
+
+
+## ...and never so late that the window would run off the end of the clip,
+## which would be a step that fades into nothing.
+func test_a_step_never_starts_so_late_that_it_runs_out_of_recording():
+	for clip_path in FootstepSound.CLIP_LENGTH_SECONDS:
+		var latest: float = FootstepSound.offset_for(clip_path, 1.0)
+		assert_lte(
+			latest + FootstepSound.STEP_WINDOW_SECONDS,
+			float(FootstepSound.CLIP_LENGTH_SECONDS[clip_path]) + 0.0001,
+			"%s's last step runs off the end" % clip_path
+		)
+
+
+func test_a_one_shot_always_starts_at_its_own_beginning():
+	for roll in [0.0, 0.5, 1.0]:
+		var one_shot := "res://assets/audio/footsteps/steps/grass_00.ogg"
+		assert_almost_eq(FootstepSound.offset_for(one_shot, roll), 0.0, 0.0001)
+
+
+## The other half of "not natural": the same sample at the same pitch every
+## step reads as a machine. A few percent either way is the standard cure.
+func test_no_two_steps_land_on_the_same_pitch():
+	var low := FootstepSound.pitch_scale_for(0.0)
+	var high := FootstepSound.pitch_scale_for(1.0)
+	assert_lt(low, 1.0, "the low roll should pitch down")
+	assert_gt(high, 1.0, "the high roll should pitch up")
+	assert_almost_eq(FootstepSound.pitch_scale_for(0.5), 1.0, 0.0001, "the middle is unaltered")
+
+
+## Small: a footstep that swings a whole semitone reads as a different
+## person's boot, not as the same boot on a different patch of ground.
+func test_the_pitch_swing_stays_subtle():
+	assert_lt(FootstepSound.PITCH_VARIATION, 0.12, "more than this is a different boot")
+	assert_gt(FootstepSound.PITCH_VARIATION, 0.01, "less than this is inaudible")
+
+
+## A step is allowed to sound for about as long as a real one does. Longer
+## and the tails of four voices pile into a crowd walking behind you; that
+## overlap is what the pool's own recycling used to cut off mid-ring.
+func test_one_step_sounds_for_about_as_long_as_a_step():
+	assert_gte(FootstepSound.STEP_WINDOW_SECONDS, 0.2)
+	assert_lte(FootstepSound.STEP_WINDOW_SECONDS, 0.6)
+
+
+## The lengths are MEASURED off the real files every run, not trusted: the
+## offsets above are derived from them, so a swapped clip that nobody
+## re-measured would silently start reading steps off the end of it.
+func test_the_pinned_clip_lengths_are_the_real_files_own():
+	for clip_path in FootstepSound.CLIP_LENGTH_SECONDS:
+		var stream = load(clip_path)
+		assert_not_null(stream, clip_path)
+		assert_almost_eq(
+			stream.get_length(), float(FootstepSound.CLIP_LENGTH_SECONDS[clip_path]), 0.05,
+			"%s is not the length it is pinned at -- re-run tools/prepare_footstep_oneshots.py" % clip_path
+		)
+
+
+# -- a pool of real steps per surface --------------------------------------
+#
+# The other half of "find better sounds for the footsteps on every terrain".
+# The clips this file used to reach for were recordings of somebody WALKING,
+# one per surface, and their levels were 35 dB apart end to end:
+#
+#     grass.ogg          rms -12.59 dBFS   (a real one-shot)
+#     snow.mp3           rms -38.42 dBFS
+#     forest_twigs.ogg   rms -41.26 dBFS
+#     default.ogg        rms -47.63 dBFS
+#
+# So grass was reported "way too loud" and got -12 dB -- a third of the way
+# across a 35 dB gap -- while everything else stayed "weak". Every surface
+# now has several real, isolated footstep one-shots instead, measured and
+# level-matched by tools/prepare_footstep_oneshots.py, which writes what it
+# measured into steps/levels.json. These tests bind this file to that
+# measurement: the numbers below are never eyeballed, and the code cannot
+# drift away from the files it is describing.
+
+const LEVELS_MANIFEST_PATH := "res://assets/audio/footsteps/steps/levels.json"
+
+## Every surface the game can actually put underfoot -- both halves of
+## surface_for's own answer (the biome's ground and anything laid on top of
+## it), plus the fallback, so "every terrain" is checked as literally as the
+## ask was phrased.
+const EVERY_REAL_SURFACE := [
+	"grass", "forest", "sand", "rock", "wood", "snow", "underwater", "default"
+]
+
+
+func _levels() -> Dictionary:
+	var file := FileAccess.open(LEVELS_MANIFEST_PATH, FileAccess.READ)
+	assert_not_null(file, "no levels manifest -- run tools/prepare_footstep_oneshots.py")
+	return JSON.parse_string(file.get_as_text())
+
+
+func test_every_surface_has_a_pool_of_real_steps_not_one_recording():
+	for surface in EVERY_REAL_SURFACE:
+		assert_gte(
+			FootstepSound.step_variants_for(surface).size(), 5,
+			"%s has too few real steps to stop sounding repetitive" % surface
+		)
+
+
+func test_every_step_a_surface_offers_is_a_real_loadable_file():
+	for surface in EVERY_REAL_SURFACE:
+		for path in FootstepSound.step_variants_for(surface):
+			assert_true(ResourceLoader.exists(path), path)
+			assert_not_null(load(path), path)
+
+
+## Re-measured off the real files every run, like the bed lengths above: a
+## variant that is seconds long is a recording of walking that slipped into
+## the pool, and the whole point of the pool is that it is not one.
+func test_every_step_is_the_length_of_one_step():
+	for surface in EVERY_REAL_SURFACE:
+		for path in FootstepSound.step_variants_for(surface):
+			var stream = load(path)
+			var length: float = stream.get_length()
+			assert_gt(length, 0.05, "%s is too short to be a step" % path)
+			assert_lt(length, 0.8, "%s is a recording of walking, not a step" % path)
+
+
+## ...and so is never read as a window into anything -- it IS the step.
+func test_a_real_step_is_never_treated_as_a_bed():
+	for surface in EVERY_REAL_SURFACE:
+		for path in FootstepSound.step_variants_for(surface):
+			assert_false(FootstepSound.is_walking_bed(path), path)
+			assert_almost_eq(FootstepSound.offset_for(path, 1.0), 0.0, 0.0001, path)
+
+
+## A surface with nothing sourced still makes a sound: the generic walking
+## recording, read one window at a time, exactly as before the pools existed.
+## This is what keeps that fallback load-bearing rather than decoration.
+func test_a_surface_with_no_pool_of_its_own_still_falls_back_to_the_bed():
+	assert_eq(FootstepSound.step_variants_for("lava"), [])
+	var fallback := FootstepSound.step_clip_path_for("lava", 0.5)
+	assert_true(FootstepSound.is_walking_bed(fallback), "the fallback must still be windowed")
+	assert_gt(FootstepSound.offset_for(fallback, 1.0), 0.0)
+
+
+func test_consecutive_steps_walk_through_the_whole_pool():
+	var seen: Dictionary = {}
+	var pool := FootstepSound.step_variants_for("grass")
+	for i in 200:
+		seen[FootstepSound.step_clip_path_for("grass", float(i) / 200.0)] = true
+	assert_eq(seen.size(), pool.size(), "some of the pool is unreachable")
+
+
+func test_a_roll_at_either_extreme_still_lands_inside_the_pool():
+	var pool := FootstepSound.step_variants_for("snow")
+	for roll in [-1.0, 0.0, 0.999, 1.0, 2.0]:
+		assert_true(pool.has(FootstepSound.step_clip_path_for("snow", roll)), str(roll))
+
+
+# -- the levels are measured, never guessed --------------------------------
+
+
+## The one binding that matters: the gain this file applies per surface is
+## the gain the pipeline MEASURED, not a number anybody chose. Godot cannot
+## read raw samples out of a compressed stream, so the measurement itself
+## lives in the manifest the tool writes -- and this pins the code to it, so
+## re-running the tool on swapped clips cannot silently leave stale dB
+## behind in the source.
+func test_every_surfaces_volume_is_the_gain_the_pipeline_measured():
+	var surfaces: Dictionary = _levels()["surfaces"]
+	for surface in surfaces:
+		assert_almost_eq(
+			FootstepSound.volume_db_for(surface), float(surfaces[surface]["gain_db"]), 0.001,
+			"%s's volume drifted from the measurement" % surface
+		)
+
+
+## What the whole exercise was for. 35 dB apart is why one surface was "way
+## too loud" and the rest "weak"; no surface may sit more than a few dB off
+## its neighbours now.
+func test_no_surface_is_dramatically_louder_than_another():
+	var surfaces: Dictionary = _levels()["surfaces"]
+	var quietest := 999.0
+	var loudest := -999.0
+	for surface in surfaces:
+		var level := float(surfaces[surface]["achieved_rms_dbfs"])
+		quietest = minf(quietest, level)
+		loudest = maxf(loudest, level)
+	assert_lt(loudest - quietest, 4.0, "the surfaces are not level-matched")
+
+
+## And nothing was pushed into clipping to get there -- there has to be room
+## left for the pitch and volume the player applies on top, per step.
+func test_no_surface_was_pushed_into_clipping():
+	var manifest := _levels()
+	for surface in manifest["surfaces"]:
+		assert_lte(
+			float(manifest["surfaces"][surface]["achieved_peak_dbfs"]),
+			float(manifest["peak_ceiling_dbfs"]) + 0.001, surface
+		)
+
+
+## Nothing ships unreferenced: a clip in the directory that no surface names
+## is either a pool that was renamed out from under the code, or dead weight
+## in the repository.
+func test_no_shipped_step_file_is_unreachable_from_any_surface():
+	var referenced: Dictionary = {}
+	for surface in EVERY_REAL_SURFACE:
+		for path in FootstepSound.step_variants_for(surface):
+			referenced[path.get_file()] = true
+	var directory := DirAccess.open("res://assets/audio/footsteps/steps")
+	assert_not_null(directory)
+	for name in directory.get_files():
+		if not name.ends_with(".ogg"):
+			continue
+		assert_true(referenced.has(name), "%s is shipped but no surface plays it" % name)

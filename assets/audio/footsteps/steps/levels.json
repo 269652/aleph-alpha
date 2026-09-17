@@ -1,0 +1,456 @@
+{
+  "generated_by": "tools/prepare_footstep_oneshots.py",
+  "peak_ceiling_dbfs": -1.0,
+  "surfaces": {
+    "default": {
+      "achieved_peak_dbfs": -7.27,
+      "achieved_rms_dbfs": -24.61,
+      "clips": [
+        {
+          "file": "default_00.ogg",
+          "peak_dbfs": -0.53,
+          "rms_dbfs": -17.81,
+          "seconds": 0.135
+        },
+        {
+          "file": "default_01.ogg",
+          "peak_dbfs": -0.77,
+          "rms_dbfs": -17.79,
+          "seconds": 0.132
+        },
+        {
+          "file": "default_02.ogg",
+          "peak_dbfs": -0.67,
+          "rms_dbfs": -17.61,
+          "seconds": 0.132
+        },
+        {
+          "file": "default_03.ogg",
+          "peak_dbfs": -0.63,
+          "rms_dbfs": -17.95,
+          "seconds": 0.132
+        },
+        {
+          "file": "default_04.ogg",
+          "peak_dbfs": -0.37,
+          "rms_dbfs": -17.42,
+          "seconds": 0.132
+        },
+        {
+          "file": "default_05.ogg",
+          "peak_dbfs": -0.68,
+          "rms_dbfs": -18.02,
+          "seconds": 0.132
+        },
+        {
+          "file": "default_06.ogg",
+          "peak_dbfs": -0.76,
+          "rms_dbfs": -17.3,
+          "seconds": 0.132
+        },
+        {
+          "file": "default_07.ogg",
+          "peak_dbfs": -0.88,
+          "rms_dbfs": -18.28,
+          "seconds": 0.132
+        },
+        {
+          "file": "default_08.ogg",
+          "peak_dbfs": -0.51,
+          "rms_dbfs": -17.2,
+          "seconds": 0.132
+        }
+      ],
+      "gain_db": -6.9,
+      "peak_capped": false
+    },
+    "forest": {
+      "achieved_peak_dbfs": -5.73,
+      "achieved_rms_dbfs": -24.63,
+      "clips": [
+        {
+          "file": "forest_00.ogg",
+          "peak_dbfs": -17.06,
+          "rms_dbfs": -34.59,
+          "seconds": 0.397
+        },
+        {
+          "file": "forest_01.ogg",
+          "peak_dbfs": -17.2,
+          "rms_dbfs": -34.84,
+          "seconds": 0.397
+        },
+        {
+          "file": "forest_02.ogg",
+          "peak_dbfs": -18.89,
+          "rms_dbfs": -35.65,
+          "seconds": 0.397
+        },
+        {
+          "file": "forest_03.ogg",
+          "peak_dbfs": -17.15,
+          "rms_dbfs": -34.17,
+          "seconds": 0.397
+        },
+        {
+          "file": "forest_04.ogg",
+          "peak_dbfs": -17.3,
+          "rms_dbfs": -35.01,
+          "seconds": 0.397
+        },
+        {
+          "file": "forest_05.ogg",
+          "peak_dbfs": -18.33,
+          "rms_dbfs": -38.51,
+          "seconds": 0.422
+        },
+        {
+          "file": "forest_06.ogg",
+          "peak_dbfs": -17.17,
+          "rms_dbfs": -37.82,
+          "seconds": 0.397
+        },
+        {
+          "file": "forest_07.ogg",
+          "peak_dbfs": -16.83,
+          "rms_dbfs": -35.27,
+          "seconds": 0.397
+        }
+      ],
+      "gain_db": 11.1,
+      "peak_capped": false
+    },
+    "grass": {
+      "achieved_peak_dbfs": -12.29,
+      "achieved_rms_dbfs": -24.57,
+      "clips": [
+        {
+          "file": "grass_00.ogg",
+          "peak_dbfs": -0.74,
+          "rms_dbfs": -12.59,
+          "seconds": 0.243
+        },
+        {
+          "file": "grass_01.ogg",
+          "peak_dbfs": -0.77,
+          "rms_dbfs": -12.8,
+          "seconds": 0.243
+        },
+        {
+          "file": "grass_02.ogg",
+          "peak_dbfs": -0.69,
+          "rms_dbfs": -12.39,
+          "seconds": 0.243
+        },
+        {
+          "file": "grass_03.ogg",
+          "peak_dbfs": -0.43,
+          "rms_dbfs": -12.75,
+          "seconds": 0.243
+        },
+        {
+          "file": "grass_04.ogg",
+          "peak_dbfs": -0.67,
+          "rms_dbfs": -12.3,
+          "seconds": 0.243
+        },
+        {
+          "file": "grass_05.ogg",
+          "peak_dbfs": -0.61,
+          "rms_dbfs": -12.91,
+          "seconds": 0.243
+        },
+        {
+          "file": "grass_06.ogg",
+          "peak_dbfs": -0.85,
+          "rms_dbfs": -12.22,
+          "seconds": 0.243
+        },
+        {
+          "file": "grass_07.ogg",
+          "peak_dbfs": -0.29,
+          "rms_dbfs": -12.94,
+          "seconds": 0.243
+        },
+        {
+          "file": "grass_08.ogg",
+          "peak_dbfs": -0.66,
+          "rms_dbfs": -12.19,
+          "seconds": 0.243
+        }
+      ],
+      "gain_db": -12.0,
+      "peak_capped": false
+    },
+    "rock": {
+      "achieved_peak_dbfs": -4.0,
+      "achieved_rms_dbfs": -24.64,
+      "clips": [
+        {
+          "file": "rock_00.ogg",
+          "peak_dbfs": -1.65,
+          "rms_dbfs": -21.49,
+          "seconds": 0.186
+        },
+        {
+          "file": "rock_01.ogg",
+          "peak_dbfs": -7.0,
+          "rms_dbfs": -20.08,
+          "seconds": 0.104
+        },
+        {
+          "file": "rock_02.ogg",
+          "peak_dbfs": -7.09,
+          "rms_dbfs": -23.47,
+          "seconds": 0.248
+        },
+        {
+          "file": "rock_03.ogg",
+          "peak_dbfs": -1.57,
+          "rms_dbfs": -20.53,
+          "seconds": 0.155
+        },
+        {
+          "file": "rock_04.ogg",
+          "peak_dbfs": -3.71,
+          "rms_dbfs": -23.68,
+          "seconds": 0.241
+        },
+        {
+          "file": "rock_05.ogg",
+          "peak_dbfs": -1.89,
+          "rms_dbfs": -19.8,
+          "seconds": 0.226
+        },
+        {
+          "file": "rock_06.ogg",
+          "peak_dbfs": -0.7,
+          "rms_dbfs": -18.26,
+          "seconds": 0.188
+        },
+        {
+          "file": "rock_07.ogg",
+          "peak_dbfs": -1.47,
+          "rms_dbfs": -20.19,
+          "seconds": 0.23
+        },
+        {
+          "file": "rock_08.ogg",
+          "peak_dbfs": -8.12,
+          "rms_dbfs": -24.32,
+          "seconds": 0.192
+        },
+        {
+          "file": "rock_09.ogg",
+          "peak_dbfs": -5.83,
+          "rms_dbfs": -21.57,
+          "seconds": 0.204
+        }
+      ],
+      "gain_db": -3.3,
+      "peak_capped": false
+    },
+    "sand": {
+      "achieved_peak_dbfs": -1.0,
+      "achieved_rms_dbfs": -25.97,
+      "clips": [
+        {
+          "file": "sand_00.ogg",
+          "peak_dbfs": -0.93,
+          "rms_dbfs": -25.47,
+          "seconds": 0.443
+        },
+        {
+          "file": "sand_01.ogg",
+          "peak_dbfs": -1.07,
+          "rms_dbfs": -24.14,
+          "seconds": 0.32
+        },
+        {
+          "file": "sand_02.ogg",
+          "peak_dbfs": -0.41,
+          "rms_dbfs": -25.81,
+          "seconds": 0.302
+        },
+        {
+          "file": "sand_03.ogg",
+          "peak_dbfs": -0.36,
+          "rms_dbfs": -25.94,
+          "seconds": 0.406
+        },
+        {
+          "file": "sand_04.ogg",
+          "peak_dbfs": -0.83,
+          "rms_dbfs": -26.13,
+          "seconds": 0.34
+        },
+        {
+          "file": "sand_05.ogg",
+          "peak_dbfs": -0.0,
+          "rms_dbfs": -22.33,
+          "seconds": 0.329
+        }
+      ],
+      "gain_db": -1.0,
+      "peak_capped": true
+    },
+    "snow": {
+      "achieved_peak_dbfs": -1.08,
+      "achieved_rms_dbfs": -26.89,
+      "clips": [
+        {
+          "file": "snow_00.ogg",
+          "peak_dbfs": -14.68,
+          "rms_dbfs": -35.44,
+          "seconds": 0.498
+        },
+        {
+          "file": "snow_01.ogg",
+          "peak_dbfs": -10.86,
+          "rms_dbfs": -34.4,
+          "seconds": 0.638
+        },
+        {
+          "file": "snow_02.ogg",
+          "peak_dbfs": -8.58,
+          "rms_dbfs": -33.7,
+          "seconds": 0.611
+        },
+        {
+          "file": "snow_03.ogg",
+          "peak_dbfs": -11.28,
+          "rms_dbfs": -33.24,
+          "seconds": 0.667
+        },
+        {
+          "file": "snow_04.ogg",
+          "peak_dbfs": -10.24,
+          "rms_dbfs": -36.17,
+          "seconds": 0.627
+        },
+        {
+          "file": "snow_05.ogg",
+          "peak_dbfs": -9.93,
+          "rms_dbfs": -31.17,
+          "seconds": 0.531
+        },
+        {
+          "file": "snow_06.ogg",
+          "peak_dbfs": -17.29,
+          "rms_dbfs": -38.16,
+          "seconds": 0.703
+        },
+        {
+          "file": "snow_07.ogg",
+          "peak_dbfs": -11.58,
+          "rms_dbfs": -32.83,
+          "seconds": 0.656
+        }
+      ],
+      "gain_db": 7.5,
+      "peak_capped": true
+    },
+    "underwater": {
+      "achieved_peak_dbfs": -5.5,
+      "achieved_rms_dbfs": -24.54,
+      "clips": [
+        {
+          "file": "underwater_00.ogg",
+          "peak_dbfs": -0.0,
+          "rms_dbfs": -19.81,
+          "seconds": 0.268
+        },
+        {
+          "file": "underwater_01.ogg",
+          "peak_dbfs": -0.8,
+          "rms_dbfs": -19.58,
+          "seconds": 0.268
+        },
+        {
+          "file": "underwater_02.ogg",
+          "peak_dbfs": -1.13,
+          "rms_dbfs": -18.15,
+          "seconds": 0.262
+        },
+        {
+          "file": "underwater_03.ogg",
+          "peak_dbfs": -0.0,
+          "rms_dbfs": -18.81,
+          "seconds": 0.231
+        },
+        {
+          "file": "underwater_04.ogg",
+          "peak_dbfs": -0.28,
+          "rms_dbfs": -18.87,
+          "seconds": 0.24
+        }
+      ],
+      "gain_db": -5.5,
+      "peak_capped": false
+    },
+    "wood": {
+      "achieved_peak_dbfs": -12.33,
+      "achieved_rms_dbfs": -24.59,
+      "clips": [
+        {
+          "file": "wood_00.ogg",
+          "peak_dbfs": -0.76,
+          "rms_dbfs": -12.82,
+          "seconds": 0.284
+        },
+        {
+          "file": "wood_01.ogg",
+          "peak_dbfs": -0.8,
+          "rms_dbfs": -12.9,
+          "seconds": 0.284
+        },
+        {
+          "file": "wood_02.ogg",
+          "peak_dbfs": -0.59,
+          "rms_dbfs": -12.6,
+          "seconds": 0.284
+        },
+        {
+          "file": "wood_03.ogg",
+          "peak_dbfs": -0.59,
+          "rms_dbfs": -12.99,
+          "seconds": 0.284
+        },
+        {
+          "file": "wood_04.ogg",
+          "peak_dbfs": -0.7,
+          "rms_dbfs": -12.56,
+          "seconds": 0.284
+        },
+        {
+          "file": "wood_05.ogg",
+          "peak_dbfs": -0.78,
+          "rms_dbfs": -13.16,
+          "seconds": 0.284
+        },
+        {
+          "file": "wood_06.ogg",
+          "peak_dbfs": -0.53,
+          "rms_dbfs": -12.46,
+          "seconds": 0.284
+        },
+        {
+          "file": "wood_07.ogg",
+          "peak_dbfs": -0.75,
+          "rms_dbfs": -13.26,
+          "seconds": 0.284
+        },
+        {
+          "file": "wood_08.ogg",
+          "peak_dbfs": -0.8,
+          "rms_dbfs": -12.39,
+          "seconds": 0.284
+        }
+      ],
+      "gain_db": -11.8,
+      "peak_capped": false
+    }
+  },
+  "target_rms_dbfs": -24.59,
+  "why_this_target": "grass.ogg measures -12.59 dBFS RMS and was accepted at volume_db -12.0, so this is the one footstep level already signed off on."
+}

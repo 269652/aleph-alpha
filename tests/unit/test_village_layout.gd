@@ -116,24 +116,58 @@ func test_no_two_plots_footprints_ever_overlap():
 			claimed[cell] = true
 
 
-## At least a one-tile gap between adjacent plots on the same street --
-## measured directly, not assumed: no two plots' footprints are even
-## ORTHOGONALLY adjacent.
-func test_adjacent_plots_on_the_same_street_keep_a_real_gap():
+## Houses on the same street stand SHOULDER TO SHOULDER. Suggested directly,
+## with three houses and the gaps between them in shot: *"could save some
+## space in villages by omitting the gap between houses"*.
+##
+## This asserted the opposite until 2026-09-17 -- that no two footprints were
+## even orthogonally adjacent -- and that one tile between every pair is the
+## space the suggestion is about. What has to survive is the part that was
+## ever load-bearing: they must not OVERLAP.
+func test_adjacent_plots_on_the_same_street_never_overlap():
 	var ids := ["house_small", "house_small", "house_small"]
 	var result := layout.layout(ids, CHUNK_SIZE, 5, _always_buildable, _never_occupied)
 	var plots: Array = result["plots"]
 	for a in plots.size():
 		for b in range(a + 1, plots.size()):
-			if plots[a]["origin"].y != plots[b]["origin"].y:
-				continue  # different streets
 			var cells_a: Dictionary = {}
 			for cell in BuildingCatalog.footprint_cells(plots[a]["building_id"], plots[a]["origin"]):
 				cells_a[cell] = true
 			for cell in BuildingCatalog.footprint_cells(plots[b]["building_id"], plots[b]["origin"]):
-				for dx in range(-1, 2):
-					for dy in range(-1, 2):
-						assert_false(cells_a.has(cell + Vector2i(dx, dy)), "plots %d/%d touch or overlap" % [a, b])
+				assert_false(cells_a.has(cell), "plots %d/%d overlap at %s" % [a, b, str(cell)])
+
+
+## And they really are flush, not merely allowed to be: a row of houses on
+## one street leaves no empty column between one footprint and the next.
+func test_houses_on_one_street_stand_shoulder_to_shoulder():
+	var ids := ["house_small", "house_small", "house_small"]
+	var result := layout.layout(ids, CHUNK_SIZE, 5, _always_buildable, _never_occupied)
+	var by_street: Dictionary = {}
+	for plot in result["plots"]:
+		var row: int = (plot["origin"] as Vector2i).y
+		by_street[row] = by_street.get(row, [])
+		by_street[row].append(plot)
+	var pairs := 0
+	for row in by_street:
+		var row_plots: Array = by_street[row]
+		row_plots.sort_custom(func(a, b): return (a["origin"] as Vector2i).x < (b["origin"] as Vector2i).x)
+		for i in range(1, row_plots.size()):
+			var previous: Dictionary = row_plots[i - 1]
+			var width: int = BuildingCatalog.footprint_of(previous["building_id"]).x
+			pairs += 1
+			assert_eq(
+				(row_plots[i]["origin"] as Vector2i).x,
+				(previous["origin"] as Vector2i).x + width,
+				"a gap was left between two houses on the same street"
+			)
+	assert_gt(pairs, 0, "precondition: two houses really did share a street")
+
+
+## The plaza keeps its own clearance, which is a different thing that shared
+## one constant with the plot gap: a house flush against the square would
+## stand in the space the square IS.
+func test_the_plaza_keeps_a_margin_even_though_houses_do_not():
+	assert_gt(VillageLayout.PLAZA_CLEARANCE_TILES, 0, "the square is not frontage")
 
 
 func test_a_building_that_fits_nowhere_is_simply_absent_from_plots():
@@ -1151,3 +1185,168 @@ func test_tying_a_growth_plot_back_to_the_street_costs_the_village_no_frontage()
 				offered += 1
 	assert_eq(asked, 160, "precondition: the same 40 seeds x four village sizes measured above")
 	assert_eq(offered, asked, "a village that had frontage before the spur still has it")
+
+
+# -- a short gap in a street is not a gap, it is a street -------------------
+#
+# Asked for directly, with the broken stretch in shot: "When there's only a
+# free gap of 1-2 tiles between two street tiles it should close the gap
+# between them". The founding layout paves only between its own doorsteps,
+# so a street row comes out as paved stretches with holes punched through
+# it -- and a one-tile hole in a road reads as a mistake, not as a junction.
+
+
+func test_a_one_tile_hole_between_two_paved_cells_is_closed():
+	var paved := {Vector2i(2, 5): true, Vector2i(4, 5): true}
+	var cells := VillageLayout.short_street_gap_cells(
+		func(cell: Vector2i) -> bool: return paved.has(cell),
+		func(_cell: Vector2i) -> bool: return true,
+		10, 5, VillageLayout.STREET_GAP_CLOSE_TILES
+	)
+	assert_eq(cells, [Vector2i(3, 5)])
+
+
+func test_a_two_tile_hole_is_closed_as_well():
+	var paved := {Vector2i(1, 5): true, Vector2i(4, 5): true}
+	var cells := VillageLayout.short_street_gap_cells(
+		func(cell: Vector2i) -> bool: return paved.has(cell),
+		func(_cell: Vector2i) -> bool: return true,
+		10, 5, VillageLayout.STREET_GAP_CLOSE_TILES
+	)
+	assert_eq(cells, [Vector2i(2, 5), Vector2i(3, 5)])
+
+
+## Three is a real break in the street, not a hole in one -- the village
+## genuinely does not pave there and closing it would invent a road.
+func test_a_longer_break_is_left_exactly_as_it_is():
+	var paved := {Vector2i(1, 5): true, Vector2i(5, 5): true}
+	var cells := VillageLayout.short_street_gap_cells(
+		func(cell: Vector2i) -> bool: return paved.has(cell),
+		func(_cell: Vector2i) -> bool: return true,
+		10, 5, VillageLayout.STREET_GAP_CLOSE_TILES
+	)
+	assert_eq(cells, [])
+
+
+## A run that reaches the edge of the chunk is not BETWEEN two street tiles
+## -- there is nothing on the far side of it to join.
+func test_an_open_end_is_not_a_gap():
+	var paved := {Vector2i(2, 5): true}
+	var cells := VillageLayout.short_street_gap_cells(
+		func(cell: Vector2i) -> bool: return paved.has(cell),
+		func(_cell: Vector2i) -> bool: return true,
+		10, 5, VillageLayout.STREET_GAP_CLOSE_TILES
+	)
+	assert_eq(cells, [])
+
+
+## FREE, as asked. A gap with a house or a rock standing in it is not a hole
+## in the road; paving it would pave over whatever is there.
+func test_a_gap_that_is_not_free_is_left_alone():
+	var paved := {Vector2i(1, 5): true, Vector2i(4, 5): true}
+	var cells := VillageLayout.short_street_gap_cells(
+		func(cell: Vector2i) -> bool: return paved.has(cell),
+		func(cell: Vector2i) -> bool: return cell != Vector2i(3, 5),
+		10, 5, VillageLayout.STREET_GAP_CLOSE_TILES
+	)
+	assert_eq(cells, [], "a gap is closed whole or not at all")
+
+
+## Every street row of the village, not just the first.
+func test_gaps_are_closed_on_every_street_row():
+	var street_y := 4
+	var second := street_y + VillageLayout.STREET_PITCH_TILES
+	var paved := {
+		Vector2i(1, street_y): true, Vector2i(3, street_y): true,
+		Vector2i(6, second): true, Vector2i(8, second): true,
+	}
+	var cells := VillageLayout.short_street_gap_cells(
+		func(cell: Vector2i) -> bool: return paved.has(cell),
+		func(_cell: Vector2i) -> bool: return true,
+		20, street_y, VillageLayout.STREET_GAP_CLOSE_TILES
+	)
+	assert_true(cells.has(Vector2i(2, street_y)), "the first street row")
+	assert_true(cells.has(Vector2i(7, second)), "the next street row down")
+
+
+## Nothing off a street row is ever paved by this -- it closes streets, it
+## does not lay new ones.
+func test_a_hole_off_a_street_row_is_not_a_street_gap():
+	var paved := {Vector2i(1, 6): true, Vector2i(3, 6): true}
+	var cells := VillageLayout.short_street_gap_cells(
+		func(cell: Vector2i) -> bool: return paved.has(cell),
+		func(_cell: Vector2i) -> bool: return true,
+		10, 5, VillageLayout.STREET_GAP_CLOSE_TILES
+	)
+	assert_eq(cells, [])
+
+
+## The size the report named, pinned rather than left as a comment.
+func test_the_gap_a_village_closes_is_the_one_that_was_asked_for():
+	assert_eq(VillageLayout.STREET_GAP_CLOSE_TILES, 2, "\"a free gap of 1-2 tiles\"")
+
+
+# -- the warehouse: every village keeps a store ----------------------------
+#
+# See docs/concept/village_warehouse.md. A village keeps a store the way it
+# keeps a well -- part of what "a village" means here, not a rung it grows
+# into. So the square reserves a plot for one the same way it reserves the
+# civic plot for the hall, and the founding renderer raises it.
+#
+# It cannot simply join `plots`: those are HOUSE plots, each carrying a
+# building_index the renderer uses to look up npcs[i] for the resident. A
+# warehouse has nobody living in it (capacity 0), so it gets its own
+# reserved plot, exactly as the hall does.
+
+
+func test_the_square_reserves_a_plot_for_the_warehouse():
+	var ids := ["house_small", "house_small", "house_medium"]
+	var result := layout.layout(ids, CHUNK_SIZE, 11, _always_buildable, _never_occupied)
+	var plot: Dictionary = result["warehouse_plot"]
+	assert_false(plot.is_empty(), "a village should reserve somewhere to keep its stock")
+	assert_eq(plot["building_id"], VillageLayout.WAREHOUSE_BUILDING_ID)
+	assert_eq(
+		plot["doorstep"],
+		plot["origin"] + BuildingCatalog.doorstep_of(VillageLayout.WAREHOUSE_BUILDING_ID),
+		"its door is its catalog doorstep, like every other plot's"
+	)
+
+
+## The store is no use if a house is standing in it. Checked against the
+## real house plots AND the hall's own plot, since all three are claimed out
+## of the same square.
+func test_the_warehouses_plot_is_clear_of_the_houses_and_the_hall():
+	var ids := ["house_small", "house_small", "house_medium", "house_small"]
+	var result := layout.layout(ids, CHUNK_SIZE, 12, _always_buildable, _never_occupied)
+	var warehouse: Dictionary = result["warehouse_plot"]
+	var taken := {}
+	for plot in result["plots"]:
+		for cell in _footprint_cells(plot["origin"], plot["building_id"]):
+			taken[cell] = true
+	var civic: Dictionary = result["civic_plot"]
+	if not civic.is_empty():
+		for cell in _footprint_cells(civic["origin"], civic["building_id"]):
+			taken[cell] = true
+	for cell in _footprint_cells(warehouse["origin"], warehouse["building_id"]):
+		assert_false(taken.has(cell), "the warehouse overlaps something else at %s" % str(cell))
+
+
+## ...and inside the chunk it is supposed to be in.
+func test_the_warehouses_plot_stays_inside_the_chunk():
+	var result := layout.layout(["house_small"], CHUNK_SIZE, 13, _always_buildable, _never_occupied)
+	for cell in _footprint_cells(
+		(result["warehouse_plot"] as Dictionary)["origin"],
+		(result["warehouse_plot"] as Dictionary)["building_id"]
+	):
+		var at: Vector2i = cell
+		assert_between(at.x, 0, CHUNK_SIZE - 1, "x of %s" % str(at))
+		assert_between(at.y, 0, CHUNK_SIZE - 1, "y of %s" % str(at))
+
+
+func _footprint_cells(origin: Vector2i, building_id: String) -> Array:
+	var cells: Array = []
+	var footprint := BuildingCatalog.footprint_of(building_id)
+	for dy in footprint.y:
+		for dx in footprint.x:
+			cells.append(origin + Vector2i(dx, dy))
+	return cells

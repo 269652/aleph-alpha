@@ -16,6 +16,7 @@ extends Node2D
 
 const IllustratedCropSprite = preload("res://src/rendering/illustrated_crop_sprite.gd")
 const ProceduralSoilSprite = preload("res://src/rendering/procedural_soil_sprite.gd")
+const IllustratedSoilMoundSprite = preload("res://src/rendering/illustrated_soil_mound_sprite.gd")
 const CropPull = preload("res://src/gameplay/crop_pull.gd")
 const HoverTargetFinder = preload("res://src/rendering/hover_target_finder.gd")
 const ItemCatalog = preload("res://src/gameplay/item_catalog.gd")
@@ -104,6 +105,7 @@ var vigor: float = 0.5:
 var on_harvested: Callable
 
 static var _illustrated := IllustratedCropSprite.new()
+static var _illustrated_soil := IllustratedSoilMoundSprite.new()
 static var _item_catalog := ItemCatalog.new()
 
 var _soil: Sprite2D
@@ -127,8 +129,7 @@ func _ready() -> void:
 	set_process(false)
 
 	_soil = Sprite2D.new()
-	_soil.texture = ProceduralSoilSprite.new().generate_texture(false)
-	_soil.scale = Vector2.ONE * ProceduralSoilSprite.SOIL_WORLD_SCALE
+	_apply_undisturbed_soil()
 	# Hidden while the plant is simply GROWING. A tilled mound is a farming
 	# artifact and this is a WILD plant -- reported live: "the potatoes and
 	# carrots still render a brown blob which is not supposed to be there".
@@ -184,6 +185,20 @@ func _ready() -> void:
 	# way.
 	_apply_season_tint()
 	_apply_vigor_scale()
+
+
+## The undisturbed (still-planted) mound -- real illustrated art when it
+## exists (see IllustratedSoilMoundSprite), keyed by this cell's own
+## sprite_seed so it picks the same variant every time it's drawn, the same
+## has_X()-gated fallback convention every other optional illustrated-art
+## seam in this codebase uses.
+func _apply_undisturbed_soil() -> void:
+	if _illustrated_soil.has_variants():
+		_soil.texture = _illustrated_soil.frame_for(sprite_seed)
+		_soil.scale = Vector2.ONE * _illustrated_soil.world_scale()
+	else:
+		_soil.texture = ProceduralSoilSprite.new().generate_texture(false)
+		_soil.scale = Vector2.ONE * ProceduralSoilSprite.SOIL_WORLD_SCALE
 
 
 func _process(delta: float) -> void:
@@ -259,7 +274,13 @@ func begin_pull() -> bool:
 	# The ground only shows once something has actually been yanked out of
 	# it -- see _ready for why it stays hidden while the plant just grows.
 	_soil.visible = true
+	# No illustrated art exists for the disturbed crater (see
+	# IllustratedSoilMoundSprite's own doc comment) -- always the procedural
+	# fallback, at ITS OWN world scale, since _apply_undisturbed_soil may
+	# have left the sprite at the illustrated mound's differently-proportioned
+	# scale.
 	_soil.texture = ProceduralSoilSprite.new().generate_texture(true)
+	_soil.scale = Vector2.ONE * ProceduralSoilSprite.SOIL_WORLD_SCALE
 	return true
 
 

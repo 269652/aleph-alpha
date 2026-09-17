@@ -26,6 +26,10 @@ const IllustratedCropSprite = preload("res://src/rendering/illustrated_crop_spri
 const ProceduralSoilSprite = preload("res://src/rendering/procedural_soil_sprite.gd")
 const IllustratedWheatPatch = preload("res://src/rendering/illustrated_wheat_patch.gd")
 const IllustratedGrassPatch = preload("res://src/rendering/illustrated_grass_patch.gd")
+## The tilled ground a bed stands on -- see docs/concept/village_farms.md's
+## "A bed stands on real tilled earth", and _build_soil_ground below.
+const IllustratedTerrainSprite = preload("res://src/rendering/illustrated_terrain_sprite.gd")
+const TerrainRenderer = preload("res://src/rendering/terrain_renderer.gd")
 
 ## The crop_id that renders via IllustratedWheatPatch's bending-blade path
 ## instead of IllustratedCropSprite's flat leaf sprite -- see
@@ -39,6 +43,19 @@ const WHEAT_CROP_ID := "wheat"
 
 const GROUP_NAME := "farm_plot"
 
+## The IllustratedTerrainSprite sheet a bed's own ground comes from. Not a
+## biome -- nothing ever looks it up by biome name (see that file's own
+## "soil" entry); this is the one caller.
+const SOIL_SHEET := "soil"
+
+## Draw order within the marker. The ground is the ground: the mound sits on
+## it and the crop grows out of it, so both draw above. Explicit rather than
+## relying on child order, matching this codebase's "every z-sensitive node
+## sets it" convention.
+const SOIL_GROUND_Z_INDEX := -2
+const MOUND_Z_INDEX := -1
+const LEAVES_Z_INDEX := 0
+
 ## Wilted tint applied to a withered plot's leaves -- desaturated and
 ## darkened, a "read as dead/neglected at a glance" signal distinct from a
 ## healthy plot's identity WHITE, so a player can tell a plot died without
@@ -49,8 +66,20 @@ var plot := FarmPlot.new()
 
 static var _illustrated := IllustratedCropSprite.new()
 static var _wheat := IllustratedWheatPatch.new()
+static var _terrain := IllustratedTerrainSprite.new()
+## variant index -> the soil texture for it, shared by every bed that rolls
+## that variant. Nine variants against however many beds a village works, so
+## without this each bed uploaded its own copy of one of nine 32x32 images
+## -- the same per-tile texture waste CharacterPreviewDiorama._build_ground
+## was fixed for. Static because the frames behind it are (see
+## IllustratedTerrainSprite._frame_cache).
+static var _soil_textures: Dictionary = {}
 
-var _soil: Sprite2D
+## The full-tile tilled earth under everything (see _build_soil_ground).
+## Never hidden: a bed is tilled earth whatever is (or is not) growing in
+## it. This is the ONLY soil a bed draws now -- ProceduralSoilSprite's small
+## mound is gone (see is_showing_soil).
+var _soil_ground: Sprite2D
 var _leaves: Sprite2D
 ## Real Sprite2D children for a wheat crop's own small cluster of bending
 ## blades -- ordinary sprites, not GPU-instanced MultiMesh, since a single
@@ -67,16 +96,21 @@ var _wheat_blades: Array[Sprite2D] = []
 ## something real on the very first _redraw().
 var _season := IllustratedWheatPatch.DEFAULT_SEASON
 
+## What this bed was last SOWN with, which outlives plot.crop_id: harvesting
+## clears the crop, and the ground a bed was last worked as is what it still
+## looks like afterwards. Without it a cut wheat bed grew its soil mound
+## back the moment the wheat came off -- caught by
+## test_a_harvested_wheat_bed_still_shows_no_mound.
+var _sown_crop_id := ""
+
 
 func _ready() -> void:
 	add_to_group(GROUP_NAME)
 
-	_soil = Sprite2D.new()
-	_soil.texture = ProceduralSoilSprite.new().generate_texture(false)
-	_soil.scale = Vector2.ONE * ProceduralSoilSprite.SOIL_WORLD_SCALE
-	add_child(_soil)
+	_build_soil_ground()
 
 	_leaves = Sprite2D.new()
+	_leaves.z_index = LEAVES_Z_INDEX
 	add_child(_leaves)
 
 	_redraw()
@@ -105,6 +139,7 @@ func till_and_plant(crop_id: String, seed_value: int) -> bool:
 	if plot.state == "growing" or plot.state == "ready":
 		return false
 	plot.plant(crop_id, seed_value)
+	_sown_crop_id = crop_id
 	_redraw()
 	return true
 
@@ -151,9 +186,100 @@ func wheat_blade_count() -> int:
 	return count
 
 
+## Whether this plot draws a mound of tilled earth under its crop.
+##
+## Always false now, and kept as a named fact rather than deleted: it is
+## what the two reports about "the brown blob" were about, and a test that
+## no bed ever draws one is worth more than a function nobody can ask.
+##
+## Reported with the beds circled: "remove the brown mound blob we have
+## illustrated soil now". Real illustrated tilled earth covers the whole
+## tile under every bed (see soil_ground), so the mound had nothing left to
+## do -- and a HERB bed, which is not wheat, was still drawing one with no
+## crop art over it: a brown blob on brown ground.
+func is_showing_soil() -> bool:
+	return false
+
+
+## Whether this bed is drawing its full tile of tilled earth.
+func is_showing_tilled_ground() -> bool:
+	return _soil_ground != null and _soil_ground.visible
+
+
+## The full tile of tilled earth this bed stands on.
+##
+## Before this, the only soil a bed drew was ProceduralSoilSprite's small
+## mound, and that mound is a ROOT crop's own ground -- correctly hidden for
+## wheat (see _redraw). Which meant a wheat bed was six rectangles of the
+## untouched meadow it had been tilled out of, with wheat rising from the
+## grass: nothing had ever drawn the ground a bed IS. Reported with the beds
+## circled, and answered here rather than by bringing the blob back.
+func soil_ground() -> Sprite2D:
+	return _soil_ground
+
+
+## Which of soil.png's nine variants a bed at `tile` stands on. Hashed from
+## the tile itself, so neighbouring beds in one 3x2 patch differ while any
+## given bed looks the same every time it is drawn -- the same seeded-
+## determinism convention every other art pick in this codebase follows.
+static func soil_variant_for(tile: Vector2i) -> int:
+	var count := _terrain.frame_count_for(SOIL_SHEET)
+	if count <= 0:
+		return 0
+	return absi(hash("%d_%d_farm_soil" % [tile.x, tile.y])) % count
+
+
+## One full-tile soil sprite, scaled from the art's OWN pixel width so it
+## covers exactly TerrainRenderer.TILE_SIZE however the sheet is authored --
+## the same derive-from-the-art rule CharacterPreviewDiorama._build_ground
+## follows, rather than a hardcoded scale that silently breaks if the art is
+## ever re-exported at another size.
+##
+## Seeded from this marker's own tile, which it reads back off its position:
+## EarthChunkManager sets that before add_child (so it is already correct by
+## _ready), and a bed never moves afterwards.
+func _build_soil_ground() -> void:
+	_soil_ground = Sprite2D.new()
+	_soil_ground.z_index = SOIL_GROUND_Z_INDEX
+	var tile := Vector2i(
+		floori(position.x / float(TerrainRenderer.TILE_SIZE)),
+		floori(position.y / float(TerrainRenderer.TILE_SIZE))
+	)
+	var variant := soil_variant_for(tile)
+	var image := _terrain.frame_for(SOIL_SHEET, variant)
+	if image != null:
+		if not _soil_textures.has(variant):
+			_soil_textures[variant] = ImageTexture.create_from_image(image)
+		_soil_ground.texture = _soil_textures[variant]
+		_soil_ground.scale = (
+			Vector2.ONE * (float(TerrainRenderer.TILE_SIZE) / float(image.get_width()))
+		)
+	add_child(_soil_ground)
+
+
 func _redraw() -> void:
 	if _leaves == null:
 		return  # not _ready() yet
+	# Reported three times, about two different browns. First the mound:
+	# "what's the round procedural dark blob? Can you remove it and keep
+	# just the wheat please". Then again once a full tile of soil.png was
+	# put under every bed ("now there are brown blobs instead of the planted
+	# wheat") -- that sheet's cells carry a soft dark vignette, so a tile of
+	# it under wheat reads as a blob rather than as ground -- and a third
+	# time, of the mound itself: "remove the brown mound blob we have
+	# illustrated soil now".
+	#
+	# So the MOUND is gone outright for every crop (see is_showing_soil),
+	# and the illustrated ground is kept for a root crop and hidden under
+	# wheat. A wheat bed is wheat; a root crop keeps the earth its root
+	# grows in.
+	#
+	# Against what the bed was SOWN with, not plot.crop_id: harvesting clears
+	# the crop, and bare ground appearing the moment the wheat comes off is
+	# the same blob back again.
+	var is_wheat := _sown_crop_id == WHEAT_CROP_ID
+	if _soil_ground != null:
+		_soil_ground.visible = not is_wheat
 	if plot.crop_id == WHEAT_CROP_ID:
 		_leaves.visible = false
 		_redraw_wheat()

@@ -857,6 +857,18 @@ slower machine, or either of those two costs growing independently in
 the future, could reopen exactly the gap this pass closes for the icon
 row specifically.
 
+**Closed for the diorama (2026-09-17).** That caveat turned out to be
+exactly right, and it was reported: *"the character creature loads super
+slow."* The diorama's own build measured ~4.5s cold -- comfortably the
+largest single cost left in the creator, and larger than the icon warming
+this pass fixed. It is now yield-split too, through `CharacterPreview
+Diorama.build_async`, awaited from `_ensure_create_screen_built` and
+reported into this same `LoadingOverlay`. See `docs/concept/character_
+creator_preview_scene.md`'s own "Load cost" section for the measured
+breakdown, the two real bugs found underneath it, and the paired
+before/after. The skill web remains un-yield-split, and remains an honest
+open gap.
+
 ### An eleventh pass: every frame cropped to the same fixed window, not its own content (2026-09-09)
 
 Reported live again, after the eighth pass's own pixel-perfect
@@ -1519,3 +1531,80 @@ Two process notes worth keeping, both cost real time here:
 - ⬜ **The first ~0.83s (frames 0–19) is a fade up out of black** and has
   no globe edge in frame to hold still. Not a defect; named so the next
   reader does not measure it and think something is wrong.
+
+
+## Display scale, re-decided for a portrait frame (2026-09-17)
+
+A twelfth pass pinned `DISPLAY_SCALE` to exactly 1 on an explicit ask —
+*"still too big.. make it native size / resolution"*. The art swaps since
+then never revisited it, and they should have: "native" was never really
+about the number 1, it was about the on-screen size that number produced
+against the art of the day, which was a **243x162 landscape** frame.
+
+Today's frames are **79x122 portrait** (see "A third art swap" above — the
+new source animation is 9:16, cropped below its own timestamp caption). At
+1:1 that renders the whole intro as a 79px-wide thumbnail: obeying the
+letter of that ask while destroying what it asked for.
+
+`DISPLAY_SCALE` is 3. That restores the on-screen WIDTH the twelfth pass
+actually shipped (79 * 3 = 237, against the 243 it had) and stays a whole
+number, so the pixel-perfect, shimmer-free property the eighth and twelfth
+passes both established is untouched. Put to the player with the trade
+spelled out, they chose it.
+
+`test_display_scale_is_a_whole_number_so_the_upscale_stays_pixel_perfect`
+and `test_the_intro_still_renders_at_about_the_width_that_ask_settled_on`
+replace the old `test_display_scale_is_native_no_upscaling`: they pin what
+that ask was actually protecting — an exact integer scale, and a width in
+the range it settled on — rather than the bare literal 1, which is what
+went stale when the art changed shape underneath it.
+
+## Re-measuring a third time: 10x5 at 10fps (2026-09-17)
+
+Reported: *"The intro still doesn't have the correct frame crops"*. The
+sheet was replaced again ("bump resolution") with **half as many frames at
+twice the size** — 1672x941 still, but **10 columns x 5 rows**, not 20x6 —
+and nothing was re-measured, so every crop was taken from a window that had
+not existed since the swap.
+
+Measured off the file on disk, never divided arithmetically:
+
+| | measured |
+|---|---|
+| column lefts | 0, 173, 340, 506, 672, 837, 1003, 1169, 1335, 1502 |
+| row tops | 0, 194, 381, 576, 756 |
+| clean cell widths | 172, 165, 164, 164, 164, 164, 164, 164, 165, 170 |
+| clean cell heights | 192, 185, 194, 178, 185 |
+| caption band | rows 10–21 of every cell (unchanged) |
+| crop | 163 x 149, one tile in, below the caption |
+| frames | 10 x 5 = **50** |
+| captions | 0.00s, 0.10s, 0.90s … 4.80s, 4.90s → **10fps**, five seconds |
+
+The frame rate came from reading the sheet's own printed timestamps, not
+from carrying 24fps over: at 24 the whole intro played in just over two
+seconds.
+
+**Why the guard did not catch it, again.** The grid test *did* go red — it
+had been red on `main` since the swap. What was missing is a tie between the
+grid and the COUNT: `FRAME_COUNT` was a hand-written 120 that agreed with a
+hand-written 20x6 grid, so the two were consistent with each other and
+inconsistent only with the file.
+`test_the_frame_count_is_exactly_the_grid_the_sheet_really_has` now derives
+the count from the measured grid, and
+`test_the_sequencer_runs_at_the_sheets_own_frame_rate` pins the rate the
+captions declare.
+
+**A second, quieter trap.** `SpriteSheetLoader` prefers the IMPORTED
+texture, so a `.godot` cache older than the art serves the OLD sheet through
+the NEW constants — which is exactly what happened while fixing this: the
+grid tests (which read the raw file) reported the new sheet while the crop
+tests (which go through the loader) were still slicing the old one. Run
+`godot --headless --import` after any art swap before trusting a crop test.
+
+**Display scale.** The frames are 163x149 now, so no whole number lands near
+the 243px width the "native size" ask settled on — 1 gives 163, 2 gives 326,
+and 1.5 would reintroduce the fractional-scale shimmer two earlier passes
+fixed. `DISPLAY_SCALE` is **2**, the option that does not go under the 237
+the player accepted; 1 is a one-line change if a smaller intro is wanted.
+The test now asserts that reachable property rather than a literal that
+nothing can satisfy.

@@ -19,7 +19,7 @@ func test_a_village_with_nobody_in_it_owes_itself_nothing():
 ## Shelter before adornment: a household without a roof outranks every
 ## civic and production rung, however entitled the village is to them.
 func test_an_unhoused_household_outranks_every_other_rung():
-	var next: String = VillageGrowth.next_building(9, 4, ["sawmill", "city_hall", "warehouse"])
+	var next: String = VillageGrowth.next_building(9, 4, ["sawmill", "city_hall", "farmhouse"])
 	assert_true(BuildingCatalog.BUILDING_IDS.has(next), "a homeless household gets a house, not a brewery")
 
 
@@ -52,7 +52,10 @@ func test_the_ladder_is_walked_in_order_as_the_village_grows():
 			standing.append(next)
 			raised.append(next)
 			next = VillageGrowth.next_building(households, households, standing)
-	assert_eq(raised, ["sawmill", "city_hall", "warehouse", "farmhouse", "blacksmith", "brewery"])
+	# No warehouse: a village is FOUNDED with its store standing, so the
+	# ladder never owes one (docs/concept/village_warehouse.md). It used to
+	# sit between city_hall and farmhouse here.
+	assert_eq(raised, ["sawmill", "city_hall", "farmhouse", "blacksmith", "brewery"])
 
 
 func test_a_rung_whose_threshold_is_not_met_is_never_named():
@@ -107,3 +110,37 @@ func test_the_ladder_share_runs_from_nothing_to_everything():
 		VillageGrowth.ladder_share(["sawmill", "city_hall", "city_hall"]),
 		2.0 / float(VillageGrowth.LADDER_BUILDING_IDS.size()), 0.001
 	)
+
+
+# -- the warehouse left the ladder ------------------------------------------
+#
+# See docs/concept/village_warehouse.md. Every village is founded with a
+# store already standing (VillageLayout.warehouse_plot, raised by
+# VillageRenderer), so it is not something a village grows into.
+#
+# The rung is REMOVED rather than lowered to one household. A threshold that
+# is always met is a gate that lies to the next reader, and worse: the rung
+# would be satisfied before the ladder is ever consulted, so next_building
+# would keep naming a target the village already has -- exactly the bug
+# present_building_ids exists to prevent.
+
+
+func test_the_warehouse_is_not_a_rung_a_village_climbs():
+	assert_false(
+		VillageGrowth.LADDER_BUILDING_IDS.has("warehouse"),
+		"a village is founded with its store, so the ladder must not owe it one"
+	)
+	assert_eq(
+		VillageGrowth.min_households_for("warehouse"),
+		0,
+		"not a rung means no threshold, not a threshold of one"
+	)
+
+
+## Whatever the village's size, and whatever it already has standing, the
+## ladder never asks for a warehouse -- swept across the whole range the
+## thresholds span rather than at one convenient number.
+func test_no_village_of_any_size_is_ever_owed_a_warehouse():
+	for households in range(1, 13):
+		var owed := VillageGrowth.next_building(households, households, [])
+		assert_ne(owed, "warehouse", "a village of %d households was owed one" % households)

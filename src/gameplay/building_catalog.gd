@@ -70,15 +70,15 @@ const CONSTRUCTION_STAGES := SHEET_COLUMNS
 ## project's "tested functions, not eyeballed comments" rule.
 const _BUILDINGS := {
 	"house_small": {
-		"footprint": Vector2i(2, 2), "interior_family": "cottage", "capacity": 1,
+		"footprint": Vector2i(2, 2), "interior_family": "cottage", "capacity": 1, "storage": 20,
 		"labor_hours": 6.0, "cost": {"wood": 12},
 	},
 	"house_medium": {
-		"footprint": Vector2i(3, 2), "interior_family": "house", "capacity": 2,
+		"footprint": Vector2i(3, 2), "interior_family": "house", "capacity": 2, "storage": 30,
 		"labor_hours": 10.0, "cost": {"wood": 20, "stone": 4},
 	},
 	"house_large": {
-		"footprint": Vector2i(4, 3), "interior_family": "manor", "capacity": 3,
+		"footprint": Vector2i(4, 3), "interior_family": "manor", "capacity": 3, "storage": 40,
 		"labor_hours": 16.0, "cost": {"wood": 32, "stone": 10},
 	},
 	# The town hall (CIVIC_BUILDING_IDS): the same wood 20 + stone 10 the
@@ -86,7 +86,7 @@ const _BUILDINGS := {
 	# -- one price, not two), more labour than any house; nobody lives in
 	# it. Drawn from city_hall.png, which already follows the sheet contract.
 	"city_hall": {
-		"footprint": Vector2i(4, 3), "interior_family": "hall", "capacity": 0,
+		"footprint": Vector2i(4, 3), "interior_family": "hall", "capacity": 0, "storage": 0,
 		"labor_hours": 45.0, "cost": {"wood": 20, "stone": 10},
 	},
 	# The growth ladder (docs/concept/village_growth.md). Every one of
@@ -105,7 +105,7 @@ const _BUILDINGS := {
 	# is where the timber is. Cheapest rung -- a shed, a saw pit and a log
 	# deck, not an enclosed hall.
 	"sawmill": {
-		"footprint": Vector2i(3, 2), "interior_family": "workshop", "capacity": 0,
+		"footprint": Vector2i(3, 2), "interior_family": "workshop", "capacity": 0, "storage": 60,
 		"labor_hours": 30.0, "cost": {"wood": 16, "stone": 4},
 	},
 	# The farmhouse: the village's own food works (docs/concept/
@@ -113,7 +113,7 @@ const _BUILDINGS := {
 	# a single tile). Timber frame, a stone footing, fibre for thatch and
 	# lashing -- the cheapest rung that needs all three materials.
 	"farmhouse": {
-		"footprint": Vector2i(3, 2), "interior_family": "farmstead", "capacity": 0,
+		"footprint": Vector2i(3, 2), "interior_family": "farmstead", "capacity": 0, "storage": 60,
 		"labor_hours": 36.0, "cost": {"wood": 14, "stone": 4, "plant_fibre": 6},
 	},
 	# The warehouse: a real physical home for VillageMarket's already-real
@@ -121,14 +121,14 @@ const _BUILDINGS := {
 	# timber and thatch -- volume to enclose, but no forge and no civic
 	# masonry -- so it lands under the hall.
 	"warehouse": {
-		"footprint": Vector2i(4, 3), "interior_family": "hall", "capacity": 0,
+		"footprint": Vector2i(4, 3), "interior_family": "hall", "capacity": 0, "storage": 240,
 		"labor_hours": 42.0, "cost": {"wood": 22, "plant_fibre": 6},
 	},
 	# The blacksmith: the first rung that needs stone in real quantity --
 	# a forge, a hearth and a chimney are masonry, not carpentry, which is
 	# exactly why it sits above the civic hall in price.
 	"blacksmith": {
-		"footprint": Vector2i(3, 2), "interior_family": "workshop", "capacity": 0,
+		"footprint": Vector2i(3, 2), "interior_family": "workshop", "capacity": 0, "storage": 60,
 		"labor_hours": 51.0, "cost": {"wood": 18, "stone": 16},
 	},
 	# The brewery: the dearest rung, and the only one raised for comfort
@@ -136,7 +136,7 @@ const _BUILDINGS := {
 	# over it, and fibre for the filtering. A village only builds this
 	# once everything it actually needs already stands.
 	"brewery": {
-		"footprint": Vector2i(3, 3), "interior_family": "workshop", "capacity": 0,
+		"footprint": Vector2i(3, 3), "interior_family": "workshop", "capacity": 0, "storage": 60,
 		"labor_hours": 57.0, "cost": {"wood": 22, "stone": 12, "plant_fibre": 4},
 	},
 }
@@ -386,6 +386,25 @@ static func interior_family_of(building_id: String) -> String:
 
 static func capacity_of(building_id: String) -> int:
 	return _BUILDINGS.get(building_id, {}).get("capacity", 0)
+
+
+## How many units of goods, across all item ids, a building holds
+## (docs/concept/building_storage.md). 0 for a building that is not a place
+## goods are kept, and for an id the catalog does not know.
+##
+## The numbers are RATIOS, not absolutes, and each is pinned by a test that
+## says what the ratio is for: a workplace holds more than a home (a
+## farmhouse has to keep working between collections; a house only keeps what
+## one household owns), and the warehouse holds more than anything that feeds
+## it (a granary smaller than the farm filling it would never be worth
+## hauling to). A hall keeps nothing -- it is where a village decides things.
+##
+## Read from the entry's own `storage` field so a building's capacity sits
+## beside its footprint and its cost rather than in a second table that can
+## drift from the first -- the same shape capacity_of already has for
+## residents.
+static func storage_capacity_of(building_id: String) -> int:
+	return _BUILDINGS.get(building_id, {}).get("storage", 0)
 
 
 static func labor_hours_of(building_id: String) -> float:

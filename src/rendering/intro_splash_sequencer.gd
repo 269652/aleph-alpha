@@ -8,24 +8,29 @@ extends RefCounted
 ## stays fully headless-testable the same way LeafLitterRenderer's own
 ## static timing functions are (see that file's own doc comment).
 
-## 120 frames: the sheet is a 20-column x 6-row contact sheet (see
+## 50 frames: the sheet is a 10-column x 5-row contact sheet (see
 ## IntroSplashSheet). Cross-pinned to what the sheet really yields by
-## test_frame_count_matches_the_sequencer, which is what catches the art
-## being replaced with a differently-shaped one -- as it was twice in one
-## day (8x5 -> 20x6).
-const FRAME_COUNT := 120
+## test_frame_count_matches_the_sequencer, and to the grid MEASURED off the
+## file by test_the_frame_count_is_exactly_the_grid_the_sheet_really_has --
+## the first one alone could not catch the third swap, because a wrong grid
+## and a wrong count agree with each other.
+##
+## The art has now been replaced three times in a day (8x5 -> 20x6 -> 10x5),
+## each time with a different shape.
+const FRAME_COUNT := 50
 
 ## The rate the sheet itself declares: every cell carries its own timestamp,
-## and they run 0.00s to 4.96s in steps of 1/24 -- 24fps, five seconds.
+## and on the sheet on disk they read 0.00s, 0.10s, 0.90s ... 4.80s, 4.90s
+## -- a tenth of a second apart, so 10fps and five seconds.
 ##
-## It was 10fps while the art was a hand-illustrated 40-frame sheet, chosen
-## deliberately chunky so a smooth readback would not fight this game's
-## 16-bit house style (docs/concept/pixel_art_engine.md). That reasoning
-## does not carry over: this art is a photoreal globe rendered at 24, and
-## playing it at 10 would both stutter its own rotation and stretch a
-## five-second intro to twelve. Honouring the timing the art was authored
-## at is the one number that cannot be wrong.
-const FPS := 24.0
+## Read off the captions in the file, not assumed. It was 24fps for the
+## previous sheet, whose captions really did step by 1/24 across 120 frames
+## for the same five seconds; the replacement halves the frame rate and
+## doubles the cell size for the same run, and leaving 24 here played the
+## whole intro in just over two seconds. Honouring the timing the art was
+## authored at is the one number that cannot be wrong, which is why it is
+## read from the art each time rather than carried over.
+const FPS := 10.0
 
 
 ## Which of the FRAME_COUNT frames should be showing after `elapsed_seconds`

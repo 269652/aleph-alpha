@@ -101,19 +101,23 @@ classification and clip lookup:
   biome) for intuitive consistency even though the two functions' surface
   SETS differ on purpose. `ground_material` was added 2026-09-17 -- see
   "A laid surface sounds like what it is laid with" below.
-- `clip_path_for(surface) -> String` -- `"snow"`, `"forest"`, `"grass"`,
-  and `"underwater"` get their own real recordings; everything else
-  (sand/rock, or an unrecognized surface) falls back to one shared,
-  genuine walking recording (`default.ogg`) rather than silence -- the
-  same "reuse where a distinct recording isn't available" shape
-  `NatureSoundscape`'s own wind bed already established for desert/
-  tundra/mountain. **Revised (2026-09-09):** `"underwater"` reuses
-  `river.ogg` from `NatureSoundscape`'s own asset directory rather than a
-  fourth, separately-licensed file -- reported live: "river wading should
-  be used for 'underwater walks'". The same real flowing-water recording
-  now backs both the continuous ambient river-proximity bed (heard
-  nearby) and this one-shot footstep (heard when actually standing in
-  it) -- one real asset, two real reasons to be heard.
+- `step_variants_for(surface) -> Array[String]` and
+  `step_clip_path_for(surface, roll) -> String` -- every surface has a
+  POOL of real, isolated footstep one-shots (5 to 10 of them), and a step
+  takes a different one each time. A surface with nothing sourced falls
+  back to `FALLBACK_CLIP_PATH` (one shared, genuine walking recording,
+  `default.ogg`) rather than silence -- the same "reuse where a distinct
+  recording isn't available" shape `NatureSoundscape`'s own wind bed
+  already established for desert/tundra/mountain. **Superseded
+  (2026-09-17):** this replaced a single `clip_path_for(surface)`, which
+  gave each surface exactly one recording -- see "A recording of walking
+  is not a footstep" below for why that was the whole problem. The
+  2026-09-09 revision that pointed `"underwater"` at the ambient
+  `river.ogg` ("river wading should be used for 'underwater walks'",
+  reported live) is superseded by the same pass: underwater now plays real
+  recordings of feet going INTO water, which is what wading is, where
+  `river.ogg` is a river heard from the bank. `river.ogg` keeps its
+  ambient job untouched.
 
 `EarthChunkManager.record_footstep` returns `{"side", "biome",
 "snow_lying", "underwater", "ground_material"}` (empty `Dictionary` when
@@ -154,6 +158,134 @@ that deliberately cycle the FULL voice pool with grass first so the next
 call is guaranteed to land on a voice actually left at `-12dB`, proving
 neither a later footstep nor a mushroom crush inherits it by accident.
 
+### A recording of walking is not a footstep (2026-09-17)
+
+Reported live: *"Can you find better sounds for the footsteps on every
+terrain? They sound weak and not natural"*. Nobody in this environment can
+hear the game, so the measurable half got measured first -- and it was the
+whole explanation. Every clip the game reached for was a recording of
+somebody WALKING rather than a footstep, and the levels were 35 dB apart end
+to end:
+
+| clip | length | RMS | peak |
+|---|---|---|---|
+| `grass.ogg` | 0.25s | -12.59 dBFS | -0.74 dBFS |
+| `default.ogg` | 3.64s | -47.63 dBFS | -17.86 dBFS |
+| `snow.mp3` | 13.72s | -38.42 dBFS | -10.34 dBFS |
+| `forest_twigs.ogg` | 41.67s | -41.26 dBFS | -15.93 dBFS |
+
+Three things followed from that, and they are the three complaints:
+
+- **Weak.** Every step played its clip from `0.0`, so a forest step was
+  always the same fraction of the same run-in -- quiet, because the
+  recording had not reached a real impact yet. And a 35 dB spread means the
+  eyeballed `-12 dB` that answered *"the grass footsteps are way too loud"*
+  (2026-09-10, above) closed barely a third of it while leaving every other
+  surface where it was.
+- **Not natural.** One recording per surface means every step on that
+  surface is literally the same sample, at the same pitch.
+- **Cut off.** The 4-voice pool's own round-robin then truncated each step
+  mid-ring a second and a half later, when four more steps had gone by.
+
+**The pools.** Every surface now has several real, isolated footstep
+one-shots, built by `tools/prepare_footstep_oneshots.py` (see
+`assets/audio/footsteps/CREDITS.md` for every source and licence):
+
+| surface | steps | where from |
+|---|---|---|
+| `grass` | 9 | the OpenGameArt pack whose first variation was already in use -- the other 8 were sitting in the same archive |
+| `wood` | 9 | same pack; retires the generic clip a wooden floor inherited |
+| `rock` | 10 | same pack's gravel |
+| `underwater` | 5 | same pack's water: feet going into water |
+| `default` | 9 | same pack's boots |
+| `sand` | 6 | Fantozzi's Footsteps (CC0) |
+| `snow` | 8 | Corsica_S's 42 real snow steps (CC0) |
+| `forest` | 8 | cut out of this repository's OWN 41-second forest recording, at its real footfalls |
+
+The forest cut is worth its own note: same file, same licence, same real
+forest at 3am. The recording holds 62 real footfalls, and its quiet floor
+measures -51.6 dBFS against footfalls around -24 dBFS, so the crickets
+audible in the full recording sit 27 dB under a step and do not ride along.
+Footfalls are found by tracking the recording's OWN floor -- a step is a
+9 dB rise over the lower quartile of the preceding 0.4s, which in a
+recording of walking IS the gap between steps -- rather than by a fixed
+threshold that would need retuning per recording.
+
+**The levels are measured, not chosen.** Each pool gets ONE gain, so its
+MEAN lands on a common target: one gain per pool rather than per clip on
+purpose, because that equalizes between surfaces while leaving a soft step
+softer than a hard one WITHIN a surface, which is the variation the
+recordings were made for. The target is **-24.59 dBFS RMS**, and that is
+not a taste call either: `grass.ogg` measures -12.59 dBFS RMS and was
+reported as finally right at `-12.0 dB`, so it is the one footstep level
+already signed off on. Solving for grass's nine clips from scratch landed on
+`-12.0` for it independently -- the by-ear number and the measured one
+agree. A pool's gain is pulled back if it would push that pool's loudest
+peak past -1 dBFS, which is why `sand` and `snow` sit ~1-2 dB under target
+(crunchy surfaces have a high crest factor; physical, not a defect). The
+whole spread is now **2.4 dB**, down from 35.
+
+`FootstepSound._VOLUME_DB_BY_SURFACE` holds those gains, and
+`test_every_surfaces_volume_is_the_gain_the_pipeline_measured` pins it
+against `assets/audio/footsteps/steps/levels.json`, which the pipeline
+writes -- so the constants cannot drift from the files they describe. Godot
+cannot hand raw samples back from a compressed stream, so the decode-level
+measurement genuinely has to live in the manifest; what the test suite
+re-measures for itself every run is every clip's real LENGTH
+(`stream.get_length()`), which is what catches a swapped clip.
+
+**Per-step variation on top.** `pitch_scale_for(roll)` nudges each step by
+up to ±6% (`PITCH_VARIATION`) -- small on purpose: a footstep that swings a
+whole semitone reads as a different person's boot rather than the same boot
+on a different patch of ground. It is applied UNCONDITIONALLY, for exactly
+the reason `volume_db` already was: the pool reuses voices, so a pitch left
+behind by a previous step must never ride along on whatever plays next (a
+mushroom crush included).
+
+**Windowing, for the fallback only.** Whether a clip has to be read one step
+at a time is a fact about the CLIP, not about the ground, so
+`is_walking_bed(clip_path)` / `offset_for(clip_path, roll)` are keyed by
+path. A real one-shot is played whole from its own beginning; a long
+recording is started somewhere else in itself each step (never so late that
+the window runs off the end) and closed again after `STEP_WINDOW_SECONDS`
+(0.45s), instead of leaving the rest of a stranger's walk playing under the
+next step. Every surface the game can put underfoot has real one-shots now,
+so this is what the fallback recording gets -- and what the next surface
+somebody adds to `_SURFACE_BY_BIOME` inherits before anyone records it.
+
+Closing a window closes THAT step's window and only its own. The real
+cadence was measured rather than assumed: `FootstepGait.STRIDE_LENGTH_PX`
+8.415 at `Player.BASE_SPEED` 40 px/s is a step every **0.210s**, and
+**0.105s** sprinting -- so with a 4-voice pool the fifth step lands back on
+voice 0 while voice 0's own window is still counting down. A timer that just
+called `stop()` would cut the new step off after a fraction of a step, which
+is the very mid-ring truncation the window exists to remove; it checks a
+per-voice token instead.
+
+**Tooling note.** `assets/audio/footsteps/CREDITS.md` long recorded that
+"real audio-editing tooling to trim the FILE itself isn't available in this
+environment", and several decisions in this doc were shaped by that. It is
+no longer true: `pip install imageio-ffmpeg py7zr` brings a real ffmpeg and
+a 7z reader as plain wheels, no system packages. Trimming, cutting,
+transcoding and loudness measurement are all available to a future pass.
+
+`play_footstep` returns the voice it started, like `play_mushroom_crush`.
+That is not cosmetic: which clip a step took is otherwise unanswerable from
+outside, because several voices are legitimately mid-step at any moment and
+none of them is "the current one". The first version of the pool-coverage
+test searched for a playing voice instead and failed consistently on the
+last clip of a pool -- correctly, since that search reports the
+lowest-indexed clip still sounding rather than the one this step chose.
+
+TDD: `test_footstep_sound.gd` 40/40 (13 new, covering pool depth, every
+variant really loading, every variant really being one step long, the roll
+reaching the whole pool at both extremes, the measured gains matching the
+manifest, the between-surface spread, peak headroom, and no shipped clip
+being unreachable); `test_interaction_sfx_player.gd` 25/25 (consecutive
+steps not repeating one recording, enough steps reaching the whole pool,
+plus the offset/pitch/window wiring, each re-verified by mutating it back
+out and watching its own test fail).
+
 ### A laid surface sounds like what it is laid with (2026-09-17)
 
 Reported live: *"walking over cobblestone streets should not leave
@@ -189,12 +321,14 @@ disagree about what was underfoot.
   and hewn timber underfoot is a distinction this file has no recording
   to express.
 
-**What this does and does not buy, honestly.** No distinct stone or
-wooden-floor recording has been sourced — Wikimedia Commons' Foley
-coverage is thin generally (see `_CLIP_BY_SURFACE`'s own note, and the
-same gap already standing for sand and rock) — so `"rock"` and `"wood"`
-both resolve to the generic `default.ogg`. **The win is that a street
-stops sounding like grass, not that it sounds like cobbles.** A real
+**What this bought, and what it did not.** At the time: no distinct stone
+or wooden-floor recording had been sourced — Wikimedia Commons' Foley
+coverage is thin generally (see `CREDITS.md`'s own note, and the same gap
+then standing for sand and rock) — so `"rock"` and `"wood"` both resolved
+to the generic `default.ogg`. **The win was that a street stopped sounding
+like grass, not that it sounded like cobbles.** Both have real pools as of
+2026-09-17 (see "A recording of walking is not a footstep" above); a street
+sounds like gravel rather than like cobbles, which is the remaining step. A real
 recording for either is a welcome upgrade whenever one turns up, not a
 gap in this mapping.
 
@@ -484,10 +618,17 @@ independent recording described above.
 
 ## Status
 
-- ✅ **Footstep SFX wired end to end**, one real distinct recording each
-  for snow, forest (audibly including twigs/undergrowth), and grass,
-  every other biome sharing one real generic walking recording rather
-  than silence.
+- ✅ **Footstep SFX wired end to end**, and **every surface now has a pool
+  of 5-10 real, isolated, level-matched footstep one-shots** (2026-09-17)
+  -- see "A recording of walking is not a footstep" above. Reported live:
+  "Can you find better sounds for the footsteps on every terrain? They
+  sound weak and not natural." Measured first: the clips were recordings
+  of somebody WALKING (up to 41.67s) played from 0.0 every step, 35 dB
+  apart end to end. Now: real steps per surface, a different one each
+  step, ±6% pitch, and one MEASURED gain per surface landing every pool
+  within 2.4 dB of the level already signed off on. **Not verified: whether
+  it sounds better** -- nothing here can hear it, so lengths, levels,
+  variation and windowing are what is tested.
 - ✅ **Revised (2026-09-09): grass now has a real, distinct footstep
   recording**, not the shared default. Reported live: "it sounds like a
   drum, not like walking on grass." Wikimedia Commons, Freesound.org
@@ -495,10 +636,13 @@ independent recording described above.
   download) were all real dead ends; sourced instead from
   OpenGameArt.org's ungated static downloads, a genuine Freesound field
   recording rehosted there for a real shipped open-source game -- see
-  `assets/audio/footsteps/CREDITS.md`'s own "Why `grass.ogg` breaks the
-  Commons-only pattern" for the full trail, including a caught-before-use
+  `assets/audio/footsteps/CREDITS.md`'s own "Why the grass recording
+  breaks the Commons-only pattern" for the full trail, including a caught-before-use
   mismatch (a differently-named CC0 pack titled itself "grass" but its
-  real archive held none).
+  real archive held none). **All nine of that pack's grass variations ship
+  now** (2026-09-17); `CREDITS.md` had recorded that only the first was
+  copied in "if per-step variation is ever added later", and it has been.
+  `steps/grass_00.ogg` is byte-for-byte the file this row described.
 - ✅ **A laid surface sounds like what it is laid with** (2026-09-17) --
   see "A laid surface sounds like what it is laid with" above. Walking a
   cobbled street played `grass.ogg`, because this file only ever asked
@@ -509,20 +653,28 @@ independent recording described above.
   underfoot. `stone` -> `"rock"`, `wood`/`timber` -> `"wood"`; `"soil"`
   deliberately unmapped, so ordinary ground still takes its sound from
   the biome.
-- ⬜ **No dedicated sand/rock/wooden-floor footstep recording** -- a real
-  search effort did not turn up usable, correctly-licensed isolated
-  candidates; they share the default clip for now (see
-  `assets/audio/footsteps/CREDITS.md`). This is what caps the pass above:
-  a street now stops sounding like grass, but it does not yet sound like
-  cobbles. A real upgrade if sourced later, not a gap in the mixing logic
-  itself.
-- ✅ **Revised (2026-09-09): `underwater` now has a real, distinct water
-  clip.** Reported live: "river wading should be used for 'underwater
-  walks'." Reuses `river.ogg` (the ambient river-proximity layer's own
-  genuine flowing-water recording, see "Proximity layer: `river`" in
-  `soundscape.md`) rather than a fourth, separately-licensed file --
-  walking through water no longer sounds identical to walking on dry
-  land.
+- ✅ **Sand, rock and wooden floors have their own recordings now**
+  (2026-09-17), closing the gap this row stood for since 2026-09-09.
+  Sand: Fantozzi's Footsteps (CC0) -- the same pack an earlier session had
+  already found and correctly rejected for grass, which it genuinely does
+  not contain. Rock: the gravel folder of the pack grass came from, which
+  nobody had looked inside. Wood: that pack's wooden-floor steps. All
+  ungated static downloads, all credited.
+- 🚧 **A laid cobbled street still sounds like the rock underfoot, not
+  like cobbles.** `rock` covers tundra, mountain AND laid stone, and its
+  pool is gravel -- right for two of those three. Splitting a `stone`
+  surface out of `rock` is the remaining step; the same pack's `tile/` (9
+  clips) and Fantozzi's `Stone` (6) are already cached for it by
+  `tools/prepare_footstep_oneshots.py`. A real, named scope cut, not an
+  oversight.
+- ✅ **`underwater` has real water footsteps** (2026-09-17). Reported live
+  (2026-09-09): "river wading should be used for 'underwater walks'",
+  answered at the time by pointing underwater at `river.ogg`, the ambient
+  river-proximity layer's own flowing-water recording -- the only water in
+  the project then. It now plays 5 real recordings of feet going INTO
+  water, which is what wading is, where `river.ogg` is a river heard from
+  the bank. `river.ogg` keeps its ambient job untouched. Flagged as a
+  deliberate change to a live request, not a silent one.
 - ✅ **Mushroom-crush sound** (`assets/audio/footsteps/mushroom_crush.mp3`,
   2026-09-09) -- a crushed-styrofoam Foley stand-in, requested directly by
   name; see "Mushroom crush" above for the full reasoning and

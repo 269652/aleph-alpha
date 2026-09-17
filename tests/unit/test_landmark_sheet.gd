@@ -20,7 +20,7 @@ const ProceduralLandmarkSprite = preload("res://src/rendering/procedural_landmar
 
 
 func test_a_props_sheet_has_a_predictable_path():
-	assert_eq(LandmarkSheet.sheet_path_for("stall"), "res://assets/sprites/landmarks/stall.png")
+	assert_eq(LandmarkSheet.sheet_path_for("gate"), "res://assets/sprites/landmarks/gate.png")
 
 
 func test_every_procedural_prop_has_somewhere_its_art_can_go():
@@ -35,12 +35,12 @@ func test_the_hunters_own_prop_is_covered_too():
 	assert_ne(LandmarkSheet.sheet_path_for("hunting_ground"), "")
 
 
-## The well's art landed 2026-09-17; the rest of the props are still drawn
-## from code, and that fallback is what this pins.
+## The well's and the stall's art landed 2026-09-17; the rest of the props
+## are still drawn from code, and that fallback is what this pins.
 func test_a_prop_with_no_file_yet_reports_no_sheet():
 	assert_false(
-		LandmarkSheet.has_sheet("stall"),
-		"no art has been supplied for the stall yet, so nothing overrides its sprite"
+		LandmarkSheet.has_sheet("gate"),
+		"no art has been supplied for the gate yet, so nothing overrides its sprite"
 	)
 
 
@@ -53,12 +53,12 @@ func test_an_unknown_id_has_no_sheet_and_no_path():
 
 
 func test_a_plain_sheet_is_one_cell():
-	assert_eq(LandmarkSheet.grid_of("stall"), Vector2i(1, 1))
+	assert_eq(LandmarkSheet.grid_of("gate"), Vector2i(1, 1))
 
 
 func test_the_only_cell_of_a_plain_sheet_is_the_one_chosen():
 	for seed_value in [0, 1, 7, 99, -4]:
-		assert_eq(LandmarkSheet.variant_cell_for("stall", seed_value), Vector2i.ZERO)
+		assert_eq(LandmarkSheet.variant_cell_for("gate", seed_value), Vector2i.ZERO)
 
 
 func test_a_declared_grid_spreads_its_seeds_over_every_cell():
@@ -80,13 +80,14 @@ func test_the_same_seed_always_picks_the_same_cell():
 	assert_eq(LandmarkSheet.variant_cell_for_grid(12345, Vector2i(5, 5)), first)
 
 
-# -- the well, whose art was delivered 2026-09-17 --------------------------
+# -- the well and the stall, whose art was delivered 2026-09-17 -----------
 #
 # Delivered into assets/sprites/buildings/ rather than assets/sprites/
-# landmarks/, as a 5x5 grid of 25 wells with MAGENTA divider lines between
-# the cells (measured, tools/probe_building_lifecycle_sheet.gd). All three
-# of those differ from this module's own defaults, so all three are
-# declared per id rather than assumed.
+# landmarks/, each as a 5x5 grid of 25 variants with MAGENTA divider lines
+# between the cells (measured, tools/probe_building_lifecycle_sheet.gd and
+# tools/_probe_stand_sheet.gd -- the stall's file is named stand.png, not
+# stall.png). All three of those differ from this module's own defaults,
+# so all three are declared per id rather than assumed.
 
 func test_the_well_has_real_art_now():
 	assert_true(LandmarkSheet.has_sheet("well"), "the sheet was delivered -- it should be found")
@@ -134,13 +135,76 @@ func test_the_wells_cells_are_cut_between_its_own_magenta_lines():
 
 func test_a_prop_with_no_declared_sheet_still_looks_in_the_landmarks_folder():
 	for landmark_id in ProceduralLandmarkSprite.LANDMARK_IDS:
-		if landmark_id == "well":
+		if landmark_id == "well" or landmark_id == "stall":
 			continue
 		assert_eq(
 			LandmarkSheet.sheet_path_for(landmark_id),
 			"res://assets/sprites/landmarks/%s.png" % landmark_id,
 			"%s has no delivered art, so its door stays where it always was" % landmark_id
 		)
+
+
+func test_the_stall_has_real_art_now():
+	assert_true(LandmarkSheet.has_sheet("stall"), "the sheet was delivered -- it should be found")
+
+
+func test_the_stalls_art_is_read_from_where_it_was_actually_delivered():
+	var path := LandmarkSheet.sheet_path_for("stall")
+	assert_eq(path, "res://assets/sprites/buildings/stand.png")
+	assert_true(FileAccess.file_exists(path), "and the file is really there")
+
+
+func test_the_stall_is_a_grid_of_twenty_five():
+	assert_eq(LandmarkSheet.grid_of("stall"), Vector2i(5, 5))
+
+
+func test_every_one_of_the_twenty_five_stalls_is_reachable():
+	var seen: Dictionary = {}
+	for seed_value in 4000:
+		seen[LandmarkSheet.variant_cell_for("stall", seed_value)] = true
+	assert_eq(seen.size(), 25, "a stall nobody's seed can reach is art nobody will ever see")
+
+
+func test_a_stall_keeps_the_same_look_across_reloads():
+	for seed_value in [2, 88, 4242]:
+		assert_eq(
+			LandmarkSheet.variant_cell_for("stall", seed_value),
+			LandmarkSheet.variant_cell_for("stall", seed_value)
+		)
+
+
+## Unlike the well, the stall's cells are cut from EXPLICIT, hand-measured
+## bands, not VariantSheetGrid's generic divider scan -- see
+## IllustratedStructureSprite.explicit_frame_image's own doc comment for
+## why the generic scan cannot read this particular sheet. This pins the
+## frame size against those same pinned bands instead.
+func test_the_stalls_cells_are_cut_between_its_own_pinned_bands():
+	var IllustratedStructureSprite = load("res://src/rendering/illustrated_structure_sprite.gd")
+	var cell: Vector2i = LandmarkSheet.variant_cell_for("stall", 11)
+	var row_band: Vector2i = LandmarkSheet._SHEETS["stall"]["row_bands"][cell.y]
+	var column_band: Vector2i = LandmarkSheet._SHEETS["stall"]["column_bands"][cell.x]
+	var frame: Image = LandmarkSheet.frame_image("stall", 11, IllustratedStructureSprite.new())
+	assert_not_null(frame, "the stall's own art must actually come back")
+	assert_eq(
+		frame.get_size(),
+		Vector2i(column_band.y - column_band.x + 1, row_band.y - row_band.x + 1)
+	)
+
+
+func test_the_stalls_own_background_is_keyed_out():
+	var IllustratedStructureSprite = load("res://src/rendering/illustrated_structure_sprite.gd")
+	var frame: Image = LandmarkSheet.frame_image("stall", 11, IllustratedStructureSprite.new())
+	assert_not_null(frame)
+	var transparent := 0
+	var opaque := 0
+	for y in range(0, frame.get_height(), 3):
+		for x in range(0, frame.get_width(), 3):
+			if frame.get_pixel(x, y).a < 0.5:
+				transparent += 1
+			else:
+				opaque += 1
+	assert_gt(transparent, 0, "a stall on an opaque magenta card would be a magenta card in the grass")
+	assert_gt(opaque, 0, "and the stall itself must still be there")
 
 
 func test_the_wells_own_background_is_keyed_out():
@@ -209,4 +273,4 @@ func test_scaling_a_prop_never_distorts_it():
 
 func test_a_prop_with_no_art_has_nothing_to_scale():
 	var IllustratedStructureSprite = load("res://src/rendering/illustrated_structure_sprite.gd")
-	assert_null(LandmarkSheet.world_scaled_image("stall", 3, IllustratedStructureSprite.new()))
+	assert_null(LandmarkSheet.world_scaled_image("gate", 3, IllustratedStructureSprite.new()))

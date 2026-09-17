@@ -53,11 +53,9 @@ const _SURFACE_BY_BIOME := {
 ## `wood` and `timber` share one "wood" surface: both are a built wooden
 ## floor underfoot, and the difference between sawn and hewn timber is a
 ## distinction this file has no recording to express. No distinct wooden-
-## floor recording has been sourced either, so "wood" falls back to the
-## generic step clip (see `_CLIP_BY_SURFACE`) -- still a better answer
-## than the grass clip a wooden floor used to inherit from the ground
-## outside it, and a real recording is a welcome upgrade whenever one
-## turns up, not a gap in this mapping.
+## floor recording has been sourced either -- so "wood" shared the generic
+## walking clip for a while, and has its own pool of nine real wooden-floor
+## steps now (see `_STEP_POOL_SIZES`).
 const _SURFACE_BY_GROUND_MATERIAL := {
 	"stone": "rock",
 	"timber": "wood",
@@ -88,48 +86,162 @@ static func surface_for(
 	return String(_SURFACE_BY_BIOME.get(biome, "default"))
 
 
-const _DEFAULT_CLIP_PATH := "res://assets/audio/footsteps/default.ogg"
+## The one recording left for a surface that has no real steps of its own
+## (see _STEP_POOL_SIZES below) -- a general walking recording, read one
+## window at a time (see "one step out of a recording of many"). Every
+## surface the game can actually put underfoot has a pool now, so nothing
+## reaches this today; it stays because the honest answer to an
+## unrecognized surface is still SOME footstep noise rather than silence
+## ("we need footsteps", reported live as a general ask), and because the
+## next surface somebody adds to _SURFACE_BY_BIOME will land here before
+## anyone records it.
+const FALLBACK_CLIP_PATH := "res://assets/audio/footsteps/default.ogg"
 
-## Real, distinct recordings exist (see CREDITS.md) for exactly 4 surfaces
-## beyond the generic default: snow (a real snow-walking field recording),
-## forest (a real footsteps-in-forest recording -- "twigs cracking in
-## forest wood", reported live, is genuinely audible in it), grass (a real
-## footstep-on-grass field recording -- "it sounds like a drum, not like
-## walking on grass", reported live about the default it used to silently
-## share), and underwater (see below). Wikimedia Commons -- this project's
-## established sourcing convention (see assets/audio/soundscape/CREDITS.md)
-## -- turned out to have very little isolated Foley-style "footstep on X"
-## material for the remaining surfaces (sand/rock), and neither did
-## Freesound.org (login-gated downloads) or Pixabay (this particular
-## grass search hit a bot-check on the actual download, see CREDITS.md);
-## rather than force a mismatched clip onto sand/rock just to fill the
-## dict, they honestly share the one general walking recording below. A
-## real, distinct recording for either is a welcome upgrade whenever one
-## turns up -- not a gap in the mixing logic itself, the same "reuse where
-## a distinct recording isn't available" shape `NatureSoundscape`'s own
-## wind bed already established for desert/tundra/mountain.
+## Where a surface's real, isolated footstep one-shots live, and how many
+## of them there are -- built by tools/prepare_footstep_oneshots.py, which
+## also writes down what it measured in the same directory's levels.json.
 ##
-## `underwater` reuses `river.ogg` from the AMBIENT soundscape's own asset
-## directory rather than a second, separately-licensed file -- reported
-## live: "river wading should be used for 'underwater walks'". The same
-## real flowing-water recording backs both the continuous river-proximity
-## bed (NatureSoundscape.RIVER_LAYER, heard nearby) and this one-shot
-## footstep (heard when actually standing in it) -- one real asset, two
-## real reasons to be heard, not a duplicated file/license entry for the
-## same water. A cross-directory reference by design, not an accident.
-const _CLIP_BY_SURFACE := {
-	"grass": "res://assets/audio/footsteps/grass.ogg",
-	"forest": "res://assets/audio/footsteps/forest_twigs.ogg",
-	"snow": "res://assets/audio/footsteps/snow.mp3",
-	"underwater": "res://assets/audio/soundscape/river.ogg",
+## Reported live: *"Can you find better sounds for the footsteps on every
+## terrain? They sound weak and not natural"*. Both halves of that were
+## measurable. Every clip this file used to reach for was a recording of
+## somebody WALKING rather than a footstep -- forest 41.67s, snow 13.72s,
+## the generic 3.64s -- and the only real one-shot among them, grass, sat
+## 35dB louder than the quietest of them. One recording per surface also
+## meant every step on a surface was the same sample.
+##
+## So: several real steps per surface, from real recordings of that real
+## surface, level-matched to each other by measurement (see
+## _VOLUME_DB_BY_SURFACE). A pool is never fewer than 5 deep --
+## test_every_surface_has_a_pool_of_real_steps_not_one_recording pins that
+## -- because a pool small enough to notice repeating is the problem it was
+## built to solve. Paths are DERIVED from the count rather than listed, so
+## the two cannot disagree; that the files behind them really exist, really
+## load and are really one step long is re-checked against the files
+## themselves on every test run.
+const _STEPS_DIRECTORY := "res://assets/audio/footsteps/steps"
+const _STEP_POOL_SIZES := {
+	"default": 9,
+	"forest": 8,
+	"grass": 9,
+	"rock": 10,
+	"sand": 6,
+	"snow": 8,
+	"underwater": 5,
+	"wood": 9,
 }
 
-## An unrecognized surface (or one with no distinct recording sourced yet)
-## falls back to one plain, generic step sound rather than staying silent
-## -- "we need footsteps", reported live as a general ask, not just for
-## the surfaces named specifically.
-static func clip_path_for(surface: String) -> String:
-	return String(_CLIP_BY_SURFACE.get(surface, _DEFAULT_CLIP_PATH))
+
+## Every real footstep one-shot this surface can play, or an empty array
+## for a surface with none sourced yet.
+static func step_variants_for(surface: String) -> Array[String]:
+	var paths: Array[String] = []
+	for index in int(_STEP_POOL_SIZES.get(surface, 0)):
+		paths.append("%s/%s_%02d.ogg" % [_STEPS_DIRECTORY, surface, index])
+	return paths
+
+
+## Which of this surface's real steps to take. `roll` is [0, 1] -- the
+## caller's own randomness, kept out of here so this stays pure and
+## testable, the same split offset_for/pitch_scale_for already use.
+##
+## Falls back to the one general walking recording for a surface with no
+## pool (see FALLBACK_CLIP_PATH), which is then windowed rather than played
+## whole -- an unrecognized surface still makes a footstep noise.
+static func step_clip_path_for(surface: String, roll: float) -> String:
+	var pool := step_variants_for(surface)
+	if pool.is_empty():
+		return FALLBACK_CLIP_PATH
+	# 0.999999, not 1.0: a roll of exactly 1.0 would index one past the end.
+	return pool[int(clampf(roll, 0.0, 0.999999) * pool.size())]
+
+
+# -- one step out of a recording of many ------------------------------------
+#
+# Reported live: *"Can you find better sounds for the footsteps on every
+# terrain? They sound weak and not natural"*.
+#
+# Measured before touching anything (tools/probe_footstep_levels.gd), and the
+# LENGTHS were the whole explanation. A footstep one-shot is ~0.2-0.5s, and
+# only grass.ogg is one:
+#
+#     grass.ogg            0.25s   a real one-shot
+#     default.ogg          3.64s   somebody walking
+#     snow.mp3            13.72s   somebody walking
+#     forest_twigs.ogg    41.67s   somebody walking, for three quarters of a minute
+#
+# Every step played its clip from 0.0. So a forest step was the same
+# fraction of the same run-in, at the same pitch, every single time --
+# quiet where the recording had not reached a real impact yet, which is
+# "weak", and mechanically identical where it had, which is "not natural".
+# The pool's own round-robin then cut each one off mid-ring a second and a
+# half later, when four more steps had gone by.
+#
+# None of that wants better recordings. A 41-second recording of walking is
+# already full of real, varied footsteps, recorded on the real surface; it
+# just has to be READ one step at a time. So: a window into the bed, a
+# different place in it every step, and a few percent of pitch either way.
+
+## How long ONE step is allowed to sound. A real footstep's impact and decay
+## is a couple of hundred milliseconds; much beyond that and the tails of
+## four voices pile up into a crowd walking behind you, which is the overlap
+## the pool's recycling used to cut off mid-ring.
+const STEP_WINDOW_SECONDS := 0.45
+
+## How far a step's pitch may swing either way. Small on purpose: a footstep
+## that swings a whole semitone reads as a different person's boot rather
+## than the same boot on a different patch of ground. Pinned between
+## audible and absurd by test_the_pitch_swing_stays_subtle.
+const PITCH_VARIATION := 0.06
+
+## The REAL length of every clip long enough to hold more than one step,
+## measured off the file with tools/prepare_footstep_oneshots.py. Keyed by
+## clip PATH, not by surface: whether a step has to be windowed is a fact
+## about the recording being played, not about the ground -- so a pool's own
+## one-shots are correctly left alone no matter which surface reaches for
+## them, and a surface added to _SURFACE_BY_BIOME tomorrow inherits the
+## right answer for the fallback without anybody remembering to list it.
+##
+## Only the fallback is left in here. The four long recordings this used to
+## hold are the four surfaces that now have real steps of their own; the
+## forest recording is still in the repository, because the forest pool is
+## cut out of it.
+##
+## Re-measured against the real file on every run by
+## test_the_pinned_clip_lengths_are_the_real_files_own, because the offsets
+## below are derived from it: a swapped clip nobody re-measured would start
+## reading steps off the end of itself.
+const CLIP_LENGTH_SECONDS := {
+	FALLBACK_CLIP_PATH: 3.64,
+}
+
+
+## Whether this clip is a recording of somebody WALKING, which one step is a
+## window into -- rather than a single recorded step, which is played whole.
+##
+## Twice the step window is the line: a clip that cannot hold two
+## non-overlapping steps has no second step to offer, so there is nothing to
+## vary and reading it from anywhere but its own beginning would only clip
+## the one step it has.
+static func is_walking_bed(clip_path: String) -> bool:
+	return float(CLIP_LENGTH_SECONDS.get(clip_path, 0.0)) > STEP_WINDOW_SECONDS * 2.0
+
+
+## Where in the clip this step starts. `roll` is [0, 1] -- the caller's own
+## randomness, kept out of here so this stays pure and testable.
+##
+## Zero for a real one-shot: it is already the step. For a bed, anywhere
+## that still leaves a whole window of recording ahead of it, so a step
+## never fades out because it ran off the end.
+static func offset_for(clip_path: String, roll: float) -> float:
+	if not is_walking_bed(clip_path):
+		return 0.0
+	var length: float = float(CLIP_LENGTH_SECONDS.get(clip_path, 0.0))
+	return clampf(roll, 0.0, 1.0) * maxf(length - STEP_WINDOW_SECONDS, 0.0)
+
+
+## This step's pitch. `roll` is [0, 1]; 0.5 is the clip's own pitch.
+static func pitch_scale_for(roll: float) -> float:
+	return 1.0 + (clampf(roll, 0.0, 1.0) - 0.5) * 2.0 * PITCH_VARIATION
 
 
 ## A mushroom crushed underfoot (see `World`'s own `crush_mushroom_at`
@@ -138,7 +250,7 @@ static func clip_path_for(surface: String) -> String:
 ## reported live as its own explicit case. Left an honest empty gap for a
 ## while: no genuine squish/crush recording turned up on Wikimedia Commons
 ## despite a real search effort (its Foley/SFX coverage is thin generally --
-## see `_CLIP_BY_SURFACE`'s own doc comment above), and this project's own
+## see `_STEP_POOL_SIZES`'s own doc comment above), and this project's own
 ## real-world-grounding discipline (see docs/concept/soundscape.md's
 ## pillar 3) argues against forcing an UNASKED-FOR mismatched stand-in (a
 ## knife-chop, a door-chime) just to fill the slot.
@@ -157,30 +269,46 @@ static func clip_path_for(surface: String) -> String:
 const MUSHROOM_CRUSH_CLIP_PATH := "res://assets/audio/footsteps/mushroom_crush.mp3"
 
 
-## Per-surface volume ADJUSTMENT in dB, relative to the plain default
-## (0dB, i.e. unchanged) -- distinct sourced clips were never level-
-## matched to each other (the same "no audio-editing tooling in this
-## environment" constraint that already applies to trimming/codec fixes
-## elsewhere in this file applies to loudness normalization too), so one
-## clip can read noticeably louder or quieter than its neighbours purely
-## because of where it happened to be sourced from, not anything about
-## the surface itself. Missing from this dict means "play at the default
-## volume," not silence -- see volume_db_for's own fallback.
+## Per-surface volume in dB, MEASURED rather than chosen. Every number in
+## here is written down by tools/prepare_footstep_oneshots.py, which decodes
+## the real files, and test_every_surfaces_volume_is_the_gain_the_pipeline_
+## measured pins this dict against the levels.json it leaves beside the
+## clips -- so these cannot drift from the files they describe.
 ##
-## Reported live: "The grass footsteps are way too loud... can you make
-## them fainter?" `grass.ogg` (OpenGameArt/Freesound, see CREDITS.md)
-## reads noticeably hotter than every other sourced clip here (all from
-## Wikimedia Commons or Pixabay). -12dB is a real, deliberate correction,
-## not an eyeballed guess: roughly a perceived halving of loudness (a
-## well-established audio-engineering rule of thumb -- every -10dB is
-## roughly "half as loud" to human hearing -- not a personal preference
-## number), a large, clearly-audible cut matching how strongly this was
-## reported ("way too loud"). A real re-normalized recording, or a
-## measured dB difference against the other clips, would be a genuine
-## upgrade over this if either ever turns up -- not a gap in the mixing
-## logic itself.
+## Reported live: *"Can you find better sounds for the footsteps on every
+## terrain? They sound weak and not natural"*, and before it *"The grass
+## footsteps are way too loud... can you make them fainter?"* Those were one
+## problem. The sourced recordings were never level-matched to each other,
+## and the spread was 35dB end to end -- grass at -12.59 dBFS RMS against
+## the generic walking clip at -47.63. So grass was genuinely too loud and
+## everything else was genuinely weak, and no single playback tweak could
+## fix both.
+##
+## Each pool now gets ONE gain, so that its MEAN lands on a common target.
+## One gain per pool rather than one per clip on purpose: it equalizes
+## between surfaces while leaving a soft step softer than a hard one WITHIN
+## a surface, which is the variation the recordings were made for.
+##
+## The target is -24.59 dBFS RMS, and it is not a taste call either: grass
+## measures -12.59 dBFS and was reported as finally right at -12.0 dB, so
+## that is the one footstep level already signed off on. Worth knowing that
+## the pipeline, measuring grass's nine clips from scratch, independently
+## arrived at -12.0 for it -- the by-ear number and the measured one agree.
+##
+## Achieved (dBFS RMS): default -24.6, forest -24.6, grass -24.6, rock -24.6, sand -26.0, snow -26.9, underwater -24.5, wood -24.6.
+## Sand and snow sit slightly under target because their gain was pulled
+## back to keep their loudest peak under the ceiling -- crunchy surfaces
+## have a high crest factor, which is physical, not a defect. The whole
+## spread is now under 2.5dB.
 const _VOLUME_DB_BY_SURFACE := {
+	"default": -6.9,
+	"forest": 11.1,
 	"grass": -12.0,
+	"rock": -3.3,
+	"sand": -1.0,
+	"snow": 7.5,
+	"underwater": -5.5,
+	"wood": -11.8,
 }
 
 ## An unrecognized surface (or one with nothing special set) plays at the

@@ -50,10 +50,71 @@ const SeasonCycle = preload("res://src/world/season_cycle.gd")
 ## footprint is an ephemeral mark, not persistent litter, unlike the snow
 ## depth reduction and PathScarring wear this sits alongside (both keep
 ## their own, much longer-lived clocks entirely unchanged by this file).
-const LIFETIME_SECONDS := SeasonCycle.SECONDS_PER_DAY * 0.5
+## Asked for directly: "Ok make the half life time 2 minutes" -- so a print
+## is at HALF strength two real minutes after it is stamped, half of that
+## again two minutes later, and so on. A half-life is exponential by
+## definition, which is also the honest shape for a mark weathering away:
+## a fresh print loses its crisp edge quickly and the last ghost of it
+## lingers.
+const HALF_LIFE_SECONDS := 2.0 * 60.0
+
+## Below this strength a print is no longer visible on any ground, so
+## keeping the record costs iteration and draw calls for something nobody
+## can see -- which, in a project that has fought sixteen rounds of frame
+## rate decay, is not a harmless simplification.
+const VISIBLE_FLOOR := 0.02
+
+## How long a print is worth keeping, DERIVED from the half-life rather than
+## carried as a second, independent number that could contradict it: the
+## time for a print to fade below VISIBLE_FLOOR.
+##
+## This replaces a flat 30 real minutes. Those were asked for first, and
+## then a two-minute half-life was asked for, and the two cannot both be
+## true -- two minutes of half-life puts a print under 2% strength after
+## about eleven, not thirty. The half-life is the later and more specific
+## instruction, so it wins, and this follows it instead of arguing with it.
+## Pinned by test_a_print_is_kept_exactly_as_long_as_it_can_be_seen.
+const LIFETIME_SECONDS := HALF_LIFE_SECONDS * 5.643856189774724  # log2(1 / VISIBLE_FLOOR)
+
+## How much faster a print fades in a downpour than on dry ground. A real
+## design knob of the same kind as the half-life, not a measurable constant:
+## four is what makes rain matter -- in a downpour the half-life is thirty
+## seconds rather than two minutes -- without a shower erasing a trail
+## before anybody can follow it.
+const RAIN_DECAY_MULTIPLIER := 4.0
+
+const FADE_STEPS := 16
 
 var _prints: Array[Dictionary] = []
 var _generation := 0
+## The world clock this field last aged against. Starts at the clock's own
+## origin rather than at the first advance() call, so a first advance(T)
+## ages every print by T -- which is what every caller written before decay
+## existed already assumes.
+var _last_advanced_at := 0.0
+
+
+## How fast a print ages right now, as a multiple of its dry pace. `wetness`
+## is 0 on dry ground and 1 in a downpour (EarthChunkManager.set_rain's own
+## intensity); anything between scales linearly, because drizzle really is
+## gentler on a trail than a storm.
+static func decay_rate_for(wetness: float) -> float:
+	return 1.0 + clampf(wetness, 0.0, 1.0) * (RAIN_DECAY_MULTIPLIER - 1.0)
+
+
+## How strongly this print still shows: 1.0 the moment it is stamped, 0.0
+## when it is spent, and continuously falling in between.
+##
+## Asked for directly ("make the decay gradually"). What this replaces is a
+## print that held full strength for its entire life and then vanished
+## between one frame and the next, which is what pruning alone did.
+static func opacity_of(stamp: Dictionary) -> float:
+	return clampf(pow(0.5, float(stamp.get("decayed", 0.0)) / HALF_LIFE_SECONDS), 0.0, 1.0)
+
+
+## Which drawn band that opacity falls in -- see FADE_STEPS.
+static func fade_band_of(stamp: Dictionary) -> int:
+	return int(floor(opacity_of(stamp) * float(FADE_STEPS)))
 
 
 func add_print(
@@ -66,6 +127,10 @@ func add_print(
 		"heading": heading,
 		"spawned_at": now,
 		"size_scale": size_scale,
+		# Seconds of DRY-equivalent ageing this print has taken so far. Not
+		# derived from spawned_at, because the weather it has lived through
+		# is not the weather it is asked about -- see advance().
+		"decayed": 0.0,
 	})
 	_generation += 1
 
@@ -88,8 +153,27 @@ func generation() -> int:
 ## accumulated one, the same convention LeafLitterField.advance already
 ## uses so a print's lifetime tracks the same clock /ecotest fast-forwards
 ## along with the rest of the ecosystem.
-func advance(now: float) -> void:
+## `wetness` is how hard it is raining on this chunk right now, 0..1, and it
+## is sampled per step rather than stored per print: a print cannot know what
+## weather is coming. That is also why decay ACCUMULATES here instead of
+## being recomputed from spawned_at -- rain that begins halfway through a
+## print's life must hurry only the half that is left of it, not retroactively
+## the half it already spent in the sun.
+##
+## The generation bump is deliberately tied to a print crossing a FADE_STEPS
+## band rather than to any change at all: see FADE_STEPS for why rebuilding
+## the renderer's buffer every frame is the one thing this must not do.
+func advance(now: float, wetness: float = 0.0) -> void:
+	var elapsed := maxf(now - _last_advanced_at, 0.0)
+	_last_advanced_at = now
+	if elapsed <= 0.0:
+		return
+	var aged := elapsed * decay_rate_for(wetness)
 	for i in range(_prints.size() - 1, -1, -1):
-		if now - _prints[i].spawned_at >= LIFETIME_SECONDS:
+		var before := fade_band_of(_prints[i])
+		_prints[i]["decayed"] = float(_prints[i].get("decayed", 0.0)) + aged
+		if _prints[i]["decayed"] >= LIFETIME_SECONDS:
 			_prints.remove_at(i)
+			_generation += 1
+		elif fade_band_of(_prints[i]) != before:
 			_generation += 1

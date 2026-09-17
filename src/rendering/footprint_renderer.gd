@@ -20,6 +20,9 @@ extends RefCounted
 ## fourth MultiMeshInstance2D per chunk.
 
 const ProceduralFootprintSprite = preload("res://src/rendering/procedural_footprint_sprite.gd")
+## Only for opacity_of -- how strongly a print still shows. The curve lives
+## with the data that ages, not with the drawing, so the two cannot drift.
+const FootprintField = preload("res://src/world/footprint_field.gd")
 
 const SURFACES := ["snow", "grass", "forest", "underwater"]
 const _FALLBACK_SURFACE := "grass"
@@ -57,6 +60,11 @@ func build_multimeshes(parent: Node) -> Dictionary:
 		var mmi := MultiMeshInstance2D.new()
 		var mm := MultiMesh.new()
 		mm.transform_format = MultiMesh.TRANSFORM_2D
+		# Per-instance colour carries the fade (FootprintField.opacity_of).
+		# Without this the buffer has nowhere to put a print's strength and
+		# every print draws solid until the moment it is pruned, which is
+		# exactly the cliff decay was asked for to remove.
+		mm.use_colors = true
 		mm.mesh = _shared_quad_mesh()
 		mmi.multimesh = mm
 		mmi.texture = _texture_for(surface)
@@ -94,6 +102,26 @@ func fill(mmis: Dictionary, prints: Array) -> void:
 		mmi.multimesh.instance_count = group.size()
 		for i in group.size():
 			mmi.multimesh.set_instance_transform_2d(i, _transform_for(group[i]))
+			# A print written before decay existed carries no `decayed` key;
+			# opacity_of reads that as untouched and returns 1.0, so it draws
+			# exactly as it always did rather than as a blank.
+			mmi.multimesh.set_instance_color(i, color_for(group[i]))
+
+
+## How strongly one print is drawn: white, with the fade in the alpha.
+##
+## Its own function because MultiMesh instance COLOURS cannot be read back
+## in a headless test the way transforms can -- get_instance_color returns
+## (0,0,0,1) whatever was written, measured directly on Godot 4.7.2. So the
+## decision is testable here even though the engine write is not, which is
+## the same split this file's own doc comment already draws for
+## LeafLitterRenderer's lossy INSTANCE_CUSTOM packing.
+##
+## A print written before decay existed carries no `decayed` key at all;
+## opacity_of reads that as untouched and answers 1.0, so it draws exactly
+## as it always did.
+static func color_for(stamp: Dictionary) -> Color:
+	return Color(1.0, 1.0, 1.0, FootprintField.opacity_of(stamp))
 
 
 ## A footprint's own art is authored toe-up (see ProceduralFootprintSprite's

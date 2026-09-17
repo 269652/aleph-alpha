@@ -15,6 +15,8 @@ const NpcIdentity = preload("res://src/world/npc_identity.gd")
 const TerrainRenderer = preload("res://src/rendering/terrain_renderer.gd")
 const VillageLayout = preload("res://src/world/village_layout.gd")
 const VillageFarm = preload("res://src/gameplay/village_farm.gd")
+const VillagePond = preload("res://src/gameplay/village_pond.gd")
+const VillageSawmill = preload("res://src/gameplay/village_sawmill.gd")
 const ProceduralLandmarkSprite = preload("res://src/rendering/procedural_landmark_sprite.gd")
 
 const TILE_SIZE := 16
@@ -161,6 +163,14 @@ class StubWorld:
 
 	func modification_at_global(x: int, y: int) -> String:
 		return occupied_cells.get(Vector2i(x, y), "")
+
+	## Every tile stock_pond_at was called for -- the real
+	## EarthChunkManager's own entry point for putting a fisher's stocking
+	## into the water they just dug.
+	var stocked_ponds: Array = []
+
+	func stock_pond_at(x: int, y: int) -> void:
+		stocked_ponds.append(Vector2i(x, y))
 
 	## Mirrors EarthChunkManager.place_building_over_roads: the civic plot
 	## is the paved square itself, so an ordinary place_building would
@@ -460,11 +470,12 @@ func test_every_street_cell_is_laid_as_the_real_road_tile():
 	var streets := 0
 	for cell in world.built_tiles:
 		var tile: String = world.built_tiles[cell]
-		# A village builds exactly two things onto its own ground: streets,
-		# and the rails a farmhouse fences its beds with (docs/concept/
-		# village_farms.md). Everything that is not a rail is a street, and
-		# every street is the real Road tile.
-		if VillageFarm.is_fence_tile(tile):
+		# A village builds three things onto its own ground: streets, the
+		# rails a farmhouse fences its beds with (docs/concept/
+		# village_farms.md) and the water a fisher digs (docs/concept/
+		# village_ponds.md). Everything that is neither a rail nor a pond is
+		# a street, and every street is the real Road tile.
+		if VillageFarm.is_fence_tile(tile) or VillagePond.is_pond_tile(tile):
 			continue
 		assert_eq(tile, TerrainRenderer.ROAD_TILE_ID, str(cell))
 		streets += 1
@@ -2056,14 +2067,21 @@ func test_the_field_a_villager_works_is_a_whole_rectangle():
 			assert_eq(cells.size(), size.x * size.y, "the rectangle has a hole in it")
 
 
-## A village never sows or fences across its own street ROWS -- paved or
-## not. Measured on real villages (tools/probe_village_map.gd): the founding
-## layout paves a further street only between its own doorsteps, so a street
-## row has unpaved gaps in it, and a rail dropped into one of those stands in
-## the middle of the street with paving either side. Worse, it made the
-## frames inconsistent -- a field under a paved stretch got no north wall
-## (the street is its boundary) while the one beside it got a rail.
-func test_no_bed_and_no_rail_ever_lands_on_one_of_the_villages_street_rows():
+## A village never SOWS across its own street ROWS -- paved or not. Measured
+## on real villages (tools/probe_village_map.gd): the founding layout paves a
+## further street only between its own doorsteps, so a street row has unpaved
+## gaps in it, and a crop dropped into one of those grows in the middle of
+## the street with paving either side.
+##
+## RAILS were once held to the same rule and are not any more: a field sits
+## below the house it belongs to, so one whole side of its frame lands on the
+## next street row, and holding rails to it left that side open -- reported
+## with the bed circled, "it's still not fully enclosing the bed". A rail
+## along the edge of a road is a fence beside a road; a crop in the roadway
+## is not a crop. The gate is the PAVING, which is occupied ground and stops
+## a rail on its own (see
+## test_a_fields_frame_closes_on_every_side_that_is_not_paving_or_a_building).
+func test_no_bed_ever_lands_on_one_of_the_villages_street_rows():
 	var offenders: Array = []
 	var checked := 0
 	for coord in _settlement_chunks_with_farmers(3, 8):
@@ -2080,11 +2098,407 @@ func test_no_bed_and_no_rail_ever_lands_on_one_of_the_villages_street_rows():
 				var local: Vector2i = (global_cell as Vector2i) - coord * CHUNK_SIZE
 				if on_a_street.call(local.y):
 					offenders.append("%s: a bed at %s is on a street row" % [str(coord), str(local)])
-		for cell in _built_tiles(world, coord):
-			if not VillageFarm.is_fence_tile(_built_tiles(world, coord)[cell]):
-				continue
-			checked += 1
-			if on_a_street.call((cell as Vector2i).y):
-				offenders.append("%s: a rail at %s stands in the street" % [str(coord), str(cell)])
-	assert_gt(checked, 0, "precondition: real fields and real rails were laid")
+	assert_gt(checked, 0, "precondition: real fields were laid")
 	assert_eq(offenders.size(), 0, "%s" % str(offenders.slice(0, 6)))
+
+
+## Reported in play with the bed circled: *"it's still not fully enclosing
+## the bed"*. A frame was leaving a whole SIDE open wherever that side fell
+## on one of the village's street ROWS -- and measured on real villages
+## (tools/probe_village_map.gd), most of those cells carry no paving at all:
+## a 3-wide `.....` gap directly under a field, with the frame closed on
+## every other side. An unpaved gap is not a gate. The gate is the paving.
+##
+## States the frame as a whole rather than re-deriving the placement rule:
+## every cell of a field's own ring carries a rail unless there is a real
+## reason it cannot -- it is somebody's bed, it is the farmhouse, it is
+## paved (which IS the gate), or it is ground nothing may stand on.
+func test_a_fields_frame_closes_on_every_side_that_is_not_paving_or_a_building():
+	var open_sides: Array = []
+	var checked := 0
+	for coord in _settlement_chunks_with_farmers(3, 8):
+		var world := StubWorld.new()
+		var spawned := renderer.spawn_village(
+			parent, coord, coord * CHUNK_SIZE, CHUNK_SIZE, TILE_SIZE, "grassland", world
+		)
+		var built := _built_tiles(world, coord)
+		var beds: Dictionary = {}
+		var markers := _farming_markers(spawned, coord)
+		for npc in markers:
+			for global_cell in npc.field_cells:
+				beds[(global_cell as Vector2i) - coord * CHUNK_SIZE] = true
+		for npc in markers:
+			var local_beds: Array = []
+			for global_cell in npc.field_cells:
+				local_beds.append((global_cell as Vector2i) - coord * CHUNK_SIZE)
+			if local_beds.is_empty():
+				continue
+			var origin: Vector2i = _nearest_farmhouse_origin(world, coord, local_beds)
+			for rail in VillageFarm.fence_cells(local_beds, origin, VillageFarm.FARM_BUILDING_ID):
+				var cell: Vector2i = rail
+				if cell.x < 0 or cell.y < 0 or cell.x >= CHUNK_SIZE or cell.y >= CHUNK_SIZE:
+					continue
+				if beds.has(cell):
+					continue  # a neighbour's crop, not this frame
+				# What the RENDERER sees standing there, not just what it
+				# built: a farmhouse's own footprint closes a side without
+				# any rail, and that occupancy lives in the same place the
+				# placement rule reads it from.
+				var standing: String = world.modification_at_global(
+					coord.x * CHUNK_SIZE + cell.x, coord.y * CHUNK_SIZE + cell.y
+				)
+				if standing == "":
+					standing = built.get(cell, "")
+				if standing == TerrainRenderer.ROAD_TILE_ID:
+					continue  # real paving: this is the gate
+				if standing != "" and not VillageFarm.is_fence_tile(standing):
+					continue  # a building or another structure closes it
+				checked += 1
+				if not VillageFarm.is_fence_tile(standing):
+					open_sides.append("%s: the frame is open at %s" % [str(coord), str(cell)])
+	assert_gt(checked, 0, "precondition: real fields with real ring cells were laid")
+	assert_eq(open_sides.size(), 0, "%s" % str(open_sides.slice(0, 8)))
+
+
+## The farmhouse this field belongs to -- the one whose own walls the ring
+## is measured against.
+func _nearest_farmhouse_origin(world: StubWorld, coord: Vector2i, local_beds: Array) -> Vector2i:
+	var best := Vector2i.ZERO
+	var best_distance := 0x7FFFFFFF
+	for record in world.buildings_in_chunk(coord):
+		if record.get("id", "") != VillageFarm.FARM_BUILDING_ID:
+			continue
+		var origin: Vector2i = record["origin_local"]
+		var distance := 0x7FFFFFFF
+		for bed in local_beds:
+			var d: int = absi((bed as Vector2i).x - origin.x) + absi((bed as Vector2i).y - origin.y)
+			distance = mini(distance, d)
+		if distance < best_distance:
+			best_distance = distance
+			best = origin
+	return best
+
+
+## Asked for directly, with the broken stretch in shot: "When there's only a
+## free gap of 1-2 tiles between two street tiles it should close the gap
+## between them". The founding layout paves only between the doorsteps it
+## actually joined, so a real village's street rows come out as paved
+## stretches with one- and two-tile holes punched through them.
+func test_a_village_leaves_no_one_or_two_tile_hole_in_its_own_streets():
+	var holes: Array = []
+	var checked := 0
+	for coord in _settlement_chunks_with_farmers(3, 8):
+		var world := StubWorld.new()
+		renderer.spawn_village(
+			parent, coord, coord * CHUNK_SIZE, CHUNK_SIZE, TILE_SIZE, "grassland", world
+		)
+		var street_y: int = VillageLayout.skeleton(CHUNK_SIZE, VillageLayout.seed_for(coord))["street_y"]
+		var is_paved := func(cell: Vector2i) -> bool:
+			var g: Vector2i = coord * CHUNK_SIZE + cell
+			return world.modification_at_global(g.x, g.y) == TerrainRenderer.ROAD_TILE_ID
+		var is_free := func(cell: Vector2i) -> bool:
+			var g: Vector2i = coord * CHUNK_SIZE + cell
+			return world.modification_at_global(g.x, g.y) == ""
+		checked += 1
+		for cell in VillageLayout.short_street_gap_cells(
+			is_paved, is_free, CHUNK_SIZE, street_y, VillageLayout.STREET_GAP_CLOSE_TILES
+		):
+			holes.append("%s: a hole in the street at %s" % [str(coord), str(cell)])
+	assert_gt(checked, 0, "precondition: real villages were laid")
+	assert_eq(holes.size(), 0, "%s" % str(holes.slice(0, 8)))
+
+
+## The last link of "make sure wheat grows and is harvested which increases
+## farmhouse stock which gets transported to city stock": a villager can
+## only fill the farmhouse they work for if they know which one it is.
+## Handed out with the field, by the one thing that knows whose is whose.
+func test_every_farmer_is_told_which_farmhouse_the_field_belongs_to():
+	var coord := _find_settlement_chunk_with_occupation("grassland", "farmer", 3)
+	var world := StubWorld.new()
+	var spawned := renderer.spawn_village(
+		parent, coord, coord * CHUNK_SIZE, CHUNK_SIZE, TILE_SIZE, "grassland", world
+	)
+	var origins: Dictionary = {}
+	for record in world.buildings_in_chunk(coord):
+		if record.get("id", "") == VillageFarm.FARM_BUILDING_ID:
+			origins[coord * CHUNK_SIZE + (record["origin_local"] as Vector2i)] = true
+	assert_gt(origins.size(), 0, "precondition: this village really raised a farmhouse")
+	var checked := 0
+	for npc in _farming_markers(spawned, coord):
+		if npc.field_cells.is_empty():
+			continue
+		checked += 1
+		assert_true(
+			origins.has(npc.stock_building_cell),
+			"a farmer works a field for %s, which is no farmhouse" % str(npc.stock_building_cell)
+		)
+	assert_gt(checked, 0, "precondition: somebody was handed a real field")
+
+
+## A fisher digs their own water where a farmer sows their own beds -- see
+## docs/concept/village_ponds.md. Asked for directly: "The Fisher should
+## build a similar 3x2 enclosure but filled with water".
+func test_a_fisher_gets_a_real_fenced_pond_beside_their_own_house():
+	var coord := _find_settlement_chunk_with_occupation("grassland", "fisher", 3)
+	var world := StubWorld.new()
+	renderer.spawn_village(
+		parent, coord, coord * CHUNK_SIZE, CHUNK_SIZE, TILE_SIZE, "grassland", world
+	)
+	var built := _built_tiles(world, coord)
+	var water: Array = []
+	for cell in built:
+		if VillagePond.is_pond_tile(built[cell]):
+			water.append(cell)
+	assert_gt(water.size(), 0, "the village's fisher has nowhere to fish")
+
+	var min_cell: Vector2i = water[0]
+	var max_cell: Vector2i = water[0]
+	for cell in water:
+		min_cell = Vector2i(mini(min_cell.x, (cell as Vector2i).x), mini(min_cell.y, (cell as Vector2i).y))
+		max_cell = Vector2i(maxi(max_cell.x, (cell as Vector2i).x), maxi(max_cell.y, (cell as Vector2i).y))
+	var size := max_cell - min_cell + Vector2i.ONE
+	assert_true(VillageFarm.FIELD_SHAPES.has(size), "a pond spans %s, not a shape that was asked for" % str(size))
+	assert_eq(water.size(), size.x * size.y, "the pond has a hole in it")
+
+
+## And it is FENCED, like the field it is modelled on -- the ask says "a
+## similar 3x2 enclosure", and an enclosure is the frame.
+func test_a_fishers_pond_is_fenced_like_a_field():
+	var coord := _find_settlement_chunk_with_occupation("grassland", "fisher", 3)
+	var world := StubWorld.new()
+	renderer.spawn_village(
+		parent, coord, coord * CHUNK_SIZE, CHUNK_SIZE, TILE_SIZE, "grassland", world
+	)
+	var built := _built_tiles(world, coord)
+	var water: Array = []
+	for cell in built:
+		if VillagePond.is_pond_tile(built[cell]):
+			water.append(cell)
+	assert_gt(water.size(), 0, "precondition: a pond was really dug")
+	var rails := 0
+	for cell in VillageFarm.fence_cells(water, Vector2i.ZERO, VillageFarm.FARM_BUILDING_ID):
+		if VillageFarm.is_fence_tile(built.get(cell, "")):
+			rails += 1
+	assert_gt(rails, 0, "a pond with no frame at all is not an enclosure")
+
+
+## Nothing is dug twice: a reload re-derives the same pond and builds
+## nothing on top of it.
+func test_digging_a_pond_twice_leaves_it_exactly_as_it_was():
+	var coord := _find_settlement_chunk_with_occupation("grassland", "fisher", 3)
+	var world := StubWorld.new()
+	renderer.spawn_village(parent, coord, coord * CHUNK_SIZE, CHUNK_SIZE, TILE_SIZE, "grassland", world)
+	var first := _built_tiles(world, coord).duplicate(true)
+	renderer.spawn_village(parent, coord, coord * CHUNK_SIZE, CHUNK_SIZE, TILE_SIZE, "grassland", world)
+	assert_eq(_built_tiles(world, coord), first, "a reload changed the village")
+
+
+## A dug pond is STOCKED: empty water is a hole, and the ask is fish
+## swimming in it. The village puts the fisher's own stocking in as it digs.
+func test_a_dug_pond_is_stocked_with_real_fish():
+	var coord := _find_settlement_chunk_with_occupation("grassland", "fisher", 3)
+	var world := StubWorld.new()
+	renderer.spawn_village(
+		parent, coord, coord * CHUNK_SIZE, CHUNK_SIZE, TILE_SIZE, "grassland", world
+	)
+	var built := _built_tiles(world, coord)
+	var water: Array = []
+	for cell in built:
+		if VillagePond.is_pond_tile(built[cell]):
+			water.append(cell)
+	assert_gt(water.size(), 0, "precondition: a pond was dug")
+	assert_gt(world.stocked_ponds.size(), 0, "the fisher's pond was left empty")
+	var stocked_in_water := false
+	for tile in world.stocked_ponds:
+		if water.has((tile as Vector2i) - coord * CHUNK_SIZE):
+			stocked_in_water = true
+	assert_true(stocked_in_water, "something was stocked, but not the pond")
+# -- the village sawmill has a worker (docs/concept/village_timber.md) ------
+#
+# Reported in play: "The sawmill also never produces any beams and doesn't
+# even have a dedicated worker".
+
+
+func _lumberjack_markers(spawned: Array) -> Array:
+	var out: Array = []
+	for node in spawned:
+		if node is NpcMarker and node.identity.occupation == VillageSawmill.OCCUPATION:
+			out.append(node)
+	return out
+
+
+func test_a_lumberjack_is_told_which_sawmill_is_theirs():
+	var coord := _find_settlement_chunk_with_occupation("grassland", VillageSawmill.OCCUPATION, 3)
+	var world := StubWorld.new()
+	# Real timber, or the village honestly raises no mill and the test would
+	# pass without ever asking its own question.
+	_forest_band(world, coord)
+	var spawned := renderer.spawn_village(
+		parent, coord, coord * CHUNK_SIZE, CHUNK_SIZE, TILE_SIZE, "grassland", world
+	)
+	var mills := _buildings_of(world, VillageSawmill.SAWMILL_BUILDING_ID)
+	assert_gt(mills.size(), 0, "precondition: a village beside timber raised its mill")
+	var sawyers := _lumberjack_markers(spawned)
+	assert_gt(sawyers.size(), 0, "precondition: somebody in this village works timber")
+	var expected: Vector2i = coord * CHUNK_SIZE + mills[0]["origin_local"]
+	for sawyer in sawyers:
+		assert_eq(
+			sawyer.sawmill_cell, expected,
+			"a sawyer works the mill their own village raised"
+		)
+
+
+## A villager who is not a lumberjack is never handed one, or every trade
+## would be felling trees.
+func test_nobody_else_is_handed_a_sawmill():
+	var coord := _find_settlement_chunk_with_occupation("grassland", VillageSawmill.OCCUPATION, 3)
+	var world := StubWorld.new()
+	_forest_band(world, coord)
+	var spawned := renderer.spawn_village(
+		parent, coord, coord * CHUNK_SIZE, CHUNK_SIZE, TILE_SIZE, "grassland", world
+	)
+	for node in spawned:
+		if node is NpcMarker and node.identity.occupation != VillageSawmill.OCCUPATION:
+			assert_eq(
+				node.sawmill_cell, NpcMarker.NO_SAWMILL,
+				"%s does not work timber" % node.identity.occupation
+			)
+
+
+## A fisher is told which water is theirs and which building they fill --
+## the last link of the pond chain, and the same handout a farmer gets.
+func test_every_fisher_is_given_their_own_pond_and_their_own_house():
+	var coord := _find_settlement_chunk_with_occupation("grassland", "fisher", 3)
+	var world := StubWorld.new()
+	var spawned := renderer.spawn_village(
+		parent, coord, coord * CHUNK_SIZE, CHUNK_SIZE, TILE_SIZE, "grassland", world
+	)
+	var built := _built_tiles(world, coord)
+	var water: Dictionary = {}
+	for cell in built:
+		if VillagePond.is_pond_tile(built[cell]):
+			water[coord * CHUNK_SIZE + (cell as Vector2i)] = true
+	assert_gt(water.size(), 0, "precondition: a pond was dug")
+	var checked := 0
+	for node in spawned:
+		if not (node is NpcMarker) or node.identity.occupation != "fisher":
+			continue
+		if node.pond_cells.is_empty():
+			continue
+		checked += 1
+		for cell in node.pond_cells:
+			assert_true(water.has(cell), "a fisher was handed %s, which is not water" % str(cell))
+		assert_ne(
+			node.stock_building_cell, NpcMarker.NO_STOCK_BUILDING,
+			"a fisher with a pond and nowhere to put the catch"
+		)
+	assert_gt(checked, 0, "no fisher was handed a pond at all")
+
+
+# -- every village is founded with a store ----------------------------------
+#
+# See docs/concept/village_warehouse.md. Unlike the hall, which a village of
+# two has no need of, the store has no threshold at all: a settlement keeps
+# one the way it keeps a well. So this asserts the plain "always", not "once
+# big enough".
+
+
+func test_a_founded_village_already_has_its_warehouse():
+	var coord := _find_settlement_chunk("grassland")
+	var world := StubWorld.new()
+	renderer.spawn_village(parent, coord, coord * CHUNK_SIZE, CHUNK_SIZE, TILE_SIZE, "grassland", world)
+	assert_eq(_placed(world, "warehouse").size(), 1, "every village keeps a store")
+
+
+func test_the_warehouse_stands_on_its_own_reserved_plot():
+	var coord := _find_settlement_chunk("grassland")
+	var world := StubWorld.new()
+	renderer.spawn_village(parent, coord, coord * CHUNK_SIZE, CHUNK_SIZE, TILE_SIZE, "grassland", world)
+	var stores: Array = _placed(world, "warehouse")
+	assert_eq(stores.size(), 1, "precondition")
+	var plot: Dictionary = VillageLayout.skeleton(CHUNK_SIZE, VillageLayout.seed_for(coord))["warehouse_plot"]
+	assert_eq(stores[0]["origin_local"], plot["origin"], "on its reserved plot, not anywhere free")
+
+
+func test_a_reload_never_raises_a_second_warehouse():
+	var coord := _find_settlement_chunk("grassland")
+	var world := StubWorld.new()
+	renderer.spawn_village(parent, coord, coord * CHUNK_SIZE, CHUNK_SIZE, TILE_SIZE, "grassland", world)
+	renderer.spawn_village(parent, coord, coord * CHUNK_SIZE, CHUNK_SIZE, TILE_SIZE, "grassland", world)
+	assert_eq(_placed(world, "warehouse").size(), 1, "one store per village, across reloads")
+
+
+func test_a_villager_of_a_village_with_a_store_knows_where_to_carry_to():
+	var coord := _find_settlement_chunk("grassland")
+	var world := StubWorld.new()
+	var spawned := renderer.spawn_village(
+		parent, coord, coord * CHUNK_SIZE, CHUNK_SIZE, TILE_SIZE, "grassland", world
+	)
+	var stores: Array = _placed(world, "warehouse")
+	assert_eq(stores.size(), 1, "precondition: this village really has a store")
+	var door_global: Vector2i = (
+		coord * CHUNK_SIZE + stores[0]["origin_local"] + BuildingCatalog.doorstep_of("warehouse")
+	)
+	var door := Vector2((door_global.x + 0.5) * TILE_SIZE, (door_global.y + 0.5) * TILE_SIZE)
+
+	var villagers := 0
+	for node in spawned:
+		if not (node is NpcMarker):
+			continue
+		villagers += 1
+		assert_eq(node.warehouse_position, door, "a villager carries to the real door, not the footprint")
+		# Hauling is wired but not switched on -- see NpcMarker.HAULING_
+		# CARRY_LIMIT for what turning it on did to a real village's economy.
+		# Pinned to the constant rather than to 0.0 so that raising it is all
+		# it takes to switch hauling back on, and this test follows.
+		assert_almost_eq(
+			node.economy.carry_limit, float(NpcMarker.HAULING_CARRY_LIMIT), 0.0,
+			"a villager carries exactly what the live hauling switch says"
+		)
+	assert_gt(villagers, 0, "precondition: somebody lives here")
+
+
+## Derived from what really STANDS, not from the plan: the reload branch
+## (_recover_existing_village) never runs the founding placement at all, and
+## a villager of a village loaded from a save must still know its door.
+func test_a_villager_of_a_reloaded_village_still_knows_the_door():
+	var coord := _find_settlement_chunk("grassland")
+	var world := StubWorld.new()
+	renderer.spawn_village(parent, coord, coord * CHUNK_SIZE, CHUNK_SIZE, TILE_SIZE, "grassland", world)
+	var reloaded := renderer.spawn_village(
+		parent, coord, coord * CHUNK_SIZE, CHUNK_SIZE, TILE_SIZE, "grassland", world
+	)
+	var checked := 0
+	for node in reloaded:
+		if node is NpcMarker:
+			checked += 1
+			assert_not_null(node.warehouse_position, "a reloaded village still has its store")
+	assert_gt(checked, 0, "precondition: somebody lives here")
+
+
+## A village founded before there was such a thing as a store still gets
+## one on its next load. The reload branch never runs the founding
+## placement at all, so without this an older save would come back
+## storeless forever and pillar 1's "every village has one" would only ever
+## be true of villages founded after this pass -- the same reason the hall
+## is raised on reload too.
+func test_a_village_founded_without_a_store_is_given_one_on_reload():
+	var coord := _find_settlement_chunk("grassland")
+	var world := StubWorld.new()
+	renderer.spawn_village(parent, coord, coord * CHUNK_SIZE, CHUNK_SIZE, TILE_SIZE, "grassland", world)
+	assert_eq(_placed(world, "warehouse").size(), 1, "precondition: this village really raised one")
+
+	# Wind it back to an older save: the store was never raised at all, and
+	# its ground is free again.
+	var kept: Array = []
+	for call in world.place_calls:
+		if call["building_id"] == "warehouse":
+			for cell in BuildingCatalog.footprint_cells("warehouse", call["origin_local"]):
+				world.occupied_cells.erase(coord * CHUNK_SIZE + cell)
+			continue
+		kept.append(call)
+	world.place_calls = kept
+	assert_eq(_placed(world, "warehouse").size(), 0, "precondition: this save has no store")
+
+	renderer.spawn_village(parent, coord, coord * CHUNK_SIZE, CHUNK_SIZE, TILE_SIZE, "grassland", world)
+	assert_eq(_placed(world, "warehouse").size(), 1, "a village that lacks a store is given one")

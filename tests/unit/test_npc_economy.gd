@@ -870,3 +870,136 @@ func test_a_harvest_of_nothing_changes_nothing():
 	farmer.record_real_harvest("", 5)
 	assert_almost_eq(market.total_stock(), 0.0, 0.0001)
 	assert_almost_eq(NpcEconomy.purse_of(market), 0.0, 0.0001)
+
+
+# -- the load in a villager's hands ----------------------------------------
+#
+# docs/concept/village_warehouse.md mechanism 3, "goods are carried in":
+# stock that teleports into a number is not stock kept in a warehouse. What a
+# producer takes goes into their HANDS first, and only reaches the village's
+# stock when they have walked it to the store door.
+#
+# Off by default (carry_limit 0.0), the same shape VillageMarket.storage_
+# capacity uses: every caller that predates a warehouse keeps the direct
+# deposit it always had, and the one place that knows a store really stands
+# opts in. A village with nowhere to carry to is not a village whose
+# producers stop stocking it.
+
+
+func test_with_nowhere_to_carry_to_a_producer_stocks_the_market_outright():
+	var economy := _economy("hunter")
+	assert_almost_eq(economy.carry_limit, 0.0, 0.0, "precondition: carrying is opt-in")
+	for i in 200:
+		economy.step(1.0, true, world, Vector2.ZERO)
+	assert_gt(market.total_stock(), 0.0, "no store must not mean no stock")
+
+
+func test_a_producer_who_carries_holds_the_take_until_it_is_delivered():
+	var economy := _economy("hunter")
+	economy.carry_limit = NpcEconomy.CARRY_LIMIT
+	for i in 200:
+		economy.step(1.0, true, world, Vector2.ZERO)
+	assert_almost_eq(market.total_stock(), 0.0, 0.0001, "nothing reaches the store on its own")
+	assert_gt(economy.carried_total(), 0.0, "the take is in their hands")
+
+
+func test_delivering_a_load_is_what_stocks_the_village():
+	var economy := _economy("hunter")
+	economy.carry_limit = NpcEconomy.CARRY_LIMIT
+	for i in 200:
+		economy.step(1.0, true, world, Vector2.ZERO)
+	var in_hand := economy.carried_total()
+	economy.deliver_load()
+	assert_almost_eq(market.total_stock(), in_hand, 0.0001)
+	assert_almost_eq(economy.carried_total(), 0.0, 0.0001, "hands are empty after a delivery")
+
+
+func test_a_delivery_keeps_every_item_apart():
+	var farmer := _economy("farmer")
+	farmer.carry_limit = NpcEconomy.CARRY_LIMIT
+	farmer.record_real_harvest("wheat", 2)
+	farmer.record_byproduct("hide", 1)
+	farmer.deliver_load()
+	assert_almost_eq(market.stock.get("wheat", 0.0), 2.0, 0.0001)
+	assert_almost_eq(market.stock.get("hide", 0.0), 1.0, 0.0001)
+
+
+## The gate the ethogram reads. A step, not a ramp: any gain above zero
+## fires the haul wiring at all (it is the only wiring listening on the
+## store), so a ramp would have a villager set off with one apple in hand
+## and never do a day's work again. What presses is being FULL.
+func test_a_load_presses_only_once_the_hands_are_full():
+	var economy := _economy("hunter")
+	economy.carry_limit = NpcEconomy.CARRY_LIMIT
+	assert_almost_eq(economy.burden(), 0.0, 0.0, "empty hands press nobody")
+	economy.record_real_catch(int(NpcEconomy.CARRY_LIMIT / 2.0))
+	assert_almost_eq(economy.burden(), 0.0, 0.0, "a half load is not an errand")
+	economy.record_real_catch(int(NpcEconomy.CARRY_LIMIT))
+	assert_almost_eq(economy.burden(), 1.0, 0.0, "full hands press")
+
+
+func test_a_villager_who_carries_nothing_is_never_burdened():
+	var economy := _economy("hunter")
+	economy.record_real_catch(500)
+	assert_almost_eq(
+		economy.burden(), 0.0, 0.0,
+		"a villager with nowhere to carry to must never be sent to a store that is not there"
+	)
+
+
+## Full hands take nothing more: no gold conjured for a unit nobody can
+## hold, and -- the part that would really bite -- no real herbivore, fish
+## or crop removed from the region for it either.
+func test_full_hands_gather_nothing():
+	var economy := _economy("hunter")
+	economy.carry_limit = NpcEconomy.CARRY_LIMIT
+	for i in 400:
+		economy.step(1.0, true, world, Vector2.ZERO)
+	var gold_when_full := economy.wallet.balance
+	var killed_when_full := world.killed_herbivore_amount
+	assert_almost_eq(
+		economy.carried_total(), NpcEconomy.CARRY_LIMIT, 0.0001,
+		"precondition: 400 working seconds really filled their hands"
+	)
+	for i in 400:
+		economy.step(1.0, true, world, Vector2.ZERO)
+	assert_eq(economy.wallet.balance, gold_when_full, "a full pair of hands earned more")
+	assert_almost_eq(
+		world.killed_herbivore_amount, killed_when_full, 0.0001,
+		"a full pair of hands killed more"
+	)
+
+
+## One person's load against a village's own ceilings (VillageMarket): four
+## trips fill a village that has no store at all, forty fill one that does.
+## That ratio is the whole point of the building -- a store that took one
+## trip to fill would not be worth raising.
+func test_a_load_is_a_quarter_of_what_a_village_keeps_without_a_store():
+	assert_almost_eq(
+		NpcEconomy.CARRY_LIMIT,
+		VillageMarket.HOUSEHOLD_CORNERS_CAPACITY / float(NpcEconomy.TRIPS_TO_FILL_A_STORELESS_VILLAGE),
+		0.0001
+	)
+	assert_eq(NpcEconomy.TRIPS_TO_FILL_A_STORELESS_VILLAGE, 4)
+	assert_almost_eq(
+		VillageMarket.WAREHOUSE_CAPACITY / NpcEconomy.CARRY_LIMIT, 40.0, 0.0001,
+		"a warehouse is forty trips deep"
+	)
+
+
+## A take that ALREADY HAPPENED is never refused for want of hands. The
+## continuous drip stops at a full load (test_full_hands_gather_nothing)
+## because it costs the region something every frame it runs -- but a crop
+## that has been cut or an animal that has been killed is done, and refusing
+## to hold it would delete it rather than leave it standing. So a villager
+## can finish a work block carrying more than a tidy load, and delivers the
+## lot. Bounded in practice: a field has finitely many plots.
+func test_a_take_that_already_happened_is_never_dropped_for_want_of_hands():
+	var farmer := _economy("farmer")
+	farmer.carry_limit = NpcEconomy.CARRY_LIMIT
+	var over := int(NpcEconomy.CARRY_LIMIT) * 3
+	farmer.record_real_harvest("wheat", over)
+	assert_almost_eq(farmer.carried_total(), float(over), 0.0001, "the whole harvest is in hand")
+	assert_almost_eq(farmer.burden(), 1.0, 0.0, "and it presses")
+	farmer.deliver_load()
+	assert_almost_eq(market.stock.get("wheat", 0.0), float(over), 0.0001, "the whole harvest arrives")

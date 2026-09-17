@@ -113,3 +113,58 @@ func test_transform_for_defaults_size_scale_to_one_with_no_size_scale_key():
 	var p := _print(Vector2.ZERO, "right", "snow", Vector2.UP)
 	var xform: Transform2D = renderer._transform_for(p)
 	assert_almost_eq(xform.basis_xform(Vector2.RIGHT).length(), ProceduralFootprintSprite.PRINT_WORLD_SCALE, 0.001)
+
+
+# -- the fade is actually drawn ---------------------------------------------
+#
+# FootprintField.opacity_of says how strongly a print still shows; nobody
+# sees that unless the renderer puts it on the instance. Asked for: "add
+# decay to the footprints ... make the decay gradually".
+
+const FootprintField = preload("res://src/world/footprint_field.gd")
+
+
+func _aged_print(decayed: float) -> Dictionary:
+	var stamp := _print(Vector2.ZERO, "left", "snow", Vector2.UP)
+	stamp["decayed"] = decayed
+	return stamp
+
+
+## MultiMesh instance COLOURS cannot be read back in a headless test the way
+## transforms can -- get_instance_color answers (0,0,0,1) whatever was
+## written, measured directly on Godot 4.7.2. So these assert the renderer's
+## own decision (color_for), which fill() is the sole caller of, plus the one
+## buffer property that DOES read back: without use_colors there is nowhere
+## for a fade to live at all.
+func test_the_buffer_can_carry_a_fade_at_all():
+	var mmis := renderer.build_multimeshes(parent)
+	renderer.fill(mmis, [_aged_print(0.0)])
+	var mm: MultiMesh = (mmis["snow"] as MultiMeshInstance2D).multimesh
+	assert_true(mm.use_colors, "a MultiMesh that carries no colours can never show a fade")
+
+
+func test_a_fresh_print_is_drawn_at_full_strength():
+	assert_almost_eq(FootprintRenderer.color_for(_aged_print(0.0)).a, 1.0, 0.001)
+
+
+func test_a_half_faded_print_is_drawn_half_strength():
+	assert_almost_eq(
+		FootprintRenderer.color_for(_aged_print(FootprintField.HALF_LIFE_SECONDS)).a, 0.5, 0.01
+	)
+
+
+## The older a print, the fainter it is drawn.
+func test_older_prints_are_drawn_fainter_than_younger_ones():
+	var fresh := FootprintRenderer.color_for(_aged_print(0.0)).a
+	var older := FootprintRenderer.color_for(_aged_print(FootprintField.HALF_LIFE_SECONDS)).a
+	var oldest := FootprintRenderer.color_for(_aged_print(FootprintField.HALF_LIFE_SECONDS * 2.0)).a
+	assert_gt(fresh, older)
+	assert_gt(older, oldest)
+
+
+## Every print written before decay existed carries no `decayed` key at all,
+## and must draw exactly as it always did rather than as a blank.
+func test_a_print_from_before_decay_existed_still_draws_solid():
+	assert_almost_eq(
+		FootprintRenderer.color_for(_print(Vector2.ZERO, "left", "snow", Vector2.UP)).a, 1.0, 0.001
+	)

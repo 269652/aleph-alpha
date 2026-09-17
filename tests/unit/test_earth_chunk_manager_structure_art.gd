@@ -185,7 +185,7 @@ func _unoffset_position_for(texture_height: int) -> Vector2:
 
 func test_every_rails_overlay_really_carries_its_own_inner_edge_offset():
 	var art := IllustratedStructureSprite.new()
-	for facing in ["north", "south", "east", "west"]:
+	for facing in VillageFarm.FENCE_TILE_IDS:
 		var subject: String = VillageFarm.fence_tile_for(facing)
 		manager.build_at_global(_berlin_tile.x, _berlin_tile.y, subject)
 		var sprite := _structure_art_sprite_at_berlin_tile()
@@ -270,12 +270,14 @@ func test_a_corner_post_lines_up_with_the_side_wall_it_caps():
 	var centre := (float(_berlin_tile.x) + 0.5) * TerrainRenderer.TILE_SIZE
 	var west_wall := _art_x_for(VillageFarm.fence_tile_for("west"))
 	var east_wall := _art_x_for(VillageFarm.fence_tile_for("east"))
-	assert_almost_eq(
-		_art_x_for(VillageFarm.fence_tile_for("corner_west")), west_wall, 0.001,
-		"a west corner stands exactly where the west wall below it does"
-	)
-	assert_almost_eq(
-		_art_x_for(VillageFarm.fence_tile_for("corner_east")), east_wall, 0.001,
-		"an east corner stands exactly where the east wall below it does"
-	)
+	for facing in ["corner_nw", "corner_sw"]:
+		assert_almost_eq(
+			_art_x_for(VillageFarm.fence_tile_for(facing)), west_wall, 0.001,
+			"%s stands exactly where the west wall below it does" % facing
+		)
+	for facing in ["corner_ne", "corner_se"]:
+		assert_almost_eq(
+			_art_x_for(VillageFarm.fence_tile_for(facing)), east_wall, 0.001,
+			"%s stands exactly where the east wall below it does" % facing
+		)
 	assert_ne(west_wall, centre, "precondition: the side walls really do move")

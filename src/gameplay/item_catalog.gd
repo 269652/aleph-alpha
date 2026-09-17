@@ -424,6 +424,20 @@ func has(item_id: String) -> bool:
 ## whole Item first (see Player.sell_food_to_village's village-feeding
 ## fallback, docs/concept/progression.md "Ecological literacy"). "" for an
 ## unknown id.
+## The human name for an item id, without allocating a whole Item to read
+## it -- what a readout needs when it is listing what is in a barn
+## (docs/concept/building_storage.md). Falls back to the raw id for
+## something the catalog does not know, which is honest and never blank.
+func display_name_of(item_id: String) -> String:
+	if _ITEMS.has(item_id):
+		return String((_ITEMS[item_id] as Array)[0])
+	if _crafted_registry != null:
+		var crafted := _crafted_registry.make_item(item_id)
+		if crafted != null:
+			return crafted.display_name
+	return item_id
+
+
 func kind_of(item_id: String) -> String:
 	if not _ITEMS.has(item_id):
 		if _crafted_registry != null:

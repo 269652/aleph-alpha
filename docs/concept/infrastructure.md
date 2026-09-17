@@ -107,6 +107,35 @@ Each tier crossing (and the reverse — reclaimed by disuse) is a real,
 `/why`-inspectable event once emergence-substrate wiring reaches it (see
 Status for exactly how far that wiring currently goes).
 
+### A village closes the short holes in its own streets
+
+Asked for directly, with the broken stretch in shot: *"When there's only a
+free gap of 1-2 tiles between two street tiles it should close the gap
+between them"*.
+
+A village's founding layout paves a street row only between the doorsteps it
+actually joined, and each farmhouse paves its own doorstep as it goes up, so
+a finished street row comes out as paved stretches with holes punched
+through them — measured on real villages
+(`tools/probe_village_map.gd`), every one had at least a one-tile hole in it.
+A hole that small reads as a mistake, not as a junction.
+
+`VillageLayout.short_street_gap_cells` is the rule, pure and derived from the
+skeleton so nothing is stored: a run of unpaved cells on a street row with
+paving immediately on **both** sides, at most
+`STREET_GAP_CLOSE_TILES` (2) long, and **free** for its whole length, is
+paved over. Three is a real break the village genuinely did not pave, and
+closing it would be inventing a road; a run reaching the edge of the chunk
+has nothing on its far side to join; a run with something standing in it is
+ground somebody is using, so it is closed whole or not at all.
+
+`VillageRenderer` runs it at one seam only — after every last cell of paving
+is down, and **before** the first farm rail. That order is load-bearing in
+both directions: a farmhouse's own doorstep is exactly what turns a long
+break into a short one, and a hole that becomes paving has to be a gate
+rather than somewhere a fence is then laid across a road
+([village_farms.md](village_farms.md)).
+
 ## Crossings: ford → ferry → bridge
 
 Repeated crossings of water upgrade the same way paths do — a shallow,
@@ -211,14 +240,17 @@ implemented either, but the two are designed to land together.
   → `"wood"`); `"soil"` stays deliberately unmapped so untouched ground
   still takes its sound from the biome. One resolution serving both the
   print and the sound, so the two cannot disagree about what is
-  underfoot. Honest limit: no distinct stone recording has been sourced,
-  so `"rock"` still resolves to the generic step clip — the win is that
-  a street stops sounding like grass, not that it sounds like cobbles.
+  underfoot. Updated 2026-09-17: `"rock"` and `"wood"` both have real
+  recordings now (gravel and a wooden floor — see that doc's "A recording
+  of walking is not a footstep"), so a street no longer sounds like
+  grass OR like the generic walking clip.
   See [creature_and_footstep_audio.md's "A laid surface sounds like what
   it is laid with"](creature_and_footstep_audio.md#a-laid-surface-sounds-like-what-it-is-laid-with-2026-09-17).
-- ⬜ A real footstep recording for stone and for a wooden floor — both
-  currently share `default.ogg`, the same honest gap already standing for
-  sand and rock (see that doc's `_CLIP_BY_SURFACE`).
+- 🚧 A laid cobbled street still sounds like the rock underfoot, not like
+  cobbles. `"rock"` covers tundra, mountain and laid stone, and its pool
+  is gravel — right for two of those three. Splitting a `stone` surface
+  out of `"rock"` is the remaining step; clips for it are already cached
+  by `tools/prepare_footstep_oneshots.py`.
 - ⬜ Between-village roads (routing a street on to the next settlement).
   The plaza and side streets a laid-out village frames its road with are
   real — see [building.md](building.md) for the layout side.

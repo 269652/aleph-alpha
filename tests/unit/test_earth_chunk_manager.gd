@@ -1,6 +1,7 @@
 extends GutTest
 
 const EarthChunkManager = preload("res://src/world/earth_chunk_manager.gd")
+const BuildingCatalog = preload("res://src/gameplay/building_catalog.gd")
 const AntColony = preload("res://src/world/ant_colony.gd")
 const AntForagerMarker = preload("res://src/rendering/ant_forager_marker.gd")
 const AntForageBehavior = preload("res://src/gameplay/ant_forage_behavior.gd")
@@ -1368,6 +1369,32 @@ func test_nearest_npc_near_returns_null_when_out_of_range():
 	var npc := _add_fake_npc(Vector2(100, 100))
 	assert_null(manager.nearest_npc_near(Vector2(500, 500), 10.0))
 	npc.free()
+
+
+## A villager looking for COMPANY asks this same question from their own
+## position (docs/concept/npc_social_life.md), and would otherwise always
+## find themselves standing zero pixels away. `excluding` is what lets one
+## lookup serve both the player's talk prompt and a villager's own search.
+func test_a_villager_looking_for_company_never_finds_themselves():
+	manager.update(_berlin_tile)
+	var seeker := _add_fake_npc(Vector2(100, 100))
+	var neighbour := NpcMarker.new()
+	neighbour.identity = NpcIdentity.new(2)
+	neighbour.position = Vector2(130, 100)
+	creatures_parent.add_child(neighbour)
+	manager._loaded_villages[Vector2i(0, 0)] = [seeker, neighbour]
+
+	assert_eq(manager.nearest_npc_near(seeker.position, 10.0), seeker, "precondition: it finds itself")
+	assert_eq(
+		manager.nearest_npc_near(seeker.position, 100.0, seeker), neighbour,
+		"excluding themselves, the nearest villager is the neighbour"
+	)
+	assert_null(
+		manager.nearest_npc_near(seeker.position, 10.0, seeker),
+		"and nobody else is in reach at all"
+	)
+	seeker.free()
+	neighbour.free()
 
 
 func test_nearest_npc_near_returns_null_when_no_settlement_loaded():
@@ -15035,3 +15062,122 @@ func _events_walked_re_founding_a_settlement(history_events: int) -> int:
 func test_re_founding_an_existing_settlement_does_not_walk_its_history():
 	var walked := _events_walked_re_founding_a_settlement(400)
 	assert_lt(walked, 10, "noticing a settlement already exists is one lookup, not a scan")
+
+
+# -- a building's own stock (docs/concept/building_storage.md) --------------
+#
+# Asked for directly: "Farmhouses, Sawmills, Houses should have their own
+# small storage". The same StructureStock the tile-scale economy already
+# uses, at a third scale -- keyed by the BUILDING's own origin, so every cell
+# of a footprint answers with the same stock.
+
+
+func _place_test_farmhouse() -> Dictionary:
+	manager.update(_berlin_tile)
+	var chunk_coord := manager._chunk_coord_for_tile(_berlin_tile)
+	var origin_local := manager._local_coord(_berlin_tile.x, _berlin_tile.y)
+	assert_true(
+		manager.place_building(chunk_coord, origin_local, "farmhouse", Vector2i(0, 1), 1, ""),
+		"precondition: a farmhouse was placed"
+	)
+	return {"chunk_coord": chunk_coord, "origin_local": origin_local}
+
+
+func test_a_building_holds_what_is_put_into_it():
+	_place_test_farmhouse()
+	manager.deposit_to_building_at(_berlin_tile.x, _berlin_tile.y, "wheat", 5)
+	assert_eq(manager.building_stock_at(_berlin_tile.x, _berlin_tile.y, "wheat"), 5)
+
+
+## Every cell of a 3x2 farmhouse is the SAME farmhouse, so every one of them
+## answers with the same stock -- keyed by the building's own origin, never
+## by whichever tile the caller happened to name.
+func test_every_cell_of_a_building_answers_with_the_same_stock():
+	_place_test_farmhouse()
+	manager.deposit_to_building_at(_berlin_tile.x + 2, _berlin_tile.y + 1, "wheat", 3)
+	assert_eq(
+		manager.building_stock_at(_berlin_tile.x, _berlin_tile.y, "wheat"), 3,
+		"a deposit at one corner is readable from the other"
+	)
+
+
+func test_open_ground_holds_nothing_and_takes_nothing():
+	manager.update(_berlin_tile)
+	var empty := Vector2i(_berlin_tile.x + 40, _berlin_tile.y + 40)
+	manager.deposit_to_building_at(empty.x, empty.y, "wheat", 5)
+	assert_eq(
+		manager.building_stock_at(empty.x, empty.y, "wheat"), 0,
+		"there is no building here to hold anything"
+	)
+
+
+## Full means full: a building takes what fits and refuses the rest, which
+## is the pressure that makes hauling matter at all.
+func test_a_building_fills_up_and_then_takes_no_more():
+	_place_test_farmhouse()
+	var capacity := BuildingCatalog.storage_capacity_of("farmhouse")
+	assert_gt(capacity, 0, "precondition: a farmhouse holds something")
+	var taken := manager.deposit_to_building_at(_berlin_tile.x, _berlin_tile.y, "wheat", capacity + 10)
+	assert_eq(taken, capacity, "it took exactly what fits")
+	assert_eq(manager.building_stock_at(_berlin_tile.x, _berlin_tile.y, "wheat"), capacity)
+	assert_eq(
+		manager.deposit_to_building_at(_berlin_tile.x, _berlin_tile.y, "wheat", 5), 0,
+		"a full building takes no more"
+	)
+
+
+## Capacity counts EVERYTHING in the building, not each item id separately --
+## a barn is full when it is full, whatever is in it.
+func test_a_buildings_room_is_shared_across_every_kind_of_goods():
+	_place_test_farmhouse()
+	var capacity := BuildingCatalog.storage_capacity_of("farmhouse")
+	manager.deposit_to_building_at(_berlin_tile.x, _berlin_tile.y, "wheat", capacity)
+	assert_eq(
+		manager.deposit_to_building_at(_berlin_tile.x, _berlin_tile.y, "wood", 1), 0,
+		"wheat filled the barn, so there is no room for wood either"
+	)
+
+
+func test_what_is_in_a_building_can_be_taken_out_again():
+	_place_test_farmhouse()
+	manager.deposit_to_building_at(_berlin_tile.x, _berlin_tile.y, "wheat", 5)
+	assert_true(manager.withdraw_from_building_at(_berlin_tile.x, _berlin_tile.y, "wheat", 3))
+	assert_eq(manager.building_stock_at(_berlin_tile.x, _berlin_tile.y, "wheat"), 2)
+	assert_false(
+		manager.withdraw_from_building_at(_berlin_tile.x, _berlin_tile.y, "wheat", 99),
+		"all-or-nothing, like every other withdrawal in this codebase"
+	)
+	assert_eq(manager.building_stock_at(_berlin_tile.x, _berlin_tile.y, "wheat"), 2)
+
+
+## The whole inventory at once, which is what the popover draws.
+func test_a_building_reports_everything_it_is_holding():
+	_place_test_farmhouse()
+	manager.deposit_to_building_at(_berlin_tile.x, _berlin_tile.y, "wheat", 4)
+	manager.deposit_to_building_at(_berlin_tile.x, _berlin_tile.y, "wood", 2)
+	var held := manager.building_inventory_at(_berlin_tile.x, _berlin_tile.y)
+	assert_eq(held.get("wheat", 0), 4)
+	assert_eq(held.get("wood", 0), 2)
+
+
+## The click-a-building readout carries what the building is holding, so the
+## popover's Inventory tab is drawn from the report like everything else it
+## shows (docs/concept/building_storage.md; HousePanel is a pure consumer).
+func test_the_building_readout_carries_what_the_building_holds():
+	_place_test_farmhouse()
+	manager.deposit_to_building_at(_berlin_tile.x, _berlin_tile.y, "wheat", 7)
+	var report := manager.household_report_at(_berlin_tile.x, _berlin_tile.y)
+	assert_eq(int(report["storage_capacity"]), BuildingCatalog.storage_capacity_of("farmhouse"))
+	assert_eq(int((report["stock"] as Dictionary).get("wheat", 0)), 7)
+
+
+## A building that keeps no goods says so, rather than being left out and
+## making the panel guess.
+func test_the_readout_of_a_building_that_keeps_nothing_says_so():
+	manager.update(_berlin_tile)
+	var chunk_coord := manager._chunk_coord_for_tile(_berlin_tile)
+	var origin_local := manager._local_coord(_berlin_tile.x, _berlin_tile.y)
+	assert_true(manager.place_building(chunk_coord, origin_local, "city_hall", Vector2i(0, 1), 1, ""))
+	var report := manager.household_report_at(_berlin_tile.x, _berlin_tile.y)
+	assert_eq(int(report["storage_capacity"]), 0)
+	assert_eq((report["stock"] as Dictionary).size(), 0)

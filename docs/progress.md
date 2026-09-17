@@ -8567,16 +8567,28 @@ carrots out of earth (visually animated)". Supersedes the old
   `test_wild_crop_marker.gd` (25/27 → 27/27) and 1 in `test_dropped_item.gd`
   (14/15 → 15/15). Verified byte-identical: the imported image differs from
   the raw read in 0 of 6,289,008 bytes after RGBA8 normalisation.
-- **Soil mound** (small) — ✅ Done (procedural fallback) —
-  `src/rendering/procedural_soil_sprite.gd`: no AI art exists yet for
-  `ai_sprite_prompts.md`'s soil-pile prompt, so a hand-drawn
-  undisturbed/disturbed mound in the same offline-art style as
-  `ProceduralBobberSprite`, swappable for real art later with no marker
-  changes needed. **Follow-up, reported live: rendered ~1.5 tiles wide** —
-  the raw `SIZE=24` texture was drawn with no scale applied at all, the
-  same "gigantic" bug class `ProceduralItemSprite.WORLD_WIDTH_BY_ID` already
-  fixed once for tree fruit. Fixed with `SOIL_WORLD_WIDTH`/`SOIL_WORLD_SCALE`
-  (pinned below a full tile by test).
+- **Soil mound** (small) — ✅ Done (real illustrated art) —
+  `src/rendering/illustrated_soil_mound_sprite.gd` slices
+  `assets/sprites/terrain/soil_mound.png` (a 3x3 grid of 9 undisturbed-mound
+  variants; gutters near-black and fully opaque rather than chroma-keyed
+  magenta, the same quirk `IllustratedTerrainSprite`'s "soil" entry already
+  hit on the same 1254x1254 template — measured directly off the real PNG
+  with `tools/_probe_soil_mound_grid.gd` rather than assumed to divide
+  evenly) for the UNDISTURBED mound, wired into `WildCropMarker`, keyed
+  per-cell so the same spot always reads the same variant. (`FarmPlotMarker`
+  never gained this: a concurrent session removed its own mound entirely
+  once the bed's full-tile illustrated ground made it redundant — see
+  that class's own `is_showing_soil()`.) `src/rendering/
+  procedural_soil_sprite.gd`'s original hand-drawn mound remains the
+  fallback for the DISTURBED (post-pull) crater, which has no illustrated
+  art yet, and for either state if the sheet is ever missing. **Follow-up,
+  reported live: rendered ~1.5 tiles wide** — the raw `SIZE=24` texture was
+  drawn with no scale applied at all, the same "gigantic" bug class
+  `ProceduralItemSprite.WORLD_WIDTH_BY_ID` already fixed once for tree
+  fruit. Fixed with `SOIL_WORLD_WIDTH`/`SOIL_WORLD_SCALE` (pinned below a
+  full tile by test); the illustrated mound now derives its own scale from
+  `IllustratedSoilMoundSprite.world_scale()` against that same
+  `SOIL_WORLD_WIDTH` footprint instead.
 - **Visible per-patch markers** (medium) — ✅ Done — `src/rendering/wild_crop_marker.gd`
   (`WildCropMarker`) + `src/rendering/wild_crop_renderer.gd`
   (`WildCropRenderer`): one real Node2D per patch cell (sparse, unlike
@@ -23960,6 +23972,217 @@ structure_art`, 259/259 `test_creature_marker`, the fence subset of
 `test_earth_chunk_manager`, and 260/260 across the four neighbouring
 village/item suites as a regression check.
 
+### Closing the frame, clearing the ground, and losing the blob (2026-09-17)
+
+Three things reported off one screenshot of a real village.
+
+**The frame was open on one side.** Looked at rather than guessed:
+`tools/probe_village_map.gd` on real villages shows a field sitting below
+the house it belongs to, so one whole side of its frame lands on the next
+street ROW — and rails were held off every street row, paved or not, while
+most of those cells carry no paving at all. A field's south side read
+`.....`, a three-wide hole with the frame closed on every other side. Rails
+may now stand on an unpaved street-row cell; paving is occupied ground and
+still stops one on its own, which is the gate. Sowing in a street row stays
+forbidden — a crop in the roadway is what that rule was really about. The
+new test states the frame as a whole (every ring cell carries a rail unless
+a bed, a building, paving or impossible ground stops it) rather than
+re-deriving the placement rule; it failed on 10 open cells across 8 real
+villages and named every one.
+
+**Long grass was not cleared before planting.** `till_and_plant_farm_plot_
+at_global` now blocks the chunk's ground cover on the tilled cell, through
+the same `_block_ground_cover_on_cells` seam a building's floor already
+uses. Only when the till really takes: a bed refused because a live crop
+stands on it was never worked.
+
+**The round dark blob was `ProceduralSoilSprite`.** It is a root crop's own
+ground — the root grows in the mound, and pulling one leaves the crater its
+DISTURBED state draws — and just a dark circle under bending wheat, six of
+them in a 3×2 bed. Hidden for a wheat bed, kept for the crops it was drawn
+for. Keyed on what the bed was SOWN with, not `plot.crop_id`: harvesting
+clears the crop, and a first pass keyed on `crop_id` grew the mound back the
+instant the wheat came off — caught by
+`test_a_harvested_wheat_bed_still_shows_no_mound`, which is why that test
+exists.
+
+test_village_renderer 90/90, test_farm_plot_marker 13/13,
+test_earth_chunk_manager_farm_plots 17/17, and 152/152 across the six
+farming and grass suites.
+
+### The street closes its own holes, and a rail clears its own ground (2026-09-17)
+
+Two more off a real village screenshot.
+
+**"When there's only a free gap of 1-2 tiles between two street tiles it
+should close the gap between them."** A village paves a street row only
+between the doorsteps it actually joined, and each farmhouse paves its own
+doorstep as it goes up, so a finished row is paved stretches with holes
+punched through them — the new test found a one-tile hole in all eight real
+villages it looked at, every one at the same relative spot.
+`VillageLayout.short_street_gap_cells` is the rule, pure and derived from the
+skeleton: a run of unpaved cells with paving on BOTH sides, at most
+`STREET_GAP_CLOSE_TILES` (2) long, free for its whole length. A run reaching
+the chunk edge has nothing on its far side to join; a run with something
+standing in it is closed whole or not at all.
+
+The ORDER is the part worth recording. It was first run before the farms and
+did nothing for the case that prompted it, because a farmhouse paves its own
+doorstep as it is placed — the hole only exists once the farms are down. It
+now runs at one seam: after every last cell of paving, and before the first
+rail. Both directions matter. Too early and the hole is not there yet; too
+late and the gap already carries a fence across a road. The probe shows the
+before and after plainly: `+vvv+:::^:::` became `+vvv+:::::::`, the rail
+replaced by the paving that belongs there, with the frame still closed on
+its own three sides.
+
+**"The grass should be cleared on the fence tiles as well."** A rail joins
+`_is_built_surface` beside a building piece and a laid road, so
+`build_at_global` clears the ground cover under it and `destroy_at_global`
+gives it back — a torn-out fence line is ordinary ground again, unlike a
+tilled bed, which stays worked. That asymmetry is deliberate: a bed is
+ground somebody worked, a rail is a thing standing on it.
+
+test_village_layout 71/71 (8 new), test_village_renderer 91/91,
+test_earth_chunk_manager_farm_plots 19/19, 290/290 across eight layout,
+farming and ground-cover suites. (`test_grass_near_respects_its_radius` is
+risky-not-asserting both before and after these changes — pre-existing,
+untouched here.)
+
+### A corner post stops overshooting its own runs (2026-09-17)
+
+Reported with all three visible corners crossed out: *"the fences still
+aren't optimal"*. A corner cell knew only which side WALL it capped, so its
+art was placed as a full tile of vertical rail — while the run it caps sits
+on that tile's own EDGE. The frame overshot by a whole tile at every corner,
+which is exactly what the crosses were on.
+
+A corner closes two sides, so it has a ground POINT rather than a ground
+line: the corner of its own tile where the two runs meet. `fence_facing`
+names both sides now (`corner_nw`/`ne`/`sw`/`se` in place of
+`corner_west`/`corner_east`), the inner direction is the diagonal, and
+`footprint_offset` centres the post on that point in both axes. It also
+takes the side wall's SCALE instead of being scaled by its own length —
+scaling a post as if it were a run is what made it a tile of rail.
+
+The diagonal direction pays for itself twice: `rails_block_step` can now
+shut exactly the diagonal a corner really faces, where before it shut either
+diagonal on that side.
+
+The old two ids stay recognised (`LEGACY_FENCE_TILE_IDS`) because a rail is
+an ordinary chunk modification — an id that stopped reading as a fence would
+lose its art and stop being overlay-only, painting bare earth on ground a
+player has already visited. Nothing raises one, and a test pins that.
+
+667/667 across the seven fence, farm and village suites.
+
+### The frame stops covering the crop (2026-09-17)
+
+*"At the bottom it still overlaps half a tile"* — the third and last report
+in the sequence that started with "move the fences to the inner edge".
+
+A south rail's posts stood on its own north edge, which is right for a fence
+seen from the front, but the body rises from there and it rose over the
+bottom row of beds: measured, 34px of a 64px tile. One rule replaces the
+per-facing reasoning: a rail's wood sits INSIDE its own tile, flush against
+the edge facing the beds — every facing, and both axes of a corner. The same
+fence, half a tile nearer the viewer, covering nothing.
+
+That also collapsed `footprint_offset` from three branches (broad-side run,
+top-view run, corner) into one: measure where the wood lands unoffset, then
+push it to the edge or edges the inner direction names. The three special
+cases were three ways of saying the same thing badly.
+
+Skipped at the user's request: the wider fence/village regression sweep.
+test_illustrated_structure_sprite is 36/36 on this change; the other six
+suites were green on the commit before it and were not re-run.
+
+### The harvest reaches the farmhouse, and the farmhouse reaches the village (2026-09-17)
+
+*"Make sure wheat grows and is harvested which increases farmhouse stock
+which gets transported to city stock."* Grown and cut were real; the middle
+was not. A villager's harvest was credited straight to the village market,
+so the farmhouse never held anything and nothing was ever carried.
+
+`NpcMarker._store_harvest` deposits a cut crop into the farmhouse's own
+`StructureStock` — the same per-building stock the placeable Farm and the
+Sägewerk already use — and `haul_farmhouse_stock_to_village` moves the whole
+lot into the market at the end of the work block. It reaches the market
+through the same `record_real_harvest` a farmer without a farmhouse uses, so
+it is stocked and paid ONCE, on arrival rather than at the scythe;
+`test_a_harvest_is_not_sold_before_it_is_carried` is the pin that keeps the
+new link from becoming a second faucet. `VillageRenderer` hands
+`farmhouse_cell` out beside `field_cells`, being the only thing that knows
+whose farmhouse is whose.
+
+The end of the work block is the trigger, and the first choice was wrong: I
+went for `_step_farm`'s "nothing left to do" branch, which never reliably
+fires — a field with beds in it always has something worth a visit
+(`next_action`'s thirstiest-bed fallback). The off-the-clock branch is
+reached every day whatever the crop cycle is doing.
+
+**And the blobs, again.** A full tile of `soil.png` had been put under every
+bed to stop wheat rising out of bare meadow; its cells carry a soft dark
+vignette, so under a bed it reads as a brown blob — the same complaint the
+mound got, from a different sprite. Hidden for wheat, kept for root crops.
+That REVERSES `test_a_wheat_bed_still_stands_on_tilled_earth` on the
+player's own later instruction, and the test now says so in place of
+quietly flipping.
+
+232/232 across the farming, market and village suites.
+
+### Houses stand shoulder to shoulder (2026-09-17)
+
+*"Could save some space in villages by omitting the gap between houses."*
+`VillageLayout.PLOT_GAP_TILES` 1 → 0. Measured on a real village with
+`tools/probe_village_map.gd`: one street row went from `hhh.hhhh` to
+`hhhhhhhhhh`, the same ground carrying three more house tiles.
+
+One constant was doing two jobs. The plot gap also set the PLAZA's
+clearance, and the square is a different question — it is never frontage, so
+a house flush against it would stand in the space the square is. Split out
+as `PLAZA_CLEARANCE_TILES`, still 1.
+
+`test_adjacent_plots_on_the_same_street_keep_a_real_gap` asserted exactly
+what was asked to go away (no two footprints even orthogonally adjacent).
+Replaced by the part that was ever load-bearing — they must not OVERLAP —
+plus a new test that they really are flush rather than merely allowed to be.
+The reversal is recorded in the test as the player's, not as a correction.
+
+270/270 across the layout, renderer, room, farm and farming suites.
+
+### The pond finished: fish you can see, and a fisher who works them (2026-09-17)
+
+*"Close the gaps please and finish this properly."* Both remaining ⬜/🚧 rows
+of `village_ponds.md` are ✅.
+
+**Visible fish.** Real `FishMarker`s on the pond's own water, one per whole
+fish, capped at one per tile — six tiles is a pond, not a shoal — synced on
+every stocking, breeding tick and catch, and freed with the chunk. Kept out
+of `_loaded_fish` on purpose: that list is respawned wholesale whenever a
+chunk's aggregate fish population is reconciled, and a pond's own fish would
+have been wiped every time the region's did anything.
+
+**The fisher works it.** `_step_pond` mirrors `_step_farm` exactly — same
+shape, same override in the work tick, same off-the-clock carry. A cast costs
+`FarmerBehavior.WORK_SECONDS`, pinned against it rather than tuned, so
+fishing and farming are one effort. The catch walks the farmer's own chain
+through the farmer's own functions.
+
+`farmhouse_cell` became `stock_building_cell` in the process. It holds a
+farmer's farmhouse and a fisher's cottage, and the name would have been a lie
+in the one place a reader looks to find where a catch went.
+
+**One trap cost three failures that read like real bugs.** `_unload_chunk`
+PERSISTS a chunk's modifications to `user://`, which is keyed only by project
+name — so a dug pond leaked into every later test in the file AND into the
+next run of it from a different worktree, as ground that was already water.
+`test_earth_chunk_manager_ponds.gd` now scrubs its own chunk in
+before_each/after_each, the way `test_earth_chunk_manager_structure_art.gd`'s
+header has warned about since it was written.
+
+274/274 across the seven pond, village and farming suites.
+
 Honest gaps, three real:
 
 🚧 **The gate is a real hole.** An animal that wanders into the gate cell is
@@ -24103,6 +24326,753 @@ drift.
 
 Tests: `test_intro_splash_sheet.gd` 16/16 (2 new), 46/46 across all five
 intro test files.
+
+## The character creator's load: one real bug, one freeze, and a never-migrated per-pixel loop (`concept/character_creator_preview_scene.md`, 2026-09-17)
+
+Reported live: *"The character creature loads super slow and needs a
+general overhaul."* Measured before touching anything (a throwaway
+`--headless` probe that instrumented `CharacterPreviewDiorama.build()`
+step by step, since deleted): a cold build is **~4.5s**, and a WARM one
+— every DNA reroll — was still **~250ms**. Both real, both with
+distinct causes.
+
+### ✅ The grass atlas was re-sliced on every single build (`illustrated_grass_patch.gd`)
+
+`IllustratedGrassPatch._textures` was a per-INSTANCE `Dictionary`, and
+`_build_grass` constructs a fresh patch each build, so every `build()`
+re-read the 1254x1254 season sheet off disk and re-ran
+`SpriteSheetSlicer.chroma_keyed` over all ~1.57M of its pixels for a
+byte-identical result: **~222ms, every time**. A straight bug against this
+codebase's own convention — `IllustratedTerrainSprite._frame_cache` and
+`IllustratedStoneSprite._frame_cache` are both `static var` for exactly
+this reason. Not diorama-specific either: `EarthChunkManager` only escaped
+it by happening to hold one long-lived patch for the whole world, so any
+second caller would have paid it too. Now `static`, with a public
+`texture_for_season()` so the sharing is directly assertable rather than
+only visible as a side effect on a `MultiMeshInstance2D`.
+
+### ✅ The remaining ~3.9s is real work, and now runs incrementally (`character_preview_diorama.gd`, `scenes/main_menu.gd`)
+
+Almost all of a cold build is first-use sprite-sheet loading, and it ran as
+ONE unyielded block inside the fully-synchronous `_build_create_screen`
+(reached via `_select_class` —> `_refresh_appearance`), so nothing could
+repaint for its duration — including the `LoadingOverlay` that had just
+been shown for the class portraits. This is the gap `concept/
+intro_splash.md`'s sixth and tenth passes each named and each explicitly
+deferred; its own caveat (*"either of those two costs growing
+independently in the future could reopen exactly the gap this pass
+closes"*) turned out to be exactly right.
+
+`build_async(dna_seed, on_progress)` performs the same steps in the same
+order from ONE shared `_build_steps()` list, awaiting a frame between each
+and reporting `(done, total, label)`. `build()` is unchanged and still
+fully synchronous. The unit of yielding is one atomic first-use cost, not
+one `_build_*` function: flowers, birds and butterflies each load a
+separate sheet PER SPECIES (~250-590ms per flower species, ~420-460ms per
+bird), so `_build_birds`/`_build_flowers`/`_build_butterflies` became
+`_build_bird`/`_build_flower`/`_build_butterfly` and expand to one step
+per item.
+
+`MainMenu._ensure_create_screen_built` awaits `_build_diorama_
+incrementally()` after the screen itself is built, reporting into the SAME
+overlay the portrait pass already uses — so the whole first open is one
+continuous readout ("7 / 7 portraits", then "11 / 21 scene pieces: the
+pond") instead of a spinner followed by a silent multi-second freeze.
+`_diorama_build_pending` keeps `_refresh_appearance` out of the way until
+that first build lands so the scene is never built twice; a DNA reroll
+stays inline on purpose, since a warm rebuild is now a frame.
+
+### ✅ A never-migrated per-pixel loop (`illustrated_terrain_sprite.gd`)
+
+Chasing the largest single step — the grassland ground — found that its
+~987ms sheet load is only ~36ms of PNG decode. `IllustratedTerrainSprite
+._prepared_for_slicing` alone was ~458ms: a plain `get_pixel`/`set_pixel`
+double loop over 1.57M pixels calling the user-defined `_is_magenta`/
+`_despilled` once each per pixel — the exact technique `SpriteSheetSlicer
+.chroma_keyed`, `IllustratedMushroomSprite`, `IllustratedAnimalSprite` and
+`IllustratedStoneSprite` had each already been fixed out of (see the "Still
+at 1fps" investigation above). This file was a never-migrated duplicate.
+
+Rewritten as single inlined passes with INTEGER thresholds — every value
+read out of a `PackedByteArray` already is an integer, so `r >= 140.25`
+means exactly `r >= 141`, and `cast > 7.65` means exactly `cast >= 8`.
+`_prepared_for_slicing` **458ms —> 180ms**, whole sheet load
+**987ms —> 691ms**.
+
+Pinned COMPARATIVELY, not by an absolute ceiling: the test races the real
+implementation against a naive reference in the same process on the same
+image, and asserts they produce byte-identical output. The first attempt
+used an absolute 200ms budget calibrated from the real 180ms measurement,
+and it went red at 221ms the first time it ran on a loaded box with nothing
+changed. A timing pin that fails on a busy runner teaches people to ignore
+it, so the pin now measures the code rather than the machine.
+
+### ⬜ A second per-pixel change was tried, measured, and reverted (`sprite_sheet_slicer.gd`)
+
+`chroma_keyed`'s own doc comment tells every illustrated-art class in this
+codebase that a `PackedByteArray` loop beats `get_pixel`/`set_pixel`. A
+"read the bytes, write with `set_pixel`" hybrid looked like a strict
+improvement when measured on one real sheet: 186ms, against the shipped
+byte-array version's 226ms and a naive loop's 201ms. `IllustratedBirdSprite
+._keyed_image` was de-duplicated onto it at the same time.
+
+Sweeping the background fraction afterwards showed that was not the win it
+appeared to be. The hybrid is ~2x faster where most pixels MISS the key and
+take the early-out, and genuinely SLOWER where most pixels match and take
+the write path (337ms against a naive 275ms at 100% background). The
+crossover sits near 46% background — roughly where real illustrated sheets
+live — so the single real-sheet measurement that motivated the change was
+sitting inside the noise around break-even rather than above it.
+
+Both the hybrid and the bird de-duplication are reverted. `chroma_keyed` is
+shared by nine classes, and a change whose benefit depends on which side of
+break-even a given sheet falls does not earn that blast radius. The finding
+is recorded in `concept/character_creator_preview_scene.md` because the next
+person to read that doc comment deserves to know it is only half true.
+
+### ✅ 72 ground tiles, 9 textures (`character_preview_diorama.gd`)
+
+The ground plane is 12x6 tiles drawn from a sheet holding 9 variants, and
+`frame_for` returns the same cached `Image` object for every seed picking a
+given variant — so one `ImageTexture` per tile was uploading the same
+handful of 32x32 images eight times over. Keyed on that object's identity
+instead. The test bounds itself against the sheet's own real frame count
+(a new `IllustratedTerrainSprite.frame_count_for`), and requires MORE than
+one texture, so a future bug flattening the whole ground onto a single
+variant fails rather than reading as a great cache hit rate.
+
+### Measured end to end
+
+Three runs of each on one machine, base commit vs. branch, `build()` called
+for four successive seeds in one process:
+
+| `build()` | before | after |
+| --- | --- | --- |
+| cold (first ever) | ~4478ms | ~3999ms |
+| second seed | ~1503ms | ~1282ms |
+| third seed | ~556ms | ~324ms |
+| steady-state rebuild | ~252ms | **~39ms** |
+
+Honestly: the cold number moves least, because most of a first build is
+still per-species sheet loading that happens once per process no matter who
+triggers it (the real world would pay it later anyway). What changed for a
+player is the other two things — that cost no longer freezes the window,
+and a DNA reroll went from a quarter-second stutter to a single frame.
+
+### Still open
+
+The skill web (`_build_skills_tab`) is still built fully synchronously, and
+is still the one remaining un-yield-split cost the sixth pass named — ~250ms
+in `_build_create_screen`, far smaller than the diorama was, but not zero.
+The OTHER illustrated-sprite classes that carry their own copy of the
+naive `_prepared_for_slicing` loop (`illustrated_beehive_sprite.gd`,
+`illustrated_caterpillar_sprite.gd`, `illustrated_bee_sprite.gd`,
+`illustrated_worm_sprite.gd`, `illustrated_ant_mound_sprite.gd`,
+`illustrated_grass_frog_sprite.gd`, `intro_splash_sheet.gd`,
+`illustrated_millipede_sprite.gd`, `illustrated_structure_sprite.gd`) were
+NOT migrated by this pass — none of them is in the character creator's own
+path, and each needs its own budgeted pin and its own pixel-parity test to
+migrate honestly rather than by search-and-replace.
+
+TDD throughout, red first. New tests: `test_illustrated_grass_patch.gd` +2
+(shared atlas identity, and that seasons still differ),
+`test_character_preview_diorama.gd` +5 (build_async scene parity against
+the synchronous build, progress 0—>total, at least one frame per step,
+per-item yielding for flowers/birds/butterflies, ground texture sharing),
+`test_main_menu.gd` +4 (the synchronous build leaves the scene unbuilt,
+`_ensure_create_screen_built` finishes it, the overlay reports diorama
+progress, and a reroll still rebuilds inline),
+`test_illustrated_terrain_sprite.gd` +3 (a comparative speed-and-parity
+race against the naive loop, a per-frame scrub pin, and a pixel-level
+key/despill/leave-alone parity test).
+
+Three existing `test_main_menu.gd` navigation tests were changed from a
+hardcoded `wait_process_frames(10)` to waiting on the real condition
+(`_creator_is_open`): that margin was already a guess at one yield-split
+pass's length, and adding a second one made it stale.
+
+## A villager stops being scenery: the ethogram they never had (`concept/npc_social_life.md`, 2026-09-17)
+
+Asked for directly: *"We need to improve the NPC AI Behaviour by an order of
+magnitude ... they should socialize; talk; share rumours; trade goods; give
+quests; cater for their needs; stroll; idk"*.
+
+**Surveyed before designing, and the gap turned out to be precise rather than
+vague.** `Ethogram.BODY_PLANS["villager"]` had **one drive and zero wirings**;
+`BODY_PLANS["mammal"]` had two drives and **seven**. So a deer decided what to
+do from what it needed and what it could sense, while a villager walked a
+fixed four-block schedule with exactly one interrupt — hunger — hand-written
+into `NpcMarker._process`. Meanwhile memory, rumour, trust, dialogue, quests
+and contracts *all already exist, are tested, and are connected to nothing a
+villager does*: `step_npc_encounters` propagates memory between villagers who
+are merely **scheduled** to the same landmark, and no player has ever seen it.
+
+So this is mostly about connecting what is already here, not writing a second
+AI. Spec first (`docs/concept/npc_social_life.md`), then four red-first
+slices.
+
+✅ **The villager ethogram.** Real receptors, four drives (hunger, thirst,
+rest, company) and four wirings. `COMPANY`/`MARKET`/`HOME` join the one shared
+channel basis rather than becoming a villager-only side channel — that is what
+lets a villager be decided by the same `BehaviorKernel` every other body plan
+runs on. Hunger is deliberately untouched (a whole famine chain hangs off its
+exact pace) and is **first** in the wiring order, deliberately *not* the mammal
+order, because a villager who stopped for a drink on the way to buy food is a
+villager that chain no longer describes. Tiredness is one world day and
+company is one schedule block, each pinned to that source. A further test
+asserts every drive is gated by some wiring — a need nothing listens to can
+rise forever and move nobody.
+
+✅ **`VillagerBehavior`**, the sibling of `CreatureBehavior` over the same
+kernel and the same table, keeping no private copy and no opinion about
+priority (wiring order *is* priority). It answers `NOTHING` when nothing is
+pressing, so the schedule still owns the villager — a layer that always had an
+opinion would have *replaced* the schedule rather than interrupting it.
+
+✅ **Needs you can watch.** `_step_needs` is the third walk-target override
+beside `_step_hunt`/`_step_farm` and deliberately last of them: real work
+outranks a need. A thirsty villager walks to the well and **drinking really
+answers it**; a tired one goes home and resting answers it. Answering on
+*arrival* is what stops a villager standing at the well forever.
+
+✅ **Villagers meet in the street and stop to talk.** A lonely villager walks
+to the nearest neighbour; on arrival **both** stop, face each other and stand
+for `CONVERSATION_SECONDS`, and having talked answers the company drive. Both
+sides are put into it or it reads as being talked *at*. A started conversation
+runs to its end — no walking off mid-sentence because quarry wandered past.
+
+Three things the tests caught rather than confirmed:
+
+- **The contract is `Drives.gains()`, not raw levels.** A gain is 0 below a
+  drive's onset and 1 at its threshold; fed raw levels, every villager would be
+  permanently one-thousandth hungry and therefore permanently walking to
+  market. The sub-threshold test was *vacuous* as first written and now runs a
+  real clock and pins the flip to the threshold itself.
+- **A villager gets thirsty before hungry** — 0.03 against 0.02 in the shared
+  mammal profile — so the first place a day sends them is the well. Found by a
+  test that assumed otherwise; kept as its own test, because it is the
+  behaviour rather than the accident.
+- **"Arrived" was one pixel**, which is right for a doorstep and impossible for
+  a person: two villagers never occupy the same pixel, so two standing two
+  pixels apart failed to notice each other. Talking reaches a tile now; places
+  keep the pixel.
+
+Deliberate divergence from the spec, recorded there rather than quietly:
+hunger keeps its dedicated interrupt instead of being routed through the
+wiring layer, because that interrupt carries two guards a famine chain was
+measured into (a producer that feeds itself, a villager with their own field)
+which the generic layer cannot express. Hunger's gain is withheld from the
+villager context so the two layers cannot steer at once.
+
+Tests: `test_ethogram.gd` 47/47, `test_villager_behavior.gd` 13/13 (new),
+`test_npc_marker.gd` 47/47, `test_npc_needs.gd` 10/10, `test_npc_economy.gd`
+66/66, `test_npc_marker_farming.gd` 16/16, `test_drives.gd` 21/21,
+`test_behavior_kernel.gd` 26/26, `test_creature_behavior.gd` 53/53,
+`test_creature_marker.gd` 258/258, `test_village_renderer.gd` 89/89.
+
+**Honestly unbuilt, and next**, in the concept doc's own status list: strolling
+(a villager with nothing pressing still stands on their scheduled spot);
+rumours passing in a meeting through the existing `MemoryStore`/`Rumor` path;
+relationships (familiarity/trust) that weight what a rumour does — the input
+`rumor.gd` names outright as missing; goods changing hands between a surplus
+and a shortfall; and a villager offering a quest from a real shortfall, which
+is `dialogue.md`'s own long-standing ⬜.
+
+## A farm bed stands on real tilled earth (`concept/village_farms.md`, 2026-09-17)
+
+Asked directly: *"Can you wire the new terrain soil.png for beds of
+farmhouses?"* `assets/sprites/terrain/soil.png` had been committed (and,
+like `fence.png` before it, without its `.import` sidecar) and nothing read
+it.
+
+### ✅ What it fixes, which is more than "new art"
+
+The only soil a bed drew was `ProceduralSoilSprite`'s small 10-unit mound,
+and that mound is a ROOT crop's own ground — correctly hidden for wheat
+after *"what's the round procedural dark blob?"*. Which meant a wheat bed
+was six rectangles of the untouched meadow it had been tilled out of, with
+wheat rising straight from the grass. Nothing had ever drawn the ground a
+bed IS. `FarmPlotMarker` now draws a full tile of tilled earth under
+everything, always on; the mound keeps its own separate, unchanged job.
+
+### ✅ An explicit grid, because this sheet's gutters are black
+
+Structurally soil.png is exactly the biome sheets — 1254x1254, a 3x3 grid
+of nine variants — but its gutters are drawn near-BLACK rather than
+magenta. `IllustratedTerrainSprite` punches magenta to alpha before slicing
+and `SpriteSheetSlicer.detect_frames` then finds dividers by transparency,
+so a black gutter reads as neither background nor divider: measured, the
+whole sheet came back as ONE frame.
+
+Rather than teach the chroma-key pass a second background colour, a `_SHEETS`
+entry may now declare `column_bands` outright and skip content detection
+entirely. Both axes were measured from the file. That is the better fit for
+ground art regardless of gutter colour: `normalize_frames` crops each frame
+to its own ink and rescales it, which is right for a drawing in empty space
+and WRONG for a tile that must abut its neighbours. Sheets without
+`column_bands` are untouched and still slice exactly as before, pinned by
+`test_an_explicit_grid_leaves_every_content_sliced_biome_sheet_alone`.
+
+### ✅ The vignette, found by rendering the bed rather than reasoning about it
+
+Each cell of soil.png is drawn as a CARD with a soft dark vignette, not as a
+seamless texture: measured down a cell's edge, mean brightness climbs
+0.001 —> 0.33 over about thirteen pixels. Sliced on the raw content bands
+every tile keeps that rim, and a rendered 3x2 bed came out as six brown
+squares in a black lattice. Rendering the same bed at three candidate insets
+and looking at them settled it: 13 removes the falloff exactly and tiles
+seamlessly, at ~7% off each side of a 388px cell.
+
+Pinned by `test_every_soil_variant_tiles_without_a_dark_seam`, which checks
+the RESULT — the outermost ring of each variant has to be about as bright
+as the tile as a whole — rather than the number 13, so a re-export with a
+different vignette fails the test instead of shipping a lattice.
+
+### ✅ Seeded per bed
+
+Which of the nine a bed gets is hashed from its own global tile, so a 3x2
+patch is not six copies of one tile and any given bed looks the same every
+time it is drawn. The sprite is scaled from the art's OWN pixel width to
+cover exactly `TerrainRenderer.TILE_SIZE`, the same derive-from-the-art rule
+`CharacterPreviewDiorama._build_ground` follows, so a re-export at another
+resolution still covers one tile.
+
+TDD throughout, red first: `test_illustrated_terrain_sprite.gd` +4 (soil
+slices into nine, every variant is earth and not gutter, no dark seam, and
+the biome sheets are unaffected), `test_farm_plot_marker.gd` +4 (a bed draws
+a full tile of earth, it draws beneath both the mound and the crop, a WHEAT
+bed still stands on it, and neighbouring beds differ while each stays
+itself).
+
+### Still open
+
+The soil is drawn by `FarmPlotMarker`, so it follows tilled BEDS — player
+plots as well as village farmhouse ones, which is the honest reading of "a
+tilled bed is tilled earth wherever it is". It is NOT baked into the terrain
+atlas the way road paving is (`TerrainRenderer.ROAD_TILE_ID` plus a
+`chunk.modifications` entry). That would make the ground itself soil rather
+than a sprite laid over it, and would let beds blend with neighbouring
+terrain, but it also entangles beds with the built-tile/occupancy rules that
+`modifications` drives — a much larger change than was asked for here.
+
+## Every village keeps a store, and somebody walks the goods to it (`concept/village_warehouse.md`, 2026-09-17)
+
+Asked for directly: *"Villages should also always build a Warehouse to keep
+stocks."* Clarified in two answers that shaped everything below — the store
+**stands from founding** rather than being earned, and it is a store in both
+senses: it **gates how much a village may keep** *and* **villagers really
+haul goods to it**.
+
+**Surveyed before designing, and the building turned out to be a prop.** A
+`warehouse` already existed: a real `BuildingCatalog` entity (4x3, wood 22 +
+plant_fibre 6, 42 labour hours), classed civic beside `city_hall`, and rung 3
+of `VillageGrowth`'s ladder behind a four-household gate. What it had was no
+connection to stock *at all* — `VillageMarket.stock` and `SettlementGranary`
+ran entirely abstractly and neither knew nor cared whether a warehouse stood.
+It was a building that looked like storage.
+
+✅ **Mechanism 1 — it stands from founding.** `VillageLayout` reserves a
+second plot on the plaza beside the one the `city_hall` already had, and
+`VillageRenderer._place_warehouse_if_missing` raises it with the houses and
+the well — not queued, not paid for, not owed. The ladder rung and
+`WAREHOUSE_MIN_HOUSEHOLDS` are **removed** rather than lowered: a rung that
+is satisfied before the ladder is ever consulted is not a rung, and leaving
+it in would make `next_building` return a target the village already has.
+
+Placement uses `place_building_over_roads`, like the hall and unlike the
+sawmill, and the reason is the doorstep: this plot's door opens straight onto
+the main street, so by the time placement runs its own front step is already
+paved and plain `place_building` refuses it — every time, over itself.
+
+⚠️ **And it goes up BEFORE the works, which is load-bearing rather than
+tidy.** The store's plot is fixed and cannot move; the sawmill is sited
+wherever there is timber and a clear road spur back to the street, searched
+for against what already stands. Placed the other way round the spur gets
+**cut**: raising the store lifts every road cell under its footprint and puts
+back only its doorstep, so a mill whose spur happened to cross the reserved
+plot was left with no road home. Caught by
+`test_the_real_sawmill_is_walkable_back_to_the_street_on_road` — and worth
+naming why no stub-world test could see it: `StubWorld.build_at_global`
+records road cells into a different dictionary from the one
+`modification_at_global` reads, so paving and placement never collide there
+the way they do against the real world.
+
+✅ **A reload raises it too.** `_recover_existing_village` never runs the
+founding placement at all, so a village founded before there was such a thing
+as a store would have come back storeless forever, and "every village has
+one" would only ever have been true of villages founded after this pass. The
+hall is raised on reload for exactly the same reason.
+
+⚠️ **And it walked village founding into a latent quadratic — 29s to 415s.**
+The store takes prime street frontage (intended: a farmstead belongs on the
+outskirts with its field), so `next_street_plot` stops finding room for a
+farmhouse and every farmstead searches the whole chunk instead. Each
+candidate field ring then asked `VillageRenderer._is_street_row` about every
+one of its cells, and that function recomputed the **entire**
+`VillageLayout.skeleton` — including the column scan for somewhere dry to put
+the square — on every call. Its own comment said deriving from the skeleton
+"costs nothing".
+
+Measured rather than reasoned about, and the first two guesses were both
+wrong: an A/B against the branch base gave 29s vs 415s, a bisect put it on
+the founding commit, and a memo on the two-pass layout (the obvious suspect)
+changed nothing. Instrumenting the phases is what found it — `layout` was
+2ms of the 415s; `_place_farms_if_missing` was ~380s of it, with 106,722
+skeleton calls behind it.
+
+`VillageRenderer` now caches the skeleton and the ground predicate for the
+life of one `spawn_village` call — safe because both derive from ground, and
+ground does not move while a village is being founded; occupancy and paving
+are deliberately **not** cached, since those genuinely change as buildings go
+down and a stale answer would let two plots claim one cell.
+
+| phase | before | after |
+| --- | --- | --- |
+| `layout` | 2ms | 1ms |
+| warehouse | 87ms | 83ms |
+| sawmill | 243ms | 205ms |
+| `_place_farms_if_missing` | ~380s | 565ms |
+| fenced fields | 1120ms | 1044ms |
+| `spawn_village` total | 25.6s | 4.4s |
+| skeleton calls | 106,722 | 10 |
+
+End to end on the test that first showed it: 415s before, **30s** after,
+against **29s** at the branch base.
+
+⚠️ **One honest caveat on "always", found by building it.** The reserved plot
+sits on prime ground a house might have needed. On a cramped site, claiming
+it tipped the layout from "houses everyone" to "houses all but one" — and a
+site that cannot house its whole roster is founded **nowhere at all**.
+Reserving a store had therefore started quietly *deleting villages from the
+world*, which is far worse than a village without one. `VillageLayout.layout`
+now plans twice: with the store, and — only if that failed to house everybody
+— without it. A roomy site gets both; a cramped one houses its people and
+goes without. Caught by
+`test_a_building_already_occupying_ground_keeps_later_ones_off_it`, which
+founded nothing the moment the reservation was added.
+
+✅ **Mechanism 2 — the roof is the limit.** `VillageMarket.storage_capacity`
+clamps `add_stock`, the one seam every deposit already passed through:
+`HOUSEHOLD_CORNERS_CAPACITY` (20) for a village that keeps its stock in
+its corners, `WAREHOUSE_CAPACITY` (200) for one with a roof for it. It
+defaults to `INF`, so no existing caller — gathering, production, trade, the
+construction ledger — changed behaviour; `EarthChunkManager`'s settlement
+step sets it every step from the building ids **actually standing**, so a
+village that loses its warehouse loses the headroom with it. Overflow is
+discarded rather than queued: a full store turns a producer away, which is
+the pressure that makes the building worth having.
+
+This deliberately does **not** touch `SettlementFood.carrying_capacity`,
+despite the name. That one asks how many households the food on hand can
+*feed*; this asks how much stock the village may *hold*. Two different
+questions sharing an English word, and conflating them would stack a brand
+new mechanic on top of a famine chain that is already real and already
+tested.
+
+🚧 **Mechanism 3 — goods are carried in. Built and tested, then switched
+OFF in a live village** (`NpcMarker.HAULING_CARRY_LIMIT` = 0.0) after it was
+reported immediately post-0.0.2 as *"no stock gets produced anywhere"*. It
+put the villager's hands in the middle of a chain a concurrent pass had just
+built: `_step_farm` calls `haul_stock_to_village` the moment a farmer goes
+off the clock, emptying the farmhouse into `record_real_harvest` — which,
+with a carry limit, goes to the HANDS rather than the market. A producer who
+GATHERS is worse: `_gather` takes nothing more once the hands are full, so
+they stop entirely. Neither side's tests could see it, because every marker
+a test builds sets no `warehouse_position` and so carried nothing. The
+lesson is the one CLAUDE.md already warns about and I still walked into: two
+sessions, one file, both honest in isolation. Everything below is real and
+still present; only the caller that opts a live villager in is off.
+
+✅ **Mechanism 3, as built.** A villager with full hands walks
+the load to the store door and puts it down there. Built as a **wiring on
+the existing villager ethogram**, not a second movement system:
+`Ethogram` gained the `WAREHOUSE` channel on the one shared basis and the
+`DRIVE_BURDEN` gate, and `VillagerBehavior` gained its `HAUL` intent purely
+by that wiring existing — its header has always claimed that was all it took,
+and this is the first behaviour actually added that way. `NpcEconomy` holds
+the take in `carried` until `deliver_load`; `NpcMarker` walks a loaded
+villager to `warehouse_position` and empties their hands on arrival, the same
+"arriving is what answers it" rule the well and the bed already run on.
+
+Burden is the one villager gate with **no clock**: it has no `drive_profile`
+entry anywhere, so `Drives` cannot raise it while a villager stands still.
+What presses is what is really in their hands.
+
+### What building mechanism 3 settled
+
+**An unreported need used to press hardest of all.** `BehaviorKernel` reads a
+gate absent from the drive vector as **wide open** — correct where it was
+written, since the mammal adapter publishes every drive it runs, so an absent
+one means "ungated". Burden is the one gate nothing publishes. Left alone,
+every villager in sight of a store would have hauled an imaginary load,
+forever, *ahead of ever taking a drink*. `VillagerBehavior` now reads an
+unreported need as pressing nobody — the same contract its stimuli already
+kept for places.
+
+**burden() is a step, not a ramp.** The haul wiring is the only one listening
+on the store, so any gain above zero fires it; a ramp would send a villager
+off with one apple in hand and they would never do a day's work again.
+
+**Full hands gather nothing.** Not "the surplus is discarded" — every unit a
+producer gathers costs the region a real herbivore, crop or fish through
+`NpcEconomy`'s depletion calls, so a producer working with nowhere to put the
+take would go on killing for units nobody can hold.
+
+**Carrying is opt-in, and read off the ground rather than the plan.**
+`carry_limit` defaults to 0.0 (stock the village where you stand) and is
+raised only for a villager whose settlement really has a store — the same
+shape mechanism 2 gave `storage_capacity`, and the one place pillar 1's
+caveat matters most: a cramped village with no store must still be stocked,
+or "no room for a warehouse" would quietly have meant "famine".
+`VillageRenderer._warehouse_door` reads `buildings_in_chunk`, not
+`VillageLayout`, because the plan and the ground disagree on purpose and a
+reloaded village never re-runs the founding placement at all.
+
+**How big a load is.** One trip is a quarter of what a village keeps without
+a store: four trips fill a storeless village, forty fill one with a roof.
+That second ratio is the tuned number and it is tuned by what it says about
+the *building* — a store filled in one trip would not be worth raising.
+
+TDD throughout, red first: `test_village_layout` 74/74, `test_village_growth`
+16/16, `test_village_renderer` 96/96, `test_village_market` 25/25,
+`test_settlement_granary` 20/20, `test_settlement_food` 28/28,
+`test_ethogram` + `test_villager_behavior` 72/72, `test_npc_economy` 74/74,
+`test_npc_marker` 52/52.
+
+### Still open
+
+- **What counts toward the ceiling.** Mechanism 2 caps stock as a whole. A
+  per-item ceiling (grain and iron do not share a shelf) is the obvious
+  refinement and was deliberately not attempted first.
+- **Who hauls.** Every villager has the wiring. Whether hauling should belong
+  to an occupation instead — a carter, a porter — is a question for once it
+  is visibly running.
+- **Nothing comes back OUT of the store on foot.** A hungry villager still
+  buys their meal from the abstract market wherever they are standing. The
+  goods now arrive somewhere; they still leave from nowhere.
+
+## The sawmill gets a sawyer (`concept/village_timber.md`, 2026-09-17)
+
+Reported in play: *"The sawmill also never produces any beams and doesn't
+even have a dedicated worker"*, then *"implement the sawmill properly"*.
+
+Both halves were true, and the second explained the first: **no villager had
+that trade at all.** `NpcIdentity.OCCUPATIONS` was farmer, blacksmith,
+merchant, guard, fisher, herbalist, hunter, nurse. A village raised a sawmill
+at its own timber and then had nobody whose job was timber.
+
+**Almost nothing here is new.** `SagewerkProduction` already turned logs into
+beams and planks, with costs and shaping times measured against real joinery
+(hewing a round log square wastes sapwood and is slow; riving boards off it is
+cheap and fast) and pinned by tests. `LumberjackBehavior` was already the
+SEEKING → APPROACHING → FELLING → CARRYING → DEPOSIT machine.
+`ChoppableTree.take_damage` was already how a tree comes down. Every one of
+those served the placeable **tile** `sagewerk`; none of it reached the
+village's own **building**, which was referenced by the founding placement and
+the growth-site search and *nowhere else*.
+
+✅ **`lumberjack` is a real trade**, and the sawmill is a real landmark, so a
+sawyer's schedule resolves to the mill rather than to a decorative workspot.
+
+✅ **`VillageSawmill`** — the pure rule set, the sibling of `VillageFarm`.
+`LOGS_PER_BEAM` is `SagewerkProduction`'s own cost re-exported and pinned to
+it. `TIMBER_REACH_TILES` starts from the reach a mill is *sited* by, because a
+mill placed beside timber must be able to reach that timber. Short of a beam's
+worth the answer is still `FELL` — a sawyer waiting at the mill for logs
+nobody is fetching is a mill that stops the moment it runs down.
+
+✅ **`NpcMarker._step_timber`** — the third sibling of `_step_hunt` and
+`_step_farm`, on the same four seams and the same override ordering. Real
+trees felled with the player's own loop, logs to the mill, and a beam squared
+*at* the mill over real time with the logs really leaving the stock.
+
+✅ **Beams reach the village** through the same store-then-haul the farmhouse
+runs, paid once on arrival. Beams only — the logs a mill holds are its raw
+material, and carrying those off would carry away the thing the mill exists to
+work.
+
+**The cost the spec warned about came due.** Occupation is drawn from
+`OCCUPATIONS` by seed, so adding one re-rolls who is who in every village.
+Three tests had silently depended on seed 1's old trade and started walking to
+a `sawmill` tag their fixtures did not have; each is now pinned to a trade of
+its own with a comment saying why, rather than papered over. That also exposed
+a real gap — the work tag named a place nothing provided — which is why the
+mill became a landmark.
+
+One of my own tests **passed vacuously** before it was fixed: the stub village
+had no forest, so it raised no mill and the assertion never ran. It seeds real
+timber now.
+
+Tests: `test_village_sawmill.gd` 9/9 (new), `test_npc_marker_timber.gd` 15/15
+(new), `test_npc_identity.gd` 18/18, `test_village_renderer.gd` 94/94,
+`test_npc_marker.gd` 47/47, `test_npc_marker_farming.gd` 25/25,
+`test_dialogue_context.gd` 39/39, `test_village_census.gd` 9/9.
+
+Honestly unbuilt: the mill shapes **beams** only — `SagewerkProduction` also
+makes planks, and nothing yet asks for them; and a village with more than one
+sawmill would hand every sawyer the first one.
+
+## Footprints weather away, and rain hurries it (`concept/snow_cover.md`, 2026-09-17)
+
+Asked for: *"Can you add decay to the footprints? Rain should increase decay
+speed.. Should be visible for ~30 real minutes"*, then *"Make the decay
+gradually"*, then *"Ok make the half life time 2 minutes"*.
+
+✅ **A print now weathers instead of vanishing.** Before this it held full
+strength for its whole life and disappeared between one frame and the next —
+`FootprintField`'s own header said there was "nothing here to age except
+lifetime pruning itself". Each print carries `decayed` (seconds of
+*dry-equivalent* ageing) and `opacity_of` is a true half-life,
+`0.5 ^ (decayed / HALF_LIFE_SECONDS)`, with the half-life two real minutes.
+
+✅ **Rain hurries it.** `decay_rate_for` scales linearly from 1x dry to
+`RAIN_DECAY_MULTIPLIER` (4x) in a downpour — a thirty-second half-life
+instead of two minutes. `EarthChunkManager.set_rain` already received the
+live weather; it now keeps it and `step_footprints` passes it down.
+
+✅ **Decay accumulates per step rather than being recomputed from
+`spawned_at`**, which is the load-bearing decision: rain starting halfway
+through a print's life must hurry only the half that is *left*, not
+retroactively the half it already spent in the sun.
+
+⚠️ **The two numbers asked for cannot both hold, and the docs say which
+won.** Thirty visible minutes came first, a two-minute half-life second —
+but two minutes of half-life puts a print under 2% strength after about
+**eleven**. The later, more specific instruction wins, and `LIFETIME_SECONDS`
+is *derived* from it (the time to fade below `VISIBLE_FLOOR`) rather than
+carried as a second constant that would contradict it. For thirty visible
+minutes the half-life wants to be ~5 minutes — a one-line change.
+
+✅ **The fade stayed cheap, deliberately.** `FootprintRenderer` writes each
+print's strength into the MultiMesh instance alpha, but that buffer is
+rebuilt only when `generation()` changes — and that dirty check *is* the fix
+for FPS regression round 4, where rebuilding an unchanged MultiMesh every
+frame was the cost. The generation bump is therefore tied to crossing one of
+`FADE_STEPS` (16) strength bands: sixteen rebuilds per print-life instead of
+sixty a second. Pinned by a test that fails in both directions.
+
+### Still open
+
+- **MultiMesh instance colours cannot be read back headless.**
+  `get_instance_color` answers `(0,0,0,1)` whatever was written (measured on
+  Godot 4.7.2 with a standalone probe), so the renderer's decision is tested
+  through `FootprintRenderer.color_for` and the engine write itself is not
+  directly asserted — the same split `LeafLitterRenderer`'s lossy
+  `INSTANCE_CUSTOM` packing already accepts.
+- **Rain is per-manager, not per-chunk.** `set_rain` carries one world-wide
+  flag, so a print decays at the same wet rate everywhere the manager says it
+  is raining. Real per-region weather would want the wetness sampled at the
+  chunk.
+---
+
+## 2026-09-17 — Footsteps: a recording of walking is not a footstep
+
+Reported live: *"Can you find better sounds for the footsteps on every
+terrain? They sound weak and not natural"*. Nobody in this environment can
+hear the game, so the measurable half got measured first — and it turned out
+to be the entire explanation.
+
+| clip | length | RMS | peak |
+|---|---|---|---|
+| `grass.ogg` | 0.25s | −12.59 dBFS | −0.74 dBFS |
+| `default.ogg` | 3.64s | −47.63 dBFS | −17.86 dBFS |
+| `snow.mp3` | 13.72s | −38.42 dBFS | −10.34 dBFS |
+| `forest_twigs.ogg` | 41.67s | −41.26 dBFS | −15.93 dBFS |
+
+One recording per surface, 35 dB apart end to end, and only one of the four
+an actual footstep. So: **weak**, because every step played its clip from
+`0.0` and a forest step was forever the same fraction of the same run-in,
+before the recording had reached a real impact; **not natural**, because one
+recording per surface means every step is literally the same sample at the
+same pitch; and **cut off**, because the 4-voice pool's round-robin then
+truncated each step mid-ring. It also explains, retroactively, why the
+eyeballed −12 dB that answered *"the grass footsteps are way too loud"* on
+2026-09-10 never fixed the rest: it closed barely a third of a 35 dB gap.
+
+✅ **Every surface has a pool of 5–10 real, isolated footstep one-shots.**
+grass 9, wood 9, rock 10 (gravel), underwater 5 (feet going *into* water),
+default 9 (boots), sand 6 (Fantozzi's, CC0), snow 8 (Corsica_S's 42, CC0),
+forest 8 — the last cut out of this repository's **own** 41-second forest
+recording at its real footfalls, same file and licence and forest. Its quiet
+floor measures −51.6 dBFS against footfalls around −24, so the crickets in
+it sit 27 dB under a step rather than riding along.
+
+✅ **The levels are measured, not chosen.** One gain per pool, so its mean
+lands on a common target — per pool rather than per clip on purpose, so a
+soft step stays softer than a hard one *within* a surface while no surface
+is louder than another. Target: **−24.59 dBFS RMS**, which is not a taste
+call either. `grass.ogg` measures −12.59 and was signed off at −12.0, so
+that is the one footstep level already agreed to. Solving grass's nine clips
+from scratch landed on −12.0 for it **independently** — the by-ear number
+and the measured one agree, which is the strongest evidence the target is
+right. Spread is now **2.4 dB**, down from 35.
+
+✅ **The measurement is bound to the code.** `tools/prepare_footstep_
+oneshots.py` writes `assets/audio/footsteps/steps/levels.json` (length, RMS,
+peak per clip, plus the derived gain), and
+`test_every_surfaces_volume_is_the_gain_the_pipeline_measured` pins
+`FootstepSound._VOLUME_DB_BY_SURFACE` against it. Godot cannot return raw
+samples from a compressed stream, so the decode-level measurement genuinely
+has to live in a manifest; what the suite re-measures itself every run is
+every clip's real **length**, which is what catches a swapped clip.
+
+✅ **Per-step variation, and windowing where it still belongs.** ±6% pitch
+per step, applied unconditionally for the same reason `volume_db` already
+was (the pool reuses voices, so a previous step's pitch must never ride
+along — a mushroom crush included). Whether a clip must be read one step at
+a time is now a fact about the **clip**, not the surface, so
+`is_walking_bed`/`offset_for` are keyed by path: one-shots play whole, the
+fallback recording is still windowed at `STEP_WINDOW_SECONDS` 0.45s.
+
+**The real cadence was measured, not assumed**, and it mattered:
+`FootstepGait.STRIDE_LENGTH_PX` 8.415 at `Player.BASE_SPEED` 40 px/s is a
+step every **0.210s**, and **0.105s** sprinting. With a 4-voice pool the
+fifth step lands back on voice 0 while voice 0's window is still counting
+down, so a window-closing timer that just called `stop()` would cut the
+*new* step short — exactly the mid-ring truncation the window exists to
+remove. It checks a per-voice token instead. Each of the four new
+behaviours was re-verified by mutating it back out and watching its own
+test fail.
+
+🚧 **A laid cobbled street sounds like gravel, not like cobbles.** `"rock"`
+covers tundra, mountain *and* laid stone; gravel is right for two of those
+three. Splitting a `stone` surface out of `"rock"` is the remaining step,
+and the clips are already cached for it (that pack's `tile/`, 9; Fantozzi's
+`Stone`, 6).
+
+⬜ **Whether it actually sounds better is unverified.** Nothing in this
+environment can hear it. Lengths, levels, variation and windowing are
+objective and tested; "natural" needs a listener.
+
+**Two long-standing notes in this repository were wrong, and are retired.**
+`assets/audio/footsteps/CREDITS.md` recorded that "real audio-editing
+tooling to trim the FILE itself isn't available in this environment" —
+several decisions were shaped by that, and `pip install imageio-ffmpeg
+py7zr` disproves it: a real ffmpeg 7 and a 7z reader, as plain wheels, no
+system packages. And the sand/rock gap that same file blamed on a failed
+search needed no new search at all: OpenGameArt's grass pack had a gravel
+folder in it, and Fantozzi's Footsteps — a pack an earlier session had
+already downloaded and correctly rejected *for grass* — has six real sand
+steps. What was missing was a second look, not a source.
+
+Also removed: `snow.mp3`, and `grass.ogg` (byte-identical to what now ships
+as `steps/grass_00.ogg`, which git records as the rename it is).
+
+**One of my own tests asked the wrong question**, and said so out loud
+rather than being loosened: it searched for a *playing* voice carrying one
+of the pool's clips, and failed on the last clip of the sand pool on every
+run. Correctly — in a tight loop all four voices are legitimately mid-step,
+so that search reports the lowest-indexed clip still sounding, not the one
+this step chose. `play_footstep` now returns the voice it started (like
+`play_mushroom_crush`), the tests read the clip off that, and the misleading
+helper is gone. Both then failed as intended when the choice was mutated
+back to a fixed index.
+
+Tests: `test_footstep_sound.gd` 40/40 (13 new), `test_interaction_sfx_
+player.gd` 25/25 (7 new), `test_world_creature_and_footstep_audio_wiring.gd`
+9/9, `test_world_footstep_wiring.gd` 7/7,
+`test_earth_chunk_manager_footprints.gd` 32/32,
+`test_nature_soundscape_player.gd` 18/18.
 
 ### Diagnosing a silent game (see `docs/concept/soundscape.md` "Diagnosing silence", 2026-09-17)
 

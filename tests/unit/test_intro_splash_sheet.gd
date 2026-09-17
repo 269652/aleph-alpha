@@ -433,3 +433,34 @@ func test_the_limb_measurement_would_notice_a_frame_that_moved():
 	var moved := _globe_right_limb(ImageTexture.create_from_image(shifted))
 	var still := _globe_right_limb(frames[frames.size() - 1])
 	assert_eq(moved, still - 3, "a 3px shift must read as a 3px shift")
+
+
+## The count is not a number somebody typed: it is the grid the sheet
+## actually has. The 2026-09-17 "bump resolution" swap replaced a 20x6 sheet
+## of 120 small frames with a 10x5 sheet of 50 larger ones, and nothing tied
+## FRAME_COUNT to the file, so the sequencer went on asking for 120 frames
+## from a sheet that has 50 -- reported as "the intro still doesn't have the
+## correct frame crops".
+func test_the_frame_count_is_exactly_the_grid_the_sheet_really_has():
+	var image := _sheet_from_disk()
+	var columns: int = _measured_cell_starts(image, false).size()
+	var rows: int = _measured_cell_starts(image, true).size()
+	assert_gt(columns, 0, "precondition: the sheet's own columns were measured")
+	assert_eq(
+		IntroSplashSequencer.FRAME_COUNT, rows * columns,
+		"the sheet on disk is %d x %d = %d frames" % [columns, rows, rows * columns]
+	)
+
+
+## And the clock is the sheet's own captions, read off the file: the first
+## three cells are 0.00s / 0.10s / 0.90s and the last two 4.80s / 4.90s, so
+## the frames are a tenth of a second apart and the whole thing is five
+## seconds long. The previous sheet printed 1/24s steps and ran at 24fps for
+## the same five seconds; the swap changed the step and nothing changed with
+## it, so the intro played in just over two seconds.
+func test_the_sequencer_runs_at_the_sheets_own_frame_rate():
+	assert_eq(IntroSplashSequencer.FPS, 10.0, "the captions step by 0.10s")
+	assert_almost_eq(
+		IntroSplashSequencer.duration_seconds(), 5.0, 0.001,
+		"the last caption is 4.90s, so the run is five seconds"
+	)
