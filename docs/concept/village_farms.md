@@ -161,6 +161,57 @@ With no farmhouse (an unloaded chunk, a village too small to have raised
 one), `_step_farm` returns null and the villager keeps the schedule and the
 regional drip they always had.
 
+### The fence around the beds
+
+Asked for directly, with the field circled in a screenshot: *"the farmhouse
+should build a fence around the bed so no animals enter"*.
+
+A farm without a fence is a field that feeds deer. The village raises the
+fence **with** the farmhouse, out of the same timber the farmhouse's own
+cost already pays for — the identical argument
+[npc_farm_production.md](npc_farm_production.md) already makes for the
+placeable Farm's gate, whose recipe cost *is* "wood (6) for fence
+rails/posts and plant_fibre (4) lashing them".
+
+- **What is enclosed:** the beds the villager actually works — the capped
+  `MAX_WORKED_CELLS` set, not the whole 14-tile ring. You fence what you
+  sow, and the fallow part of the ring is not the farm's yard.
+- **Where the rails stand:** every cell touching a worked bed, on the
+  diagonal as well as the orthogonal so the corners close, that is not
+  itself a worked bed, not the farmhouse's own footprint, not water, and
+  not the village's paving. `VillageFarm.fence_cells` is that rule, pure
+  and derived — like `field_cells` and `owner_of`, it stores nothing, so
+  the same farmhouse fences the same ring on every reload.
+- **The gate** is where the ring meets the village's own paving. No rail is
+  raised there: the farmer walks in over the street their farmhouse fronts,
+  which is the whole reason a farmhouse takes frontage at all. A fence laid
+  across the road would wall the village off from its own farm.
+- **What it does:** a rail is solid ground for an animal.
+  `CreatureMarker` refuses a step onto a fenced cell and slides along the
+  rail rather than sticking against it — the obstacle its own `_advance`
+  doc comment has always described ("blocked by an obstacle, once that
+  lands") and nothing had yet supplied. Villagers and the player walk
+  through freely; the fence is a stock fence, not a wall.
+- **The rails are real tiles**, `farm_fence`, persisted as ordinary chunk
+  modifications like every other placeable. They weather and break like
+  anything else made of wood, because the sheet has the frames for it.
+
+**Art contract.** `assets/sprites/buildings/fence.png`, 1536×1024, magenta
+dividers with a printed label row across the top and a label gutter down
+the left — the same grid the house lifecycle sheets use
+(`VariantSheetGrid.art_bands`). Four orientation columns by three condition
+rows, in the sheet's own printed order:
+
+|            | North (Back) | South (Front) | East (Top View) | West (Top View) |
+|-----------:|:------------:|:-------------:|:---------------:|:---------------:|
+| Pristine (0) | 0,0 | 1,0 | 2,0 | 3,0 |
+| Worn (1)     | 0,1 | 1,1 | 2,1 | 3,1 |
+| Destroyed (2)| 0,2 | 1,2 | 2,2 | 3,2 |
+
+A rail picks its column from which side of the enclosure it stands on, so a
+run along the field's north edge is drawn back-on and a run down its east
+edge is drawn as a post-and-rail seen from above.
+
 ### What a field costs to keep
 
 A day is `ChunkEcologyCatchup.SECONDS_PER_DAY` = 3600 s in four

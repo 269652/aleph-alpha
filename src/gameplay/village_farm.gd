@@ -259,3 +259,85 @@ static func next_action(plots: Array) -> int:
 			worst = used
 			thirstiest = i
 	return thirstiest
+
+
+## The fence line around the beds a villager actually works (see
+## docs/concept/village_farms.md, "The fence around the beds"): every cell
+## TOUCHING a worked bed that is not itself a bed and not the farmhouse's
+## own footprint, nearest-of-(y, x) order so the same field fences the same
+## ring every time with nothing persisted.
+##
+## Asked for directly, with the field circled in a screenshot: "the
+## farmhouse should build a fence around the bed so no animals enter". A
+## farm without a fence is a field that feeds deer.
+##
+## Diagonal neighbours count. A ring of only the four orthogonal ones has
+## an open corner at every turn, which is not a fence -- it is four walls
+## that miss each other.
+##
+## Only the WORKED beds are fenced, never the whole reachable ring: you
+## fence what you sow, and the fallow part of a farmhouse's ring
+## (MAX_WORKED_CELLS leaves ten of fourteen tiles fallow -- see that
+## constant) is not the farm's yard.
+##
+## Pure geometry, exactly like field_cells and owner_of. Whether a rail can
+## really stand on a given cell -- water, paving, something already built
+## there -- is the caller's question, and the caller leaving the paving open
+## is what makes the gate.
+static func fence_cells(worked_cells: Array, origin: Vector2i, building_id: String) -> Array:
+	var footprint := BuildingCatalog.footprint_of(building_id)
+	if footprint == Vector2i.ZERO or worked_cells.is_empty():
+		return []
+	var beds: Dictionary = {}
+	for cell in worked_cells:
+		beds[cell] = true
+	var rails: Dictionary = {}
+	for cell in worked_cells:
+		var bed: Vector2i = cell
+		for dy in [-1, 0, 1]:
+			for dx in [-1, 0, 1]:
+				if dx == 0 and dy == 0:
+					continue
+				var rail := bed + Vector2i(dx, dy)
+				if beds.has(rail):
+					continue  # a rail between two beds fences nothing
+				if _ring_distance(rail, origin, footprint) == 0:
+					continue  # the farmhouse's own wall closes that side
+				rails[rail] = true
+	var ordered: Array = rails.keys()
+	ordered.sort_custom(func(a: Vector2i, b: Vector2i) -> bool:
+		return a.y < b.y if a.y != b.y else a.x < b.x
+	)
+	return ordered
+
+
+## Which side of the field this rail stands on -- "north", "south", "east"
+## or "west", or "" for a cell that touches no bed at all. The sheet has one
+## orientation column per answer (docs/concept/village_farms.md's art
+## contract), so a run along the field's north edge is drawn back-on and a
+## run down its east edge as posts seen from above.
+##
+## Measured from the bed the rail actually touches: a rail NORTH of a bed
+## closes that bed's north side. A corner touches beds on two sides at once,
+## and takes the vertical answer -- a corner post is drawn as part of the
+## run it caps, and the north/south art is the piece that reads as a fence
+## rather than a single post.
+static func fence_facing(cell: Vector2i, worked_cells: Array) -> String:
+	var beds: Dictionary = {}
+	for bed in worked_cells:
+		beds[bed] = true
+	if beds.has(cell + Vector2i(0, 1)):
+		return "north"
+	if beds.has(cell + Vector2i(0, -1)):
+		return "south"
+	if beds.has(cell + Vector2i(-1, 0)):
+		return "east"
+	if beds.has(cell + Vector2i(1, 0)):
+		return "west"
+	# Only a diagonal bed touches this cell: a corner post. Take the side
+	# the bed lies on vertically, for the same reason a corner does above.
+	for dy in [1, -1]:
+		for dx in [1, -1]:
+			if beds.has(cell + Vector2i(dx, dy)):
+				return "north" if dy > 0 else "south"
+	return ""
