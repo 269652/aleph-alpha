@@ -554,3 +554,64 @@ func test_a_rising_building_is_never_drawn_from_the_flat_variant_sheet():
 				entry["path"], BuildingCatalog.variant_sheet_of("house_small"),
 				"the flat variant sheet draws 25 FINISHED cottages and no scaffold"
 			)
+
+
+# -- every building holds its own goods -------------------------------------
+#
+# Asked for directly: "Farmhouses, Sawmills, Houses should have their own
+# small storage where e.g. a villager keeps his acquired goods; the farmhouse
+# stockpiles wheat until the storage is full". See
+# docs/concept/building_storage.md.
+
+
+func test_a_house_holds_a_households_own_goods():
+	for house_id in BuildingCatalog.BUILDING_IDS:
+		assert_gt(
+			BuildingCatalog.storage_capacity_of(house_id), 0,
+			"%s is a home with things in it, not a sleeping box" % house_id
+		)
+
+
+func test_every_production_building_holds_what_it_produces():
+	for building_id in BuildingCatalog.PRODUCTION_BUILDING_IDS:
+		assert_gt(
+			BuildingCatalog.storage_capacity_of(building_id), 0,
+			"%s produces goods that have to sit somewhere" % building_id
+		)
+
+
+## A workplace holds more than a home: a farmhouse has to keep working
+## between collections, a house only keeps what one household owns.
+func test_a_workplace_holds_more_than_a_home():
+	assert_gt(
+		BuildingCatalog.storage_capacity_of("farmhouse"),
+		BuildingCatalog.storage_capacity_of("house_small")
+	)
+
+
+## The warehouse is the village's granary -- that is the whole point of the
+## building, so it holds more than anything that feeds it.
+func test_the_warehouse_holds_more_than_anything_that_feeds_it():
+	var warehouse := BuildingCatalog.storage_capacity_of("warehouse")
+	for building_id in BuildingCatalog.PRODUCTION_BUILDING_IDS + BuildingCatalog.BUILDING_IDS:
+		assert_gt(
+			warehouse, BuildingCatalog.storage_capacity_of(building_id),
+			"a granary smaller than a %s would never be worth hauling to" % building_id
+		)
+
+
+## Somewhere goods are NOT kept: a hall is where a village decides things.
+func test_a_building_that_keeps_no_goods_says_so():
+	assert_eq(BuildingCatalog.storage_capacity_of("city_hall"), 0)
+	assert_eq(BuildingCatalog.storage_capacity_of("not_a_building"), 0)
+
+
+## Every building the catalog knows answers the question, so no caller ever
+## has to special-case an id.
+func test_every_building_in_the_catalog_answers_at_all():
+	var every: Array = (
+		BuildingCatalog.BUILDING_IDS + BuildingCatalog.CIVIC_BUILDING_IDS
+		+ BuildingCatalog.PRODUCTION_BUILDING_IDS
+	)
+	for building_id in every:
+		assert_gte(BuildingCatalog.storage_capacity_of(building_id), 0, building_id)
