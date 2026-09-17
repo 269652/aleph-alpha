@@ -105,6 +105,7 @@ const LeafLitterRenderer = preload("res://src/rendering/leaf_litter_renderer.gd"
 const FootstepGait = preload("res://src/gameplay/footstep_gait.gd")
 const FootprintField = preload("res://src/world/footprint_field.gd")
 const FootprintRenderer = preload("res://src/rendering/footprint_renderer.gd")
+const GroundImprint = preload("res://src/world/ground_imprint.gd")
 const CreatureMass = preload("res://src/world/creature_mass.gd")
 const SimulationSettings = preload("res://src/gameplay/simulation_settings.gd")
 
@@ -6991,7 +6992,23 @@ func record_footstep(
 	if surface.is_empty():
 		return result
 	var print_position := pixel_position + FootstepGait.print_offset(heading, side)
-	var chunk_coord := _chunk_coord_for_tile(_world_tile_for_pixel(print_position))
+	var print_tile := _world_tile_for_pixel(print_position)
+	# Whether the ground gives way at all is a real indentation-hardness
+	# question rather than a biome one -- see GroundImprint, which compares
+	# a real footfall's own pressure against the material's own published
+	# one. A laid cobbled street is granite setts, orders of magnitude past
+	# anything a foot can press with, so it keeps no mark at all (reported
+	# live: "walking over cobblestone streets should not leave
+	# footprints"). Asked at the tile the PRINT lands in, not the walker's
+	# own, because that is where the mark would physically be.
+	#
+	# Deliberately AFTER `result` is fully populated and returned intact:
+	# a step on a street really did happen, so FootstepSound still hears it
+	# (see this function's own doc comment on why the returned facts are
+	# wider than the visual print's own coverage). Only the MARK is absent.
+	if not GroundImprint.takes_a_print(modification_at_global(print_tile.x, print_tile.y), snow_lying):
+		return result
+	var chunk_coord := _chunk_coord_for_tile(print_tile)
 	var field: FootprintField = _footprint_fields.get(chunk_coord)
 	if field == null:
 		return result

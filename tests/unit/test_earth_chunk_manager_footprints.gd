@@ -429,3 +429,80 @@ func test_a_heavier_creature_leaves_a_larger_print_than_a_lighter_one():
 		field.prints()[0].size_scale, field.prints()[1].size_scale,
 		"the horse's own print should read larger than the mouse's"
 	)
+
+
+# -- a laid road takes no print: real indentation physics, not a tile-id ---
+# -- exemption (see GroundImprint, docs/concept/infrastructure.md's Road ---
+# -- tier) -- reported live: "walking over cobblestone streets should not --
+# -- leave footprints" -----------------------------------------------------
+
+## Paves every cell a whole stride's walk could possibly touch, so the
+## step being ON the street is unambiguous regardless of where in its own
+## tile `pixel` falls or how a stride's length divides into TILE_SIZE.
+func _pave_around(pixel: Vector2, step: Vector2) -> void:
+	for anchor in [pixel, pixel + step]:
+		var tile := manager._world_tile_for_pixel(anchor)
+		for dx in range(-1, 2):
+			for dy in range(-1, 2):
+				manager.build_at_global(tile.x + dx, tile.y + dy, TerrainRenderer.ROAD_TILE_ID)
+
+
+## The report itself. A road is LAID granite setts (docs/concept/
+## infrastructure.md's Road tier -- "a flat cobble surface"), whose
+## indentation hardness is orders of magnitude past the pressure any foot
+## can put on it, so no mark is left behind at all -- even though the
+## grassland/forest BIOME underneath still reads exactly as before.
+func test_walking_over_a_cobbled_street_leaves_no_print():
+	manager._load_chunk(_berlin_chunk)
+	var pixel := _real_footprint_pixel_or_nan()
+	if is_nan(pixel.x):
+		pass_test("precondition unmet (this chunk's real biome/season this run isn't grass/forest snow-free) -- nothing to check")
+		return
+	var step := Vector2.UP * (FootstepGait.STRIDE_LENGTH_PX + 1.0)
+	_pave_around(pixel, step)
+	manager.record_footstep(pixel, Vector2.UP)  # baseline
+	manager.record_footstep(pixel + step, Vector2.UP)
+	var field: FootprintField = manager._footprint_fields[_berlin_chunk]
+	assert_eq(field.count(), 0, "a cobbled street is too hard to take a footprint")
+
+
+## The control for the test above, walking the IDENTICAL stride on the
+## IDENTICAL ground with the paving as the only difference -- so the
+## assertion above can only be explained by the road itself, not by this
+## chunk's own biome, season, or stride arithmetic.
+func test_the_same_stride_on_unpaved_ground_still_leaves_its_print():
+	manager._load_chunk(_berlin_chunk)
+	var pixel := _real_footprint_pixel_or_nan()
+	if is_nan(pixel.x):
+		pass_test("precondition unmet (this chunk's real biome/season this run isn't grass/forest snow-free) -- nothing to check")
+		return
+	var step := Vector2.UP * (FootstepGait.STRIDE_LENGTH_PX + 1.0)
+	manager.record_footstep(pixel, Vector2.UP)  # baseline
+	manager.record_footstep(pixel + step, Vector2.UP)
+	var field: FootprintField = manager._footprint_fields[_berlin_chunk]
+	assert_eq(field.count(), 1, "the same stride on unpaved ground must still leave its print")
+
+
+## Snow lies ON TOP of a street like it lies on everything else (snow_
+## depth() is a single global scalar -- see footstep_surface_for's own
+## snow-first precedence), and snow is soft. What the foot actually
+## touches on a snowed-over street is the snow, not the setts, so the
+## print comes back.
+func test_snow_lying_on_a_cobbled_street_takes_a_print_again():
+	manager._load_chunk(_berlin_chunk)
+	var centre_tile: Vector2i = _berlin_chunk * EarthChunkManager.CHUNK_SIZE + Vector2i(
+		EarthChunkManager.CHUNK_SIZE / 2, EarthChunkManager.CHUNK_SIZE / 2
+	)
+	var biome := manager.biome_at_global(centre_tile.x, centre_tile.y)
+	if not ["grassland", "forest"].has(biome):
+		pass_test("precondition unmet (this chunk's real biome this run isn't grass/forest) -- nothing to check")
+		return
+	var pixel := _pixel_for(centre_tile)
+	var step := Vector2.UP * (FootstepGait.STRIDE_LENGTH_PX + 1.0)
+	_pave_around(pixel, step)
+	manager._snow_depth = 0.5
+	manager.record_footstep(pixel, Vector2.UP)  # baseline
+	manager.record_footstep(pixel + step, Vector2.UP)
+	var field: FootprintField = manager._footprint_fields[_berlin_chunk]
+	assert_eq(field.count(), 1, "snow lying on the setts is what the foot presses into")
+	assert_eq(field.prints()[0].surface, "snow")
