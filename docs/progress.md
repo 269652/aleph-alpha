@@ -23802,7 +23802,7 @@ per item.
 `MainMenu._ensure_create_screen_built` awaits `_build_diorama_
 incrementally()` after the screen itself is built, reporting into the SAME
 overlay the portrait pass already uses — so the whole first open is one
-continuous readout ("7 / 7 portraits", then "11 / 24 scene pieces: the
+continuous readout ("7 / 7 portraits", then "11 / 21 scene pieces: the
 pond") instead of a spinner followed by a silent multi-second freeze.
 `_diorama_build_pending` keeps `_refresh_appearance` out of the way until
 that first build lands so the scene is never built twice; a DNA reroll

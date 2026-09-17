@@ -546,7 +546,7 @@ func _ensure_create_screen_built() -> void:
 ## The creator's first diorama build, one step at a time, behind the SAME
 ## loading overlay _warm_class_icon_cache already reports into -- so the
 ## whole first-open cost reads as one continuous progress readout ("7 / 7
-## portraits", then "11 / 24 scene pieces: the pond") instead of a spinner
+## portraits", then "11 / 21 scene pieces: the pond") instead of a spinner
 ## followed by a silent multi-second freeze.
 ##
 ## Measured at ~4s cold, essentially all of it first-use sprite-sheet

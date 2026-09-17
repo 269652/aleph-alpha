@@ -325,7 +325,7 @@ does repeatedly, went from a quarter-second stutter to a single frame.
 after the class-icon warm pass it already awaits, behind the SAME
 `LoadingOverlay` that pass already shows — so the creator's whole first-open
 cost is now one continuous, honest progress readout ("7 / 7 portraits", then
-"11 / 24 scene pieces") rather than two silent freezes back to back.
+"11 / 21 scene pieces") rather than two silent freezes back to back.
 `_refresh_appearance` skips its own synchronous `build()` while that first
 build is still pending (`_diorama_build_pending`), so the scene is never
 built twice; every LATER rebuild — a DNA reroll — stays synchronous on
