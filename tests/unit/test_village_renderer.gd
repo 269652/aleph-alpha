@@ -1343,3 +1343,70 @@ func test_dry_ground_still_founds_its_village_exactly_as_before():
 
 	assert_false(spawned.is_empty())
 	assert_gt(_house_calls(world).size(), 0, "the precondition this whole rule turns on")
+
+
+# -- props stand where a villager can walk up to them (reported in play:
+# "all procedural stands, wells, beds etc ... are also badly placed") ------
+#
+# _grounded_position finds the nearest cell that is real, dry and carries
+# nothing built -- and stops there. Open grass five tiles behind a house
+# satisfies all of that, so a farmer's field or a merchant's own stand
+# could be pushed off the street and left sitting in a meadow with no path
+# to it, which is what the screenshot shows.
+#
+# A prop is somewhere a villager's schedule sends them, so the ground it
+# stands on has to touch the village's own paving.
+
+
+func _road_cells_of(world: StubWorld) -> Dictionary:
+	var roads := {}
+	for cell in world.road_cells:
+		if TerrainRenderer.is_road_tile(world.road_cells[cell]):
+			roads[cell] = true
+	return roads
+
+
+func _prop_cells(spawned: Array, personal_only: bool) -> Array:
+	var cells: Array = []
+	for node in spawned:
+		if not node.has_meta("landmark_id"):
+			continue
+		if personal_only and not node.get_meta("personal", false):
+			continue
+		cells.append(Vector2i(floori(node.position.x / TILE_SIZE), floori(node.position.y / TILE_SIZE)))
+	return cells
+
+
+func _touches_a_road(cell: Vector2i, roads: Dictionary) -> bool:
+	for step in [Vector2i.ZERO, Vector2i(1, 0), Vector2i(-1, 0), Vector2i(0, 1), Vector2i(0, -1)]:
+		if roads.has(cell + step):
+			return true
+	return false
+
+
+func test_every_personal_workspot_prop_stands_next_to_the_villages_paving():
+	var coord := _find_settlement_chunk("grassland")
+	var world := StubWorld.new()
+
+	var spawned := renderer.spawn_village(parent, coord, coord * CHUNK_SIZE, CHUNK_SIZE, TILE_SIZE, "grassland", world)
+
+	var roads := _road_cells_of(world)
+	assert_gt(roads.size(), 0, "precondition: this village really paved something")
+	var props := _prop_cells(spawned, true)
+	assert_gt(props.size(), 0, "precondition: this village really has personal props")
+	for cell in props:
+		assert_true(
+			_touches_a_road(cell, roads),
+			"a prop a villager walks to must touch the paving, not sit in a meadow behind the houses"
+		)
+
+
+func test_every_shared_landmark_stands_on_or_beside_the_paving_too():
+	var coord := _find_settlement_chunk("grassland")
+	var world := StubWorld.new()
+
+	var spawned := renderer.spawn_village(parent, coord, coord * CHUNK_SIZE, CHUNK_SIZE, TILE_SIZE, "grassland", world)
+
+	var roads := _road_cells_of(world)
+	for cell in _prop_cells(spawned, false):
+		assert_true(_touches_a_road(cell, roads), "the well, the stall and the gate belong to the square")

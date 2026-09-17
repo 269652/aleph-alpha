@@ -608,15 +608,53 @@ func _grounded_position(nominal: Vector2, tile_size: int, world, allow_road: boo
 	if world == null or not world.has_method("modification_at_global"):
 		return nominal
 	var centre := Vector2i(floori(nominal.x / tile_size), floori(nominal.y / tile_size))
+	# A prop is somewhere a villager's own schedule sends them, so the
+	# ground it stands on has to touch the village's paving. Reported in
+	# play: "all procedural stands, wells, beds etc ... are also badly
+	# placed" -- open grass five tiles behind a house is real, dry and
+	# carries nothing built, so the search below used to stop there and
+	# leave a farmer's field or a merchant's own stand sitting in a meadow
+	# with no path to it.
+	var beside_the_street: Variant = _nearest_prop_cell(centre, tile_size, world, allow_road, true)
+	if beside_the_street != null:
+		return beside_the_street
+	# Nothing within reach touches a street -- keep the prop on real ground
+	# rather than losing it, the same fail-open shape the rest of this file
+	# uses. A village with no paving at all (an isolated rendering test)
+	# lands here every time.
+	return _nearest_prop_cell(centre, tile_size, world, allow_road, false)
+
+
+## The nearest cell to `centre` that a prop may stand on, searched outward
+## ring by ring; null when nothing within _PROP_SEARCH_RADIUS_TILES works.
+## `require_street_access` additionally demands the cell touch a road.
+func _nearest_prop_cell(
+	centre: Vector2i, tile_size: int, world, allow_road: bool, require_street_access: bool
+):
 	for radius in range(0, _PROP_SEARCH_RADIUS_TILES + 1):
 		for dy in range(-radius, radius + 1):
 			for dx in range(-radius, radius + 1):
 				if maxi(absi(dx), absi(dy)) != radius:
 					continue  # only this ring; inner ones were already tried
 				var cell := centre + Vector2i(dx, dy)
-				if _prop_cell_is_clear(cell, world, allow_road):
-					return Vector2((cell.x + 0.5) * tile_size, (cell.y + 0.5) * tile_size)
+				if not _prop_cell_is_clear(cell, world, allow_road):
+					continue
+				if require_street_access and not _touches_road(cell, world):
+					continue
+				return Vector2((cell.x + 0.5) * tile_size, (cell.y + 0.5) * tile_size)
 	return null
+
+
+## Whether this cell is on the paving or directly beside it -- close enough
+## that a villager walking the street can step onto the prop. Four-connected
+## like everything else that walks here; a diagonal touch is a corner, not a
+## way through.
+func _touches_road(cell: Vector2i, world) -> bool:
+	for step in [Vector2i.ZERO, Vector2i(1, 0), Vector2i(-1, 0), Vector2i(0, 1), Vector2i(0, -1)]:
+		var neighbour: Vector2i = cell + step
+		if TerrainRenderer.is_road_tile(world.modification_at_global(neighbour.x, neighbour.y)):
+			return true
+	return false
 
 
 ## Real buildable ground (no water, no forest -- the SAME is_buildable_
