@@ -103,3 +103,27 @@ func test_step_footprints_is_called_alongside_step_leaf_litter():
 	var body := _function_body("_step_ecology_batch")
 	assert_true(body.contains("step_leaf_litter"), "the premise: this is still where leaf litter batches")
 	assert_true(body.contains("step_footprints"))
+
+
+## The step facts already tell the sound what BIOME the walker is on; they
+## must now also tell it what the cell is actually MADE OF, so a laid
+## street stops sounding like the grass beside it (see GroundImprint,
+## docs/concept/creature_and_footstep_audio.md's "A laid surface sounds
+## like what it is laid with"). Fed from record_footstep's own returned
+## facts like every other input here -- never re-derived in World, and
+## never by World asking EarthChunkManager for an audio surface (that
+## dependency runs the other way).
+func test_the_footstep_sound_is_told_what_the_ground_is_made_of():
+	var body := _function_body("_client_process")
+	var call_index := body.find("FootstepSound.surface_for(")
+	assert_gt(call_index, -1, "the premise: World must still classify the footstep surface itself")
+	var call_end := body.find("\n", call_index)
+	var call_text := body.substr(call_index, call_end - call_index)
+	assert_true(
+		call_text.contains("ground_material"),
+		"must pass the real ground material alongside biome/snow/underwater: %s" % call_text
+	)
+	assert_true(
+		call_text.contains("footstep"),
+		"and it must come from record_footstep's own returned facts, not a second lookup"
+	)

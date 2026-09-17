@@ -33,17 +33,58 @@ const _SURFACE_BY_BIOME := {
 	"mountain": "rock",
 }
 
-## `biome`/`snow_lying`/`underwater` are the exact same live inputs
-## `EarthChunkManager.record_footstep` already computes every step for the
-## visual footprint -- pass them straight through, never re-derive. Priority
-## mirrors `footstep_surface_for`'s own exactly (snow checked first, then
-## underwater, then the plain biome surface) so the two stay intuitively
-## consistent even though their surface SETS differ.
-static func surface_for(biome: String, snow_lying: bool, underwater: bool) -> String:
+## What a cell is actually MADE OF, when that is something LAID rather
+## than the biome's own ground -- the same materials `GroundImprint.
+## material_underfoot` already resolves for the VISUAL footprint gate (see
+## docs/concept/snow_cover.md's "Ground that is too hard to take a
+## print"), read here for the other half of the same question. Reported
+## live: "walking over cobblestone streets should not leave footprints",
+## whose sibling gap was that the same street still SOUNDED like the grass
+## beside it, because this file only ever asked the biome -- and a road
+## never changes the biome under it (see `docs/concept/infrastructure.md`'s
+## Road tier), exactly like a river never does.
+##
+## "soil" is deliberately ABSENT rather than mapped: untouched ground is
+## the absence of anything laid on top of it, so it falls through to the
+## biome exactly as before -- grassland still sounds like grass, desert
+## still like sand. "snow" is absent for the same reason snow is handled
+## first below.
+##
+## `wood` and `timber` share one "wood" surface: both are a built wooden
+## floor underfoot, and the difference between sawn and hewn timber is a
+## distinction this file has no recording to express. No distinct wooden-
+## floor recording has been sourced either, so "wood" falls back to the
+## generic step clip (see `_CLIP_BY_SURFACE`) -- still a better answer
+## than the grass clip a wooden floor used to inherit from the ground
+## outside it, and a real recording is a welcome upgrade whenever one
+## turns up, not a gap in this mapping.
+const _SURFACE_BY_GROUND_MATERIAL := {
+	"stone": "rock",
+	"timber": "wood",
+	"wood": "wood",
+}
+
+## `biome`/`snow_lying`/`underwater`/`ground_material` are the exact same
+## live facts `EarthChunkManager.record_footstep` already computes every
+## step for the visual footprint -- pass them straight through, never
+## re-derive. Priority mirrors `footstep_surface_for`'s own exactly (snow
+## checked first, then underwater) so the two stay intuitively consistent
+## even though their surface SETS differ; the laid material sits between
+## those overrides and the plain biome, because snow and standing water
+## lie ON TOP of a street while the street lies on top of the ground.
+##
+## `ground_material` defaults to "" -- no laid material known -- so every
+## pre-existing 3-arg call site resolves to exactly its previous answer.
+static func surface_for(
+	biome: String, snow_lying: bool, underwater: bool, ground_material: String = ""
+) -> String:
 	if snow_lying:
 		return "snow"
 	if underwater:
 		return "underwater"
+	var laid := String(_SURFACE_BY_GROUND_MATERIAL.get(ground_material, ""))
+	if not laid.is_empty():
+		return laid
 	return String(_SURFACE_BY_BIOME.get(biome, "default"))
 
 

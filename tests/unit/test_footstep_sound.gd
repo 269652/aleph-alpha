@@ -50,8 +50,51 @@ func test_underwater_wins_over_the_biome_surface_but_not_over_snow():
 	)
 
 
+# -- what the cell is actually MADE OF, when that is not the biome's own ---
+# -- ground (see GroundImprint.material_underfoot, the same answer the -----
+# -- VISUAL footprint gate already reads) -- reported live: "walking over --
+# -- cobblestone streets should not leave footprints", whose sibling gap ---
+# -- was that the same street still SOUNDED like the grass beside it -------
+
+func test_a_paved_cell_sounds_like_rock_not_like_the_biome_under_it():
+	assert_eq(FootstepSound.surface_for("grassland", false, false, "stone"), "rock")
+	assert_eq(FootstepSound.surface_for("forest", false, false, "stone"), "rock")
+
+
+## A built floor is not the ground outside it either -- the same one rule,
+## reaching the same materials the print gate already reaches.
+func test_a_built_wooden_floor_stops_sounding_like_the_ground_outside_it():
+	assert_eq(FootstepSound.surface_for("grassland", false, false, "timber"), "wood")
+	assert_eq(FootstepSound.surface_for("grassland", false, false, "wood"), "wood")
+
+
+## Ordinary ground is still the BIOME's job: "soil" is not a surface of its
+## own here, it is the absence of anything laid on top, so grassland still
+## sounds like grass and desert still sounds like sand.
+func test_plain_soil_still_takes_its_sound_from_the_biome():
+	assert_eq(FootstepSound.surface_for("grassland", false, false, "soil"), "grass")
+	assert_eq(FootstepSound.surface_for("desert", false, false, "soil"), "sand")
+	assert_eq(FootstepSound.surface_for("forest", false, false, "soil"), "forest")
+
+
+## Snow and standing water lie ON TOP of a street, so they keep the
+## priority they already had -- the same order EarthChunkManager.
+## footstep_surface_for and GroundImprint.material_underfoot both use.
+func test_snow_and_water_still_win_over_whatever_is_paved_underneath():
+	assert_eq(FootstepSound.surface_for("grassland", true, false, "stone"), "snow")
+	assert_eq(FootstepSound.surface_for("grassland", false, true, "stone"), "underwater")
+
+
+## Every pre-existing 3-arg call site across the whole project must keep
+## resolving to exactly today's answer.
+func test_the_material_argument_defaults_to_leaving_every_caller_unchanged():
+	assert_eq(FootstepSound.surface_for("grassland", false, false), "grass")
+	assert_eq(FootstepSound.surface_for("tundra", false, false), "rock")
+	assert_eq(FootstepSound.surface_for("grassland", false, false, ""), "grass")
+
+
 func test_every_surface_key_resolves_to_a_real_non_empty_clip_path():
-	for surface in ["grass", "forest", "snow", "underwater", "sand", "rock", "default"]:
+	for surface in ["grass", "forest", "snow", "underwater", "sand", "rock", "wood", "default"]:
 		var path: String = FootstepSound.clip_path_for(surface)
 		assert_true(path.begins_with("res://"), "%s should map to a real resource path" % surface)
 

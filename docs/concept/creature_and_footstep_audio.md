@@ -92,13 +92,15 @@ a call) rather than a continuous looping mix.
 `src/audio/footstep_sound.gd` (pure, no Node dependency) owns the surface
 classification and clip lookup:
 
-- `surface_for(biome, snow_lying, underwater) -> String` -- reuses the
-  SAME real inputs `EarthChunkManager.footstep_surface_for` already
-  computes for the visual footprint, but with WIDER coverage: every biome
-  maps to something (falling back to `"default"`), not just the 4 the
-  footprint sprite has art for. Priority mirrors that function's own
-  (snow, then underwater, then biome) for intuitive consistency even
-  though the two functions' surface SETS differ on purpose.
+- `surface_for(biome, snow_lying, underwater, ground_material) -> String`
+  -- reuses the SAME real inputs `EarthChunkManager.footstep_surface_for`
+  already computes for the visual footprint, but with WIDER coverage:
+  every biome maps to something (falling back to `"default"`), not just
+  the 4 the footprint sprite has art for. Priority mirrors that
+  function's own (snow, then underwater, then the laid material, then
+  biome) for intuitive consistency even though the two functions' surface
+  SETS differ on purpose. `ground_material` was added 2026-09-17 -- see
+  "A laid surface sounds like what it is laid with" below.
 - `clip_path_for(surface) -> String` -- `"snow"`, `"forest"`, `"grass"`,
   and `"underwater"` get their own real recordings; everything else
   (sand/rock, or an unrecognized surface) falls back to one shared,
@@ -114,10 +116,11 @@ classification and clip lookup:
   it) -- one real asset, two real reasons to be heard.
 
 `EarthChunkManager.record_footstep` returns `{"side", "biome",
-"snow_lying", "underwater"}` (empty `Dictionary` when no real step landed
-this call) instead of `void` -- the raw facts behind a step, computed even
-when the biome has no VISUAL footprint art, so audio's wider coverage
-isn't silently capped by the footprint sprite's narrower one.
+"snow_lying", "underwater", "ground_material"}` (empty `Dictionary` when
+no real step landed this call) instead of `void` -- the raw facts behind
+a step, computed even when the biome has no VISUAL footprint art, so
+audio's wider coverage isn't silently capped by the footprint sprite's
+narrower one.
 `World._client_process` feeds those facts through `FootstepSound.
 surface_for` and triggers `InteractionSfxPlayer.play_footstep`.
 
@@ -150,6 +153,59 @@ footstep_sound.gd` (now 15/15); `test_interaction_sfx_player.gd` gained
 that deliberately cycle the FULL voice pool with grass first so the next
 call is guaranteed to land on a voice actually left at `-12dB`, proving
 neither a later footstep nor a mushroom crush inherits it by accident.
+
+### A laid surface sounds like what it is laid with (2026-09-17)
+
+Reported live: *"walking over cobblestone streets should not leave
+footprints."* The visual half of that is
+[snow_cover.md's "Ground that is too hard to take a
+print"](snow_cover.md#ground-that-is-too-hard-to-take-a-print-2026-09-17);
+this is its sibling gap, named there and closed here. The print gate
+knew a street was stone, but this file only ever asked the **biome** —
+and a road never changes the biome under it, exactly as a river doesn't
+(see [infrastructure.md](infrastructure.md)'s Road tier) — so walking a
+cobbled street played `grass.ogg`.
+
+**One ground per step, read by both consumers.** `record_footstep` now
+resolves `GroundImprint.material_underfoot(modification, snow_lying)`
+**once** and uses it twice: the print gate asks whether that material
+can be indented at all, and the returned facts carry it out to
+`FootstepSound.surface_for`. Resolving it once is the point, not an
+optimisation — two separate lookups would let the print and the sound
+disagree about what was underfoot.
+
+**`_SURFACE_BY_GROUND_MATERIAL`**: `stone` → `"rock"`, `wood`/`timber` →
+`"wood"`. Three deliberate absences:
+
+- **`"soil"` is not mapped**, so untouched ground still falls through to
+  the biome — grassland still sounds like grass, desert still like sand.
+  Soil is the *absence* of anything laid on top, not a surface of its
+  own.
+- **`"snow"` is not mapped** because snow is already checked first, for
+  the same real reason it wins in `material_underfoot`: it lies on top
+  of a street, while a street lies on top of the ground. Standing water
+  keeps its place above the laid material too.
+- **`wood` and `timber` share one surface.** The difference between sawn
+  and hewn timber underfoot is a distinction this file has no recording
+  to express.
+
+**What this does and does not buy, honestly.** No distinct stone or
+wooden-floor recording has been sourced — Wikimedia Commons' Foley
+coverage is thin generally (see `_CLIP_BY_SURFACE`'s own note, and the
+same gap already standing for sand and rock) — so `"rock"` and `"wood"`
+both resolve to the generic `default.ogg`. **The win is that a street
+stops sounding like grass, not that it sounds like cobbles.** A real
+recording for either is a welcome upgrade whenever one turns up, not a
+gap in this mapping.
+
+TDD: 6 new tests in `test_footstep_sound.gd` (the paved cell, a built
+wooden floor, plain soil still deferring to the biome, snow and water
+still winning, and the 3-arg default leaving every pre-existing caller
+identical); 3 in `test_earth_chunk_manager_footprints.gd` for the new
+fact, including one proving it is reported even where no print is drawn
+at all; 1 source-contract test in `test_world_footstep_wiring.gd` that
+the material reaches `surface_for` from `record_footstep`'s own facts
+rather than a second lookup.
 
 ### Mushroom crush
 
@@ -443,11 +499,23 @@ independent recording described above.
   Commons-only pattern" for the full trail, including a caught-before-use
   mismatch (a differently-named CC0 pack titled itself "grass" but its
   real archive held none).
-- ⬜ **No dedicated sand/rock footstep recording** -- a real search
-  effort did not turn up usable, correctly-licensed isolated candidates;
-  they share the default clip for now (see
-  `assets/audio/footsteps/CREDITS.md`). A real upgrade if sourced later,
-  not a gap in the mixing logic itself.
+- ✅ **A laid surface sounds like what it is laid with** (2026-09-17) --
+  see "A laid surface sounds like what it is laid with" above. Walking a
+  cobbled street played `grass.ogg`, because this file only ever asked
+  the BIOME and a road never changes the biome under it. The step facts
+  now carry a `ground_material`, resolved ONCE per step by
+  `GroundImprint.material_underfoot` and read by both the visual print
+  gate and `surface_for`, so the two cannot disagree about what is
+  underfoot. `stone` -> `"rock"`, `wood`/`timber` -> `"wood"`; `"soil"`
+  deliberately unmapped, so ordinary ground still takes its sound from
+  the biome.
+- ⬜ **No dedicated sand/rock/wooden-floor footstep recording** -- a real
+  search effort did not turn up usable, correctly-licensed isolated
+  candidates; they share the default clip for now (see
+  `assets/audio/footsteps/CREDITS.md`). This is what caps the pass above:
+  a street now stops sounding like grass, but it does not yet sound like
+  cobbles. A real upgrade if sourced later, not a gap in the mixing logic
+  itself.
 - ✅ **Revised (2026-09-09): `underwater` now has a real, distinct water
   clip.** Reported live: "river wading should be used for 'underwater
   walks'." Reuses `river.ogg` (the ambient river-proximity layer's own
