@@ -55,9 +55,18 @@ func _initialize() -> void:
 			for npc in settlement.npcs:
 				occupations[npc.occupation] = int(occupations.get(npc.occupation, 0)) + 1
 			var wants_farm := int(occupations.get("farmer", 0)) + int(occupations.get("herbalist", 0))
-			print("VILLAGE %s farmhouses=%d wanted_by=%d fishers=%d buildings=%s occupations=%s" % [
+			# Ponds are chunk MODIFICATIONS (pond_water) and fence rails, not
+			# buildings, so buildings_in_chunk cannot see one. Counting the
+			# cells directly is the only reading that means anything.
+			var pond_cells := 0
+			var chunk = manager._loaded_chunks.get(coord)
+			if chunk != null:
+				for local in chunk.modifications:
+					if chunk.modifications[local] == "pond_water":
+						pond_cells += 1
+			print("VILLAGE %s farmhouses=%d wanted_by=%d fishers=%d pond_cells=%d buildings=%s occupations=%s" % [
 				str(coord), int(counts.get("farmhouse", 0)), wants_farm,
-				int(occupations.get("fisher", 0)), str(counts), str(occupations)
+				int(occupations.get("fisher", 0)), pond_cells, str(counts), str(occupations)
 			])
 			manager._unload_chunk(coord)
 			found += 1
