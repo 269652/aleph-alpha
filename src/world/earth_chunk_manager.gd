@@ -140,6 +140,7 @@ const FlyerPersonality = preload("res://src/gameplay/flyer_personality.gd")
 const PiscivoreBirdRenderer = preload("res://src/rendering/piscivore_bird_renderer.gd")
 const VillageRenderer = preload("res://src/rendering/village_renderer.gd")
 const VillageFarm = preload("res://src/gameplay/village_farm.gd")
+const VillagePond = preload("res://src/gameplay/village_pond.gd")
 const NpcMarker = preload("res://src/rendering/npc_marker.gd")
 const EcosystemSimulation = preload("res://src/world/ecosystem_simulation.gd")
 const ChunkSerializer = preload("res://src/world/chunk_serializer.gd")
@@ -12108,7 +12109,17 @@ func gradient_at_global(global_x: int, global_y: int) -> Vector2:
 ## above; unlike biome_at_global below, needs no loaded-chunk cache since a
 ## river is never stored per-chunk (see _paint_water_overlay).
 func is_river_at_global(global_x: int, global_y: int) -> bool:
+	if is_pond_at_global(global_x, global_y):
+		return true
 	return generator.is_river_at_global(global_x, global_y)
+
+
+## Whether a village's own dug pond stands on this tile (docs/concept/
+## village_ponds.md, VillagePond). An ordinary chunk modification, like a
+## rail -- the id is the only thing stored about it, which is what lets a
+## pond survive a reload with no record of the fisher who dug it.
+func is_pond_at_global(global_x: int, global_y: int) -> bool:
+	return VillagePond.is_pond_tile(modification_at_global(global_x, global_y))
 
 
 ## A tile under a baked lake's surface (docs/concept/hydrology.md) -- an
@@ -13123,6 +13134,8 @@ func is_buildable_terrain_at(global_x: int, global_y: int) -> bool:
 func is_buildable_ground_at(global_x: int, global_y: int) -> bool:
 	if biome_at_global(global_x, global_y) == "forest":
 		return false
+	if is_pond_at_global(global_x, global_y):
+		return false  # the fisher's own water is not somewhere to put a house
 	if is_water_at_global(global_x, global_y):
 		return false
 	return true
@@ -13141,6 +13154,14 @@ func is_buildable_ground_at(global_x: int, global_y: int) -> bool:
 ## (test_earth_chunk_manager_buildable_terrain.gd pins it cell by cell
 ## against the overlay's own decision over the real Berlin radius).
 func is_water_at_global(global_x: int, global_y: int) -> bool:
+	# A dug pond is water the moment it is dug, and is the ONLY water the
+	# generator knows nothing about -- everything below asks the generated
+	# world (docs/concept/village_ponds.md, "Built water"). Answering it
+	# here is what gives a pond the whole stack for free: creatures refuse
+	# it, the surface paints it, and is_river_at_global above carries its
+	# flow to anything that floats.
+	if is_pond_at_global(global_x, global_y):
+		return true
 	if biome_at_global(global_x, global_y) == "ocean":
 		return true
 	if is_river_at_global(global_x, global_y):

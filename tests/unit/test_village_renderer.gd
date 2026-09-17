@@ -15,6 +15,7 @@ const NpcIdentity = preload("res://src/world/npc_identity.gd")
 const TerrainRenderer = preload("res://src/rendering/terrain_renderer.gd")
 const VillageLayout = preload("res://src/world/village_layout.gd")
 const VillageFarm = preload("res://src/gameplay/village_farm.gd")
+const VillagePond = preload("res://src/gameplay/village_pond.gd")
 const ProceduralLandmarkSprite = preload("res://src/rendering/procedural_landmark_sprite.gd")
 
 const TILE_SIZE := 16
@@ -2222,3 +2223,61 @@ func test_every_farmer_is_told_which_farmhouse_the_field_belongs_to():
 			"a farmer works a field for %s, which is no farmhouse" % str(npc.farmhouse_cell)
 		)
 	assert_gt(checked, 0, "precondition: somebody was handed a real field")
+
+
+## A fisher digs their own water where a farmer sows their own beds -- see
+## docs/concept/village_ponds.md. Asked for directly: "The Fisher should
+## build a similar 3x2 enclosure but filled with water".
+func test_a_fisher_gets_a_real_fenced_pond_beside_their_own_house():
+	var coord := _find_settlement_chunk_with_occupation("grassland", "fisher", 3)
+	var world := StubWorld.new()
+	renderer.spawn_village(
+		parent, coord, coord * CHUNK_SIZE, CHUNK_SIZE, TILE_SIZE, "grassland", world
+	)
+	var built := _built_tiles(world, coord)
+	var water: Array = []
+	for cell in built:
+		if VillagePond.is_pond_tile(built[cell]):
+			water.append(cell)
+	assert_gt(water.size(), 0, "the village's fisher has nowhere to fish")
+
+	var min_cell: Vector2i = water[0]
+	var max_cell: Vector2i = water[0]
+	for cell in water:
+		min_cell = Vector2i(mini(min_cell.x, (cell as Vector2i).x), mini(min_cell.y, (cell as Vector2i).y))
+		max_cell = Vector2i(maxi(max_cell.x, (cell as Vector2i).x), maxi(max_cell.y, (cell as Vector2i).y))
+	var size := max_cell - min_cell + Vector2i.ONE
+	assert_true(VillageFarm.FIELD_SHAPES.has(size), "a pond spans %s, not a shape that was asked for" % str(size))
+	assert_eq(water.size(), size.x * size.y, "the pond has a hole in it")
+
+
+## And it is FENCED, like the field it is modelled on -- the ask says "a
+## similar 3x2 enclosure", and an enclosure is the frame.
+func test_a_fishers_pond_is_fenced_like_a_field():
+	var coord := _find_settlement_chunk_with_occupation("grassland", "fisher", 3)
+	var world := StubWorld.new()
+	renderer.spawn_village(
+		parent, coord, coord * CHUNK_SIZE, CHUNK_SIZE, TILE_SIZE, "grassland", world
+	)
+	var built := _built_tiles(world, coord)
+	var water: Array = []
+	for cell in built:
+		if VillagePond.is_pond_tile(built[cell]):
+			water.append(cell)
+	assert_gt(water.size(), 0, "precondition: a pond was really dug")
+	var rails := 0
+	for cell in VillageFarm.fence_cells(water, Vector2i.ZERO, VillageFarm.FARM_BUILDING_ID):
+		if VillageFarm.is_fence_tile(built.get(cell, "")):
+			rails += 1
+	assert_gt(rails, 0, "a pond with no frame at all is not an enclosure")
+
+
+## Nothing is dug twice: a reload re-derives the same pond and builds
+## nothing on top of it.
+func test_digging_a_pond_twice_leaves_it_exactly_as_it_was():
+	var coord := _find_settlement_chunk_with_occupation("grassland", "fisher", 3)
+	var world := StubWorld.new()
+	renderer.spawn_village(parent, coord, coord * CHUNK_SIZE, CHUNK_SIZE, TILE_SIZE, "grassland", world)
+	var first := _built_tiles(world, coord).duplicate(true)
+	renderer.spawn_village(parent, coord, coord * CHUNK_SIZE, CHUNK_SIZE, TILE_SIZE, "grassland", world)
+	assert_eq(_built_tiles(world, coord), first, "a reload changed the village")
