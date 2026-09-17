@@ -280,3 +280,21 @@ func test_cast_distance_matches_the_players_own_rod():
 	# doc comment already says what this number is for: "generous enough to
 	# cover a pond fish a few tiles out while standing at the shore".
 	assert_eq(NpcMarker.CAST_DISTANCE_PX, Player.FISH_CATCH_RADIUS)
+
+
+## A hunter runs down real quarry (docs/concept/npc.md, "A hunter runs, and
+## the run is paid for in stamina") -- a fisher does not, and that is a
+## deliberate scope line rather than an accident of which file the code went
+## in. Nobody sprints at a trout: a fish does not bolt across a meadow, and a
+## rod already reaches CAST_DISTANCE_PX without closing the gap at all. The
+## rule asks for a CREATURE quarry precisely so this stays true.
+func test_a_fisher_walks_to_the_water_and_never_sprints_at_a_fish():
+	_fish_at(POND)
+	_run(ForagerBehavior.REHUNT_SECONDS + 0.2)
+	var before := marker.position
+	marker._process(0.1)
+	assert_almost_eq(
+		before.distance_to(marker.position), NpcMarker.WALK_SPEED * 0.1, 0.001,
+		"a fisher walks to the bank"
+	)
+	assert_eq(marker.condition.stamina, 1.0, "and spends no wind getting there")

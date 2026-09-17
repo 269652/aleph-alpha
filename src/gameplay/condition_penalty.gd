@@ -34,3 +34,30 @@ const WORST_SPEED_MULTIPLIER := 0.75
 ## player is slow, never immobilised.
 static func speed_multiplier(fitness: float) -> float:
 	return lerpf(WORST_SPEED_MULTIPLIER, 1.0, clampf(fitness, 0.0, 1.0))
+
+
+## The multiplier on how fast stamina comes back at rock-bottom condition:
+## recovery takes FOUR TIMES as long. Deliberately harsher than
+## WORST_SPEED_MULTIPLIER above, and that asymmetry is the point -- speed is
+## the one penalty that can leave somebody unable to get away from anything,
+## so it is kept mild, while a slow refill only ever means resting longer.
+## Never zero, for the same "debuffs, not death" reason: a starving hunter
+## gets their wind back eventually, they just lose the deer first.
+const WORST_STAMINA_REGEN_MULTIPLIER := 0.25
+
+
+## Stamina-recovery multiplier for `fitness` in [0,1]: 1.0 at full
+## condition, falling linearly to WORST_STAMINA_REGEN_MULTIPLIER at zero --
+## the same shape, and the same single accumulated number, as the movement
+## curve above, so neglect compounds by construction rather than through an
+## invented stacking matrix.
+##
+## This is survival.md's own "debuffs, not death" pillar effect that sat
+## unbuilt because nothing spent stamina: with a villager hunter who runs
+## (docs/concept/npc.md, "A hunter runs, and the run is paid for in
+## stamina") there is finally a real sink to make it visible. The PLAYER's
+## own sprint still spends nothing, so this does not change anything for
+## them yet -- wiring that is survival.md's own open item, not a free ride
+## on this one.
+static func stamina_regen_multiplier(fitness: float) -> float:
+	return lerpf(WORST_STAMINA_REGEN_MULTIPLIER, 1.0, clampf(fitness, 0.0, 1.0))
