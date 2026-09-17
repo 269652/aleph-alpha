@@ -511,3 +511,70 @@ func test_a_hungry_villager_answers_hunger_before_anything_else():
 	var wirings := Ethogram.wirings_for("villager")
 	assert_gt(wirings.size(), 0, "precondition: a villager has wirings at all")
 	assert_eq(wirings[0]["gate"], Ethogram.DRIVE_HUNGER)
+
+
+# -- hauling: a load is answered by a store ---------------------------------
+#
+# docs/concept/village_warehouse.md mechanism 3, "goods are carried in": a
+# villager with a full load walks it to the warehouse door, so a village's
+# stock arrives somewhere instead of appearing as a number. A wiring on the
+# same table every other villager behaviour already runs on, not a second
+# movement system beside it.
+
+
+func test_a_villager_senses_the_store_they_carry_to():
+	assert_true(
+		Ethogram.CHANNELS.has(Ethogram.WAREHOUSE),
+		"the store must be part of the one basis, or nothing can express it"
+	)
+
+
+func test_the_store_really_draws_a_loaded_villager():
+	var receptors := Ethogram.express("", {}, "villager")
+	assert_gt(float(receptors["sensitivity"].get(Ethogram.WAREHOUSE, 0.0)), 0.0)
+	assert_gt(
+		float(receptors["valence"].get(Ethogram.WAREHOUSE, 0.0)), 0.0,
+		"a store a villager is pushed away from is a store nothing is ever carried to"
+	)
+
+
+func test_a_full_pair_of_hands_is_what_sends_a_villager_to_the_store():
+	var hauling := {}
+	for wiring in Ethogram.wirings_for("villager"):
+		if wiring.get("gate", "") == Ethogram.DRIVE_BURDEN:
+			hauling = wiring
+	assert_false(hauling.is_empty(), "no villager wiring answers a load")
+	assert_true(
+		(hauling["channels"] as Array).has(Ethogram.WAREHOUSE),
+		"a load is answered by the store, not by somewhere else"
+	)
+
+
+## Below every survival need and above company: a villager does not starve
+## holding a sack, and does not stop for a chat with one.
+func test_hauling_ranks_under_every_survival_need_and_over_company():
+	var order := {}
+	var wirings := Ethogram.wirings_for("villager")
+	for i in wirings.size():
+		order[String(wirings[i].get("gate", ""))] = i
+	assert_true(order.has(Ethogram.DRIVE_BURDEN), "precondition: a villager answers a load at all")
+	for survival in [Ethogram.DRIVE_HUNGER, Ethogram.DRIVE_THIRST, Ethogram.DRIVE_REST]:
+		assert_lt(
+			int(order[survival]), int(order[Ethogram.DRIVE_BURDEN]),
+			"%s must outrank a load" % survival
+		)
+	assert_lt(
+		int(order[Ethogram.DRIVE_BURDEN]), int(order[Ethogram.DRIVE_COMPANY]),
+		"a load must outrank a chat"
+	)
+
+
+## Burden is the one villager gate with NO clock, and deliberately so. What
+## presses is what is really in this villager's hands, reported by whoever
+## is holding them; a profile entry would have Drives raise it on a timer
+## and send an empty-handed villager to the store every so often.
+func test_a_load_is_not_something_that_rises_on_a_clock():
+	assert_false(
+		Ethogram.drive_profile("", "villager").has(Ethogram.DRIVE_BURDEN),
+		"a load must not be on the drive clock -- it is carried, not accrued"
+	)

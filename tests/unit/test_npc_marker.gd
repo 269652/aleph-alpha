@@ -303,6 +303,7 @@ func test_no_bound_view_never_crashes():
 
 const NpcEconomy = preload("res://src/world/npc_economy.gd")
 const VillageMarket = preload("res://src/world/village_market.gd")
+const Ethogram = preload("res://src/gameplay/ethogram.gd")
 
 
 func test_process_without_economy_never_crashes():
@@ -960,3 +961,84 @@ func test_a_villager_busy_with_real_work_answers_no_need_at_all():
 	)
 	assert_false(marker.is_talking(), "and never started a conversation at all")
 	assert_not_null(marker._step_needs(0.1, true), "but free, that same villager would go and talk")
+
+
+# -- carrying a load to the store ------------------------------------------
+#
+# docs/concept/village_warehouse.md mechanism 3, "goods are carried in": the
+# visible half of a warehouse. What a producer takes is in their hands until
+# they have walked it to the door, so a village's stock arrives somewhere
+# rather than appearing as a number.
+#
+# `warehouse_position` is null for every villager whose settlement has no
+# store (a cramped site houses its people and goes without -- see the
+# concept doc's own caveat under pillar 1), and such a villager keeps the
+# direct deposit they always had.
+
+
+## A producer with a store to carry to, hands already full.
+func _loaded_producer_at(store: Vector2) -> void:
+	_quiet_every_need()
+	marker.economy.market = VillageMarket.new()
+	marker.warehouse_position = store
+	marker.economy.carry_limit = NpcEconomy.CARRY_LIMIT
+	marker.economy.record_real_catch(int(NpcEconomy.CARRY_LIMIT))
+
+
+func test_a_villager_with_full_hands_walks_to_the_store():
+	var store := Vector2(700, 700)
+	_loaded_producer_at(store)
+	assert_almost_eq(marker.economy.burden(), 1.0, 0.0, "precondition: their hands really are full")
+	var before := marker.position.distance_to(store)
+	marker._process(0.5)
+	assert_lt(marker.position.distance_to(store), before, "a loaded villager heads for the store")
+
+
+## Reaching the door really puts the load down, or a villager stands at the
+## warehouse forever holding it -- the same "arriving is what answers it"
+## rule the well and the bed already run on.
+func test_reaching_the_door_really_puts_the_load_down():
+	_loaded_producer_at(Vector2(700, 700))
+	var in_hand := marker.economy.carried_total()
+	marker.position = marker.warehouse_position
+	marker._process(0.1)
+	assert_almost_eq(marker.economy.carried_total(), 0.0, 0.0001, "their hands are empty")
+	assert_almost_eq(
+		marker.economy.market.total_stock(), in_hand, 0.0001,
+		"and the village has what they were carrying"
+	)
+
+
+func test_an_empty_handed_villager_is_left_to_their_schedule():
+	_quiet_every_need()
+	marker.economy.market = VillageMarket.new()
+	marker.warehouse_position = Vector2(700, 700)
+	marker.economy.carry_limit = NpcEconomy.CARRY_LIMIT
+	assert_null(
+		marker._step_needs(0.1, true),
+		"carrying nothing is not an errand, however near the store is"
+	)
+
+
+## The trap this wiring sits over: BehaviorKernel reads a gate the caller
+## never mentioned as WIDE OPEN, and burden is deliberately not on the
+## villager drive clock, so NpcNeeds.gains() has never heard of it. A marker
+## that forgot to publish what its villager is carrying would send every
+## villager in sight of a store off to haul an imaginary load.
+func test_the_marker_really_says_what_this_villager_is_carrying():
+	_quiet_every_need()
+	marker.economy.carry_limit = NpcEconomy.CARRY_LIMIT
+	marker.warehouse_position = Vector2(700, 700)
+	var context := marker._villager_context()
+	assert_true(context.has(Ethogram.WAREHOUSE), "the store is where the load goes")
+	assert_true(
+		(context["drives"] as Dictionary).has(Ethogram.DRIVE_BURDEN),
+		"a burden the marker never reports is a burden the kernel reads as full"
+	)
+	assert_almost_eq(float(context["drives"][Ethogram.DRIVE_BURDEN]), 0.0, 0.0)
+
+
+func test_a_village_with_no_store_offers_a_villager_nowhere_to_carry_to():
+	_quiet_every_need()
+	assert_null(marker.warehouse_position, "precondition: no store by default")
+	assert_false(marker._villager_context().has(Ethogram.WAREHOUSE))
