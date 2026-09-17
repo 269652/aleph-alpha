@@ -308,6 +308,21 @@ var _diorama: Node2D
 ## very first _refresh_appearance always builds once, regardless of
 ## whatever _dna_seed's own default happens to be.
 var _diorama_built_for_seed := -1
+## True until the creator's FIRST diorama build has finished. That first
+## build is ~3.9s of first-use sprite-sheet loading (see docs/concept/
+## character_creator_preview_scene.md's own "Load cost" section), so it runs
+## incrementally, behind the loading overlay, from _ensure_create_screen_
+## built -- NOT inline from _refresh_appearance, which is synchronous and is
+## reached from _build_create_screen itself (via _select_class). While this
+## is set, _refresh_appearance leaves the scene alone entirely, so the two
+## can never both build it; _build_diorama_incrementally clears it and calls
+## _refresh_appearance once more to dress the finished hero.
+##
+## Every LATER rebuild -- a DNA reroll -- stays inline on purpose: with
+## IllustratedGrassPatch's atlas now shared across instances, a warm rebuild
+## measures ~10ms, which is a frame rather than a freeze, and flashing an
+## overlay for it would read worse than the rebuild itself.
+var _diorama_build_pending := true
 ## The preview panel's own toggle between the live diorama and the old
 ## "standard" full-body static portrait it replaced (asked directly: "add a
 ## toggle button in the top right that toggles between diorama and standard
@@ -519,6 +534,51 @@ func _ensure_create_screen_built() -> void:
 		# before_each) must not leave two screens simultaneously visible.
 		s.visible = false
 		_stack.add_child(s)
+	# LAST, and awaited: the creator's single largest remaining cost, and
+	# the one the sixth and tenth passes both named as an explicitly-
+	# deferred gap (see docs/concept/intro_splash.md). Runs here rather
+	# than inline in _build_create_screen so it can yield -- see
+	# _build_diorama_incrementally.
+	await _build_diorama_incrementally()
+
+
+## The creator's first diorama build, one step at a time, behind the SAME
+## loading overlay _warm_class_icon_cache already reports into -- so the
+## whole first-open cost reads as one continuous progress readout ("7 / 7
+## portraits", then "11 / 24 scene pieces: the pond") instead of a spinner
+## followed by a silent multi-second freeze.
+##
+## Measured at ~3.9s cold, essentially all of it first-use sprite-sheet
+## loads (see docs/concept/character_creator_preview_scene.md's own "Load
+## cost" table). None of that work goes away here -- CharacterPreviewDiorama
+## .build_async does exactly what build() does, in the same order, from the
+## same step list -- it just stops being one unyielded block.
+func _build_diorama_incrementally() -> void:
+	if _diorama == null:
+		# Nothing to build (no creator screen, or a test that never built
+		# the hero column) -- but the pending flag still has to clear, or
+		# _refresh_appearance would silently skip the scene forever.
+		_diorama_build_pending = false
+		return
+	await _diorama.build_async(_dna_seed, _on_diorama_build_progress)
+	_diorama_built_for_seed = _dna_seed
+	_diorama_build_pending = false
+	# The scene exists now but is still wearing _build_character's own
+	# default warrior look -- one more pass dresses it in the creator's
+	# actual current appearance, which _refresh_appearance skipped while
+	# the build was pending.
+	_refresh_appearance()
+
+
+## Passed as build_async's on_progress so the loading overlay's status line
+## shows real "N / M scene pieces" progress for the diorama the same way
+## _on_class_icon_warm_progress already does for the portraits. The step's
+## own label rides along in the unit string (LoadingOverlay.set_progress
+## renders "<base> (N / M <unit>)"), because a diorama step is "the pond" or
+## "the hero" rather than one more of a single uniform unit -- which is what
+## makes the readout tell a player what is actually happening.
+func _on_diorama_build_progress(done: int, total: int, label: String) -> void:
+	_loading_overlay.set_progress(done, total, "scene pieces: %s" % label)
 
 
 func _build_create_screen() -> Control:
@@ -1154,7 +1214,12 @@ func current_dna() -> Dictionary:
 
 func _refresh_appearance() -> void:
 	var appearance := current_appearance()
-	if _diorama != null:
+	# `not _diorama_build_pending` -- see that field's own doc comment. This
+	# function is reached from _build_create_screen itself (via _select_
+	# class) and is fully synchronous, so without the guard the creator's
+	# very first build would be paid here, unyielded, exactly as it was
+	# before (reported live: "the character creator loads super slow").
+	if _diorama != null and not _diorama_build_pending:
 		# The world layout (pond/tree/pebble/grass positions) only rebuilds
 		# when the DNA seed itself actually changed (a reroll) -- every
 		# OTHER call here (cycling an axis, switching class) just redresses
