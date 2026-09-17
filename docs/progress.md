@@ -24911,3 +24911,55 @@ Tests: `test_village_sawmill.gd` 9/9 (new), `test_npc_marker_timber.gd` 15/15
 Honestly unbuilt: the mill shapes **beams** only — `SagewerkProduction` also
 makes planks, and nothing yet asks for them; and a village with more than one
 sawmill would hand every sawyer the first one.
+
+## Footprints weather away, and rain hurries it (`concept/snow_cover.md`, 2026-09-17)
+
+Asked for: *"Can you add decay to the footprints? Rain should increase decay
+speed.. Should be visible for ~30 real minutes"*, then *"Make the decay
+gradually"*, then *"Ok make the half life time 2 minutes"*.
+
+✅ **A print now weathers instead of vanishing.** Before this it held full
+strength for its whole life and disappeared between one frame and the next —
+`FootprintField`'s own header said there was "nothing here to age except
+lifetime pruning itself". Each print carries `decayed` (seconds of
+*dry-equivalent* ageing) and `opacity_of` is a true half-life,
+`0.5 ^ (decayed / HALF_LIFE_SECONDS)`, with the half-life two real minutes.
+
+✅ **Rain hurries it.** `decay_rate_for` scales linearly from 1x dry to
+`RAIN_DECAY_MULTIPLIER` (4x) in a downpour — a thirty-second half-life
+instead of two minutes. `EarthChunkManager.set_rain` already received the
+live weather; it now keeps it and `step_footprints` passes it down.
+
+✅ **Decay accumulates per step rather than being recomputed from
+`spawned_at`**, which is the load-bearing decision: rain starting halfway
+through a print's life must hurry only the half that is *left*, not
+retroactively the half it already spent in the sun.
+
+⚠️ **The two numbers asked for cannot both hold, and the docs say which
+won.** Thirty visible minutes came first, a two-minute half-life second —
+but two minutes of half-life puts a print under 2% strength after about
+**eleven**. The later, more specific instruction wins, and `LIFETIME_SECONDS`
+is *derived* from it (the time to fade below `VISIBLE_FLOOR`) rather than
+carried as a second constant that would contradict it. For thirty visible
+minutes the half-life wants to be ~5 minutes — a one-line change.
+
+✅ **The fade stayed cheap, deliberately.** `FootprintRenderer` writes each
+print's strength into the MultiMesh instance alpha, but that buffer is
+rebuilt only when `generation()` changes — and that dirty check *is* the fix
+for FPS regression round 4, where rebuilding an unchanged MultiMesh every
+frame was the cost. The generation bump is therefore tied to crossing one of
+`FADE_STEPS` (16) strength bands: sixteen rebuilds per print-life instead of
+sixty a second. Pinned by a test that fails in both directions.
+
+### Still open
+
+- **MultiMesh instance colours cannot be read back headless.**
+  `get_instance_color` answers `(0,0,0,1)` whatever was written (measured on
+  Godot 4.7.2 with a standalone probe), so the renderer's decision is tested
+  through `FootprintRenderer.color_for` and the engine write itself is not
+  directly asserted — the same split `LeafLitterRenderer`'s lossy
+  `INSTANCE_CUSTOM` packing already accepts.
+- **Rain is per-manager, not per-chunk.** `set_rain` carries one world-wide
+  flag, so a print decays at the same wet rate everywhere the manager says it
+  is raining. Real per-region weather would want the wetness sampled at the
+  chunk.

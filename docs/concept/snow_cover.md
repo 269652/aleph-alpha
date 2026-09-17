@@ -242,6 +242,76 @@ dirt underneath it. An already-scarred path from before the snow fell is
 unaffected (it decays/recovers and repaints normally in winter) — only
 FRESH scarring is what snow prevents.
 
+### Footprints weather away, and rain hurries it (2026-09-17)
+
+Asked for: *"Can you add decay to the footprints? Rain should increase decay
+speed.. Should be visible for ~30 real minutes"*, then *"Make the decay
+gradually"*, then *"Ok make the half life time 2 minutes"*.
+
+Before this a print held **full strength for its entire life and then
+vanished between one frame and the next** — `FootprintField`'s own header
+said so: *"a footprint is static once stamped ... there is nothing here to
+age except lifetime pruning itself"*. What follows is that missing ageing.
+
+**The curve is a real half-life.** Each print carries `decayed`, seconds of
+*dry-equivalent* ageing, and `opacity_of` is `0.5 ^ (decayed /
+HALF_LIFE_SECONDS)` with `HALF_LIFE_SECONDS` two real minutes. Exponential
+because a half-life is exponential by definition, and because it is the
+honest shape for a mark weathering away: a fresh print loses its crisp edge
+quickly and the last ghost of it lingers.
+
+**Decay accumulates per step; it is not recomputed from `spawned_at`.** That
+is the load-bearing choice. Rain beginning halfway through a print's life
+must hurry only the half that is *left* of it, not retroactively the half it
+already spent in the sun — and a print cannot know what weather is coming,
+so wetness is sampled per step by whoever is doing the ageing.
+`decay_rate_for` scales linearly from 1x on dry ground to
+`RAIN_DECAY_MULTIPLIER` (4x) in a downpour, where the half-life is thirty
+seconds rather than two minutes. `EarthChunkManager.set_rain` already carried
+the live weather in; it now keeps it, and `step_footprints` passes it down.
+
+**Two numbers that were asked for cannot both be true, and the doc says so
+rather than quietly picking one.** Thirty real minutes of visibility came
+first, a two-minute half-life second. Two minutes of half-life puts a print
+under 2% strength after about **eleven** minutes, not thirty. The half-life
+is the later and more specific instruction, so it wins, and
+`LIFETIME_SECONDS` is *derived* from it — the time to fade below
+`VISIBLE_FLOOR` — instead of being carried as an independent constant that
+would contradict it. If thirty visible minutes is what matters more, the
+half-life wants to be about five.
+
+**Dropping the record at the visibility floor is not tidiness.** In a project
+sixteen rounds deep into frame-rate decay, iterating and drawing prints
+nobody can see is one of the ways that happens.
+
+**The fade had to stay cheap.** `FootprintRenderer` now builds its MultiMesh
+with `use_colors` and writes each print's strength into the instance alpha —
+but the buffer is rebuilt only when `generation()` changes, and *that dirty
+check is the fix for FPS regression round 4*, where rebuilding an unchanged
+MultiMesh every frame **was** the cost. A fade that bumped the generation on
+every advance would have handed that regression straight back. So the bump is
+tied to a print crossing one of `FADE_STEPS` (16) strength bands: sixteen
+rebuilds across a print's whole life instead of sixty a second, and a
+sixteenth of full strength is a step the eye reads as smooth. Pinned by a
+test that fails in **both** directions — no bumps at all, or one per advance.
+
+**One engine limitation worth recording.** MultiMesh instance *colours*
+cannot be read back in a headless test the way transforms can:
+`get_instance_color` answers `(0,0,0,1)` whatever was written, measured
+directly on Godot 4.7.2 with a standalone probe. So the renderer's decision
+lives in `FootprintRenderer.color_for`, which `fill()` is the sole caller of
+and which tests assert against — the same split this file's own renderer
+already draws for `LeafLitterRenderer`'s lossy `INSTANCE_CUSTOM` packing.
+
+Backward compatible throughout: a print written before decay existed carries
+no `decayed` key, `opacity_of` reads that as untouched and answers 1.0, and
+`advance()` called with no wetness keeps the dry pace rather than silently
+getting a default downpour. Both pinned.
+
+TDD red first: `test_footprint_field.gd` 23/23, `test_footprint_renderer.gd`,
+`test_earth_chunk_manager_footprints.gd` — 70 passing across the footprint
+suites.
+
 ### Real left/right footprint stamps (2026-09-07)
 
 Reported live: *"real footstep prints with left/right footprints spaced

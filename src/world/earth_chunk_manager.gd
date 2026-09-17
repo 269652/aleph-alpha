@@ -7145,7 +7145,11 @@ func step_footprints() -> void:
 		# absolute world clock, so a chunk nobody can see loses nothing by
 		# advancing once per interval instead of every frame.
 		if visible or _world_age_seconds - float(_footprint_far_advanced_at.get(chunk_coord, -INF)) >= FAR_CHUNK_ADVANCE_SECONDS:
-			field.advance(_world_age_seconds)
+			# Rain hurries a print away (docs/concept/snow_cover.md's
+			# "Footprints"): the wetness is sampled per step rather than
+			# stored per print, because a print cannot know what weather is
+			# coming.
+			field.advance(_world_age_seconds, _rain_wetness)
 			_footprint_far_advanced_at[chunk_coord] = _world_age_seconds
 		# A typed Dictionary cannot hold the Nil a missing entry returns --
 		# every real chunk has its renderers, but a field injected on its own
@@ -7324,8 +7328,17 @@ func _paint_snow_presence(chunk_coord: Vector2i, chunk: Chunk) -> void:
 			_snow_layer.set_cell(global, 0, SnowBombShader.PRESENCE_ATLAS_COORD)
 
 
+## How hard it is raining right now, 0 dry and 1 a downpour -- pushed in by
+## set_rain below and read by step_footprints, because a footprint field
+## knows how to weather faster when it is wet but cannot know THAT it is
+## wet. Starts dry: a world nobody has told about the weather must not age
+## its prints as though it had rained.
+var _rain_wetness := 0.0
+
+
 func set_rain(raining: bool) -> void:
 	var intensity := 1.0 if raining else 0.0
+	_rain_wetness = intensity
 	if _water_material != null:
 		_water_material.set_shader_parameter("rain_intensity", intensity)
 	# Rivers/lakes/the sea all render on the ONE river flow overlay in real
