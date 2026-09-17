@@ -92,7 +92,8 @@ func _initialize() -> void:
 				glyphs[local] = ":"
 			elif VillageFarm.is_fence_tile(tile):
 				glyphs[local] = {"farm_fence_north": "^", "farm_fence_south": "v",
-					"farm_fence_east": ">", "farm_fence_west": "<", "farm_fence_corner": "+"}[tile]
+					"farm_fence_east": ">", "farm_fence_west": "<",
+					"farm_fence_corner_west": "+", "farm_fence_corner_east": "+"}[tile]
 		for call in world.place_calls:
 			var letter := "B"
 			if call["building_id"] == VillageFarm.FARM_BUILDING_ID:

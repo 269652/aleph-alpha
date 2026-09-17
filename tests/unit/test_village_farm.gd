@@ -588,14 +588,14 @@ func test_a_rectangles_fence_is_exactly_its_own_border():
 func test_the_four_corners_of_a_frame_are_posts_not_lengths_of_rail():
 	var beds := _every_rect_cell(Rect2i(4, 4, 3, 2))
 	for corner in [Vector2i(3, 3), Vector2i(7, 3), Vector2i(3, 6), Vector2i(7, 6)]:
-		assert_eq(
-			VillageFarm.fence_facing(corner, beds), "corner",
+		assert_true(
+			VillageFarm.fence_facing(corner, beds).begins_with("corner"),
 			"%s caps two runs at once -- a rail drawn across it is the broken look" % str(corner)
 		)
 
 
 func test_a_corner_post_has_its_own_rail_tile():
-	var tile_id: String = VillageFarm.fence_tile_for("corner")
+	var tile_id: String = VillageFarm.fence_tile_for("corner_west")
 	assert_ne(tile_id, "", "a corner needs a piece of its own")
 	assert_true(VillageFarm.is_fence_tile(tile_id))
 
@@ -614,3 +614,24 @@ func test_no_cell_of_a_frame_is_left_without_a_piece():
 	var beds := _every_rect_cell(Rect2i(4, 4, 2, 3))
 	for cell in VillageFarm.fence_cells(beds, Vector2i(20, 20), VillageFarm.FARM_BUILDING_ID):
 		assert_ne(VillageFarm.fence_facing(cell, beds), "", "%s got no piece at all" % str(cell))
+
+
+## A corner knows which SIDE of the field it caps, because the side wall it
+## caps is drawn pushed out to that side and a post left on its own tile
+## centre would sit half a tile inboard of the run it belongs to.
+func test_a_corner_knows_which_side_of_the_field_it_caps():
+	var beds := _every_rect_cell(Rect2i(4, 4, 3, 2))
+	assert_eq(VillageFarm.fence_facing(Vector2i(3, 3), beds), "corner_west", "north-west")
+	assert_eq(VillageFarm.fence_facing(Vector2i(3, 6), beds), "corner_west", "south-west")
+	assert_eq(VillageFarm.fence_facing(Vector2i(7, 3), beds), "corner_east", "north-east")
+	assert_eq(VillageFarm.fence_facing(Vector2i(7, 6), beds), "corner_east", "south-east")
+
+
+func test_both_corner_posts_have_rail_tiles_of_their_own():
+	var west: String = VillageFarm.fence_tile_for("corner_west")
+	var east: String = VillageFarm.fence_tile_for("corner_east")
+	assert_ne(west, "")
+	assert_ne(east, "")
+	assert_ne(west, east, "the two sides are pushed opposite ways, so they cannot share a tile")
+	assert_true(VillageFarm.is_fence_tile(west))
+	assert_true(VillageFarm.is_fence_tile(east))

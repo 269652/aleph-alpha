@@ -209,3 +209,23 @@ func test_the_two_side_walls_are_pushed_out_by_the_same_distance():
 	var east := _art_x_for(VillageFarm.fence_tile_for("east")) - centre
 	assert_almost_eq(west, east, 0.001)
 	assert_almost_eq(west, TerrainRenderer.TILE_SIZE * 0.5, 0.001, "half a tile out")
+
+
+## A corner post caps a side wall, so it has to be pushed out by the SAME
+## half tile that wall is -- a post left on its own tile centre sits half a
+## tile inboard of the run it caps, which is a visibly broken joint and the
+## opposite of what "corner pieces added so it doesn't look that broken"
+## asked for.
+func test_a_corner_post_lines_up_with_the_side_wall_it_caps():
+	var centre := (float(_berlin_tile.x) + 0.5) * TerrainRenderer.TILE_SIZE
+	var west_wall := _art_x_for(VillageFarm.fence_tile_for("west"))
+	var east_wall := _art_x_for(VillageFarm.fence_tile_for("east"))
+	assert_almost_eq(
+		_art_x_for(VillageFarm.fence_tile_for("corner_west")), west_wall, 0.001,
+		"a west corner stands exactly where the west wall below it does"
+	)
+	assert_almost_eq(
+		_art_x_for(VillageFarm.fence_tile_for("corner_east")), east_wall, 0.001,
+		"an east corner stands exactly where the east wall below it does"
+	)
+	assert_ne(west_wall, centre, "precondition: the side walls really are pushed out")

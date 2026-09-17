@@ -14475,14 +14475,15 @@ func _spawn_structure_art_for(chunk_coord: Vector2i, local_cell: Vector2i, subje
 ## circled: "the side walls of the fence should be moved outwards and corner
 ## pieces added so it doesn't look that broken".
 ##
-## Only the east/west runs move. A north or south rail already lies along
-## the row it closes, and a corner post caps the turn where the two runs
-## meet, so moving either would open the frame rather than close it.
+## The two corner posts move WITH the wall each caps -- a post left on its
+## own tile centre would sit half a tile inboard of the run it belongs to,
+## which is a visibly broken joint. A north or south rail does not move: it
+## already lies along the row it closes.
 func _structure_art_x_offset(subject: String) -> float:
 	var half_tile := float(TerrainRenderer.TILE_SIZE) * 0.5
-	if subject == VillageFarm.fence_tile_for("east"):
+	if subject == VillageFarm.fence_tile_for("east") or subject == VillageFarm.fence_tile_for("corner_east"):
 		return half_tile
-	if subject == VillageFarm.fence_tile_for("west"):
+	if subject == VillageFarm.fence_tile_for("west") or subject == VillageFarm.fence_tile_for("corner_west"):
 		return -half_tile
 	return 0.0
 

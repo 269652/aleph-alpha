@@ -194,7 +194,11 @@ rails/posts and plant_fibre (4) lashing them".
   **corner posts**, not lengths of rail: drawing a horizontal rail across a
   corner is exactly the "broken" look the report points at. The sheet has no
   corner cell of its own, so a corner is drawn with the post art the side
-  columns use, which is what a real corner post is.
+  columns use, which is what a real corner post is. A post knows *which
+  side* it caps (`corner_west`/`corner_east`), because it has to move
+  outward with the wall below it — one left on its own tile centre would sit
+  half a tile inboard of the run it caps, which is a broken joint of its
+  own.
 - **The side walls sit on the outside.** The two vertical walls are drawn
   half a tile further out than their own tile centre, so the frame reads as
   surrounding the beds rather than standing on top of the outermost row.

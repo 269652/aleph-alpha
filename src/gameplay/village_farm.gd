@@ -42,7 +42,8 @@ const FENCE_TILE_IDS := {
 	"south": "farm_fence_south",
 	"east": "farm_fence_east",
 	"west": "farm_fence_west",
-	"corner": "farm_fence_corner",
+	"corner_west": "farm_fence_corner_west",
+	"corner_east": "farm_fence_corner_east",
 }
 
 ## The shapes a farmhouse's field may take -- asked for directly, with the
@@ -357,10 +358,15 @@ static func fence_facing(cell: Vector2i, worked_cells: Array) -> String:
 		if beds.has(cell + step):
 			orthogonal += 1
 	if orthogonal == 0:
+		# Which SIDE the corner caps matters: the side wall below it is drawn
+		# pushed outward (EarthChunkManager._structure_art_x_offset), so a
+		# post that did not know its side would sit half a tile inboard of
+		# the run it caps -- a visibly broken joint, and the opposite of what
+		# "corner pieces added so it doesn't look that broken" asked for.
 		for dy in [1, -1]:
 			for dx in [1, -1]:
 				if beds.has(cell + Vector2i(dx, dy)):
-					return "corner"
+					return "corner_west" if dx > 0 else "corner_east"
 		return ""
 	if beds.has(cell + Vector2i(0, 1)):
 		return "north"

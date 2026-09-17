@@ -23,7 +23,7 @@ const _FENCE_SUBJECTS := [
 const _ALL_SUBJECTS := [
 	"farm", "sagewerk", "storage", "wooden_fence", "city_hall",
 	"farm_fence_north", "farm_fence_south", "farm_fence_east", "farm_fence_west",
-	"farm_fence_corner",
+	"farm_fence_corner_west", "farm_fence_corner_east",
 ]
 
 var sprite: IllustratedStructureSprite
@@ -265,7 +265,7 @@ func test_a_divider_sheet_scales_to_a_real_footprint():
 ## subject name the tile id implies -- the one link between "a rail was
 ## built facing east" and "an east rail is drawn".
 func test_every_rail_the_village_can_build_has_its_own_art():
-	for facing in ["north", "south", "east", "west", "corner"]:
+	for facing in ["north", "south", "east", "west", "corner_west", "corner_east"]:
 		var subject: String = VillageFarm.fence_tile_for(facing)
 		assert_true(sprite.has_subject(subject), "%s has no art at all" % subject)
 
