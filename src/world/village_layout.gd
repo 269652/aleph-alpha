@@ -790,10 +790,17 @@ static func next_street_plot(
 ## in the middle of a field, which is not frontage at all.
 ##
 ## The tie-back is the one layout() already uses for exactly this, so a
-## village that grows looks like a village that was founded: down the GATE
-## LANE (the column at the spine's own start -- the one column no plot can
-## ever want, since every street's plots begin _GATE_CLEARANCE_TILES east of
-## it), then east or west along this street's own row to the door.
+## village that grows looks like a village that was founded: an L down a
+## LANE COLUMN from the spine, then east or west along this street's own row
+## to the door -- the same shape _industry_spur lays for the sawmill.
+##
+## The lane's column is SEARCHED, nearest the door first, rather than fixed
+## at the spine's own start. Fixing it there was measured and it is wrong on
+## real ground: layout() lays its own gate lane at the start of the RUN it
+## actually paved, which on a village wedged against water is nowhere near
+## where the skeleton drew the spine -- and a single blocked column then
+## refused the plot outright. That cost the growth ladder eight of its own
+## tests before the column was searched.
 ##
 ## `is_paved` lets the tie-back cross what the village has ALREADY laid --
 ## another street's row, an earlier plot's doorstep, the square. Without it
@@ -806,36 +813,68 @@ static func _frontage_spur(
 	footprint_cells: Array, chunk_size: int,
 	is_buildable: Callable, is_occupied: Callable, is_paved: Callable
 ):
-	var cells: Array[Vector2i] = []
+	var none: Array[Vector2i] = []
 	if street == street_y:
 		# The spine itself: paved end to end by layout(), and re-paved on
 		# every reload. Nothing to add.
-		return cells
-	for y in range(street_y + 1, street + 1):
-		cells.append(Vector2i(lane_x, y))
-	var step := 1 if doorstep.x >= lane_x else -1
-	var x := lane_x
-	while x != doorstep.x:
-		x += step
-		cells.append(Vector2i(x, street))
-
+		return none
 	var footprint := {}
 	for cell in footprint_cells:
 		footprint[cell] = true
+	for column in _lane_columns(doorstep.x, lane_x, chunk_size):
+		var cells := _lane_cells(doorstep, street, street_y, column)
+		if _spur_is_clear(cells, doorstep, footprint, plaza, chunk_size, is_buildable, is_occupied, is_paved):
+			return cells
+	return null
+
+
+## Which columns to try a lane down, nearest the door first -- the door's
+## own column is the straight run and the ordinary answer, and the spine's
+## own start is tried too because that is the column layout() itself
+## reserves and no plot may take.
+static func _lane_columns(doorstep_x: int, lane_x: int, chunk_size: int) -> Array:
+	var columns: Array = []
+	for offset in range(0, chunk_size):
+		for x in ([doorstep_x] if offset == 0 else [doorstep_x + offset, doorstep_x - offset]):
+			if x >= 0 and x < chunk_size and not columns.has(x):
+				columns.append(x)
+	if not columns.has(lane_x) and lane_x >= 0 and lane_x < chunk_size:
+		columns.append(lane_x)
+	return columns
+
+
+## One candidate L: down `column` from just south of the spine to this
+## street's row, then along that row to the door.
+static func _lane_cells(doorstep: Vector2i, street: int, street_y: int, column: int) -> Array[Vector2i]:
+	var cells: Array[Vector2i] = []
+	for y in range(street_y + 1, street + 1):
+		cells.append(Vector2i(column, y))
+	var step := 1 if doorstep.x >= column else -1
+	var x := column
+	while x != doorstep.x:
+		x += step
+		cells.append(Vector2i(x, street))
+	return cells
+
+
+static func _spur_is_clear(
+	cells: Array, doorstep: Vector2i, footprint: Dictionary, plaza: Rect2i, chunk_size: int,
+	is_buildable: Callable, is_occupied: Callable, is_paved: Callable
+) -> bool:
 	for cell in cells:
 		if cell == doorstep:
 			continue
 		if footprint.has(cell):
-			return null  # a lane laid through the building it serves is no lane
+			return false  # a lane laid through the building it serves is no lane
 		if cell.x < 0 or cell.y < 0 or cell.x >= chunk_size or cell.y >= chunk_size:
-			return null
+			return false
 		if not is_buildable.call(cell):
-			return null  # water: a village does not pave a river
+			return false  # water: a village does not pave a river
 		if plaza.has_area() and plaza.has_point(cell):
 			continue  # the square is already paved, and crossing it is fine
 		if is_occupied.call(cell) and not (is_paved.is_valid() and is_paved.call(cell)):
-			return null
-	return cells
+			return false
+	return true
 
 
 ## Whether the plaza's own rows overlap the rows a plot at `origin` would

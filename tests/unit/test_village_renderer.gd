@@ -35,7 +35,12 @@ var _generator := SettlementGenerator.new()
 ## real here, not just re-asserted.
 class StubWorld:
 	var place_calls: Array = []
-	var road_cells: Dictionary = {}  # Vector2i -> true
+	## Every cell this village really BUILT, global -> tile id -- roads, and
+	## now the rails a farmhouse fences its beds with (docs/concept/
+	## village_farms.md). Named for what it holds: build_at_global records
+	## whatever it is given, and a test that wants only the streets filters
+	## for the road tile (see _road_cells_of).
+	var built_tiles: Dictionary = {}
 	var biome := "grassland"
 	var water_cells: Dictionary = {}
 	var unbuildable_cells: Dictionary = {}
@@ -112,7 +117,7 @@ class StubWorld:
 		return false
 
 	func build_at_global(x: int, y: int, tile_id: String) -> bool:
-		road_cells[Vector2i(x, y)] = tile_id
+		built_tiles[Vector2i(x, y)] = tile_id
 		# Mirrors the REAL EarthChunkManager.build_at_global exactly:
 		# chunk.modifications[local] = tile_id, unconditionally, with no
 		# occupancy check of its own (see that function's own doc
@@ -367,7 +372,7 @@ func test_every_placed_building_faces_south_onto_a_real_road_cell():
 		assert_eq(call["facing"], Vector2i(0, 1))
 		var doorstep: Vector2i = call["origin_local"] + BuildingCatalog.doorstep_of(call["building_id"])
 		var doorstep_global: Vector2i = coord * CHUNK_SIZE + doorstep
-		assert_true(world.road_cells.has(doorstep_global), "doorstep %s should be a real road cell" % str(doorstep_global))
+		assert_true(world.built_tiles.has(doorstep_global), "doorstep %s should be a real road cell" % str(doorstep_global))
 
 
 ## A reload (the settlement's buildings already persisted) must not grow
@@ -376,11 +381,11 @@ func test_reloading_a_settlement_lays_no_new_road_cells():
 	var coord := _find_settlement_chunk("grassland")
 	var world := StubWorld.new()
 	renderer.spawn_village(parent, coord, coord * CHUNK_SIZE, CHUNK_SIZE, TILE_SIZE, "grassland", world)
-	var roads_after_first_load := world.road_cells.size()
+	var roads_after_first_load := world.built_tiles.size()
 	assert_gt(roads_after_first_load, 0, "precondition")
 	var second_parent := Node2D.new()
 	renderer.spawn_village(second_parent, coord, coord * CHUNK_SIZE, CHUNK_SIZE, TILE_SIZE, "grassland", world)
-	assert_eq(world.road_cells.size(), roads_after_first_load)
+	assert_eq(world.built_tiles.size(), roads_after_first_load)
 	second_parent.free()
 
 
@@ -400,18 +405,18 @@ func test_a_reloaded_older_village_gets_its_plaza_paved_where_the_square_is_clea
 	for y in range(plaza.position.y, plaza.end.y):
 		for x in range(plaza.position.x, plaza.end.x):
 			plaza_cells.append(coord * CHUNK_SIZE + Vector2i(x, y))
-	if not world.road_cells.has(plaza_cells[0]):
+	if not world.built_tiles.has(plaza_cells[0]):
 		pass_test("this fixture village has no plaza (its square is not clear) -- nothing to catch up")
 		return
 	for g in plaza_cells:
-		world.road_cells.erase(g)
+		world.built_tiles.erase(g)
 		world.occupied_cells.erase(g)
 
 	var second_parent := Node2D.new()
 	renderer.spawn_village(second_parent, coord, coord * CHUNK_SIZE, CHUNK_SIZE, TILE_SIZE, "grassland", world)
 
 	for g in plaza_cells:
-		assert_eq(world.road_cells.get(g, ""), TerrainRenderer.ROAD_TILE_ID, "plaza cell %s must be paved on reload" % str(g))
+		assert_eq(world.built_tiles.get(g, ""), TerrainRenderer.ROAD_TILE_ID, "plaza cell %s must be paved on reload" % str(g))
 	second_parent.free()
 
 
@@ -428,11 +433,11 @@ func test_a_reloaded_older_village_keeps_its_square_unpaved_where_a_building_sta
 	for y in range(plaza.position.y, plaza.end.y):
 		for x in range(plaza.position.x, plaza.end.x):
 			plaza_cells.append(coord * CHUNK_SIZE + Vector2i(x, y))
-	if not world.road_cells.has(plaza_cells[0]):
+	if not world.built_tiles.has(plaza_cells[0]):
 		pass_test("this fixture village has no plaza -- nothing to protect")
 		return
 	for g in plaza_cells:
-		world.road_cells.erase(g)
+		world.built_tiles.erase(g)
 		world.occupied_cells.erase(g)
 	# An old house stands on one square cell.
 	world.occupied_cells[plaza_cells[5]] = "house_small"
@@ -441,7 +446,7 @@ func test_a_reloaded_older_village_keeps_its_square_unpaved_where_a_building_sta
 	renderer.spawn_village(second_parent, coord, coord * CHUNK_SIZE, CHUNK_SIZE, TILE_SIZE, "grassland", world)
 
 	for g in plaza_cells:
-		assert_ne(world.road_cells.get(g, ""), TerrainRenderer.ROAD_TILE_ID, "must not pave a square a house stands on (%s)" % str(g))
+		assert_ne(world.built_tiles.get(g, ""), TerrainRenderer.ROAD_TILE_ID, "must not pave a square a house stands on (%s)" % str(g))
 	second_parent.free()
 
 
@@ -451,9 +456,19 @@ func test_every_street_cell_is_laid_as_the_real_road_tile():
 	var coord := _find_settlement_chunk("grassland")
 	var world := StubWorld.new()
 	renderer.spawn_village(parent, coord, coord * CHUNK_SIZE, CHUNK_SIZE, TILE_SIZE, "grassland", world)
-	assert_gt(world.road_cells.size(), 0, "precondition: streets were laid")
-	for cell in world.road_cells:
-		assert_eq(world.road_cells[cell], TerrainRenderer.ROAD_TILE_ID, str(cell))
+	assert_gt(world.built_tiles.size(), 0, "precondition: something was built")
+	var streets := 0
+	for cell in world.built_tiles:
+		var tile: String = world.built_tiles[cell]
+		# A village builds exactly two things onto its own ground: streets,
+		# and the rails a farmhouse fences its beds with (docs/concept/
+		# village_farms.md). Everything that is not a rail is a street, and
+		# every street is the real Road tile.
+		if tile == VillageRenderer.FENCE_TILE_ID:
+			continue
+		assert_eq(tile, TerrainRenderer.ROAD_TILE_ID, str(cell))
+		streets += 1
+	assert_gt(streets, 0, "precondition: streets were laid")
 
 
 func test_no_two_placed_buildings_ever_overlap():
@@ -515,9 +530,9 @@ func test_a_building_is_never_placed_where_the_real_terrain_check_refuses():
 			world.water_cells[coord * CHUNK_SIZE + Vector2i(x, y)] = true
 	renderer.spawn_village(parent, coord, coord * CHUNK_SIZE, CHUNK_SIZE, TILE_SIZE, "grassland", world)
 	assert_true(world.place_calls.is_empty(), "a chunk that is all water should place nothing")
-	for g in world.road_cells:
+	for g in world.built_tiles:
 		assert_false(
-			TerrainRenderer.is_road_tile(world.road_cells[g]), "a road was paved across open water at %s" % str(g)
+			TerrainRenderer.is_road_tile(world.built_tiles[g]), "a road was paved across open water at %s" % str(g)
 		)
 
 
@@ -954,11 +969,11 @@ func test_the_sawmills_doorstep_is_really_paved_back_to_the_main_street():
 			var next_cell: Vector2i = cell + step
 			if seen.has(next_cell):
 				continue
-			if not TerrainRenderer.is_road_tile(world.road_cells.get(next_cell, "")):
+			if not TerrainRenderer.is_road_tile(world.built_tiles.get(next_cell, "")):
 				continue
 			seen[next_cell] = true
 			frontier.append(next_cell)
-	assert_true(TerrainRenderer.is_road_tile(world.road_cells.get(doorstep, "")), "the doorstep itself is paved")
+	assert_true(TerrainRenderer.is_road_tile(world.built_tiles.get(doorstep, "")), "the doorstep itself is paved")
 	assert_true(reached, "the spur must reach the street, walking only road")
 
 
@@ -1252,7 +1267,7 @@ func test_a_village_clears_the_wood_for_its_houses_and_its_square():
 	for y in range(plaza.position.y, plaza.end.y):
 		for x in range(plaza.position.x, plaza.end.x):
 			var g: Vector2i = coord * CHUNK_SIZE + Vector2i(x, y)
-			if TerrainRenderer.is_road_tile(world.road_cells.get(g, "")):
+			if TerrainRenderer.is_road_tile(world.built_tiles.get(g, "")):
 				paved += 1
 	assert_eq(paved, plaza.get_area(), "the square is cleared out of the wood and fully paved")
 
@@ -1373,7 +1388,7 @@ func test_a_village_with_nowhere_to_put_a_single_house_is_not_founded_at_all():
 
 	assert_true(spawned.is_empty(), "no villagers, no landmarks -- there is no village here")
 	assert_true(world.place_calls.is_empty(), "nothing is built on a lake, not even a sawmill")
-	assert_true(world.road_cells.is_empty(), "and no streets are paved across it")
+	assert_true(world.built_tiles.is_empty(), "and no streets are paved across it")
 
 
 func test_a_drowned_site_is_never_recorded_as_a_founded_settlement():
@@ -1414,8 +1429,8 @@ func test_dry_ground_still_founds_its_village_exactly_as_before():
 
 func _road_cells_of(world: StubWorld) -> Dictionary:
 	var roads := {}
-	for cell in world.road_cells:
-		if TerrainRenderer.is_road_tile(world.road_cells[cell]):
+	for cell in world.built_tiles:
+		if TerrainRenderer.is_road_tile(world.built_tiles[cell]):
 			roads[cell] = true
 	return roads
 
@@ -1823,8 +1838,8 @@ func test_a_village_with_room_for_everyone_is_founded_as_before():
 ## Every cell this village actually paved, chunk-LOCAL.
 func _paved_cells(world: StubWorld, coord: Vector2i) -> Dictionary:
 	var paved: Dictionary = {}
-	for global_cell in world.road_cells:
-		if world.road_cells[global_cell] != TerrainRenderer.ROAD_TILE_ID:
+	for global_cell in world.built_tiles:
+		if world.built_tiles[global_cell] != TerrainRenderer.ROAD_TILE_ID:
 			continue
 		var local: Vector2i = (global_cell as Vector2i) - coord * CHUNK_SIZE
 		if local.x < 0 or local.y < 0 or local.x >= CHUNK_SIZE or local.y >= CHUNK_SIZE:
@@ -1896,3 +1911,89 @@ func test_every_farmhouse_doorstep_really_joins_the_villages_own_streets():
 			+ "nobody can walk to is not part of the village: %s"
 		) % [stranded.size(), farmhouses_seen, str(stranded.slice(0, 4))]
 	)
+
+
+# -- and the beds are fenced against the animals ---------------------------
+#
+# Asked for directly, with the field circled in a screenshot: "the farmhouse
+# should build a fence around the bed so no animals enter". See
+# docs/concept/village_farms.md, "The fence around the beds".
+
+
+## Every tile this village really built, LOCAL -> tile id.
+func _built_tiles(world: StubWorld, coord: Vector2i) -> Dictionary:
+	var built: Dictionary = {}
+	for global_cell in world.built_tiles:
+		built[(global_cell as Vector2i) - coord * CHUNK_SIZE] = world.built_tiles[global_cell]
+	return built
+
+
+func test_a_farmhouse_raises_a_real_fence_around_the_beds_it_works():
+	var coord := _find_settlement_chunk_with_occupation("grassland", "farmer", 3)
+	var world := StubWorld.new()
+	var spawned := renderer.spawn_village(
+		parent, coord, coord * CHUNK_SIZE, CHUNK_SIZE, TILE_SIZE, "grassland", world
+	)
+	var farmers := _farming_markers(spawned, coord)
+	assert_gt(farmers.size(), 0, "precondition: somebody in this village farms")
+	var built := _built_tiles(world, coord)
+	var rails := 0
+	for tile_id in built.values():
+		if tile_id == VillageRenderer.FENCE_TILE_ID:
+			rails += 1
+	assert_gt(rails, 0, "a farm with no fence is a field that feeds deer")
+
+
+## Only the beds are enclosed, and the rails stand OUTSIDE them: a rail on a
+## bed is a rail through the crop.
+func test_no_rail_is_ever_built_on_a_bed_a_villager_works():
+	var coord := _find_settlement_chunk_with_occupation("grassland", "farmer", 3)
+	var world := StubWorld.new()
+	var spawned := renderer.spawn_village(
+		parent, coord, coord * CHUNK_SIZE, CHUNK_SIZE, TILE_SIZE, "grassland", world
+	)
+	var built := _built_tiles(world, coord)
+	for npc in _farming_markers(spawned, coord):
+		for global_cell in npc.field_cells:
+			var local: Vector2i = (global_cell as Vector2i) - coord * CHUNK_SIZE
+			assert_ne(
+				built.get(local, ""), VillageRenderer.FENCE_TILE_ID,
+				"%s is a bed, and a rail through it is a rail through the crop" % str(local)
+			)
+
+
+## The gate: the village's own paving is never fenced over, or the farmer
+## could not walk to the farm their farmhouse fronts.
+func test_the_fence_never_closes_over_the_villages_own_street():
+	var coord := _find_settlement_chunk_with_occupation("grassland", "farmer", 3)
+	var world := StubWorld.new()
+	renderer.spawn_village(parent, coord, coord * CHUNK_SIZE, CHUNK_SIZE, TILE_SIZE, "grassland", world)
+	var network := _paving_reachable_from_the_spine(world, coord)
+	assert_gt(network.size(), 0, "precondition: this village paved a street")
+	var built := _built_tiles(world, coord)
+	for cell in network:
+		assert_ne(
+			built.get(cell, ""), VillageRenderer.FENCE_TILE_ID,
+			"%s is street, and a fence laid across it walls the village off from its own farm" % str(cell)
+		)
+
+
+## And a rail never stands on a building, in water, or off the chunk.
+func test_a_rail_only_ever_stands_on_ground_that_can_take_one():
+	var coord := _find_settlement_chunk_with_occupation("grassland", "farmer", 3)
+	var world := StubWorld.new()
+	renderer.spawn_village(parent, coord, coord * CHUNK_SIZE, CHUNK_SIZE, TILE_SIZE, "grassland", world)
+	var footprints: Dictionary = {}
+	for call in world.place_calls:
+		for cell in BuildingCatalog.footprint_cells(call["building_id"], call["origin_local"]):
+			footprints[cell] = call["building_id"]
+	for cell in _built_tiles(world, coord):
+		if _built_tiles(world, coord)[cell] != VillageRenderer.FENCE_TILE_ID:
+			continue
+		assert_false(footprints.has(cell), "%s is a building, not open ground" % str(cell))
+		assert_true(
+			cell.x >= 0 and cell.y >= 0 and cell.x < CHUNK_SIZE and cell.y < CHUNK_SIZE,
+			"%s is outside the chunk" % str(cell)
+		)
+		var g: Vector2i = coord * CHUNK_SIZE + cell
+		assert_false(world.is_water_at_global(g.x, g.y), "%s is water" % str(cell))

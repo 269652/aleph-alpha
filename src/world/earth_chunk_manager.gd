@@ -15716,8 +15716,17 @@ func _growth_site_for(chunk_coord: Vector2i, building_id: String):
 		)
 		return null if industry.is_empty() else industry["origin"]
 
+	# is_paved lets the plot's own tie-back cross the paving this village
+	# has ALREADY laid -- another street's row, an earlier plot's doorstep,
+	# the square. Without it every junction reads as blocked ground and the
+	# ladder runs out of frontage the moment the second street exists (see
+	# VillageLayout._frontage_spur).
+	var is_paved := func(cell: Vector2i) -> bool:
+		var g: Vector2i = chunk_coord * CHUNK_SIZE + cell
+		return TerrainRenderer.is_road_tile(modification_at_global(g.x, g.y))
 	var plot: Dictionary = VillageLayout.next_street_plot(
-		building_id, CHUNK_SIZE, seed_value, is_buildable, is_occupied, _is_dry_local(chunk_coord)
+		building_id, CHUNK_SIZE, seed_value, is_buildable, is_occupied,
+		_is_dry_local(chunk_coord), Callable(), is_paved
 	)
 	return null if plot.is_empty() else plot["origin"]
 
