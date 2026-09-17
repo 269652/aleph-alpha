@@ -563,3 +563,51 @@ func test_a_corner_post_never_hangs_past_the_run_it_caps():
 			past, _EDGE_TOLERANCE,
 			"%s hangs %.0fpx past its own run, on a %dpx tile" % [subject, past, _TILE]
 		)
+
+
+# -- the divider fringe (IllustratedStructureSprite.even_cell_crop) --------
+
+## sawmill/warehouse/city_hall draw a thin LIGHT line along every cell
+## boundary and around the canvas. It is neither magenta nor near-black, so
+## neither of the two keys these sheets use removes it -- a cell cut
+## exactly on its grid square therefore keeps it as a hard opaque fringe up
+## the frame's own edge, visible in game as a white hairline boxing every
+## building in. Measured on warehouse.png: the pixel at cell corner
+## (0, 384) reads (0.992, 0.969, 0.996).
+const _FRINGE_MIN_CHANNEL := 0.85
+const _FRINGE_MIN_ALPHA := 0.5
+
+## Only the three sheets whose background keys to near-black: the divider
+## survives both keys there. farm/wooden_fence key on magenta, which is
+## what their own divider is drawn in, so it is already removed.
+const _BLACK_KEYED_EVEN_SUBJECTS := ["sagewerk", "storage", "city_hall"]
+
+
+func _opaque_light_pixels_on_the_border(image: Image) -> int:
+	var found := 0
+	for y in image.get_height():
+		for x in image.get_width():
+			var on_border := (
+				x == 0 or y == 0
+				or x == image.get_width() - 1 or y == image.get_height() - 1
+			)
+			if not on_border:
+				continue
+			var pixel := image.get_pixel(x, y)
+			var light := (
+				pixel.r >= _FRINGE_MIN_CHANNEL
+				and pixel.g >= _FRINGE_MIN_CHANNEL
+				and pixel.b >= _FRINGE_MIN_CHANNEL
+			)
+			if light and pixel.a >= _FRINGE_MIN_ALPHA:
+				found += 1
+	return found
+
+
+func test_no_idle_frame_carries_the_sheets_divider_line_as_a_fringe():
+	for subject in _BLACK_KEYED_EVEN_SUBJECTS:
+		var image := sprite.idle_texture(subject).get_image()
+		assert_eq(
+			_opaque_light_pixels_on_the_border(image), 0,
+			"%s keeps divider pixels on its own edge" % subject
+		)

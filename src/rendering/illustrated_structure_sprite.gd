@@ -548,12 +548,11 @@ func _build_idle_image(subject: String) -> Image:
 	return frame
 
 
-## The pixel rect for (row, column) in a columns x rows grid over `image`,
-## via cumulative rounding on both axes -- see this file's own header
-## comment for why a flat division would bleed on these sheets' real
-## non-evenly-divisible row count.
+## The pixels taken for (row, column) in a columns x rows grid over
+## `image`: the square grid cell (even_cell_rect) minus the sheet's own
+## divider line (even_cell_crop).
 func _cell_rect(image: Image, columns: int, rows: int, row: int, column: int) -> Rect2i:
-	return even_cell_rect(image.get_width(), image.get_height(), columns, rows, row, column)
+	return even_cell_crop(image.get_width(), image.get_height(), columns, rows, row, column)
 
 
 ## Where cell (row, column) sits on a sheet whose cells are drawn on an
@@ -584,6 +583,50 @@ static func even_cell_rect(
 	var x0: int = mini(column * cell, maxi(width - 1, 0))
 	var y0: int = mini(row * cell, maxi(height - 1, 0))
 	return Rect2i(x0, y0, mini(cell, width - x0), mini(cell, height - y0))
+
+
+## How far inside its own grid square a cell is actually cut, to clear the
+## thin light divider the sheets draw between cells and around the canvas.
+##
+## Measured, not guessed. On warehouse.png the pixel at the cell corner
+## (0, 384) reads (0.992, 0.969, 0.996) -- near-white, so neither the
+## magenta key nor the near-black key removes it, and the sheet's own
+## magenta background only starts 5px in. A cell cut exactly on the grid
+## carries that line up its own edge as a hard opaque fringe. The line runs
+## 1-3px, and the real art starts 8px inside a cell boundary, so 3 takes
+## the divider and never the building (pinned by
+## test_the_inset_clears_the_divider_without_reaching_the_art).
+const CELL_INSET := 3
+
+## An inset is only worth taking while it costs a small part of the cell.
+## Trimming both edges of a 192px cell loses 3% of it; on a cell small
+## enough to lose more than this share, the fringe is the lesser evil --
+## so the rule is the share, not a hand-picked minimum cell size.
+const MAX_INSET_SHARE := 0.1
+
+
+static func inset_for_cell(cell: int) -> int:
+	return CELL_INSET if float(CELL_INSET * 2) <= float(cell) * MAX_INSET_SHARE else 0
+
+
+## The pixels actually taken for cell (row, column): its grid square minus
+## the divider, on all four edges. The divider straddles a boundary, so the
+## neighbour's half of it lands on this cell's far edge as well as its own
+## near edge -- and trimming all four keeps the crop square, which is the
+## whole point of the square-cell rule above.
+static func even_cell_crop(
+	width: int, height: int, columns: int, rows: int, row: int, column: int
+) -> Rect2i:
+	var cell := even_cell_rect(width, height, columns, rows, row, column)
+	var inset := inset_for_cell(mini(cell.size.x, cell.size.y))
+	if inset <= 0:
+		return cell
+	return Rect2i(
+		cell.position.x + inset,
+		cell.position.y + inset,
+		maxi(1, cell.size.x - inset * 2),
+		maxi(1, cell.size.y - inset * 2)
+	)
 
 
 func _key_and_despill(image: Image, keys_black: bool) -> void:

@@ -1,9 +1,10 @@
 extends GutTest
 
-## Where a building sheet's cells actually are (see
-## IllustratedStructureSprite.even_cell_rect, docs/concept/building.md's
-## "Building sheets"). Reported live: "The warehouse has the rows cropped
-## wrongly and its scale as well."
+## Where a building sheet's cells actually are, and which pixels of one get
+## cropped (see IllustratedStructureSprite.even_cell_rect /
+## even_cell_crop, docs/concept/building.md's "Building sheets").
+## Reported live: "The warehouse has the rows cropped wrongly and its scale
+## as well."
 ##
 ## Pure arithmetic over a canvas size, so the real 1536x1024 sheets can be
 ## checked without loading a 1.5MB image per assertion.
@@ -15,6 +16,8 @@ const BuildingCatalog = preload("res://src/gameplay/building_catalog.gd")
 const REAL_SHEET_WIDTH := 1536
 const REAL_SHEET_HEIGHT := 1024
 
+
+# -- the grid the art is drawn on ------------------------------------------
 
 ## The bug, stated as a test. 1536/8 is exactly 192, but 1024/5 is 204.8 --
 ## so dividing the canvas evenly on BOTH axes walks every row after the
@@ -65,6 +68,92 @@ func test_a_cell_never_runs_off_the_canvas():
 	assert_lte(rect.position.y + rect.size.y, 100)
 	assert_gt(rect.size.x, 0)
 	assert_gt(rect.size.y, 0)
+
+
+# -- the divider line, and the crop that clears it -------------------------
+
+## The sheets draw a thin light divider between cells and a border around
+## the canvas. Measured on warehouse.png: the pixel at the cell corner
+## (0, 384) reads (0.992, 0.969, 0.996) -- near-white, so neither the
+## magenta nor the near-black key removes it, and the sheet's own magenta
+## background only starts 5px in. A cell cut exactly on the grid therefore
+## carries that line up its own top and left edge as a hard opaque fringe.
+##
+## 3px clears a divider measured at up to 3px, and the real art starts 8px
+## inside a cell boundary on these sheets, so it can never reach a
+## building.
+func test_the_inset_clears_the_divider_without_reaching_the_art():
+	assert_gte(IllustratedStructureSprite.CELL_INSET, 3, "must clear a divider measured at up to 3px")
+	assert_lt(IllustratedStructureSprite.CELL_INSET, 8, "must never reach the art, which starts 8px in")
+
+
+## An inset is only worth taking while it costs a small part of the cell.
+## On a cell small enough that trimming both edges eats more than
+## MAX_INSET_SHARE of it, the fringe is the lesser evil -- so the rule is
+## the share, not a hand-picked pixel count.
+func test_a_192_cell_takes_the_full_inset():
+	assert_eq(IllustratedStructureSprite.inset_for_cell(192), IllustratedStructureSprite.CELL_INSET)
+
+
+func test_a_cell_too_small_to_spare_its_edges_keeps_the_fringe():
+	assert_eq(IllustratedStructureSprite.inset_for_cell(16), 0)
+
+
+func test_the_inset_is_taken_exactly_while_it_costs_no_more_than_the_allowed_share():
+	var share := IllustratedStructureSprite.MAX_INSET_SHARE
+	var inset := IllustratedStructureSprite.CELL_INSET
+	for cell in range(1, 400):
+		var trimmed := float(IllustratedStructureSprite.inset_for_cell(cell) * 2) / float(cell)
+		assert_lte(trimmed, share, "cell %d may never lose more than the allowed share" % cell)
+		if float(inset * 2) / float(cell) <= share:
+			assert_eq(
+				IllustratedStructureSprite.inset_for_cell(cell), inset,
+				"cell %d can afford the inset and must take it" % cell
+			)
+
+
+## The crop is the grid square minus the divider, on all four edges: the
+## divider straddles a boundary, so the neighbour's half shows up on this
+## cell's far edge too.
+func test_the_crop_sits_inside_its_own_grid_square_on_every_edge():
+	for row in 5:
+		for column in 8:
+			var cell: Rect2i = IllustratedStructureSprite.even_cell_rect(
+				REAL_SHEET_WIDTH, REAL_SHEET_HEIGHT, 8, 5, row, column
+			)
+			var crop: Rect2i = IllustratedStructureSprite.even_cell_crop(
+				REAL_SHEET_WIDTH, REAL_SHEET_HEIGHT, 8, 5, row, column
+			)
+			assert_gt(crop.position.x, cell.position.x, "r%d c%d left" % [row, column])
+			assert_gt(crop.position.y, cell.position.y, "r%d c%d top" % [row, column])
+			assert_lt(
+				crop.position.x + crop.size.x, cell.position.x + cell.size.x,
+				"r%d c%d right" % [row, column]
+			)
+			assert_lt(
+				crop.position.y + crop.size.y, cell.position.y + cell.size.y,
+				"r%d c%d bottom" % [row, column]
+			)
+
+
+## Still square after the inset -- the whole point of the square-cell rule
+## is that the art's aspect is preserved, and an inset applied to one axis
+## only would quietly reintroduce the stretch.
+func test_the_cropped_cell_is_still_square():
+	var crop: Rect2i = IllustratedStructureSprite.even_cell_crop(
+		REAL_SHEET_WIDTH, REAL_SHEET_HEIGHT, 8, 5, 2, 3
+	)
+	assert_eq(crop.size.x, crop.size.y)
+
+
+## A cell too small to afford the inset is cropped to its whole grid
+## square, unchanged -- the crop never degenerates.
+func test_a_tiny_cell_is_cropped_to_its_whole_square():
+	var cell: Rect2i = IllustratedStructureSprite.even_cell_rect(100, 100, 8, 5, 4, 7)
+	var crop: Rect2i = IllustratedStructureSprite.even_cell_crop(100, 100, 8, 5, 4, 7)
+	assert_eq(crop, cell)
+	assert_gt(crop.size.x, 0)
+	assert_gt(crop.size.y, 0)
 
 
 # -- the warehouse's own footprint -----------------------------------------
