@@ -24297,3 +24297,46 @@ Tests: `test_npc_trust_store.gd` 7/7 (new), `test_world_planner_mode_wiring.gd`
 +4, 89/89 across the planner and hiring suites, and 158/158 across the
 construction/NPC/HUD/catalog suites this wires into — zero regressions.
 `world.gd` confirmed to compile.
+
+### Planner mode, slice 4: the wage really moves, and a hired build is worked (2026-09-17)
+
+Asked: *"Fix 1. and 2."* — the wage that was offered but not paid, and the
+hired villager who did not work.
+
+✅ **Gold really moves.** `WagePayment.pay` debits the player's purse and
+credits the hired villager's own household wallet. It is ONE function
+rather than a spend and an add at the call site, and that is the whole
+point: a debit that succeeded next to a credit that did not is money
+destroyed, and a credit without a debit is money invented. Conservation is
+pinned by a test, as is the refusal path — an unaffordable wage moves
+nothing and charges nobody, and a villager with no household (a real state:
+`household_wallet_for_villager` returns null for one) is not paid out of
+nowhere. Payment happens **before** the job is taken.
+
+✅ **A hired build is worked, not spawned** — the way
+`concept/building.md` says hiring must return: *"a build the player cannot
+do themselves says that hiring returns with construction-over-time"*. That
+doc retired the instant-hire fork on purpose, so this does not bring it
+back. A hired build opens **IN_PROGRESS** (`advance_project_labor` only
+advances an in-progress project, so one left PLANNED would silently never
+move) and accrues hours through the same `ConstructionProjectStore` and
+`ConstructionCatchup` a settlement's own builds use — 8 hours per builder
+per in-game day, so a hired villager earns exactly what a settlement's
+spare hand does rather than on a private schedule.
+
+✅ **One clock, read.** Hired builds advance against
+`world_age_seconds()`, never an accumulated frame delta — the rule
+`step_snow`'s own doc comment already states, and the reason a `/season`
+leap does not leave a half-built house frozen. Pinned by a test that the
+function contains no `delta`. Stepped from `_step_ecology_batch` alongside
+every other slow world system, because a build in progress is world state
+rather than something that should only advance while somebody watches.
+
+🚧 **The hired villager has no visible walk to the site.** The hours are
+real and the building completes, but the NPC does not path there and
+animate. `BuilderMarker` exists for exactly this and is still unconsumed by
+live gameplay — wiring it belongs with `concept/workforce.md`, not here.
+
+Tests: `test_wage_payment.gd` 6/6 (new), `test_world_planner_mode_wiring.gd`
++4, 145/145 across the planner, wage, wallet, hiring, construction-store and
+catchup suites — zero regressions. `world.gd` confirmed to compile.

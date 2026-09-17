@@ -194,12 +194,33 @@ whole.
   raising twice cannot reset a project already under way. The plan is
   cancelled and re-saved as it becomes a project, or a blueprint would be
   drawn over its own building.
-- ⬜ **The wage is offered, not yet paid.** `BUILDER_WAGE` clears the
-  minimum (pinned), and `docs/concept/npc_instructions.md` lists "any
-  actual wage-payment flow" as unbuilt for the whole NPC system, not just
-  here — so no gold moves yet. Naming it rather than pretending the
-  transaction happened.
-- ⬜ **A hired villager does not yet walk to the site and work.**
-  `ConstructionLabor` and `BuilderMarker` exist; connecting the project to
-  a villager's own day is the next slice, and belongs with
-  `docs/concept/workforce.md` rather than here.
+- ✅ **The wage is really paid** (2026-09-17) — `WagePayment.pay` moves gold
+  from the player's purse into the hired villager's own household wallet,
+  and it is ONE function rather than a spend and an add at the call site
+  for the reason that matters: a debit that succeeded next to a credit that
+  did not is money destroyed, and a credit without a debit is money
+  invented. Gold conservation is pinned by a test. Payment happens
+  **before** the job is taken — a villager who was never paid must not end
+  up working, and a player who cannot afford the wage is told so rather
+  than quietly getting free labour. This is the first real wage-payment
+  flow in the game; `docs/concept/npc_instructions.md` lists the general
+  one as still unbuilt.
+- ✅ **A hired villager works the site over time** — and does it the way
+  [building.md](building.md) says hiring must come back: *"a build the
+  player cannot do themselves says that hiring returns with
+  construction-over-time"*. The instant-hire fork was retired on purpose,
+  so nothing is spawned. A hired build opens **IN_PROGRESS** (a PLANNED one
+  would silently never advance) and accrues hours through the same
+  `ConstructionProjectStore.advance_project_labor` and
+  `ConstructionCatchup` a settlement's own builds use — 8 hours per builder
+  per in-game day, so a hired villager earns exactly what a settlement's
+  spare hand does rather than on a private schedule. Stepped from
+  `_step_ecology_batch` alongside every other slow world system, and
+  measured against the **world clock** rather than a frame delta: one
+  clock, read, never a second one kept in step — which is why a `/season`
+  leap does not leave a half-built house frozen.
+- ⬜ **The hired villager has no visible walk to the site.** The hours are
+  real and the building completes, but the NPC does not yet path there and
+  animate. `BuilderMarker` exists for exactly this and is still unconsumed
+  by live gameplay; wiring it belongs with
+  [workforce.md](workforce.md).

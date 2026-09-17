@@ -139,3 +139,42 @@ func test_hiring_reads_the_live_trust_value():
 ## forever.
 func test_talking_is_what_earns_trust():
 	assert_true(_function_body("_on_talk_pressed").contains("_npc_trust.record_conversation("))
+
+
+## The wage really moves before the job is taken. A villager who was never
+## paid must not end up working, and a player who cannot afford the wage
+## must be told rather than quietly getting free labour.
+func test_the_wage_is_paid_before_the_job_is_taken():
+	var body := _function_body("_raise_plan_within_reach")
+	assert_true(body.contains("WagePayment.pay("), "gold really moves")
+	assert_true(
+		body.contains("household_wallet_for_villager("),
+		"into the villager's own household purse, not nowhere"
+	)
+	var paid_at := body.find("WagePayment.pay(")
+	var hired_at := body.find("_open_raising_project(plan, PlanRaising.Labour.HIRED)")
+	assert_gt(hired_at, -1, "the premise: hiring still opens a project")
+	assert_lt(paid_at, hired_at, "payment must come before the job is taken, not after")
+
+
+## docs/concept/building.md retired the instant hire fork on purpose: "a
+## build the player cannot do themselves says that hiring returns with
+## construction-over-time". A hired build must therefore accrue labour,
+## never spawn a finished building.
+func test_a_hired_build_accrues_labour_rather_than_being_spawned():
+	var body := _function_body("_step_hired_builds")
+	assert_true(body.contains("advance_hired_build("), "hours are added over time")
+	assert_false(body.contains("stamp_"), "nothing is stamped into existence")
+	assert_true(body.contains("world_age_seconds()"), "measured against the world clock")
+
+
+## One clock, read -- never a second one accumulated per frame that has to
+## be kept in step with it. It is why a /season leap does not leave a
+## half-built house frozen.
+func test_hired_builds_are_advanced_from_the_world_clock_not_a_frame_delta():
+	var body := _function_body("_step_hired_builds")
+	assert_false(body.contains("delta"), "a frame delta would be a second clock: %s" % body)
+
+
+func test_hired_builds_are_stepped_with_the_other_slow_world_systems():
+	assert_true(_function_body("_step_ecology_batch").contains("_step_hired_builds()"))

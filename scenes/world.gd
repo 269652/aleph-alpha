@@ -20,6 +20,7 @@ const PlanWireframeLayer = preload("res://src/rendering/plan_wireframe_layer.gd"
 const PlanRaising = preload("res://src/gameplay/plan_raising.gd")
 const BuildPlanPersistence = preload("res://src/world/build_plan_persistence.gd")
 const NpcTrustStore = preload("res://src/world/npc_trust_store.gd")
+const WagePayment = preload("res://src/gameplay/wage_payment.gd")
 const InteractionSfxPlayer = preload("res://src/audio/interaction_sfx_player.gd")
 const FootstepSound = preload("res://src/audio/footstep_sound.gd")
 const CreatureCallSound = preload("res://src/audio/creature_call_sound.gd")
@@ -3627,6 +3628,10 @@ func _handle_escape() -> void:
 ## Per slice: cheap, and the things the lapse exists to show.
 ##
 func _step_ecology_batch(delta: float, focus_player: Player) -> void:
+	# Hired builds accrue their hours here, alongside every other slow
+	# world system -- a build in progress is world state, not something
+	# that should only advance while somebody is looking at it.
+	_step_hired_builds()
 	_ecology_focus_player = focus_player
 	if _ecology_steps.is_empty():
 		_ecology_steps = {
@@ -5094,6 +5099,19 @@ var _build_plan_store := BuildPlanPersistence.new()
 ## survives a marker despawning with its chunk.
 var _npc_trust := NpcTrustStore.new()
 
+## Builds the player commissioned and paid for: project id -> how many
+## hired villagers are working it. Labour accrues against these every
+## ecology batch, which is how docs/concept/building.md's "hiring returns
+## with construction-over-time" actually happens -- a hired house is
+## WORKED, never spawned.
+var _hired_builds: Dictionary = {}
+
+## When each hired build last had labour added, so elapsed time is measured
+## against the world clock rather than accumulated per frame -- the same
+## "one clock, read it, do not keep a second one" rule step_snow's own doc
+## comment already states.
+var _hired_build_advanced_at: Dictionary = {}
+
 ## What the player offers a villager to raise a wireframe, and the least
 ## any villager will take. Both are tuned values, so they are pinned by
 ## test_the_offered_wage_clears_the_minimum rather than asserted here: an
@@ -5267,9 +5285,24 @@ func _raise_plan_within_reach(builder: Player) -> bool:
 	if hired != null and hired.identity != null and PlanRaising.can_hire_builder(
 		_npc_trust.trust_of(hired.identity.seed_value), BUILDER_WAGE, BUILDER_MINIMUM_WAGE
 	):
-		_open_raising_project(plan, PlanRaising.Labour.HIRED)
-		_show_planner_message("%s takes the job: %s." % [
-			hired.identity.npc_name, BuildPlan.display_name_of(plan.blueprint_id)
+		# The wage really moves before the job is taken: a villager who was
+		# never paid must not end up working, and a player who cannot afford
+		# the wage is told so rather than silently getting free labour.
+		if not WagePayment.pay(
+			builder.wallet,
+			_chunk_manager.household_wallet_for_villager(hired.identity.seed_value),
+			int(BUILDER_WAGE)
+		):
+			_show_planner_message("You cannot pay %s the %d gold they want for this." % [
+				hired.identity.npc_name, int(BUILDER_WAGE)
+			])
+			return true
+		var project = _open_raising_project(plan, PlanRaising.Labour.HIRED)
+		if project != null:
+			_hired_builds[project.id] = 1.0
+			_hired_build_advanced_at[project.id] = _chunk_manager.world_age_seconds()
+		_show_planner_message("%s takes the job for %d gold: %s." % [
+			hired.identity.npc_name, int(BUILDER_WAGE), BuildPlan.display_name_of(plan.blueprint_id)
 		])
 		return true
 	var missing: Dictionary = PlanRaising.missing_materials(plan.blueprint_id, _carried_counts(builder, plan.blueprint_id))
@@ -5295,10 +5328,19 @@ func _raise_plan_within_reach(builder: Player) -> bool:
 ## -- a player-raised building must be the same kind of project a
 ## villager-raised one is, not a parallel one. start_project is idempotent
 ## by site, so this cannot reset a project already under way.
-func _open_raising_project(plan, labour: int) -> void:
+func _open_raising_project(plan, labour: int):
 	var request: Dictionary = PlanRaising.raising_request(plan, labour)
-	_chunk_manager.start_build_project(
-		request["chunk_coord"], request["origin"], request["blueprint_id"], ""
+	# A hired build is under way from the moment somebody takes the job;
+	# advance_project_labor only advances an IN_PROGRESS project, so a hired
+	# one left PLANNED would silently never progress.
+	var project = (
+		_chunk_manager.begin_hired_build_project(
+			request["chunk_coord"], request["origin"], request["blueprint_id"], ""
+		)
+		if labour == PlanRaising.Labour.HIRED
+		else _chunk_manager.start_build_project(
+			request["chunk_coord"], request["origin"], request["blueprint_id"], ""
+		)
 	)
 	# The wireframe has become a real project, so the plan that stood for it
 	# is done -- leaving it would draw a blueprint over its own building.
@@ -5306,6 +5348,30 @@ func _open_raising_project(plan, labour: int) -> void:
 	_build_plan_store.save(_build_plans)
 	if _plan_wireframes != null:
 		_plan_wireframes.refresh()
+	return project
+
+
+## Adds the hours a hired villager put in since this build was last looked
+## at, and reports the ones that finished.
+##
+## Measured against the world clock rather than accumulated per frame: one
+## clock, read it, never keep a second one that has to be kept in step --
+## the rule step_snow's own doc comment already states, and the reason a
+## /season leap does not leave a half-built house frozen.
+func _step_hired_builds() -> void:
+	if _hired_builds.is_empty():
+		return
+	var now: float = _chunk_manager.world_age_seconds()
+	for project_id in _hired_builds.keys():
+		var since: float = now - float(_hired_build_advanced_at.get(project_id, now))
+		_hired_build_advanced_at[project_id] = now
+		var outcome: Dictionary = _chunk_manager.advance_hired_build(
+			project_id, since, float(_hired_builds[project_id])
+		)
+		if outcome.get("action", "") == "completed":
+			_hired_builds.erase(project_id)
+			_hired_build_advanced_at.erase(project_id)
+			_show_planner_message("The builders are finished.")
 
 
 ## What the builder is carrying, item id -> count, in the shape
