@@ -17,6 +17,8 @@ const BuildPlanLedger = preload("res://src/world/build_plan_ledger.gd")
 const BuildingCatalog = preload("res://src/gameplay/building_catalog.gd")
 const PlanWireframe = preload("res://src/rendering/plan_wireframe.gd")
 const PlanWireframeLayer = preload("res://src/rendering/plan_wireframe_layer.gd")
+const PlanRaising = preload("res://src/gameplay/plan_raising.gd")
+const BuildPlanPersistence = preload("res://src/world/build_plan_persistence.gd")
 const InteractionSfxPlayer = preload("res://src/audio/interaction_sfx_player.gd")
 const FootstepSound = preload("res://src/audio/footstep_sound.gd")
 const CreatureCallSound = preload("res://src/audio/creature_call_sound.gd")
@@ -1075,6 +1077,7 @@ func _ready() -> void:
 	_apply_simulation_settings()
 
 	_build_hotbar_slots()
+	_build_plans = _build_plan_store.load_ledger()
 	_build_plan_wireframes()
 	_build_blueprint_palette()
 	_build_view_mode_toggle()
@@ -1351,6 +1354,9 @@ func _wipe_persisted_world() -> void:
 	_world_reset.wipe_directory(EarthChunkManager.MODIFICATIONS_DIR)
 	_world_reset.wipe_directory(EarthChunkManager.PLANTED_TREES_DIR)
 	_world_reset.wipe_directory(EarthChunkManager.FISH_POPULATION_DIR)
+	# Plans are world state like any other, so a new world starts without
+	# the previous one's wireframes standing in it.
+	_build_plan_store.wipe()
 	# Roofs are chunk modifications like any other (the same per-chunk
 	# <x>_<y>.bin shape as MODIFICATIONS_DIR, written by the same building
 	# code) -- they were just added later than the three lines above and
@@ -3548,7 +3554,13 @@ func _unhandled_input(event: InputEvent) -> void:
 	elif event.is_action_pressed(TALK_ACTION):
 		var talker := _players.get_node_or_null(str(multiplayer.get_unique_id())) as Player
 		if talker != null:
-			_on_talk_pressed(talker)
+			# Standing at a wireframe, the interact key raises it; anywhere
+			# else it still talks. Plan first because a wireframe you are
+			# standing on is unambiguous, while an NPC in talking range is
+			# the commoner case everywhere else -- and _raise_plan_within_
+			# reach reports whether it found one, so nothing is swallowed.
+			if not _raise_plan_within_reach(talker):
+				_on_talk_pressed(talker)
 	elif event.is_action_pressed(SKILLS_TOGGLE_ACTION):
 		_skill_window.toggle()
 		var lp := _players.get_node_or_null(str(multiplayer.get_unique_id())) as Player
@@ -5065,6 +5077,11 @@ var _selected_blueprint := ""
 var _view_mode_button: Button
 var _blueprint_palette: PanelContainer
 var _plan_wireframes: PlanWireframeLayer
+
+## Plans on disk. A wireframe is world state (planner_mode.md's pillar 3),
+## so it has to outlive a reload -- walking back to one later is the whole
+## point of planning ahead.
+var _build_plan_store := BuildPlanPersistence.new()
 var _planner_banner: PanelContainer
 
 
@@ -5209,6 +5226,46 @@ func _update_plan_cursor() -> void:
 	)
 
 
+## Raises the wireframe the player is standing at, if there is one.
+##
+## This is where planner_mode.md's pillar 1 pays out: planning charged
+## nothing, and the building's own REAL catalog cost -- the same numbers a
+## village pays for the same building -- falls here, at the moment somebody
+## actually builds. A player who cannot afford it is told what they are
+## short of rather than silently refused.
+func _raise_plan_within_reach(builder: Player) -> bool:
+	if _plan_wireframes == null or builder == null:
+		return false
+	var player_cell := Vector2i((builder.position / TerrainRenderer.TILE_SIZE).floor())
+	var plan = PlanRaising.plan_within_reach(_build_plans, player_cell, EarthChunkManager.CHUNK_SIZE)
+	if plan == null:
+		return false
+	var missing: Dictionary = PlanRaising.missing_materials(plan.blueprint_id, _carried_counts(builder, plan.blueprint_id))
+	if not missing.is_empty():
+		var shortfall: Array[String] = []
+		for item_id in missing:
+			shortfall.append("%s x%d" % [item_id, missing[item_id]])
+		_show_planner_message("Need %s to raise this %s." % [
+			", ".join(shortfall), BuildPlan.display_name_of(plan.blueprint_id)
+		])
+		return true
+	_show_planner_message(
+		"Raising %s. (Hiring a builder instead is not wired yet.)" % BuildPlan.display_name_of(plan.blueprint_id)
+	)
+	return true
+
+
+## What the builder is carrying, item id -> count, in the shape
+## PlanRaising.missing_materials expects. Asked per material the blueprint
+## actually needs (Inventory.count_of) rather than by walking every stack:
+## a cost names two or three items, and an inventory holds far more.
+func _carried_counts(builder: Player, blueprint_id: String) -> Dictionary:
+	var counts: Dictionary = {}
+	for item_id in BuildingCatalog.cost_of(blueprint_id):
+		counts[item_id] = builder.inventory.count_of(item_id)
+	return counts
+
+
 ## Whether this global cell is ground a blueprint may stand on. The world's
 ## OWN real answer, handed to the ledger as a Callable exactly as
 ## BuildingPlacement takes one -- water and cliff rules belong here, with
@@ -5240,6 +5297,7 @@ func _plan_blueprint_at(global_cell: Vector2i) -> void:
 		_plan_ground_is_buildable
 	)
 	_show_planner_message("%s planned." % BuildPlan.display_name_of(_selected_blueprint))
+	_build_plan_store.save(_build_plans)
 	if _plan_wireframes != null:
 		_plan_wireframes.refresh()
 

@@ -148,17 +148,36 @@ whole.
   rather than silently doing nothing. Pillar 1 is pinned by a test that
   the placement path contains no `build_at_global`, `place_building`,
   `spend` or `remove_item`.
-- ⬜ **Wireframe rendering.** The plans are real world state and the ledger
-  answers `plans_in(chunk)` for exactly this, but nothing draws them yet —
-  so a planned site is currently invisible on the map. This is the next
-  slice and the biggest remaining gap.
-- ⬜ **Persistence across save/load and chunk unload.** The ledger lives in
-  `World` for now, so plans do not survive a reload. Pillar 3 says they
-  must.
-- ⬜ **Walking up to a wireframe: build-it-yourself, and hire-an-NPC.** The
-  pieces it needs already exist (`ConstructionProject`'s `PLANNED` status,
-  `ConstructionLabor`, `HiringGate.can_hire`); what is missing is the
-  proximity check and the choice itself.
-- ⬜ **A footprint that follows the cursor and colours itself** by whether
-  it may be placed, the way Anno's does. `refusal_reason` already answers
-  it per cell; nothing draws it yet.
+- ✅ **Wireframe rendering** (2026-09-17) — `PlanWireframe` (pure geometry
+  and colour) + `PlanWireframeLayer` (a thin Node2D that only iterates and
+  draws). A child of `World` rather than `$UI`, on the ground-effects tier
+  (`z_index -1`), because a plan stands on the ground rather than on the
+  screen. 10/10.
+- ✅ **The cursor's footprint, coloured by whether it may be placed** — one
+  colour vocabulary shared with the standing wireframe, since they are the
+  same thing a moment apart. The colour is derived from the ledger's own
+  refusal *reason*, so what the cursor shows and what the message says
+  cannot disagree. Allowed and refused differ in hue rather than
+  brightness, pinned by a test.
+- ✅ **Persistence** — `BuildPlanPersistence`, mirroring
+  `WorldClockPersistence`'s shape. One file rather than the per-chunk
+  directories chunk modifications use: a settlement's plans are tens of
+  records read whole, not thousands per chunk. JSON rather than
+  `store_var` because a malformed `get_var` raises an uncatchable engine
+  error, where a truncated file must degrade to "no plans". Loading
+  replays rows into a real ledger so its overlap refusal still knows what
+  it loaded. Wiped with the rest of the world on New Game. 7/7.
+- ✅ **Raising a wireframe** — `PlanRaising`: reach, the building's own
+  **real catalog cost** (never a second price list), what you are short of
+  so the prompt can say it, and hiring through the **same `HiringGate`**
+  every other wage relationship uses. Both ways produce the same site and
+  blueprint; only who supplies the hours differs. Bound to the interact
+  key, which raises a wireframe you are standing at and otherwise still
+  talks. 12/12.
+- 🚧 **Choosing an NPC to hire is not wired.** `can_hire_builder` is real
+  and tested and `raising_request` already carries `Labour.HIRED`, but
+  nothing yet picks *which* villager you are offering the job to, so the
+  prompt currently says so plainly instead of pretending.
+- 🚧 **Raising does not yet open a `ConstructionProject`.** The prompt
+  reports the cost check honestly; turning that into real labour hours
+  against `ConstructionLabor` is the next slice.

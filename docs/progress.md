@@ -24206,3 +24206,48 @@ Tests: `test_view_mode.gd` 9/9 (new), `test_build_plan_ledger.gd` 15/15
 (new), `test_world_planner_mode_wiring.gd` 7/7 (new), 108/108 including the
 `building_catalog`/`building_placement`/`world_hud` suites they touch;
 `world.gd` confirmed to still compile by booting it.
+
+### Planner mode, slice 2: the gaps closed (see `docs/concept/planner_mode.md`, 2026-09-17)
+
+Asked: *"Fix the gaps"* — the four open items the first slice named.
+
+✅ **Wireframes are visible.** `PlanWireframe` (pure geometry and colour) +
+`PlanWireframeLayer` (a thin Node2D that only iterates and draws). The one
+piece of real logic a drawing node would carry — turning a plan's chunk and
+local origin into a world rect — lives in the model where a test reaches it
+without a viewport. A child of `World`, not `$UI`, on the ground-effects
+tier: a plan stands on the ground, not on the screen.
+
+✅ **The cursor answers.** One colour vocabulary serves the ghost and the
+wireframe it becomes, since they are the same thing a moment apart. The
+colour comes from the ledger's own refusal *reason*, so the cursor and the
+message can never disagree. Allowed and refused differ in **hue**, pinned by
+a test — it is the only feedback the cursor gives.
+
+✅ **Plans survive a reload.** `BuildPlanPersistence` mirrors
+`WorldClockPersistence`'s shape. One file, not per-chunk directories: tens of
+records read whole, not thousands per chunk. **JSON rather than `store_var`**
+because a malformed `get_var` raises an uncatchable engine error, and a file
+truncated by a crash must degrade to "no plans" rather than take the boot
+down. Loading replays rows into a real ledger, so its overlap refusal still
+knows what it loaded — otherwise every reload would silently allow a second
+plan on top of an existing one.
+
+✅ **Walking up to a wireframe raises it.** `PlanRaising` carries the reach,
+the building's own **real catalog cost** (the same numbers a village pays, so
+a player and a villager never disagree about what a sawmill costs), what you
+are short of so the prompt can say it, and hiring through the **same
+`HiringGate`** every other wage relationship uses rather than a softer rule
+invented for construction. Pillar 1 pays out here: planning charged nothing,
+and the cost falls at the moment somebody builds.
+
+🚧 **Choosing which NPC to hire is not wired** — `can_hire_builder` is real
+and tested and `raising_request` already carries `Labour.HIRED`, but nothing
+picks the villager yet, so the prompt says so plainly rather than pretending.
+
+🚧 **Raising does not yet open a `ConstructionProject`** — the cost check is
+honest; turning it into labour hours against `ConstructionLabor` is next.
+
+Tests: `test_plan_wireframe.gd` 10/10, `test_plan_raising.gd` 12/12,
+`test_build_plan_persistence.gd` 7/7 (all new), 118/118 across the planner
+suite plus `building_catalog`/`hiring_gate`; `world.gd` confirmed to compile.
