@@ -66,10 +66,11 @@ const _SHEET_PATH := "res://assets/sprites/intro.png"
 ## documents the real measured row extent and drives _FRAME_HEIGHT's own
 ## derivation below.
 const _ROW_BANDS: Array[Vector2i] = [
-	Vector2i(12, 193),
-	Vector2i(206, 389),
-	Vector2i(402, 584),
-	Vector2i(598, 780),
+	Vector2i(7, 169),
+	Vector2i(174, 332),
+	Vector2i(337, 495),
+	Vector2i(500, 647),
+	Vector2i(652, 786),
 ]
 
 ## Left edge (source-image space) of each of the 8 columns, identical
@@ -82,7 +83,7 @@ const _ROW_BANDS: Array[Vector2i] = [
 ## wordmark letters already present) drifts by 1px at a single column --
 ## see test_column_lefts_match_a_content_free_measurement for the
 ## regression check against the real image.
-const _COLUMN_LEFTS: Array[int] = [13, 259, 506, 752, 998, 1245, 1492, 1739]
+const _COLUMN_LEFTS: Array[int] = [8, 251, 499, 746, 994, 1242, 1490, 1738]
 
 ## ONE fixed crop size, used for every one of the 32 frames -- no
 ## per-frame content cropping (see this file's own doc comment above for
@@ -99,8 +100,8 @@ const _COLUMN_LEFTS: Array[int] = [13, 259, 506, 752, 998, 1245, 1492, 1739]
 ## sheet by test_frame_size_has_real_safety_margins, not just claimed in
 ## this comment (see CLAUDE.md: tuned thresholds must be tested, not
 ## eyeballed).
-const _FRAME_WIDTH := 240
-const _FRAME_HEIGHT := 183
+const _FRAME_WIDTH := 243
+const _FRAME_HEIGHT := 162
 
 ## Chroma-keyed opaque magenta -- identical thresholds to every other
 ## illustrated sheet in this codebase (e.g. IllustratedWormSprite),
@@ -132,12 +133,29 @@ func generate_textures() -> Array[ImageTexture]:
 func _build_textures() -> Array[ImageTexture]:
 	var image := _prepared_for_slicing(SpriteSheetLoader.load_image(_SHEET_PATH))
 	var textures: Array[ImageTexture] = []
-	for band in _ROW_BANDS:
+	for row in _ROW_BANDS.size():
+		var top: int = _ROW_BANDS[row].x
+		# Never read past this row into the next one's art. The rows of
+		# this sheet are not evenly pitched and their content heights
+		# shrink down it (162/158/158/147/134), so one crop height cannot
+		# both cover the tallest row and stay clear of the shortest gap --
+		# the crop is capped and the frame padded below instead.
+		var limit: int = (
+			_ROW_BANDS[row + 1].x if row + 1 < _ROW_BANDS.size() else image.get_height()
+		)
+		var crop_height: int = mini(_FRAME_HEIGHT, limit - top)
 		for left in _COLUMN_LEFTS:
-			var rect := Rect2i(left, band.x, _FRAME_WIDTH, _FRAME_HEIGHT)
-			var frame_image := image.get_region(rect)
-			if frame_image.get_format() != Image.FORMAT_RGBA8:
-				frame_image.convert(Image.FORMAT_RGBA8)
+			var cropped := image.get_region(Rect2i(left, top, _FRAME_WIDTH, crop_height))
+			if cropped.get_format() != Image.FORMAT_RGBA8:
+				cropped.convert(Image.FORMAT_RGBA8)
+			# Every frame is the SAME size whatever its row could spare,
+			# so nothing rescales between rows (see bug #6 above); a short
+			# row simply carries transparent space below its art.
+			var frame_image := Image.create(_FRAME_WIDTH, _FRAME_HEIGHT, false, Image.FORMAT_RGBA8)
+			frame_image.fill(Color(0.0, 0.0, 0.0, 0.0))
+			frame_image.blit_rect(
+				cropped, Rect2i(0, 0, _FRAME_WIDTH, crop_height), Vector2i.ZERO
+			)
 			textures.append(ImageTexture.create_from_image(frame_image))
 	return textures
 

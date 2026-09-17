@@ -67,7 +67,7 @@ exact beat structure (rotate → light-streak sweep → wordmark builds in
 consequence of generating art with an external AI tool rather than hand-
 placing it on an exact canvas, and the reason `IntroSplashSheet` measures
 its own row bands directly (`tools/probe_intro_sheet.gd`) rather than
-assuming even division. 8 columns × 4 rows = 32 frames, magenta-keyed and
+assuming even division. 8 columns × 5 rows = 40 frames, magenta-keyed and
 despilled exactly like every other illustrated sheet in this codebase
 (`IllustratedWormSprite` etc. — the identical technique, duplicated rather
 than shared, matching how this codebase already treats that small
@@ -91,7 +91,7 @@ size), applied uncritically here.
 ### Sequencing
 
 `IntroSplashSequencer` (`src/rendering/intro_splash_sequencer.gd`, pure,
-headlessly tested) is the entire timing model: `FRAME_COUNT` (32) over
+headlessly tested) is the entire timing model: `FRAME_COUNT` (40) over
 `FPS` (10, a deliberately chunky pixel-art rate rather than a smooth 24-
 30fps readback — see that constant's own doc comment) gives a ~3.2s
 one-shot playback, `frame_index_at(elapsed_seconds)` clamped at the final
@@ -1283,3 +1283,34 @@ only old, already-tested behavior restored.
   right" instability. The richer sheet isn't lost, just not integrated —
   recoverable from commit `aad16cff` whenever a version with genuinely
   continuous inter-row rotation exists.
+
+
+## Re-measuring after the art is replaced (2026-09-17)
+
+Reported in play right after `intro.png` was swapped: *"the new intro has
+wrong row sizes the image is moving from bottom to top"*.
+
+`_ROW_BANDS` and `_COLUMN_LEFTS` are measured constants, pinned once
+against the sheet as it then was. Nothing checked they still described the
+file, so the new art was cropped at the OLD rows' offsets — drifting
+further down the sheet row by row (+5, +32, +65, +98 px), which reads on
+screen as the picture climbing upward.
+
+The new sheet is a different grid: **5 rows, not 4** (tops at
+7/174/337/500/652 rather than 12/206/402/598), columns shifted left by
+~5px, and therefore **40 frames rather than 32**.
+
+Two things changed beyond the numbers:
+
+- **The rows are not evenly pitched and their content heights shrink down
+  the sheet** (162/158/158/147/134). One crop height cannot both cover the
+  tallest row and stay clear of the shortest gap, so the crop is capped at
+  whatever the row can spare and the frame is **padded below** to a single
+  fixed size. Every frame is still the exact same size — which is what bug
+  #6 was about — without clipping art or pulling in the row beneath.
+- **The pinned grid is now checked against the real file at test time**
+  (`test_the_pinned_row_tops_are_where_the_sheets_rows_actually_start`).
+  That is the test that was missing: the art could change and nothing
+  noticed. The next swap fails there instead of shipping a drifting intro.
+
+Re-measure with `tools/probe_intro_sheet.gd` whenever the sheet changes.

@@ -11,7 +11,7 @@ extends RefCounted
 ## 32 frames: an 8-column x 4-row illustrated sheet (see IntroSplashSheet),
 ## the same grid shape as this project's other illustrated animation
 ## sheets (e.g. worm.png).
-const FRAME_COUNT := 32
+const FRAME_COUNT := 40
 
 ## Deliberately chunky, not smooth -- a fast 24-30fps readback would fight
 ## the sheet's own hand-illustrated pixel-art style (see

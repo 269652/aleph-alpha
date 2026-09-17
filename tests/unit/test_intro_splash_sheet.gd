@@ -22,6 +22,8 @@ extends GutTest
 ## regions instead.
 
 const IntroSplashSheet = preload("res://src/rendering/intro_splash_sheet.gd")
+const SpriteSheetLoader = preload("res://src/rendering/sprite_sheet_loader.gd")
+const IntroSplashSequencer = preload("res://src/rendering/intro_splash_sequencer.gd")
 
 var sheet: IntroSplashSheet
 
@@ -31,7 +33,7 @@ func before_each():
 
 
 func test_frame_count_matches_the_sequencer():
-	assert_eq(sheet.generate_textures().size(), 32)
+	assert_eq(sheet.generate_textures().size(), IntroSplashSequencer.FRAME_COUNT)
 
 
 func test_every_frame_has_real_content():
@@ -63,14 +65,14 @@ func test_frames_have_no_leftover_magenta_background():
 
 
 ## The first frame (no wordmark yet) and the last frame (full wordmark,
-## globe rotated) must genuinely differ -- a real 32-frame animation, not
-## 32 copies of one drawing.
+## globe rotated) must genuinely differ -- a real animation, not
+## a stack of copies of one drawing.
 func test_first_and_last_frames_differ():
 	var frames := sheet.generate_textures()
 	assert_ne(frames[0].get_image().get_data(), frames[31].get_image().get_data())
 
 
-## Every one of the 32 frames must differ from its own immediate neighbour
+## Every frame must differ from its own immediate neighbour
 ## -- catches a slicing bug that accidentally duplicates a column/row
 ## boundary (e.g. an off-by-one that reads the same cell twice) even if
 ## the first-vs-last check above would not.
@@ -89,7 +91,7 @@ func test_frames_are_cached_not_rebuilt_per_call():
 	assert_same(a[0], b[0])
 
 
-## Bug #6 (2026-09-09): every one of the 32 frames must be the exact same
+## Bug #6 (2026-09-09): every frame must be the exact same
 ## pixel size. IntroSplash's own TextureRect (EXPAND_IGNORE_SIZE +
 ## STRETCH_KEEP_ASPECT_COVERED, see scenes/intro_splash.gd) scales and
 ## re-centers EACH frame independently, driven by that frame's own size --
@@ -132,3 +134,91 @@ func _has_opaque_pixels(texture: Texture2D) -> bool:
 			if image.get_pixel(x, y).a > 0.5:
 				return true
 	return false
+
+
+# -- the pinned grid must match the sheet that is actually on disk --------
+#
+# Reported in play after the intro art was replaced: "the new intro has
+# wrong row sizes the image is moving from bottom to top".
+#
+# _ROW_BANDS and _COLUMN_LEFTS are measured constants, pinned once against
+# the sheet as it was (see this file's own doc comment and
+# tools/probe_intro_sheet.gd). Nothing checked they still described the
+# file, so replacing intro.png left every row cropped at the OLD row's
+# offset -- drifting further down the sheet row by row, which reads on
+# screen as the picture climbing upward.
+#
+# These measure the real sheet at test time and compare, so the next art
+# swap fails here instead of shipping a drifting intro.
+
+
+## Rows of the sheet that are entirely background, i.e. the gutters -- the
+## same magenta rule the slicer itself keys on. Returns each content band
+## as [top, bottom).
+func _measured_row_bands(image: Image) -> Array:
+	var bands: Array = []
+	var top := -1
+	for y in image.get_height():
+		var is_gutter := true
+		for x in image.get_width():
+			if not IntroSplashSheet._is_magenta(image.get_pixel(x, y)):
+				is_gutter = false
+				break
+		if is_gutter:
+			if top >= 0:
+				bands.append(Vector2i(top, y))
+				top = -1
+		elif top < 0:
+			top = y
+	if top >= 0:
+		bands.append(Vector2i(top, image.get_height()))
+	return bands
+
+
+func test_the_pinned_row_tops_are_where_the_sheets_rows_actually_start():
+	var image := SpriteSheetLoader.load_image(IntroSplashSheet._SHEET_PATH)
+	assert_not_null(image, "precondition: the sheet loads")
+	var measured := _measured_row_bands(image)
+	var real_tops: Array = []
+	for band in measured:
+		# A one-pixel sliver at the sheet's edge is an artefact of the
+		# render, not a row of art.
+		if (band as Vector2i).y - (band as Vector2i).x > 8:
+			real_tops.append((band as Vector2i).x)
+	var pinned_tops: Array = []
+	for band in IntroSplashSheet._ROW_BANDS:
+		pinned_tops.append((band as Vector2i).x)
+	assert_eq(
+		pinned_tops, real_tops,
+		"the pinned rows no longer describe assets/sprites/intro.png -- re-measure with tools/probe_intro_sheet.gd"
+	)
+
+
+func test_a_frame_never_reaches_into_the_row_below_it():
+	# What produced the drift: art from the next row pulled into this row's
+	# frame. The CROP is what must stay clear -- the frame canvas is a
+	# fixed size for every row and pads below when a row cannot spare it,
+	# so asserting on _FRAME_HEIGHT alone would be asserting the wrong
+	# quantity. Every row's own art must fit in what its crop can take.
+	var bands: Array = IntroSplashSheet._ROW_BANDS
+	for i in bands.size():
+		var band: Vector2i = bands[i]
+		var limit: int = int((bands[i + 1] as Vector2i).x) if i + 1 < bands.size() else 793
+		var crop: int = mini(IntroSplashSheet._FRAME_HEIGHT, limit - band.x)
+		assert_lte(band.x + crop, limit, "row %d's crop reaches into what follows it" % i)
+		assert_lte(band.y - band.x, crop, "row %d's own art does not fit in its crop" % i)
+
+
+func test_a_frame_never_reaches_into_the_column_beside_it():
+	var lefts: Array = IntroSplashSheet._COLUMN_LEFTS
+	for i in range(lefts.size() - 1):
+		assert_lte(
+			IntroSplashSheet._FRAME_WIDTH, int(lefts[i + 1]) - int(lefts[i]),
+			"column %d's crop reaches into column %d" % [i, i + 1]
+		)
+
+
+func test_every_frame_is_inside_the_sheet():
+	var image := SpriteSheetLoader.load_image(IntroSplashSheet._SHEET_PATH)
+	var last_left: int = IntroSplashSheet._COLUMN_LEFTS[IntroSplashSheet._COLUMN_LEFTS.size() - 1]
+	assert_lte(last_left + IntroSplashSheet._FRAME_WIDTH, image.get_width(), "the last column runs off the sheet")
