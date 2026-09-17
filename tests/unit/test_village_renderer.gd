@@ -1811,3 +1811,65 @@ func test_a_village_with_room_for_everyone_is_founded_as_before():
 		_house_calls(world).size(), SettlementGenerator.POPULATION,
 		"and every villager in it has a house"
 	)
+
+
+# -- and every farmhouse is really joined to the village's own streets -----
+#
+# Reported in play, with a screenshot of a farmhouse whose field beds sit in
+# open ground: "There are still Farmhouses not connected by a street". See
+# docs/concept/village_farms.md.
+
+
+## Every cell this village actually paved, chunk-LOCAL.
+func _paved_cells(world: StubWorld, coord: Vector2i) -> Dictionary:
+	var paved: Dictionary = {}
+	for global_cell in world.road_cells:
+		if world.road_cells[global_cell] != TerrainRenderer.ROAD_TILE_ID:
+			continue
+		var local: Vector2i = (global_cell as Vector2i) - coord * CHUNK_SIZE
+		if local.x < 0 or local.y < 0 or local.x >= CHUNK_SIZE or local.y >= CHUNK_SIZE:
+			continue
+		paved[local] = true
+	return paved
+
+
+## The paving a villager could actually walk to from the village's own main
+## street, 4-connected -- the real question behind "connected by a street".
+func _paving_reachable_from_the_spine(world: StubWorld, coord: Vector2i) -> Dictionary:
+	var paved := _paved_cells(world, coord)
+	var bones: Dictionary = VillageLayout.skeleton(CHUNK_SIZE, VillageLayout.seed_for(coord))
+	var frontier: Array = []
+	var seen: Dictionary = {}
+	for x in range(bones["street_x0"], bones["street_x1"] + 1):
+		var cell := Vector2i(x, bones["street_y"])
+		if paved.has(cell) and not seen.has(cell):
+			seen[cell] = true
+			frontier.append(cell)
+	while not frontier.is_empty():
+		var cell: Vector2i = frontier.pop_back()
+		for step in [Vector2i(1, 0), Vector2i(-1, 0), Vector2i(0, 1), Vector2i(0, -1)]:
+			var next: Vector2i = cell + step
+			if paved.has(next) and not seen.has(next):
+				seen[next] = true
+				frontier.append(next)
+	return seen
+
+
+func test_every_farmhouse_doorstep_really_joins_the_villages_own_streets():
+	var coord := _find_settlement_chunk_with_occupation("grassland", "farmer", 3)
+	var world := StubWorld.new()
+	renderer.spawn_village(parent, coord, coord * CHUNK_SIZE, CHUNK_SIZE, TILE_SIZE, "grassland", world)
+	var farmhouses := _buildings_of(world, VillageFarm.FARM_BUILDING_ID)
+	assert_gt(farmhouses.size(), 0, "precondition: a farmhouse was raised")
+	var network := _paving_reachable_from_the_spine(world, coord)
+	for call in farmhouses:
+		var doorstep: Vector2i = (
+			call["origin_local"] + BuildingCatalog.doorstep_of(VillageFarm.FARM_BUILDING_ID)
+		)
+		assert_true(
+			network.has(doorstep),
+			(
+				"the farmhouse at %s opens onto %s, which no street reaches -- "
+				+ "a farm nobody can walk to is not part of the village"
+			) % [str(call["origin_local"]), str(doorstep)]
+		)

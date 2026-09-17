@@ -715,7 +715,8 @@ static func _spur_cells(
 ## square.
 static func next_street_plot(
 	building_id: String, chunk_size: int, seed_value: int, is_buildable: Callable,
-	is_occupied: Callable, is_dry := Callable(), accepts_origin := Callable()
+	is_occupied: Callable, is_dry := Callable(), accepts_origin := Callable(),
+	is_paved := Callable()
 ) -> Dictionary:
 	var footprint := BuildingCatalog.footprint_of(building_id)
 	if footprint == Vector2i.ZERO:
@@ -729,6 +730,7 @@ static func next_street_plot(
 	var street_x1: int = bones["street_x1"]
 	var plaza: Rect2i = bones["plaza"]
 
+	var spine_x0 := street_x0
 	var street := street_y
 	while street < chunk_size - _EDGE_MARGIN_TILES:
 		var x := street_x0 + _GATE_CLEARANCE_TILES
@@ -752,13 +754,88 @@ static func next_street_plot(
 				# the next frontage that does work.
 				and (not accepts_origin.is_valid() or accepts_origin.call(origin))
 			):
-				return {
-					"origin": origin, "building_id": building_id, "facing": Vector2i(0, 1),
-					"doorstep": origin + BuildingCatalog.doorstep_of(building_id),
-				}
+				# ... and the paving that makes this a STREET plot rather
+				# than a plot on a row nobody ever paved (see
+				# _frontage_spur). A plot the village cannot join is not
+				# frontage, so the walk simply goes on.
+				var doorstep: Vector2i = origin + BuildingCatalog.doorstep_of(building_id)
+				var spur = _frontage_spur(
+					doorstep, street, street_y, spine_x0, plaza,
+					BuildingCatalog.footprint_cells(building_id, origin),
+					chunk_size, is_buildable, is_occupied, is_paved
+				)
+				if spur != null:
+					return {
+						"origin": origin, "building_id": building_id, "facing": Vector2i(0, 1),
+						"doorstep": doorstep, "road_spur": spur,
+					}
 			x += 1
 		street += STREET_PITCH_TILES
 	return {}
+
+
+## The paving that JOINS a plot at `doorstep` to the village it belongs to,
+## beyond its own front step -- `[]` when the doorstep already stands on the
+## village's own paving, `null` when nothing can reach it.
+##
+## Reported in play, with a screenshot of a farmhouse standing in open
+## ground: "There are still Farmhouses not connected by a street". The cause
+## is a real mismatch, and it stranded HALF of every growth plot offered
+## (measured: 80 of 160 over 40 seeds x four village sizes, by
+## test_the_next_street_plot_always_fronts_paving_the_village_really_laid).
+## next_street_plot walks the SKELETON's streets -- every row the spine
+## could ever open. What layout() actually PAVES is narrower: a further
+## street is paved only once it really got a plot at founding. So the first
+## growth building sited on a fresh row got a single paved tile at its door
+## in the middle of a field, which is not frontage at all.
+##
+## The tie-back is the one layout() already uses for exactly this, so a
+## village that grows looks like a village that was founded: down the GATE
+## LANE (the column at the spine's own start -- the one column no plot can
+## ever want, since every street's plots begin _GATE_CLEARANCE_TILES east of
+## it), then east or west along this street's own row to the door.
+##
+## `is_paved` lets the tie-back cross what the village has ALREADY laid --
+## another street's row, an earlier plot's doorstep, the square. Without it
+## every junction would read as "occupied" and the second growth building on
+## a row could never reach the first one's lane. A caller that cannot answer
+## it gets the conservative answer (clear ground only), which is correct,
+## just more easily defeated.
+static func _frontage_spur(
+	doorstep: Vector2i, street: int, street_y: int, lane_x: int, plaza: Rect2i,
+	footprint_cells: Array, chunk_size: int,
+	is_buildable: Callable, is_occupied: Callable, is_paved: Callable
+):
+	var cells: Array[Vector2i] = []
+	if street == street_y:
+		# The spine itself: paved end to end by layout(), and re-paved on
+		# every reload. Nothing to add.
+		return cells
+	for y in range(street_y + 1, street + 1):
+		cells.append(Vector2i(lane_x, y))
+	var step := 1 if doorstep.x >= lane_x else -1
+	var x := lane_x
+	while x != doorstep.x:
+		x += step
+		cells.append(Vector2i(x, street))
+
+	var footprint := {}
+	for cell in footprint_cells:
+		footprint[cell] = true
+	for cell in cells:
+		if cell == doorstep:
+			continue
+		if footprint.has(cell):
+			return null  # a lane laid through the building it serves is no lane
+		if cell.x < 0 or cell.y < 0 or cell.x >= chunk_size or cell.y >= chunk_size:
+			return null
+		if not is_buildable.call(cell):
+			return null  # water: a village does not pave a river
+		if plaza.has_area() and plaza.has_point(cell):
+			continue  # the square is already paved, and crossing it is fine
+		if is_occupied.call(cell) and not (is_paved.is_valid() and is_paved.call(cell)):
+			return null
+	return cells
 
 
 ## Whether the plaza's own rows overlap the rows a plot at `origin` would

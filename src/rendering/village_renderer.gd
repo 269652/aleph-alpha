@@ -460,6 +460,19 @@ func _is_occupied_local(chunk_coord: Vector2i, chunk_size: int, world) -> Callab
 		return world.modification_at_global(g.x, g.y) != "" if world.has_method("modification_at_global") else false
 
 
+## Whether this cell is paving the village has ALREADY laid -- what lets a
+## growth plot's tie-back cross a street it meets rather than reading that
+## junction as blocked ground (VillageLayout._frontage_spur). A world that
+## cannot answer reports nothing paved, which costs the tie-back reach and
+## never invents a road that is not there.
+func _is_paved_local(chunk_coord: Vector2i, chunk_size: int, world) -> Callable:
+	return func(cell: Vector2i) -> bool:
+		if not world.has_method("modification_at_global"):
+			return false
+		var g: Vector2i = chunk_coord * chunk_size + cell
+		return world.modification_at_global(g.x, g.y) == TerrainRenderer.ROAD_TILE_ID
+
+
 ## The village's own works at its own timber, and the road spur that joins
 ## them to the street (VillageLayout.industry_plot). Idempotent by the one
 ## check that matters -- a real `sawmill` already standing anywhere in this
@@ -617,6 +630,7 @@ func _place_farms_if_missing(chunk_coord: Vector2i, chunk_size: int, npcs: Array
 
 	var is_buildable := _is_buildable_local(chunk_coord, chunk_size, world)
 	var is_occupied := _is_occupied_local(chunk_coord, chunk_size, world)
+	var is_paved := _is_paved_local(chunk_coord, chunk_size, world)
 	var renderer := self
 	var accepts_origin := func(origin: Vector2i) -> bool:
 		return (
@@ -626,7 +640,7 @@ func _place_farms_if_missing(chunk_coord: Vector2i, chunk_size: int, npcs: Array
 	for index in range(standing, wanted):
 		var plot: Dictionary = VillageLayout.next_street_plot(
 			VillageFarm.FARM_BUILDING_ID, chunk_size, VillageLayout.seed_for(chunk_coord),
-			is_buildable, is_occupied, is_buildable, accepts_origin
+			is_buildable, is_occupied, is_buildable, accepts_origin, is_paved
 		)
 		if plot.is_empty():
 			# No frontage left -- which on a village hemmed in by water is
