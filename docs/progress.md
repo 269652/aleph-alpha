@@ -20949,6 +20949,11 @@ cripples to 5-10 fps -- is there GC missing?" Write-up in
   in `test_earth_chunk_manager.gd` pass unmodified (369 asserts). The two
   new tests assert COST instead -- one assessment costs less than a
   single pass over the history, and costs the same at H=500 as at H=50.
+- ✅ **Measured after the fix**, same probe and settlement: **flat at 20
+  events walked** at history depths 0, 100 and 800 (against `74 + 14.0*H`
+  before, i.e. 74 / 1,474 / 11,274 at those depths -- a 560x cut at
+  H=800, and, more to the point, no growth at all). Wall clock for the
+  same call flat at ~1.4 ms.
 - ✅ **A new instrument: `c_ev_read`** on the PERF line. Every other
   field there is a duration, and a duration cannot say WHY it grew --
   `s_ecology` climbing 6 → 142 ms looks the same whether a store, a
@@ -20970,6 +20975,16 @@ cripples to 5-10 fps -- is there GC missing?" Write-up in
   stored, so a long enough session still grows memory and save time
   without limit. "What may a world forget?" is a real, separate design
   question, deliberately not attempted here.
+- 🚧 **Incidentally found, confirmed unrelated** (pre-existing):
+  `test_dialogue_topic.gd`'s
+  `test_every_event_type_..._is_claimed_by_some_topic` fails on
+  `blueprint_learned` and `player_house_settled`. Fails identically with
+  this round's changes reverted (pre-session `earth_chunk_manager.gd` +
+  `dialogue_topic.gd` checked out and re-run: same two types, same 31/33
+  asserts), and this round touches no `Event.new(...)` call -- the
+  emitter count the test scans is 24 before and after. Needs two
+  `DialogueTopic.MEMORY_TOPIC_EVENT_TYPES` entries; a dialogue-content
+  decision, not a performance one.
 - ⬜ **`NpcRecognition.shared_history` still walks the player's whole
   history** -- and the player is an actor or witness in more events than
   anything else. Not fixed here: it needs every event involving both

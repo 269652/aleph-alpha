@@ -4527,6 +4527,20 @@ per-entity scan on the conversation path -- an NPC's settlement recovered
 by walking everything that ever happened to them, measured at 301 events
 for a 300-event history, every time anyone was spoken to.
 
+**Measured after the fix** (same probe, same chunk, same settlement):
+
+| settlement history | events walked, before | after |
+|---:|---:|---:|
+| 0   | 74     | 20 |
+| 100 | 1,474  | 20 |
+| 800 | 11,274 | 20 |
+
+Flat at twenty, which is the whole point: an assessment now costs what it
+matches, not what the session has accumulated. (The "before" column is
+`74 + 14.0 * H` evaluated at each depth -- the measured fit from the three
+directly-measured points above, which reproduce it exactly.) Wall clock
+for the same call is flat at ~1.4 ms across all three depths.
+
 **A new instrument, and the real lesson of fifteen rounds.** Every field
 a PERF line prints is a duration, and a duration cannot say WHY it grew:
 `s_ecology` climbing 6 -> 142 ms looks identical whether the cause is a
@@ -4557,6 +4571,18 @@ GDScript/GUT cannot assert Big-O and a wall clock would be flaky.
   and save time without limit. That is a real, separate, larger design
   question (what may a world forget?) and is deliberately not attempted
   here.
+- **Incidentally found, confirmed unrelated.**
+  `test_dialogue_topic.gd`'s
+  `test_every_event_type_the_substrate_really_emits_is_claimed_by_some_topic`
+  fails on `blueprint_learned` and `player_house_settled` -- and fails
+  identically with this round's changes reverted (verified by checking
+  out the pre-session `earth_chunk_manager.gd`/`dialogue_topic.gd` and
+  re-running: same two types, same 31/33 asserts). It predates this
+  round, which touches no `Event.new(...)` call at all (the emitter count
+  the test scans for is 24 before and after). Flagged, not fixed here:
+  the two event types genuinely need `DialogueTopic.
+  MEMORY_TOPIC_EVENT_TYPES` entries, which is a dialogue-content decision,
+  not a performance one.
 - `NpcRecognition.shared_history` still walks the PLAYER's whole event
   history, and the player is an actor or witness in more events than
   anything else in the world. It is not fixed here because it genuinely
