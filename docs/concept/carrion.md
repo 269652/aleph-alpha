@@ -374,3 +374,21 @@ see that doc's own mechanism spec and Status.
 - ⬜ Persistence/catch-up integration for carcasses across a chunk
   unload — a carcass is chunk-local, ephemeral state, same explicit scope
   cut `soil_fauna.md`'s worm burrows already made for the same reason.
+- 🚧 **A village hunter's own kill leaves nothing behind.** Villagers now
+  hunt real animals ([npc.md](npc.md#work-against-the-real-world-not-against-a-number)),
+  and a hunter carries the whole animal home: `NpcMarker._take_carcass_at`
+  removes the carcass its own kill just left at the kill site. Without
+  that the same meat would exist twice — once as village market stock and
+  once as a carcass anyone could walk up and butcher. Two consequences
+  worth stating plainly rather than discovering later. First, the guts a
+  real field-dressing leaves behind are **not** spawned, so that kill
+  contributes nothing to the decomposer/fly/disease chain above; modelling
+  field-dressing residue is a real follow-up, not a thing this pass
+  pretends to have. Second, in practice the rule barely fires: `LootTable`
+  has drops for four generic entries (`herbivore`/`boar`/`predator`/
+  `lynx`) out of roughly thirty species, so most kills — a hunter's or
+  anyone's — leave no carcass at all. Widening that table is this doc's
+  own ⬜ species-specific-yields item above, and it is what would make
+  this interaction actually matter. Wild deaths — predation, disease, age
+  — are untouched either way, so every input this chain already had
+  remains except the ones a villager personally killed and carried off.

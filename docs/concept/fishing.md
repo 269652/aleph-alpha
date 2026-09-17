@@ -322,6 +322,25 @@ startle_fish_near_waders`, not only by a kingfisher strike). Still
 population-invisible, exactly like the kingfisher-bolt mechanism above — no
 catch/death term, purely a movement reaction.
 
+**Also new since this doc was first written**: a village fisher fishes for
+real. Villagers who work quarry now walk to it and take it themselves (see
+[npc.md](npc.md#work-against-the-real-world-not-against-a-number)), and the
+fisher's half needed no new machinery at all — `NpcMarker` finds water
+worth working through `nearest_fish_position` (written for a diving
+kingfisher) and takes the fish through `catch_nearest_fish`, the player's
+own rod's hook, which frees the real marker and records the harvest against
+its chunk's aggregate by itself. A villager's rod reaches exactly
+`Player.FISH_CATCH_RADIUS`, test-pinned rather than re-chosen, so a fisher
+holds at the bank instead of wading onto the shoal. So fishing pressure is
+now the player's, a kingfisher's, **and** every loaded village's — through
+one hook, counted once. One caught fish is one food unit rather than a
+mass-scaled amount: unlike a carcass, which has `Butchering.meat_count` to
+read a real conversion off, nothing here converts a fish's real `mass_kg`
+into food, and inventing that number is exactly what this change removed
+elsewhere. The fisher's old path — read `fish_population_near`, then delete
+some nearby fish afterwards to keep the books straight — remains only as
+the fallback for a village whose chunks hold no loaded fish.
+
 ### Open questions
 
 - Bait/lure system depth — does bait choice meaningfully bias which species/

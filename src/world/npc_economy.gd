@@ -96,10 +96,48 @@ static func purse_of(a_market) -> float:
 	return float(a_market.get_meta(PURSE_META, 0.0))
 
 
+## Pays `gold` into a settlement's shared purse -- the public counterpart
+## to purse_of, for money arriving from OUTSIDE the village's own levy
+## (docs/concept/traveling_merchants.md: a merchant buys goods and pays for
+## them). The levy split below keeps its own private setter because it
+## moves gold that is already inside the village; this brings new gold in.
+static func deposit_to_purse(a_market, gold: float) -> void:
+	if a_market == null or gold <= 0.0:
+		return
+	_set_purse(a_market, purse_of(a_market) + gold)
+
+
 static func _set_purse(a_market, gold: float) -> void:
 	if a_market == null:
 		return
 	a_market.set_meta(PURSE_META, gold)
+
+
+## Makes `household_wallet` the purse this villager earns into and spends
+## from, in place of the one created below.
+##
+## Reported live as "all villagers have 0 gold". They were earning all
+## along -- the producer faucet and the subsistence wage both worked -- but
+## into a Wallet created fresh in _init, on an NpcEconomy owned by an
+## NpcMarker that is regenerated from scratch on every chunk load. The
+## persistent Household wallet (HouseholdStore -- the unit Household's own
+## doc comment calls "this project's real, persistent unit") never received
+## a coin, so a villager's whole working life evaporated the moment the
+## player walked away, and every readout of their purse honestly said zero.
+##
+## Whatever was already in hand is carried over rather than dropped: an
+## economy may work for a moment before its household is resolved, and
+## silently losing that gold would be a second, quieter version of the same
+## bug. Passing null is a harmless no-op, so a villager with no household
+## (an isolated test, a world that cannot answer) keeps its own wallet
+## exactly as before.
+func bind_household_wallet(household_wallet) -> void:
+	if household_wallet == null or household_wallet == wallet:
+		return
+	var in_hand := wallet.balance
+	wallet = household_wallet
+	if in_hand > 0:
+		wallet.add(in_hand)
 
 
 func _init(seed_value: int, an_occupation: String, a_market) -> void:
@@ -114,12 +152,71 @@ func _init(seed_value: int, an_occupation: String, a_market) -> void:
 ## `pixel_position` feed NpcProduction's real weather-tied yield read;
 ## `is_working` gates production (and the free self-feed path) to the
 ## "work" schedule activity, not idle/sleep/socialize time.
-func step(delta_seconds: float, is_working: bool, world, pixel_position: Vector2) -> void:
+## `on_real_quarry` switches the regional drip OFF: this producer is
+## currently working a real animal or fish they walked to and struck
+## themselves (docs/concept/npc.md, "Work against the real world, not
+## against a number"), and record_real_catch below is what pays them for
+## it. Crediting both would pay a hunter twice for one deer. Defaults to
+## false, so every caller that predates real quarry -- and every villager
+## whose chunk holds none -- keeps the aggregate fallback npc.md's own
+## "a villager can only hunt what is LOADED" limitation depends on.
+##
+## Deliberately gates only _gather, not _try_eat: a hunter standing over a
+## fresh kill has food in their hands, which is exactly what the free
+## self-feed is about.
+func step(
+	delta_seconds: float,
+	is_working: bool,
+	world,
+	pixel_position: Vector2,
+	on_real_quarry := false
+) -> void:
 	needs.advance(delta_seconds)
-	if is_working and _production.is_producer(occupation):
+	if is_working and not on_real_quarry and _production.is_producer(occupation):
 		_gather(delta_seconds, world, pixel_position)
 	if needs.is_hungry():
 		_try_eat(is_working, world, pixel_position)
+
+
+## Credits `count` whole units of this producer's own real item -- the meat
+## off an animal this villager actually killed, or a fish they actually
+## took (docs/concept/npc.md, "Work against the real world, not against a
+## number") -- to the village market, and pays for them at exactly the rate
+## a gathered unit earns. A unit of meat is worth a unit of meat however it
+## was obtained; the kill changes where food comes from, not its price.
+##
+## Books NO depletion of its own, unlike _gather/_deplete_continuous. A
+## real kill has already reported itself: CreatureMarker._die() is the
+## single choke point every death routes through, and its own doc comment
+## records a merge that left two record_death_at calls there and counted
+## every wild death twice. The same holds for a real fish, taken through
+## EarthChunkManager.record_fish_catch_near. This is the paying half only.
+##
+## A no-op for a non-producer (nothing to credit it as) and for a count of
+## zero (a strike that did not land a kill).
+func record_real_catch(count: int) -> void:
+	if count <= 0 or not _production.is_producer(occupation):
+		return
+	market.add_stock(_production.item_id_for(occupation), float(count))
+	_earn(float(count) * float(NpcProduction.YIELD_TO_GOLD_RATE))
+
+
+## Credits `count` units of something a real take produced ALONGSIDE the
+## food -- the hide off a hunted animal (HuntableQuarry.hide_yield_of).
+##
+## Deliberately pays nothing, unlike record_real_catch. A hide feeds nobody
+## and no villager buys one, so there is no local sale to pay for; its value
+## arrives when a travelling cart buys it out of the market
+## (docs/concept/traveling_merchants.md, MerchantVisit.BUY_LIST). Paying at
+## the kill would be the conjured faucet that doc exists to close, pointed
+## at a second good.
+##
+## Any producer may record one -- the item id says what it is, so this
+## needs no occupation table -- and a count of zero is a no-op.
+func record_byproduct(item_id: String, count: int) -> void:
+	if count <= 0 or item_id == "":
+		return
+	market.add_stock(item_id, float(count))
 
 
 func _gather(delta_seconds: float, world, pixel_position: Vector2) -> void:
@@ -216,12 +313,34 @@ func _deplete_discrete_unit(world, pixel_position: Vector2) -> void:
 		world.record_fish_catch_near(pixel_position, NpcProduction.FOOD_UNIT)
 
 
+## Whether this villager can eat by simply doing their job right now: a
+## producer standing in a region that still yields something real. Exactly
+## the condition the free self-feed below turns on, named rather than
+## restated so the two can never drift.
+##
+## NpcMarker reads it too, and that is the point of naming it. A hungry
+## villager's schedule is interrupted to walk to the well and buy a meal,
+## which is right for a blacksmith and wrong for a hunter, whose food is
+## standing in the woods. Measured live (tools/probe_village_hunting.gd): a
+## real hunter went hungry about twelve seconds in, with an empty village
+## market and an empty purse, and never worked again for the remaining 227
+## simulated seconds -- not working is precisely what stopped them
+## producing the food they had been sent to buy, and the well had nothing
+## on it and never would.
+##
+## False for a non-producer and for a producer whose region has genuinely
+## collapsed, so the famine chain npc.md describes stays intact: nothing
+## left to hunt is still nothing to eat.
+func feeds_itself_from_work(world, pixel_position: Vector2) -> bool:
+	if not _production.is_producer(occupation):
+		return false
+	return _production.yield_per_second(occupation, world, pixel_position) > 0.0
+
+
 func _try_eat(is_working: bool, world, pixel_position: Vector2) -> void:
-	if is_working and _production.is_producer(occupation):
-		var current_yield := _production.yield_per_second(occupation, world, pixel_position)
-		if current_yield > 0.0:
-			needs.feed()  # a free bite from their own active harvest -- see file doc comment
-			return
+	if is_working and feeds_itself_from_work(world, pixel_position):
+		needs.feed()  # a free bite from their own active harvest -- see file doc comment
+		return
 	_draw_subsistence_wage(world, pixel_position)
 	if market.buy_meal(wallet) != "":
 		needs.feed()

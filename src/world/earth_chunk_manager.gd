@@ -176,6 +176,7 @@ const SettlementConstruction = preload("res://src/emergence/settlement_construct
 const VillageGrowth = preload("res://src/emergence/village_growth.gd")
 const VillageCensus = preload("res://src/emergence/village_census.gd")
 const VillageImmigration = preload("res://src/emergence/village_immigration.gd")
+const MerchantVisit = preload("res://src/emergence/merchant_visit.gd")
 const HouseholdWellbeing = preload("res://src/emergence/household_wellbeing.gd")
 const ConstructionLabor = preload("res://src/emergence/construction_labor.gd")
 const VillageLayout = preload("res://src/world/village_layout.gd")
@@ -3533,6 +3534,11 @@ func step_settlements(delta_seconds: float) -> void:
 		# baking.md) -- the SAME interval, so a village near the player builds
 		# in real time rather than only on a reload after an unload.
 		_step_settlement_gathering(settlement_id, market, household_ids)
+		# The outside world turns up and pays for what the village made
+		# (docs/concept/traveling_merchants.md) -- BEFORE the build and
+		# immigration steps, so gold that arrives this tick is gold the
+		# village can act on this tick.
+		_step_merchant_visits(settlement_id, market)
 		# A fed village with room takes a household in, BEFORE the build
 		# step: a newcomer arriving this tick is owed a house this tick,
 		# not one assessment later.
@@ -3813,6 +3819,43 @@ func _step_settlement_gathering(settlement_id: String, market, household_ids: Ar
 		market.add_stock(str(item_id), int(stock_delta[item_id]))
 
 
+## settlement_id -> MerchantVisit's own sub-visit carry, the same
+## per-settlement remainder gathering and immigration already keep.
+var _settlement_merchant_carry: Dictionary = {}
+
+
+## A traveling merchant buys this settlement's surplus and pays gold into
+## its shared purse (docs/concept/traveling_merchants.md).
+##
+## This is the first faucet in the game where a village's gold arrives
+## because somebody carried goods away, rather than being conjured per
+## food unit gathered whether or not anyone ever bought it
+## (NpcProduction.YIELD_TO_GOLD_RATE, which stays for now as the producer's
+## own wage). The goods really leave the market and the gold really enters
+## the purse VillageWages already pays subsistence out of -- so a visit
+## feeds the blacksmith, not only the fisher whose catch was sold.
+##
+## Runs for loaded and UNLOADED settlements alike, unlike immigration: it
+## needs only the market's own stock, which is persisted, so a village goes
+## on trading while the player is away.
+func _step_merchant_visits(settlement_id: String, market) -> void:
+	if market == null:
+		return
+	var result: Dictionary = MerchantVisit.arrivals(
+		SETTLEMENT_STEP_INTERVAL, market.stock, float(_settlement_merchant_carry.get(settlement_id, 0.0))
+	)
+	_settlement_merchant_carry[settlement_id] = result["carry"]
+	if not result["arrived"]:
+		return
+
+	var sale: Dictionary = MerchantVisit.purchase(market.stock)
+	if int(sale["paid"]) <= 0:
+		return
+	for item_id in sale["bought"]:
+		market.remove_stock(str(item_id), float(sale["bought"][item_id]))
+	NpcEconomy.deposit_to_purse(market, float(sale["paid"]))
+
+
 ## docs/concept/village_growth.md mechanism 3: a fed village with room takes
 ## a household in. Called from the same settlement step that gathers and
 ## builds, so a village grows on the same clock it works on.
@@ -4049,6 +4092,28 @@ func household_report_at(global_x: int, global_y: int) -> Dictionary:
 	report["happiness"] = wellbeing["happiness"]
 	report["productivity"] = wellbeing["productivity"]
 	return report
+
+
+## Places a building whose plot IS paved -- the civic seat on the village
+## square (VillageRenderer._place_civic_if_missing). The public face of
+## _place_building_over_roads, which the completed-project path already
+## uses: an ordinary place_building refuses a plot carrying any
+## modification, and the plaza's own paving is exactly that.
+func place_building_over_roads(
+	chunk_coord: Vector2i, origin_local: Vector2i, building_id: String, seed_value: int,
+	owner_household_id: String
+) -> bool:
+	return _place_building_over_roads(chunk_coord, origin_local, building_id, seed_value, owner_household_id)
+
+
+## This villager's own household's persistent Wallet, or null if they have
+## no household yet. What a live NpcEconomy earns into and spends from (see
+## NpcEconomy.bind_household_wallet) -- without it a villager's whole
+## working life is kept in a wallet that dies with the chunk, which is
+## exactly why every villager read 0 gold however long they had worked.
+func household_wallet_for_villager(villager_seed: int):
+	var household = _household_store.household_for(EntityRef.for_npc(villager_seed))
+	return null if household == null else household.wallet
 
 
 ## The LOCAL origin of the house `villager_seed`'s household owns in this

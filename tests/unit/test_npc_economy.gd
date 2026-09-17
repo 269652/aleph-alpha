@@ -642,3 +642,185 @@ func test_a_world_without_a_bakehouse_hook_changes_nothing():
 	economy.step(0.01, false, BareWorld.new(), Vector2.ZERO)
 	assert_true(economy.needs.is_hungry())
 	assert_eq(economy.wallet.balance, 100)
+
+
+# -- earnings must reach the household that keeps them --------------------
+#
+# Reported live: "all villagers have 0 gold". They were in fact earning --
+# the producer faucet and the subsistence wage both worked -- into a Wallet
+# created fresh inside NpcEconomy, which lives on an NpcMarker that is
+# regenerated from scratch on every chunk load. The persistent Household
+# wallet (HouseholdStore, the unit Household's own doc comment calls "this
+# project's real, persistent unit") never received a single coin, so every
+# villager really did read 0 gold, for good, and the income need with them.
+
+const Household = preload("res://src/emergence/household.gd")
+const EntityRef = preload("res://src/emergence/entity_ref.gd")
+
+
+func test_an_unbound_economy_still_keeps_its_own_wallet():
+	var economy = NpcEconomy.new(1, "hunter", VillageMarket.new())
+	economy.wallet.add(3)
+	assert_eq(economy.wallet.balance, 3, "nothing changes for a villager with no household")
+
+
+func test_binding_a_household_makes_its_wallet_the_one_that_earns():
+	var household = Household.for_founder(EntityRef.for_npc(7))
+	var economy = NpcEconomy.new(7, "hunter", VillageMarket.new())
+
+	economy.bind_household_wallet(household.wallet)
+	economy.wallet.add(5)
+
+	assert_eq(household.wallet.balance, 5, "a villager's earnings land in their household's purse")
+
+
+## Binding must never silently drop coins the villager already had in hand.
+func test_binding_carries_over_what_was_already_earned():
+	var household = Household.for_founder(EntityRef.for_npc(8))
+	var economy = NpcEconomy.new(8, "hunter", VillageMarket.new())
+	economy.wallet.add(4)
+
+	economy.bind_household_wallet(household.wallet)
+
+	assert_eq(household.wallet.balance, 4, "gold in hand at binding time is carried over, not lost")
+	assert_eq(economy.wallet.balance, 4, "and the economy now spends from that same purse")
+
+
+func test_binding_nothing_is_a_harmless_no_op():
+	var economy = NpcEconomy.new(9, "hunter", VillageMarket.new())
+	economy.wallet.add(2)
+	economy.bind_household_wallet(null)
+	assert_eq(economy.wallet.balance, 2)
+
+
+# -- real quarry (docs/concept/npc.md, "Work against the real world, not
+# against a number") ---------------------------------------------------
+#
+# A hunter who walks to a real animal and kills it credits what that animal
+# really carried (HuntableQuarry.meat_yield_of) instead of the regional
+# drip, and the drip is switched OFF for as long as they are on real
+# quarry. Both halves matter: crediting a real kill on top of the drip
+# would pay a hunter twice for one animal, and dropping the drip entirely
+# would starve every village whose chunks aren't loaded (npc.md's own named
+# limitation).
+
+
+func test_a_real_catch_puts_the_producers_own_item_in_the_market():
+	var hunter := _economy("hunter")
+	hunter.record_real_catch(3)
+	assert_almost_eq(market.stock.get("meat", 0.0), 3.0, 0.0001)
+
+
+func test_a_real_catch_pays_the_same_rate_a_gathered_unit_does():
+	# A unit of meat is worth a unit of meat however it was obtained -- the
+	# kill changes where food comes from, not what it sells for.
+	var hunter := _economy("hunter")
+	hunter.record_real_catch(4)
+	var gross := 4.0 * float(NpcProduction.YIELD_TO_GOLD_RATE)
+	assert_almost_eq(NpcEconomy.purse_of(market), VillageWages.levy_on(gross), 0.0001)
+
+
+func test_a_real_catch_of_nothing_changes_nothing():
+	var hunter := _economy("hunter")
+	hunter.record_real_catch(0)
+	assert_almost_eq(market.total_stock(), 0.0, 0.0001)
+	assert_almost_eq(NpcEconomy.purse_of(market), 0.0, 0.0001)
+
+
+func test_a_real_catch_does_not_book_the_death_a_second_time():
+	# CreatureMarker._die() is the single choke point every death already
+	# reports through (_book_death_against_the_region) -- its own doc
+	# comment records a merge that left two calls there and counted every
+	# wild death twice. A hunter's kill dies through that same path, so
+	# this must not report it again.
+	var hunter := _economy("hunter")
+	hunter.record_real_catch(2)
+	assert_almost_eq(world.killed_herbivore_amount, 0.0, 0.0001)
+
+
+func test_a_non_producer_cannot_record_a_catch():
+	var blacksmith := _economy("blacksmith")
+	blacksmith.record_real_catch(2)
+	assert_almost_eq(market.total_stock(), 0.0, 0.0001)
+
+
+func test_a_producer_on_real_quarry_does_not_also_gather_the_regional_drip():
+	var hunter := _economy("hunter")
+	for _i in 100:
+		hunter.step(1.0, true, world, Vector2.ZERO, true)
+	assert_almost_eq(market.total_stock(), 0.0, 0.0001, "the drip must be off while real quarry is in hand")
+	assert_almost_eq(
+		world.killed_herbivore_amount, 0.0, 0.0001, "and so must the aggregate kill it books"
+	)
+
+
+func test_a_producer_with_no_quarry_in_hand_still_gathers_the_regional_fallback():
+	# npc.md's named limitation: a villager can only hunt what is LOADED,
+	# so the aggregate path stays for everyone else.
+	var hunter := _economy("hunter")
+	for _i in 100:
+		hunter.step(1.0, true, world, Vector2.ZERO, false)
+	assert_gt(market.total_stock(), 0.0)
+
+
+func test_the_regional_fallback_is_still_the_default_for_callers_that_say_nothing():
+	var hunter := _economy("hunter")
+	for _i in 100:
+		hunter.step(1.0, true, world, Vector2.ZERO)
+	assert_gt(market.total_stock(), 0.0)
+
+
+func test_a_producer_on_real_quarry_still_eats_from_their_own_work():
+	# The free self-feed is about having food in your hands, which a hunter
+	# standing over a fresh kill emphatically does.
+	var hunter := _economy("hunter")
+	hunter.needs.advance(100000.0)
+	assert_true(hunter.needs.is_hungry(), "precondition")
+	hunter.step(0.01, true, world, Vector2.ZERO, true)
+	assert_false(hunter.needs.is_hungry())
+
+
+func test_a_byproduct_reaches_the_market_without_being_paid_for():
+	# A hide feeds nobody and no villager buys one. Its value arrives when
+	# a cart does (MerchantVisit.BUY_LIST), so paying for it at the kill
+	# would be the conjured faucet traveling_merchants.md exists to close,
+	# pointed at a second good.
+	var hunter := _economy("hunter")
+	hunter.record_byproduct("hide", 2)
+	assert_almost_eq(market.stock.get("hide", 0.0), 2.0, 0.0001)
+	assert_almost_eq(NpcEconomy.purse_of(market), 0.0, 0.0001)
+	assert_eq(hunter.wallet.balance, 0)
+
+
+func test_a_byproduct_of_nothing_changes_nothing():
+	var hunter := _economy("hunter")
+	hunter.record_byproduct("hide", 0)
+	assert_almost_eq(market.total_stock(), 0.0, 0.0001)
+
+
+# -- feeding yourself by working (docs/concept/npc.md's free self-feed) ----
+#
+# The condition the free self-feed already turns on, named so that NpcMarker
+# can ask it too. A hungry villager's schedule is overridden to walk to the
+# well and buy a meal -- which is right for a blacksmith and wrong for a
+# hunter, whose food is standing in the woods. Measured live: a villager who
+# goes hungry with an empty village market never works again, because not
+# working is what stops them producing the food they would have bought.
+
+
+func test_a_producer_in_a_living_region_feeds_itself_from_its_own_work():
+	assert_true(_economy("hunter").feeds_itself_from_work(world, Vector2.ZERO))
+
+
+func test_a_producer_whose_region_has_collapsed_cannot_feed_itself():
+	# The famine chain stays intact: nothing left to hunt is nothing to eat.
+	world.herbivore_population = 0.0
+	assert_false(_economy("hunter").feeds_itself_from_work(world, Vector2.ZERO))
+
+
+func test_a_non_producer_never_feeds_itself_from_work():
+	assert_false(_economy("blacksmith").feeds_itself_from_work(world, Vector2.ZERO))
+
+
+func test_a_producer_with_no_world_cannot_feed_itself():
+	assert_false(_economy("hunter").feeds_itself_from_work(null, Vector2.ZERO))

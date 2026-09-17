@@ -155,6 +155,20 @@ class StubWorld:
 	func modification_at_global(x: int, y: int) -> String:
 		return occupied_cells.get(Vector2i(x, y), "")
 
+	## Mirrors EarthChunkManager.place_building_over_roads: the civic plot
+	## is the paved square itself, so an ordinary place_building would
+	## refuse it over its own paving.
+	func place_building_over_roads(
+		chunk_coord: Vector2i, origin_local: Vector2i, building_id: String, seed_value: int,
+		owner_household_id: String
+	) -> bool:
+		if refuse_civic:
+			return false
+		for cell in BuildingCatalog.footprint_cells(building_id, origin_local):
+			occupied_cells.erase(chunk_coord * CHUNK_SIZE + cell)
+		occupied_cells.erase(chunk_coord * CHUNK_SIZE + origin_local + BuildingCatalog.doorstep_of(building_id))
+		return place_building(chunk_coord, origin_local, building_id, Vector2i(0, 1), seed_value, owner_household_id)
+
 	var founded_calls: Array = []
 	func record_settlement_founded_if_new(chunk_coord: Vector2i, npcs: Array, plots: Array = []) -> void:
 		founded_calls.append({"chunk_coord": chunk_coord, "npcs": npcs, "plots": plots})
@@ -166,6 +180,10 @@ class StubWorld:
 	var household_count := 0
 	func household_count_for_settlement(_settlement_id: String) -> int:
 		return household_count
+
+	## Stands in for a village founded before the hall was placed at
+	## founding at all -- see the older-village healing test.
+	var refuse_civic := false
 
 	## villager seed -> the LOCAL origin of the house their household owns,
 	## mirroring the real EarthChunkManager.house_origin_for_villager. null
@@ -207,6 +225,18 @@ func _find_settlement_chunk_with_merchant(biome: String) -> Vector2i:
 				return coord
 	fail_test("no settlement chunk with a merchant found within 400 chunks")
 	return Vector2i.ZERO
+
+
+## Only the HOUSES a village placed. A village also places its civic seat
+## and, where there is timber, its sawmill -- real buildings, but not
+## anybody's home, and every test below that counts "one per villager"
+## means houses.
+func _house_calls(world: StubWorld) -> Array:
+	var houses: Array = []
+	for call in world.place_calls:
+		if BuildingCatalog.capacity_of(call["building_id"]) > 0:
+			houses.append(call)
+	return houses
 
 
 func _workspot_prop_count(settlement: Dictionary) -> int:
@@ -260,8 +290,8 @@ func test_spawn_village_places_a_real_building_for_every_villager():
 	var coord := _find_settlement_chunk("grassland")
 	var world := StubWorld.new()
 	renderer.spawn_village(parent, coord, coord * CHUNK_SIZE, CHUNK_SIZE, TILE_SIZE, "grassland", world)
-	assert_gt(world.place_calls.size(), 0, "at least some villagers should get a real building")
-	assert_lte(world.place_calls.size(), SettlementGenerator.POPULATION)
+	assert_gt(_house_calls(world).size(), 0, "at least some villagers should get a real building")
+	assert_lte(_house_calls(world).size(), SettlementGenerator.POPULATION)
 	for call in world.place_calls:
 		assert_true(BuildingCatalog.has_building(call["building_id"]), call["building_id"])
 		assert_eq(call["chunk_coord"], coord)
@@ -282,8 +312,8 @@ func test_a_buildings_own_doorstep_road_cell_never_blocks_its_own_placement():
 	var coord := _find_settlement_chunk("grassland")
 	var world := StubWorld.new()
 	renderer.spawn_village(parent, coord, coord * CHUNK_SIZE, CHUNK_SIZE, TILE_SIZE, "grassland", world)
-	assert_gt(world.place_calls.size(), 0, "every real village must place at least one real building")
-	assert_eq(world.place_calls.size(), SettlementGenerator.POPULATION, "a village on ample clear grassland should house everyone")
+	assert_gt(_house_calls(world).size(), 0, "every real village must place at least one real building")
+	assert_eq(_house_calls(world).size(), SettlementGenerator.POPULATION, "a village on ample clear grassland should house everyone")
 
 
 ## Regression: a real settlement chunk grew a SECOND set of houses on top
@@ -699,7 +729,7 @@ func test_founding_is_reported_with_the_real_village_layout_plots():
 	var world := StubWorld.new()
 	renderer.spawn_village(parent, coord, coord * CHUNK_SIZE, CHUNK_SIZE, TILE_SIZE, "grassland", world)
 	var plots: Array = world.founded_calls[0]["plots"]
-	assert_eq(plots.size(), world.place_calls.size(), "one plot per real placed building, no more no less")
+	assert_eq(plots.size(), _house_calls(world).size(), "one plot per real placed HOUSE, no more no less")
 	assert_gt(plots.size(), 0, "precondition: some villager should have gotten a real plot")
 	for plot in plots:
 		assert_between(plot["building_index"], 0, SettlementGenerator.POPULATION - 1)
@@ -727,9 +757,12 @@ func test_each_placed_building_records_its_own_villagers_occupation_and_seed():
 	renderer.spawn_village(parent, coord, coord * CHUNK_SIZE, CHUNK_SIZE, TILE_SIZE, "grassland", world)
 	var npcs: Array = world.founded_calls[0]["npcs"]
 	var plots: Array = world.founded_calls[0]["plots"]
-	assert_gt(world.place_calls.size(), 0, "precondition: real buildings were placed")
-	for i in world.place_calls.size():
-		var call: Dictionary = world.place_calls[i]
+	# Houses only: the village also places a civic seat, which has no plot
+	# and nobody living in it.
+	var houses := _house_calls(world)
+	assert_gt(houses.size(), 0, "precondition: real houses were placed")
+	for i in houses.size():
+		var call: Dictionary = houses[i]
 		var building_index: int = plots[i]["building_index"]
 		assert_eq(call["occupation"], npcs[building_index].occupation, "building %d" % i)
 		assert_eq(call["resident_seed"], npcs[building_index].seed_value, "building %d" % i)
@@ -756,7 +789,7 @@ func test_reloading_backfills_a_resident_onto_records_that_lack_one():
 	var second_parent := Node2D.new()
 	renderer.spawn_village(second_parent, coord, coord * CHUNK_SIZE, CHUNK_SIZE, TILE_SIZE, "grassland", world)
 
-	assert_eq(world.resident_calls.size(), world.place_calls.size(), "every anonymous record gets its villager back")
+	assert_eq(world.resident_calls.size(), _house_calls(world).size(), "every anonymous record gets its villager back")
 	for call in world.resident_calls:
 		var expected: Dictionary = expected_by_origin[call["origin_local"]]
 		assert_eq(call["occupation"], expected["occupation"], str(call["origin_local"]))
@@ -765,7 +798,7 @@ func test_reloading_backfills_a_resident_onto_records_that_lack_one():
 	# Third load: nothing left to heal.
 	var third_parent := Node2D.new()
 	renderer.spawn_village(third_parent, coord, coord * CHUNK_SIZE, CHUNK_SIZE, TILE_SIZE, "grassland", world)
-	assert_eq(world.resident_calls.size(), world.place_calls.size(), "a record that already knows its villager is left alone")
+	assert_eq(world.resident_calls.size(), _house_calls(world).size(), "a record that already knows its villager is left alone")
 	second_parent.free()
 	third_parent.free()
 
@@ -1175,3 +1208,72 @@ func test_a_village_clears_an_entirely_wooded_chunk_rather_than_refusing_it():
 	renderer.spawn_village(parent, coord, coord * CHUNK_SIZE, CHUNK_SIZE, TILE_SIZE, "grassland", world)
 
 	assert_gt(world.place_calls.size(), 0, "a wooded chunk is cleared and settled, not abandoned")
+
+
+# -- a village is founded with the hall its size entitles it to -----------
+#
+# Reported three times in play as simply missing. The over-time build is
+# real and tested (test_earth_chunk_manager_city_hall_rising.gd), but it
+# needs ~20 wood + 10 stone gathered and then 45 labour-hours accrued --
+# a couple of real hours beside the village, and longer still for a poor
+# one now that productivity scales the crew. A player who walks into a
+# village never sees it.
+#
+# So the same rule the sawmill already follows: a village the player
+# DISCOVERS has been standing for years, and its civic seat is part of the
+# fabric it was founded with. The over-time ladder still covers every rung
+# a village grows into during play.
+
+func test_a_founded_village_already_has_its_city_hall():
+	var coord := _find_settlement_chunk("grassland")
+	var world := StubWorld.new()
+	renderer.spawn_village(parent, coord, coord * CHUNK_SIZE, CHUNK_SIZE, TILE_SIZE, "grassland", world)
+	assert_eq(_placed(world, "city_hall").size(), 1, "a village of five households has a seat")
+
+
+func test_the_hall_stands_on_the_plazas_own_reserved_civic_plot():
+	var coord := _find_settlement_chunk("grassland")
+	var world := StubWorld.new()
+	renderer.spawn_village(parent, coord, coord * CHUNK_SIZE, CHUNK_SIZE, TILE_SIZE, "grassland", world)
+	var halls: Array = _placed(world, "city_hall")
+	assert_eq(halls.size(), 1, "precondition")
+	var plot: Dictionary = VillageLayout.skeleton(CHUNK_SIZE, VillageLayout.seed_for(coord))["civic_plot"]
+	assert_eq(halls[0]["origin_local"], plot["origin"], "on the square's own reserved plot, not anywhere free")
+
+
+func test_a_reload_never_raises_a_second_hall():
+	var coord := _find_settlement_chunk("grassland")
+	var world := StubWorld.new()
+	renderer.spawn_village(parent, coord, coord * CHUNK_SIZE, CHUNK_SIZE, TILE_SIZE, "grassland", world)
+	renderer.spawn_village(parent, coord, coord * CHUNK_SIZE, CHUNK_SIZE, TILE_SIZE, "grassland", world)
+	assert_eq(_placed(world, "city_hall").size(), 1, "one seat per village, across reloads")
+
+
+## An older village, founded before this existed, gains its hall on the
+## next visit -- the same self-healing shape the plaza and the mill have.
+func test_an_older_village_gains_its_hall_on_a_later_visit():
+	var coord := _find_settlement_chunk("grassland")
+	var world := StubWorld.new()
+	world.refuse_civic = true
+	renderer.spawn_village(parent, coord, coord * CHUNK_SIZE, CHUNK_SIZE, TILE_SIZE, "grassland", world)
+	assert_eq(_placed(world, "city_hall").size(), 0, "precondition: founded without one")
+
+	world.refuse_civic = false
+	renderer.spawn_village(parent, coord, coord * CHUNK_SIZE, CHUNK_SIZE, TILE_SIZE, "grassland", world)
+
+	assert_eq(_placed(world, "city_hall").size(), 1)
+
+
+## A village whose square was never paved has nowhere to put a seat, and
+## honestly gets none.
+func test_a_village_with_no_square_gets_no_hall():
+	var coord := _find_settlement_chunk("grassland")
+	var world := StubWorld.new()
+	var plaza: Rect2i = VillageLayout.skeleton(CHUNK_SIZE, VillageLayout.seed_for(coord))["plaza"]
+	for y in range(plaza.position.y, plaza.end.y):
+		for x in range(plaza.position.x, plaza.end.x):
+			world.water_cells[coord * CHUNK_SIZE + Vector2i(x, y)] = true
+
+	renderer.spawn_village(parent, coord, coord * CHUNK_SIZE, CHUNK_SIZE, TILE_SIZE, "grassland", world)
+
+	assert_eq(_placed(world, "city_hall").size(), 0, "no square, no seat")

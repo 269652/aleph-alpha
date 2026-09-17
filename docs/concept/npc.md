@@ -345,6 +345,222 @@ witnesses): no instruction DSL, no hiring or negotiated wages, no
 relationships/trust, no lifecycle/death consequence for sustained hunger yet,
 no migration, no real LLM-backed planning.
 
+### Work against the real world, not against a number
+
+Reported in play: *"the hunter doesn't hunt, the fisher doesn't fish ...
+hunting and fishing should be simulated against the real world, just like
+lumberjacking and everything else."*
+
+That is exactly right, and the codebase already says so about itself. The
+fish-catch hook's own doc comment notes that a caught fish "actually
+depletes the region it came from -- **unlike land hunting**". A hunter
+today walks to a decorative prop four tiles from their door, stands on it,
+and food appears in the village market; no animal is approached and none
+dies. `NpcEconomy._deplete_discrete_unit` handles only the fisher, and
+even that decrements a regional aggregate rather than taking a real fish.
+
+**The Lumberjack is the pattern to follow, and it is already built.**
+`LumberjackBehavior` is a pure phase machine (`SEEKING → APPROACHING →
+FELLING → CARRYING → DEPOSIT`) with no engine dependency, and
+`LumberjackMarker` owns the world effect: it scans
+`ChoppableTree.GROUP_NAME` for a real standing tree, walks to it, and
+swings with the SAME `take_damage()` loop `Player._chop_step` uses. An NPC
+swinging an axe is not a separate mechanic; it is the same one with a
+different caller.
+
+Hunting and fishing become the same mechanic with two more callers:
+
+- **The hunter** scans `CreatureMarker.GROUP_NAME` for a real, living,
+  huntable animal in range, walks to it, and damages it with the same
+  `CreatureMarker.take_damage` the player's own weapon calls. When it
+  dies, that is where the meat comes from — a real animal that was
+  standing there a moment ago and now is not.
+- **The fisher** walks to real water and takes a real `FishMarker` through
+  the hook that already exists for the player's own rod, which frees the
+  fish and records the harvest against its chunk's aggregate population.
+
+What this replaces, and why it is better than what is there:
+
+1. **Yield stops being conjured.** `NpcProduction.yield_per_second` reads
+   the real regional headcount, which is good, but the food it produces
+   appears without anything being taken. After this, a hunter's output is
+   the animals they actually killed.
+2. **Depletion becomes real for land, not just water.** The gap the fish
+   hook's own comment names is closed from the other side.
+3. **It is visible.** The reported complaint is that nothing happens. A
+   villager walking out to a deer and bringing it down is the thing that
+   was missing, and it costs no new art — `CreatureMarker` and the walk
+   cycle are already there.
+
+**Deliberately unchanged:** the farmer. There is no real "crop entity" to
+harvest the way there is a tree, an animal or a fish —
+`vegetation_density_near` is a field, not a thing standing in the world —
+so a farmer keeps reading it. Inventing a crop entity to make the third
+producer symmetrical would be exactly the premature system this doc's own
+framing warns against; the farm/mill/bakery chain
+([milling_and_baking.md](milling_and_baking.md)) is where real crop
+entities belong when they come.
+
+**Named limitation to design around:** a villager can only hunt what is
+LOADED. Creatures and fish exist as nodes only in loaded chunks, so an
+unloaded settlement cannot take real quarry. The regional-aggregate path
+stays as the fallback for those, which keeps an unloaded village fed
+without pretending it killed anything — the same two-fidelities split
+[ecosystem_dynamics.md](ecosystem_dynamics.md) already draws between
+individual and aggregate simulation.
+
+#### Status — built, and how it actually landed
+
+Both halves are live. `ForagerBehavior` is the pure phase machine
+(`SEEKING → APPROACHING → TAKING`), `HuntableQuarry` is the pure rule set,
+and `NpcMarker` owns the world effect. One skeleton runs both quarry kinds;
+only four things differ (`_find_quarry` / `_quarry_position` / `_reach` /
+`_take_quarry`), because a deer and a trout are approached, lost and given
+up on identically and writing that twice is how the two drift apart.
+
+- ✅ **The hunter** scans the real creature group, walks to a living wild
+  animal and strikes it with the same `take_damage()` a wolf's own bite
+  calls. Four exclusions, each grounded rather than chosen: **not a
+  predator** (`NpcProduction` pays a hunter by `herbivore_population_near`,
+  so prey is what a hunter takes), **not a world boss** (`BossAggro` would
+  wake it into the village), **nothing the player has a stake in** — the
+  broader line `CreatureMarker.is_player_invested` already draws, so an
+  animal the player has fed even once or has on a rope is off the list
+  well before `Taming.is_tame`'s threshold ([taming.md](taming.md)) — and
+  **alive and still really here** (a creature killed earlier in the frame
+  stays in its group until the frame boundary).
+- ✅ **The fisher** walks to the water and casts through the two hooks the
+  player's own rod and a diving bird already use —
+  `nearest_fish_position` and `catch_nearest_fish`, the latter of which
+  frees the real fish and books the harvest against its chunk's aggregate
+  by itself.
+- ✅ **Yield is no longer conjured while real quarry is there.** What the
+  kill is worth is `HuntableQuarry.meat_yield_of`: exactly the
+  `Butchering.meat_count` a player butchering that same carcass would cut
+  out of it, against the animal's own live mass relative to its species
+  reference ([metabolism.md](metabolism.md)). A well-fed deer feeds the
+  village better than a starved one. No skill bonus — SkillTree's
+  `meat_yield` nodes are the player's to earn.
+- ✅ **The hide reaches the market too, unpaid.**
+  `MerchantVisit.BUY_LIST` has bought hides since it was written, and until
+  a hunter took one no hide ever reached a village market for a cart to
+  find. A kill now credits `Butchering.HIDE_COUNT` — flat, not mass-scaled,
+  because `Butchering`'s own shape is flat: a starved deer is a thinner
+  deer, not a smaller one. Deliberately **not** paid for at the kill: a hide
+  feeds nobody and no villager buys one, so there is no local sale to pay
+  for, and its value arrives when a cart buys it out of the market
+  ([traveling_merchants.md](traveling_merchants.md)). Paying at the kill
+  would be the conjured faucet that doc exists to close, pointed at a
+  second good.
+- ✅ **No number in the hunt was invented.** Every constant is borrowed
+  from something already live and test-pinned to it, never copied as a
+  literal: the search radius and arrival distance from the Lumberjack's
+  own, the strike damage from `CreatureMarker.ATTACK_DAMAGE` (a villager
+  bringing a deer down does what a wolf does to the same deer), the
+  look-around and strike intervals from `LumberjackBehavior`, and the rod's
+  reach from `Player.FISH_CATCH_RADIUS` — a villager's rod is the player's
+  rod.
+
+Four decisions this section did not originally specify, recorded here
+because the code took them:
+
+1. **The regional drip is off whenever quarry is within REACH, not only
+   while a villager is committed to one.** Paid only for committed time, a
+   hunter would still draw most of their income from a number: the drip
+   runs at `PRODUCTION_RATE_PER_SECOND × the regional headcount`, which
+   across a look-around interval and a walk outruns a real deer several
+   times over, and hunting would have stayed decorative. The fallback is
+   for a region with no loaded quarry in it — not a top-up for the seconds
+   between one kill and the next.
+2. **A hunter carries home the animal it killed**, so the carcass
+   `CreatureMarker._die` leaves is removed at the kill site. Otherwise the
+   same meat exists twice: once as village stock and once as a carcass
+   anyone can walk up and butcher. Named simplification: the whole animal
+   goes home, so the guts a real field-dressing leaves behind
+   (`Butchering`'s third part, `CarcassGuts`) are not spawned. Wild deaths
+   — predation, disease, age — still leave their carcasses untouched, so
+   [carrion.md](carrion.md)'s chain keeps every input it had except the
+   ones a villager personally killed and carried off.
+3. **One fish is one food unit**, not a mass-scaled count the way a carcass
+   is — a deliberate asymmetry with the hunter. There is no fish equivalent
+   of `Butchering.meat_count` to read a real conversion off, and inventing
+   one would be exactly the invented number this change exists to remove.
+4. **Nothing is credited for a blow that does not kill, or a cast that
+   lands nothing.** Half a deer is not half a meal, and a wounded animal
+   that escapes fed nobody.
+
+**Measured, not assumed** (`tools/probe_village_hunting.gd`, 40 chunk-widths
+east of Berlin, real chunks, real settlements, real spawned creatures): of
+**9 real hunter villagers, 6 (67%) had real quarry within reach** of where
+they actually work, and **none saw no live quarry at all** — around 30
+huntable creatures are loaded at any moment. The distance from a hunter's
+workspot to the nearest real animal ran **16px / 244px / 419px**
+(min/median/max) against a reach of **250px**.
+
+That median lands within 3% of the reach, which is worth stating plainly
+because the reach was not chosen for it: it is `LumberjackMarker`'s own
+search radius, borrowed on the argument that a village worker ranges about
+as far for an animal as for a tree, and test-pinned to it. The measurement
+says that argument was right to within a rounding error. It also says the
+feature is a coin flip per hunter rather than a certainty — the third that
+misses sits at 250–419px and falls back to the aggregate, which is exactly
+what the fallback is for. **The reach is deliberately NOT widened to
+capture them.** Nothing principled sits at 419px; moving it there would be
+tuning a constant to a sample, which is the thing this project's rules
+forbid and the thing the whole borrow-and-pin discipline exists to avoid.
+
+**And it really produces.** Re-run after the deadlock fix below, the same
+hunter over 240 simulated seconds banked **2 meat and 1 hide** — exactly
+one real animal, `Butchering.meat_count` plus `HIDE_COUNT`, taken from a
+deer that was standing there and now is not. Against the **8.86 units** the
+old conjured drip would have paid over the same stretch, so a real hunt is
+roughly a quarter as productive as the faucet it replaces. That is the
+point rather than a shortfall: the drip still runs for the 94.5% of ticks
+where no quarry is in reach of where the hunter actually stands, so the
+real hunt supplements the fallback rather than starving a village. Note the
+gap between **67% of hunters having quarry in reach of their workspot** and
+**5.5% of ticks having it in reach of the marker** — a villager spends most
+of a day at home, asleep, or walking, and only half of it working at all.
+
+✅ **A hungry producer works instead of queuing at an empty well** — found
+by the probe above, and a pre-existing deadlock rather than anything this
+change introduced. The hunger interrupt sends any hungry villager to the
+well to buy a meal. Measured live: a real hunter went hungry about twelve
+seconds in, with an empty village market and an empty purse, and then never
+worked again for the remaining 227 simulated seconds — because the
+interrupt fires every frame, and *not working is precisely what stopped
+them producing the food they had been sent to buy*. The well had nothing on
+it and never would. A village that fell into that state could not climb out
+of it.
+
+The interrupt now skips a producer who can feed itself from its own work
+(`NpcEconomy.feeds_itself_from_work`, which is exactly the condition the
+free self-feed already turned on, named rather than restated so the two
+cannot drift). Working *is* eating for a hunter, so sending them to the
+stall trades a meal they already have for one they have to buy. The
+interrupt is for villagers who must BUY, which is what this doc describes
+it as — and a producer whose region has genuinely collapsed is one of them
+again, so the famine chain above stays intact.
+
+🚧 **A fisher's dock is not sited at water.** `VillageRenderer` places
+every personal workspot prop — a farmer's field, a blacksmith's forge, a
+fisher's dock — on dry ground near that villager's own house, with no
+notion of what the trade needs to be near. So whether a fisher ever
+actually fishes depends on where the village happened to land relative to a
+river or lake, not on anything the dock knows. The fallback keeps them fed
+either way, and the fix belongs to whatever eventually sites work props by
+what the work needs (the hunter has the same shape of problem and is less
+exposed to it, since animals move and water does not). **Unmeasured**: the
+probe covers the hunter's side only, so the rate at which a fisher has real
+water in reach is currently a stated gap, not a number.
+
+**Still open here:** a villager cannot hunt a species whose meat the world
+has no `LootTable` entry for — they can *kill* it, and are paid the same
+`Butchering` yield for it, but it leaves no carcass either way, so the
+"carried home" rule is a no-op for most of the roster. Widening `LootTable`
+past its four generic entries is [carrion.md](carrion.md)'s to do, not this
+section's.
+
 ### Open questions
 
 - Aging pace — real-time-days-per-life-stage vs. some faster abstracted

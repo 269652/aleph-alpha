@@ -89,16 +89,19 @@ func _find_settlement_chunk() -> Vector2i:
 			loads += 1
 			_scrub_chunk(coord)
 			manager._load_chunk(coord)
-			# BOTH: a paved square with a reserved civic plot, AND real
-			# houses. The square alone is not enough -- since the plaza is
-			# CLEARED out of forest while house plots are not, a heavily
-			# wooded chunk can pave its square and still fit no house, and
-			# a village with no households has no growth decision to test.
-			var plot_origin = manager._civic_plot_origin_for(coord)
-			var has_houses := not manager.buildings_in_chunk(coord).is_empty()
+			# BOTH a real square AND real houses. Deliberately NOT
+			# _civic_plot_origin_for: that answers null once a hall STANDS
+			# on the plot, and a founded village now has one -- which is
+			# success, not failure. What this file needs is a village with
+			# a square and households to make decisions for.
+			var has_square := _plaza_is_real(coord)
+			var houses := 0
+			for record in manager.buildings_in_chunk(coord):
+				if BuildingCatalog.capacity_of(record.get("id", "")) > 0:
+					houses += 1
 			manager._unload_chunk(coord)
 			_scrub_chunk(coord)
-			if plot_origin != null and has_houses:
+			if has_square and houses > 0:
 				return coord
 			if loads >= 20:
 				break
@@ -143,9 +146,55 @@ func _stock_everything() -> void:
 	market.add_stock("plant_fibre", 200.0)
 
 
+## Loading a village ALREADY takes a growth decision (_load_chunk calls
+## _apply_village_growth_decision), and a founded village with its hall up
+## is immediately owed its next rung -- so a project can exist before a
+## test body runs a line. A test that asserts what ONE decision queued has
+## to start from an empty ledger, or it is really asserting what the load
+## did.
+func _clear_ledger() -> void:
+	for project in manager.construction_project_store().active_projects_in_chunk(_chunk_coord):
+		manager.construction_project_store().abandon_project(project.id)
+
+
+## Puts the plot back the way it was before founding placed a hall on it --
+## the state the over-time civic build is about. Same shape
+## test_earth_chunk_manager_city_hall_rising.gd uses.
+func _remove_the_founded_hall() -> void:
+	if not manager.remove_building(_chunk_coord, _civic_origin):
+		return
+	var cells: Array = BuildingCatalog.footprint_cells("city_hall", _civic_origin)
+	cells.append(_civic_origin + BuildingCatalog.doorstep_of("city_hall"))
+	for local in cells:
+		var g := _global(local)
+		manager.build_at_global(g.x, g.y, TerrainRenderer.ROAD_TILE_ID)
+
+
+## Every plaza cell is either paved or built on -- what a village that
+## really laid its square looks like, whether or not a hall stands on it
+## yet.
+func _plaza_is_real(coord: Vector2i) -> bool:
+	var plaza: Rect2i = VillageLayout.skeleton(CHUNK_SIZE, VillageLayout.seed_for(coord))["plaza"]
+	var chunk = manager._loaded_chunks.get(coord)
+	if chunk == null:
+		return false
+	for y in range(plaza.position.y, plaza.end.y):
+		for x in range(plaza.position.x, plaza.end.x):
+			var tile: String = chunk.modifications.get(Vector2i(x, y), "")
+			if not (TerrainRenderer.is_road_tile(tile) or BuildingCatalog.occupies(tile)):
+				return false
+	return true
+
+
 ## The hall stands, so the ladder moves past the rung CivicBuildDecision
-## owns and this file can exercise the rungs the growth decision owns.
+## owns and this file can exercise the rungs the growth decision owns. A
+## founded village already has one, so this is usually a no-op now -- it
+## stays because these tests are about what the ladder does ONCE the hall
+## is up, and must not quietly depend on founding having put it there.
 func _raise_the_hall() -> void:
+	for record in manager.buildings_in_chunk(_chunk_coord):
+		if record.get("id", "") == "city_hall":
+			return
 	manager._place_building_over_roads(_chunk_coord, _civic_origin, "city_hall", 1, _settlement_id)
 
 
@@ -178,6 +227,9 @@ func _projects_for(building_id: String) -> Array:
 
 func test_a_village_without_its_hall_yet_queues_no_later_rung():
 	_stock_everything()
+	_remove_the_founded_hall()
+	_clear_ledger()
+
 	manager._apply_village_growth_decision(_chunk_coord)
 	for building_id in ["warehouse", "farmhouse", "blacksmith", "brewery"]:
 		assert_true(_projects_for(building_id).is_empty(), "%s must wait behind the hall" % building_id)
@@ -258,6 +310,7 @@ func test_a_homeless_household_makes_the_village_owe_a_house_before_any_other_ru
 	_stock_everything()
 	_raise_everything_below("warehouse")
 	manager.admit_household(_chunk_coord)
+	_clear_ledger()
 
 	manager._apply_village_growth_decision(_chunk_coord)
 
@@ -617,3 +670,69 @@ func test_a_real_chunk_load_leaves_the_plaza_paved():
 				TerrainRenderer.is_road_tile(tile) or BuildingCatalog.occupies(tile),
 				"plaza cell (%d,%d) is '%s' -- neither paved nor built on" % [x, y, tile]
 			)
+
+
+# -- a traveling merchant pays the village (traveling_merchants.md) -------
+#
+# Reported live: "all villagers have 0 gold". The persistent-purse bug was
+# half of it; the other half is that a village's gold came from nowhere --
+# conjured per food unit gathered whether or not anyone ever bought it.
+# Here the outside world turns up and pays for goods it carries away.
+
+const MerchantVisit = preload("res://src/emergence/merchant_visit.gd")
+const NpcEconomy = preload("res://src/world/npc_economy.gd")
+
+
+func test_a_village_with_goods_is_eventually_paid_by_a_merchant():
+	var market = _market()
+	market.add_stock("fish", 60.0)
+	assert_eq(NpcEconomy.purse_of(market), 0.0, "precondition: an empty purse")
+
+	for i in 400:
+		manager._step_merchant_visits(_settlement_id, market)
+
+	assert_gt(NpcEconomy.purse_of(market), 0.0, "somebody carried the catch away and paid for it")
+	assert_lt(market.stock.get("fish", 0.0), 60.0, "and the fish really left the village")
+
+
+func test_a_village_with_nothing_to_sell_is_never_paid():
+	var market = _market()
+	for i in 400:
+		manager._step_merchant_visits(_settlement_id, market)
+	assert_eq(NpcEconomy.purse_of(market), 0.0, "no goods, no merchant, no gold")
+
+
+## The gold and the goods have to balance: this is the one place new money
+## enters a village, so it must enter for a reason.
+func test_the_gold_paid_is_exactly_the_goods_taken():
+	var market = _market()
+	market.add_stock("beam", 40.0)
+	var before: float = market.stock["beam"]
+
+	for i in 200:
+		manager._step_merchant_visits(_settlement_id, market)
+
+	var taken: float = before - float(market.stock.get("beam", 0.0))
+	assert_gt(taken, 0.0, "precondition: a sale happened")
+	assert_almost_eq(
+		NpcEconomy.purse_of(market), taken * MerchantVisit.price_of("beam"), 0.001,
+		"the purse holds exactly what the beams were worth"
+	)
+
+
+## And that gold is spendable: VillageWages pays subsistence out of this
+## same purse, which is what carries a merchant's visit to the villagers
+## who did not catch anything.
+func test_the_gold_lands_in_the_purse_the_village_pays_wages_from():
+	var VillageWages = load("res://src/world/village_wages.gd")
+	var market = _market()
+	market.add_stock("hide", 50.0)
+	for i in 300:
+		manager._step_merchant_visits(_settlement_id, market)
+	var purse := NpcEconomy.purse_of(market)
+	assert_gt(purse, 0.0, "precondition")
+
+	var payout: Dictionary = VillageWages.pay_subsistence(purse)
+
+	assert_gt(int(payout["paid"]), 0, "a villager who caught nothing can still be paid a wage")
+	assert_lt(float(payout["purse"]), purse, "and the village really spent it")
