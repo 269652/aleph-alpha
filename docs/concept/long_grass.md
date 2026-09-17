@@ -208,16 +208,25 @@ the screen regardless, and the walker push (the only term large enough to
 matter) is ~0 at the screen's edge anyway, the player being at its centre.
 No `custom_aabb` needed.
 
-**Not independently verified by a live render.** Every claim above is pinned
-by a real headless test (the residual bound, the shader's structure, the
+**Confirmed with a real render, not only by test.** Every claim above is
+pinned by a headless test (the residual bound, the shader's structure, the
 mesh's subdivision and triangle count, roots staying exactly put), and the
 GLSL genuinely compiles under the headless runner -- confirmed directly, not
 assumed: a deliberately broken line in this same shader fails the suite loudly
 with `SHADER ERROR`. But this doc's own History is full of grass bugs only a
-real, non-headless render could see, and none was available in the session
-that made this change. Worth a look on next launch: if a strongly bent blade
-now reads as *stretched* rather than leaning, the answer is a finer
-`BEND_MESH_SUBDIVIDE_*`, not a redesign.
+real render could see, so this one got one too
+(`tools/probe_grass_bend_clipping.gd`, kept): it draws one real cell's cards
+twice in the SAME frame -- old shader on a plain quad beside the shipped one
+on the subdivided mesh, identical `TIME` and therefore identical wind -- with
+a walker standing right beside each clump. With no walker the two are
+pixel-alike (the fix changes nothing about an unbent card); with one, the old
+clump is visibly a squat stub with its leaning half cut away, exactly as
+reported, while the new one LEANS -- blades sweeping well past the card's own
+upright footprint, parting to both sides of the walker, roots still on the
+same ground line, and no seam or stretch visible at the mesh's own
+subdivision boundaries. Rendered under `xvfb` + Mesa software GL, which is a
+real rasterizer as far as the shader is concerned, though not this game's own
+integrated-GPU hardware.
 
 **Wheat is deliberately not changed in the same pass, and has diverged.**
 `IllustratedWheatPatch` draws ordinary `Sprite2D` blades (two triangles, no
@@ -996,9 +1005,10 @@ at the ROOT instead of the tip), the fix is a one-line flip of
   1.66 card widths (106 px) the sampling stage used to slide on its own, and
   pinned by `test_bending_never_slides_a_blade_further_sideways_than_its_own_
   card_can_show`. Fill rate and draw calls are unchanged; vertex count is
-  not (4 → 45 per card). ⬜ Still unverified by a real, non-headless render,
-  unlike the entry above it, and ⬜ `IllustratedWheatPatch` still bends the
-  old (clippable) way — see "Where a bent blade actually goes" for both.
+  not (4 → 45 per card). Verified with a real before/after render
+  (`tools/probe_grass_bend_clipping.gd`, kept), not only by test. ⬜
+  `IllustratedWheatPatch` still bends the old (clippable) way — see "Where a
+  bent blade actually goes".
 - ✅ The walker-position uniform updates every frame for every client
   (host and connected), not just whichever peer owns the ecosystem
   simulation — see History #5.
