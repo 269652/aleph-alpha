@@ -1608,3 +1608,155 @@ is true for every roster species today, and `marker_scale(id)` measures
 each sheet's own opaque-pixel width so it lands at
 `ProceduralMushroomSprite.MUSHROOM_WORLD_WIDTH` on screen, the same real
 size the procedural fallback already used.
+
+## 13. Fence corner pieces — the L-joint the ring already needs (2026-09-17)
+
+`assets/sprites/buildings/fence.png` has four **straight** runs (North/
+South/East/West) and no corner, but `VillageFarm.fence_cells` encloses a
+field on the diagonal as well as the orthogonal, *"so the corners close"*
+([village_farms.md](../concept/village_farms.md)) — so every ring the
+village raises has four cells whose only bed neighbour is diagonal.
+`VillageFarm.fence_facing` has nowhere to send them and falls back to
+`north`/`south`, which draws a straight rail lying across the bend.
+
+Target: a second sheet, `assets/sprites/buildings/fence_corners.png`, in
+the **same contract as `fence.png`** so `VariantSheetGrid` reads it with no
+new code — four corner columns by the same three condition rows.
+
+### Why the naive prompt fails (and what actually fixes it)
+
+Asking any current model for "a fence corner, top-down pixel art" reliably
+returns one of four wrong pictures: a *scene* corner (a fenced yard drawn
+in perspective), a **diagonal** rail, two fences that visibly do not meet,
+or an L whose arms are drawn in two different projections. The four levers
+that fix it, in order of how much they matter:
+
+1. **Image-to-image, one cell per turn, with the real sheet as reference.**
+   Same finding as the flower bloom stages above: Nano Banana holds
+   identity across a conversation and loses it across a one-shot grid. A
+   corner is *two halves of frames the model can already see*, so give it
+   those frames. Asking for all 12 cells at once is the single biggest
+   cause of the failure.
+2. **Say "one shared post, two arms" in geometry, not in the word
+   "corner."** The word is what invites the perspective scene.
+3. **Say the arms are cut off flush at the frame edge.** Left unsaid, every
+   model caps each arm with a second post — which reads as a standalone
+   gate fragment and, worse, tiles wrong: a post lands mid-run everywhere
+   two tiles meet.
+4. **Name each arm by the column it must match.** The sheet mixes
+   projections on purpose — a horizontal run shows its rails broad-side,
+   a vertical run is seen almost from above and foreshortens to a narrow
+   band. A corner splices one of each, and that splice is exactly what the
+   model will not invent unprompted.
+
+### The four corners, and which straight cell each arm must match
+
+Named for the corner of the **enclosure** they stand on, the same way the
+existing columns are named for the side of the field (not for a facing):
+
+| Cell | Horizontal arm exits | drawn as | Vertical arm exits | drawn as |
+|:-----|:--------------------:|:--------:|:------------------:|:--------:|
+| NW   | right  | North (Back)  | down | West (Top View) |
+| NE   | left   | North (Back)  | down | East (Top View) |
+| SW   | right  | South (Front) | up   | West (Top View) |
+| SE   | left   | South (Front) | up   | East (Top View) |
+
+North corners take the **back** view (no bolt heads on the post); south
+corners take the **front** view (bolt heads visible), exactly as the
+straight columns already differ.
+
+### Working prompt template (fill the four `[...]` slots per the table)
+
+Attach `fence.png` itself as the reference image. One cell per turn.
+
+> Reference image: my existing fence sprite sheet. Its four columns are,
+> left to right: **North** — a fence run seen from behind; **South** — the
+> same run seen from the front, with iron bolt heads on the posts;
+> **East** and **West** — the same fence rotated 90° so it runs vertically,
+> seen from almost straight above, its rails strongly foreshortened into a
+> narrow band.
+>
+> Draw ONE new frame: the **[NW]** corner of that same fence — the
+> identical fence turning a single 90° bend. Geometry, exactly:
+>
+> - ONE post at the bend, and only one. Both arms grow out of that single
+>   shared corner post.
+> - HORIZONTAL ARM: from the post, two parallel horizontal rails run to the
+>   **[RIGHT]** edge of the frame, drawn exactly like the **[North]**
+>   column — same plank thickness, same grain, same two rail heights, same
+>   colours.
+> - VERTICAL ARM: from the same post, the fence continues to the
+>   **[BOTTOM]** edge of the frame, drawn exactly like the **[West]**
+>   column — a narrow, strongly foreshortened vertical band of rail seen
+>   from above.
+> - Both arms are HALF runs. Each starts at the corner post and is CUT OFF
+>   FLUSH at the edge of the frame, straight through the middle of the
+>   plank. No end cap, no second post, no taper, no fade — the frame edge
+>   cuts them the way a tile boundary does.
+> - Exactly TWO arms. Nothing leaves the **[left]** or **[top]** side of
+>   the frame. A third arm would be a T-junction, not a corner.
+> - The horizontal rails end INTO the side face of the corner post; the
+>   vertical rails leave the post's **[bottom]** face. The post reads as
+>   one unbroken silhouette in front of both.
+>
+> Forbidden: any diagonal rail; any perspective difference between the two
+> arms (one camera, the reference sheet's); ground, grass, soil, path,
+> plants, sky or snow; a cast shadow; a gate, hinge or latch; a second
+> fence behind this one; any drawn border, frame or label inside the cell.
+>
+> Background: solid pure black (#000000) edge to edge — no vignette, no
+> texture. Same posterized flat shading (one base tone, one highlight, one
+> shadow band per surface, hard edges, no gradients) and the same
+> upper-left light as the reference sheet. Same wood palette and same pixel
+> scale: the frame must look cut from that sheet.
+
+### The two other rows
+
+Generate the Pristine corner first, then ask for its Worn and Destroyed
+states **in the same conversation** ("same corner, same palette, now …"),
+so all three are the same fence:
+
+- **Worn (1):** identical geometry — nothing missing. Wood silvered and
+  greyed, hairline splits along the grain, chipped rail edges, one rail
+  slightly out of true, moss at the post base.
+- **Destroyed (2):** the corner post still STANDS (both posts survive in
+  the sheet's own Destroyed row). Both arms' rails are snapped near the
+  post and left as splintered stubs pointing outward along their own arm;
+  the outer half of each run is gone, leaving black.
+
+### Assembling the sheet
+
+`fence.png` is 1536×1024, and its cells are **not** on an exact pitch —
+measured, the magenta rules sit at x = 176, 509, 840, 1194 and y = 75, 354,
+635, 926, giving columns 329/327/350/334px wide and rows 275/277/287px
+tall. `VariantSheetGrid.art_bands` finds the bands, so the corner sheet
+needs the *conventions*, not those exact numbers:
+
+- 1536×1024, solid black background.
+- A ~4px pure magenta (#FF00FF) rule between every cell and around the
+  outside.
+- A label row across the top (`NW / NE / SW / SE`) and a label gutter down
+  the left (`Pristine (0) / Worn (1) / Destroyed (2)`) in white — outside
+  the art cells, on the far side of a magenta rule, exactly as `fence.png`
+  prints them.
+- Generous black margin inside each cell on the two edges the arms do NOT
+  leave; the two edges they do leave must be touched flush.
+
+Composite the 12 generated cells in an image editor rather than asking the
+model to lay out the grid — the label bands and the exact magenta rules are
+cheap by hand and are the part a model gets subtly wrong.
+
+### Wiring, once generated
+
+Four new `IllustratedStructureSprite._SUBJECTS` entries
+(`farm_fence_nw/ne/sw/se`, `columns: 4, rows: 3, idle_row: 0,
+idle_column: 0..3, keys_black: true, grid: "dividers"`), four new
+`VillageFarm.FENCE_TILE_IDS` entries, and a `fence_facing` that returns the
+corner name for a diagonal-only cell instead of today's `north`/`south`
+fallback. Red-first: the failing test is that a cell with only a diagonal
+bed gets a corner id, which today it does not.
+
+**Optional later:** T-junctions and a cross, same recipe with three and
+four arms. Not needed by the current ring — `fence_cells` encloses one
+farm's beds, so only L corners occur — so don't generate them
+speculatively.

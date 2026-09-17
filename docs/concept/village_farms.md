@@ -212,6 +212,31 @@ A rail picks its column from which side of the enclosure it stands on, so a
 run along the field's north edge is drawn back-on and a run down its east
 edge is drawn as a post-and-rail seen from above.
 
+**The corners are a second sheet, not a fifth column.** The ring closes on
+the diagonal, so four cells of every ring have only a diagonal bed and no
+side of the enclosure to name — `fence_facing` sends them to `north`/
+`south` today, which lays a straight rail across the bend. The fix is
+`assets/sprites/buildings/fence_corners.png`, the identical contract
+(1536×1024, magenta rules, printed labels, `VariantSheetGrid.art_bands`)
+with the four columns being the corner of the enclosure rather than its
+side:
+
+|            | NW | NE | SW | SE |
+|-----------:|:--:|:--:|:--:|:--:|
+| Pristine (0) | 0,0 | 1,0 | 2,0 | 3,0 |
+| Worn (1)     | 0,1 | 1,1 | 2,1 | 3,1 |
+| Destroyed (2)| 0,2 | 1,2 | 2,2 | 3,2 |
+
+A corner cell is one shared post with two HALF runs leaving it, each drawn
+as the straight column it must butt against (NW = a North back-on run
+exiting right, plus a West top-view run exiting down) and each cut flush at
+the cell edge so the rails line up with the neighbouring tile's. Separate
+sheet rather than extra columns because the existing four columns are
+`fence.png`'s own printed order, pinned by
+`test_the_four_rails_are_four_different_pictures` — widening that sheet
+would rewrite art already on disk. The generation prompt lives in
+[../art/ai_sprite_prompts.md](../art/ai_sprite_prompts.md) §13.
+
 ### What a field costs to keep
 
 A day is `ChunkEcologyCatchup.SECONDS_PER_DAY` = 3600 s in four
@@ -428,7 +453,14 @@ Honest gaps, each real:
 - 🚧 **Rails do not weather or break.** The sheet carries Worn and Destroyed
   rows and only the Pristine row is ever drawn. Nothing damages a fence, so
   nothing would ever read them yet.
-- - ⬜ **Nothing yet notices a village that wants a second farmhouse.** The
+- 🚧 **The corners are drawn as straight rail.** `fence_cells` closes the
+  ring on the diagonal, but `fence.png` has only the four straight runs, so
+  `fence_facing` sends a diagonal-only cell to `north`/`south` and the bend
+  reads as a rail lying across it. The art contract for
+  `fence_corners.png` is above and its prompt is written
+  ([../art/ai_sprite_prompts.md](../art/ai_sprite_prompts.md) §13); no
+  corner art exists on disk yet, so nothing is wired.
+- ⬜ **Nothing yet notices a village that wants a second farmhouse.** The
   village raises one per farming villager and stops. Growing the chain on
   demand is `SettlementBuildDecision`'s to answer, and it reports *missing*
   producers rather than insufficient throughput — the same open question
