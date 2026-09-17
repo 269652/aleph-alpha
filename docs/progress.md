@@ -24769,7 +24769,21 @@ questions sharing an English word, and conflating them would stack a brand
 new mechanic on top of a famine chain that is already real and already
 tested.
 
-✅ **Mechanism 3 — goods are carried in.** A villager with full hands walks
+🚧 **Mechanism 3 — goods are carried in. Built and tested, then switched
+OFF in a live village** (`NpcMarker.HAULING_CARRY_LIMIT` = 0.0) after it was
+reported immediately post-0.0.2 as *"no stock gets produced anywhere"*. It
+put the villager's hands in the middle of a chain a concurrent pass had just
+built: `_step_farm` calls `haul_stock_to_village` the moment a farmer goes
+off the clock, emptying the farmhouse into `record_real_harvest` — which,
+with a carry limit, goes to the HANDS rather than the market. A producer who
+GATHERS is worse: `_gather` takes nothing more once the hands are full, so
+they stop entirely. Neither side's tests could see it, because every marker
+a test builds sets no `warehouse_position` and so carried nothing. The
+lesson is the one CLAUDE.md already warns about and I still walked into: two
+sessions, one file, both honest in isolation. Everything below is real and
+still present; only the caller that opts a live villager in is off.
+
+✅ **Mechanism 3, as built.** A villager with full hands walks
 the load to the store door and puts it down there. Built as a **wiring on
 the existing villager ethogram**, not a second movement system:
 `Ethogram` gained the `WAREHOUSE` channel on the one shared basis and the

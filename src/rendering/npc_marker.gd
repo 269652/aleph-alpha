@@ -354,13 +354,38 @@ func setup_economy(market, household_wallet = null) -> void:
 	_apply_carry_limit()
 
 
+## What a villager with a store to carry to may hold before their hands are
+## full -- and it is 0.0, which means hauling is WIRED BUT NOT SWITCHED ON.
+##
+## Reported live against 0.0.2: *"now no stock gets produced anywhere"*.
+## Turning carrying on in a real village inserts the villager's hands into
+## the middle of a chain another pass had just built. _step_farm calls
+## haul_stock_to_village the moment a farmer goes off the clock, which
+## empties the farmhouse straight into NpcEconomy.record_real_harvest -- and
+## with a carry limit that goes to the HANDS, not the market. Nothing then
+## reaches the village until that villager accumulates a whole load AND
+## completes a walk to the door. Producers that GATHER are worse: _gather
+## takes nothing more once the hands are full, so they stop dead.
+##
+## Neither showed up in tests because both sides were honest in isolation:
+## every marker built by a test sets no warehouse_position, so carry_limit
+## stayed 0 and every existing assertion passed.
+##
+## The channel, the drive, the wiring, the carried load and all of their
+## tests stay exactly as they are. What is switched off is only the caller
+## that opts a REAL villager in. Raising this to NpcEconomy.CARRY_LIMIT is
+## the whole of switching hauling back on, once delivery is proven to
+## complete in a running village rather than in a unit test.
+const HAULING_CARRY_LIMIT := 0.0
+
+
 ## A villager with a store to carry to holds their take until they reach it;
 ## one without keeps stocking the village outright, which is what a
 ## settlement that went without a store still needs them to do.
 func _apply_carry_limit() -> void:
 	if economy == null:
 		return
-	economy.carry_limit = NpcEconomy.CARRY_LIMIT if warehouse_position != null else 0.0
+	economy.carry_limit = HAULING_CARRY_LIMIT if warehouse_position != null else 0.0
 
 
 func _process(delta: float) -> void:

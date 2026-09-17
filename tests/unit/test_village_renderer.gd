@@ -2447,9 +2447,13 @@ func test_a_villager_of_a_village_with_a_store_knows_where_to_carry_to():
 			continue
 		villagers += 1
 		assert_eq(node.warehouse_position, door, "a villager carries to the real door, not the footprint")
-		assert_gt(
-			node.economy.carry_limit, 0.0,
-			"a village with a store is a village whose take is carried to it"
+		# Hauling is wired but not switched on -- see NpcMarker.HAULING_
+		# CARRY_LIMIT for what turning it on did to a real village's economy.
+		# Pinned to the constant rather than to 0.0 so that raising it is all
+		# it takes to switch hauling back on, and this test follows.
+		assert_almost_eq(
+			node.economy.carry_limit, float(NpcMarker.HAULING_CARRY_LIMIT), 0.0,
+			"a villager carries exactly what the live hauling switch says"
 		)
 	assert_gt(villagers, 0, "precondition: somebody lives here")
 

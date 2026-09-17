@@ -133,7 +133,19 @@ and the overflow is simply not kept.
   can carry a real surplus.
 
 The ceiling is a property of the settlement's buildings, not a constant, so
-a village that loses its warehouse loses the headroom with it. Overflow is
+a village that loses its warehouse loses the headroom with it — but it is
+applied **only while the settlement's chunk is loaded**. Not being able to
+see a village must never read as "it has no warehouse". Without that guard
+every settlement the player was not standing in had its market clamped to a
+household's corners and everything above silently discarded, because the
+structure scan answers "nothing stands here" for an unloaded chunk.
+
+And it is read straight off the chunk's own building records rather than
+through `has_structure_near`, which walks every modification of nine chunks
+once per placeable id in the catalog. Occasionally, for a build decision,
+that is affordable; every settlement every step it is not, and it gets worse
+as villages pave themselves — reported live as the frame rate decaying over
+time. Overflow is
 discarded rather than queued: a full store turns a producer away, which is
 the pressure that makes the building worth having.
 
@@ -221,7 +233,19 @@ thing anybody ever did.
   step from the ids actually standing — so losing the warehouse loses the
   headroom. `capacity_for_structures` keeps that decision testable without
   building a world.
-- ✅ **Mechanism 3 — goods are carried in.** `Ethogram` gained the
+- 🚧 **Mechanism 3 — goods are carried in. Built, tested, and switched
+  OFF in a live village** (`NpcMarker.HAULING_CARRY_LIMIT` is 0.0).
+  Reported immediately after 0.0.2: *"no stock gets produced anywhere"*.
+  Turning carrying on puts the villager's hands in the middle of a chain
+  another pass had just built — `_step_farm` empties the farmhouse straight
+  into `record_real_harvest`, which with a carry limit goes to the hands
+  rather than the market — and a producer who GATHERS stops dead once their
+  hands are full, because `_gather` takes nothing more. Nothing caught it:
+  every marker a test builds sets no `warehouse_position`, so `carry_limit`
+  stayed 0 and both sides passed honestly in isolation.
+
+  What follows is all real and all still there; only the caller that opts a
+  live villager in is off. `Ethogram` gained the
   `WAREHOUSE` channel and the `DRIVE_BURDEN` gate (wired under every
   survival need, over company, and with no `drives` profile entry so no
   clock can raise it); `VillagerBehavior` gained the `HAUL` intent purely by

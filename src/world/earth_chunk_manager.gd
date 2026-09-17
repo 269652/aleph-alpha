@@ -3577,9 +3577,17 @@ func step_settlements(delta_seconds: float) -> void:
 		# had it raised gains it. Deliberately NOT SettlementFood.carrying_
 		# capacity, which asks the different question of how many households
 		# the food on hand can feed.
-		if village_market != null:
+		#
+		# ONLY while the chunk is LOADED, and that guard is the whole point.
+		# Not being able to see a village must never read as "it has no
+		# warehouse": without it, every settlement the player is not standing
+		# in had its market clamped to a household's corners and everything
+		# above that silently discarded, because has_structure_near answers
+		# false for an unloaded chunk.
+		var settlement_chunk := RegionalTrade.chunk_coord_of(settlement_id)
+		if village_market != null and _loaded_chunks.has(settlement_chunk):
 			village_market.storage_capacity = VillageMarket.capacity_for_structures(
-				_present_structure_ids_for_settlement_chunk(RegionalTrade.chunk_coord_of(settlement_id))
+				_standing_building_ids_in_chunk(settlement_chunk)
 			)
 		# BEFORE capacity is read, because this is what finally puts a real
 		# number in front of it (see _step_settlement_granary).
@@ -14234,6 +14242,29 @@ const SETTLEMENT_STRUCTURE_SCAN_RADIUS_TILES := CHUNK_SIZE / 2
 ## construction.md's "Deciding what to build, and who builds it" section),
 ## derived the SAME has_structure_near chunk-scan style every other real
 ## structure-presence check in this file already uses.
+## The distinct BUILDING ids standing in this chunk, read straight off its
+## own building records.
+##
+## Deliberately NOT _present_structure_ids_for_settlement_chunk below, which
+## asks has_structure_near once per placeable id in the catalog -- and
+## has_structure_near walks every modification of NINE chunks, which means
+## every road tile, rail and wall a village has ever laid. That is affordable
+## for a build decision taken occasionally. It is not affordable for every
+## settlement on every step, which is where the stock ceiling runs, and it
+## gets steadily worse as a world fills in and villages pave more of
+## themselves. Reported live as the frame rate decaying over time.
+func _standing_building_ids_in_chunk(chunk_coord: Vector2i) -> Array:
+	var chunk: Chunk = _loaded_chunks.get(chunk_coord)
+	if chunk == null:
+		return []
+	var seen := {}
+	for origin_local in chunk.buildings:
+		var building_id: String = chunk.buildings[origin_local].get("id", "")
+		if building_id != "":
+			seen[building_id] = true
+	return seen.keys()
+
+
 func _present_structure_ids_for_settlement_chunk(chunk_coord: Vector2i) -> Array:
 	var center := chunk_coord * CHUNK_SIZE + Vector2i(CHUNK_SIZE / 2, CHUNK_SIZE / 2)
 	var present: Array = []
