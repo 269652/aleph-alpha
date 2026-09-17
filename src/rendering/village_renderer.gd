@@ -16,6 +16,7 @@ extends RefCounted
 const SettlementGenerator = preload("res://src/world/settlement_generator.gd")
 const VillageLayout = preload("res://src/world/village_layout.gd")
 const VillageFarm = preload("res://src/gameplay/village_farm.gd")
+const VillageSawmill = preload("res://src/gameplay/village_sawmill.gd")
 const BuildingCatalog = preload("res://src/gameplay/building_catalog.gd")
 const NpcMarker = preload("res://src/rendering/npc_marker.gd")
 const VillageMarket = preload("res://src/world/village_market.gd")
@@ -298,7 +299,43 @@ func spawn_village(
 		if work_tag != "" and not settlement.landmarks.has(work_tag) and workspot != null:
 			spawned.append(_build_landmark(work_tag, workspot, parent, true))
 	_hand_out_farm_fields(npcs, npc_markers, farm_fields, chunk_coord, chunk_size)
+	_hand_out_the_sawmill(npcs, npc_markers, chunk_coord, chunk_size, world)
 	return spawned
+
+
+## Tells every villager whose trade is timber which sawmill is theirs
+## (docs/concept/village_timber.md). One mill per village, so unlike the
+## farmhouses there is nothing to pair off -- every sawyer works the one the
+## village raised.
+##
+## A village with no timber in reach raised no mill, and its sawyer honestly
+## has no sawmill work; they keep the regional drip every villager without a
+## worksite already lives on.
+func _hand_out_the_sawmill(
+	npcs: Array, npc_markers: Array, chunk_coord: Vector2i, chunk_size: int, world
+) -> void:
+	if world == null or not world.has_method("buildings_in_chunk") or npc_markers.size() < npcs.size():
+		return
+	var mill = null
+	for record in world.buildings_in_chunk(chunk_coord):
+		if record.get("id", "") == VillageSawmill.SAWMILL_BUILDING_ID:
+			mill = record["origin_local"]
+			break
+	if mill == null:
+		return
+	# The mill is also a real place on the village's own map, so a sawyer's
+	# schedule resolves to it like a merchant's resolves to the stall.
+	# Without this their work tag names somewhere that does not exist and
+	# they fall back to a decorative workspot.
+	var footprint := BuildingCatalog.footprint_of(VillageSawmill.SAWMILL_BUILDING_ID)
+	var mill_centre := Vector2(
+		(float((mill as Vector2i).x + chunk_coord.x * chunk_size) + float(footprint.x) * 0.5) * TerrainRenderer.TILE_SIZE,
+		(float((mill as Vector2i).y + chunk_coord.y * chunk_size) + float(footprint.y) * 0.5) * TerrainRenderer.TILE_SIZE
+	)
+	for i in npcs.size():
+		npc_markers[i].landmarks["sawmill"] = mill_centre
+		if VillageSawmill.works_timber(npcs[i].occupation):
+			npc_markers[i].sawmill_cell = chunk_coord * chunk_size + (mill as Vector2i)
 
 
 ## First-ever placement for this settlement (see spawn_village's own

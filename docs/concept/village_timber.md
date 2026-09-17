@@ -104,12 +104,33 @@ is, through the same haul.
 
 Written before implementation, per CLAUDE.md. Corrected as each slice lands.
 
-- ⬜ **`lumberjack` is a real village trade.**
-- ⬜ **`VillageSawmill`**, the pure rule set.
-- ⬜ **`NpcMarker._step_timber`** — real trees felled, logs to the mill,
-  beams shaped.
-- ⬜ **The renderer tells a lumberjack which sawmill is theirs.**
-- ⬜ **Beams reach the village stock.**
+- ✅ **`lumberjack` is a real village trade**, and the sawmill is a real
+  place on the village map so their schedule resolves to the mill rather than
+  to a decorative workspot. Adding to `OCCUPATIONS` re-rolled every village's
+  roster, exactly as the spec warned — three tests that had silently depended
+  on seed 1's old trade were pinned to a trade of their own rather than
+  papered over.
+- ✅ **`VillageSawmill`**, the pure rule set. `LOGS_PER_BEAM` is
+  `SagewerkProduction`'s own measured cost re-exported, pinned to it by test.
+  `TIMBER_REACH_TILES` is grounded on `VillageLayout.INDUSTRY_FOREST_REACH_
+  TILES` — a mill sited beside timber must be able to reach that timber —
+  with room to work outward as the near trees come down. Short of a beam's
+  worth the answer is still `FELL`: a sawyer waiting at the mill for logs
+  nobody is fetching is a mill that stops the moment it runs down.
+  `test_village_sawmill.gd` 9/9.
+- ✅ **`NpcMarker._step_timber`** — the third sibling of `_step_hunt` and
+  `_step_farm`, on `LumberjackBehavior`'s own phase machine, felling real
+  trees with the same `ChoppableTree.take_damage` loop the player's axe uses.
+  Logs go into the mill; at the mill, with enough of them, a beam is squared
+  over `SagewerkProduction`'s own shaping time and the logs really leave the
+  stock. Timber out of the mill's range is left standing.
+  `test_npc_marker_timber.gd` 15/15.
+- ✅ **The renderer tells a lumberjack which sawmill is theirs**, and nobody
+  else. `test_village_renderer.gd` 94/94.
+- ✅ **Beams reach the village stock**, through the same store-then-haul the
+  farmhouse runs and paid once on arrival. Beams only: the logs a mill holds
+  are its own raw material, and carrying those off would carry away the thing
+  the sawmill exists to work.
 
 ## Interaction with other docs
 

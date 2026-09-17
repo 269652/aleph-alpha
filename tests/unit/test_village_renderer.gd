@@ -15,6 +15,7 @@ const NpcIdentity = preload("res://src/world/npc_identity.gd")
 const TerrainRenderer = preload("res://src/rendering/terrain_renderer.gd")
 const VillageLayout = preload("res://src/world/village_layout.gd")
 const VillageFarm = preload("res://src/gameplay/village_farm.gd")
+const VillageSawmill = preload("res://src/gameplay/village_sawmill.gd")
 const ProceduralLandmarkSprite = preload("res://src/rendering/procedural_landmark_sprite.gd")
 
 const TILE_SIZE := 16
@@ -2222,3 +2223,55 @@ func test_every_farmer_is_told_which_farmhouse_the_field_belongs_to():
 			"a farmer works a field for %s, which is no farmhouse" % str(npc.farmhouse_cell)
 		)
 	assert_gt(checked, 0, "precondition: somebody was handed a real field")
+
+
+# -- the village sawmill has a worker (docs/concept/village_timber.md) ------
+#
+# Reported in play: "The sawmill also never produces any beams and doesn't
+# even have a dedicated worker".
+
+
+func _lumberjack_markers(spawned: Array) -> Array:
+	var out: Array = []
+	for node in spawned:
+		if node is NpcMarker and node.identity.occupation == VillageSawmill.OCCUPATION:
+			out.append(node)
+	return out
+
+
+func test_a_lumberjack_is_told_which_sawmill_is_theirs():
+	var coord := _find_settlement_chunk_with_occupation("grassland", VillageSawmill.OCCUPATION, 3)
+	var world := StubWorld.new()
+	# Real timber, or the village honestly raises no mill and the test would
+	# pass without ever asking its own question.
+	_forest_band(world, coord)
+	var spawned := renderer.spawn_village(
+		parent, coord, coord * CHUNK_SIZE, CHUNK_SIZE, TILE_SIZE, "grassland", world
+	)
+	var mills := _buildings_of(world, VillageSawmill.SAWMILL_BUILDING_ID)
+	assert_gt(mills.size(), 0, "precondition: a village beside timber raised its mill")
+	var sawyers := _lumberjack_markers(spawned)
+	assert_gt(sawyers.size(), 0, "precondition: somebody in this village works timber")
+	var expected: Vector2i = coord * CHUNK_SIZE + mills[0]["origin_local"]
+	for sawyer in sawyers:
+		assert_eq(
+			sawyer.sawmill_cell, expected,
+			"a sawyer works the mill their own village raised"
+		)
+
+
+## A villager who is not a lumberjack is never handed one, or every trade
+## would be felling trees.
+func test_nobody_else_is_handed_a_sawmill():
+	var coord := _find_settlement_chunk_with_occupation("grassland", VillageSawmill.OCCUPATION, 3)
+	var world := StubWorld.new()
+	_forest_band(world, coord)
+	var spawned := renderer.spawn_village(
+		parent, coord, coord * CHUNK_SIZE, CHUNK_SIZE, TILE_SIZE, "grassland", world
+	)
+	for node in spawned:
+		if node is NpcMarker and node.identity.occupation != VillageSawmill.OCCUPATION:
+			assert_eq(
+				node.sawmill_cell, NpcMarker.NO_SAWMILL,
+				"%s does not work timber" % node.identity.occupation
+			)

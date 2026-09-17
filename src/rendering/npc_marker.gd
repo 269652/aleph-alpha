@@ -22,6 +22,11 @@ const HuntableQuarry = preload("res://src/gameplay/huntable_quarry.gd")
 const Carcass = preload("res://src/rendering/carcass.gd")
 const NpcCondition = preload("res://src/world/npc_condition.gd")
 const VillagerBehavior = preload("res://src/gameplay/villager_behavior.gd")
+const VillageSawmill = preload("res://src/gameplay/village_sawmill.gd")
+const LumberjackBehavior = preload("res://src/gameplay/lumberjack_behavior.gd")
+const SagewerkProduction = preload("res://src/world/sagewerk_production.gd")
+const ChoppableTree = preload("res://src/rendering/choppable_tree.gd")
+const FelledTree = preload("res://src/rendering/felled_tree.gd")
 const Ethogram = preload("res://src/gameplay/ethogram.gd")
 
 ## Walking pace -- similar order to CreatureWander.WANDER_SPEED, unhurried.
@@ -190,6 +195,31 @@ const NO_FARMHOUSE := Vector2i(-2147483648, -2147483648)
 ## ever carried anywhere. See _work_field_cell and
 ## haul_farmhouse_stock_to_village.
 var farmhouse_cell: Vector2i = NO_FARMHOUSE
+
+## The sentinel sawmill_cell carries when this villager has none.
+const NO_SAWMILL := Vector2i(-2147483648, -2147483648)
+
+## The GLOBAL tile of the sawmill this villager works, or NO_SAWMILL
+## (docs/concept/village_timber.md). Assigned by VillageRenderer, the only
+## thing that knows which mill is whose -- the same shape farmhouse_cell has.
+##
+## Reported in play: "The sawmill also never produces any beams and doesn't
+## even have a dedicated worker".
+var sawmill_cell: Vector2i = NO_SAWMILL
+
+## How hard one swing bites, and the sawyer's own phase machine. Both are
+## the tile-scale Lumberjack's (LumberjackMarker.FELL_DAMAGE,
+## LumberjackBehavior) -- a villager swinging an axe is not a second
+## mechanic, it is the same one with a different caller.
+const FELL_DAMAGE := 5.0
+
+var _sawyer: LumberjackBehavior = null
+var _timber_target: Node2D = null
+var _canopy_off := false
+var _cuts_left := 0
+var _carried_logs := 0
+var _target_growth_scale := 1.0
+var _shaping_elapsed := 0.0
 
 ## This villager's farm work, or null for anyone who does not farm -- the
 ## same null-until-wired shape `_forager` above uses, built by
@@ -392,6 +422,13 @@ func _process(delta: float) -> void:
 	# carries guards (a producer who feeds itself, a villager with their own
 	# field) that a whole famine chain was measured into and that this
 	# generic layer has no way to express.
+	# A lumberjack with a mill of their own works timber -- out to a real
+	# tree, back to the mill, and the mill squares beams. The same override
+	# shape, and the same place in the chain, as the hunt and the field
+	# (docs/concept/village_timber.md).
+	var timber_target = _step_timber(delta, is_working)
+	if timber_target != null:
+		target = timber_target
 	var need_target = _step_needs(delta, not is_on_real_work())
 	if need_target != null:
 		target = need_target
@@ -440,7 +477,203 @@ const CONVERSATION_SECONDS := 4.0
 const COMPANY_REACH_PX := 160.0
 
 
-## Whether this villager is doing REAL work against the real world right
+## One frame of the sawmill trade (docs/concept/village_timber.md). Returns
+## where this villager should walk because of real timber work, or null when
+## they have none and the ordinary schedule should decide.
+##
+## The third sibling of _step_hunt and _step_farm, on the same four seams
+## (find -> position -> reach -> act) and built on the tile-scale
+## Lumberjack's own phase machine: SEEKING -> APPROACHING -> FELLING ->
+## CARRYING -> DEPOSIT. Nothing about felling is reinvented -- it is
+## ChoppableTree.take_damage, staged the way the player's own axe stages it.
+##
+## Two jobs, not one, which is what a sawyer's day actually is: fetch logs
+## to the mill, and work the mill. VillageSawmill.next_action picks between
+## them from what the mill is holding.
+func _step_timber(delta: float, is_working: bool):
+	if not VillageSawmill.works_timber(identity.occupation) or sawmill_cell == NO_SAWMILL:
+		return null
+	if _world == null or not _world.has_method("deposit_to_structure_at"):
+		return null
+	if not is_working:
+		# Off the clock the trunk is dropped rather than paused, exactly as
+		# the field is -- a villager never wakes up still walking to a tree
+		# they chose the evening before -- and the day's beams go in.
+		_abandon_timber()
+		haul_sawmill_stock_to_village()
+		return null
+	if _sawyer == null:
+		_sawyer = LumberjackBehavior.new()
+	_on_real_work_timber = true
+
+	var mill := _cell_centre(sawmill_cell)
+	# Working the mill only counts while standing AT it: a beam is squared
+	# at the sawmill, not carried around half-finished.
+	if (
+		_sawyer.phase == LumberjackBehavior.Phase.SEEKING
+		and VillageSawmill.next_action(_mill_stock("log")) == VillageSawmill.SHAPE
+	):
+		if position.distance_to(mill) > _field_reach():
+			return mill
+		_shape_a_beam(delta)
+		return position
+
+	match _sawyer.phase:
+		LumberjackBehavior.Phase.SEEKING:
+			_shaping_elapsed = 0.0
+			_sawyer.advance(delta)
+			var tree := _nearest_workable_tree(mill)
+			if tree == null or not _sawyer.can_commit():
+				return null
+			_timber_target = tree
+			_canopy_off = false
+			_cuts_left = 0
+			_target_growth_scale = float(tree.growth_scale)
+			_sawyer.begin_approach()
+			return tree.position
+		LumberjackBehavior.Phase.APPROACHING:
+			if not _timber_still_there():
+				return null
+			if position.distance_to(_timber_target.position) <= _field_reach():
+				_sawyer.arrive()
+			return _timber_target.position
+		LumberjackBehavior.Phase.FELLING:
+			if not _timber_still_there():
+				return null
+			_swing_at_timber(delta)
+			return position
+		LumberjackBehavior.Phase.CARRYING:
+			if position.distance_to(mill) <= _field_reach():
+				_sawyer.arrive_home()
+			return mill
+		LumberjackBehavior.Phase.DEPOSIT:
+			if _sawyer.advance_deposit(delta):
+				_deposit_logs()
+				_sawyer.finish_deposit()
+			return position
+	return null
+
+
+## Drops whatever trunk this villager was working. Called when they go off
+## the clock, and whenever the tree they committed to stops being there.
+func _abandon_timber() -> void:
+	if _sawyer != null and _sawyer.phase != LumberjackBehavior.Phase.SEEKING:
+		_sawyer.abort()
+	_timber_target = null
+	_carried_logs = 0
+	_shaping_elapsed = 0.0
+	_on_real_work_timber = false
+
+
+func _timber_still_there() -> bool:
+	if _timber_target != null and is_instance_valid(_timber_target):
+		return true
+	_timber_target = null
+	if _sawyer != null:
+		_sawyer.abort()
+	return false
+
+
+## The nearest standing tree this MILL's sawyer may work -- measured from
+## the mill, not from the villager, so a village fells its own wood rather
+## than following a trail of trunks across the map.
+func _nearest_workable_tree(mill: Vector2) -> Node2D:
+	var best: Node2D = null
+	var best_distance := INF
+	for node in get_tree().get_nodes_in_group(ChoppableTree.GROUP_NAME):
+		if not is_instance_valid(node) or node.is_felled():
+			continue
+		if not VillageSawmill.is_in_range(mill, node.position, _tile_size):
+			continue
+		var distance: float = position.distance_to(node.position)
+		if distance < best_distance:
+			best = node
+			best_distance = distance
+	return best
+
+
+## One swing, staged exactly as the player's own axe stages it: fell the
+## trunk, take the canopy off, then buck CUTS_TO_CLEAR lengths off the bare
+## trunk, each one a real log.
+func _swing_at_timber(delta: float) -> void:
+	if not _sawyer.advance(delta):
+		return  # the swing is not ready yet this tick
+	if not _timber_target.is_felled():
+		_timber_target.take_damage(FELL_DAMAGE)
+		return
+	if not _canopy_off:
+		_canopy_off = true
+		_cuts_left = FelledTree.CUTS_TO_CLEAR
+		_timber_target.take_damage(FELL_DAMAGE)  # the canopy comes off, no log yet
+		return
+	_carried_logs += FelledTree.logs_per_cut(_target_growth_scale)
+	_cuts_left -= 1
+	_timber_target.take_damage(FELL_DAMAGE)
+	if _cuts_left <= 0:
+		_timber_target = null
+		_sawyer.start_carry()
+
+
+func _deposit_logs() -> void:
+	if _carried_logs > 0:
+		_world.deposit_to_structure_at(sawmill_cell.x, sawmill_cell.y, "log", _carried_logs)
+	_carried_logs = 0
+
+
+func _mill_stock(item_id: String) -> int:
+	if not _world.has_method("structure_stock_at"):
+		return 0
+	return int(_world.structure_stock_at(sawmill_cell.x, sawmill_cell.y, item_id))
+
+
+## Squaring a beam at the mill. SagewerkProduction's own shaping time and
+## its own log cost -- slow, skilled, wasteful work, and never a second set
+## of numbers. The logs are really taken out of the mill's stock and the
+## beam really put back into it.
+func _shape_a_beam(delta: float) -> void:
+	_shaping_elapsed += delta
+	if _shaping_elapsed < SagewerkProduction.SHAPE_SECONDS_PER_BEAM:
+		return
+	_shaping_elapsed = 0.0
+	if not _world.has_method("withdraw_from_structure_at"):
+		return
+	if not _world.withdraw_from_structure_at(
+		sawmill_cell.x, sawmill_cell.y, "log", VillageSawmill.LOGS_PER_BEAM
+	):
+		return
+	_world.deposit_to_structure_at(sawmill_cell.x, sawmill_cell.y, "beam", 1)
+
+
+## Carries the mill's finished BEAMS into the village's own stock -- the
+## other half of the chain, and the same one the farmhouse already runs
+## (haul_farmhouse_stock_to_village): cut in the wood, squared at the mill,
+## carried to the village.
+##
+## Beams only. The logs a mill is holding are its own raw material, and
+## carrying those off would be carrying away the very thing the sawmill
+## exists to work.
+##
+## Credited through the same record_real_harvest a farmer's crop uses, so a
+## beam is paid for exactly once, at the moment it actually arrives rather
+## than at the saw. All-or-nothing per unit, mirroring
+## withdraw_from_structure_at itself, and a no-op for a villager with no
+## mill, an empty one, or a world that cannot answer.
+func haul_sawmill_stock_to_village() -> void:
+	if sawmill_cell == NO_SAWMILL or economy == null or _world == null:
+		return
+	if not _world.has_method("withdraw_from_structure_at"):
+		return
+	var carried := 0
+	while _world.withdraw_from_structure_at(sawmill_cell.x, sawmill_cell.y, "beam", 1):
+		carried += 1
+	if carried > 0:
+		economy.record_real_harvest("beam", carried)
+
+
+var _on_real_work_timber := false
+
+
+## Whether this villager is doing REAL work against the real world right## Whether this villager is doing REAL work against the real world right
 ## now -- working a field of their own, or on a real quarry.
 ##
 ## Reported in play: "No crops (wheat) grow and get harvested.. it plants
@@ -456,7 +689,7 @@ const COMPANY_REACH_PX := 160.0
 ## the regional drip, precisely because "has a job on" is not the same
 ## question as "is walking somewhere".
 func is_on_real_work() -> bool:
-	return _on_real_quarry or _on_real_field
+	return _on_real_quarry or _on_real_field or _on_real_work_timber
 
 
 ## Whether this villager is mid-conversation right now -- standing still,
