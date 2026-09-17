@@ -84,9 +84,27 @@ func _sample() -> void:
 				dwellings += 1
 			else:
 				other += 1
+		var has_plaza := false
+		var has_hall := false
+		for record in _manager.buildings_in_chunk(chunk_coord):
+			if record["id"] == "city_hall":
+				has_hall = true
+		var bones: Dictionary = _village_layout_script.skeleton(
+			CHUNK_SIZE, _village_layout_script.seed_for(chunk_coord)
+		)
+		var plaza: Rect2i = bones["plaza"]
+		var paved := 0
+		for y in range(plaza.position.y, plaza.end.y):
+			for x in range(plaza.position.x, plaza.end.x):
+				var g: Vector2i = chunk_coord * CHUNK_SIZE + Vector2i(x, y)
+				if _manager.modification_at_global(g.x, g.y) != "":
+					paved += 1
+		has_plaza = paved >= (plaza.size.x * plaza.size.y) / 2
 		_seen[chunk_coord] = {
 			"villagers": villagers,
 			"dwellings": dwellings,
+			"plaza": has_plaza,
+			"hall": has_hall,
 			"other": other,
 			"water_frontage": _house_strip_water_fraction(chunk_coord),
 			"plots_if_only_water_blocked": _plots_with_real_water(chunk_coord, villagers),
@@ -153,6 +171,16 @@ func _report() -> void:
 					100.0 * float(row["water_frontage"]), int(row["plots_if_only_water_blocked"]),
 				]
 			)
+	var with_plaza := 0
+	var with_hall := 0
+	var short_of_five := 0
+	for coord2 in _seen:
+		if _seen[coord2]["plaza"]:
+			with_plaza += 1
+		if _seen[coord2]["hall"]:
+			with_hall += 1
+		if int(_seen[coord2]["dwellings"]) > 0 and int(_seen[coord2]["dwellings"]) < 5:
+			short_of_five += 1
 	print("-- real villages actually loaded near lat %.1f lon %.1f --" % [LAT, LON])
 	print("villages met:                            %d" % _seen.size())
 	if _seen.is_empty():
@@ -170,6 +198,9 @@ func _report() -> void:
 			dwelling_counts[dwelling_counts.size() - 1],
 		]
 	)
+	print("villages with a paved plaza:             %d / %d" % [with_plaza, _seen.size()])
+	print("villages with a city hall:               %d / %d" % [with_hall, _seen.size()])
+	print("villages that built 1-4 houses, not 5:   %d" % short_of_five)
 	for line in houseless_detail:
 		print(line)
 	print("  for comparison, the villages that DID build:")
