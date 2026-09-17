@@ -468,13 +468,21 @@ func test_npc_home_position_is_its_own_buildings_doorstep_not_the_raw_ring_ancho
 	assert_true(any_moved, "at least one villager should have a real doorstep home, not the raw ring anchor")
 
 
+## REVISED (reported in play: "Some villages have no houses"). This used to
+## assert that a village with nowhere dry to build still spawned its
+## landmarks and villagers -- and that is precisely the reported bug, seen
+## as a paved square with a stall and a sawmill and not one house. The
+## no-building-forced-into-water half is unchanged and still the point; what
+## flipped is what happens afterwards. See
+## test_a_village_with_nowhere_to_put_a_single_house_is_not_founded_at_all
+## for the rule and the measurement behind it.
 func test_a_building_is_never_placed_in_water():
 	var coord := _find_settlement_chunk("grassland")
 	var world := StubWorld.new()
 	world.biome = "ocean"  # the whole chunk reads as water
 	var spawned := renderer.spawn_village(parent, coord, coord * CHUNK_SIZE, CHUNK_SIZE, TILE_SIZE, "grassland", world)
 	assert_true(world.place_calls.is_empty(), "no dry ground anywhere -- no villager should get a building forced into water")
-	assert_false(spawned.is_empty(), "the village itself (landmarks, NPCs) still spawns")
+	assert_true(spawned.is_empty(), "and nothing else is founded here either -- a village needs somewhere to live")
 
 
 ## A village's own terrain refusal is WATER (see VillageRenderer._is_
@@ -1277,3 +1285,61 @@ func test_a_village_with_no_square_gets_no_hall():
 	renderer.spawn_village(parent, coord, coord * CHUNK_SIZE, CHUNK_SIZE, TILE_SIZE, "grassland", world)
 
 	assert_eq(_placed(world, "city_hall").size(), 0, "no square, no seat")
+
+
+# -- a village is not founded where it cannot build (reported in play:
+# "Some villages have no houses") -----------------------------------------
+#
+# Measured against the real world near lat 48.6 lon 12.7
+# (tools/probe_village_houses_live.gd): 3 of 6 real villages stood with
+# roads, a sawmill and five villagers, and not one dwelling. One of their
+# chunks is 100% water by the same rule the water surface paints with --
+# a village founded in the middle of a lake -- and the other two are 50%
+# and 68% water.
+#
+# The biome classifier does not know about hydrology, so a lake still
+# reads as "grassland" and SettlementGenerator settles it. Every house is
+# then correctly refused, because the ground really is water. What was
+# wrong was carrying on regardless: paving streets, raising a sawmill and
+# spawning five villagers onto a lake.
+
+
+func _drown_the_whole_chunk(world: StubWorld, coord: Vector2i) -> void:
+	for y in CHUNK_SIZE:
+		for x in CHUNK_SIZE:
+			world.water_cells[coord * CHUNK_SIZE + Vector2i(x, y)] = true
+
+
+func test_a_village_with_nowhere_to_put_a_single_house_is_not_founded_at_all():
+	var coord := _find_settlement_chunk("grassland")
+	var world := StubWorld.new()
+	_drown_the_whole_chunk(world, coord)
+
+	var spawned := renderer.spawn_village(parent, coord, coord * CHUNK_SIZE, CHUNK_SIZE, TILE_SIZE, "grassland", world)
+
+	assert_true(spawned.is_empty(), "no villagers, no landmarks -- there is no village here")
+	assert_true(world.place_calls.is_empty(), "nothing is built on a lake, not even a sawmill")
+	assert_true(world.road_cells.is_empty(), "and no streets are paved across it")
+
+
+func test_a_drowned_site_is_never_recorded_as_a_founded_settlement():
+	# Recording one would leave a settlement in the ledger with no village
+	# in the world -- households, a market and a build ladder for a place
+	# that does not exist.
+	var coord := _find_settlement_chunk("grassland")
+	var world := StubWorld.new()
+	_drown_the_whole_chunk(world, coord)
+
+	renderer.spawn_village(parent, coord, coord * CHUNK_SIZE, CHUNK_SIZE, TILE_SIZE, "grassland", world)
+
+	assert_true(world.founded_calls.is_empty())
+
+
+func test_dry_ground_still_founds_its_village_exactly_as_before():
+	var coord := _find_settlement_chunk("grassland")
+	var world := StubWorld.new()
+
+	var spawned := renderer.spawn_village(parent, coord, coord * CHUNK_SIZE, CHUNK_SIZE, TILE_SIZE, "grassland", world)
+
+	assert_false(spawned.is_empty())
+	assert_gt(_house_calls(world).size(), 0, "the precondition this whole rule turns on")

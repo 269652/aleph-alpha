@@ -188,7 +188,26 @@ func spawn_village(
 			world.buildings_in_chunk(chunk_coord) if world.has_method("buildings_in_chunk") else []
 		)
 		if existing_buildings.is_empty():
-			_place_new_village(chunk_coord, chunk_size, tile_size, building_ids, npcs, world, plots, door_positions, stand_positions)
+			# A site that cannot take a single house is not a village.
+			# Reported in play ("Some villages have no houses") and
+			# measured against the real world near lat 48.6 lon 12.7
+			# (tools/probe_village_houses_live.gd): 3 of 6 real villages
+			# stood with paved streets, a sawmill and five villagers, and
+			# not one dwelling. One of those chunks is 100% water by the
+			# same rule the water surface paints with -- a village founded
+			# in the middle of a lake -- and the other two are 50% and 68%
+			# water. BiomeClassifier knows nothing of hydrology, so a lake
+			# still reads as "grassland" and SettlementGenerator settles
+			# it; every house is then refused for the honest reason that
+			# the ground really is water. Carrying on regardless is what
+			# was wrong. Nothing is founded here at all now -- no streets,
+			# no mill, no villagers, no settlement record -- rather than a
+			# ghost village nobody can live in.
+			if not _place_new_village(
+				chunk_coord, chunk_size, tile_size, building_ids, npcs, world,
+				plots, door_positions, stand_positions
+			):
+				return []
 		else:
 			_recover_existing_village(chunk_coord, chunk_size, tile_size, npcs, world, existing_buildings, plots, door_positions, stand_positions)
 
@@ -248,14 +267,22 @@ func spawn_village(
 ## `stand_positions` in place (GDScript Arrays are reference types, so
 ## spawn_village's own locals update directly) rather than returning a
 ## tuple.
+## Returns whether this really is a village: false when the layout could
+## not fit a single house, which is spawn_village's own signal to found
+## nothing here at all. Nothing is written in that case -- the streets and
+## the mill below are reached only once at least one dwelling has a plot,
+## because a paved square with a sawmill and no houses is exactly the
+## reported bug.
 func _place_new_village(
 	chunk_coord: Vector2i, chunk_size: int, tile_size: int, building_ids: Array, npcs: Array, world,
 	plots: Array, door_positions: Array, stand_positions: Array
-) -> void:
+) -> bool:
 	var layout_seed := VillageLayout.seed_for(chunk_coord)
 	var is_buildable := _is_buildable_local(chunk_coord, chunk_size, world)
 	var is_occupied := _is_occupied_local(chunk_coord, chunk_size, world)
 	var result := _village_layout.layout(building_ids, chunk_size, layout_seed, is_buildable, is_occupied)
+	if (result["plots"] as Array).is_empty():
+		return false
 
 	# Buildings BEFORE roads -- place_building's own occupancy check
 	# refuses a plot whose doorstep cell is already non-empty in
@@ -300,6 +327,7 @@ func _place_new_village(
 
 	_place_industry_if_missing(chunk_coord, chunk_size, world)
 	_place_civic_if_missing(chunk_coord, chunk_size, world)
+	return true
 
 
 ## A reload: this settlement's buildings are already persisted from an
