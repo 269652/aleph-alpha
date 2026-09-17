@@ -23948,3 +23948,54 @@ Tests: `test_village_renderer.gd` 89/89, `test_village_farm.gd` 56/56,
 `test_earth_chunk_manager_structure_art.gd` 13/13,
 `test_illustrated_structure_sprite.gd` 24/24, `test_village_layout.gd`
 63/63, `test_village_finder.gd` 8/8, `test_settlement_generator.gd` 14/14.
+
+### Frame stabilisation for the intro: already stable, measured (see `docs/concept/intro_splash.md` "Frame stabilisation", 2026-09-17)
+
+Asked directly: *"Can you frame stabilize the intro sprite animation?"* —
+the same thing this feature had been re-reported for repeatedly.
+
+✅ **On the sheet shipping now it is already stable, and that is now
+measured rather than assumed.** The globe's right limb sits at exactly the
+same column in all 100 frames past the fade-in — **zero spread**. The
+fixed crop from a measured grid is doing the whole job, so no registration
+pass was added.
+
+✅ **The measurement is geometry, not lighting — which is the whole
+trap.** The current art crops the sphere at the left frame edge, so its
+right limb is the only edge of it in shot, and the limb is geometry while
+almost everything else here is lighting that moves on purpose (an
+Earth-at-night turning into daylight, terminator sweeping across the
+disc). A centre-of-lit-pixels reading moves **~35px** over the sequence
+while the globe has not moved at all — large enough to look exactly like
+the reported jitter, and acting on it would have registered every frame
+against the terminator and genuinely shoved the globe around. Same
+"moon-phase crescent" effect as the sixteenth pass, from the opposite
+direction: there it hid drift, here it invents it.
+
+✅ **Kept as a regression test rather than dropped as a no-op.**
+`test_the_globe_holds_the_same_position_in_every_frame` asserts what is
+already true, which is normally a smell; it earns its place because this
+feature's history is four art swaps, at least two of which shipped a
+visibly drifting intro that only a player caught. Paired with
+`test_the_limb_measurement_would_notice_a_frame_that_moved` — the same
+ruler over a real frame shifted 3px, required to read 3px — because a
+stability test whose measurement cannot see movement is worth nothing.
+
+🚧 **A per-frame registration pass was built, verified, and thrown away.**
+Against the *previous* 8×5 sheet it cut a real 6.0px horizontal and 2.0px
+vertical wander to 1.0px each. That sheet was replaced while the work was
+in flight; on the current art the same estimator reads the terminator
+rather than the globe, so it was dropped rather than carried over. The
+code is in the branch history if a future sheet needs it.
+
+Two process notes, both of which cost real time here and are written into
+the concept doc so the next reader does not repeat them:
+**re-import before measuring** (`SpriteSheetLoader` prefers Godot's
+imported resource, so a stale `.godot` cache silently serves the OLD art
+through the NEW grid constants — this produced 20 "blank" frames and
+magenta ink in 76 others and read convincingly as a broken sheet), and
+**render the frames and look at them** before concluding anything about
+drift.
+
+Tests: `test_intro_splash_sheet.gd` 16/16 (2 new), 46/46 across all five
+intro test files.

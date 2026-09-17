@@ -355,3 +355,81 @@ func test_every_frame_puts_its_art_at_the_same_height():
 			art_centre, frame_centre, 1.0,
 			"frame %d centres its art at %.1f, not %.1f -- art anchored anywhere but the frame's own middle drifts up (or down) the screen as the rows change height" % [i, art_centre, frame_centre]
 		)
+
+
+# -- frame stabilisation: the globe holds still frame to frame -------------
+# -- (see docs/concept/intro_splash.md's "Frame stabilisation") -----------
+
+## The globe's RIGHT LIMB -- for the widest row, the rightmost pixel with
+## any light in it at all.
+##
+## Deliberately the limb rather than the globe's centre, and deliberately a
+## near-black threshold. This art crops the sphere at the LEFT frame edge,
+## so the right limb is the only edge of it actually in shot; and the limb
+## is geometry, where every brightness-based reading here is lighting. The
+## terminator sweeps right across the disc as the Earth turns into
+## daylight, so a centre-of-lit-pixels measurement moves ~35px over the
+## sequence while the globe itself has not moved at all -- the same
+## "moon-phase crescent" trap that made an earlier measurement of the
+## PREVIOUS sheet read as falsely reassuring (see this doc's sixteenth
+## pass), reached here from the opposite direction.
+func _globe_right_limb(texture: Texture2D) -> int:
+	var image := texture.get_image()
+	var limb := -1
+	for y in image.get_height():
+		for x in image.get_width():
+			if image.get_pixel(x, y).get_luminance() > 0.02:
+				limb = maxi(limb, x)
+	return limb
+
+
+## Frames before this have not faded up out of black yet, so the globe's
+## own edge is genuinely not in the picture to hold still. Measured: the
+## limb is already at its final position by frame 20 of 120, and the
+## sequence runs at 24fps, so this is the first ~0.83s.
+const _FADE_IN_FRAMES := 20
+
+
+## The report this was chased for, over and over: "stabilize the intro
+## video", "it jumps left to right". On THIS sheet it does not. Measured
+## across all 100 frames past the fade-in, the globe's right limb sits at
+## exactly the same column in every one of them -- zero spread, not merely
+## a small one. The fixed crop from a measured grid is already doing the
+## whole job here, and nothing further is needed.
+##
+## Kept as a regression test rather than deleted as a no-op: this file's
+## own history is four separate art swaps, at least two of which shipped a
+## visibly drifting intro. The next one fails here.
+func test_the_globe_holds_the_same_position_in_every_frame():
+	var frames := sheet.generate_textures()
+	assert_gt(frames.size(), _FADE_IN_FRAMES, "precondition: there are frames past the fade-in")
+	var lowest := 9999
+	var highest := -1
+	for i in range(_FADE_IN_FRAMES, frames.size()):
+		var limb := _globe_right_limb(frames[i])
+		assert_gte(limb, 0, "frame %d has no lit pixel at all, past the fade-in" % i)
+		lowest = mini(lowest, limb)
+		highest = maxi(highest, limb)
+	assert_lte(
+		highest - lowest, 1,
+		"the globe's own edge wanders %dpx across the frames past the fade-in (%d..%d) -- this sheet drifts" % [
+			highest - lowest, lowest, highest
+		]
+	)
+
+
+## ...and the measurement really would notice. A test that the art holds
+## still is worth nothing if its own ruler cannot see movement, so the same
+## helper is run over a real frame shifted by a known amount.
+func test_the_limb_measurement_would_notice_a_frame_that_moved():
+	var frames := sheet.generate_textures()
+	var original := frames[frames.size() - 1].get_image()
+	var shifted := Image.create(original.get_width(), original.get_height(), false, original.get_format())
+	shifted.fill(Color(0.0, 0.0, 0.0, 1.0))
+	# Left by 3px: the limb must come back 3px lower, or the ruler is blind.
+	shifted.blit_rect(
+		original, Rect2i(3, 0, original.get_width() - 3, original.get_height()), Vector2i(0, 0)
+	)
+	var moved := _globe_right_limb(ImageTexture.create_from_image(shifted))
+	var still := _globe_right_limb(frames[frames.size() - 1])
+	assert_eq(moved, still - 3, "a 3px shift must read as a 3px shift")
