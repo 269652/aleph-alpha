@@ -240,14 +240,17 @@ implemented either, but the two are designed to land together.
   → `"wood"`); `"soil"` stays deliberately unmapped so untouched ground
   still takes its sound from the biome. One resolution serving both the
   print and the sound, so the two cannot disagree about what is
-  underfoot. Honest limit: no distinct stone recording has been sourced,
-  so `"rock"` still resolves to the generic step clip — the win is that
-  a street stops sounding like grass, not that it sounds like cobbles.
+  underfoot. Updated 2026-09-17: `"rock"` and `"wood"` both have real
+  recordings now (gravel and a wooden floor — see that doc's "A recording
+  of walking is not a footstep"), so a street no longer sounds like
+  grass OR like the generic walking clip.
   See [creature_and_footstep_audio.md's "A laid surface sounds like what
   it is laid with"](creature_and_footstep_audio.md#a-laid-surface-sounds-like-what-it-is-laid-with-2026-09-17).
-- ⬜ A real footstep recording for stone and for a wooden floor — both
-  currently share `default.ogg`, the same honest gap already standing for
-  sand and rock (see that doc's `_CLIP_BY_SURFACE`).
+- 🚧 A laid cobbled street still sounds like the rock underfoot, not like
+  cobbles. `"rock"` covers tundra, mountain and laid stone, and its pool
+  is gravel — right for two of those three. Splitting a `stone` surface
+  out of `"rock"` is the remaining step; clips for it are already cached
+  by `tools/prepare_footstep_oneshots.py`.
 - ⬜ Between-village roads (routing a street on to the next settlement).
   The plaza and side streets a laid-out village frames its road with are
   real — see [building.md](building.md) for the layout side.

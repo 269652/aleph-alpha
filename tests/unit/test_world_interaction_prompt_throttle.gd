@@ -27,6 +27,7 @@ const PlayerScene = preload("res://scenes/player.tscn")
 const TerrainRenderer = preload("res://src/rendering/terrain_renderer.gd")
 const HouseInteriorView = preload("res://src/rendering/house_interior_view.gd")
 const NpcIdentity = preload("res://src/world/npc_identity.gd")
+const NpcMarker = preload("res://src/rendering/npc_marker.gd")
 
 const TILE_SIZE := TerrainRenderer.TILE_SIZE
 const INTERVAL := World.INTERACTION_PROMPT_REFRESH_INTERVAL
@@ -42,9 +43,17 @@ const INTERVAL := World.INTERACTION_PROMPT_REFRESH_INTERVAL
 class SpyChunkManager extends EarthChunkManager:
 	var nearest_npc_near_calls := 0
 
-	func nearest_npc_near(pixel_position: Vector2, max_distance: float):
+	# Mirrors the parent's full signature, `excluding` included: a villager
+	# looking for company asks this same question from their own position and
+	# passes themselves in (see EarthChunkManager.nearest_npc_near's own doc
+	# comment), so an override that drops the parameter no longer matches the
+	# parent and this whole file stops loading. Forwarded rather than
+	# ignored -- this spy exists to COUNT the scan, not to change it.
+	func nearest_npc_near(
+		pixel_position: Vector2, max_distance: float, excluding: NpcMarker = null
+	) -> NpcMarker:
 		nearest_npc_near_calls += 1
-		return super.nearest_npc_near(pixel_position, max_distance)
+		return super.nearest_npc_near(pixel_position, max_distance, excluding)
 
 
 var world: World
