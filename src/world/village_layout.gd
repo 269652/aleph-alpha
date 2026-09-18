@@ -679,10 +679,15 @@ const _INDUSTRY_EDGE_MARGIN_TILES := _EDGE_MARGIN_TILES + 1
 ## close to the village as the timber allows, which is exactly how a real
 ## village sited its mill -- at the resource, but no further out than it
 ## had to be.
+## `is_paved` is the world's own "is this cell already the village's paving"
+## answer (VillageRenderer._is_paved_local, the same seam frontage_spur
+## already takes). Omitted, a further street row still counts as street --
+## a spur simply paves its own junction rather than recognising one that is
+## already there.
 static func industry_plot(
 	building_id: String, chunk_size: int, seed_value: int,
 	is_buildable: Callable, is_forest: Callable, is_occupied: Callable,
-	is_dry := Callable()
+	is_dry := Callable(), is_paved := Callable()
 ) -> Dictionary:
 	var footprint := BuildingCatalog.footprint_of(building_id)
 	if footprint == Vector2i.ZERO:
@@ -699,7 +704,7 @@ static func industry_plot(
 		return _industry_site_qualifies(
 			building_id, origin, chunk_size, is_buildable, is_forest, is_occupied
 		)
-	return _sited_plot(building_id, chunk_size, bones, is_buildable, is_occupied, qualifies)
+	return _sited_plot(building_id, chunk_size, bones, is_buildable, is_occupied, qualifies, is_paved)
 
 
 ## A plot on the village's OUTSKIRTS: anywhere clear in the chunk, clear of
@@ -743,7 +748,7 @@ static func outskirt_plot(
 ## allows, which is exactly how a real one was sited.
 static func _sited_plot(
 	building_id: String, chunk_size: int, bones: Dictionary,
-	is_buildable: Callable, is_occupied: Callable, qualifies: Callable
+	is_buildable: Callable, is_occupied: Callable, qualifies: Callable, is_paved := Callable()
 ) -> Dictionary:
 	var footprint := BuildingCatalog.footprint_of(building_id)
 	var plaza: Rect2i = bones["plaza"]
@@ -761,7 +766,7 @@ static func _sited_plot(
 				continue
 			var doorstep: Vector2i = origin + BuildingCatalog.doorstep_of(building_id)
 			var spur = _industry_spur(
-				origin, footprint, doorstep, bones, chunk_size, is_buildable, is_occupied
+				origin, footprint, doorstep, bones, chunk_size, is_buildable, is_occupied, is_paved
 			)
 			if spur == null:
 				continue
@@ -813,7 +818,7 @@ static func _industry_site_qualifies(
 ## reload), so the spur's job is only to reach it.
 static func _industry_spur(
 	origin: Vector2i, footprint: Vector2i, doorstep: Vector2i, bones: Dictionary,
-	chunk_size: int, is_buildable: Callable, is_occupied: Callable
+	chunk_size: int, is_buildable: Callable, is_occupied: Callable, is_paved := Callable()
 ):
 	var street_y: int = bones["street_y"]
 	var street_x0: int = bones["street_x0"]
@@ -823,13 +828,53 @@ static func _industry_spur(
 		for x in footprint.x:
 			footprint_cells[origin + Vector2i(x, y)] = true
 
-	for column in [doorstep.x, origin.x + footprint.x, origin.x - 1]:
-		if column < street_x0 or column > street_x1:
-			continue
-		var cells = _spur_cells(doorstep, column, street_y, footprint_cells, chunk_size, is_buildable, is_occupied)
-		if cells != null:
-			return cells
+	for target in street_rows_toward(doorstep.y, street_y):
+		for column in [doorstep.x, origin.x + footprint.x, origin.x - 1]:
+			if column < street_x0 or column > street_x1:
+				continue
+			# A row that is not the spine counts as street only where the
+			# village has REALLY paved it. layout() paves the spine end to
+			# end and re-paves it on every reload, but a further row is
+			# paved only between the doorsteps it actually joined -- so
+			# joining one on the strength of its y alone would run a spur
+			# to a gap and call the mill connected.
+			if target != street_y and not (
+				is_paved.is_valid() and bool(is_paved.call(Vector2i(column, target)))
+			):
+				continue
+			var cells = _spur_cells(
+				doorstep, column, target, footprint_cells, chunk_size, is_buildable, is_occupied
+			)
+			if cells != null:
+				return cells
 	return null
+
+
+## The street rows a spur from `doorstep_y` may join, NEAREST first.
+##
+## A village's streets run at STREET_PITCH_TILES from the main one (the same
+## rule VillageRenderer._is_street_row reads), and a row the village really
+## paved IS the street. Joining a works to the row it stands beside, rather
+## than routing it all the way back to the spine, is both what a real
+## village did and the difference between a mill that can be sited and one
+## that cannot: the spine-only spur had to cross every house between, which
+## on a village of ten households is a column that no longer exists
+## (measured with the founding roster at ten -- four sites qualified on
+## every other count and every one of them was refused for its spur alone,
+## so a village beside a wood silently stopped getting a mill).
+##
+## The spine is always the last resort, so a village with nothing but its
+## main street behaves exactly as before.
+static func street_rows_toward(doorstep_y: int, street_y: int) -> Array[int]:
+	var rows: Array[int] = []
+	if doorstep_y > street_y + STREET_PITCH_TILES:
+		var row := street_y + ((doorstep_y - street_y) / STREET_PITCH_TILES) * STREET_PITCH_TILES
+		if row >= doorstep_y:
+			row -= STREET_PITCH_TILES
+		if row > street_y:
+			rows.append(row)
+	rows.append(street_y)
+	return rows
 
 
 ## One candidate L, or null if any cell of it is unusable. Every cell is

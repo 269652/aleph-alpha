@@ -722,14 +722,44 @@ func test_spawned_npc_markers_have_an_identity_and_a_schedule_source():
 			assert_ne(node.identity.npc_name, "")
 
 
+## The well and the gate are the settlement's, shared by everybody. The
+## STALL is not, and deliberately: the square's trading spot is whichever
+## market stand really got pitched (VillageLayout.market_stand_cells), and a
+## merchant with a stand of their own carries that one instead, or every
+## villager in the village would walk to one merchant's trestle. So this
+## asks what is really shared, and asks of the stall only that it is a real
+## stand of this village.
+##
+## It used to compare the whole dictionary, which held while the founding
+## roster was five villagers and that chunk happened to roll no merchant at
+## all. Ten villagers roll one, and the comparison started failing on a
+## village behaving exactly as designed.
 func test_spawned_npc_markers_know_the_settlements_shared_landmarks():
 	var coord := _find_settlement_chunk("grassland")
 	var world := StubWorld.new()
 	var spawned := renderer.spawn_village(parent, coord, coord * CHUNK_SIZE, CHUNK_SIZE, TILE_SIZE, "grassland", world)
 	var settlement := _generator.generate_settlement(coord, coord * CHUNK_SIZE, CHUNK_SIZE, TILE_SIZE)
+	var stands := {}
 	for node in spawned:
-		if node is NpcMarker:
-			assert_eq(node.landmarks, settlement.landmarks)
+		if node is NpcMarker and node.market_stand != null:
+			stands[node.market_stand.position] = true
+	var checked := 0
+	for node in spawned:
+		if not (node is NpcMarker):
+			continue
+		checked += 1
+		for landmark_id in ["well", "gate"]:
+			assert_eq(
+				node.landmarks.get(landmark_id), settlement.landmarks[landmark_id],
+				"%s is the whole settlement's" % landmark_id
+			)
+		assert_true(node.landmarks.has("stall"), "everybody knows where to trade")
+		if not stands.is_empty():
+			assert_true(
+				stands.has(node.landmarks["stall"]),
+				"a villager sent to the stall must be sent to a stand that really stands"
+			)
+	assert_gt(checked, 0, "precondition: the village really spawned villagers")
 
 
 func test_positions_are_deterministic_for_the_same_chunk():
@@ -2278,14 +2308,46 @@ func test_a_fisher_gets_a_real_fenced_pond_beside_their_own_house():
 			water.append(cell)
 	assert_gt(water.size(), 0, "the village's fisher has nowhere to fish")
 
-	var min_cell: Vector2i = water[0]
-	var max_cell: Vector2i = water[0]
-	for cell in water:
-		min_cell = Vector2i(mini(min_cell.x, (cell as Vector2i).x), mini(min_cell.y, (cell as Vector2i).y))
-		max_cell = Vector2i(maxi(max_cell.x, (cell as Vector2i).x), maxi(max_cell.y, (cell as Vector2i).y))
-	var size := max_cell - min_cell + Vector2i.ONE
-	assert_true(VillageFarm.FIELD_SHAPES.has(size), "a pond spans %s, not a shape that was asked for" % str(size))
-	assert_eq(water.size(), size.x * size.y, "the pond has a hole in it")
+	# EACH pond, not the union of them. A fisher digs their OWN water, so a
+	# village with several fishers has several ponds scattered across the
+	# chunk -- measuring the bounding box of all of them at once described a
+	# rectangle no pond has, and only ever agreed with one pond because the
+	# founding roster used to be small enough to roll a single fisher.
+	var checked := 0
+	for pond in _connected_groups(water):
+		checked += 1
+		var min_cell: Vector2i = pond[0]
+		var max_cell: Vector2i = pond[0]
+		for cell in pond:
+			min_cell = Vector2i(mini(min_cell.x, (cell as Vector2i).x), mini(min_cell.y, (cell as Vector2i).y))
+			max_cell = Vector2i(maxi(max_cell.x, (cell as Vector2i).x), maxi(max_cell.y, (cell as Vector2i).y))
+		var size := max_cell - min_cell + Vector2i.ONE
+		assert_true(VillageFarm.FIELD_SHAPES.has(size), "a pond spans %s, not a shape that was asked for" % str(size))
+		assert_eq(pond.size(), size.x * size.y, "the pond has a hole in it")
+	assert_gt(checked, 0, "precondition: at least one pond was dug")
+
+
+## The cells of `cells` grouped into orthogonally-connected islands -- one
+## entry per real pond, however many fishers a village has.
+func _connected_groups(cells: Array) -> Array:
+	var remaining := {}
+	for cell in cells:
+		remaining[cell] = true
+	var groups: Array = []
+	while not remaining.is_empty():
+		var frontier: Array = [remaining.keys()[0]]
+		remaining.erase(frontier[0])
+		var group: Array = []
+		while not frontier.is_empty():
+			var cell: Vector2i = frontier.pop_back()
+			group.append(cell)
+			for offset in [Vector2i(1, 0), Vector2i(-1, 0), Vector2i(0, 1), Vector2i(0, -1)]:
+				var neighbour: Vector2i = cell + offset
+				if remaining.has(neighbour):
+					remaining.erase(neighbour)
+					frontier.append(neighbour)
+		groups.append(group)
+	return groups
 
 
 ## And it is FENCED, like the field it is modelled on -- the ask says "a

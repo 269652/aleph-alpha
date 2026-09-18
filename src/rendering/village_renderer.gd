@@ -439,7 +439,24 @@ func _place_new_village(
 	var layout_seed := VillageLayout.seed_for(chunk_coord)
 	var is_buildable := _is_buildable_local(chunk_coord, chunk_size, world)
 	var is_occupied := _is_occupied_local(chunk_coord, chunk_size, world)
-	var result := _village_layout.layout(building_ids, chunk_size, layout_seed, is_buildable, is_occupied)
+	# The works' ground is spoken for BEFORE a single house plot is
+	# assigned -- docs/concept/village_growth.md pillar 1: the reservation
+	# exists "so a sawmill never has to hunt for room after the fact", and
+	# "reservations cost nothing until something is actually raised on
+	# them". The square, the civic plot and the store are reserved in the
+	# skeleton itself; the works cannot be, because where they go depends on
+	# where the timber is, which a seeded layout cannot know.
+	#
+	# Measured when the founding roster grew from five to ten: a mill needs
+	# clear ground within INDUSTRY_FOREST_REACH_TILES of real forest and
+	# outside it, which on a chunk with a forest edge is a band a couple of
+	# tiles deep. Ten houses reach it where five did not, and every village
+	# with timber in reach silently stopped getting a mill at all.
+	var industry := _industry_plot_for(chunk_coord, chunk_size, world, is_buildable, is_occupied)
+	var result := _village_layout.layout(
+		building_ids, chunk_size, layout_seed, is_buildable,
+		_occupied_or_reserved(is_occupied, _reserved_cells(industry))
+	)
 	# EVERY villager, not merely one. Asked for directly: "They should only
 	# settle where there's enough space and the square wins; houses should
 	# just be moved further away connected by streets". The layout already
@@ -690,6 +707,48 @@ func _is_paved_local(chunk_coord: Vector2i, chunk_size: int, world) -> Callable:
 ## No resident: nobody lives in a sawmill (BuildingCatalog.capacity_of ==
 ## 0), so the occupation/resident_seed a house record carries are left
 ## empty here rather than invented.
+## Where this village's works would stand -- ONE call, asked both by the
+## founding layout (which reserves the ground) and by the placement itself,
+## so the plot a village keeps free and the plot it then builds on can never
+## be two different answers.
+func _industry_plot_for(
+	chunk_coord: Vector2i, chunk_size: int, world, is_buildable: Callable, is_occupied: Callable
+) -> Dictionary:
+	return VillageLayout.industry_plot(
+		INDUSTRY_BUILDING_ID, chunk_size, VillageLayout.seed_for(chunk_coord),
+		is_buildable, _is_forest_local(chunk_coord, chunk_size, world), is_occupied,
+		Callable(), _is_paved_local(chunk_coord, chunk_size, world)
+	)
+
+
+## Every LOCAL cell a sited plot needs kept clear: its footprint, its
+## doorstep and the whole road spur that joins it back to the street. The
+## spur as much as the building -- a mill whose path home was built over is
+## a mill the village cannot walk to, which industry_plot itself refuses to
+## site in the first place.
+static func _reserved_cells(plot: Dictionary) -> Dictionary:
+	var reserved: Dictionary = {}
+	if plot.is_empty():
+		return reserved
+	for cell in BuildingCatalog.footprint_cells(plot["building_id"], plot["origin"]):
+		reserved[cell] = true
+	reserved[plot["doorstep"]] = true
+	for cell in plot["road_spur"]:
+		reserved[cell] = true
+	return reserved
+
+
+## `is_occupied`, widened by ground this village has already spoken for --
+## the same seam VillageLayout.layout already takes, so a reservation needs
+## no new parameter anywhere and reads to the layout exactly like something
+## already standing there.
+static func _occupied_or_reserved(is_occupied: Callable, reserved: Dictionary) -> Callable:
+	if reserved.is_empty():
+		return is_occupied
+	return func(cell: Vector2i) -> bool:
+		return reserved.has(cell) or bool(is_occupied.call(cell))
+
+
 func _place_industry_if_missing(chunk_coord: Vector2i, chunk_size: int, world) -> void:
 	if not world.has_method("place_building"):
 		return
@@ -698,10 +757,9 @@ func _place_industry_if_missing(chunk_coord: Vector2i, chunk_size: int, world) -
 			if record.get("id", "") == INDUSTRY_BUILDING_ID:
 				return
 
-	var plot := VillageLayout.industry_plot(
-		INDUSTRY_BUILDING_ID, chunk_size, VillageLayout.seed_for(chunk_coord),
+	var plot := _industry_plot_for(
+		chunk_coord, chunk_size, world,
 		_is_buildable_local(chunk_coord, chunk_size, world),
-		_is_forest_local(chunk_coord, chunk_size, world),
 		_is_occupied_local(chunk_coord, chunk_size, world)
 	)
 	if plot.is_empty():
