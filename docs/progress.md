@@ -25986,3 +25986,60 @@ seven appear verbatim in a full-suite log captured before this work
 `test_a_surviving_nut_plants_a_sapling_somewhere_forested_near_berlin` —
 fails identically with `earth_chunk_manager.gd` checked out from
 `a249f15`, the commit before this fix.
+
+## A release can carry its own license, if that license is still good (`docs/licensing.md`, "Bundling a license with a release", 2026-09-18)
+
+Asked for directly: *"make it so that the license.txt is included in the
+release if it's still valid at the time of build"*.
+
+✅ **Automates a practice that already existed.** `docs/licensing.md`'s
+issued-serials table already records a `license.txt` being hand-placed
+inside the first real Windows distributable (`license_id` 2, 2026-09, "for
+a specific friend"). `build_release.ps1` now takes a `-LicensePath`
+(falling back to `$env:ALEPH_ALPHA_RELEASE_LICENSE`, the same
+set-it-once-in-your-profile shape `-KeyPath` already uses), verifies it
+**before the export runs**, and packages it as `license.txt` beside the
+`.exe` and its `.sig`.
+
+✅ **Validity is the shipped game's own answer.** `tools/verify_release_
+license.gd` runs `SerialVerifier` against a key ring built exactly the way
+`LicenseGate` builds it, `KeyFingerprint` check included. A build trusting
+a laxer ring than the game does could bundle a serial the game then
+rejects — a release that fails on the customer's machine and nowhere else.
+
+✅ **Three refusals, each in code rather than in care.** The
+owner/developer key (every product bit set; the table marks it "never for
+distribution", and it is the most valid license in existence); any
+`-LicensePath` that looks like a private key (the existing
+`Assert-NoPrivateKeyAmong` guard, now applied to the source path too); and
+auto-discovery of a `license.txt` lying in the export folder — which is
+exactly where the developer's own testing copy lives.
+
+✅ **A license that cannot be bundled stops the release** instead of
+quietly publishing a package missing the license you asked for. A license
+that is valid now but lapses within `EXPIRY_WARNING_DAYS` (30, test-pinned)
+still ships, with the remaining days shouted in the build output.
+
+✅ **The policy is real game code; the CLI is not.** `ReleaseLicense`
+(`src/licensing/release_license.gd`) is pure and static — dictionaries in,
+a dictionary out, no I/O and no clock of its own, the build passing the
+time it is building at the same way `SerialVerifier.verify_code` takes an
+explicit `current_unix_time`. `tools/verify_release_license.gd` is a thin
+CLI over it doing only the file read and the exit code, keeping the
+"release tooling is not TDD-covered" carve-out `ReleaseCommon.ps1` already
+documents while the decision itself is tested.
+
+Tests: `test_release_license.gd` 12/12 (new). The PowerShell has no unit
+suite (that carve-out), so it was exercised directly instead, with
+PowerShell 7.4.6 and the real Godot binary: all three scripts parse clean,
+and `build_release.ps1 -DryRun` was run against **the real published trial
+serial from `README.md`** and five failure cases — valid (bundled, "expires
+in 468 days", matching the key's stated 2027-12-31), invalid (stops before
+the dry-run marker), none configured (builds as before), a `.pem` path
+(refused), a missing file (named), and the env-var fallback. The zip layout
+was verified separately: a source license under any name lands in the
+archive root as `license.txt`, which is where
+`LicenseStore.default_candidate_paths` looks.
+
+⬜ **Not done: no CI wiring.** Releases are still cut by hand from a
+Windows machine; `.github/workflows/tests.yml` remains the only workflow.

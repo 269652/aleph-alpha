@@ -305,6 +305,67 @@ list as serial verification — one key (or rotated set) signs both serials
 and builds, rather than maintaining two separate keys to protect and
 rotate.
 
+## Bundling a license with a release
+
+A release package may carry a `license.txt` of its own, so whoever
+downloads it can run the game without pasting a key. This is not a new
+idea here — the issued-serials table below already records it being done by
+hand once (`license_id` 2, *"bundled as the `license.txt` inside the first
+real Windows distributable build (2026-09), for a specific friend"*). What
+follows is that practice made automatic, and made safe to repeat.
+
+**The rule, as asked for: bundle it if it is still valid at the time of
+build.** `tools/release/build_release.ps1` takes a `-LicensePath` (falling
+back to `$env:ALEPH_ALPHA_RELEASE_LICENSE`, the same
+set-it-once-in-your-profile shape `-KeyPath` uses). Given one, it runs
+`tools/verify_release_license.gd` **before the export**, and only a license
+that verifies gets copied into the package as `license.txt`, alongside the
+executable and its `.sig`.
+
+**Validity is the shipped game's own answer, not a second opinion.** The
+check runs `SerialVerifier` against a key ring built exactly the way
+`LicenseGate` builds it — *including* the `KeyFingerprint` check that falls
+back to an empty ring on a mismatch. A build that trusted a laxer ring than
+the game does could bundle a serial the game then rejects: a release that
+fails on the customer's machine and nowhere else.
+
+**Three things the build refuses, and why each is worth code rather than
+care:**
+
+| Refused | Why |
+|---|---|
+| The owner/developer key (every product bit set) | The issued-serials table marks it *"local testing only. Not for distribution."* It is the most valid license in existence and the worst one to ship. |
+| Any `-LicensePath` that looks like a private key (`.pem`, `private_key`) | Same `Assert-NoPrivateKeyAmong` guard the packaging step already applies to the shipped file list, now applied to the source path too. |
+| Auto-discovery of a `license.txt` lying in the export folder | That folder is exactly where the developer's *own* testing license lives — the one the first row refuses. The path is always explicit. |
+
+**A license that cannot be bundled stops the release.** It does not publish
+a package quietly missing the license you asked for: you get the reason and
+a non-zero exit, before any export, tag or upload happens. Unset
+`-LicensePath` to publish without one deliberately.
+
+**A license that is valid now but expires soon still ships, loudly.** A
+release published today with a serial that lapses next week stops working
+for its downloaders days later, and nothing in the build output would have
+said so. Inside `ReleaseLicense.EXPIRY_WARNING_DAYS` (30) the build prints
+the remaining days in capitals. The threshold is a tuned value, so it is
+pinned by a test rather than left in a comment.
+
+**The build console may name the reason.** The "generic failure message"
+rule above is about the *shipped, player-facing* UI, where distinguishing
+"bad checksum" from "bad signature" from "expired" hands a would-be keygen
+author a debugging oracle. Your own release output is not that surface.
+
+**Where the logic lives.** The policy — bundle or not, and why — is
+`src/licensing/release_license.gd`: pure, static, no I/O and no clock of
+its own (the build passes the time it is building at, the same way
+`SerialVerifier.verify_code` takes an explicit `current_unix_time`). It is
+ordinary TDD-covered game code, tested by
+`tests/unit/test_release_license.gd`. `tools/verify_release_license.gd` is
+a thin CLI over it that only does the file read and the exit code, and
+carries the same "developer tooling, not shipped logic" status as
+`sign_build.gd`.
+
+
 ## Proposed file layout
 
 - `src/licensing/serial_codec.gd` — pure encode/decode between the payload
