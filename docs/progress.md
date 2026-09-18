@@ -25399,6 +25399,92 @@ Tests: `test_earth_chunk_manager_raised_builds.gd` 10/10 (new),
 `world.gd`, `earth_chunk_manager.gd`, `plan_raising.gd` and `player.gd`
 confirmed to load.
 
+### The mill, the store and the people in between (2026-09-18)
+
+A run of live reports, each measured before it was touched.
+
+✅ **The sawmill's woodpile.** Two defects, in both workers that cut timber
+(the Sägewerk's `LumberjackMarker` and the villager who works a village
+`sawmill`). Every swing bucked the log through `take_damage`, which drops it
+on the ground, while the worker *also* credited itself the same cut — the
+timber was created twice, once as a pile nobody collects and once in the
+mill's own stock (*"it only produced 6xLogs"*). And both looked only for
+STANDING trees, so a trunk left lying — by the player, by weather, or by the
+worker itself when it went off the clock — stayed there for ever while they
+walked past it (*"two felled trees lying around the sawmill and the worker
+doesn't bring them in"*). `ChoppableTree.buck_for_worker` hands the logs
+back instead, and each stage is read off the trunk rather than a local
+mirror that assumed every trunk was a fresh fall.
+
+✅ **The beam has first call on the woodpile.** Hewing and riving draw from
+ONE pile, and riving is three times cheaper per log and faster per piece, so
+the plank lane emptied the pile continuously and it almost never held the
+three logs a beam needs for the eight seconds it needs them. Measured with
+the mill ticked a frame at a time, as it really is: a thin pile produced
+planks and never one beam — which is what the village's own construction
+needs least.
+
+✅ **The warehouse binds its own porter** (`village_warehouse.md`,
+Mechanism 4). The whole logistics system was wired for the `sagewerk` →
+`storage` single-tile placeables; a real village raises a `sawmill` and a
+`warehouse`, which are whole-building entities `place_building` staffed
+nobody for. One `LogisticsMarker` per (store, producer) pair in reach, bound
+when either is raised or the chunk loads, let go when either goes. A porter
+with no item id named carries whatever is waiting, because a village
+producer's shelf is not a fixed list. This answers the doc's own open
+question — *"whether hauling should belong to an occupation instead"* — the
+way the report does: the store binds the worker.
+
+✅ **The Bollerwagen** (Mechanism 5). The load is on the CART: `CartLoad` is
+a real store on the cart's own node, so a cart left standing in a field is a
+cart with the timber still in it. It carries six of the porter's armfuls —
+pinned as two relationships against real quantities (more than arms, and at
+least the 12 wood the ladder's cheapest rung costs) rather than as a number.
+The sheet is measured, not guessed: 4 views × 5 roll frames off explicit
+magenta bands, the columns being an animation (the difference from column 0
+grows monotonically across each row) rather than five variants.
+
+✅ **Nothing built stands in water.** Measured first
+(`tools/probe_buildings_in_water.gd`): across 16 real villages, not one
+building stands in water — every siting path already asks
+`is_buildable_ground_at`. What had no check at all was `place_building`
+itself, so any caller that forgets is free to put a house in a river.
+
+✅ **A well stops you.** Every landmark was a bare `Sprite2D` with a shadow.
+What is solid is stated as a rule: a gate is an OPENING in a wall, and a
+stall is a trestle you step up to.
+
+✅ **A village does not turn as one.** Every villager read the same world
+hour, so a whole village rose, worked, drank and slept in step to the second
+(*"that looks very weird... behaviour should be natural and organic; not
+scripted"*). Each keeps an hour of their own now, deterministic from their
+identity seed and under half the shortest block, so nobody is shifted out of
+a block of their own plan.
+
+✅ **A village founded smaller catches up.** A settlement's household count
+is read back out of the persisted event graph, so one founded with five kept
+five for ever and the bigger roster was invisible in an existing world.
+Never downwards.
+
+✅ **A fence with nothing left to enclose comes down.** Measured against
+distance to a farmhouse rather than against the frame the current visit
+worked out — a field is re-derived every visit against what is standing,
+including last visit's rails, so asking "is this rail in today's frame" had
+each visit pull up the last one's fence. A fisher's pond anchors its own
+frame the same way.
+
+🔧 **A suite that had been silently dropped.** `test_npc_marker.gd`
+referenced a `world` that is not in scope, and a GDScript parse error makes
+GUT skip a whole file rather than fail it — so its 52 tests had not run since
+the helper landed earlier the same day. Repaired, and the hunter test now
+reads the PEAK purse rather than the closing balance: a villager who can buy
+a meal spends what they earn on one.
+
+🔧 **A pre-existing failure, A/B-confirmed against the base.** The fishing
+stub's water was eight fish — two water cells' worth — so a fisher working it
+a whole day honestly earned less than one unit once the regional take became
+a share of what the water replaces.
+
 ### Villages of ten that really grow (`concept/village_growth.md`, `concept/traveling_merchants.md`, 2026-09-18)
 
 Asked directly: *"please increase the village sizes from 5 houses to 10
