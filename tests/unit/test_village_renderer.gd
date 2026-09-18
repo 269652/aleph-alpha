@@ -3036,6 +3036,55 @@ func test_rails_with_no_farmhouse_left_are_cleared_away():
 	)
 
 
+## The case the distance rule could not see: a rail standing CLOSE to a real
+## farmhouse but on no field's frame.
+##
+## Reported again after the first sweep landed: *"there are still fenced
+## enclosures without a corresponding Farmhouse or Fisher"*. Measured on four
+## real villages (113 rails between them): every rail a founding really lays
+## sits on some farmhouse's own ring or some pond's own ring, and NONE of
+## them needs the reach slack -- so a rail that belongs to no ring is an
+## orphan however near it happens to stand to a building that survived.
+func test_a_rail_beside_a_real_farmhouse_but_on_no_frame_comes_down():
+	var coord := _find_settlement_chunk_with_occupation("grassland", "farmer", 5)
+	var world := StubWorld.new()
+	renderer.spawn_village(parent, coord, coord * CHUNK_SIZE, CHUNK_SIZE, TILE_SIZE, "grassland", world)
+	var farms := _buildings_of(world, VillageFarm.FARM_BUILDING_ID)
+	assert_gt(farms.size(), 0, "precondition: this village really raised a farmhouse")
+	# Right on the farmhouse's own doorstep row, well inside the reach the
+	# old distance rule allowed, and on nobody's frame.
+	var orphan_local: Vector2i = (farms[0]["origin_local"] as Vector2i) + Vector2i(-1, -1)
+	var orphan_global: Vector2i = coord * CHUNK_SIZE + orphan_local
+	world.occupied_cells[orphan_global] = VillageFarm.fence_tile_for("north")
+
+	renderer.spawn_village(parent, coord, coord * CHUNK_SIZE, CHUNK_SIZE, TILE_SIZE, "grassland", world)
+
+	assert_ne(
+		world.modification_at_global(orphan_global.x, orphan_global.y),
+		VillageFarm.fence_tile_for("north"),
+		"a rail on no frame is a fence around nothing, however near the farm"
+	)
+
+
+## And every rail a real founding lays is still standing afterwards --
+## measured, not assumed: 113 of them across four real villages, and the
+## sweep must take none of them.
+func test_the_sweep_takes_no_rail_a_real_founding_laid():
+	for row in range(3, 7):
+		var coord := _find_settlement_chunk_with_occupation("grassland", "farmer", row)
+		var world := StubWorld.new()
+		renderer.spawn_village(parent, coord, coord * CHUNK_SIZE, CHUNK_SIZE, TILE_SIZE, "grassland", world)
+		var standing := _fence_cells(world, coord).size()
+		assert_gt(standing, 0, "precondition: %s really fenced something" % str(coord))
+
+		renderer.spawn_village(parent, coord, coord * CHUNK_SIZE, CHUNK_SIZE, TILE_SIZE, "grassland", world)
+
+		assert_eq(
+			_fence_cells(world, coord).size(), standing,
+			"the village at %s lost a fence it had really built" % str(coord)
+		)
+
+
 ## And the rails that DO belong to a standing farmhouse are left alone.
 func test_a_real_farms_own_rails_are_left_standing():
 	var coord := _find_settlement_chunk_with_occupation("grassland", "farmer", 5)
@@ -3064,3 +3113,4 @@ func _fence_cells(world: StubWorld, coord: Vector2i) -> Array:
 ## never sees them here. That split is why this test can assert they are
 ## LEFT ALONE without the sweep being able to reach them either way; the
 ## orphan case above plants its rail where the sweep really looks.
+

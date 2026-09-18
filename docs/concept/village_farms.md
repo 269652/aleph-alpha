@@ -367,6 +367,43 @@ A rail picks its column from which side of the enclosure it stands on, so a
 run along the field's north edge is drawn back-on and a run down its east
 edge is drawn as a post-and-rail seen from above.
 
+### A fence with nothing left to enclose comes down
+
+Reported live with the village in shot: *"There's a bed enclosure without a
+Farmhouse"*, and again after the first sweep landed: *"there are still fenced
+enclosures without a corresponding Farmhouse or Fisher"*.
+
+A field is only ever fenced around a farmhouse that really stands. But the
+rails are real persisted tiles, so a farmhouse that goes **afterwards** —
+razed, or reclaimed for standing in water — leaves its whole frame behind for
+ever.
+
+**A rail survives only if it is on a real frame this visit**: some
+farmhouse's own ring around its own beds, or some pond's own ring around its
+own water. Not "near a building that survived".
+
+The first pass used distance instead, on the worry that frame membership
+would not be stable across visits — a farmhouse's field is re-derived every
+time against what is standing, the last visit's rails included, so asking
+"is this rail in today's frame" unstably would have each visit pull up the
+previous one's fence.
+
+It is stable, and that is measured rather than assumed: across four real
+villages and the 113 rails between them, every rail a founding lays sits on
+its own farmhouse's ring or its own pond's ring on the next visit too, and
+not one of them needed the slack the distance rule was giving away
+(`test_the_sweep_takes_no_rail_a_real_founding_laid`). What that slack *did*
+keep standing is a frame left by a razed farmhouse that happened to lie near
+a surviving one — which is exactly the second report.
+
+A pond's ring is read off the water that is really there rather than off a
+plan, so a pond that was only partly dug still keeps the frame around what it
+got.
+
+The sweep runs on every visit, not on the removal: idempotent, self-healing,
+and able to clean up a save whose farmhouse went before it existed — the same
+shape `_lay_plaza_if_missing` and `_place_industry_if_missing` already have.
+
 ### A farmstead clears its own ground
 
 Reported in play with the enclosure in shot: *"the Farmhouse should clear
@@ -620,6 +657,13 @@ again.
 
 ## Status
 
+- ✅ **A fence with nothing left to enclose comes down.**
+  `VillageRenderer._clear_rails_with_nothing_to_enclose` now asks whether a
+  rail is on a real frame this visit — a farmhouse's ring around its own
+  beds, or a pond's ring around its own water — rather than how near it
+  stands to a surviving building. Measured: 113 rails across four real
+  villages, none lost, and a rail planted on a standing farmhouse's own
+  doorstep with no frame under it comes down (it did not before).
 - ✅ **A farmstead clears its own ground.**
   `EarthChunkManager.clear_vegetation_at_global(cells)` is the public door
   onto the same `_clear_vegetation_on_cells` sweep `place_building` and

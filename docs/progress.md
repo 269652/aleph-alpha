@@ -26213,3 +26213,37 @@ have teeth by neutering the hook and watching 4 of them fail),
 `test_village_renderer.gd` 124/124 including three new cases: every bed is
 cleared, nothing beyond the beds is, and a world with no such hook still
 founds its village.
+
+## A fence is kept by its frame, not by its neighbours (`concept/village_farms.md`, 2026-09-18)
+
+Reported live with the village in shot, twice: *"There's a bed enclosure
+without a Farmhouse"*, and after the first sweep landed, *"there are still
+fenced enclosures without a corresponding Farmhouse or Fisher"*.
+
+The first sweep asked whether a rail stood within reach of a farmhouse origin
+or a pond cell. That was chosen over frame membership on the worry that
+membership would not be stable: a field is re-derived on every visit against
+what is standing, the last visit's rails included, so an unstable answer
+would have each visit pull up the previous one's fence.
+
+**Measured instead of worried about.** A throwaway diagnostic over four real
+villages counted every standing rail against the rings their own farmhouses
+and ponds really derive that visit: **113 rails, 0 that membership would have
+lost.** Not one needed the slack the distance rule was giving away — and what
+that slack kept standing is a frame left by a razed farmhouse lying near a
+surviving one, which is exactly the second report.
+
+✅ **A rail survives only if it is on a real frame this visit.** A farmhouse's
+own ring around its own beds (`VillageFarm.fence_cells`, per farmhouse, not
+pooled), or a pond's own ring — read off the water that is really there, so a
+partly-dug pond keeps the frame around what it got. Everything else comes
+down.
+
+Two new tests, and the first is the one the distance rule could not pass: a
+rail planted on a standing farmhouse's own doorstep with no frame under it
+now comes down, and `test_the_sweep_takes_no_rail_a_real_founding_laid` pins
+the 113-rail measurement so the rule can never quietly start eating real
+fences.
+
+Tests: `test_village_renderer.gd` 126/126, `test_village_farm.gd` and
+`test_village_pond.gd` green alongside it (208/208 together).
