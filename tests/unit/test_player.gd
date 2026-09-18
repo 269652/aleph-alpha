@@ -320,6 +320,12 @@ func test_try_enter_direct_builder_mode_succeeds_beside_a_whole_building_city_ha
 	assert_true(player._try_enter_direct_builder_mode())
 	assert_true(player.direct_builder_mode)
 
+	# The hall is a PERSISTED building, and this file shares one real
+	# user:// dir with every other test in the run -- including the ones
+	# that go looking for clear ground in this same Berlin chunk. Take it
+	# back off the map so nothing downstream inherits it.
+	chunk_manager.remove_building(chunk_coord, origin)
+
 
 ## A real site for a whole-building `building_id` on ground that is really
 ## dry, plus a dry cell off its east wall for the player to stand on.
