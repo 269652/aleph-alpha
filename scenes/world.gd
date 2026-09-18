@@ -5141,8 +5141,49 @@ var _planner_banner: PanelContainer
 ## its own design, so it is legible over any terrain like every other
 ## message (docs/concept/hud.md's pillar 1).
 func _show_planner_message(message: String) -> void:
+	_planner_message = message
+	_planner_message_seconds_left = PLANNER_MESSAGE_SECONDS
 	if _planner_banner != null:
 		_set_message_banner(_planner_banner, message)
+
+
+## How long a planner message stays on screen.
+##
+## Reported live: *"the 'Pavement planned' notification doesn't go away
+## anymore"*. It never did. Every other banner is a standing READOUT, rebuilt
+## from live player state every frame (see _update_lasso_label), so it clears
+## itself the moment the state behind it does. A planner message is a one-off
+## REPORT with no state behind it to go away, so nothing ever took it down.
+## Pinned by test_world_hud.gd rather than left as an eyeballed number: a
+## message that clears before it can be read is the same bug the other way
+## round.
+const PLANNER_MESSAGE_SECONDS := 4.0
+
+var _planner_message := ""
+var _planner_message_seconds_left := 0.0
+
+
+## The planner banner's own countdown, one frame on: what should still be up
+## and how long it has left. Pure and static so the expiry is a tested
+## function rather than a timer buried in _process, the same split
+## message_banner_lines already keeps.
+static func planner_message_after(message: String, seconds_left: float, delta: float) -> Dictionary:
+	if message == "":
+		return {"message": "", "seconds_left": 0.0}
+	var remaining := seconds_left - maxf(delta, 0.0)
+	if remaining <= 0.0:
+		return {"message": "", "seconds_left": 0.0}
+	return {"message": message, "seconds_left": remaining}
+
+
+func _step_planner_message(delta: float) -> void:
+	if _planner_message == "":
+		return
+	var after := planner_message_after(_planner_message, _planner_message_seconds_left, delta)
+	_planner_message = after["message"]
+	_planner_message_seconds_left = after["seconds_left"]
+	if _planner_message == "" and _planner_banner != null:
+		_set_message_banner(_planner_banner, "")
 
 
 ## The standing wireframes, in WORLD space -- a child of World itself
@@ -6672,6 +6713,7 @@ func _client_process(delta: float) -> void:
 	_update_karma_display(local_player)
 	_update_fishing_label(local_player)
 	_update_lasso_label(local_player)
+	_step_planner_message(delta)
 	_update_trade_label(local_player)
 	_update_talk_label(local_player)
 	_update_cast_label(local_player)
