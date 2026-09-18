@@ -366,6 +366,94 @@ func test_a_village_that_already_farms_is_left_alone():
 	assert_gt(touched, 0, "some villages should still roll more than one food producer of their own")
 
 
+# -- and every village has somebody who carts ------------------------------
+
+const VillageCart = preload("res://src/gameplay/village_cart.gd")
+
+
+func _carters(npcs: Array) -> int:
+	var count := 0
+	for npc in npcs:
+		if VillageCart.walks_the_round(npc.occupation):
+			count += 1
+	return count
+
+
+## Reported live with the empty store in shot: *"the warehouse stays
+## empty"*. Hauling is a trade now, and a store stands in EVERY village from
+## founding (Mechanism 1) -- so a roster that rolled no carter is a village
+## whose producers keep their own output for ever.
+##
+## Measured before it was fixed (tools/probe_carter_rosters.gd, over the 75
+## real grassland villages in rows 0-5): 7 of them, 9.3%, had nobody to cart
+## at all. The same shape of gap, and the same remedy, as the "No
+## Farmhouses" report that _staff_food_producers already answers.
+func test_every_village_has_somebody_who_carts():
+	var checked := 0
+	for i in 40:
+		var coord := Vector2i(600 + i, 140 + (i % 7))
+		var settlement := generator.generate_settlement(coord, coord * CHUNK_SIZE, CHUNK_SIZE, TILE_SIZE)
+		assert_gt(
+			_carters(settlement.npcs), 0,
+			"the village at %s has a store nobody empties" % str(coord)
+		)
+		checked += 1
+	assert_eq(checked, 40, "precondition: every sampled chunk really produced a roster")
+
+
+## One is enough. A village conscripted wholesale into hauling would have
+## nobody left to produce what is hauled.
+func test_a_village_is_never_conscripted_wholesale_into_hauling():
+	for i in 40:
+		var coord := Vector2i(600 + i, 140 + (i % 7))
+		var settlement := generator.generate_settlement(coord, coord * CHUNK_SIZE, CHUNK_SIZE, TILE_SIZE)
+		assert_lte(
+			_carters(settlement.npcs), 3,
+			"the village at %s put most of itself behind a wagon" % str(coord)
+		)
+
+
+## The wagon is not handed round as the village grows. Conscription comes
+## off the FOUNDING roster, so a village that has taken in newcomers still
+## has the same carter it always had -- growth is additive here.
+func test_the_carter_is_still_the_same_villager_after_the_village_grows():
+	for i in 12:
+		var coord := Vector2i(600 + i, 140 + (i % 7))
+		var founded := generator.generate_settlement(coord, coord * CHUNK_SIZE, CHUNK_SIZE, TILE_SIZE)
+		var grown := generator.generate_settlement(
+			coord, coord * CHUNK_SIZE, CHUNK_SIZE, TILE_SIZE, SettlementGenerator.POPULATION + 5
+		)
+		# The CARTER specifically, not every founder: _staff_food_producers
+		# scales with population and so genuinely conscripts a different
+		# tail as a village grows, which is its own older behaviour and not
+		# what this pins.
+		var founding_carters: Array = []
+		for index in founded.npcs.size():
+			if VillageCart.walks_the_round(founded.npcs[index].occupation):
+				founding_carters.append(index)
+		assert_false(founding_carters.is_empty(), "precondition: %s carts at all" % str(coord))
+		for index in founding_carters:
+			assert_true(
+				VillageCart.walks_the_round(grown.npcs[index].occupation),
+				"the carter of the village at %s lost the wagon as it grew" % str(coord)
+			)
+		assert_gt(_carters(grown.npcs), 0, "and the grown village still carts")
+
+
+## And the ones who feed it are never the ones taken: a village conscripted
+## into hauling out of its own farmers would starve to keep its shelves
+## tidy. Food is staffed first for exactly this reason.
+func test_conscripting_a_carter_never_costs_the_village_its_food():
+	for i in 40:
+		var coord := Vector2i(600 + i, 140 + (i % 7))
+		var settlement := generator.generate_settlement(coord, coord * CHUNK_SIZE, CHUNK_SIZE, TILE_SIZE)
+		assert_gte(
+			_food_producers(settlement.npcs),
+			SettlementFoodDemand.producers_needed(settlement.npcs.size()),
+			"the village at %s went hungry for its wagon" % str(coord)
+		)
+
+
 func test_the_roster_is_still_deterministic_for_a_chunk():
 	var coord := Vector2i(613, 141)
 	var first := generator.generate_settlement(coord, coord * CHUNK_SIZE, CHUNK_SIZE, TILE_SIZE)

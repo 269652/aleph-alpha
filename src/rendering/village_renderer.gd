@@ -18,6 +18,8 @@ const VillageLayout = preload("res://src/world/village_layout.gd")
 const VillageFarm = preload("res://src/gameplay/village_farm.gd")
 const VillagePond = preload("res://src/gameplay/village_pond.gd")
 const VillageSawmill = preload("res://src/gameplay/village_sawmill.gd")
+const VillageCart = preload("res://src/gameplay/village_cart.gd")
+const CartMarker = preload("res://src/rendering/cart_marker.gd")
 const BuildingCatalog = preload("res://src/gameplay/building_catalog.gd")
 const NpcMarker = preload("res://src/rendering/npc_marker.gd")
 const VillageMarket = preload("res://src/world/village_market.gd")
@@ -382,7 +384,69 @@ func spawn_village(
 	_hand_out_farm_fields(npcs, npc_markers, farm_fields, chunk_coord, chunk_size)
 	_hand_out_fisher_ponds(npcs, npc_markers, fisher_ponds, chunk_coord, chunk_size)
 	_hand_out_the_sawmill(npcs, npc_markers, chunk_coord, chunk_size, world)
+	_hand_out_the_store_round(npcs, npc_markers, chunk_coord, chunk_size, world, parent, spawned)
 	return spawned
+
+
+## Tells every villager whose trade is hauling which store is theirs, whose
+## shelves are on their round, and which wagon they pull
+## (docs/concept/village_warehouse.md, Mechanism 4).
+##
+## The sawmill handout's own sibling, and deliberately the same shape: read
+## what really STANDS off world.buildings_in_chunk rather than off the plan,
+## because a cramped site houses its people and goes without a store
+## (pillar 1's caveat) and a reloaded village never re-runs the founding
+## placement at all. A village with no store has no carter's work in it, and
+## its carters keep the ordinary schedule.
+##
+## The wagon goes into `spawned`, which is what the chunk frees when the
+## player walks out -- a cart is not a node this renderer leaks behind. That
+## is not hypothetical: a porter and a cart left alive on every load/unload
+## cycle is the measured cause of the reported framerate decay.
+func _hand_out_the_store_round(
+	npcs: Array, npc_markers: Array, chunk_coord: Vector2i, chunk_size: int, world,
+	parent: Node2D, spawned: Array[Node2D]
+) -> void:
+	if world == null or not world.has_method("buildings_in_chunk") or npc_markers.size() < npcs.size():
+		return
+	var store = null
+	var producers: Array[Vector2i] = []
+	for record in world.buildings_in_chunk(chunk_coord):
+		var building_id: String = record.get("id", "")
+		if building_id == VillageLayout.WAREHOUSE_BUILDING_ID:
+			if store == null:
+				store = record["origin_local"]
+		elif BuildingCatalog.PRODUCTION_BUILDING_IDS.has(building_id):
+			producers.append(record["origin_local"])
+	if store == null:
+		return
+	# The store is also a real place on the village's own map, so a carter's
+	# schedule resolves to it the way a sawyer's resolves to the mill.
+	# Without this their work tag names somewhere that does not exist and
+	# they fall back to a decorative workspot.
+	var footprint := BuildingCatalog.footprint_of(VillageLayout.WAREHOUSE_BUILDING_ID)
+	var store_centre := Vector2(
+		(float((store as Vector2i).x + chunk_coord.x * chunk_size) + float(footprint.x) * 0.5) * TerrainRenderer.TILE_SIZE,
+		(float((store as Vector2i).y + chunk_coord.y * chunk_size) + float(footprint.y) * 0.5) * TerrainRenderer.TILE_SIZE
+	)
+	var store_cell: Vector2i = chunk_coord * chunk_size + (store as Vector2i)
+	var round_cells: Array[Vector2i] = []
+	for producer_origin in producers:
+		round_cells.append(chunk_coord * chunk_size + producer_origin)
+	for i in npcs.size():
+		npc_markers[i].landmarks[VillageCart.WORK_LOCATION] = store_centre
+		if not VillageCart.walks_the_round(npcs[i].occupation):
+			continue
+		npc_markers[i].store_cell = store_cell
+		npc_markers[i].producer_cells = round_cells.duplicate()
+		# One wagon each, standing at the store where its carter starts: a
+		# cart is a real thing on the map, and two carters sharing one would
+		# have each of them emptying the other's load.
+		var cart := CartMarker.new()
+		cart.position = store_centre
+		parent.add_child(cart)
+		spawned.append(cart)
+		npc_markers[i].cart = cart
 
 
 ## Tells every villager whose trade is timber which sawmill is theirs

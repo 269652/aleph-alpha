@@ -17,6 +17,8 @@ const VillageLayout = preload("res://src/world/village_layout.gd")
 const VillageFarm = preload("res://src/gameplay/village_farm.gd")
 const VillagePond = preload("res://src/gameplay/village_pond.gd")
 const VillageSawmill = preload("res://src/gameplay/village_sawmill.gd")
+const VillageCart = preload("res://src/gameplay/village_cart.gd")
+const CartMarker = preload("res://src/rendering/cart_marker.gd")
 const ProceduralLandmarkSprite = preload("res://src/rendering/procedural_landmark_sprite.gd")
 
 const TILE_SIZE := 16
@@ -282,12 +284,25 @@ func _house_calls(world: StubWorld) -> Array:
 	return houses
 
 
+## How many villagers here earn a prop of their own -- the same three
+## conditions spawn_village itself applies, not a looser copy of them: a
+## trade with no work tag stands nothing, a tag the square already has
+## (merchant/stall, guard/gate) needs nothing, and a tag that names a real
+## BUILDING the village raises gets the building rather than a prop.
+##
+## That last clause is not decoration. A lumberjack works at the `sawmill`
+## and a carter at the `warehouse`, both real catalog buildings; asking for a
+## prop falls back to the well art, which is how every lumberjack once stood
+## a second, spurious well in the middle of the village.
 func _workspot_prop_count(settlement: Dictionary) -> int:
 	var count := 0
 	for npc in settlement.npcs:
 		var work_tag: String = NpcIdentity.WORK_LOCATION_BY_OCCUPATION.get(npc.occupation, "")
-		if work_tag != "" and not settlement.landmarks.has(work_tag):
-			count += 1
+		if work_tag == "" or settlement.landmarks.has(work_tag):
+			continue
+		if BuildingCatalog.has_building(work_tag):
+			continue
+		count += 1
 	return count
 
 
@@ -2479,6 +2494,108 @@ func test_nobody_else_is_handed_a_sawmill():
 				node.sawmill_cell, NpcMarker.NO_SAWMILL,
 				"%s does not work timber" % node.identity.occupation
 			)
+
+
+# -- the store has a carter (docs/concept/village_warehouse.md, Mech. 4) ---
+#
+# Reported in play, and then corrected: "The warehouse also needs to bind a
+# worker which then collects all ressources from every production building",
+# then "It should be a real NPC pulling the cart, not an additional sprite".
+
+
+func _carter_markers(spawned: Array) -> Array:
+	var out: Array = []
+	for node in spawned:
+		if node is NpcMarker and node.identity.occupation == VillageCart.OCCUPATION:
+			out.append(node)
+	return out
+
+
+func test_a_carter_is_told_which_store_is_theirs_and_whose_shelves_to_empty():
+	var coord := _find_settlement_chunk_with_occupation("grassland", VillageCart.OCCUPATION, 3)
+	var world := StubWorld.new()
+	# Real timber, so the village raises a mill and the round has a producer
+	# on it at all.
+	_forest_band(world, coord)
+	var spawned := renderer.spawn_village(
+		parent, coord, coord * CHUNK_SIZE, CHUNK_SIZE, TILE_SIZE, "grassland", world
+	)
+	var stores := _buildings_of(world, VillageLayout.WAREHOUSE_BUILDING_ID)
+	assert_gt(stores.size(), 0, "precondition: this village raised a store")
+	var carters := _carter_markers(spawned)
+	assert_gt(carters.size(), 0, "precondition: somebody in this village carts")
+	var expected_store: Vector2i = coord * CHUNK_SIZE + stores[0]["origin_local"]
+	var expected_producers: Dictionary = {}
+	for call in world.place_calls:
+		if BuildingCatalog.PRODUCTION_BUILDING_IDS.has(call["building_id"]):
+			expected_producers[coord * CHUNK_SIZE + (call["origin_local"] as Vector2i)] = true
+	assert_gt(expected_producers.size(), 0, "precondition: the village has producers to empty")
+	for carter in carters:
+		assert_eq(carter.store_cell, expected_store, "a carter carts for their own village's store")
+		var handed: Dictionary = {}
+		for cell in carter.producer_cells:
+			handed[cell] = true
+		assert_eq(
+			handed, expected_producers,
+			"and walks the round of every production building the village raised"
+		)
+
+
+## A villager born to another trade is never handed the round, or every
+## trade in the village would be hauling.
+func test_nobody_else_is_handed_the_stores_round():
+	var coord := _find_settlement_chunk_with_occupation("grassland", VillageCart.OCCUPATION, 3)
+	var world := StubWorld.new()
+	_forest_band(world, coord)
+	var spawned := renderer.spawn_village(
+		parent, coord, coord * CHUNK_SIZE, CHUNK_SIZE, TILE_SIZE, "grassland", world
+	)
+	for node in spawned:
+		if node is NpcMarker and node.identity.occupation != VillageCart.OCCUPATION:
+			assert_eq(
+				node.store_cell, NpcMarker.NO_STORE,
+				"%s does not cart" % node.identity.occupation
+			)
+			assert_null(node.cart, "and pulls nothing")
+
+
+## The wagon is a real node spawned WITH the village, so it is freed with
+## the chunk the same way every villager and prop is -- not a node the
+## renderer leaks behind every time the player walks out of a village
+## (measured once already: a porter and a cart left alive per load/unload
+## cycle was the reported framerate decay).
+func test_a_carter_is_given_a_real_cart_that_lives_and_dies_with_the_village():
+	var coord := _find_settlement_chunk_with_occupation("grassland", VillageCart.OCCUPATION, 3)
+	var world := StubWorld.new()
+	_forest_band(world, coord)
+	var spawned := renderer.spawn_village(
+		parent, coord, coord * CHUNK_SIZE, CHUNK_SIZE, TILE_SIZE, "grassland", world
+	)
+	var carters := _carter_markers(spawned)
+	assert_gt(carters.size(), 0, "precondition: somebody in this village carts")
+	for carter in carters:
+		assert_true(carter.cart is CartMarker, "a carter pulls a real wagon")
+		assert_true(
+			spawned.has(carter.cart),
+			"spawned with the village, so it is freed with the village"
+		)
+
+
+## And the store is somewhere their schedule can actually name -- without
+## it, a carter's work tag resolves to nothing and they fall back to a
+## decorative workspot, exactly the bug the sawmill tag was added for.
+func test_the_store_is_a_place_a_carters_schedule_can_resolve():
+	var coord := _find_settlement_chunk_with_occupation("grassland", VillageCart.OCCUPATION, 3)
+	var world := StubWorld.new()
+	_forest_band(world, coord)
+	var spawned := renderer.spawn_village(
+		parent, coord, coord * CHUNK_SIZE, CHUNK_SIZE, TILE_SIZE, "grassland", world
+	)
+	for carter in _carter_markers(spawned):
+		assert_true(
+			carter.landmarks.has(VillageCart.WORK_LOCATION),
+			"the store the village really raised is on the carter's own map"
+		)
 
 
 ## A fisher is told which water is theirs and which building they fill --

@@ -20,6 +20,7 @@ const SettlementFoodDemand = preload("res://src/emergence/settlement_food_demand
 const NpcIdentity = preload("res://src/world/npc_identity.gd")
 const VillageLayout = preload("res://src/world/village_layout.gd")
 const BuildingCatalog = preload("res://src/gameplay/building_catalog.gd")
+const VillageCart = preload("res://src/gameplay/village_cart.gd")
 
 ## The FOUNDING roster: how many villagers a settlement is founded with.
 ## Not a ceiling -- docs/concept/village_growth.md's own arrivals mechanism
@@ -125,6 +126,7 @@ func generate_settlement(
 		house_positions.append(_house_position(chunk_coord, center_pos, tile_size, i))
 
 	_staff_food_producers(npcs, region)
+	_staff_the_carter(npcs)
 
 	return {"house_positions": house_positions, "landmarks": landmarks, "npcs": npcs}
 
@@ -165,6 +167,50 @@ static func _staff_food_producers(npcs: Array, region) -> void:
 		if not SettlementFoodDemand.FOOD_TRADES.has(npcs[index].occupation):
 			npcs[index] = NpcIdentity.new(npcs[index].seed_value, trade)
 			have += 1
+		index -= 1
+
+
+## Makes sure this village has somebody to cart, if nobody rolled it
+## (docs/concept/village_warehouse.md, Mechanism 4).
+##
+## Reported live with the empty store in shot: *"the warehouse stays
+## empty"*. Hauling is a trade now, and unlike the mill -- which only stands
+## where there is timber -- a STORE stands in every village from founding.
+## A village with a store and nobody to walk its round is a village whose
+## producers keep their own output for ever.
+##
+## Measured before this existed (tools/probe_carter_rosters.gd, over the 75
+## real grassland villages in rows 0-5): 7 of them, 9.3%, had nobody to cart
+## at all. Exactly the shape of the "No Farmhouses" report that
+## _staff_food_producers above answers, so this answers it the same way:
+## ONE villager, taken off the END of the roster and only from somebody the
+## village's food demand has not already claimed, so the founders are left
+## exactly as they rolled and a village never goes hungry for its wagon.
+##
+## Deliberately after _staff_food_producers, not before: food outranks
+## logistics when a small roster cannot staff both.
+static func _staff_the_carter(npcs: Array) -> void:
+	if npcs.is_empty():
+		return
+	# Scoped to the FOUNDING roster on both halves -- who is looked for and
+	# who is taken. Asking the whole grown roster instead would let a
+	# newcomer who happened to roll carter call off a conscription the
+	# founding ten had already made, handing that founder their old trade
+	# back on the village's next visit.
+	var founders: int = mini(npcs.size(), POPULATION)
+	for i in founders:
+		if VillageCart.walks_the_round(npcs[i].occupation):
+			return
+	# Off the end of the FOUNDING roster, not the end of the current one: a
+	# village that has grown must not hand the wagon to a newcomer and give
+	# the old carter their rolled trade back. Growth is additive here, and
+	# founders keep who they are (test_growing_never_changes_who_the_
+	# founders_are pins exactly that).
+	var index: int = founders - 1
+	while index >= 0:
+		if not SettlementFoodDemand.FOOD_TRADES.has(npcs[index].occupation):
+			npcs[index] = NpcIdentity.new(npcs[index].seed_value, VillageCart.OCCUPATION)
+			return
 		index -= 1
 
 
