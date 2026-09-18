@@ -1180,9 +1180,22 @@ func _props_in(spawned: Array) -> Array:
 
 
 ## Everything south of the street is river -- exactly the reported shape.
+## A river across the chunk's southern ground, beginning past the village's
+## THIRD street row.
+##
+## It used to start one row south of the main street, which drowned all but
+## one of the rows the village had left to build on. That left a site a
+## five-villager roster could still just about squeeze onto and a
+## ten-villager one cannot
+## -- and a roster a site cannot house founds nothing at all, by design
+## (_place_new_village: "founding there is what left a riverside chunk with
+## a market square and one house"). The tests below then ran against a
+## village that did not exist and asserted nothing at all. The point of
+## them is that nothing STANDS in water, so the fixture has to leave a
+## village standing.
 func _flood_south_of_the_street(world: StubWorld, coord: Vector2i) -> void:
 	var street_y: int = VillageLayout.skeleton(CHUNK_SIZE, VillageLayout.seed_for(coord))["street_y"]
-	for y in range(street_y + 1, CHUNK_SIZE):
+	for y in range(street_y + 2 * VillageLayout.STREET_PITCH_TILES + 1, CHUNK_SIZE):
 		for x in CHUNK_SIZE:
 			world.water_cells[coord * CHUNK_SIZE + Vector2i(x, y)] = true
 
@@ -1198,6 +1211,7 @@ func test_no_prop_and_no_villager_ever_stands_in_water():
 
 	var spawned := renderer.spawn_village(parent, coord, coord * CHUNK_SIZE, CHUNK_SIZE, TILE_SIZE, "grassland", world)
 
+	assert_false(spawned.is_empty(), "precondition: the village really was founded beside the river")
 	for node in spawned:
 		var tile := _tile_of(node.position)
 		assert_false(
@@ -1214,12 +1228,15 @@ func test_a_villagers_workspot_is_never_in_water_either():
 
 	var spawned := renderer.spawn_village(parent, coord, coord * CHUNK_SIZE, CHUNK_SIZE, TILE_SIZE, "grassland", world)
 
+	var checked := 0
 	for node in spawned:
 		if node is NpcMarker:
+			checked += 1
 			assert_false(
 				world.water_cells.has(_tile_of(node.workspot_position)),
 				"a villager would walk into the river to work"
 			)
+	assert_gt(checked, 0, "precondition: the village beside the river really has villagers")
 
 
 ## Dry ground everywhere: the props are still there. The fix must site
