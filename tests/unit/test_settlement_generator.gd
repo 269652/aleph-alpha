@@ -175,6 +175,129 @@ func test_omitting_the_population_still_founds_the_original_roster():
 	)
 
 
+# -- the roster is staffed by demand ----------------------------------------
+#
+# Asked for directly: "Make it driven by demand." What that replaced was
+# "if nobody in this roster farms, make the LAST one a farmer" -- one food
+# producer, always, whatever the village's size and whatever it stood on.
+#
+# The count is SettlementFoodDemand.producers_needed (the village's own
+# subsistence draw over what one producer's real work brings in) and the
+# trade is SettlementFoodDemand.trade_for (whichever the land really feeds a
+# village with). Both were only writable once the food model's two halves
+# had been measured against each other -- see
+# docs/concept/settlement_food_calibration.md.
+
+const SettlementFoodDemand = preload("res://src/emergence/settlement_food_demand.gd")
+const SettlementGranary = preload("res://src/emergence/settlement_granary.gd")
+
+
+func _region(vegetation: float, herbivores: float, fish: float):
+	var region = SettlementGranary.SeededRegion.new()
+	region.vegetation_density = vegetation
+	region.herbivore_population = herbivores
+	region.fish_population = fish
+	return region
+
+
+func _food_producers(npcs: Array) -> int:
+	var count := 0
+	for npc in npcs:
+		if SettlementFoodDemand.FOOD_TRADES.has(npc.occupation):
+			count += 1
+	return count
+
+
+## Every village carries as many food producers as its own demand asks for
+## -- never a fixed one.
+func test_every_village_carries_the_food_producers_its_demand_asks_for():
+	for i in 40:
+		var coord := Vector2i(620 + i, 160 + (i % 7))
+		var settlement := generator.generate_settlement(coord, coord * CHUNK_SIZE, CHUNK_SIZE, TILE_SIZE)
+		assert_gte(
+			_food_producers(settlement.npcs),
+			SettlementFoodDemand.producers_needed(settlement.npcs.size()),
+			"the village at %s cannot feed itself" % str(coord)
+		)
+
+
+## A village that grows past what one producer feeds is staffed for the size
+## it really is, which is the whole point of making it demand-driven.
+func test_a_bigger_village_is_staffed_for_the_size_it_really_is():
+	var coord := Vector2i(631, 163)
+	var big: int = SettlementFoodDemand.households_fed_per_producer() * 2 + 1
+	var settlement := generator.generate_settlement(
+		coord, coord * CHUNK_SIZE, CHUNK_SIZE, TILE_SIZE, big
+	)
+	assert_eq(settlement.npcs.size(), big, "precondition: the whole roster really was generated")
+	assert_gte(_food_producers(settlement.npcs), SettlementFoodDemand.producers_needed(big))
+	assert_gte(SettlementFoodDemand.producers_needed(big), 3, "precondition: this size really needs several")
+
+
+## The land picks the trade. Water means a fisher -- who digs and stocks a
+## pond (docs/concept/village_ponds.md), which is what a player asked to see.
+## A chunk whose own roll gives the village nobody to feed it -- the case
+## conscription exists for, and the only one in which the LAND gets to pick
+## the trade at all. A roster that already feeds itself is left alone.
+func _chunk_whose_roster_feeds_nobody() -> Vector2i:
+	for i in 400:
+		var coord := Vector2i(640 + i, 167)
+		var settlement := generator.generate_settlement(
+			coord, coord * CHUNK_SIZE, CHUNK_SIZE, TILE_SIZE,
+			SettlementGenerator.POPULATION, Callable(), _region(0.0, 0.0, 0.0)
+		)
+		var rolled := 0
+		for npc in settlement.npcs:
+			if SettlementFoodDemand.FOOD_TRADES.has(npc.occupation) and npc.occupation != "farmer":
+				rolled += 1
+		if rolled == 0:
+			return coord
+	fail_test("no chunk found whose roster rolls nobody who feeds it")
+	return Vector2i.ZERO
+
+
+## The land picks the trade. Water means a fisher -- who digs and stocks a
+## pond (docs/concept/village_ponds.md), which is what a player asked to see.
+func test_a_village_on_water_is_fed_by_a_fisher():
+	var coord := _chunk_whose_roster_feeds_nobody()
+	var settlement := generator.generate_settlement(
+		coord, coord * CHUNK_SIZE, CHUNK_SIZE, TILE_SIZE,
+		SettlementGenerator.POPULATION, Callable(), _region(0.15, 0.9, 800.0)
+	)
+	var fishers := 0
+	for npc in settlement.npcs:
+		if npc.occupation == "fisher":
+			fishers += 1
+	assert_gt(fishers, 0, "land with real water should be worked by somebody who fishes it")
+
+
+## ...and the same roster on dry grassland is fed by a farmer instead, who
+## raises a farmhouse. Same chunk, same villagers, different land.
+func test_the_same_roster_on_dry_grassland_is_fed_by_a_farmer():
+	var coord := _chunk_whose_roster_feeds_nobody()
+	var settlement := generator.generate_settlement(
+		coord, coord * CHUNK_SIZE, CHUNK_SIZE, TILE_SIZE,
+		SettlementGenerator.POPULATION, Callable(), _region(0.15, 0.9, 0.0)
+	)
+	var farmers := 0
+	for npc in settlement.npcs:
+		if VillageFarm.crop_for(npc.occupation) != "":
+			farmers += 1
+	assert_gt(farmers, 0, "dry land is worked by somebody who works the ground")
+
+
+## Conscription comes off the END of the roster, so a village's founders are
+## exactly who they rolled except for the ones demand really needed.
+func test_conscription_leaves_the_earlier_founders_exactly_as_they_rolled():
+	var coord := Vector2i(651, 169)
+	var plain := generator.generate_settlement(coord, coord * CHUNK_SIZE, CHUNK_SIZE, TILE_SIZE)
+	var needed: int = SettlementFoodDemand.producers_needed(plain.npcs.size())
+	var untouched: int = plain.npcs.size() - needed
+	var rolled := generator.generate_settlement(coord, coord * CHUNK_SIZE, CHUNK_SIZE, TILE_SIZE)
+	for i in untouched:
+		assert_eq(plain.npcs[i].occupation, rolled.npcs[i].occupation, "villager %d" % i)
+
+
 # -- every village has somebody who farms -----------------------------------
 
 const VillageFarm = preload("res://src/gameplay/village_farm.gd")
@@ -189,19 +312,20 @@ const VillageFarm = preload("res://src/gameplay/village_farm.gd")
 ## five villagers miss both farmer and herbalist often enough that two of
 ## three founded villages had neither.
 ##
-## A pre-industrial village that nobody farms in is not a village; it is what
-## the surrounding fields are FOR. So a roster that rolled no food producer
-## gets one.
-func test_every_village_has_somebody_who_farms():
+## A pre-industrial village that nobody feeds is not a village. The
+## guarantee is "somebody FEEDS it" now rather than "somebody FARMS it" --
+## a fisher with a stocked pond feeds a village too, and on land with real
+## water they are who the demand rule picks. With no region to read, that
+## falls back to farming, which is what this samples.
+func test_every_village_has_somebody_who_feeds_it():
 	var checked := 0
 	for i in 40:
 		var coord := Vector2i(600 + i, 140 + (i % 7))
 		var settlement := generator.generate_settlement(coord, coord * CHUNK_SIZE, CHUNK_SIZE, TILE_SIZE)
-		var farmers := 0
-		for npc in settlement.npcs:
-			if VillageFarm.crop_for(npc.occupation) != "":
-				farmers += 1
-		assert_gt(farmers, 0, "the village at %s has nobody who farms" % str(coord))
+		assert_gt(
+			_food_producers(settlement.npcs), 0,
+			"the village at %s has nobody who feeds it" % str(coord)
+		)
 		checked += 1
 	assert_eq(checked, 40, "precondition: every sampled chunk really produced a roster")
 

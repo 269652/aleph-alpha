@@ -186,6 +186,38 @@ hunt in the game. Deliberately not attempted here.
 assessment against a draw of 6, no amount of foraging feeds five households
 — and that is correct. A real worked farmhouse yields ~225 per work block,
 about 7.5 per assessment, which covers six. That is the number the founding
-roster has to reason about, not the drip.
+roster reasons about, not the drip.
+
+## The roster, finally driven by demand
+
+`SettlementFoodDemand` (deliberately not `SettlementDemand`, which is City
+Hall's own recipe-graph step and has nothing to do with food):
+
+- **How many.** `producers_needed(household_count)` is the village's own
+  subsistence draw over what one producer's real work brings in
+  (`VillageFarm.FIELD_YIELD_PER_WORK_BLOCK`, measured by a real villager
+  over a real field, not described in a comment). A founding five needs
+  **one** — the old hardcode's answer, for the first time for a reason —
+  and a village that outgrows one field needs a second.
+- **Which trade.** `trade_for(region)` is whichever of farmer, herbalist,
+  fisher and hunter yields most *here* — only askable at all because the
+  three are finally the same kind of number. Land with real water is worked
+  by a **fisher**, who digs and stocks a pond; ordinary grassland by a
+  **farmer**, who raises a farmhouse. A hunter never wins, for the measured
+  reason above.
+- **Which villagers.** Conscription comes off the END of the roster and
+  only takes villagers who are not already feeding the village, so it stays
+  deterministic per chunk and leaves the earlier founders exactly as they
+  rolled.
+
+The region every caller reads is the **seeded** one
+(`EarthChunkManager.seeded_region_for_chunk`), a pure function of terrain:
+the village is founded with the same roster on every visit, and the live
+ecology cannot make a roster drift with the weather.
+
+🚧 **A village founded before this keeps its buildings but not its roster.**
+Buildings are persisted and rosters are not, so an existing save's farmhouse
+may now belong to a village whose food producer the land made a fisher.
+Nothing repairs that; the next farmhouse the village raises will match.
 - 🚧 **A household is assumed to be one villager.** True today by
   construction, and nothing enforces it.

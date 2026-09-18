@@ -418,6 +418,30 @@ func test_a_field_of_the_capped_size_really_produces_over_a_work_block():
 	)
 
 
+## What a worked field REALLY yields, measured rather than described.
+##
+## This number had only ever lived in a doc comment ("~215 wheat per work
+## block"), and the founding roster now has to reason about it: a village
+## lives on real work, not on the ambient drip, so "how many food producers
+## does this village need" is its own draw divided by THIS
+## (SettlementDemand, docs/concept/settlement_food_calibration.md).
+## VillageFarm.FIELD_YIELD_PER_WORK_BLOCK is that number, and this is the
+## measurement that holds it there.
+func test_a_capped_fields_yield_per_work_block_is_what_the_roster_is_told_it_is():
+	assert_almost_eq(
+		_wheat_off_a_field(VillageFarm.MAX_WORKED_CELLS),
+		VillageFarm.FIELD_YIELD_PER_WORK_BLOCK,
+		VillageFarm.FIELD_YIELD_PER_WORK_BLOCK * 0.1,
+		"a roster sized against a yield the field does not really have is sized against nothing"
+	)
+
+
+## ...and the work block it is measured over is the one a villager really
+## works, so the two cannot drift.
+func test_the_work_block_the_yield_is_measured_over_is_the_real_one():
+	assert_almost_eq(VillageFarm.WORK_BLOCK_SECONDS, WORK_BLOCK_SECONDS, 0.001)
+
+
 ## The cap is a design limit that was asked for (first "capped to 10
 ## tiles", then the shape inside it: "a 2x3 or 3x2 area"), not a measured
 ## cliff any more -- watering the beds around the one being

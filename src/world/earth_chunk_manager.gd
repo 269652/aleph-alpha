@@ -4271,6 +4271,19 @@ var _settlement_seeded_region: Dictionary = {}
 ## pristine baseline the moment its chunk unloads, because there is no
 ## persisted per-region ecology for an unloaded chunk to read -- the same
 ## simplification EcosystemSimulation.remove_region already documents.
+## The same reading by CHUNK, for a caller that has a coordinate rather than
+## a settlement id -- chiefly the founding roster, which has to know what a
+## village's land feeds it with (SettlementDemand.trade_for) before that
+## village exists.
+##
+## Deliberately the SEEDED region and not the live one: it is a pure
+## function of terrain, so every caller gets the same answer whether or not
+## the chunk is loaded, and a village is founded with the same roster on
+## every visit. The live ecology would make a roster drift with the weather.
+func seeded_region_for_chunk(chunk_coord: Vector2i):
+	return _seeded_region_for(EntityRef.for_settlement(chunk_coord))
+
+
 func _seeded_region_for(settlement_id: String):
 	if _settlement_seeded_region.has(settlement_id):
 		return _settlement_seeded_region[settlement_id]
@@ -4770,7 +4783,8 @@ func _well_position_for_settlement(settlement_id: String) -> Vector2:
 	var chunk_coord := RegionalTrade.chunk_coord_of(settlement_id)
 	var settlement := _settlement_generator.generate_settlement(
 		chunk_coord, chunk_coord * CHUNK_SIZE, CHUNK_SIZE, TerrainRenderer.TILE_SIZE,
-		SettlementGenerator.POPULATION, _is_dry_local(chunk_coord)
+		SettlementGenerator.POPULATION, _is_dry_local(chunk_coord),
+		seeded_region_for_chunk(chunk_coord)
 	)
 	return settlement.landmarks.well
 
@@ -5589,7 +5603,7 @@ func _village_would_settle(chunk_coord: Vector2i) -> bool:
 	var is_dry := _is_dry_local(chunk_coord)
 	var settlement := _settlement_generator.generate_settlement(
 		chunk_coord, chunk_coord * CHUNK_SIZE, CHUNK_SIZE, TerrainRenderer.TILE_SIZE,
-		SettlementGenerator.POPULATION, is_dry
+		SettlementGenerator.POPULATION, is_dry, seeded_region_for_chunk(chunk_coord)
 	)
 	var building_ids: Array = SettlementGenerator.house_ids_for(chunk_coord, settlement.npcs)
 	var result: Dictionary = VillageLayout.new().layout(
@@ -5623,7 +5637,8 @@ func find_nearest_village(from_tile: Vector2i) -> Variant:
 		return null
 	var settlement := _settlement_generator.generate_settlement(
 		found_chunk, found_chunk * CHUNK_SIZE, CHUNK_SIZE, TerrainRenderer.TILE_SIZE,
-		SettlementGenerator.POPULATION, _is_dry_local(found_chunk)
+		SettlementGenerator.POPULATION, _is_dry_local(found_chunk),
+		seeded_region_for_chunk(found_chunk)
 	)
 	return settlement.landmarks.well
 

@@ -16,6 +16,7 @@ extends RefCounted
 ## not what gets built there.
 
 const VillageFarm = preload("res://src/gameplay/village_farm.gd")
+const SettlementFoodDemand = preload("res://src/emergence/settlement_food_demand.gd")
 const NpcIdentity = preload("res://src/world/npc_identity.gd")
 const VillageLayout = preload("res://src/world/village_layout.gd")
 const BuildingCatalog = preload("res://src/gameplay/building_catalog.gd")
@@ -29,9 +30,9 @@ const BuildingCatalog = preload("res://src/gameplay/building_catalog.gd")
 ## are (test-pinned, test_settlement_generator.gd).
 const POPULATION := 5
 
-## The trade a village falls back on when its roster rolled nobody who works
-## the land -- see _ensure_somebody_farms.
-const FARMING_TRADE := "farmer"
+## Which food trades exist, how many of them a village needs and which one
+## its land feeds it with all live in SettlementFoodDemand -- this module only
+## applies the answer to the roster.
 
 ## Roughly 1-in-this-many habitable chunks hosts a settlement -- sparse, so
 ## villages read as discoverable landmarks rather than carpeting the map.
@@ -80,9 +81,14 @@ func has_settlement_at(chunk_coord: Vector2i, dominant_biome: String) -> bool:
 ## settlement's REAL household count (VillageRenderer, off
 ## EarthChunkManager.household_count_for_settlement) passes that instead,
 ## so a village that has taken households in generates them too.
+## `region` is what the village's own land is standing on -- anything
+## exposing NpcProduction's three world accessors (the live world, or a
+## SettlementGranary.SeededRegion). It decides which food trade the roster
+## is staffed with; omitting it falls back to farming, so every caller that
+## predates this keeps a roster it can still feed.
 func generate_settlement(
 	chunk_coord: Vector2i, chunk_origin_tiles: Vector2i, chunk_size: int, tile_size: int,
-	population: int = POPULATION, is_dry := Callable()
+	population: int = POPULATION, is_dry := Callable(), region = null
 ) -> Dictionary:
 	# The well, stall and gate stand where the village's own street plan
 	# puts them -- on the plaza, at the street's entrance (see
@@ -110,32 +116,48 @@ func generate_settlement(
 		npcs.append(NpcIdentity.new(seed_value))
 		house_positions.append(_house_position(chunk_coord, center_pos, tile_size, i))
 
-	_ensure_somebody_farms(npcs)
+	_staff_food_producers(npcs, region)
 
 	return {"house_positions": house_positions, "landmarks": landmarks, "npcs": npcs}
 
 
-## A village that nobody farms in is not a village -- the fields around it
-## are what it is FOR.
+## Staffs this roster with as many food producers as the village's own
+## DEMAND asks for, in the trade its own LAND feeds it with.
 ##
-## Occupations are drawn uniformly from nine, so five villagers miss both
-## farmer and herbalist often. Measured on real settlement chunks
-## (tools/probe_village_contents.gd): two of three founded villages had
-## neither, which is what "No Farmhouses" actually was. The farmhouse siting
-## was working the whole time -- every village that wanted one and could be
-## founded got exactly one; there was simply nobody to want it.
+## Asked for directly: *"Make it driven by demand."* What this replaced was
+## "if nobody in this roster farms, make the last one a farmer" -- exactly
+## one food producer, whatever the village's size and whatever it was
+## standing on. That rule came from a real report ("No Farmhouses":
+## occupations are drawn uniformly from nine, so five villagers missed both
+## farmer and herbalist in two of three founded villages) and it fixed that,
+## but it could not grow with a village and it could not tell a lakeside
+## from a meadow.
 ##
-## Only a roster that rolled NO food producer is touched, and it is always
-## the LAST villager who takes up farming, so this is deterministic per
-## chunk and leaves every earlier villager exactly as they rolled.
-static func _ensure_somebody_farms(npcs: Array) -> void:
+## Both halves are SettlementFoodDemand's, and neither could be written until
+## the food model's two sides had been measured against each other -- see
+## docs/concept/settlement_food_calibration.md, which is also where the
+## honest gaps live.
+##
+## Conscription comes off the END of the roster and only takes villagers who
+## are not already feeding the village, so it is deterministic per chunk and
+## leaves the earlier founders exactly as they rolled.
+static func _staff_food_producers(npcs: Array, region) -> void:
 	if npcs.is_empty():
 		return
+	var needed := SettlementFoodDemand.producers_needed(npcs.size())
+	var have := 0
 	for npc in npcs:
-		if VillageFarm.crop_for(npc.occupation) != "":
-			return
-	var last: int = npcs.size() - 1
-	npcs[last] = NpcIdentity.new(npcs[last].seed_value, FARMING_TRADE)
+		if SettlementFoodDemand.FOOD_TRADES.has(npc.occupation):
+			have += 1
+	if have >= needed:
+		return
+	var trade := SettlementFoodDemand.trade_for(region)
+	var index: int = npcs.size() - 1
+	while have < needed and index >= 0:
+		if not SettlementFoodDemand.FOOD_TRADES.has(npcs[index].occupation):
+			npcs[index] = NpcIdentity.new(npcs[index].seed_value, trade)
+			have += 1
+		index -= 1
 
 
 ## A ring position with a small deterministic per-house radius/angle jitter
