@@ -533,6 +533,56 @@ func test_a_harvest_is_not_sold_before_it_is_carried():
 	assert_eq(_market_stock("wheat"), 0.0, "the village was credited at the scythe")
 
 
+# -- the store is where the goods really are (Mechanism 7) -----------------
+#
+# Reported in play: "The FarmHouse seems to be harvesting something but none
+# of it makes it into storage... it's always 0". The farmer carried the WHOLE
+# shelf into the abstract ledger at the end of every work block, so a
+# farmhouse you clicked was empty, a store you clicked was empty, and the
+# carter arrived at a shelf somebody had already emptied into thin air.
+
+
+## With a store in the village, the shelf is the carter's to empty: the
+## farmer leaves it alone.
+func test_a_farmer_in_a_village_with_a_store_leaves_the_shelf_for_the_carter():
+	var farmhouse := Vector2i(10, 10)
+	var bed := Vector2i(11, 12)
+	marker.warehouse_position = Vector2(400.0, 400.0)  # this village has a store
+	marker.stock_building_cell = farmhouse
+	marker.field_cells = [bed]
+	_ready_bed(marker, bed)
+	marker._field_index = 0
+	marker._work_field_cell()
+	var grown: int = world.stock_at(farmhouse, "wheat")
+	assert_gt(grown, 0, "precondition: something was really cut")
+
+	marker.haul_stock_to_village()
+
+	assert_eq(world.stock_at(farmhouse, "wheat"), grown, "the shelf is still holding it")
+	assert_eq(_market_stock("wheat"), 0.0, "and nothing was conjured into the ledger")
+
+
+## And they are paid for the work anyway -- at the scythe, which is when they
+## did it.
+func test_a_farmer_is_paid_at_the_scythe_even_when_the_shelf_stays_full():
+	var bed := Vector2i(11, 12)
+	marker.warehouse_position = Vector2(400.0, 400.0)
+	marker.stock_building_cell = Vector2i(10, 10)
+	marker.field_cells = [bed]
+	_ready_bed(marker, bed)
+	var purse_before: int = marker.economy.wallet.balance
+	var village_before: float = marker.economy.purse_of(market)
+
+	marker._field_index = 0
+	marker._work_field_cell()
+
+	assert_gt(
+		float(marker.economy.wallet.balance) + marker.economy.purse_of(market),
+		float(purse_before) + village_before,
+		"the work was paid for"
+	)
+
+
 func test_the_farmhouse_stock_is_carried_into_the_villages_own_stock():
 	var farmhouse := Vector2i(10, 10)
 	var bed := Vector2i(11, 12)

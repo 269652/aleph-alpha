@@ -18,6 +18,7 @@ const VillageMarket = preload("res://src/world/village_market.gd")
 const VillageCart = preload("res://src/gameplay/village_cart.gd")
 const CartMarker = preload("res://src/rendering/cart_marker.gd")
 const CartLoad = preload("res://src/gameplay/cart_load.gd")
+const NpcProduction = preload("res://src/world/npc_production.gd")
 
 const TILE_SIZE := 16
 
@@ -313,3 +314,36 @@ func test_an_off_duty_carter_lets_the_wagon_go():
 	_run(10.0)
 
 	assert_null(cart.held_by, "a parked wagon is free for whoever needs it next")
+
+
+# -- the delivery is what credits the village (Mechanism 7) -----------------
+#
+# Reported in play: "The FarmHouse seems to be harvesting something but none
+# of it makes it into storage... it's always 0". The producer is paid at
+# their own scythe; the village's sellable stock is credited at the moment
+# the goods really reach the store.
+
+
+func test_delivering_a_load_credits_the_villages_own_stock():
+	world.deposit_to_structure_at(MILL_CELL.x, MILL_CELL.y, "beam", 8)
+	var market: VillageMarket = marker.economy.market
+	assert_eq(float(market.stock.get("beam", 0.0)), 0.0, "precondition: the village has none yet")
+
+	for i in 3000:
+		marker._process(0.1)
+		if world.structure_stock_at(STORE_CELL.x, STORE_CELL.y, "beam") > 0:
+			break
+
+	assert_eq(
+		float(market.stock.get("beam", 0.0)), 8.0,
+		"the village can sell what really arrived, and only that"
+	)
+
+
+## Once, not twice: the goods are counted when they land, and a shelf the
+## carter has already emptied has nothing left to count.
+func test_a_load_is_credited_once_however_long_the_round_runs():
+	world.deposit_to_structure_at(MILL_CELL.x, MILL_CELL.y, "beam", 8)
+	var market: VillageMarket = marker.economy.market
+	_run(400.0)
+	assert_eq(float(market.stock.get("beam", 0.0)), 8.0, "eight beams, counted eight times over")

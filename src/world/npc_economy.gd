@@ -252,7 +252,35 @@ func record_real_harvest(item_id: String, count: int) -> void:
 	if count <= 0 or item_id == "":
 		return
 	_stock(item_id, float(count))
+	record_harvest_wage(item_id, count)
+
+
+## The PAY half of record_real_harvest, without the stocking.
+##
+## For a producer whose village has a real store (docs/concept/
+## village_warehouse.md, Mechanism 7): the crop stays on their own shelf for
+## the carter to fetch, so the village's sellable stock is credited when the
+## goods really ARRIVE there, not at the scythe. The villager is still paid
+## at the scythe, for exactly the same amount and at exactly the same moment
+## -- they did the work, and the pay is for the work.
+##
+## Deliberately the same arithmetic as above rather than a second rate: if
+## these could differ, a village with a store would pay its farmers
+## differently from one without, which nothing in the design asks for.
+func record_harvest_wage(item_id: String, count: int) -> void:
+	if count <= 0 or item_id == "":
+		return
 	_earn(float(count) * float(NpcProduction.YIELD_TO_GOLD_RATE))
+
+
+## The STOCKING half, without the pay -- what a delivery into the village's
+## own store is worth to the village (Mechanism 7). The producer was already
+## paid at the scythe; this is the moment the goods become something the
+## village can sell.
+func record_delivered_goods(item_id: String, count: int) -> void:
+	if count <= 0 or item_id == "":
+		return
+	_stock(item_id, float(count))
 
 
 ## Credits `count` units of something a real take produced ALONGSIDE the

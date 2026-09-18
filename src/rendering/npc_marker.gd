@@ -1354,9 +1354,26 @@ func _store_harvest(crop_id: String, count: int) -> void:
 		and _world.has_method("deposit_to_structure_at")
 	):
 		_world.deposit_to_structure_at(stock_building_cell.x, stock_building_cell.y, crop_id, count)
+		# Paid at the scythe when the village has a store to cart it to
+		# (docs/concept/village_warehouse.md, Mechanism 7): the crop stays
+		# on this shelf for the carter, so the village is credited when the
+		# goods really arrive there rather than here. The same pay, at the
+		# same moment, either way -- what moved is where the goods are.
+		if economy != null and _village_has_a_store():
+			economy.record_harvest_wage(crop_id, count)
 		return
 	if economy != null:
 		economy.record_real_harvest(crop_id, count)
+
+
+## Whether this villager's village really has a store to cart goods to.
+##
+## VillageRenderer hands every villager the door of the store that really
+## STANDS in their chunk (null for a site too cramped to raise one, pillar
+## 1's caveat), so a villager can tell which world they are in without
+## asking anybody.
+func _village_has_a_store() -> bool:
+	return warehouse_position != null
 
 
 ## How long a fisher works one cast before it lands a fish. Not a fresh
@@ -1447,6 +1464,14 @@ func _work_pond() -> void:
 ## answer -- the same fail-open shape every other world hook here uses.
 func haul_stock_to_village() -> void:
 	if stock_building_cell == NO_STOCK_BUILDING or economy == null or _world == null:
+		return
+	# A village with a store leaves its shelves to the carter (docs/concept/
+	# village_warehouse.md, Mechanism 7). Carrying the whole shelf into the
+	# abstract ledger at the end of every work block is exactly what made a
+	# farmhouse you clicked empty, a store you clicked empty, and the
+	# carter's round pointless: *"The FarmHouse seems to be harvesting
+	# something but none of it makes it into storage... it's always 0"*.
+	if _village_has_a_store():
 		return
 	if not _world.has_method("withdraw_from_structure_at"):
 		return
@@ -1634,7 +1659,14 @@ func _unload_the_cart() -> void:
 		return
 	var unloaded: Dictionary = cart.unload_all()
 	for item_id in unloaded:
-		_world.deposit_to_structure_at(store_cell.x, store_cell.y, String(item_id), int(unloaded[item_id]))
+		var delivered := int(unloaded[item_id])
+		_world.deposit_to_structure_at(store_cell.x, store_cell.y, String(item_id), delivered)
+		# The village's sellable stock is credited HERE, at the moment the
+		# goods really reach the store (docs/concept/village_warehouse.md,
+		# Mechanism 7) -- once, for a pile that exists. The producer was
+		# already paid at their own scythe.
+		if economy != null:
+			economy.record_delivered_goods(String(item_id), delivered)
 
 
 ## The nearest real thing this villager may take right now, or null.
