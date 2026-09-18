@@ -13945,12 +13945,22 @@ func _free_warehouse_porters_in_chunk(chunk_coord: Vector2i) -> void:
 	_warehouse_porters.erase(chunk_coord)
 
 
+## free(), not queue_free(): every other unload path in this file frees its
+## nodes outright (the building nodes just above, the construction sites
+## just below), and a queued node goes on processing until the frame ends.
+##
+## Measured with tools/probe_node_growth.gd after the framerate was reported
+## falling from 60-100 to 20: loading and unloading the same three real
+## chunks over and over left one more porter and one more cart alive on
+## every single cycle, while every other class returned to where it started.
+## A village the player walks in and out of was leaving a porter and a wagon
+## behind each time, each of them still running _process.
 func _free_porter(by_producer: Dictionary, producer_origin: Vector2i) -> void:
 	var porter = by_producer.get(producer_origin)
 	if porter != null and is_instance_valid(porter):
 		if porter.cart != null and is_instance_valid(porter.cart):
-			porter.cart.queue_free()
-		porter.queue_free()
+			porter.cart.free()
+		porter.free()
 	by_producer.erase(producer_origin)
 
 

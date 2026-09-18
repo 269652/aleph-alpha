@@ -183,13 +183,45 @@ func test_a_restored_village_binds_its_porter_again():
 	assert_eq(_porters().size(), 1, "the store employs its porter again on the next visit")
 
 
+## Freed OUTRIGHT, not queued. Measured with tools/probe_node_growth.gd
+## after the framerate was reported falling from 60-100 to 20: loading and
+## unloading the same three real chunks over and over left one more porter
+## and one more cart alive on every single cycle, while every other class
+## returned to where it started. A queue_free leaves a node processing until
+## the frame ends, which is what every other unload path in this file avoids
+## by calling free() -- and a village the player walks in and out of leaves
+## one behind each time.
 func test_a_porter_does_not_outlive_the_chunk_it_works_in():
 	manager.place_building(_chunk_coord, _store_origin, "warehouse")
 	manager.place_building(_chunk_coord, _mill_origin, "sawmill")
+	assert_eq(_live_nodes().size(), 2, "precondition: a porter and its cart")
 
 	manager._unload_chunk(_chunk_coord)
 
-	assert_eq(_porters().size(), 0, "a porter is not left walking a chunk that is gone")
+	assert_eq(_live_nodes().size(), 0, "nothing is left walking a chunk that is gone")
+
+
+## Every porter and cart still alive under the entities parent, queued for
+## deletion or not -- the count the probe watched climb.
+func _live_nodes() -> Array:
+	var out: Array = []
+	for node in entities_parent.get_children():
+		if node is LogisticsMarker or node is CartMarker:
+			out.append(node)
+	return out
+
+
+## And the same for the whole round of load/unload the probe measured: a
+## village visited again and again leaves nothing behind.
+func test_visiting_a_village_again_and_again_leaves_nothing_behind():
+	manager.place_building(_chunk_coord, _store_origin, "warehouse")
+	manager.place_building(_chunk_coord, _mill_origin, "sawmill")
+
+	for i in 4:
+		manager._unload_chunk(_chunk_coord)
+		manager._load_chunk(_chunk_coord)
+
+	assert_eq(_live_nodes().size(), 2, "one porter and one cart, however many times it is visited")
 
 
 # -- the Bollerwagen ---------------------------------------------------------
