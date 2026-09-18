@@ -57,6 +57,21 @@ const ROW_BURNING := 3
 const ROW_RUINED := 4
 const CONSTRUCTION_STAGES := SHEET_COLUMNS
 
+## Sheets that are NOT eight columns wide.
+##
+## MEASURED off each sheet's own magenta divider lines
+## (tools/probe_building_lifecycle_sheet.gd): sawmill.png, warehouse.png,
+## city_hall.png, blacksmith.png and brewery.png are all eight, and
+## farmhouse.png is SIX. Its art is therefore on a 256px pitch, and reading
+## it at 192 cut 64px off every farmhouse -- rendered
+## (tools/probe_building_idle_crops.gd), the tree and the left-hand third of
+## the farmyard, with the house itself sitting off-centre in its own frame.
+##
+## Pinned by test_every_contract_sheet_is_read_with_the_column_count_its_
+## art_is_drawn_on, which reads each sheet's real columns rather than
+## trusting this table.
+const _SHEET_COLUMNS_BY_ID := {"farmhouse": 6}
+
 ## Per-id definition.
 ##   footprint        width x depth in tiles
 ##   interior_family  which InteriorTemplates family this building enters into
@@ -160,6 +175,12 @@ const HOUSE_POOL_BY_OCCUPATION := {
 	"guard": ["house_small", "house_medium"],
 	"herbalist": ["house_small", "house_medium", "house_medium"],
 	"hunter": ["house_small", "house_small", "house_medium"],
+	# A sawyer keeps a small working household, like the other trades worked
+	# out of doors. Added when test_every_occupation_has_a_pool_and_can_
+	# choose_more_than_one_house caught the gap: "lumberjack" reached
+	# NpcIdentity.OCCUPATIONS with the sawmill and never got a pool here, so
+	# every one of them fell through to the whole catalog.
+	"lumberjack": ["house_small", "house_small", "house_medium"],
 	"nurse": ["house_medium", "house_medium", "house_large"],
 	"blacksmith": ["house_medium", "house_medium", "house_large"],
 	"merchant": ["house_medium", "house_large", "house_large", "house_large"],
@@ -326,7 +347,7 @@ static func finished_sheet_chain(building_id: String, seed_value: int) -> Array:
 			"row": cell.y, "column": cell.x, "grid": "gutters",
 		})
 	chain.append({
-		"path": sheet_of(building_id), "columns": SHEET_COLUMNS, "rows": SHEET_ROWS,
+		"path": sheet_of(building_id), "columns": sheet_columns_of(building_id), "rows": SHEET_ROWS,
 		"row": ROW_IDLE, "column": 0, "grid": "even",
 	})
 	return chain
@@ -359,8 +380,8 @@ static func construction_sheet_chain(building_id: String, seed_value: int, progr
 			"row": cell.y, "column": cell.x, "grid": "dividers",
 		})
 	chain.append({
-		"path": sheet_of(building_id), "columns": SHEET_COLUMNS, "rows": SHEET_ROWS,
-		"row": ROW_CONSTRUCTION, "column": construction_stage_for(progress), "grid": "even",
+		"path": sheet_of(building_id), "columns": sheet_columns_of(building_id), "rows": SHEET_ROWS,
+		"row": ROW_CONSTRUCTION, "column": construction_stage_for(progress, building_id), "grid": "even",
 	})
 	return chain
 
@@ -379,12 +400,24 @@ static func sheet_of(building_id: String) -> String:
 	return "res://assets/sprites/buildings/%s.png" % building_id
 
 
+## How many columns this building's own contract sheet really has -- eight
+## for every sheet but farmhouse.png's six (see _SHEET_COLUMNS_BY_ID).
+static func sheet_columns_of(building_id: String) -> int:
+	return _SHEET_COLUMNS_BY_ID.get(building_id, SHEET_COLUMNS)
+
+
 ## The construction row's stage column for a project `progress` in [0, 1]
 ## -- the sheet contract's own formula (docs/concept/building.md "Building
 ## sheets": clampi(floori(progress * 8), 0, 7)), so a rising building
 ## shows scaffold at 0 and the roofed shell just before it completes.
-static func construction_stage_for(progress: float) -> int:
-	return clampi(floori(progress * CONSTRUCTION_STAGES), 0, CONSTRUCTION_STAGES - 1)
+## `building_id` names the sheet, because a sheet with fewer columns has
+## fewer stages -- farmhouse.png's six, not the eight every other one has,
+## and eight stages read off six cells would walk two of them off the end of
+## the row. Omitting it keeps the contract's own eight, for a caller that
+## only means "the eight-stage row".
+static func construction_stage_for(progress: float, building_id: String = "") -> int:
+	var stages := sheet_columns_of(building_id) if building_id != "" else CONSTRUCTION_STAGES
+	return clampi(floori(progress * stages), 0, stages - 1)
 
 
 static func interior_family_of(building_id: String) -> String:

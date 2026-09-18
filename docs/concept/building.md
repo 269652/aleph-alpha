@@ -351,6 +351,23 @@ construction ×8 (scaffold → shell → roof, left to right), 1 active ×8 (lit
 windows / chimney smoke loop), 2 idle ×8 (loop or repeats), 3 burning ×8,
 4 ruined ×8.
 
+> **…but not every sheet is eight columns.** Reported live with two
+> buildings in shot: *"There are still two buildings with wrong crops …
+> Please fix the slicer."* The mill and the store were the ones the grid and
+> the inset below fixed; the **farmhouse** was a different fault in the same
+> place. Measured off each sheet's own magenta dividers
+> (`tools/probe_building_lifecycle_sheet.gd`): `sawmill.png` 8×~143px,
+> `warehouse.png` 8×~146px, `city_hall.png` 8×~189px, `blacksmith.png`
+> 8×~189px, `brewery.png` 8×~190px — and **`farmhouse.png` SIX** ×~182px.
+> Its art is on a 256px pitch, so reading it at 192 cut 64px off every
+> farmhouse: rendered (`tools/probe_building_idle_crops.gd`), the tree and
+> the left-hand third of the farmyard, with the house sitting off-centre in
+> its own frame. `BuildingCatalog.sheet_columns_of` carries the exception,
+> `construction_stage_for` takes the building id so a six-column sheet has
+> six stages rather than eight, and
+> `test_every_contract_sheet_is_read_with_the_column_count_its_art_is_drawn_on`
+> reads every sheet's real columns rather than trusting the table.
+
 > **Columns are on a pitch. Rows are not.** (Corrected 2026-09-17, twice —
 > the second correction is the one that measured instead of assuming.)
 > Reported live: *"the warehouse has the rows cropped wrongly."*

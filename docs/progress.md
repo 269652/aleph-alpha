@@ -25546,3 +25546,60 @@ identically:
 
 The parse error in `test_earth_chunk_manager_far_chunk_advance.gd` reported
 earlier is gone — `main`'s own `956590a` fixed that test double.
+
+## farmhouse.png is six columns, not eight (`concept/building.md`, 2026-09-18)
+
+Reported live with two buildings in shot: *"There are still two buildings
+with wrong crops ... Please fix the slicer"*.
+
+A concurrent session had already landed the bigger half of this on `main` —
+the 192px column grid, rows read off the art rather than off the canvas, and
+a measured inset for the near-white rule line. Rendered with
+`tools/probe_building_idle_crops.gd`, five of the six buildings come out
+clean under it. **The farmhouse does not**, and it is a different fault in
+the same place.
+
+Measured off each sheet's own magenta divider lines
+(`tools/probe_building_lifecycle_sheet.gd`, extended here to the 8×5
+contract sheets):
+
+```
+sawmill.png    8 columns of ~143px   warehouse.png  8 columns of ~146px
+city_hall.png  8 columns of ~189px   blacksmith.png 8 columns of ~189px
+brewery.png    8 columns of ~190px   farmhouse.png  6 columns of ~182px
+```
+
+✅ **`BuildingCatalog.sheet_columns_of`** carries the exception.
+`farmhouse.png`'s art is on a 256px pitch, so reading it at 192 cut 64px off
+every farmhouse — the tree and the left-hand third of the farmyard, with the
+house itself sitting off-centre in its own frame. Verified by re-rendering:
+250px wide now, the whole scene in frame.
+
+✅ **`construction_stage_for` takes the building id**, so a six-column sheet
+has six construction stages rather than eight — eight stages read off six
+cells would walk two of them off the end of the row.
+
+✅ **The cross-pin** reads every sheet's REAL columns
+(`VariantSheetGrid.divider_bands`) rather than trusting the table, so a new
+sheet drawn on a different pitch fails in
+`test_every_contract_sheet_is_read_with_the_column_count_its_art_is_drawn_on`
+rather than in somebody's screenshot.
+
+Two failures traced to `main` are fixed here, one line each, because they
+sit in the files being edited:
+
+- `test_every_occupation_has_a_pool_and_can_choose_more_than_one_house` —
+  `lumberjack` reached `NpcIdentity.OCCUPATIONS` with the sawmill and never
+  got a `HOUSE_POOL_BY_OCCUPATION` entry, so every one of them fell through
+  to the whole catalog.
+- `test_community_is_exactly_how_much_of_the_ladder_stands` named
+  `["sawmill", "city_hall", "warehouse"]` as "half the ladder" and stopped
+  being half the moment the warehouse left it. It derives the half from
+  `VillageGrowth.LADDER_BUILDING_IDS` now, so it cannot rot again.
+
+The warehouse's three-tile width was asked for in the same message and had
+already landed on `main` from the other session; nothing here changes it.
+
+Tests: `test_structure_sheet_cells.gd` 19/19 (+3),
+`test_building_catalog.gd`, `test_household_wellbeing.gd`,
+`test_illustrated_structure_sprite.gd` — 131/131 across the four.

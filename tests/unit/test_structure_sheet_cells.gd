@@ -212,3 +212,84 @@ func test_four_tiles_would_have_drawn_it_a_third_wider():
 		_TILE, 4, entry["grid"]
 	)
 	assert_almost_eq(float(four.get_width()) / float(three.get_width()), 4.0 / 3.0, 0.01)
+
+
+# -- a sheet is read with the column count its own art is drawn on ---------
+#
+# Reported live with the sawmill and the warehouse in shot: "There are still
+# two buildings with wrong crops ... Please fix the slicer." Those two are
+# right now (see the grid and inset above). The FARMHOUSE still is not, and
+# it is a different fault in the same place.
+#
+# MEASURED off the sheets' own magenta divider lines
+# (tools/probe_building_lifecycle_sheet.gd):
+#
+#   sawmill.png    8 columns of ~143px   warehouse.png  8 columns of ~146px
+#   city_hall.png  8 columns of ~189px   blacksmith.png 8 columns of ~189px
+#   brewery.png    8 columns of ~190px   farmhouse.png  6 columns of ~182px
+#
+# farmhouse.png is SIX columns wide, not the eight every other contract
+# sheet uses -- so its art is on a 256px pitch and reading it at 192 cuts
+# 64px off every farmhouse. Rendered (tools/probe_building_idle_crops.gd),
+# that is the tree and the left-hand third of the farmyard gone, with the
+# house itself sitting off-centre in its own frame.
+
+const SheetGrid = preload("res://src/rendering/variant_sheet_grid.gd")
+const SheetLoader = preload("res://src/rendering/sprite_sheet_loader.gd")
+
+
+func _every_building_id() -> Array:
+	var ids: Array = []
+	ids.append_array(BuildingCatalog.BUILDING_IDS)
+	ids.append_array(BuildingCatalog.CIVIC_BUILDING_IDS)
+	ids.append_array(BuildingCatalog.PRODUCTION_BUILDING_IDS)
+	return ids
+
+
+func _sheet_image(path: String):
+	var image: Image = SheetLoader.load_image(path)
+	if image == null:
+		return null
+	if image.get_format() != Image.FORMAT_RGBA8:
+		image.convert(Image.FORMAT_RGBA8)
+	return image
+
+
+## The cross-pin, driven off each sheet's own drawn columns rather than a
+## hand-copied list: a sheet drawn on a different pitch than the one it is
+## read at fails HERE, not in somebody's screenshot.
+func test_every_contract_sheet_is_read_with_the_column_count_its_art_is_drawn_on():
+	for building_id in _every_building_id():
+		var path: String = BuildingCatalog.sheet_of(building_id)
+		var image = _sheet_image(path)
+		if image == null:
+			continue  # not on disk -- the renderer's own fallback chain covers that
+		var drawn: int = SheetGrid.divider_bands(image, false).size()
+		assert_eq(
+			BuildingCatalog.sheet_columns_of(building_id), drawn,
+			"%s is drawn in %d columns" % [path.get_file(), drawn]
+		)
+
+
+## ...and the finished cell really is taken at that pitch, so the count is
+## wired through rather than merely declared.
+func test_a_farmhouses_cell_is_taken_at_its_own_sheets_pitch():
+	var entry: Dictionary = BuildingCatalog.finished_sheet_for("farmhouse", 1)
+	assert_eq(int(entry["columns"]), 6, "farmhouse.png is six columns wide")
+	var rect: Rect2i = IllustratedStructureSprite.even_cell_rect(
+		REAL_SHEET_WIDTH, REAL_SHEET_HEIGHT, int(entry["columns"]), int(entry["rows"]), 0, 1
+	)
+	assert_eq(rect.position.x, 256, "the second column of six starts at 1536/6")
+
+
+## A sheet with fewer columns has fewer construction stages -- eight stages
+## read off six cells would walk two of them off the end of the row.
+func test_a_six_column_sheet_has_six_construction_stages():
+	assert_eq(BuildingCatalog.construction_stage_for(0.99, "farmhouse"), 5, "the last of six")
+	assert_eq(BuildingCatalog.construction_stage_for(0.99, "warehouse"), 7, "the last of eight")
+	for progress in [0.0, 0.2, 0.4, 0.6, 0.8, 1.0]:
+		assert_lt(
+			BuildingCatalog.construction_stage_for(progress, "farmhouse"),
+			BuildingCatalog.sheet_columns_of("farmhouse"),
+			"a stage must be a column the sheet really has"
+		)
