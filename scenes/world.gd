@@ -388,6 +388,10 @@ const INVENTORY_TOGGLE_ACTION := "toggle_inventory"
 const CRAFTING_TOGGLE_ACTION := "toggle_crafting"
 const QUEST_LOG_TOGGLE_ACTION := "toggle_quest_log"
 const SKILLS_TOGGLE_ACTION := "toggle_skills"
+## P for planner (docs/concept/planner_mode.md). The mode toggle used to be
+## the HUD button alone, and a focused Button answers ui_accept -- which is
+## Space, the attack key.
+const PLANNER_TOGGLE_ACTION := "toggle_planner"
 const SETTINGS_TOGGLE_ACTION := "toggle_settings"
 ## Not a *_TOGGLE_ACTION -- "talk" already exists (Keybindings, default G)
 ## for Player._talk_step's own bare NpcGreeting banner (docs/concept/npc.md's
@@ -3567,6 +3571,8 @@ func _unhandled_input(event: InputEvent) -> void:
 			# reach reports whether it found one, so nothing is swallowed.
 			if not _raise_plan_within_reach(talker):
 				_on_talk_pressed(talker)
+	elif event.is_action_pressed(PLANNER_TOGGLE_ACTION):
+		_toggle_view_mode()
 	elif event.is_action_pressed(SKILLS_TOGGLE_ACTION):
 		_skill_window.toggle()
 		var lp := _players.get_node_or_null(str(multiplayer.get_unique_id())) as Player
@@ -5267,6 +5273,12 @@ func _build_view_mode_toggle() -> void:
 
 	_view_mode_button = Button.new()
 	_view_mode_button.theme = _ui_theme
+	# Never takes keyboard focus. A focused Button answers `ui_accept`, and
+	# ui_accept is Space -- which is the ATTACK key, so once this had been
+	# clicked every later Space press flipped the mode instead of swinging
+	# (reported live: "space now toggles between plann mode and rpg"). A HUD
+	# readout the mouse presses has no business holding the keyboard.
+	_view_mode_button.focus_mode = Control.FOCUS_NONE
 	_view_mode_button.pressed.connect(_toggle_view_mode)
 	panel.add_child(_view_mode_button)
 	_apply_view_mode()
