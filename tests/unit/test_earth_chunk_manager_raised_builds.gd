@@ -25,6 +25,7 @@ const ConstructionProject = preload("res://src/emergence/construction_project.gd
 const ConstructionLabor = preload("res://src/emergence/construction_labor.gd")
 const ConstructionCatchup = preload("res://src/world/construction_catchup.gd")
 const PlanRaising = preload("res://src/gameplay/plan_raising.gd")
+const ChunkEcologyCatchup = preload("res://src/world/chunk_ecology_catchup.gd")
 const CraftingRecipeBook = preload("res://src/gameplay/crafting_recipe_book.gd")
 
 const CHUNK_SIZE := EarthChunkManager.CHUNK_SIZE
@@ -83,13 +84,15 @@ func _global(local: Vector2i) -> Vector2i:
 	return _chunk_coord * CHUNK_SIZE + local
 
 
-## Real seconds of ONE builder's work that comfortably clear this
-## blueprint's own real requirement -- derived from the requirement and the
-## catch-up's own hours-per-builder-per-day rate rather than an eyeballed
+## Real seconds of ONE builder's work this blueprint's own requirement asks
+## for -- derived from the requirement and the rate rather than an eyeballed
 ## big number, so it cannot drift out of step with either.
+func _builder_days() -> float:
+	return ConstructionLabor.labor_hours_required(BLUEPRINT, _recipe_book) / ConstructionCatchup.HOURS_PER_BUILDER_PER_DAY
+
+
 func _seconds_to_finish() -> float:
-	var hours := ConstructionLabor.labor_hours_required(BLUEPRINT, _recipe_book)
-	return hours / ConstructionCatchup.HOURS_PER_BUILDER_PER_DAY * ConstructionCatchup.SECONDS_PER_DAY * 1.2
+	return _builder_days() * EarthChunkManager.SECONDS_PER_SIMULATED_DAY
 
 
 func _raise() -> ConstructionProject:
@@ -170,3 +173,53 @@ func test_finishing_a_pavement_build_really_lays_the_road():
 
 func test_finishing_a_build_that_was_never_opened_is_a_no_op():
 	assert_false(manager.finish_build_project("construction_project:nothing"))
+
+
+# -- a raised build runs on the game's own clock ---------------------------
+# Measured (tools/probe_raised_build.gd): a raised build inherited the
+# ecology catch-up's own day/second rate, where one in-game HOUR of absence
+# is one ecological day -- deliberate LOD for integrating vegetation and
+# herds over an unloaded chunk, and 60x the day the player actually lives
+# in. A small house is 2.25 builder-days, so at that rate the player stands
+# at their own site for 8100 real seconds before anything finishes, and
+# somebody who just paid a villager's wage watches nothing happen for two
+# and a quarter hours. That is indistinguishable from the build being
+# broken, which is exactly how it was reported.
+
+func test_a_raised_build_is_worked_in_the_games_own_days():
+	var project := _raise()
+
+	manager.advance_hired_build(
+		project.id, _builder_days() * EarthChunkManager.SECONDS_PER_SIMULATED_DAY,
+		PlanRaising.HIRED_BUILDER_COUNT
+	)
+
+	assert_eq(
+		project.status, ConstructionProject.Status.COMPLETE,
+		"a builder's day is the game's own day -- the one the ecosystem step, the settlement step and the day/night cycle all already run on"
+	)
+
+
+## And not faster than that: the requirement is a real minimum-build-time
+## floor, so most of a build's days must still leave it unfinished.
+func test_most_of_the_work_still_leaves_it_unfinished():
+	var project := _raise()
+
+	manager.advance_hired_build(
+		project.id, _builder_days() * EarthChunkManager.SECONDS_PER_SIMULATED_DAY * 0.5,
+		PlanRaising.HIRED_BUILDER_COUNT
+	)
+
+	assert_eq(project.status, ConstructionProject.Status.IN_PROGRESS, "half the hours is half a house")
+
+
+## A village's own construction and the offscreen catch-up keep the ecology
+## rate they were tuned at -- the honest divergence named in
+## docs/concept/planner_mode.md. Pinned so it is a decision rather than a
+## drift: if the two ever have to agree, this test is what says so.
+func test_the_settlements_own_construction_keeps_the_catchup_rate():
+	assert_ne(
+		ConstructionCatchup.SECONDS_PER_DAY, EarthChunkManager.SECONDS_PER_SIMULATED_DAY,
+		"the premise: the two rates really are different"
+	)
+	assert_eq(ConstructionCatchup.SECONDS_PER_DAY, ChunkEcologyCatchup.SECONDS_PER_DAY)

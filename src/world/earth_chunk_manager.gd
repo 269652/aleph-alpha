@@ -17522,6 +17522,18 @@ func _restore_growing_juveniles(chunk_coord: Vector2i) -> void:
 ## in-game day), so a hired villager earns exactly what a settlement's own
 ## spare hand does rather than on a private schedule.
 ##
+## Worked in the GAME's own day (SECONDS_PER_SIMULATED_DAY), not the ecology
+## catch-up's LOD day. Measured (tools/probe_raised_build.gd): at the
+## catch-up rate a small house is 2.25 * 3600 = 8100 real seconds of one
+## builder's work, so a player standing at their own site, or one who has
+## just paid a villager's wage, watches nothing happen for two and a
+## quarter hours -- which is how "hiring a builder does not work" was
+## reported. A raised build is a thing the player is WATCHING, so it runs
+## on the clock the player lives in; the settlement's own construction and
+## the offscreen catch-up keep the rate they were tuned at (see
+## docs/concept/planner_mode.md for that divergence, stated rather than
+## silently reconciled).
+##
 ## This is what docs/concept/building.md means by retiring the instant hire
 ## fork: "a build the player cannot do themselves says that hiring returns
 ## with construction-over-time". A hired house is not spawned; it is worked.
@@ -17538,7 +17550,8 @@ func advance_hired_build(project_id: String, elapsed_seconds: float, builder_cou
 	if project == null:
 		return {"action": "no_op"}
 	var result: Dictionary = _construction_project_store.advance_project_labor(
-		project_id, elapsed_seconds, {"builder_count": builder_count}, _recipe_book, _household_store
+		project_id, elapsed_seconds, {"builder_count": builder_count}, _recipe_book, _household_store,
+		SECONDS_PER_SIMULATED_DAY
 	)
 	match result.get("action", ""):
 		"completed":

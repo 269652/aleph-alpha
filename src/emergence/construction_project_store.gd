@@ -77,8 +77,12 @@ func complete_project(project_id: String, household_store) -> bool:
 ## CraftingRecipeBook (for ConstructionLabor's own real requirement lookup).
 ## `household_store`: passed straight through to complete_project on
 ## completion.
+## `seconds_per_day` is how long a builder's day is in real seconds, passed
+## straight through to ConstructionCatchup.advance (see that function for
+## why the offscreen catch-up and a player-raised build disagree about it).
 func advance_project_labor(
-	project_id: String, elapsed_seconds: float, capacity: Dictionary, recipe_book, household_store
+	project_id: String, elapsed_seconds: float, capacity: Dictionary, recipe_book, household_store,
+	seconds_per_day: float = ConstructionCatchup.SECONDS_PER_DAY
 ) -> Dictionary:
 	var project: ConstructionProject = _projects.get(project_id)
 	if project == null or project.status != ConstructionProject.Status.IN_PROGRESS:
@@ -88,7 +92,8 @@ func advance_project_labor(
 	var caught_up := ConstructionCatchup.new().advance(
 		{"labor_hours_accumulated": project.labor_hours_accumulated, "labor_hours_required": required},
 		elapsed_seconds,
-		capacity
+		capacity,
+		seconds_per_day
 	)
 	project.labor_hours_accumulated = caught_up["labor_hours_accumulated"]
 

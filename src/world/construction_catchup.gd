@@ -76,9 +76,23 @@ const MAX_CATCHUP_DAYS := 120.0
 ## can never "overshoot" done, and elapsed time itself is capped at
 ## MAX_CATCHUP_DAYS worth of seconds so a huge unloaded duration is bounded
 ## arithmetic in one call rather than an unbounded loop.
-func advance(state: Dictionary, elapsed_seconds: float, capacity: Dictionary) -> Dictionary:
+##
+## `seconds_per_day` is how long a BUILDER's day is in real seconds, and it
+## is an argument because the two real callers genuinely disagree about it:
+## the offscreen catch-up integrates an absence at the ecology LOD rate
+## above (one in-game hour away is one day of progress, deliberately
+## conservative), while a build the PLAYER raised and is standing at runs on
+## the game's own day (EarthChunkManager.SECONDS_PER_SIMULATED_DAY, 60
+## seconds -- what the ecosystem step, the settlement step, the day/night
+## cycle and every colony already run on). Defaulting to the catch-up rate
+## keeps every existing caller exactly where it was; see docs/concept/
+## planner_mode.md for why the raise path does not.
+func advance(
+	state: Dictionary, elapsed_seconds: float, capacity: Dictionary,
+	seconds_per_day: float = SECONDS_PER_DAY
+) -> Dictionary:
 	var elapsed := maxf(0.0, elapsed_seconds)
-	var elapsed_days := minf(elapsed / SECONDS_PER_DAY, MAX_CATCHUP_DAYS)
+	var elapsed_days := minf(elapsed / maxf(seconds_per_day, 0.0001), MAX_CATCHUP_DAYS)
 
 	var labor_hours_accumulated: float = state.get("labor_hours_accumulated", 0.0)
 	var labor_hours_required: float = state.get("labor_hours_required", 0.0)
