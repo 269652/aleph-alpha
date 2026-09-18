@@ -32,12 +32,24 @@ const NpcProduction = preload("res://src/world/npc_production.gd")
 ## The trades that really feed a village, and where each of them does it:
 ## a farmer and a herbalist work a field their own farmhouse owns
 ## (village_farms.md), a fisher works a pond they dug themselves
-## (village_ponds.md), a hunter takes real game.
+## (village_ponds.md).
+##
+## A HUNTER IS DELIBERATELY NOT ONE, and that is a measurement rather than a
+## preference. Measured on real villages after this rule first landed
+## (tools/probe_village_contents.gd): the village at (657,145) rolled a
+## hunter and a fisher, was read as fed, and its farmhouse stood with nobody
+## to work it. A hunter brings in about 0.02 food units an assessment
+## against a draw of 6 -- a whole chunk supports roughly one deer, see the
+## concept doc's own honest gap about HERBIVORES_PER_VEGETATION_UNIT.
+## Counting one while sizing the roster against a FARMHOUSE's yield says a
+## village is fed when it is not, and brings back the "No Farmhouses" report
+## this whole line of work started from. Hunting stays a real occupation and
+## a real way to eat; it is not what a village is founded on.
 ##
 ## An Array rather than a lookup because the ORDER is the tie-break in
 ## trade_for below: where two trades yield the same, the earlier one wins,
 ## and a village that farms is the one this game is about.
-const FOOD_TRADES: Array[String] = ["farmer", "herbalist", "fisher", "hunter"]
+const FOOD_TRADES: Array[String] = ["farmer", "herbalist", "fisher"]
 
 ## The trade a village falls back on when its land says nothing -- barren
 ## ground, or no region to read at all. Farming, because a farmer can raise

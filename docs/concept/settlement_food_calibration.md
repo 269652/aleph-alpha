@@ -199,12 +199,21 @@ Hall's own recipe-graph step and has nothing to do with food):
   over a real field, not described in a comment). A founding five needs
   **one** — the old hardcode's answer, for the first time for a reason —
   and a village that outgrows one field needs a second.
-- **Which trade.** `trade_for(region)` is whichever of farmer, herbalist,
-  fisher and hunter yields most *here* — only askable at all because the
-  three are finally the same kind of number. Land with real water is worked
-  by a **fisher**, who digs and stocks a pond; ordinary grassland by a
-  **farmer**, who raises a farmhouse. A hunter never wins, for the measured
-  reason above.
+- **Which trade.** `trade_for(region)` is whichever of farmer, herbalist and
+  fisher yields most *here* — only askable at all because the three are
+  finally the same kind of number. Land with real water is worked by a
+  **fisher**, who digs and stocks a pond; ordinary grassland by a **farmer**,
+  who raises a farmhouse.
+- **A hunter is not one of them**, and that is a measurement rather than a
+  preference. Measured on real villages after this rule first landed
+  (`tools/probe_village_contents.gd`): the village at (657,145) rolled a
+  hunter and a fisher, was read as fed, and its farmhouse stood with
+  `wanted_by=0` — nobody to work it. A hunter brings in about **0.02** food
+  units an assessment against a draw of **6**. Counting one while sizing the
+  roster against a *farmhouse's* yield says a village is fed when it is not,
+  and brings back the "No Farmhouses" report this whole line of work started
+  from. Hunting stays a real occupation and a real way to eat; it is not
+  what a village is founded on.
 - **Which villagers.** Conscription comes off the END of the roster and
   only takes villagers who are not already feeding the village, so it stays
   deterministic per chunk and leaves the earlier founders exactly as they

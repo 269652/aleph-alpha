@@ -128,3 +128,38 @@ func test_the_food_trades_are_the_ones_that_really_feed_a_village():
 			VillageFarm.crop_for(trade) != "" or trade in ["fisher", "hunter"],
 			"%s has to have somewhere to actually produce food" % trade
 		)
+
+
+## A trade only counts toward the demand if it can really MEET it.
+##
+## MEASURED on real villages after the rule first landed
+## (tools/probe_village_contents.gd): the village at (657,145) rolled a
+## hunter and a fisher, was therefore read as fed, and its farmhouse stood
+## with `wanted_by=0` -- nobody to work it. A hunter brings in about 0.02
+## food units an assessment against a draw of 6 (see the concept doc's own
+## measured table and its honest gap about HERBIVORES_PER_VEGETATION_UNIT:
+## a whole chunk supports roughly one deer). Counting one as a producer
+## while sizing the roster against a FARMHOUSE's yield says a village is fed
+## when it is not -- and brings back the "No Farmhouses" report this whole
+## line of work started from.
+##
+## So the trades that count are the ones with a real workplace that really
+## yields: a farmer and a herbalist work a field their farmhouse owns, a
+## fisher works a pond they dug. Hunting stays a real occupation and a real
+## way to eat; it is simply not what a village is founded on.
+func test_a_trade_only_counts_if_it_can_really_meet_the_demand_it_is_sized_against():
+	assert_false(
+		SettlementFoodDemand.FOOD_TRADES.has("hunter"),
+		"a hunter yields ~0.02 an assessment against a draw of 6 -- counting one says a village is fed when it is not"
+	)
+	for trade in SettlementFoodDemand.FOOD_TRADES:
+		assert_true(
+			VillageFarm.crop_for(trade) != "" or trade == "fisher",
+			"%s has to have a real workplace the village raises" % trade
+		)
+
+
+## ...and the land still never picks it either, for the same reason.
+func test_the_land_never_picks_a_trade_that_cannot_feed_the_village():
+	for fish in [0.0, 800.0]:
+		assert_ne(SettlementFoodDemand.trade_for(_region(0.15, 50.0, fish)), "hunter")
