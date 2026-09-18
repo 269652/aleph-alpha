@@ -1,5 +1,7 @@
 extends GutTest
 
+const NpcSchedule = preload("res://src/world/npc_schedule.gd")
+
 ## Capstone proof for docs/roadmap.md Phase 2's "Local executor: FSM +
 ## pathfinding that walks the schedule with zero LLM calls during normal
 ## execution" -- this slice's own stated minimum bar: a REAL NpcMarker,
@@ -98,6 +100,18 @@ func _hour_elapsed(hour: int) -> float:
 	return float(hour) * _REAL_SECONDS_PER_GAME_HOUR
 
 
+## The world time at which THIS villager's own hour is `hour`.
+##
+## A village does not turn as one any more (NpcSchedule.personal_hour):
+## every villager's day is shifted a little that is theirs alone, so a
+## checkpoint an hour from a block boundary lands in the next block for some
+## of them. Asking for the villager's own hour is what these tests always
+## meant -- "a guard at dusk" is a guard at THEIR dusk.
+func _hour_elapsed_for(marker, hour: int) -> float:
+	var seed_value: int = 0 if marker.identity == null else marker.identity.seed_value
+	return (float(hour) - NpcSchedule.shift_hours_for(seed_value)) * _REAL_SECONDS_PER_GAME_HOUR
+
+
 ## Advances real elapsed process time (tracked in `_elapsed`, mirroring
 ## NpcMarker's own private `_elapsed_time` 1:1 since every tick anywhere in
 ## this file goes through this one helper) up to `target_elapsed`.
@@ -137,10 +151,10 @@ func test_a_farmer_is_in_a_different_place_at_dawn_midday_and_dusk():
 	_advance_to(marker, _hour_elapsed(_DAWN_HOUR))
 	var dawn_position := marker.position
 
-	_advance_to(marker, _hour_elapsed(_MIDDAY_HOUR))
+	_advance_to(marker, _hour_elapsed_for(marker, _MIDDAY_HOUR))
 	var midday_position := marker.position
 
-	_advance_to(marker, _hour_elapsed(_DUSK_HOUR))
+	_advance_to(marker, _hour_elapsed_for(marker, _DUSK_HOUR))
 	var dusk_position := marker.position
 
 	assert_gt(dawn_position.distance_to(midday_position), 10.0, "dawn (home) and midday (field) should be different places")
@@ -165,7 +179,7 @@ func test_a_different_occupation_walks_to_a_different_midday_location():
 	var marker := _spawn()
 	marker.identity = identity
 
-	_advance_to(marker, _hour_elapsed(_MIDDAY_HOUR))
+	_advance_to(marker, _hour_elapsed_for(marker, _MIDDAY_HOUR))
 
 	assert_almost_eq(marker.position.distance_to(_STALL), 0.0, 1.0, "a merchant should be at the stall by midday")
 
@@ -183,10 +197,10 @@ func test_a_guard_stays_at_the_gate_through_dusk_instead_of_socializing():
 	var marker := _spawn()
 	marker.identity = identity
 
-	_advance_to(marker, _hour_elapsed(_MIDDAY_HOUR))
+	_advance_to(marker, _hour_elapsed_for(marker, _MIDDAY_HOUR))
 	var midday_position := marker.position
 
-	_advance_to(marker, _hour_elapsed(_DUSK_HOUR))
+	_advance_to(marker, _hour_elapsed_for(marker, _DUSK_HOUR))
 	var dusk_position := marker.position
 
 	assert_almost_eq(midday_position.distance_to(_GATE), 0.0, 1.0, "a guard should be on watch at the gate by midday")

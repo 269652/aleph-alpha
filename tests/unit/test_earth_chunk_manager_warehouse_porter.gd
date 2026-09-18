@@ -252,3 +252,74 @@ func test_the_goods_ride_in_the_cart_and_are_unloaded_at_the_store():
 	assert_true(rode_in_the_cart, "the timber really sat in the wagon on the way")
 	assert_gt(manager.structure_stock_at(store.x, store.y, "beam"), 0, "and was unloaded at the store")
 	assert_eq(CartLoad.total(_carts()[0].stock), 0, "the cart is empty again once it has been unloaded")
+
+
+# -- a village founded under an older, smaller roster catches up ------------
+# Reported live after the founding roster grew from five to ten: "the village
+# still doesn't have 10 people". A village's household count is read back out
+# of the persisted event graph, so one recorded as founded with five keeps
+# five for ever however big a village is founded today -- the change is
+# invisible in a world that already has villages in it.
+
+const SettlementGenerator = preload("res://src/world/settlement_generator.gd")
+const NpcIdentity = preload("res://src/world/npc_identity.gd")
+const EntityRef = preload("res://src/emergence/entity_ref.gd")
+
+
+func test_a_village_founded_smaller_grows_to_todays_founding_roster():
+	var settlement_id := EntityRef.for_settlement(_chunk_coord)
+	var founders: Array = []
+	for i in 5:
+		founders.append(NpcIdentity.new(hash("%d_%d_villager_%d" % [_chunk_coord.x, _chunk_coord.y, i])))
+	manager.record_settlement_founded_if_new(_chunk_coord, founders)
+	assert_eq(
+		manager.household_count_for_settlement(settlement_id), 5,
+		"precondition: an older save's village really was founded with five"
+	)
+
+	manager.settle_up_to_founding_roster(_chunk_coord)
+
+	assert_eq(
+		manager.household_count_for_settlement(settlement_id), SettlementGenerator.POPULATION,
+		"a village founded under an older rule catches up to today's"
+	)
+
+
+## Once, not every visit -- and never DOWN: a village that has grown past the
+## founding roster is not culled back to it.
+func test_catching_up_never_shrinks_a_village_that_grew():
+	var settlement_id := EntityRef.for_settlement(_chunk_coord)
+	var founders: Array = []
+	for i in 5:
+		founders.append(NpcIdentity.new(hash("%d_%d_villager_%d" % [_chunk_coord.x, _chunk_coord.y, i])))
+	manager.record_settlement_founded_if_new(_chunk_coord, founders)
+	for i in SettlementGenerator.POPULATION + 3:
+		manager.admit_household(_chunk_coord)
+	var grown: int = manager.household_count_for_settlement(settlement_id)
+	assert_gt(grown, SettlementGenerator.POPULATION, "precondition: it really outgrew the roster")
+
+	manager.settle_up_to_founding_roster(_chunk_coord)
+
+	assert_eq(manager.household_count_for_settlement(settlement_id), grown, "nobody is sent away")
+
+
+func test_catching_up_a_chunk_with_no_village_settles_nobody():
+	manager.settle_up_to_founding_roster(_chunk_coord)
+	assert_eq(manager.household_count_for_settlement(EntityRef.for_settlement(_chunk_coord)), 0)
+
+
+## And it happens on the visit, not only when something asks for it: a
+## village the player walks back into is the village it would be founded as
+## today.
+func test_a_village_catches_up_on_the_visit():
+	var settlement_id := EntityRef.for_settlement(_chunk_coord)
+	var founders: Array = []
+	for i in 5:
+		founders.append(NpcIdentity.new(hash("%d_%d_villager_%d" % [_chunk_coord.x, _chunk_coord.y, i])))
+	manager.record_settlement_founded_if_new(_chunk_coord, founders)
+	assert_eq(manager.household_count_for_settlement(settlement_id), 5, "precondition")
+
+	manager._unload_chunk(_chunk_coord)
+	manager._load_chunk(_chunk_coord)
+
+	assert_eq(manager.household_count_for_settlement(settlement_id), SettlementGenerator.POPULATION)

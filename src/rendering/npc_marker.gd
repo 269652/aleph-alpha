@@ -417,7 +417,15 @@ func _process(delta: float) -> void:
 		_day_index = current_day
 		schedule = _planner.plan_day(identity, _day_index)
 
-	var entry := NpcSchedule.current_entry(schedule, _current_hour())
+	# THIS villager's own hour, not the village's. Reported live: "every once
+	# in a while all villagers go to the well at the same time and then walk
+	# away a bit later all at the same time.. that looks very weird". Every
+	# villager read the same world hour, so a whole village rose, worked,
+	# drank and slept in step to the second -- see NpcSchedule.personal_hour
+	# for the shift that is each villager's own.
+	var entry := NpcSchedule.current_entry_for(
+		schedule, _hour_of_day(), 0 if identity == null else identity.seed_value
+	)
 	# A real, urgent need overrides wherever today's ordinary schedule says
 	# to be right now (docs/progress.md's Interrupt/Replan Handling row: "a
 	# need crossing a threshold") -- without this, hunger only ever
@@ -981,8 +989,15 @@ func _is_in_water() -> bool:
 
 
 func _current_hour() -> int:
-	var day_fraction := fmod(_elapsed_time / SECONDS_PER_SIMULATED_DAY, 1.0)
-	return int(day_fraction * 24.0)
+	return int(_hour_of_day())
+
+
+## The world's own hour of the day, as a real number -- the clock a villager
+## then shifts a little of their own (NpcSchedule.personal_hour). A float
+## because a whole-hour clock can only ever turn a village's day in one
+## tick, which is the lockstep this exists to break.
+func _hour_of_day() -> float:
+	return fmod(_elapsed_time / SECONDS_PER_SIMULATED_DAY, 1.0) * 24.0
 
 
 ## Builds the flat context Dictionary NpcInstructionEvaluator's condition

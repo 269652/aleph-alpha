@@ -1,5 +1,7 @@
 extends GutTest
 
+const NpcSchedule = preload("res://src/world/npc_schedule.gd")
+
 ## NpcMarker: the cheap local FSM half of docs/concept/npc.md's "Planning
 ## architecture" -- walks toward wherever its current schedule entry's
 ## location_tag resolves to (home / a shared village landmark / a personal
@@ -190,9 +192,7 @@ func test_resolves_a_landmark_tag_to_the_shared_landmark_position():
 		{"time_block": "night", "location_tag": "stall", "activity": "work"},
 	]
 	marker.position = Vector2(0, 0)
-	for i in 200:
-		marker._process(1.0)
-	assert_lt(marker.position.distance_to(marker.landmarks["stall"]), 1.0)
+	assert_lt(_closest_approach(marker, marker.landmarks["stall"]), 1.0)
 
 
 ## An occupation whose work tag isn't one of the 3 shared landmarks (e.g.
@@ -507,9 +507,7 @@ func test_no_instruction_script_walks_the_planner_entry_unchanged():
 		{"time_block": "night", "location_tag": "stall", "activity": "work"},
 	]
 	marker.position = Vector2(0, 0)
-	for i in 200:
-		marker._process(1.0)
-	assert_lt(marker.position.distance_to(marker.landmarks["stall"]), 1.0)
+	assert_lt(_closest_approach(marker, marker.landmarks["stall"]), 1.0)
 
 
 func test_instruction_script_overrides_the_planner_entry_when_a_rule_matches():
@@ -551,9 +549,7 @@ func test_instruction_script_falls_back_to_the_planner_entry_when_no_rule_matche
 		{"time_block": "night", "location_tag": "stall", "activity": "work"},
 	]
 	marker.position = Vector2(0, 0)
-	for i in 200:
-		marker._process(1.0)
-	assert_lt(marker.position.distance_to(marker.landmarks["stall"]), 1.0)
+	assert_lt(_closest_approach(marker, marker.landmarks["stall"]), 1.0)
 
 
 # -- per-NPC inventory (docs/concept/npc_instructions.md, closing the
@@ -1117,3 +1113,23 @@ func _working_seconds_to_gather(occupation: String, units: float, gather_world) 
 	if per_second <= 0.0:
 		return 0
 	return int(ceil(2.0 * units * NpcProduction.FOOD_UNIT / per_second)) + 1
+
+
+## How close `target` ever gets to `destination` over a few days of walking.
+##
+## The closest APPROACH, not where they happen to be standing when the run
+## ends: a day is sixty real seconds and the walk across a village is most of
+## one, so where a villager is on any particular tick is as much about which
+## block just turned as about where their tag resolves to. What these tests
+## are actually about is that the tag resolves THERE -- that the villager
+## really goes to it.
+##
+## It matters more now than it did: a village does not turn as one any more
+## (NpcSchedule.personal_hour), so a fixed number of ticks leaves different
+## villagers in different blocks of their own days.
+func _closest_approach(target, destination: Vector2, ticks := 600) -> float:
+	var closest := INF
+	for i in ticks:
+		target._process(1.0)
+		closest = minf(closest, target.position.distance_to(destination))
+	return closest

@@ -4028,6 +4028,36 @@ var _settlement_immigration_carry: Dictionary = {}
 ## and VillageGrowth's ladder all see the newcomer immediately. They arrive
 ## WITHOUT a house on purpose -- the village then owes them one, which is
 ## exactly the ladder's first rung.
+## Old-save migration: a village recorded as founded with FEWER households
+## than a village is founded with today takes the missing ones in, once.
+##
+## Reported live after the founding roster grew from five to ten: *"the
+## village still doesn't have 10 people"*. A settlement's household count is
+## read back out of the persisted event graph (see _population_for), so a
+## village founded under the older rule keeps the roster it was founded with
+## for ever and the change is invisible in any world that already has
+## villages in it.
+##
+## Never DOWN: a village that has grown past the founding roster on its own
+## (docs/concept/village_growth.md mechanism 3) is not culled back to it. And
+## the newcomers are the SAME deterministic villagers the generator would
+## have rolled for those indices (admit_household continues its own per-index
+## seed), so a village that catches up is the village it would have been
+## founded as, not a different one.
+##
+## No-op for a chunk with no settlement recorded at all -- an ordinary
+## wilderness chunk has nobody to settle.
+func settle_up_to_founding_roster(chunk_coord: Vector2i) -> void:
+	var settlement_id := EntityRef.for_settlement(chunk_coord)
+	var count := household_count_for_settlement(settlement_id)
+	if count <= 0:
+		return
+	while count < SettlementGenerator.POPULATION:
+		if admit_household(chunk_coord) == "":
+			return  # already here -- nothing further to settle
+		count += 1
+
+
 func admit_household(chunk_coord: Vector2i) -> String:
 	var settlement_id := EntityRef.for_settlement(chunk_coord)
 	var index := _villagers_in_settlement(settlement_id).size()
@@ -16016,6 +16046,11 @@ func _load_chunk(chunk_coord: Vector2i) -> void:
 		_creatures_parent, chunk_coord, chunk, chunk_coord * CHUNK_SIZE, TerrainRenderer.TILE_SIZE, self,
 		_fish_target_count(chunk_coord)
 	)
+	# Before the village is read: a village recorded as founded under an
+	# older, smaller roster takes the missing households in first, so what
+	# spawns is the village it would be founded as today (see
+	# settle_up_to_founding_roster).
+	settle_up_to_founding_roster(chunk_coord)
 	_loaded_villages[chunk_coord] = _village_renderer.spawn_village(
 		_creatures_parent,
 		chunk_coord,
