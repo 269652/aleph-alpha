@@ -339,6 +339,79 @@ per carter, spawned with the village and freed with it.
   `illustrated_structure_sprite.gd`'s own `explicit_frame_image` was added
   for.
 
+## Mechanism 6 — The cart is a thing you can take hold of
+
+Asked directly, once the wagon was rolling: *"The cart should also be a real
+entity with hitbox and clicking on it shows the popup with inventory and the
+player should also be able to grab/pull it"*.
+
+A cart that a carter pulls past you and that you cannot touch is scenery with
+an animation. Three things make it an object instead, and they are three
+different systems — being in the way, answering a question, and changing
+hands — so they are specified separately.
+
+### It is in the way
+
+A `StaticBody2D` on the ground floor's own collision layer
+(`EarthChunkManager.GROUND_FLOOR_COLLISION_LAYER`), a child of the cart so it
+moves and is freed with it. Exactly the shape the well's own hitbox already
+uses (`VillageRenderer._solid_body_for`) and for the same reason: the thing
+IS what is in the way, so a separately-tracked body would be one more thing
+to keep in step.
+
+Sized off the drawn frame, not off a constant: a cart is `WIDTH_TILES` of
+road wide and stands on its own wheels, so what stops you is the box at its
+foot rather than a column of air above it.
+
+### It answers the cursor
+
+The cart joins `HoverTargetFinder.GROUP_NAME` and answers
+`get_display_name()` and `get_hover_actions()` like every other interactable
+in the world. Its name says what is in it — an empty cart and a loaded one
+are different things to walk up to — and its one action is on the
+`primary_action` context slot, which is exactly what that slot is for:
+*"What they do is decided by whatever is under the cursor and the state it is
+in"*.
+
+### Clicking it shows what is in it
+
+A left-click opens the same readout a building opens (`HousePanel`), because
+the question is the same question and the panel is already a pure consumer of
+a Dictionary — it renders what it is handed and reaches for nothing else.
+`CartMarker.report()` hands it a title, a subtitle naming who has the shaft,
+its `stock`, and `CartLoad.CAPACITY` as `storage_capacity`, and the existing
+inventory tab draws the load.
+
+The panel grows exactly two seams for this: an explicit `title`/`subtitle`
+override, used when a report carries one. Nothing that already opened it
+changes — a building carries neither key and keeps the building naming it
+always had.
+
+A cart under the cursor wins over the building underneath it. A cart is
+standing ON a village's paving and often beside its store; a click that read
+through it to the warehouse would make the wagon unclickable exactly where
+carts spend their time.
+
+### It changes hands
+
+`held_by` is whoever has the shaft, and `pulled_toward` follows them. The
+rules are the rules of a real handcart:
+
+- **A carter only ever takes a FREE cart.** `take_hold(who)` fails when
+  somebody else has it.
+- **The player's hold displaces.** `take_hold(who, true)` always succeeds. A
+  villager is not going to wrestle the player for a wagon, and the alternative
+  — the player being refused by an NPC's claim — is the kind of rule that
+  reads as a bug.
+- **A carter who has lost the shaft drops the round** rather than walking it
+  empty-handed: no shelf is emptied into a cart the carter is not holding, so
+  goods are never moved into thin air.
+- **Letting go parks it.** `let_go(who)` releases only if `who` really holds
+  it, and a parked cart stays exactly where it was left, still loaded — which
+  is Mechanism 5's whole point, now reachable by the player as well.
+- **A carter reclaims a parked cart** on their next round. A wagon abandoned
+  in a field is village property again the moment nobody is holding it.
+
 ## Status
 
 - ✅ **Mechanism 1 — standing from founding.** `VillageLayout` reserves the
