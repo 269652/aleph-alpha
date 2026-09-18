@@ -49,6 +49,15 @@ class StubWorld:
 	var water_cells: Dictionary = {}
 	var unbuildable_cells: Dictionary = {}
 	var occupied_cells: Dictionary = {}  # pre-seeded occupancy, e.g. an existing structure
+	## Every GLOBAL cell a farmstead asked to have cleared of trees and
+	## boulders (docs/concept/village_farms.md, "A farmstead clears its own
+	## ground"). The real EarthChunkManager fells what is standing there; a
+	## stub only has to remember it was asked.
+	var cleared_cells: Dictionary = {}
+
+	func clear_vegetation_at_global(cells: Array) -> void:
+		for cell in cells:
+			cleared_cells[cell] = true
 
 	## Mirrors the REAL EarthChunkManager.place_building's own occupancy
 	## check exactly (footprint cells AND the doorstep must all be
@@ -2494,6 +2503,64 @@ func test_nobody_else_is_handed_a_sawmill():
 				node.sawmill_cell, NpcMarker.NO_SAWMILL,
 				"%s does not work timber" % node.identity.occupation
 			)
+
+
+# -- a farmstead clears its own ground (docs/concept/village_farms.md) -----
+#
+# Reported in play with the enclosure in shot: "the Farmhouse should clear
+# trees in its bed enclosure". The beds are the one real placement here that
+# never felled what was in its way -- they are not written tiles, so nothing
+# ever called _clear_vegetation_on_cells on them, and a farmer tilling a bed
+# can clear the ground cover but has no axe.
+
+
+func _farm_field_cells(spawned: Array) -> Dictionary:
+	var cells: Dictionary = {}
+	for node in spawned:
+		if node is NpcMarker:
+			for cell in node.field_cells:
+				cells[cell] = true
+	return cells
+
+
+func test_every_bed_a_farmstead_claims_is_cleared_of_what_stood_on_it():
+	var coord := _find_settlement_chunk_with_occupation("grassland", "farmer", 3)
+	var world := StubWorld.new()
+	var spawned := renderer.spawn_village(
+		parent, coord, coord * CHUNK_SIZE, CHUNK_SIZE, TILE_SIZE, "grassland", world
+	)
+	var beds := _farm_field_cells(spawned)
+	assert_false(beds.is_empty(), "precondition: this village really laid beds")
+	for cell in beds:
+		assert_true(
+			world.cleared_cells.has(cell),
+			"a tree was left standing in a bed at %s" % str(cell)
+		)
+
+
+## And nothing beyond them: a village fells the timber it needs, not the
+## wood it happens to be standing near.
+func test_a_farmstead_clears_its_beds_and_not_the_wood_around_them():
+	var coord := _find_settlement_chunk_with_occupation("grassland", "farmer", 3)
+	var world := StubWorld.new()
+	var spawned := renderer.spawn_village(
+		parent, coord, coord * CHUNK_SIZE, CHUNK_SIZE, TILE_SIZE, "grassland", world
+	)
+	var beds := _farm_field_cells(spawned)
+	assert_false(beds.is_empty(), "precondition: this village really laid beds")
+	for cell in world.cleared_cells:
+		assert_true(beds.has(cell), "%s is not anybody's bed" % str(cell))
+
+
+## A world that cannot answer simply has nothing to clear -- the same
+## fail-open shape every other world hook this renderer makes already has.
+func test_a_world_that_cannot_clear_anything_still_founds_its_village():
+	var coord := _find_settlement_chunk_with_occupation("grassland", "farmer", 3)
+	var world := StubWorld.new()
+	var spawned := renderer.spawn_village(
+		parent, coord, coord * CHUNK_SIZE, CHUNK_SIZE, TILE_SIZE, "grassland", world
+	)
+	assert_false(spawned.is_empty(), "the village stands either way")
 
 
 # -- the store has a carter (docs/concept/village_warehouse.md, Mech. 4) ---

@@ -26178,3 +26178,38 @@ Tests: `test_cart_marker.gd` 25/25, `test_npc_marker_cart.gd` 12/12,
   it does not offer to take any of it. Reading what is in a wagon and
   unloading one by hand are different features and only the first was asked
   for.
+
+## A farmstead fells the trees in its own beds (`concept/village_farms.md`, 2026-09-18)
+
+Reported in play with the enclosure in shot: *"the Farmhouse should clear
+trees in its bed enclosure"*. A fence around six beds with an oak standing in
+the middle of them is not a field.
+
+The beds were the one real placement in this game that never felled what was
+in its way, and the reason is structural rather than an oversight:
+`place_building` and `build_at_global` both call `_clear_vegetation_on_cells`
+on the cells they WRITE, and a farmstead's beds are not written tiles. They
+are ground handed to a farmer, who tills them one at a time —
+`till_and_plant_farm_plot_at_global` blocks the ground cover (grass, flowers,
+scrub) and has no axe.
+
+✅ **`EarthChunkManager.clear_vegetation_at_global(cells)`** is the public
+door onto that same sweep: trees, boulders and ore veins, grouped by chunk so
+a field spanning two is one sweep each, silent about cells in chunks nobody
+has loaded, and the persisted `planted_trees` record goes with the tree so
+nothing regrows on the next load. Nothing is credited for the timber — a
+village clearing its founding site is scene setting, not a harvest, exactly
+as it already is for a house's footprint.
+
+✅ **`VillageRenderer._clear_the_beds`** calls it on exactly the cells the
+fence encloses. No margin: a village fells the timber it needs, not the wood
+it is standing near, and the rails clear their own cells as they are laid.
+Idempotent — a cleared cell has nothing left to clear — so it runs on every
+visit and heals a village founded before this existed, the same self-healing
+shape `_clear_rails_with_nothing_to_enclose` already has.
+
+Tests: `test_earth_chunk_manager_clear_vegetation.gd` 7/7 (new — confirmed to
+have teeth by neutering the hook and watching 4 of them fail),
+`test_village_renderer.gd` 124/124 including three new cases: every bed is
+cleared, nothing beyond the beds is, and a world with no such hook still
+founds its village.

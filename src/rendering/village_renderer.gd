@@ -957,7 +957,35 @@ func _fenced_farm_fields(chunk_coord: Vector2i, chunk_size: int, world) -> Dicti
 		)
 	_fence_the_fields(chunk_coord, chunk_size, fields, is_buildable, is_occupied, world)
 	_clear_rails_with_nothing_to_enclose(chunk_coord, chunk_size, origins, world)
+	_clear_the_beds(fields, world)
 	return fields
+
+
+## Fells whatever is standing in the beds a farmstead has just claimed
+## (docs/concept/village_farms.md, "A farmstead clears its own ground").
+##
+## Reported in play with the enclosure in shot: *"the Farmhouse should clear
+## trees in its bed enclosure"*. A fence around six beds with an oak in the
+## middle of them is not a field -- and the beds were the one real placement
+## here that never felled what was in its way, because they are ground handed
+## to a farmer rather than written tiles.
+##
+## Exactly the enclosed cells and no margin: a village fells the timber it
+## needs, not the wood it is standing near. The fence ring itself is left to
+## the rails, which clear their own cells as they are built.
+##
+## Idempotent -- a cleared cell has nothing left to clear -- so it runs on
+## every visit and heals a village founded before this existed, the same
+## self-healing shape _clear_rails_with_nothing_to_enclose above already has.
+func _clear_the_beds(fields: Dictionary, world) -> void:
+	if world == null or not world.has_method("clear_vegetation_at_global"):
+		return
+	var cells: Array = []
+	for origin in fields:
+		cells.append_array(fields[origin])
+	if cells.is_empty():
+		return
+	world.clear_vegetation_at_global(cells)
 
 
 ## Rails with no farmhouse anywhere near them, taken down.

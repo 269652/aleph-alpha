@@ -620,6 +620,16 @@ again.
 
 ## Status
 
+- ✅ **A farmstead clears its own ground.**
+  `EarthChunkManager.clear_vegetation_at_global(cells)` is the public door
+  onto the same `_clear_vegetation_on_cells` sweep `place_building` and
+  `build_at_global` already run over the cells they write, and
+  `VillageRenderer._clear_the_beds` calls it on exactly the cells a
+  farmstead's fence encloses — no margin, and the rails clear their own
+  cells as they are laid. Idempotent, so it runs on every visit and heals a
+  village founded before it existed.
+  `test_earth_chunk_manager_clear_vegetation.gd` 7/7 (new),
+  `test_village_renderer.gd` 124/124.
 - ✅ **`VillageFarm`, the pure rule set.** `field_cells` derives the ring
   from `BuildingCatalog`'s own footprint (5×4 minus the 3×2 the farmhouse
   stands on = 14 tiles); `owner_of` is total and deterministic (nearest

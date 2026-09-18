@@ -14196,6 +14196,41 @@ func _is_built_surface(tile_id: String) -> bool:
 	)
 
 
+## Fells whatever is standing on these GLOBAL cells -- trees, boulders and
+## ore veins alike (docs/concept/village_farms.md, "A farmstead clears its
+## own ground").
+##
+## The public door onto _clear_vegetation_on_cells, which every real
+## placement path already goes through for the cells it writes
+## (place_building, build_at_global). A farmstead's BEDS are not written
+## tiles, so nothing ever cleared them, and a farmer tilling one can clear
+## the ground cover but has no axe -- reported in play with the fence in
+## shot: *"the Farmhouse should clear trees in its bed enclosure"*.
+##
+## Grouped by chunk so a field spanning two of them is one sweep each rather
+## than one per cell, and silent about cells in chunks that are not loaded:
+## a village only ever clears ground it is standing on.
+##
+## Nothing is credited for the timber. A village clearing its own founding
+## site is scene setting, not a harvest -- exactly as it already is for a
+## house's footprint.
+func clear_vegetation_at_global(cells: Array) -> void:
+	if cells.is_empty():
+		return
+	var by_chunk: Dictionary = {}
+	for cell in cells:
+		var global_cell: Vector2i = cell
+		var chunk_coord := _chunk_coord_for_tile(global_cell)
+		if not by_chunk.has(chunk_coord):
+			by_chunk[chunk_coord] = {}
+		by_chunk[chunk_coord][global_cell] = true
+	for chunk_coord in by_chunk:
+		var chunk: Chunk = _loaded_chunks.get(chunk_coord)
+		if chunk == null:
+			continue
+		_clear_vegetation_on_cells(chunk_coord, chunk, by_chunk[chunk_coord])
+
+
 func _clear_vegetation_on_cells(
 	chunk_coord: Vector2i, chunk: Chunk, occupied_global_cells: Dictionary
 ) -> void:
