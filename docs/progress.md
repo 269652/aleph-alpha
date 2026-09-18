@@ -25718,3 +25718,16 @@ the difference between those sites and the tree walks is one guard and
 nothing but a test says so. `EarthChunkManager._plant_sapling_record`'s own
 `"planted_at" in tree` reads a node `spawn_tree_at` has just returned and
 cannot be null.
+
+Tests: `test_earth_chunk_manager_felled_tree_registry.gd` 4/4 (new), and
+**106/106 across the nine tree, pollination, bee, cicada, ground-cover,
+season-fanout, ecology-cadence, fruit-harvest and settlement-food suites**
+— every suite that exercises one of the four repaired walks. The rest of
+the `test_earth_chunk_manager*` family is clean; `test_earth_chunk_manager.
+gd` (the known-slow file) carries 8 failures, all of them pre-existing:
+seven appear verbatim in a full-suite log captured before this work
+(shore-overlay cells, `blackbird`, settlement spare capacity, the
+`sagewerk` placeable), and the one that could plausibly have been ours —
+`test_a_surviving_nut_plants_a_sapling_somewhere_forested_near_berlin` —
+fails identically with `earth_chunk_manager.gd` checked out from
+`a249f15`, the commit before this fix.
