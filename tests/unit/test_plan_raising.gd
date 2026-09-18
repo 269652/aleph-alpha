@@ -127,3 +127,51 @@ func test_both_ways_raise_the_same_site_and_blueprint():
 	assert_eq(mine.origin, theirs.origin)
 	assert_eq(mine.blueprint_id, theirs.blueprint_id)
 	assert_ne(mine.labour, theirs.labour, "only who supplies the hours differs")
+
+
+# -- who supplies the hours -------------------------------------------------
+# (docs/concept/planner_mode.md's "Who supplies the hours": pillar 5's "paid
+# for differently" is exactly this. A hired crew was paid and works whether
+# or not the player is there; the player's own hours accrue only while they
+# are standing at the site, which is the price of not paying the wage.)
+
+func test_standing_at_the_site_is_one_builder_working_it():
+	var cells := BuildPlan.footprint_cells("house_small", Vector2i(4, 4))
+	assert_eq(PlanRaising.builders_at_site(Vector2i(4, 4), cells), PlanRaising.PLAYER_BUILDER_COUNT)
+
+
+## The SAME reach that offered the wireframe in the first place -- a player
+## close enough to raise a plan is close enough to go on working it, or the
+## build would stop the instant it started.
+func test_the_reach_that_offers_a_plan_is_the_reach_that_works_it():
+	var cells := BuildPlan.footprint_cells("house_small", Vector2i(4, 4))
+	var at_the_limit := Vector2i(4, 4) - Vector2i(PlanRaising.REACH_TILES, 0)
+	assert_eq(PlanRaising.builders_at_site(at_the_limit, cells), PlanRaising.PLAYER_BUILDER_COUNT)
+
+
+func test_walking_away_from_your_own_build_stops_the_work():
+	var cells := BuildPlan.footprint_cells("house_small", Vector2i(4, 4))
+	assert_eq(
+		PlanRaising.builders_at_site(Vector2i(40, 40), cells), 0.0,
+		"nobody is working a site the player walked off from"
+	)
+
+
+## A hired crew is the other half of the same rule: they were paid, so
+## where the player is standing has nothing to do with it.
+func test_a_hired_crew_is_one_builder_wherever_the_player_stands():
+	assert_eq(PlanRaising.HIRED_BUILDER_COUNT, PlanRaising.PLAYER_BUILDER_COUNT)
+
+
+# -- work that is laid by hand ----------------------------------------------
+# (planner_mode.md's "Work that is laid by hand": pavement asks for zero
+# labour hours, and advance_project_labor deliberately never completes a
+# zero-hour requirement -- so without this rule a raised pavement plan is a
+# project that can never finish and a cell that never gets paved.)
+
+func test_work_that_asks_for_no_hours_is_done_the_moment_it_is_begun():
+	assert_true(PlanRaising.is_laid_by_hand(0.0))
+
+
+func test_work_that_asks_for_real_hours_is_not_laid_by_hand():
+	assert_false(PlanRaising.is_laid_by_hand(18.0))
