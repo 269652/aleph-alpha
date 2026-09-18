@@ -18,6 +18,7 @@ extends GutTest
 const LumberjackMarker = preload("res://src/rendering/lumberjack_marker.gd")
 const LumberjackBehavior = preload("res://src/gameplay/lumberjack_behavior.gd")
 const ChoppableTree = preload("res://src/rendering/choppable_tree.gd")
+const FelledTree = preload("res://src/rendering/felled_tree.gd")
 const HoverTargetFinder = preload("res://src/rendering/hover_target_finder.gd")
 const EarthChunkManager = preload("res://src/world/earth_chunk_manager.gd")
 const EarthChunkGenerator = preload("res://src/world/earth_chunk_generator.gd")
@@ -146,3 +147,69 @@ func test_returns_to_seeking_after_a_full_deposit():
 
 func test_get_display_name_reports_lumberjack():
 	assert_eq(marker.get_display_name(), "Lumberjack")
+
+
+# -- a trunk already down is work, not litter -------------------------------
+# Reported live: "there are lying two felled trees around the sawmill and the
+# worker doesn't bring them in". The Lumberjack looked only for STANDING
+# trees, so any trunk left lying -- felled by the player, by weather, or by
+# the worker itself before it was interrupted -- stayed there for ever while
+# the worker walked past it to fell another.
+
+func _felled_trunk_at(at: Vector2) -> ChoppableTree:
+	var t := _standing_tree_at(at)
+	t.take_damage(ChoppableTree.MAX_HEALTH)
+	return t
+
+
+func test_a_trunk_already_lying_there_is_worked_up_rather_than_walked_past():
+	tree = _felled_trunk_at(marker.home + Vector2(10, 0))
+	for i in 4000:
+		marker._process(0.25)
+		if is_instance_valid(tree) and tree.is_queued_for_deletion():
+			break
+	assert_true(tree.is_queued_for_deletion(), "a woodcutter finishes what is already down")
+
+
+## And prefers it: a trunk on the ground is finished before another tree is
+## put on the ground beside it, even when the standing one is nearer.
+func test_a_lying_trunk_is_finished_before_another_is_felled():
+	tree = _felled_trunk_at(marker.home + Vector2(40, 0))
+	var standing := _standing_tree_at(marker.home + Vector2(8, 0))
+	for i in 4000:
+		marker._process(0.25)
+		if is_instance_valid(tree) and tree.is_queued_for_deletion():
+			break
+	assert_true(tree.is_queued_for_deletion(), "the trunk already down was taken first")
+	assert_false(standing.is_felled(), "and the standing tree was left alone until it was")
+
+
+## Every swing created the timber twice: once as a pile nobody collects and
+## once in the mill's own woodpile. The same rule this file already pins for
+## shaped output -- it credits the mill, not the ground.
+func test_the_logs_the_worker_bucks_are_not_also_dropped_on_the_ground():
+	var dropped: Array = []
+	var record := func(stack, _position): dropped.append(stack.item.id)
+	WorldItemBus.item_dropped.connect(record)
+	tree = _standing_tree_at(marker.home + Vector2(10, 0))
+	for i in 4000:
+		marker._process(0.25)
+		if _has_shaped_output():
+			break
+	WorldItemBus.item_dropped.disconnect(record)
+	assert_false(dropped.has("log"), "the worker carries the logs home; they are not also on the ground")
+
+
+## Half-worked is not restarted: a trunk somebody already limbed is bucked
+## from where they left it, not re-limbed.
+func test_a_half_worked_trunk_is_finished_rather_than_restarted():
+	tree = _felled_trunk_at(marker.home + Vector2(10, 0))
+	tree.take_damage(1.0)   # somebody already limbed the crown off
+	var cuts_before: int = tree.cuts_left()
+	assert_true(tree.canopy_removed(), "precondition")
+	for i in 4000:
+		marker._process(0.25)
+		if is_instance_valid(tree) and tree.is_queued_for_deletion():
+			break
+	assert_true(tree.is_queued_for_deletion())
+	assert_eq(cuts_before, FelledTree.CUTS_TO_CLEAR, "precondition: limbing costs no cut of its own")

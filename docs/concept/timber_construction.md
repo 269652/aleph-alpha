@@ -154,6 +154,42 @@ uses, not a one-off gate invented for this one structure. See that doc
 for the full mechanism; this paragraph only records the Sägewerk's own
 concrete instance of it.
 
+### The mill's own woodpile: one log, one place, first call to the beam
+
+Three things about a real mill's own timber, each of them a defect that was
+reported from play.
+
+**A log the Lumberjack bucks is carried to the mill, not dropped on the
+ground.** `ChoppableTree._cut_up` emits a `log` `ItemStack` through
+`WorldItemBus` — right for a player swinging an axe, and wrong for a worker
+whose whole job is to carry the haul home, because the worker *also*
+credits itself the same cut. Every swing therefore created the timber
+twice: once as a pile nobody collects and once in the mill's woodpile.
+Reported as *"two felled trees lying around the sawmill and the worker
+doesn't bring them in"* and *"it only produced 6xLogs"*. The Lumberjack
+bucks through a worker path that returns the logs instead of dropping them
+— the same rule this doc already holds for shaped output ("beam should
+credit `StructureStock`, not the ground").
+
+**A trunk that is already down is work, not litter.** The Lumberjack looked
+only for *standing* trees, so any trunk left lying — felled by the player,
+by weather, or by the worker itself before it was interrupted — stayed
+there for ever while the worker walked past it to fell another. It now
+takes a felled trunk in reach and **prefers** it to a standing tree: a
+woodcutter finishes what is already down before putting another one on the
+ground. The trunk's remaining work is read off the trunk itself rather than
+assumed to be a fresh fall, so a half-bucked one is finished, not restarted.
+
+**The beam has first call on the woodpile.** Hewing and riving draw from
+one pile, and riving is three times cheaper per log and faster per piece —
+so the plank lane emptied the pile continuously and the pile almost never
+held the three logs a beam needs for the eight seconds it needs them. A
+mill on a steady trickle of timber therefore produced planks and never a
+single beam, which is exactly what the village's own construction needs
+least. The beam lane's logs are reserved while it has work in progress, and
+the plank lane rives what is left over — a sawyer with an order for a beam
+does not first cut the log into boards.
+
 ### Real statics: a support graph over the piece grid
 
 `RoomDetector` already treats a structure's pieces as a grid keyed by local
