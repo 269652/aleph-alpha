@@ -257,6 +257,41 @@ entities, and `place_building` staffs nobody at all — so every village
 producer filled its own shelf and nothing ever moved it. The store was
 empty because nobody was carrying.
 
+## Mechanism 5 — The Bollerwagen
+
+Asked directly, with the art in hand: *"I added a cart sprite with a
+Bollerwagen; please wire it and make the Warehouse Worker use it to move
+heavy ressources to the warehouse.. it should be so that the ressources are
+actually loaded inside the wagon which has an inventory; so if the worker
+leaves it somewhere it's actually full of ressources... once in the
+warehouse he unloads"*.
+
+**The load is on the cart, not in the worker.** That is the whole point and
+the whole design: `CartLoad` is a real `item_id -> count` store that lives on
+the cart's own node. A cart standing in a field is a cart with the timber
+still in it — leave the porter behind, unload it later, come back to it
+tomorrow. Nothing about the goods is bookkeeping held on the person.
+
+- **Capacity.** A cart carries six of the porter's own armfuls
+  (`LogisticsMarker.CARRY_CAPACITY`), which is also more than the 12 wood
+  the growth ladder's cheapest rung needs — a cart that could not bring
+  home a whole small house's timber in one trip would not be worth pulling.
+  Both relationships are test-pinned rather than the number asserted.
+- **Loading.** At the producer the porter fills the cart, an armful at a
+  time, until the shelf is bare or the cart is full. A load that will not
+  fit is left on the shelf rather than destroyed.
+- **Unloading.** At the store the cart is emptied into the warehouse's own
+  `StructureStock` — all of it, every item id it is carrying, in one
+  arrival.
+- **Drawing it.** `assets/sprites/vehicles/cart.png` is a magenta-divided
+  sheet, measured as 4 rows × 5 columns: the rows are the four views (rear,
+  east, west, front) and the columns are a roll cycle — measured, the
+  difference from column 0 grows monotonically across the row, which is an
+  animation rather than five unrelated variants. The wheels turn only while
+  the cart is moving. The bands are pinned explicitly, the same call
+  `illustrated_structure_sprite.gd`'s own `explicit_frame_image` was added
+  for.
+
 ## Status
 
 - ✅ **Mechanism 1 — standing from founding.** `VillageLayout` reserves the

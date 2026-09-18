@@ -65,6 +65,7 @@ const GrassFrogRenderer = preload("res://src/rendering/grass_frog_renderer.gd")
 const LumberjackMarker = preload("res://src/rendering/lumberjack_marker.gd")
 const ProceduralBuildingPieceSprite = preload("res://src/rendering/procedural_building_piece_sprite.gd")
 const LogisticsMarker = preload("res://src/rendering/logistics_marker.gd")
+const CartMarker = preload("res://src/rendering/cart_marker.gd")
 const StructureStockStore = preload("res://src/emergence/structure_stock_store.gd")
 const IllustratedStructureSprite = preload("res://src/rendering/illustrated_structure_sprite.gd")
 const BuildingCatalog = preload("res://src/gameplay/building_catalog.gd")
@@ -13873,6 +13874,13 @@ func _spawn_warehouse_porter(
 	porter.preferred_storage_position = _building_centre(chunk_coord, store_origin)
 	porter.search_radius_tiles = WAREHOUSE_PORTER_RADIUS_TILES
 	porter.position = porter.preferred_storage_position
+	# The Bollerwagen the porter pulls (docs/concept/village_warehouse.md,
+	# Mechanism 5): the goods ride ON IT, so a cart left standing is a cart
+	# with the timber still in it.
+	var cart := CartMarker.new()
+	cart.position = porter.position
+	_entities_parent.add_child(cart)
+	porter.cart = cart
 	_entities_parent.add_child(porter)
 	return porter
 
@@ -13898,6 +13906,8 @@ func _free_warehouse_porters_in_chunk(chunk_coord: Vector2i) -> void:
 func _free_porter(by_producer: Dictionary, producer_origin: Vector2i) -> void:
 	var porter = by_producer.get(producer_origin)
 	if porter != null and is_instance_valid(porter):
+		if porter.cart != null and is_instance_valid(porter.cart):
+			porter.cart.queue_free()
 		porter.queue_free()
 	by_producer.erase(producer_origin)
 

@@ -75,6 +75,15 @@ var preferred_storage_position = null
 ## lookups) -- set by whatever spawns this marker.
 var earth = null
 
+## The Bollerwagen this worker pulls (a CartMarker), or null for one who
+## carries in their arms.
+##
+## With a cart, the goods are ON THE CART while they travel -- a cart left
+## standing somewhere is a cart with the timber still in it (docs/concept/
+## village_warehouse.md, Mechanism 5) -- and the cart's own capacity is what
+## a trip is worth, not the armful CARRY_CAPACITY names.
+var cart = null
+
 var carried_item_id := ""
 var carried_count := 0
 
@@ -96,6 +105,10 @@ func _ready() -> void:
 
 
 func _process(delta: float) -> void:
+	# The cart comes along wherever this worker goes -- it is PULLED, so it
+	# follows rather than being teleported alongside.
+	if cart != null and is_instance_valid(cart):
+		cart.pulled_toward = position
 	match _behavior.phase:
 		LogisticsBehavior.Phase.SEEKING:
 			_step_seeking(delta)
@@ -155,7 +168,7 @@ func _collect_from_source() -> void:
 		_behavior.abort()
 		return
 	var available: int = earth.structure_stock_at(source_tile.x, source_tile.y, fetching)
-	var amount: int = mini(available, CARRY_CAPACITY)
+	var amount: int = mini(available, _trip_capacity())
 	if amount <= 0:
 		_behavior.abort()
 		return
@@ -174,13 +187,23 @@ func _collect_from_source() -> void:
 		earth.deposit_to_structure_at(source_tile.x, source_tile.y, fetching, amount)  # put it back
 		_behavior.abort()
 		return
-	carried_item_id = fetching
-	carried_count = amount
+	if cart != null and is_instance_valid(cart):
+		# Onto the CART, not into the worker's arms. Whatever the cart
+		# refuses goes straight back on the shelf rather than vanishing.
+		var loaded: int = cart.load_on(fetching, amount)
+		if loaded < amount:
+			earth.deposit_to_structure_at(source_tile.x, source_tile.y, fetching, amount - loaded)
+		if loaded <= 0:
+			_behavior.abort()
+			return
+	else:
+		carried_item_id = fetching
+		carried_count = amount
 	_storage_target_position = storage_position
 
 
 func _step_carrying(delta: float) -> void:
-	if carried_count <= 0:
+	if _carrying_nothing():
 		_behavior.abort()
 		return
 	var to_target: Vector2 = _storage_target_position - position
@@ -197,11 +220,32 @@ func _step_depositing(delta: float) -> void:
 
 
 func _deposit_into_storage() -> void:
-	if earth != null and carried_count > 0:
-		var storage_tile := _tile_for(_storage_target_position)
+	if earth == null:
+		return
+	var storage_tile := _tile_for(_storage_target_position)
+	if cart != null and is_instance_valid(cart):
+		# Everything the wagon is carrying, in one arrival at the door.
+		var unloaded: Dictionary = cart.unload_all()
+		for item in unloaded:
+			earth.deposit_to_structure_at(storage_tile.x, storage_tile.y, String(item), int(unloaded[item]))
+	elif carried_count > 0:
 		earth.deposit_to_structure_at(storage_tile.x, storage_tile.y, carried_item_id, carried_count)
 	carried_item_id = ""
 	carried_count = 0
+
+
+## What one trip is worth: the cart's own room when there is a cart, and the
+## worker's own armful when there is not.
+func _trip_capacity() -> int:
+	if cart != null and is_instance_valid(cart):
+		return cart.room_left()
+	return CARRY_CAPACITY
+
+
+func _carrying_nothing() -> bool:
+	if cart != null and is_instance_valid(cart):
+		return cart.is_empty()
+	return carried_count <= 0
 
 
 ## Recovers the global tile coordinate a tile-center pixel position

@@ -190,3 +190,65 @@ func test_a_porter_does_not_outlive_the_chunk_it_works_in():
 	manager._unload_chunk(_chunk_coord)
 
 	assert_eq(_porters().size(), 0, "a porter is not left walking a chunk that is gone")
+
+
+# -- the Bollerwagen ---------------------------------------------------------
+# Asked directly: "make the Warehouse Worker use it to move heavy ressources
+# to the warehouse.. it should be so that the ressources are actually loaded
+# inside the wagon which has an inventory; so if the worker leaves it
+# somewhere it's actually full of ressources... once in the warehouse he
+# unloads".
+
+const CartMarker = preload("res://src/rendering/cart_marker.gd")
+const CartLoad = preload("res://src/gameplay/cart_load.gd")
+
+
+func _carts() -> Array:
+	var out: Array = []
+	for node in entities_parent.get_children():
+		if node is CartMarker and not node.is_queued_for_deletion():
+			out.append(node)
+	return out
+
+
+func test_a_porter_is_given_a_cart_to_pull():
+	manager.place_building(_chunk_coord, _store_origin, "warehouse")
+	manager.place_building(_chunk_coord, _mill_origin, "sawmill")
+
+	assert_eq(_carts().size(), 1, "one cart per porter")
+	assert_not_null(_porters()[0].cart, "and the porter is the one pulling it")
+
+
+func test_a_cart_goes_when_its_porter_does():
+	manager.place_building(_chunk_coord, _store_origin, "warehouse")
+	manager.place_building(_chunk_coord, _mill_origin, "sawmill")
+	assert_eq(_carts().size(), 1, "precondition")
+
+	manager.remove_building(_chunk_coord, _store_origin)
+
+	assert_eq(_carts().size(), 0, "no porter, no cart standing in the village")
+
+
+## The whole point: the goods are ON the cart while they travel, not
+## bookkeeping held on the person.
+func test_the_goods_ride_in_the_cart_and_are_unloaded_at_the_store():
+	manager.place_building(_chunk_coord, _store_origin, "warehouse")
+	manager.place_building(_chunk_coord, _mill_origin, "sawmill")
+	var mill := _global(_mill_origin)
+	var store := _global(_store_origin)
+	manager.deposit_to_structure_at(mill.x, mill.y, "beam", 6)
+
+	var rode_in_the_cart := false
+	for i in 4000:
+		for porter in _porters():
+			porter._process(0.25)
+		for cart in _carts():
+			cart._process(0.25)
+		if CartLoad.total(_carts()[0].stock) > 0:
+			rode_in_the_cart = true
+		if manager.structure_stock_at(store.x, store.y, "beam") > 0:
+			break
+
+	assert_true(rode_in_the_cart, "the timber really sat in the wagon on the way")
+	assert_gt(manager.structure_stock_at(store.x, store.y, "beam"), 0, "and was unloaded at the store")
+	assert_eq(CartLoad.total(_carts()[0].stock), 0, "the cart is empty again once it has been unloaded")
