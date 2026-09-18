@@ -221,6 +221,42 @@ it says about the BUILDING: a store that took one trip to fill would not be
 worth raising, and one that took a thousand would make hauling the only
 thing anybody ever did.
 
+## Mechanism 4 — The store binds its own porter
+
+Asked directly, with the empty store in shot: *"The warehouse also needs to
+bind a worker which then collects all ressources from every production
+building"*, and *"the warehouse stays empty"*.
+
+This answers the open question Mechanism 3 left standing — *"whether hauling
+should belong to an occupation instead — a carter, a porter"* — and it
+answers it the way the report does: **the store binds the worker, not the
+producer.** A village's mill, farmhouse, smith and brewery each keep their
+own output on their own shelf, and a porter the warehouse itself employs
+walks the round and carries it in.
+
+It is the `LogisticsMarker` the Sägewerk/Storage pair already uses, bound to
+a whole-building warehouse and a whole-building producer instead of the two
+single-tile placeables. Nothing about the walk, the cart load or the
+put-it-back-on-failure is reinvented: one porter per (warehouse, producer)
+pair within the store's own reach, spawned when either is raised and
+despawned when either goes.
+
+**A porter carries whatever is waiting.** The existing worker hauls one
+named item id, because the Sägewerk has exactly two outputs and the caller
+knows them. A village producer's shelf is not a fixed list — a farmhouse
+holds whatever crop its farmer sows, a mill holds logs on the way to
+becoming beams — so naming the goods in advance would be inventing a
+catalogue that drifts from what the buildings really hold. A porter with no
+item id named takes the largest load waiting on the shelf and comes back for
+the rest.
+
+**Why this is what was missing.** The whole logistics system was wired for
+`sagewerk` → `storage`, the two single-tile placeables. A real village
+raises a `sawmill` and a `warehouse`, which are whole-building catalog
+entities, and `place_building` staffs nobody at all — so every village
+producer filled its own shelf and nothing ever moved it. The store was
+empty because nobody was carrying.
+
 ## Status
 
 - ✅ **Mechanism 1 — standing from founding.** `VillageLayout` reserves the

@@ -35,8 +35,24 @@ const CARRY_CAPACITY := 4
 
 ## Which structure id this worker collects FROM, and which item it hauls --
 ## the caller's job to set before the worker starts (see class doc comment).
+##
+## `item_id` left EMPTY means "whatever is waiting": the porter takes the
+## largest load on the source's shelf and comes back for the rest. A village
+## producer's shelf is not a fixed list -- a farmhouse holds whatever crop
+## its farmer sows, a mill holds logs on the way to becoming beams -- so a
+## caller that named the goods in advance would be inventing a catalogue
+## that drifts from what the buildings really hold (docs/concept/
+## village_warehouse.md, Mechanism 4).
 var source_structure_id := ""
 var item_id := ""
+
+## Optional pixel-space override (Vector2, null when unset) for WHICH source
+## this worker collects from -- the exact mirror of preferred_storage_
+## position below, and for the same reason: a caller that has already paired
+## this worker with one specific producer must not have it re-discover
+## whichever one happens to be nearest. Left unset, the dynamic
+## nearest_structure_position lookup runs unchanged.
+var preferred_source_position = null
 var storage_structure_id := "storage"
 var search_radius_tiles := 20
 
@@ -97,11 +113,15 @@ func _step_seeking(delta: float) -> void:
 	_behavior.advance(delta)  # no-op outside timed phases, just ticks the coordination-pause clock
 	if not _behavior.can_commit():
 		return
-	if earth == null or source_structure_id == "" or item_id == "":
+	if earth == null:
 		return
-	var found = earth.nearest_structure_position(
-		position, source_structure_id, float(search_radius_tiles) * TerrainRenderer.TILE_SIZE
-	)
+	var found = preferred_source_position
+	if found == null:
+		if source_structure_id == "" or item_id == "":
+			return
+		found = earth.nearest_structure_position(
+			position, source_structure_id, float(search_radius_tiles) * TerrainRenderer.TILE_SIZE
+		)
 	if found == null:
 		return
 	_source_target_position = found
@@ -130,12 +150,16 @@ func _step_collecting(delta: float) -> void:
 ## destroying real stock.
 func _collect_from_source() -> void:
 	var source_tile := _tile_for(_source_target_position)
-	var available: int = earth.structure_stock_at(source_tile.x, source_tile.y, item_id)
+	var fetching := item_id if item_id != "" else _largest_load_waiting_at(source_tile)
+	if fetching == "":
+		_behavior.abort()
+		return
+	var available: int = earth.structure_stock_at(source_tile.x, source_tile.y, fetching)
 	var amount: int = mini(available, CARRY_CAPACITY)
 	if amount <= 0:
 		_behavior.abort()
 		return
-	earth.withdraw_from_structure_at(source_tile.x, source_tile.y, item_id, amount)
+	earth.withdraw_from_structure_at(source_tile.x, source_tile.y, fetching, amount)
 	# A caller that already paired this worker with one specific Storage
 	# (see preferred_storage_position's own doc comment) wins outright over
 	# the dynamic "whichever is nearest right now" lookup -- otherwise every
@@ -147,10 +171,10 @@ func _collect_from_source() -> void:
 			position, storage_structure_id, float(search_radius_tiles) * TerrainRenderer.TILE_SIZE
 		)
 	if storage_position == null:
-		earth.deposit_to_structure_at(source_tile.x, source_tile.y, item_id, amount)  # put it back
+		earth.deposit_to_structure_at(source_tile.x, source_tile.y, fetching, amount)  # put it back
 		_behavior.abort()
 		return
-	carried_item_id = item_id
+	carried_item_id = fetching
 	carried_count = amount
 	_storage_target_position = storage_position
 
@@ -186,3 +210,20 @@ func _tile_for(tile_center_pixel: Vector2) -> Vector2i:
 	return Vector2i(
 		floori(tile_center_pixel.x / TerrainRenderer.TILE_SIZE), floori(tile_center_pixel.y / TerrainRenderer.TILE_SIZE)
 	)
+
+
+## The id of the biggest pile on this shelf, or "" when the shelf is bare --
+## what a porter with no named item takes (see `item_id`). Ties broken by id
+## so a round is deterministic rather than dependent on Dictionary order.
+func _largest_load_waiting_at(source_tile: Vector2i) -> String:
+	if not earth.has_method("structure_stock_contents_at"):
+		return ""
+	var best := ""
+	var best_count := 0
+	var contents: Dictionary = earth.structure_stock_contents_at(source_tile.x, source_tile.y)
+	for waiting_item_id in contents:
+		var count := int(contents[waiting_item_id])
+		if count > best_count or (count == best_count and best != "" and String(waiting_item_id) < best):
+			best = String(waiting_item_id)
+			best_count = count
+	return best if best_count > 0 else ""
