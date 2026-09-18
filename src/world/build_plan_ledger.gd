@@ -14,6 +14,15 @@ extends RefCounted
 
 const BuildPlan = preload("res://src/world/build_plan.gd")
 
+## How wide a chunk is, so a plan's own LOCAL footprint can be asked about
+## where it really stands in the WORLD.
+##
+## Declared here rather than imported from EarthChunkManager, which this
+## module deliberately does not depend on ("that is also what makes the
+## whole ledger testable with no chunk loaded"); pinned across the seam by
+## test_the_chunk_this_ledger_measures_in_is_the_one_the_world_loads.
+const CHUNK_SIZE := 32
+
 var _plans: Dictionary = {}
 
 
@@ -44,8 +53,19 @@ func refusal_reason(
 		return "There is no blueprint called \"%s\"." % blueprint_id
 	var cells: Array = BuildPlan.footprint_cells(blueprint_id, origin)
 	for cell in cells:
-		if not bool(buildable_ground.call(cell)):
-			return "The ground at %d,%d cannot be built on." % [cell.x, cell.y]
+		# The GLOBAL cell, not the plan's own local one. Reported live with
+		# the build bar open and every tile refused: "i can't build on any
+		# tile", against "The ground at 29,19 cannot be built on." -- 29,19
+		# being a chunk-LOCAL cell handed to a predicate that reads the
+		# world by global tile (World._plan_ground_is_buildable), so outside
+		# the origin chunk it was asking about somewhere else entirely, and
+		# the honest answer about a cell 29,19 tiles from the world origin
+		# is open ocean. Every test of this function passed Vector2i.ZERO as
+		# the chunk, where the two are the same number, which is why the
+		# whole suite stayed green.
+		var global_cell: Vector2i = chunk_coord * CHUNK_SIZE + cell
+		if not bool(buildable_ground.call(global_cell)):
+			return "The ground at %d,%d cannot be built on." % [global_cell.x, global_cell.y]
 	for existing in _plans.values():
 		if existing.chunk_coord != chunk_coord:
 			continue

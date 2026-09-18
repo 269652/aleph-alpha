@@ -169,3 +169,56 @@ func test_cancelling_removes_the_plan_and_frees_its_ground():
 
 func test_cancelling_something_that_was_never_planned_is_false_not_a_crash():
 	assert_false(ledger.cancel("not_a_real_plan_id"))
+
+
+# -- the ground it asks about is the ground in the WORLD --------------------
+#
+# Reported live, with the build bar open and every tile refused: "i can't
+# build on any tile", against "The ground at 29,19 cannot be built on."
+#
+# 29,19 is a CHUNK-LOCAL cell. refusal_reason handed BuildPlan's own local
+# footprint cells straight to a buildability predicate that reads the world
+# by GLOBAL tile (World._plan_ground_is_buildable ->
+# EarthChunkManager.is_buildable_terrain_at), so in any chunk but the one at
+# the origin it was asking about somewhere else entirely -- and the honest
+# answer about a cell 29,19 tiles from the world's origin, far out in open
+# ocean, is no.
+#
+# Every test above passes Vector2i.ZERO as the chunk, where local and global
+# are the same number, which is exactly why the whole suite stayed green.
+
+
+## What the predicate was really asked about, so a test can check the cell
+## and not merely the verdict.
+class _RecordingGround:
+	extends RefCounted
+	var asked: Array = []
+	func call_cell(cell: Vector2i) -> bool:
+		asked.append(cell)
+		return true
+
+
+func test_the_ground_it_asks_about_is_the_cell_in_the_world():
+	var ground := _RecordingGround.new()
+	var chunk_coord := Vector2i(3, -2)
+	var origin := Vector2i(5, 7)
+	ledger.refusal_reason(chunk_coord, origin, "house_small", ground.call_cell)
+	assert_false(ground.asked.is_empty(), "precondition: it really asked about something")
+	var expected: Array = []
+	for cell in BuildPlan.footprint_cells("house_small", origin):
+		expected.append(chunk_coord * BuildPlanLedger.CHUNK_SIZE + cell)
+	assert_eq(ground.asked, expected, "a plan's ground is where it really stands in the world")
+
+
+## A chunk at the origin still asks about exactly the same cells, so the
+## fix cannot have moved the one case that already worked.
+func test_a_plan_in_the_origin_chunk_is_asked_about_exactly_as_before():
+	var ground := _RecordingGround.new()
+	ledger.refusal_reason(Vector2i.ZERO, Vector2i(5, 7), "house_small", ground.call_cell)
+	assert_eq(ground.asked, BuildPlan.footprint_cells("house_small", Vector2i(5, 7)))
+
+
+## The chunk this ledger measures in is the chunk the world loads.
+func test_the_chunk_this_ledger_measures_in_is_the_one_the_world_loads():
+	var EarthChunkManager = load("res://src/world/earth_chunk_manager.gd")
+	assert_eq(BuildPlanLedger.CHUNK_SIZE, EarthChunkManager.CHUNK_SIZE)
