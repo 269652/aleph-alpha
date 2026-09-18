@@ -25399,6 +25399,88 @@ Tests: `test_earth_chunk_manager_raised_builds.gd` 10/10 (new),
 `world.gd`, `earth_chunk_manager.gd`, `plan_raising.gd` and `player.gd`
 confirmed to load.
 
+### Villages of ten that really grow (`concept/village_growth.md`, `concept/traveling_merchants.md`, 2026-09-18)
+
+Asked directly: *"please increase the village sizes from 5 houses to 10
+initial and then it should grow by itself; adding new houses new trades"*.
+Reported alongside it: *"the warehouse stays empty"*.
+
+✅ **The founding roster is ten.** `SettlementGenerator.POPULATION` 5 → 10.
+Measured on real terrain (`tools/probe_village_houses.gd`): 58 of 58 real
+settlement chunks near 48.6N 12.7E house all ten — min 10, median 10, max
+10 — so the bigger roster costs no villages.
+
+✅ **The ladder is spaced in founding rosters.** Every rung sat at or below
+five, so a village founded at ten would owe itself the whole ladder on the
+day it was founded and have nothing left to grow into — a threshold that is
+always met is a gate that lies to the next reader, the same reasoning that
+took the warehouse off the ladder. What a village needs to LIVE (sawmill,
+hall, farmhouse) sits at or under one roster; the specialists it grows INTO
+sit above. 5/7/9 against five becomes 10/14/18 against ten, and the
+relationship is what the tests pin.
+
+✅ **A village keeps the timber it is saving for.** The real reason a
+village never grew. Measured end to end with a new probe
+(`tools/probe_village_growth.gd`) on a real loaded settlement: stone climbed
+steadily past 50 while wood never once got past 2, the `house_small` project
+sat `PLANNED` with nothing reserved for a whole hour, and a village that
+grew from 10 households to 31 built **not one house** for any of them.
+`SettlementGathering` is the only thing that puts wood, stone or fibre into
+a settlement's market, and two things took it away first: the traveling
+merchant (wood is on his buy list) and the village's own production step
+(the sawyer's `log_to_balken` turns 3 wood into 1 beam the moment there are
+three, and the merchant's cart, filling with the dearest goods first, then
+took the beams). `SettlementReserve` is the one rule both now ask: what does
+this village's own next building need, read off the same
+`VillageGrowth.next_building` the ladder walks and the same recipe it is
+priced in. Above it is surplus; at or below it belongs to the building.
+
+✅ **A village the player is watching builds and grows on the day they live
+in.** Construction labour and immigration were both counted in
+`ChunkEcologyCatchup.SECONDS_PER_DAY` (3600) — the deliberately conservative
+rate for integrating an *unloaded* chunk across an absence, and 60× the day
+the ecosystem step, the settlement step, the day/night cycle and every
+colony already run on. A bare just-fed village therefore drew one household
+every 6 hours 40 minutes, and immigration only runs while the chunk is
+loaded. The day is an argument now, with the catch-up rate as its default,
+so the offscreen integration is untouched.
+
+**Measured after:** 10 households in 10 houses become 31 households in 16
+houses over the same hour, a house going up every few minutes, until the
+chunk honestly runs out of street frontage.
+
+✅ **A bigger village still gets its mill, its stall and its ponds.** Three
+regressions the roster exposed. The works' ground is reserved *before* a
+single house plot is assigned (`village_growth.md` pillar 1 already says the
+reservation exists "so a sawmill never has to hunt for room after the
+fact"): a mill needs clear ground within two tiles of real forest and
+outside it, which on a forest edge is a band a couple of tiles deep, and ten
+houses reach it where five did not. A spur may now join a further street row
+where the village has really paved one, instead of always routing back to
+the spine across every house between — measured on an older village gaining
+its mill, four sites qualified on every other count and every one was
+refused for its spur alone.
+
+⬜ **A village keeps drawing people after it runs out of roofs.** The census
+reports spare house capacity that does not fall as households move in, so
+immigration goes on past the point the chunk has frontage for another house.
+Measured but not yet fixed.
+
+⬜ **New trades arrive but bring no new works.** An arriving household rolls
+its own occupation, so the trades in a village really do change as it grows.
+The ladder's specialist rungs (blacksmith at 14, brewery at 18) were not
+reached in the measured hour, because the chunk ran out of house frontage
+first.
+
+Tests: `test_settlement_reserve.gd` 10/10 (new), `test_merchant_visit.gd`
+25/25 (+6), `test_village_immigration.gd` 16/16 (+3),
+`test_earth_chunk_manager_city_hall_rising.gd` 12/12 (+1),
+`test_village_growth.gd` 18/18 (+2), `test_settlement_generator.gd` 24/24
+(+2), `test_village_renderer.gd` 111/111, `test_village_layout.gd` 84/84,
+`test_settlement_construction.gd`, `test_construction_catchup.gd`,
+`test_construction_project_store.gd`,
+`test_earth_chunk_manager_raised_builds.gd` — all green.
+
 ## A herbalist's bed grows, withers and is harvested invisibly (`concept/village_farms.md`, 2026-09-17)
 
 Reported live with the field in shot: *"it plows the soil but then the soil
