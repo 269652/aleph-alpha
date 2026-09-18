@@ -892,7 +892,67 @@ func _fenced_farm_fields(chunk_coord: Vector2i, chunk_size: int, world) -> Dicti
 			origin, origins, chunk_coord, chunk_size, is_buildable, is_occupied, world
 		)
 	_fence_the_fields(chunk_coord, chunk_size, fields, is_buildable, is_occupied, world)
+	_clear_rails_with_nothing_to_enclose(chunk_coord, chunk_size, origins, world)
 	return fields
+
+
+## Rails with no farmhouse anywhere near them, taken down.
+##
+## Reported live with the village in shot: *"There's a bed enclosure without
+## a Farmhouse"*. A field is only ever fenced around a farmhouse that really
+## stands (this function starts from _farmhouse_origins) -- but the rails are
+## real persisted tiles, so a farmhouse that goes AFTERWARDS, razed or
+## reclaimed for standing in water, leaves its whole frame behind for ever.
+##
+## Measured against DISTANCE to a farmhouse rather than against the frame
+## this pass just worked out. A farmhouse's own field is re-derived on every
+## visit against what is standing at the time -- including the rails the last
+## visit laid -- so "is this rail in today's frame" is not a stable question,
+## and asking it would have each visit pull up the last one's fence. Where
+## the farmhouses are IS stable, and "no farmhouse within its own field's
+## reach" is exactly what the report describes.
+##
+## Reconciled on every visit rather than hooked to the removal itself: the
+## same idempotent self-healing shape _lay_plaza_if_missing and
+## _place_industry_if_missing already have, and it heals a save whose
+## farmhouse went before this existed.
+func _clear_rails_with_nothing_to_enclose(
+	chunk_coord: Vector2i, chunk_size: int, farmhouse_origins: Array, world
+) -> void:
+	if not world.has_method("modification_at_global") or not world.has_method("destroy_at_global"):
+		return
+	# How far a rail of a REAL farm can stand from its farmhouse, measured
+	# the way the field itself is worked out (VillageFarm.workable_cells
+	# scans the footprint grown by FIELD_REACH_TILES on every side) and one
+	# tile further out again, because the frame stands OUTSIDE the beds it
+	# encloses. Chebyshev, like the scan: a field is a rectangle, not a disc.
+	var footprint: Vector2i = BuildingCatalog.footprint_of(VillageFarm.FARM_BUILDING_ID)
+	var reach: int = VillageFarm.FIELD_REACH_TILES + maxi(footprint.x, footprint.y) + 1
+	# A fisher's pond is fenced with the SAME rails (docs/concept/
+	# village_ponds.md: "a similar 3x2 enclosure"), so its own water anchors
+	# its frame exactly as a farmhouse anchors a field's -- without this the
+	# sweep would pull up every pond fence in the village.
+	var anchors: Array = farmhouse_origins.duplicate()
+	var rails: Array = []
+	for y in chunk_size:
+		for x in chunk_size:
+			var cell := Vector2i(x, y)
+			var g: Vector2i = chunk_coord * chunk_size + cell
+			var tile_id := String(world.modification_at_global(g.x, g.y))
+			if VillagePond.is_pond_tile(tile_id):
+				anchors.append(cell)
+			elif VillageFarm.is_fence_tile(tile_id):
+				rails.append(cell)
+	for cell in rails:
+		var has_an_anchor := false
+		for anchor in anchors:
+			var offset: Vector2i = (cell as Vector2i) - (anchor as Vector2i)
+			if maxi(absi(offset.x), absi(offset.y)) <= reach:
+				has_an_anchor = true
+				break
+		if not has_an_anchor:
+			var g: Vector2i = chunk_coord * chunk_size + (cell as Vector2i)
+			world.destroy_at_global(g.x, g.y)
 
 
 ## Hands every villager who farms the field their OWN farmhouse works

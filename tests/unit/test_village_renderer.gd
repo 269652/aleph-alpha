@@ -164,6 +164,16 @@ class StubWorld:
 	func modification_at_global(x: int, y: int) -> String:
 		return occupied_cells.get(Vector2i(x, y), "")
 
+	## Takes a tile back off the map, from whichever of the two dicts this
+	## stub is holding it in (see built_tiles' own note on why there are
+	## two).
+	func destroy_at_global(x: int, y: int) -> bool:
+		var cell := Vector2i(x, y)
+		var had: bool = occupied_cells.has(cell) or built_tiles.has(cell)
+		occupied_cells.erase(cell)
+		built_tiles.erase(cell)
+		return had
+
 	## Every tile stock_pond_at was called for -- the real
 	## EarthChunkManager's own entry point for putting a fisher's stocking
 	## into the water they just dug.
@@ -2813,3 +2823,60 @@ func test_a_solid_prop_stops_you_on_the_ground_floors_own_layer():
 		VillageRenderer.GROUND_FLOOR_COLLISION_LAYER,
 		load("res://src/world/earth_chunk_manager.gd").GROUND_FLOOR_COLLISION_LAYER
 	)
+
+
+# -- a fence with nothing left to enclose ------------------------------------
+# Reported live with the village in shot: "There's a bed enclosure without a
+# Farmhouse". A field is only ever fenced around a farmhouse that really
+# stands (_fenced_farm_fields starts from _farmhouse_origins) -- but the
+# rails are real persisted tiles, so a farmhouse that goes afterwards (razed,
+# or reclaimed for standing in water) leaves its frame behind for ever.
+
+func test_rails_with_no_farmhouse_left_are_cleared_away():
+	var coord := _find_settlement_chunk("grassland")
+	var world := StubWorld.new()
+	renderer.spawn_village(parent, coord, coord * CHUNK_SIZE, CHUNK_SIZE, TILE_SIZE, "grassland", world)
+	# A frame standing well away from any farmhouse this village has, the way
+	# one is left behind when the building it belonged to goes.
+	# Planted the way a rail left behind by a razed farmhouse really is:
+	# persisted in the chunk's own modifications.
+	var orphan_global: Vector2i = coord * CHUNK_SIZE + Vector2i(1, 1)
+	world.occupied_cells[orphan_global] = VillageFarm.fence_tile_for("north")
+
+	renderer.spawn_village(parent, coord, coord * CHUNK_SIZE, CHUNK_SIZE, TILE_SIZE, "grassland", world)
+
+	assert_ne(
+		world.modification_at_global(orphan_global.x, orphan_global.y),
+		VillageFarm.fence_tile_for("north"),
+		"a fence around nothing is not a fence"
+	)
+
+
+## And the rails that DO belong to a standing farmhouse are left alone.
+func test_a_real_farms_own_rails_are_left_standing():
+	var coord := _find_settlement_chunk_with_occupation("grassland", "farmer", 5)
+	var world := StubWorld.new()
+	renderer.spawn_village(parent, coord, coord * CHUNK_SIZE, CHUNK_SIZE, TILE_SIZE, "grassland", world)
+	var rails_before := _fence_cells(world, coord)
+	assert_gt(rails_before.size(), 0, "precondition: this village really fenced a field")
+
+	renderer.spawn_village(parent, coord, coord * CHUNK_SIZE, CHUNK_SIZE, TILE_SIZE, "grassland", world)
+
+	assert_eq(_fence_cells(world, coord).size(), rails_before.size(), "a working farm keeps its frame")
+
+
+func _fence_cells(world: StubWorld, coord: Vector2i) -> Array:
+	var out: Array = []
+	var built := _built_tiles(world, coord)
+	for cell in built:
+		if VillageFarm.is_fence_tile(String(built[cell])):
+			out.append(cell)
+	return out
+
+
+## A real farm's own rails go through build_at_global, which this stub keeps
+## in a different dict from the one modification_at_global reads (see
+## StubWorld) -- so the sweep, which asks what is really standing on a cell,
+## never sees them here. That split is why this test can assert they are
+## LEFT ALONE without the sweep being able to reach them either way; the
+## orphan case above plants its rail where the sweep really looks.
