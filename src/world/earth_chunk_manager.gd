@@ -5297,6 +5297,10 @@ func step_fruiting(delta_seconds: float, player_pixel: Vector2) -> void:
 	var season_progress := _season_cycle.progress_through_season(now)
 	for trees in _loaded_trees.values():
 		for tree in trees:
+			# A felled tree stays in the registry after it frees itself --
+			# see step_tree_growth, which is where the corpse is dropped.
+			if not is_instance_valid(tree):
+				continue
 			if not tree.has_method("set_ripe_fruit"):
 				continue
 			# Distance pre-filter, BEFORE any per-tree work: genome lookup,
@@ -7526,6 +7530,12 @@ func _loaded_tree_positions() -> Array:
 	var positions: Array = []
 	for trees in _loaded_trees.values():
 		for tree in trees:
+			# A felled tree stays in the registry after it frees itself, and
+			# reading .position off the corpse does not merely log -- it
+			# ABORTS this walk, so every tree after it goes unreported and
+			# the caller is told the forest is empty.
+			if not is_instance_valid(tree):
+				continue
 			positions.append(tree.position)
 	return positions
 
@@ -7923,13 +7933,24 @@ func step_ground_food(delta_seconds: float) -> void:
 ## Only saplings: a tree with planted_at 0 predates the session and is already
 ## grown, so the common case costs one comparison.
 func step_tree_growth() -> void:
-	for trees in _loaded_trees.values():
+	for chunk_coord in _loaded_trees:
+		var trees: Array = _loaded_trees[chunk_coord]
+		var survivors: Array = []
 		for tree in trees:
+			if not is_instance_valid(tree):
+				continue
+			survivors.append(tree)
 			if not ("planted_at" in tree) or tree.planted_at <= 0.0:
 				continue
 			if not tree.has_method("set_age"):
 				continue
 			tree.set_age(_world_age_seconds - tree.planted_at)
+		# This walk visits every loaded tree every tick anyway, so it is the
+		# one place that can drop the corpses for free. Without it a chunk
+		# that is never unloaded accumulates one dead entry per tree ever
+		# felled, and every other walk pays a validity check for each.
+		if survivors.size() != trees.size():
+			_loaded_trees[chunk_coord] = survivors
 
 
 ## How often the tall-grass sprite layer re-syncs to the simulation (and
@@ -9914,6 +9935,11 @@ func sync_tree_season(player_pixel: Variant = null) -> void:
 	_last_tree_season = signature
 	for trees in _loaded_trees.values():
 		for tree in trees:
+			# has_method on a freed node does not log and carry on -- it
+			# takes the process down. A felled tree is still in the registry
+			# until step_tree_growth drops it.
+			if not is_instance_valid(tree):
+				continue
 			if not tree.has_method("set_ripe_fruit"):
 				continue
 			if (
