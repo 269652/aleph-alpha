@@ -221,7 +221,48 @@ it says about the BUILDING: a store that took one trip to fill would not be
 worth raising, and one that took a thousand would make hauling the only
 thing anybody ever did.
 
-## Mechanism 4 — The store binds its own porter
+## Mechanism 4 — The carter
+
+Asked directly, with the empty store in shot: *"The warehouse also needs to
+bind a worker which then collects all ressources from every production
+building"*, and then corrected, with the wagon in shot: *"It should be a
+real NPC pulling the cart, not an additional sprite"*.
+
+Both halves matter, and the correction is the design. A village's hauling is
+a **trade**, not a spawned walker: `carter` joins the occupations a villager
+can be born to, and a carter works the store's round exactly the way the
+lumberjack works the mill, the farmer works their beds and the fisher works
+their pond — an `NpcMarker` work step that overrides the schedule's
+decorative workspot, built on the same `LogisticsBehavior` phase machine the
+placeable-scale worker already uses. Nothing about the round is reinvented;
+what changes is who walks it.
+
+This answers the open question Mechanism 3 left standing — *"whether hauling
+should belong to an occupation instead — a carter, a porter"* — the way the
+report does.
+
+- **The round.** From whichever producer has the most waiting on its shelf,
+  to the store's own door, and back. A carter with nothing to fetch keeps
+  the ordinary schedule, like every other villager whose work has nothing
+  in it today.
+- **What they carry it in** is the Bollerwagen (Mechanism 5), which is the
+  point of the trade existing: the goods ride on the cart, not in the
+  carter's hands.
+- **A named consequence.** A villager's trade is rolled from
+  `NpcIdentity.OCCUPATIONS` by index, so adding one re-rolls every
+  villager's trade in every village in an existing world. Names, houses and
+  seeds are unchanged; who does what shifts. That is the price of a trade
+  being a real trade rather than a special case bolted beside them, and it
+  is stated here rather than discovered.
+
+## Superseded — The store binds its own porter
+
+*Kept for the record; replaced by Mechanism 4 above.* The first pass spawned
+a `LogisticsMarker` per (store, producer) pair — the same worker the
+`sagewerk`→`storage` placeables use. It worked, and it was the wrong shape:
+a second kind of person, drawn with a placeholder sprite, walking beside the
+villagers who already live there. The `LogisticsMarker` keeps its original
+job (the single-tile placeables); a village's own store is a carter's.
 
 Asked directly, with the empty store in shot: *"The warehouse also needs to
 bind a worker which then collects all ressources from every production

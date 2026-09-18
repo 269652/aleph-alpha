@@ -37,9 +37,16 @@ const NpcSkillAllocation = preload("res://src/world/npc_skill_allocation.gd")
 ## list by seed, so adding to it RE-ROLLS who is who in every village -- a
 ## real, world-wide change to generated content, accepted because a village
 ## with a sawmill and no sawyer is the worse answer.
+## **Adding one re-rolls every villager's trade in every village**, here and
+## in any world already saved: an occupation is picked by INDEX into this
+## list, so its length is part of the roll. Names, houses and seeds are
+## unchanged; who does what shifts. That is the price of a trade being a
+## real trade rather than a special case bolted beside them, and it is
+## stated here rather than discovered (see docs/concept/village_warehouse.md
+## Mechanism 4, which added "carter" and says so too).
 const OCCUPATIONS: Array[String] = [
 	"farmer", "blacksmith", "merchant", "guard", "fisher", "herbalist", "hunter", "nurse",
-	"lumberjack",
+	"lumberjack", "carter",
 ]
 
 ## Which location_tag an occupation works at during the day -- the single
@@ -78,6 +85,10 @@ const WORK_LOCATION_BY_OCCUPATION := {
 	# the village already raised, and the villager's own work override takes
 	# them out to real trees anyway (docs/concept/village_timber.md).
 	"lumberjack": "sawmill",
+	# The store itself, for the same reason the sawyer's tag is the mill: the
+	# building is really there, and the carter's own work override takes them
+	# out to the producers anyway (docs/concept/village_warehouse.md).
+	"carter": "warehouse",
 }
 
 const PERSONALITY_TRAITS: Array[String] = [

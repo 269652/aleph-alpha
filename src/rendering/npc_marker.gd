@@ -23,6 +23,8 @@ const Carcass = preload("res://src/rendering/carcass.gd")
 const NpcCondition = preload("res://src/world/npc_condition.gd")
 const VillagerBehavior = preload("res://src/gameplay/villager_behavior.gd")
 const VillageSawmill = preload("res://src/gameplay/village_sawmill.gd")
+const VillageCart = preload("res://src/gameplay/village_cart.gd")
+const LogisticsBehavior = preload("res://src/gameplay/logistics_behavior.gd")
 const LumberjackBehavior = preload("res://src/gameplay/lumberjack_behavior.gd")
 const SagewerkProduction = preload("res://src/world/sagewerk_production.gd")
 const ChoppableTree = preload("res://src/rendering/choppable_tree.gd")
@@ -223,6 +225,23 @@ var stock_building_cell: Vector2i = NO_STOCK_BUILDING
 
 ## The sentinel sawmill_cell carries when this villager has none.
 const NO_SAWMILL := Vector2i(-2147483648, -2147483648)
+
+## The store this villager carts for, and the producers whose shelves they
+## empty into it -- GLOBAL anchor cells, handed over by VillageRenderer the
+## same way a sawyer is handed their mill. NO_STORE for every villager who
+## is not this village's carter (docs/concept/village_warehouse.md,
+## Mechanism 4).
+const NO_STORE := Vector2i(-2147483648, -2147483648)
+var store_cell: Vector2i = NO_STORE
+var producer_cells: Array[Vector2i] = []
+
+## The Bollerwagen this carter pulls (a CartMarker), or null. The goods ride
+## ON IT -- a cart left standing is a cart with the timber still in it, which
+## is the whole point of the trade having one (Mechanism 5).
+var cart = null
+
+var _carter: LogisticsBehavior = null
+var _round_shelf: Vector2i = NO_STORE
 
 ## The GLOBAL tile of the sawmill this villager works, or NO_SAWMILL
 ## (docs/concept/village_timber.md). Assigned by VillageRenderer, the only
@@ -527,6 +546,13 @@ func _process(delta: float) -> void:
 	var timber_target = _step_timber(delta, is_working)
 	if timber_target != null:
 		target = timber_target
+	# And the village's carter walks the store's round -- producer to store
+	# and back, with the wagon behind them. The same override shape, and the
+	# same place in the chain, as the mill and the field
+	# (docs/concept/village_warehouse.md, Mechanism 4).
+	var round_target = _step_cart(delta, is_working)
+	if round_target != null:
+		target = round_target
 	var need_target = _step_needs(delta, not is_on_real_work())
 	if need_target != null:
 		target = need_target
@@ -1482,6 +1508,111 @@ func _cell_centre(cell: Vector2i) -> Vector2:
 
 func _field_reach() -> float:
 	return float(_tile_size) * FIELD_REACH_TILES
+
+
+## The carter's round: from whichever producer has the most waiting on its
+## shelf, to the store's own door, and back (docs/concept/
+## village_warehouse.md, Mechanism 4).
+##
+## The fourth sibling of _step_hunt, _step_farm and _step_timber, on the
+## same four seams (find -> position -> reach -> act) and built on the SAME
+## LogisticsBehavior phase machine the placeable-scale worker already uses:
+## SEEKING -> APPROACHING -> COLLECTING -> CARRYING -> DEPOSITING. Nothing
+## about hauling is reinvented; what changed is that a real villager walks
+## it rather than a spawned walker ("It should be a real NPC pulling the
+## cart, not an additional sprite").
+##
+## Off the clock the round is dropped rather than paused, exactly as the
+## field and the trunk are -- and the cart is left standing WHERE IT IS,
+## still holding whatever is in it, which is the feature rather than a gap.
+func _step_cart(delta: float, is_working: bool):
+	if not VillageCart.walks_the_round(identity.occupation) or store_cell == NO_STORE:
+		return null
+	if _world == null or not _world.has_method("structure_stock_contents_at"):
+		return null
+	if _carter == null:
+		_carter = LogisticsBehavior.new()
+	if cart != null and is_instance_valid(cart):
+		cart.pulled_toward = position
+	if not is_working:
+		if _carter.phase != LogisticsBehavior.Phase.SEEKING:
+			_carter.abort()
+		return null
+
+	match _carter.phase:
+		LogisticsBehavior.Phase.SEEKING:
+			_carter.advance(delta)
+			if not _carter.can_commit():
+				return null
+			var shelf := VillageCart.fullest_shelf(_shelves_waiting())
+			if shelf.is_empty():
+				return null
+			_round_shelf = shelf["cell"]
+			_carter.begin_approach()
+			return _cell_centre(_round_shelf)
+		LogisticsBehavior.Phase.APPROACHING:
+			if position.distance_to(_cell_centre(_round_shelf)) <= _field_reach():
+				_carter.arrive_at_source()
+			return _cell_centre(_round_shelf)
+		LogisticsBehavior.Phase.COLLECTING:
+			if _carter.advance(delta) == LogisticsBehavior.Outcome.COLLECTED:
+				_load_the_cart()
+			return position
+		LogisticsBehavior.Phase.CARRYING:
+			if position.distance_to(_cell_centre(store_cell)) <= _field_reach():
+				_carter.arrive_at_storage()
+			return _cell_centre(store_cell)
+		LogisticsBehavior.Phase.DEPOSITING:
+			if _carter.advance(delta) == LogisticsBehavior.Outcome.DEPOSITED:
+				_unload_the_cart()
+			return position
+	return null
+
+
+## What each of this village's producers is really holding, in the {cell,
+## waiting} shape VillageCart.fullest_shelf reads. Asked of the world every
+## time rather than remembered: a shelf fills while the carter is walking.
+func _shelves_waiting() -> Array:
+	var shelves: Array = []
+	for cell in producer_cells:
+		var waiting := 0
+		var contents: Dictionary = _world.structure_stock_contents_at(cell.x, cell.y)
+		for item_id in contents:
+			waiting += int(contents[item_id])
+		shelves.append({"cell": cell, "waiting": waiting})
+	return shelves
+
+
+## Fills the wagon from the shelf it is standing at, and really takes what
+## it loaded off that shelf. What will not fit is left there rather than
+## destroyed -- a full cart comes back for the rest.
+func _load_the_cart() -> void:
+	if cart == null or not is_instance_valid(cart):
+		_carter.abort()
+		return
+	var contents: Dictionary = _world.structure_stock_contents_at(_round_shelf.x, _round_shelf.y)
+	var loaded := 0
+	for item_id in contents:
+		var wanted := int(contents[item_id])
+		if wanted <= 0:
+			continue
+		var took: int = cart.load_on(String(item_id), wanted)
+		if took <= 0:
+			continue
+		_world.withdraw_from_structure_at(_round_shelf.x, _round_shelf.y, String(item_id), took)
+		loaded += took
+	if loaded <= 0:
+		_carter.abort()
+
+
+## Empties the wagon into the store, every item id in one arrival at the
+## door.
+func _unload_the_cart() -> void:
+	if cart == null or not is_instance_valid(cart):
+		return
+	var unloaded: Dictionary = cart.unload_all()
+	for item_id in unloaded:
+		_world.deposit_to_structure_at(store_cell.x, store_cell.y, String(item_id), int(unloaded[item_id]))
 
 
 ## The nearest real thing this villager may take right now, or null.
