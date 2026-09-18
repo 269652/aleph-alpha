@@ -97,13 +97,26 @@ func _measure(farmer) -> void:
 
 	var elapsed := 0.0
 	var working_ticks := 0
-	var planted_calls := 0
+	var peak_in_farmhouse := 0
+	var deposits := 0
+	var store_cell: Vector2i = farmer.stock_building_cell
 	while elapsed < SIMULATED_SECONDS:
+		var before: int = (
+			_manager.structure_stock_at(store_cell.x, store_cell.y, crop) if crop != "" else 0
+		)
 		farmer._process(SLICE)
 		_manager.step_farm_plots(SLICE)
 		elapsed += SLICE
 		if farmer._on_real_field:
 			working_ticks += 1
+		var now_held: int = _manager.structure_stock_at(store_cell.x, store_cell.y, crop) if crop != "" else 0
+		if now_held > before:
+			deposits += 1
+		peak_in_farmhouse = maxi(peak_in_farmhouse, now_held)
+	_report_lines.append(
+		"  farmhouse PEAK held %d over the run, %d separate deposits"
+		% [peak_in_farmhouse, deposits]
+	)
 	_report_lines.append(
 		"  worked %d/%d ticks over %.0fs" % [working_ticks, int(SIMULATED_SECONDS / SLICE), SIMULATED_SECONDS]
 	)
@@ -126,6 +139,19 @@ func _measure(farmer) -> void:
 		)
 	if farmer.economy != null and farmer.economy.market != null:
 		_report_lines.append("  village market stock=%s" % str(farmer.economy.market.stock))
+	# What the FARMHOUSE itself is holding -- reported live: "der Farmer
+	# scheint was zu ernten und laeuft dann zum Farmhouse aber es wird kein
+	# Weizen eingelagert".
+	if farmer.stock_building_cell != null:
+		var report_cell: Vector2i = farmer.stock_building_cell
+		_report_lines.append(
+			"  farmhouse at %s holds wheat=%d herb=%d"
+			% [
+				str(report_cell),
+				_manager.structure_stock_at(report_cell.x, report_cell.y, "wheat"),
+				_manager.structure_stock_at(report_cell.x, report_cell.y, "herb"),
+			]
+		)
 
 
 func _report_market(chunk_coord: Vector2i) -> void:

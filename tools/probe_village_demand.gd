@@ -35,8 +35,9 @@ func _initialize() -> void:
 	var production := NpcProduction.new()
 	var interval: float = EarthChunkManager.SETTLEMENT_STEP_INTERVAL
 	var found := 0
-	print("DEMAND draw_per_household=%d interval=%.1f rate=%.4f" % [
-		4, interval, NpcProduction.PRODUCTION_RATE_PER_SECOND
+	var SettlementState = load("res://src/emergence/settlement_state.gd")
+	print("DEMAND draw_per_household=%.2f interval=%.1f" % [
+		SettlementState.FOOD_PER_HOUSEHOLD, interval
 	])
 	for dy in range(-10, 11):
 		for dx in range(-10, 11):
@@ -58,7 +59,7 @@ func _initialize() -> void:
 			var per_trade := {}
 			for trade in ["farmer", "hunter", "fisher"]:
 				per_trade[trade] = production.yield_per_second(trade, region, Vector2.ZERO) * interval
-			var draw := SettlementGranary.subsistence_draw(SettlementGenerator.POPULATION)
+			var draw: int = SettlementGranary.subsistence_draw(SettlementGenerator.POPULATION)
 			print("VILLAGE %s biome=%s veg=%.4f herb=%.3f fish=%.3f draw=%d farmer=%.3f hunter=%.3f fisher=%.3f" % [
 				str(coord), biome, region.vegetation_density, region.herbivore_population,
 				region.fish_population, draw,

@@ -155,7 +155,15 @@ func spawn_village(
 		# stall and gate must be derived from the SAME square the layout
 		# and the paving below use, or a riverside village's props stand
 		# where its square isn't.
-		_is_buildable_local(chunk_coord, chunk_size, world) if world != null else Callable()
+		_is_buildable_local(chunk_coord, chunk_size, world) if world != null else Callable(),
+		# What this village's own land feeds it with (SettlementDemand.
+		# trade_for): the SEEDED region, so the roster is the same on every
+		# visit and does not drift with the weather. A world that cannot
+		# answer falls back to farming, like every other hook here.
+		(
+			world.seeded_region_for_chunk(chunk_coord)
+			if world != null and world.has_method("seeded_region_for_chunk") else null
+		)
 	)
 
 	# One VillageMarket per settlement, shared by every villager built below

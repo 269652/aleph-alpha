@@ -126,16 +126,98 @@ changed no behaviour and the recalibration can be judged on its own.
   the seam** to `SETTLEMENT_STEP_INTERVAL`, which `SettlementState` cannot
   import (that module is preloaded by the manager, so the dependency runs
   one way only).
-- 🚧 **The supply side is still incommensurable.** `NpcProduction` applies
-  one rate to a 0–1 density and to two headcounts. Turning all three into
-  food-per-second means reading each resource's own **renewal** rather than
-  its standing stock — `VegetationGrowthModel`, `HerbivorePopulationModel`
-  and `AquaticPopulationModel` each already have one. Not attempted yet;
-  this doc exists so the next pass starts from the measurement rather than
-  re-deriving it.
-- 🚧 **The demand-driven founding roster** waits on that. The rule itself is
-  short — staff food producers until the village's own draw is covered, and
-  let the land pick the trade — but it is only meaningful once a farmer's
-  yield and a fisher's are the same kind of number.
+- ✅ **One currency.** `vegetation_density_near` returns a per-CELL MEAN
+  while the other two return chunk TOTALS, and one rate was applied to all
+  three alike. `NpcProduction.standing_food` multiplies the mean back up by
+  `CELLS_PER_REGION`, so all three are chunk totals in food units. That they
+  ARE the same unit is not assumed: `NpcEconomy._deplete_continuous` already
+  spends one unit of vegetation density, one herbivore or one fish per food
+  unit gathered, so the game's own accounting says a cell's density unit, a
+  deer and a fish are each one food unit.
+- ✅ **Each resource is scaled by its own renewal.** The single invented
+  `PRODUCTION_RATE_PER_SECOND` (0.05, "chosen for reasonable pacing" by its
+  own comment) is gone. A forager sustainably takes a share of what the
+  resource REPLACES, and all three are logistic populations whose growth
+  rate per day is already written down —
+  `VegetationGrowthModel.GROWTH_PACE_PER_DAY`,
+  `HerbivorePopulationModel.GROWTH_RATE_PER_DAY`,
+  `AquaticPopulationModel.GROWTH_RATE_PER_DAY`. A logistic population's
+  **maximum sustainable yield is r·K/4**; textbook, not picked here. The
+  standing stock stands in for K because `EcosystemSimulation` seeds a
+  region at equilibrium, and a worked-down region therefore yields less,
+  which is the right direction and is exactly what land health already reads.
+- ✅ **A producer reaches part of a region, not all of it.** Without this
+  the drip handed ONE villager a whole 1024-cell chunk's sustainable yield:
+  measured, 1152 food per work block against the 225 a real worked field
+  yields, so a farmer was five times better off not farming. Each trade's
+  reach is the one this codebase already measured for that trade's own real
+  work — `VillageFarm.FIELD_REACH_TILES` for a farmer, `HuntableQuarry.
+  SEARCH_RADIUS_PX` for a hunter, `NpcMarker.CAST_DISTANCE_PX` for a fisher
+  — as a disc, capped at the region. **Two independent anchors agree**: at
+  the farmer's own field reach the drip lands at about a seventh of a real
+  field's 225 per work block, which is the "about eight times the drip it
+  replaces" [village_farms.md](village_farms.md) already stated as the
+  design intent before any of this.
+
+**Measured after both halves** (`tools/probe_village_demand.gd`, the same
+real chunks), per assessment against a draw of 6 for five households:
+
+| village | farmer | hunter | fisher |
+|---|---|---|---|
+| (660,136) | 0.219 | 0.021 | 0.000 |
+| (654,137) | 0.228 | 0.022 | 3.029 |
+| (659,138) | 0.320 | 0.031 | 1.764 |
+| (649,153) | 0.185 | 0.018 | 0.000 |
+
+Comparable at last, and the ratios say something true: a farmer out-forages
+a hunter about ten to one on ordinary grassland, and a fisher beats both
+where there is real water and yields nothing where there is not.
+
+🚧 **A hunter cannot be a village's staple**, and that is a finding rather
+than a tuning: `EcosystemSimulation.herbivore_capacity_at` feeds
+`HERBIVORES_PER_VEGETATION_UNIT` (20) a per-cell MEAN density, so a whole
+chunk supports about **one deer**. That is the same class of unit error
+fixed above, one level down — but `HERBIVORES_PER_VEGETATION_UNIT` was
+calibrated against the mean, so correcting the input means retuning the
+constant by ~1000× and moving every creature spawn, predator population and
+hunt in the game. Deliberately not attempted here.
+
+**The drip is a supplement; real work is what feeds a village.** At 0.22 per
+assessment against a draw of 6, no amount of foraging feeds five households
+— and that is correct. A real worked farmhouse yields ~225 per work block,
+about 7.5 per assessment, which covers six. That is the number the founding
+roster reasons about, not the drip.
+
+## The roster, finally driven by demand
+
+`SettlementFoodDemand` (deliberately not `SettlementDemand`, which is City
+Hall's own recipe-graph step and has nothing to do with food):
+
+- **How many.** `producers_needed(household_count)` is the village's own
+  subsistence draw over what one producer's real work brings in
+  (`VillageFarm.FIELD_YIELD_PER_WORK_BLOCK`, measured by a real villager
+  over a real field, not described in a comment). A founding five needs
+  **one** — the old hardcode's answer, for the first time for a reason —
+  and a village that outgrows one field needs a second.
+- **Which trade.** `trade_for(region)` is whichever of farmer, herbalist,
+  fisher and hunter yields most *here* — only askable at all because the
+  three are finally the same kind of number. Land with real water is worked
+  by a **fisher**, who digs and stocks a pond; ordinary grassland by a
+  **farmer**, who raises a farmhouse. A hunter never wins, for the measured
+  reason above.
+- **Which villagers.** Conscription comes off the END of the roster and
+  only takes villagers who are not already feeding the village, so it stays
+  deterministic per chunk and leaves the earlier founders exactly as they
+  rolled.
+
+The region every caller reads is the **seeded** one
+(`EarthChunkManager.seeded_region_for_chunk`), a pure function of terrain:
+the village is founded with the same roster on every visit, and the live
+ecology cannot make a roster drift with the weather.
+
+🚧 **A village founded before this keeps its buildings but not its roster.**
+Buildings are persisted and rosters are not, so an existing save's farmhouse
+may now belong to a village whose food producer the land made a fisher.
+Nothing repairs that; the next farmhouse the village raises will match.
 - 🚧 **A household is assumed to be one villager.** True today by
   construction, and nothing enforces it.
