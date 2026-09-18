@@ -50,7 +50,8 @@ func test_a_settlement_with_no_households_eats_nothing():
 func test_gathering_is_npc_productions_own_rate_over_the_elapsed_time():
 	var gathered: Dictionary = SettlementGranary.gathered_over(["hunter"], _region(0.0, 10.0, 0.0), 30.0)
 	assert_almost_eq(
-		float(gathered["meat"]), NpcProduction.PRODUCTION_RATE_PER_SECOND * 10.0 * 30.0, 0.0001
+		float(gathered["meat"]),
+		NpcProduction.new().yield_per_second("hunter", region, Vector2.ZERO) * 30.0, 0.0001
 	)
 
 

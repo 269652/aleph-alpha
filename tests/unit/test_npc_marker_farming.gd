@@ -429,7 +429,8 @@ func test_a_capped_field_is_worth_more_than_the_drip_it_replaces():
 	var NpcProduction = load("res://src/world/npc_production.gd")
 	var harvested := _wheat_off_a_field(VillageFarm.MAX_WORKED_CELLS)
 	var dripped: float = (
-		float(NpcProduction.PRODUCTION_RATE_PER_SECOND) * 0.6 * WORK_BLOCK_SECONDS
+		NpcProduction.new().yield_per_second("farmer", _DripWorld.new(), Vector2.ZERO)
+		* WORK_BLOCK_SECONDS
 	)
 	assert_gt(
 		harvested, dripped,
@@ -760,3 +761,14 @@ func test_a_fisher_off_the_clock_carries_their_catch_in_and_stops_fishing():
 ## effort per action rather than two tunings to keep in step.
 func test_a_cast_costs_what_a_piece_of_field_work_costs():
 	assert_eq(NpcMarker.CAST_SECONDS, FarmerBehavior.WORK_SECONDS)
+
+
+## The ambient regional drip a farmer would live on WITHOUT a field, read
+## through NpcProduction itself rather than re-derived: that module's rate is
+## each resource's own renewal now, not one shared fraction (see
+## docs/concept/settlement_food_calibration.md), so a test that multiplied a
+## constant by a density would be pricing a farmer's alternative wrongly.
+class _DripWorld:
+	extends RefCounted
+	func vegetation_density_near(_pos: Vector2) -> float:
+		return 0.6
