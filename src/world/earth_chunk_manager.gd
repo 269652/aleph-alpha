@@ -620,7 +620,26 @@ func solid_obstacles_near(at: Vector2, radius: float) -> Array:
 	return result
 
 
-func _append_if_near(result: Array, node: Node, at: Vector2, radius: float) -> void:
+## `node` is deliberately UNTYPED, and that is the whole of a crash reported
+## live in the middle of play:
+##
+##   Invalid type in function '_append_if_near' ... The Object-derived class
+##   of argument 2 (previously freed) is not a subclass of the expected
+##   argument class.
+##     at: solid_obstacles_near   [1] _blockers_near (creature_marker.gd)
+##
+## A felled tree stays in _loaded_trees after it frees itself (choppable_
+## tree.gd calls queue_free() while leaving the entry in the array -- see
+## _clear_vegetation_on_cells' own note). The is_instance_valid guard below
+## was always here, as the first line; but GDScript type-checks a declared
+## `node: Node` parameter at the CALL, and a freed object fails that check
+## before the body is ever entered. A guard behind a type annotation that
+## rejects exactly the value it guards against cannot run.
+##
+## Worse than a log line: the failed call aborted the whole sensing pass, so
+## every obstacle AFTER the dead one went unseen and creatures walked
+## through standing trees.
+func _append_if_near(result: Array, node, at: Vector2, radius: float) -> void:
 	if not is_instance_valid(node):
 		return
 	if at.distance_to(node.position) > radius:

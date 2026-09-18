@@ -6763,6 +6763,50 @@ func test_solid_obstacles_near_returns_only_obstacles_within_the_radius():
 	assert_eq(found[0]["position"], Vector2(100, 100))
 
 
+## A FELLED tree stays in _loaded_trees after it frees itself: choppable_
+## tree.gd calls queue_free() on the node while leaving the entry in this
+## array, which _clear_vegetation_on_cells' own doc comment already records.
+##
+## Reported live, as a crash in the middle of play:
+##
+##   Invalid type in function '_append_if_near' ... The Object-derived class
+##   of argument 2 (previously freed) is not a subclass of the expected
+##   argument class.
+##     at: solid_obstacles_near (earth_chunk_manager.gd:617)
+##     [1] _blockers_near (creature_marker.gd:2297)
+##
+## _append_if_near HAD an is_instance_valid guard -- as its first line. But
+## GDScript type-checks a declared `node: Node` parameter at the CALL, and a
+## freed object fails that check before the function body is ever entered,
+## so the guard could never run. A guard behind a type annotation that
+## rejects exactly the value it guards against is not a guard.
+func test_solid_obstacles_near_survives_a_freed_obstacle_still_in_the_list():
+	var standing := Node2D.new()
+	standing.position = Vector2(100, 100)
+	entities_parent.add_child(standing)
+	var felled := Node2D.new()
+	felled.position = Vector2(105, 100)
+	entities_parent.add_child(felled)
+	manager._loaded_trees[Vector2i(0, 0)] = [standing, felled]
+	felled.free()
+
+	var found: Array = manager.solid_obstacles_near(Vector2(110, 100), 64.0)
+
+	assert_eq(found.size(), 1, "the standing tree is still found")
+	assert_eq(found[0]["position"], Vector2(100, 100))
+
+
+## The same for a stone, which reaches the same call through the other loop.
+func test_solid_obstacles_near_survives_a_freed_stone():
+	var gone := Node2D.new()
+	gone.position = Vector2(100, 100)
+	entities_parent.add_child(gone)
+	manager._loaded_stones[Vector2i(0, 0)] = [gone]
+	gone.free()
+
+	assert_eq(manager.solid_obstacles_near(Vector2(110, 100), 64.0).size(), 0)
+
+
 ## An obstacle can sit just across a chunk border from the asking creature --
 ## the chunk-range math must cover every chunk the query circle overlaps,
 ## not only the creature's own.
