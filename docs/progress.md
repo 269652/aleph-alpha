@@ -26123,6 +26123,58 @@ and `test_procedural_landmark_sprite.gd` green.
 - **A village with more than one store.** The handout gives every carter the
   FIRST store in the chunk. Villages raise one, so this has never mattered; a
   second would want the round split rather than doubled.
-- **The cart is not yet a thing you can touch.** It has no hitbox, clicking it
-  shows nothing, and the player cannot take hold of it — asked for directly
-  and not built here.
+- ~~**The cart is not yet a thing you can touch.**~~ Built below.
+
+## The handcart is a real object you can take hold of (`concept/village_warehouse.md`, 2026-09-18)
+
+Asked directly, once the wagon was rolling: *"The cart should also be a real
+entity with hitbox and clicking on it shows the popup with inventory and the
+player should also be able to grab/pull it"*. A cart a carter pulls past you
+that you cannot touch is scenery with an animation. Three different systems
+make it an object instead, so they were built and pinned separately.
+
+✅ **It is in the way.** A `StaticBody2D` on the ground floor's own collision
+layer (`EarthChunkManager.GROUND_FLOOR_COLLISION_LAYER`, pinned equal by
+test), a child of the cart so it moves and is freed with it — the same shape
+`VillageRenderer._solid_body_for` already gives the village well. Sized off
+the cart's own drawn width (`WIDTH_TILES` of road), not the sheet's raw
+pixels, and anchored at its wheels so what stops you is the box at its foot.
+
+✅ **It answers the cursor.** `CartMarker` joins
+`HoverTargetFinder.GROUP_NAME` with a `get_display_name()` that says what is
+in it — an empty wagon and a loaded one are different things to walk up to —
+and one `get_hover_actions()` entry on `primary_action`, which is exactly what
+that context slot is for.
+
+✅ **Clicking it shows what is in it.** `CartMarker.report()` hands
+`HousePanel` a Dictionary in the shape it already consumes. The panel grew
+exactly two seams: a `title` and a `subtitle` override, used only when a
+report carries them. A building carries neither key and keeps the catalog
+naming it always had, so nothing that already opened the panel changed.
+`World._on_world_clicked` prefers a cart within half its drawn width over the
+building underneath it — a wagon stands ON a village's paving and often right
+beside its store, so a click that read through it would make carts
+unclickable exactly where they spend their time. The candidate list is passed
+in rather than scanned inside, which is what keeps that decision testable
+without a live tree.
+
+✅ **It changes hands.** `held_by` is whoever has the shaft and
+`pulled_toward` follows them. A carter only ever takes a FREE cart, so two
+never fight over one; `Player.toggle_cart_hold` takes the nearest within
+`LASSO_RANGE` **by force**, because a villager is not going to wrestle the
+player for a wagon and being refused by an NPC claim reads as a bug. A carter
+who has lost the shaft drops the round rather than emptying a shelf into a
+cart they are not holding, and lets go off the clock — the wagon stands where
+the round ended, still loaded, and is village property again the moment
+nobody holds it.
+
+Tests: `test_cart_marker.gd` 25/25, `test_npc_marker_cart.gd` 12/12,
+`test_house_panel.gd` 27/27, `test_world_house_panel_wiring.gd` 10/10,
+`test_player_cart.gd` 7/7 (new).
+
+### Still open
+
+- **Nothing comes back out of the cart on foot.** The panel LISTS the load;
+  it does not offer to take any of it. Reading what is in a wagon and
+  unloading one by hand are different features and only the first was asked
+  for.

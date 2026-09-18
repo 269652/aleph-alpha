@@ -126,3 +126,81 @@ func test_escape_closing_the_gameplay_windows_closes_the_readout_too():
 	world._close_gameplay_windows()
 
 	assert_false(panel.is_open())
+
+
+# -- a cart under the cursor (docs/concept/village_warehouse.md, Mech. 6) ---
+#
+# Asked directly: "clicking on it shows the popup with inventory". A cart is
+# standing ON a village's paving and often right beside its store, so a click
+# that read through it to the building underneath would make the wagon
+# unclickable exactly where carts spend their time.
+
+const CartMarker = preload("res://src/rendering/cart_marker.gd")
+
+
+func _cart_at(at: Vector2) -> CartMarker:
+	var cart := CartMarker.new()
+	cart.position = at
+	add_child_autofree(cart)
+	return cart
+
+
+func _click_tile_with(tile: Vector2i, carts: Array) -> void:
+	world._on_world_clicked((Vector2(tile) + Vector2(0.5, 0.5)) * TerrainRenderer.TILE_SIZE, carts)
+
+
+func test_clicking_a_cart_opens_the_readout_on_its_load():
+	var cart := _cart_at((Vector2(_HOUSE_TILE) + Vector2(0.5, 0.5)) * TerrainRenderer.TILE_SIZE)
+	cart.load_on("beam", 3)
+
+	_click_tile_with(_HOUSE_TILE, [cart])
+
+	assert_true(panel.is_open())
+	assert_eq(panel.title_text(), cart.get_display_name(), "the wagon, not the house under it")
+	assert_eq(int(panel.inventory_rows()[0].get("count")), 3)
+
+
+## The wagon wins over the building it is standing on, which is the whole
+## point -- carts live on a village's paving, beside its store.
+func test_a_cart_wins_over_the_building_it_stands_on():
+	var cart := _cart_at((Vector2(_HOUSE_TILE) + Vector2(0.5, 0.5)) * TerrainRenderer.TILE_SIZE)
+
+	_click_tile_with(_HOUSE_TILE, [cart])
+
+	assert_false(panel.subtitle_text().contains("Ilsa Rook"), "the house was not what was clicked")
+
+
+## A cart somewhere else does not swallow a click meant for the building.
+func test_a_cart_across_the_village_does_not_steal_the_click():
+	var cart := _cart_at(Vector2(4000, 4000))
+
+	_click_tile_with(_HOUSE_TILE, [cart])
+
+	assert_true(panel.subtitle_text().contains("Ilsa Rook"), "the house answered, as it should")
+
+
+## And the nearest one, when a village has parked two beside each other.
+func test_the_nearest_cart_is_the_one_that_answers():
+	var here := (Vector2(_HOUSE_TILE) + Vector2(0.5, 0.5)) * TerrainRenderer.TILE_SIZE
+	var near := _cart_at(here)
+	near.load_on("beam", 2)
+	var far := _cart_at(here + Vector2(CartMarker.WIDTH_TILES * TerrainRenderer.TILE_SIZE, 0.0))
+	far.load_on("plank", 7)
+
+	_click_tile_with(_HOUSE_TILE, [far, near])
+
+	assert_eq(int(panel.inventory_rows()[0].get("count")), 2, "the one under the cursor")
+
+
+## A freed cart is not a cart: a click during the frame a village unloaded
+## must not reach through a dangling reference.
+func test_a_cart_that_is_gone_is_not_clicked():
+	var cart := CartMarker.new()
+	cart.position = (Vector2(_HOUSE_TILE) + Vector2(0.5, 0.5)) * TerrainRenderer.TILE_SIZE
+	add_child(cart)
+	remove_child(cart)
+	cart.free()
+
+	_click_tile_with(_HOUSE_TILE, [cart])
+
+	assert_true(panel.subtitle_text().contains("Ilsa Rook"), "the house answered instead")

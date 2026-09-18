@@ -463,6 +463,16 @@ rules are the rules of a real handcart:
   way it is going). Spawned with the village, so it is freed with the chunk
   — a leak there was the measured cause of a reported framerate decay
   (`tools/probe_node_growth.gd`).
+- ✅ **Mechanism 6 — a real object.** `CartMarker` carries a `StaticBody2D`
+  on the ground floor's own collision layer, joins the hover group with a
+  name that says what is in it, and offers Take Hold / Let Go on the primary
+  context slot. `report()` hands `HousePanel` a title, a subtitle naming who
+  has the shaft, its load and `CartLoad.CAPACITY`; the panel grew exactly two
+  seams for it (`title`/`subtitle` overrides), and a building carries neither
+  key so nothing that already opened it changed. `World._on_world_clicked`
+  prefers a cart within half its drawn width over the building underneath,
+  and `Player.toggle_cart_hold` takes the nearest one within `LASSO_RANGE` by
+  force, or lets go of the one already held.
 
 ## Known open questions
 

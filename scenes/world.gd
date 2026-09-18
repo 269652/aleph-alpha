@@ -2,6 +2,7 @@ extends Node2D
 
 const MushroomMarker = preload("res://src/rendering/mushroom_marker.gd")
 const TerrainRenderer = preload("res://src/rendering/terrain_renderer.gd")
+const CartMarker = preload("res://src/rendering/cart_marker.gd")
 const TorchGlow = preload("res://src/rendering/torch_glow.gd")
 const GroundSlide = preload("res://src/gameplay/ground_slide.gd")
 const RenderResolution = preload("res://src/rendering/render_resolution.gd")
@@ -3581,7 +3582,7 @@ func _unhandled_input(event: InputEvent) -> void:
 	elif event.is_action_pressed(SETTINGS_TOGGLE_ACTION):
 		_handle_escape()
 	elif event is InputEventMouseButton and event.pressed and event.button_index == MOUSE_BUTTON_LEFT:
-		_on_world_clicked(_world_position_of(event.position))
+		_on_world_clicked(_world_position_of(event.position), _carts_in_world())
 	else:
 		_handle_hotbar_hotkeys(event)
 
@@ -3777,11 +3778,51 @@ func _build_house_panel() -> void:
 ## opened by clicking the WORLD, which is exactly the gesture it is for.
 ## Suppressed entirely while a modal is open, matching every other
 ## world-space affordance in this file (see _world_hints_allowed).
-func _on_world_clicked(world_position: Vector2) -> void:
+func _on_world_clicked(world_position: Vector2, carts: Array = []) -> void:
 	if _any_gameplay_window_open():
+		return
+	# A cart under the cursor wins over the building underneath it
+	# (docs/concept/village_warehouse.md, Mechanism 6): a wagon stands ON a
+	# village's paving and often right beside its store, so a click that read
+	# through it would make carts unclickable exactly where they spend their
+	# time. `carts` is passed in rather than scanned here, which is what keeps
+	# this decision testable without a live tree -- the same reasoning the
+	# world-position conversion above already follows.
+	var cart = _cart_under(world_position, carts)
+	if cart != null:
+		_house_panel.show_report(cart.report())
 		return
 	var tile := _tile_for_position(world_position)
 	_house_panel.show_report(_chunk_manager.household_report_at(tile.x, tile.y))
+
+
+## How close a click has to land to take hold of a cart rather than the
+## ground under it: the cart's own drawn half-width, so the clickable area is
+## the wagon you can see and not a halo around it.
+const CART_CLICK_RADIUS_PX := CartMarker.WIDTH_TILES * TerrainRenderer.TILE_SIZE * 0.5
+
+
+## The nearest cart a click at `world_position` really lands on, or null.
+## Freed carts are skipped: a click during the frame a village unloaded must
+## not reach through a dangling reference.
+static func _cart_under(world_position: Vector2, carts: Array):
+	var best = null
+	var best_distance := CART_CLICK_RADIUS_PX
+	for cart in carts:
+		if cart == null or not is_instance_valid(cart):
+			continue
+		var distance: float = world_position.distance_to(cart.position)
+		if distance <= best_distance:
+			best = cart
+			best_distance = distance
+	return best
+
+
+## Every cart standing in the loaded world right now. Empty when there is no
+## tree to ask (a World built in a test).
+func _carts_in_world() -> Array:
+	var tree := get_tree()
+	return [] if tree == null else tree.get_nodes_in_group(CartMarker.GROUP_NAME)
 
 
 ## Screen space -> world space for a click. The HUD lives on a CanvasLayer
