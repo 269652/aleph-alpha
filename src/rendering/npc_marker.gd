@@ -240,10 +240,7 @@ const FELL_DAMAGE := 5.0
 
 var _sawyer: LumberjackBehavior = null
 var _timber_target: Node2D = null
-var _canopy_off := false
-var _cuts_left := 0
 var _carried_logs := 0
-var _target_growth_scale := 1.0
 var _shaping_elapsed := 0.0
 
 ## This villager's farm work, or null for anyone who does not farm -- the
@@ -620,9 +617,6 @@ func _step_timber(delta: float, is_working: bool):
 			if tree == null or not _sawyer.can_commit():
 				return null
 			_timber_target = tree
-			_canopy_off = false
-			_cuts_left = 0
-			_target_growth_scale = float(tree.growth_scale)
 			_sawyer.begin_approach()
 			return tree.position
 		LumberjackBehavior.Phase.APPROACHING:
@@ -668,14 +662,30 @@ func _timber_still_there() -> bool:
 	return false
 
 
-## The nearest standing tree this MILL's sawyer may work -- measured from
-## the mill, not from the villager, so a village fells its own wood rather
-## than following a trail of trunks across the map.
+## The nearest tree this MILL's sawyer may work -- a trunk already LYING in
+## the mill's range first, then the nearest standing one. Range is measured
+## from the mill, not from the villager, so a village fells its own wood
+## rather than following a trail of trunks across the map.
+##
+## A woodcutter finishes what is already down before putting another one on
+## the ground. This used to skip felled trees outright, so a trunk left
+## lying -- by the player, by weather, or by this villager themselves when
+## they went off the clock and dropped it (_abandon_timber) -- stayed there
+## for ever while they walked past it to fell another. Reported live: "there
+## are lying two felled trees around the sawmill and the worker doesn't
+## bring them in".
 func _nearest_workable_tree(mill: Vector2) -> Node2D:
+	var lying := _nearest_timber(mill, true)
+	return lying if lying != null else _nearest_timber(mill, false)
+
+
+func _nearest_timber(mill: Vector2, felled: bool) -> Node2D:
 	var best: Node2D = null
 	var best_distance := INF
 	for node in get_tree().get_nodes_in_group(ChoppableTree.GROUP_NAME):
-		if not is_instance_valid(node) or node.is_felled():
+		if not is_instance_valid(node) or node.is_queued_for_deletion():
+			continue
+		if node.is_felled() != felled:
 			continue
 		if not VillageSawmill.is_in_range(mill, node.position, _tile_size):
 			continue
@@ -689,21 +699,26 @@ func _nearest_workable_tree(mill: Vector2) -> Node2D:
 ## One swing, staged exactly as the player's own axe stages it: fell the
 ## trunk, take the canopy off, then buck CUTS_TO_CLEAR lengths off the bare
 ## trunk, each one a real log.
+## Each stage is read off the TRUNK rather than off a local mirror of it.
+## The mirror assumed every trunk this villager meets is one they felled
+## themselves, which stopped being true the moment they started finishing
+## trunks already lying there (see _nearest_workable_tree): a half-worked one
+## would have been re-limbed and credited the wrong number of cuts.
 func _swing_at_timber(delta: float) -> void:
 	if not _sawyer.advance(delta):
 		return  # the swing is not ready yet this tick
 	if not _timber_target.is_felled():
 		_timber_target.take_damage(FELL_DAMAGE)
 		return
-	if not _canopy_off:
-		_canopy_off = true
-		_cuts_left = FelledTree.CUTS_TO_CLEAR
+	if not _timber_target.canopy_removed():
 		_timber_target.take_damage(FELL_DAMAGE)  # the canopy comes off, no log yet
 		return
-	_carried_logs += FelledTree.logs_per_cut(_target_growth_scale)
-	_cuts_left -= 1
-	_timber_target.take_damage(FELL_DAMAGE)
-	if _cuts_left <= 0:
+	# buck_for_worker, not take_damage: the drop through WorldItemBus is
+	# right for a player's axe and wrong for a worker who also carries the
+	# same cut home, which made every swing create the timber twice -- once
+	# as a pile nobody collects and once in the mill's own stock.
+	_carried_logs += _timber_target.buck_for_worker()
+	if not _timber_still_there() or _timber_target.cuts_left() <= 0:
 		_timber_target = null
 		_sawyer.start_carry()
 

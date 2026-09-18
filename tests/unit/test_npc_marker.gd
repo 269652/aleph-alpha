@@ -454,11 +454,18 @@ func test_a_working_hunter_gathers_real_food_through_process():
 	# rounds away to nothing. The drip is each resource's own renewal now
 	# (docs/concept/settlement_food_calibration.md), so a fixed second count
 	# silently gathers nothing the moment that is retuned.
-	for i in _working_seconds_to_gather("hunter", 20.0):
+	# The PEAK, not the closing balance: a villager who can buy a meal spends
+	# what they earn on one (NpcEconomy/VillageMarket.buy_meal), so reading
+	# the purse at an arbitrary moment measures whether they had just eaten,
+	# not whether they ever earned. Earning and then spending is still
+	# earning.
+	var peak_gold := 0
+	for i in _working_seconds_to_gather("hunter", 20.0, world):
 		marker._process(1.0)
+		peak_gold = maxi(peak_gold, marker.economy.wallet.balance)
 
 	assert_gt(market.total_stock(), 0.0)
-	assert_gt(marker.economy.wallet.balance, 0)
+	assert_gt(peak_gold, 0, "a working hunter really earns")
 
 
 # -- instruction scripts (docs/concept/npc_instructions.md "Execution /
@@ -1097,10 +1104,15 @@ func _stock_the_stall(market) -> void:
 ## Doubled because two of the four scheduled blocks are work: a villager who
 ## gathers for half their day needs twice the wall clock of one who gathers
 ## all of it.
-func _working_seconds_to_gather(occupation: String, units: float) -> int:
+## `gather_world` is the caller's own stub world, passed in rather than
+## reached for: there is no `world` member on this suite, and referring to
+## one made the WHOLE FILE fail to parse -- which GUT reports as a script it
+## could not load and then runs nothing from, so every test in here was
+## silently dropped rather than failing.
+func _working_seconds_to_gather(occupation: String, units: float, gather_world) -> int:
 	var NpcProduction = load("res://src/world/npc_production.gd")
 	var per_second: float = NpcProduction.new().yield_per_second(
-		occupation, world, marker.position
+		occupation, gather_world, marker.position
 	)
 	if per_second <= 0.0:
 		return 0
