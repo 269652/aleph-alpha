@@ -138,7 +138,11 @@ func test_whole_meals_count_and_the_leftover_fraction_does_not():
 
 func test_carrying_capacity_divides_by_settlement_states_own_food_per_household():
 	var village := VillageMarket.new()
-	village.add_stock("fruit", float(SettlementState.FOOD_PER_HOUSEHOLD * 3))
+	# Whole meals: _village_food_stock counts whole FOOD_UNITS_PER_MEAL per
+	# item (half a fruit feeds nobody), and the per-household draw is a
+	# measured 1.2 rather than a whole number -- so carrying three households
+	# takes the next whole unit up from 3.6, not 3.6 itself.
+	village.add_stock("fruit", ceil(SettlementState.FOOD_PER_HOUSEHOLD * 3.0))
 	assert_eq(SettlementFood.carrying_capacity(null, village), 3)
 
 
@@ -172,7 +176,7 @@ func test_a_settlement_fed_only_by_its_village_market_stops_declining():
 func test_a_settlement_with_exactly_enough_village_food_reads_stable():
 	var household_count := 4
 	var village := VillageMarket.new()
-	village.add_stock("fruit", float(SettlementState.FOOD_PER_HOUSEHOLD * household_count))
+	village.add_stock("fruit", ceil(SettlementState.FOOD_PER_HOUSEHOLD * float(household_count)))
 	var capacity := SettlementFood.carrying_capacity(Market.new(), village)
 	assert_eq(SettlementState.status_for(household_count, capacity), SettlementState.STABLE)
 
@@ -244,7 +248,10 @@ func test_structure_food_adds_to_both_markets():
 	village.add_stock("fruit", 3.0)
 	var storage := _stock_with({"bread": 8})
 	assert_eq(SettlementFood.food_stock(market, village, null, [storage]), 16)
-	assert_eq(SettlementFood.carrying_capacity(market, village, null, [storage]), 16 / SettlementState.FOOD_PER_HOUSEHOLD)
+	assert_eq(
+		SettlementFood.carrying_capacity(market, village, null, [storage]),
+		int(16.0 / SettlementState.FOOD_PER_HOUSEHOLD)
+	)
 
 
 func test_no_structures_at_all_changes_nothing():

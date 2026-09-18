@@ -3429,27 +3429,29 @@ var _settlement_status: Dictionary = {}
 ## _settlement_production_outcome exists to stop, multiplied by the villager
 ## count.
 ##
-## Not a taste number, but be honest about which number it is. It is
-## borrowed from the capacity rule, not measured against the clock: capacity
-## is floor(food / FOOD_PER_HOUSEHOLD) and a VillageMarket's smallest real
-## food move is one whole meal (its own FOOD_UNITS_PER_MEAL, the unit
-## SettlementFood counts in), so FOOD_PER_HOUSEHOLD single-meal moves is the
-## smallest food change that can shift capacity by one whole household --
-## the smallest change that is the settlement changing rather than the band
-## boundary being brushed.
+## A real stretch of WORLD TIME, and that is the whole point of the change
+## that made it one. It used to be SettlementState.FOOD_PER_HOUSEHOLD -- a
+## quantity of FOOD read as a count of ASSESSMENTS -- and the comment here
+## already had to admit in capitals that meals and assessments are not the
+## same unit. Two consequences, both real: nobody could recalibrate what a
+## household eats without silently retuning an unrelated anti-flicker
+## window, and the number itself said nothing about how long a wobble
+## actually lasts (see docs/concept/settlement_food_calibration.md).
 ##
-## MEALS AND ASSESSMENTS ARE NOT THE SAME UNIT, and this constant does not
-## pretend they are. SETTLEMENT_STEP_INTERVAL is 30 world-seconds and
-## villagers gather and eat continuously, so many meals move between any two
-## assessments -- requiring FOOD_PER_HOUSEHOLD assessments is therefore not
-## "wait exactly as long as one household of capacity takes to move." It is
-## an ordinal taken from the one real quantity the classification is already
-## built on, so the window is derived from the same rule rather than picked,
-## and it is deliberately the loosest such number available rather than a
-## fitted one. What it actually buys is pinned in tests, not asserted here:
-## a status that flips back and forth across a band boundary never fires,
-## and one that holds for this many consecutive assessments does.
-const SETTLEMENT_STATUS_DWELL_STEPS := SettlementState.FOOD_PER_HOUSEHOLD
+## Two days, because a status that holds through two whole day-night cycles
+## of the village's own life is the village changing, not the band boundary
+## being brushed. The value is unchanged (SECONDS_PER_SIMULATED_DAY is 60
+## and an assessment is 30, so two days is four assessments, exactly what
+## this was before) -- deliberately, so decoupling it changed no behaviour
+## and the recalibration that follows can be judged on its own.
+##
+## What it actually buys is pinned in tests, not asserted here: a status
+## that flips back and forth across a band boundary never fires, and one
+## that holds for this many consecutive assessments does.
+const SETTLEMENT_STATUS_DWELL_DAYS := 2
+const SETTLEMENT_STATUS_DWELL_STEPS := int(
+	SECONDS_PER_SIMULATED_DAY * SETTLEMENT_STATUS_DWELL_DAYS / SETTLEMENT_STEP_INTERVAL
+)
 ## settlement_id -> {"status", "steps"}: the status currently being dwelt on
 ## and how many consecutive assessments it has held. Cleared the moment the
 ## settlement reads as its already-recorded status again, so a wobble never

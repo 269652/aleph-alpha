@@ -134,8 +134,11 @@ class SeededRegion:
 ## -- SettlementState's own per-household draw, finally drawn. An empty or
 ## nonsensical census eats nothing rather than going negative, the same
 ## clamp VillageWages.deposit already applies to nonsense input.
+## Rounded to whole units because the granary's stock IS whole units (see
+## catchup's own carry), and rounded rather than truncated so a per-household
+## draw below one unit still costs a village something.
 static func subsistence_draw(household_count: int) -> int:
-	return maxi(household_count, 0) * SettlementState.FOOD_PER_HOUSEHOLD
+	return int(round(float(maxi(household_count, 0)) * SettlementState.FOOD_PER_HOUSEHOLD))
 
 
 ## Whether any of these households has an occupation that gathers food at

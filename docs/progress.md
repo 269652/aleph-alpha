@@ -25603,3 +25603,77 @@ already landed on `main` from the other session; nothing here changes it.
 Tests: `test_structure_sheet_cells.gd` 19/19 (+3),
 `test_building_catalog.gd`, `test_household_wellbeing.gd`,
 `test_illustrated_structure_sprite.gd` — 131/131 across the four.
+
+## What a village eats, measured (`concept/settlement_food_calibration.md`, 2026-09-18)
+
+Asked for directly, after a measurement showed the obvious implementation of
+the demand-driven roster would make things worse: *"Erst Granary-Raten
+rekalibrieren, dann alles ableiten"*.
+
+**The gap, measured first** (`tools/probe_village_demand.gd`, real
+settlement chunks). A village of five drew 20 food units per assessment.
+What one producer really brings in on the same land:
+
+| trade | per assessment | reads |
+|---|---|---|
+| farmer | 0.16 – 0.27 | a 0–1 **density** |
+| hunter | 0.94 – 1.63 | a **headcount** |
+| fisher | 0 … 1481 | a **headcount** |
+
+One `PRODUCTION_RATE_PER_SECOND` applied to three quantities that are not in
+the same units. A roster rule staffing producers until demand is met would
+give all-hunter villages inland — no farmhouse anywhere, the exact thing
+that was reported — and one-fisher villages beside water. That is why the
+roster work stopped and this started.
+
+✅ **The dwell window is a stretch of world time, not a food quantity.**
+`SETTLEMENT_STATUS_DWELL_STEPS` **was** `SettlementState.FOOD_PER_HOUSEHOLD`
+— a quantity of FOOD read as a count of ASSESSMENTS, with its own comment
+admitting in capitals that the two are not the same unit. It is
+`SETTLEMENT_STATUS_DWELL_DAYS` (2) times the assessments in a simulated day
+now. Same value (4), no behaviour change — deliberately, so the decoupling
+could be judged separately from the recalibration it unblocks.
+
+✅ **`FOOD_PER_HOUSEHOLD` is measured: 1.2, not 4.** The input is
+`Ethogram.drive_profile("", "villager")`'s hunger entry — rises 0→1 over 50
+world-seconds, urgent at 0.5, one meal resets it — so a fed villager is
+hungry again 25 seconds later and an assessment is 30. Run against the real
+`NpcNeeds` clock for 200 assessments: **240 meals, exactly 1.2 units per
+household per assessment**, against a constant of 4. A **3.33×
+overstatement** of what a village actually eats, in the number every
+carrying-capacity, GROWING/DECLINING, caravan and quest decision divides by.
+
+Two tests hold it there: one runs the measurement, one ties it to the
+ethogram entry it comes from, so retuning hunger fails there rather than
+quietly leaving the settlement economy priced against the old pace.
+
+✅ **`ASSESSMENT_SECONDS` declared where it is used**, pinned across the seam
+to `SETTLEMENT_STEP_INTERVAL`. `SettlementState` cannot import it — the
+manager preloads that module, so the dependency runs one way only.
+
+**Fixtures that encoded the old magnitude were rewritten, not re-tuned.** A
+flicker test stocked a literal 4 meat as "capacity 1 for one household"; at
+the measured draw that is capacity 3, so the settlement started GROWING and
+the test asserted against a state it never reached. It is written off the
+draw now, so it keeps meaning what it says. Same for the granary,
+settlement-food and dialogue fixtures.
+
+**A/B'd rather than assumed.** `test_earth_chunk_manager.gd`'s settlement
+tests fail 5 on the base commit too (tier ×2, specialization ×2, production
+×1 — another session's in-flight work). Stashing this change and diffing the
+failing sets shows **no regression**: the same five, before and after.
+
+🚧 **The supply side is still incommensurable**, and the demand-driven
+roster still waits on it. Turning a grass density and two headcounts into
+food-per-second means reading each resource's own **renewal** rather than
+its standing stock — `VegetationGrowthModel`, `HerbivorePopulationModel` and
+`AquaticPopulationModel` each already have one. The concept doc records the
+measurement so the next pass starts from it.
+
+Tests: 253/253 across `test_settlement_state.gd` (+3),
+`test_settlement_granary.gd`, `test_settlement_food.gd`,
+`test_village_growth.gd`, `test_household_wellbeing.gd`,
+`test_trade_route.gd`, `test_village_market.gd`, `test_npc_economy.gd`,
+`test_settlement_tier.gd`, `test_earth_chunk_manager_village_growth.gd`;
+`test_dialogue_topic.gd`/`test_dialogue_context.gd` clean but for two
+event-type failures that predate this and belong elsewhere.
