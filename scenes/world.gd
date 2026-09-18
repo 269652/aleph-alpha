@@ -5390,36 +5390,51 @@ func _raise_plan_within_reach(builder: Player) -> bool:
 	# wireframe with a villager beside you, and it does not ask the player
 	# to carry the materials themselves.
 	var hired := _chunk_manager.nearest_npc_near(builder.position, Player.TALK_RADIUS)
+	# Why the hire did not happen, for the message below -- empty when
+	# nobody was offered the job at all, which is the ordinary case and
+	# needs no explaining.
+	var hire_refused := ""
 	if hired != null and hired.identity != null and PlanRaising.can_hire_builder(
 		_npc_trust.trust_of(hired.identity.seed_value), BUILDER_WAGE, BUILDER_MINIMUM_WAGE
 	):
 		# The wage really moves before the job is taken: a villager who was
-		# never paid must not end up working, and a player who cannot afford
-		# the wage is told so rather than silently getting free labour.
-		if not WagePayment.pay(
+		# never paid must not end up working.
+		if WagePayment.pay(
 			builder.wallet,
 			_chunk_manager.household_wallet_for_villager(hired.identity.seed_value),
 			int(BUILDER_WAGE)
 		):
-			_show_planner_message("You cannot pay %s the %d gold they want for this." % [
-				hired.identity.npc_name, int(BUILDER_WAGE)
+			var project = _open_raising_project(plan, PlanRaising.Labour.HIRED)
+			if project != null:
+				_hired_builds[project.id] = 1.0
+				_raised_build_advanced_at[project.id] = _chunk_manager.world_age_seconds()
+			_show_planner_message("%s takes the job for %d gold: %s." % [
+				hired.identity.npc_name, int(BUILDER_WAGE), BuildPlan.display_name_of(plan.blueprint_id)
 			])
 			return true
-		var project = _open_raising_project(plan, PlanRaising.Labour.HIRED)
-		if project != null:
-			_hired_builds[project.id] = 1.0
-			_raised_build_advanced_at[project.id] = _chunk_manager.world_age_seconds()
-		_show_planner_message("%s takes the job for %d gold: %s." % [
-			hired.identity.npc_name, int(BUILDER_WAGE), BuildPlan.display_name_of(plan.blueprint_id)
-		])
-		return true
+		# A hire that cannot be paid FALLS THROUGH to your own hands rather
+		# than ending the interaction.
+		#
+		# Reported twice, and this is why: *"hiring a builder does not yet
+		# seem to work"*, then *"It's still not possible to build a planned
+		# entity like pavement"*. Standing in a village -- which is where
+		# wireframes are raised -- there is nearly always somebody within
+		# talking range, and once the player has talked to them enough to
+		# clear the trust gate, EVERY press offered them the job. When the
+		# wage could not move (an empty purse, or a villager the household
+		# store has never heard of, whose wallet is simply null) the player
+		# was told they could not pay and given nothing else -- unable to
+		# lay a paving stone they were standing on and that costs nothing.
+		hire_refused = "You cannot pay %s the %d gold they want. " % [
+			hired.identity.npc_name, int(BUILDER_WAGE)
+		]
 	var missing: Dictionary = PlanRaising.missing_materials(plan.blueprint_id, _carried_counts(builder, plan.blueprint_id))
 	if not missing.is_empty():
 		var shortfall: Array[String] = []
 		for item_id in missing:
 			shortfall.append("%s x%d" % [item_id, missing[item_id]])
-		_show_planner_message("Need %s to raise this %s." % [
-			", ".join(shortfall), BuildPlan.display_name_of(plan.blueprint_id)
+		_show_planner_message("%sNeed %s to raise this %s." % [
+			hire_refused, ", ".join(shortfall), BuildPlan.display_name_of(plan.blueprint_id)
 		])
 		return true
 	# Pillar 1: planning charged nothing, and the building's own real
@@ -5434,7 +5449,9 @@ func _raise_plan_within_reach(builder: Player) -> bool:
 			"chunk_coord": plan.chunk_coord, "origin": plan.origin, "blueprint_id": plan.blueprint_id,
 		}
 		_raised_build_advanced_at[mine.id] = _chunk_manager.world_age_seconds()
-	_show_planner_message("Raising %s yourself." % BuildPlan.display_name_of(plan.blueprint_id))
+	_show_planner_message("%sRaising %s yourself." % [
+		hire_refused, BuildPlan.display_name_of(plan.blueprint_id)
+	])
 	return true
 
 
