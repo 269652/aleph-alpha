@@ -412,6 +412,43 @@ rules are the rules of a real handcart:
 - **A carter reclaims a parked cart** on their next round. A wagon abandoned
   in a field is village property again the moment nobody is holding it.
 
+## Mechanism 7 — The store is where the goods really are
+
+Reported in play: *"The FarmHouse seems to be harvesting something but none
+of it makes it into storage... it's always 0"*.
+
+It was true of both places you could look. A farmer cut wheat onto their
+farmhouse's own shelf — and then, at the end of every work block, carried the
+**whole shelf** into the village's abstract ledger
+(`NpcEconomy.record_real_harvest`, which credits the market and pays the
+farmer in one call). So a farmhouse you clicked was empty, a store you
+clicked was empty, and the carter of Mechanism 4 arrived at a shelf somebody
+had already emptied into thin air.
+
+The village's goods have to be somewhere you can point at. So:
+
+- **A harvest goes on its producer's own shelf and stays there.** The
+  end-of-block carry is gone for any village that HAS a store — the shelf is
+  the carter's to empty, which is the whole reason the trade exists.
+- **The villager is paid at the scythe**, not at the delivery. They did the
+  work; the pay is for the work. `record_harvest_wage` is
+  `record_real_harvest` with the stocking taken out.
+- **The carter's arrival at the store is what credits the village's
+  sellable stock.** One credit, at the moment the goods really get there —
+  so nothing is counted twice, and the market's numbers describe a pile that
+  exists.
+- **A village with no store keeps the old behaviour exactly.** The producer
+  carries their own shelf in and is paid and credited in one go, as before.
+  That is not a leftover: a hamlet too cramped to raise a store (pillar 1's
+  caveat) still has to eat, and `VillageRenderer` already tells every
+  villager whether their village has a store door, so the villager can tell
+  which world they are in without asking anybody.
+
+**What this does not change.** Gold. `record_harvest_wage` pays exactly what
+`record_real_harvest` paid, at exactly the same moment, so no villager earns
+more or less than before and the levy split is untouched. What moved is
+*where the goods are* between the field and the market.
+
 ## Status
 
 - ✅ **Mechanism 1 — standing from founding.** `VillageLayout` reserves the
