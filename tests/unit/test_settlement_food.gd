@@ -311,3 +311,28 @@ func test_the_food_shortfall_carries_the_shape_the_build_decision_reads():
 func test_structure_held_bread_counts_toward_clearing_the_shortfall():
 	var storage := _stock_with({"bread": 40})
 	assert_eq(SettlementFood.food_shortfall_for(5, null, null, null, [storage]), {})
+
+
+## A village node freed while still listed in `loaded_villages` -- the array
+## is a plain registry and is not auto-pruned, so a corpse really can sit in
+## it. This passes today and is pinned so it keeps passing: in Godot 4.7.2 a
+## freed Object compares EQUAL to null, so the resolver's own `node == null`
+## already fails open on one.
+##
+## Worth pinning because the equivalent walks over `_loaded_trees` had no
+## null check at all, and `"planted_at" in <freed>` raises "Invalid Object
+## base for 'in'" and aborts the whole pass (see
+## test_earth_chunk_manager_felled_tree_registry.gd). The difference between
+## the two is one guard, and nothing but a test says so.
+func test_a_freed_village_node_does_not_hide_the_market_behind_it():
+	var chunk := Vector2i(2, 5)
+	var village := VillageMarket.new()
+	var corpse := Node2D.new()
+	corpse.free()
+
+	var market = SettlementFood.village_market_for(
+		EntityRef.for_settlement(chunk),
+		{chunk: [corpse, _villager_with_market(village)]}
+	)
+
+	assert_eq(market, village, "the villager behind the corpse still holds the market")

@@ -25846,3 +25846,57 @@ Tests: 253/253 across `test_settlement_state.gd` (+3),
 `test_settlement_tier.gd`, `test_earth_chunk_manager_village_growth.gd`;
 `test_dialogue_topic.gd`/`test_dialogue_context.gd` clean but for two
 event-type failures that predate this and belong elsewhere.
+
+## A felled tree's corpse aborted every walk behind it (`concept/flora.md`, "The loaded-tree registry holds corpses", 2026-09-18)
+
+Reported in play: *"There are tons of errors saying 'Invalid Object base
+for in'"*.
+
+✅ **One chopped trunk, four broken passes.** `EarthChunkManager._loaded_trees`
+keeps a felled tree's array slot after `ChoppableTree.queue_free()`s itself —
+a documented fact (`_append_if_near` already carries the story of creatures
+walking through standing trees because of it) that seven of the eleven walks
+over that registry guard against and four did not:
+
+| Walk | First touch on the corpse | What it did |
+| --- | --- | --- |
+| `step_tree_growth` | `"planted_at" in tree` | **the reported error**, once per felled tree per tick |
+| `_loaded_tree_positions` | `tree.position` | returned `[]` — the forest reads as empty |
+| `sync_tree_season` | `tree.has_method(...)` | **took the process down** |
+| `step_fruiting` | `tree.has_method(...)` | same |
+
+The damage was never the log line. A runtime error on a freed base aborts
+the enclosing walk, so every tree AFTER the corpse in the array went
+unserved — saplings stopped growing, positions went unreported, leaves
+stopped turning. Pinned by putting the corpse FIRST in the array and
+asserting the live tree behind it was still reached
+(`test_earth_chunk_manager_felled_tree_registry.gd`, 4/4 new).
+
+✅ **And one walk now prunes.** `step_tree_growth` already visits every
+loaded tree every tick, so it rebuilds each chunk's array from the survivors
+it finds. Without it a chunk that is never unloaded accumulates one dead
+entry per tree ever felled there, and every other walk pays a validity check
+for each one forever.
+
+✅ **Two sites audited and left alone, measured rather than assumed.**
+`SettlementFood.village_market_for` and `Player._mount_fitness_score` also
+run `"x" in node` — but both are behind `node == null`, and a direct probe
+confirms a freed Object compares **equal to null** in Godot 4.7.2. They were
+never broken. `test_settlement_food.gd` gained a test pinning that, since
+the difference between those sites and the tree walks is one guard and
+nothing but a test says so. `EarthChunkManager._plant_sapling_record`'s own
+`"planted_at" in tree` reads a node `spawn_tree_at` has just returned and
+cannot be null.
+
+Tests: `test_earth_chunk_manager_felled_tree_registry.gd` 4/4 (new), and
+**106/106 across the nine tree, pollination, bee, cicada, ground-cover,
+season-fanout, ecology-cadence, fruit-harvest and settlement-food suites**
+— every suite that exercises one of the four repaired walks. The rest of
+the `test_earth_chunk_manager*` family is clean; `test_earth_chunk_manager.
+gd` (the known-slow file) carries 8 failures, all of them pre-existing:
+seven appear verbatim in a full-suite log captured before this work
+(shore-overlay cells, `blackbird`, settlement spare capacity, the
+`sagewerk` placeable), and the one that could plausibly have been ours —
+`test_a_surviving_nut_plants_a_sapling_somewhere_forested_near_berlin` —
+fails identically with `earth_chunk_manager.gd` checked out from
+`a249f15`, the commit before this fix.
