@@ -62,13 +62,30 @@ const SAWMILL_MIN_HOUSEHOLDS := 1
 ## at all, and the first thing a village builds once it has a hall. (It used
 ## to be rung 4, behind the store; the store is founded with the village
 ## now, so its harvest already has a roof waiting for it.)
-const FARMHOUSE_MIN_HOUSEHOLDS := 5
+## The rungs below are spaced in FOUNDING ROSTERS (SettlementGenerator.
+## POPULATION), not in absolute households, and that is why they moved when
+## the roster did.
+##
+## A threshold at or below the founding roster is met the moment a village
+## exists, which makes it a gate that lies to the next reader -- the exact
+## reasoning that took the warehouse off this ladder entirely (see above).
+## So the rungs a village needs to LIVE sit at or under one roster, and the
+## specialists it grows INTO sit above it. These were spaced against a
+## roster of five (5 / 7 / 9); the roster is ten, so they are spaced against
+## ten. The relationship, not the numbers, is what is pinned
+## (test_village_growth.gd) -- there is no real demographic data to derive a
+## "correct" population per rung from, the same honesty SettlementTier.
+## TOWN_HOUSEHOLDS' own doc comment states.
+##
+## One roster: a village feeds itself from the day it is founded.
+const FARMHOUSE_MIN_HOUSEHOLDS := 10
 ## Rung 4. Tools, and the first rung needing stone in real quantity -- a
-## village supports a full-time smith only once it is past subsistence.
-const BLACKSMITH_MIN_HOUSEHOLDS := 7
+## village supports a full-time smith only once it is past subsistence,
+## which is now past its own founding size.
+const BLACKSMITH_MIN_HOUSEHOLDS := 14
 ## Rung 5. The one rung raised for comfort rather than survival; a village
 ## only builds this once everything it actually needs already stands.
-const BREWERY_MIN_HOUSEHOLDS := 9
+const BREWERY_MIN_HOUSEHOLDS := 18
 
 ## The ladder, in the order a village walks it. The hall's own threshold is
 ## CivicBuildDecision's, not a second copy -- that decision is still the

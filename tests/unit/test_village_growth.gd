@@ -46,7 +46,13 @@ func test_the_city_halls_threshold_is_the_civic_decisions_own():
 func test_the_ladder_is_walked_in_order_as_the_village_grows():
 	var standing: Array = []
 	var raised: Array = []
-	for households in range(1, 12):
+	# Up past the ladder's own top rung, read off the ladder rather than
+	# typed in, so re-spacing the rungs cannot silently stop this walk short
+	# of one of them and go on passing.
+	var top: int = VillageGrowth.min_households_for(
+		VillageGrowth.LADDER_BUILDING_IDS[VillageGrowth.LADDER_BUILDING_IDS.size() - 1]
+	)
+	for households in range(1, top + 2):
 		var next: String = VillageGrowth.next_building(households, households, standing)
 		while next != "" and not standing.has(next):
 			standing.append(next)
@@ -144,3 +150,42 @@ func test_no_village_of_any_size_is_ever_owed_a_warehouse():
 	for households in range(1, 13):
 		var owed := VillageGrowth.next_building(households, households, [])
 		assert_ne(owed, "warehouse", "a village of %d households was owed one" % households)
+
+
+# -- the ladder is spaced in founding rosters -------------------------------
+# Asked directly: *"increase the village sizes from 5 houses to 10 initial
+# and then it should grow by itself; adding new houses new trades"*. The
+# second half is the constraint on the first: if every rung's threshold sits
+# at or below the founding roster, a village is founded already owing itself
+# the whole ladder and there is nothing left to grow into. The ladder was
+# spaced against a roster of five; the roster is ten now, so the ladder is
+# spaced against ten.
+
+const SettlementGenerator = preload("res://src/world/settlement_generator.gd")
+
+
+## A village is founded able to feed and govern itself -- the rungs it needs
+## to live are its from the start.
+func test_a_founded_village_is_entitled_to_the_rungs_it_needs_to_live():
+	for building_id in ["sawmill", "city_hall", "farmhouse"]:
+		assert_lte(
+			VillageGrowth.min_households_for(building_id), SettlementGenerator.POPULATION,
+			"%s is what a village needs to live, not something it grows into" % building_id
+		)
+
+
+## And the specialists are what it grows into. A threshold already met at
+## founding is a gate that lies to the next reader -- the same reasoning
+## that took the warehouse off this ladder entirely.
+func test_a_founded_village_still_has_trades_to_grow_into():
+	var founding := SettlementGenerator.POPULATION
+	for building_id in ["blacksmith", "brewery"]:
+		assert_gt(
+			VillageGrowth.min_households_for(building_id), founding,
+			"%s must be something a village grows into, not something it is founded with" % building_id
+		)
+	var standing: Array = ["sawmill", "city_hall", "warehouse", "farmhouse"]
+	assert_eq(
+		VillageGrowth.next_building(founding, founding, standing), "",
+		"a freshly founded village owes itself nothing more until it grows"
+	)

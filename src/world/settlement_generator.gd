@@ -28,7 +28,15 @@ const BuildingCatalog = preload("res://src/gameplay/building_catalog.gd")
 ## newcomers are generated too. Villager `i` is keyed to index `i` whatever
 ## the population is, so growing a village never shifts who its founders
 ## are (test-pinned, test_settlement_generator.gd).
-const POPULATION := 5
+##
+## Ten, asked for directly: *"please increase the village sizes from 5
+## houses to 10 initial and then it should grow by itself; adding new
+## houses new trades"*. The second half is a constraint on the first --
+## VillageGrowth's ladder is spaced in founding rosters so that a village
+## founded at this size still has trades left to grow into, rather than
+## being founded already owing itself every rung (test-pinned,
+## test_village_growth.gd).
+const POPULATION := 10
 
 ## Which food trades exist, how many of them a village needs and which one
 ## its land feeds it with all live in SettlementFoodDemand -- this module only

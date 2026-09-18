@@ -236,24 +236,43 @@ func test_a_bigger_village_is_staffed_for_the_size_it_really_is():
 
 ## The land picks the trade. Water means a fisher -- who digs and stocks a
 ## pond (docs/concept/village_ponds.md), which is what a player asked to see.
-## A chunk whose own roll gives the village nobody to feed it -- the case
-## conscription exists for, and the only one in which the LAND gets to pick
-## the trade at all. A roster that already feeds itself is left alone.
+## A chunk whose own roll leaves the village short of the food producers its
+## size demands -- the case conscription exists for, and the only one in
+## which the LAND gets to pick the trade at all. A roster that already feeds
+## itself is left alone.
+##
+## Asked of the RULE rather than of the roster it already acted on: a chunk
+## qualifies when the same villagers come out differently on water than on
+## dry ground, which happens exactly when conscription had something to do.
+## Counting food trades in a returned roster cannot answer this -- staffing
+## runs inside generate_settlement, so every roster it hands back already
+## meets its own demand by construction. That reading agreed with this one
+## while a village was five villagers needing one producer, and stopped the
+## moment the founding roster grew: ten villagers roll enough food trades to
+## feed themselves most of the time, so the old predicate started returning
+## chunks the rule had correctly left alone, and the tests below then looked
+## for a fisher nobody had any reason to conscript.
 func _chunk_whose_roster_feeds_nobody() -> Vector2i:
 	for i in 400:
 		var coord := Vector2i(640 + i, 167)
-		var settlement := generator.generate_settlement(
-			coord, coord * CHUNK_SIZE, CHUNK_SIZE, TILE_SIZE,
-			SettlementGenerator.POPULATION, Callable(), _region(0.0, 0.0, 0.0)
-		)
-		var rolled := 0
-		for npc in settlement.npcs:
-			if SettlementFoodDemand.FOOD_TRADES.has(npc.occupation) and npc.occupation != "farmer":
-				rolled += 1
-		if rolled == 0:
+		if _occupations(_roster_on(coord, 0.0)) != _occupations(_roster_on(coord, 800.0)):
 			return coord
-	fail_test("no chunk found whose roster rolls nobody who feeds it")
+	fail_test("no chunk found whose own roll leaves the land anything to decide")
 	return Vector2i.ZERO
+
+
+func _roster_on(coord: Vector2i, water: float) -> Array:
+	return generator.generate_settlement(
+		coord, coord * CHUNK_SIZE, CHUNK_SIZE, TILE_SIZE,
+		SettlementGenerator.POPULATION, Callable(), _region(0.15, 0.9, water)
+	).npcs
+
+
+func _occupations(npcs: Array) -> Array:
+	var out: Array = []
+	for npc in npcs:
+		out.append(npc.occupation)
+	return out
 
 
 ## The land picks the trade. Water means a fisher -- who digs and stocks a
@@ -354,3 +373,30 @@ func test_the_roster_is_still_deterministic_for_a_chunk():
 	for i in first.npcs.size():
 		assert_eq(first.npcs[i].occupation, second.npcs[i].occupation)
 		assert_eq(first.npcs[i].npc_name, second.npcs[i].npc_name)
+
+
+# -- how big a village is founded -------------------------------------------
+
+## Asked directly: *"please increase the village sizes from 5 houses to 10
+## initial and then it should grow by itself; adding new houses new
+## trades"*.
+##
+## The number itself, not just "whatever POPULATION happens to say": every
+## other assertion in this file reads the constant symbolically, so a
+## careless edit to it would move them all silently and this file would go
+## on passing while villages shrank.
+func test_a_village_is_founded_with_ten_households():
+	assert_eq(SettlementGenerator.POPULATION, 10)
+
+
+## And really produces them -- ten villagers, ten house anchors, all
+## distinct, at the size a village is actually founded at rather than at a
+## size only this file ever asks for.
+func test_the_founding_roster_really_is_that_many_distinct_households():
+	var chunk_coord := _find_settlement_chunk("grassland")
+	var settlement := generator.generate_settlement(chunk_coord, chunk_coord * CHUNK_SIZE, CHUNK_SIZE, TILE_SIZE)
+	assert_eq(settlement.npcs.size(), 10)
+	var seen := {}
+	for position in settlement.house_positions:
+		seen[position] = true
+	assert_eq(seen.size(), 10, "ten households means ten places to live")
