@@ -18,7 +18,7 @@ extends Node2D
 ## assigns a worker to whichever source structure id and item it's meant to
 ## haul, exactly as it would need to once a real producer exists.
 
-const ProceduralStructureSprite = preload("res://src/rendering/procedural_structure_sprite.gd")
+const ProceduralPorterSprite = preload("res://src/rendering/procedural_porter_sprite.gd")
 const TerrainRenderer = preload("res://src/rendering/terrain_renderer.gd")
 const LogisticsBehavior = preload("res://src/gameplay/logistics_behavior.gd")
 
@@ -95,12 +95,12 @@ var _storage_target_position := Vector2.ZERO
 func _ready() -> void:
 	add_to_group(GROUP_NAME)
 	var sprite := Sprite2D.new()
-	# A hand-cart has no dedicated art yet -- reusing Storage's own tile art
-	# at marker scale is a placeholder (a dedicated worker sprite is a
-	# follow-up, not this pass's scope; see this doc section's own status
-	# note), not a claim that this IS a storage building.
-	sprite.texture = ProceduralStructureSprite.new().generate_texture("storage")
-	sprite.scale = Vector2.ONE * 0.5
+	# A real person. This used to be Storage's own TILE at half scale, left
+	# in when this worker was first written ("a dedicated worker sprite is a
+	# follow-up") -- and once the porter had a Bollerwagen to pull it read
+	# exactly as what it was: "the cart is not being pulled by a worker, but
+	# by a floor tile???".
+	sprite.texture = ProceduralPorterSprite.new().generate_texture()
 	add_child(sprite)
 
 
