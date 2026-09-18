@@ -397,6 +397,17 @@ carts spend their time.
 `held_by` is whoever has the shaft, and `pulled_toward` follows them. The
 rules are the rules of a real handcart:
 
+- **Only a person may take the shaft at all.** `take_hold` refuses anything
+  outside `CartMarker.PULLER_GROUP`, forced or not — the group every real
+  person in this world joins, villagers and the player alike. Reported three
+  times in the same words (*"the cart is not being pulled by a worker, but by
+  a floor tile???"*, *"It should be a real NPC pulling the cart, not an
+  additional sprite"*, *"The cart is still town by a floor tile instead of an
+  actual dedicated worker NPC"*), so the answer is a rule rather than another
+  round of corrected wiring: a thing that is not a person **cannot** pull a
+  cart, and no future caller can reintroduce one that does. The
+  placeable-scale `LogisticsMarker` has had its cart machinery removed
+  outright; it carries in its arms.
 - **A carter only ever takes a FREE cart.** `take_hold(who)` fails when
   somebody else has it.
 - **The player's hold displaces.** `take_hold(who, true)` always succeeds. A

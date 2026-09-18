@@ -26247,3 +26247,77 @@ fences.
 
 Tests: `test_village_renderer.gd` 126/126, `test_village_farm.gd` and
 `test_village_pond.gd` green alongside it (208/208 together).
+
+## Three reports, one afternoon: the plan, the shelf and the shaft (2026-09-18)
+
+### ✅ A hire that cannot be paid no longer stops you building it
+
+*"It's still not possible to build a planned entity like pavement."*
+
+Standing in a village — which is where wireframes are raised — there is
+nearly always somebody within talking range, and once the player has talked
+to them enough to clear the trust gate, **every press offered them the job**.
+When the wage could not move (an empty purse, or a villager the household
+store has never heard of, whose wallet is simply `null`) the player was told
+they could not pay and given nothing else: unable to lay a paving stone they
+were standing on, that costs nothing at all. A refused hire now falls through
+to the player's own hands, and the message says both halves.
+
+**Why it survived so long:** every existing test of this path is a
+source-contract test on the function bodies (`test_world_planner_mode_
+wiring.gd`'s own header explains the reasoning), so all of them passed on
+code that could not raise a tile. `test_world_raising_a_plan.gd` drives the
+real `_raise_plan_within_reach` on a real ledger, chunk manager and player
+and asks the only question that matters: is the tile there afterwards. 7/7.
+
+### ✅ A producer's shelf is the carter's to empty, not the ledger's
+
+*"The FarmHouse seems to be harvesting something but none of it makes it into
+storage... it's always 0."*
+
+True of both places you could look. A farmer cut wheat onto their farmhouse's
+shelf and then, at the end of **every work block**, carried the whole shelf
+into the abstract village ledger (`record_real_harvest` credits the market
+and pays the farmer in one call) — so a farmhouse you clicked was empty, a
+store you clicked was empty, and the carter of Mechanism 4 arrived at a shelf
+somebody had already emptied into thin air.
+
+In a village with a real store the shelf stays put. The villager is paid at
+the scythe (`record_harvest_wage`: the same arithmetic, the same moment, so
+no villager earns a coin more or less and the levy split is untouched), and
+the village's sellable stock is credited when the carter's load really
+reaches the store — once, for a pile that exists. A village too cramped to
+raise a store keeps the old behaviour exactly; `VillageRenderer` already
+tells every villager whether their village has a store door.
+
+### ✅ Only a person may take the shaft
+
+*"The cart is still town by a floor tile instead of an actual dedicated
+worker NPC."* — the third report in the same words.
+
+The wiring was already right: on `main`, the only thing that creates a cart
+is `VillageRenderer._hand_out_the_store_round`, and it only ever hands one to
+a carter. Answering a third time by re-checking the wiring is not an answer,
+so this is a rule instead. `CartMarker.take_hold` refuses anything outside
+`PULLER_GROUP` — the group every real person joins, villagers and the player
+— forced or not. A thing that is not a person **cannot** pull a cart, and no
+future caller can reintroduce one that does.
+
+`LogisticsMarker` (the small purpose-built walker for the single-tile
+`sagewerk`→`storage` placeables) has had its cart machinery removed outright
+rather than left dormant: it carries in its arms, and there is no longer a
+field for anybody to set.
+
+Tests: `test_world_raising_a_plan.gd` 7/7 (new), `test_cart_marker.gd` 28/28,
+`test_npc_marker_cart.gd` 14/14, `test_player_cart.gd` 7/7,
+`test_npc_marker_farming.gd`, `test_npc_economy.gd`, `test_logistics_marker.gd`,
+`test_earth_chunk_manager_chain_logistics.gd`,
+`test_earth_chunk_manager_structure_workers.gd`,
+`test_earth_chunk_manager_village_store.gd`, `test_settlement_food.gd`,
+`test_village_market.gd`, `test_settlement_granary.gd` all green.
+
+### ⬜ Still open
+
+- **A building raised by hand still needs hours at the site.** Pavement is
+  laid the moment it is raised; a house accumulates the player's own hours
+  while they stand there. Only the pavement half is pinned end to end.

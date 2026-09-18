@@ -24,6 +24,7 @@ const NpcCondition = preload("res://src/world/npc_condition.gd")
 const VillagerBehavior = preload("res://src/gameplay/villager_behavior.gd")
 const VillageSawmill = preload("res://src/gameplay/village_sawmill.gd")
 const VillageCart = preload("res://src/gameplay/village_cart.gd")
+const CartMarker = preload("res://src/rendering/cart_marker.gd")
 const LogisticsBehavior = preload("res://src/gameplay/logistics_behavior.gd")
 const LumberjackBehavior = preload("res://src/gameplay/lumberjack_behavior.gd")
 const SagewerkProduction = preload("res://src/world/sagewerk_production.gd")
@@ -1840,3 +1841,9 @@ func _take_carcass_at(kill_position: Vector2) -> void:
 		if node.position.distance_to(kill_position) <= HuntableQuarry.STRIKE_DISTANCE_PX:
 			node.queue_free()
 			return
+
+
+func _ready() -> void:
+	# A villager is a person, and a person is what may pull a cart
+	# (CartMarker.PULLER_GROUP).
+	add_to_group(CartMarker.PULLER_GROUP)

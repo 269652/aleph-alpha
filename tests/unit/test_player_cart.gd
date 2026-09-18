@@ -52,6 +52,17 @@ func _cart_at(offset: Vector2) -> CartMarker:
 	return cart
 
 
+
+## Somebody who may take a shaft: a node in the puller group, which is what
+## every real person in this world joins (CartMarker.PULLER_GROUP -- a thing
+## that is not a person cannot pull a cart).
+func _a_person() -> Node2D:
+	var person := Node2D.new()
+	person.add_to_group(CartMarker.PULLER_GROUP)
+	add_child_autofree(person)
+	return person
+
+
 func test_the_nearest_cart_within_reach_is_the_one_taken():
 	var near := _cart_at(Vector2(8, 0))
 	var far := _cart_at(Vector2(Player.LASSO_RANGE - 4.0, 0))
@@ -88,8 +99,7 @@ func test_the_same_key_lets_go_of_a_cart_already_held():
 ## reads as a bug, and a villager is not going to wrestle them for a wagon.
 func test_the_player_takes_a_cart_a_villager_is_already_pulling():
 	var cart := _cart_at(Vector2(8, 0))
-	var carter := Node2D.new()
-	add_child_autofree(carter)
+	var carter := _a_person()
 	cart.take_hold(carter)
 
 	player.toggle_cart_hold()
@@ -117,8 +127,7 @@ func test_letting_go_only_releases_the_cart_the_player_holds():
 	var mine := _cart_at(Vector2(8, 0))
 	# Plainly further off, so "the nearer one" is not a coin toss.
 	var theirs := _cart_at(Vector2(0, 40))
-	var carter := Node2D.new()
-	add_child_autofree(carter)
+	var carter := _a_person()
 	theirs.take_hold(carter)
 	player.toggle_cart_hold()
 	assert_eq(mine.held_by, player, "precondition: the nearer one")

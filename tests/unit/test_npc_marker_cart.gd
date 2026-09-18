@@ -133,6 +133,17 @@ func _carter_with(planner: NpcPlanner.Planner, occupation: String) -> NpcMarker:
 	return built
 
 
+
+## Somebody who may take a shaft: a node in the puller group, which is what
+## every real person in this world joins (CartMarker.PULLER_GROUP -- a thing
+## that is not a person cannot pull a cart).
+func _a_person() -> Node2D:
+	var person := Node2D.new()
+	person.add_to_group(CartMarker.PULLER_GROUP)
+	add_child_autofree(person)
+	return person
+
+
 func _run(seconds: float, slice := 0.1) -> void:
 	var elapsed := 0.0
 	while elapsed < seconds:
@@ -265,8 +276,7 @@ func test_a_carter_takes_hold_of_the_wagon_they_pull():
 
 ## A cart somebody else is already pulling is not this carter's to take.
 func test_a_carter_never_takes_a_wagon_somebody_else_is_pulling():
-	var thief := Node2D.new()
-	add_child_autofree(thief)
+	var thief := _a_person()
 	cart.take_hold(thief)
 	world.deposit_to_structure_at(MILL_CELL.x, MILL_CELL.y, "beam", 8)
 	_run(30.0)
@@ -276,8 +286,7 @@ func test_a_carter_never_takes_a_wagon_somebody_else_is_pulling():
 ## And nothing is moved into a wagon the carter is not holding: a shelf
 ## emptied into somebody else's cart would be goods vanishing.
 func test_a_carter_without_the_shaft_empties_nothing():
-	var thief := Node2D.new()
-	add_child_autofree(thief)
+	var thief := _a_person()
 	cart.take_hold(thief)
 	world.deposit_to_structure_at(MILL_CELL.x, MILL_CELL.y, "beam", 8)
 	_run(120.0)
@@ -288,8 +297,7 @@ func test_a_carter_without_the_shaft_empties_nothing():
 ## A wagon abandoned in a field is village property again the moment nobody
 ## is holding it.
 func test_a_carter_reclaims_a_parked_wagon():
-	var thief := Node2D.new()
-	add_child_autofree(thief)
+	var thief := _a_person()
 	cart.take_hold(thief)
 	world.deposit_to_structure_at(MILL_CELL.x, MILL_CELL.y, "beam", 8)
 	_run(10.0)

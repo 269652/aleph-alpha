@@ -173,12 +173,33 @@ func _holder_line() -> String:
 	return "Being pulled"
 
 
-## Takes the shaft. Fails when somebody else already has it, so two carters
-## never fight over one wagon -- unless `force`, which the player's own grab
-## passes: a villager is not going to wrestle them for it, and being refused
-## by an NPC's claim reads as a bug.
+## Who may pull a cart: the group every real PERSON in this world joins.
+##
+## Reported three times, in the same words each time -- *"the cart is not
+## being pulled by a worker, but by a floor tile???"*, *"It should be a real
+## NPC pulling the cart, not an additional sprite"*, *"The cart is still town
+## by a floor tile instead of an actual dedicated worker NPC"*. Answering it
+## once more by fixing the wiring is not enough: what the report keeps
+## describing is a thing that is not a person pulling a wagon, so a thing
+## that is not a person CANNOT, and no future caller can reintroduce it.
+const PULLER_GROUP := "cart_puller"
+
+
+## Whether `who` is a person at all -- the only thing that may take a shaft.
+static func can_pull(who) -> bool:
+	return (
+		who != null and is_instance_valid(who) and who is Node
+		and (who as Node).is_in_group(PULLER_GROUP)
+	)
+
+
+## Takes the shaft. Refuses anything that is not a person (see can_pull),
+## forced or not. Otherwise fails when somebody else already has it, so two
+## carters never fight over one wagon -- unless `force`, which the player's
+## own grab passes: a villager is not going to wrestle them for it, and being
+## refused by an NPC's claim reads as a bug.
 func take_hold(who, force := false) -> bool:
-	if who == null:
+	if not can_pull(who):
 		return false
 	if held_by != null and is_instance_valid(held_by) and held_by != who and not force:
 		return false

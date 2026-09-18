@@ -15,6 +15,16 @@ func before_each():
 	add_child_autofree(cart)
 
 
+## Somebody who may take a shaft: a node in the puller group, which is what
+## every real person in this world joins (see CartMarker.PULLER_GROUP -- a
+## thing that is not a person cannot pull a cart).
+func _a_person() -> Node2D:
+	var person := Node2D.new()
+	person.add_to_group(CartMarker.PULLER_GROUP)
+	add_child_autofree(person)
+	return person
+
+
 # -- the load is on the cart -------------------------------------------------
 
 func test_a_fresh_cart_is_empty():
@@ -157,7 +167,7 @@ func test_taking_hold_is_offered_on_the_context_slot():
 	assert_eq(actions.size(), 1, "one thing to do with a cart: take it, or let it go")
 	assert_eq(actions[0].get("action"), "primary_action")
 	var free_verb: String = actions[0].get("verb")
-	cart.take_hold(self, true)
+	cart.take_hold(_a_person(), true)
 	assert_ne(
 		cart.get_hover_actions()[0].get("verb"), free_verb,
 		"and once you have it, the offer is to let it go"
@@ -189,35 +199,36 @@ func test_the_report_does_not_hand_out_the_carts_own_load():
 # -- and it changes hands ---------------------------------------------------
 
 func test_a_free_cart_can_be_taken():
+	var carter := _a_person()
 	assert_null(cart.held_by, "a fresh cart is parked")
-	assert_true(cart.take_hold(self))
-	assert_eq(cart.held_by, self)
+	assert_true(cart.take_hold(carter))
+	assert_eq(cart.held_by, carter)
 
 
 ## A carter only ever takes a free cart, so two of them never fight over one.
 func test_a_cart_somebody_else_holds_is_not_free_to_take():
-	var other := Node2D.new()
-	add_child_autofree(other)
+	var other := _a_person()
 	assert_true(cart.take_hold(other))
-	assert_false(cart.take_hold(self), "somebody already has the shaft")
+	assert_false(cart.take_hold(_a_person()), "somebody already has the shaft")
 	assert_eq(cart.held_by, other)
 
 
 ## The player's hold displaces: a villager is not going to wrestle them for
 ## a wagon, and being refused by an NPC's claim reads as a bug.
 func test_taking_hold_by_force_always_wins():
-	var other := Node2D.new()
-	add_child_autofree(other)
+	var other := _a_person()
+	var thief := _a_person()
 	cart.take_hold(other)
-	assert_true(cart.take_hold(self, true))
-	assert_eq(cart.held_by, self)
+	assert_true(cart.take_hold(thief, true))
+	assert_eq(cart.held_by, thief)
 
 
 func test_letting_go_parks_it_where_it_stands_and_still_loaded():
+	var carter := _a_person()
 	cart.load_on("beam", 5)
 	cart.position = Vector2(300, 220)
-	cart.take_hold(self)
-	cart.let_go(self)
+	cart.take_hold(carter)
+	cart.let_go(carter)
 	assert_null(cart.held_by)
 	for i in 100:
 		cart._process(0.1)
@@ -227,18 +238,16 @@ func test_letting_go_parks_it_where_it_stands_and_still_loaded():
 
 ## Only the one holding it can let go of it.
 func test_somebody_who_is_not_holding_it_cannot_let_it_go():
-	var other := Node2D.new()
-	add_child_autofree(other)
+	var other := _a_person()
 	cart.take_hold(other)
-	cart.let_go(self)
+	cart.let_go(_a_person())
 	assert_eq(cart.held_by, other)
 
 
 ## Held means followed: the cart is told where its holder is every frame,
 ## without anybody having to drive pulled_toward by hand.
 func test_a_held_cart_follows_whoever_is_holding_it():
-	var holder := Node2D.new()
-	add_child_autofree(holder)
+	var holder := _a_person()
 	holder.position = Vector2(200, 0)
 	cart.position = Vector2.ZERO
 	cart.take_hold(holder)
@@ -251,9 +260,59 @@ func test_a_held_cart_follows_whoever_is_holding_it():
 ## unloaded is parked, not chasing a dangling reference.
 func test_a_cart_whose_holder_is_gone_is_parked_again():
 	var holder := Node2D.new()
+	holder.add_to_group(CartMarker.PULLER_GROUP)
 	add_child(holder)
 	cart.take_hold(holder)
 	remove_child(holder)
 	holder.free()
 	cart._process(0.1)
 	assert_null(cart.held_by, "nobody is holding it any more")
+
+
+# -- only a person may take the shaft ---------------------------------------
+#
+# Reported three times now, in the same words each time: *"the cart is not
+# being pulled by a worker, but by a floor tile???"*, *"It should be a real
+# NPC pulling the cart, not an additional sprite"*, *"The cart is still town
+# by a floor tile instead of an actual dedicated worker NPC"*.
+#
+# Answering it once more with "the wiring is right now" is not enough: what
+# the report keeps describing is a thing that is not a person pulling a
+# wagon, so the rule is that a thing that is not a person CANNOT.
+
+const NpcMarker = preload("res://src/rendering/npc_marker.gd")
+const NpcIdentity = preload("res://src/world/npc_identity.gd")
+const LogisticsMarker = preload("res://src/rendering/logistics_marker.gd")
+
+
+func test_a_villager_may_take_the_shaft():
+	var villager := NpcMarker.new()
+	villager.identity = NpcIdentity.new(7)
+	add_child_autofree(villager)
+
+	assert_true(cart.take_hold(villager))
+	assert_eq(cart.held_by, villager)
+
+
+## Anything that is not a person is refused, forced or not -- there is no
+## way left to end up with scenery towing a wagon across the village.
+func test_a_thing_that_is_not_a_person_can_never_take_the_shaft():
+	var scenery := Node2D.new()
+	add_child_autofree(scenery)
+
+	assert_false(cart.take_hold(scenery), "scenery does not pull carts")
+	assert_false(cart.take_hold(scenery, true), "and forcing it does not make it a person")
+	assert_null(cart.held_by)
+
+
+## The old porter is not a person in this sense either. It is a small
+## purpose-built walker for the single-tile placeables, and giving it a cart
+## is exactly the mistake the report has been describing: its own class no
+## longer carries the machinery at all.
+func test_the_placeable_scale_porter_has_no_cart_to_pull():
+	var porter := LogisticsMarker.new()
+	add_child_autofree(porter)
+	assert_false(
+		"cart" in porter,
+		"a placeable's porter carries in its arms; the Bollerwagen is the carter's"
+	)

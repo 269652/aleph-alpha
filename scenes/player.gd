@@ -797,6 +797,10 @@ var _last_facing_direction := Vector2.DOWN
 
 
 func _ready() -> void:
+	# A player is a person, and a person is what may pull a cart
+	# (CartMarker.PULLER_GROUP -- docs/concept/village_warehouse.md,
+	# Mechanism 6).
+	add_to_group(CartMarker.PULLER_GROUP)
 	motion_mode = CharacterBody2D.MOTION_MODE_FLOATING
 	_last_position = position
 	_camera.zoom = CAMERA_ZOOM
