@@ -205,15 +205,25 @@ Hall's own recipe-graph step and has nothing to do with food):
   **fisher**, who digs and stocks a pond; ordinary grassland by a **farmer**,
   who raises a farmhouse.
 - **A hunter is not one of them**, and that is a measurement rather than a
-  preference. Measured on real villages after this rule first landed
-  (`tools/probe_village_contents.gd`): the village at (657,145) rolled a
-  hunter and a fisher, was read as fed, and its farmhouse stood with
-  `wanted_by=0` — nobody to work it. A hunter brings in about **0.02** food
-  units an assessment against a draw of **6**. Counting one while sizing the
-  roster against a *farmhouse's* yield says a village is fed when it is not,
-  and brings back the "No Farmhouses" report this whole line of work started
-  from. Hunting stays a real occupation and a real way to eat; it is not
-  what a village is founded on.
+  preference. A hunter brings in about **0.02** food units an assessment
+  against a draw of **6** — a whole chunk supports roughly one deer (see the
+  honest gap about `HERBIVORES_PER_VEGETATION_UNIT` above). Counting one
+  while sizing the roster against a *farmhouse's* yield says a village is
+  fed when it is not. Hunting stays a real occupation and a real way to eat;
+  it is not what a village is founded on.
+
+  **How far that reaches**, measured over 4000 raw rosters
+  (`tools/probe_roster_food_trades.gd`): **93.3 %** already roll a farmer, a
+  herbalist or a fisher and are left exactly as they rolled; **5.2 %** would
+  have been read as fed on a hunter alone and now get a conscript; **1.4 %**
+  roll nobody at all and always did. So conscription touches about one
+  village in fifteen, and the hunter rule about one in twenty.
+
+  *Correction to an earlier note in this file:* the village at (657,145) was
+  cited as evidence for this and is not. Its `wanted_by=0` farmhouse is
+  explained by its producer being a **fisher**, who works a pond rather than
+  a farmhouse — correct behaviour, not the fault. The rule stands on the
+  0.02-against-6 measurement.
 - **Which villagers.** Conscription comes off the END of the roster and
   only takes villagers who are not already feeding the village, so it stays
   deterministic per chunk and leaves the earlier founders exactly as they
