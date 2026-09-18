@@ -16431,6 +16431,14 @@ func _place_completed_construction_project(project) -> void:
 	if BuildingCatalog.has_building(project.blueprint_id):
 		_place_completed_building_project(project)
 		return
+	# Pavement is a laid SURFACE, not a structure (docs/concept/
+	# planner_mode.md's "What can be planned"): the same road tile a village
+	# lays for its streets, through the same build_at_global that lays them,
+	# so anything already true of a street is true of a paved plan.
+	if TerrainRenderer.is_road_tile(project.blueprint_id):
+		var road_cell: Vector2i = project.chunk_coord * CHUNK_SIZE + project.origin
+		build_at_global(road_cell.x, road_cell.y, project.blueprint_id)
+		return
 	var output: Dictionary = _recipe_book.recipe_output(project.blueprint_id)
 	if output.is_empty():
 		return
@@ -17517,10 +17525,53 @@ func _restore_growing_juveniles(chunk_coord: Vector2i) -> void:
 ## This is what docs/concept/building.md means by retiring the instant hire
 ## fork: "a build the player cannot do themselves says that hiring returns
 ## with construction-over-time". A hired house is not spawned; it is worked.
+##
+## And what the hours PRODUCE is the settlement ledger's own answer, not a
+## second one (docs/concept/planner_mode.md's "From raised to raised"): the
+## site rises through the same construction-row sprite a village's own
+## project draws, and finishing places the real building through the same
+## _place_completed_construction_project. Marking a row COMPLETE in a
+## ledger is bookkeeping, not construction -- this used to do only that,
+## so a raised build that "finished" left nothing standing.
 func advance_hired_build(project_id: String, elapsed_seconds: float, builder_count: float) -> Dictionary:
-	return _construction_project_store.advance_project_labor(
+	var project = _construction_project_store.get_project(project_id)
+	if project == null:
+		return {"action": "no_op"}
+	var result: Dictionary = _construction_project_store.advance_project_labor(
 		project_id, elapsed_seconds, {"builder_count": builder_count}, _recipe_book, _household_store
 	)
+	match result.get("action", ""):
+		"completed":
+			_place_completed_construction_project(project)
+		"advanced":
+			if BuildingCatalog.has_building(project.blueprint_id):
+				_sync_construction_site(project.chunk_coord, project)
+	return result
+
+
+## Finishes a raised build outright, and places what it built.
+##
+## For work that asks for no labour hours at all (PlanRaising.is_laid_by_
+## hand -- pavement is not a recipe, so its requirement is genuinely zero):
+## advance_project_labor deliberately never completes a zero-hour
+## requirement, because otherwise an unknown blueprint id would complete
+## instantly and for free. So a zero-hour build is finished HERE instead,
+## the moment it is begun -- laid by hand, exactly like the earth tile the
+## player already places (docs/concept/planner_mode.md's "Work that is laid
+## by hand").
+##
+## Deliberately not a shortcut past the hours for anything else: the caller
+## is the one that asked is_laid_by_hand, and it only ever asks about work
+## that has none. False, no mutation, for an unknown project_id -- the same
+## contract complete_project itself carries.
+func finish_build_project(project_id: String) -> bool:
+	var project = _construction_project_store.get_project(project_id)
+	if project == null:
+		return false
+	if not _construction_project_store.complete_project(project_id, _household_store):
+		return false
+	_place_completed_construction_project(project)
+	return true
 
 
 ## Opens (or returns) a real construction project for a site the PLAYER
