@@ -223,3 +223,66 @@ func test_the_settlements_own_construction_keeps_the_catchup_rate():
 		"the premise: the two rates really are different"
 	)
 	assert_eq(ConstructionCatchup.SECONDS_PER_DAY, ChunkEcologyCatchup.SECONDS_PER_DAY)
+
+
+# -- nothing stands in water -------------------------------------------------
+# Reported live with the screenshot: "Buildings are placed in rivers".
+#
+# Measured first (tools/probe_buildings_in_water.gd): across 16 real villages
+# founded near the reported spot, not ONE building stands in water -- every
+# siting path already asks is_buildable_ground_at. What has no such check at
+# all is place_building itself, which only refuses cells that are already
+# modified, so any caller that forgets is free to put a house in a river, and
+# a village whose river moved under it keeps the ones it has.
+
+func test_a_building_cannot_be_placed_in_water():
+	var wet = _first_water_cell()
+	assert_not_null(wet, "precondition: this chunk really has water in it")
+	var origin: Vector2i = wet - _chunk_coord * CHUNK_SIZE
+
+	assert_false(
+		manager.place_building(_chunk_coord, origin, "house_small"),
+		"nothing built stands in water -- the rule the pieces already keep"
+	)
+	assert_true(manager.building_at_global(wet.x, wet.y).is_empty())
+
+
+## And a building already standing in water is reclaimed, the same way a
+## piece standing in water already is: a village whose river moved under it
+## heals on its next visit rather than keeping a house in the current.
+##
+## Measured against its DOOR, which is the rule
+## _reclaim_buildings_standing_in_water keeps: a house whose walls graze a
+## newly-wet corner but whose entrance is still dry stays, because unlike a
+## piece structure a building's interior is never the painted ground under
+## it. A house in the middle of a river has its door in the river.
+func test_a_building_already_standing_in_water_is_reclaimed_on_load():
+	var wet = _first_water_cell()
+	assert_not_null(wet, "precondition")
+	var origin: Vector2i = wet - _chunk_coord * CHUNK_SIZE - BuildingCatalog.door_of("house_small")
+	var chunk = manager._loaded_chunks[_chunk_coord]
+	# Put one there the way an older save has one: written straight into the
+	# chunk, past every siting rule.
+	chunk.buildings[origin] = {
+		"id": "house_small", "facing": Vector2i(0, 1), "seed": 1, "condition": 1.0,
+		"progress": 1.0, "owner_household_id": "", "occupation": "", "resident_seed": 0,
+	}
+	chunk.modifications[origin] = "house_small"
+
+	manager._unload_chunk(_chunk_coord)
+	manager._load_chunk(_chunk_coord)
+
+	assert_false(
+		manager._loaded_chunks[_chunk_coord].buildings.has(origin),
+		"a house the river took back is not still standing in it"
+	)
+
+
+## The first real water cell in this chunk, or null when it has none.
+func _first_water_cell():
+	for y in CHUNK_SIZE:
+		for x in CHUNK_SIZE:
+			var g: Vector2i = _chunk_coord * CHUNK_SIZE + Vector2i(x, y)
+			if manager.is_water_at_global(g.x, g.y):
+				return g
+	return null

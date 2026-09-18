@@ -2744,3 +2744,72 @@ func test_the_stall_tag_resolves_to_a_real_stand():
 				positions.has(node.landmarks["stall"]),
 				"%s would walk to a trading spot with no stand on it" % node.identity.npc_name
 			)
+
+
+# -- props you cannot walk through ------------------------------------------
+# Reported live: "The well doesn't have a hitbox.. it should block walking".
+# Every landmark was a bare Sprite2D with a shadow and nothing else, so a
+# villager and the player alike walked straight through the stonework.
+
+func test_the_well_blocks_walking():
+	var coord := _find_settlement_chunk("grassland")
+	var world := StubWorld.new()
+	var spawned := renderer.spawn_village(parent, coord, coord * CHUNK_SIZE, CHUNK_SIZE, TILE_SIZE, "grassland", world)
+
+	var well: Node2D = null
+	for node in spawned:
+		if node.has_meta("landmark_id") and String(node.get_meta("landmark_id")) == "well":
+			well = node
+			break
+	assert_not_null(well, "precondition: the village really laid a well")
+	var body: StaticBody2D = null
+	for child in well.get_children():
+		if child is StaticBody2D:
+			body = child
+			break
+	assert_not_null(body, "you cannot walk through a stone well")
+	var shape: CollisionShape2D = null
+	for child in body.get_children():
+		if child is CollisionShape2D:
+			shape = child
+			break
+	assert_not_null(shape, "and the body needs a real shape to stop anything")
+	assert_gt((shape.shape as RectangleShape2D).size.x, 0.0)
+
+
+## What you CAN walk through stays walkable: a gate is an opening in a wall
+## and a stall is a trestle you step up to, not a wall across the square.
+func test_a_gate_and_a_stall_are_still_walked_through():
+	var coord := _find_settlement_chunk("grassland")
+	var world := StubWorld.new()
+	var spawned := renderer.spawn_village(parent, coord, coord * CHUNK_SIZE, CHUNK_SIZE, TILE_SIZE, "grassland", world)
+
+	var checked := 0
+	for node in spawned:
+		if not node.has_meta("landmark_id"):
+			continue
+		var landmark_id := String(node.get_meta("landmark_id"))
+		if landmark_id == "well":
+			continue
+		checked += 1
+		for child in node.get_children():
+			assert_false(child is StaticBody2D, "%s is not something to bump into" % landmark_id)
+	assert_gt(checked, 0, "precondition: the village really laid other props")
+
+
+## The rule itself, so what is solid is a decision rather than whatever the
+## renderer happened to do.
+func test_which_props_are_solid_is_stated_rather_than_implied():
+	assert_true(VillageRenderer.landmark_is_solid("well"))
+	assert_false(VillageRenderer.landmark_is_solid("gate"))
+	assert_false(VillageRenderer.landmark_is_solid("stall"))
+	assert_false(VillageRenderer.landmark_is_solid("moon_base"), "an unknown prop is not solid by accident")
+
+
+## The layer a solid prop stops you on is the ground floor's own, not a
+## second number that could drift from it.
+func test_a_solid_prop_stops_you_on_the_ground_floors_own_layer():
+	assert_eq(
+		VillageRenderer.GROUND_FLOOR_COLLISION_LAYER,
+		load("res://src/world/earth_chunk_manager.gd").GROUND_FLOOR_COLLISION_LAYER
+	)

@@ -1594,6 +1594,40 @@ func _prop_cell_is_clear(cell: Vector2i, world, allow_road: bool) -> bool:
 ## prop must never stand on the road it fronts, and a merchant's personal
 ## stand carries the same `stall` id as the square's own, so the id alone
 ## cannot tell them apart.
+## Which village props you cannot walk through.
+##
+## Reported live: *"The well doesn't have a hitbox.. it should block
+## walking"*. Every landmark was a bare Sprite2D with a shadow and nothing
+## else, so the player and every villager walked straight through the
+## stonework.
+##
+## Stated as a rule rather than left to whatever the renderer happens to do,
+## and deliberately short: a well is a waist-high ring of stone and you
+## cannot step into it. A gate is an OPENING in a wall -- a village whose own
+## gate blocked its street would be walled in by its entrance -- and a stall
+## is a trestle you step up to, not a wall across the square. An unknown prop
+## is not solid by accident.
+const _SOLID_LANDMARK_IDS := {"well": true}
+
+
+static func landmark_is_solid(landmark_id: String) -> bool:
+	return _SOLID_LANDMARK_IDS.has(landmark_id)
+
+
+## How much of a solid prop's own drawn size really stops you. Under 1 so a
+## body follows the stonework rather than the whole sprite's bounding box,
+## which includes the flowers and the roof overhang a shoulder passes under.
+const _SOLID_LANDMARK_FOOTPRINT_FRACTION := 0.7
+
+## The ground floor's own collision layer -- mirrors EarthChunkManager.
+## GROUND_FLOOR_COLLISION_LAYER's own VALUE (1), restated here rather than
+## imported: EarthChunkManager already preloads this renderer, so the
+## reverse import would be circular. The same "restate + cross-check" choice
+## AntColony.SECONDS_PER_SIMULATED_DAY's own doc comment makes, and
+## cross-checked by test_village_renderer.gd so the two cannot drift.
+const GROUND_FLOOR_COLLISION_LAYER := 1
+
+
 func _build_landmark(landmark_id: String, position: Vector2, parent: Node2D, personal: bool = false) -> Sprite2D:
 	var landmark := Sprite2D.new()
 	landmark.texture = _landmark_texture(landmark_id, position)
@@ -1606,8 +1640,39 @@ func _build_landmark(landmark_id: String, position: Vector2, parent: Node2D, per
 	landmark.position = position
 	var size: Vector2i = ProceduralLandmarkSprite.SIZES.get(landmark_id, Vector2i(20, 20))
 	landmark.add_child(_drop_shadow.make_shadow(int(size.x * 0.8), size.y * 0.5 - 1.0))
+	if landmark_is_solid(landmark_id):
+		landmark.add_child(_solid_body_for(size))
 	parent.add_child(landmark)
 	return landmark
+
+
+## The body that stops you walking into a solid prop. A child of the prop
+## itself, so it moves and is freed with it -- the prop IS the thing in the
+## way, and a separately-tracked body would be one more thing to keep in
+## step. On the ground floor's own collision layer, the same one every
+## wall piece uses (EarthChunkManager.GROUND_FLOOR_COLLISION_LAYER), so
+## nothing new has to learn about it.
+##
+## Sized in the prop's own WORLD units: `size` is the art's own pixel size,
+## which is authored DETAIL_MULTIPLIER times oversized (see
+## docs/concept/art_resolution.md), and the sprite is scaled back by
+## SPRITE_SCALE -- a body that used the raw numbers would be a wall several
+## tiles across.
+func _solid_body_for(size: Vector2i) -> StaticBody2D:
+	var body := StaticBody2D.new()
+	body.name = "LandmarkCollision"
+	body.collision_layer = GROUND_FLOOR_COLLISION_LAYER
+	var shape := CollisionShape2D.new()
+	var rect := RectangleShape2D.new()
+	# In the SPRITE's own space: the body is a child of the scaled sprite, so
+	# Godot applies that scale to the shape as well.
+	rect.size = Vector2(size) * _SOLID_LANDMARK_FOOTPRINT_FRACTION
+	shape.shape = rect
+	# A prop stands ON its own base, so what stops you is the stonework at
+	# its foot rather than a column of air over it.
+	shape.position = Vector2(0, -rect.size.y * 0.5)
+	body.add_child(shape)
+	return body
 
 
 ## A prop's real art if any has been supplied for it, and its procedural

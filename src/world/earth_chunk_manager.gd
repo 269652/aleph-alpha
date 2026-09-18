@@ -13761,6 +13761,18 @@ func place_building(
 	for local in required_cells:
 		if chunk.modifications.get(local, "") != "":
 			return false
+		# Nothing built stands in water -- the SAME rule
+		# _reclaim_pieces_standing_in_water already keeps for every wall,
+		# floor and roof, kept here too. Reported live with the screenshot:
+		# "Buildings are placed in rivers". Measured first
+		# (tools/probe_buildings_in_water.gd): every siting path already
+		# asks is_buildable_ground_at and not one of 16 real villages put a
+		# building in water -- but this function had no check of its own at
+		# all, so any caller that forgets is free to, and a village whose
+		# river moved under it keeps the ones it has.
+		var global_cell: Vector2i = chunk_coord * CHUNK_SIZE + local
+		if is_water_at_global(global_cell.x, global_cell.y):
+			return false
 	for local in footprint_cells:
 		chunk.modifications[local] = building_id if local == origin_local else BuildingCatalog.FOOTPRINT_TILE_ID
 	chunk.buildings[origin_local] = {
