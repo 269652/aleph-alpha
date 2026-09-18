@@ -65,7 +65,6 @@ const GrassFrogRenderer = preload("res://src/rendering/grass_frog_renderer.gd")
 const LumberjackMarker = preload("res://src/rendering/lumberjack_marker.gd")
 const ProceduralBuildingPieceSprite = preload("res://src/rendering/procedural_building_piece_sprite.gd")
 const LogisticsMarker = preload("res://src/rendering/logistics_marker.gd")
-const CartMarker = preload("res://src/rendering/cart_marker.gd")
 const StructureStockStore = preload("res://src/emergence/structure_stock_store.gd")
 const IllustratedStructureSprite = preload("res://src/rendering/illustrated_structure_sprite.gd")
 const BuildingCatalog = preload("res://src/gameplay/building_catalog.gd")
@@ -13817,151 +13816,15 @@ func place_building(
 	_block_ground_cover_on_cells(chunk_coord, footprint_cells)
 	_terrain_renderer.paint(_tile_map_layer, chunk, chunk_coord * CHUNK_SIZE, generator.biome_at_global)
 	_spawn_building_node(chunk_coord, origin_local, chunk.buildings[origin_local])
-	_resync_warehouse_porters(chunk_coord)
 	return true
 
 
-## The store's own porters (docs/concept/village_warehouse.md, Mechanism 4):
-## chunk_coord -> {warehouse origin_local -> {producer origin_local ->
-## LogisticsMarker}}. One porter per (store, producer) pair in reach.
-##
-## Asked directly, with the empty store in shot: "The warehouse also needs to
-## bind a worker which then collects all ressources from every production
-## building". It answers Mechanism 3's own open question -- whether hauling
-## belongs to an occupation -- the way the report does: the STORE binds the
-## worker, not the producer.
-##
-## The whole logistics system was wired for the `sagewerk` -> `storage`
-## single-tile placeables. A real village raises a `sawmill` and a
-## `warehouse`, which are whole-building catalog entities that place_building
-## staffed nobody for -- so every village producer filled its own shelf and
-## nothing ever moved it.
-var _warehouse_porters: Dictionary = {}
-
-## Which whole buildings a store sends a porter to. Every real production
-## building the growth ladder raises, read off the catalog rather than listed
-## again here, so a building added to the game is collected from for free.
+## Which building id a village's store is. Kept because the growth ladder
+## and the capacity rule both name it; the round that fills it is a
+## carter's, not this manager's (docs/concept/village_warehouse.md,
+## Mechanism 4 -- "It should be a real NPC pulling the cart, not an
+## additional sprite").
 const WAREHOUSE_BUILDING_ID := "warehouse"
-
-## How far (in tiles) a producer may be from a store and still be on its
-## porter's round -- the same reach the Sägewerk/Storage pair already uses
-## (SAGEWERK_STORAGE_PAIR_RADIUS_TILES), and matched to LogisticsMarker's own
-## default search radius for the same reason: a porter whose own reach could
-## never cover the round would be a real worker who can never find the shelf
-## they were sent to.
-const WAREHOUSE_PORTER_RADIUS_TILES := SAGEWERK_STORAGE_PAIR_RADIUS_TILES
-
-
-## Re-decides every store's round in `chunk_coord`: one porter per producer
-## in reach, none for a store with nothing to fetch, and none left behind
-## when either end of a pair goes. Idempotent -- called on every real
-## building placement and removal, and safe to call again.
-func _resync_warehouse_porters(chunk_coord: Vector2i) -> void:
-	var chunk: Chunk = _loaded_chunks.get(chunk_coord)
-	if chunk == null:
-		return
-	var stores: Array = []
-	var producers: Array = []
-	for origin_local in chunk.buildings:
-		var building_id: String = chunk.buildings[origin_local].get("id", "")
-		if building_id == WAREHOUSE_BUILDING_ID:
-			stores.append(origin_local)
-		elif BuildingCatalog.PRODUCTION_BUILDING_IDS.has(building_id):
-			producers.append(origin_local)
-
-	var wanted: Dictionary = {}
-	var reach := float(WAREHOUSE_PORTER_RADIUS_TILES)
-	for store_origin in stores:
-		for producer_origin in producers:
-			var offset: Vector2i = producer_origin - store_origin
-			if Vector2(offset).length() > reach:
-				continue
-			if not wanted.has(store_origin):
-				wanted[store_origin] = {}
-			wanted[store_origin][producer_origin] = true
-
-	if not _warehouse_porters.has(chunk_coord):
-		_warehouse_porters[chunk_coord] = {}
-	var by_store: Dictionary = _warehouse_porters[chunk_coord]
-	for store_origin in by_store.keys():
-		var by_producer: Dictionary = by_store[store_origin]
-		for producer_origin in by_producer.keys():
-			if wanted.get(store_origin, {}).has(producer_origin):
-				continue
-			_free_porter(by_producer, producer_origin)
-		if by_producer.is_empty():
-			by_store.erase(store_origin)
-	for store_origin in wanted:
-		if not by_store.has(store_origin):
-			by_store[store_origin] = {}
-		for producer_origin in wanted[store_origin]:
-			if by_store[store_origin].has(producer_origin):
-				continue
-			by_store[store_origin][producer_origin] = _spawn_warehouse_porter(
-				chunk_coord, store_origin, producer_origin
-			)
-
-
-func _spawn_warehouse_porter(
-	chunk_coord: Vector2i, store_origin: Vector2i, producer_origin: Vector2i
-) -> LogisticsMarker:
-	var porter := LogisticsMarker.new()
-	porter.earth = self
-	# Both ends are FIXED, not rediscovered: this porter serves this store
-	# and this producer, and a dynamic nearest-lookup would have every porter
-	# in a village converge on the same pair (see preferred_storage_position's
-	# own doc comment). `item_id` stays empty -- a porter carries whatever is
-	# waiting on the shelf.
-	porter.preferred_source_position = _building_centre(chunk_coord, producer_origin)
-	porter.preferred_storage_position = _building_centre(chunk_coord, store_origin)
-	porter.search_radius_tiles = WAREHOUSE_PORTER_RADIUS_TILES
-	porter.position = porter.preferred_storage_position
-	# The Bollerwagen the porter pulls (docs/concept/village_warehouse.md,
-	# Mechanism 5): the goods ride ON IT, so a cart left standing is a cart
-	# with the timber still in it.
-	var cart := CartMarker.new()
-	cart.position = porter.position
-	_entities_parent.add_child(cart)
-	porter.cart = cart
-	_entities_parent.add_child(porter)
-	return porter
-
-
-## The centre of a building's own ANCHOR cell -- where its StructureStock
-## lives (_structure_stock_key is keyed by tile), so a porter sent there
-## reaches the shelf rather than a footprint cell beside it.
-func _building_centre(chunk_coord: Vector2i, origin_local: Vector2i) -> Vector2:
-	var global_cell: Vector2i = chunk_coord * CHUNK_SIZE + origin_local
-	return (Vector2(global_cell) + Vector2(0.5, 0.5)) * TerrainRenderer.TILE_SIZE
-
-
-## Every porter working this chunk, let go with it -- a porter is not left
-## walking a chunk that is gone, the same way its buildings' own nodes are
-## freed above.
-func _free_warehouse_porters_in_chunk(chunk_coord: Vector2i) -> void:
-	for by_producer in _warehouse_porters.get(chunk_coord, {}).values():
-		for producer_origin in by_producer.keys():
-			_free_porter(by_producer, producer_origin)
-	_warehouse_porters.erase(chunk_coord)
-
-
-## free(), not queue_free(): every other unload path in this file frees its
-## nodes outright (the building nodes just above, the construction sites
-## just below), and a queued node goes on processing until the frame ends.
-##
-## Measured with tools/probe_node_growth.gd after the framerate was reported
-## falling from 60-100 to 20: loading and unloading the same three real
-## chunks over and over left one more porter and one more cart alive on
-## every single cycle, while every other class returned to where it started.
-## A village the player walks in and out of was leaving a porter and a wagon
-## behind each time, each of them still running _process.
-func _free_porter(by_producer: Dictionary, producer_origin: Vector2i) -> void:
-	var porter = by_producer.get(producer_origin)
-	if porter != null and is_instance_valid(porter):
-		if porter.cart != null and is_instance_valid(porter.cart):
-			porter.cart.free()
-		porter.free()
-	by_producer.erase(producer_origin)
 
 
 ## Writes who lives in an already-placed building (see place_building's
@@ -14052,7 +13915,6 @@ func remove_building(chunk_coord: Vector2i, origin_local: Vector2i) -> bool:
 	_unblock_ground_cover_on_cells(chunk_coord, footprint_cells)
 	_terrain_renderer.paint(_tile_map_layer, chunk, chunk_coord * CHUNK_SIZE, generator.biome_at_global)
 	_despawn_building_node(chunk_coord, origin_local)
-	_resync_warehouse_porters(chunk_coord)
 	return true
 
 
@@ -15657,7 +15519,6 @@ func _load_chunk(chunk_coord: Vector2i) -> void:
 	# RESTORED rather than placed, so binding the porter only inside
 	# place_building would leave every village's store empty again on the
 	# next visit -- which is exactly how it was reported.
-	_resync_warehouse_porters(chunk_coord)
 	if _roof_layer != null:
 		_terrain_renderer.paint_roofs(_roof_layer, chunk, chunk_coord * CHUNK_SIZE, _hidden_cells_for(chunk_coord))
 	_paint_furniture(chunk_coord, chunk)
@@ -17234,7 +17095,6 @@ func _unload_chunk(chunk_coord: Vector2i) -> void:
 	for node in _building_nodes.get(chunk_coord, {}).values():
 		node.free()
 	_building_nodes.erase(chunk_coord)
-	_free_warehouse_porters_in_chunk(chunk_coord)
 	_free_construction_sites_in_chunk(chunk_coord)
 
 	for tree in _loaded_trees.get(chunk_coord, []):

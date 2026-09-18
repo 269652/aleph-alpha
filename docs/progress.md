@@ -24845,9 +24845,9 @@ TDD throughout, red first: `test_village_layout` 74/74, `test_village_growth`
 - **What counts toward the ceiling.** Mechanism 2 caps stock as a whole. A
   per-item ceiling (grain and iron do not share a shelf) is the obvious
   refinement and was deliberately not attempted first.
-- **Who hauls.** Every villager has the wiring. Whether hauling should belong
-  to an occupation instead — a carter, a porter — is a question for once it
-  is visibly running.
+- ~~**Who hauls.**~~ Answered below: hauling is an occupation. Every villager
+  keeps the wiring for their own hands; the store's round belongs to the
+  carter.
 - **Nothing comes back OUT of the store on foot.** A hungry villager still
   buys their meal from the abstract market wherever they are standing. The
   goods now arrive somewhere; they still leave from nowhere.
@@ -26043,3 +26043,86 @@ archive root as `license.txt`, which is where
 
 ⬜ **Not done: no CI wiring.** Releases are still cut by hand from a
 Windows machine; `.github/workflows/tests.yml` remains the only workflow.
+
+## Hauling is a trade: the carter and the Bollerwagen (`concept/village_warehouse.md`, 2026-09-18)
+
+Reported in play with the empty store in shot — *"The warehouse also needs to
+bind a worker which then collects all ressources from every production
+building"*, *"And the warehouse stays empty"* — and then corrected twice,
+with the wagon in shot: *"The cart is not being pulled by a worker, but by a
+floor tile???"*, and *"It should be a real NPC pulling the cart, not an
+additional sprite"*.
+
+The first pass spawned a `LogisticsMarker` per (store, producer) pair — the
+same worker the single-tile `sagewerk`→`storage` placeables use. It worked,
+and it was the wrong shape: a second kind of person, drawn with a placeholder
+sprite, walking beside the villagers who already live there. The correction
+is the design.
+
+✅ **Hauling is a trade.** `carter` is a real entry in
+`NpcIdentity.OCCUPATIONS`, so a villager is born to it the way they are born
+to milling or farming — and a carter works the store's round exactly the way
+the sawyer works the mill, on the same three-part split this project keeps
+everywhere: `VillageCart` (pure — whose shelf is worth walking to),
+`LogisticsBehavior` (the SEEKING → APPROACHING → COLLECTING → CARRYING →
+DEPOSITING phase machine the placeable-scale worker already used, reused
+unmodified), and `NpcMarker._step_cart` (the world effect). Off the clock the
+round is dropped rather than paused, and the wagon is left standing where it
+is, still loaded.
+
+✅ **The renderer hands out the round.** `VillageRenderer._hand_out_the_store_
+round` is `_hand_out_the_sawmill`'s sibling and reads what really STANDS
+(`buildings_in_chunk`), not the plan: the store's anchor cell, every
+`BuildingCatalog.PRODUCTION_BUILDING_IDS` building in the chunk, and one
+`CartMarker` per carter. The wagon goes into the array `_unload_chunk` frees,
+so it lives and dies with the village — a leak there is the measured cause of
+a reported framerate decay (`tools/probe_node_growth.gd`).
+
+✅ **Every village really has one.** `SettlementGenerator._staff_the_carter`
+conscripts one when a roster rolled none, the same remedy the "No Farmhouses"
+report already earned `_staff_food_producers`. Measured first
+(`tools/probe_carter_rosters.gd`, the 75 real grassland villages in rows
+0–5): **7 of them, 9.3%, had a store nobody could ever empty; 0 do now.**
+Scoped to the FOUNDING roster on both halves — who is looked for and who is
+taken — so growth never hands the wagon to a newcomer and gives the old
+carter their rolled trade back.
+
+⬜ **A named consequence, stated rather than discovered.** A villager's trade
+is rolled from `OCCUPATIONS` by index, so adding one **re-rolls every
+villager's trade in every village in an existing world.** Names, houses and
+seeds are unchanged; who does what shifts. That is the price of a trade being
+a real trade rather than a special case bolted beside them.
+
+✅ **The store porter is removed.** `EarthChunkManager` staffs nobody for a
+village store: `_resync_warehouse_porters`, `_spawn_warehouse_porter`,
+`_free_warehouse_porters_in_chunk` and `_free_porter` are gone, with their
+call sites. `LogisticsMarker` keeps its original job, the single-tile
+placeables. `test_earth_chunk_manager_warehouse_porter.gd` became
+`test_earth_chunk_manager_village_store.gd`, which pins the absence and
+drives a REAL settlement chunk through four load/unload cycles to prove a
+village leaves no wagon behind.
+
+✅ **A loader bug found on the way.** `SpriteSheetLoader` took the `load()`
+branch whenever `ResourceLoader.exists()` was true — which it is off a
+committed `*.png.import` sidecar alone, whether or not the artifact under
+`.godot/` has ever been generated. On a fresh checkout that is every
+newly-added sheet: `load()` failed with an engine error on art that decodes
+perfectly from its own bytes, and the whole cart suite failed with it. The
+loader now checks the import artifact is really on disk and otherwise decodes
+the file's own buffer — no `Image.load_from_file`, so not even the export
+warning GUT counts as an error.
+
+Tests: `test_village_cart.gd` 5/5 (new), `test_npc_marker_cart.gd` 7/7 (new),
+`test_earth_chunk_manager_village_store.gd` 9/9, `test_village_renderer.gd`
+121/121, `test_settlement_generator.gd` 28/28, `test_sprite_sheet_loader.gd`
+6/6, `test_cart_marker.gd` 12/12, `test_cart_load.gd`, `test_npc_identity.gd`
+and `test_procedural_landmark_sprite.gd` green.
+
+### Still open
+
+- **A village with more than one store.** The handout gives every carter the
+  FIRST store in the chunk. Villages raise one, so this has never mattered; a
+  second would want the round split rather than doubled.
+- **The cart is not yet a thing you can touch.** It has no hitbox, clicking it
+  shows nothing, and the player cannot take hold of it — asked for directly
+  and not built here.

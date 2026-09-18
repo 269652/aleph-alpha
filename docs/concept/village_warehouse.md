@@ -310,17 +310,23 @@ warehouse he unloads"*.
 **The load is on the cart, not in the worker.** That is the whole point and
 the whole design: `CartLoad` is a real `item_id -> count` store that lives on
 the cart's own node. A cart standing in a field is a cart with the timber
-still in it — leave the porter behind, unload it later, come back to it
-tomorrow. Nothing about the goods is bookkeeping held on the person.
+still in it — leave it behind, unload it later, come back to it tomorrow.
+Nothing about the goods is bookkeeping held on the person.
+
+**Who pulls it** is the carter of Mechanism 4, a real villager — corrected
+in play once the first pass gave the wagon to a spawned walker: *"The cart
+is not being pulled by a worker, but by a floor tile???"*, and then *"It
+should be a real NPC pulling the cart, not an additional sprite"*. One wagon
+per carter, spawned with the village and freed with it.
 
 - **Capacity.** A cart carries six of the porter's own armfuls
   (`LogisticsMarker.CARRY_CAPACITY`), which is also more than the 12 wood
   the growth ladder's cheapest rung needs — a cart that could not bring
   home a whole small house's timber in one trip would not be worth pulling.
   Both relationships are test-pinned rather than the number asserted.
-- **Loading.** At the producer the porter fills the cart, an armful at a
-  time, until the shelf is bare or the cart is full. A load that will not
-  fit is left on the shelf rather than destroyed.
+- **Loading.** At the producer the carter fills the cart until the shelf is
+  bare or the cart is full. A load that will not fit is left on the shelf
+  rather than destroyed.
 - **Unloading.** At the store the cart is emptied into the warehouse's own
   `StructureStock` — all of it, every item id it is carrying, in one
   arrival.
@@ -368,11 +374,31 @@ tomorrow. Nothing about the goods is bookkeeping held on the person.
   `VillageRenderer` hands every villager the door of the store that really
   stands in their chunk.
 
+- ✅ **Mechanism 4 — the carter.** `carter` is a real entry in
+  `NpcIdentity.OCCUPATIONS`; `VillageCart` decides whose shelf is worth
+  walking to, `LogisticsBehavior` decides when each leg of the round ends,
+  and `NpcMarker._step_cart` owns the world effect — the same three-part
+  split the sawyer and the farmer already keep. `VillageRenderer` hands each
+  carter the store that really stands, the producers on their round and a
+  wagon of their own. `SettlementGenerator` conscripts one carter when a
+  roster rolled none: measured over the 75 real grassland villages in rows
+  0–5, 7 of them (9.3%) had a store nobody could ever empty, and 0 do now.
+  The `LogisticsMarker`-based store porter is **removed**; that class keeps
+  its original job, the single-tile `sagewerk`→`storage` placeables.
+- ✅ **Mechanism 5 — the Bollerwagen.** `CartLoad` (pure) and `CartMarker`
+  (the node that holds the load, trails its puller and turns to face the
+  way it is going). Spawned with the village, so it is freed with the chunk
+  — a leak there was the measured cause of a reported framerate decay
+  (`tools/probe_node_growth.gd`).
+
 ## Known open questions
 
 - **What counts toward the ceiling.** Mechanism 2 caps stock as a whole. A
   per-item or per-kind ceiling (grain and iron do not share a shelf) is the
   obvious refinement and is deliberately not attempted first.
-- **Who hauls.** Mechanism 3 gives every villager the wiring. Whether
-  hauling should belong to an occupation instead — a carter, a porter —
-  is a question for once it is visibly running.
+- ~~**Who hauls.**~~ Answered by Mechanism 4: hauling is an occupation. Every
+  villager keeps Mechanism 3's wiring for their own hands, but the store's
+  round belongs to the carter.
+- **A village with more than one store.** Mechanism 4's handout gives every
+  carter the FIRST store in the chunk. Villages raise one, so this has never
+  mattered; a second one would want the round split rather than doubled.
