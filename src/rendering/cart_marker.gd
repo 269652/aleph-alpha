@@ -18,6 +18,7 @@ extends Node2D
 const CartLoad = preload("res://src/gameplay/cart_load.gd")
 const IllustratedStructureSprite = preload("res://src/rendering/illustrated_structure_sprite.gd")
 const TerrainRenderer = preload("res://src/rendering/terrain_renderer.gd")
+const HoverTargetFinder = preload("res://src/rendering/hover_target_finder.gd")
 
 const GROUP_NAME := "cart"
 
@@ -67,6 +68,26 @@ var stock: Dictionary = {}
 ## -- a cart nobody is pulling stays exactly where it was left.
 var pulled_toward = null
 
+## Whoever has the shaft (a Node2D), or null when the cart is parked
+## (docs/concept/village_warehouse.md, Mechanism 6). `pulled_toward` follows
+## them for as long as they hold it, so nothing has to drive the low-level
+## field by hand.
+##
+## Asked directly: *"the player should also be able to grab/pull it"*.
+var held_by = null
+
+## What stops you walking through it. The same ground-floor collision layer
+## every wall piece and the village well already use
+## (EarthChunkManager.GROUND_FLOOR_COLLISION_LAYER), named here rather than
+## imported so a cart does not have to preload the whole chunk manager to
+## know one number.
+const GROUND_FLOOR_COLLISION_LAYER := 1
+
+## How much of the drawn frame the hitbox covers. A hand-cart is mostly
+## air -- a box the full size of the art would stop you a wheel's width
+## away from something you can plainly walk past.
+const SOLID_FOOTPRINT_FRACTION := Vector2(0.7, 0.45)
+
 var _sprite: Sprite2D
 var _view_row := ROW_FRONT
 var _rolled_seconds := 0.0
@@ -76,9 +97,105 @@ static var _frames: Dictionary = {}
 
 func _ready() -> void:
 	add_to_group(GROUP_NAME)
+	# Answers the cursor like every other interactable in the world -- a
+	# name, and one thing to do with it (Mechanism 6).
+	add_to_group(HoverTargetFinder.GROUP_NAME)
 	_sprite = Sprite2D.new()
 	add_child(_sprite)
 	_redraw()
+	add_child(_solid_body())
+
+
+## The body that stops you walking into a parked cart. A child of the cart
+## itself, so it moves with it and is freed with it -- the cart IS the thing
+## in the way, and a separately-tracked body would be one more thing to keep
+## in step (the same shape VillageRenderer._solid_body_for already uses for
+## the well).
+##
+## Sized in WORLD units off the cart's own drawn width, not off the art's raw
+## pixels: the sheet is authored many times oversized and the sprite is
+## scaled back to WIDTH_TILES of road, so raw numbers would be a wall several
+## tiles across.
+func _solid_body() -> StaticBody2D:
+	var body := StaticBody2D.new()
+	body.name = "CartCollision"
+	body.collision_layer = GROUND_FLOOR_COLLISION_LAYER
+	var shape := CollisionShape2D.new()
+	var rect := RectangleShape2D.new()
+	var drawn := WIDTH_TILES * float(TerrainRenderer.TILE_SIZE)
+	rect.size = Vector2(drawn, drawn) * SOLID_FOOTPRINT_FRACTION
+	shape.shape = rect
+	# A cart stands on its own wheels, so what stops you is the box at its
+	# foot rather than a column of air over it.
+	shape.position = Vector2(0, -rect.size.y * 0.5)
+	body.add_child(shape)
+	return body
+
+
+## What the hover tooltip calls it. An empty cart and a loaded one are
+## different things to walk up to, so the name says which.
+func get_display_name() -> String:
+	if is_empty():
+		return "Handcart"
+	return "Handcart (%d)" % CartLoad.total(stock)
+
+
+## The one thing there is to do with a cart, on the primary context slot --
+## which is exactly what that slot is for: what it does is decided by
+## whatever is under the cursor and the state it is in.
+func get_hover_actions() -> Array:
+	if held_by != null and is_instance_valid(held_by):
+		return [{"verb": "Let Go", "action": "primary_action"}]
+	return [{"verb": "Take Hold", "action": "primary_action"}]
+
+
+## What a click on the cart shows, in the shape HousePanel already reads --
+## it is a pure consumer of a Dictionary, so a cart hands it one rather than
+## growing a second panel that would draw the same rows a different way.
+##
+## A SNAPSHOT of the load, never the cart's own store: a panel holding the
+## live dictionary could edit the load by drawing it.
+func report() -> Dictionary:
+	return {
+		"title": get_display_name(),
+		"subtitle": _holder_line(),
+		"is_home": false,
+		"stock": stock.duplicate(),
+		"storage_capacity": CartLoad.CAPACITY,
+	}
+
+
+func _holder_line() -> String:
+	if held_by == null or not is_instance_valid(held_by):
+		return "Parked"
+	if held_by.has_method("get_display_name"):
+		return "Pulled by %s" % held_by.get_display_name()
+	return "Being pulled"
+
+
+## Takes the shaft. Fails when somebody else already has it, so two carters
+## never fight over one wagon -- unless `force`, which the player's own grab
+## passes: a villager is not going to wrestle them for it, and being refused
+## by an NPC's claim reads as a bug.
+func take_hold(who, force := false) -> bool:
+	if who == null:
+		return false
+	if held_by != null and is_instance_valid(held_by) and held_by != who and not force:
+		return false
+	held_by = who
+	return true
+
+
+## Lets go, but only if `who` really has it -- otherwise anybody walking past
+## could park somebody else's cart.
+func let_go(who) -> void:
+	if held_by == who:
+		held_by = null
+		pulled_toward = null
+
+
+func is_held_by(who) -> bool:
+	return who != null and held_by == who and is_instance_valid(who)
 
 
 ## Loads up to `count` of `item_id` on, and reports what really went on. What
@@ -109,6 +226,13 @@ func unload_all() -> Dictionary:
 
 
 func _process(delta: float) -> void:
+	# A holder that has been freed is not a holder: a cart whose carter's
+	# chunk unloaded is parked, not chasing a dangling reference.
+	if held_by != null and not is_instance_valid(held_by):
+		held_by = null
+		pulled_toward = null
+	elif held_by != null:
+		pulled_toward = held_by.position
 	if pulled_toward == null:
 		_redraw()
 		return

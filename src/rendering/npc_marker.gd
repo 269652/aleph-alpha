@@ -1532,9 +1532,20 @@ func _step_cart(delta: float, is_working: bool):
 		return null
 	if _carter == null:
 		_carter = LogisticsBehavior.new()
-	if cart != null and is_instance_valid(cart):
-		cart.pulled_toward = position
+	var have_the_shaft := _hold_the_cart()
 	if not is_working:
+		# Off the clock the wagon is LET GO, not dragged home: it stands
+		# where the round ended, still loaded, free for whoever needs it next
+		# (docs/concept/village_warehouse.md, Mechanisms 5 and 6).
+		if cart != null and is_instance_valid(cart):
+			cart.let_go(self)
+		if _carter.phase != LogisticsBehavior.Phase.SEEKING:
+			_carter.abort()
+		return null
+	# A carter who has lost the shaft -- the player took it -- drops the
+	# round rather than walking it empty-handed. Nothing is emptied into a
+	# wagon they are not holding, so goods are never moved into thin air.
+	if not have_the_shaft:
 		if _carter.phase != LogisticsBehavior.Phase.SEEKING:
 			_carter.abort()
 		return null
@@ -1569,6 +1580,17 @@ func _step_cart(delta: float, is_working: bool):
 	return null
 
 
+## Takes the shaft if the wagon is free, and reports whether this villager
+## really has it. A cart somebody else is pulling is never wrested off them
+## -- a carter only ever takes a FREE cart, which is what keeps two of them
+## from fighting over one (docs/concept/village_warehouse.md, Mechanism 6).
+func _hold_the_cart() -> bool:
+	if cart == null or not is_instance_valid(cart):
+		return false
+	cart.take_hold(self)
+	return cart.is_held_by(self)
+
+
 ## What each of this village's producers is really holding, in the {cell,
 ## waiting} shape VillageCart.fullest_shelf reads. Asked of the world every
 ## time rather than remembered: a shelf fills while the carter is walking.
@@ -1587,7 +1609,7 @@ func _shelves_waiting() -> Array:
 ## it loaded off that shelf. What will not fit is left there rather than
 ## destroyed -- a full cart comes back for the rest.
 func _load_the_cart() -> void:
-	if cart == null or not is_instance_valid(cart):
+	if cart == null or not is_instance_valid(cart) or not cart.is_held_by(self):
 		_carter.abort()
 		return
 	var contents: Dictionary = _world.structure_stock_contents_at(_round_shelf.x, _round_shelf.y)
@@ -1608,7 +1630,7 @@ func _load_the_cart() -> void:
 ## Empties the wagon into the store, every item id in one arrival at the
 ## door.
 func _unload_the_cart() -> void:
-	if cart == null or not is_instance_valid(cart):
+	if cart == null or not is_instance_valid(cart) or not cart.is_held_by(self):
 		return
 	var unloaded: Dictionary = cart.unload_all()
 	for item_id in unloaded:

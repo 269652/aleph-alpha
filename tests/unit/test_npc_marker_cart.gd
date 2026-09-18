@@ -211,20 +211,26 @@ func test_the_store_really_receives_what_the_cart_brought():
 	assert_eq(CartLoad.total(cart.stock), 0, "and the wagon empty again")
 
 
-## The cart is PULLED: it is told where its puller is, every frame of the
-## round, so it trails along behind a real villager.
+## The cart is PULLED by a real villager: they take the shaft, and the wagon
+## trails along behind them wherever the round goes.
 func test_the_cart_is_pulled_along_behind_the_carter():
 	world.deposit_to_structure_at(MILL_CELL.x, MILL_CELL.y, "beam", 8)
-	_run(6.0)
-	assert_ne(cart.pulled_toward, null, "somebody is pulling it")
-	# A cart follows where its puller WAS -- it is handed the carter's
-	# position at the top of the frame, before they take that frame's step --
-	# so one frame of walking is the whole gap there can ever be, and the
-	# bound is that real distance rather than a number picked to pass.
+	cart.position = marker.position
+	var travelled := 0.0
+	var worst_gap := 0.0
+	for i in 200:
+		marker._process(0.1)
+		cart._process(0.1)
+		travelled = maxf(travelled, marker.position.distance_to(_centre(STORE_CELL)))
+		worst_gap = maxf(worst_gap, cart.position.distance_to(marker.position))
+	assert_eq(cart.held_by, marker, "a real villager has the shaft")
+	assert_gt(travelled, float(TILE_SIZE), "precondition: the round really took them somewhere")
+	# Close behind, never on top, at every step of the round: TRAIL_DISTANCE_PX
+	# is the gap a cart keeps, and one frame of walking is the most it can
+	# fall further back before FOLLOW_SPEED closes it again.
 	assert_lte(
-		(cart.pulled_toward as Vector2).distance_to(marker.position),
-		NpcMarker.WALK_SPEED * 0.1,
-		"and it is the carter, wherever they have got to"
+		worst_gap, CartMarker.TRAIL_DISTANCE_PX + NpcMarker.WALK_SPEED * 0.1,
+		"and the wagon never got left behind"
 	)
 
 
@@ -241,3 +247,69 @@ func test_off_the_clock_the_cart_is_left_standing_and_still_loaded():
 	_run(60.0)
 	assert_eq(int(cart.stock.get("beam", 0)), 5, "nothing leaked out of a parked wagon")
 	assert_eq(world.total_on_shelf(MILL_CELL), 8, "and an off-duty carter empties nothing")
+
+
+# -- and the wagon really changes hands (Mechanism 6) -----------------------
+#
+# Asked directly: "the player should also be able to grab/pull it". A carter
+# only ever takes a FREE cart, and one who has lost the shaft drops the round
+# rather than walking it empty-handed.
+
+
+func test_a_carter_takes_hold_of_the_wagon_they_pull():
+	world.deposit_to_structure_at(MILL_CELL.x, MILL_CELL.y, "beam", 8)
+	_run(6.0)
+	assert_eq(cart.held_by, marker, "the carter has the shaft")
+
+
+## A cart somebody else is already pulling is not this carter's to take.
+func test_a_carter_never_takes_a_wagon_somebody_else_is_pulling():
+	var thief := Node2D.new()
+	add_child_autofree(thief)
+	cart.take_hold(thief)
+	world.deposit_to_structure_at(MILL_CELL.x, MILL_CELL.y, "beam", 8)
+	_run(30.0)
+	assert_eq(cart.held_by, thief, "the shaft is not wrested off them")
+
+
+## And nothing is moved into a wagon the carter is not holding: a shelf
+## emptied into somebody else's cart would be goods vanishing.
+func test_a_carter_without_the_shaft_empties_nothing():
+	var thief := Node2D.new()
+	add_child_autofree(thief)
+	cart.take_hold(thief)
+	world.deposit_to_structure_at(MILL_CELL.x, MILL_CELL.y, "beam", 8)
+	_run(120.0)
+	assert_eq(world.total_on_shelf(MILL_CELL), 8, "the mill keeps what nobody could carry")
+	assert_eq(CartLoad.total(cart.stock), 0, "and the wagon stays empty")
+
+
+## A wagon abandoned in a field is village property again the moment nobody
+## is holding it.
+func test_a_carter_reclaims_a_parked_wagon():
+	var thief := Node2D.new()
+	add_child_autofree(thief)
+	cart.take_hold(thief)
+	world.deposit_to_structure_at(MILL_CELL.x, MILL_CELL.y, "beam", 8)
+	_run(10.0)
+	assert_eq(cart.held_by, thief, "precondition: somebody else had it")
+
+	cart.let_go(thief)
+	_run(20.0)
+
+	assert_eq(cart.held_by, marker, "the village's own carter picks it up again")
+
+
+## Off the clock the carter lets go, so a wagon is not dragged home to bed --
+## it stands where the round ended, still loaded (Mechanism 5's whole point).
+func test_an_off_duty_carter_lets_the_wagon_go():
+	world.deposit_to_structure_at(MILL_CELL.x, MILL_CELL.y, "beam", 8)
+	_run(10.0)
+	assert_eq(cart.held_by, marker, "precondition: on the clock, they have it")
+
+	remove_child(marker)
+	marker.free()
+	marker = _carter_with(NeverWorkPlanner.new(), VillageCart.OCCUPATION)
+	_run(10.0)
+
+	assert_null(cart.held_by, "a parked wagon is free for whoever needs it next")
