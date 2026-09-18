@@ -17589,16 +17589,27 @@ func start_build_project(
 	return _construction_project_store.start_project(chunk_coord, origin, blueprint_id, household_id)
 
 
-## The same project, already under way -- what a HIRED build opens, because
-## somebody is working it from the moment they take the job.
-## advance_project_labor only advances an IN_PROGRESS project, so a hired
-## build that stayed PLANNED would silently never progress.
-func begin_hired_build_project(
+## The same project, already under way -- what RAISING a wireframe opens,
+## either way somebody pays for it (docs/concept/planner_mode.md's "From
+## raised to raised"): somebody is working it from the moment it is raised.
+## advance_project_labor only advances an IN_PROGRESS project, so a raised
+## build that stayed PLANNED would silently never progress -- which is
+## exactly what building it yourself used to do.
+func begin_build_project(
 	chunk_coord: Vector2i, origin: Vector2i, blueprint_id: String, household_id: String
 ) -> ConstructionProject:
 	var project := start_build_project(chunk_coord, origin, blueprint_id, household_id)
 	project.status = ConstructionProject.Status.IN_PROGRESS
 	return project
+
+
+## The real labour hours a build of `blueprint_id` asks for -- off the SAME
+## recipe book the ledger derives its own requirement from, so a caller
+## deciding whether work is laid by hand (PlanRaising.is_laid_by_hand) and
+## the ledger deciding when it is finished can never disagree about how big
+## the job is.
+func build_labor_hours_for(blueprint_id: String) -> float:
+	return ConstructionLabor.labor_hours_required(blueprint_id, _recipe_book)
 
 
 func chunk_coord_for_tile(global_tile: Vector2i) -> Vector2i:

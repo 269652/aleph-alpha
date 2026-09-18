@@ -93,7 +93,7 @@ func _seconds_to_finish() -> float:
 
 
 func _raise() -> ConstructionProject:
-	return manager.begin_hired_build_project(_chunk_coord, _origin, BLUEPRINT, "")
+	return manager.begin_build_project(_chunk_coord, _origin, BLUEPRINT, "")
 
 
 # -- the site rises while it is worked -------------------------------------
@@ -157,7 +157,7 @@ func test_pavement_asks_for_no_labour_hours_at_all():
 
 
 func test_finishing_a_pavement_build_really_lays_the_road():
-	var project := manager.begin_hired_build_project(
+	var project := manager.begin_build_project(
 		_chunk_coord, _origin, TerrainRenderer.ROAD_TILE_ID, ""
 	)
 

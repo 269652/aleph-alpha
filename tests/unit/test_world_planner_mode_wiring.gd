@@ -120,7 +120,11 @@ func _constant_value(source: String, name: String) -> float:
 ## would be drawn over its own building.
 func test_raising_opens_a_real_project_and_clears_the_plan():
 	var body := _function_body("_open_raising_project")
-	assert_true(body.contains("start_build_project("), "a real ConstructionProject, not a parallel record")
+	# begin_build_project IS start_build_project with the status a raised
+	# build opens at (see EarthChunkManager) -- the same idempotent-by-site
+	# ConstructionProjectStore.start_project every village build goes
+	# through, never a parallel record.
+	assert_true(body.contains("begin_build_project("), "a real ConstructionProject, not a parallel record")
 	assert_true(body.contains("_build_plans.cancel("), "the wireframe is done once it is a project")
 	assert_true(body.contains("_build_plan_store.save("), "and that must survive a reload")
 
@@ -178,3 +182,69 @@ func test_hired_builds_are_advanced_from_the_world_clock_not_a_frame_delta():
 
 func test_hired_builds_are_stepped_with_the_other_slow_world_systems():
 	assert_true(_function_body("_step_ecology_batch").contains("_step_hired_builds()"))
+
+
+# -- building it yourself ---------------------------------------------------
+# (docs/concept/planner_mode.md's "Who supplies the hours". The player path
+# used to open a PLANNED project, which advance_project_labor no-ops on, and
+# nothing advanced it -- so "Raising it yourself" took the wireframe down and
+# then nothing ever happened.)
+
+## Both ways open the project already under way, because
+## advance_project_labor only advances an IN_PROGRESS one -- a build that
+## says it started and then silently never happens is worse than one that
+## refuses.
+func test_both_ways_open_a_project_that_is_already_under_way():
+	var body := _function_body("_open_raising_project")
+	assert_true(body.contains("begin_build_project("), "opened IN_PROGRESS, whoever is paying")
+	assert_false(
+		body.contains("PlanRaising.Labour.HIRED"),
+		"nothing about the two ways differs here any more: %s" % body
+	)
+
+
+## Pillar 5: the player's hours are their own time AT THE SITE, so they
+## accrue only while the player stands within the same reach that offered
+## them the wireframe. Walk away and the work stops where it stands.
+func test_your_own_hours_only_accrue_while_you_stand_at_the_site():
+	var body := _function_body("_step_player_builds")
+	assert_true(body.contains("PlanRaising.builders_at_site("), "the site decides, not a flat rate")
+	assert_true(body.contains("advance_hired_build("), "through the same labour the ledger already runs")
+	assert_true(body.contains("world_age_seconds()"), "measured against the world clock")
+	assert_false(body.contains("delta"), "a frame delta would be a second clock: %s" % body)
+
+
+func test_your_own_builds_are_stepped_with_the_other_slow_world_systems():
+	assert_true(_function_body("_step_ecology_batch").contains("_step_player_builds()"))
+
+
+## Pillar 1: "every material... still happens at the moment somebody builds
+## it". Checking that they are carried and then not taking them would make
+## building by hand the cheapest path in the game.
+func test_raising_it_yourself_really_takes_the_materials():
+	var body := _function_body("_raise_plan_within_reach")
+	assert_true(body.contains("_spend_carried_materials("), "the cost is really paid")
+	var spent_at := body.find("_spend_carried_materials(")
+	var raised_at := body.find("PlanRaising.Labour.PLAYER")
+	assert_gt(raised_at, -1, "the premise: building it yourself still opens a project")
+	assert_lt(spent_at, raised_at, "the materials go before the work starts, not after")
+
+
+## Hiring does NOT take them -- the wage is what the player pays, and the
+## villager brings the material, which is the whole reason hiring is worth
+## gold.
+func test_hiring_does_not_also_take_the_players_materials():
+	var body := _function_body("_raise_plan_within_reach")
+	var spent_at := body.find("_spend_carried_materials(")
+	var hired_at := body.find("_open_raising_project(plan, PlanRaising.Labour.HIRED)")
+	assert_gt(hired_at, -1, "the premise: hiring still opens a project")
+	assert_lt(hired_at, spent_at, "the hired branch returns before the materials are touched")
+
+
+## Pavement asks for no labour hours, and advance_project_labor never
+## completes a zero-hour requirement -- so a raised pavement plan must be
+## laid at once instead of opening a project that can never finish.
+func test_work_that_asks_for_no_hours_is_finished_on_the_spot():
+	var body := _function_body("_open_raising_project")
+	assert_true(body.contains("PlanRaising.is_laid_by_hand("), "the size of the work decides")
+	assert_true(body.contains("finish_build_project("), "and it is laid the moment it is begun")

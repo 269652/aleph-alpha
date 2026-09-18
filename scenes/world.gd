@@ -3632,6 +3632,7 @@ func _step_ecology_batch(delta: float, focus_player: Player) -> void:
 	# world system -- a build in progress is world state, not something
 	# that should only advance while somebody is looking at it.
 	_step_hired_builds()
+	_step_player_builds()
 	_ecology_focus_player = focus_player
 	if _ecology_steps.is_empty():
 		_ecology_steps = {
@@ -5109,11 +5110,21 @@ var _npc_trust := NpcTrustStore.new()
 ## WORKED, never spawned.
 var _hired_builds: Dictionary = {}
 
-## When each hired build last had labour added, so elapsed time is measured
-## against the world clock rather than accumulated per frame -- the same
-## "one clock, read it, do not keep a second one" rule step_snow's own doc
-## comment already states.
-var _hired_build_advanced_at: Dictionary = {}
+## When each RAISED build (hired or the player's own) last had labour added,
+## so elapsed time is measured against the world clock rather than
+## accumulated per frame -- the same "one clock, read it, do not keep a
+## second one" rule step_snow's own doc comment already states. One dict for
+## both, keyed by project id: two clocks for one question is the very thing
+## that rule exists to prevent.
+var _raised_build_advanced_at: Dictionary = {}
+
+## Builds the player is raising with their OWN hours: project id -> the
+## site (chunk_coord, origin, blueprint_id) those hours have to be standing
+## at. Kept apart from _hired_builds because the two differ in exactly one
+## way (docs/concept/planner_mode.md pillar 5): a hired crew was paid and
+## works whether or not the player is there, and the player's own hours
+## accrue only while they stand at the site.
+var _player_builds: Dictionary = {}
 
 ## What the player offers a villager to raise a wireframe, and the least
 ## any villager will take. Both are tuned values, so they are pinned by
@@ -5303,7 +5314,7 @@ func _raise_plan_within_reach(builder: Player) -> bool:
 		var project = _open_raising_project(plan, PlanRaising.Labour.HIRED)
 		if project != null:
 			_hired_builds[project.id] = 1.0
-			_hired_build_advanced_at[project.id] = _chunk_manager.world_age_seconds()
+			_raised_build_advanced_at[project.id] = _chunk_manager.world_age_seconds()
 		_show_planner_message("%s takes the job for %d gold: %s." % [
 			hired.identity.npc_name, int(BUILDER_WAGE), BuildPlan.display_name_of(plan.blueprint_id)
 		])
@@ -5317,9 +5328,29 @@ func _raise_plan_within_reach(builder: Player) -> bool:
 			", ".join(shortfall), BuildPlan.display_name_of(plan.blueprint_id)
 		])
 		return true
-	_open_raising_project(plan, PlanRaising.Labour.PLAYER)
+	# Pillar 1: planning charged nothing, and the building's own real
+	# catalog cost falls HERE. Checking that the materials are carried and
+	# then not taking them would make building by hand the cheapest path in
+	# the game. Hiring returned above without touching them -- the wage is
+	# what the player pays there, and the villager brings the material.
+	_spend_carried_materials(builder, plan.blueprint_id)
+	var mine = _open_raising_project(plan, PlanRaising.Labour.PLAYER)
+	if mine != null:
+		_player_builds[mine.id] = {
+			"chunk_coord": plan.chunk_coord, "origin": plan.origin, "blueprint_id": plan.blueprint_id,
+		}
+		_raised_build_advanced_at[mine.id] = _chunk_manager.world_age_seconds()
 	_show_planner_message("Raising %s yourself." % BuildPlan.display_name_of(plan.blueprint_id))
 	return true
+
+
+## Takes the building's own real BuildingCatalog cost out of the builder's
+## inventory -- the same numbers a village pays for the same building, never
+## a second price list, exactly as PlanRaising.missing_materials reads them
+## to decide whether they are carried at all.
+func _spend_carried_materials(builder: Player, blueprint_id: String) -> void:
+	for item_id in BuildingCatalog.cost_of(blueprint_id):
+		builder.inventory.remove(str(item_id), int(BuildingCatalog.cost_of(blueprint_id)[item_id]))
 
 
 ## Opens the real ConstructionProject behind a raised wireframe, and takes
@@ -5333,18 +5364,20 @@ func _raise_plan_within_reach(builder: Player) -> bool:
 ## by site, so this cannot reset a project already under way.
 func _open_raising_project(plan, labour: int):
 	var request: Dictionary = PlanRaising.raising_request(plan, labour)
-	# A hired build is under way from the moment somebody takes the job;
-	# advance_project_labor only advances an IN_PROGRESS project, so a hired
-	# one left PLANNED would silently never progress.
-	var project = (
-		_chunk_manager.begin_hired_build_project(
-			request["chunk_coord"], request["origin"], request["blueprint_id"], ""
-		)
-		if labour == PlanRaising.Labour.HIRED
-		else _chunk_manager.start_build_project(
-			request["chunk_coord"], request["origin"], request["blueprint_id"], ""
-		)
+	# A raised build is under way from the moment it is raised, whoever is
+	# paying for the hours; advance_project_labor only advances an
+	# IN_PROGRESS project, so one left PLANNED would silently never progress
+	# -- which is exactly what building it yourself used to do.
+	var project = _chunk_manager.begin_build_project(
+		request["chunk_coord"], request["origin"], request["blueprint_id"], ""
 	)
+	# Work that asks for no labour hours at all is done the moment it is
+	# begun: pavement is not a recipe, and advance_project_labor never
+	# completes a zero-hour requirement, so a paved plan would otherwise be
+	# a project that can never finish. Laid by hand, exactly like the earth
+	# tile the player already places.
+	if PlanRaising.is_laid_by_hand(_chunk_manager.build_labor_hours_for(request["blueprint_id"])):
+		_chunk_manager.finish_build_project(project.id)
 	# The wireframe has become a real project, so the plan that stood for it
 	# is done -- leaving it would draw a blueprint over its own building.
 	_build_plans.cancel(plan.id)
@@ -5366,15 +5399,54 @@ func _step_hired_builds() -> void:
 		return
 	var now: float = _chunk_manager.world_age_seconds()
 	for project_id in _hired_builds.keys():
-		var since: float = now - float(_hired_build_advanced_at.get(project_id, now))
-		_hired_build_advanced_at[project_id] = now
+		var since: float = now - float(_raised_build_advanced_at.get(project_id, now))
+		_raised_build_advanced_at[project_id] = now
 		var outcome: Dictionary = _chunk_manager.advance_hired_build(
 			project_id, since, float(_hired_builds[project_id])
 		)
 		if outcome.get("action", "") == "completed":
 			_hired_builds.erase(project_id)
-			_hired_build_advanced_at.erase(project_id)
+			_raised_build_advanced_at.erase(project_id)
 			_show_planner_message("The builders are finished.")
+
+
+## Adds the hours the PLAYER put in on their own build since it was last
+## looked at -- and only the ones they were really standing at the site for
+## (docs/concept/planner_mode.md's "Who supplies the hours").
+##
+## Pillar 5's "paid for differently" is exactly this: a hired crew was paid
+## and works regardless, and building it yourself is free of gold because
+## the price is your own time on the spot. Walk away and the work stops
+## where it stands; come back and it goes on.
+##
+## The same world clock _step_hired_builds reads, for the same reason, and
+## the same ledger labour -- only the builder count is asked of the site
+## rather than taken as given.
+func _step_player_builds() -> void:
+	if _player_builds.is_empty():
+		return
+	var builder := _players.get_node_or_null(str(multiplayer.get_unique_id())) as Player
+	var now: float = _chunk_manager.world_age_seconds()
+	for project_id in _player_builds.keys():
+		var site: Dictionary = _player_builds[project_id]
+		var since: float = now - float(_raised_build_advanced_at.get(project_id, now))
+		_raised_build_advanced_at[project_id] = now
+		if builder == null:
+			continue
+		var builders := PlanRaising.builders_at_site(
+			Vector2i((builder.position / TerrainRenderer.TILE_SIZE).floor()),
+			BuildPlan.footprint_cells(
+				site["blueprint_id"],
+				site["chunk_coord"] * EarthChunkManager.CHUNK_SIZE + site["origin"]
+			)
+		)
+		if builders <= 0.0:
+			continue
+		var outcome: Dictionary = _chunk_manager.advance_hired_build(project_id, since, builders)
+		if outcome.get("action", "") == "completed":
+			_player_builds.erase(project_id)
+			_raised_build_advanced_at.erase(project_id)
+			_show_planner_message("You finish the %s." % BuildPlan.display_name_of(site["blueprint_id"]))
 
 
 ## What the builder is carrying, item id -> count, in the shape
