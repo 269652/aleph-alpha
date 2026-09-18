@@ -280,23 +280,54 @@ whole.
   measured against the **world clock** rather than a frame delta: one
   clock, read, never a second one kept in step — which is why a `/season`
   leap does not leave a half-built house frozen.
-- ⬜ **What the hours produce.** The hours are real and the project reaches
-  `COMPLETE` — and that is all it does. `advance_hired_build` calls
-  `ConstructionProjectStore.advance_project_labor` directly, so it reaches
-  neither `_sync_construction_site` nor
-  `_place_completed_construction_project`: a hired build shows nothing
-  rising and, finished, builds nothing. (An earlier version of this list
-  claimed "the building completes"; measured, it does not. See "From
-  raised to raised" above for what it must do.)
-- ⬜ **Building it yourself supplies no hours.** The player path opens the
-  project `PLANNED`, which `advance_project_labor` no-ops on, and nothing
-  in `World` advances it — so "Raising it yourself" takes the wireframe
-  down and then nothing ever happens. Its materials are checked and never
-  taken, either (pillar 1). See "Who supplies the hours" above.
-- ⬜ **Pavement can never finish.** Its work is zero hours, and
+- ✅ **What the hours produce** (2026-09-18) — the site rises through the
+  same `_sync_construction_site` sprite a village's own project draws, and
+  finishing runs the same `_place_completed_construction_project`. Before
+  this, `advance_hired_build` called `advance_project_labor` directly and
+  reached neither: a hired build showed nothing rising and, finished, built
+  nothing. (An earlier version of this list claimed "the building
+  completes". Measured, it did not — marking a ledger row `COMPLETE` is
+  bookkeeping, not construction.)
+- ✅ **Building it yourself really supplies the hours** (2026-09-18) — both
+  ways open the project `IN_PROGRESS` through one `begin_build_project`,
+  and `_step_player_builds` adds the player's own hours **while they stand
+  within the same `REACH_TILES` that offered them the wireframe**. Walk
+  away and the work stops where it stands. Before this the player path
+  opened it `PLANNED`, which `advance_project_labor` no-ops on, with
+  nothing in `World` advancing it — "Raising it yourself" took the
+  wireframe down and then nothing ever happened. The materials it already
+  checked for are really taken now, too (pillar 1); hiring still does not
+  take them, because there the wage is what the player pays.
+- ✅ **Pavement is laid by hand** (2026-09-18) — `PlanRaising.
+  is_laid_by_hand` on the work's own hours, and `finish_build_project` on
+  the spot. Its requirement is genuinely zero (it is not a recipe) and
   `advance_project_labor` completes only against a requirement above zero,
-  so a raised pavement plan is a project that can never complete and a
-  cell that never gets paved. See "Work that is laid by hand" above.
+  so a raised pavement plan used to be a project that could never finish.
+- ✅ **A raised build runs on the game's own day** (2026-09-18) — measured
+  with `tools/probe_raised_build.gd`. It inherited
+  `ChunkEcologyCatchup.SECONDS_PER_DAY` (3600), the deliberately
+  conservative LOD rate for integrating vegetation and herds over an
+  **unloaded** chunk, which is 60× the day the player lives in
+  (`SECONDS_PER_SIMULATED_DAY`, 60 — what the ecosystem step, the
+  settlement step, the day/night cycle and every colony already run on). A
+  small house is 2.25 builder-days, so the player stood at their own site
+  for **8100 real seconds** before anything finished, and somebody who had
+  just paid a wage watched nothing happen for two and a quarter hours —
+  indistinguishable from broken, which is how it was reported. Now 135
+  real seconds, measured end to end.
+  **Named divergence:** a settlement's own construction and the offscreen
+  catch-up keep the catch-up rate they were tuned at. A raised build is a
+  thing the player is *watching*; a village's is a background process
+  integrated over absence. The two rates differing is a decision, pinned by
+  `test_the_settlements_own_construction_keeps_the_catchup_rate` rather
+  than left to drift.
+- ⬜ **A raised build in progress does not survive a reload.** The project
+  itself is persisted, but `_hired_builds`/`_player_builds` — the records
+  that say *whose* hours advance it — live only in memory. A raised build
+  inside a settlement chunk keeps going anyway, because the village's own
+  `_advance_construction_labor` advances every `IN_PROGRESS` project in its
+  chunk; one out in the wilderness stalls at the hours it had when the
+  game was quit.
 - ⬜ **The hired villager has no visible walk to the site.** The hours are
   real and the building completes, but the NPC does not yet path there and
   animate. `BuilderMarker` exists for exactly this and is still unconsumed

@@ -25312,6 +25312,93 @@ Tests: `test_wage_payment.gd` 6/6 (new), `test_world_planner_mode_wiring.gd`
 +4, 145/145 across the planner, wage, wallet, hiring, construction-store and
 catchup suites — zero regressions. `world.gd` confirmed to compile.
 
+> **Correction (2026-09-18):** "the building completes" above was an
+> overstatement. The hours were real and the project reached `COMPLETE`,
+> and that is all it did — `advance_hired_build` called
+> `advance_project_labor` directly, reaching neither the construction-site
+> sprite nor the placement, so a hired build showed nothing rising and,
+> finished, built nothing. See the slice below.
+
+### Planner mode, slice 5: a raised wireframe actually becomes a building (`concept/planner_mode.md`, 2026-09-18)
+
+Reported live with the plan in shot: *"Planning works, but building it /
+hiring a builder does not yet seem to work"*.
+
+Four separate defects, each measured before it was touched.
+
+✅ **What the hours produce.** `advance_hired_build` went straight to
+`ConstructionProjectStore.advance_project_labor`, so the raise path reached
+neither `_sync_construction_site` nor
+`_place_completed_construction_project` — the two things a village's own
+project does with its labour. A hired build showed nothing rising and,
+finished, left nothing standing. It now takes the ledger's own two
+outcomes: the site rises through the same construction-row sprite, and
+finishing places the real building. Marking a row `COMPLETE` in a ledger is
+bookkeeping, not construction.
+
+✅ **Building it yourself supplies real hours.** The player path opened the
+project `PLANNED`, which `advance_project_labor` no-ops on, and nothing in
+`World` advanced it — "Raising it yourself" took the wireframe down and
+then nothing ever happened. Both ways now open it `IN_PROGRESS` through one
+`begin_build_project`, and `_step_player_builds` adds the player's own
+hours **while they stand within the same `REACH_TILES` that offered them
+the wireframe** (`PlanRaising.builders_at_site`). Walk away and the work
+stops where it stands; come back and it goes on. That is pillar 5's "the
+player's own time *at the site*" made real, and what keeps building it
+yourself from being a free hire.
+
+✅ **The materials are really taken** (pillar 1). The raise path already
+refused a player who was not carrying the building's own catalog cost, and
+then never took it — free buildings for anyone who owned the wood once.
+Hiring still does not take them: there the wage is what the player pays,
+and the villager brings the material, which is the whole reason hiring is
+worth gold.
+
+✅ **Pavement is laid by hand.** Its work is genuinely zero hours (it is
+not a recipe), and `advance_project_labor` completes only against a
+requirement above zero — deliberately, or an unknown blueprint id would
+complete instantly and for free. So a raised pavement plan was a project
+that could never finish. `PlanRaising.is_laid_by_hand` asks about the size
+of the work, not about pavement by name, and `finish_build_project` lays it
+on the spot.
+
+✅ **A raised build runs on the game's own day.** Measured with
+`tools/probe_raised_build.gd`: it inherited
+`ChunkEcologyCatchup.SECONDS_PER_DAY` (3600), the deliberately conservative
+LOD rate for integrating vegetation and herds over an **unloaded** chunk,
+which is 60× `SECONDS_PER_SIMULATED_DAY` (60) — the day the ecosystem step,
+the settlement step, the day/night cycle and every colony already run on. A
+`house_small` is 2.25 builder-days, so the player stood at their own site
+for **8100 real seconds** before anything finished, and somebody who had
+just paid a wage watched nothing happen for two and a quarter hours. That
+is indistinguishable from the build being broken, which is how it was
+reported. The day length is now an argument with the catch-up rate as its
+default, so no existing caller moved, and the raise path passes the game's
+own. Measured after: **135 real seconds**, site sprite rising the whole
+way, real `house_small` standing at the end.
+
+⬜ **A raised build in progress does not survive a reload.** The project is
+persisted; `_hired_builds`/`_player_builds` — the records saying *whose*
+hours advance it — are in memory only. Inside a settlement chunk it keeps
+going anyway (the village's own `_advance_construction_labor` advances
+every `IN_PROGRESS` project in its chunk); out in the wilderness it stalls
+at the hours it had.
+
+⬜ **The settlement's own construction keeps the catch-up rate.** A raised
+build is something the player is *watching*; a village's is a background
+process integrated over absence. The two rates differing is a decision, not
+a drift — pinned by
+`test_the_settlements_own_construction_keeps_the_catchup_rate`.
+
+Tests: `test_earth_chunk_manager_raised_builds.gd` 10/10 (new),
+`test_plan_raising.gd` 18/18 (+6), `test_world_planner_mode_wiring.gd`
+21/21 (+6), `test_construction_catchup.gd` 12/12,
+`test_construction_project_store.gd` 33/33,
+`test_earth_chunk_manager_city_hall_rising.gd`, `test_construction_labor.gd`,
+`test_build_plan_ledger.gd`, `test_plan_wireframe.gd` — all green.
+`world.gd`, `earth_chunk_manager.gd`, `plan_raising.gd` and `player.gd`
+confirmed to load.
+
 ## A herbalist's bed grows, withers and is harvested invisibly (`concept/village_farms.md`, 2026-09-17)
 
 Reported live with the field in shot: *"it plows the soil but then the soil
