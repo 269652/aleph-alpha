@@ -367,6 +367,44 @@ A rail picks its column from which side of the enclosure it stands on, so a
 run along the field's north edge is drawn back-on and a run down its east
 edge is drawn as a post-and-rail seen from above.
 
+### A farmstead clears its own ground
+
+Reported in play with the enclosure in shot: *"the Farmhouse should clear
+trees in its bed enclosure"*.
+
+A fence around six beds with an oak standing in the middle of them is not a
+field. Every other real placement in this game already fells what is in its
+way — `place_building` and `build_at_global` both call
+`_clear_vegetation_on_cells` on the cells they write, which is
+[building.md](building.md)'s own *"the NPCs / Player must first fell all
+trees to make space for the building"*. The beds were the one thing that
+never did, because they are not written tiles: they are ground handed to a
+farmer, who tills them one at a time and can only clear the ground COVER
+(`till_and_plant_farm_plot_at_global` blocks grass and flowers, and has no
+axe).
+
+So the farmstead clears its beds the way it clears its footprint: at
+founding, once, on the cells it has just claimed.
+
+- **What is cleared:** exactly the cells the fence encloses — the field
+  rectangle the villager really works. Not the fence ring (those are built
+  tiles, and building one already clears its own cell), and not a margin
+  beyond it: a village fells the timber it needs, not the wood it is
+  standing near.
+- **Trees, boulders and ore veins alike**, because that is what
+  `_clear_vegetation_on_cells` means by vegetation and because a boulder in
+  a bed is the same problem as an oak in one. The felled timber is not
+  credited anywhere: a village clearing its own founding site is scene
+  setting, not a harvest, exactly as it already is for a house's footprint.
+- **Through one duck-typed hook**, `clear_vegetation_at_global(cells)`, the
+  same fail-open shape every other world call the renderer makes already
+  uses — a world that cannot answer simply has nothing to clear.
+- **On every visit, not only the first.** The sweep is idempotent (a cleared
+  cell has nothing left to clear), which is what lets it heal a village
+  founded before this existed, the same self-healing shape
+  `_clear_rails_with_nothing_to_enclose` and `_lay_plaza_if_missing`
+  already have.
+
 ### The rail stands on the inner edge
 
 Asked for directly, with the west and south sides of a real ring arrowed in
