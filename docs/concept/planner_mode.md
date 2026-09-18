@@ -124,6 +124,67 @@ and both end in the same `ConstructionProject` against the same site:
 Cancelling a plan removes the wireframe and costs nothing, because
 planning cost nothing (pillar 1).
 
+### From raised to raised: what the hours actually produce
+
+A raised plan is a `ConstructionProject` **already under way**. Both ways
+open it `IN_PROGRESS`, because `advance_project_labor` only advances an
+`IN_PROGRESS` project and a project left `PLANNED` would sit at zero hours
+forever with nothing ever built — a build that says it started and then
+silently never happens is worse than one that refuses.
+
+From there the project is the settlement ledger's own, and it goes the
+whole way the ledger already goes for a village's own builds:
+
+- **The site rises while it is worked.** Every labour tick syncs the same
+  `_sync_construction_site` sprite a village's own project draws — the
+  eight-stage construction row, at the stage the real accumulated hours
+  have reached. A build with nothing standing on it and no message left on
+  screen is indistinguishable from a build that never started.
+- **Completing places the building.** The hours reaching the requirement
+  runs the same `_place_completed_construction_project` a village's own
+  project runs: the real catalog building on its plot, or the recipe's own
+  placeable, and the construction site taken down. Marking a row COMPLETE
+  in a ledger is bookkeeping, not construction.
+
+### Who supplies the hours
+
+Pillar 5's "paid for differently" is exactly this, and nothing else:
+
+- **Hired** — the villager was paid, so the crew works whether or not the
+  player is anywhere near. One builder, at the same eight hours per
+  builder per in-game day a settlement's own spare hand earns.
+- **Yourself** — *the player's own time at the site*. The hours accrue
+  only while the player stands within `PlanRaising.REACH_TILES` of the
+  plan's own footprint — the same reach that offered them the wireframe in
+  the first place. Walk away and the work stops where it stands; come
+  back and it goes on. This is what keeps "build it yourself" from being a
+  free hire: the price of doing it yourself is standing there.
+
+And pillar 1's "every material… still happens at the moment somebody
+builds it" is paid at the same moment: raising it yourself really **takes
+the materials out of the player's own inventory**, the building's own real
+`BuildingCatalog.cost_of`, the same numbers a village pays. Checking that
+they are carried and then not taking them would make building by hand the
+cheapest path in the game. Hiring does not take them — the wage is what
+the player pays, and the villager brings the material, which is the whole
+reason hiring is worth gold.
+
+### Work that is laid by hand
+
+Pavement asks for no labour hours at all: it is not a recipe, so
+`ConstructionLabor.labor_hours_required` is genuinely zero for it, and a
+zero-hour project can never complete (`advance_project_labor` only
+completes against a requirement above zero, deliberately — otherwise an
+unknown blueprint id would complete instantly and for free).
+
+So a blueprint whose work is zero hours is **done the moment it is
+begun**: raised, it is laid at once, exactly like the earth tile the
+player already places by hand. The same rule `PlanRaising.
+can_build_yourself` already states for its cost ("an empty cost must read
+as layable by hand") applied to its hours. It is a rule about the size of
+the work, not a special case named after pavement — anything else that
+ever costs no hours is laid the same way.
+
 ## Status
 
 The spec above was written before the code, per CLAUDE.md. It lands in
@@ -219,6 +280,23 @@ whole.
   measured against the **world clock** rather than a frame delta: one
   clock, read, never a second one kept in step — which is why a `/season`
   leap does not leave a half-built house frozen.
+- ⬜ **What the hours produce.** The hours are real and the project reaches
+  `COMPLETE` — and that is all it does. `advance_hired_build` calls
+  `ConstructionProjectStore.advance_project_labor` directly, so it reaches
+  neither `_sync_construction_site` nor
+  `_place_completed_construction_project`: a hired build shows nothing
+  rising and, finished, builds nothing. (An earlier version of this list
+  claimed "the building completes"; measured, it does not. See "From
+  raised to raised" above for what it must do.)
+- ⬜ **Building it yourself supplies no hours.** The player path opens the
+  project `PLANNED`, which `advance_project_labor` no-ops on, and nothing
+  in `World` advances it — so "Raising it yourself" takes the wireframe
+  down and then nothing ever happens. Its materials are checked and never
+  taken, either (pillar 1). See "Who supplies the hours" above.
+- ⬜ **Pavement can never finish.** Its work is zero hours, and
+  `advance_project_labor` completes only against a requirement above zero,
+  so a raised pavement plan is a project that can never complete and a
+  cell that never gets paved. See "Work that is laid by hand" above.
 - ⬜ **The hired villager has no visible walk to the site.** The hours are
   real and the building completes, but the NPC does not yet path there and
   animate. `BuilderMarker` exists for exactly this and is still unconsumed
