@@ -267,6 +267,21 @@ var _field_index := -1
 ## that AND an ambient number at the same time.
 var _on_real_field := false
 
+## Whether this villager's own store has already been carried in since their
+## work block ended.
+##
+## The haul is the END of the block, and an end happens once. Reported live
+## with the farmhouse panel open: "der Farmer scheint was zu ernten und
+## läuft dann zum Farmhouse aber es wird kein Weizen eingelagert" -- it ran
+## on EVERY off-clock frame, so anything reaching the store outside the work
+## block was drained again within a frame and a store could never hold a
+## thing overnight.
+##
+## One flag for the field and the pond alike: a villager works one or the
+## other, both carry their take in at the same moment, and two flags would
+## be two places to forget to clear.
+var _carried_in_since_work := false
+
 ## How close counts as standing on a plot: half a tile, so a villager on
 ## the tile is working it rather than walking the last few pixels onto its
 ## exact centre. In tiles, against the real tile size setup() was given,
@@ -1210,12 +1225,15 @@ func _step_farm(delta: float, is_working: bool):
 		# is doing -- a field with beds in it always has SOMETHING worth a
 		# visit (VillageFarm.next_action's thirstiest-bed fallback), so
 		# "nothing left to do" never reliably arrives.
-		haul_stock_to_village()
+		#
+		# ONCE, though. See _carried_in_since_work.
+		_carry_the_store_in()
 		return null
 	# A villager with a farmhouse has real work whether or not any single
 	# plot wants attention this instant, so the regional drip is off for
 	# the whole work block rather than flickering with the crop cycle.
 	_on_real_field = true
+	_carried_in_since_work = false
 	match _farmer.phase:
 		FarmerBehavior.Phase.SEEKING:
 			_farmer.advance(delta)  # a no-op outside WORKING; ticks the re-commit clock
@@ -1308,13 +1326,23 @@ func _step_pond(delta: float, is_working: bool):
 		return null
 	if not is_working:
 		_cast_elapsed = 0.0
-		haul_stock_to_village()
+		_carry_the_store_in()  # once, at the end of the block
 		return null
 	_cast_elapsed += delta
+	_carried_in_since_work = false
 	if _cast_elapsed >= CAST_SECONDS:
 		_cast_elapsed = 0.0
 		_work_pond()
 	return _cell_centre(pond_cells[0])
+
+
+## Carries what this villager's own store is holding into the village --
+## once per work block, at its end (see _carried_in_since_work).
+func _carry_the_store_in() -> void:
+	if _carried_in_since_work:
+		return
+	_carried_in_since_work = true
+	haul_stock_to_village()
 
 
 ## The GLOBAL tiles of this villager's own pond, or empty for everyone who

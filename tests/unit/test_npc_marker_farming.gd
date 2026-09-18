@@ -796,3 +796,48 @@ class _DripWorld:
 	extends RefCounted
 	func vegetation_density_near(_pos: Vector2) -> float:
 		return 0.6
+
+
+## Once, at the END of the block -- not on every off-clock frame.
+##
+## Reported live with the farmhouse panel open: "der Farmer scheint was zu
+## ernten und läuft dann zum Farmhouse aber es wird kein Weizen
+## eingelagert". The haul ran on EVERY frame the villager was off the clock,
+## so anything that reached the store outside the work block was drained
+## again within a frame, and a store could never hold a thing overnight.
+func test_the_store_is_carried_in_once_at_the_end_of_the_block_not_every_frame():
+	var farmhouse := Vector2i(10, 10)
+	marker.stock_building_cell = farmhouse
+	marker.field_cells = [Vector2i(11, 12)]
+
+	# The block ends: what the farmhouse held is carried in, exactly as before.
+	world.deposit_to_structure_at(farmhouse.x, farmhouse.y, "wheat", 4)
+	marker._step_farm(0.1, false)
+	assert_eq(world.stock_at(farmhouse, "wheat"), 0, "precondition: the end of the block still hauls")
+
+	# Anything reaching the store AFTER that stays there until the next block
+	# ends -- a village store is not a chute.
+	world.deposit_to_structure_at(farmhouse.x, farmhouse.y, "wheat", 3)
+	for i in 20:
+		marker._step_farm(0.1, false)
+	assert_eq(
+		world.stock_at(farmhouse, "wheat"), 3,
+		"a store filled after the block ended must not be drained on every frame"
+	)
+
+
+## ...and the next block's end carries it in, so nothing is stranded.
+func test_the_next_blocks_end_carries_in_what_was_left():
+	var farmhouse := Vector2i(10, 10)
+	marker.stock_building_cell = farmhouse
+	marker.field_cells = [Vector2i(11, 12)]
+	marker._step_farm(0.1, false)  # first block end, store empty
+	world.deposit_to_structure_at(farmhouse.x, farmhouse.y, "wheat", 3)
+	marker._step_farm(0.1, false)
+	assert_eq(world.stock_at(farmhouse, "wheat"), 3, "precondition: still held")
+
+	marker._step_farm(0.1, true)   # back on the clock
+	marker._step_farm(0.1, false)  # and off again: this block's end
+
+	assert_eq(world.stock_at(farmhouse, "wheat"), 0, "the next block's end must still carry it in")
+	assert_almost_eq(_market_stock("wheat"), 3.0, 0.001)

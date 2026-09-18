@@ -447,7 +447,14 @@ func test_a_working_hunter_gathers_real_food_through_process():
 	]
 	marker.position = marker.workspot_position  # already at the work tag's resolved spot
 
-	for i in 300:
+	# Long enough to earn REAL GOLD, derived from the real rate rather than
+	# written as a round 300 seconds. Half this villager's day is scheduled
+	# as work (two of the four blocks above), and a producer's take-home is
+	# a share of what they earn (VillageWages), so a single unit's gold
+	# rounds away to nothing. The drip is each resource's own renewal now
+	# (docs/concept/settlement_food_calibration.md), so a fixed second count
+	# silently gathers nothing the moment that is retuned.
+	for i in _working_seconds_to_gather("hunter", 20.0):
 		marker._process(1.0)
 
 	assert_gt(market.total_stock(), 0.0)
@@ -1082,3 +1089,19 @@ func _stock_the_stall(market) -> void:
 	market.add_stock("fish", 5.0)
 	if marker.economy != null:
 		marker.economy.wallet.add(100)
+
+
+## How many WALL-CLOCK seconds this villager needs to gather `units` whole
+## food units, given that only part of their day is scheduled as work.
+##
+## Doubled because two of the four scheduled blocks are work: a villager who
+## gathers for half their day needs twice the wall clock of one who gathers
+## all of it.
+func _working_seconds_to_gather(occupation: String, units: float) -> int:
+	var NpcProduction = load("res://src/world/npc_production.gd")
+	var per_second: float = NpcProduction.new().yield_per_second(
+		occupation, world, marker.position
+	)
+	if per_second <= 0.0:
+		return 0
+	return int(ceil(2.0 * units * NpcProduction.FOOD_UNIT / per_second)) + 1

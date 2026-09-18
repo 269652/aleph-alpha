@@ -752,6 +752,24 @@ again.
   A crop with neither illustrated nor procedural art now leaves the sprite
   **hidden** rather than visible-and-textureless.
 
+- ✅ **The store is carried in ONCE, at the end of the block.** Reported live
+  with the farmhouse panel open: *"der Farmer scheint was zu ernten und
+  läuft dann zum Farmhouse aber es wird kein Weizen eingelagert"*. The haul
+  ran on **every** off-clock frame, so anything that reached the store
+  outside the work block was drained again within a frame and a store could
+  never hold a thing overnight. `_carried_in_since_work` is that edge: one
+  flag for the field and the pond alike, because a villager works one or the
+  other and both carry their take in at the same moment.
+
+  **Say plainly what this does and does not change.** Measured before the
+  fix (`tools/probe_village_farming.gd`), the chain was already working —
+  ten separate deposits, a peak of six held in the farmhouse — and the store
+  fills during the work block either way. What changed is that a store can
+  now hold what reaches it *after* the block ends, instead of being a chute.
+  A farmhouse whose villager was never paired with it (a leftover from an
+  earlier roster, `wanted_by=0`) still reads empty, and always will: nobody
+  deposits into it.
+
 Honest gaps, each real:
 
 - 🚧 **`herb` has no INVENTORY art** and falls back to the procedural item
