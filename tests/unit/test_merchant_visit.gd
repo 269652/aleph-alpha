@@ -167,3 +167,54 @@ func test_nothing_is_created_or_destroyed_by_a_sale():
 	for item_id in result["bought"]:
 		owed += int(result["bought"][item_id]) * MerchantVisit.price_of(item_id)
 	assert_eq(int(result["paid"]), owed, "the gold paid is exactly the goods taken")
+
+
+# -- surplus, not stock ------------------------------------------------------
+# Measured on a real loaded village (tools/probe_village_growth.gd): a
+# merchant took its wood away every few minutes, so its stone climbed
+# steadily to 37 while its wood never once got past 2, its house_small
+# project sat PLANNED with nothing reserved for the whole run, and a village
+# that grew from 10 households to 31 built not one house for any of them.
+# SettlementGathering is the only thing in the game that puts wood into a
+# settlement's market, and `wood` is on the buy list.
+
+func test_a_merchant_never_buys_what_the_village_is_saving_for():
+	var stock := {"wood": 12.0}
+	var sale: Dictionary = MerchantVisit.purchase(stock, {"wood": 12})
+	assert_eq(int(sale["bought"].get("wood", 0)), 0, "the timber for its own next house is not surplus")
+	assert_eq(int(sale["paid"]), 0, "and nothing is paid for it")
+
+
+func test_a_merchant_buys_only_what_is_over_the_reserve():
+	var sale: Dictionary = MerchantVisit.purchase({"wood": 20.0}, {"wood": 12})
+	assert_eq(int(sale["bought"].get("wood", 0)), 8, "eight over the twelve it is saving")
+
+
+func test_a_village_saving_for_nothing_sells_as_it_always_did():
+	var sale: Dictionary = MerchantVisit.purchase({"wood": 20.0}, {})
+	assert_eq(int(sale["bought"].get("wood", 0)), 20)
+	assert_eq(sale, MerchantVisit.purchase({"wood": 20.0}), "an omitted reserve reserves nothing")
+
+
+## A reserve on one good never holds back another: a village saving timber
+## still sells its fish.
+func test_a_reserve_on_one_good_does_not_hold_back_another():
+	var sale: Dictionary = MerchantVisit.purchase({"wood": 5.0, "fish": 5.0}, {"wood": 12})
+	assert_eq(int(sale["bought"].get("wood", 0)), 0)
+	assert_eq(int(sale["bought"].get("fish", 0)), 5)
+
+
+## And the VISIT is gated on the same reading: a merchant does not walk to a
+## village whose every plank is already spoken for.
+func test_a_merchant_does_not_walk_to_a_village_with_nothing_spare():
+	var result: Dictionary = MerchantVisit.arrivals(
+		1.0e6, {"wood": 12.0}, 0.0, {"wood": 12}
+	)
+	assert_false(result["arrived"], "nothing to buy is nothing to buy")
+
+
+func test_a_merchant_still_walks_to_a_village_with_a_real_surplus():
+	var result: Dictionary = MerchantVisit.arrivals(
+		1.0e6, {"wood": 40.0}, 0.0, {"wood": 12}
+	)
+	assert_true(result["arrived"])

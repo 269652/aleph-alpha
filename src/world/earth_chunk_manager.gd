@@ -183,6 +183,7 @@ const VillageImmigration = preload("res://src/emergence/village_immigration.gd")
 const MerchantVisit = preload("res://src/emergence/merchant_visit.gd")
 const HouseholdWellbeing = preload("res://src/emergence/household_wellbeing.gd")
 const ConstructionLabor = preload("res://src/emergence/construction_labor.gd")
+const SettlementReserve = preload("res://src/emergence/settlement_reserve.gd")
 const VillageLayout = preload("res://src/world/village_layout.gd")
 const Institution = preload("res://src/emergence/institution.gd")
 const InstitutionStore = preload("res://src/emergence/institution_store.gd")
@@ -3923,19 +3924,59 @@ var _settlement_merchant_carry: Dictionary = {}
 func _step_merchant_visits(settlement_id: String, market) -> void:
 	if market == null:
 		return
+	var reserved := _construction_reserve_for(settlement_id)
 	var result: Dictionary = MerchantVisit.arrivals(
-		SETTLEMENT_STEP_INTERVAL, market.stock, float(_settlement_merchant_carry.get(settlement_id, 0.0))
+		SETTLEMENT_STEP_INTERVAL, market.stock,
+		float(_settlement_merchant_carry.get(settlement_id, 0.0)), reserved
 	)
 	_settlement_merchant_carry[settlement_id] = result["carry"]
 	if not result["arrived"]:
 		return
 
-	var sale: Dictionary = MerchantVisit.purchase(market.stock)
+	var sale: Dictionary = MerchantVisit.purchase(market.stock, reserved)
 	if int(sale["paid"]) <= 0:
 		return
 	for item_id in sale["bought"]:
 		market.remove_stock(str(item_id), float(sale["bought"][item_id]))
 	NpcEconomy.deposit_to_purse(market, float(sale["paid"]))
+
+
+## What this village is SAVING FOR: item_id -> whole units its own next
+## building really needs (docs/concept/traveling_merchants.md, "Surplus, not
+## stock"). {} for a village that owes itself nothing.
+##
+## Read off the SAME VillageGrowth.next_building the ladder walks and the
+## SAME recipe that building is priced in -- never a second list of
+## "protected goods", which would drift from what a village is actually
+## saving for. Measured before this existed (tools/probe_village_growth.gd):
+## SettlementGathering is the only thing that puts wood into a settlement's
+## market and `wood` is on the merchant's buy list, so a real village's
+## stone climbed steadily to 37 while its wood never once got past 2, and a
+## village that grew from 10 households to 31 built not one house for any of
+## them.
+##
+## An UNLOADED settlement reserves nothing: the ladder reads what really
+## stands in the chunk, and an unloaded one has nothing to read -- the same
+## honest limitation _step_village_immigration already carries. A village
+## the player is away from therefore trades as it always did.
+func _construction_reserve_for(settlement_id: String) -> Dictionary:
+	var chunk_coord := RegionalTrade.chunk_coord_of(settlement_id)
+	if not _loaded_chunks.has(chunk_coord):
+		return {}
+	var household_ids := _households_in_settlement(settlement_id)
+	if household_ids.is_empty():
+		return {}
+	var census := _village_census_for(chunk_coord, household_ids)
+	var next_building: String = VillageGrowth.next_building(
+		household_ids.size(), int(census["housed_count"]),
+		_present_structure_ids_for_settlement_chunk(chunk_coord)
+	)
+	if next_building == "":
+		return {}
+	var reserved: Dictionary = {}
+	for input in _recipe_book.recipe_inputs(next_building):
+		reserved[String(input["item_id"])] = int(input["count"])
+	return reserved
 
 
 ## docs/concept/village_growth.md mechanism 3: a fed village with room takes
@@ -4261,7 +4302,10 @@ func _step_settlement_construction(settlement_id: String, household_ids: Array[S
 	_apply_settlement_build_decision(chunk_coord)
 	_apply_civic_build_decision(chunk_coord)
 	_apply_village_growth_decision(chunk_coord)
-	_advance_construction_labor(chunk_coord, SETTLEMENT_STEP_INTERVAL)
+	# The GAME's own day, not the catch-up's: a village standing in front of
+	# the player is not an absence to be integrated over (see
+	# _advance_construction_labor's own `seconds_per_day`).
+	_advance_construction_labor(chunk_coord, SETTLEMENT_STEP_INTERVAL, SECONDS_PER_SIMULATED_DAY)
 ## settlement_id -> SettlementGranary.SeededRegion, cached for the session.
 var _settlement_seeded_region: Dictionary = {}
 
@@ -4326,10 +4370,22 @@ func _seeded_region_for(settlement_id: String):
 ## attempt. A household with no grounded recipe (see OccupationProduction's
 ## own doc comment) is silently skipped, not forced onto an unrelated one.
 func _step_settlement_production(settlement_id: String, household_ids: Array[String]) -> void:
+	# A village does not saw the timber it is saving for its own next house
+	# (docs/concept/village_growth.md, "What a village is saving for"). The
+	# sawyer's own log_to_balken turns 3 wood into 1 beam, so before this a
+	# village sawed its construction timber the moment it had three of it --
+	# and the merchant, whose cart fills with the dearest goods first,
+	# carried the beams off. Measured: stone past 50, wood never past 2, and
+	# 31 households living in the 10 houses the village was founded with.
+	var market := _market_store.market_for(settlement_id)
+	var reserved := _construction_reserve_for(settlement_id)
 	for household_id in household_ids:
 		var recipe_id := OccupationProduction.recipe_for(_occupation_of_household(household_id))
-		if recipe_id != "":
-			attempt_production(settlement_id, recipe_id)
+		if recipe_id == "":
+			continue
+		if not SettlementReserve.can_spend(_recipe_book.recipe_inputs(recipe_id), market.stock, reserved):
+			continue
+		attempt_production(settlement_id, recipe_id)
 
 
 ## A settlement's own households periodically trade with each other --
@@ -15983,7 +16039,23 @@ func _apply_construction_labor_catchup(chunk_coord: Vector2i) -> void:
 ## seconds of real spare-capacity labor and places whatever completes --
 ## the one body both the reload catch-up above and the loaded-settlement
 ## step (_step_settlement_construction) share.
-func _advance_construction_labor(chunk_coord: Vector2i, elapsed: float) -> void:
+## `seconds_per_day` is how long a builder's day is in real seconds, and the
+## two callers of this one body genuinely disagree about it. The offscreen
+## catch-up integrates an ABSENCE at ChunkEcologyCatchup's own deliberately
+## conservative LOD rate (one in-game hour away is one day of progress); the
+## LIVE settlement step is a village the player is standing in front of, and
+## runs on the day the player lives in (SECONDS_PER_SIMULATED_DAY -- what
+## the ecosystem step, the day/night cycle and every colony already use).
+##
+## Measured with the old shared rate (tools/probe_village_growth.gd): a real
+## village grew from 10 households to 31 and raised TWO houses in the same
+## hour, so its people lived thirty-one to twelve roofs and the growth
+## ladder was a ladder nothing could climb. See docs/concept/village_growth.md's
+## "What a village is saving for" for the other half of that measurement.
+func _advance_construction_labor(
+	chunk_coord: Vector2i, elapsed: float,
+	seconds_per_day: float = REAL_SECONDS_PER_ECOLOGICAL_DAY
+) -> void:
 	if elapsed <= 0.0:
 		return
 	var settlement_id := EntityRef.for_settlement(chunk_coord)
@@ -16009,7 +16081,7 @@ func _advance_construction_labor(chunk_coord: Vector2i, elapsed: float) -> void:
 		if is_building and not _civic_site_is_clear(chunk_coord, project.origin, project.blueprint_id):
 			continue
 		var result: Dictionary = _construction_project_store.advance_project_labor(
-			project.id, elapsed, capacity, _recipe_book, _household_store
+			project.id, elapsed, capacity, _recipe_book, _household_store, seconds_per_day
 		)
 		if result.get("action", "") == "completed":
 			_place_completed_construction_project(project)

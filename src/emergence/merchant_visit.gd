@@ -78,11 +78,19 @@ static func price_of(item_id: String) -> int:
 
 ## How many whole units of sellable goods a settlement is holding -- what
 ## decides both whether a merchant comes at all and how soon.
-static func sellable_units(stock: Dictionary) -> int:
+static func sellable_units(stock: Dictionary, reserved: Dictionary = {}) -> int:
 	var total := 0
 	for item_id in BUY_LIST:
-		total += int(floor(float(stock.get(item_id, 0.0))))
+		total += _surplus_of(stock, reserved, item_id)
 	return total
+
+
+## What is really for sale of `item_id`: whole units held, less whatever the
+## village is saving for. Never negative -- a village short of what it needs
+## has no surplus, it does not owe the merchant units.
+static func _surplus_of(stock: Dictionary, reserved: Dictionary, item_id: String) -> int:
+	var held := int(floor(float(stock.get(item_id, 0.0))))
+	return maxi(held - int(reserved.get(item_id, 0)), 0)
 
 
 ## `{"arrived": bool, "carry": the fraction of a visit still owed}`.
@@ -90,11 +98,17 @@ static func sellable_units(stock: Dictionary) -> int:
 ## Gated on there being something to buy: no sellable stock means no visit,
 ## and the carry is kept rather than lost, so a village that finally lands
 ## a catch is not also made to wait out a fresh clock.
-static func arrivals(seconds: float, stock: Dictionary, carry: float) -> Dictionary:
-	if seconds <= 0.0 or sellable_units(stock) <= 0:
+## `reserved` is what the village is SAVING FOR -- item_id -> whole units
+## its own next building really needs (see this doc's "Mercantile
+## surplus, not stock"). Stock up to the reserve is not surplus and is
+## neither sold nor counted toward a visit being worth the walk.
+static func arrivals(
+	seconds: float, stock: Dictionary, carry: float, reserved: Dictionary = {}
+) -> Dictionary:
+	if seconds <= 0.0 or sellable_units(stock, reserved) <= 0:
 		return {"arrived": false, "carry": carry}
 
-	var surplus := clampf(float(sellable_units(stock)) / SURPLUS_FOR_FULL_DRAW, 0.0, 1.0)
+	var surplus := clampf(float(sellable_units(stock, reserved)) / SURPLUS_FOR_FULL_DRAW, 0.0, 1.0)
 	var draw := VISITS_PER_DAY * (1.0 + SURPLUS_DRAW * surplus)
 	var accrued := carry + draw * (seconds / ConstructionCatchup.SECONDS_PER_DAY)
 	if accrued < 1.0:
@@ -112,10 +126,18 @@ static func arrivals(seconds: float, stock: Dictionary, carry: float) -> Diction
 ## The cart fills with the DEAREST goods first (price, then item id, so the
 ## outcome is deterministic rather than dependent on Dictionary order): a
 ## merchant with room for twenty units takes the beams over the fish.
-static func purchase(stock: Dictionary) -> Dictionary:
+## `reserved` holds back what the village's own next building needs, item_id
+## -> whole units. A merchant buys a village's SURPLUS; he does not buy the
+## timber it cut for its own next house. Measured before this rule
+## (tools/probe_village_growth.gd): a real village's stone climbed steadily
+## to 37 while its wood never once got past 2, because SettlementGathering
+## is the only thing that puts wood into a settlement's market and `wood` is
+## on the buy list -- so a village that grew from 10 households to 31 built
+## not one house for any of them.
+static func purchase(stock: Dictionary, reserved: Dictionary = {}) -> Dictionary:
 	var order: Array = []
 	for item_id in BUY_LIST:
-		var available := int(floor(float(stock.get(item_id, 0.0))))
+		var available := _surplus_of(stock, reserved, item_id)
 		if available > 0:
 			order.append([-price_of(item_id), item_id, available])
 	order.sort()
