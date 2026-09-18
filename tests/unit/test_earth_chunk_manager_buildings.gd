@@ -291,13 +291,34 @@ func _water_cell():
 	return null
 
 
+## Writes the record a building standing in water leaves behind, exactly as
+## place_building used to write it and as a save made before that rule
+## existed still contains it. NOT through place_building, which refuses a
+## wet footprint or doorstep outright now (pinned just below) -- this is the
+## LEGACY state the reload sweep exists to heal, and the only way to
+## construct it is to write it.
+func _plant_a_legacy_building(origin_local: Vector2i, building_id: String) -> void:
+	var chunk = manager._loaded_chunks[_chunk_coord]
+	for local in BuildingCatalog.footprint_cells(building_id, origin_local):
+		chunk.modifications[local] = (
+			building_id if local == origin_local else BuildingCatalog.FOOTPRINT_TILE_ID
+		)
+	chunk.buildings[origin_local] = {
+		"id": building_id, "facing": Vector2i(0, 1), "seed": 1,
+		"condition": 1.0, "progress": 1.0, "owner_household_id": "",
+		"occupation": "", "resident_seed": 0,
+	}
+
+
 ## A building's own door/doorstep just happening to be a real wet cell
 ## (Berlin's chunk has the Spree) is removed on the next load -- the same
 ## protection _reclaim_pieces_standing_in_water already gives legacy piece
-## houses, for the entity model. place_building itself does not validate
-## terrain (the caller -- VillageLayout, the player's blueprint build -- is
-## expected to have already), so this constructs the wet-doorstep case
-## directly rather than depending on siting to reproduce it.
+## houses, for the entity model.
+##
+## Still worth having now that place_building refuses to CREATE one: a river
+## that moves under a village it was founded beside, and every save written
+## before the refusal existed, both put a building on wet ground that no
+## placement call is ever asked about again.
 func test_a_building_whose_doorstep_is_water_is_removed_on_reload():
 	var wet = _water_cell()
 	assert_not_null(wet, "precondition: Berlin's chunk has water (the Spree)")
@@ -305,8 +326,8 @@ func test_a_building_whose_doorstep_is_water_is_removed_on_reload():
 		return
 	var door_local := BuildingCatalog.door_of("house_small")
 	var wet_origin: Vector2i = manager._local_coord(wet.x, wet.y) - door_local
-	manager.place_building(_chunk_coord, wet_origin, "house_small", Vector2i(0, 1), 1, "")
-	assert_false(manager.building_at_global(wet.x, wet.y).is_empty(), "precondition: really placed there")
+	_plant_a_legacy_building(wet_origin, "house_small")
+	assert_false(manager.building_at_global(wet.x, wet.y).is_empty(), "precondition: really there")
 
 	manager._unload_chunk(_chunk_coord)
 	manager._load_chunk(_chunk_coord)
@@ -315,6 +336,47 @@ func test_a_building_whose_doorstep_is_water_is_removed_on_reload():
 	for cell in BuildingCatalog.footprint_cells("house_small", wet_origin):
 		var g := _global(cell)
 		assert_eq(manager.modification_at_global(g.x, g.y), "", str(cell))
+
+
+## And nothing new is ever put there in the first place. Reported live with
+## the screenshot: *"Buildings are placed in rivers"*. place_building used to
+## refuse only cells already modified, so any caller that forgot to check the
+## ground was free to put a house in the Spree.
+func test_a_building_is_never_placed_on_water_in_the_first_place():
+	var wet = _water_cell()
+	assert_not_null(wet, "precondition: Berlin's chunk has water (the Spree)")
+	if wet == null:
+		return
+	var wet_origin: Vector2i = manager._local_coord(wet.x, wet.y)
+
+	assert_false(
+		manager.place_building(_chunk_coord, wet_origin, "house_small", Vector2i(0, 1), 1, ""),
+		"a house is not raised in the river"
+	)
+	assert_true(manager.building_at_global(wet.x, wet.y).is_empty(), "and nothing was written")
+
+
+## The doorstep counts too: a house on dry ground whose only way in is off a
+## riverbank is a house nobody can enter.
+func test_a_building_whose_doorstep_would_be_water_is_refused():
+	var wet = _water_cell()
+	assert_not_null(wet, "precondition: Berlin's chunk has water (the Spree)")
+	if wet == null:
+		return
+	var doorstep_local := BuildingCatalog.doorstep_of("house_small")
+	var wet_origin: Vector2i = manager._local_coord(wet.x, wet.y) - doorstep_local
+	var dry_footprint := true
+	for cell in BuildingCatalog.footprint_cells("house_small", wet_origin):
+		var g := _global(cell)
+		if manager.is_water_at_global(g.x, g.y):
+			dry_footprint = false
+	if not dry_footprint:
+		return  # this particular wet cell has the house itself in the water too
+
+	assert_false(
+		manager.place_building(_chunk_coord, wet_origin, "house_small", Vector2i(0, 1), 1, ""),
+		"the front door opens onto the river"
+	)
 
 
 func test_a_building_on_dry_ground_survives_a_reload():
