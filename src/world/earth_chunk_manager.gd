@@ -4105,11 +4105,9 @@ func _step_village_estates(
 			guild.chest,
 			_is_fully_supplied(satisfaction)
 		)
-		guild.chest = banked["chest"]
-		for item_id in banked["chest"]:
-			var moved: float = float(banked["chest"][item_id]) - float(relieved["chest"].get(item_id, 0.0))
-			if moved > 0.0:
-				_take_from_settlement_stock(market, village_market, settlement_id, str(item_id), moved)
+		guild.chest = _bank_into_guild_chest(
+			market, village_market, banked["chest"], relieved["chest"]
+		)
 
 	_settlement_estate_satisfaction[settlement_id] = satisfaction
 
@@ -4170,6 +4168,50 @@ func estate_whole_units_drawn_for(settlement_id: String) -> Dictionary:
 ## is exactly what the baskets asked for.
 func estate_draw_carry_for(settlement_id: String) -> Dictionary:
 	return _settlement_estate_draw_carry.get(settlement_id, {}).duplicate()
+
+
+## Moves what a guild decided to set aside off the settlement's shelves and
+## into its chest, returning the chest the shelves could actually fill.
+##
+## Deliberately NOT routed through _take_from_settlement_stock, for two
+## reasons that both matter. What a guild BANKS is not what the baskets
+## ATE, and sharing that path would have the draw counter report a full
+## larder as a famine -- a readout that cannot tell the two apart is worse
+## than no readout. And the basket's carry is a fraction still OWED, while
+## an unbankable fraction is simply not banked: the goods stay on the shelf
+## and the chest is trimmed back to what really left it, so nothing is
+## created and nothing is lost.
+##
+## Whole units off the emergence Market, which counts in them; the live
+## VillageMarket holds floats and gives up exactly what it is asked for.
+func _bank_into_guild_chest(
+	market, village_market, wanted_chest: Dictionary, chest_before: Dictionary
+) -> Dictionary:
+	var chest := wanted_chest.duplicate()
+	for item_id in wanted_chest:
+		var moving: float = float(wanted_chest[item_id]) - float(chest_before.get(item_id, 0.0))
+		if moving <= 0.0:
+			continue
+		var taken := 0.0
+		if village_market != null:
+			var from_village: float = minf(float(village_market.stock.get(item_id, 0.0)), moving)
+			if from_village > 0.0:
+				village_market.remove_stock(str(item_id), from_village)
+				taken += from_village
+		var still_wanted := moving - taken
+		if still_wanted > 0.0:
+			var whole := mini(int(floor(still_wanted + 0.000001)), market.stock_of(str(item_id)))
+			if whole > 0:
+				market.remove_stock(str(item_id), float(whole))
+				taken += float(whole)
+		# Trimmed back to what the shelves really gave up -- the rest was
+		# never banked and is still sitting in the store.
+		var held := float(chest_before.get(item_id, 0.0)) + taken
+		if held <= 0.0:
+			chest.erase(item_id)
+		else:
+			chest[item_id] = held
+	return chest
 
 
 ## The settlement's whole shelf as ONE float view, live market first -- the

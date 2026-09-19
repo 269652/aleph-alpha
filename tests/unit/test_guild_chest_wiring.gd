@@ -155,3 +155,62 @@ func test_a_village_with_no_guild_behaves_exactly_as_before():
 	manager.step_settlements(EarthChunkManager.SETTLEMENT_STEP_INTERVAL)
 	var drawn: int = before - market.stock_of(VillageEstates.FUEL_ITEM_ID)
 	assert_true(drawn >= 0 and drawn < 10, "a guildless village lost stock to a chest it has not got")
+
+
+# -- banking is accounted apart from eating ------------------------------
+
+## What a guild BANKS is not what the baskets ATE. The draw counter says
+## "whole units this settlement's estate baskets have really taken off its
+## market", and a guild setting goods aside must not inflate it -- a
+## readout that cannot tell a full larder from an empty one is worse than
+## no readout.
+func test_banking_into_the_chest_is_not_counted_as_the_baskets_eating():
+	var households := _found(5)
+	var guild := _form_guild(households)
+	var market = manager.market_store().market_for(_settlement_id)
+	market.add_stock(VillageEstates.FUEL_ITEM_ID, 400)
+	market.add_stock("herb", 400)
+	manager.step_settlements(EarthChunkManager.SETTLEMENT_STEP_INTERVAL)
+
+	var banked: float = float(guild.chest.get(VillageEstates.FUEL_ITEM_ID, 0.0))
+	assert_true(banked > 0.0, "precondition: the guild really banked something")
+	var eaten: int = int(
+		manager.estate_whole_units_drawn_for(_settlement_id).get(VillageEstates.FUEL_ITEM_ID, 0)
+	)
+	assert_true(
+		float(eaten) < banked,
+		"the draw counter reported %d logs eaten when the guild merely stored %f" % [eaten, banked]
+	)
+
+
+## And nothing is created or lost in the move: what the chest gains, the
+## shelf loses, to the unit.
+func test_banking_moves_goods_off_the_shelf_and_never_creates_them():
+	var households := _found(5)
+	var guild := _form_guild(households)
+	var market = manager.market_store().market_for(_settlement_id)
+	market.add_stock(VillageEstates.FUEL_ITEM_ID, 400)
+	market.add_stock("herb", 400)
+	var before: int = market.stock_of(VillageEstates.FUEL_ITEM_ID)
+	manager.step_settlements(EarthChunkManager.SETTLEMENT_STEP_INTERVAL)
+
+	var off_the_shelf: int = before - market.stock_of(VillageEstates.FUEL_ITEM_ID)
+	var in_the_chest: float = float(guild.chest.get(VillageEstates.FUEL_ITEM_ID, 0.0))
+	assert_true(
+		in_the_chest <= float(off_the_shelf) + 0.0001,
+		"the chest holds %f logs and only %d left the shelf" % [in_the_chest, off_the_shelf]
+	)
+
+
+## A chest never holds a fraction of a unit the shelf could not actually
+## give up -- the emergence Market counts in whole units, so a chest
+## claiming half a log the market still has is a half log that exists twice.
+func test_a_chest_never_holds_a_fraction_the_shelf_could_not_give_up():
+	var households := _found(5)
+	var guild := _form_guild(households)
+	var market = manager.market_store().market_for(_settlement_id)
+	market.add_stock(VillageEstates.FUEL_ITEM_ID, 3)
+	market.add_stock("herb", 400)
+	manager.step_settlements(EarthChunkManager.SETTLEMENT_STEP_INTERVAL)
+	var held: float = float(guild.chest.get(VillageEstates.FUEL_ITEM_ID, 0.0))
+	assert_almost_eq(held, floor(held), 0.0001, "the chest holds a fraction of a log")
