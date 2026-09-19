@@ -62,6 +62,7 @@ const DecomposerRenderer = preload("res://src/rendering/decomposer_renderer.gd")
 const CaterpillarRenderer = preload("res://src/rendering/caterpillar_renderer.gd")
 const MillipedeRenderer = preload("res://src/rendering/millipede_renderer.gd")
 const GrassFrogRenderer = preload("res://src/rendering/grass_frog_renderer.gd")
+const GrassFrogMarker = preload("res://src/rendering/grass_frog_marker.gd")
 const LumberjackMarker = preload("res://src/rendering/lumberjack_marker.gd")
 const ProceduralBuildingPieceSprite = preload("res://src/rendering/procedural_building_piece_sprite.gd")
 const LogisticsMarker = preload("res://src/rendering/logistics_marker.gd")
@@ -10061,6 +10062,73 @@ func crush_decomposers_near(pixel_position: Vector2, momentum_kg_m_s: float) -> 
 	return _crush_markers_near(_decomposer_markers, pixel_position, momentum_kg_m_s)
 
 
+## Every grass frog standing on `pixel_position`'s own tile, crushed by a
+## stepper of `stepper_mass_kg` (see docs/concept/soil_fauna.md "Generalized
+## to ANY animal", CrushMechanic.crushes_underfoot). Reported in play:
+## "Stepping on a frog doesn't kill it? ... A boar walking over a frog should
+## kill it as well."
+##
+## Takes the stepper's own MASS rather than its momentum, unlike every crush
+## call above it: an animal victim is decided by two terms, and the second one
+## (does this whole body fit under that foot) is a question about the foot's
+## mass, which a momentum has already thrown away. A frog is otherwise exactly
+## the caterpillar-shaped victim this manager already knows -- a real Node2D
+## in a chunk-keyed array, dying by its own crush() -- so it shares that
+## walk. Every frog weighs the same, so its victim mass is its species' own
+## tabulated figure, asked once rather than per marker.
+func crush_grass_frogs_near(pixel_position: Vector2, stepper_mass_kg: float) -> bool:
+	if not CrushMechanic.crushes_underfoot(stepper_mass_kg, CreatureMass.mass_kg_for(GrassFrogMarker.SPECIES)):
+		return false
+	return _crush_tracked_markers_on_tile(_grass_frog_markers, pixel_position)
+
+
+## Every real ANIMAL in `creature_markers` standing on `pixel_position`'s own
+## tile and light enough to go under the foot of a stepper of
+## `stepper_mass_kg` (see CrushMechanic.crushes_underfoot) -- a mouse under a
+## horse, a frog-sized thing under a boar -- crushed through its own crush(),
+## which kills it the way every other death in this game happens rather than
+## freeing it where it stands.
+##
+## The ONE crush entry point that is handed its victims instead of finding
+## them: creature markers are not tracked by this manager at all (they live
+## in the scene tree, and this class is a RefCounted with no access to it),
+## and World's own crush pass already holds a cached group list of them for
+## the several other loops it runs over the same list. Taking that list is
+## both honest about where the truth lives and free -- the alternative is a
+## second full group scan per stepper per frame, in the function this file's
+## own FPS history says is the most expensive one in the game.
+##
+## `excluding` is the stepper itself when the stepper is a creature. The mass
+## rule already rules self-crushing out (a body always outweighs its own
+## foot), so this is a second, explicit guard on the thing that must never
+## happen rather than the only thing preventing it.
+func crush_creatures_near(
+	creature_markers: Array, pixel_position: Vector2, stepper_mass_kg: float, excluding: Node2D = null
+) -> bool:
+	# The cheap term first: a stepper too light to crush anything at all
+	# never walks the list (see CrushMechanic.crushes_underfoot's own first
+	# term), which is most of the creatures in a loaded world.
+	if not CrushMechanic.is_crushed_by(stepper_mass_kg * PebbleDispersion.FOOTSTEP_SPEED_MPS):
+		return false
+	var tile := _world_tile_for_pixel(pixel_position)
+	var crushed_any := false
+	for marker in creature_markers:
+		if marker == excluding:
+			continue
+		# Defensive, the same contract _crush_tracked_markers_on_tile
+		# documents: a creature freed earlier this frame must not crash the
+		# scan of a creature that is still alive.
+		if not is_instance_valid(marker) or marker.is_queued_for_deletion():
+			continue
+		if not CrushMechanic.crushes_underfoot(stepper_mass_kg, marker.current_mass_kg()):
+			continue
+		if _world_tile_for_pixel(marker.position) != tile:
+			continue
+		marker.crush()
+		crushed_any = true
+	return crushed_any
+
+
 ## The ant-shaped sibling of crush_caterpillars_near/crush_millipedes_near
 ## (see docs/concept/soil_fauna.md "Generalized to ants too" -- reported
 ## live: "ants are also not crushed when a player is walking over them").
@@ -10301,6 +10369,18 @@ func take_ant_near(pixel_position: Vector2) -> bool:
 func _crush_markers_near(markers_by_chunk: Dictionary, pixel_position: Vector2, momentum_kg_m_s: float) -> bool:
 	if not CrushMechanic.is_crushed_by(momentum_kg_m_s):
 		return false
+	return _crush_tracked_markers_on_tile(markers_by_chunk, pixel_position)
+
+
+## _crush_markers_near's own walk, with the GATE lifted out (2026-09-19, see
+## docs/concept/soil_fauna.md "Generalized to ANY animal"): an invertebrate
+## victim's gate is a momentum threshold, a frog's is CrushMechanic.crushes_
+## underfoot at a frog's own real mass, and the walk they share afterwards --
+## "everything of this kind standing on exactly this tile dies and leaves
+## tracking at once" -- is identical either way. Split rather than given a
+## second momentum parameter so neither caller has to express its own gate in
+## the other's terms.
+func _crush_tracked_markers_on_tile(markers_by_chunk: Dictionary, pixel_position: Vector2) -> bool:
 	var tile := _world_tile_for_pixel(pixel_position)
 	var chunk_coord := _chunk_coord_for_tile(tile)
 	var markers: Array = markers_by_chunk.get(chunk_coord, [])

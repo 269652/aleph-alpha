@@ -50,6 +50,13 @@ const SquashCrushEffect = preload("res://src/rendering/squash_crush_effect.gd")
 
 const GROUP_NAME := "grass_frog"
 
+## This frog's species key -- the one CreatureMass tabulates its real body
+## mass under, so "how much does a frog weigh" has exactly one answer rather
+## than a second one written down wherever it happens to be needed (see
+## CrushMechanic.crushes_underfoot, which asks that question of a frog every
+## time something steps on its tile).
+const SPECIES := "grass_frog"
+
 ## How far this frog ranges from its home spot across many hops -- short: a
 ## real grass frog stays close to its patch of damp ground/pond edge.
 ## Same order of magnitude as CaterpillarMarker.WANDER_RADIUS_PX.
