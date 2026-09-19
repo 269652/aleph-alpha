@@ -189,6 +189,7 @@ const EstateAscension = preload("res://src/emergence/estate_ascension.gd")
 const VillageLabor = preload("res://src/emergence/village_labor.gd")
 const VillageAssembly = preload("res://src/emergence/village_assembly.gd")
 const EstateShortfall = preload("res://src/emergence/estate_shortfall.gd")
+const GuildRelief = preload("res://src/emergence/guild_relief.gd")
 const ConstructionLabor = preload("res://src/emergence/construction_labor.gd")
 const SettlementReserve = preload("res://src/emergence/settlement_reserve.gd")
 const VillageLayout = preload("res://src/world/village_layout.gd")
@@ -3926,6 +3927,22 @@ func estate_shortfalls_for_settlement(settlement_id: String) -> Array:
 	)
 
 
+## This settlement's own guild, or null.
+##
+## The first ACTIVE institution of type "guild" any of its households
+## belongs to. Deliberately the first rather than a merged view of all of
+## them: a village of this size realistically has one trade body, and a
+## chest split across several would be several chests none of which is big
+## enough to relieve anybody. Stated as a first slice rather than as a
+## finished model.
+func guild_for_settlement(settlement_id: String):
+	for household_id in _households_in_settlement(settlement_id):
+		for institution in _institution_store.institutions_for(household_id):
+			if institution.type == "guild" and institution.status == Institution.ACTIVE:
+				return institution
+	return null
+
+
 ## What this settlement's spare hands cut in one assessment -- the real
 ## number the estate layer's own draw has to stay under, exposed so that
 ## relation can be MEASURED by a test rather than asserted in a comment.
@@ -4058,6 +4075,37 @@ func _step_village_estates(
 		0.0,
 		1.0
 	)
+	# docs/concept/village_estates.md's guild chest: the village's own
+	# guild tops up what the market could not supply, and banks a share of
+	# what is left when it could. RELIEVE before BANK, always: a guild that
+	# banked first would take from a shelf its own members were about to be
+	# found short of.
+	#
+	# Paired with the seasonal fuel term this produces a behaviour nobody
+	# wrote -- a guild village banks firewood through the summer, when the
+	# basket asks for half as much and there is a real surplus, and burns it
+	# through the winter, when the basket asks for double. The mechanism has
+	# no idea what a season is.
+	var guild = guild_for_settlement(settlement_id)
+	if guild != null:
+		var relieved: Dictionary = GuildRelief.relieve(satisfaction, demand, guild.chest)
+		satisfaction = relieved["satisfaction"]
+		# What the chest released came OUT of the chest, which relieve()
+		# already drew down -- the market is not touched for it, because
+		# those goods were never on its shelf.
+		guild.chest = relieved["chest"]
+		var banked: Dictionary = GuildRelief.set_aside(
+			_settlement_shelf_view(market, village_market),
+			EstateConsumption.demand_for(census, 1.0, _season_cycle.season_at(_world_age_seconds)),
+			guild.chest,
+			_is_fully_supplied(satisfaction)
+		)
+		guild.chest = banked["chest"]
+		for item_id in banked["chest"]:
+			var moved: float = float(banked["chest"][item_id]) - float(relieved["chest"].get(item_id, 0.0))
+			if moved > 0.0:
+				_take_from_settlement_stock(market, village_market, settlement_id, str(item_id), moved)
+
 	_settlement_estate_satisfaction[settlement_id] = satisfaction
 
 	_walk_estate_ladder(settlement_id, household_ids, satisfaction, ladder_days)
@@ -4117,6 +4165,29 @@ func estate_whole_units_drawn_for(settlement_id: String) -> Dictionary:
 ## is exactly what the baskets asked for.
 func estate_draw_carry_for(settlement_id: String) -> Dictionary:
 	return _settlement_estate_draw_carry.get(settlement_id, {}).duplicate()
+
+
+## The settlement's whole shelf as ONE float view, live market first -- the
+## same combined reading the basket draw itself takes, so the guild banks
+## against what the village really has rather than against one half of it.
+func _settlement_shelf_view(market, village_market) -> Dictionary:
+	var stock := {}
+	if village_market != null:
+		for item_id in village_market.stock:
+			stock[item_id] = float(stock.get(item_id, 0.0)) + float(village_market.stock[item_id])
+	for item_id in market.stock:
+		stock[item_id] = float(stock.get(item_id, 0.0)) + float(market.stock[item_id])
+	return stock
+
+
+## Whether every good this settlement's baskets asked for was actually
+## supplied -- the gate on a guild banking anything at all. You do not
+## stockpile while your own people go short.
+static func _is_fully_supplied(satisfaction: Dictionary) -> bool:
+	for good in satisfaction:
+		if float(satisfaction[good]) < 1.0:
+			return false
+	return not satisfaction.is_empty()
 
 
 ## Removes `amount` of one good from the settlement's shelves, live one
