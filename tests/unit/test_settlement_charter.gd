@@ -180,15 +180,31 @@ func test_the_next_tier_up_is_named_and_the_top_has_none():
 
 # -- the anti-deadlock invariant -----------------------------------------
 
-## Pillar 4, as a hard test rather than a promise. A hamlet with no
-## farmhouse cannot make husbandmen, cannot diversify its production and
-## cannot become a town -- so a farmhouse chartered at TOWN would be a
-## village that can never grow, found months later by somebody watching a
-## save go nowhere.
+## Pillar 4, as a hard test rather than a promise -- and stated CAUSALLY,
+## which is the only form that is actually checkable. A building may be
+## chartered only if nothing needed to reach that charter's tier depends
+## on it. Three things feed SettlementTier, so three things must stay free
+## at the bottom:
+##
+## - HOUSES, because households are a dimension and a household needs a
+##   roof (VillageImmigration gates arrivals on room);
+## - every ESTATE CHARTER building, because an estate that cannot be
+##   reached is labour that never changes class;
+## - every building anything PRODUCES through, because production
+##   diversity is a dimension.
+##
+## A hamlet with no farmhouse cannot make husbandmen, cannot diversify its
+## production and cannot become a town -- so a farmhouse chartered at TOWN
+## would be a village that can never grow, found months later by somebody
+## watching a save go nowhere.
 func test_nothing_a_settlement_needs_in_order_to_grow_is_gated_behind_growing():
+	var StaffedProduction = load("res://src/emergence/staffed_production.gd")
+	var VillageLabor = load("res://src/emergence/village_labor.gd")
+
 	var must_be_free: Array = []
-	must_be_free.append_array(VillageGrowth.LADDER_BUILDING_IDS)
 	must_be_free.append_array(BuildingCatalog.BUILDING_IDS)
+	must_be_free.append_array(StaffedProduction.RECIPE_BY_BUILDING.keys())
+	must_be_free.append_array(VillageLabor.LABOUR_BY_BUILDING.keys())
 	for estate in VillageEstates.ESTATE_IDS:
 		must_be_free.append_array(EstateAscension.charter_building_ids_for(estate))
 
@@ -197,6 +213,27 @@ func test_nothing_a_settlement_needs_in_order_to_grow_is_gated_behind_growing():
 			SettlementCharter.allows(building_id, SettlementTier.HAMLET),
 			"%s is needed to grow and is gated behind having grown" % building_id
 		)
+
+
+## And the converse, which is what stops the rule above from being
+## satisfied by chartering nothing: a chartered building must NOT be one of
+## those things. Nothing may produce through it and no estate may need it,
+## or the invariant above is being dodged rather than kept.
+func test_a_chartered_building_is_nothing_a_settlement_needs_to_grow():
+	var StaffedProduction = load("res://src/emergence/staffed_production.gd")
+	for building_id in SettlementCharter.MIN_TIER_BY_BUILDING:
+		assert_false(
+			BuildingCatalog.BUILDING_IDS.has(building_id), "%s is a home" % building_id
+		)
+		assert_false(
+			StaffedProduction.RECIPE_BY_BUILDING.has(building_id),
+			"%s is produced through and cannot be chartered" % building_id
+		)
+		for estate in VillageEstates.ESTATE_IDS:
+			assert_false(
+				EstateAscension.charter_building_ids_for(estate).has(building_id),
+				"%s is %s's own charter and cannot be chartered itself" % [building_id, estate]
+			)
 
 
 ## And the warehouse every village is FOUNDED with, which is not on the

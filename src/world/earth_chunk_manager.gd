@@ -210,6 +210,7 @@ const VillageWages = preload("res://src/world/village_wages.gd")
 const OccupationProduction = preload("res://src/emergence/occupation_production.gd")
 const NpcIdentity = preload("res://src/world/npc_identity.gd")
 const SettlementTier = preload("res://src/emergence/settlement_tier.gd")
+const SettlementCharter = preload("res://src/emergence/settlement_charter.gd")
 const WorldBoss = preload("res://src/emergence/world_boss.gd")
 const WorldBossStore = preload("res://src/emergence/world_boss_store.gd")
 const WorldBossStorePersistence = preload("res://src/emergence/world_boss_store_persistence.gd")
@@ -17508,6 +17509,9 @@ func _village_assembly_state(chunk_coord: Vector2i) -> Dictionary:
 		"food_trade": SettlementFoodDemand.trade_for(seeded_region_for_chunk(chunk_coord)),
 		"satisfaction": _settlement_estate_satisfaction.get(settlement_id, {}),
 		"waiting_estate": _estate_of_household(waiting[0] if not waiting.is_empty() else ""),
+		# The settlement's own charter (docs/concept/settlement_charter.md
+		# mechanism 4): the village reads the same gate the player does.
+		"tier": settlement_tier_of(settlement_id),
 	}
 
 
@@ -17579,6 +17583,79 @@ func estate_report_for_household(household_id: String, chunk_coord: Vector2i) ->
 			"good_run_days": household.good_run_days,
 			"short_run_days": household.short_run_days,
 		}),
+	}
+
+
+## This settlement's live SettlementTier -- re-derived from the same three
+## real flows _step_settlement_classification reads (households, ACTIVE
+## institutions, production diversity), rather than from the cached label,
+## so an answer is never one assessment stale.
+##
+## The LOWEST tier for a settlement nobody founded, which is the reading
+## that refuses rather than the one letting a place nobody has heard of
+## raise a mage guild.
+func settlement_tier_of(settlement_id: String) -> String:
+	var household_ids := _households_in_settlement(settlement_id)
+	if household_ids.is_empty():
+		return SettlementTier.TIERS[0]
+	return SettlementTier.tier_for(
+		household_ids.size(),
+		_active_institution_count_for(household_ids),
+		_production_counts_for_settlement(settlement_id).size()
+	)
+
+
+## `{}` when this settlement may raise `building_id`; otherwise the refusal
+## that TEACHES (docs/concept/settlement_charter.md mechanism 2) -- the
+## tier wanted, the tier held, and exactly what is still short.
+##
+## The ONE gate a player's build hand and the village's own decision both
+## read, so a village can never quietly raise through its construction
+## ledger what a player standing on its square would be refused.
+func building_charter_refusal_at(settlement_id: String, building_id: String) -> Dictionary:
+	var household_ids := _households_in_settlement(settlement_id)
+	return SettlementCharter.refusal_for(
+		building_id,
+		household_ids.size(),
+		_active_institution_count_for(household_ids),
+		_production_counts_for_settlement(settlement_id).size()
+	)
+
+
+## What a player reads off a settlement's own hall (docs/concept/
+## settlement_charter.md mechanism 5): what the place IS, what it may
+## raise, and what it would take to be the next thing up.
+##
+## A consumer and never a driver -- asking changes nothing about the
+## settlement, which is test-pinned, the same discipline the household
+## readout already holds itself to.
+func settlement_charter_report_for(settlement_id: String) -> Dictionary:
+	var household_ids := _households_in_settlement(settlement_id)
+	var institutions := _active_institution_count_for(household_ids)
+	var diversity := _production_counts_for_settlement(settlement_id).size()
+	var tier := SettlementTier.tier_for(household_ids.size(), institutions, diversity)
+	var next_tier := SettlementCharter.next_tier_above(tier)
+
+	var allowed: Array = []
+	var locked: Array = []
+	for building_id in BuildingCatalog.CHARTERED_BUILDING_IDS:
+		if SettlementCharter.allows(building_id, tier):
+			allowed.append(building_id)
+		else:
+			locked.append(building_id)
+
+	return {
+		"settlement_id": settlement_id,
+		"tier": tier,
+		"next_tier": next_tier,
+		"households": household_ids.size(),
+		"institutions": institutions,
+		"production_diversity": diversity,
+		"allowed": allowed,
+		"locked": locked,
+		"short": SettlementCharter.shortfall_to(
+			next_tier, household_ids.size(), institutions, diversity
+		),
 	}
 
 

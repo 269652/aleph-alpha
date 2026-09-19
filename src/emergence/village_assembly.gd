@@ -33,6 +33,9 @@ const SettlementFoodDemand = preload("res://src/emergence/settlement_food_demand
 const VillageGrowth = preload("res://src/emergence/village_growth.gd")
 const VillageLabor = preload("res://src/emergence/village_labor.gd")
 const EstateAscension = preload("res://src/emergence/estate_ascension.gd")
+const SettlementCharter = preload("res://src/emergence/settlement_charter.gd")
+const SettlementTier = preload("res://src/emergence/settlement_tier.gd")
+const BuildingCatalog = preload("res://src/gameplay/building_catalog.gd")
 
 ## How far each estate's voice carries in the assembly. Strictly rising,
 ## and that is the historical fact rather than a balance knob: a burgher
@@ -109,6 +112,13 @@ const SUPPLIED := EstateAscension.FULL_SATISFACTION
 ##   satisfaction          good -> [0,1], EstateConsumption.draw's own report
 ##   waiting_estate        the estate of the household at the head of the
 ##                         housing queue, if the caller knows it
+##   tier                  this settlement's SettlementTier, which decides
+##                         which chartered buildings it may raise at all
+##                         (docs/concept/settlement_charter.md). ABSENT is
+##                         read as the LOWEST tier, so the assembly errs
+##                         toward refusing rather than letting a hamlet
+##                         build a mage guild because a caller forgot an
+##                         argument.
 static func next_building(state: Dictionary) -> String:
 	var household_count := int(state.get("household_count", 0))
 	if household_count <= 0:
@@ -128,7 +138,8 @@ static func next_building(state: Dictionary) -> String:
 	var petitions: Dictionary = _petitions(
 		estate_counts, present, state.get("satisfaction", {}),
 		state.get("building_counts", {}), household_count,
-		String(state.get("food_trade", SettlementFoodDemand.FALLBACK_TRADE))
+		String(state.get("food_trade", SettlementFoodDemand.FALLBACK_TRADE)),
+		String(state.get("tier", SettlementTier.TIERS[0]))
 	)
 	if petitions.is_empty():
 		# Nothing anybody in this village is asking for -- but silence is
@@ -150,7 +161,7 @@ static func next_building(state: Dictionary) -> String:
 ## building_id -> total weight petitioned for it.
 static func _petitions(
 	estate_counts: Dictionary, present: Array, satisfaction: Dictionary,
-	building_counts: Dictionary, household_count: int, food_trade: String
+	building_counts: Dictionary, household_count: int, food_trade: String, tier: String
 ) -> Dictionary:
 	var supply: Dictionary = VillageLabor.supply_for(estate_counts)
 	var petitions := {}
@@ -160,7 +171,7 @@ static func _petitions(
 			continue
 		var asked: String = _ask_of(
 			estate, present, satisfaction, supply, estate_counts,
-			building_counts, household_count, food_trade
+			building_counts, household_count, food_trade, tier
 		)
 		if asked == "":
 			continue
@@ -180,11 +191,12 @@ static func _ask_of(
 	estate_counts: Dictionary,
 	building_counts: Dictionary,
 	household_count: int,
-	food_trade: String
+	food_trade: String,
+	tier: String
 ) -> String:
 	var remedy: String = remedy_for(_worst_shortage_of(estate, satisfaction), food_trade)
 	if remedy != "" and _is_remedy_petitionable(
-		remedy, present, supply, estate_counts, building_counts, household_count
+		remedy, present, supply, estate_counts, building_counts, household_count, tier
 	):
 		return remedy
 	# A CHARTER is satisfied by one standing building and never scales: it
@@ -192,8 +204,20 @@ static func _ask_of(
 	# Deliberately the unscaled gate, even where the charter happens to be
 	# the same building as the food works (a farmhouse is both).
 	for charter in EstateAscension.charter_building_ids_for(estate):
-		if _is_petitionable(charter, present, supply, estate_counts):
+		if _is_petitionable(charter, present, supply, estate_counts, tier):
 			return charter
+	# The CIVIC petition (docs/concept/settlement_charter.md). An estate
+	# with nothing to complain of and no charter left to earn is the top of
+	# this village, and what the top of a village asks for is the
+	# institutions its place is finally entitled to. Without it a city that
+	# earned its charter would sit there never raising anything with it,
+	# and a player's own hand would be the only way a mage guild appeared.
+	#
+	# In CHARTERED_BUILDING_IDS order, which is cheapest entitlement first:
+	# a place builds up to the mage guild rather than straight to it.
+	for chartered in BuildingCatalog.CHARTERED_BUILDING_IDS:
+		if _is_petitionable(chartered, present, supply, estate_counts, tier):
+			return chartered
 	return ""
 
 
@@ -205,10 +229,12 @@ static func _ask_of(
 ## _is_petitionable, so the charter path above is untouched by it.
 static func _is_remedy_petitionable(
 	building_id: String, present: Array, supply: Dictionary, estate_counts: Dictionary,
-	building_counts: Dictionary, household_count: int
+	building_counts: Dictionary, household_count: int, tier: String
 ) -> bool:
-	if _is_petitionable(building_id, present, supply, estate_counts):
+	if _is_petitionable(building_id, present, supply, estate_counts, tier):
 		return true
+	if not SettlementCharter.allows(building_id, tier):
+		return false
 	if not _wants_another(building_id, building_counts, household_count):
 		return false
 	return VillageLabor.can_staff(building_id, supply)
@@ -254,9 +280,17 @@ static func _worst_shortage_of(estate: String, satisfaction: Dictionary) -> Stri
 ## every rung of the estate ladder deadlocks on needing the people its own
 ## charter would produce.
 static func _is_petitionable(
-	building_id: String, present: Array, supply: Dictionary, estate_counts: Dictionary
+	building_id: String, present: Array, supply: Dictionary, estate_counts: Dictionary, tier: String
 ) -> bool:
 	if present.has(building_id):
+		return false
+	# The settlement's own charter, read BEFORE anything else
+	# (docs/concept/settlement_charter.md mechanism 4). A hamlet must not
+	# spend years saving timber for a hall it would be refused, and a
+	# village that could quietly raise through its own ledger what a player
+	# standing on its square is refused would make the charter a lie. One
+	# rule, two callers.
+	if not SettlementCharter.allows(building_id, tier):
 		return false
 	if _is_charter_for_any_estate_here(building_id, estate_counts):
 		return true
@@ -299,7 +333,11 @@ static func _is_charter_for_any_estate_here(building_id: String, estate_counts: 
 static func _winner(petitions: Dictionary) -> String:
 	var best := ""
 	var best_weight := 0.0
-	for building_id in VillageGrowth.LADDER_BUILDING_IDS:
+	# The ladder first, then the chartered buildings: a tie between a rung
+	# a village needs and an institution it is merely entitled to goes to
+	# the rung, and the chartered ids keep their own cheapest-first order
+	# (docs/concept/settlement_charter.md).
+	for building_id in VillageGrowth.LADDER_BUILDING_IDS + BuildingCatalog.CHARTERED_BUILDING_IDS:
 		var weight := float(petitions.get(building_id, 0.0))
 		if weight > best_weight:
 			best_weight = weight
