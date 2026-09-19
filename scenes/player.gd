@@ -5041,7 +5041,14 @@ func _resolve_water_state(tile: Vector2i, delta: float) -> Dictionary:
 	# Lakes are the third kind of water, asked the same way (see
 	# docs/concept/hydrology.md): standing water over untouched land biome.
 	var lake_depth := _chunk_manager.lake_depth_meters_at_global(tile.x, tile.y)
-	var water_depth := maxf(maxf(ocean_depth, river_depth), lake_depth)
+	# And the fourth: a village's own dug pond (docs/concept/village_ponds.md,
+	# "Built water"), the only water the generator knows nothing about. It
+	# answered is_water_at_global from the day it was dug -- so nothing was
+	# ever built or grown on one -- but carried no DEPTH, so a fisher's pond
+	# was water a player walked over on dry feet. Reported live: "there's no
+	# real pond with river / lake water physics".
+	var pond_depth := _chunk_manager.pond_depth_meters_at_global(tile.x, tile.y)
+	var water_depth := maxf(maxf(maxf(ocean_depth, river_depth), lake_depth), pond_depth)
 
 	var submerged := water_depth > 0.0
 	wetness = _wetness_tracker.update(wetness, worn_material, submerged, delta)
