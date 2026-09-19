@@ -2277,6 +2277,140 @@ flower shared one invented height; once flowers were pinned to the player's own
 scale the worm was suddenly longer than several of them and read as a snake
 lying in the grass.
 
+### Generalized to ANY animal (2026-09-19)
+
+Reported in play: *"Stepping on a frog doesn't kill it? Shouldn't this work
+out of the box for ANY animal when enough pressure is put on it? A boar
+walking over a frog should kill it as well"*.
+
+Correct on every count, and `crush_mechanic.gd`'s own doc comment already
+said so — *"a third crushable creature needs no new rule of its own, only
+detection wiring"*. The physics was general from the start and both
+steppers were already real: the **player** and **every `CreatureMarker`**
+trample with their own live mass. What was missing is that every victim
+wired up so far (worms, caterpillars, millipedes, ants, decomposers) is a
+small special-case marker type. A frog is a `GrassFrogMarker`; a mouse is a
+`CreatureMarker`. **No real animal was crushable by anything.**
+
+#### The victim side needs a second term
+
+Momentum alone cannot decide this. The existing
+`CRUSH_MOMENTUM_THRESHOLD_KG_M_S` asks only *"is the stepper heavy enough to
+crush anything at all"* — which is the right question for a worm, because
+anything above that threshold flattens a worm. It is the wrong question on
+its own for animals: a boar clears it, and a deer is also an animal, but a
+boar does not crush a deer by stepping on it.
+
+So crushing a real animal needs **both**:
+
+1. the stepper is heavy enough to crush at all (the existing threshold), and
+2. the victim is small enough to go *under* the foot rather than be stepped
+   *on*.
+
+#### The second term is derived, not picked
+
+`PebbleDispersion.FOOT_MASS_FRACTION` already exists and is already a cited
+anatomical figure: **one foot is 1.4% of body mass**. That gives the rule
+for free, with no new number invented:
+
+> An animal is crushed underfoot when **it weighs less than the foot landing
+> on it**.
+
+Physically that is exactly the boundary: if your whole body is lighter than
+the foot coming down, that foot does not deflect around you — its owner's
+full weight settles through a contact patch larger than you are. Above it,
+you are something the stepper stumbles on rather than through.
+
+What it decides, against this codebase's own real masses:
+
+| stepper | foot | victim | crushed? |
+|---|---|---|---|
+| player, 70 kg | 0.98 kg | frog / mouse, 0.02 kg | **yes** |
+| boar, 90 kg | 1.26 kg | frog, 0.02 kg | **yes** |
+| horse, 500 kg | 7 kg | snake, 5 kg | **yes** |
+| horse, 500 kg | 7 kg | wolf, 40 kg | no |
+| deer, 70 kg | 0.98 kg | jackal, 10 kg | no |
+| mouse, 0.02 kg | — | ant | no — the mouse fails the momentum gate first |
+
+The two terms compose cleanly: the momentum threshold rules out steppers too
+light to crush *anything*, and the foot-mass rule rules out victims too heavy
+to go under a foot. Neither is redundant and neither replaces the other.
+
+#### Detection wiring, as promised
+
+Two more victim sides, and no third physics rule:
+
+- **`CreatureMarker`** — any real animal. Killed through its own
+  `take_damage`, not `queue_free`, so a crushed animal leaves the same
+  carcass and fires the same death the world already knows about.
+- **`GrassFrogMarker`** — freed like a caterpillar, since an ambient frog has
+  no health, no carcass and no death of its own.
+
+A crushing creature never crushes *itself*, and never crushes something
+heavier than its own foot — which is what stops a herd flattening itself.
+
+#### Karma splits between the two, deliberately
+
+A **frog** joins the Karma roster the worm, caterpillar, millipede, ant, bug
+and mushroom are already on (see [karma_and_luck.md](karma_and_luck.md)): a
+small, harmless animal dying under the player's own boot is the identical
+event, and like every other entry on that list a frog has no other death
+path at all.
+
+A real **`CreatureMarker`** does not join it, for anybody. Its death goes
+through the same `_die()` a hunted animal's does and is already on the
+region's own mortality books, so charging Karma for it would be inventing a
+hunting penalty inside the crush pass — a different mechanic, and not the
+one that was asked for.
+
+#### Status
+
+- ✅ **`CrushMechanic.crushes_underfoot`/`foot_mass_kg`** — the rule and the
+  derived second term, pinned by test against the game's own real masses
+  rather than examples: for every pair of real species, the answer is
+  exactly "the stepper clears the momentum gate AND the victim is no heavier
+  than its foot". Both the decision table above and "nothing crushes
+  something its own size" are tests, not claims.
+  `test_crush_mechanic.gd` 13/13.
+- ✅ **`grass_frog` is a real tabulated mass** in `CreatureMass` (a cited
+  adult *Rana temporaria* average), the same explicit entry ant/bug/
+  caterpillar already needed — none of the four is an `AnimalAnatomy`
+  species, so none has a profile to derive a mass from.
+- ✅ **Both victim sides answer to the same `crush()`** every other crush
+  victim already does, so detection needs no special case for either.
+  `GrassFrogMarker.crush()` is `CaterpillarMarker`'s, method for method — a
+  real `SquashCrushEffect` squash it lingers in long enough to be seen, then
+  frees itself, and it stops hopping and croaking meanwhile.
+  `CreatureMarker.crush()` is deliberately NOT that: a real animal has
+  health, a carcass and a death the world already knows about, so it dies
+  through its own `take_damage` → `_die` path. `_die` is the choke point the
+  region's mortality books and the carcass hang off; freeing the marker
+  where it stood would be a death nothing ever heard about.
+  `test_grass_frog_marker.gd` 13/13, `test_creature_marker.gd` 263/263.
+- ✅ **Detection: `crush_grass_frogs_near` and `crush_creatures_near`.**
+  Both take the stepper's **mass**, not its momentum — the second term is a
+  question about the foot's mass, which a momentum has already thrown away.
+  A frog is otherwise exactly the caterpillar-shaped victim the chunk
+  manager already tracks, so `_crush_markers_near`'s walk is lifted out and
+  shared with only the gate differing. `crush_creatures_near` is the one
+  crush entry point *handed* its victims: `EarthChunkManager` is a
+  `RefCounted` with no scene tree and does not track creature markers at
+  all, while `World`'s crush pass already holds a cached group list it runs
+  several other loops over. Taking that list is honest about where the truth
+  lives and free — the alternative is a second full group scan per stepper
+  per frame, in the function this file's own FPS history calls the most
+  expensive in the game. `test_earth_chunk_manager_animal_crush.gd` 14/14.
+- ✅ **Wired into both steppers**, player and every creature, exactly like
+  the seven calls beside them. The player's live mass read and its
+  standing-still gate lifted out of `_player_step_momentum_kg_m_s` into
+  `_player_step_mass_kg` — one gate and one mass read shared by the
+  momentum-taking walks and the mass-taking animal ones, rather than a
+  second check that could drift from it. `test_world_crush_wiring.gd` 28/28.
+- ⬜ **A crushed animal has no death art of its own.** A real
+  `CreatureMarker` dies the ordinary way, which means it vanishes and leaves
+  its carcass — there is no "flattened" pose for a mouse the way
+  `millipede.png` has a real crushed row. Named, not hidden.
+
 ### Generalized to caterpillars too (2026-09-06)
 
 Reported directly, right after caterpillars shipped: *"they don't get

@@ -43,6 +43,15 @@ const _REAL_MASS_KG := {
 	# back to _mass_from_world_scale, which has no AnimalAnatomy profile
 	# for it to derive from either.
 	"caterpillar": 0.003,
+	# GrassFrogMarker is a fourth species built outside CreatureMarker/
+	# AnimalAnatomy (see that class's own doc comment on why), so it needs
+	# its own explicit entry here too -- and it needs one at all now that a
+	# real animal can be crushed underfoot (see CrushMechanic.crushes_
+	# underfoot, docs/concept/soil_fauna.md "Generalized to ANY animal"):
+	# without it, mass_kg_for would fall back to _mass_from_world_scale,
+	# which has no AnimalAnatomy profile for a frog to derive from. A
+	# commonly-cited adult Rana temporaria (the real grass frog) average.
+	"grass_frog": 0.02,
 	"mouse": 0.02,
 	"squirrel": 0.5,
 	"arctic_fox": 3.5,

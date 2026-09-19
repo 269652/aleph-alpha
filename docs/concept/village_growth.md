@@ -321,9 +321,17 @@ claim about the world. So it checks the world:
   The well comes out of `VillageLayout.skeleton`, which is a plan; a
   doorstep is a cell a building really has, so you land where you can see
   the village rather than where one was drawn.
-- **"No village found nearby" is now an honest answer** rather than the
-  absence of one: it means the search really looked and really found
-  nothing standing within `MAX_VILLAGE_SEARCH_RADIUS_CHUNKS`.
+- **"No village standing within N chunks" is an honest answer** rather than
+  the absence of one: it means the search really looked and really found
+  nothing standing.
+- **It says what it found.** Reported a third time, with the verification
+  already in — *"It still teleports me to the same empty spot"* — and a line
+  that only claims success leaves a player no way to tell WHICH thing is
+  wrong: the wrong chunk, no buildings recorded, or buildings recorded that
+  nothing then drew. So `/village` names the chunk it landed you in and how
+  many buildings are standing there (`VillageFinder.teleport_report`). Zero
+  is spelled out rather than counted, because a village with nothing in it
+  is the bug being hunted, not a detail.
 
 The prediction stays in front of the load, as the cheap filter it is good
 at being. What changed is that it no longer gets the last word.

@@ -31,6 +31,7 @@ extends GutTest
 
 const World = preload("res://scenes/world.gd")
 const PlayerScene = preload("res://scenes/player.tscn")
+const PebbleDispersionForCrush = preload("res://src/rendering/pebble_dispersion.gd")
 
 
 func _client_process_body() -> String:
@@ -65,9 +66,22 @@ func test_the_players_own_step_uses_a_real_mass_derived_momentum():
 	assert_true(body.contains("player_step_momentum_kg_m_s"))
 	assert_true(body.contains("local_player.position"))
 	var source := FileAccess.get_file_as_string("res://scenes/world.gd")
+	# The live mass read moved into _player_step_mass_kg (2026-09-19, see
+	# docs/concept/soil_fauna.md "Generalized to ANY animal"): crushing a
+	# real animal needs the MASS, which a momentum has already thrown away,
+	# so the gate and the mass read are shared by both rather than duplicated.
+	# The property this pins is unchanged -- a live per-frame read of the
+	# player's own real, unified mass, not a fixed guess -- and the behaviour
+	# is now also pinned live, against a real Player, by
+	# test_a_moving_players_step_mass_is_their_own_real_live_mass and
+	# test_the_players_step_momentum_is_exactly_their_step_mass_at_walking_pace.
 	assert_true(
-		source.contains("player.current_mass_kg() * PebbleDispersion.FOOTSTEP_SPEED_MPS"),
-		"the player's own step momentum must read their real, live, unified mass, not a fixed guess"
+		source.contains("_player_step_mass_kg(player) * PebbleDispersion.FOOTSTEP_SPEED_MPS"),
+		"the player's own step momentum must still be their step mass at walking pace"
+	)
+	assert_true(
+		source.contains("return player.current_mass_kg()"),
+		"and that step mass must read their real, live, unified mass, not a fixed guess"
 	)
 
 
@@ -209,8 +223,8 @@ func test_only_the_players_own_crush_calls_apply_the_karma_penalty():
 	var body := _client_process_body()
 	assert_eq(
 		_count_occurrences(body, "apply_karma_delta(-Karma.WORM_OR_CATERPILLAR_CRUSH_PENALTY)"),
-		6,
-		"expected the penalty applied at exactly the 6 player-only crush call sites (worm+caterpillar+millipede+ant+decomposer+mushroom)"
+		7,
+		"expected the penalty applied at exactly the 7 player-only crush call sites (worm+caterpillar+millipede+ant+decomposer+mushroom+frog)"
 	)
 
 
@@ -228,7 +242,7 @@ func test_the_players_own_karma_penalty_is_only_charged_when_a_crush_actually_ha
 	# premise).
 	var group_loop_at := body.rfind("for creature in loaded_creature_markers:")
 	assert_gt(group_loop_at, -1)
-	for call_name in ["crush_worm_at(", "crush_caterpillars_near(", "crush_millipedes_near(", "crush_ants_near(", "crush_decomposers_near(", "crush_mushroom_at("]:
+	for call_name in ["crush_worm_at(", "crush_caterpillars_near(", "crush_millipedes_near(", "crush_ants_near(", "crush_decomposers_near(", "crush_mushroom_at(", "crush_grass_frogs_near("]:
 		var at := body.find(call_name)
 		assert_gt(at, -1, "%s should still have a player call site" % call_name)
 		assert_lt(at, group_loop_at, "%s's player call site must come before the creature loop" % call_name)
@@ -248,7 +262,7 @@ func test_a_creatures_own_crush_never_applies_the_karma_penalty():
 	# rfind, not find -- see the sibling test above's own comment on why.
 	var group_loop_at := body.rfind("for creature in loaded_creature_markers:")
 	assert_gt(group_loop_at, -1)
-	for call_name in ["crush_worm_at(", "crush_caterpillars_near(", "crush_millipedes_near(", "crush_ants_near(", "crush_decomposers_near(", "crush_mushroom_at(", "crush_walnut_near("]:
+	for call_name in ["crush_worm_at(", "crush_caterpillars_near(", "crush_millipedes_near(", "crush_ants_near(", "crush_decomposers_near(", "crush_mushroom_at(", "crush_walnut_near(", "crush_grass_frogs_near(", "crush_creatures_near("]:
 		var at := body.rfind(call_name)
 		assert_gt(at, -1, "%s should still have a creature call site" % call_name)
 		assert_gt(at, group_loop_at, "%s's creature call site must come after entering the group loop" % call_name)
@@ -366,11 +380,144 @@ func test_a_player_who_is_not_moving_carries_no_step_momentum():
 	assert_eq(world._player_step_momentum_kg_m_s(player), 0.0)
 
 
+## The gate now lives in _player_step_mass_kg, which _player_step_momentum_
+## kg_m_s is expressed in terms of -- so one standing check covers the
+## momentum-taking crush walks AND the mass-taking animal ones, and there is
+## no second check of its own to drift from it.
 func test_the_standing_check_comes_before_the_mass_formula():
 	var source := FileAccess.get_file_as_string("res://scenes/world.gd")
-	var start := source.find("func _player_step_momentum_kg_m_s(")
+	var start := source.find("func _player_step_mass_kg(")
 	assert_gt(start, -1, "the premise")
 	var body := source.substr(start, source.find("\nfunc ", start + 1) - start)
 	var gate_at := body.find("velocity")
 	assert_gt(gate_at, -1, "the gate reads the player's real velocity")
 	assert_lt(gate_at, body.find("current_mass_kg()"), "and it comes before the formula, so standing costs nothing")
+
+
+# -- ANY animal (see docs/concept/soil_fauna.md "Generalized to ANY animal")
+#
+# Reported in play: "Stepping on a frog doesn't kill it? Shouldn't this work
+# out of the box for ANY animal when enough pressure is put on it? A boar
+# walking over a frog should kill it as well". Both steppers here were
+# already real; every VICTIM wired above is a small special-case
+# invertebrate, so no real animal was crushable by anything.
+#
+# These two calls differ from all six above in one visible way: they are
+# handed the stepper's own MASS, not the momentum every other call takes.
+# An animal victim is decided by two terms, and the second one -- does this
+# whole body fit under that foot -- is a question about the foot's mass,
+# which a momentum has already thrown away (see CrushMechanic.crushes_
+# underfoot). crush_creatures_near is handed the cached group list too, since
+# EarthChunkManager does not track creature markers at all.
+#
+# Karma splits between them, deliberately. A frog joins the roster above it
+# (see test_only_the_players_own_crush_calls_apply_the_karma_penalty, now 7):
+# a small, harmless animal dying under the player's own boot is the identical
+# event a caterpillar or a bug already is, and like them a frog has no other
+# death path at all. A real CreatureMarker does NOT join it, for anybody --
+# its death goes through the same _die() a hunted animal's does and is
+# already on the region's mortality books, so charging Karma for it would be
+# inventing a hunting penalty inside the crush pass. That both animal calls
+# stay bare statements in the creature loop, and that crush_creatures_near
+# stays one in the player block too, is pinned by
+# test_a_creatures_own_crush_never_applies_the_karma_penalty and by that
+# count of 7.
+
+
+func test_crush_grass_frogs_near_is_called_for_both_the_player_and_creatures():
+	var body := _client_process_body()
+	assert_eq(
+		_count_occurrences(body, "crush_grass_frogs_near("), 2,
+		"expected exactly one call for the player and one inside the creature loop"
+	)
+
+
+func test_crush_creatures_near_is_called_for_both_the_player_and_creatures():
+	var body := _client_process_body()
+	assert_eq(
+		_count_occurrences(body, "crush_creatures_near("), 2,
+		"expected exactly one call for the player and one inside the creature loop"
+	)
+
+
+func test_the_creature_animal_crush_calls_are_inside_a_creaturemarker_group_loop():
+	var body := _client_process_body()
+	var group_loop_at := body.rfind("for creature in loaded_creature_markers:")
+	assert_gt(group_loop_at, -1)
+	for call_name in ["crush_grass_frogs_near(", "crush_creatures_near("]:
+		assert_gt(body.rfind(call_name), group_loop_at, "%s must be reached inside the group loop" % call_name)
+
+
+## Both animal crush calls take a MASS, never a momentum -- passing
+## player_step_momentum_kg_m_s or the creature loop's own `momentum` here
+## would silently make every animal look ~1.4x heavier than it is and crush
+## things it should not.
+func test_the_animal_crush_calls_are_handed_a_mass_and_never_a_momentum():
+	var body := _client_process_body()
+	for call_name in ["crush_grass_frogs_near(", "crush_creatures_near("]:
+		var search_from := 0
+		var checked := 0
+		while true:
+			var at := body.find(call_name, search_from)
+			if at == -1:
+				break
+			var line_end := body.find("\n", at)
+			var line := body.substr(at, line_end - at)
+			assert_false(line.contains("momentum"), "%s should take a mass, found: %s" % [call_name, line])
+			assert_true(line.contains("mass_kg"), "%s should take a mass, found: %s" % [call_name, line])
+			checked += 1
+			search_from = at + 1
+		assert_eq(checked, 2, "%s should have exactly 2 call sites" % call_name)
+
+
+## The player's own step must carry no mass at all while standing still, the
+## same gate that already makes every momentum-based crush walk free for a
+## player who has not moved -- and it must be the SAME gate, not a second
+## one that could drift from it.
+func test_a_player_who_is_not_moving_carries_no_step_mass():
+	var world := World.new()
+	autofree(world)
+	var player := PlayerScene.instantiate()
+	add_child_autofree(player)
+	player.velocity = Vector2.ZERO
+
+	assert_eq(world._player_step_mass_kg(player), 0.0)
+
+
+func test_a_moving_players_step_mass_is_their_own_real_live_mass():
+	var world := World.new()
+	autofree(world)
+	var player := PlayerScene.instantiate()
+	add_child_autofree(player)
+	player.velocity = Vector2(1.0, 0.0)
+
+	assert_almost_eq(world._player_step_mass_kg(player), player.current_mass_kg(), 0.0001)
+
+
+## One gate, one mass: the player's step momentum is their step mass at
+## walking pace, not a second independent read that could disagree with it.
+func test_the_players_step_momentum_is_exactly_their_step_mass_at_walking_pace():
+	var world := World.new()
+	autofree(world)
+	var player := PlayerScene.instantiate()
+	add_child_autofree(player)
+	player.velocity = Vector2(1.0, 0.0)
+
+	assert_almost_eq(
+		world._player_step_momentum_kg_m_s(player),
+		world._player_step_mass_kg(player) * PebbleDispersionForCrush.FOOTSTEP_SPEED_MPS,
+		0.0001
+	)
+
+
+## A creature never scans itself: the stepper is excluded explicitly at the
+## creature-loop call site, on top of the mass rule that already rules it
+## out (a body always outweighs its own foot).
+func test_a_creature_is_excluded_from_its_own_animal_crush_scan():
+	var body := _client_process_body()
+	var at := body.rfind("crush_creatures_near(")
+	var line_end := body.find("\n", at)
+	assert_true(
+		body.substr(at, line_end - at).contains("marker"),
+		"the creature loop's own call must pass the stepping marker as the exclusion"
+	)

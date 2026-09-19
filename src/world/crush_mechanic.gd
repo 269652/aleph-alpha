@@ -11,6 +11,14 @@ extends RefCounted
 ## CreatureMarker, via CreatureMass.mass_kg_for) and which is being
 ## crushed both plug into this single check, so a third crushable creature
 ## needs no new rule of its own, only detection wiring.
+##
+## Generalized again (2026-09-19, see that doc's own "Generalized to ANY
+## animal") to real animals -- a frog underfoot, a mouse under a horse --
+## which need ONE more term than a worm does, and take it from an
+## anatomical fraction that already exists rather than a new tuned
+## number: see crushes_underfoot.
+
+const PebbleDispersion = preload("res://src/rendering/pebble_dispersion.gd")
 
 ## Momentum here is a full body's weight settling through one foot at
 ## ordinary walking pace (CreatureMass.mass_kg_for(species) *
@@ -37,3 +45,45 @@ const CRUSH_MOMENTUM_THRESHOLD_KG_M_S := 5.0
 ## CRUSH_MOMENTUM_THRESHOLD_KG_M_S's own doc comment).
 static func is_crushed_by(momentum_kg_m_s: float) -> bool:
 	return momentum_kg_m_s >= CRUSH_MOMENTUM_THRESHOLD_KG_M_S
+
+
+## One foot's own real mass for a body of `stepper_mass_kg` -- PebbleDispersion.
+## FOOT_MASS_FRACTION's already-cited anthropometric figure (the foot segment
+## alone is roughly 1.4% of total body mass) applied to THIS stepper rather
+## than to PebbleDispersion's own fixed human reference body, so a horse has a
+## horse's foot and a mouse a mouse's.
+static func foot_mass_kg(stepper_mass_kg: float) -> float:
+	return stepper_mass_kg * PebbleDispersion.FOOT_MASS_FRACTION
+
+
+## Whether a creature of `stepper_mass_kg` crushes an ANIMAL of
+## `victim_mass_kg` by putting a foot on it (see docs/concept/soil_fauna.md
+## "Generalized to ANY animal": "Stepping on a frog doesn't kill it?
+## Shouldn't this work out of the box for ANY animal when enough pressure is
+## put on it? A boar walking over a frog should kill it as well").
+##
+## is_crushed_by alone cannot answer this. It asks only "is the stepper heavy
+## enough to crush anything at all", which is the WHOLE question for a worm --
+## anything over that threshold flattens a worm -- and the wrong question on
+## its own for an animal: a boar clears it, a deer is also an animal, and a
+## boar does not crush a deer by stepping on it.
+##
+## So an animal victim needs a second term, and it is DERIVED, not picked:
+## an animal goes under a foot rather than being stepped on when it weighs
+## less than that foot does. Physically that is exactly the boundary -- if a
+## whole body is lighter than the foot coming down, the foot does not deflect
+## around it and the stepper's full weight settles through a contact patch
+## larger than the victim. Above it, the victim is something the stepper
+## stumbles ON rather than through.
+##
+## The two terms compose and neither is redundant: the momentum gate rules
+## out steppers too light to crush anything (a mouse crushes no ant, even
+## though an ant is lighter than a mouse's foot), and the foot-mass term
+## rules out victims too heavy to go under a foot (a horse crushes no wolf,
+## even though a horse crushes worms all day). It also falls out that nothing
+## crushes something its own size, which is what stops a herd flattening
+## itself.
+static func crushes_underfoot(stepper_mass_kg: float, victim_mass_kg: float) -> bool:
+	if not is_crushed_by(stepper_mass_kg * PebbleDispersion.FOOTSTEP_SPEED_MPS):
+		return false
+	return victim_mass_kg <= foot_mass_kg(stepper_mass_kg)

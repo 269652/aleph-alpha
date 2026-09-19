@@ -4324,3 +4324,64 @@ func test_a_gated_step_over_open_ground_still_moves_the_animal():
 	marker.position = Vector2(100, 100)
 	marker._advance_gated(Vector2.RIGHT, 100.0, 0.5, false)
 	assert_gt(marker.position.x, 100.0, "open ground must still be open")
+
+
+# -- crushed underfoot (see docs/concept/soil_fauna.md "Generalized to ANY
+# animal", CrushMechanic.crushes_underfoot) ---------------------------------
+#
+# Asked directly: "Shouldn't this work out of the box for ANY animal when
+# enough pressure is put on it? A boar walking over a frog should kill it as
+# well." A real animal is not a caterpillar: it HAS health, a carcass, a
+# death the rest of the world already knows about (EcosystemSimulation's own
+# mortality books, the loot it drops). So a crushed one must die through its
+# own take_damage -> _die path rather than being freed where it stands, or a
+# crushed mouse would be a mouse that never died as far as the region's
+# books are concerned.
+
+
+## Records what actually reached take_damage, so "crush() routes through the
+## real damage path" is asserted rather than assumed from the outcome.
+class RecordingCreature:
+	extends CreatureMarker
+	var damage_taken := 0.0
+
+	func take_damage(amount: float) -> void:
+		damage_taken += amount
+		super.take_damage(amount)
+
+
+func test_a_crushed_creature_dies():
+	marker.crush()
+	assert_true(marker.info.health <= 0.0, "a body that went under a foot is dead")
+	assert_true(marker.is_queued_for_deletion())
+
+
+## The point of routing through take_damage: _die() is the single choke
+## point every other death in this game goes through (carcass, the region's
+## mortality books). A crush that called queue_free() directly would be a
+## death the world never heard about.
+func test_a_crushed_creature_dies_through_its_own_real_damage_path():
+	var recorder := RecordingCreature.new()
+	recorder.info = CreatureInfo.new("herbivore")
+	add_child_autofree(recorder)
+	recorder.crush()
+	assert_gte(recorder.damage_taken, recorder.info.max_health, "lethal, in one step")
+
+
+## Crushing is not a partial injury -- whatever the species' own health, one
+## full body settling through one foot is the end of it.
+func test_a_crush_is_lethal_whatever_the_creature_is():
+	for species in ["mouse", "squirrel", "herbivore", "predator"]:
+		var victim := CreatureMarker.new()
+		victim.info = CreatureInfo.new(species)
+		add_child_autofree(victim)
+		victim.crush()
+		assert_true(victim.info.health <= 0.0, species)
+
+
+## A second foot on an already-dead creature changes nothing and crashes
+## nothing -- the same idempotence every other crush victim has.
+func test_crushing_an_already_crushed_creature_is_harmless():
+	marker.crush()
+	marker.crush()
+	assert_true(marker.info.health <= 0.0)
