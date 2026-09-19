@@ -15900,7 +15900,8 @@ func _load_chunk(chunk_coord: Vector2i) -> void:
 	# ticks according to the live weather, rather than popping onto the grass
 	# the instant a chunk loads.
 	_worm_patches[chunk_coord] = EarthwormPatch.new(
-		hash("%d_%d_earthworms" % [chunk_coord.x, chunk_coord.y]), chunk.width, chunk.height, chunk.biome
+		hash("%d_%d_earthworms" % [chunk_coord.x, chunk_coord.y]), chunk.width, chunk.height, chunk.biome,
+		_ground_cover_blockers(chunk)
 	)
 	_worm_sprites[chunk_coord] = {}
 

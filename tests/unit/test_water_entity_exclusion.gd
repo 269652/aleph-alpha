@@ -192,3 +192,15 @@ func test_no_natural_stone_stands_in_still_water():
 		in_still.size(), 0,
 		"%d stones stand in still water (e.g. %s)" % [in_still.size(), str(in_still.slice(0, 3))]
 	)
+
+
+## Earthworms burrow in soil and surface visibly on top of it. A lake bed
+## is not soil anyone can dig, and a worm drawn on open water is the same
+## bug as a mushroom drawn on it.
+func test_no_earthworm_burrows_on_water():
+	var chunk_coord: Vector2i = manager._chunk_coord_for_tile(water_tile)
+	if not manager._worm_patches.has(chunk_coord):
+		pending("no worm patch in this chunk")
+		return
+	_report("earthworm burrows", _cells_of(
+		manager._worm_patches[chunk_coord].worm_cells(), chunk_coord))

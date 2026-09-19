@@ -131,12 +131,32 @@ var _rising: Dictionary = {}
 var _drive := 0.0
 
 
-func _init(seed_value: int, width: int, height: int, biome: PackedStringArray) -> void:
+func _init(
+	seed_value: int, width: int, height: int, biome: PackedStringArray,
+	is_water: PackedByteArray = PackedByteArray()
+) -> void:
 	_seed_value = seed_value
 	_width = width
 	_height = height
 	_biome = biome
+	_is_water = is_water
 	_seed_initial_burrows()
+
+
+## 1 where this chunk's cell is drawn as WATER, 0 elsewhere -- the same
+## mask shape TallGrass and the other ground-cover sims take (see
+## docs/concept/hydrology.md's "Nothing that belongs on land stands on
+## water"). A water cell keeps its LAND biome, so SOIL_BIOMES alone
+## happily digs burrows in a lake bed: measured at 47.3N 19.6E, 21 of
+## them. Empty by default, so every existing caller is unaffected.
+var _is_water: PackedByteArray
+
+
+## Mirrors TallGrass._is_river_at, including the bounds check that makes
+## an empty mask read as "nothing is water".
+func _is_water_at(x: int, y: int) -> bool:
+	var index := y * _width + x
+	return index < _is_water.size() and _is_water[index] == 1
 
 
 func worm_cells() -> Array:
@@ -369,6 +389,8 @@ func _seed_initial_burrows() -> void:
 		for x in _width:
 			if _surfacing.size() >= MAX_WORMS:
 				return
+			if _is_water_at(x, y):
+				continue
 			if not SOIL_BIOMES.has(_biome[y * _width + x]):
 				continue
 			if PixelNoise.unit(_seed_value, x, y) >= SEED_CHANCE:

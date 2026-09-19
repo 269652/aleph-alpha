@@ -517,13 +517,15 @@ who consults the mask at all:
 | mushrooms | 60 | no |
 | flowers | 4 | no |
 | ant mounds | 2 | no |
+| earthworm burrows | 21 | no |
 | stones | 74 | no |
 | land creatures | 24 (loaded radius) | no |
 
 The rule, now enforced rather than implied: **a system that places
 something on the ground consults the water mask, in seeding and in
-spread.** `WildCropPatch`, `WildMushroomPatch` and `AntColony` take the
-same optional `PackedByteArray` `TallGrass` already took (empty by
+spread.** `WildCropPatch`, `WildMushroomPatch`, `AntColony` and
+`EarthwormPatch` take the same optional `PackedByteArray` `TallGrass`
+already took (empty by
 default, so nothing else changes); `FlowerPatch` needed no new parameter
 because its own `block_cells` already clears a cell and refuses every
 later rooting and seed-fall. For ant mounds one guard in

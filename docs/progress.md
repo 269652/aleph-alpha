@@ -26415,7 +26415,8 @@ Census of that one all-water chunk: grass 0, trees 0, **crops 31,
 mushrooms 60, flowers 4, ant mounds 2, stones 74**, plus 24 land
 creatures across the loaded radius.
 
-- ✅ `WildCropPatch`, `WildMushroomPatch` and `AntColony` take the same
+- ✅ `WildCropPatch`, `WildMushroomPatch`, `AntColony` and
+  `EarthwormPatch` (21 burrows in that lake bed) take the same
   optional mask `TallGrass` already took, honoured in seeding AND spread,
   empty by default so no existing caller changes. One guard in
   `is_valid_mound_site` covers both initial mounds and budding.
@@ -26471,6 +26472,7 @@ three survived.
   "Invalid access to property or key 'modifications' on a base object of
   type 'Nil'" — identical (same tests, same error) with all of this
   reverted, so pre-existing and untouched here.
-- ⬜ Only the placement systems named above were audited. Other per-chunk
-  surface sims (leaf litter, earthworms, footprints, snow presence) were
+- ⬜ Only the placement systems named above were audited. Leaf litter is
+  deliberately left alone -- it really does float on rivers, and the flow
+  shader already gives it turbulence. Footprints and snow presence were
   not re-checked against the mask this round.
