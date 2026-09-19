@@ -107,6 +107,13 @@ the plaza's own rows):
   and still the first thing you see walking in. `_grounded_position` nudges
   it to the nearest free cell if a house claimed that one, as it already
   does for every other landmark.
+- **And nothing fences it in.** A landmark is a NODE, not a persisted tile,
+  so nothing reading `modification_at_global` can see one — and a farmstead's
+  rails are laid AFTER the landmarks are grounded. Off the square's own
+  paving the well was on ordinary ground, and the first village measured
+  drove a rail straight through it. The shared landmarks' cells are reserved
+  for the whole farm pass now, beds and rails alike: neither a crop nor a
+  fence belongs in the village well.
 
 `market_stand_cells` keeps its "skip the well" guard even though the well no
 longer starts on the square: grounding can nudge it back onto the paving, and

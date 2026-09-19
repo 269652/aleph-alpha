@@ -321,14 +321,20 @@ func test_the_gate_stands_on_the_main_street_at_its_end_and_no_doorstep_shares_i
 		assert_ne(plot["doorstep"], gate, "a house must not open onto the gate itself")
 
 
-func test_the_well_and_the_stall_stand_on_the_plaza_clear_of_the_civic_plot():
+## The stall stands ON the square. The well stands BESIDE it (docs/concept/
+## village_market_square.md): a square is an open place to trade in, and a
+## solid well was taking a cell of it nobody could walk through.
+##
+## Neither may stand where the hall will rise, or on its doorstep.
+func test_the_stall_stands_on_the_plaza_and_the_well_beside_it_clear_of_the_civic_plot():
 	var result := layout.layout(["house_small"], CHUNK_SIZE, 6, _always_buildable, _never_occupied)
 	var plaza: Rect2i = result["plaza"]
 	var civic: Dictionary = result["civic_plot"]
 	var civic_cells: Array = BuildingCatalog.footprint_cells(civic["building_id"], civic["origin"])
+	assert_true(plaza.has_point(result["landmarks"]["stall"]), "the stall trades on the square")
+	assert_false(plaza.has_point(result["landmarks"]["well"]), "the well stands beside it")
 	for landmark in ["well", "stall"]:
 		var cell: Vector2i = result["landmarks"][landmark]
-		assert_true(plaza.has_point(cell), "%s must stand on the plaza" % landmark)
 		assert_false(civic_cells.has(cell), "%s must not stand where the hall will rise" % landmark)
 		assert_ne(cell, civic["doorstep"], "%s must not block the hall's door" % landmark)
 	assert_ne(result["landmarks"]["well"], result["landmarks"]["stall"])
@@ -758,12 +764,22 @@ func test_the_civic_plot_and_landmarks_slide_with_the_square():
 	var footprint := BuildingCatalog.footprint_of(VillageLayout.CIVIC_BUILDING_ID)
 	assert_gte(civic_origin.x, plaza.position.x, "the hall must stand on its own square")
 	assert_lte(civic_origin.x + footprint.x, plaza.end.x, "the hall must stand on its own square")
-	for landmark_id in ["well", "stall"]:
-		var cell: Vector2i = bones["landmarks"][landmark_id]
-		assert_true(
-			plaza.has_point(cell),
-			"%s at %s left the square behind at %s" % [landmark_id, str(cell), str(plaza)]
-		)
+	# The stall stands ON the square; the well stands BESIDE it (docs/concept/
+	# village_market_square.md -- a square is an open place to trade in).
+	# Both must SLIDE with it, which is what this test is really about.
+	assert_true(
+		plaza.has_point(bones["landmarks"]["stall"]),
+		"the stall at %s left the square behind at %s" % [
+			str(bones["landmarks"]["stall"]), str(plaza)
+		]
+	)
+	var well: Vector2i = bones["landmarks"]["well"]
+	var beside := Rect2i(plaza.position - Vector2i.ONE, plaza.size + Vector2i(2, 2))
+	assert_false(plaza.has_point(well), "the well stands beside the square, not on it")
+	assert_true(
+		beside.has_point(well),
+		"the well at %s left the square behind at %s" % [str(well), str(plaza)]
+	)
 
 
 func test_a_square_with_dry_ground_under_it_does_not_move():
@@ -1443,3 +1459,58 @@ func test_a_village_with_no_square_has_no_market_stands():
 func test_asking_for_no_stands_gives_none():
 	var skeleton: Dictionary = VillageLayout.skeleton(CHUNK_SIZE, 11)
 	assert_eq(VillageLayout.market_stand_cells(skeleton, 0), [])
+
+
+# -- the square is for the stands (docs/concept/village_market_square.md) ---
+#
+# Reported with the square in shot: *"The well should not be placed on the
+# plaza"*. A square is an open place to trade in, and since the well became
+# solid it was taking a cell of it nobody could even walk through.
+
+
+func test_the_well_does_not_stand_on_the_square():
+	for seed_value in [1, 7, 99, 12345]:
+		var bones := VillageLayout.skeleton(64, seed_value)
+		var plaza: Rect2i = bones["plaza"]
+		var well: Vector2i = bones["landmarks"]["well"]
+		assert_false(
+			plaza.has_point(well),
+			"the well is standing on the square at seed %d (%s in %s)" % [
+				seed_value, str(well), str(plaza)
+			]
+		)
+
+
+## Beside it, though -- a village well nobody can find is not a village
+## well. Within a tile of the square's own edge.
+func test_the_well_still_stands_at_the_squares_edge():
+	for seed_value in [1, 7, 99, 12345]:
+		var bones := VillageLayout.skeleton(64, seed_value)
+		var plaza: Rect2i = bones["plaza"]
+		var well: Vector2i = bones["landmarks"]["well"]
+		var grown := Rect2i(plaza.position - Vector2i.ONE, plaza.size + Vector2i(2, 2))
+		assert_true(
+			grown.has_point(well),
+			"the well wandered off at seed %d: %s vs %s" % [seed_value, str(well), str(plaza)]
+		)
+
+
+## And off the street itself, which it would otherwise block for everyone
+## walking into the village.
+func test_the_well_does_not_stand_in_the_street():
+	for seed_value in [1, 7, 99, 12345]:
+		var bones := VillageLayout.skeleton(64, seed_value)
+		assert_ne(
+			int(bones["landmarks"]["well"].y), int(bones["street_y"]),
+			"the well is in the road at seed %d" % seed_value
+		)
+
+
+## The stands still get the square: that is what it is for.
+func test_the_stall_still_stands_on_the_square():
+	for seed_value in [1, 7, 99, 12345]:
+		var bones := VillageLayout.skeleton(64, seed_value)
+		assert_true(
+			(bones["plaza"] as Rect2i).has_point(bones["landmarks"]["stall"]),
+			"the square lost its own stall at seed %d" % seed_value
+		)

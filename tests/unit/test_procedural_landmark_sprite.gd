@@ -210,13 +210,18 @@ const TerrainRenderer = preload("res://src/rendering/terrain_renderer.gd")
 ## pixels it stood 3.25 tiles wide on a 16-pixel grid: wider than the
 ## cottages it sells in front of, and nearly as wide as the city hall.
 ##
-## A market stall is a table under an awning, about as wide as a small room,
-## which on this grid is two tiles.
-func test_a_stall_is_two_tiles_wide_not_wider_than_a_cottage():
-	assert_eq(
-		ProceduralLandmarkSprite.SIZES["stall"].x, TerrainRenderer.TILE_SIZE * 2,
-		"a market stall is as wide as a small room"
-	)
+## A market stall is a table under an awning -- narrower than the cottage it
+## sells in front of, which is the rule this number is derived from rather
+## than a width chosen for itself (see
+## test_a_stall_is_strictly_narrower_than_the_smallest_cottage below, and
+## docs/concept/village_market_square.md). Two tiles was exactly the smallest
+## cottage's own width, which is equal rather than narrower -- reported a
+## second time, with the square in shot: "the stand is too big and it's
+## placed ontop of a house".
+func test_a_stall_is_narrower_than_a_cottage_and_wider_than_a_post():
+	var width: int = ProceduralLandmarkSprite.SIZES["stall"].x
+	assert_lt(width, TerrainRenderer.TILE_SIZE * 2, "narrower than the smallest cottage")
+	assert_gt(width, TerrainRenderer.TILE_SIZE, "and still a table, not a post")
 
 
 ## Whatever a stall's width becomes, its drawn proportions have to stay the
@@ -228,3 +233,39 @@ func test_shrinking_the_stall_kept_its_proportions():
 		float(stall.y) / float(stall.x), 44.0 / 52.0, 0.03,
 		"the same aspect the stall was drawn at, just smaller"
 	)
+
+
+# -- a stall is narrower than what it sells in front of ---------------------
+#
+# Reported twice. First *"the stands are way too big"*, which cut the stall
+# from 52 to 32; then, with the square in shot, *"the stand is too big and
+# it's placed ontop of a house"*. 32 is exactly 2 tiles, and the smallest
+# house in the catalog is exactly 2 tiles wide -- the rule the cut was made
+# against was "narrower than the cottages it sells in front of", and equal is
+# not narrower.
+
+## The narrowest house a village can raise, in tiles -- read off the catalog
+## rather than restated, so a new, smaller cottage makes this fail loudly.
+func _narrowest_house_tiles() -> int:
+	var narrowest := 99
+	for building_id in BuildingCatalog.BUILDING_IDS:
+		if BuildingCatalog.capacity_of(building_id) <= 0:
+			continue
+		narrowest = mini(narrowest, BuildingCatalog.footprint_of(building_id).x)
+	return narrowest
+
+
+func test_a_stall_is_strictly_narrower_than_the_smallest_cottage():
+	var stall_tiles := (
+		float(ProceduralLandmarkSprite.SIZES["stall"].x) / float(TerrainRenderer.TILE_SIZE)
+	)
+	assert_lt(
+		stall_tiles, float(_narrowest_house_tiles()),
+		"a stall is a table under an awning, not a building"
+	)
+
+
+## And still wide enough to read as a table with an awning over it rather
+## than a post: over a tile of frontage.
+func test_a_stall_is_still_wider_than_a_single_tile():
+	assert_gt(float(ProceduralLandmarkSprite.SIZES["stall"].x) / float(TerrainRenderer.TILE_SIZE), 1.0)

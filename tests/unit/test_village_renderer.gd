@@ -3114,3 +3114,67 @@ func _fence_cells(world: StubWorld, coord: Vector2i) -> Array:
 ## LEFT ALONE without the sweep being able to reach them either way; the
 ## orphan case above plants its rail where the sweep really looks.
 
+
+# -- a prop stands ON its cell (docs/concept/village_market_square.md) ------
+#
+# Reported with the square in shot: *"the stand is too big and it's placed
+# ontop of a house"*. A landmark sprite is centre-anchored, so half its
+# height hangs SOUTH of the cell it was placed on -- and the stall's cell is
+# the plaza's southernmost row, so its awning lands on the row where the
+# cottages front the street.
+
+const ArtResolution = preload("res://src/rendering/art_resolution.gd")
+
+
+## How far below the CENTRE of its own cell a prop's art reaches, in world
+## pixels. A prop anchored at its foot reaches no further down than the cell
+## centre it stands on; a centre-anchored one reaches half its height past it.
+func _overhang_below_the_cell(landmark_id: String) -> float:
+	var cell_centre := Vector2(100.0 * TILE_SIZE, 100.0 * TILE_SIZE)
+	var prop := renderer._build_landmark(landmark_id, cell_centre, parent)
+	assert_not_null(prop.texture, "precondition: %s has art to draw" % landmark_id)
+	var half_height := float(prop.texture.get_height()) * 0.5
+	var bottom := (prop.offset.y + half_height) * ArtResolution.SPRITE_SCALE
+	return bottom
+
+
+func test_a_prop_never_hangs_below_the_cell_it_stands_on():
+	for landmark_id in ProceduralLandmarkSprite.SIZES.keys():
+		assert_lte(
+			_overhang_below_the_cell(landmark_id), float(TILE_SIZE) * 0.5,
+			"%s hangs over the tile south of it" % landmark_id
+		)
+
+
+## And it is not floating either: its foot really is at the cell, not a
+## tile above it.
+func test_a_prop_really_stands_on_its_own_cell():
+	for landmark_id in ProceduralLandmarkSprite.SIZES.keys():
+		assert_gte(
+			_overhang_below_the_cell(landmark_id), -float(TILE_SIZE) * 0.5,
+			"%s is hovering above its own ground" % landmark_id
+		)
+
+
+## A fence is laid AFTER the shared landmarks are grounded, and a rail is a
+## real persisted tile while a landmark is only a node -- so the farm never
+## saw the well and could rail straight through it. Caught the moment the
+## well moved off the square's own paving onto ordinary ground
+## (docs/concept/village_market_square.md).
+func test_a_farm_fence_is_never_laid_through_a_shared_landmark():
+	var coord := _find_settlement_chunk_with_occupation("grassland", "farmer", 3)
+	var world := StubWorld.new()
+	var spawned := renderer.spawn_village(
+		parent, coord, coord * CHUNK_SIZE, CHUNK_SIZE, TILE_SIZE, "grassland", world
+	)
+	var shared := 0
+	for node in _props_in(spawned):
+		if bool(node.get_meta("personal", false)):
+			continue
+		shared += 1
+		var tile := _tile_of(node.position)
+		assert_false(
+			VillageFarm.is_fence_tile(String(world.modification_at_global(tile.x, tile.y))),
+			"%s at %s has a fence rail through it" % [node.get_meta("landmark_id"), str(tile)]
+		)
+	assert_gt(shared, 0, "precondition: this village has shared landmarks at all")

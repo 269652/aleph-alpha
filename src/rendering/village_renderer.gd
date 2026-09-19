@@ -296,7 +296,9 @@ func spawn_village(
 	# hole that becomes paving is a gate rather than somewhere a fence is
 	# then laid across the road.
 	_close_short_street_gaps(chunk_coord, chunk_size, world)
-	var farm_fields := _fenced_farm_fields(chunk_coord, chunk_size, world)
+	var farm_fields := _fenced_farm_fields(
+		chunk_coord, chunk_size, world, _landmark_cells(settlement.landmarks, tile_size)
+	)
 	# After the farms: a pond must not be dug through ground a farmhouse has
 	# already claimed for its beds, and the beds are only known once
 	# _fenced_farm_fields has worked them out.
@@ -942,14 +944,38 @@ func _market_stand_positions(
 ## against what is already built: a prop placed first would have rails
 ## dropped through it, and a villager's own field has to exist before they
 ## can be handed it.
-func _fenced_farm_fields(chunk_coord: Vector2i, chunk_size: int, world) -> Dictionary:
+## The GLOBAL cells the village's shared landmarks really stand on.
+##
+## A landmark is a NODE, not a persisted tile, so nothing that reads
+## `modification_at_global` can see one -- and the farm fences are laid
+## AFTER the landmarks are grounded. That is how a rail came to be driven
+## straight through the well the moment it moved off the square's own
+## paving (docs/concept/village_market_square.md).
+func _landmark_cells(landmarks: Dictionary, tile_size: int) -> Dictionary:
+	var cells: Dictionary = {}
+	for landmark_id in landmarks:
+		var at: Vector2 = landmarks[landmark_id]
+		cells[Vector2i(floori(at.x / float(tile_size)), floori(at.y / float(tile_size)))] = true
+	return cells
+
+
+func _fenced_farm_fields(
+	chunk_coord: Vector2i, chunk_size: int, world, reserved: Dictionary = {}
+) -> Dictionary:
 	if world == null:
 		return {}
 	var origins := _farmhouse_origins(chunk_coord, world)
 	if origins.is_empty():
 		return {}
 	var is_buildable := _is_buildable_local(chunk_coord, chunk_size, world)
-	var is_occupied := _is_occupied_local(chunk_coord, chunk_size, world)
+	var occupied_by_tile := _is_occupied_local(chunk_coord, chunk_size, world)
+	# A shared landmark counts as occupied ground for the whole farm pass --
+	# beds and rails alike. Neither a crop nor a fence belongs in the village
+	# well.
+	var is_occupied := func(cell: Vector2i) -> bool:
+		if reserved.has(chunk_coord * chunk_size + cell):
+			return true
+		return occupied_by_tile.call(cell)
 	var fields: Dictionary = {}
 	for origin in origins:
 		fields[origin] = _workable_field_of(
@@ -1810,8 +1836,19 @@ func _build_landmark(landmark_id: String, position: Vector2, parent: Node2D, per
 	# docs/concept/art_resolution.md).
 	landmark.scale = Vector2.ONE * ArtResolution.SPRITE_SCALE
 	landmark.position = position
+	# Anchored at its FOOT, not its middle (docs/concept/
+	# village_market_square.md). A Sprite2D is centre-anchored, so half a
+	# prop's height hung SOUTH of the cell it was placed on -- and the
+	# stall's cell is the plaza's southernmost row, so its awning landed on
+	# the row where the cottages front the street: "the stand ... is placed
+	# ontop of a house". The same rule CartMarker already follows, and the
+	# one _solid_body_for below already states for the collision box.
+	if landmark.texture != null:
+		landmark.offset = Vector2(0, -float(landmark.texture.get_height()) * 0.5)
 	var size: Vector2i = ProceduralLandmarkSprite.SIZES.get(landmark_id, Vector2i(20, 20))
-	landmark.add_child(_drop_shadow.make_shadow(int(size.x * 0.8), size.y * 0.5 - 1.0))
+	# The shadow sits at the prop's own foot, which is now the sprite's
+	# origin rather than half a height below it.
+	landmark.add_child(_drop_shadow.make_shadow(int(size.x * 0.8), 0.0))
 	if landmark_is_solid(landmark_id):
 		landmark.add_child(_solid_body_for(size))
 	parent.add_child(landmark)
@@ -1841,8 +1878,9 @@ func _solid_body_for(size: Vector2i) -> StaticBody2D:
 	rect.size = Vector2(size) * _SOLID_LANDMARK_FOOTPRINT_FRACTION
 	shape.shape = rect
 	# A prop stands ON its own base, so what stops you is the stonework at
-	# its foot rather than a column of air over it.
-	shape.position = Vector2(0, -rect.size.y * 0.5)
+	# its foot rather than a column of air over it. The sprite is anchored at
+	# that foot now (see _build_landmark), so the box sits on the origin.
+	shape.position = Vector2.ZERO
 	body.add_child(shape)
 	return body
 

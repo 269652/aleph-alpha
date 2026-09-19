@@ -26818,3 +26818,65 @@ surfaces whose energy is shaped differently must sit at different RMS to
 sound equally loud.
 
 Tests: `test_footstep_sound.gd` 43/43 (+2 new, 1 corrected).
+
+## The square is for the stands; the well stands beside it (2026-09-19)
+
+Reported with the square in shot: *"The well should not be placed on the
+plaza also the stand is too big and it's placed ontop of a house.. should be
+on the plaza instead"* — three separate defects, each measured before it was
+touched.
+
+### ✅ A prop stands ON its cell, not over the one below it
+
+A landmark `Sprite2D` is centre-anchored, so **half its height hung SOUTH of
+the cell it was placed on**. The stall's art is ~1.7 tiles tall and its cell
+is the plaza's southernmost row, so ~0.85 of a tile of awning landed on the
+row where the cottages front the street. That is the whole of "placed ontop
+of a house" — nothing was mis-sited.
+
+Every prop is anchored at its **foot** now, the rule `CartMarker` already
+follows and the one `_solid_body_for` already stated for the collision box
+("a prop stands ON its own base"). Pinned both ways: a prop may not hang
+below its own cell, and may not float above it either.
+
+### ✅ A stall is narrower than the cottage it sells in front of
+
+That was already the rule — *"It was 52 — 3.25 tiles on a 16-pixel grid,
+wider than the cottages it sells in front of"* — but the cut landed on 32,
+which is **exactly** two tiles, and `house_small` is **exactly** two tiles
+wide. Equal is not narrower. The size is now derived from `BuildingCatalog`'s
+own smallest house footprint and pinned by test, so a new, smaller cottage
+fails loudly rather than quietly leaving the stall the wider of the two.
+
+Measured on the way: the procedural and real-art paths disagree by exactly
+2× (a prop with supplied art draws at twice the size of the same prop's
+procedural drawing — well 2.5 tiles vs 1.2, stall 2.0 vs 1.0). The real-art
+path matches what the `SIZES` comments intend, so the numbers were read that
+way. **The procedural path drawing at half size is a real, separate
+inconsistency and is left standing rather than fixed blind** — every prop
+with art already goes through the other path.
+
+### ✅ The well stands beside the square, not on it
+
+A square is an open place to trade in, and since the well became solid it was
+taking a cell of it nobody could even walk through. It moves one column west
+of the plaza, on the row south of the street: off the paving, off the road,
+still at the square's edge.
+
+**That immediately broke something, and the suite caught it.** A landmark is
+a node, not a persisted tile, so nothing reading `modification_at_global` can
+see one — and a farmstead's rails are laid *after* the landmarks are
+grounded. On the square's paving that never mattered; off it, the first
+village measured drove a fence rail straight through the well. The shared
+landmarks' cells are reserved for the whole farm pass now, beds and rails
+alike.
+
+Three older tests encoded the contract this changed (the stall's exact 32,
+and two asserting the well stands on the plaza). Each was rewritten to the
+new rule rather than deleted — the well must still slide with the square, and
+must still keep clear of the hall and its doorstep.
+
+Tests: `test_village_renderer.gd` 129/129 (three new), `test_village_layout.gd`
+and `test_procedural_landmark_sprite.gd` (six new between them),
+`test_village_farm.gd`, `test_village_pond.gd`, `test_landmark_sheet.gd`,
+`test_earth_chunk_manager_city_hall.gd` — 352 green in total.
