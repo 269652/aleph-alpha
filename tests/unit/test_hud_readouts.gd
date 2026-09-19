@@ -95,6 +95,15 @@ func test_a_slowed_swimmer_reads_its_own_mode_and_speed():
 	assert_eq(lines[2], "Swimming · 45%")
 
 
+## The card is built with exactly this many Labels, so a readout that grew a
+## line without the card growing one would silently drop it on the floor.
+func test_the_clock_card_has_exactly_as_many_lines_as_the_card_is_built_with():
+	var lines: PackedStringArray = HudReadouts.world_clock_lines(
+		14, 32, "Day", "Summer", "Clear", "walking", 1.0
+	)
+	assert_eq(lines.size(), HudReadouts.WORLD_CLOCK_LINE_COUNT)
+
+
 # -- the diagnostics strip ---------------------------------------------------
 
 ## The developer's half, which used to ship on. Same three facts the old strip
@@ -107,6 +116,11 @@ func test_the_diagnostics_strip_carries_fps_position_and_sun_elevation():
 func test_a_southern_western_position_keeps_its_sign():
 	var lines: PackedStringArray = HudReadouts.diagnostics_lines(60, -33.9, -70.7, -12.5)
 	assert_eq(lines[1], "Lat -33.9  Lon -70.7")
+
+
+func test_the_diagnostics_strip_has_exactly_as_many_lines_as_it_is_built_with():
+	var lines: PackedStringArray = HudReadouts.diagnostics_lines(87, 48.0, 7.9, 41.3)
+	assert_eq(lines.size(), HudReadouts.DIAGNOSTICS_LINE_COUNT)
 
 
 # -- condition chips ---------------------------------------------------------
@@ -236,3 +250,44 @@ func test_an_item_that_cannot_wear_is_just_its_name():
 ## nothing can leave a blank card holding a gap open.
 func test_an_empty_hand_is_an_empty_line():
 	assert_eq(HudReadouts.held_item_line("", ""), "")
+
+
+# -- rebuilding the chip row only when it changed -----------------------------
+
+## The chips are rebuilt rather than pooled (the row is empty in the common
+## case, so a pool of five hidden cards to avoid allocating in the rare case is
+## the more expensive of the two) -- which makes "has anything changed?" the
+## thing that has to be cheap and exact.
+func test_the_same_conditions_produce_the_same_signature():
+	var meters := SurvivalMeters.new()
+	meters.hunger = 0.6
+	var a := HudReadouts.chips_signature(HudReadouts.condition_chips(meters, "walking"))
+	# A different deficit on the SAME side of the threshold says the same thing.
+	meters.hunger = 0.7
+	var b := HudReadouts.chips_signature(HudReadouts.condition_chips(meters, "walking"))
+	assert_eq(a, b, "a bar moving without crossing a threshold is not a rebuild")
+
+
+func test_crossing_a_threshold_changes_the_signature():
+	var meters := SurvivalMeters.new()
+	var fed := HudReadouts.chips_signature(HudReadouts.condition_chips(meters, "walking"))
+	meters.hunger = 0.6
+	var hungry := HudReadouts.chips_signature(HudReadouts.condition_chips(meters, "walking"))
+	meters.hunger = 0.9
+	var starving := HudReadouts.chips_signature(HudReadouts.condition_chips(meters, "walking"))
+	assert_ne(fed, hungry)
+	assert_ne(hungry, starving)
+
+
+## Two different chips must not collide into one signature just because their
+## texts concatenate the same way.
+func test_two_chips_do_not_collide_with_one_chip_named_after_both():
+	var separate := HudReadouts.chips_signature(
+		[{"text": "Cold", "color": Color.WHITE}, {"text": "Wading", "color": Color.WHITE}]
+	)
+	var merged := HudReadouts.chips_signature([{"text": "ColdWading", "color": Color.WHITE}])
+	assert_ne(separate, merged)
+
+
+func test_no_chips_is_a_stable_signature_of_its_own():
+	assert_eq(HudReadouts.chips_signature([]), HudReadouts.chips_signature([]))

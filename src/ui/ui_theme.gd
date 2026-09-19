@@ -35,12 +35,25 @@ const BORDER_WIDTH := 1
 const BASE_FONT_SIZE := 14
 const TITLE_FONT_SIZE := 22
 const CONTENT_MARGIN := 12.0
+## The slim HUD card's padding (see compact_panel_stylebox).
+const COMPACT_CONTENT_MARGIN := 5.0
 const BUTTON_MARGIN := 8.0
 
 
 ## A rounded, bordered panel background (the base for every window/menu panel).
 func panel_stylebox() -> StyleBoxFlat:
 	return _flat(PANEL_BG, CONTENT_MARGIN, PANEL_BORDER, BORDER_WIDTH)
+
+
+## The same card with less padding, for the slim HUD readouts -- the XP bar,
+## the land-sense line, the charge meter (docs/concept/hud.md pillar 1).
+##
+## A 10px XP bar inside the full-margin panel is a 34px card holding 10px of
+## content, which is mostly empty card stacked three deep down the left edge.
+## Same bg, same border, same radius: "legible over every terrain" stays one
+## decision made once, and only the padding differs.
+func compact_panel_stylebox() -> StyleBoxFlat:
+	return _flat(PANEL_BG, COMPACT_CONTENT_MARGIN, PANEL_BORDER, BORDER_WIDTH)
 
 
 ## A rounded button background for the given state ("normal"/"hover"/"pressed").

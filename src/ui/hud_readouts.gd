@@ -24,6 +24,12 @@ const FULL_DAYLIGHT_DEGREES := 6.0
 ## approximation of when the sun peaks, it is where the model puts it.
 const SOLAR_NOON_HOUR := 12
 
+## How many lines each card carries. The cards are built with exactly this many
+## Labels, so a readout that grew a line without the card growing one would
+## silently drop it on the floor.
+const WORLD_CLOCK_LINE_COUNT := 3
+const DIAGNOSTICS_LINE_COUNT := 3
+
 
 ## "Day" / "Dawn" / "Dusk" / "Night" -- what `Sun elev 41.3°` meant, said in
 ## the one word a player can act on. `local_hour` only ever chooses between
@@ -117,6 +123,22 @@ static func condition_chips(meters, movement_mode: String) -> Array:
 	if place != "":
 		chips.append(_chip(place, UiTheme.TEXT_MUTED))
 	return chips
+
+
+## What `condition_chips` currently says, as one comparable string -- so the
+## row is rebuilt only when it would actually look different.
+##
+## The chips are rebuilt rather than pooled (the row is empty in the common
+## case, so five hidden PanelContainers kept around to avoid allocating in the
+## rare one would be the more expensive of the two), which makes "has anything
+## changed?" the thing that has to be cheap and exact. A bar drifting without
+## crossing a threshold must NOT count as a change; two chips must not collide
+## with one chip named after both, hence the separator.
+static func chips_signature(chips: Array) -> String:
+	var out := ""
+	for chip in chips:
+		out += String(chip["text"]) + "|"
+	return out
 
 
 ## What is in hand and how close it is to breaking. `condition` is

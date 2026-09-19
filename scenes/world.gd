@@ -142,6 +142,9 @@ const LoadingOverlay = preload("res://scenes/loading_overlay.gd")
 const ClassArchetype = preload("res://src/gameplay/class_archetype.gd")
 const StarterKit = preload("res://src/gameplay/starter_kit.gd")
 const UiTheme = preload("res://src/ui/ui_theme.gd")
+## The pure HUD readouts and the UI scale model (docs/concept/hud.md).
+const HudReadouts = preload("res://src/ui/hud_readouts.gd")
+const UiScale = preload("res://src/ui/ui_scale.gd")
 const WeatherModel = preload("res://src/world/weather_model.gd")
 const SeasonCycle = preload("res://src/world/season_cycle.gd")
 const EntityRef = preload("res://src/emergence/entity_ref.gd")
@@ -400,6 +403,36 @@ const ALWAYS_NIGHT_ELEVATION := -90.0
 ## with one (see clock_hour_for_console_argument).
 const NO_FORCED_HOUR := -1.0
 
+## F3, the key every other game uses for exactly this (see
+## docs/concept/hud.md "The top-left strip"). FPS, lat/lon and the sun's
+## elevation in degrees used to ship ON, in the middle of the clock line.
+const DIAGNOSTICS_TOGGLE_ACTION := "toggle_diagnostics"
+
+## The top-right column, under the minimap (which ends at y = 170): the
+## world-clock card, then Karma under it. See docs/concept/hud.md.
+const HUD_RIGHT_COLUMN_LEFT := -170.0
+const HUD_RIGHT_COLUMN_RIGHT := -8.0
+const WORLD_CLOCK_CARD_TOP := 178.0
+const WORLD_CLOCK_CARD_BOTTOM := 266.0
+const KARMA_CARD_TOP := 274.0
+const KARMA_CARD_BOTTOM := 306.0
+## The diagnostics strip sits bottom-right -- the one free corner. Top-left,
+## where it came from, is the player's own state column (health, XP, land
+## sense, creature panels) and an overlay toggled on top of that would cover
+## exactly the thing the player was watching when they reached for F3.
+const DIAGNOSTICS_CARD_LEFT := -150.0
+const DIAGNOSTICS_CARD_TOP := -92.0
+## The top-left column, under the health bar (which now sits at y = 8..26,
+## in the corner the old strip vacated): the XP card, then the land-sense
+## card, then the creature panels. See docs/concept/hud.md.
+const XP_CARD_TOP := 32.0
+const LAND_SENSE_CARD_TOP := 74.0
+## The condition chips sit directly above the survival panel (which occupies
+## the bottom 132px of the left edge), with the bars they name.
+const CONDITION_CHIPS_BOTTOM := -136.0
+## The held-item card sits directly above the hotbar (top at -76).
+const HELD_ITEM_CARD_BOTTOM := -80.0
+
 const CONSOLE_TOGGLE_ACTION := "toggle_console"
 const INVENTORY_TOGGLE_ACTION := "toggle_inventory"
 const CRAFTING_TOGGLE_ACTION := "toggle_crafting"
@@ -519,8 +552,22 @@ var _ground_tint := GroundTint.new()
 var _torch_glow := TorchGlow.new()
 var _torch_glow_mesh: MeshInstance2D
 @onready var _ui: CanvasLayer = $UI
-@onready var _debug_label: Label = $UI/DebugLabel
 @onready var _minimap: TextureRect = $UI/Minimap
+## The two halves the old $UI/DebugLabel split into (docs/concept/hud.md "The
+## top-left strip"): the world-clock card, always on, and the diagnostics
+## strip, off until toggle_diagnostics (F3).
+var _clock_labels: Array[Label] = []
+var _diagnostics_card: PanelContainer
+var _diagnostics_labels: Array[Label] = []
+var _diagnostics_visible := false
+## The condition chips above the survival panel, and the held-item card above
+## the hotbar (docs/concept/hud.md).
+var _condition_chips_row: HBoxContainer
+## The chip texts currently on screen, joined -- so a frame whose conditions
+## have not changed rebuilds nothing.
+var _condition_chips_signature := ""
+var _held_item_card: PanelContainer
+var _held_item_label: Label
 @onready var _player_health_bg: ColorRect = $UI/PlayerHealthBar/Background
 @onready var _player_health_fill: ColorRect = $UI/PlayerHealthBar/Fill
 @onready var _player_health_label: Label = $UI/PlayerHealthBar/Label
@@ -651,6 +698,11 @@ var _hotbar_slot_frames: Array[Control] = []
 var _hotbar_slot_state: Array[String] = []
 var _creature_renderer := CreatureRenderer.new()
 var _item_catalog := ItemCatalog.new()
+## The held-item card's wear grade (docs/concept/hud.md). Pure and stateless,
+## the same instance Player keeps for its own durability checks -- the HUD just
+## reads what that model already decides.
+const ItemWear = preload("res://src/gameplay/item_wear.gd")
+var _item_wear := ItemWear.new()
 var _crafting_recipe_book := CraftingRecipeBook.new()
 var _dev_console: PanelContainer
 var _inventory_window: PanelContainer
@@ -693,6 +745,14 @@ var _initial_client_chunk_load_done := false
 ## Shared dark/rounded UI theme (see UiTheme), assigned to every window/menu so
 ## the whole UI reads as one styled system rather than raw grey boxes.
 var _ui_theme := UiTheme.new().build_theme()
+## The player's own UI scale (see UiScale, docs/concept/hud.md "UI scale"):
+## loaded beside the graphics settings, applied to _ui_theme and to every HUD
+## label that overrides its own font size, saved the moment the slider moves.
+var _ui_scale := UiScale.DEFAULT_SCALE
+## Label -> the UNSCALED base font size it was built with. The theme covers
+## every widget that does NOT override its size; these are the ones that do,
+## and _apply_ui_scale re-reads this so a scale change needs no restart.
+var _scaled_font_labels: Dictionary = {}
 var _class_archetypes := ClassArchetype.new()
 ## Class chosen at the main menu, applied to the local player on spawn.
 var _pending_class := "warrior"
@@ -747,6 +807,11 @@ var _audio_volume := AudioSettings.DEFAULT_VOLUME
 const SimulationSettings = preload("res://src/gameplay/simulation_settings.gd")
 var _simulation_densities: Dictionary = SimulationSettings.default_densities()
 var _death_label: Label
+## The shared card each of these readouts moved onto (docs/concept/hud.md
+## pillar 1): hiding the CARD is what hides the readout, so nothing can leave
+## a blank card standing.
+var _death_card: PanelContainer
+var _land_sense_card: PanelContainer
 ## The village readout (docs/concept/village_growth.md mechanism 5): a
 ## left-click on any building opens HousePanel on it -- the needs,
 ## happiness and productivity of the household living there, or, for a
@@ -1112,6 +1177,10 @@ func _ready() -> void:
 	_log_audio_diagnostics()
 	_load_simulation_settings()
 	_apply_simulation_settings()
+	# Before the first builder runs, so the first frame the player sees is
+	# already at their own size rather than at 100% for a frame.
+	_load_ui_settings()
+	_apply_ui_scale()
 
 	_build_hotbar_slots()
 	_build_plans = _build_plan_store.load_ledger()
@@ -1132,6 +1201,10 @@ func _ready() -> void:
 	_build_hover_tooltip()
 	_build_death_label()
 	_build_survival_bar()
+	_build_condition_chips()
+	_build_held_item_card()
+	_build_world_clock_card()
+	_build_diagnostics_strip()
 	_build_xp_bar()
 	_build_land_sense_label()
 	_build_karma_display()
@@ -2109,7 +2182,7 @@ func _build_settings_overlay() -> void:
 	_settings_overlay.process_mode = Node.PROCESS_MODE_ALWAYS
 	_settings_overlay.setup(
 		_keybindings, _graphics_fullscreen, _graphics_vsync, _graphics_resolution, _audio_volume,
-		_simulation_densities
+		_simulation_densities, _ui_scale
 	)
 	_settings_overlay.set_anchors_preset(Control.PRESET_CENTER)
 	_settings_overlay.offset_left = -210.0
@@ -2123,6 +2196,7 @@ func _build_settings_overlay() -> void:
 	_settings_overlay.graphics_option_changed.connect(_on_graphics_option_changed)
 	_settings_overlay.audio_volume_changed.connect(_on_audio_volume_changed)
 	_settings_overlay.simulation_density_changed.connect(_on_simulation_density_changed)
+	_settings_overlay.ui_scale_changed.connect(_on_ui_scale_changed)
 	_settings_overlay.resume_requested.connect(_toggle_settings_menu)
 	_settings_overlay.license_code_submitted.connect(_on_settings_license_code_submitted)
 
@@ -2215,6 +2289,51 @@ func _load_graphics() -> void:
 	_graphics_resolution = RenderResolution.sanitize(
 		str(config.get_value("graphics", "render_resolution", _graphics_resolution))
 	)
+
+
+## The UI scale persists alongside the key bindings and graphics settings in
+## KEYBINDINGS_PATH (one small user config file), in its own `[ui]` section.
+## Applied by _apply_ui_scale, which _ready calls BEFORE any HUD builder runs
+## so the first frame is already at the player's size.
+func _load_ui_settings() -> void:
+	var config := ConfigFile.new()
+	if config.load(KEYBINDINGS_PATH) != OK:
+		return
+	_ui_scale = UiScale.sanitize(float(config.get_value("ui", "scale", _ui_scale)))
+
+
+func _save_ui_settings() -> void:
+	var config := ConfigFile.new()
+	config.load(KEYBINDINGS_PATH)  # preserve every other section
+	config.set_value("ui", "scale", _ui_scale)
+	config.save(KEYBINDINGS_PATH)
+
+
+## Pushes the current scale into the shared theme and into every HUD label
+## that overrides its own font size.
+##
+## The theme is MUTATED rather than replaced: a Theme is a Resource shared by
+## reference, and every window and card already in the tree holds this one, so
+## handing out a freshly built theme would leave all of them on the old sizes
+## until a restart (see UiTheme.apply_scale).
+func _apply_ui_scale() -> void:
+	UiTheme.new().apply_scale(_ui_theme, _ui_scale)
+	for label in _scaled_font_labels:
+		if is_instance_valid(label):
+			_apply_scaled_font(label, _scaled_font_labels[label])
+	# The condition chips are not in that registry (they are rebuilt as the
+	# player's state changes, see _update_condition_chips). Forgetting what the
+	# row currently says makes the next frame rebuild it at the new size.
+	_condition_chips_signature = ""
+
+
+## The settings menu's UI scale slider moved -- applies and persists
+## immediately, the same "every change saves right away, no separate Apply
+## step" convention _on_graphics_changed already uses.
+func _on_ui_scale_changed(value: float) -> void:
+	_ui_scale = UiScale.sanitize(value)
+	_apply_ui_scale()
+	_save_ui_settings()
 
 
 func _apply_graphics() -> void:
@@ -2433,25 +2552,42 @@ func _build_survival_bar() -> void:
 ## A slim XP bar with a level readout, just under the player health bar
 ## (top-left). Full = about to level up (see ExperienceTrack).
 func _build_xp_bar() -> void:
+	# On the shared card, like every other readout (docs/concept/hud.md pillar
+	# 1). "Lv 7 - Warrior (2 pts)" used to be a bare 10pt Label over the world,
+	# which is exactly the white-text-over-snow case the pillar exists for.
+	# The compact stylebox rather than the full one: a 10px bar in a 12px-
+	# margin card is mostly empty card, three deep down this edge.
+	var card := PanelContainer.new()
+	card.theme = _ui_theme
+	card.add_theme_stylebox_override("panel", UiTheme.new().compact_panel_stylebox())
+	card.set_anchors_preset(Control.PRESET_TOP_LEFT)
+	card.offset_left = 8.0
+	card.offset_top = XP_CARD_TOP
+	card.offset_right = 8.0 + SURVIVAL_BAR_WIDTH + 2.0 * UiTheme.COMPACT_CONTENT_MARGIN
+	card.mouse_filter = Control.MOUSE_FILTER_IGNORE
+	_ui.add_child(card)
+
+	var column := VBoxContainer.new()
+	column.add_theme_constant_override("separation", 2)
+	card.add_child(column)
+
+	_xp_label = Label.new()
+	_scaled_font(_xp_label, 11)
+	column.add_child(_xp_label)
+
 	var bar := Control.new()
-	bar.set_anchors_preset(Control.PRESET_TOP_LEFT)
-	bar.position = Vector2(8, 74)
-	_ui.add_child(bar)
+	bar.custom_minimum_size = Vector2(SURVIVAL_BAR_WIDTH, 8)
+	column.add_child(bar)
 
 	var bg := ColorRect.new()
 	bg.color = Color(0.1, 0.1, 0.12, 0.85)
-	bg.size = Vector2(SURVIVAL_BAR_WIDTH, 10)
+	bg.size = Vector2(SURVIVAL_BAR_WIDTH, 8)
 	bar.add_child(bg)
 
 	_xp_fill = ColorRect.new()
 	_xp_fill.color = Color(0.5, 0.35, 0.85)
-	_xp_fill.size = Vector2(0, 10)
+	_xp_fill.size = Vector2(0, 8)
 	bar.add_child(_xp_fill)
-
-	_xp_label = Label.new()
-	_xp_label.add_theme_font_size_override("font_size", 10)
-	_xp_label.position = Vector2(2, -2)
-	bar.add_child(_xp_label)
 
 
 ## Naturalist "land_sense" keystone reveal (docs/concept/progression.md
@@ -2461,12 +2597,25 @@ func _build_xp_bar() -> void:
 ## This keystone's whole payoff IS this reveal, not a stat bump (see
 ## SkillTreeWindow's own special-cased row rendering for the same keystone).
 func _build_land_sense_label() -> void:
+	# On the shared card (docs/concept/hud.md pillar 1). This keystone's whole
+	# payoff is two real numbers, and they used to be bare 10pt text laid over
+	# whatever ground the player was reading them about -- the one readout in
+	# the HUD guaranteed to be drawn over open terrain.
+	_land_sense_card = PanelContainer.new()
+	_land_sense_card.theme = _ui_theme
+	_land_sense_card.add_theme_stylebox_override(
+		"panel", UiTheme.new().compact_panel_stylebox()
+	)
+	_land_sense_card.set_anchors_preset(Control.PRESET_TOP_LEFT)
+	_land_sense_card.offset_left = 8.0
+	_land_sense_card.offset_top = LAND_SENSE_CARD_TOP
+	_land_sense_card.mouse_filter = Control.MOUSE_FILTER_IGNORE
+	_land_sense_card.visible = false
+	_ui.add_child(_land_sense_card)
+
 	_land_sense_label = Label.new()
-	_land_sense_label.set_anchors_preset(Control.PRESET_TOP_LEFT)
-	_land_sense_label.position = Vector2(8, 88)
-	_land_sense_label.add_theme_font_size_override("font_size", 10)
-	_land_sense_label.visible = false
-	_ui.add_child(_land_sense_label)
+	_scaled_font(_land_sense_label, 11)
+	_land_sense_card.add_child(_land_sense_label)
 
 
 ## Karma's own HUD readout (asked directly: "Karma should be displayed
@@ -2481,16 +2630,236 @@ func _build_karma_display() -> void:
 	var panel := PanelContainer.new()
 	panel.theme = _ui_theme
 	panel.set_anchors_preset(Control.PRESET_TOP_RIGHT)
-	panel.offset_left = -170.0
-	panel.offset_top = 178.0
-	panel.offset_right = -8.0
-	panel.offset_bottom = 210.0
+	panel.offset_left = HUD_RIGHT_COLUMN_LEFT
+	# Under the world-clock card, which took the slot directly below the
+	# minimap when the top-left strip split (docs/concept/hud.md).
+	panel.offset_top = KARMA_CARD_TOP
+	panel.offset_right = HUD_RIGHT_COLUMN_RIGHT
+	panel.offset_bottom = KARMA_CARD_BOTTOM
 	_ui.add_child(panel)
 
 	_karma_label = Label.new()
 	_karma_label.horizontal_alignment = HORIZONTAL_ALIGNMENT_CENTER
 	_karma_label.vertical_alignment = VERTICAL_ALIGNMENT_CENTER
 	panel.add_child(_karma_label)
+
+
+## The world-clock card (docs/concept/hud.md "The top-left strip"): the time,
+## the phase of the day, the season, the weather and how the player is moving.
+##
+## This is the PLAYER's half of what used to be $UI/DebugLabel -- one bare,
+## unthemed Label at (8, 8), still carrying its .tscn-authored "Loading..."
+## placeholder, cramming eight fields into a single %-formatted string and
+## mixing the clock in with a frame rate and a latitude. The developer's half
+## is _build_diagnostics_strip, and it is off until asked for.
+##
+## Top-RIGHT, under the minimap, rather than back in the corner it came from:
+## where you are and when you are are one thought, and the top-left column is
+## already the player's own state (health, XP, land sense, creature panels).
+## Karma moves down to sit under this.
+func _build_world_clock_card() -> void:
+	var panel := PanelContainer.new()
+	panel.theme = _ui_theme
+	panel.set_anchors_preset(Control.PRESET_TOP_RIGHT)
+	panel.offset_left = HUD_RIGHT_COLUMN_LEFT
+	panel.offset_top = WORLD_CLOCK_CARD_TOP
+	panel.offset_right = HUD_RIGHT_COLUMN_RIGHT
+	panel.offset_bottom = WORLD_CLOCK_CARD_BOTTOM
+	panel.mouse_filter = Control.MOUSE_FILTER_IGNORE
+	_ui.add_child(panel)
+
+	var column := VBoxContainer.new()
+	column.add_theme_constant_override("separation", 2)
+	panel.add_child(column)
+	for i in HudReadouts.WORLD_CLOCK_LINE_COUNT:
+		var line := Label.new()
+		line.horizontal_alignment = HORIZONTAL_ALIGNMENT_CENTER
+		# The clock reads first; the season and the movement line under it are
+		# context for it, so they are a size down and in the muted text colour
+		# rather than three lines shouting equally.
+		if i == 0:
+			_scaled_font(line, UiTheme.BASE_FONT_SIZE)
+		else:
+			_scaled_font(line, UiTheme.BASE_FONT_SIZE - 2)
+			line.add_theme_color_override("font_color", UiTheme.TEXT_MUTED)
+		column.add_child(line)
+		_clock_labels.append(line)
+
+
+## The developer's half of the old strip: FPS, lat/lon, sun elevation in
+## degrees. HIDDEN until toggle_diagnostics (F3) -- "a diagnostic must never
+## ship on" is the rule RiverFlowShader's raw-across channel already states for
+## itself, and this is the one diagnostic that did.
+##
+## Bottom-right, the one free corner: an overlay toggled over the top-left
+## column would cover exactly the health and meters the player was watching
+## when they reached for F3.
+func _build_diagnostics_strip() -> void:
+	_diagnostics_card = PanelContainer.new()
+	_diagnostics_card.theme = _ui_theme
+	_diagnostics_card.set_anchors_preset(Control.PRESET_BOTTOM_RIGHT)
+	_diagnostics_card.offset_left = DIAGNOSTICS_CARD_LEFT
+	_diagnostics_card.offset_top = DIAGNOSTICS_CARD_TOP
+	_diagnostics_card.offset_right = HUD_RIGHT_COLUMN_RIGHT
+	_diagnostics_card.offset_bottom = -8.0
+	_diagnostics_card.mouse_filter = Control.MOUSE_FILTER_IGNORE
+	_diagnostics_card.visible = false
+	_ui.add_child(_diagnostics_card)
+
+	var column := VBoxContainer.new()
+	column.add_theme_constant_override("separation", 2)
+	_diagnostics_card.add_child(column)
+	for _i in HudReadouts.DIAGNOSTICS_LINE_COUNT:
+		var line := Label.new()
+		_scaled_font(line, UiTheme.BASE_FONT_SIZE - 2)
+		line.add_theme_color_override("font_color", UiTheme.TEXT_MUTED)
+		column.add_child(line)
+		_diagnostics_labels.append(line)
+
+
+## F3. Writing the strip is skipped entirely while it is hidden (see
+## _client_process), so a player who never presses this pays nothing for it.
+func _toggle_diagnostics_strip() -> void:
+	_diagnostics_visible = not _diagnostics_visible
+	_diagnostics_card.visible = _diagnostics_visible
+
+
+## The named states the survival bars only imply (docs/concept/hud.md
+## "Condition chips"): a row of small themed cards directly above the survival
+## panel, bottom-left -- with the bars they name, not in some other corner.
+func _build_condition_chips() -> void:
+	_condition_chips_row = HBoxContainer.new()
+	_condition_chips_row.theme = _ui_theme
+	_condition_chips_row.set_anchors_preset(Control.PRESET_BOTTOM_LEFT)
+	_condition_chips_row.offset_left = 8.0
+	_condition_chips_row.offset_bottom = CONDITION_CHIPS_BOTTOM
+	_condition_chips_row.add_theme_constant_override("separation", 4)
+	_condition_chips_row.mouse_filter = Control.MOUSE_FILTER_IGNORE
+	_condition_chips_row.grow_vertical = Control.GROW_DIRECTION_BEGIN
+	_ui.add_child(_condition_chips_row)
+
+
+## Every frame: whichever SurvivalMeters states are true right now, in
+## HudReadouts' fixed severity order.
+##
+## Chips are rebuilt rather than pooled because the row is empty in the common
+## case -- a fed, watered, warm player on dry land shows nothing at all -- and
+## a pool of five hidden PanelContainers to avoid allocating in the rare case
+## would be the more expensive of the two. Guarded so a frame whose chips have
+## not changed rebuilds nothing.
+func _update_condition_chips(local_player: Player) -> void:
+	var chips: Array = HudReadouts.condition_chips(
+		local_player.survival, local_player.current_mode
+	)
+	var signature := HudReadouts.chips_signature(chips)
+	if signature == _condition_chips_signature:
+		return
+	_condition_chips_signature = signature
+	for child in _condition_chips_row.get_children():
+		child.queue_free()
+	for chip in chips:
+		var card := PanelContainer.new()
+		card.mouse_filter = Control.MOUSE_FILTER_IGNORE
+		var label := Label.new()
+		label.text = String(chip["text"])
+		label.add_theme_color_override("font_color", chip["color"])
+		# _apply_scaled_font, NOT _scaled_font: these Labels are freed and
+		# rebuilt whenever the conditions change, and a registry keyed by them
+		# would grow for the whole session. _apply_ui_scale clears the
+		# signature instead, so the next frame rebuilds them at the new size.
+		_apply_scaled_font(label, UiTheme.BASE_FONT_SIZE - 2)
+		card.add_child(label)
+		_condition_chips_row.add_child(card)
+
+
+## What is in hand and how close it is to breaking (docs/concept/hud.md "The
+## held-item card"). The hotbar shows five icons and a stack count; it does not
+## name what is equipped, and nothing anywhere in the HUD showed WEAR -- the
+## only way a player learnt an axe was about to break was that it broke.
+func _build_held_item_card() -> void:
+	_held_item_card = PanelContainer.new()
+	_held_item_card.theme = _ui_theme
+	_held_item_card.set_anchors_preset(Control.PRESET_CENTER_BOTTOM)
+	_held_item_card.offset_bottom = HELD_ITEM_CARD_BOTTOM
+	_held_item_card.mouse_filter = Control.MOUSE_FILTER_IGNORE
+	_held_item_card.grow_horizontal = Control.GROW_DIRECTION_BOTH
+	_held_item_card.grow_vertical = Control.GROW_DIRECTION_BEGIN
+	_held_item_card.visible = false
+	_ui.add_child(_held_item_card)
+
+	_held_item_label = Label.new()
+	_held_item_label.horizontal_alignment = HORIZONTAL_ALIGNMENT_CENTER
+	_scaled_font(_held_item_label, UiTheme.BASE_FONT_SIZE - 2)
+	_held_item_card.add_child(_held_item_label)
+
+
+## Every frame: the equipped item's display name and its ItemWear grade, or an
+## empty line -- which hides the whole CARD, the same rule _set_message_banner
+## follows, so nothing can leave a blank card holding a gap open.
+func _update_held_item_card(local_player: Player) -> void:
+	var name := ""
+	var condition := ""
+	var item = local_player.equipped_item
+	if item != null:
+		name = _item_catalog.display_name_of(item.id)
+		# An item with no material to wear (a torch, a fish) gets no grade
+		# rather than a meaningless "Pristine".
+		var material := _item_catalog.material_of(item.id)
+		if material != "":
+			condition = _item_wear.condition_for(item.wear, material)
+	var line := HudReadouts.held_item_line(name, condition)
+	_held_item_card.visible = line != ""
+	_held_item_label.text = line
+
+
+## The player's half of the old strip, every frame.
+func _update_world_clock_card(
+	local_hour: int,
+	local_minute: int,
+	sun_elevation_degrees: float,
+	season: String,
+	weather: String,
+	local_player: Player
+) -> void:
+	var lines: PackedStringArray = HudReadouts.world_clock_lines(
+		local_hour,
+		local_minute,
+		HudReadouts.day_phase(sun_elevation_degrees, local_hour),
+		season,
+		weather,
+		local_player.current_mode,
+		local_player.current_speed_multiplier
+	)
+	for i in _clock_labels.size():
+		_clock_labels[i].text = lines[i]
+
+
+## The developer's half -- only ever called while the strip is actually
+## showing (see _client_process).
+func _update_diagnostics_strip(
+	latitude: float, longitude: float, sun_elevation_degrees: float
+) -> void:
+	var lines: PackedStringArray = HudReadouts.diagnostics_lines(
+		Engine.get_frames_per_second(), latitude, longitude, sun_elevation_degrees
+	)
+	for i in _diagnostics_labels.size():
+		_diagnostics_labels[i].text = lines[i]
+
+
+## Applies `base` to `label` at the current UI scale AND remembers it, so
+## moving the scale slider re-applies without a restart (see _apply_ui_scale).
+## The shared theme covers every widget that does not override its own size;
+## this is for the ones that do.
+func _scaled_font(label: Label, base: int) -> void:
+	_scaled_font_labels[label] = base
+	_apply_scaled_font(label, base)
+
+
+## The same size, applied WITHOUT registering -- for labels that are freed and
+## rebuilt as the HUD runs (the condition chips). Registering those would leave
+## the registry holding freed Labels for the whole session.
+func _apply_scaled_font(label: Label, base: int) -> void:
+	label.add_theme_font_size_override("font_size", UiScale.font_size(base, _ui_scale))
 
 
 ## Every transient message the world shows the player -- fishing, taming,
@@ -3045,20 +3414,32 @@ const CHARGE_METER_SIZE := Vector2(40.0, 6.0)
 ## every frame the same world-to-screen way _interaction_prompt is (it
 ## floats above whichever player is charging, not a fixed HUD corner).
 func _build_charge_meter() -> void:
-	_charge_meter = Control.new()
+	# On the shared card (docs/concept/hud.md pillar 1): it floats in WORLD
+	# space above the player's head, so it is drawn over terrain by definition
+	# -- the strongest case in the HUD for the card, and the last readout still
+	# without one.
+	_charge_meter = PanelContainer.new()
+	_charge_meter.theme = _ui_theme
+	_charge_meter.add_theme_stylebox_override(
+		"panel", UiTheme.new().compact_panel_stylebox()
+	)
 	_charge_meter.mouse_filter = Control.MOUSE_FILTER_IGNORE
 	_charge_meter.visible = false
-	_charge_meter.size = CHARGE_METER_SIZE
+
+	var stack := Control.new()
+	stack.custom_minimum_size = CHARGE_METER_SIZE
+	stack.mouse_filter = Control.MOUSE_FILTER_IGNORE
+	_charge_meter.add_child(stack)
 
 	_charge_meter_bg = ColorRect.new()
 	_charge_meter_bg.color = Color(0.1, 0.1, 0.1, 0.85)
 	_charge_meter_bg.size = CHARGE_METER_SIZE
-	_charge_meter.add_child(_charge_meter_bg)
+	stack.add_child(_charge_meter_bg)
 
 	_charge_meter_fill = ColorRect.new()
-	_charge_meter_fill.color = Color(0.85, 0.65, 0.15, 1.0)
+	_charge_meter_fill.color = UiTheme.ACCENT
 	_charge_meter_fill.size = CHARGE_METER_SIZE
-	_charge_meter.add_child(_charge_meter_fill)
+	stack.add_child(_charge_meter_fill)
 
 	_ui.add_child(_charge_meter)
 
@@ -3071,14 +3452,20 @@ func _build_charge_meter() -> void:
 ## health/max_health.
 func _update_charge_meter(local_player: Player) -> void:
 	var fraction := local_player.hand_charge_fraction()
-	_charge_meter.visible = fraction > 0.0
+	# A WORLD-space floater, so it yields to an open gameplay window like the
+	# interaction prompt, the hover tooltip and the message stack already do
+	# (see world_hint_visible_for). It was the one floater left uncovered --
+	# docs/concept/hud.md named it as a gap.
+	_charge_meter.visible = world_hint_visible_for(
+		fraction > 0.0, _any_gameplay_window_open()
+	)
 	if not _charge_meter.visible:
 		return
 	_charge_meter_fill.size.x = _health_bar.fill_width(fraction, 1.0, CHARGE_METER_SIZE.x)
 	var screen_position: Vector2 = (
 		get_viewport().get_canvas_transform() * (local_player.position + Vector2(0, -40))
 	)
-	_charge_meter.position = screen_position - Vector2(CHARGE_METER_SIZE.x / 2.0, 0)
+	_charge_meter.position = screen_position - Vector2(_charge_meter.size.x / 2.0, 0)
 
 
 ## Every frame: finds the nearest villager within talk range of the local
@@ -3242,8 +3629,10 @@ func _update_xp_bar(local_player: Player) -> void:
 ## stat bonus).
 func _update_land_sense_label(local_player: Player) -> void:
 	var unlocked: bool = local_player.unlocked_keystones.get("land_sense", false)
-	_land_sense_label.visible = unlocked and _chunk_manager != null
-	if not _land_sense_label.visible:
+	# Hides the CARD, not the label inside it -- nothing may leave a blank card
+	# standing (the same rule _set_message_banner follows).
+	_land_sense_card.visible = unlocked and _chunk_manager != null
+	if not _land_sense_card.visible:
 		return
 	var land_health := _chunk_manager.land_health_near(local_player.position)
 	var vegetation := _chunk_manager.vegetation_density_near(local_player.position)
@@ -3284,8 +3673,9 @@ func _build_creature_panels_container() -> void:
 	_creature_panels_container.theme = _ui_theme
 	_creature_panels_container.set_anchors_preset(Control.PRESET_TOP_LEFT)
 	_creature_panels_container.offset_left = 8.0
-	# Below the health bar (top) and the XP bar (y~74), so they don't overlap.
-	_creature_panels_container.offset_top = 96.0
+	# Below the health bar, the XP card and the land-sense card, so they never
+	# overlap -- see docs/concept/hud.md for the column's order.
+	_creature_panels_container.offset_top = LAND_SENSE_CARD_TOP + 34.0
 	_creature_panels_container.add_theme_constant_override("separation", 4)
 	_ui.add_child(_creature_panels_container)
 
@@ -3459,18 +3849,28 @@ func _animal_detail_line(state: Dictionary) -> String:
 ## countdown/respawn happens on Player itself (see Player.RESPAWN_DELAY),
 ## this just displays it.
 func _build_death_label() -> void:
+	# On the shared card (docs/concept/hud.md pillar 1). Dead centre of the
+	# screen is precisely where the world is busiest, and 28pt dark red over a
+	# sunlit field or snow was the least legible text in the HUD -- for the one
+	# message the player most needs to read.
+	_death_card = PanelContainer.new()
+	_death_card.theme = _ui_theme
+	_death_card.set_anchors_preset(Control.PRESET_CENTER)
+	_death_card.offset_left = -160.0
+	_death_card.offset_top = -60.0
+	_death_card.offset_right = 160.0
+	_death_card.offset_bottom = 10.0
+	_death_card.mouse_filter = Control.MOUSE_FILTER_IGNORE
+	_death_card.visible = false
+	_ui.add_child(_death_card)
+
 	_death_label = Label.new()
 	_death_label.text = "You Died"
-	_death_label.visible = false
-	_death_label.add_theme_font_size_override("font_size", 28)
-	_death_label.add_theme_color_override("font_color", Color(0.8, 0.1, 0.1))
+	_scaled_font(_death_label, 28)
+	_death_label.add_theme_color_override("font_color", UiTheme.NEGATIVE)
 	_death_label.horizontal_alignment = HORIZONTAL_ALIGNMENT_CENTER
-	_death_label.set_anchors_preset(Control.PRESET_CENTER)
-	_death_label.offset_left = -120.0
-	_death_label.offset_top = -60.0
-	_death_label.offset_right = 120.0
-	_death_label.offset_bottom = 10.0
-	_ui.add_child(_death_label)
+	_death_label.vertical_alignment = VERTICAL_ALIGNMENT_CENTER
+	_death_card.add_child(_death_label)
 
 
 ## Throttled (see CREATURE_CALL_REFRESH_INTERVAL) chance for a live creature
@@ -3595,7 +3995,9 @@ func _unhandled_input(event: InputEvent) -> void:
 	# refusal would be work for nothing on every frame the mouse is still.
 	if event is InputEventMouseMotion:
 		_update_plan_cursor()
-	if event.is_action_pressed(CONSOLE_TOGGLE_ACTION):
+	if event.is_action_pressed(DIAGNOSTICS_TOGGLE_ACTION):
+		_toggle_diagnostics_strip()
+	elif event.is_action_pressed(CONSOLE_TOGGLE_ACTION):
 		_dev_console.toggle()
 	elif event.is_action_pressed(INVENTORY_TOGGLE_ACTION):
 		_inventory_window.toggle()
@@ -5085,7 +5487,8 @@ func _update_player_health_bar(local_player: Player) -> void:
 	_player_health_fill.size.x = width
 	_player_health_label.text = "HP %d / %d" % [int(local_player.health), int(local_player.max_health)]
 
-	_death_label.visible = local_player.is_dead
+	# The CARD is what hides -- nothing may leave a blank card standing.
+	_death_card.visible = local_player.is_dead
 	if local_player.is_permanently_dead():
 		# docs/concept/death.md: "the character is gone forever" -- no
 		# countdown, because there is nothing left to respawn into. Actually
@@ -6878,6 +7281,10 @@ func _client_process(delta: float) -> void:
 	if _perf_report != null:
 		perf_started = _perf_section("cli_hover", perf_started)
 	_update_survival_bar(local_player)
+	# The names the bars above only imply, and what is in hand -- see
+	# docs/concept/hud.md. Both rebuild only when what they say changes.
+	_update_condition_chips(local_player)
+	_update_held_item_card(local_player)
 	_update_xp_bar(local_player)
 	_update_land_sense_label(local_player)
 	_update_karma_display(local_player)
@@ -7314,21 +7721,14 @@ func _client_process(delta: float) -> void:
 	_chunk_manager.sync_tree_season(local_player.position)
 	_chunk_manager.sync_grass_season()
 	var weather := raw_weather.capitalize()
-	_debug_label.text = (
-		"FPS %d   Lat %.1f Lon %.1f   Local %02d:%02d   Sun elev %.1f°   %s · %s   Mode: %s   Speed: %d%%"
-		% [
-			Engine.get_frames_per_second(),
-			latitude,
-			longitude,
-			local_hour_whole,
-			local_minute,
-			elevation,
-			season,
-			weather,
-			local_player.current_mode,
-			local_player.current_speed_multiplier * 100,
-		]
-	)
+	# The two halves of what used to be one bare Label at (8, 8) holding eight
+	# fields in a single %-formatted string -- see docs/concept/hud.md "The
+	# top-left strip". The clock card is always on; the diagnostics strip is
+	# only written while it is actually showing, so a player who never presses
+	# F3 pays nothing for it.
+	_update_world_clock_card(local_hour_whole, local_minute, elevation, season, weather, local_player)
+	if _diagnostics_visible:
+		_update_diagnostics_strip(latitude, longitude, elevation)
 	if _perf_report != null:
 		_perf_section("cli_season", perf_started)
 
