@@ -39,8 +39,26 @@ const ConstructionCatchup = preload("res://src/world/construction_catchup.gd")
 ## test-pinned so the two can never invert.
 const FED_THRESHOLD := 2.0
 
+## Real seconds of elapsed play per simulated day -- mirrors
+## EarthChunkManager.SECONDS_PER_SIMULATED_DAY's own VALUE (60), restated
+## here rather than imported for the reason AntColony.SECONDS_PER_SIMULATED_
+## DAY's own doc comment gives (EarthChunkManager is an engine-dependent
+## singleton a pure emergence module must not depend on). Cross-checked by
+## test_village_immigration.gd so the two cannot silently drift.
+##
+## Arrivals used to be counted in ConstructionCatchup's day (3600) -- the
+## deliberately conservative rate for integrating an UNLOADED chunk's
+## vegetation and herds across an absence, and sixty times the day the
+## player actually lives in. Measured: a bare just-fed village drew one
+## household every 6 hours 40 minutes of real play, and a full larder under
+## a full ladder still took 2 hours 13. Immigration only runs while the
+## chunk is LOADED (see this file's own honest limitation below), so that
+## was two hours of standing beside a village to watch one person move in --
+## a village that grows by itself and can never be seen to.
+const SECONDS_PER_SIMULATED_DAY := 60.0
+
 ## The draw of a bare, just-fed village with room: roughly one household a
-## week at ConstructionCatchup.SECONDS_PER_DAY's own day length.
+## week of simulated days.
 const BASE_ARRIVALS_PER_DAY := 0.15
 ## How much a full larder adds on top of the base draw, as a multiple.
 const FOOD_SURPLUS_DRAW := 1.0
@@ -82,7 +100,11 @@ static func arrivals(
 	var draw := BASE_ARRIVALS_PER_DAY * (
 		1.0 + FOOD_SURPLUS_DRAW * surplus + LADDER_DRAW * clampf(ladder_share, 0.0, 1.0)
 	)
-	var days := seconds / ConstructionCatchup.SECONDS_PER_DAY
+	var days := seconds / SECONDS_PER_SIMULATED_DAY
 	var accrued := carry + draw * days
 	var whole := int(floor(accrued + 0.000001))
-	return {"arrivals": mini(whole, room), "carry": accrued - float(whole)}
+	# maxf, because the +epsilon that stops a float 0.9999999 from losing a
+	# whole household can also carry `accrued` just past `whole`, leaving a
+	# carry of -3e-15. A negative carry is not a fraction still owed; it is
+	# arithmetic noise, and it compounds.
+	return {"arrivals": mini(whole, room), "carry": maxf(accrued - float(whole), 0.0)}

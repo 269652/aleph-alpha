@@ -293,13 +293,84 @@ func test_try_enter_direct_builder_mode_fails_with_no_city_hall_nearby():
 ## its east wall (one cell from the building, four from its anchor cell)
 ## counts.
 func test_try_enter_direct_builder_mode_succeeds_beside_a_whole_building_city_hall():
-	var tile := player.current_tile()  # (4, 4): the hall's east wall ends on x = 3
-	var origin := tile + Vector2i(-BuildingCatalog.footprint_of("city_hall").x, 0)
-	assert_true(chunk_manager.place_building(Vector2i(0, 0), origin, "city_hall", Vector2i(0, 1), 1, ""), "precondition")
-	assert_gt(tile.x - origin.x, Player.HEAT_SOURCE_RADIUS_TILES, "precondition: the anchor alone is out of reach")
+	# On real, DRY ground, found rather than assumed: place_building refuses a
+	# wet footprint or doorstep now (docs/concept/building.md; reported as
+	# "Buildings are placed in rivers"), and the loaded area around the origin
+	# is real Earth terrain with real water in it.
+	var site := _a_dry_site_for("city_hall")
+	assert_false(site.is_empty(), "precondition: somewhere dry to raise a hall")
+	if site.is_empty():
+		return
+	var chunk_coord: Vector2i = site["chunk_coord"]
+	var origin: Vector2i = site["origin"]
+	# The player stands just off the hall's east wall -- one cell from the
+	# building, a whole footprint from its anchor -- which is the geometry
+	# this test exists to check.
+	var tile: Vector2i = site["global_origin"] + Vector2i(BuildingCatalog.footprint_of("city_hall").x, 0)
+	player.position = (Vector2(tile) + Vector2(0.5, 0.5)) * TILE_SIZE
+	assert_true(
+		chunk_manager.place_building(chunk_coord, origin, "city_hall", Vector2i(0, 1), 1, ""),
+		"precondition"
+	)
+	assert_gt(
+		tile.x - site["global_origin"].x, Player.HEAT_SOURCE_RADIUS_TILES,
+		"precondition: the anchor alone is out of reach"
+	)
 
 	assert_true(player._try_enter_direct_builder_mode())
 	assert_true(player.direct_builder_mode)
+
+	# The hall is a PERSISTED building, and this file shares one real
+	# user:// dir with every other test in the run -- including the ones
+	# that go looking for clear ground in this same Berlin chunk. Take it
+	# back off the map so nothing downstream inherits it.
+	chunk_manager.remove_building(chunk_coord, origin)
+
+
+## A real site for a whole-building `building_id` on ground that is really
+## dry, plus a dry cell off its east wall for the player to stand on.
+##
+## In BERLIN's chunk, loaded additively alongside before_each's own -- the
+## same move, and for the same reason, as _a_clear_house_footprint_origin
+## above: global tile (0,0) is the Earth projection's corner, so the whole
+## chunk (0,0) neighbourhood is open ocean, and the land nearest to it has
+## negative coordinates that current_tile() wraps to the far side of the
+## world. place_building refuses a wet footprint or doorstep now (reported as
+## "Buildings are placed in rivers"), so a site has to be found rather than
+## assumed.
+##
+## Returns {chunk_coord, origin (local), global_origin}, or {} if Berlin's
+## own chunk has nowhere clear either.
+func _a_dry_site_for(building_id: String) -> Dictionary:
+	var footprint := BuildingCatalog.footprint_of(building_id)
+	var geo := GeoCoordinates.new()
+	var berlin := Vector2i(
+		geo.tile_for_longitude(13.405, EarthChunkGenerator.WORLD_WIDTH_TILES),
+		geo.tile_for_latitude(52.52, EarthChunkGenerator.WORLD_HEIGHT_TILES)
+	)
+	var size := EarthChunkManager.CHUNK_SIZE
+	var chunk_coord := Vector2i(floori(float(berlin.x) / size), floori(float(berlin.y) / size))
+	chunk_manager._load_chunk(chunk_coord)
+	for y in range(2, size - footprint.y - 2):
+		for x in range(2, size - footprint.x - 2):
+			var origin := Vector2i(x, y)
+			var global_origin: Vector2i = chunk_coord * size + origin
+			var cells: Array = BuildingCatalog.footprint_cells(building_id, global_origin)
+			cells.append(global_origin + BuildingCatalog.doorstep_of(building_id))
+			cells.append(global_origin + Vector2i(footprint.x, 0))  # where the player stands
+			var clear := true
+			for cell in cells:
+				if (
+					chunk_manager.is_water_at_global(cell.x, cell.y)
+					or chunk_manager.modification_at_global(cell.x, cell.y) != ""
+				):
+					clear = false
+					break
+			if clear:
+				return {
+					"chunk_coord": chunk_coord, "origin": origin, "global_origin": global_origin,
+				}
+	return {}
 
 
 ## Leaving is never gated on still standing near the City Hall you entered

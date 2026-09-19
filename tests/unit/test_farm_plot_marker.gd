@@ -269,6 +269,9 @@ func test_a_root_crop_still_stands_on_real_tilled_earth():
 
 func test_a_bed_draws_a_full_tile_of_tilled_earth():
 	add_child_autofree(marker)
+	# Ploughed first: ground nobody has ever worked is grass, not a bed (see
+	# "the ploughed bed" section below).
+	marker.till_and_plant("wheat", 42)
 	var ground: Sprite2D = marker.soil_ground()
 	assert_not_null(ground, "a bed should stand on drawn soil")
 	assert_not_null(ground.texture, "with real art on it")
@@ -289,22 +292,22 @@ func test_the_tilled_earth_draws_beneath_the_mound_and_the_crop():
 	assert_lt(ground.z_index, FarmPlotMarker.LEAVES_Z_INDEX, "and so does the crop")
 
 
-## This asserted the OPPOSITE until 2026-09-17, and the reversal is the
-## player's, not a correction: the tilled tile was added because hiding the
-## mound left wheat rising out of bare meadow, and the answer to that was
-## *"now there are brown blobs instead of the planted wheat ... remove the
-## blobs"*. soil.png's cells carry a soft dark vignette, so a tile of it
-## under a bed reads as a brown blob rather than as ground -- which is the
-## same complaint the mound got, from a different sprite.
+## REVERSED AGAIN, and this reversal is the player's own clarification of
+## what the three "brown blob" reports were actually about: *"Die Erde war am
+## Ende ohne Blobs... einfach der neue Sprite soil.png und bevor dem
+## einpflanzen auf soil_mound.png ... lasse nur den prozedual generierten
+## blob weg."*
 ##
-## A root crop keeps both (see the tests above): its root really is in that
-## earth, and nothing was ever reported about those.
-func test_a_wheat_bed_stands_on_neither_the_mound_nor_the_tilled_tile():
+## So the complaint was never the illustrated earth -- it was
+## ProceduralSoilSprite's own drawn mound. soil.png goes back under every
+## bed, wheat included; soil_mound.png goes on a bed that has been ploughed
+## and not yet sown; and the procedural blob stays gone for good.
+func test_a_wheat_bed_stands_on_illustrated_earth_but_never_the_procedural_blob():
 	add_child_autofree(marker)
 	marker.till_and_plant(FarmPlotMarker.WHEAT_CROP_ID, 42)
 
-	assert_false(marker.is_showing_soil(), "the mound stays gone for wheat")
-	assert_false(marker.soil_ground().visible, "and so does the tile under it")
+	assert_false(marker.is_showing_soil(), "the procedural mound stays gone")
+	assert_true(marker.soil_ground().visible, "but the illustrated earth is the ground it stands on")
 
 
 ## Seeded from the bed's own tile, so a 3x2 bed is not six copies of one
@@ -321,23 +324,20 @@ func test_neighbouring_beds_differ_while_each_bed_stays_itself():
 	assert_gt(variants.size(), 1, "a whole bed of one variant is a tiled-looking bed")
 
 
-## Reported again once a full-tile tilled ground was added under every bed:
-## "now there are brown blobs instead of the planted wheat". The soil sheet's
-## cells carry a soft dark vignette, so a tile of it under a wheat bed reads
-## as a brown blob rather than as ground -- the same complaint the mound got,
-## from a different sprite. Same answer: a wheat bed is wheat.
-func test_a_wheat_bed_shows_no_tilled_ground_either():
+## Superseded by the same clarification: a wheat bed keeps its tilled
+## ground, because ploughed earth is what a field looks like.
+func test_a_wheat_bed_keeps_its_tilled_ground():
 	add_child_autofree(marker)
 	marker.till_and_plant("wheat", 42)
-	assert_false(marker.is_showing_tilled_ground(), "a wheat bed reads as wheat, not as a blob")
+	assert_true(marker.is_showing_tilled_ground(), "a ploughed field reads as ploughed")
 
 
-func test_a_harvested_wheat_bed_still_shows_no_tilled_ground():
+func test_a_harvested_wheat_bed_keeps_its_tilled_ground():
 	add_child_autofree(marker)
 	marker.till_and_plant("wheat", 42)
 	_grow_to_ready(marker)
 	marker.harvest()
-	assert_false(marker.is_showing_tilled_ground())
+	assert_true(marker.is_showing_tilled_ground(), "cut, and still ploughed ground")
 
 
 ## And a root crop keeps the ground it is grown in.
@@ -345,3 +345,164 @@ func test_a_root_crop_keeps_its_tilled_ground():
 	add_child_autofree(marker)
 	marker.till_and_plant("carrot", 7)
 	assert_true(marker.is_showing_tilled_ground())
+
+
+# -- every crop a village really sows has to be visible on the bed ---------
+
+const VillageFarm = preload("res://src/gameplay/village_farm.gd")
+
+
+## Reported live with the field in shot: "it plows the soil but then the
+## soil mound sprites don't appear and nothing gets planted, nothing grows
+## and nothing gets harvested".
+##
+## MEASURED on a real village before anything was touched
+## (tools/probe_village_farming.gd): the field's villager was a HERBALIST,
+## every bed really was sown (`sown=herb`), the crop really grew
+## (`grown=29.5/57.2`), beds really withered and 8 real herbs reached the
+## village market over one stretch of work. Not one of them was ever drawn:
+## IllustratedCropSprite has entries for carrot and potato only, so
+## leaf_texture("herb", ...) returns null -- and a Sprite2D that is VISIBLE
+## with a null texture draws nothing at all, over a full tile of bare
+## tilled soil. From the player's side that is indistinguishable from a
+## field where nothing happens.
+##
+## So this is the cross-pin, driven off VillageFarm's own table rather than
+## a hand-copied list: a crop a village can sow that its bed cannot draw
+## fails HERE, not in somebody's screenshot.
+func test_every_crop_a_village_farm_sows_really_draws_something():
+	for occupation in VillageFarm.CROP_BY_OCCUPATION:
+		var crop_id: String = VillageFarm.CROP_BY_OCCUPATION[occupation]
+		var bed := FarmPlotMarker.new()
+		add_child_autofree(bed)
+		assert_true(bed.till_and_plant(crop_id, 11), "%s should plant" % crop_id)
+		assert_true(
+			bed.is_drawing_a_crop(),
+			"a %s bed grows, withers and is harvested invisibly" % crop_id
+		)
+
+
+## ...and it must still be drawn once it is ripe, not only as a seedling.
+func test_every_crop_a_village_farm_sows_is_still_drawn_when_ready():
+	for occupation in VillageFarm.CROP_BY_OCCUPATION:
+		var crop_id: String = VillageFarm.CROP_BY_OCCUPATION[occupation]
+		var bed := FarmPlotMarker.new()
+		add_child_autofree(bed)
+		bed.till_and_plant(crop_id, 11)
+		_grow_to_ready(bed)
+		assert_eq(bed.plot.state, "ready", crop_id)
+		assert_true(bed.is_drawing_a_crop(), "a ripe %s bed draws nothing" % crop_id)
+
+
+## A visible sprite carrying no texture is the exact shape of the bug above,
+## so the query a bed answers has to be "is there really art on screen",
+## not "is the node visible".
+func test_an_empty_bed_draws_no_crop():
+	add_child_autofree(marker)
+	assert_false(marker.is_drawing_a_crop(), "nothing is sown, so nothing is drawn")
+
+
+## A herb grows UP out of the bed it is rooted in.
+##
+## ProceduralHerbSprite draws the plant filling its canvas from the bottom
+## row up (its stem reaches the last row on purpose), so a centred sprite
+## would bury the lower half of every herb in the soil. The illustrated
+## crops can be centred because their sheets are authored with the plant
+## high in the canvas above a baseline; a procedural sprite that fills its
+## own canvas cannot. Same root-pinned offset the wheat blades already use
+## for exactly this reason (see _redraw_wheat).
+func test_a_herb_is_rooted_at_the_bed_not_sunk_into_it():
+	add_child_autofree(marker)
+	marker.till_and_plant("herb", 3)
+	var leaves: Sprite2D = marker._leaves
+	assert_false(leaves.centered, "a plant pinned by its middle is half underground")
+	assert_almost_eq(
+		leaves.offset.y, -float(leaves.texture.get_height()), 0.001,
+		"the plant's own bottom row sits on the bed"
+	)
+	assert_almost_eq(
+		leaves.offset.x, -float(leaves.texture.get_width()) * 0.5, 0.001,
+		"and it stands in the middle of it"
+	)
+
+
+## ...while an illustrated crop keeps the centring its own sheet baseline
+## was authored for -- this must not become one rule for both.
+func test_an_illustrated_crop_keeps_its_own_centring():
+	add_child_autofree(marker)
+	marker.till_and_plant("carrot", 3)
+	assert_true(marker._leaves.centered, "carrot art is authored around a baseline")
+
+
+# -- the ploughed bed: illustrated earth, never the procedural blob --------
+#
+# Clarified after three rounds of "brown blob" reports: what was wrong was
+# the PROCEDURAL mound, not the illustrated earth. "Die Erde war am Ende
+# ohne Blobs... einfach der neue Sprite soil.png und bevor dem einpflanzen
+# auf soil_mound.png ... lasse nur den prozedual generierten blob weg."
+#
+# So: soil.png under every bed whatever it grows, soil_mound.png on a bed
+# that has been ploughed but not yet sown, and ProceduralSoilSprite's own
+# mound gone for good.
+
+const IllustratedSoilMoundSprite = preload("res://src/rendering/illustrated_soil_mound_sprite.gd")
+
+
+## The tilled ground is the ground, wheat included. It used to be hidden
+## under wheat, which is what made a wheat bed look unploughed.
+func test_every_bed_stands_on_its_own_tilled_earth_wheat_included():
+	for crop_id in ["wheat", "herb", "carrot"]:
+		var bed := FarmPlotMarker.new()
+		add_child_autofree(bed)
+		bed.till_and_plant(crop_id, 11)
+		assert_true(bed.is_showing_tilled_ground(), "a %s bed stands on tilled earth" % crop_id)
+
+
+## A bed that has been ploughed and not yet sown shows the mound -- the
+## real, illustrated one.
+func test_a_ploughed_bed_that_is_not_yet_sown_shows_the_illustrated_mound():
+	add_child_autofree(marker)
+	marker.till_and_plant("wheat", 11)
+	_grow_to_ready(marker)
+	marker.harvest()
+	assert_eq(marker.plot.state, "empty", "precondition: cut and waiting to be sown again")
+	assert_true(marker.is_showing_mound(), "a ploughed bed waiting for seed shows its mound")
+
+
+## ...and it is gone the moment something is growing in it, because then the
+## crop is what the bed shows.
+func test_a_sown_bed_shows_its_crop_and_not_the_mound():
+	add_child_autofree(marker)
+	marker.till_and_plant("wheat", 11)
+	assert_false(marker.is_showing_mound(), "something is growing here")
+	assert_true(marker.is_drawing_a_crop())
+
+
+## Ground nobody has ever ploughed shows neither.
+func test_untouched_ground_shows_no_mound():
+	add_child_autofree(marker)
+	assert_false(marker.is_showing_mound())
+
+
+## The mound is the illustrated sheet's, never ProceduralSoilSprite's blob
+## -- that is the one thing the three reports were actually about.
+func test_the_mound_is_the_illustrated_one_never_the_procedural_blob():
+	add_child_autofree(marker)
+	marker.till_and_plant("wheat", 11)
+	_grow_to_ready(marker)
+	marker.harvest()
+	assert_false(marker.is_showing_soil(), "the procedural mound stays gone")
+	var mound: Sprite2D = marker.mound()
+	assert_not_null(mound)
+	assert_not_null(mound.texture, "the illustrated sheet's own art")
+	assert_almost_eq(
+		mound.scale.x, IllustratedSoilMoundSprite.new().world_scale(), 0.001,
+		"at the world size a bed's mound really is"
+	)
+
+
+## Ground nobody has ever ploughed is grass, not a bed -- the tilled tile
+## appears with the plough, not with the marker.
+func test_untouched_ground_draws_no_tilled_earth():
+	add_child_autofree(marker)
+	assert_false(marker.is_showing_tilled_ground())

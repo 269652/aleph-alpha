@@ -1,5 +1,8 @@
 extends GutTest
 
+const ProceduralPorterSprite = preload("res://src/rendering/procedural_porter_sprite.gd")
+const ProceduralStructureSprite = preload("res://src/rendering/procedural_structure_sprite.gd")
+
 ## LogisticsMarker: the engine glue for a Logistics worker (see
 ## docs/concept/timber_construction.md's "Storage, logistics, and the
 ## autonomous dependency chain" section) -- walks to a source structure
@@ -182,3 +185,21 @@ func test_delivers_to_the_preferred_storage_instead_of_the_nearer_one():
 		manager.structure_stock_at(near_storage_tile.x, near_storage_tile.y, "plank"), 0,
 		"the nearer storage nearest_structure_position would have picked gets nothing"
 	)
+
+
+## Reported live with the Bollerwagen in shot: "The cart is not being pulled
+## by a worker, but by a floor tile???". This marker drew itself with
+## ProceduralStructureSprite's own `storage` TILE, left in as a placeholder
+## when the worker was first written and never replaced.
+func test_the_porter_is_drawn_as_a_person_not_a_storage_shed():
+	var sprite: Sprite2D = null
+	for child in marker.get_children():
+		if child is Sprite2D:
+			sprite = child
+			break
+	assert_not_null(sprite, "the porter is drawn at all")
+	var drawn := sprite.texture.get_image()
+	assert_eq(drawn.get_width(), ProceduralPorterSprite.SIZE, "a walker's size, not a building's")
+	var shed: Image = ProceduralStructureSprite.new().generate_texture("storage").get_image()
+	assert_ne(drawn.get_width(), shed.get_width(), "a person is not a shed")
+	assert_almost_eq(sprite.scale.x, 1.0, 0.0001, "and drawn at its own scale rather than a tile shrunk by half")

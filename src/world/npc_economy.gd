@@ -252,7 +252,35 @@ func record_real_harvest(item_id: String, count: int) -> void:
 	if count <= 0 or item_id == "":
 		return
 	_stock(item_id, float(count))
+	record_harvest_wage(item_id, count)
+
+
+## The PAY half of record_real_harvest, without the stocking.
+##
+## For a producer whose village has a real store (docs/concept/
+## village_warehouse.md, Mechanism 7): the crop stays on their own shelf for
+## the carter to fetch, so the village's sellable stock is credited when the
+## goods really ARRIVE there, not at the scythe. The villager is still paid
+## at the scythe, for exactly the same amount and at exactly the same moment
+## -- they did the work, and the pay is for the work.
+##
+## Deliberately the same arithmetic as above rather than a second rate: if
+## these could differ, a village with a store would pay its farmers
+## differently from one without, which nothing in the design asks for.
+func record_harvest_wage(item_id: String, count: int) -> void:
+	if count <= 0 or item_id == "":
+		return
 	_earn(float(count) * float(NpcProduction.YIELD_TO_GOLD_RATE))
+
+
+## The STOCKING half, without the pay -- what a delivery into the village's
+## own store is worth to the village (Mechanism 7). The producer was already
+## paid at the scythe; this is the moment the goods become something the
+## village can sell.
+func record_delivered_goods(item_id: String, count: int) -> void:
+	if count <= 0 or item_id == "":
+		return
+	_stock(item_id, float(count))
 
 
 ## Credits `count` units of something a real take produced ALONGSIDE the
@@ -448,6 +476,40 @@ func feeds_itself_from_work(world, pixel_position: Vector2) -> bool:
 	if not _production.is_producer(occupation):
 		return false
 	return _production.yield_per_second(occupation, world, pixel_position) > 0.0
+
+
+## Whether walking to the market would ACTUALLY get this villager a meal:
+## there is a whole unit of real food within reach, and either they can pay
+## for it or their village can advance them the subsistence wage that buys
+## one.
+##
+## A pure query -- it moves no gold, no stock and no purse, so asking must
+## never feed anybody.
+##
+## This is the gate on NpcMarker's hunger interrupt, and the honest general
+## form of the rule that file's own comments already state: "The interrupt is
+## for villagers who must BUY." A villager who CANNOT buy gains nothing by
+## standing at the well and loses the work that is the only thing able to
+## change either number.
+##
+## MEASURED on a real village (tools/probe_village_market.gd, with the whole
+## settlement ticked rather than one villager alone): a merchant was hungry
+## for 1589 of 1801 ticks with an empty purse, and their schedule's 825
+## "work at the stall" ticks were overridden on every single one of them.
+## The producer/own-field guards already on that interrupt were written for
+## exactly this deadlock and cover neither a merchant, a blacksmith, a guard
+## nor a nurse.
+##
+## The famine chain npc.md describes is untouched: a village with nothing to
+## eat still starves. What changes is that its villagers starve AT WORK,
+## where they might yet produce something, rather than queueing at a stall
+## with nothing on it.
+func can_obtain_a_meal(world = null, pixel_position: Vector2 = Vector2.ZERO) -> bool:
+	if not market.can_buy_meal() and not _structure_meal_available(world, pixel_position):
+		return false
+	if wallet.can_afford(VillageWages.subsistence_wage()):
+		return true
+	return VillageWages.can_pay_subsistence(purse_of(market))
 
 
 func _try_eat(is_working: bool, world, pixel_position: Vector2) -> void:

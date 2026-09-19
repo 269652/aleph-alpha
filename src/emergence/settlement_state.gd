@@ -14,10 +14,43 @@ extends RefCounted
 
 const ItemCatalog = preload("res://src/gameplay/item_catalog.gd")
 
-## How much food one household draws down per assessment. Tested against the
-## GROWING/STABLE/DECLINING classification it produces, not any specific
-## "correct" number -- there is no real economy data yet to derive one from.
-const FOOD_PER_HOUSEHOLD := 4
+## How long one settlement assessment is, in world seconds.
+##
+## Declared here rather than imported from EarthChunkManager, which preloads
+## this module -- the dependency can only run one way. Pinned against
+## SETTLEMENT_STEP_INTERVAL by test_the_assessment_this_module_prices_is_
+## the_one_the_world_runs, so the two cannot drift.
+const ASSESSMENT_SECONDS := 30.0
+
+## How much food one household draws down per assessment.
+##
+## MEASURED off the villagers' own hunger clock, not chosen. This used to be
+## 4, with its own comment admitting "there is no real economy data yet to
+## derive one from" -- and by the time there was, nobody went back. The data
+## is `Ethogram.drive_profile("", "villager")`'s hunger entry:
+##
+##     rise_seconds 50.0, threshold 0.5, meal 1.0
+##
+## A villager's hunger rises from 0 to 1 over 50 world-seconds and reads as
+## urgent at 0.5, so a fed villager is hungry again 25 seconds later, and one
+## meal (VillageMarket.FOOD_UNITS_PER_MEAL, one whole unit) takes it back to
+## zero. An assessment is 30 world-seconds. Run for 200 assessments against
+## the real NpcNeeds clock: 240 meals, exactly 1.2 food units per household
+## per assessment -- against the 4 this constant claimed, a 3.33x
+## overstatement of what a village actually eats.
+##
+## A literal rather than a computed expression because GDScript cannot call
+## into another script from a const initialiser (the same reason
+## Ethogram's own DRIVE_COMPANY entry writes out the quarter-day it means);
+## pinned to the real clock by test_a_households_draw_is_what_its_own_hunger
+## _clock_really_eats, so the derivation is a test and not a comment.
+##
+## ONE HOUSEHOLD IS ONE VILLAGER today -- the founding roster gives each
+## villager a house of their own (SettlementGenerator, VillageRenderer), so
+## this is a per-villager draw wearing a per-household name. A house that
+## really held two (BuildingCatalog.capacity_of allows up to three) would
+## need this multiplied by its residents, and nothing does that yet.
+const FOOD_PER_HOUSEHOLD := 1.2
 
 const GROWING := "growing"
 const STABLE := "stable"

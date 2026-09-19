@@ -115,9 +115,20 @@ func test_community_is_exactly_how_much_of_the_ladder_stands():
 	var bare: Dictionary = _thriving()
 	bare["ladder_share"] = VillageGrowth.ladder_share([])
 	assert_eq(float(HouseholdWellbeing.assess(bare)["needs"]["community"]), 0.0)
+	# Derived from the ladder itself, not a hand-copied list of rungs: this
+	# used to name ["sawmill", "city_hall", "warehouse"] as "half", and
+	# stopped being half the moment the warehouse left the ladder (it is
+	# raised at founding now -- docs/concept/village_warehouse.md), leaving
+	# the test asserting 0.5 against a real 0.4.
+	var half_the_rungs: Array = VillageGrowth.LADDER_BUILDING_IDS.slice(
+		0, VillageGrowth.LADDER_BUILDING_IDS.size() / 2
+	)
 	var halfway: Dictionary = _thriving()
-	halfway["ladder_share"] = VillageGrowth.ladder_share(["sawmill", "city_hall", "warehouse"])
-	assert_almost_eq(float(HouseholdWellbeing.assess(halfway)["needs"]["community"]), 0.5, 0.001)
+	halfway["ladder_share"] = VillageGrowth.ladder_share(half_the_rungs)
+	assert_almost_eq(
+		float(HouseholdWellbeing.assess(halfway)["needs"]["community"]),
+		float(half_the_rungs.size()) / float(VillageGrowth.LADDER_BUILDING_IDS.size()), 0.001
+	)
 
 
 # -- happiness: weighted, food heaviest ------------------------------------

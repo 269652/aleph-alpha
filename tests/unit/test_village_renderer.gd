@@ -17,6 +17,8 @@ const VillageLayout = preload("res://src/world/village_layout.gd")
 const VillageFarm = preload("res://src/gameplay/village_farm.gd")
 const VillagePond = preload("res://src/gameplay/village_pond.gd")
 const VillageSawmill = preload("res://src/gameplay/village_sawmill.gd")
+const VillageCart = preload("res://src/gameplay/village_cart.gd")
+const CartMarker = preload("res://src/rendering/cart_marker.gd")
 const ProceduralLandmarkSprite = preload("res://src/rendering/procedural_landmark_sprite.gd")
 
 const TILE_SIZE := 16
@@ -47,6 +49,15 @@ class StubWorld:
 	var water_cells: Dictionary = {}
 	var unbuildable_cells: Dictionary = {}
 	var occupied_cells: Dictionary = {}  # pre-seeded occupancy, e.g. an existing structure
+	## Every GLOBAL cell a farmstead asked to have cleared of trees and
+	## boulders (docs/concept/village_farms.md, "A farmstead clears its own
+	## ground"). The real EarthChunkManager fells what is standing there; a
+	## stub only has to remember it was asked.
+	var cleared_cells: Dictionary = {}
+
+	func clear_vegetation_at_global(cells: Array) -> void:
+		for cell in cells:
+			cleared_cells[cell] = true
 
 	## Mirrors the REAL EarthChunkManager.place_building's own occupancy
 	## check exactly (footprint cells AND the doorstep must all be
@@ -164,6 +175,16 @@ class StubWorld:
 	func modification_at_global(x: int, y: int) -> String:
 		return occupied_cells.get(Vector2i(x, y), "")
 
+	## Takes a tile back off the map, from whichever of the two dicts this
+	## stub is holding it in (see built_tiles' own note on why there are
+	## two).
+	func destroy_at_global(x: int, y: int) -> bool:
+		var cell := Vector2i(x, y)
+		var had: bool = occupied_cells.has(cell) or built_tiles.has(cell)
+		occupied_cells.erase(cell)
+		built_tiles.erase(cell)
+		return had
+
 	## Every tile stock_pond_at was called for -- the real
 	## EarthChunkManager's own entry point for putting a fisher's stocking
 	## into the water they just dug.
@@ -272,12 +293,25 @@ func _house_calls(world: StubWorld) -> Array:
 	return houses
 
 
+## How many villagers here earn a prop of their own -- the same three
+## conditions spawn_village itself applies, not a looser copy of them: a
+## trade with no work tag stands nothing, a tag the square already has
+## (merchant/stall, guard/gate) needs nothing, and a tag that names a real
+## BUILDING the village raises gets the building rather than a prop.
+##
+## That last clause is not decoration. A lumberjack works at the `sawmill`
+## and a carter at the `warehouse`, both real catalog buildings; asking for a
+## prop falls back to the well art, which is how every lumberjack once stood
+## a second, spurious well in the middle of the village.
 func _workspot_prop_count(settlement: Dictionary) -> int:
 	var count := 0
 	for npc in settlement.npcs:
 		var work_tag: String = NpcIdentity.WORK_LOCATION_BY_OCCUPATION.get(npc.occupation, "")
-		if work_tag != "" and not settlement.landmarks.has(work_tag):
-			count += 1
+		if work_tag == "" or settlement.landmarks.has(work_tag):
+			continue
+		if BuildingCatalog.has_building(work_tag):
+			continue
+		count += 1
 	return count
 
 
@@ -575,18 +609,28 @@ func test_spawn_village_does_not_crash_without_a_world():
 	assert_eq(npc_count, SettlementGenerator.POPULATION, "every villager still gets a marker, falling back to their ring anchor as home")
 
 
-func test_merchant_villagers_get_a_personal_trading_stand_near_their_own_house():
+## SUPERSEDED, and kept as a statement of what replaced it. A merchant used
+## to get a personal stand pitched two tiles south of their own front door,
+## on top of one shared village-square stall that stood there for ever
+## whether or not anybody traded. Reported live with such a stand in shot:
+## "the market stands should only be put up when an NPC stands behind them
+## to sell goods ... also the stand should ... be placed on the plaza
+## anyways". A merchant's stand is a cell OF the square now, and the
+## square's own stall is the first of them rather than a fourth thing
+## standing beside three others -- see "the market square's stands" at the
+## end of this file.
+func test_a_merchant_gets_a_stand_of_their_own_on_the_square():
 	var coord := _find_settlement_chunk_with_merchant("grassland")
 	var world := StubWorld.new()
 	var spawned := renderer.spawn_village(parent, coord, coord * CHUNK_SIZE, CHUNK_SIZE, TILE_SIZE, "grassland", world)
-	var stall_count := 0
-	for node in spawned:
-		if node.get_meta("landmark_id", "") == "stall":
-			stall_count += 1
-	assert_gte(stall_count, 2, "the shared village stall plus at least one merchant's own personal stand")
+	assert_false(_stall_nodes(spawned).is_empty(), "a village with a merchant has a market")
 
 
-func test_non_merchant_villagers_do_not_get_a_personal_trading_stand():
+## There is no longer a shared stall standing in ADDITION to the merchants'
+## own: the square's stall IS the first merchant's stand. So the count is
+## one per merchant, capped by what the square has room for -- and a village
+## nobody trades in pitches nothing at all.
+func test_a_village_pitches_one_stand_per_merchant_and_no_more():
 	var coord := _find_settlement_chunk("grassland")
 	var world := StubWorld.new()
 	var spawned := renderer.spawn_village(parent, coord, coord * CHUNK_SIZE, CHUNK_SIZE, TILE_SIZE, "grassland", world)
@@ -595,11 +639,7 @@ func test_non_merchant_villagers_do_not_get_a_personal_trading_stand():
 	for npc in settlement.npcs:
 		if npc.occupation == "merchant":
 			merchant_count += 1
-	var stall_count := 0
-	for node in spawned:
-		if node.get_meta("landmark_id", "") == "stall":
-			stall_count += 1
-	assert_eq(stall_count, 1 + merchant_count, "one shared stall plus exactly one per merchant")
+	assert_eq(_stall_nodes(spawned).size(), merchant_count, "exactly one stand per merchant")
 
 
 func test_farmer_blacksmith_fisher_and_herbalist_each_get_their_own_workspot_prop():
@@ -681,17 +721,23 @@ func test_villagers_are_given_the_world_so_they_can_tell_when_theyre_in_water():
 
 
 ## A landmark_id can legitimately tag MORE than one spawned node -- e.g.
-## "stall" is both the settlement's own shared landmark AND the tag
-## VillageRenderer gives a merchant's personal trading stand (a separate
-## node at the merchant's own stand position). So this only requires that
-## SOME node carrying the id sits at the shared landmark's position, not
-## that EVERY node carrying it does.
+## "stall" is the tag on every one of a village's market stands. So this
+## only requires that SOME node carrying the id sits at the landmark's
+## position, not that EVERY node carrying it does.
+##
+## "stall" is excluded outright: it is no longer an always-drawn landmark.
+## A market stand is furniture, up only while its trader is behind it, and a
+## village nobody trades in has none at all -- see "the market square's
+## stands" at the end of this file. Which stands exist, and where, is pinned
+## there instead.
 func test_landmarks_are_rendered_as_sprites_at_their_positions():
 	var coord := _find_settlement_chunk("grassland")
 	var world := StubWorld.new()
 	var spawned := renderer.spawn_village(parent, coord, coord * CHUNK_SIZE, CHUNK_SIZE, TILE_SIZE, "grassland", world)
 	var settlement := _generator.generate_settlement(coord, coord * CHUNK_SIZE, CHUNK_SIZE, TILE_SIZE)
 	for landmark_id in settlement.landmarks:
+		if landmark_id == "stall":
+			continue
 		var found := false
 		for node in spawned:
 			if node.get_meta("landmark_id", "") == landmark_id and node is Sprite2D:
@@ -710,14 +756,44 @@ func test_spawned_npc_markers_have_an_identity_and_a_schedule_source():
 			assert_ne(node.identity.npc_name, "")
 
 
+## The well and the gate are the settlement's, shared by everybody. The
+## STALL is not, and deliberately: the square's trading spot is whichever
+## market stand really got pitched (VillageLayout.market_stand_cells), and a
+## merchant with a stand of their own carries that one instead, or every
+## villager in the village would walk to one merchant's trestle. So this
+## asks what is really shared, and asks of the stall only that it is a real
+## stand of this village.
+##
+## It used to compare the whole dictionary, which held while the founding
+## roster was five villagers and that chunk happened to roll no merchant at
+## all. Ten villagers roll one, and the comparison started failing on a
+## village behaving exactly as designed.
 func test_spawned_npc_markers_know_the_settlements_shared_landmarks():
 	var coord := _find_settlement_chunk("grassland")
 	var world := StubWorld.new()
 	var spawned := renderer.spawn_village(parent, coord, coord * CHUNK_SIZE, CHUNK_SIZE, TILE_SIZE, "grassland", world)
 	var settlement := _generator.generate_settlement(coord, coord * CHUNK_SIZE, CHUNK_SIZE, TILE_SIZE)
+	var stands := {}
 	for node in spawned:
-		if node is NpcMarker:
-			assert_eq(node.landmarks, settlement.landmarks)
+		if node is NpcMarker and node.market_stand != null:
+			stands[node.market_stand.position] = true
+	var checked := 0
+	for node in spawned:
+		if not (node is NpcMarker):
+			continue
+		checked += 1
+		for landmark_id in ["well", "gate"]:
+			assert_eq(
+				node.landmarks.get(landmark_id), settlement.landmarks[landmark_id],
+				"%s is the whole settlement's" % landmark_id
+			)
+		assert_true(node.landmarks.has("stall"), "everybody knows where to trade")
+		if not stands.is_empty():
+			assert_true(
+				stands.has(node.landmarks["stall"]),
+				"a villager sent to the stall must be sent to a stand that really stands"
+			)
+	assert_gt(checked, 0, "precondition: the village really spawned villagers")
 
 
 func test_positions_are_deterministic_for_the_same_chunk():
@@ -1138,9 +1214,22 @@ func _props_in(spawned: Array) -> Array:
 
 
 ## Everything south of the street is river -- exactly the reported shape.
+## A river across the chunk's southern ground, beginning past the village's
+## THIRD street row.
+##
+## It used to start one row south of the main street, which drowned all but
+## one of the rows the village had left to build on. That left a site a
+## five-villager roster could still just about squeeze onto and a
+## ten-villager one cannot
+## -- and a roster a site cannot house founds nothing at all, by design
+## (_place_new_village: "founding there is what left a riverside chunk with
+## a market square and one house"). The tests below then ran against a
+## village that did not exist and asserted nothing at all. The point of
+## them is that nothing STANDS in water, so the fixture has to leave a
+## village standing.
 func _flood_south_of_the_street(world: StubWorld, coord: Vector2i) -> void:
 	var street_y: int = VillageLayout.skeleton(CHUNK_SIZE, VillageLayout.seed_for(coord))["street_y"]
-	for y in range(street_y + 1, CHUNK_SIZE):
+	for y in range(street_y + 2 * VillageLayout.STREET_PITCH_TILES + 1, CHUNK_SIZE):
 		for x in CHUNK_SIZE:
 			world.water_cells[coord * CHUNK_SIZE + Vector2i(x, y)] = true
 
@@ -1156,6 +1245,7 @@ func test_no_prop_and_no_villager_ever_stands_in_water():
 
 	var spawned := renderer.spawn_village(parent, coord, coord * CHUNK_SIZE, CHUNK_SIZE, TILE_SIZE, "grassland", world)
 
+	assert_false(spawned.is_empty(), "precondition: the village really was founded beside the river")
 	for node in spawned:
 		var tile := _tile_of(node.position)
 		assert_false(
@@ -1172,12 +1262,15 @@ func test_a_villagers_workspot_is_never_in_water_either():
 
 	var spawned := renderer.spawn_village(parent, coord, coord * CHUNK_SIZE, CHUNK_SIZE, TILE_SIZE, "grassland", world)
 
+	var checked := 0
 	for node in spawned:
 		if node is NpcMarker:
+			checked += 1
 			assert_false(
 				world.water_cells.has(_tile_of(node.workspot_position)),
 				"a villager would walk into the river to work"
 			)
+	assert_gt(checked, 0, "precondition: the village beside the river really has villagers")
 
 
 ## Dry ground everywhere: the props are still there. The fix must site
@@ -1202,6 +1295,13 @@ func test_a_personal_workspot_prop_never_stands_on_a_road_or_a_building():
 	var personal := 0
 	for node in _props_in(spawned):
 		if not bool(node.get_meta("personal", false)):
+			continue
+		# A market stand is the one personal prop that BELONGS on the
+		# paving: it is a cell of the village square (see "the market
+		# square's stands" at the end of this file, and
+		# test_a_market_stand_stands_on_the_villages_own_paving, which is
+		# this same rule the other way round for it).
+		if node.get_meta("landmark_id", "") == "stall":
 			continue
 		personal += 1
 		var tile := _tile_of(node.position)
@@ -1230,16 +1330,23 @@ func test_the_shared_landmarks_stand_on_the_villages_own_paving():
 
 ## A merchant's PERSONAL stand is the same rule -- it was the other blind
 ## offset, two tiles south of the door.
-func test_a_merchants_personal_stand_is_sited_on_real_ground():
+## A drowned square has no market to pitch, rather than stalls floating on
+## the river. Nothing is dropped silently that a player would miss: the
+## merchants are still there and still trade (their schedule keeps
+## resolving the square's own trading spot), there is simply no trestle
+## standing in the water.
+func test_a_merchants_stand_is_never_pitched_on_water():
 	var coord := _find_settlement_chunk_with_merchant("grassland")
 	var world := StubWorld.new()
 	_flood_south_of_the_street(world, coord)
 
 	var spawned := renderer.spawn_village(parent, coord, coord * CHUNK_SIZE, CHUNK_SIZE, TILE_SIZE, "grassland", world)
 
-	for node in spawned:
-		if node.has_meta("landmark_id") and node.get_meta("landmark_id") == "stall":
-			assert_false(world.water_cells.has(_tile_of(node.position)), "a stall floating on the river")
+	var drowned := 0
+	for node in _stall_nodes(spawned):
+		if world.water_cells.has(_tile_of(node.position)):
+			drowned += 1
+	assert_eq(drowned, 0, "a stall floating on the river")
 
 
 # -- a village fells the trees it needs ------------------------------------
@@ -1644,22 +1751,23 @@ func test_a_village_raises_one_farmhouse_for_every_villager_who_farms():
 	)
 
 
+## Driven against a hand-built roster rather than by hunting the map for a
+## village that happens to have rolled nobody who farms: SettlementGenerator.
+## _ensure_somebody_farms makes that precondition unreachable now (every
+## village gets somebody who works the land -- see docs/concept/
+## village_farms.md), and a test whose precondition can never be met is a
+## test that silently stops testing. The RULE it pins is still real, so it
+## is exercised where it lives.
 func test_a_village_with_nobody_who_farms_raises_no_farmhouse():
-	var coord := Vector2i.ZERO
-	var found := false
-	for x in 400:
-		var candidate := Vector2i(x, 4)
-		if not _generator.has_settlement_at(candidate, "grassland"):
-			continue
-		if _farming_villager_count(candidate) == 0:
-			coord = candidate
-			found = true
-			break
-	assert_true(found, "precondition: a settlement chunk whose whole roster happens not to farm")
-	if not found:
-		return
+	var coord := _find_settlement_chunk("grassland")
 	var world := StubWorld.new()
-	renderer.spawn_village(parent, coord, coord * CHUNK_SIZE, CHUNK_SIZE, TILE_SIZE, "grassland", world)
+	var nobody_farms: Array = [
+		NpcIdentity.new(1, "blacksmith"), NpcIdentity.new(2, "guard"),
+		NpcIdentity.new(3, "merchant"), NpcIdentity.new(4, "nurse"),
+	]
+	for npc in nobody_farms:
+		assert_eq(VillageFarm.crop_for(npc.occupation), "", "precondition: %s does not farm" % npc.occupation)
+	renderer._place_farms_if_missing(coord, CHUNK_SIZE, nobody_farms, world)
 	assert_eq(
 		_buildings_of(world, VillageFarm.FARM_BUILDING_ID).size(), 0,
 		"a farmhouse nobody would ever work is a building the village should not own"
@@ -2251,14 +2359,46 @@ func test_a_fisher_gets_a_real_fenced_pond_beside_their_own_house():
 			water.append(cell)
 	assert_gt(water.size(), 0, "the village's fisher has nowhere to fish")
 
-	var min_cell: Vector2i = water[0]
-	var max_cell: Vector2i = water[0]
-	for cell in water:
-		min_cell = Vector2i(mini(min_cell.x, (cell as Vector2i).x), mini(min_cell.y, (cell as Vector2i).y))
-		max_cell = Vector2i(maxi(max_cell.x, (cell as Vector2i).x), maxi(max_cell.y, (cell as Vector2i).y))
-	var size := max_cell - min_cell + Vector2i.ONE
-	assert_true(VillageFarm.FIELD_SHAPES.has(size), "a pond spans %s, not a shape that was asked for" % str(size))
-	assert_eq(water.size(), size.x * size.y, "the pond has a hole in it")
+	# EACH pond, not the union of them. A fisher digs their OWN water, so a
+	# village with several fishers has several ponds scattered across the
+	# chunk -- measuring the bounding box of all of them at once described a
+	# rectangle no pond has, and only ever agreed with one pond because the
+	# founding roster used to be small enough to roll a single fisher.
+	var checked := 0
+	for pond in _connected_groups(water):
+		checked += 1
+		var min_cell: Vector2i = pond[0]
+		var max_cell: Vector2i = pond[0]
+		for cell in pond:
+			min_cell = Vector2i(mini(min_cell.x, (cell as Vector2i).x), mini(min_cell.y, (cell as Vector2i).y))
+			max_cell = Vector2i(maxi(max_cell.x, (cell as Vector2i).x), maxi(max_cell.y, (cell as Vector2i).y))
+		var size := max_cell - min_cell + Vector2i.ONE
+		assert_true(VillageFarm.FIELD_SHAPES.has(size), "a pond spans %s, not a shape that was asked for" % str(size))
+		assert_eq(pond.size(), size.x * size.y, "the pond has a hole in it")
+	assert_gt(checked, 0, "precondition: at least one pond was dug")
+
+
+## The cells of `cells` grouped into orthogonally-connected islands -- one
+## entry per real pond, however many fishers a village has.
+func _connected_groups(cells: Array) -> Array:
+	var remaining := {}
+	for cell in cells:
+		remaining[cell] = true
+	var groups: Array = []
+	while not remaining.is_empty():
+		var frontier: Array = [remaining.keys()[0]]
+		remaining.erase(frontier[0])
+		var group: Array = []
+		while not frontier.is_empty():
+			var cell: Vector2i = frontier.pop_back()
+			group.append(cell)
+			for offset in [Vector2i(1, 0), Vector2i(-1, 0), Vector2i(0, 1), Vector2i(0, -1)]:
+				var neighbour: Vector2i = cell + offset
+				if remaining.has(neighbour):
+					remaining.erase(neighbour)
+					frontier.append(neighbour)
+		groups.append(group)
+	return groups
 
 
 ## And it is FENCED, like the field it is modelled on -- the ask says "a
@@ -2363,6 +2503,166 @@ func test_nobody_else_is_handed_a_sawmill():
 				node.sawmill_cell, NpcMarker.NO_SAWMILL,
 				"%s does not work timber" % node.identity.occupation
 			)
+
+
+# -- a farmstead clears its own ground (docs/concept/village_farms.md) -----
+#
+# Reported in play with the enclosure in shot: "the Farmhouse should clear
+# trees in its bed enclosure". The beds are the one real placement here that
+# never felled what was in its way -- they are not written tiles, so nothing
+# ever called _clear_vegetation_on_cells on them, and a farmer tilling a bed
+# can clear the ground cover but has no axe.
+
+
+func _farm_field_cells(spawned: Array) -> Dictionary:
+	var cells: Dictionary = {}
+	for node in spawned:
+		if node is NpcMarker:
+			for cell in node.field_cells:
+				cells[cell] = true
+	return cells
+
+
+func test_every_bed_a_farmstead_claims_is_cleared_of_what_stood_on_it():
+	var coord := _find_settlement_chunk_with_occupation("grassland", "farmer", 3)
+	var world := StubWorld.new()
+	var spawned := renderer.spawn_village(
+		parent, coord, coord * CHUNK_SIZE, CHUNK_SIZE, TILE_SIZE, "grassland", world
+	)
+	var beds := _farm_field_cells(spawned)
+	assert_false(beds.is_empty(), "precondition: this village really laid beds")
+	for cell in beds:
+		assert_true(
+			world.cleared_cells.has(cell),
+			"a tree was left standing in a bed at %s" % str(cell)
+		)
+
+
+## And nothing beyond them: a village fells the timber it needs, not the
+## wood it happens to be standing near.
+func test_a_farmstead_clears_its_beds_and_not_the_wood_around_them():
+	var coord := _find_settlement_chunk_with_occupation("grassland", "farmer", 3)
+	var world := StubWorld.new()
+	var spawned := renderer.spawn_village(
+		parent, coord, coord * CHUNK_SIZE, CHUNK_SIZE, TILE_SIZE, "grassland", world
+	)
+	var beds := _farm_field_cells(spawned)
+	assert_false(beds.is_empty(), "precondition: this village really laid beds")
+	for cell in world.cleared_cells:
+		assert_true(beds.has(cell), "%s is not anybody's bed" % str(cell))
+
+
+## A world that cannot answer simply has nothing to clear -- the same
+## fail-open shape every other world hook this renderer makes already has.
+func test_a_world_that_cannot_clear_anything_still_founds_its_village():
+	var coord := _find_settlement_chunk_with_occupation("grassland", "farmer", 3)
+	var world := StubWorld.new()
+	var spawned := renderer.spawn_village(
+		parent, coord, coord * CHUNK_SIZE, CHUNK_SIZE, TILE_SIZE, "grassland", world
+	)
+	assert_false(spawned.is_empty(), "the village stands either way")
+
+
+# -- the store has a carter (docs/concept/village_warehouse.md, Mech. 4) ---
+#
+# Reported in play, and then corrected: "The warehouse also needs to bind a
+# worker which then collects all ressources from every production building",
+# then "It should be a real NPC pulling the cart, not an additional sprite".
+
+
+func _carter_markers(spawned: Array) -> Array:
+	var out: Array = []
+	for node in spawned:
+		if node is NpcMarker and node.identity.occupation == VillageCart.OCCUPATION:
+			out.append(node)
+	return out
+
+
+func test_a_carter_is_told_which_store_is_theirs_and_whose_shelves_to_empty():
+	var coord := _find_settlement_chunk_with_occupation("grassland", VillageCart.OCCUPATION, 3)
+	var world := StubWorld.new()
+	# Real timber, so the village raises a mill and the round has a producer
+	# on it at all.
+	_forest_band(world, coord)
+	var spawned := renderer.spawn_village(
+		parent, coord, coord * CHUNK_SIZE, CHUNK_SIZE, TILE_SIZE, "grassland", world
+	)
+	var stores := _buildings_of(world, VillageLayout.WAREHOUSE_BUILDING_ID)
+	assert_gt(stores.size(), 0, "precondition: this village raised a store")
+	var carters := _carter_markers(spawned)
+	assert_gt(carters.size(), 0, "precondition: somebody in this village carts")
+	var expected_store: Vector2i = coord * CHUNK_SIZE + stores[0]["origin_local"]
+	var expected_producers: Dictionary = {}
+	for call in world.place_calls:
+		if BuildingCatalog.PRODUCTION_BUILDING_IDS.has(call["building_id"]):
+			expected_producers[coord * CHUNK_SIZE + (call["origin_local"] as Vector2i)] = true
+	assert_gt(expected_producers.size(), 0, "precondition: the village has producers to empty")
+	for carter in carters:
+		assert_eq(carter.store_cell, expected_store, "a carter carts for their own village's store")
+		var handed: Dictionary = {}
+		for cell in carter.producer_cells:
+			handed[cell] = true
+		assert_eq(
+			handed, expected_producers,
+			"and walks the round of every production building the village raised"
+		)
+
+
+## A villager born to another trade is never handed the round, or every
+## trade in the village would be hauling.
+func test_nobody_else_is_handed_the_stores_round():
+	var coord := _find_settlement_chunk_with_occupation("grassland", VillageCart.OCCUPATION, 3)
+	var world := StubWorld.new()
+	_forest_band(world, coord)
+	var spawned := renderer.spawn_village(
+		parent, coord, coord * CHUNK_SIZE, CHUNK_SIZE, TILE_SIZE, "grassland", world
+	)
+	for node in spawned:
+		if node is NpcMarker and node.identity.occupation != VillageCart.OCCUPATION:
+			assert_eq(
+				node.store_cell, NpcMarker.NO_STORE,
+				"%s does not cart" % node.identity.occupation
+			)
+			assert_null(node.cart, "and pulls nothing")
+
+
+## The wagon is a real node spawned WITH the village, so it is freed with
+## the chunk the same way every villager and prop is -- not a node the
+## renderer leaks behind every time the player walks out of a village
+## (measured once already: a porter and a cart left alive per load/unload
+## cycle was the reported framerate decay).
+func test_a_carter_is_given_a_real_cart_that_lives_and_dies_with_the_village():
+	var coord := _find_settlement_chunk_with_occupation("grassland", VillageCart.OCCUPATION, 3)
+	var world := StubWorld.new()
+	_forest_band(world, coord)
+	var spawned := renderer.spawn_village(
+		parent, coord, coord * CHUNK_SIZE, CHUNK_SIZE, TILE_SIZE, "grassland", world
+	)
+	var carters := _carter_markers(spawned)
+	assert_gt(carters.size(), 0, "precondition: somebody in this village carts")
+	for carter in carters:
+		assert_true(carter.cart is CartMarker, "a carter pulls a real wagon")
+		assert_true(
+			spawned.has(carter.cart),
+			"spawned with the village, so it is freed with the village"
+		)
+
+
+## And the store is somewhere their schedule can actually name -- without
+## it, a carter's work tag resolves to nothing and they fall back to a
+## decorative workspot, exactly the bug the sawmill tag was added for.
+func test_the_store_is_a_place_a_carters_schedule_can_resolve():
+	var coord := _find_settlement_chunk_with_occupation("grassland", VillageCart.OCCUPATION, 3)
+	var world := StubWorld.new()
+	_forest_band(world, coord)
+	var spawned := renderer.spawn_village(
+		parent, coord, coord * CHUNK_SIZE, CHUNK_SIZE, TILE_SIZE, "grassland", world
+	)
+	for carter in _carter_markers(spawned):
+		assert_true(
+			carter.landmarks.has(VillageCart.WORK_LOCATION),
+			"the store the village really raised is on the carter's own map"
+		)
 
 
 ## A fisher is told which water is theirs and which building they fill --
@@ -2502,3 +2802,315 @@ func test_a_village_founded_without_a_store_is_given_one_on_reload():
 
 	renderer.spawn_village(parent, coord, coord * CHUNK_SIZE, CHUNK_SIZE, TILE_SIZE, "grassland", world)
 	assert_eq(_placed(world, "warehouse").size(), 1, "a village that lacks a store is given one")
+
+
+# -- the market square's stands -------------------------------------------
+#
+# Reported live with a stand in shot, pitched in long grass well off the
+# paving: "the market stands should only be put up when an NPC stands behind
+# them to sell goods ... also the stand should clear long grass around it
+# and be placed on the plaza anyways".
+#
+# Both halves were one bug. A merchant's personal stand was pitched two
+# tiles south of that merchant's own front door -- out in the meadow -- and
+# nobody ever stood behind it, because NpcMarker._resolve_location sends
+# every merchant to landmarks["stall"], the square's single stall. So the
+# stand a player walked past was decoration by construction.
+#
+# A market is where the market is: every stand is a cell OF the square (see
+# VillageLayout.market_stand_cells), each merchant trades at their own, and
+# a stand is up only while its merchant is behind it (NpcMarker.stand_is_up).
+
+
+func _stall_nodes(spawned: Array) -> Array:
+	var out: Array = []
+	for node in spawned:
+		if node.get_meta("landmark_id", "") == "stall":
+			out.append(node)
+	return out
+
+
+func _merchant_markers(spawned: Array) -> Array:
+	var out: Array = []
+	for node in spawned:
+		if node is NpcMarker and node.identity.occupation == "merchant":
+			out.append(node)
+	return out
+
+
+func test_every_market_stand_stands_on_the_village_square():
+	var coord := _find_settlement_chunk_with_merchant("grassland")
+	var world := StubWorld.new()
+	var spawned := renderer.spawn_village(parent, coord, coord * CHUNK_SIZE, CHUNK_SIZE, TILE_SIZE, "grassland", world)
+	var skeleton: Dictionary = VillageLayout.skeleton(CHUNK_SIZE, VillageLayout.seed_for(coord))
+	var plaza: Rect2i = skeleton["plaza"]
+	var stalls := _stall_nodes(spawned)
+	assert_false(stalls.is_empty(), "a village with a merchant has a market")
+	for node in stalls:
+		var local: Vector2i = _tile_of(node.position) - coord * CHUNK_SIZE
+		assert_true(plaza.has_point(local), "a stand at %s is off the square" % str(local))
+
+
+## ...and the square is paved, which is the whole of "clear the long grass
+## around it": every ground-cover sim in the chunk blocks a built surface
+## (EarthChunkManager._is_built_surface covers road tiles, and
+## _block_ground_cover_on_cells is what clears and keeps clearing them). A
+## stand standing on the village's own paving therefore has no tall grass,
+## flowers, scrub or lichen under it or beside it, with no second clearing
+## mechanism of its own.
+func test_a_market_stand_stands_on_the_villages_own_paving():
+	var coord := _find_settlement_chunk_with_merchant("grassland")
+	var world := StubWorld.new()
+	var spawned := renderer.spawn_village(parent, coord, coord * CHUNK_SIZE, CHUNK_SIZE, TILE_SIZE, "grassland", world)
+	var roads := _road_cells_of(world)
+	for node in _stall_nodes(spawned):
+		assert_true(
+			roads.has(_tile_of(node.position)),
+			"a stand at %s stands on bare ground, not on the square's paving" % str(_tile_of(node.position))
+		)
+
+
+func test_each_merchant_trades_at_a_stand_of_their_own():
+	var coord := _find_settlement_chunk_with_merchant("grassland")
+	var world := StubWorld.new()
+	var spawned := renderer.spawn_village(parent, coord, coord * CHUNK_SIZE, CHUNK_SIZE, TILE_SIZE, "grassland", world)
+	var seen := {}
+	for merchant in _merchant_markers(spawned):
+		assert_not_null(merchant.market_stand, "a merchant with no stand has nothing to sell from")
+		assert_eq(
+			merchant.landmarks["stall"], merchant.market_stand.position,
+			"a merchant's schedule must send them to their OWN stand"
+		)
+		assert_false(seen.has(merchant.market_stand), "two merchants behind one stand")
+		seen[merchant.market_stand] = true
+
+
+## A village nobody trades in has no market -- which is the point of the
+## whole change: a stand with nobody behind it should not be standing.
+func test_a_village_with_no_merchant_pitches_no_market_stand():
+	var coord := _find_settlement_chunk_without_merchant("grassland")
+	var world := StubWorld.new()
+	var spawned := renderer.spawn_village(parent, coord, coord * CHUNK_SIZE, CHUNK_SIZE, TILE_SIZE, "grassland", world)
+	assert_true(_stall_nodes(spawned).is_empty(), "nobody sells here, so nothing is pitched")
+
+
+## Every stand starts taken in, whatever hour the chunk loaded at -- see
+## NpcMarker.market_stand's own setter.
+func test_a_freshly_spawned_market_stand_is_taken_in():
+	var coord := _find_settlement_chunk_with_merchant("grassland")
+	var world := StubWorld.new()
+	var spawned := renderer.spawn_village(parent, coord, coord * CHUNK_SIZE, CHUNK_SIZE, TILE_SIZE, "grassland", world)
+	for node in _stall_nodes(spawned):
+		assert_false(node.visible, "a stand nobody has reached yet is not up")
+
+
+func _find_settlement_chunk_without_merchant(biome: String) -> Vector2i:
+	for x in 400:
+		var coord := Vector2i(x, 3)  # a row of its own, like the other _find_* helpers
+		if not _generator.has_settlement_at(coord, biome):
+			continue
+		var settlement := _generator.generate_settlement(coord, coord * CHUNK_SIZE, CHUNK_SIZE, TILE_SIZE)
+		var has_merchant := false
+		for npc in settlement.npcs:
+			if npc.occupation == "merchant":
+				has_merchant = true
+		if not has_merchant:
+			return coord
+	fail_test("no settlement chunk without a merchant found within 400 chunks")
+	return Vector2i.ZERO
+
+
+## The square's canonical trading spot IS the first stand: a villager who
+## resolves the `stall` tag -- and every merchant past the ones the square
+## had room for -- must walk to somewhere a stand really stands.
+func test_the_stall_tag_resolves_to_a_real_stand():
+	var coord := _find_settlement_chunk_with_merchant("grassland")
+	var world := StubWorld.new()
+	var spawned := renderer.spawn_village(parent, coord, coord * CHUNK_SIZE, CHUNK_SIZE, TILE_SIZE, "grassland", world)
+	var stalls := _stall_nodes(spawned)
+	assert_false(stalls.is_empty(), "precondition: this village has a market")
+	var positions := {}
+	for node in stalls:
+		positions[node.position] = true
+	for node in spawned:
+		if node is NpcMarker:
+			assert_true(
+				positions.has(node.landmarks["stall"]),
+				"%s would walk to a trading spot with no stand on it" % node.identity.npc_name
+			)
+
+
+# -- props you cannot walk through ------------------------------------------
+# Reported live: "The well doesn't have a hitbox.. it should block walking".
+# Every landmark was a bare Sprite2D with a shadow and nothing else, so a
+# villager and the player alike walked straight through the stonework.
+
+func test_the_well_blocks_walking():
+	var coord := _find_settlement_chunk("grassland")
+	var world := StubWorld.new()
+	var spawned := renderer.spawn_village(parent, coord, coord * CHUNK_SIZE, CHUNK_SIZE, TILE_SIZE, "grassland", world)
+
+	var well: Node2D = null
+	for node in spawned:
+		if node.has_meta("landmark_id") and String(node.get_meta("landmark_id")) == "well":
+			well = node
+			break
+	assert_not_null(well, "precondition: the village really laid a well")
+	var body: StaticBody2D = null
+	for child in well.get_children():
+		if child is StaticBody2D:
+			body = child
+			break
+	assert_not_null(body, "you cannot walk through a stone well")
+	var shape: CollisionShape2D = null
+	for child in body.get_children():
+		if child is CollisionShape2D:
+			shape = child
+			break
+	assert_not_null(shape, "and the body needs a real shape to stop anything")
+	assert_gt((shape.shape as RectangleShape2D).size.x, 0.0)
+
+
+## What you CAN walk through stays walkable: a gate is an opening in a wall
+## and a stall is a trestle you step up to, not a wall across the square.
+func test_a_gate_and_a_stall_are_still_walked_through():
+	var coord := _find_settlement_chunk("grassland")
+	var world := StubWorld.new()
+	var spawned := renderer.spawn_village(parent, coord, coord * CHUNK_SIZE, CHUNK_SIZE, TILE_SIZE, "grassland", world)
+
+	var checked := 0
+	for node in spawned:
+		if not node.has_meta("landmark_id"):
+			continue
+		var landmark_id := String(node.get_meta("landmark_id"))
+		if landmark_id == "well":
+			continue
+		checked += 1
+		for child in node.get_children():
+			assert_false(child is StaticBody2D, "%s is not something to bump into" % landmark_id)
+	assert_gt(checked, 0, "precondition: the village really laid other props")
+
+
+## The rule itself, so what is solid is a decision rather than whatever the
+## renderer happened to do.
+func test_which_props_are_solid_is_stated_rather_than_implied():
+	assert_true(VillageRenderer.landmark_is_solid("well"))
+	assert_false(VillageRenderer.landmark_is_solid("gate"))
+	assert_false(VillageRenderer.landmark_is_solid("stall"))
+	assert_false(VillageRenderer.landmark_is_solid("moon_base"), "an unknown prop is not solid by accident")
+
+
+## The layer a solid prop stops you on is the ground floor's own, not a
+## second number that could drift from it.
+func test_a_solid_prop_stops_you_on_the_ground_floors_own_layer():
+	assert_eq(
+		VillageRenderer.GROUND_FLOOR_COLLISION_LAYER,
+		load("res://src/world/earth_chunk_manager.gd").GROUND_FLOOR_COLLISION_LAYER
+	)
+
+
+# -- a fence with nothing left to enclose ------------------------------------
+# Reported live with the village in shot: "There's a bed enclosure without a
+# Farmhouse". A field is only ever fenced around a farmhouse that really
+# stands (_fenced_farm_fields starts from _farmhouse_origins) -- but the
+# rails are real persisted tiles, so a farmhouse that goes afterwards (razed,
+# or reclaimed for standing in water) leaves its frame behind for ever.
+
+func test_rails_with_no_farmhouse_left_are_cleared_away():
+	var coord := _find_settlement_chunk("grassland")
+	var world := StubWorld.new()
+	renderer.spawn_village(parent, coord, coord * CHUNK_SIZE, CHUNK_SIZE, TILE_SIZE, "grassland", world)
+	# A frame standing well away from any farmhouse this village has, the way
+	# one is left behind when the building it belonged to goes.
+	# Planted the way a rail left behind by a razed farmhouse really is:
+	# persisted in the chunk's own modifications.
+	var orphan_global: Vector2i = coord * CHUNK_SIZE + Vector2i(1, 1)
+	world.occupied_cells[orphan_global] = VillageFarm.fence_tile_for("north")
+
+	renderer.spawn_village(parent, coord, coord * CHUNK_SIZE, CHUNK_SIZE, TILE_SIZE, "grassland", world)
+
+	assert_ne(
+		world.modification_at_global(orphan_global.x, orphan_global.y),
+		VillageFarm.fence_tile_for("north"),
+		"a fence around nothing is not a fence"
+	)
+
+
+## The case the distance rule could not see: a rail standing CLOSE to a real
+## farmhouse but on no field's frame.
+##
+## Reported again after the first sweep landed: *"there are still fenced
+## enclosures without a corresponding Farmhouse or Fisher"*. Measured on four
+## real villages (113 rails between them): every rail a founding really lays
+## sits on some farmhouse's own ring or some pond's own ring, and NONE of
+## them needs the reach slack -- so a rail that belongs to no ring is an
+## orphan however near it happens to stand to a building that survived.
+func test_a_rail_beside_a_real_farmhouse_but_on_no_frame_comes_down():
+	var coord := _find_settlement_chunk_with_occupation("grassland", "farmer", 5)
+	var world := StubWorld.new()
+	renderer.spawn_village(parent, coord, coord * CHUNK_SIZE, CHUNK_SIZE, TILE_SIZE, "grassland", world)
+	var farms := _buildings_of(world, VillageFarm.FARM_BUILDING_ID)
+	assert_gt(farms.size(), 0, "precondition: this village really raised a farmhouse")
+	# Right on the farmhouse's own doorstep row, well inside the reach the
+	# old distance rule allowed, and on nobody's frame.
+	var orphan_local: Vector2i = (farms[0]["origin_local"] as Vector2i) + Vector2i(-1, -1)
+	var orphan_global: Vector2i = coord * CHUNK_SIZE + orphan_local
+	world.occupied_cells[orphan_global] = VillageFarm.fence_tile_for("north")
+
+	renderer.spawn_village(parent, coord, coord * CHUNK_SIZE, CHUNK_SIZE, TILE_SIZE, "grassland", world)
+
+	assert_ne(
+		world.modification_at_global(orphan_global.x, orphan_global.y),
+		VillageFarm.fence_tile_for("north"),
+		"a rail on no frame is a fence around nothing, however near the farm"
+	)
+
+
+## And every rail a real founding lays is still standing afterwards --
+## measured, not assumed: 113 of them across four real villages, and the
+## sweep must take none of them.
+func test_the_sweep_takes_no_rail_a_real_founding_laid():
+	for row in range(3, 7):
+		var coord := _find_settlement_chunk_with_occupation("grassland", "farmer", row)
+		var world := StubWorld.new()
+		renderer.spawn_village(parent, coord, coord * CHUNK_SIZE, CHUNK_SIZE, TILE_SIZE, "grassland", world)
+		var standing := _fence_cells(world, coord).size()
+		assert_gt(standing, 0, "precondition: %s really fenced something" % str(coord))
+
+		renderer.spawn_village(parent, coord, coord * CHUNK_SIZE, CHUNK_SIZE, TILE_SIZE, "grassland", world)
+
+		assert_eq(
+			_fence_cells(world, coord).size(), standing,
+			"the village at %s lost a fence it had really built" % str(coord)
+		)
+
+
+## And the rails that DO belong to a standing farmhouse are left alone.
+func test_a_real_farms_own_rails_are_left_standing():
+	var coord := _find_settlement_chunk_with_occupation("grassland", "farmer", 5)
+	var world := StubWorld.new()
+	renderer.spawn_village(parent, coord, coord * CHUNK_SIZE, CHUNK_SIZE, TILE_SIZE, "grassland", world)
+	var rails_before := _fence_cells(world, coord)
+	assert_gt(rails_before.size(), 0, "precondition: this village really fenced a field")
+
+	renderer.spawn_village(parent, coord, coord * CHUNK_SIZE, CHUNK_SIZE, TILE_SIZE, "grassland", world)
+
+	assert_eq(_fence_cells(world, coord).size(), rails_before.size(), "a working farm keeps its frame")
+
+
+func _fence_cells(world: StubWorld, coord: Vector2i) -> Array:
+	var out: Array = []
+	var built := _built_tiles(world, coord)
+	for cell in built:
+		if VillageFarm.is_fence_tile(String(built[cell])):
+			out.append(cell)
+	return out
+
+
+## A real farm's own rails go through build_at_global, which this stub keeps
+## in a different dict from the one modification_at_global reads (see
+## StubWorld) -- so the sweep, which asks what is really standing on a cell,
+## never sees them here. That split is why this test can assert they are
+## LEFT ALONE without the sweep being able to reach them either way; the
+## orphan case above plants its rail where the sweep really looks.
+

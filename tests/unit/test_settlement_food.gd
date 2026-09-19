@@ -138,7 +138,11 @@ func test_whole_meals_count_and_the_leftover_fraction_does_not():
 
 func test_carrying_capacity_divides_by_settlement_states_own_food_per_household():
 	var village := VillageMarket.new()
-	village.add_stock("fruit", float(SettlementState.FOOD_PER_HOUSEHOLD * 3))
+	# Whole meals: _village_food_stock counts whole FOOD_UNITS_PER_MEAL per
+	# item (half a fruit feeds nobody), and the per-household draw is a
+	# measured 1.2 rather than a whole number -- so carrying three households
+	# takes the next whole unit up from 3.6, not 3.6 itself.
+	village.add_stock("fruit", ceil(SettlementState.FOOD_PER_HOUSEHOLD * 3.0))
 	assert_eq(SettlementFood.carrying_capacity(null, village), 3)
 
 
@@ -172,7 +176,7 @@ func test_a_settlement_fed_only_by_its_village_market_stops_declining():
 func test_a_settlement_with_exactly_enough_village_food_reads_stable():
 	var household_count := 4
 	var village := VillageMarket.new()
-	village.add_stock("fruit", float(SettlementState.FOOD_PER_HOUSEHOLD * household_count))
+	village.add_stock("fruit", ceil(SettlementState.FOOD_PER_HOUSEHOLD * float(household_count)))
 	var capacity := SettlementFood.carrying_capacity(Market.new(), village)
 	assert_eq(SettlementState.status_for(household_count, capacity), SettlementState.STABLE)
 
@@ -244,7 +248,10 @@ func test_structure_food_adds_to_both_markets():
 	village.add_stock("fruit", 3.0)
 	var storage := _stock_with({"bread": 8})
 	assert_eq(SettlementFood.food_stock(market, village, null, [storage]), 16)
-	assert_eq(SettlementFood.carrying_capacity(market, village, null, [storage]), 16 / SettlementState.FOOD_PER_HOUSEHOLD)
+	assert_eq(
+		SettlementFood.carrying_capacity(market, village, null, [storage]),
+		int(16.0 / SettlementState.FOOD_PER_HOUSEHOLD)
+	)
 
 
 func test_no_structures_at_all_changes_nothing():
@@ -304,3 +311,28 @@ func test_the_food_shortfall_carries_the_shape_the_build_decision_reads():
 func test_structure_held_bread_counts_toward_clearing_the_shortfall():
 	var storage := _stock_with({"bread": 40})
 	assert_eq(SettlementFood.food_shortfall_for(5, null, null, null, [storage]), {})
+
+
+## A village node freed while still listed in `loaded_villages` -- the array
+## is a plain registry and is not auto-pruned, so a corpse really can sit in
+## it. This passes today and is pinned so it keeps passing: in Godot 4.7.2 a
+## freed Object compares EQUAL to null, so the resolver's own `node == null`
+## already fails open on one.
+##
+## Worth pinning because the equivalent walks over `_loaded_trees` had no
+## null check at all, and `"planted_at" in <freed>` raises "Invalid Object
+## base for 'in'" and aborts the whole pass (see
+## test_earth_chunk_manager_felled_tree_registry.gd). The difference between
+## the two is one guard, and nothing but a test says so.
+func test_a_freed_village_node_does_not_hide_the_market_behind_it():
+	var chunk := Vector2i(2, 5)
+	var village := VillageMarket.new()
+	var corpse := Node2D.new()
+	corpse.free()
+
+	var market = SettlementFood.village_market_for(
+		EntityRef.for_settlement(chunk),
+		{chunk: [corpse, _villager_with_market(village)]}
+	)
+
+	assert_eq(market, village, "the villager behind the corpse still holds the market")

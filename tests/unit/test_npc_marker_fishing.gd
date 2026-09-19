@@ -1,5 +1,8 @@
 extends GutTest
 
+const AquaticPopulationModel = preload("res://src/world/aquatic_population_model.gd")
+const VillageFarm = preload("res://src/gameplay/village_farm.gd")
+
 ## A villager who actually fishes (docs/concept/npc.md, "Work against the
 ## real world, not against a number").
 ##
@@ -73,8 +76,17 @@ class StubWorld:
 	func herbivore_population_near(_pos: Vector2) -> float:
 		return 10.0
 
+	## A real stretch of water, not a puddle: the fisher's regional take is
+	## this region's own MAXIMUM SUSTAINABLE YIELD (NpcProduction.
+	## yield_per_second), so the standing population is what decides whether
+	## a day's fishing is worth a whole unit at all. Eight fish is two water
+	## cells' worth (AquaticPopulationModel.FISH_PER_WATER_CELL), which is a
+	## puddle -- a fisher working it for a whole day honestly earns less than
+	## one unit, which is what made the regional-fallback test below read as
+	## broken. A pond the size of the one a village digs itself is the real
+	## floor here.
 	func fish_population_near(_pos: Vector2) -> float:
-		return 8.0
+		return AquaticPopulationModel.FISH_PER_WATER_CELL * float(VillageFarm.FIELD_SHAPES[0].x * VillageFarm.FIELD_SHAPES[0].y) * 20.0
 
 	func nearest_fish_position(pixel_position: Vector2, max_distance: float):
 		var nearest = null
@@ -250,7 +262,13 @@ func test_a_fisher_working_real_fish_does_not_also_conjure_regional_yield():
 
 func test_a_fisher_with_no_fish_in_reach_still_earns_from_the_region():
 	# npc.md's named limitation: an unloaded village keeps the aggregate.
-	_run(30.0)
+	#
+	# A WHOLE day. The regional take is a share of what the water REPLACES
+	# each day (docs/concept/settlement_food_calibration.md), so half a day
+	# on a small water body is honestly less than one whole unit -- this
+	# read as broken before the stub's water was a real stretch rather than
+	# two cells' worth.
+	_run(NpcMarker.SECONDS_PER_SIMULATED_DAY)
 	assert_gt(market.total_stock(), 0.0)
 
 

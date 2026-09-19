@@ -74,7 +74,11 @@ const ACTIONS := [
 	# Player._harvest_farm_plot_step), the same way every other
 	# harvest-shaped verb (chop/smash/pull/butcher/collect) already
 	# piggybacks on attack.
-	{"action": "plant", "label": "Till / Plant / Tend", "default": KEY_P},
+	# Moved off P (the very next key over, an easy muscle-memory shift) to
+	# make room for the planner-mode toggle -- the same reasoning that moved
+	# toggle_skills off K for "kick" above. Asked for directly: "space now
+	# toggles between plann mode and rpg ... bind it to P key".
+	{"action": "plant", "label": "Till / Plant / Tend", "default": KEY_O},
 	# Casting is a wholly new trigger, not routed through the hotbar/item
 	# system (see docs/concept/spell_runtime.md) -- it needs its own real
 	# key, not a repurposed one.
@@ -90,6 +94,11 @@ const ACTIONS := [
 	# Moved off K (the very next key over, an easy muscle-memory shift) to
 	# make room for "kick" -- see docs/concept/stone.md.
 	{"action": "toggle_skills", "label": "Toggle Skill Tree", "default": KEY_L},
+	# P for planner (docs/concept/planner_mode.md). A mode toggle is a real
+	# control, so it gets a real key rather than only the HUD button it had
+	# -- which, being a focusable Button, was answering the ATTACK key
+	# (Space) as ui_accept once it had been clicked.
+	{"action": "toggle_planner", "label": "Toggle Planner Mode", "default": KEY_P},
 	{"action": "toggle_settings", "label": "Toggle Settings", "default": KEY_ESCAPE},
 	{"action": "toggle_console", "label": "Toggle Console", "default": KEY_QUOTELEFT},
 ]

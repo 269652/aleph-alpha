@@ -51,6 +51,25 @@ const SHAPE_SECONDS_PER_PLANK := 3.0
 ## only consumes stock) while enough logs remain for at least one more unit
 ## of that lane's own product, so running out of logs mid-shape stops
 ## consumption rather than going negative.
+## The logs the hewing block is holding for a beam it has already started.
+##
+## Hewing and riving draw from ONE woodpile, and riving is three times
+## cheaper per log and faster per piece -- so without this the plank lane
+## emptied the pile continuously and it almost never held the three logs a
+## beam needs for the eight seconds it needs them. Measured from play: a
+## mill on a steady trickle of timber produced planks and never a single
+## beam ("it only produced 6xLogs but no beams"), which is exactly what a
+## village's own construction needs least.
+##
+## Held only while a beam is really under way, and only out of a pile that
+## can actually finish one: a mill whose whole pile is under a beam's cost
+## rives it rather than sitting on it for a beam it will never start.
+static func reserved_for_beam(log_stock: float, beam_progress: float) -> float:
+	if beam_progress <= 0.0 or log_stock < LOG_COST_PER_BEAM:
+		return 0.0
+	return LOG_COST_PER_BEAM
+
+
 func advance(state: Dictionary, elapsed_seconds: float, staffed: bool) -> Dictionary:
 	var log_stock: float = state.get("log_stock", 0.0)
 	var beam_progress: float = state.get("beam_progress", 0.0)
@@ -65,9 +84,21 @@ func advance(state: Dictionary, elapsed_seconds: float, staffed: bool) -> Dictio
 				beam_progress -= SHAPE_SECONDS_PER_BEAM
 				log_stock -= LOG_COST_PER_BEAM
 				beam_output += 1
-		if log_stock >= LOG_COST_PER_PLANK:
+		else:
+			# Nothing to hew with: a lane that cannot start must not bank
+			# time, or a mill that finally gets three logs would square a
+			# beam out of hours it never worked.
+			beam_progress = 0.0
+		# The hewing block's own logs are spoken for while a beam is really
+		# under way (see reserved_for_beam): the riving station takes what
+		# is left over.
+		var rivable := log_stock - reserved_for_beam(log_stock, beam_progress)
+		if rivable >= LOG_COST_PER_PLANK:
 			plank_progress += elapsed_seconds
-			while plank_progress >= SHAPE_SECONDS_PER_PLANK and log_stock >= LOG_COST_PER_PLANK:
+			while (
+				plank_progress >= SHAPE_SECONDS_PER_PLANK
+				and log_stock - reserved_for_beam(log_stock, beam_progress) >= LOG_COST_PER_PLANK
+			):
 				plank_progress -= SHAPE_SECONDS_PER_PLANK
 				log_stock -= LOG_COST_PER_PLANK
 				plank_output += 1

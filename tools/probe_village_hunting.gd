@@ -204,7 +204,10 @@ func _measure_one_hunt(hunter) -> void:
 			quarry_ticks += 1
 
 	var after := get_nodes_in_group(_huntable_quarry.QUARRY_GROUP_NAME).size()
-	var drip: float = _npc_production.PRODUCTION_RATE_PER_SECOND * headcount * SIMULATED_SECONDS
+	var drip: float = (
+		_npc_production.new().yield_per_second("hunter", _manager, hunter.workspot_position)
+		* SIMULATED_SECONDS
+	)
 	_hunt_report = [
 		"",
 		"-- one real hunter, %.0f simulated seconds --" % SIMULATED_SECONDS,

@@ -298,7 +298,10 @@ func test_village_food_salience_is_the_share_of_the_villages_own_food_need_it_la
 		"settlement_id": SETTLEMENT, "market": market, "household_count": 4,
 	})
 
-	var needed := 4 * SettlementState.FOOD_PER_HOUSEHOLD
+	# Rounded the way _food_needed rounds: the per-household draw is a
+	# measured 1.2 now, not a whole number (SettlementState.FOOD_PER_
+	# HOUSEHOLD), and a village's need is counted in whole units.
+	var needed := int(round(4.0 * SettlementState.FOOD_PER_HOUSEHOLD))
 	var expected := 1.0 - 4.0 / float(needed)
 	assert_true(DialogueTopic.is_available("village_food", frame))
 	assert_almost_eq(DialogueTopic.salience("village_food", frame), expected, 0.0001)
@@ -306,7 +309,7 @@ func test_village_food_salience_is_the_share_of_the_villages_own_food_need_it_la
 
 func test_a_village_that_can_feed_itself_has_no_food_topic():
 	var market := Market.new()
-	market.add_stock("fruit", 4 * SettlementState.FOOD_PER_HOUSEHOLD)
+	market.add_stock("fruit", int(ceil(4.0 * SettlementState.FOOD_PER_HOUSEHOLD)))
 	var frame := _frame({
 		"settlement_id": SETTLEMENT, "market": market, "household_count": 4,
 	})

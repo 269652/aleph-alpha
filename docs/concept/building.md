@@ -345,10 +345,72 @@ draws so the system is playable and testable without art.
 
 **Building sheets** — `assets/sprites/buildings/<building_id>.png`
 (`house_small`, `house_medium`, `house_large`, `city_hall` …), 1536×1024,
-8 columns × 5 rows, black background, magenta cell dividers. Rows: 0
+8 columns × 5 rows, black background, magenta cell dividers and a thin
+near-white rule line on every cell boundary. Rows: 0
 construction ×8 (scaffold → shell → roof, left to right), 1 active ×8 (lit
 windows / chimney smoke loop), 2 idle ×8 (loop or repeats), 3 burning ×8,
-4 ruined ×8. Each cell is scaled on screen so the cell's WIDTH equals the
+4 ruined ×8.
+
+> **…but not every sheet is eight columns.** Reported live with two
+> buildings in shot: *"There are still two buildings with wrong crops …
+> Please fix the slicer."* The mill and the store were the ones the grid and
+> the inset below fixed; the **farmhouse** was a different fault in the same
+> place. Measured off each sheet's own magenta dividers
+> (`tools/probe_building_lifecycle_sheet.gd`): `sawmill.png` 8×~143px,
+> `warehouse.png` 8×~146px, `city_hall.png` 8×~189px, `blacksmith.png`
+> 8×~189px, `brewery.png` 8×~190px — and **`farmhouse.png` SIX** ×~182px.
+> Its art is on a 256px pitch, so reading it at 192 cut 64px off every
+> farmhouse: rendered (`tools/probe_building_idle_crops.gd`), the tree and
+> the left-hand third of the farmyard, with the house sitting off-centre in
+> its own frame. `BuildingCatalog.sheet_columns_of` carries the exception,
+> `construction_stage_for` takes the building id so a six-column sheet has
+> six stages rather than eight, and
+> `test_every_contract_sheet_is_read_with_the_column_count_its_art_is_drawn_on`
+> reads every sheet's real columns rather than trusting the table.
+
+> **Columns are on a pitch. Rows are not.** (Corrected 2026-09-17, twice —
+> the second correction is the one that measured instead of assuming.)
+> Reported live: *"the warehouse has the rows cropped wrongly."*
+>
+> **Columns.** 1536/8 is exactly 192, and profiling confirms the art in
+> every column really does start ~12px inside one of 0, 192, 384 … 1344, on
+> all four 8-column sheets. So a column is cut by even division
+> (`IllustratedStructureSprite.even_cell_rect`), minus
+> `CELL_INSET` = 3px for the rule line drawn on the boundary —
+> that line is neither magenta nor near-black, so neither chroma key
+> removes it and a cell cut exactly on the grid keeps it as a hard white
+> hairline up its own edge (196 such pixels on sagewerk's idle frame
+> before the inset, 0 after).
+>
+> **Rows.** No pitch lands on them. The drawn boundaries are at 188, 376,
+> 566, 786 on `warehouse`; 190, 387, 578, 789 on `sawmill`; elsewhere again
+> on `city_hall` and `blacksmith`. Two guesses were shipped before this was
+> measured: an even fifth of the canvas (204.8) clipped 9px off `sawmill`'s
+> roof, and the column pitch (192) clipped 13px off `city_hall`'s footings,
+> 26px off `blacksmith`'s last row, and cut `wooden_fence`'s real 256px
+> rows at 384. So rows are **read off the sheet** by
+> `VariantSheetGrid.content_bands`, which finds the bands holding real
+> drawing — not the dark cell background, not the magenta margin, not the
+> rule line — and falls back to even division on any sheet it cannot
+> resolve. Its 2% art-share threshold is pinned against all five real
+> sheets: at 2% every one resolves to its 5 drawn rows, at 1% `city_hall`
+> splits into 7, at 5% `sawmill` splits into 6.
+>
+> What the inset does NOT clear: where a magenta divider is antialiased
+> against a cell's black background it leaves a tail of near-black
+> magenta-hued pixels a few px inside the boundary (~100 of them on
+> `city_hall`'s left edge, ~3% luminance). Keying those out is not an
+> option — 30,000+ pixels of that same hue and brightness sit well away
+> from any boundary on every sheet, as real shadow and roof art — so the
+> dark half of the fringe stays.
+>
+> The consequence worth stating plainly: **a frame from one of these sheets
+> is not square and the sheets do not agree on a row height.** `sagewerk`'s
+> idle frame is 186×183, `storage`'s 186×169, `city_hall`'s 186×186. That
+> disagreement is the regression guard — any pitch would give all three the
+> same height.
+
+Each cell is scaled on screen so the cell's WIDTH equals the
 footprint's width (`footprint_frame_texture`): a `w`-wide house draws
 `ART_TILE_SIZE`·w art px wide, drawn at `ArtResolution.SPRITE_SCALE` so it
 occupies exactly 16·w WORLD units — the same pixels-per-world-unit the

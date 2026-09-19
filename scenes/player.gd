@@ -3,6 +3,7 @@ class_name Player
 
 const Keybindings = preload("res://src/gameplay/keybindings.gd")
 const AnimalActions = preload("res://src/gameplay/animal_actions.gd")
+const CartMarker = preload("res://src/rendering/cart_marker.gd")
 const EquipmentMaterial = preload("res://src/gameplay/equipment_material.gd")
 const WetnessTracker = preload("res://src/gameplay/wetness_tracker.gd")
 const WaterMovementModel = preload("res://src/gameplay/water_movement_model.gd")
@@ -796,6 +797,10 @@ var _last_facing_direction := Vector2.DOWN
 
 
 func _ready() -> void:
+	# A player is a person, and a person is what may pull a cart
+	# (CartMarker.PULLER_GROUP -- docs/concept/village_warehouse.md,
+	# Mechanism 6).
+	add_to_group(CartMarker.PULLER_GROUP)
 	motion_mode = CharacterBody2D.MOTION_MODE_FLOATING
 	_last_position = position
 	_camera.zoom = CAMERA_ZOOM
@@ -4005,12 +4010,55 @@ func _perform_context_action(slot: int, action_name: String) -> void:
 	if slot < animal_actions_for(animal).size():
 		_perform_animal_action(animal, slot)
 		return
+	# A handcart within arm's reach (docs/concept/village_warehouse.md,
+	# Mechanism 6). AFTER the animal verbs, which have the same standing
+	# every other hover verb has, and only on the primary slot -- a cart
+	# offers one thing to do and that one thing flips.
+	if action_name == AnimalActions.SLOT_ACTIONS[0] and toggle_cart_hold():
+		return
 	# An EMPTY bottle: one already holding a creature is not somewhere to put
 	# a second one (see _bottle_captive).
 	var has_bottle := inventory != null and inventory.has("glass_bottle", "")
 	var tool_action := CaptureItemActions.for_tool(equipped_item, has_bottle)
 	if tool_action.get("action", "") == action_name:
 		_bottle_captive()
+
+
+## Takes hold of the nearest handcart within reach, or lets go of the one
+## already held (docs/concept/village_warehouse.md, Mechanism 6). Reports
+## whether it really did anything, so the context slot can fall through to
+## its other meanings when there is no cart to take.
+##
+## Asked directly: *"the player should also be able to grab/pull it"*.
+##
+## The grab is FORCED: a villager is not going to wrestle the player for a
+## wagon, and being refused by an NPC's claim reads as a bug. The carter
+## whose shaft this takes drops their round rather than emptying a shelf
+## into a cart they are not holding (see NpcMarker._step_cart).
+func toggle_cart_hold() -> bool:
+	var tree := get_tree()
+	if tree == null:
+		return false
+	var held = null
+	var nearest = null
+	var nearest_distance := LASSO_RANGE
+	for cart in tree.get_nodes_in_group(CartMarker.GROUP_NAME):
+		if not is_instance_valid(cart):
+			continue
+		if cart.is_held_by(self):
+			held = cart
+			break
+		var distance: float = position.distance_to(cart.position)
+		if distance <= nearest_distance:
+			nearest = cart
+			nearest_distance = distance
+	if held != null:
+		held.let_go(self)
+		return true
+	if nearest == null:
+		return false
+	nearest.take_hold(self, true)
+	return true
 
 
 ## Throws whichever capture tool is held (see docs/concept/taming.md's "Any

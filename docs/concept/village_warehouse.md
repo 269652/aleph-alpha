@@ -4,7 +4,8 @@ Asked directly: *"Villages should also always build a Warehouse to keep
 stocks."*
 
 A `warehouse` already existed before this doc: a real `BuildingCatalog`
-entity (4x3, wood 22 + plant_fibre 6, 42 labour hours, capacity 0), classed
+entity (3x3 — 4x3 until 2026-09-17, see building.md's "Building
+sheets"; wood 22 + plant_fibre 6, 42 labour hours, capacity 0), classed
 civic beside `city_hall`, and rung 3 of `VillageGrowth`'s ladder behind a
 four-household threshold. What it did NOT have was any connection to stock
 at all — `VillageMarket.stock` and `SettlementGranary` ran entirely
@@ -220,6 +221,251 @@ it says about the BUILDING: a store that took one trip to fill would not be
 worth raising, and one that took a thousand would make hauling the only
 thing anybody ever did.
 
+## Mechanism 4 — The carter
+
+Asked directly, with the empty store in shot: *"The warehouse also needs to
+bind a worker which then collects all ressources from every production
+building"*, and then corrected, with the wagon in shot: *"It should be a
+real NPC pulling the cart, not an additional sprite"*.
+
+Both halves matter, and the correction is the design. A village's hauling is
+a **trade**, not a spawned walker: `carter` joins the occupations a villager
+can be born to, and a carter works the store's round exactly the way the
+lumberjack works the mill, the farmer works their beds and the fisher works
+their pond — an `NpcMarker` work step that overrides the schedule's
+decorative workspot, built on the same `LogisticsBehavior` phase machine the
+placeable-scale worker already uses. Nothing about the round is reinvented;
+what changes is who walks it.
+
+This answers the open question Mechanism 3 left standing — *"whether hauling
+should belong to an occupation instead — a carter, a porter"* — the way the
+report does.
+
+- **The round.** From whichever producer has the most waiting on its shelf,
+  to the store's own door, and back. A carter with nothing to fetch keeps
+  the ordinary schedule, like every other villager whose work has nothing
+  in it today.
+- **What they carry it in** is the Bollerwagen (Mechanism 5), which is the
+  point of the trade existing: the goods ride on the cart, not in the
+  carter's hands.
+- **A named consequence.** A villager's trade is rolled from
+  `NpcIdentity.OCCUPATIONS` by index, so adding one re-rolls every
+  villager's trade in every village in an existing world. Names, houses and
+  seeds are unchanged; who does what shifts. That is the price of a trade
+  being a real trade rather than a special case bolted beside them, and it
+  is stated here rather than discovered.
+
+## Superseded — The store binds its own porter
+
+*Kept for the record; replaced by Mechanism 4 above.* The first pass spawned
+a `LogisticsMarker` per (store, producer) pair — the same worker the
+`sagewerk`→`storage` placeables use. It worked, and it was the wrong shape:
+a second kind of person, drawn with a placeholder sprite, walking beside the
+villagers who already live there. The `LogisticsMarker` keeps its original
+job (the single-tile placeables); a village's own store is a carter's.
+
+Asked directly, with the empty store in shot: *"The warehouse also needs to
+bind a worker which then collects all ressources from every production
+building"*, and *"the warehouse stays empty"*.
+
+This answers the open question Mechanism 3 left standing — *"whether hauling
+should belong to an occupation instead — a carter, a porter"* — and it
+answers it the way the report does: **the store binds the worker, not the
+producer.** A village's mill, farmhouse, smith and brewery each keep their
+own output on their own shelf, and a porter the warehouse itself employs
+walks the round and carries it in.
+
+It is the `LogisticsMarker` the Sägewerk/Storage pair already uses, bound to
+a whole-building warehouse and a whole-building producer instead of the two
+single-tile placeables. Nothing about the walk, the cart load or the
+put-it-back-on-failure is reinvented: one porter per (warehouse, producer)
+pair within the store's own reach, spawned when either is raised and
+despawned when either goes.
+
+**A porter carries whatever is waiting.** The existing worker hauls one
+named item id, because the Sägewerk has exactly two outputs and the caller
+knows them. A village producer's shelf is not a fixed list — a farmhouse
+holds whatever crop its farmer sows, a mill holds logs on the way to
+becoming beams — so naming the goods in advance would be inventing a
+catalogue that drifts from what the buildings really hold. A porter with no
+item id named takes the largest load waiting on the shelf and comes back for
+the rest.
+
+**Why this is what was missing.** The whole logistics system was wired for
+`sagewerk` → `storage`, the two single-tile placeables. A real village
+raises a `sawmill` and a `warehouse`, which are whole-building catalog
+entities, and `place_building` staffs nobody at all — so every village
+producer filled its own shelf and nothing ever moved it. The store was
+empty because nobody was carrying.
+
+## Mechanism 5 — The Bollerwagen
+
+Asked directly, with the art in hand: *"I added a cart sprite with a
+Bollerwagen; please wire it and make the Warehouse Worker use it to move
+heavy ressources to the warehouse.. it should be so that the ressources are
+actually loaded inside the wagon which has an inventory; so if the worker
+leaves it somewhere it's actually full of ressources... once in the
+warehouse he unloads"*.
+
+**The load is on the cart, not in the worker.** That is the whole point and
+the whole design: `CartLoad` is a real `item_id -> count` store that lives on
+the cart's own node. A cart standing in a field is a cart with the timber
+still in it — leave it behind, unload it later, come back to it tomorrow.
+Nothing about the goods is bookkeeping held on the person.
+
+**Who pulls it** is the carter of Mechanism 4, a real villager — corrected
+in play once the first pass gave the wagon to a spawned walker: *"The cart
+is not being pulled by a worker, but by a floor tile???"*, and then *"It
+should be a real NPC pulling the cart, not an additional sprite"*. One wagon
+per carter, spawned with the village and freed with it.
+
+- **Capacity.** A cart carries six of the porter's own armfuls
+  (`LogisticsMarker.CARRY_CAPACITY`), which is also more than the 12 wood
+  the growth ladder's cheapest rung needs — a cart that could not bring
+  home a whole small house's timber in one trip would not be worth pulling.
+  Both relationships are test-pinned rather than the number asserted.
+- **Loading.** At the producer the carter fills the cart until the shelf is
+  bare or the cart is full. A load that will not fit is left on the shelf
+  rather than destroyed.
+- **Unloading.** At the store the cart is emptied into the warehouse's own
+  `StructureStock` — all of it, every item id it is carrying, in one
+  arrival.
+- **Drawing it.** `assets/sprites/vehicles/cart.png` is a magenta-divided
+  sheet, measured as 4 rows × 5 columns: the rows are the four views (rear,
+  east, west, front) and the columns are a roll cycle — measured, the
+  difference from column 0 grows monotonically across the row, which is an
+  animation rather than five unrelated variants. The wheels turn only while
+  the cart is moving. The bands are pinned explicitly, the same call
+  `illustrated_structure_sprite.gd`'s own `explicit_frame_image` was added
+  for.
+
+## Mechanism 6 — The cart is a thing you can take hold of
+
+Asked directly, once the wagon was rolling: *"The cart should also be a real
+entity with hitbox and clicking on it shows the popup with inventory and the
+player should also be able to grab/pull it"*.
+
+A cart that a carter pulls past you and that you cannot touch is scenery with
+an animation. Three things make it an object instead, and they are three
+different systems — being in the way, answering a question, and changing
+hands — so they are specified separately.
+
+### It is in the way
+
+A `StaticBody2D` on the ground floor's own collision layer
+(`EarthChunkManager.GROUND_FLOOR_COLLISION_LAYER`), a child of the cart so it
+moves and is freed with it. Exactly the shape the well's own hitbox already
+uses (`VillageRenderer._solid_body_for`) and for the same reason: the thing
+IS what is in the way, so a separately-tracked body would be one more thing
+to keep in step.
+
+Sized off the drawn frame, not off a constant: a cart is `WIDTH_TILES` of
+road wide and stands on its own wheels, so what stops you is the box at its
+foot rather than a column of air above it.
+
+### It answers the cursor
+
+The cart joins `HoverTargetFinder.GROUP_NAME` and answers
+`get_display_name()` and `get_hover_actions()` like every other interactable
+in the world. Its name says what is in it — an empty cart and a loaded one
+are different things to walk up to — and its one action is on the
+`primary_action` context slot, which is exactly what that slot is for:
+*"What they do is decided by whatever is under the cursor and the state it is
+in"*.
+
+### Clicking it shows what is in it
+
+A left-click opens the same readout a building opens (`HousePanel`), because
+the question is the same question and the panel is already a pure consumer of
+a Dictionary — it renders what it is handed and reaches for nothing else.
+`CartMarker.report()` hands it a title, a subtitle naming who has the shaft,
+its `stock`, and `CartLoad.CAPACITY` as `storage_capacity`, and the existing
+inventory tab draws the load.
+
+The panel grows exactly two seams for this: an explicit `title`/`subtitle`
+override, used when a report carries one. Nothing that already opened it
+changes — a building carries neither key and keeps the building naming it
+always had.
+
+A cart under the cursor wins over the building underneath it. A cart is
+standing ON a village's paving and often beside its store; a click that read
+through it to the warehouse would make the wagon unclickable exactly where
+carts spend their time.
+
+### It changes hands
+
+`held_by` is whoever has the shaft, and `pulled_toward` follows them. The
+rules are the rules of a real handcart:
+
+- **Only a person may take the shaft at all.** `take_hold` refuses anything
+  outside `CartMarker.PULLER_GROUP`, forced or not — the group every real
+  person in this world joins, villagers and the player alike. Reported three
+  times in the same words (*"the cart is not being pulled by a worker, but by
+  a floor tile???"*, *"It should be a real NPC pulling the cart, not an
+  additional sprite"*, *"The cart is still town by a floor tile instead of an
+  actual dedicated worker NPC"*), so the answer is a rule rather than another
+  round of corrected wiring: a thing that is not a person **cannot** pull a
+  cart, and no future caller can reintroduce one that does. The
+  placeable-scale `LogisticsMarker` has had its cart machinery removed
+  outright; it carries in its arms.
+- **A carter only ever takes a FREE cart.** `take_hold(who)` fails when
+  somebody else has it.
+- **The player's hold displaces.** `take_hold(who, true)` always succeeds. A
+  villager is not going to wrestle the player for a wagon, and the alternative
+  — the player being refused by an NPC's claim — is the kind of rule that
+  reads as a bug.
+- **A carter who has lost the shaft drops the round** rather than walking it
+  empty-handed: no shelf is emptied into a cart the carter is not holding, so
+  goods are never moved into thin air.
+- **Letting go parks it.** `let_go(who)` releases only if `who` really holds
+  it, and a parked cart stays exactly where it was left, still loaded — which
+  is Mechanism 5's whole point, now reachable by the player as well.
+- **A carter reclaims a parked cart** on their next round. A wagon abandoned
+  in a field is village property again the moment nobody is holding it.
+
+## Mechanism 7 — The store is where the goods really are
+
+Reported in play: *"The FarmHouse seems to be harvesting something but none
+of it makes it into storage... it's always 0"*.
+
+It was true of both places you could look. A farmer cut wheat onto their
+farmhouse's own shelf — and then, at the end of every work block, carried the
+**whole shelf** into the village's abstract ledger
+(`NpcEconomy.record_real_harvest`, which credits the market and pays the
+farmer in one call). So a farmhouse you clicked was empty, a store you
+clicked was empty, and the carter of Mechanism 4 arrived at a shelf somebody
+had already emptied into thin air.
+
+The village's goods have to be somewhere you can point at. So:
+
+- **A harvest goes on its producer's own shelf and stays there.** The
+  end-of-block carry is gone for any village that HAS a store — the shelf is
+  the carter's to empty, which is the whole reason the trade exists. **Every
+  producer**, not just the farmhouse: the sawmill had the identical carry
+  (`haul_sawmill_stock_to_village`, run off the clock from `_step_timber`),
+  and it was reported in exactly the same words with the mill's own panel in
+  shot reading *"Stored: 0 / 60, Beam x0, Log x0"* — *"The sawmill also
+  doesn't produce beams or plangs or logs"*. It produced them all along.
+- **The villager is paid at the work**, not at the delivery — at the scythe
+  for a farmer, at the saw for a sawyer. They did the work; the pay is for
+  the work. `record_harvest_wage` is `record_real_harvest` with the stocking
+  taken out.
+- **The carter's arrival at the store is what credits the village's
+  sellable stock.** One credit, at the moment the goods really get there —
+  so nothing is counted twice, and the market's numbers describe a pile that
+  exists.
+- **A village with no store keeps the old behaviour exactly.** The producer
+  carries their own shelf in and is paid and credited in one go, as before.
+  That is not a leftover: a hamlet too cramped to raise a store (pillar 1's
+  caveat) still has to eat, and `VillageRenderer` already tells every
+  villager whether their village has a store door, so the villager can tell
+  which world they are in without asking anybody.
+
+**What this does not change.** Gold. `record_harvest_wage` pays exactly what
+`record_real_harvest` paid, at exactly the same moment, so no villager earns
+more or less than before and the levy split is untouched. What moved is
+*where the goods are* between the field and the market.
+
 ## Status
 
 - ✅ **Mechanism 1 — standing from founding.** `VillageLayout` reserves the
@@ -255,11 +501,41 @@ thing anybody ever did.
   `VillageRenderer` hands every villager the door of the store that really
   stands in their chunk.
 
+- ✅ **Mechanism 4 — the carter.** `carter` is a real entry in
+  `NpcIdentity.OCCUPATIONS`; `VillageCart` decides whose shelf is worth
+  walking to, `LogisticsBehavior` decides when each leg of the round ends,
+  and `NpcMarker._step_cart` owns the world effect — the same three-part
+  split the sawyer and the farmer already keep. `VillageRenderer` hands each
+  carter the store that really stands, the producers on their round and a
+  wagon of their own. `SettlementGenerator` conscripts one carter when a
+  roster rolled none: measured over the 75 real grassland villages in rows
+  0–5, 7 of them (9.3%) had a store nobody could ever empty, and 0 do now.
+  The `LogisticsMarker`-based store porter is **removed**; that class keeps
+  its original job, the single-tile `sagewerk`→`storage` placeables.
+- ✅ **Mechanism 5 — the Bollerwagen.** `CartLoad` (pure) and `CartMarker`
+  (the node that holds the load, trails its puller and turns to face the
+  way it is going). Spawned with the village, so it is freed with the chunk
+  — a leak there was the measured cause of a reported framerate decay
+  (`tools/probe_node_growth.gd`).
+- ✅ **Mechanism 6 — a real object.** `CartMarker` carries a `StaticBody2D`
+  on the ground floor's own collision layer, joins the hover group with a
+  name that says what is in it, and offers Take Hold / Let Go on the primary
+  context slot. `report()` hands `HousePanel` a title, a subtitle naming who
+  has the shaft, its load and `CartLoad.CAPACITY`; the panel grew exactly two
+  seams for it (`title`/`subtitle` overrides), and a building carries neither
+  key so nothing that already opened it changed. `World._on_world_clicked`
+  prefers a cart within half its drawn width over the building underneath,
+  and `Player.toggle_cart_hold` takes the nearest one within `LASSO_RANGE` by
+  force, or lets go of the one already held.
+
 ## Known open questions
 
 - **What counts toward the ceiling.** Mechanism 2 caps stock as a whole. A
   per-item or per-kind ceiling (grain and iron do not share a shelf) is the
   obvious refinement and is deliberately not attempted first.
-- **Who hauls.** Mechanism 3 gives every villager the wiring. Whether
-  hauling should belong to an occupation instead — a carter, a porter —
-  is a question for once it is visibly running.
+- ~~**Who hauls.**~~ Answered by Mechanism 4: hauling is an occupation. Every
+  villager keeps Mechanism 3's wiring for their own hands, but the store's
+  round belongs to the carter.
+- **A village with more than one store.** Mechanism 4's handout gives every
+  carter the FIRST store in the chunk. Villages raise one, so this has never
+  mattered; a second one would want the round split rather than doubled.

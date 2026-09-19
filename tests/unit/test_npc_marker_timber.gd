@@ -17,6 +17,7 @@ const NpcPlanner = preload("res://src/world/npc_planner.gd")
 const VillageMarket = preload("res://src/world/village_market.gd")
 const VillageSawmill = preload("res://src/gameplay/village_sawmill.gd")
 const SagewerkProduction = preload("res://src/world/sagewerk_production.gd")
+const FelledTree = preload("res://src/rendering/felled_tree.gd")
 
 const TILE_SIZE := 16
 const MILL_CELL := Vector2i(10, 10)
@@ -30,6 +31,13 @@ class FakeTree:
 	var growth_scale := 1.0
 	var hits := 0
 	var _felled := false
+	var _canopy_removed := false
+	var _cuts_left: int = FelledTree.CUTS_TO_CLEAR
+	## Logs this stub would have dropped ON THE GROUND, the way the real
+	## ChoppableTree._cut_up does. A worker must never make the ground grow a
+	## pile of the same timber it is carrying home (see buck_for_worker).
+	var ground_logs := 0
+	var worker_logs := 0
 
 	func _ready() -> void:
 		add_to_group("tree")
@@ -37,9 +45,39 @@ class FakeTree:
 	func is_felled() -> bool:
 		return _felled
 
+	func canopy_removed() -> bool:
+		return _canopy_removed
+
+	func cuts_left() -> int:
+		return _cuts_left
+
 	func take_damage(_amount: float) -> void:
 		hits += 1
+		if not _felled:
+			_felled = true
+			return
+		if not _canopy_removed:
+			_canopy_removed = true
+			return
+		_cuts_left -= 1
+		ground_logs += FelledTree.logs_per_cut(growth_scale)
+		if _cuts_left <= 0:
+			queue_free()
+
+	func buck_for_worker() -> int:
+		if not _felled or not _canopy_removed or _cuts_left <= 0:
+			return 0
+		_cuts_left -= 1
+		var logs := FelledTree.logs_per_cut(growth_scale)
+		worker_logs += logs
+		if _cuts_left <= 0:
+			queue_free()
+		return logs
+
+	## The state a trunk somebody ELSE already felled and limbed is in.
+	func fell_and_limb() -> void:
 		_felled = true
+		_canopy_removed = true
 
 
 ## A world that answers the structure-stock questions the real
@@ -161,10 +199,30 @@ func test_a_tree_out_of_the_mills_range_is_left_standing():
 # -- and the logs reach the mill -------------------------------------------
 
 
+## The mill really receives what the sawyer cut. Asserted the moment the
+## logs land rather than at the end of the run: a mill that is working
+## SQUARES them (3 logs to a beam, see _shape_a_beam), so a stock read long
+## afterwards is measuring how much has not been milled yet, not how much
+## arrived. This test used to pass only because the shaping never kept up.
 func test_felling_puts_real_logs_into_the_mill():
 	_tree_at(MILL_POSITION + Vector2(40, 0))
-	_run(60.0)
-	assert_gt(world.structure_stock_at(0, 0, "log"), 0, "the wood a sawyer cut is at the mill")
+	var peak := 0
+	for i in 600:
+		marker._process(0.1)
+		peak = maxi(peak, world.structure_stock_at(0, 0, "log"))
+	assert_gt(peak, 0, "the wood a sawyer cut is at the mill")
+
+
+## And the mill squares it. Reported live: "it only produced 6xLogs but no
+## beams" -- the other half of the same chain, and the whole reason a
+## village's sawmill exists.
+func test_the_mill_squares_the_logs_its_sawyer_brought_in():
+	_tree_at(MILL_POSITION + Vector2(40, 0))
+	for i in 600:
+		marker._process(0.1)
+		if world.structure_stock_at(0, 0, "beam") > 0:
+			break
+	assert_gt(world.structure_stock_at(0, 0, "beam"), 0, "a mill with logs in it squares beams")
 
 
 # -- and the mill squares them into beams ----------------------------------
@@ -235,8 +293,18 @@ func test_the_mills_beams_are_carried_to_the_village():
 	assert_gt(float(market.stock.get("beam", 0.0)), 0.0, "and the village has it now")
 
 
+## Enough beams that a whole COIN certainly lands, whatever the levy is.
+##
+## A wallet holds whole coins only; a take-home under one is carried
+## (NpcEconomy._take_home_carry) rather than lost, so a small haul can pay
+## a villager and move no coin at all. This used to haul three beams, which
+## cleared exactly 1.0 at the levy of the day -- and adding one occupation
+## to NpcIdentity.OCCUPATIONS moved the levy (it is derived from the
+## non-producer share of the census, see VillageWages.wage_share) and with
+## it the take-home, to 0.9. The test was measuring the rounding boundary,
+## not the payment.
 func test_hauling_pays_the_sawyer_for_what_they_carried_in():
-	world.stock["beam"] = 3
+	world.stock["beam"] = 10
 	var before := marker.economy.wallet.balance
 	marker.haul_sawmill_stock_to_village()
 	assert_gt(marker.economy.wallet.balance, before, "paid on arrival, like a farmer's crop")
@@ -272,3 +340,76 @@ func test_the_beams_go_in_on_their_own_when_the_day_ends():
 	marker.schedule = []
 	_run(1.0)
 	assert_eq(world.structure_stock_at(0, 0, "beam"), 0, "clocking off carries the day's beams in")
+
+
+# -- the trunks lying around the mill ----------------------------------------
+# Reported live: "there are lying two felled trees around the sawmill and the
+# worker doesn't bring them in". The sawyer looked only for STANDING trees,
+# so a trunk left lying -- by the player, by weather, or by this villager
+# before they went off the clock and dropped it (_abandon_timber) -- stayed
+# there for ever while they walked past it to fell another.
+
+func test_a_trunk_already_lying_by_the_mill_is_worked_up():
+	var trunk := _tree_at(MILL_POSITION + Vector2(TILE_SIZE, 0))
+	trunk.fell_and_limb()
+	for i in 4000:
+		marker._process(0.25)
+		if not is_instance_valid(trunk) or trunk.is_queued_for_deletion():
+			break
+	assert_true(trunk.is_queued_for_deletion(), "a sawyer finishes what is already down")
+
+
+## And the logs it bucks reach the MILL, not the ground beside it. Every
+## swing used to create the timber twice: the take_damage drop AND the
+## villager's own carried count.
+func test_the_logs_the_sawyer_bucks_are_not_also_dropped_on_the_ground():
+	var trunk := _tree_at(MILL_POSITION + Vector2(TILE_SIZE, 0))
+	trunk.fell_and_limb()
+	for i in 4000:
+		marker._process(0.25)
+		if not is_instance_valid(trunk) or trunk.is_queued_for_deletion():
+			break
+	assert_eq(trunk.ground_logs, 0, "the sawyer carries the logs home; they are not also on the ground")
+	assert_gt(trunk.worker_logs, 0, "and they really were bucked")
+
+
+# -- the mill's shelf is the carter's to empty (Mechanism 7) ----------------
+#
+# Reported in play with the mill's own panel in shot, reading "Stored: 0 / 60,
+# Beam x0, Log x0": *"The sawmill also doesn't produce beams or plangs or
+# logs"*. It produced them all along -- and then, at the end of every work
+# block, the sawyer carried every beam off the shelf into the abstract
+# village ledger, exactly as the farmer used to do with their farmhouse. So
+# the mill you clicked was always empty, and the carter arrived at a shelf
+# somebody had already emptied.
+
+
+func test_a_sawyer_in_a_village_with_a_store_leaves_the_beams_on_the_shelf():
+	marker.warehouse_position = Vector2(400.0, 400.0)  # this village has a store
+	world.stock["beam"] = 5
+
+	marker.haul_sawmill_stock_to_village()
+
+	assert_eq(world.structure_stock_at(0, 0, "beam"), 5, "the mill is still holding them")
+
+
+## And a village with no store keeps the old behaviour exactly: the sawyer
+## carries them in, because there is nowhere else for them to go.
+func test_a_sawyer_with_no_store_still_carries_the_beams_in():
+	marker.warehouse_position = null
+	world.stock["beam"] = 5
+
+	marker.haul_sawmill_stock_to_village()
+
+	assert_eq(world.structure_stock_at(0, 0, "beam"), 0, "carried in, as before")
+
+
+## Off the clock is where it happened: the whole shelf went at the end of
+## every single work block.
+func test_going_off_the_clock_no_longer_empties_a_mill_in_a_village_with_a_store():
+	marker.warehouse_position = Vector2(400.0, 400.0)
+	world.stock["beam"] = 5
+
+	marker._step_timber(0.1, false)
+
+	assert_eq(world.structure_stock_at(0, 0, "beam"), 5, "the beams are still at the mill")

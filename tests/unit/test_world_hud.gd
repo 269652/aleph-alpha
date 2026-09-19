@@ -166,3 +166,47 @@ func test_negative_karma_is_the_themes_red_accent():
 
 func test_zero_karma_is_neutral_text_colour_not_gold_or_red():
 	assert_eq(World.karma_display_color(0.0), UiTheme.TEXT)
+
+
+# -- the planner banner clears itself ----------------------------------------
+# Reported live: *"the 'Pavement planned' notification doesn't go away
+# anymore"*. It never did. Every other banner is a standing READOUT, rebuilt
+# from live player state each frame, so it clears itself the moment the state
+# behind it does. A planner message is a one-off REPORT -- "Pavement
+# planned.", "Raising a Farmhouse yourself.", "The builders are finished." --
+# with no state behind it to go away, so nothing ever took it down.
+
+func test_a_planner_message_counts_itself_down():
+	var after: Dictionary = World.planner_message_after("Pavement planned.", 4.0, 1.0)
+	assert_eq(after["message"], "Pavement planned.", "still up a second later")
+	assert_almost_eq(float(after["seconds_left"]), 3.0, 0.0001)
+
+
+func test_a_planner_message_goes_away_when_its_time_is_up():
+	var after: Dictionary = World.planner_message_after("Pavement planned.", 0.5, 1.0)
+	assert_eq(after["message"], "", "a one-off report does not stand on screen for ever")
+	assert_almost_eq(float(after["seconds_left"]), 0.0, 0.0001)
+
+
+## Long enough to read a whole sentence at a glance, and pinned rather than
+## eyeballed: a message that clears before it can be read is the same bug
+## the other way round.
+func test_a_planner_message_is_up_long_enough_to_read():
+	assert_gte(World.PLANNER_MESSAGE_SECONDS, 3.0)
+	var after: Dictionary = World.planner_message_after(
+		"Pavement planned.", World.PLANNER_MESSAGE_SECONDS, 2.5
+	)
+	assert_eq(after["message"], "Pavement planned.", "two and a half seconds in, it is still readable")
+
+
+func test_no_planner_message_stays_no_planner_message():
+	var after: Dictionary = World.planner_message_after("", 0.0, 1.0)
+	assert_eq(after["message"], "")
+	assert_almost_eq(float(after["seconds_left"]), 0.0, 0.0001)
+
+
+## A frame that took no time cannot age a message out from under the player
+## -- the same guard every other elapsed-time reader in this project keeps.
+func test_a_zero_length_frame_ages_nothing():
+	var after: Dictionary = World.planner_message_after("Pavement planned.", 4.0, 0.0)
+	assert_almost_eq(float(after["seconds_left"]), 4.0, 0.0001)
