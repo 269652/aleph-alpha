@@ -470,8 +470,9 @@ the exponential reserved for the act of fixing a *new* design into a book:
   the game already prices, not a third price pulled from nowhere.
 
 The resulting scale, at the shop's current 4-gold meal and the fixed book's
-three spells, is deliberately early-game-shaped — a starting-tier spell costs
-a few dozen meals, which is real money to a new character and pocket change
+three spells, is deliberately capital-purchase-shaped: Minor Heal 128 gold
+(32 meals, about what a small-house blueprint costs), Frost Lance 236 (59
+meals, about a cottage). Real money to a new character, an afternoon's trade
 to an established one. Every one of those numbers falls out of the formula;
 none is typed in.
 
@@ -480,8 +481,10 @@ none is typed in.
 A guild that answers "no" is useless; a guild that answers **why** is a
 quest hook. Tuition refusals follow the same shape
 `settlement_charter.refusal_for` established — `{}` for "nothing is wrong",
-otherwise a dict naming the fact — and there are exactly three ways to be
-refused, each of which points somewhere:
+otherwise a dict naming the fact. A spell the world's catalogue does not
+hold is refused first and flatly, since there is nothing there to price;
+past that there are exactly three ways to be refused, each of which points
+somewhere:
 
 - **No guild within reach.** Points at the charter ladder: go find, or grow,
   a city. The refusal carries the building id so the UI can name it.
