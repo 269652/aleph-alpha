@@ -163,6 +163,16 @@ have, and it is free here because the season is already real.
   unpaid. **It does not go into debt** and it does not partially-refuse: a
   village with half the firewood burns half the firewood and is half warm.
 
+**Food is drawn by the granary, not by this.** `SettlementGranary.catchup`
+already eats a settlement's food on the very same step, at a rate a whole
+famine chain is calibrated against, and a loaded village's own villagers
+buy meals from the same shelf. So the live wiring draws everything ABOVE
+food — fuel, bread, physic, candles, leather, beer, honey, exactly the
+goods no village has ever had to supply — and reads food's satisfaction off
+the larder the granary leaves behind. `EstateConsumption` itself is
+general and draws whatever it is handed; the exclusion is the caller's, and
+it is stated again under Status as the known gap it is.
+
 Satisfaction is then collapsed per estate into
 `subsistence_satisfaction` and `station_satisfaction` — each the *minimum*
 over its own goods, not the mean. A household with all the bread in the
@@ -213,22 +223,62 @@ verdict, the same derived-over-persisted discipline
   | building | demands |
   |---|---|
   | `farmhouse` | 2 `field` |
-  | `sawmill` | 1 `hand`, 1 `craft` |
+  | `sawmill` | 2 `hand` |
   | `warehouse` | 1 `hand` |
   | `blacksmith` | 2 `craft` |
-  | `brewery` | 2 `craft` |
+  | `brewery` | 1 `craft`, 1 `hand` |
   | `city_hall` | 1 `civic` |
 
+  **Corrected against the code, 2026-09-19.** This table first gave the
+  sawmill a `craft` head and the brewery two — and `VillageAssembly`'s own
+  tests then deadlocked the bottom of the ladder: a village of cottagers
+  could never staff the one works that supplies its own firewood, and
+  craftsmen only exist downstream of a mill. A saw pit is two men on a saw,
+  which is exactly what `BuildingCatalog` already said the building was ("a
+  shed, a saw pit and a log deck, not an enclosed hall"), so the mill is
+  hand-worked and the brewery took over as the two-class rung: a brewer
+  over somebody else's back, and the one building that can be bottlenecked
+  from below as well as above.
+
 - `output_scale_for(building_id, supply, demand)` → `[0,1]`: the **minimum**
-  fulfilment across the classes that building needs. A sawmill with a sawyer
-  and no hand runs at half. A blacksmith with no craftsman at all does not
-  run — which is why a village that has not raised a `handwerker` yet gets
-  nothing out of a forge it built.
+  fulfilment across the classes that building needs. A brewery with its
+  brewer and nobody to rake the mash runs at the hand's rate. A blacksmith
+  with no craftsman at all does not run — which is why a village that has
+  not raised a `handwerker` yet gets nothing out of a forge it built.
 
 That last clause is pillar 4 in one sentence: **a building is not
 production, a staffed building is.** It is also the honest answer to
 [village_growth.md](village_growth.md)'s own standing gap, *"the ladder's
 rungs are buildings, not yet production."*
+
+### What that scale is actually spent on
+
+`StaffedProduction`, and it is deliberately narrow:
+
+- **`brewery` → `brew_beer`.** The one rung on the whole ladder that
+  produced nothing at all. A staffed brewhouse turns the village's own
+  grain into beer, so beer and bread compete for one harvest.
+- **`sawmill` → more timber from the same hands.** There is no `log` in a
+  village's economy to saw (`SettlementGathering` gathers `wood` directly),
+  so a saw pit has no recipe to run; what it really does is get more usable
+  timber out of the same labour. That is also what makes Mechanism 5's
+  "short of firewood → raise a sawmill" petition true rather than a lie.
+  The term is **additive and never below 1.0**:
+  [village_growth.md](village_growth.md)'s rule is that gathering may be
+  raised by a building and must never be dragged down by one.
+- **`blacksmith` and `farmhouse` produce nothing here**, for reasons the
+  code found rather than chose. A forge would run the heat-gated smelts
+  `OccupationProduction` rules out on principle, plus a tool recipe its own
+  smith's household already runs. A farmhouse would run `grow_wheat`, which
+  is `automated` — `CraftingRecipeBook.can_craft` refuses an automated
+  recipe outright, because it is a real world-standing structure's own
+  production, and a farmhouse's grain really does come from its real field
+  (`FarmPlot`/`VillageFarm`). Running it again here would be the same crop
+  harvested twice.
+
+The batch rate is **derived, not chosen**: a fully staffed works must
+supply several times more households than it employs, or it costs the
+village more labour than it returns and nobody should ever build one.
 
 ## Mechanism 5 — The assembly: what the village votes to build
 
@@ -257,8 +307,12 @@ the thing a headcount ladder can never do.
 
 ## Mechanism 6 — The ledger: tax that scales with provision
 
-`VillageEstates.tax_per_day(estate, station_satisfaction)` — a household
-pays `BASE_TAX[estate]` scaled by how well provided it is. Anno's exact
+`VillageEstates.tax_per_day(estate, provision)` — a household pays
+`BASE_TAX[estate]` scaled by how well provided it is, where provision is
+the **lower** of its subsistence and its station satisfaction. Subsistence
+is in there because a household that cannot feed itself has no surplus
+whatever its station; station is in there because taxing bare survival is
+how you get a village that cannot afford to be poor. Anno's exact
 shape, and the real one: a well-supplied household has a surplus to tax and
 a destitute one does not. Paid into the **existing** `VillageWages` purse,
 which already funds the subsistence wage a non-producer eats on, so the
