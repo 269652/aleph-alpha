@@ -103,3 +103,47 @@ func test_two_different_seeds_do_not_hop_in_perfect_lockstep():
 		a_positions.append(marker.position)
 		b_positions.append(other.position)
 	assert_ne(a_positions, b_positions, "different seeds should hop at different moments")
+
+
+# -- crushed underfoot (see docs/concept/soil_fauna.md "Generalized to ANY
+# animal") ------------------------------------------------------------------
+#
+# Reported in play: "Stepping on a frog doesn't kill it?" It didn't --
+# every victim wired into the crush pass until now was a small special-case
+# invertebrate marker, and a frog was none of them. A frog dies the same way
+# a caterpillar does: it has no health, no carcass and no death of its own,
+# so crush() is a real squash it lingers in before freeing itself, not an
+# instant disappearance.
+
+const SquashCrushEffect = preload("res://src/rendering/squash_crush_effect.gd")
+
+
+func test_a_crushed_frog_starts_dying_immediately():
+	marker.crush()
+	assert_true(marker._dying)
+
+
+func test_a_crushed_frog_is_visibly_squashed_rather_than_vanishing():
+	var before: float = marker._sprite.scale.y
+	marker.crush()
+	assert_lt(marker._sprite.scale.y, before, "a crushed frog flattens")
+	assert_ne(marker._sprite.modulate, Color(1, 1, 1, 1), "and reads as no longer alive")
+	assert_false(marker.is_queued_for_deletion(), "but is still there to be seen")
+
+
+func test_a_crushed_frog_frees_itself_once_its_squash_has_been_seen():
+	marker.crush()
+	marker._process(SquashCrushEffect.LINGER_SECONDS * 0.4)
+	assert_false(marker.is_queued_for_deletion(), "not gone the instant it dies")
+	marker._process(SquashCrushEffect.LINGER_SECONDS)
+	assert_true(marker.is_queued_for_deletion())
+
+
+## A dead frog does not hop, croak or restart its own death timer.
+func test_a_crushed_frog_stops_behaving_like_a_frog():
+	marker.crush()
+	var resting_place := marker.position
+	marker.crush()
+	marker._process(0.1)
+	assert_eq(marker.position, resting_place, "a crushed frog does not hop away")
+	assert_false(marker._is_croaking())

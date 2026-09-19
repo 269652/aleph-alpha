@@ -62,6 +62,7 @@ const DecomposerRenderer = preload("res://src/rendering/decomposer_renderer.gd")
 const CaterpillarRenderer = preload("res://src/rendering/caterpillar_renderer.gd")
 const MillipedeRenderer = preload("res://src/rendering/millipede_renderer.gd")
 const GrassFrogRenderer = preload("res://src/rendering/grass_frog_renderer.gd")
+const GrassFrogMarker = preload("res://src/rendering/grass_frog_marker.gd")
 const LumberjackMarker = preload("res://src/rendering/lumberjack_marker.gd")
 const ProceduralBuildingPieceSprite = preload("res://src/rendering/procedural_building_piece_sprite.gd")
 const LogisticsMarker = preload("res://src/rendering/logistics_marker.gd")
@@ -5733,6 +5734,10 @@ func _village_would_settle(chunk_coord: Vector2i) -> bool:
 ## arrives.
 func find_nearest_village(from_tile: Vector2i) -> Variant:
 	var start_chunk := _chunk_coord_for_tile(from_tile)
+	# A one-slot box, not a plain local: a GDScript lambda captures locals by
+	# VALUE, so the predicate below could not otherwise hand its answer back
+	# out. An Array is a reference type and can.
+	var landing: Array = [null]
 	var found_chunk: Variant = _village_finder.find_nearest(
 		start_chunk,
 		MAX_VILLAGE_SEARCH_RADIUS_CHUNKS,
@@ -5740,16 +5745,60 @@ func find_nearest_village(from_tile: Vector2i) -> Variant:
 		func(chunk_coord: Vector2i) -> String:
 			var chunk := generator.generate_chunk(chunk_coord, CHUNK_SIZE)
 			return _biome_classifier.dominant_biome(chunk.biome),
-		_village_would_settle
+		# The cheap PREDICTION first, then the world itself (docs/concept/
+		# village_growth.md, Mechanism 6). _village_would_settle re-derives
+		# the roster and the layout and never looks at the ground, because it
+		# deliberately loads nothing -- so a chunk it likes can still turn
+		# out to be an empty field, which is exactly the second report:
+		# "/village teleports me to an empty field...". The load only ever
+		# runs for a chunk that already passed the settlement roll AND the
+		# prediction, and the player is about to go there anyway.
+		func(chunk_coord: Vector2i) -> bool:
+			if not _village_would_settle(chunk_coord):
+				return false
+			var at = standing_village_position(chunk_coord)
+			if at == null:
+				return false
+			landing[0] = at
+			return true
 	)
 	if found_chunk == null:
 		return null
-	var settlement := _settlement_generator.generate_settlement(
-		found_chunk, found_chunk * CHUNK_SIZE, CHUNK_SIZE, TerrainRenderer.TILE_SIZE,
-		SettlementGenerator.POPULATION, _is_dry_local(found_chunk),
-		seeded_region_for_chunk(found_chunk)
-	)
-	return settlement.landmarks.well
+	return landing[0]
+
+
+## Where to land in `chunk_coord`'s village -- a real building's own
+## DOORSTEP -- or null when nothing is standing there
+## (docs/concept/village_growth.md, Mechanism 6).
+##
+## A doorstep rather than the planned well: the well comes out of
+## VillageLayout.skeleton, which is a plan, while a doorstep is a cell a
+## building really has. The lowest (y, x) origin, so the same village answers
+## the same way every time rather than by whichever order a Dictionary handed
+## its keys back.
+##
+## Loads the chunk if it is not loaded, and UNLOADS it again if it turns out
+## not to be a village -- a rejected candidate leaves nothing behind. A chunk
+## that was already loaded is left alone: it may well be the one the player
+## is standing in.
+func standing_village_position(chunk_coord: Vector2i):
+	var was_loaded := _loaded_chunks.has(chunk_coord)
+	if not was_loaded:
+		_load_chunk(chunk_coord)
+	var best: Variant = null
+	var best_origin := Vector2i(0, 0)
+	for record in buildings_in_chunk(chunk_coord):
+		var origin: Vector2i = record["origin_local"]
+		if best != null and [origin.y, origin.x] >= [best_origin.y, best_origin.x]:
+			continue
+		best_origin = origin
+		var door: Vector2i = (
+			chunk_coord * CHUNK_SIZE + origin + BuildingCatalog.doorstep_of(record.get("id", ""))
+		)
+		best = (Vector2(door) + Vector2(0.5, 0.5)) * float(TerrainRenderer.TILE_SIZE)
+	if best == null and not was_loaded:
+		_unload_chunk(chunk_coord)
+	return best
 
 
 ## How warm it feels around `player_pixel` right now, [0,1]: the real climate
@@ -10484,6 +10533,77 @@ func crush_decomposers_near(pixel_position: Vector2, momentum_kg_m_s: float) -> 
 	return _crush_markers_near(_decomposer_markers, pixel_position, momentum_kg_m_s)
 
 
+## Every grass frog standing on `pixel_position`'s own tile, crushed by a
+## stepper of `stepper_mass_kg` (see docs/concept/soil_fauna.md "Generalized
+## to ANY animal", CrushMechanic.crushes_underfoot). Reported in play:
+## "Stepping on a frog doesn't kill it? ... A boar walking over a frog should
+## kill it as well."
+##
+## Takes the stepper's own MASS rather than its momentum, unlike every crush
+## call above it: an animal victim is decided by two terms, and the second one
+## (does this whole body fit under that foot) is a question about the foot's
+## mass, which a momentum has already thrown away. A frog is otherwise exactly
+## the caterpillar-shaped victim this manager already knows -- a real Node2D
+## in a chunk-keyed array, dying by its own crush() -- so it shares that
+## walk. Every frog weighs the same, so its victim mass is its species' own
+## tabulated figure, asked once rather than per marker.
+func crush_grass_frogs_near(pixel_position: Vector2, stepper_mass_kg: float) -> bool:
+	if not CrushMechanic.crushes_underfoot(stepper_mass_kg, CreatureMass.mass_kg_for(GrassFrogMarker.SPECIES)):
+		return false
+	return _crush_tracked_markers_on_tile(_grass_frog_markers, pixel_position)
+
+
+## Every real ANIMAL in `creature_markers` standing on `pixel_position`'s own
+## tile and light enough to go under the foot of a stepper of
+## `stepper_mass_kg` (see CrushMechanic.crushes_underfoot) -- a mouse under a
+## horse, a frog-sized thing under a boar -- crushed through its own crush(),
+## which kills it the way every other death in this game happens rather than
+## freeing it where it stands.
+##
+## The ONE crush entry point that is handed its victims instead of finding
+## them: creature markers are not tracked by this manager at all (they live
+## in the scene tree, and this class is a RefCounted with no access to it),
+## and World's own crush pass already holds a cached group list of them for
+## the several other loops it runs over the same list. Taking that list is
+## both honest about where the truth lives and free -- the alternative is a
+## second full group scan per stepper per frame, in the function this file's
+## own FPS history says is the most expensive one in the game.
+##
+## `excluding` is the stepper itself when the stepper is a creature. The mass
+## rule already rules self-crushing out (a body always outweighs its own
+## foot), so this is a second, explicit guard on the thing that must never
+## happen rather than the only thing preventing it.
+func crush_creatures_near(
+	creature_markers: Array, pixel_position: Vector2, stepper_mass_kg: float, excluding: Node2D = null
+) -> bool:
+	# The cheap term first: a stepper too light to crush anything at all
+	# never walks the list (see CrushMechanic.crushes_underfoot's own first
+	# term), which is most of the creatures in a loaded world.
+	if not CrushMechanic.is_crushed_by(stepper_mass_kg * PebbleDispersion.FOOTSTEP_SPEED_MPS):
+		return false
+	var tile := _world_tile_for_pixel(pixel_position)
+	var crushed_any := false
+	for marker in creature_markers:
+		if marker == excluding:
+			continue
+		# Defensive, the same contract _crush_tracked_markers_on_tile
+		# documents: a creature freed earlier this frame must not crash the
+		# scan of a creature that is still alive.
+		if not is_instance_valid(marker) or marker.is_queued_for_deletion():
+			continue
+		# Tile before mass: almost nothing in a loaded world is standing on
+		# the exact tile being stepped on, and a tile compare is pure
+		# arithmetic on a position already in hand, where the mass term has
+		# to reach into each creature's own metabolism for its live weight.
+		if _world_tile_for_pixel(marker.position) != tile:
+			continue
+		if not CrushMechanic.crushes_underfoot(stepper_mass_kg, marker.current_mass_kg()):
+			continue
+		marker.crush()
+		crushed_any = true
+	return crushed_any
+
+
 ## The ant-shaped sibling of crush_caterpillars_near/crush_millipedes_near
 ## (see docs/concept/soil_fauna.md "Generalized to ants too" -- reported
 ## live: "ants are also not crushed when a player is walking over them").
@@ -10724,6 +10844,18 @@ func take_ant_near(pixel_position: Vector2) -> bool:
 func _crush_markers_near(markers_by_chunk: Dictionary, pixel_position: Vector2, momentum_kg_m_s: float) -> bool:
 	if not CrushMechanic.is_crushed_by(momentum_kg_m_s):
 		return false
+	return _crush_tracked_markers_on_tile(markers_by_chunk, pixel_position)
+
+
+## _crush_markers_near's own walk, with the GATE lifted out (2026-09-19, see
+## docs/concept/soil_fauna.md "Generalized to ANY animal"): an invertebrate
+## victim's gate is a momentum threshold, a frog's is CrushMechanic.crushes_
+## underfoot at a frog's own real mass, and the walk they share afterwards --
+## "everything of this kind standing on exactly this tile dies and leaves
+## tracking at once" -- is identical either way. Split rather than given a
+## second momentum parameter so neither caller has to express its own gate in
+## the other's terms.
+func _crush_tracked_markers_on_tile(markers_by_chunk: Dictionary, pixel_position: Vector2) -> bool:
 	var tile := _world_tile_for_pixel(pixel_position)
 	var chunk_coord := _chunk_coord_for_tile(tile)
 	var markers: Array = markers_by_chunk.get(chunk_coord, [])
@@ -11608,7 +11740,7 @@ func _find_bee_hive_site(chunk_coord: Vector2i, colony: BeeColony, from_cell: Ve
 		var pixel := (Vector2(global_tile) + Vector2(0.5, 0.5)) * float(TerrainRenderer.TILE_SIZE)
 		if not _has_bee_food_near(pixel):
 			continue
-		if _has_real_hive_anchor(pixel, global_tile):
+		if _has_real_hive_anchor(global_tile):
 			return candidate
 	return Vector2i(-1, -1)
 
@@ -11616,58 +11748,69 @@ func _find_bee_hive_site(chunk_coord: Vector2i, colony: BeeColony, from_cell: Ve
 ## Requested live: "Beehives should only be able to build on trees or
 ## structures like houses .. not free floating over a river or ground."
 ## A real hive hangs from a real tree branch, or (a beekeeper's own
-## manmade hive) sits beside a real structure -- never bare open ground,
-## and never open water. Two gates: never a river/lake tile regardless of
-## what's nearby (mirrors TreeRenderer.spawn_trees's own river exclusion
-## -- a hive floating over open water is exactly the same bug class real
-## trees already got fixed for), then a real tree OR a real building
-## piece within HIVE_ANCHOR_RADIUS_TILES.
-func _has_real_hive_anchor(pixel_position: Vector2, global_tile: Vector2i) -> bool:
+## manmade hive) is fixed to a real structure -- never bare open ground,
+## and never open water. Two gates: never a river/lake tile (mirrors
+## TreeRenderer.spawn_trees's own river exclusion -- a hive floating over
+## open water is exactly the same bug class real trees already got fixed
+## for), then a real standing tree OR a real building piece ON THE HIVE'S
+## OWN TILE.
+##
+## Tightened from "within HIVE_ANCHOR_RADIUS_TILES (2.0)" after the same
+## thing was reported again: *"Beehives should not be built on grass...
+## they need a tree branch to build it please"*. A radius admits the tile
+## NEXT TO a trunk, which is bare grass with a tree visible from it -- the
+## hive stood on the ground between, which is exactly what a radius can
+## never express. What holds a hive up is not nearby scenery; it is the
+## branch it hangs off, and that is a property of one tile. The radius, and
+## the `pixel_position` argument only its tree query needed, are both gone
+## rather than left at 0.0, so there is no dial left to widen this back
+## into the same bug.
+func _has_real_hive_anchor(global_tile: Vector2i) -> bool:
 	if is_river_at_global(global_tile.x, global_tile.y):
 		return false
 	if is_lake_at_global(global_tile.x, global_tile.y):
 		return false
-	if not trees_near(pixel_position, int(ceil(HIVE_ANCHOR_RADIUS_TILES))).is_empty():
-		return true
-	return _has_building_piece_near(global_tile, HIVE_ANCHOR_RADIUS_TILES)
+	return _has_standing_tree_at(global_tile) or _has_building_piece_at(global_tile)
 
 
-## How close a hive's own tile must be to a real tree or building piece to
-## read as genuinely anchored to it -- a hive HANGS from a branch or sits
-## beside a wall, it does not merely happen to share a neighbourhood with
-## one several tiles off. Deliberately small and tight, unlike BeeColony's
-## own much larger SENSE_RADIUS_TILES/FORAGE_RADIUS_TILES (those are about
-## finding food from a distance; this is about physical support).
-const HIVE_ANCHOR_RADIUS_TILES := 2.0
-
-
-## A real BuildingPiece stands within `radius_tiles` of `global_tile` --
-## the same chunk.modifications + BuildingPiece.has_piece idiom
-## TreeRenderer.spawn_trees already uses to keep a tree from rooting in a
-## house's own floor, read here instead of written (a hive does not
-## uproot the structure, it just needs one nearby). Walks a small tile
-## square rather than trusting one chunk's own modifications alone,
-## since HIVE_ANCHOR_RADIUS_TILES can spill into a neighbouring chunk at
-## an edge; an unloaded neighbour simply contributes nothing (fails
-## closed toward "no building found there," the same honest "only sees
-## what's currently loaded" limit _has_bee_food_near/trees_near already
-## accept).
-func _has_building_piece_near(global_tile: Vector2i, radius_tiles: float) -> bool:
-	var r := int(ceil(radius_tiles))
-	for dy in range(-r, r + 1):
-		for dx in range(-r, r + 1):
-			var offset := Vector2i(dx, dy)
-			if Vector2(offset).length() > radius_tiles:
-				continue
-			var tile := global_tile + offset
-			var chunk_coord := _chunk_coord_for_tile(tile)
-			var chunk: Chunk = _loaded_chunks.get(chunk_coord)
-			if chunk == null:
-				continue
-			var local := tile - chunk_coord * CHUNK_SIZE
-			if BuildingPiece.has_piece(chunk.modifications.get(local, "")):
-				return true
+## A real, standing tree whose OWN tile is `global_tile` -- the branch a
+## hive hangs from. Only that tile's own chunk is searched, because a tree
+## is spawned into the chunk its position falls in, so no other chunk's
+## list can hold a tree standing here.
+##
+## Skips a felled tree for the same reason trees_near does: a stump is not
+## a perch, and it is not a branch either.
+func _has_standing_tree_at(global_tile: Vector2i) -> bool:
+	var chunk_coord := _chunk_coord_for_tile(global_tile)
+	for tree in _loaded_trees.get(chunk_coord, []):
+		if not is_instance_valid(tree) or tree.is_felled():
+			continue
+		var tile := Vector2i(
+			floori(tree.position.x / float(TerrainRenderer.TILE_SIZE)),
+			floori(tree.position.y / float(TerrainRenderer.TILE_SIZE))
+		)
+		if tile == global_tile:
+			return true
 	return false
+
+
+## A real BuildingPiece stands ON `global_tile` -- the same
+## chunk.modifications + BuildingPiece.has_piece idiom TreeRenderer.
+## spawn_trees already uses to keep a tree from rooting in a house's own
+## floor, read here instead of written (a hive does not uproot the
+## structure, it hangs on it). One tile, so one chunk: the square this
+## used to walk existed only to cover HIVE_ANCHOR_RADIUS_TILES spilling
+## across a chunk edge, and there is no radius any more. An unloaded chunk
+## contributes nothing (fails closed toward "no building there", the same
+## honest "only sees what's currently loaded" limit _has_bee_food_near and
+## trees_near already accept).
+func _has_building_piece_at(global_tile: Vector2i) -> bool:
+	var chunk_coord := _chunk_coord_for_tile(global_tile)
+	var chunk: Chunk = _loaded_chunks.get(chunk_coord)
+	if chunk == null:
+		return false
+	var local := global_tile - chunk_coord * CHUNK_SIZE
+	return BuildingPiece.has_piece(chunk.modifications.get(local, ""))
 
 
 ## The one absconding trigger a wild nest keeps (see WildBeePatch.
@@ -15625,10 +15768,6 @@ func _load_chunk(chunk_coord: Vector2i) -> void:
 	# draws for pieces.
 	for origin_local in chunk.buildings:
 		_spawn_building_node(chunk_coord, origin_local, chunk.buildings[origin_local])
-	# A village the player walks back to has its store and its producers
-	# RESTORED rather than placed, so binding the porter only inside
-	# place_building would leave every village's store empty again on the
-	# next visit -- which is exactly how it was reported.
 	if _roof_layer != null:
 		_terrain_renderer.paint_roofs(_roof_layer, chunk, chunk_coord * CHUNK_SIZE, _hidden_cells_for(chunk_coord))
 	_paint_furniture(chunk_coord, chunk)
@@ -15942,9 +16081,7 @@ func _load_chunk(chunk_coord: Vector2i) -> void:
 	_bee_colonies[chunk_coord] = BeeColony.new(
 		hash("%d_%d_bees" % [chunk_coord.x, chunk_coord.y]), chunk.width, chunk.height, chunk.biome,
 		func(local_cell: Vector2i) -> bool:
-			var global_tile: Vector2i = chunk_coord * CHUNK_SIZE + local_cell
-			var pixel := (Vector2(global_tile) + Vector2(0.5, 0.5)) * float(TerrainRenderer.TILE_SIZE)
-			return _has_real_hive_anchor(pixel, global_tile)
+			return _has_real_hive_anchor(chunk_coord * CHUNK_SIZE + local_cell)
 	)
 	var hive_markers: Dictionary = {}
 	for hive_cell in _bee_colonies[chunk_coord].hive_cells():

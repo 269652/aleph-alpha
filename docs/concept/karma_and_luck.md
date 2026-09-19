@@ -71,7 +71,7 @@ named events only:
 
 | Event | Delta | Source |
 |---|---|---|
-| A worm, caterpillar, millipede, ant, bug (`DecomposerMarker`), or mushroom is crushed underfoot **by the player's own step** (never a wild creature's — see below; `CrushMechanic` already treats all six identically, see its own doc comment). Millipedes, ants, and bugs each joined this table's first two entries the same way, once `docs/concept/soil_fauna.md`'s "Generalized to millipedes too"/"Generalized to ants too"/"Generalized to bugs too" gave them the identical crush shape a caterpillar already has. A mushroom crush was originally exempt ("a fungus is not an animal") but reversed the same day, asked directly (see soil_fauna.md's "Generalized past animals: mushrooms and walnuts") — a walnut (a seed) stays exempt | `-1.0` | `CrushMechanic`/`EarthwormPatch`/`EarthChunkManager.crush_caterpillars_near`/`crush_millipedes_near`/`crush_ants_near`/`crush_decomposers_near`/`crush_mushroom_at`, hooked from `World`'s existing per-frame crush pass |
+| A worm, caterpillar, millipede, ant, bug (`DecomposerMarker`), grass frog, or mushroom is crushed underfoot **by the player's own step** (never a wild creature's — see below; `CrushMechanic` already treats all six identically, see its own doc comment). Millipedes, ants, and bugs each joined this table's first two entries the same way, once `docs/concept/soil_fauna.md`'s "Generalized to millipedes too"/"Generalized to ants too"/"Generalized to bugs too" gave them the identical crush shape a caterpillar already has. A mushroom crush was originally exempt ("a fungus is not an animal") but reversed the same day, asked directly (see soil_fauna.md's "Generalized past animals: mushrooms and walnuts") — a walnut (a seed) stays exempt. A **grass frog** joined the same way once `soil_fauna.md`'s "Generalized to ANY animal" made a real animal crushable at all: a small, harmless animal under the player's own boot is the identical event, and like every other entry here a frog has no other death path. A real **`CreatureMarker`** crushed underfoot (a mouse under a horse) is deliberately NOT on this table, for anybody — its death goes through the same `_die()` a hunted animal's does and is already on the region's own mortality books, so charging for it would be inventing a hunting penalty inside the crush pass | `-1.0` | `CrushMechanic`/`EarthwormPatch`/`EarthChunkManager.crush_caterpillars_near`/`crush_millipedes_near`/`crush_ants_near`/`crush_decomposers_near`/`crush_grass_frogs_near`/`crush_mushroom_at`, hooked from `World`'s existing per-frame crush pass |
 | A quest is abandoned (see Quest lifecycle below) | `-1.0` | `QuestLog.abandon` |
 | A quest is fulfilled — this is the request's "helping an NPC": every quest in this codebase's real, implemented slice is literally an NPC's own stated need (`docs/concept/quests.md` pillar 1), so completing one and helping the NPC who asked for it are the same event, not two mechanisms | `+1.0` | `QuestLog`, detected the same re-derivation way completion always works here (see below) |
 
@@ -212,13 +212,15 @@ change to `PlayerSave`'s own schemaless-Dictionary format.
 - ✅ `Karma` module: event constants, `luck_for`.
 - ✅ `Player.karma` + `Player.luck()`, persisted.
 - ✅ `Taming.break_free_chance` and `OreYield.yields` read `Player.luck()`.
-- ✅ Worm/caterpillar/millipede/ant/bug crush → Karma, wired into
+- ✅ Worm/caterpillar/millipede/ant/bug/frog crush → Karma, wired into
   `World`'s existing crush pass (see `docs/concept/soil_fauna.md`'s
   "Generalized to..." follow-ups). Mushroom crush joined the same way,
-  reversing its original "a fungus is not an animal" exemption.
-  Player-only since the 2026-09-07 reversal above — a wild creature's own
-  step still crushes what's underfoot, but never touches the player's
-  Karma.
+  reversing its original "a fungus is not an animal" exemption; a grass
+  frog joined once "Generalized to ANY animal" made a real animal
+  crushable at all. A crushed `CreatureMarker` is deliberately excluded —
+  see the table's own entry for why. Player-only since the 2026-09-07
+  reversal above — a wild creature's own step still crushes what's
+  underfoot, but never touches the player's Karma.
 - ✅ `QuestLog`: accept/abandon/derived-fulfilment, wired to Karma.
   `reconcile` runs automatically every `EarthChunkManager.
   SETTLEMENT_STEP_INTERVAL` from `World._step_ecology_batch` whenever the

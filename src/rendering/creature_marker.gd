@@ -3014,6 +3014,32 @@ func take_damage(amount: float) -> void:
 		_die()
 
 
+## Crushed underfoot (see docs/concept/soil_fauna.md "Generalized to ANY
+## animal", CrushMechanic.crushes_underfoot) -- asked directly: "Shouldn't
+## this work out of the box for ANY animal when enough pressure is put on
+## it? A boar walking over a frog should kill it as well."
+##
+## The same method name every other crush victim already answers to
+## (CaterpillarMarker.crush, MillipedeMarker.crush, GrassFrogMarker.crush),
+## so the detection side needs no special case for a real animal. What it
+## does differs, and has to: those have no health, no carcass and no death
+## of their own, and a real animal has all three. So this goes through this
+## creature's OWN take_damage -> _die path rather than freeing it where it
+## stands -- _die() is the single choke point every other death in this game
+## goes through (the region's mortality books, the carcass it leaves), and a
+## crush that called queue_free() directly would be a death the world never
+## heard about.
+##
+## Lethal outright, never a partial injury: the rule that gets here at all
+## already established that this creature's whole body went UNDER the foot
+## (it weighs less than the foot did). Idempotent -- a second foot on an
+## already-dead animal changes nothing.
+func crush() -> void:
+	if info == null or _health.is_dead(info.health):
+		return
+	take_damage(info.max_health)
+
+
 ## The `minor_heal`/`major_heal` atoms' shared target-side method (see
 ## docs/concept/spell_runtime.md) -- same duck-typed-across-target-types
 ## shape take_damage already is; Player.heal is the other half.

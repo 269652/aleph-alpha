@@ -96,8 +96,10 @@ system above had already shipped: *"Beehives should only be able to
 build on trees or structures like houses .. not free floating over a
 river or ground."* `EarthChunkManager._has_real_hive_anchor` (see
 "Absconding" below for where it is actually enforced) is the fix: a
-real tree or a real building piece within a small radius, and never a
-river/lake tile regardless. **A known, named gap, not silently
+real tree or a real building piece **on the hive's own tile**, and never
+a river/lake tile regardless. That was a small *radius* at first, which
+turned out to be the same bug in a smaller size — see "A radius is not a
+branch" below. **A known, named gap, not silently
 extended: wild bee nests (`WildBeePatch`) have the identical
 "needs real deadwood/an old stem nearby" real-world claim below and no
 enforcement of it either — this pass fixes honeybee hives only, since
@@ -425,13 +427,15 @@ never free-floating** (2026-09-08, see "Real-world grounding" above).
 know whether a real tree or building actually stands nearby, so this
 lives one layer up, in `EarthChunkManager._find_bee_hive_site` itself,
 alongside the existing real-nearby-forage check:
-`_has_real_hive_anchor(pixel, global_tile)` rejects a river/lake tile
-outright, then requires a real tree (`trees_near`) or a real building
-piece (`chunk.modifications` + `BuildingPiece.has_piece`, the identical
-idiom `TreeRenderer.spawn_trees` already uses to keep a tree from
-rooting in a house) within a small, tight `HIVE_ANCHOR_RADIUS_TILES` —
-a hive hangs from a *specific* branch or sits beside a *specific* wall,
-not merely somewhere in the same general area as one. This covers
+`_has_real_hive_anchor(global_tile)` rejects a river/lake tile
+outright, then requires a real standing tree (`_has_standing_tree_at`)
+or a real building piece (`chunk.modifications` +
+`BuildingPiece.has_piece`, the identical idiom `TreeRenderer.spawn_trees`
+already uses to keep a tree from rooting in a house) **on that tile
+itself** — a hive hangs from a *specific* branch or is fixed to a
+*specific* wall. This was a small, tight `HIVE_ANCHOR_RADIUS_TILES`
+(2.0) until 2026-09-19; see "A radius is not a branch" below for why a
+radius could never express this. This covers
 swarming, absconding, and harvest-relocation uniformly (all three route
 through `_find_bee_hive_site`), but **not** initial world-generation
 seeding — `BeeColony._seed_initial_hives` is a separate path with no
@@ -487,6 +491,84 @@ outright after a failed relocation search) -- belt-and-braces, since (1)
 (`_maybe_relocate_wild_bee_nest`/`_replace_wild_bee_nest_marker`,
 `_active_wild_bee_foragers`) has the identical shape and was out of
 scope for this pass, which was specifically about honeybee hives.
+
+### A radius is not a branch (2026-09-19)
+
+Reported live, after the anchor rule above had already shipped:
+*"Beehives should not be built on grass... they need a tree branch to
+build it please"*.
+
+The anchor rule was right about what a hive needs and wrong about how to
+ask for it. `HIVE_ANCHOR_RADIUS_TILES` was already deliberately small
+(2.0) and described as "a hive hangs from a *specific* branch, not merely
+somewhere in the same general area" — but a radius of any size admits the
+tile **next to** a trunk, and that tile is bare grass with a tree visible
+from it. The hive stood on the ground in between, which is exactly what
+was reported. No smaller radius fixes this, because the thing that holds
+a hive up is not nearby scenery: it is the branch it hangs off, and that
+is a property of **one tile**.
+
+So the anchor is the hive's own tile:
+
+- `_has_standing_tree_at(global_tile)` — a real, standing tree whose own
+  tile *is* this one. Only that tile's chunk is searched, because a tree
+  is spawned into the chunk its position falls in. A felled tree is
+  skipped for the same reason `trees_near` skips one: a stump is not a
+  perch, and it is not a branch either.
+- `_has_building_piece_at(global_tile)` — replaces
+  `_has_building_piece_near(tile, radius)`; the tile square that function
+  walked existed only to cover the radius spilling across a chunk edge,
+  and there is no radius any more.
+
+`HIVE_ANCHOR_RADIUS_TILES` is **deleted**, not set to `0.0`, and
+`_has_real_hive_anchor` loses the `pixel_position` argument that only its
+radius tree query needed. Neither is left as a dial that could widen this
+back into the same bug. Every placement path is covered at once, since
+seeding, swarming, absconding and harvest-relocation all already route
+through this one function.
+
+**The other half is where the comb is drawn.** A hive sited on a tree's
+tile but drawn at that tile's *centre* is drawn at the foot of the
+trunk — still, visibly, on the grass. `BeeHiveMarker.HANG_HEIGHT_PX`
+lifts the sprite `BRANCH_HANG_FRACTION` (0.6) of a real tree's real drawn
+height, which is `ProceduralTreeSprite.WORLD_SIZE.y × VISUAL_SCALE` —
+that IS the height of the crown above the ground, because a tree's node
+origin is the foot of its trunk with the canopy drawn above it (see
+`TreeRenderer`'s own `sprite.offset.y = -SIZE.y * 0.5`). Measured against
+the art rather than chosen, and bounded on both sides by
+`test_the_hive_hangs_within_the_real_canopy_of_a_real_tree`, so tree art
+and hive height cannot drift apart. The queen rides up with it — she
+lives on the comb.
+
+Two things that look like details and are not:
+
+- The lift is on the **sprite**, never on the node. Y-sorting compares
+  node origins, so a hive whose own origin floated into the canopy would
+  sort as though it stood a tree's height further back and draw behind
+  things it is plainly in front of. The same split
+  `CaterpillarMarker._climb_height_px` already keeps for climbing a trunk.
+- It is `position`, not `offset`. `offset` is multiplied by the sprite's
+  own scale, which `_apply_growth` changes as the colony grows — the hive
+  would creep up its tree as it filled out. The branch does not move.
+
+`tools/probe_hive_tree_anchor.gd` measures the real thing across real
+generated terrain — how far each seeded hive's tile is from the nearest
+real tree, and what share of a chunk's tiles hold one at all — so the
+rule can be re-checked rather than assumed. Eight real chunks around
+Berlin and Bavaria, after the change:
+
+| | |
+|---|---|
+| hives seeded | 4 |
+| standing on a tile with a real tree | **4 / 4** |
+| distance to the nearest tree | min 0.09, median 0.20, **max 0.34 tiles** |
+| share of a chunk's tiles holding a standing tree | 6.3% |
+
+The old rule allowed 2.0 tiles; the measured worst case is now 0.34, which
+is a hive at the trunk rather than near it. The 6.3% matters too: requiring
+a tree on the hive's own tile is a genuine constraint, not a formality — and
+hives still seed at a normal rate under it, so this did not quietly delete
+the feature to satisfy the rule.
 
 ### Harvesting honey — the one genuinely new player-interaction mechanic
 
@@ -787,6 +869,18 @@ tree with zero real visits this cycle bears nothing at all, and
 seeding new trees too. Closes the full loop the feature exists for:
 blossom → scent → bee attraction → visit → fruit set and new growth.
 
+✅ **A hive hangs from a branch on its own tile, and is drawn up in it**
+(2026-09-19, see "A radius is not a branch" above) — reported live:
+"Beehives should not be built on grass... they need a tree branch to
+build it please". The 2026-09-08 rule below was right about what a hive
+needs and wrong about how to ask for it: a radius admits the tile next to
+a trunk, which is grass. The anchor is now the hive's own tile, the
+radius constant is deleted rather than widened-down to zero, and the comb
+is drawn 0.6 of a real tree's real height up — measured against the tree
+art, not chosen. **Not verified in a running game**: the rule and the
+hang height are both tested against real generated terrain and the real
+art, but nobody has looked at one in play.
+
 ✅ **A hive must be a real physical anchor — a tree or a structure,
 never free-floating** (2026-09-08, see "Absconding" above) —
 `EarthChunkManager._has_real_hive_anchor` gates swarming, absconding,
@@ -794,8 +888,9 @@ and harvest-relocation (via `_find_bee_hive_site`) AND initial
 world-generation seeding (via `BeeColony._init`'s new optional
 `extra_site_check` Callable, injected only by real chunk loading —
 every other/existing caller is completely unaffected). Never a
-river/lake tile; otherwise a real tree or a real building piece within
-a small, tight radius. **Wild bee nests have the identical claim
+river/lake tile; otherwise a real standing tree or a real building piece
+**on the hive's own tile** (a small radius until 2026-09-19 — see "A
+radius is not a branch"). **Wild bee nests have the identical claim
 ("needs real deadwood/an old stem nearby") and no equivalent
 enforcement — a known, named, not-yet-fixed parallel gap**, since this
 pass was specifically asked about honeybee hives.
