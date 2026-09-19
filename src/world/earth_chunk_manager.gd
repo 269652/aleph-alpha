@@ -14541,6 +14541,24 @@ func _clear_vegetation_on_cells(
 ## first -- build_at_global doesn't check occupancy the way
 ## BuildingPlacement.can_place does, so overwriting a wall with a door must
 ## not leave the old wall's collision behind.
+## Whether a real building piece on this tile stops something walking onto
+## it -- a wall or a window, but never a door or a floor.
+##
+## The SAME question _sync_piece_collision asks before it spawns the tile's
+## StaticBody2D, from the same two BuildingPiece facts, so what stops the
+## PLAYER (physics) and what stops an NPC or an animal (this query) can
+## never disagree about a given piece.
+##
+## It exists because a marker is a Sprite2D that moves by setting
+## `position`: no collision body in the world has ever had the slightest
+## effect on one, so the walls a player cannot pass were walked straight
+## through by every animal in the village. Reported live: "Horses still
+## aren't blocked by houses".
+func piece_blocks_movement_at_global(global_x: int, global_y: int) -> bool:
+	var tile_id := modification_at_global(global_x, global_y)
+	return BuildingPiece.has_piece(tile_id) and not BuildingPiece.is_walkable(tile_id)
+
+
 func _sync_piece_collision(global_cell: Vector2i, tile_id: String) -> void:
 	_remove_piece_collision(global_cell)
 	if BuildingPiece.has_piece(tile_id) and not BuildingPiece.is_walkable(tile_id):
