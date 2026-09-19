@@ -1004,7 +1004,9 @@ func _ready() -> void:
 	# it takes was spent staring at scenes/world.tscn's own raw, never-yet-
 	# updated default state instead of a real loading screen --
 	# UI/DebugLabel's literal .tscn-authored placeholder text ("Loading...",
-	# top-left), UI/PlayerHealthBar/Fill's green ColorRect sitting at its
+	# top-left -- that node is gone now, see docs/concept/hud.md "The top-left
+	# strip"; the rest of the scaffold below is unchanged),
+	# UI/PlayerHealthBar/Fill's green ColorRect sitting at its
 	# authored default (unset) width, and UI/Minimap/PlayerDot's yellow
 	# square floating with no minimap texture behind it yet -- reported live,
 	# via a screenshot, as a "stuck"/"not professional"-looking loading

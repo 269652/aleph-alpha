@@ -244,7 +244,11 @@ effect, confirmed on a real, timestamped, screenshotted launch: the
 player sees the intro's first frame for a beat, then the raw,
 not-yet-populated `UI` scaffold (`DebugLabel`'s literal placeholder text,
 an empty progress bar, a bare minimap dot) for however long the heavy
-setup takes, then the finished main menu — the intro's own ~3.2s
+setup takes, then the finished main menu
+
+> `DebugLabel` no longer exists — it split into the world-clock card and the
+> F3 diagnostics strip (see [hud.md](hud.md) "The top-left strip"). The
+> scaffold is one item shorter; nothing else about this account changed. — the intro's own ~3.2s
 animation never actually plays out on screen at all.
 
 **A methodology note worth recording, because it cost real time on this
