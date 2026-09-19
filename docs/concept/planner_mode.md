@@ -321,6 +321,41 @@ whole.
   integrated over absence. The two rates differing is a decision, pinned by
   `test_the_settlements_own_construction_keeps_the_catchup_rate` rather
   than left to drift.
+- ✅ **Two actions, two keys, and a prompt that names them** (2026-09-19) —
+  reported a third time: *"Planned nodes (e.g. pavement) still can't be
+  actually built by the player or hired NPCs... there should be tooltips with
+  hotkeys for both actions"*.
+
+  The mechanism was not broken: `test_world_raising_a_plan.gd` drives it end
+  to end on a real ledger, chunk manager and player, and a pavement plan
+  really is laid by hand and really is laid by a paid hire. What was missing
+  was the **player's half** of it, and in two ways.
+
+  Both actions hung off the **talk key**, which offered the hire first and
+  fell through to your own hands when it failed. Standing in a village —
+  which is where wireframes are raised — one press did one of three things
+  and nothing said which. And the floating prompt over a wireframe read
+  **"Talk (G)"**, for the same reason: a villager is nearly always in
+  talking range, and the prompt chain asked about people before plans.
+
+  So `_raise_plan_yourself` and `_hire_builder_for_plan` are separate, one
+  **context slot** each — the two keys `Keybindings` already keeps for
+  exactly this ("what they do is decided by whatever is under the cursor and
+  the state it is in"), rather than two new letters on a keyboard with one
+  free. Each **refuses in its own terms**: "Nobody here to hire", "does not
+  know you well enough", "You cannot pay them" — and your own hands are one
+  key over, always. **A reversal, deliberately:** the old fall-through from a
+  failed hire to your own labour is gone, because it is precisely what made
+  the outcome unpredictable.
+
+  A wireframe in reach is prompted **before** the villager beside you — it is
+  the least ambiguous thing in reach, you walked onto it — naming the plan
+  and both keys, read live from the bindings like every other prompt here.
+  The overloaded `_raise_plan_within_reach` is deleted rather than left dead.
+
+  *Named:* standing at a wireframe while also within reach of a cart or a
+  tame animal, the same slot can still do both — the context slots are polled
+  by `Player` as well as read here. Rare, and both outcomes are harmless.
 - ⬜ **A raised build in progress does not survive a reload.** The project
   itself is persisted, but `_hired_builds`/`_player_builds` — the records
   that say *whose* hours advance it — live only in memory. A raised build

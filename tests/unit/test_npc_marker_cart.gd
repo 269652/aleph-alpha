@@ -355,3 +355,170 @@ func test_a_load_is_credited_once_however_long_the_round_runs():
 	var market: VillageMarket = marker.economy.market
 	_run(400.0)
 	assert_eq(float(market.stock.get("beam", 0.0)), 8.0, "eight beams, counted eight times over")
+
+
+# -- the round is real work, so a need never abandons it ---------------------
+#
+# Reported in play, with the warehouse readout open at "Stored: 0 / 240":
+# *"The porter is moving products (beams, logs) from the sawmill to the
+# warehouse but unloading doesn't put anything into warehouse.. storage is
+# still 0 and goods just vanish"*.
+#
+# The goods were not vanishing. They were on the wagon, and the wagon never
+# arrived: a carter mid-round was not counted as being on real work, so
+# every thirst that came up steered them to the well instead of the store --
+# and thirst comes up roughly every seventeen seconds. The beams really did
+# leave the sawmill and the warehouse really did stay empty, which is
+# exactly what was described.
+#
+# The tests above could not see it, because the well in them stands ON the
+# store: a thirsty carter in that village walks to the door either way. This
+# one puts the well where a real village puts it, in the plaza, well away
+# from the store.
+#
+# The same fix the farmer's own field already has (is_on_real_work): real
+# work against the real world outranks a need, so a hunter mid-chase
+# finishes the chase and a carter mid-round finishes the round.
+
+
+func _well_across_the_village(at: Vector2i) -> void:
+	marker.landmarks["well"] = _centre(at)
+
+
+func test_a_carter_mid_round_counts_as_being_on_real_work():
+	world.deposit_to_structure_at(MILL_CELL.x, MILL_CELL.y, "beam", 8)
+	var on_work := false
+	for i in 600:
+		marker._process(0.1)
+		if CartLoad.total(cart.stock) > 0:
+			on_work = marker.is_on_real_work()
+			break
+	assert_true(on_work, "a carter walking a loaded wagon to the store is working")
+
+
+## The report itself: a village whose well is not its warehouse still gets
+## its timber delivered.
+func test_the_store_receives_the_load_even_with_the_well_across_the_village():
+	_well_across_the_village(Vector2i(60, 60))
+	world.deposit_to_structure_at(MILL_CELL.x, MILL_CELL.y, "beam", 8)
+	for i in 6000:
+		marker._process(0.1)
+		if world.structure_stock_at(STORE_CELL.x, STORE_CELL.y, "beam") > 0:
+			break
+	assert_eq(
+		world.structure_stock_at(STORE_CELL.x, STORE_CELL.y, "beam"), 8,
+		"the beams reached the store, not the well"
+	)
+
+
+## And nothing is lost on the way: what left the mill is at the store, never
+## still riding a wagon that keeps being turned around.
+func test_nothing_is_left_riding_the_wagon_when_the_well_is_far_away():
+	_well_across_the_village(Vector2i(60, 60))
+	world.deposit_to_structure_at(MILL_CELL.x, MILL_CELL.y, "beam", 8)
+	for i in 6000:
+		marker._process(0.1)
+		if world.structure_stock_at(STORE_CELL.x, STORE_CELL.y, "beam") > 0:
+			break
+	assert_eq(CartLoad.total(cart.stock), 0, "the wagon is empty again")
+	assert_eq(world.total_on_shelf(MILL_CELL), 0, "and the mill's shelf really emptied")
+
+
+## Off the clock the round is still dropped, exactly as before -- being on
+## real work is about the round being in flight, not about a carter who is
+## asleep.
+func test_a_carter_off_the_clock_is_not_on_real_work():
+	world.deposit_to_structure_at(MILL_CELL.x, MILL_CELL.y, "beam", 8)
+	var off_duty := _carter_with(NeverWorkPlanner.new(), VillageCart.OCCUPATION)
+	for i in 200:
+		off_duty._process(0.1)
+	assert_false(off_duty.is_on_real_work())
+	remove_child(off_duty)
+	off_duty.free()
+
+
+## And a villager who is not a carter is never on the round's own work.
+func test_a_villager_who_is_not_a_carter_is_not_on_round_work():
+	var nurse := _carter_with(AllWorkPlanner.new(), "nurse")
+	world.deposit_to_structure_at(MILL_CELL.x, MILL_CELL.y, "beam", 8)
+	for i in 200:
+		nurse._process(0.1)
+	assert_false(nurse.is_on_real_work())
+	remove_child(nurse)
+	nurse.free()
+
+
+# -- a loaded wagon delivers before it collects again ------------------------
+#
+# Measured against a real village (tools/probe_village_store_round.gd) while
+# chasing the report above: the warehouse readout really does climb now, but
+# TWENTY-FOUR beams -- a full wagon -- were still sitting on the cart after
+# ten simulated days, and only one or two deliveries had arrived at all.
+#
+# The reason is the clock. A carter walks the round only on the clock, and
+# drops it when the block ends (which is correct, and stays). But dropping it
+# returned them to SEEKING, so the next block began by walking to a SHELF and
+# loading MORE onto a wagon that had never been emptied -- and a village is
+# wider than a work block is long, so the load grew until the wagon was full
+# and the store saw almost none of it.
+#
+# A carter with something already on the wagon finishes THAT delivery first.
+# It is what a real carter does, and it is the difference between a round
+# that completes across days and one that only completes when a whole trip
+# happens to fit inside a single block.
+
+
+## A day worked in halves, the way a real villager's is -- the probe measured
+## the real carter on the clock 2750 ticks in 6000, and the bug only exists
+## because the round is interrupted by the end of a block at all.
+class HalfDayPlanner:
+	extends NpcPlanner.Planner
+	func plan_day(_identity: NpcIdentity, _day_index: int) -> Array:
+		return [
+			{"time_block": "morning", "location_tag": "warehouse", "activity": "work"},
+			{"time_block": "midday", "location_tag": "home", "activity": "idle"},
+			{"time_block": "evening", "location_tag": "warehouse", "activity": "work"},
+			{"time_block": "night", "location_tag": "home", "activity": "sleep"},
+		]
+
+
+func test_a_carter_with_a_loaded_wagon_heads_for_the_store_not_for_a_shelf():
+	world.deposit_to_structure_at(MILL_CELL.x, MILL_CELL.y, "beam", 8)
+	marker.position = _centre(MILL_CELL)
+	marker._process(0.01)  # takes the shaft
+	cart.load_on("beam", 5)
+
+	var target = marker._step_cart(0.1, true)
+
+	assert_eq(target, _centre(STORE_CELL), "a full wagon is a delivery, not a collection")
+
+
+func test_a_loaded_wagon_is_not_piled_higher_before_it_is_emptied():
+	world.deposit_to_structure_at(MILL_CELL.x, MILL_CELL.y, "beam", 8)
+	marker.position = _centre(MILL_CELL)
+	marker._process(0.01)
+	cart.load_on("beam", 5)
+
+	for i in 30:
+		marker._step_cart(0.1, true)
+
+	assert_eq(int(cart.stock.get("beam", 0)), 5, "nothing else went on")
+	assert_eq(world.total_on_shelf(MILL_CELL), 8, "and the shelf was left alone")
+
+
+## The end-to-end proof of this is a MEASUREMENT, not a test here, and it
+## says so rather than pretending otherwise: the failure needs a real
+## village's own distances, schedule and four real producers to show up at
+## all, and a stub world delivers everything either way (tried, both with the
+## carter living at the store and away from it -- it passes without the fix,
+## which is a test that proves nothing).
+##
+## tools/probe_village_store_round.gd is the measurement. Against a real
+## village, before: ONE delivery in ten simulated days, twenty-four beams --
+## a full wagon -- still parked at the end, warehouse readout at 12 of 48.
+## After: four deliveries, an empty wagon, and all 48 in the readout.
+##
+## What is pinned here is the mechanism that does it: a loaded wagon heads
+## for the store (above), a dropped round keeps its leg (LogisticsBehavior.
+## resume_carrying and _step_cart's own off-the-clock branch), and a carter
+## mid-round counts as working (above).

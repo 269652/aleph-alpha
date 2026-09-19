@@ -10030,6 +10030,69 @@ constant's own doc comment). Built red-first end to end, merged to
   `DroppedItem`, no per-chunk sim or marker at all). Neither applies a
   Karma penalty (a fungus/seed, not an animal); flowers are excluded
   by construction (never in any group at all), needing no new check.
+- **A planned node says what it offers, and each action has its own key**
+  (2026-09-19). ✅ Done — reported a third time: *"Planned nodes (e.g.
+  pavement) still can't be actually built by the player or hired NPCs...
+  there should be tooltips with hotkeys for both actions"*. The
+  mechanism was never broken — `test_world_raising_a_plan.gd` drives it
+  end to end on a real ledger, chunk manager and player — so the gap was
+  the player's half: both actions hung off the talk key, which offered
+  the hire first and fell through to your own hands, so one press did
+  one of three things; and the floating prompt over a wireframe read
+  "Talk (G)", because wireframes are raised in villages and somebody is
+  nearly always in talking range. Now `_raise_plan_yourself` and
+  `_hire_builder_for_plan` take one context slot each (the two keys the
+  bindings already keep for exactly this), each refuses in its own terms
+  rather than quietly becoming the other — a deliberate reversal of the
+  old fall-through, which is what made the outcome unpredictable — and a
+  wireframe in reach is prompted before the villager beside you, naming
+  the plan and both keys live from the bindings. Full writeup:
+  [planner_mode.md](concept/planner_mode.md).
+- **A farm bed survives the night, so wheat really ripens** (2026-09-19).
+  ✅ Done — reported three times over, most recently with the field in
+  shot: *"Planted crops still vanish and don't grow and no harvest
+  happens"*, and *"i don't even know what the purple crops are it
+  plants.. atm it should plant only wheat"*. Measured FIRST
+  (`tools/probe_village_farming.gd`): thirteen of eighteen beds ended
+  withered over ten simulated days, two of three farmhouses took in
+  nothing at all, and the farmer was working 2750 of 6000 ticks the
+  whole time. A bed's whole drought tolerance was half its growth time
+  — ten to thirty seconds — against a villager's day of sixty seconds
+  in four blocks, of which up to three are spent asleep. Every bed died
+  every night and each morning was spent replanting ground that would
+  die again by evening. `FarmPlot.MIN_WATER_GRACE_SECONDS` is now a
+  floor of one night, taken from that day and those blocks and pinned
+  against both by test rather than restated by import;
+  `VillageFarm.action_for` reads the bed's real window too. Measured
+  again after: **zero withered beds**, and the same three farmhouses
+  taking in 51, 70 and 73 wheat where they took 15, 0 and 0.
+  `FIELD_YIELD_PER_WORK_BLOCK` re-measured at 278 from 225 by the test
+  that pinned the old one — the founding roster had been sized against
+  a field that lost beds every night. Every field also sows wheat for
+  now: a narrowing of the crop, not of who farms, and putting herbs
+  back in the herbalist's bed is one table entry. Full writeup:
+  [village_farms.md](concept/village_farms.md).
+- **The carter's load actually reaches the store** (2026-09-19). ✅
+  Done — reported with the readout open at "Stored: 0 / 240": *"The
+  porter is moving products (beams, logs) from the sawmill to the
+  warehouse but unloading doesn't put anything into warehouse.. storage
+  is still 0 and goods just vanish"*. Nothing vanished: the beams were
+  on the wagon and the wagon kept being turned around. Measured first
+  with a new `tools/probe_village_store_round.gd` (which reads the same
+  `building_inventory_at` the popover draws, not the tile-keyed stock
+  the carter's own tests assert against): one delivery in ten simulated
+  days, a full wagon still parked at the end, readout at 12 of 48.
+  Three separate causes: a carter mid-round was not on real work, so
+  thirst steered them to the well roughly every seventeen seconds; a
+  dropped round threw its leg away, so each block began walking back
+  out to a shelf nearly reached the evening before; and a loaded wagon
+  went to another shelf rather than to the store, topping up a load
+  that was never emptied. After: four deliveries, an empty wagon, all
+  48 beams in the readout. The end-to-end proof is that measurement and
+  the test file says so — a stub world delivers either way, so a unit
+  test claiming it would prove nothing; what the tests pin is each
+  mechanism. Full writeup:
+  [village_warehouse.md](concept/village_warehouse.md).
 - **Crushed underfoot, generalized to ANY animal** (2026-09-19). ✅
   Done — reported in play: *"Stepping on a frog doesn't kill it?
   Shouldn't this work out of the box for ANY animal when enough
@@ -26640,6 +26703,183 @@ Flagged to the user rather than flipped a fourth time.
 
 Tests: `test_farmer_marker.gd` 12/12 (5 new), `test_farm_plot_marker.gd`
 42/42, `test_farmer_behavior.gd` 14/14.
+
+## The real item art finally reaches the screen (`concept/illustrated_art_addressing.md`, 2026-09-19)
+
+Asked for directly: *"Can you wire the real tool sprites? Axe is currently
+using procedural sprite, but should use the illustrated one"*, and *"Sword
+as well"*.
+
+✅ **Nothing was broken; nothing was connected.** The registry (~100
+subjects), the resolver (the fallback lattice) and the loader (slice, key,
+anchor) had all shipped and were all tested. But **nothing anywhere called
+`IllustratedArtLoader`** — it appeared only inside *other files'* doc
+comments — so every item in the game drew `ProceduralItemSprite`'s
+generated shape while ~100 subjects' worth of real art sat on disk
+unreferenced. `illustrated_item_art.gd` is the missing middle: it backs the
+resolver's injected `address_exists` with the real file tree (the half that
+never existed), loads the resolved address, and falls back to the generated
+sprite for a subject with none.
+
+✅ **Six call sites, four contexts, and the pictures really differ.**
+
+| Call site | Context | What the art shows |
+| --- | --- | --- |
+| `World` hotbar slot | `icon` | the item presented flat |
+| `DroppedItem` | `ground` | the thing laid down |
+| `Player.equip_armor` + interior outfit | `equipped` | worn — the axe on its belt strap |
+| `Player.equip_item` + interior outfit | `held` | the gripped pose the tool slot swings |
+
+✅ **Fitted to `ProceduralItemSprite.SIZE`, which is what makes it a
+drop-in.** No call site re-scales and `world_scale_for` keeps its meaning.
+It matters most for `held`: the loader's `pivot` anchor returns the whole
+authored cell (220×300 for the axe) and `CharacterView.equip_weapon` offsets
+by half the texture height, so an unfitted one would displace the grip
+tenfold. A **uniform** scale is compatible with the pivot contract rather
+than a violation of it — every pixel keeps its position relative to every
+other, so the grip point stays put at a different resolution.
+
+✅ **`stone_axe` and `stone_blade` could not reach their own art.** Both had
+real files on disk (16 and 20) and no registry entry at all, so both
+resolved past their own pictures to the procedural sprite. Found by writing
+the sweep the addressing doc itself deferred until real art existed — it
+caught them on its first run. A second sweep checks contexts, since a
+subject declared icon-only cannot reach three quarters of its own art.
+
+✅ **Two tests that pinned "procedural" as the contract are corrected, not
+worked around.** `test_equipping_an_item_shows_its_sprite_id_art_not_its_
+raw_id` and `test_equipping_armor_shows_it_in_the_matching_character_view_
+slot` both asserted `ProceduralItemSprite`'s output. Neither was ever about
+the generator: the first protects the `sprite_id` indirection (and still
+does — `iron_sword_blessed` has no art tree of its own and must borrow
+`iron_sword`'s), the second that equipping puts THIS item's picture in THIS
+slot.
+
+101 of the catalog's 145 ids now draw real art; the other 44 fall back
+exactly as before, which is what made it safe to wire every subject at once
+rather than one id at a time. Verified by eye as well as by test: all four
+contexts rendered for `iron_axe`, `stone_axe`, `iron_sword`, `stone_blade`
+and `leather_helm` and looked at — flat, gripped, strapped, laid down —
+plus a fringe/key check finding 0 near-white border pixels and 0 surviving
+magenta on the produced icons.
+
+🚧 **Animation by address is still not played.** The registry declares
+`attack` timing and seven alternate `pose_*` frames per weapon, and
+`frames_for` returns every frame of a row in order, but nothing steps them:
+a swing is still a pendulum rotation of one static texture, not the
+authored 8-frame wind-up/release/recovery.
+
+## Pavement was 10 dB too loud while measuring perfectly level (`concept/creature_and_footstep_audio.md`, 2026-09-19)
+
+Reported live: *"pavement footsteps are way too loud ..."*.
+
+✅ **Both things were true: the pools were level-matched, and pavement was
+far too loud.** Every surface sat within 2.5 dB of a common -24.59 dBFS
+RMS, and `test_no_surface_is_dramatically_louder_than_another` passed on
+exactly that. The trap is that **RMS is not loudness for an impulsive
+sound.** A footstep is a transient and a hard surface packs its energy into
+a far sharper one — at equal RMS, `rock`'s peaks sat 8.4 dB above `grass`'s
+(crest factor 20.64 dB against 12.28 dB).
+
+✅ **Measured rather than tweaked by ear.** ITU-R BS.1770 K-weighted
+loudness — what EBU R128 normalises broadcast audio by, and the standard
+answer to precisely this failure of RMS — added to
+`tools/prepare_footstep_oneshots.py` as two biquads and the standard's own
+mean square. Under it, the shipped RMS-matched gains measured:
+
+| surface | LUFS after its shipped gain | vs grass |
+| --- | --- | --- |
+| `grass` (signed off by ear) | -33.65 | — |
+| `rock` (pavement) | -23.80 | **+9.85 dB** |
+| `sand` | -20.11 | +13.5 dB |
+
+The pipeline matches on loudness now: `rock` -3.3 → **-12.8**, `sand` -1.0
+→ -11.1, `default` -6.9 → -14.0, `forest` +11.1 → -0.9. Achieved spread
+**0.08 dB**, against 13.5 dB of real loudness difference before. Nothing is
+capped and the loudest pool peak is -7.48 dBFS.
+
+✅ **The anchor cannot drift any more.** `grass` is the one level a person
+actually listened to and accepted (-12.0 dB), so the target is now
+**derived** as grass's own measured loudness plus that -12.0 rather than
+written down. Not a stylistic preference: a hardcoded target rounded grass
+to -12.5 on the first run of this switch, moving the only number nobody was
+entitled to move. The derivation is what caught it.
+
+✅ **`--remeasure`**: re-derives every gain from the clips already in the
+repo, downloading no source packs and rewriting no audio. The clips were
+never wrong; only the gains computed from them were.
+
+✅ **A test that passed while the bug was live is corrected, not worked
+around.** `test_no_surface_is_dramatically_louder_than_another` measured
+`achieved_rms_dbfs`; its name was right and its metric was wrong. It now
+measures `achieved_lufs`. Worth stating plainly: the RMS spread is
+deliberately **wide** now (12.74 dB), and that is the correct outcome —
+surfaces whose energy is shaped differently must sit at different RMS to
+sound equally loud.
+
+Tests: `test_footstep_sound.gd` 43/43 (+2 new, 1 corrected).
+
+## The square is for the stands; the well stands beside it (2026-09-19)
+
+Reported with the square in shot: *"The well should not be placed on the
+plaza also the stand is too big and it's placed ontop of a house.. should be
+on the plaza instead"* — three separate defects, each measured before it was
+touched.
+
+### ✅ A prop stands ON its cell, not over the one below it
+
+A landmark `Sprite2D` is centre-anchored, so **half its height hung SOUTH of
+the cell it was placed on**. The stall's art is ~1.7 tiles tall and its cell
+is the plaza's southernmost row, so ~0.85 of a tile of awning landed on the
+row where the cottages front the street. That is the whole of "placed ontop
+of a house" — nothing was mis-sited.
+
+Every prop is anchored at its **foot** now, the rule `CartMarker` already
+follows and the one `_solid_body_for` already stated for the collision box
+("a prop stands ON its own base"). Pinned both ways: a prop may not hang
+below its own cell, and may not float above it either.
+
+### ✅ A stall is narrower than the cottage it sells in front of
+
+That was already the rule — *"It was 52 — 3.25 tiles on a 16-pixel grid,
+wider than the cottages it sells in front of"* — but the cut landed on 32,
+which is **exactly** two tiles, and `house_small` is **exactly** two tiles
+wide. Equal is not narrower. The size is now derived from `BuildingCatalog`'s
+own smallest house footprint and pinned by test, so a new, smaller cottage
+fails loudly rather than quietly leaving the stall the wider of the two.
+
+Measured on the way: the procedural and real-art paths disagree by exactly
+2× (a prop with supplied art draws at twice the size of the same prop's
+procedural drawing — well 2.5 tiles vs 1.2, stall 2.0 vs 1.0). The real-art
+path matches what the `SIZES` comments intend, so the numbers were read that
+way. **The procedural path drawing at half size is a real, separate
+inconsistency and is left standing rather than fixed blind** — every prop
+with art already goes through the other path.
+
+### ✅ The well stands beside the square, not on it
+
+A square is an open place to trade in, and since the well became solid it was
+taking a cell of it nobody could even walk through. It moves one column west
+of the plaza, on the row south of the street: off the paving, off the road,
+still at the square's edge.
+
+**That immediately broke something, and the suite caught it.** A landmark is
+a node, not a persisted tile, so nothing reading `modification_at_global` can
+see one — and a farmstead's rails are laid *after* the landmarks are
+grounded. On the square's paving that never mattered; off it, the first
+village measured drove a fence rail straight through the well. The shared
+landmarks' cells are reserved for the whole farm pass now, beds and rails
+alike.
+
+Three older tests encoded the contract this changed (the stall's exact 32,
+and two asserting the well stands on the plaza). Each was rewritten to the
+new rule rather than deleted — the well must still slide with the square, and
+must still keep clear of the hall and its doorstep.
+
+Tests: `test_village_renderer.gd` 129/129 (three new), `test_village_layout.gd`
+and `test_procedural_landmark_sprite.gd` (six new between them),
+`test_village_farm.gd`, `test_village_pond.gd`, `test_landmark_sheet.gd`,
+`test_earth_chunk_manager_city_hall.gd` — 352 green in total.
 
 ---
 

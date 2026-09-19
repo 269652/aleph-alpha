@@ -209,9 +209,31 @@ func test_ownership_is_decided_the_same_way_every_time():
 
 # -- what grows there ------------------------------------------------------
 
-func test_the_farmer_grows_wheat_and_the_herbalist_grows_herbs():
+## Asked directly, with a field of unrecognisable purple plants in shot:
+## *"i don't even know what the purple crops are it plants.. atm it should
+## plant only wheat which grows and gets harvested properly"*. The purple was
+## the herbalist's herb, and it was dying overnight exactly as the wheat was
+## (see FarmPlot.MIN_WATER_GRACE_SECONDS).
+##
+## So every field sows wheat for now. Deliberately a narrowing of the CROP,
+## not of who farms: the herbalist keeps the farmhouse and the field an
+## earlier ask gave them ("similar to a farmer the herbalist should build a
+## farm house and plant herbs"), and putting herbs back in their bed is this
+## one table entry.
+func test_every_field_a_village_works_sows_wheat_for_now():
 	assert_eq(VillageFarm.crop_for("farmer"), "wheat")
-	assert_eq(VillageFarm.crop_for("herbalist"), "herb")
+	assert_eq(VillageFarm.crop_for("herbalist"), "wheat")
+	for occupation in VillageFarm.CROP_BY_OCCUPATION:
+		assert_eq(
+			VillageFarm.CROP_BY_OCCUPATION[occupation], "wheat",
+			"%s sows something the player cannot recognise" % occupation
+		)
+
+
+## And the herbalist still farms at all -- the narrowing is what is sown,
+## never whether they have a field.
+func test_the_herbalist_still_has_a_field_of_their_own():
+	assert_ne(VillageFarm.crop_for("herbalist"), "")
 
 
 func test_every_other_occupation_has_no_field():
@@ -246,9 +268,10 @@ func test_a_freshly_watered_growing_plot_needs_nothing():
 
 func test_a_growing_plot_is_watered_once_it_has_used_up_its_margin():
 	var plot := _growing_plot(0.0)
-	var margin: float = (
-		plot.growth_time * FarmPlot.WATER_GRACE_FRACTION * VillageFarm.WATER_BEFORE_WITHER_FRACTION
-	)
+	# The bed's own real window, not growth_time's share of it: a bed's
+	# tolerance has a floor of one night now (FarmPlot.MIN_WATER_GRACE_
+	# SECONDS), and the margin is half of whatever that bed really has.
+	var margin: float = plot.grace_seconds() * VillageFarm.WATER_BEFORE_WITHER_FRACTION
 	plot.time_since_watered = margin - 0.01
 	assert_eq(VillageFarm.action_for(plot), "", "still inside its own margin")
 	plot.time_since_watered = margin
@@ -850,3 +873,34 @@ func test_no_rail_of_a_rectangular_field_has_to_close_two_sides_at_once():
 			if bed_set.has(cell + step):
 				orthogonal += 1
 		assert_lt(orthogonal, 2, "%s faces beds on %d sides and can only close one" % [str(cell), orthogonal])
+
+
+# -- watering is measured against the bed's REAL window ----------------------
+#
+# A bed's drought tolerance gained a floor of one night (FarmPlot.
+# MIN_WATER_GRACE_SECONDS) after a real village was measured losing thirteen
+# of eighteen beds to the dark. The farmer's own "water it before it wilts"
+# threshold has to be read off the same window, or the two describe different
+# beds: computed from growth_time alone it fires at a quarter of the growth
+# time, which for a fast crop is a fraction of the real window and sends the
+# farmer back to soak ground that is in no danger.
+
+
+func test_a_bed_is_watered_at_half_of_its_own_real_grace_window():
+	var plot := FarmPlot.new()
+	plot.plant("wheat", 7)
+	plot.time_since_watered = plot.grace_seconds() * VillageFarm.WATER_BEFORE_WITHER_FRACTION - 0.01
+	assert_eq(VillageFarm.action_for(plot), "", "not thirsty yet")
+	plot.time_since_watered = plot.grace_seconds() * VillageFarm.WATER_BEFORE_WITHER_FRACTION + 0.01
+	assert_eq(VillageFarm.action_for(plot), "water")
+
+
+## And the margin is real: a bed the farmer is sent to water is always still
+## alive when they get there, for every seed.
+func test_the_watering_call_always_comes_before_the_bed_dies():
+	for seed_value in range(1, 40):
+		var plot := FarmPlot.new()
+		plot.plant("wheat", seed_value)
+		plot.time_since_watered = plot.grace_seconds() * VillageFarm.WATER_BEFORE_WITHER_FRACTION + 0.01
+		assert_eq(VillageFarm.action_for(plot), "water", "seed %d" % seed_value)
+		assert_false(plot.is_withered(), "seed %d was already dead when it was called thirsty" % seed_value)

@@ -78,6 +78,40 @@ TARGET_RMS_DBFS = -24.59
 ## applies per step on top of this (see FootstepSound.pitch_scale_for).
 PEAK_CEILING_DBFS = -1.0
 
+# ITU-R BS.1770 K-weighting, at 48 kHz (the rate pcm() decodes to). Two
+# biquads -- a high shelf standing in for the head's own response, then an
+# RLB high-pass -- and then the standard's own mean square.
+#
+# Added 2026-09-19, reported live: *"pavement footsteps are way too loud"*.
+# The pools WERE level-matched, to within 2.5 dB of a common RMS, and the
+# complaint was still correct: RMS is not loudness for an impulsive sound.
+# A footstep is a transient and a hard surface packs its energy into a much
+# sharper one -- at equal RMS, rock's peaks sit 8.4 dB above grass's (crest
+# 20.64 dB against 12.28 dB). Applying the shipped RMS-matched gains put
+# grass at -33.65 LUFS and rock at -23.80: pavement ran 9.85 dB hot, sand
+# 13.5. K-weighting is the standard answer to exactly this failure of RMS,
+# and is what EBU R128 normalises broadcast audio by.
+K_SHELF_B = (1.53512485958697, -2.69169618940638, 1.19839281085285)
+K_SHELF_A = (1.0, -1.69065929318241, 0.73248077421585)
+K_RLB_B = (1.0, -2.0, 1.0)
+K_RLB_A = (1.0, -1.99004745483398, 0.99007225036621)
+
+# The one footstep level a person has actually listened to and accepted:
+# grass, at volume_db -12.0. Everything else is matched to it.
+ANCHOR_SURFACE = "grass"
+ANCHOR_GAIN_DB = -12.0
+
+# The loudness every pool is matched to is DERIVED from that anchor, not
+# written down: target = grass's own measured loudness + the gain grass was
+# signed off at. Deriving it is what guarantees the anchor cannot drift --
+# a hardcoded target rounded grass to -12.5 on the first run of this
+# switch, moving the one level nobody was entitled to move.
+TARGET_LUFS = None  # filled in by anchored_target() once grass is measured
+
+
+def anchored_target(raw_lufs_by_surface: dict) -> float:
+    return raw_lufs_by_surface[ANCHOR_SURFACE] + ANCHOR_GAIN_DB
+
 ## How long one cut step is allowed to be, and how much recording to keep
 ## AHEAD of the footfall so its own attack is not clipped off.
 CUT_LENGTH_SECONDS = 0.40
@@ -197,6 +231,44 @@ def rms_dbfs(samples: array.array) -> float:
     for value in samples:
         total += value * value
     return dbfs(math.sqrt(total / len(samples)))
+
+
+def _biquad(samples, b, a) -> list:
+    out = [0.0] * len(samples)
+    x1 = x2 = y1 = y2 = 0.0
+    for i, x in enumerate(samples):
+        y = b[0] * x + b[1] * x1 + b[2] * x2 - a[1] * y1 - a[2] * y2
+        out[i] = y
+        x2, x1 = x1, x
+        y2, y1 = y1, y
+    return out
+
+
+def lufs(samples: array.array) -> float:
+    """K-weighted loudness of one clip, in LUFS (see K_SHELF_B above).
+
+    pcm() hands back signed 16-bit integers, so samples are scaled to the
+    +/-1.0 full scale the standard is defined against first -- exactly the
+    /32768.0 dbfs() already applies. Skipping it reads every clip about
+    90 dB hot, which is how it was caught.
+    """
+    if not len(samples):
+        return -120.0
+    scaled = [v / 32768.0 for v in samples]
+    weighted = _biquad(_biquad(scaled, K_SHELF_B, K_SHELF_A), K_RLB_B, K_RLB_A)
+    mean_square = sum(v * v for v in weighted) / len(weighted)
+    return -0.691 + 10.0 * math.log10(mean_square) if mean_square > 0 else -120.0
+
+
+def pool_lufs(clip_levels: list) -> float:
+    """A pool's loudness: the ENERGY mean of its clips, not the dB mean.
+
+    Averaging decibels would let one quiet clip drag a pool's figure down
+    without making the pool any quieter to walk on.
+    """
+    return 10.0 * math.log10(
+        sum(10.0 ** (level / 10.0) for level in clip_levels) / len(clip_levels)
+    )
 
 
 def peak_dbfs(samples: array.array) -> float:
@@ -323,6 +395,80 @@ def fetch(name: str, cache_dir: str) -> str:
     return extracted
 
 
+def remeasure(repo_root: str) -> dict:
+    """Re-derive every gain from the clips ALREADY in the repo.
+
+    The full build downloads several source packs and re-encodes two
+    surfaces; re-deriving a level from the shipped one-shots needs none of
+    that, and must not touch a single audio byte. Added when the matching
+    metric changed from RMS to K-weighted loudness (see K_SHELF_B): the
+    clips were right, only the gains computed from them were wrong.
+    """
+    global TARGET_LUFS
+    out_dir = os.path.join(repo_root, OUT_DIR)
+    measured = {}
+    for surface in sorted(POOLS):
+        names = sorted(
+            n for n in os.listdir(out_dir)
+            if n.startswith(surface + "_") and n.endswith(".ogg")
+        )
+        if not names:
+            raise SystemExit("no shipped clips for %s in %s" % (surface, out_dir))
+        measured[surface] = _measure([os.path.join(out_dir, n) for n in names])
+    # Measure everything first, THEN derive the target from the anchor --
+    # the gain cannot be computed until grass has told us what it is.
+    TARGET_LUFS = anchored_target({s: m["pool_lufs"] for s, m in measured.items()})
+    print("  anchored on %s at %+.1f dB -> target %.2f LUFS"
+          % (ANCHOR_SURFACE, ANCHOR_GAIN_DB, TARGET_LUFS))
+    return {surface: _gained(surface, m) for surface, m in sorted(measured.items())}
+
+
+def _measure(paths: list) -> dict:
+    """One pool's clip measurements, before any target is known."""
+    clips = []
+    for path in paths:
+        samples = pcm(path)
+        clips.append({
+            "file": os.path.basename(path),
+            "seconds": round(len(samples) / RATE, 3),
+            "rms_dbfs": round(rms_dbfs(samples), 2),
+            "peak_dbfs": round(peak_dbfs(samples), 2),
+            "lufs": round(lufs(samples), 2),
+        })
+    return {
+        "clips": clips,
+        "mean_rms": sum(c["rms_dbfs"] for c in clips) / len(clips),
+        "loudest_peak": max(c["peak_dbfs"] for c in clips),
+        "pool_lufs": pool_lufs([c["lufs"] for c in clips]),
+    }
+
+
+def _gained(surface: str, measured: dict) -> dict:
+    """That pool's single matched gain, against the anchored target."""
+    clips = measured["clips"]
+    mean_rms = measured["mean_rms"]
+    loudest_peak = measured["loudest_peak"]
+    pool_loudness = measured["pool_lufs"]
+    gain = TARGET_LUFS - pool_loudness
+    headroom = PEAK_CEILING_DBFS - loudest_peak
+    capped = gain > headroom
+    gain = round(min(gain, headroom), 1)
+    if loudest_peak + gain > PEAK_CEILING_DBFS:
+        gain = math.floor(headroom * 10.0) / 10.0
+    print("  %-11s %2d clips, %7.2f LUFS -> gain %+6.1f dB -> %7.2f LUFS%s" % (
+        surface, len(clips), pool_loudness, gain, pool_loudness + gain,
+        "  (capped at the peak ceiling)" if capped else ""))
+    return {
+        "achieved_lufs": round(pool_loudness + gain, 2),
+        "raw_lufs": round(pool_loudness, 2),
+        "achieved_peak_dbfs": round(loudest_peak + gain, 2),
+        "achieved_rms_dbfs": round(mean_rms + gain, 2),
+        "clips": clips,
+        "gain_db": gain,
+        "peak_capped": capped,
+    }
+
+
 def build(cache_dir: str, repo_root: str) -> dict:
     out_dir = os.path.join(repo_root, OUT_DIR)
     os.makedirs(out_dir, exist_ok=True)
@@ -366,10 +512,14 @@ def build(cache_dir: str, repo_root: str) -> dict:
                 "seconds": round(len(samples) / RATE, 3),
                 "rms_dbfs": round(rms_dbfs(samples), 2),
                 "peak_dbfs": round(peak_dbfs(samples), 2),
+                "lufs": round(lufs(samples), 2),
             })
         mean_rms = sum(c["rms_dbfs"] for c in clips) / len(clips)
         loudest_peak = max(c["peak_dbfs"] for c in clips)
-        gain = TARGET_RMS_DBFS - mean_rms
+        pool_loudness = pool_lufs([c["lufs"] for c in clips])
+        # Matched on LOUDNESS, not RMS -- see K_SHELF_B's own note for why
+        # the RMS match left pavement 9.85 dB hot while measuring level.
+        gain = TARGET_LUFS - pool_loudness
         headroom = PEAK_CEILING_DBFS - loudest_peak
         capped = gain > headroom
         # The gain ships as a one-decimal constant in GDScript, so it is
@@ -381,6 +531,8 @@ def build(cache_dir: str, repo_root: str) -> dict:
         if loudest_peak + gain > PEAK_CEILING_DBFS:
             gain = math.floor(headroom * 10.0) / 10.0
         surfaces[surface] = {
+            "achieved_lufs": round(pool_loudness + gain, 2),
+            "raw_lufs": round(pool_loudness, 2),
             "gain_db": gain,
             "achieved_rms_dbfs": round(mean_rms + gain, 2),
             "achieved_peak_dbfs": round(loudest_peak + gain, 2),
@@ -397,26 +549,42 @@ def main() -> None:
     global FFMPEG
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--cache", default=".cache/footstep_sources")
+    parser.add_argument(
+        "--remeasure", action="store_true",
+        help="re-derive the gains from the clips already in the repo, "
+             "downloading nothing and rewriting no audio",
+    )
     args = parser.parse_args()
     FFMPEG = ffmpeg()
     repo_root = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
-    surfaces = build(os.path.join(repo_root, args.cache), repo_root)
+    if args.remeasure:
+        print("re-measuring the shipped clips (no downloads, no re-encoding):")
+        surfaces = remeasure(repo_root)
+    else:
+        surfaces = build(os.path.join(repo_root, args.cache), repo_root)
     manifest = {
         "generated_by": "tools/prepare_footstep_oneshots.py",
+        "target_lufs": TARGET_LUFS,
         "target_rms_dbfs": TARGET_RMS_DBFS,
         "peak_ceiling_dbfs": PEAK_CEILING_DBFS,
         "why_this_target": (
             "grass.ogg measures -12.59 dBFS RMS and was accepted at volume_db "
-            "-12.0, so this is the one footstep level already signed off on."
+            "-12.0, so this is the one footstep level already signed off on. "
+            "Pools are matched by K-weighted loudness (ITU-R BS.1770) rather "
+            "than RMS: reported live as 'pavement footsteps are way too loud' "
+            "while every pool sat within 2.5 dB of a common RMS, because RMS "
+            "under-reads a transient and a hard surface is all transient."
         ),
         "surfaces": surfaces,
     }
     with open(os.path.join(repo_root, MANIFEST), "w") as handle:
         json.dump(manifest, handle, indent=2, sort_keys=True)
         handle.write("\n")
-    spread = [s["achieved_rms_dbfs"] for s in surfaces.values()]
-    print("\nwrote %s\n  %d surfaces, achieved rms spread %.2f dB" % (
-        MANIFEST, len(surfaces), max(spread) - min(spread)))
+    spread = [s["achieved_lufs"] for s in surfaces.values()]
+    rms_spread = [s["achieved_rms_dbfs"] for s in surfaces.values()]
+    print("\nwrote %s\n  %d surfaces, achieved loudness spread %.2f dB (rms %.2f dB)" % (
+        MANIFEST, len(surfaces), max(spread) - min(spread),
+        max(rms_spread) - min(rms_spread)))
     # Said out loud because this repository has been bitten by it before:
     # the .import sidecars went with the clips, so until Godot re-imports,
     # every path in the manifest loads as null.
