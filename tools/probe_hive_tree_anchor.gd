@@ -11,7 +11,6 @@ extends SceneTree
 ## the nearest real standing tree -- so the fix can be re-measured rather
 ## than assumed to have worked.
 
-const EarthChunkManager = preload("res://src/world/earth_chunk_manager.gd")
 const EarthChunkGenerator = preload("res://src/world/earth_chunk_generator.gd")
 const GeoCoordinates = preload("res://src/world/geo_coordinates.gd")
 const TerrainRenderer = preload("res://src/rendering/terrain_renderer.gd")
@@ -26,12 +25,21 @@ const PLACES := {
 }
 
 
+## EarthChunkManager ALONE is loaded at run time rather than preloaded, for
+## the reason tools/probe_chunk_leak.gd already documents: a tool script is
+## compiled while the project's autoloads are still coming up, and this is
+## the script with the deepest preload graph in the project, so preloading it
+## fails to compile ("Identifier not found: WorldItemBus"). The three above
+## have no such graph.
 func _initialize() -> void:
+	var EarthChunkManager = load("res://src/world/earth_chunk_manager.gd")
 	var tile_map_layer := TileMapLayer.new()
 	var entities_parent := Node2D.new()
 	var creatures_parent := Node2D.new()
 	get_root().add_child(entities_parent)
-	var manager := EarthChunkManager.new(tile_map_layer, entities_parent, creatures_parent)
+	# Untyped `=`, not `:=`: EarthChunkManager is load()ed above rather than
+	# preloaded, so it carries no static type for := to infer from.
+	var manager = EarthChunkManager.new(tile_map_layer, entities_parent, creatures_parent)
 	var geo := GeoCoordinates.new()
 
 	var hives_total := 0

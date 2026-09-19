@@ -389,15 +389,25 @@ func test_every_surfaces_volume_is_the_gain_the_pipeline_measured():
 ## What the whole exercise was for. 35 dB apart is why one surface was "way
 ## too loud" and the rest "weak"; no surface may sit more than a few dB off
 ## its neighbours now.
+##
+## **Corrected 2026-09-19.** This measured `achieved_rms_dbfs`, and passed,
+## while pavement was genuinely ~10 dB louder than grass to listen to --
+## reported live as *"pavement footsteps are way too loud ..."*. RMS is
+## simply not loudness for an impulsive sound: at equal RMS, rock's peaks
+## sit 8.4 dB above grass's. So this now measures what it always meant to.
+##
+## The RMS spread is deliberately WIDE now (12.74 dB) and that is the
+## correct outcome, not a regression: surfaces whose energy is shaped
+## differently must sit at different RMS to sound equally loud.
 func test_no_surface_is_dramatically_louder_than_another():
 	var surfaces: Dictionary = _levels()["surfaces"]
 	var quietest := 999.0
 	var loudest := -999.0
 	for surface in surfaces:
-		var level := float(surfaces[surface]["achieved_rms_dbfs"])
+		var level := float(surfaces[surface]["achieved_lufs"])
 		quietest = minf(quietest, level)
 		loudest = maxf(loudest, level)
-	assert_lt(loudest - quietest, 4.0, "the surfaces are not level-matched")
+	assert_lt(loudest - quietest, 1.5, "the surfaces are not loudness-matched")
 
 
 ## And nothing was pushed into clipping to get there -- there has to be room
@@ -425,3 +435,52 @@ func test_no_shipped_step_file_is_unreachable_from_any_surface():
 		if not name.ends_with(".ogg"):
 			continue
 		assert_true(referenced.has(name), "%s is shipped but no surface plays it" % name)
+
+
+## Reported live: *"pavement footsteps are way too loud ..."*.
+##
+## test_no_surface_is_dramatically_louder_than_another above says the
+## surfaces ARE level-matched, and it is right about what it measures: every
+## pool's RMS lands within 2.5 dB of the same target. The complaint was
+## still correct, because **RMS is not loudness for an impulsive sound.** A
+## footstep is a transient, and a hard surface packs its energy into a much
+## sharper one: at equal RMS, rock's peaks sit 8.4 dB above grass's (crest
+## factor 20.64 dB against 12.28 dB). So pavement measured matched and hit
+## the ear far louder.
+##
+## The metric loudness is actually defined by is ITU-R BS.1770's K-weighted
+## mean square -- the same one EBU R128 broadcast normalisation uses, and
+## the standard answer to exactly this failure of RMS. The pipeline now
+## measures it per pool and matches on it, anchored where it was already
+## anchored: on grass, the one footstep level signed off by ear.
+##
+## Under the RMS match, applying each shipped gain put grass at -33.65 LUFS
+## and rock at -23.80 -- pavement was running 9.85 dB hot, and sand 13.5.
+func test_every_surface_carries_a_real_loudness_measurement():
+	var surfaces: Dictionary = _levels()["surfaces"]
+	for surface in surfaces:
+		assert_true(
+			surfaces[surface].has("achieved_lufs"),
+			"%s has no K-weighted measurement to be matched on" % surface
+		)
+		assert_true(
+			surfaces[surface].has("raw_lufs"),
+			"%s does not record what it measured before its gain" % surface
+		)
+
+
+## And pavement specifically -- the surface that was reported -- really did
+## come down. It sat at gain -3.3 under the RMS match; anything near that
+## again means the loudness match has been undone.
+func test_pavement_is_no_longer_ten_decibels_hot():
+	assert_lt(
+		FootstepSound.volume_db_for("rock"), -10.0,
+		"stone/pavement plays the rock pool, which was 9.85 dB over grass"
+	)
+
+
+## Grass is the anchor and must not move: it is the one level a person
+## actually listened to and accepted, and every other surface is matched to
+## it rather than to a number chosen here.
+func test_grass_keeps_the_level_that_was_signed_off_by_ear():
+	assert_almost_eq(FootstepSound.volume_db_for("grass"), -12.0, 0.001)

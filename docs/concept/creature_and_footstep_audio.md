@@ -215,15 +215,42 @@ threshold that would need retuning per recording.
 MEAN lands on a common target: one gain per pool rather than per clip on
 purpose, because that equalizes between surfaces while leaving a soft step
 softer than a hard one WITHIN a surface, which is the variation the
-recordings were made for. The target is **-24.59 dBFS RMS**, and that is
-not a taste call either: `grass.ogg` measures -12.59 dBFS RMS and was
-reported as finally right at `-12.0 dB`, so it is the one footstep level
-already signed off on. Solving for grass's nine clips from scratch landed on
-`-12.0` for it independently -- the by-ear number and the measured one
-agree. A pool's gain is pulled back if it would push that pool's loudest
-peak past -1 dBFS, which is why `sand` and `snow` sit ~1-2 dB under target
-(crunchy surfaces have a high crest factor; physical, not a defect). The
-whole spread is now **2.4 dB**, down from 35.
+recordings were made for.
+
+> **Matched by loudness, not by RMS** (corrected 2026-09-19). Reported
+> live: *"pavement footsteps are way too loud ..."* — while every pool sat
+> within 2.5 dB of a common **-24.59 dBFS RMS**, which is what this section
+> used to describe. Both were true at once, because **RMS is not loudness
+> for an impulsive sound.** A footstep is a transient and a hard surface
+> packs its energy into a far sharper one: at equal RMS, `rock`'s peaks sat
+> 8.4 dB above `grass`'s (crest factor 20.64 dB against 12.28 dB). Measured
+> in **ITU-R BS.1770 K-weighted loudness** — what EBU R128 normalises
+> broadcast audio by, and the standard answer to exactly this failure of
+> RMS — the RMS-matched gains put `grass` at -33.65 LUFS and `rock` at
+> -23.80. Pavement was running **9.85 dB hot**, and `sand` 13.5.
+>
+> So the pipeline measures and matches K-weighted loudness now. `rock` went
+> -3.3 → -12.8 and `sand` -1.0 → -11.1; the loudness spread is **0.08 dB**
+> where the real difference had been 13.5.
+>
+> The RMS spread is deliberately **wide** now (12.74 dB) and that is the
+> correct outcome rather than a regression: surfaces whose energy is shaped
+> differently must sit at different RMS to sound equally loud.
+
+The anchor did not change and now cannot drift. `grass` was reported as
+finally right at `-12.0 dB`, so it is the one footstep level actually
+signed off on, and the target is **derived** as grass's own measured
+loudness plus that -12.0 rather than written down anywhere. That derivation
+is the point: a hardcoded target rounded grass to -12.5 on the first run of
+this switch, moving the only number nobody was entitled to move. A pool's
+gain is still pulled back if it would push its loudest peak past -1 dBFS,
+though nothing is capped today — the loudest pool peak is -7.48 dBFS, so
+there is room left for the per-step pitch and volume applied on top.
+
+Re-deriving the gains needs no downloads and rewrites no audio:
+`tools/prepare_footstep_oneshots.py --remeasure` re-measures the clips
+already in the repo. The clips were never the problem; only the gains
+computed from them were.
 
 `FootstepSound._VOLUME_DB_BY_SURFACE` holds those gains, and
 `test_every_surfaces_volume_is_the_gain_the_pipeline_measured` pins it
