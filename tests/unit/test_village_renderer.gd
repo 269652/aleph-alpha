@@ -3325,3 +3325,61 @@ func test_a_landmark_with_real_art_is_still_spawned():
 		if landmark_id != "":
 			drawn[landmark_id] = true
 	assert_true(drawn.has("well"), "the village's well must still be drawn")
+
+
+
+## Reported live: the pond is "randomly placed somewhere not adjacent to
+## the fishers house or across the street". Measured before the fix, at the
+## first grassland village with a fisher: the water sat 3.0 tiles from the
+## house with a whole street row between the two.
+##
+## A pond is sited by VillageFarm.field_rect, the same search a farmhouse
+## uses for its beds -- and a farm's beds are worked out through
+## _workable_field_of, which refuses a street row outright ("a village does
+## not sow in its own road"). The pond's own is_free never had that guard,
+## so the search was free to jump the road and take the first rectangle
+## that fitted on the far side.
+##
+## The rule is not "adjacent": a field reaches FIELD_REACH_TILES, ground out
+## the back is a perfectly good place for a pond, and demanding adjacency
+## would leave most villages with no pond at all -- which is the other half
+## of the same report ("I haven't yet seen a fisher with a built pond").
+## The rule is that the water is on the fisher's OWN side of the street.
+func test_a_fishers_pond_is_never_dug_across_the_street_from_them():
+	var coord := _find_settlement_chunk_with_occupation("grassland", "fisher", 3)
+	var world := StubWorld.new()
+	renderer.spawn_village(
+		parent, coord, coord * CHUNK_SIZE, CHUNK_SIZE, TILE_SIZE, "grassland", world
+	)
+	var built := _built_tiles(world, coord)
+	var water: Array = []
+	for cell in built:
+		if VillagePond.is_pond_tile(built[cell]):
+			water.append(cell)
+	var fisher_origins: Array = []
+	for record in world.buildings_in_chunk(coord):
+		if String(record.get("occupation", "")) == "fisher":
+			fisher_origins.append(record["origin_local"])
+	assert_gt(fisher_origins.size(), 0, "the premise: this village has a fisher")
+	assert_gt(water.size(), 0, "the premise: the fisher really dug a pond")
+
+	for pond in _connected_groups(water):
+		# Whichever fisher this pond belongs to is the nearest one.
+		var best := 9999.0
+		var house := Vector2i.ZERO
+		for origin in fisher_origins:
+			for cell in pond:
+				var d: float = Vector2((cell as Vector2i) - (origin as Vector2i)).length()
+				if d < best:
+					best = d
+					house = origin
+		for cell in pond:
+			var low := mini(house.y, (cell as Vector2i).y)
+			var high := maxi(house.y, (cell as Vector2i).y)
+			for y in range(low + 1, high):
+				assert_false(
+					renderer._is_street_row(coord, CHUNK_SIZE, world, y),
+					"the pond at %s is across a street row from its fisher at %s"
+						% [str(cell), str(house)]
+				)
+

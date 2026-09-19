@@ -39,8 +39,15 @@ static func is_pond_tile(tile_id: String) -> bool:
 ## comment for why it is delegated rather than restated).
 ##
 ## `is_free` answers for ONE cell: is this ground the fisher may dig?
+## Unlike a farm's beds, a pond may be dug BEHIND the house. A farmhouse
+## refuses ground north of itself because that is the next row of buildings
+## -- true of a farm laid out along a street, and exactly wrong for a
+## fisher, whose house fronts the street to the south so that every scrap of
+## their own ground is behind them. Without this the search had nowhere to
+## go but over the road, which is what put the water across the street from
+## its owner (reported live).
 static func pond_rect(origin: Vector2i, building_id: String, is_free: Callable):
-	return VillageFarm.field_rect(origin, building_id, is_free)
+	return VillageFarm.field_rect(origin, building_id, is_free, true)
 
 
 ## Those cells, in the same (y, x) order everything else here returns, or []

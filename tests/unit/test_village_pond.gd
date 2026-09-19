@@ -18,12 +18,41 @@ const HOUSE := "house_small"
 var _anywhere := func(_cell: Vector2i) -> bool: return true
 
 
-func test_a_pond_is_the_same_rectangle_a_field_would_be():
+## A pond is still sited by the FIELD's own search and the field's own
+## shapes -- "similar" is the whole of the ask, and a pond that invented its
+## own rule would drift away from the thing it is modelled on.
+##
+## It differs in exactly one way, and deliberately: a pond may be dug
+## BEHIND the house. A farmhouse refuses ground north of itself because
+## that is the next row of buildings; a fisher's house fronts the street to
+## the south, so behind it is the only ground of their own they have.
+## Measured at the first grassland village with a fisher, every free cell on
+## their own side of the street was north of the house -- so a search that
+## could only look south had nowhere to go but across the road, which is
+## exactly what was reported ("it's randomly placed somewhere not adjacent
+## to the fishers house or across the street").
+func test_a_pond_is_sited_by_the_fields_own_rule_but_may_lie_behind_the_house():
 	var origin := Vector2i(6, 4)
 	assert_eq(
 		VillagePond.pond_rect(origin, HOUSE, _anywhere),
-		VillageFarm.field_rect(origin, HOUSE, _anywhere),
-		"a pond that sites itself by its own rule drifts away from the field"
+		VillageFarm.field_rect(origin, HOUSE, _anywhere, true),
+		"a pond sites itself by the field's rule, with the ground behind opened up"
+	)
+	assert_true(
+		VillageFarm.FIELD_SHAPES.has((VillagePond.pond_rect(origin, HOUSE, _anywhere) as Rect2i).size),
+		"and still takes one of the field's own shapes"
+	)
+
+
+## The difference is real, not incidental: on open ground the pond takes
+## ground the field would have refused.
+func test_a_field_still_refuses_the_ground_behind_the_house():
+	var origin := Vector2i(6, 4)
+	var field = VillageFarm.field_rect(origin, HOUSE, _anywhere)
+	assert_not_null(field)
+	assert_gte(
+		(field as Rect2i).position.y, origin.y,
+		"a farmhouse never sows north of itself -- that is the next row of buildings"
 	)
 
 
