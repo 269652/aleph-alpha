@@ -27180,9 +27180,27 @@ it is asked for, so it can never be stale.
   larder the granary leaves behind. Two models that agree rather than
   compete; folding them into one means recalibrating the famine chain,
   which is its own piece of work.
-- 🚧 **The labour pyramid is not yet wired to production.**
-  `output_scale_for` is real, tested and consulted by the assembly's
-  staffing gate; no production step multiplies its output by it yet.
+### ✅ A staffed works really produces
+
+`StaffedProduction` spends the labour pyramid: a staffed brewery really
+brews `beer` out of the village's own grain — so beer and bread compete for
+one harvest — and a staffed sawmill really brings more usable timber in
+from the same hands, which is what makes the assembly's "short of firewood,
+raise a sawmill" petition true rather than a lie. A brewhouse with no
+craftsman in the village produces nothing however long it stands, which is
+the pyramid's whole claim, live. The batch rate is derived rather than
+chosen: a works must supply several times more households than it employs,
+or it costs the village more labour than it returns.
+
+🚧 Two of the four works still produce nothing and both reasons are real. A
+`blacksmith` would run the heat-gated smelts `OccupationProduction` rules
+out on principle plus a tool recipe its own smith already runs. A
+`farmhouse` would run `grow_wheat`, which is `automated` — `can_craft`
+refuses one outright, because a farmhouse's grain really does come from its
+real field worked by real villagers on real plots, and running it again
+through a market would be the same crop harvested twice. That entry was
+tried, and produced exactly nothing, silently, for sixty assessments before
+a test asked.
 - 🚧 **`HouseholdWellbeing` still reads stock rather than flow.** Its four
   needs are unchanged and still power the happiness/productivity loop.
 ### ✅ The guild chest: a village's social structure buffers its economy
@@ -27252,8 +27270,9 @@ Tests, all green: `test_village_estates.gd`, `test_estate_consumption.gd`,
 `test_village_assembly.gd`, `test_village_estate_tax.gd`,
 `test_household_estate.gd`, `test_brewing.gd`, `test_house_panel_estate.gd`,
 `test_estate_shortfall.gd`, `test_guild_relief.gd`,
-`test_guild_chest_wiring.gd`, `test_earth_chunk_manager_village_estates.gd`
-— 275 in the pure sweep plus 30 in the live one.
+`test_guild_chest_wiring.gd`, `test_staffed_production.gd`,
+`test_earth_chunk_manager_village_estates.gd` — 34 in the live sweep and
+just under 300 in the pure one.
 
 Regressions re-run green: `test_earth_chunk_manager_village_growth.gd`
 (33/33), `test_village_growth.gd`, `test_household*.gd`,

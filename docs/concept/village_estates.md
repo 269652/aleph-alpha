@@ -339,6 +339,18 @@ the code as it landed. See [progress.md](../progress.md) for the ledger.
   building was ("a shed, a saw pit and a log deck"), so the mill is
   hand-worked and the brewery took over as the two-class rung: a brewer
   over somebody else's back.
+
+  **It is wired to real output now** (`StaffedProduction`): a staffed
+  brewhouse really brews beer out of the village's own grain, so beer and
+  bread compete for one harvest, and a staffed saw pit really brings more
+  usable timber in from the same hands — which is what makes
+  `VillageAssembly`'s own "short of firewood, raise a sawmill" petition
+  true rather than a lie. The timber term is ADDITIVE and never below 1.0,
+  because [village_growth.md](village_growth.md)'s rule is that gathering
+  may be raised by a building and must never be dragged down by one. The
+  batch rate is derived rather than chosen: a works must supply several
+  times more households than it employs, or it costs the village more
+  labour than it returns.
 - ✅ **Mechanism 5 — `VillageAssembly`.** The estate-weighted petition,
   and a layer over `VillageGrowth` rather than a replacement — shelter
   first, that ladder's buildings, that ladder's order as the tie-break,
@@ -438,12 +450,19 @@ which is exactly how these hid.
   two models. Folding the per-villager meal into the household's own draw
   is the right end state and is its own piece of work: it means
   recalibrating the famine chain, which nobody asked for here.
-- 🚧 **The labour pyramid is not yet wired to production.**
-  `VillageLabor.output_scale_for` is real, tested and consulted by the
-  assembly's staffing gate, but no production step multiplies its output by
-  it yet. A standing forge with no craftsman is currently a forge that
-  produces nothing *because nothing produces from it at all*, which is the
-  right answer for the wrong reason.
+- 🚧 **Two of the four works still produce nothing, and both reasons are
+  real.** `StaffedProduction` wires the pyramid to real output for the one
+  rung that genuinely made nothing — the brewery — and to the village's own
+  timber for the saw pit. The other two are out for reasons the code found
+  rather than chose: a **blacksmith** would run the heat-gated smelts
+  `OccupationProduction` rules out on principle plus a tool recipe its own
+  smith's household already runs, and a **farmhouse** would run
+  `grow_wheat`, which is `automated` — `CraftingRecipeBook.can_craft`
+  refuses one outright, because a farmhouse's grain really does come from
+  its real field (`FarmPlot`/`VillageFarm`) worked by real villagers on
+  real plots, and running it again through a market abstraction would be
+  the same crop harvested twice. The farmhouse entry was tried and produced
+  exactly nothing, silently, for sixty assessments before a test asked.
 - 🚧 **`HouseholdWellbeing` still reads stock rather than flow.** Its four
   needs (food, shelter, income, community) are unchanged and still power
   the happiness/productivity loop. The estate layer's per-good satisfaction

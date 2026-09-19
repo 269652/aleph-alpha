@@ -566,14 +566,21 @@ Implemented 2026-09-16, TDD red-first throughout. See
   single-tile `sagewerk`/`farm` do (`_sync_sagewerk_lumberjack`,
   `_farm_farmers`).
 
-  **Half closed, 2026-09-19.** The brewery has a real product now
-  (`brew_beer`, [village_estates.md](village_estates.md) mechanism 1), and
-  every rung has a real WORKFORCE it must be staffed from and an output
-  scale that is zero until somebody of the right estate stands in it
-  (`VillageLabor`). What is still missing is the step that multiplies a
-  building's output by that scale — the pyramid is real, tested and
-  consulted by the assembly's staffing gate, and no production loop reads
-  it yet.
+  **Mostly closed, 2026-09-19** ([village_estates.md](village_estates.md)
+  mechanisms 1 and 4). Every rung has a real WORKFORCE it must be staffed
+  from and an output scale that is zero until somebody of the right estate
+  stands in it (`VillageLabor`), and `StaffedProduction` spends that scale:
+  a staffed brewery really brews `beer` out of the village's own grain, so
+  beer and bread compete for one harvest, and a staffed sawmill really
+  brings more usable timber in from the same hands.
+
+  The two still producing nothing are out for reasons the code found. A
+  `blacksmith` would run the heat-gated smelts `OccupationProduction` rules
+  out on principle plus a tool recipe its own smith's household already
+  runs. A `farmhouse` would run `grow_wheat`, which is `automated` —
+  `can_craft` refuses one outright, because a farmhouse's grain really does
+  come from its real field (`FarmPlot`/`VillageFarm`), and running it again
+  through a market would be the same crop harvested twice.
 - ⬜ **Civic buildings beyond the ladder.**
   [civic_construction.md](civic_construction.md)'s Watchtower, and its
   richer multi-piece `CivicBlueprint` shape, stay design-only.
