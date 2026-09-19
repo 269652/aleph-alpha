@@ -311,6 +311,20 @@ const _RECIPES := {
 		"output": {"item_id": "bread", "count": 1},
 		"requires_structure": "bakery",
 	},
+	# The brewery finally brews (docs/concept/village_estates.md mechanism
+	# 1). docs/concept/village_growth.md carried the gap in as many words --
+	# "the ladder's rungs are buildings, not yet production" -- and the
+	# dearest rung on that ladder made nothing at all. Structure-gated on
+	# the brewery exactly as bread is on the bakery, and drawn on the SAME
+	# wheat grow_wheat already grows, so brewing is a third consumer of one
+	# existing crop rather than a new resource nobody produces. Dearer in
+	# grain than a loaf is in flour: it is the luxury at the top of the
+	# estate ladder and has to cost like one (test_brewing.gd).
+	"brew_beer": {
+		"inputs": [{"item_id": "wheat", "count": 3}],
+		"output": {"item_id": "beer", "count": 1},
+		"requires_structure": "brewery",
+	},
 	# Wayfinding & citizenship instruments (see docs/concept/wayfinding.md,
 	# docs/concept/player_citizenship.md). Every input below is an existing
 	# raw-material item id already in item_catalog.gd's _ITEMS -- no new
