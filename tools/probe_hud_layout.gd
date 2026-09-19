@@ -15,8 +15,15 @@ extends SceneTree
 ##
 ## Usage:
 ##   xvfb-run -a godot --path . --rendering-driver opengl3 \
-##       -s tools/probe_hud_layout.gd [-- <scale>]
-## Output: tools/hud_renders/hud_<scale>.png (gitignored via tools/*_renders/).
+##       -s tools/probe_hud_layout.gd [-- <scale> [busy|calm|dead]]
+##
+## `busy` (the default) fills every card, which is what catches clipping and
+## overlap. `calm` is the opposite and catches the other failure: a card that
+## should have hidden itself leaving a blank card standing. `dead` shows the
+## death card over both.
+##
+## Output: tools/hud_renders/hud_<scale>_<state>.png (gitignored via
+## tools/*_renders/).
 
 const OUT_DIR := "res://tools/hud_renders"
 const DESIGN_SIZE := Vector2i(1280, 720)
@@ -24,9 +31,12 @@ const DESIGN_SIZE := Vector2i(1280, 720)
 
 func _initialize() -> void:
 	var scale := 1.0
+	var state := "busy"
 	var args := OS.get_cmdline_user_args()
 	if not args.is_empty():
 		scale = float(args[0])
+	if args.size() > 1:
+		state = args[1]
 
 	DirAccess.make_dir_recursive_absolute(ProjectSettings.globalize_path(OUT_DIR))
 
@@ -61,8 +71,13 @@ func _initialize() -> void:
 	world._build_karma_display()
 	world._build_held_item_card()
 	world._build_diagnostics_strip()
+	world._build_death_label()
 
-	_fill_in(world, scale)
+	if state == "calm":
+		_fill_in_calm(world)
+	else:
+		_fill_in(world, scale)
+	world._death_card.visible = state == "dead"
 
 	world.remove_child(ui)
 	viewport.add_child(ui)
@@ -70,7 +85,7 @@ func _initialize() -> void:
 	await process_frame
 	await process_frame
 	var image := viewport.get_texture().get_image()
-	var path := "%s/hud_%s.png" % [OUT_DIR, str(scale).replace(".", "_")]
+	var path := "%s/hud_%s_%s.png" % [OUT_DIR, str(scale).replace(".", "_"), state]
 	image.save_png(ProjectSettings.globalize_path(path))
 	print("wrote ", path, "  (", image.get_width(), "x", image.get_height(), ")")
 	quit()
@@ -126,3 +141,26 @@ func _fill_in(world, scale: float) -> void:
 
 	world._karma_label.text = world.karma_display_text(12)
 	world._karma_label.add_theme_color_override("font_color", world.karma_display_color(12))
+
+
+## Nothing wrong, nothing in hand, the keystone not unlocked, F3 not pressed --
+## the other failure mode. Every card that has nothing to say must be GONE, not
+## blank: an empty chip row, no held-item card, no land-sense card, no
+## diagnostics strip, and the cards that remain closed up against each other.
+func _fill_in_calm(world) -> void:
+	world._hunger_label.text = world.meter_label_text("Food", 0.92)
+	world._thirst_label.text = world.meter_label_text("Water", 0.88)
+	world._stamina_label.text = world.meter_label_text("Stamina", 1.0)
+	world._warmth_label.text = world.meter_label_text("Warmth", 0.95)
+	world._wallet_label.text = "Gold: 3"
+	world._xp_label.text = "Lv 1 — Warrior"
+	world._xp_fill.size.x = 0.05 * world.SURVIVAL_BAR_WIDTH
+	world._karma_label.text = world.karma_display_text(0)
+	world._karma_label.add_theme_color_override("font_color", world.karma_display_color(0))
+
+	var HudReadouts = load("res://src/ui/hud_readouts.gd")
+	var clock: PackedStringArray = HudReadouts.world_clock_lines(
+		9, 15, HudReadouts.day_phase(34.0, 9), "Spring", "Clear", "walking", 1.0
+	)
+	for i in world._clock_labels.size():
+		world._clock_labels[i].text = clock[i]
