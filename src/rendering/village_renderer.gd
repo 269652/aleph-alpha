@@ -325,7 +325,9 @@ func spawn_village(
 	for landmark_id in settlement.landmarks:
 		if landmark_id == "stall":
 			continue  # pitched with the market below, and only when tended
-		spawned.append(_build_landmark(landmark_id, settlement.landmarks[landmark_id], parent))
+		var landmark := _build_landmark(landmark_id, settlement.landmarks[landmark_id], parent)
+		if landmark != null:
+			spawned.append(landmark)
 	for i in npcs.size():
 		var workspot = _grounded_position(
 			door_positions[i] + Vector2(0, _WORKSPOT_OFFSET_TILES * tile_size), tile_size, world, false
@@ -354,7 +356,8 @@ func spawn_village(
 		if stand_slot >= 0 and stand_slot < market_stands.size():
 			var stand_position: Vector2 = market_stands[stand_slot]
 			var stand := _build_landmark("stall", stand_position, parent, true)
-			spawned.append(stand)
+			if stand != null:
+				spawned.append(stand)
 			# A COPY, not the settlement's shared dictionary: overriding the
 			# tag in place would send every villager in the village to this
 			# one merchant's trestle.
@@ -382,7 +385,9 @@ func spawn_village(
 			work_tag != "" and not settlement.landmarks.has(work_tag)
 			and not BuildingCatalog.has_building(work_tag) and workspot != null
 		):
-			spawned.append(_build_landmark(work_tag, workspot, parent, true))
+			var prop := _build_landmark(work_tag, workspot, parent, true)
+			if prop != null:
+				spawned.append(prop)
 	_hand_out_farm_fields(npcs, npc_markers, farm_fields, chunk_coord, chunk_size)
 	_hand_out_fisher_ponds(npcs, npc_markers, fisher_ponds, chunk_coord, chunk_size)
 	_hand_out_the_sawmill(npcs, npc_markers, chunk_coord, chunk_size, world)
@@ -1827,8 +1832,11 @@ const GROUND_FLOOR_COLLISION_LAYER := 1
 
 
 func _build_landmark(landmark_id: String, position: Vector2, parent: Node2D, personal: bool = false) -> Sprite2D:
+	var texture := _landmark_texture(landmark_id, position)
+	if texture == null:
+		return null  # no art for this prop: nothing is drawn (see _landmark_texture)
 	var landmark := Sprite2D.new()
-	landmark.texture = _landmark_texture(landmark_id, position)
+	landmark.texture = texture
 	landmark.set_meta("landmark_id", landmark_id)
 	landmark.set_meta("personal", personal)
 	# Art is authored DETAIL_MULTIPLIER times oversized for pixel detail;
@@ -1843,8 +1851,7 @@ func _build_landmark(landmark_id: String, position: Vector2, parent: Node2D, per
 	# the row where the cottages front the street: "the stand ... is placed
 	# ontop of a house". The same rule CartMarker already follows, and the
 	# one _solid_body_for below already states for the collision box.
-	if landmark.texture != null:
-		landmark.offset = Vector2(0, -float(landmark.texture.get_height()) * 0.5)
+	landmark.offset = Vector2(0, -float(landmark.texture.get_height()) * 0.5)
 	var size: Vector2i = ProceduralLandmarkSprite.SIZES.get(landmark_id, Vector2i(20, 20))
 	# The shadow sits at the prop's own foot, which is now the sprite's
 	# origin rather than half a height below it.
@@ -1904,7 +1911,20 @@ func _landmark_texture(landmark_id: String, position: Vector2) -> Texture2D:
 	var image := LandmarkSheet.world_scaled_image(landmark_id, seed_value, _structure_sprite)
 	if image != null:
 		return ImageTexture.create_from_image(image)
-	return _landmark_sprite.generate_texture(landmark_id)
+	# No sheet, no prop. The procedural box (ProceduralLandmarkSprite) was
+	# the scaffolding that let the whole village system be built and played
+	# before any prop art existed, and it did that job. Two props have real
+	# art now (LandmarkSheet._SHEETS), and for the six that do not the
+	# fallback reads as clutter rather than as a placeholder -- reported
+	# live with close-ups of the field's soil-and-crop-dots, the forge's
+	# grey box with an orange fire, and the dock's planks standing in blue
+	# water: "remove These procedural entities please".
+	#
+	# The villager still works the spot; there is simply nothing drawn on
+	# it until a real sheet is dropped into assets/sprites/landmarks/, which
+	# is the same "the moment a file is dropped in" contract the props that
+	# DO have art already follow.
+	return null
 
 
 ## `home_position` is this villager's own house's DOORSTEP position (the
