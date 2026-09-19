@@ -52,3 +52,27 @@ func find_nearest(
 				continue
 			return chunk_coord
 	return null
+
+
+## What /village says it did -- the chunk it landed you in and what is really
+## standing there (docs/concept/village_growth.md, Mechanism 6).
+##
+## Reported three times, the third with the verification already in: *"It
+## teleports me to where no village is"*, *"/village teleports me to an empty
+## field..."*, *"It still teleports me to the same empty spot"*. A command
+## that says "Teleported to the nearest village" and nothing else leaves a
+## player no way to tell WHICH thing is wrong -- the wrong chunk, no
+## buildings recorded, or buildings recorded and never drawn. Naming the
+## chunk and the count makes the next report evidence rather than another
+## round of guessing.
+##
+## Zero is spelled out rather than counted, because a village with nothing
+## standing in it is the bug being hunted, not a detail.
+static func teleport_report(chunk_coord: Vector2i, building_count: int) -> String:
+	if building_count <= 0:
+		return "Landed in chunk (%d, %d) -- no buildings standing there." % [
+			chunk_coord.x, chunk_coord.y
+		]
+	return "Teleported to the village in chunk (%d, %d): %d building%s standing." % [
+		chunk_coord.x, chunk_coord.y, building_count, "" if building_count == 1 else "s"
+	]

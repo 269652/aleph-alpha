@@ -2,6 +2,7 @@ extends Node2D
 
 const MushroomMarker = preload("res://src/rendering/mushroom_marker.gd")
 const TerrainRenderer = preload("res://src/rendering/terrain_renderer.gd")
+const VillageFinder = preload("res://src/world/village_finder.gd")
 const CartMarker = preload("res://src/rendering/cart_marker.gd")
 const TorchGlow = preload("res://src/rendering/torch_glow.gd")
 const GroundSlide = preload("res://src/gameplay/ground_slide.gd")
@@ -4531,11 +4532,26 @@ func _handle_village_command(local_player: Player) -> void:
 
 	var destination: Variant = _chunk_manager.find_nearest_village(local_player.current_tile())
 	if destination == null:
-		_dev_console.log_line("No village found nearby.")
+		_dev_console.log_line(
+			"No village standing within %d chunks." % EarthChunkManager.MAX_VILLAGE_SEARCH_RADIUS_CHUNKS
+		)
 		return
 
 	local_player.position = destination
-	_dev_console.log_line("Teleported to the nearest village.")
+	# Says WHICH chunk and what is really standing in it, rather than only
+	# claiming success (docs/concept/village_growth.md, Mechanism 6). Asked
+	# for by the third report of the same thing: a line that only says
+	# "Teleported to the nearest village" leaves a player no way to tell
+	# whether the search picked the wrong chunk, found no buildings, or found
+	# buildings nothing then drew.
+	var landed := Vector2i(
+		floori((destination as Vector2).x / float(TerrainRenderer.TILE_SIZE)),
+		floori((destination as Vector2).y / float(TerrainRenderer.TILE_SIZE))
+	)
+	var chunk := _chunk_manager.chunk_coord_for_tile(landed)
+	_dev_console.log_line(
+		VillageFinder.teleport_report(chunk, _chunk_manager.buildings_in_chunk(chunk).size())
+	)
 
 
 ## /river -- teleports to a random point on a random curated river, reusing
