@@ -16,6 +16,7 @@ const VillageEstates = preload("res://src/emergence/village_estates.gd")
 const EstateAscension = preload("res://src/emergence/estate_ascension.gd")
 const VillageWages = preload("res://src/world/village_wages.gd")
 const EstateShortfall = preload("res://src/emergence/estate_shortfall.gd")
+const BuildingCatalog = preload("res://src/gameplay/building_catalog.gd")
 const NpcEconomy = preload("res://src/world/npc_economy.gd")
 
 const CHUNK := Vector2i(4242, 4242)
@@ -70,6 +71,16 @@ func _market():
 
 func _step() -> void:
 	manager.step_settlements(EarthChunkManager.SETTLEMENT_STEP_INTERVAL)
+
+
+## Keeps the larder and the woodpile deep enough that nobody starves out
+## over a long run -- otherwise a test measuring a draw over four hundred
+## assessments is really measuring an exodus, and the census it divides by
+## changes underneath it.
+func _keep_the_village_alive() -> void:
+	_market().add_stock("bread", 9000)
+	_market().add_stock(VillageEstates.FUEL_ITEM_ID, 9000)
+	_market().add_stock("herb", 9000)
 
 
 # -- the census -----------------------------------------------------------
@@ -214,6 +225,40 @@ func test_a_starved_cottager_leaves_and_the_village_is_really_smaller():
 	)
 
 
+## A village empties one household at a time, never all at once.
+##
+## Found by a probe rather than reasoned about: with every starving
+## household leaving on the same assessment, a four-household village went
+## to ZERO inside twenty assessments -- about ten minutes of play -- and so
+## would every lean village on the planet. One departure per assessment is
+## also simply what happens: people leave a failing village one family at
+## a time, and each one that goes leaves more of the larder for those who
+## stay, which is a village's real chance to recover.
+func test_a_starving_village_loses_one_household_per_assessment_at_most():
+	_found(6)
+	for household_id in manager.household_ids_in_settlement(_settlement_id):
+		manager.household_store().get_household(household_id).short_run_days = (
+			EstateAscension.DECLINE_DWELL_DAYS
+		)
+	var before: int = manager.household_ids_in_settlement(_settlement_id).size()
+	_step()
+	var after: int = manager.household_ids_in_settlement(_settlement_id).size()
+	assert_eq(before - after, 1, "a starving village emptied itself in one assessment")
+
+
+## And it keeps emptying: one at a time is a slower exodus, not a stopped
+## one.
+func test_a_village_that_never_recovers_really_does_empty_out():
+	_found(4)
+	for _i in 120:
+		_step()
+	assert_true(
+		manager.household_ids_in_settlement(_settlement_id).size()
+		< 4,
+		"a village that never fed anybody kept every household it had"
+	)
+
+
 func test_a_household_that_left_never_comes_back_on_the_next_step():
 	_found(4)
 	for household_id in manager.household_ids_in_settlement(_settlement_id):
@@ -334,3 +379,129 @@ func test_the_shortfalls_are_in_the_shape_the_build_decision_reads():
 
 func test_a_settlement_nobody_founded_reports_no_shortfalls():
 	assert_eq(manager.estate_shortfalls_for_settlement(EntityRef.for_settlement(Vector2i(2, 2))), [])
+
+
+# -- the clock the basket is drawn on ------------------------------------
+
+## The one relation the whole estate economy has to satisfy: a village's
+## spare hands must out-gather its own firewood. Firewood IS `wood` --
+## deliberately the same id a village builds with, so fuel and timber are a
+## real competition for one resource rather than two parallel economies --
+## and if the burn outruns the cut, no village on the planet can ever
+## afford a building again.
+##
+## Pinned as a measurement against the real gathering rate, not as a
+## number: `SettlementGathering` counts in ConstructionCatchup's one-hour
+## day, so the basket has to be drawn on that same day or the two are
+## sixty times apart. It was, once. The bread chain's own
+## "spare hands gather building material between assessments" caught it.
+## The one relation the whole estate economy has to satisfy, held as two
+## real numbers rather than as a stock level: a village's firewood burn
+## must stay under what its own spare hands cut. Firewood IS `wood` --
+## deliberately the same id a village builds with, so fuel and timber are a
+## real competition for one resource rather than two parallel economies --
+## and if the burn outruns the cut, no village on the planet can ever
+## afford a building again.
+##
+## It did, once, and by sixty times: `SettlementGathering` counts in
+## ConstructionCatchup's one-hour day and the basket was being drawn on the
+## sixty-second simulated one. The bread chain's own "spare hands gather
+## building material between assessments" is what caught it.
+##
+## Measured in WINTER, the season the burn is worst in.
+func test_a_villages_firewood_burn_stays_under_what_its_spare_hands_cut():
+	_found(5)
+	assert_true(
+		manager.estate_fuel_demand_per_assessment_for(_settlement_id)
+		< manager.gathering_wood_per_assessment_for(_settlement_id),
+		"a village burns more firewood in winter than it can cut"
+	)
+
+
+## And it still holds as the village grows: the burn scales with
+## households and the cut with spare hands, so a relation true at five is
+## not automatically true at twenty-five.
+func test_the_relation_still_holds_for_a_village_five_times_the_size():
+	_found(5)
+	for _i in 20:
+		manager.admit_household(CHUNK)
+	assert_true(
+		manager.estate_fuel_demand_per_assessment_for(_settlement_id)
+		< manager.gathering_wood_per_assessment_for(_settlement_id),
+		"a village of twenty-five burns more firewood than it can cut"
+	)
+
+
+## The burn is still REAL, not rounded away to nothing: a village really
+## does spend a share of its timber keeping warm.
+func test_the_burn_is_a_real_share_of_the_cut_and_not_a_rounding_error():
+	_found(5)
+	assert_true(manager.estate_fuel_demand_per_assessment_for(_settlement_id) > 0.0)
+
+
+## The emergence Market counts in WHOLE units and its own remove_stock
+## CEILS -- so a draw of a fiftieth of a log took a whole log, every single
+## assessment, and every village stripped its own timber sixty times over.
+## The bread chain's own "a village with idle hands cuts its own timber" is
+## what caught it.
+##
+## The fix is the carry-the-fraction idiom SettlementGathering,
+## SettlementGranary and VillageImmigration all already run on: a sub-unit
+## draw accrues until it crosses a whole unit.
+##
+## Measured on what the ESTATE LAYER itself took, not on a stock level:
+## the merchant, the production step and every construction project spend
+## from the same shelf, so a stock reading cannot tell any of them apart --
+## which is exactly how this bug hid.
+func test_a_sub_unit_draw_never_costs_the_village_a_whole_unit():
+	_found(4)
+	_market().add_stock(VillageEstates.FUEL_ITEM_ID, 400)
+	assert_true(
+		manager.estate_fuel_demand_per_assessment_for(_settlement_id) < 1.0,
+		"precondition: this village's draw really is a fraction of a log"
+	)
+	for _i in 5:
+		_step()
+	assert_eq(
+		int(manager.estate_whole_units_drawn_for(_settlement_id).get(VillageEstates.FUEL_ITEM_ID, 0)),
+		0,
+		"five assessments of a fractional draw cost the village whole logs"
+	)
+
+
+## And the fraction is not thrown away either: run it long enough and the
+## whole units really do come off.
+func test_the_carried_fractions_really_do_add_up_to_whole_units():
+	_found(4)
+	_keep_the_village_alive()
+	for _i in 400:
+		_step()
+	assert_true(
+		int(manager.estate_whole_units_drawn_for(_settlement_id).get(VillageEstates.FUEL_ITEM_ID, 0)) > 0,
+		"four hundred assessments of burning firewood cost the village nothing"
+	)
+
+
+## Conservation, which is what makes the carry trustworthy rather than
+## merely quieter: whole units taken plus the remainder still carried is
+## exactly what the baskets asked for over the same stretch.
+func test_what_was_taken_plus_what_is_carried_is_what_the_baskets_asked_for():
+	_found(4)
+	_keep_the_village_alive()
+	var steps := 30
+	for _i in steps:
+		_step()
+	var taken: float = float(
+		manager.estate_whole_units_drawn_for(_settlement_id).get(VillageEstates.FUEL_ITEM_ID, 0)
+	)
+	var carried: float = float(
+		manager.estate_draw_carry_for(_settlement_id).get(VillageEstates.FUEL_ITEM_ID, 0.0)
+	)
+	var asked: float = (
+		manager.estate_fuel_demand_per_assessment_for(_settlement_id) * float(steps)
+	)
+	# The seasonal term means the per-assessment figure above (winter, the
+	# worst case) is an upper bound on what was really asked for, so the
+	# claim is that nothing was invented, not that the two match exactly.
+	assert_true(taken + carried <= asked + 0.0001, "the draw took more than the baskets asked for")
+	assert_true(taken + carried > 0.0, "thirty assessments of burning firewood asked for nothing")

@@ -199,6 +199,7 @@ const InstitutionFormation = preload("res://src/emergence/institution_formation.
 const PlayerIdentity = preload("res://src/emergence/player_identity.gd")
 const SettlementState = preload("res://src/emergence/settlement_state.gd")
 const SettlementFood = preload("res://src/emergence/settlement_food.gd")
+const ConstructionCatchup = preload("res://src/world/construction_catchup.gd")
 const SettlementGathering = preload("res://src/emergence/settlement_gathering.gd")
 const SettlementGranary = preload("res://src/emergence/settlement_granary.gd")
 const VillageWages = preload("res://src/world/village_wages.gd")
@@ -3917,8 +3918,46 @@ func estate_shortfalls_for_settlement(settlement_id: String) -> Array:
 	return EstateShortfall.shortfalls_for(
 		_household_store.estate_census(household_ids),
 		_settlement_estate_satisfaction.get(settlement_id, {}),
-		SETTLEMENT_STEP_INTERVAL / SECONDS_PER_SIMULATED_DAY
+		# The economy's own clock, the same one the draw these shortfalls
+		# are measured from ran on (see _step_village_estates) -- a need
+		# counted on a different day than the draw that produced it is a
+		# number about nothing.
+		SETTLEMENT_STEP_INTERVAL / ConstructionCatchup.SECONDS_PER_DAY
 	)
+
+
+## What this settlement's spare hands cut in one assessment -- the real
+## number the estate layer's own draw has to stay under, exposed so that
+## relation can be MEASURED by a test rather than asserted in a comment.
+func gathering_wood_per_assessment_for(settlement_id: String) -> float:
+	var household_ids := _households_in_settlement(settlement_id)
+	if household_ids.is_empty():
+		return 0.0
+	var spare := SettlementSpareCapacity.for_settlement(
+		household_ids.size(), _household_occupations_for_settlement(settlement_id)
+	)
+	return (
+		SettlementGathering.WOOD_PER_SPARE_HOUSEHOLD_PER_DAY
+		* float(maxi(spare, 0))
+		* SETTLEMENT_STEP_INTERVAL
+		/ ConstructionCatchup.SECONDS_PER_DAY
+	)
+
+
+## What this settlement's estates burn as firewood in one assessment, in
+## the WORST season for it -- the other half of the relation above, so a
+## test can hold the two real numbers against each other instead of
+## asserting a stock level that construction also spends out of.
+func estate_fuel_demand_per_assessment_for(settlement_id: String) -> float:
+	var household_ids := _households_in_settlement(settlement_id)
+	if household_ids.is_empty():
+		return 0.0
+	var demand := EstateConsumption.demand_for(
+		_household_store.estate_census(household_ids),
+		SETTLEMENT_STEP_INTERVAL / ConstructionCatchup.SECONDS_PER_DAY,
+		"winter"
+	)
+	return float(demand.get(VillageEstates.FUEL_ITEM_ID, 0.0))
 
 
 ## What the granary alone eats out of this settlement in one assessment --
@@ -3986,11 +4025,33 @@ func _step_village_estates(
 	if census.is_empty():
 		return
 
-	var days := SETTLEMENT_STEP_INTERVAL / SECONDS_PER_SIMULATED_DAY
-	var demand := EstateConsumption.demand_for(census, days, _season_cycle.season_at(_world_age_seconds))
+	# TWO clocks, named apart because they answer different questions, and
+	# using one for both is a real bug this had (caught by the bread
+	# chain's own "spare hands gather building material between
+	# assessments").
+	#
+	# The DEMAND is spent from the shelf SettlementGathering fills, and
+	# that economy counts in ConstructionCatchup's one-hour day. A basket
+	# drawn on the sixty-second simulated day instead burns wood SIXTY
+	# TIMES faster than the village's spare hands can cut it -- and
+	# firewood IS `wood`, deliberately the same id a village builds with,
+	# so every village on the planet stripped its own timber and could
+	# never afford a building again. One pool, one clock.
+	var economy_days := SETTLEMENT_STEP_INTERVAL / ConstructionCatchup.SECONDS_PER_DAY
+	# The LADDER's dwells are about how long a player waits to see a
+	# household rise, which is what the simulated day measures -- one
+	# season on the economy's day would be twelve hours of real play.
+	# Mixing them is safe because satisfaction is a RATIO: demand and draw
+	# share a clock, so the number the dwells are counted against is
+	# dimensionless.
+	var ladder_days := SETTLEMENT_STEP_INTERVAL / SECONDS_PER_SIMULATED_DAY
+
+	var demand := EstateConsumption.demand_for(
+		census, economy_days, _season_cycle.season_at(_world_age_seconds)
+	)
 	demand.erase(VillageEstates.FOOD_KIND_TOKEN)  # the granary's own; see above
 
-	var satisfaction: Dictionary = _draw_estate_basket(market, village_market, demand)
+	var satisfaction: Dictionary = _draw_estate_basket(market, village_market, settlement_id, demand)
 	satisfaction[VillageEstates.FOOD_KIND_TOKEN] = clampf(
 		_food_per_household(settlement_id, market, household_ids.size())
 		/ HouseholdWellbeing.FOOD_STOCK_PER_HOUSEHOLD_TARGET,
@@ -3999,8 +4060,10 @@ func _step_village_estates(
 	)
 	_settlement_estate_satisfaction[settlement_id] = satisfaction
 
-	_walk_estate_ladder(settlement_id, household_ids, satisfaction, days)
-	_collect_estate_tax(market, settlement_id, satisfaction, days)
+	_walk_estate_ladder(settlement_id, household_ids, satisfaction, ladder_days)
+	# Tax is money, and money buys goods off that same shelf, so it accrues
+	# on the economy's clock rather than the ladder's.
+	_collect_estate_tax(market, settlement_id, satisfaction, economy_days)
 
 
 ## Spends `demand` against the settlement's real stock and returns what
@@ -4011,7 +4074,7 @@ func _step_village_estates(
 ## is what is left of it when nobody is looking. Taking from the live one
 ## first means a village burns the firewood in front of it before the
 ## firewood in its books.
-func _draw_estate_basket(market, village_market, demand: Dictionary) -> Dictionary:
+func _draw_estate_basket(market, village_market, settlement_id: String, demand: Dictionary) -> Dictionary:
 	if demand.is_empty():
 		return {}
 	var stock := {}
@@ -4023,15 +4086,56 @@ func _draw_estate_basket(market, village_market, demand: Dictionary) -> Dictiona
 
 	var result: Dictionary = EstateConsumption.draw(demand, stock, [])
 	for item_id in result["taken"]:
-		_take_from_settlement_stock(market, village_market, str(item_id), float(result["taken"][item_id]))
+		_take_from_settlement_stock(
+			market, village_market, settlement_id, str(item_id), float(result["taken"][item_id])
+		)
 	return result["satisfaction"]
+
+
+## settlement_id -> {item_id -> the sub-unit remainder of its estate draw
+## carried into the next assessment} -- the same carry-the-fraction idiom
+## SettlementGathering, SettlementGranary and VillageImmigration all run on.
+var _settlement_estate_draw_carry: Dictionary = {}
+
+## settlement_id -> {item_id -> whole units the ESTATE LAYER has taken off
+## the emergence Market for this settlement, ever}. Kept so the layer's own
+## draw can be told apart from the merchant's, the production step's and
+## every construction project's -- all of which spend from the same shelf,
+## which is what made "how much did the estates actually burn" impossible
+## to read off a stock level and easy to get wrong.
+var _settlement_estate_whole_units_drawn: Dictionary = {}
+
+
+## Whole units this settlement's estate baskets have really taken off its
+## market, by item. `{}` for a settlement that has never been assessed.
+func estate_whole_units_drawn_for(settlement_id: String) -> Dictionary:
+	return _settlement_estate_whole_units_drawn.get(settlement_id, {}).duplicate()
+
+
+## The sub-unit remainder still owed, by item -- the other half of the
+## conservation the draw promises: whole units taken plus remainder carried
+## is exactly what the baskets asked for.
+func estate_draw_carry_for(settlement_id: String) -> Dictionary:
+	return _settlement_estate_draw_carry.get(settlement_id, {}).duplicate()
 
 
 ## Removes `amount` of one good from the settlement's shelves, live one
 ## first. Split by hand rather than through one remove_stock call because
 ## both markets' own remove_stock is all-or-nothing, and a draw that spans
 ## the two has to take part of it from each.
-func _take_from_settlement_stock(market, village_market, item_id: String, amount: float) -> void:
+##
+## **The emergence Market counts in WHOLE units, and its own remove_stock
+## CEILS.** A basket asking for a twentieth of a log therefore took a whole
+## log, every single assessment -- sixty times what it asked for -- and
+## every village on the planet stripped its own timber. (Caught by the
+## bread chain's "a village with idle hands cuts its own timber", which is
+## exactly the kind of thing a pre-existing test is for.) So the fraction
+## is CARRIED here and only whole units are ever taken off that market; the
+## live VillageMarket holds floats and takes its share exactly, needing no
+## carry at all.
+func _take_from_settlement_stock(
+	market, village_market, settlement_id: String, item_id: String, amount: float
+) -> void:
 	var left := amount
 	if left <= 0.0:
 		return
@@ -4042,9 +4146,28 @@ func _take_from_settlement_stock(market, village_market, item_id: String, amount
 			left -= from_village
 	if left <= 0.0:
 		return
-	var from_market: float = minf(float(market.stock.get(item_id, 0.0)), left)
-	if from_market > 0.0:
-		market.remove_stock(item_id, from_market)
+
+	var carry: Dictionary = _settlement_estate_draw_carry.get(settlement_id, {})
+	var owed: float = float(carry.get(item_id, 0.0)) + left
+	var whole := int(floor(owed + 0.000001))
+	if whole > market.stock_of(item_id):
+		# The village simply had less than it wanted, and does NOT go into
+		# debt for the rest -- the same rule EstateConsumption.draw itself
+		# keeps. Carrying the shortfall would turn one empty shelf into a
+		# bill the village pays off out of every future delivery, which is
+		# a famine that never ends.
+		whole = market.stock_of(item_id)
+		owed = float(whole)
+	if whole > 0:
+		market.remove_stock(item_id, float(whole))
+		var taken: Dictionary = _settlement_estate_whole_units_drawn.get(settlement_id, {})
+		taken[item_id] = int(taken.get(item_id, 0)) + whole
+		_settlement_estate_whole_units_drawn[settlement_id] = taken
+	# maxf for the same reason VillageImmigration's own carry needs one: the
+	# epsilon that stops a float 0.9999999 from losing a whole unit can also
+	# carry `owed` just past `whole`, and a negative remainder compounds.
+	carry[item_id] = maxf(owed - float(whole), 0.0)
+	_settlement_estate_draw_carry[settlement_id] = carry
 
 
 ## Advances every household's run-lengths and applies EstateAscension's
@@ -4055,6 +4178,18 @@ func _walk_estate_ladder(
 ) -> void:
 	var chunk_coord := RegionalTrade.chunk_coord_of(settlement_id)
 	var present := _settlement_present_building_ids(chunk_coord)
+	# A village empties ONE household at a time, never all at once.
+	#
+	# Found by measuring rather than by reasoning: with every starving
+	# household leaving on the same assessment, a four-household village
+	# went to zero inside twenty assessments -- about ten minutes of play
+	# -- and so would every lean village on the planet. It is also simply
+	# what happens: people leave a failing village one family at a time,
+	# and each one that goes leaves more of the larder for those who stay,
+	# which is a village's real chance to recover. A DESCENT is not capped;
+	# losing standing is not leaving, and a whole village can slip a rung
+	# together.
+	var departed_this_assessment := false
 	for household_id in household_ids:
 		var household = _household_store.get_household(household_id)
 		if household == null:
@@ -4081,6 +4216,9 @@ func _walk_estate_ladder(
 		if verdict == EstateAscension.HOLD:
 			continue
 		if verdict == EstateAscension.DESCEND and EstateAscension.is_exodus(estate):
+			if departed_this_assessment:
+				continue
+			departed_this_assessment = true
 			_record_household_departure(settlement_id, household)
 			continue
 		var landed: String = EstateAscension.resolve(estate, verdict)
