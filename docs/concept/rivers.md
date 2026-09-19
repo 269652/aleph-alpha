@@ -2018,6 +2018,57 @@ the river is light because it is shallow. The old band's tests are
 replaced by shoal tests. The eyot stays: it is the part of the rise that
 breaks the surface.
 
+### Every rock a rock of its own size, wherever it stands (2026-09-19)
+
+Reported live: *"the boulders in the river doesn't affect hydrology
+whirls and such correctly"*. Three defects, all between a rock existing
+and the shader hearing about it, and none of them covered — every boulder
+test drove the DROPPED piece through `_sync_flow_boulder`, never the
+flow-overlay paint that collects the natural rocks.
+
+1. **The paint stored a flag where a size belongs.** `_river_flow_boulder_
+   tiles` maps tile → diameter in cm, and `_river_flow_boulder_feed` reads
+   its values back with `float(...)` to size each rock. The paint wrote
+   plain `true`. `float(true)` is `1.0`, a one-centimetre rock, so
+   `boulder_radius_px_for` floored every natural boulder in the world at
+   `MIN_BOULDER_RADIUS_PX`. Measured at the Dreisam: seven distinct real
+   sizes from 60 cm to 200 cm all reached the shader as one radius of
+   6.00 px. Radius scales the push reach, the eyot, the shoal, the foam
+   and the wake, so every rock parted exactly as much water as every
+   other one — which is what "doesn't affect the whirls correctly" looks
+   like from the bank.
+
+2. **Only the flowing branch collected a rock at all.** The still-water
+   and shore-band branches erased unconditionally. That is not a corner
+   case: a tile can be a curated river cell AND be classified a lake by
+   the baked hydrology field at the same time (this game's own Dreisam
+   spawn is exactly that — `is_river_at_global` true, hydrology kind
+   `lake`), so even a boulder the player dropped in the river in front of
+   them stopped bending the water the moment its chunk repainted. Since
+   "rivers, lakes and the sea all ride this overlay", collection is now
+   one shared rule (`_collect_flow_boulder`) across every branch that
+   paints water. Tiles past the shore bleed take a plain erase and never
+   call the predicate, so the far majority of a chunk stays free.
+
+3. **The 24 uniform slots were filled in Dictionary insertion order.**
+   Harmless while fewer rocks than slots were collected; with (2) fixed
+   the cap binds. Measured at the fixture: rocks 48 tiles from the player
+   dropped while rocks 100 tiles out kept their slots. Now **nearest
+   first, then capped**, against the tile `update()` was last called with
+   — the same answer `_budgeted_load_order` gives for a capped chunk set
+   and `SimulationScheduler` for a capped creature step.
+
+Chunk-load cost is unchanged: 5881 ms before, 5930 ms after (+0.8%, one
+sample, on a ~5.9 s load).
+
+**A natural stone no longer generates in still water at all** (see
+hydrology.md's "Nothing that belongs on land stands on water"): rocks in
+a stream are this section's whole point, rocks drawn sitting on three
+metres of lake are not. A boulder the player *drops* in still water is
+unaffected and still parts the surface, which is what (2) above makes
+possible.
+
+
 ## Status
 
 - Force balance (`BoulderHydraulics`: drag, submerged weight, load,

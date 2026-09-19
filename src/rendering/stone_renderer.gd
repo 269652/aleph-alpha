@@ -69,15 +69,32 @@ var _illustrated_stones = IllustratedStoneSprite.new()
 ## why). Returns every spawned node -- one per ore cell, one per solitary
 ## stone, or `flock_size_at` many per flock cell -- so the caller can free
 ## them again when the chunk unloads.
+## `world` is optional and duck-typed (EarthChunkManager): given one,
+## no natural stone is placed in STILL water. Water is not on its own a
+## reason to refuse a rock -- a boulder standing in a STREAM is a real,
+## deliberate feature, and the whole boulder-hydraulics model exists to
+## bend the current around exactly the rocks the player can see. A lake is
+## the case that is wrong: measured at 47.3N 19.6E, all 74 stones this
+## chunk put in water were in still water at solved depths of 1.9-2.7 m,
+## deep enough to submerge even a 2 m boulder, and they drew as rocks
+## sitting on top of the lake (reported live with a screenshot taken while
+## swimming). A boulder the player DROPS in a pond is untouched by this:
+## that is a deliberate act, and it still parts the surface.
 func spawn_stones(
-	parent: Node2D, chunk: Chunk, chunk_origin_tiles: Vector2i, tile_size: int
+	parent: Node2D, chunk: Chunk, chunk_origin_tiles: Vector2i, tile_size: int, world = null
 ) -> Array[Node2D]:
 	var spawned: Array[Node2D] = []
+	var knows_water: bool = (
+		world != null
+		and world.has_method("is_still_water_at_global")
+	)
 	for cell in _stone_placement.stones_in_chunk(
 		chunk_origin_tiles, chunk.biome, chunk.width, chunk.height
 	):
 		var global_x := chunk_origin_tiles.x + cell.x
 		var global_y := chunk_origin_tiles.y + cell.y
+		if knows_water and world.is_still_water_at_global(global_x, global_y):
+			continue
 		if _piece_occupies(chunk, cell):
 			continue
 		var position := Vector2((global_x + 0.5) * tile_size, (global_y + 0.5) * tile_size)

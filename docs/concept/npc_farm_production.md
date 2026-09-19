@@ -191,12 +191,44 @@ subject (farmhouse/sawmill/warehouse/wooden_fence), sliced with a known
 fixed grid, chroma-keyed and despilled, mirroring
 `illustrated_beehive_sprite.gd`'s established precedent. Rendered as a real
 overlay `Sprite2D` standing on the structure's own tile (`EarthChunkManager.
-_structure_art_sprites`), scaled via a "footprint" anchor (width matches
-the tile, height scales by the same factor, so a structure taller than one
-tile — Sägewerk/Storage's own portrait-oriented art — stays taller, and one
-wider than tall — Farm/wooden_fence's own landscape-oriented art — stays
-wider) rather than squashed into a single small tile texture, per
-`IllustratedArtLoader`'s own documented "footprint" anchor contract. The
+_structure_art_sprites`), scaled via a "footprint" anchor: one factor on
+both axes, so a structure taller than one tile — Sägewerk/Storage's own
+portrait-oriented art — stays taller, and one wider than tall —
+Farm/wooden_fence's own landscape-oriented art — stays wider, rather than
+being squashed into a square, per `IllustratedArtLoader`'s own documented
+"footprint" anchor contract.
+
+**How WIDE that footprint is was wrong until 2026-09-19, and this document
+said so in as many words** ("width matches the tile"). One tile is not a
+building. Measured with `tools/probe_structure_art_scale.gd`, at a 16px
+tile, against a villager 1.23 tiles tall:
+
+| subject | drawn | next to a person |
+|---|---|---|
+| `farm` | 0.85 × 0.70 tiles | **0.57×** |
+| `sagewerk` | 0.88 × 0.82 tiles | 0.67× |
+| `storage` | 0.83 × 0.89 tiles | 0.72× |
+| `city_hall` | 0.84 × 0.96 tiles | 0.78× |
+
+Every one of them was drawn shorter than the person who works it — the
+farmhouse barely half his height, which is what got reported: *"there's a
+weird shrunk farmhouse"*. A placeable is drawn at the footprint its own
+**catalog twin** claims now (`IllustratedStructureSprite.drawn_width_tiles`
+→ `BuildingCatalog.footprint_of`), which puts the farmhouse at 2.56 × 2.10
+tiles, 1.71× a person.
+
+Read from the catalog rather than restated, because the village raises the
+very same sheets as real multi-tile buildings (see `BuildingCatalog`'s own
+`farmhouse` row: *"npc_farm_production.md's Farm, raised as a real building
+rather than a single tile"*) — so one building cannot end up two sizes
+depending on who put it down. A subject with no twin keeps one tile, which
+is right for the lone `wooden_fence` panel and is what stops this quietly
+enlarging everything with art.
+
+This is about the PICTURE, not the ground: a placed structure still occupies
+its single tile exactly as before, and nothing about placement, collision or
+the fence gate moves. A real tree already draws a canopy far wider than the
+one tile its trunk stands on. The
 underlying ground tile is unchanged (bare earth) — purely additive, and
 every placeable with no real art yet (campfire/furnace/stone_dam) keeps
 rendering exactly as before.
@@ -303,6 +335,11 @@ farmers (see below) use the full `CharacterView` the player does, so the two
 kinds of farmer standing in neighbouring fields do not look like they belong
 to the same game. A real decision, not an oversight: named here rather than
 quietly restyled.
+
+✅ **A placed building is drawn at a building's size** (2026-09-19) — see
+"Real art" above. It was drawn one tile wide, which made every placeable
+shorter than the villager working it; it now uses the footprint its own
+catalog twin claims, measured rather than chosen.
 
 ## A village counterpart, 2026-09-17
 

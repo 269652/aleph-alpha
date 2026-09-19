@@ -26544,6 +26544,89 @@ Tests: `test_npc_marker_timber.gd` 21/21, `test_settlement_generator.gd`
 `test_settlement_demand.gd`, `test_village_wages.gd`, `test_npc_identity.gd`,
 `test_procedural_landmark_sprite.gd` all green (344 between them).
 
+## Nothing that belongs on land stands on water (2026-09-19)
+
+Reported live in two rounds: *"There are still patches of grass; potatoes
+in the river.. also the boulders in the river doesn't affect hydrology
+whirls and such correctly"*, then, with a screenshot taken while
+SWIMMING, *"There are still plenty of entities in the water"* — mushrooms,
+an ant mound, bushes, a stone and an alpaca out on open lake. Write-ups in
+`concept/hydrology.md` ("Nothing that belongs on land stands on water")
+and `concept/rivers.md` ("Every rock a rock of its own size, wherever it
+stands").
+
+### ✅ Root cause: a water tile keeps its LAND biome
+
+Measured at the reported 47.3N 19.6E: the whole chunk is drawn as water,
+`Chunk.blocks_ground_cover` already agrees with `is_water_at_global` on
+all 1024 cells, and `biome_at_global` still answers `"grassland"`. So this
+was never a mask-width problem — every placement that seeds "by biome"
+seeds a lake bed, and only tall grass and trees ever consulted the mask.
+Census of that one all-water chunk: grass 0, trees 0, **crops 31,
+mushrooms 60, flowers 4, ant mounds 2, stones 74**, plus 24 land
+creatures across the loaded radius.
+
+- ✅ `WildCropPatch`, `WildMushroomPatch`, `AntColony` and
+  `EarthwormPatch` (21 burrows in that lake bed) take the same
+  optional mask `TallGrass` already took, honoured in seeding AND spread,
+  empty by default so no existing caller changes. One guard in
+  `is_valid_mound_site` covers both initial mounds and budding.
+- ✅ `FlowerPatch` needed no new parameter: its own `block_cells` already
+  clears a cell and refuses every later rooting and seed-fall — it had
+  simply never been handed the water.
+- ✅ Land creatures **slide clear** rather than vanish (the village
+  square's own idiom): nearest dry tile within eight, ringing outward in
+  a fixed order so placement stays deterministic. A fully flooded chunk
+  correctly ends up with no land animals.
+- ✅ Stones care which KIND of water. All 74 were in STILL water, none in
+  flowing river, at depths of 1.9–2.7 m — enough to submerge a 2 m
+  boulder. A natural stone may now stand in flowing river and never in a
+  lake, sea pocket, pond or shore feather
+  (`is_still_water_at_global`). A boulder the player *drops* in still
+  water is deliberately unaffected and still parts the surface.
+- ✅ Pinned by a new `test_water_entity_exclusion.gd` driving one real
+  `update()` at the reported coordinates, asserting against
+  `is_water_at_global` directly, including the premise that the chunk
+  really is all water and really does read back as land biome. 8/8.
+  Regression: 282 tests across the five sims, 117 across stones, 305
+  across creatures, all unchanged.
+
+### ✅ Boulders: three defects between a rock and the shader
+
+Every existing boulder test drove the DROPPED piece; the flow-overlay
+paint that collects the NATURAL rocks was untested, which is how all
+three survived.
+
+- ✅ The paint stored `true` in a tile→diameter dictionary read back with
+  `float(...)`. `float(true)` is 1.0 — a one-centimetre rock — so every
+  natural boulder was floored at `MIN_BOULDER_RADIUS_PX`. Measured at the
+  Dreisam: **seven distinct real sizes from 60 cm to 200 cm all reached
+  the shader as one radius of 6.00 px**, and radius scales the reach, the
+  eyot, the shoal, the foam and the wake.
+- ✅ Only the flowing branch collected at all; still-water and shore-band
+  erased. A tile can be curated river AND baked lake at once (this game's
+  own spawn is), so a dropped boulder stopped working on repaint — which
+  is what `test_a_persisted_boulder_still_bends_the_water_after_reload`
+  had been failing on at `origin/main`. Now one shared rule across every
+  branch that paints water.
+- ✅ With that fixed the 24 slots bind, and they were filled in Dictionary
+  insertion order: rocks 48 tiles out dropped while rocks 100 tiles out
+  kept slots. Now nearest-first then capped.
+- ✅ Chunk-load cost unchanged: 5881 ms → 5930 ms (+0.8%, one sample).
+
+### 🚧 Honest gaps
+
+- 🚧 Not verified in a live session. Every number above is from headless
+  measurement at the reported coordinates; the screenshot has not been
+  re-taken.
+- ⬜ `test_earth_chunk_manager_creature_persistence.gd` fails 3 of 5 with
+  "Invalid access to property or key 'modifications' on a base object of
+  type 'Nil'" — identical (same tests, same error) with all of this
+  reverted, so pre-existing and untouched here.
+- ⬜ Only the placement systems named above were audited. Leaf litter is
+  deliberately left alone -- it really does float on rivers, and the flow
+  shader already gives it turbulence. Footprints and snow presence were
+  not re-checked against the mask this round.
 ## `/village` now checks the ground instead of trusting a plan (2026-09-19)
 
 Reported with the console still on screen and nothing but grass, flowers and
@@ -26902,3 +26985,55 @@ Tests: `test_village_renderer.gd` 129/129 (three new), `test_village_layout.gd`
 and `test_procedural_landmark_sprite.gd` (six new between them),
 `test_village_farm.gd`, `test_village_pond.gd`, `test_landmark_sheet.gd`,
 `test_earth_chunk_manager_city_hall.gd` — 352 green in total.
+
+---
+
+## 2026-09-19 — A placed building was smaller than the person working in it
+
+Reported live: *"Also there's a weird shrunk farmhouse fix that too"*, with
+a screenshot of a farmhouse a villager stood head and shoulders above.
+
+**The concept doc specified the bug.** `npc_farm_production.md`'s "Real art"
+section said a placed structure's art is scaled so its "width matches the
+tile" — one factor on both axes so nothing is squashed, which was right, at
+a width of exactly one tile, which was not. Measured before changing
+anything (`tools/probe_structure_art_scale.gd`), at a 16px tile against a
+villager 1.23 tiles tall:
+
+| subject | drawn | next to a person |
+|---|---|---|
+| `farm` | 0.85 × 0.70 tiles | **0.57×** |
+| `sagewerk` | 0.88 × 0.82 tiles | 0.67× |
+| `storage` | 0.83 × 0.89 tiles | 0.72× |
+| `city_hall` | 0.84 × 0.96 tiles | 0.78× |
+
+Not one of them reached the height of the person who works it. The
+farmhouse, the one that got reported, was barely half.
+
+✅ **A placeable is drawn at the footprint its own catalog twin claims.**
+`IllustratedStructureSprite.drawn_width_tiles` reads
+`BuildingCatalog.footprint_of` — the village raises the very same sheets as
+real multi-tile buildings (`BuildingCatalog`'s `farmhouse` row is literally
+*"npc_farm_production.md's Farm, raised as a real building rather than a
+single tile"*), so the answer already existed and is read rather than
+restated. One building cannot now be two sizes depending on who placed it.
+The farmhouse draws 2.56 × 2.10 tiles, **1.71×** a person.
+
+✅ **Nothing with no twin grew.** A lone `wooden_fence` panel genuinely is
+one tile of fence and still draws as one — which is what keeps this from
+quietly enlarging every subject that happens to have art.
+
+**This is the picture, not the ground.** A placed structure still occupies
+its single tile; placement, collision and the fence gate are untouched. A
+real tree already draws a canopy far wider than the tile its trunk stands
+on, and the hive added two days ago draws above its own tile for the same
+reason.
+
+Two existing tests pinned the old rule and were rewritten rather than
+deleted, each keeping the invariant it was really guarding:
+`test_a_building_still_scales_its_width_to_the_tile` became
+`..._scales_by_its_width_not_by_a_run` (the fence pass's guard, still
+true), and the overlay-wiring test now checks the drawn footprint instead
+of the tile.
+
+Tests: `test_illustrated_structure_sprite.gd` 41/41 (3 new).
