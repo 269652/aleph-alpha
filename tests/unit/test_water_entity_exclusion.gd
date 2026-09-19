@@ -157,3 +157,38 @@ func test_no_land_creature_stands_on_water():
 		on_water.size(), 0,
 		"%d land creatures stand on water (e.g. %s)" % [on_water.size(), str(on_water.slice(0, 4))]
 	)
+
+
+## The rock in the screenshot. Stones are the one case where "in water" is
+## not automatically wrong: a boulder standing in a STREAM is a real,
+## deliberate feature -- the whole boulder-hydraulics model (the eyot, the
+## shoal, the wake, the force balance in BoulderHydraulics) exists to make
+## the current bend around exactly the rocks the player can see.
+##
+## STILL water is the case that is wrong, and the measurement is
+## unambiguous: of the 74 stones this chunk put in water, all 74 are in
+## still water, none in flowing river, at solved depths of 1.9-2.7 m --
+## deep enough to submerge even a 2 m boulder completely, let alone the
+## 60 cm ones. A rock drawn sitting on top of three metres of lake is the
+## bug; a rock breaking the surface of a stream is the feature.
+##
+## So the rule is about the KIND of water, not about water: a naturally
+## generated stone may stand in flowing river, never in a lake, a sea
+## pocket, a pond or a shore feather. A boulder the player DROPS in still
+## water is untouched by this -- that is a deliberate act, and it still
+## parts the surface (see _collect_flow_boulder).
+func test_no_natural_stone_stands_in_still_water():
+	var chunk_coord: Vector2i = manager._chunk_coord_for_tile(water_tile)
+	var stones: Array = manager._loaded_stones.get(chunk_coord, [])
+	var in_still: Array = []
+	for stone in stones:
+		if not is_instance_valid(stone):
+			continue
+		var tile := Vector2i(int(stone.position.x / 16.0), int(stone.position.y / 16.0))
+		var probe: Dictionary = manager.generator.hydrology_at_global(tile.x, tile.y)
+		if EarthChunkManager.is_still_water_probe(probe):
+			in_still.append(tile)
+	assert_eq(
+		in_still.size(), 0,
+		"%d stones stand in still water (e.g. %s)" % [in_still.size(), str(in_still.slice(0, 3))]
+	)

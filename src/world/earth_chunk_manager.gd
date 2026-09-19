@@ -12540,6 +12540,19 @@ func is_river_at_global(global_x: int, global_y: int) -> bool:
 ## village_ponds.md, VillagePond). An ordinary chunk modification, like a
 ## rail -- the id is the only thing stored about it, which is what lets a
 ## pond survive a reload with no record of the fisher who dug it.
+## Whether this tile is STILL water the surface paints -- a lake, a sea
+## pocket, a pond, or a dry-by-elevation cell inside a gentle shore's own
+## feather. The public, global-tile form of is_still_water_probe, which
+## _paint_river_flow_overlay and is_water_at_global already share; exposed
+## so placement can tell the two KINDS of water apart, because a rock
+## standing in a stream is a feature and a rock standing on a lake is not
+## (see StoneRenderer.spawn_stones).
+func is_still_water_at_global(global_x: int, global_y: int) -> bool:
+	if is_pond_at_global(global_x, global_y):
+		return true
+	return is_still_water_probe(generator.hydrology_at_global(global_x, global_y))
+
+
 func is_pond_at_global(global_x: int, global_y: int) -> bool:
 	return VillagePond.is_pond_tile(modification_at_global(global_x, global_y))
 
@@ -15641,7 +15654,7 @@ func _load_chunk(chunk_coord: Vector2i) -> void:
 	_dispatch_cicadas(chunk_coord)
 
 	_loaded_stones[chunk_coord] = _stone_renderer.spawn_stones(
-		_entities_parent, chunk, chunk_coord * CHUNK_SIZE, TerrainRenderer.TILE_SIZE
+		_entities_parent, chunk, chunk_coord * CHUNK_SIZE, TerrainRenderer.TILE_SIZE, self
 	) + _stone_renderer.spawn_mountain_veins(
 		_entities_parent, chunk, chunk_coord * CHUNK_SIZE, TerrainRenderer.TILE_SIZE, self
 	)
