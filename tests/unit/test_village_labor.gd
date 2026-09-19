@@ -58,10 +58,21 @@ func test_a_farmhouse_demands_field_labour():
 	assert_true(int(VillageLabor.demand_for(["farmhouse"]).get("field", 0)) > 0)
 
 
-## The mill needs both a sawyer and a pair of hands to shift the logs --
-## which is why its output scale can be held down by either.
-func test_a_sawmill_demands_both_a_hand_and_a_craftsman():
+## A saw pit is two men on a saw, not a guild trade -- which is what lets
+## a village of cottagers cut its own firewood. It is also the deadlock
+## VillageAssembly's tests found: craftsmen only exist downstream of a
+## mill, so a mill that needed one could never be the first works a
+## village raised.
+func test_a_saw_pit_is_worked_by_hands_and_needs_no_guild_trade():
 	var demand: Dictionary = VillageLabor.demand_for(["sawmill"])
+	assert_true(int(demand.get("hand", 0)) > 0)
+	assert_eq(int(demand.get("craft", 0)), 0, "a saw pit wants a guild trade")
+
+
+## The brewery is the one rung staffed from two classes: a brewer over
+## somebody else's back. Either post empty and the mash floor stands.
+func test_a_brewery_demands_both_a_brewer_and_a_pair_of_hands():
+	var demand: Dictionary = VillageLabor.demand_for(["brewery"])
 	assert_true(int(demand.get("hand", 0)) > 0)
 	assert_true(int(demand.get("craft", 0)) > 0)
 
@@ -127,12 +138,12 @@ func test_half_the_workforce_is_half_the_output():
 
 
 ## The MINIMUM across the classes a building needs, never the mean: a
-## sawmill with its sawyer and no hand runs at the hand's rate. One
-## missing post is a real bottleneck, which is the same reason an estate's
-## satisfaction is a minimum too.
+## brewery with its brewer and nobody to rake the mash runs at the hand's
+## rate. One missing post is a real bottleneck, which is the same reason an
+## estate's satisfaction is a minimum too.
 func test_a_building_runs_at_the_rate_of_its_worst_staffed_post():
-	var demand: Dictionary = VillageLabor.demand_for(["sawmill"])
-	var scale: float = VillageLabor.output_scale_for("sawmill", {"craft": 9, "hand": 0}, demand)
+	var demand: Dictionary = VillageLabor.demand_for(["brewery"])
+	var scale: float = VillageLabor.output_scale_for("brewery", {"craft": 9, "hand": 0}, demand)
 	assert_almost_eq(scale, 0.0, 0.0001)
 
 
@@ -140,7 +151,9 @@ func test_a_building_runs_at_the_rate_of_its_worst_staffed_post():
 ## craftsmen does not get a forge that runs at four hundred percent.
 func test_a_surplus_of_labour_never_pushes_a_building_past_full():
 	var demand: Dictionary = VillageLabor.demand_for(["brewery"])
-	assert_almost_eq(VillageLabor.output_scale_for("brewery", {"craft": 400}, demand), 1.0, 0.0001)
+	assert_almost_eq(
+		VillageLabor.output_scale_for("brewery", {"craft": 400, "hand": 400}, demand), 1.0, 0.0001
+	)
 
 
 ## Labour is POOLED: two forges in one village share its craftsmen, so
@@ -168,7 +181,7 @@ func test_a_village_can_staff_only_what_it_holds_some_of_every_class_for():
 	assert_false(VillageLabor.can_staff("blacksmith", {"hand": 20, "field": 20}))
 	assert_true(VillageLabor.can_staff("blacksmith", {"craft": 1}))
 	assert_false(VillageLabor.can_staff("sawmill", {"craft": 9}), "a mill with no hands is unstaffable")
-	assert_true(VillageLabor.can_staff("sawmill", {"craft": 1, "hand": 1}))
+	assert_true(VillageLabor.can_staff("sawmill", {"hand": 1}))
 
 
 func test_anything_that_needs_no_workforce_can_always_be_staffed():

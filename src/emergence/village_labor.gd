@@ -39,16 +39,24 @@ const LABOUR_BY_BUILDING := {
 	# The farm is worked by husbandmen, two to a farmstead: plough-land is
 	# the one job in the village that is nobody else's.
 	"farmhouse": {"field": 2},
-	# A saw pit takes a sawyer on the saw and a pair of hands on the log
-	# deck. Either post empty and the mill stands idle, which is why this
-	# is the one rung that can be bottlenecked from BELOW as well as above.
-	"sawmill": {"craft": 1, "hand": 1},
+	# Two men on a saw. NOT a guild trade, and that correction came out of
+	# VillageAssembly's own tests rather than out of taste: with the mill
+	# needing a craftsman, a village of cottagers could never staff the one
+	# works that supplies its own firewood, and craftsmen only exist
+	# downstream of a mill -- a deadlock at the very bottom of the ladder.
+	# It is also what BuildingCatalog already says the building IS: "a shed,
+	# a saw pit and a log deck, not an enclosed hall". A water mill would
+	# want a millwright; this is a saw pit.
+	"sawmill": {"hand": 2},
 	# Shifting and stacking; no trade required.
 	"warehouse": {"hand": 1},
 	# A forge is a trade end to end.
 	"blacksmith": {"craft": 2},
-	# So is a mash floor.
-	"brewery": {"craft": 2},
+	# A mash floor is a brewer's trade over somebody else's back: the malt
+	# has to be shifted and the mash raked, and the brewer does not do it
+	# alone. The one rung that can be bottlenecked from BELOW as well as
+	# above, which is why its output scale is the interesting one.
+	"brewery": {"craft": 1, "hand": 1},
 	# The civic seat is kept by the estate that holds civic rights.
 	"city_hall": {"civic": 1},
 }
