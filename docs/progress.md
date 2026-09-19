@@ -25022,3 +25022,81 @@ player.gd` 25/25 (7 new), `test_world_creature_and_footstep_audio_wiring.gd`
 9/9, `test_world_footstep_wiring.gd` 7/7,
 `test_earth_chunk_manager_footprints.gd` 32/32,
 `test_nature_soundscape_player.gd` 18/18.
+
+---
+
+## 2026-09-19 — Beehives: a radius is not a branch
+
+Reported live: *"Beehives should not be built on grass... they need a tree
+branch to build it please"*.
+
+An earlier pass had already answered *"Beehives should only be able to build
+on trees or structures like houses .. not free floating over a river or
+ground"* with `_has_real_hive_anchor`, and that rule was right about what a
+hive needs and wrong about how to ask for it. It accepted any tile with a
+tree or a building piece within `HIVE_ANCHOR_RADIUS_TILES` — already
+deliberately small at 2.0, and already described in the concept doc as "a
+hive hangs from a *specific* branch, not merely somewhere in the same
+general area as one". But **a radius of any size admits the tile next to a
+trunk**, and that tile is bare grass with a tree visible from it. No smaller
+radius fixes that: what holds a hive up is not nearby scenery, it is the
+branch it hangs off, and that is a property of one tile.
+
+✅ **The anchor is the hive's own tile.** `_has_standing_tree_at` (a real,
+standing tree whose own tile *is* this one — a felled tree skipped for the
+same reason `trees_near` skips one: a stump is not a branch) or
+`_has_building_piece_at`, which replaces `_has_building_piece_near(tile,
+radius)` — the tile square that walked existed only to cover the radius
+spilling across a chunk edge. `HIVE_ANCHOR_RADIUS_TILES` is **deleted**
+rather than set to `0.0`, and `_has_real_hive_anchor` loses the
+`pixel_position` argument only its radius tree query needed, so no dial is
+left that could widen this back into the same bug. Seeding, swarming,
+absconding and harvest-relocation all already route through this one
+function, so every path was covered at once.
+
+✅ **The comb is drawn up in the tree.** A hive sited on a tree's tile but
+drawn at that tile's centre is drawn at the foot of the trunk — still,
+visibly, on the grass. `BeeHiveMarker` hangs its sprite
+`BRANCH_HANG_FRACTION` (0.6) of a real tree's real drawn height, which is
+`ProceduralTreeSprite.WORLD_SIZE.y × VISUAL_SCALE` — measured against the
+art rather than chosen, because a tree's node origin is the foot of its
+trunk with the canopy drawn above it, and bounded on both sides by a test so
+the two cannot drift apart. The queen rides up with it; she lives on the comb.
+
+Two things that look like details and are not: the lift is on the **sprite**,
+never the node (Y-sorting compares node origins, so a hive whose own origin
+floated into the canopy would draw behind things it stands in front of — the
+same split `CaterpillarMarker._climb_height_px` already keeps), and it is
+`position`, not `offset` (offset is multiplied by the sprite's growth scale,
+so the hive would creep up its tree as the colony filled out).
+
+⬜ **Wild bee nests still have the identical gap**, and this pass did not
+close it. `WildBeePatch` is constructed with no `extra_site_check` at all —
+placement is biome-only — while its own class doc says a cavity-nesting
+solitary bee "needs a real tree/deadwood source". `bees.md` has named this a
+known parallel gap since 2026-09-08 and it stays named: the ask was about
+beehives, and gating nests on a standing tree would visibly thin them out,
+which is a behaviour change nobody asked for.
+
+⬜ **Not verified in a running game.** The rule is tested against real
+generated terrain (a 3×3 of real chunks around Berlin: four real hives
+seeded, every one of them on a real tree or structure tile, 7 asserts — not
+vacuous) and the hang height against the real tree art, but nobody has
+looked at a hive in play.
+
+**Found by sweeping, not by looking: four tests had been silently red.**
+`test_ant_mound_marker`, `test_ant_queen_marker`, `test_bee_hive_marker` and
+`test_bee_queen_marker` each asserted `timer.autostart` on a marker already
+in the tree, after the "FPS regression round 13" pass moved their slow ticks
+onto `Timer` children. Godot's `Timer` clears that flag the moment it acts on
+it — `NOTIFICATION_READY` starts the timer and sets `autostart` false — so
+the assertion could only ever be false. All four now assert the timer is
+genuinely running, which is what the line was always trying to say; verified
+it still bites by setting a marker's `autostart` back to false.
+
+Tests: `test_earth_chunk_manager_bees.gd` 34/34 (3 new),
+`test_bee_hive_marker.gd` 30/30 (4 new), `test_bee_colony.gd` 52/52,
+`test_wild_bee_patch.gd` 26/26, `test_ant_mound_marker.gd` 18/18,
+`test_ant_queen_marker.gd` 2/2, `test_bee_queen_marker.gd` 2/2,
+`test_procedural_beehive_sprite.gd` 11/11,
+`test_illustrated_beehive_sprite.gd` 19/19.

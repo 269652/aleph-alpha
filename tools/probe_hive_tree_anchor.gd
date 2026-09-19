@@ -16,11 +16,13 @@ const EarthChunkGenerator = preload("res://src/world/earth_chunk_generator.gd")
 const GeoCoordinates = preload("res://src/world/geo_coordinates.gd")
 const TerrainRenderer = preload("res://src/rendering/terrain_renderer.gd")
 
+## Two real, tree-bearing places, 2x2 chunks each. Kept small on purpose:
+## generating real terrain is genuinely slow, and a 3x3 around four places
+## ran past fifteen minutes without finishing. Eight chunks is enough to
+## see several real hives.
 const PLACES := {
 	"Berlin": Vector2(13.405, 52.52),
-	"Amazon": Vector2(-60.02, -3.10),
 	"Bavaria": Vector2(11.58, 48.14),
-	"Kenya": Vector2(36.82, -1.29),
 }
 
 
@@ -47,8 +49,8 @@ func _initialize() -> void:
 			floori(float(tile.x) / EarthChunkManager.CHUNK_SIZE),
 			floori(float(tile.y) / EarthChunkManager.CHUNK_SIZE)
 		)
-		for dy in range(-1, 2):
-			for dx in range(-1, 2):
+		for dy in range(0, 2):
+			for dx in range(0, 2):
 				var chunk_coord := home + Vector2i(dx, dy)
 				manager._load_chunk(chunk_coord)
 				var trees: Array = manager._loaded_trees.get(chunk_coord, [])
