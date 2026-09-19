@@ -188,6 +188,7 @@ const EstateConsumption = preload("res://src/emergence/estate_consumption.gd")
 const EstateAscension = preload("res://src/emergence/estate_ascension.gd")
 const VillageLabor = preload("res://src/emergence/village_labor.gd")
 const VillageAssembly = preload("res://src/emergence/village_assembly.gd")
+const SettlementFoodDemand = preload("res://src/emergence/settlement_food_demand.gd")
 const EstateShortfall = preload("res://src/emergence/estate_shortfall.gd")
 const GuildRelief = preload("res://src/emergence/guild_relief.gd")
 const StaffedProduction = preload("res://src/emergence/staffed_production.gd")
@@ -4021,6 +4022,28 @@ func _settlement_present_building_ids(chunk_coord: Vector2i) -> Array:
 	for building_id in _chartered_building_ids_in_chunk(chunk_coord):
 		seen[building_id] = true
 	return seen.keys()
+
+
+## How MANY of each whole building this settlement has standing --
+## building_id -> count, where the list above only says whether one does.
+##
+## What VillageAssembly needs to know that a works which feeds people is
+## outnumbered by the mouths it feeds (docs/concept/village_estates.md
+## mechanism 7): a village of forty with one farmstead is short however many
+## times it votes, and "a farmhouse stands here" cannot say so.
+##
+## Whole buildings only. A single-tile placeable is not something the
+## assembly scales, and the ledger's completed projects are counted
+## alongside the ones standing in a loaded chunk for the same reason the
+## union above exists -- what a village HAS should not depend on whether
+## anybody is standing in it.
+func _settlement_building_counts(chunk_coord: Vector2i) -> Dictionary:
+	var counts := {}
+	for building_id in _standing_building_ids_in_chunk(chunk_coord):
+		counts[building_id] = int(counts.get(building_id, 0)) + 1
+	for building_id in _construction_project_store.completed_blueprint_ids_in_chunk(chunk_coord):
+		counts[building_id] = int(counts.get(building_id, 0)) + 1
+	return counts
 
 
 ## docs/concept/village_estates.md mechanisms 2, 3 and 6, in one pass over
@@ -17366,6 +17389,13 @@ func next_building_for_settlement(chunk_coord: Vector2i) -> String:
 		"household_count": household_ids.size(),
 		"housed_count": int(census["housed_count"]),
 		"present_building_ids": _settlement_present_building_ids(chunk_coord),
+		# How many of each, so a works that feeds people can be raised again
+		# while it is outnumbered by the mouths (mechanism 7).
+		"building_counts": _settlement_building_counts(chunk_coord),
+		# And WHICH food works this land wants -- a fishing village raises no
+		# farmstead to feed itself, because a fisher's works is their own
+		# house and the roster already conscripts another of them.
+		"food_trade": SettlementFoodDemand.trade_for(seeded_region_for_chunk(chunk_coord)),
 		"satisfaction": _settlement_estate_satisfaction.get(settlement_id, {}),
 		"waiting_estate": _estate_of_household(waiting[0] if not waiting.is_empty() else ""),
 	})

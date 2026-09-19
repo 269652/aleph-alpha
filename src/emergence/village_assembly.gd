@@ -29,6 +29,7 @@ extends RefCounted
 ## architecture would be the hardest kind of bug to see.
 
 const VillageEstates = preload("res://src/emergence/village_estates.gd")
+const SettlementFoodDemand = preload("res://src/emergence/settlement_food_demand.gd")
 const VillageGrowth = preload("res://src/emergence/village_growth.gd")
 const VillageLabor = preload("res://src/emergence/village_labor.gd")
 const EstateAscension = preload("res://src/emergence/estate_ascension.gd")
@@ -51,6 +52,35 @@ const ESTATE_VOTE_WEIGHT := {
 ## village short of candles has no building on its ladder that makes
 ## candles, so it honestly petitions for nothing on that count rather than
 ## voting for the nearest-sounding rung.
+## Which works FEEDS people, and so scales with how many there are.
+##
+## Mechanism 7. Everything else on the ladder is raised once: a village
+## holds one hall, one store, one saw pit. A farmstead is not like that --
+## it feeds the households one farmer can feed, so a village of forty is
+## short however many times it votes. Asked directly: *"when population
+## rises and there's not enough food they need to build more Farmhouses"*.
+const FOOD_WORKS_ID := "farmhouse"
+
+## Which food works each land's own food trade actually wants.
+##
+## A fisher is absent on purpose rather than by omission: their works is
+## their own HOUSE, beside which they dig their pond (docs/concept/
+## village_ponds.md), so a fishing village short of food needs another
+## fisher and not another building -- and the founding roster already
+## conscripts one as demand rises (SettlementGenerator._staff_food_
+## producers). Raising a farmhouse there would be a building nobody in that
+## village will ever work.
+##
+## A hunter is absent for a MEASURED reason, recorded on FOOD_TRADES itself:
+## about 0.02 food units an assessment against a draw of 6, because a whole
+## chunk supports roughly one deer. Hunting is a real way to eat and not
+## something a village can build its way to being fed by.
+const FOOD_WORKS_BY_TRADE := {
+	"farmer": FOOD_WORKS_ID,
+	"herbalist": FOOD_WORKS_ID,
+	"fisher": "",
+}
+
 const REMEDY_BY_GOOD := {
 	VillageEstates.FOOD_KIND_TOKEN: "farmhouse",
 	VillageEstates.FUEL_ITEM_ID: "sawmill",
@@ -96,7 +126,9 @@ static func next_building(state: Dictionary) -> String:
 	var estate_counts: Dictionary = state.get("estate_counts", {})
 	var present: Array = state.get("present_building_ids", [])
 	var petitions: Dictionary = _petitions(
-		estate_counts, present, state.get("satisfaction", {})
+		estate_counts, present, state.get("satisfaction", {}),
+		state.get("building_counts", {}), household_count,
+		String(state.get("food_trade", SettlementFoodDemand.FALLBACK_TRADE))
 	)
 	if petitions.is_empty():
 		# Nothing anybody in this village is asking for -- but silence is
@@ -117,7 +149,8 @@ static func next_building(state: Dictionary) -> String:
 
 ## building_id -> total weight petitioned for it.
 static func _petitions(
-	estate_counts: Dictionary, present: Array, satisfaction: Dictionary
+	estate_counts: Dictionary, present: Array, satisfaction: Dictionary,
+	building_counts: Dictionary, household_count: int, food_trade: String
 ) -> Dictionary:
 	var supply: Dictionary = VillageLabor.supply_for(estate_counts)
 	var petitions := {}
@@ -125,7 +158,10 @@ static func _petitions(
 		var households := int(estate_counts.get(estate, 0))
 		if households <= 0:
 			continue
-		var asked: String = _ask_of(estate, present, satisfaction, supply, estate_counts)
+		var asked: String = _ask_of(
+			estate, present, satisfaction, supply, estate_counts,
+			building_counts, household_count, food_trade
+		)
 		if asked == "":
 			continue
 		var weight := float(households) * float(ESTATE_VOTE_WEIGHT.get(estate, 1.0))
@@ -141,15 +177,51 @@ static func _ask_of(
 	present: Array,
 	satisfaction: Dictionary,
 	supply: Dictionary,
-	estate_counts: Dictionary
+	estate_counts: Dictionary,
+	building_counts: Dictionary,
+	household_count: int,
+	food_trade: String
 ) -> String:
-	var remedy: String = REMEDY_BY_GOOD.get(_worst_shortage_of(estate, satisfaction), "")
-	if remedy != "" and _is_petitionable(remedy, present, supply, estate_counts):
+	var remedy: String = _remedy_for(_worst_shortage_of(estate, satisfaction), food_trade)
+	if remedy != "" and _is_remedy_petitionable(
+		remedy, present, supply, estate_counts, building_counts, household_count
+	):
 		return remedy
+	# A CHARTER is satisfied by one standing building and never scales: it
+	# entitles every household in the village, so a second entitles nobody.
+	# Deliberately the unscaled gate, even where the charter happens to be
+	# the same building as the food works (a farmhouse is both).
 	for charter in EstateAscension.charter_building_ids_for(estate):
 		if _is_petitionable(charter, present, supply, estate_counts):
 			return charter
 	return ""
+
+
+## Whether the village may vote for this REMEDY: petitionable as anything
+## else is, or -- for the one works that feeds people -- already standing
+## but outnumbered by the producers this village's own demand asks for.
+##
+## A second door on the remedy path alone, rather than a loosening of
+## _is_petitionable, so the charter path above is untouched by it.
+static func _is_remedy_petitionable(
+	building_id: String, present: Array, supply: Dictionary, estate_counts: Dictionary,
+	building_counts: Dictionary, household_count: int
+) -> bool:
+	if _is_petitionable(building_id, present, supply, estate_counts):
+		return true
+	if not _wants_another(building_id, building_counts, household_count):
+		return false
+	return VillageLabor.can_staff(building_id, supply)
+
+
+## The building that would supply `good` on THIS land. Only the food token
+## depends on where the village stands -- every other remedy is the same
+## building anywhere (see FOOD_WORKS_BY_TRADE for why a fisher's is none).
+static func _remedy_for(good: String, food_trade: String) -> String:
+	var remedy: String = REMEDY_BY_GOOD.get(good, "")
+	if remedy != FOOD_WORKS_ID:
+		return remedy
+	return String(FOOD_WORKS_BY_TRADE.get(food_trade, FOOD_WORKS_ID))
 
 
 ## The good this estate is shortest of, or "" if it is fully supplied.
@@ -183,6 +255,27 @@ static func _is_petitionable(
 	if _is_charter_for_any_estate_here(building_id, estate_counts):
 		return true
 	return VillageLabor.can_staff(building_id, supply)
+
+
+## Whether this village wants ANOTHER of a works it already has.
+##
+## Only the food works scales, and it scales against the number of producers
+## this village's own demand asks for (SettlementFoodDemand.producers_needed
+## -- the same already-measured function the founding roster is staffed
+## against, so farmhouses and farmers cannot disagree about how many are
+## needed).
+##
+## A caller that supplies no counts reads as "one of each that stands",
+## which is exactly the behaviour every caller had before this existed.
+static func _wants_another(
+	building_id: String, building_counts: Dictionary, household_count: int
+) -> bool:
+	if building_id != FOOD_WORKS_ID or household_count <= 0:
+		return false
+	var standing := int(building_counts.get(building_id, 0))
+	if standing <= 0:
+		return false
+	return standing < SettlementFoodDemand.producers_needed(household_count)
 
 
 static func _is_charter_for_any_estate_here(building_id: String, estate_counts: Dictionary) -> bool:

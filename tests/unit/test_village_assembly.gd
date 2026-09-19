@@ -322,3 +322,154 @@ func test_every_answer_is_a_building_the_village_can_actually_build():
 			next == "" or VillageGrowth.LADDER_BUILDING_IDS.has(next) or BuildingCatalog.BUILDING_IDS.has(next),
 			"a shortage of %s produced %s, which nothing builds" % [shortage, next]
 		)
+
+
+# -- a works that feeds people scales with the people -----------------------
+#
+# Asked directly: *"when population rises and there's not enough food they
+# need to build more Farmhouses; Fishers or Hunters"*.
+#
+# _is_petitionable refuses anything already standing, which is right for a
+# charter (one hall; a second entitles nobody) and wrong for a works: one
+# farmhouse feeds the households one farmer can feed, so a village of forty
+# stayed hungry with the remedy standing in plain sight.
+
+const SettlementFoodDemand = preload("res://src/emergence/settlement_food_demand.gd")
+
+
+## A village big enough to need several farmers, short of food, with one
+## farmhouse already up.
+func _hungry_village(households: int, present: Array, extras: Dictionary = {}) -> Dictionary:
+	var state := {
+		"estate_counts": {"kossaet": households},
+		"household_count": households,
+		"housed_count": households,
+		"present_building_ids": present,
+		"satisfaction": {VillageEstates.FOOD_KIND_TOKEN: 0.2},
+	}
+	for key in extras:
+		state[key] = extras[key]
+	return state
+
+
+## The size that really asks for more than one producer, searched rather
+## than guessed -- the same discipline the staffing test uses.
+func _households_needing(producers: int) -> int:
+	for size in range(2, 2000):
+		if SettlementFoodDemand.producers_needed(size) >= producers:
+			return size
+	fail_test("no village size needs %d producers" % producers)
+	return 0
+
+
+## With husbandmen in it, who are the class a farmstead is worked by. A
+## village of pure cottagers cannot staff a SECOND farm -- the first is
+## raised under the charter exemption, and rising off it is what produces
+## the field hands the next one needs. That ordering is the ladder working,
+## not a gap.
+func test_a_village_short_of_food_raises_a_second_farmhouse():
+	var households := _households_needing(2)
+	var state := _hungry_village(households, ["farmhouse"], {
+		"estate_counts": {"kossaet": households - 2, "bauer": 2},
+		"building_counts": {"farmhouse": 1},
+	})
+	assert_eq(VillageAssembly.next_building(state), "farmhouse")
+
+
+## And a village with nobody who could work one does not vote for a second
+## farmstead it would leave standing empty -- the same rule that has always
+## kept a village from voting for a forge it has no smith for.
+func test_a_village_of_cottagers_alone_does_not_vote_for_a_farm_it_cannot_work():
+	var households := _households_needing(2)
+	var state := _hungry_village(households, ["farmhouse"], {
+		"building_counts": {"farmhouse": 1},
+	})
+	assert_ne(VillageAssembly.next_building(state), "farmhouse")
+
+
+func test_a_village_with_a_farmhouse_for_every_farmer_it_needs_stops_asking():
+	var households := _households_needing(2)
+	var enough := SettlementFoodDemand.producers_needed(households)
+	var state := _hungry_village(households, ["farmhouse"], {
+		"building_counts": {"farmhouse": enough},
+	})
+	assert_ne(
+		VillageAssembly.next_building(state), "farmhouse",
+		"a village with a farmstead per farmer asks for something else, or nothing"
+	)
+
+
+## A charter does NOT scale: one hall entitles everybody in the village, and
+## a second would entitle nobody.
+func test_a_charter_is_still_only_ever_raised_once():
+	var households := _households_needing(3)
+	var state := _hungry_village(households, ["city_hall"], {
+		"building_counts": {"city_hall": 1},
+	})
+	assert_ne(VillageAssembly.next_building(state), "city_hall")
+
+
+## Counts nobody has supplied read as "one of each that stands", so every
+## caller that has not been taught to count is exactly as it was.
+func test_a_caller_that_counts_nothing_behaves_as_it_always_did():
+	var households := _households_needing(2)
+	assert_ne(
+		VillageAssembly.next_building(_hungry_village(households, ["farmhouse"])),
+		"farmhouse",
+		"without counts a standing farmhouse is still one that stands"
+	)
+
+
+# -- and the land decides which works ---------------------------------------
+
+
+## A fisher's works is their own house, beside which they dig their pond.
+## Raising a farmhouse in a fishing village is a building nobody there will
+## work, so the honest answer is to petition for nothing on that count.
+##
+## Asked with the kossaet CHARTER already standing, which is the farmhouse
+## too (EstateAscension._CHARTERS_BY_ESTATE: you cannot be a husbandman
+## where there is no plough-land worked). That path is a real and separate
+## reason to raise one -- a fishing village that wants husbandmen does need
+## a farm -- and this test is about the FOOD remedy, not about that.
+func test_a_fishing_village_short_of_food_does_not_raise_a_farmhouse():
+	var households := _households_needing(2)
+	var enough := SettlementFoodDemand.producers_needed(households)
+	var state := _hungry_village(households, ["farmhouse"], {
+		"building_counts": {"farmhouse": 1},
+		"food_trade": "fisher",
+	})
+	assert_gt(enough, 1, "precondition: a farming village this size would want another")
+	assert_ne(
+		VillageAssembly.next_building(state), "farmhouse",
+		"a fishing village raises no second farmstead to feed itself"
+	)
+
+
+func test_a_farming_village_still_raises_its_farmhouse():
+	var households := _households_needing(2)
+	var state := _hungry_village(households, [], {
+		"building_counts": {},
+		"food_trade": "farmer",
+	})
+	assert_eq(VillageAssembly.next_building(state), "farmhouse")
+
+
+## A herbalist's physic garden is worked off the farmstead's own field, so
+## their land raises the same building a farmer's does.
+func test_a_herbalists_land_raises_the_same_farmstead():
+	var households := _households_needing(2)
+	var state := _hungry_village(households, [], {
+		"building_counts": {},
+		"food_trade": "herbalist",
+	})
+	assert_eq(VillageAssembly.next_building(state), "farmhouse")
+
+
+## No trade named is farming -- the fallback the food model itself keeps,
+## because a farmer can raise a farmhouse anywhere a village can build.
+func test_no_land_named_falls_back_to_farming():
+	var households := _households_needing(2)
+	var state := _hungry_village(households, [], {"building_counts": {}})
+	assert_eq(VillageAssembly.next_building(state), "farmhouse")
+	assert_eq(SettlementFoodDemand.FALLBACK_TRADE, "farmer", "and that is the model's own fallback")

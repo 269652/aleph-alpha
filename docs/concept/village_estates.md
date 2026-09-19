@@ -358,6 +358,48 @@ loop closes on machinery that is already there:
    trust — which is the input `rumor.gd` names as its own missing
    relationship weighting.
 
+## Mechanism 7 — a works that feeds people scales with the people
+
+Asked directly, after the estate layer landed: *"they should produce
+production buildings autonomously; e.g. when population rises and there's
+not enough food they need to build more Farmhouses; Fishers or Hunters"*.
+
+Mechanism 5 petitions for a remedy, and `_is_petitionable` refuses anything
+that already stands. That is exactly right for a **charter** — a village
+holds one hall, and a second would entitle nobody — and exactly wrong for a
+**works**: one farmhouse feeds the households one farmer can feed, and a
+village of forty is short however many times it votes. So the assembly could
+raise its first farmhouse and never a second, and a growing village stayed
+hungry with the remedy standing in plain sight.
+
+**A food works is petitionable while fewer of them stand than the village's
+own demand asks for producers** — `SettlementFoodDemand.producers_needed`,
+the same already-measured function the founding roster is staffed against,
+so the number of farmhouses and the number of farmers cannot disagree.
+Everything else keeps "one, ever".
+
+### The land decides which works, and a fisher's works is their house
+
+A remedy has to be a building the village could actually work. Three food
+trades exist (`SettlementFoodDemand.FOOD_TRADES`), and they do not all want
+the same thing:
+
+| land's trade | what a shortfall raises | why |
+|---|---|---|
+| farmer, herbalist | `farmhouse` | the field is worked off the farmstead ([village_farms.md](village_farms.md)) |
+| fisher | *nothing* | a fisher's works is their own house, beside which they dig their pond ([village_ponds.md](village_ponds.md)) — the village needs another fisher, not another building, and the founding roster already conscripts one as demand rises |
+
+Raising a farmhouse in a fishing village is a building nobody there will
+work. Petitioning for nothing is the honest answer, not a fallback.
+
+**A hunter is deliberately not on that table**, and it is a measurement
+rather than an omission: `FOOD_TRADES`' own doc comment records a hunter
+bringing in about **0.02 food units an assessment against a draw of 6** — a
+whole chunk supports roughly one deer. Hunting stays a real occupation and a
+real way to eat; it is not something a village can build its way to being
+fed by, and a remedy that pretended otherwise would report a village fed
+when it is starving.
+
 ## Status
 
 Written before implementation, per CLAUDE.md; each entry corrected against
