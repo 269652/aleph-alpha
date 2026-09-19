@@ -383,6 +383,44 @@ the code as it landed. See [progress.md](../progress.md) for the ledger.
   re-derived at the moment it is asked for rather than stored when the
   ladder was last walked, so it can never be stale.
 
+### Three bugs the measurements found, not the code review
+
+Each one was invisible in the source and obvious the moment a real number
+was put next to another real number. They are recorded because the
+measurement is the interesting part.
+
+1. **The basket was drawn on the wrong day, by a factor of sixty.**
+   `SettlementGathering` fills the settlement's shelf counting in
+   `ConstructionCatchup`'s one-hour day; the basket was spending from that
+   same shelf counting in the sixty-second simulated one. Firewood IS
+   `wood` — deliberately the same id a village builds with — so every
+   village on the planet stripped its own timber and could never afford a
+   building again. Caught by a *pre-existing* test,
+   `test_earth_chunk_manager_bread_chain.gd`'s "spare hands gather building
+   material between assessments". One pool, one clock: demand, draw and tax
+   run on the economy's day, and only the ladder's dwells keep the
+   simulated one — which is safe because satisfaction is a ratio, so the
+   number the dwells count against is dimensionless.
+2. **A fractional draw took a whole unit.** The emergence `Market` counts
+   in whole units and its own `remove_stock` *ceils*, so a basket asking
+   for a fiftieth of a log took a whole log, every assessment. The fraction
+   is carried now — the same carry-the-fraction idiom
+   `SettlementGathering`, `SettlementGranary` and `VillageImmigration` all
+   already run on — and a village short of the good does **not** go into
+   debt for the rest, which would be a famine that never ends.
+3. **A starving village emptied itself in ten minutes.** With every
+   short household leaving on the same assessment, a four-household village
+   went to zero inside twenty assessments. One household leaves per
+   assessment now: it is what actually happens, and each family that goes
+   leaves more of the larder for those who stay — which is a village's real
+   chance to recover. A *descent* is deliberately not capped; losing
+   standing is not leaving, and a whole village can slip a rung together.
+
+What made all three measurable was giving the estate layer its own draw
+counter: the merchant, the production step and every construction project
+spend from the same shelf, so a stock level cannot tell any of them apart,
+which is exactly how these hid.
+
 ### Known gaps, stated rather than papered over
 
 - 🚧 **Food is not drawn by this layer.** `SettlementGranary.catchup`
@@ -412,9 +450,23 @@ the code as it landed. See [progress.md](../progress.md) for the ledger.
   is a strictly better input for the `food` and `community` terms; wiring
   it in means moving numbers a live construction loop is calibrated
   against, so it is deliberately a separate pass.
-- ⬜ **The guild relief chest.** Specified above; `InstitutionStore` forms
-  real `guild` institutions already, and nothing yet pools or pays out of
-  one.
+- ✅ **The guild relief chest** — `GuildRelief`, live. A settlement's own
+  guild sets goods aside while the village is supplied and releases them
+  when it is not, relieving BEFORE it banks (a guild that banked first
+  would take from a shelf its own members were about to be found short
+  of). The chest holds at most one real season's demand — the horizon the
+  fuel term itself swings over — takes only `SET_ASIDE_SHARE` of the shelf
+  so it never strips the village it protects, and banks nothing while its
+  own people go short. Chests live on the `Institution`, so
+  `InstitutionStorePersistence` carries them with no new file; a save from
+  before they existed reads back with an empty one. **A village with no
+  guild is untouched end to end**, test-pinned rather than assumed.
+
+  The emergent half is the point: paired with the seasonal fuel term, a
+  guild village banks firewood through the summer, when the basket asks for
+  half as much and there is a real surplus, and burns it through the
+  winter, when the basket asks for double. The mechanism has no idea what a
+  season is.
 - ⬜ **Patronage across estates.** Specified above; waits on
   [npc_social_life.md](npc_social_life.md)'s own trust dimension.
 - ⬜ **Interiors and art per estate.** A household that rises moves up a

@@ -27185,17 +27185,88 @@ it is asked for, so it can never be stale.
   staffing gate; no production step multiplies its output by it yet.
 - 🚧 **`HouseholdWellbeing` still reads stock rather than flow.** Its four
   needs are unchanged and still power the happiness/productivity loop.
-- ⬜ **The guild relief chest** and ⬜ **patronage across estates** — both
-  specified in the concept doc, neither built.
+### ✅ The guild chest: a village's social structure buffers its economy
+
+`GuildRelief`, and the point where "who has actually traded with whom"
+stops being bookkeeping. `InstitutionStore` already forms real `guild`
+institutions out of repeated fulfilled contracts; now a guild sets goods
+aside while its village is supplied and releases them when it is not,
+which is what a Zunftkasse was for — one bad season costs a village its
+comfort instead of its craftsmen.
+
+Paired with the seasonal fuel term it produces a behaviour nobody wrote:
+**a guild village banks firewood through the summer**, when the basket asks
+for half as much and there is a real surplus, **and burns it through the
+winter**, when the basket asks for double. The mechanism has no idea what a
+season is.
+
+The chest holds at most one real season's demand, takes only a share of
+the shelf so a guild never strips the village it protects, and banks
+nothing while its own people go short. A village with no guild is untouched
+end to end, test-pinned. Chests live on the `Institution`, so the existing
+persistence carries them with no new file.
+
+### Three bugs the measurements found, not the code review
+
+Each was invisible in the source and obvious the moment one real number was
+put next to another.
+
+1. **The basket was drawn on the wrong day, by sixty.**
+   `SettlementGathering` fills the shelf counting in `ConstructionCatchup`'s
+   one-hour day; the basket was spending from that same shelf on the
+   sixty-second simulated one. Firewood IS `wood`, so every village on the
+   planet stripped its own timber and could never afford a building again.
+   Caught by a *pre-existing* test —
+   `test_earth_chunk_manager_bread_chain.gd`'s "spare hands gather building
+   material between assessments" — which is exactly what that kind of test
+   is for.
+2. **A fractional draw took a whole unit.** The emergence `Market` counts in
+   whole units and its `remove_stock` ceils, so a basket asking for a
+   fiftieth of a log took a whole log every assessment. Carried now, the
+   same idiom gathering/granary/immigration already run on, and a village
+   short of the good does not go into debt for the rest.
+3. **A starving village emptied itself in ten minutes.** Every short
+   household left on the same assessment. One leaves per assessment now,
+   which is what actually happens and which leaves more of the larder for
+   those who stay.
+
+What made all three measurable was giving the estate layer its own draw
+counter: the merchant, the production step and every construction project
+spend from the same shelf, so a stock level cannot tell them apart.
+
+### An unmet basket is now something a village builds its way out of
+
+`EstateShortfall` reports what the estates went short of in the ONE shape
+`SettlementBuildDecision` already reads, so that decision walks `bread ->
+bakery -> flour -> mill -> wheat -> farm`, and `beer -> brewery`, with no
+new code on its side. Without it the ladder was decorative: village fields
+grow wheat and nothing else, the growth ladder raises no mill and no
+bakery, and nothing made beer at all — so no household could ever meet its
+station and nobody could ever rise.
+
+- ⬜ **Patronage across estates** — specified in the concept doc, not built.
 - ⬜ **A household that rises does not yet move house on the ground.**
 
-Tests: `test_village_estates.gd` 26/26, `test_estate_consumption.gd` 22/22,
-`test_estate_ascension.gd` 26/26, `test_village_labor.gd` 23/23,
-`test_village_assembly.gd` 22/22, `test_village_estate_tax.gd` 11/11,
-`test_household_estate.gd` 7/7, `test_brewing.gd` 7/7,
-`test_house_panel_estate.gd` 12/12,
-`test_earth_chunk_manager_village_estates.gd` 18/18. Regressions re-run
-green: `test_village_growth.gd`, `test_household*.gd`,
-`test_settlement_*.gd`, `test_npc_economy.gd`, `test_merchant_visit.gd`,
-`test_regional_trade.gd`, `test_crafting_recipe_book.gd`,
-`test_item_catalog.gd`, `test_house_panel.gd`, `test_village_wages.gd`.
+Tests, all green: `test_village_estates.gd`, `test_estate_consumption.gd`,
+`test_estate_ascension.gd`, `test_village_labor.gd`,
+`test_village_assembly.gd`, `test_village_estate_tax.gd`,
+`test_household_estate.gd`, `test_brewing.gd`, `test_house_panel_estate.gd`,
+`test_estate_shortfall.gd`, `test_guild_relief.gd`,
+`test_guild_chest_wiring.gd`, `test_earth_chunk_manager_village_estates.gd`
+— 275 in the pure sweep plus 30 in the live one.
+
+Regressions re-run green: `test_earth_chunk_manager_village_growth.gd`
+(33/33), `test_village_growth.gd`, `test_household*.gd`,
+`test_settlement_*.gd`, `test_institution*.gd`, `test_npc_economy.gd`,
+`test_merchant_visit.gd`, `test_regional_trade.gd`, `test_quest.gd`,
+`test_crafting_recipe_book.gd`, `test_item_catalog.gd`,
+`test_house_panel.gd`, `test_village_wages.gd`.
+
+Two suites fail identically on `origin/main` before any of this and are
+**pre-existing, not caused here** — verified by running both against a
+clean baseline worktree: `test_earth_chunk_manager_village_migration.gd`
+(4 passing, 5 failing, about trail/road repaving and old-style piece
+migration) and `test_earth_chunk_manager_bread_chain.gd` (9 passing, 1
+failing, on the stone and plant_fibre halves of "spare hands gather
+building material between assessments"). The *wood* half of that same
+assertion did break here and is fixed; it passes again.
