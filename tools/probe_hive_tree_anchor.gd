@@ -37,7 +37,9 @@ func _initialize() -> void:
 	var entities_parent := Node2D.new()
 	var creatures_parent := Node2D.new()
 	get_root().add_child(entities_parent)
-	var manager := EarthChunkManager.new(tile_map_layer, entities_parent, creatures_parent)
+	# Untyped `=`, not `:=`: EarthChunkManager is load()ed above rather than
+	# preloaded, so it carries no static type for := to infer from.
+	var manager = EarthChunkManager.new(tile_map_layer, entities_parent, creatures_parent)
 	var geo := GeoCoordinates.new()
 
 	var hives_total := 0
