@@ -127,3 +127,65 @@ village actually does.
   A pond fished below one whole fish gives nothing until it breeds back, and
   a fisher with no pond keeps the open water their quarry model already gives
   them.
+
+
+## A pond that is actually a pond (2026-09-19)
+
+Reported in one go, and all three parts were true: *"there's no real pond
+with river / lake water physics... also it's randomly placed somewhere not
+adjacent to the fishers house or across the street.. it's a procedural
+entity layn over and not properly dug / built pond"*.
+
+**It was not water you could get into.** A pond has answered
+`is_water_at_global` since the feature landed -- which is why nothing is
+ever built or grown on one -- but it carried no DEPTH, and the player's
+water state is the maximum of ocean, river and lake depth. A pond is none
+of those three, so a fisher's pond was water a player walked over on dry
+feet. `VillagePond.DEPTH_METERS` (1.8) is the fourth source now, asked
+alongside the others. A flat depth, not a solved one: a dug pond is a hole
+somebody dug to a depth they chose. The figure is the standard temperate
+one for a pond that can overwinter fish -- which is what a fisher digs one
+FOR -- and it is pinned against `WaterMovementModel.WADE_DEPTH_METERS`
+rather than as a bare number, because what matters in play is that it
+reads as water to swim in rather than a puddle to walk through.
+
+**It was across the street.** Measured at the first grassland village with
+a fisher: 3.0 tiles from the house with a whole street row between them.
+A pond is sited by `VillageFarm.field_rect`, and that search refuses ground
+NORTH of the building -- true for a farmhouse, where north is the next row
+of buildings, and exactly wrong for a fisher, whose house fronts the
+street to the south so that every scrap of their own ground is behind
+them. All 32 free cells on that fisher's own side were north of the house,
+so a search that could only look south had nowhere to go but over the
+road. `field_rect`/`field_cells` gained an opt-in `behind` that only the
+pond passes, plus a guard that no street row may lie between the house and
+any cell of the water. Deliberately NOT "adjacent": ground out the back is
+a fine place for a pond, and demanding adjacency would leave most villages
+with none at all.
+
+Two things that shook out of opening the ground behind a house, each
+caught by an existing test rather than by inspection: a pond could swallow
+the village well and another villager's beds (the dig now takes the same
+`reserved` set the farm pass does, plus the beds it just laid -- a bed is
+not a tile modification, only its rails are, so `is_occupied` cannot see
+one); and `_has_pond_already`/`_pond_water_near` still looked SOUTH, so a
+reload could not find the pond it had already dug and dug another every
+load -- precisely what `_has_pond_already`'s own doc comment warns about.
+
+**It was laid over, not dug.** The blue was the flat `pond_water`
+modification tile and nothing else. Every other kind of water rides one
+overlay (hydrology.md's "ONE WATER SURFACE"), which is what gives it a
+waterline, an ink edge, a shore feather and ripples --  and
+`_paint_river_flow_overlay` works that out from the GENERATOR, the one
+thing that cannot know about a modification. A pond fell through to
+"nothing is water here" and had its overlay cell erased outright (measured:
+source id -1 on a freshly dug pond). It is answered before the probe now,
+as still water with zero current. Its cross-section is read off its own
+shape rather than solved -- it has no channel and no spill to contour from
+-- so a cell with dry ground orthogonally beside it reads near the
+waterline and a cell surrounded by its own water reads as open water. On a
+3x2 pond every cell is a rim cell, which is correct: a pond that small IS
+all shore.
+
+**Not verified in a live session.** Every number above is headless
+measurement; the screenshots have not been re-taken.

@@ -27112,3 +27112,40 @@ guessed at.
 
 None of this is verified in a live session -- every number above is from
 headless measurement. The screenshots have not been re-taken.
+
+## The fisher's pond becomes an actual pond (2026-09-19)
+
+Reported in one go, and all three parts were true: *"there's no real pond
+with river / lake water physics... also it's randomly placed somewhere not
+adjacent to the fishers house or across the street.. it's a procedural
+entity layn over and not properly dug / built pond"*. Write-up in
+`concept/village_ponds.md`, "A pond that is actually a pond".
+
+I had claimed in the previous round that the pond "is implemented and it's
+in your screenshot". That was checking the pond EXISTS, not that it was
+water — all three corrections landed.
+
+- ✅ **Real depth.** A pond answered `is_water_at_global` but carried no
+  DEPTH, and the player's water state is the max of ocean, river and lake —
+  three sources a pond is not one of, so it was water you crossed on dry
+  feet. `VillagePond.DEPTH_METERS` (1.8) is the fourth, pinned against
+  `WaterMovementModel.WADE_DEPTH_METERS` rather than asserted as a number.
+- ✅ **On the fisher's own side of the street.** Measured: 3.0 tiles away
+  with a street row between. `field_rect` refuses ground north of a
+  building (right for a farmhouse, wrong for a fisher, whose whole plot is
+  behind them — all 32 free same-side cells were north). Opt-in `behind`,
+  plus a no-street-between guard.
+- ✅ **Painted by the one water surface.** The blue was the flat
+  `pond_water` tile; the overlay is generator-driven and the generator
+  cannot know about a modification, so a pond had its overlay cell erased
+  outright (measured: source id -1). Answered before the probe now, as
+  still water, with its rim read off its own shape.
+- ✅ Two regressions the change shook out, both caught by existing tests:
+  a pond behind a house swallowing the well and a neighbour's beds, and
+  `_has_pond_already` still looking south so every reload dug a second
+  pond (37 rails on the second spawn against 29 on the first).
+
+### 🚧 Honest note
+
+Not verified in a live session — every number is headless measurement, and
+the screenshots have not been re-taken.
