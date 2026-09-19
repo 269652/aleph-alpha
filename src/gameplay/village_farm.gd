@@ -69,7 +69,19 @@ const FIELD_SHAPES: Array[Vector2i] = [Vector2i(3, 2), Vector2i(2, 3)]
 ## QUARRY_KIND_BY_OCCUPATION already uses for hunter/fisher; an occupation
 ## absent from it has no field at all, which is the honest answer for every
 ## villager who is not a farmer or a herbalist.
-const CROP_BY_OCCUPATION := {"farmer": "wheat", "herbalist": "herb"}
+## Asked directly, with a field of unrecognisable purple plants in shot:
+## *"i don't even know what the purple crops are it plants.. atm it should
+## plant only wheat which grows and gets harvested properly"*. The purple was
+## the herbalist's own herb, and it was dying overnight exactly as the wheat
+## beside it was (see FarmPlot.MIN_WATER_GRACE_SECONDS, fixed in the same
+## pass).
+##
+## So every field sows wheat for now. Deliberately a narrowing of the CROP,
+## not of who farms: the herbalist keeps the farmhouse and field an earlier
+## ask gave them ("similar to a farmer the herbalist should build a farm
+## house and plant herbs"), and putting herbs back in their bed is this one
+## entry -- "herbalist": "herb" -- and nothing else.
+const CROP_BY_OCCUPATION := {"farmer": "wheat", "herbalist": "wheat"}
 
 ## Re-water a growing plot once it has used up this much of its own real
 ## wither grace window (FarmPlot.WATER_GRACE_FRACTION) -- a real margin
@@ -278,11 +290,14 @@ static func action_for(plot) -> String:
 		return "harvest"
 	if plot.state == "empty" or plot.state == "withered":
 		return "plant"
+	# Against the bed's OWN real window (FarmPlot.grace_seconds), not against
+	# growth_time: a bed's tolerance has a floor of one night now, and a
+	# threshold computed from growth time alone would describe a different,
+	# shorter bed than the one that actually dies -- sending the farmer back
+	# to soak ground in no danger while the field's real deadline moved.
 	if (
 		plot.state == "growing"
-		and plot.time_since_watered >= (
-			plot.growth_time * FarmPlot.WATER_GRACE_FRACTION * WATER_BEFORE_WITHER_FRACTION
-		)
+		and plot.time_since_watered >= plot.grace_seconds() * WATER_BEFORE_WITHER_FRACTION
 	):
 		return "water"
 	return ""
