@@ -292,19 +292,133 @@ loop closes on machinery that is already there:
 
 ## Status
 
-Written before implementation, per CLAUDE.md. Each entry is corrected
-against the code as it lands; see [progress.md](../progress.md) for the
-ledger.
+Written before implementation, per CLAUDE.md; each entry corrected against
+the code as it landed. See [progress.md](../progress.md) for the ledger.
 
-- ⬜ Mechanism 1 — `VillageEstates`, the estate table and the seasonal
-  basket.
-- ⬜ Mechanism 2 — `EstateConsumption`, demand and the real draw-down.
-- ⬜ Mechanism 3 — `EstateAscension`, the charter-gated ladder and exodus.
-- ⬜ Mechanism 4 — `VillageLabor`, the pyramid and the output scale.
-- ⬜ Mechanism 5 — `VillageAssembly`, the estate-weighted petition.
-- ⬜ Mechanism 6 — the tax ledger into `VillageWages`' existing purse.
-- ⬜ The guild relief chest.
-- ⬜ Patronage across estates.
+- ✅ **Mechanism 1 — `VillageEstates`.** The four estates, the house tier
+  each lives in, the one labour class each supplies, the two-part basket
+  and the seasonal fuel term. Every tuned value is pinned by the ordering
+  or the invariant it produces — a higher rung demands strictly more,
+  claims a strictly wider station and pays strictly more tax; every basket
+  good is a real `ItemCatalog` id.
+
+  **That last invariant caught its own first violation.** The burgher
+  basket named `beer`, and there was no such thing: the brewery, the
+  dearest rung on [village_growth.md](village_growth.md)'s ladder, made
+  nothing at all — a gap that doc carried in as many words ("the ladder's
+  rungs are buildings, not yet production"). So the brewery brews:
+  `brew_beer`, 3 wheat to 1 beer, structure-gated on the brewery exactly as
+  bread is on the bakery, drawn on the same crop `grow_wheat` already
+  grows. Beer and bread now compete for one harvest, which is the intended
+  shape rather than an accident of adding a recipe — the City Hall's own
+  demand walk reports it (`test_brewing.gd`, `test_settlement_demand.gd`).
+- ✅ **Mechanism 2 — `EstateConsumption`.** Demand for a whole village over
+  an elapsed span, and a real draw-down that removes the units from real
+  stock. The draw never refuses and never goes into debt; `kind:food` is
+  spent across whatever real food is on the shelf, most plentiful first,
+  ties broken on item id. An estate's verdict is the MINIMUM over its
+  goods, never the mean.
+- ✅ **Mechanism 3 — `EstateAscension`.** The charter gate, the dwells and
+  the way down. Ascent needs a whole ration, a station at or above
+  `STATION_THRESHOLD`, the charter building standing, and one whole real
+  season held (`SeasonCycle`'s own year over its own four seasons — derived,
+  not typed). Descent needs half a season below half a ration: a village
+  unmakes itself faster than it makes itself. At the bottom rung, which has
+  nowhere to fall to, the household leaves.
+- ✅ **Mechanism 4 — `VillageLabor`.** The pyramid, pooled per village, and
+  an output scale that is the minimum across a building's own posts. The
+  squeeze is test-pinned rather than asserted: promotion moves a head
+  between classes and never creates one, so a village that promotes every
+  cottager can no longer work its own store.
+
+  **A real deadlock came out of this**, found by `VillageAssembly`'s tests
+  rather than by taste. With the sawmill needing a `craft` head, a village
+  of cottagers could never staff the one works that supplies its own
+  firewood — and craftsmen only exist downstream of a mill. A saw pit is
+  two men on a saw, which is what `BuildingCatalog` already said the
+  building was ("a shed, a saw pit and a log deck"), so the mill is
+  hand-worked and the brewery took over as the two-class rung: a brewer
+  over somebody else's back.
+- ✅ **Mechanism 5 — `VillageAssembly`.** The estate-weighted petition,
+  and a layer over `VillageGrowth` rather than a replacement — shelter
+  first, that ladder's buildings, that ladder's order as the tie-break,
+  and a village whose estates or whose supply nobody has read falls
+  straight through to the behaviour it had before this existed. Weight is
+  a thumb on the scale and never a veto: three burghers outvote five
+  neighbours, and forty cottagers outvote the burghers.
+
+  The charter exemption in `_is_petitionable` is load-bearing and is
+  stated as such in the code: a works nobody could put a body in is never
+  petitioned for, but a charter IS, because a civic seat is not staffed
+  before it exists — it is what creates the estate that keeps it. Without
+  it every rung of this ladder deadlocks on needing the people its own
+  charter would produce.
+
+  It also closes [village_growth.md](village_growth.md)'s own named gap
+  that "a growth house is always the small one": the house raised is the
+  waiting household's own estate's house.
+- ✅ **Mechanism 6 — the tax ledger.** `VillageWages.estate_tax_for` pays
+  into the SAME purse the subsistence wage already comes out of, which is
+  what closes the loop on machinery that already exists rather than opening
+  a second treasury beside it. A destitute village raises nothing however
+  many live in it. What is taxed is STATION satisfaction, not subsistence:
+  taxing survival is how you get a village that cannot afford to be poor.
+- ✅ **Standing is persisted, on the household.** `Household` carries its
+  estate and both run-lengths, so `HouseholdStorePersistence` carries them
+  with no new file and no second source of truth. A save written before
+  estates existed reads back as a cottager rather than as an empty string
+  every lookup then quietly fails on. `HouseholdStore.estate_census` is the
+  one reading of a settlement's standing.
+- ✅ **It is live.** `EarthChunkManager.step_settlements` runs the estate
+  layer for every settlement, loaded or not: the basket is drawn, the runs
+  advance, the ladder is walked, the tax is paid, and a departing household
+  is recorded as a real `npc_departed` event the roster then reads. "What
+  stands here" is the union of the ground, the loaded chunk's buildings and
+  the persisted construction ledger — which is what lets the charter gate
+  work for a village nobody is standing in.
+- ✅ **The readout.** Clicking a house names the household's estate beside
+  its resident and carries one line for the thing a player actually
+  watches: *Rising to Husbandman*, *Falling to Husbandman*, *Leaving the
+  village*, or *Settled* — green for up, amber for down. The verdict is
+  re-derived at the moment it is asked for rather than stored when the
+  ladder was last walked, so it can never be stale.
+
+### Known gaps, stated rather than papered over
+
+- 🚧 **Food is not drawn by this layer.** `SettlementGranary.catchup`
+  already eats a settlement's food on the very same step, at a rate
+  (`SettlementState.FOOD_PER_HOUSEHOLD`) a whole famine chain is
+  calibrated against, and a LOADED village's own villagers buy meals from
+  the same shelf through `NpcEconomy`. A third draw would be the same meal
+  eaten twice or three times, and would have every village on the planet
+  starve the day it landed. So the estate layer draws everything ABOVE
+  food — fuel, bread, physic, candles, leather, beer, honey, exactly the
+  goods no village has ever had to supply before — and reads food's
+  satisfaction off the larder the granary leaves behind.
+
+  The two halves therefore agree rather than compete, but they are still
+  two models. Folding the per-villager meal into the household's own draw
+  is the right end state and is its own piece of work: it means
+  recalibrating the famine chain, which nobody asked for here.
+- 🚧 **The labour pyramid is not yet wired to production.**
+  `VillageLabor.output_scale_for` is real, tested and consulted by the
+  assembly's staffing gate, but no production step multiplies its output by
+  it yet. A standing forge with no craftsman is currently a forge that
+  produces nothing *because nothing produces from it at all*, which is the
+  right answer for the wrong reason.
+- 🚧 **`HouseholdWellbeing` still reads stock rather than flow.** Its four
+  needs (food, shelter, income, community) are unchanged and still power
+  the happiness/productivity loop. The estate layer's per-good satisfaction
+  is a strictly better input for the `food` and `community` terms; wiring
+  it in means moving numbers a live construction loop is calibrated
+  against, so it is deliberately a separate pass.
+- ⬜ **The guild relief chest.** Specified above; `InstitutionStore` forms
+  real `guild` institutions already, and nothing yet pools or pays out of
+  one.
+- ⬜ **Patronage across estates.** Specified above; waits on
+  [npc_social_life.md](npc_social_life.md)'s own trust dimension.
+- ⬜ **Interiors and art per estate.** A household that rises moves up a
+  house tier in the model; nothing yet re-houses it on the ground.
 
 ## Interaction with other docs
 

@@ -215,6 +215,29 @@ the code as it lands.
 - ⬜ **A villager offers a quest** from a real shortfall, and the player can
   accept it.
 
+## Interaction with the estates
+
+[village_estates.md](village_estates.md) gives a villager a **standing** as
+well as a job: which of four estates their household holds, what basket it
+consumes, which class of labour it supplies and what tax it pays. Three of
+this doc's own open items land differently because of it:
+
+- **Relationships** now have a real axis to weight by beyond familiarity.
+  Two households of the same estate meet as equals; across estates they do
+  not, and that asymmetry is exactly what a trust dimension is for.
+- **Goods change hands** has a direction and a reason: a household with a
+  surplus and a neighbour short of *subsistence* is the case that matters,
+  because going short is what costs a household its standing. That is
+  `village_estates.md`'s **patronage** mechanic, and it is this doc's own
+  ⬜ item with the economics filled in.
+- **A villager offers a quest** from a real shortfall — and an estate's
+  unmet basket good is the most legible shortfall in the game: a burgher
+  with no beer wants beer, by name, in units, from a village that can
+  actually be short of it.
+
+None of the three is built. What changed is that the social layer now has
+something economically load-bearing to be about.
+
 ## Interaction with other docs
 
 - [ethogram.md](ethogram.md) — the drives/wirings/kernel this is built on.
@@ -227,6 +250,9 @@ the code as it lands.
   offer here is that doc's own open item.
 - [quests.md](quests.md) — quests as projections of real problems.
 - [economy.md](economy.md) — the prices a between-neighbours trade settles at.
+- [village_estates.md](village_estates.md) — the standing a villager holds,
+  the basket it consumes, and the patronage this doc's "goods change hands"
+  item becomes.
 - [01-society-and-institutions.md](../emergence/01-society-and-institutions.md)
   — the relationship dimensions and decay rule.
 - [02-history-memory-rumors.md](../emergence/02-history-memory-rumors.md) —

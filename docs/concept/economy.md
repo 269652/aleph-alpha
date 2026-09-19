@@ -131,6 +131,37 @@ bug `InputLatch` exists to fix.
 **⬜ Not built:** a sell-side UI. Selling picks the first catalog item in the
 bag; there is no way to choose, and no list of what a merchant wants.
 
+### Households buy a basket, and pay tax on what is left — ✅ built (2026-09-19)
+
+[village_estates.md](village_estates.md) is the other half of this doc's
+own loop, and the half it has been missing: what the *NPC* side of the
+economy actually buys, and where a settlement's money comes from.
+
+- **Demand is a basket, not a number.** Each of the four estates consumes
+  a fixed basket of real goods per household per day — food and firewood
+  for everyone, then bread and candles, then leather, then beer and honey
+  as standing rises. `EstateConsumption` removes those units from the
+  settlement's real stock every step, so demand is a *flow* against the
+  same `Market`/`VillageMarket` `Shop.market_price_of` prices from. A
+  village that runs its beer down is a village whose beer gets dearer, by
+  the scarcity multiplier that was already there.
+- **Firewood is seasonal.** The fuel term doubles in winter and halves in
+  summer off the real `SeasonCycle`, so the price of `wood` in a village
+  has a real annual shape without anybody writing one.
+- **Income scales with provision.** `VillageWages.estate_tax_for` pays into
+  the SAME purse the subsistence wage already comes out of, at a rate that
+  rises with standing and falls to nothing for a destitute household. That
+  answers half of this doc's own last open question — *"price/exchange-rate
+  design for hiring wages"* — for the settlement side at least: a village's
+  wage bill is now funded by a real, derived tax rather than by producer
+  levy alone.
+- **The brewery has a product.** `brew_beer` (3 wheat → 1 beer, gated on
+  the brewery) is the first thing the growth ladder's own top rung has ever
+  made, and it competes with `bake_bread` for one crop.
+
+Still open on this doc's own list: real values for raw materials, so the
+rest of what a player gathers can be sold.
+
 ### Open questions
 
 - Should premium currency ever be tradeable for regular currency between

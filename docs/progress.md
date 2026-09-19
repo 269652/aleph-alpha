@@ -27037,3 +27037,165 @@ true), and the overlay-wiring test now checks the drawn footprint instead
 of the tile.
 
 Tests: `test_illustrated_structure_sprite.gd` 41/41 (3 new).
+
+## Village estates: consumption, station, and a ladder that can be fallen down (`concept/village_estates.md`, 2026-09-19)
+
+Asked for directly: *"overhaul and vastly improve village dynamics so it
+plays more like Anno 1806. Brainstorm novel mechanics and flesh out the
+economy / social interactions and gated growth."*
+
+`concept/village_growth.md` built half of it — a charter, a ladder,
+arrivals, a readout. What it built is a **ratchet**. Households only ever
+arrived. Needs were a score nobody ever paid for. A rung was owed on
+headcount alone. Every villager was the same kind of villager. Six gaps,
+against Anno's actual loop:
+
+| Anno's loop | the village before this |
+|---|---|
+| a residence consumes goods every tick | nothing consumed anything; `HouseholdWellbeing` *read* stock and never spent it |
+| unsupplied needs shrink the population | `VillageImmigration` only ever added — no departure path existed at all |
+| a house upgrades on need fulfilment + a public building | `VillageGrowth` gated every rung on raw household count |
+| upgrading moves labour up a tier and starves the tier below | there was one undifferentiated villager; no labour classes existed |
+| a production building demands a workforce and scales with it | a rung was a building that stood; none was staffed |
+| income scales with how well-supplied a household is | `VillageWages` levied a flat share of producer income only |
+
+### ✅ Four estates, and a basket that is really drawn
+
+`VillageEstates` is the table the whole thing hangs off: `kossaet` /
+`bauer` / `handwerker` / `buerger` — the estates (Stände) a Central
+European village of this period actually had, not Anno's tier names
+transplanted. Each carries a house tier, ONE distinct class of labour, a
+two-part basket (subsistence you must have; station you must have to rise)
+and a tax rate.
+
+`EstateConsumption` is the change everything else needed: **a need is a
+flow, not a reading.** The units are removed from real stock, the same unit
+cannot satisfy two households, and a half-stocked store leaves the village
+half warm rather than refusing. `kind:food` is spent across whatever real
+food is on the shelf — most plentiful first, ties broken on item id, so a
+glut is eaten down before a scarcity and the draw is deterministic. An
+estate's verdict is the **minimum** over its goods, never the mean: a
+household with all the bread in the world and no fuel is not eighty percent
+provided for, it is cold.
+
+**Fuel is a function of the date**, off the real `SeasonCycle` — double in
+winter, half in summer. That is the one line in this design Anno cannot
+have, and it is free here because the season is already real.
+
+### ✅ Growth that is gated, and that can go backwards
+
+`EstateAscension`: a household rises only where the **charter building**
+for the next estate really stands — a `farmhouse` to be a husbandman, a
+`sawmill` or `blacksmith` to be apprenticed into, a `city_hall` to hold
+civic rights from — and only after holding its standard for one whole real
+season (`SeasonCycle`'s own year over its own four seasons, derived rather
+than typed). It falls when subsistence stays under half a ration for half
+a season, and at the bottom rung, which has nowhere to fall to, the
+household **leaves** on a real `npc_departed` event the settlement roster
+then reads. That is the first way a village's population has ever gone
+down.
+
+### ✅ A labour pyramid where promotion costs the rung below
+
+`VillageLabor`: each estate supplies one class (`hand`/`field`/`craft`/
+`civic`), each standing building demands heads of specific classes, and a
+building's output scale is the **minimum** across its own posts. Labour is
+pooled, so a second forge with no more craftsmen halves them both. The
+squeeze is test-pinned rather than asserted: promotion moves a head between
+classes and never creates one, so a village that promotes every cottager
+can no longer work its own store.
+
+### ✅ An assembly that votes, so two villages of a size build different towns
+
+`VillageAssembly` replaces a fixed ladder order with an estate-weighted
+petition. **A household short of something petitions for the works that
+would supply it; a household with nothing to complain of petitions for the
+charter that would let it rise.** A burgher's voice carries further than a
+cottager's — which is the historical fact, not a balance knob — and enough
+cottagers still outvote the burghers, because weight is a thumb on the
+scale and never a veto.
+
+It is a *layer* over `VillageGrowth`, never a replacement: shelter first,
+that ladder's buildings, that ladder's order as the tie-break, and a
+village whose estates or whose supply nobody has read falls straight
+through to the behaviour it had before. It also closes that doc's own named
+gap that "a growth house is always the small one" — the house raised is the
+waiting household's own estate's house.
+
+### ✅ A tax that closes the loop on the purse that already existed
+
+`VillageWages.estate_tax_for` pays into the SAME purse the subsistence wage
+comes out of. A destitute village raises nothing however many live in it:
+there is no surplus to take, so a village that stops supplying its people
+stops being able to pay for anything. What is taxed is STATION
+satisfaction, not subsistence — taxing survival is how you get a village
+that cannot afford to be poor.
+
+### ✅ The brewery finally brews
+
+The basket invariant — *every good named must be a good the world really
+produces* — caught its own first violation on the day it was written. The
+burgher basket named `beer`, and there was no such thing: the brewery, the
+dearest rung on the growth ladder, made nothing at all. `brew_beer` (3
+wheat → 1 beer, structure-gated on the brewery exactly as bread is on the
+bakery) is the first product that ladder's top rung has ever had, and it
+competes with `bake_bread` for one crop — which the City Hall's own demand
+walk now reports as a fourth demand.
+
+### ✅ A readout a player actually watches
+
+Clicking a house names the household's estate beside its resident and
+carries one line: *Rising to Husbandman*, *Falling to Husbandman*, *Leaving
+the village*, or *Settled* — green for up, amber for down. A cottager that
+is falling is told it is leaving rather than named an estate below the
+lowest one, which does not exist. The verdict is re-derived at the moment
+it is asked for, so it can never be stale.
+
+### Two real bugs the tests found before a player could
+
+- **A deadlock at the bottom of the ladder.** With the sawmill needing a
+  `craft` head, a village of cottagers could never staff the one works that
+  supplies its own firewood — and craftsmen only exist downstream of a
+  mill. Caught by `VillageAssembly`'s own tests. A saw pit is two men on a
+  saw, which is exactly what `BuildingCatalog` already said the building
+  was ("a shed, a saw pit and a log deck"), so the mill is hand-worked now
+  and the brewery took over as the two-class rung.
+- **A village that had never been assessed built nothing.** With no
+  satisfaction reading, every estate reads as fully supplied, petitions for
+  its charter, finds it standing, and abstains. Silence is not an answer
+  when nobody asked the question: an unassessed village falls back to
+  `VillageGrowth`'s ladder, so the assembly can only ever be a layer over
+  it and never a regression on it.
+
+### Stated rather than papered over
+
+- 🚧 **Food is not drawn by this layer.** `SettlementGranary.catchup`
+  already eats a settlement's food on the very same step, at a rate a whole
+  famine chain is calibrated against, and a loaded village's villagers buy
+  meals from the same shelf through `NpcEconomy`. A third draw would be the
+  same meal eaten twice and would starve every village on the planet the
+  day it landed. So the estate layer draws everything ABOVE food — fuel,
+  bread, physic, candles, leather, beer, honey, exactly the goods no
+  village has ever had to supply — and reads food's satisfaction off the
+  larder the granary leaves behind. Two models that agree rather than
+  compete; folding them into one means recalibrating the famine chain,
+  which is its own piece of work.
+- 🚧 **The labour pyramid is not yet wired to production.**
+  `output_scale_for` is real, tested and consulted by the assembly's
+  staffing gate; no production step multiplies its output by it yet.
+- 🚧 **`HouseholdWellbeing` still reads stock rather than flow.** Its four
+  needs are unchanged and still power the happiness/productivity loop.
+- ⬜ **The guild relief chest** and ⬜ **patronage across estates** — both
+  specified in the concept doc, neither built.
+- ⬜ **A household that rises does not yet move house on the ground.**
+
+Tests: `test_village_estates.gd` 26/26, `test_estate_consumption.gd` 22/22,
+`test_estate_ascension.gd` 26/26, `test_village_labor.gd` 23/23,
+`test_village_assembly.gd` 22/22, `test_village_estate_tax.gd` 11/11,
+`test_household_estate.gd` 7/7, `test_brewing.gd` 7/7,
+`test_house_panel_estate.gd` 12/12,
+`test_earth_chunk_manager_village_estates.gd` 18/18. Regressions re-run
+green: `test_village_growth.gd`, `test_household*.gd`,
+`test_settlement_*.gd`, `test_npc_economy.gd`, `test_merchant_visit.gd`,
+`test_regional_trade.gd`, `test_crafting_recipe_book.gd`,
+`test_item_catalog.gd`, `test_house_panel.gd`, `test_village_wages.gd`.
