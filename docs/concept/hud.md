@@ -139,13 +139,20 @@ happened to scroll under it.
 
 They split along that seam:
 
-- **The world-clock card**, top-left on the shared `UiTheme.panel_stylebox()`:
-  the time, the phase of the day, the season, the weather, and how the player
-  is moving. Always visible. `HudReadouts.world_clock_lines` is the pinned
-  pure half.
-- **The diagnostics strip**: FPS, latitude/longitude, sun elevation in degrees.
-  **Hidden by default**, toggled with the rebindable `toggle_diagnostics`
-  action (default **F3**). `HudReadouts.diagnostics_lines` is its pure half.
+- **The world-clock card**, on the shared `UiTheme.panel_stylebox()`: the
+  time, the phase of the day, the season, the weather, and how the player is
+  moving. Always visible. `HudReadouts.world_clock_lines` is the pinned pure
+  half. It lands **top-right, under the minimap** rather than back in the
+  corner it came from — where you are and when you are are one thought, and
+  the top-left column is already the player's own state (health, XP, land
+  sense, creature panels).
+- **The diagnostics strip**: FPS, latitude/longitude, sun elevation in degrees,
+  **bottom-right** — the one free corner, and toggled over the top-left column
+  it would cover exactly the health and meters the player was watching when
+  they reached for the key. **Hidden by default**, toggled with the rebindable
+  `toggle_diagnostics` action (default **F3**), and not even written while
+  hidden, so a player who never presses it pays nothing for it.
+  `HudReadouts.diagnostics_lines` is its pure half.
 
 A diagnostic that is off until asked for is the rule
 [`RiverFlowShader`'s raw-across channel](../../src/rendering/river_flow_shader.gd)
