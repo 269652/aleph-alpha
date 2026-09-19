@@ -225,13 +225,23 @@ func test_every_village_carries_the_food_producers_its_demand_asks_for():
 ## it really is, which is the whole point of making it demand-driven.
 func test_a_bigger_village_is_staffed_for_the_size_it_really_is():
 	var coord := Vector2i(631, 163)
-	var big: int = SettlementFoodDemand.households_fed_per_producer() * 2 + 1
+	# DERIVED, not guessed: the smallest roster that really asks for three
+	# producers. This used to be households_fed_per_producer() * 2 + 1, which
+	# only lands on three when that (floored) figure divides exactly -- it
+	# stopped doing so the moment a field's own measured yield changed
+	# (VillageFarm.FIELD_YIELD_PER_WORK_BLOCK, re-measured once beds stopped
+	# dying overnight), and the precondition failed rather than the claim.
+	var big := 0
+	for size in range(2, 400):
+		if SettlementFoodDemand.producers_needed(size) >= 3:
+			big = size
+			break
+	assert_gt(big, 0, "precondition: some village size really needs three producers")
 	var settlement := generator.generate_settlement(
 		coord, coord * CHUNK_SIZE, CHUNK_SIZE, TILE_SIZE, big
 	)
 	assert_eq(settlement.npcs.size(), big, "precondition: the whole roster really was generated")
 	assert_gte(_food_producers(settlement.npcs), SettlementFoodDemand.producers_needed(big))
-	assert_gte(SettlementFoodDemand.producers_needed(big), 3, "precondition: this size really needs several")
 
 
 ## The land picks the trade. Water means a fisher -- who digs and stocks a
