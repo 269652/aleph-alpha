@@ -183,6 +183,11 @@ const VillageCensus = preload("res://src/emergence/village_census.gd")
 const VillageImmigration = preload("res://src/emergence/village_immigration.gd")
 const MerchantVisit = preload("res://src/emergence/merchant_visit.gd")
 const HouseholdWellbeing = preload("res://src/emergence/household_wellbeing.gd")
+const VillageEstates = preload("res://src/emergence/village_estates.gd")
+const EstateConsumption = preload("res://src/emergence/estate_consumption.gd")
+const EstateAscension = preload("res://src/emergence/estate_ascension.gd")
+const VillageLabor = preload("res://src/emergence/village_labor.gd")
+const VillageAssembly = preload("res://src/emergence/village_assembly.gd")
 const ConstructionLabor = preload("res://src/emergence/construction_labor.gd")
 const SettlementReserve = preload("res://src/emergence/settlement_reserve.gd")
 const VillageLayout = preload("res://src/world/village_layout.gd")
@@ -195,6 +200,7 @@ const SettlementState = preload("res://src/emergence/settlement_state.gd")
 const SettlementFood = preload("res://src/emergence/settlement_food.gd")
 const SettlementGathering = preload("res://src/emergence/settlement_gathering.gd")
 const SettlementGranary = preload("res://src/emergence/settlement_granary.gd")
+const VillageWages = preload("res://src/world/village_wages.gd")
 const OccupationProduction = preload("res://src/emergence/occupation_production.gd")
 const NpcIdentity = preload("res://src/world/npc_identity.gd")
 const SettlementTier = preload("res://src/emergence/settlement_tier.gd")
@@ -3615,6 +3621,13 @@ func step_settlements(delta_seconds: float) -> void:
 		# BEFORE capacity is read, because this is what finally puts a real
 		# number in front of it (see _step_settlement_granary).
 		_step_settlement_granary(settlement_id, market, village_market, household_ids)
+		# The estates eat, burn, rise and fall (docs/concept/
+		# village_estates.md). AFTER the granary, because the food reading
+		# its satisfaction report carries has to be the one taken once this
+		# step's eating is already done; BEFORE gathering and construction,
+		# because the estate census and its satisfaction are what the
+		# assembly then votes with.
+		_step_village_estates(settlement_id, market, village_market, household_ids)
 		# The village's spare hands gather building material and keep raising
 		# whatever the settlement decided to build (docs/concept/milling_and_
 		# baking.md) -- the SAME interval, so a village near the player builds
@@ -3863,6 +3876,239 @@ func _step_settlement_granary(
 	var stock_delta: Dictionary = result["stock_delta"]
 	for item_id in stock_delta:
 		market.add_stock(str(item_id), int(stock_delta[item_id]))
+
+
+## settlement_id -> EstateConsumption.draw's own last satisfaction report
+## (good -> [0,1]). Derived every step and kept only until the next one --
+## it is a READING, not state, and a settlement that has not been assessed
+## this session simply has none rather than a stale one.
+var _settlement_estate_satisfaction: Dictionary = {}
+
+
+## This settlement's real estate census, `{estate -> households}`
+## (docs/concept/village_estates.md mechanism 1) -- the ONE input every
+## estate mechanism is fed. `{}` for a settlement nobody founded.
+func estate_census_for_settlement(settlement_id: String) -> Dictionary:
+	return _household_store.estate_census(_households_in_settlement(settlement_id))
+
+
+## What this settlement's households were actually supplied with at its
+## last assessment, `{good -> [0,1]}`. `{}` before its first one.
+func estate_satisfaction_for_settlement(settlement_id: String) -> Dictionary:
+	return _settlement_estate_satisfaction.get(settlement_id, {}).duplicate()
+
+
+## What the granary alone eats out of this settlement in one assessment --
+## exposed so the estate layer's own promise ("it never eats the food the
+## granary already ate") can be checked against the real number rather than
+## asserted in a comment.
+func granary_subsistence_draw_for(settlement_id: String) -> int:
+	return SettlementGranary.subsistence_draw(_households_in_settlement(settlement_id).size())
+
+
+## What this settlement has actually FINISHED building, loaded or not: the
+## buildings standing on its ground when the chunk is there to read, and
+## its persisted construction ledger when it is not.
+##
+## The ledger half is what lets docs/concept/village_estates.md's charter
+## gate work offscreen at all -- a village that raised its farmhouse three
+## years ago and has not been visited since really does have one, and a
+## gate that could only see loaded ground would say otherwise.
+func _chartered_building_ids_in_chunk(chunk_coord: Vector2i) -> Array:
+	var seen := {}
+	for building_id in _standing_building_ids_in_chunk(chunk_coord):
+		seen[building_id] = true
+	for building_id in _construction_project_store.completed_blueprint_ids_in_chunk(chunk_coord):
+		seen[building_id] = true
+	return seen.keys()
+
+
+## Everything a settlement has: the single-tile placeables really modified
+## into its ground (_present_structure_ids_for_settlement_chunk, the
+## reading the growth ladder has always used), the whole buildings standing
+## in its loaded chunk, and the projects its persisted ledger says it
+## finished. The union, because each of the three sees something the other
+## two do not, and "what stands here" should not depend on which of them
+## was asked.
+func _settlement_present_building_ids(chunk_coord: Vector2i) -> Array:
+	var seen := {}
+	for building_id in _present_structure_ids_for_settlement_chunk(chunk_coord):
+		seen[building_id] = true
+	for building_id in _chartered_building_ids_in_chunk(chunk_coord):
+		seen[building_id] = true
+	return seen.keys()
+
+
+## docs/concept/village_estates.md mechanisms 2, 3 and 6, in one pass over
+## one settlement: the basket is drawn out of real stock, the run-lengths
+## advance, the ladder is walked up and down, and the tax is paid.
+##
+## **FOOD is deliberately not drawn here.** SettlementGranary.catchup
+## already eats a settlement's food on this very step, at a rate
+## (SettlementState.FOOD_PER_HOUSEHOLD) that a whole famine chain is
+## calibrated against, and NpcEconomy's own per-villager meal draws from
+## the same shelf for a LOADED village. A third draw would be the same meal
+## eaten two or three times over, and it would have every village on the
+## planet starve the moment this landed. So the estate layer draws
+## everything ABOVE food -- fuel, bread, physic, candles, leather, beer,
+## honey: exactly the goods no village has ever had to supply before -- and
+## reads food's satisfaction off the larder the granary leaves behind. The
+## two halves agree rather than compete.
+func _step_village_estates(
+	settlement_id: String, market, village_market, household_ids: Array[String]
+) -> void:
+	if household_ids.is_empty():
+		return
+	var census := _household_store.estate_census(household_ids)
+	if census.is_empty():
+		return
+
+	var days := SETTLEMENT_STEP_INTERVAL / SECONDS_PER_SIMULATED_DAY
+	var demand := EstateConsumption.demand_for(census, days, _season_cycle.season_at(_world_age_seconds))
+	demand.erase(VillageEstates.FOOD_KIND_TOKEN)  # the granary's own; see above
+
+	var satisfaction: Dictionary = _draw_estate_basket(market, village_market, demand)
+	satisfaction[VillageEstates.FOOD_KIND_TOKEN] = clampf(
+		_food_per_household(settlement_id, market, household_ids.size())
+		/ HouseholdWellbeing.FOOD_STOCK_PER_HOUSEHOLD_TARGET,
+		0.0,
+		1.0
+	)
+	_settlement_estate_satisfaction[settlement_id] = satisfaction
+
+	_walk_estate_ladder(settlement_id, household_ids, satisfaction, days)
+	_collect_estate_tax(market, settlement_id, satisfaction, days)
+
+
+## Spends `demand` against the settlement's real stock and returns what
+## share of each good it could actually cover.
+##
+## Both markets, in that order: a LOADED village's own VillageMarket is the
+## shelf its people actually reach into, and the persisted emergence Market
+## is what is left of it when nobody is looking. Taking from the live one
+## first means a village burns the firewood in front of it before the
+## firewood in its books.
+func _draw_estate_basket(market, village_market, demand: Dictionary) -> Dictionary:
+	if demand.is_empty():
+		return {}
+	var stock := {}
+	if village_market != null:
+		for item_id in village_market.stock:
+			stock[item_id] = float(stock.get(item_id, 0.0)) + float(village_market.stock[item_id])
+	for item_id in market.stock:
+		stock[item_id] = float(stock.get(item_id, 0.0)) + float(market.stock[item_id])
+
+	var result: Dictionary = EstateConsumption.draw(demand, stock, [])
+	for item_id in result["taken"]:
+		_take_from_settlement_stock(market, village_market, str(item_id), float(result["taken"][item_id]))
+	return result["satisfaction"]
+
+
+## Removes `amount` of one good from the settlement's shelves, live one
+## first. Split by hand rather than through one remove_stock call because
+## both markets' own remove_stock is all-or-nothing, and a draw that spans
+## the two has to take part of it from each.
+func _take_from_settlement_stock(market, village_market, item_id: String, amount: float) -> void:
+	var left := amount
+	if left <= 0.0:
+		return
+	if village_market != null:
+		var from_village: float = minf(float(village_market.stock.get(item_id, 0.0)), left)
+		if from_village > 0.0:
+			village_market.remove_stock(item_id, from_village)
+			left -= from_village
+	if left <= 0.0:
+		return
+	var from_market: float = minf(float(market.stock.get(item_id, 0.0)), left)
+	if from_market > 0.0:
+		market.remove_stock(item_id, from_market)
+
+
+## Advances every household's run-lengths and applies EstateAscension's
+## verdict: a promotion, a demotion, or -- at the bottom rung, which has
+## nowhere left to fall to -- a real departure from the village.
+func _walk_estate_ladder(
+	settlement_id: String, household_ids: Array[String], satisfaction: Dictionary, days: float
+) -> void:
+	var chunk_coord := RegionalTrade.chunk_coord_of(settlement_id)
+	var present := _settlement_present_building_ids(chunk_coord)
+	for household_id in household_ids:
+		var household = _household_store.get_household(household_id)
+		if household == null:
+			continue
+		var estate: String = household.estate
+		var subsistence: float = EstateConsumption.subsistence_satisfaction(estate, satisfaction)
+		var station: float = EstateConsumption.station_satisfaction(estate, satisfaction)
+
+		var verdict: String = EstateAscension.verdict({
+			"estate": estate,
+			"subsistence": subsistence,
+			"station": station,
+			"present_building_ids": present,
+			"good_run_days": household.good_run_days,
+			"short_run_days": household.short_run_days,
+		})
+
+		var runs: Dictionary = EstateAscension.advanced_runs(
+			estate, subsistence, station, household.good_run_days, household.short_run_days, days
+		)
+		household.good_run_days = float(runs["good_run_days"])
+		household.short_run_days = float(runs["short_run_days"])
+
+		if verdict == EstateAscension.HOLD:
+			continue
+		if verdict == EstateAscension.DESCEND and EstateAscension.is_exodus(estate):
+			_record_household_departure(settlement_id, household)
+			continue
+		var landed: String = EstateAscension.resolve(estate, verdict)
+		if landed == "" or landed == estate:
+			continue
+		household.estate = landed
+		# A household that just changed standing starts both runs over: the
+		# standard it has to hold is its NEW estate's, and the time it
+		# banked was banked against a different one.
+		household.good_run_days = 0.0
+		household.short_run_days = 0.0
+
+
+## Records that this household has left the settlement (see
+## DEPARTURE_EVENT_TYPE). Every member is named, because
+## _households_in_settlement resolves membership through the settling
+## event's own actor and a household's founder is not necessarily the only
+## one on record.
+func _record_household_departure(settlement_id: String, household) -> void:
+	var departed := Event.new(DEPARTURE_EVENT_TYPE, _world_age_seconds)
+	departed.actors = household.members.duplicate()
+	departed.witnesses = [settlement_id]
+	departed.importance = 0.2
+	_event_store.append(departed)
+	_memory_store.witness_event(departed, _world_age_seconds)
+
+
+## docs/concept/village_estates.md mechanism 6: the households pay into the
+## SAME purse VillageWages already pays the subsistence wage out of, which
+## is what closes the loop on machinery that already exists rather than
+## opening a second treasury beside it.
+##
+## An estate's provision for tax is its STATION satisfaction, not its
+## subsistence: subsistence is what a household must have to survive, and
+## taxing survival is how you get a village that cannot afford to be poor.
+## What is taxable is the surplus above it.
+func _collect_estate_tax(
+	market, settlement_id: String, satisfaction: Dictionary, days: float
+) -> void:
+	var census := _household_store.estate_census(_households_in_settlement(settlement_id))
+	if census.is_empty():
+		return
+	var provision := {}
+	for estate in census:
+		provision[estate] = minf(
+			EstateConsumption.subsistence_satisfaction(estate, satisfaction),
+			EstateConsumption.station_satisfaction(estate, satisfaction)
+		)
+	var take := VillageWages.estate_tax_for(census, provision, days)
+	if take > 0.0:
+		NpcEconomy.deposit_to_purse(market, take)
 
 
 ## settlement_id -> the sub-unit gathering remainder carried into its next
@@ -5133,12 +5379,30 @@ func _known_settlement_ids() -> Array[String]:
 ## would inflate the settlement's own tier and institution thresholds.
 const SETTLING_EVENT_TYPES := ["npc_settled", "player_settled", "player_house_settled"]
 
+## The event that UNDOES a settling one (docs/concept/village_estates.md
+## mechanism 3): a household at the bottom rung that went short of its
+## subsistence for long enough leaves the village altogether.
+##
+## Recorded rather than deleted, for the same reason everything else here
+## is event-sourced: a village's history is what happened to it, and "four
+## households left in the winter of the third year" is exactly the kind of
+## thing a rumour, a memory or a chronicle should be able to name later.
+## The household itself survives in the store -- it went somewhere, it did
+## not stop existing -- it is simply no longer counted as this
+## settlement's.
+const DEPARTURE_EVENT_TYPE := "npc_departed"
+
 
 func _households_in_settlement(settlement_id: String) -> Array[String]:
+	var departed := {}
+	for event in _event_store.events_for_entity_of_type(settlement_id, DEPARTURE_EVENT_TYPE):
+		if not event.actors.is_empty():
+			departed[event.actors[0]] = true
+
 	var household_ids: Array[String] = []
 	var seen := {}
 	for event in _event_store.events_for_entity_of_types(settlement_id, SETTLING_EVENT_TYPES):
-		if event.actors.is_empty():
+		if event.actors.is_empty() or departed.has(event.actors[0]):
 			continue
 		var household := _household_store.household_for(event.actors[0])
 		if household == null or seen.has(household.id):
@@ -5146,6 +5410,13 @@ func _households_in_settlement(settlement_id: String) -> Array[String]:
 		seen[household.id] = true
 		household_ids.append(household.id)
 	return household_ids
+
+
+## _households_in_settlement, in public. The estate layer, its tests and
+## any caller that wants a settlement's real roster read it here rather
+## than reaching for the private one.
+func household_ids_in_settlement(settlement_id: String) -> Array[String]:
+	return _households_in_settlement(settlement_id)
 
 
 ## Every villager of `settlement_id` -- the exact sibling of
@@ -16570,10 +16841,21 @@ func _apply_village_growth_decision(chunk_coord: Vector2i) -> void:
 	if household_ids.is_empty():
 		return
 	var census := _village_census_for(chunk_coord, household_ids)
-	var next_building: String = VillageGrowth.next_building(
-		household_ids.size(), int(census["housed_count"]),
-		_present_structure_ids_for_settlement_chunk(chunk_coord)
-	)
+	var waiting: Array = census["unhoused_household_ids"]
+	# docs/concept/village_estates.md mechanism 5: the village VOTES rather
+	# than walking a fixed table. VillageAssembly is a layer over
+	# VillageGrowth, not a replacement -- shelter still comes first, the
+	# buildings are still that ladder's, its order is still the tie-break,
+	# and a settlement with no estate census falls straight through to the
+	# behaviour it had before this existed.
+	var next_building: String = VillageAssembly.next_building({
+		"estate_counts": _household_store.estate_census(household_ids),
+		"household_count": household_ids.size(),
+		"housed_count": int(census["housed_count"]),
+		"present_building_ids": _settlement_present_building_ids(chunk_coord),
+		"satisfaction": _settlement_estate_satisfaction.get(settlement_id, {}),
+		"waiting_estate": _estate_of_household(waiting[0] if not waiting.is_empty() else ""),
+	})
 	if next_building == "" or next_building == CivicBuildDecision.CITY_HALL_BUILDING_ID:
 		return  # nothing owed, or the hall -- which has its own live decision
 
@@ -16588,7 +16870,6 @@ func _apply_village_growth_decision(chunk_coord: Vector2i) -> void:
 
 	var owner_id := settlement_id
 	if BuildingCatalog.BUILDING_IDS.has(next_building):
-		var waiting: Array = census["unhoused_household_ids"]
 		if waiting.is_empty():
 			return
 		owner_id = waiting[0]
@@ -16600,6 +16881,17 @@ func _apply_village_growth_decision(chunk_coord: Vector2i) -> void:
 		_construction_project_store, _market_store.market_for(settlement_id),
 		chunk_coord, origin, next_building, owner_id, _recipe_book
 	)
+
+
+## One household's standing, or the founding estate for an id the store has
+## never heard of -- the same destitute-but-valid default every other
+## estate reader takes, so a caller is never handed an empty string that
+## VillageEstates then has no answer for.
+func _estate_of_household(household_id: String) -> String:
+	if household_id == "":
+		return VillageEstates.STARTING_ESTATE
+	var household = _household_store.get_household(household_id)
+	return VillageEstates.STARTING_ESTATE if household == null else String(household.estate)
 
 
 ## Where a growth building actually goes: the sawmill at the village's own
