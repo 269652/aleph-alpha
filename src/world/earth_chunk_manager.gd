@@ -188,6 +188,7 @@ const EstateConsumption = preload("res://src/emergence/estate_consumption.gd")
 const EstateAscension = preload("res://src/emergence/estate_ascension.gd")
 const VillageLabor = preload("res://src/emergence/village_labor.gd")
 const VillageAssembly = preload("res://src/emergence/village_assembly.gd")
+const EstateShortfall = preload("res://src/emergence/estate_shortfall.gd")
 const ConstructionLabor = preload("res://src/emergence/construction_labor.gd")
 const SettlementReserve = preload("res://src/emergence/settlement_reserve.gd")
 const VillageLayout = preload("res://src/world/village_layout.gd")
@@ -3896,6 +3897,28 @@ func estate_census_for_settlement(settlement_id: String) -> Dictionary:
 ## last assessment, `{good -> [0,1]}`. `{}` before its first one.
 func estate_satisfaction_for_settlement(settlement_id: String) -> Dictionary:
 	return _settlement_estate_satisfaction.get(settlement_id, {}).duplicate()
+
+
+## What this settlement's own estates went short of at its last assessment,
+## in the ONE shortfall shape SettlementBuildDecision already reads
+## (docs/concept/village_estates.md).
+##
+## This is what keeps the estate ladder from being decorative. A village
+## short of bread has no bakery, no mill and no farm; before this, nothing
+## in the game ever told it to raise one, so no household could ever meet
+## its station and nobody could ever rise. Reported in the same shape the
+## production and staple-food shortfalls already use, so the decision walks
+## bread -> bakery -> flour -> mill -> wheat -> farm, and beer -> brewery,
+## with no new code on that side at all.
+func estate_shortfalls_for_settlement(settlement_id: String) -> Array:
+	var household_ids := _households_in_settlement(settlement_id)
+	if household_ids.is_empty():
+		return []
+	return EstateShortfall.shortfalls_for(
+		_household_store.estate_census(household_ids),
+		_settlement_estate_satisfaction.get(settlement_id, {}),
+		SETTLEMENT_STEP_INTERVAL / SECONDS_PER_SIMULATED_DAY
+	)
 
 
 ## What the granary alone eats out of this settlement in one assessment --
@@ -16777,6 +16800,13 @@ func _apply_settlement_build_decision(chunk_coord: Vector2i) -> void:
 	)
 	if not food_shortfall.is_empty():
 		shortfalls.append(food_shortfall)
+	# The THIRD source of shortfall (docs/concept/village_estates.md): what
+	# this settlement's own estates went short of in their baskets. Same
+	# shape again, so the walk below reasons about an unmet station good --
+	# beer -> brewery, bread -> bakery -> flour -> mill -> wheat -> farm --
+	# with no new code here. Without it a village has no way to build its
+	# way to the goods its own people must have to rise.
+	shortfalls.append_array(estate_shortfalls_for_settlement(settlement_id))
 
 	# A real site, not Vector2i.ZERO: the first free, buildable, clear cell
 	# spiralling out from the settlement's own centre (see _settlement_build_

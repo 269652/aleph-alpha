@@ -15,6 +15,7 @@ const EntityRef = preload("res://src/emergence/entity_ref.gd")
 const VillageEstates = preload("res://src/emergence/village_estates.gd")
 const EstateAscension = preload("res://src/emergence/estate_ascension.gd")
 const VillageWages = preload("res://src/world/village_wages.gd")
+const EstateShortfall = preload("res://src/emergence/estate_shortfall.gd")
 const NpcEconomy = preload("res://src/world/npc_economy.gd")
 
 const CHUNK := Vector2i(4242, 4242)
@@ -290,3 +291,46 @@ func test_a_building_nobody_owns_carries_no_standing_at_all():
 	var estate_report: Dictionary = manager.estate_report_for_household("", CHUNK)
 	assert_eq(String(estate_report["estate"]), "")
 	assert_eq(String(estate_report["estate_verdict"]), "")
+
+
+# -- an unmet basket is something the village can build its way out of ----
+
+## The step that keeps the estate ladder from being decorative. A village
+## short of a station good has to be able to RAISE the works that makes it,
+## or nobody ever meets their station and nobody ever rises.
+func test_a_village_short_of_a_station_good_really_reports_a_buildable_shortfall():
+	_found(5)
+	_step()
+	var shortfalls: Array = manager.estate_shortfalls_for_settlement(_settlement_id)
+	var goods: Array = []
+	for shortfall in shortfalls:
+		for missing in shortfall["missing"]:
+			goods.append(String(missing["item_id"]))
+	assert_true(goods.has(VillageEstates.FUEL_ITEM_ID), "a village with no firewood asked for none")
+	assert_false(
+		goods.has(VillageEstates.FOOD_KIND_TOKEN),
+		"the food token reached the build decision, which can build nothing for it"
+	)
+
+
+func test_a_supplied_village_reports_no_shortfall_to_build_for():
+	_found(5)
+	_market().add_stock(VillageEstates.FUEL_ITEM_ID, 900)
+	_market().add_stock("herb", 900)
+	_step()
+	assert_eq(manager.estate_shortfalls_for_settlement(_settlement_id), [])
+
+
+## Every entry is in the shape SettlementBuildDecision already reads, so it
+## reasons about an unmet basket with no new code on that side.
+func test_the_shortfalls_are_in_the_shape_the_build_decision_reads():
+	_found(5)
+	_step()
+	for shortfall in manager.estate_shortfalls_for_settlement(_settlement_id):
+		for key in ["kind", "household_id", "occupation", "recipe_id", "missing"]:
+			assert_true(shortfall.has(key), "a shortfall with no %s is not the shape" % key)
+		assert_eq(String(shortfall["kind"]), EstateShortfall.KIND)
+
+
+func test_a_settlement_nobody_founded_reports_no_shortfalls():
+	assert_eq(manager.estate_shortfalls_for_settlement(EntityRef.for_settlement(Vector2i(2, 2))), [])

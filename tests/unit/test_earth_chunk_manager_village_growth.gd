@@ -234,19 +234,24 @@ const INDUSTRY_RUNG := "sawmill"
 ## is asked again.
 func _rung_the_village_is_owed() -> String:
 	_raise_the_hall()
-	for _attempt in VillageGrowth.LADDER_BUILDING_IDS.size() * 4:
+	# ONE household at a time. Every household this helper adds costs the
+	# street a house, and the frontage is finite -- growing in threes
+	# overshot the first rung the village actually wanted by a house or two
+	# and left the later tests with nowhere to build (which is how this
+	# helper failed once already).
+	for _attempt in 40:
 		var rung := manager.next_building_for_settlement(_chunk_coord)
 		if rung == "" or BuildingCatalog.BUILDING_IDS.has(rung):
 			# Nothing wanted yet, or a roof owed -- a bigger village wants
-			# more, so grow it and ask again.
-			_grow_to(manager.household_count_for_settlement(_settlement_id) + 3)
+			# more, so grow it by one and ask again.
+			_grow_to(manager.household_count_for_settlement(_settlement_id) + 1)
 			continue
 		if rung == "city_hall":
 			_raise_the_hall()
 			continue
 		var origin = manager._growth_site_for(_chunk_coord, rung)
 		if origin == null:
-			_grow_to(manager.household_count_for_settlement(_settlement_id) + 3)
+			_grow_to(manager.household_count_for_settlement(_settlement_id) + 1)
 			continue
 		if rung == INDUSTRY_RUNG:
 			manager._place_building_over_roads(_chunk_coord, origin, rung, 2, _settlement_id)
