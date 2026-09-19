@@ -145,15 +145,81 @@ invented to fill a table.
 
 ## Status
 
-Written before implementation, per CLAUDE.md. Corrected against the code as
-it lands; see [progress.md](../progress.md) for the ledger.
+Written before implementation, per CLAUDE.md; each entry corrected against
+the code as it landed. See [progress.md](../progress.md) for the ledger.
 
-- ⬜ Mechanism 1 — `SettlementCharter`, the table and its readings.
-- ⬜ Mechanism 2 — the refusal that names what is short.
-- ⬜ Mechanism 3 — the anti-deadlock invariant.
-- ⬜ Mechanism 4 — the assembly reads the same gate.
-- ⬜ Mechanism 5 — the charter on the readout.
-- ⬜ `trade_hall` and `mage_guild` as real catalog buildings.
+- ✅ **Mechanism 1 — `SettlementCharter`.** The table, `min_tier_for`,
+  `allows`, `tier_rank` and `next_tier_above`. An unknown tier ranks BELOW
+  every real one, so a caller that hands in nonsense is refused everything
+  chartered rather than accidentally allowed it.
+- ✅ **Mechanism 2 — the refusal that teaches.** `refusal_for` names the
+  tier wanted, the tier held and what is still short per dimension, never
+  negative: a readout saying "-3 households" is worse than no readout.
+  `shortfall_to` is the same arithmetic on its own, for a readout that is
+  not refusing anything.
+- ✅ **Mechanism 3 — the anti-deadlock invariant**, and it is stated
+  CAUSALLY, which is the only form that is checkable. Three things feed
+  `SettlementTier`, so three things must stay free at the bottom: HOUSES
+  (households are a dimension, and a household needs a roof), every ESTATE
+  CHARTER building (an estate that cannot be reached is labour that never
+  changes class), and every building anything PRODUCES through (production
+  diversity is a dimension). Plus the converse — a chartered building must
+  be none of those things — so the rule cannot be satisfied by chartering
+  nothing.
+- ✅ **Mechanism 4 — the village obeys it too.** `VillageAssembly` reads
+  the same gate before anything else, so a village can never quietly raise
+  through its own construction ledger what a player standing on its square
+  is refused. A settlement whose tier nobody passed is read as the LOWEST,
+  so the assembly errs toward refusing rather than letting a hamlet build a
+  mage guild because a caller forgot an argument.
+
+  It also gained a **civic petition**: an estate with nothing to complain
+  of and no charter left to earn asks for the institutions its place is
+  finally entitled to, cheapest first. Without it a city that earned its
+  charter would sit there never raising anything with it, and the player's
+  own hand would be the only way a mage guild ever appeared. A shortage
+  still outranks an institution — hungry people before halls.
+- ✅ **Mechanism 5 — the charter on the readout.** `EarthChunkManager.
+  settlement_charter_report_for` answers what a place is, what it may
+  raise, what it may not, and what it is short of; it rides on every
+  `household_report_at`, and `HousePanel` draws it on the COMMONS only.
+  *Town — a city needs 2 more households, 1 more trade body.* A dimension
+  already cleared is left out, because "0 more trades" is noise and noise
+  is what stops a player reading the line at all. All three readings are
+  consumers and never drivers, test-pinned.
+- ✅ **`trade_hall` and `mage_guild`** are real `BuildingCatalog` entities
+  with real recipes at ONE shared price, priced in the exact three
+  materials a settlement gathers — a charter is one gate, and pricing them
+  in anything else would be a second, hidden gate behind it. They cost
+  strictly more than anything anybody may raise unchartered.
+
+  The catalog's own invariants now read `all_building_ids()` off the
+  entries themselves rather than a hand-maintained union of three lists, so
+  a new entry cannot quietly escape them. That was found by adding these
+  two.
+
+### Known gaps, stated rather than papered over
+
+- 🚧 **Neither chartered building DOES anything yet.** The trade hall is
+  the natural home of [village_estates.md](village_estates.md)'s relief
+  chest and does not yet hold it; the mage guild is
+  [magic.md](magic.md)'s compile station and compiling has no structure
+  gate in code at all — `SpellCost` charges gold and asks nothing about
+  where you are standing. Both are real buildings behind a real gate, and
+  what happens INSIDE them is the next pass. Said plainly rather than
+  dressed up, because a building that only exists to be unlocked is half a
+  feature.
+- 🚧 **Neither has art.** Both draw the procedural placeholder, which is
+  what that path is for (see [building.md](building.md)'s asset contract),
+  and will pick up a sheet the moment one is dropped in under its own id.
+- 🚧 **The player's own build hand does not consult the gate yet.**
+  `building_charter_refusal_at` is the function it will call, and the
+  village's own decision already calls it — but the player's whole-building
+  path today is `can_build_house_from_blueprint`, which only knows houses,
+  and none of the chartered buildings is one. Wiring a player-placeable
+  non-house is its own piece of work.
+- ⬜ **Tiers above city.** `SettlementTier` stops at city, so `next_tier_
+  above` returns "" there and the readout says so honestly.
 
 ## Interaction with other docs
 
