@@ -377,3 +377,73 @@ func test_the_labels_name_nothing_that_is_not_a_real_need():
 			HouseholdWellbeing.NEED_IDS.has(need_id),
 			"%s is labelled and is not a need" % need_id
 		)
+
+
+# -- the settlement's charter, on the building a player clicks ------------
+
+## docs/concept/settlement_charter.md mechanism 5. A player who wants a
+## mage guild stands in the village, clicks the hall, and reads the errand.
+const SettlementTier = preload("res://src/emergence/settlement_tier.gd")
+
+
+func _commons(charter: Dictionary) -> Dictionary:
+	return {
+		"is_home": false, "building_id": "city_hall", "settlement_productivity": 0.7,
+		"charter": charter,
+	}
+
+
+func test_a_commons_names_the_tier_its_settlement_holds():
+	panel.show_report(_commons({
+		"tier": SettlementTier.TOWN, "next_tier": SettlementTier.CITY,
+		"short": {"households": 2, "institutions": 1, "production_diversity": 0},
+		"locked": ["mage_guild"],
+	}))
+	assert_string_contains(panel.charter_text().to_lower(), "town")
+
+
+## The errand itself: what it would take to be the next thing up, in the
+## dimensions that are actually short.
+func test_a_town_short_of_a_city_reads_the_errand_off_the_hall():
+	panel.show_report(_commons({
+		"tier": SettlementTier.TOWN, "next_tier": SettlementTier.CITY,
+		"short": {"households": 2, "institutions": 1, "production_diversity": 0},
+		"locked": ["mage_guild"],
+	}))
+	var text: String = panel.charter_text().to_lower()
+	assert_string_contains(text, "city")
+	assert_string_contains(text, "2")
+	assert_string_contains(text, "1")
+
+
+## A dimension already cleared is not listed -- a readout that says
+## "0 more trades" is noise, and noise is what stops a player reading it.
+func test_a_dimension_already_cleared_is_not_listed():
+	panel.show_report(_commons({
+		"tier": SettlementTier.TOWN, "next_tier": SettlementTier.CITY,
+		"short": {"households": 2, "institutions": 0, "production_diversity": 0},
+		"locked": ["mage_guild"],
+	}))
+	assert_false(panel.charter_text().contains("0"), panel.charter_text())
+
+
+## A city at the top of the ladder has no errand and says so, rather than
+## leaving a blank line where an errand used to be.
+func test_a_city_at_the_top_says_so_rather_than_nothing():
+	panel.show_report(_commons({
+		"tier": SettlementTier.CITY, "next_tier": "", "short": {}, "locked": [],
+	}))
+	assert_string_contains(panel.charter_text().to_lower(), "city")
+	assert_false(panel.charter_text().is_empty())
+
+
+## A HOME is about its household, not about the settlement's charter --
+## the charter belongs on the commons a village shares.
+func test_a_home_shows_no_charter():
+	panel.show_report(_home_report())
+	assert_eq(panel.charter_text(), "")
+
+
+func test_a_commons_with_no_charter_reported_shows_none():
+	panel.show_report(_commons({}))
+	assert_eq(panel.charter_text(), "")

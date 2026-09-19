@@ -4953,6 +4953,11 @@ func household_report_at(global_x: int, global_y: int) -> Dictionary:
 		# and the decision cannot disagree about what is short or about what
 		# would fix it.
 		"village_needs": _village_needs_rows(chunk_coord),
+		# The settlement's own charter (docs/concept/settlement_charter.md
+		# mechanism 5). Carried on EVERY report; the panel draws it on the
+		# COMMONS only, because a home's readout is about its household and
+		# the charter is a fact about the place everyone shares.
+		"charter": settlement_charter_report_for(settlement_id),
 	}
 	if capacity <= 0:
 		return report

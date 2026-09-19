@@ -795,3 +795,18 @@ func test_the_village_never_decides_to_build_what_its_charter_forbids():
 			SettlementCharter.allows(next, manager.settlement_tier_of(_settlement_id)),
 			"a %s decided to build %s" % [manager.settlement_tier_of(_settlement_id), next]
 		)
+
+
+## And the charter really rides on the report a click produces, so the
+## panel has something to draw rather than a field nobody fills.
+func test_the_report_a_click_produces_carries_the_settlements_charter():
+	_found(3)
+	var report: Dictionary = manager.household_report_at(0, 0)
+	assert_true(report.is_empty(), "precondition: nothing stands at the origin")
+
+	# The charter the report WOULD carry, asked of the same function the
+	# report builds it with -- the building itself needs real loaded
+	# ground, which is what test_world_house_panel_wiring.gd drives.
+	var charter: Dictionary = manager.settlement_charter_report_for(_settlement_id)
+	assert_eq(String(charter["tier"]), SettlementTier.HAMLET)
+	assert_true(charter["locked"].has("mage_guild"))
