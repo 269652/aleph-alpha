@@ -554,3 +554,55 @@ func test_the_founding_roster_really_is_that_many_distinct_households():
 	for position in settlement.house_positions:
 		seen[position] = true
 	assert_eq(seen.size(), 10, "ten households means ten places to live")
+
+
+# -- a village founds cottages, never manors --------------------------------
+#
+# Asked directly: *"The village should not produce Manors from the beginning
+# only cottages and once all villagers needs are stable in the green they can
+# upgrade to houses"*.
+#
+# Every household is founded at the bottom estate (VillageEstates.STARTING_
+# ESTATE), which lives in a cottage -- but the house choice never asked, so
+# a founding merchant, whose pool is house/manor/manor/manor, raised a manor
+# before the village had fed anybody.
+
+const VillageEstates = preload("res://src/emergence/village_estates.gd")
+const BuildingCatalogForHouses = preload("res://src/gameplay/building_catalog.gd")
+
+
+func test_a_founding_village_raises_only_the_house_its_standing_entitles():
+	var entitled := VillageEstates.house_id_for(VillageEstates.STARTING_ESTATE)
+	assert_ne(entitled, "", "precondition: the founding estate really lives somewhere")
+	var founded := 0
+	for x in 400:
+		var coord := Vector2i(x, 0)
+		if not generator.has_settlement_at(coord, "grassland"):
+			continue
+		var settlement := generator.generate_settlement(coord, coord * CHUNK_SIZE, CHUNK_SIZE, TILE_SIZE)
+		for house_id in SettlementGenerator.house_ids_for(coord, settlement.npcs):
+			assert_eq(house_id, entitled, "the village at %s founded a %s" % [str(coord), house_id])
+		founded += 1
+		if founded >= 8:
+			break
+	assert_gt(founded, 0, "precondition: real villages were founded")
+
+
+## A village of five is not five identical people -- the occupations really
+## do differ, which is what made this worth fixing rather than a no-op.
+func test_the_founding_roster_really_holds_trades_that_would_have_built_bigger():
+	var reached := false
+	for x in 400:
+		var coord := Vector2i(x, 0)
+		if not generator.has_settlement_at(coord, "grassland"):
+			continue
+		var settlement := generator.generate_settlement(coord, coord * CHUNK_SIZE, CHUNK_SIZE, TILE_SIZE)
+		for npc in settlement.npcs:
+			var uncapped: String = BuildingCatalogForHouses.choose_house_id(
+				npc.occupation, npc.genome, hash("%d_%d" % [coord.x, coord.y])
+			)
+			if uncapped != VillageEstates.house_id_for(VillageEstates.STARTING_ESTATE):
+				reached = true
+		if reached:
+			break
+	assert_true(reached, "no founding villager anywhere would have built above a cottage")

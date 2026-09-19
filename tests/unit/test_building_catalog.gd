@@ -641,3 +641,82 @@ func test_every_building_in_the_catalog_answers_at_all():
 	)
 	for building_id in every:
 		assert_gte(BuildingCatalog.storage_capacity_of(building_id), 0, building_id)
+
+
+# -- a house no grander than its household's standing -----------------------
+#
+# Asked directly: *"The village should not produce Manors from the beginning
+# only cottages and once all villagers needs are stable in the green they can
+# upgrade to houses"*.
+#
+# The estate layer (docs/concept/village_estates.md) already says which house
+# an estate lives in, and every household is founded a kossaet -- but
+# choose_house_id never asked. It draws from the OCCUPATION's pool, so a
+# founding merchant (whose pool is medium/large/large/large) raised a manor
+# on day one, before the village had fed anybody.
+#
+# So the pool is CAPPED by what the household is entitled to. Occupation and
+# personality still choose within that cap -- a showy merchant cottager gets
+# the grandest cottage there is, which is still a cottage.
+
+
+func test_a_household_entitled_to_a_cottage_never_builds_a_manor():
+	var genome := NpcGenome.new(3, _TRAIT_NAMES)
+	for occupation in BuildingCatalog.HOUSE_POOL_BY_OCCUPATION:
+		for seed_value in range(40):
+			assert_eq(
+				BuildingCatalog.choose_house_id(occupation, genome, seed_value, "house_small"),
+				"house_small",
+				"%s built above their standing" % occupation
+			)
+
+
+## The cap is a ceiling, not a fixed answer: a household entitled to a house
+## may still live in a cottage if that is what their trade and character
+## would have built.
+##
+## Asked of a FARMER, whose pool really spans the cap (cottage, cottage,
+## house). A merchant's does not -- theirs is house/manor/manor/manor, so
+## capped at a house there is exactly one thing left for them to build, and
+## that is the cap doing its job rather than an assignment.
+func test_the_cap_is_a_ceiling_rather_than_an_assignment():
+	var seen := {}
+	for seed_value in range(120):
+		var genome := NpcGenome.new(seed_value, _TRAIT_NAMES)
+		var id: String = BuildingCatalog.choose_house_id("farmer", genome, seed_value, "house_medium")
+		assert_ne(id, "house_large", "above the cap")
+		seen[id] = true
+	assert_gt(seen.size(), 1, "a ceiling that only ever answers one thing is an assignment")
+
+
+## And a pool with nothing at or below the cap still answers with a real
+## house: a merchant entitled only to a cottage lives in a cottage, rather
+## than in nothing at all.
+func test_a_pool_with_nothing_under_the_cap_still_houses_the_household():
+	var genome := NpcGenome.new(11, _TRAIT_NAMES)
+	assert_eq(
+		BuildingCatalog.choose_house_id("merchant", genome, 11, "house_small"), "house_small"
+	)
+
+
+## No cap named is exactly today's behaviour, so every caller that has not
+## been taught about standing yet is untouched.
+func test_naming_no_cap_leaves_the_choice_exactly_as_it_was():
+	for occupation in BuildingCatalog.HOUSE_POOL_BY_OCCUPATION:
+		for seed_value in range(30):
+			var genome := NpcGenome.new(seed_value, _TRAIT_NAMES)
+			assert_eq(
+				BuildingCatalog.choose_house_id(occupation, genome, seed_value, ""),
+				BuildingCatalog.choose_house_id(occupation, genome, seed_value)
+			)
+
+
+## And an unknown cap is no cap, never an empty answer -- a caller that
+## passes something this catalog has never heard of still gets a real house.
+func test_an_unknown_cap_still_answers_with_a_real_house():
+	var genome := NpcGenome.new(5, _TRAIT_NAMES)
+	assert_true(
+		BuildingCatalog.BUILDING_IDS.has(
+			BuildingCatalog.choose_house_id("farmer", genome, 5, "not_a_house")
+		)
+	)

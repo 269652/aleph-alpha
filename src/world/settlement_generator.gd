@@ -20,6 +20,7 @@ const SettlementFoodDemand = preload("res://src/emergence/settlement_food_demand
 const NpcIdentity = preload("res://src/world/npc_identity.gd")
 const VillageLayout = preload("res://src/world/village_layout.gd")
 const BuildingCatalog = preload("res://src/gameplay/building_catalog.gd")
+const VillageEstates = preload("res://src/emergence/village_estates.gd")
 const VillageCart = preload("res://src/gameplay/village_cart.gd")
 const VillageSawmill = preload("res://src/gameplay/village_sawmill.gd")
 
@@ -283,9 +284,30 @@ func _unit_float(chunk_coord: Vector2i, index: int, salt: String) -> float:
 ## that before sending a player somewhere (EarthChunkManager.
 ## find_nearest_village), and a second copy of this rule would let it
 ## answer about different houses than the ones the renderer then places.
+## The grandest house a FOUNDING household may raise: the one its estate
+## lives in, and every household is founded at the bottom estate
+## (VillageEstates.STARTING_ESTATE).
+##
+## Asked directly: *"The village should not produce Manors from the
+## beginning only cottages and once all villagers needs are stable in the
+## green they can upgrade to houses"*. Measured before fixing: the first
+## grassland village on the map founded a manor and three houses on day one,
+## because the choice read the villager's TRADE and never their standing.
+##
+## Read from the estate layer rather than named here, so the two cannot
+## disagree about what a kossaet lives in (docs/concept/village_estates.md,
+## mechanism 1). Rising out of it is that layer's own business -- a whole
+## ration, a station held for a real season, and the charter building
+## standing.
+static func _founding_house_entitlement() -> String:
+	return VillageEstates.house_id_for(VillageEstates.STARTING_ESTATE)
+
+
 static func house_ids_for(chunk_coord: Vector2i, npcs: Array) -> Array:
 	var ids: Array = []
 	for i in npcs.size():
 		var seed_value := hash("%d_%d_house_%d" % [chunk_coord.x, chunk_coord.y, i])
-		ids.append(BuildingCatalog.choose_house_id(npcs[i].occupation, npcs[i].genome, seed_value))
+		ids.append(BuildingCatalog.choose_house_id(
+			npcs[i].occupation, npcs[i].genome, seed_value, _founding_house_entitlement()
+		))
 	return ids
