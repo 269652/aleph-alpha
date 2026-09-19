@@ -440,10 +440,16 @@ The village's goods have to be somewhere you can point at. So:
 
 - **A harvest goes on its producer's own shelf and stays there.** The
   end-of-block carry is gone for any village that HAS a store — the shelf is
-  the carter's to empty, which is the whole reason the trade exists.
-- **The villager is paid at the scythe**, not at the delivery. They did the
-  work; the pay is for the work. `record_harvest_wage` is
-  `record_real_harvest` with the stocking taken out.
+  the carter's to empty, which is the whole reason the trade exists. **Every
+  producer**, not just the farmhouse: the sawmill had the identical carry
+  (`haul_sawmill_stock_to_village`, run off the clock from `_step_timber`),
+  and it was reported in exactly the same words with the mill's own panel in
+  shot reading *"Stored: 0 / 60, Beam x0, Log x0"* — *"The sawmill also
+  doesn't produce beams or plangs or logs"*. It produced them all along.
+- **The villager is paid at the work**, not at the delivery — at the scythe
+  for a farmer, at the saw for a sawyer. They did the work; the pay is for
+  the work. `record_harvest_wage` is `record_real_harvest` with the stocking
+  taken out.
 - **The carter's arrival at the store is what credits the village's
   sellable stock.** One credit, at the moment the goods really get there —
   so nothing is counted twice, and the market's numbers describe a pile that

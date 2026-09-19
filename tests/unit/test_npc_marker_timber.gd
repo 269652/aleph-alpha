@@ -293,8 +293,18 @@ func test_the_mills_beams_are_carried_to_the_village():
 	assert_gt(float(market.stock.get("beam", 0.0)), 0.0, "and the village has it now")
 
 
+## Enough beams that a whole COIN certainly lands, whatever the levy is.
+##
+## A wallet holds whole coins only; a take-home under one is carried
+## (NpcEconomy._take_home_carry) rather than lost, so a small haul can pay
+## a villager and move no coin at all. This used to haul three beams, which
+## cleared exactly 1.0 at the levy of the day -- and adding one occupation
+## to NpcIdentity.OCCUPATIONS moved the levy (it is derived from the
+## non-producer share of the census, see VillageWages.wage_share) and with
+## it the take-home, to 0.9. The test was measuring the rounding boundary,
+## not the payment.
 func test_hauling_pays_the_sawyer_for_what_they_carried_in():
-	world.stock["beam"] = 3
+	world.stock["beam"] = 10
 	var before := marker.economy.wallet.balance
 	marker.haul_sawmill_stock_to_village()
 	assert_gt(marker.economy.wallet.balance, before, "paid on arrival, like a farmer's crop")
@@ -361,3 +371,45 @@ func test_the_logs_the_sawyer_bucks_are_not_also_dropped_on_the_ground():
 			break
 	assert_eq(trunk.ground_logs, 0, "the sawyer carries the logs home; they are not also on the ground")
 	assert_gt(trunk.worker_logs, 0, "and they really were bucked")
+
+
+# -- the mill's shelf is the carter's to empty (Mechanism 7) ----------------
+#
+# Reported in play with the mill's own panel in shot, reading "Stored: 0 / 60,
+# Beam x0, Log x0": *"The sawmill also doesn't produce beams or plangs or
+# logs"*. It produced them all along -- and then, at the end of every work
+# block, the sawyer carried every beam off the shelf into the abstract
+# village ledger, exactly as the farmer used to do with their farmhouse. So
+# the mill you clicked was always empty, and the carter arrived at a shelf
+# somebody had already emptied.
+
+
+func test_a_sawyer_in_a_village_with_a_store_leaves_the_beams_on_the_shelf():
+	marker.warehouse_position = Vector2(400.0, 400.0)  # this village has a store
+	world.stock["beam"] = 5
+
+	marker.haul_sawmill_stock_to_village()
+
+	assert_eq(world.structure_stock_at(0, 0, "beam"), 5, "the mill is still holding them")
+
+
+## And a village with no store keeps the old behaviour exactly: the sawyer
+## carries them in, because there is nowhere else for them to go.
+func test_a_sawyer_with_no_store_still_carries_the_beams_in():
+	marker.warehouse_position = null
+	world.stock["beam"] = 5
+
+	marker.haul_sawmill_stock_to_village()
+
+	assert_eq(world.structure_stock_at(0, 0, "beam"), 0, "carried in, as before")
+
+
+## Off the clock is where it happened: the whole shelf went at the end of
+## every single work block.
+func test_going_off_the_clock_no_longer_empties_a_mill_in_a_village_with_a_store():
+	marker.warehouse_position = Vector2(400.0, 400.0)
+	world.stock["beam"] = 5
+
+	marker._step_timber(0.1, false)
+
+	assert_eq(world.structure_stock_at(0, 0, "beam"), 5, "the beams are still at the mill")

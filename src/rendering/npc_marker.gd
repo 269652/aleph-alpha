@@ -786,6 +786,13 @@ func _shape_a_beam(delta: float) -> void:
 	):
 		return
 	_world.deposit_to_structure_at(sawmill_cell.x, sawmill_cell.y, "beam", 1)
+	# Paid at the saw when the village has a store to cart it to
+	# (docs/concept/village_warehouse.md, Mechanism 7) -- the beam stays on
+	# the mill's shelf for the carter, so the village is credited when it
+	# really arrives at the store rather than here. The same pay, for the
+	# same work; what moved is where the beam is.
+	if economy != null and _village_has_a_store():
+		economy.record_harvest_wage("beam", 1)
 
 
 ## Carries the mill's finished BEAMS into the village's own stock -- the
@@ -797,6 +804,10 @@ func _shape_a_beam(delta: float) -> void:
 ## carrying those off would be carrying away the very thing the sawmill
 ## exists to work.
 ##
+## Only in a village with NO store. Where one stands, the beams stay on the
+## mill's shelf for the carter and the sawyer is paid at the saw (see
+## _shape_a_beam) -- Mechanism 7, the same split the farmhouse keeps.
+##
 ## Credited through the same record_real_harvest a farmer's crop uses, so a
 ## beam is paid for exactly once, at the moment it actually arrives rather
 ## than at the saw. All-or-nothing per unit, mirroring
@@ -804,6 +815,16 @@ func _shape_a_beam(delta: float) -> void:
 ## mill, an empty one, or a world that cannot answer.
 func haul_sawmill_stock_to_village() -> void:
 	if sawmill_cell == NO_SAWMILL or economy == null or _world == null:
+		return
+	# A village with a store leaves its shelves to the carter (docs/concept/
+	# village_warehouse.md, Mechanism 7) -- the same rule the farmhouse
+	# already follows, and the same bug on the other producer: reported with
+	# the mill's own panel in shot reading "Stored: 0 / 60, Beam x0, Log x0",
+	# *"The sawmill also doesn't produce beams or plangs or logs"*. It
+	# produced them all along; the sawyer carried every one off the shelf at
+	# the end of every work block, so the mill you clicked was always empty
+	# and the carter arrived at a shelf somebody had already emptied.
+	if _village_has_a_store():
 		return
 	if not _world.has_method("withdraw_from_structure_at"):
 		return
