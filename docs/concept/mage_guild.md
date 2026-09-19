@@ -246,11 +246,12 @@ the teacher.
   `rarity_tier.roll_tier` instead, which is an existing weighted roll
   rather than an invented one. **The divergence is recorded here rather
   than hidden, and the exact change that would close it is named above.**
-- 🚧 **A guild's interior is still a cottage.** `InteriorTemplates` has no
-  `hall` plan, so `hall`/`workshop`/`farmstead` all silently fall back to
-  the cottage variants — a pre-existing gap this feature now makes
-  visible, since the guild is the first hall a player will spend time in.
-  The masters stand in a cottage.
+- ✅ **A guild's interior is a hall now**, not a cottage — three plans with
+  no bed in them, 52+ open cells against a cottage's 32, furnished for a
+  mage (a bench and bookshelves) rather than for whatever trade the
+  building's seed landed on. See [building.md](building.md), "A hall is a
+  workplace". `workshop` and `farmstead` still borrow the cottage's plans,
+  now declared rather than implicit.
 - 🚧 **You cannot talk to a specific master.** Indoor Talk reaches the
   room's `_resident`, which is the first master; the others are scenery
   until the Talk verb learns about groups.
