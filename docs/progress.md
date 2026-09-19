@@ -10030,6 +10030,24 @@ constant's own doc comment). Built red-first end to end, merged to
   `DroppedItem`, no per-chunk sim or marker at all). Neither applies a
   Karma penalty (a fungus/seed, not an animal); flowers are excluded
   by construction (never in any group at all), needing no new check.
+- **A planned node says what it offers, and each action has its own key**
+  (2026-09-19). ✅ Done — reported a third time: *"Planned nodes (e.g.
+  pavement) still can't be actually built by the player or hired NPCs...
+  there should be tooltips with hotkeys for both actions"*. The
+  mechanism was never broken — `test_world_raising_a_plan.gd` drives it
+  end to end on a real ledger, chunk manager and player — so the gap was
+  the player's half: both actions hung off the talk key, which offered
+  the hire first and fell through to your own hands, so one press did
+  one of three things; and the floating prompt over a wireframe read
+  "Talk (G)", because wireframes are raised in villages and somebody is
+  nearly always in talking range. Now `_raise_plan_yourself` and
+  `_hire_builder_for_plan` take one context slot each (the two keys the
+  bindings already keep for exactly this), each refuses in its own terms
+  rather than quietly becoming the other — a deliberate reversal of the
+  old fall-through, which is what made the outcome unpredictable — and a
+  wireframe in reach is prompted before the villager beside you, naming
+  the plan and both keys live from the bindings. Full writeup:
+  [planner_mode.md](concept/planner_mode.md).
 - **A farm bed survives the night, so wheat really ripens** (2026-09-19).
   ✅ Done — reported three times over, most recently with the field in
   shot: *"Planted crops still vanish and don't grow and no harvest
