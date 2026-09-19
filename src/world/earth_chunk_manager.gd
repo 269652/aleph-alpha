@@ -4738,21 +4738,104 @@ func _household_wellbeing_for_settlement(settlement_id: String) -> Array:
 		VillageGrowth.ladder_share(_present_structure_ids_for_settlement_chunk(chunk_coord)) if loaded else 0.0
 	)
 	var capacity_by_household := _house_capacity_by_household(chunk_coord) if loaded else {}
+	var employment := _settlement_employment(settlement_id, household_ids)
 
 	var out: Array = []
 	for household_id in household_ids:
-		var household = _household_store.get_household(household_id)
-		var size: int = 1 if household == null else maxi(household.members.size(), 1)
-		out.append(HouseholdWellbeing.assess({
-			"hunger": hunger,
-			"food_per_household": food_per_household,
-			"house_capacity": int(capacity_by_household.get(household_id, size)) if loaded else size,
-			"household_size": size,
-			"wallet_balance": 0 if household == null else household.wallet.balance,
-			"meal_price": VillageMarket.VILLAGE_LOCAL_FOOD_PRICE,
-			"ladder_share": ladder_share,
-		}))
+		out.append(HouseholdWellbeing.assess(
+			_wellbeing_state_for(
+				household_id,
+				hunger,
+				food_per_household,
+				ladder_share,
+				employment,
+				capacity_by_household,
+				loaded
+			)
+		))
 	return out
+
+
+## One household's whole HouseholdWellbeing.assess input, built from the
+## settlement-wide readings its caller already took. Extracted so the
+## SETTLEMENT assessment and the single-household readout cannot drift into
+## measuring two different things.
+##
+## `employment` is `{}` when this settlement's buildings could not be read
+## at all, and the key is then LEFT OUT rather than guessed: absence of a
+## reading is not evidence of idleness, and a destitute default would have
+## every village nobody is standing in read as wholly out of work (see
+## HouseholdWellbeing.WORK_UNREAD_DEFAULT).
+func _wellbeing_state_for(
+	household_id: String,
+	hunger: float,
+	food_per_household: float,
+	ladder_share: float,
+	employment: Dictionary,
+	capacity_by_household: Dictionary,
+	loaded: bool
+) -> Dictionary:
+	var household = _household_store.get_household(household_id)
+	var size: int = 1 if household == null else maxi(household.members.size(), 1)
+	var state := {
+		"hunger": hunger,
+		"food_per_household": food_per_household,
+		"house_capacity": int(capacity_by_household.get(household_id, size)) if loaded else size,
+		"household_size": size,
+		"wallet_balance": 0 if household == null else household.wallet.balance,
+		"meal_price": VillageMarket.VILLAGE_LOCAL_FOOD_PRICE,
+		"ladder_share": ladder_share,
+	}
+	if not employment.is_empty():
+		state["employment"] = VillageLabor.employment_for_estate(
+			_estate_of_household(household_id), employment
+		)
+	return state
+
+
+## `{labour_class -> [0,1]}` for this settlement -- what share of the
+## people of each class have a post (docs/concept/village_estates.md
+## mechanism 4, read from the households' side rather than the buildings').
+##
+## `{}` when NOTHING is known to stand here, which is the honest reading
+## for a settlement whose chunk is unloaded and whose construction ledger
+## is empty: every village is founded with a store already standing, so
+## "no building at all" means nobody looked rather than that the village
+## has none.
+func _settlement_employment(settlement_id: String, household_ids: Array[String]) -> Dictionary:
+	var present := _settlement_present_building_ids(RegionalTrade.chunk_coord_of(settlement_id))
+	if present.is_empty():
+		return {}
+	return VillageLabor.employment_for(
+		VillageLabor.supply_for(_household_store.estate_census(household_ids)),
+		VillageLabor.demand_for(present)
+	)
+
+
+## One household's own HouseholdWellbeing reading -- the same assessment
+## the settlement-wide one takes, for a single household. `{}` for a
+## household this world has never heard of.
+func household_wellbeing_report_for(household_id: String) -> Dictionary:
+	var settlement_id := _settlement_of_party(household_id)
+	if settlement_id == "":
+		return {}
+	var household_ids := _households_in_settlement(settlement_id)
+	if not household_ids.has(household_id):
+		return {}
+
+	var chunk_coord := RegionalTrade.chunk_coord_of(settlement_id)
+	var loaded := _loaded_chunks.has(chunk_coord)
+	var market := _market_store.market_for(settlement_id)
+	var food_per_household := _food_per_household(settlement_id, market, household_ids.size())
+	return HouseholdWellbeing.assess(_wellbeing_state_for(
+		household_id,
+		1.0 - clampf(food_per_household / HouseholdWellbeing.FOOD_STOCK_PER_HOUSEHOLD_TARGET, 0.0, 1.0),
+		food_per_household,
+		VillageGrowth.ladder_share(_settlement_present_building_ids(chunk_coord)) if loaded else 0.0,
+		_settlement_employment(settlement_id, household_ids),
+		_house_capacity_by_household(chunk_coord) if loaded else {},
+		loaded
+	))
 
 
 ## household_id -> the capacity of the house it owns in this chunk. A
@@ -4861,15 +4944,26 @@ func household_report_at(global_x: int, global_y: int) -> Dictionary:
 	var food_per_household := _food_per_household(
 		settlement_id, _market_store.market_for(settlement_id), household_count
 	)
-	var wellbeing: Dictionary = HouseholdWellbeing.assess({
-		"hunger": _resident_hunger(chunk_coord, resident_seed, food_per_household),
-		"food_per_household": food_per_household,
-		"house_capacity": capacity,
-		"household_size": household_size,
-		"wallet_balance": report["wallet_balance"],
-		"meal_price": VillageMarket.VILLAGE_LOCAL_FOOD_PRICE,
-		"ladder_share": VillageGrowth.ladder_share(_present_structure_ids_for_settlement_chunk(chunk_coord)),
-	})
+	# The SAME state builder the settlement-wide assessment uses, so the two
+	# cannot drift into measuring different things -- then the two fields a
+	# clicked house genuinely knows better: the resident's own live hunger
+	# rather than the village's larder reading, and the capacity of the
+	# building actually clicked rather than whichever house the household
+	# owns.
+	var state := _wellbeing_state_for(
+		household_id,
+		0.0,
+		food_per_household,
+		VillageGrowth.ladder_share(_present_structure_ids_for_settlement_chunk(chunk_coord)),
+		_settlement_employment(settlement_id, _households_in_settlement(settlement_id)),
+		{},
+		false
+	)
+	state["hunger"] = _resident_hunger(chunk_coord, resident_seed, food_per_household)
+	state["house_capacity"] = capacity
+	state["household_size"] = household_size
+	state["wallet_balance"] = report["wallet_balance"]
+	var wellbeing: Dictionary = HouseholdWellbeing.assess(state)
 	report["needs"] = wellbeing["needs"]
 	report["happiness"] = wellbeing["happiness"]
 	report["productivity"] = wellbeing["productivity"]

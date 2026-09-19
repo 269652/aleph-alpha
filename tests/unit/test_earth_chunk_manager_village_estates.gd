@@ -622,3 +622,111 @@ func test_two_identical_gathering_runs_from_a_cleared_carry_cut_the_same_timber(
 
 	assert_almost_eq(second, first, 0.001, "a leftover remainder survived the reset")
 	assert_true(first > 0.0, "precondition: this village cuts timber at all")
+
+
+# -- the labour pyramid reaches wellbeing ---------------------------------
+
+## docs/concept/village_estates.md mechanism 4 into
+## docs/concept/village_growth.md mechanism 4: a household that has no post
+## to fill is idle, and idleness really costs the village happiness and
+## therefore productivity.
+## The village has a farm -- so its buildings really are readable -- and
+## the farm wants husbandmen, of which it has none. Its cottagers are
+## therefore genuinely idle, which is a different fact from "nobody looked"
+## (see the last test in this block).
+func test_a_village_whose_only_works_wants_another_estate_reads_its_people_as_idle():
+	_found(6)
+	_raise("farmhouse", Vector2i(3, 3))
+	_keep_the_village_alive()
+	_step()
+	var idle_productivity: float = manager.settlement_productivity(_settlement_id)
+
+	# The SAME village, with a store and a saw pit its cottagers can work.
+	_raise("warehouse", Vector2i(12, 3))
+	_raise("sawmill", Vector2i(9, 9))
+	_step()
+	assert_true(
+		manager.settlement_productivity(_settlement_id) > idle_productivity,
+		"giving every cottager a post changed nothing about how the village works"
+	)
+
+
+## And from the other side: a village that promoted everyone out of the
+## class its own works need has idle risen households AND works nobody can
+## run -- the squeeze, now felt as unhappiness rather than only as output.
+func test_a_village_that_promoted_everyone_reads_its_risen_households_as_idle():
+	var households := _found(6)
+	_raise("warehouse", Vector2i(3, 3))
+	_raise("sawmill", Vector2i(9, 9))
+	_keep_the_village_alive()
+	_step()
+	var working: float = manager.settlement_productivity(_settlement_id)
+
+	for household_id in households:
+		manager.household_store().get_household(household_id).estate = "bauer"
+	_step()
+	assert_true(
+		manager.settlement_productivity(_settlement_id) < working,
+		"a village of husbandmen with nothing but a saw pit was just as productive"
+	)
+
+
+## The readout carries it too, so a player can see WHY a house is unhappy.
+func test_the_house_readout_reports_the_work_need():
+	var households := _found(6)
+	_raise("farmhouse", Vector2i(3, 3))  # readable, and no post for a cottager
+	_keep_the_village_alive()
+	_step()
+	var report: Dictionary = manager.household_wellbeing_report_for(households[0])
+	assert_true(report["needs"].has("work"))
+	assert_almost_eq(
+		float(report["needs"]["work"]), 0.0, 0.001, "a cottager found work on a farm"
+	)
+
+
+func test_the_same_household_with_a_post_reads_its_work_met():
+	var households := _found(1)
+	_raise("warehouse", Vector2i(3, 3))
+	_keep_the_village_alive()
+	_step()
+	var report: Dictionary = manager.household_wellbeing_report_for(households[0])
+	assert_almost_eq(float(report["needs"]["work"]), 1.0, 0.001)
+
+
+## A settlement whose buildings could not be read at all is NOT reported as
+## idle -- that would have every village in the world nobody is standing in
+## read as wholly out of work. Absence of a reading is not evidence of
+## idleness.
+func test_a_settlement_whose_buildings_are_unreadable_is_not_called_idle():
+	var quiet := EntityRef.for_settlement(Vector2i(-91, -91))
+	var npcs: Array = []
+	for i in 4:
+		npcs.append(FakeNpc.new(660_000 + i))
+	manager.record_settlement_founded_if_new(Vector2i(-91, -91), npcs)
+	var households := manager.household_ids_in_settlement(quiet)
+	assert_eq(manager._settlement_present_building_ids(Vector2i(-91, -91)), [], "precondition")
+	var report: Dictionary = manager.household_wellbeing_report_for(households[0])
+	assert_almost_eq(
+		float(report["needs"]["work"]), 1.0, 0.001,
+		"a village nobody could look at was reported out of work"
+	)
+
+
+## Both wellbeing paths -- the settlement-wide assessment and the single
+## household a click resolves to -- read the SAME employment, because both
+## build their state through one builder. Two readings of "is this
+## household in work" that could disagree is exactly the drift the shared
+## builder exists to stop.
+func test_the_settlement_assessment_and_the_single_readout_agree_on_work():
+	var households := _found(6)
+	_raise("farmhouse", Vector2i(3, 3))
+	_keep_the_village_alive()
+	_step()
+	var single: float = float(
+		manager.household_wellbeing_report_for(households[0])["needs"]["work"]
+	)
+	for assessment in manager._household_wellbeing_for_settlement(_settlement_id):
+		assert_almost_eq(
+			float(assessment["needs"]["work"]), single, 0.001,
+			"the village and the household disagree about who is in work"
+		)
