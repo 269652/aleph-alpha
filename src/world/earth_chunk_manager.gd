@@ -5875,9 +5875,25 @@ func _river_flow_boulder_feed() -> Dictionary:
 			stale.append(tile)
 	for tile in stale:
 		_river_flow_boulder_tiles.erase(tile)
+	# NEAREST FIRST, then capped -- the same answer _budgeted_load_order
+	# already gives for a capped chunk set, and SimulationScheduler for a
+	# capped creature step. The slots used to be filled in Dictionary
+	# insertion order, i.e. whichever chunk happened to paint first, so once
+	# the loaded world held more rocks than slots the water could bend
+	# around two dozen rocks off screen while the ones the player is
+	# standing next to did nothing at all (measured at the Dreisam fixture:
+	# rocks 48 tiles out dropped while rocks 100 tiles out kept their
+	# slots). The centre is the tile update() was last called with -- the
+	# same one record_water_disturbance already culls distant wakes against.
+	var centre := _disturbance_center_tile
+	var tiles: Array = _river_flow_boulder_tiles.keys()
+	tiles.sort_custom(
+		func(a: Vector2i, b: Vector2i) -> bool:
+			return Vector2(a - centre).length_squared() < Vector2(b - centre).length_squared()
+	)
 	var positions := PackedVector2Array()
 	var radii := PackedFloat32Array()
-	for tile in _river_flow_boulder_tiles:
+	for tile in tiles:
 		if positions.size() >= RIVER_FLOW_BOULDER_SLOTS:
 			break
 		positions.append(Vector2(
@@ -6761,6 +6777,37 @@ func _paint_hillshade_overlay(chunk_coord: Vector2i, chunk: Chunk) -> void:
 const LAKE_PAINT_ACROSS := 1.6
 
 
+## One rock, one rule, whatever STYLE of water its tile is painted as.
+##
+## "ONE WATER SURFACE (docs/concept/hydrology.md): rivers, lakes and the sea
+## all ride this overlay" -- _paint_river_flow_overlay's own opening comment
+## -- so a boulder standing in a pond parts its surface exactly like one
+## standing mid-stream, and the shader has a single boulder uniform set for
+## all of them. But only the flowing-river branch ever collected a rock; the
+## still-water and shore-band branches ERASED unconditionally, so every
+## boulder in a lake, a pond, a sea pocket, a river-mouth plume or a lake
+## feather silently did nothing to the water.
+##
+## That is not a rare corner: a tile can be a curated river cell AND be
+## classified a lake by the baked hydrology field at the same time (this
+## game's own Dreisam spawn is exactly that -- is_river_at_global true,
+## hydrology kind "lake"), so even a boulder the player drops in the river
+## in front of them stopped bending the water as soon as its chunk was
+## repainted. Reported live: "the boulders in the river doesn't affect
+## hydrology whirls and such correctly".
+##
+## Stores the rock's real DIAMETER, never a flag: _river_flow_boulder_feed
+## reads these values back as cm to size each rock's radius, and the push
+## reach, the eyot, the shoal, the foam and the wake all scale from that
+## radius.
+func _collect_flow_boulder(global: Vector2i) -> void:
+	var diameter_cm := flow_boulder_diameter_cm_at_global(global.x, global.y)
+	if diameter_cm > 0.0:
+		_river_flow_boulder_tiles[global] = diameter_cm
+	else:
+		_river_flow_boulder_tiles.erase(global)
+
+
 func _paint_river_flow_overlay(chunk_coord: Vector2i, chunk: Chunk) -> void:
 	if _river_flow_layer == null:
 		return
@@ -6794,7 +6841,7 @@ func _paint_river_flow_overlay(chunk_coord: Vector2i, chunk: Chunk) -> void:
 					RiverCatalog.RIVER_HALF_WIDTH_TILES,
 					generator.drift_speed_m_s_for_discharge_units(probe.get("plume_reach_discharge", 0.0))
 				)
-				_river_flow_boulder_tiles.erase(global)
+				_collect_flow_boulder(global)
 				_river_flow_layer.set_cell(
 					global, 0,
 					_terrain_renderer.atlas_coords_for_river_flow(
@@ -6847,6 +6894,11 @@ func _paint_river_flow_overlay(chunk_coord: Vector2i, chunk: Chunk) -> void:
 					half_width,
 					nearest.get("drift_speed_m_s", 0.0)
 				)
+				# Past the bleed nothing is drawn as water, so no rock here
+				# can be a flow boulder. A plain erase, never the predicate:
+				# this is the far majority of a chunk's tiles and it must
+				# stay free.
+				_river_flow_boulder_tiles.erase(global)
 				continue
 			if nearest.distance_tiles > apron:
 				var apron_hydraulics := generator.river_hydraulics_at_global(
@@ -6860,7 +6912,7 @@ func _paint_river_flow_overlay(chunk_coord: Vector2i, chunk: Chunk) -> void:
 					half_width,
 					nearest.get("drift_speed_m_s", 0.0)
 				)
-				_river_flow_boulder_tiles.erase(global)
+				_collect_flow_boulder(global)
 				_river_flow_layer.set_cell(
 					global, 0,
 					_terrain_renderer.atlas_coords_for_river_flow(
@@ -6884,10 +6936,7 @@ func _paint_river_flow_overlay(chunk_coord: Vector2i, chunk: Chunk) -> void:
 				nearest.course_bearing_deg, hydraulics.velocity_m_s, half_width,
 				nearest.get("drift_speed_m_s", 0.0)
 			)
-			if flow_boulder_at_global(global.x, global.y):
-				_river_flow_boulder_tiles[global] = true
-			else:
-				_river_flow_boulder_tiles.erase(global)
+			_collect_flow_boulder(global)
 			_river_flow_layer.set_cell(
 				global, 0,
 				_terrain_renderer.atlas_coords_for_river_flow(
