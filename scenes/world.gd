@@ -62,6 +62,7 @@ const PlayerScene = preload("res://scenes/player.tscn")
 const HealthBar = preload("res://src/gameplay/health_bar.gd")
 const HoverTargetFinder = preload("res://src/rendering/hover_target_finder.gd")
 const ProceduralItemSprite = preload("res://src/rendering/procedural_item_sprite.gd")
+const IllustratedItemArt = preload("res://src/rendering/illustrated_item_art.gd")
 const CreatureRenderer = preload("res://src/rendering/creature_renderer.gd")
 const ItemCatalog = preload("res://src/gameplay/item_catalog.gd")
 const CraftingRecipeBook = preload("res://src/gameplay/crafting_recipe_book.gd")
@@ -419,6 +420,15 @@ const SETTINGS_TOGGLE_ACTION := "toggle_settings"
 ## source of truth for what is actually said (see docs/progress.md).
 const TALK_ACTION := "talk"
 
+## The two context slots (see Keybindings' own primary_action/secondary_
+## action doc comment: "What they do is decided by whatever is under the
+## cursor and the state it is in"). Standing at a build plan, that state is a
+## wireframe, and the two things there are to do with one are raising it
+## yourself and hiring somebody to -- one key each, both named in the
+## floating prompt (see _plan_prompt_for).
+const RAISE_PLAN_ACTION := "primary_action"
+const HIRE_BUILDER_ACTION := "secondary_action"
+
 ## Where the player's key-binding overrides persist between sessions. Only
 ## overrides are stored (see Keybindings.to_dict); defaults live in code.
 const KEYBINDINGS_PATH := "user://keybindings.cfg"
@@ -624,6 +634,11 @@ var _minimap_refresh_accumulator := MINIMAP_REFRESH_INTERVAL  # refresh immediat
 var _autosave_accumulator := 0.0
 var _health_bar := HealthBar.new()
 var _item_sprite_generator := ProceduralItemSprite.new()
+## Real illustrated art for the hotbar, where a subject has any -- the
+## `icon` row, the item presented flat. Falls back to the generated
+## sprite for a subject with none (docs/concept/
+## illustrated_art_addressing.md).
+var _item_art := IllustratedItemArt.new()
 var _hotbar_slots: Array[TextureRect] = []
 var _hotbar_counts: Array[Label] = []
 ## The slot frames themselves (icon/count's parent) -- kept separately so
@@ -3114,6 +3129,17 @@ func _update_interaction_prompt(local_player: Player) -> void:
 				_interaction_prompt.visible = false
 		return
 
+	# A wireframe you are standing at, FIRST -- before the villager beside
+	# you, before a door, before a pebble. It is the least ambiguous thing in
+	# reach (you walked onto it), and it is the one thing here whose keys the
+	# player had no way at all to discover: the prompt used to read "Talk
+	# (G)" over a plan they had just drawn, because wireframes are raised in
+	# villages and somebody is nearly always in talking range.
+	var plan_prompt := _plan_prompt_for(local_player)
+	if plan_prompt != "":
+		_show_interaction_prompt(plan_prompt, local_player.position)
+		return
+
 	var npc = _chunk_manager.nearest_npc_near(local_player.position, Player.TALK_RADIUS)
 	if npc != null:
 		_show_interaction_prompt("Talk (%s)" % OS.get_keycode_string(_keybindings.keycode_for("talk")), npc.position)
@@ -3580,13 +3606,21 @@ func _unhandled_input(event: InputEvent) -> void:
 	elif event.is_action_pressed(TALK_ACTION):
 		var talker := _players.get_node_or_null(str(multiplayer.get_unique_id())) as Player
 		if talker != null:
-			# Standing at a wireframe, the interact key raises it; anywhere
-			# else it still talks. Plan first because a wireframe you are
-			# standing on is unambiguous, while an NPC in talking range is
-			# the commoner case everywhere else -- and _raise_plan_within_
-			# reach reports whether it found one, so nothing is swallowed.
-			if not _raise_plan_within_reach(talker):
-				_on_talk_pressed(talker)
+			# Talk only. Raising a wireframe used to ride this key too,
+			# offering the hire first and falling through to your own hands
+			# -- which meant that standing in a village, where wireframes are
+			# raised and a villager is nearly always in range, one press did
+			# one of three things and the player could not tell which. The
+			# two are their own keys now (below), each with its own prompt.
+			_on_talk_pressed(talker)
+	elif event.is_action_pressed(RAISE_PLAN_ACTION):
+		var raiser := _players.get_node_or_null(str(multiplayer.get_unique_id())) as Player
+		if raiser != null:
+			_raise_plan_yourself(raiser)
+	elif event.is_action_pressed(HIRE_BUILDER_ACTION):
+		var employer := _players.get_node_or_null(str(multiplayer.get_unique_id())) as Player
+		if employer != null:
+			_hire_builder_for_plan(employer)
 	elif event.is_action_pressed(PLANNER_TOGGLE_ACTION):
 		_toggle_view_mode()
 	elif event.is_action_pressed(SKILLS_TOGGLE_ACTION):
@@ -5408,70 +5442,64 @@ func _update_plan_cursor() -> void:
 ## village pays for the same building -- falls here, at the moment somebody
 ## actually builds. A player who cannot afford it is told what they are
 ## short of rather than silently refused.
-func _raise_plan_within_reach(builder: Player) -> bool:
+## The wireframe this player is standing close enough to act on, or null.
+## The one question both of the two actions below start from, and the one the
+## floating prompt asks to decide whether to offer them at all.
+func _plan_within_reach_of(builder: Player):
 	if _plan_wireframes == null or builder == null:
-		return false
+		return null
 	var player_cell := Vector2i((builder.position / TerrainRenderer.TILE_SIZE).floor())
-	var plan = PlanRaising.plan_within_reach(_build_plans, player_cell, EarthChunkManager.CHUNK_SIZE)
+	return PlanRaising.plan_within_reach(_build_plans, player_cell, EarthChunkManager.CHUNK_SIZE)
+
+
+## What the floating prompt says when a wireframe is in reach, or "" when
+## none is -- the plan's own name and BOTH keys, read live from the
+## keybindings like every other prompt here.
+##
+## Reported a third time: *"Planned nodes (e.g. pavement) still can't be
+## actually built by the player or hired NPCs... there should be tooltips
+## with hotkeys for both actions"*. The mechanism worked (this file's own
+## test_world_raising_a_plan.gd drives it end to end); what was missing was
+## any way to know it was there. Standing on a wireframe, the prompt said
+## "Talk (G)" -- wireframes are raised in villages, and a villager is nearly
+## always in range.
+func _plan_prompt_for(builder: Player) -> String:
+	var plan = _plan_within_reach_of(builder)
+	if plan == null:
+		return ""
+	return "%s\nBuild (%s)\nHire (%s)" % [
+		BuildPlan.display_name_of(plan.blueprint_id),
+		OS.get_keycode_string(_keybindings.keycode_for("primary_action")),
+		OS.get_keycode_string(_keybindings.keycode_for("secondary_action")),
+	]
+
+
+## Raise the wireframe in reach with your OWN hands. Returns whether there
+## was one to act on at all, so the caller knows whether the key was spent.
+##
+## One of the two things the single overloaded interact key used to do in an
+## order the player could not see or choose: it offered the hire first and
+## fell through to your own hands when that failed, which is why *which*
+## thing happened was unpredictable. Now each is its own key, each refuses in
+## its own terms, and neither silently becomes the other.
+func _raise_plan_yourself(builder: Player) -> bool:
+	var plan = _plan_within_reach_of(builder)
 	if plan == null:
 		return false
-	# Somebody you know well enough, standing close enough to take the job,
-	# is offered it first: hiring is the whole point of walking up to a
-	# wireframe with a villager beside you, and it does not ask the player
-	# to carry the materials themselves.
-	var hired := _chunk_manager.nearest_npc_near(builder.position, Player.TALK_RADIUS)
-	# Why the hire did not happen, for the message below -- empty when
-	# nobody was offered the job at all, which is the ordinary case and
-	# needs no explaining.
-	var hire_refused := ""
-	if hired != null and hired.identity != null and PlanRaising.can_hire_builder(
-		_npc_trust.trust_of(hired.identity.seed_value), BUILDER_WAGE, BUILDER_MINIMUM_WAGE
-	):
-		# The wage really moves before the job is taken: a villager who was
-		# never paid must not end up working.
-		if WagePayment.pay(
-			builder.wallet,
-			_chunk_manager.household_wallet_for_villager(hired.identity.seed_value),
-			int(BUILDER_WAGE)
-		):
-			var project = _open_raising_project(plan, PlanRaising.Labour.HIRED)
-			if project != null:
-				_hired_builds[project.id] = 1.0
-				_raised_build_advanced_at[project.id] = _chunk_manager.world_age_seconds()
-			_show_planner_message("%s takes the job for %d gold: %s." % [
-				hired.identity.npc_name, int(BUILDER_WAGE), BuildPlan.display_name_of(plan.blueprint_id)
-			])
-			return true
-		# A hire that cannot be paid FALLS THROUGH to your own hands rather
-		# than ending the interaction.
-		#
-		# Reported twice, and this is why: *"hiring a builder does not yet
-		# seem to work"*, then *"It's still not possible to build a planned
-		# entity like pavement"*. Standing in a village -- which is where
-		# wireframes are raised -- there is nearly always somebody within
-		# talking range, and once the player has talked to them enough to
-		# clear the trust gate, EVERY press offered them the job. When the
-		# wage could not move (an empty purse, or a villager the household
-		# store has never heard of, whose wallet is simply null) the player
-		# was told they could not pay and given nothing else -- unable to
-		# lay a paving stone they were standing on and that costs nothing.
-		hire_refused = "You cannot pay %s the %d gold they want. " % [
-			hired.identity.npc_name, int(BUILDER_WAGE)
-		]
-	var missing: Dictionary = PlanRaising.missing_materials(plan.blueprint_id, _carried_counts(builder, plan.blueprint_id))
+	var missing: Dictionary = PlanRaising.missing_materials(
+		plan.blueprint_id, _carried_counts(builder, plan.blueprint_id)
+	)
 	if not missing.is_empty():
 		var shortfall: Array[String] = []
 		for item_id in missing:
 			shortfall.append("%s x%d" % [item_id, missing[item_id]])
-		_show_planner_message("%sNeed %s to raise this %s." % [
-			hire_refused, ", ".join(shortfall), BuildPlan.display_name_of(plan.blueprint_id)
+		_show_planner_message("Need %s to raise this %s." % [
+			", ".join(shortfall), BuildPlan.display_name_of(plan.blueprint_id)
 		])
 		return true
-	# Pillar 1: planning charged nothing, and the building's own real
-	# catalog cost falls HERE. Checking that the materials are carried and
-	# then not taking them would make building by hand the cheapest path in
-	# the game. Hiring returned above without touching them -- the wage is
-	# what the player pays there, and the villager brings the material.
+	# Pillar 1: planning charged nothing, and the building's own real catalog
+	# cost falls HERE. Checking that the materials are carried and then not
+	# taking them would make building by hand the cheapest path in the game.
 	_spend_carried_materials(builder, plan.blueprint_id)
 	var mine = _open_raising_project(plan, PlanRaising.Labour.PLAYER)
 	if mine != null:
@@ -5479,10 +5507,52 @@ func _raise_plan_within_reach(builder: Player) -> bool:
 			"chunk_coord": plan.chunk_coord, "origin": plan.origin, "blueprint_id": plan.blueprint_id,
 		}
 		_raised_build_advanced_at[mine.id] = _chunk_manager.world_age_seconds()
-	_show_planner_message("%sRaising %s yourself." % [
-		hire_refused, BuildPlan.display_name_of(plan.blueprint_id)
+	_show_planner_message("Raising %s yourself." % BuildPlan.display_name_of(plan.blueprint_id))
+	return true
+
+
+## Hire the villager beside you to raise the wireframe in reach. Returns
+## whether there was one to act on at all.
+##
+## Refuses in its own terms rather than quietly doing the other thing: no
+## villager near enough, none who trusts you enough, or a wage that cannot
+## move are each ANSWERED. A key that falls through to your own labour when
+## the hire fails is a key whose outcome the player cannot predict, which is
+## exactly what was reported.
+func _hire_builder_for_plan(builder: Player) -> bool:
+	var plan = _plan_within_reach_of(builder)
+	if plan == null:
+		return false
+	var hired := _chunk_manager.nearest_npc_near(builder.position, Player.TALK_RADIUS)
+	if hired == null or hired.identity == null:
+		_show_planner_message("Nobody here to hire.")
+		return true
+	if not PlanRaising.can_hire_builder(
+		_npc_trust.trust_of(hired.identity.seed_value), BUILDER_WAGE, BUILDER_MINIMUM_WAGE
+	):
+		_show_planner_message("%s does not know you well enough to take the job." % hired.identity.npc_name)
+		return true
+	# The wage really moves before the job is taken: a villager who was never
+	# paid must not end up working.
+	if not WagePayment.pay(
+		builder.wallet,
+		_chunk_manager.household_wallet_for_villager(hired.identity.seed_value),
+		int(BUILDER_WAGE)
+	):
+		_show_planner_message("You cannot pay %s the %d gold they want." % [
+			hired.identity.npc_name, int(BUILDER_WAGE)
+		])
+		return true
+	var project = _open_raising_project(plan, PlanRaising.Labour.HIRED)
+	if project != null:
+		_hired_builds[project.id] = 1.0
+		_raised_build_advanced_at[project.id] = _chunk_manager.world_age_seconds()
+	_show_planner_message("%s takes the job for %d gold: %s." % [
+		hired.identity.npc_name, int(BUILDER_WAGE), BuildPlan.display_name_of(plan.blueprint_id)
 	])
 	return true
+
+
 
 
 ## Takes the building's own real BuildingCatalog cost out of the builder's
@@ -5754,7 +5824,7 @@ func _update_hotbar(local_player: Player) -> void:
 		if item_id != "" and count > 0:
 			# texture_for() hits a shared static cache keyed by id (no per-frame
 			# image build / GPU upload) -- item art is a pure function of the id.
-			_hotbar_slots[i].texture = _item_sprite_generator.texture_for(_sprite_id_for_item(item_id))
+			_hotbar_slots[i].texture = _item_art.texture_for(_sprite_id_for_item(item_id), "icon")
 			_hotbar_counts[i].text = str(count) if count > 1 else ""
 			_hotbar_slot_frames[i].tooltip_text = _hotbar_tooltip_text(item_id, count)
 		else:

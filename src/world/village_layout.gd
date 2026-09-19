@@ -262,10 +262,22 @@ static func skeleton(chunk_size: int, seed_value: int, is_dry := Callable()) -> 
 			"facing": Vector2i(0, 1),
 		}
 
-	# Well and stall on the plaza's south half, clear of the street row (so
-	# they never block the hall's door) and of each other.
+	# The stall on the plaza's south half, clear of the street row (so it
+	# never blocks the hall's door).
+	#
+	# The WELL stands BESIDE the square, not on it (docs/concept/
+	# village_market_square.md): a square is an open place to trade in, and
+	# since the well became solid it was taking a cell of it that nobody
+	# could even walk through -- reported with the square in shot, "The well
+	# should not be placed on the plaza". One column west of the plaza, on
+	# the row south of the street: off the paving, off the road, still at the
+	# square's own edge. Grounding nudges it to the nearest free cell if a
+	# house claimed that one, as it does for every other landmark.
+	var well_x: int = plaza.position.x - 1
+	if well_x < 0:
+		well_x = plaza.end.x  # ...or the square's east edge, when west is off the chunk
 	var landmarks := {
-		"well": Vector2i(plaza_x0 + 2, street_y + 1),
+		"well": Vector2i(well_x, street_y + 1),
 		"stall": Vector2i(plaza.end.x - 3, street_y + PLAZA_ROWS_SOUTH),
 		"gate": Vector2i(street_x0, street_y),
 	}

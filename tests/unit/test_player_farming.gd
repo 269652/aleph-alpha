@@ -95,7 +95,9 @@ func test_plant_action_on_an_already_growing_plot_tends_it_instead_of_replanting
 	var target := _target_tile()
 	_tap_plant()
 	var plot: FarmPlot = chunk_manager._farm_plots[target].plot
-	chunk_manager.step_farm_plots(plot.growth_time * FarmPlot.WATER_GRACE_FRACTION - 0.1)
+	# Half the window -- see test_farm_plot_marker's own note: a full one
+	# can ripen the crop, and a ready plot is replanted, not tended.
+	chunk_manager.step_farm_plots(plot.grace_seconds() * 0.5)
 
 	_tap_plant()
 

@@ -81,6 +81,30 @@ func arrive_at_storage() -> bool:
 	return true
 
 
+## Picks a DROPPED run back up: the goods are already in hand, so the run
+## re-enters its second walk leg directly instead of starting a first one it
+## does not need. Only from SEEKING -- never a way to skip a leg of a run
+## already in flight -- and it returns whether it took, the same shape
+## begin_approach uses.
+##
+## This exists because a village carter clocks off (docs/concept/
+## village_warehouse.md): the round is dropped at the end of a work block
+## with the wagon still loaded, and without this the next block began by
+## walking to another shelf and piling more onto a wagon that had never been
+## emptied. Measured against a real village, that left a FULL wagon -- 24
+## beams -- still aboard after ten simulated days (tools/probe_village_store_
+## round.gd).
+##
+## Deliberately does not wait out REHUNT_SECONDS the way begin_approach does:
+## that pause exists so two idle workers do not converge on the same shelf,
+## and a worker already holding the goods is not choosing a shelf at all.
+func resume_carrying() -> bool:
+	if phase != Phase.SEEKING:
+		return false
+	_enter(Phase.CARRYING)
+	return true
+
+
 ## Gives up on the current run (the source's output vanished, another worker
 ## took it, the chunk unloaded) and returns to seeking with a fresh
 ## coordination pause -- valid from APPROACHING or CARRYING, whichever leg

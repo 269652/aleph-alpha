@@ -76,7 +76,7 @@ func test_till_and_plant_refuses_to_disturb_a_growing_plot():
 func test_water_farm_plot_resets_the_neglect_clock():
 	manager.till_and_plant_farm_plot_at_global(_berlin_tile.x, _berlin_tile.y, "carrot")
 	var plot := _plot_at(_berlin_tile)
-	manager.step_farm_plots(plot.growth_time * FarmPlot.WATER_GRACE_FRACTION - 0.1)
+	manager.step_farm_plots(plot.grace_seconds() - 0.1)
 	var watered := manager.water_farm_plot_at_global(_berlin_tile.x, _berlin_tile.y)
 	assert_true(watered)
 	assert_eq(plot.time_since_watered, 0.0)
@@ -137,7 +137,7 @@ func test_a_tended_plot_reaches_harvestable_state_after_simulated_time_and_harve
 func test_an_unwatered_plot_withers_instead_of_reaching_ready():
 	manager.till_and_plant_farm_plot_at_global(_berlin_tile.x, _berlin_tile.y, "carrot")
 	var plot := _plot_at(_berlin_tile)
-	manager.step_farm_plots(plot.growth_time * FarmPlot.WATER_GRACE_FRACTION + 0.01)
+	manager.step_farm_plots(plot.grace_seconds() + 0.01)
 	assert_eq(plot.state, "withered")
 
 

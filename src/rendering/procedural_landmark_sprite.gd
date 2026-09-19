@@ -19,12 +19,18 @@ const LANDMARK_IDS: Array[String] = [
 
 const SIZES := {
 	"well": Vector2i(40, 44),
-	# Two tiles wide: a market stall is a table under an awning, about as
-	# wide as a small room. It was 52 -- 3.25 tiles on a 16-pixel grid, wider
-	# than the cottages it sells in front of. Reported live with the village
-	# in shot: "the stands are way too big". Height follows the same aspect
-	# the art was drawn at, so nothing is squashed to fit.
-	"stall": Vector2i(32, 27),
+	# A table under an awning, and STRICTLY narrower than the cottage it
+	# sells in front of -- BuildingCatalog's smallest house (house_small) is
+	# two tiles, so two tiles was equal rather than narrower. Pinned by
+	# test_procedural_landmark_sprite.gd against that catalog footprint, so a
+	# new, smaller cottage fails loudly instead of quietly leaving a stall
+	# the wider of the two.
+	#
+	# Reported twice: "the stands are way too big", which cut this from 52
+	# (3.25 tiles), and then "the stand is too big and it's placed ontop of a
+	# house". Height follows the same aspect the art was drawn at, so nothing
+	# is squashed to fit.
+	"stall": Vector2i(24, 20),
 	"gate": Vector2i(48, 52),
 	"field": Vector2i(48, 40),
 	"forge": Vector2i(44, 44),

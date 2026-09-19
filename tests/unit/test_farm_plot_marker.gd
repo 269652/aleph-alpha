@@ -64,7 +64,7 @@ func test_till_and_plant_refuses_to_disturb_a_ready_plot():
 func test_till_and_plant_succeeds_again_over_a_withered_plot():
 	add_child_autofree(marker)
 	marker.till_and_plant("carrot", 42)
-	marker.plot.advance(marker.plot.growth_time * FarmPlot.WATER_GRACE_FRACTION + 0.01)
+	marker.plot.advance(marker.plot.grace_seconds() + 0.01)
 	assert_eq(marker.plot.state, "withered")
 	var replanted := marker.till_and_plant("potato", 7)
 	assert_true(replanted)
@@ -82,7 +82,10 @@ func test_advance_ticks_the_underlying_plot():
 func test_water_resets_the_neglect_clock_while_growing():
 	add_child_autofree(marker)
 	marker.till_and_plant("carrot", 42)
-	marker.advance(marker.plot.growth_time * FarmPlot.WATER_GRACE_FRACTION - 0.1)
+	# Half the window, not all but a hair of it: a grace window is a whole
+	# night now (FarmPlot.MIN_WATER_GRACE_SECONDS), longer than some crops
+	# take to ripen, and a READY plot is not one watering resets.
+	marker.advance(marker.plot.grace_seconds() * 0.5)
 	var watered := marker.water()
 	assert_true(watered)
 	assert_eq(marker.plot.time_since_watered, 0.0)
@@ -203,7 +206,7 @@ func test_replanting_wheat_over_with_carrot_switches_away_from_bending_blades():
 func test_a_withered_wheat_plot_still_renders_blades_tinted_the_same_withered_color():
 	add_child_autofree(marker)
 	marker.till_and_plant("wheat", 42)
-	marker.advance(marker.plot.growth_time * FarmPlot.WATER_GRACE_FRACTION + 0.01)
+	marker.advance(marker.plot.grace_seconds() + 0.01)
 	assert_eq(marker.plot.state, "withered")
 	assert_true(marker.is_rendering_bending_wheat())
 

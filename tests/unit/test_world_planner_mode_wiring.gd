@@ -9,6 +9,8 @@ extends GutTest
 ## not worth the fight.
 
 const ViewMode = preload("res://src/gameplay/view_mode.gd")
+const World = preload("res://scenes/world.gd")
+const Keybindings = preload("res://src/gameplay/keybindings.gd")
 
 
 func _source() -> String:
@@ -133,7 +135,7 @@ func test_raising_opens_a_real_project_and_clears_the_plan():
 ## NpcTrustStore existing -- a hard-coded trust would make the gate
 ## decorative.
 func test_hiring_reads_the_live_trust_value():
-	var body := _function_body("_raise_plan_within_reach")
+	var body := _function_body("_hire_builder_for_plan")
 	assert_true(body.contains("_npc_trust.trust_of("), "the villager's own opinion of the player")
 	assert_true(body.contains("PlanRaising.can_hire_builder("), "through the shared gate")
 
@@ -149,7 +151,7 @@ func test_talking_is_what_earns_trust():
 ## paid must not end up working, and a player who cannot afford the wage
 ## must be told rather than quietly getting free labour.
 func test_the_wage_is_paid_before_the_job_is_taken():
-	var body := _function_body("_raise_plan_within_reach")
+	var body := _function_body("_hire_builder_for_plan")
 	assert_true(body.contains("WagePayment.pay("), "gold really moves")
 	assert_true(
 		body.contains("household_wallet_for_villager("),
@@ -222,7 +224,7 @@ func test_your_own_builds_are_stepped_with_the_other_slow_world_systems():
 ## it". Checking that they are carried and then not taking them would make
 ## building by hand the cheapest path in the game.
 func test_raising_it_yourself_really_takes_the_materials():
-	var body := _function_body("_raise_plan_within_reach")
+	var body := _function_body("_raise_plan_yourself")
 	assert_true(body.contains("_spend_carried_materials("), "the cost is really paid")
 	var spent_at := body.find("_spend_carried_materials(")
 	var raised_at := body.find("PlanRaising.Labour.PLAYER")
@@ -232,13 +234,15 @@ func test_raising_it_yourself_really_takes_the_materials():
 
 ## Hiring does NOT take them -- the wage is what the player pays, and the
 ## villager brings the material, which is the whole reason hiring is worth
-## gold.
+## gold. Now that the two are separate functions this is the plainest form
+## of the claim there is: the hiring one does not mention materials at all.
 func test_hiring_does_not_also_take_the_players_materials():
-	var body := _function_body("_raise_plan_within_reach")
-	var spent_at := body.find("_spend_carried_materials(")
-	var hired_at := body.find("_open_raising_project(plan, PlanRaising.Labour.HIRED)")
-	assert_gt(hired_at, -1, "the premise: hiring still opens a project")
-	assert_lt(hired_at, spent_at, "the hired branch returns before the materials are touched")
+	var body := _function_body("_hire_builder_for_plan")
+	assert_false(body.contains("_spend_carried_materials("), "hiring never touches the player's pack")
+	assert_true(
+		body.contains("_open_raising_project(plan, PlanRaising.Labour.HIRED)"),
+		"the premise: hiring still opens a project"
+	)
 
 
 ## Pavement asks for no labour hours, and advance_project_labor never
@@ -248,3 +252,79 @@ func test_work_that_asks_for_no_hours_is_finished_on_the_spot():
 	var body := _function_body("_open_raising_project")
 	assert_true(body.contains("PlanRaising.is_laid_by_hand("), "the size of the work decides")
 	assert_true(body.contains("finish_build_project("), "and it is laid the moment it is begun")
+
+
+# -- two keys, and a prompt that names them ---------------------------------
+#
+# Reported a third time: *"Planned nodes (e.g. pavement) still can't be
+# actually built by the player or hired NPCs... there should be tooltips with
+# hotkeys for both actions"*. Driving the path directly had always worked
+# (test_world_raising_a_plan.gd), so what was missing was the player's side
+# of it: one overloaded key that did one of three things, and a floating
+# prompt that said "Talk (G)" over a wireframe they had just drawn.
+
+
+func test_both_plan_actions_are_real_bound_keys():
+	var bindings := Keybindings.new()
+	for action_name in [World.RAISE_PLAN_ACTION, World.HIRE_BUILDER_ACTION]:
+		assert_true(
+			bindings.action_names().has(action_name),
+			"%s must be a rebindable key, not a hardcoded one" % action_name
+		)
+	assert_ne(
+		World.RAISE_PLAN_ACTION, World.HIRE_BUILDER_ACTION,
+		"two actions the player chooses between cannot share one key"
+	)
+
+
+func test_each_plan_action_is_handled_on_its_own_key():
+	var body := _function_body("_unhandled_input")
+	for pair in [
+		[World.RAISE_PLAN_ACTION, "_raise_plan_yourself("],
+		[World.HIRE_BUILDER_ACTION, "_hire_builder_for_plan("],
+	]:
+		var pressed_at := body.find('is_action_pressed(%s)' % _action_constant_for(pair[0]))
+		assert_gt(pressed_at, -1, "%s is never read" % pair[0])
+		var called_at := body.find(pair[1], pressed_at)
+		assert_gt(called_at, -1, "%s does not reach %s" % [pair[0], pair[1]])
+
+
+## Which World constant names this action -- the input handler reads the
+## constants, not the strings, so this is what the assertion above looks for.
+func _action_constant_for(action_name: String) -> String:
+	return "RAISE_PLAN_ACTION" if action_name == World.RAISE_PLAN_ACTION else "HIRE_BUILDER_ACTION"
+
+
+## The talk key talks. It used to try the wireframe first and fall through,
+## which is why standing in a village -- where wireframes are raised and a
+## villager is nearly always in range -- one press did one of three things.
+func test_the_talk_key_only_talks_now():
+	var body := _function_body("_unhandled_input")
+	var talk_at := body.find("is_action_pressed(TALK_ACTION)")
+	assert_gt(talk_at, -1, "the premise")
+	var next_branch := body.find("elif ", talk_at)
+	var talk_branch := body.substr(talk_at, next_branch - talk_at)
+	assert_false(talk_branch.contains("_raise_plan_yourself("), "raising is its own key")
+	assert_false(talk_branch.contains("_hire_builder_for_plan("), "and so is hiring")
+	assert_true(talk_branch.contains("_on_talk_pressed("))
+
+
+## The prompt offers the wireframe BEFORE the villager beside you: it is the
+## least ambiguous thing in reach (you walked onto it), and it is the one
+## whose keys the player had no other way to discover.
+func test_a_wireframe_is_prompted_before_the_villager_beside_you():
+	var body := _function_body("_update_interaction_prompt")
+	var plan_at := body.find("_plan_prompt_for(")
+	var npc_at := body.find("nearest_npc_near(")
+	assert_gt(plan_at, -1, "a wireframe in reach must be offered at all")
+	assert_gt(npc_at, -1, "the premise: the villager prompt is still there")
+	assert_lt(plan_at, npc_at, "the wireframe comes first")
+
+
+## And both keys are read live from the keybindings, like every other prompt
+## here -- a rebind must be reflected, never a stale hardcoded letter.
+func test_the_wireframe_prompt_reads_both_keys_live():
+	var body := _function_body("_plan_prompt_for")
+	assert_true(body.contains('keycode_for("primary_action")'))
+	assert_true(body.contains('keycode_for("secondary_action")'))
+	assert_true(body.contains("display_name_of("), "and it names what is planned there")

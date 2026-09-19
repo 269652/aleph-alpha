@@ -250,3 +250,39 @@ func _find_bottled_view(node: DroppedItem) -> Variant:
 		if child is BottledCreatureView:
 			return child
 	return null
+
+
+## Reported directly: *"Can you wire the real tool sprites? Axe is currently
+## using procedural sprite, but should use the illustrated one"*. An axe
+## lying on the ground is drawn from its own `ground` art -- the axe laid
+## down, which is a different picture from the icon and from the one in
+## your hand (see docs/concept/illustrated_art_addressing.md).
+func test_a_dropped_axe_uses_the_illustrated_ground_art():
+	var IllustratedItemArt = load("res://src/rendering/illustrated_item_art.gd")
+	var axe := DroppedItem.new()
+	axe.item_stack = ItemStack.new(_item_catalog.make("iron_axe"), 1)
+	add_child(axe)
+	_extra.append(axe)
+
+	var expected = IllustratedItemArt.new().texture_for("iron_axe", "ground")
+	assert_true(
+		axe.texture.get_image().get_data() == expected.get_image().get_data(),
+		"a dropped axe draws its own ground art"
+	)
+
+
+## And an item with no art of its own is untouched -- the whole reason it
+## was safe to wire every subject at once rather than one id at a time.
+## 44 of the catalog's 145 ids are still in this position.
+func test_a_dropped_item_with_no_art_still_uses_its_generated_sprite():
+	var ProceduralItemSprite = load("res://src/rendering/procedural_item_sprite.gd")
+	var lantern := DroppedItem.new()
+	lantern.item_stack = ItemStack.new(_item_catalog.make("lantern"), 1)
+	add_child(lantern)
+	_extra.append(lantern)
+
+	var expected = ProceduralItemSprite.new().texture_for("lantern")
+	assert_true(
+		lantern.texture.get_image().get_data() == expected.get_image().get_data(),
+		"nothing changes for an item with no art of its own"
+	)

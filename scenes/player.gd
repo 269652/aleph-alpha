@@ -76,6 +76,7 @@ const CaptureItemActions = preload("res://src/gameplay/capture_item_actions.gd")
 const FlyerPersonality = preload("res://src/gameplay/flyer_personality.gd")
 const AnimalFitness = preload("res://src/world/animal_fitness.gd")
 const ProceduralItemSprite = preload("res://src/rendering/procedural_item_sprite.gd")
+const IllustratedItemArt = preload("res://src/rendering/illustrated_item_art.gd")
 const BiomeClassifier = preload("res://src/world/biome_classifier.gd")
 const WorldCoordinates = preload("res://src/world/world_coordinates.gd")
 const EarthChunkGenerator = preload("res://src/world/earth_chunk_generator.gd")
@@ -742,6 +743,13 @@ var _item_wear := ItemWear.new()
 var _hotbar_action := HotbarAction.new()
 var _campfire_cooking := CampfireCooking.new()
 var _item_sprite_generator := ProceduralItemSprite.new()
+## Real illustrated art, where a subject has any (docs/concept/
+## illustrated_art_addressing.md). Context matters and the art really
+## differs: `equipped` is the thing worn on the body -- the axe on its
+## belt strap -- while `held` is the gripped pose the tool slot swings
+## during an attack. Falls back to the generated sprite for a subject
+## with no art, so nothing changes for one that has none.
+var _item_art := IllustratedItemArt.new()
 var _tile_targeting := TileTargeting.new()
 var _attack_cooldown_remaining := 0.0
 var _last_attack_input_state := false
@@ -1571,7 +1579,7 @@ func equip_armor(item) -> bool:
 	# with no call into _character_view at all, so nothing ever appeared on
 	# the rig no matter what was worn.
 	_character_view.equip_armor_slot(
-		item.equip_slot_name(), _item_sprite_generator.generate_texture(item.sprite_id)
+		item.equip_slot_name(), _item_art.texture_for(item.sprite_id, "equipped")
 	)
 	inventory_changed.emit()
 	return true
@@ -2082,7 +2090,7 @@ func equip_item(item) -> bool:
 		return false
 	equipped_item = item
 	equipment.equip(item)
-	_character_view.equip_weapon(_item_sprite_generator.generate_texture(item.sprite_id))
+	_character_view.equip_weapon(_item_art.texture_for(item.sprite_id, "held"))
 	inventory_changed.emit()
 	return true
 
@@ -2656,10 +2664,10 @@ func _interior_outfit() -> Dictionary:
 			continue
 		var worn = equipment.equipped_in(slot)
 		if worn != null:
-			armor_textures[slot] = _item_sprite_generator.generate_texture(worn.sprite_id)
+			armor_textures[slot] = _item_art.texture_for(worn.sprite_id, "equipped")
 	var weapon_texture: Texture2D = null
 	if equipped_item != null:
-		weapon_texture = _item_sprite_generator.generate_texture(equipped_item.sprite_id)
+		weapon_texture = _item_art.texture_for(equipped_item.sprite_id, "held")
 	return {"appearance": appearance, "armor_textures": armor_textures, "weapon_texture": weapon_texture}
 
 
