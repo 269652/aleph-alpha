@@ -20,6 +20,9 @@ const _FENCE_SUBJECTS := [
 	"farm_fence_north", "farm_fence_south", "farm_fence_east", "farm_fence_west",
 ]
 
+const StoneSize = preload("res://src/world/stone_size.gd")
+const TerrainRenderer = preload("res://src/rendering/terrain_renderer.gd")
+
 const _ALL_SUBJECTS := [
 	"farm", "sagewerk", "storage", "wooden_fence", "city_hall",
 	"farm_fence_north", "farm_fence_south", "farm_fence_east", "farm_fence_west",
@@ -121,12 +124,48 @@ func test_footprint_texture_is_null_for_an_unknown_subject():
 ## is deliberately not one of them any more: it scales by its own run so
 ## consecutive rails meet, which makes its band wider than the tile it
 ## stands on (see "and a run is scaled by its RUN" below).
-func test_footprint_texture_width_matches_the_tile_size():
+##
+## **Reversed 2026-09-19**, and the old rule is worth stating because the
+## concept doc specified it in as many words ("width matches the tile"): a
+## building was drawn exactly one tile wide, which made it SMALLER THAN THE
+## PERSON WHO WORKS IT. Reported live: "there's a weird shrunk farmhouse".
+## A building is drawn at the footprint its own catalog twin claims now --
+## the same art, at the same size, whether the village raised it as a real
+## multi-tile building or the player placed it on one tile.
+func test_a_building_is_drawn_at_the_footprint_its_own_catalog_twin_claims():
 	for subject in _ALL_SUBJECTS:
 		if VillageFarm.is_fence_tile(subject):
 			continue
 		var texture := sprite.footprint_texture(subject, 16)
-		assert_eq(texture.get_width(), 16, "%s footprint width should match tile_size" % subject)
+		assert_eq(
+			texture.get_width(), 16 * IllustratedStructureSprite.drawn_width_tiles(subject),
+			"%s should be drawn at its own footprint width" % subject
+		)
+
+
+## The property the report was actually about, stated the way a player sees
+## it: a building you can walk into is taller than you are. Measured off the
+## real ART inside the cell (_art_rect), never the cell, for the same reason
+## the rails are -- these sheets draw every subject with real margin around
+## it, so the cell's own size is not the building's.
+func test_a_placed_building_is_drawn_taller_than_the_person_who_works_it():
+	for subject in ["farm", "sagewerk", "storage", "city_hall"]:
+		var source := sprite.idle_texture(subject).get_image()
+		var art: Rect2i = sprite._art_rect(subject, source)
+		var texture := sprite.footprint_texture(subject, TerrainRenderer.TILE_SIZE)
+		var scale := float(texture.get_width()) / float(source.get_width())
+		assert_gt(
+			float(art.size.y) * scale, StoneSize.PLAYER_WORLD_HEIGHT_PX,
+			"%s is drawn shorter than the villager standing in it" % subject
+		)
+
+
+## A lone fence panel has no catalog twin and genuinely IS one tile of
+## fence, so the old rule is still the right answer for it -- this is what
+## keeps the change above from quietly enlarging everything with art.
+func test_a_standalone_fence_panel_is_still_drawn_one_tile_wide():
+	assert_eq(IllustratedStructureSprite.drawn_width_tiles("wooden_fence"), 1)
+	assert_eq(sprite.footprint_texture("wooden_fence", 16).get_width(), 16)
 
 
 ## No fixed pitch: each of these sheets is cut on the rows its own artist
@@ -521,11 +560,17 @@ func test_scaling_by_the_run_keeps_every_rail_flush_against_its_own_edge():
 	assert_almost_eq(_placed_wood_rect("farm_fence_west").end.x, float(_TILE), _EDGE_TOLERANCE)
 
 
-## Everything that is a whole building still scales by its own width, the
-## way it always has.
-func test_a_building_still_scales_its_width_to_the_tile():
+## Everything that is a whole building still scales by its own WIDTH, not by
+## a run -- which is what this guard is for, and is unchanged. The width it
+## scales to is its catalog footprint rather than a single tile since
+## 2026-09-19 (see test_a_building_is_drawn_at_the_footprint_its_own_catalog_
+## twin_claims: one tile made a farmhouse shorter than its own farmer).
+func test_a_building_still_scales_by_its_width_not_by_a_run():
 	for subject in ["farm", "sagewerk", "storage", "wooden_fence", "city_hall"]:
-		assert_eq(sprite.footprint_texture(subject, _TILE).get_width(), _TILE, subject)
+		assert_eq(
+			sprite.footprint_texture(subject, _TILE).get_width(),
+			_TILE * IllustratedStructureSprite.drawn_width_tiles(subject), subject
+		)
 
 
 # -- a corner post caps the runs, it does not extend past them --------------

@@ -30,10 +30,35 @@ func test_an_unknown_id_is_not_a_building_and_answers_safely():
 	assert_eq(BuildingCatalog.footprint_cells("not_a_building", Vector2i(3, 3)), [])
 
 
+## Asked directly, alongside the art for each: *"cottage 2x2; house 3x2;
+## manor 3x3"*. The manor was 4x3 -- wider than it was deep, and wider than
+## the hall -- which is what the real manor illustration then had to be
+## squeezed into; it is a square building now, and the hall keeps the 4x3
+## the town hall was always drawn at.
 func test_the_first_three_houses_have_the_footprints_the_spec_names():
-	assert_eq(BuildingCatalog.footprint_of("house_small"), Vector2i(2, 2))
-	assert_eq(BuildingCatalog.footprint_of("house_medium"), Vector2i(3, 2))
-	assert_eq(BuildingCatalog.footprint_of("house_large"), Vector2i(4, 3))
+	assert_eq(BuildingCatalog.footprint_of("house_small"), Vector2i(2, 2), "cottage")
+	assert_eq(BuildingCatalog.footprint_of("house_medium"), Vector2i(3, 2), "house")
+	assert_eq(BuildingCatalog.footprint_of("house_large"), Vector2i(3, 3), "manor")
+
+
+## And they still grow: each tier covers more ground than the one below it,
+## which is what makes the ladder a ladder rather than three sizes of one
+## thing.
+func test_each_house_tier_still_covers_more_ground_than_the_one_below():
+	var small := BuildingCatalog.footprint_of("house_small")
+	var medium := BuildingCatalog.footprint_of("house_medium")
+	var large := BuildingCatalog.footprint_of("house_large")
+	assert_gt(medium.x * medium.y, small.x * small.y)
+	assert_gt(large.x * large.y, medium.x * medium.y)
+
+
+## A manor draws a manor and a cottage draws a cottage -- never the flat
+## 25-cottage sheet, which is where "villages use scaled houses" came from.
+func test_no_house_tier_falls_back_to_a_cottage_that_is_not_one():
+	assert_eq(
+		BuildingCatalog.variant_sheet_of("house_large"), "",
+		"a manor with a missing sheet must not fall back to a page of cottages"
+	)
 
 
 ## The door sits on the footprint's bottom (south) row, at x = width / 2;
@@ -398,20 +423,18 @@ func test_an_unknown_id_still_gets_something_printable():
 # and still what a RISING building's construction row comes from; a variant
 # sheet has no construction/burning/ruined rows and never claims to.
 
-## Every village HOUSE draws from the first-tier cottage sheet. All three
-## share it deliberately: no house had a sheet of its own at all before
-## this, so declaring it for only one tier would leave a village street
-## half beautiful cottages and half procedural boxes. The scaler sizes each
-## cell to its own footprint without distorting it, so a medium or large
-## house is simply a bigger cottage until grander art for those tiers
-## lands, at which point they get their own entries and nothing else
-## changes.
-func test_every_village_house_draws_from_the_first_tier_cottage_sheet():
-	for building_id in BuildingCatalog.BUILDING_IDS:
+## house_1.png is a page of 25 COTTAGES, and the two smaller tiers fall back
+## to it. The manor does NOT, and that is the change of 2026-09-19: it has
+## manor art of its own now, and one whose sheet is missing must fall
+## through to the honest procedural placeholder rather than to a picture of
+## a cottage. "Grander art for those tiers lands, at which point they get
+## their own entries" is exactly what this test used to promise.
+func test_the_two_smaller_house_tiers_fall_back_to_the_cottage_sheet():
+	for building_id in ["house_small", "house_medium"]:
 		assert_eq(
 			BuildingCatalog.variant_sheet_of(building_id),
 			"res://assets/sprites/buildings/house_1.png",
-			"%s should draw from the village cottage sheet" % building_id
+			"%s should fall back to the village cottage sheet" % building_id
 		)
 
 
@@ -470,10 +493,13 @@ func test_every_one_of_the_twenty_five_variants_is_really_reachable():
 ## stays as the fallback below it.
 func test_a_finished_first_tier_house_is_drawn_from_its_lifecycle_variation():
 	var sheet: Dictionary = BuildingCatalog.finished_sheet_for("house_small", 42)
+	var grid := BuildingLifecycleSheet.grid_for("house_small")
 	assert_eq(sheet["path"], BuildingLifecycleSheet.sheet_for("house_small", 42))
-	assert_eq(sheet["columns"], BuildingLifecycleSheet.COLUMNS)
-	assert_eq(sheet["rows"], BuildingLifecycleSheet.ROWS)
-	var cell: Vector2i = BuildingLifecycleSheet.idle_cell_for(42)
+	# Each tier's own art carries the grid it is drawn on now -- the cottage
+	# and manor sheets are the 8x5 contract, house_1_* the 8x10 one.
+	assert_eq(sheet["columns"], int(grid["columns"]))
+	assert_eq(sheet["rows"], int(grid["rows"]))
+	var cell: Vector2i = BuildingLifecycleSheet.idle_cell_for("house_small", 42)
 	assert_eq(sheet["row"], cell.y)
 	assert_eq(sheet["column"], cell.x)
 	assert_eq(sheet["grid"], "dividers", "these sheets divide their cells with magenta lines")
@@ -496,10 +522,10 @@ func test_a_rising_house_walks_its_own_variations_build_frames():
 			sheet["path"], BuildingLifecycleSheet.sheet_for("house_small", 42),
 			"a house must rise as the house it is going to be, not as a different one"
 		)
-		var cell: Vector2i = BuildingLifecycleSheet.build_cell_for(progress)
+		var cell: Vector2i = BuildingLifecycleSheet.build_cell_for("house_small", progress)
 		assert_eq(sheet["row"], cell.y)
 		assert_eq(sheet["column"], cell.x)
-		assert_true(BuildingLifecycleSheet.BUILD_ROWS.has(sheet["row"]))
+		assert_true(BuildingLifecycleSheet.grid_for("house_small")["build_rows"].has(sheet["row"]))
 
 
 func test_a_rising_building_with_no_variations_keeps_the_old_construction_row():

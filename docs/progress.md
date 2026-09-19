@@ -10030,6 +10030,28 @@ constant's own doc comment). Built red-first end to end, merged to
   `DroppedItem`, no per-chunk sim or marker at all). Neither applies a
   Karma penalty (a fungus/seed, not an animal); flowers are excluded
   by construction (never in any group at all), needing no new check.
+- **A cottage is a cottage and a manor is a manor** (2026-09-19). ✅
+  Done — asked directly once the art landed: *"I added cottage and manor
+  sprites... please fix that villages use scaled houses for those and use
+  the real illustrations ... cottage 2x2; house 3x2; manor 3x3"*. All
+  three house tiers drew from the five `house_1_*` sheets, which
+  `concept/building.md` called deliberate only while that was the only
+  house art in the repo and said exactly what would end it. `house_small`
+  now draws `cottage_1..5`, `house_medium` keeps `house_1_1..5`,
+  `house_large` draws `manor_1..5`, and the manor also drops the flat
+  25-cottage page as a fallback — a manor whose own sheet is missing must
+  fall through to the honest placeholder, not to a picture of a cottage,
+  which is what "villages use scaled houses" described. The new sheets
+  are the older 8×5 contract rather than `house_1_*`'s 8×10 one:
+  measured, not assumed (`tools/probe_building_lifecycle_sheet.gd` plus
+  rendered cells — cottage_1 row 0 is a foundation ring, row 3 a cottage
+  on fire, manor_1 row 2 a turreted manor), so a variation set now
+  carries the grid its own art is drawn on and both sheet chains read it.
+  The manor's footprint is 3×3 as asked; it was 4×3, wider than deep and
+  as wide as the town hall. Verified by rendering each tier through the
+  real chain and slicer, not by reading the code. Also gives the carter a
+  house pool, fixing a test that was already red on `main`. Full writeup:
+  [building.md](concept/building.md).
 - **A planned node says what it offers, and each action has its own key**
   (2026-09-19). ✅ Done — reported a third time: *"Planned nodes (e.g.
   pavement) still can't be actually built by the player or hired NPCs...
@@ -26963,3 +26985,55 @@ Tests: `test_village_renderer.gd` 129/129 (three new), `test_village_layout.gd`
 and `test_procedural_landmark_sprite.gd` (six new between them),
 `test_village_farm.gd`, `test_village_pond.gd`, `test_landmark_sheet.gd`,
 `test_earth_chunk_manager_city_hall.gd` — 352 green in total.
+
+---
+
+## 2026-09-19 — A placed building was smaller than the person working in it
+
+Reported live: *"Also there's a weird shrunk farmhouse fix that too"*, with
+a screenshot of a farmhouse a villager stood head and shoulders above.
+
+**The concept doc specified the bug.** `npc_farm_production.md`'s "Real art"
+section said a placed structure's art is scaled so its "width matches the
+tile" — one factor on both axes so nothing is squashed, which was right, at
+a width of exactly one tile, which was not. Measured before changing
+anything (`tools/probe_structure_art_scale.gd`), at a 16px tile against a
+villager 1.23 tiles tall:
+
+| subject | drawn | next to a person |
+|---|---|---|
+| `farm` | 0.85 × 0.70 tiles | **0.57×** |
+| `sagewerk` | 0.88 × 0.82 tiles | 0.67× |
+| `storage` | 0.83 × 0.89 tiles | 0.72× |
+| `city_hall` | 0.84 × 0.96 tiles | 0.78× |
+
+Not one of them reached the height of the person who works it. The
+farmhouse, the one that got reported, was barely half.
+
+✅ **A placeable is drawn at the footprint its own catalog twin claims.**
+`IllustratedStructureSprite.drawn_width_tiles` reads
+`BuildingCatalog.footprint_of` — the village raises the very same sheets as
+real multi-tile buildings (`BuildingCatalog`'s `farmhouse` row is literally
+*"npc_farm_production.md's Farm, raised as a real building rather than a
+single tile"*), so the answer already existed and is read rather than
+restated. One building cannot now be two sizes depending on who placed it.
+The farmhouse draws 2.56 × 2.10 tiles, **1.71×** a person.
+
+✅ **Nothing with no twin grew.** A lone `wooden_fence` panel genuinely is
+one tile of fence and still draws as one — which is what keeps this from
+quietly enlarging every subject that happens to have art.
+
+**This is the picture, not the ground.** A placed structure still occupies
+its single tile; placement, collision and the fence gate are untouched. A
+real tree already draws a canopy far wider than the tile its trunk stands
+on, and the hive added two days ago draws above its own tile for the same
+reason.
+
+Two existing tests pinned the old rule and were rewritten rather than
+deleted, each keeping the invariant it was really guarding:
+`test_a_building_still_scales_its_width_to_the_tile` became
+`..._scales_by_its_width_not_by_a_run` (the fence pass's guard, still
+true), and the overlay-wiring test now checks the drawn footprint instead
+of the tile.
+
+Tests: `test_illustrated_structure_sprite.gd` 41/41 (3 new).

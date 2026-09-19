@@ -492,10 +492,47 @@ different cottages AND each one is the same house it was while it was
 rising (`idle_cell_for`).
 
 A building picks ONE of its declared variation sheets from its own seed and
-keeps it for life (`BuildingLifecycleSheet.sheet_for`). Declared today for
-all three village houses, sharing the five first-tier cottage sheets
-(`house_1_1.png` .. `house_1_5.png`), for the same reason given for the flat
-variant sheet above. Nothing that is not a home has one.
+keeps it for life (`BuildingLifecycleSheet.sheet_for`). Nothing that is not a
+home has one.
+
+**One tier, one building (2026-09-19).** All three house tiers used to share
+the five `house_1_*` sheets, which this doc called deliberate *"until grander
+art for those tiers lands, at which point they get their own entries"*. It
+landed, and was asked for directly: *"I added cottage and manor sprites...
+please fix that villages use scaled houses for those and use the real
+illustrations ... cottage 2x2; house 3x2; manor 3x3"*.
+
+| tier | footprint | art |
+|---|---|---|
+| `house_small` | 2×2 | `cottage_1.png` .. `cottage_5.png` |
+| `house_medium` | 3×2 | `house_1_1.png` .. `house_1_5.png` |
+| `house_large` | 3×3 | `manor_1.png` .. `manor_5.png` |
+
+The manor was 4×3 — wider than it was deep, and as wide as the town hall,
+which is the shape the real manor illustration then had to squeeze into. The
+footprints given above are also what the art's own aspect ratios want: a
+rendered cottage cell is square, a house cell is half again as wide as deep,
+and a manor cell is very nearly square.
+
+**A variation set carries the grid its own art is drawn on.** The cottage and
+manor sheets are the OLDER 8×5 contract at the top of this section, not
+`house_1_*`'s 8×10 one — measured, not assumed
+(`tools/probe_building_lifecycle_sheet.gd` reads five divider-separated row
+bands and eight columns off `cottage_1.png`, and the rendered cells confirm
+the rows: row 0 a foundation ring, row 2 a finished building, row 3 one on
+fire). So `BuildingLifecycleSheet.grid_for` says a set's columns, rows, build
+rows and idle rows, and `build_cell_for`/`idle_cell_for` and both sheet
+chains read it rather than assuming every set is the richest one. A cottage
+therefore rises through its sheet's single eight-stage construction row where
+a medium house still walks all 24 of its own frames, and a finished cottage
+or manor is only ever drawn from its idle row — never the burning or ruined
+ones beside it.
+
+The manor is also **off the flat variant sheet**: `house_1.png` is a page of
+25 cottages, so a manor whose own sheet were missing would fall back to a
+picture of a cottage, which is exactly what "villages use scaled houses"
+described. It falls through to the honest procedural placeholder instead. The
+two smaller tiers keep it — for a cottage that page IS cottage art.
 
 Which picture a building actually gets is one ordered chain, best first
 (`BuildingCatalog.finished_sheet_chain` / `construction_sheet_chain`), each
