@@ -1133,3 +1133,100 @@ func _closest_approach(target, destination: Vector2, ticks := 600) -> float:
 		target._process(1.0)
 		closest = minf(closest, target.position.distance_to(destination))
 	return closest
+
+
+# -- a villager does not walk through a wall ---------------------------------
+#
+# Reported live: "houses should also block NPCs and animals". An NpcMarker
+# is a Sprite2D that moves by one position.move_toward per frame, so the
+# StaticBody2D on a wall has never had any effect on it.
+#
+# It SLIDES rather than stopping dead, which is what the same collision
+# would do to the player (move_and_slide) and what this marker needs to
+# keep working: there is no pathfinding here, only a straight line to the
+# target, so a villager who stopped the instant they touched a wall would
+# stand there for good -- and their own front door is reached by walking
+# at the house. Blocked straight on, they try the two axes separately and
+# take whichever is open, which carries them along the wall to the door.
+#
+# A DOOR and a FLOOR are walkable pieces, so going indoors is unaffected.
+
+class StubWorldWithWall:
+	extends StubWorld
+	var blocking_tiles: Dictionary = {}
+	func piece_blocks_movement_at_global(x: int, y: int) -> bool:
+		return blocking_tiles.has(Vector2i(x, y))
+
+
+func _wall_marker(world) -> NpcMarker:
+	var marker := NpcMarker.new()
+	marker.identity = NpcIdentity.new(1)
+	add_child_autofree(marker)
+	marker.setup(world, 16)
+	return marker
+
+
+func test_open_ground_is_stepped_into_unchanged():
+	var world := StubWorldWithWall.new()
+	var marker := _wall_marker(world)
+	assert_eq(marker._slid_along_walls(Vector2(8, 8), Vector2(24, 8)), Vector2(24, 8))
+
+
+func test_a_villager_slides_along_a_wall_instead_of_stopping_dead():
+	var world := StubWorldWithWall.new()
+	# The step's destination is a wall, and so is the cell due east of the
+	# start -- but due south is open, so that is the part of the step that
+	# survives.
+	world.blocking_tiles[Vector2i(1, 1)] = true
+	world.blocking_tiles[Vector2i(1, 0)] = true
+	var marker := _wall_marker(world)
+	var slid: Vector2 = marker._slid_along_walls(Vector2(8, 8), Vector2(24, 24))
+	assert_eq(
+		slid, Vector2(8, 24),
+		"blocked east, open south: the villager keeps the part of the step that is open"
+	)
+
+
+func test_a_villager_boxed_in_on_both_axes_stays_put():
+	var world := StubWorldWithWall.new()
+	world.blocking_tiles[Vector2i(1, 0)] = true
+	world.blocking_tiles[Vector2i(1, 1)] = true
+	world.blocking_tiles[Vector2i(0, 1)] = true
+	var marker := _wall_marker(world)
+	assert_eq(marker._slid_along_walls(Vector2(8, 8), Vector2(24, 24)), Vector2(8, 8))
+
+
+func test_a_world_that_knows_no_pieces_never_blocks_a_villager():
+	var marker := _wall_marker(StubWorld.new())
+	assert_eq(marker._slid_along_walls(Vector2(8, 8), Vector2(24, 24)), Vector2(24, 24))
+
+
+## The rails a farmhouse raises round its beds stop a villager for the same
+## reason they stop an animal (CreatureMarker._fence_blocks_movement):
+## asked for directly, "fences should have a hitbox blocking player and
+## NPCs as well". A rail is a LINE on one edge of its tile, so what the
+## world is asked is whether the STEP crosses it -- never whether a tile
+## carries a rail, which would make the ring round a field unwalkable
+## ground rather than a fence.
+class StubWorldWithFence:
+	extends StubWorld
+	var blocks_step := false
+	var asked_step: Array = []
+	func fence_blocks_step_global(from_x: int, from_y: int, to_x: int, to_y: int) -> bool:
+		asked_step = [Vector2i(from_x, from_y), Vector2i(to_x, to_y)]
+		return blocks_step
+
+
+func test_a_villager_does_not_step_across_a_farm_rail():
+	var world := StubWorldWithFence.new()
+	world.blocks_step = true
+	var marker := _wall_marker(world)
+	assert_eq(marker._slid_along_walls(Vector2(8, 8), Vector2(24, 8)), Vector2(8, 8))
+	assert_eq(world.asked_step, [Vector2i(0, 0), Vector2i(1, 0)], "it asks about the step it takes")
+
+
+func test_a_villager_walks_on_when_no_rail_is_crossed():
+	var world := StubWorldWithFence.new()
+	world.blocks_step = false
+	var marker := _wall_marker(world)
+	assert_eq(marker._slid_along_walls(Vector2(8, 8), Vector2(24, 8)), Vector2(24, 8))
