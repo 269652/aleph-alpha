@@ -388,6 +388,43 @@ the code as it landed. See [progress.md](../progress.md) for the ledger.
   stands here" is the union of the ground, the loaded chunk's buildings and
   the persisted construction ledger — which is what lets the charter gate
   work for a village nobody is standing in.
+- ✅ **The guild relief chest** — `GuildRelief`, live. A settlement's own
+  guild sets goods aside while the village is supplied and releases them
+  when it is not, relieving BEFORE it banks (a guild that banked first
+  would take from a shelf its own members were about to be found short
+  of). The chest holds at most one real season's demand — the horizon the
+  fuel term itself swings over — takes only `SET_ASIDE_SHARE` of the shelf
+  so it never strips the village it protects, and banks nothing while its
+  own people go short. Chests live on the `Institution`, so
+  `InstitutionStorePersistence` carries them with no new file; a save from
+  before they existed reads back with an empty one. **A village with no
+  guild is untouched end to end**, test-pinned rather than assumed.
+
+  The emergent half is the point: paired with the seasonal fuel term, a
+  guild village banks firewood through the summer, when the basket asks for
+  half as much and there is a real surplus, and burns it through the
+  winter, when the basket asks for double. The mechanism has no idea what a
+  season is.
+- ✅ **An unmet basket is something a village can build its way out of.**
+  `EstateShortfall` reports what the estates went short of in the ONE
+  shortfall shape `SettlementBuildDecision` already reads, so that decision
+  walks `bread -> bakery -> flour -> mill -> wheat -> farm`, and `beer ->
+  brewery`, with no new code on its side. Without it the ladder was
+  decorative and the gap was real: village fields grow wheat and nothing
+  else (`VillageFarm.CROP_BY_OCCUPATION`), the growth ladder raises no mill
+  and no bakery, and nothing made beer at all — so no household could ever
+  meet its station and nobody could ever rise. Estates short of the same
+  good ask ONCE with the sum, so the worst-first ranking sees one big ask
+  rather than three small ones, and the food token is never reported
+  because nothing can be built to produce "any food" and `SettlementFood`
+  already asks for the staple.
+- ✅ **A staffed works really produces.** `StaffedProduction` spends the
+  pyramid: a staffed brewery brews `beer` out of the village's own grain
+  (so beer and bread compete for one harvest), and a staffed sawmill brings
+  more usable timber in from the same hands. The batch rate is derived
+  rather than chosen — a works must supply several times more households
+  than it employs, or it costs the village more labour than it returns.
+
 - ✅ **The readout.** Clicking a house names the household's estate beside
   its resident and carries one line for the thing a player actually
   watches: *Rising to Husbandman*, *Falling to Husbandman*, *Leaving the
@@ -469,23 +506,6 @@ which is exactly how these hid.
   is a strictly better input for the `food` and `community` terms; wiring
   it in means moving numbers a live construction loop is calibrated
   against, so it is deliberately a separate pass.
-- ✅ **The guild relief chest** — `GuildRelief`, live. A settlement's own
-  guild sets goods aside while the village is supplied and releases them
-  when it is not, relieving BEFORE it banks (a guild that banked first
-  would take from a shelf its own members were about to be found short
-  of). The chest holds at most one real season's demand — the horizon the
-  fuel term itself swings over — takes only `SET_ASIDE_SHARE` of the shelf
-  so it never strips the village it protects, and banks nothing while its
-  own people go short. Chests live on the `Institution`, so
-  `InstitutionStorePersistence` carries them with no new file; a save from
-  before they existed reads back with an empty one. **A village with no
-  guild is untouched end to end**, test-pinned rather than assumed.
-
-  The emergent half is the point: paired with the seasonal fuel term, a
-  guild village banks firewood through the summer, when the basket asks for
-  half as much and there is a real surplus, and burns it through the
-  winter, when the basket asks for double. The mechanism has no idea what a
-  season is.
 - ⬜ **Patronage across estates.** Specified above; waits on
   [npc_social_life.md](npc_social_life.md)'s own trust dimension.
 - ⬜ **Interiors and art per estate.** A household that rises moves up a
