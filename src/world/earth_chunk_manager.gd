@@ -6849,6 +6849,27 @@ const LAKE_PAINT_ACROSS := 1.6
 ## reads these values back as cm to size each rock's radius, and the push
 ## reach, the eyot, the shoal, the foam and the wake all scale from that
 ## radius.
+## The cross-section reading for a cell of a dug pond: how close it is to
+## the pond's own bank, in the same across-fraction units every other kind
+## of water writes (|across| under 1 is water, 1 is the bank line).
+##
+## A pond has no channel and no spill to solve a contour from -- it is a
+## flat-bottomed hole of a fixed size -- so its rim is read straight off
+## its own shape: a cell with dry ground orthogonally beside it is a bank
+## cell and reads near the waterline, a cell surrounded by its own water
+## reads as open water. On a 3x2 pond every cell is a rim cell, which is
+## correct: a pond that small IS all shore.
+const POND_RIM_ACROSS := 0.75
+
+
+func _pond_across_at(global: Vector2i) -> float:
+	for step in [Vector2i(1, 0), Vector2i(-1, 0), Vector2i(0, 1), Vector2i(0, -1)]:
+		var neighbour: Vector2i = global + step
+		if not is_pond_at_global(neighbour.x, neighbour.y):
+			return POND_RIM_ACROSS
+	return 0.0
+
+
 func _collect_flow_boulder(global: Vector2i) -> void:
 	var diameter_cm := flow_boulder_diameter_cm_at_global(global.x, global.y)
 	if diameter_cm > 0.0:
@@ -6874,6 +6895,26 @@ func _paint_river_flow_overlay(chunk_coord: Vector2i, chunk: Chunk) -> void:
 			# shader draws the same smooth waterline, ink and feather it
 			# gives a river bank, and only ripples. First playtest: "ponds
 			# have a very different art style", "unify river and pond water".
+			# A dug pond is the ONE water the generator cannot know about --
+			# it is a village/player MODIFICATION, and everything below asks
+			# the generated world -- so it is answered before the probe.
+			# Without this a pond fell through to "nothing is water here"
+			# and had its overlay cell erased, leaving the flat `pond_water`
+			# tile as the only blue on screen: reported live as "it's a
+			# procedural entity layn over and not properly dug / built
+			# pond". It rides the one water surface now, like every lake and
+			# every sea pocket, so it gets the same waterline, ink edge,
+			# shore feather and ripples.
+			if is_pond_at_global(global.x, global.y):
+				_write_flow_across_texel(
+					global, _pond_across_at(global), 0.0, 0.0,
+					RiverCatalog.RIVER_HALF_WIDTH_TILES, 0.0
+				)
+				_collect_flow_boulder(global)
+				_river_flow_layer.set_cell(
+					global, 0, _terrain_renderer.atlas_coords_for_river_flow(0.0, false)
+				)
+				continue
 			var probe := generator.hydrology_at_global(global.x, global.y)
 			var still_across: float = probe["lake_across"]
 			# The SAME still-water rule is_water_at_global reads (see

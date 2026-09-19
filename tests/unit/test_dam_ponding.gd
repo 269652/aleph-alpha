@@ -565,3 +565,40 @@ func test_the_players_water_state_asks_for_the_pond_depth():
 		body.contains("pond_depth"),
 		"and fold it into the water_depth the swim decision is made from"
 	)
+
+
+## Reported live: "it's a procedural entity layn over and not properly dug
+## / built pond". The blue a player sees on a pond is the `pond_water`
+## MODIFICATION tile and nothing else -- a flat square laid over the grass.
+##
+## Every other kind of water in this game rides one surface: "ONE WATER
+## SURFACE (docs/concept/hydrology.md): rivers, lakes and the sea all ride
+## this overlay", which is what gives them a waterline, an ink edge, a
+## shore feather and ripples. _paint_river_flow_overlay works that out from
+## `generator.hydrology_at_global` and `generator.nearest_river_at` -- and
+## the generator is the one thing that cannot know about a dug pond, since
+## a pond is a player/village modification. So a pond fell through to the
+## "nothing is water here" branch and had its overlay cell ERASED.
+func test_a_dug_pond_is_painted_on_the_water_surface():
+	# Ground the surface does not paint at all -- past the river's own shore
+	# bleed, so the cell really is empty before the pond is dug.
+	var tile := Vector2i.MAX
+	for dx in range(20, 300):
+		var candidate := river_tile + Vector2i(dx, 0)
+		if not manager.is_chunk_loaded(manager._chunk_coord_for_tile(candidate)):
+			continue
+		if manager.is_water_at_global(candidate.x, candidate.y):
+			continue
+		if river_flow_layer.get_cell_source_id(candidate) == -1:
+			tile = candidate
+			break
+	assert_ne(tile, Vector2i.MAX, "the premise: unpainted dry ground must be findable")
+	var chunk_coord: Vector2i = manager._chunk_coord_for_tile(tile)
+
+	assert_true(manager.build_at_global(tile.x, tile.y, VillagePond.POND_TILE_ID))
+	manager._paint_river_flow_overlay(chunk_coord, manager._loaded_chunks[chunk_coord])
+
+	assert_ne(
+		river_flow_layer.get_cell_source_id(tile), -1,
+		"a dug pond must be painted by the one water surface, not left to a flat tile"
+	)
