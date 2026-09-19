@@ -26,6 +26,10 @@ const BUTTON_NORMAL := Color(0.19, 0.21, 0.27, 1.0)
 const BUTTON_HOVER := Color(0.27, 0.30, 0.38, 1.0)
 const BUTTON_PRESSED := Color(0.14, 0.15, 0.2, 1.0)
 
+## The player's own UI scale (see docs/concept/hud.md "UI scale"), applied to
+## every font size this theme sets.
+const UiScale = preload("res://src/ui/ui_scale.gd")
+
 const CORNER_RADIUS := 6
 const BORDER_WIDTH := 1
 const BASE_FONT_SIZE := 14
@@ -61,9 +65,15 @@ func tooltip_stylebox() -> StyleBoxFlat:
 
 ## Builds the Theme resource assigned to every UI root Control (menus, windows,
 ## HUD). Styles PanelContainer/Button/Label/LineEdit consistently.
-func build_theme() -> Theme:
+##
+## `scale` is the player's UI scale (see UiScale). It covers every widget that
+## does NOT override its own font size; the HUD widgets that do register their
+## base size with World._scaled_font instead. The default of 1.0 is a no-op, so
+## an unscaled build_theme() is still exactly the theme that shipped.
+func build_theme(scale: float = UiScale.DEFAULT_SCALE) -> Theme:
+	var font_size := UiScale.font_size(BASE_FONT_SIZE, scale)
 	var theme := Theme.new()
-	theme.default_font_size = BASE_FONT_SIZE
+	theme.default_font_size = font_size
 
 	theme.set_stylebox("panel", "PanelContainer", panel_stylebox())
 
@@ -73,10 +83,10 @@ func build_theme() -> Theme:
 	theme.set_stylebox("focus", "Button", button_stylebox("hover"))
 	theme.set_color("font_color", "Button", TEXT)
 	theme.set_color("font_hover_color", "Button", ACCENT)
-	theme.set_font_size("font_size", "Button", BASE_FONT_SIZE)
+	theme.set_font_size("font_size", "Button", font_size)
 
 	theme.set_color("font_color", "Label", TEXT)
-	theme.set_font_size("font_size", "Label", BASE_FONT_SIZE)
+	theme.set_font_size("font_size", "Label", font_size)
 
 	var field := _flat(Color(0.09, 0.1, 0.13, 1.0), 6.0, PANEL_BORDER, BORDER_WIDTH)
 	theme.set_stylebox("normal", "LineEdit", field)
@@ -85,7 +95,7 @@ func build_theme() -> Theme:
 
 	theme.set_stylebox("panel", "TooltipPanel", tooltip_stylebox())
 	theme.set_color("font_color", "TooltipLabel", TEXT)
-	theme.set_font_size("font_size", "TooltipLabel", BASE_FONT_SIZE)
+	theme.set_font_size("font_size", "TooltipLabel", font_size)
 
 	return theme
 
