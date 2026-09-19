@@ -4497,6 +4497,7 @@ func household_report_at(global_x: int, global_y: int) -> Dictionary:
 	report["needs"] = wellbeing["needs"]
 	report["happiness"] = wellbeing["happiness"]
 	report["productivity"] = wellbeing["productivity"]
+	report.merge(estate_report_for_household(household_id, chunk_coord), true)
 	return report
 
 
@@ -16881,6 +16882,35 @@ func _apply_village_growth_decision(chunk_coord: Vector2i) -> void:
 		_construction_project_store, _market_store.market_for(settlement_id),
 		chunk_coord, origin, next_building, owner_id, _recipe_book
 	)
+
+
+## What the house readout is handed about one household's STANDING
+## (docs/concept/village_estates.md mechanisms 1 and 3):
+## `{"estate": String, "estate_verdict": String}`.
+##
+## The verdict is re-derived here rather than stored when the ladder was
+## last walked, so the readout can never show a stale one -- village_growth
+## .md's pillar 5, held: it IS the simulation, read. A building nobody owns
+## carries neither field, which is what makes the panel show no standing
+## line for a commons.
+func estate_report_for_household(household_id: String, chunk_coord: Vector2i) -> Dictionary:
+	var household = _household_store.get_household(household_id) if household_id != "" else null
+	if household == null:
+		return {"estate": "", "estate_verdict": ""}
+	var settlement_id := EntityRef.for_settlement(chunk_coord)
+	var satisfaction: Dictionary = _settlement_estate_satisfaction.get(settlement_id, {})
+	var estate: String = household.estate
+	return {
+		"estate": estate,
+		"estate_verdict": EstateAscension.verdict({
+			"estate": estate,
+			"subsistence": EstateConsumption.subsistence_satisfaction(estate, satisfaction),
+			"station": EstateConsumption.station_satisfaction(estate, satisfaction),
+			"present_building_ids": _settlement_present_building_ids(chunk_coord),
+			"good_run_days": household.good_run_days,
+			"short_run_days": household.short_run_days,
+		}),
+	}
 
 
 ## One household's standing, or the founding estate for an id the store has

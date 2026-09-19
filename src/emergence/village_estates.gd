@@ -152,6 +152,26 @@ const BASE_TAX_PER_DAY := {
 }
 
 
+## What a player is shown an estate as. The German names are the historical
+## ones and are what this table is grounded in (see the file header); the
+## readout uses their nearest real English equivalents, because a panel is
+## not a glossary.
+##
+## "" for an unknown estate rather than a made-up name: a readout that
+## invents a title for standing nobody holds is worse than one that says
+## nothing.
+const _DISPLAY_NAMES := {
+	"kossaet": "Cottager",
+	"bauer": "Husbandman",
+	"handwerker": "Craftsman",
+	"buerger": "Burgher",
+}
+
+
+static func display_name_of(estate: String) -> String:
+	return _DISPLAY_NAMES.get(estate, "")
+
+
 ## The estate's position on the ladder; -1 for anything that is not one.
 static func rank_of(estate: String) -> int:
 	return ESTATE_IDS.find(estate)

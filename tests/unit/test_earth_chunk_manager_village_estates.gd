@@ -248,3 +248,45 @@ func test_a_destitute_village_pays_nothing_into_the_purse():
 	assert_almost_eq(
 		NpcEconomy.purse_of(_market()), before, 0.0001, "a village with nothing paid tax anyway"
 	)
+
+
+# -- what the house readout is handed -------------------------------------
+
+## household_report_at needs a real building on real loaded ground, which
+## costs a terrain load. What it needs from the ESTATE layer is this one
+## helper, so that is what is checked here -- the report itself just carries
+## what this returns.
+func test_a_households_readout_carries_its_real_standing():
+	var households := _found(3)
+	manager.household_store().get_household(households[0]).estate = "handwerker"
+	var estate_report: Dictionary = manager.estate_report_for_household(households[0], CHUNK)
+	assert_eq(String(estate_report["estate"]), "handwerker")
+
+
+func test_a_household_holding_its_standing_reads_as_holding():
+	var households := _found(3)
+	_market().add_stock(VillageEstates.FUEL_ITEM_ID, 900)
+	_market().add_stock("herb", 900)
+	_step()
+	var estate_report: Dictionary = manager.estate_report_for_household(households[0], CHUNK)
+	assert_eq(String(estate_report["estate_verdict"]), EstateAscension.HOLD)
+
+
+## A starved cottager with its run already banked reads as leaving, which
+## is exactly what the panel then says out loud.
+func test_a_starved_cottager_reads_as_on_its_way_out():
+	var households := _found(3)
+	for household_id in households:
+		manager.household_store().get_household(household_id).short_run_days = (
+			EstateAscension.DECLINE_DWELL_DAYS
+		)
+	manager.step_settlements(0.0)  # no time passes; only the reading is taken
+	var estate_report: Dictionary = manager.estate_report_for_household(households[0], CHUNK)
+	assert_eq(String(estate_report["estate_verdict"]), EstateAscension.DESCEND)
+
+
+func test_a_building_nobody_owns_carries_no_standing_at_all():
+	_found(2)
+	var estate_report: Dictionary = manager.estate_report_for_household("", CHUNK)
+	assert_eq(String(estate_report["estate"]), "")
+	assert_eq(String(estate_report["estate_verdict"]), "")
