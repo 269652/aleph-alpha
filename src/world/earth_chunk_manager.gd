@@ -15232,11 +15232,11 @@ func _spawn_building_node(chunk_coord: Vector2i, origin_local: Vector2i, record:
 	# has been declared but not dropped in yet simply does not stop the
 	# chain, so nothing ever regresses to a box for want of one file.
 	var texture := _first_texture_of(
-		BuildingCatalog.finished_sheet_chain(building_id, seed_value), footprint.x
+		BuildingCatalog.finished_sheet_chain(building_id, seed_value), footprint.x, building_id
 	)
 	if texture == null:
 		texture = _building_placeholder_sprite.footprint_texture(
-			footprint, seed_value, TerrainRenderer.ART_TILE_SIZE
+			footprint, seed_value, TerrainRenderer.ART_TILE_SIZE, building_id
 		)
 	sprite.texture = texture
 	sprite.scale = Vector2.ONE * ArtResolution.SPRITE_SCALE
@@ -18114,11 +18114,16 @@ func _sync_construction_site(chunk_coord: Vector2i, project) -> void:
 	# The same art resolution the FINISHED building uses (see
 	# _spawn_building_node): a site drawn at a different pixels-per-world-
 	# unit would visibly jump the moment it completed.
-	var texture := _first_texture_of(chain, footprint.x)
+	# Named, so a site is drawn at the same size the finished building will
+	# be -- a cottage that grew to full size the moment it completed would
+	# be the same jump this comment's own line above guards against.
+	var texture := _first_texture_of(chain, footprint.x, building_id)
 	if texture == null:
 		# No sheet yet: the finished placeholder, faded -- a ghost of what
 		# is coming, growing solid with the work.
-		texture = _building_placeholder_sprite.footprint_texture(footprint, 0, TerrainRenderer.ART_TILE_SIZE)
+		texture = _building_placeholder_sprite.footprint_texture(
+			footprint, 0, TerrainRenderer.ART_TILE_SIZE, building_id
+		)
 		sprite.modulate = Color(1.0, 1.0, 1.0, 0.35 + 0.65 * progress)
 	sprite.texture = texture
 	sprite.scale = Vector2.ONE * ArtResolution.SPRITE_SCALE
@@ -18135,11 +18140,13 @@ func _sync_construction_site(chunk_coord: Vector2i, project) -> void:
 ## way, but the art then carries DETAIL_MULTIPLIER pixels per world unit --
 ## the same detail per world unit the ground it stands on already paints
 ## at. A finely drawn sheet at TILE_SIZE would be thrown away.
-func _first_texture_of(chain: Array, footprint_width_tiles: int) -> ImageTexture:
+func _first_texture_of(
+	chain: Array, footprint_width_tiles: int, building_id: String = ""
+) -> ImageTexture:
 	for entry in chain:
 		var texture := _illustrated_structure_sprite.footprint_frame_texture(
 			entry["path"], entry["columns"], entry["rows"], entry["row"], entry["column"],
-			TerrainRenderer.ART_TILE_SIZE, footprint_width_tiles, entry["grid"]
+			TerrainRenderer.ART_TILE_SIZE, footprint_width_tiles, entry["grid"], building_id
 		)
 		if texture != null:
 			return texture

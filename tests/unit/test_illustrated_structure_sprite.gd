@@ -744,3 +744,52 @@ func test_an_even_grid_frame_keeps_the_measured_column_pitch():
 	var frame := sprite.idle_texture("storage").get_image()
 	var cell: int = 1536 / 8
 	assert_eq(frame.get_width(), cell - IllustratedStructureSprite.CELL_INSET * 2)
+
+
+# -- the house tiers read as a ladder, in the real art ----------------------
+#
+# Asked directly, with the street in shot: *"also scale down cottage to be
+# smaller than house"*. Measured before changing anything
+# (tools/probe_building_fit.gd): a cottage drew 26.0 x 26.0 world px against
+# a house's 39.5 x 24.0 -- the smallest tier was the tallest building on the
+# street, because both are drawn at the same share of their own plot width
+# and the art's aspect does the rest (a cottage square, a house low and
+# wide).
+#
+# Asked of the REAL sheets through the REAL chain, not of the catalog's
+# arithmetic: what a player compares is the picture.
+
+
+func _drawn_size_of(building_id: String, seed_value: int) -> Vector2i:
+	var footprint := BuildingCatalog.footprint_of(building_id)
+	var chosen: Dictionary = BuildingCatalog.finished_sheet_for(building_id, seed_value)
+	var texture: ImageTexture = sprite.footprint_frame_texture(
+		String(chosen["path"]), int(chosen["columns"]), int(chosen["rows"]),
+		int(chosen["row"]), int(chosen["column"]), 32, footprint.x,
+		String(chosen["grid"]), building_id
+	)
+	assert_not_null(texture, "%s draws nothing at all" % building_id)
+	return Vector2i(texture.get_width(), texture.get_height())
+
+
+func test_a_cottage_really_draws_smaller_than_a_house():
+	for seed_value in [3, 29, 91]:
+		var cottage := _drawn_size_of("house_small", seed_value)
+		var house := _drawn_size_of("house_medium", seed_value)
+		assert_lt(cottage.x, house.x, "seed %d: a cottage is narrower" % seed_value)
+		assert_lt(cottage.y, house.y, "seed %d: and shorter -- it was taller" % seed_value)
+
+
+func test_a_house_really_draws_smaller_than_a_manor():
+	for seed_value in [3, 29, 91]:
+		var house := _drawn_size_of("house_medium", seed_value)
+		var manor := _drawn_size_of("house_large", seed_value)
+		assert_lt(house.y, manor.y, "seed %d: a manor looms over a house" % seed_value)
+		assert_lte(house.x, manor.x, "seed %d" % seed_value)
+
+
+## Still a building standing on its plot rather than a model of one -- the
+## same floor PLOT_MARGIN_SHARE is already pinned against.
+func test_a_cottage_still_fills_most_of_its_plot():
+	var cottage := _drawn_size_of("house_small", 29)
+	assert_gt(float(cottage.x) / float(2 * 32), 0.6, "a cottage this small is a doll's house")
