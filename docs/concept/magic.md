@@ -469,12 +469,30 @@ the exponential reserved for the act of fixing a *new* design into a book:
   it stays honest when bread moves: the anchor is a ratio between two things
   the game already prices, not a third price pulled from nowhere.
 
-The resulting scale, at the shop's current 4-gold meal and the fixed book's
-three spells, is deliberately capital-purchase-shaped: Minor Heal 128 gold
-(32 meals, about what a small-house blueprint costs), Frost Lance 236 (59
-meals, about a cottage). Real money to a new character, an afternoon's trade
-to an established one. Every one of those numbers falls out of the formula;
-none is typed in.
+**What the anchor constant encodes is a weight class, not a price**, and
+three claims asserted against the live `Shop.CATALOG` are what stop it being
+a matter of taste: the cheapest lesson in the world costs more than any tool
+or weapon a merchant sells; the cheapest lesson lands between the cheapest
+and the dearest house blueprint; and the dearest lesson exceeds the dearest
+thing on any shelf. Together they admit roughly **10..39** meals per power
+unit and nothing outside — deliberately a **wide** band, because a weight
+class is a wide thing and a tight one would claim a precision this design
+does not have.
+
+The resulting scale, at the shop's current 4-gold meal, spans real ground:
+Farsight 123 gold (about a small-house blueprint), Minor Heal 128, Frost
+Lance 236 (about a cottage), and — only from an archmage, see
+[mage_guild.md](mage_guild.md) — Call Wisp at 785, more than twice the
+dearest thing any merchant stocks. Real money to a new character; a genuine
+expedition for the deep end. Every one of those numbers falls out of the
+formula; none is typed in.
+
+An earlier version of this section claimed the band was 10..20 and that *no*
+spell should cost more than the dearest shelf item. Both were true of a
+three-spell starter book and stopped being true the moment the catalogue
+grew real tier-3 magic — correctly so, since a lesson from an archmage
+should not be purchasable at a market stall. The claim moved rather than the
+number.
 
 ### The refusal is the feature
 
