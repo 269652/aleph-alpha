@@ -3,454 +3,535 @@
   "peak_ceiling_dbfs": -1.0,
   "surfaces": {
     "default": {
-      "achieved_peak_dbfs": -7.27,
-      "achieved_rms_dbfs": -24.61,
+      "achieved_lufs": -33.12,
+      "achieved_peak_dbfs": -14.37,
+      "achieved_rms_dbfs": -31.71,
       "clips": [
         {
           "file": "default_00.ogg",
+          "lufs": -19.2,
           "peak_dbfs": -0.53,
           "rms_dbfs": -17.81,
           "seconds": 0.135
         },
         {
           "file": "default_01.ogg",
+          "lufs": -19.15,
           "peak_dbfs": -0.77,
           "rms_dbfs": -17.79,
           "seconds": 0.132
         },
         {
           "file": "default_02.ogg",
+          "lufs": -19.04,
           "peak_dbfs": -0.67,
           "rms_dbfs": -17.61,
           "seconds": 0.132
         },
         {
           "file": "default_03.ogg",
+          "lufs": -19.31,
           "peak_dbfs": -0.63,
           "rms_dbfs": -17.95,
           "seconds": 0.132
         },
         {
           "file": "default_04.ogg",
+          "lufs": -18.91,
           "peak_dbfs": -0.37,
           "rms_dbfs": -17.42,
           "seconds": 0.132
         },
         {
           "file": "default_05.ogg",
+          "lufs": -19.34,
           "peak_dbfs": -0.68,
           "rms_dbfs": -18.02,
           "seconds": 0.132
         },
         {
           "file": "default_06.ogg",
+          "lufs": -18.84,
           "peak_dbfs": -0.76,
           "rms_dbfs": -17.3,
           "seconds": 0.132
         },
         {
           "file": "default_07.ogg",
+          "lufs": -19.58,
           "peak_dbfs": -0.88,
           "rms_dbfs": -18.28,
           "seconds": 0.132
         },
         {
           "file": "default_08.ogg",
+          "lufs": -18.78,
           "peak_dbfs": -0.51,
           "rms_dbfs": -17.2,
           "seconds": 0.132
         }
       ],
-      "gain_db": -6.9,
-      "peak_capped": false
+      "gain_db": -14.0,
+      "peak_capped": false,
+      "raw_lufs": -19.12
     },
     "forest": {
-      "achieved_peak_dbfs": -5.73,
-      "achieved_rms_dbfs": -24.63,
+      "achieved_lufs": -33.16,
+      "achieved_peak_dbfs": -17.73,
+      "achieved_rms_dbfs": -36.63,
       "clips": [
         {
           "file": "forest_00.ogg",
+          "lufs": -31.3,
           "peak_dbfs": -17.06,
           "rms_dbfs": -34.59,
           "seconds": 0.397
         },
         {
           "file": "forest_01.ogg",
+          "lufs": -31.61,
           "peak_dbfs": -17.2,
           "rms_dbfs": -34.84,
           "seconds": 0.397
         },
         {
           "file": "forest_02.ogg",
+          "lufs": -32.56,
           "peak_dbfs": -18.89,
           "rms_dbfs": -35.65,
           "seconds": 0.397
         },
         {
           "file": "forest_03.ogg",
+          "lufs": -30.86,
           "peak_dbfs": -17.15,
           "rms_dbfs": -34.17,
           "seconds": 0.397
         },
         {
           "file": "forest_04.ogg",
+          "lufs": -31.7,
           "peak_dbfs": -17.3,
           "rms_dbfs": -35.01,
           "seconds": 0.397
         },
         {
           "file": "forest_05.ogg",
+          "lufs": -35.3,
           "peak_dbfs": -18.33,
           "rms_dbfs": -38.51,
           "seconds": 0.422
         },
         {
           "file": "forest_06.ogg",
+          "lufs": -34.6,
           "peak_dbfs": -17.17,
           "rms_dbfs": -37.82,
           "seconds": 0.397
         },
         {
           "file": "forest_07.ogg",
+          "lufs": -31.97,
           "peak_dbfs": -16.83,
           "rms_dbfs": -35.27,
           "seconds": 0.397
         }
       ],
-      "gain_db": 11.1,
-      "peak_capped": false
+      "gain_db": -0.9,
+      "peak_capped": false,
+      "raw_lufs": -32.26
     },
     "grass": {
+      "achieved_lufs": -33.13,
       "achieved_peak_dbfs": -12.29,
       "achieved_rms_dbfs": -24.57,
       "clips": [
         {
           "file": "grass_00.ogg",
+          "lufs": -21.13,
           "peak_dbfs": -0.74,
           "rms_dbfs": -12.59,
           "seconds": 0.243
         },
         {
           "file": "grass_01.ogg",
+          "lufs": -21.2,
           "peak_dbfs": -0.77,
           "rms_dbfs": -12.8,
           "seconds": 0.243
         },
         {
           "file": "grass_02.ogg",
+          "lufs": -21.15,
           "peak_dbfs": -0.69,
           "rms_dbfs": -12.39,
           "seconds": 0.243
         },
         {
           "file": "grass_03.ogg",
+          "lufs": -20.92,
           "peak_dbfs": -0.43,
           "rms_dbfs": -12.75,
           "seconds": 0.243
         },
         {
           "file": "grass_04.ogg",
+          "lufs": -21.25,
           "peak_dbfs": -0.67,
           "rms_dbfs": -12.3,
           "seconds": 0.243
         },
         {
           "file": "grass_05.ogg",
+          "lufs": -20.99,
           "peak_dbfs": -0.61,
           "rms_dbfs": -12.91,
           "seconds": 0.243
         },
         {
           "file": "grass_06.ogg",
+          "lufs": -21.34,
           "peak_dbfs": -0.85,
           "rms_dbfs": -12.22,
           "seconds": 0.243
         },
         {
           "file": "grass_07.ogg",
+          "lufs": -20.9,
           "peak_dbfs": -0.29,
           "rms_dbfs": -12.94,
           "seconds": 0.243
         },
         {
           "file": "grass_08.ogg",
+          "lufs": -21.35,
           "peak_dbfs": -0.66,
           "rms_dbfs": -12.19,
           "seconds": 0.243
         }
       ],
       "gain_db": -12.0,
-      "peak_capped": false
+      "peak_capped": false,
+      "raw_lufs": -21.13
     },
     "rock": {
-      "achieved_peak_dbfs": -4.0,
-      "achieved_rms_dbfs": -24.64,
+      "achieved_lufs": -33.17,
+      "achieved_peak_dbfs": -13.5,
+      "achieved_rms_dbfs": -34.14,
       "clips": [
         {
           "file": "rock_00.ogg",
+          "lufs": -21.22,
           "peak_dbfs": -1.65,
           "rms_dbfs": -21.49,
           "seconds": 0.186
         },
         {
           "file": "rock_01.ogg",
+          "lufs": -19.34,
           "peak_dbfs": -7.0,
           "rms_dbfs": -20.08,
           "seconds": 0.104
         },
         {
           "file": "rock_02.ogg",
+          "lufs": -22.75,
           "peak_dbfs": -7.09,
           "rms_dbfs": -23.47,
           "seconds": 0.248
         },
         {
           "file": "rock_03.ogg",
+          "lufs": -20.13,
           "peak_dbfs": -1.57,
           "rms_dbfs": -20.53,
           "seconds": 0.155
         },
         {
           "file": "rock_04.ogg",
+          "lufs": -23.22,
           "peak_dbfs": -3.71,
           "rms_dbfs": -23.68,
           "seconds": 0.241
         },
         {
           "file": "rock_05.ogg",
+          "lufs": -19.03,
           "peak_dbfs": -1.89,
           "rms_dbfs": -19.8,
           "seconds": 0.226
         },
         {
           "file": "rock_06.ogg",
+          "lufs": -18.02,
           "peak_dbfs": -0.7,
           "rms_dbfs": -18.26,
           "seconds": 0.188
         },
         {
           "file": "rock_07.ogg",
+          "lufs": -19.76,
           "peak_dbfs": -1.47,
           "rms_dbfs": -20.19,
           "seconds": 0.23
         },
         {
           "file": "rock_08.ogg",
+          "lufs": -23.41,
           "peak_dbfs": -8.12,
           "rms_dbfs": -24.32,
           "seconds": 0.192
         },
         {
           "file": "rock_09.ogg",
+          "lufs": -20.23,
           "peak_dbfs": -5.83,
           "rms_dbfs": -21.57,
           "seconds": 0.204
         }
       ],
-      "gain_db": -3.3,
-      "peak_capped": false
+      "gain_db": -12.8,
+      "peak_capped": false,
+      "raw_lufs": -20.37
     },
     "sand": {
-      "achieved_peak_dbfs": -1.0,
-      "achieved_rms_dbfs": -25.97,
+      "achieved_lufs": -33.13,
+      "achieved_peak_dbfs": -11.1,
+      "achieved_rms_dbfs": -36.07,
       "clips": [
         {
           "file": "sand_00.ogg",
+          "lufs": -22.67,
           "peak_dbfs": -0.93,
           "rms_dbfs": -25.47,
           "seconds": 0.443
         },
         {
           "file": "sand_01.ogg",
+          "lufs": -21.51,
           "peak_dbfs": -1.07,
           "rms_dbfs": -24.14,
           "seconds": 0.32
         },
         {
           "file": "sand_02.ogg",
+          "lufs": -22.91,
           "peak_dbfs": -0.41,
           "rms_dbfs": -25.81,
           "seconds": 0.302
         },
         {
           "file": "sand_03.ogg",
+          "lufs": -23.27,
           "peak_dbfs": -0.36,
           "rms_dbfs": -25.94,
           "seconds": 0.406
         },
         {
           "file": "sand_04.ogg",
+          "lufs": -23.54,
           "peak_dbfs": -0.83,
           "rms_dbfs": -26.13,
           "seconds": 0.34
         },
         {
           "file": "sand_05.ogg",
+          "lufs": -19.62,
           "peak_dbfs": -0.0,
           "rms_dbfs": -22.33,
           "seconds": 0.329
         }
       ],
-      "gain_db": -1.0,
-      "peak_capped": true
+      "gain_db": -11.1,
+      "peak_capped": false,
+      "raw_lufs": -22.03
     },
     "snow": {
-      "achieved_peak_dbfs": -1.08,
-      "achieved_rms_dbfs": -26.89,
+      "achieved_lufs": -33.09,
+      "achieved_peak_dbfs": -7.48,
+      "achieved_rms_dbfs": -33.29,
       "clips": [
         {
           "file": "snow_00.ogg",
+          "lufs": -36.23,
           "peak_dbfs": -14.68,
           "rms_dbfs": -35.44,
           "seconds": 0.498
         },
         {
           "file": "snow_01.ogg",
+          "lufs": -34.82,
           "peak_dbfs": -10.86,
           "rms_dbfs": -34.4,
           "seconds": 0.638
         },
         {
           "file": "snow_02.ogg",
+          "lufs": -34.53,
           "peak_dbfs": -8.58,
           "rms_dbfs": -33.7,
           "seconds": 0.611
         },
         {
           "file": "snow_03.ogg",
+          "lufs": -33.87,
           "peak_dbfs": -11.28,
           "rms_dbfs": -33.24,
           "seconds": 0.667
         },
         {
           "file": "snow_04.ogg",
+          "lufs": -36.43,
           "peak_dbfs": -10.24,
           "rms_dbfs": -36.17,
           "seconds": 0.627
         },
         {
           "file": "snow_05.ogg",
+          "lufs": -30.76,
           "peak_dbfs": -9.93,
           "rms_dbfs": -31.17,
           "seconds": 0.531
         },
         {
           "file": "snow_06.ogg",
+          "lufs": -39.1,
           "peak_dbfs": -17.29,
           "rms_dbfs": -38.16,
           "seconds": 0.703
         },
         {
           "file": "snow_07.ogg",
+          "lufs": -32.78,
           "peak_dbfs": -11.58,
           "rms_dbfs": -32.83,
           "seconds": 0.656
         }
       ],
-      "gain_db": 7.5,
-      "peak_capped": true
+      "gain_db": 1.1,
+      "peak_capped": false,
+      "raw_lufs": -34.19
     },
     "underwater": {
-      "achieved_peak_dbfs": -5.5,
-      "achieved_rms_dbfs": -24.54,
+      "achieved_lufs": -33.1,
+      "achieved_peak_dbfs": -14.1,
+      "achieved_rms_dbfs": -33.14,
       "clips": [
         {
           "file": "underwater_00.ogg",
+          "lufs": -19.98,
           "peak_dbfs": -0.0,
           "rms_dbfs": -19.81,
           "seconds": 0.268
         },
         {
           "file": "underwater_01.ogg",
+          "lufs": -19.78,
           "peak_dbfs": -0.8,
           "rms_dbfs": -19.58,
           "seconds": 0.268
         },
         {
           "file": "underwater_02.ogg",
+          "lufs": -17.45,
           "peak_dbfs": -1.13,
           "rms_dbfs": -18.15,
           "seconds": 0.262
         },
         {
           "file": "underwater_03.ogg",
+          "lufs": -18.75,
           "peak_dbfs": -0.0,
           "rms_dbfs": -18.81,
           "seconds": 0.231
         },
         {
           "file": "underwater_04.ogg",
+          "lufs": -19.58,
           "peak_dbfs": -0.28,
           "rms_dbfs": -18.87,
           "seconds": 0.24
         }
       ],
-      "gain_db": -5.5,
-      "peak_capped": false
+      "gain_db": -14.1,
+      "peak_capped": false,
+      "raw_lufs": -19.0
     },
     "wood": {
-      "achieved_peak_dbfs": -12.33,
-      "achieved_rms_dbfs": -24.59,
+      "achieved_lufs": -33.15,
+      "achieved_peak_dbfs": -11.63,
+      "achieved_rms_dbfs": -23.89,
       "clips": [
         {
           "file": "wood_00.ogg",
+          "lufs": -22.07,
           "peak_dbfs": -0.76,
           "rms_dbfs": -12.82,
           "seconds": 0.284
         },
         {
           "file": "wood_01.ogg",
+          "lufs": -21.94,
           "peak_dbfs": -0.8,
           "rms_dbfs": -12.9,
           "seconds": 0.284
         },
         {
           "file": "wood_02.ogg",
+          "lufs": -22.06,
           "peak_dbfs": -0.59,
           "rms_dbfs": -12.6,
           "seconds": 0.284
         },
         {
           "file": "wood_03.ogg",
+          "lufs": -21.83,
           "peak_dbfs": -0.59,
           "rms_dbfs": -12.99,
           "seconds": 0.284
         },
         {
           "file": "wood_04.ogg",
+          "lufs": -22.25,
           "peak_dbfs": -0.7,
           "rms_dbfs": -12.56,
           "seconds": 0.284
         },
         {
           "file": "wood_05.ogg",
+          "lufs": -21.82,
           "peak_dbfs": -0.78,
           "rms_dbfs": -13.16,
           "seconds": 0.284
         },
         {
           "file": "wood_06.ogg",
+          "lufs": -22.34,
           "peak_dbfs": -0.53,
           "rms_dbfs": -12.46,
           "seconds": 0.284
         },
         {
           "file": "wood_07.ogg",
+          "lufs": -21.73,
           "peak_dbfs": -0.75,
           "rms_dbfs": -13.26,
           "seconds": 0.284
         },
         {
           "file": "wood_08.ogg",
+          "lufs": -22.44,
           "peak_dbfs": -0.8,
           "rms_dbfs": -12.39,
           "seconds": 0.284
         }
       ],
-      "gain_db": -11.8,
-      "peak_capped": false
+      "gain_db": -11.1,
+      "peak_capped": false,
+      "raw_lufs": -22.05
     }
   },
+  "target_lufs": -33.133738744040606,
   "target_rms_dbfs": -24.59,
-  "why_this_target": "grass.ogg measures -12.59 dBFS RMS and was accepted at volume_db -12.0, so this is the one footstep level already signed off on."
+  "why_this_target": "grass.ogg measures -12.59 dBFS RMS and was accepted at volume_db -12.0, so this is the one footstep level already signed off on. Pools are matched by K-weighted loudness (ITU-R BS.1770) rather than RMS: reported live as 'pavement footsteps are way too loud' while every pool sat within 2.5 dB of a common RMS, because RMS under-reads a transient and a hard surface is all transient."
 }
