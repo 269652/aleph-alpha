@@ -571,7 +571,12 @@ func _process(delta: float) -> void:
 	var running := _is_chasing_at_a_run(quarry_target)
 	condition.advance(delta, economy.needs.hunger if economy != null else 0.0, running)
 	var before := position
-	position = position.move_toward(target, (RUN_SPEED if running else WALK_SPEED) * delta)
+	# Walls are asked about here, once, on the step actually being taken --
+	# the same ask-before-you-step shape CreatureMarker uses for rails and
+	# walls, and at the same cost.
+	position = _slid_along_walls(
+		position, position.move_toward(target, (RUN_SPEED if running else WALK_SPEED) * delta)
+	)
 	_update_animation(position - before)
 	# Hidden once actually arrived home on a "home"-tagged entry -- a house
 	# is now a real whole-building entity (docs/concept/building.md
@@ -1018,6 +1023,67 @@ var _at_home := false
 ## after the marker moved, so every villager's walk animation sat frozen in
 ## IDLE despite visibly walking (reported: "NPCs don't have walk or swim
 ## animation").
+## `to`, with any part of the step that walks into a real wall taken out of
+## it -- and nothing else changed.
+##
+## Reported live: "houses should also block NPCs and animals". An NpcMarker
+## is a Sprite2D that moves by one position.move_toward per frame, so the
+## StaticBody2D on a wall (EarthChunkManager._spawn_piece_collision) has
+## never had the slightest effect on one and villagers walked through their
+## own houses.
+##
+## It SLIDES rather than stopping dead, which is both what the same
+## collision does to the player (move_and_slide) and what this marker
+## actually needs: there is no pathfinding here, only a straight line at
+## the target, so a villager who stopped the instant they touched a wall
+## would stand against it for good -- and their own front door is reached
+## by walking AT the house. Blocked head-on, they keep whichever single
+## axis of the step is open, which carries them along the wall to the door.
+## Boxed in on both, they stay put, exactly as _step's own "nowhere to go"
+## already means stand still.
+##
+## Asks the world the same question the wall's own collision body is
+## spawned from, so what stops a player and what stops a villager can never
+## disagree. A DOOR and a FLOOR are walkable pieces, so going indoors is
+## untouched.
+func _slid_along_walls(from: Vector2, to: Vector2) -> Vector2:
+	if _world == null or from == to:
+		return to
+	if (
+		not _world.has_method("piece_blocks_movement_at_global")
+		and not _world.has_method("fence_blocks_step_global")
+	):
+		return to
+	if not _blocked_step(from, to):
+		return to
+	var along_x := Vector2(to.x, from.y)
+	if not is_equal_approx(to.x, from.x) and not _blocked_step(from, along_x):
+		return along_x
+	var along_y := Vector2(from.x, to.y)
+	if not is_equal_approx(to.y, from.y) and not _blocked_step(from, along_y):
+		return along_y
+	return from
+
+
+## Whether stepping from `from` to `point` is refused -- by a wall standing
+## ON the destination, or by a farm rail standing on the LINE between the
+## two (docs/concept/village_farms.md, "The rail stands on the inner
+## edge"). The two are different questions on purpose: a wall is a tile you
+## cannot be in, a rail is an edge you cannot cross, and the ring round a
+## field stays ordinary ground a villager may walk along.
+func _blocked_step(from: Vector2, point: Vector2) -> bool:
+	var tile := Vector2i(floori(point.x / _tile_size), floori(point.y / _tile_size))
+	if (
+		_world.has_method("piece_blocks_movement_at_global")
+		and _world.piece_blocks_movement_at_global(tile.x, tile.y)
+	):
+		return true
+	if not _world.has_method("fence_blocks_step_global"):
+		return false
+	var here := Vector2i(floori(from.x / _tile_size), floori(from.y / _tile_size))
+	return _world.fence_blocks_step_global(here.x, here.y, tile.x, tile.y)
+
+
 func _update_animation(moved: Vector2) -> void:
 	if _character_view == null:
 		return

@@ -12792,6 +12792,32 @@ func lake_depth_meters_at_global(global_x: int, global_y: int) -> float:
 ## API takes a cell list rather than a mask (FlowerPatch.block_cells, which
 ## also clears anything already seeded there and refuses every later
 ## rooting and seed-fall).
+## The water mask with every BUILT cell folded in -- what may not grow
+## anything at all, as opposed to `_ground_cover_blockers`, which is water
+## alone and stays that way because the aquatic sims use it as an
+## INCLUSION filter.
+##
+## Reported live with two screenshots: "TherE's a shroom growing on a
+## house ... should be cleared before placing" and "Also potatoes growing
+## on pavement". _built_local_cells has always named exactly the ground
+## nothing may grow on -- a real building piece, a laid road, a village
+## farm's own rail -- and TallGrass and FlowerPatch were handed it through
+## block_cells at chunk load. The sims that only ever learned about water
+## were not, so a roof and a market square read as plain "grassland" to
+## them. Measured on a build-then-reload: 82 mushrooms and crops seeded
+## straight back onto paved ground.
+func _ground_cover_and_built_blockers(
+	water_blockers: PackedByteArray, built_cells: Array, width: int
+) -> PackedByteArray:
+	var blockers := water_blockers.duplicate()
+	for cell in built_cells:
+		var local: Vector2i = cell
+		var index := local.y * width + local.x
+		if index >= 0 and index < blockers.size():
+			blockers[index] = 1
+	return blockers
+
+
 func _water_cells_from(blockers: PackedByteArray, width: int) -> Array:
 	var cells: Array = []
 	for index in blockers.size():
@@ -14515,6 +14541,24 @@ func _clear_vegetation_on_cells(
 ## first -- build_at_global doesn't check occupancy the way
 ## BuildingPlacement.can_place does, so overwriting a wall with a door must
 ## not leave the old wall's collision behind.
+## Whether a real building piece on this tile stops something walking onto
+## it -- a wall or a window, but never a door or a floor.
+##
+## The SAME question _sync_piece_collision asks before it spawns the tile's
+## StaticBody2D, from the same two BuildingPiece facts, so what stops the
+## PLAYER (physics) and what stops an NPC or an animal (this query) can
+## never disagree about a given piece.
+##
+## It exists because a marker is a Sprite2D that moves by setting
+## `position`: no collision body in the world has ever had the slightest
+## effect on one, so the walls a player cannot pass were walked straight
+## through by every animal in the village. Reported live: "Horses still
+## aren't blocked by houses".
+func piece_blocks_movement_at_global(global_x: int, global_y: int) -> bool:
+	var tile_id := modification_at_global(global_x, global_y)
+	return BuildingPiece.has_piece(tile_id) and not BuildingPiece.is_walkable(tile_id)
+
+
 func _sync_piece_collision(global_cell: Vector2i, tile_id: String) -> void:
 	_remove_piece_collision(global_cell)
 	if BuildingPiece.has_piece(tile_id) and not BuildingPiece.is_walkable(tile_id):
@@ -15837,9 +15881,14 @@ func _load_chunk(chunk_coord: Vector2i) -> void:
 	# answer, on the chunk-load path this project has already spent fifteen
 	# FPS rounds defending.
 	var water_blockers := _ground_cover_blockers(chunk, chunk_coord)
+	# Water OR built, for everything that GROWS. The aquatic sims below keep
+	# water_blockers itself, since for them it is an inclusion filter.
+	var growth_blockers := _ground_cover_and_built_blockers(
+		water_blockers, built_cells, chunk.width
+	)
 	_grass_sims[chunk_coord] = TallGrass.new(
 		hash("%d_%d_tall_grass" % [chunk_coord.x, chunk_coord.y]), chunk.width, chunk.height, chunk.biome,
-		water_blockers
+		growth_blockers
 	)
 	_grass_sims[chunk_coord].block_cells(built_cells)
 	_grass_sprites[chunk_coord] = {}
@@ -15878,7 +15927,7 @@ func _load_chunk(chunk_coord: Vector2i) -> void:
 	for crop_id in WILD_CROP_IDS:
 		var sim := WildCropPatch.new(
 			crop_id, hash("%d_%d_wild_crop" % [chunk_coord.x, chunk_coord.y]),
-			chunk.width, chunk.height, chunk.biome, water_blockers
+			chunk.width, chunk.height, chunk.biome, growth_blockers
 		)
 		crop_sims[crop_id] = sim
 		# Already carrying the current season, so a chunk streamed in during
@@ -15896,7 +15945,7 @@ func _load_chunk(chunk_coord: Vector2i) -> void:
 	# already fruiting on arrival.
 	var mushroom_sim := WildMushroomPatch.new(
 		hash("%d_%d_mushroom" % [chunk_coord.x, chunk_coord.y]), chunk.width, chunk.height, chunk.biome,
-		water_blockers
+		growth_blockers
 	)
 	_mushroom_sims[chunk_coord] = mushroom_sim
 	_mushroom_markers[chunk_coord] = _mushroom_renderer.spawn_markers(
@@ -16060,7 +16109,7 @@ func _load_chunk(chunk_coord: Vector2i) -> void:
 	# the instant a chunk loads.
 	_worm_patches[chunk_coord] = EarthwormPatch.new(
 		hash("%d_%d_earthworms" % [chunk_coord.x, chunk_coord.y]), chunk.width, chunk.height, chunk.biome,
-		water_blockers
+		growth_blockers
 	)
 	_worm_sprites[chunk_coord] = {}
 
@@ -16069,7 +16118,7 @@ func _load_chunk(chunk_coord: Vector2i) -> void:
 	# chunk's lifetime, exactly like the earthworm burrows just above.
 	_ant_colonies[chunk_coord] = AntColony.new(
 		hash("%d_%d_ants" % [chunk_coord.x, chunk_coord.y]), chunk.width, chunk.height, chunk.biome,
-		water_blockers
+		growth_blockers
 	)
 	# The visible counterpart: one static AntMoundMarker per mound cell, so a
 	# colony is actually somewhere a player can SEE rather than a pure

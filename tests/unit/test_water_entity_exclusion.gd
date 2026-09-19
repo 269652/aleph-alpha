@@ -13,6 +13,7 @@ extends GutTest
 const EarthChunkManager = preload("res://src/world/earth_chunk_manager.gd")
 const EarthChunkGenerator = preload("res://src/world/earth_chunk_generator.gd")
 const GeoCoordinates = preload("res://src/world/geo_coordinates.gd")
+const BuildingCatalog = preload("res://src/gameplay/building_catalog.gd")
 
 var tile_map_layer: TileMapLayer
 var entities_parent: Node2D
@@ -274,3 +275,72 @@ func test_no_grass_grows_on_the_painted_river_bank():
 				on_water += 1
 	_free_river(bundle)
 	assert_eq(on_water, 0, "%d grass patches stand on cells drawn as water" % on_water)
+
+
+# -- nor on anything the village has built -----------------------------------
+#
+# Reported live, twice, with screenshots: "TherE's a shroom growing on a
+# house ... should be cleared before placing", and "Also potatoes growing on
+# pavement".
+#
+# Same shape as the water above, one mask over. _built_local_cells already
+# names every cell nothing may grow on -- a real building piece, a laid
+# road, a village farm's own rail -- and TallGrass and FlowerPatch are
+# handed it via block_cells at chunk load. WildCropPatch, WildMushroomPatch,
+# AntColony and EarthwormPatch never were: they only ever learned about
+# water, so a house roof and the market square's paving are still
+# "grassland" to them.
+
+## The reported scenario exactly: the ground is BUILT on, then the chunk is
+## (re)loaded and the ground-cover sims seed from scratch. Modifications are
+## restored before the sims are constructed, so a house roof and a paved
+## square are there to be seen -- the sims simply never looked.
+func test_nothing_grows_on_what_has_been_built():
+	var layer := TileMapLayer.new()
+	var entities := Node2D.new()
+	var creatures := Node2D.new()
+	var subject = EarthChunkManager.new(layer, entities, creatures)
+	var geo := GeoCoordinates.new()
+	var tile: Vector2i = geo.tile_for_coordinate(
+		48.2, 11.5, EarthChunkGenerator.WORLD_WIDTH_TILES, EarthChunkGenerator.WORLD_HEIGHT_TILES
+	)
+	subject.update(tile)
+	var chunk_coord: Vector2i = subject._chunk_coord_for_tile(tile)
+
+	# Pave over every cell that currently grows something, so the reload
+	# below has the exact conflict the screenshots show.
+	var paved := {}
+	for cell in subject._mushroom_sims[chunk_coord].get_site_cells():
+		paved[chunk_coord * EarthChunkManager.CHUNK_SIZE + (cell as Vector2i)] = true
+	for crop_id in subject._wild_crop_sims[chunk_coord]:
+		for cell in subject._wild_crop_sims[chunk_coord][crop_id].get_patch_cells():
+			paved[chunk_coord * EarthChunkManager.CHUNK_SIZE + (cell as Vector2i)] = true
+	for g in paved:
+		subject.build_at_global((g as Vector2i).x, (g as Vector2i).y, "road")
+
+	# Force the chunk to unload and load again, so every sim re-seeds with
+	# the built ground already on record.
+	subject.update(tile + Vector2i(EarthChunkManager.CHUNK_SIZE * 20, 0))
+	subject.update(tile)
+
+	var offenders: Array = []
+	if subject._mushroom_sims.has(chunk_coord):
+		for cell in subject._mushroom_sims[chunk_coord].get_site_cells():
+			var g2: Vector2i = chunk_coord * EarthChunkManager.CHUNK_SIZE + cell
+			if paved.has(g2):
+				offenders.append("mushroom at %s" % str(g2))
+		for crop_id in subject._wild_crop_sims[chunk_coord]:
+			for cell in subject._wild_crop_sims[chunk_coord][crop_id].get_patch_cells():
+				var g3: Vector2i = chunk_coord * EarthChunkManager.CHUNK_SIZE + cell
+				if paved.has(g3):
+					offenders.append("%s at %s" % [crop_id, str(g3)])
+	var paved_count := paved.size()
+	layer.free()
+	entities.free()
+	creatures.free()
+
+	assert_gt(paved_count, 0, "the premise: something really grew there to pave over")
+	assert_eq(
+		offenders.size(), 0,
+		"%d things grow on built ground (e.g. %s)" % [offenders.size(), str(offenders.slice(0, 4))]
+	)
