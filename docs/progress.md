@@ -27281,11 +27281,21 @@ Regressions re-run green: `test_earth_chunk_manager_village_growth.gd`
 `test_crafting_recipe_book.gd`, `test_item_catalog.gd`,
 `test_house_panel.gd`, `test_village_wages.gd`.
 
-Two suites fail identically on `origin/main` before any of this and are
-**pre-existing, not caused here** — verified by running both against a
-clean baseline worktree: `test_earth_chunk_manager_village_migration.gd`
-(4 passing, 5 failing, about trail/road repaving and old-style piece
-migration) and `test_earth_chunk_manager_bread_chain.gd` (9 passing, 1
-failing, on the stone and plant_fibre halves of "spare hands gather
-building material between assessments"). The *wood* half of that same
-assertion did break here and is fixed; it passes again.
+Three suites fail identically on `origin/main` before any of this and are
+**pre-existing, not caused here** — verified by running each against a
+clean baseline worktree checked out at `origin/main`:
+
+- `test_earth_chunk_manager_village_migration.gd` (4 passing, 5 failing) —
+  trail/road repaving and old-style piece migration.
+- `test_earth_chunk_manager_bread_chain.gd` (9 passing, 1 failing) — the
+  stone and plant_fibre halves of "spare hands gather building material
+  between assessments". The *wood* half of that same assertion did break
+  here, was caught by it, and is fixed; it passes again.
+- `test_occupation_production.gd` (12 passing, 3 failing) —
+  `NpcIdentity.OCCUPATIONS` gained `lumberjack` and `carter` and
+  `OccupationProduction` still maps eight, so both come back with no
+  recipe.
+
+Everything else touched is green: 724 in the pure sweep, 34 in the live
+estate one, 33/33 in `test_earth_chunk_manager_village_growth.gd`, and 54
+across the settlement integration suites.
