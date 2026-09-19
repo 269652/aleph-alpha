@@ -418,15 +418,26 @@ func _building_sprite_at(origin_local: Vector2i) -> Sprite2D:
 	return null
 
 
-func test_a_buildings_drawn_world_width_is_exactly_its_footprint():
+## A building is drawn INSIDE its own plot (BuildingCatalog.
+## PLOT_MARGIN_SHARE), in world units -- whatever the art resolution.
+## That "whatever the art resolution" is what this test is really for: the
+## world width must follow the footprint and not the pixel count.
+func test_a_buildings_drawn_world_width_is_its_footprint_less_its_margin():
 	assert_true(manager.place_building(_chunk_coord, _origin, "house_large", Vector2i(0, 1), 5, ""))
 	var sprite := _building_sprite_at(_origin)
 	assert_not_null(sprite, "a placed building has a sprite")
 
 	var footprint := BuildingCatalog.footprint_of("house_large")
+	var drawn_world_width: float = sprite.texture.get_width() * sprite.scale.x
 	assert_almost_eq(
-		sprite.texture.get_width() * sprite.scale.x, float(footprint.x * TerrainRenderer.TILE_SIZE), 0.01,
-		"the drawn width must be the footprint's own world width, whatever the art resolution"
+		drawn_world_width,
+		float(TerrainRenderer.TILE_SIZE) * BuildingCatalog.drawn_plot_width_tiles(footprint.x),
+		0.51,
+		"the drawn width must be the footprint's own world width less its margin"
+	)
+	assert_lt(
+		drawn_world_width, float(footprint.x * TerrainRenderer.TILE_SIZE),
+		"a building drawn across its whole plot touches its neighbours"
 	)
 
 
@@ -435,10 +446,25 @@ func test_a_building_carries_the_same_art_detail_per_world_unit_as_the_ground_it
 	var sprite := _building_sprite_at(_origin)
 	assert_not_null(sprite, "precondition")
 
-	var footprint := BuildingCatalog.footprint_of("house_large")
-	assert_eq(
-		sprite.texture.get_width(), footprint.x * TerrainRenderer.ART_TILE_SIZE,
+	# The claim is about DETAIL, not about width: however wide a building
+	# is drawn, its art must carry DETAIL_MULTIPLIER pixels per world unit
+	# -- the same as the ground it stands on. Asserted as that ratio rather
+	# than as a pixel count, so it survives a change to how much of its
+	# plot a building covers (which is exactly what PLOT_MARGIN_SHARE was).
+	var art_pixels_per_world_unit: float = (
+		float(sprite.texture.get_width()) / (float(sprite.texture.get_width()) * sprite.scale.x)
+	)
+	assert_almost_eq(
+		art_pixels_per_world_unit, float(ArtResolution.DETAIL_MULTIPLIER), 0.001,
 		"a building's art must be authored/scaled at the same pixels-per-world-unit as terrain"
+	)
+	assert_eq(
+		sprite.texture.get_width(),
+		int(round(
+			float(TerrainRenderer.ART_TILE_SIZE)
+			* BuildingCatalog.drawn_plot_width_tiles(BuildingCatalog.footprint_of("house_large").x)
+		)),
+		"sliced at the ART tile size, not the world one"
 	)
 	assert_almost_eq(sprite.scale.x, ArtResolution.SPRITE_SCALE, 0.001)
 	assert_almost_eq(sprite.scale.y, ArtResolution.SPRITE_SCALE, 0.001)

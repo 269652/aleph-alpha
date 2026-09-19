@@ -720,3 +720,67 @@ func test_an_unknown_cap_still_answers_with_a_real_house():
 			BuildingCatalog.choose_house_id("farmer", genome, 5, "not_a_house")
 		)
 	)
+
+
+# -- a building stands IN its plot, not across it -------------------------
+
+## Reported live with a screenshot of three cottages in a row: "make the
+## cottages a bit smaller and add a padding so they have a gap between them
+## and the top doesn't get clipped".
+##
+## The cause was not the slicer. Measured on the real sheets, every
+## finished cottage frame has ZERO transparent pixels on all four edges --
+## the cell bands are cut tight to the art by construction -- and that
+## tight crop was then scaled to exactly the plot width. So neighbouring
+## houses touched at the pixel, and a roof that reaches well above its own
+## plot ran straight into whatever stood north of it.
+##
+## A building is drawn INSIDE its plot now, leaving PLOT_MARGIN_SHARE of
+## the plot free on each side.
+func test_a_building_is_drawn_narrower_than_the_plot_it_stands_on():
+	for footprint_width in [1, 2, 3, 4]:
+		assert_lt(
+			BuildingCatalog.drawn_plot_width_tiles(footprint_width),
+			float(footprint_width),
+			"a %d-tile building fills its whole plot" % footprint_width
+		)
+
+
+## But it still reads as a building on that plot rather than a model of
+## one: most of the ground it claims is covered.
+func test_a_building_still_covers_most_of_its_own_plot():
+	for footprint_width in [1, 2, 3, 4]:
+		assert_gt(
+			BuildingCatalog.drawn_plot_width_tiles(footprint_width) / float(footprint_width),
+			0.75,
+			"a %d-tile building shrank into its own plot" % footprint_width
+		)
+
+
+## The claim the report was actually about: two houses on ADJACENT plots
+## stand a visible distance apart. A quarter of a tile is the floor,
+## because anything under that is a seam rather than a gap at the size a
+## tile is really drawn.
+func test_two_houses_on_neighbouring_plots_really_stand_apart():
+	for building_id in BuildingCatalog.BUILDING_IDS:
+		var plot_width: int = BuildingCatalog.footprint_of(building_id).x
+		var gap: float = float(plot_width) - BuildingCatalog.drawn_plot_width_tiles(plot_width)
+		assert_gt(gap, 0.25, "two %s side by side are %f tiles apart" % [building_id, gap])
+
+
+## The margin is the SAME on both sides, so a building stands in the middle
+## of its plot rather than shouldered against one edge.
+func test_the_margin_is_centred_so_a_building_is_not_shouldered_to_one_side():
+	var plot := 3
+	var margin: float = (float(plot) - BuildingCatalog.drawn_plot_width_tiles(plot)) * 0.5
+	assert_almost_eq(
+		BuildingCatalog.drawn_plot_width_tiles(plot) + margin * 2.0, float(plot), 0.0001
+	)
+
+
+## A nonsense plot is treated as the smallest real one rather than
+## returning zero or a negative width -- a building drawn at no width at
+## all is a building nobody can see.
+func test_a_nonsense_plot_still_draws_something():
+	for plot in [0, -3]:
+		assert_gt(BuildingCatalog.drawn_plot_width_tiles(plot), 0.0)

@@ -435,6 +435,51 @@ static func interior_family_of(building_id: String) -> String:
 	return _BUILDINGS.get(building_id, {}).get("interior_family", "")
 
 
+## How much of its plot a building's picture leaves as AIR on each side.
+##
+## Reported live with a screenshot of three cottages in a row: "make the
+## cottages a bit smaller and add a padding so they have a gap between them
+## and the top doesn't get clipped".
+##
+## The slicer was not the problem, which is worth recording because it was
+## the obvious suspect. Measured on the real sheets, every finished cottage
+## frame has ZERO transparent pixels on all four edges -- the cell bands
+## are cut tight to the art by construction (VariantSheetGrid) -- and that
+## tight crop was then scaled to EXACTLY the plot width. So two houses on
+## neighbouring plots touched at the pixel with no street between them, and
+## a roof that reaches well above its own plot ran straight into whatever
+## stood north of it.
+##
+## A share rather than a fixed number of tiles, so the air scales with the
+## building: a manor stands in proportionally as much ground as a cottage
+## does. The trade-off is deliberate -- a bigger building gets a wider gap,
+## which reads as a bigger house standing in more of its own land rather
+## than as an inconsistent street.
+##
+## Pinned from both sides by test_building_catalog.gd against what it
+## PRODUCES, never as a number somebody liked: two houses on adjacent plots
+## must stand at least a quarter of a tile apart (under that it is a seam,
+## not a gap, at the size a tile is really drawn), and a building must
+## still cover more than three quarters of its own plot (under that it
+## stops reading as a building on that ground and starts reading as a model
+## of one).
+const PLOT_MARGIN_SHARE := 0.09
+
+
+## The width, in tiles, a building's picture is actually DRAWN at on a
+## `footprint_width_tiles`-wide plot -- its own width less
+## PLOT_MARGIN_SHARE of air on each side.
+##
+## The ONE place that answer lives, so the illustrated sheet path and the
+## procedural placeholder cannot disagree about how much of a plot a
+## building covers. Named apart from IllustratedStructureSprite.drawn_
+## width_tiles, which answers a different question for a different thing --
+## how wide a single-tile PLACEABLE is drawn, from its catalog twin. A nonsense plot is treated as the smallest real one:
+## a building drawn at no width at all is a building nobody can see.
+static func drawn_plot_width_tiles(footprint_width_tiles: int) -> float:
+	return float(maxi(footprint_width_tiles, 1)) * (1.0 - 2.0 * PLOT_MARGIN_SHARE)
+
+
 static func capacity_of(building_id: String) -> int:
 	return _BUILDINGS.get(building_id, {}).get("capacity", 0)
 
