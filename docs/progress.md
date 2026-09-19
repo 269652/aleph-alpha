@@ -27863,3 +27863,118 @@ printed `derived_base`, tier and gold for every spell in the book next to
 the shop's real prices, which is how the weight-class band became a claim
 that could be written down and asserted rather than a number that felt
 about right.
+
+## A house is not a faculty: masters move into the mage guild (`concept/mage_guild.md`, 2026-09-19)
+
+The tuition pass made the *building* teach. Reported straight back: *"the
+player should have to enter into the mage guild and find a master which
+teaches him; building a mage guild still requires a mage teacher to move in;
+the mage teacher's skills and teachable spells are in turn based on the
+teacher's skills; there should be rare teachers which can teach special rare
+spells; multiple mages can move in and hang around inside."*
+
+That is the difference between a vending machine and a guild, and it changes
+what the charter buys. Earning a city no longer buys a spell shop — it buys
+**a place where masters may come**. A guild raised today holds nobody and
+teaches nothing, which is the point rather than a delay timer.
+
+### Who came decides what can be learned
+
+- **Schools** (`spell_schools.gd`) partition all 25 atoms into ten
+  traditions, exhaustive and disjoint, pinned both ways — an atom in no
+  school is a spell nobody in the world could ever teach, and an atom in two
+  is a master claiming another's trade. A spell's school is the one its
+  atoms share; one whose atoms **cross** schools has no master at all, which
+  is the intended cost of braiding two traditions rather than a bug.
+- **Depth** is a spell's deepest atom, in the atom catalog's own 1..3 band,
+  pinned against the live catalog rather than restated.
+- **A master is a seed** (`mage_master.gd`): school, depth, rarity, title,
+  and a real `NpcIdentity` — name, genome, personality, appearance, and a
+  real allocation on the same skill web every other NPC and the player walk.
+  `teaches()` is one rule — in my school, within my depth — never a list.
+- **Rarity is not reinvented.** `rarity_tier.roll_tier`'s existing weighted
+  roll (65/25/8/2) decides; `DEPTH_BY_RARITY` only says what it MEANS here.
+  An archmage is about one master in ten because the existing roll already
+  said so.
+- **A mage is a trade that arrives, not one a village produces.**
+  `NpcIdentity.FORCED_ONLY_OCCUPATIONS` is a second list on purpose: adding
+  `"mage"` to `OCCUPATIONS` would have put a wizard in every fifth cottage,
+  given them a field or a forge to stand at, and handed them a house out of
+  the ordinary pools.
+
+### The book had to grow before any of that meant anything
+
+Three spells across two schools would make every master either everything or
+nothing, so `spell_book.gd` went from 3 to **21**, at least one per
+tradition, laid out by school, with depth following the atom tiers so the
+tier-3 entries are the ones only an archmage passes on.
+
+That broke a tuition claim, and the break was correct: *"no spell costs more
+than the dearest thing on the shelf"* was true of a starter book and should
+not be true of an archmage's lesson. The claim moved rather than the number
+— the band is now stated as **roughly 10..39**, deliberately wide, because
+what the anchor encodes is a weight class and a tight band would claim a
+precision the design does not have. Prices span Farsight at 123 gold (a
+small-house blueprint) to Call Wisp at 785 (more than twice the dearest
+thing any merchant stocks).
+
+### A guild fills, and you have to walk in
+
+- **One persisted number per guild** — the simulated days it has stood open
+  — plus the `seed` `place_building` already writes. No roster is saved, no
+  master is serialised, nothing can drift from what generated it. It
+  survives a chunk round trip, because a permanent fact about a place must
+  not reset because the player walked away.
+- **A season per master, three at most.** The wait is the unit
+  `estate_ascension` already measures a person's decision to move by; the
+  capacity is pinned by what it encodes — a full guild must still be unable
+  to teach every school, or every city's guild is interchangeable.
+- **Ageing is per CHUNK, not global**, and that distinction is load-bearing
+  rather than tidy: the settlement step runs once per settlement, so a
+  global age from inside it would run every guild's clock once per village
+  in range. Found by reading the diff back, pinned by a test.
+- **The gate is inside-plus-a-master.** Standing beside a guild, on its
+  doorstep, or inside some other building all refuse alike. `Player.
+  guild_here()` reads the interior record the game already carries for
+  decorating, so "am I in a mage guild" is the same fact "may I decorate
+  this room" is.
+- **`NO_MASTER` names the school and the depth to go looking for.** That is
+  the sentence that turns a refusal into a reason to travel.
+
+### Several of them really stand in there
+
+Every interior until now held exactly one resident — one `_resident`, one
+`resident_cell`. `HouseInteriorView` learned `standing_cells()` (open floor,
+nothing on it, never the doorway, which has to stay clear or there is no way
+out) and `place_occupants()`, which spreads a group through the room instead
+of queueing them by the door. The first of them becomes the room's
+`_resident`, so Talk, the indoor prompt and every other single-occupant
+reader keep working with no knowledge that groups exist. Masters are not
+gated on `is_at_home()` the way a villager is: they have no outdoor marker
+and no home to be out from.
+
+### Stated rather than papered over
+
+- 🚧 **A master's depth is not read off their skill web, though their
+  identity is.** `spell_atom_tier` exists, on the mage wedge, on the exact
+  graph the player walks — but `NpcSkillAllocation.MAX_POINTS` stops every
+  NPC at a ring-3 notable, the two tier nodes sit at rings 3 and 4, and
+  `ARCHETYPE_STAT_POOL["mage"]` does not name that stat, so the allocator
+  steers away from it and every master would come out depth 1. Closing it is
+  three edits to tested systems for one derived number. Recorded in the
+  concept doc with the exact change that would close it, not hidden.
+- 🚧 **A guild's interior is still a cottage** — `InteriorTemplates` has no
+  `hall` plan, a pre-existing gap this feature makes visible since the guild
+  is the first hall a player will spend time in.
+- 🚧 **You cannot talk to a specific master** — indoor Talk reaches the
+  room's first occupant; the others are scenery until Talk learns groups.
+- 🚧 **Masters never leave, age or die**, and a roster only grows. A
+  tradition lost with its last master is the obvious next mechanism.
+- 🚧 **A guild ages only while its chunk is loaded** — the same honest
+  limitation immigration already carries.
+
+Tests: `test_spell_schools.gd` (17), `test_mage_master.gd` (21),
+`test_mage_guild_roster.gd` (19), `test_earth_chunk_manager_mage_guild.gd`
+(10), `test_house_interior_view_occupants.gd` (15), plus additions to
+`test_spell_tuition.gd` (43), `test_player.gd` and
+`test_learn_command_clarity.gd` (10).
