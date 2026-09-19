@@ -2635,6 +2635,13 @@ func _enter_exit_step() -> void:
 	var occupation: String
 	if _owns_building(record):
 		occupation = InteriorTemplates.UNFURNISHED
+	elif String(record.get("id", "")) == SpellTuition.GUILD_BUILDING_ID:
+		# A guild has no household, so `occupation` is "" and the
+		# seed-derived fallback below would furnish it for whatever trade
+		# the seed landed on -- a mage guild with a farmer's barrel in it,
+		# or (as it actually did) a nurse's. It is furnished for the trade
+		# that is really in there (docs/concept/mage_guild.md).
+		occupation = MageMaster.OCCUPATION
 	else:
 		occupation = record.get("occupation", "")
 		if occupation == "":

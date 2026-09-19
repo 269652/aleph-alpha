@@ -1977,6 +1977,39 @@ func test_walking_into_a_guild_stands_its_masters_up_in_the_room():
 		assert_eq(identity.occupation, MageMaster.OCCUPATION)
 
 
+## A guild's record carries no occupation (nobody is its household), so
+## the enter step's seed-derived fallback would furnish it for a random
+## trade -- a mage guild with a farmer's barrel in it. It has to be
+## furnished for the trade that is actually in there.
+func test_walking_into_a_guild_furnishes_it_for_a_mage():
+	var guild_seed := _a_guild_seed_teaching("minor_heal")
+	var site := _a_dry_site_for(SpellTuition.GUILD_BUILDING_ID)
+	assert_false(site.is_empty(), "precondition: somewhere dry to raise a guild")
+	if site.is_empty():
+		return
+	assert_true(chunk_manager.place_building(
+		site["chunk_coord"], site["origin"], SpellTuition.GUILD_BUILDING_ID,
+		Vector2i(0, 1), guild_seed
+	))
+	_placed_guilds.append(site)
+	var global_origin: Vector2i = site["chunk_coord"] * EarthChunkManager.CHUNK_SIZE + site["origin"]
+	var doorstep: Vector2i = global_origin + BuildingCatalog.doorstep_of(SpellTuition.GUILD_BUILDING_ID)
+	player.position = (Vector2(doorstep) + Vector2(0.5, 0.5)) * TILE_SIZE
+	_register_all_keybindings()
+	Input.action_press("enter")
+	player._enter_exit_step()
+	Input.action_release("enter")
+
+	assert_true(player.is_indoors(), "precondition: went in")
+	assert_eq(player._interior_view.occupation, MageMaster.OCCUPATION)
+	# A hall, not somebody's cottage: the room has to be the shape the
+	# catalog says a guild is (docs/concept/building.md, "A hall is a
+	# workplace").
+	var cells: Dictionary = player._interior_view._furniture
+	assert_false(cells.values().has("wood_bed"), "a mage guild has a bed in it")
+	assert_true(cells.values().has("workbench"), "a mage guild has nothing to work at")
+
+
 func test_an_empty_guild_really_is_an_empty_room():
 	_enter_a_guild(_a_guild_seed_teaching("minor_heal"), 0)
 	assert_eq(player._interior_view.occupant_identities(), [])
