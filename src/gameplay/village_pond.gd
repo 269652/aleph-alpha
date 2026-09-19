@@ -69,6 +69,22 @@ static func fence_cells(origin: Vector2i, building_id: String, is_free: Callable
 ## village pond is stocked deliberately -- see docs/concept/village_ponds.md)
 ## and also what makes the stocking a real act rather than decoration. One
 ## fish is a pet. Pinned by test_a_stocking_is_enough_fish_to_breed.
+## How deep a dug pond is, in metres.
+##
+## A pond dug to KEEP fish is dug deep enough for them to overwinter in --
+## roughly two metres is the standard temperate figure, and the reason a
+## village fish pond is a real hole rather than a scrape. 1.8 m sits inside
+## that and comfortably past WaterMovementModel.WADE_DEPTH_METERS, which is
+## the part that matters in play: a fisher's pond is water to swim in, not a
+## puddle to walk through. Pinned against that threshold rather than as a
+## bare number (test_village_pond.gd).
+##
+## Reported live: "there's no real pond with river / lake water physics".
+## A pond answered is_water_at_global -- so nothing built or grew on it --
+## but had no depth at all, and the player's water state is the maximum of
+## ocean, river and lake depth, three sources a pond was not one of.
+const DEPTH_METERS := 1.8
+
 const STOCKING_FISH := 2
 
 ## The pond's own population model. The world's OWN aquatic one, not a second

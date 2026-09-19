@@ -12696,6 +12696,18 @@ func is_still_water_at_global(global_x: int, global_y: int) -> bool:
 	return is_still_water_probe(generator.hydrology_at_global(global_x, global_y))
 
 
+## How deep the dug pond on this tile is, in metres -- 0.0 where there is
+## none. The pond's counterpart to river_depth_meters_at_global and
+## lake_depth_meters_at_global, and asked alongside them by the player's own
+## water state (Player._resolve_water_state).
+##
+## A flat depth, not a solved one: a dug pond is a hole somebody dug to a
+## depth they chose, not a water body whose level is solved from discharge
+## or a spill point. VillagePond.DEPTH_METERS is that choice.
+func pond_depth_meters_at_global(global_x: int, global_y: int) -> float:
+	return VillagePond.DEPTH_METERS if is_pond_at_global(global_x, global_y) else 0.0
+
+
 func is_pond_at_global(global_x: int, global_y: int) -> bool:
 	return VillagePond.is_pond_tile(modification_at_global(global_x, global_y))
 

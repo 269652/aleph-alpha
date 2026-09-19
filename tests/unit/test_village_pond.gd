@@ -126,3 +126,31 @@ func test_a_full_pond_stays_full():
 ## Two is the smallest stocking that can breed at all -- one fish is a pet.
 func test_a_stocking_is_enough_fish_to_breed():
 	assert_gte(VillagePond.STOCKING_FISH, 2, "one fish cannot reproduce")
+
+
+# -- a dug pond is water you can actually get into ---------------------------
+#
+# Reported live: "there's no real pond with river / lake water physics".
+# A pond answered is_water_at_global (so nothing builds or grows on it) but
+# carried no DEPTH, and the player's own water state is the maximum of
+# ocean, river and lake depth -- three sources a pond is not one of. So a
+# fisher's pond was water everything avoided and nobody could wade into.
+
+const WaterMovementModel = preload("res://src/gameplay/water_movement_model.gd")
+
+
+## A pond dug to keep fish is dug deep enough for them to overwinter in --
+## the standard temperate figure, and the reason a village pond is a real
+## hole rather than a puddle. Pinned against the wade threshold rather than
+## asserted as a number: what matters about the depth is that a pond reads
+## as water to swim in, not a puddle to walk through.
+func test_a_pond_is_deeper_than_a_person_can_wade():
+	assert_gt(
+		VillagePond.DEPTH_METERS, WaterMovementModel.WADE_DEPTH_METERS,
+		"a fisher's pond that can be walked across is not a pond"
+	)
+
+
+## And not absurdly deep either -- it is a dug village pond, not a quarry.
+func test_a_pond_is_a_dug_pond_not_a_quarry():
+	assert_lt(VillagePond.DEPTH_METERS, 3.0)
