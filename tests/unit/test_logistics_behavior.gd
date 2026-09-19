@@ -164,3 +164,58 @@ func test_a_large_delta_overshooting_collect_still_resolves_into_carrying():
 	# DEPOSITING starts its own fresh clock on arrival -- the overshoot above
 	# does not carry through the (arrival-terminated) CARRYING leg.
 	assert_eq(behavior.advance(LogisticsBehavior.DEPOSIT_SECONDS * 0.5), LogisticsBehavior.Outcome.NONE)
+
+
+# -- resuming a delivery that was interrupted --------------------------------
+#
+# A village carter walks this same machine, and unlike the placeable-scale
+# worker they CLOCK OFF: the round is dropped at the end of a work block and
+# picked up again the next one (docs/concept/village_warehouse.md). Dropping
+# it returns them to SEEKING with the wagon still loaded, and measured
+# against a real village (tools/probe_village_store_round.gd) that meant the
+# next block began by walking to another SHELF and piling more onto a wagon
+# that had never been emptied -- twenty-four beams, a full load, still
+# aboard after ten simulated days.
+#
+# So a run that already has goods in hand can re-enter its second walk leg
+# directly, rather than starting a fresh one it does not need.
+
+
+func test_a_run_that_is_already_loaded_can_go_straight_back_to_carrying():
+	assert_eq(behavior.phase, LogisticsBehavior.Phase.SEEKING, "the premise")
+	assert_true(behavior.resume_carrying())
+	assert_eq(behavior.phase, LogisticsBehavior.Phase.CARRYING)
+
+
+## Only from SEEKING -- this is for picking a dropped run back up, never for
+## skipping a leg of one already in flight.
+func test_resuming_is_refused_from_every_other_phase():
+	behavior.advance(LogisticsBehavior.REHUNT_SECONDS)
+	behavior.begin_approach()
+	assert_false(behavior.resume_carrying(), "mid-approach")
+	assert_eq(behavior.phase, LogisticsBehavior.Phase.APPROACHING)
+	behavior.arrive_at_source()
+	assert_false(behavior.resume_carrying(), "mid-collection")
+	assert_eq(behavior.phase, LogisticsBehavior.Phase.COLLECTING)
+	behavior.advance(LogisticsBehavior.COLLECT_SECONDS)
+	assert_false(behavior.resume_carrying(), "already carrying")
+	assert_eq(behavior.phase, LogisticsBehavior.Phase.CARRYING)
+	behavior.arrive_at_storage()
+	assert_false(behavior.resume_carrying(), "mid-deposit")
+	assert_eq(behavior.phase, LogisticsBehavior.Phase.DEPOSITING)
+
+
+## Unlike begin_approach, this does NOT wait out the coordination pause: the
+## pause exists so two idle workers do not converge on the same shelf, and a
+## worker already holding the goods is not choosing a shelf at all.
+func test_resuming_does_not_wait_out_the_coordination_pause():
+	assert_false(behavior.can_commit(), "the premise: too soon to pick a new source")
+	assert_true(behavior.resume_carrying())
+
+
+## And the leg it resumes into really finishes the way it always did.
+func test_a_resumed_run_still_arrives_and_deposits():
+	behavior.resume_carrying()
+	assert_true(behavior.arrive_at_storage())
+	assert_eq(behavior.advance(LogisticsBehavior.DEPOSIT_SECONDS), LogisticsBehavior.Outcome.DEPOSITED)
+	assert_eq(behavior.phase, LogisticsBehavior.Phase.SEEKING)

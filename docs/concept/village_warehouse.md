@@ -512,6 +512,37 @@ more or less than before and the levy split is untouched. What moved is
   0–5, 7 of them (9.3%) had a store nobody could ever empty, and 0 do now.
   The `LogisticsMarker`-based store porter is **removed**; that class keeps
   its original job, the single-tile `sagewerk`→`storage` placeables.
+
+  **Corrected 2026-09-19, and it took three separate causes.** Reported with
+  the readout open at "Stored: 0 / 240": *"The porter is moving products
+  (beams, logs) from the sawmill to the warehouse but unloading doesn't put
+  anything into warehouse.. storage is still 0 and goods just vanish"*.
+  Nothing vanished — the beams were on the wagon, and the wagon kept being
+  turned around. Measured on a real village first
+  (`tools/probe_village_store_round.gd`, which reads the same
+  `building_inventory_at` the popover draws): **one delivery in ten simulated
+  days, a full wagon — twenty-four beams — still parked at the end**, and the
+  readout at 12 of 48.
+
+  1. A carter mid-round was **not counted as being on real work**, so every
+     thirst steered them to the well instead of the store, and thirst comes
+     up about every seventeen seconds. `is_on_real_work` now includes the
+     round, exactly as it already included the farmer's field.
+  2. A dropped round **threw its leg away**. The round is still dropped off
+     the clock and the wagon still stands where it stopped (Mechanisms 5 and
+     6, unchanged), but the carter now picks up the leg they were on rather
+     than walking back out to a shelf they had nearly reached the evening
+     before. A village is wider than a work block is long.
+  3. A loaded wagon now **heads for the store before another shelf**
+     (`LogisticsBehavior.resume_carrying`). Without it the next block topped
+     up a wagon that had never been emptied, which is how it ended full.
+
+  After, on the same village: **four deliveries, an empty wagon, and all 48
+  beams in the readout.** The end-to-end proof is that measurement rather
+  than a unit test, and `test_npc_marker_cart.gd` says so where the test
+  would otherwise sit: a stub world delivers either way (tried both with the
+  carter living at the store and away from it), so a test claiming it would
+  prove nothing. What the tests pin is each of the three mechanisms.
 - ✅ **Mechanism 5 — the Bollerwagen.** `CartLoad` (pure) and `CartMarker`
   (the node that holds the load, trails its puller and turns to face the
   way it is going). Spawned with the village, so it is freed with the chunk
