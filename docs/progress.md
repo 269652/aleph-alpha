@@ -4520,9 +4520,13 @@ brainstorm extensions (atom domains beyond the physical, material-component
 cost, caster self-danger, complexity-priced spell gems) have a pure/tested
 foundation; most of the non-physical atoms now have a real mechanical hook
 too (see Primitive Effects Catalog below) — caster self-danger specifically
-is still unwired (see its own row). The 2026-08-24 brainstorm (gold cost to
-compile a spell, exponential in size; sealed gems vs. teachable scrolls) is
-still design-only — no code exists for it yet.
+is still unwired (see its own row). The 2026-08-24 brainstorm's own price
+curves (gold cost to compile a spell, exponential in size; sealed gems vs.
+teachable scrolls) are still design-only — but the **access layer** they
+sit on is now real: a per-caster known-spell set distinct from the
+catalogue, a gold-for-knowledge transaction, and a structure gate on magic
+(the mage guild). See **Spell Tuition** below and `concept/magic.md`'s
+2026-09-19 section.
 
 - **Spell Cast Runtime** (large) — ✅ Done (MVP) — see `concept/
   spell_runtime.md` (new). A player presses a real bound key (`cast`,
@@ -4551,6 +4555,46 @@ still design-only — no code exists for it yet.
   computed but not enforced as an actual delay, and the "cast" key always
   casts the same fixed spell (no selection UI).
 
+- **Spell Tuition / the mage guild's trade** (medium) — ✅ Done — see
+  `concept/magic.md`'s 2026-09-19 section, which answers that doc's own
+  standing open question ("whether compiling needs a station at all"):
+  it does, and the station is the `mage_guild` `settlement_charter.gd`
+  gates at CITY tier. `spell_tuition.gd` (pure) splits **the world's
+  catalogue from a caster's known set** — `SpellBook.has()` used to
+  conflate "this spell exists" with "you can cast it", so nothing could
+  ever GRANT a spell. A character is born with `STARTING_SPELL_IDS`
+  (test-pinned to contain whatever the cast key binds to) and buys the
+  rest from a guild. **Nothing about a price is typed in**: power is
+  `spell_cost.derived_base` (the same number already pricing the cast's
+  mana), the rarity kick is `rarity_tier.tier_from_complexity` against
+  that identical score, and the gold-per-power anchor is read off
+  `shop.gd`'s live meal price. The one free constant,
+  `MEALS_PER_POWER_UNIT`, encodes a falsifiable design claim asserted
+  against the live shop catalogue — *a spell is a permanent capability, so
+  it sits in the weight class of a building blueprint* — which admits
+  roughly 10..20 and nothing outside; Minor Heal lands at 128 gold, Frost
+  Lance at 236. Priced **linear in power, not exponential in LOC**,
+  because magic.md already ruled the author's compile cost is paid once
+  and never re-charged to learners. The refusal is the feature: `{}` when
+  nothing is wrong (the shape `settlement_charter.refusal_for`
+  established), otherwise the reason — the money case carrying the price
+  AND the exact shortfall, the standing case the building id. Gold moves
+  only on a lesson that lands. `Player.learn_spell` gates it on a real
+  placed `mage_guild` within reach (the same `_has_structure_near_player`
+  proximity every station interaction already uses), `cast_spell` refuses
+  a spell this character never learned (spending nothing, and saying so
+  rather than blaming mana), and the known set is persisted beside karma
+  and the life count. `/learn` is the hand on it while no guild
+  interaction UI exists. A real city raises its own guild — `VillageAssembly`'s
+  civic petition already walks `CHARTERED_BUILDING_IDS` — so the whole
+  errand is reachable in ordinary play. Tests: `test_spell_tuition.gd`
+  (32), `test_learn_command_clarity.gd` (8), plus 13 additions to
+  `test_player.gd`. ⬜ Still open (named in the doc): compiling itself has
+  nothing to compile from until a spell-editor UI exists; scrolls and gems
+  are unbuilt (scroll-learning writes to this same known set, so the
+  vessel is what is missing, not the destination); no spell-selection UI,
+  so the cast key still casts `DEFAULT_CAST_SPELL_ID`; and the guild has
+  no interior trade UI.
 - **Spellcrafting DSL** (huge) — 🚧 Partial — the pure `RefCounted` pipeline
   modules (`spell_atom_catalog.gd`, `spell_cost.gd`, `spell_parser.gd`) now
   have a real runtime consuming them (`spell_executor.gd` and friends — see
@@ -27669,12 +27713,11 @@ entry cannot quietly escape them. Found by adding these two.
 
 ### Stated rather than papered over
 
-- 🚧 **Neither chartered building DOES anything yet.** The trade hall is the
-  natural home of the estate relief chest and does not hold it; the mage
-  guild is the compile station and compiling has no structure gate in code
-  at all. Both are real buildings behind a real gate, and what happens
-  inside them is the next pass. A building that only exists to be unlocked
-  is half a feature.
+- ✅ **The mage guild does something** — it teaches. See *A mage guild
+  teaches* below; the charter is no longer a locked door in a field.
+- 🚧 **The trade hall still does nothing.** It is the natural home of the
+  estate relief chest and does not hold it. A building that only exists to
+  be unlocked is half a feature.
 - 🚧 **Neither has art** — both draw the procedural placeholder, which is
   what that path is for, and pick up a sheet the moment one lands.
 - 🚧 **The player's own build hand does not consult the gate yet.**
@@ -27693,3 +27736,130 @@ Tests: `test_settlement_charter.gd` (22), plus additions to
 concurrent changes; the patch was rewritten against what is actually there
 rather than against what was remembered, per CLAUDE.md's own warning about
 the live checkout.
+
+## A mage guild teaches (`concept/magic.md`, 2026-09-19)
+
+The charter shipped a mage guild only a city may raise, and recorded its own
+honest gap: *"Neither chartered building DOES anything yet."* A gate with
+nothing behind it is a locked door in a field. This is what is behind it.
+
+**It answers magic.md's own standing open question** from 2026-08-24 —
+*"whether compiling needs a station at all vs. being available from any
+spell-editor UI"* — with: it needs one, and the station is the chartered
+mage guild. The two docs need each other. A compile station reachable from
+any menu makes the charter ladder pointless; a gate with nothing behind it
+is the same. Together they say **the way into higher magic is through a
+village you helped grow**, not through a level-up.
+
+### What was actually missing was the access layer, not a price curve
+
+The 2026-08-24 brainstorm priced compiling. It could not be built, and not
+because the formula was hard — because three facts had no home in the code:
+
+1. **A known-spell set distinct from the world's catalogue.** `SpellBook.
+   has()` conflated *this spell exists* with *you can cast it*, so nothing
+   could ever GRANT a spell. Scroll-learning, compiling and npc.md's
+   "an NPC that studies a traded scroll" are all writes to a per-caster set
+   that did not exist.
+2. **A gold-for-knowledge transaction.** Nothing in the game charged gold
+   for a permanent capability at all.
+3. **A structure gate on magic.** Nothing checked where you were standing.
+
+Tuition is those three for the case where the AST is already authored —
+there is no spell-editor UI, so there is nothing to compile *from*, and
+`spell_book.gd` says as much in its own header. When the editor lands,
+compiling reuses all three unchanged and adds only its own curve.
+
+### Nothing about a price is typed in
+
+- **Power** is `spell_cost.derived_base` — the number that already prices
+  every cast's mana, and the one magic.md's scrolls section already
+  nominates for pricing a vessel. No second measure of "how big is this
+  spell" was invented.
+- **Rarity** multiplies it through `rarity_tier.tier_from_complexity` +
+  `stat_multiplier`, both already pure and already test-pinned, against
+  that identical score.
+- **The gold-per-power anchor is a meal, read live from `shop.gd`.** A
+  tuned constant would have been an invented third price; a ratio between
+  two things the game already prices is not.
+- **The one free parameter, `MEALS_PER_POWER_UNIT = 16`, is pinned by the
+  design claim it encodes** rather than eyeballed: *a spell is a permanent
+  capability, so it sits in the weight class of a building blueprint* —
+  dearer than any tool or weapon on the merchant's shelf, at least what the
+  cheapest house blueprint costs, never dearer than the dearest thing on
+  it. Asserted against the live `Shop.CATALOG`, that band admits roughly
+  10..20 and nothing outside. Minor Heal lands at 128 gold, Frost Lance at
+  236 — about a small house and about a cottage.
+
+**Linear in power, not exponential in LOC.** magic.md already ruled that
+the author's compile cost is *"paid once, by the original author — never
+re-charged to learners"*. Billing a student the compile curve would charge
+one design twice. The exponential stays reserved for fixing a NEW design
+into a book; a lesson is a purchase.
+
+### The refusal is the feature
+
+A guild that answers "no" is useless; one that answers **why** is a quest
+hook. Same shape `settlement_charter.refusal_for` established — `{}` when
+nothing is wrong, otherwise a dict naming the fact. A spell the catalogue
+does not hold is refused first and flatly; past that, three refusals that
+each point somewhere: **no guild in reach** (carrying the building id, so
+the answer points at the charter ladder), **already known** (points at the
+rest of the catalogue), **short of the price** (carrying the price AND the
+exact shortfall — *"come back with 40 more gold"*, never a bare no).
+
+Gold moves only on a lesson that lands, the same conserving discipline the
+estate baskets and the guild chest already hold themselves to. `learn` is
+pure: it never mutates the known list it was handed, it hands back a new
+one, and the caller decides whether to adopt it — the same shape
+`EstateAscension` returns a verdict rather than moving a household itself.
+
+### On the Player, and reachable in ordinary play
+
+`Player` carries `_known_spell_ids`, starts with `STARTING_SPELL_IDS`
+(test-pinned to contain whatever `DEFAULT_CAST_SPELL_ID` binds the cast key
+to — a character who cannot cast the spell the game binds to their own cast
+button is a bug, not a gate), and refuses to cast what it has not learned,
+spending nothing and saying so rather than blaming mana. `learn_spell` is
+gated on a real placed `mage_guild` within reach via the SAME
+`_has_structure_near_player` proximity every other station interaction in
+that file already uses. Learned spells are persisted beside karma and the
+life count; a save written before spells were learnable simply keeps the
+starting grant.
+
+`/learn` is the hand on it while no guild interaction UI exists — bare, it
+lists what a guild would teach and what each lesson costs; with an argument
+it takes the lesson. The same "a real command before a real UI" scope
+`/gold` and `/craft` already established.
+
+**And a real city raises its own guild.** `VillageAssembly`'s civic
+petition already walks `BuildingCatalog.CHARTERED_BUILDING_IDS` once an
+estate has nothing left to complain of, and `mage_guild` asks for no
+labour class, so `can_staff` never blocks it. The whole errand — grow a
+village into a city, let it raise its guild, go and learn — runs without a
+console command anywhere in it.
+
+### Stated rather than papered over
+
+- 🚧 **Compiling itself is still unbuilt** — no spell-editor UI, so nothing
+  to compile. `CRAFT_BASE`/`CRAFT_GROWTH`/per-tier LOC weights remain
+  design-only. This pass built the layer they sit on, not the curve.
+- 🚧 **Scrolls and gems are still unbuilt.** Scroll-learning writes to this
+  same known set, so the vessel is what is missing, not the destination.
+- 🚧 **No spell-selection UI** — the cast key still casts
+  `DEFAULT_CAST_SPELL_ID`. A learned spell is real, persisted and castable
+  through `cast_spell`, but nothing lets a player *choose* it at the
+  keyboard yet.
+- 🚧 **The guild has no interior trade UI**, and no art (it draws the
+  procedural placeholder, which is what that path is for).
+- 🚧 **The trade hall still does nothing** — the charter's other gap,
+  untouched here deliberately rather than widened into.
+
+Tests: `test_spell_tuition.gd` (32), `test_learn_command_clarity.gd` (8),
+plus 13 additions to `test_player.gd`.
+
+The tuition prices were **measured, not reasoned about** — a throwaway probe
+printed `derived_base`, tier and gold for every spell in the book next to
+the shop's real prices, which is how the weight-class band became a claim
+that could be written down and asserted rather than a number that felt
+about right.
