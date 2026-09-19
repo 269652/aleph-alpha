@@ -596,3 +596,29 @@ func _timber_gathered_over(steps: int, with_sawmill: bool) -> int:
 	for _i in steps:
 		manager.step_settlements(EarthChunkManager.SETTLEMENT_STEP_INTERVAL)
 	return market.stock_of(VillageEstates.FUEL_ITEM_ID) - before
+
+
+## The sawmill's timber bonus is carried in the SAME place the gathering
+## carry is, so a caller that resets one resets both. It was not, once:
+## test_earth_chunk_manager_village_growth.gd's own "hunger must never slow
+## the gathering" clears the material carry between two identical runs and
+## saw 8 logs where it saw 7, purely because a second, separate remainder
+## survived the reset. A gathering step with two carries and one reset is a
+## step whose output depends on what ran before it.
+func test_two_identical_gathering_runs_from_a_cleared_carry_cut_the_same_timber():
+	_found(6)
+	_raise("sawmill", Vector2i(9, 9))
+	var household_ids := manager.household_ids_in_settlement(_settlement_id)
+
+	for _i in 8:
+		manager._step_settlement_gathering(_settlement_id, _market(), household_ids)
+	var first: float = float(_market().stock.get(VillageEstates.FUEL_ITEM_ID, 0.0))
+
+	_market().stock.clear()
+	manager._settlement_material_carry.clear()
+	for _i in 8:
+		manager._step_settlement_gathering(_settlement_id, _market(), household_ids)
+	var second: float = float(_market().stock.get(VillageEstates.FUEL_ITEM_ID, 0.0))
+
+	assert_almost_eq(second, first, 0.001, "a leftover remainder survived the reset")
+	assert_true(first > 0.0, "precondition: this village cuts timber at all")

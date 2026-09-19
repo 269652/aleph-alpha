@@ -4350,9 +4350,22 @@ func _collect_estate_tax(
 
 ## settlement_id -> StaffedProduction's own per-recipe batch remainder.
 var _settlement_staffed_production_carry: Dictionary = {}
-## settlement_id -> the sub-unit remainder of a staffed sawmill's timber
-## BONUS (see _step_settlement_gathering).
-var _settlement_timber_bonus_carry: Dictionary = {}
+## The key a staffed sawmill's own sub-unit timber remainder is carried
+## under, INSIDE _settlement_material_carry rather than in a second
+## dictionary beside it.
+##
+## One gathering step, one carry: a caller that clears the material carry
+## must clear the whole of what that step is carrying, or two identical
+## runs from a cleared state cut different amounts of timber. They did --
+## test_earth_chunk_manager_village_growth.gd's own "hunger must never slow
+## the gathering" saw 8 logs where it saw 7, purely because a second
+## remainder survived the reset.
+##
+## Safe to share the dictionary: SettlementGathering.material_delta
+## duplicates the carry it is given and only ever writes its own
+## _RATE_BY_ITEM keys, so an extra key passes through untouched. Prefixed
+## so it can never collide with a real item id.
+const TIMBER_BONUS_CARRY_KEY := "carry:sawmill_timber_bonus"
 
 
 ## docs/concept/village_estates.md mechanism 4, made real: what this
@@ -4461,11 +4474,13 @@ func _add_sawmill_timber_bonus(settlement_id: String, market, spare_capacity: in
 		* SETTLEMENT_STEP_INTERVAL
 		/ ConstructionCatchup.SECONDS_PER_DAY
 	)
-	var owed: float = float(_settlement_timber_bonus_carry.get(settlement_id, 0.0)) + bonus
+	var carry: Dictionary = _settlement_material_carry.get(settlement_id, {})
+	var owed: float = float(carry.get(TIMBER_BONUS_CARRY_KEY, 0.0)) + bonus
 	var whole := int(floor(owed + 0.000001))
 	if whole > 0:
 		market.add_stock(VillageEstates.FUEL_ITEM_ID, whole)
-	_settlement_timber_bonus_carry[settlement_id] = maxf(owed - float(whole), 0.0)
+	carry[TIMBER_BONUS_CARRY_KEY] = maxf(owed - float(whole), 0.0)
+	_settlement_material_carry[settlement_id] = carry
 
 
 ## settlement_id -> MerchantVisit's own sub-visit carry, the same
