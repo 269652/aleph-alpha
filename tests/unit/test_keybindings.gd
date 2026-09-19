@@ -195,3 +195,23 @@ func test_no_two_actions_share_a_default_key():
 			"%s and %s share a default key" % [by_keycode.get(keycode, ""), action]
 		)
 		by_keycode[keycode] = action
+
+
+## The diagnostics strip (see docs/concept/hud.md "The top-left strip"): FPS,
+## lat/lon and the sun's elevation in degrees used to ship ON, in the middle
+## of the line that also carried the clock. F3 is the key every other game
+## uses for exactly this, and it is rebindable like everything else here.
+func test_the_diagnostics_toggle_has_its_own_key_and_it_is_f3():
+	assert_true(bindings.action_names().has("toggle_diagnostics"))
+	assert_eq(bindings.default_keycode_for("toggle_diagnostics"), KEY_F3)
+
+
+func test_the_diagnostics_toggle_does_not_collide_with_any_other_default():
+	for action in bindings.action_names():
+		if action == "toggle_diagnostics":
+			continue
+		assert_ne(
+			bindings.default_keycode_for("toggle_diagnostics"),
+			bindings.default_keycode_for(action),
+			"toggle_diagnostics' default collides with %s" % action
+		)

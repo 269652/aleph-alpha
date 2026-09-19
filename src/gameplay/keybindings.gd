@@ -101,6 +101,12 @@ const ACTIONS := [
 	{"action": "toggle_planner", "label": "Toggle Planner Mode", "default": KEY_P},
 	{"action": "toggle_settings", "label": "Toggle Settings", "default": KEY_ESCAPE},
 	{"action": "toggle_console", "label": "Toggle Console", "default": KEY_QUOTELEFT},
+	# The diagnostics strip (docs/concept/hud.md "The top-left strip"): FPS,
+	# lat/lon and the sun's elevation in degrees. F3 is the key every other
+	# game uses for exactly this. Rebindable like everything else here, and
+	# OFF until pressed -- these three used to ship on, in the middle of the
+	# same line that carried the clock.
+	{"action": "toggle_diagnostics", "label": "Toggle Diagnostics", "default": KEY_F3},
 ]
 
 ## action -> keycode, only for actions the player has changed from default.

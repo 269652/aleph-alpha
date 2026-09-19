@@ -71,9 +71,8 @@ func tooltip_stylebox() -> StyleBoxFlat:
 ## base size with World._scaled_font instead. The default of 1.0 is a no-op, so
 ## an unscaled build_theme() is still exactly the theme that shipped.
 func build_theme(scale: float = UiScale.DEFAULT_SCALE) -> Theme:
-	var font_size := UiScale.font_size(BASE_FONT_SIZE, scale)
 	var theme := Theme.new()
-	theme.default_font_size = font_size
+	apply_scale(theme, scale)
 
 	theme.set_stylebox("panel", "PanelContainer", panel_stylebox())
 
@@ -83,10 +82,8 @@ func build_theme(scale: float = UiScale.DEFAULT_SCALE) -> Theme:
 	theme.set_stylebox("focus", "Button", button_stylebox("hover"))
 	theme.set_color("font_color", "Button", TEXT)
 	theme.set_color("font_hover_color", "Button", ACCENT)
-	theme.set_font_size("font_size", "Button", font_size)
 
 	theme.set_color("font_color", "Label", TEXT)
-	theme.set_font_size("font_size", "Label", font_size)
 
 	var field := _flat(Color(0.09, 0.1, 0.13, 1.0), 6.0, PANEL_BORDER, BORDER_WIDTH)
 	theme.set_stylebox("normal", "LineEdit", field)
@@ -95,9 +92,24 @@ func build_theme(scale: float = UiScale.DEFAULT_SCALE) -> Theme:
 
 	theme.set_stylebox("panel", "TooltipPanel", tooltip_stylebox())
 	theme.set_color("font_color", "TooltipLabel", TEXT)
-	theme.set_font_size("font_size", "TooltipLabel", font_size)
 
 	return theme
+
+
+## Re-applies `scale` to a theme ALREADY IN USE.
+##
+## A Theme is a Resource shared by reference -- every window and HUD card holds
+## the same one -- so moving the scale slider has to mutate that object rather
+## than hand out a freshly built replacement, which would leave every node
+## already in the tree on the old sizes until a restart. This is also the one
+## place that knows WHICH font sizes this theme sets, so build_theme delegates
+## to it rather than keeping a second copy of that list.
+func apply_scale(theme: Theme, scale: float) -> void:
+	var font_size := UiScale.font_size(BASE_FONT_SIZE, scale)
+	theme.default_font_size = font_size
+	theme.set_font_size("font_size", "Button", font_size)
+	theme.set_font_size("font_size", "Label", font_size)
+	theme.set_font_size("font_size", "TooltipLabel", font_size)
 
 
 func _flat(bg: Color, margin: float, border: Color, border_width: int) -> StyleBoxFlat:

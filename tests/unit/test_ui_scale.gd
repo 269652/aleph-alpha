@@ -90,3 +90,29 @@ func test_an_unscaled_theme_is_the_theme_that_shipped():
 	var theme := UiTheme.new().build_theme()
 	assert_eq(theme.default_font_size, UiTheme.BASE_FONT_SIZE)
 	assert_eq(theme.get_font_size("font_size", "Label"), UiTheme.BASE_FONT_SIZE)
+
+
+## A Theme is a Resource shared by reference: every window and HUD card holds
+## the SAME one. So a scale change must mutate that object in place -- handing
+## out a freshly built Theme would leave every node already in the tree on the
+## old one until a restart.
+func test_a_scale_can_be_re_applied_to_a_theme_already_in_use():
+	var ui := UiTheme.new()
+	var theme := ui.build_theme()
+	ui.apply_scale(theme, 1.5)
+	var expected := UiScale.font_size(UiTheme.BASE_FONT_SIZE, 1.5)
+	assert_eq(theme.default_font_size, expected)
+	assert_eq(theme.get_font_size("font_size", "Label"), expected)
+	assert_eq(theme.get_font_size("font_size", "Button"), expected)
+	assert_eq(theme.get_font_size("font_size", "TooltipLabel"), expected)
+
+
+## Re-applying is a round trip, not a ratchet: dragging the slider back to 1.0
+## gives back exactly the theme that shipped.
+func test_re_applying_the_default_scale_restores_the_shipped_sizes():
+	var ui := UiTheme.new()
+	var theme := ui.build_theme()
+	ui.apply_scale(theme, 1.75)
+	ui.apply_scale(theme, UiScale.DEFAULT_SCALE)
+	assert_eq(theme.default_font_size, UiTheme.BASE_FONT_SIZE)
+	assert_eq(theme.get_font_size("font_size", "Label"), UiTheme.BASE_FONT_SIZE)
