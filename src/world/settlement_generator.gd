@@ -21,6 +21,7 @@ const NpcIdentity = preload("res://src/world/npc_identity.gd")
 const VillageLayout = preload("res://src/world/village_layout.gd")
 const BuildingCatalog = preload("res://src/gameplay/building_catalog.gd")
 const VillageCart = preload("res://src/gameplay/village_cart.gd")
+const VillageSawmill = preload("res://src/gameplay/village_sawmill.gd")
 
 ## The FOUNDING roster: how many villagers a settlement is founded with.
 ## Not a ceiling -- docs/concept/village_growth.md's own arrivals mechanism
@@ -127,6 +128,7 @@ func generate_settlement(
 
 	_staff_food_producers(npcs, region)
 	_staff_the_carter(npcs)
+	_staff_the_sawyer(npcs)
 
 	return {"house_positions": house_positions, "landmarks": landmarks, "npcs": npcs}
 
@@ -210,6 +212,47 @@ static func _staff_the_carter(npcs: Array) -> void:
 	while index >= 0:
 		if not SettlementFoodDemand.FOOD_TRADES.has(npcs[index].occupation):
 			npcs[index] = NpcIdentity.new(npcs[index].seed_value, VillageCart.OCCUPATION)
+			return
+		index -= 1
+
+
+## Makes sure this village has somebody to work timber, if nobody rolled it
+## (docs/concept/village_timber.md, "Somebody in the village has the trade").
+##
+## Reported in play with the mill's own panel in shot: *"The sawmill also
+## doesn't produce beams or plangs or logs"*. A mill with nobody whose trade
+## is timber produces exactly nothing -- the very report this trade was added
+## for, back when the occupations were nine, returning quietly when a tenth
+## was added: a trade is rolled by index, so `carter` re-rolled every
+## villager, and _staff_the_carter above takes one off the end of the roster
+## who may well have been the only sawyer.
+##
+## Measured before this existed (tools/probe_trades_after_conscription.gd,
+## the 75 real grassland villages in rows 0-5): 14 of them, 18.7%, had nobody
+## to work a mill.
+##
+## Deliberately LAST of the three, and it will not take a food producer or
+## the carter the two calls above just placed: food outranks logistics, and
+## logistics outranks timber, when a small roster cannot staff all three.
+##
+## A sawyer in a village with no timber in reach is not wasted -- they keep
+## the regional drip every villager without a worksite already lives on, the
+## same honest fallback a farmer with no farmhouse has.
+static func _staff_the_sawyer(npcs: Array) -> void:
+	if npcs.is_empty():
+		return
+	var founders: int = mini(npcs.size(), POPULATION)
+	for i in founders:
+		if VillageSawmill.works_timber(npcs[i].occupation):
+			return
+	var index: int = founders - 1
+	while index >= 0:
+		var occupation: String = npcs[index].occupation
+		if (
+			not SettlementFoodDemand.FOOD_TRADES.has(occupation)
+			and not VillageCart.walks_the_round(occupation)
+		):
+			npcs[index] = NpcIdentity.new(npcs[index].seed_value, VillageSawmill.OCCUPATION)
 			return
 		index -= 1
 

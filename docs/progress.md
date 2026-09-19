@@ -26321,3 +26321,74 @@ Tests: `test_world_raising_a_plan.gd` 7/7 (new), `test_cart_marker.gd` 28/28,
 - **A building raised by hand still needs hours at the site.** Pavement is
   laid the moment it is raised; a house accumulates the player's own hours
   while they stand there. Only the pavement half is pinned end to end.
+
+## Nothing a village produced was ever where you could see it (2026-09-19)
+
+Four reports in one sitting, all the same root cause plus one older one that
+had quietly come back.
+
+*"The Farmhouse NPC seems to be planting things but it's not wheat and
+nothing grows and nothing gets harvested"* · *"The sawmill also doesn't
+produce beams or plangs or logs"* (with the mill's own panel in shot reading
+**Stored: 0 / 60, Beam x0, Log x0**) · *"also the cart doesn't show up to
+transport goods to warehouse"*.
+
+### ✅ The mill's shelf is the carter's too
+
+Mechanism 7 stopped the FARMHOUSE being emptied into the abstract ledger at
+the end of every work block. The sawmill had the identical carry —
+`haul_sawmill_stock_to_village`, run off the clock from `_step_timber` — and
+it was missed. So the mill you clicked was always empty, the warehouse never
+filled, and **the carter walked a round of shelves somebody had already
+emptied, which is why the cart never left the store.** One cause, four
+symptoms.
+
+In a village with a store the beams now stay on the mill's shelf and the
+sawyer is paid at the saw, exactly as the farmer is paid at the scythe. A
+village with no store carries them in as before. The fisher's pond already
+went through `haul_stock_to_village` and was covered by Mechanism 7.
+
+### ✅ Every village staffs a sawyer
+
+The second cause, and it is the report this trade was *originally* added for:
+*"the sawmill never produces any beams and doesn't even have a dedicated
+worker"*. It came back when `carter` joined `NpcIdentity.OCCUPATIONS` — a
+trade is rolled by index, so a tenth occupation re-rolls every villager, and
+the carter conscription takes one off the end of the roster who may well have
+been the only sawyer.
+
+Measured (`tools/probe_trades_after_conscription.gd`, the 75 real grassland
+villages in rows 0–5): **14 of them, 18.7%, had nobody whose trade is timber;
+0 do now.** `_staff_the_sawyer` runs last of the three conscriptions and will
+take neither a food producer nor the carter, so food outranks logistics and
+logistics outranks timber when a small roster cannot staff all three.
+
+### ✅ The farm loop, driven against the REAL manager
+
+Every existing test of the farming loop drives `StubFarmWorld`, and all of
+them pass — so none of them could have caught this. `test_earth_chunk_manager_
+village_farm_loop.gd` drives the real till/water/harvest hooks and the real
+`step_farm_plots` cadence with a chunk injected rather than generated: a
+farmer really tills the real beds, what they plant really is **wheat**, the
+field really puts wheat on the farmhouse shelf over a work block, and the
+beds do not simply all wither. All four pass, which places the reported
+symptom squarely on the drain above: the crop was grown and harvested all
+along, and then carried off the shelf before anyone could see it.
+
+### ✅ A rounding-boundary test that had been failing since `carter` landed
+
+`VillageWages.wage_share` is derived from the non-producer share of the
+occupation census, so a tenth occupation moved the levy from 0.667 to 0.7 and
+a sawyer's take-home for three beams from exactly 1.0 to **0.9** — under the
+whole coin a `Wallet` can hold, so the wallet never ticked and the assertion
+failed. It hauls ten beams now and says why. Worth noting as a real
+consequence rather than just a test fix: **adding an occupation lowered every
+villager's take-home and raised the village purse's share.**
+
+Tests: `test_npc_marker_timber.gd` 21/21, `test_settlement_generator.gd`
+31/31, `test_earth_chunk_manager_village_farm_loop.gd` 4/4 (new),
+`test_village_renderer.gd`, `test_npc_marker_cart.gd`,
+`test_npc_marker_farming.gd`, `test_village_census.gd`,
+`test_village_npc_population.gd`, `test_settlement_food.gd`,
+`test_settlement_demand.gd`, `test_village_wages.gd`, `test_npc_identity.gd`,
+`test_procedural_landmark_sprite.gd` all green (344 between them).

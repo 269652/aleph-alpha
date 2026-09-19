@@ -366,6 +366,62 @@ func test_a_village_that_already_farms_is_left_alone():
 	assert_gt(touched, 0, "some villages should still roll more than one food producer of their own")
 
 
+# -- and every village has somebody who works timber -----------------------
+
+const VillageSawmill = preload("res://src/gameplay/village_sawmill.gd")
+
+
+func _sawyers(npcs: Array) -> int:
+	var count := 0
+	for npc in npcs:
+		if VillageSawmill.works_timber(npc.occupation):
+			count += 1
+	return count
+
+
+## Reported in play with the mill's own panel in shot: *"The sawmill also
+## doesn't produce beams or plangs or logs"*. A mill with nobody whose trade
+## is timber produces exactly nothing -- the very report this whole trade was
+## added for, back when the occupations were nine.
+##
+## Measured before it was fixed (tools/probe_trades_after_conscription.gd,
+## the 75 real grassland villages in rows 0-5): 14 of them, 18.7%, had nobody
+## to work a mill. Adding a tenth occupation re-rolled every villager, and
+## the carter conscription takes one off the end of the roster -- who may
+## well have been the only sawyer.
+func test_every_village_has_somebody_who_works_timber():
+	for i in 40:
+		var coord := Vector2i(600 + i, 140 + (i % 7))
+		var settlement := generator.generate_settlement(coord, coord * CHUNK_SIZE, CHUNK_SIZE, TILE_SIZE)
+		assert_gt(
+			_sawyers(settlement.npcs), 0,
+			"the village at %s has a mill nobody can work" % str(coord)
+		)
+
+
+## And the carter survived it: two conscriptions must not fight over the
+## same villager and leave the village short of one of them.
+func test_conscripting_a_sawyer_never_costs_the_village_its_carter():
+	for i in 40:
+		var coord := Vector2i(600 + i, 140 + (i % 7))
+		var settlement := generator.generate_settlement(coord, coord * CHUNK_SIZE, CHUNK_SIZE, TILE_SIZE)
+		assert_gt(_carters(settlement.npcs), 0, "the village at %s lost its carter" % str(coord))
+		assert_gte(
+			_food_producers(settlement.npcs),
+			SettlementFoodDemand.producers_needed(settlement.npcs.size()),
+			"and the village at %s went hungry for its timber" % str(coord)
+		)
+
+
+## One is enough -- a village conscripted wholesale into felling would have
+## nobody left to do anything else.
+func test_a_village_is_never_conscripted_wholesale_into_timber():
+	for i in 40:
+		var coord := Vector2i(600 + i, 140 + (i % 7))
+		var settlement := generator.generate_settlement(coord, coord * CHUNK_SIZE, CHUNK_SIZE, TILE_SIZE)
+		assert_lte(_sawyers(settlement.npcs), 3, "the village at %s is all axes" % str(coord))
+
+
 # -- and every village has somebody who carts ------------------------------
 
 const VillageCart = preload("res://src/gameplay/village_cart.gd")
