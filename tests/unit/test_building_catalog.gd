@@ -354,7 +354,7 @@ func test_every_ladder_buildings_cost_and_labour_match_its_recipe():
 func test_no_catalog_building_is_deeper_than_the_street_pitch_reserves():
 	var VillageLayout = load("res://src/world/village_layout.gd")
 	var deepest := 0
-	for building_id in BuildingCatalog.BUILDING_IDS + BuildingCatalog.CIVIC_BUILDING_IDS + BuildingCatalog.PRODUCTION_BUILDING_IDS:
+	for building_id in BuildingCatalog.all_building_ids():
 		deepest = maxi(deepest, BuildingCatalog.footprint_of(building_id).y)
 	assert_eq(
 		VillageLayout.STREET_PITCH_TILES, deepest + VillageLayout.STREET_GAP_TILES,
@@ -401,7 +401,7 @@ func test_no_house_is_ever_offered_at_a_crafting_bench():
 ## see test_no_house_is_ever_offered_at_a_crafting_bench).
 func test_every_building_has_a_readable_display_name():
 	var seen := {}
-	for building_id in BuildingCatalog.BUILDING_IDS + BuildingCatalog.CIVIC_BUILDING_IDS + BuildingCatalog.PRODUCTION_BUILDING_IDS:
+	for building_id in BuildingCatalog.all_building_ids():
 		var name: String = BuildingCatalog.display_name_of(building_id)
 		assert_ne(name, "", "%s needs a name" % building_id)
 		assert_ne(name, building_id, "%s must read as a name, not an id" % building_id)
@@ -635,11 +635,7 @@ func test_a_building_that_keeps_no_goods_says_so():
 ## Every building the catalog knows answers the question, so no caller ever
 ## has to special-case an id.
 func test_every_building_in_the_catalog_answers_at_all():
-	var every: Array = (
-		BuildingCatalog.BUILDING_IDS + BuildingCatalog.CIVIC_BUILDING_IDS
-		+ BuildingCatalog.PRODUCTION_BUILDING_IDS
-	)
-	for building_id in every:
+	for building_id in BuildingCatalog.all_building_ids():
 		assert_gte(BuildingCatalog.storage_capacity_of(building_id), 0, building_id)
 
 
@@ -784,3 +780,64 @@ func test_the_margin_is_centred_so_a_building_is_not_shouldered_to_one_side():
 func test_a_nonsense_plot_still_draws_something():
 	for plot in [0, -3]:
 		assert_gt(BuildingCatalog.drawn_plot_width_tiles(plot), 0.0)
+
+
+# -- the chartered buildings ----------------------------------------------
+
+## docs/concept/settlement_charter.md: two buildings a settlement's own
+## tier entitles it to, at two different tiers, so the charter mechanism is
+## demonstrated rather than special-cased.
+func test_the_chartered_buildings_are_real_catalog_buildings():
+	for building_id in BuildingCatalog.CHARTERED_BUILDING_IDS:
+		assert_true(BuildingCatalog.has_building(building_id), building_id)
+		assert_eq(BuildingCatalog.capacity_of(building_id), 0, "%s is not a home" % building_id)
+
+
+## A charter is one gate. Pricing a chartered building in something a
+## settlement cannot gather would be a SECOND, hidden gate behind it -- a
+## city that earned its charter and still cannot raise its own guild hall.
+## The same three materials every ladder rung is priced in
+## (SettlementGathering's own).
+func test_a_chartered_building_is_priced_in_what_a_settlement_can_actually_gather():
+	for building_id in BuildingCatalog.CHARTERED_BUILDING_IDS:
+		for item_id in BuildingCatalog.cost_of(building_id):
+			assert_true(
+				["wood", "stone", "plant_fibre"].has(item_id),
+				"%s wants %s, which no settlement gathers" % [building_id, item_id]
+			)
+
+
+## A city institution costs more than anything a village raises for itself
+## -- it is the thing a place builds because it finally can.
+func test_a_chartered_building_costs_more_than_every_ungated_one():
+	var dearest_ungated := 0
+	for building_id in BuildingCatalog.PRODUCTION_BUILDING_IDS + BuildingCatalog.CIVIC_BUILDING_IDS:
+		dearest_ungated = maxi(dearest_ungated, _total_material(building_id))
+	for building_id in BuildingCatalog.CHARTERED_BUILDING_IDS:
+		assert_gt(
+			_total_material(building_id), dearest_ungated,
+			"%s costs no more than a building anybody may raise" % building_id
+		)
+
+
+func _total_material(building_id: String) -> int:
+	var total := 0
+	for count in BuildingCatalog.cost_of(building_id).values():
+		total += int(count)
+	return total
+
+
+## The catalog's own invariants must cover EVERY building it knows, or a
+## new entry quietly escapes them -- which is exactly what a hand-written
+## list of three lists lets happen.
+func test_all_building_ids_really_is_every_building_the_catalog_knows():
+	var listed: Array = (
+		BuildingCatalog.BUILDING_IDS + BuildingCatalog.CIVIC_BUILDING_IDS
+		+ BuildingCatalog.PRODUCTION_BUILDING_IDS + BuildingCatalog.CHARTERED_BUILDING_IDS
+	)
+	var every: Array = BuildingCatalog.all_building_ids()
+	assert_eq(every.size(), listed.size(), "a building is in no list, or in two")
+	for building_id in listed:
+		assert_true(every.has(building_id), "%s is listed and not in all_building_ids" % building_id)
+	for building_id in every:
+		assert_true(BuildingCatalog.has_building(building_id), "%s is not a real entry" % building_id)

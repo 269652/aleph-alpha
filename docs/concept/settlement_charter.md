@@ -140,7 +140,7 @@ invented to fill a table.
 
 | building | charter | what it is |
 |---|---|---|
-| `guild_hall` | **town** | the trade guild's own house. `InstitutionStore` already forms real `guild` institutions out of repeated fulfilled contracts, and [village_estates.md](village_estates.md)'s relief chest is already held by one — a guild that has organised itself enough to be measured is a guild with somewhere to meet. |
+| `trade_hall` | **town** | the trade guild's own house. `InstitutionStore` already forms real `guild` institutions out of repeated fulfilled contracts, and [village_estates.md](village_estates.md)'s relief chest is already held by one — a guild that has organised itself enough to be measured is a guild with somewhere to meet. **Not** `guild_hall`: that id is already a 7×7 piece-built *player house* blueprint, and two different things sharing one id is how a recipe book ends up with a duplicate key. |
 | `mage_guild` | **city** | the user's own example, and the answer to a question [magic.md](magic.md) has carried open since it was written: *"Exact station-tier thresholds for compiling (or whether compiling needs a station at all…)"*. Compiling a designed spell into one you permanently know is the single biggest gold sink in that doc; the station it happens at is a mage guild, and a mage guild needs a city. |
 
 ## Status
@@ -153,12 +153,12 @@ it lands; see [progress.md](../progress.md) for the ledger.
 - ⬜ Mechanism 3 — the anti-deadlock invariant.
 - ⬜ Mechanism 4 — the assembly reads the same gate.
 - ⬜ Mechanism 5 — the charter on the readout.
-- ⬜ `guild_hall` and `mage_guild` as real catalog buildings.
+- ⬜ `trade_hall` and `mage_guild` as real catalog buildings.
 
 ## Interaction with other docs
 
 - [village_estates.md](village_estates.md) — the estates, the assembly and
-  the guild whose chest the guild hall houses.
+  the guild whose chest the trade hall houses.
 - [village_growth.md](village_growth.md) — the ladder whose rungs this must
   never gate.
 - [magic.md](magic.md) — the compile station the mage guild is.

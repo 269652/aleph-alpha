@@ -37,6 +37,28 @@ const CIVIC_BUILDING_IDS: Array[String] = ["city_hall", "warehouse"]
 ## trade they house is worked from, not lived in.
 const PRODUCTION_BUILDING_IDS: Array[String] = ["sawmill", "farmhouse", "blacksmith", "brewery"]
 
+## Buildings a settlement's own TIER entitles it to (docs/concept/
+## settlement_charter.md): a place may not simply decide to have one, it
+## has to BE a town or a city first. Never a home either, and never on the
+## growth ladder -- the ladder is what a village climbs to become the kind
+## of place that may raise these.
+##
+## See SettlementCharter.MIN_TIER_BY_BUILDING for which tier each wants.
+## That table lives there rather than here because it is a rule about
+## SETTLEMENTS, and this file knows nothing about settlements.
+const CHARTERED_BUILDING_IDS: Array[String] = ["trade_hall", "mage_guild"]
+
+
+## Every building this catalog knows, in one list.
+##
+## Read off the entries themselves rather than by concatenating the four
+## lists above, so an invariant written against it cannot be escaped by a
+## new entry somebody forgot to add to a list -- which is exactly what a
+## hand-maintained union lets happen (test-pinned both ways: every listed
+## id is here, and every id here is a real entry).
+static func all_building_ids() -> Array:
+	return _BUILDINGS.keys()
+
 ## The reserved chunk-modification id every NON-anchor footprint cell
 ## carries (the anchor cell carries the building id itself, exactly like a
 ## single-tile placeable does today). Never a building, never placeable by
@@ -164,6 +186,37 @@ const _BUILDINGS := {
 		"footprint": Vector2i(3, 3), "interior_family": "workshop", "capacity": 0, "storage": 60,
 		"labor_hours": 57.0, "cost": {"wood": 22, "stone": 12, "plant_fibre": 4},
 	},
+	# The chartered buildings (CHARTERED_BUILDING_IDS, docs/concept/
+	# settlement_charter.md). Priced in the SAME three materials every
+	# other rung is -- the exact three SettlementGathering gathers -- on
+	# purpose: a charter is ONE gate, and pricing these in something a
+	# settlement cannot get would be a second, hidden gate behind it, so a
+	# city that earned its charter still could not raise its own guild
+	# hall. They cost strictly more than anything anybody may raise
+	# unchartered, because they are what a place builds when it finally
+	# can (both test-pinned).
+	#
+	# The trade hall: the house of the `guild` institutions InstitutionStore
+	# already forms out of repeated fulfilled contracts, and the natural
+	# home of the relief chest docs/concept/village_estates.md hangs off
+	# one. Deep storage because that is what a chest in a hall is.
+	#
+	# NOT "guild_hall", which is already taken by a 7x7 piece-built PLAYER
+	# house blueprint (HouseBlueprint.BLUEPRINTS). Two different things
+	# sharing one id is how a recipe book ends up with a duplicate key,
+	# which is exactly how this was found.
+	"trade_hall": {
+		"footprint": Vector2i(3, 3), "interior_family": "hall", "capacity": 0, "storage": 180,
+		"labor_hours": 72.0, "cost": {"wood": 24, "stone": 18, "plant_fibre": 6},
+	},
+	# The mage guild: the compile station docs/concept/magic.md has carried
+	# as an open question since it was written ("exact station-tier
+	# thresholds for compiling"). The dearest thing in the catalog, and the
+	# only one a hamlet or a town may never have at any price.
+	"mage_guild": {
+		"footprint": Vector2i(3, 3), "interior_family": "hall", "capacity": 0, "storage": 60,
+		"labor_hours": 93.0, "cost": {"wood": 28, "stone": 26, "plant_fibre": 8},
+	},
 }
 
 ## Which houses an occupation tends toward -- weighted by repetition, ordered
@@ -216,6 +269,8 @@ const _DISPLAY_NAMES := {
 	"farmhouse": "Farmhouse",
 	"blacksmith": "Smithy",
 	"brewery": "Brewery",
+	"trade_hall": "Trade Hall",
+	"mage_guild": "Mage Guild",
 }
 
 
