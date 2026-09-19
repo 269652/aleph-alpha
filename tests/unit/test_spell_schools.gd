@@ -129,3 +129,47 @@ func test_atoms_in_spell_reads_the_real_pipeline():
 	assert_eq(SpellSchools.atoms_in_spell(book, "fire_bolt"), ["fire_damage"])
 	assert_eq(SpellSchools.atoms_in_spell(book, "frost_lance"), ["frost_damage", "slow"])
 	assert_eq(SpellSchools.atoms_in_spell(book, "not_a_real_spell"), [])
+
+
+# -- how shallow a tradition's shallowest work is ----------------------------
+#
+# Not every school has shallow work: conjury's only spell is depth 3, and
+# vivimancy's shallowest is depth 2. That is a real fact about those
+# traditions, and it is what floors how deep a master of one must run --
+# see MageMaster. Read off the book rather than tabled, so authoring a
+# shallower spell into a school changes it for free.
+
+func test_a_schools_entry_depth_is_its_shallowest_spell():
+	for school in SpellSchools.SCHOOL_IDS:
+		var shallowest := 99
+		for spell_id in book.known_ids():
+			if SpellSchools.school_of_spell(book, spell_id) == school:
+				shallowest = mini(shallowest, SpellSchools.depth_of_spell(book, spell_id))
+		if shallowest == 99:
+			continue
+		assert_eq(SpellSchools.entry_depth_of(book, school), shallowest, "%s" % school)
+
+
+func test_every_school_has_at_least_one_spell_somebody_could_teach():
+	# A tradition with nothing authored in it is a master who teaches
+	# nothing -- a person standing in a room for no reason.
+	for school in SpellSchools.SCHOOL_IDS:
+		assert_between(
+			SpellSchools.entry_depth_of(book, school),
+			SpellSchools.MIN_DEPTH, SpellSchools.MAX_DEPTH,
+			"%s has no spell in the whole catalogue" % school
+		)
+
+
+func test_a_school_nobody_has_heard_of_has_no_entry_depth():
+	assert_eq(SpellSchools.entry_depth_of(book, "not_a_real_school"), 0)
+
+
+func test_spells_of_a_school_are_exactly_those_that_belong_to_it():
+	for school in SpellSchools.SCHOOL_IDS:
+		var expected: Array = []
+		for spell_id in book.known_ids():
+			if SpellSchools.school_of_spell(book, spell_id) == school:
+				expected.append(spell_id)
+		expected.sort()
+		assert_eq(SpellSchools.spells_of(book, school), expected, "%s" % school)

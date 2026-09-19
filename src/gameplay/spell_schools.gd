@@ -130,6 +130,37 @@ static func school_of_spell(book, spell_id: String) -> String:
 	return school
 
 
+## Every spell of a school, in a stable order.
+static func spells_of(book, school: String) -> Array:
+	if book == null:
+		return []
+	var ids: Array = []
+	for spell_id in book.known_ids():
+		if school_of_spell(book, spell_id) == school:
+			ids.append(spell_id)
+	ids.sort()
+	return ids
+
+
+## How shallow a tradition's SHALLOWEST authored work is -- its entry.
+##
+## Not every school has shallow work, and that is a real fact about those
+## traditions rather than a hole: conjury's only spell is depth 3, and
+## vivimancy's shallowest is depth 2. Nobody dabbles in calling things into
+## being. That is what floors how deep a master of one must run (see
+## MageMaster.depth_for), and reading it off the BOOK rather than a table
+## means authoring a shallower spell into a school changes it for free.
+##
+## 0 for a school nothing is authored in.
+static func entry_depth_of(book, school: String) -> int:
+	var shallowest := 0
+	for spell_id in spells_of(book, school):
+		var depth := depth_of_spell(book, spell_id)
+		if depth > 0 and (shallowest == 0 or depth < shallowest):
+			shallowest = depth
+	return shallowest
+
+
 ## How deep a spell runs: the tier of its DEEPEST atom. A spell is exactly
 ## as hard to teach as its hardest verb -- one tier-3 atom in an otherwise
 ## tier-1 pipeline still needs an archmage. 0 for an unknown spell.

@@ -49,6 +49,16 @@ const TITLE_BY_DEPTH := {
 }
 
 static var _rarity: RarityTier = null
+static var _book = null
+
+
+## The world's catalogue, for the readouts (title/display name) that have
+## to agree with what this master will actually teach but are not handed a
+## book by their caller. Cached, like SpellBook's own parse cache.
+static func _shared_book():
+	if _book == null:
+		_book = load("res://src/gameplay/spell_book.gd").new()
+	return _book
 
 
 ## Seeded pick, routed through a % 10000 reduction first -- the exact idiom
@@ -73,12 +83,34 @@ static func rarity_for(seed_value: int) -> String:
 
 
 ## How deep into their own school this master runs, in the atom catalog's
-## 1..3 tier band. Clamped to that band rather than trusted, so a rarity
-## this table has not heard of degrades to a shallow master instead of an
-## impossible one.
-static func depth_for(seed_value: int) -> int:
+## 1..3 tier band.
+##
+## Two floors, and the second one was measured rather than reasoned about
+## (tools/probe_mage_guild.gd): an "Adept of Conjury" taught NOTHING,
+## because conjury's only spell is depth 3 while a common master ran to
+## depth 1 -- and a guild of three such masters taught one spell between
+## them. A master who cannot pass on a single thing is a person standing in
+## a room for no reason.
+##
+## The fix is not a patch but the honest reading: **you cannot hold a
+## tradition whose shallowest work is beyond you.** If you are of a school
+## at all, you can teach its entry; what rarity buys is running DEEPER than
+## that, which stays rare in every school that has shallow work to be rare
+## against. Nobody dabbles in calling things into being, so every conjurer
+## is an archmage of it -- and finding a conjurer at all is then the gate,
+## which is its own kind of rare.
+##
+## `book` is the catalogue the entry depth is read from, and it DEFAULTS to
+## the world's own rather than to null on purpose: an earlier cut made it
+## optional, so depth_for(seed) and depth_for(seed, book) could disagree
+## about the same master while teaches() quietly used the second -- exactly
+## the drift a readout and its mechanics must never have between them.
+## Callers pass a book only to ask about a different catalogue.
+static func depth_for(seed_value: int, book = null) -> int:
+	var catalogue = book if book != null else _shared_book()
 	var depth: int = DEPTH_BY_RARITY.get(rarity_for(seed_value), SpellSchools.MIN_DEPTH)
-	return clampi(depth, SpellSchools.MIN_DEPTH, SpellSchools.MAX_DEPTH)
+	var entry: int = SpellSchools.entry_depth_of(catalogue, school_for(seed_value))
+	return clampi(maxi(depth, entry), SpellSchools.MIN_DEPTH, SpellSchools.MAX_DEPTH)
 
 
 ## The master as a real villager: name, genome, personality, appearance and
@@ -113,7 +145,7 @@ static func teaches(book, spell_id: String, seed_value: int) -> bool:
 	if school == "" or school != school_for(seed_value):
 		return false
 	var depth := SpellSchools.depth_of_spell(book, spell_id)
-	return depth > 0 and depth <= depth_for(seed_value)
+	return depth > 0 and depth <= depth_for(seed_value, book)
 
 
 ## Everything this master would teach, out of the world's whole catalogue,

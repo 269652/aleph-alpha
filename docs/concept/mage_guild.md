@@ -103,10 +103,26 @@ them.
 
 - `school_for(seed)` → one of the ten, chosen by the seed.
 - `rarity_for(seed)` → `RarityTier.roll_tier(seed)`, unchanged.
-- `depth_for(seed)` → that rarity mapped onto the catalog's tier band:
-  common → 1, uncommon → 2, rare and legendary → 3. A depth-3 master is
-  therefore ~10% of masters, which is the rarity the existing roll already
-  decided; this doc adds no weight of its own.
+- `depth_for(seed)` → that rarity mapped onto the catalog's tier band
+  (common → 1, uncommon → 2, rare and legendary → 3), **floored by the
+  master's own school's entry depth**.
+
+  That floor was measured rather than reasoned about
+  (`tools/probe_mage_guild.gd`): without it an *Adept of Conjury* taught
+  **nothing at all**, because conjury's only spell is depth 3 while a
+  common master ran to depth 1 — and a guild of three such masters taught
+  one spell between them. A master who cannot pass on a single thing is a
+  person standing in a room for no reason.
+
+  The fix is not a patch but the honest reading: **you cannot hold a
+  tradition whose shallowest work is beyond you.** If you are of a school
+  at all, you can teach its entry; what rarity buys is running *deeper*
+  than that, which stays rare in every school with shallow work to be rare
+  against. Nobody dabbles in calling things into being, so every conjurer
+  is an Archmage of it — and *finding a conjurer at all* becomes the gate,
+  which is its own kind of rare. `SpellSchools.entry_depth_of` reads that
+  floor off the book rather than a table, so authoring a shallower spell
+  into a school changes it for free.
 - `title_for(seed)` → the master's displayed name and style
   (*"Adept of Cryomancy"*, *"Archmage of Conjury"*), derived from school and
   depth so the readout can never disagree with the mechanics.
@@ -185,6 +201,9 @@ the teacher.
   appearance and a real allocation on the same skill web every other NPC
   and the player walk. `teaches()` is one rule (in my school, within my
   depth), never a list.
+- ✅ **Every master can teach something** — depth is floored by their own
+  school's entry (see mechanism 2). Found by probe, not by review: three
+  masters used to share a guild that taught one spell between them.
 - ✅ **A mage is a trade that arrives, not one a village produces** —
   `NpcIdentity.FORCED_ONLY_OCCUPATIONS`: forcible by a caller, never rolled
   by a seed, so no wizard turns up in a cottage with a field to stand at.

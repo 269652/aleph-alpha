@@ -85,27 +85,82 @@ func test_rarity_is_the_existing_weighted_roll_not_a_new_one():
 		assert_eq(MageMaster.rarity_for(seed_value), rarity.roll_tier(seed_value))
 
 
-func test_depth_rises_with_rarity_and_never_falls():
-	var deepest_by_rank := {}
-	var rarity := RarityTier.new()
-	for seed_value in _seeds(400):
-		var rank: int = RarityTier.TIERS.find(MageMaster.rarity_for(seed_value))
-		deepest_by_rank[rank] = MageMaster.depth_for(seed_value)
-	var ranks: Array = deepest_by_rank.keys()
-	ranks.sort()
-	for i in range(1, ranks.size()):
-		assert_gte(int(deepest_by_rank[ranks[i]]), int(deepest_by_rank[ranks[i - 1]]),
-			"a rarer master taught LESS deeply than a commoner one")
+## Within ONE school, a rarer master never runs shallower than a commoner
+## one. Across schools it is not comparable, because a school's own entry
+## depth floors every master who holds it (see below).
+func test_depth_rises_with_rarity_within_a_school_and_never_falls():
+	var deepest_by_school_and_rank := {}
+	for seed_value in _seeds(600):
+		var key := "%s_%d" % [
+			MageMaster.school_for(seed_value),
+			RarityTier.TIERS.find(MageMaster.rarity_for(seed_value)),
+		]
+		deepest_by_school_and_rank[key] = MageMaster.depth_for(seed_value)
+	for school in SpellSchools.SCHOOL_IDS:
+		var previous := 0
+		for rank in RarityTier.TIERS.size():
+			var key := "%s_%d" % [school, rank]
+			if not deepest_by_school_and_rank.has(key):
+				continue
+			var depth: int = int(deepest_by_school_and_rank[key])
+			assert_gte(depth, previous, "a rarer %s ran shallower than a commoner one" % school)
+			previous = depth
+
+
+## Measured, not assumed (tools/probe_mage_guild.gd): an "Adept of Conjury"
+## used to teach NOTHING, because conjury's only spell is depth 3 and a
+## common master ran to depth 1. A master who cannot pass on a single thing
+## is a person standing in a room for no reason, and three of them made a
+## guild that taught one spell between them.
+##
+## The rule that fixes it is not a patch, it is the honest reading: **you
+## cannot hold a tradition whose shallowest work is beyond you.** If you
+## are of a school at all, you can teach its entry.
+func test_a_master_always_runs_at_least_to_their_own_schools_entry_depth():
+	for seed_value in _seeds(300):
+		var school: String = MageMaster.school_for(seed_value)
+		assert_gte(
+			MageMaster.depth_for(seed_value),
+			SpellSchools.entry_depth_of(book, school),
+			"a master of %s cannot teach the shallowest %s there is" % [school, school]
+		)
+
+
+func test_every_master_anywhere_can_teach_something():
+	for seed_value in _seeds(300):
+		assert_gt(
+			MageMaster.teachable(book, seed_value).size(), 0,
+			"%s teaches nothing at all" % MageMaster.title_for(seed_value)
+		)
+
+
+## Depth BEYOND a school's entry is what rarity buys, and that has to stay
+## rare or an archmage is not worth finding.
+func test_running_deeper_than_your_schools_entry_is_rare():
+	var deeper := 0
+	var sampled := 600
+	for seed_value in _seeds(sampled):
+		var entry: int = SpellSchools.entry_depth_of(book, MageMaster.school_for(seed_value))
+		if MageMaster.depth_for(seed_value) > entry:
+			deeper += 1
+	assert_gt(deeper, 0, "nobody anywhere runs deeper than their school's entry")
+	assert_lt(float(deeper) / float(sampled), 0.45, "running deep is the common case")
 
 
 func test_the_deepest_masters_are_genuinely_rare():
 	# "there should be rare teachers which can teach special rare spells" --
 	# rare must mean rare. The existing roll (common 65 / uncommon 25 /
 	# rare 8 / legendary 2) is what decides, so this pins the consequence
-	# rather than a second weight of this file's own.
+	# rather than a second weight of this file's own. Counted over the
+	# schools that HAVE shallow work, since a school whose entry is already
+	# deep floors every master who holds it.
 	var deep := 0
-	var sampled := 400
-	for seed_value in _seeds(sampled):
+	var sampled := 0
+	for seed_value in _seeds(600):
+		var school: String = MageMaster.school_for(seed_value)
+		if SpellSchools.entry_depth_of(book, school) >= SpellSchools.MAX_DEPTH:
+			continue
+		sampled += 1
 		if MageMaster.depth_for(seed_value) >= SpellSchools.MAX_DEPTH:
 			deep += 1
 	assert_gt(deep, 0, "no master anywhere can teach the deepest magic")
@@ -152,12 +207,20 @@ func test_a_master_refuses_a_spell_from_another_school():
 func test_a_master_refuses_a_spell_deeper_than_they_run():
 	# Same school, one depth short: the school is right and the answer is
 	# still no. That is what makes an archmage worth finding.
+	#
+	# Only for spells that run deeper than their own school's ENTRY --
+	# below that there is no such master to find, because holding the
+	# tradition at all already floors you at its shallowest work.
+	var checked := 0
 	for spell_id in book.known_ids():
+		var school: String = SpellSchools.school_of_spell(book, spell_id)
 		var depth: int = SpellSchools.depth_of_spell(book, spell_id)
-		if depth <= SpellSchools.MIN_DEPTH:
+		if depth <= SpellSchools.entry_depth_of(book, school):
 			continue
-		var shallow := _a_master_of(SpellSchools.school_of_spell(book, spell_id), depth - 1)
+		var shallow := _a_master_of(school, depth - 1)
 		assert_false(MageMaster.teaches(book, spell_id, shallow), "%s" % spell_id)
+		checked += 1
+	assert_gt(checked, 0, "no spell in the book runs deeper than its own school's entry")
 
 
 func test_nobody_teaches_a_spell_outside_the_catalogue():
