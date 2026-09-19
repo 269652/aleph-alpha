@@ -297,7 +297,7 @@ func spawn_village(
 	# then laid across the road.
 	_close_short_street_gaps(chunk_coord, chunk_size, world)
 	var farm_fields := _fenced_farm_fields(
-		chunk_coord, chunk_size, world, _landmark_cells(settlement.landmarks, tile_size)
+		chunk_coord, chunk_size, world, _landmark_cells(settlement.landmarks, tile_size, world)
 	)
 	# After the farms: a pond must not be dug through ground a farmhouse has
 	# already claimed for its beds, and the beds are only known once
@@ -312,7 +312,7 @@ func spawn_village(
 	# Keyed by GLOBAL cell, the same convention _fenced_farm_fields' own
 	# `reserved` uses (it converts on lookup) -- _landmark_cells and the
 	# worked field cells are both already global.
-	var pond_reserved := _landmark_cells(settlement.landmarks, tile_size).duplicate()
+	var pond_reserved := _landmark_cells(settlement.landmarks, tile_size, world).duplicate()
 	for origin in farm_fields:
 		for global_cell in farm_fields[origin]:
 			pond_reserved[global_cell as Vector2i] = true
@@ -972,11 +972,24 @@ func _market_stand_positions(
 ## AFTER the landmarks are grounded. That is how a rail came to be driven
 ## straight through the well the moment it moved off the square's own
 ## paving (docs/concept/village_market_square.md).
-func _landmark_cells(landmarks: Dictionary, tile_size: int) -> Dictionary:
+## Every cell a landmark stands on -- its whole FOOTPRINT, not just the cell
+## it is anchored to. The well is 2x2 (see landmark_footprint_tiles), and
+## reserving only its anchor is how a farm's rails came to be laid through
+## the other three: the fence pass dutifully stepped round one cell of a
+## prop that takes four.
+func _landmark_cells(landmarks: Dictionary, tile_size: int, world = null) -> Dictionary:
 	var cells: Dictionary = {}
 	for landmark_id in landmarks:
 		var at: Vector2 = landmarks[landmark_id]
-		cells[Vector2i(floori(at.x / float(tile_size)), floori(at.y / float(tile_size)))] = true
+		var anchor := Vector2i(floori(at.x / float(tile_size)), floori(at.y / float(tile_size)))
+		var block: Array = [anchor]
+		if world != null and world.has_method("modification_at_global"):
+			var allow_road: bool = landmark_id != "well"
+			var chosen := _clear_block(anchor, world, allow_road, landmark_id)
+			if not chosen.is_empty():
+				block = chosen
+		for cell in block:
+			cells[cell as Vector2i] = true
 	return cells
 
 
@@ -1746,10 +1759,71 @@ func _lay_plaza_if_missing(chunk_coord: Vector2i, chunk_size: int, world) -> voi
 ## on the plaza, the gate is on the street), so a road cell is a legal
 ## place for one -- unlike a workspot prop, which must never stand on the
 ## road it fronts.
+## How many tiles a landmark really stands on.
+##
+## A well is the one SOLID landmark (_SOLID_LANDMARK_IDS), so the ground it
+## takes is ground nobody can walk through -- and it is drawn taller and
+## wider than the single cell it used to be checked against, which is how
+## it ended up shouldering into a street. Asked for directly: "The well
+## should be placed on a free 2x2 place; not over streets or plaza".
+##
+## Everything else is one cell, as before.
+const LANDMARK_FOOTPRINT_TILES := {"well": Vector2i(2, 2)}
+
+
+static func landmark_footprint_tiles(landmark_id: String) -> Vector2i:
+	return LANDMARK_FOOTPRINT_TILES.get(landmark_id, Vector2i.ONE)
+
+
+## Where the block may sit relative to the cell the prop is anchored to:
+## the anchor can be any corner of it. Fixed order, so placement and
+## reservation always pick the same one.
+##
+## A single orientation was tried first and is wrong for exactly the place
+## the well belongs: it stands one row south of the street, so a block that
+## always ran north took a bite out of the road and shoved the well five
+## tiles away looking for somewhere it fitted. Letting it lie in whichever
+## quadrant is actually free keeps it beside the square, which is the whole
+## point of siting it there (docs/concept/village_market_square.md).
+const _BLOCK_TOP_LEFT_OFFSETS := [
+	Vector2i(0, -1),  # anchor at the south-west corner
+	Vector2i(-1, -1),  # ...south-east
+	Vector2i(0, 0),  # ...north-west
+	Vector2i(-1, 0),  # ...north-east
+]
+
+
+## Every placement a landmark's footprint could take around `cell`, each as
+## the list of cells it would occupy. One entry, `[cell]`, for anything
+## one tile across.
+static func landmark_block_options(cell: Vector2i, landmark_id: String) -> Array:
+	var footprint := landmark_footprint_tiles(landmark_id)
+	if footprint == Vector2i.ONE:
+		return [[cell]]
+	var options: Array = []
+	for offset in _BLOCK_TOP_LEFT_OFFSETS:
+		var top_left: Vector2i = cell + (offset as Vector2i)
+		var cells: Array = []
+		for dy in footprint.y:
+			for dx in footprint.x:
+				cells.append(top_left + Vector2i(dx, dy))
+		options.append(cells)
+	return options
+
+
 func _grounded_landmarks(landmarks: Dictionary, tile_size: int, world) -> Dictionary:
 	var grounded := {}
 	for landmark_id in landmarks:
-		var position = _grounded_position(landmarks[landmark_id], tile_size, world, true)
+		# The WELL is the exception the doc comment above predates: it was
+		# moved off the square on report ("The well should not be placed on
+		# the plaza") and then kept being grounded with allow_road true,
+		# which let the search settle it straight back onto the paving. The
+		# stall and the gate really do belong on their own stonework.
+		var allow_road: bool = landmark_id != "well"
+		var position = _grounded_position(
+			landmarks[landmark_id], tile_size, world, allow_road,
+			landmark_footprint_tiles(landmark_id)
+		)
 		if position != null:
 			grounded[landmark_id] = position
 	return grounded
@@ -1764,7 +1838,10 @@ func _grounded_landmarks(landmarks: Dictionary, tile_size: int, world) -> Dictio
 ## keeps the nominal position -- the same duck-typed fail-open shape every
 ## other world hook in this file uses, so nothing that worked without a
 ## world starts returning null.
-func _grounded_position(nominal: Vector2, tile_size: int, world, allow_road: bool):
+func _grounded_position(
+	nominal: Vector2, tile_size: int, world, allow_road: bool,
+	footprint: Vector2i = Vector2i.ONE
+):
 	if world == null or not world.has_method("modification_at_global"):
 		return nominal
 	var centre := Vector2i(floori(nominal.x / tile_size), floori(nominal.y / tile_size))
@@ -1775,21 +1852,24 @@ func _grounded_position(nominal: Vector2, tile_size: int, world, allow_road: boo
 	# carries nothing built, so the search below used to stop there and
 	# leave a farmer's field or a merchant's own stand sitting in a meadow
 	# with no path to it.
-	var beside_the_street: Variant = _nearest_prop_cell(centre, tile_size, world, allow_road, true)
+	var beside_the_street: Variant = _nearest_prop_cell(
+		centre, tile_size, world, allow_road, true, footprint
+	)
 	if beside_the_street != null:
 		return beside_the_street
 	# Nothing within reach touches a street -- keep the prop on real ground
 	# rather than losing it, the same fail-open shape the rest of this file
 	# uses. A village with no paving at all (an isolated rendering test)
 	# lands here every time.
-	return _nearest_prop_cell(centre, tile_size, world, allow_road, false)
+	return _nearest_prop_cell(centre, tile_size, world, allow_road, false, footprint)
 
 
 ## The nearest cell to `centre` that a prop may stand on, searched outward
 ## ring by ring; null when nothing within _PROP_SEARCH_RADIUS_TILES works.
 ## `require_street_access` additionally demands the cell touch a road.
 func _nearest_prop_cell(
-	centre: Vector2i, tile_size: int, world, allow_road: bool, require_street_access: bool
+	centre: Vector2i, tile_size: int, world, allow_road: bool, require_street_access: bool,
+	footprint: Vector2i = Vector2i.ONE
 ):
 	for radius in range(0, _PROP_SEARCH_RADIUS_TILES + 1):
 		for dy in range(-radius, radius + 1):
@@ -1797,7 +1877,7 @@ func _nearest_prop_cell(
 				if maxi(absi(dx), absi(dy)) != radius:
 					continue  # only this ring; inner ones were already tried
 				var cell := centre + Vector2i(dx, dy)
-				if not _prop_cell_is_clear(cell, world, allow_road):
+				if not _prop_block_is_clear(cell, world, allow_road, footprint):
 					continue
 				if require_street_access and not _touches_road(cell, world):
 					continue
@@ -1820,6 +1900,45 @@ func _touches_road(cell: Vector2i, world) -> bool:
 ## Real buildable ground (no water, no forest -- the SAME is_buildable_
 ## ground_at rule the village's own plots obey) carrying nothing built,
 ## or a road when `allow_road`.
+## Every cell of the footprint a prop standing on `cell` would take, clear
+## -- one cell for almost everything, a 2x2 for the well. Checking only the
+## anchor cell while the prop covers more is exactly how a well came to
+## stand with half of itself in the road.
+func _prop_block_is_clear(
+	cell: Vector2i, world, allow_road: bool, footprint: Vector2i
+) -> bool:
+	if footprint == Vector2i.ONE:
+		return _prop_cell_is_clear(cell, world, allow_road)
+	return _clear_block(cell, world, allow_road, _footprint_id(footprint)) != []
+
+
+## The cells this prop really takes standing on `cell` -- the first
+## orientation that is wholly clear, in _BLOCK_TOP_LEFT_OFFSETS' own order,
+## or [] when none is. Placement and reservation both go through this, so
+## the fence pass steps round exactly the four cells the well is standing
+## on rather than a different four.
+func _clear_block(cell: Vector2i, world, allow_road: bool, landmark_id: String) -> Array:
+	for option in landmark_block_options(cell, landmark_id):
+		var clear := true
+		for occupied in option:
+			if not _prop_cell_is_clear(occupied as Vector2i, world, allow_road):
+				clear = false
+				break
+		if clear:
+			return option
+	return []
+
+
+## The landmark id a footprint belongs to -- the search carries a size, the
+## block helpers speak in ids, and the well is the only prop bigger than a
+## cell (LANDMARK_FOOTPRINT_TILES).
+static func _footprint_id(footprint: Vector2i) -> String:
+	for landmark_id in LANDMARK_FOOTPRINT_TILES:
+		if LANDMARK_FOOTPRINT_TILES[landmark_id] == footprint:
+			return landmark_id
+	return ""
+
+
 func _prop_cell_is_clear(cell: Vector2i, world, allow_road: bool) -> bool:
 	if world.has_method("is_buildable_ground_at"):
 		if not world.is_buildable_ground_at(cell.x, cell.y):
