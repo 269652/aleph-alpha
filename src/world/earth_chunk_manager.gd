@@ -5924,9 +5924,25 @@ func _river_flow_boulder_feed() -> Dictionary:
 			stale.append(tile)
 	for tile in stale:
 		_river_flow_boulder_tiles.erase(tile)
+	# NEAREST FIRST, then capped -- the same answer _budgeted_load_order
+	# already gives for a capped chunk set, and SimulationScheduler for a
+	# capped creature step. The slots used to be filled in Dictionary
+	# insertion order, i.e. whichever chunk happened to paint first, so once
+	# the loaded world held more rocks than slots the water could bend
+	# around two dozen rocks off screen while the ones the player is
+	# standing next to did nothing at all (measured at the Dreisam fixture:
+	# rocks 48 tiles out dropped while rocks 100 tiles out kept their
+	# slots). The centre is the tile update() was last called with -- the
+	# same one record_water_disturbance already culls distant wakes against.
+	var centre := _disturbance_center_tile
+	var tiles: Array = _river_flow_boulder_tiles.keys()
+	tiles.sort_custom(
+		func(a: Vector2i, b: Vector2i) -> bool:
+			return Vector2(a - centre).length_squared() < Vector2(b - centre).length_squared()
+	)
 	var positions := PackedVector2Array()
 	var radii := PackedFloat32Array()
-	for tile in _river_flow_boulder_tiles:
+	for tile in tiles:
 		if positions.size() >= RIVER_FLOW_BOULDER_SLOTS:
 			break
 		positions.append(Vector2(
@@ -6810,6 +6826,37 @@ func _paint_hillshade_overlay(chunk_coord: Vector2i, chunk: Chunk) -> void:
 const LAKE_PAINT_ACROSS := 1.6
 
 
+## One rock, one rule, whatever STYLE of water its tile is painted as.
+##
+## "ONE WATER SURFACE (docs/concept/hydrology.md): rivers, lakes and the sea
+## all ride this overlay" -- _paint_river_flow_overlay's own opening comment
+## -- so a boulder standing in a pond parts its surface exactly like one
+## standing mid-stream, and the shader has a single boulder uniform set for
+## all of them. But only the flowing-river branch ever collected a rock; the
+## still-water and shore-band branches ERASED unconditionally, so every
+## boulder in a lake, a pond, a sea pocket, a river-mouth plume or a lake
+## feather silently did nothing to the water.
+##
+## That is not a rare corner: a tile can be a curated river cell AND be
+## classified a lake by the baked hydrology field at the same time (this
+## game's own Dreisam spawn is exactly that -- is_river_at_global true,
+## hydrology kind "lake"), so even a boulder the player drops in the river
+## in front of them stopped bending the water as soon as its chunk was
+## repainted. Reported live: "the boulders in the river doesn't affect
+## hydrology whirls and such correctly".
+##
+## Stores the rock's real DIAMETER, never a flag: _river_flow_boulder_feed
+## reads these values back as cm to size each rock's radius, and the push
+## reach, the eyot, the shoal, the foam and the wake all scale from that
+## radius.
+func _collect_flow_boulder(global: Vector2i) -> void:
+	var diameter_cm := flow_boulder_diameter_cm_at_global(global.x, global.y)
+	if diameter_cm > 0.0:
+		_river_flow_boulder_tiles[global] = diameter_cm
+	else:
+		_river_flow_boulder_tiles.erase(global)
+
+
 func _paint_river_flow_overlay(chunk_coord: Vector2i, chunk: Chunk) -> void:
 	if _river_flow_layer == null:
 		return
@@ -6843,7 +6890,7 @@ func _paint_river_flow_overlay(chunk_coord: Vector2i, chunk: Chunk) -> void:
 					RiverCatalog.RIVER_HALF_WIDTH_TILES,
 					generator.drift_speed_m_s_for_discharge_units(probe.get("plume_reach_discharge", 0.0))
 				)
-				_river_flow_boulder_tiles.erase(global)
+				_collect_flow_boulder(global)
 				_river_flow_layer.set_cell(
 					global, 0,
 					_terrain_renderer.atlas_coords_for_river_flow(
@@ -6896,6 +6943,11 @@ func _paint_river_flow_overlay(chunk_coord: Vector2i, chunk: Chunk) -> void:
 					half_width,
 					nearest.get("drift_speed_m_s", 0.0)
 				)
+				# Past the bleed nothing is drawn as water, so no rock here
+				# can be a flow boulder. A plain erase, never the predicate:
+				# this is the far majority of a chunk's tiles and it must
+				# stay free.
+				_river_flow_boulder_tiles.erase(global)
 				continue
 			if nearest.distance_tiles > apron:
 				var apron_hydraulics := generator.river_hydraulics_at_global(
@@ -6909,7 +6961,7 @@ func _paint_river_flow_overlay(chunk_coord: Vector2i, chunk: Chunk) -> void:
 					half_width,
 					nearest.get("drift_speed_m_s", 0.0)
 				)
-				_river_flow_boulder_tiles.erase(global)
+				_collect_flow_boulder(global)
 				_river_flow_layer.set_cell(
 					global, 0,
 					_terrain_renderer.atlas_coords_for_river_flow(
@@ -6933,10 +6985,7 @@ func _paint_river_flow_overlay(chunk_coord: Vector2i, chunk: Chunk) -> void:
 				nearest.course_bearing_deg, hydraulics.velocity_m_s, half_width,
 				nearest.get("drift_speed_m_s", 0.0)
 			)
-			if flow_boulder_at_global(global.x, global.y):
-				_river_flow_boulder_tiles[global] = true
-			else:
-				_river_flow_boulder_tiles.erase(global)
+			_collect_flow_boulder(global)
 			_river_flow_layer.set_cell(
 				global, 0,
 				_terrain_renderer.atlas_coords_for_river_flow(
@@ -12634,6 +12683,19 @@ func is_river_at_global(global_x: int, global_y: int) -> bool:
 ## village_ponds.md, VillagePond). An ordinary chunk modification, like a
 ## rail -- the id is the only thing stored about it, which is what lets a
 ## pond survive a reload with no record of the fisher who dug it.
+## Whether this tile is STILL water the surface paints -- a lake, a sea
+## pocket, a pond, or a dry-by-elevation cell inside a gentle shore's own
+## feather. The public, global-tile form of is_still_water_probe, which
+## _paint_river_flow_overlay and is_water_at_global already share; exposed
+## so placement can tell the two KINDS of water apart, because a rock
+## standing in a stream is a feature and a rock standing on a lake is not
+## (see StoneRenderer.spawn_stones).
+func is_still_water_at_global(global_x: int, global_y: int) -> bool:
+	if is_pond_at_global(global_x, global_y):
+		return true
+	return is_still_water_probe(generator.hydrology_at_global(global_x, global_y))
+
+
 func is_pond_at_global(global_x: int, global_y: int) -> bool:
 	return VillagePond.is_pond_tile(modification_at_global(global_x, global_y))
 
@@ -12714,6 +12776,19 @@ func lake_depth_meters_at_global(global_x: int, global_y: int) -> float:
 ## One byte per cell, 1 where a river or lake covers the ground -- the
 ## per-chunk form of Chunk.blocks_ground_cover, for consumers that take a
 ## whole flag array (TallGrass) rather than a Chunk.
+## Every cell of this chunk that is drawn as WATER, as local Vector2i --
+## the cells form of _ground_cover_blockers, for the sims whose blocking
+## API takes a cell list rather than a mask (FlowerPatch.block_cells, which
+## also clears anything already seeded there and refuses every later
+## rooting and seed-fall).
+func _water_cells(chunk: Chunk) -> Array:
+	var cells: Array = []
+	for index in chunk.width * chunk.height:
+		if chunk.blocks_ground_cover(index):
+			cells.append(Vector2i(index % chunk.width, index / chunk.width))
+	return cells
+
+
 func _ground_cover_blockers(chunk: Chunk) -> PackedByteArray:
 	var blockers := PackedByteArray()
 	blockers.resize(chunk.width * chunk.height)
@@ -15718,7 +15793,7 @@ func _load_chunk(chunk_coord: Vector2i) -> void:
 	_dispatch_cicadas(chunk_coord)
 
 	_loaded_stones[chunk_coord] = _stone_renderer.spawn_stones(
-		_entities_parent, chunk, chunk_coord * CHUNK_SIZE, TerrainRenderer.TILE_SIZE
+		_entities_parent, chunk, chunk_coord * CHUNK_SIZE, TerrainRenderer.TILE_SIZE, self
 	) + _stone_renderer.spawn_mountain_veins(
 		_entities_parent, chunk, chunk_coord * CHUNK_SIZE, TerrainRenderer.TILE_SIZE, self
 	)
@@ -15783,7 +15858,7 @@ func _load_chunk(chunk_coord: Vector2i) -> void:
 	for crop_id in WILD_CROP_IDS:
 		var sim := WildCropPatch.new(
 			crop_id, hash("%d_%d_wild_crop" % [chunk_coord.x, chunk_coord.y]),
-			chunk.width, chunk.height, chunk.biome
+			chunk.width, chunk.height, chunk.biome, _ground_cover_blockers(chunk)
 		)
 		crop_sims[crop_id] = sim
 		# Already carrying the current season, so a chunk streamed in during
@@ -15800,7 +15875,8 @@ func _load_chunk(chunk_coord: Vector2i) -> void:
 	# species for this chunk, already carrying whatever it seeded/was
 	# already fruiting on arrival.
 	var mushroom_sim := WildMushroomPatch.new(
-		hash("%d_%d_mushroom" % [chunk_coord.x, chunk_coord.y]), chunk.width, chunk.height, chunk.biome
+		hash("%d_%d_mushroom" % [chunk_coord.x, chunk_coord.y]), chunk.width, chunk.height, chunk.biome,
+		_ground_cover_blockers(chunk)
 	)
 	_mushroom_sims[chunk_coord] = mushroom_sim
 	_mushroom_markers[chunk_coord] = _mushroom_renderer.spawn_markers(
@@ -15935,6 +16011,11 @@ func _load_chunk(chunk_coord: Vector2i) -> void:
 		_weather_model.prevailing_wind_strength(PREVAILING_WIND_REGION_SEED)
 	)
 	_flower_patches[chunk_coord].block_cells(built_cells)
+	# ...and every cell drawn as water. FlowerPatch already owns the right
+	# API for this (block_cells clears what is there AND refuses every
+	# later rooting and seed-fall); it had simply never been handed the
+	# water. Reported live: bushes and flowers standing in open lake.
+	_flower_patches[chunk_coord].block_cells(_water_cells(chunk))
 	_flower_sprites[chunk_coord] = {}
 	_seed_sprites[chunk_coord] = {}
 	_sync_flower_sprites(chunk_coord)
@@ -15958,7 +16039,8 @@ func _load_chunk(chunk_coord: Vector2i) -> void:
 	# ticks according to the live weather, rather than popping onto the grass
 	# the instant a chunk loads.
 	_worm_patches[chunk_coord] = EarthwormPatch.new(
-		hash("%d_%d_earthworms" % [chunk_coord.x, chunk_coord.y]), chunk.width, chunk.height, chunk.biome
+		hash("%d_%d_earthworms" % [chunk_coord.x, chunk_coord.y]), chunk.width, chunk.height, chunk.biome,
+		_ground_cover_blockers(chunk)
 	)
 	_worm_sprites[chunk_coord] = {}
 
@@ -15966,7 +16048,8 @@ func _load_chunk(chunk_coord: Vector2i) -> void:
 	# once at chunk creation -- mound_cells() never changes for a loaded
 	# chunk's lifetime, exactly like the earthworm burrows just above.
 	_ant_colonies[chunk_coord] = AntColony.new(
-		hash("%d_%d_ants" % [chunk_coord.x, chunk_coord.y]), chunk.width, chunk.height, chunk.biome
+		hash("%d_%d_ants" % [chunk_coord.x, chunk_coord.y]), chunk.width, chunk.height, chunk.biome,
+		_ground_cover_blockers(chunk)
 	)
 	# The visible counterpart: one static AntMoundMarker per mound cell, so a
 	# colony is actually somewhere a player can SEE rather than a pure
