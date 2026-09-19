@@ -204,3 +204,73 @@ func test_no_earthworm_burrows_on_water():
 		return
 	_report("earthworm burrows", _cells_of(
 		manager._worm_patches[chunk_coord].worm_cells(), chunk_coord))
+
+
+# -- the river bank, where the two masks genuinely disagree ------------------
+#
+# The lake above hides one half of this bug: there, Chunk.blocks_ground_
+# cover already agrees with is_water_at_global on every cell. At a RIVER it
+# does not. The painted water runs out across the bank apron and the shore
+# feather, and `is_river` flags none of that -- which is precisely why
+# is_water_at_global was written ("so a house could be sited on a cell
+# drawn blue"). Building placement was moved onto it; ground cover was
+# left on the narrow mask.
+#
+# Measured at the Dreisam: 1,840 cells drawn as water that the narrow mask
+# does not block, and 474 grass patches standing on them. That is the
+# original report -- "There are still patches of grass" -- and it is a
+# mask-WIDTH problem, unlike everything above, which was a
+# nobody-reads-the-mask problem.
+
+const _RIVER_LAT := 48.007669
+const _RIVER_LON := 7.805657
+
+
+## Its own manager at the river, since before_each loads the lake.
+func _river_manager() -> Dictionary:
+	var layer := TileMapLayer.new()
+	var entities := Node2D.new()
+	var creatures := Node2D.new()
+	var subject = EarthChunkManager.new(layer, entities, creatures)
+	var geo := GeoCoordinates.new()
+	var tile: Vector2i = geo.tile_for_coordinate(
+		_RIVER_LAT, _RIVER_LON,
+		EarthChunkGenerator.WORLD_WIDTH_TILES, EarthChunkGenerator.WORLD_HEIGHT_TILES
+	)
+	subject.update(tile)
+	return {"manager": subject, "tile": tile, "nodes": [layer, entities, creatures]}
+
+
+func _free_river(bundle: Dictionary) -> void:
+	for node in bundle["nodes"]:
+		node.free()
+
+
+## The premise: at a river the two masks really do disagree, and that gap
+## is what the grass is standing in.
+func test_the_narrow_mask_misses_the_painted_river_bank():
+	var bundle := _river_manager()
+	var subject = bundle["manager"]
+	var missed := 0
+	for chunk_coord in subject._loaded_chunks:
+		var chunk = subject._loaded_chunks[chunk_coord]
+		for y in chunk.height:
+			for x in chunk.width:
+				var g: Vector2i = chunk_coord * EarthChunkManager.CHUNK_SIZE + Vector2i(x, y)
+				if subject.is_water_at_global(g.x, g.y) and not chunk.blocks_ground_cover(y * chunk.width + x):
+					missed += 1
+	_free_river(bundle)
+	assert_gt(missed, 0, "the premise: the painted river is wider than is_river/is_lake")
+
+
+func test_no_grass_grows_on_the_painted_river_bank():
+	var bundle := _river_manager()
+	var subject = bundle["manager"]
+	var on_water := 0
+	for chunk_coord in subject._loaded_chunks:
+		for cell in subject._grass_sims[chunk_coord].get_patch_cells():
+			var g: Vector2i = chunk_coord * EarthChunkManager.CHUNK_SIZE + cell
+			if subject.is_water_at_global(g.x, g.y):
+				on_water += 1
+	_free_river(bundle)
+	assert_eq(on_water, 0, "%d grass patches stand on cells drawn as water" % on_water)

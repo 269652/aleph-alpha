@@ -498,3 +498,4 @@ func test_the_boulder_feed_keeps_the_nearest_rocks_when_slots_run_out():
 			Vector2(tile - river_tile).length(), worst_fed,
 			"a rock at %s was dropped while a farther one kept its slot" % str(tile)
 		)
+
