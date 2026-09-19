@@ -288,17 +288,29 @@ system most needed.
 
 - An unhoused household outvotes everything. Shelter first, unchanged.
 - Otherwise every estate casts `count × ESTATE_VOTE_WEIGHT[estate]` votes
-  for the one unbuilt building that would most directly fix **its own**
-  most-unmet need — a cottager short of fuel petitions for the sawmill, a
-  husbandman short of bread for the mill, a craftsman for the forge that
-  employs him, a burgher for the brewery.
+  for one building, by one rule: **a household short of something
+  petitions for the works that would supply it; a household with nothing
+  to complain of petitions for the charter that would let it rise.** A
+  cottager short of fuel asks for the sawmill; a well-kept one asks for the
+  farm that would make him a husbandman.
 - Highest petition wins. Ties break on
   [village_growth.md](village_growth.md)'s own ladder order, so the result
   is deterministic and a village with no strong opinion still behaves
   exactly as it does today.
 - **A building nobody could staff is never petitioned for.** The gate is
-  `VillageLabor.demand_for` against the *current* supply: a village with no
+  `VillageLabor.can_staff` against the *current* supply: a village with no
   craftsmen does not vote to build a forge it would then leave cold.
+- **A charter is exempt from that gate, and the exemption is
+  load-bearing.** A civic seat is not staffed before it exists; it is what
+  CREATES the estate that keeps it. Without the exemption every rung of
+  this ladder deadlocks on needing the very people its own charter would
+  produce — no farm, so no husbandmen; no husbandmen, so no farm.
+- **A village nobody has assessed falls back to the plain ladder.** With no
+  satisfaction reading, every estate reads as fully supplied, petitions for
+  its charter, finds it standing and abstains — so a village that had never
+  been stepped built nothing at all. Silence is not an answer when nobody
+  asked the question. Once a real reading exists the fallback is gone, and
+  a village that genuinely wants nothing genuinely builds nothing.
 
 A village therefore builds what its own people are short of, in the order
 their standing entitles them to ask — and two villages with the same
