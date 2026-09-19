@@ -219,17 +219,35 @@ func _raise_the_hall() -> void:
 const INDUSTRY_RUNG := "sawmill"
 
 
+## The next street-fronting rung this village will really raise.
+##
+## ASKED OF THE MANAGER rather than predicted here. Since docs/concept/
+## village_estates.md a village VOTES on its next rung (VillageAssembly)
+## instead of walking a fixed table, so a second copy of the ladder order
+## in this file would be predicting a decision nothing makes any more --
+## which is exactly how this helper broke when the assembly landed.
+##
+## Anything that is not a street-fronting works is cleared out of the way
+## first: the hall has its own decision and is already up, a house means
+## somebody is still unroofed, and the industry rung is sited at the forest
+## rather than on the street, so each is satisfied for real and the village
+## is asked again.
 func _rung_the_village_is_owed() -> String:
 	_raise_the_hall()
-	for rung in VillageGrowth.LADDER_BUILDING_IDS:
+	for _attempt in VillageGrowth.LADDER_BUILDING_IDS.size() * 4:
+		var rung := manager.next_building_for_settlement(_chunk_coord)
+		if rung == "" or BuildingCatalog.BUILDING_IDS.has(rung):
+			# Nothing wanted yet, or a roof owed -- a bigger village wants
+			# more, so grow it and ask again.
+			_grow_to(manager.household_count_for_settlement(_settlement_id) + 3)
+			continue
 		if rung == "city_hall":
-			continue  # the hall has its own decision, and is up already
-		if manager._present_structure_ids_for_settlement_chunk(_chunk_coord).has(rung):
-			continue  # already standing, so the ladder walks past it
-		_grow_to(VillageGrowth.min_households_for(rung))
+			_raise_the_hall()
+			continue
 		var origin = manager._growth_site_for(_chunk_coord, rung)
 		if origin == null:
-			continue  # nowhere to put this one; try the next
+			_grow_to(manager.household_count_for_settlement(_settlement_id) + 3)
+			continue
 		if rung == INDUSTRY_RUNG:
 			manager._place_building_over_roads(_chunk_coord, origin, rung, 2, _settlement_id)
 			continue

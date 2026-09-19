@@ -99,10 +99,17 @@ static func next_building(state: Dictionary) -> String:
 		estate_counts, present, state.get("satisfaction", {})
 	)
 	if petitions.is_empty():
-		# Nothing anybody in this village is asking for. A village whose
-		# estates are unknown to us has not abstained -- we simply never
-		# asked it -- so it falls through to the ladder it already walked.
-		if estate_counts.is_empty():
+		# Nothing anybody in this village is asking for -- but silence is
+		# not always an answer. A village whose estates are unknown to us,
+		# or whose supply has never been ASSESSED, has not abstained: we
+		# simply never asked it. Either way it falls through to the ladder
+		# it already walked, so the assembly can only ever be a layer over
+		# VillageGrowth and never a regression on it.
+		#
+		# Once a real reading HAS been taken, the fallback is gone: a
+		# village that really wants nothing really builds nothing, which is
+		# the whole point of asking.
+		if estate_counts.is_empty() or Dictionary(state.get("satisfaction", {})).is_empty():
 			return VillageGrowth.next_building(household_count, household_count, present)
 		return ""
 	return _winner(petitions)

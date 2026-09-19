@@ -267,6 +267,40 @@ func test_a_village_with_no_estate_census_at_all_falls_back_to_the_ladder():
 	)
 
 
+## A village whose people are known but whose supply has never been
+## ASSESSED has not abstained -- nobody asked it. Without this it silently
+## petitions for nothing, and a village that has never been stepped builds
+## nothing at all, which would make the assembly a regression on the plain
+## ladder rather than a layer over it.
+func test_a_village_nobody_has_assessed_yet_falls_back_to_the_ladder():
+	assert_eq(
+		_petition({
+			"estate_counts": {"kossaet": 4},
+			"household_count": 4,
+			"housed_count": 4,
+			"present_building_ids": ["farmhouse"],
+			"satisfaction": {},
+		}),
+		VillageGrowth.next_building(4, 4, ["farmhouse"])
+	)
+
+
+## And once a reading HAS been taken, the fallback is gone: a village that
+## really wants nothing really builds nothing.
+func test_an_assessed_village_that_wants_nothing_builds_nothing():
+	var estate_counts := {"buerger": 3}
+	assert_eq(
+		_petition({
+			"estate_counts": estate_counts,
+			"household_count": 3,
+			"housed_count": 3,
+			"present_building_ids": VillageGrowth.LADDER_BUILDING_IDS,
+			"satisfaction": _fully_supplied(estate_counts),
+		}),
+		""
+	)
+
+
 func test_an_empty_village_owes_itself_nothing():
 	assert_eq(_petition({"estate_counts": {}, "household_count": 0, "housed_count": 0}), "")
 

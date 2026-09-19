@@ -16836,20 +16836,27 @@ func _apply_civic_build_decision(chunk_coord: Vector2i) -> void:
 ## real household its real roof through the existing property scheme.
 ## Everything else is a commons, owned by the settlement itself, exactly
 ## as CivicBuildDecision already owns the hall.
-func _apply_village_growth_decision(chunk_coord: Vector2i) -> void:
+## The ONE building this settlement will raise next, or "".
+##
+## docs/concept/village_estates.md mechanism 5: the village VOTES rather
+## than walking a fixed table. VillageAssembly is a layer over
+## VillageGrowth, not a replacement -- shelter still comes first, the
+## buildings are still that ladder's, its order is still the tie-break, and
+## a settlement whose estates or whose supply nobody has read falls
+## straight through to the behaviour it had before this existed.
+##
+## Public because it is a QUESTION, not an action: anything that wants to
+## know what this village intends -- a readout, a test, a later caller --
+## must ask the same function _apply_village_growth_decision then acts on,
+## never keep a second prediction of its own that can drift from it.
+func next_building_for_settlement(chunk_coord: Vector2i) -> String:
 	var settlement_id := EntityRef.for_settlement(chunk_coord)
 	var household_ids := _households_in_settlement(settlement_id)
 	if household_ids.is_empty():
-		return
+		return ""
 	var census := _village_census_for(chunk_coord, household_ids)
 	var waiting: Array = census["unhoused_household_ids"]
-	# docs/concept/village_estates.md mechanism 5: the village VOTES rather
-	# than walking a fixed table. VillageAssembly is a layer over
-	# VillageGrowth, not a replacement -- shelter still comes first, the
-	# buildings are still that ladder's, its order is still the tie-break,
-	# and a settlement with no estate census falls straight through to the
-	# behaviour it had before this existed.
-	var next_building: String = VillageAssembly.next_building({
+	return VillageAssembly.next_building({
 		"estate_counts": _household_store.estate_census(household_ids),
 		"household_count": household_ids.size(),
 		"housed_count": int(census["housed_count"]),
@@ -16857,6 +16864,16 @@ func _apply_village_growth_decision(chunk_coord: Vector2i) -> void:
 		"satisfaction": _settlement_estate_satisfaction.get(settlement_id, {}),
 		"waiting_estate": _estate_of_household(waiting[0] if not waiting.is_empty() else ""),
 	})
+
+
+func _apply_village_growth_decision(chunk_coord: Vector2i) -> void:
+	var settlement_id := EntityRef.for_settlement(chunk_coord)
+	var household_ids := _households_in_settlement(settlement_id)
+	if household_ids.is_empty():
+		return
+	var census := _village_census_for(chunk_coord, household_ids)
+	var waiting: Array = census["unhoused_household_ids"]
+	var next_building := next_building_for_settlement(chunk_coord)
 	if next_building == "" or next_building == CivicBuildDecision.CITY_HALL_BUILDING_ID:
 		return  # nothing owed, or the hall -- which has its own live decision
 
