@@ -504,9 +504,28 @@ static func touches_building(modifications: Dictionary, cell: Vector2i) -> bool:
 
 ## Which house a villager builds -- their occupation's own pool, nudged by
 ## their dominant personality trait, seeded so the same villager always
-## builds the same house.
-static func choose_house_id(occupation: String, genome: NpcGenome, seed_value: int) -> String:
+## builds the same house, and never grander than `entitled_house_id`.
+##
+## The cap is the whole of "a village does not start with manors". Asked
+## directly: *"The village should not produce Manors from the beginning only
+## cottages and once all villagers needs are stable in the green they can
+## upgrade to houses"*. The estate layer already says which house each
+## standing lives in (VillageEstates.house_id_for) and every household is
+## founded at the bottom one -- this function simply never asked, so a
+## founding merchant, whose pool is medium/large/large/large, raised a manor
+## before the village had fed anybody.
+##
+## A CEILING, not an assignment: the pool is clamped rather than replaced,
+## so trade and character still choose within it and a showy merchant
+## cottager gets the grandest cottage there is. "" (the default) means no
+## cap at all, so a caller that has not been taught about standing yet is
+## untouched -- as is an id this catalog does not know, which is no cap
+## rather than no house.
+static func choose_house_id(
+	occupation: String, genome: NpcGenome, seed_value: int, entitled_house_id: String = ""
+) -> String:
 	var pool: Array = HOUSE_POOL_BY_OCCUPATION.get(occupation, BUILDING_IDS)
+	pool = _capped_pool(pool, entitled_house_id)
 	var index := PixelNoise.range_index(seed_value, 7, 11, pool.size())
 	var dominant := genome.dominant_trait()
 	if _SHOWY_TRAITS.has(dominant):
@@ -517,3 +536,19 @@ static func choose_house_id(occupation: String, genome: NpcGenome, seed_value: i
 		var lower_half_size := maxi(pool.size() / 2, 1)
 		index = mini(index, PixelNoise.range_index(seed_value, 19, 23, lower_half_size))
 	return pool[index]
+
+
+## `pool` with every house grander than `entitled_house_id` dropped --
+## BUILDING_IDS' own order IS the ladder, smallest first, so "grander" needs
+## no second table. Never empty: a pool with nothing at or below the cap
+## falls back to the smallest house there is, because a household always
+## lives somewhere.
+static func _capped_pool(pool: Array, entitled_house_id: String) -> Array:
+	var ceiling := BUILDING_IDS.find(entitled_house_id)
+	if ceiling < 0:
+		return pool
+	var capped: Array = []
+	for house_id in pool:
+		if BUILDING_IDS.find(house_id) <= ceiling:
+			capped.append(house_id)
+	return capped if not capped.is_empty() else [BUILDING_IDS[0]]
