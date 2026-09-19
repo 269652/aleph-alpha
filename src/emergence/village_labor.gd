@@ -134,6 +134,48 @@ static func output_scale_for(building_id: String, supply: Dictionary, demand: Di
 	return clampf(scale, 0.0, 1.0)
 
 
+## `{labour_class -> [0,1]}`, what share of the PEOPLE of each class have a
+## post -- the dual of fulfilment, and the half a household actually feels.
+##
+## The two answer different questions off the same two numbers and are not
+## interchangeable: a village with one forge and forty craftsmen has every
+## post filled (`fulfilment` 1.0) and thirty-eight idle men (`employment`
+## 0.05). Buildings care about the first; households care about the second,
+## which is why HouseholdWellbeing's `work` need reads this one.
+##
+## Every class named on EITHER side gets an answer, because both cases are
+## real and different: a class nothing demands is wholly idle, and a class
+## NOBODY HOLDS is reported as fully employed rather than as zero — there is
+## nobody to be idle, and zero would invent a crowd of unemployed people
+## who do not exist.
+static func employment_for(supply: Dictionary, demand: Dictionary) -> Dictionary:
+	var out := {}
+	for labour_class in supply:
+		var heads := float(supply[labour_class])
+		out[labour_class] = (
+			1.0 if heads <= 0.0
+			else clampf(float(demand.get(labour_class, 0)) / heads, 0.0, 1.0)
+		)
+	for labour_class in demand:
+		if not out.has(labour_class):
+			out[labour_class] = 1.0
+	return out
+
+
+## What ONE household of `estate` reads off an employment table: the
+## employment of its own estate's labour class.
+##
+## An estate with no labour class of its own -- an id this table has never
+## heard of -- cannot be idle, so it reads 1.0 rather than 0.0. The same
+## reasoning as a class nobody holds: a household we know nothing about
+## must not be counted as one we know is out of work.
+static func employment_for_estate(estate: String, employment: Dictionary) -> float:
+	var labour_class := VillageEstates.labour_class_for(estate)
+	if labour_class == "":
+		return 1.0
+	return clampf(float(employment.get(labour_class, 1.0)), 0.0, 1.0)
+
+
 ## Whether the village holds at least ONE head of every class this building
 ## needs -- the assembly's own gate (mechanism 5): a village does not vote
 ## to build what it could not put a single body in. Deliberately weaker

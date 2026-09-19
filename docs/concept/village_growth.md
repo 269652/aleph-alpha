@@ -262,7 +262,7 @@ reload regenerates exactly the same person.
 `HouseholdWellbeing.assess(state) -> {needs, happiness, productivity}`,
 pure, from real state passed in.
 
-**Four needs**, each a satisfaction in `[0, 1]` (1 = fully met):
+**Five needs**, each a satisfaction in `[0, 1]` (1 = fully met):
 
 | need | satisfied by | real source |
 |---|---|---|
@@ -270,8 +270,17 @@ pure, from real state passed in.
 | `shelter` | having a house at all, and its capacity vs. household size | `BuildingCatalog.capacity_of` |
 | `income` | wallet balance against the local price of a meal | `Household.wallet`, `VillageMarket.VILLAGE_LOCAL_FOOD_PRICE` |
 | `community` | how many civic/production rungs actually stand in the village | the ladder above, `_present_structure_ids_for_settlement_chunk` |
+| `work` | whether there is a post in this village for the household's own labour class | `VillageLabor.employment_for` ([village_estates.md](village_estates.md) mechanism 4) |
 
-**Happiness** is the weighted mean of the four, food weighted heaviest and
+`work` is the fifth, added 2026-09-19 with the estate overhaul, and it
+sits between shelter and income in weight: losing your trade costs a
+household more than losing its savings, because the trade is what
+produced the savings, and less than losing the roof. It is also the one
+need whose MISSING input is not read as destitution — employment is read
+off the settlement's buildings, and a caller that could not look at them
+has discovered nothing rather than idleness.
+
+**Happiness** is the weighted mean of the five, food weighted heaviest and
 community lightest (`NEED_WEIGHTS`, test-pinned by the ordering they
 produce: an unfed household is unhappier than one merely lacking a
 brewery).
