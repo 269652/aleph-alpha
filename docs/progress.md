@@ -27038,6 +27038,118 @@ of the tile.
 
 Tests: `test_illustrated_structure_sprite.gd` 41/41 (3 new).
 
+## Walls, rails and built ground stop being suggestions (2026-09-19)
+
+A run of live reports in one session, all of the same family: something
+stands, grows or walks where the world already says it may not.
+
+### ✅ Nothing grows on what has been built
+
+"TherE's a shroom growing on a house ... should be cleared before
+placing", "Also potatoes growing on pavement". `_built_local_cells`
+already named the ground nothing may grow on (building piece, laid road,
+farm rail) and grass and flowers were handed it; crops, mushrooms, ant
+mounds and earthworms were not. Measured on a build-then-reload: **82**
+things seeded straight back onto freshly paved ground. Now every sim that
+GROWS takes water-or-built; the aquatic pair keeps the water mask alone,
+since for them it is an inclusion filter.
+
+### ✅ A prop with no art is not drawn at all
+
+"remove These procedural entities please", with close-ups of a soil bed
+with crop dots, a grey box with an orange fire, and planks standing in
+blue water -- `field`, `forge` and `dock` from `ProceduralLandmarkSprite`,
+matched by palette. The procedural box was the scaffolding that let the
+village system be built before any prop art existed. Two props have real
+art now (`well`, `stall`); for the six that do not the fallback reads as
+clutter. `_landmark_texture` returns null and nothing is placed. Nothing
+load-bearing is lost: `well` is the ONLY solid landmark and it has art.
+Nine tests encoded the old "every villager gets a prop" contract; rather
+than delete them, the placement invariants they were really pinning (a
+workspot is not a road or a wall; it touches the paving) were retargeted
+onto `NpcMarker.workspot_position`, which outlives the prop. 131/131.
+
+### ✅ Walls and rails stop animals and villagers
+
+"Horses still aren't blocked by houses", "fences should have a hitbox
+blocking player and NPCs as well... and all animals".
+
+**Why nothing was blocked:** a `CreatureMarker` and an `NpcMarker` are
+`Sprite2D`s that move by setting `position`, so the real `StaticBody2D` on
+every wall -- the one that does stop the player -- has never had the
+slightest effect on either. Animals asked about slope and farm rails;
+villagers asked about nothing at all.
+
+- ✅ `EarthChunkManager.piece_blocks_movement_at_global` answers from the
+  SAME two `BuildingPiece` facts `_sync_piece_collision` spawns the wall's
+  body from, so what stops a player and what stops a marker cannot
+  disagree. Doors and floors stay walkable.
+- ✅ Animals ask it per movement decision, against the same look-ahead
+  tile as the rail check, at the same cost. 267/267.
+- ✅ Villagers ask it too, and the rail question as well -- and **slide**
+  rather than stop dead. There is no pathfinding here, only a straight
+  line at the target, so a villager who stopped on contact would stand
+  against the wall for good, and their own front door is reached by
+  walking AT the house. 58/58, and the six `npc_marker_*` suites (194
+  tests) unchanged.
+- A wall and a rail stay different questions on purpose: a wall is a tile
+  you cannot be IN, a rail is an edge you cannot CROSS, so the ring round
+  a field remains ordinary ground.
+
+### ⬜ Not done: the player still walks through fences
+
+The one part of the fence report still open. A fence tile is not a
+`BuildingPiece`, so `_sync_piece_collision` never spawns a body for it and
+the player passes straight through. It cannot simply be registered as a
+solid piece: `village_farm.gd` records that a rail used to be a whole
+solid tile and was deliberately made a LINE on one edge ("move the fences
+to the inner edge of the enclosure and treat the rest of the tile as
+street"), so the player needs an EDGE collider on the side
+`fence_edge_normal` names, not a tile-sized box. Flagged rather than
+guessed at.
+
+### 🚧 Honest note
+
+None of this is verified in a live session -- every number above is from
+headless measurement. The screenshots have not been re-taken.
+
+## The fisher's pond becomes an actual pond (2026-09-19)
+
+Reported in one go, and all three parts were true: *"there's no real pond
+with river / lake water physics... also it's randomly placed somewhere not
+adjacent to the fishers house or across the street.. it's a procedural
+entity layn over and not properly dug / built pond"*. Write-up in
+`concept/village_ponds.md`, "A pond that is actually a pond".
+
+I had claimed in the previous round that the pond "is implemented and it's
+in your screenshot". That was checking the pond EXISTS, not that it was
+water — all three corrections landed.
+
+- ✅ **Real depth.** A pond answered `is_water_at_global` but carried no
+  DEPTH, and the player's water state is the max of ocean, river and lake —
+  three sources a pond is not one of, so it was water you crossed on dry
+  feet. `VillagePond.DEPTH_METERS` (1.8) is the fourth, pinned against
+  `WaterMovementModel.WADE_DEPTH_METERS` rather than asserted as a number.
+- ✅ **On the fisher's own side of the street.** Measured: 3.0 tiles away
+  with a street row between. `field_rect` refuses ground north of a
+  building (right for a farmhouse, wrong for a fisher, whose whole plot is
+  behind them — all 32 free same-side cells were north). Opt-in `behind`,
+  plus a no-street-between guard.
+- ✅ **Painted by the one water surface.** The blue was the flat
+  `pond_water` tile; the overlay is generator-driven and the generator
+  cannot know about a modification, so a pond had its overlay cell erased
+  outright (measured: source id -1). Answered before the probe now, as
+  still water, with its rim read off its own shape.
+- ✅ Two regressions the change shook out, both caught by existing tests:
+  a pond behind a house swallowing the well and a neighbour's beds, and
+  `_has_pond_already` still looking south so every reload dug a second
+  pond (37 rails on the second spawn against 29 on the first).
+
+### 🚧 Honest note
+
+Not verified in a live session — every number is headless measurement, and
+the screenshots have not been re-taken.
+
 ## Village estates: consumption, station, and a ladder that can be fallen down (`concept/village_estates.md`, 2026-09-19)
 
 Asked for directly: *"overhaul and vastly improve village dynamics so it

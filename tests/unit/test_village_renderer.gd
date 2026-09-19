@@ -20,6 +20,7 @@ const VillageSawmill = preload("res://src/gameplay/village_sawmill.gd")
 const VillageCart = preload("res://src/gameplay/village_cart.gd")
 const CartMarker = preload("res://src/rendering/cart_marker.gd")
 const ProceduralLandmarkSprite = preload("res://src/rendering/procedural_landmark_sprite.gd")
+const LandmarkSheet = preload("res://src/rendering/landmark_sheet.gd")
 
 const TILE_SIZE := 16
 const CHUNK_SIZE := 32
@@ -348,7 +349,11 @@ func test_spawns_landmarks_and_npc_markers_on_a_settlement_chunk():
 		elif node.get_meta("landmark_id", "") != "":
 			landmark_count += 1
 	assert_eq(npc_count, SettlementGenerator.POPULATION)
-	assert_gte(landmark_count, 3, "well, stall, gate at minimum")
+	# The well at minimum. It used to be "well, stall, gate", but the gate
+	# has no art sheet and a prop with no art is no longer drawn at all
+	# (see VillageRenderer._landmark_texture), and the stall is pitched only
+	# when a merchant is actually tending it.
+	assert_gte(landmark_count, 1, "the village's own well at minimum")
 
 
 # -- houses are real whole-building entities (docs/concept/building.md) -----
@@ -647,13 +652,22 @@ func test_farmer_blacksmith_fisher_and_herbalist_each_get_their_own_workspot_pro
 	var world := StubWorld.new()
 	var spawned := renderer.spawn_village(parent, coord, coord * CHUNK_SIZE, CHUNK_SIZE, TILE_SIZE, "grassland", world)
 	var settlement := _generator.generate_settlement(coord, coord * CHUNK_SIZE, CHUNK_SIZE, TILE_SIZE)
+	# The prop these villagers used to get is no longer DRAWN -- none of
+	# field/forge/dock/garden/hunting_ground has a real art sheet, and a
+	# prop with no art is not placed (reported live: "remove These
+	# procedural entities please"). What they still get, and what the
+	# schedule actually uses, is the workspot itself.
 	var expected := _workspot_prop_count(settlement)
 	var prop_ids := ["field", "forge", "dock", "garden", "hunting_ground"]
-	var found := 0
 	for node in spawned:
-		if prop_ids.has(node.get_meta("landmark_id", "")):
-			found += 1
-	assert_eq(found, expected)
+		assert_false(
+			prop_ids.has(node.get_meta("landmark_id", "")),
+			"%s has no art sheet and must not be drawn" % node.get_meta("landmark_id", "")
+		)
+	assert_gte(
+		_personal_workspots(spawned).size(), expected,
+		"every villager who had a prop still has the workspot it stood on"
+	)
 
 
 ## Reported live: "there are 3 wells and one stand all over the place."
@@ -676,19 +690,24 @@ func test_no_prop_but_the_villages_own_well_is_drawn_as_one():
 	var world := StubWorld.new()
 	var spawned := renderer.spawn_village(parent, coord, coord * CHUNK_SIZE, CHUNK_SIZE, TILE_SIZE, "grassland", world)
 
+	# The hunter's own prop is no longer drawn at all (no art sheet), which
+	# is the strongest possible form of "it is not drawn as a well".
 	var well_drawing := ProceduralLandmarkSprite.new().generate_image("well").get_data()
-	var hunter_props := 0
+	var others := 0
 	for node in spawned:
 		var landmark_id: String = node.get_meta("landmark_id", "")
 		if landmark_id == "" or landmark_id == "well":
 			continue
-		if landmark_id == "hunting_ground":
-			hunter_props += 1
+		others += 1
 		assert_ne(
 			node.texture.get_image().get_data(), well_drawing,
 			"a %s prop is drawn as the village's well" % landmark_id
 		)
-	assert_gt(hunter_props, 0, "precondition: this village really does have a hunter's own prop standing in it")
+	for node in spawned:
+		assert_ne(
+			node.get_meta("landmark_id", ""), "hunting_ground",
+			"a hunter's prop has no art and must not be drawn"
+		)
 
 
 func test_workspot_props_land_at_the_villagers_own_workspot_position():
@@ -699,16 +718,24 @@ func test_workspot_props_land_at_the_villagers_own_workspot_position():
 	for node in spawned:
 		if node is NpcMarker:
 			markers.append(node)
-	var prop_ids := ["field", "forge", "dock", "garden", "hunting_ground"]
+	# Only props with real art are drawn now, so this is the rule for
+	# whichever of them is personal -- and the workspots themselves are
+	# asserted directly, since they outlive the props that stood on them.
 	for node in spawned:
-		var landmark_id: String = node.get_meta("landmark_id", "")
-		if not prop_ids.has(landmark_id):
+		if not node.has_meta("landmark_id") or not bool(node.get_meta("personal", false)):
 			continue
+		if node.get_meta("landmark_id", "") == "stall":
+			continue  # pitched on the square, not at a personal workspot
 		var matched := false
 		for marker in markers:
 			if marker.workspot_position == node.position:
 				matched = true
-		assert_true(matched, "%s prop should sit at some villager's own workspot_position" % landmark_id)
+		assert_true(
+			matched,
+			"%s prop should sit at some villager's own workspot_position"
+				% node.get_meta("landmark_id", "")
+		)
+	assert_gt(_personal_workspots(spawned).size(), 0, "precondition: villagers have workspots")
 
 
 func test_villagers_are_given_the_world_so_they_can_tell_when_theyre_in_water():
@@ -735,9 +762,12 @@ func test_landmarks_are_rendered_as_sprites_at_their_positions():
 	var world := StubWorld.new()
 	var spawned := renderer.spawn_village(parent, coord, coord * CHUNK_SIZE, CHUNK_SIZE, TILE_SIZE, "grassland", world)
 	var settlement := _generator.generate_settlement(coord, coord * CHUNK_SIZE, CHUNK_SIZE, TILE_SIZE)
+	var drawn := _drawn_landmark_ids()
 	for landmark_id in settlement.landmarks:
 		if landmark_id == "stall":
 			continue
+		if not drawn.has(landmark_id):
+			continue  # no art sheet: deliberately not drawn at all
 		var found := false
 		for node in spawned:
 			if node.get_meta("landmark_id", "") == landmark_id and node is Sprite2D:
@@ -1222,6 +1252,32 @@ func test_a_newcomer_stands_at_the_house_their_household_owns():
 # with no terrain check of any kind, and a village street that runs along
 # a riverbank puts that offset straight into the water.
 
+## The prop ids a real art sheet exists for. Since "a prop with no art is
+## not drawn at all" (see VillageRenderer._landmark_texture), every test
+## below that used to walk ProceduralLandmarkSprite.SIZES has to walk this
+## instead -- SIZES is still the authority on how big a prop IS, it is just
+## no longer the list of what gets drawn.
+func _drawn_landmark_ids() -> Array:
+	var ids: Array = []
+	for landmark_id in ProceduralLandmarkSprite.SIZES.keys():
+		var path: String = LandmarkSheet.sheet_path_for(landmark_id)
+		if path != "" and ResourceLoader.exists(path):
+			ids.append(landmark_id)
+	return ids
+
+
+## Every villager's own workspot, which is where the PLACEMENT invariants
+## below really live now. They used to be asserted against the prop node
+## standing on the spot; the prop is gone for want of art, the spot is not,
+## and it is the spot a villager actually walks to.
+func _personal_workspots(spawned: Array) -> Array:
+	var spots: Array = []
+	for node in spawned:
+		if node is NpcMarker and node.workspot_position != Vector2.ZERO:
+			spots.append(node.workspot_position)
+	return spots
+
+
 func _props_in(spawned: Array) -> Array:
 	var props: Array = []
 	for node in spawned:
@@ -1311,6 +1367,13 @@ func test_a_personal_workspot_prop_never_stands_on_a_road_or_a_building():
 	var world := StubWorld.new()
 	var spawned := renderer.spawn_village(parent, coord, coord * CHUNK_SIZE, CHUNK_SIZE, TILE_SIZE, "grassland", world)
 
+	# Asserted against the WORKSPOT, not the prop that used to stand on it:
+	# the props without art are no longer drawn, and it was always the spot
+	# a villager walks to that must not be a road or a wall.
+	for spot in _personal_workspots(spawned):
+		var spot_tile := _tile_of(spot)
+		var on: String = world.modification_at_global(spot_tile.x, spot_tile.y)
+		assert_eq(on, "", "a villager's workspot stands on '%s' at %s" % [on, str(spot_tile)])
 	var personal := 0
 	for node in _props_in(spawned):
 		if not bool(node.get_meta("personal", false)):
@@ -1326,7 +1389,10 @@ func test_a_personal_workspot_prop_never_stands_on_a_road_or_a_building():
 		var tile := _tile_of(node.position)
 		var existing: String = world.modification_at_global(tile.x, tile.y)
 		assert_eq(existing, "", "%s stands on '%s' at %s" % [node.get_meta("landmark_id"), existing, str(tile)])
-	assert_gt(personal, 0, "precondition: this village has personal workspots at all")
+	assert_gt(
+		_personal_workspots(spawned).size(), 0,
+		"precondition: this village has personal workspots at all"
+	)
 
 
 ## And the shared ones really are on the village's own paving -- the thing
@@ -1598,8 +1664,10 @@ func test_every_personal_workspot_prop_stands_next_to_the_villages_paving():
 
 	var roads := _road_cells_of(world)
 	assert_gt(roads.size(), 0, "precondition: this village really paved something")
-	var props := _prop_cells(spawned, true)
-	assert_gt(props.size(), 0, "precondition: this village really has personal props")
+	var props: Array = _prop_cells(spawned, true)
+	for spot in _personal_workspots(spawned):
+		props.append(Vector2i(floori(spot.x / TILE_SIZE), floori(spot.y / TILE_SIZE)))
+	assert_gt(props.size(), 0, "precondition: this village really has personal workspots")
 	for cell in props:
 		assert_true(
 			_touches_a_road(cell, roads),
@@ -3007,7 +3075,11 @@ func test_a_gate_and_a_stall_are_still_walked_through():
 		checked += 1
 		for child in node.get_children():
 			assert_false(child is StaticBody2D, "%s is not something to bump into" % landmark_id)
-	assert_gt(checked, 0, "precondition: the village really laid other props")
+	# The gate has no art sheet and is no longer drawn, so on a village with
+	# no merchant there may be no non-well prop left to check at all. The
+	# rule is still stated -- and pinned directly by
+	# test_which_props_are_solid_is_stated_rather_than_implied.
+	assert_gte(checked, 0)
 
 
 ## The rule itself, so what is solid is a decision rather than whatever the
@@ -3158,7 +3230,7 @@ func _overhang_below_the_cell(landmark_id: String) -> float:
 
 
 func test_a_prop_never_hangs_below_the_cell_it_stands_on():
-	for landmark_id in ProceduralLandmarkSprite.SIZES.keys():
+	for landmark_id in _drawn_landmark_ids():
 		assert_lte(
 			_overhang_below_the_cell(landmark_id), float(TILE_SIZE) * 0.5,
 			"%s hangs over the tile south of it" % landmark_id
@@ -3168,7 +3240,7 @@ func test_a_prop_never_hangs_below_the_cell_it_stands_on():
 ## And it is not floating either: its foot really is at the cell, not a
 ## tile above it.
 func test_a_prop_really_stands_on_its_own_cell():
-	for landmark_id in ProceduralLandmarkSprite.SIZES.keys():
+	for landmark_id in _drawn_landmark_ids():
 		assert_gte(
 			_overhang_below_the_cell(landmark_id), -float(TILE_SIZE) * 0.5,
 			"%s is hovering above its own ground" % landmark_id
@@ -3197,3 +3269,117 @@ func test_a_farm_fence_is_never_laid_through_a_shared_landmark():
 			"%s at %s has a fence rail through it" % [node.get_meta("landmark_id"), str(tile)]
 		)
 	assert_gt(shared, 0, "precondition: this village has shared landmarks at all")
+
+
+# -- a prop with no art is not drawn at all ---------------------------------
+#
+# Reported live, with three close-ups: "remove These procedural entities
+# please" -- a dark bed of soil with crop dots (`field`), a grey box with an
+# orange fire in it (`forge`), and brown planks with posts standing in blue
+# water (`dock`). All three are ProceduralLandmarkSprite, whose palette they
+# match exactly (SOIL_COLOR/CROP_COLOR, STONE_COLOR/AWNING_A,
+# WOOD_COLOR/STONE_COLOR/WATER_COLOR).
+#
+# The procedural box was the fallback that let the village system be built
+# and played before any prop art existed. Two props have real art now
+# (`well` and `stall`, see LandmarkSheet._SHEETS); the rest still fall back,
+# and the fallback now reads as clutter rather than as scaffolding. A prop
+# with no art is simply not placed -- the villager still works there, the
+# spot is still theirs, there is just nothing drawn on it until a real sheet
+# is dropped in, which is the same "the moment a file is dropped in"
+# contract the props already have.
+
+func test_a_landmark_with_no_real_art_is_not_spawned():
+	var coord := _find_settlement_chunk("grassland")
+	var world := StubWorld.new()
+	renderer.spawn_village(
+		parent, coord, coord * CHUNK_SIZE, CHUNK_SIZE, TILE_SIZE, "grassland", world
+	)
+	var artless: Array = []
+	for node in parent.get_children():
+		var landmark_id: String = node.get_meta("landmark_id", "")
+		if landmark_id == "":
+			continue
+		if LandmarkSheet.sheet_path_for(landmark_id) != "" and ResourceLoader.exists(
+			LandmarkSheet.sheet_path_for(landmark_id)
+		):
+			continue
+		artless.append(landmark_id)
+	assert_eq(
+		artless.size(), 0,
+		"props with no art sheet were still drawn procedurally: %s" % str(artless)
+	)
+
+
+## The other half of the same contract: the props that DO have art are
+## unaffected, so this removes clutter rather than the village's props.
+func test_a_landmark_with_real_art_is_still_spawned():
+	var coord := _find_settlement_chunk("grassland")
+	var world := StubWorld.new()
+	renderer.spawn_village(
+		parent, coord, coord * CHUNK_SIZE, CHUNK_SIZE, TILE_SIZE, "grassland", world
+	)
+	var drawn := {}
+	for node in parent.get_children():
+		var landmark_id: String = node.get_meta("landmark_id", "")
+		if landmark_id != "":
+			drawn[landmark_id] = true
+	assert_true(drawn.has("well"), "the village's well must still be drawn")
+
+
+
+## Reported live: the pond is "randomly placed somewhere not adjacent to
+## the fishers house or across the street". Measured before the fix, at the
+## first grassland village with a fisher: the water sat 3.0 tiles from the
+## house with a whole street row between the two.
+##
+## A pond is sited by VillageFarm.field_rect, the same search a farmhouse
+## uses for its beds -- and a farm's beds are worked out through
+## _workable_field_of, which refuses a street row outright ("a village does
+## not sow in its own road"). The pond's own is_free never had that guard,
+## so the search was free to jump the road and take the first rectangle
+## that fitted on the far side.
+##
+## The rule is not "adjacent": a field reaches FIELD_REACH_TILES, ground out
+## the back is a perfectly good place for a pond, and demanding adjacency
+## would leave most villages with no pond at all -- which is the other half
+## of the same report ("I haven't yet seen a fisher with a built pond").
+## The rule is that the water is on the fisher's OWN side of the street.
+func test_a_fishers_pond_is_never_dug_across_the_street_from_them():
+	var coord := _find_settlement_chunk_with_occupation("grassland", "fisher", 3)
+	var world := StubWorld.new()
+	renderer.spawn_village(
+		parent, coord, coord * CHUNK_SIZE, CHUNK_SIZE, TILE_SIZE, "grassland", world
+	)
+	var built := _built_tiles(world, coord)
+	var water: Array = []
+	for cell in built:
+		if VillagePond.is_pond_tile(built[cell]):
+			water.append(cell)
+	var fisher_origins: Array = []
+	for record in world.buildings_in_chunk(coord):
+		if String(record.get("occupation", "")) == "fisher":
+			fisher_origins.append(record["origin_local"])
+	assert_gt(fisher_origins.size(), 0, "the premise: this village has a fisher")
+	assert_gt(water.size(), 0, "the premise: the fisher really dug a pond")
+
+	for pond in _connected_groups(water):
+		# Whichever fisher this pond belongs to is the nearest one.
+		var best := 9999.0
+		var house := Vector2i.ZERO
+		for origin in fisher_origins:
+			for cell in pond:
+				var d: float = Vector2((cell as Vector2i) - (origin as Vector2i)).length()
+				if d < best:
+					best = d
+					house = origin
+		for cell in pond:
+			var low := mini(house.y, (cell as Vector2i).y)
+			var high := maxi(house.y, (cell as Vector2i).y)
+			for y in range(low + 1, high):
+				assert_false(
+					renderer._is_street_row(coord, CHUNK_SIZE, world, y),
+					"the pond at %s is across a street row from its fisher at %s"
+						% [str(cell), str(house)]
+				)
+

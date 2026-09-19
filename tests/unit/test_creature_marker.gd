@@ -4385,3 +4385,58 @@ func test_crushing_an_already_crushed_creature_is_harmless():
 	marker.crush()
 	marker.crush()
 	assert_true(marker.info.health <= 0.0)
+
+
+# -- a wall is not something an animal walks through -------------------------
+#
+# Reported live: "Horses still aren't blocked by houses". A house's walls
+# DO carry a real StaticBody2D (EarthChunkManager._spawn_piece_collision),
+# which is why the PLAYER is stopped by them -- but a CreatureMarker is a
+# Sprite2D that moves by setting `position`, so no physics body in the
+# world has ever had any effect on it. It only ever asked about slope and
+# about farm rails, and walked straight through the village.
+#
+# So the wall gets asked about the same way the rail already is: one world
+# query per creature per movement decision, against the same look-ahead
+# tile, never one per candidate direction. A DOOR and a FLOOR are walkable
+# pieces and must stay walkable, or an animal could not follow a villager
+# inside -- the question is the piece's own walkability, not "is there a
+# building here".
+
+## A StubWorld that also answers piece_blocks_movement_at_global, the way
+## the real EarthChunkManager does from its own building pieces.
+class StubWorldWithWall:
+	extends StubWorld
+	var blocking_tiles: Dictionary = {}
+	var asked: Array = []
+	func piece_blocks_movement_at_global(x: int, y: int) -> bool:
+		asked.append(Vector2i(x, y))
+		return blocking_tiles.has(Vector2i(x, y))
+
+
+func test_a_world_that_knows_no_pieces_blocks_nothing():
+	marker.setup(StubWorld.new(), TILE_SIZE)
+	assert_false(marker._building_blocks_movement(Vector2.RIGHT))
+
+
+func test_a_wall_blocks_nothing_when_the_creature_is_not_moving():
+	var world := StubWorldWithWall.new()
+	world.blocking_tiles[Vector2i(1, 0)] = true
+	marker.setup(world, TILE_SIZE)
+	assert_false(marker._building_blocks_movement(Vector2.ZERO))
+
+
+func test_a_wall_ahead_stops_the_animal():
+	var world := StubWorldWithWall.new()
+	world.blocking_tiles[Vector2i(1, 0)] = true
+	marker.setup(world, TILE_SIZE)
+	marker.position = Vector2(TILE_SIZE - 2, TILE_SIZE * 0.5)
+	assert_true(marker._building_blocks_movement(Vector2.RIGHT))
+
+
+func test_open_ground_ahead_of_a_house_lets_the_animal_through():
+	var world := StubWorldWithWall.new()
+	marker.setup(world, TILE_SIZE)
+	marker.position = Vector2(TILE_SIZE - 2, TILE_SIZE * 0.5)
+	assert_false(marker._building_blocks_movement(Vector2.RIGHT))
+	assert_eq(world.asked, [Vector2i(1, 0)], "it asks about the tile it is stepping into")

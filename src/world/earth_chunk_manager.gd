@@ -7440,6 +7440,27 @@ const LAKE_PAINT_ACROSS := 1.6
 ## reads these values back as cm to size each rock's radius, and the push
 ## reach, the eyot, the shoal, the foam and the wake all scale from that
 ## radius.
+## The cross-section reading for a cell of a dug pond: how close it is to
+## the pond's own bank, in the same across-fraction units every other kind
+## of water writes (|across| under 1 is water, 1 is the bank line).
+##
+## A pond has no channel and no spill to solve a contour from -- it is a
+## flat-bottomed hole of a fixed size -- so its rim is read straight off
+## its own shape: a cell with dry ground orthogonally beside it is a bank
+## cell and reads near the waterline, a cell surrounded by its own water
+## reads as open water. On a 3x2 pond every cell is a rim cell, which is
+## correct: a pond that small IS all shore.
+const POND_RIM_ACROSS := 0.75
+
+
+func _pond_across_at(global: Vector2i) -> float:
+	for step in [Vector2i(1, 0), Vector2i(-1, 0), Vector2i(0, 1), Vector2i(0, -1)]:
+		var neighbour: Vector2i = global + step
+		if not is_pond_at_global(neighbour.x, neighbour.y):
+			return POND_RIM_ACROSS
+	return 0.0
+
+
 func _collect_flow_boulder(global: Vector2i) -> void:
 	var diameter_cm := flow_boulder_diameter_cm_at_global(global.x, global.y)
 	if diameter_cm > 0.0:
@@ -7465,6 +7486,26 @@ func _paint_river_flow_overlay(chunk_coord: Vector2i, chunk: Chunk) -> void:
 			# shader draws the same smooth waterline, ink and feather it
 			# gives a river bank, and only ripples. First playtest: "ponds
 			# have a very different art style", "unify river and pond water".
+			# A dug pond is the ONE water the generator cannot know about --
+			# it is a village/player MODIFICATION, and everything below asks
+			# the generated world -- so it is answered before the probe.
+			# Without this a pond fell through to "nothing is water here"
+			# and had its overlay cell erased, leaving the flat `pond_water`
+			# tile as the only blue on screen: reported live as "it's a
+			# procedural entity layn over and not properly dug / built
+			# pond". It rides the one water surface now, like every lake and
+			# every sea pocket, so it gets the same waterline, ink edge,
+			# shore feather and ripples.
+			if is_pond_at_global(global.x, global.y):
+				_write_flow_across_texel(
+					global, _pond_across_at(global), 0.0, 0.0,
+					RiverCatalog.RIVER_HALF_WIDTH_TILES, 0.0
+				)
+				_collect_flow_boulder(global)
+				_river_flow_layer.set_cell(
+					global, 0, _terrain_renderer.atlas_coords_for_river_flow(0.0, false)
+				)
+				continue
 			var probe := generator.hydrology_at_global(global.x, global.y)
 			var still_across: float = probe["lake_across"]
 			# The SAME still-water rule is_water_at_global reads (see
@@ -13287,6 +13328,18 @@ func is_still_water_at_global(global_x: int, global_y: int) -> bool:
 	return is_still_water_probe(generator.hydrology_at_global(global_x, global_y))
 
 
+## How deep the dug pond on this tile is, in metres -- 0.0 where there is
+## none. The pond's counterpart to river_depth_meters_at_global and
+## lake_depth_meters_at_global, and asked alongside them by the player's own
+## water state (Player._resolve_water_state).
+##
+## A flat depth, not a solved one: a dug pond is a hole somebody dug to a
+## depth they chose, not a water body whose level is solved from discharge
+## or a spill point. VillagePond.DEPTH_METERS is that choice.
+func pond_depth_meters_at_global(global_x: int, global_y: int) -> float:
+	return VillagePond.DEPTH_METERS if is_pond_at_global(global_x, global_y) else 0.0
+
+
 func is_pond_at_global(global_x: int, global_y: int) -> bool:
 	return VillagePond.is_pond_tile(modification_at_global(global_x, global_y))
 
@@ -13365,26 +13418,66 @@ func lake_depth_meters_at_global(global_x: int, global_y: int) -> float:
 
 
 ## One byte per cell, 1 where a river or lake covers the ground -- the
-## per-chunk form of Chunk.blocks_ground_cover, for consumers that take a
+## Reads is_water_at_global, NOT Chunk.blocks_ground_cover. The narrow
+## is_river/is_lake mask misses everything the flow overlay paints beyond
+## them -- the river bank apron, the shore feather, a dug pond, a sea
+## pocket the biome array calls land -- which is the whole reason
+## is_water_at_global exists ("so a house could be sited on a cell drawn
+## blue"). Building placement was moved onto it and ground cover was not:
+## measured at the Dreisam, 1,840 cells per loaded span are drawn as water
+## without being blocked, and 474 grass patches were standing in them
+## (reported live: "there are still patches of grass"). At a LAKE the two
+## agree exactly, which is why this stayed invisible there.
+##
+## per-chunk form of the water mask, for consumers that take a
 ## whole flag array (TallGrass) rather than a Chunk.
 ## Every cell of this chunk that is drawn as WATER, as local Vector2i --
 ## the cells form of _ground_cover_blockers, for the sims whose blocking
 ## API takes a cell list rather than a mask (FlowerPatch.block_cells, which
 ## also clears anything already seeded there and refuses every later
 ## rooting and seed-fall).
-func _water_cells(chunk: Chunk) -> Array:
+## The water mask with every BUILT cell folded in -- what may not grow
+## anything at all, as opposed to `_ground_cover_blockers`, which is water
+## alone and stays that way because the aquatic sims use it as an
+## INCLUSION filter.
+##
+## Reported live with two screenshots: "TherE's a shroom growing on a
+## house ... should be cleared before placing" and "Also potatoes growing
+## on pavement". _built_local_cells has always named exactly the ground
+## nothing may grow on -- a real building piece, a laid road, a village
+## farm's own rail -- and TallGrass and FlowerPatch were handed it through
+## block_cells at chunk load. The sims that only ever learned about water
+## were not, so a roof and a market square read as plain "grassland" to
+## them. Measured on a build-then-reload: 82 mushrooms and crops seeded
+## straight back onto paved ground.
+func _ground_cover_and_built_blockers(
+	water_blockers: PackedByteArray, built_cells: Array, width: int
+) -> PackedByteArray:
+	var blockers := water_blockers.duplicate()
+	for cell in built_cells:
+		var local: Vector2i = cell
+		var index := local.y * width + local.x
+		if index >= 0 and index < blockers.size():
+			blockers[index] = 1
+	return blockers
+
+
+func _water_cells_from(blockers: PackedByteArray, width: int) -> Array:
 	var cells: Array = []
-	for index in chunk.width * chunk.height:
-		if chunk.blocks_ground_cover(index):
-			cells.append(Vector2i(index % chunk.width, index / chunk.width))
+	for index in blockers.size():
+		if blockers[index] == 1:
+			cells.append(Vector2i(index % width, index / width))
 	return cells
 
 
-func _ground_cover_blockers(chunk: Chunk) -> PackedByteArray:
+func _ground_cover_blockers(chunk: Chunk, chunk_coord: Vector2i) -> PackedByteArray:
+	var origin := chunk_coord * CHUNK_SIZE
 	var blockers := PackedByteArray()
 	blockers.resize(chunk.width * chunk.height)
 	for index in blockers.size():
-		blockers[index] = 1 if chunk.blocks_ground_cover(index) else 0
+		var global_x := origin.x + index % chunk.width
+		var global_y := origin.y + index / chunk.width
+		blockers[index] = 1 if is_water_at_global(global_x, global_y) else 0
 	return blockers
 
 
@@ -15092,6 +15185,24 @@ func _clear_vegetation_on_cells(
 ## first -- build_at_global doesn't check occupancy the way
 ## BuildingPlacement.can_place does, so overwriting a wall with a door must
 ## not leave the old wall's collision behind.
+## Whether a real building piece on this tile stops something walking onto
+## it -- a wall or a window, but never a door or a floor.
+##
+## The SAME question _sync_piece_collision asks before it spawns the tile's
+## StaticBody2D, from the same two BuildingPiece facts, so what stops the
+## PLAYER (physics) and what stops an NPC or an animal (this query) can
+## never disagree about a given piece.
+##
+## It exists because a marker is a Sprite2D that moves by setting
+## `position`: no collision body in the world has ever had the slightest
+## effect on one, so the walls a player cannot pass were walked straight
+## through by every animal in the village. Reported live: "Horses still
+## aren't blocked by houses".
+func piece_blocks_movement_at_global(global_x: int, global_y: int) -> bool:
+	var tile_id := modification_at_global(global_x, global_y)
+	return BuildingPiece.has_piece(tile_id) and not BuildingPiece.is_walkable(tile_id)
+
+
 func _sync_piece_collision(global_cell: Vector2i, tile_id: String) -> void:
 	_remove_piece_collision(global_cell)
 	if BuildingPiece.has_piece(tile_id) and not BuildingPiece.is_walkable(tile_id):
@@ -16408,9 +16519,20 @@ func _load_chunk(chunk_coord: Vector2i) -> void:
 	# below blocks them before its first sprite sync, so a reloaded house is
 	# never briefly full of grass.
 	var built_cells := _built_local_cells(chunk)
+	# ONE water mask per chunk load, reused by every ground-cover sim below.
+	# It is 1024 is_water_at_global reads (see _ground_cover_blockers); six
+	# sims each building their own was six times that for an identical
+	# answer, on the chunk-load path this project has already spent fifteen
+	# FPS rounds defending.
+	var water_blockers := _ground_cover_blockers(chunk, chunk_coord)
+	# Water OR built, for everything that GROWS. The aquatic sims below keep
+	# water_blockers itself, since for them it is an inclusion filter.
+	var growth_blockers := _ground_cover_and_built_blockers(
+		water_blockers, built_cells, chunk.width
+	)
 	_grass_sims[chunk_coord] = TallGrass.new(
 		hash("%d_%d_tall_grass" % [chunk_coord.x, chunk_coord.y]), chunk.width, chunk.height, chunk.biome,
-		_ground_cover_blockers(chunk)
+		growth_blockers
 	)
 	_grass_sims[chunk_coord].block_cells(built_cells)
 	_grass_sprites[chunk_coord] = {}
@@ -16424,7 +16546,7 @@ func _load_chunk(chunk_coord: Vector2i) -> void:
 	# soil-biome gate already uses. Reuses the IDENTICAL is_river-OR-is_lake
 	# mask TallGrass reads just above to keep grass OUT of the water, as an
 	# INCLUSION filter instead.
-	var water_mask := _ground_cover_blockers(chunk)
+	var water_mask := water_blockers
 	if water_mask.has(1):
 		_aquatic_vegetation[chunk_coord] = AquaticVegetation.new(
 			hash("%d_%d_aquatic_vegetation" % [chunk_coord.x, chunk_coord.y]), chunk.width, chunk.height, water_mask
@@ -16449,7 +16571,7 @@ func _load_chunk(chunk_coord: Vector2i) -> void:
 	for crop_id in WILD_CROP_IDS:
 		var sim := WildCropPatch.new(
 			crop_id, hash("%d_%d_wild_crop" % [chunk_coord.x, chunk_coord.y]),
-			chunk.width, chunk.height, chunk.biome, _ground_cover_blockers(chunk)
+			chunk.width, chunk.height, chunk.biome, growth_blockers
 		)
 		crop_sims[crop_id] = sim
 		# Already carrying the current season, so a chunk streamed in during
@@ -16467,7 +16589,7 @@ func _load_chunk(chunk_coord: Vector2i) -> void:
 	# already fruiting on arrival.
 	var mushroom_sim := WildMushroomPatch.new(
 		hash("%d_%d_mushroom" % [chunk_coord.x, chunk_coord.y]), chunk.width, chunk.height, chunk.biome,
-		_ground_cover_blockers(chunk)
+		growth_blockers
 	)
 	_mushroom_sims[chunk_coord] = mushroom_sim
 	_mushroom_markers[chunk_coord] = _mushroom_renderer.spawn_markers(
@@ -16606,7 +16728,7 @@ func _load_chunk(chunk_coord: Vector2i) -> void:
 	# API for this (block_cells clears what is there AND refuses every
 	# later rooting and seed-fall); it had simply never been handed the
 	# water. Reported live: bushes and flowers standing in open lake.
-	_flower_patches[chunk_coord].block_cells(_water_cells(chunk))
+	_flower_patches[chunk_coord].block_cells(_water_cells_from(water_blockers, chunk.width))
 	_flower_sprites[chunk_coord] = {}
 	_seed_sprites[chunk_coord] = {}
 	_sync_flower_sprites(chunk_coord)
@@ -16631,7 +16753,7 @@ func _load_chunk(chunk_coord: Vector2i) -> void:
 	# the instant a chunk loads.
 	_worm_patches[chunk_coord] = EarthwormPatch.new(
 		hash("%d_%d_earthworms" % [chunk_coord.x, chunk_coord.y]), chunk.width, chunk.height, chunk.biome,
-		_ground_cover_blockers(chunk)
+		growth_blockers
 	)
 	_worm_sprites[chunk_coord] = {}
 
@@ -16640,7 +16762,7 @@ func _load_chunk(chunk_coord: Vector2i) -> void:
 	# chunk's lifetime, exactly like the earthworm burrows just above.
 	_ant_colonies[chunk_coord] = AntColony.new(
 		hash("%d_%d_ants" % [chunk_coord.x, chunk_coord.y]), chunk.width, chunk.height, chunk.biome,
-		_ground_cover_blockers(chunk)
+		growth_blockers
 	)
 	# The visible counterpart: one static AntMoundMarker per mound cell, so a
 	# colony is actually somewhere a player can SEE rather than a pure

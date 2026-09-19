@@ -557,6 +557,19 @@ of the `is_still_water_probe` rule the flow paint and `is_water_at_global`
 already share. A boulder the player *drops* in still water is untouched:
 that is a deliberate act, and it still parts the surface.
 
+**And the same for BUILT ground (2026-09-19).** Reported next, with two
+more screenshots: "TherE's a shroom growing on a house", "Also potatoes
+growing on pavement". `_built_local_cells` has always named exactly the
+ground nothing may grow on -- a real building piece, a laid road, a
+village farm's own rail -- and `TallGrass`/`FlowerPatch` were handed it
+through `block_cells`; the sims that had only just learned about water
+were not, so a roof and a market square still read as `grassland` to
+them. Measured on a build-then-reload: **82** mushrooms and crops seeded
+straight back onto ground that had just been paved. Every sim that GROWS
+now takes water-or-built; the two aquatic sims keep the water mask alone,
+because for them it is an inclusion filter and folding buildings into it
+would seed pondweed on a roof.
+
 Pinned by `tests/unit/test_water_entity_exclusion.gd`, which drives one
 real `update()` at the reported coordinates and asserts against
 `is_water_at_global` directly — including the premise that the chunk

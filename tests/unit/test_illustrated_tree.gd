@@ -2527,3 +2527,123 @@ func _mean_hue_degrees(image: Image) -> float:
 ## side of a raw "< 30" check from where the rest of that range sits).
 func _hue_distance_from_red(hue_degrees: float) -> float:
 	return minf(hue_degrees, 360.0 - hue_degrees)
+
+
+# -- the fruit on a tree is the item it becomes -----------------------------
+#
+# Reported directly, with the apple sheet just repainted: *"I replaced the
+# apple spritesheet to render without fruits... can you make sure all the
+# trees bear real fruit (individual apples or cherrys / nuts) by placing the
+# fruit sprite on the tree so that when fruit fall down in autumn or summer
+# actually drops a fruit entity which then disappears from the tree and can
+# be picked up or eaten by animals"*.
+#
+# Rendered before changing anything (a probe over all six species): cherry
+# drew a leafy twig with a CLUSTER of cherries on it, ten of which merged
+# into one red mass; and apple drew a pair of CUT-OPEN HALVES the size of a
+# branch, because the season-indexed on-tree lookup assumes four season
+# columns and the repainted sheet's row is green apple / red apple / cut
+# halves instead.
+#
+# So the crop is drawn from the species' own ITEM ICON -- the same individual
+# fruit that lands on the ground and goes in the pack.
+
+const IllustratedItemArt = preload("res://src/rendering/illustrated_item_art.gd")
+const TreeSpeciesForFruit = preload("res://src/world/tree_species.gd")
+
+
+## The species_bias that really resolves to `species` -- searched rather than
+## restated, since the mapping is TreeSpecies' own.
+func _bias_for_species(species: String) -> float:
+	for step in 1001:
+		var bias := float(step) / 1000.0
+		if TreeSpeciesForFruit.species_for_bias(bias) == species:
+			return bias
+	fail_test("no species_bias resolves to %s" % species)
+	return -1.0
+
+
+func test_every_bearing_species_has_a_real_item_icon_to_hang():
+	var art := IllustratedItemArt.new()
+	for species in IllustratedTree.SPECIES_WITH_ART:
+		assert_not_null(
+			art.illustrated_texture_for(species, "icon"),
+			"%s has no item icon, so nothing individual can hang on it" % species
+		)
+
+
+func test_the_fruit_drawn_on_a_tree_is_the_species_own_item_icon():
+	var sprite := ProceduralTreeSprite.new()
+	var art := IllustratedItemArt.new()
+	for species in IllustratedTree.SPECIES_WITH_ART:
+		var icon: Texture2D = art.illustrated_texture_for(species, "icon")
+		assert_not_null(icon, "precondition: %s has an icon" % species)
+		var drawn: Image = sprite.on_tree_fruit_image(species, "summer")
+		assert_not_null(drawn, "%s hangs nothing at all" % species)
+		# The same subject, scaled: aspect is what survives a uniform fit, and
+		# it is what tells a whole apple from a pair of cut halves. Against
+		# the icon's own SUBJECT, not its canvas -- an icon is fitted to a
+		# square canvas with transparent margin, and the tree trims that off
+		# before scaling, so the canvas's aspect is 1.0 for everything and
+		# would compare nothing at all.
+		var used: Rect2i = icon.get_image().get_used_rect()
+		assert_almost_eq(
+			float(drawn.get_width()) / float(drawn.get_height()),
+			float(used.size.x) / float(used.size.y),
+			0.2,
+			"%s draws something that is not the shape of its own item" % species
+		)
+
+
+## Ten cherries have to read as ten cherries. Measured as separate blobs of
+## changed pixels: a cluster drawing at the old size ran them together.
+func test_a_crop_is_individual_fruit_rather_than_one_mass():
+	var sprite := ProceduralTreeSprite.new()
+	for species in ["cherry", "apple"]:
+		var bias := _bias_for_species(species)
+		var plain := sprite.generate_image_with_fruit(bias, 7, 0, "summer")
+		var fruited := sprite.generate_image_with_fruit(bias, 7, 8, "summer")
+		assert_gte(
+			_changed_blobs(plain, fruited), 3,
+			"%s's whole crop came out as one blob rather than separate fruit" % species
+		)
+
+
+## A fruit is small: a crop must not bury the crown it hangs in.
+func test_one_fruit_is_a_small_part_of_the_crown():
+	var sprite := ProceduralTreeSprite.new()
+	for species in IllustratedTree.SPECIES_WITH_ART:
+		var drawn: Image = sprite.on_tree_fruit_image(species, "summer")
+		assert_not_null(drawn)
+		assert_lte(
+			float(drawn.get_width()) / float(ProceduralTreeSprite.SIZE.x), 0.16,
+			"%s's fruit is a branch-sized drawing, not a fruit" % species
+		)
+
+
+## How many separate clumps of pixels differ between two images -- a flood
+## fill over the changed set, which is what "separate fruit" means in pixels.
+func _changed_blobs(plain: Image, fruited: Image) -> int:
+	var changed := {}
+	for y in plain.get_height():
+		for x in plain.get_width():
+			if not fruited.get_pixel(x, y).is_equal_approx(plain.get_pixel(x, y)):
+				changed[Vector2i(x, y)] = true
+	var blobs := 0
+	while not changed.is_empty():
+		var start: Vector2i = changed.keys()[0]
+		var stack: Array[Vector2i] = [start]
+		changed.erase(start)
+		var size := 0
+		while not stack.is_empty():
+			var at: Vector2i = stack.pop_back()
+			size += 1
+			for step in [Vector2i(1, 0), Vector2i(-1, 0), Vector2i(0, 1), Vector2i(0, -1)]:
+				var next: Vector2i = at + step
+				if changed.has(next):
+					changed.erase(next)
+					stack.append(next)
+		# Stray single pixels are antialiasing, not a fruit.
+		if size >= ProceduralTreeSprite.MIN_PIXELS_PER_FRUIT:
+			blobs += 1
+	return blobs

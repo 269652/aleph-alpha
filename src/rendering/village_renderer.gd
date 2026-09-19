@@ -302,7 +302,23 @@ func spawn_village(
 	# After the farms: a pond must not be dug through ground a farmhouse has
 	# already claimed for its beds, and the beds are only known once
 	# _fenced_farm_fields has worked them out.
-	var fisher_ponds := _dig_fisher_ponds_if_missing(chunk_coord, chunk_size, world)
+	# The same ground the farm pass reserves, and then the beds it actually
+	# laid. A pond may now be dug BEHIND its house (VillagePond.pond_rect),
+	# which is where a village keeps its well and its shared props and where
+	# a farmhouse's own beds often lie -- none of which a fisher may dig
+	# through. A bed is not a tile modification, only its rails are, so
+	# is_occupied cannot see one and the fields have to be handed over
+	# explicitly.
+	# Keyed by GLOBAL cell, the same convention _fenced_farm_fields' own
+	# `reserved` uses (it converts on lookup) -- _landmark_cells and the
+	# worked field cells are both already global.
+	var pond_reserved := _landmark_cells(settlement.landmarks, tile_size).duplicate()
+	for origin in farm_fields:
+		for global_cell in farm_fields[origin]:
+			pond_reserved[global_cell as Vector2i] = true
+	var fisher_ponds := _dig_fisher_ponds_if_missing(
+		chunk_coord, chunk_size, world, pond_reserved
+	)
 	# Where this village's market really is: cells OF its square, one per
 	# merchant (see VillageLayout.market_stand_cells). Worked out before the
 	# landmark loop because the square's own stall IS the first of them --
@@ -325,7 +341,9 @@ func spawn_village(
 	for landmark_id in settlement.landmarks:
 		if landmark_id == "stall":
 			continue  # pitched with the market below, and only when tended
-		spawned.append(_build_landmark(landmark_id, settlement.landmarks[landmark_id], parent))
+		var landmark := _build_landmark(landmark_id, settlement.landmarks[landmark_id], parent)
+		if landmark != null:
+			spawned.append(landmark)
 	for i in npcs.size():
 		var workspot = _grounded_position(
 			door_positions[i] + Vector2(0, _WORKSPOT_OFFSET_TILES * tile_size), tile_size, world, false
@@ -354,7 +372,8 @@ func spawn_village(
 		if stand_slot >= 0 and stand_slot < market_stands.size():
 			var stand_position: Vector2 = market_stands[stand_slot]
 			var stand := _build_landmark("stall", stand_position, parent, true)
-			spawned.append(stand)
+			if stand != null:
+				spawned.append(stand)
 			# A COPY, not the settlement's shared dictionary: overriding the
 			# tag in place would send every villager in the village to this
 			# one merchant's trestle.
@@ -382,7 +401,9 @@ func spawn_village(
 			work_tag != "" and not settlement.landmarks.has(work_tag)
 			and not BuildingCatalog.has_building(work_tag) and workspot != null
 		):
-			spawned.append(_build_landmark(work_tag, workspot, parent, true))
+			var prop := _build_landmark(work_tag, workspot, parent, true)
+			if prop != null:
+				spawned.append(prop)
 	_hand_out_farm_fields(npcs, npc_markers, farm_fields, chunk_coord, chunk_size)
 	_hand_out_fisher_ponds(npcs, npc_markers, fisher_ponds, chunk_coord, chunk_size)
 	_hand_out_the_sawmill(npcs, npc_markers, chunk_coord, chunk_size, world)
@@ -1138,7 +1159,9 @@ func _hand_out_farm_fields(
 ## Idempotent by the same shape everything else here uses: a cell that is
 ## already water reads as occupied, so `is_free` refuses it, no rectangle
 ## fits over a pond that is already there, and a reload digs nothing twice.
-func _dig_fisher_ponds_if_missing(chunk_coord: Vector2i, chunk_size: int, world) -> Dictionary:
+func _dig_fisher_ponds_if_missing(
+	chunk_coord: Vector2i, chunk_size: int, world, reserved: Dictionary = {}
+) -> Dictionary:
 	var ponds: Dictionary = {}
 	if world == null or not world.has_method("build_at_global"):
 		return ponds
@@ -1149,7 +1172,10 @@ func _dig_fisher_ponds_if_missing(chunk_coord: Vector2i, chunk_size: int, world)
 	var is_free := func(cell: Vector2i) -> bool:
 		if cell.x < 0 or cell.y < 0 or cell.x >= chunk_size or cell.y >= chunk_size:
 			return false
+		if reserved.has(chunk_coord * chunk_size + cell):
+			return false  # the well, a shared prop, or another villager's beds
 		return is_buildable.call(cell) and not is_occupied.call(cell)
+	var renderer := self
 	for record in world.buildings_in_chunk(chunk_coord):
 		if String(record.get("occupation", "")) != FISHER_OCCUPATION:
 			continue
@@ -1158,7 +1184,35 @@ func _dig_fisher_ponds_if_missing(chunk_coord: Vector2i, chunk_size: int, world)
 		if _has_pond_already(chunk_coord, chunk_size, world, origin, building_id):
 			ponds[origin] = _pond_water_near(chunk_coord, chunk_size, world, origin, building_id)
 			continue
-		var water: Array = VillagePond.pond_cells(origin, building_id, is_free)
+		# On the fisher's OWN side of the street. field_rect reaches
+		# FIELD_REACH_TILES in every direction and takes the first rectangle
+		# that fits, which left it free to jump the road and dig the water on
+		# the far side -- reported live, and measured at 3.0 tiles away with
+		# a whole street row in between: "it's randomly placed somewhere not
+		# adjacent to the fishers house or across the street".
+		#
+		# _workable_field_of has always refused a street row outright for a
+		# farm's beds ("a village does not sow in its own road"); the pond
+		# search never had that guard. This is the same rule plus the part a
+		# field does not need, because a field is worked from its own edge
+		# while a pond is meant to be the fisher's own water: no street row
+		# may lie BETWEEN the house and any cell of it either.
+		#
+		# Deliberately NOT "adjacent": ground out the back is a perfectly
+		# good place for a pond, and demanding adjacency would leave most
+		# villages with none at all -- which is the other half of the same
+		# report, "I haven't yet seen a fisher with a built pond".
+		var house := origin
+		var is_free_for_house := func(cell: Vector2i) -> bool:
+			if not is_free.call(cell):
+				return false
+			if renderer._is_street_row(chunk_coord, chunk_size, world, cell.y):
+				return false
+			for y in range(mini(house.y, cell.y) + 1, maxi(house.y, cell.y)):
+				if renderer._is_street_row(chunk_coord, chunk_size, world, y):
+					return false
+			return true
+		var water: Array = VillagePond.pond_cells(origin, building_id, is_free_for_house)
 		if water.is_empty():
 			continue  # no room beside this house -- honestly, no pond
 		ponds[origin] = water
@@ -1196,7 +1250,7 @@ func _pond_water_near(
 	var water: Array = []
 	if not world.has_method("modification_at_global"):
 		return water
-	for cell in VillageFarm.field_cells(origin, building_id):
+	for cell in VillageFarm.field_cells(origin, building_id, true):
 		var local: Vector2i = cell
 		if local.x < 0 or local.y < 0 or local.x >= chunk_size or local.y >= chunk_size:
 			continue
@@ -1249,7 +1303,7 @@ func _has_pond_already(
 ) -> bool:
 	if not world.has_method("modification_at_global"):
 		return false
-	for cell in VillageFarm.field_cells(origin, building_id):
+	for cell in VillageFarm.field_cells(origin, building_id, true):
 		var local: Vector2i = cell
 		if local.x < 0 or local.y < 0 or local.x >= chunk_size or local.y >= chunk_size:
 			continue
@@ -1827,8 +1881,11 @@ const GROUND_FLOOR_COLLISION_LAYER := 1
 
 
 func _build_landmark(landmark_id: String, position: Vector2, parent: Node2D, personal: bool = false) -> Sprite2D:
+	var texture := _landmark_texture(landmark_id, position)
+	if texture == null:
+		return null  # no art for this prop: nothing is drawn (see _landmark_texture)
 	var landmark := Sprite2D.new()
-	landmark.texture = _landmark_texture(landmark_id, position)
+	landmark.texture = texture
 	landmark.set_meta("landmark_id", landmark_id)
 	landmark.set_meta("personal", personal)
 	# Art is authored DETAIL_MULTIPLIER times oversized for pixel detail;
@@ -1843,8 +1900,7 @@ func _build_landmark(landmark_id: String, position: Vector2, parent: Node2D, per
 	# the row where the cottages front the street: "the stand ... is placed
 	# ontop of a house". The same rule CartMarker already follows, and the
 	# one _solid_body_for below already states for the collision box.
-	if landmark.texture != null:
-		landmark.offset = Vector2(0, -float(landmark.texture.get_height()) * 0.5)
+	landmark.offset = Vector2(0, -float(landmark.texture.get_height()) * 0.5)
 	var size: Vector2i = ProceduralLandmarkSprite.SIZES.get(landmark_id, Vector2i(20, 20))
 	# The shadow sits at the prop's own foot, which is now the sprite's
 	# origin rather than half a height below it.
@@ -1904,7 +1960,20 @@ func _landmark_texture(landmark_id: String, position: Vector2) -> Texture2D:
 	var image := LandmarkSheet.world_scaled_image(landmark_id, seed_value, _structure_sprite)
 	if image != null:
 		return ImageTexture.create_from_image(image)
-	return _landmark_sprite.generate_texture(landmark_id)
+	# No sheet, no prop. The procedural box (ProceduralLandmarkSprite) was
+	# the scaffolding that let the whole village system be built and played
+	# before any prop art existed, and it did that job. Two props have real
+	# art now (LandmarkSheet._SHEETS), and for the six that do not the
+	# fallback reads as clutter rather than as a placeholder -- reported
+	# live with close-ups of the field's soil-and-crop-dots, the forge's
+	# grey box with an orange fire, and the dock's planks standing in blue
+	# water: "remove These procedural entities please".
+	#
+	# The villager still works the spot; there is simply nothing drawn on
+	# it until a real sheet is dropped into assets/sprites/landmarks/, which
+	# is the same "the moment a file is dropped in" contract the props that
+	# DO have art already follow.
+	return null
 
 
 ## `home_position` is this villager's own house's DOORSTEP position (the

@@ -13,6 +13,7 @@ extends GutTest
 const EarthChunkManager = preload("res://src/world/earth_chunk_manager.gd")
 const EarthChunkGenerator = preload("res://src/world/earth_chunk_generator.gd")
 const GeoCoordinates = preload("res://src/world/geo_coordinates.gd")
+const BuildingCatalog = preload("res://src/gameplay/building_catalog.gd")
 
 var tile_map_layer: TileMapLayer
 var entities_parent: Node2D
@@ -204,3 +205,142 @@ func test_no_earthworm_burrows_on_water():
 		return
 	_report("earthworm burrows", _cells_of(
 		manager._worm_patches[chunk_coord].worm_cells(), chunk_coord))
+
+
+# -- the river bank, where the two masks genuinely disagree ------------------
+#
+# The lake above hides one half of this bug: there, Chunk.blocks_ground_
+# cover already agrees with is_water_at_global on every cell. At a RIVER it
+# does not. The painted water runs out across the bank apron and the shore
+# feather, and `is_river` flags none of that -- which is precisely why
+# is_water_at_global was written ("so a house could be sited on a cell
+# drawn blue"). Building placement was moved onto it; ground cover was
+# left on the narrow mask.
+#
+# Measured at the Dreisam: 1,840 cells drawn as water that the narrow mask
+# does not block, and 474 grass patches standing on them. That is the
+# original report -- "There are still patches of grass" -- and it is a
+# mask-WIDTH problem, unlike everything above, which was a
+# nobody-reads-the-mask problem.
+
+const _RIVER_LAT := 48.007669
+const _RIVER_LON := 7.805657
+
+
+## Its own manager at the river, since before_each loads the lake.
+func _river_manager() -> Dictionary:
+	var layer := TileMapLayer.new()
+	var entities := Node2D.new()
+	var creatures := Node2D.new()
+	var subject = EarthChunkManager.new(layer, entities, creatures)
+	var geo := GeoCoordinates.new()
+	var tile: Vector2i = geo.tile_for_coordinate(
+		_RIVER_LAT, _RIVER_LON,
+		EarthChunkGenerator.WORLD_WIDTH_TILES, EarthChunkGenerator.WORLD_HEIGHT_TILES
+	)
+	subject.update(tile)
+	return {"manager": subject, "tile": tile, "nodes": [layer, entities, creatures]}
+
+
+func _free_river(bundle: Dictionary) -> void:
+	for node in bundle["nodes"]:
+		node.free()
+
+
+## The premise: at a river the two masks really do disagree, and that gap
+## is what the grass is standing in.
+func test_the_narrow_mask_misses_the_painted_river_bank():
+	var bundle := _river_manager()
+	var subject = bundle["manager"]
+	var missed := 0
+	for chunk_coord in subject._loaded_chunks:
+		var chunk = subject._loaded_chunks[chunk_coord]
+		for y in chunk.height:
+			for x in chunk.width:
+				var g: Vector2i = chunk_coord * EarthChunkManager.CHUNK_SIZE + Vector2i(x, y)
+				if subject.is_water_at_global(g.x, g.y) and not chunk.blocks_ground_cover(y * chunk.width + x):
+					missed += 1
+	_free_river(bundle)
+	assert_gt(missed, 0, "the premise: the painted river is wider than is_river/is_lake")
+
+
+func test_no_grass_grows_on_the_painted_river_bank():
+	var bundle := _river_manager()
+	var subject = bundle["manager"]
+	var on_water := 0
+	for chunk_coord in subject._loaded_chunks:
+		for cell in subject._grass_sims[chunk_coord].get_patch_cells():
+			var g: Vector2i = chunk_coord * EarthChunkManager.CHUNK_SIZE + cell
+			if subject.is_water_at_global(g.x, g.y):
+				on_water += 1
+	_free_river(bundle)
+	assert_eq(on_water, 0, "%d grass patches stand on cells drawn as water" % on_water)
+
+
+# -- nor on anything the village has built -----------------------------------
+#
+# Reported live, twice, with screenshots: "TherE's a shroom growing on a
+# house ... should be cleared before placing", and "Also potatoes growing on
+# pavement".
+#
+# Same shape as the water above, one mask over. _built_local_cells already
+# names every cell nothing may grow on -- a real building piece, a laid
+# road, a village farm's own rail -- and TallGrass and FlowerPatch are
+# handed it via block_cells at chunk load. WildCropPatch, WildMushroomPatch,
+# AntColony and EarthwormPatch never were: they only ever learned about
+# water, so a house roof and the market square's paving are still
+# "grassland" to them.
+
+## The reported scenario exactly: the ground is BUILT on, then the chunk is
+## (re)loaded and the ground-cover sims seed from scratch. Modifications are
+## restored before the sims are constructed, so a house roof and a paved
+## square are there to be seen -- the sims simply never looked.
+func test_nothing_grows_on_what_has_been_built():
+	var layer := TileMapLayer.new()
+	var entities := Node2D.new()
+	var creatures := Node2D.new()
+	var subject = EarthChunkManager.new(layer, entities, creatures)
+	var geo := GeoCoordinates.new()
+	var tile: Vector2i = geo.tile_for_coordinate(
+		48.2, 11.5, EarthChunkGenerator.WORLD_WIDTH_TILES, EarthChunkGenerator.WORLD_HEIGHT_TILES
+	)
+	subject.update(tile)
+	var chunk_coord: Vector2i = subject._chunk_coord_for_tile(tile)
+
+	# Pave over every cell that currently grows something, so the reload
+	# below has the exact conflict the screenshots show.
+	var paved := {}
+	for cell in subject._mushroom_sims[chunk_coord].get_site_cells():
+		paved[chunk_coord * EarthChunkManager.CHUNK_SIZE + (cell as Vector2i)] = true
+	for crop_id in subject._wild_crop_sims[chunk_coord]:
+		for cell in subject._wild_crop_sims[chunk_coord][crop_id].get_patch_cells():
+			paved[chunk_coord * EarthChunkManager.CHUNK_SIZE + (cell as Vector2i)] = true
+	for g in paved:
+		subject.build_at_global((g as Vector2i).x, (g as Vector2i).y, "road")
+
+	# Force the chunk to unload and load again, so every sim re-seeds with
+	# the built ground already on record.
+	subject.update(tile + Vector2i(EarthChunkManager.CHUNK_SIZE * 20, 0))
+	subject.update(tile)
+
+	var offenders: Array = []
+	if subject._mushroom_sims.has(chunk_coord):
+		for cell in subject._mushroom_sims[chunk_coord].get_site_cells():
+			var g2: Vector2i = chunk_coord * EarthChunkManager.CHUNK_SIZE + cell
+			if paved.has(g2):
+				offenders.append("mushroom at %s" % str(g2))
+		for crop_id in subject._wild_crop_sims[chunk_coord]:
+			for cell in subject._wild_crop_sims[chunk_coord][crop_id].get_patch_cells():
+				var g3: Vector2i = chunk_coord * EarthChunkManager.CHUNK_SIZE + cell
+				if paved.has(g3):
+					offenders.append("%s at %s" % [crop_id, str(g3)])
+	var paved_count := paved.size()
+	layer.free()
+	entities.free()
+	creatures.free()
+
+	assert_gt(paved_count, 0, "the premise: something really grew there to pave over")
+	assert_eq(
+		offenders.size(), 0,
+		"%d things grow on built ground (e.g. %s)" % [offenders.size(), str(offenders.slice(0, 4))]
+	)

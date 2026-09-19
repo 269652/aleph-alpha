@@ -498,3 +498,107 @@ func test_the_boulder_feed_keeps_the_nearest_rocks_when_slots_run_out():
 			Vector2(tile - river_tile).length(), worst_fed,
 			"a rock at %s was dropped while a farther one kept its slot" % str(tile)
 		)
+
+
+
+# -- a dug pond is water with a real depth -----------------------------------
+#
+# Reported live: "there's no real pond with river / lake water physics".
+# A pond answered is_water_at_global from the day it was dug -- so nothing
+# was ever built or grown on one -- but carried no DEPTH, and the player's
+# own water state is the maximum of ocean, river and lake depth, three
+# sources a pond is not one of. So a fisher's pond was water a player
+# walked over on dry feet.
+
+const VillagePond = preload("res://src/gameplay/village_pond.gd")
+const WaterMovementModel = preload("res://src/gameplay/water_movement_model.gd")
+
+
+## A dry tile well away from the fixture's own river, so the depth measured
+## is the pond's and nothing else's.
+func _dry_tile() -> Vector2i:
+	for dx in range(20, 200):
+		var tile := river_tile + Vector2i(dx, 0)
+		if not manager.is_water_at_global(tile.x, tile.y) and manager.is_chunk_loaded(
+			manager._chunk_coord_for_tile(tile)
+		):
+			return tile
+	return Vector2i.MAX
+
+
+func test_dry_ground_has_no_pond_depth():
+	var tile := _dry_tile()
+	assert_ne(tile, Vector2i.MAX, "the premise: a dry loaded tile must be findable")
+	assert_eq(manager.pond_depth_meters_at_global(tile.x, tile.y), 0.0)
+
+
+func test_a_dug_pond_is_water_deep_enough_to_swim_in():
+	var tile := _dry_tile()
+	assert_ne(tile, Vector2i.MAX, "the premise: a dry loaded tile must be findable")
+	assert_true(manager.build_at_global(tile.x, tile.y, VillagePond.POND_TILE_ID))
+
+	assert_true(manager.is_water_at_global(tile.x, tile.y), "a dug pond is water")
+	assert_almost_eq(
+		manager.pond_depth_meters_at_global(tile.x, tile.y), VillagePond.DEPTH_METERS, 1e-6
+	)
+	assert_gt(
+		manager.pond_depth_meters_at_global(tile.x, tile.y),
+		WaterMovementModel.WADE_DEPTH_METERS,
+		"deep enough that the player swims rather than walks across it"
+	)
+
+
+## The wiring itself: the player's water depth has to ASK for the pond, or
+## the depth above never reaches the swim decision. A source-contract check,
+## the same shape test_world_perf_report_wiring.gd uses, because standing a
+## real Player up headlessly is not worth the fight.
+func test_the_players_water_state_asks_for_the_pond_depth():
+	var source := FileAccess.get_file_as_string("res://scenes/player.gd")
+	var start := source.find("func _resolve_water_state(")
+	assert_gt(start, -1, "the premise: _resolve_water_state must still exist")
+	var body := source.substr(start, source.find("\nfunc ", start + 1) - start)
+	assert_true(
+		body.contains("_chunk_manager.pond_depth_meters_at_global(tile.x, tile.y)"),
+		"the player's water depth must include a dug pond"
+	)
+	assert_true(
+		body.contains("pond_depth"),
+		"and fold it into the water_depth the swim decision is made from"
+	)
+
+
+## Reported live: "it's a procedural entity layn over and not properly dug
+## / built pond". The blue a player sees on a pond is the `pond_water`
+## MODIFICATION tile and nothing else -- a flat square laid over the grass.
+##
+## Every other kind of water in this game rides one surface: "ONE WATER
+## SURFACE (docs/concept/hydrology.md): rivers, lakes and the sea all ride
+## this overlay", which is what gives them a waterline, an ink edge, a
+## shore feather and ripples. _paint_river_flow_overlay works that out from
+## `generator.hydrology_at_global` and `generator.nearest_river_at` -- and
+## the generator is the one thing that cannot know about a dug pond, since
+## a pond is a player/village modification. So a pond fell through to the
+## "nothing is water here" branch and had its overlay cell ERASED.
+func test_a_dug_pond_is_painted_on_the_water_surface():
+	# Ground the surface does not paint at all -- past the river's own shore
+	# bleed, so the cell really is empty before the pond is dug.
+	var tile := Vector2i.MAX
+	for dx in range(20, 300):
+		var candidate := river_tile + Vector2i(dx, 0)
+		if not manager.is_chunk_loaded(manager._chunk_coord_for_tile(candidate)):
+			continue
+		if manager.is_water_at_global(candidate.x, candidate.y):
+			continue
+		if river_flow_layer.get_cell_source_id(candidate) == -1:
+			tile = candidate
+			break
+	assert_ne(tile, Vector2i.MAX, "the premise: unpainted dry ground must be findable")
+	var chunk_coord: Vector2i = manager._chunk_coord_for_tile(tile)
+
+	assert_true(manager.build_at_global(tile.x, tile.y, VillagePond.POND_TILE_ID))
+	manager._paint_river_flow_overlay(chunk_coord, manager._loaded_chunks[chunk_coord])
+
+	assert_ne(
+		river_flow_layer.get_cell_source_id(tile), -1,
+		"a dug pond must be painted by the one water surface, not left to a flat tile"
+	)
