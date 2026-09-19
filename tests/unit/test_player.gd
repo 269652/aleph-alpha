@@ -1946,6 +1946,42 @@ func test_several_masters_hang_around_inside_a_full_guild():
 	assert_eq(player.masters_here().size(), MageGuildRoster.CAPACITY)
 
 
+## Walking in through the real door must actually stand them up in the
+## room, not merely make them answerable by a query.
+func test_walking_into_a_guild_stands_its_masters_up_in_the_room():
+	var guild_seed := _a_guild_seed_teaching("minor_heal")
+	var site := _a_dry_site_for(SpellTuition.GUILD_BUILDING_ID)
+	assert_false(site.is_empty(), "precondition: somewhere dry to raise a guild")
+	if site.is_empty():
+		return
+	assert_true(chunk_manager.place_building(
+		site["chunk_coord"], site["origin"], SpellTuition.GUILD_BUILDING_ID,
+		Vector2i(0, 1), guild_seed
+	))
+	_placed_guilds.append(site)
+	chunk_manager.age_mage_guilds_in(
+		site["chunk_coord"], MageGuildRoster.DAYS_PER_MASTER * float(MageGuildRoster.CAPACITY)
+	)
+	# Stand on the guild's own doorstep and press Enter for real.
+	var global_origin: Vector2i = site["chunk_coord"] * EarthChunkManager.CHUNK_SIZE + site["origin"]
+	var doorstep: Vector2i = global_origin + BuildingCatalog.doorstep_of(SpellTuition.GUILD_BUILDING_ID)
+	player.position = (Vector2(doorstep) + Vector2(0.5, 0.5)) * TILE_SIZE
+	_register_all_keybindings()
+	Input.action_press("enter")
+	player._enter_exit_step()
+	Input.action_release("enter")
+
+	assert_true(player.is_indoors(), "pressing Enter on the guild's doorstep did not go in")
+	assert_eq(player._interior_view.occupant_identities().size(), MageGuildRoster.CAPACITY)
+	for identity in player._interior_view.occupant_identities():
+		assert_eq(identity.occupation, MageMaster.OCCUPATION)
+
+
+func test_an_empty_guild_really_is_an_empty_room():
+	_enter_a_guild(_a_guild_seed_teaching("minor_heal"), 0)
+	assert_eq(player._interior_view.occupant_identities(), [])
+
+
 func test_what_a_guild_offers_is_what_its_own_masters_teach():
 	_enter_a_guild(_a_guild_seed_teaching("minor_heal"), MageGuildRoster.CAPACITY)
 	var offered: Array = player.spells_a_guild_would_teach()

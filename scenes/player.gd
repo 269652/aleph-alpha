@@ -659,6 +659,7 @@ const SpellExecutor = preload("res://src/gameplay/spell_executor.gd")
 const SpellAtomEffects = preload("res://src/gameplay/spell_atom_effects.gd")
 const SpellTargeting = preload("res://src/gameplay/spell_targeting.gd")
 const SpellTuition = preload("res://src/gameplay/spell_tuition.gd")
+const MageMaster = preload("res://src/gameplay/mage_master.gd")
 const Karma = preload("res://src/gameplay/karma.gd")
 
 var _spell_book := SpellBook.new()
@@ -2654,14 +2655,27 @@ func _enter_exit_step() -> void:
 		interior_family, occupation, seed_value, renderer.build_tile_set(), _tile_size, renderer, placed_furniture
 	)
 
-	# The house's own villager stands in their room only while they are
-	# actually home right now (docs/concept/building.md "Residents inside")
-	# -- the same "arrived home" state that hides their outdoor marker on
-	# the doorstep, so they are never in two places at once and a house
-	# whose villager is out at the well is honestly empty.
-	var resident_marker = _chunk_manager.resident_marker_for(record)
-	if resident_marker != null and resident_marker.is_at_home():
-		interior_view.place_resident(resident_marker.identity)
+	# A mage guild holds a GROUP rather than a household (docs/concept/
+	# mage_guild.md): however many masters have moved in so far, standing
+	# around in there. They have no outdoor marker and no home to be out
+	# from -- a master in residence is in the guild, which is the whole
+	# point of having to walk in to find one.
+	var masters := _chunk_manager.masters_in_guild(record)
+	if not masters.is_empty():
+		var faculty: Array = []
+		for master_seed in masters:
+			faculty.append(MageMaster.identity_for(master_seed))
+		interior_view.place_occupants(faculty)
+	else:
+		# Every other building: the house's own villager stands in their
+		# room only while they are actually home right now (docs/concept/
+		# building.md "Residents inside") -- the same "arrived home" state
+		# that hides their outdoor marker on the doorstep, so they are
+		# never in two places at once and a house whose villager is out at
+		# the well is honestly empty.
+		var resident_marker = _chunk_manager.resident_marker_for(record)
+		if resident_marker != null and resident_marker.is_at_home():
+			interior_view.place_resident(resident_marker.identity)
 
 	var avatar := InteriorAvatar.new()
 	_interior_viewport.add_child(avatar)
