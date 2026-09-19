@@ -188,6 +188,8 @@ const EstateConsumption = preload("res://src/emergence/estate_consumption.gd")
 const EstateAscension = preload("res://src/emergence/estate_ascension.gd")
 const VillageLabor = preload("res://src/emergence/village_labor.gd")
 const VillageAssembly = preload("res://src/emergence/village_assembly.gd")
+const VillageNeedsReport = preload("res://src/emergence/village_needs_report.gd")
+const SettlementFoodDemand = preload("res://src/emergence/settlement_food_demand.gd")
 const EstateShortfall = preload("res://src/emergence/estate_shortfall.gd")
 const GuildRelief = preload("res://src/emergence/guild_relief.gd")
 const StaffedProduction = preload("res://src/emergence/staffed_production.gd")
@@ -208,6 +210,8 @@ const VillageWages = preload("res://src/world/village_wages.gd")
 const OccupationProduction = preload("res://src/emergence/occupation_production.gd")
 const NpcIdentity = preload("res://src/world/npc_identity.gd")
 const SettlementTier = preload("res://src/emergence/settlement_tier.gd")
+const SettlementCharter = preload("res://src/emergence/settlement_charter.gd")
+const MageGuildRoster = preload("res://src/gameplay/mage_guild_roster.gd")
 const WorldBoss = preload("res://src/emergence/world_boss.gd")
 const WorldBossStore = preload("res://src/emergence/world_boss_store.gd")
 const WorldBossStorePersistence = preload("res://src/emergence/world_boss_store_persistence.gd")
@@ -3650,6 +3654,14 @@ func step_settlements(delta_seconds: float) -> void:
 		# step: a newcomer arriving this tick is owed a house this tick,
 		# not one assessment later.
 		_step_village_immigration(settlement_id, market, household_ids)
+		# A master decides to settle here (docs/concept/mage_guild.md
+		# mechanism 3), beside immigration and on the same player-felt
+		# clock, because it is the same kind of decision -- a person
+		# choosing to move to this place.
+		age_mage_guilds_in(
+			RegionalTrade.chunk_coord_of(settlement_id),
+			SETTLEMENT_STEP_INTERVAL / SECONDS_PER_SIMULATED_DAY
+		)
 		_step_settlement_construction(settlement_id, household_ids)
 		var capacity := _settlement_capacity(settlement_id, market, village_market)
 		var status := SettlementState.status_for(household_ids.size(), capacity)
@@ -4021,6 +4033,28 @@ func _settlement_present_building_ids(chunk_coord: Vector2i) -> Array:
 	for building_id in _chartered_building_ids_in_chunk(chunk_coord):
 		seen[building_id] = true
 	return seen.keys()
+
+
+## How MANY of each whole building this settlement has standing --
+## building_id -> count, where the list above only says whether one does.
+##
+## What VillageAssembly needs to know that a works which feeds people is
+## outnumbered by the mouths it feeds (docs/concept/village_estates.md
+## mechanism 7): a village of forty with one farmstead is short however many
+## times it votes, and "a farmhouse stands here" cannot say so.
+##
+## Whole buildings only. A single-tile placeable is not something the
+## assembly scales, and the ledger's completed projects are counted
+## alongside the ones standing in a loaded chunk for the same reason the
+## union above exists -- what a village HAS should not depend on whether
+## anybody is standing in it.
+func _settlement_building_counts(chunk_coord: Vector2i) -> Dictionary:
+	var counts := {}
+	for building_id in _standing_building_ids_in_chunk(chunk_coord):
+		counts[building_id] = int(counts.get(building_id, 0)) + 1
+	for building_id in _construction_project_store.completed_blueprint_ids_in_chunk(chunk_coord):
+		counts[building_id] = int(counts.get(building_id, 0)) + 1
+	return counts
 
 
 ## docs/concept/village_estates.md mechanisms 2, 3 and 6, in one pass over
@@ -4738,21 +4772,104 @@ func _household_wellbeing_for_settlement(settlement_id: String) -> Array:
 		VillageGrowth.ladder_share(_present_structure_ids_for_settlement_chunk(chunk_coord)) if loaded else 0.0
 	)
 	var capacity_by_household := _house_capacity_by_household(chunk_coord) if loaded else {}
+	var employment := _settlement_employment(settlement_id, household_ids)
 
 	var out: Array = []
 	for household_id in household_ids:
-		var household = _household_store.get_household(household_id)
-		var size: int = 1 if household == null else maxi(household.members.size(), 1)
-		out.append(HouseholdWellbeing.assess({
-			"hunger": hunger,
-			"food_per_household": food_per_household,
-			"house_capacity": int(capacity_by_household.get(household_id, size)) if loaded else size,
-			"household_size": size,
-			"wallet_balance": 0 if household == null else household.wallet.balance,
-			"meal_price": VillageMarket.VILLAGE_LOCAL_FOOD_PRICE,
-			"ladder_share": ladder_share,
-		}))
+		out.append(HouseholdWellbeing.assess(
+			_wellbeing_state_for(
+				household_id,
+				hunger,
+				food_per_household,
+				ladder_share,
+				employment,
+				capacity_by_household,
+				loaded
+			)
+		))
 	return out
+
+
+## One household's whole HouseholdWellbeing.assess input, built from the
+## settlement-wide readings its caller already took. Extracted so the
+## SETTLEMENT assessment and the single-household readout cannot drift into
+## measuring two different things.
+##
+## `employment` is `{}` when this settlement's buildings could not be read
+## at all, and the key is then LEFT OUT rather than guessed: absence of a
+## reading is not evidence of idleness, and a destitute default would have
+## every village nobody is standing in read as wholly out of work (see
+## HouseholdWellbeing.WORK_UNREAD_DEFAULT).
+func _wellbeing_state_for(
+	household_id: String,
+	hunger: float,
+	food_per_household: float,
+	ladder_share: float,
+	employment: Dictionary,
+	capacity_by_household: Dictionary,
+	loaded: bool
+) -> Dictionary:
+	var household = _household_store.get_household(household_id)
+	var size: int = 1 if household == null else maxi(household.members.size(), 1)
+	var state := {
+		"hunger": hunger,
+		"food_per_household": food_per_household,
+		"house_capacity": int(capacity_by_household.get(household_id, size)) if loaded else size,
+		"household_size": size,
+		"wallet_balance": 0 if household == null else household.wallet.balance,
+		"meal_price": VillageMarket.VILLAGE_LOCAL_FOOD_PRICE,
+		"ladder_share": ladder_share,
+	}
+	if not employment.is_empty():
+		state["employment"] = VillageLabor.employment_for_estate(
+			_estate_of_household(household_id), employment
+		)
+	return state
+
+
+## `{labour_class -> [0,1]}` for this settlement -- what share of the
+## people of each class have a post (docs/concept/village_estates.md
+## mechanism 4, read from the households' side rather than the buildings').
+##
+## `{}` when NOTHING is known to stand here, which is the honest reading
+## for a settlement whose chunk is unloaded and whose construction ledger
+## is empty: every village is founded with a store already standing, so
+## "no building at all" means nobody looked rather than that the village
+## has none.
+func _settlement_employment(settlement_id: String, household_ids: Array[String]) -> Dictionary:
+	var present := _settlement_present_building_ids(RegionalTrade.chunk_coord_of(settlement_id))
+	if present.is_empty():
+		return {}
+	return VillageLabor.employment_for(
+		VillageLabor.supply_for(_household_store.estate_census(household_ids)),
+		VillageLabor.demand_for(present)
+	)
+
+
+## One household's own HouseholdWellbeing reading -- the same assessment
+## the settlement-wide one takes, for a single household. `{}` for a
+## household this world has never heard of.
+func household_wellbeing_report_for(household_id: String) -> Dictionary:
+	var settlement_id := _settlement_of_party(household_id)
+	if settlement_id == "":
+		return {}
+	var household_ids := _households_in_settlement(settlement_id)
+	if not household_ids.has(household_id):
+		return {}
+
+	var chunk_coord := RegionalTrade.chunk_coord_of(settlement_id)
+	var loaded := _loaded_chunks.has(chunk_coord)
+	var market := _market_store.market_for(settlement_id)
+	var food_per_household := _food_per_household(settlement_id, market, household_ids.size())
+	return HouseholdWellbeing.assess(_wellbeing_state_for(
+		household_id,
+		1.0 - clampf(food_per_household / HouseholdWellbeing.FOOD_STOCK_PER_HOUSEHOLD_TARGET, 0.0, 1.0),
+		food_per_household,
+		VillageGrowth.ladder_share(_settlement_present_building_ids(chunk_coord)) if loaded else 0.0,
+		_settlement_employment(settlement_id, household_ids),
+		_house_capacity_by_household(chunk_coord) if loaded else {},
+		loaded
+	))
 
 
 ## household_id -> the capacity of the house it owns in this chunk. A
@@ -4839,6 +4956,17 @@ func household_report_at(global_x: int, global_y: int) -> Dictionary:
 		# buildings that hold things and neither is a home.
 		"storage_capacity": BuildingCatalog.storage_capacity_of(building_id),
 		"stock": building_inventory_at(global_x, global_y),
+		# Every need this village's estates really ask for, what they got,
+		# and which building would answer it (docs/concept/village_estates.md
+		# mechanism 8). The SAME state the assembly votes on, so the readout
+		# and the decision cannot disagree about what is short or about what
+		# would fix it.
+		"village_needs": _village_needs_rows(chunk_coord),
+		# The settlement's own charter (docs/concept/settlement_charter.md
+		# mechanism 5). Carried on EVERY report; the panel draws it on the
+		# COMMONS only, because a home's readout is about its household and
+		# the charter is a fact about the place everyone shares.
+		"charter": settlement_charter_report_for(settlement_id),
 	}
 	if capacity <= 0:
 		return report
@@ -4861,15 +4989,26 @@ func household_report_at(global_x: int, global_y: int) -> Dictionary:
 	var food_per_household := _food_per_household(
 		settlement_id, _market_store.market_for(settlement_id), household_count
 	)
-	var wellbeing: Dictionary = HouseholdWellbeing.assess({
-		"hunger": _resident_hunger(chunk_coord, resident_seed, food_per_household),
-		"food_per_household": food_per_household,
-		"house_capacity": capacity,
-		"household_size": household_size,
-		"wallet_balance": report["wallet_balance"],
-		"meal_price": VillageMarket.VILLAGE_LOCAL_FOOD_PRICE,
-		"ladder_share": VillageGrowth.ladder_share(_present_structure_ids_for_settlement_chunk(chunk_coord)),
-	})
+	# The SAME state builder the settlement-wide assessment uses, so the two
+	# cannot drift into measuring different things -- then the two fields a
+	# clicked house genuinely knows better: the resident's own live hunger
+	# rather than the village's larder reading, and the capacity of the
+	# building actually clicked rather than whichever house the household
+	# owns.
+	var state := _wellbeing_state_for(
+		household_id,
+		0.0,
+		food_per_household,
+		VillageGrowth.ladder_share(_present_structure_ids_for_settlement_chunk(chunk_coord)),
+		_settlement_employment(settlement_id, _households_in_settlement(settlement_id)),
+		{},
+		false
+	)
+	state["hunger"] = _resident_hunger(chunk_coord, resident_seed, food_per_household)
+	state["house_capacity"] = capacity
+	state["household_size"] = household_size
+	state["wallet_balance"] = report["wallet_balance"]
+	var wellbeing: Dictionary = HouseholdWellbeing.assess(state)
 	report["needs"] = wellbeing["needs"]
 	report["happiness"] = wellbeing["happiness"]
 	report["productivity"] = wellbeing["productivity"]
@@ -14786,6 +14925,73 @@ func place_building(
 const WAREHOUSE_BUILDING_ID := "warehouse"
 
 
+# -- the mage guild fills with masters (docs/concept/mage_guild.md) ---------
+
+const MAGE_GUILD_BUILDING_ID := "mage_guild"
+
+## The ONE number a guild persists: how many simulated days it has stood
+## open. Everything else about who is inside is derived from this and the
+## building's own `seed` (see MageGuildRoster) -- there is no roster to
+## save, no master to serialise, and nothing that can drift from the thing
+## that generated it. A record written before guilds aged simply reads 0.0
+## and starts filling from the day this loads.
+const GUILD_DAYS_OPEN_KEY := "guild_days_open"
+
+
+## The building record placed at `origin_local`, with its own location
+## folded in the way buildings_in_chunk does -- {} when nothing is there.
+func building_record_at(chunk_coord: Vector2i, origin_local: Vector2i) -> Dictionary:
+	var chunk: Chunk = _loaded_chunks.get(chunk_coord)
+	if chunk == null or not chunk.buildings.has(origin_local):
+		return {}
+	var record: Dictionary = chunk.buildings[origin_local].duplicate()
+	record["chunk_coord"] = chunk_coord
+	record["origin_local"] = origin_local
+	return record
+
+
+## Every loaded mage guild stands open for `days` more simulated days.
+##
+## On the PLAYER-FELT clock (SECONDS_PER_SIMULATED_DAY), not the material
+## economy's 3600-second one, because a master deciding to move somewhere
+## is the same kind of decision VillageImmigration already measures on that
+## clock -- and a guild nobody can ever see fill is a gate, not a feature.
+## Loaded chunks only, the same honest limitation _step_village_immigration
+## already carries.
+func age_mage_guilds(days: float) -> void:
+	for chunk_coord in _loaded_chunks:
+		age_mage_guilds_in(chunk_coord, days)
+
+
+## The same, for ONE chunk. This is what the settlement step calls, and the
+## distinction is load-bearing rather than tidiness: the step runs once per
+## SETTLEMENT, so ageing every loaded guild from inside it would run a
+## guild's clock once per settlement in range -- three villages nearby and
+## every guild in the world fills three times too fast.
+func age_mage_guilds_in(chunk_coord: Vector2i, days: float) -> void:
+	if days <= 0.0:
+		return
+	var chunk: Chunk = _loaded_chunks.get(chunk_coord)
+	if chunk == null:
+		return
+	for origin_local in chunk.buildings:
+		var record: Dictionary = chunk.buildings[origin_local]
+		if String(record.get("id", "")) != MAGE_GUILD_BUILDING_ID:
+			continue
+		record[GUILD_DAYS_OPEN_KEY] = float(record.get(GUILD_DAYS_OPEN_KEY, 0.0)) + days
+
+
+## Who is in residence at this guild. [] for any building that is not a
+## mage guild, and [] for a guild nobody has come to yet -- correct and
+## deliberate, because the building is not the teacher.
+func masters_in_guild(record: Dictionary) -> Array:
+	if String(record.get("id", "")) != MAGE_GUILD_BUILDING_ID:
+		return []
+	return MageGuildRoster.master_seeds(
+		int(record.get("seed", 0)), float(record.get(GUILD_DAYS_OPEN_KEY, 0.0))
+	)
+
+
 ## Writes who lives in an already-placed building (see place_building's
 ## own occupation/resident_seed) -- the backfill hook for a record
 ## persisted before those fields existed (VillageRenderer._recover_
@@ -15026,11 +15232,11 @@ func _spawn_building_node(chunk_coord: Vector2i, origin_local: Vector2i, record:
 	# has been declared but not dropped in yet simply does not stop the
 	# chain, so nothing ever regresses to a box for want of one file.
 	var texture := _first_texture_of(
-		BuildingCatalog.finished_sheet_chain(building_id, seed_value), footprint.x
+		BuildingCatalog.finished_sheet_chain(building_id, seed_value), footprint.x, building_id
 	)
 	if texture == null:
 		texture = _building_placeholder_sprite.footprint_texture(
-			footprint, seed_value, TerrainRenderer.ART_TILE_SIZE
+			footprint, seed_value, TerrainRenderer.ART_TILE_SIZE, building_id
 		)
 	sprite.texture = texture
 	sprite.scale = Vector2.ONE * ArtResolution.SPRITE_SCALE
@@ -17355,20 +17561,46 @@ func _apply_civic_build_decision(chunk_coord: Vector2i) -> void:
 ## must ask the same function _apply_village_growth_decision then acts on,
 ## never keep a second prediction of its own that can drift from it.
 func next_building_for_settlement(chunk_coord: Vector2i) -> String:
+	var state := _village_assembly_state(chunk_coord)
+	return "" if state.is_empty() else VillageAssembly.next_building(state)
+
+
+## The ONE reading of a village the assembly votes on -- and the same one
+## the needs readout draws, so what a player is shown and what the village
+## decides can never come from two different pictures of it. {} for a chunk
+## with no settlement in it.
+func _village_assembly_state(chunk_coord: Vector2i) -> Dictionary:
 	var settlement_id := EntityRef.for_settlement(chunk_coord)
 	var household_ids := _households_in_settlement(settlement_id)
 	if household_ids.is_empty():
-		return ""
+		return {}
 	var census := _village_census_for(chunk_coord, household_ids)
 	var waiting: Array = census["unhoused_household_ids"]
-	return VillageAssembly.next_building({
+	return {
 		"estate_counts": _household_store.estate_census(household_ids),
 		"household_count": household_ids.size(),
 		"housed_count": int(census["housed_count"]),
 		"present_building_ids": _settlement_present_building_ids(chunk_coord),
+		# How many of each, so a works that feeds people can be raised again
+		# while it is outnumbered by the mouths (mechanism 7).
+		"building_counts": _settlement_building_counts(chunk_coord),
+		# And WHICH food works this land wants -- a fishing village raises no
+		# farmstead to feed itself, because a fisher's works is their own
+		# house and the roster already conscripts another of them.
+		"food_trade": SettlementFoodDemand.trade_for(seeded_region_for_chunk(chunk_coord)),
 		"satisfaction": _settlement_estate_satisfaction.get(settlement_id, {}),
 		"waiting_estate": _estate_of_household(waiting[0] if not waiting.is_empty() else ""),
-	})
+		# The settlement's own charter (docs/concept/settlement_charter.md
+		# mechanism 4): the village reads the same gate the player does.
+		"tier": settlement_tier_of(settlement_id),
+	}
+
+
+## The needs graph for the village in `chunk_coord`, or [] where there is no
+## settlement or nobody has assessed it yet (see VillageNeedsReport).
+func _village_needs_rows(chunk_coord: Vector2i) -> Array:
+	var state := _village_assembly_state(chunk_coord)
+	return [] if state.is_empty() else VillageNeedsReport.rows_for(state)
 
 
 func _apply_village_growth_decision(chunk_coord: Vector2i) -> void:
@@ -17432,6 +17664,79 @@ func estate_report_for_household(household_id: String, chunk_coord: Vector2i) ->
 			"good_run_days": household.good_run_days,
 			"short_run_days": household.short_run_days,
 		}),
+	}
+
+
+## This settlement's live SettlementTier -- re-derived from the same three
+## real flows _step_settlement_classification reads (households, ACTIVE
+## institutions, production diversity), rather than from the cached label,
+## so an answer is never one assessment stale.
+##
+## The LOWEST tier for a settlement nobody founded, which is the reading
+## that refuses rather than the one letting a place nobody has heard of
+## raise a mage guild.
+func settlement_tier_of(settlement_id: String) -> String:
+	var household_ids := _households_in_settlement(settlement_id)
+	if household_ids.is_empty():
+		return SettlementTier.TIERS[0]
+	return SettlementTier.tier_for(
+		household_ids.size(),
+		_active_institution_count_for(household_ids),
+		_production_counts_for_settlement(settlement_id).size()
+	)
+
+
+## `{}` when this settlement may raise `building_id`; otherwise the refusal
+## that TEACHES (docs/concept/settlement_charter.md mechanism 2) -- the
+## tier wanted, the tier held, and exactly what is still short.
+##
+## The ONE gate a player's build hand and the village's own decision both
+## read, so a village can never quietly raise through its construction
+## ledger what a player standing on its square would be refused.
+func building_charter_refusal_at(settlement_id: String, building_id: String) -> Dictionary:
+	var household_ids := _households_in_settlement(settlement_id)
+	return SettlementCharter.refusal_for(
+		building_id,
+		household_ids.size(),
+		_active_institution_count_for(household_ids),
+		_production_counts_for_settlement(settlement_id).size()
+	)
+
+
+## What a player reads off a settlement's own hall (docs/concept/
+## settlement_charter.md mechanism 5): what the place IS, what it may
+## raise, and what it would take to be the next thing up.
+##
+## A consumer and never a driver -- asking changes nothing about the
+## settlement, which is test-pinned, the same discipline the household
+## readout already holds itself to.
+func settlement_charter_report_for(settlement_id: String) -> Dictionary:
+	var household_ids := _households_in_settlement(settlement_id)
+	var institutions := _active_institution_count_for(household_ids)
+	var diversity := _production_counts_for_settlement(settlement_id).size()
+	var tier := SettlementTier.tier_for(household_ids.size(), institutions, diversity)
+	var next_tier := SettlementCharter.next_tier_above(tier)
+
+	var allowed: Array = []
+	var locked: Array = []
+	for building_id in BuildingCatalog.CHARTERED_BUILDING_IDS:
+		if SettlementCharter.allows(building_id, tier):
+			allowed.append(building_id)
+		else:
+			locked.append(building_id)
+
+	return {
+		"settlement_id": settlement_id,
+		"tier": tier,
+		"next_tier": next_tier,
+		"households": household_ids.size(),
+		"institutions": institutions,
+		"production_diversity": diversity,
+		"allowed": allowed,
+		"locked": locked,
+		"short": SettlementCharter.shortfall_to(
+			next_tier, household_ids.size(), institutions, diversity
+		),
 	}
 
 
@@ -17809,11 +18114,16 @@ func _sync_construction_site(chunk_coord: Vector2i, project) -> void:
 	# The same art resolution the FINISHED building uses (see
 	# _spawn_building_node): a site drawn at a different pixels-per-world-
 	# unit would visibly jump the moment it completed.
-	var texture := _first_texture_of(chain, footprint.x)
+	# Named, so a site is drawn at the same size the finished building will
+	# be -- a cottage that grew to full size the moment it completed would
+	# be the same jump this comment's own line above guards against.
+	var texture := _first_texture_of(chain, footprint.x, building_id)
 	if texture == null:
 		# No sheet yet: the finished placeholder, faded -- a ghost of what
 		# is coming, growing solid with the work.
-		texture = _building_placeholder_sprite.footprint_texture(footprint, 0, TerrainRenderer.ART_TILE_SIZE)
+		texture = _building_placeholder_sprite.footprint_texture(
+			footprint, 0, TerrainRenderer.ART_TILE_SIZE, building_id
+		)
 		sprite.modulate = Color(1.0, 1.0, 1.0, 0.35 + 0.65 * progress)
 	sprite.texture = texture
 	sprite.scale = Vector2.ONE * ArtResolution.SPRITE_SCALE
@@ -17830,11 +18140,13 @@ func _sync_construction_site(chunk_coord: Vector2i, project) -> void:
 ## way, but the art then carries DETAIL_MULTIPLIER pixels per world unit --
 ## the same detail per world unit the ground it stands on already paints
 ## at. A finely drawn sheet at TILE_SIZE would be thrown away.
-func _first_texture_of(chain: Array, footprint_width_tiles: int) -> ImageTexture:
+func _first_texture_of(
+	chain: Array, footprint_width_tiles: int, building_id: String = ""
+) -> ImageTexture:
 	for entry in chain:
 		var texture := _illustrated_structure_sprite.footprint_frame_texture(
 			entry["path"], entry["columns"], entry["rows"], entry["row"], entry["column"],
-			TerrainRenderer.ART_TILE_SIZE, footprint_width_tiles, entry["grid"]
+			TerrainRenderer.ART_TILE_SIZE, footprint_width_tiles, entry["grid"], building_id
 		)
 		if texture != null:
 			return texture

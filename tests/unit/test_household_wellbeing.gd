@@ -19,6 +19,7 @@ func _thriving() -> Dictionary:
 		"wallet_balance": VillageMarket.VILLAGE_LOCAL_FOOD_PRICE * HouseholdWellbeing.INCOME_MEALS_FOR_FULL,
 		"meal_price": VillageMarket.VILLAGE_LOCAL_FOOD_PRICE,
 		"ladder_share": 1.0,
+		"employment": 1.0,
 	}
 
 
@@ -209,3 +210,106 @@ func test_the_mean_productivity_is_the_real_average():
 		HouseholdWellbeing.mean_productivity([thriving, starving]),
 		(float(thriving["productivity"]) + float(starving["productivity"])) / 2.0, 0.001
 	)
+
+
+# -- work: the labour pyramid, felt from the household's side -------------
+
+## docs/concept/village_estates.md mechanism 4 reaches wellbeing. The
+## pyramid already said what share of a building's POSTS are filled; this
+## is the other half of the same two numbers -- what share of the PEOPLE
+## have one -- and it is the half a household actually feels.
+func test_work_is_one_of_the_needs():
+	assert_true(HouseholdWellbeing.NEED_IDS.has("work"))
+
+
+func test_a_household_with_a_post_has_its_work_need_met():
+	assert_almost_eq(float(HouseholdWellbeing.assess(_thriving())["needs"]["work"]), 1.0, 0.001)
+
+
+func test_an_idle_household_has_no_work_at_all():
+	var idle: Dictionary = _thriving()
+	idle["employment"] = 0.0
+	assert_almost_eq(float(HouseholdWellbeing.assess(idle)["needs"]["work"]), 0.0, 0.001)
+
+
+func test_half_a_chance_of_a_post_is_half_the_need():
+	var half: Dictionary = _thriving()
+	half["employment"] = 0.5
+	assert_almost_eq(float(HouseholdWellbeing.assess(half)["needs"]["work"]), 0.5, 0.001)
+
+
+## Idleness really costs a village something: an idle household is
+## unhappier, and therefore builds slower, than an employed one.
+func test_an_idle_village_is_unhappier_and_builds_slower():
+	var idle: Dictionary = _thriving()
+	idle["employment"] = 0.0
+	var employed: Dictionary = HouseholdWellbeing.assess(_thriving())
+	var out: Dictionary = HouseholdWellbeing.assess(idle)
+	assert_lt(float(out["happiness"]), float(employed["happiness"]))
+	assert_lt(float(out["productivity"]), float(employed["productivity"]))
+
+
+## **Not a destitute default, and deliberately so.** Every other need reads
+## a missing input as its worst case, because a household nobody has
+## established anything about really is badly off. Employment is different:
+## it is read off the BUILDINGS a settlement has, and a caller that could
+## not look at them has not discovered idleness, it has discovered nothing.
+## A destitute default here would have every village in the world nobody is
+## standing in read as wholly unemployed -- the same trap
+## `house_capacity`'s own unloaded fallback already avoids.
+func test_a_household_whose_employment_was_never_read_is_not_called_idle():
+	var unread: Dictionary = _thriving()
+	unread.erase("employment")
+	assert_almost_eq(
+		float(HouseholdWellbeing.assess(unread)["needs"]["work"]),
+		1.0,
+		0.001,
+		"a household nobody asked about was reported out of work"
+	)
+
+
+## Nonsense is still clamped -- "not read" is a MISSING key, never a silly
+## number.
+func test_an_absurd_employment_reading_is_still_clamped():
+	var absurd: Dictionary = _thriving()
+	absurd["employment"] = 7.0
+	assert_almost_eq(float(HouseholdWellbeing.assess(absurd)["needs"]["work"]), 1.0, 0.001)
+	absurd["employment"] = -3.0
+	assert_almost_eq(float(HouseholdWellbeing.assess(absurd)["needs"]["work"]), 0.0, 0.001)
+
+
+# -- and where work sits among the rest ------------------------------------
+
+## Pinned as an ordering, like every other weight here: losing your trade
+## costs a household more than losing its savings, because the trade is
+## what produced the savings; and it costs less than losing the roof.
+func test_losing_work_costs_more_happiness_than_losing_income():
+	var idle: Dictionary = _thriving()
+	idle["employment"] = 0.0
+	var broke: Dictionary = _thriving()
+	broke["wallet_balance"] = 0
+	assert_lt(
+		float(HouseholdWellbeing.assess(idle)["happiness"]),
+		float(HouseholdWellbeing.assess(broke)["happiness"])
+	)
+
+
+func test_losing_shelter_costs_more_happiness_than_losing_work():
+	var homeless: Dictionary = _thriving()
+	homeless["house_capacity"] = 0
+	var idle: Dictionary = _thriving()
+	idle["employment"] = 0.0
+	assert_lt(
+		float(HouseholdWellbeing.assess(homeless)["happiness"]),
+		float(HouseholdWellbeing.assess(idle)["happiness"])
+	)
+
+
+## The whole weight order, in one place, so a re-weighting cannot silently
+## reshuffle it: food, shelter, work, income, community.
+func test_the_needs_are_weighted_in_their_own_listed_order():
+	var previous := 1.1
+	for need_id in HouseholdWellbeing.NEED_IDS:
+		var weight: float = HouseholdWellbeing.NEED_WEIGHTS[need_id]
+		assert_lt(weight, previous, "%s is weighted at or above the need before it" % need_id)
+		previous = weight

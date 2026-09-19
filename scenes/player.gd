@@ -658,12 +658,23 @@ const SpellBook = preload("res://src/gameplay/spell_book.gd")
 const SpellExecutor = preload("res://src/gameplay/spell_executor.gd")
 const SpellAtomEffects = preload("res://src/gameplay/spell_atom_effects.gd")
 const SpellTargeting = preload("res://src/gameplay/spell_targeting.gd")
+const SpellTuition = preload("res://src/gameplay/spell_tuition.gd")
+const MageMaster = preload("res://src/gameplay/mage_master.gd")
 const Karma = preload("res://src/gameplay/karma.gd")
 
 var _spell_book := SpellBook.new()
 var _spell_executor := SpellExecutor.new()
 var _spell_atom_effects := SpellAtomEffects.new()
 var _spell_targeting := SpellTargeting.new()
+
+## What THIS character can cast, which is not the same thing as what exists
+## (docs/concept/magic.md's 2026-09-19 section). The SpellBook is the
+## world's catalogue; this is the known set. Everything past the starting
+## grant is bought from a mage guild -- the building settlement_charter.gd
+## only lets a CITY raise, so the way into higher magic is through a
+## village the player helped grow.
+var _known_spell_ids: Array[String] = SpellTuition.STARTING_SPELL_IDS.duplicate()
+var _spell_tuition := SpellTuition.new()
 
 ## The current cast result banner ("" == nothing to show), read by the HUD --
 ## same shape as trade_message/fishing_message.
@@ -1236,6 +1247,10 @@ func to_save_dict() -> Dictionary:
 		# same as karma above, or the nine-lives count could be reset by
 		# quitting and reloading right after a death.
 		"lives_remaining": _lives_tracker.lives_remaining,
+		# A permanent capability bought with real gold (docs/concept/
+		# magic.md's tuition section) -- must not evaporate on reload, the
+		# same as karma or a spent life above.
+		"known_spell_ids": _known_spell_ids.duplicate(),
 	}
 
 
@@ -1265,6 +1280,12 @@ func apply_save_dict(data: Dictionary) -> void:
 	karma = data.get("karma", karma)
 	accepted_quest_ids = (data.get("accepted_quest_ids", accepted_quest_ids) as Array).duplicate()
 	_lives_tracker = LivesTracker.new(data.get("lives_remaining", _lives_tracker.lives_remaining))
+	# Rebuilt element-wise rather than assigned: a save round-trips as an
+	# untyped Array and _known_spell_ids is typed. A save written before
+	# spells were learnable has no key at all and simply keeps the starting
+	# grant this player was already born with.
+	if data.has("known_spell_ids"):
+		_known_spell_ids = Array(data["known_spell_ids"] as Array, TYPE_STRING, "", null)
 	# is_dead itself is deliberately NOT part of this save dict (an ordinary
 	# mid-respawn-countdown death reloading as alive-at-respawn-position is
 	# an acceptable simplification -- matches this project's pre-existing
@@ -2634,14 +2655,27 @@ func _enter_exit_step() -> void:
 		interior_family, occupation, seed_value, renderer.build_tile_set(), _tile_size, renderer, placed_furniture
 	)
 
-	# The house's own villager stands in their room only while they are
-	# actually home right now (docs/concept/building.md "Residents inside")
-	# -- the same "arrived home" state that hides their outdoor marker on
-	# the doorstep, so they are never in two places at once and a house
-	# whose villager is out at the well is honestly empty.
-	var resident_marker = _chunk_manager.resident_marker_for(record)
-	if resident_marker != null and resident_marker.is_at_home():
-		interior_view.place_resident(resident_marker.identity)
+	# A mage guild holds a GROUP rather than a household (docs/concept/
+	# mage_guild.md): however many masters have moved in so far, standing
+	# around in there. They have no outdoor marker and no home to be out
+	# from -- a master in residence is in the guild, which is the whole
+	# point of having to walk in to find one.
+	var masters := _chunk_manager.masters_in_guild(record)
+	if not masters.is_empty():
+		var faculty: Array = []
+		for master_seed in masters:
+			faculty.append(MageMaster.identity_for(master_seed))
+		interior_view.place_occupants(faculty)
+	else:
+		# Every other building: the house's own villager stands in their
+		# room only while they are actually home right now (docs/concept/
+		# building.md "Residents inside") -- the same "arrived home" state
+		# that hides their outdoor marker on the doorstep, so they are
+		# never in two places at once and a house whose villager is out at
+		# the well is honestly empty.
+		var resident_marker = _chunk_manager.resident_marker_for(record)
+		if resident_marker != null and resident_marker.is_at_home():
+			interior_view.place_resident(resident_marker.identity)
 
 	var avatar := InteriorAvatar.new()
 	_interior_viewport.add_child(avatar)
@@ -2834,6 +2868,13 @@ func cast_spell(spell_id: String) -> bool:
 	var ast = _spell_book.ast_for(spell_id)
 	if ast == null:
 		return false
+	# Known, not merely extant. Checked AFTER the catalogue lookup so a
+	# garbage id stays the silent no-op it always was, and before anything
+	# is spent -- a spell you never learned costs nothing to be refused.
+	if not _known_spell_ids.has(spell_id):
+		cast_message = "You have not learned that spell -- a mage guild teaches it."
+		_cast_message_timer = CAST_MESSAGE_DURATION
+		return false
 	var rule = _spell_executor.cast_rule(ast)
 	if rule == null:
 		return false
@@ -2896,6 +2937,68 @@ func _spawn_spell_effect(atom_id: String, at_position: Vector2) -> void:
 	marker.position = at_position
 	get_parent().add_child(marker)
 	marker.play(atom_id)
+
+
+# -- learning a spell at a mage guild (docs/concept/magic.md, 2026-09-19) ----
+
+
+## Everything this character can actually cast. A copy, so a caller poking
+## at the returned array cannot teach itself a spell.
+func known_spell_ids() -> Array:
+	return _known_spell_ids.duplicate()
+
+
+## Which mage guild this character is standing in, in the shape
+## SpellTuition's gate reads: {inside, masters}. {} whenever they are not
+## inside one -- in a field, on its doorstep, or inside some other
+## building. Standing near a guild is not standing in it (docs/concept/
+## mage_guild.md mechanism 4).
+func guild_here() -> Dictionary:
+	if not is_indoors() or _chunk_manager == null:
+		return {}
+	if String(_interior_building.get("id", "")) != SpellTuition.GUILD_BUILDING_ID:
+		return {}
+	return {"inside": true, "masters": _chunk_manager.masters_in_guild(_interior_building)}
+
+
+## The masters in residence where this character is standing, [] anywhere
+## else -- for a readout that wants to name who is in the room.
+func masters_here() -> Array:
+	return guild_here().get("masters", [])
+
+
+## What the guild this character is standing in would teach them: what its
+## masters between them know, minus what they already know. [] outside one,
+## and [] inside an empty one, because the building is not the teacher.
+func spells_a_guild_would_teach() -> Array:
+	return _spell_tuition.offers_at(_spell_book, _known_spell_ids, masters_here())
+
+
+## What a lesson in `spell_id` costs, derived from the spell's own power and
+## the shop's live meal price (see SpellTuition). Quotable without standing
+## anywhere: a price is a fact about the spell, not about where you are.
+func tuition_for(spell_id: String) -> int:
+	return _spell_tuition.tuition_for(_spell_book, spell_id)
+
+
+## Pays for and takes a lesson from whoever is in the room.
+##
+## Gated on standing INSIDE a real mage guild that has a master in
+## residence who teaches this spell (docs/concept/mage_guild.md mechanism
+## 4) -- not on proximity. An apprenticeship is to a person, and you cannot
+## be apprenticed to somebody through a wall.
+##
+## Returns SpellTuition.learn's result dict unchanged ({ok, gold, known,
+## refusal}); the refusal names which gate said no so a caller can report
+## the true reason instead of a bare "you can't". Gold moves only on a
+## lesson that lands, and the known set is only adopted then.
+func learn_spell(spell_id: String) -> Dictionary:
+	var result := _spell_tuition.learn(
+		_spell_book, spell_id, _known_spell_ids, wallet, guild_here()
+	)
+	if result["ok"]:
+		_known_spell_ids = Array(result["known"] as Array, TYPE_STRING, "", null)
+	return result
 
 
 ## The creature/player group is scanned the same way _perform_attack already

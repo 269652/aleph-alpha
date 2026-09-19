@@ -613,6 +613,11 @@ const PerfReport = preload("res://src/gameplay/perf_report.gd")
 const PerfFrameSentinel = preload("res://src/gameplay/perf_frame_sentinel.gd")
 ## The batched ecology steps' round-robin clock (see _step_ecology_batch).
 const StepCadence = preload("res://src/gameplay/step_cadence.gd")
+## The mage guild's trade (docs/concept/magic.md) -- named here only to
+## report a refusal by its own reason; the pricing and the gates live in
+## SpellTuition itself, reached through Player.learn_spell.
+const SpellTuition = preload("res://src/gameplay/spell_tuition.gd")
+const MageMaster = preload("res://src/gameplay/mage_master.gd")
 var _ecology_cadence: StepCadence = null
 var _ecology_steps: Dictionary = {}
 ## The player the fruiting step details trees around, captured per batch
@@ -4486,7 +4491,8 @@ func _on_console_command(command: String, args: Array) -> void:
 					+ "  /institution <entity_id>  /settlement <entity_id>  /boss <entity_id>"
 					+ "  /quests <entity_id>  /emergence"
 					+ "  /spawn <species> [count]  /give <item_id> [count]"
-					+ "  /craft <recipe_id>  /gold <amount>  /village  /river  /species  /help"
+					+ "  /craft <recipe_id>  /gold <amount>  /learn [spell_id]"
+					+ "  /village  /river  /species  /help"
 					+ "  /compass  /map  /weatherglass  /almanac  /deed"
 					+ "  /ledger propose|accept|fulfill|breach ...  /charter found <type> <counterparty_id>"
 					+ "  /journal <entity_id>  /workforce assign|slots|free ..."
@@ -4567,6 +4573,8 @@ func _on_console_command(command: String, args: Array) -> void:
 			_handle_craft_command(args, local_player)
 		"gold":
 			_handle_gold_command(args, local_player)
+		"learn":
+			_handle_learn_command(args, local_player)
 		"village":
 			_handle_village_command(local_player)
 		"river":
@@ -5100,6 +5108,89 @@ func _handle_gold_command(args: Array, local_player: Player) -> void:
 	var amount := clampi(int(args[0]), 1, MAX_GOLD_COUNT)
 	local_player.wallet.add(amount)
 	_dev_console.log_line("Gave %d gold." % amount)
+
+
+## A mage guild's tuition (docs/concept/magic.md's 2026-09-19 section),
+## reached by hand. No argument lists what a guild would teach this
+## character and what each lesson costs; an argument takes that lesson.
+##
+## The command prices and gates NOTHING itself -- Player.learn_spell ->
+## SpellTuition owns all of it, and their own tests pin the price, the
+## refusal order and the rule that gold moves only on a lesson that lands.
+## This is only the hand on the mechanic, the same "a real command before a
+## real UI" scope /gold and /craft already established; a guild interaction
+## UI is named as an open gap in the doc itself.
+##
+## Every refusal is reported by its own reason, because a guild that
+## answers "no" is useless and one that answers WHY is a quest hook: the
+## money case quotes the price and the exact shortfall, the standing case
+## points at the building a city has to be big enough to raise.
+func _handle_learn_command(args: Array, local_player: Player) -> void:
+	if local_player == null:
+		_dev_console.log_line("No local player to teach.")
+		return
+
+	if args.is_empty():
+		var masters: Array = local_player.masters_here()
+		if masters.is_empty():
+			_dev_console.log_line(
+				"No master here. Step inside a %s with somebody in it."
+				% SpellTuition.GUILD_BUILDING_ID
+			)
+			return
+		var who: Array[String] = []
+		for master_seed in masters:
+			who.append(MageMaster.display_name_for(master_seed))
+		var offers: Array = local_player.spells_a_guild_would_teach()
+		if offers.is_empty():
+			_dev_console.log_line(
+				"In residence: %s. You already know everything they teach."
+				% ", ".join(who)
+			)
+			return
+		var lines: Array[String] = []
+		for spell_id in offers:
+			lines.append("%s (%d gold)" % [spell_id, local_player.tuition_for(spell_id)])
+		_dev_console.log_line(
+			"In residence: %s. They teach: %s. /learn <spell_id> to take a lesson."
+			% [", ".join(who), ", ".join(lines)]
+		)
+		return
+
+	var wanted := String(args[0])
+	var result: Dictionary = local_player.learn_spell(wanted)
+	if result["ok"]:
+		_dev_console.log_line(
+			"%s taught you %s for %d gold."
+			% [MageMaster.display_name_for(int(result["teacher"])), wanted, result["gold"]]
+		)
+		return
+
+	var refusal: Dictionary = result["refusal"]
+	match String(refusal.get("reason", "")):
+		SpellTuition.UNKNOWN_SPELL:
+			_dev_console.log_line("No such spell: %s." % wanted)
+		SpellTuition.OUTSIDE:
+			_dev_console.log_line(
+				"You are not inside a %s. Only a city may raise one, and you have to go in."
+				% refusal.get("building_id", SpellTuition.GUILD_BUILDING_ID)
+			)
+		SpellTuition.ALREADY_KNOWN:
+			_dev_console.log_line("You already know %s." % wanted)
+		SpellTuition.NO_MASTER:
+			# The refusal that turns into a reason to travel: it names the
+			# tradition and the depth to go looking for.
+			_dev_console.log_line(
+				"Nobody here teaches %s. It wants a master of %s who runs to depth %d."
+				% [wanted, refusal.get("school", "?"), int(refusal.get("depth", 0))]
+			)
+		SpellTuition.CANNOT_AFFORD:
+			_dev_console.log_line(
+				"%s costs %d gold -- come back with %d more."
+				% [wanted, refusal.get("tuition", 0), refusal.get("short", 0)]
+			)
+		_:
+			_dev_console.log_line("The guild will not teach %s." % wanted)
 
 
 ## Teleports the local player to the nearest procedurally-placed settlement

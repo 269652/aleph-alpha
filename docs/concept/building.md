@@ -120,6 +120,58 @@ layer), and clears/blocks vegetation on the footprint as a stamped
 structure does today. `remove_building` reverses all of it.
 `building_at_global(x, y)` answers for any footprint cell;
 `building_door_near(pixel, radius)` finds a doorstep for the Enter prompt.
+
+**A house stands IN its plot, not across it** (2026-09-19). Reported live
+with a screenshot of three cottages in a row: *"make the cottages a bit
+smaller and add a padding so they have a gap between them and the top
+doesn't get clipped"*.
+
+The slicer was the obvious suspect and was not the problem, which is worth
+recording because it is where anyone would look first. Measured on the real
+sheets (`tools/probe_cottage_row.gd`), every finished cottage frame has
+**zero** transparent pixels on all four edges — the cell bands are cut
+tight to the art by construction (`VariantSheetGrid`) — and that tight crop
+was then scaled to **exactly** the plot width. So two houses on
+neighbouring plots touched at the pixel with no street between them, and a
+roof that reaches well above its own plot ran straight into whatever stood
+north of it.
+
+`BuildingCatalog.PLOT_MARGIN_SHARE` leaves air on each side, and
+`drawn_plot_width_tiles` is the ONE place that answer lives, so the
+illustrated-sheet path and the procedural placeholder cannot disagree about
+how much of a plot a building covers — otherwise dropping a sheet in would
+visibly move the house, and a street of half-arted buildings would carry
+two different rhythms. Measured on a real cottage row: **52px drawn on a
+64px plot, 12px of air.**
+
+A share rather than a fixed number of tiles, so the air scales with the
+building: a manor stands in proportionally as much ground as a cottage
+does. The trade-off is deliberate — a bigger building gets a wider gap,
+which reads as a bigger house standing in more of its own land rather than
+as an inconsistent street. The share is pinned from both sides by what it
+produces, never as a number: two houses on adjacent plots must stand more
+than a quarter of a tile apart (under that it is a seam, not a gap, at the
+size a tile is really drawn), and a building must still cover more than
+three quarters of its own plot (under that it stops reading as a building
+on that ground and starts reading as a model of one).
+
+> **The collision body is unchanged and still covers the whole footprint.**
+> Only the PICTURE moved. The plot is reserved ground either way — the
+> layout routes roads around the whole of it — so the air between two
+> houses is eaves and garden rather than a path between them. It does mean
+> a few world pixels of collision with nothing drawn on them; at
+> `PLOT_MARGIN_SHARE` on a two-tile plot that is under a fifth of a tile
+> per side, and shrinking the body instead would open a walkable slot
+> between every pair of houses, which is a gameplay change nobody asked
+> for. Named here rather than left to be rediscovered.
+>
+> Single-tile **placeables** (`farm`, `sagewerk`, `storage`) are untouched:
+> they draw through `IllustratedStructureSprite.drawn_width_tiles`, which
+> answers a different question for a different thing — how wide a placeable
+> is drawn, from its catalog twin — and they were sized by their own
+> separate pass. A `farmhouse` the whole building and a `farm` the placeable
+> therefore now sit slightly differently on their ground; that duality
+> predates this and is not what was reported.
 Facing is south only in this pass (every sheet is drawn south-facing);
 the field exists so a later pass can add other faces.
 
@@ -231,6 +283,19 @@ shows "Leave" on the exit cell, else "Talk" within reach of the resident,
 else nothing. Doorstep scans (`nearest_npc_near`) skip at-home villagers,
 so "Enter" is what a doorstep offers rather than a "Talk" through the
 wall.
+
+**A room can hold a group, not only a resident.** `HouseInteriorView.
+place_occupants` stands several people up at once — spread evenly across
+`standing_cells()` (open floor with nothing on it, never the doorway,
+which has to stay clear or there is no way back out) rather than queued by
+the door. The first of them takes the template's own resident cell and
+becomes that room's `_resident`, so everything above — Talk, the indoor
+prompt, `resident_identity`/`resident_position` — keeps reading one field
+and needs no knowledge that groups exist. A house still holds exactly one
+villager; the first room in the game that holds a group is the **mage
+guild**, whose masters are in residence rather than "at home" and so are
+not gated on `is_at_home()` at all (see
+[mage_guild.md](mage_guild.md)).
 
 **Older saves.** A settlement chunk that has no buildings yet but still
 holds piece-built houses has those pieces (and their roof/furniture/upper
@@ -494,6 +559,42 @@ rising (`idle_cell_for`).
 A building picks ONE of its declared variation sheets from its own seed and
 keeps it for life (`BuildingLifecycleSheet.sheet_for`). Nothing that is not a
 home has one.
+
+**A building stands on the ground; it does not replace it (2026-09-19).**
+Reported with four of them in shot: *"Cottages and Manors are clipped"*.
+Nothing was clipped. Every cell of a building's footprint — the anchor
+carrying the building id, and `BuildingCatalog.FOOTPRINT_TILE_ID` on the
+rest — fell through `atlas_coords_for_modification` to the plain-earth slot,
+so the whole plot painted as a hard brown rectangle. A building's art is
+scaled to its plot's WIDTH and keeps its own aspect, so a cottage covers
+about 97% of its plot's depth and a manor as little as 85% (measured,
+`tools/probe_building_fit.gd`) — and the bare brown band left above the roof
+is what reads as the roof being cut off inside a box.
+
+This is exactly the bug a farm rail already had, with exactly its fix: a
+building is a real `Sprite2D` standing on the ground, so it has no ground
+tile of its own to paint and the grass it was raised on goes on showing
+around it (`TerrainRenderer.BUILDING_OVERLAY_TILE_IDS`). The list is pinned
+against `BuildingCatalog` rather than trusted, which is how it caught
+`trade_hall` and `mage_guild` the day they were added.
+
+**The house tiers read as a ladder (2026-09-19).** Asked in the same breath:
+*"also scale down cottage to be smaller than house"*. Measured, a cottage
+drew 26.0 × 26.0 world px against a house's 39.5 × 24.0 — the smallest tier
+was the tallest building on the street. Both are drawn at the same share of
+their own plot width and their plots differ only in width (2×2 against 3×2),
+so the whole misorder came from the art's aspect: a cottage is drawn square,
+a house low and wide.
+
+`BuildingCatalog._DRAW_SCALES` carries the correction, because how big a
+building is drawn is a fact about the *building* rather than about whichever
+sheet its picture came from — and both the illustrated path and the
+procedural placeholder then read one answer. Pinned by what it produces
+rather than as a number somebody liked, the same discipline
+`PLOT_MARGIN_SHARE` keeps: against the REAL sheets, a cottage must come out
+smaller than a house in both dimensions and a house shorter than a manor,
+and a cottage must still cover most of its own plot or it stops reading as a
+building on that ground. Now 22.5 × 22.5, 39.5 × 24.0, 39.5 × 37.5.
 
 **One tier, one building (2026-09-19).** All three house tiers used to share
 the five `house_1_*` sheets, which this doc called deliberate *"until grander

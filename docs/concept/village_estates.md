@@ -242,6 +242,14 @@ verdict, the same derived-over-persisted discipline
   over somebody else's back, and the one building that can be bottlenecked
   from below as well as above.
 
+- `employment_for(supply, demand)` → `{labour_class -> [0,1]}`, the share
+  of the PEOPLE of each class that have a post. The dual of the line
+  below, off the same two numbers, and the half a household feels rather
+  than the half a building does — it is what
+  [village_growth.md](village_growth.md)'s wellbeing model reads as its
+  `work` need. A class nobody holds reads as fully employed, not as zero:
+  there is nobody to be idle, and zero would invent a crowd of unemployed
+  people who do not exist.
 - `output_scale_for(building_id, supply, demand)` → `[0,1]`: the **minimum**
   fulfilment across the classes that building needs. A brewery with its
   brewer and nobody to rake the mash runs at the hand's rate. A blacksmith
@@ -357,6 +365,91 @@ loop closes on machinery that is already there:
    burgher who lets the cottagers starve is a burgher the village does not
    trust — which is the input `rumor.gd` names as its own missing
    relationship weighting.
+
+## Mechanism 7 — a works that feeds people scales with the people
+
+Asked directly, after the estate layer landed: *"they should produce
+production buildings autonomously; e.g. when population rises and there's
+not enough food they need to build more Farmhouses; Fishers or Hunters"*.
+
+Mechanism 5 petitions for a remedy, and `_is_petitionable` refuses anything
+that already stands. That is exactly right for a **charter** — a village
+holds one hall, and a second would entitle nobody — and exactly wrong for a
+**works**: one farmhouse feeds the households one farmer can feed, and a
+village of forty is short however many times it votes. So the assembly could
+raise its first farmhouse and never a second, and a growing village stayed
+hungry with the remedy standing in plain sight.
+
+**A food works is petitionable while fewer of them stand than the village's
+own demand asks for producers** — `SettlementFoodDemand.producers_needed`,
+the same already-measured function the founding roster is staffed against,
+so the number of farmhouses and the number of farmers cannot disagree.
+Everything else keeps "one, ever".
+
+### The land decides which works, and a fisher's works is their house
+
+A remedy has to be a building the village could actually work. Three food
+trades exist (`SettlementFoodDemand.FOOD_TRADES`), and they do not all want
+the same thing:
+
+| land's trade | what a shortfall raises | why |
+|---|---|---|
+| farmer, herbalist | `farmhouse` | the field is worked off the farmstead ([village_farms.md](village_farms.md)) |
+| fisher | *nothing* | a fisher's works is their own house, beside which they dig their pond ([village_ponds.md](village_ponds.md)) — the village needs another fisher, not another building, and the founding roster already conscripts one as demand rises |
+
+Raising a farmhouse in a fishing village is a building nobody there will
+work. Petitioning for nothing is the honest answer, not a fallback.
+
+**A hunter is deliberately not on that table**, and it is a measurement
+rather than an omission: `FOOD_TRADES`' own doc comment records a hunter
+bringing in about **0.02 food units an assessment against a draw of 6** — a
+whole chunk supports roughly one deer. Hunting stays a real occupation and a
+real way to eat; it is not something a village can build its way to being
+fed by, and a remedy that pretended otherwise would report a village fed
+when it is starving.
+
+## Mechanism 8 — the needs readout: every need, and what would answer it
+
+Asked directly: *"there should be sth. like a graph with every needs that
+can be resolved"*.
+
+Every part of that graph already exists and none of it is visible. The
+estates name what each rung must have (`basket_goods`), the draw reports
+what they actually got (`EstateConsumption.draw`'s satisfaction), and the
+assembly knows which building would supply each good (`REMEDY_BY_GOOD`,
+and mechanism 7's land-aware food works). What is missing is the one place
+that puts them next to each other.
+
+`VillageNeedsReport` is that place: one ordered row per good this village's
+estates really ask for, carrying
+
+| field | what it is |
+|---|---|
+| `good` / `label` | the item id, and the name the rest of the game calls it |
+| `satisfaction` | `[0, 1]`, the draw's own reading — no second calculation |
+| `estates` | which rungs ask for it, so a shortage names who is going short |
+| `remedy` | the building that would supply it on THIS land, or `""` |
+| `resolvable` | whether that remedy is a building at all |
+| `next` | whether the assembly is actually about to raise it |
+
+Three rules keep it honest rather than decorative:
+
+1. **It reads, it never computes.** Satisfaction comes from the draw and
+   the remedy from the assembly — a readout that worked either out for
+   itself could disagree with the village it claims to describe, which is
+   the failure `HousePanel` already exists to avoid.
+2. **A need nothing can build is still a row.** A village short of candles
+   has no candle-works on any ladder, and saying so plainly ("nothing here
+   makes this") is the honest answer rather than hiding the row or pointing
+   at the nearest-sounding building. That is how food reads on fishing
+   land, too.
+3. **Worst first.** The row order is the order a village would fix them in,
+   so the top of the list is what the assembly is arguing about.
+
+The panel is a **Needs tab** on the building readout `village_growth.md`
+mechanism 5 already put behind a click, beside Household and Inventory —
+the same "renders what it is handed and reaches for nothing else" contract
+those two keep.
 
 ## Status
 
@@ -486,6 +579,35 @@ the code as it landed. See [progress.md](../progress.md) for the ledger.
   rather than three small ones, and the food token is never reported
   because nothing can be built to produce "any food" and `SettlementFood`
   already asks for the staple.
+- ✅ **The pyramid reaches wellbeing.** `VillageLabor.employment_for` is
+  the DUAL of `output_scale_for`, read off the same two numbers: that one
+  says what share of a building's POSTS are filled, this says what share
+  of the PEOPLE of a class have one. A village with one forge and forty
+  craftsmen has every post filled and thirty-eight idle men, and those are
+  not the same fact.
+
+  `HouseholdWellbeing` gains a fifth need, **`work`**, weighted between
+  shelter and income — losing your trade costs more than losing your
+  savings, since the trade is what produced the savings, and less than
+  losing the roof. So the squeeze is felt: a village that promoted every
+  cottager out of the class its own works need has idle households AND
+  cold buildings, and the idleness costs real happiness and, through it,
+  real construction speed.
+
+  **`work` is the one need whose missing input is not read as
+  destitution.** Every other input describes the household itself, so a
+  missing one really is bad news; employment is read off the settlement's
+  BUILDINGS, and a caller that could not look at them has discovered
+  nothing rather than idleness. `EarthChunkManager` therefore omits the
+  key when a settlement's buildings are wholly unreadable — nothing
+  standing and an empty construction ledger — because every village is
+  founded with a store already up, so "no building at all" means nobody
+  looked. The same trap the unloaded `house_capacity` fallback already
+  avoids.
+
+  Both wellbeing paths — the settlement-wide assessment and the household
+  a click resolves to — build their state through ONE builder, so they
+  cannot drift into disagreeing about who is in work (test-pinned).
 - ✅ **A staffed works really produces.** `StaffedProduction` spends the
   pyramid: a staffed brewery brews `beer` out of the village's own grain
   (so beer and bread compete for one harvest), and a staffed sawmill brings
@@ -568,12 +690,12 @@ which is exactly how these hid.
   real plots, and running it again through a market abstraction would be
   the same crop harvested twice. The farmhouse entry was tried and produced
   exactly nothing, silently, for sixty assessments before a test asked.
-- 🚧 **`HouseholdWellbeing` still reads stock rather than flow.** Its four
-  needs (food, shelter, income, community) are unchanged and still power
-  the happiness/productivity loop. The estate layer's per-good satisfaction
-  is a strictly better input for the `food` and `community` terms; wiring
-  it in means moving numbers a live construction loop is calibrated
-  against, so it is deliberately a separate pass.
+- 🚧 **`HouseholdWellbeing`'s food and community needs still read stock
+  rather than flow.** The `work` need is wired (see the Status entry
+  above); `food` and `community` are not. The estate layer's per-good
+  satisfaction is a strictly better input for both, but wiring them means
+  moving numbers a live construction loop is calibrated against, so it is
+  deliberately a separate pass.
 - ⬜ **Patronage across estates.** Specified above; waits on
   [npc_social_life.md](npc_social_life.md)'s own trust dimension.
 - ⬜ **Interiors and art per estate.** A household that rises moves up a

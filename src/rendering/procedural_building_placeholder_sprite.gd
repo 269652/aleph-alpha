@@ -13,6 +13,7 @@ extends RefCounted
 ## placeholder and a real sheet anchor identically (bottom edge on the
 ## footprint's south edge, see EarthChunkManager._spawn_building_node).
 
+const BuildingCatalog = preload("res://src/gameplay/building_catalog.gd")
 const PixelPalette = preload("res://src/rendering/pixel_palette.gd")
 const PixelNoise = preload("res://src/rendering/pixel_noise.gd")
 const TerrainRenderer = preload("res://src/rendering/terrain_renderer.gd")
@@ -66,9 +67,25 @@ func generate_image(footprint: Vector2i, seed_value: int) -> Image:
 
 ## The box scaled for a Sprite2D standing on the footprint at `tile_size`
 ## world units per tile -- the same width/height contract Illustrated
-## StructureSprite.footprint_frame_texture keeps for a real sheet.
-func footprint_texture(footprint: Vector2i, seed_value: int, tile_size: int) -> ImageTexture:
+## StructureSprite.footprint_frame_texture keeps for a real sheet, which
+## since BuildingCatalog.PLOT_MARGIN_SHARE means drawn INSIDE the plot
+## rather than across the whole of it.
+##
+## Both paths read the same drawn_plot_width_tiles on purpose: a building with
+## no art yet must stand in exactly as much of its plot as one with art,
+## or dropping a sheet in would visibly move the house and a street of
+## half-arted buildings would carry two different rhythms.
+func footprint_texture(
+	footprint: Vector2i, seed_value: int, tile_size: int, building_id: String = ""
+) -> ImageTexture:
 	var image := generate_image(footprint, seed_value)
 	var scaled := image.duplicate() as Image
-	scaled.resize(maxi(footprint.x, 1) * tile_size, (maxi(footprint.y, 1) + 1) * tile_size, Image.INTERPOLATE_NEAREST)
+	var width := maxi(1, int(round(
+		float(tile_size) * BuildingCatalog.drawn_plot_width_tiles(footprint.x, building_id)
+	)))
+	var height := maxi(1, int(round(
+		float(width) * float((maxi(footprint.y, 1) + 1) * tile_size)
+		/ float(maxi(footprint.x, 1) * tile_size)
+	)))
+	scaled.resize(width, height, Image.INTERPOLATE_NEAREST)
 	return ImageTexture.create_from_image(scaled)

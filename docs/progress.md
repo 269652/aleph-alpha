@@ -4522,9 +4522,13 @@ brainstorm extensions (atom domains beyond the physical, material-component
 cost, caster self-danger, complexity-priced spell gems) have a pure/tested
 foundation; most of the non-physical atoms now have a real mechanical hook
 too (see Primitive Effects Catalog below) — caster self-danger specifically
-is still unwired (see its own row). The 2026-08-24 brainstorm (gold cost to
-compile a spell, exponential in size; sealed gems vs. teachable scrolls) is
-still design-only — no code exists for it yet.
+is still unwired (see its own row). The 2026-08-24 brainstorm's own price
+curves (gold cost to compile a spell, exponential in size; sealed gems vs.
+teachable scrolls) are still design-only — but the **access layer** they
+sit on is now real: a per-caster known-spell set distinct from the
+catalogue, a gold-for-knowledge transaction, and a structure gate on magic
+(the mage guild). See **Spell Tuition** below and `concept/magic.md`'s
+2026-09-19 section.
 
 - **Spell Cast Runtime** (large) — ✅ Done (MVP) — see `concept/
   spell_runtime.md` (new). A player presses a real bound key (`cast`,
@@ -4553,6 +4557,46 @@ still design-only — no code exists for it yet.
   computed but not enforced as an actual delay, and the "cast" key always
   casts the same fixed spell (no selection UI).
 
+- **Spell Tuition / the mage guild's trade** (medium) — ✅ Done — see
+  `concept/magic.md`'s 2026-09-19 section, which answers that doc's own
+  standing open question ("whether compiling needs a station at all"):
+  it does, and the station is the `mage_guild` `settlement_charter.gd`
+  gates at CITY tier. `spell_tuition.gd` (pure) splits **the world's
+  catalogue from a caster's known set** — `SpellBook.has()` used to
+  conflate "this spell exists" with "you can cast it", so nothing could
+  ever GRANT a spell. A character is born with `STARTING_SPELL_IDS`
+  (test-pinned to contain whatever the cast key binds to) and buys the
+  rest from a guild. **Nothing about a price is typed in**: power is
+  `spell_cost.derived_base` (the same number already pricing the cast's
+  mana), the rarity kick is `rarity_tier.tier_from_complexity` against
+  that identical score, and the gold-per-power anchor is read off
+  `shop.gd`'s live meal price. The one free constant,
+  `MEALS_PER_POWER_UNIT`, encodes a falsifiable design claim asserted
+  against the live shop catalogue — *a spell is a permanent capability, so
+  it sits in the weight class of a building blueprint* — which admits
+  roughly 10..20 and nothing outside; Minor Heal lands at 128 gold, Frost
+  Lance at 236. Priced **linear in power, not exponential in LOC**,
+  because magic.md already ruled the author's compile cost is paid once
+  and never re-charged to learners. The refusal is the feature: `{}` when
+  nothing is wrong (the shape `settlement_charter.refusal_for`
+  established), otherwise the reason — the money case carrying the price
+  AND the exact shortfall, the standing case the building id. Gold moves
+  only on a lesson that lands. `Player.learn_spell` gates it on a real
+  placed `mage_guild` within reach (the same `_has_structure_near_player`
+  proximity every station interaction already uses), `cast_spell` refuses
+  a spell this character never learned (spending nothing, and saying so
+  rather than blaming mana), and the known set is persisted beside karma
+  and the life count. `/learn` is the hand on it while no guild
+  interaction UI exists. A real city raises its own guild — `VillageAssembly`'s
+  civic petition already walks `CHARTERED_BUILDING_IDS` — so the whole
+  errand is reachable in ordinary play. Tests: `test_spell_tuition.gd`
+  (32), `test_learn_command_clarity.gd` (8), plus 13 additions to
+  `test_player.gd`. ⬜ Still open (named in the doc): compiling itself has
+  nothing to compile from until a spell-editor UI exists; scrolls and gems
+  are unbuilt (scroll-learning writes to this same known set, so the
+  vessel is what is missing, not the destination); no spell-selection UI,
+  so the cast key still casts `DEFAULT_CAST_SPELL_ID`; and the guild has
+  no interior trade UI.
 - **Spellcrafting DSL** (huge) — 🚧 Partial — the pure `RefCounted` pipeline
   modules (`spell_atom_catalog.gd`, `spell_cost.gd`, `spell_parser.gd`) now
   have a real runtime consuming them (`spell_executor.gd` and friends — see
@@ -10054,6 +10098,43 @@ constant's own doc comment). Built red-first end to end, merged to
   real chain and slicer, not by reading the code. Also gives the carter a
   house pool, fixing a test that was already red on `main`. Full writeup:
   [building.md](concept/building.md).
+- **Anno-style village gating: cottages first, works that scale, and a
+  needs graph** (2026-09-19). ✅ Done — asked for directly: gating,
+  population and productivity that play more like Anno; no manors from
+  the beginning; production buildings raised autonomously when food runs
+  short; and *"sth. like a graph with every needs that can be
+  resolved"*. Most of that loop had landed the same day in
+  `concept/village_estates.md` (consumption as a flow, four estates,
+  ascent gated on a charter, a labour pyramid, an estate-weighted
+  assembly, tax and guild relief). Three real gaps remained, each
+  measured before it was closed:
+  1. **A village founded manors.** Every household is founded at the
+     bottom estate, which lives in a cottage, but `choose_house_id` read
+     the villager's TRADE and never their standing — the first grassland
+     village on the map founded a manor and three houses on day one. The
+     pool is capped by entitlement now: a ceiling, not an assignment, so
+     trade and character still choose within it.
+  2. **A works that feeds people never got a second building.** The
+     assembly refused any remedy already standing — right for a charter,
+     wrong for a farmstead, so a village of forty stayed hungry with the
+     remedy in plain sight. A food works is petitionable again while
+     fewer stand than `producers_needed` asks for, through a second door
+     on the remedy path alone so the charter path is untouched. And the
+     land picks the works: a fishing village raises no farmstead, because
+     a fisher's works is their own house and the roster already
+     conscripts another fisher. A hunter stays off that table for the
+     already-measured reason on `FOOD_TRADES` (about 0.02 food units an
+     assessment against a draw of 6).
+  3. **The needs graph existed and was invisible.** `VillageNeedsReport`
+     puts the basket, the draw's satisfaction and the assembly's own
+     remedy next to each other — one row per good, worst first, each
+     naming who asks for it, what would answer it, and whether the
+     village is about to. It reads and never computes. A **Needs tab**
+     on the building readout draws it, beside Household and Inventory,
+     from the same state the assembly votes on so the two cannot
+     disagree. A need nothing can build is still a row and says so.
+  Full writeup: [village_estates.md](concept/village_estates.md),
+  mechanisms 7 and 8.
 - **A planned node says what it offers, and each action has its own key**
   (2026-09-19). ✅ Done — reported a third time: *"Planned nodes (e.g.
   pavement) still can't be actually built by the player or hired NPCs...
@@ -27341,8 +27422,40 @@ real field worked by real villagers on real plots, and running it again
 through a market would be the same crop harvested twice. That entry was
 tried, and produced exactly nothing, silently, for sixty assessments before
 a test asked.
-- 🚧 **`HouseholdWellbeing` still reads stock rather than flow.** Its four
-  needs are unchanged and still power the happiness/productivity loop.
+### ✅ The pyramid reaches wellbeing
+
+`VillageLabor.employment_for` is the DUAL of `output_scale_for` off the
+same two numbers: that one says what share of a building's POSTS are
+filled, this says what share of the PEOPLE of a class have one. A village
+with one forge and forty craftsmen has every post filled and thirty-eight
+idle men, and those are not the same fact.
+
+`HouseholdWellbeing` gains a fifth need, **`work`**, weighted between
+shelter and income — losing your trade costs more than losing your
+savings, since the trade produced the savings, and less than losing the
+roof. The squeeze is now something a village FEELS: promote every cottager
+out of the class your own works need and you get idle households and cold
+buildings together, and the idleness costs real happiness and, through it,
+real construction speed.
+
+`work` is the one need whose missing input is **not** read as destitution.
+Every other input describes the household itself; employment is read off
+the settlement's buildings, and a caller that could not look at them has
+discovered nothing rather than idleness. `EarthChunkManager` omits the key
+when a settlement's buildings are wholly unreadable — nothing standing and
+an empty ledger — because every village is founded with a store already
+up, so "no building at all" means nobody looked. Both wellbeing paths now
+build their state through one builder, so the village-wide assessment and
+the household a click resolves to cannot disagree about who is in work.
+
+The panel's needs fixture is derived from the real need list rather than
+typed out — a hand-written four kept passing against a five-need model,
+and the row the panel was failing to draw was invisible in it.
+
+🚧 `HouseholdWellbeing`'s **food and community** needs still read stock
+rather than flow. The estate layer's per-good satisfaction is a strictly
+better input for both, but wiring them moves numbers a live construction
+loop is calibrated against.
 ### ✅ The guild chest: a village's social structure buffers its economy
 
 `GuildRelief`, and the point where "who has actually traded with whom"
@@ -27439,3 +27552,431 @@ clean baseline worktree checked out at `origin/main`:
 Everything else touched is green: 724 in the pure sweep, 34 in the live
 estate one, 33/33 in `test_earth_chunk_manager_village_growth.gd`, and 54
 across the settlement integration suites.
+
+## A house stands in its plot, not across it (`concept/building.md`, 2026-09-19)
+
+Reported live with a screenshot of three cottages in a row: *"make the
+cottages a bit smaller and add a padding so they have a gap between them and
+the top doesn't get clipped"*.
+
+### The slicer was the obvious suspect and was not the problem
+
+Worth recording, because it is where anyone would look first. Measured on
+the real sheets (`tools/probe_cottage_row.gd`, which stands three real
+cottages on three adjacent plots and slices them exactly the way the game
+does): every finished cottage frame has **zero** transparent pixels on all
+four edges. The cell bands are cut tight to the art *by construction* —
+that is what `VariantSheetGrid` is for — and that tight crop was then scaled
+to **exactly** the plot width.
+
+So two houses on neighbouring plots touched at the pixel with no street
+between them, and a roof that reaches well above its own plot ran straight
+into whatever stood north of it. Nothing was being clipped; everything was
+flush, which reads as the same thing.
+
+### ✅ The fix is one number in one place
+
+`BuildingCatalog.PLOT_MARGIN_SHARE` leaves air on each side, and
+`drawn_plot_width_tiles` is the ONE place that answer lives — so the
+illustrated-sheet path (`IllustratedStructureSprite.footprint_frame_texture`)
+and the procedural placeholder (`ProceduralBuildingPlaceholderSprite.
+footprint_texture`) cannot disagree about how much of a plot a building
+covers. If they could, dropping a sheet in would visibly move the house and
+a street of half-arted buildings would carry two different rhythms.
+
+Measured on a real cottage row: **52px drawn on a 64px plot, 12px of air.**
+
+A share rather than a fixed number of tiles, so the air scales with the
+building — a manor stands in proportionally as much ground as a cottage.
+Pinned from both sides by what it produces rather than as a number somebody
+liked: two houses on adjacent plots must stand more than a quarter of a tile
+apart, and a building must still cover more than three quarters of its own
+plot.
+
+Two existing tests pinned the old full-plot width and were rewritten rather
+than deleted, each keeping the invariant it was really guarding — that the
+scaling happens at all and lands on the plot, and that the placeholder keeps
+its three-wide-by-three-tall shape.
+
+### Stated rather than left to be rediscovered
+
+- 🚧 **The collision body is unchanged** and still covers the whole
+  footprint. Only the picture moved. That leaves a few world pixels of
+  collision with nothing drawn on them — under a fifth of a tile per side on
+  a two-tile plot — and shrinking the body instead would open a walkable
+  slot between every pair of houses, which is a gameplay change nobody asked
+  for.
+- 🚧 **Single-tile placeables are untouched.** `farm`/`sagewerk`/`storage`
+  draw through `IllustratedStructureSprite.drawn_width_tiles`, which answers
+  a different question for a different thing, and were sized by their own
+  earlier pass. A `farmhouse` the whole building and a `farm` the placeable
+  therefore now sit slightly differently on their ground; that duality
+  predates this.
+
+Tests: `test_building_catalog.gd`, `test_illustrated_structure_sprite.gd`,
+`test_procedural_building_placeholder_sprite.gd`,
+`test_earth_chunk_manager_buildings.gd` — all green, plus the building-art
+integration suites.
+
+Four existing tests pinned the old full-plot width and were rewritten
+rather than deleted, each keeping the invariant it was really guarding. The
+art-resolution pair is the interesting one: its claim is about DETAIL, not
+width — a building's art must carry `DETAIL_MULTIPLIER` pixels per world
+unit, the same as the ground it stands on — and it was asserting a pixel
+count as a proxy for that. It asserts the ratio now, so it survives any
+later change to how much of its plot a building covers.
+
+`test_earth_chunk_manager_structure_art.gd`'s "half a tile in" failure is
+**pre-existing on `origin/main`** (identical 6.34375, verified against a
+clean baseline worktree) and is about farm fence rails, which draw through
+a different path entirely.
+
+## Settlement charter: a mage guild only a city may raise (`concept/settlement_charter.md`, 2026-09-19)
+
+Asked for directly: *"I want it so, that some buildings like a mage guild
+can only be built in cities; not villages; so a player has to help villagers
+to grow into a city in order to get access to mage guild and other similar
+buildings."*
+
+A progression system whose currency is **somebody else's prosperity**. The
+player does not unlock the mage guild by levelling; they unlock it by making
+a place big enough, organised enough and productive enough to hold one.
+
+### ✅ It adds no new measure and no new number
+
+`SettlementTier` already reads households, ACTIVE institutions and
+production diversity, and already requires **all three to cross together** —
+its own rule, written long before this. That is what makes "help them grow"
+a real errand rather than a food-dumping exercise: a player can carry in a
+hundred meals and still not have a city, because a city is also trades that
+organised themselves and goods that are actually being made.
+
+`SettlementCharter` is the gate that hangs off it. A building absent from
+its table may be raised anywhere, which is every building that existed
+before this.
+
+### ✅ A refusal TEACHES
+
+`refusal_for` names the tier wanted, the tier held, and exactly what is
+still short per dimension — never negative, because a readout saying
+"-3 households" is worse than no readout. "You cannot build that here" is a
+dead end and a bad game.
+
+### ✅ The anti-deadlock invariant, stated causally
+
+Three things feed the tier, so three things must stay free at the bottom:
+**houses** (households are a dimension and a household needs a roof), every
+**estate charter** building (an estate that cannot be reached is labour that
+never changes class), and every building anything **produces through**
+(production diversity is a dimension). Plus the converse — a chartered
+building must be none of those — so the rule cannot be satisfied by
+chartering nothing.
+
+A hamlet with no farmhouse cannot make husbandmen, cannot diversify its
+production and cannot become a town. A farmhouse chartered at TOWN would be
+a village that can never grow, found months later by somebody watching a
+save go nowhere.
+
+### ✅ One rule, two callers — and a city that builds for itself
+
+`VillageAssembly` reads the same gate before anything else, so a village can
+never quietly raise through its own ledger what a player standing on its
+square is refused. A settlement whose tier nobody passed is read as the
+LOWEST, erring toward refusing.
+
+It also gained a **civic petition**: an estate with nothing to complain of
+and no charter left to earn asks for the institutions its place is finally
+entitled to, cheapest first. Without it a city that earned its charter would
+sit there never raising anything with it. A shortage still outranks an
+institution — hungry people before halls.
+
+### ✅ The errand, on the hall a player clicks
+
+*Town — a city needs 2 more households, 1 more trade body.* A dimension
+already cleared is left out; "0 more trades" is noise, and noise is what
+stops a player reading the line at all. Drawn on the COMMONS only, because a
+home's readout is about its household.
+
+### ✅ Two chartered buildings, at two tiers
+
+`trade_hall` (town) and `mage_guild` (city) — the second answering
+`magic.md`'s own open question about where a spell is compiled. Both priced
+in the exact three materials a settlement gathers, because a charter is ONE
+gate and pricing them in anything else would be a second hidden one behind
+it. Both cost strictly more than anything anybody may raise unchartered.
+
+**Not `guild_hall`**: that id is already a 7×7 piece-built *player house*
+blueprint, and two things sharing one id is how a recipe book ends up with a
+duplicate key — which is exactly how it was found.
+
+The catalog's invariants now read `all_building_ids()` off the entries
+themselves rather than a hand-maintained union of three lists, so a new
+entry cannot quietly escape them. Found by adding these two.
+
+### Stated rather than papered over
+
+- ✅ **The mage guild does something** — it teaches. See *A mage guild
+  teaches* below; the charter is no longer a locked door in a field.
+- 🚧 **The trade hall still does nothing.** It is the natural home of the
+  estate relief chest and does not hold it. A building that only exists to
+  be unlocked is half a feature.
+- 🚧 **Neither has art** — both draw the procedural placeholder, which is
+  what that path is for, and pick up a sheet the moment one lands.
+- 🚧 **The player's own build hand does not consult the gate yet.**
+  `building_charter_refusal_at` is the function it will call and the village
+  already calls it, but the player's whole-building path only knows houses
+  and none of the chartered buildings is one.
+- ⬜ **Tiers above city** — `SettlementTier` stops there, and the readout
+  says so honestly.
+
+Tests: `test_settlement_charter.gd` (22), plus additions to
+`test_village_assembly.gd`, `test_building_catalog.gd`,
+`test_house_panel.gd`, `test_crafting_recipe_book.gd` and
+`test_earth_chunk_manager_village_estates.gd`.
+
+`village_assembly.gd` had moved under this work from another session's
+concurrent changes; the patch was rewritten against what is actually there
+rather than against what was remembered, per CLAUDE.md's own warning about
+the live checkout.
+
+## A mage guild teaches (`concept/magic.md`, 2026-09-19)
+
+The charter shipped a mage guild only a city may raise, and recorded its own
+honest gap: *"Neither chartered building DOES anything yet."* A gate with
+nothing behind it is a locked door in a field. This is what is behind it.
+
+**It answers magic.md's own standing open question** from 2026-08-24 —
+*"whether compiling needs a station at all vs. being available from any
+spell-editor UI"* — with: it needs one, and the station is the chartered
+mage guild. The two docs need each other. A compile station reachable from
+any menu makes the charter ladder pointless; a gate with nothing behind it
+is the same. Together they say **the way into higher magic is through a
+village you helped grow**, not through a level-up.
+
+### What was actually missing was the access layer, not a price curve
+
+The 2026-08-24 brainstorm priced compiling. It could not be built, and not
+because the formula was hard — because three facts had no home in the code:
+
+1. **A known-spell set distinct from the world's catalogue.** `SpellBook.
+   has()` conflated *this spell exists* with *you can cast it*, so nothing
+   could ever GRANT a spell. Scroll-learning, compiling and npc.md's
+   "an NPC that studies a traded scroll" are all writes to a per-caster set
+   that did not exist.
+2. **A gold-for-knowledge transaction.** Nothing in the game charged gold
+   for a permanent capability at all.
+3. **A structure gate on magic.** Nothing checked where you were standing.
+
+Tuition is those three for the case where the AST is already authored —
+there is no spell-editor UI, so there is nothing to compile *from*, and
+`spell_book.gd` says as much in its own header. When the editor lands,
+compiling reuses all three unchanged and adds only its own curve.
+
+### Nothing about a price is typed in
+
+- **Power** is `spell_cost.derived_base` — the number that already prices
+  every cast's mana, and the one magic.md's scrolls section already
+  nominates for pricing a vessel. No second measure of "how big is this
+  spell" was invented.
+- **Rarity** multiplies it through `rarity_tier.tier_from_complexity` +
+  `stat_multiplier`, both already pure and already test-pinned, against
+  that identical score.
+- **The gold-per-power anchor is a meal, read live from `shop.gd`.** A
+  tuned constant would have been an invented third price; a ratio between
+  two things the game already prices is not.
+- **The one free parameter, `MEALS_PER_POWER_UNIT = 16`, is pinned by the
+  design claim it encodes** rather than eyeballed: *a spell is a permanent
+  capability, so it sits in the weight class of a building blueprint* —
+  dearer than any tool or weapon on the merchant's shelf, at least what the
+  cheapest house blueprint costs, never dearer than the dearest thing on
+  it. Asserted against the live `Shop.CATALOG`, that band admits roughly
+  10..20 and nothing outside. Minor Heal lands at 128 gold, Frost Lance at
+  236 — about a small house and about a cottage.
+
+**Linear in power, not exponential in LOC.** magic.md already ruled that
+the author's compile cost is *"paid once, by the original author — never
+re-charged to learners"*. Billing a student the compile curve would charge
+one design twice. The exponential stays reserved for fixing a NEW design
+into a book; a lesson is a purchase.
+
+### The refusal is the feature
+
+A guild that answers "no" is useless; one that answers **why** is a quest
+hook. Same shape `settlement_charter.refusal_for` established — `{}` when
+nothing is wrong, otherwise a dict naming the fact. A spell the catalogue
+does not hold is refused first and flatly; past that, three refusals that
+each point somewhere: **no guild in reach** (carrying the building id, so
+the answer points at the charter ladder), **already known** (points at the
+rest of the catalogue), **short of the price** (carrying the price AND the
+exact shortfall — *"come back with 40 more gold"*, never a bare no).
+
+Gold moves only on a lesson that lands, the same conserving discipline the
+estate baskets and the guild chest already hold themselves to. `learn` is
+pure: it never mutates the known list it was handed, it hands back a new
+one, and the caller decides whether to adopt it — the same shape
+`EstateAscension` returns a verdict rather than moving a household itself.
+
+### On the Player, and reachable in ordinary play
+
+`Player` carries `_known_spell_ids`, starts with `STARTING_SPELL_IDS`
+(test-pinned to contain whatever `DEFAULT_CAST_SPELL_ID` binds the cast key
+to — a character who cannot cast the spell the game binds to their own cast
+button is a bug, not a gate), and refuses to cast what it has not learned,
+spending nothing and saying so rather than blaming mana. `learn_spell` is
+gated on a real placed `mage_guild` within reach via the SAME
+`_has_structure_near_player` proximity every other station interaction in
+that file already uses. Learned spells are persisted beside karma and the
+life count; a save written before spells were learnable simply keeps the
+starting grant.
+
+`/learn` is the hand on it while no guild interaction UI exists — bare, it
+lists what a guild would teach and what each lesson costs; with an argument
+it takes the lesson. The same "a real command before a real UI" scope
+`/gold` and `/craft` already established.
+
+**And a real city raises its own guild.** `VillageAssembly`'s civic
+petition already walks `BuildingCatalog.CHARTERED_BUILDING_IDS` once an
+estate has nothing left to complain of, and `mage_guild` asks for no
+labour class, so `can_staff` never blocks it. The whole errand — grow a
+village into a city, let it raise its guild, go and learn — runs without a
+console command anywhere in it.
+
+### Stated rather than papered over
+
+- 🚧 **Compiling itself is still unbuilt** — no spell-editor UI, so nothing
+  to compile. `CRAFT_BASE`/`CRAFT_GROWTH`/per-tier LOC weights remain
+  design-only. This pass built the layer they sit on, not the curve.
+- 🚧 **Scrolls and gems are still unbuilt.** Scroll-learning writes to this
+  same known set, so the vessel is what is missing, not the destination.
+- 🚧 **No spell-selection UI** — the cast key still casts
+  `DEFAULT_CAST_SPELL_ID`. A learned spell is real, persisted and castable
+  through `cast_spell`, but nothing lets a player *choose* it at the
+  keyboard yet.
+- 🚧 **The guild has no interior trade UI**, and no art (it draws the
+  procedural placeholder, which is what that path is for).
+- 🚧 **The trade hall still does nothing** — the charter's other gap,
+  untouched here deliberately rather than widened into.
+
+Tests: `test_spell_tuition.gd` (32), `test_learn_command_clarity.gd` (8),
+plus 13 additions to `test_player.gd`.
+
+The tuition prices were **measured, not reasoned about** — a throwaway probe
+printed `derived_base`, tier and gold for every spell in the book next to
+the shop's real prices, which is how the weight-class band became a claim
+that could be written down and asserted rather than a number that felt
+about right.
+
+## A house is not a faculty: masters move into the mage guild (`concept/mage_guild.md`, 2026-09-19)
+
+The tuition pass made the *building* teach. Reported straight back: *"the
+player should have to enter into the mage guild and find a master which
+teaches him; building a mage guild still requires a mage teacher to move in;
+the mage teacher's skills and teachable spells are in turn based on the
+teacher's skills; there should be rare teachers which can teach special rare
+spells; multiple mages can move in and hang around inside."*
+
+That is the difference between a vending machine and a guild, and it changes
+what the charter buys. Earning a city no longer buys a spell shop — it buys
+**a place where masters may come**. A guild raised today holds nobody and
+teaches nothing, which is the point rather than a delay timer.
+
+### Who came decides what can be learned
+
+- **Schools** (`spell_schools.gd`) partition all 25 atoms into ten
+  traditions, exhaustive and disjoint, pinned both ways — an atom in no
+  school is a spell nobody in the world could ever teach, and an atom in two
+  is a master claiming another's trade. A spell's school is the one its
+  atoms share; one whose atoms **cross** schools has no master at all, which
+  is the intended cost of braiding two traditions rather than a bug.
+- **Depth** is a spell's deepest atom, in the atom catalog's own 1..3 band,
+  pinned against the live catalog rather than restated.
+- **A master is a seed** (`mage_master.gd`): school, depth, rarity, title,
+  and a real `NpcIdentity` — name, genome, personality, appearance, and a
+  real allocation on the same skill web every other NPC and the player walk.
+  `teaches()` is one rule — in my school, within my depth — never a list.
+- **Rarity is not reinvented.** `rarity_tier.roll_tier`'s existing weighted
+  roll (65/25/8/2) decides; `DEPTH_BY_RARITY` only says what it MEANS here.
+  An archmage is about one master in ten because the existing roll already
+  said so.
+- **A mage is a trade that arrives, not one a village produces.**
+  `NpcIdentity.FORCED_ONLY_OCCUPATIONS` is a second list on purpose: adding
+  `"mage"` to `OCCUPATIONS` would have put a wizard in every fifth cottage,
+  given them a field or a forge to stand at, and handed them a house out of
+  the ordinary pools.
+
+### The book had to grow before any of that meant anything
+
+Three spells across two schools would make every master either everything or
+nothing, so `spell_book.gd` went from 3 to **21**, at least one per
+tradition, laid out by school, with depth following the atom tiers so the
+tier-3 entries are the ones only an archmage passes on.
+
+That broke a tuition claim, and the break was correct: *"no spell costs more
+than the dearest thing on the shelf"* was true of a starter book and should
+not be true of an archmage's lesson. The claim moved rather than the number
+— the band is now stated as **roughly 10..39**, deliberately wide, because
+what the anchor encodes is a weight class and a tight band would claim a
+precision the design does not have. Prices span Farsight at 123 gold (a
+small-house blueprint) to Call Wisp at 785 (more than twice the dearest
+thing any merchant stocks).
+
+### A guild fills, and you have to walk in
+
+- **One persisted number per guild** — the simulated days it has stood open
+  — plus the `seed` `place_building` already writes. No roster is saved, no
+  master is serialised, nothing can drift from what generated it. It
+  survives a chunk round trip, because a permanent fact about a place must
+  not reset because the player walked away.
+- **A season per master, three at most.** The wait is the unit
+  `estate_ascension` already measures a person's decision to move by; the
+  capacity is pinned by what it encodes — a full guild must still be unable
+  to teach every school, or every city's guild is interchangeable.
+- **Ageing is per CHUNK, not global**, and that distinction is load-bearing
+  rather than tidy: the settlement step runs once per settlement, so a
+  global age from inside it would run every guild's clock once per village
+  in range. Found by reading the diff back, pinned by a test.
+- **The gate is inside-plus-a-master.** Standing beside a guild, on its
+  doorstep, or inside some other building all refuse alike. `Player.
+  guild_here()` reads the interior record the game already carries for
+  decorating, so "am I in a mage guild" is the same fact "may I decorate
+  this room" is.
+- **`NO_MASTER` names the school and the depth to go looking for.** That is
+  the sentence that turns a refusal into a reason to travel.
+
+### Several of them really stand in there
+
+Every interior until now held exactly one resident — one `_resident`, one
+`resident_cell`. `HouseInteriorView` learned `standing_cells()` (open floor,
+nothing on it, never the doorway, which has to stay clear or there is no way
+out) and `place_occupants()`, which spreads a group through the room instead
+of queueing them by the door. The first of them becomes the room's
+`_resident`, so Talk, the indoor prompt and every other single-occupant
+reader keep working with no knowledge that groups exist. Masters are not
+gated on `is_at_home()` the way a villager is: they have no outdoor marker
+and no home to be out from.
+
+### Stated rather than papered over
+
+- 🚧 **A master's depth is not read off their skill web, though their
+  identity is.** `spell_atom_tier` exists, on the mage wedge, on the exact
+  graph the player walks — but `NpcSkillAllocation.MAX_POINTS` stops every
+  NPC at a ring-3 notable, the two tier nodes sit at rings 3 and 4, and
+  `ARCHETYPE_STAT_POOL["mage"]` does not name that stat, so the allocator
+  steers away from it and every master would come out depth 1. Closing it is
+  three edits to tested systems for one derived number. Recorded in the
+  concept doc with the exact change that would close it, not hidden.
+- 🚧 **A guild's interior is still a cottage** — `InteriorTemplates` has no
+  `hall` plan, a pre-existing gap this feature makes visible since the guild
+  is the first hall a player will spend time in.
+- 🚧 **You cannot talk to a specific master** — indoor Talk reaches the
+  room's first occupant; the others are scenery until Talk learns groups.
+- 🚧 **Masters never leave, age or die**, and a roster only grows. A
+  tradition lost with its last master is the obvious next mechanism.
+- 🚧 **A guild ages only while its chunk is loaded** — the same honest
+  limitation immigration already carries.
+
+Tests: `test_spell_schools.gd` (17), `test_mage_master.gd` (21),
+`test_mage_guild_roster.gd` (19), `test_earth_chunk_manager_mage_guild.gd`
+(10), `test_house_interior_view_occupants.gd` (15), plus additions to
+`test_spell_tuition.gd` (43), `test_player.gd` and
+`test_learn_command_clarity.gd` (10).

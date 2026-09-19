@@ -354,7 +354,7 @@ func test_every_ladder_buildings_cost_and_labour_match_its_recipe():
 func test_no_catalog_building_is_deeper_than_the_street_pitch_reserves():
 	var VillageLayout = load("res://src/world/village_layout.gd")
 	var deepest := 0
-	for building_id in BuildingCatalog.BUILDING_IDS + BuildingCatalog.CIVIC_BUILDING_IDS + BuildingCatalog.PRODUCTION_BUILDING_IDS:
+	for building_id in BuildingCatalog.all_building_ids():
 		deepest = maxi(deepest, BuildingCatalog.footprint_of(building_id).y)
 	assert_eq(
 		VillageLayout.STREET_PITCH_TILES, deepest + VillageLayout.STREET_GAP_TILES,
@@ -401,7 +401,7 @@ func test_no_house_is_ever_offered_at_a_crafting_bench():
 ## see test_no_house_is_ever_offered_at_a_crafting_bench).
 func test_every_building_has_a_readable_display_name():
 	var seen := {}
-	for building_id in BuildingCatalog.BUILDING_IDS + BuildingCatalog.CIVIC_BUILDING_IDS + BuildingCatalog.PRODUCTION_BUILDING_IDS:
+	for building_id in BuildingCatalog.all_building_ids():
 		var name: String = BuildingCatalog.display_name_of(building_id)
 		assert_ne(name, "", "%s needs a name" % building_id)
 		assert_ne(name, building_id, "%s must read as a name, not an id" % building_id)
@@ -635,11 +635,7 @@ func test_a_building_that_keeps_no_goods_says_so():
 ## Every building the catalog knows answers the question, so no caller ever
 ## has to special-case an id.
 func test_every_building_in_the_catalog_answers_at_all():
-	var every: Array = (
-		BuildingCatalog.BUILDING_IDS + BuildingCatalog.CIVIC_BUILDING_IDS
-		+ BuildingCatalog.PRODUCTION_BUILDING_IDS
-	)
-	for building_id in every:
+	for building_id in BuildingCatalog.all_building_ids():
 		assert_gte(BuildingCatalog.storage_capacity_of(building_id), 0, building_id)
 
 
@@ -720,3 +716,182 @@ func test_an_unknown_cap_still_answers_with_a_real_house():
 			BuildingCatalog.choose_house_id("farmer", genome, 5, "not_a_house")
 		)
 	)
+
+
+# -- a building stands IN its plot, not across it -------------------------
+
+## Reported live with a screenshot of three cottages in a row: "make the
+## cottages a bit smaller and add a padding so they have a gap between them
+## and the top doesn't get clipped".
+##
+## The cause was not the slicer. Measured on the real sheets, every
+## finished cottage frame has ZERO transparent pixels on all four edges --
+## the cell bands are cut tight to the art by construction -- and that
+## tight crop was then scaled to exactly the plot width. So neighbouring
+## houses touched at the pixel, and a roof that reaches well above its own
+## plot ran straight into whatever stood north of it.
+##
+## A building is drawn INSIDE its plot now, leaving PLOT_MARGIN_SHARE of
+## the plot free on each side.
+func test_a_building_is_drawn_narrower_than_the_plot_it_stands_on():
+	for footprint_width in [1, 2, 3, 4]:
+		assert_lt(
+			BuildingCatalog.drawn_plot_width_tiles(footprint_width),
+			float(footprint_width),
+			"a %d-tile building fills its whole plot" % footprint_width
+		)
+
+
+## But it still reads as a building on that plot rather than a model of
+## one: most of the ground it claims is covered.
+func test_a_building_still_covers_most_of_its_own_plot():
+	for footprint_width in [1, 2, 3, 4]:
+		assert_gt(
+			BuildingCatalog.drawn_plot_width_tiles(footprint_width) / float(footprint_width),
+			0.75,
+			"a %d-tile building shrank into its own plot" % footprint_width
+		)
+
+
+## The claim the report was actually about: two houses on ADJACENT plots
+## stand a visible distance apart. A quarter of a tile is the floor,
+## because anything under that is a seam rather than a gap at the size a
+## tile is really drawn.
+func test_two_houses_on_neighbouring_plots_really_stand_apart():
+	for building_id in BuildingCatalog.BUILDING_IDS:
+		var plot_width: int = BuildingCatalog.footprint_of(building_id).x
+		var gap: float = float(plot_width) - BuildingCatalog.drawn_plot_width_tiles(plot_width)
+		assert_gt(gap, 0.25, "two %s side by side are %f tiles apart" % [building_id, gap])
+
+
+## The margin is the SAME on both sides, so a building stands in the middle
+## of its plot rather than shouldered against one edge.
+func test_the_margin_is_centred_so_a_building_is_not_shouldered_to_one_side():
+	var plot := 3
+	var margin: float = (float(plot) - BuildingCatalog.drawn_plot_width_tiles(plot)) * 0.5
+	assert_almost_eq(
+		BuildingCatalog.drawn_plot_width_tiles(plot) + margin * 2.0, float(plot), 0.0001
+	)
+
+
+## A nonsense plot is treated as the smallest real one rather than
+## returning zero or a negative width -- a building drawn at no width at
+## all is a building nobody can see.
+func test_a_nonsense_plot_still_draws_something():
+	for plot in [0, -3]:
+		assert_gt(BuildingCatalog.drawn_plot_width_tiles(plot), 0.0)
+
+
+# -- the chartered buildings ----------------------------------------------
+
+## docs/concept/settlement_charter.md: two buildings a settlement's own
+## tier entitles it to, at two different tiers, so the charter mechanism is
+## demonstrated rather than special-cased.
+func test_the_chartered_buildings_are_real_catalog_buildings():
+	for building_id in BuildingCatalog.CHARTERED_BUILDING_IDS:
+		assert_true(BuildingCatalog.has_building(building_id), building_id)
+		assert_eq(BuildingCatalog.capacity_of(building_id), 0, "%s is not a home" % building_id)
+
+
+## A charter is one gate. Pricing a chartered building in something a
+## settlement cannot gather would be a SECOND, hidden gate behind it -- a
+## city that earned its charter and still cannot raise its own guild hall.
+## The same three materials every ladder rung is priced in
+## (SettlementGathering's own).
+func test_a_chartered_building_is_priced_in_what_a_settlement_can_actually_gather():
+	for building_id in BuildingCatalog.CHARTERED_BUILDING_IDS:
+		for item_id in BuildingCatalog.cost_of(building_id):
+			assert_true(
+				["wood", "stone", "plant_fibre"].has(item_id),
+				"%s wants %s, which no settlement gathers" % [building_id, item_id]
+			)
+
+
+## A city institution costs more than anything a village raises for itself
+## -- it is the thing a place builds because it finally can.
+func test_a_chartered_building_costs_more_than_every_ungated_one():
+	var dearest_ungated := 0
+	for building_id in BuildingCatalog.PRODUCTION_BUILDING_IDS + BuildingCatalog.CIVIC_BUILDING_IDS:
+		dearest_ungated = maxi(dearest_ungated, _total_material(building_id))
+	for building_id in BuildingCatalog.CHARTERED_BUILDING_IDS:
+		assert_gt(
+			_total_material(building_id), dearest_ungated,
+			"%s costs no more than a building anybody may raise" % building_id
+		)
+
+
+func _total_material(building_id: String) -> int:
+	var total := 0
+	for count in BuildingCatalog.cost_of(building_id).values():
+		total += int(count)
+	return total
+
+
+## The catalog's own invariants must cover EVERY building it knows, or a
+## new entry quietly escapes them -- which is exactly what a hand-written
+## list of three lists lets happen.
+func test_all_building_ids_really_is_every_building_the_catalog_knows():
+	var listed: Array = (
+		BuildingCatalog.BUILDING_IDS + BuildingCatalog.CIVIC_BUILDING_IDS
+		+ BuildingCatalog.PRODUCTION_BUILDING_IDS + BuildingCatalog.CHARTERED_BUILDING_IDS
+	)
+	var every: Array = BuildingCatalog.all_building_ids()
+	assert_eq(every.size(), listed.size(), "a building is in no list, or in two")
+	for building_id in listed:
+		assert_true(every.has(building_id), "%s is listed and not in all_building_ids" % building_id)
+	for building_id in every:
+		assert_true(BuildingCatalog.has_building(building_id), "%s is not a real entry" % building_id)
+
+
+# -- the house tiers read as a ladder ---------------------------------------
+#
+# Asked directly, with the street in shot: *"also scale down cottage to be
+# smaller than house"*. Measured (tools/probe_building_fit.gd) before
+# changing anything: a cottage draws 26.0 x 26.0 world px and a house
+# 39.5 x 24.0 -- so the SMALLEST tier is the tallest building on the street.
+#
+# Both are drawn at the same share of their own plot width, and the plots
+# differ only in width (2x2 against 3x2), so the misorder comes entirely
+# from the art's aspect: a cottage is drawn square and a house low and wide.
+# The catalog carries the correction, because how big a building is drawn is
+# a fact about the building rather than about whichever sheet it came from.
+
+
+func test_a_cottage_is_drawn_smaller_than_a_house():
+	assert_lt(
+		BuildingCatalog.drawn_plot_width_tiles(2, "house_small"),
+		BuildingCatalog.drawn_plot_width_tiles(3, "house_medium"),
+		"a cottage covers less ground than a house"
+	)
+
+
+## The scale is a fact about the BUILDING, so asking without naming one
+## answers exactly as it always did -- every caller that has not been taught
+## to name it is untouched.
+func test_asking_without_naming_a_building_is_unchanged():
+	for width in [1, 2, 3, 4]:
+		assert_almost_eq(
+			BuildingCatalog.drawn_plot_width_tiles(width),
+			float(width) * (1.0 - 2.0 * BuildingCatalog.PLOT_MARGIN_SHARE),
+			0.0001
+		)
+
+
+## And a building with no scale of its own is drawn exactly as before.
+func test_a_building_with_no_scale_of_its_own_is_unchanged():
+	for building_id in ["house_medium", "house_large", "city_hall", "sawmill"]:
+		var footprint := BuildingCatalog.footprint_of(building_id)
+		assert_almost_eq(
+			BuildingCatalog.drawn_plot_width_tiles(footprint.x, building_id),
+			BuildingCatalog.drawn_plot_width_tiles(footprint.x),
+			0.0001,
+			building_id
+		)
+
+
+## Still a building standing on its plot, not a model of one: the same floor
+## PLOT_MARGIN_SHARE is already pinned against, so "smaller" can never
+## quietly become "tiny".
+func test_a_cottage_still_covers_most_of_its_own_plot():
+	var drawn := BuildingCatalog.drawn_plot_width_tiles(2, "house_small")
+	assert_gt(drawn / 2.0, 0.6, "a cottage that covers less than this is a model of a cottage")

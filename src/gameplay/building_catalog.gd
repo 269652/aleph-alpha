@@ -37,6 +37,28 @@ const CIVIC_BUILDING_IDS: Array[String] = ["city_hall", "warehouse"]
 ## trade they house is worked from, not lived in.
 const PRODUCTION_BUILDING_IDS: Array[String] = ["sawmill", "farmhouse", "blacksmith", "brewery"]
 
+## Buildings a settlement's own TIER entitles it to (docs/concept/
+## settlement_charter.md): a place may not simply decide to have one, it
+## has to BE a town or a city first. Never a home either, and never on the
+## growth ladder -- the ladder is what a village climbs to become the kind
+## of place that may raise these.
+##
+## See SettlementCharter.MIN_TIER_BY_BUILDING for which tier each wants.
+## That table lives there rather than here because it is a rule about
+## SETTLEMENTS, and this file knows nothing about settlements.
+const CHARTERED_BUILDING_IDS: Array[String] = ["trade_hall", "mage_guild"]
+
+
+## Every building this catalog knows, in one list.
+##
+## Read off the entries themselves rather than by concatenating the four
+## lists above, so an invariant written against it cannot be escaped by a
+## new entry somebody forgot to add to a list -- which is exactly what a
+## hand-maintained union lets happen (test-pinned both ways: every listed
+## id is here, and every id here is a real entry).
+static func all_building_ids() -> Array:
+	return _BUILDINGS.keys()
+
 ## The reserved chunk-modification id every NON-anchor footprint cell
 ## carries (the anchor cell carries the building id itself, exactly like a
 ## single-tile placeable does today). Never a building, never placeable by
@@ -164,6 +186,37 @@ const _BUILDINGS := {
 		"footprint": Vector2i(3, 3), "interior_family": "workshop", "capacity": 0, "storage": 60,
 		"labor_hours": 57.0, "cost": {"wood": 22, "stone": 12, "plant_fibre": 4},
 	},
+	# The chartered buildings (CHARTERED_BUILDING_IDS, docs/concept/
+	# settlement_charter.md). Priced in the SAME three materials every
+	# other rung is -- the exact three SettlementGathering gathers -- on
+	# purpose: a charter is ONE gate, and pricing these in something a
+	# settlement cannot get would be a second, hidden gate behind it, so a
+	# city that earned its charter still could not raise its own guild
+	# hall. They cost strictly more than anything anybody may raise
+	# unchartered, because they are what a place builds when it finally
+	# can (both test-pinned).
+	#
+	# The trade hall: the house of the `guild` institutions InstitutionStore
+	# already forms out of repeated fulfilled contracts, and the natural
+	# home of the relief chest docs/concept/village_estates.md hangs off
+	# one. Deep storage because that is what a chest in a hall is.
+	#
+	# NOT "guild_hall", which is already taken by a 7x7 piece-built PLAYER
+	# house blueprint (HouseBlueprint.BLUEPRINTS). Two different things
+	# sharing one id is how a recipe book ends up with a duplicate key,
+	# which is exactly how this was found.
+	"trade_hall": {
+		"footprint": Vector2i(3, 3), "interior_family": "hall", "capacity": 0, "storage": 180,
+		"labor_hours": 72.0, "cost": {"wood": 24, "stone": 18, "plant_fibre": 6},
+	},
+	# The mage guild: the compile station docs/concept/magic.md has carried
+	# as an open question since it was written ("exact station-tier
+	# thresholds for compiling"). The dearest thing in the catalog, and the
+	# only one a hamlet or a town may never have at any price.
+	"mage_guild": {
+		"footprint": Vector2i(3, 3), "interior_family": "hall", "capacity": 0, "storage": 60,
+		"labor_hours": 93.0, "cost": {"wood": 28, "stone": 26, "plant_fibre": 8},
+	},
 }
 
 ## Which houses an occupation tends toward -- weighted by repetition, ordered
@@ -216,6 +269,8 @@ const _DISPLAY_NAMES := {
 	"farmhouse": "Farmhouse",
 	"blacksmith": "Smithy",
 	"brewery": "Brewery",
+	"trade_hall": "Trade Hall",
+	"mage_guild": "Mage Guild",
 }
 
 
@@ -433,6 +488,81 @@ static func construction_stage_for(progress: float, building_id: String = "") ->
 
 static func interior_family_of(building_id: String) -> String:
 	return _BUILDINGS.get(building_id, {}).get("interior_family", "")
+
+
+## How much of its plot a building's picture leaves as AIR on each side.
+##
+## Reported live with a screenshot of three cottages in a row: "make the
+## cottages a bit smaller and add a padding so they have a gap between them
+## and the top doesn't get clipped".
+##
+## The slicer was not the problem, which is worth recording because it was
+## the obvious suspect. Measured on the real sheets, every finished cottage
+## frame has ZERO transparent pixels on all four edges -- the cell bands
+## are cut tight to the art by construction (VariantSheetGrid) -- and that
+## tight crop was then scaled to EXACTLY the plot width. So two houses on
+## neighbouring plots touched at the pixel with no street between them, and
+## a roof that reaches well above its own plot ran straight into whatever
+## stood north of it.
+##
+## A share rather than a fixed number of tiles, so the air scales with the
+## building: a manor stands in proportionally as much ground as a cottage
+## does. The trade-off is deliberate -- a bigger building gets a wider gap,
+## which reads as a bigger house standing in more of its own land rather
+## than as an inconsistent street.
+##
+## Pinned from both sides by test_building_catalog.gd against what it
+## PRODUCES, never as a number somebody liked: two houses on adjacent plots
+## must stand at least a quarter of a tile apart (under that it is a seam,
+## not a gap, at the size a tile is really drawn), and a building must
+## still cover more than three quarters of its own plot (under that it
+## stops reading as a building on that ground and starts reading as a model
+## of one).
+const PLOT_MARGIN_SHARE := 0.09
+
+## A building drawn at less of its plot than the margin above allows, because
+## of what the building IS rather than because of the plot it stands on.
+##
+## Asked directly, with the street in shot: *"also scale down cottage to be
+## smaller than house"*. Measured before changing anything
+## (tools/probe_building_fit.gd): a cottage drew 26.0 x 26.0 world px against
+## a house's 39.5 x 24.0 -- the SMALLEST tier was the tallest building on the
+## street. Both are drawn at the same share of their own plot width and the
+## plots differ only in width (2x2 against 3x2), so the whole misorder comes
+## from the art's aspect: a cottage is drawn square, a house low and wide.
+##
+## The correction lives here rather than in the sheet reader because how big
+## a building is DRAWN is a fact about the building, not about whichever
+## sheet its picture came from -- and both the illustrated path and the
+## procedural placeholder then read one answer.
+##
+## Pinned by what it PRODUCES rather than as a number somebody liked, the
+## same discipline PLOT_MARGIN_SHARE itself keeps: a cottage must come out
+## smaller than a house in both dimensions, and must still cover most of its
+## own plot, or it stops reading as a building on that ground.
+const _DRAW_SCALES := {
+	"house_small": 0.85,
+}
+
+
+## The width, in tiles, a building's picture is actually DRAWN at on a
+## `footprint_width_tiles`-wide plot -- its own width less
+## PLOT_MARGIN_SHARE of air on each side.
+##
+## The ONE place that answer lives, so the illustrated sheet path and the
+## procedural placeholder cannot disagree about how much of a plot a
+## building covers. Named apart from IllustratedStructureSprite.drawn_
+## width_tiles, which answers a different question for a different thing --
+## how wide a single-tile PLACEABLE is drawn, from its catalog twin. A nonsense plot is treated as the smallest real one:
+## a building drawn at no width at all is a building nobody can see.
+static func drawn_plot_width_tiles(
+	footprint_width_tiles: int, building_id: String = ""
+) -> float:
+	return (
+		float(maxi(footprint_width_tiles, 1))
+		* (1.0 - 2.0 * PLOT_MARGIN_SHARE)
+		* float(_DRAW_SCALES.get(building_id, 1.0))
+	)
 
 
 static func capacity_of(building_id: String) -> int:

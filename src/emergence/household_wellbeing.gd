@@ -1,6 +1,6 @@
 extends RefCounted
 
-## docs/concept/village_growth.md mechanism 4: a household's four needs, its
+## docs/concept/village_growth.md mechanism 4: a household's five needs, its
 ## happiness and its productivity.
 ##
 ## **Derived, never stored** (that doc's pillar 5). Every input below is a
@@ -26,15 +26,19 @@ extends RefCounted
 ##   wallet_balance       real gold in the household's own Wallet
 ##   meal_price           VillageMarket.VILLAGE_LOCAL_FOOD_PRICE
 ##   ladder_share         VillageGrowth.ladder_share of what stands here
+##   employment           [0,1], VillageLabor.employment_for_estate for this
+##                        household's own estate -- OMIT it rather than
+##                        guessing when the settlement's buildings could not
+##                        be read (see WORK_UNREAD_DEFAULT)
 ##
 ## Every tuned value below is pinned by test_household_wellbeing.gd against
 ## the ORDERING it produces (going hungry costs more happiness than lacking
 ## a brewery; a hungry household works below its own mood), never asserted
 ## as a magic number, per this project's no-manual-tuning rule.
 
-## The four needs, in the order a readout should show them -- most
+## The five needs, in the order a readout should show them -- most
 ## fundamental first, which is also weight order (see NEED_WEIGHTS).
-const NEED_IDS: Array[String] = ["food", "shelter", "income", "community"]
+const NEED_IDS: Array[String] = ["food", "shelter", "work", "income", "community"]
 
 ## How much settlement food stock PER HOUSEHOLD reads as a full larder.
 ## Deliberately several meals' worth rather than one: a village with
@@ -57,9 +61,32 @@ const SHELTER_SPARE_CAPACITY_FOR_FULL := 2.0
 ## How many meals' worth of gold in hand reads as a comfortable purse.
 const INCOME_MEALS_FOR_FULL := 10
 
-## Weights over NEED_IDS, summing to 1. Food heaviest, community lightest
-## -- pinned by the ordering it produces, not by these numbers.
-const NEED_WEIGHTS := {"food": 0.4, "shelter": 0.3, "income": 0.2, "community": 0.1}
+## What a household whose employment NOBODY READ counts as.
+##
+## Deliberately the opposite of every other need's destitute default, and
+## the exception is the point. The other inputs describe the household
+## itself, so a missing one really is bad news. Employment is read off the
+## BUILDINGS its settlement has, and a caller that could not look at them
+## has not discovered idleness -- it has discovered nothing. A destitute
+## default here would have every village in the world nobody is standing in
+## read as wholly out of work, which is the same trap the unloaded
+## `house_capacity` fallback already avoids (see EarthChunkManager.
+## _household_wellbeing_for_settlement's own note).
+##
+## "Not read" is a MISSING key. A reading that is present is taken at face
+## value and clamped, however silly.
+const WORK_UNREAD_DEFAULT := 1.0
+
+## Weights over NEED_IDS, summing to 1, strictly descending in that array's
+## own order -- pinned by the ordering it produces, not by these numbers.
+##
+## `work` sits between shelter and income because that is where the
+## ORDERING puts it: losing your trade costs more than losing your savings,
+## since the trade is what produced the savings, and less than losing the
+## roof over your head.
+const NEED_WEIGHTS := {
+	"food": 0.35, "shelter": 0.25, "work": 0.18, "income": 0.12, "community": 0.10,
+}
 
 ## What a wholly desperate household still manages. Never zero: a starving
 ## household still works, just badly, and a zero here would silently stall
@@ -72,6 +99,7 @@ static func assess(state: Dictionary) -> Dictionary:
 	var needs := {
 		"food": _food_need(state),
 		"shelter": _shelter_need(state),
+		"work": _work_need(state),
 		"income": _income_need(state),
 		"community": clampf(float(state.get("ladder_share", 0.0)), 0.0, 1.0),
 	}
@@ -114,6 +142,22 @@ static func _shelter_need(state: Dictionary) -> float:
 		return clampf(SHELTER_ROOF_SHARE * float(capacity) / float(size), 0.0, 1.0)
 	var spare := float(capacity - size) / SHELTER_SPARE_CAPACITY_FOR_FULL
 	return clampf(SHELTER_ROOF_SHARE + (1.0 - SHELTER_ROOF_SHARE) * clampf(spare, 0.0, 1.0), 0.0, 1.0)
+
+
+## docs/concept/village_estates.md mechanism 4, felt from the household's
+## side. `VillageLabor.employment_for` already says what share of the
+## PEOPLE of a labour class have a post -- the dual of the fulfilment a
+## building reads -- and this is the household's own class's share of it.
+##
+## A village with no works has idle cottagers and knows it; one that
+## promoted every cottager into a husbandman has idle husbandmen and a
+## saw pit nobody can run. Either way the idleness now costs real
+## happiness, and through it real productivity, which is what makes the
+## pyramid something a village feels rather than a number it carries.
+static func _work_need(state: Dictionary) -> float:
+	if not state.has("employment"):
+		return WORK_UNREAD_DEFAULT
+	return clampf(float(state["employment"]), 0.0, 1.0)
 
 
 ## The purse measured in meals it could actually buy. A meal price of zero
