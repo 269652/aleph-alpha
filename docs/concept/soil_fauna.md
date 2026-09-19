@@ -2277,6 +2277,78 @@ flower shared one invented height; once flowers were pinned to the player's own
 scale the worm was suddenly longer than several of them and read as a snake
 lying in the grass.
 
+### Generalized to ANY animal (2026-09-19)
+
+Reported in play: *"Stepping on a frog doesn't kill it? Shouldn't this work
+out of the box for ANY animal when enough pressure is put on it? A boar
+walking over a frog should kill it as well"*.
+
+Correct on every count, and `crush_mechanic.gd`'s own doc comment already
+said so — *"a third crushable creature needs no new rule of its own, only
+detection wiring"*. The physics was general from the start and both
+steppers were already real: the **player** and **every `CreatureMarker`**
+trample with their own live mass. What was missing is that every victim
+wired up so far (worms, caterpillars, millipedes, ants, decomposers) is a
+small special-case marker type. A frog is a `GrassFrogMarker`; a mouse is a
+`CreatureMarker`. **No real animal was crushable by anything.**
+
+#### The victim side needs a second term
+
+Momentum alone cannot decide this. The existing
+`CRUSH_MOMENTUM_THRESHOLD_KG_M_S` asks only *"is the stepper heavy enough to
+crush anything at all"* — which is the right question for a worm, because
+anything above that threshold flattens a worm. It is the wrong question on
+its own for animals: a boar clears it, and a deer is also an animal, but a
+boar does not crush a deer by stepping on it.
+
+So crushing a real animal needs **both**:
+
+1. the stepper is heavy enough to crush at all (the existing threshold), and
+2. the victim is small enough to go *under* the foot rather than be stepped
+   *on*.
+
+#### The second term is derived, not picked
+
+`PebbleDispersion.FOOT_MASS_FRACTION` already exists and is already a cited
+anatomical figure: **one foot is 1.4% of body mass**. That gives the rule
+for free, with no new number invented:
+
+> An animal is crushed underfoot when **it weighs less than the foot landing
+> on it**.
+
+Physically that is exactly the boundary: if your whole body is lighter than
+the foot coming down, that foot does not deflect around you — its owner's
+full weight settles through a contact patch larger than you are. Above it,
+you are something the stepper stumbles on rather than through.
+
+What it decides, against this codebase's own real masses:
+
+| stepper | foot | victim | crushed? |
+|---|---|---|---|
+| player, 70 kg | 0.98 kg | frog / mouse, 0.02 kg | **yes** |
+| boar, 80 kg | 1.12 kg | frog, 0.02 kg | **yes** |
+| horse, 500 kg | 7 kg | snake, 5 kg | **yes** |
+| horse, 500 kg | 7 kg | wolf, 40 kg | no |
+| deer, 70 kg | 0.98 kg | jackal, 10 kg | no |
+| mouse, 0.02 kg | — | ant | no — the mouse fails the momentum gate first |
+
+The two terms compose cleanly: the momentum threshold rules out steppers too
+light to crush *anything*, and the foot-mass rule rules out victims too heavy
+to go under a foot. Neither is redundant and neither replaces the other.
+
+#### Detection wiring, as promised
+
+Two more victim sides, and no third physics rule:
+
+- **`CreatureMarker`** — any real animal. Killed through its own
+  `take_damage`, not `queue_free`, so a crushed animal leaves the same
+  carcass and fires the same death the world already knows about.
+- **`GrassFrogMarker`** — freed like a caterpillar, since an ambient frog has
+  no health, no carcass and no death of its own.
+
+A crushing creature never crushes *itself*, and never crushes something
+heavier than its own foot — which is what stops a herd flattening itself.
+
 ### Generalized to caterpillars too (2026-09-06)
 
 Reported directly, right after caterpillars shipped: *"they don't get
