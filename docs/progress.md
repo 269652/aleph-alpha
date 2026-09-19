@@ -26490,6 +26490,14 @@ known parallel gap since 2026-09-08 and it stays named: the ask was about
 beehives, and gating nests on a standing tree would visibly thin them out,
 which is a behaviour change nobody asked for.
 
+✅ **Measured after the fact, not assumed.** `tools/probe_hive_tree_anchor.gd`
+over eight real chunks around Berlin and Bavaria: 4 hives seeded, **4 of 4
+standing on a tile with a real tree**, nearest-tree distance min 0.09 /
+median 0.20 / **max 0.34 tiles** where the old rule allowed 2.0. Only 6.3%
+of a chunk's tiles hold a standing tree, so the constraint is real — and
+hives still seeded at a normal rate under it, which is the thing worth
+checking: the rule did not quietly delete the feature to satisfy itself.
+
 ⬜ **Not verified in a running game.** The rule is tested against real
 generated terrain (a 3×3 of real chunks around Berlin: four real hives
 seeded, every one of them on a real tree or structure tile, 7 asserts — not
