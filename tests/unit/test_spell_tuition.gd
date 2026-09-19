@@ -20,6 +20,9 @@ const Shop = preload("res://src/gameplay/shop.gd")
 const Wallet = preload("res://src/gameplay/wallet.gd")
 const SettlementCharter = preload("res://src/emergence/settlement_charter.gd")
 const BuildingCatalog = preload("res://src/gameplay/building_catalog.gd")
+const MageMaster = preload("res://src/gameplay/mage_master.gd")
+const MageGuildRoster = preload("res://src/gameplay/mage_guild_roster.gd")
+const SpellSchools = preload("res://src/gameplay/spell_schools.gd")
 
 var tuition: RefCounted
 var book: RefCounted
@@ -188,19 +191,44 @@ func test_the_deepest_magic_costs_more_than_anything_a_merchant_sells():
 
 # -- the refusal is the feature ---------------------------------------------
 
-func _refusal(spell_id: String, known: Array, gold: int, at_guild: bool) -> Dictionary:
-	return tuition.refusal_for(book, spell_id, known, gold, at_guild)
+## A guild the player is standing in, staffed by whoever can teach
+## `spell_id` -- the shape Player.learn_spell hands in.
+func _a_guild_teaching(spell_id: String) -> Dictionary:
+	return {"inside": true, "masters": [_a_master_who_teaches(spell_id)]}
 
 
-func test_standing_at_a_guild_with_the_gold_and_no_prior_knowledge_is_no_refusal():
+## A guild the player is standing in that has nobody in it at all: newly
+## raised, no master arrived yet. The building is not the teacher.
+func _an_empty_guild() -> Dictionary:
+	return {"inside": true, "masters": []}
+
+
+func _outside() -> Dictionary:
+	return {}
+
+
+func _a_master_who_teaches(spell_id: String) -> int:
+	for i in 4000:
+		var seed_value := hash("tuition_master_%d" % i)
+		if MageMaster.teaches(book, spell_id, seed_value):
+			return seed_value
+	fail_test("no master anywhere teaches %s" % spell_id)
+	return 0
+
+
+func _refusal(spell_id: String, known: Array, gold: int, guild: Dictionary) -> Dictionary:
+	return tuition.refusal_for(book, spell_id, known, gold, guild)
+
+
+func test_standing_in_a_guild_with_a_teacher_the_gold_and_no_prior_knowledge_is_no_refusal():
 	var spell_id: String = tuition.teachable(book, _starting())[0]
-	assert_eq(_refusal(spell_id, _starting(), tuition.tuition_for(book, spell_id), true), {})
+	assert_eq(_refusal(spell_id, _starting(), tuition.tuition_for(book, spell_id), _a_guild_teaching(spell_id)), {})
 
 
-func test_not_standing_at_a_guild_is_refused_and_names_the_building():
+func test_not_standing_inside_a_guild_is_refused_and_names_the_building():
 	var spell_id: String = tuition.teachable(book, _starting())[0]
-	var refusal := _refusal(spell_id, _starting(), 100000, false)
-	assert_eq(refusal.get("reason", ""), SpellTuition.NO_GUILD)
+	var refusal := _refusal(spell_id, _starting(), 100000, _outside())
+	assert_eq(refusal.get("reason", ""), SpellTuition.OUTSIDE)
 	assert_eq(refusal.get("building_id", ""), SpellTuition.GUILD_BUILDING_ID)
 
 
@@ -211,14 +239,14 @@ func test_the_building_the_refusal_names_is_the_one_the_charter_gates():
 
 
 func test_a_spell_you_already_know_is_refused():
-	var refusal := _refusal(SpellTuition.STARTING_SPELL_IDS[0], _starting(), 100000, true)
+	var refusal := _refusal(SpellTuition.STARTING_SPELL_IDS[0], _starting(), 100000, _a_guild_teaching(SpellTuition.STARTING_SPELL_IDS[0]))
 	assert_eq(refusal.get("reason", ""), SpellTuition.ALREADY_KNOWN)
 
 
 func test_being_short_of_the_price_names_the_price_and_the_shortfall():
 	var spell_id: String = tuition.teachable(book, _starting())[0]
 	var price: int = tuition.tuition_for(book, spell_id)
-	var refusal := _refusal(spell_id, _starting(), price - 40, true)
+	var refusal := _refusal(spell_id, _starting(), price - 40, _a_guild_teaching(spell_id))
 	assert_eq(refusal.get("reason", ""), SpellTuition.CANNOT_AFFORD)
 	assert_eq(refusal.get("tuition", 0), price, "the refusal must say what it costs")
 	assert_eq(refusal.get("short", 0), 40, "'come back with 40 more gold', never a bare no")
@@ -226,27 +254,27 @@ func test_being_short_of_the_price_names_the_price_and_the_shortfall():
 
 func test_exactly_the_price_is_enough():
 	var spell_id: String = tuition.teachable(book, _starting())[0]
-	assert_eq(_refusal(spell_id, _starting(), tuition.tuition_for(book, spell_id), true), {})
+	assert_eq(_refusal(spell_id, _starting(), tuition.tuition_for(book, spell_id), _a_guild_teaching(spell_id)), {})
 
 
 func test_a_spell_outside_the_catalogue_is_refused_before_it_is_priced():
-	var refusal := _refusal("not_a_real_spell", _starting(), 100000, true)
+	var refusal := _refusal("not_a_real_spell", _starting(), 100000, _an_empty_guild())
 	assert_eq(refusal.get("reason", ""), SpellTuition.UNKNOWN_SPELL)
 
 
-func test_no_guild_is_reported_before_the_price():
+func test_being_outside_is_reported_before_the_price():
 	# Standing in a field is the first thing wrong, not the last.
 	var spell_id: String = tuition.teachable(book, _starting())[0]
-	var refusal := _refusal(spell_id, _starting(), 0, false)
-	assert_eq(refusal.get("reason", ""), SpellTuition.NO_GUILD)
+	var refusal := _refusal(spell_id, _starting(), 0, _outside())
+	assert_eq(refusal.get("reason", ""), SpellTuition.OUTSIDE)
 
 
 func test_every_refusal_carries_the_spell_it_is_about():
 	for refusal in [
-		_refusal("not_a_real_spell", _starting(), 100000, true),
-		_refusal("minor_heal", _starting(), 100000, false),
-		_refusal(SpellTuition.STARTING_SPELL_IDS[0], _starting(), 100000, true),
-		_refusal("minor_heal", _starting(), 0, true),
+		_refusal("not_a_real_spell", _starting(), 100000, _an_empty_guild()),
+		_refusal("minor_heal", _starting(), 100000, _outside()),
+		_refusal(SpellTuition.STARTING_SPELL_IDS[0], _starting(), 100000, _a_guild_teaching(SpellTuition.STARTING_SPELL_IDS[0])),
+		_refusal("minor_heal", _starting(), 0, _a_guild_teaching("minor_heal")),
 	]:
 		assert_eq(refusal.get("spell_id", ""), refusal.get("spell_id", "_"), "")
 		assert_true(refusal.has("spell_id"), "a refusal must name what it refused: %s" % refusal)
@@ -265,7 +293,7 @@ func test_learning_adds_the_spell_and_charges_exactly_the_tuition():
 	var price: int = tuition.tuition_for(book, spell_id)
 	var wallet := _wallet(price + 7)
 
-	var result: Dictionary = tuition.learn(book, spell_id, _starting(), wallet, true)
+	var result: Dictionary = tuition.learn(book, spell_id, _starting(), wallet, _a_guild_teaching(spell_id))
 
 	assert_true(result["ok"])
 	assert_eq(result["gold"], price)
@@ -277,7 +305,7 @@ func test_learning_leaves_the_callers_own_known_list_alone():
 	# Pure: the caller decides whether to adopt the new list.
 	var spell_id: String = tuition.teachable(book, _starting())[0]
 	var known := _starting()
-	tuition.learn(book, spell_id, known, _wallet(100000), true)
+	tuition.learn(book, spell_id, known, _wallet(100000), _a_guild_teaching(spell_id))
 	assert_eq(known, _starting(), "learn must not mutate the array it was handed")
 
 
@@ -285,13 +313,13 @@ func test_a_refused_learn_charges_nothing():
 	var spell_id: String = tuition.teachable(book, _starting())[0]
 	var price: int = tuition.tuition_for(book, spell_id)
 	for attempt in [
-		{"spell_id": spell_id, "gold": price, "at_guild": false},
-		{"spell_id": spell_id, "gold": price - 1, "at_guild": true},
-		{"spell_id": SpellTuition.STARTING_SPELL_IDS[0], "gold": price, "at_guild": true},
-		{"spell_id": "not_a_real_spell", "gold": price, "at_guild": true},
+		{"spell_id": spell_id, "gold": price, "guild": _outside()},
+		{"spell_id": spell_id, "gold": price - 1, "guild": _a_guild_teaching(spell_id)},
+		{"spell_id": SpellTuition.STARTING_SPELL_IDS[0], "gold": price, "guild": _a_guild_teaching(SpellTuition.STARTING_SPELL_IDS[0])},
+		{"spell_id": "not_a_real_spell", "gold": price, "guild": _an_empty_guild()},
 	]:
 		var wallet := _wallet(attempt["gold"])
-		var result: Dictionary = tuition.learn(book, attempt["spell_id"], _starting(), wallet, attempt["at_guild"])
+		var result: Dictionary = tuition.learn(book, attempt["spell_id"], _starting(), wallet, attempt["guild"])
 		assert_false(result["ok"], "%s" % attempt)
 		assert_eq(result["gold"], 0)
 		assert_eq(wallet.balance, attempt["gold"], "a refusal must never move gold: %s" % attempt)
@@ -301,17 +329,17 @@ func test_a_refused_learn_charges_nothing():
 
 func test_a_landed_learn_carries_no_refusal():
 	var spell_id: String = tuition.teachable(book, _starting())[0]
-	var result: Dictionary = tuition.learn(book, spell_id, _starting(), _wallet(100000), true)
+	var result: Dictionary = tuition.learn(book, spell_id, _starting(), _wallet(100000), _a_guild_teaching(spell_id))
 	assert_eq(result["refusal"], {})
 
 
 func test_learning_the_same_spell_twice_is_refused_the_second_time():
 	var spell_id: String = tuition.teachable(book, _starting())[0]
 	var wallet := _wallet(100000)
-	var first: Dictionary = tuition.learn(book, spell_id, _starting(), wallet, true)
+	var first: Dictionary = tuition.learn(book, spell_id, _starting(), wallet, _a_guild_teaching(spell_id))
 	var after: int = wallet.balance
 
-	var second: Dictionary = tuition.learn(book, spell_id, first["known"], wallet, true)
+	var second: Dictionary = tuition.learn(book, spell_id, first["known"], wallet, _a_guild_teaching(spell_id))
 
 	assert_false(second["ok"])
 	assert_eq(second["refusal"].get("reason", ""), SpellTuition.ALREADY_KNOWN)
@@ -322,7 +350,89 @@ func test_learning_every_teachable_spell_ends_with_the_whole_catalogue():
 	var known := _starting()
 	var wallet := _wallet(100000)
 	for spell_id in tuition.teachable(book, known):
-		known = tuition.learn(book, spell_id, known, wallet, true)["known"]
+		known = tuition.learn(book, spell_id, known, wallet, _a_guild_teaching(spell_id))["known"]
 	assert_eq(tuition.teachable(book, known), [])
 	for spell_id in book.known_ids():
 		assert_true(known.has(spell_id))
+
+
+# -- somebody has to be home (docs/concept/mage_guild.md mechanism 4) --------
+
+func test_an_empty_guild_teaches_nothing_because_the_building_is_not_the_teacher():
+	var refusal := _refusal("minor_heal", _starting(), 100000, _an_empty_guild())
+	assert_eq(refusal.get("reason", ""), SpellTuition.NO_MASTER)
+
+
+func test_a_guild_whose_masters_all_hold_other_traditions_refuses():
+	var wanted := "minor_heal"
+	var wanted_school: String = SpellSchools.school_of_spell(book, wanted)
+	var stranger := 0
+	for i in 4000:
+		var seed_value := hash("stranger_%d" % i)
+		if MageMaster.school_for(seed_value) != wanted_school:
+			stranger = seed_value
+			break
+	var refusal := _refusal(wanted, _starting(), 100000, {"inside": true, "masters": [stranger]})
+	assert_eq(refusal.get("reason", ""), SpellTuition.NO_MASTER)
+
+
+## The sentence that turns a refusal into a reason to travel.
+func test_the_no_master_refusal_names_the_school_and_the_depth_to_go_looking_for():
+	var refusal := _refusal("minor_heal", _starting(), 100000, _an_empty_guild())
+	assert_eq(refusal.get("school", ""), SpellSchools.school_of_spell(book, "minor_heal"))
+	assert_eq(refusal.get("depth", 0), SpellSchools.depth_of_spell(book, "minor_heal"))
+
+
+func test_one_master_of_the_right_tradition_is_enough():
+	var wanted := "minor_heal"
+	var guild := {"inside": true, "masters": [hash("nobody_in_particular"), _a_master_who_teaches(wanted)]}
+	assert_eq(_refusal(wanted, _starting(), tuition.tuition_for(book, wanted), guild), {})
+
+
+func test_being_outside_is_reported_before_having_no_teacher():
+	# You cannot tell who is in a building you have not walked into.
+	var refusal := _refusal("minor_heal", _starting(), 100000, {"inside": false, "masters": []})
+	assert_eq(refusal.get("reason", ""), SpellTuition.OUTSIDE)
+
+
+func test_a_spell_you_already_know_is_refused_before_looking_for_a_teacher():
+	var known: String = SpellTuition.STARTING_SPELL_IDS[0]
+	var refusal := _refusal(known, _starting(), 100000, _an_empty_guild())
+	assert_eq(refusal.get("reason", ""), SpellTuition.ALREADY_KNOWN)
+
+
+func test_having_no_teacher_is_reported_before_the_price():
+	# "Nobody here teaches that" is a better answer than "you are poor"
+	# when both are true, because only one of them is about this guild.
+	var refusal := _refusal("minor_heal", _starting(), 0, _an_empty_guild())
+	assert_eq(refusal.get("reason", ""), SpellTuition.NO_MASTER)
+
+
+func test_a_landed_lesson_names_the_master_who_gave_it():
+	var wanted := "minor_heal"
+	var teacher := _a_master_who_teaches(wanted)
+	var result: Dictionary = tuition.learn(
+		book, wanted, _starting(), _wallet(100000), {"inside": true, "masters": [teacher]}
+	)
+	assert_true(result["ok"])
+	assert_eq(result["teacher"], teacher)
+
+
+func test_a_refused_lesson_names_no_master():
+	var result: Dictionary = tuition.learn(book, "minor_heal", _starting(), _wallet(100000), _outside())
+	assert_false(result["ok"])
+	assert_eq(result["teacher"], 0)
+
+
+func test_what_a_guild_offers_is_what_its_masters_teach_minus_what_you_know():
+	var seeds: Array = MageGuildRoster.master_seeds(hash("some_guild"), MageGuildRoster.DAYS_PER_MASTER * 3.0)
+	var known := _starting()
+	var offered: Array = tuition.offers_at(book, known, seeds)
+	for spell_id in MageGuildRoster.teachable_here(book, seeds):
+		assert_eq(offered.has(spell_id), not known.has(spell_id), "%s" % spell_id)
+	for spell_id in offered:
+		assert_true(MageGuildRoster.teachable_here(book, seeds).has(spell_id))
+
+
+func test_an_empty_guild_offers_nothing():
+	assert_eq(tuition.offers_at(book, _starting(), []), [])

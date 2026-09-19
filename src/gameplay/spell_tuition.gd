@@ -24,11 +24,17 @@ extends RefCounted
 ## SpellBook says as much in its own header). When the editor lands,
 ## compiling reuses all three unchanged and adds only its own price curve.
 ##
-## Pure: no scene tree, no world. The caller supplies "am I standing at a
-## guild" (see Player._has_structure_near_player) and decides whether to
-## adopt the known-spell list this hands back.
+## Pure: no scene tree, no world. The caller supplies where the player is
+## standing and who is in the room (see Player.learn_spell) and decides
+## whether to adopt the known-spell list this hands back.
+##
+## The gate is docs/concept/mage_guild.md mechanism 4: not "a guild is
+## within reach" but "you are INSIDE one AND a master in residence there
+## teaches this". A building is a house, not a faculty.
 
 const SpellCost = preload("res://src/gameplay/spell_cost.gd")
+const SpellSchools = preload("res://src/gameplay/spell_schools.gd")
+const MageGuildRoster = preload("res://src/gameplay/mage_guild_roster.gd")
 const SpellExecutor = preload("res://src/gameplay/spell_executor.gd")
 const RarityTier = preload("res://src/gameplay/rarity_tier.gd")
 const Shop = preload("res://src/gameplay/shop.gd")
@@ -63,12 +69,20 @@ const MEAL_ITEM_ID := "cooked_meat"
 const MEALS_PER_POWER_UNIT := 16.0
 
 ## Refusal reasons. The first is a caller error (you cannot price a spell
-## the world does not have); the other three are the real player-facing
-## ones, and each points somewhere: at the charter ladder, at the rest of
-## the catalogue, at a sum of money.
+## the world does not have); the rest are the real player-facing ones, and
+## each points somewhere: at a door, at the rest of the catalogue, at a
+## road out of town, at a sum of money.
+##
+## Order is part of the contract, and each step is a precondition of the
+## next: a spell the world does not have cannot be priced; you cannot tell
+## who is in a building you have not walked into; a spell you already know
+## needs no teacher; and "nobody here teaches that" is a better answer than
+## "you are poor" when both are true, because only one of them is about
+## this guild.
 const UNKNOWN_SPELL := "unknown_spell"
-const NO_GUILD := "no_guild"
+const OUTSIDE := "outside"
 const ALREADY_KNOWN := "already_known"
+const NO_MASTER := "no_master"
 const CANNOT_AFFORD := "cannot_afford"
 
 var _cost := SpellCost.new()
@@ -145,14 +159,23 @@ func teachable(book, known_ids: Array) -> Array:
 ## have cannot be priced at all, and standing in a field is the first thing
 ## wrong with the attempt, not the last.
 func refusal_for(
-	book, spell_id: String, known_ids: Array, gold: int, at_guild: bool
+	book, spell_id: String, known_ids: Array, gold: int, guild: Dictionary
 ) -> Dictionary:
 	if book == null or not book.has(spell_id):
 		return {"spell_id": spell_id, "reason": UNKNOWN_SPELL}
-	if not at_guild:
-		return {"spell_id": spell_id, "reason": NO_GUILD, "building_id": GUILD_BUILDING_ID}
+	if not bool(guild.get("inside", false)):
+		return {"spell_id": spell_id, "reason": OUTSIDE, "building_id": GUILD_BUILDING_ID}
 	if known_ids.has(spell_id):
 		return {"spell_id": spell_id, "reason": ALREADY_KNOWN}
+	if teacher_at(book, spell_id, guild) == 0:
+		# The refusal that turns into a reason to travel: it names the
+		# tradition and the depth to go looking for, not merely "no".
+		return {
+			"spell_id": spell_id,
+			"reason": NO_MASTER,
+			"school": SpellSchools.school_of_spell(book, spell_id),
+			"depth": SpellSchools.depth_of_spell(book, spell_id),
+		}
 	var price := tuition_for(book, spell_id)
 	if gold < price:
 		return {
@@ -164,20 +187,44 @@ func refusal_for(
 	return {}
 
 
+## The first master in this guild who will teach `spell_id`, or 0 for none.
+## `guild` is {inside: bool, masters: Array of master seeds} -- the shape
+## Player.learn_spell builds from where the player is standing and how long
+## that guild has been open. {} is "not in a guild at all".
+func teacher_at(book, spell_id: String, guild: Dictionary) -> int:
+	var teachers := MageGuildRoster.teachers_for(book, spell_id, guild.get("masters", []))
+	return 0 if teachers.is_empty() else int(teachers[0])
+
+
+## What THIS guild will teach THIS caster: what its masters between them
+## know, minus what the caster already knows. Empty for a guild nobody has
+## come to yet -- correct and deliberate, because the building is not the
+## teacher.
+func offers_at(book, known_ids: Array, master_seeds_here: Array) -> Array:
+	var offered: Array = []
+	for spell_id in MageGuildRoster.teachable_here(book, master_seeds_here):
+		if not known_ids.has(spell_id):
+			offered.append(spell_id)
+	return offered
+
+
 ## Pays for and takes a lesson. Returns
-## {ok, gold: what was actually charged, known: the caller's new list,
-## refusal: why not}.
+## {ok, gold: what was actually charged, teacher: whose lesson it was,
+## known: the caller's new list, refusal: why not}.
 ##
 ## Gold moves ONLY on a learn that lands -- the same conserving discipline
 ## village_estates.md's baskets and guild_relief.gd's chest hold themselves
 ## to. `known_ids` is never mutated: the caller decides whether to adopt the
 ## list this hands back, the same way EstateAscension hands back a verdict
 ## rather than moving a household itself.
-func learn(book, spell_id: String, known_ids: Array, wallet, at_guild: bool) -> Dictionary:
+func learn(book, spell_id: String, known_ids: Array, wallet, guild: Dictionary) -> Dictionary:
 	var gold: int = wallet.balance if wallet != null else 0
-	var refusal := refusal_for(book, spell_id, known_ids, gold, at_guild)
+	var refusal := refusal_for(book, spell_id, known_ids, gold, guild)
 	if not refusal.is_empty():
-		return {"ok": false, "gold": 0, "known": known_ids.duplicate(), "refusal": refusal}
+		return {
+			"ok": false, "gold": 0, "teacher": 0,
+			"known": known_ids.duplicate(), "refusal": refusal,
+		}
 	var price := tuition_for(book, spell_id)
 	# Belt and braces: refusal_for already cleared the price against the same
 	# balance, so a refused spend here would mean the wallet moved under us.
@@ -186,6 +233,7 @@ func learn(book, spell_id: String, known_ids: Array, wallet, at_guild: bool) -> 
 		return {
 			"ok": false,
 			"gold": 0,
+			"teacher": 0,
 			"known": known_ids.duplicate(),
 			"refusal": {
 				"spell_id": spell_id,
@@ -196,4 +244,12 @@ func learn(book, spell_id: String, known_ids: Array, wallet, at_guild: bool) -> 
 		}
 	var known := known_ids.duplicate()
 	known.append(spell_id)
-	return {"ok": true, "gold": price, "known": known, "refusal": {}}
+	return {
+		"ok": true,
+		"gold": price,
+		# Who actually gave the lesson, so a banner can name them -- an
+		# apprenticeship is to a person, not to a building.
+		"teacher": teacher_at(book, spell_id, guild),
+		"known": known,
+		"refusal": {},
+	}
