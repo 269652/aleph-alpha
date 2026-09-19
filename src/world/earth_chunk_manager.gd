@@ -15609,10 +15609,6 @@ func _load_chunk(chunk_coord: Vector2i) -> void:
 	# draws for pieces.
 	for origin_local in chunk.buildings:
 		_spawn_building_node(chunk_coord, origin_local, chunk.buildings[origin_local])
-	# A village the player walks back to has its store and its producers
-	# RESTORED rather than placed, so binding the porter only inside
-	# place_building would leave every village's store empty again on the
-	# next visit -- which is exactly how it was reported.
 	if _roof_layer != null:
 		_terrain_renderer.paint_roofs(_roof_layer, chunk, chunk_coord * CHUNK_SIZE, _hidden_cells_for(chunk_coord))
 	_paint_furniture(chunk_coord, chunk)
