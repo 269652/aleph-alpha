@@ -124,3 +124,36 @@ func test_no_ant_mounds_sit_on_water():
 		return
 	_report("ant mounds", _cells_of(
 		manager._ant_colonies[chunk_coord].mound_cells(), chunk_coord))
+
+
+## The alpaca in the screenshot. Land herbivores and predators are placed
+## at a deterministic per-chunk position with no water check at all, so an
+## all-water chunk gets a full land population standing on the lake.
+##
+## Fish and the other aquatic markers are spawned through their own paths,
+## not through _loaded_creatures, so this can say "none" without qualifying
+## it by species.
+func test_no_land_creature_stands_on_water():
+	# Every loaded chunk, not just the all-water one: an entirely flooded
+	# chunk correctly ends up with NO land animals at all, so checking only
+	# that one would assert against an empty list. The loaded radius here
+	# spans real shoreline, which is exactly where a slid position has to
+	# land somewhere dry rather than being dropped.
+	var total := 0
+	var on_water: Array = []
+	for chunk_coord in manager._loaded_creatures:
+		for creature in manager._loaded_creatures[chunk_coord]:
+			if not is_instance_valid(creature):
+				continue
+			total += 1
+			var tile := Vector2i(
+				int(creature.position.x / 16.0), int(creature.position.y / 16.0)
+			)
+			if manager.is_water_at_global(tile.x, tile.y):
+				on_water.append("%s@%s" % [
+					str(creature.info.species if creature.info != null else "?"), str(tile)])
+	assert_gt(total, 0, "the premise: the loaded radius must promote some land creatures")
+	assert_eq(
+		on_water.size(), 0,
+		"%d land creatures stand on water (e.g. %s)" % [on_water.size(), str(on_water.slice(0, 4))]
+	)
