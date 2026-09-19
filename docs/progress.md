@@ -26640,3 +26640,55 @@ Flagged to the user rather than flipped a fourth time.
 
 Tests: `test_farmer_marker.gd` 12/12 (5 new), `test_farm_plot_marker.gd`
 42/42, `test_farmer_behavior.gd` 14/14.
+
+---
+
+## 2026-09-19 — A placed building was smaller than the person working in it
+
+Reported live: *"Also there's a weird shrunk farmhouse fix that too"*, with
+a screenshot of a farmhouse a villager stood head and shoulders above.
+
+**The concept doc specified the bug.** `npc_farm_production.md`'s "Real art"
+section said a placed structure's art is scaled so its "width matches the
+tile" — one factor on both axes so nothing is squashed, which was right, at
+a width of exactly one tile, which was not. Measured before changing
+anything (`tools/probe_structure_art_scale.gd`), at a 16px tile against a
+villager 1.23 tiles tall:
+
+| subject | drawn | next to a person |
+|---|---|---|
+| `farm` | 0.85 × 0.70 tiles | **0.57×** |
+| `sagewerk` | 0.88 × 0.82 tiles | 0.67× |
+| `storage` | 0.83 × 0.89 tiles | 0.72× |
+| `city_hall` | 0.84 × 0.96 tiles | 0.78× |
+
+Not one of them reached the height of the person who works it. The
+farmhouse, the one that got reported, was barely half.
+
+✅ **A placeable is drawn at the footprint its own catalog twin claims.**
+`IllustratedStructureSprite.drawn_width_tiles` reads
+`BuildingCatalog.footprint_of` — the village raises the very same sheets as
+real multi-tile buildings (`BuildingCatalog`'s `farmhouse` row is literally
+*"npc_farm_production.md's Farm, raised as a real building rather than a
+single tile"*), so the answer already existed and is read rather than
+restated. One building cannot now be two sizes depending on who placed it.
+The farmhouse draws 2.56 × 2.10 tiles, **1.71×** a person.
+
+✅ **Nothing with no twin grew.** A lone `wooden_fence` panel genuinely is
+one tile of fence and still draws as one — which is what keeps this from
+quietly enlarging every subject that happens to have art.
+
+**This is the picture, not the ground.** A placed structure still occupies
+its single tile; placement, collision and the fence gate are untouched. A
+real tree already draws a canopy far wider than the tile its trunk stands
+on, and the hive added two days ago draws above its own tile for the same
+reason.
+
+Two existing tests pinned the old rule and were rewritten rather than
+deleted, each keeping the invariant it was really guarding:
+`test_a_building_still_scales_its_width_to_the_tile` became
+`..._scales_by_its_width_not_by_a_run` (the fence pass's guard, still
+true), and the overlay-wiring test now checks the drawn footprint instead
+of the tile.
+
+Tests: `test_illustrated_structure_sprite.gd` 41/41 (3 new).

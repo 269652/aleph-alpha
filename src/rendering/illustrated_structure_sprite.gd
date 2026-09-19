@@ -53,6 +53,7 @@ extends RefCounted
 
 const SpriteSheetLoader = preload("res://src/rendering/sprite_sheet_loader.gd")
 const VillageFarm = preload("res://src/gameplay/village_farm.gd")
+const BuildingCatalog = preload("res://src/gameplay/building_catalog.gd")
 
 ## How a sheet's cells are found. All three are real on disk today:
 ## "even" divides the canvas (the original 8x5 sheets), "gutters" finds the
@@ -215,6 +216,52 @@ func footprint_texture(subject: String, tile_size: int) -> ImageTexture:
 ##
 ## A whole building scales its WIDTH to the tile, which is the footprint
 ## anchor footprint_texture documents and every one of them still uses.
+## The catalog building each placeable structure shares its art with. The
+## village raises the very same sheet as a real, multi-tile building (see
+## BuildingCatalog's own "farmhouse" row: "npc_farm_production.md's Farm,
+## raised as a real building rather than a single tile"), so the catalog
+## already holds the answer to how big this picture is meant to be drawn.
+## Read from there rather than restated here, so one building cannot end up
+## two sizes depending on who put it down.
+const _CATALOG_TWIN := {
+	"farm": "farmhouse",
+	"sagewerk": "sawmill",
+	"storage": "warehouse",
+	"city_hall": "city_hall",
+}
+
+
+## How many tiles wide this subject is DRAWN. One, for anything with no
+## catalog twin -- a lone fence panel genuinely is one tile of fence.
+##
+## Note this is about the PICTURE, not the ground: a placed structure still
+## occupies its single tile, exactly as before. A real tree already draws a
+## canopy far wider than the one tile its trunk stands on; a building is the
+## same kind of thing.
+static func drawn_width_tiles(subject: String) -> int:
+	var twin := String(_CATALOG_TWIN.get(subject, ""))
+	if twin.is_empty():
+		return 1
+	return maxi(BuildingCatalog.footprint_of(twin).x, 1)
+
+
+## Reported live: *"Also there's a weird shrunk farmhouse fix that too"*.
+##
+## A whole building used to scale its cell to exactly ONE tile, which
+## npc_farm_production.md's "Real art" section specified in as many words
+## ("width matches the tile ... rather than squashed into a single small
+## tile texture"). The intent was right and the number was not. Measured
+## (tools/probe_structure_art_scale.gd), at a 16px tile against a villager
+## 1.23 tiles tall:
+##
+##     farm       drawn 0.85 x 0.70 tiles   0.57x a person
+##     sagewerk   drawn 0.88 x 0.82 tiles   0.67x a person
+##     storage    drawn 0.83 x 0.89 tiles   0.72x a person
+##     city_hall  drawn 0.84 x 0.96 tiles   0.78x a person
+##
+## Every one of them was shorter than the person who works it -- the
+## farmhouse barely half his height, which is what got reported. Drawn at
+## its own catalog footprint now (see drawn_width_tiles).
 ##
 ## A RAIL scales by its RUN instead. Asked for in one word, after the rails
 ## landed on their inner edges: *"also scale"*. The sheet draws every run
@@ -227,7 +274,7 @@ func footprint_texture(subject: String, tile_size: int) -> ImageTexture:
 func _footprint_scale(subject: String, image: Image, tile_size: int) -> float:
 	var inner := VillageFarm.fence_inner_direction(subject)
 	if inner == Vector2i.ZERO:
-		return float(tile_size) / float(image.get_width())
+		return float(tile_size * drawn_width_tiles(subject)) / float(image.get_width())
 	var art := _art_rect(subject, image)
 	# A run travels ACROSS the direction it closes: a rail whose beds lie
 	# north or south runs east-west, and one whose beds lie east or west
