@@ -34,6 +34,17 @@ var goals: Array[String] = []
 var status: String
 var created_at: float
 
+## docs/concept/village_estates.md's guild chest (Zunftkasse): `item_id ->
+## units` this institution is holding in relief for its own members.
+##
+## Lives here rather than in a second parallel store for the same reason a
+## household's estate lives on the Household: an Institution is this
+## project's persistent unit for a body of people, so
+## InstitutionStorePersistence carries the chest with no new file and no
+## second source of truth. Empty for every institution that is not a guild,
+## and for a guild that has never had a surplus to set aside.
+var chest: Dictionary = {}
+
 
 func _init(a_type: String, a_members: Array, a_created_at: float) -> void:
 	type = a_type

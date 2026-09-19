@@ -28,6 +28,18 @@ simulation:
    happiness and productivity, every number *derived at the moment it is
    asked for* from state that already exists.
 
+> **Overhauled by [village_estates.md](village_estates.md) (2026-09-19).**
+> What this doc built is a ratchet: households only ever arrive, needs are
+> a score nobody ever pays for, and a rung is owed on headcount alone. That
+> doc adds the other half — baskets that are really drawn out of the
+> market, a four-estate social order, ascent gated on a charter building
+> actually standing, a labour pyramid where promotion costs the rung below,
+> and an estate-weighted assembly that decides what gets built. Three of
+> this doc's own named gaps are closed there and are marked below. Nothing
+> here was deleted: the estates are a layer over this ladder, and a village
+> whose estates or whose supply nobody has read still behaves exactly as
+> this doc describes.
+
 ## Design pillars
 
 1. **A village is a charter, not a roster.** Before any villager is
@@ -207,6 +219,17 @@ Nothing here decides whether the village *can* build: that stays
 occupations?) and `SettlementConstruction.try_start` (is the material
 actually in the market?), exactly as for the city hall today. The ladder
 only names the target.
+
+**The ORDER is no longer this table's** (2026-09-19). `VillageAssembly`
+([village_estates.md](village_estates.md) mechanism 5) asks the village
+instead: each estate petitions for the works that would supply what it is
+shortest of, or for the charter that would let it rise, weighted by
+standing. This table's buildings, its shelter-first rule and its order as
+the tie-break all survive and are read from here rather than restated —
+and a village with no estate census, or none whose supply has been
+assessed, falls straight through to `next_building` exactly as before. Two
+villages of the same size with different estate mixes now build visibly
+different towns, which is the one thing a headcount ladder cannot do.
 
 ## Mechanism 3 — Arrivals: population that actually grows
 
@@ -529,17 +552,35 @@ Implemented 2026-09-16, TDD red-first throughout. See
   plans for `cottage`/`house`/`manor` only, so those (like the already-real
   `hall`) fall back to the cottage variants. Entering a mill shows a
   cottage interior, honestly noted here rather than dressed up.
-- 🚧 **A growth house is always the small one.** `VillageGrowth` names
-  `BuildingCatalog.BUILDING_IDS[0]` for a homeless household, rather than
-  running `choose_house_id` against the arriving villager's own occupation
-  and personality the way the founding roster does. A newcomer building
-  modest is defensible, but it is a simplification, not a design decision.
+- ✅ **A growth house is always the small one** — closed 2026-09-19 by
+  [village_estates.md](village_estates.md) mechanism 5. The house a village
+  raises is the waiting household's own ESTATE's house
+  (`VillageEstates.house_id_for`), so a burgher who lost a roof is not
+  rehoused in a cottage. `VillageGrowth.next_building` itself still names
+  the first house id, which is the right answer for a caller with no
+  villager in hand.
 - 🚧 **The ladder's rungs are buildings, not yet production.** A standing
   `sawmill`, `farmhouse`, `blacksmith` or `brewery` is a real building the
   village raised and a real contributor to the `community` need; none of
   them yet RUNS a production chain of its own the way the legacy
   single-tile `sagewerk`/`farm` do (`_sync_sagewerk_lumberjack`,
-  `_farm_farmers`). Staffing them is the obvious next pass.
+  `_farm_farmers`).
+
+  **Mostly closed, 2026-09-19** ([village_estates.md](village_estates.md)
+  mechanisms 1 and 4). Every rung has a real WORKFORCE it must be staffed
+  from and an output scale that is zero until somebody of the right estate
+  stands in it (`VillageLabor`), and `StaffedProduction` spends that scale:
+  a staffed brewery really brews `beer` out of the village's own grain, so
+  beer and bread compete for one harvest, and a staffed sawmill really
+  brings more usable timber in from the same hands.
+
+  The two still producing nothing are out for reasons the code found. A
+  `blacksmith` would run the heat-gated smelts `OccupationProduction` rules
+  out on principle plus a tool recipe its own smith's household already
+  runs. A `farmhouse` would run `grow_wheat`, which is `automated` —
+  `can_craft` refuses one outright, because a farmhouse's grain really does
+  come from its real field (`FarmPlot`/`VillageFarm`), and running it again
+  through a market would be the same crop harvested twice.
 - ⬜ **Civic buildings beyond the ladder.**
   [civic_construction.md](civic_construction.md)'s Watchtower, and its
   richer multi-piece `CivicBlueprint` shape, stay design-only.

@@ -17,6 +17,8 @@ extends PanelContainer
 ## this project's rules forbid.
 
 const HouseholdWellbeing = preload("res://src/emergence/household_wellbeing.gd")
+const VillageEstates = preload("res://src/emergence/village_estates.gd")
+const EstateAscension = preload("res://src/emergence/estate_ascension.gd")
 const BuildingCatalog = preload("res://src/gameplay/building_catalog.gd")
 const ItemCatalog = preload("res://src/gameplay/item_catalog.gd")
 
@@ -49,6 +51,7 @@ signal closed
 
 var _title: Label
 var _subtitle: Label
+var _standing: Label
 var _needs_root: VBoxContainer
 var _summary: Label
 var _purse: Label
@@ -72,6 +75,15 @@ func _ready() -> void:
 	_subtitle.add_theme_font_size_override("font_size", 11)
 	_subtitle.modulate = Color(1, 1, 1, 0.75)
 	root.add_child(_subtitle)
+
+	# Which way this household is going (docs/concept/village_estates.md
+	# mechanism 3). Its own line rather than a third clause on the subtitle:
+	# it is the one thing on this panel that CHANGES, and a player watching
+	# a house to see whether it will rise should not have to re-read a name
+	# and a trade to find out.
+	_standing = Label.new()
+	_standing.add_theme_font_size_override("font_size", 11)
+	root.add_child(_standing)
 
 	_needs_root = VBoxContainer.new()
 	_needs_root.add_theme_constant_override("separation", 2)
@@ -131,6 +143,9 @@ func show_report(report: Dictionary) -> void:
 		named if named != "" else BuildingCatalog.display_name_of(String(report.get("building_id", "")))
 	)
 	_subtitle.text = _subtitle_for(report)
+	_standing.text = _standing_for(report)
+	_standing.visible = _standing.text != ""
+	_standing.modulate = _STANDING_COLORS.get(String(report.get("estate_verdict", "")), _STANDING_OK_COLOR)
 	_rebuild_need_rows(report.get("needs", {}))
 	_summary.text = _summary_for(report)
 	var wallet := int(report.get("wallet_balance", 0))
@@ -166,9 +181,12 @@ func _subtitle_for(report: Dictionary) -> String:
 		return "Nobody has moved in yet"
 	if occupation == "":
 		return resident
-	if resident == "":
-		return occupation.capitalize()
-	return "%s — %s" % [resident, occupation.capitalize()]
+	var standing := VillageEstates.display_name_of(String(report.get("estate", "")))
+	var who := (
+		occupation.capitalize() if resident == ""
+		else ("%s — %s" % [resident, occupation.capitalize()])
+	)
+	return who if standing == "" else ("%s · %s" % [who, standing])
 
 
 ## A home reports its own household's happiness and productivity; a commons
@@ -179,6 +197,43 @@ func _summary_for(report: Dictionary) -> String:
 			_percent(report.get("happiness", 0.0)), _percent(report.get("productivity", 0.0)),
 		]
 	return "Village productivity %d%%" % _percent(report.get("settlement_productivity", 0.0))
+
+
+## Which way this household is going, in one line -- the thing a player
+## actually watches (docs/concept/village_estates.md mechanism 3).
+##
+## A falling household at the bottom rung is LEAVING, and is told so rather
+## than named an estate below the lowest one, which does not exist. A
+## commons has no household and gets no line at all.
+func _standing_for(report: Dictionary) -> String:
+	if not bool(report.get("is_home", false)):
+		return ""
+	var estate := String(report.get("estate", ""))
+	if VillageEstates.display_name_of(estate) == "":
+		return ""
+	match String(report.get("estate_verdict", EstateAscension.HOLD)):
+		EstateAscension.ASCEND:
+			var above := VillageEstates.display_name_of(VillageEstates.next_estate(estate))
+			return "Rising to %s" % above if above != "" else _SETTLED_TEXT
+		EstateAscension.DESCEND:
+			if EstateAscension.is_exodus(estate):
+				return "Leaving the village"
+			var below := VillageEstates.display_name_of(VillageEstates.previous_estate(estate))
+			return "Falling to %s" % below if below != "" else "Leaving the village"
+		_:
+			return _SETTLED_TEXT
+
+
+## What a household holding its own standing is shown as. Never blank: a
+## blank line reads as "the panel does not know", and a settled household
+## is a real, and usually good, answer.
+const _SETTLED_TEXT := "Settled"
+
+const _STANDING_OK_COLOR := Color(1, 1, 1, 0.75)
+const _STANDING_COLORS := {
+	EstateAscension.ASCEND: Color(0.45, 0.76, 0.5),
+	EstateAscension.DESCEND: Color(0.95, 0.6, 0.3),
+}
 
 
 ## Rounded toward zero, so a reading never flatters itself up to the next
@@ -242,6 +297,11 @@ func subtitle_text() -> String:
 
 func summary_text() -> String:
 	return _summary.text
+
+
+## Which way this household is going, as drawn; "" for a commons.
+func standing_text() -> String:
+	return _standing.text if _standing.visible else ""
 
 
 func purse_text() -> String:
