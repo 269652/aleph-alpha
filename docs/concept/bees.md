@@ -554,7 +554,21 @@ Two things that look like details and are not:
 `tools/probe_hive_tree_anchor.gd` measures the real thing across real
 generated terrain — how far each seeded hive's tile is from the nearest
 real tree, and what share of a chunk's tiles hold one at all — so the
-rule can be re-checked rather than assumed.
+rule can be re-checked rather than assumed. Eight real chunks around
+Berlin and Bavaria, after the change:
+
+| | |
+|---|---|
+| hives seeded | 4 |
+| standing on a tile with a real tree | **4 / 4** |
+| distance to the nearest tree | min 0.09, median 0.20, **max 0.34 tiles** |
+| share of a chunk's tiles holding a standing tree | 6.3% |
+
+The old rule allowed 2.0 tiles; the measured worst case is now 0.34, which
+is a hive at the trunk rather than near it. The 6.3% matters too: requiring
+a tree on the hive's own tile is a genuine constraint, not a formality — and
+hives still seed at a normal rate under it, so this did not quietly delete
+the feature to satisfy the rule.
 
 ### Harvesting honey — the one genuinely new player-interaction mechanic
 

@@ -26619,6 +26619,14 @@ known parallel gap since 2026-09-08 and it stays named: the ask was about
 beehives, and gating nests on a standing tree would visibly thin them out,
 which is a behaviour change nobody asked for.
 
+✅ **Measured after the fact, not assumed.** `tools/probe_hive_tree_anchor.gd`
+over eight real chunks around Berlin and Bavaria: 4 hives seeded, **4 of 4
+standing on a tile with a real tree**, nearest-tree distance min 0.09 /
+median 0.20 / **max 0.34 tiles** where the old rule allowed 2.0. Only 6.3%
+of a chunk's tiles hold a standing tree, so the constraint is real — and
+hives still seeded at a normal rate under it, which is the thing worth
+checking: the rule did not quietly delete the feature to satisfy itself.
+
 ⬜ **Not verified in a running game.** The rule is tested against real
 generated terrain (a 3×3 of real chunks around Berlin: four real hives
 seeded, every one of them on a real tree or structure tile, 7 asserts — not
@@ -26641,3 +26649,57 @@ Tests: `test_earth_chunk_manager_bees.gd` 34/34 (3 new),
 `test_ant_queen_marker.gd` 2/2, `test_bee_queen_marker.gd` 2/2,
 `test_procedural_beehive_sprite.gd` 11/11,
 `test_illustrated_beehive_sprite.gd` 19/19.
+
+---
+
+## 2026-09-19 — A bed is ground, and ground does not follow a person
+
+Reported live: *"There's now some weird moving char thing + soil tiles??"*,
+then, a moment later, the detail that identified it outright: *"The soil
+tiles are also moving with the character..."*. Both symptoms were one bug.
+
+✅ **The Farm's beds are no longer children of its Farmer.**
+`FarmerMarker._ready()` did `add_child(plot_marker)`, and a child's
+`position` is an offset from its parent — so three tilled beds and the wheat
+standing in them were carried around the field by the Farmer on every step
+he took. `PLOT_COUNT` is 3, exactly the three beds in the screenshot. They
+are siblings now, anchored at `home`, so they stay where they were laid out.
+
+✅ **He takes them with him when he goes.** Being his children used to free
+the beds along with him for free. Siblings do not follow, so he frees them
+deliberately on `_exit_tree` — otherwise a demolished Farm
+(`_despawn_farmer_at`) would leave three tilled beds and their wheat
+standing in an empty field forever. This is the part a parenting change
+quietly breaks if nobody looks for it.
+
+**The loop was right all along; only the drawing disagreed.**
+`_step_approaching` has *always* walked the Farmer to `home +
+_plot_offset(index)` — a fixed spot in the world — while the bed was drawn
+at `farmer + _plot_offset(index)`. So the further he wandered, the further
+his beds drifted from the ground he was standing on to tend them, and he was
+kneeling over bare grass. Both are the same expression today, and
+`test_the_bed_he_walks_to_is_the_bed_that_is_standing_there` is what keeps
+them that way.
+
+**Incidentally fixed.** `FarmPlotMarker` seeds its soil variant from its own
+tile, "so neighbouring beds in one patch do not all show the same variant" —
+read off `position` in `_ready`, which in child space was the offset
+`(-20, 20)`. Every Farm in the world therefore drew the same three variants.
+It is a real world tile now.
+
+⬜ **The Farmer still looks like a placeholder.** He is drawn with
+`ProceduralLumberjackSprite` — a flat tan head, a brown body, an axe — which
+is the established look for these standalone structure-workers (the
+Lumberjack, the porter, the conversion workers), not a broken fallback. But
+the VILLAGE's farmers use the full `CharacterView` the player does, so two
+kinds of farmer in neighbouring fields do not look like the same game. Named
+rather than quietly restyled: it is a decision, not a fix.
+
+⬜ **The ploughed soil under wheat was NOT touched.** It looked like a
+second complaint and is not one: `farm_plot_marker.gd`'s own comment records
+that hiding it was tried and then reversed on report (*"es fehlt nun das
+Pfluegen"*). The beds only read as wrong because they were walking around.
+Flagged to the user rather than flipped a fourth time.
+
+Tests: `test_farmer_marker.gd` 12/12 (5 new), `test_farm_plot_marker.gd`
+42/42, `test_farmer_behavior.gd` 14/14.

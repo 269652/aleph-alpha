@@ -128,7 +128,32 @@ The Farmer owns a small, fixed number of real `FarmPlotMarker` instances
 (reusing the exact same tilled-soil/crop-art rendering a player's own farm
 plot already uses) at fixed offsets around its home tile. Every owned
 plot's growth advances every frame, independent of the Farmer's own current
-phase (pillar 2). The Farmer's own loop:
+phase (pillar 2).
+
+**A bed is ground, and ground does not follow a person** (2026-09-19).
+"Owns" is a bookkeeping relationship, not a scene-tree one: the beds are
+laid out as the Farmer's **siblings**, anchored at `home`, never as his
+children. They were `add_child`ed at first, and since a child's `position`
+is an offset from its parent, three tilled beds and the wheat standing in
+them were carried around the field by the Farmer on every step he took —
+reported live as *"there's now some weird moving char thing + soil tiles"*,
+and then *"the soil tiles are also moving with the character"*.
+
+What makes this worth writing down rather than just fixing: `APPROACHING`
+had **always** walked him to `home + _plot_offset(index)`, a fixed spot in
+the world, while the bed was *drawn* at `farmer + _plot_offset(index)`. The
+further he wandered, the further his beds drifted from the ground he was
+standing on to tend them — the loop below already believed the beds were
+where they are now, and only the drawing disagreed. Both are the same
+expression today, and a test holds them there.
+
+The one thing the old parenting bought for free was cleanup: a freed Farmer
+took his beds with him because they were his children. Siblings do not
+follow, so he frees them deliberately when he leaves the tree — otherwise a
+demolished Farm leaves three tilled beds and their wheat standing in an
+empty field forever.
+
+The Farmer's own loop:
 
 `SEEKING` (decide which owned plot needs attention: a **ready** plot to
 harvest, else an **empty/withered** plot to till-and-plant wheat, else a
@@ -261,6 +286,23 @@ atlas family: farmed wheat" for the full mechanism — wheat now renders as
 several small, real bending blades reusing long grass's own path-traced
 wind/walker-push shader math, using three real illustrated sheets
 (spring/summer/autumn) that turn with the world's own calendar season.
+
+✅ **The beds stand still** (2026-09-19) — reported live: *"there's now
+some weird moving char thing + soil tiles??"*, then *"the soil tiles are
+also moving with the character..."*. The Farmer's three beds were his
+scene-tree children, so they were carried around the field with him; they
+are siblings anchored at `home` now, and he frees them himself when he
+leaves. See "The Farmer" above for why the walking loop had been right
+about where the beds were all along, and only the drawing disagreed.
+
+⬜ **The Farmer still reads as a placeholder next to a villager.** He is
+drawn with `ProceduralLumberjackSprite` — a flat tan head, a brown body and
+an axe — which is the established look shared by the Lumberjack, the porter
+and the conversion workers, not a broken fallback. The VILLAGE's own
+farmers (see below) use the full `CharacterView` the player does, so the two
+kinds of farmer standing in neighbouring fields do not look like they belong
+to the same game. A real decision, not an oversight: named here rather than
+quietly restyled.
 
 ## A village counterpart, 2026-09-17
 
