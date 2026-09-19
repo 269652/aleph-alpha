@@ -60,11 +60,20 @@ const _FALLBACK_SET: Array[String] = ["wood_chair", "wood_table"]
 ## crate) rather than leaving a hole -- the same fail-open convention
 ## furniture_set_for below already keeps.
 const _COUCH_OCCUPATIONS := {"merchant": true, "nurse": true}
-const _BOOKSHELF_OCCUPATIONS := {"herbalist": true, "merchant": true, "nurse": true}
+## A mage keeps books for the same reason a herbalist does: the trade is
+## half reading (docs/concept/mage_guild.md -- a guild's hall is where a
+## tradition is kept, not merely where its masters stand).
+const _BOOKSHELF_OCCUPATIONS := {
+	"herbalist": true, "merchant": true, "nurse": true, "mage": true,
+}
 const _WORKSHOP_PIECE_BY_OCCUPATION := {
 	"blacksmith": "anvil", "herbalist": "workbench", "nurse": "workbench",
 	"farmer": "barrel", "fisher": "crate", "merchant": "crate",
 	"hunter": "chest", "guard": "chest",
+	# A bench to work spells at, the same piece the herbalist and the nurse
+	# already prepare things on -- not a crate, which is what the fail-open
+	# default was giving every mage guild in the world.
+	"mage": "workbench",
 }
 
 static func piece_for_slot(letter: String, occupation: String) -> String:

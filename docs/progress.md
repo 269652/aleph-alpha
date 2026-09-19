@@ -27980,3 +27980,63 @@ Tests: `test_spell_schools.gd` (17), `test_mage_master.gd` (21),
 (10), `test_house_interior_view_occupants.gd` (15), plus additions to
 `test_spell_tuition.gd` (43), `test_player.gd` and
 `test_learn_command_clarity.gd` (10).
+
+## A hall of its own (`concept/building.md`, 2026-09-19)
+
+Reported straight after the masters moved in: *"now add a hall interior
+template so they're not in a cottage."*
+
+`interior_family` had always sorted buildings into room shapes, but only the
+three HOUSE families had plans. `hall` — the City Hall, the warehouse, the
+trade hall and the mage guild — fell through `InteriorTemplates.
+_variants_for`'s fail-open default and was furnished as a **cottage, bed and
+all**. It cost nothing while nothing happened indoors, and then three mage
+masters were standing around somebody's bedroom.
+
+**Three hall plans, 13×9, shaped by what a hall is.** No bed anywhere, pinned
+from both sides — no hall plan has one, every house plan does — because a bed
+in a City Hall is exactly the kind of thing a later plan reintroduces by
+copy-paste. One big open room (the poorest hall leaves **52** open cells
+where the best cottage leaves **32**, which is what lets several masters
+stand in one without standing on the furniture) plus side chambers through
+wall gaps, so it keeps the same "more than one room" shape houses and manors
+already have.
+
+**The real fix was upstream of the plans.** The geometry sweep read a
+hand-maintained `["cottage", "house", "manor"]` list, so `hall` was never
+validated by a test that had simply never heard of it — the same class of
+hole `BuildingCatalog.all_building_ids()` was introduced to close for
+buildings. It reads every family off the catalog now, and each one must
+either have its own plans or be **declared** as borrowing the cottage's.
+`workshop` and `farmstead` still borrow; they are named, so the next family
+cannot join them silently.
+
+Two things the guild needed on top: a mage works at a **bench** and keeps
+**books** rather than a crate and a cupboard, and a guild is furnished for a
+mage rather than for whatever trade its seed landed on. That last one was a
+real bug caught in the act — the test came back saying the guild was
+furnished for a *nurse*.
+
+`tools/probe_hall_interior.gd` prints every plan furnished for a mage and
+for a merchant, so the one shared shape can be read next to both trades that
+use it rather than trusted from ASCII.
+
+### A pre-existing failure found while verifying this, recorded rather than fixed
+
+`test_player.gd`'s `test_entering_a_house_furnishes_it_for_its_own_residents_
+occupation` (and its sibling `test_entering_a_house_with_no_recorded_
+resident_still_gets_a_real_occupation`) fail: the player never gets indoors,
+so the assertion reads a null interior view. **Not caused here** — verified
+by running the same test against clean worktrees at `d3ddbe8`, `0bfe582` and
+`03a94ff`, where it fails identically. It predates this work by at least two
+merges, and it is not one of the four pre-existing failures the charter pass
+recorded, because no pass so far has run `test_player.gd` to completion (it
+is ~324 tests and takes the better part of an hour). Both tests place a
+`house_small` at chunk (0,0) tile (10,10), which is in the Earth
+projection's open-ocean corner — the likely cause is that `place_building`
+now refuses a wet footprint, which the test predates.
+
+Tests: `test_interior_templates.gd` (29, up from 22), `test_house_decor.gd`
+(9), plus additions to `test_player.gd`; `test_house_interior_view.gd` (23),
+`test_house_interior_view_occupants.gd` (15) and `test_building_catalog.gd`
+(75) green alongside.

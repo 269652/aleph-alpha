@@ -284,6 +284,40 @@ else nothing. Doorstep scans (`nearest_npc_near`) skip at-home villagers,
 so "Enter" is what a doorstep offers rather than a "Talk" through the
 wall.
 
+**A hall is a workplace, not a home (2026-09-19).** `interior_family`
+already sorts buildings into room shapes — `cottage`/`house`/`manor` for
+the three house tiers, and `hall` for the City Hall, the warehouse, the
+trade hall and the mage guild. Only the three house families had plans;
+`hall` fell through `InteriorTemplates._variants_for`'s fail-open default
+and was silently furnished as a **cottage**, bed and all. Nobody noticed
+while nothing happened indoors — and then [mage_guild.md](mage_guild.md)
+put three masters in one, standing around somebody's bedroom.
+
+A hall has its own plans now, and they are shaped by what a hall *is*:
+
+- **No bed.** A hall is where a trade meets, not where anyone sleeps. The
+  slot vocabulary is the same one houses use (`T` tables, `C` chairs, `S`
+  shelves, `K` hearth, `P` pictures, `R` rugs, `W` the occupation's own
+  piece, `L` candles), minus `B` — and that absence is test-pinned rather
+  than merely observed, because a bed in a City Hall is exactly the kind of
+  thing a later plan would reintroduce by copy-paste.
+- **A big room with business off it.** Each plan is one open floor — long
+  enough to hold a table people gather at and *room for several people to
+  stand*, which a cottage does not have — plus one or more side chambers
+  through wall gaps, so it still satisfies the same "more than one room"
+  rule houses and manors do.
+- **The occupation still decides the furnishing.** A guild's `W` and `S`
+  slots resolve through `HouseDecor.piece_for_slot` exactly as a house's
+  do, so a mage guild gets a workbench and bookshelves where a warehouse
+  gets crates and cupboards — one shape, many trades, the same mechanism
+  that already makes a smith's cottage differ from a farmer's.
+
+**`workshop` and `farmstead` still fall back to cottage plans.** That is
+the same gap this section just closed for `hall`, left open honestly for
+the buildings that need it (the sawmill, the blacksmith, the brewery, the
+farmhouse) and pinned by a test that names exactly which families are
+still borrowing, so a *new* family cannot join them silently.
+
 **A room can hold a group, not only a resident.** `HouseInteriorView.
 place_occupants` stands several people up at once — spread evenly across
 `standing_cells()` (open floor with nothing on it, never the doorway,
