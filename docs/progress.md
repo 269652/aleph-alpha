@@ -26392,3 +26392,85 @@ Tests: `test_npc_marker_timber.gd` 21/21, `test_settlement_generator.gd`
 `test_village_npc_population.gd`, `test_settlement_food.gd`,
 `test_settlement_demand.gd`, `test_village_wages.gd`, `test_npc_identity.gd`,
 `test_procedural_landmark_sprite.gd` all green (344 between them).
+
+## Nothing that belongs on land stands on water (2026-09-19)
+
+Reported live in two rounds: *"There are still patches of grass; potatoes
+in the river.. also the boulders in the river doesn't affect hydrology
+whirls and such correctly"*, then, with a screenshot taken while
+SWIMMING, *"There are still plenty of entities in the water"* — mushrooms,
+an ant mound, bushes, a stone and an alpaca out on open lake. Write-ups in
+`concept/hydrology.md` ("Nothing that belongs on land stands on water")
+and `concept/rivers.md` ("Every rock a rock of its own size, wherever it
+stands").
+
+### ✅ Root cause: a water tile keeps its LAND biome
+
+Measured at the reported 47.3N 19.6E: the whole chunk is drawn as water,
+`Chunk.blocks_ground_cover` already agrees with `is_water_at_global` on
+all 1024 cells, and `biome_at_global` still answers `"grassland"`. So this
+was never a mask-width problem — every placement that seeds "by biome"
+seeds a lake bed, and only tall grass and trees ever consulted the mask.
+Census of that one all-water chunk: grass 0, trees 0, **crops 31,
+mushrooms 60, flowers 4, ant mounds 2, stones 74**, plus 24 land
+creatures across the loaded radius.
+
+- ✅ `WildCropPatch`, `WildMushroomPatch` and `AntColony` take the same
+  optional mask `TallGrass` already took, honoured in seeding AND spread,
+  empty by default so no existing caller changes. One guard in
+  `is_valid_mound_site` covers both initial mounds and budding.
+- ✅ `FlowerPatch` needed no new parameter: its own `block_cells` already
+  clears a cell and refuses every later rooting and seed-fall — it had
+  simply never been handed the water.
+- ✅ Land creatures **slide clear** rather than vanish (the village
+  square's own idiom): nearest dry tile within eight, ringing outward in
+  a fixed order so placement stays deterministic. A fully flooded chunk
+  correctly ends up with no land animals.
+- ✅ Stones care which KIND of water. All 74 were in STILL water, none in
+  flowing river, at depths of 1.9–2.7 m — enough to submerge a 2 m
+  boulder. A natural stone may now stand in flowing river and never in a
+  lake, sea pocket, pond or shore feather
+  (`is_still_water_at_global`). A boulder the player *drops* in still
+  water is deliberately unaffected and still parts the surface.
+- ✅ Pinned by a new `test_water_entity_exclusion.gd` driving one real
+  `update()` at the reported coordinates, asserting against
+  `is_water_at_global` directly, including the premise that the chunk
+  really is all water and really does read back as land biome. 8/8.
+  Regression: 282 tests across the five sims, 117 across stones, 305
+  across creatures, all unchanged.
+
+### ✅ Boulders: three defects between a rock and the shader
+
+Every existing boulder test drove the DROPPED piece; the flow-overlay
+paint that collects the NATURAL rocks was untested, which is how all
+three survived.
+
+- ✅ The paint stored `true` in a tile→diameter dictionary read back with
+  `float(...)`. `float(true)` is 1.0 — a one-centimetre rock — so every
+  natural boulder was floored at `MIN_BOULDER_RADIUS_PX`. Measured at the
+  Dreisam: **seven distinct real sizes from 60 cm to 200 cm all reached
+  the shader as one radius of 6.00 px**, and radius scales the reach, the
+  eyot, the shoal, the foam and the wake.
+- ✅ Only the flowing branch collected at all; still-water and shore-band
+  erased. A tile can be curated river AND baked lake at once (this game's
+  own spawn is), so a dropped boulder stopped working on repaint — which
+  is what `test_a_persisted_boulder_still_bends_the_water_after_reload`
+  had been failing on at `origin/main`. Now one shared rule across every
+  branch that paints water.
+- ✅ With that fixed the 24 slots bind, and they were filled in Dictionary
+  insertion order: rocks 48 tiles out dropped while rocks 100 tiles out
+  kept slots. Now nearest-first then capped.
+- ✅ Chunk-load cost unchanged: 5881 ms → 5930 ms (+0.8%, one sample).
+
+### 🚧 Honest gaps
+
+- 🚧 Not verified in a live session. Every number above is from headless
+  measurement at the reported coordinates; the screenshot has not been
+  re-taken.
+- ⬜ `test_earth_chunk_manager_creature_persistence.gd` fails 3 of 5 with
+  "Invalid access to property or key 'modifications' on a base object of
+  type 'Nil'" — identical (same tests, same error) with all of this
+  reverted, so pre-existing and untouched here.
+- ⬜ Only the placement systems named above were audited. Other per-chunk
+  surface sims (leaf litter, earthworms, footprints, snow presence) were
+  not re-checked against the mask this round.
