@@ -92,8 +92,11 @@ const _BUILDINGS := {
 		"footprint": Vector2i(3, 2), "interior_family": "house", "capacity": 2, "storage": 30,
 		"labor_hours": 10.0, "cost": {"wood": 20, "stone": 4},
 	},
+	# Asked directly, with the manor art: "cottage 2x2; house 3x2; manor 3x3".
+	# Was 4x3 -- wider than it was deep, and as wide as the town hall, which
+	# is the shape the real manor illustration then had to be squeezed into.
 	"house_large": {
-		"footprint": Vector2i(4, 3), "interior_family": "manor", "capacity": 3, "storage": 40,
+		"footprint": Vector2i(3, 3), "interior_family": "manor", "capacity": 3, "storage": 40,
 		"labor_hours": 16.0, "cost": {"wood": 32, "stone": 10},
 	},
 	# The town hall (CIVIC_BUILDING_IDS): the same wood 20 + stone 10 the
@@ -181,6 +184,11 @@ const HOUSE_POOL_BY_OCCUPATION := {
 	# NpcIdentity.OCCUPATIONS with the sawmill and never got a pool here, so
 	# every one of them fell through to the whole catalog.
 	"lumberjack": ["house_small", "house_small", "house_medium"],
+	# And a carter the same, for the same reason and caught by the same test
+	# -- "carter" reached NpcIdentity.OCCUPATIONS with the store round and
+	# never got a pool here, so every one of them fell through to the whole
+	# catalog, town hall and all.
+	"carter": ["house_small", "house_small", "house_medium"],
 	"nurse": ["house_medium", "house_medium", "house_large"],
 	"blacksmith": ["house_medium", "house_medium", "house_large"],
 	"merchant": ["house_medium", "house_large", "house_large", "house_large"],
@@ -267,17 +275,19 @@ const VARIANT_SHEET_ROWS := 5
 
 ## Which building ids have a real variant sheet.
 ##
-## All three village HOUSES share the first-tier cottage sheet, and that is
-## deliberate rather than lazy: no house had a lifecycle sheet of its own
-## at all, so every village house drew as a procedural box -- declaring the
-## cottage art for only the smallest tier would leave a street half
-## beautiful cottages and half boxes, which reads worse than either
-## extreme. The scaler sizes each cell to its own footprint WITHOUT
-## distorting it (footprint_frame_texture scales height by the same factor
-## as width), so a medium or large house is simply a bigger cottage, and a
-## different seed picks a different one of the 25 anyway. When grander art
-## for those tiers lands they get their own entries here and nothing else
-## changes.
+## house_1.png is a page of 25 COTTAGES. All three tiers used to fall back
+## to it, which was deliberate while it was the only house art there was:
+## declaring it for the smallest tier alone would have left a street half
+## beautiful cottages and half boxes. That ended when cottage_* and manor_*
+## landed (2026-09-19) -- asked for directly: *"please fix that villages use
+## scaled houses for those and use the real illustrations"*.
+##
+## So the MANOR is off this list. It has manor art of its own now, and a
+## manor whose own sheet is missing must fall through to the honest
+## procedural placeholder rather than to a picture of a cottage, which is
+## precisely what "villages use scaled houses" described. The two smaller
+## tiers keep it: for a cottage this page IS cottage art, and the middle
+## tier is the one house_1.png was drawn beside.
 ##
 ## Nothing that is not a home has one: a town hall, a mill or a brewery
 ## drawn as a cottage would be drawing the wrong building, and each of
@@ -285,7 +295,6 @@ const VARIANT_SHEET_ROWS := 5
 const _VARIANT_SHEETS := {
 	"house_small": "res://assets/sprites/buildings/house_1.png",
 	"house_medium": "res://assets/sprites/buildings/house_1.png",
-	"house_large": "res://assets/sprites/buildings/house_1.png",
 }
 
 
@@ -333,10 +342,11 @@ static func finished_sheet_chain(building_id: String, seed_value: int) -> Array:
 	var chain: Array = []
 	var variation := BuildingLifecycleSheet.sheet_for(building_id, seed_value)
 	if variation != "":
-		var idle := BuildingLifecycleSheet.idle_cell_for(seed_value)
+		var idle := BuildingLifecycleSheet.idle_cell_for(building_id, seed_value)
+		var idle_grid := BuildingLifecycleSheet.grid_for(building_id)
 		chain.append({
 			"path": variation,
-			"columns": BuildingLifecycleSheet.COLUMNS, "rows": BuildingLifecycleSheet.ROWS,
+			"columns": int(idle_grid["columns"]), "rows": int(idle_grid["rows"]),
 			"row": idle.y, "column": idle.x, "grid": "dividers",
 		})
 	var variant_sheet := variant_sheet_of(building_id)
@@ -373,10 +383,11 @@ static func construction_sheet_chain(building_id: String, seed_value: int, progr
 	var chain: Array = []
 	var variation := BuildingLifecycleSheet.sheet_for(building_id, seed_value)
 	if variation != "":
-		var cell := BuildingLifecycleSheet.build_cell_for(progress)
+		var cell := BuildingLifecycleSheet.build_cell_for(building_id, progress)
+		var build_grid := BuildingLifecycleSheet.grid_for(building_id)
 		chain.append({
 			"path": variation,
-			"columns": BuildingLifecycleSheet.COLUMNS, "rows": BuildingLifecycleSheet.ROWS,
+			"columns": int(build_grid["columns"]), "rows": int(build_grid["rows"]),
 			"row": cell.y, "column": cell.x, "grid": "dividers",
 		})
 	chain.append({

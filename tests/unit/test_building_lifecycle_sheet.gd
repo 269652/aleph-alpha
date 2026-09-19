@@ -32,11 +32,17 @@ func test_every_declared_variation_sheet_is_really_on_disk():
 			)
 
 
-func test_all_three_house_tiers_draw_from_the_same_variations():
-	var small: Array = BuildingLifecycleSheet.variation_sheets_of("house_small")
-	assert_gt(small.size(), 0, "precondition: the cottage sheets are declared")
-	assert_eq(BuildingLifecycleSheet.variation_sheets_of("house_medium"), small)
-	assert_eq(BuildingLifecycleSheet.variation_sheets_of("house_large"), small)
+## REPLACED by test_each_house_tier_has_art_of_its_own below: all three
+## tiers sharing one set was deliberate only while house_1_* was the only
+## house art in the repo, and the doc said so. Cottage and manor sheets
+## landed 2026-09-19. What is still worth pinning is that every tier has
+## real art at all -- that was the reason for sharing in the first place.
+func test_every_house_tier_has_real_art():
+	for building_id in ["house_small", "house_medium", "house_large"]:
+		assert_gt(
+			BuildingLifecycleSheet.variation_sheets_of(building_id).size(), 0,
+			"%s would fall back to a procedural box" % building_id
+		)
 
 
 func test_a_building_with_no_variations_declares_none():
@@ -96,7 +102,7 @@ func test_the_build_animation_is_every_frame_of_every_build_row():
 
 func test_a_fresh_site_shows_the_first_foundation_frame():
 	assert_eq(
-		BuildingLifecycleSheet.build_cell_for(0.0),
+		BuildingLifecycleSheet.build_cell_for("house_medium", 0.0),
 		Vector2i(0, BuildingLifecycleSheet.BUILD_ROWS[0])
 	)
 
@@ -104,7 +110,7 @@ func test_a_fresh_site_shows_the_first_foundation_frame():
 func test_a_nearly_finished_site_shows_the_last_construction_frame():
 	var last_row: int = BuildingLifecycleSheet.BUILD_ROWS[BuildingLifecycleSheet.BUILD_ROWS.size() - 1]
 	assert_eq(
-		BuildingLifecycleSheet.build_cell_for(1.0),
+		BuildingLifecycleSheet.build_cell_for("house_medium", 1.0),
 		Vector2i(BuildingLifecycleSheet.COLUMNS - 1, last_row)
 	)
 
@@ -112,7 +118,7 @@ func test_a_nearly_finished_site_shows_the_last_construction_frame():
 func test_the_build_walks_every_one_of_its_frames_in_order():
 	var seen: Array = []
 	for step in 200:
-		var cell: Vector2i = BuildingLifecycleSheet.build_cell_for(float(step) / 199.0)
+		var cell: Vector2i = BuildingLifecycleSheet.build_cell_for("house_medium", float(step) / 199.0)
 		if seen.is_empty() or seen[seen.size() - 1] != cell:
 			seen.append(cell)
 	assert_eq(
@@ -128,15 +134,15 @@ func test_the_build_walks_every_one_of_its_frames_in_order():
 
 
 func test_progress_outside_the_range_still_lands_on_a_real_frame():
-	assert_eq(BuildingLifecycleSheet.build_cell_for(-5.0), BuildingLifecycleSheet.build_cell_for(0.0))
-	assert_eq(BuildingLifecycleSheet.build_cell_for(99.0), BuildingLifecycleSheet.build_cell_for(1.0))
+	assert_eq(BuildingLifecycleSheet.build_cell_for("house_medium", -5.0), BuildingLifecycleSheet.build_cell_for("house_medium", 0.0))
+	assert_eq(BuildingLifecycleSheet.build_cell_for("house_medium", 99.0), BuildingLifecycleSheet.build_cell_for("house_medium", 1.0))
 
 
 # -- the finished house -----------------------------------------------------
 
 func test_a_finished_house_stands_in_an_idle_row():
 	for seed_value in 200:
-		var cell: Vector2i = BuildingLifecycleSheet.idle_cell_for(seed_value)
+		var cell: Vector2i = BuildingLifecycleSheet.idle_cell_for("house_medium", seed_value)
 		assert_true(
 			BuildingLifecycleSheet.IDLE_ROWS.has(cell.y),
 			"seed %d puts a finished house in row %d, which is not a standing house" % [seed_value, cell.y]
@@ -147,7 +153,7 @@ func test_a_finished_house_stands_in_an_idle_row():
 func test_every_finished_look_is_reachable():
 	var seen: Dictionary = {}
 	for seed_value in 4000:
-		seen[BuildingLifecycleSheet.idle_cell_for(seed_value)] = true
+		seen[BuildingLifecycleSheet.idle_cell_for("house_medium", seed_value)] = true
 	assert_eq(
 		seen.size(), BuildingLifecycleSheet.IDLE_ROWS.size() * BuildingLifecycleSheet.COLUMNS,
 		"a finished look no seed can reach is art nobody will ever see"
@@ -157,8 +163,8 @@ func test_every_finished_look_is_reachable():
 func test_a_house_keeps_the_same_finished_look_across_reloads():
 	for seed_value in [3, 44, 777]:
 		assert_eq(
-			BuildingLifecycleSheet.idle_cell_for(seed_value),
-			BuildingLifecycleSheet.idle_cell_for(seed_value)
+			BuildingLifecycleSheet.idle_cell_for("house_medium", seed_value),
+			BuildingLifecycleSheet.idle_cell_for("house_medium", seed_value)
 		)
 
 
@@ -171,3 +177,119 @@ func test_the_variations_are_declared_for_real_catalog_buildings():
 			BuildingCatalog.capacity_of(building_id), 0,
 			"%s is not a home -- a hall or a mill drawn as a cottage is the wrong building" % building_id
 		)
+
+
+# -- each house tier is its own building now --------------------------------
+#
+# Asked directly, with the new art in the repo: *"I added cottage and manor
+# sprites... please fix that villages use scaled houses for those and use the
+# real illustrations ... cottage 2x2; house 3x2; manor 3x3"*.
+#
+# Until now all three tiers shared the five house_1_* sheets, which this
+# file's own test above pinned as deliberate: no house had art of its own, so
+# declaring it for the smallest tier only would have left a street half
+# cottages and half boxes. The doc said what would end it -- "when grander art
+# for those tiers lands they get their own entries here" -- and it has landed.
+#
+# The new sheets are on the OLDER 8x5 contract, not house_1_*'s 8x10 one.
+# MEASURED, not assumed (tools/probe_building_lifecycle_sheet.gd against
+# cottage_1 and manor_1): five divider-separated row bands, eight columns,
+# and the rows really do read construction / active / idle / burning /
+# ruined -- row 0 of cottage_1 is a foundation ring, row 3 is a cottage on
+# fire, row 2 of manor_1 is a turreted manor. So a variation set carries its
+# own grid rather than every set being assumed to be the richest one.
+
+
+func test_each_house_tier_has_art_of_its_own():
+	var small: Array = BuildingLifecycleSheet.variation_sheets_of("house_small")
+	var medium: Array = BuildingLifecycleSheet.variation_sheets_of("house_medium")
+	var large: Array = BuildingLifecycleSheet.variation_sheets_of("house_large")
+	for tier in [small, medium, large]:
+		assert_gt(tier.size(), 0, "every tier still has real art")
+	assert_ne(small, medium, "a cottage is not a house")
+	assert_ne(medium, large, "a house is not a manor")
+	assert_ne(small, large, "and a cottage is certainly not a manor")
+
+
+func test_the_smallest_tier_draws_cottages_and_the_largest_manors():
+	for path in BuildingLifecycleSheet.variation_sheets_of("house_small"):
+		assert_true(path.contains("cottage"), "house_small should draw a cottage, found %s" % path)
+	for path in BuildingLifecycleSheet.variation_sheets_of("house_large"):
+		assert_true(path.contains("manor"), "house_large should draw a manor, found %s" % path)
+
+
+## Every tier keeps five variations, so a street of any one tier is still a
+## street of different buildings.
+func test_every_tier_still_has_five_variations_to_pick_from():
+	for building_id in ["house_small", "house_medium", "house_large"]:
+		assert_eq(
+			BuildingLifecycleSheet.variation_sheets_of(building_id).size(), 5,
+			building_id
+		)
+
+
+# -- and each set is read on its own grid -----------------------------------
+
+
+func test_a_variation_set_knows_the_grid_its_art_is_drawn_on():
+	var cottage := BuildingLifecycleSheet.grid_for("house_small")
+	var house := BuildingLifecycleSheet.grid_for("house_medium")
+	assert_eq(int(cottage["columns"]), 8, "both contracts are eight columns wide")
+	assert_eq(int(house["columns"]), 8)
+	assert_eq(int(cottage["rows"]), 5, "the cottage sheets are the 8x5 contract -- measured")
+	assert_eq(int(house["rows"]), 10, "house_1_* is the richer 8x10 one")
+	assert_eq(int(BuildingLifecycleSheet.grid_for("house_large")["rows"]), 5, "so are the manors")
+
+
+func test_a_building_with_no_variations_has_no_grid():
+	assert_eq(BuildingLifecycleSheet.grid_for("city_hall"), {})
+
+
+## Every row a set draws from has to be a row that set really has.
+func test_no_set_ever_reads_a_row_off_the_end_of_its_own_sheet():
+	for building_id in BuildingLifecycleSheet.VARIATION_SHEETS:
+		var grid := BuildingLifecycleSheet.grid_for(building_id)
+		var rows := int(grid["rows"])
+		for seed_value in 200:
+			var idle := BuildingLifecycleSheet.idle_cell_for(building_id, seed_value)
+			assert_lt(idle.y, rows, "%s idle row %d is off its own sheet" % [building_id, idle.y])
+			assert_lt(idle.x, int(grid["columns"]), "%s idle column is off its own sheet" % building_id)
+		for step in 50:
+			var build := BuildingLifecycleSheet.build_cell_for(building_id, float(step) / 49.0)
+			assert_lt(build.y, rows, "%s build row %d is off its own sheet" % [building_id, build.y])
+			assert_lt(build.x, int(grid["columns"]), "%s build column is off its own sheet" % building_id)
+
+
+## A cottage rises through its own sheet's single construction row, eight
+## stages left to right -- the 8x5 contract's own build animation, not the
+## 24-frame one only the richer sheets have.
+func test_a_cottage_rises_through_its_own_sheets_eight_stages():
+	var seen: Dictionary = {}
+	for step in 80:
+		var cell := BuildingLifecycleSheet.build_cell_for("house_small", float(step) / 79.0)
+		assert_eq(cell.y, 0, "the 8x5 contract's build row is row 0")
+		seen[cell.x] = true
+	assert_eq(seen.size(), 8, "all eight stages are walked")
+
+
+## And a medium house still walks all 24 of its richer sheet's frames, which
+## is the whole reason that contract exists.
+func test_a_medium_house_still_walks_all_twenty_four_build_frames():
+	var seen: Dictionary = {}
+	for step in 240:
+		var cell := BuildingLifecycleSheet.build_cell_for("house_medium", float(step) / 239.0)
+		seen[cell] = true
+	assert_eq(seen.size(), BuildingLifecycleSheet.BUILD_FRAMES)
+
+
+## A finished cottage or manor stands in its own sheet's IDLE row -- never
+## the burning or ruined ones, which are the same rows an 8x5 sheet keeps
+## for a building that is on fire or gone.
+func test_a_finished_cottage_or_manor_is_never_drawn_burning_or_ruined():
+	for building_id in ["house_small", "house_large"]:
+		for seed_value in 300:
+			assert_eq(
+				BuildingLifecycleSheet.idle_cell_for(building_id, seed_value).y,
+				BuildingCatalog.ROW_IDLE,
+				"%s drew a finished house from a row that is not the idle one" % building_id
+			)
