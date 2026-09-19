@@ -120,6 +120,58 @@ layer), and clears/blocks vegetation on the footprint as a stamped
 structure does today. `remove_building` reverses all of it.
 `building_at_global(x, y)` answers for any footprint cell;
 `building_door_near(pixel, radius)` finds a doorstep for the Enter prompt.
+
+**A house stands IN its plot, not across it** (2026-09-19). Reported live
+with a screenshot of three cottages in a row: *"make the cottages a bit
+smaller and add a padding so they have a gap between them and the top
+doesn't get clipped"*.
+
+The slicer was the obvious suspect and was not the problem, which is worth
+recording because it is where anyone would look first. Measured on the real
+sheets (`tools/probe_cottage_row.gd`), every finished cottage frame has
+**zero** transparent pixels on all four edges — the cell bands are cut
+tight to the art by construction (`VariantSheetGrid`) — and that tight crop
+was then scaled to **exactly** the plot width. So two houses on
+neighbouring plots touched at the pixel with no street between them, and a
+roof that reaches well above its own plot ran straight into whatever stood
+north of it.
+
+`BuildingCatalog.PLOT_MARGIN_SHARE` leaves air on each side, and
+`drawn_plot_width_tiles` is the ONE place that answer lives, so the
+illustrated-sheet path and the procedural placeholder cannot disagree about
+how much of a plot a building covers — otherwise dropping a sheet in would
+visibly move the house, and a street of half-arted buildings would carry
+two different rhythms. Measured on a real cottage row: **52px drawn on a
+64px plot, 12px of air.**
+
+A share rather than a fixed number of tiles, so the air scales with the
+building: a manor stands in proportionally as much ground as a cottage
+does. The trade-off is deliberate — a bigger building gets a wider gap,
+which reads as a bigger house standing in more of its own land rather than
+as an inconsistent street. The share is pinned from both sides by what it
+produces, never as a number: two houses on adjacent plots must stand more
+than a quarter of a tile apart (under that it is a seam, not a gap, at the
+size a tile is really drawn), and a building must still cover more than
+three quarters of its own plot (under that it stops reading as a building
+on that ground and starts reading as a model of one).
+
+> **The collision body is unchanged and still covers the whole footprint.**
+> Only the PICTURE moved. The plot is reserved ground either way — the
+> layout routes roads around the whole of it — so the air between two
+> houses is eaves and garden rather than a path between them. It does mean
+> a few world pixels of collision with nothing drawn on them; at
+> `PLOT_MARGIN_SHARE` on a two-tile plot that is under a fifth of a tile
+> per side, and shrinking the body instead would open a walkable slot
+> between every pair of houses, which is a gameplay change nobody asked
+> for. Named here rather than left to be rediscovered.
+>
+> Single-tile **placeables** (`farm`, `sagewerk`, `storage`) are untouched:
+> they draw through `IllustratedStructureSprite.drawn_width_tiles`, which
+> answers a different question for a different thing — how wide a placeable
+> is drawn, from its catalog twin — and they were sized by their own
+> separate pass. A `farmhouse` the whole building and a `farm` the placeable
+> therefore now sit slightly differently on their ground; that duality
+> predates this and is not what was reported.
 Facing is south only in this pass (every sheet is drawn south-facing);
 the field exists so a later pass can add other faces.
 

@@ -27506,3 +27506,67 @@ clean baseline worktree checked out at `origin/main`:
 Everything else touched is green: 724 in the pure sweep, 34 in the live
 estate one, 33/33 in `test_earth_chunk_manager_village_growth.gd`, and 54
 across the settlement integration suites.
+
+## A house stands in its plot, not across it (`concept/building.md`, 2026-09-19)
+
+Reported live with a screenshot of three cottages in a row: *"make the
+cottages a bit smaller and add a padding so they have a gap between them and
+the top doesn't get clipped"*.
+
+### The slicer was the obvious suspect and was not the problem
+
+Worth recording, because it is where anyone would look first. Measured on
+the real sheets (`tools/probe_cottage_row.gd`, which stands three real
+cottages on three adjacent plots and slices them exactly the way the game
+does): every finished cottage frame has **zero** transparent pixels on all
+four edges. The cell bands are cut tight to the art *by construction* —
+that is what `VariantSheetGrid` is for — and that tight crop was then scaled
+to **exactly** the plot width.
+
+So two houses on neighbouring plots touched at the pixel with no street
+between them, and a roof that reaches well above its own plot ran straight
+into whatever stood north of it. Nothing was being clipped; everything was
+flush, which reads as the same thing.
+
+### ✅ The fix is one number in one place
+
+`BuildingCatalog.PLOT_MARGIN_SHARE` leaves air on each side, and
+`drawn_plot_width_tiles` is the ONE place that answer lives — so the
+illustrated-sheet path (`IllustratedStructureSprite.footprint_frame_texture`)
+and the procedural placeholder (`ProceduralBuildingPlaceholderSprite.
+footprint_texture`) cannot disagree about how much of a plot a building
+covers. If they could, dropping a sheet in would visibly move the house and
+a street of half-arted buildings would carry two different rhythms.
+
+Measured on a real cottage row: **52px drawn on a 64px plot, 12px of air.**
+
+A share rather than a fixed number of tiles, so the air scales with the
+building — a manor stands in proportionally as much ground as a cottage.
+Pinned from both sides by what it produces rather than as a number somebody
+liked: two houses on adjacent plots must stand more than a quarter of a tile
+apart, and a building must still cover more than three quarters of its own
+plot.
+
+Two existing tests pinned the old full-plot width and were rewritten rather
+than deleted, each keeping the invariant it was really guarding — that the
+scaling happens at all and lands on the plot, and that the placeholder keeps
+its three-wide-by-three-tall shape.
+
+### Stated rather than left to be rediscovered
+
+- 🚧 **The collision body is unchanged** and still covers the whole
+  footprint. Only the picture moved. That leaves a few world pixels of
+  collision with nothing drawn on them — under a fifth of a tile per side on
+  a two-tile plot — and shrinking the body instead would open a walkable
+  slot between every pair of houses, which is a gameplay change nobody asked
+  for.
+- 🚧 **Single-tile placeables are untouched.** `farm`/`sagewerk`/`storage`
+  draw through `IllustratedStructureSprite.drawn_width_tiles`, which answers
+  a different question for a different thing, and were sized by their own
+  earlier pass. A `farmhouse` the whole building and a `farm` the placeable
+  therefore now sit slightly differently on their ground; that duality
+  predates this.
+
+Tests: `test_building_catalog.gd`, `test_illustrated_structure_sprite.gd`,
+`test_procedural_building_placeholder_sprite.gd` — all green, plus the
+building-art integration suites.
