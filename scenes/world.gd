@@ -86,16 +86,30 @@ const QuestLog = preload("res://src/emergence/quest_log.gd")
 ## seed mass (nothing has fed or starved them yet), proven by
 ## test_player_current_mass_kg_starts_at_the_seed_mass.
 func _player_step_momentum_kg_m_s(player: Player) -> float:
-	# A footstep carries momentum; standing still carries none. With a
-	# constant walking momentum every crush walk -- walnuts over the whole
-	# dropped-item group (which also holds every liftable stone, mushroom and
-	# seed), ants, decomposers, caterpillars, millipedes -- ran every frame for
-	# a player who had not moved: ~2 ms of each frame in the round-13
-	# measurement (docs/concept/soil_fauna.md). The walks all gate on the
-	# momentum threshold first, so zero here is what makes them free.
+	return _player_step_mass_kg(player) * PebbleDispersion.FOOTSTEP_SPEED_MPS
+
+
+## The mass the player's own step actually lands with -- their real, live,
+## unified current_mass_kg() while walking, and zero while standing still.
+##
+## Lifted out of _player_step_momentum_kg_m_s (2026-09-19, see docs/concept/
+## soil_fauna.md "Generalized to ANY animal") because crushing a real ANIMAL
+## needs the MASS, not the momentum: an animal is crushed when it weighs less
+## than the foot landing on it (CrushMechanic.crushes_underfoot), and a
+## momentum has already thrown that away. One gate and one mass read, shared
+## by both -- a second standing check of its own could drift from this one.
+##
+## A footstep carries momentum; standing still carries none. With a constant
+## walking momentum every crush walk -- walnuts over the whole dropped-item
+## group (which also holds every liftable stone, mushroom and seed), ants,
+## decomposers, caterpillars, millipedes -- ran every frame for a player who
+## had not moved: ~2 ms of each frame in the round-13 measurement
+## (docs/concept/soil_fauna.md). Every walk gates on its own threshold first,
+## so zero here is what makes them free.
+func _player_step_mass_kg(player: Player) -> float:
 	if player.velocity.length_squared() <= 0.0:
 		return 0.0
-	return player.current_mass_kg() * PebbleDispersion.FOOTSTEP_SPEED_MPS
+	return player.current_mass_kg()
 const FoodConsumption = preload("res://src/gameplay/food_consumption.gd")
 const Courtship = preload("res://src/gameplay/courtship.gd")
 const MammalCourtship = preload("res://src/gameplay/mammal_courtship.gd")
@@ -6480,6 +6494,26 @@ func _client_process(delta: float) -> void:
 		# own doc comment: no genuine squish recording sourced yet).
 		_interaction_sfx.play_mushroom_crush()
 	_chunk_manager.crush_walnut_near(local_player.position, player_step_momentum_kg_m_s)
+	# And ANY animal small enough to go under a foot (see docs/concept/
+	# soil_fauna.md "Generalized to ANY animal") -- reported in play:
+	# "Stepping on a frog doesn't kill it? Shouldn't this work out of the box
+	# for ANY animal when enough pressure is put on it?" These two take the
+	# stepper's own MASS rather than the momentum every call above them
+	# takes, because an animal victim is decided by a second term the
+	# momentum has already thrown away: whether the victim's whole body fits
+	# under the foot that lands on it.
+	#
+	# A frog charges Karma exactly like a caterpillar or a bug does -- a
+	# small, harmless animal died under the player's own boot, the identical
+	# event. A real CreatureMarker does not, for anybody: its death goes
+	# through the same _die() a hunted animal's does and is already on the
+	# region's mortality books, where a frog (like a worm) has no other death
+	# path at all. Charging for it would be inventing a hunting penalty
+	# inside the crush pass.
+	var player_step_mass_kg := _player_step_mass_kg(local_player)
+	if _chunk_manager.crush_grass_frogs_near(local_player.position, player_step_mass_kg):
+		local_player.apply_karma_delta(-Karma.WORM_OR_CATERPILLAR_CRUSH_PENALTY)
+	_chunk_manager.crush_creatures_near(loaded_creature_markers, local_player.position, player_step_mass_kg)
 	# A wild creature's own step still crushes what's underfoot (a real,
 	# weight-emergent ecosystem effect -- a deer's own hoof kills the worm
 	# the same as a player's boot would) but never touches Karma: every
@@ -6514,7 +6548,8 @@ func _client_process(delta: float) -> void:
 		# reads EXACTLY the old flat value at this creature's own seed
 		# mass (see test_seed_mass_matches_creature_mass_exactly_for_
 		# every_real_species).
-		var momentum := marker.current_mass_kg() * PebbleDispersion.FOOTSTEP_SPEED_MPS
+		var stepper_mass_kg := marker.current_mass_kg()
+		var momentum := stepper_mass_kg * PebbleDispersion.FOOTSTEP_SPEED_MPS
 		_chunk_manager.crush_worm_at(marker.position, momentum)
 		_chunk_manager.crush_caterpillars_near(marker.position, momentum)
 		_chunk_manager.crush_millipedes_near(marker.position, momentum)
@@ -6522,6 +6557,14 @@ func _client_process(delta: float) -> void:
 		_chunk_manager.crush_decomposers_near(marker.position, momentum)
 		_chunk_manager.crush_mushroom_at(marker.position, momentum)
 		_chunk_manager.crush_walnut_near(marker.position, momentum)
+		# "A boar walking over a frog should kill it as well" -- the same two
+		# mass-taking animal calls the player's own block runs, and never
+		# Karma-charging, like every other call in this loop. The stepper
+		# excludes itself: the mass rule already rules self-crushing out (a
+		# body always outweighs its own foot), so this is the explicit guard
+		# on top of it rather than the only thing preventing it.
+		_chunk_manager.crush_grass_frogs_near(marker.position, stepper_mass_kg)
+		_chunk_manager.crush_creatures_near(loaded_creature_markers, marker.position, stepper_mass_kg, marker)
 	if _perf_report != null:
 		perf_started = _perf_section("cli_crush", perf_started)
 	_chunk_manager.set_wind_strength(_weather_model.wind_strength_for(raw_weather))

@@ -10120,9 +10120,13 @@ func crush_creatures_near(
 		# scan of a creature that is still alive.
 		if not is_instance_valid(marker) or marker.is_queued_for_deletion():
 			continue
-		if not CrushMechanic.crushes_underfoot(stepper_mass_kg, marker.current_mass_kg()):
-			continue
+		# Tile before mass: almost nothing in a loaded world is standing on
+		# the exact tile being stepped on, and a tile compare is pure
+		# arithmetic on a position already in hand, where the mass term has
+		# to reach into each creature's own metabolism for its live weight.
 		if _world_tile_for_pixel(marker.position) != tile:
+			continue
+		if not CrushMechanic.crushes_underfoot(stepper_mass_kg, marker.current_mass_kg()):
 			continue
 		marker.crush()
 		crushed_any = true
