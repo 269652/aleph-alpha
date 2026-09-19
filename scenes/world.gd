@@ -2845,7 +2845,12 @@ func _update_condition_chips(local_player: Player) -> void:
 	if signature == _condition_chips_signature:
 		return
 	_condition_chips_signature = signature
+	# remove_child BEFORE queue_free: queue_free defers the actual removal to
+	# the end of the frame, so freeing alone would leave the outgoing chips in
+	# the row alongside the incoming ones for one frame -- a visible doubled
+	# row on the frame a condition changes.
 	for child in _condition_chips_row.get_children():
+		_condition_chips_row.remove_child(child)
 		child.queue_free()
 	for chip in chips:
 		var card := PanelContainer.new()
