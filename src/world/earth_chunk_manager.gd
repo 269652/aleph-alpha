@@ -190,6 +190,7 @@ const VillageLabor = preload("res://src/emergence/village_labor.gd")
 const VillageAssembly = preload("res://src/emergence/village_assembly.gd")
 const EstateShortfall = preload("res://src/emergence/estate_shortfall.gd")
 const GuildRelief = preload("res://src/emergence/guild_relief.gd")
+const StaffedProduction = preload("res://src/emergence/staffed_production.gd")
 const ConstructionLabor = preload("res://src/emergence/construction_labor.gd")
 const SettlementReserve = preload("res://src/emergence/settlement_reserve.gd")
 const VillageLayout = preload("res://src/world/village_layout.gd")
@@ -3631,6 +3632,10 @@ func step_settlements(delta_seconds: float) -> void:
 		# because the estate census and its satisfaction are what the
 		# assembly then votes with.
 		_step_village_estates(settlement_id, market, village_market, household_ids)
+		# What the village's own works actually MAKE, staffed out of the
+		# estates the step above just counted (docs/concept/
+		# village_estates.md mechanism 4).
+		_step_staffed_production(settlement_id, market, household_ids)
 		# The village's spare hands gather building material and keep raising
 		# whatever the settlement decided to build (docs/concept/milling_and_
 		# baking.md) -- the SAME interval, so a village near the player builds
@@ -4343,6 +4348,47 @@ func _collect_estate_tax(
 		NpcEconomy.deposit_to_purse(market, take)
 
 
+## settlement_id -> StaffedProduction's own per-recipe batch remainder.
+var _settlement_staffed_production_carry: Dictionary = {}
+## settlement_id -> the sub-unit remainder of a staffed sawmill's timber
+## BONUS (see _step_settlement_gathering).
+var _settlement_timber_bonus_carry: Dictionary = {}
+
+
+## docs/concept/village_estates.md mechanism 4, made real: what this
+## settlement's own standing works actually produce, staffed out of its own
+## estates.
+##
+## This is what closes docs/concept/village_growth.md's "the ladder's rungs
+## are buildings, not yet production". An UNSTAFFED building produces
+## nothing however long it stands, which is the labour pyramid's whole
+## claim -- a village that promoted every cottager into a burgher finds its
+## farm standing idle.
+##
+## Runs through the same Market.produce every other settlement production
+## path uses, so a batch really consumes its inputs out of the village's own
+## stock and really puts its output back -- no goods are created here that
+## the recipe book did not price.
+func _step_staffed_production(settlement_id: String, market, household_ids: Array[String]) -> void:
+	if household_ids.is_empty():
+		return
+	var chunk_coord := RegionalTrade.chunk_coord_of(settlement_id)
+	var present := _settlement_present_building_ids(chunk_coord)
+	var supply := VillageLabor.supply_for(_household_store.estate_census(household_ids))
+	var demand := VillageLabor.demand_for(present)
+	var result: Dictionary = StaffedProduction.attempts_over(
+		present,
+		supply,
+		demand,
+		SETTLEMENT_STEP_INTERVAL / ConstructionCatchup.SECONDS_PER_DAY,
+		_settlement_staffed_production_carry.get(settlement_id, {})
+	)
+	_settlement_staffed_production_carry[settlement_id] = result["carry"]
+	for recipe_id in result["attempts"]:
+		for _batch in int(result["attempts"][recipe_id]):
+			attempt_production(settlement_id, str(recipe_id))
+
+
 ## settlement_id -> the sub-unit gathering remainder carried into its next
 ## assessment (see _step_settlement_granary).
 var _settlement_gather_carry: Dictionary = {}
@@ -4379,6 +4425,47 @@ func _step_settlement_gathering(settlement_id: String, market, household_ids: Ar
 	var stock_delta: Dictionary = result["stock_delta"]
 	for item_id in stock_delta:
 		market.add_stock(str(item_id), int(stock_delta[item_id]))
+	_add_sawmill_timber_bonus(settlement_id, market, spare_capacity)
+
+
+## A staffed saw pit gets more usable timber out of the same hands
+## (StaffedProduction.timber_multiplier_for), which is what makes
+## VillageAssembly's own "short of firewood -> raise a sawmill" petition
+## true rather than a lie.
+##
+## ADDITIVE on top of the ordinary gathering rather than a multiplier
+## applied to it, for two reasons: the delta above is already rounded to
+## whole units, so multiplying it would quietly drop the bonus for any
+## village small enough to gather less than two logs a step; and the floor
+## stays exactly where it was -- a village with no mill, or an unstaffed
+## one, gathers precisely what it gathered before this existed. That floor
+## is docs/concept/village_growth.md's own rule: gathering may be RAISED by
+## a building and must never be dragged down by one.
+func _add_sawmill_timber_bonus(settlement_id: String, market, spare_capacity: int) -> void:
+	if spare_capacity <= 0:
+		return
+	var chunk_coord := RegionalTrade.chunk_coord_of(settlement_id)
+	var present := _settlement_present_building_ids(chunk_coord)
+	var household_ids := _households_in_settlement(settlement_id)
+	var multiplier := StaffedProduction.timber_multiplier_for(
+		present,
+		VillageLabor.supply_for(_household_store.estate_census(household_ids)),
+		VillageLabor.demand_for(present)
+	)
+	if multiplier <= 1.0:
+		return
+	var bonus := (
+		(multiplier - 1.0)
+		* SettlementGathering.WOOD_PER_SPARE_HOUSEHOLD_PER_DAY
+		* float(spare_capacity)
+		* SETTLEMENT_STEP_INTERVAL
+		/ ConstructionCatchup.SECONDS_PER_DAY
+	)
+	var owed: float = float(_settlement_timber_bonus_carry.get(settlement_id, 0.0)) + bonus
+	var whole := int(floor(owed + 0.000001))
+	if whole > 0:
+		market.add_stock(VillageEstates.FUEL_ITEM_ID, whole)
+	_settlement_timber_bonus_carry[settlement_id] = maxf(owed - float(whole), 0.0)
 
 
 ## settlement_id -> MerchantVisit's own sub-visit carry, the same

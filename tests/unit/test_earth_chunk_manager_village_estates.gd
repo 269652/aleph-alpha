@@ -17,6 +17,7 @@ const EstateAscension = preload("res://src/emergence/estate_ascension.gd")
 const VillageWages = preload("res://src/world/village_wages.gd")
 const EstateShortfall = preload("res://src/emergence/estate_shortfall.gd")
 const BuildingCatalog = preload("res://src/gameplay/building_catalog.gd")
+const StaffedProduction = preload("res://src/emergence/staffed_production.gd")
 const NpcEconomy = preload("res://src/world/npc_economy.gd")
 
 const CHUNK := Vector2i(4242, 4242)
@@ -505,3 +506,93 @@ func test_what_was_taken_plus_what_is_carried_is_what_the_baskets_asked_for():
 	# claim is that nothing was invented, not that the two match exactly.
 	assert_true(taken + carried <= asked + 0.0001, "the draw took more than the baskets asked for")
 	assert_true(taken + carried > 0.0, "thirty assessments of burning firewood asked for nothing")
+
+
+# -- staffed buildings really produce -------------------------------------
+
+## Raises a real COMPLETE project for `building_id` on this settlement's
+## own persisted ledger -- the record of what a village really built, which
+## is what the estate layer reads for a village nobody is standing in.
+func _raise(building_id: String, at: Vector2i) -> void:
+	var project = manager.construction_project_store().start_project(
+		CHUNK, at, building_id, _settlement_id
+	)
+	manager.construction_project_store().complete_project(project.id, manager.household_store())
+
+
+## The close of village_growth.md's own "the rungs are buildings, not yet
+## production": the dearest rung on that ladder made NOTHING, and now a
+## staffed brewhouse really puts beer on the village's own shelf.
+func test_a_staffed_brewery_really_brews_real_beer():
+	var households := _found(8)
+	# A brewer and a pair of hands: one craftsman, the rest cottagers.
+	manager.household_store().get_household(households[0]).estate = "handwerker"
+	_raise("brewery", Vector2i(3, 3))
+	_keep_the_village_alive()
+	_market().add_stock("wheat", 400)
+	var before: int = _market().stock_of("beer")
+	for _i in 60:
+		_step()
+	assert_true(_market().stock_of("beer") > before, "a staffed brewhouse brewed nothing at all")
+
+
+## And the pyramid's whole claim, live: the same brewhouse with no
+## craftsman in the village produces nothing, however long it stands.
+func test_the_same_brewery_with_no_craftsman_in_the_village_brews_nothing():
+	_found(8)  # every household a cottager -- hands, but no trade
+	_raise("brewery", Vector2i(3, 3))
+	_keep_the_village_alive()
+	_market().add_stock("wheat", 400)
+	var before: int = _market().stock_of("beer")
+	for _i in 60:
+		_step()
+	assert_eq(_market().stock_of("beer"), before, "a brewhouse with no brewer in it made beer")
+
+
+## And it costs real grain: beer and bread compete for one harvest, which
+## is the supply-chain tension the whole chain exists to have.
+func test_brewing_really_spends_the_villages_own_grain():
+	var households := _found(8)
+	manager.household_store().get_household(households[0]).estate = "handwerker"
+	_raise("brewery", Vector2i(3, 3))
+	_keep_the_village_alive()
+	_market().add_stock("wheat", 400)
+	var before: int = _market().stock_of("wheat")
+	for _i in 60:
+		_step()
+	assert_true(_market().stock_of("wheat") < before, "the brewhouse brewed beer out of nothing")
+
+
+## The assembly tells a village short of firewood to raise a sawmill. That
+## has to be true, so a staffed saw pit really does bring more timber in.
+func test_a_staffed_sawmill_really_brings_more_timber_in():
+	var without := _timber_gathered_over(20, false)
+	var with_mill := _timber_gathered_over(20, true)
+	assert_true(
+		with_mill > without,
+		"a village with a staffed saw pit cut no more timber than one without"
+	)
+
+
+## How much timber a fresh village of cottagers brings in over `steps`,
+## with or without a staffed mill standing.
+func _timber_gathered_over(steps: int, with_sawmill: bool) -> int:
+	var chunk := Vector2i(-31, -31) if with_sawmill else Vector2i(-32, -32)
+	var npcs: Array = []
+	for i in 6:
+		npcs.append(FakeNpc.new(610_000 + i))
+	manager.record_settlement_founded_if_new(chunk, npcs)
+	var settlement := EntityRef.for_settlement(chunk)
+	if with_sawmill:
+		var project = manager.construction_project_store().start_project(
+			chunk, Vector2i(6, 6), "sawmill", settlement
+		)
+		manager.construction_project_store().complete_project(project.id, manager.household_store())
+	var market = manager.market_store().market_for(settlement)
+	market.add_stock("bread", 9000)
+	market.add_stock(VillageEstates.FUEL_ITEM_ID, 9000)
+	market.add_stock("herb", 9000)
+	var before: int = market.stock_of(VillageEstates.FUEL_ITEM_ID)
+	for _i in steps:
+		manager.step_settlements(EarthChunkManager.SETTLEMENT_STEP_INTERVAL)
+	return market.stock_of(VillageEstates.FUEL_ITEM_ID) - before
