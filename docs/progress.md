@@ -26457,3 +26457,53 @@ magenta on the produced icons.
 `frames_for` returns every frame of a row in order, but nothing steps them:
 a swing is still a pendulum rotation of one static texture, not the
 authored 8-frame wind-up/release/recovery.
+
+## Pavement was 10 dB too loud while measuring perfectly level (`concept/creature_and_footstep_audio.md`, 2026-09-19)
+
+Reported live: *"pavement footsteps are way too loud ..."*.
+
+✅ **Both things were true: the pools were level-matched, and pavement was
+far too loud.** Every surface sat within 2.5 dB of a common -24.59 dBFS
+RMS, and `test_no_surface_is_dramatically_louder_than_another` passed on
+exactly that. The trap is that **RMS is not loudness for an impulsive
+sound.** A footstep is a transient and a hard surface packs its energy into
+a far sharper one — at equal RMS, `rock`'s peaks sat 8.4 dB above `grass`'s
+(crest factor 20.64 dB against 12.28 dB).
+
+✅ **Measured rather than tweaked by ear.** ITU-R BS.1770 K-weighted
+loudness — what EBU R128 normalises broadcast audio by, and the standard
+answer to precisely this failure of RMS — added to
+`tools/prepare_footstep_oneshots.py` as two biquads and the standard's own
+mean square. Under it, the shipped RMS-matched gains measured:
+
+| surface | LUFS after its shipped gain | vs grass |
+| --- | --- | --- |
+| `grass` (signed off by ear) | -33.65 | — |
+| `rock` (pavement) | -23.80 | **+9.85 dB** |
+| `sand` | -20.11 | +13.5 dB |
+
+The pipeline matches on loudness now: `rock` -3.3 → **-12.8**, `sand` -1.0
+→ -11.1, `default` -6.9 → -14.0, `forest` +11.1 → -0.9. Achieved spread
+**0.08 dB**, against 13.5 dB of real loudness difference before. Nothing is
+capped and the loudest pool peak is -7.48 dBFS.
+
+✅ **The anchor cannot drift any more.** `grass` is the one level a person
+actually listened to and accepted (-12.0 dB), so the target is now
+**derived** as grass's own measured loudness plus that -12.0 rather than
+written down. Not a stylistic preference: a hardcoded target rounded grass
+to -12.5 on the first run of this switch, moving the only number nobody was
+entitled to move. The derivation is what caught it.
+
+✅ **`--remeasure`**: re-derives every gain from the clips already in the
+repo, downloading no source packs and rewriting no audio. The clips were
+never wrong; only the gains computed from them were.
+
+✅ **A test that passed while the bug was live is corrected, not worked
+around.** `test_no_surface_is_dramatically_louder_than_another` measured
+`achieved_rms_dbfs`; its name was right and its metric was wrong. It now
+measures `achieved_lufs`. Worth stating plainly: the RMS spread is
+deliberately **wide** now (12.74 dB), and that is the correct outcome —
+surfaces whose energy is shaped differently must sit at different RMS to
+sound equally loud.
+
+Tests: `test_footstep_sound.gd` 43/43 (+2 new, 1 corrected).
