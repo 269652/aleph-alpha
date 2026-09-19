@@ -292,6 +292,50 @@ scheme village and player houses already share), and opens a panel showing:
 Clicking empty ground, or a building no household owns, closes the panel.
 The panel reads; it never writes.
 
+## Mechanism 6 — `/village` lands you in a village that is really there
+
+Reported in play, twice. First *"It teleports me to where no village is"*,
+which earned the layout pre-check `_village_would_settle`; then, with the
+console still on screen and nothing but grass and flowers around,
+*"/village teleports me to an empty field..."*.
+
+The pre-check is a **prediction**: it re-derives the roster and the layout
+for a candidate chunk and asks whether every house would fit. It is careful,
+it is strictly stricter than the founding itself (which settles if even one
+house fits), and it is still a prediction — it never looks at what is
+actually standing on the ground, because it deliberately loads nothing.
+
+A dev command that says *"Teleported to the nearest village"* is making a
+claim about the world. So it checks the world:
+
+- **The candidate chunk is LOADED and looked at.** Only for chunks that
+  already passed the settlement roll (one in
+  `SETTLEMENT_CHANCE_DENOMINATOR`) *and* the layout pre-check, so the ring
+  search still pays for terrain rarely rather than per chunk — and the
+  player is about to go there anyway.
+- **A chunk with no buildings standing in it is not a village**, whatever
+  the prediction said. The search moves on to the next ring.
+- **A chunk that was not loaded before is unloaded again** if its village
+  turns out not to stand, so a rejected candidate leaves nothing behind.
+- **The destination is a real building's doorstep**, not the planned well.
+  The well comes out of `VillageLayout.skeleton`, which is a plan; a
+  doorstep is a cell a building really has, so you land where you can see
+  the village rather than where one was drawn.
+- **"No village standing within N chunks" is an honest answer** rather than
+  the absence of one: it means the search really looked and really found
+  nothing standing.
+- **It says what it found.** Reported a third time, with the verification
+  already in — *"It still teleports me to the same empty spot"* — and a line
+  that only claims success leaves a player no way to tell WHICH thing is
+  wrong: the wrong chunk, no buildings recorded, or buildings recorded that
+  nothing then drew. So `/village` names the chunk it landed you in and how
+  many buildings are standing there (`VillageFinder.teleport_report`). Zero
+  is spelled out rather than counted, because a village with nothing in it
+  is the bug being hunted, not a detail.
+
+The prediction stays in front of the load, as the cheap filter it is good
+at being. What changed is that it no longer gets the last word.
+
 ## What a village is saving for
 
 A village that owes itself a building is **saving for it**, and nothing else

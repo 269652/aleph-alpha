@@ -46,8 +46,16 @@ extends Node2D
 
 const IllustratedGrassFrogSprite = preload("res://src/rendering/illustrated_grass_frog_sprite.gd")
 const AmbientFlyerMovement = preload("res://src/rendering/ambient_flyer_movement.gd")
+const SquashCrushEffect = preload("res://src/rendering/squash_crush_effect.gd")
 
 const GROUP_NAME := "grass_frog"
+
+## This frog's species key -- the one CreatureMass tabulates its real body
+## mass under, so "how much does a frog weigh" has exactly one answer rather
+## than a second one written down wherever it happens to be needed (see
+## CrushMechanic.crushes_underfoot, which asks that question of a frog every
+## time something steps on its tile).
+const SPECIES := "grass_frog"
 
 ## How far this frog ranges from its home spot across many hops -- short: a
 ## real grass frog stays close to its patch of damp ground/pond edge.
@@ -94,6 +102,10 @@ var wander_seed := 0
 
 var _elapsed_time := 0.0
 var _sprite: Sprite2D
+
+## Crushed underfoot, mid-squash -- see crush().
+var _dying := false
+var _dying_elapsed := 0.0
 static var _illustrated_generator := IllustratedGrassFrogSprite.new()
 
 ## Heading-picker only (see the class doc comment) -- never stepped
@@ -133,7 +145,35 @@ func get_display_name() -> String:
 ## own _lod_step), so waiting for a follow-up call to actually move would
 ## let a slow-ticking frog schedule hop after hop while never once visibly
 ## moving, each one instantly stale before its next tick ever arrives.
+## Crushed underfoot (see docs/concept/soil_fauna.md "Generalized to ANY
+## animal", CrushMechanic.crushes_underfoot). Reported in play: "Stepping on
+## a frog doesn't kill it?" -- it didn't, because every victim the crush pass
+## knew about was a small special-case invertebrate marker and a frog was
+## none of them.
+##
+## Deliberately CaterpillarMarker.crush()'s own shape, method for method: a
+## frog has no health, no carcass and no death of its own either, so it dies
+## the same way -- a real SquashCrushEffect squash it lingers in long enough
+## to be seen, then frees itself. Idempotent (a second step on an already-
+## crushed frog changes nothing, and in particular never pushes
+## _dying_elapsed back to 0), which is also what lets EarthChunkManager.
+## crush_grass_frogs_near reuse _crush_markers_near's own has_method("crush")
+## branch with no special case of its own.
+func crush() -> void:
+	if _dying:
+		return
+	_dying = true
+	SquashCrushEffect.apply(_sprite)
+
+
 func _process(delta: float) -> void:
+	# A crushed frog is no longer a frog: it does not hop, croak or animate,
+	# it only lies there until its squash has been seen (see crush()).
+	if _dying:
+		_dying_elapsed += delta
+		if _dying_elapsed >= SquashCrushEffect.LINGER_SECONDS:
+			queue_free()
+		return
 	_elapsed_time += delta
 	_last_moved = Vector2.ZERO
 	if _is_hopping():

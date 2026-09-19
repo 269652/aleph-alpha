@@ -10030,6 +10030,72 @@ constant's own doc comment). Built red-first end to end, merged to
   `DroppedItem`, no per-chunk sim or marker at all). Neither applies a
   Karma penalty (a fungus/seed, not an animal); flowers are excluded
   by construction (never in any group at all), needing no new check.
+- **Crushed underfoot, generalized to ANY animal** (2026-09-19). ✅
+  Done — reported in play: *"Stepping on a frog doesn't kill it?
+  Shouldn't this work out of the box for ANY animal when enough
+  pressure is put on it? A boar walking over a frog should kill it as
+  well"*. Correct on every count, and `crush_mechanic.gd`'s own doc
+  comment already said so ("a third crushable creature needs no new
+  rule of its own, only detection wiring"). The physics was general
+  from the start and BOTH steppers were already real — the player and
+  every `CreatureMarker` trample with their own live mass — but every
+  victim wired up so far is a small special-case invertebrate marker,
+  so **no real animal was crushable by anything**, not even a mouse
+  under a horse. Full mechanism:
+  [soil_fauna.md's "Generalized to ANY animal"](concept/soil_fauna.md#generalized-to-any-animal-2026-09-19).
+  1. **The rule needed one more term, and it is derived, not picked.**
+     Momentum alone asks only "is the stepper heavy enough to crush
+     anything at all", which is the whole question for a worm and the
+     wrong one for an animal: a boar clears it, a deer is also an
+     animal, and a boar does not crush a deer.
+     `PebbleDispersion.FOOT_MASS_FRACTION` is already a cited
+     anatomical figure (one foot is 1.4% of body mass), so
+     `CrushMechanic.crushes_underfoot` falls out of it with no new
+     tuned number invented: **an animal is crushed underfoot when it
+     weighs less than the foot landing on it.** Neither term is
+     redundant — a mouse crushes no ant (momentum), a horse crushes no
+     wolf (foot mass) — and "nothing crushes something its own size"
+     falls out, which is what stops a herd flattening itself. Pinned by
+     test as the RULE over every real species pair, not as examples.
+  2. **Two victim sides, both answering the same `crush()`** every
+     other crush victim already does, so detection needed no special
+     case for either. A frog dies exactly as a caterpillar does (no
+     health, no carcass, no death of its own → a real
+     `SquashCrushEffect` squash it lingers in, then frees itself, and
+     stops hopping/croaking meanwhile). A real `CreatureMarker` dies
+     through its own `take_damage` → `_die` path instead, because
+     `_die` is the choke point the region's mortality books and the
+     carcass hang off — freeing the marker where it stood would be a
+     death nothing ever heard about.
+  3. **`crush_grass_frogs_near`/`crush_creatures_near`** take the
+     stepper's MASS, not its momentum: the second term is a question
+     about the foot's mass, which a momentum has already thrown away.
+     The frog shares `_crush_markers_near`'s walk with only the gate
+     lifted out. `crush_creatures_near` is the one crush entry point
+     *handed* its victims — `EarthChunkManager` is a `RefCounted` with
+     no scene tree and does not track creature markers at all, while
+     `World`'s crush pass already holds a cached group list it runs
+     several other loops over, so taking it is both honest and free
+     (the alternative is a second full group scan per stepper per
+     frame, in the most expensive function in the game).
+  4. **Both steppers wired**, and the player's live mass read plus its
+     standing-still gate lifted out of `_player_step_momentum_kg_m_s`
+     into `_player_step_mass_kg` — one gate and one mass read shared by
+     the momentum-taking walks and the mass-taking animal ones, rather
+     than a second check that could drift from it.
+  5. **Karma splits, deliberately.** A frog joins the roster (a small,
+     harmless animal under the player's own boot is the identical event
+     a caterpillar or bug already is, and it has no other death path);
+     a real animal does not, for anybody, since its death is already on
+     the region's mortality books and charging for it would be
+     inventing a hunting penalty inside the crush pass.
+  6. **`grass_frog` is a real tabulated `CreatureMass` entry** (a cited
+     adult *Rana temporaria* average) — the same explicit row ant, bug
+     and caterpillar already needed, none of the four being an
+     `AnimalAnatomy` species with a profile to derive a mass from.
+  Named, not hidden: a crushed `CreatureMarker` has no "flattened" pose
+  of its own the way `millipede.png` does — it dies the ordinary way and
+  leaves its carcass.
 
 Built red-first end to end throughout, merged to `main`.
 
@@ -26392,6 +26458,188 @@ Tests: `test_npc_marker_timber.gd` 21/21, `test_settlement_generator.gd`
 `test_village_npc_population.gd`, `test_settlement_food.gd`,
 `test_settlement_demand.gd`, `test_village_wages.gd`, `test_npc_identity.gd`,
 `test_procedural_landmark_sprite.gd` all green (344 between them).
+
+## `/village` now checks the ground instead of trusting a plan (2026-09-19)
+
+Reported with the console still on screen and nothing but grass, flowers and
+a deer around: *"/village teleports me to an empty field..."* — the second
+time this has come up, after *"It teleports me to where no village is"*.
+
+The first report earned `_village_would_settle`, a careful layout pre-check:
+it re-derives the roster and the layout for a candidate chunk and asks
+whether every house would fit. It is strictly **stricter** than the founding
+itself (which settles if even one house fits), which is why a false positive
+looked impossible — and it is still a **prediction**. It never looks at what
+is standing on the ground, because it deliberately loads nothing.
+
+✅ **The command checks the world now.** For a chunk that has already passed
+the settlement roll *and* the prediction — rare, so the ring search still
+pays for terrain rarely rather than per chunk — `standing_village_position`
+loads it and looks for real buildings. No buildings, no village: the search
+moves to the next ring, and a chunk it loaded and rejected is unloaded again
+so nothing is left behind. A chunk that was already loaded is left alone (it
+may be the one the player is standing in).
+
+✅ **You land on a real doorstep**, the lowest `(y, x)` building's, rather
+than on `VillageLayout.skeleton`'s planned well. A well is a plan; a doorstep
+is a cell a building really has.
+
+✅ **"No village found nearby" is an honest answer now** rather than the
+absence of one — it means the search really looked and really found nothing
+standing within `MAX_VILLAGE_SEARCH_RADIUS_CHUNKS`.
+
+⬜ **Not reproduced here, and said plainly.** Real terrain generation is
+IO-bound in this container — three separate probes that load real settlement
+chunks were each killed after running for many minutes without finishing — so
+I could not put the old command in front of the user's own coordinates and
+watch it pick an empty chunk. What I could do is read both paths (they agree
+on the water predicate, the biome and the layout seed, so the well it
+returned should have been the right one) and then make the command stop
+relying on any of that reasoning being right: it verifies what it claims.
+
+Tests: `test_earth_chunk_manager_village_command.gd` 5/5 (new),
+`test_village_finder.gd`, `test_dev_console.gd`,
+`test_console_command_parser.gd` green (36 between them).
+
+---
+
+## 2026-09-19 — Beehives: a radius is not a branch
+
+Reported live: *"Beehives should not be built on grass... they need a tree
+branch to build it please"*.
+
+An earlier pass had already answered *"Beehives should only be able to build
+on trees or structures like houses .. not free floating over a river or
+ground"* with `_has_real_hive_anchor`, and that rule was right about what a
+hive needs and wrong about how to ask for it. It accepted any tile with a
+tree or a building piece within `HIVE_ANCHOR_RADIUS_TILES` — already
+deliberately small at 2.0, and already described in the concept doc as "a
+hive hangs from a *specific* branch, not merely somewhere in the same
+general area as one". But **a radius of any size admits the tile next to a
+trunk**, and that tile is bare grass with a tree visible from it. No smaller
+radius fixes that: what holds a hive up is not nearby scenery, it is the
+branch it hangs off, and that is a property of one tile.
+
+✅ **The anchor is the hive's own tile.** `_has_standing_tree_at` (a real,
+standing tree whose own tile *is* this one — a felled tree skipped for the
+same reason `trees_near` skips one: a stump is not a branch) or
+`_has_building_piece_at`, which replaces `_has_building_piece_near(tile,
+radius)` — the tile square that walked existed only to cover the radius
+spilling across a chunk edge. `HIVE_ANCHOR_RADIUS_TILES` is **deleted**
+rather than set to `0.0`, and `_has_real_hive_anchor` loses the
+`pixel_position` argument only its radius tree query needed, so no dial is
+left that could widen this back into the same bug. Seeding, swarming,
+absconding and harvest-relocation all already route through this one
+function, so every path was covered at once.
+
+✅ **The comb is drawn up in the tree.** A hive sited on a tree's tile but
+drawn at that tile's centre is drawn at the foot of the trunk — still,
+visibly, on the grass. `BeeHiveMarker` hangs its sprite
+`BRANCH_HANG_FRACTION` (0.6) of a real tree's real drawn height, which is
+`ProceduralTreeSprite.WORLD_SIZE.y × VISUAL_SCALE` — measured against the
+art rather than chosen, because a tree's node origin is the foot of its
+trunk with the canopy drawn above it, and bounded on both sides by a test so
+the two cannot drift apart. The queen rides up with it; she lives on the comb.
+
+Two things that look like details and are not: the lift is on the **sprite**,
+never the node (Y-sorting compares node origins, so a hive whose own origin
+floated into the canopy would draw behind things it stands in front of — the
+same split `CaterpillarMarker._climb_height_px` already keeps), and it is
+`position`, not `offset` (offset is multiplied by the sprite's growth scale,
+so the hive would creep up its tree as the colony filled out).
+
+⬜ **Wild bee nests still have the identical gap**, and this pass did not
+close it. `WildBeePatch` is constructed with no `extra_site_check` at all —
+placement is biome-only — while its own class doc says a cavity-nesting
+solitary bee "needs a real tree/deadwood source". `bees.md` has named this a
+known parallel gap since 2026-09-08 and it stays named: the ask was about
+beehives, and gating nests on a standing tree would visibly thin them out,
+which is a behaviour change nobody asked for.
+
+✅ **Measured after the fact, not assumed.** `tools/probe_hive_tree_anchor.gd`
+over eight real chunks around Berlin and Bavaria: 4 hives seeded, **4 of 4
+standing on a tile with a real tree**, nearest-tree distance min 0.09 /
+median 0.20 / **max 0.34 tiles** where the old rule allowed 2.0. Only 6.3%
+of a chunk's tiles hold a standing tree, so the constraint is real — and
+hives still seeded at a normal rate under it, which is the thing worth
+checking: the rule did not quietly delete the feature to satisfy itself.
+
+⬜ **Not verified in a running game.** The rule is tested against real
+generated terrain (a 3×3 of real chunks around Berlin: four real hives
+seeded, every one of them on a real tree or structure tile, 7 asserts — not
+vacuous) and the hang height against the real tree art, but nobody has
+looked at a hive in play.
+
+**Found by sweeping, not by looking: four tests had been silently red.**
+`test_ant_mound_marker`, `test_ant_queen_marker`, `test_bee_hive_marker` and
+`test_bee_queen_marker` each asserted `timer.autostart` on a marker already
+in the tree, after the "FPS regression round 13" pass moved their slow ticks
+onto `Timer` children. Godot's `Timer` clears that flag the moment it acts on
+it — `NOTIFICATION_READY` starts the timer and sets `autostart` false — so
+the assertion could only ever be false. All four now assert the timer is
+genuinely running, which is what the line was always trying to say; verified
+it still bites by setting a marker's `autostart` back to false.
+
+Tests: `test_earth_chunk_manager_bees.gd` 34/34 (3 new),
+`test_bee_hive_marker.gd` 30/30 (4 new), `test_bee_colony.gd` 52/52,
+`test_wild_bee_patch.gd` 26/26, `test_ant_mound_marker.gd` 18/18,
+`test_ant_queen_marker.gd` 2/2, `test_bee_queen_marker.gd` 2/2,
+`test_procedural_beehive_sprite.gd` 11/11,
+`test_illustrated_beehive_sprite.gd` 19/19.
+
+---
+
+## 2026-09-19 — A bed is ground, and ground does not follow a person
+
+Reported live: *"There's now some weird moving char thing + soil tiles??"*,
+then, a moment later, the detail that identified it outright: *"The soil
+tiles are also moving with the character..."*. Both symptoms were one bug.
+
+✅ **The Farm's beds are no longer children of its Farmer.**
+`FarmerMarker._ready()` did `add_child(plot_marker)`, and a child's
+`position` is an offset from its parent — so three tilled beds and the wheat
+standing in them were carried around the field by the Farmer on every step
+he took. `PLOT_COUNT` is 3, exactly the three beds in the screenshot. They
+are siblings now, anchored at `home`, so they stay where they were laid out.
+
+✅ **He takes them with him when he goes.** Being his children used to free
+the beds along with him for free. Siblings do not follow, so he frees them
+deliberately on `_exit_tree` — otherwise a demolished Farm
+(`_despawn_farmer_at`) would leave three tilled beds and their wheat
+standing in an empty field forever. This is the part a parenting change
+quietly breaks if nobody looks for it.
+
+**The loop was right all along; only the drawing disagreed.**
+`_step_approaching` has *always* walked the Farmer to `home +
+_plot_offset(index)` — a fixed spot in the world — while the bed was drawn
+at `farmer + _plot_offset(index)`. So the further he wandered, the further
+his beds drifted from the ground he was standing on to tend them, and he was
+kneeling over bare grass. Both are the same expression today, and
+`test_the_bed_he_walks_to_is_the_bed_that_is_standing_there` is what keeps
+them that way.
+
+**Incidentally fixed.** `FarmPlotMarker` seeds its soil variant from its own
+tile, "so neighbouring beds in one patch do not all show the same variant" —
+read off `position` in `_ready`, which in child space was the offset
+`(-20, 20)`. Every Farm in the world therefore drew the same three variants.
+It is a real world tile now.
+
+⬜ **The Farmer still looks like a placeholder.** He is drawn with
+`ProceduralLumberjackSprite` — a flat tan head, a brown body, an axe — which
+is the established look for these standalone structure-workers (the
+Lumberjack, the porter, the conversion workers), not a broken fallback. But
+the VILLAGE's farmers use the full `CharacterView` the player does, so two
+kinds of farmer in neighbouring fields do not look like the same game. Named
+rather than quietly restyled: it is a decision, not a fix.
+
+⬜ **The ploughed soil under wheat was NOT touched.** It looked like a
+second complaint and is not one: `farm_plot_marker.gd`'s own comment records
+that hiding it was tried and then reversed on report (*"es fehlt nun das
+Pfluegen"*). The beds only read as wrong because they were walking around.
+Flagged to the user rather than flipped a fourth time.
+
+Tests: `test_farmer_marker.gd` 12/12 (5 new), `test_farm_plot_marker.gd`
+42/42, `test_farmer_behavior.gd` 14/14.
 
 ## The real item art finally reaches the screen (`concept/illustrated_art_addressing.md`, 2026-09-19)
 

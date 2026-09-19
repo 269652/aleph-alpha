@@ -16,6 +16,7 @@ const IllustratedBeehiveSprite = preload("res://src/rendering/illustrated_beehiv
 const HoverTargetFinder = preload("res://src/rendering/hover_target_finder.gd")
 const BeeColony = preload("res://src/world/bee_colony.gd")
 const BeeQueenMarker = preload("res://src/rendering/bee_queen_marker.gd")
+const ProceduralTreeSprite = preload("res://src/rendering/procedural_tree_sprite.gd")
 const Item = preload("res://src/gameplay/item.gd")
 const ItemStack = preload("res://src/gameplay/item_stack.gd")
 
@@ -41,6 +42,26 @@ const HARVEST_HITS_TO_DESTROY := 8
 ## proportionally little, honestly, rather than a flat guaranteed amount
 ## regardless of the colony's real state.
 const HONEY_YIELD_PER_HIT := 2.0
+
+## How far up its tree a hive hangs, as a fraction of that tree's own real
+## drawn height. Reported live: *"Beehives should not be built on grass...
+## they need a tree branch to build it please"*. EarthChunkManager only ever
+## sites a hive on a tile a real tree stands on now (see _has_real_hive_
+## anchor), but a comb drawn at that tile's own centre is drawn at the FOOT
+## of the trunk -- which is the grass, and is what got reported.
+##
+## Measured against the real tree art rather than chosen: a tree's node
+## origin is the foot of its trunk with the canopy drawn above it (see
+## TreeRenderer's own `sprite.offset.y = -SIZE.y * 0.5`), so WORLD_SIZE.y
+## scaled by VISUAL_SCALE IS the height of the crown above the ground, and
+## 0.6 of it puts the hive up among the branches rather than in the roots or
+## floating over the treetop. Bounded on both sides by
+## test_the_hive_hangs_within_the_real_canopy_of_a_real_tree, so tree art and
+## hive height cannot drift apart.
+const BRANCH_HANG_FRACTION := 0.6
+const HANG_HEIGHT_PX := (
+	ProceduralTreeSprite.WORLD_SIZE.y * ProceduralTreeSprite.VISUAL_SCALE * BRANCH_HANG_FRACTION
+)
 
 ## The real BeeColony this hive belongs to, and which cell within it --
 ## optional, the same "graceful no-op without a colony" contract
@@ -82,6 +103,15 @@ func _ready() -> void:
 	add_to_group(GROUP_NAME)
 	add_to_group(HoverTargetFinder.GROUP_NAME)
 	_sprite = Sprite2D.new()
+	# Up in the branches. On the SPRITE, never on this node: Y-sorting
+	# compares node origins, so a hive whose own origin floated into the
+	# canopy would sort as though it stood a tree's height further back and
+	# draw behind things it is plainly in front of. The same split
+	# CaterpillarMarker._climb_height_px already keeps for climbing a trunk.
+	# `position`, not `offset`: offset is multiplied by the sprite's own
+	# scale, which _apply_growth changes as the colony grows -- the hive
+	# would then creep up its tree as it filled out. The branch does not move.
+	_sprite.position.y = -HANG_HEIGHT_PX
 	add_child(_sprite)
 	_apply_growth(_growth_fraction())
 	# Growth is re-applied every RESIZE_INTERVAL_SECONDS seconds from a Timer child (C++, a fraction
@@ -105,6 +135,16 @@ func _ready() -> void:
 		var queen := BeeQueenMarker.new()
 		queen.setup(_colony, _cell)
 		add_child(queen)
+		# She lives ON the comb, so she rides up to it. Applied after
+		# add_child because BeeQueenMarker._ready sets its own position (see
+		# its OFFSET_PX) and would otherwise overwrite this.
+		queen.position.y -= HANG_HEIGHT_PX
+
+
+## The comb itself, drawn up in the branches (see HANG_HEIGHT_PX) while this
+## node stays on the ground it sorts by.
+func hive_sprite() -> Sprite2D:
+	return _sprite
 
 
 ## Founding size (0.0) with no colony wired up -- mirrors
