@@ -3000,3 +3000,67 @@ func test_an_earth_cell_blends_toward_a_fenced_neighbor_like_open_ground():
 		),
 		"the rail's own cell is still real grassland, so all four edges blend"
 	)
+
+
+# -- a whole building does not replace the ground it stands on -------------
+#
+# Reported in play with four of them in shot: *"Cottages and Manors are
+# clipped"*. Nothing was clipped. Every cell of a building's footprint --
+# the anchor carrying the building id, and BuildingCatalog.FOOTPRINT_TILE_ID
+# on the rest -- fell through atlas_coords_for_modification to the plain
+# earth slot, exactly as a farm rail once did, so the whole plot painted as
+# a hard brown rectangle. A building's art is scaled to its plot's WIDTH and
+# keeps its own aspect, so a cottage covers about 97% of its plot's depth
+# and a manor as little as 85% -- and that bare brown band above the roof is
+# what reads as the roof being cut off inside a box.
+#
+# A building is a SPRITE standing on the ground, exactly like a rail: it has
+# no ground tile of its own to paint. Measured before and after with
+# tools/probe_building_fit.gd.
+
+const BuildingCatalogForOverlay = preload("res://src/gameplay/building_catalog.gd")
+
+
+func test_a_whole_building_is_an_overlay_and_paints_no_ground_of_its_own():
+	assert_true(
+		TerrainRenderer.is_overlay_only_modification(BuildingCatalogForOverlay.FOOTPRINT_TILE_ID),
+		"a building's footprint must leave the ground it stands on alone"
+	)
+	for building_id in BuildingCatalogForOverlay.all_building_ids():
+		assert_true(
+			TerrainRenderer.is_overlay_only_modification(building_id),
+			"a %s must leave the ground it stands on alone" % building_id
+		)
+
+
+## The real paint, not just the predicate: a cell under a manor paints
+## EXACTLY what the same cell paints with nothing on it at all.
+func test_paint_leaves_a_buildings_plot_showing_its_own_ground():
+	var tile_set := renderer.build_tile_set()
+	tile_map_layer.tile_set = tile_set
+	var chunk := _make_chunk()
+
+	renderer.paint(tile_map_layer, chunk)
+	var bare := tile_map_layer.get_cell_atlas_coords(Vector2i(0, 0))
+	var bare_neighbour := tile_map_layer.get_cell_atlas_coords(Vector2i(1, 0))
+
+	chunk.modifications[Vector2i(0, 0)] = "house_large"
+	chunk.modifications[Vector2i(1, 0)] = BuildingCatalogForOverlay.FOOTPRINT_TILE_ID
+	renderer.paint(tile_map_layer, chunk)
+
+	assert_eq(
+		tile_map_layer.get_cell_atlas_coords(Vector2i(0, 0)), bare,
+		"a manor must not turn the ground under it into a bare earth square"
+	)
+	assert_eq(
+		tile_map_layer.get_cell_atlas_coords(Vector2i(1, 0)), bare_neighbour,
+		"nor the rest of its own footprint"
+	)
+	assert_ne(bare, renderer.atlas_coords_for_modification(TerrainRenderer.EARTH_TILE_ID))
+
+
+## And a single-tile placeable still paints its own tile -- it IS a ground
+## piece, not a sprite standing on one.
+func test_a_placeable_structure_still_paints_its_own_tile():
+	assert_false(TerrainRenderer.is_overlay_only_modification("campfire"))
+	assert_false(TerrainRenderer.is_overlay_only_modification("sagewerk"))
