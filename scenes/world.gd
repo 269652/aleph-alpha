@@ -548,6 +548,7 @@ const StepCadence = preload("res://src/gameplay/step_cadence.gd")
 ## report a refusal by its own reason; the pricing and the gates live in
 ## SpellTuition itself, reached through Player.learn_spell.
 const SpellTuition = preload("res://src/gameplay/spell_tuition.gd")
+const MageMaster = preload("res://src/gameplay/mage_master.gd")
 var _ecology_cadence: StepCadence = null
 var _ecology_steps: Dictionary = {}
 ## The player the fruiting step details trees around, captured per batch
@@ -4596,36 +4597,59 @@ func _handle_learn_command(args: Array, local_player: Player) -> void:
 		return
 
 	if args.is_empty():
+		var masters: Array = local_player.masters_here()
+		if masters.is_empty():
+			_dev_console.log_line(
+				"No master here. Step inside a %s with somebody in it."
+				% SpellTuition.GUILD_BUILDING_ID
+			)
+			return
+		var who: Array[String] = []
+		for master_seed in masters:
+			who.append(MageMaster.display_name_for(master_seed))
 		var offers: Array = local_player.spells_a_guild_would_teach()
 		if offers.is_empty():
-			_dev_console.log_line("You already know every spell in the world.")
+			_dev_console.log_line(
+				"In residence: %s. You already know everything they teach."
+				% ", ".join(who)
+			)
 			return
 		var lines: Array[String] = []
 		for spell_id in offers:
 			lines.append("%s (%d gold)" % [spell_id, local_player.tuition_for(spell_id)])
 		_dev_console.log_line(
-			"A mage guild would teach: %s. /learn <spell_id> to take a lesson."
-			% ", ".join(lines)
+			"In residence: %s. They teach: %s. /learn <spell_id> to take a lesson."
+			% [", ".join(who), ", ".join(lines)]
 		)
 		return
 
 	var wanted := String(args[0])
 	var result: Dictionary = local_player.learn_spell(wanted)
 	if result["ok"]:
-		_dev_console.log_line("Learned %s for %d gold." % [wanted, result["gold"]])
+		_dev_console.log_line(
+			"%s taught you %s for %d gold."
+			% [MageMaster.display_name_for(int(result["teacher"])), wanted, result["gold"]]
+		)
 		return
 
 	var refusal: Dictionary = result["refusal"]
 	match String(refusal.get("reason", "")):
 		SpellTuition.UNKNOWN_SPELL:
 			_dev_console.log_line("No such spell: %s." % wanted)
-		SpellTuition.NO_GUILD:
+		SpellTuition.OUTSIDE:
 			_dev_console.log_line(
-				"No %s within reach -- only a city may raise one."
+				"You are not inside a %s. Only a city may raise one, and you have to go in."
 				% refusal.get("building_id", SpellTuition.GUILD_BUILDING_ID)
 			)
 		SpellTuition.ALREADY_KNOWN:
 			_dev_console.log_line("You already know %s." % wanted)
+		SpellTuition.NO_MASTER:
+			# The refusal that turns into a reason to travel: it names the
+			# tradition and the depth to go looking for.
+			_dev_console.log_line(
+				"Nobody here teaches %s. It wants a master of %s who runs to depth %d."
+				% [wanted, refusal.get("school", "?"), int(refusal.get("depth", 0))]
+			)
 		SpellTuition.CANNOT_AFFORD:
 			_dev_console.log_line(
 				"%s costs %d gold -- come back with %d more."

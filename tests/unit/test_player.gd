@@ -47,6 +47,9 @@ const HouseInteriorView = preload("res://src/rendering/house_interior_view.gd")
 const BuildingCatalog = preload("res://src/gameplay/building_catalog.gd")
 const HouseDecor = preload("res://src/gameplay/house_decor.gd")
 const SpellTuition = preload("res://src/gameplay/spell_tuition.gd")
+const MageGuildRoster = preload("res://src/gameplay/mage_guild_roster.gd")
+const MageMaster = preload("res://src/gameplay/mage_master.gd")
+const SpellBook = preload("res://src/gameplay/spell_book.gd")
 
 const TILE_SIZE := TerrainRenderer.TILE_SIZE
 
@@ -88,6 +91,9 @@ func before_each():
 
 
 func after_each():
+	for site in _placed_guilds:
+		chunk_manager.remove_building(site["chunk_coord"], site["origin"])
+	_placed_guilds.clear()
 	remove_child(player)
 	player.free()
 	remove_child(interior_viewport)
@@ -1781,16 +1787,63 @@ func test_casting_with_nothing_in_range_still_spends_mana():
 # teaches spells out of the world's catalogue that you do not yet know. The
 # catalogue is the world's; the known set is yours.
 
-## A real placed mage guild one tile from the player -- the same single-tile
-## `build_at_global` the city_hall proximity tests above already use.
-func _place_mage_guild_near_player() -> void:
-	var tile := player.current_tile()
-	chunk_manager.build_at_global(tile.x + 1, tile.y, SpellTuition.GUILD_BUILDING_ID)
+var _book := SpellBook.new()
+## Guilds this file placed; they persist, and Berlin's chunk is shared with
+## every other test in the run (see _a_dry_site_for).
+var _placed_guilds: Array = []
 
 
-## Puts a guild in reach, pays the asking price, and takes the lesson.
+## A guild seed whose FULL roster really teaches `spell_id`. Masters are
+## drawn from the guild's own seed, so "a guild that teaches Minor Heal" is
+## a guild you have to go and FIND rather than one you can assume -- which
+## is the feature, and here it just means searching for the fixture.
+func _a_guild_seed_teaching(spell_id: String) -> int:
+	for i in 400:
+		var seed_value := hash("test_guild_%d" % i)
+		var seeds: Array = MageGuildRoster.master_seeds(
+			seed_value, MageGuildRoster.DAYS_PER_MASTER * float(MageGuildRoster.CAPACITY)
+		)
+		if MageGuildRoster.teachers_for(_book, spell_id, seeds).size() > 0:
+			return seed_value
+	fail_test("no guild in the sample teaches %s" % spell_id)
+	return 0
+
+
+## Raises a real mage guild on real dry ground, ages it so `masters` have
+## moved in, and walks the player inside -- a real HouseInteriorView and
+## InteriorAvatar in this test's own viewport, the same fixture
+## _enter_a_real_interior builds. Returns the guild's own record.
+func _enter_a_guild(guild_seed: int, masters: int) -> Dictionary:
+	var site := _a_dry_site_for(SpellTuition.GUILD_BUILDING_ID)
+	assert_false(site.is_empty(), "precondition: somewhere dry to raise a guild")
+	if site.is_empty():
+		return {}
+	assert_true(
+		chunk_manager.place_building(
+			site["chunk_coord"], site["origin"], SpellTuition.GUILD_BUILDING_ID,
+			Vector2i(0, 1), guild_seed
+		),
+		"precondition: the guild stands"
+	)
+	_placed_guilds.append(site)
+	chunk_manager.age_mage_guilds_in(
+		site["chunk_coord"], MageGuildRoster.DAYS_PER_MASTER * float(masters)
+	)
+	var record: Dictionary = chunk_manager.building_record_at(site["chunk_coord"], site["origin"])
+	var view := HouseInteriorView.new()
+	var renderer := TerrainRenderer.new()
+	view.build("hall", MageMaster.OCCUPATION, guild_seed, renderer.build_tile_set(), TILE_SIZE, renderer)
+	interior_viewport.add_child(view)
+	var avatar := InteriorAvatar.new()
+	interior_viewport.add_child(avatar)
+	player.enter_building(view, avatar, record)
+	return record
+
+
+## Walks into a full guild that really teaches `spell_id`, pays the asking
+## price, and takes the lesson.
 func _learn_at_a_guild(spell_id: String) -> Dictionary:
-	_place_mage_guild_near_player()
+	_enter_a_guild(_a_guild_seed_teaching(spell_id), MageGuildRoster.CAPACITY)
 	player.wallet.add(player.tuition_for(spell_id))
 	return player.learn_spell(spell_id)
 
@@ -1828,29 +1881,52 @@ func test_a_guild_quotes_a_real_price_for_a_spell_it_can_teach():
 	assert_gt(player.tuition_for("minor_heal"), 0)
 
 
-func test_learning_away_from_any_guild_is_refused_and_costs_nothing():
+func test_learning_out_in_a_field_is_refused_and_costs_nothing():
 	player.wallet.add(100000)
 
 	var result: Dictionary = player.learn_spell("minor_heal")
 
 	assert_false(result["ok"])
-	assert_eq(result["refusal"].get("reason", ""), SpellTuition.NO_GUILD)
+	assert_eq(result["refusal"].get("reason", ""), SpellTuition.OUTSIDE)
 	assert_eq(player.wallet.balance, 100000, "a refusal must never move gold")
 	assert_false(player.known_spell_ids().has("minor_heal"))
 
 
-func test_a_guild_across_the_map_is_not_a_guild_within_reach():
+func test_standing_right_beside_a_guild_is_still_standing_outside_it():
+	# The gate moved from proximity to being INSIDE: you cannot be
+	# apprenticed to somebody through a wall.
 	var tile := player.current_tile()
-	chunk_manager.build_at_global(tile.x + 20, tile.y, SpellTuition.GUILD_BUILDING_ID)
+	chunk_manager.build_at_global(tile.x + 1, tile.y, SpellTuition.GUILD_BUILDING_ID)
 	player.wallet.add(100000)
 
 	var result: Dictionary = player.learn_spell("minor_heal")
 
-	assert_eq(result["refusal"].get("reason", ""), SpellTuition.NO_GUILD)
+	assert_eq(result["refusal"].get("reason", ""), SpellTuition.OUTSIDE)
 
 
-func test_learning_at_a_guild_charges_the_tuition_and_teaches_the_spell():
-	_place_mage_guild_near_player()
+func test_being_inside_some_other_building_is_not_being_inside_a_guild():
+	_enter_a_real_interior()
+	player.wallet.add(100000)
+
+	assert_eq(player.guild_here(), {})
+	assert_eq(player.learn_spell("minor_heal")["refusal"].get("reason", ""), SpellTuition.OUTSIDE)
+
+
+func test_a_guild_nobody_has_moved_into_yet_teaches_nothing():
+	# Pillar 1: the building is not the teacher.
+	_enter_a_guild(_a_guild_seed_teaching("minor_heal"), 0)
+	player.wallet.add(100000)
+
+	var result: Dictionary = player.learn_spell("minor_heal")
+
+	assert_false(result["ok"])
+	assert_eq(result["refusal"].get("reason", ""), SpellTuition.NO_MASTER)
+	assert_eq(player.masters_here(), [])
+	assert_eq(player.spells_a_guild_would_teach(), [])
+
+
+func test_learning_inside_a_guild_charges_the_tuition_and_teaches_the_spell():
+	_enter_a_guild(_a_guild_seed_teaching("minor_heal"), MageGuildRoster.CAPACITY)
 	var price: int = player.tuition_for("minor_heal")
 	player.wallet.add(price + 5)
 
@@ -1860,6 +1936,49 @@ func test_learning_at_a_guild_charges_the_tuition_and_teaches_the_spell():
 	assert_eq(result["gold"], price)
 	assert_eq(player.wallet.balance, 5)
 	assert_true(player.known_spell_ids().has("minor_heal"))
+	assert_true(MageMaster.teaches(_book, "minor_heal", int(result["teacher"])),
+		"the lesson was credited to somebody who does not teach it")
+
+
+func test_several_masters_hang_around_inside_a_full_guild():
+	# Asked for directly: multiple mages move in and are in there together.
+	_enter_a_guild(_a_guild_seed_teaching("minor_heal"), MageGuildRoster.CAPACITY)
+	assert_eq(player.masters_here().size(), MageGuildRoster.CAPACITY)
+
+
+func test_what_a_guild_offers_is_what_its_own_masters_teach():
+	_enter_a_guild(_a_guild_seed_teaching("minor_heal"), MageGuildRoster.CAPACITY)
+	var offered: Array = player.spells_a_guild_would_teach()
+	assert_gt(offered.size(), 0)
+	for spell_id in offered:
+		assert_gt(
+			MageGuildRoster.teachers_for(_book, spell_id, player.masters_here()).size(), 0,
+			"%s is offered here but nobody in the room teaches it" % spell_id
+		)
+		assert_false(player.known_spell_ids().has(spell_id), "%s is already known" % spell_id)
+
+
+func test_a_guild_refuses_a_tradition_nobody_in_it_holds():
+	# The sentence that turns a refusal into a reason to travel.
+	_enter_a_guild(_a_guild_seed_teaching("minor_heal"), MageGuildRoster.CAPACITY)
+	player.wallet.add(100000)
+	var unheld := ""
+	for spell_id in _book.known_ids():
+		if (
+			not player.known_spell_ids().has(spell_id)
+			and MageGuildRoster.teachers_for(_book, spell_id, player.masters_here()).is_empty()
+		):
+			unheld = spell_id
+			break
+	assert_ne(unheld, "", "precondition: this guild cannot teach everything")
+	if unheld == "":
+		return
+
+	var refusal: Dictionary = player.learn_spell(unheld)["refusal"]
+
+	assert_eq(refusal.get("reason", ""), SpellTuition.NO_MASTER)
+	assert_ne(refusal.get("school", ""), "", "a refusal must say which tradition to go looking for")
+	assert_gt(int(refusal.get("depth", 0)), 0)
 
 
 func test_a_spell_learned_at_a_guild_is_really_castable():
@@ -1876,7 +1995,7 @@ func test_a_spell_learned_at_a_guild_is_really_castable():
 
 
 func test_learning_without_the_gold_is_refused_and_names_the_shortfall():
-	_place_mage_guild_near_player()
+	_enter_a_guild(_a_guild_seed_teaching("minor_heal"), MageGuildRoster.CAPACITY)
 	var price: int = player.tuition_for("minor_heal")
 	player.wallet.add(price - 10)
 

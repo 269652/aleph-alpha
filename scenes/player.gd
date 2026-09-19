@@ -2934,10 +2934,30 @@ func known_spell_ids() -> Array:
 	return _known_spell_ids.duplicate()
 
 
-## What a guild would offer to teach this character -- the world's catalogue
-## minus what they already know.
+## Which mage guild this character is standing in, in the shape
+## SpellTuition's gate reads: {inside, masters}. {} whenever they are not
+## inside one -- in a field, on its doorstep, or inside some other
+## building. Standing near a guild is not standing in it (docs/concept/
+## mage_guild.md mechanism 4).
+func guild_here() -> Dictionary:
+	if not is_indoors() or _chunk_manager == null:
+		return {}
+	if String(_interior_building.get("id", "")) != SpellTuition.GUILD_BUILDING_ID:
+		return {}
+	return {"inside": true, "masters": _chunk_manager.masters_in_guild(_interior_building)}
+
+
+## The masters in residence where this character is standing, [] anywhere
+## else -- for a readout that wants to name who is in the room.
+func masters_here() -> Array:
+	return guild_here().get("masters", [])
+
+
+## What the guild this character is standing in would teach them: what its
+## masters between them know, minus what they already know. [] outside one,
+## and [] inside an empty one, because the building is not the teacher.
 func spells_a_guild_would_teach() -> Array:
-	return _spell_tuition.teachable(_spell_book, _known_spell_ids)
+	return _spell_tuition.offers_at(_spell_book, _known_spell_ids, masters_here())
 
 
 ## What a lesson in `spell_id` costs, derived from the spell's own power and
@@ -2947,18 +2967,20 @@ func tuition_for(spell_id: String) -> int:
 	return _spell_tuition.tuition_for(_spell_book, spell_id)
 
 
-## Pays for and takes a lesson, gated on a real placed mage_guild within
-## reach -- the SAME `_has_structure_near_player` proximity every other
-## station interaction in this file uses, rather than a second one.
+## Pays for and takes a lesson from whoever is in the room.
+##
+## Gated on standing INSIDE a real mage guild that has a master in
+## residence who teaches this spell (docs/concept/mage_guild.md mechanism
+## 4) -- not on proximity. An apprenticeship is to a person, and you cannot
+## be apprenticed to somebody through a wall.
 ##
 ## Returns SpellTuition.learn's result dict unchanged ({ok, gold, known,
 ## refusal}); the refusal names which gate said no so a caller can report
 ## the true reason instead of a bare "you can't". Gold moves only on a
 ## lesson that lands, and the known set is only adopted then.
 func learn_spell(spell_id: String) -> Dictionary:
-	var at_guild := _has_structure_near_player(SpellTuition.GUILD_BUILDING_ID)
 	var result := _spell_tuition.learn(
-		_spell_book, spell_id, _known_spell_ids, wallet, at_guild
+		_spell_book, spell_id, _known_spell_ids, wallet, guild_here()
 	)
 	if result["ok"]:
 		_known_spell_ids = Array(result["known"] as Array, TYPE_STRING, "", null)

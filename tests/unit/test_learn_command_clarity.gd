@@ -74,7 +74,7 @@ func test_the_listing_quotes_the_guilds_own_price():
 func test_the_command_reports_every_refusal_reason_by_name():
 	var body := _learn_command_body()
 	var constants: Dictionary = (SpellTuition as GDScript).get_script_constant_map()
-	for reason_name in ["UNKNOWN_SPELL", "NO_GUILD", "ALREADY_KNOWN", "CANNOT_AFFORD"]:
+	for reason_name in ["UNKNOWN_SPELL", "OUTSIDE", "ALREADY_KNOWN", "NO_MASTER", "CANNOT_AFFORD"]:
 		assert_true(constants.has(reason_name), "SpellTuition.%s must exist" % reason_name)
 		assert_string_contains(body, "SpellTuition.%s" % reason_name)
 
@@ -93,6 +93,22 @@ func test_the_standing_refusal_names_the_building_the_charter_gates():
 	var body := _learn_command_body()
 	assert_string_contains(body, '"building_id"')
 	assert_string_contains(body, "SpellTuition.GUILD_BUILDING_ID")
+
+
+## "Nobody here teaches that" is the refusal that turns into a reason to
+## travel, so it has to name the tradition and the depth to look for.
+func test_the_no_master_refusal_names_the_school_and_the_depth():
+	var body := _learn_command_body()
+	assert_string_contains(body, '"school"')
+	assert_string_contains(body, '"depth"')
+
+
+## An apprenticeship is to a person: the listing names who is in the room
+## and a landed lesson names who gave it.
+func test_the_command_names_the_masters_rather_than_the_building():
+	var body := _learn_command_body()
+	assert_string_contains(body, "masters_here(")
+	assert_string_contains(body, "MageMaster.display_name_for(")
 
 
 func test_the_command_needs_a_local_player_like_every_other_one():
