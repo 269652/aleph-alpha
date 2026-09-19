@@ -15849,8 +15849,12 @@ func _load_chunk(chunk_coord: Vector2i) -> void:
 	# Wild mushrooms (see docs/concept/mushrooms.md): one sim covering all 6
 	# species for this chunk, already carrying whatever it seeded/was
 	# already fruiting on arrival.
+	# Same water mask, same reason as the ant colony below: a mycelium
+	# needs soil, and MushroomSpecies.allows_biome cannot see a river on
+	# its own because a river is not a biome.
 	var mushroom_sim := WildMushroomPatch.new(
-		hash("%d_%d_mushroom" % [chunk_coord.x, chunk_coord.y]), chunk.width, chunk.height, chunk.biome
+		hash("%d_%d_mushroom" % [chunk_coord.x, chunk_coord.y]), chunk.width, chunk.height, chunk.biome,
+		_ground_cover_blockers(chunk)
 	)
 	_mushroom_sims[chunk_coord] = mushroom_sim
 	_mushroom_markers[chunk_coord] = _mushroom_renderer.spawn_markers(
@@ -16015,8 +16019,15 @@ func _load_chunk(chunk_coord: Vector2i) -> void:
 	# Ant mounds in the soil (see docs/concept/soil_fauna.md "Ants"). Placed
 	# once at chunk creation -- mound_cells() never changes for a loaded
 	# chunk's lifetime, exactly like the earthworm burrows just above.
+	# The water mask is the SAME Chunk.blocks_ground_cover array TallGrass
+	# already reads to keep grass out of the river: a river or lake leaves
+	# the biome array untouched (docs/concept/rivers.md's Rendering
+	# section), so AntColony's own SOIL_BIOMES check cannot see water
+	# without it -- reported live, with a screenshot, as mounds sitting in
+	# open water.
 	_ant_colonies[chunk_coord] = AntColony.new(
-		hash("%d_%d_ants" % [chunk_coord.x, chunk_coord.y]), chunk.width, chunk.height, chunk.biome
+		hash("%d_%d_ants" % [chunk_coord.x, chunk_coord.y]), chunk.width, chunk.height, chunk.biome,
+		_ground_cover_blockers(chunk)
 	)
 	# The visible counterpart: one static AntMoundMarker per mound cell, so a
 	# colony is actually somewhere a player can SEE rather than a pure

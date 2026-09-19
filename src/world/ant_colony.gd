@@ -260,6 +260,12 @@ const _WINDFALL_SALT := 27457
 var _width: int
 var _height: int
 var _biome: PackedStringArray
+
+## One byte per cell, 1 where a river or lake covers the ground (the same
+## Chunk.blocks_ground_cover mask TallGrass reads to keep grass out of the
+## water). Empty for a caller that never passed one, which reads as
+## all-dry -- see _is_water_at.
+var _is_water: PackedByteArray
 var _seed_value: int
 
 ## Vector2i cell -> true. The mounds a chunk seeds at construction; fixed for
@@ -395,12 +401,28 @@ var _pheromones: Dictionary = {}
 const MAX_CONCURRENT_FORAGERS := 15
 
 
-func _init(seed_value: int, width: int, height: int, biome: PackedStringArray) -> void:
+## `is_water` (the Chunk.blocks_ground_cover mask -- river OR lake) defaults
+## to empty, so every pre-existing 4-argument call site and test fixture
+## keeps behaving exactly as before: the same optional-trailing-parameter
+## shape TallGrass's own is_river addition already uses.
+func _init(
+	seed_value: int, width: int, height: int, biome: PackedStringArray,
+	is_water: PackedByteArray = PackedByteArray()
+) -> void:
 	_seed_value = seed_value
 	_width = width
 	_height = height
 	_biome = biome
+	_is_water = is_water
 	_seed_initial_mounds()
+
+
+## True where standing or flowing water covers this cell. Size-checked, so
+## a caller that never passed a mask reads as dry land rather than indexing
+## off the end -- the identical guard TallGrass._is_river_at already makes.
+func _is_water_at(x: int, y: int) -> bool:
+	var index := y * _width + x
+	return index < _is_water.size() and _is_water[index] == 1
 
 
 func mound_cells() -> Array:
@@ -676,6 +698,11 @@ func is_valid_mound_site(cell: Vector2i) -> bool:
 	if cell.x < 0 or cell.x >= _width or cell.y < 0 or cell.y >= _height:
 		return false
 	if _mounds.has(cell):
+		return false
+	# Gating budding here too, not only initial seeding, is what stops a
+	# colony creeping into the river over time (see bud_new_mound, which
+	# goes through this).
+	if _is_water_at(cell.x, cell.y):
 		return false
 	return SOIL_BIOMES.has(_biome[cell.y * _width + cell.x])
 
@@ -1171,6 +1198,13 @@ func _seed_initial_mounds() -> void:
 			if _mounds.size() >= MAX_MOUNDS:
 				return
 			if not SOIL_BIOMES.has(_biome[y * _width + x]):
+				continue
+			# A river or lake never changes the biome array (see
+			# docs/concept/rivers.md's Rendering section), so the soil
+			# check above cannot see water on its own -- reported live,
+			# with a screenshot: "ant mounds ... should not spawn in
+			# rivers".
+			if _is_water_at(x, y):
 				continue
 			if PixelNoise.unit(_seed_value, x, y) >= MOUND_CHANCE:
 				continue

@@ -83,6 +83,12 @@ const _SPECIES_SALT := 16183
 const _INITIAL_SALT := 24571
 const _FLUSH_SALT := 32771
 
+## One byte per cell, 1 where a river or lake covers the ground (the same
+## Chunk.blocks_ground_cover mask TallGrass and AntColony read to keep
+## themselves out of the water). Empty for a caller that never passed one,
+## which reads as all-dry -- see _is_water_at.
+var _is_water: PackedByteArray
+
 var _width: int
 var _height: int
 var _seed_value: int
@@ -123,12 +129,28 @@ var _bite_stage: Dictionary = {}
 var _corpse_kind: Dictionary = {}
 
 
-func _init(seed_value: int, width: int, height: int, biome: PackedStringArray) -> void:
+## `is_water` (the Chunk.blocks_ground_cover mask -- river OR lake) defaults
+## to empty, so every pre-existing 4-argument call site and test fixture
+## keeps behaving exactly as before: the same optional-trailing-parameter
+## shape TallGrass's own is_river addition already uses.
+func _init(
+	seed_value: int, width: int, height: int, biome: PackedStringArray,
+	is_water: PackedByteArray = PackedByteArray()
+) -> void:
 	_seed_value = seed_value
 	_width = width
 	_height = height
+	_is_water = is_water
 	_seed_sites(biome)
 	_seed_initial_fruiting()
+
+
+## True where standing or flowing water covers this cell. Size-checked, so
+## a caller that never passed a mask reads as dry land rather than indexing
+## off the end -- the identical guard TallGrass._is_river_at already makes.
+func _is_water_at(x: int, y: int) -> bool:
+	var index := y * _width + x
+	return index < _is_water.size() and _is_water[index] == 1
 
 
 func get_site_cells() -> Array:
@@ -336,6 +358,12 @@ func _seed_sites(biome: PackedStringArray) -> void:
 		for x in _width:
 			if _sites.size() >= MAX_SITES:
 				return
+			# A river or lake never changes the biome array (see
+			# docs/concept/rivers.md's Rendering section), so
+			# MushroomSpecies.allows_biome cannot see water on its own --
+			# reported live, with a screenshot: "no shrooms in rivers".
+			if _is_water_at(x, y):
+				continue
 			var species := _eligible_species_at(x, y, biome)
 			if species.is_empty():
 				continue

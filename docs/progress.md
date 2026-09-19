@@ -12452,6 +12452,26 @@ New concept doc this pass -- no prior doc covered what's underground (`stone.md`
 - ⬜ **Underground art is the flat procedural fallback** (`ProceduralStoneSprite`/`ProceduralOreSprite`, same textures surface stone/ore nodes fall back to with no illustrated sheet), not a cave-specific illustrated sheet -- none exists yet, the same honestly-documented situation `stone.md` itself describes for any future stone class with no art of its own.
 
 
+### Nothing grows in the river that is not meant to (`concept/soil_fauna.md`, `concept/mushrooms.md`)
+
+Reported live, with a screenshot: *"ant mounds and long grass should not spawn in rivers"*, then *"Also no shrooms in rivers"*.
+
+**One root cause, two systems.** A river or lake in this world leaves the biome array completely untouched -- it is an overlay flag (`Chunk.is_river`/`Chunk.is_lake`, read through the one `Chunk.blocks_ground_cover` predicate), never an eighth biome, per `concept/rivers.md`'s Rendering decision. So any placement that consults only `chunk.biome` is structurally blind to water. `TallGrass` was fixed for exactly this once before (its own source still carries the comment *"reported live: grass grows in rivers"*), but the fix was never propagated: `AntColony.new(...)` and `WildMushroomPatch.new(...)` were both still being handed `chunk.biome` and nothing else.
+
+**Measured at the reported coordinates** (HUD read Lat 48.2 Lon 7.9 -> global tile 20857, 4640, chunk (651, 145)) rather than reasoned about. That chunk is 874 grassland + 150 forest with **zero** ocean-biome cells, and 142 river + 578 lake flags -- 63% water by area, all of it overlay on land biome, which is precisely why a biome-only check saw dry grassland everywhere:
+
+| | before | after |
+|---|---|---|
+| ant mounds in water | **2 of 2** | 0 of 2 |
+| mushroom sites in water | **39 of 60** | 0 of 50 |
+| long grass in water | 0 of 77 | 0 of 77 |
+
+- ✅ **`AntColony`** takes the `Chunk.blocks_ground_cover` mask as an optional trailing `PackedByteArray`, the identical shape `TallGrass`'s own `is_river` addition already used, so every pre-existing 4-argument caller and fixture is untouched. Gated in **`is_valid_mound_site`** as well as initial seeding -- budding goes through that predicate, so gating seeding alone would have stopped mounds *starting* in a river while still letting a colony creep into one over time. `test_ant_colony.gd` (4 new tests, 117 total).
+- ✅ **`WildMushroomPatch`** the same, gated in `_seed_sites`. The sites are relocated rather than lost: the same chunk still seeds 50, all on soil. `test_wild_mushroom_patch.gd` (4 new tests, 46 total).
+- ✅ **`EarthChunkManager`** passes `_ground_cover_blockers(chunk)` to both -- the helper whose own doc comment already said it existed "for consumers that take a whole flag array", but which only `TallGrass` had ever been given.
+- ✅ **Long grass was already correct** and is left alone. The plants visible over water in the screenshot are `AquaticVegetation`, which reads the *same* mask as an inclusion filter and is supposed to be there.
+- ⬜ Not audited: every other `chunk.biome`-only placement in the codebase. This pass fixed the two that were reported; the class of bug is "consults biome, never asks about water", and `Chunk.blocks_ground_cover`'s own docstring still claims stone is covered when no stone placer reads it.
+
 ### The underground (`concept/underground.md`)
 
 New concept doc and new system this pass, asked for directly: *"brainstorm and spec the second level underground mechanics and structure ... the underground levels get progressively difficult and rewarding; we need cave systems; content; instances."* `geology.md` specified the rock; nothing specified what the rock CONTAINS. The design decisions taken with the user: **one shared persistent planet with no per-party copies**, and a **chemosynthetic clade throughout** rather than troglomorphic descendants of surface species.

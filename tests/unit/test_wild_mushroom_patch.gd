@@ -546,3 +546,78 @@ func test_the_default_season_and_progress_preserve_every_pre_existing_caller():
 			flushed = true
 			break
 	assert_true(flushed, "the defaulted season/progress must land inside even the narrowest real window")
+
+
+# -- water: a mycelium needs soil, not a riverbed --------------------------
+#
+# Reported live, with a screenshot: "no shrooms in rivers". A river or lake
+# NEVER changes the biome array (see docs/concept/rivers.md's Rendering
+# section -- it is an overlay flag on untouched land biome), so
+# MushroomSpecies.allows_biome cannot see water at all. Measured at the
+# reported coordinates before the fix: 39 of that chunk's 60 sites sat in
+# water.
+#
+# Same mask and same shape TallGrass and AntColony already use
+# (Chunk.blocks_ground_cover -> an optional trailing PackedByteArray), so
+# the three cannot drift apart.
+
+const _WET_W := 24
+const _WET_H := 24
+
+
+func _all_forest(width: int, height: int) -> PackedStringArray:
+	var biome := PackedStringArray()
+	biome.resize(width * height)
+	for i in width * height:
+		biome[i] = "forest"
+	return biome
+
+
+## Water over the left half of the chunk, dry land on the right.
+func _left_half_wet(width: int, height: int) -> PackedByteArray:
+	var mask := PackedByteArray()
+	mask.resize(width * height)
+	for y in height:
+		for x in width:
+			mask[y * width + x] = 1 if x < width / 2 else 0
+	return mask
+
+
+func test_no_site_is_ever_seeded_in_water():
+	var patch := WildMushroomPatch.new(
+		2468, _WET_W, _WET_H, _all_forest(_WET_W, _WET_H), _left_half_wet(_WET_W, _WET_H)
+	)
+	for cell in patch.get_site_cells():
+		assert_gte(
+			cell.x, _WET_W / 2,
+			"mushroom site at %s sits in water -- a mycelium needs soil, not a riverbed" % cell
+		)
+
+
+func test_nothing_fruits_in_water_either():
+	# Fruiting is seeded from the sites, so this follows -- but it is the
+	# half a player actually SEES, and worth pinning directly.
+	var patch := WildMushroomPatch.new(
+		1357, _WET_W, _WET_H, _all_forest(_WET_W, _WET_H), _left_half_wet(_WET_W, _WET_H)
+	)
+	for cell in patch.get_fruiting_cells():
+		assert_gte(cell.x, _WET_W / 2, "a mushroom is fruiting at %s, in open water" % cell)
+
+
+func test_sites_still_appear_on_the_dry_half():
+	# The fix must not simply stop mushrooms existing.
+	var dry := WildMushroomPatch.new(2468, _WET_W, _WET_H, _all_forest(_WET_W, _WET_H))
+	assert_gt(dry.get_site_cells().size(), 0, "precondition: this seed produces sites on dry land")
+	var half := WildMushroomPatch.new(
+		2468, _WET_W, _WET_H, _all_forest(_WET_W, _WET_H), _left_half_wet(_WET_W, _WET_H)
+	)
+	assert_gt(half.get_site_cells().size(), 0, "every site was culled, not just the wet ones")
+
+
+func test_a_patch_given_no_water_mask_behaves_exactly_as_before():
+	var without := WildMushroomPatch.new(8080, _WET_W, _WET_H, _all_forest(_WET_W, _WET_H))
+	var with_empty := WildMushroomPatch.new(
+		8080, _WET_W, _WET_H, _all_forest(_WET_W, _WET_H), PackedByteArray()
+	)
+	assert_eq(without.get_site_cells().size(), with_empty.get_site_cells().size())
+	assert_eq(without.get_fruiting_cells().size(), with_empty.get_fruiting_cells().size())
