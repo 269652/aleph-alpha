@@ -11,6 +11,9 @@ const IllustratedStructureSprite = preload("res://src/rendering/illustrated_stru
 const TerrainRenderer = preload("res://src/rendering/terrain_renderer.gd")
 
 const OUT := "/tmp/claude-0/-home-user-aleph-alpha/70e7bac8-cb28-5bf7-b632-10ffe5d682ba/scratchpad/cottage_row.png"
+## Draw at the FULL plot width too, so the fix can be looked at beside
+## what was reported rather than only described.
+const SHOW_BEFORE := true
 const SEEDS := [3, 11, 29]
 const PAVING := Color(0.38, 0.38, 0.40)
 const PAVING_LINE := Color(0.30, 0.30, 0.32)
@@ -33,7 +36,7 @@ func _initialize() -> void:
 		tallest = maxi(tallest, texture.get_height())
 
 	var width := plot_px * textures.size()
-	var height := tallest + TerrainRenderer.ART_TILE_SIZE * 2
+	var height := (tallest + TerrainRenderer.ART_TILE_SIZE * 2) * (2 if SHOW_BEFORE else 1)
 	var canvas := Image.create(width, height, false, Image.FORMAT_RGBA8)
 	for y in height:
 		for x in width:
@@ -41,6 +44,17 @@ func _initialize() -> void:
 			canvas.set_pixel(x, y, PAVING_LINE if on_line else PAVING)
 
 	# Bottom-centre on each plot, exactly as _spawn_building_node anchors it.
+	var band := height / (2 if SHOW_BEFORE else 1)
+	if SHOW_BEFORE:
+		var before_ground := band - TerrainRenderer.ART_TILE_SIZE
+		for i in textures.size():
+			var stretched: Image = textures[i].get_image().duplicate() as Image
+			var factor := float(plot_px) / float(stretched.get_width())
+			stretched.resize(plot_px, int(round(stretched.get_height() * factor)), Image.INTERPOLATE_LANCZOS)
+			canvas.blend_rect(
+				stretched, Rect2i(Vector2i.ZERO, stretched.get_size()),
+				Vector2i(i * plot_px, before_ground - stretched.get_height())
+			)
 	var ground := height - TerrainRenderer.ART_TILE_SIZE
 	for i in textures.size():
 		var frame: Image = textures[i].get_image()
