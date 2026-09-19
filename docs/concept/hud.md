@@ -115,6 +115,153 @@ The warmth row keeps its three-way state name (`Freezing`/`Cold`/`Warmth`,
 from `SurvivalMeters.is_freezing()`/`is_cold()`), which is a *label* change
 only — the percentage under it is still the same reserve the bar shows.
 
+### The top-left strip: the player's half is a card, the diagnostic half is opt-in
+
+The strip at `(8, 8)` was one bare `Label` -- `$UI/DebugLabel`, still carrying
+its `.tscn`-authored `"Loading..."` placeholder -- holding eight fields in a
+single `%`-formatted string:
+
+```
+FPS 87   Lat 48.0 Lon 7.9   Local 14:32   Sun elev 41.3°   Summer · Clear   Mode: walk   Speed: 100%
+```
+
+That mixes two audiences in one line. *Local 14:32*, *Summer · Clear*,
+*Mode: walk* and *Speed: 100%* are things the player plays with. *FPS*,
+*Lat/Lon* and *Sun elev 41.3°* are things a developer debugs with -- a player
+who has never opened this repo cannot act on any of them. And being a bare
+`Label`, the whole line broke pillar 1: white text over whatever terrain
+happened to scroll under it.
+
+They split along that seam:
+
+- **The world-clock card**, top-left on the shared `UiTheme.panel_stylebox()`:
+  the time, the phase of the day, the season, the weather, and how the player
+  is moving. Always visible. `HudReadouts.world_clock_lines` is the pinned
+  pure half.
+- **The diagnostics strip**: FPS, latitude/longitude, sun elevation in degrees.
+  **Hidden by default**, toggled with the rebindable `toggle_diagnostics`
+  action (default **F3**). `HudReadouts.diagnostics_lines` is its pure half.
+
+A diagnostic that is off until asked for is the rule
+[`RiverFlowShader`'s raw-across channel](../../src/rendering/river_flow_shader.gd)
+already states for itself ("a diagnostic must never ship on"); this applies it
+to the one diagnostic that did ship on.
+
+**Why a separate `HudReadouts` module rather than more statics on `World`.**
+The four pure HUD decisions that exist today (`message_banner_lines`,
+`world_hint_visible_for`, `reserve_for_deficit`, `karma_display_text`) are
+statics on `World` because they were each one function added to a file that
+was already open. `scenes/world.gd` is now past 17k lines, and the readouts
+below are a coherent group with no dependency on `World` at all -- they take
+numbers and strings and return text and colours. They live in
+`src/ui/hud_readouts.gd`, tested by `tests/unit/test_hud_readouts.gd`, beside
+`UiTheme`. The existing four stay where they are; this is where new ones go.
+
+#### The phase of the day is the sun's elevation, not the clock
+
+The strip already printed `Sun elev 41.3°`, a number with no meaning at the
+player's chair. The same number, named, is the thing the player actually wants
+to know -- whether it is about to get dark.
+
+`HudReadouts.day_phase(sun_elevation_degrees, local_hour)` uses the real civil
+twilight boundary rather than clock hours, because the clock hour of sunset
+moves by months and by latitude while the elevation does not:
+
+| Sun elevation | Phase |
+|---------------|-------|
+| `>= 6°` | **Day** |
+| `-6°` to `6°`, before local noon | **Dawn** |
+| `-6°` to `6°`, at or after local noon | **Dusk** |
+| `< -6°` | **Night** |
+
+The rising/setting split is `local_hour < 12` -- the game's local hour is local
+*solar* time (it is derived from longitude, see `WorldCoordinates`), so solar
+noon is 12 by construction, not by approximation.
+
+### Condition chips: the bars finally say what is wrong
+
+`SurvivalMeters` has carried eight named states since it was written --
+`is_hungry`, `is_starving`, `is_thirsty`, `is_dehydrated`, `is_exhausted`,
+`is_cold`, `is_freezing`, `is_malnourished` -- and the HUD showed exactly one
+of them, as the warmth row's label. A player watching the food bar drop had no
+way to know that 0.5 is where hunger starts costing them and 0.85 is where it
+starts killing them; the bar is a fraction, and a fraction is not a warning.
+
+`HudReadouts.condition_chips(meters, in_water)` returns the states that are
+true right now as `{text, color}` entries, drawn as a row of small themed cards
+directly above the survival panel, bottom-left -- with the bars they name, not
+in some other corner.
+
+Two rules, both pinned by test:
+
+1. **Severity is the colour, and the colour is the theme's own good/bad pair.**
+   A state that is actively taking the player apart is `UiTheme.NEGATIVE`; a
+   state that is a warning is `UiTheme.ACCENT`; a state that is merely a fact
+   about where the player is standing is `UiTheme.TEXT_MUTED`. No third palette.
+2. **Severe first, then warnings, then facts, each tier in a fixed order.** The
+   same reasoning as the message stack's fixed order: a chip must not move
+   under the player's eye because an unrelated one appeared. Within a tier the
+   order is food, water, warmth, rest, nutrition, place.
+
+A severe chip **replaces** its own warning rather than stacking with it --
+"Starving" and "Hungry" are the same meter, and showing both would double-count
+one problem:
+
+| Condition | Chip | Tier |
+|-----------|------|------|
+| `is_starving()` | **Starving** | severe |
+| `is_hungry()` and not starving | **Hungry** | warning |
+| `is_dehydrated()` | **Parched** | severe |
+| `is_thirsty()` and not dehydrated | **Thirsty** | warning |
+| `is_freezing()` | **Freezing** | severe |
+| `is_cold()` and not freezing | **Cold** | warning |
+| `is_exhausted()` | **Exhausted** | warning |
+| `is_malnourished()` | **Malnourished** | warning |
+| in water | **Swimming** | fact |
+
+Nothing wrong and dry ground underfoot shows **no chips at all** -- an empty
+row, not a row of green "OK" badges. The HUD is quiet when there is nothing to
+say, the same way an empty message banner hides its whole card.
+
+### The held-item card: what is in hand, and how close it is to breaking
+
+The hotbar shows five icons and a stack count. It does not name what is
+equipped, and nothing anywhere in the HUD shows **wear** -- `ItemWear` has
+graded every tool's condition since it was written, and the only way a player
+learnt an axe was about to break was that it broke.
+
+A small themed card sits directly above the hotbar, bottom-centre, showing the
+equipped item's display name and its `ItemWear.condition_for` grade.
+`HudReadouts.held_item_line(name, condition)` is the pure half: the name alone
+when the item has no material to wear (a torch, a fish), `"Name · Condition"`
+when it does, and an empty string when nothing is equipped -- which hides the
+whole card, the same `_set_message_banner` rule the banners follow.
+
+### UI scale
+
+Every font size in the HUD was a hardcoded `add_theme_font_size_override`
+between 9 and 28, chosen against one developer's monitor. `src/ui/ui_scale.gd`
+is the settings model, the same shape `AudioSettings` and `SimulationSettings`
+already have: a float multiplier, `sanitize`d into `[MIN_SCALE, MAX_SCALE]`
+with NaN falling back to `DEFAULT_SCALE` (1.0, exactly today's look), driven by
+a Settings > Interface slider and persisted in the `[ui]` section of the shared
+settings file.
+
+`UiScale.font_size(base, scale)` is how a size is applied, and it is the only
+way one is: `maxi(MIN_FONT_SIZE, roundi(base * scale))`, so a tiny scale can
+never round a 9pt label to 0 and make it vanish. It feeds two places:
+
+- `UiTheme.build_theme(scale)` scales the theme's own default/Button/Label
+  sizes, which covers every widget that does not override its size.
+- Widgets that *do* override -- they are the ones this pass touched -- register
+  their base size with `World._scaled_font(label, base)`, which applies the
+  size now and re-applies it when the slider moves, so a scale change takes
+  effect without a restart.
+
+Deliberately **not** done by scaling the `$UI` CanvasLayer: a `CanvasLayer`
+scales about its origin, so every bottom- and right-anchored card would walk
+off the screen. Layout stays at one scale and text is what grows.
+
 ## Status
 
 - ✅ **One shared message stack** — `World._build_message_stack` /
@@ -133,16 +280,19 @@ only — the percentage under it is still the same reserve the bar shows.
   (`UiTheme.panel_stylebox` via `_ui_theme`, pillar 1) just under the
   minimap, top-right. `World.karma_display_text`/`karma_display_color`
   are the pure, tested halves (`test_world_hud.gd`): a signed number,
-  coloured gold/red/neutral by sign. Built on the shared card from the
-  start, unlike the still-bare readouts the next line names.
-- 🚧 **The rest of the HUD is not audited against pillar 1.** The land-sense
-  readout (`_land_sense_label`), the death label, the XP label and the charge
-  meter are still bare `Label`s/`ColorRect`s without the shared card. The
-  land-sense and XP ones sit in screen corners rather than over open terrain,
-  which is why they were not swept in with the message banners — but they are
-  not *specified* as exempt, they are simply untouched.
-- ⬜ **No in-world UI scale / font-size setting.** Every size above is a
-  hardcoded `font_size` override.
+  coloured gold/red/neutral by sign.
+- ⬜ **The top-left strip is split** — the world-clock card always on, the
+  diagnostics strip behind `toggle_diagnostics` (F3) and off by default.
+  `HudReadouts.world_clock_lines` / `diagnostics_lines` / `day_phase`.
+- ⬜ **Condition chips** — `HudReadouts.condition_chips`, a row of themed
+  cards above the survival panel naming the `SurvivalMeters` states the bars
+  only imply.
+- ⬜ **Held-item card** — `HudReadouts.held_item_line`, above the hotbar:
+  what is equipped and how close it is to breaking.
+- ⬜ **UI scale** — `src/ui/ui_scale.gd` + `UiTheme.build_theme(scale)` +
+  a Settings > Interface slider, persisted in `[ui]`.
+- ⬜ **Pillar 1 finished** — the land-sense readout, the death label, the XP
+  label and the charge meter move onto the shared card.
 - ⬜ **The charge meter is world-space and not yet covered by
   `world_hint_visible_for`.** It is drawn above the player's own head, so it
   can overlap a window the same way the prompt did.
@@ -153,4 +303,7 @@ only — the percentage under it is still the same reserve the bar shows.
 member points at — is untested glue over tested pieces, the same boundary
 [persistence.md](persistence.md) already draws for the persistence wiring.
 What is tested is the pure decisions: the banner order, the visibility rule
-and the meter vocabulary, all in `tests/unit/test_world_hud.gd`.
+and the meter vocabulary in `tests/unit/test_world_hud.gd`; the readout text,
+the day phase, the condition chips and the held-item line in
+`tests/unit/test_hud_readouts.gd`; the scale model in
+`tests/unit/test_ui_scale.gd`.
