@@ -44,7 +44,8 @@ const NEED_WARN_COLOR := Color(0.95, 0.6, 0.3)
 ## (most fundamental first) -- the readout shows needs in the order they
 ## actually matter, which is also their weight order.
 const NEED_LABELS := {
-	"food": "Food", "shelter": "Shelter", "income": "Income", "community": "Community",
+	"food": "Food", "shelter": "Shelter", "work": "Work", "income": "Income",
+	"community": "Community",
 }
 
 signal closed

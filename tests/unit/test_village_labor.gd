@@ -195,3 +195,78 @@ func test_promoting_every_cottager_leaves_the_mill_unstaffable():
 	var after: Dictionary = VillageLabor.supply_for({"bauer": 6})
 	assert_true(VillageLabor.can_staff("warehouse", before))
 	assert_false(VillageLabor.can_staff("warehouse", after), "a village of farmers still has hands")
+
+
+# -- employment: the dual of fulfilment ----------------------------------
+
+## `fulfilment` asks what share of the POSTS are filled; `employment` asks
+## what share of the PEOPLE have one. A village reads both off the same two
+## numbers, and they are not the same question -- a village with one forge
+## and forty craftsmen has every post filled and thirty-eight idle men.
+func test_a_class_with_a_post_for_everyone_is_fully_employed():
+	assert_almost_eq(float(VillageLabor.employment_for({"hand": 2}, {"hand": 2})["hand"]), 1.0, 0.0001)
+
+
+func test_a_class_with_posts_for_half_of_it_is_half_employed():
+	assert_almost_eq(float(VillageLabor.employment_for({"hand": 4}, {"hand": 2})["hand"]), 0.5, 0.0001)
+
+
+## Surplus posts do not employ people twice: a village with ten forges and
+## two craftsmen has two employed craftsmen, not five each.
+func test_more_posts_than_people_never_employs_anyone_twice():
+	assert_almost_eq(float(VillageLabor.employment_for({"craft": 2}, {"craft": 20})["craft"]), 1.0, 0.0001)
+
+
+func test_a_class_nothing_demands_is_wholly_idle():
+	assert_almost_eq(float(VillageLabor.employment_for({"field": 5}, {})["field"]), 0.0, 0.0001)
+
+
+## A class NOBODY holds is not unemployed -- there is nobody to be idle.
+## Reported as fully employed rather than as zero, which is the only
+## reading that does not invent a crowd of idle people who do not exist.
+func test_a_class_nobody_holds_is_not_reported_as_idle():
+	assert_almost_eq(float(VillageLabor.employment_for({}, {"craft": 3})["craft"], ), 1.0, 0.0001)
+
+
+func test_every_class_named_on_either_side_gets_an_answer():
+	var employment: Dictionary = VillageLabor.employment_for({"hand": 3}, {"craft": 1})
+	assert_true(employment.has("hand"))
+	assert_true(employment.has("craft"))
+
+
+func test_an_empty_village_employs_nobody_and_reports_nothing():
+	assert_eq(VillageLabor.employment_for({}, {}), {})
+
+
+## What one household actually reads: the employment of its OWN estate's
+## labour class.
+func test_a_household_reads_the_employment_of_its_own_estates_class():
+	var census := {"kossaet": 4, "bauer": 2}
+	var present := ["warehouse"]  # one `hand` post, nothing for a husbandman
+	var employment: Dictionary = VillageLabor.employment_for(
+		VillageLabor.supply_for(census), VillageLabor.demand_for(present)
+	)
+	assert_almost_eq(float(employment["hand"]), 0.25, 0.0001)
+	assert_almost_eq(float(employment["field"]), 0.0, 0.0001)
+
+
+func test_employment_for_estate_reads_the_right_class_and_is_safe_for_an_unknown_one():
+	var employment := {"hand": 0.25, "field": 0.0}
+	assert_almost_eq(VillageLabor.employment_for_estate("kossaet", employment), 0.25, 0.0001)
+	assert_almost_eq(VillageLabor.employment_for_estate("bauer", employment), 0.0, 0.0001)
+	assert_almost_eq(
+		VillageLabor.employment_for_estate("emperor", employment), 1.0, 0.0001,
+		"an estate with no labour class of its own cannot be idle"
+	)
+
+
+## The squeeze, from the PEOPLE'S side rather than the buildings': promote
+## every cottager and the village's works have nobody to run them AND the
+## risen households have nothing to do.
+func test_promoting_everyone_leaves_the_risen_households_idle():
+	var present := ["warehouse", "sawmill"]
+	var demand: Dictionary = VillageLabor.demand_for(present)
+	var before: Dictionary = VillageLabor.employment_for(VillageLabor.supply_for({"kossaet": 3}), demand)
+	var after: Dictionary = VillageLabor.employment_for(VillageLabor.supply_for({"bauer": 3}), demand)
+	assert_almost_eq(float(before["hand"]), 1.0, 0.0001)
+	assert_almost_eq(float(after["field"]), 0.0, 0.0001, "husbandmen with no farm found work anyway")

@@ -242,6 +242,14 @@ verdict, the same derived-over-persisted discipline
   over somebody else's back, and the one building that can be bottlenecked
   from below as well as above.
 
+- `employment_for(supply, demand)` → `{labour_class -> [0,1]}`, the share
+  of the PEOPLE of each class that have a post. The dual of the line
+  below, off the same two numbers, and the half a household feels rather
+  than the half a building does — it is what
+  [village_growth.md](village_growth.md)'s wellbeing model reads as its
+  `work` need. A class nobody holds reads as fully employed, not as zero:
+  there is nobody to be idle, and zero would invent a crowd of unemployed
+  people who do not exist.
 - `output_scale_for(building_id, supply, demand)` → `[0,1]`: the **minimum**
   fulfilment across the classes that building needs. A brewery with its
   brewer and nobody to rake the mash runs at the hand's rate. A blacksmith
@@ -571,6 +579,35 @@ the code as it landed. See [progress.md](../progress.md) for the ledger.
   rather than three small ones, and the food token is never reported
   because nothing can be built to produce "any food" and `SettlementFood`
   already asks for the staple.
+- ✅ **The pyramid reaches wellbeing.** `VillageLabor.employment_for` is
+  the DUAL of `output_scale_for`, read off the same two numbers: that one
+  says what share of a building's POSTS are filled, this says what share
+  of the PEOPLE of a class have one. A village with one forge and forty
+  craftsmen has every post filled and thirty-eight idle men, and those are
+  not the same fact.
+
+  `HouseholdWellbeing` gains a fifth need, **`work`**, weighted between
+  shelter and income — losing your trade costs more than losing your
+  savings, since the trade is what produced the savings, and less than
+  losing the roof. So the squeeze is felt: a village that promoted every
+  cottager out of the class its own works need has idle households AND
+  cold buildings, and the idleness costs real happiness and, through it,
+  real construction speed.
+
+  **`work` is the one need whose missing input is not read as
+  destitution.** Every other input describes the household itself, so a
+  missing one really is bad news; employment is read off the settlement's
+  BUILDINGS, and a caller that could not look at them has discovered
+  nothing rather than idleness. `EarthChunkManager` therefore omits the
+  key when a settlement's buildings are wholly unreadable — nothing
+  standing and an empty construction ledger — because every village is
+  founded with a store already up, so "no building at all" means nobody
+  looked. The same trap the unloaded `house_capacity` fallback already
+  avoids.
+
+  Both wellbeing paths — the settlement-wide assessment and the household
+  a click resolves to — build their state through ONE builder, so they
+  cannot drift into disagreeing about who is in work (test-pinned).
 - ✅ **A staffed works really produces.** `StaffedProduction` spends the
   pyramid: a staffed brewery brews `beer` out of the village's own grain
   (so beer and bread compete for one harvest), and a staffed sawmill brings
@@ -653,12 +690,12 @@ which is exactly how these hid.
   real plots, and running it again through a market abstraction would be
   the same crop harvested twice. The farmhouse entry was tried and produced
   exactly nothing, silently, for sixty assessments before a test asked.
-- 🚧 **`HouseholdWellbeing` still reads stock rather than flow.** Its four
-  needs (food, shelter, income, community) are unchanged and still power
-  the happiness/productivity loop. The estate layer's per-good satisfaction
-  is a strictly better input for the `food` and `community` terms; wiring
-  it in means moving numbers a live construction loop is calibrated
-  against, so it is deliberately a separate pass.
+- 🚧 **`HouseholdWellbeing`'s food and community needs still read stock
+  rather than flow.** The `work` need is wired (see the Status entry
+  above); `food` and `community` are not. The estate layer's per-good
+  satisfaction is a strictly better input for both, but wiring them means
+  moving numbers a live construction loop is calibrated against, so it is
+  deliberately a separate pass.
 - ⬜ **Patronage across estates.** Specified above; waits on
   [npc_social_life.md](npc_social_life.md)'s own trust dimension.
 - ⬜ **Interiors and art per estate.** A household that rises moves up a

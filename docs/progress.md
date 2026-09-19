@@ -27376,8 +27376,40 @@ real field worked by real villagers on real plots, and running it again
 through a market would be the same crop harvested twice. That entry was
 tried, and produced exactly nothing, silently, for sixty assessments before
 a test asked.
-- 🚧 **`HouseholdWellbeing` still reads stock rather than flow.** Its four
-  needs are unchanged and still power the happiness/productivity loop.
+### ✅ The pyramid reaches wellbeing
+
+`VillageLabor.employment_for` is the DUAL of `output_scale_for` off the
+same two numbers: that one says what share of a building's POSTS are
+filled, this says what share of the PEOPLE of a class have one. A village
+with one forge and forty craftsmen has every post filled and thirty-eight
+idle men, and those are not the same fact.
+
+`HouseholdWellbeing` gains a fifth need, **`work`**, weighted between
+shelter and income — losing your trade costs more than losing your
+savings, since the trade produced the savings, and less than losing the
+roof. The squeeze is now something a village FEELS: promote every cottager
+out of the class your own works need and you get idle households and cold
+buildings together, and the idleness costs real happiness and, through it,
+real construction speed.
+
+`work` is the one need whose missing input is **not** read as destitution.
+Every other input describes the household itself; employment is read off
+the settlement's buildings, and a caller that could not look at them has
+discovered nothing rather than idleness. `EarthChunkManager` omits the key
+when a settlement's buildings are wholly unreadable — nothing standing and
+an empty ledger — because every village is founded with a store already
+up, so "no building at all" means nobody looked. Both wellbeing paths now
+build their state through one builder, so the village-wide assessment and
+the household a click resolves to cannot disagree about who is in work.
+
+The panel's needs fixture is derived from the real need list rather than
+typed out — a hand-written four kept passing against a five-need model,
+and the row the panel was failing to draw was invisible in it.
+
+🚧 `HouseholdWellbeing`'s **food and community** needs still read stock
+rather than flow. The estate layer's per-good satisfaction is a strictly
+better input for both, but wiring them moves numbers a live construction
+loop is calibrated against.
 ### ✅ The guild chest: a village's social structure buffers its economy
 
 `GuildRelief`, and the point where "who has actually traded with whom"

@@ -18,12 +18,24 @@ func before_each():
 	add_child_autofree(panel)
 
 
+## Every real need at one reading -- the fixture's needs dict, derived so
+## it cannot go stale when a need is added.
+func _every_need_at(value: float) -> Dictionary:
+	var needs := {}
+	for need_id in HouseholdWellbeing.NEED_IDS:
+		needs[need_id] = value
+	return needs
+
+
 func _home_report(overrides: Dictionary = {}) -> Dictionary:
 	var report := {
 		"building_id": "house_medium", "capacity": 2, "is_home": true,
 		"household_id": "household:npc:7", "resident_name": "Mara Fenn",
 		"resident_occupation": "herbalist", "wallet_balance": 14,
-		"needs": {"food": 0.9, "shelter": 1.0, "income": 0.35, "community": 0.5},
+		# Built from HouseholdWellbeing's OWN need list rather than typed
+		# out: a hand-written four kept passing while the model had five,
+		# and the row the panel was failing to draw was invisible here.
+		"needs": _every_need_at(0.5),
 		"happiness": 0.72, "productivity": 0.64, "settlement_productivity": 0.7,
 	}
 	for key in overrides:
@@ -345,3 +357,23 @@ func test_the_need_being_answered_right_now_is_marked():
 func test_the_panel_still_opens_on_household():
 	panel.show_report(_home_report({"village_needs": _needs_rows()}))
 	assert_eq(panel.selected_tab(), "household")
+
+
+## Every need HouseholdWellbeing reports has a label a player can read --
+## otherwise a new need shows up on the panel as a bare id, or as nothing
+## at all.
+func test_every_need_has_a_human_label():
+	for need_id in HouseholdWellbeing.NEED_IDS:
+		assert_true(
+			HousePanel.NEED_LABELS.has(need_id),
+			"%s has no label a player could read" % need_id
+		)
+		assert_ne(String(HousePanel.NEED_LABELS[need_id]), need_id, "%s is shown by its id" % need_id)
+
+
+func test_the_labels_name_nothing_that_is_not_a_real_need():
+	for need_id in HousePanel.NEED_LABELS:
+		assert_true(
+			HouseholdWellbeing.NEED_IDS.has(need_id),
+			"%s is labelled and is not a need" % need_id
+		)
