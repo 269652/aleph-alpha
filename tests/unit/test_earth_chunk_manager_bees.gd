@@ -444,20 +444,20 @@ func test_has_real_hive_anchor_accepts_a_position_at_a_real_standing_tree():
 	var tree_tile := Vector2i(
 		floori(tree_position.x / TerrainRenderer.TILE_SIZE), floori(tree_position.y / TerrainRenderer.TILE_SIZE)
 	)
-	assert_true(manager._has_real_hive_anchor(tree_position, tree_tile))
+	assert_true(manager._has_real_hive_anchor(tree_tile))
 
 
 ## Nothing loaded at all means no real tree and no real building piece can
 ## possibly be found nearby (both queries only ever see loaded data) --
 ## the honest "free-floating" case this whole feature exists to reject.
 func test_has_real_hive_anchor_rejects_a_position_with_nothing_loaded_nearby():
-	assert_false(manager._has_real_hive_anchor(_tile_pixel(_berlin_tile), _berlin_tile))
+	assert_false(manager._has_real_hive_anchor(_berlin_tile))
 
 
 func test_has_real_hive_anchor_accepts_a_position_near_a_real_building_piece():
 	manager._load_chunk(_berlin_chunk)
 	assert_true(manager.build_at_global(_berlin_tile.x, _berlin_tile.y, "wood_wall"))
-	assert_true(manager._has_real_hive_anchor(_tile_pixel(_berlin_tile), _berlin_tile))
+	assert_true(manager._has_real_hive_anchor(_berlin_tile))
 
 
 ## A source-level wiring assertion, not a live-terrain one -- mirrors
@@ -610,3 +610,92 @@ func test_a_wild_bee_forager_orphaned_by_an_unload_does_not_touch_the_old_patch(
 		"an orphaned wild bee patch must never receive a forage-result record from a forager whose nest's chunk already unloaded"
 	)
 	assert_true(forager.is_queued_for_deletion())
+
+
+# -- a hive hangs FROM a branch; it does not stand near one ------------------
+#
+# Reported live: *"Beehives should not be built on grass... they need a tree
+# branch to build it please"*. The earlier pass (above) already rejected open
+# water and genuinely empty ground, but accepted any tile with a tree or a
+# building piece within HIVE_ANCHOR_RADIUS_TILES -- so a hive could stand on
+# bare grass a couple of tiles away from the nearest trunk, which is exactly
+# what got reported. A branch is not nearby scenery: it is the thing the comb
+# hangs off, on the hive's own tile.
+
+
+## Every real standing tree's own tile in a loaded chunk, so a test can pick
+## a tile that genuinely has no tree on it rather than assuming one.
+func _tree_tiles_in(chunk_coord: Vector2i) -> Dictionary:
+	var tiles: Dictionary = {}
+	for tree in manager._loaded_trees.get(chunk_coord, []):
+		if not is_instance_valid(tree) or tree.is_felled():
+			continue
+		tiles[Vector2i(
+			floori(tree.position.x / TerrainRenderer.TILE_SIZE),
+			floori(tree.position.y / TerrainRenderer.TILE_SIZE)
+		)] = true
+	return tiles
+
+
+func test_has_real_hive_anchor_rejects_bare_ground_beside_a_real_tree():
+	manager._load_chunk(_berlin_chunk)
+	var tree_tiles := _tree_tiles_in(_berlin_chunk)
+	if tree_tiles.is_empty():
+		pending("no real tree landed in Berlin's own chunk this seed")
+		return
+	var tree_tile: Vector2i = tree_tiles.keys()[0]
+	# The nearest neighbouring tile that holds no tree of its own -- close
+	# enough that the old radius accepted it, bare ground all the same.
+	for offset in [Vector2i(1, 0), Vector2i(0, 1), Vector2i(-1, 0), Vector2i(0, -1)]:
+		var beside: Vector2i = tree_tile + offset
+		if tree_tiles.has(beside):
+			continue
+		assert_false(
+			manager._has_real_hive_anchor(beside),
+			"a hive on bare ground at %s has no branch to hang from, only a tree at %s"
+				% [beside, tree_tile]
+		)
+		return
+	pending("every neighbour of this tree holds a tree of its own")
+
+
+func test_has_real_hive_anchor_rejects_bare_ground_beside_a_real_building_piece():
+	manager._load_chunk(_berlin_chunk)
+	var beside := _berlin_tile + Vector2i(1, 0)
+	if not _tree_tiles_in(_berlin_chunk).is_empty() and _tree_tiles_in(_berlin_chunk).has(beside):
+		pending("a real tree stands on the tile this test needs bare")
+		return
+	assert_true(manager.build_at_global(_berlin_tile.x, _berlin_tile.y, "wood_wall"))
+	assert_false(
+		manager._has_real_hive_anchor(beside),
+		"a hive on the ground beside a wall is not attached to it"
+	)
+
+
+## The whole point, stated against real generated terrain rather than a
+## constructed fixture: whatever the world seeds, no hive stands on bare
+## ground. Walks a real 3x3 of chunks so the assertion has real hives to
+## find rather than depending on one specific chunk rolling one.
+func test_no_seeded_hive_in_real_terrain_stands_on_bare_ground():
+	var hives_checked := 0
+	for dy in range(-1, 2):
+		for dx in range(-1, 2):
+			var chunk_coord := _berlin_chunk + Vector2i(dx, dy)
+			manager._load_chunk(chunk_coord)
+			var colony = manager._bee_colonies.get(chunk_coord, null)
+			if colony == null:
+				continue
+			var tree_tiles := _tree_tiles_in(chunk_coord)
+			for hive_cell in colony.hive_cells():
+				hives_checked += 1
+				var global_tile: Vector2i = (
+					chunk_coord * EarthChunkManager.CHUNK_SIZE + hive_cell
+				)
+				assert_true(
+					tree_tiles.has(global_tile)
+						or manager._has_building_piece_at(global_tile),
+					"a hive was seeded at %s with no tree and no structure on that tile"
+						% global_tile
+				)
+	if hives_checked == 0:
+		pending("no hive was seeded anywhere in this 3x3 of chunks this seed")
