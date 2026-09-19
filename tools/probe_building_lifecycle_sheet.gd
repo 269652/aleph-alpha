@@ -19,7 +19,8 @@ extends SceneTree
 const VariantSheetGrid = preload("res://src/rendering/variant_sheet_grid.gd")
 
 const _SHEETS := [
-	"house_1_1", "house_1_2", "house_1_3", "house_1_4", "house_1_5", "well", "house_1", "stand",
+	"sawmill", "warehouse", "city_hall", "farmhouse", "blacksmith", "brewery",
+	"house_1_1", "well", "house_1", "stand",
 ]
 
 const _MAGENTA_RED_MIN := 0.85

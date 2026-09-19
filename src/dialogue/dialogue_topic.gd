@@ -582,7 +582,10 @@ static func _village_food_facts(frame: Dictionary) -> Dictionary:
 ## by, read the other way round. Never a second "how much food is enough"
 ## number of this module's own.
 static func _food_needed(frame: Dictionary) -> int:
-	return maxi(int(frame.get("settlement_household_count", 0)), 0) * SettlementState.FOOD_PER_HOUSEHOLD
+	return int(round(
+		float(maxi(int(frame.get("settlement_household_count", 0)), 0))
+		* SettlementState.FOOD_PER_HOUSEHOLD
+	))
 
 
 ## The share of what this village needs to eat that it does not have.

@@ -23,6 +23,9 @@ const Carcass = preload("res://src/rendering/carcass.gd")
 const NpcCondition = preload("res://src/world/npc_condition.gd")
 const VillagerBehavior = preload("res://src/gameplay/villager_behavior.gd")
 const VillageSawmill = preload("res://src/gameplay/village_sawmill.gd")
+const VillageCart = preload("res://src/gameplay/village_cart.gd")
+const CartMarker = preload("res://src/rendering/cart_marker.gd")
+const LogisticsBehavior = preload("res://src/gameplay/logistics_behavior.gd")
 const LumberjackBehavior = preload("res://src/gameplay/lumberjack_behavior.gd")
 const SagewerkProduction = preload("res://src/world/sagewerk_production.gd")
 const ChoppableTree = preload("res://src/rendering/choppable_tree.gd")
@@ -224,6 +227,23 @@ var stock_building_cell: Vector2i = NO_STOCK_BUILDING
 ## The sentinel sawmill_cell carries when this villager has none.
 const NO_SAWMILL := Vector2i(-2147483648, -2147483648)
 
+## The store this villager carts for, and the producers whose shelves they
+## empty into it -- GLOBAL anchor cells, handed over by VillageRenderer the
+## same way a sawyer is handed their mill. NO_STORE for every villager who
+## is not this village's carter (docs/concept/village_warehouse.md,
+## Mechanism 4).
+const NO_STORE := Vector2i(-2147483648, -2147483648)
+var store_cell: Vector2i = NO_STORE
+var producer_cells: Array[Vector2i] = []
+
+## The Bollerwagen this carter pulls (a CartMarker), or null. The goods ride
+## ON IT -- a cart left standing is a cart with the timber still in it, which
+## is the whole point of the trade having one (Mechanism 5).
+var cart = null
+
+var _carter: LogisticsBehavior = null
+var _round_shelf: Vector2i = NO_STORE
+
 ## The GLOBAL tile of the sawmill this villager works, or NO_SAWMILL
 ## (docs/concept/village_timber.md). Assigned by VillageRenderer, the only
 ## thing that knows which mill is whose -- the same shape stock_building_cell has.
@@ -240,10 +260,7 @@ const FELL_DAMAGE := 5.0
 
 var _sawyer: LumberjackBehavior = null
 var _timber_target: Node2D = null
-var _canopy_off := false
-var _cuts_left := 0
 var _carried_logs := 0
-var _target_growth_scale := 1.0
 var _shaping_elapsed := 0.0
 
 ## This villager's farm work, or null for anyone who does not farm -- the
@@ -266,6 +283,21 @@ var _field_index := -1
 ## villager is paid for what their own ground actually yielded, never for
 ## that AND an ambient number at the same time.
 var _on_real_field := false
+
+## Whether this villager's own store has already been carried in since their
+## work block ended.
+##
+## The haul is the END of the block, and an end happens once. Reported live
+## with the farmhouse panel open: "der Farmer scheint was zu ernten und
+## läuft dann zum Farmhouse aber es wird kein Weizen eingelagert" -- it ran
+## on EVERY off-clock frame, so anything reaching the store outside the work
+## block was drained again within a frame and a store could never hold a
+## thing overnight.
+##
+## One flag for the field and the pond alike: a villager works one or the
+## other, both carry their take in at the same moment, and two flags would
+## be two places to forget to clear.
+var _carried_in_since_work := false
 
 ## How close counts as standing on a plot: half a tile, so a villager on
 ## the tile is working it rather than walking the last few pixels onto its
@@ -405,7 +437,15 @@ func _process(delta: float) -> void:
 		_day_index = current_day
 		schedule = _planner.plan_day(identity, _day_index)
 
-	var entry := NpcSchedule.current_entry(schedule, _current_hour())
+	# THIS villager's own hour, not the village's. Reported live: "every once
+	# in a while all villagers go to the well at the same time and then walk
+	# away a bit later all at the same time.. that looks very weird". Every
+	# villager read the same world hour, so a whole village rose, worked,
+	# drank and slept in step to the second -- see NpcSchedule.personal_hour
+	# for the shift that is each villager's own.
+	var entry := NpcSchedule.current_entry_for(
+		schedule, _hour_of_day(), 0 if identity == null else identity.seed_value
+	)
 	# A real, urgent need overrides wherever today's ordinary schedule says
 	# to be right now (docs/progress.md's Interrupt/Replan Handling row: "a
 	# need crossing a threshold") -- without this, hunger only ever
@@ -444,6 +484,19 @@ func _process(delta: float) -> void:
 		# deadlock the producer branch already exists to avoid.
 		and not _works_their_own_field()
 		and not economy.feeds_itself_from_work(_world, position)
+		# ...and there has to BE a meal at the end of the walk. The two
+		# guards above were written for exactly this deadlock and cover only
+		# producers and villagers with a field; a merchant, a blacksmith, a
+		# guard and a nurse are none of those. MEASURED on a real village
+		# (tools/probe_village_market.gd, the whole settlement ticked): a
+		# merchant was hungry for 1589 of 1801 ticks with an empty purse,
+		# and every one of their 825 scheduled "work at the stall" ticks was
+		# overridden and spent at a well with nothing on it -- so they never
+		# worked, never earned, and stayed hungry for ever. The interrupt is
+		# for villagers who must BUY (see above); a villager who CANNOT buy
+		# gains nothing by going and loses the only thing that could change
+		# either number. See NpcEconomy.can_obtain_a_meal.
+		and economy.can_obtain_a_meal(_world, position)
 	):
 		entry = {"time_block": entry.get("time_block", ""), "location_tag": "well", "activity": "eat"}
 	if instruction_script != null:
@@ -494,6 +547,13 @@ func _process(delta: float) -> void:
 	var timber_target = _step_timber(delta, is_working)
 	if timber_target != null:
 		target = timber_target
+	# And the village's carter walks the store's round -- producer to store
+	# and back, with the wagon behind them. The same override shape, and the
+	# same place in the chain, as the mill and the field
+	# (docs/concept/village_warehouse.md, Mechanism 4).
+	var round_target = _step_cart(delta, is_working)
+	if round_target != null:
+		target = round_target
 	var need_target = _step_needs(delta, not is_on_real_work())
 	if need_target != null:
 		target = need_target
@@ -524,6 +584,7 @@ func _process(delta: float) -> void:
 		and position.distance_to(home_position) < _ARRIVED_HOME_EPSILON_PX
 	)
 	visible = not _at_home
+	_sync_market_stand(is_working)
 	if economy != null:
 		economy.step(delta, is_working, _world, position, _on_real_quarry or _on_real_field)
 
@@ -591,9 +652,6 @@ func _step_timber(delta: float, is_working: bool):
 			if tree == null or not _sawyer.can_commit():
 				return null
 			_timber_target = tree
-			_canopy_off = false
-			_cuts_left = 0
-			_target_growth_scale = float(tree.growth_scale)
 			_sawyer.begin_approach()
 			return tree.position
 		LumberjackBehavior.Phase.APPROACHING:
@@ -639,14 +697,30 @@ func _timber_still_there() -> bool:
 	return false
 
 
-## The nearest standing tree this MILL's sawyer may work -- measured from
-## the mill, not from the villager, so a village fells its own wood rather
-## than following a trail of trunks across the map.
+## The nearest tree this MILL's sawyer may work -- a trunk already LYING in
+## the mill's range first, then the nearest standing one. Range is measured
+## from the mill, not from the villager, so a village fells its own wood
+## rather than following a trail of trunks across the map.
+##
+## A woodcutter finishes what is already down before putting another one on
+## the ground. This used to skip felled trees outright, so a trunk left
+## lying -- by the player, by weather, or by this villager themselves when
+## they went off the clock and dropped it (_abandon_timber) -- stayed there
+## for ever while they walked past it to fell another. Reported live: "there
+## are lying two felled trees around the sawmill and the worker doesn't
+## bring them in".
 func _nearest_workable_tree(mill: Vector2) -> Node2D:
+	var lying := _nearest_timber(mill, true)
+	return lying if lying != null else _nearest_timber(mill, false)
+
+
+func _nearest_timber(mill: Vector2, felled: bool) -> Node2D:
 	var best: Node2D = null
 	var best_distance := INF
 	for node in get_tree().get_nodes_in_group(ChoppableTree.GROUP_NAME):
-		if not is_instance_valid(node) or node.is_felled():
+		if not is_instance_valid(node) or node.is_queued_for_deletion():
+			continue
+		if node.is_felled() != felled:
 			continue
 		if not VillageSawmill.is_in_range(mill, node.position, _tile_size):
 			continue
@@ -660,21 +734,26 @@ func _nearest_workable_tree(mill: Vector2) -> Node2D:
 ## One swing, staged exactly as the player's own axe stages it: fell the
 ## trunk, take the canopy off, then buck CUTS_TO_CLEAR lengths off the bare
 ## trunk, each one a real log.
+## Each stage is read off the TRUNK rather than off a local mirror of it.
+## The mirror assumed every trunk this villager meets is one they felled
+## themselves, which stopped being true the moment they started finishing
+## trunks already lying there (see _nearest_workable_tree): a half-worked one
+## would have been re-limbed and credited the wrong number of cuts.
 func _swing_at_timber(delta: float) -> void:
 	if not _sawyer.advance(delta):
 		return  # the swing is not ready yet this tick
 	if not _timber_target.is_felled():
 		_timber_target.take_damage(FELL_DAMAGE)
 		return
-	if not _canopy_off:
-		_canopy_off = true
-		_cuts_left = FelledTree.CUTS_TO_CLEAR
+	if not _timber_target.canopy_removed():
 		_timber_target.take_damage(FELL_DAMAGE)  # the canopy comes off, no log yet
 		return
-	_carried_logs += FelledTree.logs_per_cut(_target_growth_scale)
-	_cuts_left -= 1
-	_timber_target.take_damage(FELL_DAMAGE)
-	if _cuts_left <= 0:
+	# buck_for_worker, not take_damage: the drop through WorldItemBus is
+	# right for a player's axe and wrong for a worker who also carries the
+	# same cut home, which made every swing create the timber twice -- once
+	# as a pile nobody collects and once in the mill's own stock.
+	_carried_logs += _timber_target.buck_for_worker()
+	if not _timber_still_there() or _timber_target.cuts_left() <= 0:
 		_timber_target = null
 		_sawyer.start_carry()
 
@@ -707,6 +786,13 @@ func _shape_a_beam(delta: float) -> void:
 	):
 		return
 	_world.deposit_to_structure_at(sawmill_cell.x, sawmill_cell.y, "beam", 1)
+	# Paid at the saw when the village has a store to cart it to
+	# (docs/concept/village_warehouse.md, Mechanism 7) -- the beam stays on
+	# the mill's shelf for the carter, so the village is credited when it
+	# really arrives at the store rather than here. The same pay, for the
+	# same work; what moved is where the beam is.
+	if economy != null and _village_has_a_store():
+		economy.record_harvest_wage("beam", 1)
 
 
 ## Carries the mill's finished BEAMS into the village's own stock -- the
@@ -718,6 +804,10 @@ func _shape_a_beam(delta: float) -> void:
 ## carrying those off would be carrying away the very thing the sawmill
 ## exists to work.
 ##
+## Only in a village with NO store. Where one stands, the beams stay on the
+## mill's shelf for the carter and the sawyer is paid at the saw (see
+## _shape_a_beam) -- Mechanism 7, the same split the farmhouse keeps.
+##
 ## Credited through the same record_real_harvest a farmer's crop uses, so a
 ## beam is paid for exactly once, at the moment it actually arrives rather
 ## than at the saw. All-or-nothing per unit, mirroring
@@ -725,6 +815,16 @@ func _shape_a_beam(delta: float) -> void:
 ## mill, an empty one, or a world that cannot answer.
 func haul_sawmill_stock_to_village() -> void:
 	if sawmill_cell == NO_SAWMILL or economy == null or _world == null:
+		return
+	# A village with a store leaves its shelves to the carter (docs/concept/
+	# village_warehouse.md, Mechanism 7) -- the same rule the farmhouse
+	# already follows, and the same bug on the other producer: reported with
+	# the mill's own panel in shot reading "Stored: 0 / 60, Beam x0, Log x0",
+	# *"The sawmill also doesn't produce beams or plangs or logs"*. It
+	# produced them all along; the sawyer carried every one off the shelf at
+	# the end of every work block, so the mill you clicked was always empty
+	# and the carter arrived at a shelf somebody had already emptied.
+	if _village_has_a_store():
 		return
 	if not _world.has_method("withdraw_from_structure_at"):
 		return
@@ -937,8 +1037,15 @@ func _is_in_water() -> bool:
 
 
 func _current_hour() -> int:
-	var day_fraction := fmod(_elapsed_time / SECONDS_PER_SIMULATED_DAY, 1.0)
-	return int(day_fraction * 24.0)
+	return int(_hour_of_day())
+
+
+## The world's own hour of the day, as a real number -- the clock a villager
+## then shifts a little of their own (NpcSchedule.personal_hour). A float
+## because a whole-hour clock can only ever turn a village's day in one
+## tick, which is the lockstep this exists to break.
+func _hour_of_day() -> float:
+	return fmod(_elapsed_time / SECONDS_PER_SIMULATED_DAY, 1.0) * 24.0
 
 
 ## Builds the flat context Dictionary NpcInstructionEvaluator's condition
@@ -979,6 +1086,60 @@ func _entry_for_instructed_action(action: Dictionary) -> Dictionary:
 ## resolves to the settlement's landmark; anything else (a work tag with no
 ## dedicated building yet, e.g. "field"/"forge") falls back to this NPC's
 ## personal workspot rather than an unresolved position.
+## The market stand this villager sells from, or null for a villager who
+## keeps none (see VillageRenderer, docs/concept/village_market_square.md).
+##
+## Owned by the renderer, driven from here: a stand is up only while its
+## trader is behind it, and this marker is the only thing that knows where
+## its trader is standing this frame.
+##
+## Taken in the moment it is handed over, rather than left at Node2D's own
+## default of visible: a village that loads at night would otherwise flash
+## its whole market up for the one frame before the first _process, and a
+## stand nobody has reached yet is not up. Same setter-does-the-wiring shape
+## as warehouse_position above.
+var market_stand: Node2D = null:
+	set(value):
+		market_stand = value
+		if market_stand != null and is_instance_valid(market_stand):
+			market_stand.visible = false
+
+## How close counts as being behind your own stand: one tile. A trader
+## standing on the square beside their own trestle is selling from it.
+## Derived from the world's own tile size rather than chosen, so a stand's
+## reach cannot drift away from the grid it stands on (pinned by
+## test_a_traders_reach_over_their_own_stand_is_one_tile).
+const STAND_REACH_TILES := 1
+
+
+func market_stand_reach() -> float:
+	return float(_tile_size * STAND_REACH_TILES)
+
+
+## Whether a market stand is UP: its trader is on the clock AND within reach
+## of it.
+##
+## Reported live with an unattended stand in shot: "the market stands should
+## only be put up when an NPC stands behind them to sell goods". A trestle
+## and a board are not architecture -- a real stand is carried out in the
+## morning, stood up for as long as somebody is behind it, and taken in
+## again. Both halves are needed: a merchant passing their own stand on the
+## way home at night is not selling from it.
+static func stand_is_up(is_working: bool, distance_to_stand: float, reach: float) -> bool:
+	return is_working and distance_to_stand <= reach
+
+
+## Puts this villager's own stand up or takes it in, from where they are
+## standing this frame. A villager who keeps no stand is left alone, the
+## same fail-open shape every other world hook here uses.
+func _sync_market_stand(is_working: bool) -> void:
+	if market_stand == null or not is_instance_valid(market_stand):
+		return
+	market_stand.visible = stand_is_up(
+		is_working, position.distance_to(market_stand.position), market_stand_reach()
+	)
+
+
 func _resolve_location(tag: String) -> Vector2:
 	if tag == "home":
 		return home_position
@@ -1142,12 +1303,15 @@ func _step_farm(delta: float, is_working: bool):
 		# is doing -- a field with beds in it always has SOMETHING worth a
 		# visit (VillageFarm.next_action's thirstiest-bed fallback), so
 		# "nothing left to do" never reliably arrives.
-		haul_stock_to_village()
+		#
+		# ONCE, though. See _carried_in_since_work.
+		_carry_the_store_in()
 		return null
 	# A villager with a farmhouse has real work whether or not any single
 	# plot wants attention this instant, so the regional drip is off for
 	# the whole work block rather than flickering with the crop cycle.
 	_on_real_field = true
+	_carried_in_since_work = false
 	match _farmer.phase:
 		FarmerBehavior.Phase.SEEKING:
 			_farmer.advance(delta)  # a no-op outside WORKING; ticks the re-commit clock
@@ -1212,9 +1376,26 @@ func _store_harvest(crop_id: String, count: int) -> void:
 		and _world.has_method("deposit_to_structure_at")
 	):
 		_world.deposit_to_structure_at(stock_building_cell.x, stock_building_cell.y, crop_id, count)
+		# Paid at the scythe when the village has a store to cart it to
+		# (docs/concept/village_warehouse.md, Mechanism 7): the crop stays
+		# on this shelf for the carter, so the village is credited when the
+		# goods really arrive there rather than here. The same pay, at the
+		# same moment, either way -- what moved is where the goods are.
+		if economy != null and _village_has_a_store():
+			economy.record_harvest_wage(crop_id, count)
 		return
 	if economy != null:
 		economy.record_real_harvest(crop_id, count)
+
+
+## Whether this villager's village really has a store to cart goods to.
+##
+## VillageRenderer hands every villager the door of the store that really
+## STANDS in their chunk (null for a site too cramped to raise one, pillar
+## 1's caveat), so a villager can tell which world they are in without
+## asking anybody.
+func _village_has_a_store() -> bool:
+	return warehouse_position != null
 
 
 ## How long a fisher works one cast before it lands a fish. Not a fresh
@@ -1240,13 +1421,23 @@ func _step_pond(delta: float, is_working: bool):
 		return null
 	if not is_working:
 		_cast_elapsed = 0.0
-		haul_stock_to_village()
+		_carry_the_store_in()  # once, at the end of the block
 		return null
 	_cast_elapsed += delta
+	_carried_in_since_work = false
 	if _cast_elapsed >= CAST_SECONDS:
 		_cast_elapsed = 0.0
 		_work_pond()
 	return _cell_centre(pond_cells[0])
+
+
+## Carries what this villager's own store is holding into the village --
+## once per work block, at its end (see _carried_in_since_work).
+func _carry_the_store_in() -> void:
+	if _carried_in_since_work:
+		return
+	_carried_in_since_work = true
+	haul_stock_to_village()
 
 
 ## The GLOBAL tiles of this villager's own pond, or empty for everyone who
@@ -1295,6 +1486,14 @@ func _work_pond() -> void:
 ## answer -- the same fail-open shape every other world hook here uses.
 func haul_stock_to_village() -> void:
 	if stock_building_cell == NO_STOCK_BUILDING or economy == null or _world == null:
+		return
+	# A village with a store leaves its shelves to the carter (docs/concept/
+	# village_warehouse.md, Mechanism 7). Carrying the whole shelf into the
+	# abstract ledger at the end of every work block is exactly what made a
+	# farmhouse you clicked empty, a store you clicked empty, and the
+	# carter's round pointless: *"The FarmHouse seems to be harvesting
+	# something but none of it makes it into storage... it's always 0"*.
+	if _village_has_a_store():
 		return
 	if not _world.has_method("withdraw_from_structure_at"):
 		return
@@ -1356,6 +1555,140 @@ func _cell_centre(cell: Vector2i) -> Vector2:
 
 func _field_reach() -> float:
 	return float(_tile_size) * FIELD_REACH_TILES
+
+
+## The carter's round: from whichever producer has the most waiting on its
+## shelf, to the store's own door, and back (docs/concept/
+## village_warehouse.md, Mechanism 4).
+##
+## The fourth sibling of _step_hunt, _step_farm and _step_timber, on the
+## same four seams (find -> position -> reach -> act) and built on the SAME
+## LogisticsBehavior phase machine the placeable-scale worker already uses:
+## SEEKING -> APPROACHING -> COLLECTING -> CARRYING -> DEPOSITING. Nothing
+## about hauling is reinvented; what changed is that a real villager walks
+## it rather than a spawned walker ("It should be a real NPC pulling the
+## cart, not an additional sprite").
+##
+## Off the clock the round is dropped rather than paused, exactly as the
+## field and the trunk are -- and the cart is left standing WHERE IT IS,
+## still holding whatever is in it, which is the feature rather than a gap.
+func _step_cart(delta: float, is_working: bool):
+	if not VillageCart.walks_the_round(identity.occupation) or store_cell == NO_STORE:
+		return null
+	if _world == null or not _world.has_method("structure_stock_contents_at"):
+		return null
+	if _carter == null:
+		_carter = LogisticsBehavior.new()
+	var have_the_shaft := _hold_the_cart()
+	if not is_working:
+		# Off the clock the wagon is LET GO, not dragged home: it stands
+		# where the round ended, still loaded, free for whoever needs it next
+		# (docs/concept/village_warehouse.md, Mechanisms 5 and 6).
+		if cart != null and is_instance_valid(cart):
+			cart.let_go(self)
+		if _carter.phase != LogisticsBehavior.Phase.SEEKING:
+			_carter.abort()
+		return null
+	# A carter who has lost the shaft -- the player took it -- drops the
+	# round rather than walking it empty-handed. Nothing is emptied into a
+	# wagon they are not holding, so goods are never moved into thin air.
+	if not have_the_shaft:
+		if _carter.phase != LogisticsBehavior.Phase.SEEKING:
+			_carter.abort()
+		return null
+
+	match _carter.phase:
+		LogisticsBehavior.Phase.SEEKING:
+			_carter.advance(delta)
+			if not _carter.can_commit():
+				return null
+			var shelf := VillageCart.fullest_shelf(_shelves_waiting())
+			if shelf.is_empty():
+				return null
+			_round_shelf = shelf["cell"]
+			_carter.begin_approach()
+			return _cell_centre(_round_shelf)
+		LogisticsBehavior.Phase.APPROACHING:
+			if position.distance_to(_cell_centre(_round_shelf)) <= _field_reach():
+				_carter.arrive_at_source()
+			return _cell_centre(_round_shelf)
+		LogisticsBehavior.Phase.COLLECTING:
+			if _carter.advance(delta) == LogisticsBehavior.Outcome.COLLECTED:
+				_load_the_cart()
+			return position
+		LogisticsBehavior.Phase.CARRYING:
+			if position.distance_to(_cell_centre(store_cell)) <= _field_reach():
+				_carter.arrive_at_storage()
+			return _cell_centre(store_cell)
+		LogisticsBehavior.Phase.DEPOSITING:
+			if _carter.advance(delta) == LogisticsBehavior.Outcome.DEPOSITED:
+				_unload_the_cart()
+			return position
+	return null
+
+
+## Takes the shaft if the wagon is free, and reports whether this villager
+## really has it. A cart somebody else is pulling is never wrested off them
+## -- a carter only ever takes a FREE cart, which is what keeps two of them
+## from fighting over one (docs/concept/village_warehouse.md, Mechanism 6).
+func _hold_the_cart() -> bool:
+	if cart == null or not is_instance_valid(cart):
+		return false
+	cart.take_hold(self)
+	return cart.is_held_by(self)
+
+
+## What each of this village's producers is really holding, in the {cell,
+## waiting} shape VillageCart.fullest_shelf reads. Asked of the world every
+## time rather than remembered: a shelf fills while the carter is walking.
+func _shelves_waiting() -> Array:
+	var shelves: Array = []
+	for cell in producer_cells:
+		var waiting := 0
+		var contents: Dictionary = _world.structure_stock_contents_at(cell.x, cell.y)
+		for item_id in contents:
+			waiting += int(contents[item_id])
+		shelves.append({"cell": cell, "waiting": waiting})
+	return shelves
+
+
+## Fills the wagon from the shelf it is standing at, and really takes what
+## it loaded off that shelf. What will not fit is left there rather than
+## destroyed -- a full cart comes back for the rest.
+func _load_the_cart() -> void:
+	if cart == null or not is_instance_valid(cart) or not cart.is_held_by(self):
+		_carter.abort()
+		return
+	var contents: Dictionary = _world.structure_stock_contents_at(_round_shelf.x, _round_shelf.y)
+	var loaded := 0
+	for item_id in contents:
+		var wanted := int(contents[item_id])
+		if wanted <= 0:
+			continue
+		var took: int = cart.load_on(String(item_id), wanted)
+		if took <= 0:
+			continue
+		_world.withdraw_from_structure_at(_round_shelf.x, _round_shelf.y, String(item_id), took)
+		loaded += took
+	if loaded <= 0:
+		_carter.abort()
+
+
+## Empties the wagon into the store, every item id in one arrival at the
+## door.
+func _unload_the_cart() -> void:
+	if cart == null or not is_instance_valid(cart) or not cart.is_held_by(self):
+		return
+	var unloaded: Dictionary = cart.unload_all()
+	for item_id in unloaded:
+		var delivered := int(unloaded[item_id])
+		_world.deposit_to_structure_at(store_cell.x, store_cell.y, String(item_id), delivered)
+		# The village's sellable stock is credited HERE, at the moment the
+		# goods really reach the store (docs/concept/village_warehouse.md,
+		# Mechanism 7) -- once, for a pile that exists. The producer was
+		# already paid at their own scythe.
+		if economy != null:
+			economy.record_delivered_goods(String(item_id), delivered)
 
 
 ## The nearest real thing this villager may take right now, or null.
@@ -1529,3 +1862,9 @@ func _take_carcass_at(kill_position: Vector2) -> void:
 		if node.position.distance_to(kill_position) <= HuntableQuarry.STRIKE_DISTANCE_PX:
 			node.queue_free()
 			return
+
+
+func _ready() -> void:
+	# A villager is a person, and a person is what may pull a cart
+	# (CartMarker.PULLER_GROUP).
+	add_to_group(CartMarker.PULLER_GROUP)

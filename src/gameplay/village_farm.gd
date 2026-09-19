@@ -113,6 +113,33 @@ const WATER_BEFORE_WITHER_FRACTION := 0.5
 ## four tiles this gives up were never worth anything.
 const MAX_WORKED_CELLS := 6
 
+## How long one work block is, in world seconds -- the stretch of a
+## villager's day their schedule marks as work (NpcSchedule's own blocks),
+## and the window every field yield in this file is measured over. Written
+## here because the yield below is meaningless without it, and pinned to the
+## measurement's own block by
+## test_the_work_block_the_yield_is_measured_over_is_the_real_one.
+const WORK_BLOCK_SECONDS := 900.0
+
+## What a field of MAX_WORKED_CELLS really yields over one work block.
+##
+## MEASURED, not described. This number had only ever lived in a doc comment
+## ("~215 wheat per work block"), and the founding roster now has to reason
+## about it: a village lives on REAL WORK, not on the ambient drip, so "how
+## many food producers does this village need" is its own subsistence draw
+## divided by this (see SettlementDemand and
+## docs/concept/settlement_food_calibration.md -- the drip is 0.22 per
+## assessment against a draw of 6, so no amount of foraging feeds five
+## households, and that is correct).
+##
+## Held to the real thing by
+## test_a_capped_fields_yield_per_work_block_is_what_the_roster_is_told_it_is,
+## which runs a real villager over a real field for a real work block. The
+## tolerance there is deliberately loose (10%): the figure comes out of a
+## walking circuit against a growth clock, not out of arithmetic, and
+## pinning it tighter would make an honest measurement read as a flake.
+const FIELD_YIELD_PER_WORK_BLOCK := 225.0
+
 ## How far out from the farmhouse a field may reach. Not the field's size
 ## -- MAX_WORKED_CELLS is that -- but how far the search looks for cells
 ## worth working when the near ones are water, road or already built on.

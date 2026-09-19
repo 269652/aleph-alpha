@@ -104,6 +104,34 @@ and what is paid, and never mutates its inputs:
 The settlement's market loses exactly the goods bought; its purse gains
 exactly the gold paid.
 
+## Mechanism — surplus, not stock
+
+A merchant buys a village's **surplus**. He does not buy the timber it cut
+for its own next house.
+
+This is not a refinement; it is the difference between a trade route and a
+village that can never build anything. `SettlementGathering` is the only
+thing in the game that puts wood, stone or plant fibre into a settlement's
+market, and `wood` is on the buy list — so before this rule a merchant
+turned up every few minutes and took the timber away again. Measured on a
+real loaded village (`tools/probe_village_growth.gd`): its stone climbed
+steadily to 37 while its wood never once got past 2, its `house_small`
+project sat `PLANNED` with nothing reserved for the whole run, and a
+village that grew from 10 households to 31 built **not one house** for any
+of them. That is the same emptiness reported from play as *"the warehouse
+stays empty"*.
+
+So the sale takes a **reserve**: what the village's own next building
+really needs, read from the same `VillageGrowth.next_building` the ladder
+walks and the same `CraftingRecipeBook` inputs that building is priced in
+— never a second list of "protected goods", which would drift from what a
+village is actually saving for. Only stock above the reserve is for sale,
+and the same reserve gates the *visit*: a merchant does not walk to a
+village whose every plank is already spoken for.
+
+A village with a real surplus still sells it. A village saving for a house
+keeps its wood, and the merchant comes back when there is more.
+
 ## Mechanism — what the gold is for
 
 Once a purse has real money in it, the paths that spend it are already

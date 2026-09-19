@@ -122,7 +122,14 @@ func show_report(report: Dictionary) -> void:
 	if report.is_empty():
 		close()
 		return
-	_title.text = BuildingCatalog.display_name_of(String(report.get("building_id", "")))
+	# A report may name ITSELF -- a cart is not a building and has no catalog
+	# entry to be looked up in (docs/concept/village_warehouse.md, Mechanism
+	# 6). A building carries neither key and keeps the naming it always had,
+	# so nothing that already opened this panel changes.
+	var named := String(report.get("title", ""))
+	_title.text = (
+		named if named != "" else BuildingCatalog.display_name_of(String(report.get("building_id", "")))
+	)
 	_subtitle.text = _subtitle_for(report)
 	_rebuild_need_rows(report.get("needs", {}))
 	_summary.text = _summary_for(report)
@@ -148,6 +155,9 @@ func is_open() -> bool:
 ## readout is about people, not plots; a commons says so plainly instead of
 ## being handed a resident it does not have.
 func _subtitle_for(report: Dictionary) -> String:
+	var given := String(report.get("subtitle", ""))
+	if given != "":
+		return given
 	if not bool(report.get("is_home", false)):
 		return "Settlement commons"
 	var resident := String(report.get("resident_name", ""))

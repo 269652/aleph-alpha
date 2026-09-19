@@ -356,3 +356,14 @@ func test_enough_steps_reach_every_recording_in_the_pool():
 		heard.size(), FootstepSound.step_variants_for("sand").size(),
 		"some of the sand pool never plays"
 	)
+
+# -- the accessor the audio diagnostic reads (see AudioDiagnostics, -------
+# -- World._log_audio_diagnostics) ----------------------------------------
+
+func test_the_root_is_not_in_the_tree_until_it_is_really_added():
+	var player := InteractionSfxPlayer.new()
+	assert_false(player.root_in_tree(), "nothing is built yet")
+	var root := player.build()
+	assert_false(player.root_in_tree(), "built is not the same as added")
+	add_child_autofree(root)
+	assert_true(player.root_in_tree())

@@ -10,7 +10,11 @@ const VillageImmigration = preload("res://src/emergence/village_immigration.gd")
 const HouseholdWellbeing = preload("res://src/emergence/household_wellbeing.gd")
 const ConstructionCatchup = preload("res://src/world/construction_catchup.gd")
 
-const _DAY := ConstructionCatchup.SECONDS_PER_DAY
+## One simulated day, in real seconds -- the module's OWN day, so these
+## tests go on measuring "a day of draw" whatever that day is worth. It used
+## to be ConstructionCatchup.SECONDS_PER_DAY (3600), which is the offscreen
+## catch-up's day and was never this module's to borrow.
+const _DAY := VillageImmigration.SECONDS_PER_SIMULATED_DAY
 const _WELL_FED := VillageImmigration.FED_THRESHOLD * 2.0
 
 
@@ -101,3 +105,51 @@ func test_the_carry_never_banks_a_crowd_for_later():
 func test_a_long_offline_stretch_never_dumps_a_whole_town_at_once():
 	var out: Dictionary = _arrivals(_DAY * 10000.0, _WELL_FED * 8.0, 0, true, 1.0, 0.0)
 	assert_eq(int(out["arrivals"]), 1, "room for one plot is one household, however long the absence")
+
+
+# -- a village grows on the clock the player lives in ------------------------
+# Asked directly: *"increase the village sizes from 5 houses to 10 initial
+# and then it should GROW BY ITSELF"*. It did, and nobody could ever see it.
+#
+# Measured before this: arrivals were counted in ConstructionCatchup's own
+# day (3600 real seconds -- the deliberately conservative rate for
+# integrating an UNLOADED chunk's vegetation and herds over an absence), so
+# a bare just-fed village drew one household every 6 hours 40 minutes of
+# real play, and a full larder under a full ladder still took 2 hours 13.
+# Immigration only runs while the chunk is LOADED, so that is two hours of
+# standing next to a village to watch one person move in.
+
+func test_a_village_grows_on_the_games_own_day_not_the_catchup_day():
+	assert_eq(
+		VillageImmigration.SECONDS_PER_SIMULATED_DAY, 60.0,
+		"the day the ecosystem step, the settlement step, the day/night cycle and every colony already run on"
+	)
+	assert_ne(
+		VillageImmigration.SECONDS_PER_SIMULATED_DAY, ConstructionCatchup.SECONDS_PER_DAY,
+		"the premise: the offscreen catch-up day really is a different, longer thing"
+	)
+
+
+## The rate itself, read as the thing a player actually experiences: a
+## comfortable village with its ladder up takes somebody in within a few
+## minutes of being watched, not within hours.
+func test_a_thriving_village_takes_somebody_in_within_minutes():
+	var seconds := 0.0
+	var carry := 0.0
+	var arrived := 0
+	while arrived == 0 and seconds < 3600.0:
+		var result: Dictionary = VillageImmigration.arrivals(30.0, 8.0, 4, true, 1.0, carry)
+		carry = result["carry"]
+		arrived += int(result["arrivals"])
+		seconds += 30.0
+	assert_gt(arrived, 0, "a thriving village never took anybody in at all")
+	assert_lt(seconds, 300.0, "a village the player is standing next to must visibly grow: %.0fs" % seconds)
+
+
+## And not instantly either -- a village that gained a household every step
+## would be a town by the time the player walked across it.
+func test_a_village_does_not_take_somebody_in_every_step():
+	assert_eq(
+		int(VillageImmigration.arrivals(30.0, 8.0, 4, true, 1.0, 0.0)["arrivals"]), 0,
+		"one settlement step is not a household"
+	)

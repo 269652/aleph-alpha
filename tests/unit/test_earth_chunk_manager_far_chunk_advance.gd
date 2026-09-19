@@ -37,9 +37,14 @@ class _CountingLitter extends LeafLitterField:
 
 class _CountingPrints extends FootprintField:
 	var advances := 0
-	func advance(now: float) -> void:
+	## Mirrors the parent exactly, `wetness` included -- FootprintField.
+	## advance gained it when footprints started decaying (rain speeds it
+	## up, see docs/concept/footprints.md). A double whose signature has
+	## drifted from its parent's does not merely fail: GDScript refuses to
+	## parse the whole file, which silently drops every test in it.
+	func advance(now: float, wetness: float = 0.0) -> void:
 		advances += 1
-		super.advance(now)
+		super.advance(now, wetness)
 
 
 var manager: EarthChunkManager

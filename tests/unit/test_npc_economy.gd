@@ -82,8 +82,11 @@ func test_starts_with_an_empty_wallet():
 ## HerbivorePopulationModel-driven number NpcProduction reads.
 func test_a_working_producer_gathers_into_the_market_and_earns_gold():
 	var economy := _economy("hunter")
-	for i in 200:
-		economy.step(1.0, true, world, Vector2.ZERO)  # is_working = true, plenty of real seconds
+	# Long enough to earn REAL GOLD, not merely to stock one unit: a
+	# producer's take-home is a share of what they earn (VillageWages), so a
+	# single unit's gold rounds away to nothing. See _seconds_to_gather.
+	for i in _seconds_to_gather("hunter", 20.0):
+		economy.step(1.0, true, world, Vector2.ZERO)
 	assert_gt(market.total_stock(), 0.0)
 	assert_gt(economy.wallet.balance, 0)
 
@@ -258,9 +261,9 @@ const VillageWages = preload("res://src/world/village_wages.gd")
 
 ## Runs a real producer on `a_market` for long enough to both stock it and
 ## fund its purse, exactly the way a village actually does it.
-func _fund_village_with_a_real_hunters_work(a_market: VillageMarket, seconds: int = 60) -> NpcEconomy:
+func _fund_village_with_a_real_hunters_work(a_market: VillageMarket, units: float = 20.0) -> NpcEconomy:
 	var hunter := NpcEconomy.new(1, "hunter", a_market)
-	for i in seconds:
+	for i in _seconds_to_gather("hunter", units):
 		hunter.step(1.0, true, world, Vector2.ZERO)
 	return hunter
 
@@ -338,7 +341,7 @@ func test_a_village_purse_feeds_only_its_own_settlement():
 ## gold (see the carry in NpcEconomy._gather).
 func test_a_producer_keeps_only_their_take_home_share_of_what_they_earn():
 	var hunter := _economy("hunter")
-	for i in 100:
+	for i in _seconds_to_gather("hunter", 20.0):
 		hunter.step(1.0, true, world, Vector2.ZERO)
 
 	# Every gathered unit went to the market -- a working hunter self-feeds
@@ -491,8 +494,8 @@ func test_a_working_hunter_does_not_crash_when_world_lacks_the_death_hook():
 
 func test_a_working_fisher_records_a_real_fish_catch():
 	var economy := _economy("fisher")
-	for i in 200:
-		economy.step(1.0, true, world, Vector2.ZERO)  # plenty of real seconds to cross a whole FOOD_UNIT
+	for i in _seconds_to_gather("fisher", 2.0):  # enough to cross a whole FOOD_UNIT
+		economy.step(1.0, true, world, Vector2.ZERO)
 	assert_gt(world.caught_fish_amount, 0.0)
 
 
@@ -520,7 +523,9 @@ func test_a_non_working_fisher_records_no_catch():
 ## market's whole-unit stock, not just coincidentally match it.
 func test_fisher_catch_amount_always_matches_the_whole_units_reaching_the_market():
 	var economy := _economy("fisher")
-	for i in 199:
+	# Deliberately HALF a unit past the last whole one, so an unthrottled
+	# implementation would report more than the market's whole-unit stock.
+	for i in _seconds_to_gather("fisher", 2.5):
 		economy.step(1.0, true, world, Vector2.ZERO)
 	assert_almost_eq(world.caught_fish_amount, market.stock["fish"], 0.0001)
 
@@ -529,9 +534,10 @@ func test_fisher_catch_amount_always_matches_the_whole_units_reaching_the_market
 ## never off by more than one FOOD_UNIT from the true total gathered.
 func test_fisher_catch_amount_stays_within_one_food_unit_of_the_real_total_gathered():
 	var economy := _economy("fisher")
-	var total_seconds := 200.0
+	var seconds := _seconds_to_gather("fisher", 3.0)
+	var total_seconds := float(seconds)
 	var expected_total := NpcProduction.new().yield_per_second("fisher", world, Vector2.ZERO) * total_seconds
-	for i in 200:
+	for i in seconds:
 		economy.step(1.0, true, world, Vector2.ZERO)
 	assert_almost_eq(world.caught_fish_amount, expected_total, NpcProduction.FOOD_UNIT)
 
@@ -558,7 +564,7 @@ func test_a_working_fisher_does_not_record_a_vegetation_harvest():
 func test_a_working_fisher_does_not_crash_when_world_lacks_the_catch_hook():
 	var economy := _economy("fisher")
 	var bare_world := BareWorld.new()
-	for i in 200:
+	for i in _seconds_to_gather("fisher", 2.0):
 		economy.step(1.0, true, bare_world, Vector2.ZERO)
 	pass_test("a working fisher against a world without record_fish_catch_near should not crash")
 
@@ -758,14 +764,14 @@ func test_a_producer_with_no_quarry_in_hand_still_gathers_the_regional_fallback(
 	# npc.md's named limitation: a villager can only hunt what is LOADED,
 	# so the aggregate path stays for everyone else.
 	var hunter := _economy("hunter")
-	for _i in 100:
+	for _i in _seconds_to_gather("hunter", 2.0):
 		hunter.step(1.0, true, world, Vector2.ZERO, false)
 	assert_gt(market.total_stock(), 0.0)
 
 
 func test_the_regional_fallback_is_still_the_default_for_callers_that_say_nothing():
 	var hunter := _economy("hunter")
-	for _i in 100:
+	for _i in _seconds_to_gather("hunter", 2.0):
 		hunter.step(1.0, true, world, Vector2.ZERO)
 	assert_gt(market.total_stock(), 0.0)
 
@@ -889,7 +895,7 @@ func test_a_harvest_of_nothing_changes_nothing():
 func test_with_nowhere_to_carry_to_a_producer_stocks_the_market_outright():
 	var economy := _economy("hunter")
 	assert_almost_eq(economy.carry_limit, 0.0, 0.0, "precondition: carrying is opt-in")
-	for i in 200:
+	for i in _seconds_to_gather("hunter", 2.0):
 		economy.step(1.0, true, world, Vector2.ZERO)
 	assert_gt(market.total_stock(), 0.0, "no store must not mean no stock")
 
@@ -897,7 +903,7 @@ func test_with_nowhere_to_carry_to_a_producer_stocks_the_market_outright():
 func test_a_producer_who_carries_holds_the_take_until_it_is_delivered():
 	var economy := _economy("hunter")
 	economy.carry_limit = NpcEconomy.CARRY_LIMIT
-	for i in 200:
+	for i in _seconds_to_gather("hunter", 2.0):
 		economy.step(1.0, true, world, Vector2.ZERO)
 	assert_almost_eq(market.total_stock(), 0.0, 0.0001, "nothing reaches the store on its own")
 	assert_gt(economy.carried_total(), 0.0, "the take is in their hands")
@@ -906,7 +912,7 @@ func test_a_producer_who_carries_holds_the_take_until_it_is_delivered():
 func test_delivering_a_load_is_what_stocks_the_village():
 	var economy := _economy("hunter")
 	economy.carry_limit = NpcEconomy.CARRY_LIMIT
-	for i in 200:
+	for i in _seconds_to_gather("hunter", 2.0):
 		economy.step(1.0, true, world, Vector2.ZERO)
 	var in_hand := economy.carried_total()
 	economy.deliver_load()
@@ -953,7 +959,8 @@ func test_a_villager_who_carries_nothing_is_never_burdened():
 func test_full_hands_gather_nothing():
 	var economy := _economy("hunter")
 	economy.carry_limit = NpcEconomy.CARRY_LIMIT
-	for i in 400:
+	# Enough to FILL a pair of hands, not merely to gather something.
+	for i in _seconds_to_gather("hunter", NpcEconomy.CARRY_LIMIT + 2.0):
 		economy.step(1.0, true, world, Vector2.ZERO)
 	var gold_when_full := economy.wallet.balance
 	var killed_when_full := world.killed_herbivore_amount
@@ -1003,3 +1010,94 @@ func test_a_take_that_already_happened_is_never_dropped_for_want_of_hands():
 	assert_almost_eq(farmer.burden(), 1.0, 0.0, "and it presses")
 	farmer.deliver_load()
 	assert_almost_eq(market.stock.get("wheat", 0.0), float(over), 0.0001, "the whole harvest arrives")
+
+
+# -- walking to the market only helps if there is a meal to be had ---------
+#
+# MEASURED on a real village (tools/probe_village_market.gd, the whole
+# settlement ticked, not just the one villager): a merchant was HUNGRY for
+# 1589 of 1801 ticks with an empty purse, and reached their own trading spot
+# on 9 of them. Their schedule said "work at the stall" for 825 ticks;
+# NpcMarker's hunger interrupt overrode every one of them and sent them to
+# the well, where there was nothing they could pay for, so they never worked,
+# never earned, and stayed hungry -- for ever.
+#
+# That is the SAME deadlock npc_marker.gd's own comments already record for
+# a hunter ("went hungry about twelve seconds in with an empty village
+# market and an empty purse, and then never worked again for the remaining
+# 227 simulated seconds"), and the guard added for it only covers producers
+# and villagers with a field. A merchant, a blacksmith, a guard and a nurse
+# are none of those.
+#
+# The honest general rule is the one that comment already states: the
+# interrupt is for villagers who must BUY. A villager who cannot buy gains
+# nothing by standing at the well and loses the only thing that could change
+# either number.
+
+
+func test_a_villager_cannot_obtain_a_meal_from_an_empty_market():
+	var market := VillageMarket.new()
+	var economy := NpcEconomy.new(1, "merchant", market)
+	economy.wallet.add(100)
+	assert_false(economy.can_obtain_a_meal(), "there is nothing on the stall to buy")
+
+
+func test_a_villager_who_can_pay_can_obtain_a_meal():
+	var market := VillageMarket.new()
+	market.add_stock("fish", 5.0)
+	var economy := NpcEconomy.new(1, "merchant", market)
+	economy.wallet.add(100)
+	assert_true(economy.can_obtain_a_meal())
+
+
+## Food on the stall they cannot pay for, and a village purse with nothing
+## in it to advance them: walking over achieves nothing.
+func test_a_broke_villager_in_a_broke_village_cannot_obtain_a_meal():
+	var market := VillageMarket.new()
+	market.add_stock("fish", 5.0)
+	var economy := NpcEconomy.new(1, "merchant", market)
+	assert_eq(economy.wallet.balance, 0, "precondition: broke")
+	assert_false(economy.can_obtain_a_meal(), "nobody can advance them the price")
+
+
+## ...but a village whose purse CAN advance them the subsistence wage really
+## can feed them, so the walk is worth making.
+func test_a_broke_villager_whose_village_can_advance_a_wage_can_obtain_a_meal():
+	var market := VillageMarket.new()
+	market.add_stock("fish", 5.0)
+	market.set_meta(NpcEconomy.PURSE_META, 100.0)
+	var economy := NpcEconomy.new(1, "merchant", market)
+	assert_eq(economy.wallet.balance, 0, "precondition: broke")
+	assert_true(economy.can_obtain_a_meal())
+
+
+## And the answer has to be a QUERY: asking it must not move a single coin,
+## or the check would feed people by being asked.
+func test_asking_whether_a_meal_can_be_had_moves_nothing():
+	var market := VillageMarket.new()
+	market.add_stock("fish", 5.0)
+	market.set_meta(NpcEconomy.PURSE_META, 100.0)
+	var economy := NpcEconomy.new(1, "merchant", market)
+	economy.can_obtain_a_meal()
+	economy.can_obtain_a_meal()
+	assert_eq(economy.wallet.balance, 0, "the wallet must be untouched")
+	assert_eq(NpcEconomy.purse_of(market), 100.0, "the purse must be untouched")
+	assert_eq(market.stock.get("fish", 0.0), 5.0, "the stall must be untouched")
+
+
+## How many real seconds a producer needs here to gather `units` whole food
+## units, derived from NpcProduction's own rate rather than written as a
+## magic second count.
+##
+## That rate is each resource's OWN renewal now, scaled by that trade's own
+## reach (see docs/concept/settlement_food_calibration.md) -- a hunter
+## working a region that holds ten animals takes about 107 seconds per unit,
+## where the single invented rate it replaced took two. Every fixture below
+## that used to say "200 seconds, plenty" was saying "plenty" about a number
+## it had no relationship to, and would silently gather nothing the next
+## time the rate moved.
+func _seconds_to_gather(occupation: String, units: float) -> int:
+	var per_second: float = NpcProduction.new().yield_per_second(occupation, world, Vector2.ZERO)
+	if per_second <= 0.0:
+		return 0
+	return int(ceil(units * NpcProduction.FOOD_UNIT / per_second)) + 1

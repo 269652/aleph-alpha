@@ -129,20 +129,44 @@ func test_footprint_texture_width_matches_the_tile_size():
 		assert_eq(texture.get_width(), 16, "%s footprint width should match tile_size" % subject)
 
 
-## sagewerk/storage/city_hall's own source cells are visibly taller than
-## wide (192 wide x ~205 tall, the same 8-column grid all three sheets
-## share) -- a uniform scale-by-width factor should therefore leave the
-## scaled height GREATER than tile_size, not squashed down to it, the
-## whole point of the footprint anchor over a plain square resize.
-## farm/wooden_fence's own cells are wider than tall (a landscape house
-## scene; a horizontal fence rail) -- their footprint height legitimately
-## comes out smaller than tile_size, a real difference in the source art,
-## not a bug (see test_footprint_texture_height_matches_the_idle_images_
-## own_aspect_ratio for the actual scaling contract that covers all five).
-func test_footprint_texture_preserves_aspect_ratio_taller_than_the_tile():
+## No fixed pitch: each of these sheets is cut on the rows its own artist
+## drew, so the three of them disagree about how tall a row is.
+##
+## **Twice corrected, and the history is the point.** This first asserted
+## the cells are "192 wide x ~205 tall" -- 205 being 1024/5, the even
+## canvas division. Then it asserted they are square 192x192, after
+## profiling put boundaries at 192, 384, 576. Both were a pitch assumed
+## from one axis and applied to the other, and both were wrong: that 192
+## pitch is the COLUMN pitch, confirmed on all four 8-column sheets (art
+## starts ~12px inside each of 0, 192, 384 ... 1344). The ROWS are
+## irregular -- warehouse.png's drawn boundaries sit at 188, 376, 566 and
+## 786 -- so the 205 cut clipped 9px off sagewerk's roof and the 192 cut
+## clipped 13px off city_hall's footings and 26 off blacksmith's last row.
+## Reported live as "the warehouse has the rows cropped wrongly". See
+## VariantSheetGrid.content_bands.
+##
+## What the test was really protecting is covered twice over now, by
+## test_an_even_grid_frame_is_cut_on_the_sheets_own_drawn_row (the height
+## is the drawn row) and test_footprint_texture_height_matches_the_idle_
+## images_own_aspect_ratio (nothing is squashed). What is left to pin here
+## is the property no pitch can have: under ANY single pitch these three
+## same-size sheets would be cut to identical heights, and they are not.
+func test_the_three_shared_size_sheets_are_cut_to_three_different_heights():
+	var heights: Array = []
 	for subject in ["sagewerk", "storage", "city_hall"]:
-		var texture := sprite.footprint_texture(subject, 16)
-		assert_gt(texture.get_height(), 16, "%s footprint height should stay taller than one tile" % subject)
+		heights.append(sprite.idle_texture(subject).get_image().get_height())
+	assert_eq(
+		heights.size(), _unique(heights).size(),
+		"a pitch would give 1536x1024 sheets one height; drawn rows give three: %s" % [heights]
+	)
+
+
+func _unique(values: Array) -> Array:
+	var seen: Array = []
+	for value in values:
+		if not seen.has(value):
+			seen.append(value)
+	return seen
 
 
 ## The scaling contract that covers all of them, rails included: ONE factor
@@ -549,3 +573,97 @@ func test_a_corner_post_never_hangs_past_the_run_it_caps():
 			past, _EDGE_TOLERANCE,
 			"%s hangs %.0fpx past its own run, on a %dpx tile" % [subject, past, _TILE]
 		)
+
+
+# -- the divider fringe (IllustratedStructureSprite.even_cell_crop) --------
+
+## sawmill/warehouse/city_hall draw a thin LIGHT line along every cell
+## boundary and around the canvas. It is neither magenta nor near-black, so
+## neither of the two keys these sheets use removes it -- a cell cut
+## exactly on its grid square therefore keeps it as a hard opaque fringe up
+## the frame's own edge, visible in game as a white hairline boxing every
+## building in. Measured on warehouse.png: the pixel at cell corner
+## (0, 384) reads (0.992, 0.969, 0.996).
+const _FRINGE_MIN_CHANNEL := 0.85
+const _FRINGE_MIN_ALPHA := 0.5
+
+## Only the three sheets whose background keys to near-black: the divider
+## survives both keys there. farm/wooden_fence key on magenta, which is
+## what their own divider is drawn in, so it is already removed.
+const _BLACK_KEYED_EVEN_SUBJECTS := ["sagewerk", "storage", "city_hall"]
+
+
+func _opaque_light_pixels_on_the_border(image: Image) -> int:
+	var found := 0
+	for y in image.get_height():
+		for x in image.get_width():
+			var on_border := (
+				x == 0 or y == 0
+				or x == image.get_width() - 1 or y == image.get_height() - 1
+			)
+			if not on_border:
+				continue
+			var pixel := image.get_pixel(x, y)
+			var light := (
+				pixel.r >= _FRINGE_MIN_CHANNEL
+				and pixel.g >= _FRINGE_MIN_CHANNEL
+				and pixel.b >= _FRINGE_MIN_CHANNEL
+			)
+			if light and pixel.a >= _FRINGE_MIN_ALPHA:
+				found += 1
+	return found
+
+
+func test_no_idle_frame_carries_the_sheets_divider_line_as_a_fringe():
+	for subject in _BLACK_KEYED_EVEN_SUBJECTS:
+		var image := sprite.idle_texture(subject).get_image()
+		assert_eq(
+			_opaque_light_pixels_on_the_border(image), 0,
+			"%s keeps divider pixels on its own edge" % subject
+		)
+
+
+# -- the sheets' own rows (VariantSheetGrid.content_bands) ------------------
+
+const VariantSheetGrid = preload("res://src/rendering/variant_sheet_grid.gd")
+const SpriteSheetLoader = preload("res://src/rendering/sprite_sheet_loader.gd")
+
+## Every subject cut on the fixed grid, with the sheet and the cell it is
+## cut from. Mirrors IllustratedStructureSprite's own _SUBJECTS entries for
+## these five -- the divider-gridded fence rails are a different grid and
+## are covered by their own tests.
+const _EVEN_GRID_SUBJECTS := {
+	"farm": ["res://assets/sprites/buildings/farmhouse.png", 6, 5, 1],
+	"sagewerk": ["res://assets/sprites/buildings/sawmill.png", 8, 5, 1],
+	"storage": ["res://assets/sprites/buildings/warehouse.png", 8, 5, 1],
+	"wooden_fence": ["res://assets/sprites/structures/wooden_fence.png", 4, 4, 0],
+	"city_hall": ["res://assets/sprites/buildings/city_hall.png", 8, 5, 1],
+}
+
+
+## Reported live: "the warehouse has the rows cropped wrongly". These
+## sheets' rows are irregular -- warehouse.png's boundaries sit at 188,
+## 376, 566 and 786 -- so a frame has to be cut on the row the artist
+## actually drew, not on any pitch. An even fifth of the canvas (204.8)
+## clipped 9px off the top of sagewerk's roof; the column pitch (192)
+## clipped 13px off the bottom of city_hall.
+func test_an_even_grid_frame_is_cut_on_the_sheets_own_drawn_row():
+	for subject in _EVEN_GRID_SUBJECTS:
+		var entry: Array = _EVEN_GRID_SUBJECTS[subject]
+		var sheet: Image = SpriteSheetLoader.load_image(entry[0])
+		var band: Vector2i = VariantSheetGrid.content_bands(sheet, entry[2], true)[entry[3]]
+		var frame := sprite.idle_texture(subject).get_image()
+		assert_eq(
+			frame.get_height(), band.y - band.x + 1,
+			"%s is cut to the row its art is drawn on" % subject
+		)
+
+
+## The columns are the one axis that really is on a pitch -- 1536/8 is
+## exactly 192 and the art in every column starts ~12px inside it,
+## confirmed on all four 8-column sheets. So the width stays the even cell
+## minus the divider, and only the height comes from detection.
+func test_an_even_grid_frame_keeps_the_measured_column_pitch():
+	var frame := sprite.idle_texture("storage").get_image()
+	var cell: int = 1536 / 8
+	assert_eq(frame.get_width(), cell - IllustratedStructureSprite.CELL_INSET * 2)

@@ -1350,3 +1350,96 @@ func _footprint_cells(origin: Vector2i, building_id: String) -> Array:
 		for dx in footprint.x:
 			cells.append(origin + Vector2i(dx, dy))
 	return cells
+
+
+# -- the market square's stands ---------------------------------------------
+#
+# Reported live with the stand in shot, standing in long grass a good way
+# off the paving: "the market stands should only be put up when an NPC
+# stands behind them to sell goods ... also the stand should clear long
+# grass around it and be placed on the plaza anyways".
+#
+# The square's OWN stall was already on the plaza (test_the_well_and_the_
+# stall_stand_on_the_plaza_clear_of_the_civic_plot, above). What was not is
+# a MERCHANT's personal stand, which VillageRenderer stood two tiles south
+# of that merchant's own front door -- out in the meadow, nowhere near the
+# market. And nobody ever stood behind one: NpcMarker._resolve_location
+# sends every merchant to landmarks["stall"], the square's single stall, so
+# a personal stand was decoration by construction.
+#
+# So a stand is a cell OF THE MARKET SQUARE, and there are as many of them
+# as the square has room for.
+
+
+func test_a_villages_market_stands_all_stand_on_its_plaza():
+	var skeleton: Dictionary = VillageLayout.skeleton(CHUNK_SIZE, 11)
+	var plaza: Rect2i = skeleton["plaza"]
+	for cell in VillageLayout.market_stand_cells(skeleton, 3):
+		assert_true(plaza.has_point(cell), "a market stand at %s is off the square" % str(cell))
+
+
+## The square's own stall is the first stand -- one canonical trading spot
+## that a schedule, a quest or a dialogue can name, not a fourth thing
+## standing beside three others.
+func test_the_squares_own_stall_is_the_first_market_stand():
+	var skeleton: Dictionary = VillageLayout.skeleton(CHUNK_SIZE, 11)
+	assert_eq(VillageLayout.market_stand_cells(skeleton, 1)[0], skeleton["landmarks"]["stall"])
+
+
+## Asking for more stands than the square can hold gives back what fits
+## rather than stands off the edge of it -- the same honest shortfall
+## VillageRenderer already accepts when a village has more farmers than
+## there is room for farmhouses.
+func test_a_square_offers_what_fits_and_no_more():
+	var skeleton: Dictionary = VillageLayout.skeleton(CHUNK_SIZE, 11)
+	var many: Array = VillageLayout.market_stand_cells(skeleton, 99)
+	var plaza: Rect2i = skeleton["plaza"]
+	assert_gt(many.size(), 1, "a square wide enough for a market holds more than one stand")
+	assert_lt(many.size(), 99)
+	for cell in many:
+		assert_true(plaza.has_point(cell))
+
+
+func test_no_two_market_stands_share_a_cell_or_touch():
+	var skeleton: Dictionary = VillageLayout.skeleton(CHUNK_SIZE, 11)
+	var cells: Array = VillageLayout.market_stand_cells(skeleton, 99)
+	for i in cells.size():
+		for j in range(i + 1, cells.size()):
+			var a: Vector2i = cells[i]
+			var b: Vector2i = cells[j]
+			assert_ne(a, b)
+			assert_gt(
+				absi(a.x - b.x) + absi(a.y - b.y), 1,
+				"two stands at %s and %s would read as one long counter" % [str(a), str(b)]
+			)
+
+
+## Nothing is persisted about a village's market, so the same square must
+## offer the same stands on every reload.
+func test_market_stands_are_the_same_on_every_reload():
+	var skeleton: Dictionary = VillageLayout.skeleton(CHUNK_SIZE, 11)
+	assert_eq(
+		VillageLayout.market_stand_cells(skeleton, 4),
+		VillageLayout.market_stand_cells(skeleton, 4)
+	)
+
+
+## A stand on the street row itself would be a market stall pitched in the
+## middle of the through road -- and on the hall's doorstep at that.
+func test_no_market_stand_stands_on_the_street_or_the_well():
+	var skeleton: Dictionary = VillageLayout.skeleton(CHUNK_SIZE, 11)
+	var street_y: int = skeleton["street_y"]
+	for cell in VillageLayout.market_stand_cells(skeleton, 99):
+		assert_ne(cell.y, street_y, "a stand must not be pitched in the through road")
+		assert_ne(cell, skeleton["landmarks"]["well"], "a stand must not stand in the well")
+
+
+## A village whose square never got laid (no dry ground for one) has nowhere
+## to pitch a market -- which is no stands, not stands in the river.
+func test_a_village_with_no_square_has_no_market_stands():
+	assert_eq(VillageLayout.market_stand_cells({}, 3), [])
+
+
+func test_asking_for_no_stands_gives_none():
+	var skeleton: Dictionary = VillageLayout.skeleton(CHUNK_SIZE, 11)
+	assert_eq(VillageLayout.market_stand_cells(skeleton, 0), [])

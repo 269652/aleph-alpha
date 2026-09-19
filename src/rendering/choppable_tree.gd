@@ -273,6 +273,47 @@ func is_felled() -> bool:
 	return _felled
 
 
+## Whether the crown has already been limbed off a felled trunk. Public so a
+## worker can finish a trunk somebody else started rather than assuming
+## every trunk it meets is a fresh fall (see LumberjackMarker._step_felling,
+## which used to keep its own mirror of this and got it wrong for any trunk
+## it did not fell itself).
+func canopy_removed() -> bool:
+	return _canopy_removed
+
+
+## How many lengths are still to be bucked off this trunk -- what is LEFT of
+## it, for the same reason canopy_removed is public.
+func cuts_left() -> int:
+	return _cuts_left
+
+
+## Bucks one length off a bare trunk and hands the logs BACK, instead of
+## dropping them through WorldItemBus.
+##
+## The ground drop is right for a player swinging an axe and wrong for a
+## worker whose whole job is to carry the haul home: that worker also
+## credits itself the same cut, so every swing created the timber twice --
+## once as a pile nobody collects and once in the mill's own woodpile.
+## Reported live as "two felled trees lying around the sawmill and the
+## worker doesn't bring them in ... it only produced 6xLogs". The same rule
+## docs/concept/timber_construction.md already holds for shaped output
+## ("beam should credit StructureStock, not the ground"), applied to the raw
+## log.
+##
+## 0, and no mutation, for anything that is not a bare, not-yet-spent trunk
+## -- a standing tree has to come down first, the same fail-closed contract
+## saw_up already keeps.
+func buck_for_worker() -> int:
+	if not _felled or not _canopy_removed or _cuts_left <= 0:
+		return 0
+	var log_count := FelledTree.logs_per_cut(growth_scale)
+	_cuts_left -= 1
+	if _cuts_left <= 0:
+		queue_free()
+	return log_count
+
+
 var _felled := false
 ## Whether the crown has already been limbed off (see _remove_canopy) --
 ## once true, further swings work the bare trunk itself.

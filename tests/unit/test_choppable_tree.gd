@@ -1,6 +1,7 @@
 extends GutTest
 
 const ChoppableTree = preload("res://src/rendering/choppable_tree.gd")
+const FelledTree = preload("res://src/rendering/felled_tree.gd")
 const TreeGrowth = preload("res://src/gameplay/tree_growth.gd")
 const TreeSpecies = preload("res://src/world/tree_species.gd")
 const ProceduralTreeSprite = preload("res://src/rendering/procedural_tree_sprite.gd")
@@ -467,3 +468,71 @@ func test_removing_the_canopy_actually_changes_what_is_drawn():
 	tree.take_damage(ChoppableTree.MAX_HEALTH)  # first swing on the felled tree: canopy off
 
 	assert_ne(tree._canopy_sprite.texture.get_image().get_data(), full_canopy_data)
+
+
+# -- the worker's own bucking ------------------------------------------------
+# Reported live: "there are lying two felled trees around the sawmill and the
+# worker doesn't bring them in ... it only produced 6xLogs". _cut_up drops the
+# log through WorldItemBus, which is right for a player swinging an axe and
+# wrong for a worker whose whole job is to carry the haul home -- that worker
+# also credits itself the same cut, so every swing created the timber twice:
+# once as a pile nobody collects and once in the mill's woodpile.
+
+func _bare_trunk() -> ChoppableTree:
+	var trunk := ChoppableTree.new()
+	add_child_autofree(trunk)
+	trunk.take_damage(ChoppableTree.MAX_HEALTH)   # fells it
+	trunk.take_damage(1.0)                        # limbs the crown off
+	return trunk
+
+
+func test_a_worker_bucking_a_trunk_gets_the_logs_in_hand():
+	var trunk := _bare_trunk()
+	assert_eq(
+		trunk.buck_for_worker(), FelledTree.logs_per_cut(trunk.growth_scale),
+		"the cut's real timber, the same number a player's swing drops"
+	)
+
+
+func test_a_worker_bucking_a_trunk_drops_nothing_on_the_ground():
+	var trunk := _bare_trunk()
+	var dropped: Array = []
+	var record := func(stack, _position): dropped.append(stack.item.id)
+	WorldItemBus.item_dropped.connect(record)
+	trunk.buck_for_worker()
+	WorldItemBus.item_dropped.disconnect(record)
+	assert_false(dropped.has("log"), "the worker carries it home; it is not also on the ground")
+
+
+func test_a_worker_bucking_uses_up_the_trunk_like_any_other_cut():
+	var trunk := _bare_trunk()
+	var before: int = trunk.cuts_left()
+	trunk.buck_for_worker()
+	assert_eq(trunk.cuts_left(), before - 1, "a cut is a cut, whoever made it")
+
+
+func test_a_spent_trunk_is_cleared_away():
+	var trunk := _bare_trunk()
+	for i in FelledTree.CUTS_TO_CLEAR:
+		trunk.buck_for_worker()
+	assert_true(trunk.is_queued_for_deletion(), "nothing left of it to work")
+
+
+## What is left to do on a trunk, so a worker can finish one somebody else
+## started rather than assuming every trunk it meets is a fresh fall.
+func test_a_trunk_reports_what_is_left_of_it():
+	var trunk := ChoppableTree.new()
+	add_child_autofree(trunk)
+	assert_false(trunk.is_felled())
+	trunk.take_damage(ChoppableTree.MAX_HEALTH)
+	assert_true(trunk.is_felled())
+	assert_false(trunk.canopy_removed(), "still has its crown on")
+	assert_eq(trunk.cuts_left(), FelledTree.CUTS_TO_CLEAR)
+	trunk.take_damage(1.0)
+	assert_true(trunk.canopy_removed())
+
+
+func test_bucking_a_tree_that_is_not_a_bare_trunk_yields_nothing():
+	var standing := ChoppableTree.new()
+	add_child_autofree(standing)
+	assert_eq(standing.buck_for_worker(), 0, "a standing tree has to come down first")

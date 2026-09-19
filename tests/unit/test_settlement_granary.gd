@@ -23,8 +23,17 @@ func _region(vegetation: float, herbivores: float, fish: float):
 ## per assessment", and a settlement step IS one assessment. Until now
 ## nothing ever drew it -- it was only ever a divisor for capacity.
 func test_subsistence_is_settlement_states_own_per_household_draw():
-	assert_eq(SettlementGranary.subsistence_draw(1), SettlementState.FOOD_PER_HOUSEHOLD)
-	assert_eq(SettlementGranary.subsistence_draw(8), 8 * SettlementState.FOOD_PER_HOUSEHOLD)
+	# Rounded to whole units, because the granary's stock is whole units and
+	# the per-household draw is a measured 1.2 rather than a whole number
+	# (see SettlementState.FOOD_PER_HOUSEHOLD).
+	assert_eq(
+		SettlementGranary.subsistence_draw(1),
+		int(round(SettlementState.FOOD_PER_HOUSEHOLD))
+	)
+	assert_eq(
+		SettlementGranary.subsistence_draw(8),
+		int(round(8.0 * SettlementState.FOOD_PER_HOUSEHOLD))
+	)
 
 
 func test_a_settlement_with_no_households_eats_nothing():
@@ -41,7 +50,8 @@ func test_a_settlement_with_no_households_eats_nothing():
 func test_gathering_is_npc_productions_own_rate_over_the_elapsed_time():
 	var gathered: Dictionary = SettlementGranary.gathered_over(["hunter"], _region(0.0, 10.0, 0.0), 30.0)
 	assert_almost_eq(
-		float(gathered["meat"]), NpcProduction.PRODUCTION_RATE_PER_SECOND * 10.0 * 30.0, 0.0001
+		float(gathered["meat"]),
+		NpcProduction.new().yield_per_second("hunter", region, Vector2.ZERO) * 30.0, 0.0001
 	)
 
 
@@ -82,11 +92,11 @@ func test_a_dead_region_yields_nothing_to_gather():
 ## SettlementState.carrying_capacity has always been dividing.
 func test_the_surplus_over_subsistence_is_what_gets_banked():
 	var result: Dictionary = SettlementGranary.catchup({"meat": 10.0}, {}, {}, 1)
-	assert_eq(result["stock_delta"], {"meat": 10 - SettlementState.FOOD_PER_HOUSEHOLD})
+	assert_eq(result["stock_delta"], {"meat": 10 - SettlementGranary.subsistence_draw(1)})
 
 
 func test_a_village_that_eats_everything_it_gathers_banks_nothing():
-	var gathered := {"meat": float(SettlementState.FOOD_PER_HOUSEHOLD)}
+	var gathered := {"meat": float(SettlementGranary.subsistence_draw(1))}
 	var result: Dictionary = SettlementGranary.catchup(gathered, {}, {}, 1)
 	assert_eq(result["stock_delta"], {})
 
@@ -96,7 +106,7 @@ func test_a_village_that_eats_everything_it_gathers_banks_nothing():
 ## out of what was stored earlier.
 func test_a_shortfall_is_eaten_out_of_the_granary():
 	var result: Dictionary = SettlementGranary.catchup({}, {}, {"meat": 20}, 2)
-	assert_eq(result["stock_delta"], {"meat": -2 * SettlementState.FOOD_PER_HOUSEHOLD})
+	assert_eq(result["stock_delta"], {"meat": -SettlementGranary.subsistence_draw(2)})
 
 
 func test_a_granary_can_be_eaten_empty_but_never_past_empty():
@@ -109,7 +119,10 @@ func test_a_granary_can_be_eaten_empty_but_never_past_empty():
 func test_a_shortfall_draws_across_every_food_in_the_granary():
 	var result: Dictionary = SettlementGranary.catchup({}, {}, {"fish": 2, "meat": 2}, 1)
 	var delta: Dictionary = result["stock_delta"]
-	assert_eq(int(delta.get("fish", 0)) + int(delta.get("meat", 0)), -SettlementState.FOOD_PER_HOUSEHOLD)
+	assert_eq(
+		int(delta.get("fish", 0)) + int(delta.get("meat", 0)),
+		-SettlementGranary.subsistence_draw(1)
+	)
 
 
 ## A granary also holds what a settlement PRODUCED (Market.produce crafts

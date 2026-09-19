@@ -6763,6 +6763,50 @@ func test_solid_obstacles_near_returns_only_obstacles_within_the_radius():
 	assert_eq(found[0]["position"], Vector2(100, 100))
 
 
+## A FELLED tree stays in _loaded_trees after it frees itself: choppable_
+## tree.gd calls queue_free() on the node while leaving the entry in this
+## array, which _clear_vegetation_on_cells' own doc comment already records.
+##
+## Reported live, as a crash in the middle of play:
+##
+##   Invalid type in function '_append_if_near' ... The Object-derived class
+##   of argument 2 (previously freed) is not a subclass of the expected
+##   argument class.
+##     at: solid_obstacles_near (earth_chunk_manager.gd:617)
+##     [1] _blockers_near (creature_marker.gd:2297)
+##
+## _append_if_near HAD an is_instance_valid guard -- as its first line. But
+## GDScript type-checks a declared `node: Node` parameter at the CALL, and a
+## freed object fails that check before the function body is ever entered,
+## so the guard could never run. A guard behind a type annotation that
+## rejects exactly the value it guards against is not a guard.
+func test_solid_obstacles_near_survives_a_freed_obstacle_still_in_the_list():
+	var standing := Node2D.new()
+	standing.position = Vector2(100, 100)
+	entities_parent.add_child(standing)
+	var felled := Node2D.new()
+	felled.position = Vector2(105, 100)
+	entities_parent.add_child(felled)
+	manager._loaded_trees[Vector2i(0, 0)] = [standing, felled]
+	felled.free()
+
+	var found: Array = manager.solid_obstacles_near(Vector2(110, 100), 64.0)
+
+	assert_eq(found.size(), 1, "the standing tree is still found")
+	assert_eq(found[0]["position"], Vector2(100, 100))
+
+
+## The same for a stone, which reaches the same call through the other loop.
+func test_solid_obstacles_near_survives_a_freed_stone():
+	var gone := Node2D.new()
+	gone.position = Vector2(100, 100)
+	entities_parent.add_child(gone)
+	manager._loaded_stones[Vector2i(0, 0)] = [gone]
+	gone.free()
+
+	assert_eq(manager.solid_obstacles_near(Vector2(110, 100), 64.0).size(), 0)
+
+
 ## An obstacle can sit just across a chunk border from the asking creature --
 ## the chunk-range math must cover every chunk the query circle overlaps,
 ## not only the creature's own.
@@ -11301,7 +11345,15 @@ func test_step_settlements_does_not_flip_status_on_oscillating_live_food():
 	manager.record_settlement_founded_if_new(chunk_coord, [NpcIdentity.new(1)])
 
 	var village_market = village_market_script.new()
-	village_market.add_stock("meat", 4.0)  # capacity 1 for one household -> stable
+	# ONE household's worth, rounded up to a whole unit, so this settlement
+	# of one household starts at capacity 1 and therefore reads STABLE.
+	# Written off the per-household draw rather than as a literal 4: that
+	# draw is a MEASURED 1.2 now (SettlementState.FOOD_PER_HOUSEHOLD, see
+	# docs/concept/settlement_food_calibration.md), and 4 units would start
+	# this settlement at capacity 3 -- GROWING, not STABLE, so the test would
+	# be asserting against a state it never reached.
+	var one_household: float = ceil(SettlementState.FOOD_PER_HOUSEHOLD)
+	village_market.add_stock("meat", one_household)
 	var economy := _FakeVillagerEconomy.new()
 	economy.market = village_market
 	var villager := _FakeVillager.new()
@@ -11310,11 +11362,15 @@ func test_step_settlements_does_not_flip_status_on_oscillating_live_food():
 
 	manager.step_settlements(EarthChunkManager.SETTLEMENT_STEP_INTERVAL)
 
+	# The same amount in and out again -- enough to add a whole household of
+	# capacity, so the settlement really does cross the STABLE/GROWING
+	# boundary each way rather than wobbling inside one band, which would be
+	# a test that passes while testing nothing.
 	for step in 8:
 		if step % 2 == 0:
-			village_market.add_stock("meat", 4.0)  # capacity 2 -> growing
+			village_market.add_stock("meat", one_household)
 		else:
-			village_market.remove_stock("meat", 4.0)  # capacity 1 -> stable
+			village_market.remove_stock("meat", one_household)
 		manager.step_settlements(EarthChunkManager.SETTLEMENT_STEP_INTERVAL)
 
 	assert_eq(manager.event_store().events_of_type("settlement_stable").size(), 1)
@@ -11327,20 +11383,25 @@ func test_step_settlements_does_not_flip_status_on_oscillating_live_food():
 
 ## The dwell is a filter, not a mute: a change that HOLDS is a real change
 ## and still lands, on exactly the step it has held long enough. The window
-## is not a taste number, but it is an ordinal borrowed from the capacity
-## rule rather than a duration measured against the clock -- capacity is
-## floor(food / FOOD_PER_HOUSEHOLD) and a VillageMarket's smallest real move
-## is one whole meal, so FOOD_PER_HOUSEHOLD single-meal moves is the
-## smallest food change that can shift capacity by one whole household.
-## Meals are not assessments (many meals move between two assessments 30
-## world-seconds apart), so what this test pins is the behaviour, not an
-## equivalence: a change that has not held for the whole window is not news,
-## and one that has, is.
+## is a real stretch of WORLD TIME now, not an ordinal borrowed from the
+## capacity rule. It used to be SettlementState.FOOD_PER_HOUSEHOLD -- a
+## quantity of FOOD read as a count of ASSESSMENTS, which the constant's own
+## doc comment already admitted were not the same unit. That borrow also
+## meant recalibrating what a household eats would silently retune an
+## unrelated anti-flicker window (see docs/concept/settlement_food_
+## calibration.md).
+##
+## What it pins is the behaviour, not the number: a change that has not held
+## for the whole window is not news, and one that has, is.
 func test_step_settlements_records_a_status_change_that_holds_for_the_dwell():
 	assert_eq(
 		EarthChunkManager.SETTLEMENT_STATUS_DWELL_STEPS,
-		SettlementState.FOOD_PER_HOUSEHOLD,
-		"the dwell is derived from the food it takes to move capacity, not picked"
+		int(
+			EarthChunkManager.SECONDS_PER_SIMULATED_DAY
+			* EarthChunkManager.SETTLEMENT_STATUS_DWELL_DAYS
+			/ EarthChunkManager.SETTLEMENT_STEP_INTERVAL
+		),
+		"the dwell is a real stretch of days, not a food quantity"
 	)
 
 	var chunk_coord := Vector2i(65, 65)
@@ -15181,6 +15242,17 @@ func test_the_readout_of_a_building_that_keeps_nothing_says_so():
 	var report := manager.household_report_at(_berlin_tile.x, _berlin_tile.y)
 	assert_eq(int(report["storage_capacity"]), 0)
 	assert_eq((report["stock"] as Dictionary).size(), 0)
+
+
+## SettlementState prices an assessment it cannot import the length of --
+## EarthChunkManager preloads that module, so the dependency can only run
+## one way. This is the pin that keeps the two from drifting: the assessment
+## the food model charges for is the one the world actually runs.
+func test_the_assessment_this_module_prices_is_the_one_the_world_runs():
+	assert_almost_eq(
+		EarthChunkManager.SETTLEMENT_STEP_INTERVAL, SettlementState.ASSESSMENT_SECONDS, 0.001,
+		"a per-assessment draw is meaningless if the two disagree about how long one is"
+	)
 
 
 # -- the underground proper (see docs/concept/underground.md) ----------------

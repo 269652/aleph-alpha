@@ -57,6 +57,83 @@ const _MAGENTA_GREEN_MAX := 0.15
 const DIVIDER_LINE_SHARE := 0.6
 
 
+## How light a pixel must be, on every channel, to read as one of the thin
+## near-white RULE LINES the production sheets draw between their cells and
+## around the canvas -- measured on warehouse.png, whose line reads
+## (0.992, 0.969, 0.996). The same 0.85 floor the magenta key already uses,
+## applied to all three channels instead of two.
+const RULE_LINE_MIN := 0.85
+
+## What share of a line must be real art before the line counts as content
+## rather than as background, margin or rule line.
+##
+## Measured across every sheet on the fixed-grid contract: at 2% all five
+## (warehouse, sawmill, city_hall, farmhouse, blacksmith) resolve to
+## exactly their 5 drawn rows. At 1% city_hall's own drop shadow splits
+## into 7 and farmhouse into 6; at 5% a faint roofline is lost and sawmill
+## splits into 6. Pinned by
+## test_content_bands_reads_five_rows_from_every_fixed_grid_sheet.
+const CONTENT_ART_SHARE := 0.02
+
+
+## Every band of real ART along one axis: the runs of lines that are
+## neither the sheet's own dark cell background, nor its magenta margin,
+## nor one of its light rule lines.
+##
+## This is the finder for the sheets whose cells sit on an exact COLUMN
+## pitch but on irregular ROWS -- warehouse.png's row boundaries are at
+## 188, 376, 566 and 786, so no single pitch lands on them. row_bands
+## cannot read them (it looks for dark gutters, and the margin here is
+## magenta) and neither can art_bands (it looks for magenta divider lines,
+## and the line here is near-white), so this asks what is art directly
+## instead of what the gap is made of.
+##
+## Falls back to even division when the sheet yields a different number of
+## bands than asked for -- the same "still cuts, just evenly" contract the
+## other finders keep.
+static func content_bands(image: Image, count: int, horizontal: bool) -> Array:
+	if count <= 0:
+		return []
+	var length := image.get_height() if horizontal else image.get_width()
+	var across := image.get_width() if horizontal else image.get_height()
+	if length <= 0 or across <= 0:
+		return _even_bands(length, count)
+
+	var tolerance := int(float(across) * CONTENT_ART_SHARE)
+	var found: Array = []
+	var start := -1
+	for i in length:
+		var art := 0
+		for j in across:
+			var pixel := image.get_pixel(j, i) if horizontal else image.get_pixel(i, j)
+			if _is_art(pixel):
+				art += 1
+				if art > tolerance:
+					break
+		var is_content := art > tolerance
+		if is_content and start < 0:
+			start = i
+		elif not is_content and start >= 0:
+			if i - start >= MIN_BAND_THICKNESS:
+				found.append(Vector2i(start, i - 1))
+			start = -1
+	if start >= 0 and length - start >= MIN_BAND_THICKNESS:
+		found.append(Vector2i(start, length - 1))
+
+	return found if found.size() == count else _even_bands(length, count)
+
+
+## Neither background, margin nor rule line -- so, a pixel of the drawing.
+static func _is_art(color: Color) -> bool:
+	if _is_magenta(color):
+		return false
+	if color.r <= BACKGROUND_MAX and color.g <= BACKGROUND_MAX and color.b <= BACKGROUND_MAX:
+		return false
+	return not (
+		color.r >= RULE_LINE_MIN and color.g >= RULE_LINE_MIN and color.b >= RULE_LINE_MIN
+	)
+
+
 ## Every band of non-divider content between a sheet's own MAGENTA DIVIDER
 ## LINES, along one axis. Unlike row_bands/column_bands below, which look
 ## for DARK gutters, this reads the sheets that draw a real line between

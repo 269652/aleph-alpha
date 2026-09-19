@@ -52,6 +52,33 @@ Project Settings > Application > Config > Version).
   exactly where to look for it to anyone who ever gets read access to
   this source.
 
+- **Optionally, a `license.txt` to bundle** (see
+  [`docs/licensing.md`](../../docs/licensing.md)'s "Bundling a license with
+  a release"). A plain file holding one signed serial code. Pass it with
+  `-LicensePath`, or set it once the same way as the signing key:
+
+  ```powershell
+  $env:ALEPH_ALPHA_RELEASE_LICENSE = "C:\path\to\release-license.txt"
+  ```
+
+  Given one, the package gains a `license.txt` next to the `.exe`, so
+  whoever downloads it can play without pasting a key. Omit both and the
+  package is built exactly as it always was, with no license in it.
+
+  The serial is verified **before** the export runs, against the same key
+  ring the shipped game itself uses, and a license that cannot be bundled
+  **stops the release** rather than quietly publishing a build without the
+  license you asked for. It refuses an expired or malformed code, one
+  signed by an unknown key, the owner/developer key (never for
+  distribution), and any path that looks like a private key. There is no
+  auto-discovery: the export folder is where your own testing
+  `license.txt` lives, and that is precisely the file that must not ship.
+
+  A license that is valid but expires within 30 days still ships, with the
+  remaining days shouted in the build output — a release whose license
+  lapses next week stops working for its downloaders days after you
+  published it.
+
 ## Usage
 
 **Rebuild and republish the CURRENT version** (e.g. you found a packaging
@@ -62,7 +89,8 @@ problem and want to fix it without bumping the version number):
 ```
 
 This exports the "Windows Desktop" preset, signs the executable, zips the
-`.exe` + its `.sig` sidecar, then either creates a new GitHub Release for
+`.exe` + its `.sig` sidecar (+ `license.txt` if one is configured and
+still valid), then either creates a new GitHub Release for
 `vX.Y.Z` or — if one already exists for that version — re-uploads the
 asset to it (`--clobber`). Safe to run repeatedly for the same version.
 
@@ -89,6 +117,14 @@ name — without actually exporting, signing, tagging, or touching GitHub):
 .\tools\release\build_release.ps1 -KeyPath D:\secure\aleph-alpha-signing-key.pem -DryRun
 ```
 
+The dry run includes the license check, since that step is read-only —
+so it answers "is the serial I am about to ship still valid?" without
+exporting, tagging or publishing anything:
+
+```powershell
+.\tools\release\build_release.ps1 -LicensePath D:\secure\release-license.txt -DryRun
+```
+
 ## What `build_release.ps1` actually does, in order
 
 1. Resolves the signing key from `-KeyPath`, or `$env:ALEPH_ALPHA_SIGNING_KEY`
@@ -97,17 +133,24 @@ name — without actually exporting, signing, tagging, or touching GitHub):
 2. Reads the current version from `project.godot`.
 3. Reads the export output path for the chosen preset straight out of
    `export_presets.cfg` (never a second, hand-maintained copy of it).
-4. `godot --headless --export-release "<preset>"` — a real build.
-5. `tools/sign_build.gd` against the exported executable, using your
+4. If a license is configured (`-LicensePath` /
+   `$env:ALEPH_ALPHA_RELEASE_LICENSE`), verifies it with
+   `tools/verify_release_license.gd` — here, before the long export, so a
+   bad serial costs a second rather than a whole build-sign-tag-publish
+   cycle. A license that cannot be bundled stops the run.
+5. `godot --headless --export-release "<preset>"` — a real build.
+6. `tools/sign_build.gd` against the exported executable, using your
    `-KeyPath` — produces the `.sig` sidecar `SelfIntegrity` checks at
    boot (see `docs/licensing.md`).
-6. Zips **exactly** the `.exe` and its `.sig` — an explicit allowlist, not
-   a whole-directory zip, so nothing else that might be sitting in the
-   dist folder (a locally-entered `license.txt`, a local-testing
-   `private_key.pem`) can end up in a customer-facing package.
-7. Pushes the current branch, then creates (or reuses, if re-running the
+7. Zips **exactly** the `.exe`, its `.sig`, and — only if step 4 approved
+   one — a `license.txt` staged under a temp directory (never written into
+   the dist folder, where it would clobber your own testing copy). An
+   explicit allowlist, not a whole-directory zip, so nothing else sitting
+   in the dist folder (a locally-entered `license.txt`, a local-testing
+   `private_key.pem`) can reach a customer-facing package.
+8. Pushes the current branch, then creates (or reuses, if re-running the
    same version) an annotated git tag `vX.Y.Z`, pushed to origin.
-8. Creates the GitHub Release for that tag (`gh release create`, with
+9. Creates the GitHub Release for that tag (`gh release create`, with
    `--generate-notes`), or if one already exists, uploads the fresh zip
    to it (`gh release upload --clobber`).
 

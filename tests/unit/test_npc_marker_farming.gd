@@ -418,6 +418,30 @@ func test_a_field_of_the_capped_size_really_produces_over_a_work_block():
 	)
 
 
+## What a worked field REALLY yields, measured rather than described.
+##
+## This number had only ever lived in a doc comment ("~215 wheat per work
+## block"), and the founding roster now has to reason about it: a village
+## lives on real work, not on the ambient drip, so "how many food producers
+## does this village need" is its own draw divided by THIS
+## (SettlementDemand, docs/concept/settlement_food_calibration.md).
+## VillageFarm.FIELD_YIELD_PER_WORK_BLOCK is that number, and this is the
+## measurement that holds it there.
+func test_a_capped_fields_yield_per_work_block_is_what_the_roster_is_told_it_is():
+	assert_almost_eq(
+		_wheat_off_a_field(VillageFarm.MAX_WORKED_CELLS),
+		VillageFarm.FIELD_YIELD_PER_WORK_BLOCK,
+		VillageFarm.FIELD_YIELD_PER_WORK_BLOCK * 0.1,
+		"a roster sized against a yield the field does not really have is sized against nothing"
+	)
+
+
+## ...and the work block it is measured over is the one a villager really
+## works, so the two cannot drift.
+func test_the_work_block_the_yield_is_measured_over_is_the_real_one():
+	assert_almost_eq(VillageFarm.WORK_BLOCK_SECONDS, WORK_BLOCK_SECONDS, 0.001)
+
+
 ## The cap is a design limit that was asked for (first "capped to 10
 ## tiles", then the shape inside it: "a 2x3 or 3x2 area"), not a measured
 ## cliff any more -- watering the beds around the one being
@@ -429,7 +453,8 @@ func test_a_capped_field_is_worth_more_than_the_drip_it_replaces():
 	var NpcProduction = load("res://src/world/npc_production.gd")
 	var harvested := _wheat_off_a_field(VillageFarm.MAX_WORKED_CELLS)
 	var dripped: float = (
-		float(NpcProduction.PRODUCTION_RATE_PER_SECOND) * 0.6 * WORK_BLOCK_SECONDS
+		NpcProduction.new().yield_per_second("farmer", _DripWorld.new(), Vector2.ZERO)
+		* WORK_BLOCK_SECONDS
 	)
 	assert_gt(
 		harvested, dripped,
@@ -506,6 +531,56 @@ func test_a_harvest_is_not_sold_before_it_is_carried():
 	marker._work_field_cell()
 
 	assert_eq(_market_stock("wheat"), 0.0, "the village was credited at the scythe")
+
+
+# -- the store is where the goods really are (Mechanism 7) -----------------
+#
+# Reported in play: "The FarmHouse seems to be harvesting something but none
+# of it makes it into storage... it's always 0". The farmer carried the WHOLE
+# shelf into the abstract ledger at the end of every work block, so a
+# farmhouse you clicked was empty, a store you clicked was empty, and the
+# carter arrived at a shelf somebody had already emptied into thin air.
+
+
+## With a store in the village, the shelf is the carter's to empty: the
+## farmer leaves it alone.
+func test_a_farmer_in_a_village_with_a_store_leaves_the_shelf_for_the_carter():
+	var farmhouse := Vector2i(10, 10)
+	var bed := Vector2i(11, 12)
+	marker.warehouse_position = Vector2(400.0, 400.0)  # this village has a store
+	marker.stock_building_cell = farmhouse
+	marker.field_cells = [bed]
+	_ready_bed(marker, bed)
+	marker._field_index = 0
+	marker._work_field_cell()
+	var grown: int = world.stock_at(farmhouse, "wheat")
+	assert_gt(grown, 0, "precondition: something was really cut")
+
+	marker.haul_stock_to_village()
+
+	assert_eq(world.stock_at(farmhouse, "wheat"), grown, "the shelf is still holding it")
+	assert_eq(_market_stock("wheat"), 0.0, "and nothing was conjured into the ledger")
+
+
+## And they are paid for the work anyway -- at the scythe, which is when they
+## did it.
+func test_a_farmer_is_paid_at_the_scythe_even_when_the_shelf_stays_full():
+	var bed := Vector2i(11, 12)
+	marker.warehouse_position = Vector2(400.0, 400.0)
+	marker.stock_building_cell = Vector2i(10, 10)
+	marker.field_cells = [bed]
+	_ready_bed(marker, bed)
+	var purse_before: int = marker.economy.wallet.balance
+	var village_before: float = marker.economy.purse_of(market)
+
+	marker._field_index = 0
+	marker._work_field_cell()
+
+	assert_gt(
+		float(marker.economy.wallet.balance) + marker.economy.purse_of(market),
+		float(purse_before) + village_before,
+		"the work was paid for"
+	)
 
 
 func test_the_farmhouse_stock_is_carried_into_the_villages_own_stock():
@@ -760,3 +835,59 @@ func test_a_fisher_off_the_clock_carries_their_catch_in_and_stops_fishing():
 ## effort per action rather than two tunings to keep in step.
 func test_a_cast_costs_what_a_piece_of_field_work_costs():
 	assert_eq(NpcMarker.CAST_SECONDS, FarmerBehavior.WORK_SECONDS)
+
+
+## The ambient regional drip a farmer would live on WITHOUT a field, read
+## through NpcProduction itself rather than re-derived: that module's rate is
+## each resource's own renewal now, not one shared fraction (see
+## docs/concept/settlement_food_calibration.md), so a test that multiplied a
+## constant by a density would be pricing a farmer's alternative wrongly.
+class _DripWorld:
+	extends RefCounted
+	func vegetation_density_near(_pos: Vector2) -> float:
+		return 0.6
+
+
+## Once, at the END of the block -- not on every off-clock frame.
+##
+## Reported live with the farmhouse panel open: "der Farmer scheint was zu
+## ernten und läuft dann zum Farmhouse aber es wird kein Weizen
+## eingelagert". The haul ran on EVERY frame the villager was off the clock,
+## so anything that reached the store outside the work block was drained
+## again within a frame, and a store could never hold a thing overnight.
+func test_the_store_is_carried_in_once_at_the_end_of_the_block_not_every_frame():
+	var farmhouse := Vector2i(10, 10)
+	marker.stock_building_cell = farmhouse
+	marker.field_cells = [Vector2i(11, 12)]
+
+	# The block ends: what the farmhouse held is carried in, exactly as before.
+	world.deposit_to_structure_at(farmhouse.x, farmhouse.y, "wheat", 4)
+	marker._step_farm(0.1, false)
+	assert_eq(world.stock_at(farmhouse, "wheat"), 0, "precondition: the end of the block still hauls")
+
+	# Anything reaching the store AFTER that stays there until the next block
+	# ends -- a village store is not a chute.
+	world.deposit_to_structure_at(farmhouse.x, farmhouse.y, "wheat", 3)
+	for i in 20:
+		marker._step_farm(0.1, false)
+	assert_eq(
+		world.stock_at(farmhouse, "wheat"), 3,
+		"a store filled after the block ended must not be drained on every frame"
+	)
+
+
+## ...and the next block's end carries it in, so nothing is stranded.
+func test_the_next_blocks_end_carries_in_what_was_left():
+	var farmhouse := Vector2i(10, 10)
+	marker.stock_building_cell = farmhouse
+	marker.field_cells = [Vector2i(11, 12)]
+	marker._step_farm(0.1, false)  # first block end, store empty
+	world.deposit_to_structure_at(farmhouse.x, farmhouse.y, "wheat", 3)
+	marker._step_farm(0.1, false)
+	assert_eq(world.stock_at(farmhouse, "wheat"), 3, "precondition: still held")
+
+	marker._step_farm(0.1, true)   # back on the clock
+	marker._step_farm(0.1, false)  # and off again: this block's end
+
+	assert_eq(world.stock_at(farmhouse, "wheat"), 0, "the next block's end must still carry it in")
+	assert_almost_eq(_market_stock("wheat"), 3.0, 0.001)
