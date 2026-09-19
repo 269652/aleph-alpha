@@ -100,6 +100,38 @@ ordering.
 The sawmill's stock is carried to the village the same way the farmhouse's
 is, through the same haul.
 
+### Somebody in the village has the trade
+
+Reported in play with the mill's own panel in shot: *"The sawmill also
+doesn't produce beams or plangs or logs"*.
+
+The first cause was Mechanism 7's (the sawyer carried the shelf off at the
+end of every work block). The second is the one this file was written for in
+the first place — *"the sawmill never produces any beams and doesn't even
+have a dedicated worker"* — and it came back, quietly, when `carter` joined
+`NpcIdentity.OCCUPATIONS`: a trade is rolled by index, so a tenth occupation
+re-rolls every villager, and the conscription that guarantees a carter takes
+one villager off the end of the roster who may well have been the only
+sawyer.
+
+Measured (`tools/probe_trades_after_conscription.gd`, the 75 real grassland
+villages in rows 0–5): **14 of them, 18.7%, had nobody whose trade is
+timber** — and a mill with nobody to work it produces exactly nothing,
+whatever else is fixed.
+
+So a village staffs a sawyer the same way it staffs its food producers and
+its carter: if the founding roster rolled none, one villager who is not
+already feeding the village is conscripted into the trade. Scoped to the
+FOUNDING roster on both halves — who is looked for and who is taken — so
+growth never hands the axe to a newcomer and gives the old sawyer their
+rolled trade back.
+
+**A sawyer in a village with no timber is not wasted.** They keep the
+regional drip every villager without a worksite already lives on, exactly as
+a farmer with no farmhouse does. That is the same honest fallback this file's
+own Mechanism already relies on: *"A village with no timber in reach raised
+no mill, and its sawyer honestly has no sawmill work"*.
+
 ## Status
 
 Written before implementation, per CLAUDE.md. Corrected as each slice lands.
