@@ -150,7 +150,14 @@ const WORK_BLOCK_SECONDS := 900.0
 ## tolerance there is deliberately loose (10%): the figure comes out of a
 ## walking circuit against a growth clock, not out of arithmetic, and
 ## pinning it tighter would make an honest measurement read as a flake.
-const FIELD_YIELD_PER_WORK_BLOCK := 225.0
+##
+## RE-MEASURED at 278 (from 225) once a bed stopped dying every night (see
+## FarmPlot.MIN_WATER_GRACE_SECONDS): the old figure was the yield of a field
+## that lost beds to the dark and spent part of every block replanting them,
+## so a village sized against it was sized against a field that was partly
+## broken. Re-measured by the same test that pinned the old one, not adjusted
+## by hand.
+const FIELD_YIELD_PER_WORK_BLOCK := 278.0
 
 ## How far out from the farmhouse a field may reach. Not the field's size
 ## -- MAX_WORKED_CELLS is that -- but how far the search looks for cells

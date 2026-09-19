@@ -24,6 +24,7 @@ const NpcCondition = preload("res://src/world/npc_condition.gd")
 const VillagerBehavior = preload("res://src/gameplay/villager_behavior.gd")
 const VillageSawmill = preload("res://src/gameplay/village_sawmill.gd")
 const VillageCart = preload("res://src/gameplay/village_cart.gd")
+const CartLoad = preload("res://src/gameplay/cart_load.gd")
 const CartMarker = preload("res://src/rendering/cart_marker.gd")
 const LogisticsBehavior = preload("res://src/gameplay/logistics_behavior.gd")
 const LumberjackBehavior = preload("res://src/gameplay/lumberjack_behavior.gd")
@@ -298,6 +299,11 @@ var _on_real_field := false
 ## other, both carry their take in at the same moment, and two flags would
 ## be two places to forget to clear.
 var _carried_in_since_work := false
+
+## Whether the store's round is in flight right now: a carter on the clock,
+## with the shaft in their hands. Read by is_on_real_work, exactly as
+## _on_real_field and _on_real_work_timber are.
+var _on_real_round := false
 
 ## How close counts as standing on a plot: half a tile, so a villager on
 ## the tile is working it rather than walking the last few pixels onto its
@@ -854,7 +860,7 @@ var _on_real_work_timber := false
 ## the regional drip, precisely because "has a job on" is not the same
 ## question as "is walking somewhere".
 func is_on_real_work() -> bool:
-	return _on_real_quarry or _on_real_field or _on_real_work_timber
+	return _on_real_quarry or _on_real_field or _on_real_work_timber or _on_real_round
 
 
 ## Whether this villager is mid-conversation right now -- standing still,
@@ -1574,8 +1580,10 @@ func _field_reach() -> float:
 ## still holding whatever is in it, which is the feature rather than a gap.
 func _step_cart(delta: float, is_working: bool):
 	if not VillageCart.walks_the_round(identity.occupation) or store_cell == NO_STORE:
+		_on_real_round = false
 		return null
 	if _world == null or not _world.has_method("structure_stock_contents_at"):
+		_on_real_round = false
 		return null
 	if _carter == null:
 		_carter = LogisticsBehavior.new()
@@ -1586,8 +1594,16 @@ func _step_cart(delta: float, is_working: bool):
 		# (docs/concept/village_warehouse.md, Mechanisms 5 and 6).
 		if cart != null and is_instance_valid(cart):
 			cart.let_go(self)
-		if _carter.phase != LogisticsBehavior.Phase.SEEKING:
-			_carter.abort()
+		# The LEG is kept, though, where it used to be thrown away. A village
+		# is wider than a work block is long: measured against a real one, a
+		# carter who restarted at SEEKING every morning spent each block
+		# walking back out to a shelf they had nearly reached the evening
+		# before, and one or two deliveries arrived in ten simulated days
+		# (tools/probe_village_store_round.gd). A carter picks up where they
+		# left off, which is the only way a round longer than a block ever
+		# finishes. Nothing moves while they are off: no target is returned,
+		# the phase timers are not advanced, and the schedule has them.
+		_on_real_round = false
 		return null
 	# A carter who has lost the shaft -- the player took it -- drops the
 	# round rather than walking it empty-handed. Nothing is emptied into a
@@ -1595,10 +1611,34 @@ func _step_cart(delta: float, is_working: bool):
 	if not have_the_shaft:
 		if _carter.phase != LogisticsBehavior.Phase.SEEKING:
 			_carter.abort()
+		_on_real_round = false
 		return null
+	# A carter on the clock with the shaft in their hands has real work,
+	# whether or not this instant is a walking one -- the same rule, for the
+	# same reason, that a farmer with a farmhouse already has (see
+	# _on_real_field). Reported in play with the warehouse readout open at
+	# "Stored: 0 / 240": *"The porter is moving products (beams, logs) from
+	# the sawmill to the warehouse but unloading doesn't put anything into
+	# warehouse.. storage is still 0 and goods just vanish"*. Nothing
+	# vanished -- the goods were on the wagon. A carter mid-round counted as
+	# free to answer a need, and thirst comes up about every seventeen
+	# seconds, so a round any longer than that was steered to the well
+	# instead of to the store, over and over, with the beams riding along.
+	_on_real_round = true
 
 	match _carter.phase:
 		LogisticsBehavior.Phase.SEEKING:
+			# A wagon with something already on it is a delivery half done,
+			# not a fresh round: finish THAT before fetching anything else.
+			# The round is dropped at the end of every work block (above), so
+			# without this a carter came back on the clock, walked to another
+			# shelf and piled more onto a wagon that had never been emptied.
+			# Measured against a real village, that left a FULL wagon -- 24
+			# beams -- still aboard after ten simulated days, with one or two
+			# deliveries arriving in all that time
+			# (tools/probe_village_store_round.gd).
+			if _wagon_is_loaded() and _carter.resume_carrying():
+				return _cell_centre(store_cell)
 			_carter.advance(delta)
 			if not _carter.can_commit():
 				return null
@@ -1625,6 +1665,15 @@ func _step_cart(delta: float, is_working: bool):
 				_unload_the_cart()
 			return position
 	return null
+
+
+## Whether this carter's own wagon still has something on it -- the question
+## that decides whether a dropped round is resumed or a new one begun (see
+## _step_cart's SEEKING leg).
+func _wagon_is_loaded() -> bool:
+	if cart == null or not is_instance_valid(cart):
+		return false
+	return CartLoad.total(cart.stock) > 0
 
 
 ## Takes the shaft if the wagon is free, and reports whether this villager
