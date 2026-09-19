@@ -53,7 +53,34 @@ func test_image_is_deterministic_per_seed_and_differs_per_footprint():
 	assert_ne(wide.get_size(), a.get_size())
 
 
+## The placeholder is scaled to its world footprint -- drawn INSIDE the
+## plot since BuildingCatalog.PLOT_MARGIN_SHARE. What this test is really
+## guarding is the SHAPE: three wide by (two deep plus a roof) tall, so the
+## box still reads as a building on that ground whatever it is scaled to.
 func test_footprint_texture_scales_to_the_world_footprint_width():
+	var BuildingCatalog = load("res://src/gameplay/building_catalog.gd")
 	var texture := generator.footprint_texture(Vector2i(3, 2), 9, 16)
-	assert_eq(texture.get_width(), 48)
-	assert_eq(texture.get_height(), 48, "3 wide x (2 + 1 roof) tall at 16px tiles")
+	assert_eq(texture.get_width(), int(round(16.0 * BuildingCatalog.drawn_plot_width_tiles(3))))
+	assert_almost_eq(
+		float(texture.get_height()) / float(texture.get_width()),
+		float((2 + 1) * 16) / float(3 * 16),
+		0.02,
+		"3 wide x (2 + 1 roof) tall"
+	)
+
+
+## A building with no art yet stands in exactly as much of its plot as one
+## with art does -- otherwise dropping a sheet in would visibly move the
+## house, and a street of half-arted buildings would have two different
+## rhythms in it. Both read BuildingCatalog.drawn_plot_width_tiles.
+func test_a_placeholder_covers_the_same_plot_a_real_sheet_would():
+	var BuildingCatalog = load("res://src/gameplay/building_catalog.gd")
+	for footprint_width in [1, 2, 3]:
+		var texture: ImageTexture = generator.footprint_texture(Vector2i(footprint_width, 2), 7, 16)
+		assert_eq(
+			texture.get_width(),
+			int(round(16.0 * BuildingCatalog.drawn_plot_width_tiles(footprint_width))),
+			"a %d-tile placeholder does not stand where a %d-tile building would"
+			% [footprint_width, footprint_width]
+		)
+		assert_lt(texture.get_width(), footprint_width * 16, "the placeholder fills its whole plot")

@@ -521,9 +521,17 @@ func _frame_image(path: String, columns: int, rows: int, row: int, column: int, 
 
 
 ## That cell scaled for a Sprite2D standing on a `footprint_width_tiles`-
-## wide footprint: width exactly `tile_size * footprint_width_tiles`, height
-## by the SAME factor (footprint_texture's own documented anchor, a building
-## taller than its footprint stays taller). Null when the sheet is missing.
+## wide footprint: drawn INSIDE the plot, at
+## `BuildingCatalog.drawn_plot_width_tiles` of it, with height by the SAME
+## factor (footprint_texture's own documented anchor, a building taller
+## than its footprint stays taller). Null when the sheet is missing.
+##
+## It used to be exactly the plot width, which is what had two houses on
+## neighbouring plots touching at the pixel with no street between them --
+## see BuildingCatalog.PLOT_MARGIN_SHARE for the report and the
+## measurement behind it. The margin lives there rather than here so this
+## path and the procedural placeholder cannot disagree about how much of a
+## plot a building covers.
 func footprint_frame_texture(
 	path: String, columns: int, rows: int, row: int, column: int, tile_size: int, footprint_width_tiles: int,
 	grid: String = GRID_EVEN
@@ -531,7 +539,9 @@ func footprint_frame_texture(
 	var frame := _frame_image(path, columns, rows, row, column, grid)
 	if frame == null:
 		return null
-	var target_width := tile_size * maxi(footprint_width_tiles, 1)
+	var target_width := maxi(
+		1, int(round(float(tile_size) * BuildingCatalog.drawn_plot_width_tiles(footprint_width_tiles)))
+	)
 	var scale := float(target_width) / float(frame.get_width())
 	var height := maxi(1, int(round(float(frame.get_height()) * scale)))
 	var scaled := frame.duplicate() as Image
