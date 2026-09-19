@@ -147,25 +147,43 @@ func test_a_guild_never_teaches_for_free():
 
 # -- the anchor constant, pinned by the design claim it encodes -------------
 
-func test_a_spell_costs_more_than_any_tool_or_weapon_on_the_shelf():
-	# The design claim MEALS_PER_POWER_UNIT encodes: a spell is a PERMANENT
-	# capability, so it sits in the weight class of a building blueprint --
-	# never that of a sword you can also just buy.
+## What MEALS_PER_POWER_UNIT encodes is a WEIGHT CLASS, not a price, and
+## these three claims are how that stops being a matter of taste. Together
+## they admit roughly 10..39 meals per power unit and nothing outside --
+## deliberately a wide band, because a weight class is a wide thing; what
+## would be dishonest is a tight band pretending to a precision the design
+## does not have.
+##
+## The upper bound used to be "no spell costs more than the dearest thing
+## on the shelf". That was true of a three-spell starter book and stopped
+## being true the moment the book grew real tier-3 magic -- correctly so: a
+## lesson from an archmage SHOULD cost more than anything a merchant
+## stocks, which is now the third claim below rather than a broken second.
+
+func test_the_cheapest_lesson_costs_more_than_any_tool_or_weapon_on_the_shelf():
+	# A spell is a PERMANENT capability. It is not a sword you can also
+	# just buy.
 	var dearest_tool := 0
 	for item_id in ["fishing_rod", "torch", "cooked_meat", "leather_helm", "iron_sword"]:
 		dearest_tool = maxi(dearest_tool, int(Shop.CATALOG[item_id]))
 	assert_gt(_cheapest_teachable(), dearest_tool)
 
 
-func test_a_spell_costs_at_least_what_the_cheapest_house_blueprint_costs():
+func test_the_cheapest_lesson_sits_in_the_house_blueprint_weight_class():
+	# At least the cheapest blueprint, and no more than the dearest: your
+	# FIRST spell is somewhere between a small house and a manor.
 	assert_gte(_cheapest_teachable(), int(Shop.CATALOG["blueprint_small_house"]))
+	assert_lte(_cheapest_teachable(), int(Shop.CATALOG["blueprint_manor"]))
 
 
-func test_no_spell_costs_more_than_the_dearest_thing_on_the_shelf():
-	var dearest := 0
+func test_the_deepest_magic_costs_more_than_anything_a_merchant_sells():
+	# The other half of the same claim, and the reason an archmage is worth
+	# travelling for: what they teach is not a thing you can walk into a
+	# market and buy.
+	var dearest_on_the_shelf := 0
 	for item_id in Shop.CATALOG:
-		dearest = maxi(dearest, int(Shop.CATALOG[item_id]))
-	assert_lte(_dearest_teachable(), dearest)
+		dearest_on_the_shelf = maxi(dearest_on_the_shelf, int(Shop.CATALOG[item_id]))
+	assert_gt(_dearest_teachable(), dearest_on_the_shelf)
 
 
 # -- the refusal is the feature ---------------------------------------------
