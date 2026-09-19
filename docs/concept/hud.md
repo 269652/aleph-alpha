@@ -26,6 +26,11 @@ allowed to appear.
    whichever way the model happens to store it internally.
 3. **The world's own hints never cover a window the player opened.** A prompt
    about the world *behind* a modal is noise even where it does not overlap.
+4. **A card sizes to its own content, and cards stack in columns.** No card is
+   pinned to a box its own text can outgrow, and no card is positioned against
+   a neighbour's height. Overlap is structurally impossible rather than
+   avoided by hand-picked constants — the rule the message stack already
+   followed, applied to the whole HUD.
 
 ## Mechanism spec
 
@@ -237,6 +242,61 @@ when the item has no material to wear (a torch, a fish), `"Name · Condition"`
 when it does, and an empty string when nothing is equipped -- which hides the
 whole card, the same `_set_message_banner` rule the banners follow.
 
+### Three columns, and why every card sizes itself
+
+Pillar 4 is the one thing in this doc that was *learned* rather than designed.
+The first pass gave each new card a pinned top **and** bottom offset, the way
+every HUD element in this file already had one — `WORLD_CLOCK_CARD_TOP = 178`,
+`KARMA_CARD_TOP = 274`, and so on down every edge of the screen. Rendered at
+the largest UI scale (`tools/probe_hud_layout.gd`) that produced:
+
+- the world-clock card's third line clipping straight through the Karma card
+  below it,
+- the diagnostics strip's third line running off the bottom of the screen,
+- the four survival meter rows overrunning each other, because each row was
+  pinned to `SURVIVAL_BAR_HEIGHT` while the label centred in it had grown,
+- the survival bars floating 150px wide inside a 390px card, because a
+  `VBoxContainer` stretches every child to its widest one and the condition
+  chips above them were wider.
+
+Which is the same failure the message banners had, in a new place: two
+elements agreeing to stay out of each other's way via constants that were only
+ever correct for one font size.
+
+Every HUD card is now a child of one of three `VBoxContainer` columns, built
+by `World._build_hud_columns` before any card:
+
+| Column | Anchored | Holds, top to bottom |
+|--------|----------|----------------------|
+| Left | top-left | player card (health + XP), land-sense card, creature panels |
+| Right | top-right, under the minimap (`HUD_RIGHT_COLUMN_TOP`) | world clock, Karma |
+| Bottom-left | bottom-left, growing up | condition chips, survival panel |
+
+Three rules hold it together, each pinned by a render rather than by a
+constant:
+
+1. **A column never pins the edge its cards grow toward.** The left column
+   pins its top, the bottom-left column its bottom, the right column its top
+   and right. Nothing pins a height.
+2. **A card is added with `_add_hud_card`**, which gives it
+   `SIZE_SHRINK_BEGIN` (or `SIZE_SHRINK_END` in the right column) so it sizes
+   to its own content and hugs its column's screen edge instead of being
+   stretched to the widest card beside it.
+3. **Anything whose height depends on a font size derives it.**
+   `_survival_row_height()` is `max(SURVIVAL_BAR_HEIGHT, font_size(10, scale) + 4)`
+   — at the default scale that is exactly `SURVIVAL_BAR_HEIGHT`, so the bars
+   are unchanged, and above it the row grows with its label. The bar and its
+   fill are anchored `LEFT_WIDE`, so their height follows the row's and
+   `_update_survival_bar`'s own `fill.size.x = …` keeps working untouched.
+
+The two floaters outside the columns are the held-item card (centred above the
+hotbar) and the diagnostics strip (bottom-right); both grow away from the edge
+they are anchored to, for the same reason.
+
+The death card stays centred on the screen and is the one card in the HUD
+allowed to sit over the world's middle, because it is the one message the
+player must not miss.
+
 ### UI scale
 
 Every font size in the HUD was a hardcoded `add_theme_font_size_override`
@@ -281,21 +341,44 @@ off the screen. Layout stays at one scale and text is what grows.
   minimap, top-right. `World.karma_display_text`/`karma_display_color`
   are the pure, tested halves (`test_world_hud.gd`): a signed number,
   coloured gold/red/neutral by sign.
-- ⬜ **The top-left strip is split** — the world-clock card always on, the
-  diagnostics strip behind `toggle_diagnostics` (F3) and off by default.
-  `HudReadouts.world_clock_lines` / `diagnostics_lines` / `day_phase`.
-- ⬜ **Condition chips** — `HudReadouts.condition_chips`, a row of themed
-  cards above the survival panel naming the `SurvivalMeters` states the bars
-  only imply.
-- ⬜ **Held-item card** — `HudReadouts.held_item_line`, above the hotbar:
-  what is equipped and how close it is to breaking.
-- ⬜ **UI scale** — `src/ui/ui_scale.gd` + `UiTheme.build_theme(scale)` +
-  a Settings > Interface slider, persisted in `[ui]`.
-- ⬜ **Pillar 1 finished** — the land-sense readout, the death label, the XP
-  label and the charge meter move onto the shared card.
-- ⬜ **The charge meter is world-space and not yet covered by
-  `world_hint_visible_for`.** It is drawn above the player's own head, so it
-  can overlap a window the same way the prompt did.
+- ✅ **The top-left strip is split** — `$UI/DebugLabel` is gone from
+  `world.tscn`. Its player half is the world-clock card
+  (`World._build_world_clock_card`, `HudReadouts.world_clock_lines` /
+  `day_phase`); its developer half is the bottom-right diagnostics strip
+  (`_build_diagnostics_strip`, `HudReadouts.diagnostics_lines`), hidden until
+  `toggle_diagnostics` (F3, `Keybindings`) and **not even written** while
+  hidden. Tested (`test_hud_readouts.gd`, `test_keybindings.gd`).
+- ✅ **Condition chips** — `HudReadouts.condition_chips` /
+  `World._update_condition_chips`: a row of themed cards above the survival
+  panel naming the `SurvivalMeters` states the bars only imply. Rebuilt only
+  when `HudReadouts.chips_signature` changes, and the chip Labels are
+  deliberately kept OUT of the UI-scale registry (they are freed and rebuilt
+  as the player's state changes; a dictionary keyed by them would grow all
+  session). Tested (`test_hud_readouts.gd`).
+- ✅ **Held-item card** — `HudReadouts.held_item_line` /
+  `World._update_held_item_card`, above the hotbar: what is equipped and its
+  `ItemWear.condition_for` grade. Hides the card, not the label. Tested
+  (`test_hud_readouts.gd`).
+- ✅ **UI scale** — `src/ui/ui_scale.gd`, `UiTheme.build_theme(scale)` /
+  `apply_scale`, a Settings > Interface slider
+  (`SettingsOverlay._build_interface_section`), persisted by
+  `World._save_ui_settings` in `[ui]`, applied by `_apply_ui_scale` without a
+  restart. Tested (`test_ui_scale.gd`, `test_ui_theme.gd`,
+  `test_settings_overlay_interface.gd`).
+- ✅ **Pillar 1 finished** — the land-sense readout, the death label, the XP
+  label, the health bar and the charge meter are all on the shared card;
+  `UiTheme.compact_panel_stylebox` is the slim variant for the bar-shaped ones
+  (tested). Each hides its **card**, never just its label.
+- ✅ **World hints yield, charge meter included** — `_update_charge_meter`
+  goes through `world_hint_visible_for`; it was the last world-space floater
+  not covered by it.
+- ✅ **Cards size themselves and stack in columns** (pillar 4) —
+  `World._build_hud_columns` / `_add_hud_card` / `_survival_row_height`.
+  Verified by rendering rather than by argument, at 0.75, 1.0 and 1.75
+  (`tools/probe_hud_layout.gd`).
+- 🚧 **Not verified in a live session.** Every check above is headless: unit
+  tests plus offscreen renders of the real builders. Nobody has yet pressed
+  F3, dragged the scale slider or watched a chip appear in a running game.
 
 ## Testing boundary
 
@@ -306,4 +389,17 @@ What is tested is the pure decisions: the banner order, the visibility rule
 and the meter vocabulary in `tests/unit/test_world_hud.gd`; the readout text,
 the day phase, the condition chips and the held-item line in
 `tests/unit/test_hud_readouts.gd`; the scale model in
-`tests/unit/test_ui_scale.gd`.
+`tests/unit/test_ui_scale.gd`; the theme's cards in
+`tests/unit/test_ui_theme.gd`; the Interface slider in
+`tests/unit/test_settings_overlay_interface.gd`.
+
+**Layout is the exception, and it is verified by rendering.**
+`tools/probe_hud_layout.gd` calls World's own builders — not a mock-up that
+can drift from them — reparents the real `$UI` CanvasLayer into a SubViewport
+of the design size, fills every card with plausible mid-game content and saves
+a PNG. It runs under `xvfb-run` with `--rendering-driver opengl3`; World is
+instantiated but never added to the tree, so its `_ready` (license gate, chunk
+manager, the ~52s of art warming) never runs. Run it at `0.75`, `1.0` and
+`1.75` and look at the three images. Every layout bug listed under "Three
+columns" above was found that way and by no other means — a unit test cannot
+see a card clipping through the one below it.

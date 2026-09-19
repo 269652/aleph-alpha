@@ -408,28 +408,31 @@ const NO_FORCED_HOUR := -1.0
 ## elevation in degrees used to ship ON, in the middle of the clock line.
 const DIAGNOSTICS_TOGGLE_ACTION := "toggle_diagnostics"
 
-## The top-right column, under the minimap (which ends at y = 170): the
-## world-clock card, then Karma under it. See docs/concept/hud.md.
-const HUD_RIGHT_COLUMN_LEFT := -170.0
-const HUD_RIGHT_COLUMN_RIGHT := -8.0
-const WORLD_CLOCK_CARD_TOP := 178.0
-const WORLD_CLOCK_CARD_BOTTOM := 266.0
-const KARMA_CARD_TOP := 274.0
-const KARMA_CARD_BOTTOM := 306.0
-## The diagnostics strip sits bottom-right -- the one free corner. Top-left,
-## where it came from, is the player's own state column (health, XP, land
-## sense, creature panels) and an overlay toggled on top of that would cover
-## exactly the thing the player was watching when they reached for F3.
-const DIAGNOSTICS_CARD_LEFT := -150.0
-const DIAGNOSTICS_CARD_TOP := -92.0
-## The top-left column, under the health bar (which now sits at y = 8..26,
-## in the corner the old strip vacated): the XP card, then the land-sense
-## card, then the creature panels. See docs/concept/hud.md.
-const XP_CARD_TOP := 32.0
-const LAND_SENSE_CARD_TOP := 74.0
-## The condition chips sit directly above the survival panel (which occupies
-## the bottom 132px of the left edge), with the bars they name.
-const CONDITION_CHIPS_BOTTOM := -136.0
+## The HUD's three stacked columns (docs/concept/hud.md). Every card in a
+## column is a VBox child, so it sizes to its OWN content and cannot overlap
+## its neighbours at any UI scale -- the same "overlap is structurally
+## impossible rather than avoided by hand-picked constants" rule the message
+## stack already follows.
+##
+## The first pass did pin each card's top AND bottom, and the 1.75-scale
+## render (tools/probe_hud_layout.gd) showed exactly what that buys: the
+## world-clock card's third line clipped through the Karma card below it, and
+## the diagnostics strip's third line ran off the bottom of the screen.
+##
+## Left: the player card (health + XP), the land-sense card, the creature
+## panels. Right, under the minimap (which ends at y = 170): the world clock,
+## then Karma. Bottom-left: the condition chips, then the survival panel.
+## Bottom-right, the one free corner: the diagnostics strip -- toggled over
+## the top-left column it would cover exactly the health and meters the player
+## was watching when they reached for F3.
+const HUD_EDGE_MARGIN := 8.0
+const HUD_RIGHT_COLUMN_TOP := 178.0
+## The narrowest a right-column or diagnostics card may be; they grow WIDER to
+## fit their text, and none is pinned to a width its own text can overflow.
+const HUD_CARD_MIN_WIDTH := 162.0
+## The health bar's own height, as the .tscn authors it -- the minimum size it
+## is given once it moves into the player card's VBox.
+const PLAYER_HEALTH_BAR_HEIGHT := 14.0
 ## The held-item card sits directly above the hotbar (top at -76).
 const HELD_ITEM_CARD_BOTTOM := -80.0
 
@@ -477,6 +480,9 @@ const MAX_GOLD_COUNT := 9999
 
 const SURVIVAL_BAR_WIDTH := 150.0
 const SURVIVAL_BAR_HEIGHT := 14.0
+## The meter label centred inside a bar. Also what _survival_row_height sizes
+## the row against, so the two can never disagree.
+const SURVIVAL_LABEL_FONT_SIZE := 10
 
 ## How heavy the visible falling rain is per weather state (see
 ## RainOverlay.set_intensity). A storm is a downpour; ordinary rain is
@@ -562,6 +568,15 @@ var _diagnostics_labels: Array[Label] = []
 var _diagnostics_visible := false
 ## The condition chips above the survival panel, and the held-item card above
 ## the hotbar (docs/concept/hud.md).
+## The three stacked HUD columns (see HUD_EDGE_MARGIN's own doc comment):
+## every card is a child of one of these, so cards size to their own content
+## and can never overlap at any UI scale.
+## The four survival meter rows, so a UI scale change can re-grow them (their
+## height follows their label's, see _survival_row_height).
+var _survival_rows: Array[Control] = []
+var _hud_left_column: VBoxContainer
+var _hud_right_column: VBoxContainer
+var _hud_bottom_left_column: VBoxContainer
 var _condition_chips_row: HBoxContainer
 ## The chip texts currently on screen, joined -- so a frame whose conditions
 ## have not changed rebuilds nothing.
@@ -1197,17 +1212,21 @@ func _ready() -> void:
 	_build_house_panel()
 	_build_skill_window()
 	_build_settings_overlay()
-	_build_creature_panels_container()
 	_build_hover_tooltip()
 	_build_death_label()
-	_build_survival_bar()
-	_build_condition_chips()
-	_build_held_item_card()
-	_build_world_clock_card()
-	_build_diagnostics_strip()
-	_build_xp_bar()
+	# The columns first, then each card into its column IN THE ORDER IT
+	# APPEARS -- a VBox draws its children top to bottom, so this call order
+	# IS the on-screen order (see HUD_EDGE_MARGIN, docs/concept/hud.md).
+	_build_hud_columns()
+	_build_xp_bar()  # the player card: health + XP
 	_build_land_sense_label()
+	_build_creature_panels_container()
+	_build_condition_chips()
+	_build_survival_bar()
+	_build_world_clock_card()
 	_build_karma_display()
+	_build_held_item_card()
+	_build_diagnostics_strip()
 	_build_message_stack()
 	_build_joust_view()
 	_build_handheld_view()
@@ -2321,6 +2340,10 @@ func _apply_ui_scale() -> void:
 	for label in _scaled_font_labels:
 		if is_instance_valid(label):
 			_apply_scaled_font(label, _scaled_font_labels[label])
+	# A meter row is as tall as the label centred in it, so it grows too.
+	for row in _survival_rows:
+		if is_instance_valid(row):
+			row.custom_minimum_size.y = _survival_row_height()
 	# The condition chips are not in that registry (they are rebuilt as the
 	# player's state changes, see _update_condition_chips). Forgetting what the
 	# row currently says makes the next frame rebuild it at the new size.
@@ -2516,14 +2539,12 @@ func _save_keybindings() -> void:
 func _build_survival_bar() -> void:
 	# A themed panel groups the meters into one HUD card in the corner instead
 	# of loose floating bars.
+	# In the bottom-left column, under the condition chips that name what these
+	# bars only imply. Sized by its own content rather than pinned to a 124px
+	# box, so the rows still fit once the UI scale grows their labels.
 	var panel := PanelContainer.new()
-	panel.theme = _ui_theme
-	panel.set_anchors_preset(Control.PRESET_BOTTOM_LEFT)
-	panel.offset_left = 8.0
-	panel.offset_top = -132.0
-	panel.offset_right = 176.0
-	panel.offset_bottom = -8.0
-	_ui.add_child(panel)
+	panel.custom_minimum_size.x = SURVIVAL_BAR_WIDTH + 2.0 * UiTheme.CONTENT_MARGIN
+	_add_hud_card(_hud_bottom_left_column, panel)
 
 	var container := VBoxContainer.new()
 	container.add_theme_constant_override("separation", 4)
@@ -2543,7 +2564,7 @@ func _build_survival_bar() -> void:
 	_warmth_label = warmth["label"]
 
 	_wallet_label = Label.new()
-	_wallet_label.add_theme_font_size_override("font_size", 12)
+	_scaled_font(_wallet_label, 12)
 	container.add_child(_wallet_label)
 
 
@@ -2552,24 +2573,33 @@ func _build_survival_bar() -> void:
 ## A slim XP bar with a level readout, just under the player health bar
 ## (top-left). Full = about to level up (see ExperienceTrack).
 func _build_xp_bar() -> void:
-	# On the shared card, like every other readout (docs/concept/hud.md pillar
-	# 1). "Lv 7 - Warrior (2 pts)" used to be a bare 10pt Label over the world,
-	# which is exactly the white-text-over-snow case the pillar exists for.
-	# The compact stylebox rather than the full one: a 10px bar in a 12px-
-	# margin card is mostly empty card, three deep down this edge.
+	# Health and XP on ONE shared card in the corner (docs/concept/hud.md
+	# pillar 1). "Lv 7 - Warrior (2 pts)" used to be a bare 10pt Label over the
+	# world -- exactly the white-text-over-snow case the pillar exists for --
+	# and the health bar beside it was raw sharp-cornered ColorRects, the last
+	# unthemed thing in the corner once everything else moved onto the card
+	# (seen directly in tools/probe_hud_layout.gd's render).
+	#
+	# The compact stylebox rather than the full one: an 18px bar in a 12px-
+	# margin card is mostly empty card, stacked down this edge.
 	var card := PanelContainer.new()
-	card.theme = _ui_theme
 	card.add_theme_stylebox_override("panel", UiTheme.new().compact_panel_stylebox())
-	card.set_anchors_preset(Control.PRESET_TOP_LEFT)
-	card.offset_left = 8.0
-	card.offset_top = XP_CARD_TOP
-	card.offset_right = 8.0 + SURVIVAL_BAR_WIDTH + 2.0 * UiTheme.COMPACT_CONTENT_MARGIN
+	card.custom_minimum_size.x = SURVIVAL_BAR_WIDTH + 2.0 * UiTheme.COMPACT_CONTENT_MARGIN
 	card.mouse_filter = Control.MOUSE_FILTER_IGNORE
-	_ui.add_child(card)
+	_add_hud_card(_hud_left_column, card)
 
 	var column := VBoxContainer.new()
-	column.add_theme_constant_override("separation", 2)
+	column.add_theme_constant_override("separation", 3)
 	card.add_child(column)
+
+	# The .tscn-authored health bar moves INTO the card rather than being
+	# rebuilt here: _update_player_health_bar reads its Background/Fill/Label
+	# by node path, and those three keep working unchanged inside a container
+	# as long as the row is given a real minimum size to lay out against.
+	var health_bar: Control = _ui.get_node("PlayerHealthBar")
+	health_bar.custom_minimum_size = Vector2(SURVIVAL_BAR_WIDTH, PLAYER_HEALTH_BAR_HEIGHT)
+	_ui.remove_child(health_bar)
+	column.add_child(health_bar)
 
 	_xp_label = Label.new()
 	_scaled_font(_xp_label, 11)
@@ -2602,16 +2632,14 @@ func _build_land_sense_label() -> void:
 	# whatever ground the player was reading them about -- the one readout in
 	# the HUD guaranteed to be drawn over open terrain.
 	_land_sense_card = PanelContainer.new()
-	_land_sense_card.theme = _ui_theme
 	_land_sense_card.add_theme_stylebox_override(
 		"panel", UiTheme.new().compact_panel_stylebox()
 	)
-	_land_sense_card.set_anchors_preset(Control.PRESET_TOP_LEFT)
-	_land_sense_card.offset_left = 8.0
-	_land_sense_card.offset_top = LAND_SENSE_CARD_TOP
 	_land_sense_card.mouse_filter = Control.MOUSE_FILTER_IGNORE
+	# A hidden child takes no room in a VBox, so the creature panels below
+	# simply move up when this keystone is not unlocked.
 	_land_sense_card.visible = false
-	_ui.add_child(_land_sense_card)
+	_add_hud_card(_hud_left_column, _land_sense_card)
 
 	_land_sense_label = Label.new()
 	_scaled_font(_land_sense_label, 11)
@@ -2627,21 +2655,65 @@ func _build_land_sense_label() -> void:
 ## minimap, top-right -- the corner column mirroring how the XP bar/land-
 ## sense/creature-panels already stack below the health bar, top-left.
 func _build_karma_display() -> void:
-	var panel := PanelContainer.new()
-	panel.theme = _ui_theme
-	panel.set_anchors_preset(Control.PRESET_TOP_RIGHT)
-	panel.offset_left = HUD_RIGHT_COLUMN_LEFT
 	# Under the world-clock card, which took the slot directly below the
-	# minimap when the top-left strip split (docs/concept/hud.md).
-	panel.offset_top = KARMA_CARD_TOP
-	panel.offset_right = HUD_RIGHT_COLUMN_RIGHT
-	panel.offset_bottom = KARMA_CARD_BOTTOM
-	_ui.add_child(panel)
+	# minimap when the top-left strip split (docs/concept/hud.md). Both are
+	# children of the same column, so neither can clip through the other.
+	var panel := PanelContainer.new()
+	_add_hud_card(_hud_right_column, panel, true)
 
 	_karma_label = Label.new()
 	_karma_label.horizontal_alignment = HORIZONTAL_ALIGNMENT_CENTER
 	_karma_label.vertical_alignment = VERTICAL_ALIGNMENT_CENTER
 	panel.add_child(_karma_label)
+
+
+## The three stacked columns every HUD card lives in -- see HUD_EDGE_MARGIN.
+## Built before any card, so each builder simply adds to the column it belongs
+## in and never positions itself against its neighbour's height.
+##
+## Each column grows AWAY from the screen edge it is anchored to, and none of
+## them pins the edge its cards grow toward, so a card that needs more room at
+## a larger UI scale takes it instead of clipping.
+func _build_hud_columns() -> void:
+	_hud_left_column = _make_hud_column(Control.PRESET_TOP_LEFT)
+	_hud_left_column.offset_left = HUD_EDGE_MARGIN
+	_hud_left_column.offset_top = HUD_EDGE_MARGIN
+
+	_hud_right_column = _make_hud_column(Control.PRESET_TOP_RIGHT)
+	_hud_right_column.offset_left = -HUD_EDGE_MARGIN
+	_hud_right_column.offset_right = -HUD_EDGE_MARGIN
+	_hud_right_column.offset_top = HUD_RIGHT_COLUMN_TOP
+	_hud_right_column.grow_horizontal = Control.GROW_DIRECTION_BEGIN
+	_hud_right_column.custom_minimum_size.x = HUD_CARD_MIN_WIDTH
+
+	_hud_bottom_left_column = _make_hud_column(Control.PRESET_BOTTOM_LEFT)
+	_hud_bottom_left_column.offset_left = HUD_EDGE_MARGIN
+	_hud_bottom_left_column.offset_top = -HUD_EDGE_MARGIN
+	_hud_bottom_left_column.offset_bottom = -HUD_EDGE_MARGIN
+	_hud_bottom_left_column.grow_vertical = Control.GROW_DIRECTION_BEGIN
+
+
+func _make_hud_column(preset: int) -> VBoxContainer:
+	var column := VBoxContainer.new()
+	column.theme = _ui_theme
+	column.set_anchors_preset(preset)
+	column.add_theme_constant_override("separation", 4)
+	column.mouse_filter = Control.MOUSE_FILTER_IGNORE
+	_ui.add_child(column)
+	return column
+
+
+## Puts `card` in `column`, sized to its OWN content and hugging the screen
+## edge the column is anchored to.
+##
+## Without this a VBox stretches every child to the widest one, which at 1.75
+## left a 150px-wide set of survival bars floating inside a 390px card, the
+## width having been set by the condition chips above them.
+func _add_hud_card(column: VBoxContainer, card: Control, hug_right: bool = false) -> void:
+	card.size_flags_horizontal = (
+		Control.SIZE_SHRINK_END if hug_right else Control.SIZE_SHRINK_BEGIN
+	)
+	column.add_child(card)
 
 
 ## The world-clock card (docs/concept/hud.md "The top-left strip"): the time,
@@ -2659,14 +2731,8 @@ func _build_karma_display() -> void:
 ## Karma moves down to sit under this.
 func _build_world_clock_card() -> void:
 	var panel := PanelContainer.new()
-	panel.theme = _ui_theme
-	panel.set_anchors_preset(Control.PRESET_TOP_RIGHT)
-	panel.offset_left = HUD_RIGHT_COLUMN_LEFT
-	panel.offset_top = WORLD_CLOCK_CARD_TOP
-	panel.offset_right = HUD_RIGHT_COLUMN_RIGHT
-	panel.offset_bottom = WORLD_CLOCK_CARD_BOTTOM
 	panel.mouse_filter = Control.MOUSE_FILTER_IGNORE
-	_ui.add_child(panel)
+	_add_hud_card(_hud_right_column, panel, true)
 
 	var column := VBoxContainer.new()
 	column.add_theme_constant_override("separation", 2)
@@ -2698,10 +2764,16 @@ func _build_diagnostics_strip() -> void:
 	_diagnostics_card = PanelContainer.new()
 	_diagnostics_card.theme = _ui_theme
 	_diagnostics_card.set_anchors_preset(Control.PRESET_BOTTOM_RIGHT)
-	_diagnostics_card.offset_left = DIAGNOSTICS_CARD_LEFT
-	_diagnostics_card.offset_top = DIAGNOSTICS_CARD_TOP
-	_diagnostics_card.offset_right = HUD_RIGHT_COLUMN_RIGHT
-	_diagnostics_card.offset_bottom = -8.0
+	# Grows up and to the left out of the corner rather than being pinned to a
+	# box its own text can outgrow -- the 1.75-scale render had it running off
+	# the bottom of the screen.
+	_diagnostics_card.offset_left = -HUD_EDGE_MARGIN
+	_diagnostics_card.offset_top = -HUD_EDGE_MARGIN
+	_diagnostics_card.offset_right = -HUD_EDGE_MARGIN
+	_diagnostics_card.offset_bottom = -HUD_EDGE_MARGIN
+	_diagnostics_card.grow_horizontal = Control.GROW_DIRECTION_BEGIN
+	_diagnostics_card.grow_vertical = Control.GROW_DIRECTION_BEGIN
+	_diagnostics_card.custom_minimum_size.x = HUD_CARD_MIN_WIDTH
 	_diagnostics_card.mouse_filter = Control.MOUSE_FILTER_IGNORE
 	_diagnostics_card.visible = false
 	_ui.add_child(_diagnostics_card)
@@ -2729,14 +2801,9 @@ func _toggle_diagnostics_strip() -> void:
 ## panel, bottom-left -- with the bars they name, not in some other corner.
 func _build_condition_chips() -> void:
 	_condition_chips_row = HBoxContainer.new()
-	_condition_chips_row.theme = _ui_theme
-	_condition_chips_row.set_anchors_preset(Control.PRESET_BOTTOM_LEFT)
-	_condition_chips_row.offset_left = 8.0
-	_condition_chips_row.offset_bottom = CONDITION_CHIPS_BOTTOM
 	_condition_chips_row.add_theme_constant_override("separation", 4)
 	_condition_chips_row.mouse_filter = Control.MOUSE_FILTER_IGNORE
-	_condition_chips_row.grow_vertical = Control.GROW_DIRECTION_BEGIN
-	_ui.add_child(_condition_chips_row)
+	_add_hud_card(_hud_bottom_left_column, _condition_chips_row)
 
 
 ## Every frame: whichever SurvivalMeters states are true right now, in
@@ -3643,41 +3710,59 @@ func _update_land_sense_label(local_player: Player) -> void:
 
 func _make_survival_meter_row(parent: Control, fill_color: Color) -> Dictionary:
 	var row := Control.new()
-	row.custom_minimum_size = Vector2(SURVIVAL_BAR_WIDTH, SURVIVAL_BAR_HEIGHT)
+	row.custom_minimum_size = Vector2(SURVIVAL_BAR_WIDTH, _survival_row_height())
+	# Sized to the bar, not stretched to the card: the label is centred inside
+	# the ROW, so a stretched row would print the label beside its own bar.
+	row.size_flags_horizontal = Control.SIZE_SHRINK_BEGIN
 	parent.add_child(row)
+	_survival_rows.append(row)
 
+	# The bar and its fill are anchored LEFT_WIDE rather than given a fixed
+	# size: their height then follows the row's, so the row is the single
+	# thing the UI scale has to grow, and _update_survival_bar's own
+	# `fill.size.x = ...` keeps working untouched.
 	var bg := ColorRect.new()
 	bg.color = Color(0.1, 0.1, 0.1, 0.85)
-	bg.size = Vector2(SURVIVAL_BAR_WIDTH, SURVIVAL_BAR_HEIGHT)
+	bg.set_anchors_preset(Control.PRESET_LEFT_WIDE)
+	bg.size.x = SURVIVAL_BAR_WIDTH
 	row.add_child(bg)
 
 	var fill := ColorRect.new()
 	fill.color = fill_color
-	fill.size = Vector2(SURVIVAL_BAR_WIDTH, SURVIVAL_BAR_HEIGHT)
+	fill.set_anchors_preset(Control.PRESET_LEFT_WIDE)
+	fill.size.x = SURVIVAL_BAR_WIDTH
 	row.add_child(fill)
 
 	var label := Label.new()
-	label.size = Vector2(SURVIVAL_BAR_WIDTH, SURVIVAL_BAR_HEIGHT)
+	label.set_anchors_preset(Control.PRESET_FULL_RECT)
 	label.horizontal_alignment = HORIZONTAL_ALIGNMENT_CENTER
 	label.vertical_alignment = VERTICAL_ALIGNMENT_CENTER
-	label.add_theme_font_size_override("font_size", 10)
+	_scaled_font(label, SURVIVAL_LABEL_FONT_SIZE)
 	row.add_child(label)
 
 	return {"fill": fill, "label": label}
 
 
+## How tall one meter row has to be: at least as tall as the label centred
+## inside it. At the default UI scale this is exactly SURVIVAL_BAR_HEIGHT, so
+## the bars are unchanged; at 1.75 the 10pt label becomes 18pt and the row
+## grows with it instead of the four rows running through each other, which is
+## what the 1.75-scale render showed them doing.
+func _survival_row_height() -> float:
+	return maxf(
+		SURVIVAL_BAR_HEIGHT, float(UiScale.font_size(SURVIVAL_LABEL_FONT_SIZE, _ui_scale)) + 4.0
+	)
+
+
 ## A plain vertical stack of CreaturePanels, left side of the screen below
 ## the player health bar -- populated/refreshed by _update_creature_panels.
 func _build_creature_panels_container() -> void:
+	# Last in the left column, under the player card and the land-sense card --
+	# so they never overlap whatever those two currently need, at any UI scale
+	# (see HUD_EDGE_MARGIN and docs/concept/hud.md).
 	_creature_panels_container = VBoxContainer.new()
-	_creature_panels_container.theme = _ui_theme
-	_creature_panels_container.set_anchors_preset(Control.PRESET_TOP_LEFT)
-	_creature_panels_container.offset_left = 8.0
-	# Below the health bar, the XP card and the land-sense card, so they never
-	# overlap -- see docs/concept/hud.md for the column's order.
-	_creature_panels_container.offset_top = LAND_SENSE_CARD_TOP + 34.0
 	_creature_panels_container.add_theme_constant_override("separation", 4)
-	_ui.add_child(_creature_panels_container)
+	_add_hud_card(_hud_left_column, _creature_panels_container)
 
 
 ## A small floating label that follows the mouse cursor, showing whichever
