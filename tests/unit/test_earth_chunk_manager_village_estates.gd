@@ -18,6 +18,8 @@ const VillageWages = preload("res://src/world/village_wages.gd")
 const EstateShortfall = preload("res://src/emergence/estate_shortfall.gd")
 const BuildingCatalog = preload("res://src/gameplay/building_catalog.gd")
 const StaffedProduction = preload("res://src/emergence/staffed_production.gd")
+const SettlementCharter = preload("res://src/emergence/settlement_charter.gd")
+const SettlementTier = preload("res://src/emergence/settlement_tier.gd")
 const NpcEconomy = preload("res://src/world/npc_economy.gd")
 
 const CHUNK := Vector2i(4242, 4242)
@@ -730,3 +732,81 @@ func test_the_settlement_assessment_and_the_single_readout_agree_on_work():
 			float(assessment["needs"]["work"]), single, 0.001,
 			"the village and the household disagree about who is in work"
 		)
+
+
+# -- the charter, live ----------------------------------------------------
+
+## docs/concept/settlement_charter.md mechanisms 2 and 5. A player refused
+## a mage guild must leave knowing what to go and do.
+func test_a_hamlet_refuses_a_mage_guild_and_says_what_it_is_short_of():
+	_found(2)
+	var refusal: Dictionary = manager.building_charter_refusal_at(_settlement_id, "mage_guild")
+	assert_false(refusal.is_empty(), "a hamlet let a mage guild through")
+	assert_eq(String(refusal["required_tier"]), SettlementTier.CITY)
+	assert_gt(int(refusal["short"]["households"]), 0, "it did not say how many more people")
+
+
+func test_a_settlement_is_never_refused_a_building_nothing_charters():
+	_found(2)
+	assert_eq(manager.building_charter_refusal_at(_settlement_id, "sawmill"), {})
+
+
+func test_a_settlement_nobody_founded_refuses_a_chartered_building():
+	var nowhere := EntityRef.for_settlement(Vector2i(-61, -61))
+	assert_false(manager.building_charter_refusal_at(nowhere, "mage_guild").is_empty())
+
+
+## The readout a player actually reads off the hall: what the place IS, and
+## what it would take to be the next thing up.
+func test_the_charter_report_names_the_tier_and_the_errand():
+	_found(2)
+	var report: Dictionary = manager.settlement_charter_report_for(_settlement_id)
+	assert_eq(String(report["tier"]), SettlementTier.HAMLET)
+	assert_eq(String(report["next_tier"]), SettlementTier.TOWN)
+	assert_true(report.has("short"), "the report does not say what is short")
+	assert_true(
+		report["allowed"].is_empty(),
+		"a hamlet was told it may raise a chartered building"
+	)
+
+
+## And it is a CONSUMER, never a driver: asking changes nothing.
+func test_reading_the_charter_changes_nothing_about_the_settlement():
+	_found(4)
+	_keep_the_village_alive()
+	_step()
+	var households_before: int = manager.household_ids_in_settlement(_settlement_id).size()
+	var stock_before: int = _market().stock_of(VillageEstates.FUEL_ITEM_ID)
+	manager.settlement_charter_report_for(_settlement_id)
+	manager.building_charter_refusal_at(_settlement_id, "mage_guild")
+	assert_eq(manager.household_ids_in_settlement(_settlement_id).size(), households_before)
+	assert_eq(_market().stock_of(VillageEstates.FUEL_ITEM_ID), stock_before)
+
+
+## The village's own decision reads the same charter: a hamlet never queues
+## what a player standing on its square would be refused.
+func test_the_village_never_decides_to_build_what_its_charter_forbids():
+	_found(6)
+	_keep_the_village_alive()
+	for _i in 12:
+		_step()
+		var next: String = manager.next_building_for_settlement(CHUNK)
+		assert_true(
+			SettlementCharter.allows(next, manager.settlement_tier_of(_settlement_id)),
+			"a %s decided to build %s" % [manager.settlement_tier_of(_settlement_id), next]
+		)
+
+
+## And the charter really rides on the report a click produces, so the
+## panel has something to draw rather than a field nobody fills.
+func test_the_report_a_click_produces_carries_the_settlements_charter():
+	_found(3)
+	var report: Dictionary = manager.household_report_at(0, 0)
+	assert_true(report.is_empty(), "precondition: nothing stands at the origin")
+
+	# The charter the report WOULD carry, asked of the same function the
+	# report builds it with -- the building itself needs real loaded
+	# ground, which is what test_world_house_panel_wiring.gd drives.
+	var charter: Dictionary = manager.settlement_charter_report_for(_settlement_id)
+	assert_eq(String(charter["tier"]), SettlementTier.HAMLET)
+	assert_true(charter["locked"].has("mage_guild"))

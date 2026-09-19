@@ -18,6 +18,8 @@ const VillageEstates = preload("res://src/emergence/village_estates.gd")
 const VillageGrowth = preload("res://src/emergence/village_growth.gd")
 const EstateAscension = preload("res://src/emergence/estate_ascension.gd")
 const BuildingCatalog = preload("res://src/gameplay/building_catalog.gd")
+const SettlementCharter = preload("res://src/emergence/settlement_charter.gd")
+const SettlementTier = preload("res://src/emergence/settlement_tier.gd")
 
 const FOOD := VillageEstates.FOOD_KIND_TOKEN
 const FUEL := VillageEstates.FUEL_ITEM_ID
@@ -473,3 +475,161 @@ func test_no_land_named_falls_back_to_farming():
 	var state := _hungry_village(households, [], {"building_counts": {}})
 	assert_eq(VillageAssembly.next_building(state), "farmhouse")
 	assert_eq(SettlementFoodDemand.FALLBACK_TRADE, "farmer", "and that is the model's own fallback")
+
+
+# -- the village reads the same charter the player does -------------------
+
+## docs/concept/settlement_charter.md mechanism 4. A hamlet must not spend
+## years saving timber for a hall it would be refused -- and a village that
+## could quietly raise through its own ledger what a player standing on its
+## square is refused would make the charter a lie.
+func test_a_hamlet_never_petitions_for_a_building_its_charter_forbids():
+	var estate_counts := {"buerger": 6}
+	var satisfaction := _fully_supplied(estate_counts)
+	for good in satisfaction:
+		satisfaction[good] = 0.0
+	for _i in 30:
+		var next := _petition({
+			"estate_counts": estate_counts,
+			"household_count": 6,
+			"housed_count": 6,
+			"present_building_ids": [],
+			"satisfaction": satisfaction,
+			"tier": SettlementTier.HAMLET,
+		})
+		assert_true(
+			SettlementCharter.allows(next, SettlementTier.HAMLET),
+			"a hamlet petitioned for %s, which it may not raise" % next
+		)
+
+
+## A settlement whose tier nobody told us is treated as the LOWEST, so the
+## assembly errs toward refusing rather than toward letting a hamlet build
+## a mage guild because a caller forgot an argument.
+func test_a_village_whose_tier_is_unknown_is_treated_as_the_lowest():
+	var estate_counts := {"kossaet": 4}
+	var next := _petition({
+		"estate_counts": estate_counts,
+		"household_count": 4,
+		"housed_count": 4,
+		"present_building_ids": [],
+		"satisfaction": _fully_supplied(estate_counts),
+	})
+	assert_true(SettlementCharter.allows(next, SettlementTier.HAMLET))
+
+
+## And the charter never blocks the ladder itself: a village that wants a
+## sawmill still gets one, whatever its tier.
+func test_the_charter_never_blocks_a_village_from_climbing():
+	var estate_counts := {"kossaet": 4}
+	var satisfaction := _fully_supplied(estate_counts)
+	satisfaction[FUEL] = 0.0
+	assert_eq(
+		_petition({
+			"estate_counts": estate_counts,
+			"household_count": 4,
+			"housed_count": 4,
+			"present_building_ids": [],
+			"satisfaction": satisfaction,
+			"tier": SettlementTier.HAMLET,
+		}),
+		"sawmill"
+	)
+
+
+# -- the civic petition: a city builds its own institutions ---------------
+
+## docs/concept/settlement_charter.md. An estate with nothing to complain
+## of and no charter left to earn is the top of the village, and what the
+## top of a village asks for is the institutions its standing finally
+## entitles the place to. Without this a city that earned its charter would
+## sit there never raising anything with it, and the player's own hand
+## would be the only way a mage guild ever appeared.
+func test_a_city_whose_people_want_for_nothing_petitions_for_its_institutions():
+	var estate_counts := {"buerger": 6}
+	assert_eq(
+		_petition({
+			"estate_counts": estate_counts,
+			"household_count": 6,
+			"housed_count": 6,
+			"present_building_ids": VillageGrowth.LADDER_BUILDING_IDS,
+			"satisfaction": _fully_supplied(estate_counts),
+			"tier": SettlementTier.CITY,
+		}),
+		"trade_hall",
+		"a city with everything asked for nothing"
+	)
+
+
+## In charter order, cheapest entitlement first: the town's hall before the
+## city's guild, so a place builds up rather than straight to the top.
+func test_a_city_raises_what_it_was_entitled_to_first_before_what_it_just_earned():
+	var estate_counts := {"buerger": 6}
+	assert_eq(
+		_petition({
+			"estate_counts": estate_counts,
+			"household_count": 6,
+			"housed_count": 6,
+			"present_building_ids": VillageGrowth.LADDER_BUILDING_IDS + ["trade_hall"],
+			"satisfaction": _fully_supplied(estate_counts),
+			"tier": SettlementTier.CITY,
+		}),
+		"mage_guild"
+	)
+
+
+## A town asks for its hall and never for the guild -- it is not a city,
+## and the charter is the whole reason the player has an errand.
+func test_a_town_with_everything_still_never_asks_for_a_mage_guild():
+	var estate_counts := {"buerger": 6}
+	var present: Array = VillageGrowth.LADDER_BUILDING_IDS + ["trade_hall"]
+	assert_eq(
+		_petition({
+			"estate_counts": estate_counts,
+			"household_count": 6,
+			"housed_count": 6,
+			"present_building_ids": present,
+			"satisfaction": _fully_supplied(estate_counts),
+			"tier": SettlementTier.TOWN,
+		}),
+		"",
+		"a town asked for a building only a city may raise"
+	)
+
+
+## And a place that has everything its charter entitles it to really does
+## want for nothing.
+func test_a_city_holding_every_entitlement_petitions_for_nothing():
+	var estate_counts := {"buerger": 6}
+	assert_eq(
+		_petition({
+			"estate_counts": estate_counts,
+			"household_count": 6,
+			"housed_count": 6,
+			"present_building_ids": (
+				VillageGrowth.LADDER_BUILDING_IDS + BuildingCatalog.CHARTERED_BUILDING_IDS
+			),
+			"satisfaction": _fully_supplied(estate_counts),
+			"tier": SettlementTier.CITY,
+		}),
+		""
+	)
+
+
+## A SHORTAGE still outranks an institution: hungry people before halls.
+func test_a_shortage_still_outranks_an_institution():
+	var estate_counts := {"kossaet": 2, "buerger": 4}
+	var satisfaction := _fully_supplied(estate_counts)
+	satisfaction[FUEL] = 0.0
+	assert_eq(
+		_petition({
+			"estate_counts": estate_counts,
+			"household_count": 6,
+			"housed_count": 6,
+			"present_building_ids": ["farmhouse", "city_hall", "blacksmith", "brewery"],
+			"satisfaction": satisfaction,
+			"tier": SettlementTier.CITY,
+		}),
+		"sawmill",
+		"a city built a hall while its people were cold"
+	)

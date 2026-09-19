@@ -27584,3 +27584,112 @@ later change to how much of its plot a building covers.
 **pre-existing on `origin/main`** (identical 6.34375, verified against a
 clean baseline worktree) and is about farm fence rails, which draw through
 a different path entirely.
+
+## Settlement charter: a mage guild only a city may raise (`concept/settlement_charter.md`, 2026-09-19)
+
+Asked for directly: *"I want it so, that some buildings like a mage guild
+can only be built in cities; not villages; so a player has to help villagers
+to grow into a city in order to get access to mage guild and other similar
+buildings."*
+
+A progression system whose currency is **somebody else's prosperity**. The
+player does not unlock the mage guild by levelling; they unlock it by making
+a place big enough, organised enough and productive enough to hold one.
+
+### ✅ It adds no new measure and no new number
+
+`SettlementTier` already reads households, ACTIVE institutions and
+production diversity, and already requires **all three to cross together** —
+its own rule, written long before this. That is what makes "help them grow"
+a real errand rather than a food-dumping exercise: a player can carry in a
+hundred meals and still not have a city, because a city is also trades that
+organised themselves and goods that are actually being made.
+
+`SettlementCharter` is the gate that hangs off it. A building absent from
+its table may be raised anywhere, which is every building that existed
+before this.
+
+### ✅ A refusal TEACHES
+
+`refusal_for` names the tier wanted, the tier held, and exactly what is
+still short per dimension — never negative, because a readout saying
+"-3 households" is worse than no readout. "You cannot build that here" is a
+dead end and a bad game.
+
+### ✅ The anti-deadlock invariant, stated causally
+
+Three things feed the tier, so three things must stay free at the bottom:
+**houses** (households are a dimension and a household needs a roof), every
+**estate charter** building (an estate that cannot be reached is labour that
+never changes class), and every building anything **produces through**
+(production diversity is a dimension). Plus the converse — a chartered
+building must be none of those — so the rule cannot be satisfied by
+chartering nothing.
+
+A hamlet with no farmhouse cannot make husbandmen, cannot diversify its
+production and cannot become a town. A farmhouse chartered at TOWN would be
+a village that can never grow, found months later by somebody watching a
+save go nowhere.
+
+### ✅ One rule, two callers — and a city that builds for itself
+
+`VillageAssembly` reads the same gate before anything else, so a village can
+never quietly raise through its own ledger what a player standing on its
+square is refused. A settlement whose tier nobody passed is read as the
+LOWEST, erring toward refusing.
+
+It also gained a **civic petition**: an estate with nothing to complain of
+and no charter left to earn asks for the institutions its place is finally
+entitled to, cheapest first. Without it a city that earned its charter would
+sit there never raising anything with it. A shortage still outranks an
+institution — hungry people before halls.
+
+### ✅ The errand, on the hall a player clicks
+
+*Town — a city needs 2 more households, 1 more trade body.* A dimension
+already cleared is left out; "0 more trades" is noise, and noise is what
+stops a player reading the line at all. Drawn on the COMMONS only, because a
+home's readout is about its household.
+
+### ✅ Two chartered buildings, at two tiers
+
+`trade_hall` (town) and `mage_guild` (city) — the second answering
+`magic.md`'s own open question about where a spell is compiled. Both priced
+in the exact three materials a settlement gathers, because a charter is ONE
+gate and pricing them in anything else would be a second hidden one behind
+it. Both cost strictly more than anything anybody may raise unchartered.
+
+**Not `guild_hall`**: that id is already a 7×7 piece-built *player house*
+blueprint, and two things sharing one id is how a recipe book ends up with a
+duplicate key — which is exactly how it was found.
+
+The catalog's invariants now read `all_building_ids()` off the entries
+themselves rather than a hand-maintained union of three lists, so a new
+entry cannot quietly escape them. Found by adding these two.
+
+### Stated rather than papered over
+
+- 🚧 **Neither chartered building DOES anything yet.** The trade hall is the
+  natural home of the estate relief chest and does not hold it; the mage
+  guild is the compile station and compiling has no structure gate in code
+  at all. Both are real buildings behind a real gate, and what happens
+  inside them is the next pass. A building that only exists to be unlocked
+  is half a feature.
+- 🚧 **Neither has art** — both draw the procedural placeholder, which is
+  what that path is for, and pick up a sheet the moment one lands.
+- 🚧 **The player's own build hand does not consult the gate yet.**
+  `building_charter_refusal_at` is the function it will call and the village
+  already calls it, but the player's whole-building path only knows houses
+  and none of the chartered buildings is one.
+- ⬜ **Tiers above city** — `SettlementTier` stops there, and the readout
+  says so honestly.
+
+Tests: `test_settlement_charter.gd` (22), plus additions to
+`test_village_assembly.gd`, `test_building_catalog.gd`,
+`test_house_panel.gd`, `test_crafting_recipe_book.gd` and
+`test_earth_chunk_manager_village_estates.gd`.
+
+`village_assembly.gd` had moved under this work from another session's
+concurrent changes; the patch was rewritten against what is actually there
+rather than against what was remembered, per CLAUDE.md's own warning about
+the live checkout.

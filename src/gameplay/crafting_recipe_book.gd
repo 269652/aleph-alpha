@@ -473,6 +473,23 @@ const _RECIPES := {
 		"inputs": [{"item_id": "wood", "count": 18}, {"item_id": "stone", "count": 16}],
 		"output": {"item_id": "blacksmith", "count": 1},
 	},
+	# The chartered buildings (docs/concept/settlement_charter.md). ONE
+	# price, shared with BuildingCatalog.cost_of rather than a second that
+	# could drift from it -- the same rule every other building here keeps.
+	"trade_hall": {
+		"inputs": [
+			{"item_id": "wood", "count": 24}, {"item_id": "stone", "count": 18},
+			{"item_id": "plant_fibre", "count": 6},
+		],
+		"output": {"item_id": "trade_hall", "count": 1},
+	},
+	"mage_guild": {
+		"inputs": [
+			{"item_id": "wood", "count": 28}, {"item_id": "stone", "count": 26},
+			{"item_id": "plant_fibre", "count": 8},
+		],
+		"output": {"item_id": "mage_guild", "count": 1},
+	},
 	"brewery": {
 		"inputs": [
 			{"item_id": "wood", "count": 22}, {"item_id": "stone", "count": 12},

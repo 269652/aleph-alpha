@@ -66,7 +66,10 @@ func test_recipe_ids_returns_all_defined_recipes():
 	# the brewery's own product, closing village_growth.md's own "the
 	# ladder's rungs are buildings, not yet production" gap for the dearest
 	# rung on that ladder (1 more).
-	assert_eq(ids.size(), 71)
+	# + the chartered buildings (docs/concept/settlement_charter.md): the
+	# trade hall a town may raise and the mage guild only a city may, each
+	# priced once and shared with BuildingCatalog.cost_of (2 more).
+	assert_eq(ids.size(), 73)
 
 
 func test_iron_sword_is_craftable_from_ingots_and_a_stick():

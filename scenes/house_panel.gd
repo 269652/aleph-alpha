@@ -19,6 +19,7 @@ extends PanelContainer
 const HouseholdWellbeing = preload("res://src/emergence/household_wellbeing.gd")
 const VillageEstates = preload("res://src/emergence/village_estates.gd")
 const EstateAscension = preload("res://src/emergence/estate_ascension.gd")
+const SettlementCharter = preload("res://src/emergence/settlement_charter.gd")
 const BuildingCatalog = preload("res://src/gameplay/building_catalog.gd")
 const ItemCatalog = preload("res://src/gameplay/item_catalog.gd")
 
@@ -53,6 +54,7 @@ signal closed
 var _title: Label
 var _subtitle: Label
 var _standing: Label
+var _charter: Label
 var _needs_root: VBoxContainer
 var _summary: Label
 var _purse: Label
@@ -85,6 +87,17 @@ func _ready() -> void:
 	_standing = Label.new()
 	_standing.add_theme_font_size_override("font_size", 11)
 	root.add_child(_standing)
+
+	# The settlement's own charter, on the commons a village shares
+	# (docs/concept/settlement_charter.md mechanism 5). Its own line under
+	# the subtitle, because it is an ERRAND -- a player who wants a mage
+	# guild stands in the village, clicks the hall, and reads what to go
+	# and do.
+	_charter = Label.new()
+	_charter.add_theme_font_size_override("font_size", 11)
+	_charter.autowrap_mode = TextServer.AUTOWRAP_WORD_SMART
+	_charter.custom_minimum_size = Vector2(PANEL_WIDTH, 0)
+	root.add_child(_charter)
 
 	_needs_root = VBoxContainer.new()
 	_needs_root.add_theme_constant_override("separation", 2)
@@ -156,6 +169,9 @@ func show_report(report: Dictionary) -> void:
 	_standing.text = _standing_for(report)
 	_standing.visible = _standing.text != ""
 	_standing.modulate = _STANDING_COLORS.get(String(report.get("estate_verdict", "")), _STANDING_OK_COLOR)
+	_charter.text = _charter_for(report)
+	_charter.visible = _charter.text != ""
+	_charter.modulate = _STANDING_OK_COLOR
 	_rebuild_need_rows(report.get("needs", {}))
 	_summary.text = _summary_for(report)
 	var wallet := int(report.get("wallet_balance", 0))
@@ -250,6 +266,46 @@ const _STANDING_COLORS := {
 }
 
 
+## What a settlement IS, and what it would take to be the next thing up
+## (docs/concept/settlement_charter.md mechanism 5).
+##
+## On the COMMONS only: a home's readout is about its household, and the
+## charter is a fact about the place everyone shares. A dimension already
+## cleared is left out -- "0 more trades" is noise, and noise is what stops
+## a player reading the line at all.
+func _charter_for(report: Dictionary) -> String:
+	if bool(report.get("is_home", false)):
+		return ""
+	var charter: Dictionary = report.get("charter", {})
+	var tier := String(charter.get("tier", ""))
+	if tier == "":
+		return ""
+
+	var next_tier := String(charter.get("next_tier", ""))
+	if next_tier == "":
+		return "%s — the greatest a settlement becomes" % tier.capitalize()
+
+	var wants: Array = []
+	for dimension in _CHARTER_DIMENSIONS:
+		var short := int(Dictionary(charter.get("short", {})).get(dimension, 0))
+		if short > 0:
+			wants.append("%d %s" % [short, _CHARTER_DIMENSIONS[dimension][short == 1]])
+	if wants.is_empty():
+		return "%s — a %s already, any day now" % [tier.capitalize(), next_tier]
+	return "%s — a %s needs %s" % [tier.capitalize(), next_tier, ", ".join(wants)]
+
+
+## What each of SettlementTier's three dimensions is CALLED to a player,
+## singular and plural. Institutions are "trade bodies" and production
+## diversity is "trades" because that is what they are on the ground: a
+## guild that formed itself, and a thing somebody actually makes.
+const _CHARTER_DIMENSIONS := {
+	"households": {true: "more household", false: "more households"},
+	"institutions": {true: "more trade body", false: "more trade bodies"},
+	"production_diversity": {true: "more trade", false: "more trades"},
+}
+
+
 ## Rounded toward zero, so a reading never flatters itself up to the next
 ## percent -- 0.729 shows as 72, not 73.
 static func _percent(value) -> int:
@@ -316,6 +372,12 @@ func summary_text() -> String:
 ## Which way this household is going, as drawn; "" for a commons.
 func standing_text() -> String:
 	return _standing.text if _standing.visible else ""
+
+
+## The settlement's charter, as drawn; "" for a home and for a commons
+## whose settlement nobody reported a charter for.
+func charter_text() -> String:
+	return _charter.text if _charter.visible else ""
 
 
 func purse_text() -> String:
