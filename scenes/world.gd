@@ -483,6 +483,13 @@ const SURVIVAL_BAR_HEIGHT := 14.0
 ## The meter label centred inside a bar. Also what _survival_row_height sizes
 ## the row against, so the two can never disagree.
 const SURVIVAL_LABEL_FONT_SIZE := 10
+## The secondary HUD label -- the XP line, the land-sense readout. Expressed
+## against the theme's own base size rather than as a number, so a change to
+## the theme carries the whole HUD with it.
+const HUD_SMALL_FONT_SIZE := UiTheme.BASE_FONT_SIZE - 3
+## Big enough to read across the screen at a glance, which is the one thing
+## this message has to do.
+const DEATH_MESSAGE_FONT_SIZE := UiTheme.TITLE_FONT_SIZE + 6
 
 ## How heavy the visible falling rain is per weather state (see
 ## RainOverlay.set_intensity). A storm is a downpour; ordinary rain is
@@ -2566,7 +2573,7 @@ func _build_survival_bar() -> void:
 	_warmth_label = warmth["label"]
 
 	_wallet_label = Label.new()
-	_scaled_font(_wallet_label, 12)
+	_scaled_font(_wallet_label, UiTheme.BASE_FONT_SIZE - 2)
 	container.add_child(_wallet_label)
 
 
@@ -2618,7 +2625,7 @@ func _build_xp_bar() -> void:
 	_scaled_font(_player_health_label, SURVIVAL_LABEL_FONT_SIZE)
 
 	_xp_label = Label.new()
-	_scaled_font(_xp_label, 11)
+	_scaled_font(_xp_label, HUD_SMALL_FONT_SIZE)
 	column.add_child(_xp_label)
 
 	var bar := Control.new()
@@ -2658,7 +2665,7 @@ func _build_land_sense_label() -> void:
 	_add_hud_card(_hud_left_column, _land_sense_card)
 
 	_land_sense_label = Label.new()
-	_scaled_font(_land_sense_label, 11)
+	_scaled_font(_land_sense_label, HUD_SMALL_FONT_SIZE)
 	_land_sense_card.add_child(_land_sense_label)
 
 
@@ -3986,7 +3993,7 @@ func _build_death_label() -> void:
 
 	_death_label = Label.new()
 	_death_label.text = "You Died"
-	_scaled_font(_death_label, 28)
+	_scaled_font(_death_label, DEATH_MESSAGE_FONT_SIZE)
 	_death_label.add_theme_color_override("font_color", UiTheme.NEGATIVE)
 	_death_label.horizontal_alignment = HORIZONTAL_ALIGNMENT_CENTER
 	_death_label.vertical_alignment = VERTICAL_ALIGNMENT_CENTER
