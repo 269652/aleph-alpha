@@ -27150,6 +27150,32 @@ water — all three corrections landed.
 Not verified in a live session — every number is headless measurement, and
 the screenshots have not been re-taken.
 
+## The well stands on a free 2x2 (2026-09-19)
+
+Asked for directly: *"The well should be placed on a free 2x2 place; not
+over streets or plaza"*. Write-up in `concept/village_market_square.md`.
+
+- ✅ **Measured before the fix**, four real villages: in one the well stood
+  **directly on a road cell**; in the others its footprint took road cells
+  beside it.
+- ✅ Shared landmarks were grounded with `allow_road` true, which let the
+  search settle the well back onto the paving it had been moved off on an
+  earlier report. Now per-landmark — the stall and gate keep their
+  stonework, the well alone refuses a road.
+- ✅ `LANDMARK_FOOTPRINT_TILES` gives the well 2×2 and the grounding search
+  needs the whole block clear. It is the one SOLID landmark, so the ground
+  it takes is ground nobody can walk through.
+- ✅ The block may lie in **whichever quadrant is free**. Fixed to one, it
+  was wrong for exactly the spot the well belongs in — a row south of the
+  street, so a north-running block bit into the road and the search shoved
+  the well five tiles away, which is no longer "beside the square".
+- ✅ Placement and reservation go through one chooser (`_clear_block`), so
+  the farm pass steps round the four cells the well is actually on. It had
+  been reserving the anchor alone and railing a fence through the rest.
+
+### 🚧 Honest note
+
+Not verified in a live session — headless measurement only.
 ## Village estates: consumption, station, and a ladder that can be fallen down (`concept/village_estates.md`, 2026-09-19)
 
 Asked for directly: *"overhaul and vastly improve village dynamics so it

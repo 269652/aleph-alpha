@@ -3383,3 +3383,68 @@ func test_a_fishers_pond_is_never_dug_across_the_street_from_them():
 						% [str(cell), str(house)]
 				)
 
+
+
+# -- the well stands in its own free 2x2 -------------------------------------
+#
+# Reported live: "The well should be placed on a free 2x2 place; not over
+# streets or plaza". Two separate things were wrong.
+#
+# The well is SITED as a single cell (VillageLayout: one column west of the
+# plaza, on the row south of the street) and then GROUNDED to the nearest
+# cell a prop may stand on -- and shared landmarks are grounded with
+# allow_road TRUE, which explicitly lets that search settle on the village's
+# own paving. That predates the decision to move the well off the square at
+# all ("The well should not be placed on the plaza"), and the two rules have
+# disagreed ever since.
+#
+# And a single cell is the wrong unit for it. A well is the one SOLID
+# landmark (_SOLID_LANDMARK_IDS), so the ground it takes is ground nobody
+# can walk through -- checking one cell for clearance while the art and the
+# body cover more than one is how it ends up shouldering into a street.
+
+func _well_cell(spawned: Array):
+	for node in spawned:
+		if node.get_meta("landmark_id", "") == "well":
+			return Vector2i(floori(node.position.x / TILE_SIZE), floori(node.position.y / TILE_SIZE))
+	return null
+
+
+func test_the_well_stands_on_a_free_2x2_clear_of_street_and_plaza():
+	for row in range(3, 7):
+		var coord := _find_settlement_chunk_with_occupation("grassland", "farmer", row)
+		var world := StubWorld.new()
+		var spawned := renderer.spawn_village(
+			parent, coord, coord * CHUNK_SIZE, CHUNK_SIZE, TILE_SIZE, "grassland", world
+		)
+		var cell = _well_cell(spawned)
+		assert_not_null(cell, "the premise: the village at %s really has a well" % str(coord))
+		if cell == null:
+			continue
+		# The contract as asked for: the well stands on free ground, and
+		# that ground is a free 2x2. WHICH 2x2 -- which quadrant round the
+		# well the block lies in -- is the renderer's business; that it has
+		# one is the rule.
+		var here: Vector2i = cell
+		assert_eq(
+			world.modification_at_global(here.x, here.y), "",
+			"the well in %s stands on '%s'"
+				% [str(coord), world.modification_at_global(here.x, here.y)]
+		)
+		var free_blocks := 0
+		var offenders: Array = []
+		for option in VillageRenderer.landmark_block_options(here, "well"):
+			var clear := true
+			for occupied in option:
+				var g: Vector2i = occupied
+				var on: String = world.modification_at_global(g.x, g.y)
+				if on != "":
+					clear = false
+					offenders.append("%s='%s'" % [str(g), on])
+			if clear:
+				free_blocks += 1
+		assert_gt(
+			free_blocks, 0,
+			"the well at %s in %s has no free 2x2 round it: %s"
+				% [str(cell), str(coord), str(offenders)]
+		)

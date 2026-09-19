@@ -202,3 +202,42 @@ Honest gaps, each real:
 - 🚧 **A player cannot buy at a stand.** Trading with a village is
   `Player.sell_food_to_village` and the dialogue/market path; standing in
   front of a merchant's trestle is not yet a way in.
+
+## The well stands on a free 2x2 (2026-09-19)
+
+Asked for directly: *"The well should be placed on a free 2x2 place; not
+over streets or plaza"*. Measured across four real villages before the
+fix: in one the well stood **directly on a road cell**, in the others its
+footprint took road cells beside it.
+
+**Two rules had been disagreeing.** The well was moved off the square on
+an earlier report ("The well should not be placed on the plaza"), but
+shared landmarks are grounded with `allow_road` true — which explicitly
+lets the search settle one straight back onto the paving. The stall and
+the gate genuinely do belong on their own stonework, so this is now
+per-landmark: the well alone refuses a road.
+
+**And a cell is the wrong unit for it.** The well is the one SOLID
+landmark, so the ground it takes is ground nobody can walk through, and it
+is drawn wider and taller than the single cell that was being checked for
+clearance. `LANDMARK_FOOTPRINT_TILES` gives it 2×2, and the grounding
+search needs the whole block clear.
+
+**Which 2×2 matters more than it looks.** A block fixed to one quadrant is
+wrong for exactly the place the well belongs: it stands one row south of
+the street, so a block that always ran north bit into the road, and the
+search shoved the well five tiles away hunting for somewhere it fitted —
+which is not "beside the square" any more. It may lie in whichever
+quadrant is actually free, chosen in a fixed order (`_BLOCK_TOP_LEFT_
+OFFSETS`) so that placement and reservation always name the same four
+cells.
+
+That agreement is the third part. The farm pass reserves landmark cells so
+it never rails through one, but it reserved the well's ANCHOR while the
+well takes four — so a fence was dutifully laid through the other three.
+Both paths go through `_clear_block` now.
+
+Pinned by `test_the_well_stands_on_a_free_2x2_clear_of_street_and_plaza`,
+which asserts the contract as asked: the well stands on free ground, and
+that ground is part of a free 2×2. Which quadrant is the renderer's
+business; that there is one is the rule.
