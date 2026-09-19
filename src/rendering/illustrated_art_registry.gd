@@ -153,6 +153,13 @@ const _SUBJECTS := {
 	# 2026-09-13: held is 6 pose variants of pristine only (hand-verified:
 	# none show wear).
 	"iron_axe": {"contexts": {"icon": {"seasonal": false, "anchor": "center"}, "held": {"seasonal": false, "anchor": "pivot"}, "equipped": {"seasonal": false, "anchor": "pivot"}, "ground": {"seasonal": false, "anchor": "center"}}, "base_season": "any", "states": ["pristine", "used", "worn", "broken"], "base_state": "pristine", "animations": {"still": {"fps": 0, "loop": false}, "pose_b": {"fps": 0, "loop": false}, "pose_c": {"fps": 0, "loop": false}, "pose_d": {"fps": 0, "loop": false}, "pose_e": {"fps": 0, "loop": false}, "pose_f": {"fps": 0, "loop": false}}, "overlays": [], "chroma_key": Color(1.0, 0.0, 1.0), "chroma_key_tolerance": 0.25},
+	# 2026-09-19: stone_axe and stone_blade had real art on disk -- 16 and
+	# 20 files, the same four-context/four-state batch as iron_axe and
+	# crude_blade beside them -- and no entry here at all, so both resolved
+	# straight past their own pictures to the procedural sprite. Found by
+	# the doc's own deferred sweep (test_every_subject_with_real_art_on_
+	# disk_is_declared), which could only be written once real art existed.
+	"stone_axe": {"contexts": {"icon": {"seasonal": false, "anchor": "center"}, "held": {"seasonal": false, "anchor": "pivot"}, "equipped": {"seasonal": false, "anchor": "pivot"}, "ground": {"seasonal": false, "anchor": "center"}}, "base_season": "any", "states": ["pristine", "used", "worn", "broken"], "base_state": "pristine", "animations": {"still": {"fps": 0, "loop": false}, "pose_b": {"fps": 0, "loop": false}, "pose_c": {"fps": 0, "loop": false}, "pose_d": {"fps": 0, "loop": false}, "pose_e": {"fps": 0, "loop": false}, "pose_f": {"fps": 0, "loop": false}, "pose_g": {"fps": 0, "loop": false}, "pose_h": {"fps": 0, "loop": false}}, "overlays": [], "chroma_key": Color(1.0, 0.0, 1.0), "chroma_key_tolerance": 0.25},
 	# 2026-09-13: torch's own icon/equipped/ground rows show a real
 	# bright-to-extinguished progression -- kept on the same
 	# pristine/used/worn/broken vocabulary the rest of this batch uses
@@ -188,6 +195,7 @@ const _SUBJECTS := {
 	# state->base_state fallback already serves them for worn/broken (the
 	# same "a worn club still swings using the pristine frames" rule).
 	"crude_blade": {"contexts": {"icon": {"seasonal": false, "anchor": "center"}, "held": {"seasonal": false, "anchor": "pivot"}, "equipped": {"seasonal": false, "anchor": "pivot"}, "ground": {"seasonal": false, "anchor": "center"}}, "base_season": "any", "states": ["pristine", "used", "worn", "broken"], "base_state": "pristine", "animations": {"still": {"fps": 0, "loop": false}, "attack": {"fps": 8, "loop": false}}, "overlays": [], "chroma_key": Color(1.0, 0.0, 1.0), "chroma_key_tolerance": 0.25},
+	"stone_blade": {"contexts": {"icon": {"seasonal": false, "anchor": "center"}, "held": {"seasonal": false, "anchor": "pivot"}, "equipped": {"seasonal": false, "anchor": "pivot"}, "ground": {"seasonal": false, "anchor": "center"}}, "base_season": "any", "states": ["pristine", "used", "worn", "broken"], "base_state": "pristine", "animations": {"still": {"fps": 0, "loop": false}, "attack": {"fps": 8, "loop": false}, "pose_b": {"fps": 0, "loop": false}, "pose_c": {"fps": 0, "loop": false}, "pose_d": {"fps": 0, "loop": false}, "pose_e": {"fps": 0, "loop": false}, "pose_f": {"fps": 0, "loop": false}, "pose_g": {"fps": 0, "loop": false}, "pose_h": {"fps": 0, "loop": false}}, "overlays": [], "chroma_key": Color(1.0, 0.0, 1.0), "chroma_key_tolerance": 0.25},
 
 	"stone": {"contexts": {"icon": {"seasonal": false, "anchor": "center"}}, "base_season": "any", "states": ["default"], "base_state": "default", "animations": {"still": {"fps": 0, "loop": false}}, "overlays": [], "chroma_key": Color(1.0, 0.0, 1.0), "chroma_key_tolerance": 0.25},
 	# 2026-09-13 (item_illustrations.md "Per-item composite sheet mapping"):

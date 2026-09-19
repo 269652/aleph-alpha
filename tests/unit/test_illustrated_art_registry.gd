@@ -469,3 +469,85 @@ func test_subjects_lists_every_registered_subject_exactly_once():
 	for subject in subjects:
 		seen[subject] = true
 	assert_eq(subjects.size(), seen.size(), "no subject should be listed twice")
+
+
+## The sweep docs/concept/illustrated_art_addressing.md's own Status list
+## deferred: *"the 'every file under assets/sprites/<subject>/ is
+## addressable' sweep test this doc originally specified -- there is no real
+## art under this convention on disk yet for that test to sweep, so it is
+## deferred to whichever migration actually authors files"*.
+##
+## There is now. ~100 subjects carry real art, and the sweep immediately
+## earns its keep: `stone_axe` and `stone_blade` had 16 and 20 files each
+## on disk and no registry entry at all, so they resolved straight past
+## their own art to the procedural sprite while their neighbours
+## (`iron_axe`, `crude_blade`) drew properly.
+const _ART_ROOT := "res://assets/sprites"
+
+
+func _subjects_with_art_on_disk() -> Array:
+	var found: Array = []
+	var root := DirAccess.open(_ART_ROOT)
+	if root == null:
+		fail_test("cannot open %s" % _ART_ROOT)
+		return found
+	for subject in root.get_directories():
+		# <subject>/<context>/<season>/<state>/<animation>.png -- a subject
+		# is "on the convention" the moment one address-shaped file exists.
+		var contexts := DirAccess.open("%s/%s" % [_ART_ROOT, subject])
+		if contexts == null:
+			continue
+		for context in contexts.get_directories():
+			var seasons := DirAccess.open("%s/%s/%s" % [_ART_ROOT, subject, context])
+			if seasons == null:
+				continue
+			for season in seasons.get_directories():
+				var states := DirAccess.open("%s/%s/%s/%s" % [_ART_ROOT, subject, context, season])
+				if states == null:
+					continue
+				for state in states.get_directories():
+					var files := DirAccess.open(
+						"%s/%s/%s/%s/%s" % [_ART_ROOT, subject, context, season, state]
+					)
+					if files == null:
+						continue
+					for file in files.get_files():
+						if file.ends_with(".png"):
+							found.append(subject)
+							break
+					if found.has(subject):
+						break
+				if found.has(subject):
+					break
+			if found.has(subject):
+				break
+	return found
+
+
+func test_every_subject_with_real_art_on_disk_is_declared():
+	var registry = IllustratedArtRegistry.new()
+	var undeclared: Array = []
+	for subject in _subjects_with_art_on_disk():
+		if not registry.has_subject(subject):
+			undeclared.append(subject)
+	assert_eq(
+		undeclared, [],
+		"art on disk that no registry entry can reach draws the procedural sprite instead"
+	)
+
+
+## And the contexts that art is drawn in are declared too -- a subject
+## declared icon-only while `held`/`equipped`/`ground` art sits on disk
+## still cannot reach three quarters of its own pictures.
+func test_every_context_with_real_art_on_disk_is_declared():
+	var registry = IllustratedArtRegistry.new()
+	var missing: Array = []
+	for subject in _subjects_with_art_on_disk():
+		if not registry.has_subject(subject):
+			continue
+		var declared: Dictionary = registry.entry_for(subject).get("contexts", {})
+		var dir := DirAccess.open("%s/%s" % [_ART_ROOT, subject])
+		for context in dir.get_directories():
+			if not declared.has(context):
+				missing.append("%s/%s" % [subject, context])
+	assert_eq(missing, [], "these contexts have art on disk but no declaration to reach it")
