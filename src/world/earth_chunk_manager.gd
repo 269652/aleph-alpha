@@ -5733,6 +5733,10 @@ func _village_would_settle(chunk_coord: Vector2i) -> bool:
 ## arrives.
 func find_nearest_village(from_tile: Vector2i) -> Variant:
 	var start_chunk := _chunk_coord_for_tile(from_tile)
+	# A one-slot box, not a plain local: a GDScript lambda captures locals by
+	# VALUE, so the predicate below could not otherwise hand its answer back
+	# out. An Array is a reference type and can.
+	var landing: Array = [null]
 	var found_chunk: Variant = _village_finder.find_nearest(
 		start_chunk,
 		MAX_VILLAGE_SEARCH_RADIUS_CHUNKS,
@@ -5740,16 +5744,60 @@ func find_nearest_village(from_tile: Vector2i) -> Variant:
 		func(chunk_coord: Vector2i) -> String:
 			var chunk := generator.generate_chunk(chunk_coord, CHUNK_SIZE)
 			return _biome_classifier.dominant_biome(chunk.biome),
-		_village_would_settle
+		# The cheap PREDICTION first, then the world itself (docs/concept/
+		# village_growth.md, Mechanism 6). _village_would_settle re-derives
+		# the roster and the layout and never looks at the ground, because it
+		# deliberately loads nothing -- so a chunk it likes can still turn
+		# out to be an empty field, which is exactly the second report:
+		# "/village teleports me to an empty field...". The load only ever
+		# runs for a chunk that already passed the settlement roll AND the
+		# prediction, and the player is about to go there anyway.
+		func(chunk_coord: Vector2i) -> bool:
+			if not _village_would_settle(chunk_coord):
+				return false
+			var at = standing_village_position(chunk_coord)
+			if at == null:
+				return false
+			landing[0] = at
+			return true
 	)
 	if found_chunk == null:
 		return null
-	var settlement := _settlement_generator.generate_settlement(
-		found_chunk, found_chunk * CHUNK_SIZE, CHUNK_SIZE, TerrainRenderer.TILE_SIZE,
-		SettlementGenerator.POPULATION, _is_dry_local(found_chunk),
-		seeded_region_for_chunk(found_chunk)
-	)
-	return settlement.landmarks.well
+	return landing[0]
+
+
+## Where to land in `chunk_coord`'s village -- a real building's own
+## DOORSTEP -- or null when nothing is standing there
+## (docs/concept/village_growth.md, Mechanism 6).
+##
+## A doorstep rather than the planned well: the well comes out of
+## VillageLayout.skeleton, which is a plan, while a doorstep is a cell a
+## building really has. The lowest (y, x) origin, so the same village answers
+## the same way every time rather than by whichever order a Dictionary handed
+## its keys back.
+##
+## Loads the chunk if it is not loaded, and UNLOADS it again if it turns out
+## not to be a village -- a rejected candidate leaves nothing behind. A chunk
+## that was already loaded is left alone: it may well be the one the player
+## is standing in.
+func standing_village_position(chunk_coord: Vector2i):
+	var was_loaded := _loaded_chunks.has(chunk_coord)
+	if not was_loaded:
+		_load_chunk(chunk_coord)
+	var best: Variant = null
+	var best_origin := Vector2i(0, 0)
+	for record in buildings_in_chunk(chunk_coord):
+		var origin: Vector2i = record["origin_local"]
+		if best != null and [origin.y, origin.x] >= [best_origin.y, best_origin.x]:
+			continue
+		best_origin = origin
+		var door: Vector2i = (
+			chunk_coord * CHUNK_SIZE + origin + BuildingCatalog.doorstep_of(record.get("id", ""))
+		)
+		best = (Vector2(door) + Vector2(0.5, 0.5)) * float(TerrainRenderer.TILE_SIZE)
+	if best == null and not was_loaded:
+		_unload_chunk(chunk_coord)
+	return best
 
 
 ## How warm it feels around `player_pixel` right now, [0,1]: the real climate

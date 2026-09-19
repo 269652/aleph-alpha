@@ -26392,3 +26392,45 @@ Tests: `test_npc_marker_timber.gd` 21/21, `test_settlement_generator.gd`
 `test_village_npc_population.gd`, `test_settlement_food.gd`,
 `test_settlement_demand.gd`, `test_village_wages.gd`, `test_npc_identity.gd`,
 `test_procedural_landmark_sprite.gd` all green (344 between them).
+
+## `/village` now checks the ground instead of trusting a plan (2026-09-19)
+
+Reported with the console still on screen and nothing but grass, flowers and
+a deer around: *"/village teleports me to an empty field..."* — the second
+time this has come up, after *"It teleports me to where no village is"*.
+
+The first report earned `_village_would_settle`, a careful layout pre-check:
+it re-derives the roster and the layout for a candidate chunk and asks
+whether every house would fit. It is strictly **stricter** than the founding
+itself (which settles if even one house fits), which is why a false positive
+looked impossible — and it is still a **prediction**. It never looks at what
+is standing on the ground, because it deliberately loads nothing.
+
+✅ **The command checks the world now.** For a chunk that has already passed
+the settlement roll *and* the prediction — rare, so the ring search still
+pays for terrain rarely rather than per chunk — `standing_village_position`
+loads it and looks for real buildings. No buildings, no village: the search
+moves to the next ring, and a chunk it loaded and rejected is unloaded again
+so nothing is left behind. A chunk that was already loaded is left alone (it
+may be the one the player is standing in).
+
+✅ **You land on a real doorstep**, the lowest `(y, x)` building's, rather
+than on `VillageLayout.skeleton`'s planned well. A well is a plan; a doorstep
+is a cell a building really has.
+
+✅ **"No village found nearby" is an honest answer now** rather than the
+absence of one — it means the search really looked and really found nothing
+standing within `MAX_VILLAGE_SEARCH_RADIUS_CHUNKS`.
+
+⬜ **Not reproduced here, and said plainly.** Real terrain generation is
+IO-bound in this container — three separate probes that load real settlement
+chunks were each killed after running for many minutes without finishing — so
+I could not put the old command in front of the user's own coordinates and
+watch it pick an empty chunk. What I could do is read both paths (they agree
+on the water predicate, the biome and the layout seed, so the well it
+returned should have been the right one) and then make the command stop
+relying on any of that reasoning being right: it verifies what it claims.
+
+Tests: `test_earth_chunk_manager_village_command.gd` 5/5 (new),
+`test_village_finder.gd`, `test_dev_console.gd`,
+`test_console_command_parser.gd` green (36 between them).
