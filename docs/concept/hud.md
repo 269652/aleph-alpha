@@ -285,9 +285,22 @@ constant:
 3. **Anything whose height depends on a font size derives it.**
    `_survival_row_height()` is `max(SURVIVAL_BAR_HEIGHT, font_size(10, scale) + 4)`
    — at the default scale that is exactly `SURVIVAL_BAR_HEIGHT`, so the bars
-   are unchanged, and above it the row grows with its label. The bar and its
-   fill are anchored `LEFT_WIDE`, so their height follows the row's and
-   `_update_survival_bar`'s own `fill.size.x = …` keeps working untouched.
+   are unchanged, and above it the row grows with its label. A bar, its fill
+   and its label are laid out by `_stretch_in_row`, so their height follows
+   the row's and `_update_survival_bar`'s own `fill.size.x = …` keeps working
+   untouched.
+
+The player health bar is one of those rows: it is authored in `world.tscn`,
+moved into the player card by `_build_xp_bar`, and then treated exactly like
+the four meters below it — same row height, same label size, registered for
+the same scale change. **`_stretch_in_row` writes anchors *and* offsets by
+hand rather than calling `set_anchors_preset(PRESET_LEFT_WIDE)`**, and that
+is not a style choice: the preset changes anchors and leaves offsets alone,
+which is harmless on a node built at (0, 0) in code and not at all harmless
+on a `.tscn`-authored one. The health bar's authored `offset_bottom = 14`
+then read as *parent height plus 14*, drawing the bar 14px taller than the
+row it was laid out in, straight through the XP label below it. Visible in
+the render; invisible to every test in the suite.
 
 The two floaters outside the columns are the held-item card (centred above the
 hotbar) and the diagnostics strip (bottom-right); both grow away from the edge

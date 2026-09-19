@@ -55,7 +55,13 @@ func _initialize() -> void:
 
 	var world = load("res://scenes/world.tscn").instantiate()
 	var ui: CanvasLayer = world.get_node("UI")
+	# World's @onready members never resolve here (its _ready never runs), so
+	# the handful the HUD builders read are wired by hand -- the same paths
+	# world.gd itself declares them with.
 	world._ui = ui
+	world._player_health_bg = ui.get_node("PlayerHealthBar/Background")
+	world._player_health_fill = ui.get_node("PlayerHealthBar/Fill")
+	world._player_health_label = ui.get_node("PlayerHealthBar/Label")
 	world._ui_scale = scale
 	world._apply_ui_scale()
 
@@ -133,6 +139,8 @@ func _fill_in(world, scale: float) -> void:
 	world._warmth_label.text = world.meter_label_text("Cold", 0.3)
 	world._wallet_label.text = "42 gold"
 
+	world._player_health_label.text = "HP 62 / 100"
+	world._player_health_fill.size.x = 0.62 * world.SURVIVAL_BAR_WIDTH
 	world._xp_label.text = "Lv 7 — Warrior  (2 pts)"
 	world._xp_fill.size.x = 0.4 * world.SURVIVAL_BAR_WIDTH
 
@@ -153,6 +161,7 @@ func _fill_in_calm(world) -> void:
 	world._stamina_label.text = world.meter_label_text("Stamina", 1.0)
 	world._warmth_label.text = world.meter_label_text("Warmth", 0.95)
 	world._wallet_label.text = "Gold: 3"
+	world._player_health_label.text = "HP 100 / 100"
 	world._xp_label.text = "Lv 1 — Warrior"
 	world._xp_fill.size.x = 0.05 * world.SURVIVAL_BAR_WIDTH
 	world._karma_label.text = world.karma_display_text(0)

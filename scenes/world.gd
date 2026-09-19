@@ -2599,9 +2599,23 @@ func _build_xp_bar() -> void:
 	# by node path, and those three keep working unchanged inside a container
 	# as long as the row is given a real minimum size to lay out against.
 	var health_bar: Control = _ui.get_node("PlayerHealthBar")
-	health_bar.custom_minimum_size = Vector2(SURVIVAL_BAR_WIDTH, PLAYER_HEALTH_BAR_HEIGHT)
 	_ui.remove_child(health_bar)
 	column.add_child(health_bar)
+	# ...and then behaves exactly like one of the four survival meter rows:
+	# height derived from the label centred in it, bar and fill anchored
+	# LEFT_WIDE so their height follows the row's, and registered so a UI
+	# scale change re-grows it. Its "HP 100 / 100" inherits the shared theme's
+	# font size, so at 1.75 it would otherwise have overflowed a 14px bar.
+	health_bar.custom_minimum_size = Vector2(SURVIVAL_BAR_WIDTH, _survival_row_height())
+	health_bar.size_flags_horizontal = Control.SIZE_SHRINK_BEGIN
+	_survival_rows.append(health_bar)
+	_stretch_in_row(_player_health_bg, SURVIVAL_BAR_WIDTH)
+	_stretch_in_row(_player_health_fill, SURVIVAL_BAR_WIDTH)
+	_stretch_in_row(_player_health_label, SURVIVAL_BAR_WIDTH)
+	# The same size as the four meter labels below it -- it IS one of these
+	# rows. At the shared theme's size it overflowed the 150px bar sideways
+	# once the UI scale grew it (seen in the 1.75 render).
+	_scaled_font(_player_health_label, SURVIVAL_LABEL_FONT_SIZE)
 
 	_xp_label = Label.new()
 	_scaled_font(_xp_label, 11)
@@ -3725,24 +3739,43 @@ func _make_survival_meter_row(parent: Control, fill_color: Color) -> Dictionary:
 	# `fill.size.x = ...` keeps working untouched.
 	var bg := ColorRect.new()
 	bg.color = Color(0.1, 0.1, 0.1, 0.85)
-	bg.set_anchors_preset(Control.PRESET_LEFT_WIDE)
-	bg.size.x = SURVIVAL_BAR_WIDTH
 	row.add_child(bg)
+	_stretch_in_row(bg, SURVIVAL_BAR_WIDTH)
 
 	var fill := ColorRect.new()
 	fill.color = fill_color
-	fill.set_anchors_preset(Control.PRESET_LEFT_WIDE)
-	fill.size.x = SURVIVAL_BAR_WIDTH
 	row.add_child(fill)
+	_stretch_in_row(fill, SURVIVAL_BAR_WIDTH)
 
 	var label := Label.new()
-	label.set_anchors_preset(Control.PRESET_FULL_RECT)
+	row.add_child(label)
+	_stretch_in_row(label, SURVIVAL_BAR_WIDTH)
 	label.horizontal_alignment = HORIZONTAL_ALIGNMENT_CENTER
 	label.vertical_alignment = VERTICAL_ALIGNMENT_CENTER
 	_scaled_font(label, SURVIVAL_LABEL_FONT_SIZE)
-	row.add_child(label)
 
 	return {"fill": fill, "label": label}
+
+
+## Makes `control` a `width`-wide strip filling its row's full height: left
+## edge, top to bottom, so the row's height is the only thing a UI scale
+## change has to grow, and `fill.size.x = …` keeps setting a length.
+##
+## Written out rather than `set_anchors_preset(PRESET_LEFT_WIDE)`, because
+## that preset changes the ANCHORS and leaves the offsets alone -- which is
+## harmless on a node built here at (0, 0), and not at all harmless on the
+## .tscn-authored health bar, whose `offset_bottom = 14` then read as "parent
+## height PLUS 14" and drew the bar 14px taller than the row it was laid out
+## in, straight through the XP label below it (seen in the 1.0 render).
+func _stretch_in_row(control: Control, width: float) -> void:
+	control.anchor_left = 0.0
+	control.anchor_top = 0.0
+	control.anchor_right = 0.0
+	control.anchor_bottom = 1.0
+	control.offset_left = 0.0
+	control.offset_top = 0.0
+	control.offset_bottom = 0.0
+	control.offset_right = width
 
 
 ## How tall one meter row has to be: at least as tall as the label centred
