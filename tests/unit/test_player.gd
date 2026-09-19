@@ -1818,7 +1818,9 @@ func test_being_refused_a_spell_you_do_not_know_says_so_rather_than_blaming_mana
 
 	player.cast_spell("minor_heal")
 
-	assert_string_contains(player.cast_message.to_lower(), "know")
+	var said := player.cast_message.to_lower()
+	assert_string_contains(said, "learn", "the banner must blame knowledge, not mana")
+	assert_false(said.contains("mana"), "a spell you never learned was refused as if you were poor")
 
 
 func test_a_guild_quotes_a_real_price_for_a_spell_it_can_teach():
