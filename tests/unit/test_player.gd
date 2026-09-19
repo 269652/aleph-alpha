@@ -32,6 +32,7 @@ const AmbientFlyerMarker = preload("res://src/rendering/ambient_flyer_marker.gd"
 const BondedCompanionMarker = preload("res://src/rendering/bonded_companion_marker.gd")
 const Item = preload("res://src/gameplay/item.gd")
 const ProceduralItemSprite = preload("res://src/rendering/procedural_item_sprite.gd")
+const IllustratedItemArt = preload("res://src/rendering/illustrated_item_art.gd")
 const DroppedItem = preload("res://src/rendering/dropped_item.gd")
 const ItemStack = preload("res://src/gameplay/item_stack.gd")
 const TreeRenderer = preload("res://src/rendering/tree_renderer.gd")
@@ -975,10 +976,14 @@ func test_equipping_an_item_shows_its_sprite_id_art_not_its_raw_id():
 
 	assert_true(player.equip_item(variant))
 
-	var expected := ProceduralItemSprite.new().generate_texture("iron_sword")
-	assert_eq(
-		player._character_view.tool_slot_texture().get_image().get_data(),
-		expected.get_image().get_data(),
+	# Resolved through the sprite_id either way -- this now reads the REAL
+	# `held` art (the gripped pose the tool slot swings), which is exactly
+	# why the indirection still has to hold: iron_sword_blessed has no art
+	# tree of its own and must borrow iron_sword's.
+	var expected := IllustratedItemArt.new().texture_for("iron_sword", "held")
+	assert_true(
+		player._character_view.tool_slot_texture().get_image().get_data()
+			== expected.get_image().get_data(),
 		"the held sprite should be iron_sword's art (the sprite_id), not iron_sword_blessed's"
 	)
 
@@ -1331,10 +1336,16 @@ func test_equipping_armor_shows_it_in_the_matching_character_view_slot():
 	assert_true(player.equip_armor(helm))
 
 	assert_true(player._character_view.is_slot_equipped("head"))
-	var expected := ProceduralItemSprite.new().generate_texture("leather_helm")
-	assert_eq(
-		player._character_view.slot_texture("head").get_image().get_data(),
-		expected.get_image().get_data()
+	# The REAL art, since 2026-09-19 -- leather_helm has an `equipped` row
+	# on disk (the helm as worn). This used to assert
+	# ProceduralItemSprite's generated shape, which was never the point of
+	# the test: what it protects is that equipping puts THIS item's picture
+	# in THIS slot. See docs/concept/illustrated_art_addressing.md.
+	var expected := IllustratedItemArt.new().texture_for("leather_helm", "equipped")
+	assert_true(
+		player._character_view.slot_texture("head").get_image().get_data()
+			== expected.get_image().get_data(),
+		"the head slot shows the helm's own worn art"
 	)
 
 

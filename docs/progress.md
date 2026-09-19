@@ -26392,3 +26392,68 @@ Tests: `test_npc_marker_timber.gd` 21/21, `test_settlement_generator.gd`
 `test_village_npc_population.gd`, `test_settlement_food.gd`,
 `test_settlement_demand.gd`, `test_village_wages.gd`, `test_npc_identity.gd`,
 `test_procedural_landmark_sprite.gd` all green (344 between them).
+
+## The real item art finally reaches the screen (`concept/illustrated_art_addressing.md`, 2026-09-19)
+
+Asked for directly: *"Can you wire the real tool sprites? Axe is currently
+using procedural sprite, but should use the illustrated one"*, and *"Sword
+as well"*.
+
+✅ **Nothing was broken; nothing was connected.** The registry (~100
+subjects), the resolver (the fallback lattice) and the loader (slice, key,
+anchor) had all shipped and were all tested. But **nothing anywhere called
+`IllustratedArtLoader`** — it appeared only inside *other files'* doc
+comments — so every item in the game drew `ProceduralItemSprite`'s
+generated shape while ~100 subjects' worth of real art sat on disk
+unreferenced. `illustrated_item_art.gd` is the missing middle: it backs the
+resolver's injected `address_exists` with the real file tree (the half that
+never existed), loads the resolved address, and falls back to the generated
+sprite for a subject with none.
+
+✅ **Six call sites, four contexts, and the pictures really differ.**
+
+| Call site | Context | What the art shows |
+| --- | --- | --- |
+| `World` hotbar slot | `icon` | the item presented flat |
+| `DroppedItem` | `ground` | the thing laid down |
+| `Player.equip_armor` + interior outfit | `equipped` | worn — the axe on its belt strap |
+| `Player.equip_item` + interior outfit | `held` | the gripped pose the tool slot swings |
+
+✅ **Fitted to `ProceduralItemSprite.SIZE`, which is what makes it a
+drop-in.** No call site re-scales and `world_scale_for` keeps its meaning.
+It matters most for `held`: the loader's `pivot` anchor returns the whole
+authored cell (220×300 for the axe) and `CharacterView.equip_weapon` offsets
+by half the texture height, so an unfitted one would displace the grip
+tenfold. A **uniform** scale is compatible with the pivot contract rather
+than a violation of it — every pixel keeps its position relative to every
+other, so the grip point stays put at a different resolution.
+
+✅ **`stone_axe` and `stone_blade` could not reach their own art.** Both had
+real files on disk (16 and 20) and no registry entry at all, so both
+resolved past their own pictures to the procedural sprite. Found by writing
+the sweep the addressing doc itself deferred until real art existed — it
+caught them on its first run. A second sweep checks contexts, since a
+subject declared icon-only cannot reach three quarters of its own art.
+
+✅ **Two tests that pinned "procedural" as the contract are corrected, not
+worked around.** `test_equipping_an_item_shows_its_sprite_id_art_not_its_
+raw_id` and `test_equipping_armor_shows_it_in_the_matching_character_view_
+slot` both asserted `ProceduralItemSprite`'s output. Neither was ever about
+the generator: the first protects the `sprite_id` indirection (and still
+does — `iron_sword_blessed` has no art tree of its own and must borrow
+`iron_sword`'s), the second that equipping puts THIS item's picture in THIS
+slot.
+
+101 of the catalog's 145 ids now draw real art; the other 44 fall back
+exactly as before, which is what made it safe to wire every subject at once
+rather than one id at a time. Verified by eye as well as by test: all four
+contexts rendered for `iron_axe`, `stone_axe`, `iron_sword`, `stone_blade`
+and `leather_helm` and looked at — flat, gripped, strapped, laid down —
+plus a fringe/key check finding 0 near-white border pixels and 0 surviving
+magenta on the produced icons.
+
+🚧 **Animation by address is still not played.** The registry declares
+`attack` timing and seven alternate `pose_*` frames per weapon, and
+`frames_for` returns every frame of a row in order, but nothing steps them:
+a swing is still a pendulum rotation of one static texture, not the
+authored 8-frame wind-up/release/recovery.
