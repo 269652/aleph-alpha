@@ -27568,5 +27568,19 @@ its three-wide-by-three-tall shape.
   predates this.
 
 Tests: `test_building_catalog.gd`, `test_illustrated_structure_sprite.gd`,
-`test_procedural_building_placeholder_sprite.gd` — all green, plus the
-building-art integration suites.
+`test_procedural_building_placeholder_sprite.gd`,
+`test_earth_chunk_manager_buildings.gd` — all green, plus the building-art
+integration suites.
+
+Four existing tests pinned the old full-plot width and were rewritten
+rather than deleted, each keeping the invariant it was really guarding. The
+art-resolution pair is the interesting one: its claim is about DETAIL, not
+width — a building's art must carry `DETAIL_MULTIPLIER` pixels per world
+unit, the same as the ground it stands on — and it was asserting a pixel
+count as a proxy for that. It asserts the ratio now, so it survives any
+later change to how much of its plot a building covers.
+
+`test_earth_chunk_manager_structure_art.gd`'s "half a tile in" failure is
+**pre-existing on `origin/main`** (identical 6.34375, verified against a
+clean baseline worktree) and is about farm fence rails, which draw through
+a different path entirely.
