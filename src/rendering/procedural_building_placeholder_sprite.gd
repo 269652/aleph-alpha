@@ -75,10 +75,14 @@ func generate_image(footprint: Vector2i, seed_value: int) -> Image:
 ## no art yet must stand in exactly as much of its plot as one with art,
 ## or dropping a sheet in would visibly move the house and a street of
 ## half-arted buildings would carry two different rhythms.
-func footprint_texture(footprint: Vector2i, seed_value: int, tile_size: int) -> ImageTexture:
+func footprint_texture(
+	footprint: Vector2i, seed_value: int, tile_size: int, building_id: String = ""
+) -> ImageTexture:
 	var image := generate_image(footprint, seed_value)
 	var scaled := image.duplicate() as Image
-	var width := maxi(1, int(round(float(tile_size) * BuildingCatalog.drawn_plot_width_tiles(footprint.x))))
+	var width := maxi(1, int(round(
+		float(tile_size) * BuildingCatalog.drawn_plot_width_tiles(footprint.x, building_id)
+	)))
 	var height := maxi(1, int(round(
 		float(width) * float((maxi(footprint.y, 1) + 1) * tile_size)
 		/ float(maxi(footprint.x, 1) * tile_size)

@@ -534,13 +534,22 @@ func _frame_image(path: String, columns: int, rows: int, row: int, column: int, 
 ## plot a building covers.
 func footprint_frame_texture(
 	path: String, columns: int, rows: int, row: int, column: int, tile_size: int, footprint_width_tiles: int,
-	grid: String = GRID_EVEN
+	grid: String = GRID_EVEN, building_id: String = ""
 ) -> ImageTexture:
 	var frame := _frame_image(path, columns, rows, row, column, grid)
 	if frame == null:
 		return null
+	# Named, so a building drawn at less of its plot than the plot alone
+	# would say gets its own size (BuildingCatalog._DRAW_SCALES -- a cottage
+	# is a smaller building than a house, and the art's own aspect does not
+	# say so). "" is exactly the old answer, so a caller with no id in hand
+	# is untouched.
 	var target_width := maxi(
-		1, int(round(float(tile_size) * BuildingCatalog.drawn_plot_width_tiles(footprint_width_tiles)))
+		1,
+		int(round(
+			float(tile_size)
+			* BuildingCatalog.drawn_plot_width_tiles(footprint_width_tiles, building_id)
+		))
 	)
 	var scale := float(target_width) / float(frame.get_width())
 	var height := maxi(1, int(round(float(frame.get_height()) * scale)))

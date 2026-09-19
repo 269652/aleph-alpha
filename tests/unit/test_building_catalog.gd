@@ -841,3 +841,57 @@ func test_all_building_ids_really_is_every_building_the_catalog_knows():
 		assert_true(every.has(building_id), "%s is listed and not in all_building_ids" % building_id)
 	for building_id in every:
 		assert_true(BuildingCatalog.has_building(building_id), "%s is not a real entry" % building_id)
+
+
+# -- the house tiers read as a ladder ---------------------------------------
+#
+# Asked directly, with the street in shot: *"also scale down cottage to be
+# smaller than house"*. Measured (tools/probe_building_fit.gd) before
+# changing anything: a cottage draws 26.0 x 26.0 world px and a house
+# 39.5 x 24.0 -- so the SMALLEST tier is the tallest building on the street.
+#
+# Both are drawn at the same share of their own plot width, and the plots
+# differ only in width (2x2 against 3x2), so the misorder comes entirely
+# from the art's aspect: a cottage is drawn square and a house low and wide.
+# The catalog carries the correction, because how big a building is drawn is
+# a fact about the building rather than about whichever sheet it came from.
+
+
+func test_a_cottage_is_drawn_smaller_than_a_house():
+	assert_lt(
+		BuildingCatalog.drawn_plot_width_tiles(2, "house_small"),
+		BuildingCatalog.drawn_plot_width_tiles(3, "house_medium"),
+		"a cottage covers less ground than a house"
+	)
+
+
+## The scale is a fact about the BUILDING, so asking without naming one
+## answers exactly as it always did -- every caller that has not been taught
+## to name it is untouched.
+func test_asking_without_naming_a_building_is_unchanged():
+	for width in [1, 2, 3, 4]:
+		assert_almost_eq(
+			BuildingCatalog.drawn_plot_width_tiles(width),
+			float(width) * (1.0 - 2.0 * BuildingCatalog.PLOT_MARGIN_SHARE),
+			0.0001
+		)
+
+
+## And a building with no scale of its own is drawn exactly as before.
+func test_a_building_with_no_scale_of_its_own_is_unchanged():
+	for building_id in ["house_medium", "house_large", "city_hall", "sawmill"]:
+		var footprint := BuildingCatalog.footprint_of(building_id)
+		assert_almost_eq(
+			BuildingCatalog.drawn_plot_width_tiles(footprint.x, building_id),
+			BuildingCatalog.drawn_plot_width_tiles(footprint.x),
+			0.0001,
+			building_id
+		)
+
+
+## Still a building standing on its plot, not a model of one: the same floor
+## PLOT_MARGIN_SHARE is already pinned against, so "smaller" can never
+## quietly become "tiny".
+func test_a_cottage_still_covers_most_of_its_own_plot():
+	var drawn := BuildingCatalog.drawn_plot_width_tiles(2, "house_small")
+	assert_gt(drawn / 2.0, 0.6, "a cottage that covers less than this is a model of a cottage")

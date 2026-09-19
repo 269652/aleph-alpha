@@ -520,6 +520,30 @@ static func interior_family_of(building_id: String) -> String:
 ## of one).
 const PLOT_MARGIN_SHARE := 0.09
 
+## A building drawn at less of its plot than the margin above allows, because
+## of what the building IS rather than because of the plot it stands on.
+##
+## Asked directly, with the street in shot: *"also scale down cottage to be
+## smaller than house"*. Measured before changing anything
+## (tools/probe_building_fit.gd): a cottage drew 26.0 x 26.0 world px against
+## a house's 39.5 x 24.0 -- the SMALLEST tier was the tallest building on the
+## street. Both are drawn at the same share of their own plot width and the
+## plots differ only in width (2x2 against 3x2), so the whole misorder comes
+## from the art's aspect: a cottage is drawn square, a house low and wide.
+##
+## The correction lives here rather than in the sheet reader because how big
+## a building is DRAWN is a fact about the building, not about whichever
+## sheet its picture came from -- and both the illustrated path and the
+## procedural placeholder then read one answer.
+##
+## Pinned by what it PRODUCES rather than as a number somebody liked, the
+## same discipline PLOT_MARGIN_SHARE itself keeps: a cottage must come out
+## smaller than a house in both dimensions, and must still cover most of its
+## own plot, or it stops reading as a building on that ground.
+const _DRAW_SCALES := {
+	"house_small": 0.85,
+}
+
 
 ## The width, in tiles, a building's picture is actually DRAWN at on a
 ## `footprint_width_tiles`-wide plot -- its own width less
@@ -531,8 +555,14 @@ const PLOT_MARGIN_SHARE := 0.09
 ## width_tiles, which answers a different question for a different thing --
 ## how wide a single-tile PLACEABLE is drawn, from its catalog twin. A nonsense plot is treated as the smallest real one:
 ## a building drawn at no width at all is a building nobody can see.
-static func drawn_plot_width_tiles(footprint_width_tiles: int) -> float:
-	return float(maxi(footprint_width_tiles, 1)) * (1.0 - 2.0 * PLOT_MARGIN_SHARE)
+static func drawn_plot_width_tiles(
+	footprint_width_tiles: int, building_id: String = ""
+) -> float:
+	return (
+		float(maxi(footprint_width_tiles, 1))
+		* (1.0 - 2.0 * PLOT_MARGIN_SHARE)
+		* float(_DRAW_SCALES.get(building_id, 1.0))
+	)
 
 
 static func capacity_of(building_id: String) -> int:

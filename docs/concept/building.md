@@ -547,6 +547,42 @@ A building picks ONE of its declared variation sheets from its own seed and
 keeps it for life (`BuildingLifecycleSheet.sheet_for`). Nothing that is not a
 home has one.
 
+**A building stands on the ground; it does not replace it (2026-09-19).**
+Reported with four of them in shot: *"Cottages and Manors are clipped"*.
+Nothing was clipped. Every cell of a building's footprint — the anchor
+carrying the building id, and `BuildingCatalog.FOOTPRINT_TILE_ID` on the
+rest — fell through `atlas_coords_for_modification` to the plain-earth slot,
+so the whole plot painted as a hard brown rectangle. A building's art is
+scaled to its plot's WIDTH and keeps its own aspect, so a cottage covers
+about 97% of its plot's depth and a manor as little as 85% (measured,
+`tools/probe_building_fit.gd`) — and the bare brown band left above the roof
+is what reads as the roof being cut off inside a box.
+
+This is exactly the bug a farm rail already had, with exactly its fix: a
+building is a real `Sprite2D` standing on the ground, so it has no ground
+tile of its own to paint and the grass it was raised on goes on showing
+around it (`TerrainRenderer.BUILDING_OVERLAY_TILE_IDS`). The list is pinned
+against `BuildingCatalog` rather than trusted, which is how it caught
+`trade_hall` and `mage_guild` the day they were added.
+
+**The house tiers read as a ladder (2026-09-19).** Asked in the same breath:
+*"also scale down cottage to be smaller than house"*. Measured, a cottage
+drew 26.0 × 26.0 world px against a house's 39.5 × 24.0 — the smallest tier
+was the tallest building on the street. Both are drawn at the same share of
+their own plot width and their plots differ only in width (2×2 against 3×2),
+so the whole misorder came from the art's aspect: a cottage is drawn square,
+a house low and wide.
+
+`BuildingCatalog._DRAW_SCALES` carries the correction, because how big a
+building is drawn is a fact about the *building* rather than about whichever
+sheet its picture came from — and both the illustrated path and the
+procedural placeholder then read one answer. Pinned by what it produces
+rather than as a number somebody liked, the same discipline
+`PLOT_MARGIN_SHARE` keeps: against the REAL sheets, a cottage must come out
+smaller than a house in both dimensions and a house shorter than a manor,
+and a cottage must still cover most of its own plot or it stops reading as a
+building on that ground. Now 22.5 × 22.5, 39.5 × 24.0, 39.5 × 37.5.
+
 **One tier, one building (2026-09-19).** All three house tiers used to share
 the five `house_1_*` sheets, which this doc called deliberate *"until grander
 art for those tiers lands, at which point they get their own entries"*. It
