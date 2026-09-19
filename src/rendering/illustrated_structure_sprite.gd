@@ -27,16 +27,21 @@ extends RefCounted
 ## - farmhouse.png: 6 columns x 5 rows. sawmill.png/warehouse.png/
 ##   city_hall.png: 8 columns x 5 rows (city_hall.png verified against the
 ##   same crop-and-view check, confirming the identical grid its sheet
-##   shares with sawmill/warehouse). Columns divide the 1536px width evenly
-##   (256px/192px); rows do NOT divide the 1024px height evenly
-##   (1024/5 = 204.8) -- row boundaries are computed by cumulative rounding
-##   (round(1024*i/5)) so 5 unequal integer rows still sum exactly to 1024,
-##   rather than a flat cell height that drifts and bleeds into the next
-##   row.
-## - wooden_fence.png: 4 columns x 4 rows, both axes dividing 1536x1024
-##   perfectly evenly (384x256) -- no special rounding needed, but the same
-##   cumulative-rounding helper is reused for both anyway (a no-op on an
-##   even division).
+##   shares with sawmill/warehouse). wooden_fence.png: 4 columns x 4 rows.
+## - The COLUMNS are on an exact pitch: 1536/8 is 192 and 1536/6 is 256,
+##   and profiling the sheets confirms the art in every column really does
+##   start ~12px inside one of 0, 192, 384 ... 1344. So a column is cut by
+##   even division, minus CELL_INSET for the rule line the sheets draw on
+##   the boundary.
+## - The ROWS are on NO pitch at all, and two different wrong guesses were
+##   shipped before that was measured. warehouse.png's drawn row
+##   boundaries sit at 188, 376, 566 and 786; sawmill.png's at 190, 387,
+##   578 and 789; city_hall.png's and blacksmith.png's elsewhere again.
+##   An even fifth of the canvas (204.8) clipped 9px off sagewerk's roof;
+##   the column pitch (192) clipped 13px off city_hall's footings, 26 off
+##   blacksmith's last row, and cut wooden_fence's 256px rows at 384. So
+##   rows are READ OFF THE SHEET by VariantSheetGrid.content_bands, which
+##   falls back to even division on any sheet it cannot resolve.
 ##
 ## Chroma key: farmhouse.png/wooden_fence.png key on magenta (their real
 ## background). sawmill.png/warehouse.png/city_hall.png key on near-black
@@ -406,6 +411,45 @@ func divider_frame_image(path: String, columns: int, rows: int, row: int, column
 	return _frame_image(path, columns, rows, row, column, GRID_DIVIDERS)
 
 
+## The same cut for a sheet whose per-cell own content reads as a false
+## extra divider to the generic band scan -- assets/sprites/buildings/
+## stand.png (the "stall" landmark) draws each cell as a roof/awning over
+## an open gap over a table, and that gap is near-full-width magenta in
+## every one of the 5 columns at once, so VariantSheetGrid.art_bands' own
+## "least size-varied run of `count` consecutive bands" heuristic prefers
+## grabbing the size-consistent noise slivers beside every true divider
+## over the genuinely different-sized roof/table halves it was supposed to
+## find (measured directly: tools/_probe_stand_bands.gd's raw
+## divider_bands come back as 16 row / 11 column entries for a real 5x5
+## grid, not 5). `row_bands`/`column_bands` are measured off the real file
+## and pinned here instead -- the same "generic detector cannot help,
+## explicit bands can" call illustrated_terrain_sprite.gd's "soil" entry
+## already made for its own near-black gutters.
+func explicit_frame_image(
+	path: String, row_bands: Array, column_bands: Array, row: int, column: int
+) -> Image:
+	if row < 0 or row >= row_bands.size() or column < 0 or column >= column_bands.size():
+		return null
+	var key := "%s|explicit|%d|%d" % [path, row, column]
+	if _sheet_frame_cache.has(key):
+		return _sheet_frame_cache[key]
+	var image := SpriteSheetLoader.load_image(path)
+	if image == null:
+		return null
+	var row_band: Vector2i = row_bands[row]
+	var column_band: Vector2i = column_bands[column]
+	var rect := Rect2i(
+		column_band.x, row_band.x,
+		column_band.y - column_band.x + 1, row_band.y - row_band.x + 1
+	)
+	var frame := image.get_region(rect)
+	if frame.get_format() != Image.FORMAT_RGBA8:
+		frame.convert(Image.FORMAT_RGBA8)
+	_key_and_despill(frame, true)
+	_sheet_frame_cache[key] = frame
+	return frame
+
+
 ## One body for all three, differing only in where the cell's rect comes
 ## from. Cached per (path, row, column, grid kind), so the band scan a
 ## detected grid needs is paid once per sheet rather than per building
@@ -472,13 +516,26 @@ func _cell_rect_for(
 				_span(_band(path, image, columns, grid, false)[column]),
 				_span(_band(path, image, rows, grid, true)[row])
 			)
-	return _cell_rect(image, columns, rows, row, column)
+	# The even grid is even on ONE axis. Columns really are on a pitch
+	# (1536/8 is exactly 192, and every column's art starts ~12px inside
+	# it); rows are not, so they are read off the sheet itself.
+	var band: Vector2i = _band(path, image, rows, _CONTENT_ROWS, true)[clampi(row, 0, rows - 1)]
+	var cell := _cell_rect(image, columns, rows, row, column)
+	return Rect2i(cell.position.x, band.x, cell.size.x, band.y - band.x + 1)
+
+
+## Cache key for the row bands read off a fixed-grid sheet's own art. Not
+## one of the GRID_* kinds a subject declares -- it is how the rows of the
+## GRID_EVEN kind are found, not a grid a caller can ask for.
+const _CONTENT_ROWS := "content_rows"
 
 
 func _band(path: String, image: Image, count: int, grid: String, horizontal: bool) -> Array:
 	var key := "%s|%s|%d|%s" % [path, grid, count, "rows" if horizontal else "columns"]
 	if not _grid_band_cache.has(key):
-		if grid == GRID_DIVIDERS:
+		if grid == _CONTENT_ROWS:
+			_grid_band_cache[key] = VariantSheetGrid.content_bands(image, count, horizontal)
+		elif grid == GRID_DIVIDERS:
 			_grid_band_cache[key] = VariantSheetGrid.art_bands(image, count, horizontal)
 		else:
 			_grid_band_cache[key] = (
@@ -509,18 +566,83 @@ func _build_idle_image(subject: String) -> Image:
 	return frame
 
 
-## The pixel rect for (row, column) in a columns x rows grid over `image`,
-## via cumulative rounding on both axes -- see this file's own header
-## comment for why a flat division would bleed on these sheets' real
-## non-evenly-divisible row count.
+## The pixels taken for (row, column) in a columns x rows grid over
+## `image`: the square grid cell (even_cell_rect) minus the sheet's own
+## divider line (even_cell_crop).
 func _cell_rect(image: Image, columns: int, rows: int, row: int, column: int) -> Rect2i:
-	var w := image.get_width()
-	var h := image.get_height()
-	var x0 := int(round(float(w) * column / columns))
-	var x1 := int(round(float(w) * (column + 1) / columns))
-	var y0 := int(round(float(h) * row / rows))
-	var y1 := int(round(float(h) * (row + 1) / rows))
-	return Rect2i(x0, y0, x1 - x0, y1 - y0)
+	return even_cell_crop(image.get_width(), image.get_height(), columns, rows, row, column)
+
+
+## The COLUMN grid: square cells sized by the column pitch, anchored
+## top-left. Only the horizontal half of this rect is used for a real
+## frame -- the vertical half comes from the sheet's own drawn rows (see
+## this file's header) -- but it stays square so the two axes can be
+## compared, and so the inset below trims the same amount either way.
+##
+## The pitch is measured, not assumed: every production/civic sheet on
+## disk is 1536x1024, 1536/8 is exactly 192, and the art in each column
+## starts ~12px inside one of 0, 192, 384 ... 1344 on all four 8-column
+## sheets.
+##
+## A sheet whose canvas ALREADY matches its grid exactly is divided exactly
+## as before (pinned by
+## test_a_sheet_that_already_divided_evenly_is_cut_exactly_as_before), so
+## this only changes what was wrong.
+##
+## Clamped to the canvas: a sheet smaller than its own declared grid asks
+## for pixels that do not exist otherwise, and get_region on an
+## out-of-bounds rect is not something to find out about at draw time.
+static func even_cell_rect(
+	width: int, height: int, columns: int, rows: int, row: int, column: int
+) -> Rect2i:
+	var cell: int = maxi(1, int(float(width) / float(maxi(columns, 1))))
+	var x0: int = mini(column * cell, maxi(width - 1, 0))
+	var y0: int = mini(row * cell, maxi(height - 1, 0))
+	return Rect2i(x0, y0, mini(cell, width - x0), mini(cell, height - y0))
+
+
+## How far inside its own grid square a cell is actually cut, to clear the
+## thin light divider the sheets draw between cells and around the canvas.
+##
+## Measured, not guessed. On warehouse.png the pixel at the cell corner
+## (0, 384) reads (0.992, 0.969, 0.996) -- near-white, so neither the
+## magenta key nor the near-black key removes it, and the sheet's own
+## magenta background only starts 5px in. A cell cut exactly on the grid
+## carries that line up its own edge as a hard opaque fringe. The line runs
+## 1-3px, and the real art starts 8px inside a cell boundary, so 3 takes
+## the divider and never the building (pinned by
+## test_the_inset_clears_the_divider_without_reaching_the_art).
+const CELL_INSET := 3
+
+## An inset is only worth taking while it costs a small part of the cell.
+## Trimming both edges of a 192px cell loses 3% of it; on a cell small
+## enough to lose more than this share, the fringe is the lesser evil --
+## so the rule is the share, not a hand-picked minimum cell size.
+const MAX_INSET_SHARE := 0.1
+
+
+static func inset_for_cell(cell: int) -> int:
+	return CELL_INSET if float(CELL_INSET * 2) <= float(cell) * MAX_INSET_SHARE else 0
+
+
+## The pixels actually taken for cell (row, column): its grid square minus
+## the divider, on all four edges. The divider straddles a boundary, so the
+## neighbour's half of it lands on this cell's far edge as well as its own
+## near edge -- and trimming all four keeps the crop square, which is the
+## whole point of the square-cell rule above.
+static func even_cell_crop(
+	width: int, height: int, columns: int, rows: int, row: int, column: int
+) -> Rect2i:
+	var cell := even_cell_rect(width, height, columns, rows, row, column)
+	var inset := inset_for_cell(mini(cell.size.x, cell.size.y))
+	if inset <= 0:
+		return cell
+	return Rect2i(
+		cell.position.x + inset,
+		cell.position.y + inset,
+		maxi(1, cell.size.x - inset * 2),
+		maxi(1, cell.size.y - inset * 2)
+	)
 
 
 func _key_and_despill(image: Image, keys_black: bool) -> void:

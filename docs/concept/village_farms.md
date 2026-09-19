@@ -367,6 +367,81 @@ A rail picks its column from which side of the enclosure it stands on, so a
 run along the field's north edge is drawn back-on and a run down its east
 edge is drawn as a post-and-rail seen from above.
 
+### A fence with nothing left to enclose comes down
+
+Reported live with the village in shot: *"There's a bed enclosure without a
+Farmhouse"*, and again after the first sweep landed: *"there are still fenced
+enclosures without a corresponding Farmhouse or Fisher"*.
+
+A field is only ever fenced around a farmhouse that really stands. But the
+rails are real persisted tiles, so a farmhouse that goes **afterwards** —
+razed, or reclaimed for standing in water — leaves its whole frame behind for
+ever.
+
+**A rail survives only if it is on a real frame this visit**: some
+farmhouse's own ring around its own beds, or some pond's own ring around its
+own water. Not "near a building that survived".
+
+The first pass used distance instead, on the worry that frame membership
+would not be stable across visits — a farmhouse's field is re-derived every
+time against what is standing, the last visit's rails included, so asking
+"is this rail in today's frame" unstably would have each visit pull up the
+previous one's fence.
+
+It is stable, and that is measured rather than assumed: across four real
+villages and the 113 rails between them, every rail a founding lays sits on
+its own farmhouse's ring or its own pond's ring on the next visit too, and
+not one of them needed the slack the distance rule was giving away
+(`test_the_sweep_takes_no_rail_a_real_founding_laid`). What that slack *did*
+keep standing is a frame left by a razed farmhouse that happened to lie near
+a surviving one — which is exactly the second report.
+
+A pond's ring is read off the water that is really there rather than off a
+plan, so a pond that was only partly dug still keeps the frame around what it
+got.
+
+The sweep runs on every visit, not on the removal: idempotent, self-healing,
+and able to clean up a save whose farmhouse went before it existed — the same
+shape `_lay_plaza_if_missing` and `_place_industry_if_missing` already have.
+
+### A farmstead clears its own ground
+
+Reported in play with the enclosure in shot: *"the Farmhouse should clear
+trees in its bed enclosure"*.
+
+A fence around six beds with an oak standing in the middle of them is not a
+field. Every other real placement in this game already fells what is in its
+way — `place_building` and `build_at_global` both call
+`_clear_vegetation_on_cells` on the cells they write, which is
+[building.md](building.md)'s own *"the NPCs / Player must first fell all
+trees to make space for the building"*. The beds were the one thing that
+never did, because they are not written tiles: they are ground handed to a
+farmer, who tills them one at a time and can only clear the ground COVER
+(`till_and_plant_farm_plot_at_global` blocks grass and flowers, and has no
+axe).
+
+So the farmstead clears its beds the way it clears its footprint: at
+founding, once, on the cells it has just claimed.
+
+- **What is cleared:** exactly the cells the fence encloses — the field
+  rectangle the villager really works. Not the fence ring (those are built
+  tiles, and building one already clears its own cell), and not a margin
+  beyond it: a village fells the timber it needs, not the wood it is
+  standing near.
+- **Trees, boulders and ore veins alike**, because that is what
+  `_clear_vegetation_on_cells` means by vegetation and because a boulder in
+  a bed is the same problem as an oak in one. The felled timber is not
+  credited anywhere: a village clearing its own founding site is scene
+  setting, not a harvest, exactly as it already is for a house's footprint.
+- **Through one duck-typed hook**, `clear_vegetation_at_global(cells)`, the
+  same fail-open shape every other world call the renderer makes already
+  uses — a world that cannot answer simply has nothing to clear.
+- **On every visit, not only the first.** The sweep is idempotent (a cleared
+  cell has nothing left to clear), which is what lets it heal a village
+  founded before this existed, the same self-healing shape
+  `_clear_rails_with_nothing_to_enclose` and `_lay_plaza_if_missing`
+  already have.
+
 ### The rail stands on the inner edge
 
 Asked for directly, with the west and south sides of a real ring arrowed in
@@ -582,6 +657,23 @@ again.
 
 ## Status
 
+- ✅ **A fence with nothing left to enclose comes down.**
+  `VillageRenderer._clear_rails_with_nothing_to_enclose` now asks whether a
+  rail is on a real frame this visit — a farmhouse's ring around its own
+  beds, or a pond's ring around its own water — rather than how near it
+  stands to a surviving building. Measured: 113 rails across four real
+  villages, none lost, and a rail planted on a standing farmhouse's own
+  doorstep with no frame under it comes down (it did not before).
+- ✅ **A farmstead clears its own ground.**
+  `EarthChunkManager.clear_vegetation_at_global(cells)` is the public door
+  onto the same `_clear_vegetation_on_cells` sweep `place_building` and
+  `build_at_global` already run over the cells they write, and
+  `VillageRenderer._clear_the_beds` calls it on exactly the cells a
+  farmstead's fence encloses — no margin, and the rails clear their own
+  cells as they are laid. Idempotent, so it runs on every visit and heals a
+  village founded before it existed.
+  `test_earth_chunk_manager_clear_vegetation.gd` 7/7 (new),
+  `test_village_renderer.gd` 124/124.
 - ✅ **`VillageFarm`, the pure rule set.** `field_cells` derives the ring
   from `BuildingCatalog`'s own footprint (5×4 minus the 3×2 the farmhouse
   stands on = 14 tiles); `owner_of` is total and deterministic (nearest
@@ -713,16 +805,68 @@ again.
   carries one, so an animal may stand on the ring and walk along it and only
   the crop is shut. See "The rail stands on the inner edge" above.
 
+- ✅ **A herb bed is visible.** Reported in play with the field in shot:
+  *"it plows the soil but then the soil mound sprites don't appear and
+  nothing gets planted, nothing grows and nothing gets harvested"* — and
+  measured before anything was touched (`tools/probe_village_farming.gd`,
+  against a real village east of Berlin): every part of it WAS happening.
+  The field's villager was a **herbalist**, every bed really was sown
+  (`sown=herb`), the crop really grew (`grown=29.5/57.2`), beds really
+  withered, and 8 real herbs really reached the village market over one
+  stretch of work. None of it was ever drawn.
+
+  `IllustratedCropSprite` has sheets for carrot and potato only, so
+  `leaf_texture("herb", ...)` returned null — and `FarmPlotMarker` put a
+  **visible** `Sprite2D` carrying **no texture** over a full tile of bare
+  tilled earth. A visible sprite with a null texture draws nothing while
+  claiming to draw something, which from the player's side is
+  indistinguishable from a field where the farming loop is broken.
+
+  Closed by `ProceduralHerbSprite`: an upright culinary herb (stem, leaf
+  pairs climbing it, side shoots as it matures, a flowering tip when ripe)
+  in `ProceduralLandmarkSprite`'s own `HERB_COLOR`, so a herbalist's bed and
+  a herbalist's `garden` workspot prop read as the same plant rather than
+  two. Hand-drawn in the same offline-art style as `ProceduralSoilSprite`,
+  behind `IllustratedCropSprite.has_crop()`, so real art can replace it
+  later with no marker change.
+
+  **Root-pinned, not centred.** A procedural herb fills its own canvas from
+  the bottom row up, so centring it would bury the lower half of every plant
+  in the soil. The illustrated crops keep their centring, because their
+  sheets are authored with the plant high in the canvas above a baseline —
+  one rule for both would be wrong for one of them. Same offset the wheat
+  blades already use for the same reason.
+
+  The cross-pin matters more than the sprite:
+  `test_every_crop_a_village_farm_sows_really_draws_something` is driven off
+  `VillageFarm.CROP_BY_OCCUPATION` itself, so a NEW crop a village can sow
+  but a bed cannot draw fails there rather than in somebody's screenshot.
+  A crop with neither illustrated nor procedural art now leaves the sprite
+  **hidden** rather than visible-and-textureless.
+
+- ✅ **The store is carried in ONCE, at the end of the block.** Reported live
+  with the farmhouse panel open: *"der Farmer scheint was zu ernten und
+  läuft dann zum Farmhouse aber es wird kein Weizen eingelagert"*. The haul
+  ran on **every** off-clock frame, so anything that reached the store
+  outside the work block was drained again within a frame and a store could
+  never hold a thing overnight. `_carried_in_since_work` is that edge: one
+  flag for the field and the pond alike, because a villager works one or the
+  other and both carry their take in at the same moment.
+
+  **Say plainly what this does and does not change.** Measured before the
+  fix (`tools/probe_village_farming.gd`), the chain was already working —
+  ten separate deposits, a peak of six held in the farmhouse — and the store
+  fills during the work block either way. What changed is that a store can
+  now hold what reaches it *after* the block ends, instead of being a chute.
+  A farmhouse whose villager was never paired with it (a leftover from an
+  earlier roster, `wanted_by=0`) still reads empty, and always will: nobody
+  deposits into it.
+
 Honest gaps, each real:
 
-- 🚧 **A herb plot renders as bare tilled soil.** `IllustratedCropSprite`
-  has entries for carrot and potato, and `FarmPlotMarker` has a dedicated
-  wheat path; an unregistered crop's `leaf_texture` returns null, so herbs
-  grow invisibly. Exactly the gap
-  [npc_farm_production.md](npc_farm_production.md) recorded for wheat before
-  [long_grass.md](long_grass.md)'s wheat atlas closed it — an asset
-  question, not a logic one. `herb` has no inventory art either and falls
-  back to the procedural item sprite.
+- 🚧 **`herb` has no INVENTORY art** and falls back to the procedural item
+  sprite. The plant in the bed is drawn now (see "A herb bed is visible"
+  below); the item in a bag still is not.
 - 🚧 **Ten of a farmhouse's fourteen ring tiles lie fallow.** That is the
   measured capacity above, not an oversight, but it does mean a farmhouse
   visibly works only part of its own yard. A second worker per farmhouse

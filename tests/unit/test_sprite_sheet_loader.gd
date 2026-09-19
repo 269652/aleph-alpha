@@ -77,5 +77,48 @@ func test_falls_back_to_the_raw_file_when_the_resource_is_not_imported():
 	DirAccess.remove_absolute(ProjectSettings.globalize_path(fixture_path))
 
 
+## Every sheet the repo actually ships loads, cleanly, on a checkout that
+## has never been opened in the editor.
+##
+## This is the case the fallback above was written for and did not really
+## cover: a sheet whose *.png.import IS committed but whose imported
+## artifact under .godot/ has never been generated. ResourceLoader.exists()
+## answers TRUE off the sidecar alone, so the loader took the load() branch
+## and load() failed on the missing .ctex -- a null image and an engine
+## error, on a file that is right there on disk.
+##
+## Found with assets/sprites/vehicles/cart.png, whose sidecar was committed
+## in a container that never ran an editor import; the whole cart suite
+## failed on art that loads fine from its own bytes.
+func test_every_sheet_the_repo_ships_loads_without_an_engine_error():
+	var checked := 0
+	for path in _every_sheet_path("res://assets/sprites"):
+		var image: Image = SpriteSheetLoader.load_image(path)
+		assert_not_null(image, "%s did not load" % path)
+		if image != null:
+			assert_gt(image.get_width(), 0, "%s loaded empty" % path)
+		checked += 1
+	assert_gt(checked, 0, "precondition: the repo ships sheets at all")
+	assert_engine_error_count(0, "a sheet on disk is a sheet that loads quietly")
+
+
+func _every_sheet_path(root: String) -> Array:
+	var out: Array = []
+	var dir := DirAccess.open(root)
+	if dir == null:
+		return out
+	dir.list_dir_begin()
+	var entry := dir.get_next()
+	while entry != "":
+		var full := "%s/%s" % [root, entry]
+		if dir.current_is_dir():
+			out.append_array(_every_sheet_path(full))
+		elif entry.ends_with(".png"):
+			out.append(full)
+		entry = dir.get_next()
+	dir.list_dir_end()
+	return out
+
+
 func test_returns_null_for_a_path_that_does_not_exist():
 	assert_null(SpriteSheetLoader.load_image("res://assets/sprites/not_a_real_sheet.png"))

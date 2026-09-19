@@ -141,6 +141,8 @@ const FlyerPersonality = preload("res://src/gameplay/flyer_personality.gd")
 const PiscivoreBirdRenderer = preload("res://src/rendering/piscivore_bird_renderer.gd")
 const VillageRenderer = preload("res://src/rendering/village_renderer.gd")
 const VillageFarm = preload("res://src/gameplay/village_farm.gd")
+const VillagePond = preload("res://src/gameplay/village_pond.gd")
+const AquaticPopulationModel = preload("res://src/world/aquatic_population_model.gd")
 const NpcMarker = preload("res://src/rendering/npc_marker.gd")
 const EcosystemSimulation = preload("res://src/world/ecosystem_simulation.gd")
 const ChunkSerializer = preload("res://src/world/chunk_serializer.gd")
@@ -182,6 +184,7 @@ const VillageImmigration = preload("res://src/emergence/village_immigration.gd")
 const MerchantVisit = preload("res://src/emergence/merchant_visit.gd")
 const HouseholdWellbeing = preload("res://src/emergence/household_wellbeing.gd")
 const ConstructionLabor = preload("res://src/emergence/construction_labor.gd")
+const SettlementReserve = preload("res://src/emergence/settlement_reserve.gd")
 const VillageLayout = preload("res://src/world/village_layout.gd")
 const Institution = preload("res://src/emergence/institution.gd")
 const InstitutionStore = preload("res://src/emergence/institution_store.gd")
@@ -619,7 +622,26 @@ func solid_obstacles_near(at: Vector2, radius: float) -> Array:
 	return result
 
 
-func _append_if_near(result: Array, node: Node, at: Vector2, radius: float) -> void:
+## `node` is deliberately UNTYPED, and that is the whole of a crash reported
+## live in the middle of play:
+##
+##   Invalid type in function '_append_if_near' ... The Object-derived class
+##   of argument 2 (previously freed) is not a subclass of the expected
+##   argument class.
+##     at: solid_obstacles_near   [1] _blockers_near (creature_marker.gd)
+##
+## A felled tree stays in _loaded_trees after it frees itself (choppable_
+## tree.gd calls queue_free() while leaving the entry in the array -- see
+## _clear_vegetation_on_cells' own note). The is_instance_valid guard below
+## was always here, as the first line; but GDScript type-checks a declared
+## `node: Node` parameter at the CALL, and a freed object fails that check
+## before the body is ever entered. A guard behind a type annotation that
+## rejects exactly the value it guards against cannot run.
+##
+## Worse than a log line: the failed call aborted the whole sensing pass, so
+## every obstacle AFTER the dead one went unseen and creatures walked
+## through standing trees.
+func _append_if_near(result: Array, node, at: Vector2, radius: float) -> void:
 	if not is_instance_valid(node):
 		return
 	if at.distance_to(node.position) > radius:
@@ -3428,27 +3450,29 @@ var _settlement_status: Dictionary = {}
 ## _settlement_production_outcome exists to stop, multiplied by the villager
 ## count.
 ##
-## Not a taste number, but be honest about which number it is. It is
-## borrowed from the capacity rule, not measured against the clock: capacity
-## is floor(food / FOOD_PER_HOUSEHOLD) and a VillageMarket's smallest real
-## food move is one whole meal (its own FOOD_UNITS_PER_MEAL, the unit
-## SettlementFood counts in), so FOOD_PER_HOUSEHOLD single-meal moves is the
-## smallest food change that can shift capacity by one whole household --
-## the smallest change that is the settlement changing rather than the band
-## boundary being brushed.
+## A real stretch of WORLD TIME, and that is the whole point of the change
+## that made it one. It used to be SettlementState.FOOD_PER_HOUSEHOLD -- a
+## quantity of FOOD read as a count of ASSESSMENTS -- and the comment here
+## already had to admit in capitals that meals and assessments are not the
+## same unit. Two consequences, both real: nobody could recalibrate what a
+## household eats without silently retuning an unrelated anti-flicker
+## window, and the number itself said nothing about how long a wobble
+## actually lasts (see docs/concept/settlement_food_calibration.md).
 ##
-## MEALS AND ASSESSMENTS ARE NOT THE SAME UNIT, and this constant does not
-## pretend they are. SETTLEMENT_STEP_INTERVAL is 30 world-seconds and
-## villagers gather and eat continuously, so many meals move between any two
-## assessments -- requiring FOOD_PER_HOUSEHOLD assessments is therefore not
-## "wait exactly as long as one household of capacity takes to move." It is
-## an ordinal taken from the one real quantity the classification is already
-## built on, so the window is derived from the same rule rather than picked,
-## and it is deliberately the loosest such number available rather than a
-## fitted one. What it actually buys is pinned in tests, not asserted here:
-## a status that flips back and forth across a band boundary never fires,
-## and one that holds for this many consecutive assessments does.
-const SETTLEMENT_STATUS_DWELL_STEPS := SettlementState.FOOD_PER_HOUSEHOLD
+## Two days, because a status that holds through two whole day-night cycles
+## of the village's own life is the village changing, not the band boundary
+## being brushed. The value is unchanged (SECONDS_PER_SIMULATED_DAY is 60
+## and an assessment is 30, so two days is four assessments, exactly what
+## this was before) -- deliberately, so decoupling it changed no behaviour
+## and the recalibration that follows can be judged on its own.
+##
+## What it actually buys is pinned in tests, not asserted here: a status
+## that flips back and forth across a band boundary never fires, and one
+## that holds for this many consecutive assessments does.
+const SETTLEMENT_STATUS_DWELL_DAYS := 2
+const SETTLEMENT_STATUS_DWELL_STEPS := int(
+	SECONDS_PER_SIMULATED_DAY * SETTLEMENT_STATUS_DWELL_DAYS / SETTLEMENT_STEP_INTERVAL
+)
 ## settlement_id -> {"status", "steps"}: the status currently being dwelt on
 ## and how many consecutive assessments it has held. Cleared the moment the
 ## settlement reads as its already-recorded status again, so a wobble never
@@ -3569,6 +3593,25 @@ func step_settlements(delta_seconds: float) -> void:
 		# settlement in the world DECLINING forever, which Governance then
 		# read straight back out as illegitimate.
 		var village_market = SettlementFood.village_market_for(settlement_id, _loaded_villages)
+		# What the village can HOLD, from what actually stands in it
+		# (docs/concept/village_warehouse.md, "The roof is the limit").
+		# Refreshed every step rather than set once: a village that loses
+		# its warehouse loses the headroom with it, and one that has just
+		# had it raised gains it. Deliberately NOT SettlementFood.carrying_
+		# capacity, which asks the different question of how many households
+		# the food on hand can feed.
+		#
+		# ONLY while the chunk is LOADED, and that guard is the whole point.
+		# Not being able to see a village must never read as "it has no
+		# warehouse": without it, every settlement the player is not standing
+		# in had its market clamped to a household's corners and everything
+		# above that silently discarded, because has_structure_near answers
+		# false for an unloaded chunk.
+		var settlement_chunk := RegionalTrade.chunk_coord_of(settlement_id)
+		if village_market != null and _loaded_chunks.has(settlement_chunk):
+			village_market.storage_capacity = VillageMarket.capacity_for_structures(
+				_standing_building_ids_in_chunk(settlement_chunk)
+			)
 		# BEFORE capacity is read, because this is what finally puts a real
 		# number in front of it (see _step_settlement_granary).
 		_step_settlement_granary(settlement_id, market, village_market, household_ids)
@@ -3882,19 +3925,59 @@ var _settlement_merchant_carry: Dictionary = {}
 func _step_merchant_visits(settlement_id: String, market) -> void:
 	if market == null:
 		return
+	var reserved := _construction_reserve_for(settlement_id)
 	var result: Dictionary = MerchantVisit.arrivals(
-		SETTLEMENT_STEP_INTERVAL, market.stock, float(_settlement_merchant_carry.get(settlement_id, 0.0))
+		SETTLEMENT_STEP_INTERVAL, market.stock,
+		float(_settlement_merchant_carry.get(settlement_id, 0.0)), reserved
 	)
 	_settlement_merchant_carry[settlement_id] = result["carry"]
 	if not result["arrived"]:
 		return
 
-	var sale: Dictionary = MerchantVisit.purchase(market.stock)
+	var sale: Dictionary = MerchantVisit.purchase(market.stock, reserved)
 	if int(sale["paid"]) <= 0:
 		return
 	for item_id in sale["bought"]:
 		market.remove_stock(str(item_id), float(sale["bought"][item_id]))
 	NpcEconomy.deposit_to_purse(market, float(sale["paid"]))
+
+
+## What this village is SAVING FOR: item_id -> whole units its own next
+## building really needs (docs/concept/traveling_merchants.md, "Surplus, not
+## stock"). {} for a village that owes itself nothing.
+##
+## Read off the SAME VillageGrowth.next_building the ladder walks and the
+## SAME recipe that building is priced in -- never a second list of
+## "protected goods", which would drift from what a village is actually
+## saving for. Measured before this existed (tools/probe_village_growth.gd):
+## SettlementGathering is the only thing that puts wood into a settlement's
+## market and `wood` is on the merchant's buy list, so a real village's
+## stone climbed steadily to 37 while its wood never once got past 2, and a
+## village that grew from 10 households to 31 built not one house for any of
+## them.
+##
+## An UNLOADED settlement reserves nothing: the ladder reads what really
+## stands in the chunk, and an unloaded one has nothing to read -- the same
+## honest limitation _step_village_immigration already carries. A village
+## the player is away from therefore trades as it always did.
+func _construction_reserve_for(settlement_id: String) -> Dictionary:
+	var chunk_coord := RegionalTrade.chunk_coord_of(settlement_id)
+	if not _loaded_chunks.has(chunk_coord):
+		return {}
+	var household_ids := _households_in_settlement(settlement_id)
+	if household_ids.is_empty():
+		return {}
+	var census := _village_census_for(chunk_coord, household_ids)
+	var next_building: String = VillageGrowth.next_building(
+		household_ids.size(), int(census["housed_count"]),
+		_present_structure_ids_for_settlement_chunk(chunk_coord)
+	)
+	if next_building == "":
+		return {}
+	var reserved: Dictionary = {}
+	for input in _recipe_book.recipe_inputs(next_building):
+		reserved[String(input["item_id"])] = int(input["count"])
+	return reserved
 
 
 ## docs/concept/village_growth.md mechanism 3: a fed village with room takes
@@ -3945,6 +4028,36 @@ var _settlement_immigration_carry: Dictionary = {}
 ## and VillageGrowth's ladder all see the newcomer immediately. They arrive
 ## WITHOUT a house on purpose -- the village then owes them one, which is
 ## exactly the ladder's first rung.
+## Old-save migration: a village recorded as founded with FEWER households
+## than a village is founded with today takes the missing ones in, once.
+##
+## Reported live after the founding roster grew from five to ten: *"the
+## village still doesn't have 10 people"*. A settlement's household count is
+## read back out of the persisted event graph (see _population_for), so a
+## village founded under the older rule keeps the roster it was founded with
+## for ever and the change is invisible in any world that already has
+## villages in it.
+##
+## Never DOWN: a village that has grown past the founding roster on its own
+## (docs/concept/village_growth.md mechanism 3) is not culled back to it. And
+## the newcomers are the SAME deterministic villagers the generator would
+## have rolled for those indices (admit_household continues its own per-index
+## seed), so a village that catches up is the village it would have been
+## founded as, not a different one.
+##
+## No-op for a chunk with no settlement recorded at all -- an ordinary
+## wilderness chunk has nobody to settle.
+func settle_up_to_founding_roster(chunk_coord: Vector2i) -> void:
+	var settlement_id := EntityRef.for_settlement(chunk_coord)
+	var count := household_count_for_settlement(settlement_id)
+	if count <= 0:
+		return
+	while count < SettlementGenerator.POPULATION:
+		if admit_household(chunk_coord) == "":
+			return  # already here -- nothing further to settle
+		count += 1
+
+
 func admit_household(chunk_coord: Vector2i) -> String:
 	var settlement_id := EntityRef.for_settlement(chunk_coord)
 	var index := _villagers_in_settlement(settlement_id).size()
@@ -4220,7 +4333,10 @@ func _step_settlement_construction(settlement_id: String, household_ids: Array[S
 	_apply_settlement_build_decision(chunk_coord)
 	_apply_civic_build_decision(chunk_coord)
 	_apply_village_growth_decision(chunk_coord)
-	_advance_construction_labor(chunk_coord, SETTLEMENT_STEP_INTERVAL)
+	# The GAME's own day, not the catch-up's: a village standing in front of
+	# the player is not an absence to be integrated over (see
+	# _advance_construction_labor's own `seconds_per_day`).
+	_advance_construction_labor(chunk_coord, SETTLEMENT_STEP_INTERVAL, SECONDS_PER_SIMULATED_DAY)
 ## settlement_id -> SettlementGranary.SeededRegion, cached for the session.
 var _settlement_seeded_region: Dictionary = {}
 
@@ -4249,6 +4365,19 @@ var _settlement_seeded_region: Dictionary = {}
 ## pristine baseline the moment its chunk unloads, because there is no
 ## persisted per-region ecology for an unloaded chunk to read -- the same
 ## simplification EcosystemSimulation.remove_region already documents.
+## The same reading by CHUNK, for a caller that has a coordinate rather than
+## a settlement id -- chiefly the founding roster, which has to know what a
+## village's land feeds it with (SettlementDemand.trade_for) before that
+## village exists.
+##
+## Deliberately the SEEDED region and not the live one: it is a pure
+## function of terrain, so every caller gets the same answer whether or not
+## the chunk is loaded, and a village is founded with the same roster on
+## every visit. The live ecology would make a roster drift with the weather.
+func seeded_region_for_chunk(chunk_coord: Vector2i):
+	return _seeded_region_for(EntityRef.for_settlement(chunk_coord))
+
+
 func _seeded_region_for(settlement_id: String):
 	if _settlement_seeded_region.has(settlement_id):
 		return _settlement_seeded_region[settlement_id]
@@ -4272,10 +4401,22 @@ func _seeded_region_for(settlement_id: String):
 ## attempt. A household with no grounded recipe (see OccupationProduction's
 ## own doc comment) is silently skipped, not forced onto an unrelated one.
 func _step_settlement_production(settlement_id: String, household_ids: Array[String]) -> void:
+	# A village does not saw the timber it is saving for its own next house
+	# (docs/concept/village_growth.md, "What a village is saving for"). The
+	# sawyer's own log_to_balken turns 3 wood into 1 beam, so before this a
+	# village sawed its construction timber the moment it had three of it --
+	# and the merchant, whose cart fills with the dearest goods first,
+	# carried the beams off. Measured: stone past 50, wood never past 2, and
+	# 31 households living in the 10 houses the village was founded with.
+	var market := _market_store.market_for(settlement_id)
+	var reserved := _construction_reserve_for(settlement_id)
 	for household_id in household_ids:
 		var recipe_id := OccupationProduction.recipe_for(_occupation_of_household(household_id))
-		if recipe_id != "":
-			attempt_production(settlement_id, recipe_id)
+		if recipe_id == "":
+			continue
+		if not SettlementReserve.can_spend(_recipe_book.recipe_inputs(recipe_id), market.stock, reserved):
+			continue
+		attempt_production(settlement_id, recipe_id)
 
 
 ## A settlement's own households periodically trade with each other --
@@ -4748,7 +4889,8 @@ func _well_position_for_settlement(settlement_id: String) -> Vector2:
 	var chunk_coord := RegionalTrade.chunk_coord_of(settlement_id)
 	var settlement := _settlement_generator.generate_settlement(
 		chunk_coord, chunk_coord * CHUNK_SIZE, CHUNK_SIZE, TerrainRenderer.TILE_SIZE,
-		SettlementGenerator.POPULATION, _is_dry_local(chunk_coord)
+		SettlementGenerator.POPULATION, _is_dry_local(chunk_coord),
+		seeded_region_for_chunk(chunk_coord)
 	)
 	return settlement.landmarks.well
 
@@ -5242,6 +5384,10 @@ func step_fruiting(delta_seconds: float, player_pixel: Vector2) -> void:
 	var season_progress := _season_cycle.progress_through_season(now)
 	for trees in _loaded_trees.values():
 		for tree in trees:
+			# A felled tree stays in the registry after it frees itself --
+			# see step_tree_growth, which is where the corpse is dropped.
+			if not is_instance_valid(tree):
+				continue
 			if not tree.has_method("set_ripe_fruit"):
 				continue
 			# Distance pre-filter, BEFORE any per-tree work: genome lookup,
@@ -5567,7 +5713,7 @@ func _village_would_settle(chunk_coord: Vector2i) -> bool:
 	var is_dry := _is_dry_local(chunk_coord)
 	var settlement := _settlement_generator.generate_settlement(
 		chunk_coord, chunk_coord * CHUNK_SIZE, CHUNK_SIZE, TerrainRenderer.TILE_SIZE,
-		SettlementGenerator.POPULATION, is_dry
+		SettlementGenerator.POPULATION, is_dry, seeded_region_for_chunk(chunk_coord)
 	)
 	var building_ids: Array = SettlementGenerator.house_ids_for(chunk_coord, settlement.npcs)
 	var result: Dictionary = VillageLayout.new().layout(
@@ -5588,6 +5734,10 @@ func _village_would_settle(chunk_coord: Vector2i) -> bool:
 ## arrives.
 func find_nearest_village(from_tile: Vector2i) -> Variant:
 	var start_chunk := _chunk_coord_for_tile(from_tile)
+	# A one-slot box, not a plain local: a GDScript lambda captures locals by
+	# VALUE, so the predicate below could not otherwise hand its answer back
+	# out. An Array is a reference type and can.
+	var landing: Array = [null]
 	var found_chunk: Variant = _village_finder.find_nearest(
 		start_chunk,
 		MAX_VILLAGE_SEARCH_RADIUS_CHUNKS,
@@ -5595,15 +5745,60 @@ func find_nearest_village(from_tile: Vector2i) -> Variant:
 		func(chunk_coord: Vector2i) -> String:
 			var chunk := generator.generate_chunk(chunk_coord, CHUNK_SIZE)
 			return _biome_classifier.dominant_biome(chunk.biome),
-		_village_would_settle
+		# The cheap PREDICTION first, then the world itself (docs/concept/
+		# village_growth.md, Mechanism 6). _village_would_settle re-derives
+		# the roster and the layout and never looks at the ground, because it
+		# deliberately loads nothing -- so a chunk it likes can still turn
+		# out to be an empty field, which is exactly the second report:
+		# "/village teleports me to an empty field...". The load only ever
+		# runs for a chunk that already passed the settlement roll AND the
+		# prediction, and the player is about to go there anyway.
+		func(chunk_coord: Vector2i) -> bool:
+			if not _village_would_settle(chunk_coord):
+				return false
+			var at = standing_village_position(chunk_coord)
+			if at == null:
+				return false
+			landing[0] = at
+			return true
 	)
 	if found_chunk == null:
 		return null
-	var settlement := _settlement_generator.generate_settlement(
-		found_chunk, found_chunk * CHUNK_SIZE, CHUNK_SIZE, TerrainRenderer.TILE_SIZE,
-		SettlementGenerator.POPULATION, _is_dry_local(found_chunk)
-	)
-	return settlement.landmarks.well
+	return landing[0]
+
+
+## Where to land in `chunk_coord`'s village -- a real building's own
+## DOORSTEP -- or null when nothing is standing there
+## (docs/concept/village_growth.md, Mechanism 6).
+##
+## A doorstep rather than the planned well: the well comes out of
+## VillageLayout.skeleton, which is a plan, while a doorstep is a cell a
+## building really has. The lowest (y, x) origin, so the same village answers
+## the same way every time rather than by whichever order a Dictionary handed
+## its keys back.
+##
+## Loads the chunk if it is not loaded, and UNLOADS it again if it turns out
+## not to be a village -- a rejected candidate leaves nothing behind. A chunk
+## that was already loaded is left alone: it may well be the one the player
+## is standing in.
+func standing_village_position(chunk_coord: Vector2i):
+	var was_loaded := _loaded_chunks.has(chunk_coord)
+	if not was_loaded:
+		_load_chunk(chunk_coord)
+	var best: Variant = null
+	var best_origin := Vector2i(0, 0)
+	for record in buildings_in_chunk(chunk_coord):
+		var origin: Vector2i = record["origin_local"]
+		if best != null and [origin.y, origin.x] >= [best_origin.y, best_origin.x]:
+			continue
+		best_origin = origin
+		var door: Vector2i = (
+			chunk_coord * CHUNK_SIZE + origin + BuildingCatalog.doorstep_of(record.get("id", ""))
+		)
+		best = (Vector2(door) + Vector2(0.5, 0.5)) * float(TerrainRenderer.TILE_SIZE)
+	if best == null and not was_loaded:
+		_unload_chunk(chunk_coord)
+	return best
 
 
 ## How warm it feels around `player_pixel` right now, [0,1]: the real climate
@@ -7125,7 +7320,11 @@ func step_footprints() -> void:
 		# absolute world clock, so a chunk nobody can see loses nothing by
 		# advancing once per interval instead of every frame.
 		if visible or _world_age_seconds - float(_footprint_far_advanced_at.get(chunk_coord, -INF)) >= FAR_CHUNK_ADVANCE_SECONDS:
-			field.advance(_world_age_seconds)
+			# Rain hurries a print away (docs/concept/snow_cover.md's
+			# "Footprints"): the wetness is sampled per step rather than
+			# stored per print, because a print cannot know what weather is
+			# coming.
+			field.advance(_world_age_seconds, _rain_wetness)
 			_footprint_far_advanced_at[chunk_coord] = _world_age_seconds
 		# A typed Dictionary cannot hold the Nil a missing entry returns --
 		# every real chunk has its renderers, but a field injected on its own
@@ -7304,8 +7503,17 @@ func _paint_snow_presence(chunk_coord: Vector2i, chunk: Chunk) -> void:
 			_snow_layer.set_cell(global, 0, SnowBombShader.PRESENCE_ATLAS_COORD)
 
 
+## How hard it is raining right now, 0 dry and 1 a downpour -- pushed in by
+## set_rain below and read by step_footprints, because a footprint field
+## knows how to weather faster when it is wet but cannot know THAT it is
+## wet. Starts dry: a world nobody has told about the weather must not age
+## its prints as though it had rained.
+var _rain_wetness := 0.0
+
+
 func set_rain(raining: bool) -> void:
 	var intensity := 1.0 if raining else 0.0
+	_rain_wetness = intensity
 	if _water_material != null:
 		_water_material.set_shader_parameter("rain_intensity", intensity)
 	# Rivers/lakes/the sea all render on the ONE river flow overlay in real
@@ -7457,6 +7665,12 @@ func _loaded_tree_positions() -> Array:
 	var positions: Array = []
 	for trees in _loaded_trees.values():
 		for tree in trees:
+			# A felled tree stays in the registry after it frees itself, and
+			# reading .position off the corpse does not merely log -- it
+			# ABORTS this walk, so every tree after it goes unreported and
+			# the caller is told the forest is empty.
+			if not is_instance_valid(tree):
+				continue
 			positions.append(tree.position)
 	return positions
 
@@ -7854,13 +8068,24 @@ func step_ground_food(delta_seconds: float) -> void:
 ## Only saplings: a tree with planted_at 0 predates the session and is already
 ## grown, so the common case costs one comparison.
 func step_tree_growth() -> void:
-	for trees in _loaded_trees.values():
+	for chunk_coord in _loaded_trees:
+		var trees: Array = _loaded_trees[chunk_coord]
+		var survivors: Array = []
 		for tree in trees:
+			if not is_instance_valid(tree):
+				continue
+			survivors.append(tree)
 			if not ("planted_at" in tree) or tree.planted_at <= 0.0:
 				continue
 			if not tree.has_method("set_age"):
 				continue
 			tree.set_age(_world_age_seconds - tree.planted_at)
+		# This walk visits every loaded tree every tick anyway, so it is the
+		# one place that can drop the corpses for free. Without it a chunk
+		# that is never unloaded accumulates one dead entry per tree ever
+		# felled, and every other walk pays a validity check for each.
+		if survivors.size() != trees.size():
+			_loaded_trees[chunk_coord] = survivors
 
 
 ## How often the tall-grass sprite layer re-syncs to the simulation (and
@@ -8273,6 +8498,198 @@ func farm_plot_at_global(global_x: int, global_y: int):
 ## reads it (FarmPlotMarker._redraw_wheat picks which of its three real
 ## sheets to sample from), but it costs nothing to pass unconditionally,
 ## the same way delta_seconds itself is.
+## Every village pond's own fish stock, keyed by chunk then by the pond's
+## own ANCHOR cell -- the top-left cell of that body of water, found by
+## flooding it (see _pond_anchor). One pond is one stock however many cells
+## it has, which is what makes "a pond" a thing rather than six buckets.
+##
+## Not persisted, like the farm plots beside it and for the same reason: a
+## revisited village re-stocks rather than remembering
+## (docs/concept/village_ponds.md's own status list).
+var _pond_fish: Dictionary = {}
+
+
+## Puts a fisher's stocking of fish into the pond this cell belongs to (see
+## docs/concept/village_ponds.md). A no-op on dry ground, and on a pond that
+## already holds fish -- a fisher stocks a pond, they do not keep stocking
+## it.
+func stock_pond_at(global_x: int, global_y: int) -> void:
+	var anchor = _pond_anchor(global_x, global_y)
+	if anchor == null:
+		return
+	var chunk_coord := _chunk_coord_for_tile(anchor)
+	var by_anchor: Dictionary = _pond_fish.get(chunk_coord, {})
+	if by_anchor.has(anchor):
+		return
+	by_anchor[anchor] = float(VillagePond.STOCKING_FISH)
+	_pond_fish[chunk_coord] = by_anchor
+	_sync_pond_fish_markers(chunk_coord, anchor)
+
+
+## How many fish the pond this cell belongs to is holding -- 0.0 for dry
+## ground, and for water nobody has stocked.
+func pond_fish_at(global_x: int, global_y: int) -> float:
+	var anchor = _pond_anchor(global_x, global_y)
+	if anchor == null:
+		return 0.0
+	return float(_pond_fish.get(_chunk_coord_for_tile(anchor), {}).get(anchor, 0.0))
+
+
+## The real FishMarkers swimming in each pond, keyed the same way the stock
+## is: chunk, then the pond's own anchor cell. Kept OUT of _loaded_fish on
+## purpose -- that list is respawned wholesale whenever a chunk's aggregate
+## fish population is reconciled, which would wipe a pond's own fish every
+## time the region's did anything.
+var _pond_fish_markers: Dictionary = {}
+
+## At most one fish per tile of water. Six tiles is a pond, not a shoal, and
+## a marker per unit of a population that can exceed its own cell count
+## would pile fish on top of each other.
+const _POND_FISH_PER_CELL := 1
+
+
+## The fish really swimming in the pond this cell belongs to.
+func pond_fish_markers_at(global_x: int, global_y: int) -> Array:
+	var anchor = _pond_anchor(global_x, global_y)
+	if anchor == null:
+		return []
+	return _pond_fish_markers.get(_chunk_coord_for_tile(anchor), {}).get(anchor, [])
+
+
+func pond_fish_marker_count_at(global_x: int, global_y: int) -> int:
+	return pond_fish_markers_at(global_x, global_y).size()
+
+
+## Brings the fish you can SEE in one pond into line with the stock it
+## holds: one marker per whole fish, capped at one per tile of water, each
+## standing on a real cell of that pond.
+##
+## Spawn and free rather than reposition -- a pond gains or loses a fish
+## rarely (a breeding tick, a catch), and FishMarker owns its own swimming
+## from wherever it is put down.
+func _sync_pond_fish_markers(chunk_coord: Vector2i, anchor: Vector2i) -> void:
+	var cells := _pond_cells_from(anchor)
+	var by_anchor: Dictionary = _pond_fish_markers.get(chunk_coord, {})
+	var markers: Array = by_anchor.get(anchor, [])
+	var stock: float = float(_pond_fish.get(chunk_coord, {}).get(anchor, 0.0))
+	var wanted: int = mini(int(floor(stock)), cells.size() * _POND_FISH_PER_CELL)
+	while markers.size() > wanted:
+		var extra = markers.pop_back()
+		if is_instance_valid(extra):
+			extra.free()
+	while markers.size() < wanted and not cells.is_empty():
+		var cell: Vector2i = cells[markers.size() % cells.size()]
+		var centre := (Vector2(cell) + Vector2(0.5, 0.5)) * TerrainRenderer.TILE_SIZE
+		var seed_value := hash("%d_%d_pond_fish_%d" % [cell.x, cell.y, markers.size()])
+		var species: String = FishRenderer.SPECIES_POOL[
+			absi(seed_value) % FishRenderer.SPECIES_POOL.size()
+		]
+		markers.append(_fish_renderer.spawn_fish_at(_creatures_parent, species, centre, seed_value))
+	by_anchor[anchor] = markers
+	_pond_fish_markers[chunk_coord] = by_anchor
+
+
+## Frees every pond fish of a chunk that is going away.
+func _free_pond_fish_markers(chunk_coord: Vector2i) -> void:
+	for markers in _pond_fish_markers.get(chunk_coord, {}).values():
+		for fish in markers:
+			if is_instance_valid(fish):
+				fish.free()
+	_pond_fish_markers.erase(chunk_coord)
+
+
+## Takes one fish out of the pond this cell belongs to: one off the stock,
+## and one fewer swimming in it. False when there is not a whole fish left
+## to take, or when this is not a pond at all.
+##
+## All-or-nothing on a WHOLE fish, mirroring withdraw_from_structure_at:
+## half a fish is not a catch, and a pond fished down to a fraction breeds
+## back from what is left rather than from nothing.
+func catch_pond_fish_at(global_x: int, global_y: int) -> bool:
+	var anchor = _pond_anchor(global_x, global_y)
+	if anchor == null:
+		return false
+	var chunk_coord := _chunk_coord_for_tile(anchor)
+	var by_anchor: Dictionary = _pond_fish.get(chunk_coord, {})
+	var stock: float = float(by_anchor.get(anchor, 0.0))
+	if stock < 1.0:
+		return false
+	by_anchor[anchor] = stock - 1.0
+	_pond_fish[chunk_coord] = by_anchor
+	_sync_pond_fish_markers(chunk_coord, anchor)
+	return true
+
+
+## Breeds every stocked pond toward what its own water can feed, on the
+## world's own ecology tick (scenes/world.gd's tick table).
+func step_ponds(delta_seconds: float) -> void:
+	if _pond_fish.is_empty():
+		return
+	var days := delta_seconds / ChunkEcologyCatchup.SECONDS_PER_DAY
+	if days <= 0.0:
+		return
+	for chunk_coord in _pond_fish:
+		var by_anchor: Dictionary = _pond_fish[chunk_coord]
+		for anchor in by_anchor:
+			var cells := _pond_cells_from(anchor)
+			if cells.is_empty():
+				continue  # filled in since it was stocked
+			by_anchor[anchor] = VillagePond.step(
+				float(by_anchor[anchor]), cells.size(),
+				_pond_temperature(anchor), days
+			)
+			_sync_pond_fish_markers(chunk_coord, anchor)
+
+
+## The water temperature a pond's fish live at -- its own chunk's, the same
+## normalized [0, 1] value every other aquatic population reads.
+func _pond_temperature(anchor: Vector2i) -> float:
+	var chunk: Chunk = _loaded_chunks.get(_chunk_coord_for_tile(anchor))
+	if chunk == null:
+		return AquaticPopulationModel.OPTIMAL_TEMPERATURE
+	return float(chunk.temperature[_local_index(anchor.x, anchor.y)])
+
+
+## Every cell of the body of water this one belongs to, flood-filled over
+## pond tiles. Bounded in practice -- a village pond is six cells -- and
+## bounded in code by _POND_FLOOD_LIMIT so a hand-dug lake cannot make this
+## walk the world.
+const _POND_FLOOD_LIMIT := 256
+
+
+func _pond_cells_from(start: Vector2i) -> Array:
+	if not is_pond_at_global(start.x, start.y):
+		return []
+	var seen: Dictionary = {start: true}
+	var queue: Array = [start]
+	var out: Array = []
+	while not queue.is_empty() and out.size() < _POND_FLOOD_LIMIT:
+		var cell: Vector2i = queue.pop_back()
+		out.append(cell)
+		for step in [Vector2i(1, 0), Vector2i(-1, 0), Vector2i(0, 1), Vector2i(0, -1)]:
+			var next: Vector2i = cell + step
+			if seen.has(next) or not is_pond_at_global(next.x, next.y):
+				continue
+			seen[next] = true
+			queue.append(next)
+	return out
+
+
+## The one cell that stands for a whole pond: its top-left, so every cell of
+## the same water agrees on which stock is theirs however the flood happened
+## to walk it. Null for dry ground.
+func _pond_anchor(global_x: int, global_y: int):
+	var cells := _pond_cells_from(Vector2i(global_x, global_y))
+	if cells.is_empty():
+		return null
+	var anchor: Vector2i = cells[0]
+	for cell in cells:
+		var c: Vector2i = cell
+		if c.y < anchor.y or (c.y == anchor.y and c.x < anchor.x):
+			anchor = c
+	return anchor
+
+
 func step_farm_plots(delta_seconds: float) -> void:
 	var season := current_season()
 	for marker in _farm_plots.values():
@@ -9653,6 +10070,11 @@ func sync_tree_season(player_pixel: Variant = null) -> void:
 	_last_tree_season = signature
 	for trees in _loaded_trees.values():
 		for tree in trees:
+			# has_method on a freed node does not log and carry on -- it
+			# takes the process down. A felled tree is still in the registry
+			# until step_tree_growth drops it.
+			if not is_instance_valid(tree):
+				continue
 			if not tree.has_method("set_ripe_fruit"):
 				continue
 			if (
@@ -11269,7 +11691,7 @@ func _find_bee_hive_site(chunk_coord: Vector2i, colony: BeeColony, from_cell: Ve
 		var pixel := (Vector2(global_tile) + Vector2(0.5, 0.5)) * float(TerrainRenderer.TILE_SIZE)
 		if not _has_bee_food_near(pixel):
 			continue
-		if _has_real_hive_anchor(pixel, global_tile):
+		if _has_real_hive_anchor(global_tile):
 			return candidate
 	return Vector2i(-1, -1)
 
@@ -11277,58 +11699,69 @@ func _find_bee_hive_site(chunk_coord: Vector2i, colony: BeeColony, from_cell: Ve
 ## Requested live: "Beehives should only be able to build on trees or
 ## structures like houses .. not free floating over a river or ground."
 ## A real hive hangs from a real tree branch, or (a beekeeper's own
-## manmade hive) sits beside a real structure -- never bare open ground,
-## and never open water. Two gates: never a river/lake tile regardless of
-## what's nearby (mirrors TreeRenderer.spawn_trees's own river exclusion
-## -- a hive floating over open water is exactly the same bug class real
-## trees already got fixed for), then a real tree OR a real building
-## piece within HIVE_ANCHOR_RADIUS_TILES.
-func _has_real_hive_anchor(pixel_position: Vector2, global_tile: Vector2i) -> bool:
+## manmade hive) is fixed to a real structure -- never bare open ground,
+## and never open water. Two gates: never a river/lake tile (mirrors
+## TreeRenderer.spawn_trees's own river exclusion -- a hive floating over
+## open water is exactly the same bug class real trees already got fixed
+## for), then a real standing tree OR a real building piece ON THE HIVE'S
+## OWN TILE.
+##
+## Tightened from "within HIVE_ANCHOR_RADIUS_TILES (2.0)" after the same
+## thing was reported again: *"Beehives should not be built on grass...
+## they need a tree branch to build it please"*. A radius admits the tile
+## NEXT TO a trunk, which is bare grass with a tree visible from it -- the
+## hive stood on the ground between, which is exactly what a radius can
+## never express. What holds a hive up is not nearby scenery; it is the
+## branch it hangs off, and that is a property of one tile. The radius, and
+## the `pixel_position` argument only its tree query needed, are both gone
+## rather than left at 0.0, so there is no dial left to widen this back
+## into the same bug.
+func _has_real_hive_anchor(global_tile: Vector2i) -> bool:
 	if is_river_at_global(global_tile.x, global_tile.y):
 		return false
 	if is_lake_at_global(global_tile.x, global_tile.y):
 		return false
-	if not trees_near(pixel_position, int(ceil(HIVE_ANCHOR_RADIUS_TILES))).is_empty():
-		return true
-	return _has_building_piece_near(global_tile, HIVE_ANCHOR_RADIUS_TILES)
+	return _has_standing_tree_at(global_tile) or _has_building_piece_at(global_tile)
 
 
-## How close a hive's own tile must be to a real tree or building piece to
-## read as genuinely anchored to it -- a hive HANGS from a branch or sits
-## beside a wall, it does not merely happen to share a neighbourhood with
-## one several tiles off. Deliberately small and tight, unlike BeeColony's
-## own much larger SENSE_RADIUS_TILES/FORAGE_RADIUS_TILES (those are about
-## finding food from a distance; this is about physical support).
-const HIVE_ANCHOR_RADIUS_TILES := 2.0
-
-
-## A real BuildingPiece stands within `radius_tiles` of `global_tile` --
-## the same chunk.modifications + BuildingPiece.has_piece idiom
-## TreeRenderer.spawn_trees already uses to keep a tree from rooting in a
-## house's own floor, read here instead of written (a hive does not
-## uproot the structure, it just needs one nearby). Walks a small tile
-## square rather than trusting one chunk's own modifications alone,
-## since HIVE_ANCHOR_RADIUS_TILES can spill into a neighbouring chunk at
-## an edge; an unloaded neighbour simply contributes nothing (fails
-## closed toward "no building found there," the same honest "only sees
-## what's currently loaded" limit _has_bee_food_near/trees_near already
-## accept).
-func _has_building_piece_near(global_tile: Vector2i, radius_tiles: float) -> bool:
-	var r := int(ceil(radius_tiles))
-	for dy in range(-r, r + 1):
-		for dx in range(-r, r + 1):
-			var offset := Vector2i(dx, dy)
-			if Vector2(offset).length() > radius_tiles:
-				continue
-			var tile := global_tile + offset
-			var chunk_coord := _chunk_coord_for_tile(tile)
-			var chunk: Chunk = _loaded_chunks.get(chunk_coord)
-			if chunk == null:
-				continue
-			var local := tile - chunk_coord * CHUNK_SIZE
-			if BuildingPiece.has_piece(chunk.modifications.get(local, "")):
-				return true
+## A real, standing tree whose OWN tile is `global_tile` -- the branch a
+## hive hangs from. Only that tile's own chunk is searched, because a tree
+## is spawned into the chunk its position falls in, so no other chunk's
+## list can hold a tree standing here.
+##
+## Skips a felled tree for the same reason trees_near does: a stump is not
+## a perch, and it is not a branch either.
+func _has_standing_tree_at(global_tile: Vector2i) -> bool:
+	var chunk_coord := _chunk_coord_for_tile(global_tile)
+	for tree in _loaded_trees.get(chunk_coord, []):
+		if not is_instance_valid(tree) or tree.is_felled():
+			continue
+		var tile := Vector2i(
+			floori(tree.position.x / float(TerrainRenderer.TILE_SIZE)),
+			floori(tree.position.y / float(TerrainRenderer.TILE_SIZE))
+		)
+		if tile == global_tile:
+			return true
 	return false
+
+
+## A real BuildingPiece stands ON `global_tile` -- the same
+## chunk.modifications + BuildingPiece.has_piece idiom TreeRenderer.
+## spawn_trees already uses to keep a tree from rooting in a house's own
+## floor, read here instead of written (a hive does not uproot the
+## structure, it hangs on it). One tile, so one chunk: the square this
+## used to walk existed only to cover HIVE_ANCHOR_RADIUS_TILES spilling
+## across a chunk edge, and there is no radius any more. An unloaded chunk
+## contributes nothing (fails closed toward "no building there", the same
+## honest "only sees what's currently loaded" limit _has_bee_food_near and
+## trees_near already accept).
+func _has_building_piece_at(global_tile: Vector2i) -> bool:
+	var chunk_coord := _chunk_coord_for_tile(global_tile)
+	var chunk: Chunk = _loaded_chunks.get(chunk_coord)
+	if chunk == null:
+		return false
+	var local := global_tile - chunk_coord * CHUNK_SIZE
+	return BuildingPiece.has_piece(chunk.modifications.get(local, ""))
 
 
 ## The one absconding trigger a wild nest keeps (see WildBeePatch.
@@ -12192,7 +12625,17 @@ func gradient_at_global(global_x: int, global_y: int) -> Vector2:
 ## above; unlike biome_at_global below, needs no loaded-chunk cache since a
 ## river is never stored per-chunk (see _paint_water_overlay).
 func is_river_at_global(global_x: int, global_y: int) -> bool:
+	if is_pond_at_global(global_x, global_y):
+		return true
 	return generator.is_river_at_global(global_x, global_y)
+
+
+## Whether a village's own dug pond stands on this tile (docs/concept/
+## village_ponds.md, VillagePond). An ordinary chunk modification, like a
+## rail -- the id is the only thing stored about it, which is what lets a
+## pond survive a reload with no record of the fisher who dug it.
+func is_pond_at_global(global_x: int, global_y: int) -> bool:
+	return VillagePond.is_pond_tile(modification_at_global(global_x, global_y))
 
 
 ## A tile under a baked lake's surface (docs/concept/hydrology.md) -- an
@@ -13207,6 +13650,8 @@ func is_buildable_terrain_at(global_x: int, global_y: int) -> bool:
 func is_buildable_ground_at(global_x: int, global_y: int) -> bool:
 	if biome_at_global(global_x, global_y) == "forest":
 		return false
+	if is_pond_at_global(global_x, global_y):
+		return false  # the fisher's own water is not somewhere to put a house
 	if is_water_at_global(global_x, global_y):
 		return false
 	return true
@@ -13225,6 +13670,14 @@ func is_buildable_ground_at(global_x: int, global_y: int) -> bool:
 ## (test_earth_chunk_manager_buildable_terrain.gd pins it cell by cell
 ## against the overlay's own decision over the real Berlin radius).
 func is_water_at_global(global_x: int, global_y: int) -> bool:
+	# A dug pond is water the moment it is dug, and is the ONLY water the
+	# generator knows nothing about -- everything below asks the generated
+	# world (docs/concept/village_ponds.md, "Built water"). Answering it
+	# here is what gives a pond the whole stack for free: creatures refuse
+	# it, the surface paints it, and is_river_at_global above carries its
+	# flow to anything that floats.
+	if is_pond_at_global(global_x, global_y):
+		return true
 	if biome_at_global(global_x, global_y) == "ocean":
 		return true
 	if is_river_at_global(global_x, global_y):
@@ -13480,6 +13933,18 @@ func place_building(
 	for local in required_cells:
 		if chunk.modifications.get(local, "") != "":
 			return false
+		# Nothing built stands in water -- the SAME rule
+		# _reclaim_pieces_standing_in_water already keeps for every wall,
+		# floor and roof, kept here too. Reported live with the screenshot:
+		# "Buildings are placed in rivers". Measured first
+		# (tools/probe_buildings_in_water.gd): every siting path already
+		# asks is_buildable_ground_at and not one of 16 real villages put a
+		# building in water -- but this function had no check of its own at
+		# all, so any caller that forgets is free to, and a village whose
+		# river moved under it keeps the ones it has.
+		var global_cell: Vector2i = chunk_coord * CHUNK_SIZE + local
+		if is_water_at_global(global_cell.x, global_cell.y):
+			return false
 	for local in footprint_cells:
 		chunk.modifications[local] = building_id if local == origin_local else BuildingCatalog.FOOTPRINT_TILE_ID
 	chunk.buildings[origin_local] = {
@@ -13495,6 +13960,14 @@ func place_building(
 	_terrain_renderer.paint(_tile_map_layer, chunk, chunk_coord * CHUNK_SIZE, generator.biome_at_global)
 	_spawn_building_node(chunk_coord, origin_local, chunk.buildings[origin_local])
 	return true
+
+
+## Which building id a village's store is. Kept because the growth ladder
+## and the capacity rule both name it; the round that fills it is a
+## carter's, not this manager's (docs/concept/village_warehouse.md,
+## Mechanism 4 -- "It should be a real NPC pulling the cart, not an
+## additional sprite").
+const WAREHOUSE_BUILDING_ID := "warehouse"
 
 
 ## Writes who lives in an already-placed building (see place_building's
@@ -13866,6 +14339,41 @@ func _is_built_surface(tile_id: String) -> bool:
 	)
 
 
+## Fells whatever is standing on these GLOBAL cells -- trees, boulders and
+## ore veins alike (docs/concept/village_farms.md, "A farmstead clears its
+## own ground").
+##
+## The public door onto _clear_vegetation_on_cells, which every real
+## placement path already goes through for the cells it writes
+## (place_building, build_at_global). A farmstead's BEDS are not written
+## tiles, so nothing ever cleared them, and a farmer tilling one can clear
+## the ground cover but has no axe -- reported in play with the fence in
+## shot: *"the Farmhouse should clear trees in its bed enclosure"*.
+##
+## Grouped by chunk so a field spanning two of them is one sweep each rather
+## than one per cell, and silent about cells in chunks that are not loaded:
+## a village only ever clears ground it is standing on.
+##
+## Nothing is credited for the timber. A village clearing its own founding
+## site is scene setting, not a harvest -- exactly as it already is for a
+## house's footprint.
+func clear_vegetation_at_global(cells: Array) -> void:
+	if cells.is_empty():
+		return
+	var by_chunk: Dictionary = {}
+	for cell in cells:
+		var global_cell: Vector2i = cell
+		var chunk_coord := _chunk_coord_for_tile(global_cell)
+		if not by_chunk.has(chunk_coord):
+			by_chunk[chunk_coord] = {}
+		by_chunk[chunk_coord][global_cell] = true
+	for chunk_coord in by_chunk:
+		var chunk: Chunk = _loaded_chunks.get(chunk_coord)
+		if chunk == null:
+			continue
+		_clear_vegetation_on_cells(chunk_coord, chunk, by_chunk[chunk_coord])
+
+
 func _clear_vegetation_on_cells(
 	chunk_coord: Vector2i, chunk: Chunk, occupied_global_cells: Dictionary
 ) -> void:
@@ -14093,6 +14601,29 @@ const SETTLEMENT_STRUCTURE_SCAN_RADIUS_TILES := CHUNK_SIZE / 2
 ## construction.md's "Deciding what to build, and who builds it" section),
 ## derived the SAME has_structure_near chunk-scan style every other real
 ## structure-presence check in this file already uses.
+## The distinct BUILDING ids standing in this chunk, read straight off its
+## own building records.
+##
+## Deliberately NOT _present_structure_ids_for_settlement_chunk below, which
+## asks has_structure_near once per placeable id in the catalog -- and
+## has_structure_near walks every modification of NINE chunks, which means
+## every road tile, rail and wall a village has ever laid. That is affordable
+## for a build decision taken occasionally. It is not affordable for every
+## settlement on every step, which is where the stock ceiling runs, and it
+## gets steadily worse as a world fills in and villages pave more of
+## themselves. Reported live as the frame rate decaying over time.
+func _standing_building_ids_in_chunk(chunk_coord: Vector2i) -> Array:
+	var chunk: Chunk = _loaded_chunks.get(chunk_coord)
+	if chunk == null:
+		return []
+	var seen := {}
+	for origin_local in chunk.buildings:
+		var building_id: String = chunk.buildings[origin_local].get("id", "")
+		if building_id != "":
+			seen[building_id] = true
+	return seen.keys()
+
+
 func _present_structure_ids_for_settlement_chunk(chunk_coord: Vector2i) -> Array:
 	var center := chunk_coord * CHUNK_SIZE + Vector2i(CHUNK_SIZE / 2, CHUNK_SIZE / 2)
 	var present: Array = []
@@ -14862,6 +15393,18 @@ func structure_stock_at(global_x: int, global_y: int, item_id: String) -> int:
 	return _structure_stocks.stock_for(_structure_stock_key(global_x, global_y)).stock_of(item_id)
 
 
+## Everything waiting on the shelf of the structure at (global_x, global_y),
+## item_id -> count. A COPY, so a caller reading it cannot move the real
+## stock by writing to what it was shown.
+##
+## What a porter with no named item asks (LogisticsMarker._largest_load_
+## waiting_at): a village producer's shelf is not a fixed list, so a caller
+## that named its goods in advance would be inventing a catalogue that
+## drifts from what the buildings really hold.
+func structure_stock_contents_at(global_x: int, global_y: int) -> Dictionary:
+	return _structure_stocks.stock_for(_structure_stock_key(global_x, global_y)).stock.duplicate()
+
+
 ## Deposits `count` of `item_id` into the stock belonging to the structure at
 ## (global_x, global_y) -- a Logistics worker's DEPOSITING action (see
 ## LogisticsMarker), or a future production building crediting its own
@@ -15455,9 +15998,7 @@ func _load_chunk(chunk_coord: Vector2i) -> void:
 	_bee_colonies[chunk_coord] = BeeColony.new(
 		hash("%d_%d_bees" % [chunk_coord.x, chunk_coord.y]), chunk.width, chunk.height, chunk.biome,
 		func(local_cell: Vector2i) -> bool:
-			var global_tile: Vector2i = chunk_coord * CHUNK_SIZE + local_cell
-			var pixel := (Vector2(global_tile) + Vector2(0.5, 0.5)) * float(TerrainRenderer.TILE_SIZE)
-			return _has_real_hive_anchor(pixel, global_tile)
+			return _has_real_hive_anchor(chunk_coord * CHUNK_SIZE + local_cell)
 	)
 	var hive_markers: Dictionary = {}
 	for hive_cell in _bee_colonies[chunk_coord].hive_cells():
@@ -15548,6 +16089,11 @@ func _load_chunk(chunk_coord: Vector2i) -> void:
 		_creatures_parent, chunk_coord, chunk, chunk_coord * CHUNK_SIZE, TerrainRenderer.TILE_SIZE, self,
 		_fish_target_count(chunk_coord)
 	)
+	# Before the village is read: a village recorded as founded under an
+	# older, smaller roster takes the missing households in first, so what
+	# spawns is the village it would be founded as today (see
+	# settle_up_to_founding_roster).
+	settle_up_to_founding_roster(chunk_coord)
 	_loaded_villages[chunk_coord] = _village_renderer.spawn_village(
 		_creatures_parent,
 		chunk_coord,
@@ -15762,7 +16308,23 @@ func _apply_construction_labor_catchup(chunk_coord: Vector2i) -> void:
 ## seconds of real spare-capacity labor and places whatever completes --
 ## the one body both the reload catch-up above and the loaded-settlement
 ## step (_step_settlement_construction) share.
-func _advance_construction_labor(chunk_coord: Vector2i, elapsed: float) -> void:
+## `seconds_per_day` is how long a builder's day is in real seconds, and the
+## two callers of this one body genuinely disagree about it. The offscreen
+## catch-up integrates an ABSENCE at ChunkEcologyCatchup's own deliberately
+## conservative LOD rate (one in-game hour away is one day of progress); the
+## LIVE settlement step is a village the player is standing in front of, and
+## runs on the day the player lives in (SECONDS_PER_SIMULATED_DAY -- what
+## the ecosystem step, the day/night cycle and every colony already use).
+##
+## Measured with the old shared rate (tools/probe_village_growth.gd): a real
+## village grew from 10 households to 31 and raised TWO houses in the same
+## hour, so its people lived thirty-one to twelve roofs and the growth
+## ladder was a ladder nothing could climb. See docs/concept/village_growth.md's
+## "What a village is saving for" for the other half of that measurement.
+func _advance_construction_labor(
+	chunk_coord: Vector2i, elapsed: float,
+	seconds_per_day: float = REAL_SECONDS_PER_ECOLOGICAL_DAY
+) -> void:
 	if elapsed <= 0.0:
 		return
 	var settlement_id := EntityRef.for_settlement(chunk_coord)
@@ -15788,7 +16350,7 @@ func _advance_construction_labor(chunk_coord: Vector2i, elapsed: float) -> void:
 		if is_building and not _civic_site_is_clear(chunk_coord, project.origin, project.blueprint_id):
 			continue
 		var result: Dictionary = _construction_project_store.advance_project_labor(
-			project.id, elapsed, capacity, _recipe_book, _household_store
+			project.id, elapsed, capacity, _recipe_book, _household_store, seconds_per_day
 		)
 		if result.get("action", "") == "completed":
 			_place_completed_construction_project(project)
@@ -16209,6 +16771,14 @@ func _place_completed_construction_project(project) -> void:
 	# the real catalog building on its own plot, never that tile.
 	if BuildingCatalog.has_building(project.blueprint_id):
 		_place_completed_building_project(project)
+		return
+	# Pavement is a laid SURFACE, not a structure (docs/concept/
+	# planner_mode.md's "What can be planned"): the same road tile a village
+	# lays for its streets, through the same build_at_global that lays them,
+	# so anything already true of a street is true of a paved plan.
+	if TerrainRenderer.is_road_tile(project.blueprint_id):
+		var road_cell: Vector2i = project.chunk_coord * CHUNK_SIZE + project.origin
+		build_at_global(road_cell.x, road_cell.y, project.blueprint_id)
 		return
 	var output: Dictionary = _recipe_book.recipe_output(project.blueprint_id)
 	if output.is_empty():
@@ -16970,6 +17540,7 @@ func _unload_chunk(chunk_coord: Vector2i) -> void:
 			creature.free()
 	_loaded_creatures.erase(chunk_coord)
 
+	_free_pond_fish_markers(chunk_coord)
 	for fish in _loaded_fish.get(chunk_coord, []):
 		fish.free()
 	_loaded_fish.erase(chunk_coord)
@@ -17277,6 +17848,126 @@ func _restore_growing_juveniles(chunk_coord: Vector2i) -> void:
 			continue
 		creature.age_seconds = float(record["age_seconds"])
 		_loaded_creatures[chunk_coord].append(creature)
+
+
+## The chunk a global tile falls in. A public wrapper over the private
+## helper below rather than a second copy of the same floor division --
+## planner mode needs it to turn a clicked world cell into a
+## chunk+local-origin site (see BuildPlan), and duplicating the arithmetic
+## in World is exactly how two answers to one question drift apart.
+## Advances a player-commissioned build by real elapsed time, and completes
+## it when the hours are in.
+##
+## `builder_count` is how many people are working it -- the same capacity
+## shape ConstructionCatchup reads everywhere else (8 hours per builder per
+## in-game day), so a hired villager earns exactly what a settlement's own
+## spare hand does rather than on a private schedule.
+##
+## Worked in the GAME's own day (SECONDS_PER_SIMULATED_DAY), not the ecology
+## catch-up's LOD day. Measured (tools/probe_raised_build.gd): at the
+## catch-up rate a small house is 2.25 * 3600 = 8100 real seconds of one
+## builder's work, so a player standing at their own site, or one who has
+## just paid a villager's wage, watches nothing happen for two and a
+## quarter hours -- which is how "hiring a builder does not work" was
+## reported. A raised build is a thing the player is WATCHING, so it runs
+## on the clock the player lives in; the settlement's own construction and
+## the offscreen catch-up keep the rate they were tuned at (see
+## docs/concept/planner_mode.md for that divergence, stated rather than
+## silently reconciled).
+##
+## This is what docs/concept/building.md means by retiring the instant hire
+## fork: "a build the player cannot do themselves says that hiring returns
+## with construction-over-time". A hired house is not spawned; it is worked.
+##
+## And what the hours PRODUCE is the settlement ledger's own answer, not a
+## second one (docs/concept/planner_mode.md's "From raised to raised"): the
+## site rises through the same construction-row sprite a village's own
+## project draws, and finishing places the real building through the same
+## _place_completed_construction_project. Marking a row COMPLETE in a
+## ledger is bookkeeping, not construction -- this used to do only that,
+## so a raised build that "finished" left nothing standing.
+func advance_hired_build(project_id: String, elapsed_seconds: float, builder_count: float) -> Dictionary:
+	var project = _construction_project_store.get_project(project_id)
+	if project == null:
+		return {"action": "no_op"}
+	var result: Dictionary = _construction_project_store.advance_project_labor(
+		project_id, elapsed_seconds, {"builder_count": builder_count}, _recipe_book, _household_store,
+		SECONDS_PER_SIMULATED_DAY
+	)
+	match result.get("action", ""):
+		"completed":
+			_place_completed_construction_project(project)
+		"advanced":
+			if BuildingCatalog.has_building(project.blueprint_id):
+				_sync_construction_site(project.chunk_coord, project)
+	return result
+
+
+## Finishes a raised build outright, and places what it built.
+##
+## For work that asks for no labour hours at all (PlanRaising.is_laid_by_
+## hand -- pavement is not a recipe, so its requirement is genuinely zero):
+## advance_project_labor deliberately never completes a zero-hour
+## requirement, because otherwise an unknown blueprint id would complete
+## instantly and for free. So a zero-hour build is finished HERE instead,
+## the moment it is begun -- laid by hand, exactly like the earth tile the
+## player already places (docs/concept/planner_mode.md's "Work that is laid
+## by hand").
+##
+## Deliberately not a shortcut past the hours for anything else: the caller
+## is the one that asked is_laid_by_hand, and it only ever asks about work
+## that has none. False, no mutation, for an unknown project_id -- the same
+## contract complete_project itself carries.
+func finish_build_project(project_id: String) -> bool:
+	var project = _construction_project_store.get_project(project_id)
+	if project == null:
+		return false
+	if not _construction_project_store.complete_project(project_id, _household_store):
+		return false
+	_place_completed_construction_project(project)
+	return true
+
+
+## Opens (or returns) a real construction project for a site the PLAYER
+## chose, rather than one a settlement decided on its own.
+##
+## The same ConstructionProjectStore.start_project every village build
+## already goes through -- idempotent by site+blueprint, so raising a
+## wireframe twice does not reset the progress of the first. Exposed
+## because planner mode (docs/concept/planner_mode.md) lets a player raise
+## a plan, and a player-raised building must be the same kind of project a
+## villager-raised one is, not a parallel one.
+func start_build_project(
+	chunk_coord: Vector2i, origin: Vector2i, blueprint_id: String, household_id: String
+) -> ConstructionProject:
+	return _construction_project_store.start_project(chunk_coord, origin, blueprint_id, household_id)
+
+
+## The same project, already under way -- what RAISING a wireframe opens,
+## either way somebody pays for it (docs/concept/planner_mode.md's "From
+## raised to raised"): somebody is working it from the moment it is raised.
+## advance_project_labor only advances an IN_PROGRESS project, so a raised
+## build that stayed PLANNED would silently never progress -- which is
+## exactly what building it yourself used to do.
+func begin_build_project(
+	chunk_coord: Vector2i, origin: Vector2i, blueprint_id: String, household_id: String
+) -> ConstructionProject:
+	var project := start_build_project(chunk_coord, origin, blueprint_id, household_id)
+	project.status = ConstructionProject.Status.IN_PROGRESS
+	return project
+
+
+## The real labour hours a build of `blueprint_id` asks for -- off the SAME
+## recipe book the ledger derives its own requirement from, so a caller
+## deciding whether work is laid by hand (PlanRaising.is_laid_by_hand) and
+## the ledger deciding when it is finished can never disagree about how big
+## the job is.
+func build_labor_hours_for(blueprint_id: String) -> float:
+	return ConstructionLabor.labor_hours_required(blueprint_id, _recipe_book)
+
+
+func chunk_coord_for_tile(global_tile: Vector2i) -> Vector2i:
+	return _chunk_coord_for_tile(global_tile)
 
 
 func _chunk_coord_for_tile(global_tile: Vector2i) -> Vector2i:

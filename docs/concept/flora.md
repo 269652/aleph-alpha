@@ -1220,6 +1220,51 @@ before -- only *whether* an insect-pollinated tree gets to spread at
 all.
 
 
+## The loaded-tree registry holds corpses
+
+`EarthChunkManager._loaded_trees` maps a chunk to the tree nodes currently
+in it, and **a felled tree stays in that array after it frees itself.**
+`ChoppableTree` calls `queue_free()` on its last cut without telling the
+registry, so from the registry's point of view a chopped tree becomes a
+corpse in place: a slot holding a freed Object.
+
+That is by design — felling happens in the tree, and a chopped tree is the
+common case, not an error. What it means is that **every walk of
+`_loaded_trees` has to expect a dead entry**, and the cost of forgetting is
+not a stray log line:
+
+| What the walk touches first | What a freed entry does |
+| --- | --- |
+| `"planted_at" in tree` | `Invalid Object base for 'in'` |
+| `tree.position` | `Invalid access to property ... on a previously freed` |
+| `tree.has_method(...)` | takes the process down |
+| a typed `node: Node` parameter | fails the type check at the CALL, before the body's own guard can run (see `_append_if_near`) |
+
+In every one of those cases the error **aborts the enclosing walk**, so
+every tree after the corpse in the array is silently skipped. A forest can
+therefore go unreported, a whole chunk of saplings can stop growing, and
+creatures can walk through standing trees — all from one chopped trunk near
+the front of the array. Reported in play as *"tons of errors saying
+'Invalid Object base for in'"*.
+
+So the rule is two-part:
+
+- **Every walk guards.** `if not is_instance_valid(tree): continue`, before
+  touching anything on the node — and never behind a typed parameter that
+  would reject the corpse first.
+- **One walk prunes.** `step_tree_growth` visits every loaded tree every
+  tick regardless, so it rebuilds each chunk's array from the survivors it
+  found. Without that a chunk that is never unloaded accumulates one dead
+  entry per tree ever felled there, and every other walk pays a validity
+  check for each one forever.
+
+A note on why the guard has to be `is_instance_valid` and not a null check
+*for this registry specifically*: in Godot 4.7.2 a freed Object does compare
+equal to `null`, so `node == null` is genuinely enough where it is already
+written (`SettlementFood.village_market_for`, `Player._mount_fitness_score`).
+The tree walks simply had no check of either kind.
+
+
 ## Illustrated trees
 
 A tree is composited from three separate pieces of art rather than drawn as

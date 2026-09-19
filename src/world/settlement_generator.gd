@@ -15,9 +15,13 @@ extends RefCounted
 ## roughly on the anchor. This module only decides WHERE that anchor sits,
 ## not what gets built there.
 
+const VillageFarm = preload("res://src/gameplay/village_farm.gd")
+const SettlementFoodDemand = preload("res://src/emergence/settlement_food_demand.gd")
 const NpcIdentity = preload("res://src/world/npc_identity.gd")
 const VillageLayout = preload("res://src/world/village_layout.gd")
 const BuildingCatalog = preload("res://src/gameplay/building_catalog.gd")
+const VillageCart = preload("res://src/gameplay/village_cart.gd")
+const VillageSawmill = preload("res://src/gameplay/village_sawmill.gd")
 
 ## The FOUNDING roster: how many villagers a settlement is founded with.
 ## Not a ceiling -- docs/concept/village_growth.md's own arrivals mechanism
@@ -26,7 +30,19 @@ const BuildingCatalog = preload("res://src/gameplay/building_catalog.gd")
 ## newcomers are generated too. Villager `i` is keyed to index `i` whatever
 ## the population is, so growing a village never shifts who its founders
 ## are (test-pinned, test_settlement_generator.gd).
-const POPULATION := 5
+##
+## Ten, asked for directly: *"please increase the village sizes from 5
+## houses to 10 initial and then it should grow by itself; adding new
+## houses new trades"*. The second half is a constraint on the first --
+## VillageGrowth's ladder is spaced in founding rosters so that a village
+## founded at this size still has trades left to grow into, rather than
+## being founded already owing itself every rung (test-pinned,
+## test_village_growth.gd).
+const POPULATION := 10
+
+## Which food trades exist, how many of them a village needs and which one
+## its land feeds it with all live in SettlementFoodDemand -- this module only
+## applies the answer to the roster.
 
 ## Roughly 1-in-this-many habitable chunks hosts a settlement -- sparse, so
 ## villages read as discoverable landmarks rather than carpeting the map.
@@ -75,9 +91,14 @@ func has_settlement_at(chunk_coord: Vector2i, dominant_biome: String) -> bool:
 ## settlement's REAL household count (VillageRenderer, off
 ## EarthChunkManager.household_count_for_settlement) passes that instead,
 ## so a village that has taken households in generates them too.
+## `region` is what the village's own land is standing on -- anything
+## exposing NpcProduction's three world accessors (the live world, or a
+## SettlementGranary.SeededRegion). It decides which food trade the roster
+## is staffed with; omitting it falls back to farming, so every caller that
+## predates this keeps a roster it can still feed.
 func generate_settlement(
 	chunk_coord: Vector2i, chunk_origin_tiles: Vector2i, chunk_size: int, tile_size: int,
-	population: int = POPULATION, is_dry := Callable()
+	population: int = POPULATION, is_dry := Callable(), region = null
 ) -> Dictionary:
 	# The well, stall and gate stand where the village's own street plan
 	# puts them -- on the plaza, at the street's entrance (see
@@ -105,7 +126,135 @@ func generate_settlement(
 		npcs.append(NpcIdentity.new(seed_value))
 		house_positions.append(_house_position(chunk_coord, center_pos, tile_size, i))
 
+	_staff_food_producers(npcs, region)
+	_staff_the_carter(npcs)
+	_staff_the_sawyer(npcs)
+
 	return {"house_positions": house_positions, "landmarks": landmarks, "npcs": npcs}
+
+
+## Staffs this roster with as many food producers as the village's own
+## DEMAND asks for, in the trade its own LAND feeds it with.
+##
+## Asked for directly: *"Make it driven by demand."* What this replaced was
+## "if nobody in this roster farms, make the last one a farmer" -- exactly
+## one food producer, whatever the village's size and whatever it was
+## standing on. That rule came from a real report ("No Farmhouses":
+## occupations are drawn uniformly from nine, so five villagers missed both
+## farmer and herbalist in two of three founded villages) and it fixed that,
+## but it could not grow with a village and it could not tell a lakeside
+## from a meadow.
+##
+## Both halves are SettlementFoodDemand's, and neither could be written until
+## the food model's two sides had been measured against each other -- see
+## docs/concept/settlement_food_calibration.md, which is also where the
+## honest gaps live.
+##
+## Conscription comes off the END of the roster and only takes villagers who
+## are not already feeding the village, so it is deterministic per chunk and
+## leaves the earlier founders exactly as they rolled.
+static func _staff_food_producers(npcs: Array, region) -> void:
+	if npcs.is_empty():
+		return
+	var needed := SettlementFoodDemand.producers_needed(npcs.size())
+	var have := 0
+	for npc in npcs:
+		if SettlementFoodDemand.FOOD_TRADES.has(npc.occupation):
+			have += 1
+	if have >= needed:
+		return
+	var trade := SettlementFoodDemand.trade_for(region)
+	var index: int = npcs.size() - 1
+	while have < needed and index >= 0:
+		if not SettlementFoodDemand.FOOD_TRADES.has(npcs[index].occupation):
+			npcs[index] = NpcIdentity.new(npcs[index].seed_value, trade)
+			have += 1
+		index -= 1
+
+
+## Makes sure this village has somebody to cart, if nobody rolled it
+## (docs/concept/village_warehouse.md, Mechanism 4).
+##
+## Reported live with the empty store in shot: *"the warehouse stays
+## empty"*. Hauling is a trade now, and unlike the mill -- which only stands
+## where there is timber -- a STORE stands in every village from founding.
+## A village with a store and nobody to walk its round is a village whose
+## producers keep their own output for ever.
+##
+## Measured before this existed (tools/probe_carter_rosters.gd, over the 75
+## real grassland villages in rows 0-5): 7 of them, 9.3%, had nobody to cart
+## at all. Exactly the shape of the "No Farmhouses" report that
+## _staff_food_producers above answers, so this answers it the same way:
+## ONE villager, taken off the END of the roster and only from somebody the
+## village's food demand has not already claimed, so the founders are left
+## exactly as they rolled and a village never goes hungry for its wagon.
+##
+## Deliberately after _staff_food_producers, not before: food outranks
+## logistics when a small roster cannot staff both.
+static func _staff_the_carter(npcs: Array) -> void:
+	if npcs.is_empty():
+		return
+	# Scoped to the FOUNDING roster on both halves -- who is looked for and
+	# who is taken. Asking the whole grown roster instead would let a
+	# newcomer who happened to roll carter call off a conscription the
+	# founding ten had already made, handing that founder their old trade
+	# back on the village's next visit.
+	var founders: int = mini(npcs.size(), POPULATION)
+	for i in founders:
+		if VillageCart.walks_the_round(npcs[i].occupation):
+			return
+	# Off the end of the FOUNDING roster, not the end of the current one: a
+	# village that has grown must not hand the wagon to a newcomer and give
+	# the old carter their rolled trade back. Growth is additive here, and
+	# founders keep who they are (test_growing_never_changes_who_the_
+	# founders_are pins exactly that).
+	var index: int = founders - 1
+	while index >= 0:
+		if not SettlementFoodDemand.FOOD_TRADES.has(npcs[index].occupation):
+			npcs[index] = NpcIdentity.new(npcs[index].seed_value, VillageCart.OCCUPATION)
+			return
+		index -= 1
+
+
+## Makes sure this village has somebody to work timber, if nobody rolled it
+## (docs/concept/village_timber.md, "Somebody in the village has the trade").
+##
+## Reported in play with the mill's own panel in shot: *"The sawmill also
+## doesn't produce beams or plangs or logs"*. A mill with nobody whose trade
+## is timber produces exactly nothing -- the very report this trade was added
+## for, back when the occupations were nine, returning quietly when a tenth
+## was added: a trade is rolled by index, so `carter` re-rolled every
+## villager, and _staff_the_carter above takes one off the end of the roster
+## who may well have been the only sawyer.
+##
+## Measured before this existed (tools/probe_trades_after_conscription.gd,
+## the 75 real grassland villages in rows 0-5): 14 of them, 18.7%, had nobody
+## to work a mill.
+##
+## Deliberately LAST of the three, and it will not take a food producer or
+## the carter the two calls above just placed: food outranks logistics, and
+## logistics outranks timber, when a small roster cannot staff all three.
+##
+## A sawyer in a village with no timber in reach is not wasted -- they keep
+## the regional drip every villager without a worksite already lives on, the
+## same honest fallback a farmer with no farmhouse has.
+static func _staff_the_sawyer(npcs: Array) -> void:
+	if npcs.is_empty():
+		return
+	var founders: int = mini(npcs.size(), POPULATION)
+	for i in founders:
+		if VillageSawmill.works_timber(npcs[i].occupation):
+			return
+	var index: int = founders - 1
+	while index >= 0:
+		var occupation: String = npcs[index].occupation
+		if (
+			not SettlementFoodDemand.FOOD_TRADES.has(occupation)
+			and not VillageCart.walks_the_round(occupation)
+		):
+			npcs[index] = NpcIdentity.new(npcs[index].seed_value, VillageSawmill.OCCUPATION)
+			return
+		index -= 1
 
 
 ## A ring position with a small deterministic per-house radius/angle jitter

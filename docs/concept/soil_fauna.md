@@ -4574,6 +4574,56 @@ the GPU is no longer a wall at any river, and the frame no longer has a
 part that was being called noise. The path is now the creature step
 costs, and it is measured per class per step.
 
+### FPS regression round 17: reported again, and chunk churn ruled out (2026-09-17)
+
+Reported immediately after 0.0.2, in the same words round 16 answered:
+*"FPS cripples to 15 over time"*, then *"It starts at 60-100 fps but than
+falls down to 15 over time"*. Round 16 landed the same day and made the
+event-history axis flat, so this is either that class on a new axis or
+something else.
+
+**First measurement: it is not nodes left behind by chunk churn.**
+`tools/probe_chunk_leak.gd` walks a 3x3 ring of chunks in and out six
+times, centred on lat 48.1 lon 9.6 (the coordinates in the report), and
+counts the real descendants of the entity and creature parents by walking
+the tree:
+
+| lap | after load | after unload | chunks still loaded |
+| --- | --- | --- | --- |
+| 0-5 | entities 4209, creatures 277 | entities 0, creatures 0 | 0 |
+
+Flat, and flat in the way that means something: the two columns differ, so
+the instrument demonstrably responds to state.
+
+**A false all-clear caught on the way, worth recording.** The probe first
+read `Performance.get_monitor` and returned six byte-identical lines
+(`objects=13619 orphans=80 320.2MB`), which reads exactly like "no leak".
+Those monitors only refresh on a frame boundary and a `-s` script never
+yields one, so it was one stale snapshot printed six times. `nodes=0` was
+the tell. Anything measuring a tool script this way is measuring nothing.
+
+**What this rules out, and what it does not.** Ruled out: node accumulation
+from loading and unloading chunks. NOT covered: a simulation running over
+time (events accruing, settlements being recorded, villages growing), the
+scheduler adopting and parking markers as the player walks, or
+`step_settlements`/`step_regional_trade` across many ticks. The next
+measurement is a `--perf-report` pair from a real session -- one line at a
+fresh start, one once degraded -- which is how rounds 13-16 were each
+pinned down.
+
+**One new instance of the round-14 shape was found and fixed** along the
+way, introduced by this pass rather than by the simulation:
+`village_warehouse.md` mechanism 2 put `_present_structure_ids_for_
+settlement_chunk` on the per-settlement, per-step path, and that asks
+`has_structure_near` once per placeable id in the catalog while
+`has_structure_near` walks every modification of nine chunks -- every road
+tile and rail a village has ever laid. Work proportional to everything that
+has ever happened, again. It now reads the chunk's own building records.
+The same block also clamped every UNLOADED settlement's market to a
+household's corners, because the structure scan answers "nothing stands
+here" for a chunk that is not loaded.
+
+
 ### FPS regression round 16: the same shape as round 14, one index over (2026-09-17)
 
 "At a fresh start FPS is 60-100 but when running the game for a while it

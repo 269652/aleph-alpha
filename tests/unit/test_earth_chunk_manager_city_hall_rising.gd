@@ -314,3 +314,47 @@ func test_the_direct_builder_gate_measures_to_the_halls_footprint():
 	assert_true(manager.has_structure_near(beside.x, beside.y, "city_hall", 1))
 	var far := _global(_civic_origin + Vector2i(BuildingCatalog.footprint_of("city_hall").x + 2, 1))
 	assert_false(manager.has_structure_near(far.x, far.y, "city_hall", 1))
+
+
+# -- a village the player is watching builds on the clock they live in ------
+# Measured (tools/probe_village_growth.gd): a real village grew from 10
+# households to 31 while raising two houses, because its LIVE construction
+# was integrated in ConstructionCatchup's own day -- the deliberately
+# conservative rate for advancing an UNLOADED chunk across an absence, and
+# sixty times the day the player actually lives in. A village standing in
+# front of the player is not an absence.
+
+const ConstructionCatchup = preload("res://src/world/construction_catchup.gd")
+const ConstructionLabor = preload("res://src/emergence/construction_labor.gd")
+
+
+func test_a_loaded_village_builds_on_the_games_own_day():
+	_stock_the_hall()
+	manager._apply_civic_build_decision(_chunk_coord)
+	var project = _hall_project()
+	assert_not_null(project, "precondition: the hall really was started")
+
+	manager._step_settlement_construction(
+		_settlement_id, manager._households_in_settlement(_settlement_id)
+	)
+
+	# One settlement step of one builder is this many hours on each clock.
+	# Read off both rates rather than typed in, so neither can drift.
+	var step: float = EarthChunkManager.SETTLEMENT_STEP_INTERVAL
+	var on_the_games_day := step / EarthChunkManager.SECONDS_PER_SIMULATED_DAY * ConstructionCatchup.HOURS_PER_BUILDER_PER_DAY
+	var on_the_catchup_day := step / ConstructionCatchup.SECONDS_PER_DAY * ConstructionCatchup.HOURS_PER_BUILDER_PER_DAY
+	# At least ONE builder's worth on the game's day. The village's real crew
+	# is several, so on the catch-up day the same step earns a small fraction
+	# of one builder-day and lands far below this -- which is exactly the
+	# difference being pinned, and why the comparison is against one builder
+	# rather than against the crew (whose size these tests do not fix).
+	assert_gte(
+		project.labor_hours_accumulated, on_the_games_day,
+		"a village in front of the player is not an absence to be integrated over"
+	)
+	assert_gt(on_the_games_day, on_the_catchup_day, "the premise: the two clocks really differ")
+	assert_lte(
+		project.labor_hours_accumulated,
+		on_the_games_day * float(maxi(manager._households_in_settlement(_settlement_id).size(), 1)) + 0.001,
+		"and no faster than its own real crew on that day"
+	)

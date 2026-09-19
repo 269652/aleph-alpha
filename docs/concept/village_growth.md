@@ -292,6 +292,89 @@ scheme village and player houses already share), and opens a panel showing:
 Clicking empty ground, or a building no household owns, closes the panel.
 The panel reads; it never writes.
 
+## Mechanism 6 — `/village` lands you in a village that is really there
+
+Reported in play, twice. First *"It teleports me to where no village is"*,
+which earned the layout pre-check `_village_would_settle`; then, with the
+console still on screen and nothing but grass and flowers around,
+*"/village teleports me to an empty field..."*.
+
+The pre-check is a **prediction**: it re-derives the roster and the layout
+for a candidate chunk and asks whether every house would fit. It is careful,
+it is strictly stricter than the founding itself (which settles if even one
+house fits), and it is still a prediction — it never looks at what is
+actually standing on the ground, because it deliberately loads nothing.
+
+A dev command that says *"Teleported to the nearest village"* is making a
+claim about the world. So it checks the world:
+
+- **The candidate chunk is LOADED and looked at.** Only for chunks that
+  already passed the settlement roll (one in
+  `SETTLEMENT_CHANCE_DENOMINATOR`) *and* the layout pre-check, so the ring
+  search still pays for terrain rarely rather than per chunk — and the
+  player is about to go there anyway.
+- **A chunk with no buildings standing in it is not a village**, whatever
+  the prediction said. The search moves on to the next ring.
+- **A chunk that was not loaded before is unloaded again** if its village
+  turns out not to stand, so a rejected candidate leaves nothing behind.
+- **The destination is a real building's doorstep**, not the planned well.
+  The well comes out of `VillageLayout.skeleton`, which is a plan; a
+  doorstep is a cell a building really has, so you land where you can see
+  the village rather than where one was drawn.
+- **"No village standing within N chunks" is an honest answer** rather than
+  the absence of one: it means the search really looked and really found
+  nothing standing.
+- **It says what it found.** Reported a third time, with the verification
+  already in — *"It still teleports me to the same empty spot"* — and a line
+  that only claims success leaves a player no way to tell WHICH thing is
+  wrong: the wrong chunk, no buildings recorded, or buildings recorded that
+  nothing then drew. So `/village` names the chunk it landed you in and how
+  many buildings are standing there (`VillageFinder.teleport_report`). Zero
+  is spelled out rather than counted, because a village with nothing in it
+  is the bug being hunted, not a detail.
+
+The prediction stays in front of the load, as the cheap filter it is good
+at being. What changed is that it no longer gets the last word.
+
+## What a village is saving for
+
+A village that owes itself a building is **saving for it**, and nothing else
+in the village may spend that material first.
+
+This is one rule with two callers, and without it the ladder cannot be
+climbed at all. `SettlementGathering` is the only thing in the game that
+puts wood, stone or plant fibre into a settlement's market. Two things then
+take it away again before the ladder ever sees it:
+
+- **The traveling merchant** buys `wood` (it is on his buy list), so the
+  timber a village cut for its own next house left on the next cart. See
+  [traveling_merchants.md](traveling_merchants.md)'s "Surplus, not stock".
+- **The village's own production step** runs each household's
+  occupation recipe against the market every step, and the sawyer's
+  `log_to_balken` turns 3 wood into 1 beam. A village therefore sawed its
+  construction timber into beams the moment it had three of them — and the
+  merchant, whose cart fills with the dearest goods first, carried the
+  beams off too.
+
+Measured on a real loaded village (`tools/probe_village_growth.gd`): its
+stone climbed steadily past 50 while its wood never once got past 2, its
+`house_small` project sat `PLANNED` with nothing reserved for the whole
+run, and a village that grew from 10 households to 31 built **not one
+house** for any of them. That is the emptiness reported from play as *"the
+warehouse stays empty"*, and the reason a village that grows by itself
+still looked frozen.
+
+So both callers ask the same question first: what does this village's own
+next building need? That reserve is read from the same
+`VillageGrowth.next_building` this ladder walks and the same
+`CraftingRecipeBook` inputs the building is priced in — never a second list
+of protected goods, which would drift from what a village is actually
+saving for. Stock above the reserve is surplus: sell it, saw it, spend it.
+Stock at or below it belongs to the building.
+
+A village that owes itself nothing reserves nothing and behaves exactly as
+it did before.
+
 ## Status
 
 Implemented 2026-09-16, TDD red-first throughout. See

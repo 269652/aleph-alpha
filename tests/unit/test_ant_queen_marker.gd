@@ -21,7 +21,13 @@ func test_the_refresh_comes_from_a_timer_not_from_engine_frames():
 	var timer := marker.get_node_or_null("TickTimer") as Timer
 	assert_not_null(timer)
 	assert_almost_eq(timer.wait_time, AntQueenMarker.REFRESH_INTERVAL_SECONDS, 0.0001)
-	assert_true(timer.autostart)
+	# is_stopped(), not autostart: Godot's own Timer CLEARS autostart the
+	# moment it acts on it (NOTIFICATION_READY starts the timer and sets
+	# autostart false), so reading it back from a marker already in the tree
+	# can only ever be false. Asserting the timer is genuinely RUNNING is
+	# what this line was always trying to say, and it is true of the real
+	# marker either way.
+	assert_false(timer.is_stopped(), "running the moment the marker is in the tree")
 	assert_false(timer.one_shot)
 
 

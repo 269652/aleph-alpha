@@ -69,11 +69,15 @@ const CARRION := "carrion"
 const COMPANY := "company"  # another villager, near enough to talk to
 const MARKET := "market"  # where food is bought: the stall, or the square
 const HOME := "home"  # this villager's own house
+## The village's store, as the door a loaded villager walks to (see
+## docs/concept/village_warehouse.md). Named after the building it is, the
+## same way MARKET is named after the stall.
+const WAREHOUSE := "warehouse"
 
 const SMELL_CHANNELS: Array[String] = [SUGAR, DECAY, GREEN, MUSK, SMOKE]
 const CHANNELS: Array[String] = [
 	SUGAR, DECAY, GREEN, MUSK, SMOKE, PREDATOR, PLAYER, FLESH, FORAGE, WATER, MATE, CARRION,
-	COMPANY, MARKET, HOME,
+	COMPANY, MARKET, HOME, WAREHOUSE,
 ]
 
 # -- drives ------------------------------------------------------------------
@@ -89,6 +93,13 @@ const DRIVE_COURTSHIP := "courtship"
 ## channels are: one basis, one kernel, one set of names.
 const DRIVE_REST := "rest"
 const DRIVE_COMPANY := "company"
+## The odd one out, and deliberately: what a villager is CARRYING (docs/
+## concept/village_warehouse.md mechanism 3). Every other drive here rises
+## on the Drives clock from a profile entry; this one has no profile entry
+## anywhere, because a load is not something that accrues while you stand
+## still. Whoever is holding the sack reports it -- NpcEconomy.burden() --
+## and the gate is a step, not a ramp: a half load is not an errand.
+const DRIVE_BURDEN := "burden"
 
 ## Below this score an animal is not interested enough in a smell to cross a
 ## field for it (ScentForaging's MIN_INTEREST, now the smell wiring's floor).
@@ -238,8 +249,8 @@ const BODY_PLANS := {
 			# these are flat: what matters is that each channel is expressed
 			# at all (so a wiring can listen on it) and that everything a
 			# villager walks toward really draws them.
-			"sensitivity": {COMPANY: 1.0, MARKET: 1.0, HOME: 1.0, WATER: 1.0},
-			"valence": {COMPANY: 1.0, MARKET: 1.0, HOME: 1.0, WATER: 1.0},
+			"sensitivity": {COMPANY: 1.0, MARKET: 1.0, HOME: 1.0, WATER: 1.0, WAREHOUSE: 1.0},
+			"valence": {COMPANY: 1.0, MARKET: 1.0, HOME: 1.0, WATER: 1.0, WAREHOUSE: 1.0},
 		},
 		"drives": {
 			# Unchanged, and deliberately so: a whole famine chain hangs off
@@ -278,6 +289,13 @@ const BODY_PLANS := {
 			{"gate": DRIVE_HUNGER, "channels": [MARKET], "approach": "eat"},
 			{"gate": DRIVE_THIRST, "channels": [WATER], "approach": "drink"},
 			{"gate": DRIVE_REST, "channels": [HOME], "approach": "rest"},
+			# Under every survival need and over company: a villager does not
+			# starve holding a sack, and does not stop for a chat with one. The
+			# one gate here with no clock behind it -- see DRIVE_BURDEN, and
+			# note there is deliberately no `drives` entry for it above, which
+			# is what keeps Drives from raising a load on a timer and sending an
+			# empty-handed villager to the store.
+			{"gate": DRIVE_BURDEN, "channels": [WAREHOUSE], "approach": "haul"},
 			{"gate": DRIVE_COMPANY, "channels": [COMPANY], "approach": "socialize"},
 		],
 	},

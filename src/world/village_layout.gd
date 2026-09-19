@@ -98,6 +98,12 @@ const PLAZA_WIDTH_TILES := 8
 const PLAZA_ROWS_NORTH := 3
 const PLAZA_ROWS_SOUTH := 2
 const CIVIC_BUILDING_ID := "city_hall"
+## The store every village keeps, reserved beside the square and raised at
+## founding (docs/concept/village_warehouse.md). Its own plot rather than
+## one of `plots`, for the same reason the hall has one: those carry a
+## building_index the renderer uses to look up npcs[i] for a resident, and
+## nobody lives in a warehouse.
+const WAREHOUSE_BUILDING_ID := "warehouse"
 ## The first house stands this many cells east of the gate, so no doorstep
 ## ever lands on the gate cell itself and the entrance reads as an entrance.
 const _GATE_CLEARANCE_TILES := 2
@@ -232,6 +238,30 @@ static func skeleton(chunk_size: int, seed_value: int, is_dry := Callable()) -> 
 		"origin": civic_origin, "building_id": CIVIC_BUILDING_ID,
 		"doorstep": civic_origin + BuildingCatalog.doorstep_of(CIVIC_BUILDING_ID),
 	}
+	# The store stands on the street's north side, immediately east of the
+	# square: the same rows as the hall (PLAZA_ROWS_NORTH is exactly a
+	# building's depth here), so its own south edge is the street and its
+	# door opens onto it like every other door in the village. Beside the
+	# plaza rather than inside it because the square is PLAZA_WIDTH_TILES
+	# wide and the hall already takes four of those from the middle --
+	# there is no four-wide gap left in it.
+	var warehouse_footprint := BuildingCatalog.footprint_of(WAREHOUSE_BUILDING_ID)
+	var warehouse_origin := Vector2i(plaza.end.x, street_y - warehouse_footprint.y)
+	# ...or west of the square, when east would hang off the chunk. Checked
+	# against the chunk rather than assumed: the plaza's own x is seed-
+	# jittered (see _START_JITTER_TILES), so how much room is left beside it
+	# genuinely varies village to village.
+	if warehouse_origin.x + warehouse_footprint.x > chunk_size:
+		warehouse_origin = Vector2i(plaza.position.x - warehouse_footprint.x, warehouse_origin.y)
+	var warehouse_plot := {}
+	if warehouse_origin.x >= 0 and warehouse_origin.y >= 0:
+		warehouse_plot = {
+			"origin": warehouse_origin,
+			"building_id": WAREHOUSE_BUILDING_ID,
+			"doorstep": warehouse_origin + BuildingCatalog.doorstep_of(WAREHOUSE_BUILDING_ID),
+			"facing": Vector2i(0, 1),
+		}
+
 	# Well and stall on the plaza's south half, clear of the street row (so
 	# they never block the hall's door) and of each other.
 	var landmarks := {
@@ -241,16 +271,102 @@ static func skeleton(chunk_size: int, seed_value: int, is_dry := Callable()) -> 
 	}
 	return {
 		"street_y": street_y, "street_x0": street_x0, "street_x1": street_x1,
-		"plaza": plaza, "civic_plot": civic_plot, "landmarks": landmarks,
+		"plaza": plaza, "civic_plot": civic_plot, "warehouse_plot": warehouse_plot,
+		"landmarks": landmarks,
 	}
 
 
+## How far apart two market stands are pitched along the square's south row
+## -- one clear cell between them, so a shopper can walk between two stalls
+## and two stands never read as one long counter. Pinned by
+## test_no_two_market_stands_share_a_cell_or_touch.
+const MARKET_STAND_PITCH_TILES := 2
+
+
+## Where this village's market stands stand: cells OF the square, west from
+## the square's own stall along its southern row.
+##
+## Reported live with a stand in shot out in the meadow: "the market stands
+## should only be put up when an NPC stands behind them to sell goods ...
+## also the stand should clear long grass around it and be placed on the
+## plaza anyways". A merchant's personal stand used to be pitched two tiles
+## south of that merchant's own front door, which is not a market -- and
+## nobody ever stood behind it either, because NpcMarker._resolve_location
+## sends every merchant to landmarks["stall"], the square's single stall. A
+## market is where the market is.
+##
+## The square's own stall is always the FIRST of them, so the one canonical
+## trading spot a schedule, a quest or a dialogue can name by tag is a real
+## stand somebody works, rather than a fourth thing standing beside three
+## others.
+##
+## Returns what FITS, which may be fewer than asked for -- a village with
+## more merchants than its square has room for leaves the rest trading at
+## the square's own stall, the same honest shortfall VillageRenderer already
+## accepts for a village with more farmers than farmhouse plots. A village
+## whose square never got laid (nowhere dry for one, see plaza_x0_for) has
+## nowhere to pitch a market at all and gets none, rather than stands in the
+## river.
+##
+## Pure and seedless: the square already IS a seeded function of the chunk,
+## so nothing about a market needs persisting to come back identically.
+static func market_stand_cells(skeleton: Dictionary, count: int) -> Array:
+	if count <= 0 or not skeleton.has("plaza") or not skeleton.has("landmarks"):
+		return []
+	var plaza: Rect2i = skeleton["plaza"]
+	if not plaza.has_area():
+		return []
+	var landmarks: Dictionary = skeleton["landmarks"]
+	if not landmarks.has("stall"):
+		return []
+	var first: Vector2i = landmarks["stall"]
+	if not plaza.has_point(first):
+		return []
+	var well = landmarks.get("well", null)
+	var cells: Array = []
+	var x := first.x
+	while cells.size() < count and x >= plaza.position.x:
+		var cell := Vector2i(x, first.y)
+		# The well is on the square too, and a stall pitched in it would be
+		# a stall in the water.
+		if cell != well:
+			cells.append(cell)
+		x -= MARKET_STAND_PITCH_TILES
+	return cells
+
+
+## The village plan for this chunk.
+##
+## Two passes, and the second one matters: the store's reserved plot sits on
+## prime ground beside the square, which is ground a house might have needed.
+## On a cramped site, claiming it can tip the layout from "houses everyone"
+## to "houses all but one" -- and a site that cannot house its whole roster
+## is founded NOWHERE (see VillageRenderer._place_new_village). Reserving a
+## warehouse would then have quietly deleted villages from the world, which
+## is a far worse outcome than a village without a store. Caught by
+## test_a_building_already_occupying_ground_keeps_later_ones_off_it, which
+## founded nothing the moment this reservation was added.
+##
+## So: prefer the store, but never at the cost of the village. A roomy site
+## gets both; a cramped one houses its people and goes without. See
+## docs/concept/village_warehouse.md's own pillar 1 for the honest caveat
+## this puts on "always".
 func layout(
 	building_ids: Array, chunk_size: int, seed_value: int, is_buildable: Callable, is_occupied: Callable
 ) -> Dictionary:
+	var planned := _layout_once(building_ids, chunk_size, seed_value, is_buildable, is_occupied, true)
+	if houses_everyone(planned, building_ids):
+		return planned
+	return _layout_once(building_ids, chunk_size, seed_value, is_buildable, is_occupied, false)
+
+
+func _layout_once(
+	building_ids: Array, chunk_size: int, seed_value: int, is_buildable: Callable, is_occupied: Callable,
+	reserve_warehouse: bool
+) -> Dictionary:
 	if building_ids.is_empty():
 		var no_roads: Array[Vector2i] = []
-		return {"plots": [], "road_cells": no_roads, "plaza": Rect2i(), "civic_plot": {}, "landmarks": {}}
+		return {"plots": [], "road_cells": no_roads, "plaza": Rect2i(), "civic_plot": {}, "warehouse_plot": {}, "landmarks": {}}
 
 	# VillageRenderer's own is_buildable IS the water test (see
 	# VillageRenderer._is_buildable_local: a village fells the trees it
@@ -290,6 +406,23 @@ func layout(
 	else:
 		plaza = Rect2i()
 
+	# The store's cells are claimed right after the square's, and for the
+	# same reason: `claimed` is what stops a later house plot taking ground
+	# this village has already spoken for. Dropped, rather than moved, if
+	# the ground beside the square will not take it -- a village with
+	# nowhere to put a store honestly has none, the same way a village whose
+	# centre is water gets no plaza and so no hall.
+	var warehouse_plot: Dictionary = bones["warehouse_plot"] if reserve_warehouse else {}
+	if not warehouse_plot.is_empty():
+		var warehouse_cells := _rect_cells(
+			Rect2i(warehouse_plot["origin"], BuildingCatalog.footprint_of(WAREHOUSE_BUILDING_ID))
+		)
+		if _every_cell_clear(warehouse_cells, chunk_size, is_buildable, is_occupied):
+			for cell in warehouse_cells:
+				claimed[cell] = true
+		else:
+			warehouse_plot = {}
+
 	# The main street is paved along its whole buildable length -- but only
 	# along ONE unbroken length of it. Reported in play: "Not all houses
 	# are connected by streets". Ground that is fine on both sides of a
@@ -306,7 +439,7 @@ func layout(
 		# nothing is placed -- VillageRenderer reads an empty plot list as
 		# "this is not a village" and founds nothing here.
 		var no_street: Array[Vector2i] = []
-		return {"plots": [], "road_cells": no_street, "plaza": Rect2i(), "civic_plot": {}, "landmarks": {}}
+		return {"plots": [], "road_cells": no_street, "plaza": Rect2i(), "civic_plot": {}, "warehouse_plot": {}, "landmarks": {}}
 	# The gate clearance keeps a village off the CHUNK's edge, so it is
 	# measured from the spine the skeleton drew, not from wherever this run
 	# happens to start -- applying it again to a short run would eat the
@@ -456,6 +589,7 @@ func layout(
 	return {
 		"plots": plots, "road_cells": road_array, "plaza": plaza,
 		"civic_plot": bones["civic_plot"] if has_plaza else {},
+		"warehouse_plot": warehouse_plot,
 		"landmarks": landmarks,
 	}
 
@@ -545,10 +679,15 @@ const _INDUSTRY_EDGE_MARGIN_TILES := _EDGE_MARGIN_TILES + 1
 ## close to the village as the timber allows, which is exactly how a real
 ## village sited its mill -- at the resource, but no further out than it
 ## had to be.
+## `is_paved` is the world's own "is this cell already the village's paving"
+## answer (VillageRenderer._is_paved_local, the same seam frontage_spur
+## already takes). Omitted, a further street row still counts as street --
+## a spur simply paves its own junction rather than recognising one that is
+## already there.
 static func industry_plot(
 	building_id: String, chunk_size: int, seed_value: int,
 	is_buildable: Callable, is_forest: Callable, is_occupied: Callable,
-	is_dry := Callable()
+	is_dry := Callable(), is_paved := Callable()
 ) -> Dictionary:
 	var footprint := BuildingCatalog.footprint_of(building_id)
 	if footprint == Vector2i.ZERO:
@@ -565,7 +704,7 @@ static func industry_plot(
 		return _industry_site_qualifies(
 			building_id, origin, chunk_size, is_buildable, is_forest, is_occupied
 		)
-	return _sited_plot(building_id, chunk_size, bones, is_buildable, is_occupied, qualifies)
+	return _sited_plot(building_id, chunk_size, bones, is_buildable, is_occupied, qualifies, is_paved)
 
 
 ## A plot on the village's OUTSKIRTS: anywhere clear in the chunk, clear of
@@ -609,7 +748,7 @@ static func outskirt_plot(
 ## allows, which is exactly how a real one was sited.
 static func _sited_plot(
 	building_id: String, chunk_size: int, bones: Dictionary,
-	is_buildable: Callable, is_occupied: Callable, qualifies: Callable
+	is_buildable: Callable, is_occupied: Callable, qualifies: Callable, is_paved := Callable()
 ) -> Dictionary:
 	var footprint := BuildingCatalog.footprint_of(building_id)
 	var plaza: Rect2i = bones["plaza"]
@@ -627,7 +766,7 @@ static func _sited_plot(
 				continue
 			var doorstep: Vector2i = origin + BuildingCatalog.doorstep_of(building_id)
 			var spur = _industry_spur(
-				origin, footprint, doorstep, bones, chunk_size, is_buildable, is_occupied
+				origin, footprint, doorstep, bones, chunk_size, is_buildable, is_occupied, is_paved
 			)
 			if spur == null:
 				continue
@@ -679,7 +818,7 @@ static func _industry_site_qualifies(
 ## reload), so the spur's job is only to reach it.
 static func _industry_spur(
 	origin: Vector2i, footprint: Vector2i, doorstep: Vector2i, bones: Dictionary,
-	chunk_size: int, is_buildable: Callable, is_occupied: Callable
+	chunk_size: int, is_buildable: Callable, is_occupied: Callable, is_paved := Callable()
 ):
 	var street_y: int = bones["street_y"]
 	var street_x0: int = bones["street_x0"]
@@ -689,13 +828,53 @@ static func _industry_spur(
 		for x in footprint.x:
 			footprint_cells[origin + Vector2i(x, y)] = true
 
-	for column in [doorstep.x, origin.x + footprint.x, origin.x - 1]:
-		if column < street_x0 or column > street_x1:
-			continue
-		var cells = _spur_cells(doorstep, column, street_y, footprint_cells, chunk_size, is_buildable, is_occupied)
-		if cells != null:
-			return cells
+	for target in street_rows_toward(doorstep.y, street_y):
+		for column in [doorstep.x, origin.x + footprint.x, origin.x - 1]:
+			if column < street_x0 or column > street_x1:
+				continue
+			# A row that is not the spine counts as street only where the
+			# village has REALLY paved it. layout() paves the spine end to
+			# end and re-paves it on every reload, but a further row is
+			# paved only between the doorsteps it actually joined -- so
+			# joining one on the strength of its y alone would run a spur
+			# to a gap and call the mill connected.
+			if target != street_y and not (
+				is_paved.is_valid() and bool(is_paved.call(Vector2i(column, target)))
+			):
+				continue
+			var cells = _spur_cells(
+				doorstep, column, target, footprint_cells, chunk_size, is_buildable, is_occupied
+			)
+			if cells != null:
+				return cells
 	return null
+
+
+## The street rows a spur from `doorstep_y` may join, NEAREST first.
+##
+## A village's streets run at STREET_PITCH_TILES from the main one (the same
+## rule VillageRenderer._is_street_row reads), and a row the village really
+## paved IS the street. Joining a works to the row it stands beside, rather
+## than routing it all the way back to the spine, is both what a real
+## village did and the difference between a mill that can be sited and one
+## that cannot: the spine-only spur had to cross every house between, which
+## on a village of ten households is a column that no longer exists
+## (measured with the founding roster at ten -- four sites qualified on
+## every other count and every one of them was refused for its spur alone,
+## so a village beside a wood silently stopped getting a mill).
+##
+## The spine is always the last resort, so a village with nothing but its
+## main street behaves exactly as before.
+static func street_rows_toward(doorstep_y: int, street_y: int) -> Array[int]:
+	var rows: Array[int] = []
+	if doorstep_y > street_y + STREET_PITCH_TILES:
+		var row := street_y + ((doorstep_y - street_y) / STREET_PITCH_TILES) * STREET_PITCH_TILES
+		if row >= doorstep_y:
+			row -= STREET_PITCH_TILES
+		if row > street_y:
+			rows.append(row)
+	rows.append(street_y)
+	return rows
 
 
 ## One candidate L, or null if any cell of it is unusable. Every cell is

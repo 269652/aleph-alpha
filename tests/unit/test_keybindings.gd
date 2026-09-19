@@ -156,3 +156,42 @@ func test_sprint_action_defaults_to_shift_and_does_not_collide_with_any_other_de
 			bindings.default_keycode_for("sprint"), bindings.default_keycode_for(action),
 			"sprint's default collides with %s" % action
 		)
+
+
+## Asked directly, with the bug in shot: *"space now toggles between plann
+## mode and rpg ... bind it to P key"*.
+##
+## Two separate things went wrong. Space is the ATTACK key, and the mode
+## toggle is a real Button in the HUD, so once it had been clicked it kept
+## keyboard focus and every later Space press went to it as `ui_accept`
+## instead of to the player (see World._build_view_mode_toggle, which now
+## refuses focus outright). And the toggle had no key of its own at all.
+func test_the_planner_toggle_has_its_own_key_and_it_is_p():
+	assert_true(bindings.action_names().has("toggle_planner"))
+	assert_eq(bindings.default_keycode_for("toggle_planner"), KEY_P)
+	assert_ne(
+		bindings.default_keycode_for("toggle_planner"), bindings.default_keycode_for("attack"),
+		"the mode toggle must never be the attack key again"
+	)
+
+
+## P was the planting key. Moved one key over to O -- the same
+## muscle-memory-shift reasoning that moved toggle_skills off K to make room
+## for kick.
+func test_planting_moved_one_key_over_to_make_room():
+	assert_eq(bindings.default_keycode_for("plant"), KEY_O)
+
+
+## The invariant the collision above was a symptom of missing: no two
+## actions may share a default key at all. Pinned once here rather than as
+## one more per-action collision test each time a key is added -- that is
+## how a collision got in.
+func test_no_two_actions_share_a_default_key():
+	var by_keycode := {}
+	for action in bindings.action_names():
+		var keycode: int = bindings.default_keycode_for(action)
+		assert_false(
+			by_keycode.has(keycode),
+			"%s and %s share a default key" % [by_keycode.get(keycode, ""), action]
+		)
+		by_keycode[keycode] = action

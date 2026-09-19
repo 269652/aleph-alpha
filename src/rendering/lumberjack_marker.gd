@@ -66,14 +66,6 @@ var earth = null
 var _behavior := LumberjackBehavior.new()
 var _target: Node2D = null
 
-## Local mirror of the tree's own canopy/cuts state (see _step_felling) --
-## tracked here rather than read off ChoppableTree's private fields, since
-## this Lumberjack is the sole caller driving every swing on its own
-## target and already knows the exact sequence ChoppableTree.take_damage
-## follows (canopy first, then CUTS_TO_CLEAR buck cuts).
-var _canopy_removed_locally := false
-var _cuts_left_locally := 0
-var _target_growth_scale := 1.0
 var _carried_log_count := 0
 
 ## The Sägewerk's own stock/shaping progress (see SagewerkProduction) --
@@ -161,24 +153,35 @@ func _step_seeking(delta: float) -> void:
 		position += to_home.normalized() * WALK_SPEED * WANDER_SPEED_FRACTION * delta
 	_behavior.advance(delta)  # no-op outside FELLING/DEPOSIT, just ticks the rehunt clock
 	if _behavior.can_commit():
-		var found := _nearest_standing_tree()
+		var found := _nearest_workable_tree()
 		if found != null:
 			_target = found
-			_canopy_removed_locally = false
-			_cuts_left_locally = 0
 			_carried_log_count = 0
 			_behavior.begin_approach()
 
 
-## Nearest live, still-standing ChoppableTree within SEARCH_RADIUS_PX, or
-## null. Standing-only: a tree someone else already felled is that worker's
-## to finish (multiple Lumberjacks competing for one trunk is an explicitly
-## out-of-scope edge case for this single-worker-per-Sägewerk pass).
-func _nearest_standing_tree() -> Node2D:
+## The nearest live ChoppableTree within SEARCH_RADIUS_PX worth working, or
+## null -- a trunk already LYING there first, then the nearest standing
+## tree.
+##
+## A woodcutter finishes what is already down before putting another one on
+## the ground, and it is less work besides. This used to skip felled trees
+## outright, so a trunk left lying (by the player, by weather, or by this
+## worker itself before something interrupted it) stayed there for ever
+## while the worker walked past it to fell another -- reported live as "two
+## felled trees lying around the sawmill and the worker doesn't bring them
+## in". The old reasoning was about several Lumberjacks competing for one
+## trunk, which cannot happen with one worker per Sägewerk.
+func _nearest_workable_tree() -> Node2D:
+	var best_felled := _nearest_tree_where(true)
+	return best_felled if best_felled != null else _nearest_tree_where(false)
+
+
+func _nearest_tree_where(felled: bool) -> Node2D:
 	var best: Node2D = null
 	var best_distance := SEARCH_RADIUS_PX
 	for node in get_tree().get_nodes_in_group(ChoppableTree.GROUP_NAME):
-		if node.is_felled():
+		if node.is_queued_for_deletion() or node.is_felled() != felled:
 			continue
 		var distance: float = position.distance_to(node.position)
 		if distance <= best_distance:
@@ -194,18 +197,24 @@ func _step_approaching(delta: float) -> void:
 		return
 	var to_target: Vector2 = _target.position - position
 	if to_target.length() <= ARRIVE_DISTANCE_PX:
-		_target_growth_scale = _target.growth_scale
 		_behavior.arrive()
 		return
 	position += to_target.normalized() * WALK_SPEED * delta
 
 
-## Swings at the tree exactly like Player._chop_step does -- the same
-## take_damage() loop, staged the same way (fell, then canopy off, then
-## CUTS_TO_CLEAR buck cuts). Tracks its own local canopy/cuts mirror (see
-## the field doc comment above) to know when a swing bucks a real log off,
-## crediting FelledTree.logs_per_cut for that cut, and to know when the
-## trunk is fully worked up so it can start carrying the haul home.
+## Swings at the tree exactly like Player._chop_step does -- the same staging
+## (fell, then the crown limbed off, then CUTS_TO_CLEAR buck cuts) -- and
+## reads each stage off the TRUNK rather than off a local mirror of it.
+##
+## The mirror assumed every trunk this worker meets is one it felled itself,
+## which stopped being true the moment it started finishing trunks already
+## lying there (see _nearest_workable_tree): a half-worked one would have
+## been re-limbed and credited the wrong number of cuts.
+##
+## The buck goes through buck_for_worker, which hands the logs back instead
+## of dropping them through WorldItemBus -- the worker carries the haul
+## home, and a drop as well would be the same timber counted twice (see that
+## function, and this file's own shaped-output rule).
 func _step_felling(delta: float) -> void:
 	if not _target_still_here():
 		_target = null
@@ -218,16 +227,12 @@ func _step_felling(delta: float) -> void:
 		_target.take_damage(FELL_DAMAGE)
 		return
 
-	if not _canopy_removed_locally:
-		_canopy_removed_locally = true
-		_cuts_left_locally = FelledTree.CUTS_TO_CLEAR
-		_target.take_damage(FELL_DAMAGE)  # removes the canopy, no log yet
+	if not _target.canopy_removed():
+		_target.take_damage(FELL_DAMAGE)  # limbs the crown off as sticks, no log yet
 		return
 
-	_carried_log_count += FelledTree.logs_per_cut(_target_growth_scale)
-	_cuts_left_locally -= 1
-	_target.take_damage(FELL_DAMAGE)  # bucks one length off the bare trunk
-	if _cuts_left_locally <= 0:
+	_carried_log_count += _target.buck_for_worker()
+	if not _target_still_here() or _target.cuts_left() <= 0:
 		_target = null
 		_behavior.start_carry()
 

@@ -3,6 +3,7 @@ extends GutTest
 ## ProceduralLandmarkSprite: art for a settlement's well/stall/gate (see
 ## VillageRenderer) -- previously invisible positions NPCs walked to.
 
+const BuildingCatalog = preload("res://src/gameplay/building_catalog.gd")
 const ProceduralLandmarkSprite = preload("res://src/rendering/procedural_landmark_sprite.gd")
 const NpcIdentity = preload("res://src/world/npc_identity.gd")
 
@@ -147,12 +148,18 @@ func test_a_hunters_workspot_prop_is_not_drawn_as_the_villages_own_well():
 ## village. Driven off NpcIdentity's own table rather than a hand-copied
 ## list, so a NEW occupation with a new work tag fails here instead of in
 ## somebody's screenshot.
-func test_every_occupation_works_at_a_prop_this_catalog_can_actually_draw():
+## An occupation's workplace is either a PROP this catalog draws, or a real
+## BUILDING the village raises -- and it must be one of the two, because
+## anything else falls back to the well and plants a spurious well at that
+## villager's workspot. A lumberjack works at the sawmill, which is a real
+## building now, so the rule had to grow rather than the lumberjack being
+## forced to own a prop that would stand on top of it.
+func test_every_occupation_works_somewhere_that_can_actually_be_drawn():
 	for occupation in NpcIdentity.WORK_LOCATION_BY_OCCUPATION:
 		var work_tag: String = NpcIdentity.WORK_LOCATION_BY_OCCUPATION[occupation]
 		assert_true(
-			ProceduralLandmarkSprite.LANDMARK_IDS.has(work_tag),
-			"%s works at '%s', which this catalog cannot draw -- it would fall back to the well" % [occupation, work_tag]
+			ProceduralLandmarkSprite.LANDMARK_IDS.has(work_tag) or BuildingCatalog.has_building(work_tag),
+			"%s works at '%s', which is neither a prop nor a building -- it would fall back to the well" % [occupation, work_tag]
 		)
 
 
@@ -188,3 +195,36 @@ func _has_color_near(image: Image, target: Color) -> bool:
 			if p.a > 0.0 and Vector3(p.r, p.g, p.b).distance_to(Vector3(target.r, target.g, target.b)) < 0.04:
 				return true
 	return false
+
+
+# -- how big a prop really is beside the buildings it stands among ----------
+
+const TerrainRenderer = preload("res://src/rendering/terrain_renderer.gd")
+
+
+## Reported live with the village in shot: "the stands are way too big".
+##
+## A prop's SIZES entry is its real world width, and LandmarkSheet.world_
+## scaled_image scales whatever art is supplied to exactly that -- so this
+## number, not the art, is what decides how big a stall looks. At 52 world
+## pixels it stood 3.25 tiles wide on a 16-pixel grid: wider than the
+## cottages it sells in front of, and nearly as wide as the city hall.
+##
+## A market stall is a table under an awning, about as wide as a small room,
+## which on this grid is two tiles.
+func test_a_stall_is_two_tiles_wide_not_wider_than_a_cottage():
+	assert_eq(
+		ProceduralLandmarkSprite.SIZES["stall"].x, TerrainRenderer.TILE_SIZE * 2,
+		"a market stall is as wide as a small room"
+	)
+
+
+## Whatever a stall's width becomes, its drawn proportions have to stay the
+## ones the art was authored in -- a stall squashed or stretched to fit a
+## new width would be a different bug wearing the fix's clothes.
+func test_shrinking_the_stall_kept_its_proportions():
+	var stall: Vector2i = ProceduralLandmarkSprite.SIZES["stall"]
+	assert_almost_eq(
+		float(stall.y) / float(stall.x), 44.0 / 52.0, 0.03,
+		"the same aspect the stall was drawn at, just smaller"
+	)

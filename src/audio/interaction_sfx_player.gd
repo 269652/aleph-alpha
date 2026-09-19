@@ -29,6 +29,11 @@ const CALL_POOL_SIZE := 4
 var _root: Node
 var _footstep_pool: Array[AudioStreamPlayer] = []
 var _next_footstep_voice := 0
+## How many sounds each footstep voice has been handed, parallel to
+## _footstep_pool -- the token a pending window-closing timer is checked
+## against, so a recycled voice is never cut short by the previous step's
+## own timer (see _stop_if_still_the_same_sound).
+var _footstep_sounds_played: Array[int] = []
 var _call_pool: Array[AudioStreamPlayer2D] = []
 var _next_call_voice := 0
 
@@ -44,6 +49,7 @@ func build() -> Node:
 		voice.name = "FootstepVoice%d" % i
 		_root.add_child(voice)
 		_footstep_pool.append(voice)
+		_footstep_sounds_played.append(0)
 	for i in CALL_POOL_SIZE:
 		var voice := AudioStreamPlayer2D.new()
 		voice.name = "CallVoice%d" % i
@@ -65,8 +71,27 @@ func build() -> Node:
 ## FootstepSound.volume_db_for's own doc comment -- grass specifically
 ## reads noticeably hotter than every other sourced clip, reported live
 ## as "way too loud").
-func play_footstep(surface: String) -> void:
-	_play_footstep_clip(FootstepSound.clip_path_for(surface), FootstepSound.volume_db_for(surface))
+##
+## Takes a different one of that surface's real recorded steps each time
+## (see FootstepSound.step_clip_path_for): several exist per surface
+## precisely so that walking on one kind of ground is not the same sample
+## repeating, which is half of "they sound weak and not natural" as
+## reported. The other half is the level, which volume_db_for now carries
+## as a measured per-surface gain rather than a guess.
+##
+## Passes `surface` through as well as the chosen clip: it is what marks
+## this as a footstep rather than a one-off like the mushroom crush, and so
+## what earns it the per-step pitch variation.
+## Returns the voice it started, like play_mushroom_crush -- which clip a
+## step took is otherwise unanswerable from outside, since several voices
+## are legitimately mid-step at any moment and none of them is "the
+## current one".
+func play_footstep(surface: String) -> AudioStreamPlayer:
+	return _play_footstep_clip(
+		FootstepSound.step_clip_path_for(surface, randf()),
+		FootstepSound.volume_db_for(surface),
+		surface
+	)
 
 
 ## How long (seconds) a mushroom-crush one-shot is allowed to keep
@@ -83,13 +108,17 @@ const MUSHROOM_CRUSH_MAX_DURATION_SECONDS := 0.3
 
 ## A mushroom crushed underfoot -- see FootstepSound.MUSHROOM_CRUSH_
 ## CLIP_PATH's own doc comment for the real, sourced clip this plays.
-## Capped at MUSHROOM_CRUSH_MAX_DURATION_SECONDS above; every other
-## one-shot (footsteps) plays its clip out in full.
-func play_mushroom_crush() -> void:
-	var voice := _play_footstep_clip(FootstepSound.MUSHROOM_CRUSH_CLIP_PATH)
-	if voice == null:
-		return
-	voice.get_tree().create_timer(MUSHROOM_CRUSH_MAX_DURATION_SECONDS).timeout.connect(voice.stop)
+## Capped at MUSHROOM_CRUSH_MAX_DURATION_SECONDS above.
+##
+## Deliberately passes NO surface: a crush is its own one-shot, played
+## whole from its own beginning at its own pitch, never a window into
+## somebody's recorded walk -- and never inheriting the pitch a reused
+## pool voice was left at by the last footstep, exactly as it already
+## relies on the default volume for the same reason.
+func play_mushroom_crush() -> AudioStreamPlayer:
+	return _play_footstep_clip(
+		FootstepSound.MUSHROOM_CRUSH_CLIP_PATH, 0.0, "", MUSHROOM_CRUSH_MAX_DURATION_SECONDS
+	)
 
 
 ## Returns the voice that started playing, or null for a real, silent
@@ -106,15 +135,68 @@ func play_mushroom_crush() -> void:
 ## voice. play_mushroom_crush deliberately relies on this default rather
 ## than passing 0.0 explicitly -- always full volume regardless of
 ## whichever surface last used this voice.
-func _play_footstep_clip(clip_path: String, volume_db: float = 0.0) -> AudioStreamPlayer:
+##
+## `surface` marks this as a footstep, which is what earns it the per-step
+## pitch nudge (FootstepSound.pitch_scale_for). An empty surface -- the
+## default -- means "this is not a surface step": played whole, from the
+## top, at the clip's own pitch.
+##
+## Whether the clip has to be WINDOWED is asked of the clip itself, not of
+## the surface (FootstepSound.is_walking_bed/offset_for). A real one-shot
+## is played whole from its own beginning; a long recording of somebody
+## walking is started somewhere else in itself each time and closed again
+## after one step's worth (FootstepSound.STEP_WINDOW_SECONDS), instead of
+## leaving the rest of a stranger's walk playing underneath the next step.
+## Every surface the game can actually put underfoot has real one-shots
+## now, so the windowing is what the fallback recording gets.
+##
+## Pitch is set UNCONDITIONALLY for exactly the reason volume_db is above:
+## the pool reuses voices, and a pitch left behind by a previous step must
+## not ride along on whatever plays next.
+##
+## `max_seconds` caps playback for a sound that is not a footstep but still
+## must not play out its whole source recording (see
+## MUSHROOM_CRUSH_MAX_DURATION_SECONDS); 0.0 leaves the choice to the
+## surface's own step window above.
+func _play_footstep_clip(
+	clip_path: String, volume_db: float = 0.0, surface: String = "", max_seconds: float = 0.0
+) -> AudioStreamPlayer:
 	if clip_path.is_empty():
 		return null
-	var voice := _footstep_pool[_next_footstep_voice]
+	var index := _next_footstep_voice
+	var voice := _footstep_pool[index]
 	_next_footstep_voice = (_next_footstep_voice + 1) % _footstep_pool.size()
+	_footstep_sounds_played[index] += 1
 	voice.stream = load(clip_path)
 	voice.volume_db = volume_db
-	voice.play()
+	voice.pitch_scale = 1.0 if surface.is_empty() else FootstepSound.pitch_scale_for(randf())
+	voice.play(FootstepSound.offset_for(clip_path, randf()))
+
+	var cap := max_seconds
+	if cap <= 0.0 and FootstepSound.is_walking_bed(clip_path):
+		cap = FootstepSound.STEP_WINDOW_SECONDS
+	# is_inside_tree, not an assumption: a capped sound needs a real tree to
+	# get a timer from, and a bed step asks for one on EVERY step rather
+	# than once in a while like a mushroom crush -- so a caller playing
+	# before the built root is added stays silent about it instead of
+	# erroring on every stride.
+	if cap > 0.0 and voice.is_inside_tree():
+		voice.get_tree().create_timer(cap).timeout.connect(
+			_stop_if_still_the_same_sound.bind(index, _footstep_sounds_played[index])
+		)
 	return voice
+
+
+## Closes a sound's own window, and only its own. The pool recycles, so by
+## the time a window's timer goes off the voice may already be playing a
+## LATER sound -- whose window is its own business and typically has most
+## of itself still to run. Stopping it there would cut a live step off after
+## a fraction of a step, which is precisely the mid-ring truncation the
+## window exists to remove.
+func _stop_if_still_the_same_sound(index: int, sounds_played_then: int) -> void:
+	if _footstep_sounds_played[index] != sounds_played_then:
+		return
+	_footstep_pool[index].stop()
 
 
 ## A creature's own occasional vocalization, at its real world position
@@ -130,3 +212,22 @@ func play_creature_call(species: String, world_position: Vector2) -> void:
 	voice.global_position = world_position
 	voice.stream = load(clip_path)
 	voice.play()
+
+
+## The node `build()` made, or null before it has run. Read by
+## `AudioDiagnostics.missing_streams`, which walks it for streams that
+## failed to resolve -- every clip here is load()ed at runtime, so a
+## missing resource leaves a silent player rather than raising.
+func root() -> Node:
+	return _root
+
+
+## Whether that node really reached the scene tree.
+##
+## False both before `build()` and when a caller built it but never added
+## it, and the difference matters: `World._ready()` returns early at the
+## license gate and at the GitHub identity check, both BEFORE
+## `add_child(build())`, so a game that took either path has no audio at
+## all rather than quiet audio (see AudioDiagnostics).
+func root_in_tree() -> bool:
+	return _root != null and _root.is_inside_tree()

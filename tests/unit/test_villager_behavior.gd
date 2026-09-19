@@ -29,6 +29,7 @@ func _context(drives: Dictionary, extras: Dictionary = {}) -> Dictionary:
 		"market": Vector2(0, 40),
 		"home": Vector2(-40, 0),
 		"water": Vector2(0, -40),
+		"warehouse": Vector2(0, 80),
 	}
 	for key in extras:
 		context[key] = extras[key]
@@ -36,7 +37,7 @@ func _context(drives: Dictionary, extras: Dictionary = {}) -> Dictionary:
 
 
 func _quiet_drives() -> Dictionary:
-	return {"hunger": 0.0, "thirst": 0.0, "rest": 0.0, "company": 0.0}
+	return {"hunger": 0.0, "thirst": 0.0, "rest": 0.0, "company": 0.0, "burden": 0.0}
 
 
 func _only(drive: String, level: float = 1.0) -> Dictionary:
@@ -99,7 +100,7 @@ func test_a_villager_with_nothing_around_them_is_left_alone_too():
 ## Hunger outranks everything, and deliberately so: a whole famine chain
 ## hangs off a villager going to buy food the moment they are hungry.
 func test_hunger_beats_every_other_need_at_once():
-	var all_urgent := {"hunger": 1.0, "thirst": 1.0, "rest": 1.0, "company": 1.0}
+	var all_urgent := {"hunger": 1.0, "thirst": 1.0, "rest": 1.0, "company": 1.0, "burden": 1.0}
 	assert_eq(behavior.decide(_context(all_urgent))["intent"], VillagerBehavior.EAT)
 
 
@@ -186,7 +187,7 @@ func test_every_intent_comes_from_the_ethograms_own_villager_wirings():
 		approaches[wiring["approach"]] = true
 	for intent in [
 		VillagerBehavior.EAT, VillagerBehavior.DRINK,
-		VillagerBehavior.REST, VillagerBehavior.SOCIALIZE,
+		VillagerBehavior.REST, VillagerBehavior.HAUL, VillagerBehavior.SOCIALIZE,
 	]:
 		assert_true(approaches.has(intent), "%s is not a villager wiring's own approach" % intent)
 
@@ -194,3 +195,75 @@ func test_every_intent_comes_from_the_ethograms_own_villager_wirings():
 func test_the_quiet_answer_is_not_one_of_the_wirings():
 	for wiring in Ethogram.wirings_for("villager"):
 		assert_ne(wiring["approach"], VillagerBehavior.NOTHING)
+
+
+# -- hauling a load to the store -------------------------------------------
+#
+# docs/concept/village_warehouse.md mechanism 3: stock that teleports into a
+# number is not stock kept in a warehouse. A villager with a full load walks
+# it to the door.
+
+
+func test_a_loaded_villager_carries_it_to_the_store():
+	var decision := behavior.decide(_context(_only("burden")))
+	assert_eq(decision["intent"], VillagerBehavior.HAUL)
+	assert_eq(decision["target"], Vector2(0, 80))
+
+
+func test_empty_hands_send_nobody_anywhere():
+	var decision := behavior.decide(_context(_quiet_drives()))
+	assert_eq(decision["intent"], VillagerBehavior.NOTHING, "an empty pair of hands is not an errand")
+
+
+func test_a_village_with_no_store_leaves_a_loaded_villager_to_their_work():
+	var context := _context(_only("burden"))
+	context.erase("warehouse")
+	assert_eq(
+		behavior.decide(context)["intent"], VillagerBehavior.NOTHING,
+		"nowhere to put it down is not an intent"
+	)
+
+
+## A villager does not starve holding a sack.
+func test_every_survival_need_outranks_a_load():
+	for need in ["hunger", "thirst", "rest"]:
+		var drives := _only("burden")
+		drives[need] = 1.0
+		assert_ne(
+			behavior.decide(_context(drives))["intent"], VillagerBehavior.HAUL,
+			"%s must come before putting the load down" % need
+		)
+
+
+## ...and does not stop for a chat with one.
+func test_a_load_outranks_a_chat():
+	var drives := _only("burden")
+	drives["company"] = 1.0
+	assert_eq(behavior.decide(_context(drives))["intent"], VillagerBehavior.HAUL)
+
+
+## The kernel reads a gate the caller never mentioned as WIDE OPEN (1.0) --
+## which is right for a mammal adapter that only publishes the drives it
+## runs, and exactly wrong here: burden is not on the villager clock at all
+## (Ethogram.drive_profile has no entry for it), so every drive vector a
+## villager has ever been handed omits it. Unfixed, a villager with a store
+## in sight would haul an imaginary load forever, and would do it before
+## ever getting a drink. An unreported need presses nobody.
+func test_a_need_the_caller_never_reported_presses_nobody():
+	var decision := behavior.decide(_context({}))
+	assert_eq(decision["intent"], VillagerBehavior.NOTHING)
+	assert_null(decision["target"])
+
+
+## The real vector a villager is handed: NpcNeeds clocks four drives and has
+## never heard of burden, so this is the shape the marker really publishes.
+func test_a_real_drive_vector_never_sends_an_empty_handed_villager_to_the_store():
+	var NpcNeeds = load("res://src/world/npc_needs.gd")
+	var needs = NpcNeeds.new()
+	var step := (1.0 / float(NpcNeeds.HUNGER_RATE_PER_SECOND)) * 0.02
+	for i in 200:
+		assert_ne(
+			behavior.decide(_context(needs.gains()))["intent"], VillagerBehavior.HAUL,
+			"a villager carrying nothing walked to the store"
+		)
+		needs.advance(step)

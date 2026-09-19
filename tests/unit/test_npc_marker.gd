@@ -1,5 +1,7 @@
 extends GutTest
 
+const NpcSchedule = preload("res://src/world/npc_schedule.gd")
+
 ## NpcMarker: the cheap local FSM half of docs/concept/npc.md's "Planning
 ## architecture" -- walks toward wherever its current schedule entry's
 ## location_tag resolves to (home / a shared village landmark / a personal
@@ -190,9 +192,7 @@ func test_resolves_a_landmark_tag_to_the_shared_landmark_position():
 		{"time_block": "night", "location_tag": "stall", "activity": "work"},
 	]
 	marker.position = Vector2(0, 0)
-	for i in 200:
-		marker._process(1.0)
-	assert_lt(marker.position.distance_to(marker.landmarks["stall"]), 1.0)
+	assert_lt(_closest_approach(marker, marker.landmarks["stall"]), 1.0)
 
 
 ## An occupation whose work tag isn't one of the 3 shared landmarks (e.g.
@@ -308,6 +308,7 @@ func test_no_bound_view_never_crashes():
 
 const NpcEconomy = preload("res://src/world/npc_economy.gd")
 const VillageMarket = preload("res://src/world/village_market.gd")
+const Ethogram = preload("res://src/gameplay/ethogram.gd")
 
 
 func test_process_without_economy_never_crashes():
@@ -354,6 +355,13 @@ func test_process_advances_hunger_through_the_bound_economy():
 func test_urgent_hunger_redirects_the_npc_toward_the_well_regardless_of_schedule():
 	var market := VillageMarket.new()
 	marker.setup_economy(market)
+	# A REAL meal on the stall, and the gold for it: the hunger interrupt
+	# only fires when there is actually something to buy at the end of the
+	# walk (NpcEconomy.can_obtain_a_meal). These tests have always meant
+	# "a villager who must buy goes and buys"; the empty market they used to
+	# build was incidental, and with it the villager now correctly keeps
+	# working rather than queueing at a stall with nothing on it.
+	_stock_the_stall(market)
 	# Scheduled to be at the (distant) workspot all day -- with no interrupt,
 	# the NPC would walk there and stay, ignoring hunger entirely.
 	marker.schedule = [
@@ -439,11 +447,25 @@ func test_a_working_hunter_gathers_real_food_through_process():
 	]
 	marker.position = marker.workspot_position  # already at the work tag's resolved spot
 
-	for i in 300:
+	# Long enough to earn REAL GOLD, derived from the real rate rather than
+	# written as a round 300 seconds. Half this villager's day is scheduled
+	# as work (two of the four blocks above), and a producer's take-home is
+	# a share of what they earn (VillageWages), so a single unit's gold
+	# rounds away to nothing. The drip is each resource's own renewal now
+	# (docs/concept/settlement_food_calibration.md), so a fixed second count
+	# silently gathers nothing the moment that is retuned.
+	# The PEAK, not the closing balance: a villager who can buy a meal spends
+	# what they earn on one (NpcEconomy/VillageMarket.buy_meal), so reading
+	# the purse at an arbitrary moment measures whether they had just eaten,
+	# not whether they ever earned. Earning and then spending is still
+	# earning.
+	var peak_gold := 0
+	for i in _working_seconds_to_gather("hunter", 20.0, world):
 		marker._process(1.0)
+		peak_gold = maxi(peak_gold, marker.economy.wallet.balance)
 
 	assert_gt(market.total_stock(), 0.0)
-	assert_gt(marker.economy.wallet.balance, 0)
+	assert_gt(peak_gold, 0, "a working hunter really earns")
 
 
 # -- instruction scripts (docs/concept/npc_instructions.md "Execution /
@@ -485,9 +507,7 @@ func test_no_instruction_script_walks_the_planner_entry_unchanged():
 		{"time_block": "night", "location_tag": "stall", "activity": "work"},
 	]
 	marker.position = Vector2(0, 0)
-	for i in 200:
-		marker._process(1.0)
-	assert_lt(marker.position.distance_to(marker.landmarks["stall"]), 1.0)
+	assert_lt(_closest_approach(marker, marker.landmarks["stall"]), 1.0)
 
 
 func test_instruction_script_overrides_the_planner_entry_when_a_rule_matches():
@@ -529,9 +549,7 @@ func test_instruction_script_falls_back_to_the_planner_entry_when_no_rule_matche
 		{"time_block": "night", "location_tag": "stall", "activity": "work"},
 	]
 	marker.position = Vector2(0, 0)
-	for i in 200:
-		marker._process(1.0)
-	assert_lt(marker.position.distance_to(marker.landmarks["stall"]), 1.0)
+	assert_lt(_closest_approach(marker, marker.landmarks["stall"]), 1.0)
 
 
 # -- per-NPC inventory (docs/concept/npc_instructions.md, closing the
@@ -667,6 +685,7 @@ func test_an_npc_reappears_once_the_schedule_moves_off_home():
 func test_hunger_interrupt_while_home_makes_the_npc_visible_again():
 	var market := VillageMarket.new()
 	marker.setup_economy(market)
+	_stock_the_stall(market)  # see _stock_the_stall -- there must be a meal to walk to
 	marker.economy.needs.hunger = 1.0  # unambiguously past HUNGRY_THRESHOLD
 	marker.schedule = [
 		{"time_block": "morning", "location_tag": "home", "activity": "idle"},
@@ -731,7 +750,9 @@ func test_is_at_home_is_false_at_a_landmark_even_when_standing_still():
 func _producer_marker_at_work(occupation: String, world: StubWorld) -> void:
 	marker.identity.occupation = occupation
 	marker.setup(world, TILE_SIZE)
-	marker.setup_economy(VillageMarket.new())
+	var market := VillageMarket.new()
+	marker.setup_economy(market)
+	_stock_the_stall(market)
 	marker.schedule = [
 		{"time_block": "morning", "location_tag": "workspot", "activity": "work"},
 		{"time_block": "midday", "location_tag": "workspot", "activity": "work"},
@@ -971,3 +992,144 @@ func test_a_villager_busy_with_real_work_answers_no_need_at_all():
 	)
 	assert_false(marker.is_talking(), "and never started a conversation at all")
 	assert_not_null(marker._step_needs(0.1, true), "but free, that same villager would go and talk")
+
+
+# -- carrying a load to the store ------------------------------------------
+#
+# docs/concept/village_warehouse.md mechanism 3, "goods are carried in": the
+# visible half of a warehouse. What a producer takes is in their hands until
+# they have walked it to the door, so a village's stock arrives somewhere
+# rather than appearing as a number.
+#
+# `warehouse_position` is null for every villager whose settlement has no
+# store (a cramped site houses its people and goes without -- see the
+# concept doc's own caveat under pillar 1), and such a villager keeps the
+# direct deposit they always had.
+
+
+## A villager with a store to carry to, hands already full. Credited
+## through record_real_harvest rather than record_real_catch because that
+## one is gated on being a PRODUCER, and this marker's occupation is
+## whatever its seed gave it -- a blacksmith would have been handed nothing
+## and the test would have passed vacuously on empty hands.
+func _loaded_villager_at(store: Vector2) -> void:
+	_quiet_every_need()
+	marker.economy.market = VillageMarket.new()
+	marker.warehouse_position = store
+	marker.economy.carry_limit = NpcEconomy.CARRY_LIMIT
+	marker.economy.record_real_harvest("wheat", int(NpcEconomy.CARRY_LIMIT))
+
+
+func test_a_villager_with_full_hands_walks_to_the_store():
+	var store := Vector2(700, 700)
+	_loaded_villager_at(store)
+	assert_almost_eq(marker.economy.burden(), 1.0, 0.0, "precondition: their hands really are full")
+	var before := marker.position.distance_to(store)
+	marker._process(0.5)
+	assert_lt(marker.position.distance_to(store), before, "a loaded villager heads for the store")
+
+
+## Reaching the door really puts the load down, or a villager stands at the
+## warehouse forever holding it -- the same "arriving is what answers it"
+## rule the well and the bed already run on.
+func test_reaching_the_door_really_puts_the_load_down():
+	_loaded_villager_at(Vector2(700, 700))
+	var in_hand := marker.economy.carried_total()
+	marker.position = marker.warehouse_position
+	marker._process(0.1)
+	assert_almost_eq(marker.economy.carried_total(), 0.0, 0.0001, "their hands are empty")
+	assert_almost_eq(
+		marker.economy.market.total_stock(), in_hand, 0.0001,
+		"and the village has what they were carrying"
+	)
+
+
+func test_an_empty_handed_villager_is_left_to_their_schedule():
+	_quiet_every_need()
+	marker.economy.market = VillageMarket.new()
+	marker.warehouse_position = Vector2(700, 700)
+	marker.economy.carry_limit = NpcEconomy.CARRY_LIMIT
+	assert_null(
+		marker._step_needs(0.1, true),
+		"carrying nothing is not an errand, however near the store is"
+	)
+
+
+## The trap this wiring sits over: BehaviorKernel reads a gate the caller
+## never mentioned as WIDE OPEN, and burden is deliberately not on the
+## villager drive clock, so NpcNeeds.gains() has never heard of it. A marker
+## that forgot to publish what its villager is carrying would send every
+## villager in sight of a store off to haul an imaginary load.
+func test_the_marker_really_says_what_this_villager_is_carrying():
+	_quiet_every_need()
+	marker.economy.carry_limit = NpcEconomy.CARRY_LIMIT
+	marker.warehouse_position = Vector2(700, 700)
+	var context := marker._villager_context()
+	assert_true(context.has(Ethogram.WAREHOUSE), "the store is where the load goes")
+	assert_true(
+		(context["drives"] as Dictionary).has(Ethogram.DRIVE_BURDEN),
+		"a burden the marker never reports is a burden the kernel reads as full"
+	)
+	assert_almost_eq(float(context["drives"][Ethogram.DRIVE_BURDEN]), 0.0, 0.0)
+
+
+func test_a_village_with_no_store_offers_a_villager_nowhere_to_carry_to():
+	_quiet_every_need()
+	assert_null(marker.warehouse_position, "precondition: no store by default")
+	assert_false(marker._villager_context().has(Ethogram.WAREHOUSE))
+
+
+## A real meal on the village stall and the gold to pay for it.
+##
+## The hunger interrupt only fires when there is something to buy at the end
+## of the walk (NpcEconomy.can_obtain_a_meal, added after a real village was
+## measured: a merchant hungry for 1589 of 1801 ticks with an empty purse
+## spent every one of their 825 scheduled work ticks queueing at a well with
+## nothing on it, so they never worked, never earned, and stayed hungry for
+## ever). A test that means "a villager who must buy goes and buys" has to
+## put something there to buy.
+func _stock_the_stall(market) -> void:
+	market.add_stock("fish", 5.0)
+	if marker.economy != null:
+		marker.economy.wallet.add(100)
+
+
+## How many WALL-CLOCK seconds this villager needs to gather `units` whole
+## food units, given that only part of their day is scheduled as work.
+##
+## Doubled because two of the four scheduled blocks are work: a villager who
+## gathers for half their day needs twice the wall clock of one who gathers
+## all of it.
+## `gather_world` is the caller's own stub world, passed in rather than
+## reached for: there is no `world` member on this suite, and referring to
+## one made the WHOLE FILE fail to parse -- which GUT reports as a script it
+## could not load and then runs nothing from, so every test in here was
+## silently dropped rather than failing.
+func _working_seconds_to_gather(occupation: String, units: float, gather_world) -> int:
+	var NpcProduction = load("res://src/world/npc_production.gd")
+	var per_second: float = NpcProduction.new().yield_per_second(
+		occupation, gather_world, marker.position
+	)
+	if per_second <= 0.0:
+		return 0
+	return int(ceil(2.0 * units * NpcProduction.FOOD_UNIT / per_second)) + 1
+
+
+## How close `target` ever gets to `destination` over a few days of walking.
+##
+## The closest APPROACH, not where they happen to be standing when the run
+## ends: a day is sixty real seconds and the walk across a village is most of
+## one, so where a villager is on any particular tick is as much about which
+## block just turned as about where their tag resolves to. What these tests
+## are actually about is that the tag resolves THERE -- that the villager
+## really goes to it.
+##
+## It matters more now than it did: a village does not turn as one any more
+## (NpcSchedule.personal_hour), so a fixed number of ticks leaves different
+## villagers in different blocks of their own days.
+func _closest_approach(target, destination: Vector2, ticks := 600) -> float:
+	var closest := INF
+	for i in ticks:
+		target._process(1.0)
+		closest = minf(closest, target.position.distance_to(destination))
+	return closest

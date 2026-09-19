@@ -98,3 +98,35 @@ func test_without_the_extra_condition_it_searches_exactly_as_before():
 	var stub := StubSettlementGenerator.new()
 	stub.settlement_chunks[Vector2i(2, 0)] = true
 	assert_eq(finder.find_nearest(Vector2i.ZERO, 10, stub, _grassland), Vector2i(2, 0))
+
+
+# -- what the command says it did (docs/concept/village_growth.md, Mech. 6) -
+#
+# Reported three times now, the third with the fix already in: *"It
+# teleports me to where no village is"*, *"/village teleports me to an empty
+# field..."*, *"It still teleports me to the same empty spot"*.
+#
+# A command that says "Teleported to the nearest village" and nothing else
+# gives a player no way to tell WHICH of the things that could be wrong is
+# wrong -- the wrong chunk, no buildings recorded, or buildings recorded and
+# not drawn. So it reports what it really found, and the next report is
+# evidence instead of another round of guessing.
+
+
+func test_the_report_names_the_chunk_and_what_is_standing_in_it():
+	var line := VillageFinder.teleport_report(Vector2i(613, 141), 12)
+	assert_true(line.contains("613"), "which chunk: %s" % line)
+	assert_true(line.contains("141"), "which chunk: %s" % line)
+	assert_true(line.contains("12"), "and how much is standing there: %s" % line)
+
+
+## The case that matters most: a chunk the search accepted with nothing
+## standing in it should say so in as many words, because that is the bug
+## being hunted rather than a detail.
+func test_a_village_with_nothing_standing_says_so_plainly():
+	var line := VillageFinder.teleport_report(Vector2i(7, 8), 0)
+	assert_true(line.to_lower().contains("no building"), "it must not claim a village: %s" % line)
+
+
+func test_one_building_is_not_reported_as_plural():
+	assert_false(VillageFinder.teleport_report(Vector2i(0, 0), 1).contains("1 buildings"))

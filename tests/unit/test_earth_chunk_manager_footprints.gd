@@ -631,3 +631,51 @@ func test_the_step_facts_carry_the_material_even_when_no_print_is_drawn():
 		result.get("ground_material"), "snow" if manager.snow_depth() > 0.0 else "stone",
 		"and the step is still reported, so it can still be heard"
 	)
+
+
+# -- rain reaches the ground the prints are in ------------------------------
+#
+# Asked for: "Rain should increase decay speed". FootprintField knows how to
+# decay faster when it is wet; it cannot know THAT it is wet. set_rain is the
+# one place the live weather model tells this manager it is raining, so that
+# is where a print's decay rate has to come from.
+
+
+func _a_field_with_one_print() -> FootprintField:
+	var field := FootprintField.new()
+	field.add_print(Vector2.ZERO, "left", "snow", Vector2.UP, 0.0)
+	manager._footprint_fields[_berlin_chunk] = field
+	return field
+
+
+func test_a_downpour_fades_prints_at_the_wet_rate():
+	var field := _a_field_with_one_print()
+	manager.set_rain(true)
+	manager._world_age_seconds = (
+		FootprintField.HALF_LIFE_SECONDS / float(FootprintField.RAIN_DECAY_MULTIPLIER)
+	)
+	manager.step_footprints()
+	assert_almost_eq(
+		FootprintField.opacity_of(field.prints()[0]), 0.5, 0.02,
+		"in a downpour a print is half gone in a quarter of the dry half-life"
+	)
+
+
+func test_dry_weather_fades_prints_at_the_dry_rate():
+	var field := _a_field_with_one_print()
+	manager.set_rain(false)
+	manager._world_age_seconds = FootprintField.HALF_LIFE_SECONDS
+	manager.step_footprints()
+	assert_almost_eq(
+		FootprintField.opacity_of(field.prints()[0]), 0.5, 0.02,
+		"dry ground takes the whole half-life to get there"
+	)
+
+
+## Nobody has told this manager anything about the weather yet, and a world
+## that has not rained must not decay prints as though it had.
+func test_a_manager_never_told_about_weather_treats_the_ground_as_dry():
+	var field := _a_field_with_one_print()
+	manager._world_age_seconds = FootprintField.HALF_LIFE_SECONDS
+	manager.step_footprints()
+	assert_almost_eq(FootprintField.opacity_of(field.prints()[0]), 0.5, 0.02)

@@ -211,3 +211,55 @@ func test_an_empty_barn_still_shows_its_inventory():
 func test_a_report_that_says_nothing_about_stock_shows_no_tab():
 	panel.show_report(_home_report())
 	assert_false(panel.has_inventory_tab())
+
+
+# -- a thing that is not a building (docs/concept/village_warehouse.md, 6) --
+#
+# Asked directly: "clicking on it shows the popup with inventory". The
+# question a cart answers is the same question a barn answers, and this panel
+# is already a pure consumer of a Dictionary -- so a cart hands it one rather
+# than growing a second panel that draws the same rows a different way.
+
+const CartLoad = preload("res://src/gameplay/cart_load.gd")
+
+
+func _cart_report(overrides: Dictionary = {}) -> Dictionary:
+	var report := {
+		"title": "Handcart (6)", "subtitle": "Pulled by Ilsa Rook", "is_home": false,
+		"stock": {"beam": 4, "plank": 2}, "storage_capacity": CartLoad.CAPACITY,
+	}
+	for key in overrides:
+		report[key] = overrides[key]
+	return report
+
+
+func test_a_report_that_names_itself_is_titled_by_that_name():
+	panel.show_report(_cart_report())
+	assert_eq(panel.title_text(), "Handcart (6)", "not looked up in a building catalog")
+	assert_eq(panel.subtitle_text(), "Pulled by Ilsa Rook", "nor called a settlement commons")
+
+
+## And a building still names itself the way it always did -- it carries
+## neither key, so nothing that already opened this panel changes.
+func test_a_building_is_still_named_by_its_catalog_entry():
+	panel.show_report(_home_report())
+	assert_eq(panel.title_text(), BuildingCatalog.display_name_of("house_medium"))
+	assert_true(panel.subtitle_text().contains("Mara Fenn"))
+
+
+func test_a_carts_load_is_drawn_in_the_inventory_tab():
+	panel.show_report(_cart_report())
+	assert_true(panel.has_inventory_tab(), "a wagon is a shelf")
+	var rows: Array = panel.inventory_rows()
+	assert_eq(rows.size(), 2)
+	assert_eq(rows[0].get("item_id"), "beam", "stable order, by item id")
+	assert_eq(int(rows[0].get("count")), 4)
+	assert_true(panel.inventory_summary_text().contains(str(CartLoad.CAPACITY)))
+
+
+## An empty cart still opens -- "there is nothing in it" is a real answer.
+func test_an_empty_cart_still_opens_and_says_it_is_empty():
+	panel.show_report(_cart_report({"title": "Handcart", "stock": {}}))
+	assert_true(panel.is_open())
+	assert_true(panel.inventory_rows().is_empty())
+	assert_false(panel.inventory_is_full())

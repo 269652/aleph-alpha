@@ -125,7 +125,9 @@ static func food_shortfall_for(
 	if SettlementState.status_for(household_count, capacity) != SettlementState.DECLINING:
 		return {}
 	var capacity_target := int(ceil(float(household_count) / (1.0 + SettlementState.STABLE_BAND)))
-	var need := maxi(1, capacity_target * SettlementState.FOOD_PER_HOUSEHOLD - stock)
+	var need := maxi(
+		1, int(round(float(capacity_target) * SettlementState.FOOD_PER_HOUSEHOLD)) - stock
+	)
 	return {
 		"kind": "food",
 		"household_id": "",

@@ -24,6 +24,8 @@ extends Node2D
 const FarmPlot = preload("res://src/gameplay/farm_plot.gd")
 const IllustratedCropSprite = preload("res://src/rendering/illustrated_crop_sprite.gd")
 const ProceduralSoilSprite = preload("res://src/rendering/procedural_soil_sprite.gd")
+const ProceduralHerbSprite = preload("res://src/rendering/procedural_herb_sprite.gd")
+const IllustratedSoilMoundSprite = preload("res://src/rendering/illustrated_soil_mound_sprite.gd")
 const IllustratedWheatPatch = preload("res://src/rendering/illustrated_wheat_patch.gd")
 const IllustratedGrassPatch = preload("res://src/rendering/illustrated_grass_patch.gd")
 ## The tilled ground a bed stands on -- see docs/concept/village_farms.md's
@@ -40,6 +42,11 @@ const TerrainRenderer = preload("res://src/rendering/terrain_renderer.gd")
 ## is false, so leaf_texture returned null -- a growing wheat plot showed
 ## bare tilled soil with nothing visibly growing in it).
 const WHEAT_CROP_ID := "wheat"
+
+## The crop_id drawn by ProceduralHerbSprite rather than by illustrated art.
+## docs/concept/village_farms.md carried "A herb plot renders as bare tilled
+## soil" as an honest gap for exactly as long as this was missing.
+const HERB_CROP_ID := "herb"
 
 const GROUP_NAME := "farm_plot"
 
@@ -65,6 +72,8 @@ const WITHERED_TINT := Color(0.55, 0.5, 0.38)
 var plot := FarmPlot.new()
 
 static var _illustrated := IllustratedCropSprite.new()
+static var _herb := ProceduralHerbSprite.new()
+static var _mound_art := IllustratedSoilMoundSprite.new()
 static var _wheat := IllustratedWheatPatch.new()
 static var _terrain := IllustratedTerrainSprite.new()
 ## variant index -> the soil texture for it, shared by every bed that rolls
@@ -80,6 +89,10 @@ static var _soil_textures: Dictionary = {}
 ## it. This is the ONLY soil a bed draws now -- ProceduralSoilSprite's small
 ## mound is gone (see is_showing_soil).
 var _soil_ground: Sprite2D
+## The ploughed-and-waiting mound (see is_showing_mound). Real illustrated
+## art from IllustratedSoilMoundSprite, never ProceduralSoilSprite's own
+## drawing -- that blob is what three separate reports were about.
+var _mound: Sprite2D
 var _leaves: Sprite2D
 ## Real Sprite2D children for a wheat crop's own small cluster of bending
 ## blades -- ordinary sprites, not GPU-instanced MultiMesh, since a single
@@ -108,6 +121,7 @@ func _ready() -> void:
 	add_to_group(GROUP_NAME)
 
 	_build_soil_ground()
+	_build_mound()
 
 	_leaves = Sprite2D.new()
 	_leaves.z_index = LEAVES_Z_INDEX
@@ -186,6 +200,23 @@ func wheat_blade_count() -> int:
 	return count
 
 
+## Whether this bed really has crop ART on screen right now -- a VISIBLE
+## sprite carrying a real texture.
+##
+## Deliberately not "is the sprite visible": a Sprite2D whose texture is
+## null is visible and draws nothing, which is exactly how a herbalist's bed
+## grew, withered and was harvested for a whole work block with the player
+## seeing only bare soil (see test_every_crop_a_village_farm_sows_really_
+## draws_something, and tools/probe_village_farming.gd for the measurement).
+func is_drawing_a_crop() -> bool:
+	if _leaves != null and _leaves.visible and _leaves.texture != null:
+		return true
+	for blade in _wheat_blades:
+		if blade.visible and blade.texture != null:
+			return true
+	return false
+
+
 ## Whether this plot draws a mound of tilled earth under its crop.
 ##
 ## Always false now, and kept as a named fact rather than deleted: it is
@@ -257,6 +288,43 @@ func _build_soil_ground() -> void:
 	add_child(_soil_ground)
 
 
+## One mound, at the world size a bed's mound really is, seeded from this
+## bed's own tile so neighbouring beds in one patch do not all show the same
+## variant. Hidden until the bed is ploughed and waiting for seed.
+func _build_mound() -> void:
+	_mound = Sprite2D.new()
+	_mound.z_index = MOUND_Z_INDEX
+	var tile := Vector2i(
+		floori(position.x / float(TerrainRenderer.TILE_SIZE)),
+		floori(position.y / float(TerrainRenderer.TILE_SIZE))
+	)
+	if _mound_art.has_variants():
+		_mound.texture = _mound_art.frame_for(hash("%d_%d_farm_mound" % [tile.x, tile.y]))
+		_mound.scale = Vector2.ONE * _mound_art.world_scale()
+	_mound.visible = false
+	add_child(_mound)
+
+
+## The ploughed-and-waiting mound sprite.
+func mound() -> Sprite2D:
+	return _mound
+
+
+## Whether this bed is showing its mound: ploughed, and waiting for seed.
+##
+## Clarified after three rounds of "brown blob" reports -- what was wrong was
+## the PROCEDURAL mound, not the illustrated earth: "einfach der neue Sprite
+## soil.png und bevor dem einpflanzen auf soil_mound.png ... lasse nur den
+## prozedual generierten blob weg." So the mound is the state BETWEEN the
+## plough and the seed, which on a working field is the gap between a
+## harvest and the farmer's next planting visit.
+##
+## Against `_sown_crop_id` rather than only the state, because ground nobody
+## has ever worked is not a ploughed bed -- it is grass.
+func is_showing_mound() -> bool:
+	return _mound != null and _mound.visible
+
+
 func _redraw() -> void:
 	if _leaves == null:
 		return  # not _ready() yet
@@ -277,24 +345,56 @@ func _redraw() -> void:
 	# Against what the bed was SOWN with, not plot.crop_id: harvesting clears
 	# the crop, and bare ground appearing the moment the wheat comes off is
 	# the same blob back again.
-	var is_wheat := _sown_crop_id == WHEAT_CROP_ID
+	# The tilled ground is the ground, whatever grows in it -- wheat
+	# included. It used to be hidden under wheat, which is exactly what made
+	# a wheat bed look unploughed ("es fehlt nun das Pfluegen").
 	if _soil_ground != null:
-		_soil_ground.visible = not is_wheat
+		_soil_ground.visible = _sown_crop_id != ""
+	# ...and the mound is what a ploughed bed shows while it waits for seed.
+	if _mound != null:
+		_mound.visible = _sown_crop_id != "" and plot.state == "empty"
 	if plot.crop_id == WHEAT_CROP_ID:
 		_leaves.visible = false
 		_redraw_wheat()
 		return
 	_hide_wheat_blades()
-	_leaves.visible = plot.state != "empty"
-	if not _leaves.visible:
+	if plot.state == "empty":
+		_leaves.visible = false
 		return
 	var fraction := 1.0
 	if plot.state == "growing":
 		fraction = clampf(plot.time_growing / plot.growth_time, 0.0, 1.0)
-	_leaves.scale = Vector2.ONE * _illustrated.leaf_world_scale(plot.crop_id)
-	_leaves.texture = _illustrated.leaf_texture(
-		plot.crop_id, IllustratedCropSprite.growth_stage_index(fraction)
-	)
+	var stage := IllustratedCropSprite.growth_stage_index(fraction)
+	# Illustrated art where it exists, the procedural herb where it does
+	# not. A crop with NEITHER leaves the sprite hidden rather than visible-
+	# and-textureless: that combination draws nothing while claiming to draw
+	# something, which is exactly how a herbalist's bed grew, withered and
+	# was harvested for a whole work block with the player seeing only bare
+	# soil (see is_drawing_a_crop, and tools/probe_village_farming.gd).
+	if _illustrated.has_crop(plot.crop_id):
+		_leaves.scale = Vector2.ONE * _illustrated.leaf_world_scale(plot.crop_id)
+		_leaves.texture = _illustrated.leaf_texture(plot.crop_id, stage)
+		# Centred, because those sheets are authored with the plant high in
+		# the canvas above their own baseline (IllustratedCropSprite.
+		# LEAF_BASELINE_Y) -- the centring IS what puts the root on the bed.
+		_leaves.centered = true
+		_leaves.offset = Vector2.ZERO
+	elif plot.crop_id == HERB_CROP_ID:
+		_leaves.scale = Vector2.ONE * ProceduralHerbSprite.world_scale()
+		_leaves.texture = _herb.generate_texture(stage)
+		# A procedural herb FILLS its own canvas from the bottom row up (its
+		# stem reaches the last row on purpose), so centring would bury the
+		# lower half of every plant in the soil. Root-pinned instead, the
+		# same offset the wheat blades already use for the same reason (see
+		# _redraw_wheat's own note about IllustratedGrassPatch's centre_
+		# offset invariant).
+		_leaves.centered = false
+		_leaves.offset = Vector2(
+			-_leaves.texture.get_width() * 0.5, -_leaves.texture.get_height()
+		)
+	else:
+		_leaves.texture = null
+	_leaves.visible = _leaves.texture != null
 	_leaves.modulate = WITHERED_TINT if plot.state == "withered" else Color.WHITE
 
 

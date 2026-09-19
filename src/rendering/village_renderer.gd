@@ -16,7 +16,10 @@ extends RefCounted
 const SettlementGenerator = preload("res://src/world/settlement_generator.gd")
 const VillageLayout = preload("res://src/world/village_layout.gd")
 const VillageFarm = preload("res://src/gameplay/village_farm.gd")
+const VillagePond = preload("res://src/gameplay/village_pond.gd")
 const VillageSawmill = preload("res://src/gameplay/village_sawmill.gd")
+const VillageCart = preload("res://src/gameplay/village_cart.gd")
+const CartMarker = preload("res://src/rendering/cart_marker.gd")
 const BuildingCatalog = preload("res://src/gameplay/building_catalog.gd")
 const NpcMarker = preload("res://src/rendering/npc_marker.gd")
 const VillageMarket = preload("res://src/world/village_market.gd")
@@ -86,6 +89,11 @@ const _PROP_SEARCH_RADIUS_TILES := 5
 ## decision). A village with no timber in reach honestly has none.
 const INDUSTRY_BUILDING_ID := "sawmill"
 
+## The villager who digs a pond (docs/concept/village_ponds.md). A fisher
+## lives in an ordinary house, so their own house is what carries this and
+## what the pond is sited against.
+const FISHER_OCCUPATION := "fisher"
+
 ## Bright daylight -- spawn_village's own default for `sun_elevation_deg`
 ## when a caller doesn't pass one. Kept (even though this pass's own
 ## buildings don't yet vary their art by time of day -- see
@@ -132,6 +140,10 @@ func spawn_village(
 ) -> Array[Node2D]:
 	if not _settlement_generator.has_settlement_at(chunk_coord, dominant_biome):
 		return []
+	# One founding, one set of ground answers and one square (see
+	# _buildable_memo and _skeleton_memo).
+	_buildable_memo.clear()
+	_skeleton_memo.clear()
 	# The settlement's REAL population, not the founding roster: households
 	# move in over time (docs/concept/village_growth.md mechanism 3), and a
 	# newcomer nobody ever spawns is a household the player can never meet.
@@ -145,7 +157,15 @@ func spawn_village(
 		# stall and gate must be derived from the SAME square the layout
 		# and the paving below use, or a riverside village's props stand
 		# where its square isn't.
-		_is_buildable_local(chunk_coord, chunk_size, world) if world != null else Callable()
+		_is_buildable_local(chunk_coord, chunk_size, world) if world != null else Callable(),
+		# What this village's own land feeds it with (SettlementDemand.
+		# trade_for): the SEEDED region, so the roster is the same on every
+		# visit and does not drift with the weather. A world that cannot
+		# answer falls back to farming, like every other hook here.
+		(
+			world.seeded_region_for_chunk(chunk_coord)
+			if world != null and world.has_method("seeded_region_for_chunk") else null
+		)
 	)
 
 	# One VillageMarket per settlement, shared by every villager built below
@@ -252,6 +272,15 @@ func spawn_village(
 	# own workspot for a tag it cannot find.
 	settlement.landmarks = _grounded_landmarks(settlement.landmarks, tile_size, world)
 
+	# The door of this settlement's store, for every villager built below
+	# (docs/concept/village_warehouse.md mechanism 3). Read off the building
+	# that really STANDS, not off the plan: a cramped site houses its people
+	# and goes without one (pillar 1's caveat), and the reload branch never
+	# runs the founding placement at all. null is the honest answer for a
+	# village with no store, and a villager who gets it keeps stocking the
+	# market outright.
+	var warehouse_door = _warehouse_door(chunk_coord, chunk_size, tile_size, world)
+
 	var spawned: Array[Node2D] = []
 	# Every villager's own marker, by roster index -- the farm fields below
 	# are handed out per villager, and only this loop knows which marker is
@@ -268,24 +297,69 @@ func spawn_village(
 	# then laid across the road.
 	_close_short_street_gaps(chunk_coord, chunk_size, world)
 	var farm_fields := _fenced_farm_fields(chunk_coord, chunk_size, world)
+	# After the farms: a pond must not be dug through ground a farmhouse has
+	# already claimed for its beds, and the beds are only known once
+	# _fenced_farm_fields has worked them out.
+	var fisher_ponds := _dig_fisher_ponds_if_missing(chunk_coord, chunk_size, world)
+	# Where this village's market really is: cells OF its square, one per
+	# merchant (see VillageLayout.market_stand_cells). Worked out before the
+	# landmark loop because the square's own stall IS the first of them --
+	# it is pitched with the rest below and only while somebody is behind
+	# it, rather than standing empty on the paving for ever.
+	var merchant_indices: Array[int] = []
+	for i in npcs.size():
+		if npcs[i].occupation == "merchant":
+			merchant_indices.append(i)
+	var market_stands := _market_stand_positions(
+		chunk_coord, chunk_size, tile_size, world, merchant_indices.size()
+	)
+	# The square's canonical trading spot IS the first stand, not a cell
+	# beside it: a villager who resolves the `stall` tag (and every merchant
+	# past the ones the square had room for) must walk to somewhere a stand
+	# really stands. Without this the tag keeps the planned cell, which
+	# _grounded_landmarks may already have nudged off it.
+	if not market_stands.is_empty():
+		settlement.landmarks["stall"] = market_stands[0]
 	for landmark_id in settlement.landmarks:
+		if landmark_id == "stall":
+			continue  # pitched with the market below, and only when tended
 		spawned.append(_build_landmark(landmark_id, settlement.landmarks[landmark_id], parent))
 	for i in npcs.size():
 		var workspot = _grounded_position(
 			door_positions[i] + Vector2(0, _WORKSPOT_OFFSET_TILES * tile_size), tile_size, world, false
 		)
-		var npc_marker := _build_npc(settlement, i, door_positions[i], workspot, tile_size, parent, world, market)
+		var npc_marker := _build_npc(
+			settlement, i, door_positions[i], workspot, tile_size, parent, world, market, warehouse_door
+		)
 		spawned.append(npc_marker)
 		npc_markers.append(npc_marker)
-		# A merchant gets a second, PERSONAL trading stand at their own house,
-		# on top of the one shared village-square stall -- otherwise every
-		# merchant in the village routes to the same single stall, which reads
-		# as one shop rather than several villagers who each trade (see
-		# docs/concept/npc.md).
-		if npcs[i].occupation == "merchant":
-			var stand = _grounded_position(stand_positions[i], tile_size, world, false)
-			if stand != null:
-				spawned.append(_build_landmark("stall", stand, parent, true))
+		# A merchant trades at their OWN stand, on the village square (see
+		# docs/concept/village_market_square.md). Reported live with a stand
+		# in shot, pitched in long grass well off the paving: "the market
+		# stands should only be put up when an NPC stands behind them to
+		# sell goods ... also the stand should ... be placed on the plaza
+		# anyways". Both halves were one bug -- a personal stand used to be
+		# pitched two tiles south of that merchant's own front door, out in
+		# the meadow, and nobody ever stood behind it because
+		# NpcMarker._resolve_location sends every merchant to
+		# landmarks["stall"], the square's single stall.
+		#
+		# A merchant with no stand (a square with less room than the village
+		# has merchants) keeps trading at the square's own spot, which is
+		# the same honest shortfall a village with more farmers than
+		# farmhouse plots already accepts.
+		var stand_slot := merchant_indices.find(i)
+		if stand_slot >= 0 and stand_slot < market_stands.size():
+			var stand_position: Vector2 = market_stands[stand_slot]
+			var stand := _build_landmark("stall", stand_position, parent, true)
+			spawned.append(stand)
+			# A COPY, not the settlement's shared dictionary: overriding the
+			# tag in place would send every villager in the village to this
+			# one merchant's trestle.
+			var own_landmarks: Dictionary = settlement.landmarks.duplicate()
+			own_landmarks["stall"] = stand_position
+			npc_marker.landmarks = own_landmarks
+			npc_marker.market_stand = stand
 		# Every OTHER occupation whose own work location isn't already one of
 		# the settlement's 3 shared landmarks (merchant/stall and guard/gate
 		# both already have something real there) gets a real prop of their
@@ -296,11 +370,83 @@ func spawn_village(
 		# a field on the river. Their workspot then falls back to their own
 		# doorstep (see _build_npc), so they still have somewhere real to be.
 		var work_tag: String = NpcIdentity.WORK_LOCATION_BY_OCCUPATION.get(npcs[i].occupation, "")
-		if work_tag != "" and not settlement.landmarks.has(work_tag) and workspot != null:
+		# ...unless their workplace is a real BUILDING the village already
+		# raises. A lumberjack works at the sawmill, and the sawmill is not a
+		# prop: asking for one falls back to the well art, so every
+		# lumberjack was standing a second, spurious well in the middle of
+		# the village. The mill _place_industry_if_missing raised is where
+		# they work.
+		if (
+			work_tag != "" and not settlement.landmarks.has(work_tag)
+			and not BuildingCatalog.has_building(work_tag) and workspot != null
+		):
 			spawned.append(_build_landmark(work_tag, workspot, parent, true))
 	_hand_out_farm_fields(npcs, npc_markers, farm_fields, chunk_coord, chunk_size)
+	_hand_out_fisher_ponds(npcs, npc_markers, fisher_ponds, chunk_coord, chunk_size)
 	_hand_out_the_sawmill(npcs, npc_markers, chunk_coord, chunk_size, world)
+	_hand_out_the_store_round(npcs, npc_markers, chunk_coord, chunk_size, world, parent, spawned)
 	return spawned
+
+
+## Tells every villager whose trade is hauling which store is theirs, whose
+## shelves are on their round, and which wagon they pull
+## (docs/concept/village_warehouse.md, Mechanism 4).
+##
+## The sawmill handout's own sibling, and deliberately the same shape: read
+## what really STANDS off world.buildings_in_chunk rather than off the plan,
+## because a cramped site houses its people and goes without a store
+## (pillar 1's caveat) and a reloaded village never re-runs the founding
+## placement at all. A village with no store has no carter's work in it, and
+## its carters keep the ordinary schedule.
+##
+## The wagon goes into `spawned`, which is what the chunk frees when the
+## player walks out -- a cart is not a node this renderer leaks behind. That
+## is not hypothetical: a porter and a cart left alive on every load/unload
+## cycle is the measured cause of the reported framerate decay.
+func _hand_out_the_store_round(
+	npcs: Array, npc_markers: Array, chunk_coord: Vector2i, chunk_size: int, world,
+	parent: Node2D, spawned: Array[Node2D]
+) -> void:
+	if world == null or not world.has_method("buildings_in_chunk") or npc_markers.size() < npcs.size():
+		return
+	var store = null
+	var producers: Array[Vector2i] = []
+	for record in world.buildings_in_chunk(chunk_coord):
+		var building_id: String = record.get("id", "")
+		if building_id == VillageLayout.WAREHOUSE_BUILDING_ID:
+			if store == null:
+				store = record["origin_local"]
+		elif BuildingCatalog.PRODUCTION_BUILDING_IDS.has(building_id):
+			producers.append(record["origin_local"])
+	if store == null:
+		return
+	# The store is also a real place on the village's own map, so a carter's
+	# schedule resolves to it the way a sawyer's resolves to the mill.
+	# Without this their work tag names somewhere that does not exist and
+	# they fall back to a decorative workspot.
+	var footprint := BuildingCatalog.footprint_of(VillageLayout.WAREHOUSE_BUILDING_ID)
+	var store_centre := Vector2(
+		(float((store as Vector2i).x + chunk_coord.x * chunk_size) + float(footprint.x) * 0.5) * TerrainRenderer.TILE_SIZE,
+		(float((store as Vector2i).y + chunk_coord.y * chunk_size) + float(footprint.y) * 0.5) * TerrainRenderer.TILE_SIZE
+	)
+	var store_cell: Vector2i = chunk_coord * chunk_size + (store as Vector2i)
+	var round_cells: Array[Vector2i] = []
+	for producer_origin in producers:
+		round_cells.append(chunk_coord * chunk_size + producer_origin)
+	for i in npcs.size():
+		npc_markers[i].landmarks[VillageCart.WORK_LOCATION] = store_centre
+		if not VillageCart.walks_the_round(npcs[i].occupation):
+			continue
+		npc_markers[i].store_cell = store_cell
+		npc_markers[i].producer_cells = round_cells.duplicate()
+		# One wagon each, standing at the store where its carter starts: a
+		# cart is a real thing on the map, and two carters sharing one would
+		# have each of them emptying the other's load.
+		var cart := CartMarker.new()
+		cart.position = store_centre
+		parent.add_child(cart)
+		spawned.append(cart)
+		npc_markers[i].cart = cart
 
 
 ## Tells every villager whose trade is timber which sawmill is theirs
@@ -357,7 +503,24 @@ func _place_new_village(
 	var layout_seed := VillageLayout.seed_for(chunk_coord)
 	var is_buildable := _is_buildable_local(chunk_coord, chunk_size, world)
 	var is_occupied := _is_occupied_local(chunk_coord, chunk_size, world)
-	var result := _village_layout.layout(building_ids, chunk_size, layout_seed, is_buildable, is_occupied)
+	# The works' ground is spoken for BEFORE a single house plot is
+	# assigned -- docs/concept/village_growth.md pillar 1: the reservation
+	# exists "so a sawmill never has to hunt for room after the fact", and
+	# "reservations cost nothing until something is actually raised on
+	# them". The square, the civic plot and the store are reserved in the
+	# skeleton itself; the works cannot be, because where they go depends on
+	# where the timber is, which a seeded layout cannot know.
+	#
+	# Measured when the founding roster grew from five to ten: a mill needs
+	# clear ground within INDUSTRY_FOREST_REACH_TILES of real forest and
+	# outside it, which on a chunk with a forest edge is a band a couple of
+	# tiles deep. Ten houses reach it where five did not, and every village
+	# with timber in reach silently stopped getting a mill at all.
+	var industry := _industry_plot_for(chunk_coord, chunk_size, world, is_buildable, is_occupied)
+	var result := _village_layout.layout(
+		building_ids, chunk_size, layout_seed, is_buildable,
+		_occupied_or_reserved(is_occupied, _reserved_cells(industry))
+	)
 	# EVERY villager, not merely one. Asked for directly: "They should only
 	# settle where there's enough space and the square wins; houses should
 	# just be moved further away connected by streets". The layout already
@@ -409,6 +572,19 @@ func _place_new_village(
 			var g: Vector2i = chunk_coord * chunk_size + local_cell
 			world.build_at_global(g.x, g.y, TerrainRenderer.ROAD_TILE_ID)
 
+	# The store BEFORE the works, and the order is load-bearing. The store
+	# stands on a fixed reserved plot beside the square and cannot move; the
+	# works is sited wherever there is timber and a clear road spur back to
+	# the street, and that spur is searched for against what is already
+	# standing. Placed the other way round, a spur laid first gets CUT: the
+	# store's own placement lifts every road cell under its footprint (see
+	# place_building_over_roads) and restores only its doorstep, so a mill
+	# whose spur happened to run through the reserved plot was left with no
+	# road home. Caught by test_the_real_sawmill_is_walkable_back_to_the_
+	# street_on_road, which no stub-world test could see -- StubWorld's
+	# build_at_global records road cells into a different dict from the one
+	# modification_at_global reads, so the two never collide there.
+	_place_warehouse_if_missing(chunk_coord, chunk_size, world)
 	_place_industry_if_missing(chunk_coord, chunk_size, world)
 	_place_civic_if_missing(chunk_coord, chunk_size, world)
 	_place_farms_if_missing(chunk_coord, chunk_size, npcs, world)
@@ -432,6 +608,13 @@ func _recover_existing_village(
 	existing_buildings: Array, plots: Array, door_positions: Array, stand_positions: Array
 ) -> void:
 	_lay_plaza_if_missing(chunk_coord, chunk_size, world)
+	# Every village keeps a store, including one founded before there was
+	# such a thing to keep (docs/concept/village_warehouse.md pillar 1).
+	# Without this an older save would reload forever without one, since
+	# this branch never runs the founding placement at all -- the same
+	# reason the hall is raised here too. Ahead of the works for the same
+	# road-spur reason _place_new_village gives.
+	_place_warehouse_if_missing(chunk_coord, chunk_size, world)
 	_place_industry_if_missing(chunk_coord, chunk_size, world)
 	_place_civic_if_missing(chunk_coord, chunk_size, world)
 	_place_farms_if_missing(chunk_coord, chunk_size, npcs, world)
@@ -493,14 +676,65 @@ func _recover_existing_village(
 ## Water is the rule that does not move, and a world that cannot answer
 ## any of these is treated as open ground -- the same duck-typed fail-open
 ## shape every other world hook in this file uses.
+## Global cell -> whether a village may build on that GROUND, for the life of
+## one spawn_village call. Cleared at the top of every call; never long-lived.
+##
+## This is a real cache, not a micro-optimisation. `is_water_at_global` is a
+## hydrology probe, and a founding asks it about the same cells thousands of
+## times over: the layout walks the streets, the store and the works and the
+## hall each site themselves, every farmstead runs a whole-chunk search, and
+## the fences ask again per cell. Measured on one real chunk load, the
+## farmstead search alone ran for minutes (see _place_farms_if_missing).
+##
+## Occupancy and paving are deliberately NOT cached beside it: both really do
+## change during a founding -- that is the entire point of placing buildings
+## and stamping roads -- and a stale answer there would let two plots claim
+## one cell. The ground itself does not move while a village is being
+## founded, which is what makes THIS one exact.
+var _buildable_memo: Dictionary = {}
+
+## This village's own skeleton, computed once per founding rather than once
+## per question.
+##
+## VillageLayout.skeleton is pure for a given chunk and ground, but it is not
+## CHEAP: it scans columns looking for somewhere dry to put the square.
+## _is_street_row's own comment used to say that deriving from it "costs
+## nothing" -- measured, one real founding made 106,722 skeleton calls, and
+## that one line was 21 of the 25 seconds the village took. _field_fits_at
+## asks _is_street_row about every cell of every candidate field ring, and a
+## farmstead pushed off the street searches the whole chunk for a ring.
+##
+## Safe for exactly the reason _buildable_memo is: the square is derived from
+## ground, and ground does not move while a village is being founded.
+var _skeleton_memo: Dictionary = {}
+
+
+## The skeleton for this chunk, from the cache above.
+func _bones(chunk_coord: Vector2i, chunk_size: int, world) -> Dictionary:
+	var key := Vector3i(chunk_coord.x, chunk_coord.y, chunk_size)
+	if not _skeleton_memo.has(key):
+		_skeleton_memo[key] = VillageLayout.skeleton(
+			chunk_size, VillageLayout.seed_for(chunk_coord),
+			_is_buildable_local(chunk_coord, chunk_size, world)
+		)
+	return _skeleton_memo[key]
+
+
 func _is_buildable_local(chunk_coord: Vector2i, chunk_size: int, world) -> Callable:
+	var memo := _buildable_memo
 	return func(cell: Vector2i) -> bool:
 		var g: Vector2i = chunk_coord * chunk_size + cell
+		if memo.has(g):
+			return memo[g]
+		var answer := true
 		if world.has_method("is_water_at_global"):
-			return not world.is_water_at_global(g.x, g.y)
-		if world.has_method("is_buildable_ground_at"):
-			return world.is_buildable_ground_at(g.x, g.y)
-		return world.is_buildable_terrain_at(g.x, g.y) if world.has_method("is_buildable_terrain_at") else true
+			answer = not world.is_water_at_global(g.x, g.y)
+		elif world.has_method("is_buildable_ground_at"):
+			answer = world.is_buildable_ground_at(g.x, g.y)
+		elif world.has_method("is_buildable_terrain_at"):
+			answer = world.is_buildable_terrain_at(g.x, g.y)
+		memo[g] = answer
+		return answer
 
 
 func _is_occupied_local(chunk_coord: Vector2i, chunk_size: int, world) -> Callable:
@@ -537,6 +771,48 @@ func _is_paved_local(chunk_coord: Vector2i, chunk_size: int, world) -> Callable:
 ## No resident: nobody lives in a sawmill (BuildingCatalog.capacity_of ==
 ## 0), so the occupation/resident_seed a house record carries are left
 ## empty here rather than invented.
+## Where this village's works would stand -- ONE call, asked both by the
+## founding layout (which reserves the ground) and by the placement itself,
+## so the plot a village keeps free and the plot it then builds on can never
+## be two different answers.
+func _industry_plot_for(
+	chunk_coord: Vector2i, chunk_size: int, world, is_buildable: Callable, is_occupied: Callable
+) -> Dictionary:
+	return VillageLayout.industry_plot(
+		INDUSTRY_BUILDING_ID, chunk_size, VillageLayout.seed_for(chunk_coord),
+		is_buildable, _is_forest_local(chunk_coord, chunk_size, world), is_occupied,
+		Callable(), _is_paved_local(chunk_coord, chunk_size, world)
+	)
+
+
+## Every LOCAL cell a sited plot needs kept clear: its footprint, its
+## doorstep and the whole road spur that joins it back to the street. The
+## spur as much as the building -- a mill whose path home was built over is
+## a mill the village cannot walk to, which industry_plot itself refuses to
+## site in the first place.
+static func _reserved_cells(plot: Dictionary) -> Dictionary:
+	var reserved: Dictionary = {}
+	if plot.is_empty():
+		return reserved
+	for cell in BuildingCatalog.footprint_cells(plot["building_id"], plot["origin"]):
+		reserved[cell] = true
+	reserved[plot["doorstep"]] = true
+	for cell in plot["road_spur"]:
+		reserved[cell] = true
+	return reserved
+
+
+## `is_occupied`, widened by ground this village has already spoken for --
+## the same seam VillageLayout.layout already takes, so a reservation needs
+## no new parameter anywhere and reads to the layout exactly like something
+## already standing there.
+static func _occupied_or_reserved(is_occupied: Callable, reserved: Dictionary) -> Callable:
+	if reserved.is_empty():
+		return is_occupied
+	return func(cell: Vector2i) -> bool:
+		return reserved.has(cell) or bool(is_occupied.call(cell))
+
+
 func _place_industry_if_missing(chunk_coord: Vector2i, chunk_size: int, world) -> void:
 	if not world.has_method("place_building"):
 		return
@@ -545,10 +821,9 @@ func _place_industry_if_missing(chunk_coord: Vector2i, chunk_size: int, world) -
 			if record.get("id", "") == INDUSTRY_BUILDING_ID:
 				return
 
-	var plot := VillageLayout.industry_plot(
-		INDUSTRY_BUILDING_ID, chunk_size, VillageLayout.seed_for(chunk_coord),
+	var plot := _industry_plot_for(
+		chunk_coord, chunk_size, world,
 		_is_buildable_local(chunk_coord, chunk_size, world),
-		_is_forest_local(chunk_coord, chunk_size, world),
 		_is_occupied_local(chunk_coord, chunk_size, world)
 	)
 	if plot.is_empty():
@@ -575,12 +850,12 @@ func _place_industry_if_missing(chunk_coord: Vector2i, chunk_size: int, world) -
 ## inconsistent, since a field under a paved stretch correctly got no north
 ## wall while the one beside it got a rail.
 ##
-## Derived from the skeleton, so it costs nothing and needs nothing stored.
+## Derived from the skeleton, so it needs nothing stored -- but it does NOT
+## cost nothing, which this comment claimed for a long time and which cost a
+## founding 21 seconds. It goes through _bones, which computes the skeleton
+## once per founding; called directly it is a column scan per cell.
 func _is_street_row(chunk_coord: Vector2i, chunk_size: int, world, y: int) -> bool:
-	var bones := VillageLayout.skeleton(
-		chunk_size, VillageLayout.seed_for(chunk_coord), _is_buildable_local(chunk_coord, chunk_size, world)
-	)
-	var street_y: int = bones["street_y"]
+	var street_y: int = _bones(chunk_coord, chunk_size, world)["street_y"]
 	return y >= street_y and (y - street_y) % VillageLayout.STREET_PITCH_TILES == 0
 
 
@@ -619,6 +894,46 @@ func _close_short_street_gaps(chunk_coord: Vector2i, chunk_size: int, world) -> 
 		world.build_at_global(g.x, g.y, TerrainRenderer.ROAD_TILE_ID)
 
 
+## Where this village's market stands stand, in world pixels -- `count` of
+## them, on the square's own paved cells (see VillageLayout.
+## market_stand_cells and docs/concept/village_market_square.md).
+##
+## Filtered against what is REALLY paved rather than against the plan: a
+## village whose square never got laid (nowhere dry for one, see
+## VillageLayout.plaza_x0_for) has no market to pitch, and a stand on bare
+## ground is exactly the thing this replaced. That filter is also the whole
+## of "clear the long grass around it": paving is a built surface
+## (EarthChunkManager._is_built_surface), and every ground-cover sim in the
+## chunk blocks a built surface, so a stand on the square's own stones has
+## no tall grass, flowers, scrub or lichen under it or beside it -- with no
+## second clearing mechanism of its own to keep in step.
+##
+## A world that cannot answer (an isolated rendering test with no paving at
+## all) keeps every planned cell, the same duck-typed fail-open shape every
+## other world hook in this file uses.
+func _market_stand_positions(
+	chunk_coord: Vector2i, chunk_size: int, tile_size: int, world, count: int
+) -> Array[Vector2]:
+	var positions: Array[Vector2] = []
+	# No world means no paving and so no square to pitch a market on -- and
+	# _bones cannot even be asked, since the skeleton's own siting predicate
+	# reads the ground. Same guard every other world-reading step here has.
+	if count <= 0 or world == null:
+		return positions
+	var cells: Array = VillageLayout.market_stand_cells(_bones(chunk_coord, chunk_size, world), count)
+	var can_ask: bool = world != null and world.has_method("modification_at_global")
+	for cell in cells:
+		var global_cell: Vector2i = chunk_coord * chunk_size + cell
+		if can_ask and not TerrainRenderer.is_road_tile(
+			world.modification_at_global(global_cell.x, global_cell.y)
+		):
+			continue
+		positions.append(
+			Vector2((global_cell.x + 0.5) * tile_size, (global_cell.y + 0.5) * tile_size)
+		)
+	return positions
+
+
 ## Every farmhouse's own field, worked out and FENCED (docs/concept/
 ## village_farms.md): `{origin -> the global cells that farmhouse works}`,
 ## in the same (y, x) order _farmhouse_origins returns.
@@ -641,7 +956,115 @@ func _fenced_farm_fields(chunk_coord: Vector2i, chunk_size: int, world) -> Dicti
 			origin, origins, chunk_coord, chunk_size, is_buildable, is_occupied, world
 		)
 	_fence_the_fields(chunk_coord, chunk_size, fields, is_buildable, is_occupied, world)
+	_clear_rails_with_nothing_to_enclose(chunk_coord, chunk_size, fields, world)
+	_clear_the_beds(fields, world)
 	return fields
+
+
+## Fells whatever is standing in the beds a farmstead has just claimed
+## (docs/concept/village_farms.md, "A farmstead clears its own ground").
+##
+## Reported in play with the enclosure in shot: *"the Farmhouse should clear
+## trees in its bed enclosure"*. A fence around six beds with an oak in the
+## middle of them is not a field -- and the beds were the one real placement
+## here that never felled what was in its way, because they are ground handed
+## to a farmer rather than written tiles.
+##
+## Exactly the enclosed cells and no margin: a village fells the timber it
+## needs, not the wood it is standing near. The fence ring itself is left to
+## the rails, which clear their own cells as they are built.
+##
+## Idempotent -- a cleared cell has nothing left to clear -- so it runs on
+## every visit and heals a village founded before this existed, the same
+## self-healing shape _clear_rails_with_nothing_to_enclose above already has.
+func _clear_the_beds(fields: Dictionary, world) -> void:
+	if world == null or not world.has_method("clear_vegetation_at_global"):
+		return
+	var cells: Array = []
+	for origin in fields:
+		cells.append_array(fields[origin])
+	if cells.is_empty():
+		return
+	world.clear_vegetation_at_global(cells)
+
+
+## Rails that are not on any real frame, taken down.
+##
+## Reported live with the village in shot: *"There's a bed enclosure without
+## a Farmhouse"*, and again after the first sweep landed: *"there are still
+## fenced enclosures without a corresponding Farmhouse or Fisher"*. A field
+## is only ever fenced around a farmhouse that really stands (see
+## _fenced_farm_fields) -- but the rails are real persisted tiles, so a
+## farmhouse that goes AFTERWARDS, razed or reclaimed for standing in water,
+## leaves its whole frame behind for ever.
+##
+## Measured against MEMBERSHIP of a frame this visit really derived, not
+## against distance to a surviving building. The first pass used distance
+## because a farmhouse's field is re-derived on every visit against what is
+## standing at the time -- including the rails the last visit laid -- so "is
+## this rail in today's frame" looked like it might not be a stable question,
+## and asking it unstably would have each visit pull up the last one's fence.
+##
+## It IS stable, measured across four real villages and the 113 rails between
+## them (test_the_sweep_takes_no_rail_a_real_founding_laid): every rail a
+## founding really lays sits on its own farmhouse's ring or its own pond's
+## ring on the next visit too, and not one of them needed the reach slack the
+## distance rule was giving away. What that slack DID keep standing is a
+## frame left by a razed farmhouse that happened to lie near a surviving one
+## -- which is exactly the report.
+##
+## A fisher's pond is fenced with the SAME rails (docs/concept/
+## village_ponds.md: "a similar 3x2 enclosure"), so its own water's ring
+## counts as a real frame exactly as a field's does -- without that the sweep
+## would pull up every pond fence in the village.
+##
+## Reconciled on every visit rather than hooked to the removal itself: the
+## same idempotent self-healing shape _lay_plaza_if_missing and
+## _place_industry_if_missing already have, and it heals a save whose
+## farmhouse went before this existed.
+func _clear_rails_with_nothing_to_enclose(
+	chunk_coord: Vector2i, chunk_size: int, fields: Dictionary, world
+) -> void:
+	if not world.has_method("modification_at_global") or not world.has_method("destroy_at_global"):
+		return
+	# Every cell a real frame may stand on this visit: each farmhouse's own
+	# ring around its own beds.
+	var framed: Dictionary = {}
+	for origin in fields:
+		var beds: Array[Vector2i] = []
+		for cell in fields[origin]:
+			beds.append((cell as Vector2i) - chunk_coord * chunk_size)
+		if beds.is_empty():
+			continue
+		for rail in VillageFarm.fence_cells(beds, origin, VillageFarm.FARM_BUILDING_ID):
+			framed[rail] = true
+
+	var rails: Array = []
+	var water: Array[Vector2i] = []
+	for y in chunk_size:
+		for x in chunk_size:
+			var cell := Vector2i(x, y)
+			var g: Vector2i = chunk_coord * chunk_size + cell
+			var tile_id := String(world.modification_at_global(g.x, g.y))
+			if VillagePond.is_pond_tile(tile_id):
+				water.append(cell)
+			elif VillageFarm.is_fence_tile(tile_id):
+				rails.append(cell)
+	# A pond's own ring is every cell touching its water, on the diagonal as
+	# well as the orthogonal -- the same closed ring VillageFarm.fence_cells
+	# draws around beds, read here off the water that is really there rather
+	# than off a plan, because a pond that was only partly dug still has a
+	# frame around what it got.
+	for cell in water:
+		for dy in range(-1, 2):
+			for dx in range(-1, 2):
+				framed[cell + Vector2i(dx, dy)] = true
+
+	for cell in rails:
+		if framed.has(cell):
+			continue
+		var g: Vector2i = chunk_coord * chunk_size + (cell as Vector2i)
+		world.destroy_at_global(g.x, g.y)
 
 
 ## Hands every villager who farms the field their OWN farmhouse works
@@ -673,8 +1096,141 @@ func _hand_out_farm_fields(
 		# they carry it in (NpcMarker._store_harvest /
 		# haul_farmhouse_stock_to_village). Global, like field_cells --
 		# `fields` is keyed by the LOCAL origin _farmhouse_origins returns.
-		npc_markers[i].farmhouse_cell = chunk_coord * chunk_size + origin
+		npc_markers[i].stock_building_cell = chunk_coord * chunk_size + origin
 		next_farmhouse += 1
+
+
+## Digs every fisher's own pond, fenced like a farmhouse's beds (see
+## docs/concept/village_ponds.md). Asked for directly: *"The Fisher should
+## build a similar 3x2 enclosure but filled with water and a pond with river
+## water physics and fish swimming in it which reproduce"*.
+##
+## Sited against the fisher's OWN house, which is the building that carries
+## their occupation -- a fisher lives in an ordinary house, so there is no
+## separate building to hang this on the way a farmhouse carries a field.
+##
+## Idempotent by the same shape everything else here uses: a cell that is
+## already water reads as occupied, so `is_free` refuses it, no rectangle
+## fits over a pond that is already there, and a reload digs nothing twice.
+func _dig_fisher_ponds_if_missing(chunk_coord: Vector2i, chunk_size: int, world) -> Dictionary:
+	var ponds: Dictionary = {}
+	if world == null or not world.has_method("build_at_global"):
+		return ponds
+	if not world.has_method("buildings_in_chunk"):
+		return ponds
+	var is_buildable := _is_buildable_local(chunk_coord, chunk_size, world)
+	var is_occupied := _is_occupied_local(chunk_coord, chunk_size, world)
+	var is_free := func(cell: Vector2i) -> bool:
+		if cell.x < 0 or cell.y < 0 or cell.x >= chunk_size or cell.y >= chunk_size:
+			return false
+		return is_buildable.call(cell) and not is_occupied.call(cell)
+	for record in world.buildings_in_chunk(chunk_coord):
+		if String(record.get("occupation", "")) != FISHER_OCCUPATION:
+			continue
+		var origin: Vector2i = record["origin_local"]
+		var building_id: String = record.get("id", "")
+		if _has_pond_already(chunk_coord, chunk_size, world, origin, building_id):
+			ponds[origin] = _pond_water_near(chunk_coord, chunk_size, world, origin, building_id)
+			continue
+		var water: Array = VillagePond.pond_cells(origin, building_id, is_free)
+		if water.is_empty():
+			continue  # no room beside this house -- honestly, no pond
+		ponds[origin] = water
+		for cell in water:
+			var g: Vector2i = chunk_coord * chunk_size + (cell as Vector2i)
+			world.build_at_global(g.x, g.y, VillagePond.POND_TILE_ID)
+		# Stocked as it is dug: empty water is a hole, and a pond's fish only
+		# breed from fish that are already in it (VillagePond.step is
+		# logistic, so nothing grows from nothing). A village stocks its own
+		# pond, which is what a village actually does.
+		if world.has_method("stock_pond_at"):
+			var first: Vector2i = chunk_coord * chunk_size + (water[0] as Vector2i)
+			world.stock_pond_at(first.x, first.y)
+		# The frame, on the field's own rule and through the field's own
+		# skips: another farm's crop, a building, paving (the gate), and
+		# ground nothing may stand on.
+		for rail in VillageFarm.fence_cells(water, origin, building_id):
+			var cell: Vector2i = rail
+			if not is_free.call(cell):
+				continue
+			var tile_id := VillageFarm.fence_tile_for(VillageFarm.fence_facing(cell, water))
+			if tile_id == "":
+				continue
+			var g: Vector2i = chunk_coord * chunk_size + cell
+			world.build_at_global(g.x, g.y, tile_id)
+	return ponds
+
+
+## The water already standing in this house's own reach, in the same local
+## cells pond_cells would have returned -- what a RELOAD hands the fisher,
+## since the pond was dug on an earlier visit and is not dug again.
+func _pond_water_near(
+	chunk_coord: Vector2i, chunk_size: int, world, origin: Vector2i, building_id: String
+) -> Array:
+	var water: Array = []
+	if not world.has_method("modification_at_global"):
+		return water
+	for cell in VillageFarm.field_cells(origin, building_id):
+		var local: Vector2i = cell
+		if local.x < 0 or local.y < 0 or local.x >= chunk_size or local.y >= chunk_size:
+			continue
+		var g: Vector2i = chunk_coord * chunk_size + local
+		if VillagePond.is_pond_tile(world.modification_at_global(g.x, g.y)):
+			water.append(local)
+	return water
+
+
+## Hands every fisher the water they work and the building they fill -- the
+## same pairing, in the same roster order, that _hand_out_farm_fields does
+## for a farmer, and for the same reason: this is the only thing that knows
+## whose pond is whose.
+func _hand_out_fisher_ponds(
+	npcs: Array, npc_markers: Array, ponds: Dictionary, chunk_coord: Vector2i, chunk_size: int
+) -> void:
+	if ponds.is_empty() or npc_markers.size() < npcs.size():
+		return
+	var origins: Array = ponds.keys()
+	var next_pond := 0
+	for i in npcs.size():
+		if npcs[i].occupation != FISHER_OCCUPATION:
+			continue
+		if next_pond >= origins.size():
+			return
+		var origin: Vector2i = origins[next_pond]
+		var water: Array = ponds[origin]
+		next_pond += 1
+		if water.is_empty():
+			continue
+		var global_water: Array[Vector2i] = []
+		for cell in water:
+			global_water.append(chunk_coord * chunk_size + (cell as Vector2i))
+		npc_markers[i].pond_cells = global_water
+		# Their own house is the building they fill: a fisher lives in an
+		# ordinary one, so the pond's own origin IS their stock building.
+		npc_markers[i].stock_building_cell = chunk_coord * chunk_size + origin
+
+
+## Whether this house already has water in reach.
+##
+## "A pond cell is occupied, so no pond fits there again" is NOT enough on
+## its own, and a reload proved it: the cells of the pond already dug are
+## refused, another rectangle in the same reach still fits, and the fisher
+## gets a SECOND pond every time the chunk loads. The question a reload has
+## to ask is whether this house has a pond at all, not whether one
+## particular rectangle is free.
+func _has_pond_already(
+	chunk_coord: Vector2i, chunk_size: int, world, origin: Vector2i, building_id: String
+) -> bool:
+	if not world.has_method("modification_at_global"):
+		return false
+	for cell in VillageFarm.field_cells(origin, building_id):
+		var local: Vector2i = cell
+		if local.x < 0 or local.y < 0 or local.x >= chunk_size or local.y >= chunk_size:
+			continue
+		var g: Vector2i = chunk_coord * chunk_size + local
+		if VillagePond.is_pond_tile(world.modification_at_global(g.x, g.y)):
+			return true
+	return false
 
 
 ## Raises each farmhouse's real fence around the beds its villager works
@@ -933,6 +1489,79 @@ func _field_fits_at(
 ## gains one on its next visit, the same self-healing shape the plaza and
 ## the mill already have. A village below the threshold, or one whose
 ## square was never paved, honestly gets none.
+## Every village is founded with a store standing (docs/concept/
+## village_warehouse.md): VillageLayout reserves a plot for it beside the
+## square, and this raises it there.
+##
+## Deliberately has NO household threshold, unlike the hall below. A hamlet
+## of two has no need of a civic seat, but it very much needs somewhere to
+## put the harvest -- that is the whole of pillar 1, and it is why the
+## warehouse left VillageGrowth's ladder rather than moving down it.
+##
+## "If missing" for the same reason the hall's own placement is: this runs
+## on every load, not only at founding, so it must be the thing that decides
+## a store already stands rather than raising a second one beside the first.
+##
+## Uses place_building_over_roads, like the hall and NOT like the sawmill.
+## The reason is the doorstep. This runs after the streets are stamped (see
+## _place_new_village's own "Buildings BEFORE roads" comment), and this
+## plot's door opens straight onto the main street -- so by the time it runs,
+## its own doorstep is already paved, and plain place_building refuses a plot
+## whose doorstep cell is non-empty. It would refuse itself over its own
+## front step, every time. The sawmill escapes this only because
+## industry_plot sites it away from the street and lays its own spur
+## afterwards.
+##
+## Unlike the hall, this does NOT first require every footprint cell to be
+## road: the hall stands ON the paved square, while this stands on ordinary
+## ground beside it. Only the doorstep is shared with the street.
+func _place_warehouse_if_missing(chunk_coord: Vector2i, chunk_size: int, world) -> void:
+	if not world.has_method("place_building_over_roads"):
+		return
+	var building_id := VillageLayout.WAREHOUSE_BUILDING_ID
+	var standing: Array = world.buildings_in_chunk(chunk_coord) if world.has_method("buildings_in_chunk") else []
+	for record in standing:
+		if record.get("id", "") == building_id:
+			return
+
+	var plot: Dictionary = VillageLayout.skeleton(
+		chunk_size, VillageLayout.seed_for(chunk_coord),
+		_is_buildable_local(chunk_coord, chunk_size, world)
+	)["warehouse_plot"]
+	# A village whose square could not be sited has no plot beside it
+	# either -- honest, the same way no plaza means no hall.
+	if plot.is_empty():
+		return
+
+	world.place_building_over_roads(
+		chunk_coord, plot["origin"], building_id,
+		hash("%d_%d_warehouse" % [chunk_coord.x, chunk_coord.y]), ""
+	)
+
+
+## Where this settlement's store opens onto the street, in world pixels, or
+## null when no store stands here.
+##
+## Read off world.buildings_in_chunk rather than off VillageLayout, because
+## the plan and the ground disagree on purpose: the layout reserves a plot
+## only when the site can spare it, the placement can still be refused, and
+## a village loaded from a save never re-runs either. What a villager walks
+## to has to be a building that is really there.
+func _warehouse_door(chunk_coord: Vector2i, chunk_size: int, tile_size: int, world):
+	if world == null or not world.has_method("buildings_in_chunk"):
+		return null
+	var building_id := VillageLayout.WAREHOUSE_BUILDING_ID
+	for record in world.buildings_in_chunk(chunk_coord):
+		if record.get("id", "") != building_id:
+			continue
+		var door_global: Vector2i = (
+			chunk_coord * chunk_size + record["origin_local"]
+			+ BuildingCatalog.doorstep_of(building_id)
+		)
+		return Vector2((door_global.x + 0.5) * tile_size, (door_global.y + 0.5) * tile_size)
+	return null
+
+
 func _place_civic_if_missing(chunk_coord: Vector2i, chunk_size: int, world) -> void:
 	if not world.has_method("place_building_over_roads"):
 		return
@@ -1137,6 +1766,40 @@ func _prop_cell_is_clear(cell: Vector2i, world, allow_road: bool) -> bool:
 ## prop must never stand on the road it fronts, and a merchant's personal
 ## stand carries the same `stall` id as the square's own, so the id alone
 ## cannot tell them apart.
+## Which village props you cannot walk through.
+##
+## Reported live: *"The well doesn't have a hitbox.. it should block
+## walking"*. Every landmark was a bare Sprite2D with a shadow and nothing
+## else, so the player and every villager walked straight through the
+## stonework.
+##
+## Stated as a rule rather than left to whatever the renderer happens to do,
+## and deliberately short: a well is a waist-high ring of stone and you
+## cannot step into it. A gate is an OPENING in a wall -- a village whose own
+## gate blocked its street would be walled in by its entrance -- and a stall
+## is a trestle you step up to, not a wall across the square. An unknown prop
+## is not solid by accident.
+const _SOLID_LANDMARK_IDS := {"well": true}
+
+
+static func landmark_is_solid(landmark_id: String) -> bool:
+	return _SOLID_LANDMARK_IDS.has(landmark_id)
+
+
+## How much of a solid prop's own drawn size really stops you. Under 1 so a
+## body follows the stonework rather than the whole sprite's bounding box,
+## which includes the flowers and the roof overhang a shoulder passes under.
+const _SOLID_LANDMARK_FOOTPRINT_FRACTION := 0.7
+
+## The ground floor's own collision layer -- mirrors EarthChunkManager.
+## GROUND_FLOOR_COLLISION_LAYER's own VALUE (1), restated here rather than
+## imported: EarthChunkManager already preloads this renderer, so the
+## reverse import would be circular. The same "restate + cross-check" choice
+## AntColony.SECONDS_PER_SIMULATED_DAY's own doc comment makes, and
+## cross-checked by test_village_renderer.gd so the two cannot drift.
+const GROUND_FLOOR_COLLISION_LAYER := 1
+
+
 func _build_landmark(landmark_id: String, position: Vector2, parent: Node2D, personal: bool = false) -> Sprite2D:
 	var landmark := Sprite2D.new()
 	landmark.texture = _landmark_texture(landmark_id, position)
@@ -1149,8 +1812,39 @@ func _build_landmark(landmark_id: String, position: Vector2, parent: Node2D, per
 	landmark.position = position
 	var size: Vector2i = ProceduralLandmarkSprite.SIZES.get(landmark_id, Vector2i(20, 20))
 	landmark.add_child(_drop_shadow.make_shadow(int(size.x * 0.8), size.y * 0.5 - 1.0))
+	if landmark_is_solid(landmark_id):
+		landmark.add_child(_solid_body_for(size))
 	parent.add_child(landmark)
 	return landmark
+
+
+## The body that stops you walking into a solid prop. A child of the prop
+## itself, so it moves and is freed with it -- the prop IS the thing in the
+## way, and a separately-tracked body would be one more thing to keep in
+## step. On the ground floor's own collision layer, the same one every
+## wall piece uses (EarthChunkManager.GROUND_FLOOR_COLLISION_LAYER), so
+## nothing new has to learn about it.
+##
+## Sized in the prop's own WORLD units: `size` is the art's own pixel size,
+## which is authored DETAIL_MULTIPLIER times oversized (see
+## docs/concept/art_resolution.md), and the sprite is scaled back by
+## SPRITE_SCALE -- a body that used the raw numbers would be a wall several
+## tiles across.
+func _solid_body_for(size: Vector2i) -> StaticBody2D:
+	var body := StaticBody2D.new()
+	body.name = "LandmarkCollision"
+	body.collision_layer = GROUND_FLOOR_COLLISION_LAYER
+	var shape := CollisionShape2D.new()
+	var rect := RectangleShape2D.new()
+	# In the SPRITE's own space: the body is a child of the scaled sprite, so
+	# Godot applies that scale to the shape as well.
+	rect.size = Vector2(size) * _SOLID_LANDMARK_FOOTPRINT_FRACTION
+	shape.shape = rect
+	# A prop stands ON its own base, so what stops you is the stonework at
+	# its foot rather than a column of air over it.
+	shape.position = Vector2(0, -rect.size.y * 0.5)
+	body.add_child(shape)
+	return body
 
 
 ## A prop's real art if any has been supplied for it, and its procedural
@@ -1183,7 +1877,7 @@ func _landmark_texture(landmark_id: String, position: Vector2) -> Texture2D:
 ## like the player and wild creatures.
 func _build_npc(
 	settlement: Dictionary, index: int, home_position: Vector2, workspot, tile_size: int,
-	parent: Node2D, world = null, market = null
+	parent: Node2D, world = null, market = null, warehouse_door = null
 ) -> NpcMarker:
 	var identity = settlement.npcs[index]
 
@@ -1195,6 +1889,9 @@ func _build_npc(
 	# there. `workspot` is already grounded by the caller.
 	marker.workspot_position = workspot if workspot != null else home_position
 	marker.landmarks = settlement.landmarks
+	# Before setup_economy, which reads it to decide whether this villager
+	# carries their take to a door or stocks the village where they stand.
+	marker.warehouse_position = warehouse_door
 	marker.position = home_position
 	if world != null:
 		marker.setup(world, tile_size)

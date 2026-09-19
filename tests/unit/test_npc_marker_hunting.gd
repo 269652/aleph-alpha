@@ -304,7 +304,16 @@ func test_a_hunter_working_real_quarry_does_not_also_conjure_regional_yield():
 func test_a_hunter_with_no_animal_in_reach_still_earns_from_the_region():
 	# npc.md's named limitation: a village whose chunks hold no loaded
 	# animals keeps the aggregate fallback rather than starving.
-	_run(30.0)
+	#
+	# Long enough to cross a whole FOOD_UNIT, derived from the real rate
+	# rather than written as a round 30 seconds: the regional drip is each
+	# resource's own renewal now, scaled by that trade's own reach (see
+	# docs/concept/settlement_food_calibration.md), so a fixed second count
+	# silently stops gathering anything the moment that is retuned.
+	var NpcProduction = load("res://src/world/npc_production.gd")
+	var per_second: float = NpcProduction.new().yield_per_second("hunter", world, marker.position)
+	assert_gt(per_second, 0.0, "precondition: this region really does drip")
+	_run(ceil(2.0 * NpcProduction.FOOD_UNIT / per_second))
 	assert_gt(market.total_stock(), 0.0)
 
 
