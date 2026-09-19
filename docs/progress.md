@@ -10018,6 +10018,72 @@ constant's own doc comment). Built red-first end to end, merged to
   `DroppedItem`, no per-chunk sim or marker at all). Neither applies a
   Karma penalty (a fungus/seed, not an animal); flowers are excluded
   by construction (never in any group at all), needing no new check.
+- **Crushed underfoot, generalized to ANY animal** (2026-09-19). ✅
+  Done — reported in play: *"Stepping on a frog doesn't kill it?
+  Shouldn't this work out of the box for ANY animal when enough
+  pressure is put on it? A boar walking over a frog should kill it as
+  well"*. Correct on every count, and `crush_mechanic.gd`'s own doc
+  comment already said so ("a third crushable creature needs no new
+  rule of its own, only detection wiring"). The physics was general
+  from the start and BOTH steppers were already real — the player and
+  every `CreatureMarker` trample with their own live mass — but every
+  victim wired up so far is a small special-case invertebrate marker,
+  so **no real animal was crushable by anything**, not even a mouse
+  under a horse. Full mechanism:
+  [soil_fauna.md's "Generalized to ANY animal"](concept/soil_fauna.md#generalized-to-any-animal-2026-09-19).
+  1. **The rule needed one more term, and it is derived, not picked.**
+     Momentum alone asks only "is the stepper heavy enough to crush
+     anything at all", which is the whole question for a worm and the
+     wrong one for an animal: a boar clears it, a deer is also an
+     animal, and a boar does not crush a deer.
+     `PebbleDispersion.FOOT_MASS_FRACTION` is already a cited
+     anatomical figure (one foot is 1.4% of body mass), so
+     `CrushMechanic.crushes_underfoot` falls out of it with no new
+     tuned number invented: **an animal is crushed underfoot when it
+     weighs less than the foot landing on it.** Neither term is
+     redundant — a mouse crushes no ant (momentum), a horse crushes no
+     wolf (foot mass) — and "nothing crushes something its own size"
+     falls out, which is what stops a herd flattening itself. Pinned by
+     test as the RULE over every real species pair, not as examples.
+  2. **Two victim sides, both answering the same `crush()`** every
+     other crush victim already does, so detection needed no special
+     case for either. A frog dies exactly as a caterpillar does (no
+     health, no carcass, no death of its own → a real
+     `SquashCrushEffect` squash it lingers in, then frees itself, and
+     stops hopping/croaking meanwhile). A real `CreatureMarker` dies
+     through its own `take_damage` → `_die` path instead, because
+     `_die` is the choke point the region's mortality books and the
+     carcass hang off — freeing the marker where it stood would be a
+     death nothing ever heard about.
+  3. **`crush_grass_frogs_near`/`crush_creatures_near`** take the
+     stepper's MASS, not its momentum: the second term is a question
+     about the foot's mass, which a momentum has already thrown away.
+     The frog shares `_crush_markers_near`'s walk with only the gate
+     lifted out. `crush_creatures_near` is the one crush entry point
+     *handed* its victims — `EarthChunkManager` is a `RefCounted` with
+     no scene tree and does not track creature markers at all, while
+     `World`'s crush pass already holds a cached group list it runs
+     several other loops over, so taking it is both honest and free
+     (the alternative is a second full group scan per stepper per
+     frame, in the most expensive function in the game).
+  4. **Both steppers wired**, and the player's live mass read plus its
+     standing-still gate lifted out of `_player_step_momentum_kg_m_s`
+     into `_player_step_mass_kg` — one gate and one mass read shared by
+     the momentum-taking walks and the mass-taking animal ones, rather
+     than a second check that could drift from it.
+  5. **Karma splits, deliberately.** A frog joins the roster (a small,
+     harmless animal under the player's own boot is the identical event
+     a caterpillar or bug already is, and it has no other death path);
+     a real animal does not, for anybody, since its death is already on
+     the region's mortality books and charging for it would be
+     inventing a hunting penalty inside the crush pass.
+  6. **`grass_frog` is a real tabulated `CreatureMass` entry** (a cited
+     adult *Rana temporaria* average) — the same explicit row ant, bug
+     and caterpillar already needed, none of the four being an
+     `AnimalAnatomy` species with a profile to derive a mass from.
+  Named, not hidden: a crushed `CreatureMarker` has no "flattened" pose
+  of its own the way `millipede.png` does — it dies the ordinary way and
+  leaves its carcass.
 
 Built red-first end to end throughout, merged to `main`.
 
