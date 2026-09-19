@@ -24,6 +24,7 @@ extends Sprite2D
 ## original home if you need it.
 
 const ProceduralItemSprite = preload("res://src/rendering/procedural_item_sprite.gd")
+const IllustratedItemArt = preload("res://src/rendering/illustrated_item_art.gd")
 const ArtResolution = preload("res://src/rendering/art_resolution.gd")
 const HoverTargetFinder = preload("res://src/rendering/hover_target_finder.gd")
 const IllustratedCropSprite = preload("res://src/rendering/illustrated_crop_sprite.gd")
@@ -73,6 +74,13 @@ const CLICK_AREA_SIZE := Vector2(64.0, 32.0)
 const CLICK_AREA_OFFSET_Y := -8.0
 
 static var _sprite_generator := ProceduralItemSprite.new()
+## Real illustrated art, where a subject has any -- an item lying on the
+## ground is drawn from its own `ground` row (the thing laid down, a
+## different picture from its icon and from the one in your hand). Falls
+## back to the generated sprite for a subject with none, so an item with
+## no art of its own is untouched. See docs/concept/
+## illustrated_art_addressing.md.
+static var _item_art := IllustratedItemArt.new()
 static var _crop_sprite_generator := IllustratedCropSprite.new()
 
 var item_stack
@@ -108,7 +116,7 @@ func _ready() -> void:
 			texture = _crop_sprite_generator.root_texture(item_stack.item.sprite_id, 0)
 			scale = Vector2.ONE * _crop_sprite_generator.root_world_scale(item_stack.item.sprite_id)
 		else:
-			texture = _sprite_generator.texture_for(item_stack.item.sprite_id)
+			texture = _item_art.texture_for(item_stack.item.sprite_id, "ground")
 			# Item art is authored DETAIL_MULTIPLIER times oversized; scaling
 			# it back keeps a dropped item the right size on the ground (see
 			# docs/concept/art_resolution.md). Tree fruit additionally has its

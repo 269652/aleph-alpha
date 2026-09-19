@@ -112,10 +112,47 @@ func frames_for(
 
 
 ## What a call site draws: the illustrated picture when one exists, the
-## generated one when it does not.
+## generated one when it does not -- always at CANVAS_SIZE, so it drops in
+## exactly where the generated sprite stood.
+##
+## The fitting matters for `pivot` contexts. The loader's pivot anchor
+## deliberately returns the WHOLE authored cell (220x300 for the axe in
+## hand) so a grip point stays at the same pixel across frames, and
+## CharacterView.equip_weapon sets `offset = -texture.get_height() / 2` --
+## a 300px-tall texture displaces the grip by ten times what a 32px one
+## does. Scaling the whole cell UNIFORMLY is compatible with the pivot
+## contract rather than a violation of it: every pixel keeps its position
+## relative to every other, so the grip point stays put, just at a
+## different resolution. `center` contexts are already canvas-fitted by the
+## loader and pass through untouched.
 func texture_for(subject: String, context: String, state := "", animation := "still") -> ImageTexture:
 	var illustrated := illustrated_texture_for(subject, context, state, animation)
-	return illustrated if illustrated != null else _procedural.texture_for(subject)
+	if illustrated == null:
+		return _procedural.texture_for(subject)
+	var key := "fitted|%s|%s|%s|%s" % [subject, context, state, animation]
+	if not _texture_cache.has(key):
+		_texture_cache[key] = _fitted(illustrated)
+	return _texture_cache[key]
+
+
+## `texture` scaled uniformly so its longest side is CANVAS_SIZE -- itself
+## when it already is, so nothing the loader already fitted is resampled a
+## second time.
+static func _fitted(texture: ImageTexture) -> ImageTexture:
+	var longest := maxi(texture.get_width(), texture.get_height())
+	var target: int = maxi(CANVAS_SIZE.x, CANVAS_SIZE.y)
+	if longest == target or longest <= 0:
+		return texture
+	var image := texture.get_image()
+	if image.get_format() != Image.FORMAT_RGBA8:
+		image.convert(Image.FORMAT_RGBA8)
+	var scale := float(target) / float(longest)
+	image.resize(
+		maxi(1, int(round(float(texture.get_width()) * scale))),
+		maxi(1, int(round(float(texture.get_height()) * scale))),
+		Image.INTERPOLATE_LANCZOS
+	)
+	return ImageTexture.create_from_image(image)
 
 
 func _build_frames(subject: String, address: Dictionary) -> Array[ImageTexture]:

@@ -135,3 +135,47 @@ func test_the_same_address_is_only_built_once():
 	assert_same(
 		art.texture_for("iron_axe", "icon"), art.texture_for("iron_axe", "icon")
 	)
+
+
+# -- a drop-in for the generated sprite, whatever anchor the art declares --
+
+## `held` is declared `pivot`, and the loader's pivot anchor deliberately
+## returns the WHOLE authored cell (220x300 for the axe) so a grip point
+## stays at the same pixel across frames. A call site swapping this in for
+## a 32px generated sprite cannot take that: CharacterView.equip_weapon
+## sets `offset = -texture.get_height() / 2`, so a 300px-tall texture
+## displaces the grip by ten times what a 32px one does.
+##
+## Scaling the whole cell UNIFORMLY to a common canvas is compatible with
+## the pivot contract rather than a violation of it -- every pixel keeps
+## its position relative to every other, so the grip point stays where it
+## was, just at a different resolution.
+func test_a_held_frame_is_fitted_to_the_same_canvas_as_the_generated_sprite():
+	var texture := art.texture_for("iron_axe", "held")
+	assert_lte(texture.get_width(), ProceduralItemSprite.SIZE)
+	assert_lte(texture.get_height(), ProceduralItemSprite.SIZE)
+	assert_eq(
+		maxi(texture.get_width(), texture.get_height()), ProceduralItemSprite.SIZE,
+		"fitted TO the canvas, not merely under it"
+	)
+
+
+func test_fitting_a_held_frame_keeps_the_cells_own_aspect_so_the_grip_does_not_move():
+	var cell := art.frames_for("iron_axe", "held")[0]
+	var fitted := art.texture_for("iron_axe", "held")
+	assert_almost_eq(
+		float(fitted.get_width()) / float(fitted.get_height()),
+		float(cell.get_width()) / float(cell.get_height()),
+		0.05,
+		"a uniform scale, not a squash"
+	)
+
+
+## The four contexts the four real call sites ask for, all present for the
+## axe -- the hotbar icon, the axe in hand, the axe on your belt, and the
+## axe lying on the ground.
+func test_every_context_the_game_draws_has_real_axe_art():
+	for context in ["icon", "held", "equipped", "ground"]:
+		var address := art.resolve("iron_axe", context, "pristine", "still")
+		assert_false(address.is_procedural, context)
+		assert_eq(address.context, context, "%s is drawn in its own context" % context)

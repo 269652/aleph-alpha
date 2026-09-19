@@ -61,6 +61,7 @@ const PlayerScene = preload("res://scenes/player.tscn")
 const HealthBar = preload("res://src/gameplay/health_bar.gd")
 const HoverTargetFinder = preload("res://src/rendering/hover_target_finder.gd")
 const ProceduralItemSprite = preload("res://src/rendering/procedural_item_sprite.gd")
+const IllustratedItemArt = preload("res://src/rendering/illustrated_item_art.gd")
 const CreatureRenderer = preload("res://src/rendering/creature_renderer.gd")
 const ItemCatalog = preload("res://src/gameplay/item_catalog.gd")
 const CraftingRecipeBook = preload("res://src/gameplay/crafting_recipe_book.gd")
@@ -609,6 +610,11 @@ var _minimap_refresh_accumulator := MINIMAP_REFRESH_INTERVAL  # refresh immediat
 var _autosave_accumulator := 0.0
 var _health_bar := HealthBar.new()
 var _item_sprite_generator := ProceduralItemSprite.new()
+## Real illustrated art for the hotbar, where a subject has any -- the
+## `icon` row, the item presented flat. Falls back to the generated
+## sprite for a subject with none (docs/concept/
+## illustrated_art_addressing.md).
+var _item_art := IllustratedItemArt.new()
 var _hotbar_slots: Array[TextureRect] = []
 var _hotbar_counts: Array[Label] = []
 ## The slot frames themselves (icon/count's parent) -- kept separately so
@@ -5724,7 +5730,7 @@ func _update_hotbar(local_player: Player) -> void:
 		if item_id != "" and count > 0:
 			# texture_for() hits a shared static cache keyed by id (no per-frame
 			# image build / GPU upload) -- item art is a pure function of the id.
-			_hotbar_slots[i].texture = _item_sprite_generator.texture_for(_sprite_id_for_item(item_id))
+			_hotbar_slots[i].texture = _item_art.texture_for(_sprite_id_for_item(item_id), "icon")
 			_hotbar_counts[i].text = str(count) if count > 1 else ""
 			_hotbar_slot_frames[i].tooltip_text = _hotbar_tooltip_text(item_id, count)
 		else:
