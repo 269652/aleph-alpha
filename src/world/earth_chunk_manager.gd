@@ -12620,6 +12620,19 @@ func lake_depth_meters_at_global(global_x: int, global_y: int) -> float:
 ## One byte per cell, 1 where a river or lake covers the ground -- the
 ## per-chunk form of Chunk.blocks_ground_cover, for consumers that take a
 ## whole flag array (TallGrass) rather than a Chunk.
+## Every cell of this chunk that is drawn as WATER, as local Vector2i --
+## the cells form of _ground_cover_blockers, for the sims whose blocking
+## API takes a cell list rather than a mask (FlowerPatch.block_cells, which
+## also clears anything already seeded there and refuses every later
+## rooting and seed-fall).
+func _water_cells(chunk: Chunk) -> Array:
+	var cells: Array = []
+	for index in chunk.width * chunk.height:
+		if chunk.blocks_ground_cover(index):
+			cells.append(Vector2i(index % chunk.width, index / chunk.width))
+	return cells
+
+
 func _ground_cover_blockers(chunk: Chunk) -> PackedByteArray:
 	var blockers := PackedByteArray()
 	blockers.resize(chunk.width * chunk.height)
@@ -15693,7 +15706,7 @@ func _load_chunk(chunk_coord: Vector2i) -> void:
 	for crop_id in WILD_CROP_IDS:
 		var sim := WildCropPatch.new(
 			crop_id, hash("%d_%d_wild_crop" % [chunk_coord.x, chunk_coord.y]),
-			chunk.width, chunk.height, chunk.biome
+			chunk.width, chunk.height, chunk.biome, _ground_cover_blockers(chunk)
 		)
 		crop_sims[crop_id] = sim
 		# Already carrying the current season, so a chunk streamed in during
@@ -15710,7 +15723,8 @@ func _load_chunk(chunk_coord: Vector2i) -> void:
 	# species for this chunk, already carrying whatever it seeded/was
 	# already fruiting on arrival.
 	var mushroom_sim := WildMushroomPatch.new(
-		hash("%d_%d_mushroom" % [chunk_coord.x, chunk_coord.y]), chunk.width, chunk.height, chunk.biome
+		hash("%d_%d_mushroom" % [chunk_coord.x, chunk_coord.y]), chunk.width, chunk.height, chunk.biome,
+		_ground_cover_blockers(chunk)
 	)
 	_mushroom_sims[chunk_coord] = mushroom_sim
 	_mushroom_markers[chunk_coord] = _mushroom_renderer.spawn_markers(
@@ -15845,6 +15859,11 @@ func _load_chunk(chunk_coord: Vector2i) -> void:
 		_weather_model.prevailing_wind_strength(PREVAILING_WIND_REGION_SEED)
 	)
 	_flower_patches[chunk_coord].block_cells(built_cells)
+	# ...and every cell drawn as water. FlowerPatch already owns the right
+	# API for this (block_cells clears what is there AND refuses every
+	# later rooting and seed-fall); it had simply never been handed the
+	# water. Reported live: bushes and flowers standing in open lake.
+	_flower_patches[chunk_coord].block_cells(_water_cells(chunk))
 	_flower_sprites[chunk_coord] = {}
 	_seed_sprites[chunk_coord] = {}
 	_sync_flower_sprites(chunk_coord)
@@ -15876,7 +15895,8 @@ func _load_chunk(chunk_coord: Vector2i) -> void:
 	# once at chunk creation -- mound_cells() never changes for a loaded
 	# chunk's lifetime, exactly like the earthworm burrows just above.
 	_ant_colonies[chunk_coord] = AntColony.new(
-		hash("%d_%d_ants" % [chunk_coord.x, chunk_coord.y]), chunk.width, chunk.height, chunk.biome
+		hash("%d_%d_ants" % [chunk_coord.x, chunk_coord.y]), chunk.width, chunk.height, chunk.biome,
+		_ground_cover_blockers(chunk)
 	)
 	# The visible counterpart: one static AntMoundMarker per mound cell, so a
 	# colony is actually somewhere a player can SEE rather than a pure
