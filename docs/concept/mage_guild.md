@@ -30,12 +30,17 @@ which is the difference between a vending machine and a guild.
    tier band). They teach exactly the spells every one of whose atoms is in
    their school and within their depth — no more, and no hand-authored
    "this master teaches these three spells" list anywhere.
-4. **Rarity is the existing rarity.** A deep master is rare because
-   `rarity_tier.roll_tier` says so — the same weighted roll (common 65% /
-   uncommon 25% / rare 8% / legendary 2%) that already prices loot and gems.
-   Mastery depth is that roll mapped onto the atom catalog's own tier band,
-   so a tier-3 master (the only one who can teach a summoning or a gateway)
-   turns up about one time in ten. **No new rarity numbers are introduced.**
+4. **Rarity is the existing rarity, and a tradition's own floor is the
+   other half of it.** How deep a master runs beyond their school's entry
+   is decided by `rarity_tier.roll_tier` — the same weighted roll (common
+   65% / uncommon 25% / rare 8% / legendary 2%) that already prices loot
+   and gems, mapped onto the atom catalog's own tier band. **No new rarity
+   numbers are introduced.** But a school with no shallow work floors every
+   master who holds it (mechanism 2), and that gives two different kinds of
+   rare: a *gateway* needs a wayfarer who happens to have rolled deep,
+   while a *summoning* needs only a conjurer — of whom there are no shallow
+   ones, and who are one master in ten to begin with. Rare by depth, or
+   rare by tradition.
 5. **Masters accumulate; they do not spawn.** A guild fills over time, one
    master at a time, up to a real capacity — the same carry-the-fraction
    arrival idiom [village_estates.md](village_estates.md)'s immigration
