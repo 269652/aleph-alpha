@@ -182,7 +182,7 @@ static func _ask_of(
 	household_count: int,
 	food_trade: String
 ) -> String:
-	var remedy: String = _remedy_for(_worst_shortage_of(estate, satisfaction), food_trade)
+	var remedy: String = remedy_for(_worst_shortage_of(estate, satisfaction), food_trade)
 	if remedy != "" and _is_remedy_petitionable(
 		remedy, present, supply, estate_counts, building_counts, household_count
 	):
@@ -214,10 +214,16 @@ static func _is_remedy_petitionable(
 	return VillageLabor.can_staff(building_id, supply)
 
 
-## The building that would supply `good` on THIS land. Only the food token
-## depends on where the village stands -- every other remedy is the same
-## building anywhere (see FOOD_WORKS_BY_TRADE for why a fisher's is none).
-static func _remedy_for(good: String, food_trade: String) -> String:
+## The building that would supply `good` on THIS land, or "" for a good no
+## ladder here makes. Only the food token depends on where the village
+## stands -- every other remedy is the same building anywhere (see
+## FOOD_WORKS_BY_TRADE for why a fisher's is none).
+##
+## Public because the needs readout asks the same question the decision
+## does (docs/concept/village_estates.md mechanism 8): a report that worked
+## the remedy out for itself could point at a building this village would
+## never raise.
+static func remedy_for(good: String, food_trade: String) -> String:
 	var remedy: String = REMEDY_BY_GOOD.get(good, "")
 	if remedy != FOOD_WORKS_ID:
 		return remedy

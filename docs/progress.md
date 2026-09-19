@@ -10052,6 +10052,43 @@ constant's own doc comment). Built red-first end to end, merged to
   real chain and slicer, not by reading the code. Also gives the carter a
   house pool, fixing a test that was already red on `main`. Full writeup:
   [building.md](concept/building.md).
+- **Anno-style village gating: cottages first, works that scale, and a
+  needs graph** (2026-09-19). ✅ Done — asked for directly: gating,
+  population and productivity that play more like Anno; no manors from
+  the beginning; production buildings raised autonomously when food runs
+  short; and *"sth. like a graph with every needs that can be
+  resolved"*. Most of that loop had landed the same day in
+  `concept/village_estates.md` (consumption as a flow, four estates,
+  ascent gated on a charter, a labour pyramid, an estate-weighted
+  assembly, tax and guild relief). Three real gaps remained, each
+  measured before it was closed:
+  1. **A village founded manors.** Every household is founded at the
+     bottom estate, which lives in a cottage, but `choose_house_id` read
+     the villager's TRADE and never their standing — the first grassland
+     village on the map founded a manor and three houses on day one. The
+     pool is capped by entitlement now: a ceiling, not an assignment, so
+     trade and character still choose within it.
+  2. **A works that feeds people never got a second building.** The
+     assembly refused any remedy already standing — right for a charter,
+     wrong for a farmstead, so a village of forty stayed hungry with the
+     remedy in plain sight. A food works is petitionable again while
+     fewer stand than `producers_needed` asks for, through a second door
+     on the remedy path alone so the charter path is untouched. And the
+     land picks the works: a fishing village raises no farmstead, because
+     a fisher's works is their own house and the roster already
+     conscripts another fisher. A hunter stays off that table for the
+     already-measured reason on `FOOD_TRADES` (about 0.02 food units an
+     assessment against a draw of 6).
+  3. **The needs graph existed and was invisible.** `VillageNeedsReport`
+     puts the basket, the draw's satisfaction and the assembly's own
+     remedy next to each other — one row per good, worst first, each
+     naming who asks for it, what would answer it, and whether the
+     village is about to. It reads and never computes. A **Needs tab**
+     on the building readout draws it, beside Household and Inventory,
+     from the same state the assembly votes on so the two cannot
+     disagree. A need nothing can build is still a row and says so.
+  Full writeup: [village_estates.md](concept/village_estates.md),
+  mechanisms 7 and 8.
 - **A planned node says what it offers, and each action has its own key**
   (2026-09-19). ✅ Done — reported a third time: *"Planned nodes (e.g.
   pavement) still can't be actually built by the player or hired NPCs...

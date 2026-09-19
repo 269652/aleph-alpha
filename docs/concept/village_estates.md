@@ -400,6 +400,49 @@ real way to eat; it is not something a village can build its way to being
 fed by, and a remedy that pretended otherwise would report a village fed
 when it is starving.
 
+## Mechanism 8 — the needs readout: every need, and what would answer it
+
+Asked directly: *"there should be sth. like a graph with every needs that
+can be resolved"*.
+
+Every part of that graph already exists and none of it is visible. The
+estates name what each rung must have (`basket_goods`), the draw reports
+what they actually got (`EstateConsumption.draw`'s satisfaction), and the
+assembly knows which building would supply each good (`REMEDY_BY_GOOD`,
+and mechanism 7's land-aware food works). What is missing is the one place
+that puts them next to each other.
+
+`VillageNeedsReport` is that place: one ordered row per good this village's
+estates really ask for, carrying
+
+| field | what it is |
+|---|---|
+| `good` / `label` | the item id, and the name the rest of the game calls it |
+| `satisfaction` | `[0, 1]`, the draw's own reading — no second calculation |
+| `estates` | which rungs ask for it, so a shortage names who is going short |
+| `remedy` | the building that would supply it on THIS land, or `""` |
+| `resolvable` | whether that remedy is a building at all |
+| `next` | whether the assembly is actually about to raise it |
+
+Three rules keep it honest rather than decorative:
+
+1. **It reads, it never computes.** Satisfaction comes from the draw and
+   the remedy from the assembly — a readout that worked either out for
+   itself could disagree with the village it claims to describe, which is
+   the failure `HousePanel` already exists to avoid.
+2. **A need nothing can build is still a row.** A village short of candles
+   has no candle-works on any ladder, and saying so plainly ("nothing here
+   makes this") is the honest answer rather than hiding the row or pointing
+   at the nearest-sounding building. That is how food reads on fishing
+   land, too.
+3. **Worst first.** The row order is the order a village would fix them in,
+   so the top of the list is what the assembly is arguing about.
+
+The panel is a **Needs tab** on the building readout `village_growth.md`
+mechanism 5 already put behind a click, beside Household and Inventory —
+the same "renders what it is handed and reaches for nothing else" contract
+those two keep.
+
 ## Status
 
 Written before implementation, per CLAUDE.md; each entry corrected against

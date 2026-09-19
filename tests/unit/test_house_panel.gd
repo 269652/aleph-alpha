@@ -263,3 +263,85 @@ func test_an_empty_cart_still_opens_and_says_it_is_empty():
 	assert_true(panel.is_open())
 	assert_true(panel.inventory_rows().is_empty())
 	assert_false(panel.inventory_is_full())
+
+
+# -- the Needs tab (docs/concept/village_estates.md mechanism 8) ------------
+#
+# Asked directly: *"there should be sth. like a graph with every needs that
+# can be resolved"*. VillageNeedsReport builds that graph; this is where a
+# player sees it, beside Household and Inventory, drawn from the report and
+# reaching for nothing of its own -- the same contract the other two keep.
+
+
+func _needs_rows() -> Array:
+	return [
+		{
+			"good": "wood", "label": "Wood", "satisfaction": 0.2,
+			"estates": ["kossaet"], "remedy": "sawmill", "resolvable": true, "next": true,
+		},
+		{
+			"good": "kind:food", "label": "Food", "satisfaction": 0.6,
+			"estates": ["kossaet"], "remedy": "farmhouse", "resolvable": true, "next": false,
+		},
+		{
+			"good": "candle", "label": "Candle", "satisfaction": 0.9,
+			"estates": ["buerger"], "remedy": "", "resolvable": false, "next": false,
+		},
+	]
+
+
+func test_a_village_with_needs_offers_a_needs_tab():
+	panel.show_report(_home_report({"village_needs": _needs_rows()}))
+	assert_true(panel.has_needs_tab())
+
+
+func test_a_building_with_no_needs_reading_offers_no_needs_tab():
+	panel.show_report(_home_report({}))
+	assert_false(panel.has_needs_tab(), "a village nobody has assessed has no graph to show")
+
+
+## Every row the report carried is a row on the tab, in the report's own
+## order -- the panel never re-sorts what it was handed.
+func test_the_tab_lists_every_need_in_the_order_it_was_given():
+	panel.show_report(_home_report({"village_needs": _needs_rows()}))
+	var listed: Array = panel.needs_rows()
+	assert_eq(listed.size(), 3)
+	assert_eq(String(listed[0]["good"]), "wood")
+	assert_eq(String(listed[1]["good"]), "kind:food")
+	assert_eq(String(listed[2]["good"]), "candle")
+
+
+## A row reads as a need, a fullness and the answer to it.
+func test_a_row_names_the_need_its_supply_and_what_would_answer_it():
+	panel.show_report(_home_report({"village_needs": _needs_rows()}))
+	var first: Dictionary = panel.needs_rows()[0]
+	assert_true(String(first["text"]).contains("Wood"), first["text"])
+	assert_true(String(first["text"]).contains("20"), "the fullness, as a percentage: %s" % first["text"])
+	assert_true(String(first["text"]).contains("Sawmill"), "what would answer it: %s" % first["text"])
+
+
+## A need nothing can build says so plainly rather than pointing at the
+## nearest-sounding building.
+func test_a_need_nothing_can_build_says_so():
+	panel.show_report(_home_report({"village_needs": _needs_rows()}))
+	var last: Dictionary = panel.needs_rows()[2]
+	assert_false(bool(last["resolvable"]))
+	assert_true(
+		String(last["text"]).to_lower().contains("nothing here"),
+		"an unbuildable need should say so: %s" % last["text"]
+	)
+
+
+## The one the village is actually about to raise is marked, so a player
+## sees the argument being settled rather than inferring it.
+func test_the_need_being_answered_right_now_is_marked():
+	panel.show_report(_home_report({"village_needs": _needs_rows()}))
+	var rows: Array = panel.needs_rows()
+	assert_true(bool(rows[0]["next"]))
+	assert_false(bool(rows[1]["next"]))
+
+
+## Opening still lands on Household: who lives here stays the first answer.
+func test_the_panel_still_opens_on_household():
+	panel.show_report(_home_report({"village_needs": _needs_rows()}))
+	assert_eq(panel.selected_tab(), "household")

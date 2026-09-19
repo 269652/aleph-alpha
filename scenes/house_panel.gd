@@ -105,8 +105,17 @@ func _ready() -> void:
 	_tabs = HBoxContainer.new()
 	_tabs.add_theme_constant_override("separation", 6)
 	root.add_child(_tabs)
-	_household_tab = _build_tab_button("Household", true)
-	_inventory_tab = _build_tab_button("Inventory", false)
+	_household_tab = _build_tab_button("Household", TAB_HOUSEHOLD)
+	_inventory_tab = _build_tab_button("Inventory", TAB_INVENTORY)
+	# The Needs tab (docs/concept/village_estates.md mechanism 8): every
+	# need this village's estates really ask for, what they got, and which
+	# building would answer it. A third question again -- who lives here,
+	# what this building holds, and what the VILLAGE is short of.
+	_village_needs_tab = _build_tab_button("Needs", TAB_NEEDS)
+
+	_village_needs_root = VBoxContainer.new()
+	_village_needs_root.add_theme_constant_override("separation", 1)
+	root.add_child(_village_needs_root)
 
 	_inventory_root = VBoxContainer.new()
 	_inventory_root.add_theme_constant_override("separation", 2)
@@ -151,6 +160,10 @@ func show_report(report: Dictionary) -> void:
 	var wallet := int(report.get("wallet_balance", 0))
 	_purse.visible = bool(report.get("is_home", false))
 	_purse.text = "Purse: %d gold" % wallet
+	# Needs first: _rebuild_inventory decides whether the tab ROW shows at
+	# all, and it cannot know that without knowing whether a Needs tab is
+	# offered too.
+	_rebuild_village_needs(report)
 	_rebuild_inventory(report)
 	visible = true
 
@@ -327,27 +340,45 @@ var _inventory: Dictionary = {}
 var _storage_capacity := 0
 
 
-func _build_tab_button(text: String, pressed: bool) -> Button:
+## Which tab is showing, by id rather than by a boolean: there are three of
+## them now, and "inventory or not" cannot say which of the other two.
+const TAB_HOUSEHOLD := "household"
+const TAB_INVENTORY := "inventory"
+const TAB_NEEDS := "needs"
+
+var _selected_tab := TAB_HOUSEHOLD
+
+
+func _build_tab_button(text: String, tab_id: String) -> Button:
 	var button := Button.new()
 	button.text = text
 	button.toggle_mode = true
-	button.button_pressed = pressed
+	button.button_pressed = tab_id == TAB_HOUSEHOLD
 	button.focus_mode = Control.FOCUS_NONE
 	button.add_theme_font_size_override("font_size", 11)
-	button.pressed.connect(func() -> void: _select_tab(button == _inventory_tab))
+	button.pressed.connect(func() -> void: _select_tab(tab_id))
 	_tabs.add_child(button)
 	return button
 
 
-## Which half of the panel is showing. Only ever one, and the buttons stay
+## Which third of the panel is showing. Only ever one, and the buttons stay
 ## in step with it rather than each tracking its own state.
-func _select_tab(inventory: bool) -> void:
-	_household_tab.button_pressed = not inventory
-	_inventory_tab.button_pressed = inventory
-	_inventory_root.visible = inventory
-	_needs_root.visible = not inventory
-	_summary.visible = not inventory
-	_purse.visible = not inventory and bool(_is_home)
+func _select_tab(tab_id: String) -> void:
+	_selected_tab = tab_id
+	_household_tab.button_pressed = tab_id == TAB_HOUSEHOLD
+	_inventory_tab.button_pressed = tab_id == TAB_INVENTORY
+	_village_needs_tab.button_pressed = tab_id == TAB_NEEDS
+	_inventory_root.visible = tab_id == TAB_INVENTORY
+	_village_needs_root.visible = tab_id == TAB_NEEDS
+	var household := tab_id == TAB_HOUSEHOLD
+	_needs_root.visible = household
+	_summary.visible = household
+	_purse.visible = household and bool(_is_home)
+
+
+## Which tab is open right now.
+func selected_tab() -> String:
+	return _selected_tab
 
 
 var _is_home := false
@@ -361,9 +392,10 @@ func _rebuild_inventory(report: Dictionary) -> void:
 	_storage_capacity = int(report.get("storage_capacity", 0))
 	_inventory = (report.get("stock", {}) as Dictionary).duplicate()
 	var offered := _storage_capacity > 0
-	_tabs.visible = offered
+	_inventory_tab.visible = offered
+	_tabs.visible = offered or has_needs_tab()
 	if not offered:
-		_select_tab(false)
+		_select_tab(TAB_HOUSEHOLD)
 		_inventory_root.visible = false
 		return
 	var held := 0
@@ -379,8 +411,9 @@ func _rebuild_inventory(report: Dictionary) -> void:
 		row.text = "%s  x%d" % [_items.display_name_of(item_id), int(_inventory[item_id])]
 		_inventory_rows_root.add_child(row)
 	# Opening on Household keeps the readout's own answer to "who lives
-	# here" first; the tab is there for whoever wants the barn.
-	_select_tab(false)
+	# here" first; the tabs are there for whoever wants the barn or the
+	# village's own ledger of needs.
+	_select_tab(TAB_HOUSEHOLD)
 
 
 ## Stable and readable: by item id, so the same barn lists the same way
@@ -395,6 +428,78 @@ func _sorted_item_ids() -> Array:
 ## Whether this building offers an Inventory tab at all.
 func has_inventory_tab() -> bool:
 	return _storage_capacity > 0
+
+
+# -- the Needs tab (docs/concept/village_estates.md mechanism 8) ------------
+
+
+var _village_needs_tab: Button
+var _village_needs_root: VBoxContainer
+var _village_needs: Array = []
+
+## What an unbuildable need says instead of naming a building. Plain rather
+## than blank: "nothing here makes this" is a real answer, and pointing at
+## the nearest-sounding building would be a lie.
+const NO_REMEDY_TEXT := "nothing here makes this"
+
+## The mark on the need the village is actually about to answer, so a player
+## sees the argument being settled rather than inferring it.
+const NEXT_MARK := "> "
+
+const _NEXT_COLOR := Color(0.62, 0.86, 0.55)
+const _SHORT_COLOR := Color(0.93, 0.66, 0.46)
+
+
+## Draws VillageNeedsReport's own rows, in the order it handed them over --
+## worst first. The panel never re-sorts and never re-derives: it renders
+## what it is handed, the same contract the other two tabs keep.
+func _rebuild_village_needs(report: Dictionary) -> void:
+	_village_needs = (report.get("village_needs", []) as Array).duplicate()
+	_village_needs_tab.visible = has_needs_tab()
+	for child in _village_needs_root.get_children():
+		child.queue_free()
+		_village_needs_root.remove_child(child)
+	for row in _village_needs:
+		var label := Label.new()
+		label.add_theme_font_size_override("font_size", 11)
+		label.text = _needs_row_text(row)
+		if bool(row.get("next", false)):
+			label.modulate = _NEXT_COLOR
+		elif float(row.get("satisfaction", 1.0)) < 1.0:
+			label.modulate = _SHORT_COLOR
+		_village_needs_root.add_child(label)
+
+
+## One row: the need, how full it is, and what would answer it.
+func _needs_row_text(row: Dictionary) -> String:
+	var remedy := String(row.get("remedy", ""))
+	var answer := (
+		BuildingCatalog.display_name_of(remedy) if bool(row.get("resolvable", false))
+		else NO_REMEDY_TEXT
+	)
+	return "%s%s  %d%%  -  %s" % [
+		NEXT_MARK if bool(row.get("next", false)) else "",
+		String(row.get("label", row.get("good", ""))),
+		int(round(clampf(float(row.get("satisfaction", 1.0)), 0.0, 1.0) * 100.0)),
+		answer,
+	]
+
+
+## Whether this readout offers a Needs tab at all -- a village nobody has
+## assessed has no graph to show, and an empty tab is worse than none.
+func has_needs_tab() -> bool:
+	return not _village_needs.is_empty()
+
+
+## What the tab lists, as the report's own rows plus the rendered `text` --
+## the same "what is really on screen" shape the Inventory tab exposes.
+func needs_rows() -> Array:
+	var rows: Array = []
+	for row in _village_needs:
+		var listed: Dictionary = (row as Dictionary).duplicate()
+		listed["text"] = _needs_row_text(row)
+		rows.append(listed)
+	return rows
 
 
 ## What the tab lists, as {item_id, label, count} -- the rendered rows, in

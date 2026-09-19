@@ -188,6 +188,7 @@ const EstateConsumption = preload("res://src/emergence/estate_consumption.gd")
 const EstateAscension = preload("res://src/emergence/estate_ascension.gd")
 const VillageLabor = preload("res://src/emergence/village_labor.gd")
 const VillageAssembly = preload("res://src/emergence/village_assembly.gd")
+const VillageNeedsReport = preload("res://src/emergence/village_needs_report.gd")
 const SettlementFoodDemand = preload("res://src/emergence/settlement_food_demand.gd")
 const EstateShortfall = preload("res://src/emergence/estate_shortfall.gd")
 const GuildRelief = preload("res://src/emergence/guild_relief.gd")
@@ -4862,6 +4863,12 @@ func household_report_at(global_x: int, global_y: int) -> Dictionary:
 		# buildings that hold things and neither is a home.
 		"storage_capacity": BuildingCatalog.storage_capacity_of(building_id),
 		"stock": building_inventory_at(global_x, global_y),
+		# Every need this village's estates really ask for, what they got,
+		# and which building would answer it (docs/concept/village_estates.md
+		# mechanism 8). The SAME state the assembly votes on, so the readout
+		# and the decision cannot disagree about what is short or about what
+		# would fix it.
+		"village_needs": _village_needs_rows(chunk_coord),
 	}
 	if capacity <= 0:
 		return report
@@ -17378,13 +17385,22 @@ func _apply_civic_build_decision(chunk_coord: Vector2i) -> void:
 ## must ask the same function _apply_village_growth_decision then acts on,
 ## never keep a second prediction of its own that can drift from it.
 func next_building_for_settlement(chunk_coord: Vector2i) -> String:
+	var state := _village_assembly_state(chunk_coord)
+	return "" if state.is_empty() else VillageAssembly.next_building(state)
+
+
+## The ONE reading of a village the assembly votes on -- and the same one
+## the needs readout draws, so what a player is shown and what the village
+## decides can never come from two different pictures of it. {} for a chunk
+## with no settlement in it.
+func _village_assembly_state(chunk_coord: Vector2i) -> Dictionary:
 	var settlement_id := EntityRef.for_settlement(chunk_coord)
 	var household_ids := _households_in_settlement(settlement_id)
 	if household_ids.is_empty():
-		return ""
+		return {}
 	var census := _village_census_for(chunk_coord, household_ids)
 	var waiting: Array = census["unhoused_household_ids"]
-	return VillageAssembly.next_building({
+	return {
 		"estate_counts": _household_store.estate_census(household_ids),
 		"household_count": household_ids.size(),
 		"housed_count": int(census["housed_count"]),
@@ -17398,7 +17414,14 @@ func next_building_for_settlement(chunk_coord: Vector2i) -> String:
 		"food_trade": SettlementFoodDemand.trade_for(seeded_region_for_chunk(chunk_coord)),
 		"satisfaction": _settlement_estate_satisfaction.get(settlement_id, {}),
 		"waiting_estate": _estate_of_household(waiting[0] if not waiting.is_empty() else ""),
-	})
+	}
+
+
+## The needs graph for the village in `chunk_coord`, or [] where there is no
+## settlement or nobody has assessed it yet (see VillageNeedsReport).
+func _village_needs_rows(chunk_coord: Vector2i) -> Array:
+	var state := _village_assembly_state(chunk_coord)
+	return [] if state.is_empty() else VillageNeedsReport.rows_for(state)
 
 
 func _apply_village_growth_decision(chunk_coord: Vector2i) -> void:
