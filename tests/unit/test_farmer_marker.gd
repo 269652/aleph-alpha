@@ -107,3 +107,86 @@ func test_get_display_name_reports_farmer():
 
 func test_get_hover_actions_is_empty():
 	assert_eq(marker.get_hover_actions(), [])
+
+
+# -- a bed is ground, and ground does not follow a person -------------------
+#
+# Reported live: *"There's now some weird moving char thing + soil tiles??"*,
+# then *"The soil tiles are also moving with the character..."*. The plots
+# were `add_child`ed to the Farmer, so their positions were offsets from HIM
+# rather than places in the world -- three tilled beds, wheat and all, walked
+# around the field with the farmer every time he took a step.
+
+
+func test_a_bed_stays_where_it_is_when_the_farmer_walks_away():
+	var before: Array[Vector2] = []
+	for plot_marker in marker._plots:
+		before.append(plot_marker.global_position)
+
+	marker.position += Vector2(96.0, 64.0)
+
+	for i in marker._plots.size():
+		assert_eq(
+			marker._plots[i].global_position, before[i],
+			"bed %d walked off with the farmer" % i
+		)
+
+
+## ...because it is not attached to him at all. A bed belongs to the world
+## the farmer walks around in, which is the node he is in himself.
+func test_a_bed_is_not_a_child_of_the_farmer():
+	for plot_marker in marker._plots:
+		assert_ne(plot_marker.get_parent(), marker, "a bed hanging off the farmer moves with him")
+		assert_eq(
+			plot_marker.get_parent(), marker.get_parent(),
+			"a bed stands in the same world the farmer does"
+		)
+
+
+## And they stand at the FARM, which is what `home` means -- not wherever
+## the farmer happened to be standing when his beds were first built.
+func test_the_beds_stand_at_the_farm_not_wherever_the_farmer_started():
+	marker.position = marker.home + Vector2(200.0, 200.0)
+	for plot_marker in marker._plots:
+		assert_lt(
+			plot_marker.global_position.distance_to(marker.home),
+			FarmerMarker.PLOT_SPACING_PX * float(FarmerMarker.PLOT_COUNT),
+			"a bed should be laid out around the farm, not around the farmer"
+		)
+
+
+## The beds used to be freed along with the farmer for free, by being his
+## children. They are siblings now, so he has to take them with him
+## deliberately -- otherwise a demolished Farm leaves three tilled beds
+## and their wheat standing in an empty field forever.
+func test_freeing_the_farmer_takes_his_beds_with_him():
+	var parent := marker.get_parent()
+	var standing := FarmerMarker.PLOT_COUNT
+	assert_eq(_beds_under(parent), standing, "the premise: his beds are in the world")
+
+	marker.free()
+	await get_tree().process_frame
+
+	assert_eq(_beds_under(parent), 0, "a demolished farm left its beds behind")
+
+
+func _beds_under(parent: Node) -> int:
+	var found := 0
+	for child in parent.get_children():
+		if child is FarmPlotMarker:
+			found += 1
+	return found
+
+
+## The invariant the bug actually broke. _step_approaching has ALWAYS walked
+## the farmer to `home + _plot_offset(index)` -- a fixed spot in the world --
+## while the bed itself was drawn at `farmer + _plot_offset(index)`. So the
+## further he wandered, the further his beds drifted from the ground he was
+## standing on to tend them. Both are the same expression now, and this is
+## what keeps them that way.
+func test_the_bed_he_walks_to_is_the_bed_that_is_standing_there():
+	for i in marker._plots.size():
+		assert_eq(
+			marker._plots[i].global_position, marker.home + marker._plot_offset(i),
+			"bed %d is not where the farmer walks to tend it" % i
+		)

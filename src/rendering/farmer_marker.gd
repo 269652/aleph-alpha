@@ -77,11 +77,51 @@ func _ready() -> void:
 	var sprite := Sprite2D.new()
 	sprite.texture = ProceduralLumberjackSprite.new().generate_texture()
 	add_child(sprite)
+	_lay_out_beds()
+
+
+## The Farmer's beds, laid out on the ground at the farm.
+##
+## As SIBLINGS of the farmer, never as his children. Reported live: *"There's
+## now some weird moving char thing + soil tiles??"*, and then *"The soil
+## tiles are also moving with the character..."* -- which is exactly what
+## add_child meant here. A child's `position` is an offset from its parent,
+## so three tilled beds, wheat and all, were being carried around the field
+## by the farmer on every step he took. A bed is ground. Ground does not
+## follow a person.
+##
+## Anchored at `home` -- the farm itself -- rather than at wherever the
+## farmer happens to be standing when this runs, for the same reason: `home`
+## is where the beds ARE, and the farmer is the one who walks.
+##
+## `get_parent()` is the world the farmer was just added to (see
+## EarthChunkManager._spawn_farmer_for, which sets `home`, sets `position` to
+## the same point, and then adds him) -- so parent space and world space
+## agree here, and the beds' own `position` is a place in the world.
+func _lay_out_beds() -> void:
+	var ground := get_parent()
+	if ground == null:
+		return
 	for i in PLOT_COUNT:
 		var plot_marker := FarmPlotMarker.new()
-		plot_marker.position = _plot_offset(i)
-		add_child(plot_marker)
+		plot_marker.position = home + _plot_offset(i)
+		ground.add_child(plot_marker)
 		_plots.append(plot_marker)
+
+
+## Being his children used to free the beds along with the farmer for free.
+## They are siblings now, so he has to take them with him deliberately --
+## otherwise a demolished Farm (EarthChunkManager._despawn_farmer_at frees
+## the marker) leaves three tilled beds and their wheat standing in an empty
+## field forever.
+##
+## is_instance_valid, because this also runs while a whole parent is being
+## torn down, and by then a bed may already be gone.
+func _exit_tree() -> void:
+	for plot_marker in _plots:
+		if is_instance_valid(plot_marker) and not plot_marker.is_queued_for_deletion():
+			plot_marker.queue_free()
+	_plots.clear()
 
 
 ## For World's mouse-hover tooltip (see HoverTargetFinder).
