@@ -10030,6 +10030,28 @@ constant's own doc comment). Built red-first end to end, merged to
   `DroppedItem`, no per-chunk sim or marker at all). Neither applies a
   Karma penalty (a fungus/seed, not an animal); flowers are excluded
   by construction (never in any group at all), needing no new check.
+- **A cottage is a cottage and a manor is a manor** (2026-09-19). ✅
+  Done — asked directly once the art landed: *"I added cottage and manor
+  sprites... please fix that villages use scaled houses for those and use
+  the real illustrations ... cottage 2x2; house 3x2; manor 3x3"*. All
+  three house tiers drew from the five `house_1_*` sheets, which
+  `concept/building.md` called deliberate only while that was the only
+  house art in the repo and said exactly what would end it. `house_small`
+  now draws `cottage_1..5`, `house_medium` keeps `house_1_1..5`,
+  `house_large` draws `manor_1..5`, and the manor also drops the flat
+  25-cottage page as a fallback — a manor whose own sheet is missing must
+  fall through to the honest placeholder, not to a picture of a cottage,
+  which is what "villages use scaled houses" described. The new sheets
+  are the older 8×5 contract rather than `house_1_*`'s 8×10 one:
+  measured, not assumed (`tools/probe_building_lifecycle_sheet.gd` plus
+  rendered cells — cottage_1 row 0 is a foundation ring, row 3 a cottage
+  on fire, manor_1 row 2 a turreted manor), so a variation set now
+  carries the grid its own art is drawn on and both sheet chains read it.
+  The manor's footprint is 3×3 as asked; it was 4×3, wider than deep and
+  as wide as the town hall. Verified by rendering each tier through the
+  real chain and slicer, not by reading the code. Also gives the carter a
+  house pool, fixing a test that was already red on `main`. Full writeup:
+  [building.md](concept/building.md).
 - **A planned node says what it offers, and each action has its own key**
   (2026-09-19). ✅ Done — reported a third time: *"Planned nodes (e.g.
   pavement) still can't be actually built by the player or hired NPCs...
