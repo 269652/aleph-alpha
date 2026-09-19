@@ -515,6 +515,12 @@ a learn that actually lands, the same conserving discipline
 `village_estates.md`'s baskets and `guild_relief.gd`'s chest already hold
 themselves to.
 
+[mage_guild.md](mage_guild.md) later added two more, for the same reason
+and in the same shape — `OUTSIDE` (you are not in the guild) and
+`NO_MASTER` (you are, and nobody here holds that tradition, which carries
+the school and depth to go looking for). The refusal order there is stated
+as a contract because each step is a precondition of the next.
+
 ### Status
 
 - ✅ The mage guild is the compile station, gated at CITY tier
@@ -525,8 +531,12 @@ themselves to.
 - ✅ Tuition: price derived from `derived_base` × rarity multiplier ×
   meal-anchored gold-per-power, refusal dict naming which gate failed,
   gold charged only on success (`spell_tuition.gd`).
-- ✅ Learning is gated on standing near a real placed `mage_guild`, using
-  the same `has_structure_near` proximity every station interaction uses.
+- ✅ Learning is gated on **being inside** a real placed `mage_guild` that
+  has a master in residence who teaches the spell — see
+  [mage_guild.md](mage_guild.md), which took the teaching off the building
+  and put it on the people in it. An earlier version of this gate was
+  proximity (`has_structure_near`); standing beside a guild is now standing
+  outside it, and an apprenticeship is to a person rather than a building.
 - 🚧 **Compiling itself is still unbuilt** — there is no spell-editor UI and
   so nothing to compile. `CRAFT_BASE`/`CRAFT_GROWTH`/per-tier LOC weights
   from the 2026-08-24 section remain unimplemented. Tuition builds the
@@ -539,6 +549,6 @@ themselves to.
   `DEFAULT_CAST_SPELL_ID`. A learned spell is real, persisted and castable
   through `cast_spell`, but nothing yet lets a player *choose* it at the
   keyboard.
-- 🚧 **The guild has no interior trade UI**; learning is a direct call, the
+- 🚧 **The guild has no interior trade UI**; `/learn` is the hand on it, the
   same honest scoping every other station interaction in `player.gd` has
   until an interaction UI exists.

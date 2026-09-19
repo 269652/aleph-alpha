@@ -171,7 +171,71 @@ the teacher.
 
 ## Status
 
-(filled in as this is built)
+- ✅ **Schools** — `spell_schools.gd`: ten traditions partitioning all 25
+  atoms, exhaustive and disjoint, test-pinned both ways so a new atom
+  cannot escape into no school. A spell's school is the one its atoms
+  share (`""` when they cross, which is the intended cost of braiding two
+  traditions); its depth is its deepest atom.
+- ✅ **A book worth having a school in** — `spell_book.gd` grew from 3
+  spells across 2 schools to 21 across all 10, laid out by tradition, with
+  depth following the atom catalog's own tiers. Three spells would have
+  made every master either everything or nothing.
+- ✅ **A master is a seed** — `mage_master.gd`: school, depth, rarity,
+  title, and a real `NpcIdentity` with a name, a genome, a personality, an
+  appearance and a real allocation on the same skill web every other NPC
+  and the player walk. `teaches()` is one rule (in my school, within my
+  depth), never a list.
+- ✅ **A mage is a trade that arrives, not one a village produces** —
+  `NpcIdentity.FORCED_ONLY_OCCUPATIONS`: forcible by a caller, never rolled
+  by a seed, so no wizard turns up in a cottage with a field to stand at.
+- ✅ **A guild fills over time and starts empty** — `mage_guild_roster.gd`
+  + `EarthChunkManager.age_mage_guilds_in`. One persisted number per guild
+  (days open) on the player-felt clock beside immigration, ageing per
+  CHUNK rather than globally, because the settlement step runs once per
+  settlement. Survives a chunk round trip.
+- ✅ **You have to be inside, and somebody has to be home** —
+  `SpellTuition`'s gate is `{inside, masters}`; `Player.guild_here()`
+  reads the interior record it already carries for decorating. `OUTSIDE`
+  and `NO_MASTER` refusals, the latter naming the school and depth to go
+  looking for.
+- ✅ **Several masters really stand around in there** —
+  `HouseInteriorView.place_occupants` / `standing_cells`, spread through
+  the room rather than queued by the door. The first of them is the room's
+  `_resident`, so Talk and the indoor prompt keep working unchanged.
+- ✅ **`/learn` names the people, not the building** — who is in residence,
+  what each lesson costs, who gave the lesson you took.
+
+### Known gaps, stated rather than papered over
+
+- 🚧 **A master's DEPTH is not read off their skill web, though their
+  identity is.** The honest version of "the teacher's skills decide what
+  they teach" would read `spell_atom_tier` off the master's own
+  `allocated_nodes` — the stat exists, on the mage wedge, on the exact
+  graph the player walks. Three things stop it today, all of them real:
+  `NpcSkillAllocation.MAX_POINTS` is pinned at exactly a ring-3 notable so
+  no NPC ever reaches ring 4, the mage wedge's two `spell_atom_tier` nodes
+  sit at rings 3 and 4, and `ARCHETYPE_STAT_POOL["mage"]` does not name
+  that stat, so the allocator actively steers away from it. Every master
+  would come out depth 1. Closing it means widening a point budget, adding
+  a stat to a pool and threading a specialty override — three edits to
+  tested systems for one derived number — so depth uses
+  `rarity_tier.roll_tier` instead, which is an existing weighted roll
+  rather than an invented one. **The divergence is recorded here rather
+  than hidden, and the exact change that would close it is named above.**
+- 🚧 **A guild's interior is still a cottage.** `InteriorTemplates` has no
+  `hall` plan, so `hall`/`workshop`/`farmstead` all silently fall back to
+  the cottage variants — a pre-existing gap this feature now makes
+  visible, since the guild is the first hall a player will spend time in.
+  The masters stand in a cottage.
+- 🚧 **You cannot talk to a specific master.** Indoor Talk reaches the
+  room's `_resident`, which is the first master; the others are scenery
+  until the Talk verb learns about groups.
+- 🚧 **Masters never leave, age, or die**, and a guild's roster only grows.
+  A tradition lost when its last master dies is the obvious next
+  mechanism, and the real-world grounding above already argues for it.
+- 🚧 **A guild ages only while its chunk is loaded** — the same honest
+  limitation `_step_village_immigration` already carries.
+- ⬜ **No guild interaction UI.** `/learn` is the hand on it.
 
 ## Interaction with other docs
 

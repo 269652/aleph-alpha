@@ -284,6 +284,19 @@ else nothing. Doorstep scans (`nearest_npc_near`) skip at-home villagers,
 so "Enter" is what a doorstep offers rather than a "Talk" through the
 wall.
 
+**A room can hold a group, not only a resident.** `HouseInteriorView.
+place_occupants` stands several people up at once — spread evenly across
+`standing_cells()` (open floor with nothing on it, never the doorway,
+which has to stay clear or there is no way back out) rather than queued by
+the door. The first of them takes the template's own resident cell and
+becomes that room's `_resident`, so everything above — Talk, the indoor
+prompt, `resident_identity`/`resident_position` — keeps reading one field
+and needs no knowledge that groups exist. A house still holds exactly one
+villager; the first room in the game that holds a group is the **mage
+guild**, whose masters are in residence rather than "at home" and so are
+not gated on `is_at_home()` at all (see
+[mage_guild.md](mage_guild.md)).
+
 **Older saves.** A settlement chunk that has no buildings yet but still
 holds piece-built houses has those pieces (and their roof/furniture/upper
 entries) wiped once on load, excluding any cell covered by a player-owned

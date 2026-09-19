@@ -201,14 +201,19 @@ the code as it landed. See [progress.md](../progress.md) for the ledger.
 ### Known gaps, stated rather than papered over
 
 - ✅ **The mage guild does something.** It teaches
-  ([magic.md](magic.md)'s 2026-09-19 section): a caster now carries a
+  ([magic.md](magic.md)'s tuition section): a caster now carries a
   known-spell set distinct from the world's catalogue, starts with one
-  spell, and buys the rest from a guild — gold for a permanent capability,
-  refused unless a real `mage_guild` is standing within reach. That is the
-  payoff this whole ladder was gating, so the charter is no longer a
-  locked door in a field: the way into higher magic is a village a player
-  helped grow into a city. `/learn` is the hand on it while no guild
-  interaction UI exists. Compiling *new* spells still has nothing to
+  spell, and buys the rest. That is the payoff this whole ladder was
+  gating, so the charter is no longer a locked door in a field: the way
+  into higher magic is a village a player helped grow into a city.
+- ✅ **And the charter is only the first of two gates.**
+  [mage_guild.md](mage_guild.md) put the teaching on the **people inside**
+  rather than on the building: a guild raised today holds nobody, masters
+  move in one per season up to three, each holds one of ten traditions to
+  one of three depths, and a player must walk **in** and find one who
+  teaches what they want. So earning the charter buys a *place where
+  masters may come*, not a spell shop — and two cities with a guild each
+  are not interchangeable. Compiling *new* spells still has nothing to
   compile from (there is no spell-editor UI), but the access layer it
   needs — known set, gold-for-knowledge, station gate — is now real and is
   what it will sit on.
