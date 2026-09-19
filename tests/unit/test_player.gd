@@ -46,6 +46,7 @@ const ConstructionProject = preload("res://src/emergence/construction_project.gd
 const HouseInteriorView = preload("res://src/rendering/house_interior_view.gd")
 const BuildingCatalog = preload("res://src/gameplay/building_catalog.gd")
 const HouseDecor = preload("res://src/gameplay/house_decor.gd")
+const SpellTuition = preload("res://src/gameplay/spell_tuition.gd")
 
 const TILE_SIZE := TerrainRenderer.TILE_SIZE
 
@@ -1755,6 +1756,7 @@ func test_casting_an_unknown_spell_id_does_nothing_and_fails():
 
 func test_casting_a_self_delivery_spell_heals_the_caster():
 	player.apply_class("mage", {"max_mana": 50.0})
+	_learn_at_a_guild("minor_heal")
 	player.take_damage(30.0)
 	var health_before := player.health
 
@@ -1770,6 +1772,157 @@ func test_casting_with_nothing_in_range_still_spends_mana():
 	player.apply_class("mage", {"max_mana": 50.0})
 	assert_true(player.cast_spell("fire_bolt"))
 	assert_lt(player.mana, 50.0)
+
+
+# -- learning a spell at a mage guild (docs/concept/magic.md, 2026-09-19) ----
+#
+# The charter gates a mage_guild at CITY tier, so the way to one is through a
+# village the player helped grow. This is what is behind that gate: a guild
+# teaches spells out of the world's catalogue that you do not yet know. The
+# catalogue is the world's; the known set is yours.
+
+## A real placed mage guild one tile from the player -- the same single-tile
+## `build_at_global` the city_hall proximity tests above already use.
+func _place_mage_guild_near_player() -> void:
+	var tile := player.current_tile()
+	chunk_manager.build_at_global(tile.x + 1, tile.y, SpellTuition.GUILD_BUILDING_ID)
+
+
+## Puts a guild in reach, pays the asking price, and takes the lesson.
+func _learn_at_a_guild(spell_id: String) -> Dictionary:
+	_place_mage_guild_near_player()
+	player.wallet.add(player.tuition_for(spell_id))
+	return player.learn_spell(spell_id)
+
+
+func test_a_fresh_player_knows_only_the_starting_spells():
+	assert_eq(player.known_spell_ids(), SpellTuition.STARTING_SPELL_IDS.duplicate())
+
+
+func test_the_cast_key_default_is_a_spell_a_fresh_player_actually_knows():
+	assert_true(player.known_spell_ids().has(Player.DEFAULT_CAST_SPELL_ID))
+
+
+func test_a_catalogue_spell_you_have_not_learned_is_not_castable():
+	# SpellBook.has() says a spell EXISTS. It must no longer say you can
+	# cast it -- that is the whole split this feature rests on.
+	player.apply_class("mage", {"max_mana": 50.0})
+
+	assert_false(player.cast_spell("minor_heal"))
+
+	assert_almost_eq(player.mana, 50.0, 0.001, "a spell you do not know must spend nothing")
+
+
+func test_being_refused_a_spell_you_do_not_know_says_so_rather_than_blaming_mana():
+	player.apply_class("mage", {"max_mana": 50.0})
+
+	player.cast_spell("minor_heal")
+
+	assert_string_contains(player.cast_message.to_lower(), "know")
+
+
+func test_a_guild_quotes_a_real_price_for_a_spell_it_can_teach():
+	assert_eq(player.tuition_for("minor_heal"), SpellTuition.new().tuition_for(player._spell_book, "minor_heal"))
+	assert_gt(player.tuition_for("minor_heal"), 0)
+
+
+func test_learning_away_from_any_guild_is_refused_and_costs_nothing():
+	player.wallet.add(100000)
+
+	var result: Dictionary = player.learn_spell("minor_heal")
+
+	assert_false(result["ok"])
+	assert_eq(result["refusal"].get("reason", ""), SpellTuition.NO_GUILD)
+	assert_eq(player.wallet.balance, 100000, "a refusal must never move gold")
+	assert_false(player.known_spell_ids().has("minor_heal"))
+
+
+func test_a_guild_across_the_map_is_not_a_guild_within_reach():
+	var tile := player.current_tile()
+	chunk_manager.build_at_global(tile.x + 20, tile.y, SpellTuition.GUILD_BUILDING_ID)
+	player.wallet.add(100000)
+
+	var result: Dictionary = player.learn_spell("minor_heal")
+
+	assert_eq(result["refusal"].get("reason", ""), SpellTuition.NO_GUILD)
+
+
+func test_learning_at_a_guild_charges_the_tuition_and_teaches_the_spell():
+	_place_mage_guild_near_player()
+	var price: int = player.tuition_for("minor_heal")
+	player.wallet.add(price + 5)
+
+	var result: Dictionary = player.learn_spell("minor_heal")
+
+	assert_true(result["ok"])
+	assert_eq(result["gold"], price)
+	assert_eq(player.wallet.balance, 5)
+	assert_true(player.known_spell_ids().has("minor_heal"))
+
+
+func test_a_spell_learned_at_a_guild_is_really_castable():
+	# The point of the whole errand: the lesson has to buy real magic, not a
+	# line in a list.
+	player.apply_class("mage", {"max_mana": 50.0})
+	_learn_at_a_guild("minor_heal")
+	player.take_damage(30.0)
+	var health_before := player.health
+
+	assert_true(player.cast_spell("minor_heal"))
+
+	assert_gt(player.health, health_before)
+
+
+func test_learning_without_the_gold_is_refused_and_names_the_shortfall():
+	_place_mage_guild_near_player()
+	var price: int = player.tuition_for("minor_heal")
+	player.wallet.add(price - 10)
+
+	var result: Dictionary = player.learn_spell("minor_heal")
+
+	assert_false(result["ok"])
+	assert_eq(result["refusal"].get("reason", ""), SpellTuition.CANNOT_AFFORD)
+	assert_eq(result["refusal"].get("short", 0), 10, "'come back with 10 more gold', never a bare no")
+	assert_eq(player.wallet.balance, price - 10)
+
+
+func test_a_guild_will_not_charge_twice_for_one_spell():
+	_learn_at_a_guild("minor_heal")
+	player.wallet.add(100000)
+
+	var result: Dictionary = player.learn_spell("minor_heal")
+
+	assert_false(result["ok"])
+	assert_eq(result["refusal"].get("reason", ""), SpellTuition.ALREADY_KNOWN)
+	assert_eq(player.wallet.balance, 100000)
+
+
+func test_learned_spells_survive_a_save_and_reload():
+	# A permanent capability bought with real gold must not evaporate on
+	# reload, the same as karma or a spent life.
+	_learn_at_a_guild("minor_heal")
+	var save_data := player.to_save_dict()
+
+	var reloaded := PlayerScene.instantiate()
+	add_child(reloaded)
+	reloaded.apply_save_dict(save_data)
+
+	assert_true(reloaded.known_spell_ids().has("minor_heal"))
+	remove_child(reloaded)
+	reloaded.free()
+
+
+func test_a_save_written_before_spells_were_learnable_keeps_the_starting_set():
+	var save_data := player.to_save_dict()
+	save_data.erase("known_spell_ids")
+
+	var reloaded := PlayerScene.instantiate()
+	add_child(reloaded)
+	reloaded.apply_save_dict(save_data)
+
+	assert_eq(reloaded.known_spell_ids(), SpellTuition.STARTING_SPELL_IDS.duplicate())
+	remove_child(reloaded)
+	reloaded.free()
 
 
 func test_apply_knockback_overrides_the_velocity_for_its_duration():

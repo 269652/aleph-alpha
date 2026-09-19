@@ -658,12 +658,22 @@ const SpellBook = preload("res://src/gameplay/spell_book.gd")
 const SpellExecutor = preload("res://src/gameplay/spell_executor.gd")
 const SpellAtomEffects = preload("res://src/gameplay/spell_atom_effects.gd")
 const SpellTargeting = preload("res://src/gameplay/spell_targeting.gd")
+const SpellTuition = preload("res://src/gameplay/spell_tuition.gd")
 const Karma = preload("res://src/gameplay/karma.gd")
 
 var _spell_book := SpellBook.new()
 var _spell_executor := SpellExecutor.new()
 var _spell_atom_effects := SpellAtomEffects.new()
 var _spell_targeting := SpellTargeting.new()
+
+## What THIS character can cast, which is not the same thing as what exists
+## (docs/concept/magic.md's 2026-09-19 section). The SpellBook is the
+## world's catalogue; this is the known set. Everything past the starting
+## grant is bought from a mage guild -- the building settlement_charter.gd
+## only lets a CITY raise, so the way into higher magic is through a
+## village the player helped grow.
+var _known_spell_ids: Array[String] = SpellTuition.STARTING_SPELL_IDS.duplicate()
+var _spell_tuition := SpellTuition.new()
 
 ## The current cast result banner ("" == nothing to show), read by the HUD --
 ## same shape as trade_message/fishing_message.
@@ -1236,6 +1246,10 @@ func to_save_dict() -> Dictionary:
 		# same as karma above, or the nine-lives count could be reset by
 		# quitting and reloading right after a death.
 		"lives_remaining": _lives_tracker.lives_remaining,
+		# A permanent capability bought with real gold (docs/concept/
+		# magic.md's tuition section) -- must not evaporate on reload, the
+		# same as karma or a spent life above.
+		"known_spell_ids": _known_spell_ids.duplicate(),
 	}
 
 
@@ -1265,6 +1279,12 @@ func apply_save_dict(data: Dictionary) -> void:
 	karma = data.get("karma", karma)
 	accepted_quest_ids = (data.get("accepted_quest_ids", accepted_quest_ids) as Array).duplicate()
 	_lives_tracker = LivesTracker.new(data.get("lives_remaining", _lives_tracker.lives_remaining))
+	# Rebuilt element-wise rather than assigned: a save round-trips as an
+	# untyped Array and _known_spell_ids is typed. A save written before
+	# spells were learnable has no key at all and simply keeps the starting
+	# grant this player was already born with.
+	if data.has("known_spell_ids"):
+		_known_spell_ids = Array(data["known_spell_ids"] as Array, TYPE_STRING, "", null)
 	# is_dead itself is deliberately NOT part of this save dict (an ordinary
 	# mid-respawn-countdown death reloading as alive-at-respawn-position is
 	# an acceptable simplification -- matches this project's pre-existing
@@ -2834,6 +2854,13 @@ func cast_spell(spell_id: String) -> bool:
 	var ast = _spell_book.ast_for(spell_id)
 	if ast == null:
 		return false
+	# Known, not merely extant. Checked AFTER the catalogue lookup so a
+	# garbage id stays the silent no-op it always was, and before anything
+	# is spent -- a spell you never learned costs nothing to be refused.
+	if not _known_spell_ids.has(spell_id):
+		cast_message = "You have not learned that spell -- a mage guild teaches it."
+		_cast_message_timer = CAST_MESSAGE_DURATION
+		return false
 	var rule = _spell_executor.cast_rule(ast)
 	if rule == null:
 		return false
@@ -2896,6 +2923,46 @@ func _spawn_spell_effect(atom_id: String, at_position: Vector2) -> void:
 	marker.position = at_position
 	get_parent().add_child(marker)
 	marker.play(atom_id)
+
+
+# -- learning a spell at a mage guild (docs/concept/magic.md, 2026-09-19) ----
+
+
+## Everything this character can actually cast. A copy, so a caller poking
+## at the returned array cannot teach itself a spell.
+func known_spell_ids() -> Array:
+	return _known_spell_ids.duplicate()
+
+
+## What a guild would offer to teach this character -- the world's catalogue
+## minus what they already know.
+func spells_a_guild_would_teach() -> Array:
+	return _spell_tuition.teachable(_spell_book, _known_spell_ids)
+
+
+## What a lesson in `spell_id` costs, derived from the spell's own power and
+## the shop's live meal price (see SpellTuition). Quotable without standing
+## anywhere: a price is a fact about the spell, not about where you are.
+func tuition_for(spell_id: String) -> int:
+	return _spell_tuition.tuition_for(_spell_book, spell_id)
+
+
+## Pays for and takes a lesson, gated on a real placed mage_guild within
+## reach -- the SAME `_has_structure_near_player` proximity every other
+## station interaction in this file uses, rather than a second one.
+##
+## Returns SpellTuition.learn's result dict unchanged ({ok, gold, known,
+## refusal}); the refusal names which gate said no so a caller can report
+## the true reason instead of a bare "you can't". Gold moves only on a
+## lesson that lands, and the known set is only adopted then.
+func learn_spell(spell_id: String) -> Dictionary:
+	var at_guild := _has_structure_near_player(SpellTuition.GUILD_BUILDING_ID)
+	var result := _spell_tuition.learn(
+		_spell_book, spell_id, _known_spell_ids, wallet, at_guild
+	)
+	if result["ok"]:
+		_known_spell_ids = Array(result["known"] as Array, TYPE_STRING, "", null)
+	return result
 
 
 ## The creature/player group is scanned the same way _perform_attack already
