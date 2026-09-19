@@ -10030,6 +10030,51 @@ constant's own doc comment). Built red-first end to end, merged to
   `DroppedItem`, no per-chunk sim or marker at all). Neither applies a
   Karma penalty (a fungus/seed, not an animal); flowers are excluded
   by construction (never in any group at all), needing no new check.
+- **A farm bed survives the night, so wheat really ripens** (2026-09-19).
+  ✅ Done — reported three times over, most recently with the field in
+  shot: *"Planted crops still vanish and don't grow and no harvest
+  happens"*, and *"i don't even know what the purple crops are it
+  plants.. atm it should plant only wheat"*. Measured FIRST
+  (`tools/probe_village_farming.gd`): thirteen of eighteen beds ended
+  withered over ten simulated days, two of three farmhouses took in
+  nothing at all, and the farmer was working 2750 of 6000 ticks the
+  whole time. A bed's whole drought tolerance was half its growth time
+  — ten to thirty seconds — against a villager's day of sixty seconds
+  in four blocks, of which up to three are spent asleep. Every bed died
+  every night and each morning was spent replanting ground that would
+  die again by evening. `FarmPlot.MIN_WATER_GRACE_SECONDS` is now a
+  floor of one night, taken from that day and those blocks and pinned
+  against both by test rather than restated by import;
+  `VillageFarm.action_for` reads the bed's real window too. Measured
+  again after: **zero withered beds**, and the same three farmhouses
+  taking in 51, 70 and 73 wheat where they took 15, 0 and 0.
+  `FIELD_YIELD_PER_WORK_BLOCK` re-measured at 278 from 225 by the test
+  that pinned the old one — the founding roster had been sized against
+  a field that lost beds every night. Every field also sows wheat for
+  now: a narrowing of the crop, not of who farms, and putting herbs
+  back in the herbalist's bed is one table entry. Full writeup:
+  [village_farms.md](concept/village_farms.md).
+- **The carter's load actually reaches the store** (2026-09-19). ✅
+  Done — reported with the readout open at "Stored: 0 / 240": *"The
+  porter is moving products (beams, logs) from the sawmill to the
+  warehouse but unloading doesn't put anything into warehouse.. storage
+  is still 0 and goods just vanish"*. Nothing vanished: the beams were
+  on the wagon and the wagon kept being turned around. Measured first
+  with a new `tools/probe_village_store_round.gd` (which reads the same
+  `building_inventory_at` the popover draws, not the tile-keyed stock
+  the carter's own tests assert against): one delivery in ten simulated
+  days, a full wagon still parked at the end, readout at 12 of 48.
+  Three separate causes: a carter mid-round was not on real work, so
+  thirst steered them to the well roughly every seventeen seconds; a
+  dropped round threw its leg away, so each block began walking back
+  out to a shelf nearly reached the evening before; and a loaded wagon
+  went to another shelf rather than to the store, topping up a load
+  that was never emptied. After: four deliveries, an empty wagon, all
+  48 beams in the readout. The end-to-end proof is that measurement and
+  the test file says so — a stub world delivers either way, so a unit
+  test claiming it would prove nothing; what the tests pin is each
+  mechanism. Full writeup:
+  [village_warehouse.md](concept/village_warehouse.md).
 - **Crushed underfoot, generalized to ANY animal** (2026-09-19). ✅
   Done — reported in play: *"Stepping on a frog doesn't kill it?
   Shouldn't this work out of the box for ANY animal when enough
