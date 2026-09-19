@@ -44,7 +44,9 @@ same reasoning [npc_social_life.md](npc_social_life.md) opens with.
    market*, and the same unit cannot satisfy two households. A village with
    a full granary and forty households is not well fed; it is four days
    from not being fed. Reading stock can never say that. Drawing it down
-   says it on its own.
+   says it on its own. (In the live wiring FOOD is the granary's draw
+   rather than this layer's, for a measured reason — see Mechanism 2 and
+   the Status gap.)
 2. **The ladder goes down as well as up.** A village that stops supplying
    its people loses them — first the standard they hold, then the people
    themselves. Growth that cannot be reversed is not growth, it is a
