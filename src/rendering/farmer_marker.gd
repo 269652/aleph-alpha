@@ -26,6 +26,7 @@ extends Node2D
 ## Farm.
 
 const FarmerBehavior = preload("res://src/gameplay/farmer_behavior.gd")
+const WalkGate = preload("res://src/gameplay/walk_gate.gd")
 const FarmPlotMarker = preload("res://src/rendering/farm_plot_marker.gd")
 const FarmPlot = preload("res://src/gameplay/farm_plot.gd")
 const TerrainRenderer = preload("res://src/rendering/terrain_renderer.gd")
@@ -69,6 +70,10 @@ var earth = null
 var _behavior := FarmerBehavior.new()
 var _plots: Array[FarmPlotMarker] = []
 var _target_index := -1
+## own_field_cells' cache and the `home` it was built for -- see that
+## function for why it is keyed this way.
+var _field_cells: Dictionary = {}
+var _field_cells_home := Vector2(INF, INF)
 var _next_seed_value := 0
 
 
@@ -135,6 +140,34 @@ func get_hover_actions() -> Array:
 	return []
 
 
+## The tiles this farmer's own beds stand on -- the one fence it may cross.
+##
+## A field's rails stand on its INNER edge, so the villager they would
+## otherwise shut out is the farmer whose beds they enclose (see
+## docs/concept/village_farms.md "The gate", and WalkGate's own
+## own_field_cells). Built from `home` and the SAME _plot_offset the approach
+## step walks to, so the exemption can never name a different set of cells
+## than the ones this farmer actually works.
+##
+## Cached against `home`, because the gate asks for it on every frame of
+## every approach and rebuilding a Dictionary per walker per frame is exactly
+## the per-frame allocation this project has spent fifteen FPS rounds
+## removing. `home` is what the answer depends on, so `home` is what the
+## cache is keyed on -- it cannot go stale without the key changing.
+func own_field_cells() -> Dictionary:
+	if _field_cells_home == home and not _field_cells.is_empty():
+		return _field_cells
+	_field_cells = {}
+	for i in PLOT_COUNT:
+		var bed: Vector2 = home + _plot_offset(i)
+		_field_cells[Vector2i(
+			floori(bed.x / TerrainRenderer.TILE_SIZE),
+			floori(bed.y / TerrainRenderer.TILE_SIZE)
+		)] = true
+	_field_cells_home = home
+	return _field_cells
+
+
 func _plot_offset(index: int) -> Vector2:
 	return Vector2((float(index) - float(PLOT_COUNT - 1) / 2.0) * PLOT_SPACING_PX, PLOT_SPACING_PX)
 
@@ -168,7 +201,14 @@ func _step_approaching(delta: float) -> void:
 	if to_target.length() <= ARRIVE_DISTANCE_PX:
 		_behavior.arrive()
 		return
-	position += to_target.normalized() * WALK_SPEED * delta
+	# Through the shared gate, with this farmer's OWN beds exempted from the
+	# rail rule and nothing else -- see own_field_cells. A wall still stops it
+	# (the exemption is about rails and only rails), and a neighbour's fence
+	# still stops it too.
+	position = WalkGate.slide(
+		earth, position, position + to_target.normalized() * WALK_SPEED * delta,
+		float(TerrainRenderer.TILE_SIZE), own_field_cells()
+	)
 
 
 func _step_working(delta: float) -> void:
