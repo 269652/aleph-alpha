@@ -29690,10 +29690,13 @@ uses to make a street of cottages a street of different cottages.
 
 Drawn **between the kerb and the house** — children paint in tree order, so
 the yard lies on the ground the kerb marks out and the walls stand on it.
-Same width as the house by the same `drawn_plot_width_tiles` rule, so it is
-the plot's and never wider. Wired per building id
-(`BuildingCatalog.background_sheet_for`), so every other building answers
-`{}` and draws exactly what it drew before.
+Wired per building id (`BuildingCatalog.background_sheet_for`), so every
+other building answers `{}` and draws exactly what it drew before.
+
+> **Superseded the same day.** This entry originally read "same width as the
+> house by the same `drawn_plot_width_tiles` rule, so it is the plot's and
+> never wider" — and that rule is what hid the art. See *"A yard is the
+> ground of the plot, not a mat under the house"* below.
 
 Worth stating, because it is what makes this art matter: **a farmhouse has no
 variant sheet of its own** — only `house_small`/`house_medium` do — so every
@@ -30071,3 +30074,504 @@ paint, so they simply stop being drawn.
 
 Tests: 14/14 in `test_building_ground.gd` (+6), with the five rings the
 reported villages really measured pinned as data.
+
+## Nothing grows in a pond, and a pond keeps its fish (`concept/village_ponds.md`, 2026-09-20)
+
+Reported live with the water in shot: *"Now there's a pond, but grass grows
+in it and no fish are in it"*. Two independent faults; neither was visible
+from anything that doc's status list claimed, and one of them was measured
+before a line was changed.
+
+**Grass in the water.** `TallGrass` seeds off the chunk's BIOME array, and a
+dug pond is deliberately NOT a biome — it is a chunk modification, so its
+cells still read as the grassland they were cut out of. This world has
+answered that exact report once already, for rivers (*"grass grows in
+rivers"*, answered by `TallGrass._is_river_at`), because a river does not
+change the biome array either. A river is GENERATED, so its answer lives in
+the sim; a pond is BUILT, so its answer is the seam every other built thing
+already uses: `EarthChunkManager._is_built_surface`, the one predicate
+`build_at_global`, `destroy_at_global` and `_built_local_cells` share for
+ground cover.
+
+Worth stating, because a half-fix here would have looked like a whole one:
+the chunk-LOAD path already kept grass out, through
+`_ground_cover_blockers`, which reads `is_water_at_global` and has always
+seen a pond. What it never covered is the visit that DIGS one — the sim is
+built when the chunk loads and the village digs later in that same load —
+nor `TallGrass.plant`, which checks the biome and the block set but not the
+water. Both go through `block_cells` now, and filling a pond in gives the
+ground back exactly as pulling out a fence rail does.
+
+**No fish in it.** Measured first, on two real streamed villages
+(`tools/probe_pond_and_farmhouse.gd`, added here): both held a dug, fenced
+pond, and both reported a stock of **0.00** with nothing swimming.
+
+The water survives a reload because it is a persisted modification, and so
+does the fence. The FISH were an in-memory dictionary keyed by chunk, and
+the village pass that stocks a pond only ever runs on the visit that DIGS
+one — `_dig_fisher_ponds_if_missing` returns early on a pond that is
+already there, which is correct, since a fisher stocks a pond once. So a
+pond was a fishery for one visit and a hole for the rest of the game. Even
+in-session it came back wrong: `_free_pond_fish_markers` empties the water
+on unload and nothing re-synced it on load.
+
+`POND_FISH_DIR` persists the stock per chunk, keyed by the pond's own
+anchor — saved on unload, merged back on load with the in-session record
+winning, the same precedence the region's aggregate fish population already
+uses. **Persistence rather than re-stocking on reload**, and the difference
+is the point: a pond the village has fished out must stay fished out until
+it breeds back, and a reload that quietly refilled it would make the stock
+decorative. `test_a_pond_fished_out_is_still_fished_out_after_a_reload`
+pins that.
+
+Re-measured after the fix on the same transect, first visit AND walking
+back: **6 of 6 ponds** clear of grass, **6 of 6** holding 2.00 fish with 2
+markers swimming, on the revisit as well as the founding visit.
+
+Tested: `test_earth_chunk_manager_ground_cover.gd` 11/11 (+3 new),
+`test_earth_chunk_manager_ponds.gd` (+3 new, whole `_a_pond` selection
+11/11). Red first in both: grass left standing in the water, flowers
+plantable in it, the ground not given back; nothing swimming after a
+reload, and stock 0.0 to a manager that never dug the pond.
+
+### Still open, named rather than implied
+
+- **Reeds.** A real fishpond has vegetation in it, and this world has a sim
+  for that (`AquaticVegetation`, which seeds on water as an INCLUSION
+  filter). A dug pond is not in the mask it reads, so a pond grows nothing
+  at all today. Clean water rather than wrong water, and *land* grass in a
+  pond was the report.
+- **A hut on 4 of 6 banks.** The same sweep found two ponds with no
+  `fisher_hut` within `HUT_BANK_REACH_TILES` of their water. Diagnosed in
+  the entry directly below, and only PARTLY closed by it: two of the three
+  real villages measured still have none, because their fisher's own plot
+  genuinely has no room for a 3x2 works.
+
+## A pond is dug where its hut can stand (`concept/village_ponds.md`, 2026-09-20)
+
+Reported live, standing at the water: *"no Fisher Hut is near"*. The
+entry above records the sweep that found it; this is what it turned out
+to be.
+
+Measured on three real streamed villages (`tools/probe_village_geometry.gd`,
+added here): one of them had a pond with **no hut anywhere**, and not by a
+near miss. All **51** candidate origins within `HUT_BANK_REACH_TILES` of
+that water were refused — 19 by the village street, 21 by neighbouring
+houses, 5 by the pond's own fence rail and 6 by the water itself. The dig
+had put the pond in the two-row strip between the street and the next
+house row, which is exactly wide enough for the water and nothing else.
+
+Two passes that never spoke: the dig took the best rectangle in reach, and
+the hut was sited afterwards on whatever bank that left.
+`VillageFarm.field_rect` gains the caller's-own-condition argument
+`VillageLayout.street_plot` has had all along, for the reason that one
+already states — *a farmhouse with nowhere to farm is a farmhouse that
+should not have been raised*. A refused rectangle keeps the search going,
+so the fisher gets the next-best water that does work; and when no bank in
+reach can take a hut, a second unconditional search digs the pond anyway,
+because a pond with no hut beats no pond at all.
+
+**Asked of the ground as it WILL BE.** `hut_origin` is asked at placement
+time, when the rails are real ground the caller's `is_free` already
+refuses. Before the dig neither the water nor its frame exists, so
+`hut_origin_after_fencing` adds the rails by hand — without it the dig
+would choose a site whose only bank is the fence it is about to build. A
+test pins that case exactly.
+
+**And the hut gets a front step.** Every other building a village places
+has its doorstep paved as part of siting the plot, because every other
+building is sited on frontage; a hut belongs to the water instead, so
+nothing laid its step and it stood with its door opening onto bare ground.
+That invariant has been false since the hut landed the same day, hidden by
+luck — the fixture village's hut happened to fall with its doorstep on a
+rail — and moving the pond by one rectangle broke
+`test_every_placed_building_faces_south_onto_a_real_road_cell`, which is
+that test doing exactly its job.
+
+Red first at every step: the dig choosing the hutless strip, a bank that
+only the fence would block being taken for a bank, and a hut with no front
+step. Tested: `test_village_pond.gd` 29/29 (+5 new),
+`test_village_renderer.gd` 153/153 (+1 new),
+`test_village_pond_hut_wiring.gd` 3/3 (new file).
+
+### What this does NOT fix, measured rather than hoped
+
+A controlled A/B on a wiped world {D} the same three villages founded from
+nothing, before and after {D} says the dig-time question is a **no-op in
+the two villages that were missing a hut**. Their ponds do not move,
+because no other rectangle in reach passes either, so the fallback runs
+and the water lands in the same strip:
+
+| village | pond | hut | why not |
+| --- | --- | --- | --- |
+| (678,128) | (8,12) | yes, at (4,11) | {D} |
+| (682,132) | (4,17) | none | 51/51 refused: 23 street, 20 houses, 6 water, 2 rails |
+| (696,128) | (4,17) | none | 51/51 refused: 19 street, 21 houses, 6 water, 5 rails |
+
+Both of those fishers live at `(4,19)`, the far west end of the street,
+and the street grid boxes them in: `y=16` is a street row and `y=21` is
+the next, so the only ground of their own is the two-row strip `y=17-18`
+that the water exactly fills. A 3x2 works plus its doorstep needs three.
+
+**A fix that was nearly written on a bad number.** The obvious next move
+is to raise the hut BEFORE the frame, so the fence goes round it the way
+it already goes round a farmhouse standing in its field's ring {D} which
+would also retire `HUT_BANK_REACH_TILES`' own stated reason for being 2
+rather than 1. The first count said 5 and 2 sites were refused by rails,
+which looked like enough. That count was read off the probe's
+first-reason tally, and a site whose FIRST refusal is a rail can still be
+blocked by a street on another of its cells, so it was an upper bound
+wearing an answer's clothes. Recomputed properly {D} the same grid walked
+again with the rails, and only the rails, treated as clear ground {D} the
+reorder opens **7** sites in the village that already has a hut and **0**
+in each of the two that do not. The frame is not what is in the way. The
+reorder is not the fix, and was not written.
+
+### What WOULD fit, counted
+
+Two levers remain: a smaller works, and a longer reach. Both are numbers,
+so both were counted rather than argued about — sites available on the
+two hutless villages' banks, with the pond's own rails treated as clear
+ground (that is, assuming the reorder above):
+
+| works | reach 2 | reach 3 | reach 4 |
+| --- | --- | --- | --- |
+| 3x2 (today) | **0** | 1 | 5 / 9 |
+| 2x2 | **0** | 3 | 10 / 13 |
+| 2x1 | **2** | 5 | 15 / 16 |
+| 1x1 | 2 / 5 | 5 / 8 | 17 / 20 |
+
+(Two figures where the villages differ.)
+
+**The reach is the wrong lever.** A 3x2 works fits at reach 3, but its
+only site in either village is `(0,14)` — the next house row, on the far
+side of the street row at `y=16` from water at `y=17-18`. That is exactly
+the fault already reported and fixed for the pond itself: *"it's randomly
+placed somewhere not adjacent to the fishers house or across the
+street"*. A hut across the road from its own pond is not a hut on the
+bank.
+
+**The footprint is the right one.** A 2x1 works fits at the CURRENT reach,
+at `(7,17)` — immediately east of the water, same rows, no street
+between, on the fisher's own side. And it needs the reorder to get there,
+because `(7,17)` is a ring cell: the frame has to go round the shack, the
+way it already goes round a farmhouse in its field's ring. Neither change
+is sufficient alone; together they give both villages a hut in the right
+place.
+
+That leaves a design question rather than a defect, and it is the
+borrowing. `fisher_hut` takes the farmhouse's 3x2 because it is DRAWN as
+one (`draws_as`), under a direct instruction: *"use farmhouse sprite until
+illustration exists"*. A real fisher's shack is not a farmhouse, and a 2x1
+building drawn from a farmhouse sheet would not look like either.
+
+### And the farmhouse half of the same report, which did NOT reproduce
+
+The same message said *"not a single Farmhouse even though there's plenty
+of space"*. Measured rather than assumed, on every real stamped village in
+the sweep: **every one of them has a farmhouse**, and the count tracks the
+trades — 3 farmhouses where the roster carried 2 farmers and a herbalist,
+1 where it carried a herbalist alone.
+
+Where they STAND is the answer. A farmhouse is sited on a street plot that
+has room for a 3x2 field beside it, which the middle of a village never
+has; measured from the plaza's own centre, the nearest farmhouse in the
+two villages surveyed sits at **4.0** and **6.8** tiles, while the fisher's
+own house and pond sit **11.7** tiles out at the far end of the street.
+Standing at the water — which is where the report was written from —
+there is no farmhouse in shot, and in that particular village there was
+genuinely no hut either. Nothing is changed for this half; it is recorded
+so the next reader does not go looking for a bug that is a viewing
+position.
+
+
+## A yard is the ground of the plot, not a mat under the house (`concept/building.md`, 2026-09-20)
+
+Reported live, with the game running: *"farm houses don't use the 3x2
+background image as background..."*, and then, mid-session: *"I also added
+bg overlays for cottages ..."*.
+
+### ✅ The yard is scaled to the plot's whole rect
+
+The farmhouse yard was being drawn the whole time. Measured before changing
+anything (`tools/probe_building_yard.gd`, new): it came out **79×53 art px
+against a house of 79×54** — the same width and a pixel *shorter* — so it
+sat entirely inside the house's own silhouette. Only **14.6%** of the
+yard's opaque pixels reached the screen, about 5% of the yard rectangle.
+
+The failure was specified, not coded: `concept/building.md` said the yard
+is drawn at "the same width as the house's own art, by the same
+`drawn_plot_width_tiles` rule", and
+`test_the_yard_is_drawn_to_the_same_width_as_the_house` pinned it in those
+words. Two different widths were being conflated. A house is deliberately
+drawn *narrower* than its plot (`PLOT_MARGIN_SHARE`) so two neighbours have
+a street between them — a fact about **walls**. Two neighbouring yards
+meeting is grass meeting grass. So the ground takes the plot and the house
+stands inside it, which is also what makes a 3×2 picture the background of
+a 3×2 plot. The test is rewritten, not deleted, and the concept doc carries
+the correction rather than the old rule.
+
+New `IllustratedStructureSprite.plot_background_texture` scales a cell to
+`footprint` tiles in **both** axes. Its sibling `footprint_frame_texture`
+scales by width and lets the art's aspect set the height, which is right for
+an object *standing on* the ground (a building taller than its footprint
+stays taller) and wrong for the ground itself.
+
+Measured after: farmhouse **96×64** with **44.3%** of the yard visible past
+its house (from 14.6%), cottage **64×64** with **56.8%**, fisher_hut
+borrowing the farmhouse's yard unchanged.
+
+### ✅ A cottage stands in its own garden
+
+`cottage_bg_overlay.png` — 1254×1254, a 3×3 grid of **418×418 square**
+scenes — is declared for `house_small`, whose plot is 2×2. A cottage is the
+one building with both a variant sheet and a yard, so a street of them now
+carries 25 house pictures × 9 gardens rather than nine repeats, and the two
+axes are salted apart so a given cottage does not always arrive in the same
+garden.
+
+The sheet is delivered the same way the farmhouse's was — no alpha channel,
+transparency painted as a grey-and-white checkerboard — so it joins
+`_CHECKERBOARD_SHEETS` and is flooded rather than keyed. Measured on the raw
+files, a cottage cell is **39% checker** against the farmhouse sheet's
+**63%**, both in the same two tones, so the existing flood reads it
+unchanged.
+
+### The assertion that needs no constant
+
+Two of the new tests are pinned to measurements rather than to numbers
+somebody liked, which is the discipline this repo already keeps for
+`PLOT_MARGIN_SHARE` and `_DRAW_SCALES`:
+
+- `test_drawing_the_yard_to_the_plot_more_than_doubles_what_shows_of_it`
+  rebuilds the **old** texture beside the new one inside the test and
+  compares the two, so it bites with no threshold at all. (A first draft of
+  the sibling test guessed 0.55 for the visible share; the real figure is
+  0.465. The guess was replaced by the measurement, floor 0.40.)
+- `test_every_declared_yard_is_the_shape_of_the_plot_it_fills` pins every
+  declared sheet's cell aspect to its plot's (1.50 for 3×2, 1.00 for 2×2),
+  which is what makes scaling to the rect a checkable promise rather than a
+  coincidence of the two sheets that exist today. Verified by mutation:
+  declaring the square cottage sheet for the 3×2 `house_medium` fails it.
+
+### ⬜ Not done
+
+`house_medium` (3×2) and `house_large` (3×3) still stand on bare plot — no
+yard art has been drawn for them. `house_medium` shares the farmhouse's
+plot shape and could borrow that sheet, but a farmyard behind a town house
+is the wrong picture, so it waits for its own.
+
+Tested: `test_illustrated_structure_sprite.gd` (+5),
+`test_building_catalog.gd` (+4), `test_earth_chunk_manager_buildings.gd`
+(+3, one rewritten).
+## A road home for the hut, and fish for a pond nobody could stock (`concept/village_ponds.md`, 2026-09-20)
+
+Two more, both reported live with the pond in shot: *"Fisher hut is there
+but not connected to street system"*, *"also no fish in pond"*.
+
+**The reach decision first.** The entry above left a fork: two villages of
+three had no hut because a 3x2 works plus its doorstep needs three rows
+and their fisher only has two. Counted, a 2x1 shack fits at the current
+reach and a 3x2 needs reach 3. The call was to keep the footprint and take
+the reach — the works is DRAWN as a farmhouse until its own sheet exists,
+and a 2x1 building off a farmhouse sheet would look like neither.
+`HUT_BANK_REACH_TILES` is 3 now, pinned by a test, with its cost written
+into the constant's own comment rather than left to be discovered: the one
+site those villages have at three tiles is on the next house row, across
+the street from the water.
+
+**The step was not a road.** Every other building a village places is
+sited ON frontage, so the layout lays its doorstep among the plot's own
+road cells and the plot is joined by construction. A hut belongs to the
+water instead, and the first answer to its missing doorstep was a single
+paved cell. A step that reaches nothing is exactly what the screenshot
+shows. `VillageLayout.way_to_paving` lays the run — pure geometry, with
+nothing about ponds or huts in it, so any building raised off the grid can
+ask. Two L-shaped legs per target, the shape `_frontage_spur` already
+walks; targets nearest first, ties broken by (y, x), so the same ground
+lays the same way on every reload. Its reach is derived: a building off
+the grid stands between two street rows, so a way home is at most one
+street pitch down and one along. `[]` and `null` stay different answers,
+because "already joined" and "cannot be joined" must never read the same.
+
+**A pond nobody could stock.** Persisting the stock keeps one that EXISTS.
+A pond dug by a build that never kept one has no record at all, and the
+dig pass returns early on water that is already there — correctly, since
+a fisher stocks a pond once. So every pond in every save made before
+`POND_FISH_DIR` existed is empty for ever, which is what the second
+screenshot is. `pond_has_been_stocked` makes the repair safe by asking a
+different question from "how many fish are in there": an emptied pond
+carries a record of 0.0, a pond nobody ever stocked carries no record at
+all. The village stocks the second kind and never the first, so a pond it
+has fished out stays fished out.
+
+**One test premise was wrong and is corrected in place**, with the reason
+kept: it asked `way_to_paving` to turn a corner when the door and the only
+paving share a column, where both L orders ARE that straight line. The
+honest answer there is `null`; what saves a hut in that spot is other
+paving, which a village has plenty of.
+
+Tested: `test_village_way_to_paving.gd` 10/10 (new file),
+`test_village_pond.gd` 31/31 (+2), `test_village_pond_hut_wiring.gd` 5/5
+(+2), `test_earth_chunk_manager_ponds.gd` stocking selection 13/13 (+4),
+`test_village_renderer.gd` + `test_village_layout.gd` 253/253. Red first
+at every step.
+
+## Why a village stopped growing — two links, both invisible (2026-09-20)
+
+Asked for directly: *"now make the village grow again"*. The roster held
+at its founding ten for a whole watch where it used to reach twelve.
+
+**The obvious hypothesis was wrong, and the measurement killed it.** The
+last food reading had been 19 units over 10 households — 1.9 against a
+`FED_THRESHOLD` of 2.0 — so the gate looked shut on food by a hair.
+`tools/probe_village_growth_gate.gd` (kept) prints every condition
+`VillageImmigration.arrivals` actually reads, separately, rather than the
+roster alone:
+
+```
+  seconds  house housed  room  food/hh  ladder
+      300     10     10     0     2.30    0.60
+      600     10     10     0     2.30    0.60
+      900     10     10     0     2.10    0.60
+     1050     10     10     0     2.30    0.60
+```
+
+Food comfortably **over** the threshold the whole way. `room` **zero at
+every single sample**. The village was fed, content, and sealed.
+
+### ✅ Link 1 — the documented fix was in a function the village had stopped asking
+
+[village_growth.md](concept/village_growth.md) has said since the day
+before: *"a village whose people are all housed would owe itself nothing,
+build nothing, and never have the roof an arrival needs… so
+`next_building` gains a lowest rung: a house for nobody in particular."*
+
+That rung went into `VillageGrowth.next_building`. The live decision had
+already moved: `_apply_village_growth_decision` →
+`next_building_for_settlement` → **`VillageAssembly.next_building`**, the
+estate-weighted petition that replaced the fixed ladder order. The
+assembly had no such rung, and its state dict was never handed a spare
+capacity to test one against — so the fix was unreachable from the path a
+village uses. Even the assembly's own fallback to the ladder called it with
+three arguments, so the capacity defaulted to *"there is already room"*
+there too.
+
+The assembly carries the rung now, below every petition (a village
+finishes what it already owes itself before it makes room for strangers),
+and `_village_assembly_state` hands it the real spare capacity. The house
+is the **starting** estate's, because that is what a newcomer arrives as,
+unlike the shelter rung above it which rehouses a *named* household in
+their own estate's house.
+
+`_next_growth_building_for` — the settlement card's read — walked
+`VillageGrowth`'s ladder directly, which is neither the function the
+village asks nor handed the capacity. Its own doc comment forbids exactly
+that (*"the card cannot promise a building the village is not actually
+about to raise"*). It asks the one question now.
+
+### ✅ Link 2 — and the one case the rung exists for was the one case the build refused
+
+With the rung firing, the village chose `house_small` at every sample and
+`room` stayed 0. Re-measured with the whole build pipeline in the probe:
+
+```
+  seconds  house housed  room  food/hh  labour waiting  site   next build   building now
+        0     10     10     0     0.00       6      0   yes    house_small  -
+      200     10     10     0     3.60       6      0   yes    house_small  -
+      500     10     10     0     3.20       6      0   yes    house_small  -
+```
+
+Food over the threshold, six spare hands, a site available, the house
+chosen every time — and **no project ever started**.
+
+`_apply_village_growth_decision` credited a new home to `waiting[0]` and
+**returned** when nobody was waiting. That is right for the shelter rung,
+which exists for a named household, and exactly wrong for the lowest rung,
+which raises a house *because* everybody is already housed. The one case
+the rung exists for was the one case the caller refused.
+
+`VillageGrowth.owner_for` answers it instead: a waiting household's home is
+theirs (the first in the queue, which `VillageCensus` sorts, so a repeated
+decision lands on the same plot); a home for nobody in particular is the
+**settlement's** — a commons roof standing empty, which is precisely the
+invitation the arrival gate reads; and nobody lives in a sawmill, so a
+works is the village's either way.
+
+### ✅ Measured after both
+
+```
+  seconds  house housed  room  food/hh  labour waiting  site   next build   building now
+        0     10     10     0     0.00       6      0   yes    house_small  house_small:0
+      200     10     10     0     3.60       6      0   yes    house_small  house_small:0
+      400     10     10     0     2.90       6      0   yes    house_small  house_small:0
+      500     10     10     1     3.20       6      0    NO    -            -
+
+  house_small x11   (was x10)
+```
+
+Chosen, **begun**, finished, and `room` is 1. The eleventh roof stands
+empty and the gate is open.
+
+**Exactly one commons house is ever raised**, which is worth stating
+because it looks like it could run away: once it stands, spare capacity is
+1, so the rung stops firing. From then on each arrival is unhoused, the
+shelter rung raises *their* house, and the spare roof stays as the standing
+invitation for the next. Population advances one household per house
+actually built — the pace the original report asked for.
+
+### ✅ And the roster rises, on the same watch every other reading used
+
+`tools/probe_village_famine.gd`, the 1200-second watch every measurement in
+this thread has used:
+
+```
+   seconds   roster   standing  hungriest market food    purse  wallets
+         0       10         10       0.30          0      0.0        0
+       300       10         10       0.60          2      0.0        0
+       600       10         10       1.00          0     20.0        0
+       900       11         11       1.00          0      0.0        0
+      1200       11         11       1.00          0      1.0        0
+```
+
+| state | roster over the watch |
+|---|---|
+| before the gold faucet was closed | 10 → 10 → 12 → 12 → 12 |
+| faucet closed, nothing else | 10 → 3 → 4 → 4 → 6 |
+| + the clock fix alone | 10 → 3 → 5 → 6 → 8 |
+| + the money fixes merged | 10 → 10 → 10 → 10 → 10 |
+| **+ both growth links** | **10 → 10 → 10 → 11 → 11** |
+
+**Nobody dies and the village grows.** `standing` equals `roster` at every
+sample, so the villager reconcile holds through the arrival: the eleventh
+household is somebody you can SEE.
+
+**Honest limit:** it is tight. The worst-off villager reached 185 of 200
+through the starvation window at t=900 and fell back to 125 by t=1200 —
+fed each time, but not comfortably. And the arrival lands at t=900 where
+the pre-faucet village reached twelve by t=600, so growth is slower than it
+was when gold was conjured. Both point at the same open gap
+([milling_and_baking.md](concept/milling_and_baking.md)): the harvest sits
+in farmhouses and the market reads 0, so a wage buys a meal only where a
+villager can reach one.
+
+### ⬜ A pre-existing failure set, named rather than absorbed
+
+`test_earth_chunk_manager.gd`'s settlement slice runs **75 of 90**, with
+fifteen failing — among them
+`test_step_settlements_records_a_first_production_shortfall_once`,
+`test_an_unloaded_settlement_can_grow_on_its_own_gathering` and
+`test_probe_eight_household_settlement`. A clean `origin/main` worktree
+runs the identical 75/90 with the identical fifteen names, so none of it is
+this work's. Recorded because fifteen is too many to leave as an unremarked
+background hum, and because the whole file (15,371 lines) does not finish
+inside a single run here, so nobody is looking at it by accident.
+
+### 🚧 The lesson, and it is the same one in a new costume
+
+A fix documented against one function is not a fix if the caller has moved
+to another. This file's own warnings about hand-maintained lists are the
+same failure: **a fact written in one place, and read from another.** What
+made it findable was a probe that prints each gate condition *separately*
+rather than the outcome they jointly produce — the roster alone said only
+"it stopped", which is consistent with at least four different causes.

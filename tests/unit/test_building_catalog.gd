@@ -13,6 +13,7 @@ const BuildingLifecycleSheet = preload("res://src/rendering/building_lifecycle_s
 const NpcGenome = preload("res://src/world/npc_genome.gd")
 const NpcIdentity = preload("res://src/world/npc_identity.gd")
 const CraftingRecipeBook = preload("res://src/gameplay/crafting_recipe_book.gd")
+const SpriteSheetLoader = preload("res://src/rendering/sprite_sheet_loader.gd")
 
 const _TRAIT_NAMES := ["friendly", "gruff", "curious", "stoic", "greedy", "kind", "cautious", "bold"]
 
@@ -1070,3 +1071,91 @@ func test_a_building_that_borrows_nothing_inherits_no_yard():
 	for building_id in ["sawmill", "warehouse", "blacksmith", "brewery", "city_hall"]:
 		assert_eq(BuildingCatalog.draws_as_of(building_id), "", "precondition: %s borrows nothing" % building_id)
 		assert_true(BuildingCatalog.background_sheet_for(building_id, 1).is_empty())
+
+
+# -- a cottage has a yard of its own ----------------------------------------
+#
+# Asked for directly, with the art dropped in: *"I also added bg overlays
+# for cottages ..."* -- a second 3x3 sheet, this one of SQUARE scenes, for
+# the 2x2 plot a cottage stands on.
+
+
+func test_a_cottage_stands_in_its_own_yard_rather_than_a_farmhouses():
+	var yard := BuildingCatalog.background_sheet_for("house_small", 1)
+	assert_false(yard.is_empty(), "a cottage's yard art is declared")
+	assert_eq(String(yard["path"]), "res://assets/sprites/buildings/cottage_bg_overlay.png")
+	assert_ne(
+		String(yard["path"]),
+		String(BuildingCatalog.background_sheet_for("farmhouse", 1)["path"]),
+		"a cottage garden is not a farmyard"
+	)
+
+
+## Nine cottage yards, same as the farmhouse's -- a street of cottages is
+## already a street of different cottages (variant_sheet_of), and it would
+## read as one repeated house again if every one stood in the same garden.
+func test_every_one_of_the_nine_cottage_yards_is_reachable_by_some_seed():
+	var seen := {}
+	for seed_value in range(400):
+		var yard := BuildingCatalog.background_sheet_for("house_small", seed_value)
+		seen["%d,%d" % [int(yard["column"]), int(yard["row"])]] = true
+	assert_eq(seen.size(), 9, "all nine cottage yards are used: %s" % str(seen.keys()))
+
+
+## The yard and the house vary INDEPENDENTLY: a cottage is the one building
+## that has both a variant sheet and a yard, so if the two shared their
+## salts a given cottage picture would always arrive in the same garden and
+## the street would carry nine combinations instead of 225.
+func test_a_cottages_yard_does_not_move_in_lockstep_with_its_house_variant():
+	var pairs := {}
+	for seed_value in range(600):
+		var yard := BuildingCatalog.background_sheet_for("house_small", seed_value)
+		var house := BuildingCatalog.variant_cell_for("house_small", seed_value)
+		pairs["%d,%d|%d,%d" % [
+			int(yard["column"]), int(yard["row"]), house.x, house.y,
+		]] = true
+	assert_gt(
+		pairs.size(), 9,
+		"a yard tied to the house variant gives nine pairs and no more"
+	)
+
+
+## A yard is scaled to cover its whole plot in BOTH axes (see
+## IllustratedStructureSprite.plot_background_texture), so a sheet whose
+## cells are not the plot's own shape would arrive visibly stretched. That
+## is a fact about the ART, checkable the moment a sheet is declared, so it
+## is checked here rather than left for a screenshot: the farmhouse's cells
+## are 512x341 for a 3x2 plot (1.50 against 1.50) and the cottage's are
+## 418x418 for a 2x2 one (1.00 against 1.00).
+##
+## 0.04 of tolerance: a 3x3 cut of a 1024-tall sheet leaves a cell of
+## 341.33 rows, so the real cells are never exactly on the nominal aspect,
+## and a mismatch worth catching is a whole plot-shape out (1.5 against 1.0
+## is 50%), never a rounding row.
+const _YARD_ASPECT_TOLERANCE := 0.04
+
+
+func test_every_declared_yard_is_the_shape_of_the_plot_it_fills():
+	var checked := 0
+	for building_id in BuildingCatalog.all_building_ids():
+		var yard := BuildingCatalog.background_sheet_for(building_id, 1)
+		if yard.is_empty():
+			continue
+		var sheet := SpriteSheetLoader.load_image(String(yard["path"]))
+		assert_not_null(sheet, "%s's yard art is really on disk" % building_id)
+		if sheet == null:
+			continue
+		var cell_aspect := (
+			(float(sheet.get_width()) / float(int(yard["columns"])))
+			/ (float(sheet.get_height()) / float(int(yard["rows"])))
+		)
+		var footprint := BuildingCatalog.footprint_of(building_id)
+		var plot_aspect := float(footprint.x) / float(footprint.y)
+		assert_almost_eq(
+			cell_aspect, plot_aspect, _YARD_ASPECT_TOLERANCE,
+			"%s stands on a %dx%d plot, so its yard cells must be that shape" % [
+				building_id, footprint.x, footprint.y,
+			]
+		)
+		checked += 1
+	assert_gt(checked, 0, "precondition: some building really declares a yard")

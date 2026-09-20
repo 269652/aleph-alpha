@@ -1173,3 +1173,92 @@ func test_no_grey_checkerboard_fringe_survives_around_a_yard():
 				fringe += 1
 	var of_cell := float(fringe) / float(image.get_width() * image.get_height())
 	assert_lt(of_cell, 0.002, "a yard keeps no grey checker fringe (%d px)" % fringe)
+
+
+# -- a yard is scaled to the PLOT, not to the house standing in it ----------
+#
+# Reported live: *"farm houses don't use the 3x2 background image as
+# background..."*. The picture was being drawn -- at the house's own width
+# and a pixel shorter than it, so it sat entirely inside the house's
+# silhouette (tools/probe_building_yard.gd: 79x53 against 79x54, 14.6% of
+# the yard's opaque pixels visible). A yard is the GROUND of a plot, so it
+# is scaled to the plot: footprint tiles wide, footprint tiles deep, in both
+# axes rather than by width alone.
+#
+# Both axes matter here and nowhere else in this file: every other subject
+# is an object standing on the ground, whose height follows from its own
+# aspect (a building taller than its footprint stays taller). A yard IS the
+# ground, so its rect is the plot's rect. Nothing is stretched by this in
+# practice -- test_building_catalog.gd pins every declared yard sheet's
+# cells to the shape of the plot they fill -- but scaling to the rect is
+# what makes that a checkable promise rather than a coincidence.
+
+const _COTTAGE_YARD_SHEET := "res://assets/sprites/buildings/cottage_bg_overlay.png"
+
+
+func test_a_plot_background_covers_its_whole_plot_in_both_axes():
+	var texture := sprite.plot_background_texture(_YARD_SHEET, 3, 3, 0, 0, 64, Vector2i(3, 2), "even")
+	assert_not_null(texture, "the yard sheet loads")
+	assert_eq(texture.get_width(), 3 * 64, "three tiles wide")
+	assert_eq(texture.get_height(), 2 * 64, "two tiles deep")
+
+
+## A square plot takes a square yard from the same call -- the plot's own
+## shape, not the sheet's.
+func test_a_square_plots_background_comes_back_square():
+	var texture := sprite.plot_background_texture(
+		_COTTAGE_YARD_SHEET, 3, 3, 0, 0, 64, Vector2i(2, 2), "even"
+	)
+	assert_not_null(texture, "the cottage yard sheet loads")
+	assert_eq(texture.get_width(), 2 * 64)
+	assert_eq(texture.get_height(), 2 * 64)
+
+
+## Wider than the house that stands in it, which is the whole reason this
+## exists: footprint_frame_texture deliberately draws a building at
+## BuildingCatalog.PLOT_MARGIN_SHARE inside its plot so two neighbours have
+## a street between them, and a yard drawn at that same width is a yard
+## behind a house.
+func test_a_plot_background_is_wider_than_the_building_drawn_on_it():
+	var yard := sprite.plot_background_texture(_YARD_SHEET, 3, 3, 0, 0, 64, Vector2i(3, 2), "even")
+	var house := sprite.footprint_frame_texture(_YARD_SHEET, 3, 3, 0, 0, 64, 3, "even")
+	assert_gt(yard.get_width(), house.get_width(), "the ground is wider than what stands on it")
+
+
+## The cottage sheet is delivered the same way the farmhouse's was -- no
+## alpha channel, transparency painted as a grey-and-white checkerboard --
+## so it needs the same flood, and a sheet keyed instead of flooded comes
+## back as a square of checker with the art still buried in it.
+func test_a_cottage_yards_checkerboard_corners_are_keyed_away():
+	var texture := sprite.plot_background_texture(
+		_COTTAGE_YARD_SHEET, 3, 3, 0, 0, 64, Vector2i(2, 2), "even"
+	)
+	assert_not_null(texture, "the cottage yard sheet loads")
+	var image := texture.get_image()
+	for corner in [
+		Vector2i(0, 0), Vector2i(image.get_width() - 1, 0),
+		Vector2i(0, image.get_height() - 1),
+		Vector2i(image.get_width() - 1, image.get_height() - 1),
+	]:
+		assert_almost_eq(
+			image.get_pixelv(corner).a, 0.0, 0.01,
+			"a cottage yard's corner is background, not checkerboard"
+		)
+
+
+## ...and its own art survives, the same way the farmhouse's does: measured
+## on the raw sheet, a cottage yard cell is 60.9% art against the
+## farmhouse's 36.5%, so a cleared square or a square left whole are both a
+## long way outside this band.
+func test_a_cottage_yards_own_art_survives_the_key():
+	var texture := sprite.plot_background_texture(
+		_COTTAGE_YARD_SHEET, 3, 3, 0, 0, 64, Vector2i(2, 2), "even"
+	)
+	var image := texture.get_image()
+	var opaque := 0
+	for y in range(image.get_height()):
+		for x in range(image.get_width()):
+			if image.get_pixel(x, y).a > 0.5:
+				opaque += 1
+	var fraction := float(opaque) / float(image.get_width() * image.get_height())
+	assert_between(fraction, 0.45, 0.8, "a cottage yard is a real scene, not a cleared square")

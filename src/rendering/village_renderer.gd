@@ -1366,6 +1366,7 @@ func _dig_fisher_ponds_if_missing(
 		var building_id: String = record.get("id", "")
 		if _has_pond_already(chunk_coord, chunk_size, world, origin, building_id):
 			ponds[origin] = _pond_water_near(chunk_coord, chunk_size, world, origin, building_id)
+			_stock_if_nobody_ever_did(chunk_coord, chunk_size, world, ponds[origin])
 			continue
 		# On the fisher's OWN side of the street. field_rect reaches
 		# FIELD_REACH_TILES in every direction and takes the first rectangle
@@ -1395,7 +1396,31 @@ func _dig_fisher_ponds_if_missing(
 				if renderer._is_street_row(chunk_coord, chunk_size, world, y):
 					return false
 			return true
-		var water: Array = VillagePond.pond_cells(origin, building_id, is_free_for_house)
+		# And on ground its own WORKS can stand beside. Reported live at the
+		# water: *"no Fisher Hut is near"*, and measured on three real
+		# streamed villages -- one had a pond with no hut anywhere, because
+		# all 51 candidate origins within reach of that water were refused
+		# (19 by the village street, 21 by neighbouring houses, 5 by the
+		# pond's own rails, 6 by the water). The dig had put the water in
+		# the two-row strip between the street and the next house row,
+		# which is exactly wide enough for the water and nothing else.
+		#
+		# The dig and the hut pass never spoke: the dig took the best
+		# rectangle in reach and the hut was sited afterwards on whatever
+		# bank that left. This is the same rule VillageLayout already
+		# applies to a farmhouse, which refuses a plot with no room for its
+		# field — a works with nowhere to stand is a works that should not
+		# have been sited there.
+		var takes_a_hut := func(cells: Array) -> bool:
+			return VillagePond.bank_takes_a_hut(cells, origin, building_id, is_free)
+		var water: Array = VillagePond.pond_cells(
+			origin, building_id, is_free_for_house, takes_a_hut
+		)
+		if water.is_empty():
+			# ...and dug anyway where no bank in reach can take one. A pond
+			# with no hut beats no pond at all: the fisher works the water,
+			# not the building.
+			water = VillagePond.pond_cells(origin, building_id, is_free_for_house)
 		if water.is_empty():
 			continue  # no room beside this house -- honestly, no pond
 		ponds[origin] = water
@@ -1467,6 +1492,86 @@ func _place_fisher_huts_if_missing(
 			chunk_coord, origin, VillagePond.HUT_BUILDING_ID, Vector2i(0, 1), building_seed, ""
 		):
 			standing.append(origin)
+			_join_to_the_street(chunk_coord, chunk_size, world, origin)
+
+
+## The front step of a building the village raised off the street grid.
+##
+## Every other building a village places gets its doorstep paved as part of
+## siting the plot (VillageLayout lays it among the plot's own road_cells),
+## because every other building is sited ON frontage. A fisher's hut is
+## deliberately not — it belongs to the water, and the water is wherever
+## the fisher had room (docs/concept/village_ponds.md, "The hut on the
+## bank"). So nothing laid its front step, and a hut stood with its door
+## opening onto bare ground.
+##
+## True since the hut landed, and hidden by luck: the fixture village's hut
+## happened to fall with its doorstep on one of the pond's own rails, so
+## test_every_placed_building_faces_south_onto_a_real_road_cell passed for
+## the whole lot anyway. Moving the pond by one rectangle broke it, which
+## is that test doing exactly its job.
+##
+## AFTER place_building, never before: place_building refuses a plot whose
+## doorstep cell is already non-empty, so paving first would refuse the hut
+## over its own future front step — the same ordering trap
+## _place_new_village's own comment records for the houses.
+## ...and the way back from that step to the village.
+##
+## Reported live with the hut in shot: *"Fisher hut is there but not
+## connected to street system"*. The first answer to the missing doorstep
+## was the step alone, and a step that reaches nothing is not a road home
+## — which is exactly what the screenshot showed. VillageLayout.
+## way_to_paving finds the run (pure geometry, tested on its own); this
+## lays it.
+##
+## Both halves are skipped in silence where they cannot be had: a hut
+## whose door already opens onto a rail keeps it, and a hut nothing clear
+## reaches keeps its step and no road, which is honest rather than a lane
+## paved through a neighbour's house.
+func _join_to_the_street(chunk_coord: Vector2i, chunk_size: int, world, origin: Vector2i) -> void:
+	if not world.has_method("build_at_global") or not world.has_method("modification_at_global"):
+		return
+	var step: Vector2i = origin + BuildingCatalog.doorstep_of(VillagePond.HUT_BUILDING_ID)
+	if step.x < 0 or step.y < 0 or step.x >= chunk_size or step.y >= chunk_size:
+		return
+	var step_global: Vector2i = chunk_coord * chunk_size + step
+	if world.modification_at_global(step_global.x, step_global.y) == "":
+		world.build_at_global(step_global.x, step_global.y, TerrainRenderer.ROAD_TILE_ID)
+	var way = VillageLayout.way_to_paving(
+		step, chunk_size,
+		_is_buildable_local(chunk_coord, chunk_size, world),
+		_is_paved_local(chunk_coord, chunk_size, world)
+	)
+	if way == null:
+		return  # nothing clear reaches this door -- honestly, no road
+	for cell in way:
+		var g: Vector2i = chunk_coord * chunk_size + (cell as Vector2i)
+		world.build_at_global(g.x, g.y, TerrainRenderer.ROAD_TILE_ID)
+
+
+## Puts a stocking into water the village dug but nobody ever stocked.
+##
+## Reported live with the water in shot a second time: *"also no fish in
+## pond"*. Persisting the stock (EarthChunkManager.POND_FISH_DIR) keeps one
+## that EXISTS; a pond dug by a build that never kept one has no record at
+## all, and the branch above returns early on water that is already dug
+## — correctly, since a fisher stocks a pond once. So every pond in every
+## save made before the stock was kept stayed empty for ever.
+##
+## It asks pond_has_been_stocked, never pond_fish_at: a pond the village
+## has FISHED OUT holds 0.0 and must stay that way, and telling those two
+## apart is the whole reason that question exists.
+func _stock_if_nobody_ever_did(
+	chunk_coord: Vector2i, chunk_size: int, world, water: Array
+) -> void:
+	if water.is_empty() or not world.has_method("pond_has_been_stocked"):
+		return
+	if not world.has_method("stock_pond_at"):
+		return
+	var first: Vector2i = chunk_coord * chunk_size + (water[0] as Vector2i)
+	if world.pond_has_been_stocked(first.x, first.y):
+		return
+	world.stock_pond_at(first.x, first.y)
 
 
 ## The water already standing in this house's own reach, in the same local

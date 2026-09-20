@@ -255,3 +255,64 @@ func test_a_household_with_no_roof_still_outranks_the_spare_one():
 ## caller build houses for ever.
 func test_a_caller_that_does_not_pass_spare_capacity_gets_the_old_ladder():
 	assert_eq(VillageGrowth.next_building(10, 10, _every_rung()), "")
+
+
+# -- who the house belongs to when it is for nobody in particular ---------
+#
+# The ladder's lowest rung raises a house when no roof stands empty, so
+# that VillageImmigration has the spare capacity it gates on. That house
+# has no household waiting to own it, by definition -- everybody is housed,
+# which is exactly why it is being built.
+#
+# EarthChunkManager._apply_village_growth_decision credited a new home to
+# `waiting[0]` and REFUSED TO START IT AT ALL when nobody was waiting. So
+# the rung was chosen every step and never begun. Measured
+# (tools/probe_village_growth_gate.gd) with every other condition open:
+#
+#   seconds  house housed  room  food/hh  labour waiting  site   next build   building now
+#         0     10     10     0     0.00       6      0   yes    house_small  -
+#       200     10     10     0     3.60       6      0   yes    house_small  -
+#       500     10     10     0     3.20       6      0   yes    house_small  -
+#
+# Food over the threshold, six spare hands, a site to put it on, the house
+# chosen at every single sample -- and no project ever started.
+
+const _SETTLEMENT := "settlement:1_2"
+
+
+## The house a waiting household is owed is theirs.
+func test_a_house_belongs_to_the_household_waiting_for_it():
+	assert_eq(
+		VillageGrowth.owner_for(BuildingCatalog.BUILDING_IDS[0], ["household:7"], _SETTLEMENT),
+		"household:7"
+	)
+
+
+## The house for nobody in particular belongs to the SETTLEMENT: a commons
+## roof, standing empty, which is precisely the standing invitation an
+## arrival needs. It is not nobody's -- the village owns it.
+func test_a_house_for_nobody_in_particular_belongs_to_the_village():
+	assert_eq(
+		VillageGrowth.owner_for(BuildingCatalog.BUILDING_IDS[0], [], _SETTLEMENT),
+		_SETTLEMENT,
+		"a village that has housed everybody must still be able to raise a roof"
+	)
+
+
+## A works is the village's whether anybody is waiting or not -- nobody
+## lives in a sawmill.
+func test_a_works_belongs_to_the_village_whoever_is_waiting():
+	assert_eq(VillageGrowth.owner_for("sawmill", ["household:7"], _SETTLEMENT), _SETTLEMENT)
+	assert_eq(VillageGrowth.owner_for("sawmill", [], _SETTLEMENT), _SETTLEMENT)
+
+
+## The FIRST waiting household, deterministically -- VillageCensus sorts
+## them, so a repeated decision credits the same household with the same
+## plot rather than queuing a second house somewhere else next tick.
+func test_the_house_goes_to_the_first_in_the_queue():
+	assert_eq(
+		VillageGrowth.owner_for(
+			BuildingCatalog.BUILDING_IDS[0], ["household:2", "household:9"], _SETTLEMENT
+		),
+		"household:2"
+	)

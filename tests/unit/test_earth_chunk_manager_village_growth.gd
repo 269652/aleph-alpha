@@ -476,9 +476,19 @@ func test_the_house_is_credited_to_the_household_waiting_for_it():
 
 	manager._apply_village_growth_decision(_chunk_coord)
 
-	var houses: Array = _projects_for(BuildingCatalog.BUILDING_IDS[0])
-	assert_eq(houses.size(), 1, "precondition")
-	assert_eq(houses[0].household_id, newcomer, "the newcomer's own house, not the settlement's")
+	# THEIR house among the village's, not the only house in it. A village
+	# with no spare roof also owes itself a commons one (VillageGrowth's
+	# lowest rung -- "room is made first, moved into after"), and this test
+	# is about who a WAITING household's house is credited to, which is a
+	# different question from how many the village is raising.
+	var theirs: Array = []
+	for project in _projects_for(BuildingCatalog.BUILDING_IDS[0]):
+		if project.household_id == newcomer:
+			theirs.append(project)
+	assert_eq(
+		theirs.size(), 1,
+		"the newcomer's own house, not the settlement's -- and one of it, not two"
+	)
 
 
 # -- the immigration step -------------------------------------------------
@@ -1079,3 +1089,73 @@ func test_nobody_is_duplicated_when_a_village_takes_somebody_in():
 			continue
 		assert_false(seen.has(identity.seed_value), "two markers for the same villager")
 		seen[identity.seed_value] = true
+
+
+# -- a village that caught up with itself still starts the house ----------
+#
+# The ladder's lowest rung raises a house when no roof stands empty, so
+# immigration has the spare capacity it gates on. That house has no
+# household waiting for it BY DEFINITION -- everybody is housed, which is
+# precisely why it is being raised.
+#
+# _apply_village_growth_decision credited a new home to `waiting[0]` and
+# RETURNED when nobody was waiting, so the rung was chosen on every
+# settlement step and never once begun. Measured
+# (tools/probe_village_growth_gate.gd) with every other condition open:
+#
+#   seconds  house housed  room  food/hh  labour waiting  site   next build   building now
+#         0     10     10     0     0.00       6      0   yes    house_small  -
+#       200     10     10     0     3.60       6      0   yes    house_small  -
+#       500     10     10     0     3.20       6      0   yes    house_small  -
+
+## Stands every rung this ladder knows, owned by the settlement, so the
+## village owes itself nothing above the house.
+func _raise_every_rung() -> void:
+	for building_id in VillageGrowth.LADDER_BUILDING_IDS:
+		if manager._present_structure_ids_for_settlement_chunk(_chunk_coord).has(building_id):
+			continue
+		var origin = manager._growth_site_for(_chunk_coord, building_id)
+		if origin == null:
+			continue
+		manager._place_building_over_roads(_chunk_coord, origin, building_id, 11, _settlement_id)
+
+
+func test_a_fully_housed_village_really_starts_the_house_it_owes_itself():
+	_stock_everything()
+	_raise_every_rung()
+	var household_ids := manager._households_in_settlement(_settlement_id)
+	var census := manager._village_census_for(_chunk_coord, household_ids)
+	assert_true(
+		census["unhoused_household_ids"].is_empty(),
+		"precondition: this village has housed everybody"
+	)
+	assert_eq(
+		int(census["spare_house_capacity"]), 0, "precondition: and no roof stands empty"
+	)
+	var house_id: String = BuildingCatalog.BUILDING_IDS[0]
+	assert_eq(
+		manager.next_building_for_settlement(_chunk_coord), house_id,
+		"precondition: so the village owes itself a house"
+	)
+
+	manager._apply_village_growth_decision(_chunk_coord)
+
+	assert_false(
+		_projects_for(house_id).is_empty(),
+		"the village owed itself a roof, had the hands and the ground, and never began it"
+	)
+
+
+## ...and the village owns it, because nobody in particular does. A commons
+## roof standing empty IS the invitation VillageImmigration gates on.
+func test_the_house_for_nobody_in_particular_belongs_to_the_village():
+	_stock_everything()
+	_raise_every_rung()
+	var house_id: String = BuildingCatalog.BUILDING_IDS[0]
+	manager._apply_village_growth_decision(_chunk_coord)
+	var projects := _projects_for(house_id)
+	assert_false(projects.is_empty(), "precondition: the house was begun")
+	assert_eq(
+		projects[0].household_id, _settlement_id,
+		"a roof for nobody in particular is the village's own"
+	)

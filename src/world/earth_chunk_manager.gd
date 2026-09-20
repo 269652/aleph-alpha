@@ -301,6 +301,14 @@ const PLANTED_TREES_DIR := "user://chunk_planted_trees"
 const WEATHER_PERIOD_SECONDS := WeatherModel.WEATHER_PERIOD_SECONDS
 
 const FISH_POPULATION_DIR := "user://chunk_fish_population"
+## A village pond's OWN fish, keyed by the pond's anchor cell -- separate
+## from FISH_POPULATION_DIR above, which is the whole region's aggregate.
+## A pond is a particular body of water somebody dug and stocked, and its
+## stock is the one thing about it nothing else can regenerate: the water
+## is a persisted modification, the fence is a persisted modification, and
+## without this the fish were an in-memory number that died with the
+## session (docs/concept/village_ponds.md, "A pond keeps its fish").
+const POND_FISH_DIR := "user://chunk_pond_fish"
 ## Land ecology (herbivores, predators, vegetation) -- see
 ## ChunkSerializer.save_ecology. Persisted for the same reason fish are:
 ## the world should have moved on when the player comes back tomorrow,
@@ -9937,6 +9945,29 @@ func stock_pond_at(global_x: int, global_y: int) -> void:
 	_sync_pond_fish_markers(chunk_coord, anchor)
 
 
+## Whether the pond this cell belongs to has EVER been stocked, which is a
+## different question from whether it holds fish now.
+##
+## Reported live with the water in shot, after the stock was made to
+## persist: *"also no fish in pond"*. Persisting a stock keeps one that
+## EXISTS; a pond dug by a build that never kept one has no record at all,
+## on disk or in memory, and the village pass that stocks a pond returns
+## early on water that is already dug (correctly -- a fisher stocks a pond
+## once). So every pond in every save made before POND_FISH_DIR existed
+## was empty for ever.
+##
+## The village stocks such a pond on its next visit (VillageRenderer.
+## _dig_fisher_ponds_if_missing), and this is the question that lets it do
+## so without refilling one it has merely FISHED OUT -- which is the one
+## thing persisting the stock exists to prevent. An emptied pond carries a
+## record of 0.0; a pond nobody ever stocked carries no record at all.
+func pond_has_been_stocked(global_x: int, global_y: int) -> bool:
+	var anchor = _pond_anchor(global_x, global_y)
+	if anchor == null:
+		return false
+	return _pond_fish.get(_chunk_coord_for_tile(anchor), {}).has(anchor)
+
+
 ## How many fish the pond this cell belongs to is holding -- 0.0 for dry
 ## ground, and for water nobody has stocked.
 func pond_fish_at(global_x: int, global_y: int) -> float:
@@ -10001,6 +10032,58 @@ func _sync_pond_fish_markers(chunk_coord: Vector2i, anchor: Vector2i) -> void:
 
 
 ## Frees every pond fish of a chunk that is going away.
+## Where one chunk's pond stocks are kept between sessions.
+func _pond_fish_path(chunk_coord: Vector2i) -> String:
+	return "%s/%d_%d.bin" % [POND_FISH_DIR, chunk_coord.x, chunk_coord.y]
+
+
+## Writes this chunk's pond stocks out, so a pond dug and stocked today is
+## still a fishery tomorrow (docs/concept/village_ponds.md, "A pond keeps
+## its fish").
+##
+## Reported live with the pond in shot: *"no fish are in it"*, and measured
+## on two real streamed villages that each held a dug, fenced pond with a
+## stock of 0.00. The water is a persisted modification and the fence is a
+## persisted modification; the FISH were an in-memory number, and the
+## village pass that stocks a pond only ever runs on the visit that digs
+## one. So the pond came back and its fish did not.
+##
+## The answer is persistence rather than "stock it again on reload": a pond
+## the village has fished out is fished out until it breeds back, and a
+## reload that quietly refilled it would make the stock decorative.
+func _save_pond_fish(chunk_coord: Vector2i) -> void:
+	var by_anchor: Dictionary = _pond_fish.get(chunk_coord, {})
+	if by_anchor.is_empty():
+		return
+	DirAccess.make_dir_recursive_absolute(POND_FISH_DIR)
+	_chunk_serializer.save_modifications(by_anchor, _pond_fish_path(chunk_coord))
+
+
+## Reads them back, and puts the fish that answer to them in the water.
+##
+## MERGES: an anchor this session already knows about wins over the disk
+## record, the same precedence the region's own fish population already
+## uses ("in-session catch-up takes precedence over the disk-persisted fish
+## population"). A pond dug seconds ago has no disk record at all, and one
+## stocked this session has a fresher number than the file does.
+##
+## The marker sync is not an extra: _free_pond_fish_markers empties the
+## water on unload, so without this a pond whose stock DID survive in
+## memory came back with nothing swimming in it -- which is the same thing
+## the report describes, arrived at a different way.
+func _restore_pond_fish(chunk_coord: Vector2i) -> void:
+	var by_anchor: Dictionary = _pond_fish.get(chunk_coord, {})
+	var stored: Dictionary = _chunk_serializer.load_modifications(_pond_fish_path(chunk_coord))
+	for anchor in stored:
+		if not by_anchor.has(anchor):
+			by_anchor[anchor] = float(stored[anchor])
+	if by_anchor.is_empty():
+		return
+	_pond_fish[chunk_coord] = by_anchor
+	for anchor in by_anchor:
+		_sync_pond_fish_markers(chunk_coord, anchor as Vector2i)
+
+
 func _free_pond_fish_markers(chunk_coord: Vector2i) -> void:
 	for markers in _pond_fish_markers.get(chunk_coord, {}).values():
 		for fish in markers:
@@ -15995,15 +16078,28 @@ func _spawn_building_node(chunk_coord: Vector2i, origin_local: Vector2i, record:
 	# every reload. A building with no yard declared grows no node at all.
 	var yard_sheet := BuildingCatalog.background_sheet_for(building_id, int(record["seed"]))
 	if not yard_sheet.is_empty():
-		var yard_texture := _first_texture_of([yard_sheet], footprint.x, building_id)
+		# Scaled to the WHOLE plot, exactly as the kerb above is, not to the
+		# narrower share the house itself is drawn at
+		# (BuildingCatalog.PLOT_MARGIN_SHARE). It was drawn at the house's
+		# width, and at that size it sat entirely inside the house's own
+		# silhouette: reported live as *"farm houses don't use the 3x2
+		# background image as background..."*, measured at 14.6% of the
+		# yard's opaque pixels reaching the screen
+		# (tools/probe_building_yard.gd).
+		var yard_texture := _illustrated_structure_sprite.plot_background_texture(
+			String(yard_sheet["path"]), int(yard_sheet["columns"]), int(yard_sheet["rows"]),
+			int(yard_sheet["row"]), int(yard_sheet["column"]),
+			TerrainRenderer.ART_TILE_SIZE, footprint, String(yard_sheet["grid"])
+		)
 		if yard_texture != null:
 			var yard := Sprite2D.new()
 			yard.name = "Yard"
 			yard.texture = yard_texture
 			yard.scale = Vector2.ONE * ArtResolution.SPRITE_SCALE
-			yard.position = Vector2(
-				0, -float(yard_texture.get_height()) * 0.5 * ArtResolution.SPRITE_SCALE
-			)
+			# The plot's own rect, the same one the kerb and the collision
+			# shape are built from -- a plot-sized picture centred on the
+			# plot's centre.
+			yard.position = Vector2(0, -footprint_px.y * 0.5)
 			node.add_child(yard)
 
 	var sprite := Sprite2D.new()
@@ -16135,9 +16231,9 @@ func _built_local_cells(chunk: Chunk) -> Array:
 
 ## A cell nothing grows on: a real building piece, a laid road (docs/
 ## concept/infrastructure.md's Road tier -- a placed surface, unlike the
-## worn path/trail tiers, which stay open ground), or a village farm's own
-## rail. The one predicate build_at_global/destroy_at_global/
-## _built_local_cells share for ground cover; buildings
+## worn path/trail tiers, which stay open ground), a village farm's own
+## rail, or a fisher's dug pond. The one predicate build_at_global/
+## destroy_at_global/_built_local_cells share for ground cover; buildings
 ## (BuildingCatalog.occupies) are checked alongside it where footprints
 ## matter.
 ##
@@ -16149,11 +16245,22 @@ func _built_local_cells(chunk: Chunk) -> Array:
 ## a rail gives its ground back when it is pulled out: destroy_at_global
 ## shares this predicate, so a torn-out fence line is ordinary ground again
 ## rather than a permanent scar.
+##
+## The POND is here because of a live screenshot of a fenced pond full of
+## reeds: *"Now there's a pond, but grass grows in it"*. This world has
+## already answered that exact report once, for rivers -- TallGrass seeds
+## off the BIOME array, and neither a river nor a dug pond changes it, so
+## both read as the grassland they were cut out of (see
+## TallGrass._seed_initial_patches, "grass grows in rivers"). A river is
+## GENERATED, so its answer lives in the sim; a pond is BUILT, so its
+## answer is the seam every other built thing already uses. A pond gives
+## its ground back when it is filled in through the same door a rail does.
 func _is_built_surface(tile_id: String) -> bool:
 	return (
 		BuildingPiece.has_piece(tile_id)
 		or TerrainRenderer.is_road_tile(tile_id)
 		or VillageFarm.is_fence_tile(tile_id)
+		or VillagePond.is_pond_tile(tile_id)
 	)
 
 
@@ -18040,6 +18147,13 @@ func _load_chunk(chunk_coord: Vector2i) -> void:
 		self,
 		_current_sun_elevation_deg
 	)
+	# After the village pass, because that pass DIGS and stocks a pond on
+	# the visit that founds one -- and before anything reads the water, so
+	# a pond stocked in an earlier session is a stocked pond the moment its
+	# chunk is back. Merges rather than replaces for exactly that reason:
+	# the pond just dug has no record on disk, and must not be erased by
+	# one that has nothing to say about it.
+	_restore_pond_fish(chunk_coord)
 	_loaded_ambient_flyers[chunk_coord] = _ambient_flyer_renderer.spawn_ambient_flyers(
 		_creatures_parent, chunk, chunk_coord * CHUNK_SIZE, TerrainRenderer.TILE_SIZE,
 		_biome_classifier.dominant_biome(chunk.biome),
@@ -18457,6 +18571,14 @@ func _village_assembly_state(chunk_coord: Vector2i) -> Dictionary:
 		"estate_counts": _household_store.estate_census(household_ids),
 		"household_count": household_ids.size(),
 		"housed_count": int(census["housed_count"]),
+		# How many roofs really stand EMPTY, which is what lets the
+		# assembly raise one when none does (VillageAssembly.next_building's
+		# lowest rung, docs/concept/village_growth.md "Room is made first,
+		# moved into after"). Without it the assembly reads the default
+		# "there is already room", and a village that has housed everybody
+		# and answered every petition owes itself nothing for ever --
+		# measured at room 0 through a whole 1200-second watch.
+		"spare_house_capacity": int(census["spare_house_capacity"]),
 		"present_building_ids": _settlement_present_building_ids(chunk_coord),
 		# How many of each, so a works that feeds people can be raised again
 		# while it is outnumbered by the mouths (mechanism 7).
@@ -18500,11 +18622,21 @@ func _apply_village_growth_decision(chunk_coord: Vector2i) -> void:
 	if spare_capacity <= 0:
 		return
 
-	var owner_id := settlement_id
-	if BuildingCatalog.BUILDING_IDS.has(next_building):
-		if waiting.is_empty():
-			return
-		owner_id = waiting[0]
+	# Who it belongs to -- and a home with nobody waiting for it is the
+	# VILLAGE'S, not a reason to refuse the build.
+	#
+	# This credited a home to waiting[0] and RETURNED when nobody was
+	# waiting. That is right for the shelter rung, which exists for a named
+	# household, and wrong for the ladder's lowest rung, which raises a
+	# house precisely BECAUSE everybody is already housed and no roof
+	# stands empty (VillageGrowth.next_building, docs/concept/
+	# village_growth.md "Room is made first, moved into after"). So the
+	# village chose that house on every settlement step and never once
+	# began it. Measured (tools/probe_village_growth_gate.gd) with every
+	# other condition open -- food per household 2.3 to 3.6 against a
+	# threshold of 2.0, six spare hands, a site available, `house_small`
+	# chosen at every sample -- and `building now` empty throughout.
+	var owner_id := VillageGrowth.owner_for(next_building, waiting, settlement_id)
 
 	var origin = _growth_site_for(chunk_coord, next_building)
 	if origin == null:
@@ -18623,14 +18755,17 @@ func _mean_household_needs(assessments: Array) -> Dictionary:
 ## acts on, so the card cannot promise a building the village is not
 ## actually about to raise.
 func _next_growth_building_for(
-	chunk_coord: Vector2i, household_ids: Array, census: Dictionary
+	chunk_coord: Vector2i, household_ids: Array, _census: Dictionary
 ) -> String:
 	if household_ids.is_empty():
 		return ""
-	return VillageGrowth.next_building(
-		household_ids.size(), int(census.get("housed_count", 0)),
-		_present_structure_ids_for_settlement_chunk(chunk_coord)
-	)
+	# The SAME question _apply_village_growth_decision acts on, not a second
+	# prediction of it. It used to walk VillageGrowth's ladder directly,
+	# which is neither the function the village really asks (the assembly)
+	# nor handed the spare capacity that decides its lowest rung -- so the
+	# card could promise a building the village was not about to raise, and
+	# stay silent about the one it was.
+	return next_building_for_settlement(chunk_coord)
 
 
 func settlement_tier_of(settlement_id: String) -> String:
@@ -19744,6 +19879,11 @@ func _unload_chunk(chunk_coord: Vector2i) -> void:
 			creature.free()
 	_loaded_creatures.erase(chunk_coord)
 
+	# A pond's own stock is saved HERE rather than with the region's
+	# aggregate above, because a pond exists whether or not the region has
+	# any water in it at all -- the block above is skipped for a landlocked
+	# chunk, and a landlocked chunk is exactly where a village digs one.
+	_save_pond_fish(chunk_coord)
 	_free_pond_fish_markers(chunk_coord)
 	for fish in _loaded_fish.get(chunk_coord, []):
 		fish.free()

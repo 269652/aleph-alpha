@@ -23,6 +23,7 @@ const GeoCoordinates = preload("res://src/world/geo_coordinates.gd")
 const EarthChunkGenerator = preload("res://src/world/earth_chunk_generator.gd")
 const TerrainRenderer = preload("res://src/rendering/terrain_renderer.gd")
 const BuildingPiece = preload("res://src/gameplay/building_piece.gd")
+const VillagePond = preload("res://src/gameplay/village_pond.gd")
 
 var manager: EarthChunkManager
 var tile_map_layer: TileMapLayer
@@ -204,3 +205,56 @@ func test_touches_building_piece_reads_the_eight_neighbours_and_the_cell_itself(
 	assert_true(BuildingPiece.touches_piece(modifications, Vector2i(5, 4)), "cardinal neighbour")
 	assert_false(BuildingPiece.touches_piece(modifications, Vector2i(7, 5)), "two cells away")
 	assert_false(BuildingPiece.touches_piece(modifications, Vector2i(9, 9)), "an earth path is not a piece")
+
+
+# -- a dug pond is water, and nothing grows in water -------------------------
+
+## Reported live with a screenshot of a fenced pond full of reeds: "Now
+## there's a pond, but grass grows in it".
+##
+## A dug pond is a chunk MODIFICATION, not a biome (docs/concept/
+## village_ponds.md: "Deliberately NOT a biome"), so TallGrass's own
+## grassland check cannot see it -- the exact shape of the bug that was
+## already reported once as "grass grows in rivers" and answered there by
+## TallGrass._is_river_at. A river is generated and a pond is built, so a
+## pond's answer is the seam a BUILT thing already uses: the ground cover
+## blocks under it, like a floor or a rail.
+func test_digging_a_pond_takes_the_grass_with_it_and_none_grows_back():
+	var local = _a_buildable_grass_cell()
+	assert_not_null(local, "precondition: Berlin's chunk has grass on buildable ground")
+	if local == null:
+		return
+	var g := _global(local)
+	manager.build_at_global(g.x, g.y, VillagePond.POND_TILE_ID)
+	assert_false(_grass().has_grass(local), "grass left standing in the water at %s" % str(local))
+	assert_false(_grass().plant(local), "...and nothing takes root in a pond")
+	assert_false(_flowers().plant(local, "poppy"), "...nor flowers")
+
+
+## The other direction, the one a rail already has: fill the hole in and the
+## ground is ordinary ground again (docs/concept/village_ponds.md: "Filling
+## one in gives the dry ground back").
+func test_filling_a_pond_in_gives_the_ground_back_to_the_grass():
+	var local = _a_buildable_grass_cell()
+	if local == null:
+		return
+	var g := _global(local)
+	manager.build_at_global(g.x, g.y, VillagePond.POND_TILE_ID)
+	manager.destroy_at_global(g.x, g.y)
+	assert_true(_grass().plant(local), "dry ground again: grass may take it back")
+
+
+## A pond dug on an earlier visit is still water when the chunk comes back,
+## and a fresh grass sim seeds from the biome alone -- so the reload seam
+## needs the same answer the build seam does, exactly as a persisted floor
+## already does above.
+func test_a_persisted_pond_keeps_the_grass_out_on_reload():
+	var local = _a_buildable_grass_cell()
+	if local == null:
+		return
+	var g := _global(local)
+	manager.build_at_global(g.x, g.y, VillagePond.POND_TILE_ID)
+	manager._unload_chunk(_chunk_coord)
+	manager._load_chunk(_chunk_coord)
+	assert_false(_grass().has_grass(local), "the reloaded chunk's fresh grass sim seeded grass in the pond")
+	assert_false(_grass().plant(local))

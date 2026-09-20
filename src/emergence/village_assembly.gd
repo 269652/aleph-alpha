@@ -108,6 +108,9 @@ const SUPPLIED := EstateAscension.FULL_SATISFACTION
 ##   estate_counts         estate -> households
 ##   household_count       how many households there are
 ##   housed_count          how many of them have a roof
+##   spare_house_capacity  places standing EMPTY in houses that are already
+##                         built. Absent reads as 1, "there is already
+##                         room", so an old caller is unchanged.
 ##   present_building_ids  what really stands here
 ##   satisfaction          good -> [0,1], EstateConsumption.draw's own report
 ##   waiting_estate        the estate of the household at the head of the
@@ -135,6 +138,11 @@ static func next_building(state: Dictionary) -> String:
 
 	var estate_counts: Dictionary = state.get("estate_counts", {})
 	var present: Array = state.get("present_building_ids", [])
+	# Defaults to 1 -- "there is already room" -- the same default
+	# VillageGrowth.next_building keeps, so a caller that never learned this
+	# parameter gets exactly the assembly it always got rather than a
+	# village that starts building houses nobody asked for.
+	var spare_house_capacity := int(state.get("spare_house_capacity", 1))
 	var petitions: Dictionary = _petitions(
 		estate_counts, present, state.get("satisfaction", {}),
 		state.get("building_counts", {}), household_count,
@@ -153,7 +161,37 @@ static func next_building(state: Dictionary) -> String:
 		# village that really wants nothing really builds nothing, which is
 		# the whole point of asking.
 		if estate_counts.is_empty() or Dictionary(state.get("satisfaction", {})).is_empty():
-			return VillageGrowth.next_building(household_count, household_count, present)
+			return VillageGrowth.next_building(
+				household_count, household_count, present, spare_house_capacity
+			)
+		# ROOM IS MADE FIRST, AND MOVED INTO AFTER (village_growth.md).
+		#
+		# A village that has housed everybody and answered every petition
+		# owes itself nothing -- so it builds nothing, so no roof ever
+		# stands empty, so VillageImmigration.arrivals (gated on real spare
+		# capacity, never on frontage) takes nobody in, ever. It stops
+		# growing for good the moment it catches up with itself.
+		#
+		# That rung was added to VillageGrowth.next_building and the live
+		# decision stopped going through it: _apply_village_growth_decision
+		# asks next_building_for_settlement, which asks THIS function, which
+		# had no such rung and was never handed the capacity to test it. The
+		# documented fix was unreachable from the path a village uses.
+		#
+		# Measured (tools/probe_village_growth_gate.gd) over a 1200-second
+		# watch of a village with every rung it was entitled to standing:
+		# food per household 2.1-4.3 against a FED_THRESHOLD of 2.0, and
+		# `room` ZERO at every single sample.
+		#
+		# Below every petition on purpose, which is the ladder's own rule: a
+		# village finishes what it already owes itself before it makes room
+		# for strangers.
+		if spare_house_capacity <= 0:
+			# The STARTING estate's house, because that is what a newcomer
+			# arrives as (EarthChunkManager.admit_household forms exactly
+			# one) -- unlike the shelter rung above, which rehouses a
+			# specific household in their OWN estate's house.
+			return VillageEstates.house_id_for(VillageEstates.STARTING_ESTATE)
 		return ""
 	return _winner(petitions)
 

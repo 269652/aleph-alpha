@@ -437,9 +437,25 @@ static func variant_cell_for(building_id: String, seed_value: int) -> Vector2i:
 ## Per building id, so declaring one for the farmhouse costs nothing
 ## anywhere else: every other building answers {} and draws exactly what it
 ## drew before.
+## Each sheet's cells must be the SHAPE of the plot the building stands on,
+## because a yard is scaled to the plot's whole rect (see
+## IllustratedStructureSprite.plot_background_texture): the farmhouse's
+## 1536x1024 cuts into 512x341 cells at 1.50 for its 3x2 plot, the cottage's
+## 1254x1254 into 418x418 at 1.00 for its 2x2. Pinned by
+## test_every_declared_yard_is_the_shape_of_the_plot_it_fills, so a sheet
+## declared against the wrong plot is caught here rather than in a
+## screenshot.
 const _BACKGROUND_SHEETS := {
 	"farmhouse": {
 		"path": "res://assets/sprites/buildings/farmhouse_bg_overlay.png",
+		"columns": 3, "rows": 3,
+	},
+	# *"I also added bg overlays for cottages ..."* -- nine square garden
+	# scenes for the 2x2 plot a cottage stands on. A cottage is the one
+	# building with both a variant sheet and a yard, so a street of them
+	# carries 25 houses x 9 gardens rather than nine repeats.
+	"house_small": {
+		"path": "res://assets/sprites/buildings/cottage_bg_overlay.png",
 		"columns": 3, "rows": 3,
 	},
 }

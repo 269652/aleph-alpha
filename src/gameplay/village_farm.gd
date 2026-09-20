@@ -712,8 +712,18 @@ static func _rail_stops_step(tile_id: String, step: Vector2i) -> bool:
 ## first grassland village with a fisher, every free cell on the fisher's
 ## own side of the street was north of their house -- 32 of them -- so a
 ## search that could only look south had nowhere to go but across the road.
+## `accepts_rect` is the caller's own further condition about the WHOLE
+## rectangle — the same shape VillageLayout.street_plot's `accepts_origin`
+## already has, and for the same reason it has it. A farmhouse with nowhere
+## to farm is a farmhouse that should not have been raised; a fisher's pond
+## with nowhere to put its hut is water that should have been dug
+## elsewhere. A refused rectangle simply keeps the search going, so the
+## caller gets the next-best site that does work rather than nothing.
+##
+## Omitted, the search is exactly the one this function has always done.
 static func field_rect(
-	origin: Vector2i, building_id: String, is_free: Callable, behind: bool = false
+	origin: Vector2i, building_id: String, is_free: Callable, behind: bool = false,
+	accepts_rect: Callable = Callable()
 ):
 	var footprint := BuildingCatalog.footprint_of(building_id)
 	if footprint == Vector2i.ZERO:
@@ -728,6 +738,11 @@ static func field_rect(
 			for left in range(origin.x - FIELD_REACH_TILES, origin.x + footprint.x + FIELD_REACH_TILES):
 				var rect := Rect2i(left, top, size.x, size.y)
 				if not _rect_is_free(rect, origin, footprint, is_free, behind):
+					continue
+				# Asked AFTER the cheap geometry, because it is the
+				# expensive half: the pond's own use of it searches a whole
+				# bank for somewhere a hut could stand.
+				if accepts_rect.is_valid() and not accepts_rect.call(rect):
 					continue
 				var key: Array = [
 					_rect_reach(rect, origin, footprint),
