@@ -466,6 +466,28 @@ The village's goods have to be somewhere you can point at. So:
 more or less than before and the levy split is untouched. What moved is
 *where the goods are* between the field and the market.
 
+## A store its own people may eat from
+
+Reported live with a stocked store in shot: *"there's still not enough
+food even though the warehouse is full"*. Both halves of that sentence
+were true at once, and the two halves of the codebase disagreed.
+
+A settlement's food **assessment** counts every `StructureStock` standing
+in its chunk (`EarthChunkManager._settlement_structure_stocks` →
+`SettlementFood.carrying_capacity`), so the grain a carter hauls in really
+is food the village has. An individual villager's **meal** came from
+`STRUCTURE_MEAL_SOURCE_IDS` — a hand-written list of `bakery` and
+`storage`, written before this building existed and never grown to include
+it. The village was fed on paper while its people starved beside a full
+store.
+
+The warehouse is now one of the places a villager may eat from. The list
+stays hand-written, because the meal search scans *for* ids — which is
+exactly how it drifted — so what is pinned is the behaviour rather than
+the list: *what the settlement counts as food is what its people can eat*
+(`test_earth_chunk_manager_village_meals.gd`). The next store added here
+fails a test rather than starving a village quietly.
+
 ## Status
 
 - ✅ **Mechanism 1 — standing from founding.** `VillageLayout` reserves the

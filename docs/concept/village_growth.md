@@ -546,8 +546,48 @@ Implemented 2026-09-16, TDD red-first throughout. See
   stages. See [building.md](building.md)'s "Building variant sheets" for
   the full contract.
 
+### A household that leaves keeps its house, and that froze the village
+
+Reported live off the settlement card: *"Population 1 (10 housed)"*,
+alongside *"The villages population is declining"*. The first is
+impossible on its face — you cannot have ten of one household under roofs
+— and the second was its consequence.
+
+`EarthChunkManager._record_household_departure` appends a
+`npc_departed` event and **releases nothing**: no roof, no villager, no
+household record. `_households_in_settlement` then stops counting that
+household, while the house it built still names it as owner. So
+`VillageCensus` met roofs whose owners were not on the roster it was
+handed, and counted them among "ours" — against the contract
+`VillageAssembly` states in its own argument list, *"housed_count — how
+many of THEM have a roof"*.
+
+The bookkeeping error froze the village solid, which is the part that
+mattered:
+
+- `housed_count >= household_count` tells `VillageGrowth.next_building`
+  there is nobody left to house, so **no house is ever raised again**.
+- `spare_house_capacity = capacity - housed_count` tells
+  `VillageImmigration` there is no room, so **nobody ever moves in
+  again**.
+
+A village carrying ghost owners can therefore only lose people. The
+census now counts only the roster it was handed, which restores both
+gates and makes the card unable to contradict itself. A roof whose owner
+has left is room the village may grow into again.
+
 ### Known gaps, stated rather than papered over
 
+- 🚧 **The villagers you can see are a render-time snapshot; the card is
+  live.** `VillageRenderer._population_for` reads the real roster
+  (`household_count_for_settlement`) — but only when the chunk is
+  rendered. Nothing spawns a villager when a household arrives mid-session
+  and nothing removes one when a household departs, so the markers walking
+  about and the card's Population row drift apart until the chunk reloads.
+  Reported exactly that way: *"there still run around more NPCs than the
+  number displays"*. Closing it means spawning and despawning villagers
+  live, which is a real change to how a village is rendered rather than a
+  counting fix, so it is named here rather than guessed at.
 - 🚧 **A village only draws new households while its chunk is LOADED.** The
   room half of the immigration gate is read off buildings that really
   stand, and an unloaded chunk has none to read; guessing at them would be

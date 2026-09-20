@@ -12,6 +12,7 @@ extends GutTest
 ## own ground and no tile is ever worked twice.
 
 const VillageFarm = preload("res://src/gameplay/village_farm.gd")
+const VillageCropChoice = preload("res://src/gameplay/village_crop_choice.gd")
 const BuildingCatalog = preload("res://src/gameplay/building_catalog.gd")
 const ItemCatalog = preload("res://src/gameplay/item_catalog.gd")
 const FarmPlot = preload("res://src/gameplay/farm_plot.gd")
@@ -215,18 +216,33 @@ func test_ownership_is_decided_the_same_way_every_time():
 ## the herbalist's herb, and it was dying overnight exactly as the wheat was
 ## (see FarmPlot.MIN_WATER_GRACE_SECONDS).
 ##
-## So every field sows wheat for now. Deliberately a narrowing of the CROP,
-## not of who farms: the herbalist keeps the farmhouse and the field an
-## earlier ask gave them ("similar to a farmer the herbalist should build a
-## farm house and plant herbs"), and putting herbs back in their bed is this
-## one table entry.
-func test_every_field_a_village_works_sows_wheat_for_now():
+## That narrowing is WITHDRAWN. It was the right answer to "the crop dies
+## before it ripens" and the wrong one to keep once the night bug was
+## fixed: reported next was *"they have 0 Herbs even though there are 3 farm
+## houses"*, because the one table entry that had put herbs in the ground
+## was the one it removed.
+##
+## This table is now the TRADITIONAL crop -- what an occupation reaches for,
+## which VillageCropChoice uses to break a tie and as its fallback where
+## there is no reading to go on. What actually goes in the ground is the
+## village's own worst-supplied need (docs/concept/village_farms.md, "What a
+## field sows follows the village's need").
+func test_each_farming_occupation_has_its_own_traditional_crop():
 	assert_eq(VillageFarm.crop_for("farmer"), "wheat")
-	assert_eq(VillageFarm.crop_for("herbalist"), "wheat")
+	assert_eq(
+		VillageFarm.crop_for("herbalist"), "herb",
+		"the herbalist reaches for herbs again -- the crop the report was about"
+	)
+
+
+## Every traditional crop has to be one a field can really sow, or the
+## fallback would put something unsowable in the ground.
+func test_every_traditional_crop_is_really_sowable():
+	assert_gt(VillageFarm.CROP_BY_OCCUPATION.size(), 0, "the premise: somebody farms")
 	for occupation in VillageFarm.CROP_BY_OCCUPATION:
-		assert_eq(
-			VillageFarm.CROP_BY_OCCUPATION[occupation], "wheat",
-			"%s sows something the player cannot recognise" % occupation
+		assert_true(
+			VillageCropChoice.sowable_crops().has(VillageFarm.CROP_BY_OCCUPATION[occupation]),
+			"%s's own crop is not sowable" % occupation
 		)
 
 

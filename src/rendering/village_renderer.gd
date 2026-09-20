@@ -1803,19 +1803,39 @@ func _lay_plaza_if_missing(chunk_coord: Vector2i, chunk_size: int, world) -> voi
 	var skeleton := VillageLayout.skeleton(
 		chunk_size, VillageLayout.seed_for(chunk_coord), is_buildable
 	)
-	var doorstep: Vector2i = chunk_coord * chunk_size + skeleton["civic_plot"]["doorstep"]
-	if TerrainRenderer.is_road_tile(world.modification_at_global(doorstep.x, doorstep.y)):
-		return
+	# No short-circuit on the civic doorstep. It used to skip the whole pass
+	# whenever that cell was already a road tile -- and the STREET crossing
+	# the square paves exactly that cell, so a village whose square was once
+	# abandoned could never gain it back on any later visit. The walk below
+	# is idempotent (an already-paved cell is simply counted), so running it
+	# every time costs nothing and heals such a village, the same
+	# self-healing shape the rest of this file uses.
 	var plaza: Rect2i = skeleton["plaza"]
 	var cells: Array = []
+	var pavable := 0
+	var total := 0
 	for y in range(plaza.position.y, plaza.end.y):
 		for x in range(plaza.position.x, plaza.end.x):
+			total += 1
 			var cell := Vector2i(x, y)
 			var g: Vector2i = chunk_coord * chunk_size + cell
 			var existing: String = world.modification_at_global(g.x, g.y)
-			if not is_buildable.call(cell) or (existing != "" and not TerrainRenderer.is_road_tile(existing)):
-				return
+			if TerrainRenderer.is_road_tile(existing):
+				pavable += 1  # already laid, by this pass or by the street
+				continue
+			# Water, or something already standing in the square -- a farm
+			# rail, a warehouse. Stepped OVER rather than treated as a reason
+			# to abandon the whole square: a square laid around what stands
+			# in it is still a square, and one fence cancelling a village its
+			# centre is the reported defect.
+			if not is_buildable.call(cell) or existing != "":
+				continue
+			pavable += 1
 			cells.append(g)
+	# But a handful of scattered cells is stray paving rather than a square
+	# (VillageLayout.plaza_is_worth_laying, and the measurement behind it).
+	if not VillageLayout.plaza_is_worth_laying(pavable, total):
+		return
 	for g in cells:
 		world.build_at_global(g.x, g.y, TerrainRenderer.ROAD_TILE_ID)
 
