@@ -7257,6 +7257,23 @@ func _spawn_local_singleplayer_from_save() -> void:
 	var saved_position: Vector2 = save_data.get("position", Vector2.ZERO)
 	player.position = saved_position
 	player.respawn_position = save_data.get("respawn_position", saved_position)
+	# Where home is, for a character who already has one.
+	#
+	# `set_spawn_tile` had exactly ONE call site -- `_compute_dry_land_spawn_
+	# tile`, which only the NEW-game path runs -- so a loaded character left
+	# `_spawn_configured` false and two things went quiet at once: every
+	# `record_footfall` returned `{}`, so the whole discovery layer was dark
+	# (no ground recorded, no XP, no crossing card, docs/concept/
+	# discovery.md), and `_difficulty_tier_at` answered HARD for every chunk
+	# on the planet, so bear, lion and venomous snake could spawn on the
+	# doorstep of a resumed game.
+	#
+	# The character's own `respawn_position`, not `saved_position`: the rings
+	# are centred on where this character STARTED, and re-centring them on
+	# wherever they logged out would turn the far country into the hearth
+	# every time they loaded. BEFORE the first `update_with_progress` below,
+	# because chunk loading reads the difficulty tier as it streams.
+	_chunk_manager.set_spawn_tile(_tile_for_position(player.respawn_position))
 	# Same ordering reason as _spawn_local_singleplayer, from the saved seed
 	# instead of the creator's; apply_save_dict below re-applies it anyway, but
 	# apply_class runs first and must already know this character's genome.

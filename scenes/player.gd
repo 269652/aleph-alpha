@@ -2994,7 +2994,26 @@ func _cast_step() -> void:
 	_last_cast_input_state = cast_pressed
 
 	if just_pressed:
-		cast_spell(DEFAULT_CAST_SPELL_ID)
+		cast_held()
+
+
+## What the cast key really does: the spell this character COMPOSED if they
+## have composed one, and otherwise the learned spell they have always cast.
+##
+## Found by playing it. `cast_woven` had zero callers: the Weave window
+## authored a draft, `weave` accepted it, `cast_woven` was tested -- and this
+## step still ran `cast_spell(DEFAULT_CAST_SPELL_ID)` unconditionally, so the
+## key cast Fire Bolt whatever the player had arranged. The whole Magicraft
+## loop was a surface with no trigger, which is the exact "real, tested, zero
+## callers" pattern the overhaul was diagnosing (docs/concept/
+## spell_weaving.md).
+##
+## The fallback is not a courtesy: a character who never opens the Weave must
+## still be able to cast, or the key goes dead for most of the game.
+func cast_held() -> bool:
+	if not SpellDraft.atoms_of(_woven_draft).is_empty():
+		return cast_woven()
+	return cast_spell(DEFAULT_CAST_SPELL_ID)
 
 
 ## Raises this act's answer (docs/concept/feedback.md): the sound, the

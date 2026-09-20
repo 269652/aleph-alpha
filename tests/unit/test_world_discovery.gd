@@ -118,3 +118,54 @@ func test_the_card_decays_on_every_frame_rather_than_only_on_a_crossing():
 ## Each card is shown for its own length, never a constant somebody picked.
 func test_the_dwell_is_the_cards_own_reading_time():
 	assert_true(_function_body("_discovery_step").contains("Answerback.seconds_to_read"))
+
+
+# -- and a loaded save explores too --------------------------------------
+#
+# Found by playing it. `set_spawn_tile` had exactly one call site --
+# `_compute_dry_land_spawn_tile`, which only the NEW-game path runs -- so a
+# loaded character left `_spawn_configured` false, `record_footfall`
+# returned `{}` on every frame, and the entire discovery layer was dark:
+# no ground recorded, no XP, no crossing card. (The same flag also gates
+# `_difficulty_tier_at`, which answers HARD when it is unset.)
+
+## The real CALL, never a mention of the name: the first draft of this test
+## matched the explanatory comment above the call and would have passed
+## against a file that only talked about setting a spawn.
+const SPAWN_CALL := "_chunk_manager.set_spawn_tile("
+const CHUNK_LOAD_CALL := "_chunk_manager.update_with_progress("
+
+
+func test_a_loaded_save_still_knows_where_home_is():
+	assert_true(
+		_function_body("_spawn_local_singleplayer_from_save").contains(SPAWN_CALL),
+		"a resumed character must still have a spawn to measure distance from"
+	)
+
+
+## From the character's OWN saved home, not from wherever they happened to
+## log out -- otherwise every load would re-centre the world's rings on the
+## player and the far country would become the hearth.
+func test_the_resumed_spawn_is_the_saved_home_not_the_logout_spot():
+	var body := _function_body("_spawn_local_singleplayer_from_save")
+	var call_index := body.find(SPAWN_CALL)
+	assert_gt(call_index, -1, "precondition")
+	var call_line := body.substr(call_index, body.find("\n", call_index) - call_index)
+	assert_true(
+		call_line.contains("respawn_position"),
+		"the ring centre is the character's own home: %s" % call_line
+	)
+
+
+## Before the first chunk load: chunk loading reads the difficulty tier, and
+## an unset spawn answers HARD for every chunk on the planet.
+func test_home_is_known_before_the_first_chunk_is_loaded():
+	var body := _function_body("_spawn_local_singleplayer_from_save")
+	var spawn_index := body.find(SPAWN_CALL)
+	var load_index := body.find(CHUNK_LOAD_CALL)
+	assert_gt(spawn_index, -1, "precondition: the call is really there")
+	assert_gt(load_index, -1, "precondition: the load is really there")
+	assert_lt(
+		spawn_index, load_index,
+		"an unset spawn makes every chunk HARD while the world streams in"
+	)

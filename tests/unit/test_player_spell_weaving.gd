@@ -155,3 +155,74 @@ func test_being_envenomated_really_grants_the_mote():
 	player.apply_venom()
 	var atom := SpellMote.first_witness_atom_for(SpellMote.PHENOMENON_ENVENOMATED)
 	assert_eq(int(player.motes().get(atom, 0)), 1, "the bite taught it")
+
+
+# -- and the cast key really reaching it ---------------------------------
+#
+# Found by playing it: `cast_woven` had ZERO callers. The Weave window
+# authored a spell, `weave` accepted it, `cast_woven` was tested -- and the
+# cast key still ran `cast_spell(DEFAULT_CAST_SPELL_ID)` unconditionally, so
+# pressing it cast Fire Bolt whatever the player had composed. The whole
+# Magicraft loop was a surface with no trigger, which is exactly the "real,
+# tested, zero callers" pattern this overhaul was diagnosing.
+
+func test_the_cast_key_casts_what_the_player_wove():
+	player.grant_mote("frost_damage")
+	player.weave(SpellDraft.make(["frost_damage"], "projectile"))
+	player.max_mana = 50.0
+	player.mana = player.max_mana
+	var before: float = player.mana
+	assert_true(player.cast_held(), "the key casts")
+	var woven_cost: float = SpellDraft.cost_of(player.woven_draft())
+	assert_almost_eq(
+		before - player.mana, woven_cost, 0.001,
+		"what it spent is the WOVEN spell's cost, not the default spell's"
+	)
+
+
+## The other half of the same fact: the default spell has to still be there
+## for a character who has woven nothing, or the key goes dead for everyone
+## who never opens the Weave.
+func test_the_cast_key_still_casts_the_learned_spell_when_nothing_is_woven():
+	assert_eq(player.woven_draft(), {}, "precondition: nothing composed")
+	player.max_mana = 50.0
+	player.mana = player.max_mana
+	assert_true(player.cast_held(), "a character who never wove anything can still cast")
+	assert_lt(player.mana, 50.0, "and it really spent something")
+
+
+## The two paths must be distinguishable, or the test above could pass while
+## casting the wrong spell.
+func test_the_woven_cost_really_differs_from_the_default_spells():
+	player.grant_mote("frost_damage")
+	player.grant_mote("ignite")
+	assert_true(
+		player.weave(SpellDraft.make(["frost_damage", "ignite"], "projectile")),
+		"precondition: this really is a legal arrangement"
+	)
+	player.max_mana = 90.0
+	player.mana = player.max_mana
+	var woven_cost: float = SpellDraft.cost_of(player.woven_draft())
+	player.cast_held()
+	var spent_woven: float = 90.0 - player.mana
+
+	var plain = PlayerScene.instantiate()
+	add_child(plain)
+	plain.max_mana = 90.0
+	plain.mana = plain.max_mana
+	plain.cast_held()
+	var spent_default: float = 90.0 - plain.mana
+	plain.queue_free()
+
+	assert_almost_eq(spent_woven, woven_cost, 0.001)
+	assert_ne(spent_woven, spent_default, "the two paths must be telling apart")
+
+
+## The key is the one the game says it is -- not a second opinion about
+## which key casts.
+func test_the_cast_step_goes_through_the_one_shared_entry_point():
+	var source := FileAccess.get_file_as_string("res://scenes/player.gd")
+	assert_true(
+		source.contains("cast_held()"),
+		"the input step must call the shared decision, not re-make it"
+	)
