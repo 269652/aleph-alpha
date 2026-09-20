@@ -66,6 +66,13 @@ func _sample() -> void:
 		var state: Dictionary = _manager.settlement_readout_at(chunk_coord)
 		if state.is_empty():
 			continue
+		# A chunk can be IN _loaded_villages with nobody in it -- props and
+		# landmarks are villages too, as far as that dictionary is
+		# concerned. Measuring the first entry found an empty one and
+		# reported "they agree" about nobody, which is a probe agreeing
+		# with itself rather than a measurement.
+		if _villagers_in(chunk_coord) == 0:
+			continue
 		_measured = true
 		_lines.append("")
 		_lines.append("VILLAGE at %s -- the card says:" % str(chunk_coord))
@@ -73,10 +80,7 @@ func _sample() -> void:
 		for line in SettlementReadout.lines_for(state):
 			_lines.append("    %s" % line)
 
-		var villagers := 0
-		for node in _manager._loaded_villages[chunk_coord]:
-			if is_instance_valid(node) and node.has_method("setup_economy"):
-				villagers += 1
+		var villagers := _villagers_in(chunk_coord)
 		_lines.append("  villager markers really standing here: %d" % villagers)
 		_lines.append(
 			"  the card's Population row says %d -- %s"
@@ -91,6 +95,14 @@ func _sample() -> void:
 		)
 		_report_food(chunk_coord)
 		return
+
+
+func _villagers_in(chunk_coord: Vector2i) -> int:
+	var villagers := 0
+	for node in _manager._loaded_villages.get(chunk_coord, []):
+		if is_instance_valid(node) and node.has_method("setup_economy"):
+			villagers += 1
+	return villagers
 
 
 ## Where this village's food actually is, and whether its own people can
