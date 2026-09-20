@@ -276,8 +276,41 @@ var _animation := preload("res://src/rendering/procedural_animal_animation.gd").
 ## see IllustratedAnimalSprite) instead of ProceduralAnimalSprite's
 ## primitive-shape generation. Checked first in _animation_step; every
 ## species/action it doesn't cover falls back to _animation as before.
-var _illustrated := preload("res://src/rendering/illustrated_animal_sprite.gd").new()
+const IllustratedAnimalSprite = preload("res://src/rendering/illustrated_animal_sprite.gd")
+var _illustrated := IllustratedAnimalSprite.new()
 var _current_action := "walk"
+
+## The one-shot row (see IllustratedAnimalSprite.ONE_SHOT_ACTIONS) playing
+## right now, "" when none is -- a flinch or a collapse, which OVERRIDE
+## whatever the AI settled on for as long as they last. Kept apart from
+## _current_action because that one is reset to "walk" at the top of every
+## step and rewritten by whichever behaviour wins: a row that has to
+## survive across steps cannot live there.
+var _one_shot_action := ""
+
+## How far into that row we are. Its OWN clock, started at the moment the
+## creature entered the state, rather than the shared _elapsed_time every
+## cycling action reads -- a flinch that began mid-cycle has to start at
+## frame 0, or half the hits in a fight would show only the tail end of one.
+var _one_shot_elapsed := 0.0
+
+## True while a death row is still playing: the creature is dead, it is
+## just not finished falling over. Nothing else about it runs while this is
+## set -- no AI, no movement, no growth, no disease tick -- and it can only
+## ever be true for a species that really HAS death art (see _die), so every
+## creature in the game today takes the same instant path it always did.
+var _dying := false
+
+## True once a HELD one-shot row (see
+## IllustratedAnimalSprite.HOLDS_LAST_FRAME_ACTIONS) has run out of frames.
+## The row does NOT clear itself then -- it stops on its final frame, the
+## pose the body actually comes to rest in, and that pose is rendered for a
+## real step before whatever raised the row ends it (for a death, before
+## the carcass replaces the marker). This is also what makes the clamp in
+## _animation_step load-bearing rather than merely defensive: the held
+## index sits one past the last frame, so a wrapping modulo would put the
+## corpse back on its feet for exactly that step.
+var _one_shot_held := false
 
 var _wander := CreatureWander.new()
 ## Seeded from wander_seed in _ready so a herd doesn't cross into hunger in
@@ -840,6 +873,21 @@ func _process(frame_delta: float) -> void:
 	if delta < 0.0:
 		return
 	_elapsed_time += delta
+	# A body already collapsing does nothing else: no AI, no movement, no
+	# growth, no disease tick, not even a knockback. Same early-return shape
+	# as the rooted/dormant branches further down, placed one rung ABOVE
+	# every one of them because dead outranks every state a live creature
+	# can be in. Only ever reached by a species that really has death art
+	# (see _die) -- for everything in the game today _dying is never set and
+	# this costs one boolean test per step.
+	if _dying:
+		_step_one_shot(delta)
+		if is_queued_for_deletion():
+			return  # the row finished this step and _finish_dying took it
+		_animation_step()
+		_sync_grounded_children()
+		return
+	_step_one_shot(delta)
 	_attack_cooldown_remaining = maxf(0.0, _attack_cooldown_remaining - delta)
 	# Always ages, regardless of which branch below this creature takes --
 	# a courting/restrained/tamed juvenile still grows up (see _step_growing).
@@ -1582,15 +1630,84 @@ func _is_fresh_water_tile(tile: Vector2i) -> bool:
 	return _world.has_method("is_lake_at_global") and _world.is_lake_at_global(tile.x, tile.y)
 
 
+## What this creature's sprite is showing right now: a one-shot row (hurt,
+## death) overrides everything while it plays; otherwise whatever the AI
+## settled on this step, with a standing "walk" reading as idle.
+func current_action() -> String:
+	if _one_shot_action != "":
+		return _one_shot_action
+	if _current_action == "walk" and not _is_moving:
+		return "idle"
+	return _current_action
+
+
+## Enters `action`'s one-shot row IF this species really has art for it,
+## and reports whether it did. Gated on the art existing rather than
+## approximated from another row: hurt and death deliberately have no
+## fallback (see IllustratedAnimalSprite.ONE_SHOT_ACTIONS), and no sheet
+## declares either today, so this returns false for every creature
+## currently in the game and each of them keeps its exact previous
+## behaviour. The day a sheet grows hurt_bands or death_bands, the row
+## plays with no further wiring.
+##
+## Restarts the clock on re-entry, which is what makes a second hit during
+## a flinch replay the row from frame 0 rather than inherit the first's
+## remaining time.
+func _begin_one_shot(action: String) -> bool:
+	if info == null or not _illustrated.has_action(info.species, action):
+		return false
+	_one_shot_action = action
+	_one_shot_elapsed = 0.0
+	_one_shot_held = false
+	# Shown NOW, on the step the hit landed, not on the next one -- a flinch
+	# that starts a frame late reads as unrelated to the blow that caused it,
+	# and a death row's frame 0 is what a killing blow leaves on screen.
+	_animation_step()
+	return true
+
+
+## How long one pass of `action`'s row takes: its own frame count at the
+## shared per-frame cadence. Derived from the art rather than configured,
+## so a 3-frame flinch and a 9-frame collapse each last exactly as long as
+## the artist drew them.
+func _one_shot_duration(action: String) -> float:
+	if info == null:
+		return 0.0
+	var frames: int = _illustrated.generate_textures(info.species, action).size()
+	return float(maxi(frames, 1)) * ANIMATION_FRAME_DURATION
+
+
+## Advances whatever one-shot row is playing and ends it when it runs out:
+## a flinch hands the creature back to its AI, a collapse finishes the death
+## (see _finish_dying). No-op when no row is playing, which is every step of
+## every creature in the game today.
+func _step_one_shot(delta: float) -> void:
+	if _one_shot_action == "":
+		return
+	if _one_shot_held:
+		# The resting pose has had its step on screen; whatever raised the
+		# row now ends it.
+		if _dying:
+			_finish_dying()
+		return
+	_one_shot_elapsed += delta
+	if _one_shot_elapsed < _one_shot_duration(_one_shot_action):
+		return
+	if IllustratedAnimalSprite.holds_last_frame(_one_shot_action):
+		_one_shot_held = true
+		return
+	_one_shot_action = ""
+
+
 func _animation_step() -> void:
 	if info == null:
 		return
-	if _world != null and (_perception.is_on(_world, _current_tile(), "water") or _is_fresh_water_tile(_current_tile())):
+	# A one-shot row outranks the water check too: a creature that dies in a
+	# river collapses, it does not go back to swimming.
+	if _one_shot_action == "" and _world != null and (_perception.is_on(_world, _current_tile(), "water") or _is_fresh_water_tile(_current_tile())):
 		_current_action = "swim"
 
-	var action := _current_action
-	if action == "walk" and not _is_moving:
-		action = "idle"
+	var action := current_action()
 
 	var uses_illustrated := _illustrated.has_action(info.species, action)
 	if not _animation_frames.has(action):
@@ -1629,6 +1746,17 @@ func _animation_step() -> void:
 		# creature's own _elapsed_time starts at 0.0 and advances by the same
 		# per-frame delta absent an LOD stagger.
 		texture = frames[_animation.idle_frame_index(_elapsed_time, wander_seed, frames.size())]
+	elif IllustratedAnimalSprite.plays_once(action):
+		# Paced by the row's OWN clock (see _one_shot_elapsed), not the
+		# shared _elapsed_time. A held row (death) clamps on its final
+		# frame so the body stays where it fell; a running one (hurt) is
+		# cleared by _step_one_shot before its index can overrun, and the
+		# wrap is belt-and-braces for an LOD step that overshoots the end.
+		var index := int(_one_shot_elapsed / ANIMATION_FRAME_DURATION)
+		if IllustratedAnimalSprite.holds_last_frame(action):
+			texture = frames[mini(index, frames.size() - 1)]
+		else:
+			texture = frames[index % frames.size()]
 	else:
 		texture = frames[int(_elapsed_time / ANIMATION_FRAME_DURATION) % frames.size()]
 	_apply_action_scale(uses_illustrated, action)
@@ -3092,8 +3220,10 @@ func _nearest_node(nodes: Array) -> Node:
 ## Once aggroed, or for any non-boss species, damage always applies exactly
 ## as before this feature existed.
 func take_damage(amount: float) -> void:
-	if info == null:
-		return
+	if info == null or _dying:
+		return  # already dead, just not finished falling over -- a corpse
+		        # cannot be killed again (that would book the death twice
+		        # and leave two carcasses)
 	if info.is_world_boss and not info.is_aggroed:
 		if not _boss_aggro.deals_real_damage(amount, info.max_health):
 			return
@@ -3102,6 +3232,12 @@ func take_damage(amount: float) -> void:
 	_update_health_bar()
 	if _health.is_dead(info.health):
 		_die()
+		return  # a lethal hit does not flinch on its way out: the death row
+		        # is the one that plays, and only one can play at a time
+	# A survivable hit flinches -- one pass of the hurt row, then straight
+	# back to whatever the AI was doing. A no-op for every species without
+	# hurt art, which today is all of them (see _begin_one_shot).
+	_begin_one_shot("hurt")
 
 
 ## Crushed underfoot (see docs/concept/soil_fauna.md "Generalized to ANY
@@ -3334,7 +3470,30 @@ func _die() -> void:
 	# unguarded call. _book_death_against_the_region is the version that skips
 	# animals the player has a stake in -- carrying capacity governs WILD
 	# animals, and KeptAnimals says so in its own doc comment.
+	# Booked AT ONCE, on the killing blow -- never deferred to the end of a
+	# death row below. A death that only lands when an animation finishes is
+	# a death a chunk unload mid-collapse would lose outright, and the
+	# aggregate restocking whatever the player just hunted is the exact bug
+	# this booking was added to close.
 	_book_death_against_the_region()
+	if _begin_one_shot("death"):
+		_dying = true
+		return  # the body collapses first; _finish_dying lands the carcass
+	_spawn_carcass_if_eligible()
+	queue_free()
+
+
+## The end of a death row: the carcass lands where the body finally came to
+## rest, and the marker goes. Deliberately AFTER the row rather than on the
+## killing blow -- a carcass appearing on top of a creature still visibly
+## collapsing is the same "evaporates instead of being cut down" mistake
+## docs/concept/carrion.md was written to fix, just one animation later.
+## Only ever reached by a species with real death art; everything else took
+## the instant path in _die above.
+func _finish_dying() -> void:
+	_one_shot_action = ""
+	_one_shot_held = false
+	_dying = false
 	_spawn_carcass_if_eligible()
 	queue_free()
 
