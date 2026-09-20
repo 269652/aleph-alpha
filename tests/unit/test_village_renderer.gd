@@ -3581,3 +3581,39 @@ func test_a_village_never_paves_over_its_own_well():
 					paved_over.append("%s: well cell %s is %s" % [str(coord), str(cell), mod])
 	assert_gt(checked, 0, "precondition: real villages really raised a well")
 	assert_eq(paved_over.size(), 0, "%s" % str(paved_over.slice(0, 8)))
+
+
+## Asked for directly, after the well was measured standing wider than the
+## ground it occupies: *"scale the art to its footprint"*.
+##
+## The rule a building's own sheet already follows: the art's WIDTH matches
+## the footprint's width, and the height follows the same factor -- so a
+## tall prop overhangs upward (it is foot-anchored) and nothing ever
+## overhangs sideways onto a neighbour's cell.
+##
+## The well took its world size from `ProceduralLandmarkSprite.SIZES`, the
+## old procedural placeholder box (40x44 world px), which has nothing to do
+## with the 2x2 it is sited and reserved on: 40px is 2.5 tiles over a
+## 2-tile footprint, so a quarter of a tile hung over the paving on each
+## side however well it was sited.
+func test_the_wells_art_is_as_wide_as_the_2x2_it_stands_on():
+	var coord := _find_settlement_chunk("grassland")
+	var world := StubWorld.new()
+	var spawned := renderer.spawn_village(
+		parent, coord, coord * CHUNK_SIZE, CHUNK_SIZE, TILE_SIZE, "grassland", world
+	)
+	var checked := 0
+	for node in spawned:
+		if node.get_meta("landmark_id", "") != "well" or not (node is Sprite2D):
+			continue
+		checked += 1
+		var footprint := VillageRenderer.landmark_footprint_tiles("well")
+		assert_almost_eq(
+			node.texture.get_width() * node.scale.x, float(footprint.x * TILE_SIZE), 1.0,
+			"the well is drawn exactly as wide as the ground it stands on"
+		)
+		assert_lte(
+			node.texture.get_height() * node.scale.y, float(footprint.y * TILE_SIZE) * 3.0,
+			"and no more than a sane overhang tall"
+		)
+	assert_gt(checked, 0, "precondition: this village really raised a well")

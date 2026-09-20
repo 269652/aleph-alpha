@@ -358,7 +358,9 @@ func spawn_village(
 	for landmark_id in settlement.landmarks:
 		if landmark_id == "stall":
 			continue  # pitched with the market below, and only when tended
-		var landmark := _build_landmark(landmark_id, settlement.landmarks[landmark_id], parent)
+		var landmark := _build_landmark(
+			landmark_id, settlement.landmarks[landmark_id], parent, false, tile_size
+		)
 		if landmark != null:
 			spawned.append(landmark)
 	for i in npcs.size():
@@ -2113,8 +2115,11 @@ const _SOLID_LANDMARK_FOOTPRINT_FRACTION := 0.7
 const GROUND_FLOOR_COLLISION_LAYER := 1
 
 
-func _build_landmark(landmark_id: String, position: Vector2, parent: Node2D, personal: bool = false) -> Sprite2D:
-	var texture := _landmark_texture(landmark_id, position)
+func _build_landmark(
+	landmark_id: String, position: Vector2, parent: Node2D, personal: bool = false,
+	tile_size: int = TerrainRenderer.TILE_SIZE
+) -> Sprite2D:
+	var texture := _landmark_texture(landmark_id, position, tile_size)
 	if texture == null:
 		return null  # no art for this prop: nothing is drawn (see _landmark_texture)
 	var landmark := Sprite2D.new()
@@ -2185,12 +2190,22 @@ func _solid_body_for(size: Vector2i) -> StaticBody2D:
 ## prop does not draw the same variant twice, and so a prop looks like
 ## itself across reloads. Only matters for a prop whose art is a grid; a
 ## plain single-image sheet has one cell whatever the seed.
-func _landmark_texture(landmark_id: String, position: Vector2) -> Texture2D:
+func _landmark_texture(
+	landmark_id: String, position: Vector2, tile_size: int = TerrainRenderer.TILE_SIZE
+) -> Texture2D:
 	var seed_value := hash("%d_%d_prop" % [int(position.x), int(position.y)])
+	# A prop that stands on a declared footprint is drawn exactly as wide
+	# as that ground -- see LandmarkSheet.world_scaled_image. Asked for
+	# directly: "scale the art to its footprint". One cell wide props keep
+	# the size their own art declares, which is what they always had.
+	var footprint := landmark_footprint_tiles(landmark_id)
+	var world_width: int = footprint.x * tile_size if footprint != Vector2i.ONE else 0
 	# Scaled to the size that prop really is, never assumed to have been
 	# authored at it -- see LandmarkSheet.world_scaled_image, and the
 	# "huge potato crops" history it cites.
-	var image := LandmarkSheet.world_scaled_image(landmark_id, seed_value, _structure_sprite)
+	var image := LandmarkSheet.world_scaled_image(
+		landmark_id, seed_value, _structure_sprite, world_width
+	)
 	if image != null:
 		return ImageTexture.create_from_image(image)
 	# No sheet, no prop. The procedural box (ProceduralLandmarkSprite) was
