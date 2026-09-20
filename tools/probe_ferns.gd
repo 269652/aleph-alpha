@@ -159,6 +159,20 @@ func _init() -> void:
 	print("saved %s/ferns_walker.png  walker standing at %s" % [OUT_DIR, str(walker)])
 	_report_bend(floor_view, pushed)
 	_report_bands(chunk_coord, centre_tile)
+	_report_brambles(chunk_coord)
+
+	# A bramble is sparse enough (a few per chunk against a fern's thirty)
+	# that one is rarely in the same frame as the densest fern stand, so it
+	# gets a shot of its own with the canopy already lifted. "Is it drawn
+	# correctly" cannot be answered by a picture that does not contain one.
+	var bramble_tile := _a_bramble_tile(chunk_coord)
+	if bramble_tile != Vector2i.MAX:
+		_manager.update(bramble_tile)
+		_manager._sync_fern_sprites(chunk_coord)
+		_hide_trees()
+		var bramble_view := await _frame(bramble_tile, Vector2(-9999.0, -9999.0))
+		bramble_view.save_png("%s/bramble.png" % OUT_DIR)
+		print("saved %s/bramble.png  centred on a thicket at %s" % [OUT_DIR, str(bramble_tile)])
 	print("dumped to: ", ProjectSettings.globalize_path(OUT_DIR))
 	quit()
 
@@ -272,3 +286,42 @@ func _report_bands(chunk_coord: Vector2i, centre_tile: Vector2i) -> void:
 			0 if mmi.multimesh == null else mmi.multimesh.instance_count,
 			"yes" if mmi.texture != null else "NONE",
 		])
+
+
+## The wood's OTHER ground cover, reported from the same run because it
+## lives on the same cells and was reported in the same breath:
+## *"blackberrys are still not wired and don't grow in forest biome"*.
+## Same three questions — is there a sim, does it hold anything, and is
+## any of it actually DRAWN.
+func _report_brambles(chunk_coord: Vector2i) -> void:
+	var BlackberryBramble = load("res://src/world/blackberry_bramble.gd")
+	var sim = _manager._bramble_sims.get(chunk_coord)
+	if sim == null:
+		print("  BRAMBLES: no sim on this chunk at all")
+		return
+	var chunk = _manager._loaded_chunks.get(chunk_coord)
+	var wood := 0
+	for y in chunk.height:
+		for x in chunk.width:
+			if chunk.biome[y * chunk.width + x] == BlackberryBramble.HOME_BIOME:
+				wood += 1
+	var cells: Array = sim.get_patch_cells()
+	var drawn: int = _manager._bramble_sprites.get(chunk_coord, {}).size()
+	print("  BRAMBLES: %d on %d forest cells — %.1f%%, asked for %.1f%%; %d drawn" % [
+		cells.size(), wood,
+		100.0 * float(cells.size()) / float(maxi(wood, 1)),
+		100.0 * BlackberryBramble.SEED_CHANCE, drawn,
+	])
+	for cell in cells:
+		var local: Vector2i = cell
+		if chunk.biome[local.y * chunk.width + local.x] != BlackberryBramble.HOME_BIOME:
+			print("    a bramble at %s is OUT OF THE WOOD" % str(local))
+
+
+## The global tile of the first thicket in this chunk, or Vector2i.MAX when
+## the wood grew none.
+func _a_bramble_tile(chunk_coord: Vector2i) -> Vector2i:
+	var sim = _manager._bramble_sims.get(chunk_coord)
+	if sim == null or sim.get_patch_cells().is_empty():
+		return Vector2i.MAX
+	return chunk_coord * CHUNK_SIZE + (sim.get_patch_cells()[0] as Vector2i)

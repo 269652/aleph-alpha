@@ -10903,6 +10903,12 @@ func plant_grass_at(pixel_position: Vector2) -> bool:
 ## ever touched the cosmetic per-tuft TallGrass sim, never
 ## EcosystemSimulation's aggregate density/land-health.
 func _graze_by_herbivores() -> void:
+	# Chunks where a fern was really taken, so their cards are rebuilt ONCE
+	# at the end rather than once per mouthful — a bite has to disappear on
+	# the frame the muzzle is in it (docs/concept/ecosystem_dynamics.md,
+	# "What is visible is what is real"), and re-syncing a whole chunk's
+	# bands per creature would pay for that many times over.
+	var cropped_ferns: Dictionary = {}
 	for chunk_key in _loaded_creatures.keys():
 		var chunk_coord: Vector2i = chunk_key
 		var sim: TallGrass = _grass_sims.get(chunk_coord)
@@ -10916,9 +10922,50 @@ func _graze_by_herbivores() -> void:
 			var growth := sim.get_growth(local)
 			if growth >= 1.0 and sim.graze(local):
 				_ecosystem.record_vegetation_harvest(chunk_coord, growth)
+			elif _crop_a_fern_under(chunk_coord, local):
+				cropped_ferns[chunk_coord] = true
 			_step_seed_dispersal(creature)
 			_step_grass_seed_caching(creature)
 			_step_squirrel_nut_caching(creature)
+	for chunk_coord in cropped_ferns:
+		_sync_fern_sprites(chunk_coord)
+
+
+## The mouthful a grazer takes when there is no grass under it: the fern
+## (docs/concept/ferns.md). Asked for directly — *"make ferns grazeable by
+## herbivores"*.
+##
+## A fern is what is taken when nothing better is underfoot, which is
+## exactly the model ecosystem_dynamics.md already states: *"an animal that
+## can see no bite but stands on living ground crops what is under it"*.
+## It fits what a real grazer does, too — bracken is toxic to livestock
+## and most grazers leave it standing while there is grass to be had, and
+## deer browse fronds mainly when the grazing is poor.
+##
+## The `elif` that puts grass first is a RAIL, not a preference a grazer
+## ever gets to express, and saying so here saves the next reader working
+## it out: grass is gated to grassland and ferns to forest, so no cell can
+## carry both and the contest cannot arise. A test pins that
+## (test_a_cell_is_either_meadow_or_wood_so_the_two_never_compete), because
+## an `elif` that looks like it settles something is worse than one that
+## says it settles nothing.
+##
+## Deliberately NOT a new GrazerForaging food kind. Those are things an
+## animal SEES and walks to, and nothing walks across a wood to reach a
+## fern. This is the standing-on-it path and only that.
+##
+## Mature only, the same rule grass has: what is croppable is what is
+## grown. True when something was really taken, so the caller knows whose
+## cards to rebuild.
+func _crop_a_fern_under(chunk_coord: Vector2i, local: Vector2i) -> bool:
+	var ferns = _fern_sims.get(chunk_coord)
+	if ferns == null:
+		return false
+	var growth: float = ferns.get_growth(local)
+	if growth < 1.0 or not ferns.graze(local):
+		return false
+	_ecosystem.record_vegetation_harvest(chunk_coord, growth)
+	return true
 
 
 ## Rodent scatter-hoarding (see SeedCaching / docs/concept/long_grass.md's
@@ -16616,7 +16663,7 @@ func _despawn_building_node(chunk_coord: Vector2i, origin_local: Vector2i) -> vo
 func _block_ground_cover_on_cells(chunk_coord: Vector2i, local_cells: Array) -> void:
 	if local_cells.is_empty():
 		return
-	for sims in [_grass_sims, _flower_patches, _scrub_sims, _lichen_sims, _fern_sims]:
+	for sims in [_grass_sims, _flower_patches, _scrub_sims, _lichen_sims, _fern_sims, _bramble_sims]:
 		var sim = sims.get(chunk_coord)
 		if sim != null:
 			sim.block_cells(local_cells)
@@ -16626,7 +16673,7 @@ func _block_ground_cover_on_cells(chunk_coord: Vector2i, local_cells: Array) -> 
 ## The reverse, for a destroyed piece: bare ground again, open to the next
 ## seed like any other cell.
 func _unblock_ground_cover_on_cells(chunk_coord: Vector2i, local_cells: Array) -> void:
-	for sims in [_grass_sims, _flower_patches, _scrub_sims, _lichen_sims, _fern_sims]:
+	for sims in [_grass_sims, _flower_patches, _scrub_sims, _lichen_sims, _fern_sims, _bramble_sims]:
 		var sim = sims.get(chunk_coord)
 		if sim != null:
 			sim.unblock_cells(local_cells)
@@ -16637,6 +16684,8 @@ func _resync_ground_cover_sprites(chunk_coord: Vector2i) -> void:
 		_sync_grass_sprites(chunk_coord)
 	if _fern_sims.has(chunk_coord):
 		_sync_fern_sprites(chunk_coord)
+	if _bramble_sims.has(chunk_coord):
+		_sync_bramble_sprites(chunk_coord)
 	if _flower_patches.has(chunk_coord):
 		_sync_flower_sprites(chunk_coord)
 	if _scrub_sims.has(chunk_coord):
@@ -20188,6 +20237,11 @@ func _unload_chunk(chunk_coord: Vector2i) -> void:
 		mmi.free()
 	_fern_sprites.erase(chunk_coord)
 	_fern_sims.erase(chunk_coord)
+
+	for sprite in _bramble_sprites.get(chunk_coord, {}).values():
+		sprite.free()
+	_bramble_sprites.erase(chunk_coord)
+	_bramble_sims.erase(chunk_coord)
 
 	for markers_by_crop in _wild_crop_markers.get(chunk_coord, {}).values():
 		for marker in markers_by_crop.values():
