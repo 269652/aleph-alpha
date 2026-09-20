@@ -18,6 +18,7 @@ extends Sprite2D
 ## toward it.
 
 const CreatureMovementGate = preload("res://src/gameplay/creature_movement_gate.gd")
+const BuildingWalls = preload("res://src/gameplay/building_walls.gd")
 
 const GROUP_NAME := "bonded_companion"
 
@@ -51,10 +52,21 @@ const BLOCKER_SCAN_RADIUS := 96.0
 var _world = null
 var _last_gated_heading := Vector2.ZERO
 
+## Kept, not discarded: the building-wall predicate works in tiles, so the
+## gate needs the real tile size to convert a candidate position (see
+## docs/concept/navigation.md). This parameter used to be thrown away.
+var _tile_size := 16
 
-func setup(world, _tile_size: int) -> void:
+## Which tiles this companion may not step into (see BuildingWalls). Built
+## once here rather than per frame, the same as every other mover.
+var _wall_tiles := Callable()
+
+
+func setup(world, tile_size: int) -> void:
 	add_to_group(GROUP_NAME)
 	_world = world
+	_tile_size = tile_size
+	_wall_tiles = BuildingWalls.predicate_for(world)
 
 
 func _process(delta: float) -> void:
@@ -71,10 +83,15 @@ func step(delta: float) -> void:
 	var desired := to_target.normalized()
 	var blockers := _blockers_near(BLOCKER_SCAN_RADIUS)
 	var heading := desired
-	if not blockers.is_empty():
+	# Same reasoning as CreatureMarker's own gate condition: the fast path
+	# skips the gate when no prop is near, so a companion beside a house
+	# needs the wall predicate to be part of the decision, not only of the
+	# call.
+	var walls := _wall_tiles
+	if not blockers.is_empty() or walls.is_valid():
 		heading = CreatureMovementGate.clear_direction(
 			position, desired, MOVEMENT_LOOKAHEAD, blockers, [], SENSE_RADIUS,
-			_last_gated_heading
+			_last_gated_heading, 0.0, walls, _tile_size
 		)
 	_last_gated_heading = heading
 	if heading == Vector2.ZERO:
