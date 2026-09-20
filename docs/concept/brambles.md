@@ -83,6 +83,38 @@ records the YEAR it was picked, so:
 - the same patch bears again the next autumn, with no regrowth timer to
   tune — the calendar is the timer.
 
+## Wired the rest of the way (2026-09-20)
+
+Reported live: *"blackberrys are still not wired and don't grow in forest
+biome"*. The sim, the sheet, the drawing and the picking were all there.
+Three seams every other ground cover goes through were not, and each of
+them reads in play as "it isn't wired":
+
+- **A building's floor did not clear one.** A bramble was absent from the
+  block/unblock lists, so a house could be raised with a thicket standing
+  through its floor — the one rule [building.md](building.md) states for
+  every other cover.
+- **A cleared thicket kept drawing.** `_resync_ground_cover_sprites` did
+  not reach the brambles, so clearing one left its sprite standing: the
+  same lie a grazed tuft left on screen would be.
+- **Nothing freed them with the chunk.** The sims and their `Sprite2D`s
+  accumulated for every wood a player ever walked through, and hung over
+  ground that was no longer loaded.
+
+### The other half did not reproduce, and was measured
+
+On a real Harz chunk: **6 brambles on 242 forest cells** (2.5% against the
+3.5% `SEED_CHANCE` asks for) and **all 6 drawn**
+(`tools/probe_ferns.gd`, which reports the wood's other cover from the
+same run). A render centred on one shows it correctly at the wood's edge
+beside the ferns.
+
+What makes them hard to find is not wiring. It is **sparsity** — about
+one thicket per 170 tiles — and **the canopy**: a closed wood seen from
+above is all crown, and this world has no canopy fade when a player walks
+under it, so nothing on a forest floor is visible there at all. Both are
+recorded as open questions below rather than quietly tuned away.
+
 ## Status
 
 - ✅ **`BlackberryBramble`, the thicket's own sim.** Seeds on forest cells
@@ -113,6 +145,19 @@ records the YEAR it was picked, so:
   its own global cell, so a wood is not one bramble stamped over and over
   and it looks the same across a reload. `blackberry.png` carries real alpha,
   so unlike `fern.png` nothing is keyed.
+- ✅ **Cleared, re-drawn and freed like every other cover** (2026-09-20).
+  A building's floor takes a thicket and its sprite goes in the same frame;
+  both are freed with the chunk. See "Wired the rest of the way" above.
+- ⬜ **A cleared bramble never comes back.** There is no `plant` and no
+  spread: a chunk is seeded once when it is created and that is the whole
+  of it, so a cell cleared by a building carries no thicket for the life of
+  that chunk. Every other ground cover can re-colonise. Left as a design
+  question rather than answered on the way past.
+- ⬜ **Sparse, and under a canopy.** Measured at one thicket per ~170
+  tiles, on a forest floor a top-down camera cannot see into. Raising the
+  density is a one-line change and would not fix the second half; a canopy
+  that fades when the player walks under it would fix both, for ferns,
+  mushrooms and everything else down there too. Neither is done.
 - ✅ **The player picks them, on the same key as everything else.**
   `EarthChunkManager.pick_blackberries_near` sweeps the tile the player
   stands on and its neighbours, takes the first ripe unpicked patch, and

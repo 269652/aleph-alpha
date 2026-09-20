@@ -31222,3 +31222,55 @@ different, still-unbuilt thing for the legacy piece model.
 Tested: `test_procedural_builder_sprite.gd` (6, new),
 `test_construction_worker_marker.gd` (5, new),
 `test_earth_chunk_manager_city_hall_rising.gd` (+4).
+
+
+## Something eats the ferns, and the brambles get their last three seams (`concept/ferns.md`, `concept/brambles.md`, 2026-09-20)
+
+Reported together: *"make ferns grazeable by herbivores also blackberrys
+are still not wired and don't grow in forest biome"*.
+
+**Ferns.** `graze()` had existed since the sim landed with nothing calling
+it — named as an honest gap in the concept doc rather than left to be
+found. A grazer that takes no grass from the cell it stands on now crops
+the fern instead: the standing-on-it path `ecosystem_dynamics.md` already
+describes, deliberately not a new `GrazerForaging` food kind, because
+those are things an animal sees and walks to and nothing walks across a
+wood to reach a fern. It matches the real thing too — bracken is toxic to
+livestock and most grazers leave it standing while there is grass, while
+deer browse fronds mainly when the grazing is poor. A cropped fern's cards
+are rebuilt once per chunk at the end of the pass rather than once per
+mouthful.
+
+One test premise was impossible and is replaced by the truth it uncovered.
+It tried to stand mature grass on a fern's own cell to prove grass wins,
+and failed at its own precondition: grass is gated to grassland and ferns
+to forest, so **no cell can ever carry both**. The `elif` is a rail, not a
+contest, and both the test and the function's comment now say so.
+
+**Brambles.** The sim, the sheet, the drawing and the picking were all
+there. Three seams every other ground cover goes through were not, and
+each reads in play as "it isn't wired": a building's floor did not clear a
+thicket (absent from the block/unblock lists, so a house could stand with
+one through its floor); a cleared thicket kept drawing, since the shared
+sprite resync did not reach them; and nothing freed them on unload, so the
+sims and their `Sprite2D`s accumulated for every wood a player ever walked
+through and hung over ground no longer loaded.
+
+**The "don't grow in forest biome" half did not reproduce, and is
+measured rather than argued.** On a real Harz chunk: **6 brambles on 242
+forest cells** (2.5% against the 3.5% asked for), **all 6 drawn**, and a
+render centred on one shows it correctly at the wood's edge beside the
+ferns. What makes them hard to find is **sparsity** — about one per 170
+tiles — and **the canopy**: a closed wood seen from above is all crown,
+and this world has no canopy fade when a player walks under it, so nothing
+on a forest floor is visible there at all. Both are written down as open
+questions rather than tuned away on the way past: raising the density is
+one line and would not fix the second half, while a fading canopy would
+fix both, and for mushrooms and everything else down there too.
+
+Also found and recorded rather than fixed: a bramble has no `plant` and no
+spread, so a cell cleared by a building carries no thicket for the life of
+that chunk. Every other ground cover can re-colonise.
+
+Tested, red first at every step: `test_earth_chunk_manager_ferns.gd` 15/15
+(+3), `test_earth_chunk_manager_brambles.gd` 16/16 (+4).

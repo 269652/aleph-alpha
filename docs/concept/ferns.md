@@ -195,10 +195,24 @@ it, for the same reason.
   season tint still reaches them, so a November wood is not summer-bright,
   but there is no drawn autumn frond. Stated so nobody reads the single
   sheet as an oversight.
-- **Nothing eats them.** `graze` exists and works, and no herbivore calls
-  it yet — `_graze_by_herbivores` is wired to the grass alone. A real
-  fern is the LAST thing a grazer takes, so this is a defensible order to
-  build in, but it is a gap rather than a decision.
+- ~~**Nothing eats them.**~~ **Closed** (2026-09-20), asked for directly:
+  *"make ferns grazeable by herbivores"*. A grazer that takes no grass from
+  the cell it stands on crops the fern instead — the standing-on-it path
+  [ecosystem_dynamics.md](ecosystem_dynamics.md) already describes (*"an
+  animal that can see no bite but stands on living ground crops what is
+  under it"*), and deliberately NOT a new `GrazerForaging` food kind, since
+  those are things an animal sees and walks to and nothing walks across a
+  wood to reach a fern. Mature only, the same rule grass has.
+
+  It is also what a real grazer does: bracken is toxic to livestock and
+  most leave it standing while there is grass to be had, while deer browse
+  fronds mainly when the grazing is poor.
+
+  **The `elif` that puts grass first is a rail, not a contest.** Grass is
+  gated to grassland and a fern to forest, so no cell can ever carry both
+  and the preference can never be observed. A test pins exactly that, after
+  an earlier version of it tried to stand mature grass on a fern's own cell
+  and failed at its own precondition.
 - **No seed fall.** Grass sheds seed onto nearby ground (`shed_seed`);
   ferns only creep from a mature clump. That matches how bracken actually
   spreads, so it is deliberate — but it means a fern can never cross a
