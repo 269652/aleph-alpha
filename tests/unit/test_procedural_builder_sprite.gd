@@ -121,3 +121,174 @@ func test_a_builders_tool_reads_as_a_tool_rather_than_a_slab():
 		"the mallet head is %.0f%% of the figure against the man's own head at %.0f%%"
 		% [mallet * 100.0, head * 100.0]
 	)
+
+
+# -- and he is visibly loaded on the way back -----------------------------
+#
+# Asked for directly: *"the builders should carry materials to the site"*.
+# A builder now walks a real round -- out to the store empty-handed, back
+# to the site with a load (see ConstructionWorkerMarker) -- and which leg
+# of it he is on has to read at village zoom, where he is seven world units
+# tall and a silhouette is all there is.
+
+
+func _carrying() -> Image:
+	return ProceduralBuilderSprite.new().generate_image(true)
+
+
+func _empty_handed() -> Image:
+	return ProceduralBuilderSprite.new().generate_image(false)
+
+
+## Told apart at a glance from himself: the same man, visibly carrying.
+func test_a_loaded_builder_is_told_apart_from_the_empty_handed_one():
+	var loaded := _carrying()
+	var empty := _empty_handed()
+	assert_ne(loaded.get_data(), empty.get_data(), "a load you cannot see is not a load")
+	var differing := 0
+	for y in ProceduralBuilderSprite.SIZE:
+		for x in ProceduralBuilderSprite.SIZE:
+			if loaded.get_pixel(x, y) != empty.get_pixel(x, y):
+				differing += 1
+	var figure := 0
+	for y in ProceduralBuilderSprite.SIZE:
+		for x in ProceduralBuilderSprite.SIZE:
+			if loaded.get_pixel(x, y).a > 0.5:
+				figure += 1
+	assert_gt(
+		float(differing) / float(figure), 0.15,
+		"only %d of %d pixels change -- at this size that is not a difference anyone sees"
+		% [differing, figure]
+	)
+
+
+## The same man: he does not change size, silhouette budget, or drawing
+## between the two legs of his own round.
+func test_a_loaded_builder_is_still_a_figure_rather_than_a_filled_square():
+	var loaded := _carrying()
+	assert_eq(loaded.get_width(), ProceduralBuilderSprite.SIZE)
+	var opaque := 0
+	for y in loaded.get_height():
+		for x in loaded.get_width():
+			if loaded.get_pixel(x, y).a > 0.5:
+				opaque += 1
+	var share := float(opaque) / float(loaded.get_width() * loaded.get_height())
+	assert_between(share, 0.05, 0.5, "a loaded worker is still a silhouette on open ground")
+	assert_eq(_carrying().get_data(), loaded.get_data(), "and the same drawing every time")
+
+
+## A man with a load on his shoulder is not also swinging a mallet.
+func test_the_mallet_is_down_while_his_arms_are_full():
+	assert_eq(
+		_share_of_figure(_carrying(), ProceduralBuilderSprite.HEAD_COLOR), 0.0,
+		"the mallet is put down to carry"
+	)
+	assert_gt(
+		_share_of_figure(_empty_handed(), ProceduralBuilderSprite.HEAD_COLOR), 0.0,
+		"precondition: he has one in hand on the way out"
+	)
+
+
+## And the load is really drawn, at a size that reads: bigger than the
+## mallet head he put down (he is carrying a building's worth of timber in
+## stages, not a hand tool) and still smaller than the man.
+func test_the_load_reads_as_something_a_man_is_carrying():
+	var loaded := _carrying()
+	var load_share := _share_of_figure(loaded, ProceduralBuilderSprite.LOAD_COLOR)
+	var mallet_share := _share_of_figure(_empty_handed(), ProceduralBuilderSprite.HEAD_COLOR)
+	var body_share := _share_of_figure(loaded, ProceduralBuilderSprite.APRON_COLOR)
+	assert_gt(load_share, mallet_share, "a load smaller than a mallet head is not a load")
+	assert_lt(load_share, body_share, "and one bigger than the man carrying it is a cart")
+
+
+## The lesson the mallet already taught this sprite once, applied to the
+## load: drawn detached, it reads as a slab floating beside a blob rather
+## than as something a man is holding. Every pixel of the load must touch
+## the figure, directly or through the rest of the load.
+func test_the_load_rests_on_him_rather_than_floating_beside_him():
+	var loaded := _carrying()
+	var load_pixels: Array = []
+	for y in ProceduralBuilderSprite.SIZE:
+		for x in ProceduralBuilderSprite.SIZE:
+			if _is_load(loaded, x, y):
+				load_pixels.append(Vector2i(x, y))
+	assert_gt(load_pixels.size(), 0, "precondition: the load is drawn")
+	var touching := false
+	for pixel in load_pixels:
+		for dy in [-1, 0, 1]:
+			for dx in [-1, 0, 1]:
+				var neighbour := (pixel as Vector2i) + Vector2i(dx, dy)
+				if neighbour.x < 0 or neighbour.y < 0:
+					continue
+				if neighbour.x >= ProceduralBuilderSprite.SIZE or neighbour.y >= ProceduralBuilderSprite.SIZE:
+					continue
+				if _is_load(loaded, neighbour.x, neighbour.y):
+					continue
+				if loaded.get_pixel(neighbour.x, neighbour.y).a > 0.5:
+					touching = true
+	assert_true(touching, "the load has to be attached to the man, or it is a slab in the air")
+
+
+## And it sits on his shoulder: above the waist of a figure whose whole
+## height is fourteen pixels, because a load drawn at his feet is a crate
+## on the ground.
+func test_the_load_sits_on_his_shoulder():
+	var loaded := _carrying()
+	var rows := 0.0
+	var count := 0.0
+	for y in ProceduralBuilderSprite.SIZE:
+		for x in ProceduralBuilderSprite.SIZE:
+			if _is_load(loaded, x, y):
+				rows += float(y)
+				count += 1.0
+	assert_gt(count, 0.0)
+	assert_lt(rows / count, ProceduralBuilderSprite.SIZE / 2.0, "the load's middle is above his own")
+
+
+func _is_load(image: Image, x: int, y: int) -> bool:
+	var pixel := image.get_pixel(x, y)
+	if pixel.a <= 0.5:
+		return false
+	var load_color: Color = ProceduralBuilderSprite.LOAD_COLOR
+	return (
+		absf(pixel.r - load_color.r) <= 0.01
+		and absf(pixel.g - load_color.g) <= 0.01
+		and absf(pixel.b - load_color.b) <= 0.01
+	)
+
+
+# -- it has to read against what it is drawn over -------------------------
+#
+# The same measured yardstick the head already answers to: the Lumberjack's
+# own skin-against-tunic contrast, which has been out in this world long
+# enough to prove it reads. The load is carried OVER the apron and rests
+# AGAINST the head, so it owes both -- pale sawn timber, brighter than
+# either, rather than one more brown in a figure already made of browns.
+
+
+func _lumberjack_contrast() -> float:
+	return absf(
+		ProceduralLumberjackSprite.SKIN_COLOR.get_luminance()
+		- ProceduralLumberjackSprite.TUNIC_COLOR.get_luminance()
+	)
+
+
+func test_the_load_reads_against_the_apron_it_is_carried_over():
+	var load_color: Color = ProceduralBuilderSprite.LOAD_COLOR
+	var apron: Color = ProceduralBuilderSprite.APRON_COLOR
+	assert_gte(
+		absf(load_color.get_luminance() - apron.get_luminance()), _lumberjack_contrast() * 0.75,
+		"a load the tone of the apron under it is a stain, not a load"
+	)
+
+
+## Less is owed here than against the apron -- a load rests against a head
+## rather than being drawn over it, so they need only be told apart, not
+## separated. A third of the same yardstick, measured rather than guessed.
+func test_the_load_reads_against_the_head_it_rests_beside():
+	var load_color: Color = ProceduralBuilderSprite.LOAD_COLOR
+	var skin: Color = ProceduralBuilderSprite.SKIN_COLOR
+	assert_gte(
+		absf(load_color.get_luminance() - skin.get_luminance()), _lumberjack_contrast() * 0.3,
+		"a load the tone of his own head merges with it at this size"
+	)

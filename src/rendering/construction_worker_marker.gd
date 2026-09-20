@@ -118,13 +118,14 @@ var _picks := 0
 ## Starts full, so the first thing a builder does on a bare site is go and
 ## fetch something rather than mime work over an empty plot.
 var _spells_since_load := WORK_SPELLS_PER_LOAD
+var _sprite: Sprite2D
 
 
 func _ready() -> void:
 	add_to_group(GROUP_NAME)
-	var sprite := Sprite2D.new()
-	sprite.texture = ProceduralBuilderSprite.new().generate_texture()
-	add_child(sprite)
+	_sprite = Sprite2D.new()
+	_sprite.texture = ProceduralBuilderSprite.new().generate_texture(carried_count > 0.0)
+	add_child(_sprite)
 	_target = _pick_spot()
 
 
@@ -190,6 +191,7 @@ func _step_loading(delta: float) -> void:
 		return
 	carried_item_id = String(load_out["item_id"])
 	carried_count = float(load_out["count"])
+	_draw_as_loaded(true)
 	_phase = Phase.HAULING
 
 
@@ -202,6 +204,7 @@ func _step_hauling(delta: float) -> void:
 	delivered[carried_item_id] = float(delivered.get(carried_item_id, 0.0)) + carried_count
 	carried_item_id = ""
 	carried_count = 0.0
+	_draw_as_loaded(false)
 	_spells_since_load = 0
 	_working = 0.0
 	_target = _pick_spot()
@@ -222,6 +225,17 @@ func _walk_the_road_to(goal: Vector2, delta: float) -> bool:
 		earth, position, position + toward.normalized() * step, float(TerrainRenderer.TILE_SIZE)
 	)
 	return false
+
+
+## Which leg of the round he is drawn on: mallet up going out, a load on
+## the shoulder coming back (ProceduralBuilderSprite). Redrawn only when
+## his hands actually change, not every frame -- the image is generated
+## pixel by pixel, and a walker regenerating it sixty times a second would
+## be paying for a picture that has not changed.
+func _draw_as_loaded(loaded: bool) -> void:
+	if _sprite == null:
+		return
+	_sprite.texture = ProceduralBuilderSprite.new().generate_texture(loaded)
 
 
 func _next_load() -> Dictionary:

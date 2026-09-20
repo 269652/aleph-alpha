@@ -14,6 +14,7 @@ extends GutTest
 const ConstructionWorkerMarker = preload("res://src/rendering/construction_worker_marker.gd")
 const ConstructionHaul = preload("res://src/gameplay/construction_haul.gd")
 const LogisticsMarker = preload("res://src/rendering/logistics_marker.gd")
+const ProceduralBuilderSprite = preload("res://src/rendering/procedural_builder_sprite.gd")
 
 const PLOT := Rect2(Vector2(100.0, 200.0), Vector2(32.0, 32.0))
 const STORE := Vector2(400.0, 200.0)
@@ -211,3 +212,32 @@ func test_he_never_wanders_off_the_round_between_the_two():
 func test_a_builder_on_the_road_walks_at_the_porters_pace():
 	assert_eq(ConstructionWorkerMarker.HAUL_SPEED, LogisticsMarker.WALK_SPEED)
 	assert_gt(ConstructionWorkerMarker.HAUL_SPEED, ConstructionWorkerMarker.WALK_SPEED)
+
+
+## And you can see which leg of the round he is on: the mallet up on the
+## way out to the store, a load on his shoulder on the way back, put down
+## again when it reaches the site.
+func test_he_is_drawn_loaded_exactly_while_he_carries():
+	_stock_the_round()
+	assert_true(_drawn_as(false), "he sets out empty-handed")
+	for i in int(120.0 / FRAME):
+		worker._process(FRAME)
+		if worker.carried_count > 0.0:
+			break
+	assert_gt(worker.carried_count, 0.0, "precondition: he picked a load up")
+	assert_true(_drawn_as(true), "and is visibly carrying it")
+	for i in int(120.0 / FRAME):
+		worker._process(FRAME)
+		if worker.carried_count <= 0.0:
+			break
+	assert_eq(worker.carried_count, 0.0, "precondition: he set it down")
+	assert_true(_drawn_as(false), "and has his hands free again")
+
+
+## Whether the sprite he is really wearing is the loaded drawing or the
+## empty-handed one. A bool rather than the two images, so a failure reads
+## as one line instead of eight hundred bytes of pixels.
+func _drawn_as(carrying: bool) -> bool:
+	var sprite := worker.get_child(0) as Sprite2D
+	var drawn := (sprite.texture as ImageTexture).get_image().get_data()
+	return drawn == ProceduralBuilderSprite.new().generate_image(carrying).get_data()
