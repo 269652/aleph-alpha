@@ -29237,3 +29237,109 @@ assumed, so it failed for its own reasons rather than the code's. The rule
 is pinned where the decision lives, in `test_village_layout.gd`.
 
 Tests: 253/253 across the layout, renderer and both city-hall suites (+1).
+
+## Consecutive rails share a post (`concept/village_farms.md`, 2026-09-20)
+
+Reported with a finished enclosure in shot: *"the enclosures render
+unnecessary vertical rails"*.
+
+### ✅ Two whole panels meeting is two posts, not one
+
+Every cell of `fence.png` is a **whole panel** — a post at *each* end with
+rails between. The sheet's four columns are North/South front views and
+East/West top views, all the same design.
+
+An earlier pass, asked for in one word (*"also scale"*), made a rail's wood
+span exactly one tile so consecutive rails **meet** with no gap. That closed
+the gaps and left the real defect untouched: two complete panels meeting put
+two posts at every junction a few pixels apart. Six rails showed twelve posts
+where they should show seven.
+
+A straight rail is scaled by the distance between **its own two post
+centres** now, not by the length of its wood. Its posts land on its tile's
+two edges, the neighbour's near post lands on the same point, and the pair
+draw as one. Corners are untouched — a corner is a post on a join, not a run,
+and still takes the side wall's own scale.
+
+### ✅ The reader took two guards, and the sheet forced both
+
+Getting the measurement right was the whole job, and both guards were found
+by measuring the real art rather than reasoning about it:
+
+- **The threshold sits between the RAIL level** (the median of slices
+  carrying content) **and a robust high percentile**, never a fixed multiple
+  of either. The front views' posts cover about **twice** their rails (0.53
+  vs 0.27); the top views' end caps only about **1.3×** their bar (0.13 vs
+  0.10). No single multiple reads both — a 1.4× rule found north/south/west
+  and lost east entirely.
+- **The percentile is robust, and a band must be 2% of the run wide.** The
+  trimmed cells carry stray edge slices — including one **fully opaque
+  column** at the far end — which own the maximum and otherwise swallow the
+  entire run between them. Three detectors in a row reported "posts 99.7% of
+  the run apart" before that stray was found.
+
+Measured this way all four facings agree, at source resolution and at drawn
+resolution alike: **posts about 0.62–0.65 of the run apart**, which at a 16px
+tile had them 12.5–13.0px apart inside a 16px tile.
+
+### ✅ Verified end to end, not just per panel
+
+Six real rails composited the way `EarthChunkManager._spawn_structure_art_for`
+places them — each centred on its tile, bottom-anchored, shifted by
+`footprint_offset` — and the posts counted off the result: **7 posts, widths
+[11, 12, 12, 12, 12, 12, 11]**. Evenly spaced, one per tile boundary, the two
+end ones half-width because half of each hangs past the end of the run, which
+is what an end post should do. That composite is the test now, rather than a
+number derived from the spacing.
+
+### 🚧 The cost, stated plainly
+
+The timber draws about **a quarter thicker** than before. The scale is
+uniform on both axes and this project does not stretch art along one axis to
+fit, so a fence that shares its posts is necessarily a little heavier than
+one that merely abuts. Flagged rather than hidden: if that reads as too
+heavy, the alternative is new art with the post split across the cell edge,
+not a non-uniform scale.
+
+### Three tests rewritten to the new rule, not deleted
+
+The two `..._wood_spans_exactly_one_tile_...` tests now pin that a rail's
+wood spans one tile **plus the post it shares**, with the old rule quoted in
+place so the reversal is legible. `test_the_offset_moves_the_art_toward_the_
+beds` now allows an already-flush rail to need no nudge — a rail scaled by
+its post spacing is drawn larger than its tile, so a facing whose art already
+lands flush has nothing to move; where the wood actually lands stays pinned
+directly by `test_scaling_by_the_run_keeps_every_rail_flush_against_its_own_
+edge` and `test_no_rails_wood_ever_crosses_into_the_beds`.
+
+Tests: `test_illustrated_structure_sprite.gd` 49/50 (+3 new, 3 rewritten).
+The remaining failure,
+`test_no_house_crop_cuts_through_the_top_of_its_own_drawing`, is about house
+art and is **pre-existing** — A/B'd in a clean worktree at the commit before
+this change, where it fails identically. Recorded rather than quietly left.
+
+### ✅ And the corner followed the wall it caps
+
+`test_a_corner_post_lines_up_with_the_side_wall_it_caps` caught this
+immediately, which is exactly what it is for: a corner is a post on a join,
+not a run, and takes the scale of the side wall it caps so its timber is as
+thick as the run it meets. Moving how a run is scaled left the corner 0.4px
+behind its wall.
+
+A corner's art **is** the side column's art, so measuring that column's post
+spacing hands it the side wall's own scale by construction — the rule it
+already had, stated against the wall rather than against its own length. Its
+distinct *fallback* is kept: if the posts cannot be read, a corner still
+falls back to the side wall's length rather than a run's, because scaling a
+post as if it were a run is what once turned a corner into a whole tile of
+rail.
+
+That pass also rewrote `test_the_offset_moves_the_art_toward_the_beds` into
+`test_every_rails_wood_lands_flush_against_the_edge_facing_its_beds`. The old
+test asserted the OFFSET VECTOR points toward the beds — a premise that only
+holds while the art is smaller than its tile. A rail scaled by its post
+spacing is larger: the band already starts outside the tile, so landing the
+wood flush against the bed-facing edge means pushing it back the other way,
+and the offset's sign stopped meaning what was asserted. The rewrite pins
+where the wood LANDS, which is what the rule was always about, and now holds
+corners to **both** of their axes rather than straight rails to one.
