@@ -14,7 +14,6 @@ extends RefCounted
 ## moves the goods and the gold (see EarthChunkManager).
 
 const SagewerkProduction = preload("res://src/world/sagewerk_production.gd")
-const ConstructionCatchup = preload("res://src/world/construction_catchup.gd")
 const NpcProduction = preload("res://src/world/npc_production.gd")
 const VillageFarm = preload("res://src/gameplay/village_farm.gd")
 const SettlementGathering = preload("res://src/emergence/settlement_gathering.gd")
