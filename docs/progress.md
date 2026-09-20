@@ -30915,3 +30915,65 @@ narrow.
 
 Tested: `test_illustrated_structure_sprite.gd` (+2, one repaired),
 `test_building_catalog.gd` (+2).
+
+
+## A crush lands on a crush, at the level everything else plays at (`concept/creature_and_footstep_audio.md`, 2026-09-20)
+
+Reported live: *"can you make the mushroom crush sound louder"*.
+
+### ✅ Measured first, and the measurement split the report in two
+
+`mushroom_crush.mp3` is 7.54s of styrofoam crushed about **twenty separate
+times**, not a continuous crinkle — which is what the concept doc assumed
+("any moment in it is a crunch"). `offset_for` read it as an ordinary
+walking bed and took a uniform roll anywhere in it, so most rolls played the
+**gap** between crushes. Across 101 evenly spaced rolls the 0.30s window
+that actually reaches the speaker ran from **−60.65 to −33.73 LUFS with a
+median of −45.34**, against a footstep target of −33.13: **58 of the 101
+landed more than 10 dB under it**, 13 more than 20 dB under.
+
+Separately, `play_mushroom_crush` was the **one sound played through these
+voices at a flat 0 dB** while every footstep pool is matched by K-weighted
+loudness to a shared target. Either fact alone makes it quiet; together they
+make a gain useless, because turning up 0.3s of room tone gives louder room
+tone.
+
+### ✅ The crushes are measured now
+
+`tools/prepare_footstep_oneshots.py` grew a one-shots pass that reuses the
+onset detector already in it — the one that cuts footfalls out of a walking
+recording finds crushes just as well. Each onset is windowed exactly as
+playback will give it (0.30s, the cap `InteractionSfxPlayer` applies, pinned
+across the two languages), with 20ms of pre-roll so the attack is not
+clipped off.
+
+11 of 22 events survive, kept because they sit within **8.34 dB** of the
+loudest — not a threshold anybody chose, but the widest within-pool spread a
+*shipped* footstep pool already runs (snow's), derived in the same run. A
+pool takes one gain, so an event 20 dB under its neighbours would stay
+inaudible.
+
+The surviving pool measures **−37.06 LUFS**, takes **+3.9 dB**, lands at
+**−33.16** against the target of −33.13. Peak after gain −8.6 dBFS, inside
+the −1.0 ceiling. Both numbers go into `steps/levels.json` beside the
+surfaces' own and are pinned against it.
+
+### ⚠️ The spec said "any moment in it is a crunch"
+
+That sentence is what made the uniform roll look right, and it is corrected
+in place in the concept doc rather than quietly rewritten — along with a
+second one calling `0.0` dB "full volume", which it is not: it is
+*unadjusted*, and being unadjusted was the bug once everything around it had
+been matched.
+
+### ✅ Red first, and both halves bite
+
+One existing test asserted the crush plays at exactly `0.0` dB. Rewritten,
+not deleted: what it guards did not move — the voice pool recycles, so a
+crush must set its own volume unconditionally rather than inherit the last
+footstep's — and the flat `0.0` it expected was itself the bug. Re-confirmed
+by mutation: putting the gain back to 0 dB, and removing the crush branch
+from `offset_for`, each fail the new tests.
+
+Tested: `test_footstep_sound.gd` (+7), `test_interaction_sfx_player.gd`
+(+2, one rewritten).

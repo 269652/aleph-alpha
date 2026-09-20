@@ -150,6 +150,15 @@ through; `play_mushroom_crush` deliberately relies on the `0.0` default
 rather than passing it explicitly, so a crush always plays at full volume
 regardless of which surface last used that voice.
 
+> **Corrected 2026-09-20.** "Full volume" was doing a lot of work in that
+> sentence. `0.0` is not full volume, it is *unadjusted* — and once every
+> footstep pool was matched to a shared loudness target, the crush was the
+> one sound here still playing at an unmatched level. It now passes
+> `FootstepSound.MUSHROOM_CRUSH_VOLUME_DB`, measured the same way. What the
+> paragraph above actually guards — that a crush must set its own volume
+> rather than inherit the last footstep's — is unchanged. See "Louder, and
+> why a gain alone could not do it" below.
+
 TDD: `test_grass_footsteps_play_quieter_than_the_default_volume` /
 `test_every_other_surface_plays_at_the_default_volume` in `test_
 footstep_sound.gd` (now 15/15); `test_interaction_sfx_player.gd` gained
@@ -441,9 +450,14 @@ its real length (`7.54`, measured off the file and pinned against it by
 `test_the_pinned_clip_lengths_are_the_real_files_own`, like every other
 length here) makes `is_walking_bed` true for it, so each crush reads a
 **random 0.3s window out of the recording** instead of its first 0.3s.
-For a continuously crinkling source that is the right reading anyway: any
-moment in it is a crunch, and a different one each time is variation the
-crush did not have before.
+For a continuously crinkling source that reading looked right: any moment
+in it is a crunch, and a different one each time is variation the crush did
+not have before.
+
+> **Measured, and it is not (2026-09-20).** The recording is not
+> continuous crinkling — it is about twenty *separate* crushes with gaps
+> between them, and most of a recording of repeated crushes is the gap. See
+> below.
 
 `is_walking_bed`'s name is now narrower than what it does — it is about a
 clip's LENGTH, not about walking. The name is left alone rather than
@@ -462,6 +476,70 @@ and at least one reads deeper in than a whole window). All confirmed red
 against the unmeasured constant first — the "different moments" one
 failing with *"every crush started in the same place"*, which is the bug
 stated exactly.
+
+#### Louder, and why a gain alone could not do it (2026-09-20)
+
+Reported live: *"can you make the mushroom crush sound louder"*.
+
+**Measured first, and the measurement split the report in two.**
+
+`mushroom_crush.mp3` is 7.54s of styrofoam crushed about **twenty separate
+times**, not a continuous crinkle. `offset_for` read it as an ordinary
+walking bed and took a uniform roll anywhere in it — so most rolls played
+the gap between crushes. Across 101 evenly spaced rolls, the 0.30s window
+that actually reaches the speaker measured:
+
+| | LUFS |
+|---|---|
+| quietest roll | −60.65 |
+| median roll | −45.34 |
+| loudest roll | −33.73 |
+| the footstep target | **−33.13** |
+
+**58 of the 101 rolls landed more than 10 dB under the target**, and 13 more
+than 20 dB under. A 27 dB spread between one crush and the next.
+
+And separately, `play_mushroom_crush` was the **one sound played through
+these voices at a flat 0 dB**, while every footstep pool is matched by
+K-weighted loudness to a shared target ("Matched by loudness, not by RMS"
+above).
+
+Either fact alone makes it quiet. Together they make a gain useless:
+turning up 0.3s of room tone gives louder room tone.
+
+**So the crushes are measured.** `tools/prepare_footstep_oneshots.py` grew a
+one-shots pass that reuses machinery already in it — the onset detector that
+cuts footfalls out of a walking recording finds crushes just as well:
+
+- every onset is windowed **exactly as playback will give it** — 0.30s, the
+  cap `InteractionSfxPlayer.MUSHROOM_CRUSH_MAX_DURATION_SECONDS` applies,
+  pinned across the two languages by
+  `test_the_measured_crush_window_is_the_one_playback_really_allows`;
+- with **20ms of pre-roll**, so the transient's own attack is not clipped
+  off by starting exactly on it — shorter than the ~30ms a listener needs
+  to localise an attack, so it cannot read as a delay;
+- the quiet ones are **dropped**: 11 of 22 survive, kept because they sit
+  within **8.34 dB** of the loudest. That is not a threshold anybody chose
+  — it is the widest within-pool spread a *shipped* footstep pool already
+  runs (snow's), derived in the same run, so what survives is exactly as
+  varied as a pool this project has already accepted. A pool takes **one**
+  gain, so an event 20 dB under its neighbours would simply stay inaudible.
+
+The surviving pool measures **−37.06 LUFS**, takes **+3.9 dB**, and lands at
+**−33.16** against the footstep target of −33.13. Peak after gain −8.6 dBFS,
+well inside the −1.0 ceiling.
+
+Both numbers are written into `steps/levels.json` beside the surfaces' own
+and pinned against it, so neither can drift from the file it describes —
+the same discipline `_VOLUME_DB_BY_SURFACE` is held to.
+
+**TDD.** Red first, on constants that did not exist yet. One existing test
+asserted the crush plays at exactly `0.0` dB and is **rewritten rather than
+deleted**: what it guards did not move (the voice pool recycles, so a crush
+must set its own volume unconditionally instead of inheriting the last
+footstep's), and the flat `0.0` it expected was itself the bug. Both halves
+re-confirmed by mutation — putting the gain back to 0 dB, and removing the
+crush branch from `offset_for`, each fail the new tests.
 
 ### Creature calls
 
