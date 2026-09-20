@@ -536,3 +536,162 @@ func test_bucking_a_tree_that_is_not_a_bare_trunk_yields_nothing():
 	var standing := ChoppableTree.new()
 	add_child_autofree(standing)
 	assert_eq(standing.buck_for_worker(), 0, "a standing tree has to come down first")
+
+
+# -- a species with its own sapling art draws it, in season -----------------
+#
+# The shared strip is species-blind and season-blind. Apple now has a sheet
+# of its own -- a stage x season grid (see docs/concept/flora.md's "Sapling
+# phase") -- so an apple sapling has to draw ITS art, wearing the season the
+# tree is actually in, and the morph past the threshold has to dissolve out
+# of exactly the drawing that was on screen the instant before.
+
+
+## A texture's pixels as a short digest rather than the raw megabyte, so a
+## failing comparison prints something a human can read instead of a
+## quarter-million numbers. Nothing that matters is lost: these compare a
+## drawing against the same drawing reached another way, never against a
+## near-miss.
+func _pixels(texture: Texture2D) -> int:
+	return hash(texture.get_image().get_data())
+
+
+## An apple, which is the species that currently has a sapling sheet of its
+## own -- searched for by bias exactly the way _tree() searches for cherry.
+func _apple_tree() -> ChoppableTree:
+	var grown := ChoppableTree.new()
+	for step in 201:
+		var bias := float(step) / 200.0
+		if TreeSpecies.species_for_bias(bias) == "apple":
+			grown.species_bias = bias
+			break
+	add_child_autofree(grown)
+	var canopy := Sprite2D.new()
+	grown.add_child(canopy)
+	grown.bind_canopy(canopy)
+	return grown
+
+
+func _apple_tree_with_shader_canopy() -> ChoppableTree:
+	var grown := _apple_tree()
+	grown._canopy_sprite.material = WindSway.new().shared_material()
+	return grown
+
+
+## The last age at which this tree is still drawing sapling art -- walked
+## for, because TreeGrowth.scale_at is a curve rather than something a test
+## can invert.
+func _age_at_the_top_of_the_sapling_phase() -> float:
+	var growth := TreeGrowth.new()
+	var last := 0.0
+	for step in 2000:
+		var age := float(step) / 2000.0 * TreeGrowth.MATURITY_SECONDS
+		if growth.sapling_progress(growth.scale_at(age)) < 1.0:
+			last = age
+	return last
+
+
+func test_an_apple_sapling_draws_its_own_species_art():
+	var apple := _apple_tree()
+	apple.set_age(0.0)
+	apple.set_ripe_fruit(0, "summer")
+	var art := IllustratedTree.new()
+	var progress := TreeGrowth.new().sapling_progress(apple.growth_scale)
+	assert_eq(
+		_pixels(apple._canopy_sprite.texture),
+		_pixels(art.sapling_frame_for_progress(progress, "apple", "summer", 0.0)),
+		"an apple sapling should draw the apple sheet"
+	)
+	assert_ne(
+		_pixels(apple._canopy_sprite.texture),
+		_pixels(art.sapling_frame_for_progress(progress)),
+		"...and not the shared strip every other species still uses"
+	)
+
+
+## The bug this fixes at its plainest: a young apple in October wore the
+## same green shoot as one in May.
+func test_an_apple_sapling_wears_the_season_it_is_in():
+	var apple := _apple_tree()
+	apple.set_age(0.0)
+	apple.set_ripe_fruit(0, "summer")
+	var in_leaf := _pixels(apple._canopy_sprite.texture)
+	apple.set_ripe_fruit(0, "autumn")
+	assert_ne(
+		_pixels(apple._canopy_sprite.texture),
+		in_leaf,
+		"an apple sapling in autumn should not be the same drawing as one in summer"
+	)
+
+
+func test_a_snowed_apple_sapling_wears_its_snow_column():
+	var apple := _apple_tree()
+	apple.set_age(0.0)
+	apple.set_ripe_fruit(0, "winter", "", 0.0, 0.0)
+	var bare := _pixels(apple._canopy_sprite.texture)
+	apple.set_ripe_fruit(0, "winter", "", 0.0, 1.0)
+	assert_ne(_pixels(apple._canopy_sprite.texture), bare, "snow changed nothing")
+	assert_eq(
+		_pixels(apple._canopy_sprite.texture),
+		_pixels(
+			IllustratedTree.new().sapling_frame_for_progress(
+				TreeGrowth.new().sapling_progress(apple.growth_scale), "apple", "winter", 1.0
+			)
+		)
+	)
+
+
+## The morph has to dissolve out of THIS species' last stage in THIS tree's
+## season -- handed the shared strip's species-blind last frame instead, an
+## apple crossing the threshold in autumn would snap from an orange sapling
+## to a generic green shoot and only THEN dissolve.
+func test_the_morph_dissolves_out_of_the_species_own_last_stage():
+	var apple := _apple_tree_with_shader_canopy()
+	apple.set_ripe_fruit(0, "autumn")
+	apple.set_age(TreeGrowth.MATURITY_SECONDS * 0.5)
+	var material: ShaderMaterial = apple._canopy_sprite.material
+	var dissolving_from: Texture2D = material.get_shader_parameter("morph_sapling_texture")
+	assert_not_null(dissolving_from, "precondition: a mid-morph tree carries a sapling texture")
+	var art := IllustratedTree.new()
+	assert_eq(
+		_pixels(dissolving_from),
+		_pixels(art.sapling_frame(art.sapling_frame_count("apple") - 1, "apple", "autumn", 0.0))
+	)
+
+
+## The property all of the above is for: the picture does not jump at the
+## hand-off. What the sapling was showing at the very top of its phase is
+## exactly what the morph starts dissolving out of one moment later.
+func test_the_hand_off_from_sapling_to_morph_is_seamless():
+	var apple := _apple_tree_with_shader_canopy()
+	apple.set_ripe_fruit(0, "autumn")
+	apple.set_age(_age_at_the_top_of_the_sapling_phase())
+	assert_lt(
+		TreeGrowth.new().sapling_progress(apple.growth_scale),
+		1.0,
+		"precondition: still inside the sapling phase"
+	)
+	var last_sapling_drawn := _pixels(apple._canopy_sprite.texture)
+	apple.set_age(TreeGrowth.MATURITY_SECONDS * 0.5)
+	var material: ShaderMaterial = apple._canopy_sprite.material
+	var dissolving_from: Texture2D = material.get_shader_parameter("morph_sapling_texture")
+	assert_eq(
+		_pixels(dissolving_from),
+		last_sapling_drawn,
+		"the morph starts from a different picture than the sapling ended on"
+	)
+
+
+## Every other species is exactly as it was: the shared strip on both sides
+## of the hand-off, so adding art is never required.
+func test_a_species_without_its_own_sheet_still_uses_the_shared_strip():
+	var cherry := _tree_with_shader_canopy()
+	cherry.set_ripe_fruit(0, "autumn")
+	cherry.set_age(TreeGrowth.MATURITY_SECONDS * 0.5)
+	var material: ShaderMaterial = cherry._canopy_sprite.material
+	var dissolving_from: Texture2D = material.get_shader_parameter("morph_sapling_texture")
+	var art := IllustratedTree.new()
+	assert_eq(
+		_pixels(dissolving_from),
+		_pixels(art.sapling_frame(art.sapling_frame_count() - 1))
+	)
