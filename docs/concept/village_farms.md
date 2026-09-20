@@ -829,6 +829,65 @@ already-accepted "plot state does not survive a chunk unload" gap
 Farm. A reloaded village re-derives the same field and starts tilling it
 again.
 
+### Two fields, one line of rails (2026-09-20)
+
+Reported with both enclosures in shot: *"It should be possible to build two
+rails on a single tile so both enclosures are fenced properly. also the
+corner post can be removed"*.
+
+A rail is an ordinary chunk modification and **a tile holds one id**, so
+where two farmsteads sit side by side their rings meet on one column of
+cells and only the first field's rail can stand there. Measured
+(`tools/probe_neighbouring_fences.gd`) on a real village with four
+farmhouses, printing what each field *wants* on every contested cell beside
+what really stands:
+
+```
+  (23, 20)  wanted as ["0:corner_ne", "1:corner_nw"] -- stands: road
+  (23, 21)  wanted as ["0:east", "1:west"]           -- stands: road
+  (23, 22)  wanted as ["0:east", "1:west"]           -- stands: farm_fence_east
+  (23, 23)  wanted as ["0:corner_se", "1:corner_sw"] -- stands: farm_fence_east
+```
+
+Field 0's east rail won every contested cell; field 1 had no west rail at
+all, so its enclosure was open along the whole shared side. (The two `road`
+cells are correct — that paving is the gate the farmer walks in through.)
+
+**A shared line is one tile carrying both fields' rails.**
+`VillageFarm.SHARED_FENCE_TILE_IDS` names the two opposite pairs, and that
+is the whole set: two fields meeting share a line, and a line has a field
+on each side of it. Rails meeting at right angles belong to one ring's
+corner, not to two rings.
+
+The id carries the facings for the same reason every rail id does — nothing
+about a rail is persisted — and a shared id is **defined as the two
+ordinary rails standing there** (`fence_pieces_of`). That is what makes it
+cost nothing downstream: each piece keeps the art and the inner edge it
+already had, `_spawn_structure_art_for` raises one sprite per piece, and
+`rails_block_step` refuses the crop on both sides because there is one on
+each. Only the *opposite* rail shares a line, and never the same rail
+twice, so a reload still re-derives the ring and builds nothing — which
+`_fence_the_fields`' own idempotence rule requires.
+
+### A corner draws no post of its own (2026-09-20)
+
+Asked for in the same breath: *"also the corner post can be removed"*.
+
+Every cell of `fence.png` is a **whole panel** — a post at each end with
+rails between — and `tools/probe_fence_posts.gd` measured those two posts
+12.5px apart inside a 16px tile. So the two runs meeting at a corner
+already carry a post each, and the corner cell drew a **third** one beside
+them: the same doubled-post look that probe was written about, at every
+turn of every ring.
+
+**The corner cell is still a rail.** It is what refuses the diagonal into
+the crop (see "The rail's own hitbox" below, and
+`_rail_stops_step`'s own corner branch), and an id that stopped reading as
+a fence would lose its collider *and* stop being overlay-only, painting a
+bare earth square on ground somebody has already walked past. What changed
+is only that it has no entry in the art registry, so nothing is spawned for
+it.
+
 ## Interaction with other docs
 
 - **[npc_farm_production.md](npc_farm_production.md)** — the placeable
