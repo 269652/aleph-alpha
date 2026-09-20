@@ -189,7 +189,8 @@ unsellable."* It was not true, and it had not been true for a long time.
 fruit` — and a village kept growing past it. A herbalist's crop, a farmer's
 wheat, gathered stone and plant fibre, and the raw log a woodcutter fells
 all arrived in the game **after** that line was written, and not one of
-them was ever added to it.
+them was ever added to it. A hand-written list of facts that live somewhere
+else does not stay right; it stays written.
 
 Measured (`tools/probe_village_purse.gd`) standing exactly where
 `_step_merchant_visits` stands, on a real village after 1200 simulated
@@ -212,22 +213,30 @@ of 8 villagers broke**. A merchant is the only faucet gold has, so a
 village that makes nothing he buys has no income at all, ever. That is the
 literal shape of the original report: *"all villagers have 0 gold"*.
 
-The rule:
+The first fix put the field crops on the list by hand and added a test
+that fails if a crop is added he will not buy. That closes the crop hole;
+it does not close the **class** of fault, and the measurement above says
+so — `log`, `stone` and `plant_fibre` are not crops, and were still
+refused.
+
+So the rule:
 
 > The buy list is **derived from what a village's own producers make**, not
 > named a second time. A second list of the same facts is free to drift
-> from the first, and this one did.
+> from the first, and this one did — twice.
 
 `MerchantVisit.village_produce()` reads the producers' own maps —
 `NpcProduction.PRODUCER_ITEM_BY_OCCUPATION` (a farmer's, hunter's and
 fisher's take), `VillageFarm.CROP_BY_OCCUPATION` (what a farmer and a
-herbalist grow), `SettlementGathering.gathered_item_ids()` (what spare
-hands gather) — and `buy_list()` is that plus the raw timber a woodcutter
-fells and the worked goods a village makes from those. Add an occupation, a
-crop or a gathered material and it is sellable the same day it exists.
+herbalist grow by default), `VillageCropChoice.SOWABLE` (what a village can
+be *told* to grow, which is a different list), and
+`SettlementGathering.gathered_item_ids()` (what spare hands gather) — and
+`buy_list()` is that plus the raw timber a woodcutter fells and the worked
+goods a village makes from those. Add an occupation, a crop or a gathered
+material and it is sellable the same day it exists.
 
-Prices follow the same discipline. The old table had four separate entries
-all reading `LOG_PRICE`, which was an unstated rule rather than four
+Prices follow the same discipline. The old table had eight separate entries
+all reading `LOG_PRICE`, which was an unstated rule rather than eight
 numbers; it is now stated once. Goods that have had **work** put into them
 or that **keep and travel** — sawn `plank` and `beam`, and `hide` — carry
 their own derived price in `KEEPING_GOOD_PRICES`. Everything else a village
