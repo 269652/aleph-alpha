@@ -19821,14 +19821,38 @@ func _sync_construction_worker(chunk_coord: Vector2i, project, builder_count: fl
 	by_origin[origin_local] = worker
 
 
-## The village store this site fetches from, or null when none is in reach
-## -- the cramped site that went without one (village_warehouse.md's own
-## pillar-1 caveat), or a settlement whose warehouse is not built yet.
+## The DOOR of the village store this site fetches from, or null when none
+## is in reach -- the cramped site that went without one
+## (village_warehouse.md's own pillar-1 caveat), or a settlement whose
+## warehouse is not built yet.
+##
+## The door, not the building. nearest_structure_position answers with a
+## whole-building's ORIGIN cell, which is inside its walls -- and measured
+## on a real village (tools/probe_construction_haul.gd) a builder sent
+## there was refused by WalkGate at the wall and slid along it for the
+## whole run, delivering nothing in four simulated minutes. This is the
+## same cell a villager hauling INTO the store is sent to
+## (VillageRenderer._warehouse_door), derived the same way.
 func _construction_store_near(pixel_position: Vector2):
-	return nearest_structure_position(
-		pixel_position, WAREHOUSE_BUILDING_ID,
-		float(CONSTRUCTION_STORE_REACH_TILES) * TerrainRenderer.TILE_SIZE
+	var reach := float(CONSTRUCTION_STORE_REACH_TILES) * TerrainRenderer.TILE_SIZE
+	var query_tile := Vector2i(
+		floori(pixel_position.x / TerrainRenderer.TILE_SIZE),
+		floori(pixel_position.y / TerrainRenderer.TILE_SIZE)
 	)
+	var doorstep := BuildingCatalog.doorstep_of(WAREHOUSE_BUILDING_ID)
+	var nearest = null
+	var nearest_distance := reach
+	for chunk_coord in chunks_in_radius(_chunk_coord_for_tile(query_tile), 1):
+		for record in buildings_in_chunk(chunk_coord):
+			if String(record.get("id", "")) != WAREHOUSE_BUILDING_ID:
+				continue
+			var door: Vector2i = chunk_coord * CHUNK_SIZE + record["origin_local"] + doorstep
+			var door_px: Vector2 = (Vector2(door) + Vector2.ONE * 0.5) * float(TerrainRenderer.TILE_SIZE)
+			var distance := pixel_position.distance_to(door_px)
+			if distance <= nearest_distance:
+				nearest = door_px
+				nearest_distance = distance
+	return nearest
 
 
 func _free_construction_worker(chunk_coord: Vector2i, origin_local: Vector2i) -> void:

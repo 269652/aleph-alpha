@@ -1293,6 +1293,17 @@ tile, no dividers, no directional variants (see
   working on it". Tested (`test_procedural_builder_sprite.gd`,
   `test_construction_worker_marker.gd`,
   `test_earth_chunk_manager_city_hall_rising.gd`).
+- ✅ **And he carries the material** (2026-09-20). `ConstructionHaul` +
+  `ConstructionWorkerMarker`'s round: out to the village store, a load of
+  the project's OWN `reserved_material` in his arms, back to the plot, a
+  couple of spells of work, and out again until the pile is on site. What
+  he carries and how many journeys it takes are read off the project, not
+  authored, and he is visibly loaded on the way back. Nothing reserved and
+  no store in reach both fall back to the builder above, working his plot.
+  Full account above, "And he carries the material". Tested
+  (`test_construction_haul.gd`, `test_construction_worker_marker.gd`,
+  `test_procedural_builder_sprite.gd`,
+  `test_earth_chunk_manager_city_hall_rising.gd`).
 - ✅ **The square under a hall, and the kerb round every plot**
   (2026-09-20). The overlay rule above leaves a building showing the
   ground it was raised on — but placement LIFTS the paving it covers, so a

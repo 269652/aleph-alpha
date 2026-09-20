@@ -27,6 +27,7 @@ const VillageLayout = preload("res://src/world/village_layout.gd")
 const ConstructionProject = preload("res://src/emergence/construction_project.gd")
 const EntityRef = preload("res://src/emergence/entity_ref.gd")
 const CivicBuildDecision = preload("res://src/emergence/civic_build_decision.gd")
+const WalkGate = preload("res://src/gameplay/walk_gate.gd")
 
 const CHUNK_SIZE := EarthChunkManager.CHUNK_SIZE
 
@@ -464,7 +465,7 @@ func test_the_builder_is_handed_the_halls_own_reserved_material():
 		)
 
 
-func test_the_builder_is_sent_to_the_village_store_for_it():
+func test_the_builder_is_sent_to_the_village_stores_own_door():
 	_stock_the_hall()
 	manager._apply_civic_build_decision(_chunk_coord)
 	manager._advance_construction_labor(_chunk_coord, 1.0)
@@ -473,12 +474,51 @@ func test_the_builder_is_sent_to_the_village_store_for_it():
 	assert_not_null(builder, "precondition: somebody is working")
 	if builder == null:
 		return
-	var store = manager.nearest_structure_position(
-		builder.plot.get_center(), EarthChunkManager.WAREHOUSE_BUILDING_ID,
-		float(EarthChunkManager.CONSTRUCTION_STORE_REACH_TILES) * TerrainRenderer.TILE_SIZE
+	var door = _warehouse_door()
+	assert_not_null(door, "precondition: this village has a store to fetch from")
+	assert_eq(builder.depot, door, "he is sent to the door of the store the village really has")
+
+
+## And the door is somewhere he can actually stand. Measured on a real
+## village (tools/probe_construction_haul.gd): sent to the store's own
+## ORIGIN cell -- which is INSIDE the building -- he was refused by
+## WalkGate at the wall and slid along it for the whole run, delivering
+## nothing at all in four simulated minutes. The store's door is the same
+## cell a villager hauling INTO it is sent to
+## (VillageRenderer._warehouse_door), and it is a cell, not a wall.
+func test_the_store_he_is_sent_to_is_a_door_rather_than_a_wall():
+	_stock_the_hall()
+	manager._apply_civic_build_decision(_chunk_coord)
+	manager._advance_construction_labor(_chunk_coord, 1.0)
+
+	var builder = _builder_at(_civic_origin)
+	assert_not_null(builder, "precondition: somebody is working")
+	if builder == null:
+		return
+	assert_not_null(builder.depot, "precondition: this village has a store to fetch from")
+	if builder.depot == null:
+		return
+	assert_false(
+		WalkGate.blocks(
+			manager, builder.plot.get_center(), builder.depot, float(TerrainRenderer.TILE_SIZE)
+		),
+		"a builder sent into a wall slides along it for ever and never arrives"
 	)
-	assert_not_null(store, "precondition: this village has a store to fetch from")
-	assert_eq(builder.depot, store, "he is sent to the store the village really has")
+
+
+## The door of the warehouse this village really raised, derived here the
+## way VillageRenderer derives it for a villager hauling INTO the store --
+## independently of whatever the manager hands the builder.
+func _warehouse_door():
+	for record in manager.buildings_in_chunk(_chunk_coord):
+		if record.get("id", "") != EarthChunkManager.WAREHOUSE_BUILDING_ID:
+			continue
+		var door: Vector2i = (
+			_chunk_coord * CHUNK_SIZE + record["origin_local"]
+			+ BuildingCatalog.doorstep_of(EarthChunkManager.WAREHOUSE_BUILDING_ID)
+		)
+		return (Vector2(door) + Vector2.ONE * 0.5) * float(TerrainRenderer.TILE_SIZE)
+	return null
 
 
 ## And he walks the village through the same gate everybody else does --
