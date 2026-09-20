@@ -861,7 +861,8 @@ The fix is an **edge** body, never a tile-sized one, because a rail stands on
 the inner edge of its cell and the rest of that cell is street.
 `fence_collider_normal` and `fence_collider_rect` own it, reading the same
 inner edge `rails_block_step` shuts -- so what stops the player and what
-stops everybody else cannot drift apart.
+stops everybody else cannot drift apart about *which* crossing a rail
+refuses.
 
 A **corner post gets none.** Its inner direction is diagonal, so an edge
 collider would lie along one of the two runs it caps, and walling either
@@ -872,6 +873,51 @@ neighbouring runs' colliders meeting at the shared corner.
 `FENCE_COLLIDER_THICKNESS_PX` is derived and test-bounded on both sides: at
 least one 60Hz tick of the fastest the player can be (a maximum-fitness
 mount, 3.0 px), and at most a quarter tile so it stays a line.
+
+#### A horizontal rail stands at the foot of its wood
+
+Reported once the bodies were in: *"The horizontal fences should have the
+hitbox at the bottom of the rail ... so it should use fence height instead
+of thickness"*.
+
+Naming the edge is not the same as knowing where on that edge the fence
+actually *stands*. The two horizontal facings anchor their art to **opposite
+ends** of their cell (`IllustratedStructureSprite.footprint_offset`:
+`inner.y > 0` bottom-anchors, `inner.y < 0` top-anchors), so pinning both
+colliders to the edge their normal names is right for one and wrong for the
+other:
+
+| rail | inner | wood, tile-local | collider was | correct |
+| --- | --- | --- | --- | --- |
+| north | `(0, 1)` | `y = 5.5 .. 16.0` | `12.0 .. 16.0` | yes |
+| south | `(0, -1)` | `y = 0.0 .. 10.9` | `0.0 .. 4.0` | no |
+
+A south rail's wood hangs *down* from the tile's top edge, so a collider on
+that edge stopped the player at the rail's **head**, seven pixels short of
+the line they could see. A fence stops things where its posts meet the
+ground and nowhere else, so `fence_collider_rect` takes the height of the
+wood as drawn and puts the strip at its **foot** — `tile_size` when the art
+is bottom-anchored, the wood's own height when it is top-anchored, clamped
+into the cell so art that measures oddly can never stand a body in the
+neighbour's tile. The strip stays `FENCE_COLLIDER_THICKNESS_PX` deep; it is
+*where* it sits that the height decides, not how thick it is.
+
+A **vertical** rail is anchored left or right, has no foot on the `y` axis
+at all, and is untouched.
+
+Finding that foot means redoing the band arithmetic `footprint_offset`
+already does, and a second copy of it in `EarthChunkManager` is a second
+copy to get wrong — losing exactly the detail that the two facings land at
+opposite ends. So `IllustratedStructureSprite.placed_art_rect` answers
+"where does this subject's ink actually land inside its tile", both
+`footprint_offset` and the collider read it, and `EarthChunkManager` only
+forwards the number.
+
+This is the one place the player and the markers stop at different *lines*:
+`rails_block_step` is a cell-grid rule and refuses the crossing at the cell
+boundary, while the body refuses it a few pixels later, inside the cell.
+They still refuse the same crossings — and the rest of a rail's tile being
+ordinary ground is the rule, not an accident, so standing in it is allowed.
 
 ## Status
 
@@ -1053,6 +1099,17 @@ mount, 3.0 px), and at most a quarter tile so it stays a line.
   `EarthChunkManager.fence_blocks_step_global`) instead of whether a tile
   carries one, so an animal may stand on the ring and walk along it and only
   the crop is shut. See "The rail stands on the inner edge" above.
+
+- ✅ **A rail is solid to the player, at the foot of its wood** (2026-09-20)
+  — `VillageFarm.fence_collider_normal`/`fence_collider_rect` and
+  `EarthChunkManager._sync_piece_collision`/`_spawn_rail_collision`. Two
+  reports, one after the other: *"fix the fence collision"* (markers
+  respected the rails and the `CharacterBody2D` player had nothing to hit,
+  because a rail is not a `BuildingPiece`), then *"The horizontal fences
+  should have the hitbox at the bottom of the rail ... so it should use
+  fence height instead of thickness"* (a south rail's art hangs down from
+  its top edge, so a collider on that edge stopped the player at the rail's
+  head). Corner posts get no body at all. See "The rail's own hitbox" above.
 
 - ✅ **A herb bed is visible.** Reported in play with the field in shot:
   *"it plows the soil but then the soil mound sprites don't appear and

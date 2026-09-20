@@ -626,15 +626,42 @@ static func fence_collider_normal(tile_id: String) -> Vector2i:
 ## It spans the tile FULLY across the edge it lies on, so two rails side by
 ## side meet and leave no seam to squeeze through, and it never reaches
 ## outside its own tile.
-static func fence_collider_rect(tile_id: String, tile_size: float, thickness: float) -> Rect2:
+##
+## `fence_height` is how tall this rail's WOOD is actually drawn, in the same
+## tile-local pixels -- because a HORIZONTAL rail stands at the FOOT of its
+## wood, not on the tile edge its normal names. Reported live: "The
+## horizontal fences should have the hitbox at the bottom of the rail ... so
+## it should use fence height instead of thickness".
+##
+## It matters because the two horizontal facings anchor their art to
+## OPPOSITE ends of the cell (IllustratedStructureSprite.footprint_offset:
+## `inner.y > 0` bottom-anchors, `inner.y < 0` top-anchors). A north rail's
+## wood really does end at the tile's bottom edge, so its collider never
+## moved. A south rail's hangs DOWN from the top edge, so pinning its
+## collider to that named edge stopped the player at the rail's HEAD --
+## seven pixels short of the line they could see. A fence stops things where
+## its posts meet the ground, and nowhere else.
+##
+## The height only ever moves a horizontal rail. A VERTICAL one is anchored
+## left or right, so its foot is not a y coordinate at all and the edge its
+## normal names is still exactly where it stands.
+##
+## The foot is clamped into [thickness, tile_size] so the strip stays inside
+## its own cell whatever height it is handed -- art that measures taller than
+## the tile, or shorter than the strip is deep, must not put a rail body in
+## the NEIGHBOUR'S cell and wall a run that should be open.
+static func fence_collider_rect(
+	tile_id: String, tile_size: float, thickness: float, fence_height: float
+) -> Rect2:
 	var normal := fence_collider_normal(tile_id)
 	if normal == Vector2i.ZERO:
 		return Rect2()
 	if normal.x != 0:
 		var x := tile_size - thickness if normal.x > 0 else 0.0
 		return Rect2(x, 0.0, thickness, tile_size)
-	var y := tile_size - thickness if normal.y > 0 else 0.0
-	return Rect2(0.0, y, tile_size, thickness)
+	var foot := tile_size if normal.y > 0 else fence_height
+	foot = clampf(foot, thickness, tile_size)
+	return Rect2(0.0, foot - thickness, tile_size, thickness)
 
 
 ## Whether a step from one cell to the next CROSSES a rail's inner edge --

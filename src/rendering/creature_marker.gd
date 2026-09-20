@@ -2432,15 +2432,15 @@ func _building_blocks_movement(heading: Vector2) -> bool:
 ## tile the walker will actually be IN -- which is why a villager never had
 ## this bug and an animal did.
 func _building_blocks_arrival(heading: Vector2, speed: float, delta: float) -> bool:
-	if (
-		_world == null
-		or not _world.has_method("piece_blocks_movement_at_global")
-		or heading.length() < 0.01
-	):
+	if _world == null or heading.length() < 0.01:
 		return false
 	var arrival := position + heading.normalized() * speed * delta
 	var tile := Vector2i(floori(arrival.x / _tile_size), floori(arrival.y / _tile_size))
-	return _world.piece_blocks_movement_at_global(tile.x, tile.y)
+	# BOTH kinds of building, via the one shared question -- a legacy
+	# BuildingPiece wall AND a whole-building entity, which is what a
+	# village house is now and has no pieces at all. See
+	# AgentPassability.structure_blocks.
+	return AgentPassability.structure_blocks(_world, tile)
 
 
 func _fence_blocks_movement(heading: Vector2) -> bool:
