@@ -25,7 +25,7 @@ const SettlementSurplus = preload("res://src/emergence/settlement_surplus.gd")
 const CHUNK_SIZE := 32
 const STEPS := 40
 const SLICE := 0.25
-const SIMULATED_SECONDS := 5000.0
+const SIMULATED_SECONDS := 1200.0
 ## How often the timeline above prints a row.
 const REPORT_EVERY := 500.0
 
