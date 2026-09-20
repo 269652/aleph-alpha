@@ -111,3 +111,30 @@ func test_the_founding_layout_is_handed_the_same_water_rule():
 		body.contains("_is_dry_local("),
 		"founding sites its square by whatever it can BUILD on: %s" % body
 	)
+
+
+## The well, the stall and the gate are the square's own props: they are
+## derived from the same rectangle, so they must be derived from the same
+## water. Handing this one _is_buildable_local would put the props on one
+## square and the paving on another the moment a fisher digs.
+func test_the_squares_props_are_sited_by_the_same_water_rule():
+	var source := FileAccess.get_file_as_string("res://src/rendering/village_renderer.gd")
+	var at := source.find("_settlement_generator.generate_settlement(")
+	assert_gt(at, -1, "the premise: the renderer still generates settlements")
+	var call_text := source.substr(at, 700)
+	assert_false(
+		call_text.contains("_is_buildable_local("),
+		"the square's props are sited by ground that MOVES: %s" % call_text
+	)
+
+
+## Both memos are per-village scratch (the square does not move while one is
+## being founded). A memo that outlives its clear hands the NEXT village the
+## previous one's ground.
+func test_every_per_village_memo_is_cleared_together():
+	var source := FileAccess.get_file_as_string("res://src/rendering/village_renderer.gd")
+	for memo in ["_buildable_memo", "_dry_memo", "_skeleton_memo"]:
+		assert_true(
+			source.contains("%s.clear()" % memo),
+			"%s is never cleared, so it leaks across villages" % memo
+		)

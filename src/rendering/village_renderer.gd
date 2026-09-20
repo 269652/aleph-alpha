@@ -143,6 +143,7 @@ func spawn_village(
 	# One founding, one set of ground answers and one square (see
 	# _buildable_memo and _skeleton_memo).
 	_buildable_memo.clear()
+	_dry_memo.clear()
 	_skeleton_memo.clear()
 	# The settlement's REAL population, not the founding roster: households
 	# move in over time (docs/concept/village_growth.md mechanism 3), and a
@@ -156,8 +157,11 @@ func spawn_village(
 		# The square's own siting (VillageLayout.plaza_x0_for) -- the well,
 		# stall and gate must be derived from the SAME square the layout
 		# and the paving below use, or a riverside village's props stand
-		# where its square isn't.
-		_is_buildable_local(chunk_coord, chunk_size, world) if world != null else Callable(),
+		# where its square isn't. The GENERATED world's water, for the same
+		# reason every other square-siting caller asks it: a fisher's dug
+		# pond would otherwise move the props off their own paving (see
+		# _is_dry_local).
+		_is_dry_local(chunk_coord, chunk_size, world) if world != null else Callable(),
 		# What this village's own land feeds it with (SettlementDemand.
 		# trade_for): the SEEDED region, so the roster is the same on every
 		# visit and does not drift with the weather. A world that cannot
