@@ -357,7 +357,7 @@ func node_tooltip(node_id: String) -> Array:
 		# something they have watched. A stat nothing reads yet says nothing
 		# here rather than inventing an effect for itself.
 		for preview in NodePayoff.preview_for(
-			[{"stat_name": stat_name, "amount": amount}],
+			[{"stat_name": stat_name, "bonus_amount": amount}],
 			_payoff_bonuses,
 			NodePayoff.default_consumers(_payoff_facts)
 		):

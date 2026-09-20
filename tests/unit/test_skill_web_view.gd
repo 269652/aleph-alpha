@@ -490,7 +490,7 @@ func test_a_node_whose_stat_has_a_live_consumer_shows_the_real_before_and_after(
 		if String(info.get("stat_name", "")) == "":
 			continue
 		var previews: Array = NodePayoff.preview_for(
-			[{"stat_name": String(info["stat_name"]), "amount": web.effective_bonus(node_id, {})}],
+			[{"stat_name": String(info["stat_name"]), "bonus_amount": web.effective_bonus(node_id, {})}],
 			{}, NodePayoff.default_consumers({})
 		)
 		var live := previews.filter(func(p): return String(p.get("unit", "")) != NodePayoff.UNIT_DECLARED)
@@ -498,6 +498,22 @@ func test_a_node_whose_stat_has_a_live_consumer_shows_the_real_before_and_after(
 			continue
 		var text := _tooltip(node_id)
 		assert_string_contains(text, "→", "a live node must show a before → after: %s" % text)
+		# ...and the two sides must DIFFER. A preview whose before equals
+		# its after still prints an arrow while saying nothing, which is
+		# exactly what a caller passing the wrong key produces -- the
+		# first cut of this wiring did, and this assertion is what caught
+		# it.
+		var arrow_line := ""
+		for line in view.node_tooltip(node_id):
+			if String(line).contains("→"):
+				arrow_line = String(line)
+				break
+		var sides := arrow_line.split("→")
+		assert_eq(sides.size(), 2, "one arrow, two sides: %s" % arrow_line)
+		assert_ne(
+			sides[0].strip_edges().split(" ")[-1], sides[1].strip_edges(),
+			"a node that changes nothing is not a payoff: %s" % arrow_line
+		)
 		shown = true
 		break
 	assert_true(shown, "at least one node in the web has a live consumer to preview")
