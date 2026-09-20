@@ -3671,6 +3671,8 @@ func step_settlements(delta_seconds: float) -> void:
 			RegionalTrade.chunk_coord_of(settlement_id),
 			SETTLEMENT_STEP_INTERVAL / SECONDS_PER_SIMULATED_DAY
 		)
+		# ...and every one of them has a pail by the door to fetch it with.
+		stock_household_buckets_in(RegionalTrade.chunk_coord_of(settlement_id))
 		_step_settlement_construction(settlement_id, household_ids)
 		var capacity := _settlement_capacity(settlement_id, market, village_market)
 		var status := SettlementState.status_for(household_ids.size(), capacity)
@@ -15052,6 +15054,33 @@ func pour_bucket_into_house(chunk_coord: Vector2i, origin_local: Vector2i) -> bo
 		house_water_at(record), HouseholdWater.BUCKET_LITRES
 	)
 	return true
+
+
+## The bucket by the door.
+##
+## Asked for directly: *"each NPC should have a bucket in its house
+## inventory"*. The bucket belongs to the HOUSEHOLD rather than to the
+## villager -- it is what the water is carried in, and it stands by the
+## door whether or not anybody is out with it right now. Every building
+## that holds a tank keeps exactly one, the farmhouse included.
+##
+## Stepped per chunk rather than seeded in place_building, for the same
+## reason house_water_at reads a starting level rather than migrating one:
+## a house raised before any of this existed gets its bucket the first
+## time its village is stepped, with no migration and no new field on the
+## record. Idempotent by construction -- it asks the building's OWN stock,
+## so a village stepped a thousand times still has one pail per door.
+func stock_household_buckets_in(chunk_coord: Vector2i) -> void:
+	var chunk: Chunk = _loaded_chunks.get(chunk_coord)
+	if chunk == null:
+		return
+	for origin_local in chunk.buildings:
+		if not _holds_a_tank(chunk.buildings[origin_local]):
+			continue
+		var tile: Vector2i = chunk_coord * CHUNK_SIZE + origin_local
+		if building_stock_at(tile.x, tile.y, HouseholdWater.BUCKET_ITEM_ID) > 0:
+			continue
+		deposit_to_building_at(tile.x, tile.y, HouseholdWater.BUCKET_ITEM_ID, 1)
 
 
 ## A farmer waters a bed, and the farmhouse pays for it.

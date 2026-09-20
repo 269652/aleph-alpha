@@ -55,6 +55,7 @@ func _initialize() -> void:
 		print("  %-26s x%d" % [key, int(activities[key])])
 
 	_print_water_rhythm()
+	_print_farm_rhythm()
 	quit()
 
 
@@ -88,3 +89,51 @@ func _print_water_rhythm() -> void:
 	])
 	print("  busiest day sent %d of %d households to the well" % [busiest, households])
 	print("  day by day: %s" % str(trips_by_day))
+
+
+## What a FARMHOUSE's tank produces (docs/concept/village_water.md
+## mechanism 3), against a cottage's on the same span. The claim being
+## measured is pillar 5: a farm is seen at the well OFTENER than a
+## household, because its tank has a field on it as well as people.
+##
+## A living field is tended more than once a simulated day -- a bed
+## withers after FarmPlot.MIN_WATER_GRACE_SECONDS (45s) and a simulated
+## day is 60s -- so the rates below bracket the real one rather than
+## guessing a single number.
+func _print_farm_rhythm() -> void:
+	var days := int(SeasonCycle.DAYS_PER_YEAR / 4.0)
+	print("\n-- the farmhouse's own tank over one season (%d days) --" % days)
+	for rate in [1.0, 1.33, 2.0]:
+		var level := HouseholdWater.farm_starting_level(hash("probe_farm"))
+		var trips := 0
+		var dry_days := 0
+		for day in days:
+			var budget: float = rate
+			while budget >= 1.0:
+				if not HouseholdWater.can_water_crops(level):
+					dry_days += 1
+					break
+				level = HouseholdWater.level_after_tending(level)
+				budget -= 1.0
+
+			if HouseholdWater.farm_trip_is_due(level):
+				level = WaterErrand.poured(level)
+				trips += 1
+		print("  %4.2f tendings/day: %2d trips, one every %5.1f days, %d day(s) the beds went dry" % [
+			rate, trips, float(days) / float(maxi(trips, 1)), dry_days
+		])
+
+	# Averaged over a whole village's worth of cottages rather than one, so
+	# the comparison is not decided by which level a single seed started at.
+	var cottages := 12
+	var cottage_trips := 0
+	for i in cottages:
+		var level := HouseholdWater.starting_level(hash("probe_cottage_%d" % i))
+		for day in days:
+			level = HouseholdWater.level_after(level, 1, 1.0)
+			if HouseholdWater.trip_is_due(level):
+				level = WaterErrand.poured(level)
+				cottage_trips += 1
+	print("  %d one-person cottages, for comparison: one trip every %.1f days each" % [
+		cottages, float(days * cottages) / float(maxi(cottage_trips, 1))
+	])

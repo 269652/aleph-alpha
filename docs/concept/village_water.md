@@ -120,10 +120,71 @@ POURING ◀──arrived── TO_HOME ◀──filled────────�
 
 - **Drinking.** The household draws `DRAW_PER_HEAD_PER_DAY` per member per
   simulated day, on the estates' own cadence.
-- **The field.** A farmhouse pours everything above a drinking **reserve**
-  onto its crops, so a farm empties its tank faster and its people are seen
-  at the well more often. The reserve is what stops a farm watering itself
-  into a drought — people before plants, which is also how it really worked.
+- **The field.** A farmhouse waters its beds out of everything above a
+  drinking **reserve**, so a farm empties its tank faster and somebody is
+  seen at the well for it far more often. The reserve is what stops a farm
+  watering itself into a drought — people before plants, which is also how
+  it really worked.
+
+### The farmhouse is the one building that holds a tank with nobody in it
+
+`BuildingCatalog.capacity_of("farmhouse")` is 0: a farmhouse is a
+workplace, not a home, and nothing drinks there. It holds a tank anyway,
+because its **field** drinks. `EarthChunkManager._holds_a_tank` is
+deliberately a separate rule from `_drinkers_in_house` rather than a
+widening of it — folding the two together would have a building with no
+residents drinking for somebody who does not exist.
+
+### The field is billed per VISIT, not per tile
+
+A farmer at a bed waters it **and the beds around it**
+(`NpcMarker._water_the_beds_around` — one trip with a can wets the ground
+you are standing on, not one plant). So the unit priced is the visit:
+`LITRES_PER_TENDING` out of the farmhouse's tank, once per
+`_work_field_cell`. Pricing tiles would make a wide field cost more than a
+narrow one for the same walk, which is not how a furrow works.
+
+`HouseholdWater.can_water_crops(level)` is false once the tank is down to
+the reserve, and then **the beds are not watered at all**. That refusal is
+the mechanism, not a failure case: an unwatered bed withers
+(`FarmPlot.grace_seconds`), so the farmhouse running dry is a thing the
+player watches happen to the crop.
+
+A farmer with **no** farmhouse — a village that has not raised one — keeps
+the free drip they always had. There is no tank to bill it to, and failing
+closed there would kill every such field rather than send anybody anywhere.
+
+### So the errand serves two buildings
+
+`NpcMarker._thirsty_building` asks, in order:
+
+1. their own house, if `water_trip_due_at` says so — **people before
+   plants**, the same order the reserve keeps;
+2. the farmhouse they work, whose field drinks out of its own tank.
+
+The chosen building is **latched** in `_errand_target` when they set out.
+Re-reading it each frame would let a villager change their mind halfway
+across the square, and the bucket in their hand would silently change what
+it was for. While carrying a full bucket for the farmhouse, `"home"`
+resolves to the farmhouse — they walk the water to the field, not to their
+own kitchen.
+
+A farmhouse is due **sooner** than a household is
+(`farm_trip_is_due`, `TENDINGS_IN_HAND`), because a field that stops being
+watered withers where a household that runs low is merely thirsty. It is
+also **seeded off its own floor** (`farm_starting_level`): seeded from the
+household's floor, three farms in four were raised already needing a trip,
+which would have lost the whole anti-crowd stagger for farms on the day it
+shipped.
+
+### The bucket is the household's, not the villager's
+
+Every building that holds a tank keeps exactly one `bucket` in its own
+stock (`EarthChunkManager.stock_household_buckets_in`, stepped per chunk
+beside the drinking). Asked for directly: *"each NPC should have a bucket
+in its house inventory"*. It is stepped rather than seeded at placement so
+a house raised before any of this existed gets one the first time its
+village is stepped — no migration, and no new field on the record.
 
 ## Mechanism 4 — The schedule stops sending everybody to the square
 
@@ -137,7 +198,39 @@ table stops saying it.
 
 ## Status
 
-(filled in as this is built)
+- ✅ **Water is a level on the house.** `HouseholdWater`, pure and static;
+  one `water_litres` number on the building's own record, surviving a
+  chunk round trip. Capacity, draw, threshold and the drinking reserve are
+  all pinned by the errand they produce (`test_household_water.gd`).
+- ✅ **The starting level staggers the village.** A new house starts
+  between its own threshold and full, off its own seed. Measured: twelve
+  households make 27 trips over a season, about one each every 5.3 days,
+  and the busiest day sends 4 of 12 (`tools/probe_well_crowding.gd`).
+- ✅ **The errand is a state machine you can see.** `WaterErrand`; an empty
+  bucket out and a full one back, `carried()` as the whole UI. An errand
+  outranks the timetable and ranks below the hunger interrupt.
+- ✅ **The schedule stopped sending everybody to the square.** The evening
+  entry is each villager's own haunt (`NpcPlanner._evening_haunt`).
+  Measured: evening went from `well x10` (busiest 10 of 12) to
+  `gate x5, home x3, stall x2, well x2` (busiest 5 of 12).
+- ✅ **A villager walks it.** `NpcMarker._step_water_errand`; they set out
+  when their own tank is low, fill at the well, walk back and pour.
+- ✅ **The bucket is a real catalog item** (`item_catalog.gd`, a `tool`),
+  and every tank-holding building keeps exactly one in its own stock.
+- ✅ **The farmhouse holds a tank and its field drinks from it.** A
+  tending visit is billed to the farmhouse; down to the reserve it cannot
+  water at all. Measured: a working farm reaches the well about every 3
+  days against a one-person cottage's ~11, with no day on which the beds
+  went dry (`tools/probe_well_crowding.gd`).
+- ⬜ **Nobody washes, brews or waters livestock with it.** Only drinking
+  and crops draw on a tank. The village's trades have their own inputs and
+  are not plumbed into this.
+- ⬜ **The well itself is inexhaustible.** Nothing tracks what the square's
+  well or the aquifer under it holds; see
+  [hydrology.md](hydrology.md), which this doc deliberately does not reach
+  into.
+- ⬜ **The player has no tank.** `Player` neither drinks nor fetches; this
+  is a villager mechanism only.
 
 ## Interaction with other docs
 

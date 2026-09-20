@@ -977,9 +977,17 @@ func _step_water_errand() -> void:
 ## Then the farmhouse they work, whose field drinks out of its own tank and
 ## whose beds stop being watered when it runs down.
 func _thirsty_building() -> Dictionary:
+	if _world == null:
+		return {}
 	var house := _house_of_their_own()
 	if not house.is_empty() and _world.water_trip_due_at(house):
 		return house
+	# The whole errand or none of it: a world that can say a tank is low
+	# but cannot be poured into would strand somebody at the farmhouse
+	# door holding a full bucket forever. (_house_of_their_own already
+	# answers {} for such a world, which is why this only guards here.)
+	if not _world.has_method("water_trip_due_at") or not _world.has_method("pour_bucket_into_house"):
+		return {}
 	var farmhouse := _farmhouse_of_their_own()
 	if not farmhouse.is_empty() and _world.water_trip_due_at(farmhouse):
 		return farmhouse
@@ -1004,7 +1012,7 @@ func _house_of_their_own() -> Dictionary:
 func _farmhouse_of_their_own() -> Dictionary:
 	if stock_building_cell == NO_STOCK_BUILDING or _world == null:
 		return {}
-	if not _world.has_method("building_at_global") or not _world.has_method("water_trip_due_at"):
+	if not _world.has_method("building_at_global"):
 		return {}
 	var record: Dictionary = _world.building_at_global(
 		stock_building_cell.x, stock_building_cell.y

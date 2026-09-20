@@ -317,3 +317,54 @@ func test_watering_the_field_long_enough_makes_a_trip_due():
 ## really does make the farmhouse the thirstier building.
 func test_a_living_field_is_tended_more_than_once_a_simulated_day():
 	assert_lt(FarmPlot.MIN_WATER_GRACE_SECONDS, EarthChunkManager.SECONDS_PER_SIMULATED_DAY)
+
+
+# -- the bucket lives in the house ------------------------------------------
+#
+# Asked for directly: *"each NPC should have a bucket in its house
+# inventory"*. The bucket belongs to the HOUSEHOLD rather than to the
+# villager -- it is what the water is carried in, and it is by the door
+# whether or not anybody is out with it right now. Every building that
+# holds a tank keeps exactly one, which is why this is stepped rather than
+# seeded at placement: a house raised before any of this existed gets one
+# the first time its village is stepped, with no migration and no new
+# field on the record.
+
+
+func _buckets_at(record: Dictionary) -> int:
+	var anchor := _global_anchor_of(record)
+	return chunk_manager.building_stock_at(anchor.x, anchor.y, HouseholdWater.BUCKET_ITEM_ID)
+
+
+func test_a_house_keeps_a_bucket_by_its_door():
+	var record := _a_house(11)
+	chunk_manager.stock_household_buckets_in(record["chunk_coord"])
+	assert_eq(_buckets_at(record), 1)
+
+
+func test_a_farmhouse_keeps_a_bucket_too():
+	var farm := _a_farmhouse(31)
+	chunk_manager.stock_household_buckets_in(farm["chunk_coord"])
+	assert_eq(_buckets_at(farm), 1)
+
+
+func test_a_household_never_accumulates_buckets():
+	var record := _a_house(11)
+	for i in 6:
+		chunk_manager.stock_household_buckets_in(record["chunk_coord"])
+	assert_eq(_buckets_at(record), 1, "the village step put a new pail by the door every time it ran")
+
+
+func test_a_building_with_no_tank_keeps_no_bucket():
+	var site := _a_dry_site_for("city_hall")
+	assert_false(site.is_empty(), "precondition")
+	assert_true(chunk_manager.place_building(site["chunk_coord"], site["origin"], "city_hall", Vector2i(0, 1), 9))
+	_placed.append(site)
+	var hall: Dictionary = chunk_manager.building_record_at(site["chunk_coord"], site["origin"])
+	chunk_manager.stock_household_buckets_in(site["chunk_coord"])
+	assert_eq(_buckets_at(hall), 0)
+
+
+func test_stocking_buckets_in_an_unloaded_chunk_is_a_no_op_rather_than_a_crash():
+	chunk_manager.stock_household_buckets_in(Vector2i(9999, 9999))
+	assert_true(true, "it did not crash")
