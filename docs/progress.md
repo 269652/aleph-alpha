@@ -28055,3 +28055,109 @@ Tests: `test_interior_templates.gd` (29, up from 22), `test_house_decor.gd`
 (9), plus additions to `test_player.gd`; `test_house_interior_view.gd` (23),
 `test_house_interior_view_occupants.gd` (15) and `test_building_catalog.gd`
 (75) green alongside.
+
+---
+
+## 2026-09-20 — A farmhouse with no field, and a field with an unbroken bed
+
+Reported live with the village in shot: *"There's a farmhouse without bed
+enclosure and the NPC only sows 4 / 6 tiles"*. Two reports, two causes.
+
+### The last bed of every field was never broken
+
+Measured before changing anything (`tools/probe_village_farming.gd`). Every
+field in the sample held exactly six cells, five cycling normally — and the
+sixth, the last in the field's own order, reported `no marker -- never
+tilled` after a full 600-second work block. The same bed, for both farmers
+in the village.
+
+`VillageFarm.next_action` scanned from index 0 and returned the first plot
+wanting the highest-priority kind. **Ground nobody has tilled asks to be
+planted, and so does a bed that was sown, ripened and harvested.** So the
+moment the earlier beds started cycling, one of them was always an earlier
+"plant" than the ground at the end, and the last bed was never broken at all.
+
+✅ Unbroken ground now wins **among beds asking for the same thing**, which
+only reorders equals: a `null` plot's action is `"plant"` and nothing else,
+so a ripe crop and a dying bed still come first — that priority is what the
+kind order exists for, and what the existing tests pin. Re-measured after
+the fix: the two previously untilled cells now read `grown=30.3/30.3` and
+`23.7/23.6`, and every field is 6/6.
+
+### Siting and derivation had drifted apart
+
+"Is there room for a field here?" (`_field_fits_at`, at siting) and "here is
+your field" (`_workable_field_of`, later) were two separate copies of the
+same question. The derivation rejects a cell a **neighbouring farmhouse
+owns** — ownership is geometric, so a farmhouse raised later can take ground
+from one raised earlier — and a cell **reserved for a landmark**. Siting
+checked neither. A farmhouse could be raised on ground that looked free and
+then be handed nothing: no beds, so no fence ring.
+
+✅ Both go through one `_may_sow(origin, origins, …)` predicate now, with
+`_reserving` wrapping the occupancy test identically for both. A candidate
+origin is judged **with itself in the running** against the farmhouses
+already standing, because a farmhouse owns ground by being nearest to it.
+`test_siting_and_derivation_never_disagree_about_an_origin` states that
+invariant directly instead of testing the two copies apart; mutating the
+reserved-cell handling back out fails it with the bug's own words —
+*"siting said true at (10, 10), derivation handed over 0 cells"*.
+
+⬜ **Not reproduced before fixing, and worth saying so.**
+`tools/probe_farmhouse_fields.gd` scanned 14 villages and 29 farmhouses on
+flat stub ground: every one took a full six-cell field, with landmarks
+reserved, and the two rules never disagreed there. The first run of that
+probe was worse than useless — it called `_fenced_farm_fields` *without* the
+reserved landmarks the real village passes, so it measured a more permissive
+world than the game's and reported everything fine. Flat ground has no
+water, no trees and no prior tiles, so the terrain that would expose this is
+exactly what the stub lacks. The gaps are real and are fixed by
+construction; catching one in the act still wants a real-terrain probe.
+
+Tests: `test_village_farm.gd` 77/77 (4 new), `test_village_renderer.gd`
+132/132 (3 new), `test_npc_marker_farming.gd` 39/39.
+
+## A field's fence shut its own farmer out (`concept/village_farms.md`, "The rail stands on the inner edge", 2026-09-20)
+
+Reported live, with the village in shot: *"The farmer doesn't farm anymore"*.
+
+✅ **A regression from `f64a360e`** ("a villager walks round a wall and a
+rail, not through them"), which gave rails a hitbox against villagers. A
+field's rails stand on its **inner** edge, so the one villager they shut out
+is the farmer whose beds they enclose.
+
+✅ **Measured, not guessed — and three wrong guesses were measured away
+first.** `tools/probe_village_farming.gd` on a real village: of three
+villagers with a field, one worked 58 beds in 600s and the other two worked
+**none**, each frozen in `APPROACHING` for 2650 of 2750 on-field ticks. The
+hypotheses that died, in order:
+
+| Guess | How it died |
+| --- | --- |
+| The fence blocks them | Tested `fence_blocks_step_global` with **pixel** coordinates — it takes tiles — and on a straight line to the bed centre rather than the 2px step actually taken. Read false. Wrong test, right suspect. |
+| The carter round hijacks the target | `VillageCart.walks_the_round` is carter-only |
+| A conversation freezes them | 0 talking ticks while on the field |
+| Some other override hijacks the target | Recorded the real target every tick: it was the field for all 2650 |
+
+What finally showed it was tracing the actual per-tick step: position frozen,
+a 2px step east proposed, and `_slid_along_walls` handing back the same
+position — then asking the fence in **tile** coordinates: `FENCE=true`.
+
+✅ **The worker may cross into ground they themselves work.** "The gate"
+exists for this, but reaching one needs pathfinding a `Sprite2D` walking one
+`move_toward` per frame does not have — `f64a360e` said so itself: *"boxed
+in on both, they stay put"*. Nothing else moves: every other rail still
+stops them, a neighbour's included, and no villager without a field is
+exempt.
+
+After, over the same 600s run: the herbalist **0 → 100 wheat** (30 deposits,
+all six beds worked), farmer one **45 → 77** (18 → 29 deposits, 3 → 6 beds).
+
+🚧 **A farmer whose field lies beyond ANOTHER farmstead's ring still cannot
+reach it.** In the probe's village the third farmer stands west of its
+neighbour's fenced beds with its own field east of them, and walks into that
+ring's rail forever — still 0 of 6 beds. Its own gate would serve if it went
+to its farmhouse frontage first; that routing is deliberately not attempted
+here. Named rather than silently left.
+
+Tests: `test_npc_marker.gd` + `test_npc_marker_farming.gd` 100/100 (+3 new).

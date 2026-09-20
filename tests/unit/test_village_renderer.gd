@@ -3448,3 +3448,78 @@ func test_the_well_stands_on_a_free_2x2_clear_of_street_and_plaza():
 			"the well at %s in %s has no free 2x2 round it: %s"
 				% [str(cell), str(coord), str(offenders)]
 		)
+
+# -- siting and derivation must ask the SAME question -----------------------
+#
+# Reported live with the village in shot: *"There's a farmhouse without bed
+# enclosure"*.
+#
+# A farmhouse is only raised where a field fits (_field_fits_at), and its
+# real field is derived later (_workable_field_of). Those were two separate
+# copies of "may this farmhouse sow this cell", and they had drifted: the
+# derivation rejects a cell a NEIGHBOURING farmhouse owns and a cell
+# RESERVED for a landmark, and siting checked neither. So a farmhouse could
+# be raised on ground that looked free, and then be handed nothing at all --
+# no beds, and so no fence ring either.
+
+
+func _all_of_chunk_reserved(coord: Vector2i) -> Dictionary:
+	var reserved: Dictionary = {}
+	for y in CHUNK_SIZE:
+		for x in CHUNK_SIZE:
+			reserved[coord * CHUNK_SIZE + Vector2i(x, y)] = true
+	return reserved
+
+
+func test_siting_refuses_ground_the_field_derivation_will_reject_as_reserved():
+	var coord := Vector2i(7, 3)
+	var world := StubWorld.new()
+	var origin := Vector2i(10, 10)
+	assert_false(
+		renderer._field_fits_at(
+			origin, [origin], _all_of_chunk_reserved(coord), coord, CHUNK_SIZE, world,
+			renderer._is_buildable_local(coord, CHUNK_SIZE, world),
+			renderer._is_occupied_local(coord, CHUNK_SIZE, world)
+		),
+		"a farmhouse was sited onto ground every last cell of which is reserved"
+	)
+
+
+## The premise of the test above: with nothing reserved, this same origin is
+## a perfectly good place for a farmhouse. Without this, that test would
+## pass just as well against a rule that refuses everything.
+func test_the_same_origin_is_accepted_when_nothing_is_reserved():
+	var coord := Vector2i(7, 3)
+	var world := StubWorld.new()
+	var origin := Vector2i(10, 10)
+	assert_true(
+		renderer._field_fits_at(
+			origin, [origin], {}, coord, CHUNK_SIZE, world,
+			renderer._is_buildable_local(coord, CHUNK_SIZE, world),
+			renderer._is_occupied_local(coord, CHUNK_SIZE, world)
+		)
+	)
+
+
+## Whatever siting says about an origin, the derivation has to agree -- that
+## is the whole invariant, and stating it directly is what keeps the two
+## from drifting apart again.
+func test_siting_and_derivation_never_disagree_about_an_origin():
+	var coord := Vector2i(7, 3)
+	var world := StubWorld.new()
+	var is_buildable := renderer._is_buildable_local(coord, CHUNK_SIZE, world)
+	var is_occupied := renderer._is_occupied_local(coord, CHUNK_SIZE, world)
+	for reserved in [{}, _all_of_chunk_reserved(coord)]:
+		for origin in [Vector2i(10, 10), Vector2i(4, 20), Vector2i(25, 6)]:
+			var sited: bool = renderer._field_fits_at(
+				origin, [origin], reserved, coord, CHUNK_SIZE, world, is_buildable, is_occupied
+			)
+			var derived: Array = renderer._workable_field_of(
+				origin, [origin], coord, CHUNK_SIZE, is_buildable,
+				renderer._reserving(coord, CHUNK_SIZE, reserved, is_occupied), world
+			)
+			assert_eq(
+				sited, not derived.is_empty(),
+				"siting said %s at %s, derivation handed over %d cells"
+					% [str(sited), str(origin), derived.size()]
+			)
