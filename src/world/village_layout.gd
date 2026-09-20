@@ -347,6 +347,57 @@ static func skeleton(chunk_size: int, seed_value: int, is_dry := Callable()) -> 
 	}
 
 
+## How far past the end of a village's street a traveller is clear of the
+## village -- in tiles, and DERIVED rather than chosen.
+##
+## The floor is measured: over 60 real layouts and all 360 directions a
+## caravan can leave a well in, turning for the destination at the street's
+## own end still crossed a building on 19.72% of routes, at one tile out
+## 12.22%, at one and a half 1.11%, and at two tiles none of 21600. The
+## ceiling is that a village is a place a road LEAVES, not a thing a
+## caravan tours: an eighth of a chunk keeps the detour a road exit.
+##
+## Both bounds are pinned by test_village_layout.gd rather than written
+## down in this comment and trusted.
+const ROAD_EXIT_CLEARANCE_TILES := 3.0
+
+
+## How a traveller gets out of a village bound for `toward` (a world pixel
+## position): the end of the street that lies that way, and a second point
+## ROAD_EXIT_CLEARANCE_TILES further out along the street's own axis. Both
+## in world pixels. [] for a `skeleton` with no street in it at all.
+##
+## It exists because a caravan walks from one settlement's well to another
+## and cannot be given the step gate every other walking marker has -- its
+## position is a pure closed-form function of elapsed time (see
+## CaravanTrip.waypoints). Measured before it: 30.2% of the directions a
+## caravan can leave a well in cross one of its own village's buildings.
+##
+## The street is the clean way out and already exists: it is a corridor
+## with the plots lined either side, so running ALONG it never crosses one.
+## All a traveller needs on top is to be clear of the end before turning,
+## which is what the second point is for.
+##
+## Read off the SKELETON rather than the laid-out village, deliberately: a
+## caravan has to compute this for a settlement whose chunk is not loaded,
+## and the skeleton is the part of a village plan that needs nothing but
+## its seed.
+static func road_exit_toward(
+	skeleton: Dictionary, chunk_origin_tiles: Vector2i, tile_size: float, toward: Vector2
+) -> Array:
+	if not skeleton.has("street_y") or not skeleton.has("street_x0") or not skeleton.has("street_x1"):
+		return []
+	var street_y := float(chunk_origin_tiles.y + int(skeleton["street_y"])) + 0.5
+	var west_x := float(chunk_origin_tiles.x + int(skeleton["street_x0"])) + 0.5
+	var east_x := float(chunk_origin_tiles.x + int(skeleton["street_x1"])) + 0.5
+	var west := Vector2(west_x * tile_size, street_y * tile_size)
+	var east := Vector2(east_x * tile_size, street_y * tile_size)
+	var leaves_east: bool = toward.distance_to(east) <= toward.distance_to(west)
+	var end: Vector2 = east if leaves_east else west
+	var outward := Vector2(1.0, 0.0) if leaves_east else Vector2(-1.0, 0.0)
+	return [end, end + outward * ROAD_EXIT_CLEARANCE_TILES * tile_size]
+
+
 ## How far apart two market stands are pitched along the square's south row
 ## -- one clear cell between them, so a shopper can walk between two stalls
 ## and two stands never read as one long counter. Pinned by

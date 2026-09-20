@@ -1763,3 +1763,152 @@ func test_the_founding_layout_sites_its_square_by_is_dry_not_by_what_it_can_buil
 		(result["plaza"] as Rect2i).position.x, by_dry.position.x,
 		"the square slid for a pond -- it must only ever slide for the generated world"
 	)
+
+
+# -- leaving the village by its own road ------------------------------------
+#
+# A caravan walks from one settlement's well to another's. Measured over 60
+# real layouts and all 360 directions a caravan can leave in
+# (tools/probe_carts_and_caravans.gd): **30.2% of those directions cross
+# one of the village's own buildings**. A caravan cannot be given the step
+# gate every other walker has -- its position is a pure closed-form
+# function of elapsed time (see CaravanTrip.waypoints for why deflecting
+# the marker is worse than useless) -- so the ROUTE has to leave cleanly
+# instead.
+#
+# The street is that clean way out, and it already exists: it is a
+# corridor with the plots lined up either side of it, so running along it
+# never crosses one. What a traveller needs on top is to get far enough
+# PAST the street's end before turning for wherever they are going.
+#
+# Measured, at 60 layouts x 360 directions = 21600 routes each:
+#
+#   margin past the street end   routes crossing a building
+#   0 tiles                      19.72%
+#   1 tile                       12.22%
+#   1.5 tiles                     1.11%
+#   2 tiles                       0.00%
+#
+# ROAD_EXIT_CLEARANCE_TILES is pinned against both ends of that below,
+# rather than written down here and trusted.
+
+const _TILE := 16.0
+
+
+func _bones(seed_value: int) -> Dictionary:
+	return VillageLayout.skeleton(CHUNK_SIZE, seed_value, Callable(self, "_always_buildable"))
+
+
+func _exit(seed_value: int, toward: Vector2) -> Array:
+	return VillageLayout.road_exit_toward(_bones(seed_value), Vector2i.ZERO, _TILE, toward)
+
+
+func test_a_traveller_leaves_along_the_street_itself():
+	var bones := _bones(1)
+	var street_y := float(int(bones["street_y"])) + 0.5
+	for toward in [Vector2(1000, 0), Vector2(-1000, 0), Vector2(0, 1000), Vector2(0, -1000)]:
+		for point in _exit(1, toward):
+			assert_almost_eq(
+				(point as Vector2).y, street_y * _TILE, 0.001,
+				"the way out of a village is its own road, %s" % toward
+			)
+
+
+## Whichever end of the street points where you are going -- a caravan
+## bound east does not walk out of the west gate first.
+func test_the_end_you_leave_by_is_the_one_toward_where_you_are_going():
+	var bones := _bones(1)
+	var west := (float(int(bones["street_x0"])) + 0.5) * _TILE
+	var east := (float(int(bones["street_x1"])) + 0.5) * _TILE
+	assert_almost_eq((_exit(1, Vector2(9999.0, 0.0))[0] as Vector2).x, east, 0.001)
+	assert_almost_eq((_exit(1, Vector2(-9999.0, 0.0))[0] as Vector2).x, west, 0.001)
+
+
+## ...and the second point is further out still, AWAY from the village --
+## the whole purpose of it, so the turn happens outside.
+func test_the_turn_happens_clear_of_the_village():
+	var bones := _bones(1)
+	var east := (float(int(bones["street_x1"])) + 0.5) * _TILE
+	var out := _exit(1, Vector2(9999.0, 0.0))
+	assert_almost_eq(
+		(out[1] as Vector2).x, east + VillageLayout.ROAD_EXIT_CLEARANCE_TILES * _TILE, 0.001
+	)
+	var back := _exit(1, Vector2(-9999.0, 0.0))
+	var west := (float(int(bones["street_x0"])) + 0.5) * _TILE
+	assert_almost_eq(
+		(back[1] as Vector2).x, west - VillageLayout.ROAD_EXIT_CLEARANCE_TILES * _TILE, 0.001
+	)
+
+
+## A chunk that laid no street has no road to leave by, and says so rather
+## than handing back a point in the middle of nowhere.
+func test_a_village_with_no_street_offers_no_road_out():
+	assert_eq(VillageLayout.road_exit_toward({}, Vector2i.ZERO, _TILE, Vector2(1, 0)), [])
+
+
+# -- and the clearance is derived, not chosen ------------------------------
+
+func _footprints(seed_value: int) -> Dictionary:
+	var ids := ["house_small", "house_medium", "house_large", "house_small", "house_medium"]
+	var result := layout.layout(
+		ids, CHUNK_SIZE, seed_value, Callable(self, "_always_buildable"),
+		Callable(self, "_never_occupied")
+	)
+	var cells := {}
+	for plot in result["plots"]:
+		for cell in BuildingCatalog.footprint_cells(plot["building_id"], plot["origin"]):
+			cells[cell] = true
+	for key in ["civic_plot", "warehouse_plot"]:
+		var p: Dictionary = result.get(key, {})
+		if not p.is_empty():
+			for cell in BuildingCatalog.footprint_cells(p["building_id"], p["origin"]):
+				cells[cell] = true
+	return cells
+
+
+func _leg_crosses(occupied: Dictionary, a: Vector2, b: Vector2) -> bool:
+	var steps := int(a.distance_to(b) / _TILE * 4.0) + 1
+	for i in steps + 1:
+		var at: Vector2 = a.lerp(b, float(i) / float(steps))
+		if occupied.has(Vector2i(floori(at.x / _TILE), floori(at.y / _TILE))):
+			return true
+	return false
+
+
+## The property the whole thing exists for, measured rather than argued:
+## from the well, out by the road, then off to anywhere at all, a caravan
+## crosses none of its own village's buildings.
+func test_no_route_out_of_a_village_crosses_one_of_its_buildings():
+	var crossed := 0
+	var routes := 0
+	for seed_value in range(1, 21):
+		var bones := _bones(seed_value)
+		if not bones.has("landmarks") or not (bones["landmarks"] as Dictionary).has("well"):
+			continue
+		var occupied := _footprints(seed_value)
+		if occupied.is_empty():
+			continue
+		var well_cell: Vector2i = bones["landmarks"]["well"]
+		var well := (Vector2(well_cell) + Vector2(0.5, 0.5)) * _TILE
+		for step in 72:
+			var angle := deg_to_rad(float(step) * 5.0)
+			var far: Vector2 = well + Vector2(cos(angle), sin(angle)) * float(CHUNK_SIZE) * 6.0 * _TILE
+			var out := VillageLayout.road_exit_toward(bones, Vector2i.ZERO, _TILE, far)
+			assert_eq(out.size(), 2, "seed %d has a street to leave by" % seed_value)
+			routes += 1
+			if (
+				_leg_crosses(occupied, well, out[0])
+				or _leg_crosses(occupied, out[0], out[1])
+				or _leg_crosses(occupied, out[1], far)
+			):
+				crossed += 1
+	assert_gt(routes, 500, "precondition: a real sweep, not two villages")
+	assert_eq(crossed, 0, "%d of %d routes out still cross a building" % [crossed, routes])
+
+
+## The clearance is bounded on the other side too: far enough is measured
+## above, and a village is a place a road leaves, not a thing a caravan
+## tours -- so the detour stays a fraction of a chunk.
+func test_the_clearance_is_a_road_exit_not_a_tour():
+	assert_gte(VillageLayout.ROAD_EXIT_CLEARANCE_TILES, 2.0, "1.5 tiles still clipped 1.11% of routes")
+	assert_lte(VillageLayout.ROAD_EXIT_CLEARANCE_TILES, float(CHUNK_SIZE) / 8.0)

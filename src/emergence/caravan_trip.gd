@@ -42,6 +42,24 @@ var raided: bool
 ## happens.
 var raid_fraction: float
 
+## The corners between `origin` and `destination`, in order -- empty for a
+## trip that walks straight there, which is what every trip did before
+## villages started stopping walkers.
+##
+## A caravan cannot be given the step gate every other walking marker has:
+## its position is a pure closed-form function of elapsed time, and
+## is_arrived, raid_triggered and its PathScarring wear all read the same
+## progress. Deflecting the MARKER would leave the marker and the trip
+## disagreeing about where the caravan is -- it would hug a wall, pop
+## through as the pure position moved on, and be freed on arrival somewhere
+## it was not.
+##
+## So the ROUTE bends instead of the walker, and the purity is untouched:
+## this is still a closed-form function of elapsed time, just of a polyline
+## rather than a segment. Everything else was already written in terms of
+## progress and needed no change at all.
+var waypoints: Array = []
+
 
 func _init(
 	p_supplier_id: String, p_shortage_settlement_id: String, p_item_id: String, p_count: int,
@@ -60,11 +78,35 @@ func _init(
 	raid_fraction = p_raid_fraction
 
 
+## Every corner of the route in order, origin and destination included --
+## the one place the polyline is assembled, so nothing can disagree about
+## what the route is.
+func route() -> Array:
+	var points: Array = [origin]
+	points.append_array(waypoints)
+	points.append(destination)
+	return points
+
+
+## How long the whole route is, in pixels -- the straight-line distance for
+## a trip with no waypoints, and the sum of the legs otherwise.
+func route_length() -> float:
+	var points := route()
+	var total := 0.0
+	for i in points.size() - 1:
+		total += (points[i] as Vector2).distance_to(points[i + 1])
+	return total
+
+
 ## Total real seconds this trip's route takes end to end, at walking pace.
 ## 0.0 for a same-position trip counts as already arrived (see progress_at's
 ## own guard), not a divide-by-zero.
+##
+## The ROUTE's length, not the straight-line distance: walking round a
+## village takes longer than walking through it, and a caravan that bent
+## its route but kept its old arrival time would simply be moving faster.
 func travel_seconds() -> float:
-	return origin.distance_to(destination) / WALK_SPEED_PX_PER_SEC
+	return route_length() / WALK_SPEED_PX_PER_SEC
 
 
 ## [0, 1] how far along the route `world_age` puts this trip -- 0 at
@@ -77,11 +119,23 @@ func progress_at(world_age: float) -> float:
 	return clampf((world_age - departure_age) / total, 0.0, 1.0)
 
 
-## Real current position along the straight real route from origin to
-## destination -- the same lerp every other marker in this codebase walks a
-## route with.
+## Real current position along the route from origin to destination -- the
+## same lerp every other marker in this codebase walks a route with, done
+## leg by leg so a corner is walked round rather than cut across.
 func position_at(world_age: float) -> Vector2:
-	return origin.lerp(destination, progress_at(world_age))
+	var points := route()
+	var total := route_length()
+	if total <= 0.0:
+		return destination
+	var walked := progress_at(world_age) * total
+	for i in points.size() - 1:
+		var a: Vector2 = points[i]
+		var b: Vector2 = points[i + 1]
+		var leg := a.distance_to(b)
+		if walked <= leg or i == points.size() - 2:
+			return a.lerp(b, 1.0 if leg <= 0.0 else clampf(walked / leg, 0.0, 1.0))
+		walked -= leg
+	return destination
 
 
 ## The tile `position_at(world_age)` falls on, at `tile_size` -- the real

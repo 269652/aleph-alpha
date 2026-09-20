@@ -98,3 +98,95 @@ func test_tile_at_progresses_toward_the_destination_as_world_age_advances():
 	var early_tile := trip.tile_at(trip.travel_seconds() * 0.1, 16)
 	var late_tile := trip.tile_at(trip.travel_seconds() * 0.9, 16)
 	assert_gt(late_tile.x, early_tile.x)
+
+
+# -- a trip walks a ROUTE, not just a straight line ------------------------
+#
+# Asked for after every other walking marker had a building gate: *"fix the
+# caravan and cart markers too"*.
+#
+# A caravan could not be given that gate, and the reason is worth writing
+# down rather than working around: its position is a pure closed-form
+# function of elapsed time, and `is_arrived`, `raid_triggered` and the
+# route's own PathScarring wear are all defined off the same progress.
+# Deflecting the MARKER would leave the marker and the trip disagreeing
+# about where the caravan is -- it would hug a wall, then pop through as
+# the pure position moved on, and be freed on arrival somewhere it was not.
+#
+# So the route bends instead of the walker. Waypoints make it a polyline
+# and position_at walks it by arc length; everything else is unchanged,
+# because everything else was already written in terms of progress.
+#
+# Measured before this existed (a 360-direction sweep over 60 real village
+# layouts, tools/probe_carts_and_caravans.gd): 30.2% of the directions a
+# caravan can leave a well in cross one of its own village's buildings.
+
+const _WALK := CaravanTrip.WALK_SPEED_PX_PER_SEC
+
+
+func _trip_via(waypoints: Array, origin := Vector2.ZERO, destination := Vector2(100, 0)) -> CaravanTrip:
+	var trip := CaravanTrip.new(
+		"settlement:1_1", "settlement:2_2", "grain", 5,
+		origin, destination, 0.0, 1, false, 1.0
+	)
+	trip.waypoints = waypoints
+	return trip
+
+
+## A trip with no waypoints is exactly the straight line it always was.
+func test_a_trip_with_no_waypoints_is_the_straight_line_it_always_was():
+	var trip := _trip_via([])
+	assert_almost_eq(trip.travel_seconds(), 100.0 / _WALK, 0.0001)
+	assert_almost_eq(trip.position_at(trip.travel_seconds() * 0.5).x, 50.0, 0.0001)
+	assert_almost_eq(trip.position_at(trip.travel_seconds() * 0.5).y, 0.0, 0.0001)
+
+
+## A dog-leg is walked, not cut across: half way through the trip the
+## caravan is half way along the ROUTE, which is the corner itself.
+func test_a_dog_leg_is_walked_corner_and_all():
+	var trip := _trip_via([Vector2(0, 100)], Vector2.ZERO, Vector2(100, 100))
+	assert_almost_eq(trip.travel_seconds(), 200.0 / _WALK, 0.0001, "both legs, not the hypotenuse")
+	var half := trip.position_at(trip.travel_seconds() * 0.5)
+	assert_almost_eq(half.x, 0.0, 0.0001, "half way is the corner")
+	assert_almost_eq(half.y, 100.0, 0.0001)
+	var quarter := trip.position_at(trip.travel_seconds() * 0.25)
+	assert_almost_eq(quarter.y, 50.0, 0.0001, "and a quarter is half way up the first leg")
+
+
+## It still ENDS where it was sent, and still counts as arrived exactly
+## then -- the two things the rest of the system reads off a trip.
+func test_a_detoured_trip_still_arrives_exactly_at_its_destination():
+	var trip := _trip_via([Vector2(0, 60), Vector2(-40, 60)], Vector2.ZERO, Vector2(100, 100))
+	var end := trip.position_at(trip.travel_seconds())
+	assert_almost_eq(end.x, 100.0, 0.0001)
+	assert_almost_eq(end.y, 100.0, 0.0001)
+	assert_true(trip.is_arrived(trip.travel_seconds()))
+	assert_false(trip.is_arrived(trip.travel_seconds() * 0.99))
+
+
+## ...and it takes LONGER, which is the honest cost of walking round a
+## village rather than through it -- not a free teleport along a bent line.
+func test_a_detour_costs_real_walking_time():
+	var straight := _trip_via([])
+	var bent := _trip_via([Vector2(0, 100)])
+	assert_gt(bent.travel_seconds(), straight.travel_seconds())
+
+
+## A raid still lands at its own fraction OF THE ROUTE, so a trip that
+## detours is robbed further along the road rather than at the same
+## straight-line point it would have been.
+func test_a_raid_still_lands_at_its_fraction_of_the_route():
+	var trip := _trip_via([Vector2(0, 100)], Vector2.ZERO, Vector2(100, 100))
+	trip.raided = true
+	trip.raid_fraction = 0.5
+	assert_false(trip.raid_triggered(trip.travel_seconds() * 0.49))
+	assert_true(trip.raid_triggered(trip.travel_seconds() * 0.5))
+
+
+## A waypoint that repeats a point cannot make the route zero-length or the
+## pace infinite -- a degenerate route still reads as arrived rather than
+## dividing by zero, the same guard travel_seconds already had.
+func test_a_degenerate_route_reads_as_arrived_rather_than_dividing_by_zero():
+	var trip := _trip_via([Vector2.ZERO, Vector2.ZERO], Vector2.ZERO, Vector2.ZERO)
+	assert_almost_eq(trip.progress_at(0.0), 1.0, 0.0001)
+	assert_eq(trip.position_at(0.0), Vector2.ZERO)
