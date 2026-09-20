@@ -156,6 +156,17 @@ Work that costs no hours reads as **laid by hand** rather than as "0 hours"
 — the same `PlanRaising.is_laid_by_hand` rule the raising path already
 applies, said in the menu instead of discovered at the site.
 
+**Nothing about the card's size is written down.** A slot is as wide as
+the widest name in its own tab, measured at the font it is really drawn
+in; the card is as wide as its slots; the footer wraps rather than clips
+and is not allowed to widen either. This is not tidiness — `UiScale`
+scales *font sizes* and deliberately not card widths ([hud.md](hud.md)'s
+"UI scale" names that as its own limit), so a slot width written down as a
+constant is a slot that clips the moment the player moves that slider.
+Measured at `UiScale.MAX_SCALE`: six of the ten names ran past a fixed
+slot, and at 1.00 the tightest had seven pixels to spare — the defect was
+already there before any slider existed.
+
 **The selected slot is visibly the selected one.** A toggled button in a
 `ButtonGroup`, so exactly one can be armed at a time and the mode's own
 "nothing selected" state is a real state rather than a stuck-looking
@@ -463,6 +474,13 @@ whole.
   is no second picture of any building to drift from the first. Measured
   per slot by the probe: every icon is a 48px box that is 50–100% real
   art rather than transparent padding.
+
+  Nothing about the card's size is a constant, and that came out of
+  merging `main`: a concurrent session had landed the UI-scale setting,
+  and sweeping the probe across every scale the player can pick showed six
+  of ten names clipping at 1.75 — and only seven pixels of headroom at
+  1.00, so the defect predated the slider. Zero clipped names at 0.75,
+  1.00 and 1.75 now, footer included.
 
   *Named:* the palette still offers exactly the ids it offered before
   (pavement + `BUILDING_IDS` + `PRODUCTION_BUILDING_IDS` +
