@@ -116,13 +116,26 @@ static func spare_for_crops(level: float) -> float:
 ## would make a wide field cost more than a narrow one for the same walk,
 ## which is not how a furrow works.
 ##
-## Pinned, not chosen: it must be less than a bucket (or one trip to the
-## well buys less than one visit to the field, and the farmer spends the
-## season walking between the two) and more than a villager drinks in a
-## whole day (or the farmhouse is not the thirstier building and pillar 5
-## describes nothing a player could see). See test_household_water.gd's
-## "what the field costs the tank" block.
-const LITRES_PER_TENDING := 4.0
+## Pinned against the MEASURED tending rate below, never chosen: what
+## matters is what a field costs the tank in a DAY, and a day holds about
+## six visits. See test_household_water.gd's "what the field costs the
+## tank" block, which pins the rhythm this produces rather than the number
+## itself.
+const LITRES_PER_TENDING := 1.0
+
+## How often a real village field is actually tended, per simulated day.
+##
+## **Measured, not assumed** (`tools/probe_farm_water.gd`): 5.7 and 6.1 on
+## the two working farms of a real twelve-villager village.
+##
+## The first cut of this feature assumed 1.33 -- reasoning from
+## FarmPlot.MIN_WATER_GRACE_SECONDS being shorter than a simulated day --
+## and so billed the field more than four times what it should have. The
+## farmhouse ran dry almost at once, the beds stopped being watered, and
+## the same probe village went from 164 wheat harvested to 24. The
+## assumption looked careful and was wrong by a factor of four; only the
+## probe said so.
+const TENDINGS_PER_SIMULATED_DAY := 6.0
 
 ## How much watering a farmhouse keeps in hand when it sends somebody to
 ## the well -- in tendings, because that is the unit the field is billed
@@ -130,6 +143,24 @@ const LITRES_PER_TENDING := 4.0
 ## already dry, and the field then goes thirsty for the whole walk across
 ## the square.
 const TENDINGS_IN_HAND := 4.0
+
+
+## What a working field takes out of the tank in one simulated day -- the
+## number that actually decides how often a farm is seen at the well, and
+## the one the constants above are pinned through.
+static func field_draw_per_day() -> float:
+	return LITRES_PER_TENDING * TENDINGS_PER_SIMULATED_DAY
+
+
+## How often a working farm has to send somebody, once it has settled into
+## its rhythm: one bucket's worth, divided by what the field drinks.
+static func days_between_farm_trips() -> float:
+	return BUCKET_LITRES / field_draw_per_day()
+
+
+## The same for a household of `heads`, who only drink.
+static func days_between_household_trips(heads: int) -> float:
+	return BUCKET_LITRES / draw_for(heads, 1.0)
 
 
 ## Whether this farmhouse can put water on its beds at all: only ever out

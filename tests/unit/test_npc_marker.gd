@@ -1637,3 +1637,56 @@ func test_a_villager_with_no_farmhouse_is_never_sent_for_one():
 	marker.stock_building_cell = NpcMarker.NO_STOCK_BUILDING
 	marker._process(0.1)
 	assert_eq(marker.water_errand, WaterErrand.AT_HOME)
+
+
+# -- the bucket is actually in their hand -----------------------------------
+#
+# The other half of the report: *"it's not visible what they are doing"*.
+# WaterErrand.carried() has always SAID what is in the villager's hand;
+# until this it went nowhere, so the errand ran invisibly and the crowd at
+# the well was replaced by people walking about for no apparent reason.
+
+func test_a_villager_on_the_errand_is_carrying_something_you_can_see():
+	var view := _bind_real_view()
+	_a_watered_villager(0.0)
+	marker._process(0.1)
+	assert_true(WaterErrand.is_running(marker.water_errand), "precondition: they set out")
+	assert_true(view.is_slot_equipped("tool"), "the errand is invisible: their hands are empty")
+	assert_ne(view.tool_slot_texture(), null)
+
+
+func test_a_villager_off_the_errand_is_empty_handed():
+	var view := _bind_real_view()
+	_a_watered_villager(HouseholdWater.TANK_LITRES)
+	marker._process(0.1)
+	assert_false(view.is_slot_equipped("tool"))
+
+
+## Pillar 2 at the one point it can actually fail: the two legs must not
+## look alike, or nothing has been fixed.
+func test_the_bucket_they_carry_back_is_not_the_one_they_carried_out():
+	var view := _bind_real_view()
+	var world := _a_watered_villager(0.0)
+	marker._process(0.1)
+	var carried_out := view.tool_slot_texture()
+	assert_ne(carried_out, null, "precondition: they set out with something")
+	for i in 4:
+		marker.position = marker._resolve_location(
+			WaterErrand.location_tag_for(marker.water_errand)
+		)
+		marker._process(0.1)
+		if marker.carried_item() == WaterErrand.BUCKET_FULL:
+			break
+	assert_eq(marker.carried_item(), WaterErrand.BUCKET_FULL, "precondition: they filled it")
+	assert_ne(view.tool_slot_texture(), carried_out, "a full bucket looks exactly like an empty one")
+
+
+func test_they_put_the_bucket_down_once_they_are_home():
+	var view := _bind_real_view()
+	var world := _a_watered_villager(0.0)
+	marker._process(0.1)
+	assert_true(view.is_slot_equipped("tool"), "precondition: they set out with it")
+	world.house_level = HouseholdWater.TANK_LITRES  # filled while they walked
+	_walk_the_errand(world)
+	assert_eq(marker.water_errand, WaterErrand.AT_HOME, "precondition: the errand ended")
+	assert_false(view.is_slot_equipped("tool"), "they are still holding the bucket indoors")

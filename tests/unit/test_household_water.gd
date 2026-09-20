@@ -246,10 +246,15 @@ func test_watering_never_digs_into_the_drinking_reserve():
 	assert_gte(level, HouseholdWater.DRINKING_RESERVE_LITRES)
 
 
-## A full farmhouse has a real working stock -- enough to tend its whole
-## field several times over -- but not an endless one.
-func test_a_full_farmhouse_waters_its_field_several_times_over():
-	assert_between(_tendings_from(HouseholdWater.TANK_LITRES), 4, 20)
+## A full farmhouse has a real working stock -- days of watering -- but
+## not an endless one. In DAYS rather than in visits, because the number
+## of visits only means anything against the rate they happen at.
+func test_a_full_farmhouse_waters_its_field_for_days_but_not_forever():
+	var days := (
+		float(_tendings_from(HouseholdWater.TANK_LITRES))
+		/ HouseholdWater.TENDINGS_PER_SIMULATED_DAY
+	)
+	assert_between(days, 1.0, SeasonCycle.DAYS_PER_YEAR / 4.0)
 
 
 func _tendings_from(level: float) -> int:
@@ -340,17 +345,45 @@ func _first_level_that_sends_a_household() -> float:
 	return level
 
 
-## Pillar 5 -- "a farm empties its tank faster" -- stated about the WATER
-## rather than about a cadence somebody assumed. A bed withers if it is
-## not re-watered within FarmPlot.MIN_WATER_GRACE_SECONDS, which is
-## shorter than a simulated day (pinned next door in
-## test_earth_chunk_manager_household_water.gd), so a living field is
-## tended more than once a day. One tending costing more than a villager's
-## WHOLE DAY of drinking is therefore what makes the farmhouse the
-## thirstier of the two buildings -- and it is the only reason a farmer is
-## ever seen carrying water anywhere but home.
-func test_a_field_is_a_heavier_draw_on_a_tank_than_a_person_is():
-	assert_gt(HouseholdWater.LITRES_PER_TENDING, HouseholdWater.DRAW_PER_HEAD_PER_DAY)
+## Pillar 5 -- "a farm empties its tank faster" -- pinned as the RHYTHM it
+## produces, against the measured tending rate rather than an assumed one.
+##
+## The first cut of this asserted `LITRES_PER_TENDING > DRAW_PER_HEAD_PER_
+## DAY` from the premise that a field is tended "more than once a day".
+## That premise was true and useless: the real rate is about six times a
+## day (tools/probe_farm_water.gd), so the assertion demanded a bill four
+## times too big, and the farmhouse ran dry almost at once. What matters
+## is the DAY, never the visit.
+func test_a_working_field_drinks_more_than_the_people_do():
+	assert_gt(HouseholdWater.field_draw_per_day(), HouseholdWater.DRAW_PER_HEAD_PER_DAY)
+
+
+## The thing a player is supposed to notice: somebody is at the well for
+## the farm oftener than for any cottage.
+func test_a_farm_reaches_the_well_oftener_than_a_household_does():
+	assert_lt(
+		HouseholdWater.days_between_farm_trips(),
+		HouseholdWater.days_between_household_trips(1)
+	)
+
+
+## ...and not SO much oftener that the farmer spends the day walking. A
+## farm billed four times over made this 0.4 days and cost the field half
+## its working time, measured end to end (tools/probe_village_farming.gd:
+## 164 wheat harvested became 24).
+func test_a_farm_is_not_at_the_well_all_day():
+	assert_gt(HouseholdWater.days_between_farm_trips(), 1.0)
+
+
+## One trip has to be worth making: the bucket that comes back must lift
+## the farmhouse off the level that sent somebody, or the farmer turns
+## round at the door and sets out again forever.
+func test_one_bucket_lifts_a_farmhouse_off_its_own_threshold():
+	var sent := HouseholdWater.farm_trip_level()
+	assert_false(
+		HouseholdWater.farm_trip_is_due(HouseholdWater.poured_into(sent, HouseholdWater.BUCKET_LITRES)),
+		"a farm that sends somebody is still short when they get back"
+	)
 
 
 # -- the bucket is a real thing (2026-09-20) --------------------------------

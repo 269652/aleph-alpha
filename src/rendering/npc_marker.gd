@@ -20,6 +20,7 @@ const CreaturePerception = preload("res://src/gameplay/creature_perception.gd")
 const ForagerBehavior = preload("res://src/gameplay/forager_behavior.gd")
 const VillageFarm = preload("res://src/gameplay/village_farm.gd")
 const BuildingCatalog = preload("res://src/gameplay/building_catalog.gd")
+const ProceduralItemSprite = preload("res://src/rendering/procedural_item_sprite.gd")
 const FarmerBehavior = preload("res://src/gameplay/farmer_behavior.gd")
 const HuntableQuarry = preload("res://src/gameplay/huntable_quarry.gd")
 const Carcass = preload("res://src/rendering/carcass.gd")
@@ -484,6 +485,7 @@ func _process(delta: float) -> void:
 	# answered from a household tank is never as urgent as having nothing
 	# to eat.
 	_step_water_errand()
+	_sync_carried_item()
 	if WaterErrand.overrides_schedule(water_errand):
 		entry = {
 			"time_block": entry.get("time_block", ""),
@@ -1062,6 +1064,42 @@ func _tank_level_of(building: Dictionary) -> float:
 	if building.is_empty():
 		return HouseholdWater.TANK_LITRES
 	return 0.0 if _world.water_trip_due_at(building) else HouseholdWater.TANK_LITRES
+
+
+## One generator for the whole village. Its texture cache is static and
+## keyed by id, so twelve villagers on twelve errands share two bucket
+## textures between them rather than rebuilding a 32x32 image each.
+static var _item_art := ProceduralItemSprite.new()
+
+## What the CharacterView is currently showing in their hand, so a frame
+## that changed nothing touches nothing.
+var _shown_carried := ""
+
+
+## Puts what they are carrying into the view's tool slot -- or takes it
+## out of their hand again.
+##
+## This is the whole of docs/concept/village_water.md pillar 2: what a
+## villager is doing has to be answerable by LOOKING at them. carried_item
+## has always SAID what is in their hand; without this it went nowhere and
+## the errand ran invisibly, which is the half of the report that reads
+## *"it's not visible what they are doing"*.
+##
+## A view that is not in the tree yet is left alone WITHOUT recording what
+## it would have been shown, so the next frame tries again --
+## CharacterView.equip_weapon writes straight to its slot node and has no
+## pending-value stash (see CharacterPreviewDiorama's own note).
+func _sync_carried_item() -> void:
+	var carried := carried_item()
+	if carried == _shown_carried:
+		return
+	if _character_view == null or not _character_view.is_node_ready():
+		return
+	_shown_carried = carried
+	if carried == "":
+		_character_view.unequip_slot("tool")
+		return
+	_character_view.equip_weapon(_item_art.texture_for(carried))
 
 
 ## What is in this villager's hands right now: "" for nothing, otherwise
