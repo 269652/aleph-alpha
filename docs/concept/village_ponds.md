@@ -263,6 +263,12 @@ it could only ever stand on the rails. Idempotence is asked of the GROUND —
 a hut already standing on this pond's bank is this pond's hut — which is
 what stops a village growing a second one every time it is walked past.
 
+**And it is an overlay, like every other building.** A hut missing from
+`TerrainRenderer.BUILDING_OVERLAY_TILE_IDS` paints the same flat brown
+square under itself that list exists to prevent -- found on the merge by
+`test_a_whole_building_is_an_overlay_and_paints_no_ground_of_its_own`
+rather than by inspection, which is exactly what that test is for.
+
 **The art is borrowed, and says so.** The catalog entry names
 `draws_as: "farmhouse"`, and a borrowed sheet is the LAST link of the
 building's own chain (`BuildingCatalog.finished_sheet_chain`): the day
