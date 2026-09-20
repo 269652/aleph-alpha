@@ -47,6 +47,8 @@ const ProceduralGrassSprite = preload("res://src/rendering/procedural_grass_spri
 const IllustratedGrassPatch = preload("res://src/rendering/illustrated_grass_patch.gd")
 const IllustratedFernPatch = preload("res://src/rendering/illustrated_fern_patch.gd")
 const ForestFern = preload("res://src/world/forest_fern.gd")
+const BlackberryBramble = preload("res://src/world/blackberry_bramble.gd")
+const IllustratedBrambleSprite = preload("res://src/rendering/illustrated_bramble_sprite.gd")
 const IllustratedWheatPatch = preload("res://src/rendering/illustrated_wheat_patch.gd")
 const FlowerPatch = preload("res://src/world/flower_patch.gd")
 const SeedDispersal = preload("res://src/world/seed_dispersal.gd")
@@ -78,6 +80,7 @@ const BuildingCatalog = preload("res://src/gameplay/building_catalog.gd")
 const InteriorTemplates = preload("res://src/gameplay/interior_templates.gd")
 const ProceduralBuildingPlaceholderSprite = preload("res://src/rendering/procedural_building_placeholder_sprite.gd")
 const ProceduralFootprintKerbSprite = preload("res://src/rendering/procedural_footprint_kerb_sprite.gd")
+const ConstructionWorkerMarker = preload("res://src/rendering/construction_worker_marker.gd")
 const FarmerMarker = preload("res://src/rendering/farmer_marker.gd")
 const MillMarker = preload("res://src/rendering/mill_marker.gd")
 const BakeryMarker = preload("res://src/rendering/bakery_marker.gd")
@@ -840,6 +843,12 @@ var _grass_sims: Dictionary = {}  # Vector2i chunk_coord -> TallGrass
 ## had (docs/concept/ferns.md).
 var _fern_sims: Dictionary = {}  # Vector2i chunk_coord -> ForestFern
 var _fern_sprites: Dictionary = {}  # Vector2i chunk_coord -> {band index int -> MultiMeshInstance2D}
+## Vector2i chunk_coord -> BlackberryBramble, and its own sprites. One
+## ordinary Sprite2D per thicket rather than the fern's banded MultiMesh:
+## brambles are sparse and woody, and do not sway (see
+## IllustratedBrambleSprite).
+var _bramble_sims: Dictionary = {}
+var _bramble_sprites: Dictionary = {}  # chunk_coord -> {local cell Vector2i -> Sprite2D}
 ## Vector2i chunk_coord -> FlowerPatch, and the Sprite2D per flower cell.
 var _flower_patches: Dictionary = {}
 var _flower_sprites: Dictionary = {}
@@ -9665,6 +9674,39 @@ func step_ferns(delta_seconds: float) -> void:
 ## coarser chunk-level _decorates gate, the same two-stage cutoff
 ## _sync_grass_sprites documents: a chunk is CHUNK_SIZE tiles square while
 ## the camera only ever shows a much smaller window.
+## One Sprite2D per standing thicket, added and freed as the sim changes --
+## the same shape _sync_scrub_sprites uses, and for the same reason: at
+## BlackberryBramble.MAX_PATCHES (36) a chunk's brambles are nowhere near the
+## density that would need instancing.
+func _sync_bramble_sprites(chunk_coord: Vector2i) -> void:
+	var sim = _bramble_sims.get(chunk_coord)
+	var sprites: Dictionary = _bramble_sprites.get(chunk_coord, {})
+	if sim == null:
+		return
+	for cell in sprites.keys():
+		if not sim.has_bramble(cell):
+			sprites[cell].free()
+			sprites.erase(cell)
+
+	var origin := chunk_coord * CHUNK_SIZE
+	for cell in sim.get_patch_cells():
+		if sprites.has(cell):
+			continue
+		var texture := IllustratedBrambleSprite.frame_for(origin + cell)
+		if texture == null:
+			continue  # no sheet on disk: draw nothing rather than a box
+		var sprite := Sprite2D.new()
+		sprite.texture = texture
+		sprite.scale = Vector2.ONE * IllustratedBrambleSprite.world_scale()
+		sprite.position = Vector2(
+			(origin.x + cell.x + 0.5) * TerrainRenderer.TILE_SIZE,
+			(origin.y + cell.y + 0.5) * TerrainRenderer.TILE_SIZE
+		)
+		_ground_decor_parent.add_child(sprite)
+		sprites[cell] = sprite
+	_bramble_sprites[chunk_coord] = sprites
+
+
 func _sync_fern_sprites(chunk_coord: Vector2i) -> void:
 	if not _decorates(chunk_coord):
 		_drop_decoration(_fern_sprites, chunk_coord)
@@ -17970,6 +18012,17 @@ func _load_chunk(chunk_coord: Vector2i) -> void:
 	_fern_sprites[chunk_coord] = {}
 	_sync_fern_sprites(chunk_coord)
 
+	# What the wood GIVES, beside what it is: the identical mask again, so a
+	# bramble no more seeds in a river or through a persisted floor than a
+	# fern or a blade does (docs/concept/brambles.md).
+	_bramble_sims[chunk_coord] = BlackberryBramble.new(
+		hash("%d_%d_blackberry_bramble" % [chunk_coord.x, chunk_coord.y]),
+		chunk.width, chunk.height, chunk.biome, growth_blockers
+	)
+	_bramble_sims[chunk_coord].block_cells(built_cells)
+	_bramble_sprites[chunk_coord] = {}
+	_sync_bramble_sprites(chunk_coord)
+
 	# Aquatic vegetation (see AquaticVegetation, docs/concept/
 	# aquatic_foraging.md "Aquatic Foraging") -- only chunks that actually
 	# contain water get a real sim, the same "don't allocate a sim for a
@@ -18599,6 +18652,10 @@ func _advance_construction_labor(
 			_place_completed_construction_project(project)
 		elif is_building:
 			_sync_construction_site(chunk_coord, project)
+			# ... and the builder working it, present exactly while the
+			# crew above is real (docs/concept/building.md, "Somebody is
+			# working on it").
+			_sync_construction_worker(chunk_coord, project, float(capacity["builder_count"]))
 
 
 ## The real, live chunk-load caller for docs/concept/timber_construction.md's
@@ -19363,6 +19420,13 @@ func _place_completed_building_project(project) -> void:
 ## on chunk unload; rebuilt by the next labour tick after a reload.
 var _construction_site_nodes: Dictionary = {}
 
+## The builder working each of those sites -- chunk_coord -> {origin_local
+## -> ConstructionWorkerMarker}, the same shape as the sites themselves and
+## kept in step with them (see _sync_construction_worker). Asked for
+## directly, watching a village raise a cottage: "the construction site
+## should show a builder working on it".
+var _construction_site_workers: Dictionary = {}
+
 
 func _sync_construction_site(chunk_coord: Vector2i, project) -> void:
 	var building_id: String = project.blueprint_id
@@ -19416,6 +19480,57 @@ func _sync_construction_site(chunk_coord: Vector2i, project) -> void:
 	sprite.position = Vector2(0, -float(texture.get_height()) * 0.5 * ArtResolution.SPRITE_SCALE)
 
 
+## Keeps the builder on a site in step with whether anybody is really
+## working it (docs/concept/building.md, "Somebody is working on it").
+##
+## `builder_count` is the crew the ledger is actually spending on this
+## settlement's projects this tick -- its spare hands scaled by its own
+## productivity. Zero is a real answer (a village with nobody to spare
+## builds nothing), and a site accruing no labour shows no worker rather
+## than a figure standing over work that is not happening.
+##
+## ONE builder, never a crew of `builder_count`: that number is
+## settlement-WIDE and shared across every project the settlement has
+## going, so drawing one worker per unit at each site would show the same
+## hands twice over. One figure per site is the honest reading of it.
+func _sync_construction_worker(chunk_coord: Vector2i, project, builder_count: float) -> void:
+	if project == null:
+		return
+	var origin_local: Vector2i = project.origin
+	if builder_count <= 0.0:
+		_free_construction_worker(chunk_coord, origin_local)
+		return
+	if not _construction_site_workers.has(chunk_coord):
+		_construction_site_workers[chunk_coord] = {}
+	var by_origin: Dictionary = _construction_site_workers[chunk_coord]
+	var standing = by_origin.get(origin_local)
+	if standing != null and is_instance_valid(standing):
+		return
+	var footprint := BuildingCatalog.footprint_of(project.blueprint_id)
+	var plot := Rect2(
+		Vector2(chunk_coord * CHUNK_SIZE + origin_local) * TerrainRenderer.TILE_SIZE,
+		Vector2(footprint) * TerrainRenderer.TILE_SIZE
+	)
+	var worker := ConstructionWorkerMarker.new()
+	worker.plot = plot
+	# The site's own seed, so one builder works one site the same way on
+	# every reload -- the same seed the stage sprite is picked from.
+	worker.seed_value = _house_site_seed(
+		chunk_coord, chunk_coord * CHUNK_SIZE + origin_local, project.blueprint_id
+	)
+	worker.position = plot.position + plot.size * 0.5
+	_entities_parent.add_child(worker)
+	by_origin[origin_local] = worker
+
+
+func _free_construction_worker(chunk_coord: Vector2i, origin_local: Vector2i) -> void:
+	var by_origin: Dictionary = _construction_site_workers.get(chunk_coord, {})
+	var worker = by_origin.get(origin_local)
+	if worker != null and is_instance_valid(worker):
+		worker.free()
+	by_origin.erase(origin_local)
+
+
 ## The first sheet of `chain` (BuildingCatalog.finished_sheet_chain /
 ## construction_sheet_chain) whose file is really on disk, as a texture
 ## scaled to a `footprint_width_tiles`-wide footprint -- null when none of
@@ -19450,6 +19565,9 @@ func _free_construction_site(chunk_coord: Vector2i, origin_local: Vector2i) -> v
 	if node != null and is_instance_valid(node):
 		node.free()
 	by_origin.erase(origin_local)
+	# The builder goes with the site he works -- a worker standing over a
+	# finished building is a ghost.
+	_free_construction_worker(chunk_coord, origin_local)
 
 
 func _free_construction_sites_in_chunk(chunk_coord: Vector2i) -> void:
@@ -19457,6 +19575,12 @@ func _free_construction_sites_in_chunk(chunk_coord: Vector2i) -> void:
 	for origin_local in by_origin.keys():
 		_free_construction_site(chunk_coord, origin_local)
 	_construction_site_nodes.erase(chunk_coord)
+	# A builder whose site was never spawned this session (a project that
+	# advanced while the chunk was loaded but never drew a stage) still has
+	# to go with the chunk he works in.
+	for origin_local in _construction_site_workers.get(chunk_coord, {}).keys():
+		_free_construction_worker(chunk_coord, origin_local)
+	_construction_site_workers.erase(chunk_coord)
 
 
 ## The house pieces the water reclaims (see _reclaim_pieces_standing_in_

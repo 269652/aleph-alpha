@@ -104,9 +104,14 @@ records the YEAR it was picked, so:
 - ✅ **`blackberry` is a real `ItemCatalog` food**, declared beside the other
   wild fruit and stacking like them, so everything that already knows what
   to do with a cherry knows what to do with it.
-- ⬜ **Not yet drawn.** `blackberry.png` (a 5×5 grid of twenty-five clumps,
-  with real alpha rather than the checkerboard `fern.png` needed) is not
-  rendered yet, and no chunk creates a `BlackberryBramble`. The mechanism is
-  real and tested; nothing is on screen.
+- ✅ **Drawn, and wired into the world.** Every loaded chunk gets a bramble
+  sim beside its fern one, handed the identical growth-blocked mask, and one
+  ordinary `Sprite2D` per thicket. Deliberately NOT the fern's banded
+  MultiMesh: that exists to bend a chunk's worth of blades as one mesh, and
+  brambles are sparse (36 against a fern's 123) and woody — they do not
+  sway. Which of the twenty-five clumps a thicket wears is hash-derived from
+  its own global cell, so a wood is not one bramble stamped over and over
+  and it looks the same across a reload. `blackberry.png` carries real alpha,
+  so unlike `fern.png` nothing is keyed.
 - ⬜ **Nothing picks them but the player would.** `pick` exists and is
   tested; no forager, bird or villager calls it yet.
