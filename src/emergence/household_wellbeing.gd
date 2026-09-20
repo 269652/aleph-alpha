@@ -40,11 +40,32 @@ extends RefCounted
 ## fundamental first, which is also weight order (see NEED_WEIGHTS).
 const NEED_IDS: Array[String] = ["food", "shelter", "work", "income", "community"]
 
-## How much settlement food stock PER HOUSEHOLD reads as a full larder.
-## Deliberately several meals' worth rather than one: a village with
-## exactly one meal per household in store is one bad day from hunger, and
-## should not read as "food need fully met".
-const FOOD_STOCK_PER_HOUSEHOLD_TARGET := 4.0
+## How much settlement food stock PER HOUSEHOLD reads as a full larder: a
+## DAY's meals in store (docs/concept/village_economy_balance.md mechanism
+## 4) -- SettlementState.FOOD_PER_HOUSEHOLD (1.2, the measured draw per
+## assessment) over the two assessments in the day the village lives on,
+## the same sixty seconds its schedule, its ecosystem step, its settlement
+## step and its cart all run on. The card's own "feeds N of M" reads the
+## same draw, so a village that feeds all its households with a day in
+## hand reads 100% here too.
+##
+## It was 4.0 -- one assessment's draw, from when the draw was 4 -- and
+## was never revisited when the draw was recalibrated, so "full" meant
+## three and a third assessments for no reason anybody could state; a
+## village the card said fed 25 of 10 read its households at 60%.
+##
+## Deliberately NOT the cart's whole cover (the minimum stock, 2.5 days):
+## measured with the target at that (tools/probe_village_economy.gd), a
+## village holding a day or two of food read its households below
+## EstateAscension's subsistence floor and lost four of ten to the ladder's
+## exodus while every belly in it was full. A village that keeps its
+## minimum stock still reads full here, with more than a day in hand.
+##
+## A literal because GDScript cannot call into another script from a const
+## initialiser; pinned to the derivation by test_a_full_larder_is_a_lived_
+## day_of_the_measured_draw, so retuning either side fails there rather
+## than quietly leaving the two apart again.
+const FOOD_STOCK_PER_HOUSEHOLD_TARGET := 2.4
 ## How the food need splits between the resident's own belly right now and
 ## the village's larder behind it. A full belly today with nothing in store
 ## is genuinely not the same as a full belly with a winter's food behind

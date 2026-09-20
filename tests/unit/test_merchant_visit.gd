@@ -418,3 +418,121 @@ func test_goods_that_keep_are_worth_more_than_raw_produce():
 			MerchantVisit.price_of(String(item_id)), MerchantVisit.LOG_PRICE,
 			"%s keeps and travels, so it beats the farm gate" % item_id
 		)
+
+
+# -- the merchant pays labour value -------------------------------------------
+#
+# docs/concept/village_economy_balance.md mechanism 2. Asked for in as many
+# words: "the price for goods when selling to the travel merchant needs to
+# be based on per capita work output... the city should generate double the
+# income through export goods than it costs to pay all workers."
+#
+# MEASURED before this existed (tools/probe_village_economy.gd): a visit
+# paid CART_CAPACITY units at LOG_PRICE -- 20 gold -- and ten hungry
+# villagers drew it as subsistence wages the same tick; the purse read
+# 0 -> 20 -> 1 -> 1 -> 19 -> 1, wallets 0 at every sample.
+
+func test_the_labour_value_is_double_the_wage_bill():
+	assert_almost_eq(MerchantVisit.labour_value_for(100.0), 200.0, 0.0001)
+	assert_almost_eq(MerchantVisit.EXPORT_INCOME_TO_WAGE_BILL_RATIO, 2.0, 0.0001)
+	assert_almost_eq(MerchantVisit.labour_value_for(-5.0), 0.0, 0.0001, "a negative bill is no bill")
+
+
+## The index is the labour value over what the surplus is worth at the farm
+## gate, floored at the farm gate: a village whose output is worth more
+## than its bill is paid for its output, not for its bill.
+func test_the_price_index_is_the_labour_value_over_the_surplus_floored_at_the_farm_gate():
+	assert_almost_eq(MerchantVisit.price_index(200.0, 50.0), 4.0, 0.0001)
+	assert_almost_eq(MerchantVisit.price_index(50.0, 200.0), 1.0, 0.0001)
+	assert_almost_eq(MerchantVisit.price_index(0.0, 50.0), 1.0, 0.0001, "no labour to pay for: the farm gate")
+	assert_almost_eq(MerchantVisit.price_index(50.0, 0.0), 1.0, 0.0001, "no surplus to price: the farm gate")
+
+
+## The base prices keep every relativity: a beam is still six logs, at any
+## index.
+func test_the_unit_price_is_the_base_times_the_index_so_a_beam_is_still_six_logs():
+	for index in [1.0, 2.5, 40.0]:
+		assert_almost_eq(
+			MerchantVisit.unit_price_of("beam", index) / MerchantVisit.unit_price_of("wood", index),
+			float(MerchantVisit.price_of("beam")) / float(MerchantVisit.price_of("wood")), 0.0001
+		)
+		assert_almost_eq(MerchantVisit.unit_price_of("fish", index), float(MerchantVisit.price_of("fish")) * index, 0.0001)
+	assert_almost_eq(MerchantVisit.unit_price_of("iron_sword", 40.0), 0.0, 0.0001, "he still does not deal in it")
+
+
+## What the surplus is worth at the farm gate: every sellable unit above the
+## reserve, at its base price.
+func test_the_surplus_value_is_the_sellable_units_at_base_prices():
+	assert_almost_eq(MerchantVisit.surplus_value({"fish": 10.0, "beam": 2.0}), 10.0 + 2.0 * MerchantVisit.price_of("beam"), 0.0001)
+	assert_almost_eq(MerchantVisit.surplus_value({"fish": 30.0}, {"fish": 25}), 5.0, 0.0001)
+	assert_almost_eq(MerchantVisit.surplus_value({"iron_sword": 9.0}), 0.0, 0.0001)
+
+
+## A sale with no labour to pay for is the farm-gate sale it always was.
+func test_a_sale_with_no_labour_value_is_the_farm_gate_sale_it_always_was():
+	for stock in [{"fish": 5.0}, {"fish": 50.0, "beam": 30.0}, {}]:
+		var before: Dictionary = MerchantVisit.purchase(stock)
+		var after: Dictionary = MerchantVisit.purchase(stock, {}, 0.0)
+		assert_eq(after["bought"], before["bought"])
+		assert_almost_eq(float(after["paid"]), float(before["paid"]), 0.0001)
+		assert_almost_eq(float(after["index"]), 1.0, 0.0001)
+
+
+## When the surplus is worth less than the labour, the cart takes all of it
+## and pays the labour value: the village earns its wage bill twice over
+## from what it made, however little that was.
+func test_a_surplus_worth_less_than_the_labour_is_taken_whole_and_paid_the_labour_value():
+	var sale: Dictionary = MerchantVisit.purchase({"fish": 10.0}, {}, 50.0)
+	assert_eq(int(sale["bought"].get("fish", 0)), 10, "every unit goes")
+	assert_almost_eq(float(sale["paid"]), 50.0, 0.0001)
+	assert_almost_eq(float(sale["index"]), 5.0, 0.0001)
+
+
+## When the surplus is worth more, he pays the farm gate and takes what
+## covers the labour value.
+func test_a_surplus_worth_more_than_the_labour_is_paid_base_and_taken_to_cover_it():
+	var sale: Dictionary = MerchantVisit.purchase({"fish": 100.0}, {}, 50.0)
+	assert_eq(int(sale["bought"].get("fish", 0)), 50)
+	assert_almost_eq(float(sale["paid"]), 50.0, 0.0001)
+	assert_almost_eq(float(sale["index"]), 1.0, 0.0001)
+
+
+## The fixed cart is a FLOOR on a visit, not a ceiling on a village's income.
+func test_the_cart_is_a_floor_on_a_visit_not_a_ceiling_on_income():
+	var small: Dictionary = MerchantVisit.purchase({"fish": 100.0}, {}, 5.0)
+	assert_eq(int(small["bought"].get("fish", 0)), MerchantVisit.CART_CAPACITY, "never fewer than a cart-load")
+	assert_almost_eq(float(small["paid"]), float(MerchantVisit.CART_CAPACITY), 0.0001)
+	var large: Dictionary = MerchantVisit.purchase({"fish": 100.0}, {}, 300.0)
+	assert_eq(int(large["bought"].get("fish", 0)), 100, "a village's whole output rides when the labour asks for it")
+	assert_almost_eq(float(large["paid"]), 300.0, 0.0001)
+
+
+## And a hoard still cannot become a windfall: what a hoard earns above the
+## labour value is its base value, exactly as before.
+func test_a_hoard_still_cannot_become_a_windfall():
+	var sale: Dictionary = MerchantVisit.purchase({"fish": 1000.0}, {}, 100.0)
+	assert_eq(int(sale["bought"].get("fish", 0)), 100)
+	assert_almost_eq(float(sale["paid"]), 100.0, 0.0001)
+
+
+func test_dearest_goods_still_ride_first_under_a_labour_value():
+	var sale: Dictionary = MerchantVisit.purchase({"beam": 20.0, "fish": 100.0}, {}, 30.0)
+	assert_eq(int(sale["bought"].get("beam", 0)), MerchantVisit.CART_CAPACITY, "the cart-load is beams")
+	assert_eq(int(sale["bought"].get("fish", 0)), 0)
+
+
+## The reserve is the reserve, whatever the price: the larder and the next
+## house are not for sale at any index.
+func test_the_reserve_still_holds_under_a_labour_value():
+	var sale: Dictionary = MerchantVisit.purchase({"fish": 30.0}, {"fish": 25}, 100.0)
+	assert_eq(int(sale["bought"].get("fish", 0)), 5)
+	assert_almost_eq(float(sale["paid"]), 100.0, 0.0001)
+	assert_almost_eq(float(sale["index"]), 20.0, 0.0001)
+
+
+func test_nothing_is_created_or_destroyed_by_an_indexed_sale():
+	var sale: Dictionary = MerchantVisit.purchase({"fish": 3.0, "beam": 2.0, "hide": 1.0}, {}, 70.0)
+	var owed := 0.0
+	for item_id in sale["bought"]:
+		owed += float(sale["bought"][item_id]) * MerchantVisit.unit_price_of(item_id, float(sale["index"]))
+	assert_almost_eq(float(sale["paid"]), owed, 0.0001, "the gold paid is exactly the goods taken at the indexed price")
