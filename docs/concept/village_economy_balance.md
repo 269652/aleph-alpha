@@ -516,8 +516,12 @@ standing where there were two fields and a pond:
 - **Herb reads 1.00 throughout**; fuel read 0.00 at two samples (450 and
   600 s) while a trade-hall project started and took its wood, and the
   purse fell once, 720 → 369, at the sample the newcomer arrived, then
-  climbed again at the old rate. Neither is root-caused here; both are
-  recorded so the next measurement starts from them.
+  climbed again at the old rate. The purse dip was root-caused by the
+  next mechanism: an arrival re-derives the village, and the
+  re-derivation made a fresh market and wiped the purse with it — kept
+  now ([village_ponds.md](village_ponds.md), "And the re-derivation keeps
+  the village's market"). The fuel dip is recorded so the next
+  measurement starts from it.
 
 ### Two regressions the measurement found, and closed
 

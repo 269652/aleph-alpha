@@ -415,7 +415,10 @@ and it is the house the ladder raises for them that gives their record
 their trade, a fisher their pond and hut, a farmstead its beds and rails
 — on the day it stands rather than on the next chunk load
 ([village_ponds.md](village_ponds.md), "A pond dug the day the fisher's
-house stands"). Each is
+house stands"). Either re-derivation keeps the market the village already
+trades in — its purse and its stall live on that object, and a fresh one
+per re-derivation was measured as the purse falling to 0 the moment a
+house completed. Each is
 a **whole re-derivation rather than one appended marker** on purpose: a
 villager is not just a marker. They need their farmhouse's field, their
 pond, their market stand, their store round, their workspot prop — all

@@ -112,6 +112,25 @@ reason. The cost is the one `_respawn_village` already names — a
 villager mid-errand restarts it — paid once per building the village
 actually completes.
 
+### And the re-derivation keeps the village's market
+
+The first cut measured worse than the run before it: the purse fell to
+**0** the moment a house completed (450 s), fuel and food followed, and
+the roster fell **10 → 6 → 5**. The purse the cart fills and the wages
+come out of, and the stall's own stock, live on the `VillageMarket` that
+`spawn_village` creates — fresh on every call, which a chunk reload had
+always accepted ([traveling_merchants.md](traveling_merchants.md)'s
+"the purse dies on a chunk reload") and which an arrival's re-derivation
+had been quietly paying too (the first measurement's unexplained
+720 → 369 at the newcomer's sample in
+[village_economy_balance.md](village_economy_balance.md)). A
+re-derivation now hands the spawn the market the village already trades
+in, read off the villagers before they are freed — the reuse
+`reconcile_villagers` already did for a newcomer — so the purse and the
+stall survive an arrival and a completed building alike
+(`test_earth_chunk_manager_village_respawn.gd`). A chunk unload still
+loses them; that gap is unchanged.
+
 **Pinned** by `test_earth_chunk_manager_newcomer_pond.gd` on a real
 settlement chunk whose next villager fishes: the house their project
 completes into carries their trade and seed at once, a pond lies within
