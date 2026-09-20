@@ -375,7 +375,9 @@ at all (which is centered, a small gold spinner glyph plus status text, no
 bar — confirmed by actually rendering it, see `tools/probe_compass_window.gd`'s
 own "code tracing alone is not enough evidence" precedent). It's
 `scenes/world.tscn`'s own raw, never-yet-updated default UI: `UI/DebugLabel`'s
-literal `.tscn`-authored placeholder text IS `"Loading..."`,
+literal `.tscn`-authored placeholder text IS `"Loading..."` (that node has
+since been removed — see [hud.md](hud.md) "The top-left strip" — so this one
+item is no longer part of the scaffold; the rest of this account still holds),
 `UI/PlayerHealthBar/Fill` is a green `ColorRect` sitting at its authored
 default (unset) width since the player's real HP hasn't been assigned yet,
 and `UI/Minimap/PlayerDot` is a yellow `ColorRect` floating with no minimap

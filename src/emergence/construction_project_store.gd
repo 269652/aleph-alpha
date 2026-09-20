@@ -185,6 +185,27 @@ func abandon_project(project_id: String) -> bool:
 ## when the player independently supplies the real fix first, and that is
 ## just as real a redundancy as an IN_PROGRESS one. COMPLETE/ABANDONED are
 ## excluded -- there is nothing left to reconsider for either.
+## Every DISTINCT blueprint id this chunk has actually finished building,
+## read out of the persisted ledger rather than off the ground.
+##
+## That distinction is the whole reason it exists: _standing_building_ids_
+## in_chunk can only answer for a LOADED chunk, and almost every settlement
+## in the world is unloaded at any moment. The ledger is what a village
+## built, it survives a restart (ConstructionProjectStorePersistence), and
+## it is therefore the only honest answer to "what stands here" for a
+## village nobody is standing in -- which is what docs/concept/
+## village_estates.md's charter gate has to read to work offscreen at all.
+func completed_blueprint_ids_in_chunk(chunk_coord: Vector2i) -> Array:
+	var seen := {}
+	for id in _projects:
+		var project: ConstructionProject = _projects[id]
+		if project.chunk_coord != chunk_coord:
+			continue
+		if project.status == ConstructionProject.Status.COMPLETE:
+			seen[project.blueprint_id] = true
+	return seen.keys()
+
+
 func active_projects_in_chunk(chunk_coord: Vector2i) -> Array:
 	var out: Array = []
 	for id in _projects:

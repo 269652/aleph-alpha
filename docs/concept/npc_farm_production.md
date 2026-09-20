@@ -128,7 +128,32 @@ The Farmer owns a small, fixed number of real `FarmPlotMarker` instances
 (reusing the exact same tilled-soil/crop-art rendering a player's own farm
 plot already uses) at fixed offsets around its home tile. Every owned
 plot's growth advances every frame, independent of the Farmer's own current
-phase (pillar 2). The Farmer's own loop:
+phase (pillar 2).
+
+**A bed is ground, and ground does not follow a person** (2026-09-19).
+"Owns" is a bookkeeping relationship, not a scene-tree one: the beds are
+laid out as the Farmer's **siblings**, anchored at `home`, never as his
+children. They were `add_child`ed at first, and since a child's `position`
+is an offset from its parent, three tilled beds and the wheat standing in
+them were carried around the field by the Farmer on every step he took —
+reported live as *"there's now some weird moving char thing + soil tiles"*,
+and then *"the soil tiles are also moving with the character"*.
+
+What makes this worth writing down rather than just fixing: `APPROACHING`
+had **always** walked him to `home + _plot_offset(index)`, a fixed spot in
+the world, while the bed was *drawn* at `farmer + _plot_offset(index)`. The
+further he wandered, the further his beds drifted from the ground he was
+standing on to tend them — the loop below already believed the beds were
+where they are now, and only the drawing disagreed. Both are the same
+expression today, and a test holds them there.
+
+The one thing the old parenting bought for free was cleanup: a freed Farmer
+took his beds with him because they were his children. Siblings do not
+follow, so he frees them deliberately when he leaves the tree — otherwise a
+demolished Farm leaves three tilled beds and their wheat standing in an
+empty field forever.
+
+The Farmer's own loop:
 
 `SEEKING` (decide which owned plot needs attention: a **ready** plot to
 harvest, else an **empty/withered** plot to till-and-plant wheat, else a
@@ -166,12 +191,44 @@ subject (farmhouse/sawmill/warehouse/wooden_fence), sliced with a known
 fixed grid, chroma-keyed and despilled, mirroring
 `illustrated_beehive_sprite.gd`'s established precedent. Rendered as a real
 overlay `Sprite2D` standing on the structure's own tile (`EarthChunkManager.
-_structure_art_sprites`), scaled via a "footprint" anchor (width matches
-the tile, height scales by the same factor, so a structure taller than one
-tile — Sägewerk/Storage's own portrait-oriented art — stays taller, and one
-wider than tall — Farm/wooden_fence's own landscape-oriented art — stays
-wider) rather than squashed into a single small tile texture, per
-`IllustratedArtLoader`'s own documented "footprint" anchor contract. The
+_structure_art_sprites`), scaled via a "footprint" anchor: one factor on
+both axes, so a structure taller than one tile — Sägewerk/Storage's own
+portrait-oriented art — stays taller, and one wider than tall —
+Farm/wooden_fence's own landscape-oriented art — stays wider, rather than
+being squashed into a square, per `IllustratedArtLoader`'s own documented
+"footprint" anchor contract.
+
+**How WIDE that footprint is was wrong until 2026-09-19, and this document
+said so in as many words** ("width matches the tile"). One tile is not a
+building. Measured with `tools/probe_structure_art_scale.gd`, at a 16px
+tile, against a villager 1.23 tiles tall:
+
+| subject | drawn | next to a person |
+|---|---|---|
+| `farm` | 0.85 × 0.70 tiles | **0.57×** |
+| `sagewerk` | 0.88 × 0.82 tiles | 0.67× |
+| `storage` | 0.83 × 0.89 tiles | 0.72× |
+| `city_hall` | 0.84 × 0.96 tiles | 0.78× |
+
+Every one of them was drawn shorter than the person who works it — the
+farmhouse barely half his height, which is what got reported: *"there's a
+weird shrunk farmhouse"*. A placeable is drawn at the footprint its own
+**catalog twin** claims now (`IllustratedStructureSprite.drawn_width_tiles`
+→ `BuildingCatalog.footprint_of`), which puts the farmhouse at 2.56 × 2.10
+tiles, 1.71× a person.
+
+Read from the catalog rather than restated, because the village raises the
+very same sheets as real multi-tile buildings (see `BuildingCatalog`'s own
+`farmhouse` row: *"npc_farm_production.md's Farm, raised as a real building
+rather than a single tile"*) — so one building cannot end up two sizes
+depending on who put it down. A subject with no twin keeps one tile, which
+is right for the lone `wooden_fence` panel and is what stops this quietly
+enlarging everything with art.
+
+This is about the PICTURE, not the ground: a placed structure still occupies
+its single tile exactly as before, and nothing about placement, collision or
+the fence gate moves. A real tree already draws a canopy far wider than the
+one tile its trunk stands on. The
 underlying ground tile is unchanged (bare earth) — purely additive, and
 every placeable with no real art yet (campfire/furnace/stone_dam) keeps
 rendering exactly as before.
@@ -262,6 +319,28 @@ several small, real bending blades reusing long grass's own path-traced
 wind/walker-push shader math, using three real illustrated sheets
 (spring/summer/autumn) that turn with the world's own calendar season.
 
+✅ **The beds stand still** (2026-09-19) — reported live: *"there's now
+some weird moving char thing + soil tiles??"*, then *"the soil tiles are
+also moving with the character..."*. The Farmer's three beds were his
+scene-tree children, so they were carried around the field with him; they
+are siblings anchored at `home` now, and he frees them himself when he
+leaves. See "The Farmer" above for why the walking loop had been right
+about where the beds were all along, and only the drawing disagreed.
+
+⬜ **The Farmer still reads as a placeholder next to a villager.** He is
+drawn with `ProceduralLumberjackSprite` — a flat tan head, a brown body and
+an axe — which is the established look shared by the Lumberjack, the porter
+and the conversion workers, not a broken fallback. The VILLAGE's own
+farmers (see below) use the full `CharacterView` the player does, so the two
+kinds of farmer standing in neighbouring fields do not look like they belong
+to the same game. A real decision, not an oversight: named here rather than
+quietly restyled.
+
+✅ **A placed building is drawn at a building's size** (2026-09-19) — see
+"Real art" above. It was drawn one tile wide, which made every placeable
+shorter than the villager working it; it now uses the footprint its own
+catalog twin claims, measured rather than chosen.
+
 ## A village counterpart, 2026-09-17
 
 [village_farms.md](village_farms.md) gives the VILLAGE's own farmer and
@@ -283,13 +362,49 @@ avoiding.
   unload/reload, the same already-accepted gap the Sägewerk's own log stock
   has today — a real `construction_catchup.gd`-style closed-form integration
   is a genuine follow-up, not attempted here.
-- **Settlement-autonomous "build a farm" decision — resolved** by
+- **Settlement-autonomous "build a farm" decision — resolved, then
+  REVERSED (2026-09-20).** It was resolved by
   [milling_and_baking.md](milling_and_baking.md) (2026-09-13): wheat's
-  chain is resolver data now (`grow_wheat`, flagged `automated` so it can
-  never be hand-crafted for free — the exact exploit this question refused
-  to paper over), and a `DECLINING` settlement's own bread shortfall raises
-  farm → mill → bakery through `SettlementBuildDecision` on its own. See
-  that doc for the whole mechanism.
+  chain is resolver data (`grow_wheat`, flagged `automated` so it can never
+  be hand-crafted for free — the exact exploit this question refused to
+  paper over), and a `DECLINING` settlement's own bread shortfall raised
+  farm → mill → bakery through `SettlementBuildDecision` on its own.
+
+  What that produced, reported live with it in shot: a lone miniature
+  farmhouse dropped on the first clear cell spiralling out from the village
+  centre, a `FarmerMarker` beside it, and its three plots at fixed offsets —
+  *"it just should not spawn this weird looking npc with that 3 soil
+  tiles"*.
+
+  The Farm is a PLAYER structure. It is one tile of ground with a
+  narrow-purpose `FarmerMarker` who tends three plots, and it was designed
+  for a player who places it, fences it and staffs it. A village has its own
+  wheat mechanism and always did — [village_farms.md](village_farms.md)
+  gives the farmer and herbalist occupations real 3×2 `farmhouse` buildings
+  with real fenced fields, worked by full `NpcMarker`s with a schedule,
+  hunger and a wallet. A settlement raising the placeable was a SECOND,
+  redundant mechanism sitting beside the real one, and the redundant one is
+  what looked wrong.
+
+  So `SettlementBuildDecision` no longer raises it: see
+  `SETTLEMENT_WILL_NOT_RAISE` there. `farm` is the ROOT of the bread chain
+  (`deepest_missing_structure_id` walks bread → bakery → flour → mill →
+  wheat → farm), so declining to raise it declines the whole chain rather
+  than leaving a bakery standing waiting on flour that never comes.
+
+  **The honest cost**: a `DECLINING` village short of bread can no longer
+  build its way out of it. Its wheat comes from whichever villagers hold
+  the farmer occupation, and nothing yet connects a bread shortfall to
+  conscripting another one — `SettlementGenerator._staff_food_producers`
+  already knows how to make a farmer, it simply is not wired to shortfall.
+  That is the real follow-up this reversal leaves open, and it is a
+  narrower, better-shaped problem than dropping a player's structure in a
+  field.
+
+  `mill`, `bakery`, `sagewerk` and `storage` are placeables on this same
+  path and would look the same way if a shortfall ever reached them
+  directly; only `farm` is refused here, because only `farm` was reported
+  and only `farm` spawns a worker and plots of its own.
 - **Capacity and a second Farmer.** Three plots is a real, if arbitrary,
   cap on how much one Farmer can tend before something occasionally
   withers — a deliberate real constraint (pillar 2), not yet paired with any

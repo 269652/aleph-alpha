@@ -47,7 +47,7 @@ Reported live, in order: *"NPCs walk straight through houses, ignoring
 the hitbox"*, then *"fix creatures walking through houses too also add
 proper wayfinding / routing"*.
 
-- **Villagers walked through houses.** Fixed by `NpcBuildingGate` (see
+- **Villagers walked through houses.** Fixed by the villager wall slide (see
   [npc.md](npc.md)'s "Walls are solid to a villager too") — but only with
   axis sliding, which gets an agent *along* a wall and not *around* it.
   A villager whose doorstep sat behind its own house pressed into the
@@ -111,7 +111,7 @@ the result is followed waypoint by waypoint. That is what makes a real
 search affordable: a villager walking to the well pays for one A\* and
 then walks it.
 
-`NpcBuildingGate` stays underneath as the last line of defence. A route
+`NpcMarker._slid_along_walls` stays underneath as the last line of defence. A route
 can go stale — a house can be raised across it mid-walk — and the gate
 is what guarantees that even a stale route never puts a villager inside
 a wall.
@@ -164,7 +164,7 @@ observation, not an optimisation.
   call sites took a fast path skipping it entirely when no tree or stone
   was near, so a creature in open ground beside a house walked straight
   through however well the gate understood buildings.
-- ✅ **`BuildingWalls`** holds the predicate once for all three movers
+- ✅ **`AgentPassability`** holds the predicate once for all three movers
   (`NpcMarker`, `CreatureMarker`, `BondedCompanionMarker`), built once per
   mover in `setup()` rather than per frame. `BondedCompanionMarker` had
   been discarding its `tile_size` parameter entirely; it is kept now.
@@ -179,8 +179,8 @@ observation, not an optimisation.
   test that actually mattered: not "never inside a house", which sliding
   already passed, but **arrives at a doorstep with a house squarely in the
   way**, which sliding failed at 89px out.
-- ✅ **The gate stays underneath the router.** A route can go stale — a
-  house raised across it mid-walk — and `NpcBuildingGate` is what
+- ✅ **The slide stays underneath the router.** A route can go stale — a
+  house raised across it mid-walk — and `_slid_along_walls` is what
   guarantees a stale route still never ends inside a wall.
 - ⬜ **Creatures still do not route**, by design (see the open question
   below). A creature blocked by a long wall turns along it and wanders
@@ -208,6 +208,32 @@ observation, not an optimisation.
   buildings.
 - ⬜ **No cross-chunk routing.** A destination in an unloaded chunk cannot
   be routed to. Villagers never have one; carters eventually might.
+
+### Reconciled with a parallel implementation (2026-09-20)
+
+Two sessions fixed "agents walk through walls" independently, and this doc
+now describes the merged result rather than what either wrote alone.
+`claude/brave-euler-bcoea4` landed first, and **its wall gate is the one
+that survived**, for a reason worth keeping written down: it asks
+`piece_blocks_movement_at_global` — the same question the wall's own
+collision body is spawned from — so what stops a player, what stops a
+villager and what a route plans around can never disagree. It also knows a
+DOOR and a FLOOR are walkable pieces, where the footprint question this
+doc originally specified reported the whole building solid and would have
+meant no villager could ever plan a way indoors. It handles farm rails too.
+
+What survived from this side is what the other did not have: the **router**
+(`TileRouter`), **`AgentPassability`**, and terrain/water. Two modules
+written here (`NpcBuildingGate`, `BuildingWalls`) were deleted as
+superseded rather than kept beside their better equivalents.
+
+One real regression came out of that deletion and is worth recording,
+because a test caught it and reasoning did not: the surviving slide knew
+walls and rails but **not slope**, so removing the deleted gate removed
+the only thing enforcing terrain on the actual step. A villager whose goal
+sat behind a cliff found no route, fell back to walking straight at it,
+and climbed it. Slope now lives in the slide — the one place every step
+passes through — rather than in a second gate beside it.
 
 ## Open questions
 

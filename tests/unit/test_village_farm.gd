@@ -209,9 +209,31 @@ func test_ownership_is_decided_the_same_way_every_time():
 
 # -- what grows there ------------------------------------------------------
 
-func test_the_farmer_grows_wheat_and_the_herbalist_grows_herbs():
+## Asked directly, with a field of unrecognisable purple plants in shot:
+## *"i don't even know what the purple crops are it plants.. atm it should
+## plant only wheat which grows and gets harvested properly"*. The purple was
+## the herbalist's herb, and it was dying overnight exactly as the wheat was
+## (see FarmPlot.MIN_WATER_GRACE_SECONDS).
+##
+## So every field sows wheat for now. Deliberately a narrowing of the CROP,
+## not of who farms: the herbalist keeps the farmhouse and the field an
+## earlier ask gave them ("similar to a farmer the herbalist should build a
+## farm house and plant herbs"), and putting herbs back in their bed is this
+## one table entry.
+func test_every_field_a_village_works_sows_wheat_for_now():
 	assert_eq(VillageFarm.crop_for("farmer"), "wheat")
-	assert_eq(VillageFarm.crop_for("herbalist"), "herb")
+	assert_eq(VillageFarm.crop_for("herbalist"), "wheat")
+	for occupation in VillageFarm.CROP_BY_OCCUPATION:
+		assert_eq(
+			VillageFarm.CROP_BY_OCCUPATION[occupation], "wheat",
+			"%s sows something the player cannot recognise" % occupation
+		)
+
+
+## And the herbalist still farms at all -- the narrowing is what is sown,
+## never whether they have a field.
+func test_the_herbalist_still_has_a_field_of_their_own():
+	assert_ne(VillageFarm.crop_for("herbalist"), "")
 
 
 func test_every_other_occupation_has_no_field():
@@ -246,9 +268,10 @@ func test_a_freshly_watered_growing_plot_needs_nothing():
 
 func test_a_growing_plot_is_watered_once_it_has_used_up_its_margin():
 	var plot := _growing_plot(0.0)
-	var margin: float = (
-		plot.growth_time * FarmPlot.WATER_GRACE_FRACTION * VillageFarm.WATER_BEFORE_WITHER_FRACTION
-	)
+	# The bed's own real window, not growth_time's share of it: a bed's
+	# tolerance has a floor of one night now (FarmPlot.MIN_WATER_GRACE_
+	# SECONDS), and the margin is half of whatever that bed really has.
+	var margin: float = plot.grace_seconds() * VillageFarm.WATER_BEFORE_WITHER_FRACTION
 	plot.time_since_watered = margin - 0.01
 	assert_eq(VillageFarm.action_for(plot), "", "still inside its own margin")
 	plot.time_since_watered = margin
@@ -850,3 +873,95 @@ func test_no_rail_of_a_rectangular_field_has_to_close_two_sides_at_once():
 			if bed_set.has(cell + step):
 				orthogonal += 1
 		assert_lt(orthogonal, 2, "%s faces beds on %d sides and can only close one" % [str(cell), orthogonal])
+
+
+# -- watering is measured against the bed's REAL window ----------------------
+#
+# A bed's drought tolerance gained a floor of one night (FarmPlot.
+# MIN_WATER_GRACE_SECONDS) after a real village was measured losing thirteen
+# of eighteen beds to the dark. The farmer's own "water it before it wilts"
+# threshold has to be read off the same window, or the two describe different
+# beds: computed from growth_time alone it fires at a quarter of the growth
+# time, which for a fast crop is a fraction of the real window and sends the
+# farmer back to soak ground that is in no danger.
+
+
+func test_a_bed_is_watered_at_half_of_its_own_real_grace_window():
+	var plot := FarmPlot.new()
+	plot.plant("wheat", 7)
+	plot.time_since_watered = plot.grace_seconds() * VillageFarm.WATER_BEFORE_WITHER_FRACTION - 0.01
+	assert_eq(VillageFarm.action_for(plot), "", "not thirsty yet")
+	plot.time_since_watered = plot.grace_seconds() * VillageFarm.WATER_BEFORE_WITHER_FRACTION + 0.01
+	assert_eq(VillageFarm.action_for(plot), "water")
+
+
+## And the margin is real: a bed the farmer is sent to water is always still
+## alive when they get there, for every seed.
+func test_the_watering_call_always_comes_before_the_bed_dies():
+	for seed_value in range(1, 40):
+		var plot := FarmPlot.new()
+		plot.plant("wheat", seed_value)
+		plot.time_since_watered = plot.grace_seconds() * VillageFarm.WATER_BEFORE_WITHER_FRACTION + 0.01
+		assert_eq(VillageFarm.action_for(plot), "water", "seed %d" % seed_value)
+		assert_false(plot.is_withered(), "seed %d was already dead when it was called thirsty" % seed_value)
+
+
+# -- a field is sown before it is re-sown -----------------------------------
+#
+# Reported live with the field in shot: *"the NPC only sows 4 / 6 tiles"*.
+#
+# Measured before changing anything (tools/probe_village_farming.gd): every
+# field in the sample had exactly 6 cells, five of them worked and cycling
+# normally, and the SIXTH -- the last in the field's own order -- reported
+# "no marker, never tilled" after a full 600-second work block. Both farmers
+# in the village, the same bed each time.
+#
+# next_action scans from index 0 and returns the first plot wanting the
+# highest-priority kind. Ground nobody has tilled asks to be planted, and so
+# does a bed that was sown, ripened and harvested -- so once the earlier beds
+# start cycling, one of them is always an earlier "plant" than the ground at
+# the end, and the last bed is never broken at all. A farmer sows the FIELD.
+
+
+func test_ground_never_broken_is_sown_before_a_bed_that_has_already_carried_a_crop():
+	var harvested := _plot_in_state("empty")
+	assert_eq(
+		VillageFarm.next_action([harvested, null]), 1,
+		"a bed that has already given a crop was re-sown while bare ground sat unbroken"
+	)
+
+
+## ...whichever end of the field it sits at -- this is about which bed, not
+## about scan order.
+func test_the_unbroken_ground_wins_from_either_end_of_the_field():
+	assert_eq(VillageFarm.next_action([null, _plot_in_state("empty")]), 0)
+	assert_eq(VillageFarm.next_action([_plot_in_state("empty"), null]), 1)
+
+
+## Only among beds asking for the same thing. A ripe crop still comes first:
+## breaking new ground while wheat rots on the stalk is how a field yields
+## nothing, which is the failure the priority order exists for.
+func test_unbroken_ground_still_waits_for_a_ripe_crop_and_a_dying_bed():
+	assert_eq(
+		VillageFarm.next_action([null, _plot_in_state("ready")]), 1,
+		"harvest still beats breaking new ground"
+	)
+	assert_eq(
+		VillageFarm.next_action([null, _growing_plot(9999.0)]), 1,
+		"saving a dying bed still beats breaking new ground"
+	)
+
+
+## The whole field really does get broken, not just the first bed of it:
+## every cell of a fresh field is planted before any of them is planted
+## twice.
+func test_every_bed_of_a_fresh_field_is_broken_before_any_is_re_sown():
+	var plots: Array = [null, null, null, null, null, null]
+	for round in plots.size():
+		var index: int = VillageFarm.next_action(plots)
+		assert_gte(index, 0, "a field with bare ground in it always has work")
+		assert_null(plots[index], "bed %d was worked twice before the field was sown" % index)
+		# What tilling it does: the bed exists now, bare and waiting.
+		plots[index] = _plot_in_state("empty")
+	for plot in plots:
+		assert_not_null(plot, "a bed was left unbroken after a full pass of the field")

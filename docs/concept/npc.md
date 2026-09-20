@@ -268,8 +268,8 @@ body is ever consulted on its behalf and no collision can possibly occur.
 Nothing about the building needed fixing; the villager needed to be asked
 to look.
 
-`NpcBuildingGate` (`src/gameplay/npc_building_gate.gd`) is that ask, and
-it is deliberately the same **ask-first** shape `CreatureMovementGate`
+`NpcMarker._slid_along_walls` is that ask, and it is deliberately the
+same **ask-first** shape `CreatureMovementGate`
 already uses for trees and stones: pure math over plain data, no nodes,
 the caller supplying the facts. It is tile-based rather than
 radius-based, because a building already knows its own footprint cell by
@@ -299,21 +299,22 @@ every real house in the catalog by
 
 ### Status
 
-- ✅ `NpcBuildingGate`, 12 tests, including a sweep asserting that no
-  reachable step from any tile around a house ever lands inside it.
+- ✅ The wall slide, with a sweep asserting that no reachable step from
+  any tile around a house ever lands inside it. It refuses walls, farm
+  rails and ground too steep to climb.
 - ✅ Wired into `NpcMarker`'s one movement line, with the blocked-tile
   predicate built **once** in `setup()` rather than per frame — it is
   called up to three times per villager per frame, and a fresh lambda each
   time is exactly the per-frame churn the creature-blocker cache already
-  exists to avoid. Backed by a new `EarthChunkManager.has_building_at_global`,
-  the allocation-free half of `building_at_global` (which resolves the
-  owning origin and then `duplicate()`s the whole record).
+  exists to avoid. Backed by `EarthChunkManager.piece_blocks_movement_at_global` -- the same
+  question the wall's own collision body is spawned from, so a door and a
+  floor stay walkable.
 - ✅ **Pathfinding, since closed.** The gap this list originally named —
   sliding gets a villager *along* a wall but never *around* one — is
   fixed: `TileRouter` gives villagers a real A\* route and `NpcMarker`
   follows it, with this gate still underneath as the last line of defence
   against a stale route. See [navigation.md](navigation.md).
-- ✅ **Creatures see buildings too**, via the same shared `BuildingWalls`
+- ✅ **Creatures see buildings too**, via the same shared `AgentPassability`
   predicate reaching `CreatureMovementGate`. Also in
   [navigation.md](navigation.md).
 - ⬜ Only buildings are solid to a villager. Trees and stones, which

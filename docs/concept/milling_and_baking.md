@@ -54,10 +54,41 @@ in live play, for reasons this doc names and removes.
 5. **A settlement raises what it lacks, in the order the chain dictates,
    and stops.** The food need is a real shortfall fed into the existing
    build decision; the resolver names the deepest missing producer; the
-   settlement builds one at a time across chunk loads (farm, then mill,
-   then bakery); once bread flows and the settlement is no longer
-   `DECLINING`, the need is gone and nothing else is queued. No cap
-   constant, no "one farm per village" rule — the signal itself clears.
+   settlement builds one at a time across chunk loads; once bread flows and
+   the settlement is no longer `DECLINING`, the need is gone and nothing
+   else is queued. No cap constant, no "one farm per village" rule — the
+   signal itself clears.
+
+   **Amended 2026-09-20: the settlement raises every link EXCEPT the farm.**
+   A village never raises the `farm` placeable
+   (`SettlementBuildDecision.SETTLEMENT_WILL_NOT_RAISE`). Pillar 1's "that
+   is what makes *the village needs a farm* an emergent need" still holds as
+   a description of the resolver's walk — the need is still derived, not
+   flagged — but the village's answer to the farm link is now "not mine to
+   build" rather than a construction project.
+
+   Reported live with one standing in a field: *"it just should not spawn
+   this weird looking npc with that 3 soil tiles"*. The Farm is the PLAYER's
+   structure — one tile of ground, a narrow-purpose `FarmerMarker`, three
+   plots at fixed offsets — and a village already grows wheat through real
+   3×2 `farmhouse` buildings and real fenced fields
+   ([village_farms.md](village_farms.md)). Raising the placeable stood a
+   second, redundant wheat mechanism beside the real one. See
+   [npc_farm_production.md](npc_farm_production.md), where this doc's own
+   resolution of that open question is recorded as reversed.
+
+   Because `farm` is the ROOT of the walk, refusing it refuses the chain
+   below it too, which is the correct reading of pillar 1 rather than an
+   exception to it: a Bakery raised with no Mill and no wheat is exactly the
+   "stands waiting for flour that never comes" this doc was written to
+   avoid. Give a village a farm — the player's, or one they planned — and it
+   raises the Mill and then the Bakery on its own, unchanged.
+
+   **The cost, stated plainly**: a `DECLINING` village short of bread can no
+   longer build its way out of it unaided. `npc_farm_production.md` carries
+   the follow-up that would close it (wiring a bread shortfall to
+   conscripting another farmer, which `SettlementGenerator._staff_food_
+   producers` already knows how to do).
 6. **Tuned values are tested functions, not comments.** Every ratio, rate
    and cost below is pinned by a calibration test at implementation time.
 

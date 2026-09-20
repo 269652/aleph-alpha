@@ -18,12 +18,24 @@ func before_each():
 	add_child_autofree(panel)
 
 
+## Every real need at one reading -- the fixture's needs dict, derived so
+## it cannot go stale when a need is added.
+func _every_need_at(value: float) -> Dictionary:
+	var needs := {}
+	for need_id in HouseholdWellbeing.NEED_IDS:
+		needs[need_id] = value
+	return needs
+
+
 func _home_report(overrides: Dictionary = {}) -> Dictionary:
 	var report := {
 		"building_id": "house_medium", "capacity": 2, "is_home": true,
 		"household_id": "household:npc:7", "resident_name": "Mara Fenn",
 		"resident_occupation": "herbalist", "wallet_balance": 14,
-		"needs": {"food": 0.9, "shelter": 1.0, "income": 0.35, "community": 0.5},
+		# Built from HouseholdWellbeing's OWN need list rather than typed
+		# out: a hand-written four kept passing while the model had five,
+		# and the row the panel was failing to draw was invisible here.
+		"needs": _every_need_at(0.5),
 		"happiness": 0.72, "productivity": 0.64, "settlement_productivity": 0.7,
 	}
 	for key in overrides:
@@ -263,3 +275,175 @@ func test_an_empty_cart_still_opens_and_says_it_is_empty():
 	assert_true(panel.is_open())
 	assert_true(panel.inventory_rows().is_empty())
 	assert_false(panel.inventory_is_full())
+
+
+# -- the Needs tab (docs/concept/village_estates.md mechanism 8) ------------
+#
+# Asked directly: *"there should be sth. like a graph with every needs that
+# can be resolved"*. VillageNeedsReport builds that graph; this is where a
+# player sees it, beside Household and Inventory, drawn from the report and
+# reaching for nothing of its own -- the same contract the other two keep.
+
+
+func _needs_rows() -> Array:
+	return [
+		{
+			"good": "wood", "label": "Wood", "satisfaction": 0.2,
+			"estates": ["kossaet"], "remedy": "sawmill", "resolvable": true, "next": true,
+		},
+		{
+			"good": "kind:food", "label": "Food", "satisfaction": 0.6,
+			"estates": ["kossaet"], "remedy": "farmhouse", "resolvable": true, "next": false,
+		},
+		{
+			"good": "candle", "label": "Candle", "satisfaction": 0.9,
+			"estates": ["buerger"], "remedy": "", "resolvable": false, "next": false,
+		},
+	]
+
+
+func test_a_village_with_needs_offers_a_needs_tab():
+	panel.show_report(_home_report({"village_needs": _needs_rows()}))
+	assert_true(panel.has_needs_tab())
+
+
+func test_a_building_with_no_needs_reading_offers_no_needs_tab():
+	panel.show_report(_home_report({}))
+	assert_false(panel.has_needs_tab(), "a village nobody has assessed has no graph to show")
+
+
+## Every row the report carried is a row on the tab, in the report's own
+## order -- the panel never re-sorts what it was handed.
+func test_the_tab_lists_every_need_in_the_order_it_was_given():
+	panel.show_report(_home_report({"village_needs": _needs_rows()}))
+	var listed: Array = panel.needs_rows()
+	assert_eq(listed.size(), 3)
+	assert_eq(String(listed[0]["good"]), "wood")
+	assert_eq(String(listed[1]["good"]), "kind:food")
+	assert_eq(String(listed[2]["good"]), "candle")
+
+
+## A row reads as a need, a fullness and the answer to it.
+func test_a_row_names_the_need_its_supply_and_what_would_answer_it():
+	panel.show_report(_home_report({"village_needs": _needs_rows()}))
+	var first: Dictionary = panel.needs_rows()[0]
+	assert_true(String(first["text"]).contains("Wood"), first["text"])
+	assert_true(String(first["text"]).contains("20"), "the fullness, as a percentage: %s" % first["text"])
+	assert_true(String(first["text"]).contains("Sawmill"), "what would answer it: %s" % first["text"])
+
+
+## A need nothing can build says so plainly rather than pointing at the
+## nearest-sounding building.
+func test_a_need_nothing_can_build_says_so():
+	panel.show_report(_home_report({"village_needs": _needs_rows()}))
+	var last: Dictionary = panel.needs_rows()[2]
+	assert_false(bool(last["resolvable"]))
+	assert_true(
+		String(last["text"]).to_lower().contains("nothing here"),
+		"an unbuildable need should say so: %s" % last["text"]
+	)
+
+
+## The one the village is actually about to raise is marked, so a player
+## sees the argument being settled rather than inferring it.
+func test_the_need_being_answered_right_now_is_marked():
+	panel.show_report(_home_report({"village_needs": _needs_rows()}))
+	var rows: Array = panel.needs_rows()
+	assert_true(bool(rows[0]["next"]))
+	assert_false(bool(rows[1]["next"]))
+
+
+## Opening still lands on Household: who lives here stays the first answer.
+func test_the_panel_still_opens_on_household():
+	panel.show_report(_home_report({"village_needs": _needs_rows()}))
+	assert_eq(panel.selected_tab(), "household")
+
+
+## Every need HouseholdWellbeing reports has a label a player can read --
+## otherwise a new need shows up on the panel as a bare id, or as nothing
+## at all.
+func test_every_need_has_a_human_label():
+	for need_id in HouseholdWellbeing.NEED_IDS:
+		assert_true(
+			HousePanel.NEED_LABELS.has(need_id),
+			"%s has no label a player could read" % need_id
+		)
+		assert_ne(String(HousePanel.NEED_LABELS[need_id]), need_id, "%s is shown by its id" % need_id)
+
+
+func test_the_labels_name_nothing_that_is_not_a_real_need():
+	for need_id in HousePanel.NEED_LABELS:
+		assert_true(
+			HouseholdWellbeing.NEED_IDS.has(need_id),
+			"%s is labelled and is not a need" % need_id
+		)
+
+
+# -- the settlement's charter, on the building a player clicks ------------
+
+## docs/concept/settlement_charter.md mechanism 5. A player who wants a
+## mage guild stands in the village, clicks the hall, and reads the errand.
+const SettlementTier = preload("res://src/emergence/settlement_tier.gd")
+
+
+func _commons(charter: Dictionary) -> Dictionary:
+	return {
+		"is_home": false, "building_id": "city_hall", "settlement_productivity": 0.7,
+		"charter": charter,
+	}
+
+
+func test_a_commons_names_the_tier_its_settlement_holds():
+	panel.show_report(_commons({
+		"tier": SettlementTier.TOWN, "next_tier": SettlementTier.CITY,
+		"short": {"households": 2, "institutions": 1, "production_diversity": 0},
+		"locked": ["mage_guild"],
+	}))
+	assert_string_contains(panel.charter_text().to_lower(), "town")
+
+
+## The errand itself: what it would take to be the next thing up, in the
+## dimensions that are actually short.
+func test_a_town_short_of_a_city_reads_the_errand_off_the_hall():
+	panel.show_report(_commons({
+		"tier": SettlementTier.TOWN, "next_tier": SettlementTier.CITY,
+		"short": {"households": 2, "institutions": 1, "production_diversity": 0},
+		"locked": ["mage_guild"],
+	}))
+	var text: String = panel.charter_text().to_lower()
+	assert_string_contains(text, "city")
+	assert_string_contains(text, "2")
+	assert_string_contains(text, "1")
+
+
+## A dimension already cleared is not listed -- a readout that says
+## "0 more trades" is noise, and noise is what stops a player reading it.
+func test_a_dimension_already_cleared_is_not_listed():
+	panel.show_report(_commons({
+		"tier": SettlementTier.TOWN, "next_tier": SettlementTier.CITY,
+		"short": {"households": 2, "institutions": 0, "production_diversity": 0},
+		"locked": ["mage_guild"],
+	}))
+	assert_false(panel.charter_text().contains("0"), panel.charter_text())
+
+
+## A city at the top of the ladder has no errand and says so, rather than
+## leaving a blank line where an errand used to be.
+func test_a_city_at_the_top_says_so_rather_than_nothing():
+	panel.show_report(_commons({
+		"tier": SettlementTier.CITY, "next_tier": "", "short": {}, "locked": [],
+	}))
+	assert_string_contains(panel.charter_text().to_lower(), "city")
+	assert_false(panel.charter_text().is_empty())
+
+
+## A HOME is about its household, not about the settlement's charter --
+## the charter belongs on the commons a village shares.
+func test_a_home_shows_no_charter():
+	panel.show_report(_home_report())
+	assert_eq(panel.charter_text(), "")
+
+
+func test_a_commons_with_no_charter_reported_shows_none():
+	panel.show_report(_commons({}))
+	assert_eq(panel.charter_text(), "")

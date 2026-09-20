@@ -15,8 +15,8 @@ const NpcEconomy = preload("res://src/world/npc_economy.gd")
 const NpcInstructionEvaluator = preload("res://src/world/npc_instruction_evaluator.gd")
 const CharacterView = preload("res://scenes/character_view.gd")
 const CreaturePerception = preload("res://src/gameplay/creature_perception.gd")
-const NpcBuildingGate = preload("res://src/gameplay/npc_building_gate.gd")
 const AgentPassability = preload("res://src/gameplay/agent_passability.gd")
+const TerrainPassability = preload("res://src/gameplay/terrain_passability.gd")
 const TileRouter = preload("res://src/gameplay/tile_router.gd")
 const ForagerBehavior = preload("res://src/gameplay/forager_behavior.gd")
 const VillageFarm = preload("res://src/gameplay/village_farm.gd")
@@ -27,6 +27,7 @@ const NpcCondition = preload("res://src/world/npc_condition.gd")
 const VillagerBehavior = preload("res://src/gameplay/villager_behavior.gd")
 const VillageSawmill = preload("res://src/gameplay/village_sawmill.gd")
 const VillageCart = preload("res://src/gameplay/village_cart.gd")
+const CartLoad = preload("res://src/gameplay/cart_load.gd")
 const CartMarker = preload("res://src/rendering/cart_marker.gd")
 const LogisticsBehavior = preload("res://src/gameplay/logistics_behavior.gd")
 const LumberjackBehavior = preload("res://src/gameplay/lumberjack_behavior.gd")
@@ -103,7 +104,7 @@ var _world = null
 var _tile_size := 16
 
 ## Which tiles this villager may not step into -- building footprints (see
-## NpcBuildingGate). Invalid until setup() binds a world that can answer,
+## AgentPassability). Invalid until setup() binds a world that can answer,
 ## and left invalid for one that cannot, so an unbound marker walks exactly
 ## as it always did.
 var _wall_tiles := Callable()
@@ -123,7 +124,7 @@ const ROUTE_RECOMPUTE_SECONDS := 0.5
 ## Tiles still to walk (TileRouter), the destination they were computed
 ## for, and time since that computation. Empty route means "no detour
 ## needed or none found" -- either way the villager walks straight at its
-## target and NpcBuildingGate keeps it out of walls.
+## target and _slid_along_walls keeps it out of walls.
 var _route: Array = []
 var _route_goal_tile := Vector2i(2147483647, 2147483647)
 var _route_age := 0.0
@@ -333,6 +334,11 @@ var _on_real_field := false
 ## be two places to forget to clear.
 var _carried_in_since_work := false
 
+## Whether the store's round is in flight right now: a carter on the clock,
+## with the shaft in their hands. Read by is_on_real_work, exactly as
+## _on_real_field and _on_real_work_timber are.
+var _on_real_round := false
+
 ## How close counts as standing on a plot: half a tile, so a villager on
 ## the tile is working it rather than walking the last few pixels onto its
 ## exact centre. In tiles, against the real tile size setup() was given,
@@ -399,7 +405,7 @@ func setup(world, tile_size: int) -> void:
 	_world = world
 	_tile_size = tile_size
 	# Built ONCE here, not per frame: this predicate is called up to three
-	# times per villager per frame by NpcBuildingGate, and allocating a
+	# times per villager per frame by the router, and allocating a
 	# fresh lambda each time is exactly the kind of per-frame churn the
 	# creature-blocker cache already exists to avoid. Invalid when the
 	# world cannot answer, which the gate reads as "nothing is solid" --
@@ -607,21 +613,26 @@ func _process(delta: float) -> void:
 	var running := _is_chasing_at_a_run(quarry_target)
 	condition.advance(delta, economy.needs.hunger if economy != null else 0.0, running)
 	var before := position
-	# Ask before stepping, rather than discovering afterwards. A building's
-	# StaticBody2D stops the player because the player is a real physics
-	# body; this marker is a Sprite2D assigning `position` directly, so a
-	# wall means nothing to it unless it looks -- reported live: "NPCs walk
-	# straight through houses, ignoring the hitbox".
-	# Route AROUND buildings, not merely along them. The gate below is a
-	# local reflex and cannot detour: a villager whose doorstep sits behind
-	# its own house has nowhere to slide to and would press into the wall
-	# forever (reported live: "add proper wayfinding / routing").
+	# Two layers, and the order matters.
+	#
+	# ROUTE first: the slide below is a local reflex and cannot detour, so
+	# a villager whose doorstep sits behind its own house has nowhere to
+	# slide to and would press into the wall forever ("add proper
+	# wayfinding / routing"). _steer_toward returns the next waypoint of a
+	# real route when one is needed, or `target` itself when the way is
+	# clear.
+	#
+	# SLIDE second, and it stays underneath rather than being replaced: a
+	# route can go stale mid-walk (a house raised across it), and
+	# _slid_along_walls is what guarantees a stale route still never ends
+	# inside a wall. It also knows about farm rails, which the router does
+	# not, and it asks the same question the wall's own collision body is
+	# spawned from -- so a door and a floor stay walkable and going indoors
+	# is untouched.
 	var steer := _steer_toward(target, delta)
-	var desired := position.move_toward(steer, (RUN_SPEED if running else WALK_SPEED) * delta)
-	# The gate stays UNDERNEATH the router rather than being replaced by it:
-	# a route can go stale mid-walk (a house raised across it), and this is
-	# what guarantees a stale route still never ends inside a wall.
-	position = NpcBuildingGate.resolve_step(position, desired, _tile_size, _wall_tiles)
+	position = _slid_along_walls(
+		position, position.move_toward(steer, (RUN_SPEED if running else WALK_SPEED) * delta)
+	)
 	_update_animation(position - before)
 	# Hidden once actually arrived home on a "home"-tagged entry -- a house
 	# is now a real whole-building entity (docs/concept/building.md
@@ -910,7 +921,7 @@ var _on_real_work_timber := false
 ## the regional drip, precisely because "has a job on" is not the same
 ## question as "is walking somewhere".
 func is_on_real_work() -> bool:
-	return _on_real_quarry or _on_real_field or _on_real_work_timber
+	return _on_real_quarry or _on_real_field or _on_real_work_timber or _on_real_round
 
 
 ## Whether this villager is mid-conversation right now -- standing still,
@@ -1068,6 +1079,98 @@ var _at_home := false
 ## after the marker moved, so every villager's walk animation sat frozen in
 ## IDLE despite visibly walking (reported: "NPCs don't have walk or swim
 ## animation").
+## `to`, with any part of the step that walks into a real wall taken out of
+## it -- and nothing else changed.
+##
+## Reported live: "houses should also block NPCs and animals". An NpcMarker
+## is a Sprite2D that moves by one position.move_toward per frame, so the
+## StaticBody2D on a wall (EarthChunkManager._spawn_piece_collision) has
+## never had the slightest effect on one and villagers walked through their
+## own houses.
+##
+## It SLIDES rather than stopping dead, which is both what the same
+## collision does to the player (move_and_slide) and what this marker
+## actually needs: there is no pathfinding here, only a straight line at
+## the target, so a villager who stopped the instant they touched a wall
+## would stand against it for good -- and their own front door is reached
+## by walking AT the house. Blocked head-on, they keep whichever single
+## axis of the step is open, which carries them along the wall to the door.
+## Boxed in on both, they stay put, exactly as _step's own "nowhere to go"
+## already means stand still.
+##
+## Asks the world the same question the wall's own collision body is
+## spawned from, so what stops a player and what stops a villager can never
+## disagree. A DOOR and a FLOOR are walkable pieces, so going indoors is
+## untouched.
+##
+## GROUND TOO STEEP TO CLIMB is refused here too. The router plans around a
+## cliff, but a route is only a plan: when none exists (the goal is behind
+## the cliff, or the budget ran out) the villager falls back to walking
+## straight at its target, and without this check that fallback walked up
+## the cliff. Caught by test_a_villager_never_climbs_a_cliff during the
+## reconciliation with main -- the slide is the ONE place every step
+## passes through, so terrain belongs in it rather than in a second gate
+## beside it.
+func _slid_along_walls(from: Vector2, to: Vector2) -> Vector2:
+	if _world == null or from == to:
+		return to
+	if (
+		not _world.has_method("piece_blocks_movement_at_global")
+		and not _world.has_method("fence_blocks_step_global")
+		and not _world.has_method("slope_at_global")
+	):
+		return to
+	if not _blocked_step(from, to):
+		return to
+	var along_x := Vector2(to.x, from.y)
+	if not is_equal_approx(to.x, from.x) and not _blocked_step(from, along_x):
+		return along_x
+	var along_y := Vector2(from.x, to.y)
+	if not is_equal_approx(to.y, from.y) and not _blocked_step(from, along_y):
+		return along_y
+	return from
+
+
+## Whether stepping from `from` to `point` is refused -- by a wall standing
+## ON the destination, or by a farm rail standing on the LINE between the
+## two (docs/concept/village_farms.md, "The rail stands on the inner
+## edge"). The two are different questions on purpose: a wall is a tile you
+## cannot be in, a rail is an edge you cannot cross, and the ring round a
+## field stays ordinary ground a villager may walk along.
+func _blocked_step(from: Vector2, point: Vector2) -> bool:
+	var tile := Vector2i(floori(point.x / _tile_size), floori(point.y / _tile_size))
+	if _world.has_method("slope_at_global") and not TerrainPassability.is_passable(
+		_world.slope_at_global(tile.x, tile.y)
+	):
+		return true
+	if (
+		_world.has_method("piece_blocks_movement_at_global")
+		and _world.piece_blocks_movement_at_global(tile.x, tile.y)
+	):
+		return true
+	if not _world.has_method("fence_blocks_step_global"):
+		return false
+	# A field's rails stand on its INNER edge (see "The rail stands on the
+	# inner edge"), so the one villager they shut out is the farmer whose
+	# beds they enclose. Reported live: "The farmer doesn't farm anymore" --
+	# measured on a real village, two of three villagers with a field worked
+	# no bed at all, frozen in APPROACHING nine pixels from their own soil,
+	# refused the last step into it.
+	#
+	# A gate exists for this (docs/concept/village_farms.md, "The gate"),
+	# but reaching one needs pathfinding a Sprite2D walking a single
+	# move_toward per frame does not have -- the commit that gave rails
+	# their hitbox said so itself: "boxed in on both, they stay put".
+	#
+	# So the worker may cross into ground they themselves work, and nothing
+	# else changes: every other rail still stops them, a neighbour's
+	# included, and no other villager is exempt from any rail.
+	if field_cells.has(tile):
+		return false
+	var here := Vector2i(floori(from.x / _tile_size), floori(from.y / _tile_size))
+	return _world.fence_blocks_step_global(here.x, here.y, tile.x, tile.y)
+
+
 func _update_animation(moved: Vector2) -> void:
 	if _character_view == null:
 		return
@@ -1669,8 +1772,10 @@ func _field_reach() -> float:
 ## still holding whatever is in it, which is the feature rather than a gap.
 func _step_cart(delta: float, is_working: bool):
 	if not VillageCart.walks_the_round(identity.occupation) or store_cell == NO_STORE:
+		_on_real_round = false
 		return null
 	if _world == null or not _world.has_method("structure_stock_contents_at"):
+		_on_real_round = false
 		return null
 	if _carter == null:
 		_carter = LogisticsBehavior.new()
@@ -1681,8 +1786,16 @@ func _step_cart(delta: float, is_working: bool):
 		# (docs/concept/village_warehouse.md, Mechanisms 5 and 6).
 		if cart != null and is_instance_valid(cart):
 			cart.let_go(self)
-		if _carter.phase != LogisticsBehavior.Phase.SEEKING:
-			_carter.abort()
+		# The LEG is kept, though, where it used to be thrown away. A village
+		# is wider than a work block is long: measured against a real one, a
+		# carter who restarted at SEEKING every morning spent each block
+		# walking back out to a shelf they had nearly reached the evening
+		# before, and one or two deliveries arrived in ten simulated days
+		# (tools/probe_village_store_round.gd). A carter picks up where they
+		# left off, which is the only way a round longer than a block ever
+		# finishes. Nothing moves while they are off: no target is returned,
+		# the phase timers are not advanced, and the schedule has them.
+		_on_real_round = false
 		return null
 	# A carter who has lost the shaft -- the player took it -- drops the
 	# round rather than walking it empty-handed. Nothing is emptied into a
@@ -1690,10 +1803,34 @@ func _step_cart(delta: float, is_working: bool):
 	if not have_the_shaft:
 		if _carter.phase != LogisticsBehavior.Phase.SEEKING:
 			_carter.abort()
+		_on_real_round = false
 		return null
+	# A carter on the clock with the shaft in their hands has real work,
+	# whether or not this instant is a walking one -- the same rule, for the
+	# same reason, that a farmer with a farmhouse already has (see
+	# _on_real_field). Reported in play with the warehouse readout open at
+	# "Stored: 0 / 240": *"The porter is moving products (beams, logs) from
+	# the sawmill to the warehouse but unloading doesn't put anything into
+	# warehouse.. storage is still 0 and goods just vanish"*. Nothing
+	# vanished -- the goods were on the wagon. A carter mid-round counted as
+	# free to answer a need, and thirst comes up about every seventeen
+	# seconds, so a round any longer than that was steered to the well
+	# instead of to the store, over and over, with the beams riding along.
+	_on_real_round = true
 
 	match _carter.phase:
 		LogisticsBehavior.Phase.SEEKING:
+			# A wagon with something already on it is a delivery half done,
+			# not a fresh round: finish THAT before fetching anything else.
+			# The round is dropped at the end of every work block (above), so
+			# without this a carter came back on the clock, walked to another
+			# shelf and piled more onto a wagon that had never been emptied.
+			# Measured against a real village, that left a FULL wagon -- 24
+			# beams -- still aboard after ten simulated days, with one or two
+			# deliveries arriving in all that time
+			# (tools/probe_village_store_round.gd).
+			if _wagon_is_loaded() and _carter.resume_carrying():
+				return _cell_centre(store_cell)
 			_carter.advance(delta)
 			if not _carter.can_commit():
 				return null
@@ -1720,6 +1857,15 @@ func _step_cart(delta: float, is_working: bool):
 				_unload_the_cart()
 			return position
 	return null
+
+
+## Whether this carter's own wagon still has something on it -- the question
+## that decides whether a dropped round is resumed or a new one begun (see
+## _step_cart's SEEKING leg).
+func _wagon_is_loaded() -> bool:
+	if cart == null or not is_instance_valid(cart):
+		return false
+	return CartLoad.total(cart.stock) > 0
 
 
 ## Takes the shaft if the wagon is free, and reports whether this villager

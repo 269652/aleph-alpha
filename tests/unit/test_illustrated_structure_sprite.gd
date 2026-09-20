@@ -10,6 +10,7 @@ extends GutTest
 ## archaeology itself.
 
 const IllustratedStructureSprite = preload("res://src/rendering/illustrated_structure_sprite.gd")
+const BuildingCatalog = preload("res://src/gameplay/building_catalog.gd")
 
 const VillageFarm = preload("res://src/gameplay/village_farm.gd")
 
@@ -19,6 +20,9 @@ const VillageFarm = preload("res://src/gameplay/village_farm.gd")
 const _FENCE_SUBJECTS := [
 	"farm_fence_north", "farm_fence_south", "farm_fence_east", "farm_fence_west",
 ]
+
+const StoneSize = preload("res://src/world/stone_size.gd")
+const TerrainRenderer = preload("res://src/rendering/terrain_renderer.gd")
 
 const _ALL_SUBJECTS := [
 	"farm", "sagewerk", "storage", "wooden_fence", "city_hall",
@@ -121,12 +125,48 @@ func test_footprint_texture_is_null_for_an_unknown_subject():
 ## is deliberately not one of them any more: it scales by its own run so
 ## consecutive rails meet, which makes its band wider than the tile it
 ## stands on (see "and a run is scaled by its RUN" below).
-func test_footprint_texture_width_matches_the_tile_size():
+##
+## **Reversed 2026-09-19**, and the old rule is worth stating because the
+## concept doc specified it in as many words ("width matches the tile"): a
+## building was drawn exactly one tile wide, which made it SMALLER THAN THE
+## PERSON WHO WORKS IT. Reported live: "there's a weird shrunk farmhouse".
+## A building is drawn at the footprint its own catalog twin claims now --
+## the same art, at the same size, whether the village raised it as a real
+## multi-tile building or the player placed it on one tile.
+func test_a_building_is_drawn_at_the_footprint_its_own_catalog_twin_claims():
 	for subject in _ALL_SUBJECTS:
 		if VillageFarm.is_fence_tile(subject):
 			continue
 		var texture := sprite.footprint_texture(subject, 16)
-		assert_eq(texture.get_width(), 16, "%s footprint width should match tile_size" % subject)
+		assert_eq(
+			texture.get_width(), 16 * IllustratedStructureSprite.drawn_width_tiles(subject),
+			"%s should be drawn at its own footprint width" % subject
+		)
+
+
+## The property the report was actually about, stated the way a player sees
+## it: a building you can walk into is taller than you are. Measured off the
+## real ART inside the cell (_art_rect), never the cell, for the same reason
+## the rails are -- these sheets draw every subject with real margin around
+## it, so the cell's own size is not the building's.
+func test_a_placed_building_is_drawn_taller_than_the_person_who_works_it():
+	for subject in ["farm", "sagewerk", "storage", "city_hall"]:
+		var source := sprite.idle_texture(subject).get_image()
+		var art: Rect2i = sprite._art_rect(subject, source)
+		var texture := sprite.footprint_texture(subject, TerrainRenderer.TILE_SIZE)
+		var scale := float(texture.get_width()) / float(source.get_width())
+		assert_gt(
+			float(art.size.y) * scale, StoneSize.PLAYER_WORLD_HEIGHT_PX,
+			"%s is drawn shorter than the villager standing in it" % subject
+		)
+
+
+## A lone fence panel has no catalog twin and genuinely IS one tile of
+## fence, so the old rule is still the right answer for it -- this is what
+## keeps the change above from quietly enlarging everything with art.
+func test_a_standalone_fence_panel_is_still_drawn_one_tile_wide():
+	assert_eq(IllustratedStructureSprite.drawn_width_tiles("wooden_fence"), 1)
+	assert_eq(sprite.footprint_texture("wooden_fence", 16).get_width(), 16)
 
 
 ## No fixed pitch: each of these sheets is cut on the rows its own artist
@@ -231,16 +271,39 @@ func test_sheet_frame_image_is_null_for_a_missing_sheet_or_an_out_of_range_cell(
 	assert_null(sprite.sheet_frame_image(_CONTRACT_SHEET, _COLUMNS, _ROWS, 0, _COLUMNS), "column past the sheet")
 
 
-## A building standing on a 3-tile-wide footprint is drawn 3 tiles wide --
-## height by the same factor, so a tall building stays tall (the same
-## footprint anchor footprint_texture already keeps for a 1-tile placeable).
-func test_footprint_frame_texture_scales_to_the_footprint_width():
+## A building standing on a 3-tile-wide footprint is drawn INSIDE those
+## three tiles, leaving BuildingCatalog.PLOT_MARGIN_SHARE of air on each
+## side -- height by the same factor, so a tall building stays tall (the
+## same footprint anchor footprint_texture already keeps for a 1-tile
+## placeable).
+##
+## It used to be drawn at exactly the plot width, which is what had two
+## houses on neighbouring plots touching at the pixel; see
+## BuildingCatalog.PLOT_MARGIN_SHARE for the report and the measurement.
+func test_footprint_frame_texture_draws_inside_the_footprint_width():
 	var texture := sprite.footprint_frame_texture(_CONTRACT_SHEET, _COLUMNS, _ROWS, 2, 0, 16, 3)
 	assert_not_null(texture)
-	assert_eq(texture.get_width(), 48)
+	var expected_width := int(round(16.0 * BuildingCatalog.drawn_plot_width_tiles(3)))
+	assert_eq(texture.get_width(), expected_width)
+	assert_lt(texture.get_width(), 48, "the building fills its whole plot")
 	var frame := sprite.sheet_frame_image(_CONTRACT_SHEET, _COLUMNS, _ROWS, 2, 0)
-	var expected_height := int(round(48.0 * float(frame.get_height()) / float(frame.get_width())))
+	var expected_height := int(round(
+		float(expected_width) * float(frame.get_height()) / float(frame.get_width())
+	))
 	assert_eq(texture.get_height(), expected_height)
+
+
+## Shrinking, never squashing: the picture keeps its own proportions, so a
+## cottage does not become a bungalow on the way into its plot.
+func test_drawing_inside_the_plot_keeps_the_pictures_own_proportions():
+	var frame := sprite.sheet_frame_image(_CONTRACT_SHEET, _COLUMNS, _ROWS, 2, 0)
+	var texture := sprite.footprint_frame_texture(_CONTRACT_SHEET, _COLUMNS, _ROWS, 2, 0, 16, 3)
+	assert_almost_eq(
+		float(texture.get_width()) / float(texture.get_height()),
+		float(frame.get_width()) / float(frame.get_height()),
+		0.02
+	)
+
 
 
 func test_footprint_frame_texture_is_null_for_a_missing_sheet():
@@ -297,10 +360,18 @@ func test_a_divider_sheets_frames_are_cached_per_cell():
 	assert_true(first == second, "the same cell must not be re-sliced every time it is asked for")
 
 
+## A divider sheet is scaled to a real footprint like any other -- drawn
+## INSIDE the plot since BuildingCatalog.PLOT_MARGIN_SHARE, which is what
+## this test was really guarding: that the scaling happens at all and lands
+## on the plot, not the exact pixel it used to land on.
 func test_a_divider_sheet_scales_to_a_real_footprint():
 	var texture: ImageTexture = sprite.footprint_frame_texture(_LIFECYCLE_SHEET, 8, 10, 3, 2, 32, 2, "dividers")
 	assert_not_null(texture)
-	assert_eq(texture.get_width(), 64, "two tiles wide at 32 art px per tile")
+	assert_eq(
+		texture.get_width(),
+		int(round(32.0 * BuildingCatalog.drawn_plot_width_tiles(2))),
+		"inside a two-tile plot at 32 art px per tile"
+	)
 
 
 # -- the farm fence: one sheet, four orientation columns -------------------
@@ -521,11 +592,17 @@ func test_scaling_by_the_run_keeps_every_rail_flush_against_its_own_edge():
 	assert_almost_eq(_placed_wood_rect("farm_fence_west").end.x, float(_TILE), _EDGE_TOLERANCE)
 
 
-## Everything that is a whole building still scales by its own width, the
-## way it always has.
-func test_a_building_still_scales_its_width_to_the_tile():
+## Everything that is a whole building still scales by its own WIDTH, not by
+## a run -- which is what this guard is for, and is unchanged. The width it
+## scales to is its catalog footprint rather than a single tile since
+## 2026-09-19 (see test_a_building_is_drawn_at_the_footprint_its_own_catalog_
+## twin_claims: one tile made a farmhouse shorter than its own farmer).
+func test_a_building_still_scales_by_its_width_not_by_a_run():
 	for subject in ["farm", "sagewerk", "storage", "wooden_fence", "city_hall"]:
-		assert_eq(sprite.footprint_texture(subject, _TILE).get_width(), _TILE, subject)
+		assert_eq(
+			sprite.footprint_texture(subject, _TILE).get_width(),
+			_TILE * IllustratedStructureSprite.drawn_width_tiles(subject), subject
+		)
 
 
 # -- a corner post caps the runs, it does not extend past them --------------
@@ -667,3 +744,180 @@ func test_an_even_grid_frame_keeps_the_measured_column_pitch():
 	var frame := sprite.idle_texture("storage").get_image()
 	var cell: int = 1536 / 8
 	assert_eq(frame.get_width(), cell - IllustratedStructureSprite.CELL_INSET * 2)
+
+
+# -- the house tiers read as a ladder, in the real art ----------------------
+#
+# Asked directly, with the street in shot: *"also scale down cottage to be
+# smaller than house"*. Measured before changing anything
+# (tools/probe_building_fit.gd): a cottage drew 26.0 x 26.0 world px against
+# a house's 39.5 x 24.0 -- the smallest tier was the tallest building on the
+# street, because both are drawn at the same share of their own plot width
+# and the art's aspect does the rest (a cottage square, a house low and
+# wide).
+#
+# Asked of the REAL sheets through the REAL chain, not of the catalog's
+# arithmetic: what a player compares is the picture.
+
+
+func _drawn_size_of(building_id: String, seed_value: int) -> Vector2i:
+	var footprint := BuildingCatalog.footprint_of(building_id)
+	var chosen: Dictionary = BuildingCatalog.finished_sheet_for(building_id, seed_value)
+	var texture: ImageTexture = sprite.footprint_frame_texture(
+		String(chosen["path"]), int(chosen["columns"]), int(chosen["rows"]),
+		int(chosen["row"]), int(chosen["column"]), 32, footprint.x,
+		String(chosen["grid"]), building_id
+	)
+	assert_not_null(texture, "%s draws nothing at all" % building_id)
+	return Vector2i(texture.get_width(), texture.get_height())
+
+
+func test_a_cottage_really_draws_smaller_than_a_house():
+	for seed_value in [3, 29, 91]:
+		var cottage := _drawn_size_of("house_small", seed_value)
+		var house := _drawn_size_of("house_medium", seed_value)
+		assert_lt(cottage.x, house.x, "seed %d: a cottage is narrower" % seed_value)
+		assert_lt(cottage.y, house.y, "seed %d: and shorter -- it was taller" % seed_value)
+
+
+func test_a_house_really_draws_smaller_than_a_manor():
+	for seed_value in [3, 29, 91]:
+		var house := _drawn_size_of("house_medium", seed_value)
+		var manor := _drawn_size_of("house_large", seed_value)
+		assert_lt(house.y, manor.y, "seed %d: a manor looms over a house" % seed_value)
+		assert_lte(house.x, manor.x, "seed %d" % seed_value)
+
+
+## Still a building standing on its plot rather than a model of one -- the
+## same floor PLOT_MARGIN_SHARE is already pinned against.
+func test_a_cottage_still_fills_most_of_its_plot():
+	var cottage := _drawn_size_of("house_small", 29)
+	assert_gt(float(cottage.x) / float(2 * 32), 0.6, "a cottage this small is a doll's house")
+
+
+# -- the crop must hold the WHOLE drawing (2026-09-20) ----------------------
+#
+# Reported live with five cottages in shot: *"Cottages are still slightly
+# clipped at the top despite having free space in the 2x2 tile."* They
+# were, and the cut happened in the SLICER, long before anything placed
+# them: the roof apex, its finial and the chimney cap were all outside the
+# cropped cell.
+#
+# The cause is measurable and is not about houses. `divider_bands` calls a
+# sheet row a divider when 60% of it is magenta, which is true of a row
+# crossing eight roof APEXES -- sparse art against background reads as
+# background. On cottage_*.png and manor_*.png there is no drawn divider to
+# find at all (no row anywhere is even 99% magenta; measured max 0.989),
+# so the band simply started wherever the roofs' silhouette happened to
+# thin past the threshold.
+#
+# The invariant below is the one that catches that class of bug whatever
+# its cause: **the sheet row directly above a cell's crop must be clear of
+# that cell's own art.** If it is not, the crop cut through the drawing.
+
+## Every house sheet a real building draws from, with the grid kind and
+## cell the game itself would ask for.
+func _house_sheet_cells() -> Array:
+	var cells: Array = []
+	for building_id in BuildingCatalog.BUILDING_IDS:
+		for seed_value in [1, 3, 7, 42]:
+			var chain: Array = BuildingCatalog.finished_sheet_chain(building_id, seed_value)
+			if chain.is_empty():
+				continue
+			var entry: Dictionary = chain[0]
+			entry["building_id"] = building_id
+			cells.append(entry)
+	return cells
+
+
+## How much of one sheet row has anything on it at all -- anything that is
+## not the chroma-key background -- across `from_x`..`to_x`.
+func _drawn_share(image: Image, y: int, from_x: int, to_x: int) -> float:
+	var span := to_x - from_x + 1
+	if span <= 0:
+		return 0.0
+	var drawn := 0
+	for x in range(from_x, to_x + 1):
+		var color := image.get_pixel(x, y)
+		var background: bool = color.r >= 0.85 and color.b >= 0.85 and color.g <= 0.15
+		if not background:
+			drawn += 1
+	return float(drawn) / float(span)
+
+
+## The band of "partly covered" that means a crop sliced through a picture.
+##
+## The row directly above a correct crop is one of two things, and neither
+## is partial:
+##
+## - **essentially empty** (0% to 17% covered) -- open background where the
+##   sheet simply spaces its rows apart, the remainder being antialiasing
+##   where a chimney cap meets the gap;
+## - **essentially full** (100%) -- the sheet's own boundary, which on
+##   these sheets is two rows deep (a solid dark line under a pale rule),
+##   or the bottom edge of the neighbouring cell.
+##
+## A row that is *partly* covered is neither: it is the silhouette of a
+## roof, which is exactly the thing a bad crop cuts through. Every cut
+## measured before the fix sat at **40% to 52%**. So the test is a band,
+## not a bound -- and that shape is the finding, not a convenience.
+const _CUT_ROW_MIN := 0.25
+const _CUT_ROW_MAX := 0.90
+
+
+func test_no_house_crop_cuts_through_the_top_of_its_own_drawing():
+	var sprite := IllustratedStructureSprite.new()
+	for entry in _house_sheet_cells():
+		var image: Image = (load(entry["path"]) as Texture2D).get_image()
+		var rect: Rect2i = sprite._cell_rect_for(
+			entry["path"], image, entry["columns"], entry["rows"], entry["row"], entry["column"], entry["grid"]
+		)
+		var above := rect.position.y - 1
+		if above < 0:
+			continue  # a cell on the sheet's own top edge has nothing above it
+		var share := _drawn_share(image, above, rect.position.x, rect.position.x + rect.size.x - 1)
+		assert_false(
+			share >= _CUT_ROW_MIN and share <= _CUT_ROW_MAX,
+			"%s (%s cell %d,%d): the sheet row above the crop is %d%% covered -- neither empty nor a boundary, so the crop sliced through a roof"
+			% [entry["building_id"], String(entry["path"]).get_file(), entry["column"], entry["row"], int(share * 100.0)]
+		)
+
+
+## The other half of the same fix. Reading a cell by where its ART is
+## reaches up past the roof -- and on some cells that is far enough to
+## swallow the sheet's own drawn RULE LINE, which then ships as a pale bar
+## across the top of the cottage. A roof apex is sparse (9 to 31 opaque
+## pixels of ~174); a rule line spans the whole cell. Measured: cottage_2
+## and cottage_4 grew one, cottage_3 did not.
+func test_no_house_crop_opens_with_the_sheets_own_rule_line():
+	var sprite := IllustratedStructureSprite.new()
+	for entry in _house_sheet_cells():
+		var frame: Image = sprite._frame_image(
+			entry["path"], entry["columns"], entry["rows"], entry["row"], entry["column"], entry["grid"]
+		)
+		assert_not_null(frame, "%s draws nothing" % entry["building_id"])
+		if frame == null:
+			continue
+		for y in mini(3, frame.get_height()):
+			assert_false(
+				_is_rule_line_row(frame, y),
+				"%s (%s cell %d,%d): row %d of the crop is the sheet's rule line, not the drawing"
+				% [entry["building_id"], String(entry["path"]).get_file(), entry["column"], entry["row"], y]
+			)
+
+
+## A full-width bar of pale pixels: the sheet's drawn rule, never a roof.
+func _is_rule_line_row(image: Image, y: int) -> bool:
+	var width := image.get_width()
+	var opaque := 0
+	var pale := 0
+	for x in width:
+		var color := image.get_pixel(x, y)
+		if color.a <= 0.02:
+			continue
+		opaque += 1
+		if color.r >= 0.85 and color.g >= 0.85 and color.b >= 0.85:
+			pale += 1
+	if opaque < int(float(width) * 0.8):
+		return false
+	return float(pale) / float(maxi(opaque, 1)) >= 0.5

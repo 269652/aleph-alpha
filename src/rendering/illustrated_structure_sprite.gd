@@ -53,6 +53,7 @@ extends RefCounted
 
 const SpriteSheetLoader = preload("res://src/rendering/sprite_sheet_loader.gd")
 const VillageFarm = preload("res://src/gameplay/village_farm.gd")
+const BuildingCatalog = preload("res://src/gameplay/building_catalog.gd")
 
 ## How a sheet's cells are found. All three are real on disk today:
 ## "even" divides the canvas (the original 8x5 sheets), "gutters" finds the
@@ -62,6 +63,27 @@ const VillageFarm = preload("res://src/gameplay/village_farm.gd")
 const GRID_EVEN := "even"
 const GRID_GUTTERS := "gutters"
 const GRID_DIVIDERS := "dividers"
+
+## Cells found by asking where the ART is, on BOTH axes.
+##
+## For a sheet that has no drawn divider between its cells at all -- only
+## the background showing through, and a near-white rule line the magenta
+## key cannot see. `dividers` reads such a sheet by accident and badly: a
+## row crossing eight roof APEXES is mostly background, so a band begins
+## where the silhouette thins rather than where the drawing ends, and the
+## apex, the finial and the chimney cap are cut off above it. Measured on
+## cottage_3.png: the divider band is rows 421..569 where the art really
+## runs 390..570, and the columns lose 13px a side as well.
+const GRID_CONTENT := "content"
+
+## Every grid kind _cell_rect_for can actually read.
+##
+## Listed off the constants rather than written out again wherever
+## somebody needs to check one, so a sheet declaring a kind this reader
+## does not have fails loudly instead of silently falling through to the
+## even cut -- which is exactly how cottage_*.png spent its life being read
+## the wrong way.
+const GRID_KINDS: Array[String] = [GRID_EVEN, GRID_GUTTERS, GRID_DIVIDERS, GRID_CONTENT]
 const VariantSheetGrid = preload("res://src/rendering/variant_sheet_grid.gd")
 
 ## Same measured thresholds as illustrated_beehive_sprite.gd/
@@ -215,6 +237,52 @@ func footprint_texture(subject: String, tile_size: int) -> ImageTexture:
 ##
 ## A whole building scales its WIDTH to the tile, which is the footprint
 ## anchor footprint_texture documents and every one of them still uses.
+## The catalog building each placeable structure shares its art with. The
+## village raises the very same sheet as a real, multi-tile building (see
+## BuildingCatalog's own "farmhouse" row: "npc_farm_production.md's Farm,
+## raised as a real building rather than a single tile"), so the catalog
+## already holds the answer to how big this picture is meant to be drawn.
+## Read from there rather than restated here, so one building cannot end up
+## two sizes depending on who put it down.
+const _CATALOG_TWIN := {
+	"farm": "farmhouse",
+	"sagewerk": "sawmill",
+	"storage": "warehouse",
+	"city_hall": "city_hall",
+}
+
+
+## How many tiles wide this subject is DRAWN. One, for anything with no
+## catalog twin -- a lone fence panel genuinely is one tile of fence.
+##
+## Note this is about the PICTURE, not the ground: a placed structure still
+## occupies its single tile, exactly as before. A real tree already draws a
+## canopy far wider than the one tile its trunk stands on; a building is the
+## same kind of thing.
+static func drawn_width_tiles(subject: String) -> int:
+	var twin := String(_CATALOG_TWIN.get(subject, ""))
+	if twin.is_empty():
+		return 1
+	return maxi(BuildingCatalog.footprint_of(twin).x, 1)
+
+
+## Reported live: *"Also there's a weird shrunk farmhouse fix that too"*.
+##
+## A whole building used to scale its cell to exactly ONE tile, which
+## npc_farm_production.md's "Real art" section specified in as many words
+## ("width matches the tile ... rather than squashed into a single small
+## tile texture"). The intent was right and the number was not. Measured
+## (tools/probe_structure_art_scale.gd), at a 16px tile against a villager
+## 1.23 tiles tall:
+##
+##     farm       drawn 0.85 x 0.70 tiles   0.57x a person
+##     sagewerk   drawn 0.88 x 0.82 tiles   0.67x a person
+##     storage    drawn 0.83 x 0.89 tiles   0.72x a person
+##     city_hall  drawn 0.84 x 0.96 tiles   0.78x a person
+##
+## Every one of them was shorter than the person who works it -- the
+## farmhouse barely half his height, which is what got reported. Drawn at
+## its own catalog footprint now (see drawn_width_tiles).
 ##
 ## A RAIL scales by its RUN instead. Asked for in one word, after the rails
 ## landed on their inner edges: *"also scale"*. The sheet draws every run
@@ -227,7 +295,7 @@ func footprint_texture(subject: String, tile_size: int) -> ImageTexture:
 func _footprint_scale(subject: String, image: Image, tile_size: int) -> float:
 	var inner := VillageFarm.fence_inner_direction(subject)
 	if inner == Vector2i.ZERO:
-		return float(tile_size) / float(image.get_width())
+		return float(tile_size * drawn_width_tiles(subject)) / float(image.get_width())
 	var art := _art_rect(subject, image)
 	# A run travels ACROSS the direction it closes: a rail whose beds lie
 	# north or south runs east-west, and one whose beds lie east or west
@@ -450,6 +518,24 @@ func explicit_frame_image(
 	return frame
 
 
+## The same cut, by the grid kind a chain entry NAMES rather than by
+## picking one of the wrappers above.
+##
+## BuildingCatalog.finished_sheet_chain carries a `grid` per entry because
+## the kind is a property of the SHEET (see GRID_CONTENT's own comment and
+## docs/concept/building.md) -- so a caller holding an entry has the answer
+## already and must not re-derive it. A caller that matched on a
+## hand-written subset of kinds instead would fall silently through to the
+## even cut for any kind it did not know, which is exactly what cost every
+## cottage its roof. Fails loudly for a kind nothing can read, the same way
+## GRID_KINDS exists so a sheet naming one fails loudly.
+func frame_image(
+	path: String, columns: int, rows: int, row: int, column: int, grid: String
+) -> Image:
+	assert(GRID_KINDS.has(grid), "unreadable grid kind: %s" % grid)
+	return _frame_image(path, columns, rows, row, column, grid)
+
+
 ## One body for all three, differing only in where the cell's rect comes
 ## from. Cached per (path, row, column, grid kind), so the band scan a
 ## detected grid needs is paid once per sheet rather than per building
@@ -474,17 +560,36 @@ func _frame_image(path: String, columns: int, rows: int, row: int, column: int, 
 
 
 ## That cell scaled for a Sprite2D standing on a `footprint_width_tiles`-
-## wide footprint: width exactly `tile_size * footprint_width_tiles`, height
-## by the SAME factor (footprint_texture's own documented anchor, a building
-## taller than its footprint stays taller). Null when the sheet is missing.
+## wide footprint: drawn INSIDE the plot, at
+## `BuildingCatalog.drawn_plot_width_tiles` of it, with height by the SAME
+## factor (footprint_texture's own documented anchor, a building taller
+## than its footprint stays taller). Null when the sheet is missing.
+##
+## It used to be exactly the plot width, which is what had two houses on
+## neighbouring plots touching at the pixel with no street between them --
+## see BuildingCatalog.PLOT_MARGIN_SHARE for the report and the
+## measurement behind it. The margin lives there rather than here so this
+## path and the procedural placeholder cannot disagree about how much of a
+## plot a building covers.
 func footprint_frame_texture(
 	path: String, columns: int, rows: int, row: int, column: int, tile_size: int, footprint_width_tiles: int,
-	grid: String = GRID_EVEN
+	grid: String = GRID_EVEN, building_id: String = ""
 ) -> ImageTexture:
 	var frame := _frame_image(path, columns, rows, row, column, grid)
 	if frame == null:
 		return null
-	var target_width := tile_size * maxi(footprint_width_tiles, 1)
+	# Named, so a building drawn at less of its plot than the plot alone
+	# would say gets its own size (BuildingCatalog._DRAW_SCALES -- a cottage
+	# is a smaller building than a house, and the art's own aspect does not
+	# say so). "" is exactly the old answer, so a caller with no id in hand
+	# is untouched.
+	var target_width := maxi(
+		1,
+		int(round(
+			float(tile_size)
+			* BuildingCatalog.drawn_plot_width_tiles(footprint_width_tiles, building_id)
+		))
+	)
 	var scale := float(target_width) / float(frame.get_width())
 	var height := maxi(1, int(round(float(frame.get_height()) * scale)))
 	var scaled := frame.duplicate() as Image
@@ -509,13 +614,14 @@ func _cell_rect_for(
 				_span(_band(path, image, columns, grid, false)[column]),
 				_span(_band(path, image, rows, grid, true)[row])
 			)
-		GRID_DIVIDERS:
-			return Rect2i(
+		GRID_DIVIDERS, GRID_CONTENT:
+			var found := Rect2i(
 				_band(path, image, columns, grid, false)[column].x,
 				_band(path, image, rows, grid, true)[row].x,
 				_span(_band(path, image, columns, grid, false)[column]),
 				_span(_band(path, image, rows, grid, true)[row])
 			)
+			return _trimmed_of_rule_lines(image, found) if grid == GRID_CONTENT else found
 	# The even grid is even on ONE axis. Columns really are on a pitch
 	# (1536/8 is exactly 192, and every column's art starts ~12px inside
 	# it); rows are not, so they are read off the sheet itself.
@@ -533,7 +639,7 @@ const _CONTENT_ROWS := "content_rows"
 func _band(path: String, image: Image, count: int, grid: String, horizontal: bool) -> Array:
 	var key := "%s|%s|%d|%s" % [path, grid, count, "rows" if horizontal else "columns"]
 	if not _grid_band_cache.has(key):
-		if grid == _CONTENT_ROWS:
+		if grid == _CONTENT_ROWS or grid == GRID_CONTENT:
 			_grid_band_cache[key] = VariantSheetGrid.content_bands(image, count, horizontal)
 		elif grid == GRID_DIVIDERS:
 			_grid_band_cache[key] = VariantSheetGrid.art_bands(image, count, horizontal)
@@ -543,6 +649,67 @@ func _band(path: String, image: Image, count: int, grid: String, horizontal: boo
 				else VariantSheetGrid.column_bands(image, count)
 			)
 	return _grid_band_cache[key]
+
+
+## `rect` with any of the sheet's own drawn RULE LINES shaved off its top
+## and bottom edges.
+##
+## Reading a cell by where its art is (GRID_CONTENT) reaches up past the
+## roof, which is the point -- but on some cells it reaches far enough to
+## swallow the pale rule the sheet draws between its rows, and that ships
+## as a bright bar across the top of a cottage. Trading a clipped roof for
+## a white scratch is not a fix.
+##
+## A rule line is told apart from a drawing by SPAN, not by colour alone: a
+## roof apex is sparse where it meets the background (measured: 9 to 31
+## opaque pixels across a ~174-wide cell) while a rule runs the whole way.
+## So a row is shaved only when it is nearly full width AND mostly pale --
+## which no top-of-roof row in these sheets is, and every rule line is.
+func _trimmed_of_rule_lines(image: Image, rect: Rect2i) -> Rect2i:
+	var top := rect.position.y
+	var bottom := rect.position.y + rect.size.y - 1
+	# A rule line found INSIDE the edge of a band means the band reached
+	# across the boundary it is drawn on, so everything up to and including
+	# it belongs to the neighbouring cell -- not just the line itself. That
+	# is the real shape of the miss: a chimney tip from the row above
+	# survives one or two rows ABOVE the rule, so trimming only the line
+	# leaves the tip behind and the scratch with it.
+	var reach: int = maxi(_RULE_ROW_REACH, int(float(rect.size.y) * _RULE_ROW_REACH_SHARE))
+	for offset in mini(reach, bottom - top):
+		if _is_rule_line_row(image, rect, top + offset):
+			top += offset + 1
+	for offset in mini(reach, bottom - top):
+		if _is_rule_line_row(image, rect, bottom - offset):
+			bottom -= offset + 1
+	return Rect2i(rect.position.x, top, rect.size.x, maxi(1, bottom - top + 1))
+
+
+## How much of a row must be drawn on before it can be a rule rather than
+## the sparse top of a drawing, and how much of that must be pale.
+const _RULE_ROW_COVERAGE := 0.8
+const _RULE_ROW_PALENESS := 0.5
+
+## How far into a band's edge a rule line may be looked for. A rule sits on
+## the boundary, so it is always within a few rows; searching further would
+## start finding pale things that are really part of the drawing (a
+## whitewashed gable, a snow-covered roof).
+const _RULE_ROW_REACH := 6
+const _RULE_ROW_REACH_SHARE := 0.05
+
+
+func _is_rule_line_row(image: Image, rect: Rect2i, y: int) -> bool:
+	var drawn := 0
+	var pale := 0
+	for x in range(rect.position.x, rect.position.x + rect.size.x):
+		var color := image.get_pixel(x, y)
+		if VariantSheetGrid.is_background(color):
+			continue
+		drawn += 1
+		if color.r >= VariantSheetGrid.RULE_LINE_MIN and color.g >= VariantSheetGrid.RULE_LINE_MIN and color.b >= VariantSheetGrid.RULE_LINE_MIN:
+			pale += 1
+	if drawn < int(float(rect.size.x) * _RULE_ROW_COVERAGE):
+		return false
+	return float(pale) / float(maxi(drawn, 1)) >= _RULE_ROW_PALENESS
 
 
 static func _span(band: Vector2i) -> int:

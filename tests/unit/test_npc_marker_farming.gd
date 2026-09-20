@@ -228,14 +228,18 @@ func test_a_farmer_tills_and_plants_every_tile_of_their_own_field():
 		assert_eq(plot.crop_id, "wheat", "a farmer grows wheat")
 
 
-func test_a_herbalist_plants_herbs_on_theirs():
+## The herbalist still works a field of their own -- what changed is what
+## goes in it. Asked directly with the purple crop in shot: "atm it should
+## plant only wheat which grows and gets harvested properly" (see
+## VillageFarm.CROP_BY_OCCUPATION, where putting herbs back is one entry).
+func test_a_herbalist_works_a_field_of_their_own_and_sows_wheat_in_it():
 	remove_child(marker)
 	marker.free()
 	marker = _build_marker("herbalist")
 	_give_a_field()
 	assert_true(_run_until_planted(), "the herbalist never planted the whole field")
 	for tile in FIELD_TILES:
-		assert_eq((world.plots[tile] as FarmPlot).crop_id, "herb")
+		assert_eq((world.plots[tile] as FarmPlot).crop_id, "wheat")
 
 
 func test_a_ready_crop_is_harvested_into_the_village_market():
@@ -266,7 +270,7 @@ func test_a_growing_crop_is_watered_before_it_withers():
 	_give_a_field()
 	assert_true(_run_until_planted())
 	# Long enough that an untended plot would be well past its own grace
-	# window (FarmPlot.WATER_GRACE_FRACTION of a 20-60s growth time).
+	# window (FarmPlot.grace_seconds -- a whole night, see MIN_WATER_GRACE_SECONDS).
 	_run(90.0)
 	var withered := 0
 	for plot in world.plots.values():
@@ -330,7 +334,7 @@ func test_tending_a_bed_waters_the_beds_beside_it():
 		# Past the watering margin, but with real headroom before the
 		# wither point -- a withered bed cannot be watered at all, which
 		# would measure the wrong thing.
-		plot.time_since_watered = plot.growth_time * FarmPlot.WATER_GRACE_FRACTION * 0.6
+		plot.time_since_watered = plot.grace_seconds() * 0.6
 	var before: Array = []
 	for tile in FIELD_TILES:
 		before.append((world.plots[tile] as FarmPlot).time_since_watered)

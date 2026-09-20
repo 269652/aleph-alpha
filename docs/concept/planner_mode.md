@@ -82,6 +82,20 @@ established layout rather than inventing a place to put it. It is a themed
 card, per [hud.md](hud.md)'s pillar 1: the mode you are in carries
 meaning, so it may not be bare text over the world.
 
+**Revised (2026-09-20): it is a switch, not a button.** Asked for directly:
+*"make the planner switch a ios like switch button with two states"*. The
+button's caption was `ViewMode.toggle_label` — the mode you would switch
+**to**, reading "Planner Mode" while you were in RPG mode. That is the right
+caption for a button and the wrong model for this control: a player looking
+at it could read it either as *you are in planner mode* or as *press for
+planner mode*, and nothing on screen settled which. A switch settles it by
+construction. The caption is now the constant `ViewMode.SWITCH_LABEL`
+("Planner"), naming what the switch controls, and the switch's on-state is
+`ViewMode.shows_palette(mode)` — the same predicate the palette's own
+visibility already reads, never a second one that could drift from it.
+`toggle_label` is kept for callers that genuinely describe the ACTION. See
+[hud.md](hud.md)'s "The planner toggle is a switch" for the widget itself.
+
 ### What can be planned
 
 Three kinds, all of them things the game can already build:
@@ -99,6 +113,108 @@ Three kinds, all of them things the game can already build:
 One vocabulary, deliberately: a plan names a `blueprint_id` that some
 existing system already understands, so nothing here invents a parallel
 catalogue that can drift from the real one.
+
+### The build palette
+
+Asked directly, with a screenshot of ten identical text buttons in a row:
+*"Make the Planner / Building HUD more professional and more like Anno 1806.
+Add Icons not only text"*.
+
+Ten equal-weight words side by side is a **list**, not a build menu. It says
+nothing about what a thing looks like, what it costs, how much ground it
+takes or what kind of thing it even is — a player reads "Brewery" and
+learns only that the word exists. Anno's menu answers all four before a
+click, and that is what this section specifies.
+
+**A card, not a strip.** The palette is one `PanelContainer` on the shared
+`UiTheme` card ([hud.md](hud.md)'s pillar 1), titled, sitting where the
+hotbar sits in rpg mode.
+
+**Grouped, and the groups are the catalogue's own.** `BuildingCatalog`
+already sorts its ids into meaning-carrying lists — `BUILDING_IDS` are
+homes, `PRODUCTION_BUILDING_IDS` are works, `CIVIC_BUILDING_IDS` are the
+commons — and each of those lists' own doc comment says what it means. The
+palette's categories **are** those lists, read at runtime, plus pavement's
+own Roads group. It does not keep a second grouping: a new building lands
+in the right category for free, and no category can drift out of step with
+what the catalogue says a building is.
+
+One category is shown at a time, chosen by a row of tabs — Anno's own
+shape, and the thing that makes ten buildings legible where one flat row
+of ten does not.
+
+**Icons are the building's own art, never a second icon set.** An icon is
+cut from exactly the picture that building will have when it is finished:
+`BuildingCatalog.finished_sheet_chain`'s best available sheet, the same
+chain `EarthChunkManager` draws the real building from. This is pillar 2's
+"one vocabulary" applied to the menu — a drawn icon set would be a second
+picture of every building, free to disagree with the first, and the player
+would be choosing from pictures of buildings this game does not have.
+
+Pavement's icon is the real road tile (`TerrainRenderer.road_tile_image`),
+for the same reason and by the same rule: the surface it will lay.
+
+The cut is **fitted into a square box**, aspect preserved, centred, never
+upscaled past the box — a manor is wider than a cottage and a warehouse is
+wider than both, and squashing each into a square would misreport the one
+thing the icon is for. `BlueprintIcon` is that fit, pure and pinned.
+
+**Every card says what it costs before it is clicked.** A slot carries the
+building's name and its footprint; hovering it gives the full reckoning —
+name, footprint in tiles, the real `BuildingCatalog.cost_of` material list,
+and the labour. All of it read from the catalogue, never a second price
+list (the same rule `PlanRaising` already keeps), so what the menu promises
+and what raising it actually charges cannot disagree.
+
+Work that costs no hours reads as **laid by hand** rather than as "0 hours"
+— the same `PlanRaising.is_laid_by_hand` rule the raising path already
+applies, said in the menu instead of discovered at the site.
+
+**Nothing about the card's size is written down.** A slot is as wide as
+the widest name in its own tab, measured at the font it is really drawn
+in; the card is as wide as its slots; the footer wraps rather than clips
+and is not allowed to widen either. This is not tidiness — `UiScale`
+scales *font sizes* and deliberately not card widths ([hud.md](hud.md)'s
+"UI scale" names that as its own limit), so a slot width written down as a
+constant is a slot that clips the moment the player moves that slider.
+Measured at `UiScale.MAX_SCALE`: six of the ten names ran past a fixed
+slot, and at 1.00 the tightest had seven pixels to spare — the defect was
+already there before any slider existed.
+
+**The selected slot is visibly the selected one.** A toggled button in a
+`ButtonGroup`, so exactly one can be armed at a time and the mode's own
+"nothing selected" state is a real state rather than a stuck-looking
+button.
+
+A `ButtonGroup` alone turned out not to be enough, and both gaps were
+found by *rendering* the thing (`tools/probe_build_palette.gd`) rather
+than by reading it:
+
+- Godot draws a toggled button in its `pressed` stylebox, which in this
+  theme is a shade *darker* than normal — about 5% of value, invisible
+  over the card's own dark background. A menu whose selection cannot be
+  seen is a menu with no selection, so an armed slot and an open tab wear
+  `UiTheme.selected_button_stylebox` instead: the gold `ACCENT` that
+  already means "this one" everywhere else in this UI, over a background
+  that *lifts* out of the card. Applied per control rather than in the
+  shared `Theme`, because `pressed` there also means a momentary click on
+  every ordinary button in the game.
+- `set_pressed_no_signal` deliberately does not tell the `ButtonGroup`, so
+  a tab opened from code — arming a blueprint that lives in another
+  category, or the palette's own first build — left the previous tab
+  looking open too. The siblings are put down by hand.
+
+`BlueprintPaletteModel` is the words — categories, what each slot says,
+what a hover reads — pure and tested without standing up a `World`, the
+same split `ViewMode` already keeps for the mode itself.
+`BlueprintPaletteView` is the menu itself, its own `Control` for the
+reason every other panel in this game already is one (`CreaturePanel`,
+`HousePanel`): a menu with tabs, a selection and a footer is a thing with
+*behaviour*, and behaviour buried in a 19k-line `World` can only be tested
+by reading its source. What stays in `World` is only what is genuinely
+`World`'s — where the card sits, and the two numbers the view is not
+allowed to invent, which arrive as the same calls the raising path itself
+makes.
 
 ### The plan ledger
 
@@ -321,6 +437,72 @@ whole.
   integrated over absence. The two rates differing is a decision, pinned by
   `test_the_settlements_own_construction_keeps_the_catchup_rate` rather
   than left to drift.
+- ✅ **Two actions, two keys, and a prompt that names them** (2026-09-19) —
+  reported a third time: *"Planned nodes (e.g. pavement) still can't be
+  actually built by the player or hired NPCs... there should be tooltips with
+  hotkeys for both actions"*.
+
+  The mechanism was not broken: `test_world_raising_a_plan.gd` drives it end
+  to end on a real ledger, chunk manager and player, and a pavement plan
+  really is laid by hand and really is laid by a paid hire. What was missing
+  was the **player's half** of it, and in two ways.
+
+  Both actions hung off the **talk key**, which offered the hire first and
+  fell through to your own hands when it failed. Standing in a village —
+  which is where wireframes are raised — one press did one of three things
+  and nothing said which. And the floating prompt over a wireframe read
+  **"Talk (G)"**, for the same reason: a villager is nearly always in
+  talking range, and the prompt chain asked about people before plans.
+
+  So `_raise_plan_yourself` and `_hire_builder_for_plan` are separate, one
+  **context slot** each — the two keys `Keybindings` already keeps for
+  exactly this ("what they do is decided by whatever is under the cursor and
+  the state it is in"), rather than two new letters on a keyboard with one
+  free. Each **refuses in its own terms**: "Nobody here to hire", "does not
+  know you well enough", "You cannot pay them" — and your own hands are one
+  key over, always. **A reversal, deliberately:** the old fall-through from a
+  failed hire to your own labour is gone, because it is precisely what made
+  the outcome unpredictable.
+
+  A wireframe in reach is prompted **before** the villager beside you — it is
+  the least ambiguous thing in reach, you walked onto it — naming the plan
+  and both keys, read live from the bindings like every other prompt here.
+  The overloaded `_raise_plan_within_reach` is deleted rather than left dead.
+
+  *Named:* standing at a wireframe while also within reach of a cart or a
+  tame animal, the same slot can still do both — the context slots are polled
+  by `Player` as well as read here. Rare, and both outcomes are harmless.
+- ✅ **The palette is a build menu rather than a row of words** (2026-09-20)
+  — asked directly, with a screenshot of ten identical text buttons:
+  *"Make the Planner / Building HUD more professional and more like Anno
+  1806. Add Icons not only text"*. See "The build palette" above for the
+  spec this landed against. `BlueprintPaletteModel` 22/22,
+  `BlueprintIcon` 12/12, `BlueprintPaletteView` 15/15, `UiTheme` 12/12,
+  and `test_world_planner_mode_wiring` 31/31 with its palette half
+  rewritten: what the menu *does* is now driven for real rather than read
+  out of `World`'s source, which is the point of the view being its own
+  class.
+
+  Icons are cut from each building's own `finished_sheet_chain` — the
+  very sheet `EarthChunkManager` draws the real building from — so there
+  is no second picture of any building to drift from the first. Measured
+  per slot by the probe: every icon is a 48px box that is 50–100% real
+  art rather than transparent padding.
+
+  Nothing about the card's size is a constant, and that came out of
+  merging `main`: a concurrent session had landed the UI-scale setting,
+  and sweeping the probe across every scale the player can pick showed six
+  of ten names clipping at 1.75 — and only seven pixels of headroom at
+  1.00, so the defect predated the slider. Zero clipped names at 0.75,
+  1.00 and 1.75 now, footer included.
+
+  *Named:* the palette still offers exactly the ids it offered before
+  (pavement + `BUILDING_IDS` + `PRODUCTION_BUILDING_IDS` +
+  `CIVIC_BUILDING_IDS`), pinned by a test. `CHARTERED_BUILDING_IDS` is
+  still absent — a charter is a settlement-tier gate
+  ([settlement_charter.md](settlement_charter.md)), and offering a
+  blueprint a player could plan but never raise is a different question
+  from how the menu looks.
 - ⬜ **A raised build in progress does not survive a reload.** The project
   itself is persisted, but `_hired_builds`/`_player_builds` — the records
   that say *whose* hours advance it — live only in memory. A raised build

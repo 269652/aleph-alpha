@@ -69,7 +69,19 @@ const FIELD_SHAPES: Array[Vector2i] = [Vector2i(3, 2), Vector2i(2, 3)]
 ## QUARRY_KIND_BY_OCCUPATION already uses for hunter/fisher; an occupation
 ## absent from it has no field at all, which is the honest answer for every
 ## villager who is not a farmer or a herbalist.
-const CROP_BY_OCCUPATION := {"farmer": "wheat", "herbalist": "herb"}
+## Asked directly, with a field of unrecognisable purple plants in shot:
+## *"i don't even know what the purple crops are it plants.. atm it should
+## plant only wheat which grows and gets harvested properly"*. The purple was
+## the herbalist's own herb, and it was dying overnight exactly as the wheat
+## beside it was (see FarmPlot.MIN_WATER_GRACE_SECONDS, fixed in the same
+## pass).
+##
+## So every field sows wheat for now. Deliberately a narrowing of the CROP,
+## not of who farms: the herbalist keeps the farmhouse and field an earlier
+## ask gave them ("similar to a farmer the herbalist should build a farm
+## house and plant herbs"), and putting herbs back in their bed is this one
+## entry -- "herbalist": "herb" -- and nothing else.
+const CROP_BY_OCCUPATION := {"farmer": "wheat", "herbalist": "wheat"}
 
 ## Re-water a growing plot once it has used up this much of its own real
 ## wither grace window (FarmPlot.WATER_GRACE_FRACTION) -- a real margin
@@ -138,7 +150,14 @@ const WORK_BLOCK_SECONDS := 900.0
 ## tolerance there is deliberately loose (10%): the figure comes out of a
 ## walking circuit against a growth clock, not out of arithmetic, and
 ## pinning it tighter would make an honest measurement read as a flake.
-const FIELD_YIELD_PER_WORK_BLOCK := 225.0
+##
+## RE-MEASURED at 278 (from 225) once a bed stopped dying every night (see
+## FarmPlot.MIN_WATER_GRACE_SECONDS): the old figure was the yield of a field
+## that lost beds to the dark and spent part of every block replanting them,
+## so a village sized against it was sized against a field that was partly
+## broken. Re-measured by the same test that pinned the old one, not adjusted
+## by hand.
+const FIELD_YIELD_PER_WORK_BLOCK := 278.0
 
 ## How far out from the farmhouse a field may reach. Not the field's size
 ## -- MAX_WORKED_CELLS is that -- but how far the search looks for cells
@@ -165,12 +184,28 @@ const FIELD_REACH_TILES := 3
 ## the first MAX_WORKED_CELLS (see nearest_cells). Offering them nearest
 ## first is what makes that "the biggest field that actually fits", rather
 ## than whichever cells happened to come up.
-static func field_cells(origin: Vector2i, building_id: String) -> Array:
+## `behind` widens the reach NORTH of the building, exactly as it does for
+## field_rect -- so a caller that SITED something behind the house (a
+## fisher's pond, VillagePond.pond_rect) can look in the same place it put
+## it. Without that the two disagreed, and a reload that could not find the
+## pond it had already dug dug another one.
+## The tallest shape a field (or a pond) can take -- how far north of a
+## building `behind` has to reach to cover every rectangle field_rect could
+## have placed there.
+static func _tallest_field_shape() -> int:
+	var tallest := 0
+	for shape in FIELD_SHAPES:
+		tallest = maxi(tallest, (shape as Vector2i).y)
+	return tallest
+
+
+static func field_cells(origin: Vector2i, building_id: String, behind: bool = false) -> Array:
 	var footprint := BuildingCatalog.footprint_of(building_id)
 	if footprint == Vector2i.ZERO:
 		return []
 	var cells: Array = []
-	for y in range(origin.y, origin.y + footprint.y + FIELD_REACH_TILES):
+	var first_y := origin.y - (FIELD_REACH_TILES + _tallest_field_shape() if behind else 0)
+	for y in range(first_y, origin.y + footprint.y + FIELD_REACH_TILES):
 		for x in range(origin.x - FIELD_REACH_TILES, origin.x + footprint.x + FIELD_REACH_TILES):
 			var cell := Vector2i(x, y)
 			if _ring_distance(cell, origin, footprint) == 0:
@@ -278,11 +313,14 @@ static func action_for(plot) -> String:
 		return "harvest"
 	if plot.state == "empty" or plot.state == "withered":
 		return "plant"
+	# Against the bed's OWN real window (FarmPlot.grace_seconds), not against
+	# growth_time: a bed's tolerance has a floor of one night now, and a
+	# threshold computed from growth time alone would describe a different,
+	# shorter bed than the one that actually dies -- sending the farmer back
+	# to soak ground in no danger while the field's real deadline moved.
 	if (
 		plot.state == "growing"
-		and plot.time_since_watered >= (
-			plot.growth_time * FarmPlot.WATER_GRACE_FRACTION * WATER_BEFORE_WITHER_FRACTION
-		)
+		and plot.time_since_watered >= plot.grace_seconds() * WATER_BEFORE_WITHER_FRACTION
 	):
 		return "water"
 	return ""
@@ -302,9 +340,34 @@ static func action_for(plot) -> String:
 ## bed costs one trip; losing it costs the entire growth cycle.
 static func next_action(plots: Array) -> int:
 	for kind in ["harvest", "water", "plant"]:
+		var first := -1
 		for i in plots.size():
-			if action_for(plots[i]) == kind:
+			if action_for(plots[i]) != kind:
+				continue
+			# Unbroken ground first, among beds asking for the same thing.
+			# Reported live with the field in shot: *"the NPC only sows 4 / 6
+			# tiles"*, and measured (tools/probe_village_farming.gd): every
+			# field in the sample held six cells, five cycling normally and
+			# the sixth reporting "no marker, never tilled" after a full
+			# 600-second work block -- the same bed, for both farmers in the
+			# village.
+			#
+			# Ground nobody has tilled asks to be planted, and so does a bed
+			# that was sown, ripened and harvested. Returning the first match
+			# meant that once the earlier beds started cycling, one of them
+			# was always an earlier "plant" than the ground at the end, and
+			# the last bed was never broken at all. A farmer sows the FIELD
+			# before sowing any of it twice.
+			#
+			# Only ever reorders beds wanting the SAME thing: a null plot's
+			# action is "plant" and nothing else, so a ripe crop and a dying
+			# bed still come first, which is what the kind order is for.
+			if plots[i] == null:
 				return i
+			if first == -1:
+				first = i
+		if first != -1:
+			return first
 	# Nothing ripe, nothing dying, nothing bare -- so tend the THIRSTIEST
 	# bed rather than stand still. A farmer in their own field always has
 	# something to do, and this is what keeps a field alive: measured with
@@ -585,7 +648,15 @@ static func _rail_stops_step(tile_id: String, step: Vector2i) -> bool:
 ## owned by this farmhouse rather than its neighbour. Every cell of a
 ## rectangle must pass, because a field with a rock in the middle of it is
 ## not the rectangle that was asked for.
-static func field_rect(origin: Vector2i, building_id: String, is_free: Callable):
+## `behind` opens the ground NORTH of the building to the search. Off by
+## default, because for a farmhouse north really is the next row of
+## buildings (see _rect_is_free). A fisher's pond passes it: measured at the
+## first grassland village with a fisher, every free cell on the fisher's
+## own side of the street was north of their house -- 32 of them -- so a
+## search that could only look south had nowhere to go but across the road.
+static func field_rect(
+	origin: Vector2i, building_id: String, is_free: Callable, behind: bool = false
+):
 	var footprint := BuildingCatalog.footprint_of(building_id)
 	if footprint == Vector2i.ZERO:
 		return null
@@ -594,10 +665,11 @@ static func field_rect(origin: Vector2i, building_id: String, is_free: Callable)
 	var centre := Vector2(origin) + Vector2(footprint) * 0.5
 	for shape in FIELD_SHAPES:
 		var size: Vector2i = shape
-		for top in range(origin.y, origin.y + footprint.y + FIELD_REACH_TILES):
+		var first_top := origin.y - (FIELD_REACH_TILES + size.y if behind else 0)
+		for top in range(first_top, origin.y + footprint.y + FIELD_REACH_TILES):
 			for left in range(origin.x - FIELD_REACH_TILES, origin.x + footprint.x + FIELD_REACH_TILES):
 				var rect := Rect2i(left, top, size.x, size.y)
-				if not _rect_is_free(rect, origin, footprint, is_free):
+				if not _rect_is_free(rect, origin, footprint, is_free, behind):
 					continue
 				var key: Array = [
 					_rect_reach(rect, origin, footprint),
@@ -613,12 +685,13 @@ static func field_rect(origin: Vector2i, building_id: String, is_free: Callable)
 ## Every cell of `rect` is ground this farmhouse may really sow: not north
 ## of the building, not under it, and accepted by the caller's own rule.
 static func _rect_is_free(
-	rect: Rect2i, origin: Vector2i, footprint: Vector2i, is_free: Callable
+	rect: Rect2i, origin: Vector2i, footprint: Vector2i, is_free: Callable,
+	behind: bool = false
 ) -> bool:
 	for y in range(rect.position.y, rect.end.y):
 		for x in range(rect.position.x, rect.end.x):
 			var cell := Vector2i(x, y)
-			if cell.y < origin.y:
+			if cell.y < origin.y and not behind:
 				return false  # north of a farmhouse is the next row of buildings
 			if _ring_distance(cell, origin, footprint) == 0:
 				return false  # the building stands here

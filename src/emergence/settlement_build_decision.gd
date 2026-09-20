@@ -75,6 +75,30 @@ const ItemCatalog = preload("res://src/gameplay/item_catalog.gd")
 ## `shortfalls`: production_shortfall_quests_for_settlement's own real
 ## return shape. `spare_capacity`: SettlementSpareCapacity.for_settlement's
 ## own real result. See this file's own header for the full contract.
+## Structures a SETTLEMENT never raises for itself, however badly it wants
+## what they make. A player may still build every one of them.
+##
+## `"farm"` is here because a village already grows wheat, and always did:
+## docs/concept/village_farms.md gives the farmer and herbalist occupations
+## real 3x2 `farmhouse` buildings with real fenced fields, worked by full
+## NpcMarkers with a schedule, hunger and a wallet. The placeable Farm is the
+## PLAYER's version -- one tile of ground, a narrow-purpose FarmerMarker, and
+## three plots at fixed offsets -- so a settlement raising it stood a second,
+## redundant wheat mechanism next to the real one.
+##
+## Reported live with exactly that standing in a field: *"it just should not
+## spawn this weird looking npc with that 3 soil tiles"*. See
+## docs/concept/npc_farm_production.md, where the settlement-autonomous
+## "build a farm" decision is recorded as resolved and then reversed.
+##
+## `farm` is the ROOT of the bread chain (deepest_missing_structure_id walks
+## bread -> bakery -> flour -> mill -> wheat -> farm), so refusing it refuses
+## the whole chain rather than leaving a bakery waiting on flour that can
+## never come. The cost is real and named in that doc: a DECLINING village
+## short of bread can no longer build its way out of it.
+const SETTLEMENT_WILL_NOT_RAISE: Array[String] = ["farm"]
+
+
 static func decide_and_advance(
 	project_store,
 	market,
@@ -114,6 +138,12 @@ static func decide_and_advance(
 		)
 		if missing_structure_id == "":
 			continue  # a skill-only gate -- nothing spatial to queue (see this file's own header)
+
+		if SETTLEMENT_WILL_NOT_RAISE.has(missing_structure_id):
+			# CONTINUE, not return: this shortfall has no fix a village may
+			# build, but a smaller one ranked below it still might, and a
+			# village must not go idle over bread it cannot build its way to.
+			continue
 
 		var result: Dictionary = SettlementConstruction.advance(
 			project_store, market, chunk_coord, origin, missing_structure_id, household_id,

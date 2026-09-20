@@ -123,13 +123,36 @@ var _spread_accumulator := 0.0
 var _spread_tick := 0
 
 
-func _init(crop_id: String, seed_value: int, width: int, height: int, biome: PackedStringArray) -> void:
+func _init(
+	crop_id: String, seed_value: int, width: int, height: int, biome: PackedStringArray,
+	is_water: PackedByteArray = PackedByteArray()
+) -> void:
 	_crop_id = crop_id
 	_seed_value = seed_value
 	_width = width
 	_height = height
 	_biome = biome
+	_is_water = is_water
 	_seed_initial_patches()
+
+
+## 1 where this chunk's cell is drawn as WATER, 0 elsewhere -- the same
+## mask shape (and the same source) TallGrass already takes. A water cell
+## keeps its LAND biome, so seeding "by biome" alone puts wild carrots and potatoes in
+## the middle of a lake: reported live with a screenshot taken while
+## swimming, and measured at 47.3N 19.6E, where an entirely-water chunk
+## held 31 crop patches, 60 mushroom sites, 4 flower patches and 2 ant
+## mounds. Empty by default, so every existing caller and test is
+## unaffected.
+var _is_water: PackedByteArray
+
+
+## Whether this cell is drawn as water. Mirrors TallGrass._is_river_at
+## exactly, including the bounds check that makes an empty mask read as
+## "nothing is water".
+func _is_water_at(x: int, y: int) -> bool:
+	var index := y * _width + x
+	return index < _is_water.size() and _is_water[index] == 1
 
 
 func get_patch_cells() -> Array:
@@ -217,6 +240,8 @@ func _seed_initial_patches() -> void:
 				return
 			if _biome[y * _width + x] != "grassland":
 				continue
+			if _is_water_at(x, y):
+				continue
 			if not _in_this_crops_territory(_crop_id, x, y):
 				continue
 			var roll := float(absi(hash("%s_%d_%d_%d_crop_seed" % [_crop_id, _seed_value, x, y])) % 10000) / 10000.0
@@ -245,6 +270,8 @@ func _step_spread() -> void:
 		if target.x < 0 or target.x >= _width or target.y < 0 or target.y >= _height:
 			continue
 		if _biome[target.y * _width + target.x] != "grassland":
+			continue
+		if _is_water_at(target.x, target.y):
 			continue
 		if not _in_this_crops_territory(_crop_id, target.x, target.y):
 			continue

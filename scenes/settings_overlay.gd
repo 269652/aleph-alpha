@@ -15,6 +15,7 @@ extends PanelContainer
 const Keybindings = preload("res://src/gameplay/keybindings.gd")
 const RenderResolution = preload("res://src/rendering/render_resolution.gd")
 const AudioSettings = preload("res://src/audio/audio_settings.gd")
+const UiScale = preload("res://src/ui/ui_scale.gd")
 
 signal binding_changed(action_name: String, keycode: int)
 signal reset_requested()
@@ -30,6 +31,11 @@ signal audio_volume_changed(value: float)
 ## One of SimulationSettings.KNOBS and its new density (0-1) -- the
 ## "Simulation" section's sliders (see _build_simulation_section).
 signal simulation_density_changed(knob: String, value: float)
+## The UI scale slider moved, to a value already inside UiScale's range (the
+## HSlider itself is range-limited, so this never needs sanitizing again --
+## see UiScale.sanitize for the one place a value that did NOT come from this
+## slider, a loaded config file, still gets guarded).
+signal ui_scale_changed(value: float)
 signal resume_requested()
 signal license_code_submitted(code: String)
 
@@ -38,6 +44,7 @@ var _key_section: VBoxContainer
 var _graphics_section: VBoxContainer
 var _audio_section: VBoxContainer
 var _simulation_section: VBoxContainer
+var _interface_section: VBoxContainer
 var _license_section: VBoxContainer
 var _license_edit: TextEdit
 var _license_status_label: Label
@@ -50,10 +57,11 @@ var _listening_button: Button
 ## the menu renders from the same source of truth World applies.
 func setup(
 	bindings: Keybindings, fullscreen: bool, vsync: bool, resolution: String = "",
-	audio_volume: float = AudioSettings.DEFAULT_VOLUME, simulation_densities: Dictionary = {}
+	audio_volume: float = AudioSettings.DEFAULT_VOLUME, simulation_densities: Dictionary = {},
+	ui_scale: float = UiScale.DEFAULT_SCALE
 ) -> void:
 	_bindings = bindings
-	_build(fullscreen, vsync, resolution, audio_volume, simulation_densities)
+	_build(fullscreen, vsync, resolution, audio_volume, simulation_densities, ui_scale)
 
 
 func _ready() -> void:
@@ -71,7 +79,7 @@ func is_open() -> bool:
 	return visible
 
 
-func _build(fullscreen: bool, vsync: bool, resolution: String, audio_volume: float, simulation_densities: Dictionary = {}) -> void:
+func _build(fullscreen: bool, vsync: bool, resolution: String, audio_volume: float, simulation_densities: Dictionary = {}, ui_scale: float = UiScale.DEFAULT_SCALE) -> void:
 	var root := VBoxContainer.new()
 	root.add_theme_constant_override("separation", 6)
 	add_child(root)
@@ -100,6 +108,10 @@ func _build(fullscreen: bool, vsync: bool, resolution: String, audio_volume: flo
 	simulation_tab.text = "Simulation"
 	simulation_tab.pressed.connect(func(): _show_section("simulation"))
 	tabs.add_child(simulation_tab)
+	var interface_tab := Button.new()
+	interface_tab.text = "Interface"
+	interface_tab.pressed.connect(func(): _show_section("interface"))
+	tabs.add_child(interface_tab)
 	var license_tab := Button.new()
 	license_tab.text = "License"
 	license_tab.pressed.connect(func(): _show_section("license"))
@@ -113,6 +125,8 @@ func _build(fullscreen: bool, vsync: bool, resolution: String, audio_volume: flo
 	root.add_child(_audio_section)
 	_simulation_section = _build_simulation_section(simulation_densities)
 	root.add_child(_simulation_section)
+	_interface_section = _build_interface_section(ui_scale)
+	root.add_child(_interface_section)
 	_license_section = _build_license_section()
 	root.add_child(_license_section)
 
@@ -251,6 +265,47 @@ func _build_audio_section(volume: float) -> VBoxContainer:
 	return section
 
 
+## The UI scale (docs/concept/hud.md "UI scale"): one slider, the exact shape
+## of the master-volume row above. Every font size in the HUD used to be a
+## hardcoded override chosen against one developer's monitor.
+func _build_interface_section(ui_scale: float) -> VBoxContainer:
+	var section := VBoxContainer.new()
+	section.add_theme_constant_override("separation", 6)
+
+	var row := HBoxContainer.new()
+	var caption := Label.new()
+	caption.text = "UI scale"
+	caption.custom_minimum_size = Vector2(120, 0)
+	row.add_child(caption)
+
+	var slider := HSlider.new()
+	slider.min_value = UiScale.MIN_SCALE
+	slider.max_value = UiScale.MAX_SCALE
+	slider.step = 0.05
+	slider.value = UiScale.sanitize(ui_scale)
+	slider.custom_minimum_size = Vector2(160, 0)
+	slider.size_flags_horizontal = Control.SIZE_EXPAND_FILL
+	row.add_child(slider)
+
+	var percent_label := Label.new()
+	percent_label.text = "%d%%" % roundi(slider.value * 100.0)
+	percent_label.custom_minimum_size = Vector2(44, 0)
+	row.add_child(percent_label)
+
+	slider.value_changed.connect(func(value: float):
+		percent_label.text = "%d%%" % roundi(value * 100.0)
+		ui_scale_changed.emit(value)
+	)
+	section.add_child(row)
+
+	var hint := Label.new()
+	hint.text = "Text size across the whole UI. Layout stays put; only the text grows."
+	hint.autowrap_mode = TextServer.AUTOWRAP_WORD_SMART
+	hint.modulate = Color(1, 1, 1, 0.6)
+	section.add_child(hint)
+	return section
+
+
 ## The player's own simulation-density knobs (docs/concept/
 ## ecosystem_dynamics.md "Simulation density: the player's own knobs"): one
 ## slider per SimulationSettings knob, the exact shape of the master-volume
@@ -348,6 +403,7 @@ func _show_section(which: String) -> void:
 	_graphics_section.visible = which == "graphics"
 	_audio_section.visible = which == "audio"
 	_simulation_section.visible = which == "simulation"
+	_interface_section.visible = which == "interface"
 	_license_section.visible = which == "license"
 
 

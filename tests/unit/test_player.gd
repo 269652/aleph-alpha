@@ -32,6 +32,7 @@ const AmbientFlyerMarker = preload("res://src/rendering/ambient_flyer_marker.gd"
 const BondedCompanionMarker = preload("res://src/rendering/bonded_companion_marker.gd")
 const Item = preload("res://src/gameplay/item.gd")
 const ProceduralItemSprite = preload("res://src/rendering/procedural_item_sprite.gd")
+const IllustratedItemArt = preload("res://src/rendering/illustrated_item_art.gd")
 const DroppedItem = preload("res://src/rendering/dropped_item.gd")
 const ItemStack = preload("res://src/gameplay/item_stack.gd")
 const TreeRenderer = preload("res://src/rendering/tree_renderer.gd")
@@ -45,6 +46,10 @@ const ConstructionProject = preload("res://src/emergence/construction_project.gd
 const HouseInteriorView = preload("res://src/rendering/house_interior_view.gd")
 const BuildingCatalog = preload("res://src/gameplay/building_catalog.gd")
 const HouseDecor = preload("res://src/gameplay/house_decor.gd")
+const SpellTuition = preload("res://src/gameplay/spell_tuition.gd")
+const MageGuildRoster = preload("res://src/gameplay/mage_guild_roster.gd")
+const MageMaster = preload("res://src/gameplay/mage_master.gd")
+const SpellBook = preload("res://src/gameplay/spell_book.gd")
 
 const TILE_SIZE := TerrainRenderer.TILE_SIZE
 
@@ -86,6 +91,9 @@ func before_each():
 
 
 func after_each():
+	for site in _placed_buildings:
+		chunk_manager.remove_building(site["chunk_coord"], site["origin"])
+	_placed_buildings.clear()
 	remove_child(player)
 	player.free()
 	remove_child(interior_viewport)
@@ -975,10 +983,14 @@ func test_equipping_an_item_shows_its_sprite_id_art_not_its_raw_id():
 
 	assert_true(player.equip_item(variant))
 
-	var expected := ProceduralItemSprite.new().generate_texture("iron_sword")
-	assert_eq(
-		player._character_view.tool_slot_texture().get_image().get_data(),
-		expected.get_image().get_data(),
+	# Resolved through the sprite_id either way -- this now reads the REAL
+	# `held` art (the gripped pose the tool slot swings), which is exactly
+	# why the indirection still has to hold: iron_sword_blessed has no art
+	# tree of its own and must borrow iron_sword's.
+	var expected := IllustratedItemArt.new().texture_for("iron_sword", "held")
+	assert_true(
+		player._character_view.tool_slot_texture().get_image().get_data()
+			== expected.get_image().get_data(),
 		"the held sprite should be iron_sword's art (the sprite_id), not iron_sword_blessed's"
 	)
 
@@ -1331,10 +1343,16 @@ func test_equipping_armor_shows_it_in_the_matching_character_view_slot():
 	assert_true(player.equip_armor(helm))
 
 	assert_true(player._character_view.is_slot_equipped("head"))
-	var expected := ProceduralItemSprite.new().generate_texture("leather_helm")
-	assert_eq(
-		player._character_view.slot_texture("head").get_image().get_data(),
-		expected.get_image().get_data()
+	# The REAL art, since 2026-09-19 -- leather_helm has an `equipped` row
+	# on disk (the helm as worn). This used to assert
+	# ProceduralItemSprite's generated shape, which was never the point of
+	# the test: what it protects is that equipping puts THIS item's picture
+	# in THIS slot. See docs/concept/illustrated_art_addressing.md.
+	var expected := IllustratedItemArt.new().texture_for("leather_helm", "equipped")
+	assert_true(
+		player._character_view.slot_texture("head").get_image().get_data()
+			== expected.get_image().get_data(),
+		"the head slot shows the helm's own worn art"
 	)
 
 
@@ -1744,6 +1762,7 @@ func test_casting_an_unknown_spell_id_does_nothing_and_fails():
 
 func test_casting_a_self_delivery_spell_heals_the_caster():
 	player.apply_class("mage", {"max_mana": 50.0})
+	_learn_at_a_guild("minor_heal")
 	player.take_damage(30.0)
 	var health_before := player.health
 
@@ -1759,6 +1778,343 @@ func test_casting_with_nothing_in_range_still_spends_mana():
 	player.apply_class("mage", {"max_mana": 50.0})
 	assert_true(player.cast_spell("fire_bolt"))
 	assert_lt(player.mana, 50.0)
+
+
+# -- learning a spell at a mage guild (docs/concept/magic.md, 2026-09-19) ----
+#
+# The charter gates a mage_guild at CITY tier, so the way to one is through a
+# village the player helped grow. This is what is behind that gate: a guild
+# teaches spells out of the world's catalogue that you do not yet know. The
+# catalogue is the world's; the known set is yours.
+
+var _book := SpellBook.new()
+## Everything this file placed, torn down in after_each: these are
+## PERSISTED buildings in a real user:// dir shared with every other test
+## in the run, and Berlin's chunk is where all of them go looking for
+## clear ground.
+var _placed_buildings: Array = []
+
+
+## A guild seed whose FULL roster really teaches `spell_id`. Masters are
+## drawn from the guild's own seed, so "a guild that teaches Minor Heal" is
+## a guild you have to go and FIND rather than one you can assume -- which
+## is the feature, and here it just means searching for the fixture.
+func _a_guild_seed_teaching(spell_id: String) -> int:
+	for i in 400:
+		var seed_value := hash("test_guild_%d" % i)
+		var seeds: Array = MageGuildRoster.master_seeds(
+			seed_value, MageGuildRoster.DAYS_PER_MASTER * float(MageGuildRoster.CAPACITY)
+		)
+		if MageGuildRoster.teachers_for(_book, spell_id, seeds).size() > 0:
+			return seed_value
+	fail_test("no guild in the sample teaches %s" % spell_id)
+	return 0
+
+
+## Raises a real mage guild on real dry ground, ages it so `masters` have
+## moved in, and walks the player inside -- a real HouseInteriorView and
+## InteriorAvatar in this test's own viewport, the same fixture
+## _enter_a_real_interior builds. Returns the guild's own record.
+func _enter_a_guild(guild_seed: int, masters: int) -> Dictionary:
+	var site := _a_dry_site_for(SpellTuition.GUILD_BUILDING_ID)
+	assert_false(site.is_empty(), "precondition: somewhere dry to raise a guild")
+	if site.is_empty():
+		return {}
+	assert_true(
+		chunk_manager.place_building(
+			site["chunk_coord"], site["origin"], SpellTuition.GUILD_BUILDING_ID,
+			Vector2i(0, 1), guild_seed
+		),
+		"precondition: the guild stands"
+	)
+	_placed_buildings.append(site)
+	chunk_manager.age_mage_guilds_in(
+		site["chunk_coord"], MageGuildRoster.DAYS_PER_MASTER * float(masters)
+	)
+	var record: Dictionary = chunk_manager.building_record_at(site["chunk_coord"], site["origin"])
+	var view := HouseInteriorView.new()
+	var renderer := TerrainRenderer.new()
+	view.build("hall", MageMaster.OCCUPATION, guild_seed, renderer.build_tile_set(), TILE_SIZE, renderer)
+	interior_viewport.add_child(view)
+	var avatar := InteriorAvatar.new()
+	interior_viewport.add_child(avatar)
+	player.enter_building(view, avatar, record)
+	return record
+
+
+## Walks into a full guild that really teaches `spell_id`, pays the asking
+## price, and takes the lesson.
+func _learn_at_a_guild(spell_id: String) -> Dictionary:
+	_enter_a_guild(_a_guild_seed_teaching(spell_id), MageGuildRoster.CAPACITY)
+	player.wallet.add(player.tuition_for(spell_id))
+	return player.learn_spell(spell_id)
+
+
+func test_a_fresh_player_knows_only_the_starting_spells():
+	assert_eq(player.known_spell_ids(), SpellTuition.STARTING_SPELL_IDS.duplicate())
+
+
+func test_the_cast_key_default_is_a_spell_a_fresh_player_actually_knows():
+	assert_true(player.known_spell_ids().has(Player.DEFAULT_CAST_SPELL_ID))
+
+
+func test_a_catalogue_spell_you_have_not_learned_is_not_castable():
+	# SpellBook.has() says a spell EXISTS. It must no longer say you can
+	# cast it -- that is the whole split this feature rests on.
+	player.apply_class("mage", {"max_mana": 50.0})
+
+	assert_false(player.cast_spell("minor_heal"))
+
+	assert_almost_eq(player.mana, 50.0, 0.001, "a spell you do not know must spend nothing")
+
+
+func test_being_refused_a_spell_you_do_not_know_says_so_rather_than_blaming_mana():
+	player.apply_class("mage", {"max_mana": 50.0})
+
+	player.cast_spell("minor_heal")
+
+	var said := player.cast_message.to_lower()
+	assert_string_contains(said, "learn", "the banner must blame knowledge, not mana")
+	assert_false(said.contains("mana"), "a spell you never learned was refused as if you were poor")
+
+
+func test_a_guild_quotes_a_real_price_for_a_spell_it_can_teach():
+	assert_eq(player.tuition_for("minor_heal"), SpellTuition.new().tuition_for(player._spell_book, "minor_heal"))
+	assert_gt(player.tuition_for("minor_heal"), 0)
+
+
+func test_learning_out_in_a_field_is_refused_and_costs_nothing():
+	player.wallet.add(100000)
+
+	var result: Dictionary = player.learn_spell("minor_heal")
+
+	assert_false(result["ok"])
+	assert_eq(result["refusal"].get("reason", ""), SpellTuition.OUTSIDE)
+	assert_eq(player.wallet.balance, 100000, "a refusal must never move gold")
+	assert_false(player.known_spell_ids().has("minor_heal"))
+
+
+func test_standing_right_beside_a_guild_is_still_standing_outside_it():
+	# The gate moved from proximity to being INSIDE: you cannot be
+	# apprenticed to somebody through a wall.
+	var tile := player.current_tile()
+	chunk_manager.build_at_global(tile.x + 1, tile.y, SpellTuition.GUILD_BUILDING_ID)
+	player.wallet.add(100000)
+
+	var result: Dictionary = player.learn_spell("minor_heal")
+
+	assert_eq(result["refusal"].get("reason", ""), SpellTuition.OUTSIDE)
+
+
+func test_being_inside_some_other_building_is_not_being_inside_a_guild():
+	_enter_a_real_interior()
+	player.wallet.add(100000)
+
+	assert_eq(player.guild_here(), {})
+	assert_eq(player.learn_spell("minor_heal")["refusal"].get("reason", ""), SpellTuition.OUTSIDE)
+
+
+func test_a_guild_nobody_has_moved_into_yet_teaches_nothing():
+	# Pillar 1: the building is not the teacher.
+	_enter_a_guild(_a_guild_seed_teaching("minor_heal"), 0)
+	player.wallet.add(100000)
+
+	var result: Dictionary = player.learn_spell("minor_heal")
+
+	assert_false(result["ok"])
+	assert_eq(result["refusal"].get("reason", ""), SpellTuition.NO_MASTER)
+	assert_eq(player.masters_here(), [])
+	assert_eq(player.spells_a_guild_would_teach(), [])
+
+
+func test_learning_inside_a_guild_charges_the_tuition_and_teaches_the_spell():
+	_enter_a_guild(_a_guild_seed_teaching("minor_heal"), MageGuildRoster.CAPACITY)
+	var price: int = player.tuition_for("minor_heal")
+	player.wallet.add(price + 5)
+
+	var result: Dictionary = player.learn_spell("minor_heal")
+
+	assert_true(result["ok"])
+	assert_eq(result["gold"], price)
+	assert_eq(player.wallet.balance, 5)
+	assert_true(player.known_spell_ids().has("minor_heal"))
+	assert_true(MageMaster.teaches(_book, "minor_heal", int(result["teacher"])),
+		"the lesson was credited to somebody who does not teach it")
+
+
+func test_several_masters_hang_around_inside_a_full_guild():
+	# Asked for directly: multiple mages move in and are in there together.
+	_enter_a_guild(_a_guild_seed_teaching("minor_heal"), MageGuildRoster.CAPACITY)
+	assert_eq(player.masters_here().size(), MageGuildRoster.CAPACITY)
+
+
+## Walking in through the real door must actually stand them up in the
+## room, not merely make them answerable by a query.
+func test_walking_into_a_guild_stands_its_masters_up_in_the_room():
+	var guild_seed := _a_guild_seed_teaching("minor_heal")
+	var site := _a_dry_site_for(SpellTuition.GUILD_BUILDING_ID)
+	assert_false(site.is_empty(), "precondition: somewhere dry to raise a guild")
+	if site.is_empty():
+		return
+	assert_true(chunk_manager.place_building(
+		site["chunk_coord"], site["origin"], SpellTuition.GUILD_BUILDING_ID,
+		Vector2i(0, 1), guild_seed
+	))
+	_placed_buildings.append(site)
+	chunk_manager.age_mage_guilds_in(
+		site["chunk_coord"], MageGuildRoster.DAYS_PER_MASTER * float(MageGuildRoster.CAPACITY)
+	)
+	# Stand on the guild's own doorstep and press Enter for real.
+	var global_origin: Vector2i = site["chunk_coord"] * EarthChunkManager.CHUNK_SIZE + site["origin"]
+	var doorstep: Vector2i = global_origin + BuildingCatalog.doorstep_of(SpellTuition.GUILD_BUILDING_ID)
+	player.position = (Vector2(doorstep) + Vector2(0.5, 0.5)) * TILE_SIZE
+	_register_all_keybindings()
+	Input.action_press("enter")
+	player._enter_exit_step()
+	Input.action_release("enter")
+
+	assert_true(player.is_indoors(), "pressing Enter on the guild's doorstep did not go in")
+	assert_eq(player._interior_view.occupant_identities().size(), MageGuildRoster.CAPACITY)
+	for identity in player._interior_view.occupant_identities():
+		assert_eq(identity.occupation, MageMaster.OCCUPATION)
+
+
+## A guild's record carries no occupation (nobody is its household), so
+## the enter step's seed-derived fallback would furnish it for a random
+## trade -- a mage guild with a farmer's barrel in it. It has to be
+## furnished for the trade that is actually in there.
+func test_walking_into_a_guild_furnishes_it_for_a_mage():
+	var guild_seed := _a_guild_seed_teaching("minor_heal")
+	var site := _a_dry_site_for(SpellTuition.GUILD_BUILDING_ID)
+	assert_false(site.is_empty(), "precondition: somewhere dry to raise a guild")
+	if site.is_empty():
+		return
+	assert_true(chunk_manager.place_building(
+		site["chunk_coord"], site["origin"], SpellTuition.GUILD_BUILDING_ID,
+		Vector2i(0, 1), guild_seed
+	))
+	_placed_buildings.append(site)
+	var global_origin: Vector2i = site["chunk_coord"] * EarthChunkManager.CHUNK_SIZE + site["origin"]
+	var doorstep: Vector2i = global_origin + BuildingCatalog.doorstep_of(SpellTuition.GUILD_BUILDING_ID)
+	player.position = (Vector2(doorstep) + Vector2(0.5, 0.5)) * TILE_SIZE
+	_register_all_keybindings()
+	Input.action_press("enter")
+	player._enter_exit_step()
+	Input.action_release("enter")
+
+	assert_true(player.is_indoors(), "precondition: went in")
+	assert_eq(player._interior_view.occupation, MageMaster.OCCUPATION)
+	# A hall, not somebody's cottage: the room has to be the shape the
+	# catalog says a guild is (docs/concept/building.md, "A hall is a
+	# workplace").
+	var cells: Dictionary = player._interior_view._furniture
+	assert_false(cells.values().has("wood_bed"), "a mage guild has a bed in it")
+	assert_true(cells.values().has("workbench"), "a mage guild has nothing to work at")
+
+
+func test_an_empty_guild_really_is_an_empty_room():
+	_enter_a_guild(_a_guild_seed_teaching("minor_heal"), 0)
+	assert_eq(player._interior_view.occupant_identities(), [])
+
+
+func test_what_a_guild_offers_is_what_its_own_masters_teach():
+	_enter_a_guild(_a_guild_seed_teaching("minor_heal"), MageGuildRoster.CAPACITY)
+	var offered: Array = player.spells_a_guild_would_teach()
+	assert_gt(offered.size(), 0)
+	for spell_id in offered:
+		assert_gt(
+			MageGuildRoster.teachers_for(_book, spell_id, player.masters_here()).size(), 0,
+			"%s is offered here but nobody in the room teaches it" % spell_id
+		)
+		assert_false(player.known_spell_ids().has(spell_id), "%s is already known" % spell_id)
+
+
+func test_a_guild_refuses_a_tradition_nobody_in_it_holds():
+	# The sentence that turns a refusal into a reason to travel.
+	_enter_a_guild(_a_guild_seed_teaching("minor_heal"), MageGuildRoster.CAPACITY)
+	player.wallet.add(100000)
+	var unheld := ""
+	for spell_id in _book.known_ids():
+		if (
+			not player.known_spell_ids().has(spell_id)
+			and MageGuildRoster.teachers_for(_book, spell_id, player.masters_here()).is_empty()
+		):
+			unheld = spell_id
+			break
+	assert_ne(unheld, "", "precondition: this guild cannot teach everything")
+	if unheld == "":
+		return
+
+	var refusal: Dictionary = player.learn_spell(unheld)["refusal"]
+
+	assert_eq(refusal.get("reason", ""), SpellTuition.NO_MASTER)
+	assert_ne(refusal.get("school", ""), "", "a refusal must say which tradition to go looking for")
+	assert_gt(int(refusal.get("depth", 0)), 0)
+
+
+func test_a_spell_learned_at_a_guild_is_really_castable():
+	# The point of the whole errand: the lesson has to buy real magic, not a
+	# line in a list.
+	player.apply_class("mage", {"max_mana": 50.0})
+	_learn_at_a_guild("minor_heal")
+	player.take_damage(30.0)
+	var health_before := player.health
+
+	assert_true(player.cast_spell("minor_heal"))
+
+	assert_gt(player.health, health_before)
+
+
+func test_learning_without_the_gold_is_refused_and_names_the_shortfall():
+	_enter_a_guild(_a_guild_seed_teaching("minor_heal"), MageGuildRoster.CAPACITY)
+	var price: int = player.tuition_for("minor_heal")
+	player.wallet.add(price - 10)
+
+	var result: Dictionary = player.learn_spell("minor_heal")
+
+	assert_false(result["ok"])
+	assert_eq(result["refusal"].get("reason", ""), SpellTuition.CANNOT_AFFORD)
+	assert_eq(result["refusal"].get("short", 0), 10, "'come back with 10 more gold', never a bare no")
+	assert_eq(player.wallet.balance, price - 10)
+
+
+func test_a_guild_will_not_charge_twice_for_one_spell():
+	_learn_at_a_guild("minor_heal")
+	player.wallet.add(100000)
+
+	var result: Dictionary = player.learn_spell("minor_heal")
+
+	assert_false(result["ok"])
+	assert_eq(result["refusal"].get("reason", ""), SpellTuition.ALREADY_KNOWN)
+	assert_eq(player.wallet.balance, 100000)
+
+
+func test_learned_spells_survive_a_save_and_reload():
+	# A permanent capability bought with real gold must not evaporate on
+	# reload, the same as karma or a spent life.
+	_learn_at_a_guild("minor_heal")
+	var save_data := player.to_save_dict()
+
+	var reloaded := PlayerScene.instantiate()
+	add_child(reloaded)
+	reloaded.apply_save_dict(save_data)
+
+	assert_true(reloaded.known_spell_ids().has("minor_heal"))
+	remove_child(reloaded)
+	reloaded.free()
+
+
+func test_a_save_written_before_spells_were_learnable_keeps_the_starting_set():
+	var save_data := player.to_save_dict()
+	save_data.erase("known_spell_ids")
+
+	var reloaded := PlayerScene.instantiate()
+	add_child(reloaded)
+	reloaded.apply_save_dict(save_data)
+
+	assert_eq(reloaded.known_spell_ids(), SpellTuition.STARTING_SPELL_IDS.duplicate())
+	remove_child(reloaded)
+	reloaded.free()
 
 
 func test_apply_knockback_overrides_the_velocity_for_its_duration():
@@ -4250,15 +4606,9 @@ func test_indoors_talking_and_inventory_actions_still_run():
 # -- _enter_exit_step: the real doorstep-driven dispatcher -------------------
 
 func test_enter_exit_step_enters_a_real_building_from_its_own_real_doorstep():
-	_register_all_keybindings()
-	var origin := Vector2i(10, 10)
-	chunk_manager.place_building(Vector2i(0, 0), origin, "house_small", Vector2i(0, 1), 1, "")
-	var doorstep_global: Vector2i = origin + BuildingCatalog.doorstep_of("house_small")
-	player.position = (Vector2(doorstep_global) + Vector2(0.5, 0.5)) * TILE_SIZE
+	_a_house_on_dry_ground()
 
-	Input.action_press("enter")
-	player._enter_exit_step()
-	Input.action_release("enter")
+	_walk_in()
 
 	assert_true(player.is_indoors())
 
@@ -4301,16 +4651,9 @@ func test_entering_a_building_dresses_the_avatar_as_the_player():
 	var sword := _item_catalog.make("iron_sword")
 	player.inventory.add(sword, 1)
 	assert_true(player.equip_item(sword), "precondition: a sword is held")
-	var origin := Vector2i(10, 10)
-	chunk_manager.place_building(Vector2i(0, 0), origin, "house_small", Vector2i(0, 1), 1, "")
-	var doorstep_global: Vector2i = origin + BuildingCatalog.doorstep_of("house_small")
-	player.position = (Vector2(doorstep_global) + Vector2(0.5, 0.5)) * TILE_SIZE
+	_a_house_on_dry_ground()
 
-	Input.action_press("enter")
-	player._enter_exit_step()
-	Input.action_release("enter")
-
-	assert_true(player.is_indoors(), "precondition: entered")
+	_walk_in()
 	var view: CharacterView = player._interior_avatar.character_view()
 	assert_not_null(view, "the avatar must carry a real CharacterView")
 	assert_true(view.is_slot_equipped("tool"), "the held sword must show on the indoor avatar")
@@ -4323,19 +4666,57 @@ func test_entering_a_building_dresses_the_avatar_as_the_player():
 # merchant's house is furnished as a merchant's, not as whatever the house's
 # seed happened to roll.
 
-func _enter_the_house_placed_at(origin: Vector2i, occupation: String, resident_seed: int) -> void:
+## A real `house_small` on real DRY ground, with the player left standing
+## on its own doorstep. Returns {chunk_coord, origin, global_origin,
+## doorstep_global}.
+##
+## The site is FOUND, never assumed, and that is the whole point of this
+## helper. Every test below used to place its house at chunk (0, 0) tile
+## (10, 10) -- which is open ocean, because global tile (0, 0) is the Earth
+## projection's corner. `place_building` refuses a wet footprint, so no
+## house was ever raised, no doorstep existed to enter, and nineteen tests
+## failed on "precondition: entered" for as long as nobody ran this file to
+## completion. Same move, same reason, as _a_dry_site_for above.
+func _a_house_on_dry_ground(
+	owner_household_id: String = "", occupation: String = "", resident_seed: int = 0
+) -> Dictionary:
+	var site := _a_dry_site_for("house_small")
+	assert_false(site.is_empty(), "precondition: somewhere dry to raise a house")
+	if site.is_empty():
+		return {}
+	assert_true(
+		chunk_manager.place_building(
+			site["chunk_coord"], site["origin"], "house_small", Vector2i(0, 1), 1,
+			owner_household_id, occupation, resident_seed
+		),
+		"precondition: the house stands"
+	)
+	_placed_buildings.append(site)
+	site["doorstep_global"] = site["global_origin"] + BuildingCatalog.doorstep_of("house_small")
+	player.position = (Vector2(site["doorstep_global"]) + Vector2(0.5, 0.5)) * TILE_SIZE
+	return site
+
+
+## Presses Enter for real, from wherever the player is standing.
+func _walk_in() -> void:
 	_register_all_keybindings()
-	chunk_manager.place_building(Vector2i(0, 0), origin, "house_small", Vector2i(0, 1), 1, "", occupation, resident_seed)
-	var doorstep_global: Vector2i = origin + BuildingCatalog.doorstep_of("house_small")
-	player.position = (Vector2(doorstep_global) + Vector2(0.5, 0.5)) * TILE_SIZE
 	Input.action_press("enter")
 	player._enter_exit_step()
 	Input.action_release("enter")
 	assert_true(player.is_indoors(), "precondition: entered")
 
 
+## A villager's house, entered. The villager fixture (if any) has to be
+## created between raising the house and walking in, so those tests call
+## the two halves themselves.
+func _enter_the_house_placed_at(occupation: String, resident_seed: int) -> Dictionary:
+	var site := _a_house_on_dry_ground("", occupation, resident_seed)
+	_walk_in()
+	return site
+
+
 func test_entering_a_house_furnishes_it_for_its_own_residents_occupation():
-	_enter_the_house_placed_at(Vector2i(10, 10), "merchant", 4242)
+	_enter_the_house_placed_at("merchant", 4242)
 	assert_eq(player._interior_view.occupation, "merchant")
 
 
@@ -4343,7 +4724,7 @@ func test_entering_a_house_furnishes_it_for_its_own_residents_occupation():
 ## today's fallback -- a deterministic pseudo-occupation from the house's
 ## own seed -- so an old save's houses stay furnished rather than bare.
 func test_entering_a_house_with_no_recorded_resident_still_gets_a_real_occupation():
-	_enter_the_house_placed_at(Vector2i(10, 10), "", 0)
+	_enter_the_house_placed_at("", 0)
 	assert_true(
 		HouseDecor.FURNITURE_SET_BY_OCCUPATION.has(player._interior_view.occupation),
 		"got %s" % player._interior_view.occupation
@@ -4357,7 +4738,9 @@ func test_entering_a_house_with_no_recorded_resident_still_gets_a_real_occupatio
 # out, the house is empty. Talking to them indoors works exactly like
 # outdoors -- the same greeting, from the avatar's own position.
 
-func _a_villager_living_at(doorstep_global: Vector2i, seed_value: int, at_home: bool) -> NpcMarker:
+func _a_villager_living_at(
+	chunk_coord: Vector2i, doorstep_global: Vector2i, seed_value: int, at_home: bool
+) -> NpcMarker:
 	var villager := NpcMarker.new()
 	villager.identity = NpcIdentity.new(seed_value)
 	villager.identity.occupation = "farmer"
@@ -4374,32 +4757,33 @@ func _a_villager_living_at(doorstep_global: Vector2i, seed_value: int, at_home: 
 	villager.position = doorstep if at_home else doorstep + Vector2(300, 0)
 	creatures_parent.add_child(villager)
 	villager._process(0.0)
-	chunk_manager._loaded_villages[Vector2i(0, 0)] = [villager]
+	# Keyed by the house's OWN chunk -- resident_marker_for looks the
+	# resident up in _loaded_villages[record.chunk_coord], so a villager
+	# filed under the origin chunk while their house stands in Berlin's is
+	# a villager nobody indoors can find.
+	chunk_manager._loaded_villages[chunk_coord] = [villager]
 	return villager
 
 
 func test_entering_a_house_whose_villager_is_home_finds_them_inside():
-	var origin := Vector2i(10, 10)
-	var doorstep_global: Vector2i = origin + BuildingCatalog.doorstep_of("house_small")
-	var villager := _a_villager_living_at(doorstep_global, 555, true)
+	var site := _a_house_on_dry_ground("", "farmer", 555)
+	var villager := _a_villager_living_at(site["chunk_coord"], site["doorstep_global"], 555, true)
 	assert_true(villager.is_at_home(), "precondition")
-	_enter_the_house_placed_at(origin, "farmer", 555)
+	_walk_in()
 	assert_eq(player._interior_view.resident_identity(), villager.identity)
 
 
 func test_entering_a_house_whose_villager_is_out_finds_it_empty():
-	var origin := Vector2i(10, 10)
-	var doorstep_global: Vector2i = origin + BuildingCatalog.doorstep_of("house_small")
-	_a_villager_living_at(doorstep_global, 556, false)
-	_enter_the_house_placed_at(origin, "farmer", 556)
+	var site := _a_house_on_dry_ground("", "farmer", 556)
+	_a_villager_living_at(site["chunk_coord"], site["doorstep_global"], 556, false)
+	_walk_in()
 	assert_null(player._interior_view.resident_identity())
 
 
 func test_talking_indoors_greets_the_resident_when_the_avatar_is_close_to_them():
-	var origin := Vector2i(10, 10)
-	var doorstep_global: Vector2i = origin + BuildingCatalog.doorstep_of("house_small")
-	var villager := _a_villager_living_at(doorstep_global, 557, true)
-	_enter_the_house_placed_at(origin, "farmer", 557)
+	var site := _a_house_on_dry_ground("", "farmer", 557)
+	var villager := _a_villager_living_at(site["chunk_coord"], site["doorstep_global"], 557, true)
+	_walk_in()
 	player._interior_avatar.position = player._interior_view.resident_position() + Vector2(TILE_SIZE, 0)
 
 	Input.action_press("talk")
@@ -4410,10 +4794,9 @@ func test_talking_indoors_greets_the_resident_when_the_avatar_is_close_to_them()
 
 
 func test_talking_indoors_far_from_the_resident_finds_nobody():
-	var origin := Vector2i(10, 10)
-	var doorstep_global: Vector2i = origin + BuildingCatalog.doorstep_of("house_small")
-	_a_villager_living_at(doorstep_global, 558, true)
-	_enter_the_house_placed_at(origin, "farmer", 558)
+	var site := _a_house_on_dry_ground("", "farmer", 558)
+	_a_villager_living_at(site["chunk_coord"], site["doorstep_global"], 558, true)
+	_walk_in()
 	player._interior_avatar.position = player._interior_view.resident_position() + Vector2(Player.TALK_RADIUS * 3.0, 0)
 
 	Input.action_press("talk")
@@ -4435,15 +4818,11 @@ func test_talking_indoors_far_from_the_resident_finds_nobody():
 const InteriorTemplates = preload("res://src/gameplay/interior_templates.gd")
 
 
-func _enter_own_house_placed_at(origin: Vector2i) -> void:
-	_register_all_keybindings()
+func _enter_own_house_placed_at() -> Dictionary:
 	var household := chunk_manager.household_store().form_household(PlayerIdentity.PLAYER_ENTITY_ID)
-	chunk_manager.place_building(Vector2i(0, 0), origin, "house_small", Vector2i(0, 1), 1, household.id)
-	var doorstep_global: Vector2i = origin + BuildingCatalog.doorstep_of("house_small")
-	player.position = (Vector2(doorstep_global) + Vector2(0.5, 0.5)) * TILE_SIZE
-	Input.action_press("enter")
-	player._enter_exit_step()
-	Input.action_release("enter")
+	var site := _a_house_on_dry_ground(household.id)
+	_walk_in()
+	return site
 	player._enter_exit_step()
 	assert_true(player.is_indoors(), "precondition: entered")
 
@@ -4480,17 +4859,17 @@ func _press_indoors(action: String) -> void:
 
 
 func test_entering_your_own_house_finds_it_unfurnished():
-	_enter_own_house_placed_at(Vector2i(10, 10))
+	_enter_own_house_placed_at()
 	assert_eq(player._interior_view.occupation, InteriorTemplates.UNFURNISHED)
 
 
 func test_a_villagers_house_is_still_furnished_for_them():
-	_enter_the_house_placed_at(Vector2i(10, 10), "merchant", 4242)
+	_enter_the_house_placed_at("merchant", 4242)
 	assert_eq(player._interior_view.occupation, "merchant")
 
 
 func test_placing_furniture_indoors_consumes_the_item_persists_it_and_paints_it():
-	_enter_own_house_placed_at(Vector2i(10, 10))
+	var site := _enter_own_house_placed_at()
 	var bed := _item_catalog.make("wood_bed")
 	player.inventory.add(bed, 2)
 	assert_true(player._arm_furniture(bed))
@@ -4500,13 +4879,13 @@ func test_placing_furniture_indoors_consumes_the_item_persists_it_and_paints_it(
 	_press_indoors("build")
 
 	assert_eq(player.inventory.count_of("wood_bed"), 1, "one bed was placed")
-	assert_eq(chunk_manager.interior_furniture_of(Vector2i(0, 0), Vector2i(10, 10)), {cell: "wood_bed"})
+	assert_eq(chunk_manager.interior_furniture_of(site["chunk_coord"], site["origin"]), {cell: "wood_bed"})
 	assert_eq(player._interior_view.furniture_at(cell), "wood_bed")
 	assert_not_null(player._interior_view.collision_body_at(cell), "a bed blocks at once")
 
 
 func test_picking_up_furniture_indoors_refunds_it_and_clears_the_cell():
-	_enter_own_house_placed_at(Vector2i(10, 10))
+	var site := _enter_own_house_placed_at()
 	var chair := _item_catalog.make("wood_chair")
 	player.inventory.add(chair, 1)
 	player._arm_furniture(chair)
@@ -4518,12 +4897,12 @@ func test_picking_up_furniture_indoors_refunds_it_and_clears_the_cell():
 	_press_indoors("destroy")
 
 	assert_eq(player.inventory.count_of("wood_chair"), 1, "picked back up")
-	assert_eq(chunk_manager.interior_furniture_of(Vector2i(0, 0), Vector2i(10, 10)), {})
+	assert_eq(chunk_manager.interior_furniture_of(site["chunk_coord"], site["origin"]), {})
 	assert_eq(player._interior_view.furniture_at(cell), "")
 
 
 func test_decorating_a_house_you_do_not_own_is_refused():
-	_enter_the_house_placed_at(Vector2i(10, 10), "farmer", 77)
+	var site := _enter_the_house_placed_at("farmer", 77)
 	var bed := _item_catalog.make("wood_bed")
 	player.inventory.add(bed, 1)
 	player._arm_furniture(bed)
@@ -4533,12 +4912,12 @@ func test_decorating_a_house_you_do_not_own_is_refused():
 	_press_indoors("build")
 
 	assert_eq(player.inventory.count_of("wood_bed"), 1, "nothing consumed")
-	assert_eq(chunk_manager.interior_furniture_of(Vector2i(0, 0), Vector2i(10, 10)), {})
+	assert_eq(chunk_manager.interior_furniture_of(site["chunk_coord"], site["origin"]), {})
 	assert_string_contains(player.decorate_message.to_lower(), "not your")
 
 
 func test_placing_furniture_against_a_wall_is_refused():
-	_enter_own_house_placed_at(Vector2i(10, 10))
+	var site := _enter_own_house_placed_at()
 	var bed := _item_catalog.make("wood_bed")
 	player.inventory.add(bed, 1)
 	player._arm_furniture(bed)
@@ -4547,11 +4926,11 @@ func test_placing_furniture_against_a_wall_is_refused():
 	_press_indoors("build")
 
 	assert_eq(player.inventory.count_of("wood_bed"), 1, "nothing consumed")
-	assert_eq(chunk_manager.interior_furniture_of(Vector2i(0, 0), Vector2i(10, 10)), {})
+	assert_eq(chunk_manager.interior_furniture_of(site["chunk_coord"], site["origin"]), {})
 
 
 func test_the_build_key_indoors_with_nothing_armed_does_nothing_to_the_house_or_the_world():
-	_enter_own_house_placed_at(Vector2i(10, 10))
+	var site := _enter_own_house_placed_at()
 	var outdoor_target := player._tile_targeting.facing_tile(player.current_tile(), player._last_facing_direction)
 	var before := chunk_manager.modification_at_global(outdoor_target.x, outdoor_target.y)
 	_face_interior_cell(_a_floor_cell_of_the_entered_house())
@@ -4559,11 +4938,11 @@ func test_the_build_key_indoors_with_nothing_armed_does_nothing_to_the_house_or_
 	_press_indoors("build")
 
 	assert_eq(chunk_manager.modification_at_global(outdoor_target.x, outdoor_target.y), before, "indoors never terraforms the world outside")
-	assert_eq(chunk_manager.interior_furniture_of(Vector2i(0, 0), Vector2i(10, 10)), {})
+	assert_eq(chunk_manager.interior_furniture_of(site["chunk_coord"], site["origin"]), {})
 
 
 func test_placed_furniture_is_still_there_after_leaving_and_re_entering():
-	_enter_own_house_placed_at(Vector2i(10, 10))
+	_enter_own_house_placed_at()
 	var table := _item_catalog.make("wood_table")
 	player.inventory.add(table, 1)
 	player._arm_furniture(table)
@@ -4597,10 +4976,7 @@ func test_enter_exit_step_does_nothing_far_from_any_doorstep():
 
 func test_enter_exit_step_leaves_from_the_real_interior_exit_cell_and_never_moves_the_real_player():
 	_register_all_keybindings()
-	var origin := Vector2i(14, 14)
-	chunk_manager.place_building(Vector2i(0, 0), origin, "house_small", Vector2i(0, 1), 1, "")
-	var doorstep_global: Vector2i = origin + BuildingCatalog.doorstep_of("house_small")
-	player.position = (Vector2(doorstep_global) + Vector2(0.5, 0.5)) * TILE_SIZE
+	_a_house_on_dry_ground()
 	var position_before := player.position
 
 	Input.action_press("enter")
@@ -4624,16 +5000,14 @@ func test_enter_exit_step_leaves_from_the_real_interior_exit_cell_and_never_move
 
 func test_enter_exit_step_does_not_re_trigger_while_the_key_stays_held():
 	_register_all_keybindings()
-	var origin := Vector2i(12, 12)
-	chunk_manager.place_building(Vector2i(0, 0), origin, "house_small", Vector2i(0, 1), 1, "")
-	var doorstep_global: Vector2i = origin + BuildingCatalog.doorstep_of("house_small")
-	player.position = (Vector2(doorstep_global) + Vector2(0.5, 0.5)) * TILE_SIZE
+	var site := _a_house_on_dry_ground()
+	var doorstep_pixel := (Vector2(site["doorstep_global"]) + Vector2(0.5, 0.5)) * TILE_SIZE
 
 	Input.action_press("enter")
 	player._enter_exit_step()
 	assert_true(player.is_indoors(), "precondition: the first press enters")
 	player.exit_building()  # simulate having walked back to the exact doorstep, key still held
-	player.position = (Vector2(doorstep_global) + Vector2(0.5, 0.5)) * TILE_SIZE
+	player.position = doorstep_pixel
 	player._enter_exit_step()  # key never released in between
 
 	assert_false(player.is_indoors(), "a held key must not re-enter on the very next step")

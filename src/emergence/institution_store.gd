@@ -91,6 +91,7 @@ func to_dicts() -> Array:
 			"goals": institution.goals,
 			"status": institution.status,
 			"created_at": institution.created_at,
+			"chest": institution.chest,
 		})
 	return out
 
@@ -107,6 +108,9 @@ static func from_dicts(dicts: Array) -> RefCounted:
 		for goal in d.get("goals", []):
 			institution.goals.append(str(goal))
 		institution.status = d.get("status", Institution.ACTIVE)
+		# A save written before chests existed carries none -- it reads back
+		# empty rather than missing, so every later read finds a Dictionary.
+		institution.chest = d.get("chest", {}).duplicate()
 
 		store._institutions[institution.id] = institution
 		store._order.append(institution.id)

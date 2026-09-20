@@ -3,7 +3,7 @@ extends RefCounted
 ## A* over the tile grid -- how a villager gets AROUND a building rather
 ## than merely along it (see docs/concept/navigation.md).
 ##
-## Reported live: "add proper wayfinding / routing". NpcBuildingGate's axis
+## Reported live: "add proper wayfinding / routing". The wall slide's axis
 ## sliding keeps an agent moving along a wall it brushes, which is right
 ## for brushing and useless for a detour: a villager whose own doorstep sat
 ## behind its own house pressed into that house forever. Sliding is a local
@@ -30,7 +30,7 @@ extends RefCounted
 ##     and guessing would hide it.
 ##
 ## Pure and static: tiles in, tiles out, no nodes and no world -- the same
-## split CreatureMovementGate and NpcBuildingGate already keep, so every
+## split CreatureMovementGate and AgentPassability already keep, so every
 ## branch is reachable headlessly against a hand-written predicate.
 
 ## Straight moves cost 1; a diagonal costs sqrt(2). Integers scaled by 100

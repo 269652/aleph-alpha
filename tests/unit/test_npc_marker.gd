@@ -1135,6 +1135,157 @@ func _closest_approach(target, destination: Vector2, ticks := 600) -> float:
 	return closest
 
 
+# -- a villager does not walk through a wall ---------------------------------
+#
+# Reported live: "houses should also block NPCs and animals". An NpcMarker
+# is a Sprite2D that moves by one position.move_toward per frame, so the
+# StaticBody2D on a wall has never had any effect on it.
+#
+# It SLIDES rather than stopping dead, which is what the same collision
+# would do to the player (move_and_slide) and what this marker needs to
+# keep working: there is no pathfinding here, only a straight line to the
+# target, so a villager who stopped the instant they touched a wall would
+# stand there for good -- and their own front door is reached by walking
+# at the house. Blocked straight on, they try the two axes separately and
+# take whichever is open, which carries them along the wall to the door.
+#
+# A DOOR and a FLOOR are walkable pieces, so going indoors is unaffected.
+
+class StubWorldWithWall:
+	extends StubWorld
+	var blocking_tiles: Dictionary = {}
+	func piece_blocks_movement_at_global(x: int, y: int) -> bool:
+		return blocking_tiles.has(Vector2i(x, y))
+
+
+func _wall_marker(world) -> NpcMarker:
+	var marker := NpcMarker.new()
+	marker.identity = NpcIdentity.new(1)
+	add_child_autofree(marker)
+	marker.setup(world, 16)
+	return marker
+
+
+func test_open_ground_is_stepped_into_unchanged():
+	var world := StubWorldWithWall.new()
+	var marker := _wall_marker(world)
+	assert_eq(marker._slid_along_walls(Vector2(8, 8), Vector2(24, 8)), Vector2(24, 8))
+
+
+func test_a_villager_slides_along_a_wall_instead_of_stopping_dead():
+	var world := StubWorldWithWall.new()
+	# The step's destination is a wall, and so is the cell due east of the
+	# start -- but due south is open, so that is the part of the step that
+	# survives.
+	world.blocking_tiles[Vector2i(1, 1)] = true
+	world.blocking_tiles[Vector2i(1, 0)] = true
+	var marker := _wall_marker(world)
+	var slid: Vector2 = marker._slid_along_walls(Vector2(8, 8), Vector2(24, 24))
+	assert_eq(
+		slid, Vector2(8, 24),
+		"blocked east, open south: the villager keeps the part of the step that is open"
+	)
+
+
+func test_a_villager_boxed_in_on_both_axes_stays_put():
+	var world := StubWorldWithWall.new()
+	world.blocking_tiles[Vector2i(1, 0)] = true
+	world.blocking_tiles[Vector2i(1, 1)] = true
+	world.blocking_tiles[Vector2i(0, 1)] = true
+	var marker := _wall_marker(world)
+	assert_eq(marker._slid_along_walls(Vector2(8, 8), Vector2(24, 24)), Vector2(8, 8))
+
+
+func test_a_world_that_knows_no_pieces_never_blocks_a_villager():
+	var marker := _wall_marker(StubWorld.new())
+	assert_eq(marker._slid_along_walls(Vector2(8, 8), Vector2(24, 24)), Vector2(24, 24))
+
+
+## The rails a farmhouse raises round its beds stop a villager for the same
+## reason they stop an animal (CreatureMarker._fence_blocks_movement):
+## asked for directly, "fences should have a hitbox blocking player and
+## NPCs as well". A rail is a LINE on one edge of its tile, so what the
+## world is asked is whether the STEP crosses it -- never whether a tile
+## carries a rail, which would make the ring round a field unwalkable
+## ground rather than a fence.
+class StubWorldWithFence:
+	extends StubWorld
+	var blocks_step := false
+	var asked_step: Array = []
+	func fence_blocks_step_global(from_x: int, from_y: int, to_x: int, to_y: int) -> bool:
+		asked_step = [Vector2i(from_x, from_y), Vector2i(to_x, to_y)]
+		return blocks_step
+
+
+func test_a_villager_does_not_step_across_a_farm_rail():
+	var world := StubWorldWithFence.new()
+	world.blocks_step = true
+	var marker := _wall_marker(world)
+	assert_eq(marker._slid_along_walls(Vector2(8, 8), Vector2(24, 8)), Vector2(8, 8))
+	assert_eq(world.asked_step, [Vector2i(0, 0), Vector2i(1, 0)], "it asks about the step it takes")
+
+
+func test_a_villager_walks_on_when_no_rail_is_crossed():
+	var world := StubWorldWithFence.new()
+	world.blocks_step = false
+	var marker := _wall_marker(world)
+	assert_eq(marker._slid_along_walls(Vector2(8, 8), Vector2(24, 8)), Vector2(24, 8))
+
+
+## Reported live, with the village in shot: *"The farmer doesn't farm
+## anymore"*.
+##
+## A regression from f64a360e ("a villager walks round a wall and a rail,
+## not through them"), whose own message named this failure mode: *"there
+## is no pathfinding here, only a straight line at the target... boxed in
+## on both, they stay put"*. Rails round a field stop a villager now -- and
+## a field's rails stand on its INNER edge, so the one villager they shut
+## out is the farmer whose beds they enclose.
+##
+## Measured on a real village (tools/probe_village_farming.gd): of three
+## villagers with a field, one worked 58 beds in 600s and the other two
+## worked NONE. Both spent 2650 of 2750 on-field ticks in APPROACHING,
+## frozen -- the herbalist nine pixels from its own bed, refused the last
+## step south into it.
+##
+## A gate exists for exactly this (docs/concept/village_farms.md, "The
+## gate"), but reaching it needs pathfinding a Sprite2D walking one
+## move_toward per frame does not have. The farmer is who the field is
+## FOR; the rails are there to keep animals out and to read as an
+## enclosure, not to shut the worker out of their own beds. So a villager
+## may cross into a bed they themselves work, and no other rail moves.
+func test_a_farmer_may_step_into_a_bed_they_work():
+	var world := StubWorldWithFence.new()
+	world.blocks_step = true
+	var marker := _wall_marker(world)
+	marker.field_cells = [Vector2i(1, 0)]
+
+	assert_eq(
+		marker._slid_along_walls(Vector2(8, 8), Vector2(24, 8)), Vector2(24, 8),
+		"the rail round a farmer's own field does not shut the farmer out of it"
+	)
+
+
+func test_a_rail_still_stops_a_villager_stepping_anywhere_else():
+	var world := StubWorldWithFence.new()
+	world.blocks_step = true
+	var marker := _wall_marker(world)
+	marker.field_cells = [Vector2i(9, 9)]  # their field is somewhere else entirely
+
+	assert_eq(
+		marker._slid_along_walls(Vector2(8, 8), Vector2(24, 8)), Vector2(8, 8),
+		"every other rail still stops them, including a neighbour's"
+	)
+
+
+func test_a_villager_with_no_field_is_stopped_by_every_rail():
+	var world := StubWorldWithFence.new()
+	world.blocks_step = true
+	var marker := _wall_marker(world)
+
+	assert_eq(marker._slid_along_walls(Vector2(8, 8), Vector2(24, 8)), Vector2(8, 8))
+
+
 # -- walls are solid to a villager too -------------------------------------
 #
 # Reported live: "NPCs walk straight through houses, ignoring the hitbox".
@@ -1142,7 +1293,8 @@ func _closest_approach(target, destination: Vector2, ticks := 600) -> float:
 # StaticBody2D (EarthChunkManager._spawn_building_node), which is exactly
 # what stops the PLAYER. But an NpcMarker is a plain Sprite2D assigning
 # `position` directly, so no physics body is ever consulted on its behalf.
-# The marker has to ASK, via NpcBuildingGate.
+# The marker has to ASK -- and now both asks: the router plans around
+# walls, and _slid_along_walls refuses a step into one.
 
 
 ## A world exposing just the two hooks NpcMarker duck-types on: the biome
@@ -1163,7 +1315,7 @@ class HouseInTheWayWorld:
 			and tile.y >= house_min.y and tile.y <= house_max.y
 		)
 
-	func has_building_at_global(x: int, y: int) -> bool:
+	func piece_blocks_movement_at_global(x: int, y: int) -> bool:
 		return covers(Vector2i(x, y))
 
 
@@ -1206,7 +1358,7 @@ func test_a_villager_with_no_world_bound_walks_exactly_as_before():
 
 func test_a_villager_routes_around_a_house_and_actually_gets_home():
 	# The bug sliding could never fix (see docs/concept/navigation.md):
-	# NpcBuildingGate keeps a villager ALONG a wall it brushes, but a
+	# the wall slide keeps a villager ALONG a wall it brushes, but a
 	# villager whose own doorstep sits directly behind its own house has
 	# nowhere to slide to and presses into the wall forever. Avoiding the
 	# house was never the hard part -- ARRIVING was.
@@ -1261,7 +1413,7 @@ class RiverAndCliffWorld:
 	func biome_at_global(_x: int, _y: int) -> String:
 		return "grassland"
 
-	func has_building_at_global(_x: int, _y: int) -> bool:
+	func piece_blocks_movement_at_global(_x: int, _y: int) -> bool:
 		return false
 
 	func slope_at_global(x: int, _y: int) -> float:

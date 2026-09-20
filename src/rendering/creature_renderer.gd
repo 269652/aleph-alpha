@@ -211,6 +211,50 @@ func spawn_creatures(
 	return spawned
 
 
+## The nearest dry tile centre to `position`, or null when there is nothing
+## but water within SPAWN_DRY_SEARCH_TILES.
+##
+## "Slides clear of water instead of not existing" is this project's own
+## established answer to a deterministic placement landing wet (see the
+## village square, which slides rather than vanishing): a lakeside chunk
+## should still carry its animals, just not out on the lake, and silently
+## dropping every individual whose point happened to land wet would thin a
+## shoreline population for no reason a player could see.
+##
+## Rings outward in a fixed order, so it stays as deterministic as the
+## point it corrects -- the same chunk gives the same animals the same
+## places on every load. Bounded rather than exhaustive: an animal that
+## cannot find land within a few tiles genuinely has no business there, and
+## the cap keeps the cost of a fully-flooded chunk bounded too.
+##
+## `world` is duck-typed and optional: every test that spawns creatures
+## without a world, and every caller that has none, gets the unchanged
+## point back.
+const SPAWN_DRY_SEARCH_TILES := 8
+
+
+func _slid_clear_of_water(position: Vector2, world, tile_size: int):
+	if world == null or not world.has_method("is_water_at_global"):
+		return position
+	var tile := Vector2i(int(position.x / tile_size), int(position.y / tile_size))
+	if not world.is_water_at_global(tile.x, tile.y):
+		return position
+	for radius in range(1, SPAWN_DRY_SEARCH_TILES + 1):
+		for dy in range(-radius, radius + 1):
+			for dx in range(-radius, radius + 1):
+				# The ring only, not the filled square: the inner cells were
+				# already answered by a smaller radius.
+				if absi(dx) != radius and absi(dy) != radius:
+					continue
+				var candidate := tile + Vector2i(dx, dy)
+				if world.is_water_at_global(candidate.x, candidate.y):
+					continue
+				return Vector2(
+					(candidate.x + 0.5) * tile_size, (candidate.y + 0.5) * tile_size
+				)
+	return null
+
+
 ## Drops any pool entry whose own minimum difficulty tier exceeds the
 ## region's current tier -- e.g. "bear" is filtered out of forest's pool
 ## below Tier.HARD. Species with no MIN_DIFFICULTY_TIER_BY_SPECIES entry
@@ -249,6 +293,14 @@ func _spawn_species(
 		var position := _deterministic_position(
 			chunk_coord, chunk_origin_tiles, chunk_size, tile_size, species_salt, i
 		)
+		# A land animal does not stand on open water. The deterministic
+		# point takes no account of it, so an all-water chunk was given a
+		# full land population standing on the lake (reported live with a
+		# screenshot taken while swimming: an alpaca out on the water).
+		var dry = _slid_clear_of_water(position, world, tile_size)
+		if dry == null:
+			continue  # nothing but water within reach -- no land animal here
+		position = dry
 		var marker := _build_marker(parent, species_name, position, wander_seed, world, tile_size)
 		# See docs/concept/disease.md "Region pressure": carried forward so
 		# disease transmission scales with the SAME distance-from-spawn

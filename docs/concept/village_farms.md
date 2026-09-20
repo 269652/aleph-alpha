@@ -137,6 +137,25 @@ stands with nowhere to farm. Placed with the same self-healing
 older village gains its farmhouses on its next visit rather than only at
 founding.
 
+**One rule, two callers** (2026-09-19). "Has real room" and "here is your
+field" were two separate copies of the same question — `_field_fits_at` at
+siting, `_workable_field_of` at derivation — and they had drifted. The
+derivation rejects a cell a **neighbouring farmhouse owns** (ownership is
+geometric, so a farmhouse raised later can take ground from one raised
+earlier) and a cell **reserved for a landmark** (the village well is not
+somewhere to sow); siting checked neither. A farmhouse could therefore be
+raised on ground that looked free and then be handed nothing at all — no
+beds, and so no fence ring either. Reported live with the village in shot:
+*"There's a farmhouse without bed enclosure"*.
+
+Both now go through one `_may_sow(origin, origins, …)` predicate, with
+`_reserving` wrapping the occupancy test the same way for both, so the two
+cannot answer differently. A candidate origin is judged with **itself in the
+running** against the farmhouses already standing, since a farmhouse owns
+ground by being nearest to it. `test_siting_and_derivation_never_disagree_
+about_an_origin` states the invariant directly rather than testing the two
+copies separately.
+
 ### The villager's work
 
 `NpcMarker` gains `_step_farm(delta, is_working)`, a sibling of the existing
@@ -455,6 +474,31 @@ moat round every field with the rails floating in the middle of it. A rail
 is a **line on one edge** instead — the edge facing the beds it encloses —
 and the rest of its own tile is ordinary ground.
 
+- **The worker may cross into their own beds.** Rails stop a villager the
+  way they stop an animal (`NpcMarker._blocked_step`) — but a field's rails
+  stand on its *inner* edge, so the one villager they shut out is the
+  farmer whose beds they enclose. Reported live: *"The farmer doesn't farm
+  anymore"*. Measured on a real village with
+  `tools/probe_village_farming.gd`: of three villagers with a field, one
+  worked 58 beds in ten minutes and the other two worked **none**, frozen
+  in `APPROACHING` for 2650 of 2750 on-field ticks — the herbalist nine
+  pixels from its own soil, refused the last step south into it.
+
+  "The gate" above exists for exactly this, but *reaching* it needs
+  pathfinding a `Sprite2D` walking one `move_toward` per frame does not
+  have. The commit that gave rails their hitbox said so itself: *"boxed in
+  on both, they stay put"*. So a villager may cross into a cell of their
+  own `field_cells`, and nothing else moves — every other rail still stops
+  them, **a neighbour's field included**, and no villager without a field
+  is exempt from any rail. The farmer is who the enclosure is *for*; it is
+  there to keep animals out, not the worker.
+
+  Still open, and measured rather than assumed: a farmer whose own field
+  lies beyond **another** farmstead's ring still cannot reach it. In the
+  probe's village the third farmer stands west of its neighbour's fenced
+  beds with its own field east of them, and walks into that ring's rail
+  forever. Its own gate would serve if it went to its farmhouse frontage
+  first; that is the routing this rule deliberately does not attempt.
 - **Which edge.** `VillageFarm.fence_inner_direction` is the inverse of what
   the facing names: a rail closing the field's *north* side stands north of
   the beds, so its rails lie on its own *south* edge. Pinned against
@@ -621,10 +665,58 @@ gives them, so the extra tiles are ground they never reach. `MAX_WORKED_CELLS`
 is the limit that was asked for; the saturation is why a village grows its
 output by raising a second farmhouse rather than a bigger field.
 
-Crops still wither overnight, when nobody is watering at all, and the
-farmer re-tills in the morning. Against 50–66 harvests in a working day
-that is a rounding error, and a field tended by day and fallow at dawn is
-what a field looks like.
+### A bed has to survive the night (2026-09-19)
+
+The paragraph that used to stand here said crops wither overnight, the
+farmer re-tills in the morning, and against 50–66 harvests a day that is a
+rounding error. **It was wrong, and measuring said so.** Reported three
+times over, most recently with the field in shot: *"Planted crops still
+vanish and don't grow and no harvest happens"*.
+
+`tools/probe_village_farming.gd` against a real village, ten simulated days:
+**thirteen of eighteen beds ended withered**, one farmhouse took in fifteen
+wheat and the other two took in **none at all**. The farmer was working 2750
+of 6000 ticks throughout — not idle, simply unable to be there.
+
+The arithmetic is not close, and it is about the OTHER day clock. A villager
+works to `NpcMarker.SECONDS_PER_SIMULATED_DAY` — sixty seconds, four blocks
+— not to the ecology day above, and nobody farms while they sleep. So a
+field goes untended for up to three blocks, **forty-five seconds**, on every
+day of its life, against a whole drought tolerance of ten to thirty. Every
+bed died every night; the morning re-till was not a rounding error, it was
+the entire day's work.
+
+So a bed's tolerance has a **floor of one night**
+(`FarmPlot.MIN_WATER_GRACE_SECONDS`), taken from that day and those blocks
+and pinned against both by test rather than restated by import — a pure
+gameplay rule does not reach into the chunk manager. The crop-scaled window
+is kept beside it and the longer of the two wins; with today's 20–60 s growth
+times the night always does, and a test says so out loud instead of leaving
+it implied. `VillageFarm.action_for` reads the bed's real window too, so the
+farmer waters against the deadline that actually exists.
+
+This is not a forgiving number chosen to make a field work. A field is not a
+pot on a windowsill, and a crop that dies because nobody came for one evening
+is a crop nobody in this world could farm, the player included.
+
+Measured again on the same village afterwards: **zero withered beds**, and
+the three farmhouses taking in **51, 70 and 73** wheat where they took 15, 0
+and 0. `FIELD_YIELD_PER_WORK_BLOCK` was re-measured at **278** from 225 by
+the same test that pinned the old one — the roster had been sized against a
+field that lost beds every night.
+
+### Every field sows wheat, for now (2026-09-19)
+
+Asked directly, with a field of unrecognisable purple plants in shot: *"i
+don't even know what the purple crops are it plants.. atm it should plant
+only wheat which grows and gets harvested properly"*. The purple was the
+herbalist's own herb, dying overnight exactly as the wheat beside it was.
+
+`CROP_BY_OCCUPATION` now reads `{"farmer": "wheat", "herbalist": "wheat"}`.
+Deliberately a narrowing of the CROP, not of who farms: the herbalist keeps
+the farmhouse and field an earlier ask gave them (*"similar to a farmer the
+herbalist should build a farm house and plant herbs"*), and putting herbs
+back in their bed is that one entry and nothing else.
 
 ### Persistence
 
@@ -657,6 +749,26 @@ again.
 
 ## Status
 
+- ✅ **A farmhouse is only raised where its field will really be derived**
+  (2026-09-19) — see "One rule, two callers" above. Siting and derivation
+  were two copies of the same question that had drifted apart, so a
+  farmhouse could be raised on ground the derivation then refused it: no
+  beds, no fence, reported as *"a farmhouse without bed enclosure"*. They
+  are one predicate now. **Honestly: not reproduced before fixing.** 29
+  farmhouses across 14 villages of flat stub ground all took a full six-cell
+  field, with landmarks reserved and with the two rules agreeing every time
+  (`tools/probe_farmhouse_fields.gd`), so the gaps are real and proven by
+  construction rather than caught in the act on real terrain.
+- ✅ **A farmer sows the field before sowing any of it twice** (2026-09-19)
+  — reported as *"the NPC only sows 4 / 6 tiles"*, and measured: every field
+  in the sample held six cells with the LAST one "never tilled" after a full
+  work block, for both farmers in the village. `next_action` returned the
+  first bed wanting the top-priority job, and unbroken ground asks to be
+  planted exactly like a bed that has already been harvested — so once the
+  earlier beds began cycling, one of them was always an earlier "plant" and
+  the end of the field was never broken. Unbroken ground now wins among beds
+  asking for the same thing; a ripe crop and a dying bed still come first.
+  Re-measured after the fix: every field 6/6.
 - ✅ **A fence with nothing left to enclose comes down.**
   `VillageRenderer._clear_rails_with_nothing_to_enclose` now asks whether a
   rail is on a real frame this visit — a farmhouse's ring around its own

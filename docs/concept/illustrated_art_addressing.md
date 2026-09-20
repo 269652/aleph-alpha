@@ -376,8 +376,63 @@ section, which now cross-references here).
 - ⬜ Club sample split into four single-row files; `IllustratedItemSprite`
   adapted.
 - ⬜ Campfire: fourteen files (summer first), a `Sprite2D` placed surface.
-- ⬜ Rendering: `Player`/`CharacterView` drawing held-item animations by
-  address; structures drawing placed animations by address.
+- ✅ **Rendering: items drawn by address** (2026-09-19). Asked for
+  directly: *"Can you wire the real tool sprites? Axe is currently using
+  procedural sprite, but should use the illustrated one"*, and *"Sword as
+  well"*.
+
+  The gap was wider than this list made it look. Nothing anywhere called
+  `illustrated_art_loader.gd` — it appeared only inside *other files'* doc
+  comments — so the registry knew ~100 subjects, the resolver knew the
+  lattice, the loader knew how to slice and anchor a sheet, and not one
+  pixel of the real art ever reached the screen. `illustrated_item_art.gd`
+  is the piece that sat between them: it backs the resolver's injected
+  `address_exists` with the real file tree (the half that never existed —
+  the resolver takes it as a `Callable` precisely so it never touches a
+  disk itself), loads the resolved address, and falls back to
+  `ProceduralItemSprite` for a subject with no art.
+
+  Six call sites now ask for the context whose art actually depicts what
+  they draw, and the four pictures genuinely differ:
+
+  | Call site | Context | What the art shows |
+  | --- | --- | --- |
+  | `World` hotbar slot | `icon` | the item presented flat |
+  | `DroppedItem` | `ground` | the thing laid down |
+  | `Player.equip_armor` / interior outfit | `equipped` | worn on the body — the axe on its belt strap |
+  | `Player.equip_item` / interior outfit | `held` | the gripped pose the tool slot swings |
+
+  Every frame is fitted to `ProceduralItemSprite.SIZE`, which is what makes
+  each a drop-in: no call site re-scales, and `world_scale_for` keeps
+  meaning what it meant. That matters most for `held`, whose `pivot` anchor
+  returns the whole authored cell (220×300 for the axe) —
+  `CharacterView.equip_weapon` offsets by half the texture height, so an
+  unfitted one would displace the grip tenfold. A **uniform** scale is
+  compatible with the pivot contract rather than a violation of it: every
+  pixel keeps its position relative to every other, so the grip point stays
+  put at a different resolution.
+
+  101 of the catalog's 145 ids now draw real art; the other 44 fall back to
+  the generated sprite exactly as before, which is what made it safe to
+  wire every subject at once rather than one id at a time.
+- ✅ **The deferred "every file is addressable" sweep** (2026-09-19). This
+  list's first entry deferred it — *"there is no real art under this
+  convention on disk yet for that test to sweep, so it is deferred to
+  whichever migration actually authors files"*. There is now, and it earned
+  its keep on its first run: `stone_axe` (16 files) and `stone_blade` (20)
+  had real art on disk and **no registry entry at all**, so both resolved
+  straight past their own pictures to the procedural sprite while
+  `iron_axe` and `crude_blade` beside them drew properly. A second sweep
+  checks contexts too — a subject declared icon-only cannot reach three
+  quarters of its own art.
+- 🚧 **Animation by address is still not played.** The registry declares
+  `attack` timing and seven alternate `pose_*` frames per weapon, and
+  `frames_for` returns every frame of a row in order, but nothing steps
+  them: a swing is still `CharacterView.play_attack_swing`'s pendulum
+  rotation of one static texture, not the authored 8-frame wind-up /
+  release / recovery. Structures drawing placed animations by address is
+  likewise still untouched.
+- ⬜ Structures drawing placed animations by address.
 
 ## Open questions
 

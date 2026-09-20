@@ -18,12 +18,41 @@ const HOUSE := "house_small"
 var _anywhere := func(_cell: Vector2i) -> bool: return true
 
 
-func test_a_pond_is_the_same_rectangle_a_field_would_be():
+## A pond is still sited by the FIELD's own search and the field's own
+## shapes -- "similar" is the whole of the ask, and a pond that invented its
+## own rule would drift away from the thing it is modelled on.
+##
+## It differs in exactly one way, and deliberately: a pond may be dug
+## BEHIND the house. A farmhouse refuses ground north of itself because
+## that is the next row of buildings; a fisher's house fronts the street to
+## the south, so behind it is the only ground of their own they have.
+## Measured at the first grassland village with a fisher, every free cell on
+## their own side of the street was north of the house -- so a search that
+## could only look south had nowhere to go but across the road, which is
+## exactly what was reported ("it's randomly placed somewhere not adjacent
+## to the fishers house or across the street").
+func test_a_pond_is_sited_by_the_fields_own_rule_but_may_lie_behind_the_house():
 	var origin := Vector2i(6, 4)
 	assert_eq(
 		VillagePond.pond_rect(origin, HOUSE, _anywhere),
-		VillageFarm.field_rect(origin, HOUSE, _anywhere),
-		"a pond that sites itself by its own rule drifts away from the field"
+		VillageFarm.field_rect(origin, HOUSE, _anywhere, true),
+		"a pond sites itself by the field's rule, with the ground behind opened up"
+	)
+	assert_true(
+		VillageFarm.FIELD_SHAPES.has((VillagePond.pond_rect(origin, HOUSE, _anywhere) as Rect2i).size),
+		"and still takes one of the field's own shapes"
+	)
+
+
+## The difference is real, not incidental: on open ground the pond takes
+## ground the field would have refused.
+func test_a_field_still_refuses_the_ground_behind_the_house():
+	var origin := Vector2i(6, 4)
+	var field = VillageFarm.field_rect(origin, HOUSE, _anywhere)
+	assert_not_null(field)
+	assert_gte(
+		(field as Rect2i).position.y, origin.y,
+		"a farmhouse never sows north of itself -- that is the next row of buildings"
 	)
 
 
@@ -126,3 +155,31 @@ func test_a_full_pond_stays_full():
 ## Two is the smallest stocking that can breed at all -- one fish is a pet.
 func test_a_stocking_is_enough_fish_to_breed():
 	assert_gte(VillagePond.STOCKING_FISH, 2, "one fish cannot reproduce")
+
+
+# -- a dug pond is water you can actually get into ---------------------------
+#
+# Reported live: "there's no real pond with river / lake water physics".
+# A pond answered is_water_at_global (so nothing builds or grows on it) but
+# carried no DEPTH, and the player's own water state is the maximum of
+# ocean, river and lake depth -- three sources a pond is not one of. So a
+# fisher's pond was water everything avoided and nobody could wade into.
+
+const WaterMovementModel = preload("res://src/gameplay/water_movement_model.gd")
+
+
+## A pond dug to keep fish is dug deep enough for them to overwinter in --
+## the standard temperate figure, and the reason a village pond is a real
+## hole rather than a puddle. Pinned against the wade threshold rather than
+## asserted as a number: what matters about the depth is that a pond reads
+## as water to swim in, not a puddle to walk through.
+func test_a_pond_is_deeper_than_a_person_can_wade():
+	assert_gt(
+		VillagePond.DEPTH_METERS, WaterMovementModel.WADE_DEPTH_METERS,
+		"a fisher's pond that can be walked across is not a pond"
+	)
+
+
+## And not absurdly deep either -- it is a dug village pond, not a quarry.
+func test_a_pond_is_a_dug_pond_not_a_quarry():
+	assert_lt(VillagePond.DEPTH_METERS, 3.0)

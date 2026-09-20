@@ -596,7 +596,7 @@ func _ready() -> void:
 func setup(world, tile_size: int) -> void:
 	_world = world
 	_tile_size = tile_size
-	# Built once, not per frame -- see BuildingWalls' own doc comment.
+	# Built once, not per frame -- see AgentPassability's own doc comment.
 	# Buildings AND ground too steep to climb, so the gate can TURN a
 	# creature away from a cliff rather than only stopping it dead the way
 	# _terrain_blocks_movement below does (see docs/concept/navigation.md).
@@ -2376,6 +2376,33 @@ func _terrain_blocks_movement(heading: Vector2) -> bool:
 ##
 ## Villagers and the player are untouched: this lives on CreatureMarker, so
 ## the gate a farmer walks through is a gate only an animal finds shut.
+## Whether the step this creature is about to take walks into a real wall
+## (docs/concept/building.md "Placement rules"). Reported live: "Horses
+## still aren't blocked by houses".
+##
+## The SAME ask-before-you-step shape as _terrain_blocks_movement and
+## _fence_blocks_movement above, against the same look-ahead tile and at
+## the same cost: one world query per creature per movement decision, never
+## one per candidate direction. A marker is a Sprite2D, so the StaticBody2D
+## that stops the player is invisible to it -- this is how an animal learns
+## the same fact, from the same BuildingPiece walkability the body itself
+## is spawned from (EarthChunkManager.piece_blocks_movement_at_global).
+##
+## A door and a floor are walkable pieces and stay walkable: the question
+## is the piece's own walkability, not whether a building stands here, so
+## an animal can still follow a villager in through the door.
+func _building_blocks_movement(heading: Vector2) -> bool:
+	if (
+		_world == null
+		or not _world.has_method("piece_blocks_movement_at_global")
+		or heading.length() < 0.01
+	):
+		return false
+	var look_ahead := position + heading.normalized() * MOVEMENT_LOOKAHEAD
+	var tile := Vector2i(floori(look_ahead.x / _tile_size), floori(look_ahead.y / _tile_size))
+	return _world.piece_blocks_movement_at_global(tile.x, tile.y)
+
+
 func _fence_blocks_movement(heading: Vector2) -> bool:
 	if _world == null or not _world.has_method("fence_blocks_step_global") or heading.length() < 0.01:
 		return false
@@ -2429,7 +2456,11 @@ func _advance_gated(desired: Vector2, speed: float, delta: float, avoid_threats:
 	# whatever heading obstacle/threat avoidance above already settled on --
 	# see _terrain_blocks_movement's own doc comment for why this stays a
 	# single slope query rather than one per candidate direction.
-	if heading != Vector2.ZERO and (_terrain_blocks_movement(heading) or _fence_blocks_movement(heading)):
+	if heading != Vector2.ZERO and (
+		_terrain_blocks_movement(heading)
+		or _fence_blocks_movement(heading)
+		or _building_blocks_movement(heading)
+	):
 		heading = Vector2.ZERO
 	_last_gated_heading = heading
 	if heading == Vector2.ZERO:
@@ -3030,6 +3061,32 @@ func take_damage(amount: float) -> void:
 	_update_health_bar()
 	if _health.is_dead(info.health):
 		_die()
+
+
+## Crushed underfoot (see docs/concept/soil_fauna.md "Generalized to ANY
+## animal", CrushMechanic.crushes_underfoot) -- asked directly: "Shouldn't
+## this work out of the box for ANY animal when enough pressure is put on
+## it? A boar walking over a frog should kill it as well."
+##
+## The same method name every other crush victim already answers to
+## (CaterpillarMarker.crush, MillipedeMarker.crush, GrassFrogMarker.crush),
+## so the detection side needs no special case for a real animal. What it
+## does differs, and has to: those have no health, no carcass and no death
+## of their own, and a real animal has all three. So this goes through this
+## creature's OWN take_damage -> _die path rather than freeing it where it
+## stands -- _die() is the single choke point every other death in this game
+## goes through (the region's mortality books, the carcass it leaves), and a
+## crush that called queue_free() directly would be a death the world never
+## heard about.
+##
+## Lethal outright, never a partial injury: the rule that gets here at all
+## already established that this creature's whole body went UNDER the foot
+## (it weighs less than the foot did). Idempotent -- a second foot on an
+## already-dead animal changes nothing.
+func crush() -> void:
+	if info == null or _health.is_dead(info.health):
+		return
+	take_damage(info.max_health)
 
 
 ## The `minor_heal`/`major_heal` atoms' shared target-side method (see

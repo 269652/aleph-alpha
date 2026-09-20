@@ -49,6 +49,26 @@ const OCCUPATIONS: Array[String] = [
 	"lumberjack", "carter",
 ]
 
+## Trades a caller may FORCE but that this seed will never roll on its own
+## (docs/concept/mage_guild.md pillar 1: "a mage is not a trade a village
+## produces; it is a trade that arrives"). Deliberately a second list
+## rather than more entries in OCCUPATIONS: adding "mage" there would put a
+## wizard in every fifth cottage, give them a field or a forge to stand at,
+## and hand them a house out of the ordinary pools. A forced-only trade is
+## a real villager of that trade in every other respect -- name, genome,
+## personality, archetype, appearance are all derived below this line
+## exactly as they are for a rolled one.
+const FORCED_ONLY_OCCUPATIONS: Array[String] = ["mage"]
+
+
+## Every trade an NpcIdentity can end up with, rolled or forced. Read off
+## the two lists themselves so a caller checking "is this a real trade"
+## cannot miss one that was added to only one of them.
+static func every_occupation() -> Array:
+	var all: Array = OCCUPATIONS.duplicate()
+	all.append_array(FORCED_ONLY_OCCUPATIONS)
+	return all
+
 ## Which location_tag an occupation works at during the day -- the single
 ## shared source both NpcPlanner.FakeNpcPlanner (which tag a villager's
 ## schedule sends them to) and VillageRenderer (which landmark prop, if any,
@@ -178,7 +198,8 @@ func _init(a_seed_value: int, forced_occupation: String = "") -> void:
 	npc_name = _NAME_FIRST[_index(seed_value, "name_first", _NAME_FIRST.size())] + \
 		_NAME_SECOND[_index(seed_value, "name_second", _NAME_SECOND.size())]
 	occupation = (
-		forced_occupation if OCCUPATIONS.has(forced_occupation)
+		forced_occupation
+		if OCCUPATIONS.has(forced_occupation) or FORCED_ONLY_OCCUPATIONS.has(forced_occupation)
 		else OCCUPATIONS[_index(seed_value, "occupation", OCCUPATIONS.size())]
 	)
 	genome = NpcGenome.new(seed_value, PERSONALITY_TRAITS)

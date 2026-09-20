@@ -143,13 +143,24 @@ func test_replacing_a_farm_with_a_different_structure_swaps_the_overlay_not_stac
 	assert_eq(_structure_art_sprite_count(), 1)
 
 
-## The overlay's own texture width matches the tile footprint (see
-## IllustratedStructureSprite.footprint_texture) -- not left at the sheet's
-## own raw cell size.
-func test_the_overlay_sprites_texture_width_matches_the_tile_size():
+## The overlay's own texture width matches the structure's drawn footprint
+## (see IllustratedStructureSprite.footprint_texture) -- not left at the
+## sheet's own raw cell size, and not one tile either: a farm drawn one tile
+## wide was shorter than its own farmer (reported live, "there's a weird
+## shrunk farmhouse"), so it is drawn at the footprint its catalog twin
+## claims. The WIRING pin; the size itself is measured against the real art
+## over in test_illustrated_structure_sprite.gd.
+func test_the_overlay_sprites_texture_width_matches_its_drawn_footprint():
 	manager.build_at_global(_berlin_tile.x, _berlin_tile.y, "farm")
 	var sprite := _structure_art_sprite_at_berlin_tile()
-	assert_eq(sprite.texture.get_width(), TerrainRenderer.TILE_SIZE)
+	assert_eq(
+		sprite.texture.get_width(),
+		TerrainRenderer.TILE_SIZE * IllustratedStructureSprite.drawn_width_tiles("farm")
+	)
+	assert_gt(
+		IllustratedStructureSprite.drawn_width_tiles("farm"), 1,
+		"the premise: a farm is drawn wider than the single tile it stands on"
+	)
 
 
 ## Re-loading a chunk that already has a persisted farm tile re-spawns its

@@ -130,3 +130,49 @@ func test_a_cost_scale_is_never_below_one():
 func test_a_world_that_knows_nothing_costs_nothing():
 	assert_false(AgentPassability.cost_scale_for(WorldThatKnowsNothing.new()).is_valid())
 	assert_false(AgentPassability.cost_scale_for(null).is_valid())
+
+
+# -- agreeing with the wall's own collision body ---------------------------
+#
+# main's NpcMarker._slid_along_walls asks `piece_blocks_movement_at_global`
+# -- "the same question the wall's own collision body is spawned from, so
+# what stops a player and what stops a villager can never disagree". The
+# ROUTER has to ask that same question, or it would plan through a door the
+# slide then refuses, or around a door the slide would have allowed.
+#
+# It also matters for what a building IS: has_building_at_global reports
+# the whole footprint, door included, while the piece question knows a DOOR
+# and a FLOOR are walkable. Routing on the footprint would mean no villager
+# could ever plan a way indoors.
+
+class WorldWithPieces:
+	extends RefCounted
+	var asked_pieces := 0
+
+	func piece_blocks_movement_at_global(x: int, y: int) -> bool:
+		asked_pieces += 1
+		return x == 7  # a wall line; the door at (7,3) is carved out below
+
+	func has_building_at_global(_x: int, _y: int) -> bool:
+		return true  # the whole footprint -- deliberately the wrong answer
+
+
+func test_the_piece_question_is_preferred_over_the_footprint_one():
+	var world := WorldWithPieces.new()
+	var blocked := AgentPassability.blocked_predicate_for(world)
+	assert_true(blocked.call(Vector2i(7, 0)), "the wall line should block")
+	assert_false(
+		blocked.call(Vector2i(3, 3)),
+		"open ground inside the footprint was blocked -- the footprint question won"
+	)
+	assert_gt(world.asked_pieces, 0, "the piece question was never asked")
+
+
+func test_the_footprint_question_is_still_the_fallback():
+	# A world that knows only whole buildings (an older stub, or a caller
+	# that never gained the piece query) must still get a real predicate.
+	var world := FakeWorld.new()
+	world.buildings = [Vector2i(4, 4)]
+	var blocked := AgentPassability.blocked_predicate_for(world)
+	assert_true(blocked.call(Vector2i(4, 4)))
+	assert_false(blocked.call(Vector2i(4, 5)))

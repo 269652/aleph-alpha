@@ -22,7 +22,6 @@ extends RefCounted
 ## should say so. Slope reads the same way through
 ## TerrainPassability.speed_multiplier.
 
-const BuildingWalls = preload("res://src/gameplay/building_walls.gd")
 const TerrainPassability = preload("res://src/gameplay/terrain_passability.gd")
 const WaterMovementModel = preload("res://src/gameplay/water_movement_model.gd")
 
@@ -34,12 +33,24 @@ const WaterMovementModel = preload("res://src/gameplay/water_movement_model.gd")
 static func blocked_predicate_for(world, has_climbing_gear: bool = false) -> Callable:
 	if world == null:
 		return Callable()
+	# Prefer the PIECE question over the whole-footprint one. It is the
+	# same question the wall's own collision body is spawned from (see
+	# NpcMarker._slid_along_walls), so what stops a player, what stops a
+	# villager and what a route plans around can never disagree -- and it
+	# knows a DOOR and a FLOOR are walkable, where the footprint question
+	# reports the whole building solid and would mean no villager could
+	# ever plan a way indoors. The footprint question stays as the fallback
+	# for a world that does not offer the finer one.
+	var knows_pieces: bool = world.has_method("piece_blocks_movement_at_global")
 	var knows_buildings: bool = world.has_method("has_building_at_global")
 	var knows_slope: bool = world.has_method("slope_at_global")
-	if not knows_buildings and not knows_slope:
+	if not knows_pieces and not knows_buildings and not knows_slope:
 		return Callable()
 	return func(tile: Vector2i) -> bool:
-		if knows_buildings and world.has_building_at_global(tile.x, tile.y):
+		if knows_pieces:
+			if world.piece_blocks_movement_at_global(tile.x, tile.y):
+				return true
+		elif knows_buildings and world.has_building_at_global(tile.x, tile.y):
 			return true
 		if knows_slope and not TerrainPassability.is_passable(
 			world.slope_at_global(tile.x, tile.y), has_climbing_gear
@@ -89,8 +100,3 @@ static func _is_water(world, tile: Vector2i) -> bool:
 		world.has_method("biome_at_global")
 		and world.biome_at_global(tile.x, tile.y) == "ocean"
 	)
-
-
-## Buildings alone, for a caller that wants only walls (see BuildingWalls).
-static func walls_only_for(world) -> Callable:
-	return BuildingWalls.predicate_for(world)

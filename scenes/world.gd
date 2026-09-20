@@ -2,6 +2,7 @@ extends Node2D
 
 const MushroomMarker = preload("res://src/rendering/mushroom_marker.gd")
 const TerrainRenderer = preload("res://src/rendering/terrain_renderer.gd")
+const VillageFinder = preload("res://src/world/village_finder.gd")
 const CartMarker = preload("res://src/rendering/cart_marker.gd")
 const TorchGlow = preload("res://src/rendering/torch_glow.gd")
 const GroundSlide = preload("res://src/gameplay/ground_slide.gd")
@@ -14,6 +15,8 @@ const AudioSettings = preload("res://src/audio/audio_settings.gd")
 const AudioDiagnostics = preload("res://src/audio/audio_diagnostics.gd")
 const ViewMode = preload("res://src/gameplay/view_mode.gd")
 const BuildPlan = preload("res://src/world/build_plan.gd")
+const BlueprintPaletteModel = preload("res://src/ui/blueprint_palette_model.gd")
+const BlueprintPaletteView = preload("res://src/ui/blueprint_palette_view.gd")
 const BuildPlanLedger = preload("res://src/world/build_plan_ledger.gd")
 const BuildingCatalog = preload("res://src/gameplay/building_catalog.gd")
 const PlanWireframe = preload("res://src/rendering/plan_wireframe.gd")
@@ -61,6 +64,7 @@ const PlayerScene = preload("res://scenes/player.tscn")
 const HealthBar = preload("res://src/gameplay/health_bar.gd")
 const HoverTargetFinder = preload("res://src/rendering/hover_target_finder.gd")
 const ProceduralItemSprite = preload("res://src/rendering/procedural_item_sprite.gd")
+const IllustratedItemArt = preload("res://src/rendering/illustrated_item_art.gd")
 const CreatureRenderer = preload("res://src/rendering/creature_renderer.gd")
 const ItemCatalog = preload("res://src/gameplay/item_catalog.gd")
 const CraftingRecipeBook = preload("res://src/gameplay/crafting_recipe_book.gd")
@@ -98,16 +102,30 @@ const QuestLog = preload("res://src/emergence/quest_log.gd")
 ## seed mass (nothing has fed or starved them yet), proven by
 ## test_player_current_mass_kg_starts_at_the_seed_mass.
 func _player_step_momentum_kg_m_s(player: Player) -> float:
-	# A footstep carries momentum; standing still carries none. With a
-	# constant walking momentum every crush walk -- walnuts over the whole
-	# dropped-item group (which also holds every liftable stone, mushroom and
-	# seed), ants, decomposers, caterpillars, millipedes -- ran every frame for
-	# a player who had not moved: ~2 ms of each frame in the round-13
-	# measurement (docs/concept/soil_fauna.md). The walks all gate on the
-	# momentum threshold first, so zero here is what makes them free.
+	return _player_step_mass_kg(player) * PebbleDispersion.FOOTSTEP_SPEED_MPS
+
+
+## The mass the player's own step actually lands with -- their real, live,
+## unified current_mass_kg() while walking, and zero while standing still.
+##
+## Lifted out of _player_step_momentum_kg_m_s (2026-09-19, see docs/concept/
+## soil_fauna.md "Generalized to ANY animal") because crushing a real ANIMAL
+## needs the MASS, not the momentum: an animal is crushed when it weighs less
+## than the foot landing on it (CrushMechanic.crushes_underfoot), and a
+## momentum has already thrown that away. One gate and one mass read, shared
+## by both -- a second standing check of its own could drift from this one.
+##
+## A footstep carries momentum; standing still carries none. With a constant
+## walking momentum every crush walk -- walnuts over the whole dropped-item
+## group (which also holds every liftable stone, mushroom and seed), ants,
+## decomposers, caterpillars, millipedes -- ran every frame for a player who
+## had not moved: ~2 ms of each frame in the round-13 measurement
+## (docs/concept/soil_fauna.md). Every walk gates on its own threshold first,
+## so zero here is what makes them free.
+func _player_step_mass_kg(player: Player) -> float:
 	if player.velocity.length_squared() <= 0.0:
 		return 0.0
-	return player.current_mass_kg() * PebbleDispersion.FOOTSTEP_SPEED_MPS
+	return player.current_mass_kg()
 const FoodConsumption = preload("res://src/gameplay/food_consumption.gd")
 const Courtship = preload("res://src/gameplay/courtship.gd")
 const MammalCourtship = preload("res://src/gameplay/mammal_courtship.gd")
@@ -126,6 +144,11 @@ const LoadingOverlay = preload("res://scenes/loading_overlay.gd")
 const ClassArchetype = preload("res://src/gameplay/class_archetype.gd")
 const StarterKit = preload("res://src/gameplay/starter_kit.gd")
 const UiTheme = preload("res://src/ui/ui_theme.gd")
+## The pure HUD readouts and the UI scale model (docs/concept/hud.md).
+const HudReadouts = preload("res://src/ui/hud_readouts.gd")
+const UiScale = preload("res://src/ui/ui_scale.gd")
+## The planner switch (docs/concept/hud.md "The planner toggle is a switch").
+const ToggleSwitch = preload("res://src/ui/toggle_switch.gd")
 const WeatherModel = preload("res://src/world/weather_model.gd")
 const SeasonCycle = preload("res://src/world/season_cycle.gd")
 const EntityRef = preload("res://src/emergence/entity_ref.gd")
@@ -384,6 +407,39 @@ const ALWAYS_NIGHT_ELEVATION := -90.0
 ## with one (see clock_hour_for_console_argument).
 const NO_FORCED_HOUR := -1.0
 
+## F3, the key every other game uses for exactly this (see
+## docs/concept/hud.md "The top-left strip"). FPS, lat/lon and the sun's
+## elevation in degrees used to ship ON, in the middle of the clock line.
+const DIAGNOSTICS_TOGGLE_ACTION := "toggle_diagnostics"
+
+## The HUD's three stacked columns (docs/concept/hud.md). Every card in a
+## column is a VBox child, so it sizes to its OWN content and cannot overlap
+## its neighbours at any UI scale -- the same "overlap is structurally
+## impossible rather than avoided by hand-picked constants" rule the message
+## stack already follows.
+##
+## The first pass did pin each card's top AND bottom, and the 1.75-scale
+## render (tools/probe_hud_layout.gd) showed exactly what that buys: the
+## world-clock card's third line clipped through the Karma card below it, and
+## the diagnostics strip's third line ran off the bottom of the screen.
+##
+## Left: the player card (health + XP), the land-sense card, the creature
+## panels. Right, under the minimap (which ends at y = 170): the world clock,
+## then Karma. Bottom-left: the condition chips, then the survival panel.
+## Bottom-right, the one free corner: the diagnostics strip -- toggled over
+## the top-left column it would cover exactly the health and meters the player
+## was watching when they reached for F3.
+const HUD_EDGE_MARGIN := 8.0
+const HUD_RIGHT_COLUMN_TOP := 178.0
+## The narrowest a right-column or diagnostics card may be; they grow WIDER to
+## fit their text, and none is pinned to a width its own text can overflow.
+const HUD_CARD_MIN_WIDTH := 162.0
+## The health bar's own height, as the .tscn authors it -- the minimum size it
+## is given once it moves into the player card's VBox.
+const PLAYER_HEALTH_BAR_HEIGHT := 14.0
+## The held-item card sits directly above the hotbar (top at -76).
+const HELD_ITEM_CARD_BOTTOM := -80.0
+
 const CONSOLE_TOGGLE_ACTION := "toggle_console"
 const INVENTORY_TOGGLE_ACTION := "toggle_inventory"
 const CRAFTING_TOGGLE_ACTION := "toggle_crafting"
@@ -404,6 +460,15 @@ const SETTINGS_TOGGLE_ACTION := "toggle_settings"
 ## source of truth for what is actually said (see docs/progress.md).
 const TALK_ACTION := "talk"
 
+## The two context slots (see Keybindings' own primary_action/secondary_
+## action doc comment: "What they do is decided by whatever is under the
+## cursor and the state it is in"). Standing at a build plan, that state is a
+## wireframe, and the two things there are to do with one are raising it
+## yourself and hiring somebody to -- one key each, both named in the
+## floating prompt (see _plan_prompt_for).
+const RAISE_PLAN_ACTION := "primary_action"
+const HIRE_BUILDER_ACTION := "secondary_action"
+
 ## Where the player's key-binding overrides persist between sessions. Only
 ## overrides are stored (see Keybindings.to_dict); defaults live in code.
 const KEYBINDINGS_PATH := "user://keybindings.cfg"
@@ -419,6 +484,16 @@ const MAX_GOLD_COUNT := 9999
 
 const SURVIVAL_BAR_WIDTH := 150.0
 const SURVIVAL_BAR_HEIGHT := 14.0
+## The meter label centred inside a bar. Also what _survival_row_height sizes
+## the row against, so the two can never disagree.
+const SURVIVAL_LABEL_FONT_SIZE := 10
+## The secondary HUD label -- the XP line, the land-sense readout. Expressed
+## against the theme's own base size rather than as a number, so a change to
+## the theme carries the whole HUD with it.
+const HUD_SMALL_FONT_SIZE := UiTheme.BASE_FONT_SIZE - 3
+## Big enough to read across the screen at a glance, which is the one thing
+## this message has to do.
+const DEATH_MESSAGE_FONT_SIZE := UiTheme.TITLE_FONT_SIZE + 6
 
 ## How heavy the visible falling rain is per weather state (see
 ## RainOverlay.set_intensity). A storm is a downpour; ordinary rain is
@@ -494,8 +569,34 @@ var _ground_tint := GroundTint.new()
 var _torch_glow := TorchGlow.new()
 var _torch_glow_mesh: MeshInstance2D
 @onready var _ui: CanvasLayer = $UI
-@onready var _debug_label: Label = $UI/DebugLabel
 @onready var _minimap: TextureRect = $UI/Minimap
+## The planner switch, and the two nodes that round and frame the minimap --
+## see docs/concept/hud.md.
+var _view_mode_switch: ToggleSwitch
+## The two halves the old $UI/DebugLabel split into (docs/concept/hud.md "The
+## top-left strip"): the world-clock card, always on, and the diagnostics
+## strip, off until toggle_diagnostics (F3).
+var _clock_labels: Array[Label] = []
+var _diagnostics_card: PanelContainer
+var _diagnostics_labels: Array[Label] = []
+var _diagnostics_visible := false
+## The condition chips above the survival panel, and the held-item card above
+## the hotbar (docs/concept/hud.md).
+## The three stacked HUD columns (see HUD_EDGE_MARGIN's own doc comment):
+## every card is a child of one of these, so cards size to their own content
+## and can never overlap at any UI scale.
+## The four survival meter rows, so a UI scale change can re-grow them (their
+## height follows their label's, see _survival_row_height).
+var _survival_rows: Array[Control] = []
+var _hud_left_column: VBoxContainer
+var _hud_right_column: VBoxContainer
+var _hud_bottom_left_column: VBoxContainer
+var _condition_chips_row: HBoxContainer
+## The chip texts currently on screen, joined -- so a frame whose conditions
+## have not changed rebuilds nothing.
+var _condition_chips_signature := ""
+var _held_item_card: PanelContainer
+var _held_item_label: Label
 @onready var _player_health_bg: ColorRect = $UI/PlayerHealthBar/Background
 @onready var _player_health_fill: ColorRect = $UI/PlayerHealthBar/Fill
 @onready var _player_health_label: Label = $UI/PlayerHealthBar/Label
@@ -519,6 +620,11 @@ const PerfReport = preload("res://src/gameplay/perf_report.gd")
 const PerfFrameSentinel = preload("res://src/gameplay/perf_frame_sentinel.gd")
 ## The batched ecology steps' round-robin clock (see _step_ecology_batch).
 const StepCadence = preload("res://src/gameplay/step_cadence.gd")
+## The mage guild's trade (docs/concept/magic.md) -- named here only to
+## report a refusal by its own reason; the pricing and the gates live in
+## SpellTuition itself, reached through Player.learn_spell.
+const SpellTuition = preload("res://src/gameplay/spell_tuition.gd")
+const MageMaster = preload("res://src/gameplay/mage_master.gd")
 var _ecology_cadence: StepCadence = null
 var _ecology_steps: Dictionary = {}
 ## The player the fruiting step details trees around, captured per batch
@@ -609,6 +715,11 @@ var _minimap_refresh_accumulator := MINIMAP_REFRESH_INTERVAL  # refresh immediat
 var _autosave_accumulator := 0.0
 var _health_bar := HealthBar.new()
 var _item_sprite_generator := ProceduralItemSprite.new()
+## Real illustrated art for the hotbar, where a subject has any -- the
+## `icon` row, the item presented flat. Falls back to the generated
+## sprite for a subject with none (docs/concept/
+## illustrated_art_addressing.md).
+var _item_art := IllustratedItemArt.new()
 var _hotbar_slots: Array[TextureRect] = []
 var _hotbar_counts: Array[Label] = []
 ## The slot frames themselves (icon/count's parent) -- kept separately so
@@ -621,6 +732,11 @@ var _hotbar_slot_frames: Array[Control] = []
 var _hotbar_slot_state: Array[String] = []
 var _creature_renderer := CreatureRenderer.new()
 var _item_catalog := ItemCatalog.new()
+## The held-item card's wear grade (docs/concept/hud.md). Pure and stateless,
+## the same instance Player keeps for its own durability checks -- the HUD just
+## reads what that model already decides.
+const ItemWear = preload("res://src/gameplay/item_wear.gd")
+var _item_wear := ItemWear.new()
 var _crafting_recipe_book := CraftingRecipeBook.new()
 var _dev_console: PanelContainer
 var _inventory_window: PanelContainer
@@ -663,6 +779,14 @@ var _initial_client_chunk_load_done := false
 ## Shared dark/rounded UI theme (see UiTheme), assigned to every window/menu so
 ## the whole UI reads as one styled system rather than raw grey boxes.
 var _ui_theme := UiTheme.new().build_theme()
+## The player's own UI scale (see UiScale, docs/concept/hud.md "UI scale"):
+## loaded beside the graphics settings, applied to _ui_theme and to every HUD
+## label that overrides its own font size, saved the moment the slider moves.
+var _ui_scale := UiScale.DEFAULT_SCALE
+## Label -> the UNSCALED base font size it was built with. The theme covers
+## every widget that does NOT override its size; these are the ones that do,
+## and _apply_ui_scale re-reads this so a scale change needs no restart.
+var _scaled_font_labels: Dictionary = {}
 var _class_archetypes := ClassArchetype.new()
 ## Class chosen at the main menu, applied to the local player on spawn.
 var _pending_class := "warrior"
@@ -717,6 +841,11 @@ var _audio_volume := AudioSettings.DEFAULT_VOLUME
 const SimulationSettings = preload("res://src/gameplay/simulation_settings.gd")
 var _simulation_densities: Dictionary = SimulationSettings.default_densities()
 var _death_label: Label
+## The shared card each of these readouts moved onto (docs/concept/hud.md
+## pillar 1): hiding the CARD is what hides the readout, so nothing can leave
+## a blank card standing.
+var _death_card: PanelContainer
+var _land_sense_card: PanelContainer
 ## The village readout (docs/concept/village_growth.md mechanism 5): a
 ## left-click on any building opens HousePanel on it -- the needs,
 ## happiness and productivity of the household living there, or, for a
@@ -894,7 +1023,9 @@ func _ready() -> void:
 	# it takes was spent staring at scenes/world.tscn's own raw, never-yet-
 	# updated default state instead of a real loading screen --
 	# UI/DebugLabel's literal .tscn-authored placeholder text ("Loading...",
-	# top-left), UI/PlayerHealthBar/Fill's green ColorRect sitting at its
+	# top-left -- that node is gone now, see docs/concept/hud.md "The top-left
+	# strip"; the rest of the scaffold below is unchanged),
+	# UI/PlayerHealthBar/Fill's green ColorRect sitting at its
 	# authored default (unset) width, and UI/Minimap/PlayerDot's yellow
 	# square floating with no minimap texture behind it yet -- reported live,
 	# via a screenshot, as a "stuck"/"not professional"-looking loading
@@ -1082,11 +1213,18 @@ func _ready() -> void:
 	_log_audio_diagnostics()
 	_load_simulation_settings()
 	_apply_simulation_settings()
+	# Before the first builder runs, so the first frame the player sees is
+	# already at their own size rather than at 100% for a frame.
+	_load_ui_settings()
+	_apply_ui_scale()
 
 	_build_hotbar_slots()
 	_build_plans = _build_plan_store.load_ledger()
 	_build_plan_wireframes()
 	_build_blueprint_palette()
+	# Before the toggle beside it, so the minimap is already in its frame when
+	# the switch measures itself against the frame's own left edge.
+	_build_minimap_frame()
 	_build_view_mode_toggle()
 	_build_spell_bar()
 	_build_dev_console()
@@ -1098,13 +1236,21 @@ func _ready() -> void:
 	_build_house_panel()
 	_build_skill_window()
 	_build_settings_overlay()
-	_build_creature_panels_container()
 	_build_hover_tooltip()
 	_build_death_label()
-	_build_survival_bar()
-	_build_xp_bar()
+	# The columns first, then each card into its column IN THE ORDER IT
+	# APPEARS -- a VBox draws its children top to bottom, so this call order
+	# IS the on-screen order (see HUD_EDGE_MARGIN, docs/concept/hud.md).
+	_build_hud_columns()
+	_build_xp_bar()  # the player card: health + XP
 	_build_land_sense_label()
+	_build_creature_panels_container()
+	_build_condition_chips()
+	_build_survival_bar()
+	_build_world_clock_card()
 	_build_karma_display()
+	_build_held_item_card()
+	_build_diagnostics_strip()
 	_build_message_stack()
 	_build_joust_view()
 	_build_handheld_view()
@@ -2079,7 +2225,7 @@ func _build_settings_overlay() -> void:
 	_settings_overlay.process_mode = Node.PROCESS_MODE_ALWAYS
 	_settings_overlay.setup(
 		_keybindings, _graphics_fullscreen, _graphics_vsync, _graphics_resolution, _audio_volume,
-		_simulation_densities
+		_simulation_densities, _ui_scale
 	)
 	_settings_overlay.set_anchors_preset(Control.PRESET_CENTER)
 	_settings_overlay.offset_left = -210.0
@@ -2093,6 +2239,7 @@ func _build_settings_overlay() -> void:
 	_settings_overlay.graphics_option_changed.connect(_on_graphics_option_changed)
 	_settings_overlay.audio_volume_changed.connect(_on_audio_volume_changed)
 	_settings_overlay.simulation_density_changed.connect(_on_simulation_density_changed)
+	_settings_overlay.ui_scale_changed.connect(_on_ui_scale_changed)
 	_settings_overlay.resume_requested.connect(_toggle_settings_menu)
 	_settings_overlay.license_code_submitted.connect(_on_settings_license_code_submitted)
 
@@ -2185,6 +2332,61 @@ func _load_graphics() -> void:
 	_graphics_resolution = RenderResolution.sanitize(
 		str(config.get_value("graphics", "render_resolution", _graphics_resolution))
 	)
+
+
+## The UI scale persists alongside the key bindings and graphics settings in
+## KEYBINDINGS_PATH (one small user config file), in its own `[ui]` section.
+## Applied by _apply_ui_scale, which _ready calls BEFORE any HUD builder runs
+## so the first frame is already at the player's size.
+func _load_ui_settings() -> void:
+	var config := ConfigFile.new()
+	if config.load(KEYBINDINGS_PATH) != OK:
+		return
+	_ui_scale = UiScale.sanitize(float(config.get_value("ui", "scale", _ui_scale)))
+
+
+func _save_ui_settings() -> void:
+	var config := ConfigFile.new()
+	config.load(KEYBINDINGS_PATH)  # preserve every other section
+	config.set_value("ui", "scale", _ui_scale)
+	config.save(KEYBINDINGS_PATH)
+
+
+## Pushes the current scale into the shared theme and into every HUD label
+## that overrides its own font size.
+##
+## The theme is MUTATED rather than replaced: a Theme is a Resource shared by
+## reference, and every window and card already in the tree holds this one, so
+## handing out a freshly built theme would leave all of them on the old sizes
+## until a restart (see UiTheme.apply_scale).
+func _apply_ui_scale() -> void:
+	UiTheme.new().apply_scale(_ui_theme, _ui_scale)
+	for label in _scaled_font_labels:
+		if is_instance_valid(label):
+			_apply_scaled_font(label, _scaled_font_labels[label])
+	# A meter row is as tall as the label centred in it, so it grows too.
+	for row in _survival_rows:
+		if is_instance_valid(row):
+			row.custom_minimum_size.y = _survival_row_height()
+	# The condition chips are not in that registry (they are rebuilt as the
+	# player's state changes, see _update_condition_chips). Forgetting what the
+	# row currently says makes the next frame rebuild it at the new size.
+	_condition_chips_signature = ""
+	# The build palette measures its own slots against the font they are
+	# drawn in (BlueprintPaletteView._size_slots), so a scale change means
+	# measuring again -- otherwise every slot keeps the width it had at the
+	# old size and the names clip.
+	if _blueprint_palette != null:
+		_blueprint_palette.refresh()
+
+
+## The settings menu's UI scale slider moved -- applies and persists
+## immediately, the same "every change saves right away, no separate Apply
+## step" convention _on_graphics_changed already uses.
+func _on_ui_scale_changed(value: float) -> void:
+	_ui_scale = UiScale.sanitize(value)
+	_apply_ui_scale()
+	_save_ui_settings()
 
 
 func _apply_graphics() -> void:
@@ -2367,14 +2569,12 @@ func _save_keybindings() -> void:
 func _build_survival_bar() -> void:
 	# A themed panel groups the meters into one HUD card in the corner instead
 	# of loose floating bars.
+	# In the bottom-left column, under the condition chips that name what these
+	# bars only imply. Sized by its own content rather than pinned to a 124px
+	# box, so the rows still fit once the UI scale grows their labels.
 	var panel := PanelContainer.new()
-	panel.theme = _ui_theme
-	panel.set_anchors_preset(Control.PRESET_BOTTOM_LEFT)
-	panel.offset_left = 8.0
-	panel.offset_top = -132.0
-	panel.offset_right = 176.0
-	panel.offset_bottom = -8.0
-	_ui.add_child(panel)
+	panel.custom_minimum_size.x = SURVIVAL_BAR_WIDTH + 2.0 * UiTheme.CONTENT_MARGIN
+	_add_hud_card(_hud_bottom_left_column, panel)
 
 	var container := VBoxContainer.new()
 	container.add_theme_constant_override("separation", 4)
@@ -2394,7 +2594,7 @@ func _build_survival_bar() -> void:
 	_warmth_label = warmth["label"]
 
 	_wallet_label = Label.new()
-	_wallet_label.add_theme_font_size_override("font_size", 12)
+	_scaled_font(_wallet_label, UiTheme.BASE_FONT_SIZE - 2)
 	container.add_child(_wallet_label)
 
 
@@ -2403,25 +2603,65 @@ func _build_survival_bar() -> void:
 ## A slim XP bar with a level readout, just under the player health bar
 ## (top-left). Full = about to level up (see ExperienceTrack).
 func _build_xp_bar() -> void:
+	# Health and XP on ONE shared card in the corner (docs/concept/hud.md
+	# pillar 1). "Lv 7 - Warrior (2 pts)" used to be a bare 10pt Label over the
+	# world -- exactly the white-text-over-snow case the pillar exists for --
+	# and the health bar beside it was raw sharp-cornered ColorRects, the last
+	# unthemed thing in the corner once everything else moved onto the card
+	# (seen directly in tools/probe_hud_layout.gd's render).
+	#
+	# The compact stylebox rather than the full one: an 18px bar in a 12px-
+	# margin card is mostly empty card, stacked down this edge.
+	var card := PanelContainer.new()
+	card.add_theme_stylebox_override("panel", UiTheme.new().compact_panel_stylebox())
+	card.custom_minimum_size.x = SURVIVAL_BAR_WIDTH + 2.0 * UiTheme.COMPACT_CONTENT_MARGIN
+	card.mouse_filter = Control.MOUSE_FILTER_IGNORE
+	_add_hud_card(_hud_left_column, card)
+
+	var column := VBoxContainer.new()
+	column.add_theme_constant_override("separation", 3)
+	card.add_child(column)
+
+	# The .tscn-authored health bar moves INTO the card rather than being
+	# rebuilt here: _update_player_health_bar reads its Background/Fill/Label
+	# by node path, and those three keep working unchanged inside a container
+	# as long as the row is given a real minimum size to lay out against.
+	var health_bar: Control = _ui.get_node("PlayerHealthBar")
+	_ui.remove_child(health_bar)
+	column.add_child(health_bar)
+	# ...and then behaves exactly like one of the four survival meter rows:
+	# height derived from the label centred in it, bar and fill anchored
+	# LEFT_WIDE so their height follows the row's, and registered so a UI
+	# scale change re-grows it. Its "HP 100 / 100" inherits the shared theme's
+	# font size, so at 1.75 it would otherwise have overflowed a 14px bar.
+	health_bar.custom_minimum_size = Vector2(SURVIVAL_BAR_WIDTH, _survival_row_height())
+	health_bar.size_flags_horizontal = Control.SIZE_SHRINK_BEGIN
+	_survival_rows.append(health_bar)
+	_stretch_in_row(_player_health_bg, SURVIVAL_BAR_WIDTH)
+	_stretch_in_row(_player_health_fill, SURVIVAL_BAR_WIDTH)
+	_stretch_in_row(_player_health_label, SURVIVAL_BAR_WIDTH)
+	# The same size as the four meter labels below it -- it IS one of these
+	# rows. At the shared theme's size it overflowed the 150px bar sideways
+	# once the UI scale grew it (seen in the 1.75 render).
+	_scaled_font(_player_health_label, SURVIVAL_LABEL_FONT_SIZE)
+
+	_xp_label = Label.new()
+	_scaled_font(_xp_label, HUD_SMALL_FONT_SIZE)
+	column.add_child(_xp_label)
+
 	var bar := Control.new()
-	bar.set_anchors_preset(Control.PRESET_TOP_LEFT)
-	bar.position = Vector2(8, 74)
-	_ui.add_child(bar)
+	bar.custom_minimum_size = Vector2(SURVIVAL_BAR_WIDTH, 8)
+	column.add_child(bar)
 
 	var bg := ColorRect.new()
 	bg.color = Color(0.1, 0.1, 0.12, 0.85)
-	bg.size = Vector2(SURVIVAL_BAR_WIDTH, 10)
+	bg.size = Vector2(SURVIVAL_BAR_WIDTH, 8)
 	bar.add_child(bg)
 
 	_xp_fill = ColorRect.new()
 	_xp_fill.color = Color(0.5, 0.35, 0.85)
-	_xp_fill.size = Vector2(0, 10)
+	_xp_fill.size = Vector2(0, 8)
 	bar.add_child(_xp_fill)
-
-	_xp_label = Label.new()
-	_xp_label.add_theme_font_size_override("font_size", 10)
-	_xp_label.position = Vector2(2, -2)
-	bar.add_child(_xp_label)
 
 
 ## Naturalist "land_sense" keystone reveal (docs/concept/progression.md
@@ -2431,12 +2671,23 @@ func _build_xp_bar() -> void:
 ## This keystone's whole payoff IS this reveal, not a stat bump (see
 ## SkillTreeWindow's own special-cased row rendering for the same keystone).
 func _build_land_sense_label() -> void:
+	# On the shared card (docs/concept/hud.md pillar 1). This keystone's whole
+	# payoff is two real numbers, and they used to be bare 10pt text laid over
+	# whatever ground the player was reading them about -- the one readout in
+	# the HUD guaranteed to be drawn over open terrain.
+	_land_sense_card = PanelContainer.new()
+	_land_sense_card.add_theme_stylebox_override(
+		"panel", UiTheme.new().compact_panel_stylebox()
+	)
+	_land_sense_card.mouse_filter = Control.MOUSE_FILTER_IGNORE
+	# A hidden child takes no room in a VBox, so the creature panels below
+	# simply move up when this keystone is not unlocked.
+	_land_sense_card.visible = false
+	_add_hud_card(_hud_left_column, _land_sense_card)
+
 	_land_sense_label = Label.new()
-	_land_sense_label.set_anchors_preset(Control.PRESET_TOP_LEFT)
-	_land_sense_label.position = Vector2(8, 88)
-	_land_sense_label.add_theme_font_size_override("font_size", 10)
-	_land_sense_label.visible = false
-	_ui.add_child(_land_sense_label)
+	_scaled_font(_land_sense_label, HUD_SMALL_FONT_SIZE)
+	_land_sense_card.add_child(_land_sense_label)
 
 
 ## Karma's own HUD readout (asked directly: "Karma should be displayed
@@ -2448,19 +2699,283 @@ func _build_land_sense_label() -> void:
 ## minimap, top-right -- the corner column mirroring how the XP bar/land-
 ## sense/creature-panels already stack below the health bar, top-left.
 func _build_karma_display() -> void:
+	# Under the world-clock card, which took the slot directly below the
+	# minimap when the top-left strip split (docs/concept/hud.md). Both are
+	# children of the same column, so neither can clip through the other.
 	var panel := PanelContainer.new()
-	panel.theme = _ui_theme
-	panel.set_anchors_preset(Control.PRESET_TOP_RIGHT)
-	panel.offset_left = -170.0
-	panel.offset_top = 178.0
-	panel.offset_right = -8.0
-	panel.offset_bottom = 210.0
-	_ui.add_child(panel)
+	_add_hud_card(_hud_right_column, panel, true)
 
 	_karma_label = Label.new()
 	_karma_label.horizontal_alignment = HORIZONTAL_ALIGNMENT_CENTER
 	_karma_label.vertical_alignment = VERTICAL_ALIGNMENT_CENTER
 	panel.add_child(_karma_label)
+
+
+## The three stacked columns every HUD card lives in -- see HUD_EDGE_MARGIN.
+## Built before any card, so each builder simply adds to the column it belongs
+## in and never positions itself against its neighbour's height.
+##
+## Each column grows AWAY from the screen edge it is anchored to, and none of
+## them pins the edge its cards grow toward, so a card that needs more room at
+## a larger UI scale takes it instead of clipping.
+func _build_hud_columns() -> void:
+	_hud_left_column = _make_hud_column(Control.PRESET_TOP_LEFT)
+	_hud_left_column.offset_left = HUD_EDGE_MARGIN
+	_hud_left_column.offset_top = HUD_EDGE_MARGIN
+
+	_hud_right_column = _make_hud_column(Control.PRESET_TOP_RIGHT)
+	_hud_right_column.offset_left = -HUD_EDGE_MARGIN
+	_hud_right_column.offset_right = -HUD_EDGE_MARGIN
+	_hud_right_column.offset_top = HUD_RIGHT_COLUMN_TOP
+	_hud_right_column.grow_horizontal = Control.GROW_DIRECTION_BEGIN
+	_hud_right_column.custom_minimum_size.x = HUD_CARD_MIN_WIDTH
+
+	_hud_bottom_left_column = _make_hud_column(Control.PRESET_BOTTOM_LEFT)
+	_hud_bottom_left_column.offset_left = HUD_EDGE_MARGIN
+	_hud_bottom_left_column.offset_top = -HUD_EDGE_MARGIN
+	_hud_bottom_left_column.offset_bottom = -HUD_EDGE_MARGIN
+	_hud_bottom_left_column.grow_vertical = Control.GROW_DIRECTION_BEGIN
+
+
+func _make_hud_column(preset: int) -> VBoxContainer:
+	var column := VBoxContainer.new()
+	column.theme = _ui_theme
+	column.set_anchors_preset(preset)
+	column.add_theme_constant_override("separation", 4)
+	column.mouse_filter = Control.MOUSE_FILTER_IGNORE
+	_ui.add_child(column)
+	return column
+
+
+## Puts `card` in `column`, sized to its OWN content and hugging the screen
+## edge the column is anchored to.
+##
+## Without this a VBox stretches every child to the widest one, which at 1.75
+## left a 150px-wide set of survival bars floating inside a 390px card, the
+## width having been set by the condition chips above them.
+func _add_hud_card(column: VBoxContainer, card: Control, hug_right: bool = false) -> void:
+	card.size_flags_horizontal = (
+		Control.SIZE_SHRINK_END if hug_right else Control.SIZE_SHRINK_BEGIN
+	)
+	column.add_child(card)
+
+
+## The world-clock card (docs/concept/hud.md "The top-left strip"): the time,
+## the phase of the day, the season, the weather and how the player is moving.
+##
+## This is the PLAYER's half of what used to be $UI/DebugLabel -- one bare,
+## unthemed Label at (8, 8), still carrying its .tscn-authored "Loading..."
+## placeholder, cramming eight fields into a single %-formatted string and
+## mixing the clock in with a frame rate and a latitude. The developer's half
+## is _build_diagnostics_strip, and it is off until asked for.
+##
+## Top-RIGHT, under the minimap, rather than back in the corner it came from:
+## where you are and when you are are one thought, and the top-left column is
+## already the player's own state (health, XP, land sense, creature panels).
+## Karma moves down to sit under this.
+func _build_world_clock_card() -> void:
+	var panel := PanelContainer.new()
+	panel.mouse_filter = Control.MOUSE_FILTER_IGNORE
+	_add_hud_card(_hud_right_column, panel, true)
+
+	var column := VBoxContainer.new()
+	column.add_theme_constant_override("separation", 2)
+	panel.add_child(column)
+	for i in HudReadouts.WORLD_CLOCK_LINE_COUNT:
+		var line := Label.new()
+		line.horizontal_alignment = HORIZONTAL_ALIGNMENT_CENTER
+		# The clock reads first; the season and the movement line under it are
+		# context for it, so they are a size down and in the muted text colour
+		# rather than three lines shouting equally.
+		if i == 0:
+			_scaled_font(line, UiTheme.BASE_FONT_SIZE)
+		else:
+			_scaled_font(line, UiTheme.BASE_FONT_SIZE - 2)
+			line.add_theme_color_override("font_color", UiTheme.TEXT_MUTED)
+		column.add_child(line)
+		_clock_labels.append(line)
+
+
+## The developer's half of the old strip: FPS, lat/lon, sun elevation in
+## degrees. HIDDEN until toggle_diagnostics (F3) -- "a diagnostic must never
+## ship on" is the rule RiverFlowShader's raw-across channel already states for
+## itself, and this is the one diagnostic that did.
+##
+## Bottom-right, the one free corner: an overlay toggled over the top-left
+## column would cover exactly the health and meters the player was watching
+## when they reached for F3.
+func _build_diagnostics_strip() -> void:
+	_diagnostics_card = PanelContainer.new()
+	_diagnostics_card.theme = _ui_theme
+	_diagnostics_card.set_anchors_preset(Control.PRESET_BOTTOM_RIGHT)
+	# Grows up and to the left out of the corner rather than being pinned to a
+	# box its own text can outgrow -- the 1.75-scale render had it running off
+	# the bottom of the screen.
+	_diagnostics_card.offset_left = -HUD_EDGE_MARGIN
+	_diagnostics_card.offset_top = -HUD_EDGE_MARGIN
+	_diagnostics_card.offset_right = -HUD_EDGE_MARGIN
+	_diagnostics_card.offset_bottom = -HUD_EDGE_MARGIN
+	_diagnostics_card.grow_horizontal = Control.GROW_DIRECTION_BEGIN
+	_diagnostics_card.grow_vertical = Control.GROW_DIRECTION_BEGIN
+	_diagnostics_card.custom_minimum_size.x = HUD_CARD_MIN_WIDTH
+	_diagnostics_card.mouse_filter = Control.MOUSE_FILTER_IGNORE
+	_diagnostics_card.visible = false
+	_ui.add_child(_diagnostics_card)
+
+	var column := VBoxContainer.new()
+	column.add_theme_constant_override("separation", 2)
+	_diagnostics_card.add_child(column)
+	for _i in HudReadouts.DIAGNOSTICS_LINE_COUNT:
+		var line := Label.new()
+		_scaled_font(line, UiTheme.BASE_FONT_SIZE - 2)
+		line.add_theme_color_override("font_color", UiTheme.TEXT_MUTED)
+		column.add_child(line)
+		_diagnostics_labels.append(line)
+
+
+## F3. Writing the strip is skipped entirely while it is hidden (see
+## _client_process), so a player who never presses this pays nothing for it.
+func _toggle_diagnostics_strip() -> void:
+	_diagnostics_visible = not _diagnostics_visible
+	_diagnostics_card.visible = _diagnostics_visible
+
+
+## The named states the survival bars only imply (docs/concept/hud.md
+## "Condition chips"): a row of small themed cards directly above the survival
+## panel, bottom-left -- with the bars they name, not in some other corner.
+func _build_condition_chips() -> void:
+	_condition_chips_row = HBoxContainer.new()
+	_condition_chips_row.add_theme_constant_override("separation", 4)
+	_condition_chips_row.mouse_filter = Control.MOUSE_FILTER_IGNORE
+	_add_hud_card(_hud_bottom_left_column, _condition_chips_row)
+
+
+## Every frame: whichever SurvivalMeters states are true right now, in
+## HudReadouts' fixed severity order.
+##
+## Chips are rebuilt rather than pooled because the row is empty in the common
+## case -- a fed, watered, warm player on dry land shows nothing at all -- and
+## a pool of five hidden PanelContainers to avoid allocating in the rare case
+## would be the more expensive of the two. Guarded so a frame whose chips have
+## not changed rebuilds nothing.
+func _update_condition_chips(local_player: Player) -> void:
+	var chips: Array = HudReadouts.condition_chips(
+		local_player.survival, local_player.current_mode
+	)
+	var signature := HudReadouts.chips_signature(chips)
+	if signature == _condition_chips_signature:
+		return
+	_condition_chips_signature = signature
+	# remove_child BEFORE queue_free: queue_free defers the actual removal to
+	# the end of the frame, so freeing alone would leave the outgoing chips in
+	# the row alongside the incoming ones for one frame -- a visible doubled
+	# row on the frame a condition changes.
+	for child in _condition_chips_row.get_children():
+		_condition_chips_row.remove_child(child)
+		child.queue_free()
+	for chip in chips:
+		var card := PanelContainer.new()
+		card.mouse_filter = Control.MOUSE_FILTER_IGNORE
+		var label := Label.new()
+		label.text = String(chip["text"])
+		label.add_theme_color_override("font_color", chip["color"])
+		# _apply_scaled_font, NOT _scaled_font: these Labels are freed and
+		# rebuilt whenever the conditions change, and a registry keyed by them
+		# would grow for the whole session. _apply_ui_scale clears the
+		# signature instead, so the next frame rebuilds them at the new size.
+		_apply_scaled_font(label, UiTheme.BASE_FONT_SIZE - 2)
+		card.add_child(label)
+		_condition_chips_row.add_child(card)
+
+
+## What is in hand and how close it is to breaking (docs/concept/hud.md "The
+## held-item card"). The hotbar shows five icons and a stack count; it does not
+## name what is equipped, and nothing anywhere in the HUD showed WEAR -- the
+## only way a player learnt an axe was about to break was that it broke.
+func _build_held_item_card() -> void:
+	_held_item_card = PanelContainer.new()
+	_held_item_card.theme = _ui_theme
+	_held_item_card.set_anchors_preset(Control.PRESET_CENTER_BOTTOM)
+	_held_item_card.offset_bottom = HELD_ITEM_CARD_BOTTOM
+	_held_item_card.mouse_filter = Control.MOUSE_FILTER_IGNORE
+	_held_item_card.grow_horizontal = Control.GROW_DIRECTION_BOTH
+	_held_item_card.grow_vertical = Control.GROW_DIRECTION_BEGIN
+	_held_item_card.visible = false
+	_ui.add_child(_held_item_card)
+
+	_held_item_label = Label.new()
+	_held_item_label.horizontal_alignment = HORIZONTAL_ALIGNMENT_CENTER
+	_scaled_font(_held_item_label, UiTheme.BASE_FONT_SIZE - 2)
+	_held_item_card.add_child(_held_item_label)
+
+
+## Every frame: the equipped item's display name and its ItemWear grade, or an
+## empty line -- which hides the whole CARD, the same rule _set_message_banner
+## follows, so nothing can leave a blank card holding a gap open.
+func _update_held_item_card(local_player: Player) -> void:
+	var name := ""
+	var condition := ""
+	var item = local_player.equipped_item
+	if item != null:
+		name = _item_catalog.display_name_of(item.id)
+		# An item with no material to wear (a torch, a fish) gets no grade
+		# rather than a meaningless "Pristine".
+		var material := _item_catalog.material_of(item.id)
+		if material != "":
+			condition = _item_wear.condition_for(item.wear, material)
+	var line := HudReadouts.held_item_line(name, condition)
+	_held_item_card.visible = line != ""
+	_held_item_label.text = line
+
+
+## The player's half of the old strip, every frame.
+func _update_world_clock_card(
+	local_hour: int,
+	local_minute: int,
+	sun_elevation_degrees: float,
+	season: String,
+	weather: String,
+	local_player: Player
+) -> void:
+	var lines: PackedStringArray = HudReadouts.world_clock_lines(
+		local_hour,
+		local_minute,
+		HudReadouts.day_phase(sun_elevation_degrees, local_hour),
+		season,
+		weather,
+		local_player.current_mode,
+		local_player.current_speed_multiplier
+	)
+	for i in _clock_labels.size():
+		_clock_labels[i].text = lines[i]
+
+
+## The developer's half -- only ever called while the strip is actually
+## showing (see _client_process).
+func _update_diagnostics_strip(
+	latitude: float, longitude: float, sun_elevation_degrees: float
+) -> void:
+	var lines: PackedStringArray = HudReadouts.diagnostics_lines(
+		Engine.get_frames_per_second(), latitude, longitude, sun_elevation_degrees
+	)
+	for i in _diagnostics_labels.size():
+		_diagnostics_labels[i].text = lines[i]
+
+
+## Applies `base` to `label` at the current UI scale AND remembers it, so
+## moving the scale slider re-applies without a restart (see _apply_ui_scale).
+## The shared theme covers every widget that does not override its own size;
+## this is for the ones that do.
+func _scaled_font(label: Label, base: int) -> void:
+	_scaled_font_labels[label] = base
+	_apply_scaled_font(label, base)
+
+
+## The same size, applied WITHOUT registering -- for labels that are freed and
+## rebuilt as the HUD runs (the condition chips). Registering those would leave
+## the registry holding freed Labels for the whole session.
+func _apply_scaled_font(label: Label, base: int) -> void:
+	label.add_theme_font_size_override("font_size", UiScale.font_size(base, _ui_scale))
 
 
 ## Every transient message the world shows the player -- fishing, taming,
@@ -3015,20 +3530,32 @@ const CHARGE_METER_SIZE := Vector2(40.0, 6.0)
 ## every frame the same world-to-screen way _interaction_prompt is (it
 ## floats above whichever player is charging, not a fixed HUD corner).
 func _build_charge_meter() -> void:
-	_charge_meter = Control.new()
+	# On the shared card (docs/concept/hud.md pillar 1): it floats in WORLD
+	# space above the player's head, so it is drawn over terrain by definition
+	# -- the strongest case in the HUD for the card, and the last readout still
+	# without one.
+	_charge_meter = PanelContainer.new()
+	_charge_meter.theme = _ui_theme
+	_charge_meter.add_theme_stylebox_override(
+		"panel", UiTheme.new().compact_panel_stylebox()
+	)
 	_charge_meter.mouse_filter = Control.MOUSE_FILTER_IGNORE
 	_charge_meter.visible = false
-	_charge_meter.size = CHARGE_METER_SIZE
+
+	var stack := Control.new()
+	stack.custom_minimum_size = CHARGE_METER_SIZE
+	stack.mouse_filter = Control.MOUSE_FILTER_IGNORE
+	_charge_meter.add_child(stack)
 
 	_charge_meter_bg = ColorRect.new()
 	_charge_meter_bg.color = Color(0.1, 0.1, 0.1, 0.85)
 	_charge_meter_bg.size = CHARGE_METER_SIZE
-	_charge_meter.add_child(_charge_meter_bg)
+	stack.add_child(_charge_meter_bg)
 
 	_charge_meter_fill = ColorRect.new()
-	_charge_meter_fill.color = Color(0.85, 0.65, 0.15, 1.0)
+	_charge_meter_fill.color = UiTheme.ACCENT
 	_charge_meter_fill.size = CHARGE_METER_SIZE
-	_charge_meter.add_child(_charge_meter_fill)
+	stack.add_child(_charge_meter_fill)
 
 	_ui.add_child(_charge_meter)
 
@@ -3041,14 +3568,20 @@ func _build_charge_meter() -> void:
 ## health/max_health.
 func _update_charge_meter(local_player: Player) -> void:
 	var fraction := local_player.hand_charge_fraction()
-	_charge_meter.visible = fraction > 0.0
+	# A WORLD-space floater, so it yields to an open gameplay window like the
+	# interaction prompt, the hover tooltip and the message stack already do
+	# (see world_hint_visible_for). It was the one floater left uncovered --
+	# docs/concept/hud.md named it as a gap.
+	_charge_meter.visible = world_hint_visible_for(
+		fraction > 0.0, _any_gameplay_window_open()
+	)
 	if not _charge_meter.visible:
 		return
 	_charge_meter_fill.size.x = _health_bar.fill_width(fraction, 1.0, CHARGE_METER_SIZE.x)
 	var screen_position: Vector2 = (
 		get_viewport().get_canvas_transform() * (local_player.position + Vector2(0, -40))
 	)
-	_charge_meter.position = screen_position - Vector2(CHARGE_METER_SIZE.x / 2.0, 0)
+	_charge_meter.position = screen_position - Vector2(_charge_meter.size.x / 2.0, 0)
 
 
 ## Every frame: finds the nearest villager within talk range of the local
@@ -3097,6 +3630,17 @@ func _update_interaction_prompt(local_player: Player) -> void:
 				)
 			_:
 				_interaction_prompt.visible = false
+		return
+
+	# A wireframe you are standing at, FIRST -- before the villager beside
+	# you, before a door, before a pebble. It is the least ambiguous thing in
+	# reach (you walked onto it), and it is the one thing here whose keys the
+	# player had no way at all to discover: the prompt used to read "Talk
+	# (G)" over a plan they had just drawn, because wireframes are raised in
+	# villages and somebody is nearly always in talking range.
+	var plan_prompt := _plan_prompt_for(local_player)
+	if plan_prompt != "":
+		_show_interaction_prompt(plan_prompt, local_player.position)
 		return
 
 	var npc = _chunk_manager.nearest_npc_near(local_player.position, Player.TALK_RADIUS)
@@ -3201,8 +3745,10 @@ func _update_xp_bar(local_player: Player) -> void:
 ## stat bonus).
 func _update_land_sense_label(local_player: Player) -> void:
 	var unlocked: bool = local_player.unlocked_keystones.get("land_sense", false)
-	_land_sense_label.visible = unlocked and _chunk_manager != null
-	if not _land_sense_label.visible:
+	# Hides the CARD, not the label inside it -- nothing may leave a blank card
+	# standing (the same rule _set_message_banner follows).
+	_land_sense_card.visible = unlocked and _chunk_manager != null
+	if not _land_sense_card.visible:
 		return
 	var land_health := _chunk_manager.land_health_near(local_player.position)
 	var vegetation := _chunk_manager.vegetation_density_near(local_player.position)
@@ -3213,40 +3759,78 @@ func _update_land_sense_label(local_player: Player) -> void:
 
 func _make_survival_meter_row(parent: Control, fill_color: Color) -> Dictionary:
 	var row := Control.new()
-	row.custom_minimum_size = Vector2(SURVIVAL_BAR_WIDTH, SURVIVAL_BAR_HEIGHT)
+	row.custom_minimum_size = Vector2(SURVIVAL_BAR_WIDTH, _survival_row_height())
+	# Sized to the bar, not stretched to the card: the label is centred inside
+	# the ROW, so a stretched row would print the label beside its own bar.
+	row.size_flags_horizontal = Control.SIZE_SHRINK_BEGIN
 	parent.add_child(row)
+	_survival_rows.append(row)
 
+	# The bar and its fill are anchored LEFT_WIDE rather than given a fixed
+	# size: their height then follows the row's, so the row is the single
+	# thing the UI scale has to grow, and _update_survival_bar's own
+	# `fill.size.x = ...` keeps working untouched.
 	var bg := ColorRect.new()
 	bg.color = Color(0.1, 0.1, 0.1, 0.85)
-	bg.size = Vector2(SURVIVAL_BAR_WIDTH, SURVIVAL_BAR_HEIGHT)
 	row.add_child(bg)
+	_stretch_in_row(bg, SURVIVAL_BAR_WIDTH)
 
 	var fill := ColorRect.new()
 	fill.color = fill_color
-	fill.size = Vector2(SURVIVAL_BAR_WIDTH, SURVIVAL_BAR_HEIGHT)
 	row.add_child(fill)
+	_stretch_in_row(fill, SURVIVAL_BAR_WIDTH)
 
 	var label := Label.new()
-	label.size = Vector2(SURVIVAL_BAR_WIDTH, SURVIVAL_BAR_HEIGHT)
+	row.add_child(label)
+	_stretch_in_row(label, SURVIVAL_BAR_WIDTH)
 	label.horizontal_alignment = HORIZONTAL_ALIGNMENT_CENTER
 	label.vertical_alignment = VERTICAL_ALIGNMENT_CENTER
-	label.add_theme_font_size_override("font_size", 10)
-	row.add_child(label)
+	_scaled_font(label, SURVIVAL_LABEL_FONT_SIZE)
 
 	return {"fill": fill, "label": label}
+
+
+## Makes `control` a `width`-wide strip filling its row's full height: left
+## edge, top to bottom, so the row's height is the only thing a UI scale
+## change has to grow, and `fill.size.x = …` keeps setting a length.
+##
+## Written out rather than `set_anchors_preset(PRESET_LEFT_WIDE)`, because
+## that preset changes the ANCHORS and leaves the offsets alone -- which is
+## harmless on a node built here at (0, 0), and not at all harmless on the
+## .tscn-authored health bar, whose `offset_bottom = 14` then read as "parent
+## height PLUS 14" and drew the bar 14px taller than the row it was laid out
+## in, straight through the XP label below it (seen in the 1.0 render).
+func _stretch_in_row(control: Control, width: float) -> void:
+	control.anchor_left = 0.0
+	control.anchor_top = 0.0
+	control.anchor_right = 0.0
+	control.anchor_bottom = 1.0
+	control.offset_left = 0.0
+	control.offset_top = 0.0
+	control.offset_bottom = 0.0
+	control.offset_right = width
+
+
+## How tall one meter row has to be: at least as tall as the label centred
+## inside it. At the default UI scale this is exactly SURVIVAL_BAR_HEIGHT, so
+## the bars are unchanged; at 1.75 the 10pt label becomes 18pt and the row
+## grows with it instead of the four rows running through each other, which is
+## what the 1.75-scale render showed them doing.
+func _survival_row_height() -> float:
+	return maxf(
+		SURVIVAL_BAR_HEIGHT, float(UiScale.font_size(SURVIVAL_LABEL_FONT_SIZE, _ui_scale)) + 4.0
+	)
 
 
 ## A plain vertical stack of CreaturePanels, left side of the screen below
 ## the player health bar -- populated/refreshed by _update_creature_panels.
 func _build_creature_panels_container() -> void:
+	# Last in the left column, under the player card and the land-sense card --
+	# so they never overlap whatever those two currently need, at any UI scale
+	# (see HUD_EDGE_MARGIN and docs/concept/hud.md).
 	_creature_panels_container = VBoxContainer.new()
-	_creature_panels_container.theme = _ui_theme
-	_creature_panels_container.set_anchors_preset(Control.PRESET_TOP_LEFT)
-	_creature_panels_container.offset_left = 8.0
-	# Below the health bar (top) and the XP bar (y~74), so they don't overlap.
-	_creature_panels_container.offset_top = 96.0
 	_creature_panels_container.add_theme_constant_override("separation", 4)
-	_ui.add_child(_creature_panels_container)
+	_add_hud_card(_hud_left_column, _creature_panels_container)
 
 
 ## A small floating label that follows the mouse cursor, showing whichever
@@ -3418,18 +4002,28 @@ func _animal_detail_line(state: Dictionary) -> String:
 ## countdown/respawn happens on Player itself (see Player.RESPAWN_DELAY),
 ## this just displays it.
 func _build_death_label() -> void:
+	# On the shared card (docs/concept/hud.md pillar 1). Dead centre of the
+	# screen is precisely where the world is busiest, and 28pt dark red over a
+	# sunlit field or snow was the least legible text in the HUD -- for the one
+	# message the player most needs to read.
+	_death_card = PanelContainer.new()
+	_death_card.theme = _ui_theme
+	_death_card.set_anchors_preset(Control.PRESET_CENTER)
+	_death_card.offset_left = -160.0
+	_death_card.offset_top = -60.0
+	_death_card.offset_right = 160.0
+	_death_card.offset_bottom = 10.0
+	_death_card.mouse_filter = Control.MOUSE_FILTER_IGNORE
+	_death_card.visible = false
+	_ui.add_child(_death_card)
+
 	_death_label = Label.new()
 	_death_label.text = "You Died"
-	_death_label.visible = false
-	_death_label.add_theme_font_size_override("font_size", 28)
-	_death_label.add_theme_color_override("font_color", Color(0.8, 0.1, 0.1))
+	_scaled_font(_death_label, DEATH_MESSAGE_FONT_SIZE)
+	_death_label.add_theme_color_override("font_color", UiTheme.NEGATIVE)
 	_death_label.horizontal_alignment = HORIZONTAL_ALIGNMENT_CENTER
-	_death_label.set_anchors_preset(Control.PRESET_CENTER)
-	_death_label.offset_left = -120.0
-	_death_label.offset_top = -60.0
-	_death_label.offset_right = 120.0
-	_death_label.offset_bottom = 10.0
-	_ui.add_child(_death_label)
+	_death_label.vertical_alignment = VERTICAL_ALIGNMENT_CENTER
+	_death_card.add_child(_death_label)
 
 
 ## Throttled (see CREATURE_CALL_REFRESH_INTERVAL) chance for a live creature
@@ -3554,7 +4148,9 @@ func _unhandled_input(event: InputEvent) -> void:
 	# refusal would be work for nothing on every frame the mouse is still.
 	if event is InputEventMouseMotion:
 		_update_plan_cursor()
-	if event.is_action_pressed(CONSOLE_TOGGLE_ACTION):
+	if event.is_action_pressed(DIAGNOSTICS_TOGGLE_ACTION):
+		_toggle_diagnostics_strip()
+	elif event.is_action_pressed(CONSOLE_TOGGLE_ACTION):
 		_dev_console.toggle()
 	elif event.is_action_pressed(INVENTORY_TOGGLE_ACTION):
 		_inventory_window.toggle()
@@ -3565,13 +4161,21 @@ func _unhandled_input(event: InputEvent) -> void:
 	elif event.is_action_pressed(TALK_ACTION):
 		var talker := _players.get_node_or_null(str(multiplayer.get_unique_id())) as Player
 		if talker != null:
-			# Standing at a wireframe, the interact key raises it; anywhere
-			# else it still talks. Plan first because a wireframe you are
-			# standing on is unambiguous, while an NPC in talking range is
-			# the commoner case everywhere else -- and _raise_plan_within_
-			# reach reports whether it found one, so nothing is swallowed.
-			if not _raise_plan_within_reach(talker):
-				_on_talk_pressed(talker)
+			# Talk only. Raising a wireframe used to ride this key too,
+			# offering the hire first and falling through to your own hands
+			# -- which meant that standing in a village, where wireframes are
+			# raised and a villager is nearly always in range, one press did
+			# one of three things and the player could not tell which. The
+			# two are their own keys now (below), each with its own prompt.
+			_on_talk_pressed(talker)
+	elif event.is_action_pressed(RAISE_PLAN_ACTION):
+		var raiser := _players.get_node_or_null(str(multiplayer.get_unique_id())) as Player
+		if raiser != null:
+			_raise_plan_yourself(raiser)
+	elif event.is_action_pressed(HIRE_BUILDER_ACTION):
+		var employer := _players.get_node_or_null(str(multiplayer.get_unique_id())) as Player
+		if employer != null:
+			_hire_builder_for_plan(employer)
 	elif event.is_action_pressed(PLANNER_TOGGLE_ACTION):
 		_toggle_view_mode()
 	elif event.is_action_pressed(SKILLS_TOGGLE_ACTION):
@@ -3903,7 +4507,8 @@ func _on_console_command(command: String, args: Array) -> void:
 					+ "  /institution <entity_id>  /settlement <entity_id>  /boss <entity_id>"
 					+ "  /quests <entity_id>  /emergence"
 					+ "  /spawn <species> [count]  /give <item_id> [count]"
-					+ "  /craft <recipe_id>  /gold <amount>  /village  /river  /species  /help"
+					+ "  /craft <recipe_id>  /gold <amount>  /learn [spell_id]"
+					+ "  /village  /river  /species  /help"
 					+ "  /compass  /map  /weatherglass  /almanac  /deed"
 					+ "  /ledger propose|accept|fulfill|breach ...  /charter found <type> <counterparty_id>"
 					+ "  /journal <entity_id>  /workforce assign|slots|free ..."
@@ -3984,6 +4589,8 @@ func _on_console_command(command: String, args: Array) -> void:
 			_handle_craft_command(args, local_player)
 		"gold":
 			_handle_gold_command(args, local_player)
+		"learn":
+			_handle_learn_command(args, local_player)
 		"village":
 			_handle_village_command(local_player)
 		"river":
@@ -4519,6 +5126,89 @@ func _handle_gold_command(args: Array, local_player: Player) -> void:
 	_dev_console.log_line("Gave %d gold." % amount)
 
 
+## A mage guild's tuition (docs/concept/magic.md's 2026-09-19 section),
+## reached by hand. No argument lists what a guild would teach this
+## character and what each lesson costs; an argument takes that lesson.
+##
+## The command prices and gates NOTHING itself -- Player.learn_spell ->
+## SpellTuition owns all of it, and their own tests pin the price, the
+## refusal order and the rule that gold moves only on a lesson that lands.
+## This is only the hand on the mechanic, the same "a real command before a
+## real UI" scope /gold and /craft already established; a guild interaction
+## UI is named as an open gap in the doc itself.
+##
+## Every refusal is reported by its own reason, because a guild that
+## answers "no" is useless and one that answers WHY is a quest hook: the
+## money case quotes the price and the exact shortfall, the standing case
+## points at the building a city has to be big enough to raise.
+func _handle_learn_command(args: Array, local_player: Player) -> void:
+	if local_player == null:
+		_dev_console.log_line("No local player to teach.")
+		return
+
+	if args.is_empty():
+		var masters: Array = local_player.masters_here()
+		if masters.is_empty():
+			_dev_console.log_line(
+				"No master here. Step inside a %s with somebody in it."
+				% SpellTuition.GUILD_BUILDING_ID
+			)
+			return
+		var who: Array[String] = []
+		for master_seed in masters:
+			who.append(MageMaster.display_name_for(master_seed))
+		var offers: Array = local_player.spells_a_guild_would_teach()
+		if offers.is_empty():
+			_dev_console.log_line(
+				"In residence: %s. You already know everything they teach."
+				% ", ".join(who)
+			)
+			return
+		var lines: Array[String] = []
+		for spell_id in offers:
+			lines.append("%s (%d gold)" % [spell_id, local_player.tuition_for(spell_id)])
+		_dev_console.log_line(
+			"In residence: %s. They teach: %s. /learn <spell_id> to take a lesson."
+			% [", ".join(who), ", ".join(lines)]
+		)
+		return
+
+	var wanted := String(args[0])
+	var result: Dictionary = local_player.learn_spell(wanted)
+	if result["ok"]:
+		_dev_console.log_line(
+			"%s taught you %s for %d gold."
+			% [MageMaster.display_name_for(int(result["teacher"])), wanted, result["gold"]]
+		)
+		return
+
+	var refusal: Dictionary = result["refusal"]
+	match String(refusal.get("reason", "")):
+		SpellTuition.UNKNOWN_SPELL:
+			_dev_console.log_line("No such spell: %s." % wanted)
+		SpellTuition.OUTSIDE:
+			_dev_console.log_line(
+				"You are not inside a %s. Only a city may raise one, and you have to go in."
+				% refusal.get("building_id", SpellTuition.GUILD_BUILDING_ID)
+			)
+		SpellTuition.ALREADY_KNOWN:
+			_dev_console.log_line("You already know %s." % wanted)
+		SpellTuition.NO_MASTER:
+			# The refusal that turns into a reason to travel: it names the
+			# tradition and the depth to go looking for.
+			_dev_console.log_line(
+				"Nobody here teaches %s. It wants a master of %s who runs to depth %d."
+				% [wanted, refusal.get("school", "?"), int(refusal.get("depth", 0))]
+			)
+		SpellTuition.CANNOT_AFFORD:
+			_dev_console.log_line(
+				"%s costs %d gold -- come back with %d more."
+				% [wanted, refusal.get("tuition", 0), refusal.get("short", 0)]
+			)
+		_:
+			_dev_console.log_line("The guild will not teach %s." % wanted)
+
+
 ## Teleports the local player to the nearest procedurally-placed settlement
 ## (see SettlementGenerator/VillageFinder), searching outward chunk-by-chunk
 ## from wherever they currently stand. Lands them at the village's well --
@@ -4531,11 +5221,26 @@ func _handle_village_command(local_player: Player) -> void:
 
 	var destination: Variant = _chunk_manager.find_nearest_village(local_player.current_tile())
 	if destination == null:
-		_dev_console.log_line("No village found nearby.")
+		_dev_console.log_line(
+			"No village standing within %d chunks." % EarthChunkManager.MAX_VILLAGE_SEARCH_RADIUS_CHUNKS
+		)
 		return
 
 	local_player.position = destination
-	_dev_console.log_line("Teleported to the nearest village.")
+	# Says WHICH chunk and what is really standing in it, rather than only
+	# claiming success (docs/concept/village_growth.md, Mechanism 6). Asked
+	# for by the third report of the same thing: a line that only says
+	# "Teleported to the nearest village" leaves a player no way to tell
+	# whether the search picked the wrong chunk, found no buildings, or found
+	# buildings nothing then drew.
+	var landed := Vector2i(
+		floori((destination as Vector2).x / float(TerrainRenderer.TILE_SIZE)),
+		floori((destination as Vector2).y / float(TerrainRenderer.TILE_SIZE))
+	)
+	var chunk := _chunk_manager.chunk_coord_for_tile(landed)
+	_dev_console.log_line(
+		VillageFinder.teleport_report(chunk, _chunk_manager.buildings_in_chunk(chunk).size())
+	)
 
 
 ## /river -- teleports to a random point on a random curated river, reusing
@@ -5021,7 +5726,8 @@ func _update_player_health_bar(local_player: Player) -> void:
 	_player_health_fill.size.x = width
 	_player_health_label.text = "HP %d / %d" % [int(local_player.health), int(local_player.max_health)]
 
-	_death_label.visible = local_player.is_dead
+	# The CARD is what hides -- nothing may leave a blank card standing.
+	_death_card.visible = local_player.is_dead
 	if local_player.is_permanently_dead():
 		# docs/concept/death.md: "the character is gone forever" -- no
 		# countdown, because there is nothing left to respawn into. Actually
@@ -5136,7 +5842,7 @@ var _build_plans := BuildPlanLedger.new()
 var _selected_blueprint := ""
 
 var _view_mode_button: Button
-var _blueprint_palette: PanelContainer
+var _blueprint_palette: BlueprintPaletteView
 var _plan_wireframes: PlanWireframeLayer
 
 ## Plans on disk. A wireframe is world state (planner_mode.md's pillar 3),
@@ -5244,51 +5950,82 @@ func _build_plan_wireframes() -> void:
 	add_child(_plan_wireframes)
 
 
-## The blueprint palette: planner mode's own controls, where the hotbar
-## sits in rpg mode. One button per thing the game can already raise --
-## pavement plus the real BuildingCatalog, never a parallel list that could
-## drift from what is actually buildable (planner_mode.md's "one
-## vocabulary").
-func _build_blueprint_palette() -> void:
-	_blueprint_palette = PanelContainer.new()
-	_blueprint_palette.theme = _ui_theme
-	_blueprint_palette.set_anchors_preset(Control.PRESET_CENTER_BOTTOM)
-	_blueprint_palette.offset_left = -260.0
-	_blueprint_palette.offset_right = 260.0
-	_blueprint_palette.offset_top = -96.0
-	_blueprint_palette.offset_bottom = -8.0
-	_ui.add_child(_blueprint_palette)
+## How far the palette's card sits off the bottom edge. Its WIDTH and
+## HEIGHT are not written down: a slot is as wide as the names it has to
+## hold (BlueprintPaletteView.slot_size_for), so the card is as wide as its
+## slots -- see _fit_blueprint_palette.
+const PALETTE_MARGIN := 8.0
 
-	var row := HBoxContainer.new()
-	row.add_theme_constant_override("separation", 4)
-	_blueprint_palette.add_child(row)
-	for blueprint_id in _palette_blueprint_ids():
-		var button := Button.new()
-		button.theme = _ui_theme
-		button.text = BuildPlan.display_name_of(blueprint_id)
-		button.toggle_mode = true
-		button.pressed.connect(_on_blueprint_selected.bind(blueprint_id))
-		row.add_child(button)
+
+## The blueprint palette: planner mode's own controls, where the hotbar
+## sits in rpg mode. See docs/concept/planner_mode.md, "The build palette".
+##
+## Asked directly, with a screenshot of the ten identical text buttons this
+## replaced: *"Make the Planner / Building HUD more professional and more
+## like Anno 1806. Add Icons not only text"*.
+##
+## The menu itself is BlueprintPaletteView -- tabs, icons, the armed slot
+## and the footer are its behaviour, tested for real rather than by reading
+## this file. What stays here is the only part that is genuinely World's:
+## where it sits, and the two numbers it is not allowed to invent. Both
+## arrive as the SAME calls the raising path itself makes -- the real
+## _item_catalog for material names, and _chunk_manager.build_labor_hours_
+## for for the requirement PlanRaising.is_laid_by_hand is asked about -- so
+## the menu cannot quote a price or a job size the site then disagrees
+## with.
+func _build_blueprint_palette() -> void:
+	_blueprint_palette = BlueprintPaletteView.new()
+	_ui.add_child(_blueprint_palette)
+	_blueprint_palette.configure(
+		_ui_theme,
+		func(blueprint_id: String) -> float:
+			return _chunk_manager.build_labor_hours_for(blueprint_id),
+		func(item_id: String) -> String:
+			return _item_catalog.display_name_of(item_id)
+	)
+	_blueprint_palette.blueprint_selected.connect(_on_blueprint_selected)
+	# Whenever the menu needs more room -- a wider tab, a larger UI scale --
+	# the card grows with it rather than clipping.
+	_blueprint_palette.minimum_size_changed.connect(_fit_blueprint_palette)
+	_fit_blueprint_palette()
 	_blueprint_palette.visible = false
 
 
-## Pavement first (the cheapest, most-used thing a player lays), then every
-## real catalog building. Read from BuildingCatalog rather than listed here
-## so a building added to the game shows up in the palette for free.
-func _palette_blueprint_ids() -> Array[String]:
-	var ids: Array[String] = [BuildPlan.PAVEMENT_BLUEPRINT_ID]
-	for building_id in BuildingCatalog.BUILDING_IDS:
-		ids.append(building_id)
-	for building_id in BuildingCatalog.PRODUCTION_BUILDING_IDS:
-		ids.append(building_id)
-	for building_id in BuildingCatalog.CIVIC_BUILDING_IDS:
-		ids.append(building_id)
-	return ids
+## Centres the card on the bottom edge at exactly the size the menu needs.
+##
+## Measured rather than written down, because a slot is now as wide as the
+## names it really has to hold (BlueprintPaletteView.slot_size_for, and the
+## measurement that forced it): a card pinned to a constant width would
+## clip the wider slots instead of the names, which is the same defect one
+## level up.
+func _fit_blueprint_palette() -> void:
+	if _blueprint_palette == null:
+		return
+	var wanted := _blueprint_palette.get_combined_minimum_size()
+	_blueprint_palette.set_anchors_preset(Control.PRESET_CENTER_BOTTOM)
+	_blueprint_palette.offset_left = -wanted.x * 0.5
+	_blueprint_palette.offset_right = wanted.x * 0.5
+	_blueprint_palette.offset_top = -wanted.y - PALETTE_MARGIN
+	_blueprint_palette.offset_bottom = -PALETTE_MARGIN
+
+
+## Tells the palette what the rest of planner mode thinks is armed.
+##
+## One direction only, and deliberately: _selected_blueprint is the state
+## the cursor and the click-to-plan path act on, so the palette follows it
+## rather than the other way round -- including the empty one
+## _apply_view_mode clears to every time the mode is left, which would
+## otherwise leave a slot looking stuck down over an unarmed cursor.
+func _update_palette_selection() -> void:
+	if _blueprint_palette == null:
+		return
+	_blueprint_palette.set_selected(_selected_blueprint)
 
 
 func _on_blueprint_selected(blueprint_id: String) -> void:
 	_selected_blueprint = blueprint_id
 	_show_planner_message("%s selected -- click the map to plan it." % BuildPlan.display_name_of(blueprint_id))
+	_update_palette_selection()
 	_update_plan_cursor()
 
 
@@ -5302,26 +6039,95 @@ func _on_blueprint_selected(blueprint_id: String) -> void:
 ## A themed card rather than a bare Button, per docs/concept/hud.md's own
 ## pillar 1: which mode you are in carries meaning, and nothing that
 ## carries meaning may be drawn as bare text over the world.
+## Rounds the minimap's own corners and frames it, so the top-right column
+## reads as one column (docs/concept/hud.md "The minimap is framed like every
+## other card"). Asked for directly: "add a border and borderradius of 4px to
+## the minimap".
+##
+## Two nodes, because a stylebox cannot do it alone: it draws BEHIND a
+## TextureRect rather than clipping it, and its border draws under its own
+## children.
+##
+## 1. A clipper the minimap is moved INTO, carrying the rounded shape with
+##    clip_children = CLIP_CHILDREN_ONLY -- never drawn itself, its shape
+##    used as the mask that rounds the map texture.
+## 2. A frame added AFTER the map, so it draws on top of it (later sibling =
+##    later draw, see this file's own "One CanvasLayer" note), carrying the
+##    border and nothing else.
+func _build_minimap_frame() -> void:
+	var ui_theme := UiTheme.new()
+	var clipper := Panel.new()
+	clipper.add_theme_stylebox_override("panel", ui_theme.map_clip_stylebox())
+	clipper.clip_children = CanvasItem.CLIP_CHILDREN_ONLY
+	clipper.mouse_filter = Control.MOUSE_FILTER_IGNORE
+	clipper.set_anchors_preset(Control.PRESET_TOP_RIGHT)
+	clipper.offset_left = _minimap.offset_left
+	clipper.offset_top = _minimap.offset_top
+	clipper.offset_right = _minimap.offset_right
+	clipper.offset_bottom = _minimap.offset_bottom
+	_ui.add_child(clipper)
+
+	# The map itself moves inside the clipper and fills it. Its PlayerDot
+	# child rides along, still anchored to the map's own centre.
+	_ui.remove_child(_minimap)
+	clipper.add_child(_minimap)
+	_minimap.set_anchors_preset(Control.PRESET_FULL_RECT)
+	_minimap.offset_left = 0.0
+	_minimap.offset_top = 0.0
+	_minimap.offset_right = 0.0
+	_minimap.offset_bottom = 0.0
+
+	var frame := Panel.new()
+	frame.add_theme_stylebox_override("panel", ui_theme.map_frame_stylebox())
+	frame.mouse_filter = Control.MOUSE_FILTER_IGNORE
+	frame.set_anchors_preset(Control.PRESET_TOP_RIGHT)
+	frame.offset_left = clipper.offset_left
+	frame.offset_top = clipper.offset_top
+	frame.offset_right = clipper.offset_right
+	frame.offset_bottom = clipper.offset_bottom
+	_ui.add_child(frame)
+
+
 func _build_view_mode_toggle() -> void:
 	var panel := PanelContainer.new()
 	panel.theme = _ui_theme
 	panel.set_anchors_preset(Control.PRESET_TOP_RIGHT)
-	panel.offset_left = -300.0
+	# Right edge pinned just left of the minimap; the left edge follows the
+	# content, so a caption plus a switch is not rattling around inside a box
+	# sized for the old, wider "Planner Mode" caption.
+	panel.offset_left = -178.0
 	panel.offset_top = 8.0
 	panel.offset_right = -178.0
-	panel.offset_bottom = 40.0
+	panel.offset_bottom = 8.0
+	panel.grow_horizontal = Control.GROW_DIRECTION_BEGIN
+	panel.grow_vertical = Control.GROW_DIRECTION_END
 	_ui.add_child(panel)
+
+	# A real two-state SWITCH, not a button whose caption is the mode you are
+	# not in -- asked for directly ("make the planner switch a ios like switch
+	# button with two states"), and see docs/concept/hud.md for why a button's
+	# caption could be read either way.
+	#
+	# The caption is constant (ViewMode.SWITCH_LABEL) because the switch, not
+	# the words, now carries the state. Neither node takes keyboard focus: a
+	# focused Control answers ui_accept, which is Space, which is the attack
+	# key (reported live, "space now toggles between plann mode and rpg").
+	var row := HBoxContainer.new()
+	row.add_theme_constant_override("separation", 8)
+	row.alignment = BoxContainer.ALIGNMENT_CENTER
+	panel.add_child(row)
 
 	_view_mode_button = Button.new()
 	_view_mode_button.theme = _ui_theme
-	# Never takes keyboard focus. A focused Button answers `ui_accept`, and
-	# ui_accept is Space -- which is the ATTACK key, so once this had been
-	# clicked every later Space press flipped the mode instead of swinging
-	# (reported live: "space now toggles between plann mode and rpg"). A HUD
-	# readout the mouse presses has no business holding the keyboard.
+	_view_mode_button.text = ViewMode.SWITCH_LABEL
 	_view_mode_button.focus_mode = Control.FOCUS_NONE
+	_view_mode_button.flat = true
 	_view_mode_button.pressed.connect(_toggle_view_mode)
-	panel.add_child(_view_mode_button)
+	row.add_child(_view_mode_button)
+
+	_view_mode_switch = ToggleSwitch.new()
+	_view_mode_switch.toggled_to.connect(func(_on: bool): _toggle_view_mode())
+	row.add_child(_view_mode_switch)
 	_apply_view_mode()
 
 
@@ -5339,14 +6145,21 @@ func _toggle_view_mode() -> void:
 ## than decided again here: a second `if` over the same two cases is how a
 ## tested model and the real HUD drift apart.
 func _apply_view_mode() -> void:
+	# The caption never changes now -- the SWITCH shows the state, which is
+	# the whole reason it is a switch (docs/concept/hud.md). set_on rather
+	# than a second predicate: a keypress flips the mode without touching the
+	# switch, and the switch has to follow the mode either way.
 	if _view_mode_button != null:
-		_view_mode_button.text = ViewMode.toggle_label(_view_mode)
+		_view_mode_button.text = ViewMode.SWITCH_LABEL
+	if _view_mode_switch != null:
+		_view_mode_switch.set_on(ViewMode.shows_palette(_view_mode))
 	if _hotbar != null:
 		_hotbar.visible = ViewMode.shows_hotbar(_view_mode)
 	if _blueprint_palette != null:
 		_blueprint_palette.visible = ViewMode.shows_palette(_view_mode)
 	if not ViewMode.shows_palette(_view_mode):
 		_selected_blueprint = ""
+	_update_palette_selection()
 	_update_plan_cursor()
 
 
@@ -5378,70 +6191,64 @@ func _update_plan_cursor() -> void:
 ## village pays for the same building -- falls here, at the moment somebody
 ## actually builds. A player who cannot afford it is told what they are
 ## short of rather than silently refused.
-func _raise_plan_within_reach(builder: Player) -> bool:
+## The wireframe this player is standing close enough to act on, or null.
+## The one question both of the two actions below start from, and the one the
+## floating prompt asks to decide whether to offer them at all.
+func _plan_within_reach_of(builder: Player):
 	if _plan_wireframes == null or builder == null:
-		return false
+		return null
 	var player_cell := Vector2i((builder.position / TerrainRenderer.TILE_SIZE).floor())
-	var plan = PlanRaising.plan_within_reach(_build_plans, player_cell, EarthChunkManager.CHUNK_SIZE)
+	return PlanRaising.plan_within_reach(_build_plans, player_cell, EarthChunkManager.CHUNK_SIZE)
+
+
+## What the floating prompt says when a wireframe is in reach, or "" when
+## none is -- the plan's own name and BOTH keys, read live from the
+## keybindings like every other prompt here.
+##
+## Reported a third time: *"Planned nodes (e.g. pavement) still can't be
+## actually built by the player or hired NPCs... there should be tooltips
+## with hotkeys for both actions"*. The mechanism worked (this file's own
+## test_world_raising_a_plan.gd drives it end to end); what was missing was
+## any way to know it was there. Standing on a wireframe, the prompt said
+## "Talk (G)" -- wireframes are raised in villages, and a villager is nearly
+## always in range.
+func _plan_prompt_for(builder: Player) -> String:
+	var plan = _plan_within_reach_of(builder)
+	if plan == null:
+		return ""
+	return "%s\nBuild (%s)\nHire (%s)" % [
+		BuildPlan.display_name_of(plan.blueprint_id),
+		OS.get_keycode_string(_keybindings.keycode_for("primary_action")),
+		OS.get_keycode_string(_keybindings.keycode_for("secondary_action")),
+	]
+
+
+## Raise the wireframe in reach with your OWN hands. Returns whether there
+## was one to act on at all, so the caller knows whether the key was spent.
+##
+## One of the two things the single overloaded interact key used to do in an
+## order the player could not see or choose: it offered the hire first and
+## fell through to your own hands when that failed, which is why *which*
+## thing happened was unpredictable. Now each is its own key, each refuses in
+## its own terms, and neither silently becomes the other.
+func _raise_plan_yourself(builder: Player) -> bool:
+	var plan = _plan_within_reach_of(builder)
 	if plan == null:
 		return false
-	# Somebody you know well enough, standing close enough to take the job,
-	# is offered it first: hiring is the whole point of walking up to a
-	# wireframe with a villager beside you, and it does not ask the player
-	# to carry the materials themselves.
-	var hired := _chunk_manager.nearest_npc_near(builder.position, Player.TALK_RADIUS)
-	# Why the hire did not happen, for the message below -- empty when
-	# nobody was offered the job at all, which is the ordinary case and
-	# needs no explaining.
-	var hire_refused := ""
-	if hired != null and hired.identity != null and PlanRaising.can_hire_builder(
-		_npc_trust.trust_of(hired.identity.seed_value), BUILDER_WAGE, BUILDER_MINIMUM_WAGE
-	):
-		# The wage really moves before the job is taken: a villager who was
-		# never paid must not end up working.
-		if WagePayment.pay(
-			builder.wallet,
-			_chunk_manager.household_wallet_for_villager(hired.identity.seed_value),
-			int(BUILDER_WAGE)
-		):
-			var project = _open_raising_project(plan, PlanRaising.Labour.HIRED)
-			if project != null:
-				_hired_builds[project.id] = 1.0
-				_raised_build_advanced_at[project.id] = _chunk_manager.world_age_seconds()
-			_show_planner_message("%s takes the job for %d gold: %s." % [
-				hired.identity.npc_name, int(BUILDER_WAGE), BuildPlan.display_name_of(plan.blueprint_id)
-			])
-			return true
-		# A hire that cannot be paid FALLS THROUGH to your own hands rather
-		# than ending the interaction.
-		#
-		# Reported twice, and this is why: *"hiring a builder does not yet
-		# seem to work"*, then *"It's still not possible to build a planned
-		# entity like pavement"*. Standing in a village -- which is where
-		# wireframes are raised -- there is nearly always somebody within
-		# talking range, and once the player has talked to them enough to
-		# clear the trust gate, EVERY press offered them the job. When the
-		# wage could not move (an empty purse, or a villager the household
-		# store has never heard of, whose wallet is simply null) the player
-		# was told they could not pay and given nothing else -- unable to
-		# lay a paving stone they were standing on and that costs nothing.
-		hire_refused = "You cannot pay %s the %d gold they want. " % [
-			hired.identity.npc_name, int(BUILDER_WAGE)
-		]
-	var missing: Dictionary = PlanRaising.missing_materials(plan.blueprint_id, _carried_counts(builder, plan.blueprint_id))
+	var missing: Dictionary = PlanRaising.missing_materials(
+		plan.blueprint_id, _carried_counts(builder, plan.blueprint_id)
+	)
 	if not missing.is_empty():
 		var shortfall: Array[String] = []
 		for item_id in missing:
 			shortfall.append("%s x%d" % [item_id, missing[item_id]])
-		_show_planner_message("%sNeed %s to raise this %s." % [
-			hire_refused, ", ".join(shortfall), BuildPlan.display_name_of(plan.blueprint_id)
+		_show_planner_message("Need %s to raise this %s." % [
+			", ".join(shortfall), BuildPlan.display_name_of(plan.blueprint_id)
 		])
 		return true
-	# Pillar 1: planning charged nothing, and the building's own real
-	# catalog cost falls HERE. Checking that the materials are carried and
-	# then not taking them would make building by hand the cheapest path in
-	# the game. Hiring returned above without touching them -- the wage is
-	# what the player pays there, and the villager brings the material.
+	# Pillar 1: planning charged nothing, and the building's own real catalog
+	# cost falls HERE. Checking that the materials are carried and then not
+	# taking them would make building by hand the cheapest path in the game.
 	_spend_carried_materials(builder, plan.blueprint_id)
 	var mine = _open_raising_project(plan, PlanRaising.Labour.PLAYER)
 	if mine != null:
@@ -5449,10 +6256,52 @@ func _raise_plan_within_reach(builder: Player) -> bool:
 			"chunk_coord": plan.chunk_coord, "origin": plan.origin, "blueprint_id": plan.blueprint_id,
 		}
 		_raised_build_advanced_at[mine.id] = _chunk_manager.world_age_seconds()
-	_show_planner_message("%sRaising %s yourself." % [
-		hire_refused, BuildPlan.display_name_of(plan.blueprint_id)
+	_show_planner_message("Raising %s yourself." % BuildPlan.display_name_of(plan.blueprint_id))
+	return true
+
+
+## Hire the villager beside you to raise the wireframe in reach. Returns
+## whether there was one to act on at all.
+##
+## Refuses in its own terms rather than quietly doing the other thing: no
+## villager near enough, none who trusts you enough, or a wage that cannot
+## move are each ANSWERED. A key that falls through to your own labour when
+## the hire fails is a key whose outcome the player cannot predict, which is
+## exactly what was reported.
+func _hire_builder_for_plan(builder: Player) -> bool:
+	var plan = _plan_within_reach_of(builder)
+	if plan == null:
+		return false
+	var hired := _chunk_manager.nearest_npc_near(builder.position, Player.TALK_RADIUS)
+	if hired == null or hired.identity == null:
+		_show_planner_message("Nobody here to hire.")
+		return true
+	if not PlanRaising.can_hire_builder(
+		_npc_trust.trust_of(hired.identity.seed_value), BUILDER_WAGE, BUILDER_MINIMUM_WAGE
+	):
+		_show_planner_message("%s does not know you well enough to take the job." % hired.identity.npc_name)
+		return true
+	# The wage really moves before the job is taken: a villager who was never
+	# paid must not end up working.
+	if not WagePayment.pay(
+		builder.wallet,
+		_chunk_manager.household_wallet_for_villager(hired.identity.seed_value),
+		int(BUILDER_WAGE)
+	):
+		_show_planner_message("You cannot pay %s the %d gold they want." % [
+			hired.identity.npc_name, int(BUILDER_WAGE)
+		])
+		return true
+	var project = _open_raising_project(plan, PlanRaising.Labour.HIRED)
+	if project != null:
+		_hired_builds[project.id] = 1.0
+		_raised_build_advanced_at[project.id] = _chunk_manager.world_age_seconds()
+	_show_planner_message("%s takes the job for %d gold: %s." % [
+		hired.identity.npc_name, int(BUILDER_WAGE), BuildPlan.display_name_of(plan.blueprint_id)
 	])
 	return true
+
+
 
 
 ## Takes the building's own real BuildingCatalog cost out of the builder's
@@ -5724,7 +6573,7 @@ func _update_hotbar(local_player: Player) -> void:
 		if item_id != "" and count > 0:
 			# texture_for() hits a shared static cache keyed by id (no per-frame
 			# image build / GPU upload) -- item art is a pure function of the id.
-			_hotbar_slots[i].texture = _item_sprite_generator.texture_for(_sprite_id_for_item(item_id))
+			_hotbar_slots[i].texture = _item_art.texture_for(_sprite_id_for_item(item_id), "icon")
 			_hotbar_counts[i].text = str(count) if count > 1 else ""
 			_hotbar_slot_frames[i].tooltip_text = _hotbar_tooltip_text(item_id, count)
 		else:
@@ -6778,6 +7627,10 @@ func _client_process(delta: float) -> void:
 	if _perf_report != null:
 		perf_started = _perf_section("cli_hover", perf_started)
 	_update_survival_bar(local_player)
+	# The names the bars above only imply, and what is in hand -- see
+	# docs/concept/hud.md. Both rebuild only when what they say changes.
+	_update_condition_chips(local_player)
+	_update_held_item_card(local_player)
 	_update_xp_bar(local_player)
 	_update_land_sense_label(local_player)
 	_update_karma_display(local_player)
@@ -7105,6 +7958,26 @@ func _client_process(delta: float) -> void:
 		# own doc comment: no genuine squish recording sourced yet).
 		_interaction_sfx.play_mushroom_crush()
 	_chunk_manager.crush_walnut_near(local_player.position, player_step_momentum_kg_m_s)
+	# And ANY animal small enough to go under a foot (see docs/concept/
+	# soil_fauna.md "Generalized to ANY animal") -- reported in play:
+	# "Stepping on a frog doesn't kill it? Shouldn't this work out of the box
+	# for ANY animal when enough pressure is put on it?" These two take the
+	# stepper's own MASS rather than the momentum every call above them
+	# takes, because an animal victim is decided by a second term the
+	# momentum has already thrown away: whether the victim's whole body fits
+	# under the foot that lands on it.
+	#
+	# A frog charges Karma exactly like a caterpillar or a bug does -- a
+	# small, harmless animal died under the player's own boot, the identical
+	# event. A real CreatureMarker does not, for anybody: its death goes
+	# through the same _die() a hunted animal's does and is already on the
+	# region's mortality books, where a frog (like a worm) has no other death
+	# path at all. Charging for it would be inventing a hunting penalty
+	# inside the crush pass.
+	var player_step_mass_kg := _player_step_mass_kg(local_player)
+	if _chunk_manager.crush_grass_frogs_near(local_player.position, player_step_mass_kg):
+		local_player.apply_karma_delta(-Karma.WORM_OR_CATERPILLAR_CRUSH_PENALTY)
+	_chunk_manager.crush_creatures_near(loaded_creature_markers, local_player.position, player_step_mass_kg)
 	# A wild creature's own step still crushes what's underfoot (a real,
 	# weight-emergent ecosystem effect -- a deer's own hoof kills the worm
 	# the same as a player's boot would) but never touches Karma: every
@@ -7139,7 +8012,8 @@ func _client_process(delta: float) -> void:
 		# reads EXACTLY the old flat value at this creature's own seed
 		# mass (see test_seed_mass_matches_creature_mass_exactly_for_
 		# every_real_species).
-		var momentum := marker.current_mass_kg() * PebbleDispersion.FOOTSTEP_SPEED_MPS
+		var stepper_mass_kg := marker.current_mass_kg()
+		var momentum := stepper_mass_kg * PebbleDispersion.FOOTSTEP_SPEED_MPS
 		_chunk_manager.crush_worm_at(marker.position, momentum)
 		_chunk_manager.crush_caterpillars_near(marker.position, momentum)
 		_chunk_manager.crush_millipedes_near(marker.position, momentum)
@@ -7147,6 +8021,14 @@ func _client_process(delta: float) -> void:
 		_chunk_manager.crush_decomposers_near(marker.position, momentum)
 		_chunk_manager.crush_mushroom_at(marker.position, momentum)
 		_chunk_manager.crush_walnut_near(marker.position, momentum)
+		# "A boar walking over a frog should kill it as well" -- the same two
+		# mass-taking animal calls the player's own block runs, and never
+		# Karma-charging, like every other call in this loop. The stepper
+		# excludes itself: the mass rule already rules self-crushing out (a
+		# body always outweighs its own foot), so this is the explicit guard
+		# on top of it rather than the only thing preventing it.
+		_chunk_manager.crush_grass_frogs_near(marker.position, stepper_mass_kg)
+		_chunk_manager.crush_creatures_near(loaded_creature_markers, marker.position, stepper_mass_kg, marker)
 	if _perf_report != null:
 		perf_started = _perf_section("cli_crush", perf_started)
 	_chunk_manager.set_wind_strength(_weather_model.wind_strength_for(raw_weather))
@@ -7185,21 +8067,14 @@ func _client_process(delta: float) -> void:
 	_chunk_manager.sync_tree_season(local_player.position)
 	_chunk_manager.sync_grass_season()
 	var weather := raw_weather.capitalize()
-	_debug_label.text = (
-		"FPS %d   Lat %.1f Lon %.1f   Local %02d:%02d   Sun elev %.1f°   %s · %s   Mode: %s   Speed: %d%%"
-		% [
-			Engine.get_frames_per_second(),
-			latitude,
-			longitude,
-			local_hour_whole,
-			local_minute,
-			elevation,
-			season,
-			weather,
-			local_player.current_mode,
-			local_player.current_speed_multiplier * 100,
-		]
-	)
+	# The two halves of what used to be one bare Label at (8, 8) holding eight
+	# fields in a single %-formatted string -- see docs/concept/hud.md "The
+	# top-left strip". The clock card is always on; the diagnostics strip is
+	# only written while it is actually showing, so a player who never presses
+	# F3 pays nothing for it.
+	_update_world_clock_card(local_hour_whole, local_minute, elevation, season, weather, local_player)
+	if _diagnostics_visible:
+		_update_diagnostics_strip(latitude, longitude, elevation)
 	if _perf_report != null:
 		_perf_section("cli_season", perf_started)
 

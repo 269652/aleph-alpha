@@ -212,16 +212,33 @@ const PITCH_VARIATION := 0.06
 ## reading steps off the end of itself.
 const CLIP_LENGTH_SECONDS := {
 	FALLBACK_CLIP_PATH: 3.64,
+	# 7.54s of continuous crinkling styrofoam -- see MUSHROOM_CRUSH_CLIP_PATH
+	# below for why the clip is a field recording rather than a trimmed
+	# one-shot. Measured off the real file, like every length here, and pinned
+	# against it by test_the_pinned_clip_lengths_are_the_real_files_own.
+	#
+	# Reported live: "Mushroom crush sounds are gone". It was missing from
+	# this dictionary, so its length read as the 0.0 default, is_walking_bed
+	# called a 7.5-second recording a one-shot, offset_for returned 0.0 for
+	# every roll, and every crush played the same opening 0.3s of lead-in --
+	# before the performer has touched the styrofoam. Silence, deterministically.
+	MUSHROOM_CRUSH_CLIP_PATH: 7.54,
 }
 
 
-## Whether this clip is a recording of somebody WALKING, which one step is a
-## window into -- rather than a single recorded step, which is played whole.
+## Whether this clip is a long CONTINUOUS recording, which one event is a
+## window into -- rather than a single recorded event, which is played whole.
+##
+## Named for the case it was written for (a recording of somebody walking),
+## but the rule is about length, not about walking: the mushroom crush's own
+## 7.5 seconds of continuous crinkling is read the same way, one crush at a
+## time. The name is left alone rather than churned through every caller;
+## this comment is the correction.
 ##
 ## Twice the step window is the line: a clip that cannot hold two
-## non-overlapping steps has no second step to offer, so there is nothing to
+## non-overlapping events has no second one to offer, so there is nothing to
 ## vary and reading it from anywhere but its own beginning would only clip
-## the one step it has.
+## the one event it has.
 static func is_walking_bed(clip_path: String) -> bool:
 	return float(CLIP_LENGTH_SECONDS.get(clip_path, 0.0)) > STEP_WINDOW_SECONDS * 2.0
 
@@ -229,9 +246,13 @@ static func is_walking_bed(clip_path: String) -> bool:
 ## Where in the clip this step starts. `roll` is [0, 1] -- the caller's own
 ## randomness, kept out of here so this stays pure and testable.
 ##
-## Zero for a real one-shot: it is already the step. For a bed, anywhere
-## that still leaves a whole window of recording ahead of it, so a step
-## never fades out because it ran off the end.
+## Zero for a real one-shot: it is already the step. For a long recording,
+## anywhere that still leaves a whole window of recording ahead of it, so an
+## event never fades out because it ran off the end. The margin left is
+## STEP_WINDOW_SECONDS, which is longer than the mushroom crush's own cap
+## (InteractionSfxPlayer.MUSHROOM_CRUSH_MAX_DURATION_SECONDS) -- pinned by
+## test_the_crush_cap_fits_inside_the_window_margin_offset_for_leaves, so
+## neither can be moved into the other's way unnoticed.
 static func offset_for(clip_path: String, roll: float) -> float:
 	if not is_walking_bed(clip_path):
 		return 0.0
@@ -284,31 +305,46 @@ const MUSHROOM_CRUSH_CLIP_PATH := "res://assets/audio/footsteps/mushroom_crush.m
 ## everything else was genuinely weak, and no single playback tweak could
 ## fix both.
 ##
-## Each pool now gets ONE gain, so that its MEAN lands on a common target.
-## One gain per pool rather than one per clip on purpose: it equalizes
-## between surfaces while leaving a soft step softer than a hard one WITHIN
-## a surface, which is the variation the recordings were made for.
+## Each pool gets ONE gain, so that its MEAN lands on a common target. One
+## gain per pool rather than one per clip on purpose: it equalizes between
+## surfaces while leaving a soft step softer than a hard one WITHIN a
+## surface, which is the variation the recordings were made for.
 ##
-## The target is -24.59 dBFS RMS, and it is not a taste call either: grass
-## measures -12.59 dBFS and was reported as finally right at -12.0 dB, so
-## that is the one footstep level already signed off on. Worth knowing that
-## the pipeline, measuring grass's nine clips from scratch, independently
-## arrived at -12.0 for it -- the by-ear number and the measured one agree.
+## **The target is loudness, not RMS (corrected 2026-09-19).** Reported
+## live: *"pavement footsteps are way too loud ..."* -- and the pools were
+## already level-matched, every one within 2.5 dB of a common RMS. The
+## complaint was still right, because **RMS is not loudness for an
+## impulsive sound.** A footstep is a transient and a hard surface packs
+## its energy into a far sharper one: at equal RMS, rock's peaks sat 8.4 dB
+## above grass's (crest factor 20.64 dB against 12.28 dB). Measured in
+## ITU-R BS.1770 K-weighted loudness -- what EBU R128 normalises broadcast
+## audio by, and the standard answer to exactly this failure of RMS -- the
+## RMS-matched gains put grass at -33.65 LUFS and rock at -23.80. Pavement
+## was running 9.85 dB hot, and sand 13.5.
 ##
-## Achieved (dBFS RMS): default -24.6, forest -24.6, grass -24.6, rock -24.6, sand -26.0, snow -26.9, underwater -24.5, wood -24.6.
-## Sand and snow sit slightly under target because their gain was pulled
-## back to keep their loudest peak under the ceiling -- crunchy surfaces
-## have a high crest factor, which is physical, not a defect. The whole
-## spread is now under 2.5dB.
+## So the pipeline now matches on K-weighted loudness. The anchor is
+## unchanged and is still not a taste call: grass measures what it measures
+## and was reported as finally right at -12.0 dB, so the target is DERIVED
+## as grass's own loudness plus that -12.0 rather than written down. That
+## derivation is what guarantees the one level a person actually signed off
+## on cannot drift -- a hardcoded target rounded grass to -12.5 on the
+## first run of this switch, moving the only number nobody was entitled to
+## move.
+##
+## Achieved (LUFS): default -33.12, forest -33.16, grass -33.13, rock
+## -33.17, sand -33.13, snow -33.09, underwater -33.10, wood -33.15 --
+## a spread of 0.08 dB, against 13.5 dB of real loudness difference before.
+## Nothing is capped and the loudest peak of any pool is -7.48 dBFS, so
+## there is room left for the per-step pitch and volume applied on top.
 const _VOLUME_DB_BY_SURFACE := {
-	"default": -6.9,
-	"forest": 11.1,
+	"default": -14.0,
+	"forest": -0.9,
 	"grass": -12.0,
-	"rock": -3.3,
-	"sand": -1.0,
-	"snow": 7.5,
-	"underwater": -5.5,
-	"wood": -11.8,
+	"rock": -12.8,
+	"sand": -11.1,
+	"snow": 1.1,
+	"underwater": -14.1,
+	"wood": -11.1,
 }
 
 ## An unrecognized surface (or one with nothing special set) plays at the

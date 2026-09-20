@@ -76,5 +76,17 @@ static func pauses_world(_mode: int) -> bool:
 ## What the toggle button says. Names the mode it would switch TO, not the
 ## one you are in: a button is a thing you press to get somewhere, and
 ## labelling it with where you already are is the classic ambiguity.
+## What the planner SWITCH is captioned (see docs/concept/hud.md "The planner
+## toggle is a switch"). Constant, unlike toggle_label below: a switch shows
+## what IS, so its caption names the thing it controls and the switch itself
+## carries the state. The old caption read "Planner Mode" while you were in
+## RPG mode, which a player could read either way and nothing on screen
+## settled.
+const SWITCH_LABEL := "Planner"
+
+
+## What a BUTTON that flips the mode should be captioned -- the mode you get
+## by pressing it. Kept for callers that really do describe the action (the
+## key-binding row still does); the HUD switch uses SWITCH_LABEL instead.
 static func toggle_label(mode: int) -> String:
 	return "Planner Mode" if mode == Mode.RPG else "RPG Mode"

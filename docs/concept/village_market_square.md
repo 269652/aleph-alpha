@@ -73,6 +73,52 @@ than against the plan: a village whose square never got laid (nowhere dry
 for one, see `VillageLayout.plaza_x0_for`) has no market to pitch, and a
 stand on bare ground is the thing this replaced.
 
+### The square is for the stands; the well stands beside it
+
+Reported in play with the square in shot: *"The well should not be placed on
+the plaza also the stand is too big and it's placed ontop of a house.. should
+be on the plaza instead"*.
+
+Three separate things, measured (`SIZES` against the real art pipeline, and
+the plaza's own rows):
+
+- **A prop stands ON its cell, not over the one below it.** A landmark
+  sprite is centre-anchored, so half its height hangs SOUTH of the cell it
+  was placed on. The stall's art is ~1.7 tiles tall and its cell is the
+  plaza's southernmost row, so ~0.85 of a tile of awning lands on the row
+  where the cottages front the street — which is exactly "placed ontop of a
+  house". Every prop is anchored at its **foot** instead, the same rule
+  `CartMarker` already follows and the same one
+  `VillageRenderer._solid_body_for` already states for a prop's collision
+  box ("a prop stands ON its own base").
+- **A stall is narrower than the cottage it sells in front of.** That was
+  the rule the last size cut was made against — *"It was 52 — 3.25 tiles on
+  a 16-pixel grid, wider than the cottages it sells in front of"* — but 32
+  made it exactly 2 tiles, and the smallest house in the catalog
+  (`house_small`) is exactly 2 tiles wide. Equal is not narrower. The size
+  is derived from `BuildingCatalog`'s own smallest house footprint and
+  pinned by test, so a new, smaller cottage would make this fail loudly
+  rather than quietly leaving a stall the wider of the two.
+- **The well stands beside the square, not on it.** A square is an open
+  place to trade in; the well was taking a cell of it, and since the well
+  became solid (`landmark_is_solid`) it was taking a cell nobody could even
+  walk through. It moves one column west of the plaza, on the row south of
+  the street — off the paving, off the street, still at the square's edge,
+  and still the first thing you see walking in. `_grounded_position` nudges
+  it to the nearest free cell if a house claimed that one, as it already
+  does for every other landmark.
+- **And nothing fences it in.** A landmark is a NODE, not a persisted tile,
+  so nothing reading `modification_at_global` can see one — and a farmstead's
+  rails are laid AFTER the landmarks are grounded. Off the square's own
+  paving the well was on ordinary ground, and the first village measured
+  drove a rail straight through it. The shared landmarks' cells are reserved
+  for the whole farm pass now, beds and rails alike: neither a crop nor a
+  fence belongs in the village well.
+
+`market_stand_cells` keeps its "skip the well" guard even though the well no
+longer starts on the square: grounding can nudge it back onto the paving, and
+a stall pitched in the well would still be a stall in the water.
+
 ### When a stand is up
 
 `NpcMarker.stand_is_up(is_working, distance, reach)` — its trader is on the
@@ -156,3 +202,42 @@ Honest gaps, each real:
 - 🚧 **A player cannot buy at a stand.** Trading with a village is
   `Player.sell_food_to_village` and the dialogue/market path; standing in
   front of a merchant's trestle is not yet a way in.
+
+## The well stands on a free 2x2 (2026-09-19)
+
+Asked for directly: *"The well should be placed on a free 2x2 place; not
+over streets or plaza"*. Measured across four real villages before the
+fix: in one the well stood **directly on a road cell**, in the others its
+footprint took road cells beside it.
+
+**Two rules had been disagreeing.** The well was moved off the square on
+an earlier report ("The well should not be placed on the plaza"), but
+shared landmarks are grounded with `allow_road` true — which explicitly
+lets the search settle one straight back onto the paving. The stall and
+the gate genuinely do belong on their own stonework, so this is now
+per-landmark: the well alone refuses a road.
+
+**And a cell is the wrong unit for it.** The well is the one SOLID
+landmark, so the ground it takes is ground nobody can walk through, and it
+is drawn wider and taller than the single cell that was being checked for
+clearance. `LANDMARK_FOOTPRINT_TILES` gives it 2×2, and the grounding
+search needs the whole block clear.
+
+**Which 2×2 matters more than it looks.** A block fixed to one quadrant is
+wrong for exactly the place the well belongs: it stands one row south of
+the street, so a block that always ran north bit into the road, and the
+search shoved the well five tiles away hunting for somewhere it fitted —
+which is not "beside the square" any more. It may lie in whichever
+quadrant is actually free, chosen in a fixed order (`_BLOCK_TOP_LEFT_
+OFFSETS`) so that placement and reservation always name the same four
+cells.
+
+That agreement is the third part. The farm pass reserves landmark cells so
+it never rails through one, but it reserved the well's ANCHOR while the
+well takes four — so a fence was dutifully laid through the other three.
+Both paths go through `_clear_block` now.
+
+Pinned by `test_the_well_stands_on_a_free_2x2_clear_of_street_and_plaza`,
+which asserts the contract as asked: the well stands on free ground, and
+that ground is part of a free 2×2. Which quadrant is the renderer's
+business; that there is one is the rule.
