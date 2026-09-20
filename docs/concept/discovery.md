@@ -258,11 +258,25 @@ reading something real.
   which [wayfinding.md](wayfinding.md) has always named as its own open
   piece of work. The minimap is a local 81×81-tile window and deliberately
   shows no fog.
+- ✅ **A loaded save explores too** (fixed 2026-09-20, found by playing
+  it). `set_spawn_tile` had exactly one call site — inside
+  `_compute_dry_land_spawn_tile`, which only the NEW-game path runs — so a
+  resumed character left `_spawn_configured` false and `record_footfall`
+  returned `{}` on every frame: the whole layer was dark on any loaded
+  game. The same flag gates `_difficulty_tier_at`, which answers **HARD**
+  when unset, so a resumed game could also spawn bear, lion and venomous
+  snake on its own doorstep. The load path now sets the spawn from the
+  character's own `respawn_position` — not from where they logged out,
+  which would re-centre the rings on the player every load and turn the far
+  country into the hearth — and does it before the first chunk streams in,
+  because chunk loading reads the tier as it goes
+  (`test_world_discovery.gd`).
 - ⬜ **The explored record is not persisted.** `ExploredTiles` is
   session-only by its own documented design, so a reloaded character's map
   is empty and their ground pays again. Named here rather than left to be
   discovered: it is the one place the "once, and only once" pillar does not
-  hold across a save.
+  hold across a save. (Distinct from the fix above: home is known on a
+  loaded save now, but *where you have been* is not.)
 - ⬜ **Nothing is out there to find yet.** [exploration.md](exploration.md)'s
   ruins, lairs and ancient groves are unbuilt. This doc is the act of going;
   the destination is still the world itself.

@@ -253,6 +253,35 @@ and most species have no loot row so they vanish on death.
   Tests: `test_world_arrival_card.gd` 11/11 (new),
   `test_arrival_briefing.gd` 26/26 (4 new, for the card join).
 
+- ✅ **Two "zero callers" bugs, found by playing it** (2026-09-20) — the
+  same shape as everything the diagnosis pass named, caught this time by
+  the person holding the controller rather than by a grep.
+
+  **`cast_woven` had no caller at all.** The Weave window authored a draft,
+  `Player.weave` accepted it, `cast_woven` was covered by tests — and
+  `_cast_step` still ran `cast_spell(DEFAULT_CAST_SPELL_ID)`
+  unconditionally, so the cast key threw Fire Bolt whatever the player had
+  arranged. The whole Magicraft loop was a surface with no trigger.
+  `Player.cast_held` is the single entry point now: the woven spell when
+  there is one, the learned spell otherwise, because a character who never
+  opens the Weave must still be able to cast.
+
+  **`set_spawn_tile` had one call site, on the NEW-game path only**, so a
+  loaded character left `_spawn_configured` false and two things went quiet
+  together: `record_footfall` returned `{}` every frame, leaving the whole
+  discovery layer dark on any resumed game, and `_difficulty_tier_at`
+  answered **HARD** for every chunk on the planet, so bear, lion and
+  venomous snake could spawn on a resumed game's doorstep. The load path
+  sets it from the character's own `respawn_position` — not from where they
+  logged out, which would re-centre the rings every load — before the first
+  chunk streams, because chunk loading reads the tier as it goes.
+
+  Tests: `test_player_spell_weaving.gd` 20/20 (5 new),
+  `test_world_discovery.gd` 14/14 (3 new). Both new wiring pins search for
+  the real CALL rather than the name: the first draft of the spawn test
+  matched the explanatory comment above the call and would have passed
+  against a file that only talked about setting a spawn.
+
 
 ### Loose stone (see `docs/concept/stone.md`)
 

@@ -267,7 +267,8 @@ holds both halves of pillar 6 at once.
 
 - ✅ **A character owns parts, weaves them, and casts the result**
   (2026-09-20). `Player.motes` / `witness` / `grant_mote` / `weave` /
-  `woven_draft` / `cast_woven` (`test_player_spell_weaving.gd`, 12).
+  `woven_draft` / `cast_woven` / `cast_held`
+  (`test_player_spell_weaving.gd`, 20).
 
   The acquisition story is real: `witness(phenomenon)` grants the atom
   that phenomenon teaches the **first time only** — you learn frost
@@ -287,6 +288,17 @@ holds both halves of pillar 6 at once.
   arrangement must pass the shared validator, whose refusals are
   sentences. The pouch, what has been witnessed and the weave itself all
   persist, because a spell you designed is yours.
+
+  **The cast key reaches it** (fixed 2026-09-20, found by playing it).
+  `cast_woven` shipped with **zero callers**: the window authored a draft,
+  `weave` accepted it, the tests covered the cast — and `_cast_step` still
+  ran `cast_spell(DEFAULT_CAST_SPELL_ID)` unconditionally, so pressing
+  **Z** cast Fire Bolt whatever the player had arranged. The Magicraft loop
+  was a surface with no trigger, which is the exact "real, tested, zero
+  callers" pattern the overhaul was diagnosing. `Player.cast_held` is now
+  the single entry point the input step calls: the woven spell when there
+  is one, the learned spell otherwise. The fallback is not a courtesy — a
+  character who never opens the Weave must still be able to cast.
 - ✅ **The Weave, on screen** (2026-09-20). `scenes/spell_weave_window.gd`,
   toggled with `toggle_weave` (default **M**): a socket row, the pouch of
   what this character owns, and a header that **rewrites itself live** as
