@@ -30226,3 +30226,57 @@ there is no farmhouse in shot, and in that particular village there was
 genuinely no hut either. Nothing is changed for this half; it is recorded
 so the next reader does not go looking for a bug that is a viewing
 position.
+
+
+## A road home for the hut, and fish for a pond nobody could stock (`concept/village_ponds.md`, 2026-09-20)
+
+Two more, both reported live with the pond in shot: *"Fisher hut is there
+but not connected to street system"*, *"also no fish in pond"*.
+
+**The reach decision first.** The entry above left a fork: two villages of
+three had no hut because a 3x2 works plus its doorstep needs three rows
+and their fisher only has two. Counted, a 2x1 shack fits at the current
+reach and a 3x2 needs reach 3. The call was to keep the footprint and take
+the reach — the works is DRAWN as a farmhouse until its own sheet exists,
+and a 2x1 building off a farmhouse sheet would look like neither.
+`HUT_BANK_REACH_TILES` is 3 now, pinned by a test, with its cost written
+into the constant's own comment rather than left to be discovered: the one
+site those villages have at three tiles is on the next house row, across
+the street from the water.
+
+**The step was not a road.** Every other building a village places is
+sited ON frontage, so the layout lays its doorstep among the plot's own
+road cells and the plot is joined by construction. A hut belongs to the
+water instead, and the first answer to its missing doorstep was a single
+paved cell. A step that reaches nothing is exactly what the screenshot
+shows. `VillageLayout.way_to_paving` lays the run — pure geometry, with
+nothing about ponds or huts in it, so any building raised off the grid can
+ask. Two L-shaped legs per target, the shape `_frontage_spur` already
+walks; targets nearest first, ties broken by (y, x), so the same ground
+lays the same way on every reload. Its reach is derived: a building off
+the grid stands between two street rows, so a way home is at most one
+street pitch down and one along. `[]` and `null` stay different answers,
+because "already joined" and "cannot be joined" must never read the same.
+
+**A pond nobody could stock.** Persisting the stock keeps one that EXISTS.
+A pond dug by a build that never kept one has no record at all, and the
+dig pass returns early on water that is already there — correctly, since
+a fisher stocks a pond once. So every pond in every save made before
+`POND_FISH_DIR` existed is empty for ever, which is what the second
+screenshot is. `pond_has_been_stocked` makes the repair safe by asking a
+different question from "how many fish are in there": an emptied pond
+carries a record of 0.0, a pond nobody ever stocked carries no record at
+all. The village stocks the second kind and never the first, so a pond it
+has fished out stays fished out.
+
+**One test premise was wrong and is corrected in place**, with the reason
+kept: it asked `way_to_paving` to turn a corner when the door and the only
+paving share a column, where both L orders ARE that straight line. The
+honest answer there is `null`; what saves a hut in that spot is other
+paving, which a village has plenty of.
+
+Tested: `test_village_way_to_paving.gd` 10/10 (new file),
+`test_village_pond.gd` 31/31 (+2), `test_village_pond_hut_wiring.gd` 5/5
+(+2), `test_earth_chunk_manager_ponds.gd` stocking selection 13/13 (+4),
+`test_village_renderer.gd` + `test_village_layout.gd` 253/253. Red first
+at every step.
