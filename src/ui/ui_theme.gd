@@ -31,6 +31,11 @@ const BUTTON_PRESSED := Color(0.14, 0.15, 0.2, 1.0)
 const UiScale = preload("res://src/ui/ui_scale.gd")
 
 const CORNER_RADIUS := 6
+## The minimap's own corner radius (asked for directly: "add a border and
+## borderradius of 4px to the minimap"). Deliberately tighter than the
+## theme's own 6: a map is read for the shapes in it, and the more its
+## corners are rounded the more of the actual map they eat.
+const MAP_CORNER_RADIUS := 4
 const BORDER_WIDTH := 1
 const BASE_FONT_SIZE := 14
 const TITLE_FONT_SIZE := 22
@@ -54,6 +59,31 @@ func panel_stylebox() -> StyleBoxFlat:
 ## decision made once, and only the padding differs.
 func compact_panel_stylebox() -> StyleBoxFlat:
 	return _flat(PANEL_BG, COMPACT_CONTENT_MARGIN, PANEL_BORDER, BORDER_WIDTH)
+
+
+## The minimap's frame: the shared border at the shared width, no fill, at
+## MAP_CORNER_RADIUS. See docs/concept/hud.md "The minimap is framed like
+## every other card".
+##
+## No fill because the MAP is the background -- this is the one stylebox in
+## the theme that draws only an edge. It is applied to a Panel drawn AFTER
+## the map (later sibling = later draw), not to the map's own parent: a
+## stylebox's border is drawn under its children, so the map would cover the
+## inner half of it.
+func map_frame_stylebox() -> StyleBoxFlat:
+	var frame := _flat(Color(0, 0, 0, 0), 0.0, PANEL_BORDER, BORDER_WIDTH)
+	frame.set_corner_radius_all(MAP_CORNER_RADIUS)
+	return frame
+
+
+## The mask that rounds the map TEXTURE's own corners -- the same shape as
+## the frame above, on a Panel with clip_children = CLIP_CHILDREN_ONLY. Its
+## colour never reaches the screen (the panel is used as a mask, not drawn),
+## but it must be opaque: a mask is the shape that was actually drawn.
+func map_clip_stylebox() -> StyleBoxFlat:
+	var clip := _flat(PANEL_BG, 0.0, PANEL_BG, 0)
+	clip.set_corner_radius_all(MAP_CORNER_RADIUS)
+	return clip
 
 
 ## A rounded button background for the given state ("normal"/"hover"/"pressed").

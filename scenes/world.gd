@@ -145,6 +145,8 @@ const UiTheme = preload("res://src/ui/ui_theme.gd")
 ## The pure HUD readouts and the UI scale model (docs/concept/hud.md).
 const HudReadouts = preload("res://src/ui/hud_readouts.gd")
 const UiScale = preload("res://src/ui/ui_scale.gd")
+## The planner switch (docs/concept/hud.md "The planner toggle is a switch").
+const ToggleSwitch = preload("res://src/ui/toggle_switch.gd")
 const WeatherModel = preload("res://src/world/weather_model.gd")
 const SeasonCycle = preload("res://src/world/season_cycle.gd")
 const EntityRef = preload("res://src/emergence/entity_ref.gd")
@@ -566,6 +568,9 @@ var _torch_glow := TorchGlow.new()
 var _torch_glow_mesh: MeshInstance2D
 @onready var _ui: CanvasLayer = $UI
 @onready var _minimap: TextureRect = $UI/Minimap
+## The planner switch, and the two nodes that round and frame the minimap --
+## see docs/concept/hud.md.
+var _view_mode_switch: ToggleSwitch
 ## The two halves the old $UI/DebugLabel split into (docs/concept/hud.md "The
 ## top-left strip"): the world-clock card, always on, and the diagnostics
 ## strip, off until toggle_diagnostics (F3).
@@ -1215,6 +1220,9 @@ func _ready() -> void:
 	_build_plans = _build_plan_store.load_ledger()
 	_build_plan_wireframes()
 	_build_blueprint_palette()
+	# Before the toggle beside it, so the minimap is already in its frame when
+	# the switch measures itself against the frame's own left edge.
+	_build_minimap_frame()
 	_build_view_mode_toggle()
 	_build_spell_bar()
 	_build_dev_console()
@@ -5992,26 +6000,95 @@ func _on_blueprint_selected(blueprint_id: String) -> void:
 ## A themed card rather than a bare Button, per docs/concept/hud.md's own
 ## pillar 1: which mode you are in carries meaning, and nothing that
 ## carries meaning may be drawn as bare text over the world.
+## Rounds the minimap's own corners and frames it, so the top-right column
+## reads as one column (docs/concept/hud.md "The minimap is framed like every
+## other card"). Asked for directly: "add a border and borderradius of 4px to
+## the minimap".
+##
+## Two nodes, because a stylebox cannot do it alone: it draws BEHIND a
+## TextureRect rather than clipping it, and its border draws under its own
+## children.
+##
+## 1. A clipper the minimap is moved INTO, carrying the rounded shape with
+##    clip_children = CLIP_CHILDREN_ONLY -- never drawn itself, its shape
+##    used as the mask that rounds the map texture.
+## 2. A frame added AFTER the map, so it draws on top of it (later sibling =
+##    later draw, see this file's own "One CanvasLayer" note), carrying the
+##    border and nothing else.
+func _build_minimap_frame() -> void:
+	var ui_theme := UiTheme.new()
+	var clipper := Panel.new()
+	clipper.add_theme_stylebox_override("panel", ui_theme.map_clip_stylebox())
+	clipper.clip_children = CanvasItem.CLIP_CHILDREN_ONLY
+	clipper.mouse_filter = Control.MOUSE_FILTER_IGNORE
+	clipper.set_anchors_preset(Control.PRESET_TOP_RIGHT)
+	clipper.offset_left = _minimap.offset_left
+	clipper.offset_top = _minimap.offset_top
+	clipper.offset_right = _minimap.offset_right
+	clipper.offset_bottom = _minimap.offset_bottom
+	_ui.add_child(clipper)
+
+	# The map itself moves inside the clipper and fills it. Its PlayerDot
+	# child rides along, still anchored to the map's own centre.
+	_ui.remove_child(_minimap)
+	clipper.add_child(_minimap)
+	_minimap.set_anchors_preset(Control.PRESET_FULL_RECT)
+	_minimap.offset_left = 0.0
+	_minimap.offset_top = 0.0
+	_minimap.offset_right = 0.0
+	_minimap.offset_bottom = 0.0
+
+	var frame := Panel.new()
+	frame.add_theme_stylebox_override("panel", ui_theme.map_frame_stylebox())
+	frame.mouse_filter = Control.MOUSE_FILTER_IGNORE
+	frame.set_anchors_preset(Control.PRESET_TOP_RIGHT)
+	frame.offset_left = clipper.offset_left
+	frame.offset_top = clipper.offset_top
+	frame.offset_right = clipper.offset_right
+	frame.offset_bottom = clipper.offset_bottom
+	_ui.add_child(frame)
+
+
 func _build_view_mode_toggle() -> void:
 	var panel := PanelContainer.new()
 	panel.theme = _ui_theme
 	panel.set_anchors_preset(Control.PRESET_TOP_RIGHT)
-	panel.offset_left = -300.0
+	# Right edge pinned just left of the minimap; the left edge follows the
+	# content, so a caption plus a switch is not rattling around inside a box
+	# sized for the old, wider "Planner Mode" caption.
+	panel.offset_left = -178.0
 	panel.offset_top = 8.0
 	panel.offset_right = -178.0
-	panel.offset_bottom = 40.0
+	panel.offset_bottom = 8.0
+	panel.grow_horizontal = Control.GROW_DIRECTION_BEGIN
+	panel.grow_vertical = Control.GROW_DIRECTION_END
 	_ui.add_child(panel)
+
+	# A real two-state SWITCH, not a button whose caption is the mode you are
+	# not in -- asked for directly ("make the planner switch a ios like switch
+	# button with two states"), and see docs/concept/hud.md for why a button's
+	# caption could be read either way.
+	#
+	# The caption is constant (ViewMode.SWITCH_LABEL) because the switch, not
+	# the words, now carries the state. Neither node takes keyboard focus: a
+	# focused Control answers ui_accept, which is Space, which is the attack
+	# key (reported live, "space now toggles between plann mode and rpg").
+	var row := HBoxContainer.new()
+	row.add_theme_constant_override("separation", 8)
+	row.alignment = BoxContainer.ALIGNMENT_CENTER
+	panel.add_child(row)
 
 	_view_mode_button = Button.new()
 	_view_mode_button.theme = _ui_theme
-	# Never takes keyboard focus. A focused Button answers `ui_accept`, and
-	# ui_accept is Space -- which is the ATTACK key, so once this had been
-	# clicked every later Space press flipped the mode instead of swinging
-	# (reported live: "space now toggles between plann mode and rpg"). A HUD
-	# readout the mouse presses has no business holding the keyboard.
+	_view_mode_button.text = ViewMode.SWITCH_LABEL
 	_view_mode_button.focus_mode = Control.FOCUS_NONE
+	_view_mode_button.flat = true
 	_view_mode_button.pressed.connect(_toggle_view_mode)
-	panel.add_child(_view_mode_button)
+	row.add_child(_view_mode_button)
+
+	_view_mode_switch = ToggleSwitch.new()
+	_view_mode_switch.toggled_to.connect(func(_on: bool): _toggle_view_mode())
+	row.add_child(_view_mode_switch)
 	_apply_view_mode()
 
 
@@ -6029,8 +6106,14 @@ func _toggle_view_mode() -> void:
 ## than decided again here: a second `if` over the same two cases is how a
 ## tested model and the real HUD drift apart.
 func _apply_view_mode() -> void:
+	# The caption never changes now -- the SWITCH shows the state, which is
+	# the whole reason it is a switch (docs/concept/hud.md). set_on rather
+	# than a second predicate: a keypress flips the mode without touching the
+	# switch, and the switch has to follow the mode either way.
 	if _view_mode_button != null:
-		_view_mode_button.text = ViewMode.toggle_label(_view_mode)
+		_view_mode_button.text = ViewMode.SWITCH_LABEL
+	if _view_mode_switch != null:
+		_view_mode_switch.set_on(ViewMode.shows_palette(_view_mode))
 	if _hotbar != null:
 		_hotbar.visible = ViewMode.shows_hotbar(_view_mode)
 	if _blueprint_palette != null:

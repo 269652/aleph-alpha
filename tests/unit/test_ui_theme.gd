@@ -103,3 +103,34 @@ func test_the_compact_card_still_has_inner_padding():
 ## the pin test_world_hud.gd already makes for the message banners.
 func test_the_compact_card_is_opaque_enough_to_read_over_snow():
 	assert_gt(ui.compact_panel_stylebox().bg_color.a, 0.9)
+
+
+## The minimap's own frame (asked for directly: "add a border and
+## borderradius of 4px to the minimap"). The map IS the background, so unlike
+## every other card in this theme this one draws no fill -- only the shared
+## border, at the radius that was asked for.
+func test_the_map_frame_draws_a_border_and_no_fill():
+	var frame: StyleBoxFlat = ui.map_frame_stylebox()
+	assert_true(frame is StyleBoxFlat)
+	assert_eq(frame.bg_color.a, 0.0, "a fill would hide the map it frames")
+	assert_eq(frame.border_color, UiTheme.PANEL_BORDER, "the shared border, not its own")
+	assert_eq(frame.border_width_left, UiTheme.BORDER_WIDTH)
+
+
+## Four, not the theme's own six: a map is read for the shapes in it, and the
+## more its corners are rounded the more of the actual map they eat.
+func test_the_map_frame_is_rounded_to_the_asked_for_four_pixels():
+	assert_eq(UiTheme.MAP_CORNER_RADIUS, 4)
+	assert_eq(ui.map_frame_stylebox().corner_radius_top_left, UiTheme.MAP_CORNER_RADIUS)
+	assert_lt(UiTheme.MAP_CORNER_RADIUS, UiTheme.CORNER_RADIUS)
+
+
+## The clipper that rounds the map texture's own corners has to use the SAME
+## shape as the frame drawn over it, or the border and the masked edge would
+## not line up.
+func test_the_clipper_matches_the_frame_it_sits_under():
+	assert_eq(
+		ui.map_clip_stylebox().corner_radius_top_left,
+		ui.map_frame_stylebox().corner_radius_top_left
+	)
+	assert_gt(ui.map_clip_stylebox().bg_color.a, 0.0, "a mask must actually be drawn to mask")

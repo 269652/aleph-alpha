@@ -317,6 +317,79 @@ The death card stays centred on the screen and is the one card in the HUD
 allowed to sit over the world's middle, because it is the one message the
 player must not miss.
 
+### The minimap is framed like every other card
+
+Asked for directly: *"add a border and borderradius of 4px to the minimap"*.
+
+The minimap was the one readout on screen with no frame at all — a bare
+`TextureRect` whose generated map ran to a hard square edge against the world
+behind it, sitting directly above a world-clock card and a Karma card that
+both have the shared rounded, bordered one. It is not a pillar-1 legibility
+problem (a map is opaque; it does not vanish over snow), it is a *coherence*
+one: the corner reads as one column only if everything in it is built the
+same way.
+
+`UiTheme.map_frame_stylebox()` is the frame: the shared `PANEL_BORDER` at the
+shared `BORDER_WIDTH`, a **transparent** background — the map is the
+background — and `MAP_CORNER_RADIUS` of **4**, the radius that was asked for
+rather than the theme's own 6. Four is deliberate and pinned: a map is read
+for the shapes in it, and the more its corners are rounded the more of the
+actual map they eat.
+
+Rounding a `TextureRect`'s own corners needs more than a stylebox, which
+draws *behind* the texture rather than clipping it. Two nodes do it:
+
+1. a **clipper** `Panel` with the same 4px-radius shape and
+   `clip_children = CLIP_CHILDREN_ONLY`, so it is never drawn itself and its
+   shape is used as a mask for the map inside it;
+2. a **frame** `Panel` drawn *after* the map (later sibling = later draw, the
+   rule this file's own "One CanvasLayer" section already states), carrying
+   the border only.
+
+The border has to be a separate node drawn on top rather than part of the
+clipper, because a stylebox's border is drawn under the clipper's children —
+the map would cover the inner half of it.
+
+### The planner toggle is a switch, because it has two states
+
+Asked for directly: *"make the planner switch a ios like switch button with
+two states"*.
+
+It was a `Button` whose caption was the mode you would switch **to** —
+`ViewMode.toggle_label`, reading "Planner Mode" while you are in RPG mode and
+"RPG Mode" while you are in planner mode. That is a correct label for a
+*button*, and the wrong model for a *switch*: a button says what pressing it
+does, a switch shows what is currently true. Both readings of "Planner Mode"
+are available to a player looking at the old button — *am I in planner mode,
+or is that what I get if I press it?* — and nothing on screen answered it.
+
+A switch answers it by construction, so the label stops changing:
+
+- The caption is the constant `ViewMode.SWITCH_LABEL` ("Planner"), naming the
+  thing the switch controls rather than the action.
+- The switch's **on** state is `ViewMode.shows_palette(mode)` — the existing
+  predicate, not a second one that could drift from it.
+
+`src/ui/toggle_switch.gd` is the widget, with its geometry and colours as
+pure statics so the parts that can be wrong are tested rather than eyeballed:
+
+| Rule | Why |
+|------|-----|
+| The knob is fully inside the track at **both** ends | A knob that overhangs at one end is the classic off-by-a-padding bug, and it only shows in one of the two states |
+| Off→on moves the knob by exactly `track_width - knob - 2·padding` | The two rest positions are symmetric; neither end is special |
+| The track is a pill: corner radius is **half its height** | What makes it read as a switch rather than a small rounded button |
+| On is `UiTheme.ACCENT`, off is `UiTheme.BUTTON_NORMAL` | The theme's own existing on/off pair, not a third palette |
+| On and off must be **visibly** different in luminance | A switch whose two states look alike is not a switch |
+
+The knob slides rather than jumps — a short `Tween` on its position — which
+is the whole reason an iOS switch reads as one control with two states
+instead of two different pictures. The animation is deliberately *not*
+tested: what is pinned is where the knob comes to rest.
+
+Keyboard focus stays off it (`FOCUS_NONE`), for the reason the old button
+already documented: a focused `Control` answers `ui_accept`, which is Space,
+which is the attack key.
+
 ### UI scale
 
 Every font size in the HUD was a hardcoded `add_theme_font_size_override`
@@ -396,6 +469,18 @@ off the screen. Layout stays at one scale and text is what grows.
   `World._build_hud_columns` / `_add_hud_card` / `_survival_row_height`.
   Verified by rendering rather than by argument, at 0.75, 1.0 and 1.75
   (`tools/probe_hud_layout.gd`).
+- ✅ **The minimap is framed** (2026-09-20, asked for directly) —
+  `UiTheme.map_frame_stylebox`/`map_clip_stylebox` +
+  `World._build_minimap_frame`: a clipper that rounds the map texture's own
+  corners to 4px and a frame drawn over it carrying the shared border.
+  Tested (`test_ui_theme.gd`) and rendered.
+- ✅ **The planner toggle is a switch** (2026-09-20, asked for directly) —
+  `src/ui/toggle_switch.gd`, captioned by the constant `ViewMode.SWITCH_LABEL`
+  and turned on by the existing `ViewMode.shows_palette`. Geometry and colours
+  tested (`test_toggle_switch.gd`), both states rendered. The render caught
+  what the geometry tests could not: inside a row the track stretched and
+  stopped being a pill, now pinned by
+  `test_the_switch_keeps_its_own_height_inside_a_row`.
 - 🚧 **Not verified in a live session.** Every check above is headless: unit
   tests plus offscreen renders of the real builders. Nobody has yet pressed
   F3, dragged the scale slider or watched a chip appear in a running game.
