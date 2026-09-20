@@ -418,10 +418,11 @@ siting the plot, because every other building is sited ON frontage. A hut
 belongs to the water instead, so nothing laid its front step and it stood
 with its door opening onto bare ground.
 
-That invariant held for three weeks on luck alone: the fixture village's
-hut happened to land with its doorstep on one of the pond's own rails, so
+That invariant has been false since the hut landed and was hidden by
+luck: the fixture village's hut happened to fall with its doorstep on one
+of the pond's own rails, so
 `test_every_placed_building_faces_south_onto_a_real_road_cell` passed for
-the whole lot. Moving the pond by one rectangle broke it, which is that
+the whole lot anyway. Moving the pond by one rectangle broke it, which is that
 test doing exactly its job. The step is laid AFTER `place_building`, never
 before — `place_building` refuses a plot whose doorstep is already
 non-empty, so paving first would refuse the hut over its own future front

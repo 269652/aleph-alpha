@@ -1504,18 +1504,18 @@ func _place_fisher_huts_if_missing(
 ## bank"). So nothing laid its front step, and a hut stood with its door
 ## opening onto bare ground.
 ##
-## Held for three weeks by luck alone: the fixture village's hut happened
-## to land with its doorstep on one of the pond's own rails, so
+## True since the hut landed, and hidden by luck: the fixture village's hut
+## happened to fall with its doorstep on one of the pond's own rails, so
 ## test_every_placed_building_faces_south_onto_a_real_road_cell passed for
-## the whole lot. Moving the pond one rectangle broke it, which is the test
-## doing exactly its job.
+## the whole lot anyway. Moving the pond by one rectangle broke it, which
+## is that test doing exactly its job.
 ##
 ## AFTER place_building, never before: place_building refuses a plot whose
 ## doorstep cell is already non-empty, so paving first would refuse the hut
 ## over its own future front step — the same ordering trap
 ## _place_new_village's own comment records for the houses.
 func _lay_front_step(chunk_coord: Vector2i, chunk_size: int, world, origin: Vector2i) -> void:
-	if not world.has_method("build_at_global"):
+	if not world.has_method("build_at_global") or not world.has_method("modification_at_global"):
 		return
 	var step: Vector2i = origin + BuildingCatalog.doorstep_of(VillagePond.HUT_BUILDING_ID)
 	if step.x < 0 or step.y < 0 or step.x >= chunk_size or step.y >= chunk_size:

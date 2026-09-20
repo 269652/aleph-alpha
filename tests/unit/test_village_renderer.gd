@@ -2562,10 +2562,10 @@ func test_every_fishers_pond_gets_a_hut_on_its_own_bank():
 ## the plot (test_every_placed_building_faces_south_onto_a_real_road_cell
 ## pins it for the lot). A hut is deliberately sited on the BANK rather
 ## than on street frontage, so nothing lays its front step unless the hut
-## pass does — which it did not, and for three weeks the invariant held in
-## the fixture village only because that hut happened to land with its
-## doorstep on a rail. Moving the pond by one rectangle broke it, and the
-## lot test caught it.
+## pass does — which it did not. The invariant held in the fixture village
+## from the day the hut landed only because that hut happened to fall with
+## its doorstep on a rail. Moving the pond by one rectangle broke it, and
+## the lot test caught it.
 func test_a_fisher_huts_own_front_step_is_laid_for_it():
 	var coord := _find_settlement_chunk_with_occupation("grassland", "fisher", 3)
 	var world := StubWorld.new()
