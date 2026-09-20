@@ -30353,3 +30353,14 @@ four, ferns have one; the shared tint still reaches them); nothing eats
 them yet (`graze` works, no herbivore calls it); and no seed fall, so a
 fern can never cross a gap in the wood — which matches how bracken
 actually spreads, and is deliberate.
+
+**One pre-existing failure ruled out rather than assumed, while verifying
+the merge.** `test_illustrated_grass_patch.gd`'s
+`test_atlas_region_for_never_includes_the_previous_rows_bled_over_content_
+on_any_season_sheet` fails on **spring row 7 col 8** (25/32 mostly
+transparent against a 90% bar). Not this pass's: confirmed by running that
+one test in two worktrees, before and after the merge, sharing the SAME
+import cache so the only variable was the code {D} identical failure,
+identical message. `concept/long_grass.md` records winter[9] as a known
+narrowed-but-not-closed gap of exactly this kind; spring[7] is a second
+one, recorded here so it is not rediscovered as a regression.
