@@ -183,3 +183,126 @@ func test_a_pond_is_deeper_than_a_person_can_wade():
 ## And not absurdly deep either -- it is a dug village pond, not a quarry.
 func test_a_pond_is_a_dug_pond_not_a_quarry():
 	assert_lt(VillagePond.DEPTH_METERS, 3.0)
+
+
+# -- the hut on the bank ---------------------------------------------------
+#
+# Reported live with a screenshot of a dug, fenced, EMPTY enclosure: "it's
+# missing a fisher hut (use farmhouse sprite until illustration exists)".
+# A farmer's beds have a farmhouse standing over them; a fisher's water had
+# nothing at all, which is the half of "the same shape as a field" that was
+# never built.
+
+
+func _pond_at(top_left: Vector2i, size: Vector2i) -> Array:
+	var cells: Array = []
+	for y in range(top_left.y, top_left.y + size.y):
+		for x in range(top_left.x, top_left.x + size.x):
+			cells.append(Vector2i(x, y))
+	return cells
+
+
+func _hut_cells(origin: Vector2i) -> Array:
+	return BuildingCatalog.footprint_cells(VillagePond.HUT_BUILDING_ID, origin)
+
+
+func test_a_hut_stands_on_the_bank_of_its_own_water():
+	var water := _pond_at(Vector2i(8, 8), Vector2i(3, 2))
+
+	var origin = VillagePond.hut_origin(water, _anywhere)
+
+	assert_not_null(origin, "open ground round a pond must put a hut somewhere")
+	var nearest := 9999.0
+	for cell in _hut_cells(origin):
+		for wet in water:
+			nearest = minf(nearest, Vector2(cell as Vector2i).distance_to(Vector2(wet as Vector2i)))
+	assert_lte(nearest, float(VillagePond.HUT_BANK_REACH_TILES), "a fisher's hut stands at their own water")
+
+
+## It is a hut BESIDE the water, never a hut IN it -- the pond is dug
+## ground nothing may be built on (is_buildable_ground_at refuses it), and
+## a hut standing in the pond would be a building in a lake.
+func test_a_hut_never_stands_in_the_water_it_fishes():
+	var water := _pond_at(Vector2i(8, 8), Vector2i(3, 2))
+	var origin = VillagePond.hut_origin(water, _anywhere)
+	for cell in _hut_cells(origin):
+		assert_false(water.has(cell), "%s is in the pond" % cell)
+
+
+## Ground nothing fits on gets no hut, honestly -- the same answer a pond
+## with no room gives, rather than a hut squeezed onto water or rails.
+func test_no_room_means_no_hut():
+	var water := _pond_at(Vector2i(8, 8), Vector2i(3, 2))
+	assert_null(VillagePond.hut_origin(water, func(_cell: Vector2i) -> bool: return false))
+
+
+func test_no_water_means_no_hut():
+	assert_null(VillagePond.hut_origin([], _anywhere))
+
+
+## Deterministic, like every other siting in this module: the same water
+## puts the hut in the same place on every reload, or a village grows a
+## second hut every time it is walked past.
+func test_the_same_water_always_puts_the_hut_in_the_same_place():
+	var water := _pond_at(Vector2i(8, 8), Vector2i(3, 2))
+	assert_eq(VillagePond.hut_origin(water, _anywhere), VillagePond.hut_origin(water, _anywhere))
+
+
+## The hut is a real building, and the same size as the farmhouse it is
+## drawn as until its own art lands -- so what stands over a pond reads at
+## the same scale as what stands over a field.
+func test_a_fisher_hut_is_a_real_building_the_size_of_a_farmhouse():
+	assert_true(BuildingCatalog.has_building(VillagePond.HUT_BUILDING_ID))
+	assert_eq(
+		BuildingCatalog.footprint_of(VillagePond.HUT_BUILDING_ID),
+		BuildingCatalog.footprint_of(VillageFarm.FARM_BUILDING_ID)
+	)
+	assert_eq(BuildingCatalog.capacity_of(VillagePond.HUT_BUILDING_ID), 0, "nobody lives in a work hut")
+
+
+# -- the shape of the water itself -----------------------------------------
+#
+# Reported live with a screenshot: "The built pond renders as earth instead
+# of water". Two separate faults, and this is the second: once the surface
+# was painted at all, a 3x2 pond still read as a small blue puddle in a
+# brown rectangle -- measured on a real render at 10.4% of the pond's own
+# area (tools/probe_fisher_pond_render.gd).
+#
+# Water rides one overlay, and where its edge falls is decided by an ACROSS
+# field: |across| < 1 is water, 1 is the waterline, and the shader
+# reconstructs it by interpolating between cell centres. The pond wrote
+# 0.75 on its own cells and nothing at all round them, so the field ran
+# from 0.75 straight up to whatever the nearest river left there -- tens of
+# tiles' worth -- and crossed 1 a few pixels past each cell's own centre.
+# Hence a puddle.
+
+
+## The waterline is a CONTOUR, so the only number that matters is where it
+## lands: half a tile out from a water cell's centre is that cell's own
+## edge, which is the edge of the pond.
+func test_a_ponds_waterline_lands_on_its_own_edge():
+	assert_almost_eq(
+		VillagePond.waterline_offset_tiles(), 0.5, 0.0001,
+		"a dug pond is water right up to the hole's own edge, not a puddle in the middle of it"
+	)
+
+
+## And it is water all the way in: a dug pond is a flat-bottomed hole, not
+## a channel with a deep line down the middle.
+func test_a_ponds_own_water_is_open_water_everywhere_inside_that_edge():
+	assert_almost_eq(VillagePond.WATER_ACROSS, 0.0, 0.0001)
+
+
+## The manager's surface pass must use THESE numbers -- a model nothing
+## reads is a comment. Source-contract, the same shape
+## test_earth_chunk_manager_footprints.gd uses.
+func test_the_water_surface_pass_paints_a_pond_from_this_model():
+	var source := FileAccess.get_file_as_string("res://src/world/earth_chunk_manager.gd")
+	assert_true(
+		source.contains("VillagePond.WATER_ACROSS"),
+		"the pond's own cells must carry the model's own across value"
+	)
+	assert_true(
+		source.contains("VillagePond.BANK_ACROSS"),
+		"and the ring round it must carry the bank that puts the waterline on its edge"
+	)

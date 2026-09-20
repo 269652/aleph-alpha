@@ -12616,6 +12616,7 @@ New concept doc (2026-08-25), written for the one mechanism below:
 ### UI / presentation
 
 - **Unified UI theme** — ✅ Done — `src/ui/ui_theme.gd` (tested: palette, styleboxes, built `Theme` all pinned) is one dark/rounded/gold-accent theme applied to every menu and window (main menu, settings, inventory, crafting, skill tree, dev console) plus the HUD survival card. Replaces the earlier raw grey boxes. **Gained a formal "this one is selected" mark (2026-09-20)**: `selected_button_stylebox`/`BUTTON_SELECTED` — the gold `ACCENT` as a thicker border over a background that lifts out of the card. Godot draws a toggled control in its `pressed` stylebox, which here is a shade *darker* than normal (~5% of value) and measured as invisible over a dark card when the build palette was first rendered; applied per control rather than in the shared `Theme`, since `pressed` there also means a momentary click on every ordinary button in the game.
+- **The merchant-funded village actually survives** — ✅ Done (2026-09-20) — asked to run the famine probe and check villages stay fed. They did not: closing the gold faucet had caused a **village-killing regression**, measured by running `tools/probe_village_famine.gd` against `main` before and after (roster over 1200s: `10 10 12 12 12` before, `10 3 4 4 6` after — seven of ten dead inside 300 seconds). Five distinct breaks, each found by following the money after adding **purse and wallet columns** to that probe, and each independently real: (1) **the merchant ran on the wrong clock** — `ConstructionCatchup.SECONDS_PER_DAY` (3600), the offscreen LOD rate, while hunger kills in 200s, so his soonest possible call was 18× the starvation window; he is paced on the lived 60s day now, exactly the fix `planner_mode.md` already records for a raised build. (2) **`BUY_LIST` did not intersect what villages grow at all** — beam/plank/hide/wood/fish/meat/fruit versus herb/carrot/potato/wheat, so the only faucet could never open; a test now fails if a crop is added he will not buy. (3) **the gold was paid into a purse nobody reads** — `step_settlements` hands him the persisted emergence `Market` (whose own neighbouring comment says "live play essentially never stocks that one") while the purse is metadata *on that object* and every villager reads theirs off the live `VillageMarket`; the same "two unrelated things called the market" trap `SettlementFood`'s header was written about. (4) **he bought the larder** — once funded, purse climbed 21→25 with market food 0 at every sample; `SettlementSurplus.larder_reserve` holds back what the people eat, over a cover period *derived* as `1 / VISITS_PER_DAY` days rather than picked. (5) **97 units of harvest were stranded in farmhouses nobody could eat from** — `STRUCTURE_MEAL_SOURCE_IDS` named bakery/storage/warehouse, and a farmer's crop is deposited in the *farmhouse* until a carter fetches it. **Result, measured: `10 11 11 12 14` — nobody dies and the village grows past the 12 it reached before any of this.** One concurrent session's design rule was deliberately turned round, not deleted: their `test_a_farmhouse_shelf_is_not_the_villages_larder` encoded "a harvest waits for the carter; nobody eats off it", which is coherent but the wrong side of the line once measured; the invariant that file exists for — *what the settlement counts as food is exactly what its people can eat* — is untouched, only the boundary moved. Tests: `test_earth_chunk_manager_village_meals.gd` 12/12, `test_merchant_visit.gd` 31/31, `test_settlement_surplus.gd` 18/18, `test_merchant_buys_the_whole_village.gd` 6/6, `test_gold_has_one_faucet.gd` 7/7, `test_npc_economy.gd` 80/80, `test_npc_marker.gd` 102/102, `test_starvation.gd` 16/16, `test_village_wages.gd` 29/29.
 - **Gold has exactly one faucet** — ✅ Done (2026-09-20) — asked directly: "Gold should only be conjured by the travelling merchant". `traveling_merchants.md`'s own opening already claimed this ("a village's gold used to come from nowhere... a traveling merchant is the faucet that replaces it") and it was **not true** — two other places minted gold with nothing behind them. (1) `NpcEconomy._earn` split a coin conjured per food unit gathered, whether or not anyone ever bought it; gone, along with `record_harvest_wage` (which was purely that pay) and the sub-coin `_take_home_carry`. A producer's work now earns the village **goods**, and the merchant pays for those — and a producer is not left unpaid, because `_draw_subsistence_wage` was *already* ungated on occupation and its own doc already anticipated this case. (2) `_collect_estate_tax` credited the purse and **debited nobody**; it is a real transfer now, through the new pure `VillageWages.tax_debits` (one debit per household, in order, never more than a household holds, summing to no more than is owed), with the fractional remainder **carried** per settlement rather than rounded — a `Wallet` holds integer gold and a kossaet owes 0.25 a day, so rounding would either forgive a real debt or charge it four times over. A village collects what is there, not what it is due: shortfalls are **not** banked as arrears, since a debt a household can never pay only grows and would make the purse a fiction again. The invariant is guarded four ways, not asserted once: nothing but the merchant sale and the household-funded tax may call `deposit_to_purse`; every *other* writer of the purse (`_set_purse`) must move gold to or from a wallet in the same breath, closing the loophole that guarding one function name would leave; the old levy arithmetic (`levy_on`/`take_home_of`/`deposit`) is kept and still tested but must stay unwired; and the mint itself must be gone rather than merely unused. **Eight existing tests asserted the old model and were rewritten, not deleted** — including a shared fixture that funded a purse by working a hunter, which now completes the real loop (goods, then a merchant's sale) and is a truer fixture than the one it replaced. Tests: `test_gold_has_one_faucet.gd` 7/7 (new), `test_village_wages.gd` 29/29, `test_npc_economy.gd` 80/80, `test_npc_marker.gd` 96/96, `test_settlement_surplus.gd` 13/13, `test_merchant_visit.gd` 25/25, `test_village_market.gd` 25/25.
 - **A merchant buys the whole village, not one of its cupboards** — ✅ Done (2026-09-20) — reported with the town panel open: "The village produces way too much food and the NPCs don't have an income" (`Food feeds 387 of 16`, `Gold 1`, `Happiness 62% (worst: income)`). **One fault, not two.** A settlement keeps goods in more than one container — `VillageMarket.stock`, and every structure's own `StructureStock` — and `MerchantVisit`, the only thing that turns goods into gold, was only ever shown the first. `SettlementFood` was taught to count the shelves when the bread chain landed (`milling_and_baking.md`, "Food that counts"); the merchant never was. So a village hauls its whole harvest into the warehouse — which is precisely what the carter's round is *for* — and thereby puts it beyond the reach of its own income. `src/emergence/settlement_surplus.gd` is the one view: `combined()` adds the containers up for the merchant to price, `allocate()` says how much to take from each, in view order, never more than a container holds. Pure — it never touches what it is shown, so a sale that cannot be completed has changed nothing, the same division `MerchantVisit` itself keeps. The market is drawn from **first**, deliberately: it is the abstract ledger a village trades out of anyway, while a warehouse shelf is a real building the player can walk up to and open, so what the player can *see* is the last thing to go. **Does not merge the containers** — `milling_and_baking.md`'s "three food containers, one eater" is still open; this says only that the merchant reads all of them. Tests: `test_settlement_surplus.gd` 13/13, `test_merchant_buys_the_whole_village.gd` 4/4, `test_merchant_visit.gd` 25/25, `test_village_wages.gd` 20/20, `test_npc_economy.gd` 80/80, `test_village_market.gd` 25/25. **Measured against the rest of the requested loop, which already exists:** the merchant's cadence already tops out at one call a day (`VISITS_PER_DAY 0.4 × (1 + SURPLUS_DRAW 1.5)` = 1.0 at full surplus), so he was always willing to come daily and simply had nothing to buy — the binding constraint on clearing a 387-unit backlog is `CART_CAPACITY` (20 units a visit), not the frequency. Progressive taxation by estate is likewise already real and wired (`VillageEstates.BASE_TAX_PER_DAY` kossaet 0.25 → buerger 1.75, through `VillageWages.estate_tax_for`, called from `EarthChunkManager`). **Still open:** producers' own gold is still conjured per unit gathered (`NpcProduction.YIELD_TO_GOLD_RATE`) rather than paid out of the civic purse, so "NPCs get paid by the City Hall" is true for non-producers only; and nothing yet throttles production against demand, which is the other half of "produces way too much food".
 - **A field sows what the village is short of** — ✅ Done (2026-09-20) — reported with the village's panels open: "they have 0 Herbs even though there are 3 farm houses... so deciding what to plant must be based on demand", and beside it "The warehouse shows 205 Wheat but the Villagers show 50% food". **Those are one defect, and the second explains it: `wheat` is `ItemCatalog` kind `"material"`, not `"food"`** (`milling_and_baking.md`'s own first pillar, "grain is not food until it is milled and baked"), so every filter that decides whether a village is fed — `SettlementFood`, `VillageMarket`, `VillageEstates`' `kind:food` token — counts a granary full of wheat as **zero food**. A village whose every field sowed wheat, with no mill standing, starved beside it. That is a cropping failure, not a distribution one. `src/gameplay/village_crop_choice.gd` picks the sowable crop whose good is least satisfied, reading `VillageAssembly`'s own per-good satisfaction — the same number the needs panel shows, so what a village says it lacks and what it plants cannot disagree — scored by the **worst** good a crop answers rather than the mean, the same minimum rule `EstateConsumption` applies one level up. Wheat is offered **only where a mill AND a bakery really stand**; everywhere else a field sows something edible the day it is harvested (`herb`, `carrot`, `potato`, all real `kind = "food"` items with real crop art). The crop is chosen **at sowing** rather than frozen in `setup_economy` from the occupation, which is how a village's whole cropping plan used to be fixed before a single basket had been drawn. `CROP_BY_OCCUPATION` survives with a changed meaning — the *traditional* crop, breaking a tie and answering where there is no reading — with the herbalist's `herb` restored; its other job, the predicate "does this occupation work a field at all" that three callers use, is untouched. One consequence handled rather than shipped: a farmhouse may now hold a crop its villager was never built with, and one shelf can hold two, so `haul_stock_to_village` reads the shelf instead of withdrawing a single assumed id. **Withdraws this session's own earlier wheat-only narrowing**, which was right for "the crop dies before it ripens" and wrong to keep once the night bug was fixed. Tests: `test_village_crop_choice.gd` 15/15, `test_village_sowing_wiring.gd` 4/4, `test_village_farm.gd` 78/78, `test_npc_marker.gd` 67/67, `test_npc_economy.gd` 80/80.
@@ -29522,3 +29523,189 @@ Tests: `test_village_immigration.gd` 20/20 (4 new, 2 rewritten),
 `test_earth_chunk_manager_village_growth.gd` (5 new, covering the roster
 matching the households after any number of arrivals and nobody being
 duplicated by the re-derivation).
+
+## A farmhouse stands in its own yard (`concept/building.md`, 2026-09-20)
+
+Asked for directly, with the art dropped in: *"I added
+farmhouse_bg_overlay.png which should be rendered as background behind the
+3x2 farmhouse it should use a random variation so that each farmhouses bg
+looks different"*.
+
+### ✅ Nine whole yards, seeded per building
+
+`farmhouse_bg_overlay.png` is a 3×3 grid of nine finished yards at the plot's
+own 3:2 shape — a woodpile, a barrel, a bench, a washing line, a well, a
+beaten path through the grass. None of that is in the building's own sheet,
+which draws the house alone. Picking one whole picture is a far smaller
+mechanism than scattering props and deciding what may overlap what, and it
+reuses the "one sheet, seeded cell" shape `BuildingLifecycleSheet` already
+uses to make a street of cottages a street of different cottages.
+
+Drawn **between the kerb and the house** — children paint in tree order, so
+the yard lies on the ground the kerb marks out and the walls stand on it.
+Same width as the house by the same `drawn_plot_width_tiles` rule, so it is
+the plot's and never wider. Wired per building id
+(`BuildingCatalog.background_sheet_for`), so every other building answers
+`{}` and draws exactly what it drew before.
+
+Worth stating, because it is what makes this art matter: **a farmhouse has no
+variant sheet of its own** — only `house_small`/`house_medium` do — so every
+farmhouse in the world draws the SAME house picture. Its yard is the only
+thing that tells one from another.
+
+### ✅ The keying was the real work, and my first reading of it was wrong
+
+This sheet has no alpha channel and paints its transparency as a
+grey-and-white **checkerboard**, which nothing else in the project does
+(everything else keys flat magenta or near-black).
+
+I first wrote this up as *"a flat key punches 674 px of holes through the
+flowers"* and that was **backwards** — the 674 were checker pixels enclosed
+by art, which the flood MISSES, not flowers a flat key destroys. Caught by
+re-measuring before it shipped; the conclusion survived, the reason did not.
+
+The true reason a flat colour key cannot be used: the checker's lighter
+square and the art's white flower highlights **are the same colour**. The
+tones measure about 253 and 213; a flower highlight sits at 235 and up.
+Measured — one source cell holds **46,354 near-white pixels**, almost all of
+them checker, and **63 survive keying at drawn size**. Those are the flowers,
+and a flat key takes every one of them.
+
+What separates them is **connectivity**, not colour: the checker reaches the
+cell's own edge and a flower enclosed in foliage does not. So the key floods
+inward from the edge, the same shape `head.png`'s own background removal
+uses. Two refinements, each measured rather than reasoned about:
+
+- **The darker square is a safe seed anywhere in the cell**, since nothing in
+  the art is that particular grey — which is what clears checker showing
+  through a gap in the foliage, enclosed by art and so unreachable from the
+  edge (**86 such pixels** in one cell).
+- **The flood then widens by a bounded two pixels** under a looser grey rule,
+  taking the anti-aliased edges where one square meets the next. The seed
+  rule cannot be loosened that far without swallowing a grey rock; bounding
+  the widening to the one or two pixels anti-aliasing actually spans cannot
+  reach a rock's interior however grey it is (**82 px of grey fringe**
+  survived before it).
+
+### ✅ Looked at, not just asserted on
+
+All nine yards were rendered to PNG and composited over a mid-grey backdrop
+(`tools/probe_farmhouse_yard.gd`), twice: once to find the fringe, once to
+confirm it was gone. Flowers, grey rocks, barrels, benches, the well and the
+washing line all survive; the checkerboard does not.
+
+Tests: `test_building_catalog.gd` 80/80 (+4 new),
+`test_earth_chunk_manager_buildings.gd` 40/40 (+4 new),
+`test_illustrated_structure_sprite.gd` 53/54 (+4 new). The one failure,
+`test_no_house_crop_cuts_through_the_top_of_its_own_drawing`, is the same
+pre-existing house-art failure recorded in the fence entry above.
+
+## A dug pond is water you can see, and a hut stands over it (`concept/village_ponds.md`, 2026-09-20)
+
+Reported live with a screenshot: *"The built pond renders as earth instead
+of water and it's missing a fisher hut (use farmhouse sprite until
+illustration exists)"* — a fenced brown rectangle with the pond's own fish
+swimming on it. The previous pass on this system closed with the reason it
+shipped that way: *"Not verified in a live session. Every number above is
+headless measurement; the screenshots have not been re-taken."*
+
+**Fault one: nothing was painted at all on the visit that dug it.** Water
+rides one overlay (`concept/hydrology.md`, "ONE WATER SURFACE"), painted
+once per chunk load — and the village that digs a fisher's pond runs LATER
+in that same load, so the pass had already been and gone and
+`build_at_global` never repainted it. Every new village a player walks into
+therefore showed its pond as the bare `pond_water` modification, which the
+painter has no tile of its own for and falls through to flat earth.
+Digging or filling a pond now repaints the surface over that cell and the
+four round it (a pond's own cross-section is read off its neighbours), not
+the whole chunk — the pass probes hydrology per cell, and a pond is dug one
+cell at a time.
+
+**Fault two: once painted, it was a puddle.** Measured on the first real
+render (`tools/probe_fisher_pond_render.gd`, new and kept): **10.4%** of
+the pond's own area read as water. The waterline is the contour where the
+across field crosses 1, and that field is INTERPOLATED between cell
+centres — so where the edge lands is half decided by the dry cells round
+the water, and they carried whatever the nearest river had left there, tens
+of tiles' worth. `VillagePond.WATER_ACROSS`/`BANK_ACROSS` are one decision
+rather than two: 0 in the water and 2 on the ring one tile out puts the
+contour exactly halfway between, on the water cell's own edge.
+`waterline_offset_tiles` states it and a test pins it at half a tile, so a
+change that moved the waterline off the pond's edge fails there rather than
+on screen. The bank never overrides a real river's own field, only a value
+further out than it. Re-rendered on the same pond: **89.8%**.
+
+**And the hut.** A farmer's beds have a farmhouse standing over them; a
+fisher's water had nothing, which is the half of "the same shape as a
+field" that was never built. `fisher_hut` is a real catalog building — the
+farmhouse's own 3×2 footprint, price and storage — sited on the bank of the
+pond it belongs to (`VillagePond.hut_origin`: the nearest free site within
+`HUT_BANK_REACH_TILES`, walked in a fixed order so the same water puts the
+hut in the same place on every reload). Idempotence is asked of the ground,
+not of a record: a hut already standing on this pond's bank is this pond's
+hut, which is what stops a village growing a second one every time it is
+walked past. It is listed among the works and deliberately NOT on the
+growth ladder, which keeps its own list.
+
+**Borrowed art, declared.** *"use farmhouse sprite until illustration
+exists"* is a catalog field now: `draws_as: "farmhouse"` puts that sheet at
+the END of the hut's own chain, so the hut draws as a farmhouse today and
+as itself the day `fisher_hut.png` lands — no code change, and removing the
+one line is pure tidying. Read with the SHEET's own grid, never the
+borrower's (farmhouse.png has six columns where every other contract sheet
+has eight), pinned by its own test.
+
+Honest gaps, all three real:
+
+🚧 **The catch still goes to the fisher's cottage**, not to the hut.
+`stock_building_cell` is still the building carrying the `fisher`
+occupation; the hut holds `storage` like any works, but nothing routes a
+catch into it. It is a building over the water, not yet a fish store.
+
+🚧 **A hut looks exactly like a farmhouse**, because it is drawn as one — a
+village with both shows two identical buildings until real art lands. That
+is what was asked for, recorded so nobody reads it as a bug.
+
+🚧 **The pond's bed is the flat earth tile** under the surface, which is
+what shows past the waterline at the pond's own edge (it reads as a muddy
+bank) and is all a scene with no flow overlay registered would draw at all.
+
+Tested: `test_village_pond.gd` (+11), `test_earth_chunk_manager_ponds.gd`
+(+3), `test_village_renderer.gd` (+2), `test_building_catalog.gd` (+3, one
+list test renamed).
+
+## A borrowed building borrows the yard it stands in (`concept/building.md`, 2026-09-20)
+
+Asked for directly the moment the fisher's hut was up beside its pond:
+*"the fisher hut should get a yard too"*.
+
+A farmhouse stands in one of nine drawn yards
+(`BuildingCatalog.background_sheet_for`, landed in parallel the same day),
+and the hut is drawn AS a farmhouse through `draws_as` — so it stood on
+bare plot beside the real thing in its finished yard, which reads as one
+building done and the other forgotten. `background_sheet_for` now falls
+through `draws_as` when a building declares no yard of its own: what is
+borrowed is the whole picture, the house and the ground it stands in. The
+hut's OWN seed still picks which of the nine, so the hut by the pond and
+the farmhouse up the street are different pictures, and borrowing art
+stays the only way to inherit a yard — a building that declares neither
+still stands on bare plot.
+
+**A correction, recorded as one.** The doc written a few hours earlier
+argued the opposite — that a fisher's hut stands on a bank rather than in
+a farmyard, so the missing yard was deliberate. It was the wrong call and
+`concept/village_ponds.md` now says so in place of the old reasoning.
+
+**And one thing measured rather than assumed on the way past.** The yard
+is drawn AFTER the kerb (children paint in tree order), so a yard whose
+scene reached the plot's edge would hide the line that marks the hitbox.
+Measured on the delivered `farmhouse_bg_overlay.png`: **0 of 5118 pixels**
+in the outer three-pixel band are opaque, so the kerb is never covered and
+the existing order is right. Pinned by
+`test_a_yard_never_paints_over_the_kerb_at_the_plots_own_edge` rather than
+by reordering two features that were each deliberate — yard art delivered
+one day with its scene bled to the edge would erase every kerb it covers,
+and the first anybody would know is a screenshot.
+
+Tested: `test_building_catalog.gd` (+3),
+`test_earth_chunk_manager_buildings.gd` (+2).

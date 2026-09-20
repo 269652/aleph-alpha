@@ -61,3 +61,38 @@ func test_the_market_is_drawn_from_before_the_shelves():
 ## second one would be a second treasury.
 func test_the_gold_still_lands_in_the_one_purse():
 	assert_true(_body("_step_merchant_visits").contains("deposit_to_purse("))
+
+
+## MEASURED (tools/probe_village_famine.gd, purse column): purse 0.0 at
+## every sample of a 1200-second watch, in a village holding 38 sellable
+## food in its market and 187 across its shelves, with the merchant offered
+## that stock on every settlement step.
+##
+## step_settlements hands him `_market_store.market_for(settlement_id)` --
+## the persisted emergence Market, whose own neighbouring comment says
+## "live play essentially never stocks that one". The purse is metadata ON
+## THAT OBJECT (NpcEconomy._set_purse), while every villager reads the
+## purse off their live VillageMarket. So the gold a merchant paid landed
+## in a purse nobody reads, and the wage could never be drawn.
+##
+## This is the same "two unrelated things called the market" trap
+## SettlementFood's own header was written about.
+func test_the_visit_sees_the_market_the_villagers_actually_trade_from():
+	var body := _body("_step_merchant_visits")
+	assert_true(
+		body.contains("village_market"),
+		"the live market is one of the containers he is shown: %s" % body
+	)
+
+
+## And the gold lands where the wage is drawn from, or it may as well not
+## have been paid.
+func test_the_gold_lands_in_the_purse_the_wage_is_drawn_from():
+	var body := _body("_step_merchant_visits")
+	var deposit_at := body.find("deposit_to_purse(")
+	assert_gt(deposit_at, -1, "the premise: he still pays")
+	var call := body.substr(deposit_at, 60)
+	assert_true(
+		call.contains("village_market") or call.contains("purse_market"),
+		"paid into the market villagers read, not the persisted ledger: %s" % call
+	)

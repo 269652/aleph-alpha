@@ -100,6 +100,29 @@ func _hungriest(chunk_coord: Vector2i) -> float:
 	return worst
 
 
+## The village's shared purse, and what its people are holding.
+##
+## Since gold has one faucet (docs/concept/traveling_merchants.md), the
+## whole chain between work and a meal is: goods -> a merchant's visit ->
+## the purse -> a wage -> a bought meal. A break anywhere in it starves a
+## village that is standing on food, and the roster alone cannot say which
+## link broke. These two columns can.
+func _purse(chunk_coord: Vector2i) -> float:
+	var NpcEconomy = load("res://src/world/npc_economy.gd")
+	for node in _manager._loaded_villages.get(chunk_coord, []):
+		if is_instance_valid(node) and node.has_method("setup_economy") and node.economy != null:
+			return NpcEconomy.purse_of(node.economy.market)
+	return 0.0
+
+
+func _wallet_total(chunk_coord: Vector2i) -> int:
+	var total := 0
+	for node in _manager._loaded_villages.get(chunk_coord, []):
+		if is_instance_valid(node) and node.has_method("setup_economy") and node.economy != null:
+			total += int(node.economy.wallet.balance)
+	return total
+
+
 ## Everything edible in the village's own market -- the shelf a villager
 ## who cannot forage actually buys from. "They starved" and "there was
 ## food and they could not reach it" want different fixes.
@@ -168,19 +191,23 @@ func _sample() -> void:
 		_lines.append("")
 		_lines.append("FAMINE watch at %s" % str(chunk_coord))
 		_lines.append(
-			"  %8s %8s %10s %10s %10s" % ["seconds", "roster", "standing", "hungriest", "market food"]
+			"  %8s %8s %10s %10s %10s %8s %8s" % [
+				"seconds", "roster", "standing", "hungriest", "market food", "purse", "wallets"
+			]
 		)
 
 		var elapsed := 0.0
 		var next_report := 0.0
 		while elapsed < SIMULATED_SECONDS:
 			if elapsed >= next_report:
-				_lines.append("  %8.0f %8d %10d %10.2f %10d %6.0f/%-5.0f" % [
+				_lines.append("  %8.0f %8d %10d %10.2f %10d %8.1f %8d %6.0f/%-5.0f" % [
 					elapsed,
 					_manager.household_count_for_settlement(settlement_id),
 					_villagers_in(chunk_coord),
 					_hungriest(chunk_coord),
 					_market_food(chunk_coord),
+					_purse(chunk_coord),
+					_wallet_total(chunk_coord),
 					_most_starved(chunk_coord), Starvation.seconds_to_die(),
 				])
 				next_report += REPORT_EVERY

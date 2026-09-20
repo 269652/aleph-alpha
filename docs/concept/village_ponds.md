@@ -76,6 +76,12 @@ village actually does.
   own anywhere else. `is_buildable_ground_at` refuses it too — the fisher's
   own water is not somewhere to put a house. Filling one in gives the dry
   ground back.
+- ✅ **A hut on the bank** (2026-09-20). `fisher_hut`, a real catalog
+  building with the farmhouse's own footprint, price and storage, raised on
+  the bank of the pond it belongs to by the pond pass itself rather than by
+  the growth ladder. Its art is borrowed from the farmhouse through a
+  declared `draws_as` until its own sheet is drawn. Full account below, in
+  "Water you can see, and a hut over it".
 - ✅ **A fisher's house digs one.** Sited against the house that carries the
   `fisher` occupation, since a fisher lives in an ordinary house and there is
   no separate building to hang it on. Fenced on the field's own rule, through
@@ -189,3 +195,113 @@ all shore.
 
 **Not verified in a live session.** Every number above is headless
 measurement; the screenshots have not been re-taken.
+
+
+## Water you can see, and a hut over it (2026-09-20)
+
+Reported live with a screenshot, which is the thing the line directly above
+says had not been taken: *"The built pond renders as earth instead of water
+and it's missing a fisher hut (use farmhouse sprite until illustration
+exists)"* — a fenced brown rectangle with the pond's own fish swimming on
+it. Two separate faults behind the first half, and both were only ever
+visible in a picture.
+
+### It was not painted at all on the visit that dug it
+
+The surface is painted once per chunk load (`_paint_river_flow_overlay`),
+and the village that digs the pond runs LATER in that same load
+(`spawn_village`) — so the pass had already been and gone, and
+`build_at_global` never repainted it. A pond dug on the visit that founded
+its village therefore had no water surface until the chunk was next
+reloaded, which is every new village a player walks into. What was left on
+screen is the bare `pond_water` modification, and the painter has no tile
+of its own for it: it falls through `atlas_coords_for_modification`'s
+fail-safe to flat earth.
+
+Digging or filling a pond now repaints the surface over that cell **and the
+four round it** — a pond's own cross-section is read off its neighbours, so
+a cell that was rim water becomes open water the moment the cell beside it
+is dug. Five cells, not the whole chunk: the surface pass probes hydrology
+per cell and a pond is dug one cell at a time.
+
+### And once painted, it was a puddle
+
+Measured on the first real render: **10.4%** of the pond's own area read as
+water. The waterline is the contour where the across field crosses 1, and
+that field is reconstructed by INTERPOLATING between cell centres — so
+where the water's edge lands is half decided by the DRY cells round it, and
+those carried whatever the nearest river had left there, tens of tiles'
+worth. The contour crossed 1 a few pixels out from each pond cell's own
+centre, and a 3×2 pond read as a small oval in a brown rectangle.
+
+`VillagePond.WATER_ACROSS` and `BANK_ACROSS` are one decision rather than
+two: 0 in the water and 2 on the ring one tile out puts the contour exactly
+halfway between them, which is the water cell's own edge — the edge of the
+hole. `waterline_offset_tiles` states that and a test pins it at half a
+tile, so a change to either number that moved the waterline off the pond's
+edge fails there rather than on screen. The bank never overrides a real
+river's own field, only a value further out than it (a cell between a pond
+and a river belongs to whichever water is nearer). Re-rendered on the same
+pond: **89.8%**.
+
+### The hut on the bank
+
+A farmer's beds have a farmhouse standing over them; a fisher's water had
+nothing at all, which is the half of "the same shape as a field" that was
+never built. `fisher_hut` is a real catalog building now — the farmhouse's
+own 3×2 footprint, price and storage, since it is the same works beside the
+same size of worked ground.
+
+It is sited on the BANK rather than on street frontage
+(`VillagePond.hut_origin`): the hut belongs to the water, the water is
+already dug and fenced by the time the hut goes up, so there is one obvious
+right place for it and no search of the chunk to do. The nearest free site
+within `HUT_BANK_REACH_TILES` of the water wins, walked in a fixed order so
+the same pond puts the hut in the same place on every reload. Two tiles,
+not one: the water is fenced on its own ring, so a hut demanding to touch
+it could only ever stand on the rails. Idempotence is asked of the GROUND —
+a hut already standing on this pond's bank is this pond's hut — which is
+what stops a village growing a second one every time it is walked past.
+
+**And it is an overlay, like every other building.** A hut missing from
+`TerrainRenderer.BUILDING_OVERLAY_TILE_IDS` paints the same flat brown
+square under itself that list exists to prevent -- found on the merge by
+`test_a_whole_building_is_an_overlay_and_paints_no_ground_of_its_own`
+rather than by inspection, which is exactly what that test is for.
+
+**The art is borrowed, and says so.** The catalog entry names
+`draws_as: "farmhouse"`, and a borrowed sheet is the LAST link of the
+building's own chain (`BuildingCatalog.finished_sheet_chain`): the day
+`fisher_hut.png` lands it wins with no code change, and removing the one
+line is pure tidying. Pinned by
+`test_a_borrowed_sheet_never_hides_the_buildings_own`.
+
+**It borrows the yard as well** -- asked for directly the moment the hut
+was up beside its pond: *"the fisher hut should get a yard too"*. A
+farmhouse stands in one of nine drawn yards (`background_sheet_for`, "A
+building's own yard, drawn behind it" in [building.md](building.md)), and
+an earlier version of this paragraph argued the hut should not, on the
+grounds that a fisher's hut stands on a bank rather than in a farmyard.
+That was the wrong call and is recorded as one: a farmhouse in a finished
+yard beside a hut on bare plot reads as one building done and the other
+forgotten. What `draws_as` borrows is the whole picture -- the house AND
+the ground it stands in -- and the hut's OWN seed still picks which of the
+nine, so the hut by the pond and the farmhouse up the street are different
+pictures.
+
+### Honest gaps
+
+- **The catch still goes to the fisher's cottage**, not to the hut. The hut
+  holds `storage` like any works, but `stock_building_cell` is still the
+  building that carries the `fisher` occupation, and nothing routes a catch
+  into the hut yet. It is a building standing over the water, not yet a
+  fish store.
+- **A hut looks exactly like a farmhouse**, because it is drawn as one. A
+  village with both shows two identical buildings until the real sheet
+  lands — which is what "use farmhouse sprite until illustration exists"
+  asks for, stated here so nobody reads it as a bug.
+- **The pond's bed is the flat earth tile** under the water surface, which
+  is what shows past the waterline at the pond's own edge. That reads as a
+  muddy bank and is left deliberately; it is also the fallback a scene with
+  no flow overlay registered would show, where a pond is still a brown
+  rectangle.
