@@ -265,6 +265,38 @@ holds both halves of pillar 6 at once.
 
 ## Status
 
+- ✅ **A character owns parts, weaves them, and casts the result**
+  (2026-09-20). `Player.motes` / `witness` / `grant_mote` / `weave` /
+  `woven_draft` / `cast_woven` (`test_player_spell_weaving.gd`, 12).
+
+  The acquisition story is real: `witness(phenomenon)` grants the atom
+  that phenomenon teaches the **first time only** — you learn frost
+  because the cold really took you there — and after that the same atom is
+  a supply, found rather than re-learned. An experience that teaches
+  nothing grants nothing.
+
+  The hinge holds: `cast_woven` compiles the draft through
+  `SpellDraft.source_for`, parses it with the **real** `SpellParser`, runs
+  it through the **real** `SpellExecutor` and resolves each step through
+  the same `_apply_cast_step` an authored spell uses. There is no second
+  interpreter and no second cost model — the mana spent is
+  `SpellDraft.cost_of`'s own figure, asserted against it.
+
+  Two gates before a weave is accepted, in order: you must own every mote
+  you socket (refused by name — *"You hold no Frost mote."*), and the
+  arrangement must pass the shared validator, whose refusals are
+  sentences. The pouch, what has been witnessed and the weave itself all
+  persist, because a spell you designed is yours.
+- ⬜ **No authoring surface yet.** A player can own and cast a weave, but
+  nothing on screen lets them arrange one: the socket row, the pouch and
+  the live name/cost/reaction header are the next slice. Until then the
+  loop is reachable only through code.
+- ⬜ **Nothing calls `witness` from the world yet**, so the phenomena
+  (standing at a fire, freezing, being envenomated, caught in a storm)
+  grant nothing in play. Each is a one-line call at a site that already
+  detects the condition.
+
+
 - ✅ `SpellMote`: `mote_for`, `display_name_for`, `rarity_of`,
   `school_of`, `tier_of`, witness table + `first_witness_atom_for`,
   `drop_tier_cap_for_ring`, `can_drop_at_ring`,

@@ -15,6 +15,9 @@ const Inventory = preload("res://src/gameplay/inventory.gd")
 const SurvivalMeters = preload("res://src/gameplay/survival_meters.gd")
 const SprintCost = preload("res://src/gameplay/sprint_cost.gd")
 const Answerback = preload("res://src/gameplay/answerback.gd")
+const SpellParser = preload("res://src/gameplay/spell_parser.gd")
+const SpellDraft = preload("res://src/gameplay/spell_draft.gd")
+const SpellMote = preload("res://src/gameplay/spell_mote.gd")
 const NutrientRelease = preload("res://src/gameplay/nutrient_release.gd")
 const ConditionPenalty = preload("res://src/gameplay/condition_penalty.gd")
 const Wallet = preload("res://src/gameplay/wallet.gd")
@@ -1295,6 +1298,12 @@ func to_save_dict() -> Dictionary:
 		# magic.md's tuition section) -- must not evaporate on reload, the
 		# same as karma or a spent life above.
 		"known_spell_ids": _known_spell_ids.duplicate(),
+		# A spell you designed is yours (docs/concept/spell_weaving.md):
+		# the parts, what you have already lived through, and the
+		# arrangement itself all survive a save.
+		"motes": _motes.duplicate(),
+		"witnessed": _witnessed.duplicate(),
+		"woven_draft": _woven_draft.duplicate(true),
 	}
 
 
@@ -1330,6 +1339,15 @@ func apply_save_dict(data: Dictionary) -> void:
 	# grant this player was already born with.
 	if data.has("known_spell_ids"):
 		_known_spell_ids = Array(data["known_spell_ids"] as Array, TYPE_STRING, "", null)
+	# The weave and its parts. A save written before spells could be
+	# composed has none of these keys and simply loads a character who has
+	# not woven anything -- which is exactly true of them.
+	if data.has("motes"):
+		_motes = (data["motes"] as Dictionary).duplicate()
+	if data.has("witnessed"):
+		_witnessed = (data["witnessed"] as Dictionary).duplicate()
+	if data.has("woven_draft"):
+		_woven_draft = (data["woven_draft"] as Dictionary).duplicate(true)
 	# is_dead itself is deliberately NOT part of this save dict (an ordinary
 	# mid-respawn-countdown death reloading as alive-at-respawn-position is
 	# an acceptable simplification -- matches this project's pre-existing
@@ -3008,6 +3026,109 @@ func _perform_attack() -> void:
 ## nothing) for an unknown spell id or a refused cast -- true for a spell
 ## that actually resolved, even if delivery found nothing to hit ("even an
 ## affordable spell still has to land", magic.md).
+## The spell parts this character owns (docs/concept/spell_weaving.md),
+## atom id -> how many. A copy, so a caller cannot edit the pouch by
+## reading it.
+func motes() -> Dictionary:
+	return _motes.duplicate()
+
+
+## Lives through a phenomenon and learns what it teaches, the FIRST time
+## only. True when something was really learned.
+##
+## This is the acquisition story: you learn frost because the cold really
+## took you there, fire because you really stood at one. After that first
+## grant the same atom is a supply -- found, dropped, traded -- never
+## re-learned, which is why a repeat teaches nothing.
+func witness(phenomenon: String) -> bool:
+	var atom := SpellMote.first_witness_atom_for(phenomenon)
+	if atom == "" or _witnessed.has(phenomenon):
+		return false
+	_witnessed[phenomenon] = true
+	grant_mote(atom)
+	answer("mote_found", {"item": SpellMote.display_name_for(atom), "count": 1})
+	return true
+
+
+## Puts one mote in the pouch, however it was come by -- a witness above, a
+## drop off something killed, a reward.
+func grant_mote(atom_id: String) -> void:
+	if atom_id == "":
+		return
+	_motes[atom_id] = int(_motes.get(atom_id, 0)) + 1
+
+
+## Sockets a draft as this character's woven spell, refusing with a named
+## reason rather than a bare false (docs/concept/spell_weaving.md, and the
+## same rule every other refusal in this overhaul follows).
+##
+## Two gates, in this order: you must OWN every mote you socket, and the
+## arrangement must pass the shared validator -- never a second opinion
+## about what a legal spell is.
+func weave(draft: Dictionary) -> bool:
+	for atom_id in SpellDraft.atoms_of(draft):
+		if int(_motes.get(atom_id, 0)) <= 0:
+			cast_message = "You hold no %s mote." % SpellMote.display_name_for(atom_id)
+			_cast_message_timer = CAST_MESSAGE_DURATION
+			return false
+	var verdict: Dictionary = SpellDraft.validate(draft)
+	if not bool(verdict.get("ok", false)):
+		var refusals: Array = verdict.get("refusals", [])
+		# A refusal is {code, reason}; the reason is the printable sentence
+		# (docs/concept/spell_weaving.md -- every refusal is a sentence).
+		cast_message = (
+			String(refusals[0].get("reason", "")) if not refusals.is_empty()
+			else "That will not hold together."
+		)
+		_cast_message_timer = CAST_MESSAGE_DURATION
+		return false
+	_woven_draft = draft.duplicate(true)
+	return true
+
+
+## What this character has woven, or {} for nobody who has yet.
+func woven_draft() -> Dictionary:
+	return _woven_draft.duplicate(true)
+
+
+## Casts the woven spell -- the hinge of the whole feature. The draft is
+## compiled to source through SpellDraft, parsed by the REAL parser and
+## run by the REAL executor, so a player's own arrangement is a spell in
+## exactly the sense an authored one is. There is no second interpreter.
+func cast_woven() -> bool:
+	if _woven_draft.is_empty():
+		return false
+	var parsed: Dictionary = _spell_parser.parse(SpellDraft.source_for(_woven_draft))
+	if not bool(parsed.get("ok", false)):
+		return false
+	var rule = _spell_executor.cast_rule(parsed["ast"])
+	if rule == null:
+		return false
+	var context := {"wielder": {"mana": mana, "health": health}}
+	if not _spell_executor.can_cast(rule, mana, context):
+		cast_message = "Not enough mana."
+		_cast_message_timer = CAST_MESSAGE_DURATION
+		return false
+	spend_mana(_spell_executor.cost_for(rule))
+	_character_view.play_attack_swing(_facing_string(), SWING_DURATION)
+	answer("cast", {})
+	# The same resolution an authored spell gets -- one pipeline, one
+	# executor, no second path for a player-made spell.
+	var delivery := _spell_executor.delivery_for(rule)
+	for step in rule.get("pipeline", []):
+		_apply_cast_step(step, delivery)
+	return true
+
+
+## The parts this character owns, what they have already lived through,
+## and what they have woven from it (docs/concept/spell_weaving.md). All
+## three persist: a spell you designed is yours.
+var _motes: Dictionary = {}
+var _witnessed: Dictionary = {}
+var _woven_draft: Dictionary = {}
+var _spell_parser := SpellParser.new()
+
+
 func cast_spell(spell_id: String) -> bool:
 	var ast = _spell_book.ast_for(spell_id)
 	if ast == null:
