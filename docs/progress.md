@@ -28747,13 +28747,26 @@ or a building between a villager and the well is enough to stop them
 permanently. That hole was in the errand from its first commit; it only
 became *visible* once a farmhouse could send somebody.
 
-An errand now has **patience**: its own straight-line walk at `WALK_SPEED`
-times `ERRAND_PATIENCE_SLACK`, after which the bucket goes back by the
-door and they get on with their day. They try again **tomorrow** rather
-than turning round at the door and walking into the same wall, which would
-have replaced the stall rather than fixed it. Both sides are pinned — a
-villager who cannot move gives up, and a villager who can simply walk
-there still finishes the trip.
+An errand now has **patience** — and patience is measured in **progress,
+not in time**. A villager who has walked `ERRAND_DETOUR_PX` without
+getting any nearer to where the bucket is going puts it down and tries
+again tomorrow, rather than turning round at the door and walking into the
+same wall.
+
+That distinction cost a second round. The first version *was* a time
+budget, scaled from the straight-line distance, and it looked equivalent.
+Then `TileRouter` ([navigation.md](concept/navigation.md), merged from
+`main` alongside this) landed and villagers began walking real routes
+around buildings — and a route is longer than the line the budget was
+scaled from. **Every well trip in the probe village stopped completing**:
+farmer 1 went from 5 trips and 51 tendings to 0 and 8, its beds dry for
+5110 of 6000 ticks, while the villagers walked perfectly well the whole
+time. A detour takes you away from the target for a while; that is not
+being stuck, and a rule that cannot tell the difference is not a rule
+about being stuck.
+
+Both ends are pinned: a villager who cannot move gives up, and a villager
+crawling toward the well at a tenth of walking speed is left alone.
 
 ### 🚧 A farmhouse seeded from a household's floor started dry
 
@@ -28780,9 +28793,12 @@ into `hydrology.md`'s aquifer); and the player has no tank of their own.
 | herbalist, on-field ticks of 6000 | 2750 | 68 | 2081 |
 
 The remaining gap to baseline is the errand's real cost — a villager
-walking to the well is a villager not farming, which is the feature. The
-herbalist's share of it is not: it still makes **zero** completed trips
-because it cannot reach the well at all, and its beds spend 5131 of 6000
-ticks with nothing to spare. That is the pathfinding hole, and it is the
-one number to re-measure once `TileRouter` routing (merged from `main`
-alongside this) has had a run at it.
+walking to the well is a villager not farming, which is the feature.
+
+Routing then changed the picture again, in both directions at once: the
+farmer that had never produced anything (`0` wheat across every run above,
+a pre-existing failure this feature did not cause) started working and
+brought in 56, while the time-budget patience rule broke every well trip
+until it was rewritten to measure progress. The numbers above are from
+before that merge; the post-merge run is what the concept doc's Status
+section now carries.

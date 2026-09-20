@@ -182,20 +182,30 @@ closed there would kill every such field rather than send anybody anywhere.
 
 ### An errand you cannot finish ends
 
-There is no pathfinding here — only a straight line at the target and a
-slide along whatever it runs into (`NpcMarker._slid_along_walls`) — so a
-wall, a rail or a building between a villager and the well stops them
-permanently. Measured (`tools/probe_farm_water.gd`): one of the probe
-village's three field workers ended a 600s run still `to_well`, **104 px
-short** of a well it had had 570 seconds to reach, having worked 156 of
-6000 ticks against its own baseline of 2750. It never farmed again.
+Routing ([navigation.md](navigation.md)) plans around what it can see and
+`NpcMarker._slid_along_walls` refuses the rest, but neither can promise a
+way through — so without a give-up rule a villager pressed against
+something walks at it for ever. Measured (`tools/probe_farm_water.gd`):
+one of the probe village's three field workers ended a 600s run still
+`to_well`, **104 px short** of a well it had had 570 seconds to reach,
+having worked 156 of 6000 ticks against its own baseline of 2750. It never
+farmed again.
 
-So an errand has **patience**: its own straight-line walk at `WALK_SPEED`
-times `ERRAND_PATIENCE_SLACK`, after which the bucket goes back by the
-door. They try again **tomorrow** (`ERRAND_RETRY_SECONDS`) rather than
-turning round at the door and walking into the same wall, which would
-replace the stall rather than fix it. This is not a pathfinding fix — it
-is the promise that a villager always comes back to their day.
+So an errand has **patience**, and patience is measured in **progress,
+not in time**. A villager who has walked `ERRAND_DETOUR_PX` without
+getting any nearer to where the bucket is going puts it down and tries
+again tomorrow (`ERRAND_RETRY_SECONDS`) rather than turning round at the
+door and walking into the same wall.
+
+That distinction is not academic — it was this rule's second bug. The
+first version was a time budget scaled from the straight-line distance,
+which looked equivalent. Then `TileRouter` landed and villagers walked
+real routes around buildings; a route is longer than the line it replaces,
+and **every well trip in the probe village stopped completing** (farmer 1:
+5 trips and 51 tendings became 0 and 8, beds dry for 5110 of 6000 ticks)
+while the villagers walked perfectly well the whole time. A detour takes
+you away from the target for a while, and that is not the same as being
+stuck.
 
 ### So the errand serves two buildings
 
@@ -280,11 +290,11 @@ table stops saying it.
   into.
 - ⬜ **The player has no tank.** `Player` neither drinks nor fetches; this
   is a villager mechanism only.
-- 🚧 **A villager still cannot route around a wall.** `ERRAND_PATIENCE_
-  SLACK` stops a blocked trip lasting forever, but the trip still fails: a
-  household on the wrong side of an obstacle gives up daily and its tank
-  keeps falling. Real pathfinding is the fix and is out of this doc's
-  scope; see `NpcMarker._slid_along_walls`.
+- 🚧 **A trip that cannot be made still fails, it just fails politely.**
+  Routing ([navigation.md](navigation.md)) plans round what it can see and
+  `ERRAND_DETOUR_PX` stops a blocked trip lasting forever, but a household
+  with no route at all gives up daily and its tank keeps falling. Nothing
+  here notices that and does anything else about it.
 
 ## Interaction with other docs
 
