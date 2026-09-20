@@ -202,6 +202,113 @@ func test_the_reserve_outlasts_the_walk_to_the_well():
 	assert_gte(days_of_reserve, 1.0, "a farm household could go thirsty while somebody fetches water")
 
 
+# -- what the field costs the tank ------------------------------------------
+
+## One tending visit is what a farmer does at a bed: they water it and the
+## beds around it (NpcMarker._water_the_beds_around). LITRES_PER_TENDING is
+## what that costs the farmhouse, and it is pinned by the errand it makes,
+## never typed in as a number somebody liked.
+
+func test_a_tending_visit_costs_the_farmhouse_real_water():
+	assert_gt(HouseholdWater.LITRES_PER_TENDING, 0.0, "watering the field was free")
+
+
+## One trip to the well has to buy MORE than one visit to the field, or the
+## farmer spends the whole season walking between the two and never farms.
+func test_one_bucket_pays_for_more_than_one_tending():
+	assert_lt(HouseholdWater.LITRES_PER_TENDING, HouseholdWater.BUCKET_LITRES)
+
+
+func test_watering_the_beds_lowers_the_tank_by_exactly_one_tending():
+	var full := HouseholdWater.TANK_LITRES
+	assert_almost_eq(
+		HouseholdWater.level_after_tending(full),
+		full - HouseholdWater.LITRES_PER_TENDING, 0.0001
+	)
+
+
+func test_a_farmhouse_down_to_its_drinking_reserve_cannot_water_at_all():
+	var reserve := HouseholdWater.DRINKING_RESERVE_LITRES
+	assert_false(HouseholdWater.can_water_crops(reserve))
+	assert_almost_eq(HouseholdWater.level_after_tending(reserve), reserve, 0.0001)
+
+
+## People before plants, as a loop rather than as an assertion about one
+## number: however long a farm keeps watering, it can never reach the day
+## its own household has nothing to drink.
+func test_watering_never_digs_into_the_drinking_reserve():
+	var level := HouseholdWater.TANK_LITRES
+	var tendings := 0
+	while HouseholdWater.can_water_crops(level) and tendings < 10000:
+		level = HouseholdWater.level_after_tending(level)
+		tendings += 1
+	assert_lt(tendings, 10000, "the field drank forever")
+	assert_gte(level, HouseholdWater.DRINKING_RESERVE_LITRES)
+
+
+## A full farmhouse has a real working stock -- enough to tend its whole
+## field several times over -- but not an endless one.
+func test_a_full_farmhouse_waters_its_field_several_times_over():
+	assert_between(_tendings_from(HouseholdWater.TANK_LITRES), 4, 20)
+
+
+func _tendings_from(level: float) -> int:
+	var tendings := 0
+	while HouseholdWater.can_water_crops(level) and tendings < 10000:
+		level = HouseholdWater.level_after_tending(level)
+		tendings += 1
+	return tendings
+
+
+# -- a farmhouse sends somebody sooner than a cottage does ------------------
+
+func test_a_full_farmhouse_sends_nobody():
+	assert_false(HouseholdWater.farm_trip_is_due(HouseholdWater.TANK_LITRES))
+
+
+## The trip must come while there is still water for the beds, or the field
+## goes thirsty for the whole walk across the square.
+func test_a_farmhouse_sends_somebody_while_it_can_still_water():
+	var level := _first_level_that_sends_a_farm()
+	assert_true(HouseholdWater.can_water_crops(level), "the farm waited until the field was already dry")
+	assert_gte(_tendings_from(level), 2, "one more visit and the beds are dry anyway")
+
+
+## The emergent difference pillar 5 asks for: a farm is seen at the well
+## more often than a cottage, because its tank has two mouths on it.
+func test_a_farmhouse_is_due_sooner_than_a_cottage():
+	assert_gt(_first_level_that_sends_a_farm(), _first_level_that_sends_a_household())
+
+
+## Walking the level down rather than solving for it, so these read as
+## "the level at which somebody is sent" whatever the rule behind it is.
+func _first_level_that_sends_a_farm() -> float:
+	var level := HouseholdWater.TANK_LITRES
+	while level > 0.0 and not HouseholdWater.farm_trip_is_due(level):
+		level -= 0.1
+	return level
+
+
+func _first_level_that_sends_a_household() -> float:
+	var level := HouseholdWater.TANK_LITRES
+	while level > 0.0 and not HouseholdWater.trip_is_due(level):
+		level -= 0.1
+	return level
+
+
+## Pillar 5 -- "a farm empties its tank faster" -- stated about the WATER
+## rather than about a cadence somebody assumed. A bed withers if it is
+## not re-watered within FarmPlot.MIN_WATER_GRACE_SECONDS, which is
+## shorter than a simulated day (pinned next door in
+## test_earth_chunk_manager_household_water.gd), so a living field is
+## tended more than once a day. One tending costing more than a villager's
+## WHOLE DAY of drinking is therefore what makes the farmhouse the
+## thirstier of the two buildings -- and it is the only reason a farmer is
+## ever seen carrying water anywhere but home.
+func test_a_field_is_a_heavier_draw_on_a_tank_than_a_person_is():
+	assert_gt(HouseholdWater.LITRES_PER_TENDING, HouseholdWater.DRAW_PER_HEAD_PER_DAY)
+
+
 # -- the bucket is a real thing (2026-09-20) --------------------------------
 #
 # Asked for directly: *"each NPC should have a bucket in its house

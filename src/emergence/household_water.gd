@@ -98,3 +98,50 @@ static func starting_level(seed_value: int) -> float:
 ## own drinking reserve, and nothing at all once the tank is down to it.
 static func spare_for_crops(level: float) -> float:
 	return maxf(0.0, level - DRINKING_RESERVE_LITRES)
+
+
+## -- what the field costs (docs/concept/village_water.md mechanism 3) ------
+
+## What ONE tending visit takes out of the farmhouse tank.
+##
+## A tending visit is what a farmer actually does at a bed: they water it
+## and the beds around it run wet too (NpcMarker._water_the_beds_around).
+## So the unit priced here is the VISIT, not the tile -- pricing tiles
+## would make a wide field cost more than a narrow one for the same walk,
+## which is not how a furrow works.
+##
+## Pinned, not chosen: it must be less than a bucket (or one trip to the
+## well buys less than one visit to the field, and the farmer spends the
+## season walking between the two) and more than a villager drinks in a
+## whole day (or the farmhouse is not the thirstier building and pillar 5
+## describes nothing a player could see). See test_household_water.gd's
+## "what the field costs the tank" block.
+const LITRES_PER_TENDING := 4.0
+
+## How much watering a farmhouse keeps in hand when it sends somebody to
+## the well -- in tendings, because that is the unit the field is billed
+## in. Without a margin the trip only becomes due once the beds are
+## already dry, and the field then goes thirsty for the whole walk across
+## the square.
+const TENDINGS_IN_HAND := 4.0
+
+
+## Whether this farmhouse can put water on its beds at all: only ever out
+## of the spare above the household's own drinking reserve.
+static func can_water_crops(level: float) -> bool:
+	return spare_for_crops(level) >= LITRES_PER_TENDING
+
+
+## The tank after one tending visit -- unchanged when there was nothing to
+## spare, so a farm can never water itself into a drought however many
+## times it is asked. People before plants, enforced here rather than
+## trusted to every caller.
+static func level_after_tending(level: float) -> float:
+	return level - LITRES_PER_TENDING if can_water_crops(level) else level
+
+
+## Whether this FARMHOUSE must send somebody to the well. Sooner than a
+## household would go (TENDINGS_IN_HAND), because a field that stops being
+## watered withers, where a household that runs low is merely thirsty.
+static func farm_trip_is_due(level: float) -> bool:
+	return spare_for_crops(level) < LITRES_PER_TENDING * TENDINGS_IN_HAND
