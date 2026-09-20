@@ -511,6 +511,13 @@ abandoned over a few cells of it".
 Verified on that village, same seed: `hall=1`, standing on its plot, with
 the square paved around it.
 
+- 🚧 **Known gap:** a village already standing in a SAVE keeps its
+  built-over plot. Chunks persist on unload, and nothing here moves a house
+  that is already there. The surgical heal is to delete that chunk's
+  `user://chunk_buildings/<x>_<y>.bin` and
+  `user://chunk_modifications/<x>_<y>.bin` so it is re-founded on the next
+  visit — at the cost of everything else built in that chunk, which is why
+  it is not an automatic migration.
 - 🚧 **Known gap, unchanged:** a village whose square really cannot be
   laid (water, or a save whose houses already stand on the plot) still has
   nowhere to put a seat and silently has none. Sliding the plot to another

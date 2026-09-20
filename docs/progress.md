@@ -29257,8 +29257,20 @@ square.
 
 🚧 **A village already standing in a save keeps its built-over square.**
 The fix is at founding; nothing here moves a house that is already there.
-A world generated before this lands still has villages whose civic plot is
-somebody's front room, and they will never raise a seat.
+Chunks persist on unload (`_persist_modifications_now`), so a world played
+before this lands still has villages whose civic plot is somebody's front
+room, and they will never raise a seat.
+
+There is a surgical heal that needs no code: delete that chunk's two
+persisted files and it is re-founded, correctly, on the next visit —
+`user://chunk_buildings/<x>_<y>.bin` and
+`user://chunk_modifications/<x>_<y>.bin` (for the reported village,
+`676_148.bin`; `user://` is `%APPDATA%\Godot\app_userdata\Aleph Alpha\`
+on Windows and `~/.local/share/godot/app_userdata/Aleph Alpha/` on Linux).
+It throws away everything the player built in that chunk too, which is why
+it is a note here rather than an automatic migration: the alternative
+migration would have to demolish two occupied houses, and that is not a
+call this ledger gets to make.
 
 🚧 **A village whose square genuinely cannot be laid still has no seat**,
 silently. Sliding the civic plot to another clear 4×3 strip of the square
