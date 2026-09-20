@@ -102,6 +102,7 @@ func _init() -> void:
 	await process_frame
 	RenderingServer.force_draw()
 
+	_report_buildings(pond)
 	var image: Image = viewport.get_texture().get_image()
 	image.save_png("%s/pond.png" % OUT_DIR)
 	print("saved %s/pond.png   pond of %d cells centred on tile %s" % [OUT_DIR, pond.size(), centre_tile])
@@ -158,3 +159,22 @@ func _report_surface(image: Image, pond: Array, centre: Vector2, zoom: float) ->
 	print("pond surface: %d of %d sampled pixels read as water (%.1f%%), %d as dry ground" % [
 		water, total, 0.0 if total == 0 else 100.0 * water / total, dry
 	])
+
+
+## What stands round the water, and how far off -- the other half of the
+## report was "it's missing a fisher hut", so the answer is a list of what
+## is really there rather than a look at a picture.
+func _report_buildings(pond: Array) -> void:
+	var BuildingCatalog = load("res://src/gameplay/building_catalog.gd")
+	for chunk_coord in _manager._loaded_chunks:
+		for record in _manager.buildings_in_chunk(chunk_coord):
+			var origin: Vector2i = chunk_coord * CHUNK_SIZE + (record["origin_local"] as Vector2i)
+			var nearest := INF
+			for cell in BuildingCatalog.footprint_cells(record["id"], origin):
+				for wet in pond:
+					nearest = minf(nearest, Vector2(cell as Vector2i).distance_to(Vector2(wet as Vector2i)))
+			if nearest > 6.0:
+				continue
+			print("  %-12s at %s  %.1f tiles from the water   occupation=%s" % [
+				record["id"], origin, nearest, record.get("occupation", ""),
+			])
