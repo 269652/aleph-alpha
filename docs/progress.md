@@ -29061,3 +29061,86 @@ a tile of width, not three.
 
 Tests: `test_village_renderer.gd` + `test_village_layout.gd` +
 `test_landmark_sheet.gd` 253/253 (+1 new, 2 corrected).
+
+## A village starving beside its own full store (`concept/village_warehouse.md`, `concept/village_growth.md`, 2026-09-20)
+
+Reported live with the settlement card in shot: *"The villages population
+is declining but there still run around more NPCs than the number displays
+also there's still not enough food even though the warehouse is full"*.
+
+Three complaints, two bugs, and the second one explains the first.
+
+### ✅ The village was fed on paper and its people could not eat
+
+Both halves of *"not enough food even though the warehouse is full"* were
+true at once, and the two halves of the codebase disagreed.
+
+A settlement's food **assessment** counts every `StructureStock` standing
+in its chunk (`_settlement_structure_stocks` → `SettlementFood.carrying_
+capacity`), so the grain a carter hauls in really is food the village has.
+An individual villager's **meal** came from `STRUCTURE_MEAL_SOURCE_IDS` —
+a hand-written list of `bakery` and `storage`, written before the
+warehouse existed and never grown to include it. A full warehouse fed
+nobody.
+
+Pinned by the behaviour rather than by the list, because the list is
+exactly how it drifted: *what the settlement counts as food is what its
+people can eat* (`test_earth_chunk_manager_village_meals.gd`).
+
+### ✅ A household that left kept its house, and that froze the village
+
+*"Population 1 (10 housed)"* is impossible on its face — you cannot have
+ten of one household under roofs.
+
+`_record_household_departure` appends an `npc_departed` event and
+**releases nothing**: no roof, no villager, no household record.
+`_households_in_settlement` then stops counting that household while the
+house it built still names it as owner, so `VillageCensus` met roofs whose
+owners were not on the roster it was handed and counted them among "ours"
+— against the contract `VillageAssembly` states in its own argument list,
+*"housed_count — how many of THEM have a roof"*.
+
+The bookkeeping error froze the village solid, which is the part that
+mattered, and it is the reported decline:
+
+- `housed_count >= household_count` tells `VillageGrowth.next_building`
+  there is nobody left to house → **no house is ever raised again**.
+- `spare_house_capacity = capacity - housed_count` tells
+  `VillageImmigration` there is no room → **nobody ever moves in again**.
+
+A village carrying ghost owners could only lose people. Counting just the
+roster restores both gates, and a roof whose owner has left is room the
+village may grow into again.
+
+### 🚧 The villagers you can see are a snapshot; the card is live
+
+*"there still run around more NPCs than the number displays"* is **not
+fixed**, and is named in `village_growth.md` rather than implied.
+`VillageRenderer._population_for` reads the real roster — but only when
+the chunk is rendered. Nothing spawns a villager when a household arrives
+mid-session and nothing removes one when a household departs, so the two
+drift apart until the chunk reloads. Measured with
+`tools/probe_village_population.gd` on a real village: at load the card
+says `Population 10 (10 housed)` and exactly 10 villager markers stand
+there — **they agree**, so the divergence is drift during play, not a
+constant offset. Closing it means spawning and despawning villagers live,
+which is a change to how a village is rendered rather than a counting fix.
+
+That probe also prints the pressure that starts the whole chain: a fresh
+village loads at `Food feeds 0 of 10`, `Happiness 29% (worst: food)`, with
+no building holding any food at all.
+
+**Honest limit on all of this**: the two fixes are verified by their own
+tests and by the code path, not by watching the reported save recover —
+that state could not be reproduced in a probe.
+
+Tests: `test_village_census.gd` 12/12 (+3 new),
+`test_earth_chunk_manager_village_meals.gd` 5/5 (new),
+`test_village_growth.gd` 18/18, `test_village_immigration.gd` 16/16,
+`test_village_assembly.gd` 39/39, `test_settlement_state.gd` 14/14,
+`test_npc_economy.gd` 80/80,
+`test_earth_chunk_manager_chain_logistics.gd` 14/14,
+`test_settlement_food.gd` 29/29. `test_earth_chunk_manager_bread_chain.gd`
+stays 10/11 — `test_spare_hands_gather_building_material_between_
+assessments`, the same pre-existing failure already A/B'd and recorded
+above.
