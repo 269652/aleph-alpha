@@ -3830,7 +3830,7 @@ func step_settlements(delta_seconds: float) -> void:
 		# (docs/concept/traveling_merchants.md) -- BEFORE the build and
 		# immigration steps, so gold that arrives this tick is gold the
 		# village can act on this tick.
-		_step_merchant_visits(settlement_id, market)
+		_step_merchant_visits(settlement_id, market, village_market)
 		# A fed village with room takes a household in, BEFORE the build
 		# step: a newcomer arriving this tick is owed a house this tick,
 		# not one assessment later.
@@ -4852,7 +4852,7 @@ var _settlement_merchant_carry: Dictionary = {}
 ## Runs for loaded and UNLOADED settlements alike, unlike immigration: it
 ## needs only the market's own stock, which is persisted, so a village goes
 ## on trading while the player is away.
-func _step_merchant_visits(settlement_id: String, market) -> void:
+func _step_merchant_visits(settlement_id: String, market, village_market = null) -> void:
 	if market == null:
 		return
 	var reserved := _construction_reserve_for(settlement_id)
@@ -4864,9 +4864,44 @@ func _step_merchant_visits(settlement_id: String, market) -> void:
 	# Reported as "way too much food and the NPCs don't have an income",
 	# which is one fault, not two.
 	var shelves: Array = _settlement_structure_stocks(settlement_id)
-	var views: Array = [market.stock]
+	# The LIVE market first, then the persisted ledger, then the shelves.
+	#
+	# `market` here is _market_store's persisted emergence Market, and the
+	# comment beside its lookup in step_settlements says what that means:
+	# "live play essentially never stocks that one". The villagers' own
+	# VillageMarket is where the food they gathered actually is. Measured
+	# with it missing (tools/probe_village_famine.gd): purse 0.0 at every
+	# sample of a 1200-second watch.
+	var views: Array = []
+	if village_market != null:
+		views.append(village_market.stock)
+	views.append(market.stock)
 	for shelf in shelves:
 		views.append(shelf.stock)
+	# And the LARDER. `reserved` already holds back what the village's next
+	# BUILDING needs; nobody was holding back what its PEOPLE eat, so a
+	# merchant carried off the food and left the gold. Measured
+	# (tools/probe_village_famine.gd): purse climbing 21 -> 24 -> 25 with
+	# market food 0 at every sample, and the village dead by t=900.
+	#
+	# The cover is DERIVED, not picked: he calls at most VISITS_PER_DAY
+	# times a day when a village is barely worth the detour, so 1 /
+	# VISITS_PER_DAY days is exactly the longest a village may have to wait
+	# between sales -- the food it must still have when he next appears.
+	var census := _household_store.estate_census(_households_in_settlement(settlement_id))
+	if not census.is_empty():
+		var cover_days := 1.0 / MerchantVisit.VISITS_PER_DAY
+		var season := SeasonCycle.new().season_at(_world_age_seconds)
+		var eaten: float = float(
+			EstateConsumption.demand_for(census, cover_days, season)
+				.get(VillageEstates.FOOD_KIND_TOKEN, 0.0)
+		)
+		if eaten > 0.0:
+			var larder := SettlementSurplus.larder_reserve(
+				views, _merchant_food_ids(), int(ceil(eaten))
+			)
+			for item_id in larder:
+				reserved[item_id] = int(reserved.get(item_id, 0)) + int(larder[item_id])
 	var surplus := SettlementSurplus.combined(views)
 
 	var result: Dictionary = MerchantVisit.arrivals(
@@ -4884,14 +4919,39 @@ func _step_merchant_visits(settlement_id: String, market) -> void:
 	# warehouse fish and taking them out of the market would invent goods in
 	# one place and destroy them in another.
 	var plan: Array = SettlementSurplus.allocate(sale["bought"], views)
-	var from_market: Dictionary = plan[0]
+	var next := 0
+	if village_market != null:
+		var from_village: Dictionary = plan[next]
+		for item_id in from_village:
+			village_market.remove_stock(str(item_id), float(from_village[item_id]))
+		next += 1
+	var from_market: Dictionary = plan[next]
 	for item_id in from_market:
 		market.remove_stock(str(item_id), float(from_market[item_id]))
+	next += 1
 	for index in shelves.size():
-		var taken: Dictionary = plan[index + 1]
+		var taken: Dictionary = plan[next + index]
 		for item_id in taken:
 			shelves[index].remove_stock(str(item_id), int(floor(float(taken[item_id]))))
-	NpcEconomy.deposit_to_purse(market, float(sale["paid"]))
+	# Into the purse the WAGE is drawn from. The purse is metadata on a
+	# market OBJECT (NpcEconomy._set_purse), and every villager reads theirs
+	# off the live VillageMarket -- so paying the persisted ledger put the
+	# gold somewhere nobody could ever spend it.
+	var purse_market = village_market if village_market != null else market
+	NpcEconomy.deposit_to_purse(purse_market, float(sale["paid"]))
+
+
+## The food on the merchant's own buy list, in the order he would take it.
+##
+## Read off BUY_LIST and the real ItemCatalog rather than listed here, so a
+## crop added to one is held back by the other without a second table to
+## keep in step.
+func _merchant_food_ids() -> Array:
+	var ids: Array = []
+	for item_id in MerchantVisit.BUY_LIST:
+		if _item_catalog.kind_of(item_id) == "food":
+			ids.append(item_id)
+	return ids
 
 
 ## What this village is SAVING FOR: item_id -> whole units its own next

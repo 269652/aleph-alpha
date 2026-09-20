@@ -20,7 +20,25 @@ const ConstructionCatchup = preload("res://src/world/construction_catchup.gd")
 ## real output of a producer occupation (NpcProduction), of butchering, or
 ## of the sawmill's own chain -- nothing the village cannot make, and
 ## nothing it makes that he refuses.
-const BUY_LIST: Array[String] = ["beam", "plank", "hide", "wood", "fish", "meat", "fruit"]
+## MEASURED addition (tools/probe_village_famine.gd, with its purse and
+## wallet columns): purse 0.0 and wallets 0 at EVERY sample, in a village
+## holding 38 sellable food in its market and 187 across its shelves. He
+## was offered that stock on every settlement step and refused all of it.
+##
+## The list was beam/plank/hide/wood/fish/meat/fruit while a village's
+## fields grow herb/carrot/potato/wheat (VillageCropChoice.SOWABLE) -- the
+## two sets did not intersect AT ALL. Once gold had one faucet and it was
+## this merchant, that meant the faucet could never open: no sale, no
+## purse, no wage, no meal, and a village starving on top of its own
+## harvest. Seven of ten died inside 300 seconds.
+##
+## So the real crops are on it, and
+## test_a_merchant_buys_every_crop_a_village_can_be_told_to_grow fails if a
+## crop is ever added that he will not take.
+const BUY_LIST: Array[String] = [
+	"beam", "plank", "hide", "wood", "fish", "meat", "fruit",
+	"herb", "carrot", "potato", "wheat",
+]
 
 ## The base timber unit every sawn price is derived from, and the cheapest
 ## thing on the list.
@@ -53,6 +71,14 @@ const FARM_GATE_PRICES := {
 	"fish": LOG_PRICE,
 	"meat": LOG_PRICE,
 	"fruit": LOG_PRICE,
+	# The field crops, at exactly what the raw food already here fetches:
+	# raw produce is raw produce, and preparing it is what adds the value
+	# (see this table's own doc comment). Test-pinned against `fruit`
+	# rather than written as a second number.
+	"herb": LOG_PRICE,
+	"carrot": LOG_PRICE,
+	"potato": LOG_PRICE,
+	"wheat": LOG_PRICE,
 }
 
 ## How much a merchant can carry away in one visit, in whole units. Finite

@@ -279,3 +279,47 @@ func test_the_merchants_day_is_the_day_the_village_lives_in():
 		MerchantVisit.SECONDS_PER_DAY, 60.0,
 		"the same day NpcMarker's schedule, the ecosystem step and the day/night cycle run on"
 	)
+
+
+# -- he must buy what a village actually makes ----------------------------
+#
+# MEASURED (tools/probe_village_famine.gd, with the purse and wallet
+# columns): purse 0.0 and wallets 0 at EVERY sample, in a village holding
+# 38 sellable food in its market and 187 across its shelves. The merchant
+# was being offered the stock every settlement step and refusing all of it.
+#
+# BUY_LIST was beam/plank/hide/wood/fish/meat/fruit. A village's fields
+# grow herb/carrot/potato/wheat (VillageCropChoice.SOWABLE). The two sets
+# did not intersect AT ALL, so the only faucet for gold could never open,
+# so nobody could buy a meal, so they starved standing on food.
+
+const VillageCropChoice = preload("res://src/gameplay/village_crop_choice.gd")
+
+
+## The rule, generalised so the next crop cannot reintroduce the famine: a
+## village must be able to SELL what its own fields are told to grow.
+func test_a_merchant_buys_every_crop_a_village_can_be_told_to_grow():
+	var refused: Array = []
+	for crop_id in VillageCropChoice.sowable_crops():
+		if not MerchantVisit.BUY_LIST.has(crop_id):
+			refused.append(crop_id)
+	assert_eq(refused, [], "the fields grow what he will not buy: %s" % str(refused))
+
+
+## And every one of them has a real price, or he would take it for nothing.
+func test_every_crop_he_buys_fetches_something():
+	for crop_id in VillageCropChoice.sowable_crops():
+		assert_gt(
+			MerchantVisit.price_of(crop_id), 0,
+			"%s sells for nothing" % crop_id
+		)
+
+
+## Raw produce is priced like the raw food already on the list -- not above
+## it, since preparing food is what adds the value (see FARM_GATE_PRICES).
+func test_raw_produce_is_priced_like_the_raw_food_already_on_the_list():
+	for crop_id in VillageCropChoice.sowable_crops():
+		assert_eq(
+			MerchantVisit.price_of(crop_id), MerchantVisit.price_of("fruit"),
+			"%s is raw produce and fetches what raw produce fetches" % crop_id
+		)
