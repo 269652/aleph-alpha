@@ -161,7 +161,13 @@ func test_a_place_already_at_the_tier_is_short_of_nothing():
 
 
 func test_the_lowest_tier_asks_nothing_of_anybody():
+	# Two readings of "asks nothing", and both have to hold: no thresholds
+	# at all (the honest one -- a hamlet is what a place is when it has
+	# cleared nothing), and, if there ever are any, every dimension already
+	# at zero. Asserted directly as well as per-dimension, because on an
+	# empty dict the loop alone was a test that could never fail.
 	var short: Dictionary = SettlementCharter.shortfall_to(SettlementTier.HAMLET, 0, 0, 0)
+	assert_eq(short, {}, "a hamlet has no thresholds to be short of")
 	for dimension in short:
 		assert_eq(int(short[dimension]), 0, "a hamlet demanded %s" % dimension)
 

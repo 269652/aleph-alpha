@@ -48,7 +48,8 @@ func test_a_settlement_with_no_households_eats_nothing():
 ## NpcProduction.yield_per_second, integrated over the elapsed interval, so
 ## an offscreen villager gathers at exactly the rate an onscreen one does.
 func test_gathering_is_npc_productions_own_rate_over_the_elapsed_time():
-	var gathered: Dictionary = SettlementGranary.gathered_over(["hunter"], _region(0.0, 10.0, 0.0), 30.0)
+	var region = _region(0.0, 10.0, 0.0)
+	var gathered: Dictionary = SettlementGranary.gathered_over(["hunter"], region, 30.0)
 	assert_almost_eq(
 		float(gathered["meat"]),
 		NpcProduction.new().yield_per_second("hunter", region, Vector2.ZERO) * 30.0, 0.0001

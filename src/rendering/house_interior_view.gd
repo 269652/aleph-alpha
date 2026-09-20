@@ -93,8 +93,14 @@ var _light_glows: Array = []  # MeshInstance2D per light cell, in template order
 var _tile_size := 16
 var _torch_glow := TorchGlow.new()
 ## The villager standing in this room, or null when nobody is home (see
-## place_resident) -- a child of this view, so it is freed with it.
+## place_resident) -- a child of this view, so it is freed with it. Always
+## _occupants[0] when there is a group (see place_occupants), so the indoor
+## Talk verb and World's own prompt keep reading one field.
 var _resident: Node2D = null
+## Everybody standing in this room, in the order they were placed. A house
+## holds exactly one (place_resident); a mage guild holds several
+## (docs/concept/mage_guild.md -- "multiple mages hang around inside").
+var _occupants: Array = []
 ## What stands on each cell right now: local cell -> furniture id, both the
 ## template's own pieces and whatever the player placed (see set_furniture)
 ## -- what furniture_at answers.
@@ -275,7 +281,99 @@ func place_resident(identity: NpcIdentity) -> Node2D:
 	add_child(resident)
 	resident.present(identity, INTERIOR_COLLISION_LAYER)
 	_resident = resident
+	# Kept in the group too, so occupant_identities/occupant_positions
+	# answer for a one-villager house exactly as they do for a guild, and
+	# a later place_occupants clears this one rather than leaving a ghost
+	# standing in the room.
+	_occupants = [resident]
 	return resident
+
+
+## Every cell somebody may stand on: open floor with nothing standing on
+## it, and never the doorway -- the door has to stay clear or there is no
+## way back out. Sorted, so a room always seats a group the same way.
+##
+## Read off _floor_cells/_furniture rather than from a second table, so a
+## piece the player drops on a cell takes that cell out of circulation for
+## free.
+func standing_cells() -> Array:
+	var cells: Array = []
+	for local in _floor_cells:
+		if local == door_cell or _furniture.has(local):
+			continue
+		cells.append(local)
+	cells.sort_custom(func(a, b): return a.y < b.y if a.y != b.y else a.x < b.x)
+	return cells
+
+
+## Stands a whole group up at once, replacing whoever was standing here.
+##
+## The FIRST of them takes the template's own resident cell and becomes
+## this room's `_resident`, so every existing single-occupant reader --
+## resident_identity, resident_position, the indoor Talk verb, World's
+## prompt -- keeps working with no knowledge that a group exists at all.
+## The rest are spread across the remaining standing cells rather than
+## bunched by the door: evenly spaced through the sorted list, so three
+## masters occupy a room instead of queueing in it.
+##
+## A group larger than the room stands up only as many as fit. Returns the
+## nodes actually placed.
+func place_occupants(identities: Array) -> Array:
+	for occupant in _occupants:
+		occupant.queue_free()
+	_occupants = []
+	_resident = null
+	if identities.is_empty():
+		return []
+
+	var free_cells := standing_cells()
+	if free_cells.is_empty():
+		return []
+	var wanted: int = mini(identities.size(), free_cells.size())
+
+	# The resident cell first if it is free, then the rest of the room
+	# sampled evenly -- index i of n walks the whole list instead of its
+	# first n entries.
+	var chosen: Array = []
+	if free_cells.has(resident_cell):
+		chosen.append(resident_cell)
+	var remaining: Array = []
+	for cell in free_cells:
+		if not chosen.has(cell):
+			remaining.append(cell)
+	var still_needed: int = wanted - chosen.size()
+	for i in still_needed:
+		var index: int = int(floor(float(i) * float(remaining.size()) / float(maxi(still_needed, 1))))
+		chosen.append(remaining[clampi(index, 0, remaining.size() - 1)])
+
+	var placed: Array = []
+	for i in wanted:
+		var occupant := InteriorResident.new()
+		occupant.position = (Vector2(chosen[i]) + Vector2(0.5, 0.5)) * _tile_size
+		occupant.z_index = INTERIOR_OCCUPANT_Z_INDEX
+		add_child(occupant)
+		occupant.present(identities[i], INTERIOR_COLLISION_LAYER)
+		_occupants.append(occupant)
+		placed.append(occupant)
+	_resident = _occupants[0]
+	return placed
+
+
+## Everybody standing in this room, in placement order.
+func occupant_identities() -> Array:
+	var identities: Array = []
+	for occupant in _occupants:
+		identities.append(occupant.identity)
+	return identities
+
+
+## Where each of them is standing, in this view's own coordinates (the same
+## space as InteriorAvatar.position), in placement order.
+func occupant_positions() -> Array:
+	var positions: Array = []
+	for occupant in _occupants:
+		positions.append(occupant.position)
+	return positions
 
 
 ## Who is home: the placed resident's NpcIdentity, or null when the room is

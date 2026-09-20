@@ -287,8 +287,10 @@ write it in the first place.
 - Does scroll-learning need a coarser raw level/skill-point floor on top of
   per-atom unlocks, or is "every atom unlocked, every param in-cap" a
   sufficient requirement on its own?
-- Exact station-tier thresholds for compiling (or whether compiling needs a
-  station at all vs. being available from any spell-editor UI).
+- ~~Exact station-tier thresholds for compiling (or whether compiling needs a
+  station at all vs. being available from any spell-editor UI).~~ **Answered
+  2026-09-19** below: it needs a station, and the station is the `mage_guild`
+  a settlement may only raise at CITY tier.
 - Can an NPC "study" a scroll the same way a player does, feeding
   [npc.md](npc.md)'s instruction economy — an NPC mage that learns spells
   from what it's traded, not just what it's scripted with?
@@ -368,3 +370,185 @@ Open questions:
 - Do reacting atoms (fire + frost → steam, per this doc's own open question
   on elemental interactions above) need a third sheet for the reaction
   product itself, on top of each reacting atom's own sheet? Not decided.
+
+---
+
+## Brainstorm extensions (2026-09-19)
+
+### The mage guild is the compile station — and a city is what holds one
+
+Answers this doc's own standing open question from 2026-08-24: *"Exact
+station-tier thresholds for compiling (or whether compiling needs a station
+at all vs. being available from any spell-editor UI)."*
+
+**It needs a station, and the station is a chartered building.**
+[settlement_charter.md](settlement_charter.md) already builds the gate: a
+`mage_guild` may only be raised by a settlement that has reached CITY tier,
+which `settlement_tier.gd` measures as households *and* active institutions
+*and* production diversity, all three crossed together. That was built as a
+progression system whose currency is somebody else's prosperity. This
+section is the other half of that trade — the part that says what the
+player actually *gets*.
+
+The two docs need each other to make sense. A gate with nothing behind it
+is a locked door in a field; a compile station available from any menu
+makes the charter ladder pointless. Putting the station behind the charter
+means **the way into higher magic is through a village you helped grow**,
+not through a level-up. That is the single design claim this section makes,
+and everything below is its mechanism.
+
+**Why a station at all, rather than a spell-editor UI anywhere.** The three
+gates this doc already names are deliberately independent — Layer 0 decides
+what you may *write*, the compilation gate what *fixing it* costs, Constraint
+layer 1 what *casting* costs. A station adds a fourth axis that none of the
+three can express: **where**. Skill is yours, gold is yours, mana is yours;
+a guild belongs to a *place*, and a place can be helped, neglected, or lost.
+That makes the magic system reach into the settlement economy rather than
+sitting beside it. It is also exactly the pattern [crafting.md](crafting.md)
+already proved with `crafting_station.gd` and the furnace/campfire heat-
+source gate — a real structure you must be standing near, checked with the
+same `has_structure_near` proximity every other station interaction uses.
+
+### Tuition: what a guild sells before the editor exists
+
+There is no spell-authoring UI yet — `spell_book.gd` is a fixed table of
+pre-authored spells, and says so in its own header. The honest first trade
+for a guild is therefore not compiling (there is nothing to compile from)
+but **teaching**: gold for a spell out of the world's catalogue that you do
+not yet know.
+
+This is not a placeholder bolted on beside the compile gate. It is the
+**access layer** the compile gate was always going to need and which does
+not exist in code today, and it is worth stating why that layer is the real
+missing piece:
+
+- **A known-spell set has to exist before anything can grant one.**
+  `SpellBook.has()` today conflates two different facts — *this spell exists
+  in the world* and *you can cast it*. Every access mechanism this doc has
+  brainstormed (scroll-learning, compiling, an NPC studying a traded scroll)
+  is a write to a per-caster known set that nothing currently has. Splitting
+  catalogue from known set is the prerequisite for all of them.
+- **A gold-for-knowledge transaction has to exist.** The compile gate is
+  priced in gold, paid once, per design. Nothing in the codebase yet charges
+  gold for a permanent capability at all.
+- **A structure gate on magic has to exist.** Named above; nothing checks it.
+
+Tuition is those three, built for the case where the AST is already
+authored. When the editor lands, compiling reuses all three unchanged and
+adds only its own price curve.
+
+**The catalogue is the world's; the known set is yours.** A caster starts
+knowing exactly one spell. That starting set is a pinned constant, not a
+comment, and it must contain whatever the cast key is bound to by default —
+a character who cannot cast the spell the game binds to their cast button is
+a bug, not a gate. Everything else in the catalogue is a purchase.
+
+**Tuition is priced as a purchase, not as a compile.** This matters and is
+not a shortcut. This doc already ruled, in the scrolls section, that *"the
+crafting gold cost is paid once, by the original author — never re-charged
+to learners"*: a learner buys a finished design, so charging them the
+author's exponential-in-LOC compile price would bill the same design twice.
+A purchase price is therefore **linear in the spell's derived power**, with
+the exponential reserved for the act of fixing a *new* design into a book:
+
+- **Power is `spell_cost.gd`'s `derived_base`** — the composition cost times
+  the delivery multiplier, the same number that already prices the mana of
+  every cast, and the same one the scrolls section already nominates for
+  pricing a vessel. No second measure of "how big is this spell" is invented
+  here.
+- **Rarity multiplies it, via the vocabulary that already exists.**
+  `rarity_tier.tier_from_complexity` maps that identical `derived_base` to a
+  tier, and `stat_multiplier` prices the tier — both already pure and
+  already test-pinned. A strictly monotonic price in power, kicked up a step
+  where the power crosses into a rarer band. Nothing about a spell's price
+  is typed in by hand.
+- **The gold-per-power anchor is a meal, read live from the shop.** A tuned
+  constant here would be an invented number. Instead the anchor is *how many
+  meals a point of spell power is worth*, multiplied by whatever
+  `shop.gd`'s catalogue actually charges for one. Price a spell in bread and
+  it stays honest when bread moves: the anchor is a ratio between two things
+  the game already prices, not a third price pulled from nowhere.
+
+**What the anchor constant encodes is a weight class, not a price**, and
+three claims asserted against the live `Shop.CATALOG` are what stop it being
+a matter of taste: the cheapest lesson in the world costs more than any tool
+or weapon a merchant sells; the cheapest lesson lands between the cheapest
+and the dearest house blueprint; and the dearest lesson exceeds the dearest
+thing on any shelf. Together they admit roughly **10..39** meals per power
+unit and nothing outside — deliberately a **wide** band, because a weight
+class is a wide thing and a tight one would claim a precision this design
+does not have.
+
+The resulting scale, at the shop's current 4-gold meal, spans real ground:
+Farsight 123 gold (about a small-house blueprint), Minor Heal 128, Frost
+Lance 236 (about a cottage), and — only from an archmage, see
+[mage_guild.md](mage_guild.md) — Call Wisp at 785, more than twice the
+dearest thing any merchant stocks. Real money to a new character; a genuine
+expedition for the deep end. Every one of those numbers falls out of the
+formula; none is typed in.
+
+An earlier version of this section claimed the band was 10..20 and that *no*
+spell should cost more than the dearest shelf item. Both were true of a
+three-spell starter book and stopped being true the moment the catalogue
+grew real tier-3 magic — correctly so, since a lesson from an archmage
+should not be purchasable at a market stall. The claim moved rather than the
+number.
+
+### The refusal is the feature
+
+A guild that answers "no" is useless; a guild that answers **why** is a
+quest hook. Tuition refusals follow the same shape
+`settlement_charter.refusal_for` established — `{}` for "nothing is wrong",
+otherwise a dict naming the fact. A spell the world's catalogue does not
+hold is refused first and flatly, since there is nothing there to price;
+past that there are exactly three ways to be refused, each of which points
+somewhere:
+
+- **No guild within reach.** Points at the charter ladder: go find, or grow,
+  a city. The refusal carries the building id so the UI can name it.
+- **Already known.** Points at the rest of the catalogue.
+- **Short of the price.** Carries the price *and* the shortfall, so the
+  answer is "come back with 40 more gold", never a bare "you can't".
+
+A refusal is checked in that order and **never charges**: gold moves only on
+a learn that actually lands, the same conserving discipline
+`village_estates.md`'s baskets and `guild_relief.gd`'s chest already hold
+themselves to.
+
+[mage_guild.md](mage_guild.md) later added two more, for the same reason
+and in the same shape — `OUTSIDE` (you are not in the guild) and
+`NO_MASTER` (you are, and nobody here holds that tradition, which carries
+the school and depth to go looking for). The refusal order there is stated
+as a contract because each step is a precondition of the next.
+
+### Status
+
+- ✅ The mage guild is the compile station, gated at CITY tier
+  (`settlement_charter.gd`, shipped before this section).
+- ✅ Known spells are a per-caster set distinct from the world catalogue;
+  a caster starts with `SpellTuition.STARTING_SPELL_IDS` and casting an
+  unknown spell is refused (`spell_tuition.gd`, `scenes/player.gd`).
+- ✅ Tuition: price derived from `derived_base` × rarity multiplier ×
+  meal-anchored gold-per-power, refusal dict naming which gate failed,
+  gold charged only on success (`spell_tuition.gd`).
+- ✅ Learning is gated on **being inside** a real placed `mage_guild` that
+  has a master in residence who teaches the spell — see
+  [mage_guild.md](mage_guild.md), which took the teaching off the building
+  and put it on the people in it. An earlier version of this gate was
+  proximity (`has_structure_near`); standing beside a guild is now standing
+  outside it, and an apprenticeship is to a person rather than a building.
+- 🚧 **Compiling itself is still unbuilt** — there is no spell-editor UI and
+  so nothing to compile. `CRAFT_BASE`/`CRAFT_GROWTH`/per-tier LOC weights
+  from the 2026-08-24 section remain unimplemented. Tuition builds the
+  access layer they will sit on (known set, gold-for-knowledge, station
+  gate), not the price curve itself.
+- 🚧 **Scrolls and gems are still unbuilt.** Scroll-learning writes to the
+  same known set tuition now writes to, so the vessel is what is missing,
+  not the destination.
+- 🚧 **No spell-selection UI**, so the cast key still casts
+  `DEFAULT_CAST_SPELL_ID`. A learned spell is real, persisted and castable
+  through `cast_spell`, but nothing yet lets a player *choose* it at the
+  keyboard.
+- 🚧 **The guild has no interior trade UI**; `/learn` is the hand on it, the
+  same honest scoping every other station interaction in `player.gd` has
+  until an interaction UI exists.

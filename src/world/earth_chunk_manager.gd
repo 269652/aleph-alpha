@@ -211,6 +211,7 @@ const OccupationProduction = preload("res://src/emergence/occupation_production.
 const NpcIdentity = preload("res://src/world/npc_identity.gd")
 const SettlementTier = preload("res://src/emergence/settlement_tier.gd")
 const SettlementCharter = preload("res://src/emergence/settlement_charter.gd")
+const MageGuildRoster = preload("res://src/gameplay/mage_guild_roster.gd")
 const WorldBoss = preload("res://src/emergence/world_boss.gd")
 const WorldBossStore = preload("res://src/emergence/world_boss_store.gd")
 const WorldBossStorePersistence = preload("res://src/emergence/world_boss_store_persistence.gd")
@@ -3653,6 +3654,14 @@ func step_settlements(delta_seconds: float) -> void:
 		# step: a newcomer arriving this tick is owed a house this tick,
 		# not one assessment later.
 		_step_village_immigration(settlement_id, market, household_ids)
+		# A master decides to settle here (docs/concept/mage_guild.md
+		# mechanism 3), beside immigration and on the same player-felt
+		# clock, because it is the same kind of decision -- a person
+		# choosing to move to this place.
+		age_mage_guilds_in(
+			RegionalTrade.chunk_coord_of(settlement_id),
+			SETTLEMENT_STEP_INTERVAL / SECONDS_PER_SIMULATED_DAY
+		)
 		_step_settlement_construction(settlement_id, household_ids)
 		var capacity := _settlement_capacity(settlement_id, market, village_market)
 		var status := SettlementState.status_for(household_ids.size(), capacity)
@@ -14914,6 +14923,73 @@ func place_building(
 ## Mechanism 4 -- "It should be a real NPC pulling the cart, not an
 ## additional sprite").
 const WAREHOUSE_BUILDING_ID := "warehouse"
+
+
+# -- the mage guild fills with masters (docs/concept/mage_guild.md) ---------
+
+const MAGE_GUILD_BUILDING_ID := "mage_guild"
+
+## The ONE number a guild persists: how many simulated days it has stood
+## open. Everything else about who is inside is derived from this and the
+## building's own `seed` (see MageGuildRoster) -- there is no roster to
+## save, no master to serialise, and nothing that can drift from the thing
+## that generated it. A record written before guilds aged simply reads 0.0
+## and starts filling from the day this loads.
+const GUILD_DAYS_OPEN_KEY := "guild_days_open"
+
+
+## The building record placed at `origin_local`, with its own location
+## folded in the way buildings_in_chunk does -- {} when nothing is there.
+func building_record_at(chunk_coord: Vector2i, origin_local: Vector2i) -> Dictionary:
+	var chunk: Chunk = _loaded_chunks.get(chunk_coord)
+	if chunk == null or not chunk.buildings.has(origin_local):
+		return {}
+	var record: Dictionary = chunk.buildings[origin_local].duplicate()
+	record["chunk_coord"] = chunk_coord
+	record["origin_local"] = origin_local
+	return record
+
+
+## Every loaded mage guild stands open for `days` more simulated days.
+##
+## On the PLAYER-FELT clock (SECONDS_PER_SIMULATED_DAY), not the material
+## economy's 3600-second one, because a master deciding to move somewhere
+## is the same kind of decision VillageImmigration already measures on that
+## clock -- and a guild nobody can ever see fill is a gate, not a feature.
+## Loaded chunks only, the same honest limitation _step_village_immigration
+## already carries.
+func age_mage_guilds(days: float) -> void:
+	for chunk_coord in _loaded_chunks:
+		age_mage_guilds_in(chunk_coord, days)
+
+
+## The same, for ONE chunk. This is what the settlement step calls, and the
+## distinction is load-bearing rather than tidiness: the step runs once per
+## SETTLEMENT, so ageing every loaded guild from inside it would run a
+## guild's clock once per settlement in range -- three villages nearby and
+## every guild in the world fills three times too fast.
+func age_mage_guilds_in(chunk_coord: Vector2i, days: float) -> void:
+	if days <= 0.0:
+		return
+	var chunk: Chunk = _loaded_chunks.get(chunk_coord)
+	if chunk == null:
+		return
+	for origin_local in chunk.buildings:
+		var record: Dictionary = chunk.buildings[origin_local]
+		if String(record.get("id", "")) != MAGE_GUILD_BUILDING_ID:
+			continue
+		record[GUILD_DAYS_OPEN_KEY] = float(record.get(GUILD_DAYS_OPEN_KEY, 0.0)) + days
+
+
+## Who is in residence at this guild. [] for any building that is not a
+## mage guild, and [] for a guild nobody has come to yet -- correct and
+## deliberate, because the building is not the teacher.
+func masters_in_guild(record: Dictionary) -> Array:
+	if String(record.get("id", "")) != MAGE_GUILD_BUILDING_ID:
+		return []
+	return MageGuildRoster.master_seeds(
+		int(record.get("seed", 0)), float(record.get(GUILD_DAYS_OPEN_KEY, 0.0))
+	)
 
 
 ## Writes who lives in an already-placed building (see place_building's

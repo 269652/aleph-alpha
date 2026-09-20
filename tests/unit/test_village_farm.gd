@@ -904,3 +904,64 @@ func test_the_watering_call_always_comes_before_the_bed_dies():
 		plot.time_since_watered = plot.grace_seconds() * VillageFarm.WATER_BEFORE_WITHER_FRACTION + 0.01
 		assert_eq(VillageFarm.action_for(plot), "water", "seed %d" % seed_value)
 		assert_false(plot.is_withered(), "seed %d was already dead when it was called thirsty" % seed_value)
+
+
+# -- a field is sown before it is re-sown -----------------------------------
+#
+# Reported live with the field in shot: *"the NPC only sows 4 / 6 tiles"*.
+#
+# Measured before changing anything (tools/probe_village_farming.gd): every
+# field in the sample had exactly 6 cells, five of them worked and cycling
+# normally, and the SIXTH -- the last in the field's own order -- reported
+# "no marker, never tilled" after a full 600-second work block. Both farmers
+# in the village, the same bed each time.
+#
+# next_action scans from index 0 and returns the first plot wanting the
+# highest-priority kind. Ground nobody has tilled asks to be planted, and so
+# does a bed that was sown, ripened and harvested -- so once the earlier beds
+# start cycling, one of them is always an earlier "plant" than the ground at
+# the end, and the last bed is never broken at all. A farmer sows the FIELD.
+
+
+func test_ground_never_broken_is_sown_before_a_bed_that_has_already_carried_a_crop():
+	var harvested := _plot_in_state("empty")
+	assert_eq(
+		VillageFarm.next_action([harvested, null]), 1,
+		"a bed that has already given a crop was re-sown while bare ground sat unbroken"
+	)
+
+
+## ...whichever end of the field it sits at -- this is about which bed, not
+## about scan order.
+func test_the_unbroken_ground_wins_from_either_end_of_the_field():
+	assert_eq(VillageFarm.next_action([null, _plot_in_state("empty")]), 0)
+	assert_eq(VillageFarm.next_action([_plot_in_state("empty"), null]), 1)
+
+
+## Only among beds asking for the same thing. A ripe crop still comes first:
+## breaking new ground while wheat rots on the stalk is how a field yields
+## nothing, which is the failure the priority order exists for.
+func test_unbroken_ground_still_waits_for_a_ripe_crop_and_a_dying_bed():
+	assert_eq(
+		VillageFarm.next_action([null, _plot_in_state("ready")]), 1,
+		"harvest still beats breaking new ground"
+	)
+	assert_eq(
+		VillageFarm.next_action([null, _growing_plot(9999.0)]), 1,
+		"saving a dying bed still beats breaking new ground"
+	)
+
+
+## The whole field really does get broken, not just the first bed of it:
+## every cell of a fresh field is planted before any of them is planted
+## twice.
+func test_every_bed_of_a_fresh_field_is_broken_before_any_is_re_sown():
+	var plots: Array = [null, null, null, null, null, null]
+	for round in plots.size():
+		var index: int = VillageFarm.next_action(plots)
+		assert_gte(index, 0, "a field with bare ground in it always has work")
+		assert_null(plots[index], "bed %d was worked twice before the field was sown" % index)
+		# What tilling it does: the bed exists now, bare and waiting.
+		plots[index] = _plot_in_state("empty")
+	for plot in plots:
+		assert_not_null(plot, "a bed was left unbroken after a full pass of the field")

@@ -2304,6 +2304,8 @@ Three separate live complaints turned out to be the same problem: the HUD grew o
 
 All three rules and their known remaining gaps are specified in [docs/concept/hud.md](concept/hud.md); the pure parts are tested in `tests/unit/test_world_hud.gd`.
 
+✅ **The top-left strip split, and the HUD became columns of self-sizing cards** (asked directly: *"Can you overhaul and flesh out the Hud / UI so it's more polished"*). `$UI/DebugLabel` — one bare, unthemed `Label` at (8, 8), still carrying its `.tscn`-authored `"Loading..."` placeholder — held eight fields in a single `%`-formatted string and mixed two audiences: the clock, season, weather and movement mode a player plays with, and the FPS, lat/lon and sun elevation in degrees a developer debugs with. It is gone. Its player half is the **world-clock card**, top-right under the minimap, on the shared `UiTheme.panel_stylebox` card; its developer half is a **bottom-right diagnostics strip** hidden until the new rebindable `toggle_diagnostics` (F3) and **not even written** while hidden, so a player who never presses F3 pays nothing for it. `HudReadouts` (`src/ui/hud_readouts.gd`, new) holds the pure halves: `world_clock_lines`, `diagnostics_lines` and `day_phase`, which names what `Sun elev 41.3°` meant using the real civil-twilight boundaries (±6°) rather than clock hours — the clock hour of sunset moves by month and by latitude while the elevation does not. **Pillar 1 is finished**: the XP label, the land-sense readout, the death label, the health bar and the charge meter all moved onto the shared card (`UiTheme.compact_panel_stylebox`, new, for the slim bar-shaped ones), each hiding its **card** rather than its label so nothing leaves a blank card standing; and `_update_charge_meter` now goes through `world_hint_visible_for` — it was the last world-space floater not covered by it. **Two new readouts**: **condition chips** above the survival bars (`HudReadouts.condition_chips`) finally say out loud what `SurvivalMeters` has known since it was written — eight named states of which the HUD showed exactly one — with a severe state replacing its own warning rather than stacking with it, severity carried by the theme's existing gold/red pair, and nothing at all shown when nothing is wrong on dry land; and a **held-item card** above the hotbar (`HudReadouts.held_item_line`) showing the equipped item and its `ItemWear` grade, because nothing anywhere in the HUD showed wear and the only way a player learnt an axe was about to break was that it broke. **UI scale** (`src/ui/ui_scale.gd`, `UiTheme.build_theme(scale)`/`apply_scale`, a Settings → Interface slider, persisted in `[ui]`) applies to font sizes rather than to the `$UI` CanvasLayer — a CanvasLayer scales about its origin, so every bottom- and right-anchored card would walk off the screen. The **layout is the part that was learned rather than designed**: the first pass pinned each card's top *and* bottom the way every HUD element in this file already did, and rendering it at 1.75 (`tools/probe_hud_layout.gd`, new — it calls World's own builders and reparents the real `$UI` layer into a SubViewport, so what it renders cannot drift from what the game builds) showed the world-clock card clipping through Karma, the diagnostics strip running off the bottom of the screen, the four survival rows overrunning each other and 150px bars floating inside a 390px card. Every HUD card is now a child of one of three `VBoxContainer` columns, added via `_add_hud_card` so it sizes to its own content and hugs its column's screen edge, and anything whose height depends on a font size derives it (`_survival_row_height`). Verified by looking, at 0.75, 1.0 and 1.75. Specified in [docs/concept/hud.md](concept/hud.md) (pillar 4 and "Three columns, and why every card sizes itself"); tested in `tests/unit/test_hud_readouts.gd`, `test_ui_scale.gd`, `test_ui_theme.gd`, `test_settings_overlay_interface.gd` and `test_keybindings.gd`. 🚧 **Not verified in a live session** — every check is headless: unit tests plus offscreen renders. Nobody has yet pressed F3, dragged the scale slider or watched a chip appear in a running game.
+
 ✅ **Movement ripples are back on the river surface.** Reported as *"fishes don't produce interferencing ripples anymore in the new unified river water ... players and animals neither ... the old ripples looked nice so we want them back adapted to new water shader"*. Nothing in the ripple machinery had broken: `FishMarker._step_water_ripple`, `Player._step_water_ripples` and `CreatureMarker._step_water_ripple` all still record disturbances on their old schedules, and `WaterShader` still ages and draws them. The cause was a rendering boundary. `EarthChunkManager._paint_water_overlay` is **ocean only** now ("rivers used to be painted here too... the flow overlay is now the river's entire water surface" — its square tiles under the smooth bank curve were the bug it was removed for), and the opaque `RiverFlowShader` that replaced it had no disturbance term at all. Every river wake was being recorded, culled, aged and drawn into a layer that river tiles no longer have. **One buffer, two surfaces**: `WaterShader` keeps ownership of the ring buffer and now exposes what it pushes (`padded_disturbance_positions`/`_ages`/`disturbance_count`); `EarthChunkManager._mirror_disturbances_to_the_river` fans the same three uniforms onto the river material, so there is one lifetime, one cap and one `DISTURBANCE_RADIUS_TILES` cull rather than two that can drift. The packet is the sea's **character for character** (`RiverFlowShader.ripple_packet`, tuning imported from `WaterShader` rather than copied) because a wake must read the same in a river as in the ocean — and signed, so overlapping wakes genuinely interfere rather than only piling up. What is *adapted* is the river part: the ring's centre is carried downstream at the surface pattern's own drift rate (`ripple_center`), since in a current a ripple is concentric about a point that moves with the water; and it is **drawn rather than glowed**, entering the contour field the current lines trace (so the lines bow into arcs and close into rings) and the stroke strength (so crests ink in the existing hand, inheriting the adaptive ink, the moonlight lift and the alpha clamp). It deliberately never touches `frag_across` — that field is the channel's geometry, and a passing fish must not narrow the river or dry a patch of it — and never the cel body, which stays static reconstructed depth for the reason `test_the_body_cels_are_static_depth_only` exists. Both gains are bounded from both sides against the packet's own **scanned** peak rather than an eyeballed amplitude. **Verified where the symptom actually lives**: a new real-GPU test renders two blocks of the same river, quiet and disturbed, *in the same frame* — sharing the frame is the whole experiment, because this surface advects continuously and a first attempt comparing across frames passed with the ripple term deleted outright; same-frame, the difference measures 0.00% with the ripple disabled and a real local ring with it. Both readback tests in `test_river_flow_render_smoke.gd` now skip explicitly under `--headless` (no GPU target, `get_image()` returns null, and the resulting engine error fails the test on its own) — the far-world one had been reporting a shader failure on every headless run for a reason that had nothing to do with the shader. **And fish really are among the causes** — this entry first shipped with a caveat saying they were not, on the grounds that `FishRenderer` spawns on ocean-biome cells only and a river never changes `biome_at_global`'s elevation-derived result. Reported back flatly ("the rivers are full of fish"), and the caveat was wrong: it came from reading the spawn gate and stopping there. Sweeping the apron band around every curated course measures **64 cells that qualify for fish, 53 of them also painted by the river-flow overlay**. The two decisions ask different questions — fish spawn by BIOME (the coarse elevation source puts real reaches below sea level: broad water, lakes a course runs through, the last stretch to a mouth), while `_paint_river_flow_overlay` paints by DISTANCE to the course and consults no biome at all. So those reaches are ocean biome *and* under the opaque surface at once: a second, independent path into the identical symptom, covered by the same fix, since the buffer now reaches the river material regardless of which cells the swimmers are on. Pinned by `test_a_river_reach_can_be_both_fish_water_and_under_the_flow_overlay` — originally at one measured Rhine coordinate rather than by re-sweeping ten thousand cells per run, though that coordinate later stopped reading as ocean biome, the Rhine itself was separately removed from the curated roster, and an exhaustive re-sweep (2026-09-13, `tools/probe_fish_river_fixture.gd`) found no real map coordinate satisfies both conditions any more on either roster, so the test now forces the ocean side with a synthetic hydrology bake at a fixture re-anchored to the Danube instead (see [docs/concept/rivers.md](concept/rivers.md)'s "Fish really do live under the river surface" update). Freshwater fishing as a *designed* mechanic (river species, spawning rules, a reason to fish a stream over the sea) is still ⬜ Not started — what exists is incidental. Specced in [docs/concept/rivers.md](concept/rivers.md)'s "Movement ripples in the river" and "Fish really do live under the river surface"; tested in `tests/unit/test_river_flow_shader.gd`, `tests/unit/test_river_flow_render_smoke.gd`, `tests/unit/test_fish_renderer.gd` and `tests/unit/test_earth_chunk_manager.gd`.
 
 ✅ **Ripples, eddies and lines now all move at the water's one visible speed.** Reported in three steps: *"Can you make the river ripples move downstream at water speed?"*, *"eddy swirls also don't move downstream.. a wobble stays in place instead of flowing with the river"*, and *"Ripples now do move downstream, but the lines should move at same speed."* One cause: the drawn surface is moved by TWO terms — the two-phase drag translates the field `ADVECT_STRENGTH` cells every `1/ADVECT_RATE` seconds regardless of the reach (~19.8 world px/s) and the linear drift adds `DRIFT_PX_PER_MPS` per m/s (10 at a typical 0.5 m/s reach) — but the ripple centre was carried by the drift alone and the eddy field by 0.6 of it, so a wake moved at a third of the water and the whirls at a fifth, both reading as standing still while the pulses streamed past. Now one function, `surface_px_per_s` (GLSL + CPU mirror in `RiverFlowShader`), is the water's visible downstream speed, gated by the same still step the strokes use, and both the ring centre and the eddy sample coordinate ride it; `BEND_DRIFT_FRACTION` goes 0.6 → 1.0 so the lines move at exactly the speed the ring is carried at (a deliberate divergence from the "boils lag the surface" grounding, noted in `rivers.md`; the fraction stays as the knob). The surface still deforms through the whirls because the phase drag stretches away from that steady translation and resets. `DRIFT_PX_PER_MPS` and the advection constants are untouched — the surface streams as before, only what is carried on it caught up. Pinned in `test_river_flow_shader.gd` (158/158): the speed's composition and still gate, the shader wiring by source, ring carry == eddy migration == the shared speed, and legibility floors at a 0.5 m/s reach (a wake carried >3.5 tiles in its lifetime, whirls crossing a tile in two seconds). GPU readback smoke test still green. See `rivers.md` "One visible water speed".
@@ -4520,9 +4522,13 @@ brainstorm extensions (atom domains beyond the physical, material-component
 cost, caster self-danger, complexity-priced spell gems) have a pure/tested
 foundation; most of the non-physical atoms now have a real mechanical hook
 too (see Primitive Effects Catalog below) — caster self-danger specifically
-is still unwired (see its own row). The 2026-08-24 brainstorm (gold cost to
-compile a spell, exponential in size; sealed gems vs. teachable scrolls) is
-still design-only — no code exists for it yet.
+is still unwired (see its own row). The 2026-08-24 brainstorm's own price
+curves (gold cost to compile a spell, exponential in size; sealed gems vs.
+teachable scrolls) are still design-only — but the **access layer** they
+sit on is now real: a per-caster known-spell set distinct from the
+catalogue, a gold-for-knowledge transaction, and a structure gate on magic
+(the mage guild). See **Spell Tuition** below and `concept/magic.md`'s
+2026-09-19 section.
 
 - **Spell Cast Runtime** (large) — ✅ Done (MVP) — see `concept/
   spell_runtime.md` (new). A player presses a real bound key (`cast`,
@@ -4551,6 +4557,46 @@ still design-only — no code exists for it yet.
   computed but not enforced as an actual delay, and the "cast" key always
   casts the same fixed spell (no selection UI).
 
+- **Spell Tuition / the mage guild's trade** (medium) — ✅ Done — see
+  `concept/magic.md`'s 2026-09-19 section, which answers that doc's own
+  standing open question ("whether compiling needs a station at all"):
+  it does, and the station is the `mage_guild` `settlement_charter.gd`
+  gates at CITY tier. `spell_tuition.gd` (pure) splits **the world's
+  catalogue from a caster's known set** — `SpellBook.has()` used to
+  conflate "this spell exists" with "you can cast it", so nothing could
+  ever GRANT a spell. A character is born with `STARTING_SPELL_IDS`
+  (test-pinned to contain whatever the cast key binds to) and buys the
+  rest from a guild. **Nothing about a price is typed in**: power is
+  `spell_cost.derived_base` (the same number already pricing the cast's
+  mana), the rarity kick is `rarity_tier.tier_from_complexity` against
+  that identical score, and the gold-per-power anchor is read off
+  `shop.gd`'s live meal price. The one free constant,
+  `MEALS_PER_POWER_UNIT`, encodes a falsifiable design claim asserted
+  against the live shop catalogue — *a spell is a permanent capability, so
+  it sits in the weight class of a building blueprint* — which admits
+  roughly 10..20 and nothing outside; Minor Heal lands at 128 gold, Frost
+  Lance at 236. Priced **linear in power, not exponential in LOC**,
+  because magic.md already ruled the author's compile cost is paid once
+  and never re-charged to learners. The refusal is the feature: `{}` when
+  nothing is wrong (the shape `settlement_charter.refusal_for`
+  established), otherwise the reason — the money case carrying the price
+  AND the exact shortfall, the standing case the building id. Gold moves
+  only on a lesson that lands. `Player.learn_spell` gates it on a real
+  placed `mage_guild` within reach (the same `_has_structure_near_player`
+  proximity every station interaction already uses), `cast_spell` refuses
+  a spell this character never learned (spending nothing, and saying so
+  rather than blaming mana), and the known set is persisted beside karma
+  and the life count. `/learn` is the hand on it while no guild
+  interaction UI exists. A real city raises its own guild — `VillageAssembly`'s
+  civic petition already walks `CHARTERED_BUILDING_IDS` — so the whole
+  errand is reachable in ordinary play. Tests: `test_spell_tuition.gd`
+  (32), `test_learn_command_clarity.gd` (8), plus 13 additions to
+  `test_player.gd`. ⬜ Still open (named in the doc): compiling itself has
+  nothing to compile from until a spell-editor UI exists; scrolls and gems
+  are unbuilt (scroll-learning writes to this same known set, so the
+  vessel is what is missing, not the destination); no spell-selection UI,
+  so the cast key still casts `DEFAULT_CAST_SPELL_ID`; and the guild has
+  no interior trade UI.
 - **Spellcrafting DSL** (huge) — 🚧 Partial — the pure `RefCounted` pipeline
   modules (`spell_atom_catalog.gd`, `spell_cost.gd`, `spell_parser.gd`) now
   have a real runtime consuming them (`spell_executor.gd` and friends — see
@@ -27670,12 +27716,11 @@ entry cannot quietly escape them. Found by adding these two.
 
 ### Stated rather than papered over
 
-- 🚧 **Neither chartered building DOES anything yet.** The trade hall is the
-  natural home of the estate relief chest and does not hold it; the mage
-  guild is the compile station and compiling has no structure gate in code
-  at all. Both are real buildings behind a real gate, and what happens
-  inside them is the next pass. A building that only exists to be unlocked
-  is half a feature.
+- ✅ **The mage guild does something** — it teaches. See *A mage guild
+  teaches* below; the charter is no longer a locked door in a field.
+- 🚧 **The trade hall still does nothing.** It is the natural home of the
+  estate relief chest and does not hold it. A building that only exists to
+  be unlocked is half a feature.
 - 🚧 **Neither has art** — both draw the procedural placeholder, which is
   what that path is for, and pick up a sheet the moment one lands.
 - 🚧 **The player's own build hand does not consult the gate yet.**
@@ -27694,3 +27739,426 @@ Tests: `test_settlement_charter.gd` (22), plus additions to
 concurrent changes; the patch was rewritten against what is actually there
 rather than against what was remembered, per CLAUDE.md's own warning about
 the live checkout.
+
+## A mage guild teaches (`concept/magic.md`, 2026-09-19)
+
+The charter shipped a mage guild only a city may raise, and recorded its own
+honest gap: *"Neither chartered building DOES anything yet."* A gate with
+nothing behind it is a locked door in a field. This is what is behind it.
+
+**It answers magic.md's own standing open question** from 2026-08-24 —
+*"whether compiling needs a station at all vs. being available from any
+spell-editor UI"* — with: it needs one, and the station is the chartered
+mage guild. The two docs need each other. A compile station reachable from
+any menu makes the charter ladder pointless; a gate with nothing behind it
+is the same. Together they say **the way into higher magic is through a
+village you helped grow**, not through a level-up.
+
+### What was actually missing was the access layer, not a price curve
+
+The 2026-08-24 brainstorm priced compiling. It could not be built, and not
+because the formula was hard — because three facts had no home in the code:
+
+1. **A known-spell set distinct from the world's catalogue.** `SpellBook.
+   has()` conflated *this spell exists* with *you can cast it*, so nothing
+   could ever GRANT a spell. Scroll-learning, compiling and npc.md's
+   "an NPC that studies a traded scroll" are all writes to a per-caster set
+   that did not exist.
+2. **A gold-for-knowledge transaction.** Nothing in the game charged gold
+   for a permanent capability at all.
+3. **A structure gate on magic.** Nothing checked where you were standing.
+
+Tuition is those three for the case where the AST is already authored —
+there is no spell-editor UI, so there is nothing to compile *from*, and
+`spell_book.gd` says as much in its own header. When the editor lands,
+compiling reuses all three unchanged and adds only its own curve.
+
+### Nothing about a price is typed in
+
+- **Power** is `spell_cost.derived_base` — the number that already prices
+  every cast's mana, and the one magic.md's scrolls section already
+  nominates for pricing a vessel. No second measure of "how big is this
+  spell" was invented.
+- **Rarity** multiplies it through `rarity_tier.tier_from_complexity` +
+  `stat_multiplier`, both already pure and already test-pinned, against
+  that identical score.
+- **The gold-per-power anchor is a meal, read live from `shop.gd`.** A
+  tuned constant would have been an invented third price; a ratio between
+  two things the game already prices is not.
+- **The one free parameter, `MEALS_PER_POWER_UNIT = 16`, is pinned by the
+  design claim it encodes** rather than eyeballed: *a spell is a permanent
+  capability, so it sits in the weight class of a building blueprint* —
+  dearer than any tool or weapon on the merchant's shelf, at least what the
+  cheapest house blueprint costs, never dearer than the dearest thing on
+  it. Asserted against the live `Shop.CATALOG`, that band admits roughly
+  10..20 and nothing outside. Minor Heal lands at 128 gold, Frost Lance at
+  236 — about a small house and about a cottage.
+
+**Linear in power, not exponential in LOC.** magic.md already ruled that
+the author's compile cost is *"paid once, by the original author — never
+re-charged to learners"*. Billing a student the compile curve would charge
+one design twice. The exponential stays reserved for fixing a NEW design
+into a book; a lesson is a purchase.
+
+### The refusal is the feature
+
+A guild that answers "no" is useless; one that answers **why** is a quest
+hook. Same shape `settlement_charter.refusal_for` established — `{}` when
+nothing is wrong, otherwise a dict naming the fact. A spell the catalogue
+does not hold is refused first and flatly; past that, three refusals that
+each point somewhere: **no guild in reach** (carrying the building id, so
+the answer points at the charter ladder), **already known** (points at the
+rest of the catalogue), **short of the price** (carrying the price AND the
+exact shortfall — *"come back with 40 more gold"*, never a bare no).
+
+Gold moves only on a lesson that lands, the same conserving discipline the
+estate baskets and the guild chest already hold themselves to. `learn` is
+pure: it never mutates the known list it was handed, it hands back a new
+one, and the caller decides whether to adopt it — the same shape
+`EstateAscension` returns a verdict rather than moving a household itself.
+
+### On the Player, and reachable in ordinary play
+
+`Player` carries `_known_spell_ids`, starts with `STARTING_SPELL_IDS`
+(test-pinned to contain whatever `DEFAULT_CAST_SPELL_ID` binds the cast key
+to — a character who cannot cast the spell the game binds to their own cast
+button is a bug, not a gate), and refuses to cast what it has not learned,
+spending nothing and saying so rather than blaming mana. `learn_spell` is
+gated on a real placed `mage_guild` within reach via the SAME
+`_has_structure_near_player` proximity every other station interaction in
+that file already uses. Learned spells are persisted beside karma and the
+life count; a save written before spells were learnable simply keeps the
+starting grant.
+
+`/learn` is the hand on it while no guild interaction UI exists — bare, it
+lists what a guild would teach and what each lesson costs; with an argument
+it takes the lesson. The same "a real command before a real UI" scope
+`/gold` and `/craft` already established.
+
+**And a real city raises its own guild.** `VillageAssembly`'s civic
+petition already walks `BuildingCatalog.CHARTERED_BUILDING_IDS` once an
+estate has nothing left to complain of, and `mage_guild` asks for no
+labour class, so `can_staff` never blocks it. The whole errand — grow a
+village into a city, let it raise its guild, go and learn — runs without a
+console command anywhere in it.
+
+### Stated rather than papered over
+
+- 🚧 **Compiling itself is still unbuilt** — no spell-editor UI, so nothing
+  to compile. `CRAFT_BASE`/`CRAFT_GROWTH`/per-tier LOC weights remain
+  design-only. This pass built the layer they sit on, not the curve.
+- 🚧 **Scrolls and gems are still unbuilt.** Scroll-learning writes to this
+  same known set, so the vessel is what is missing, not the destination.
+- 🚧 **No spell-selection UI** — the cast key still casts
+  `DEFAULT_CAST_SPELL_ID`. A learned spell is real, persisted and castable
+  through `cast_spell`, but nothing lets a player *choose* it at the
+  keyboard yet.
+- 🚧 **The guild has no interior trade UI**, and no art (it draws the
+  procedural placeholder, which is what that path is for).
+- 🚧 **The trade hall still does nothing** — the charter's other gap,
+  untouched here deliberately rather than widened into.
+
+Tests: `test_spell_tuition.gd` (32), `test_learn_command_clarity.gd` (8),
+plus 13 additions to `test_player.gd`.
+
+The tuition prices were **measured, not reasoned about** — a throwaway probe
+printed `derived_base`, tier and gold for every spell in the book next to
+the shop's real prices, which is how the weight-class band became a claim
+that could be written down and asserted rather than a number that felt
+about right.
+
+## A house is not a faculty: masters move into the mage guild (`concept/mage_guild.md`, 2026-09-19)
+
+The tuition pass made the *building* teach. Reported straight back: *"the
+player should have to enter into the mage guild and find a master which
+teaches him; building a mage guild still requires a mage teacher to move in;
+the mage teacher's skills and teachable spells are in turn based on the
+teacher's skills; there should be rare teachers which can teach special rare
+spells; multiple mages can move in and hang around inside."*
+
+That is the difference between a vending machine and a guild, and it changes
+what the charter buys. Earning a city no longer buys a spell shop — it buys
+**a place where masters may come**. A guild raised today holds nobody and
+teaches nothing, which is the point rather than a delay timer.
+
+### Who came decides what can be learned
+
+- **Schools** (`spell_schools.gd`) partition all 25 atoms into ten
+  traditions, exhaustive and disjoint, pinned both ways — an atom in no
+  school is a spell nobody in the world could ever teach, and an atom in two
+  is a master claiming another's trade. A spell's school is the one its
+  atoms share; one whose atoms **cross** schools has no master at all, which
+  is the intended cost of braiding two traditions rather than a bug.
+- **Depth** is a spell's deepest atom, in the atom catalog's own 1..3 band,
+  pinned against the live catalog rather than restated.
+- **A master is a seed** (`mage_master.gd`): school, depth, rarity, title,
+  and a real `NpcIdentity` — name, genome, personality, appearance, and a
+  real allocation on the same skill web every other NPC and the player walk.
+  `teaches()` is one rule — in my school, within my depth — never a list.
+- **Rarity is not reinvented.** `rarity_tier.roll_tier`'s existing weighted
+  roll (65/25/8/2) decides; `DEPTH_BY_RARITY` only says what it MEANS here.
+  An archmage is about one master in ten because the existing roll already
+  said so.
+- **A mage is a trade that arrives, not one a village produces.**
+  `NpcIdentity.FORCED_ONLY_OCCUPATIONS` is a second list on purpose: adding
+  `"mage"` to `OCCUPATIONS` would have put a wizard in every fifth cottage,
+  given them a field or a forge to stand at, and handed them a house out of
+  the ordinary pools.
+
+### The book had to grow before any of that meant anything
+
+Three spells across two schools would make every master either everything or
+nothing, so `spell_book.gd` went from 3 to **21**, at least one per
+tradition, laid out by school, with depth following the atom tiers so the
+tier-3 entries are the ones only an archmage passes on.
+
+That broke a tuition claim, and the break was correct: *"no spell costs more
+than the dearest thing on the shelf"* was true of a starter book and should
+not be true of an archmage's lesson. The claim moved rather than the number
+— the band is now stated as **roughly 10..39**, deliberately wide, because
+what the anchor encodes is a weight class and a tight band would claim a
+precision the design does not have. Prices span Farsight at 123 gold (a
+small-house blueprint) to Call Wisp at 785 (more than twice the dearest
+thing any merchant stocks).
+
+### A guild fills, and you have to walk in
+
+- **One persisted number per guild** — the simulated days it has stood open
+  — plus the `seed` `place_building` already writes. No roster is saved, no
+  master is serialised, nothing can drift from what generated it. It
+  survives a chunk round trip, because a permanent fact about a place must
+  not reset because the player walked away.
+- **A season per master, three at most.** The wait is the unit
+  `estate_ascension` already measures a person's decision to move by; the
+  capacity is pinned by what it encodes — a full guild must still be unable
+  to teach every school, or every city's guild is interchangeable.
+- **Ageing is per CHUNK, not global**, and that distinction is load-bearing
+  rather than tidy: the settlement step runs once per settlement, so a
+  global age from inside it would run every guild's clock once per village
+  in range. Found by reading the diff back, pinned by a test.
+- **The gate is inside-plus-a-master.** Standing beside a guild, on its
+  doorstep, or inside some other building all refuse alike. `Player.
+  guild_here()` reads the interior record the game already carries for
+  decorating, so "am I in a mage guild" is the same fact "may I decorate
+  this room" is.
+- **`NO_MASTER` names the school and the depth to go looking for.** That is
+  the sentence that turns a refusal into a reason to travel.
+
+### Several of them really stand in there
+
+Every interior until now held exactly one resident — one `_resident`, one
+`resident_cell`. `HouseInteriorView` learned `standing_cells()` (open floor,
+nothing on it, never the doorway, which has to stay clear or there is no way
+out) and `place_occupants()`, which spreads a group through the room instead
+of queueing them by the door. The first of them becomes the room's
+`_resident`, so Talk, the indoor prompt and every other single-occupant
+reader keep working with no knowledge that groups exist. Masters are not
+gated on `is_at_home()` the way a villager is: they have no outdoor marker
+and no home to be out from.
+
+### Stated rather than papered over
+
+- 🚧 **A master's depth is not read off their skill web, though their
+  identity is.** `spell_atom_tier` exists, on the mage wedge, on the exact
+  graph the player walks — but `NpcSkillAllocation.MAX_POINTS` stops every
+  NPC at a ring-3 notable, the two tier nodes sit at rings 3 and 4, and
+  `ARCHETYPE_STAT_POOL["mage"]` does not name that stat, so the allocator
+  steers away from it and every master would come out depth 1. Closing it is
+  three edits to tested systems for one derived number. Recorded in the
+  concept doc with the exact change that would close it, not hidden.
+- 🚧 **A guild's interior is still a cottage** — `InteriorTemplates` has no
+  `hall` plan, a pre-existing gap this feature makes visible since the guild
+  is the first hall a player will spend time in.
+- 🚧 **You cannot talk to a specific master** — indoor Talk reaches the
+  room's first occupant; the others are scenery until Talk learns groups.
+- 🚧 **Masters never leave, age or die**, and a roster only grows. A
+  tradition lost with its last master is the obvious next mechanism.
+- 🚧 **A guild ages only while its chunk is loaded** — the same honest
+  limitation immigration already carries.
+
+Tests: `test_spell_schools.gd` (17), `test_mage_master.gd` (21),
+`test_mage_guild_roster.gd` (19), `test_earth_chunk_manager_mage_guild.gd`
+(10), `test_house_interior_view_occupants.gd` (15), plus additions to
+`test_spell_tuition.gd` (43), `test_player.gd` and
+`test_learn_command_clarity.gd` (10).
+
+## A hall of its own (`concept/building.md`, 2026-09-19)
+
+Reported straight after the masters moved in: *"now add a hall interior
+template so they're not in a cottage."*
+
+`interior_family` had always sorted buildings into room shapes, but only the
+three HOUSE families had plans. `hall` — the City Hall, the warehouse, the
+trade hall and the mage guild — fell through `InteriorTemplates.
+_variants_for`'s fail-open default and was furnished as a **cottage, bed and
+all**. It cost nothing while nothing happened indoors, and then three mage
+masters were standing around somebody's bedroom.
+
+**Three hall plans, 13×9, shaped by what a hall is.** No bed anywhere, pinned
+from both sides — no hall plan has one, every house plan does — because a bed
+in a City Hall is exactly the kind of thing a later plan reintroduces by
+copy-paste. One big open room (the poorest hall leaves **52** open cells
+where the best cottage leaves **32**, which is what lets several masters
+stand in one without standing on the furniture) plus side chambers through
+wall gaps, so it keeps the same "more than one room" shape houses and manors
+already have.
+
+**The real fix was upstream of the plans.** The geometry sweep read a
+hand-maintained `["cottage", "house", "manor"]` list, so `hall` was never
+validated by a test that had simply never heard of it — the same class of
+hole `BuildingCatalog.all_building_ids()` was introduced to close for
+buildings. It reads every family off the catalog now, and each one must
+either have its own plans or be **declared** as borrowing the cottage's.
+`workshop` and `farmstead` still borrow; they are named, so the next family
+cannot join them silently.
+
+Two things the guild needed on top: a mage works at a **bench** and keeps
+**books** rather than a crate and a cupboard, and a guild is furnished for a
+mage rather than for whatever trade its seed landed on. That last one was a
+real bug caught in the act — the test came back saying the guild was
+furnished for a *nurse*.
+
+`tools/probe_hall_interior.gd` prints every plan furnished for a mage and
+for a merchant, so the one shared shape can be read next to both trades that
+use it rather than trusted from ASCII.
+
+### A pre-existing failure found while verifying this — and then fixed
+
+`test_player.gd`'s interior tests were failing on "precondition: entered":
+the player never got indoors, so every assertion after it read a null
+interior view. **Not caused here** — verified against clean worktrees at
+`d3ddbe8`, `0bfe582` and `03a94ff`, where it failed identically. It predates
+this work by at least two merges, and it is not among the four pre-existing
+failures the charter pass recorded, because **no pass had ever run
+`test_player.gd` to completion** (~324 tests, the better part of an hour).
+
+It was **nineteen** tests, not the two first noticed, and the cause was one
+line repeated across two fixtures and four tests: every one of them placed
+its `house_small` at chunk (0, 0) tile (10, 10). Global tile (0, 0) is the
+Earth projection's corner, so that is **open ocean** — measured, not
+assumed: every footprint cell and the doorstep come back `water=true`,
+`place_building` returns false, and `building_door_near` finds nothing.
+`place_building` learned to refuse a wet footprint at some point after these
+tests were written (see building.md, "Buildings are placed in rivers"), and
+they had been silently asserting nothing ever since.
+
+The fix is the one `_a_dry_site_for` already existed for: **find the ground,
+do not assume it.** `_a_house_on_dry_ground` raises the house on a real dry
+site in Berlin's chunk, hands back `{chunk_coord, origin, global_origin,
+doorstep_global}`, and leaves the player on its doorstep; `_walk_in` presses
+Enter for real. The villager fixture takes the house's own chunk now, because
+`resident_marker_for` looks a resident up in
+`_loaded_villages[record.chunk_coord]` — one filed under the origin chunk
+while their house stands in Berlin's is a villager nobody indoors can find.
+Every house these tests raise is torn down in `after_each`, like the guilds.
+
+Tests: `test_interior_templates.gd` (29, up from 22), `test_house_decor.gd`
+(9), plus additions to `test_player.gd`; `test_house_interior_view.gd` (23),
+`test_house_interior_view_occupants.gd` (15) and `test_building_catalog.gd`
+(75) green alongside.
+
+---
+
+## 2026-09-20 — A farmhouse with no field, and a field with an unbroken bed
+
+Reported live with the village in shot: *"There's a farmhouse without bed
+enclosure and the NPC only sows 4 / 6 tiles"*. Two reports, two causes.
+
+### The last bed of every field was never broken
+
+Measured before changing anything (`tools/probe_village_farming.gd`). Every
+field in the sample held exactly six cells, five cycling normally — and the
+sixth, the last in the field's own order, reported `no marker -- never
+tilled` after a full 600-second work block. The same bed, for both farmers
+in the village.
+
+`VillageFarm.next_action` scanned from index 0 and returned the first plot
+wanting the highest-priority kind. **Ground nobody has tilled asks to be
+planted, and so does a bed that was sown, ripened and harvested.** So the
+moment the earlier beds started cycling, one of them was always an earlier
+"plant" than the ground at the end, and the last bed was never broken at all.
+
+✅ Unbroken ground now wins **among beds asking for the same thing**, which
+only reorders equals: a `null` plot's action is `"plant"` and nothing else,
+so a ripe crop and a dying bed still come first — that priority is what the
+kind order exists for, and what the existing tests pin. Re-measured after
+the fix: the two previously untilled cells now read `grown=30.3/30.3` and
+`23.7/23.6`, and every field is 6/6.
+
+### Siting and derivation had drifted apart
+
+"Is there room for a field here?" (`_field_fits_at`, at siting) and "here is
+your field" (`_workable_field_of`, later) were two separate copies of the
+same question. The derivation rejects a cell a **neighbouring farmhouse
+owns** — ownership is geometric, so a farmhouse raised later can take ground
+from one raised earlier — and a cell **reserved for a landmark**. Siting
+checked neither. A farmhouse could be raised on ground that looked free and
+then be handed nothing: no beds, so no fence ring.
+
+✅ Both go through one `_may_sow(origin, origins, …)` predicate now, with
+`_reserving` wrapping the occupancy test identically for both. A candidate
+origin is judged **with itself in the running** against the farmhouses
+already standing, because a farmhouse owns ground by being nearest to it.
+`test_siting_and_derivation_never_disagree_about_an_origin` states that
+invariant directly instead of testing the two copies apart; mutating the
+reserved-cell handling back out fails it with the bug's own words —
+*"siting said true at (10, 10), derivation handed over 0 cells"*.
+
+⬜ **Not reproduced before fixing, and worth saying so.**
+`tools/probe_farmhouse_fields.gd` scanned 14 villages and 29 farmhouses on
+flat stub ground: every one took a full six-cell field, with landmarks
+reserved, and the two rules never disagreed there. The first run of that
+probe was worse than useless — it called `_fenced_farm_fields` *without* the
+reserved landmarks the real village passes, so it measured a more permissive
+world than the game's and reported everything fine. Flat ground has no
+water, no trees and no prior tiles, so the terrain that would expose this is
+exactly what the stub lacks. The gaps are real and are fixed by
+construction; catching one in the act still wants a real-terrain probe.
+
+Tests: `test_village_farm.gd` 77/77 (4 new), `test_village_renderer.gd`
+132/132 (3 new), `test_npc_marker_farming.gd` 39/39.
+
+## A field's fence shut its own farmer out (`concept/village_farms.md`, "The rail stands on the inner edge", 2026-09-20)
+
+Reported live, with the village in shot: *"The farmer doesn't farm anymore"*.
+
+✅ **A regression from `f64a360e`** ("a villager walks round a wall and a
+rail, not through them"), which gave rails a hitbox against villagers. A
+field's rails stand on its **inner** edge, so the one villager they shut out
+is the farmer whose beds they enclose.
+
+✅ **Measured, not guessed — and three wrong guesses were measured away
+first.** `tools/probe_village_farming.gd` on a real village: of three
+villagers with a field, one worked 58 beds in 600s and the other two worked
+**none**, each frozen in `APPROACHING` for 2650 of 2750 on-field ticks. The
+hypotheses that died, in order:
+
+| Guess | How it died |
+| --- | --- |
+| The fence blocks them | Tested `fence_blocks_step_global` with **pixel** coordinates — it takes tiles — and on a straight line to the bed centre rather than the 2px step actually taken. Read false. Wrong test, right suspect. |
+| The carter round hijacks the target | `VillageCart.walks_the_round` is carter-only |
+| A conversation freezes them | 0 talking ticks while on the field |
+| Some other override hijacks the target | Recorded the real target every tick: it was the field for all 2650 |
+
+What finally showed it was tracing the actual per-tick step: position frozen,
+a 2px step east proposed, and `_slid_along_walls` handing back the same
+position — then asking the fence in **tile** coordinates: `FENCE=true`.
+
+✅ **The worker may cross into ground they themselves work.** "The gate"
+exists for this, but reaching one needs pathfinding a `Sprite2D` walking one
+`move_toward` per frame does not have — `f64a360e` said so itself: *"boxed
+in on both, they stay put"*. Nothing else moves: every other rail still
+stops them, a neighbour's included, and no villager without a field is
+exempt.
+
+After, over the same 600s run: the herbalist **0 → 100 wheat** (30 deposits,
+all six beds worked), farmer one **45 → 77** (18 → 29 deposits, 3 → 6 beds).
+
+🚧 **A farmer whose field lies beyond ANOTHER farmstead's ring still cannot
+reach it.** In the probe's village the third farmer stands west of its
+neighbour's fenced beds with its own field east of them, and walks into that
+ring's rail forever — still 0 of 6 beds. Its own gate would serve if it went
+to its farmhouse frontage first; that routing is deliberately not attempted
+here. Named rather than silently left.
+
+Tests: `test_npc_marker.gd` + `test_npc_marker_farming.gd` 100/100 (+3 new).

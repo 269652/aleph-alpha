@@ -1230,3 +1230,57 @@ func test_a_villager_walks_on_when_no_rail_is_crossed():
 	world.blocks_step = false
 	var marker := _wall_marker(world)
 	assert_eq(marker._slid_along_walls(Vector2(8, 8), Vector2(24, 8)), Vector2(24, 8))
+
+
+## Reported live, with the village in shot: *"The farmer doesn't farm
+## anymore"*.
+##
+## A regression from f64a360e ("a villager walks round a wall and a rail,
+## not through them"), whose own message named this failure mode: *"there
+## is no pathfinding here, only a straight line at the target... boxed in
+## on both, they stay put"*. Rails round a field stop a villager now -- and
+## a field's rails stand on its INNER edge, so the one villager they shut
+## out is the farmer whose beds they enclose.
+##
+## Measured on a real village (tools/probe_village_farming.gd): of three
+## villagers with a field, one worked 58 beds in 600s and the other two
+## worked NONE. Both spent 2650 of 2750 on-field ticks in APPROACHING,
+## frozen -- the herbalist nine pixels from its own bed, refused the last
+## step south into it.
+##
+## A gate exists for exactly this (docs/concept/village_farms.md, "The
+## gate"), but reaching it needs pathfinding a Sprite2D walking one
+## move_toward per frame does not have. The farmer is who the field is
+## FOR; the rails are there to keep animals out and to read as an
+## enclosure, not to shut the worker out of their own beds. So a villager
+## may cross into a bed they themselves work, and no other rail moves.
+func test_a_farmer_may_step_into_a_bed_they_work():
+	var world := StubWorldWithFence.new()
+	world.blocks_step = true
+	var marker := _wall_marker(world)
+	marker.field_cells = [Vector2i(1, 0)]
+
+	assert_eq(
+		marker._slid_along_walls(Vector2(8, 8), Vector2(24, 8)), Vector2(24, 8),
+		"the rail round a farmer's own field does not shut the farmer out of it"
+	)
+
+
+func test_a_rail_still_stops_a_villager_stepping_anywhere_else():
+	var world := StubWorldWithFence.new()
+	world.blocks_step = true
+	var marker := _wall_marker(world)
+	marker.field_cells = [Vector2i(9, 9)]  # their field is somewhere else entirely
+
+	assert_eq(
+		marker._slid_along_walls(Vector2(8, 8), Vector2(24, 8)), Vector2(8, 8),
+		"every other rail still stops them, including a neighbour's"
+	)
+
+
+func test_a_villager_with_no_field_is_stopped_by_every_rail():
+	var world := StubWorldWithFence.new()
+	world.blocks_step = true
+	var marker := _wall_marker(world)
+
+	assert_eq(marker._slid_along_walls(Vector2(8, 8), Vector2(24, 8)), Vector2(8, 8))

@@ -200,15 +200,27 @@ the code as it landed. See [progress.md](../progress.md) for the ledger.
 
 ### Known gaps, stated rather than papered over
 
-- 🚧 **Neither chartered building DOES anything yet.** The trade hall is
-  the natural home of [village_estates.md](village_estates.md)'s relief
-  chest and does not yet hold it; the mage guild is
-  [magic.md](magic.md)'s compile station and compiling has no structure
-  gate in code at all — `SpellCost` charges gold and asks nothing about
-  where you are standing. Both are real buildings behind a real gate, and
-  what happens INSIDE them is the next pass. Said plainly rather than
-  dressed up, because a building that only exists to be unlocked is half a
-  feature.
+- ✅ **The mage guild does something.** It teaches
+  ([magic.md](magic.md)'s tuition section): a caster now carries a
+  known-spell set distinct from the world's catalogue, starts with one
+  spell, and buys the rest. That is the payoff this whole ladder was
+  gating, so the charter is no longer a locked door in a field: the way
+  into higher magic is a village a player helped grow into a city.
+- ✅ **And the charter is only the first of two gates.**
+  [mage_guild.md](mage_guild.md) put the teaching on the **people inside**
+  rather than on the building: a guild raised today holds nobody, masters
+  move in one per season up to three, each holds one of ten traditions to
+  one of three depths, and a player must walk **in** and find one who
+  teaches what they want. So earning the charter buys a *place where
+  masters may come*, not a spell shop — and two cities with a guild each
+  are not interchangeable. Compiling *new* spells still has nothing to
+  compile from (there is no spell-editor UI), but the access layer it
+  needs — known set, gold-for-knowledge, station gate — is now real and is
+  what it will sit on.
+- 🚧 **The trade hall still does nothing.** It is the natural home of
+  [village_estates.md](village_estates.md)'s relief chest and does not yet
+  hold it. Said plainly rather than dressed up, because a building that
+  only exists to be unlocked is half a feature.
 - 🚧 **Neither has art.** Both draw the procedural placeholder, which is
   what that path is for (see [building.md](building.md)'s asset contract),
   and will pick up a sheet the moment one is dropped in under its own id.
@@ -227,6 +239,8 @@ the code as it landed. See [progress.md](../progress.md) for the ledger.
   the guild whose chest the trade hall houses.
 - [village_growth.md](village_growth.md) — the ladder whose rungs this must
   never gate.
-- [magic.md](magic.md) — the compile station the mage guild is.
+- [magic.md](magic.md) — the compile station the mage guild is, and the
+  tuition it sells in the meantime: what a player actually gets for
+  growing a city.
 - [04-settlements-cities-infrastructure.md](../emergence/04-settlements-cities-infrastructure.md)
   — the city threshold `SettlementTier` implements and this hangs off.

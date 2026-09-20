@@ -15,17 +15,119 @@ const HouseDecor = preload("res://src/gameplay/house_decor.gd")
 const BuildingCatalog = preload("res://src/gameplay/building_catalog.gd")
 const BuildingPiece = preload("res://src/gameplay/building_piece.gd")
 
-const _FAMILIES := ["cottage", "house", "manor"]
 const _OCCUPATIONS := ["farmer", "blacksmith", "merchant", "guard", "fisher", "herbalist", "hunter", "nurse"]
 const _SLOT_LETTERS := ["B", "T", "C", "R", "S", "P", "K", "W", "L"]
+
+## Families that have no plans of their own yet and borrow the cottage's
+## (see InteriorTemplates._variants_for's fail-open default). Named here
+## rather than left implicit, because that default is exactly what let
+## `hall` be furnished as a bedroom for as long as nothing happened
+## indoors -- a new family joining this list has to be a deliberate act,
+## and taking one off it is what authoring plans for it looks like.
+const _FAMILIES_STILL_BORROWING := ["workshop", "farmstead"]
+
+
+## Every interior family any real building actually uses -- read off the
+## catalog rather than hand-maintained, so a family cannot be validated by
+## a list that simply never heard of it.
+func _families() -> Array:
+	var families: Array = []
+	for building_id in BuildingCatalog.all_building_ids():
+		var family := BuildingCatalog.interior_family_of(building_id)
+		if family != "" and not families.has(family):
+			families.append(family)
+	families.sort()
+	return families
+
+
+## The families with plans of their own, i.e. every family minus the ones
+## still borrowing.
+func _families_with_own_plans() -> Array:
+	var own: Array = []
+	for family in _families():
+		if not _FAMILIES_STILL_BORROWING.has(family):
+			own.append(family)
+	return own
 
 
 func _every_grid() -> Array:
 	var out: Array = []
-	for family in _FAMILIES:
+	for family in _families_with_own_plans():
 		for variant_index in InteriorTemplates.variant_count(family):
 			out.append({"family": family, "variant": variant_index, "grid": InteriorTemplates.grid_for(family, variant_index)})
 	return out
+
+
+# -- which families have plans at all --------------------------------------
+
+func test_every_family_a_real_building_uses_is_accounted_for():
+	# Either it has its own plans or it is on the borrowing list. A new
+	# interior_family that is neither fails here rather than silently
+	# rendering as somebody's cottage.
+	for family in _families():
+		assert_true(
+			InteriorTemplates.has_own_plans(family) or _FAMILIES_STILL_BORROWING.has(family),
+			"'%s' has no plans and is not declared as borrowing the cottage's" % family
+		)
+
+
+func test_the_families_still_borrowing_are_exactly_the_ones_declared():
+	for family in _families():
+		assert_eq(
+			InteriorTemplates.has_own_plans(family), not _FAMILIES_STILL_BORROWING.has(family),
+			"'%s'" % family
+		)
+
+
+func test_a_hall_has_its_own_plans_now():
+	assert_true(InteriorTemplates.has_own_plans("hall"))
+	assert_false(_FAMILIES_STILL_BORROWING.has("hall"))
+
+
+func test_a_family_nothing_builds_has_no_plans_of_its_own():
+	assert_false(InteriorTemplates.has_own_plans("not_a_family"))
+
+
+# -- a hall is a workplace, not a home --------------------------------------
+
+func test_no_hall_plan_has_a_bed_in_it():
+	# A hall is where a trade meets, not where anyone sleeps. Pinned rather
+	# than merely observed, because a bed in a City Hall is exactly what a
+	# later plan reintroduces by copy-paste.
+	for variant_index in InteriorTemplates.variant_count("hall"):
+		for row in InteriorTemplates.grid_for("hall", variant_index):
+			assert_false((row as String).contains("B"), "hall variant %d has a bed" % variant_index)
+
+
+func test_every_house_plan_does_have_a_bed():
+	# The other half of the same claim: a home is where somebody sleeps.
+	for family in ["cottage", "house", "manor"]:
+		for variant_index in InteriorTemplates.variant_count(family):
+			var beds := 0
+			for row in InteriorTemplates.grid_for(family, variant_index):
+				beds += (row as String).count("B")
+			assert_gt(beds, 0, "%s variant %d has nowhere to sleep" % [family, variant_index])
+
+
+## The reason a hall needed its own shape at all: three masters have to be
+## able to stand in one without standing on the furniture.
+func test_a_hall_has_room_for_a_group_to_stand_where_a_cottage_does_not():
+	var smallest_hall := 99999
+	for variant_index in InteriorTemplates.variant_count("hall"):
+		smallest_hall = mini(smallest_hall, _open_floor_of("hall", variant_index))
+	var largest_cottage := 0
+	for variant_index in InteriorTemplates.variant_count("cottage"):
+		largest_cottage = maxi(largest_cottage, _open_floor_of("cottage", variant_index))
+	assert_gt(smallest_hall, largest_cottage,
+		"the poorest hall is no more open than the best cottage")
+
+
+## Cells nobody has put anything on: plain floor and the resident cell.
+func _open_floor_of(family: String, variant_index: int) -> int:
+	var open := 0
+	for row in InteriorTemplates.grid_for(family, variant_index):
+		open += (row as String).count(".") + (row as String).count("@")
+	return open
 
 
 func _is_wall(ch: String) -> bool:
@@ -43,7 +145,7 @@ func test_choosing_a_variant_is_deterministic_for_the_same_seed():
 
 
 func test_choosing_a_variant_stays_in_range():
-	for family in _FAMILIES:
+	for family in _families_with_own_plans():
 		for seed_value in 40:
 			assert_between(InteriorTemplates.choose_variant_index(family, seed_value), 0, InteriorTemplates.variant_count(family) - 1)
 
@@ -252,7 +354,7 @@ func test_furnish_is_deterministic_for_the_same_seed():
 
 func test_furnish_the_same_seed_across_every_real_occupation_never_crashes():
 	for occupation in _OCCUPATIONS:
-		for family in _FAMILIES:
+		for family in _families_with_own_plans():
 			var result := InteriorTemplates.furnish(family, occupation, hash(occupation + family))
 			assert_false(result.is_empty(), "%s/%s" % [family, occupation])
 

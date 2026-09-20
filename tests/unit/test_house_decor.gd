@@ -61,3 +61,29 @@ func test_an_unrecognized_occupation_still_gets_a_real_non_empty_baseline():
 	assert_false(set.is_empty())
 	for piece_id in set:
 		assert_true(BuildingPiece.has_piece(piece_id))
+
+
+# -- a mage guild furnishes like a guild (docs/concept/mage_guild.md) -------
+#
+# The hall's shape is shared with the City Hall and the warehouse; what
+# makes one READ as a mage guild is the same per-occupation slot
+# resolution that already makes a smith's cottage differ from a farmer's.
+
+const MageMaster = preload("res://src/gameplay/mage_master.gd")
+
+
+func test_a_mage_works_at_a_bench_rather_than_out_of_a_crate():
+	assert_eq(HouseDecor.piece_for_slot("W", MageMaster.OCCUPATION), "workbench")
+
+
+func test_a_mage_keeps_books_rather_than_a_cupboard():
+	assert_eq(HouseDecor.piece_for_slot("S", MageMaster.OCCUPATION), "wood_bookshelf")
+
+
+func test_every_slot_a_hall_uses_resolves_for_a_mage():
+	# A hall's whole slot vocabulary, minus the bed it deliberately has no
+	# room for -- see InteriorTemplates._HALL_VARIANTS.
+	for letter in ["T", "C", "R", "S", "P", "K", "W", "L"]:
+		var piece: String = HouseDecor.piece_for_slot(letter, MageMaster.OCCUPATION)
+		assert_true(BuildingPiece.has_piece(piece), "%s -> '%s'" % [letter, piece])
+		assert_eq(BuildingPiece.category_of(piece), BuildingPiece.CATEGORY_FURNITURE, "%s" % letter)
