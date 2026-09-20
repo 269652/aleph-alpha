@@ -258,3 +258,58 @@ Pinned by `test_the_well_stands_on_a_free_2x2_clear_of_street_and_plaza`,
 which asserts the contract as asked: the well stands on free ground, and
 that ground is part of a free 2×2. Which quadrant is the renderer's
 business; that there is one is the rule.
+
+> **Which quadrant turned out to be the whole bug** (corrected
+> 2026-09-20). Reported again, with the well in shot: *"The well is still
+> placed partly on streets"*. The siting above is real and does its job —
+> but "which quadrant is the renderer's business" was answered **three
+> different ways** by three functions, and only one of them was ever
+> checked:
+>
+> | | which 2×2 |
+> | --- | --- |
+> | `_clear_block` | whichever quadrant round the anchor was free — its first option runs **north** of it |
+> | `_nearest_prop_cell` | returned the centre of the **anchor cell alone** |
+> | `_landmark_cells` | searched *again* from that position, landing on a third |
+>
+> So a well was validated on one patch, drawn over a second and reserved
+> on a third. Two of the three could be road while the check passed —
+> measured across eight real villages: **sixteen well cells on road, two
+> per well**, every one in the well's own column.
+>
+> `VillageRenderer.landmark_block_at(position, tile_size, id)` is the one
+> answer now. A multi-tile landmark stands on its block's **centre**, so
+> the block is recovered by stepping back half a footprint — exact for
+> even footprints, which is every one there is. Siting, reservation and
+> the tests all read it, and a probe that reimplemented the old assumption
+> got the wrong 2×2 too, which is exactly why it is one function.
+>
+> Two renderer tests had been comparing the **grounded** landmark against
+> the generator's **ungrounded** plan, and passed only because the two
+> coincided while the well sat on a single cell's centre. They now assert
+> what they meant: the sprite stands where the settlement thinks the
+> landmark is, and every villager agrees with every other.
+
+✅ **And the art is scaled to that ground** (asked for directly: *"scale
+the art to its footprint"*). The well took its world size from
+`ProceduralLandmarkSprite.SIZES` — the old procedural placeholder box,
+40×44 world px — which has nothing to do with the 2×2 it is sited and
+reserved on. 40px is **2.5 tiles over a 2-tile footprint**, so a quarter
+of a tile hung over the paving on each side however well it was sited.
+
+> A measurement worth correcting rather than quietly fixing: this was
+> first reported here as "80×60 px, five tiles wide, covering 24 cells".
+> That read the raw TEXTURE and ignored `ArtResolution.SPRITE_SCALE` —
+> art is authored at `DETAIL_MULTIPLIER` (2×) and drawn back down at 0.5,
+> so 80×60 texture pixels are 40×30 **world** pixels. The overhang was
+> half a tile of width, not three.
+
+`LandmarkSheet.world_scaled_image` takes the world width the caller knows
+now, and the renderer passes `footprint.x * tile_size` for any prop with a
+declared footprint — the rule a building's own sheet already follows:
+width matches the ground the thing stands on, height follows the same
+factor, so a tall prop overhangs **upward** (it is foot-anchored) and
+nothing ever overhangs sideways onto a neighbour's cell. The well is
+32×24 world px now, exactly its 2×2. A one-cell prop keeps the size its
+own art declares, unchanged. Pinned by
+`test_the_wells_art_is_as_wide_as_the_2x2_it_stands_on`.

@@ -12689,6 +12689,21 @@ New concept doc this pass -- no prior doc covered what's underground (`stone.md`
 - ⬜ **Underground art is the flat procedural fallback** (`ProceduralStoneSprite`/`ProceduralOreSprite`, same textures surface stone/ore nodes fall back to with no illustrated sheet), not a cave-specific illustrated sheet -- none exists yet, the same honestly-documented situation `stone.md` itself describes for any future stone class with no art of its own.
 
 
+### The settlement card, and FPS back on (`concept/hud.md`)
+
+Asked for: *"a context dependent Village / City panel which shows stats and status of the village / city like population; happiness; gold and so"*, and mid-task, *"also add back the FPS"*.
+
+- ✅ **`SettlementReadout`** (17 tests) — pure model, thin Node, so a city's rows are testable without founding one. **The title is the settlement's real tier**, not the word "village": `SettlementTier.tier_for` classifies hamlet/town/city from three dimensions that must ALL cross together (households, active institutions, production diversity), so watching the title change is watching three real things happen at once.
+- ✅ **`EarthChunkManager.settlement_readout_at`** gathers it, returning `{}` where there is no settlement — which is the whole of "context dependent". No key, because standing somewhere IS the gesture.
+- ✅ **Every row reads state that already exists**: households and `VillageCensus` for population, `HouseholdWellbeing` for happiness, the village purse (`NpcEconomy.PURSE_META` — the same one wages and the civic tax use) for gold, `SettlementFood.carrying_capacity` for food, the growth ladder for what is being built. Nothing is tracked for the card's benefit.
+- ✅ **Happiness names its weakest need beside it** ("68% (worst: food)"). One blended percentage of five weighted needs tells a player nothing about what to do, and the per-need numbers are already computed to make the blend, so naming the worst costs nothing and turns a score into a prompt.
+- ✅ **Happiness is mean HAPPINESS, not mean PRODUCTIVITY.** `HouseholdWellbeing` keeps them apart deliberately — productivity is happiness dragged down by hunger — so a row labelled happiness reporting the work rate would answer a different question than it asks.
+- ✅ **Food is carrying capacity, not stock.** A first pass formatted a raw stock figure against a per-household target; corrected to `SettlementFood.carrying_capacity` ("feeds 17 of 12"), the number the simulation already assesses a settlement by.
+- ✅ **FPS returns to the always-on clock card**, sharing the movement line so the card's fixed three-line height is unchanged. Only FPS: lat/lon and sun elevation stay behind F3, because those are genuinely diagnostic while a frame counter is wanted visible exactly when you are not thinking to press F3. `UNKNOWN_FPS` (0) leaves the reading off on the first frame rather than claiming 0.
+- ✅ **Verified with a real render**, not only tests (`tools/probe_hud_layout.gd`, extended to cover the card): filled as a city in `busy`, and **gone rather than blank** in `calm` — the second is the failure mode a passing unit test would never catch.
+- ⬜ FPS appears twice while F3 is open. Harmless, left alone: removing it from the strip would shrink `DIAGNOSTICS_LINE_COUNT` and rewrite a contract this request never touched.
+- ⬜ The card is read-only, and shows nothing for a settlement whose chunk is not loaded (the purse and village market are only reachable while it is) — so a player cannot check on a town from the next valley.
+
 ### Reconciling two parallel wall fixes (2026-09-20)
 
 Merging this branch to `main` found that another session, `claude/brave-euler-bcoea4`, had independently fixed **the same three bugs** while this one was working: creatures through walls, villagers through walls, and things growing in water. 200 commits had landed on `main` in the meantime. A straight merge would have put two competing implementations of each fix into the live checkout, so the merge was aborted and reconciled deliberately instead.
@@ -28584,3 +28599,209 @@ plant_fibre gathering staying at 0). **Pre-existing, not from this change**:
 A/B'd in a clean worktree at the commit before it, where it fails with the
 identical numbers at the identical two lines. Recorded rather than quietly
 left.
+
+## The square stays under the hall, and every plot shows its own kerb (`concept/building.md`, 2026-09-20)
+
+Reported live with a screenshot: *"the background of the houses 2x2 should
+be variable; if the city hall is placed on the plaza it should have
+cobblestone background so it looks seamless... also there should be some
+kind of border so the hitbox is visible."*
+
+**Half of it was already fixed, in parallel, the day before.** "A building
+stands on the ground; it does not replace it" (2026-09-19,
+`TerrainRenderer.BUILDING_OVERLAY_TILE_IDS`) made a footprint an overlay,
+so a house on grass shows the grass it was raised on and the ground under
+a building is exactly as variable as the ground is. This entry is the
+other half, and the two are reconciled rather than stacked — one branch
+was written against the pre-overlay code and was merged into it by hand.
+
+**The square is the one thing an overlay cannot answer.** Placement LIFTS
+the paving it covers — `EarthChunkManager._place_building_over_roads`
+erases the Road modification from every footprint cell before writing the
+building's own ids — so a hall raised on the village square falls back to
+the *biome* under it and shows the grassland the square was paved over.
+Not a seam: a hole punched in the square, which is what the screenshot
+shows. Measured before the fix with `tools/probe_building_ground.gd`
+(new, kept) across three real settlements near lat 48.6 lon 12.7: 28
+buildings, all three town halls standing on ground that is not the square
+they stand on.
+
+**So a building reads its own kerb** — the ring of cells immediately
+around the footprint, 18 round a 4×3 hall and 12 round a 2×2 cottage.
+More than `TerrainRenderer.PAVED_KERB_SHARE` of it carrying laid Road
+means the footprint paints Road as well and the hall is cobbled up to its
+own walls; anything less leaves it the plain overlay, ground showing
+through. The share is half and the real geometry put it there: every town
+hall's kerb is 12 of 18 paved (67%, the same in all three villages, since
+plaza and civic plot are both pure functions of the chunk and its seed),
+an ordinary house/farmhouse/sawmill plot runs 7–43%, and the three plots
+of 28 that sat above half (58%, 71%, 86%) are corner plots genuinely
+ringed by street.
+`test_the_town_hall_on_a_real_villages_square_stands_on_the_square` builds
+the kerb out of `VillageLayout`'s own real output rather than a made-up
+ring, so a change to the plaza or the street pitch fails there instead of
+on screen — mutation-checked by raising the share to 0.75 and watching all
+four seeds fail. Trails do not count, only the laid Road tier: a building
+standing in ground worn by walking is standing in worn ground.
+
+**Nothing is persisted.** The ground is re-derived from the chunk on every
+paint, so a village saved before this existed heals on its next load (the
+same property that lets an older village re-derive and pave its square),
+and a plot that is paved *around* later becomes paved itself with no
+migration and no second source of truth to drift. `TerrainRenderer` does
+now preload `BuildingCatalog`, which the literal `BUILDING_OVERLAY_TILE_
+IDS` list deliberately avoids — a named divergence: the overlay question
+needs nothing but an id, while a kerb is read around a whole PLOT and a
+footprint is the one thing only the catalog knows. The list stays literal.
+
+**The kerb is drawn, too.** `ProceduralFootprintKerbSprite` (new) draws
+the plot's own outline at art resolution — two art pixels of stone, one of
+lit top face, a joint every eight so it reads as laid kerb stones rather
+than a debug rectangle — and `_spawn_building_node` carries it *beneath*
+the building's art (children paint in tree order; the art sprite is now
+named `Art` so nothing has to guess which `Sprite2D` is which), built from
+the same `footprint_px` the `StaticBody2D`'s `RectangleShape2D` is built
+from. What is drawn IS the hitbox rather than a picture of one that can
+drift from it, pinned by
+`test_the_kerb_a_building_draws_is_exactly_its_own_collision_rect`. Its
+middle is fully transparent, so it never paints over the ground the rule
+above just chose. "Visible" is measured rather than eyeballed:
+`contrast_over` composites the kerb's own drawn pixels onto a ground and
+returns how far they land from it, and every ground a kerb can lie on
+clears `MIN_GROUND_CONTRAST` — 0.44 over the village's cobbles, 0.28 over
+bare earth, 0.31 over the grass beside a plot, against a floor of 0.12 —
+with a second test recomputing that number straight off the generated
+image so the function cannot drift from the drawing. A construction site
+draws none; it has no collision body yet.
+
+**Confirmed on a real render** (`tools/probe_village_render.gd`, new,
+under `xvfb` + Mesa software GL, because a headless run paints no pixels):
+the hall's plot is cobbled continuously into the plaza with no seam, and a
+cottage's plot shows the grass it stands in, with a kerb legible against
+both.
+
+Honest gaps, both real:
+
+🚧 **The kerb is drawn on a paved plot too**, where it is an outline over
+the square rather than a boundary between two surfaces. That is what "so
+the hitbox is visible" asked for, and it does mean a village square
+carries outlines a photograph of one would not.
+
+🚧 **An earth cell beside a PAVED plot blends toward it as open ground.**
+`_neighbor_biomes` reads overlays as unmodified, and the paved branch runs
+ahead of that. It cannot arise today — a paved plot is by definition
+ringed by paving, not by earth — but it is a real hole in the rule rather
+than a guarantee.
+
+Tested: `test_building_ground.gd` (7, new),
+`test_procedural_footprint_kerb_sprite.gd` (9, new),
+`test_terrain_renderer.gd` (+5, beside the overlay tests they reconcile
+with), `test_earth_chunk_manager_buildings.gd` (+4).
+
+## The item panels draw the real art too (`concept/illustrated_art_addressing.md`, 2026-09-20)
+
+Reported live: *"The inventory still renders the old procedual icons and not
+the illustrated ones"*.
+
+### ✅ Documented from the start, wired for only one of its four surfaces
+
+`illustrated_art_addressing.md` has described the `icon` context as
+"inventory/hotbar/paperdoll/tooltip" since its first draft. The pass that
+finally made real art reach the screen (2026-09-19) wired **six** call sites
+— the `World` hotbar slot, `DroppedItem`, and the two equip paths — and of
+`icon`'s own four named surfaces it reached only the hotbar.
+
+So the hotbar along the bottom of the screen drew the real axe while the
+inventory slot directly above it drew the generated one. Nothing was broken;
+two windows were simply never connected.
+
+### ✅ Seven more call sites, each asking for the context that depicts it
+
+| Window | Call sites | Context |
+| --- | --- | --- |
+| `InventoryWindow` | grid slot, paperdoll frame, drag preview | `icon` |
+| `InventoryWindow` | preview character's armour / weapon | `equipped` / `held` |
+| `CraftingWindow` | card thumbnail, material row | `icon` |
+
+The preview character mattered as much as the slots. It is the **same rig**
+the world draws, so it takes the same contexts `Player.equip_armor`/
+`equip_item` ask for rather than the flat icon — a paperdoll showing a
+different axe from the one in the player's hand two panels away would be its
+own bug.
+
+A drop-in in both windows: `IllustratedItemArt` falls back to
+`ProceduralItemSprite` for a subject with no art and fits every frame to
+`ProceduralItemSprite.SIZE`, so no call site re-scales and no layout moved.
+Both files dropped their `ProceduralItemSprite` preload outright — the
+fallback lives behind `IllustratedItemArt` now, in one place.
+
+### The fallback test does not use the obvious item
+
+`test_an_item_with_no_art_still_draws_its_generated_icon` pins `"bread"`, not
+`"rock"`. Measured against the real asset tree: **104 of the catalog's 149
+ids have icon art** now and `rock` is one of them, so the first draft of that
+test asserted a no-art fallback for an item that has art and failed for the
+right reason. Bread is one of the 45 that genuinely has none. Picking a
+familiar-sounding id by hand proves nothing here.
+
+Tests: `test_inventory_window.gd` 42/42 (+5 new), `test_crafting_window.gd`
+20/20 (+1 new).
+
+## The well had three different 2x2s, and only one was checked (`concept/village_market_square.md`, 2026-09-20)
+
+Reported live with the well in shot: *"The well is still placed partly on
+streets ... it should be placed on a free 2x2 grass patch"*.
+
+✅ **"Still", because the siting was never the problem.** `c2b78947` really
+does site the well with `allow_road` false and the whole 2×2 checked. What
+undid it is that three functions each answered "which 2×2" differently:
+
+| | which 2×2 |
+| --- | --- |
+| `_clear_block` | whichever quadrant round the anchor was free — its first option runs **north** of it |
+| `_nearest_prop_cell` | returned the centre of the **anchor cell alone** |
+| `_landmark_cells` | searched again from that position, landing on a third |
+
+So a well was validated on one patch, drawn over a second and reserved on a
+third, and two of the three could be road while the check passed. Measured
+across eight real villages: **16 well cells on road, two per well**.
+
+✅ **One answer now.** `VillageRenderer.landmark_block_at` — a multi-tile
+landmark stands on its block's centre, so the block is recovered by
+stepping back half a footprint. Siting, reservation and the tests all read
+it. Measured after: **0 road cells** under the well that had 2.
+
+✅ **A wrong guess worth recording.** The first suspect was ordering:
+`_close_short_street_gaps` runs *after* the landmarks are grounded and
+paves one- and two-tile holes, and a prop is not `_is_occupied_local` to
+it. That is a real hazard, so the gap closer is now told about the landmark
+block — but it was not the bug: the fix changed nothing on its own, because
+the cells it protected were the wrong 2×2 too. Kept, as the guard it should
+always have had.
+
+✅ **Two tests that passed by coincidence are corrected.**
+`test_landmarks_are_rendered_as_sprites_at_their_positions` and
+`test_spawned_npc_markers_know_the_settlements_shared_landmarks` compared
+the **grounded** landmark against the generator's **ungrounded** plan, which
+only matched while the well sat on one cell's centre. They now assert what
+they meant — the sprite stands where the settlement thinks it does, and
+every villager agrees with every other.
+
+✅ **And the art is scaled to that ground** (asked for next: *"scale the
+art to its footprint"*). The well's world size came from
+`ProceduralLandmarkSprite.SIZES` — the old procedural placeholder box,
+40×44 world px — which has nothing to do with the 2×2 it stands on. 40px
+is 2.5 tiles over a 2-tile footprint, so a quarter of a tile hung over the
+paving each side however well it was sited.
+`LandmarkSheet.world_scaled_image` takes a world width now and the
+renderer passes `footprint.x * tile_size`: **40×30 → 32×24 world px**,
+exactly its 2×2. One-cell props are unchanged.
+
+**A measurement of mine, corrected.** I first reported this as "80×60 px,
+five tiles wide, covering 24 cells". That read the raw texture and ignored
+`ArtResolution.SPRITE_SCALE` — art is authored at 2× and drawn back at
+0.5, so 80×60 texture pixels are 40×30 world pixels. The overhang was half
+a tile of width, not three.
+
+Tests: `test_village_renderer.gd` + `test_village_layout.gd` +
+`test_landmark_sheet.gd` 253/253 (+1 new, 2 corrected).
