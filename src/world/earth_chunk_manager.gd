@@ -9945,6 +9945,29 @@ func stock_pond_at(global_x: int, global_y: int) -> void:
 	_sync_pond_fish_markers(chunk_coord, anchor)
 
 
+## Whether the pond this cell belongs to has EVER been stocked, which is a
+## different question from whether it holds fish now.
+##
+## Reported live with the water in shot, after the stock was made to
+## persist: *"also no fish in pond"*. Persisting a stock keeps one that
+## EXISTS; a pond dug by a build that never kept one has no record at all,
+## on disk or in memory, and the village pass that stocks a pond returns
+## early on water that is already dug (correctly -- a fisher stocks a pond
+## once). So every pond in every save made before POND_FISH_DIR existed
+## was empty for ever.
+##
+## The village stocks such a pond on its next visit (VillageRenderer.
+## _dig_fisher_ponds_if_missing), and this is the question that lets it do
+## so without refilling one it has merely FISHED OUT -- which is the one
+## thing persisting the stock exists to prevent. An emptied pond carries a
+## record of 0.0; a pond nobody ever stocked carries no record at all.
+func pond_has_been_stocked(global_x: int, global_y: int) -> bool:
+	var anchor = _pond_anchor(global_x, global_y)
+	if anchor == null:
+		return false
+	return _pond_fish.get(_chunk_coord_for_tile(anchor), {}).has(anchor)
+
+
 ## How many fish the pond this cell belongs to is holding -- 0.0 for dry
 ## ground, and for water nobody has stocked.
 func pond_fish_at(global_x: int, global_y: int) -> float:
@@ -18548,6 +18571,14 @@ func _village_assembly_state(chunk_coord: Vector2i) -> Dictionary:
 		"estate_counts": _household_store.estate_census(household_ids),
 		"household_count": household_ids.size(),
 		"housed_count": int(census["housed_count"]),
+		# How many roofs really stand EMPTY, which is what lets the
+		# assembly raise one when none does (VillageAssembly.next_building's
+		# lowest rung, docs/concept/village_growth.md "Room is made first,
+		# moved into after"). Without it the assembly reads the default
+		# "there is already room", and a village that has housed everybody
+		# and answered every petition owes itself nothing for ever --
+		# measured at room 0 through a whole 1200-second watch.
+		"spare_house_capacity": int(census["spare_house_capacity"]),
 		"present_building_ids": _settlement_present_building_ids(chunk_coord),
 		# How many of each, so a works that feeds people can be raised again
 		# while it is outnumbered by the mouths (mechanism 7).
@@ -18591,11 +18622,21 @@ func _apply_village_growth_decision(chunk_coord: Vector2i) -> void:
 	if spare_capacity <= 0:
 		return
 
-	var owner_id := settlement_id
-	if BuildingCatalog.BUILDING_IDS.has(next_building):
-		if waiting.is_empty():
-			return
-		owner_id = waiting[0]
+	# Who it belongs to -- and a home with nobody waiting for it is the
+	# VILLAGE'S, not a reason to refuse the build.
+	#
+	# This credited a home to waiting[0] and RETURNED when nobody was
+	# waiting. That is right for the shelter rung, which exists for a named
+	# household, and wrong for the ladder's lowest rung, which raises a
+	# house precisely BECAUSE everybody is already housed and no roof
+	# stands empty (VillageGrowth.next_building, docs/concept/
+	# village_growth.md "Room is made first, moved into after"). So the
+	# village chose that house on every settlement step and never once
+	# began it. Measured (tools/probe_village_growth_gate.gd) with every
+	# other condition open -- food per household 2.3 to 3.6 against a
+	# threshold of 2.0, six spare hands, a site available, `house_small`
+	# chosen at every sample -- and `building now` empty throughout.
+	var owner_id := VillageGrowth.owner_for(next_building, waiting, settlement_id)
 
 	var origin = _growth_site_for(chunk_coord, next_building)
 	if origin == null:
@@ -18714,14 +18755,17 @@ func _mean_household_needs(assessments: Array) -> Dictionary:
 ## acts on, so the card cannot promise a building the village is not
 ## actually about to raise.
 func _next_growth_building_for(
-	chunk_coord: Vector2i, household_ids: Array, census: Dictionary
+	chunk_coord: Vector2i, household_ids: Array, _census: Dictionary
 ) -> String:
 	if household_ids.is_empty():
 		return ""
-	return VillageGrowth.next_building(
-		household_ids.size(), int(census.get("housed_count", 0)),
-		_present_structure_ids_for_settlement_chunk(chunk_coord)
-	)
+	# The SAME question _apply_village_growth_decision acts on, not a second
+	# prediction of it. It used to walk VillageGrowth's ladder directly,
+	# which is neither the function the village really asks (the assembly)
+	# nor handed the spare capacity that decides its lowest rung -- so the
+	# card could promise a building the village was not about to raise, and
+	# stay silent about the one it was.
+	return next_building_for_settlement(chunk_coord)
 
 
 func settlement_tier_of(settlement_id: String) -> String:

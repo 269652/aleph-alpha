@@ -424,3 +424,59 @@ func test_a_dig_with_no_condition_sites_the_pond_exactly_as_before():
 		VillagePond.pond_rect(house, HOUSE, _anywhere),
 		VillageFarm.field_rect(house, HOUSE, _anywhere, true)
 	)
+
+
+# -- how far off the water a hut may stand ---------------------------------
+#
+# Measured on the two real villages that had no hut at all
+# (tools/probe_village_geometry.gd, sites available for the catalog's own
+# 3x2 works with the pond's rails treated as clear ground):
+#
+#     works  | reach 2 | reach 3 | reach 4
+#     3x2    |    0    |    1    |  5 / 9
+#     2x2    |    0    |    3    | 10 / 13
+#     2x1    |    2    |    5    | 15 / 16
+#
+# Both fishers live at the far west end of the street with a street row
+# above them and the next below, so the only ground of their own is a
+# two-row strip the water exactly fills -- and a 3x2 works plus its
+# doorstep needs three rows. At two tiles there is nowhere at all.
+
+
+## Chosen deliberately over shrinking the works: the hut keeps the
+## farmhouse's footprint, because it is DRAWN as a farmhouse until its own
+## sheet exists ("use farmhouse sprite until illustration exists"), and a
+## 2x1 building drawn from a farmhouse sheet would look like neither.
+##
+## The floor is not arbitrary either: the water is fenced on its own ring,
+## so a hut demanding to stand within one tile of it could only ever stand
+## on the rails.
+func test_the_bank_reach_is_the_measured_three_and_still_clears_the_frame():
+	assert_gte(
+		VillagePond.HUT_BANK_REACH_TILES, 2,
+		"inside two tiles a hut could only stand on the pond's own rails"
+	)
+	assert_eq(
+		VillagePond.HUT_BANK_REACH_TILES, 3,
+		"three is what a real cramped bank needed; two gave those villages nothing"
+	)
+
+
+## And it really reaches: ground clear only three tiles off the water puts
+## a hut there rather than leaving the pond bare.
+func test_a_bank_clear_only_three_tiles_out_still_takes_a_hut():
+	var water := _pond_at(Vector2i(8, 8), Vector2i(3, 2))
+	# Nothing nearer than three tiles below the water is free -- the shape
+	# of a fisher boxed in by their own street grid.
+	var three_out := func(cell: Vector2i) -> bool:
+		return cell.y >= 12 and cell.y <= 14 and cell.x >= 7 and cell.x <= 11
+
+	var origin = VillagePond.hut_origin(water, three_out)
+
+	assert_not_null(origin, "a bank three tiles out is still this pond's bank")
+	var nearest := 9999.0
+	for cell in _hut_cells(origin):
+		for wet in water:
+			nearest = minf(nearest, Vector2(cell as Vector2i).distance_to(Vector2(wet as Vector2i)))
+	assert_lte(nearest, float(VillagePond.HUT_BANK_REACH_TILES))
+	assert_gt(nearest, 2.0, "precondition: this fixture really has nothing closer")

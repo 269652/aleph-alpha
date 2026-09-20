@@ -90,6 +90,11 @@ village actually does.
   real village in three with a pond and no hut at all. The dig asks now,
   and falls back to digging anyway when no bank in reach can take one —
   see "A pond is dug where its hut can stand" below.
+
+  ⚠️ **Two villages in three still have no hut**, and it is measured
+  rather than suspected: their fisher's plot genuinely has no room for a
+  3x2 works, and the obvious next fix (the frame going round the hut)
+  opens zero sites in either. Same section, "What it does not fix".
 - ✅ **A fisher's house digs one.** Sited against the house that carries the
   `fisher` occupation, since a fisher lives in an ordinary house and there is
   no separate building to hang it on. Fenced on the field's own rule, through
@@ -269,11 +274,13 @@ It is sited on the BANK rather than on street frontage
 already dug and fenced by the time the hut goes up, so there is one obvious
 right place for it and no search of the chunk to do. The nearest free site
 within `HUT_BANK_REACH_TILES` of the water wins, walked in a fixed order so
-the same pond puts the hut in the same place on every reload. Two tiles,
-not one: the water is fenced on its own ring, so a hut demanding to touch
-it could only ever stand on the rails. Idempotence is asked of the GROUND —
-a hut already standing on this pond's bank is this pond's hut — which is
-what stops a village growing a second one every time it is walked past.
+the same pond puts the hut in the same place on every reload. Never one
+tile: the water is fenced on its own ring, so a hut demanding to touch it
+could only ever stand on the rails. **Three** since 2026-09-20, measured
+rather than picked — see "What WOULD fit, counted" below. Idempotence is
+asked of the GROUND — a hut already standing on this pond's bank is this
+pond's hut — which is what stops a village growing a second one every
+time it is walked past.
 
 **And it is an overlay, like every other building.** A hut missing from
 `TerrainRenderer.BUILDING_OVERLAY_TILE_IDS` paints the same flat brown
@@ -427,6 +434,130 @@ test doing exactly its job. The step is laid AFTER `place_building`, never
 before — `place_building` refuses a plot whose doorstep is already
 non-empty, so paving first would refuse the hut over its own future front
 step, the same ordering trap the houses' own pass records.
+
+### What it does not fix, and why the obvious next fix is not it
+
+A controlled A/B on a wiped world — the same three villages founded from
+nothing, before and after — says the dig-time question is a **no-op in
+the two villages that were missing a hut**. Their ponds do not move,
+because no other rectangle in reach passes either, so the fallback runs
+and the water lands in the same strip. Both of those fishers live at the
+far west end of the street, and the street grid boxes them in: one street
+row above, the next below, leaving a two-row strip that the water exactly
+fills. A 3x2 works plus its doorstep needs three rows.
+
+The obvious next move is to raise the hut BEFORE the frame, so the fence
+goes round it the way it already goes round a farmhouse standing in its
+field's ring — which would also retire `HUT_BANK_REACH_TILES`' own
+stated reason for being 2 rather than 1. **Measured, it is not the fix.**
+Walking the same candidate grid again with the pond's own rails, and only
+the rails, treated as clear ground opens **7** sites in the village that
+already has a hut and **0** in each of the two that do not. The frame is
+not what is in the way; the street grid and the neighbours are.
+
+(The first count said 5 and 2, which looked like enough. It was read off
+a first-reason tally, and a site whose FIRST refusal is a rail can still
+be blocked by a street on another of its cells — an upper bound wearing
+an answer's clothes. Recorded because the reorder was about to be written
+on it.)
+
+### What WOULD fit, counted
+
+Two levers remain: a smaller works, and a longer reach. Both are numbers,
+so both were counted rather than argued about — sites available on the
+two hutless villages' banks, with the pond's own rails treated as clear
+ground (that is, assuming the reorder above):
+
+| works | reach 2 | reach 3 | reach 4 |
+| --- | --- | --- | --- |
+| 3x2 (today) | **0** | 1 | 5 / 9 |
+| 2x2 | **0** | 3 | 10 / 13 |
+| 2x1 | **2** | 5 | 15 / 16 |
+| 1x1 | 2 / 5 | 5 / 8 | 17 / 20 |
+
+(Two figures where the villages differ.)
+
+**The reach is the wrong lever.** A 3x2 works fits at reach 3, but its
+only site in either village is `(0,14)` — the next house row, on the far
+side of the street row at `y=16` from water at `y=17-18`. That is exactly
+the fault already reported and fixed for the pond itself: *"it's randomly
+placed somewhere not adjacent to the fishers house or across the
+street"*. A hut across the road from its own pond is not a hut on the
+bank.
+
+**The footprint is the right one.** A 2x1 works fits at the CURRENT reach,
+at `(7,17)` — immediately east of the water, same rows, no street
+between, on the fisher's own side. And it needs the reorder to get there,
+because `(7,17)` is a ring cell: the frame has to go round the shack, the
+way it already goes round a farmhouse in its field's ring. Neither change
+is sufficient alone; together they give both villages a hut in the right
+place.
+
+That left a design question rather than a defect, and it is the
+borrowing. `fisher_hut` takes the farmhouse's 3x2 because it is DRAWN as
+one (`draws_as`), under a direct instruction: *"use farmhouse sprite until
+illustration exists"*. A real fisher's shack is not a farmhouse, and a 2x1
+building drawn from a farmhouse sheet would not look like either.
+
+**Decided: keep the footprint, take the reach** (2026-09-20).
+`HUT_BANK_REACH_TILES` is 3, which is the smallest value that leaves those
+two banks anywhere at all. The cost is stated in the constant's own
+comment rather than left to be discovered: at three tiles the one site
+those villages have is on the next house row, across the street from the
+water, so a fisher walks out of their hut, over the road, and down to
+their pond. That is the shape of a thing already reported once about the
+pond itself; it is accepted here deliberately, because the alternative
+measured at zero and the alternative to THAT was art the hut does not
+have.
+
+
+## A road home, and fish for a pond nobody could stock (2026-09-20)
+
+Both reported live with the pond in shot: *"Fisher hut is there but not
+connected to street system"*, *"also no fish in pond"*.
+
+### The step was not a road
+
+Every other building a village places is sited ON frontage, so the layout
+lays its doorstep among the plot's own road cells and the plot is joined
+by construction. A hut belongs to the water instead, and the first answer
+to its missing doorstep was a single paved cell {D} a front step, not a
+road home. A step that reaches nothing is exactly what the screenshot
+showed.
+
+`VillageLayout.way_to_paving` finds the run, and is pure geometry with
+nothing about ponds or huts in it: any building raised off the grid can
+ask. Two L-shaped legs per target, the same shape `_frontage_spur`
+already walks for a street plot; targets taken nearest first with ties
+broken by (y, x), so the same ground lays the same way on every reload {D}
+a village that paved a different way each visit would grow a new road
+every time it was walked past. Its reach is derived rather than picked:
+a building off the grid stands between two street rows, so a way home is
+at most one street pitch down and one along, and anything longer is a new
+road rather than a spur.
+
+`[]` and `null` are deliberately different answers. "Already joined" and
+"cannot be joined" must never read the same, or a caller cannot tell a
+hut with a road from a hut without one {D} and a hut nothing clear reaches
+keeps its step and no road, which is honest rather than a lane paved
+through a neighbour's house.
+
+### A pond nobody could stock
+
+Persisting the stock keeps one that EXISTS. A pond dug by a build that
+never kept one has no record at all, and the dig pass returns early on
+water that is already there {D} correctly, since a fisher stocks a pond
+once. So every pond in every save made before `POND_FISH_DIR` existed was
+empty for ever, which is what the second screenshot is.
+
+`EarthChunkManager.pond_has_been_stocked` is the question that makes the
+repair safe, and it is a different question from how many fish are in
+there now: **an emptied pond carries a record of 0.0, a pond nobody ever
+stocked carries no record at all.** The village stocks the second kind on
+its next visit and never the first, so a pond it has fished out stays
+fished out {D} which is the one thing persisting the stock exists to
+prevent. A test pins that the stocking path asks `pond_has_been_stocked`
+and never `pond_fish_at`.
 
 ### Honest gaps
 
