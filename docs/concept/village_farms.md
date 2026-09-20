@@ -814,6 +814,17 @@ again.
 
 ## Status
 
+- ✅ **A field sows what the village is short of** (2026-09-20) —
+  `VillageCropChoice`, reading `VillageAssembly`'s own per-good
+  satisfaction so the needs panel and the plough share one number. Wheat is
+  offered only where a mill AND a bakery stand, because wheat is
+  `kind = "material"` and a granary of it counts as zero food — which is
+  what *"the warehouse shows 205 Wheat but the Villagers show 50% food"*
+  really was. The crop is chosen at sowing rather than frozen in
+  `setup_economy`, and the haul reads the shelf rather than one assumed id,
+  since a farmhouse may now hold a crop its villager was never built with.
+  `CROP_BY_OCCUPATION` survives as the TRADITIONAL crop — a tie-break and
+  the fallback — with the herbalist's herb restored. 15/15 + 4/4 wiring.
 - ✅ **A farmhouse is only raised where its field will really be derived**
   (2026-09-19) — see "One rule, two callers" above. Siting and derivation
   were two copies of the same question that had drifted apart, so a

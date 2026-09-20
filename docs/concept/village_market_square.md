@@ -190,6 +190,23 @@ villager in the village to one merchant's trestle.
 
 Honest gaps, each real:
 
+- ✅ **The square is laid AROUND what stands in it** (2026-09-20) — reported
+  a further time: *"There are still villages without plaza."* Measured
+  (`tools/probe_village_supply.gd`): of the two genuine villages in a
+  14-chunk sweep, one had 8 of its 48 square cells paved — exactly the
+  single street row crossing it — with a farm rail and a warehouse standing
+  inside the square. Two faults, each fatal alone. The paving pass
+  **returned on the first cell it could not take**, so one rail cancelled
+  the whole square; it steps over such a cell now. And it **skipped the
+  pass whenever the civic doorstep already carried a road tile** — which
+  the street crossing the square paves — so a village that lost its square
+  once could never gain it back on any later visit; that short-circuit is
+  gone, and the walk being idempotent means every visit now heals it.
+  A floor remains, because scattered cells are stray paving rather than a
+  square: `VillageLayout.plaza_is_worth_laying`, a **share** rather than a
+  count so it does not change meaning if `PLAZA_WIDTH_TILES` does, pinned
+  at both ends. Paving *through* a building is still forbidden — that half
+  of the old rule was right and is kept.
 - 🚧 **A stand is up or down, never being set up.** There is no carrying-out
   animation and no goods on the boards: the sprite appears when its trader
   arrives and vanishes when they leave. What a stand is *selling* is the
