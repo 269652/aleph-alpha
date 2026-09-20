@@ -31008,3 +31008,57 @@ it would pass these by accident.
 Tests: 151/151 across `test_forest_fern.gd`, `test_blackberry_bramble.gd`,
 `test_earth_chunk_manager_ferns.gd`, `test_earth_chunk_manager_brambles.gd`
 and `test_item_catalog.gd`.
+
+## Somebody is working on the construction site (`concept/building.md`, 2026-09-20)
+
+Asked for directly, watching a village raise a cottage: *"the construction
+site should show a builder working on it"*. A site was a picture of a
+building going up and nothing else — the stage sprite changed as labour
+accrued and the plot was otherwise empty ground.
+
+**The builder is a number made visible, not decoration.** A settlement
+spends real spare hands on its projects (`SettlementSpareCapacity` scaled
+by `settlement_productivity`, charged against the project's required hours
+by `ConstructionCatchup`), and that number is already the difference
+between a hall that rises and one that does not.
+`ConstructionWorkerMarker` stands on the plot while its settlement has
+hands on the work, and is freed the moment the project completes, is
+abandoned, or its chunk unloads — the site node's own life exactly, since
+a worker outliving the site he works is a ghost.
+
+- **Nobody, when nobody is working.** `builder_count` is zero for a
+  settlement with no spare capacity, and a site accruing no labour shows
+  no worker (`test_a_site_nobody_has_hands_for_shows_no_builder`).
+- **One figure, not a crew.** That count is settlement-WIDE and shared
+  across every project going, so one worker per unit at each site would
+  show the same hands twice over.
+- **He never leaves the footprint.** A small purpose-built walker like the
+  Farmer and the Lumberjack, not the `NpcMarker` schedule stack: he paces
+  his own plot, works a spell, moves on, seeded from the site's own seed
+  so one builder works one site the same way on every reload.
+
+**The art had to READ at the size it is really drawn**, and that is
+measured rather than eyeballed. On a real render at the game's own zoom
+(`tools/probe_construction_render.gd`, which now spawns a builder per
+stage through the real seam) a builder is about seven world units tall, a
+third the width of the cottage he is raising — a silhouette and nothing
+else. The first draft failed twice, both times for reasons a test can
+hold: an apron nearly the tone of skin, so the head vanished into the body
+(measured contrast 0.19 against the Lumberjack's own 0.35), and a mallet
+head 13% of the figure, drawn detached, which read as a grey slab floating
+beside a blob. Both are pinned now — the head must stand out from the
+apron about as well as the woodsman's does from his tunic, and the tool
+must be smaller than the man's own head, which is the honest standard for
+"a thing he is carrying" rather than "an axe, but bigger".
+
+Honest gap:
+
+🚧 **He does not carry material or place anything.** The labour he stands
+for is abstract — hours against a required total — so he is the face of
+work happening here, not a piece-by-piece builder.
+`BuilderMarker`/`civic_construction.md`'s piece-placing worker is a
+different, still-unbuilt thing for the legacy piece model.
+
+Tested: `test_procedural_builder_sprite.gd` (6, new),
+`test_construction_worker_marker.gd` (5, new),
+`test_earth_chunk_manager_city_hall_rising.gd` (+4).
