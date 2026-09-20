@@ -779,6 +779,97 @@ geometry helpers `leg_thigh_offset_y`/`leg_knee_pivot_local_y`/
 
 ### Character creator live preview scene (see `concept/character_creator_preview_scene.md`)
 
+✅ **Redone as a staged composition, with the hero twice the size.**
+Reported: *"redo and professionalize the Diorama. Make the character way
+bigger and a nicer scenery."* Measured before anything was changed —
+`tools/probe_diorama_render.gd` frames the diorama exactly as `main_menu.gd`
+does and saves a PNG per seed; `tools/probe_diorama_subject_sizes.gd`
+renders each subject alone at a known zoom and reads its opaque bounding
+box back in world units. Three seeds, three different failures, and the
+numbers named the cause of each.
+
+- **The hero filled 20.5% of its own portrait, and the ambient boar was the
+  biggest thing in it** (hero 10.0 × 19.8 world units, boar 30.0 × 46.5).
+  How much of the frame the hero fills has a closed form —
+  `hero_drawn_height / FOOTPRINT.y`, with the camera cancelling out
+  entirely, since the view's zoom is `view_width / FOOTPRINT.x` and its
+  height is `view_width * FOOTPRINT.y / FOOTPRINT.x`. That is exactly why
+  three earlier passes at "the character is too small" changed nothing:
+  each widened the panel AND the footprint at a fixed ratio, the one
+  operation the formula is blind to. `FOOTPRINT` 192×96 → 96×48 takes the
+  hero to **40.9%** at the same 496×248 panel (`DIORAMA_VIEW_SIZE` is
+  derived from the aspect ratio, which halving both axes leaves alone) —
+  the same scene at twice the magnification, not a differently shaped one.
+- **The scatter could not compose anything.** Every object was sampled
+  from one rectangle and obstacle-checked against whatever was already
+  there, which is a fine way to fill a meadow and a hopeless way to frame
+  a portrait: the two trees piled into the middle of the panel and stood
+  between the camera and the hero, the pond parked against whichever of
+  four edges the seed rolled (including the bottom, now the hero's own
+  lane), and the hero ended up half outside the frame on two seeds out of
+  three. Staged in depth now — a back band for the trees and the boar, a
+  middle ground for the pond, a front lane for the hero — with the trees
+  **assigned** one to each side edge rather than rolled, close enough that
+  part of each canopy sits outside the frame. That overhang is the point:
+  a canopy filling an upper corner reads as the scene continuing past the
+  panel, where the same tree in the middle just stands in front of the
+  subject.
+- **Keeping the hero in frame is not the same as keeping it in the
+  picture.** Its lane is inset by its own drawn extent (read off
+  `CharacterView.HEAD_TOP_Y` and `SCALE`, never pinned) *and* past both
+  framing trunks, after a rendered seed showed it hard against the left
+  edge under that side's canopy with the middle of the panel empty beside
+  it. It also opens centre stage facing the camera and holds one ordinary
+  `IDLE` beat before behaving randomly — it used to spawn at a random
+  clear point and roll its first action, so the first thing a player saw
+  of their own character was a back, mid-stride.
+- **Two tests passed while a rendered frame said otherwise, and both are
+  fixed at the root.** The boar-is-smaller-than-the-hero assertion measured
+  `texture.get_height()` — but every illustrated animal frame is composited
+  onto one shared 340×330 canvas with its feet on a shared baseline, so the
+  texture is mostly transparent padding and its height says nothing about
+  how big the animal reads; it uses `get_used_rect()` now. Once that was
+  fixed it passed again, because it measured a scale nothing had yet
+  overwritten: a `CreatureMarker` owns its `scale` and recomputes it from
+  its species profile and growth on every animation step, so the diorama's
+  value lasted until the marker's next frame (measured live at 29.4 × 19.9
+  against the hero's 19.6 — exactly the unscaled size). The boar hangs
+  under a scaling holder now, re-derived each frame, and the test forces
+  the marker to rewrite its own scale first. `CreatureMarker.
+  set_status_bars_visible` also takes the combat UI off it — a real marker
+  arrives wearing a health bar, and a red bar floating over a character
+  portrait is nobody's idea of a portrait.
+- **The pond's silhouette now resolves at a fixed cell COUNT**
+  (`POND_GRID_COLUMNS`), not a fixed cell world size. Sizing cells at one
+  world tile quietly made the pond's SHAPE depend on how big the pond was,
+  since the corner-erosion pass only has as much detail as it has cells:
+  already a blunt 4×3 rectangle before, and 2×2 at the halved footprint,
+  with no interior left to keep solid. Two things fell out of that.
+  `biome_at_global` had been conflating the incoming world tile size with
+  the pond's own cell size (the same number until now), and it has to test
+  a tile by **overlap** rather than by its centre — the whole pond is about
+  one world tile across now, so a centre test answered "land" for tiles a
+  fish was swimming in the middle of, and a fish checks the tile it wants
+  to step onto before committing (`FishMarker._compute_is_water_tile`). It
+  froze where it floated.
+- **Five older tests encoded the scatter and are rewritten to the property
+  each was really guarding**, not deleted: the pond moves across the frame
+  from seed to seed (it used to be shoved against a random edge); no trunk
+  stands in the pond; a framing tree stays anchored in frame even though it
+  overhangs it; the pond's tiles cover one grid CELL where the test said
+  one world tile; and the hold-still ripple test compares the hero's
+  position across steps instead of using a 2.5-unit "arrived" tolerance
+  that, at the shipped pond size, is wider than the wade-in distance and so
+  counted the deliberate entry splash. The grass-reaches-the-middle guard
+  now asks about the clear ground nearest the centre, because the centre is
+  the pond now and a cell under water cannot grow a clump under any noise
+  scale — counting it measured the pond, not the noise field it was written
+  for.
+- ⬜ **The panel still overruns the Character tab's first unscrolled view by
+  ~12px** (`test_the_diorama_fits_within_the_first_unscrolled_view_of_the_
+  character_tab`). Pre-existing, and untouched by this work: the panel is
+  still exactly 496×248, so the overrun is exactly what it was.
+
 ✅ **The static hero portrait is now a real, live, always-animating mini
 scene.** Asked directly, after the static-portrait panel had shipped and
 every other character-rendering fix above had landed: *"It should be a
