@@ -78,3 +78,28 @@ func test_build_theme_styles_tooltips_to_match_the_rest_of_the_ui():
 	assert_true(tooltip_sb is StyleBoxFlat)
 	assert_lt(tooltip_sb.bg_color.v, 0.35, "tooltip background should be dark, matching the rest of the UI")
 	assert_eq(theme.get_color("font_color", "TooltipLabel"), UiTheme.TEXT)
+
+
+## A slim HUD card (docs/concept/hud.md pillar 1): the same opaque, bordered,
+## rounded card, with less padding. A 10px XP bar inside the full-margin panel
+## would be a 34px card holding 10px of content -- mostly empty card. Same
+## colour and same border, so "legible" is still one decision made once.
+func test_the_compact_card_is_the_same_card_with_less_padding():
+	var compact := ui.compact_panel_stylebox()
+	var full := ui.panel_stylebox()
+	assert_eq(compact.bg_color, full.bg_color)
+	assert_eq(compact.border_color, full.border_color)
+	assert_eq(compact.corner_radius_top_left, full.corner_radius_top_left)
+	assert_lt(compact.content_margin_left, full.content_margin_left)
+
+
+## Still padded, though -- a card with no inner margin is a box drawn tight
+## around its text, which reads as a bug rather than as a card.
+func test_the_compact_card_still_has_inner_padding():
+	assert_gt(ui.compact_panel_stylebox().content_margin_left, 0.0)
+
+
+## Opaque enough to read over snow, which is the whole point of pillar 1 and
+## the pin test_world_hud.gd already makes for the message banners.
+func test_the_compact_card_is_opaque_enough_to_read_over_snow():
+	assert_gt(ui.compact_panel_stylebox().bg_color.a, 0.9)
