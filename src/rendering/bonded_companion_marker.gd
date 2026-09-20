@@ -18,7 +18,7 @@ extends Sprite2D
 ## toward it.
 
 const CreatureMovementGate = preload("res://src/gameplay/creature_movement_gate.gd")
-const BuildingWalls = preload("res://src/gameplay/building_walls.gd")
+const AgentPassability = preload("res://src/gameplay/agent_passability.gd")
 
 const GROUP_NAME := "bonded_companion"
 
@@ -57,7 +57,7 @@ var _last_gated_heading := Vector2.ZERO
 ## docs/concept/navigation.md). This parameter used to be thrown away.
 var _tile_size := 16
 
-## Which tiles this companion may not step into (see BuildingWalls). Built
+## Which tiles this companion may not step into (see AgentPassability). Built
 ## once here rather than per frame, the same as every other mover.
 var _wall_tiles := Callable()
 
@@ -66,7 +66,7 @@ func setup(world, tile_size: int) -> void:
 	add_to_group(GROUP_NAME)
 	_world = world
 	_tile_size = tile_size
-	_wall_tiles = BuildingWalls.predicate_for(world)
+	_wall_tiles = AgentPassability.blocked_predicate_for(world)
 
 
 func _process(delta: float) -> void:

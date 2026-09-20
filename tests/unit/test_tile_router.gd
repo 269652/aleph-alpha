@@ -150,3 +150,75 @@ func test_a_start_inside_a_wall_can_still_route_out():
 	var route: Array = TileRouter.route(Vector2i(0, 0), Vector2i(3, 0), blocked, BUDGET)
 	assert_gt(route.size(), 0, "an agent starting inside a wall could not route out")
 	assert_eq(route[-1], Vector2i(3, 0))
+
+
+# -- costed ground: route by travel TIME, not distance ---------------------
+#
+# Water is crossable but slow (see AgentPassability), so a route must be
+# free to prefer a longer dry way over a short wet one -- and free to wade
+# anyway when wading really is quicker than walking round.
+
+## A river running down x == 2, every tile of it costly but passable.
+func _river_cost(scale: float) -> Callable:
+	return func(tile: Vector2i) -> float:
+		return scale if tile.x == 2 else 1.0
+
+
+func test_a_route_prefers_dry_ground_when_the_detour_is_cheap():
+	# Crossing at y == 0 costs a lot; stepping around the river's end at
+	# y == 5 (where it does not run) costs a few ordinary tiles. With the
+	# river expensive enough, the dry way wins.
+	var short_river := func(tile: Vector2i) -> float:
+		return 20.0 if (tile.x == 2 and tile.y <= 4) else 1.0
+	var route: Array = TileRouter.route(
+		Vector2i(0, 0), Vector2i(4, 0), Callable(), BUDGET, short_river
+	)
+	assert_gt(route.size(), 0)
+	for tile in route:
+		assert_false(tile.x == 2 and tile.y <= 4, "the route waded at %s despite a dry way" % tile)
+
+
+func test_a_route_still_wades_when_going_round_would_cost_more():
+	# The same river, only mildly slow, and now the detour is long. A
+	# router that refused water outright would walk miles; one costed in
+	# time just gets its feet wet.
+	var route: Array = TileRouter.route(
+		Vector2i(0, 0), Vector2i(4, 0), Callable(), BUDGET, _river_cost(1.2)
+	)
+	var waded := false
+	for tile in route:
+		if tile.x == 2:
+			waded = true
+	assert_true(waded, "the route went the long way round a barely-slower river")
+
+
+func test_cost_never_makes_a_blocked_tile_passable():
+	# The wall needs a gap. A first version blocked the whole column, so no
+	# route existed, the loop body never ran and the test asserted nothing
+	# at all -- GUT called it Risky, correctly: a test that cannot fail is
+	# not a test.
+	var blocked := func(tile: Vector2i) -> bool: return tile.x == 2 and tile.y <= 3
+	var route: Array = TileRouter.route(
+		Vector2i(0, 0), Vector2i(4, 0), blocked, BUDGET, _river_cost(1.0)
+	)
+	assert_gt(route.size(), 0, "precondition: a way round the wall exists")
+	for tile in route:
+		assert_false(blocked.call(tile), "a costed route crossed a BLOCKED tile at %s" % tile)
+
+
+func test_a_scale_below_one_is_clamped_rather_than_breaking_optimality():
+	# The octile heuristic assumes a scale of 1, so a tile CHEAPER than open
+	# ground would make it overestimate and quietly return non-optimal
+	# routes. Clamping keeps A* honest even if a caller passes nonsense.
+	var free_lunch := func(_tile: Vector2i) -> float: return 0.01
+	var route: Array = TileRouter.route(
+		Vector2i(0, 0), Vector2i(5, 5), Callable(), BUDGET, free_lunch
+	)
+	assert_eq(route.size(), 5, "a cheap-tile scale distorted an open diagonal route")
+
+
+func test_no_cost_callable_routes_exactly_as_before():
+	assert_eq(
+		TileRouter.route(Vector2i(0, 3), Vector2i(7, 3), _wall(), BUDGET),
+		TileRouter.route(Vector2i(0, 3), Vector2i(7, 3), _wall(), BUDGET, Callable())
+	)

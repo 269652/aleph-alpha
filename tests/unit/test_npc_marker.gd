@@ -1247,3 +1247,68 @@ func test_routing_still_never_puts_a_villager_inside_the_house():
 			assert_false(true, "routing put the villager inside the house at %s" % tile)
 			return
 	assert_true(true)
+
+
+## A world with a river running north-south, crossable but slow, and a
+## cliff the villager must never climb. Exposes exactly the hooks
+## AgentPassability duck-types on.
+class RiverAndCliffWorld:
+	extends RefCounted
+	var river_x := 64
+	var river_gap_y := 70   # the one dry tile in the river's course
+	var cliff_x := 66
+
+	func biome_at_global(_x: int, _y: int) -> String:
+		return "grassland"
+
+	func has_building_at_global(_x: int, _y: int) -> bool:
+		return false
+
+	func slope_at_global(x: int, _y: int) -> float:
+		return 70.0 if x == cliff_x else 0.0
+
+	func is_river_at_global(x: int, y: int) -> bool:
+		return x == river_x and y != river_gap_y
+
+	func is_lake_at_global(_x: int, _y: int) -> bool:
+		return false
+
+
+func test_a_villager_prefers_the_dry_crossing_over_wading():
+	# Water is costly, not blocked (creatures must stand on it to drink,
+	# and both they and villagers already swim), so the router should route
+	# THROUGH the one dry gap rather than wading straight across.
+	var world := RiverAndCliffWorld.new()
+	marker.setup(world, TILE_SIZE)
+	marker.position = Vector2(62 * TILE_SIZE + 8, 70 * TILE_SIZE + 8)
+	marker.home_position = Vector2(65 * TILE_SIZE + 8, 70 * TILE_SIZE + 8)
+	marker.workspot_position = marker.home_position
+	marker.landmarks = {}
+	var waded := false
+	for i in 400:
+		marker._process(0.05)
+		var tile := Vector2i(
+			floori(marker.position.x / TILE_SIZE), floori(marker.position.y / TILE_SIZE)
+		)
+		if world.is_river_at_global(tile.x, tile.y):
+			waded = true
+		if marker.position.distance_to(marker.home_position) <= TILE_SIZE:
+			break
+	assert_false(waded, "the villager waded the river with a dry crossing right there")
+
+
+func test_a_villager_never_climbs_a_cliff():
+	# Slope is absolute, unlike water: TerrainPassability.is_passable says
+	# 70 degrees is not climbable, so no step may ever land there.
+	var world := RiverAndCliffWorld.new()
+	marker.setup(world, TILE_SIZE)
+	marker.position = Vector2(65 * TILE_SIZE + 8, 70 * TILE_SIZE + 8)
+	marker.home_position = Vector2(68 * TILE_SIZE + 8, 70 * TILE_SIZE + 8)
+	marker.workspot_position = marker.home_position
+	marker.landmarks = {}
+	for i in 400:
+		marker._process(0.05)
+		var tile_x := floori(marker.position.x / TILE_SIZE)
+		assert_ne(tile_x, world.cliff_x, "the villager walked onto the cliff at step %d" % i)
+		if tile_x == world.cliff_x:
+			return

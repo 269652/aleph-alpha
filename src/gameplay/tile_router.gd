@@ -52,8 +52,16 @@ const _NEIGHBOURS: Array[Vector2i] = [
 ## `is_blocked` takes a Vector2i and returns whether that tile is solid. An
 ## invalid Callable routes as open ground, the same fail-open every other
 ## mover contract here keeps.
+## `cost_scale` optionally takes a Vector2i and returns how much longer
+## crossing it takes than open flat ground (see AgentPassability) -- water
+## is slow but crossable, so a route costed in TIME can prefer a dry
+## detour and still wade when wading is genuinely quicker. Clamped to at
+## least 1.0: the octile heuristic assumes open ground is the cheapest
+## there is, and a cheaper tile would make it overestimate and quietly
+## return non-optimal routes.
 static func route(
-	from_tile: Vector2i, to_tile: Vector2i, is_blocked: Callable, node_budget: int
+	from_tile: Vector2i, to_tile: Vector2i, is_blocked: Callable, node_budget: int,
+	cost_scale: Callable = Callable()
 ) -> Array:
 	if from_tile == to_tile:
 		return []
@@ -103,6 +111,8 @@ static func route(
 				):
 					continue
 			var step_cost: int = _DIAGONAL_COST if diagonal else _STRAIGHT_COST
+			if cost_scale.is_valid():
+				step_cost = int(round(step_cost * maxf(float(cost_scale.call(next)), 1.0)))
 			var new_cost: int = int(cost_so_far[current]) + step_cost
 			if cost_so_far.has(next) and new_cost >= int(cost_so_far[next]):
 				continue

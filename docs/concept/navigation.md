@@ -116,6 +116,33 @@ can go stale — a house can be raised across it mid-walk — and the gate
 is what guarantees that even a stale route never puts a villager inside
 a wall.
 
+### Terrain and water are not the same kind of obstacle
+
+Wiring these in is one decision, not two, and getting it wrong in the
+obvious way would have removed working behaviour:
+
+- **Slope is absolute.** `TerrainPassability.is_passable` already owns the
+  threshold; too steep is simply not ground an agent can be on.
+- **Water is costly, not blocked.** A creature must stand *on* a water
+  tile to drink from it, and creatures, villagers and the player all
+  already have swim animations and a `WaterMovementModel`. Blocking water
+  would not have been a safety measure, it would have deleted all of that.
+
+So water enters through **cost**, which means routes are priced in
+**travel time rather than distance** — and the prices are derived, not
+invented. If swimming is `BASE_SWIM_SPEED` (0.6) of walking pace, a water
+tile takes 1/0.6 as long to cross, and that is exactly what the router is
+told. Slope reads the same way through
+`TerrainPassability.speed_multiplier`. A villager therefore walks round a
+river when there is a dry crossing and wades when going round would cost
+more, which is what a person does and what no amount of blocking could
+express.
+
+Cost scales are clamped to at least 1.0. The octile heuristic assumes open
+ground is the cheapest there is, so a tile cheaper than open ground would
+make the heuristic overestimate and quietly return non-optimal routes —
+wrong rather than merely odd.
+
 ## Real-world grounding, such as it is
 
 Little here is a physical claim, and this doc will not dress up a
@@ -159,11 +186,23 @@ observation, not an optimisation.
   below). A creature blocked by a long wall turns along it and wanders
   off, which is what a wandering animal should do, but a predator
   committed to a hunt inherits the same limitation.
-- ⬜ **Terrain is still not part of either navigation path.**
-  `TerrainPassability` answers slope and `blocks_ground_cover` answers
-  water, and neither is wired in — so agents still route up cliffs and
-  across rivers. The router takes an arbitrary predicate, so this is
-  additive rather than a redesign.
+- ✅ **Terrain and water are wired into both paths**, via
+  `AgentPassability` — one module answering two separate questions
+  (blocked: buildings and cliffs; costly: water). Villagers refuse cliffs
+  and prefer dry crossings; creatures and companions refuse cliffs through
+  the same predicate.
+- ✅ **Creatures now TURN at a cliff rather than stopping at one.** An
+  earlier draft of this list claimed terrain was in neither path; that was
+  wrong for creatures, which already had `_terrain_blocks_movement` —
+  but it ran *after* the heading was chosen, so the only thing a creature
+  could do about a cliff was stand still. Folding slope into the gate's own
+  per-candidate predicate means the existing twelve-turn search now finds
+  a way along the contour instead. The cost stays one predicate call on
+  the common path, because the gate returns on its first clear candidate.
+- ⬜ **Water costs nothing to a creature.** Only villagers route, and only
+  a router can price a tile — a wandering animal has no route to weigh, so
+  it wades whatever it walks into. Correct for a deer at a stream; less so
+  for one that ought to prefer the bank.
 - ⬜ **Trees and stones are not in the villager's predicate.** Creatures
   avoid them through `solid_obstacles_near`; villagers only avoid
   buildings.

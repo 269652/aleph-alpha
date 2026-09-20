@@ -62,7 +62,7 @@ const HoverTargetFinder = preload("res://src/rendering/hover_target_finder.gd")
 const SubmersionShader = preload("res://src/rendering/submersion_shader.gd")
 const WaterMovementModel = preload("res://src/gameplay/water_movement_model.gd")
 const CreatureMovementGate = preload("res://src/gameplay/creature_movement_gate.gd")
-const BuildingWalls = preload("res://src/gameplay/building_walls.gd")
+const AgentPassability = preload("res://src/gameplay/agent_passability.gd")
 const TerrainPassability = preload("res://src/gameplay/terrain_passability.gd")
 const AnimalFitness = preload("res://src/world/animal_fitness.gd")
 const EarthwormPatch = preload("res://src/world/earthworm_patch.gd")
@@ -476,8 +476,8 @@ var carried_nut_origin := Vector2.ZERO
 var carried_nut_direction := Vector2.ZERO
 var _world = null
 
-## Which tiles this creature may not step into -- building footprints (see
-## BuildingWalls). Invalid until setup() binds a world that can answer.
+## Which tiles this creature may not step into -- buildings and cliffs (see
+## AgentPassability). Invalid until setup() binds a world that can answer.
 var _wall_tiles := Callable()
 var _tile_size := 16
 
@@ -597,7 +597,10 @@ func setup(world, tile_size: int) -> void:
 	_world = world
 	_tile_size = tile_size
 	# Built once, not per frame -- see BuildingWalls' own doc comment.
-	_wall_tiles = BuildingWalls.predicate_for(world)
+	# Buildings AND ground too steep to climb, so the gate can TURN a
+	# creature away from a cliff rather than only stopping it dead the way
+	# _terrain_blocks_movement below does (see docs/concept/navigation.md).
+	_wall_tiles = AgentPassability.blocked_predicate_for(world)
 
 
 ## This creature's own real, live, current body mass -- see

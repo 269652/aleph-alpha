@@ -16,6 +16,7 @@ const NpcInstructionEvaluator = preload("res://src/world/npc_instruction_evaluat
 const CharacterView = preload("res://scenes/character_view.gd")
 const CreaturePerception = preload("res://src/gameplay/creature_perception.gd")
 const NpcBuildingGate = preload("res://src/gameplay/npc_building_gate.gd")
+const AgentPassability = preload("res://src/gameplay/agent_passability.gd")
 const TileRouter = preload("res://src/gameplay/tile_router.gd")
 const ForagerBehavior = preload("res://src/gameplay/forager_behavior.gd")
 const VillageFarm = preload("res://src/gameplay/village_farm.gd")
@@ -126,6 +127,11 @@ const ROUTE_RECOMPUTE_SECONDS := 0.5
 var _route: Array = []
 var _route_goal_tile := Vector2i(2147483647, 2147483647)
 var _route_age := 0.0
+
+## How much longer each tile takes to cross than open flat ground (see
+## AgentPassability) -- water is slow but crossable, so a villager routes
+## round a river when there is a dry way and wades when there is not.
+var _route_cost := Callable()
 var _perception := CreaturePerception.new()
 
 ## docs/concept/npc.md "Needs and the local production economy": this
@@ -398,10 +404,8 @@ func setup(world, tile_size: int) -> void:
 	# creature-blocker cache already exists to avoid. Invalid when the
 	# world cannot answer, which the gate reads as "nothing is solid" --
 	# the same duck-typed fail-open _is_in_water makes.
-	_wall_tiles = Callable()
-	if world != null and world.has_method("has_building_at_global"):
-		_wall_tiles = func(tile: Vector2i) -> bool:
-			return world.has_building_at_global(tile.x, tile.y)
+	_wall_tiles = AgentPassability.blocked_predicate_for(world)
+	_route_cost = AgentPassability.cost_scale_for(world)
 
 
 ## Builds this villager's NpcEconomy from its already-assigned `identity`
@@ -1211,7 +1215,7 @@ func _steer_toward(target: Vector2, delta: float) -> Vector2:
 	if goal != _route_goal_tile and _route_age >= ROUTE_RECOMPUTE_SECONDS:
 		_route_goal_tile = goal
 		_route_age = 0.0
-		_route = TileRouter.route(here, goal, _wall_tiles, ROUTE_NODE_BUDGET)
+		_route = TileRouter.route(here, goal, _wall_tiles, ROUTE_NODE_BUDGET, _route_cost)
 	# Drop whatever has already been walked. A villager can cross more than
 	# one waypoint in a frame at RUN_SPEED, so this is a loop, not an if.
 	while not _route.is_empty() and _tile_of(position) == _route[0]:

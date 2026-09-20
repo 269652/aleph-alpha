@@ -12452,6 +12452,21 @@ New concept doc this pass -- no prior doc covered what's underground (`stone.md`
 - ⬜ **Underground art is the flat procedural fallback** (`ProceduralStoneSprite`/`ProceduralOreSprite`, same textures surface stone/ore nodes fall back to with no illustrated sheet), not a cave-specific illustrated sheet -- none exists yet, the same honestly-documented situation `stone.md` itself describes for any future stone class with no art of its own.
 
 
+### Terrain and water reach both navigation paths (`concept/navigation.md`)
+
+Asked directly: *"wire terrain passability and water into both paths too"*.
+
+**The decision that shaped this: slope and water are not the same kind of obstacle.** Slope is absolute — `TerrainPassability.is_passable` already owns the threshold. Water is **costly, not blocked**, and treating it as blocked would have deleted working behaviour rather than adding safety: a creature must stand ON a water tile to drink from it (`CreatureMarker`'s own thirst check), and creatures, villagers and the player all already have swim animations and a real `WaterMovementModel`.
+
+- ✅ **`AgentPassability`** (9 tests) — one module, two deliberately separate questions: `blocked_predicate_for` (buildings OR ground too steep) and `cost_scale_for` (how much longer a tile takes to cross). Every hook is duck-typed and asked only of a world that offers it, so a partial stub answers for whichever it knows.
+- ✅ **Routes are priced in TRAVEL TIME, not distance, and the prices are derived rather than invented.** If `WaterMovementModel.BASE_SWIM_SPEED` is 0.6 of walking pace, a water tile takes 1/0.6 as long to cross, and that is exactly what the router is told; slope reads the same way through `TerrainPassability.speed_multiplier`. So a villager walks round a river when there is a dry crossing and **wades when going round would cost more** — which is what a person does, and what no amount of blocking could express. Both pinned as real behaviour tests, not just unit maths.
+- ✅ **Cost scales clamp at 1.0.** The octile heuristic assumes open ground is the cheapest there is, so a tile cheaper than open ground would make it overestimate and quietly return non-optimal routes — wrong rather than merely odd.
+- ✅ **Creatures now TURN at a cliff instead of stopping at one.** Wired through the same predicate, which upgrades behaviour that already existed: `_terrain_blocks_movement` ran *after* the heading was chosen, so the only thing a creature could do about a cliff was stand still. Folding slope into the gate's per-candidate predicate lets the existing twelve-turn search find a way along the contour. Cost on the common path stays one predicate call, because the gate returns on its first clear candidate.
+- ⚠️ **Correcting the previous entry**: it claimed "terrain is in neither navigation path". That was wrong for creatures, which already had `_terrain_blocks_movement` and already refused to climb cliffs. What was missing was that they could only stop, not steer.
+- ⬜ **Water costs a creature nothing.** Only villagers route, and only a router can price a tile — a wandering animal has no route to weigh, so it wades whatever it walks into. Right for a deer at a stream, less so for one that ought to prefer the bank.
+- ⬜ Trees and stones are still not in the villager's predicate; no cross-chunk routing.
+- ⚠️ Still pre-existing and untouched: `test_follow_speed_is_slower_than_the_players_own_base_speed` fails on `main` independently (`FOLLOW_SPEED` 60.0 vs `Player.BASE_SPEED` 40.0).
+
 ### Navigation: creatures see walls, and villagers route around them (`concept/navigation.md`)
 
 Reported live: *"fix creatures walking through houses too also add proper wayfinding / routing"*. New concept doc this pass — `wayfinding.md` turned out to be about PLAYER INSTRUMENTS (compass, map, spyglass), so agent navigation had no spec at all.
