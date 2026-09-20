@@ -288,9 +288,15 @@ func test_a_neighbours_rail_still_stops_the_farmer():
 		"precondition: this step must be nowhere near its own beds"
 	)
 	world.rails["%d,%d>%d,%d" % [here.x, here.y, next.x, next.y]] = true
-	var before := marker.position
 	marker._step_approaching(0.5)
-	assert_eq(marker.position, before, "somebody else's fence is still a fence")
+	# "It must not move" is the wrong assertion and this test made it twice.
+	# A rail is an EDGE you may not CROSS, and WalkGate deliberately slides
+	# along the free axis rather than freezing -- so the farmer legitimately
+	# drifts sideways here. What must not happen is arriving in `next`.
+	assert_eq(
+		_tile_of(marker.position), here,
+		"somebody else's fence is still a fence: it may slide, not cross"
+	)
 
 
 ## The exemption's cache is keyed on `home`, so a farmer whose farmhouse
