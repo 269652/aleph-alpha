@@ -102,8 +102,16 @@ func _init() -> void:
 	var loaded_frames := 0
 	var saved_loaded := false
 	var saved_working := false
+	var last: Vector2 = worker.position
 	for i in int(SECONDS / FRAME):
 		worker._process(FRAME)
+		if i % 600 == 0:
+			print("  t=%3ds phase %d at %s, %.1f px from the store, moved %.1f px" % [
+				int(float(i) * FRAME), worker._phase, worker.position,
+				worker.position.distance_to(worker.depot) if worker.depot != null else -1.0,
+				worker.position.distance_to(last)
+			])
+			last = worker.position
 		if worker.plot.has_point(worker.position):
 			on_the_plot += 1
 		if worker.carried_count > 0.0:

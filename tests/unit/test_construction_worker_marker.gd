@@ -15,6 +15,7 @@ const ConstructionWorkerMarker = preload("res://src/rendering/construction_worke
 const ConstructionHaul = preload("res://src/gameplay/construction_haul.gd")
 const LogisticsMarker = preload("res://src/rendering/logistics_marker.gd")
 const ProceduralBuilderSprite = preload("res://src/rendering/procedural_builder_sprite.gd")
+const NpcMarker = preload("res://src/rendering/npc_marker.gd")
 
 const PLOT := Rect2(Vector2(100.0, 200.0), Vector2(32.0, 32.0))
 const STORE := Vector2(400.0, 200.0)
@@ -241,3 +242,58 @@ func _drawn_as(carrying: bool) -> bool:
 	var sprite := worker.get_child(0) as Sprite2D
 	var drawn := (sprite.texture as ImageTexture).get_image().get_data()
 	return drawn == ProceduralBuilderSprite.new().generate_image(carrying).get_data()
+
+
+# -- a wall between him and the store (docs/concept/navigation.md) ---------
+#
+# Measured on a real village (tools/probe_construction_haul.gd): given a
+# straight line and the wall slide alone, a builder walked 68 px toward
+# the store's door, pressed into the corner of a building 25 px short of
+# it, and stood there for the remaining 230 simulated seconds -- nothing
+# delivered, never once back on his own plot. Sliding is a reflex for a
+# wall you brush; a detour needs a plan, which is what TileRouter is and
+# what every villager already walks on.
+
+
+## A world that answers the one question AgentPassability asks about
+## buildings, with a wall standing between the site and the store and a
+## way round its south end.
+class WalledVillage:
+	extends RefCounted
+
+	const WALL_COLUMN := 20
+	const GAP_BELOW_ROW := 21
+
+	func has_building_at_global(x: int, y: int) -> bool:
+		return x == WALL_COLUMN and y <= GAP_BELOW_ROW
+
+
+func test_he_walks_round_a_building_standing_between_him_and_the_store():
+	_stock_the_round()
+	var village := WalledVillage.new()
+	worker.earth = village
+	var reached_the_store := false
+	var stood_in_a_wall := false
+	for i in int(240.0 / FRAME):
+		worker._process(FRAME)
+		if worker.position.distance_to(STORE) <= ConstructionWorkerMarker.ARRIVE_DISTANCE_PX:
+			reached_the_store = true
+		var tile := Vector2i(
+			floori(worker.position.x / 16.0), floori(worker.position.y / 16.0)
+		)
+		if village.has_building_at_global(tile.x, tile.y):
+			stood_in_a_wall = true
+	assert_true(reached_the_store, "he never got round the wall to the store")
+	assert_false(stood_in_a_wall, "and he did not walk through it either")
+	assert_gt(
+		float(worker.delivered.get("wood", 0.0)), 0.0,
+		"a builder who cannot reach the store delivers nothing, however long you watch"
+	)
+
+
+## The same budget and the same throttle every villager routes on, read off
+## NpcMarker rather than restated beside it: two walkers searching the same
+## village to different depths is a difference nobody can justify.
+func test_a_builder_routes_on_the_same_terms_a_villager_does():
+	assert_eq(ConstructionWorkerMarker.ROUTE_NODE_BUDGET, NpcMarker.ROUTE_NODE_BUDGET)
+	assert_eq(ConstructionWorkerMarker.ROUTE_RECOMPUTE_SECONDS, NpcMarker.ROUTE_RECOMPUTE_SECONDS)

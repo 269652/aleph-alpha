@@ -33,6 +33,8 @@ const PixelNoise = preload("res://src/rendering/pixel_noise.gd")
 const ConstructionHaul = preload("res://src/gameplay/construction_haul.gd")
 const WalkGate = preload("res://src/gameplay/walk_gate.gd")
 const TerrainRenderer = preload("res://src/rendering/terrain_renderer.gd")
+const TileRouter = preload("res://src/gameplay/tile_router.gd")
+const AgentPassability = preload("res://src/gameplay/agent_passability.gd")
 
 const GROUP_NAME := "construction_worker"
 
@@ -64,6 +66,15 @@ const ARRIVE_DISTANCE_PX := 4.0
 ## working on the plot -- lifting a load onto your shoulder is work, and
 ## measuring it differently would be inventing a second number.
 const LOAD_SECONDS := WORK_SECONDS
+
+## How much A* one builder may spend on one leg of his round, and the
+## smallest gap between two recomputes -- the same terms every villager
+## routes on (docs/concept/navigation.md), pinned to NpcMarker's own by
+## test_a_builder_routes_on_the_same_terms_a_villager_does rather than
+## preloading that whole marker for two numbers. Two walkers searching the
+## same village to different depths is a difference nobody can justify.
+const ROUTE_NODE_BUDGET := 1500
+const ROUTE_RECOMPUTE_SECONDS := 0.5
 
 ## How many spells of work one delivered load is worth before he goes back
 ## for the next. One would mean a man who walks far more than he builds;
@@ -106,10 +117,17 @@ var delivered: Dictionary = {}
 var carried_item_id := ""
 var carried_count := 0.0
 
-## Late-bound world reference for WalkGate, the same pattern the other
-## walking markers use -- set by whatever spawns this marker, null in a
-## test, which the gate itself answers by letting every step through.
-var earth = null
+## Late-bound world reference for WalkGate and for routing, the same
+## pattern the other walking markers use -- set by whatever spawns this
+## marker, null in a test, which the gate itself answers by letting every
+## step through. Assigning it binds the two passability questions once
+## (NpcMarker.setup's own shape) rather than building a fresh lambda per
+## frame.
+var earth = null:
+	set(value):
+		earth = value
+		_wall_tiles = AgentPassability.blocked_predicate_for(value)
+		_route_cost = AgentPassability.cost_scale_for(value)
 
 var _phase := Phase.WORKING
 var _target := Vector2.ZERO
@@ -119,6 +137,22 @@ var _picks := 0
 ## fetch something rather than mime work over an empty plot.
 var _spells_since_load := WORK_SPELLS_PER_LOAD
 var _sprite: Sprite2D
+
+## Which tiles he may not step into, and how much longer each takes to
+## cross than open ground -- invalid until `earth` is set, which both the
+## gate and the router read as "nothing is solid", the same fail-open
+## every mover in this project keeps.
+var _wall_tiles := Callable()
+var _route_cost := Callable()
+
+## The tiles left to walk on this leg, the goal they were computed for, and
+## the time since. An empty route means "no detour needed, or none found"
+## -- either way he walks straight at it and the gate keeps him out of
+## walls. Starts stale on purpose, so the first leg of a round routes on
+## its first frame rather than half a second into a wall.
+var _route: Array = []
+var _route_goal_tile := Vector2i(2147483647, 2147483647)
+var _route_age := ROUTE_RECOMPUTE_SECONDS
 
 
 func _ready() -> void:
@@ -211,20 +245,73 @@ func _step_hauling(delta: float) -> void:
 	_phase = Phase.WORKING
 
 
-## One step of a road leg, through the shared gate (see WalkGate): a worker
-## is a Sprite2D assigning position, so no StaticBody2D in the world has
-## ever stopped one -- reported live, "Creatures and NPCs also walk through
+## One step of a road leg: toward the next waypoint of a real route when
+## one is needed, through the shared gate (see WalkGate). A worker is a
+## Sprite2D assigning position, so no StaticBody2D in the world has ever
+## stopped one -- reported live, "Creatures and NPCs also walk through
 ## houses". A builder who never left his footprint could not walk through a
 ## wall; one crossing the square to the store can. True once he is there.
 func _walk_the_road_to(goal: Vector2, delta: float) -> bool:
 	var toward := goal - position
 	var step := HAUL_SPEED * delta
 	if toward.length() <= maxf(step, ARRIVE_DISTANCE_PX):
+		_route.clear()
+		_route_goal_tile = Vector2i(2147483647, 2147483647)
 		return true
+	var toward_waypoint := _steer_toward(goal, delta) - position
+	if toward_waypoint.length() <= 0.0001:
+		return false
 	position = WalkGate.slide(
-		earth, position, position + toward.normalized() * step, float(TerrainRenderer.TILE_SIZE)
+		earth, position, position + toward_waypoint.normalized() * step,
+		float(TerrainRenderer.TILE_SIZE)
 	)
 	return false
+
+
+## Where to actually aim this frame: the next waypoint of a real route when
+## one is needed, or the goal itself when the way is clear, no route was
+## found, or he has no world to ask. The villagers' own steering
+## (NpcMarker._steer_toward, docs/concept/navigation.md), because the
+## problem is the villagers' own.
+##
+## Measured on a real village (tools/probe_construction_haul.gd) before
+## this: given the straight line and the wall slide alone, a builder walked
+## 68 px toward the store's door, pressed into the corner of a building
+## 25 px short of it, and stood there for the remaining 230 simulated
+## seconds. Sliding is a local reflex for a wall you brush; getting AROUND
+## one needs a plan.
+##
+## Recomputed when the goal moves, and also when the route has run out
+## while he is still not there -- a leg that ends short is exactly the
+## stall above, and one search every half second for the one builder on a
+## site is cheap enough to spend on never seeing it again.
+func _steer_toward(target: Vector2, delta: float) -> Vector2:
+	_route_age += delta
+	if not _wall_tiles.is_valid():
+		return target
+	var here := _tile_of(position)
+	var goal := _tile_of(target)
+	if here == goal:
+		return target  # final approach, inside the destination tile
+	if (goal != _route_goal_tile or _route.is_empty()) and _route_age >= ROUTE_RECOMPUTE_SECONDS:
+		_route_goal_tile = goal
+		_route_age = 0.0
+		_route = TileRouter.route(here, goal, _wall_tiles, ROUTE_NODE_BUDGET, _route_cost)
+	# Drop whatever has already been walked.
+	while not _route.is_empty() and _tile_of(position) == _route[0]:
+		_route.remove_at(0)
+	if _route.is_empty():
+		return target
+	return _tile_centre(_route[0])
+
+
+func _tile_of(point: Vector2) -> Vector2i:
+	var tile_size := float(TerrainRenderer.TILE_SIZE)
+	return Vector2i(floori(point.x / tile_size), floori(point.y / tile_size))
+
+
+func _tile_centre(tile: Vector2i) -> Vector2:
+	return (Vector2(tile) + Vector2.ONE * 0.5) * float(TerrainRenderer.TILE_SIZE)
 
 
 ## Which leg of the round he is drawn on: mallet up going out, a load on
