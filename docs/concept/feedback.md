@@ -203,6 +203,25 @@ the suite goes red before it can ship.
 
 ## Status
 
+- ✅ **Wired into the game** (2026-09-20). `Player.answered` carries
+  `Answerback`'s own resolved dictionary and `World._on_player_answered`
+  draws it: the line on the shared message stack, the number floating up
+  off the hero and fading inside the table's own deliberate interval so
+  two receipts never stack. Raised from the real paths rather than a
+  test hook — a connecting swing (`_perform_attack`), a sweep off the
+  ground (`pickup_nearby`), experience gained and a level reached.
+
+  **`gain_experience` has always returned the levels it granted, and all
+  three of its callers threw that away** — which is exactly why a
+  level-up was a silent change to a corner label. It is read now.
+
+  Rate-limited per action from the table's own interval, against a clock
+  the player advances itself rather than `Time.get_ticks_msec`, so the
+  limit is testable without a real clock — the same reason
+  `should_play` takes its `now`. A verb with no feedback row raises
+  nothing at all (`test_player_answerback.gd`, 8).
+
+
 - ✅ **The table and its four entry points** (2026-09-20).
   `Answerback.for_action` / `floating_text_for` / `should_play` /
   `interval_for`, pure and static (`tests/unit/test_answerback.gd`).

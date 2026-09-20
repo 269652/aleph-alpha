@@ -14,6 +14,7 @@ const Item = preload("res://src/gameplay/item.gd")
 const Inventory = preload("res://src/gameplay/inventory.gd")
 const SurvivalMeters = preload("res://src/gameplay/survival_meters.gd")
 const SprintCost = preload("res://src/gameplay/sprint_cost.gd")
+const Answerback = preload("res://src/gameplay/answerback.gd")
 const NutrientRelease = preload("res://src/gameplay/nutrient_release.gd")
 const ConditionPenalty = preload("res://src/gameplay/condition_penalty.gd")
 const Wallet = preload("res://src/gameplay/wallet.gd")
@@ -366,6 +367,21 @@ signal permanently_died
 ## faster would just stack redundant rings at the same spot.
 const WATER_RIPPLE_INTERVAL := 0.4
 var _water_ripple_accumulator := 0.0
+
+## This act answered back (docs/concept/feedback.md). Carries
+## Answerback's own resolved dictionary -- sound, flash, float text,
+## message -- for World to render. Emitted by `answer`.
+signal answered(feedback: Dictionary)
+
+## When each action last answered, for the table's own per-action
+## interval. Keyed by action id so one verb's clock never mutes another's.
+var _answered_at: Dictionary = {}
+
+## The clock the intervals are measured against, advanced by the physics
+## step. Its own field rather than Time.get_ticks_msec so the rate limit
+## is testable without a real clock -- the same reason
+## Answerback.should_play takes its `now` rather than reading one.
+var _answer_clock_seconds := 0.0
 
 var inventory := Inventory.new(INVENTORY_SLOTS)
 ## The single item currently in hand. It alone decides attack damage (if it's
@@ -2385,6 +2401,7 @@ func _authority_step(delta: float) -> void:
 	_update_character_view(input_direction)
 	_step_water_ripples(delta, input_direction)
 
+	_answer_clock_seconds += delta
 	survival.advance(delta)
 	# Running costs the legs (docs/concept/survival.md's "Stamina scope",
 	# SprintCost). Only while actually MOVING: standing still with the
@@ -2903,6 +2920,39 @@ func _cast_step() -> void:
 		cast_spell(DEFAULT_CAST_SPELL_ID)
 
 
+## Raises this act's answer (docs/concept/feedback.md): the sound, the
+## flash, the number that floats and the line to say, resolved from the
+## one shared Answerback table and emitted for World to render.
+##
+## The PLAYER raises it because the player is what knows what happened --
+## the damage dealt, the item gained, the level reached, the reason a verb
+## refused. World owns the screen and does the drawing, the same division
+## `topic_chosen` and the seen ledger already keep.
+##
+## Rate-limited per action from the table's own interval, so a held key
+## answers once a beat rather than once a frame, and one verb's clock
+## never mutes another's. A verb with no feedback row raises nothing at
+## all: opening a window is not a world-changing act.
+##
+## Measured before this existed: the whole game had three sound effects,
+## no hit flash, no damage number, no XP float and no level-up toast, so
+## chopping a tree, killing a lynx, levelling up and being bitten all felt
+## like nothing had happened.
+func answer(action_id: String, context: Dictionary = {}) -> void:
+	if not Answerback.has_feedback(action_id):
+		return
+	var now := _answer_clock_seconds
+	if not Answerback.should_play(
+		action_id, float(_answered_at.get(action_id, -INF)), now
+	):
+		return
+	var feedback := Answerback.for_action(action_id, context)
+	if feedback.is_empty():
+		return
+	_answered_at[action_id] = now
+	answered.emit(feedback)
+
+
 func _perform_attack() -> void:
 	_attack_cooldown_remaining = ATTACK_COOLDOWN
 	_character_view.play_attack_swing(_facing_string(), SWING_DURATION)
@@ -2922,11 +2972,22 @@ func _perform_attack() -> void:
 		)
 		creature.apply_knockback(knockback)
 		creature.take_damage(damage)
+		# The swing answers (docs/concept/feedback.md): a number off the
+		# thing you hit, a flash, a sound. Before this a connecting blow on
+		# a lynx was completely silent.
+		answer("attack", {"damage": damage})
 		_wear_equipped_item()  # a real connecting hit, see docs/concept/item_durability.md
 		# A hit that kills the creature awards XP scaled by its level (see
 		# ExperienceTrack / concept/progression.md).
 		if creature.is_queued_for_deletion() and creature.info != null:
-			gain_experience(XP_PER_KILL * creature.info.level)
+			var gained := XP_PER_KILL * creature.info.level
+			var levels := gain_experience(gained)
+			answer("xp_gain", {"xp": gained})
+			# gain_experience has always RETURNED the levels it granted and
+			# all three of its callers threw that away, which is why a
+			# level-up was a silent change to a corner label.
+			if levels > 0:
+				answer("level_up", {"level": experience.level})
 
 	_chop_step()
 	_smash_step()
@@ -3724,11 +3785,19 @@ func _spawn_thrown_item(landing_position: Vector2, item_stack) -> void:
 ## nodes fully collected.
 func pickup_nearby() -> int:
 	var collected := 0
+	var last_item_id := ""
 	for item in get_tree().get_nodes_in_group(DroppedItem.GROUP_NAME):
 		if item.is_queued_for_deletion():
 			continue
 		if position.distance_to(item.position) <= PICKUP_RADIUS and item.pick_up(self):
 			collected += 1
+			if "item_stack" in item and item.item_stack != null and item.item_stack.item != null:
+				last_item_id = String(item.item_stack.item.id)
+	# What you just picked up, said out loud (docs/concept/feedback.md).
+	# Sweeping three sticks off the ground used to produce nothing at all
+	# on screen -- no sound, no line, no "+3".
+	if collected > 0:
+		answer("pickup", {"item": last_item_id, "count": collected})
 	return collected
 
 

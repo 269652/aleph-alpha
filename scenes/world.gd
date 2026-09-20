@@ -155,6 +155,7 @@ const SeasonCycle = preload("res://src/world/season_cycle.gd")
 const EntityRef = preload("res://src/emergence/entity_ref.gd")
 const ErrandDelivery = preload("res://src/gameplay/errand_delivery.gd")
 const NodePayoff = preload("res://src/gameplay/node_payoff.gd")
+const Answerback = preload("res://src/gameplay/answerback.gd")
 const Why = preload("res://src/emergence/why.gd")
 const SimulationMetrics = preload("res://src/emergence/simulation_metrics.gd")
 const TreeSpecies = preload("res://src/world/tree_species.gd")
@@ -2152,6 +2153,63 @@ func _payoff_facts_for(local_player: Player) -> Dictionary:
 	if weapon != null:
 		facts["held_weapon"] = weapon
 	return facts
+
+
+## Draws what an act answered with (docs/concept/feedback.md): the line on
+## the shared message stack, the number floating up off the player.
+##
+## World owns the screen; the Player owns knowing what happened. The same
+## division `topic_chosen` keeps for the seen ledger, and the reason the
+## resolved feedback arrives here already decided rather than as raw
+## numbers to interpret.
+func _listen_for_answers(player: Player) -> void:
+	if player == null or player.answered.is_connected(_on_player_answered):
+		return
+	player.answered.connect(_on_player_answered)
+
+
+func _on_player_answered(feedback: Dictionary) -> void:
+	var message := String(feedback.get("message", ""))
+	if message != "":
+		_set_message_banner(_talk_banner, message)
+	var float_text := String(feedback.get("float_text", ""))
+	if float_text != "":
+		_float_answer_text(float_text, Color(feedback.get("flash_color", Color.WHITE)))
+
+
+## One rising, fading label over the player: the receipt for an act, gone
+## before it can clutter. Deliberately a plain Label on the UI layer rather
+## than a world-space node -- it belongs to the reading of the act, not to
+## the place it happened, and a world-space number is the first thing to
+## get lost behind a tree.
+func _float_answer_text(text: String, colour: Color) -> void:
+	if _ui == null:
+		return
+	var label := Label.new()
+	label.text = text
+	label.theme = _ui_theme
+	label.add_theme_color_override("font_color", colour)
+	label.add_theme_font_size_override("font_size", ANSWER_FLOAT_FONT_SIZE)
+	label.set_anchors_preset(Control.PRESET_CENTER)
+	label.offset_top = ANSWER_FLOAT_START_OFFSET_Y
+	label.mouse_filter = Control.MOUSE_FILTER_IGNORE
+	_ui.add_child(label)
+	var rise := create_tween()
+	rise.set_parallel(true)
+	rise.tween_property(label, "offset_top", ANSWER_FLOAT_START_OFFSET_Y - ANSWER_FLOAT_RISE_PX,
+		ANSWER_FLOAT_SECONDS)
+	rise.tween_property(label, "modulate:a", 0.0, ANSWER_FLOAT_SECONDS)
+	rise.chain().tween_callback(label.queue_free)
+
+
+## How a floating answer reads: far enough above the hero to clear their
+## own sprite, rising a little, gone inside the interval the feedback table
+## itself uses for a deliberate act (Answerback.DELIBERATE_INTERVAL_SECONDS)
+## so two receipts never stack.
+const ANSWER_FLOAT_FONT_SIZE := 14
+const ANSWER_FLOAT_START_OFFSET_Y := -36.0
+const ANSWER_FLOAT_RISE_PX := 24.0
+const ANSWER_FLOAT_SECONDS := Answerback.DELIBERATE_INTERVAL_SECONDS
 
 
 ## Shown INSTEAD OF building the rest of the world when LicenseGate finds no
@@ -6802,6 +6860,7 @@ func _on_peer_connected(peer_id: int) -> void:
 	player.position = _spawn_position_for_tile(await _compute_dry_land_spawn_tile())
 	player.respawn_position = player.position
 	_players.add_child(player)
+	_listen_for_answers(player)
 	# So its pack ages and, once something in it turns, smells (see
 	# EarthChunkManager.register_scent_carrier).
 	_chunk_manager.register_scent_carrier(player)
@@ -6849,6 +6908,7 @@ func _spawn_local_singleplayer() -> void:
 		_pending_appearance
 	)
 	_players.add_child(player)
+	_listen_for_answers(player)
 	# AFTER add_child: _ready() has just wired inventory_changed ->
 	# sync_hotbar, so the grant's own emit actually reaches something (see
 	# Player.grant_starter_items's own doc comment). Only this NEW-game path
@@ -6890,6 +6950,7 @@ func _spawn_local_singleplayer_from_save() -> void:
 		save_data.get("appearance", {})
 	)
 	_players.add_child(player)
+	_listen_for_answers(player)
 	# So its pack ages and, once something in it turns, smells (see
 	# EarthChunkManager.register_scent_carrier).
 	_chunk_manager.register_scent_carrier(player)
