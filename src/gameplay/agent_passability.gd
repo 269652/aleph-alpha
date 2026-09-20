@@ -33,30 +33,67 @@ const WaterMovementModel = preload("res://src/gameplay/water_movement_model.gd")
 static func blocked_predicate_for(world, has_climbing_gear: bool = false) -> Callable:
 	if world == null:
 		return Callable()
-	# Prefer the PIECE question over the whole-footprint one. It is the
-	# same question the wall's own collision body is spawned from (see
-	# NpcMarker._slid_along_walls), so what stops a player, what stops a
-	# villager and what a route plans around can never disagree -- and it
-	# knows a DOOR and a FLOOR are walkable, where the footprint question
-	# reports the whole building solid and would mean no villager could
-	# ever plan a way indoors. The footprint question stays as the fallback
-	# for a world that does not offer the finer one.
 	var knows_pieces: bool = world.has_method("piece_blocks_movement_at_global")
 	var knows_buildings: bool = world.has_method("has_building_at_global")
 	var knows_slope: bool = world.has_method("slope_at_global")
 	if not knows_pieces and not knows_buildings and not knows_slope:
 		return Callable()
 	return func(tile: Vector2i) -> bool:
-		if knows_pieces:
-			if world.piece_blocks_movement_at_global(tile.x, tile.y):
-				return true
-		elif knows_buildings and world.has_building_at_global(tile.x, tile.y):
+		if structure_blocks(world, tile):
 			return true
 		if knows_slope and not TerrainPassability.is_passable(
 			world.slope_at_global(tile.x, tile.y), has_climbing_gear
 		):
 			return true
 		return false
+
+
+## Whether a SOLID structure stands on `tile` -- the one question every
+## walking marker asks about buildings, so six gates cannot answer it six
+## ways.
+##
+## BOTH kinds of building, and that `or` is the whole point. Reported twice:
+## *"Creatures and NPCs also walk through houses"*, then, after every marker
+## had grown a gate, **"NPCs still walk through houses and ignore the
+## hitbox"**. The gate was right; the question was half of one.
+##
+##   - A legacy **BuildingPiece** structure is a grid of wall/floor/door
+##     tiles, and `piece_blocks_movement_at_global` is the same question its
+##     wall's own collision body is spawned from -- so it knows a DOOR and a
+##     FLOOR are walkable and going indoors is untouched.
+##   - A **whole-building entity** -- what a village house is now (see
+##     docs/concept/building.md, "Buildings are entities; interiors are
+##     scenes") -- has no pieces AT ALL. `BuildingCatalog.occupies` says so:
+##     "a legacy BuildingPiece or a single-tile placeable is its own thing
+##     and answers false here". The piece question therefore answers `false`
+##     on every cell of a cottage, while the player is stopped by a
+##     `StaticBody2D` over its whole footprint.
+##
+## Asking only the first left the player and the markers stopped by two
+## different kinds of building. They are disjoint kinds, so asking both
+## costs nothing and shuts the gap.
+##
+## Its whole footprint is solid, and that is safe rather than coarse: a
+## whole building's interior is a separate SCENE, entered from its DOORSTEP,
+## which `BuildingCatalog.doorstep_of` puts "just south of the door, outside
+## the footprint". Nobody ever needed to walk through the footprint to get
+## in.
+##
+## Duck-typed, like every gate here: a world that answers neither question
+## -- a test double, or a marker set up before its world exists -- simply
+## reports nothing solid rather than erroring once per frame.
+static func structure_blocks(world, tile: Vector2i) -> bool:
+	if world == null:
+		return false
+	if (
+		world.has_method("piece_blocks_movement_at_global")
+		and world.piece_blocks_movement_at_global(tile.x, tile.y)
+	):
+		return true
+	return (
+		world.has_method("has_building_at_global")
+		and world.has_building_at_global(tile.x, tile.y)
+	)
 
 
 ## A `func(tile: Vector2i) -> float` giving how much longer crossing this

@@ -222,6 +222,33 @@ DOOR and a FLOOR are walkable pieces, where the footprint question this
 doc originally specified reported the whole building solid and would have
 meant no villager could ever plan a way indoors. It handles farm rails too.
 
+**That preference was half right, and the other half was a bug**
+(2026-09-20). Reported after every marker already had this gate: *"NPCs
+still walk through houses and ignore the hitbox"*. A village house is a
+whole-building **entity**, not a grid of pieces (see
+`docs/concept/building.md`, "Buildings are entities; interiors are
+scenes"), and `BuildingCatalog.occupies` is explicit that the two kinds are
+different things — "a legacy BuildingPiece or a single-tile placeable is
+its own thing and answers false here". So the piece question answers
+`false` on every cell of a cottage, while the player is stopped by a
+`StaticBody2D` over its whole footprint: the player and the markers were
+being stopped by two different kinds of building.
+
+`AgentPassability` had made the preference structural — an `elif`, so a
+world that knew pieces never asked about buildings at all.
+
+**Both questions, asked once.** `AgentPassability.structure_blocks(world,
+tile)` is now the single answer the router, `WalkGate`,
+`NpcMarker._blocked_step` and `CreatureMarker._building_blocks_arrival` all
+read, so six gates cannot answer it six ways. What protects a walkable door
+is not the preference but the **disjointness**: a `BuildingPiece` answers
+`false` to `has_building_at_global`, measured on real stamped pieces
+(`test_marker_gates_block_buildings.gd`), so both questions can be asked
+and a door stays a door. And a whole building's footprint being solid in
+full costs nothing, because its interior is a separate scene entered from
+the **doorstep**, which `BuildingCatalog.doorstep_of` puts "just south of
+the door, outside the footprint".
+
 What survived from this side is what the other did not have: the **router**
 (`TileRouter`), **`AgentPassability`**, and terrain/water. Two modules
 written here (`NpcBuildingGate`, `BuildingWalls`) were deleted as

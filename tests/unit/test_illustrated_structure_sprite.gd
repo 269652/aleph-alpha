@@ -1273,6 +1273,65 @@ func test_a_cottage_yards_own_art_survives_the_key():
 	var fraction := float(opaque) / float(image.get_width() * image.get_height())
 	assert_between(fraction, 0.45, 0.8, "a cottage yard is a real scene, not a cleared square")
 
+
+# -- where the ink actually lands, as something OTHER code can ask ----------
+#
+# _placed_wood_rect above measures this from the raw sheet's pixels, and the
+# rules around it are all phrased in terms of it -- but until now only this
+# test file could work it out. EarthChunkManager needs the same answer to
+# stand a fence's COLLIDER at the foot of its wood rather than on the tile
+# edge (reported: "The horizontal fences should have the hitbox at the
+# bottom of the rail"), and re-deriving it there would be a second copy of
+# the band arithmetic to get wrong.
+#
+# So the class answers it, and these tests hold that answer against the
+# independent pixel measurement rather than against itself.
+
+func test_the_sprite_reports_where_a_rails_ink_really_lands():
+	for subject in _FENCE_SUBJECTS:
+		var measured := _placed_wood_rect(subject)
+		var reported: Rect2 = sprite.placed_art_rect(subject, _TILE)
+		assert_almost_eq(reported.position.x, measured.position.x, _EDGE_TOLERANCE, subject)
+		assert_almost_eq(reported.position.y, measured.position.y, _EDGE_TOLERANCE, subject)
+		assert_almost_eq(reported.size.x, measured.size.x, _EDGE_TOLERANCE, subject)
+		assert_almost_eq(reported.size.y, measured.size.y, _EDGE_TOLERANCE, subject)
+
+
+## The load-bearing consequence, stated on its own because it is the number
+## the collider is placed from: a HORIZONTAL rail's wood ends at the tile
+## edge when it is bottom-anchored and at its own HEIGHT when it is top-
+## anchored -- the two facings really do land at opposite ends of the cell,
+## which is the whole reason the collider could not just stay on the edge.
+func test_a_horizontal_rails_ink_ends_at_its_own_foot():
+	for facing in ["north", "south"]:
+		var subject: String = VillageFarm.fence_tile_for(facing)
+		var inner: Vector2i = VillageFarm.fence_inner_direction(subject)
+		var placed: Rect2 = sprite.placed_art_rect(subject, _TILE)
+		if inner.y > 0:
+			assert_almost_eq(placed.end.y, float(_TILE), _EDGE_TOLERANCE, subject)
+		else:
+			assert_almost_eq(placed.end.y, placed.size.y, _EDGE_TOLERANCE, subject)
+			assert_lt(
+				placed.end.y, float(_TILE) - _EDGE_TOLERANCE,
+				"%s stops well short of the tile's bottom edge, which is the bug" % subject
+			)
+
+
+## A subject with no fence anchoring at all is still placed honestly: it is
+## bottom-anchored and centred like every whole structure, so asking where
+## its ink lands must not return a zero rect that a caller would read as
+## "no art" -- and must not be wider than the tile it was scaled onto.
+func test_a_plain_structure_reports_a_real_rect_too():
+	var placed: Rect2 = sprite.placed_art_rect("farm", _TILE)
+	assert_gt(placed.size.x, 0.0)
+	assert_gt(placed.size.y, 0.0)
+
+
+## An unknown subject has no ink to report, and says so rather than
+## inventing a rect the caller would stand a collider on.
+func test_an_unknown_subject_reports_no_rect():
+	assert_eq(sprite.placed_art_rect("not_a_subject", _TILE), Rect2())
+
 # -- and the same for a house that is still going up (2026-09-20) ----------
 #
 # Reported live with a village raising a cottage: *"it's clipped and

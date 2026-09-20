@@ -16655,10 +16655,28 @@ func _sync_piece_collision(global_cell: Vector2i, tile_id: String) -> void:
 	# which edge and how thick, so physics and the step rule read the same
 	# source.
 	var rail := VillageFarm.fence_collider_rect(
-		tile_id, float(TerrainRenderer.TILE_SIZE), VillageFarm.FENCE_COLLIDER_THICKNESS_PX
+		tile_id, float(TerrainRenderer.TILE_SIZE), VillageFarm.FENCE_COLLIDER_THICKNESS_PX,
+		_rail_wood_height(tile_id)
 	)
 	if rail.size != Vector2.ZERO:
 		_spawn_rail_collision(global_cell, rail)
+
+
+## How tall this rail's wood is actually DRAWN, in tile-local pixels.
+##
+## A horizontal rail stands at the foot of its wood, and the two facings
+## anchor their art to opposite ends of the cell, so where that foot is
+## cannot be guessed from the tile -- it has to be read off the same
+## picture the player sees. Reported live: "The horizontal fences should
+## have the hitbox at the bottom of the rail ... so it should use fence
+## height instead of thickness".
+##
+## Measured by the sprite class rather than here (placed_art_rect), so the
+## body and the art can never drift apart.
+func _rail_wood_height(tile_id: String) -> float:
+	if not _illustrated_structure_sprite.has_subject(tile_id):
+		return 0.0
+	return _illustrated_structure_sprite.placed_art_rect(tile_id, TerrainRenderer.TILE_SIZE).size.y
 
 
 func _spawn_piece_collision(global_cell: Vector2i, piece_id: String) -> void:

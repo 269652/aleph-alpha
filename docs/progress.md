@@ -27447,6 +27447,102 @@ than delete them, the placement invariants they were really pinning (a
 workspot is not a road or a wall; it touches the paving) were retargeted
 onto `NpcMarker.workspot_position`, which outlives the prop. 131/131.
 
+### ✅ Done (2026-09-20): ...and so do whole-building entities
+
+Reported unchanged after all of the above landed: **"NPCs still walk
+through houses and ignore the hitbox"**.
+
+The gates were right; the question was half of one. A village house is a
+whole-building **entity** now (docs/concept/building.md, "Buildings are
+entities; interiors are scenes"): its cells carry the building id and
+`BuildingCatalog.FOOTPRINT_TILE_ID`, and it has **no `BuildingPiece` walls
+at all** -- `BuildingCatalog.occupies` says so in as many words, "a legacy
+BuildingPiece or a single-tile placeable is its own thing and answers false
+here". So `piece_blocks_movement_at_global`, the one question all four
+gates asked, answers `false` on every cell of a cottage, while the player
+is stopped by a `StaticBody2D` over its whole footprint. **The player and
+the markers were being stopped by two different kinds of building.**
+
+`AgentPassability.blocked_predicate_for` had made it structural: an
+`elif`, so a world that knew about pieces never asked about buildings at
+all. That preference was deliberate and its worry was real -- routing on a
+whole footprint would shut a villager out of a piece-built structure's
+walkable DOOR and FLOOR -- but it defended the wrong thing.
+
+- ✅ **One shared question.** `AgentPassability.structure_blocks(world,
+  tile)` asks both, and is read by `TileRouter`'s predicate, `WalkGate`,
+  `NpcMarker._blocked_step` and
+  `CreatureMarker._building_blocks_arrival` -- six gates cannot answer it
+  six ways.
+- ✅ **What protects a door is disjointness, not preference.** A
+  `wood_wall` blocks the piece question and answers `false` to
+  `has_building_at_global`; `wood_door` and `wood_floor` stay walkable
+  through both. Measured on real stamped pieces, not asserted.
+- ✅ **A whole footprint is solid, and that costs nothing.** A building
+  entity's interior is a separate scene entered from its DOORSTEP, which
+  `BuildingCatalog.doorstep_of` puts "just south of the door, outside the
+  footprint". Nobody ever walked through the footprint to get in.
+
+**Measured on a real village, before and after**
+(`tools/probe_villagers_in_houses.gd` — 10 villagers, 17 buildings loaded,
+900 frames of 0.05 s each):
+
+| | before | after |
+| --- | --- | --- |
+| frames standing inside a building | **1818 / 9000 (20.2%)** | **0 / 9000** |
+| villagers ever inside one | **9 / 10** | **0 / 10** |
+| worst offender | carter, 621 frames | — |
+| ...of which the PIECE question would also have refused | **0** | — |
+| villagers that never moved at all | 0 / 10 | 0 / 10 |
+| still walking in the last 90 frames | 9 / 10 | 7 / 10 |
+| frames spent standing still | 5310 (59.0%) | 6498 (72.2%) |
+| mean distance walked | 375 px | 256 px |
+
+The fourth row is the diagnosis in one number: not one of the 1818 cells a
+villager stood on inside a house was a cell the old question would have
+refused, because a house entity has no `BuildingPiece` in it. Every marker
+had a world and a valid wall predicate the whole time — the gate was never
+missing, it was asking about the wrong kind of building.
+
+**The cost, stated rather than glossed:** villagers stand still more
+(72% of frames against 59%) and cover less ground in the same window,
+because a route around a house is not a line through one. Three ended the
+run stopped next to a house, against one before — so each was asked
+**directly** whether it had any way out, by offering it all eight
+directions through its own slide. All three had 4–5 open, none was wedged,
+and none was frozen for the whole run. The standing is villagers being
+villagers; the baseline already spent 59% of its frames that way.
+
+**Probe caveat:** it drives `villager._process` without stepping the world
+clock, so schedules do not advance as they would live. The numbers are
+sound as a *comparison* between the two runs, which is what they are for.
+
+**TDD:** new `test_marker_gates_block_buildings.gd` (10 tests) works on a
+REAL `house_medium` in a real Berlin chunk rather than a stub -- a stub can
+be made to answer anything, and what was wrong here was which question the
+*real* world was asked. Three confirmed red (route, walk gate, slide) with
+two diagnosis tests passing beside them (the body exists; the piece
+question is silent about it). It also pins the body's world rect against
+the cells the world calls a building, so player and markers cannot drift
+apart again. 10/10, plus 14/14 in `test_agent_passability.gd`.
+
+`test_the_piece_question_is_preferred_over_the_footprint_one` asserted the
+`elif` against a stub that answered `true` to **both** questions -- a world
+that does not exist -- and so pinned this bug in place. Retargeted onto the
+invariant that actually protects a door.
+
+**One of my own tests was wrong first**, the same class of mistake as ever:
+the "diagonal into the house" aimed at a cell one row BELOW the footprint,
+where there was nothing to be stopped by and nothing to slide along. Now
+stated in cells off the house's own corner.
+
+**Pre-existing failures, confirmed unchanged by stashing the change and
+re-running:** `test_npc_marker_farming` (3), `_timber` (1), `_fishing` (1),
+`_hunting` (1).
+
+**Still ungated:** the caravan and cart markers have no world reference to
+ask with; plumbing one through is a separate change and is the user's call.
+
 ### ✅ Walls and rails stop animals and villagers
 
 "Horses still aren't blocked by houses", "fences should have a hitbox
@@ -27514,6 +27610,70 @@ start, which is what makes it a regression guard. One of my own tests was
 wrong first: it asserted a "north" rail's collider touches its northern edge,
 when a rail on the field's north side closes its own SOUTHERN one -- the side
 the crop is on.
+
+### ✅ Done (2026-09-20): and it stops them at the foot of the rail
+
+Reported straight after: *"The horizontal fences should have the hitbox at
+the bottom of the rail ... so it should use fence height instead of
+thickness"*.
+
+Naming the edge is not the same as knowing where on that edge the fence
+stands. The two horizontal facings anchor their art to **opposite ends** of
+their cell (`IllustratedStructureSprite.footprint_offset`: `inner.y > 0`
+bottom-anchors, `inner.y < 0` top-anchors), so a collider pinned to the edge
+its normal names is right for one facing and wrong for the other. Measured
+before anything was changed, on a 16px tile:
+
+| rail | inner | wood, tile-local | collider was | correct |
+| --- | --- | --- | --- | --- |
+| north | `(0, 1)` | `y = 5.5 .. 16.0` | `12.0 .. 16.0` | yes |
+| south | `(0, -1)` | `y = 0.0 .. 10.9` | `0.0 .. 4.0` | no |
+
+A south rail's wood hangs DOWN from its top edge, so the body on that edge
+stopped the player at the rail's **head** -- seven pixels short of the line
+they could see. `fence_collider_rect` now takes the height of the wood as
+drawn and stands the strip at its **foot**, clamped into the cell so art
+that measures oddly can never put a body in the neighbour's tile. The strip
+is still `FENCE_COLLIDER_THICKNESS_PX` deep: the height decides *where* it
+sits, not how thick it is. A **vertical** rail is anchored left or right,
+has no foot on the `y` axis, and is untouched.
+
+Finding that foot means the band arithmetic `footprint_offset` already does,
+so `IllustratedStructureSprite.placed_art_rect` answers it once ("where does
+this subject's ink land inside its tile"), `footprint_offset` is refactored
+onto the same helper, and `EarthChunkManager` only forwards the number --
+the body cannot drift from the picture. That helper's result is cached per
+`subject|tile_size`, because `get_image()` is a readback and a chunk load
+asks once per rail cell.
+
+**TDD:** 5 new geometry pins in `test_village_farm.gd` (top-anchored blocks
+at its wood's foot, bottom-anchored does not move, both facings stated as
+one property, vertical unchanged, the foot clamped into the tile for any
+height) and 4 wiring pins in `test_earth_chunk_manager_rail_collision.gd`,
+plus 4 in `test_illustrated_structure_sprite.gd` holding `placed_art_rect`
+against the test file's own independent pixel measurement. All confirmed red
+first (`Too many arguments for "fence_collider_rect()"`, then
+`Nonexistent function 'placed_art_rect'`, then 9/9 against the unwired
+manager). 93/93, 9/9, 63/63.
+
+`test_the_collider_touches_the_edge_its_normal_names` asserted all four
+facings, and so **encoded this exact bug**. It is now vertical-only
+(`test_a_vertical_colliders_edge_is_the_one_its_normal_names`), with the
+horizontal rule stated as the foot it really is.
+
+**Known divergence, deliberate:** this is the one place the player and the
+markers stop at different *lines*. `rails_block_step` is a cell-grid rule
+and refuses the crossing at the cell boundary; the body refuses it a few
+pixels later, inside the cell. They still refuse the same crossings, and the
+rest of a rail's tile being ordinary ground is the design rule rather than
+an accident, so standing in it is allowed.
+
+**Also read as ambiguous and decided:** *"use fence height instead of
+thickness"* could have meant the strip's DEPTH becomes the fence height (a
+band covering the whole drawn rail) rather than its PLACEMENT. Read as
+placement, because *"have the hitbox at the bottom of the rail"* is where it
+sits; a band spanning the wood's full height would not be "at the bottom".
+Easy to change if the other reading was meant.
 
 ### 🚧 Honest note
 

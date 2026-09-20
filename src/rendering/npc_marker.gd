@@ -1466,6 +1466,7 @@ func _slid_along_walls(from: Vector2, to: Vector2) -> Vector2:
 		return to
 	if (
 		not _world.has_method("piece_blocks_movement_at_global")
+		and not _world.has_method("has_building_at_global")
 		and not _world.has_method("fence_blocks_step_global")
 		and not _world.has_method("slope_at_global")
 	):
@@ -1493,10 +1494,12 @@ func _blocked_step(from: Vector2, point: Vector2) -> bool:
 		_world.slope_at_global(tile.x, tile.y)
 	):
 		return true
-	if (
-		_world.has_method("piece_blocks_movement_at_global")
-		and _world.piece_blocks_movement_at_global(tile.x, tile.y)
-	):
+	# BOTH kinds of building, via the one shared question. Reported after
+	# this gate already existed: "NPCs still walk through houses and ignore
+	# the hitbox" -- a village house is a whole-building ENTITY with no
+	# BuildingPiece walls at all, so the piece question alone answered
+	# `false` on every cell of it. See AgentPassability.structure_blocks.
+	if AgentPassability.structure_blocks(_world, tile):
 		return true
 	if not _world.has_method("fence_blocks_step_global"):
 		return false

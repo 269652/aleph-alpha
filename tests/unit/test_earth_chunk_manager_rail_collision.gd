@@ -111,3 +111,85 @@ func test_pulling_the_rail_out_takes_its_body_with_it():
 	assert_not_null(_raise_rail("north"))
 	manager.build_at_global(_tile.x, _tile.y, "")
 	assert_eq(_bodies().size(), 0, "a torn-out fence line is ordinary ground again")
+
+
+# -- a horizontal rail's body stands at the foot of its wood ----------------
+#
+# Reported after the bodies first went in: "The horizontal fences should
+# have the hitbox at the bottom of the rail ... so it should use fence
+# height instead of thickness".
+#
+# The two horizontal facings anchor their art to OPPOSITE ends of the cell
+# (IllustratedStructureSprite.footprint_offset). A north rail's wood really
+# does end at the tile's bottom edge, so its body was always right. A south
+# rail's hangs DOWN from the top edge, and a body pinned to that edge
+# stopped the player at the rail's HEAD, a good seven pixels short of the
+# line they could see.
+#
+# VillageFarm owns the rule and is tested there; this is the WIRING -- that
+# the manager hands it the height of the wood it actually drew, rather than
+# a number that makes a south rail look right by accident.
+
+const IllustratedStructureSprite = preload("res://src/rendering/illustrated_structure_sprite.gd")
+
+## How far the body's own bottom edge is allowed to be from the wood's foot.
+## Sub-pixel: both come from the same scaled art, so anything larger means
+## the manager is measuring something else.
+const _FOOT_TOLERANCE := 0.01
+
+
+func _body_bottom_y(body: Node) -> float:
+	return body.position.y + _shape_size(body).y * 0.5
+
+
+## Where the rail's wood really ends, in world pixels -- read off the sprite
+## class rather than restated, so the body and the picture cannot drift.
+func _wood_foot_world_y(facing: String) -> float:
+	var sprite := IllustratedStructureSprite.new()
+	var placed: Rect2 = sprite.placed_art_rect(
+		VillageFarm.fence_tile_for(facing), TerrainRenderer.TILE_SIZE
+	)
+	return float(_tile.y) * TerrainRenderer.TILE_SIZE + placed.end.y
+
+
+func test_a_horizontal_rails_body_stands_at_the_foot_of_its_wood():
+	for facing in ["north", "south"]:
+		var body := _raise_rail(facing)
+		assert_not_null(body, facing)
+		assert_almost_eq(
+			_body_bottom_y(body), _wood_foot_world_y(facing), _FOOT_TOLERANCE,
+			"%s rail is not standing where its posts land" % facing
+		)
+		manager.build_at_global(_tile.x, _tile.y, "")
+
+
+## Stated as the regression itself, with no reference to the art at all: a
+## south rail's body used to sit flat against the TOP of its cell. Wherever
+## the wood is measured to end, it is not there.
+func test_a_south_rails_body_is_no_longer_pinned_to_the_top_of_its_cell():
+	var body := _raise_rail("south")
+	assert_not_null(body)
+	var tile_top := float(_tile.y) * TerrainRenderer.TILE_SIZE
+	assert_gt(
+		body.position.y, tile_top + TerrainRenderer.TILE_SIZE * 0.5,
+		"a south rail hangs down from its top edge, so it blocks in the lower half"
+	)
+
+
+## ...and the north one, which was never wrong, must not move to fix it.
+func test_a_north_rails_body_still_sits_on_the_cells_bottom_edge():
+	var body := _raise_rail("north")
+	assert_not_null(body)
+	var tile_bottom := float(_tile.y + 1) * TerrainRenderer.TILE_SIZE
+	assert_almost_eq(_body_bottom_y(body), tile_bottom, _FOOT_TOLERANCE)
+
+
+## A VERTICAL rail spans the full height of its cell and is untouched by any
+## of this -- its wood is anchored left or right, so it has no foot on the
+## y axis to stand at.
+func test_a_vertical_rails_body_still_spans_its_whole_cell():
+	for facing in ["east", "west"]:
+		var body := _raise_rail(facing)
+		assert_not_null(body, facing)
+		assert_eq(_shape_size(body).y, float(TerrainRenderer.TILE_SIZE), facing)
+		manager.build_at_global(_tile.x, _tile.y, "")
