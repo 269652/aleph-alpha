@@ -15821,6 +15821,28 @@ func _spawn_building_node(chunk_coord: Vector2i, origin_local: Vector2i, record:
 	kerb.position = Vector2(0, -footprint_px.y * 0.5)
 	node.add_child(kerb)
 
+	# The yard the building stands in, between the kerb and the house: on the
+	# ground the kerb marks out, under the walls (children paint in tree
+	# order). A woodpile, a barrel, a bench, a beaten path -- none of it in
+	# the building's own sheet, which draws the house alone. See
+	# docs/concept/building.md, "A building's own yard, drawn behind it".
+	#
+	# Seeded from the building's own seed through BuildingCatalog's own
+	# salts, so two farmhouses in a village differ and one looks the same on
+	# every reload. A building with no yard declared grows no node at all.
+	var yard_sheet := BuildingCatalog.background_sheet_for(building_id, int(record["seed"]))
+	if not yard_sheet.is_empty():
+		var yard_texture := _first_texture_of([yard_sheet], footprint.x, building_id)
+		if yard_texture != null:
+			var yard := Sprite2D.new()
+			yard.name = "Yard"
+			yard.texture = yard_texture
+			yard.scale = Vector2.ONE * ArtResolution.SPRITE_SCALE
+			yard.position = Vector2(
+				0, -float(yard_texture.get_height()) * 0.5 * ArtResolution.SPRITE_SCALE
+			)
+			node.add_child(yard)
+
 	var sprite := Sprite2D.new()
 	sprite.name = "Art"
 	# Which picture a FINISHED building has is BuildingCatalog's call (see

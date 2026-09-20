@@ -1078,3 +1078,98 @@ func _posts_across(canvas: Image) -> int:
 	if run_start >= 0 and canvas.get_width() - run_start >= 3:
 		posts += 1
 	return posts
+
+
+# -- a yard sheet's checkerboard is flooded off, not keyed off --------------
+#
+# farmhouse_bg_overlay.png (see docs/concept/building.md, "A building's own
+# yard, drawn behind it") has no alpha channel and paints its transparency as
+# a grey-and-white CHECKERBOARD -- a new problem here, since every other
+# sheet in this project keys flat magenta or near-black.
+#
+# A flat colour key cannot separate it from the art: the checker's lighter
+# square and the art's white flower highlights are the same colour -- the
+# tones measure about 253 and 213, a flower highlight sits at 235 and above.
+# Measured, one source cell holds 46,354 near-white pixels, almost all of
+# them checker, and 63 survive keying at drawn size; those are the flowers,
+# and a flat key takes every one. Connectivity is what separates them: the
+# checker reaches the cell's edge and a flower in foliage does not.
+
+const _YARD_SHEET := "res://assets/sprites/buildings/farmhouse_bg_overlay.png"
+
+
+## The outside is gone: a yard's own corners are background, so they must
+## come back fully transparent.
+func test_a_yards_checkerboard_corners_are_keyed_away():
+	var texture := sprite.footprint_frame_texture(_YARD_SHEET, 3, 3, 0, 0, 64, 3, "even")
+	assert_not_null(texture, "the yard sheet loads")
+	var image := texture.get_image()
+	for corner in [
+		Vector2i(0, 0), Vector2i(image.get_width() - 1, 0),
+		Vector2i(0, image.get_height() - 1),
+		Vector2i(image.get_width() - 1, image.get_height() - 1),
+	]:
+		assert_almost_eq(
+			image.get_pixelv(corner).a, 0.0, 0.01,
+			"a yard's corner is background, not checkerboard"
+		)
+
+
+## And the inside survives: the art is still most of the cell. A flat
+## near-white key would take the flowers with it, so this fails loudly if
+## anyone ever swaps the flood for one.
+func test_a_yards_own_art_survives_the_key():
+	var texture := sprite.footprint_frame_texture(_YARD_SHEET, 3, 3, 0, 0, 64, 3, "even")
+	var image := texture.get_image()
+	var opaque := 0
+	for y in range(image.get_height()):
+		for x in range(image.get_width()):
+			if image.get_pixel(x, y).a > 0.5:
+				opaque += 1
+	var fraction := float(opaque) / float(image.get_width() * image.get_height())
+	assert_between(fraction, 0.3, 0.75, "a yard is a real scene, not a cleared square")
+
+
+## The flowers in particular: white, unsaturated, and NOT connected to the
+## cell's edge, so a flood can never reach them however white they are.
+func test_the_white_flowers_inside_a_yard_are_not_keyed_away():
+	var texture := sprite.footprint_frame_texture(_YARD_SHEET, 3, 3, 0, 0, 64, 3, "even")
+	var image := texture.get_image()
+	var bright_kept := 0
+	for y in range(image.get_height()):
+		for x in range(image.get_width()):
+			var pixel := image.get_pixel(x, y)
+			var channels := [pixel.r, pixel.g, pixel.b]
+			channels.sort()
+			var unsaturated: bool = channels[2] - channels[0] <= 0.08
+			if pixel.a > 0.5 and channels[0] >= 0.72 and unsaturated:
+				bright_kept += 1
+	assert_gt(bright_kept, 0, "white flowers are kept, being unreachable from the edge")
+
+
+## The checker's EDGES, not just its squares. Its two tones measure 253 and
+## 213, so the pixels where one square meets the next are anti-aliased to
+## everything in between -- and below, where a square meets the art. The
+## strict seed threshold cannot take those without also being loose enough
+## to eat a grey rock, so the flood widens by a bounded two pixels from
+## background it has already cleared.
+##
+## Measured before the widening: 82 px of grey fringe survived in one yard.
+## Only the GREYS are counted -- a near-white leftover is a flower highlight
+## and belongs there, which is what the test above guards.
+func test_no_grey_checkerboard_fringe_survives_around_a_yard():
+	var texture := sprite.footprint_frame_texture(_YARD_SHEET, 3, 3, 0, 0, 64, 3, "even")
+	var image := texture.get_image()
+	var fringe := 0
+	for y in range(image.get_height()):
+		for x in range(image.get_width()):
+			var pixel := image.get_pixel(x, y)
+			if pixel.a <= 0.5:
+				continue
+			var lowest: float = minf(pixel.r, minf(pixel.g, pixel.b))
+			var highest: float = maxf(pixel.r, maxf(pixel.g, pixel.b))
+			# grey, bright, and NOT the near-white a flower highlight is
+			if highest - lowest <= 0.12 and lowest >= 0.58 and lowest < 0.97:
+				fringe += 1
+	var of_cell := float(fringe) / float(image.get_width() * image.get_height())
+	assert_lt(of_cell, 0.002, "a yard keeps no grey checker fringe (%d px)" % fringe)
