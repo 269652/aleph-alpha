@@ -134,12 +134,16 @@ func _pond_tiles() -> Array:
 	return pond.get_children()
 
 
-func test_pond_tiles_cover_a_grid_at_the_real_worlds_own_tile_size():
+func test_pond_tiles_cover_a_grid_of_the_ponds_own_cells():
 	var tiles := _pond_tiles()
 	assert_gt(tiles.size(), 1, "a single stretched tile is exactly the bug being fixed")
+	# One POND CELL each, not one world tile -- the grid's resolution is a
+	# fixed cell COUNT now (see POND_GRID_COLUMNS), so its cells are as big
+	# as the pond divided by that count.
+	var cell: float = CharacterPreviewDioramaScript._pond_cell_world_size(diorama.get("_layout"))
 	for tile in tiles:
-		assert_almost_eq(tile.scale.x * tile.texture.get_width(), CharacterPreviewDioramaScript.POND_TILE_WORLD_SIZE, 0.01)
-		assert_almost_eq(tile.scale.y * tile.texture.get_height(), CharacterPreviewDioramaScript.POND_TILE_WORLD_SIZE, 0.01)
+		assert_almost_eq(tile.scale.x * tile.texture.get_width(), cell, 0.01)
+		assert_almost_eq(tile.scale.y * tile.texture.get_height(), cell, 0.01)
 
 
 ## A tile with no land-facing side at all must be the real world's own
@@ -707,15 +711,33 @@ func test_the_hero_stops_rippling_once_it_holds_still_in_the_water():
 	diorama._enter_action(CharacterActionPicker.Action.FISH)
 	diorama.set("_action_time_remaining", 1000.0)
 	var previous_count := 0
+	var previous_position: Vector2 = diorama.character_view.position
 	var new_ripple_while_still := false
+	var held_still_in_water := false
 	for i in 300:
 		diorama._process(0.1)
 		var current_count: int = diorama.get("_water_shader")._disturbance_positions.size()
-		var arrived: bool = diorama.character_view.position.distance_to(fishing_spot) <= 2.5
-		if arrived and current_count > previous_count:
-			new_ripple_while_still = true
+		# "Holding still" means the hero did not MOVE this step -- not that
+		# it is within some tolerance of its target. A distance tolerance
+		# reads as "arrived" the instant the hero is that close, which at
+		# the shipped pond size is before it has even finished wading in:
+		# the wade spot sits 0.15 * pond_radius inside the rim, less than
+		# 2.5 world units, so a tolerance that size counts the deliberate
+		# entry splash (see _process's own "just_entered_water" branch) as
+		# a ripple made while standing still. This is the property the test
+		# was always about.
+		var still: bool = diorama.character_view.position == previous_position
+		var in_water: bool = (
+			diorama.character_view.movement_state == diorama.character_view.MovementState.SWIMMING
+		)
+		if still and in_water:
+			held_still_in_water = true
+			if current_count > previous_count:
+				new_ripple_while_still = true
 		previous_count = current_count
-	assert_false(new_ripple_while_still, "a new ripple was recorded while the hero was holding still, already arrived, in the water")
+		previous_position = diorama.character_view.position
+	assert_true(held_still_in_water, "precondition: the hero has to actually reach the water and stop in it")
+	assert_false(new_ripple_while_still, "a new ripple was recorded while the hero was holding still in the water")
 
 
 # -- incremental build ---------------------------------------------------
@@ -872,3 +894,59 @@ func test_ground_tiles_share_one_texture_per_distinct_variant():
 		)
 	)
 	assert_gt(textures.size(), 1, "sharing must not collapse the whole ground onto one variant")
+
+
+# -- the pond's silhouette resolves independently of how big it is --------
+#
+# The grid that renders the pond used to size its cells at one WORLD tile,
+# which made the pond's own shape depend on how big the pond happened to
+# be: the erosion pass that gives it an organic edge only has as much
+# detail as it has cells. At the halved footprint (see FOOTPRINT's own doc
+# comment) the whole pond came out 2 cells wide -- no interior left to keep
+# solid, nothing to erode, and a centre cell that bordered the shore on
+# every side. A fixed cell COUNT resolves the silhouette the same way at
+# any pond size.
+
+
+func test_the_pond_grid_resolves_at_a_fixed_cell_count_not_a_fixed_cell_size():
+	var layout = diorama.get("_layout")
+	assert_eq(
+		CharacterPreviewDioramaScript._pond_columns_for(layout),
+		CharacterPreviewDioramaScript.POND_GRID_COLUMNS
+	)
+	# ...and a pond of a completely different size resolves at the same
+	# count, which is the whole point.
+	var bigger = CharacterPreviewLayout.generate(42, Vector2(400, 200))
+	assert_eq(
+		CharacterPreviewDioramaScript._pond_columns_for(bigger),
+		CharacterPreviewDioramaScript.POND_GRID_COLUMNS
+	)
+
+
+## Cells stay square whatever the pond's aspect ratio, so the erosion noise
+## reads the same along both axes -- a grid of tall thin cells would nibble
+## the top and bottom edges visibly harder than the sides.
+func test_pond_cells_are_square_at_any_aspect_ratio():
+	for footprint in [Vector2(96, 48), Vector2(400, 200), Vector2(120, 120)]:
+		var layout = CharacterPreviewLayout.generate(7, footprint)
+		var cell: float = CharacterPreviewDioramaScript._pond_cell_world_size(layout)
+		var rows: int = CharacterPreviewDioramaScript._pond_rows_for(layout)
+		var covered_height := float(rows) * cell
+		assert_almost_eq(
+			covered_height / (layout.pond_half_size.y * 2.0), 1.0, 0.2,
+			"rows x cell size should cover the pond's own height at %s" % footprint
+		)
+
+
+## Enough cells, at the shipped footprint, for the erosion pass to have a
+## solid core AND a rim to nibble -- the property the organic silhouette
+## actually needs, checked against the real pond rather than the constant.
+func test_the_shipped_pond_has_both_a_solid_core_and_an_eroded_rim():
+	var layout = diorama.get("_layout")
+	var columns: int = CharacterPreviewDioramaScript._pond_columns_for(layout)
+	var rows: int = CharacterPreviewDioramaScript._pond_rows_for(layout)
+	assert_gte(columns, 6, "columns")
+	assert_gte(rows, 4, "rows")
+	var kept: Dictionary = CharacterPreviewDioramaScript._generate_pond_cells(columns, rows, 42)
+	assert_gt(kept.size(), 0)
+	assert_lt(kept.size(), columns * rows, "a pond that keeps every cell is a rectangle again")

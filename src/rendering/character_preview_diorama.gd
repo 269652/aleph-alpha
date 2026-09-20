@@ -89,7 +89,25 @@ const WEAPON_ITEM_ID := "iron_sword"
 ## further into the pre-existing, separately-tracked scroll-clipping
 ## regression (test_the_diorama_fits_within_the_first_unscrolled_view_of_
 ## the_character_tab) rather than leaving it exactly as-is.
-const FOOTPRINT := Vector2(192, 96)
+##
+## HALVED 192x96 -> 96x48, and this is the change that finally makes the
+## hero read bigger (reported live, against rendered frames: "make the
+## character way bigger"). Every pass above widened the PANEL and this
+## footprint together at a fixed ratio -- which, as
+## CharacterPreviewLayout.hero_screen_height_fraction's own doc comment
+## works out, cannot change the hero's on-screen size at all: the camera's
+## zoom and the view's height scale by the same factor and cancel, leaving
+## hero_height / footprint.y. The hero stayed at 20.5% of its own portrait
+## through all of them. Halving the footprint's HEIGHT is the only thing
+## that moves it, and it moves it to 40.9%.
+##
+## Both axes halve together so the 2:1 aspect -- and with it main_menu.gd's
+## own DIORAMA_VIEW_SIZE, which is derived from this ratio -- is completely
+## unchanged: the panel still renders at exactly 496x248, the same little
+## scene at twice the magnification rather than a differently-shaped one.
+## 96x48 stays a whole number of ground tiles (6x3), keeping this
+## constant's own established convention.
+const FOOTPRINT := Vector2(96, 48)
 ## The biome this little corner of the world is a corner OF.
 const GROUND_BIOME := "grassland"
 ## One diorama ground tile covers exactly one REAL world tile -- read from
@@ -798,7 +816,40 @@ static func _pick_long_grass_positions(positions: Array[Vector2]) -> Array[Vecto
 ## enough, and never needs the real system's intermediate "a few rings out"
 ## tier (TerrainRenderer.RING_MAX/generate_ring_image) at all -- every cell
 ## is either touching the rim or fully interior.
+## One real world tile, in world units -- what biome_at_global's incoming
+## coordinates are measured in (that is the grid FishMarker asks against).
+## NOT the pond's own cell size any more: those were the same number until
+## the grid below stopped being measured in world tiles, and the two are
+## now kept apart on purpose (see biome_at_global).
 const POND_TILE_WORLD_SIZE := float(TerrainRenderer.TILE_SIZE)
+
+## How many cells the pond's own silhouette is resolved at along its LONG
+## axis -- a fixed cell COUNT, not a fixed cell world size.
+##
+## The grid used to size its cells at one real world tile
+## (TerrainRenderer.TILE_SIZE), which quietly made the pond's SHAPE depend
+## on how big the pond happened to be: the erosion pass above only has as
+## much detail as it has cells to erode. At the old 192x96 footprint that
+## was a 4x3 grid -- already coarse enough to read as a blunt rectangle
+## with one notch taken out of it -- and at the halved footprint (see
+## FOOTPRINT's own doc comment) it collapsed to 2x2: no interior cell left
+## to keep solid, nothing to erode, and every cell bordering the shore on
+## every side. Resolving at a fixed count instead means a pond looks like a
+## pond at any size, which is the property the silhouette actually needs.
+##
+## 8 is test-pinned rather than derived, like every other framing choice in
+## this file -- what is CHECKED is the pair of properties that make a
+## silhouette read as organic (a solid core survives AND the rim is
+## genuinely nibbled), by test_the_shipped_pond_has_both_a_solid_core_and_
+## an_eroded_rim.
+const POND_GRID_COLUMNS := 8
+
+
+## The world size of one pond cell -- derived from the pond, so the grid
+## always spans exactly the pond's own long axis at POND_GRID_COLUMNS of
+## resolution.
+static func _pond_cell_world_size(layout: CharacterPreviewLayout.Result) -> float:
+	return layout.pond_half_size.x * 2.0 / float(POND_GRID_COLUMNS)
 ## How deep into a CORNER a cell must sit (its SHORTER-axis fraction from
 ## centre -- see _generate_pond_cells's own "corner_frac" doc comment) before
 ## the noise below can erode it at all. First tried against the LONGER axis
@@ -834,12 +885,16 @@ const POND_EROSION_NOISE_SCALE := 0.35
 ## (rather than inlined in _build_pond) so test_pond_grid_is_wider_than_it_
 ## is_tall can check the property directly against the live diorama's own
 ## layout without needing to reach into _build_pond's local variables.
-static func _pond_columns_for(layout: CharacterPreviewLayout.Result) -> int:
-	return maxi(1, int(ceil(layout.pond_half_size.x * 2.0 / POND_TILE_WORLD_SIZE)))
+static func _pond_columns_for(_layout: CharacterPreviewLayout.Result) -> int:
+	return POND_GRID_COLUMNS
 
 
+## Enough rows to cover the pond's SHORT axis with the same square cells the
+## long axis uses -- so the erosion noise reads identically along both, where
+## a grid of tall thin cells would nibble the top and bottom edges visibly
+## harder than the sides.
 static func _pond_rows_for(layout: CharacterPreviewLayout.Result) -> int:
-	return maxi(1, int(ceil(layout.pond_half_size.y * 2.0 / POND_TILE_WORLD_SIZE)))
+	return maxi(1, roundi(layout.pond_half_size.y * 2.0 / _pond_cell_world_size(layout)))
 
 
 ## Which cells of a `columns` x `rows` grid are actually part of the pond --
@@ -916,7 +971,8 @@ func _build_pond() -> void:
 
 	var columns := _pond_columns_for(_layout)
 	var rows := _pond_rows_for(_layout)
-	var grid_size := Vector2(columns, rows) * POND_TILE_WORLD_SIZE
+	var cell_size := _pond_cell_world_size(_layout)
+	var grid_size := Vector2(columns, rows) * cell_size
 	var top_left := _layout.pond_center - grid_size * 0.5
 	_pond_bounds = Rect2(top_left, grid_size)
 	# Seeded from _dna_seed directly, not the mutable _rng (whose state
@@ -953,8 +1009,8 @@ func _build_pond() -> void:
 			tile.name = "PondTile%d_%d" % [column, row]
 			tile.texture = ImageTexture.create_from_image(image)
 			tile.centered = false
-			tile.scale = Vector2.ONE * (POND_TILE_WORLD_SIZE / float(image.get_width()))
-			tile.position = top_left + Vector2(column, row) * POND_TILE_WORLD_SIZE
+			tile.scale = Vector2.ONE * (cell_size / float(image.get_width()))
+			tile.position = top_left + Vector2(column, row) * cell_size
 			tile.material = material
 			# _build_trees enables y_sort_enabled on this whole diorama
 			# root, which would otherwise compare each pond tile's own
@@ -996,12 +1052,16 @@ func _build_pond() -> void:
 ## centre point is re-expressed in the pond's own LOCAL cell coordinates
 ## before checking _pond_cells.
 func biome_at_global(tile_x: int, tile_y: int) -> String:
+	# Two DIFFERENT sizes, which were the same number until the pond's grid
+	# stopped being measured in world tiles: the incoming coordinate is a
+	# real world tile (that is what FishMarker asks in), the grid it is
+	# looked up in is the pond's own cell.
 	var tile_center := Vector2(
 		(float(tile_x) + 0.5) * POND_TILE_WORLD_SIZE, (float(tile_y) + 0.5) * POND_TILE_WORLD_SIZE
 	)
 	if not _pond_bounds.has_point(tile_center):
 		return GROUND_BIOME
-	var local := (tile_center - _pond_bounds.position) / POND_TILE_WORLD_SIZE
+	var local := (tile_center - _pond_bounds.position) / _pond_cell_world_size(_layout)
 	var cell := Vector2i(floori(local.x), floori(local.y))
 	return "ocean" if _pond_cells.has(cell) else GROUND_BIOME
 

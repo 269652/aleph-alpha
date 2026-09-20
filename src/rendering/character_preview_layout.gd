@@ -285,6 +285,100 @@ static func generate(seed_value: int, footprint: Vector2) -> Result:
 	return result
 
 
+const CharacterView = preload("res://scenes/character_view.gd")
+
+## How much of its own portrait the hero has to fill before the panel is
+## framing a character rather than a landscape with someone in it. A
+## decorative "how prominent should the subject be" has no real-world value
+## to derive it from, so it is test-pinned exactly the way
+## POND_RADIUS_FRACTION above is -- but what it is checked against is the
+## footprint the diorama actually ships
+## (test_the_shipped_footprint_frames_the_hero_as_the_subject), so a
+## footprint that shrinks the hero fails rather than drifts.
+##
+## Reported live, against rendered frames: "make the character way bigger".
+## The hero measured 19.8 world units tall in a 96-unit-tall footprint --
+## 20.5% of its own portrait, and the smallest thing in it (the ambient
+## boar rendered 46.5 units tall, more than twice the hero).
+const MIN_HERO_SCREEN_FRACTION := 0.35
+
+## How the footprint is staged in DEPTH, front to back -- the one change
+## that turns a scatter into a composition. The hero owns the FRONT band,
+## nearest the camera: it reads largest there, nothing can stand in front of
+## it, and it cannot wander behind a canopy. Trees and the ambient boar
+## stand in the BACK band, where they frame the scene rather than compete
+## with it. The pond sits in the middle, so the hero walks in front of the
+## water rather than around a rectangle parked wherever the seed dropped it.
+##
+## Fractions of the footprint's own height, not world units, so the staging
+## survives a footprint change; the two deliberately leave a gap between
+## them (the pond's band) rather than summing to 1.
+const BACK_BAND_FRACTION := 0.42
+const HERO_BAND_FRACTION := 0.3
+
+
+## The hero's own drawn extent in world units, read off the rig instead of
+## pinned to a number: CharacterView is anchored at its FEET and drawn
+## upward to HEAD_TOP_Y, at its own SCALE (itself already derived, from a
+## full-grown tree's height). Confirmed against a rendered frame --
+## tools/probe_diorama_subject_sizes.gd measures the hero alone at a known
+## zoom and reads its opaque bounding box back as 10.0 x 19.8 world units,
+## which is this arithmetic plus a row of antialiasing.
+static func hero_drawn_height() -> float:
+	return -CharacterView.HEAD_TOP_Y * CharacterView.SCALE
+
+
+## The rig's own shoulder width -- its widest part, and so the right inset
+## for keeping the whole body inside the frame (the arms hang within it).
+static func hero_drawn_width() -> float:
+	return float(CharacterView.BODY_SIZE.x) * CharacterView.SCALE
+
+
+## What share of the rendered frame's HEIGHT the hero fills. The camera
+## drops out of this entirely: the view's zoom is view_width / footprint.x
+## and its height is view_width * footprint.y / footprint.x (one uniform
+## zoom, see main_menu.gd's DIORAMA_VIEW_SIZE), so hero_height * zoom /
+## view_height reduces to hero_height / footprint.y.
+##
+## Which is exactly why "the character is too small" is a LAYOUT problem and
+## not a panel one: widening the panel cannot make the hero read bigger --
+## every previous pass at this widened the panel and the footprint together,
+## at a fixed ratio, and the hero stayed exactly the same size on screen
+## through all of them. Only the footprint's own height moves this number.
+static func hero_screen_height_fraction(footprint: Vector2) -> float:
+	if footprint.y <= 0.0:
+		return 0.0
+	return hero_drawn_height() / footprint.y
+
+
+## The strip of ground the hero strolls in -- the front band, inset by the
+## hero's OWN drawn extent so no seed can ever put it half out of frame.
+## Two of the three rendered seeds did exactly that (the hero clipped by the
+## left edge on one, the right on the other) because the stroll picked
+## targets across the whole footprint while the hero is drawn ~12 units wide
+## around that point and ~20 units tall above it. Derived from the art, the
+## same rule tree_bounds already applies to a canopy -- never an eyeballed
+## margin.
+static func hero_bounds(footprint: Vector2) -> Rect2:
+	var half_width := hero_drawn_width() * 0.5
+	# The rig stands ON its target and is drawn upward, so its head needs
+	# this much clear frame above the highest point it may stand on.
+	var top := maxf(footprint.y * (1.0 - HERO_BAND_FRACTION), hero_drawn_height())
+	return Rect2(
+		Vector2(half_width, top),
+		Vector2(
+			maxf(footprint.x - hero_drawn_width(), 0.0),
+			maxf(footprint.y - top, 0.0)
+		)
+	)
+
+
+## The scenery band across the back -- where trees and the ambient boar
+## stand, behind everything the hero does.
+static func back_band(footprint: Vector2) -> Rect2:
+	return Rect2(Vector2.ZERO, Vector2(footprint.x, footprint.y * BACK_BAND_FRACTION))
+
+
 ## Where a tree's own POSITION (the foot of its trunk) may land so that its
 ## whole drawn body stays inside the camera's frame -- which is exactly the
 ## footprint (see CharacterPreviewDiorama.FOOTPRINT and the camera derived

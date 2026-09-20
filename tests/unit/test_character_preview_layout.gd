@@ -425,3 +425,102 @@ func test_flower_butterfly_worm_boar_positions_are_deterministic_for_the_same_se
 	assert_eq(a.butterfly_positions, b.butterfly_positions)
 	assert_eq(a.worm_positions, b.worm_positions)
 	assert_eq(a.boar_position, b.boar_position)
+
+
+# -- Staging: the hero is the subject of this panel ------------------------
+#
+# Reported live, with the three rendered seeds in tools/diorama_renders/
+# that prompted it: "make the character way bigger and a nicer scenery".
+# Measured rather than eyeballed -- probe_diorama_subject_sizes.gd renders
+# each subject alone at a known zoom and reads its opaque bounding box back
+# in world units: hero 10.0 x 19.8, ambient boar 30.0 x 46.5. The hero was
+# the smallest thing in its own portrait.
+
+const CharacterViewForLayout = preload("res://scenes/character_view.gd")
+const CharacterPreviewDioramaForLayout = preload("res://src/rendering/character_preview_diorama.gd")
+
+
+## The hero's drawn height is the rig's OWN feet-to-head-top span times the
+## rig's OWN scale -- both already derived constants (CharacterView.SCALE is
+## itself computed from a tree's height), so this is read out of the art
+## rather than pinned to a number that a rig change would silently outdate.
+## Matches the rendered measurement (19.8 world units, off a pixel bounding
+## box that includes a row or two of antialiasing).
+func test_hero_drawn_height_is_the_rigs_own_scaled_span():
+	assert_almost_eq(
+		CharacterPreviewLayout.hero_drawn_height(),
+		-CharacterViewForLayout.HEAD_TOP_Y * CharacterViewForLayout.SCALE,
+		0.001
+	)
+	assert_almost_eq(CharacterPreviewLayout.hero_drawn_height(), 19.8, 0.4)
+
+
+## How much of the FRAME the hero fills reduces to a single ratio, and the
+## camera drops out of it entirely: the view's zoom is
+## view_width / footprint.x and its height is view_width * footprint.y /
+## footprint.x (uniform zoom, see main_menu.gd's DIORAMA_VIEW_SIZE), so
+## hero_height * zoom / view_height is just hero_height / footprint.y. That
+## is why this is a property of the LAYOUT and not of the panel: widening
+## the panel cannot make the hero read bigger, and only shrinking the
+## footprint can.
+func test_hero_screen_fraction_is_independent_of_the_panel_size():
+	var tall := CharacterPreviewLayout.hero_screen_height_fraction(Vector2(192, 96))
+	assert_almost_eq(tall, CharacterPreviewLayout.hero_drawn_height() / 96.0, 0.0001)
+	# Double the footprint's width (and with it the panel's, at the same
+	# uniform zoom) and the hero reads exactly as small as before.
+	assert_almost_eq(CharacterPreviewLayout.hero_screen_height_fraction(Vector2(384, 96)), tall, 0.0001)
+	# Halve its HEIGHT and the hero doubles.
+	assert_almost_eq(CharacterPreviewLayout.hero_screen_height_fraction(Vector2(192, 48)), tall * 2.0, 0.0001)
+
+
+## The framing bar itself. A decorative "how much of its own portrait should
+## the subject fill" has no real-world value to derive it from, so it is
+## test-pinned the same way POND_RADIUS_FRACTION above it is -- but what it
+## is checked AGAINST is the real footprint the diorama ships, so shipping a
+## footprint that shrinks the hero fails here.
+func test_the_shipped_footprint_frames_the_hero_as_the_subject():
+	var fraction := CharacterPreviewLayout.hero_screen_height_fraction(
+		CharacterPreviewDioramaForLayout.FOOTPRINT
+	)
+	assert_gte(
+		fraction,
+		CharacterPreviewLayout.MIN_HERO_SCREEN_FRACTION,
+		"the hero fills %.1f%% of its own portrait" % (fraction * 100.0)
+	)
+
+
+## The hero walks in a band across the FRONT of the scene -- between the
+## camera and the pond, in front of the trees and the boar. That is what
+## makes it read as the subject rather than as one more thing scattered
+## through a meadow, and it is also what keeps it from wandering behind a
+## tree canopy.
+func test_the_hero_walks_in_a_band_across_the_front_of_the_scene():
+	var fp := Vector2(96, 48)
+	var hero := CharacterPreviewLayout.hero_bounds(fp)
+	var back := CharacterPreviewLayout.back_band(fp)
+	assert_gt(hero.position.y, back.end.y, "the hero's lane starts below the scenery band")
+	assert_almost_eq(hero.end.y + CharacterPreviewLayout.hero_drawn_height() * 0.0, hero.end.y, 0.001)
+	assert_lte(hero.end.y, fp.y, "and ends inside the footprint")
+
+
+## No seed may ever put the hero half out of frame. Two of the three
+## rendered seeds did exactly that (99 and 1234 -- the hero clipped by the
+## left and right edges respectively), because the stroll picked targets
+## across the WHOLE footprint while the hero is drawn ~10 units wide and
+## ~20 tall around that point. The lane is inset by the hero's own drawn
+## extent, read from the art -- the same rule tree_bounds already applies
+## to a canopy.
+func test_the_heros_whole_body_stays_inside_the_frame_anywhere_in_its_lane():
+	var fp := Vector2(96, 48)
+	var lane := CharacterPreviewLayout.hero_bounds(fp)
+	var half_width := CharacterPreviewLayout.hero_drawn_width() * 0.5
+	# EPSILON, not an exact compare: the lane's own width is derived by
+	# subtracting the hero's drawn width from the footprint's, so adding
+	# half of it back lands a float ULP or two past the edge.
+	const EPSILON := 0.001
+	assert_gte(lane.position.x - half_width, -EPSILON, "left edge")
+	assert_lte(lane.end.x + half_width, fp.x + EPSILON, "right edge")
+	# The rig is anchored at its FEET and drawn upward, so the top of its
+	# head is hero_drawn_height above the highest point it can stand on.
+	assert_gte(lane.position.y - CharacterPreviewLayout.hero_drawn_height(), 0.0, "head-room")
+	assert_lte(lane.end.y, fp.y, "feet stay on the ground plane")
