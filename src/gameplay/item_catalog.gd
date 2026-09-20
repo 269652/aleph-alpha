@@ -142,6 +142,14 @@ const _ITEMS := {
 	# build-input press instead of equipping/using it.
 	"campfire": ["Campfire", "placeable", 5, 0.0],
 	"cooked_meat": ["Cooked Meat", "food", 20, 0.0],
+	# The vessel a household's water crosses the square in (docs/concept/
+	# village_water.md). A "tool", not a container kind of its own: nothing
+	# in this catalog models what is INSIDE an item, and water deliberately
+	# never becomes an item at all -- it is a level on the house, so a
+	# bucket is simply a thing a villager is seen holding. An empty one and
+	# a full one are the same item wearing two sprites (WaterErrand.
+	# BUCKET_EMPTY/BUCKET_FULL), not two entries here.
+	"bucket": ["Bucket", "tool", 1, 0.0],
 	# Primitive knapping-tech chain (see docs/concept/crafting.md's
 	# gather-craft loop): pick up rocks, smash rock-on-rock for sharp shards,
 	# lash a shard to a stick with grass fibre for a first crude weapon.

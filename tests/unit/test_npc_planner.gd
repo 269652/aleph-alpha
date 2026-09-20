@@ -158,3 +158,92 @@ func test_current_entry_resolves_from_an_hour():
 	var schedule := planner.plan_day(NpcIdentity.new(3), 0)
 	var current := NpcSchedule.current_entry(schedule, 2)  # hour 2 -> night
 	assert_eq(current["activity"], "sleep")
+
+
+# -- the square is not a waiting room (2026-09-20) --------------------------
+#
+# Reported live: *"All NPCs walk to the well at the same moments... and it's
+# not visible what they are doing."* Measured before changing anything
+# (tools/probe_well_crowding.gd), on a real twelve-villager roster: the
+# evening block sent **ten of twelve** to the well, all performing
+# `socialize`.
+#
+# NpcSchedule.personal_hour already staggers when each villager's day
+# turns, and it works -- but it cannot help when the DESTINATION is the same
+# for almost everyone across a five-hour block. They arrive a couple of
+# hours apart and then stand together until night. The crowd is a fact about
+# where the plan sends people, not about when.
+#
+# So the evening is each villager's own: some at the well, some at the
+# market stall, some simply home. The well is reached by ERRAND
+# (docs/concept/village_water.md) or not at all.
+
+const _EVENING_ROSTER := 24
+
+
+func _evening_spread() -> Dictionary:
+	var planner := NpcPlanner.FakeNpcPlanner.new()
+	var counts := {}
+	for i in _EVENING_ROSTER:
+		var identity := NpcIdentity.new(hash("evening_%d" % i))
+		for entry in planner.plan_day(identity, 0):
+			if String(entry["time_block"]) != "evening":
+				continue
+			var tag := String(entry["location_tag"])
+			counts[tag] = int(counts.get(tag, 0)) + 1
+	return counts
+
+
+func test_no_single_spot_swallows_the_village_in_the_evening():
+	var counts := _evening_spread()
+	var biggest := 0
+	var busiest := ""
+	for tag in counts:
+		if int(counts[tag]) > biggest:
+			biggest = int(counts[tag])
+			busiest = tag
+	assert_lt(
+		float(biggest) / float(_EVENING_ROSTER), 0.5,
+		"%d of %d villagers spend the evening at the %s" % [biggest, _EVENING_ROSTER, busiest]
+	)
+
+
+func test_the_evening_really_is_spread_over_several_places():
+	assert_gte(_evening_spread().size(), 3, "the whole village has one evening between them")
+
+
+## Each villager's own evening, the same way their own day-shift is theirs:
+## stable across days, so somebody who drinks at the well is a regular
+## rather than somebody who wanders differently every night.
+func test_a_villagers_evening_is_their_own_and_does_not_wander():
+	var planner := NpcPlanner.FakeNpcPlanner.new()
+	var identity := NpcIdentity.new(4242)
+	var first := ""
+	for day in 5:
+		for entry in planner.plan_day(identity, day):
+			if String(entry["time_block"]) == "evening":
+				if first == "":
+					first = String(entry["location_tag"])
+				assert_eq(String(entry["location_tag"]), first, "day %d" % day)
+
+
+## A guard still holds the gate -- that was already true and must stay so.
+func test_a_guard_still_works_the_gate_in_the_evening():
+	var planner := NpcPlanner.FakeNpcPlanner.new()
+	var guard := NpcIdentity.new(7, "guard")
+	for entry in planner.plan_day(guard, 0):
+		if String(entry["time_block"]) == "evening":
+			assert_eq(String(entry["location_tag"]), "gate")
+			assert_eq(String(entry["activity"]), "work")
+
+
+## Nobody is SCHEDULED to fetch water. The well appears in an evening plan
+## only as somewhere to be, never as an errand -- the errand is decided by
+## the household's own tank (village_water.md pillar 1).
+func test_the_plan_never_schedules_the_water_errand():
+	var planner := NpcPlanner.FakeNpcPlanner.new()
+	for i in _EVENING_ROSTER:
+		var identity := NpcIdentity.new(hash("errand_%d" % i))
+		for entry in planner.plan_day(identity, 0):
+			assert_ne(String(entry["activity"]), "fetch_water",
+				"a villager was put on the water errand by a timetable")

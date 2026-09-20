@@ -478,3 +478,55 @@ func test_bitten_mushroom_keeps_its_species_own_cap_color():
 	assert_eq(
 		ProceduralItemSprite.color_for("parasol_bitten"), ProceduralItemSprite.color_for("parasol")
 	)
+
+
+# -- the bucket (docs/concept/village_water.md pillar 2) --------------------
+#
+# "The bucket is the explanation": what a villager is doing must be
+# answerable by LOOKING at them. The two states carry the entire UI this
+# feature has, so they must not look alike -- and the full one must read as
+# the SAME pail with water in it rather than as a different object.
+
+const WaterErrand = preload("res://src/emergence/water_errand.gd")
+const HouseholdWater = preload("res://src/emergence/household_water.gd")
+
+
+func test_a_bucket_has_its_own_look_rather_than_the_generic_fallback():
+	assert_ne(
+		generator.generate_image(HouseholdWater.BUCKET_ITEM_ID).get_data(),
+		generator.generate_image("some_totally_unknown_item").get_data()
+	)
+
+
+func test_a_full_bucket_does_not_look_like_an_empty_one():
+	assert_ne(
+		generator.generate_image(WaterErrand.BUCKET_EMPTY).get_data(),
+		generator.generate_image(WaterErrand.BUCKET_FULL).get_data(),
+		"the errand is invisible again: both legs draw the same picture"
+	)
+
+
+func test_the_bucket_a_villager_carries_out_is_the_one_the_house_keeps():
+	assert_eq(
+		generator.generate_image(WaterErrand.BUCKET_EMPTY).get_data(),
+		generator.generate_image(HouseholdWater.BUCKET_ITEM_ID).get_data()
+	)
+
+
+func test_a_full_bucket_is_the_same_pail_rather_than_a_recolour():
+	assert_eq(
+		ProceduralItemSprite.color_for(WaterErrand.BUCKET_FULL),
+		ProceduralItemSprite.color_for(HouseholdWater.BUCKET_ITEM_ID),
+		"the full bucket is a different object, not the same one carrying water"
+	)
+
+
+func test_only_the_full_bucket_has_water_in_it():
+	assert_true(
+		_has_pixel(generator.generate_image(WaterErrand.BUCKET_FULL), ProceduralItemSprite.WATER_COLOR),
+		"nothing in the full bucket"
+	)
+	assert_false(
+		_has_pixel(generator.generate_image(WaterErrand.BUCKET_EMPTY), ProceduralItemSprite.WATER_COLOR),
+		"the empty bucket is carrying water"
+	)

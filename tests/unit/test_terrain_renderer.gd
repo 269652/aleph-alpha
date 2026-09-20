@@ -3064,3 +3064,149 @@ func test_paint_leaves_a_buildings_plot_showing_its_own_ground():
 func test_a_placeable_structure_still_paints_its_own_tile():
 	assert_false(TerrainRenderer.is_overlay_only_modification("campfire"))
 	assert_false(TerrainRenderer.is_overlay_only_modification("sagewerk"))
+
+
+# -- ... except the one a paved square was lifted out from under ----------
+#
+# Reported live with a screenshot, the same day the overlay rule above
+# landed: "the background of the houses 2x2 should be variable; if the
+# city hall is placed on the plaza it should have cobblestone background
+# so it looks seamless". An overlay answers the first half by itself -- a
+# house on grass shows grass -- but not the second: placement LIFTS the
+# paving it covers (EarthChunkManager._place_building_over_roads), so a
+# hall on the village square shows the grassland the square was paved over
+# instead, which is a hole punched in the square rather than a seam.
+#
+# So a building reads its own KERB (the ring of cells immediately around
+# its footprint): mostly paved means it stands ON the square and paints
+# that paving; anything less leaves it the plain overlay above. See
+# docs/concept/building.md, "The ground a building stands on, and the kerb
+# round its plot", and test_building_ground.gd for the rule itself.
+
+
+## A `size`-square all-grassland chunk carrying a 2x2 building at (1,1) --
+## its anchor id and its footprint markers -- and the real record that says
+## who owns those cells, which is what a kerb is read from.
+func _chunk_with_a_house_at_1_1(size: int) -> Chunk:
+	var chunk := Chunk.new()
+	chunk.width = size
+	chunk.height = size
+	chunk.elevation = PackedFloat32Array()
+	chunk.elevation.resize(size * size)
+	chunk.elevation.fill(0.4)
+	chunk.biome = PackedStringArray()
+	for i in size * size:
+		chunk.biome.append("grassland")
+	var origin := Vector2i(1, 1)
+	for cell in BuildingCatalogForOverlay.footprint_cells("house_small", origin):
+		chunk.modifications[cell] = (
+			"house_small" if cell == origin else BuildingCatalogForOverlay.FOOTPRINT_TILE_ID
+		)
+	chunk.buildings[origin] = {"id": "house_small", "facing": Vector2i(0, 1), "seed": 1}
+	return chunk
+
+
+func _pave_around_the_house(chunk: Chunk) -> void:
+	for y in chunk.height:
+		for x in chunk.width:
+			var cell := Vector2i(x, y)
+			if not chunk.modifications.has(cell):
+				chunk.modifications[cell] = TerrainRenderer.ROAD_TILE_ID
+
+
+## The hall on the square: every cell around the footprint is the village's
+## own paving, so the footprint carries that paving too and the square runs
+## unbroken under the building standing on it.
+func test_paint_gives_a_building_ringed_by_paving_the_paving_itself():
+	var tile_set := renderer.build_tile_set()
+	tile_map_layer.tile_set = tile_set
+	var chunk := _chunk_with_a_house_at_1_1(4)
+	_pave_around_the_house(chunk)
+
+	renderer.paint(tile_map_layer, chunk)
+
+	var road := renderer.atlas_coords_for_modification(TerrainRenderer.ROAD_TILE_ID)
+	for cell in BuildingCatalogForOverlay.footprint_cells("house_small", Vector2i(1, 1)):
+		assert_eq(
+			tile_map_layer.get_cell_atlas_coords(cell), road,
+			"%s: a building on the square stands on the square" % cell
+		)
+
+
+## The anchor cell carries the BUILDING ID, not the footprint marker, and a
+## reader that only knew about the marker would leave one corner of every
+## hall showing the grass under the plaza.
+func test_paint_paves_a_buildings_anchor_cell_along_with_the_rest():
+	var tile_set := renderer.build_tile_set()
+	tile_map_layer.tile_set = tile_set
+	var chunk := _chunk_with_a_house_at_1_1(4)
+	_pave_around_the_house(chunk)
+
+	renderer.paint(tile_map_layer, chunk)
+
+	assert_eq(
+		tile_map_layer.get_cell_atlas_coords(Vector2i(1, 1)),
+		renderer.atlas_coords_for_modification(TerrainRenderer.ROAD_TILE_ID),
+		"the anchor is ground like every other footprint cell"
+	)
+
+
+## The other half: nothing around this one is paved, so it stays the
+## overlay the rule above makes it -- every footprint cell paints exactly
+## what it painted before the building was ever placed on it.
+func test_paint_leaves_a_building_on_open_ground_showing_the_ground_it_was_raised_on():
+	var tile_set := renderer.build_tile_set()
+	tile_map_layer.tile_set = tile_set
+	var bare_chunk := _chunk_with_a_house_at_1_1(4)
+	bare_chunk.modifications.clear()
+	bare_chunk.buildings.clear()
+	renderer.paint(tile_map_layer, bare_chunk)
+	var bare := {}
+	for cell in BuildingCatalogForOverlay.footprint_cells("house_small", Vector2i(1, 1)):
+		bare[cell] = tile_map_layer.get_cell_atlas_coords(cell)
+
+	renderer.paint(tile_map_layer, _chunk_with_a_house_at_1_1(4))
+
+	for cell in bare:
+		assert_eq(
+			tile_map_layer.get_cell_atlas_coords(cell), bare[cell],
+			"%s: a house on grass shows the grass it was raised on" % cell
+		)
+
+
+## The kerb is read around the WHOLE footprint, not around each cell: the
+## doorstep road south of a house's own door must not pave the house.
+func test_paint_does_not_pave_a_house_because_its_doorstep_is_a_road():
+	var tile_set := renderer.build_tile_set()
+	tile_map_layer.tile_set = tile_set
+	var chunk := _chunk_with_a_house_at_1_1(4)
+	chunk.modifications[Vector2i(1, 1) + BuildingCatalogForOverlay.doorstep_of("house_small")] = (
+		TerrainRenderer.ROAD_TILE_ID
+	)
+
+	renderer.paint(tile_map_layer, chunk)
+
+	var road := renderer.atlas_coords_for_modification(TerrainRenderer.ROAD_TILE_ID)
+	for cell in BuildingCatalogForOverlay.footprint_cells("house_small", Vector2i(1, 1)):
+		assert_ne(
+			tile_map_layer.get_cell_atlas_coords(cell), road,
+			"%s fronts a street, it does not stand on one" % cell
+		)
+
+
+## A footprint marker with no record owning it (a chunk mid-load, or a
+## stale marker) has no kerb to read, so it stays an overlay rather than
+## crashing on a lookup that cannot answer.
+func test_paint_leaves_a_footprint_no_record_owns_as_a_plain_overlay():
+	var tile_set := renderer.build_tile_set()
+	tile_map_layer.tile_set = tile_set
+	var chunk := _chunk_with_a_house_at_1_1(4)
+	_pave_around_the_house(chunk)
+	chunk.buildings.clear()
+
+	renderer.paint(tile_map_layer, chunk)
+
+	var road := renderer.atlas_coords_for_modification(TerrainRenderer.ROAD_TILE_ID)
+	for cell in BuildingCatalogForOverlay.footprint_cells("house_small", Vector2i(1, 1)):
+		assert_ne(tile_map_layer.get_cell_atlas_coords(cell), road, str(cell))
+		assert_ne(tile_map_layer.get_cell_source_id(cell), -1, "%s is still painted" % cell)

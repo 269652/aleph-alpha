@@ -15331,3 +15331,41 @@ func test_ascending_from_bedrock_returns_to_the_surface():
 func test_ascending_from_the_surface_does_nothing():
 	assert_false(manager.try_ascend())
 	assert_eq(manager.player_cave_layer, "")
+
+
+# -- a chunk that cannot answer says so, rather than indexing off its end ---
+#
+# `biome_at_global` guarded a chunk that is not loaded and returned "" for
+# it, but not one that is PRESENT AND EMPTY -- a bare `Chunk.new()`, which
+# is exactly what a fixture builds when it only needs somewhere to put
+# modifications. Nothing asked it about arbitrary tiles until routing did
+# (AgentPassability._is_water, TileRouter.route), and then it indexed
+# straight off the end of an empty PackedStringArray: measured on a clean
+# origin/main worktree, `test_earth_chunk_manager_village_farm_loop` fails
+# 4/4 with 17,376 of these errors in one run.
+#
+# The fix is the size check Chunk.blocks_ground_cover already documents in
+# this very codebase -- "so a fixture that never set either flag reads as
+# dry land rather than indexing off the end".
+
+const _BareChunk = preload("res://src/world/chunk.gd")
+
+
+func test_an_empty_chunks_biome_reads_as_unknown_rather_than_crashing():
+	var coord := Vector2i(4, 4)
+	manager._loaded_chunks[coord] = _BareChunk.new()
+	var tile: Vector2i = coord * EarthChunkManager.CHUNK_SIZE + Vector2i(7, 9)
+	assert_eq(manager.biome_at_global(tile.x, tile.y), "")
+
+
+func test_a_chunk_still_answers_for_the_tiles_it_really_holds():
+	var coord := Vector2i(5, 5)
+	var chunk = _BareChunk.new()
+	chunk.width = EarthChunkManager.CHUNK_SIZE
+	chunk.height = EarthChunkManager.CHUNK_SIZE
+	chunk.biome = PackedStringArray()
+	chunk.biome.resize(EarthChunkManager.CHUNK_SIZE * EarthChunkManager.CHUNK_SIZE)
+	chunk.biome.fill("grassland")
+	manager._loaded_chunks[coord] = chunk
+	var tile: Vector2i = coord * EarthChunkManager.CHUNK_SIZE + Vector2i(7, 9)
+	assert_eq(manager.biome_at_global(tile.x, tile.y), "grassland")

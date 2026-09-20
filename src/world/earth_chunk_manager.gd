@@ -75,6 +75,7 @@ const IllustratedStructureSprite = preload("res://src/rendering/illustrated_stru
 const BuildingCatalog = preload("res://src/gameplay/building_catalog.gd")
 const InteriorTemplates = preload("res://src/gameplay/interior_templates.gd")
 const ProceduralBuildingPlaceholderSprite = preload("res://src/rendering/procedural_building_placeholder_sprite.gd")
+const ProceduralFootprintKerbSprite = preload("res://src/rendering/procedural_footprint_kerb_sprite.gd")
 const FarmerMarker = preload("res://src/rendering/farmer_marker.gd")
 const MillMarker = preload("res://src/rendering/mill_marker.gd")
 const BakeryMarker = preload("res://src/rendering/bakery_marker.gd")
@@ -145,6 +146,7 @@ const FlyerPersonality = preload("res://src/gameplay/flyer_personality.gd")
 const PiscivoreBirdRenderer = preload("res://src/rendering/piscivore_bird_renderer.gd")
 const VillageRenderer = preload("res://src/rendering/village_renderer.gd")
 const VillageFarm = preload("res://src/gameplay/village_farm.gd")
+const VillageCropChoice = preload("res://src/gameplay/village_crop_choice.gd")
 const VillagePond = preload("res://src/gameplay/village_pond.gd")
 const AquaticPopulationModel = preload("res://src/world/aquatic_population_model.gd")
 const NpcMarker = preload("res://src/rendering/npc_marker.gd")
@@ -217,6 +219,7 @@ const SettlementTier = preload("res://src/emergence/settlement_tier.gd")
 const SettlementReadout = preload("res://src/ui/settlement_readout.gd")
 const SettlementCharter = preload("res://src/emergence/settlement_charter.gd")
 const MageGuildRoster = preload("res://src/gameplay/mage_guild_roster.gd")
+const HouseholdWater = preload("res://src/emergence/household_water.gd")
 const WorldBoss = preload("res://src/emergence/world_boss.gd")
 const WorldBossStore = preload("res://src/emergence/world_boss_store.gd")
 const WorldBossStorePersistence = preload("res://src/emergence/world_boss_store_persistence.gd")
@@ -951,6 +954,12 @@ const SAGEWERK_STORAGE_PAIR_RADIUS_TILES := 20
 var _structure_art_sprites: Dictionary = {}
 var _illustrated_structure_sprite := IllustratedStructureSprite.new()
 var _building_placeholder_sprite := ProceduralBuildingPlaceholderSprite.new()
+
+## The kerb every placed building's own plot is edged with (docs/concept/
+## building.md, "The ground a building stands on, and the kerb round its
+## plot") -- one generator, shared, like every other procedural sprite
+## this manager holds.
+var _footprint_kerb_sprite := ProceduralFootprintKerbSprite.new()
 
 ## Every placed Farm currently staffed with a real FarmerMarker (see
 ## docs/concept/npc_farm_production.md) -- chunk_coord -> {local_cell ->
@@ -3807,6 +3816,16 @@ func step_settlements(delta_seconds: float) -> void:
 			RegionalTrade.chunk_coord_of(settlement_id),
 			SETTLEMENT_STEP_INTERVAL / SECONDS_PER_SIMULATED_DAY
 		)
+		# The households drink (docs/concept/village_water.md). On the
+		# player-felt clock beside the guilds and immigration, because
+		# running dry is what sends somebody to the well and a player has
+		# to be able to watch that happen.
+		drink_household_water_in(
+			RegionalTrade.chunk_coord_of(settlement_id),
+			SETTLEMENT_STEP_INTERVAL / SECONDS_PER_SIMULATED_DAY
+		)
+		# ...and every one of them has a pail by the door to fetch it with.
+		stock_household_buckets_in(RegionalTrade.chunk_coord_of(settlement_id))
 		_step_settlement_construction(settlement_id, household_ids)
 		var capacity := _settlement_capacity(settlement_id, market, village_market)
 		var status := SettlementState.status_for(household_ids.size(), capacity)
@@ -14223,7 +14242,20 @@ func biome_at_global(global_x: int, global_y: int) -> String:
 	var chunk: Chunk = _loaded_chunks.get(_chunk_coord_for_tile(Vector2i(global_x, global_y)))
 	if chunk == null:
 		return ""  # not currently loaded/rendered; callers shouldn't query far outside the load radius
-	return chunk.biome[_local_index(global_x, global_y)]
+	# ...and a chunk that is PRESENT BUT EMPTY says the same thing. A bare
+	# Chunk.new() is what a fixture builds when it only needs somewhere to
+	# hang modifications, and nothing asked it about arbitrary tiles until
+	# routing did (AgentPassability._is_water via TileRouter.route) --
+	# measured on a clean origin/main worktree,
+	# test_earth_chunk_manager_village_farm_loop failed 4/4 with 17,376 of
+	# these in one run. The same size check Chunk.blocks_ground_cover
+	# already keeps, for the same reason it gives: a fixture that never
+	# filled the array reads as "nothing known here" rather than indexing
+	# off the end.
+	var index := _local_index(global_x, global_y)
+	if index < 0 or index >= chunk.biome.size():
+		return ""
+	return chunk.biome[index]
 
 
 ## Finds the nearest loaded FishMarker within max_distance pixels of
@@ -15109,6 +15141,179 @@ func place_building(
 const WAREHOUSE_BUILDING_ID := "warehouse"
 
 
+# -- a house's own water (docs/concept/village_water.md) --------------------
+
+## The ONE number a house persists about its water: what is in the tank.
+## Same idiom as GUILD_DAYS_OPEN_KEY -- a field on the building's own
+## record, so it costs no new store and travels with the house through a
+## chunk round trip.
+const WATER_LITRES_KEY := "water_litres"
+
+
+## How many people drink out of this house.
+##
+## One, for an occupied home. Households are single-member on this
+## substrate and say so (see VillageCensus: "Everyone housed occupies one
+## place in the roof they own. Single-member households are all this
+## substrate has"), so reading capacity_of here would have a cottage
+## drinking for three people who do not exist. A house nobody lives in
+## drinks nothing, and a workplace is not a home at all.
+func _drinkers_in_house(record: Dictionary) -> int:
+	if BuildingCatalog.capacity_of(String(record.get("id", ""))) <= 0:
+		return 0
+	var lived_in: bool = (
+		int(record.get("resident_seed", 0)) != 0
+		or String(record.get("owner_household_id", "")) != ""
+	)
+	return 1 if lived_in else 0
+
+
+## Which buildings hold a tank at all.
+##
+## A home, because the people in it drink -- and the FARMHOUSE, which
+## nobody lives in (its capacity is 0) but whose FIELD drinks out of it
+## (docs/concept/village_water.md mechanism 3). Deliberately a SEPARATE
+## rule from _drinkers_in_house above rather than a widening of it: a
+## farmhouse holds water and never swallows a mouthful of it, and folding
+## the two together would have a building with no residents drinking for
+## somebody who does not exist.
+func _holds_a_tank(record: Dictionary) -> bool:
+	var building_id := String(record.get("id", ""))
+	return (
+		BuildingCatalog.capacity_of(building_id) > 0
+		or building_id == VillageFarm.FARM_BUILDING_ID
+	)
+
+
+## Whether this building's tank is worked by a field rather than drunk
+## from -- the one distinction between the two kinds of tank there is.
+func _is_a_farmhouse(record: Dictionary) -> bool:
+	return String(record.get("id", "")) == VillageFarm.FARM_BUILDING_ID
+
+
+## What is in this house's tank.
+##
+## A record with no tank yet -- every house raised before this existed --
+## reads its own SEEDED starting level rather than zero, so an old save's
+## village does not wake up dry and send every household to the well at
+## once on the morning it loads. That is the same crowd this whole feature
+## exists to prevent, and a migration is exactly where it would come back.
+## 0.0 for anything that holds no tank.
+func house_water_at(record: Dictionary) -> float:
+	if not _holds_a_tank(record):
+		return 0.0
+	if not record.has(WATER_LITRES_KEY):
+		# Off the building's OWN floor: a farmhouse's trip comes sooner
+		# than a household's, so seeding it from the household's floor
+		# would raise a third of all farms already needing one.
+		if _is_a_farmhouse(record):
+			return HouseholdWater.farm_starting_level(int(record.get("seed", 0)))
+		return HouseholdWater.starting_level(int(record.get("seed", 0)))
+	return float(record[WATER_LITRES_KEY])
+
+
+## Whether this building must send somebody to the well. A farmhouse is
+## sent sooner than a household is (HouseholdWater.farm_trip_is_due): a
+## field that stops being watered withers, where a household that runs low
+## is merely thirsty.
+func water_trip_due_at(record: Dictionary) -> bool:
+	if not _holds_a_tank(record):
+		return false
+	var level := house_water_at(record)
+	if _is_a_farmhouse(record):
+		return HouseholdWater.farm_trip_is_due(level)
+	return HouseholdWater.trip_is_due(level)
+
+
+## Every household in ONE chunk drinks for `days`.
+##
+## Per-chunk rather than global for the same reason age_mage_guilds_in is:
+## the settlement step runs once per SETTLEMENT, so draining every loaded
+## house from inside it would empty a village once per neighbour in range.
+func drink_household_water_in(chunk_coord: Vector2i, days: float) -> void:
+	if days <= 0.0:
+		return
+	var chunk: Chunk = _loaded_chunks.get(chunk_coord)
+	if chunk == null:
+		return
+	for origin_local in chunk.buildings:
+		var record: Dictionary = chunk.buildings[origin_local]
+		var drinkers := _drinkers_in_house(record)
+		if drinkers <= 0:
+			continue
+		record[WATER_LITRES_KEY] = HouseholdWater.level_after(
+			house_water_at(record), drinkers, days
+		)
+
+
+## A villager tips their bucket into the tank at the end of an errand.
+## False for anything that is not a home standing there.
+func pour_bucket_into_house(chunk_coord: Vector2i, origin_local: Vector2i) -> bool:
+	var chunk: Chunk = _loaded_chunks.get(chunk_coord)
+	if chunk == null or not chunk.buildings.has(origin_local):
+		return false
+	var record: Dictionary = chunk.buildings[origin_local]
+	if not _holds_a_tank(record):
+		return false
+	record[WATER_LITRES_KEY] = HouseholdWater.poured_into(
+		house_water_at(record), HouseholdWater.BUCKET_LITRES
+	)
+	return true
+
+
+## The bucket by the door.
+##
+## Asked for directly: *"each NPC should have a bucket in its house
+## inventory"*. The bucket belongs to the HOUSEHOLD rather than to the
+## villager -- it is what the water is carried in, and it stands by the
+## door whether or not anybody is out with it right now. Every building
+## that holds a tank keeps exactly one, the farmhouse included.
+##
+## Stepped per chunk rather than seeded in place_building, for the same
+## reason house_water_at reads a starting level rather than migrating one:
+## a house raised before any of this existed gets its bucket the first
+## time its village is stepped, with no migration and no new field on the
+## record. Idempotent by construction -- it asks the building's OWN stock,
+## so a village stepped a thousand times still has one pail per door.
+func stock_household_buckets_in(chunk_coord: Vector2i) -> void:
+	var chunk: Chunk = _loaded_chunks.get(chunk_coord)
+	if chunk == null:
+		return
+	for origin_local in chunk.buildings:
+		if not _holds_a_tank(chunk.buildings[origin_local]):
+			continue
+		var tile: Vector2i = chunk_coord * CHUNK_SIZE + origin_local
+		if building_stock_at(tile.x, tile.y, HouseholdWater.BUCKET_ITEM_ID) > 0:
+			continue
+		deposit_to_building_at(tile.x, tile.y, HouseholdWater.BUCKET_ITEM_ID, 1)
+
+
+## A farmer waters a bed, and the farmhouse pays for it.
+##
+## `global_x/y` is any footprint cell of the farmhouse itself -- the same
+## "any cell answers" rule building_at_global already keeps, so a farmer
+## standing at the far corner of their own farmhouse is still at it.
+##
+## False, and NOTHING drawn, when there is no farmhouse there or its tank
+## is down to the household's own drinking reserve. That false is the
+## whole mechanism: it is what stops the field being watered, which is
+## what makes the trip to the well matter (see NpcMarker._work_field_cell).
+## A cottage never pays for crop water -- its tank is for the people in it.
+func draw_crop_water_at_global(global_x: int, global_y: int) -> bool:
+	var found := building_at_global(global_x, global_y)
+	if found.is_empty() or not _is_a_farmhouse(found):
+		return false
+	var chunk: Chunk = _loaded_chunks.get(found["chunk_coord"])
+	if chunk == null or not chunk.buildings.has(found["origin_local"]):
+		return false
+	var record: Dictionary = chunk.buildings[found["origin_local"]]
+	var level := house_water_at(record)
+	if not HouseholdWater.can_water_crops(level):
+		return false
+	record[WATER_LITRES_KEY] = HouseholdWater.level_after_tending(level)
+	return true
+
+
 # -- the mage guild fills with masters (docs/concept/mage_guild.md) ---------
 
 const MAGE_GUILD_BUILDING_ID := "mage_guild"
@@ -15412,7 +15617,20 @@ func _spawn_building_node(chunk_coord: Vector2i, origin_local: Vector2i, record:
 	node.name = "Building"
 	node.position = bottom_centre
 
+	# The kerb first, so it lies on the ground UNDER the building rather
+	# than as a box drawn round its walls (children paint in tree order).
+	# Built from the same footprint_px the collision rect below is built
+	# from -- see docs/concept/building.md, "The ground a building stands
+	# on, and the kerb round its plot": what is drawn IS the hitbox.
+	var kerb := Sprite2D.new()
+	kerb.name = "FootprintKerb"
+	kerb.texture = _footprint_kerb_sprite.footprint_texture(footprint, TerrainRenderer.ART_TILE_SIZE)
+	kerb.scale = Vector2.ONE * ArtResolution.SPRITE_SCALE
+	kerb.position = Vector2(0, -footprint_px.y * 0.5)
+	node.add_child(kerb)
+
 	var sprite := Sprite2D.new()
+	sprite.name = "Art"
 	# Which picture a FINISHED building has is BuildingCatalog's call (see
 	# finished_sheet_for): a building with a real variant sheet draws its
 	# own seeded variant, so a street of cottages is a street of DIFFERENT
@@ -16740,9 +16958,27 @@ func withdraw_from_building_at(global_x: int, global_y: int, item_id: String, co
 const STRUCTURE_MEAL_RADIUS_TILES := CHUNK_SIZE
 
 ## The structures whose own stock a villager may eat from: where baked
-## bread ends up (see CHAIN_LOGISTICS_LEGS) -- a Bakery's shelf and any
-## Storage it was hauled into.
-const STRUCTURE_MEAL_SOURCE_IDS: Array[String] = ["bakery", "storage"]
+## bread ends up (see CHAIN_LOGISTICS_LEGS) -- a Bakery's shelf, any
+## Storage it was hauled into, and THE VILLAGE'S OWN WAREHOUSE.
+##
+## The warehouse was the reported bug: *"there's still not enough food even
+## though the warehouse is full"*. Both halves of that sentence were true
+## at once. A settlement's food ASSESSMENT counts every StructureStock
+## standing in its chunk (_settlement_structure_stocks), so the grain a
+## carter hauls in really is food the village has -- while a villager's own
+## meal came from this list, which was written before the warehouse existed
+## and never grew to include it. The village was fed on paper and its
+## people could not eat.
+##
+## This list has to name every place the village really puts food. It is
+## hand-written because the meal search scans FOR ids, and that is exactly
+## how it drifted; test_earth_chunk_manager_village_meals.gd pins the
+## behaviour that matters -- what the settlement counts as food is what its
+## people can eat -- so the next store added here fails a test rather than
+## starving a village quietly.
+const STRUCTURE_MEAL_SOURCE_IDS: Array[String] = [
+	"bakery", "storage", VillageLayout.WAREHOUSE_BUILDING_ID
+]
 
 
 ## Whether the village's own stores hold a whole meal near `pixel_position`
@@ -19498,6 +19734,27 @@ func begin_build_project(
 	var project := start_build_project(chunk_coord, origin, blueprint_id, household_id)
 	project.status = ConstructionProject.Status.IN_PROGRESS
 	return project
+
+
+## What a field at this global cell should sow (docs/concept/
+## village_farms.md, "What a field sows follows the village's need").
+##
+## Reads the SAME assembly state the needs panel shows, so what a village
+## says it lacks and what it plants cannot disagree -- and the rule itself
+## is VillageCropChoice's, never a second one written here.
+##
+## `default_crop` is the villager's own traditional crop, and it is the
+## whole answer where there is no settlement or nobody has assessed it yet:
+## the same fail-open shape every other hook on this path uses.
+func sow_choice_at(global_x: int, global_y: int, default_crop: String) -> String:
+	var state := _village_assembly_state(_chunk_coord_for_tile(Vector2i(global_x, global_y)))
+	if state.is_empty():
+		return default_crop
+	return VillageCropChoice.choose(
+		state.get("satisfaction", {}),
+		VillageCropChoice.can_bake(state.get("present_building_ids", [])),
+		default_crop
+	)
 
 
 ## The real labour hours a build of `blueprint_id` asks for -- off the SAME

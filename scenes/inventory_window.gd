@@ -20,7 +20,7 @@ extends PanelContainer
 ## place first. Reported as "a click on a carrot makes it vanish". Right
 ## never starts a drag in Godot, so it can't collide with one.
 
-const ProceduralItemSprite = preload("res://src/rendering/procedural_item_sprite.gd")
+const IllustratedItemArt = preload("res://src/rendering/illustrated_item_art.gd")
 ## The real character rig, the same one the player/NPCs/character creator use
 ## -- the equipment paperdoll renders it rather than a second, flatter
 ## approximation of a person (see _build_character_preview).
@@ -89,7 +89,18 @@ const KIND_LABELS := {
 	"potion": "Potion", "placeable": "Placeable", "material": "Material",
 }
 
-var _item_sprite := ProceduralItemSprite.new()
+## Every picture this window draws comes from here. IllustratedItemArt falls
+## back to ProceduralItemSprite for a subject with no art of its own and fits
+## every frame to ProceduralItemSprite.SIZE, so it is a drop-in for the
+## generated sprite this used to call directly -- nothing below re-scales.
+##
+## Reported live: *"The inventory still renders the old procedual icons and
+## not the illustrated ones"*. docs/concept/illustrated_art_addressing.md has
+## always said the `icon` context is "inventory/hotbar/paperdoll/tooltip",
+## but the pass that wired real art wired the hotbar, the ground and the two
+## equip paths and not this window -- so the hotbar showed the real axe while
+## the inventory slot above it showed the generated one.
+var _item_art := IllustratedItemArt.new()
 var _catalog := ItemCatalog.new()
 var _materials := MaterialProperties.new()
 var _grid: GridContainer
@@ -329,7 +340,7 @@ func refresh(stacks: Array, equipped: Dictionary, total_armor: float, slot_count
 	for slot in _paperdoll_icons:
 		var icon: TextureRect = _paperdoll_icons[slot]
 		var item = equipped.get(slot)
-		icon.texture = _item_sprite.generate_texture(item.sprite_id) if item != null else null
+		icon.texture = _item_art.texture_for(item.sprite_id, "icon") if item != null else null
 
 	# Mirrors the weapon-in-hand wiring just below for the four real armor
 	# slots (see Equipment.SLOTS/docs/concept/item_illustrations.md) -- the
@@ -339,7 +350,12 @@ func refresh(stacks: Array, equipped: Dictionary, total_armor: float, slot_count
 	for slot in ["head", "chest", "legs", "feet"]:
 		var worn_armor = equipped.get(slot)
 		if worn_armor != null:
-			_preview_view.equip_armor_slot(slot, _item_sprite.generate_texture(worn_armor.sprite_id))
+			# The same contexts Player.equip_armor/equip_item ask for: this is
+			# the same rig, so the preview must not show a different axe from
+			# the one the player is carrying two panels away.
+			_preview_view.equip_armor_slot(
+				slot, _item_art.texture_for(worn_armor.sprite_id, "equipped")
+			)
 		else:
 			_preview_view.unequip_slot(slot)
 
@@ -349,7 +365,7 @@ func refresh(stacks: Array, equipped: Dictionary, total_armor: float, slot_count
 	# stood there empty-handed.
 	var worn_weapon = equipped.get("weapon")
 	if worn_weapon != null:
-		_preview_view.equip_weapon(_item_sprite.generate_texture(worn_weapon.sprite_id))
+		_preview_view.equip_weapon(_item_art.texture_for(worn_weapon.sprite_id, "held"))
 	else:
 		_preview_view.unequip_slot("tool")
 
@@ -431,7 +447,7 @@ func _build_item_slot(stack, grid_index: int) -> Control:
 	box.dropped = func(payload): items_reordered.emit(int(payload["index"]), grid_index)
 
 	var icon := TextureRect.new()
-	icon.texture = _item_sprite.generate_texture(stack.item.sprite_id)
+	icon.texture = _item_art.texture_for(stack.item.sprite_id, "icon")
 	icon.set_anchors_preset(Control.PRESET_FULL_RECT)
 	icon.stretch_mode = TextureRect.STRETCH_KEEP_ASPECT_CENTERED
 	icon.mouse_filter = Control.MOUSE_FILTER_IGNORE
@@ -456,7 +472,7 @@ func _is_inventory_payload(payload) -> bool:
 ## The little icon that follows the cursor while dragging.
 func _drag_preview_for(sprite_id: String) -> Control:
 	var preview := TextureRect.new()
-	preview.texture = _item_sprite.generate_texture(sprite_id)
+	preview.texture = _item_art.texture_for(sprite_id, "icon")
 	preview.custom_minimum_size = Vector2(ICON_SIZE, ICON_SIZE)
 	preview.size = Vector2(ICON_SIZE, ICON_SIZE)
 	preview.stretch_mode = TextureRect.STRETCH_KEEP_ASPECT_CENTERED

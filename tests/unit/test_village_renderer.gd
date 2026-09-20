@@ -8,6 +8,7 @@ extends GutTest
 ## free" shape as TreeRenderer/CreatureRenderer/FishRenderer.
 
 const VillageRenderer = preload("res://src/rendering/village_renderer.gd")
+const CivicBuildDecision = preload("res://src/emergence/civic_build_decision.gd")
 const SettlementGenerator = preload("res://src/world/settlement_generator.gd")
 const NpcMarker = preload("res://src/rendering/npc_marker.gd")
 const BuildingCatalog = preload("res://src/gameplay/building_catalog.gd")
@@ -469,10 +470,19 @@ func test_a_reloaded_older_village_gets_its_plaza_paved_where_the_square_is_clea
 	second_parent.free()
 
 
-## ...but never over a house: an old village whose houses stand where the
-## square would go keeps its square unpaved, rather than paving through a
-## building.
-func test_a_reloaded_older_village_keeps_its_square_unpaved_where_a_building_stands_on_it():
+## ...and never THROUGH a house. An old village whose houses stand where the
+## square would go keeps the occupied cells bare and paves the rest.
+##
+## This test used to assert that NOT ONE cell of the square was paved when a
+## house stood on any of them, which is broader than its own stated intent
+## and is the reported defect: *"There are still villages without plaza."*
+## Measured on a real village (tools/probe_village_supply.gd), chunk
+## (682,132) had 8 of its 48 square cells paved -- exactly the street row
+## crossing it -- because a farm rail and a warehouse stood inside the
+## square and the whole pass was abandoned. A square laid AROUND what stands
+## in it is still a square; paving over the building is what must not
+## happen, and that half is kept.
+func test_a_reloaded_older_village_paves_its_square_around_a_house_not_through_it():
 	var coord := _find_settlement_chunk("grassland")
 	var world := StubWorld.new()
 	renderer.spawn_village(parent, coord, coord * CHUNK_SIZE, CHUNK_SIZE, TILE_SIZE, "grassland", world)
@@ -489,13 +499,24 @@ func test_a_reloaded_older_village_keeps_its_square_unpaved_where_a_building_sta
 		world.built_tiles.erase(g)
 		world.occupied_cells.erase(g)
 	# An old house stands on one square cell.
-	world.occupied_cells[plaza_cells[5]] = "house_small"
+	var occupied: Vector2i = plaza_cells[5]
+	world.occupied_cells[occupied] = "house_small"
 
 	var second_parent := Node2D.new()
 	renderer.spawn_village(second_parent, coord, coord * CHUNK_SIZE, CHUNK_SIZE, TILE_SIZE, "grassland", world)
 
+	assert_ne(
+		world.built_tiles.get(occupied, ""), TerrainRenderer.ROAD_TILE_ID,
+		"the cell the house stands on is never paved (%s)" % str(occupied)
+	)
+	var paved := 0
 	for g in plaza_cells:
-		assert_ne(world.built_tiles.get(g, ""), TerrainRenderer.ROAD_TILE_ID, "must not pave a square a house stands on (%s)" % str(g))
+		if world.built_tiles.get(g, "") == TerrainRenderer.ROAD_TILE_ID:
+			paved += 1
+	assert_eq(
+		paved, plaza_cells.size() - 1,
+		"every other cell of the square is laid -- one house does not cancel a village its centre"
+	)
 	second_parent.free()
 
 
@@ -762,8 +783,21 @@ func test_landmarks_are_rendered_as_sprites_at_their_positions():
 	var world := StubWorld.new()
 	var spawned := renderer.spawn_village(parent, coord, coord * CHUNK_SIZE, CHUNK_SIZE, TILE_SIZE, "grassland", world)
 	var settlement := _generator.generate_settlement(coord, coord * CHUNK_SIZE, CHUNK_SIZE, TILE_SIZE)
+	# Against the GROUNDED landmarks every villager reads, not the
+	# generator's raw plan. The renderer moves a landmark onto real ground
+	# before anything sees it (_grounded_landmarks), and now that the well
+	# stands on its 2x2's centre rather than on one cell's, plan and ground
+	# genuinely differ -- comparing to the plan only ever passed by
+	# coincidence. "At their positions" means the sprite stands where the
+	# settlement itself thinks the landmark is.
+	var known: Dictionary = {}
+	for node in spawned:
+		if node is NpcMarker:
+			known = node.landmarks
+			break
+	assert_false(known.is_empty(), "precondition: somebody knows where the landmarks are")
 	var drawn := _drawn_landmark_ids()
-	for landmark_id in settlement.landmarks:
+	for landmark_id in known:
 		if landmark_id == "stall":
 			continue
 		if not drawn.has(landmark_id):
@@ -771,7 +805,7 @@ func test_landmarks_are_rendered_as_sprites_at_their_positions():
 		var found := false
 		for node in spawned:
 			if node.get_meta("landmark_id", "") == landmark_id and node is Sprite2D:
-				if node.position == settlement.landmarks[landmark_id]:
+				if node.position == known[landmark_id]:
 					found = true
 		assert_true(found, landmark_id)
 
@@ -808,13 +842,20 @@ func test_spawned_npc_markers_know_the_settlements_shared_landmarks():
 		if node is NpcMarker and node.market_stand != null:
 			stands[node.market_stand.position] = true
 	var checked := 0
+	# One settlement, one answer -- compared BETWEEN villagers rather than
+	# against the generator's ungrounded plan, which the renderer moves a
+	# landmark off on purpose (_grounded_landmarks).
+	var shared: Dictionary = {}
 	for node in spawned:
 		if not (node is NpcMarker):
 			continue
 		checked += 1
 		for landmark_id in ["well", "gate"]:
+			if not shared.has(landmark_id):
+				shared[landmark_id] = node.landmarks.get(landmark_id)
+			assert_not_null(shared[landmark_id], "%s is known at all" % landmark_id)
 			assert_eq(
-				node.landmarks.get(landmark_id), settlement.landmarks[landmark_id],
+				node.landmarks.get(landmark_id), shared[landmark_id],
 				"%s is the whole settlement's" % landmark_id
 			)
 		assert_true(node.landmarks.has("stall"), "everybody knows where to trade")
@@ -3523,3 +3564,269 @@ func test_siting_and_derivation_never_disagree_about_an_origin():
 				"siting said %s at %s, derivation handed over %d cells"
 					% [str(sited), str(origin), derived.size()]
 			)
+
+
+## Reported live with the well in shot: *"The well is still placed partly on
+## streets ... it should be placed on a free 2x2 grass patch"*.
+##
+## "Still", because c2b78947 already sited it off the road -- and it really
+## does, with allow_road false and the whole 2x2 checked. What undid it is
+## ORDER. `_close_short_street_gaps` runs AFTER the landmarks are grounded
+## and paves every one- and two-tile hole it finds in a street row; a well
+## standing in such a hole is not `_is_occupied_local` to it, because a
+## landmark is a prop node and not a building or a modification. So the
+## village sites its well on clean grass and then paves it over.
+##
+## Measured with tools/_probe_well.gd before the fix: of the wells found in
+## real villages, one stood with TWO of its four cells turned to road, the
+## other with none -- which is exactly the signature of a hole that
+## happened to be under one well and not the other.
+func test_a_village_never_paves_over_its_own_well():
+	var paved_over: Array = []
+	var checked := 0
+	for coord in _settlement_chunks_with_farmers(3, 8):
+		var world := StubWorld.new()
+		var spawned := renderer.spawn_village(
+			parent, coord, coord * CHUNK_SIZE, CHUNK_SIZE, TILE_SIZE, "grassland", world
+		)
+		for node in spawned:
+			if not node.has_meta("landmark_id") or String(node.get_meta("landmark_id")) != "well":
+				continue
+			checked += 1
+			# The renderer's own answer for which cells it stands on --
+			# one source of truth, so this can never drift into checking a
+			# different 2x2 than the well occupies (which it did).
+			for cell in VillageRenderer.landmark_block_at(node.position, TILE_SIZE, "well"):
+				var mod: String = world.modification_at_global(cell.x, cell.y)
+				if mod != "" and TerrainRenderer.is_road_tile(mod):
+					paved_over.append("%s: well cell %s is %s" % [str(coord), str(cell), mod])
+	assert_gt(checked, 0, "precondition: real villages really raised a well")
+	assert_eq(paved_over.size(), 0, "%s" % str(paved_over.slice(0, 8)))
+
+
+## Asked for directly, after the well was measured standing wider than the
+## ground it occupies: *"scale the art to its footprint"*.
+##
+## The rule a building's own sheet already follows: the art's WIDTH matches
+## the footprint's width, and the height follows the same factor -- so a
+## tall prop overhangs upward (it is foot-anchored) and nothing ever
+## overhangs sideways onto a neighbour's cell.
+##
+## The well took its world size from `ProceduralLandmarkSprite.SIZES`, the
+## old procedural placeholder box (40x44 world px), which has nothing to do
+## with the 2x2 it is sited and reserved on: 40px is 2.5 tiles over a
+## 2-tile footprint, so a quarter of a tile hung over the paving on each
+## side however well it was sited.
+func test_the_wells_art_is_as_wide_as_the_2x2_it_stands_on():
+	var coord := _find_settlement_chunk("grassland")
+	var world := StubWorld.new()
+	var spawned := renderer.spawn_village(
+		parent, coord, coord * CHUNK_SIZE, CHUNK_SIZE, TILE_SIZE, "grassland", world
+	)
+	var checked := 0
+	for node in spawned:
+		if node.get_meta("landmark_id", "") != "well" or not (node is Sprite2D):
+			continue
+		checked += 1
+		var footprint := VillageRenderer.landmark_footprint_tiles("well")
+		assert_almost_eq(
+			node.texture.get_width() * node.scale.x, float(footprint.x * TILE_SIZE), 1.0,
+			"the well is drawn exactly as wide as the ground it stands on"
+		)
+		assert_lte(
+			node.texture.get_height() * node.scale.y, float(footprint.y * TILE_SIZE) * 3.0,
+			"and no more than a sane overhang tall"
+		)
+	assert_gt(checked, 0, "precondition: this village really raised a well")
+
+
+## The market square is not somewhere you fence a field.
+##
+## A GUARD, not a fix. Chasing *"There are fenced enclosures without
+## farmhouse"*, tools/probe_village_supply.gd reported a `farm_fence_east`
+## inside chunk (682,132)'s plaza rect -- but this test, written to
+## reproduce that on a real fixture village, passed immediately. The likely
+## explanation is the probe's own rect: it derives the skeleton with a
+## water-only `is_buildable`, where VillageRenderer uses its richer
+## `_is_buildable_local`, so the two can choose different columns for the
+## square and the probe may simply have been reading the wrong eight.
+##
+## So the rail-on-the-square reading is NOT established, and nothing was
+## changed on the strength of it. What is pinned here is the rule itself,
+## which is worth holding whether or not it has ever been broken: the farm
+## pass reserves the landmarks and not the square, so this is exactly the
+## kind of thing that could start happening silently.
+func test_no_farm_rail_is_ever_laid_across_the_market_square():
+	var coord := _find_settlement_chunk("grassland")
+	var world := StubWorld.new()
+	renderer.spawn_village(parent, coord, coord * CHUNK_SIZE, CHUNK_SIZE, TILE_SIZE, "grassland", world)
+	var plaza: Rect2i = VillageLayout.skeleton(CHUNK_SIZE, VillageLayout.seed_for(coord))["plaza"]
+	var checked := 0
+	for y in range(plaza.position.y, plaza.end.y):
+		for x in range(plaza.position.x, plaza.end.x):
+			var g: Vector2i = coord * CHUNK_SIZE + Vector2i(x, y)
+			checked += 1
+			assert_false(
+				VillageFarm.is_fence_tile(String(world.built_tiles.get(g, ""))),
+				"a farm rail stands on the square at %s" % str(g)
+			)
+	assert_gt(checked, 0, "the premise: this village has a square to protect")
+
+## Reported a FOURTH time, with the hamlet in shot: *"There's still a
+## village without plaza and city hall... all villages should have a city
+## hall"*.
+##
+## The three earlier rounds each fixed a real reason the SQUARE could not be
+## sited (the decorative street jitter vetoing dry columns; a rule demanding
+## room for a house beside the square). What none of them changed is the
+## last line of `VillageLayout.plaza_x0_for`: when no candidate column is
+## dry it returns `centred` anyway -- a site it has just proved is wet. The
+## village then plans its square there, never paves it, and
+## `_place_civic_building_if_missing` refuses because the plot is not road.
+##
+## This measures the real rate across many villages rather than arguing
+## from one screenshot.
+func test_every_village_big_enough_for_a_seat_gets_one():
+	var without: Array = []
+	var checked := 0
+	var coords: Array = []
+	for row in [3, 6, 9, 12, 15, 18, 21, 24]:
+		coords.append_array(_settlement_chunks_with_farmers(row, 12))
+	for coord in coords:
+		var world := StubWorld.new()
+		world.household_count = CivicBuildDecision.CITY_HALL_MIN_HOUSEHOLDS + 2
+		renderer.spawn_village(
+			parent, coord, coord * CHUNK_SIZE, CHUNK_SIZE, TILE_SIZE, "grassland", world
+		)
+		checked += 1
+		if _placed(world, "city_hall").is_empty():
+			without.append(str(coord))
+	assert_gt(checked, 8, "precondition: enough real villages to say anything")
+	assert_eq(
+		without.size(), 0,
+		"%d of %d villages have no seat: %s" % [without.size(), checked, str(without.slice(0, 8))]
+	)
+
+
+## The case the coverage test above cannot reach, and the one in the
+## screenshot: a village whose CENTRED square site is unusable. The report
+## was a forest-edge hamlet, and `_is_buildable_local` -- the very
+## predicate the skeleton is handed as `is_dry` -- rejects forest as well
+## as water, so a village hemmed in by trees is in exactly this position.
+##
+## `plaza_x0_for` is built to slide the square along the street until it
+## finds a site that works. What it does when nothing works is return
+## `centred` anyway -- the site it has just proved unusable -- and the
+## village then plans a square it can never pave, so
+## `_place_civic_building_if_missing` refuses the seat for want of road.
+## Asked for directly: *"all villages should have a city hall"*.
+func test_a_village_slides_its_square_clear_of_unbuildable_ground_and_still_gets_a_seat():
+	var coord := _find_settlement_chunk("grassland")
+	var world := StubWorld.new()
+	world.household_count = CivicBuildDecision.CITY_HALL_MIN_HOUSEHOLDS + 2
+	# Only the CENTRED site is spoiled -- the rest of the street row is
+	# ordinary ground, so a square genuinely fits elsewhere on it.
+	var centred: Rect2i = VillageLayout.skeleton(CHUNK_SIZE, VillageLayout.seed_for(coord))["plaza"]
+	for y in range(centred.position.y, centred.end.y):
+		for x in range(centred.position.x, centred.end.x):
+			world.unbuildable_cells[coord * CHUNK_SIZE + Vector2i(x, y)] = true
+
+	renderer.spawn_village(
+		parent, coord, coord * CHUNK_SIZE, CHUNK_SIZE, TILE_SIZE, "grassland", world
+	)
+
+	assert_eq(
+		_placed(world, "city_hall").size(), 1,
+		"the square slides off the bad ground and the village keeps its seat"
+	)
+
+
+## The forest-edge case, and the one the report is about: a village with
+## room for a SEAT but nowhere for a whole SQUARE.
+##
+## The plaza is 8 wide by 6 deep; the hall is 4x3. `_is_buildable_local` --
+## the predicate the skeleton is handed -- rejects forest as well as water,
+## so a hamlet hemmed in by trees can easily have a pocket that fits the
+## hall and no pocket that fits the square. `plaza_x0_for` then falls
+## through its whole search and returns `centred` regardless, the village
+## plans a square on ground it cannot pave, and the seat is refused for
+## want of road -- silently, with nothing said anywhere.
+##
+## Asked for directly, a fourth time: *"all villages should have a city
+## hall"*. A square is how a village would LIKE to seat its hall; it is not
+## a condition of having one.
+func test_a_village_with_room_for_a_seat_but_not_a_square_still_gets_its_seat():
+	var coord := _find_settlement_chunk("grassland")
+	var world := StubWorld.new()
+	world.household_count = CivicBuildDecision.CITY_HALL_MIN_HOUSEHOLDS + 2
+	# Trees over everything on the street band except a pocket too narrow
+	# for the 8-wide square but wide enough for the 4x3 hall.
+	var street_y: int = VillageLayout.skeleton(CHUNK_SIZE, VillageLayout.seed_for(coord))["street_y"]
+	var pocket_x0 := CHUNK_SIZE / 2 - 3
+	for y in range(street_y - VillageLayout.PLAZA_ROWS_NORTH, street_y + VillageLayout.PLAZA_ROWS_SOUTH + 1):
+		for x in CHUNK_SIZE:
+			if x >= pocket_x0 and x < pocket_x0 + 6:
+				continue  # the pocket: 6 wide, less than PLAZA_WIDTH_TILES
+			world.unbuildable_cells[coord * CHUNK_SIZE + Vector2i(x, y)] = true
+
+	renderer.spawn_village(
+		parent, coord, coord * CHUNK_SIZE, CHUNK_SIZE, TILE_SIZE, "grassland", world
+	)
+
+	assert_eq(
+		_placed(world, "city_hall").size(), 1,
+		"a square is how a village would LIKE to seat its hall, not a condition of having one"
+	)
+
+
+## The other half of the same report: *"a village without plaza"*. A square
+## the village planned but never paved would be invisible on the ground,
+## and would also silently cost the village its seat (the civic plot IS the
+## square's paving).
+##
+## Measured across 32 real villages: every one paves its whole square
+## except a 4x3 block in the north-centre -- which is not a hole, it is the
+## CITY HALL standing on it. Worth a test precisely because it looks like a
+## defect: the first run of this measurement reported "32 of 32 villages
+## planned a square they never paved" before the shape was printed and the
+## block turned out to be the hall's own footprint.
+func test_every_village_paves_the_square_it_planned_apart_from_the_seat_on_it():
+	var unpaved_villages: Array = []
+	var checked := 0
+	var coords: Array = []
+	for row in [3, 9, 15, 21]:
+		coords.append_array(_settlement_chunks_with_farmers(row, 8))
+	for coord in coords:
+		var world := StubWorld.new()
+		world.household_count = CivicBuildDecision.CITY_HALL_MIN_HOUSEHOLDS + 2
+		renderer.spawn_village(
+			parent, coord, coord * CHUNK_SIZE, CHUNK_SIZE, TILE_SIZE, "grassland", world
+		)
+		checked += 1
+		var bones: Dictionary = VillageLayout.skeleton(
+			CHUNK_SIZE, VillageLayout.seed_for(coord),
+			func(cell: Vector2i) -> bool:
+				return not world.unbuildable_cells.has(coord * CHUNK_SIZE + cell) \
+					and not world.water_cells.has(coord * CHUNK_SIZE + cell)
+		)
+		var plaza: Rect2i = bones["plaza"]
+		# The seat's own cells are the one legitimate exception.
+		var seat: Dictionary = {}
+		for cell in BuildingCatalog.footprint_cells("city_hall", bones["civic_plot"]["origin"]):
+			seat[cell as Vector2i] = true
+		var unpaved := 0
+		for y in range(plaza.position.y, plaza.end.y):
+			for x in range(plaza.position.x, plaza.end.x):
+				if seat.has(Vector2i(x, y)):
+					continue
+				var g: Vector2i = coord * CHUNK_SIZE + Vector2i(x, y)
+				if not TerrainRenderer.is_road_tile(world.modification_at_global(g.x, g.y)):
+					unpaved += 1
+		if unpaved > 0:
+			unpaved_villages.append("%s: %d cells" % [str(coord), unpaved])
+	assert_gt(checked, 8, "precondition: enough real villages")
+	assert_eq(
+		unpaved_villages.size(), 0,
+		"%d of %d villages left real holes in their square: %s"
+			% [unpaved_villages.size(), checked, str(unpaved_villages.slice(0, 6))]
+	)

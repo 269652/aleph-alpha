@@ -1514,3 +1514,77 @@ func test_the_stall_still_stands_on_the_square():
 			(bones["plaza"] as Rect2i).has_point(bones["landmarks"]["stall"]),
 			"the square lost its own stall at seed %d" % seed_value
 		)
+
+
+# -- laying the square over ground that is not all clear -------------------
+#
+# Measured on two real villages (tools/probe_village_supply.gd): chunk
+# (682,132) had 8 of its 48 plaza cells paved -- exactly the one street row
+# crossing it -- with a `farm_fence_east` and a `warehouse` standing inside
+# the square. _lay_plaza_if_missing walked the rect, met the fence, and
+# returned without paving anything, so the village simply had no square.
+
+
+## A square laid around whatever stands in it is still a square. Abandoning
+## the whole thing over one occupied cell is what left a village with only
+## the street stripe through it.
+func test_the_square_is_laid_around_what_stands_in_it():
+	assert_true(
+		VillageLayout.plaza_is_worth_laying(40, 48),
+		"a warehouse and a fence in the corner do not cancel a square"
+	)
+
+
+## But a handful of scattered cells is not a square -- it is stray paving.
+## The rule is a SHARE of the square rather than a count, so it does not
+## change meaning if PLAZA_WIDTH_TILES ever does.
+func test_a_few_scattered_cells_are_not_a_square():
+	assert_false(VillageLayout.plaza_is_worth_laying(3, 48))
+	assert_false(VillageLayout.plaza_is_worth_laying(0, 48))
+
+
+func test_the_threshold_is_a_share_not_a_count():
+	var total := 48
+	var floor_cells := int(ceil(float(total) * VillageLayout.PLAZA_MIN_PAVED_SHARE))
+	assert_true(VillageLayout.plaza_is_worth_laying(floor_cells, total))
+	assert_false(VillageLayout.plaza_is_worth_laying(floor_cells - 1, total))
+	# The same share of a differently sized square, so the rule travels.
+	assert_true(VillageLayout.plaza_is_worth_laying(int(ceil(24.0 * VillageLayout.PLAZA_MIN_PAVED_SHARE)), 24))
+
+
+## Most of it, because a square you cannot cross is not a market place --
+## and a majority is the weakest claim that still means "most".
+func test_most_of_the_square_has_to_be_real_paving():
+	assert_gt(VillageLayout.PLAZA_MIN_PAVED_SHARE, 0.5)
+	assert_lt(VillageLayout.PLAZA_MIN_PAVED_SHARE, 1.0, "one blocked cell may not cancel it")
+
+
+func test_an_empty_square_is_never_worth_laying():
+	assert_false(VillageLayout.plaza_is_worth_laying(0, 0))
+	assert_false(VillageLayout.plaza_is_worth_laying(5, 0))
+
+
+## Asked for directly, after a fourth report of a village with no square:
+## *"Every village should have a square"*.
+##
+## When no 8-wide window is wholly usable, plaza_x0_for used to return
+## `centred` -- a site it had just proved unusable -- so the village planned
+## a square it could never pave. It must pick the best partial window
+## instead: a clipped square is still a square.
+func test_the_square_goes_where_most_of_it_fits_when_none_of_it_fits_wholly():
+	var street_y := 16
+	var pocket_x0 := 10
+	var pocket_width := VillageLayout.PLAZA_WIDTH_TILES - 2
+	var is_dry := func(cell: Vector2i) -> bool:
+		return cell.x >= pocket_x0 and cell.x < pocket_x0 + pocket_width
+
+	var x0 := VillageLayout.plaza_x0_for(32, street_y, 2, 29, is_dry)
+
+	var usable := 0
+	for x in range(x0, x0 + VillageLayout.PLAZA_WIDTH_TILES):
+		if is_dry.call(Vector2i(x, street_y)):
+			usable += 1
+	assert_eq(
+		usable, pocket_width,
+		"the square lands over the whole pocket, not on ground it cannot use"
+	)
