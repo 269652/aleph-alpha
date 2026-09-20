@@ -20,8 +20,8 @@ const CHUNK_SIZE := 32
 const STEPS := 40
 const SLICE := 0.25
 ## Long enough for several starvation windows to pass end to end.
-const SIMULATED_SECONDS := 900.0
-const REPORT_EVERY := 150.0
+const SIMULATED_SECONDS := 2400.0
+const REPORT_EVERY := 300.0
 
 var _manager
 var _origin: Vector2i
