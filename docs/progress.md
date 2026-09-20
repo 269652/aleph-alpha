@@ -29709,3 +29709,48 @@ and the first anybody would know is a screenshot.
 
 Tested: `test_building_catalog.gd` (+3),
 `test_earth_chunk_manager_buildings.gd` (+2).
+
+## A house going up is cut the way its own sheet is drawn (`concept/building.md`, 2026-09-20)
+
+Reported live with a village raising a cottage: *"it's clipped and doesn't
+use the intermediate construction sprites so you can see the progress...
+also it's scaled improperly"*. Three symptoms, one fault, and it is the
+previous day's crop fix stopping one chain short.
+
+**The grid kind is a property of the SHEET.** `finished_sheet_chain` has
+asked the sheet for it since the pass that fixed the finished crop —
+`construction_sheet_chain` still NAMED `dividers` for every house, so a
+cottage or manor going up was cut on magenta divider lines its own sheet
+does not draw (cottage/manor sheets top out at a 0.989 magenta share where
+`house_1_*` reaches 1.000), and the band began wherever the roofs'
+silhouette happened to thin.
+
+Measured before the fix (`tools/probe_construction_stage.gd`, new and
+kept), `cottage_1` row 0 as the build runs: cells **145×105, 149×105,
+153×105**, every one of them slicing through the drawing, where the
+sheet's own content cut gives **171×174** every time and the finished
+house is 172 wide. A cell half the sheet's own pitch tall, changing shape
+frame to frame, drawn scaled to one fixed plot width, is exactly a house
+that is clipped, scaled wrong, and unreadable as a stage of anything —
+all three of the reported symptoms out of one line.
+
+After, on a real render (`tools/probe_construction_render.gd`, new and
+kept: five real `ConstructionProject`s side by side, one per stage,
+through the real `_sync_construction_site`): the strip reads left to right
+as **footings → frame → truss → roof → house**, every stage drawn
+**21.0 × 21.0 world units**, nothing clipped.
+
+**Why a report had to find it.** The crop guard that exists for exactly
+this class of bug
+(`test_no_house_crop_cuts_through_the_top_of_its_own_drawing`) read its
+sheets with `load()` as a `Texture2D` — which answers null for art whose
+imported artifact has never been generated in that checkout, i.e. every
+headless run on a fresh clone with newly added art. It was erroring on
+`cottage_3` instead of guarding. It reads through `SpriteSheetLoader` now
+(the shared loader written for precisely that case, falling back to the
+file's own bytes), and the guard is asked of the RISING house too, beside
+a scale guard against the finished cell — the cut it catches was 11–16%
+narrow.
+
+Tested: `test_illustrated_structure_sprite.gd` (+2, one repaired),
+`test_building_catalog.gd` (+2).

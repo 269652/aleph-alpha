@@ -1070,3 +1070,39 @@ func test_a_building_that_borrows_nothing_inherits_no_yard():
 	for building_id in ["sawmill", "warehouse", "blacksmith", "brewery", "city_hall"]:
 		assert_eq(BuildingCatalog.draws_as_of(building_id), "", "precondition: %s borrows nothing" % building_id)
 		assert_true(BuildingCatalog.background_sheet_for(building_id, 1).is_empty())
+
+
+# -- a rising house is cut the way its own sheet is drawn (2026-09-20) -----
+#
+# Reported live with a village raising a cottage: *"it's clipped and
+# doesn't use the intermediate construction sprites so you can see the
+# progress... also it's scaled improperly"*. The grid kind is a property of
+# the SHEET, and finished_sheet_chain has asked the sheet since the pass
+# that fixed the finished crop -- but construction_sheet_chain still NAMED
+# the divider cut for every house, including the cottage and manor sheets
+# that draw no divider at all.
+
+const BuildingLifecycleSheetForGrids = preload("res://src/rendering/building_lifecycle_sheet.gd")
+
+
+func test_a_rising_house_is_cut_on_the_grid_its_own_sheet_declares():
+	for building_id in BuildingCatalog.BUILDING_IDS:
+		var declared := String(BuildingLifecycleSheetForGrids.grid_for(building_id).get("grid", ""))
+		assert_ne(declared, "", "precondition: %s's art declares a grid" % building_id)
+		var entry: Dictionary = BuildingCatalog.construction_sheet_chain(building_id, 7, 0.5)[0]
+		assert_eq(
+			String(entry["grid"]), declared,
+			"%s rises through cells cut the %s way while its sheet is drawn the %s way"
+			% [building_id, String(entry["grid"]), declared]
+		)
+
+
+## The two chains must agree, because they cut the SAME sheet: a house that
+## changed shape the moment it finished would be the same jump the art
+## resolution rule already guards against.
+func test_a_house_is_cut_the_same_way_rising_as_it_is_standing():
+	for building_id in BuildingCatalog.BUILDING_IDS:
+		var rising: Dictionary = BuildingCatalog.construction_sheet_chain(building_id, 7, 0.5)[0]
+		var standing: Dictionary = BuildingCatalog.finished_sheet_chain(building_id, 7)[0]
+		assert_eq(String(rising["path"]), String(standing["path"]), "precondition: the same sheet")
+		assert_eq(String(rising["grid"]), String(standing["grid"]), "%s" % building_id)

@@ -845,6 +845,38 @@ a crop must be **essentially empty or essentially full**, because a partly
 covered row is the silhouette of a roof being sliced. Every cut measured
 before the fix sat at 40–52%; every whole crop is at 0–17% or 100%.
 
+**…and the same house RISING (2026-09-20).** Reported the moment a village
+started one: *"it's clipped and doesn't use the intermediate construction
+sprites so you can see the progress... also it's scaled improperly"*. All
+three are one fault, and it is the pass above stopping one chain short. The
+grid kind is a property of the SHEET, `finished_sheet_chain` asks the sheet
+for it — and `construction_sheet_chain` still NAMED `dividers` for every
+house, so a cottage or manor going up was cut on magenta lines its own sheet
+does not draw.
+
+Measured before the fix (`tools/probe_construction_stage.gd`), `cottage_1`
+row 0 as the build runs: cells **145×105, 149×105, 153×105**, where the
+sheet's own content cut gives **171×174** every time and the finished house
+is 172 wide. A cell half the sheet's own pitch tall, changing shape frame to
+frame, drawn scaled to one fixed plot width, is precisely a house that is
+clipped, scaled wrong, and unreadable as a stage of anything. After: every
+stage within 2% of the finished house's own width, drawn 21.0 × 21.0 world
+units at every one of the five stages, and the strip reads left to right as
+footings → frame → truss → roof → house
+(`tools/probe_construction_render.gd`, kept).
+
+The guard above is now asked of the rising house as well as the standing one
+(`test_no_rising_house_crop_cuts_through_the_top_of_its_own_drawing`), plus
+a scale guard against the finished cell
+(`test_every_stage_of_one_build_is_drawn_at_the_scale_its_finished_house_
+will_be`) — the cut it catches was 11–16% narrow. **Why it took a report to
+find:** the existing crop guard read its sheets with `load()` as a
+`Texture2D`, which answers null for art whose imported artifact has never
+been generated in that checkout — every headless run on a fresh clone. It
+was erroring on `cottage_3` rather than guarding, while the bug shipped one
+chain along. It reads through `SpriteSheetLoader` now, which falls back to
+the file's own bytes.
+
 **The house tiers read as a ladder (2026-09-19).** Asked in the same breath:
 *"also scale down cottage to be smaller than house"*. Measured, a cottage
 drew 26.0 × 26.0 world px against a house's 39.5 × 24.0 — the smallest tier

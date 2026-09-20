@@ -538,7 +538,15 @@ static func construction_sheet_chain(building_id: String, seed_value: int, progr
 		chain.append({
 			"path": variation,
 			"columns": int(build_grid["columns"]), "rows": int(build_grid["rows"]),
-			"row": cell.y, "column": cell.x, "grid": "dividers",
+			"row": cell.y, "column": cell.x,
+			# The SHEET's own kind, exactly as finished_sheet_chain asks it
+			# -- not a kind named here. Hardcoding "dividers" cut every
+			# rising cottage and manor on magenta lines their sheets do not
+			# draw: measured (tools/probe_construction_stage.gd), cottage_1
+			# row 0 came back 145x105, 149x105 and 153x105 as the build ran
+			# where the content cut gives 171x174 every time -- a house
+			# clipped, scaled wrong, and unreadable as a stage of anything.
+			"grid": String(build_grid.get("grid", "dividers")),
 		})
 	chain.append({
 		"path": sheet_of(building_id), "columns": sheet_columns_of(building_id), "rows": SHEET_ROWS,

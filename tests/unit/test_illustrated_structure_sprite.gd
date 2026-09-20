@@ -896,7 +896,17 @@ const _CUT_ROW_MAX := 0.90
 func test_no_house_crop_cuts_through_the_top_of_its_own_drawing():
 	var sprite := IllustratedStructureSprite.new()
 	for entry in _house_sheet_cells():
-		var image: Image = (load(entry["path"]) as Texture2D).get_image()
+		# SpriteSheetLoader, not load()-as-Texture2D. A sheet whose imported
+		# artifact has never been generated in this checkout -- art added
+		# since the project was last opened in an editor, which is every
+		# headless run on a fresh clone -- loads as null there, and this
+		# guard then errors instead of guarding. Found exactly that way: it
+		# was failing on cottage_3 while the bug it exists to catch was
+		# shipping one chain along (see the rising-house section below).
+		var image: Image = SpriteSheetLoader.load_image(String(entry["path"]))
+		assert_not_null(image, "%s is not readable" % entry["path"])
+		if image == null:
+			continue
 		var rect: Rect2i = sprite._cell_rect_for(
 			entry["path"], image, entry["columns"], entry["rows"], entry["row"], entry["column"], entry["grid"]
 		)
@@ -1173,3 +1183,104 @@ func test_no_grey_checkerboard_fringe_survives_around_a_yard():
 				fringe += 1
 	var of_cell := float(fringe) / float(image.get_width() * image.get_height())
 	assert_lt(of_cell, 0.002, "a yard keeps no grey checker fringe (%d px)" % fringe)
+
+
+# -- and the same for a house that is still going up (2026-09-20) ----------
+#
+# Reported live with a village raising a cottage: *"it's clipped and
+# doesn't use the intermediate construction sprites so you can see the
+# progress... also it's scaled improperly"*. All three are the same fault
+# as the pass above, one chain along: the crop guard, and the fix it
+# pinned, only ever covered finished_sheet_chain, while
+# construction_sheet_chain still NAMED the divider cut for every house --
+# including the cottage and manor sheets that draw no divider at all.
+#
+# Measured before the fix (tools/probe_construction_stage.gd), cottage_1
+# row 0: the divider cut hands back cells 145x105, 149x105 and 153x105 as
+# the build runs, where the sheet's own content cut gives 171x174 every
+# time. A cell an eighth of the sheet's own pitch tall, that changes shape
+# frame to frame, drawn scaled to a fixed plot width, is exactly a house
+# that is clipped, scaled wrong, and unreadable as a stage of anything.
+
+
+## Every house sheet cell the game asks for while a house is RISING -- the
+## same shape _house_sheet_cells has for a finished one.
+func _rising_house_sheet_cells() -> Array:
+	var cells: Array = []
+	for building_id in BuildingCatalog.BUILDING_IDS:
+		for progress in [0.0, 0.25, 0.5, 0.75, 0.99]:
+			var chain: Array = BuildingCatalog.construction_sheet_chain(building_id, 7, progress)
+			if chain.is_empty():
+				continue
+			var entry: Dictionary = chain[0]
+			entry["building_id"] = building_id
+			cells.append(entry)
+	return cells
+
+
+func test_no_rising_house_crop_cuts_through_the_top_of_its_own_drawing():
+	var sprite := IllustratedStructureSprite.new()
+	for entry in _rising_house_sheet_cells():
+		# The shared loader, not load()-as-Texture2D: a sheet whose imported
+		# artifact was never generated in this checkout (a freshly added
+		# one, headless) loads from its own bytes instead of returning null.
+		var image: Image = SpriteSheetLoader.load_image(String(entry["path"]))
+		assert_not_null(image, "%s is not readable" % entry["path"])
+		if image == null:
+			continue
+		var rect: Rect2i = sprite._cell_rect_for(
+			entry["path"], image, entry["columns"], entry["rows"], entry["row"], entry["column"], entry["grid"]
+		)
+		var above := rect.position.y - 1
+		if above < 0:
+			continue  # a cell on the sheet's own top edge has nothing above it
+		var share := _drawn_share(image, above, rect.position.x, rect.position.x + rect.size.x - 1)
+		assert_false(
+			share >= _CUT_ROW_MIN and share <= _CUT_ROW_MAX,
+			"%s rising (%s cell %d,%d): the sheet row above the crop is %d%% covered -- the crop sliced through the drawing"
+			% [entry["building_id"], String(entry["path"]).get_file(), entry["column"], entry["row"], int(share * 100.0)]
+		)
+
+
+## And the scale half of the same report. The texture is scaled so its
+## WIDTH is the plot's (footprint_frame_texture), so the cell's width is
+## what sets pixels-per-world-unit: a stage cut 15% narrower is a house
+## drawn 15% bigger for that stage, and bigger again the moment it
+## finishes. The HEIGHT is free and must be -- a foundation really is
+## shorter than a roof, and a content cut hugs whatever is drawn.
+##
+## Measured (tools/probe_construction_stage.gd) on cottage_1, whose
+## finished cell is 172 wide: the divider cut this fixes handed back 145,
+## 149 and 153 as the build ran -- 11% to 16% narrower than the house it
+## was going to become. The sheet's own content cut gives 171, 171, 171,
+## 174, 175: within 2%. So the bound is five percent, with the real spread
+## well inside it and the real bug well outside.
+const _BUILD_SCALE_TOLERANCE := 0.05
+
+
+func test_every_stage_of_one_build_is_drawn_at_the_scale_its_finished_house_will_be():
+	var sprite := IllustratedStructureSprite.new()
+	for building_id in BuildingCatalog.BUILDING_IDS:
+		var standing: Dictionary = BuildingCatalog.finished_sheet_chain(building_id, 7)[0]
+		var finished: Image = sprite._frame_image(
+			String(standing["path"]), int(standing["columns"]), int(standing["rows"]),
+			int(standing["row"]), int(standing["column"]), String(standing["grid"])
+		)
+		assert_not_null(finished, "%s draws no finished house" % building_id)
+		if finished == null:
+			continue
+		for progress in [0.0, 0.25, 0.5, 0.75, 0.99]:
+			var rising_entry: Dictionary = BuildingCatalog.construction_sheet_chain(building_id, 7, progress)[0]
+			var rising: Image = sprite._frame_image(
+				String(rising_entry["path"]), int(rising_entry["columns"]), int(rising_entry["rows"]),
+				int(rising_entry["row"]), int(rising_entry["column"]), String(rising_entry["grid"])
+			)
+			assert_not_null(rising, "%s draws nothing at %.2f" % [building_id, progress])
+			if rising == null:
+				continue
+			var off := absf(float(rising.get_width() - finished.get_width())) / float(finished.get_width())
+			assert_lte(
+				off, _BUILD_SCALE_TOLERANCE,
+				"%s at %.2f is cut %d wide against the finished %d -- %.0f%% off, so it is drawn that much bigger"
+				% [building_id, progress, rising.get_width(), finished.get_width(), off * 100.0]
+			)
