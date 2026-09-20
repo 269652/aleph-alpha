@@ -29744,7 +29744,44 @@ its eleven entries without saying so.
 producer maps directly, so a new crop, occupation or gathered material
 cannot be silently unsellable again.
 
-### 🚧 The faucet is open, and the village still dies
+### ✅ Measured on the merged tree: the village survives, earns and spends
+
+`tools/probe_village_famine.gd` on the merged result — the same village,
+the same 1200-second watch every measurement in this thread used:
+
+```
+   seconds   roster   standing  hungriest market food    purse  wallets
+         0       10         10       0.30          0      0.0        0
+       300       10         10       0.60          2      0.0        0
+       600       10         10       1.00          0     20.0        0
+       900       10         10       0.60          0      1.0        0
+      1200       10         10       0.60          0      1.0        0
+```
+
+Against the same probe's earlier runs, in order:
+
+| state | roster over the watch |
+|---|---|
+| before the faucet was closed | 10 → 10 → 12 → 12 → 12 |
+| faucet closed, nothing else | 10 → 3 → 4 → 4 → 6 |
+| + the clock fix alone | 10 → 3 → 5 → 6 → 8 |
+| **merged** | **10 → 10 → 10 → 10 → 10** |
+
+**Nobody dies.** The purse reaches 20 gold by t=600 and is spent down to 1
+by t=900, which is the loop actually closing: goods sold, wage drawn, meal
+bought. The hungriest villager peaks at 1.00 at t=600 and falls back to
+0.60 — fed, not merely alive. "10 of 10 broke" at the end is correct rather
+than alarming: a subsistence wage buys exactly one meal and leaves nothing
+to hoard.
+
+**Honest limit:** it survives, it does not yet grow. The pre-faucet run
+reached 12 households and this one holds at 10. The remaining cause is the
+gap [milling_and_baking.md](concept/milling_and_baking.md) already lists —
+*"three food containers, one eater… nothing ever moves food between
+them"* — visible in the same run's own breakdown: `VillageMarket 0`,
+`structure shelves 19`.
+
+### 🚧 A per-household reserve is a death spiral, not a brake
 
 Measured on this session's own branch before the merge, with the derived
 buy list and a per-household food reserve, over 5000 simulated seconds:
@@ -29758,15 +29795,14 @@ buy list and a per-household food reserve, over 5000 simulated seconds:
    food units in the village : 0
 ```
 
-**Gold really flows now — 0 → 693 where it was 0.0 at every sample.** And
-the village fell from 22 villagers to 2 doing it. A per-household reserve
-shrinks as the village dies, which is a death spiral rather than a brake;
-`main`'s seasonal `EstateConsumption` cover is the better of the two and is
-what is kept. The honest reading is the one session `017mcboF…` already
-recorded: **the faucet is open and the famine is not closed.** The
-remaining cause is the gap `milling_and_baking.md` already lists —
-*"three food containers, one eater… nothing ever moves food between
-them"*.
+**Gold really flowed — 0 → 693 where it was 0.0 at every sample.** And the
+village fell from 22 villagers to 2 doing it. The reserve was
+`households × FOOD_PER_HOUSEHOLD ÷ VISITS_PER_DAY`, which **shrinks as the
+village dies**: fewer households, smaller reserve, more food sold, more
+deaths. `main`'s seasonal `EstateConsumption` cover does not have that
+feedback and is what is kept. Recorded rather than quietly dropped,
+because the derivation looked sound and only the measurement showed the
+loop in it.
 
 ### 🚧 Two things this session got wrong, both caught by measuring
 

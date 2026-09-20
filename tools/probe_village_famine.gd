@@ -258,12 +258,18 @@ func _sample() -> void:
 			_manager.step_farm_plots(SLICE)
 			_manager.step_settlements(SLICE)
 			elapsed += SLICE
-		_lines.append("  %8.0f %8d %10d %10.2f %10d %6.0f/%-5.0f" % [
+		# The closing row carries the SAME columns as the ones above it.
+		# It did not, and the last line of a famine watch silently dropped
+		# the purse and the wallets -- the two columns the whole money
+		# question is read out of.
+		_lines.append("  %8.0f %8d %10d %10.2f %10d %8.1f %8d %6.0f/%-5.0f" % [
 			elapsed,
 			_manager.household_count_for_settlement(settlement_id),
 			_villagers_in(chunk_coord),
 			_hungriest(chunk_coord),
 			_market_food(chunk_coord),
+			_purse(chunk_coord),
+			_wallet_total(chunk_coord),
 			_most_starved(chunk_coord), Starvation.seconds_to_die(),
 		])
 		_lines.append("  %s" % _purse_and_pockets(chunk_coord, settlement_id))
