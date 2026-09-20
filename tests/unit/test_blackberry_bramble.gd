@@ -39,10 +39,36 @@ func test_brambles_grow_in_woods_and_nowhere_else():
 	assert_gt(_a_bramble().get_patch_cells().size(), 0, "a wood has brambles in it")
 
 
-## Bracken carpets a wood's floor; brambles are scattered through it. The
-## ORDERING is the decision, not either literal.
-func test_brambles_are_scattered_where_bracken_carpets():
+## Brambles stay rarer than bracken. The ORDERING is the decision, not
+## either literal — though at today's numbers it is a near thing rather
+## than the "scattered through a carpet" this once described: see
+## test_the_density_is_the_one_that_was_asked_for.
+func test_brambles_stay_rarer_than_bracken():
 	assert_lt(BlackberryBramble.SEED_CHANCE, ForestFern.SEED_CHANCE)
+
+
+## Asked for directly, after a live hunt for them came up short:
+## *"Bump blackberrys to 10%"*. Pinned as a literal because it is a
+## decision somebody made rather than a number derived from anything —
+## and because the cap below is computed FROM it, so the two must move
+## together.
+func test_the_density_is_the_one_that_was_asked_for():
+	assert_almost_eq(BlackberryBramble.SEED_CHANCE, 0.10, 0.0001)
+
+
+## The cap has to be able to hold the density the seed chance asks for on a
+## REAL full chunk, or seeding alone reaches it at worldgen and silently
+## truncates the thicket — the trap TallGrass.MAX_PATCHES' own comment
+## records paying for once, and which this file claimed to respect without
+## anything checking it. Recomputed here from the same real constants, so
+## raising one and forgetting the other fails here rather than in a wood.
+func test_the_cap_can_hold_the_density_it_asks_for_on_a_real_chunk():
+	var chunk := 32
+	assert_gte(
+		BlackberryBramble.MAX_PATCHES,
+		int(ceil(chunk * chunk * BlackberryBramble.SEED_CHANCE)),
+		"seeding alone would hit the cap on a fully wooded chunk"
+	)
 
 
 func test_the_same_seed_grows_the_same_brambles():

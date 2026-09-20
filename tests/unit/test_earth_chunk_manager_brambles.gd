@@ -180,10 +180,27 @@ func test_nothing_can_be_picked_in_summer():
 
 ## Foraging that refills as you walk away is the permanent larder flora.md
 ## already refuses.
+##
+## The neighbours are cleared FIRST, and that is the point of the test
+## rather than housekeeping. pick_blackberries_near searches a one-tile
+## radius and takes the first bearing cane in it, so standing in the same
+## place twice only proves the first cane is stripped if nothing else is
+## within reach. At the old 3.5% density that was true by accident; the
+## bump to 10% put a second thicket in the 3x3 often enough to fail this,
+## which is the test catching its own premise rather than a regression.
 func test_a_bramble_picked_once_gives_nothing_more_this_autumn():
 	var sim = manager._bramble_sims[_chunk_coord]
 	var cell: Vector2i = sim.get_patch_cells()[0]
+	var neighbours: Array = []
+	for dy in range(-1, 2):
+		for dx in range(-1, 2):
+			var near: Vector2i = cell + Vector2i(dx, dy)
+			if near != cell:
+				neighbours.append(near)
+	sim.block_cells(neighbours)
+	assert_true(sim.has_bramble(cell), "precondition: the cane under test survived the clearing")
 	_set_season("autumn")
+
 	assert_true(manager.pick_blackberries_near(_stand_on(cell)), "precondition")
 	assert_false(manager.pick_blackberries_near(_stand_on(cell)), "the cane is stripped")
 
