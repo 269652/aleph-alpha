@@ -12,6 +12,7 @@ const RainOverlay = preload("res://src/rendering/rain_overlay.gd")
 const RiverFlowPass = preload("res://src/rendering/river_flow_pass.gd")
 const NatureSoundscapePlayer = preload("res://src/audio/nature_soundscape_player.gd")
 const AudioSettings = preload("res://src/audio/audio_settings.gd")
+const SettlementReadout = preload("res://src/ui/settlement_readout.gd")
 const AudioDiagnostics = preload("res://src/audio/audio_diagnostics.gd")
 const ViewMode = preload("res://src/gameplay/view_mode.gd")
 const BuildPlan = preload("res://src/world/build_plan.gd")
@@ -1249,6 +1250,7 @@ func _ready() -> void:
 	_build_survival_bar()
 	_build_world_clock_card()
 	_build_karma_display()
+	_build_settlement_card()
 	_build_held_item_card()
 	_build_diagnostics_strip()
 	_build_message_stack()
@@ -2698,6 +2700,60 @@ func _build_land_sense_label() -> void:
 ## Label the way the XP/land-sense readouts still are. Sits just under the
 ## minimap, top-right -- the corner column mirroring how the XP bar/land-
 ## sense/creature-panels already stack below the health bar, top-left.
+## The settlement card (docs/concept/hud.md "The settlement card"): what
+## the village or city the player is standing in is doing. Hidden whenever
+## they are not in one, which is the whole of "context dependent" -- it
+## needs no key because standing somewhere IS the gesture.
+var _settlement_card: PanelContainer
+var _settlement_title: Label
+var _settlement_labels: Array[Label] = []
+
+
+func _build_settlement_card() -> void:
+	_settlement_card = PanelContainer.new()
+	_settlement_card.mouse_filter = Control.MOUSE_FILTER_IGNORE
+	_add_hud_card(_hud_right_column, _settlement_card, true)
+	_settlement_card.visible = false
+
+	var column := VBoxContainer.new()
+	column.add_theme_constant_override("separation", 2)
+	_settlement_card.add_child(column)
+
+	_settlement_title = Label.new()
+	_settlement_title.horizontal_alignment = HORIZONTAL_ALIGNMENT_CENTER
+	_scaled_font(_settlement_title, UiTheme.BASE_FONT_SIZE)
+	column.add_child(_settlement_title)
+
+	# One label per row the readout produces, built once. The row COUNT is
+	# fixed, so the card never resizes under the player's eye as a village
+	# grows -- the same contract the world-clock card already keeps.
+	for i in SettlementReadout.ROW_COUNT:
+		var line := Label.new()
+		_scaled_font(line, UiTheme.BASE_FONT_SIZE - 2)
+		line.add_theme_color_override("font_color", UiTheme.TEXT_MUTED)
+		column.add_child(line)
+		_settlement_labels.append(line)
+
+
+## Shown only while the player stands in a chunk that has a settlement.
+## Asks the manager once per frame for a read of state it already keeps --
+## no polling of its own, and nothing cached here that could go stale
+## against the village it describes.
+func _update_settlement_card(local_player: Player) -> void:
+	if _settlement_card == null:
+		return
+	var state: Dictionary = _chunk_manager.settlement_readout_at(
+		_chunk_manager.chunk_coord_for_tile(local_player.current_tile())
+	)
+	_settlement_card.visible = not state.is_empty()
+	if state.is_empty():
+		return
+	_settlement_title.text = SettlementReadout.title_for(state)
+	var lines: Array = SettlementReadout.lines_for(state)
+	for i in _settlement_labels.size():
+		_settlement_labels[i].text = String(lines[i]) if i < lines.size() else ""
+
+
 func _build_karma_display() -> void:
 	# Under the world-clock card, which took the slot directly below the
 	# minimap when the top-left strip split (docs/concept/hud.md). Both are
@@ -2944,7 +3000,8 @@ func _update_world_clock_card(
 		season,
 		weather,
 		local_player.current_mode,
-		local_player.current_speed_multiplier
+		local_player.current_speed_multiplier,
+		Engine.get_frames_per_second()
 	)
 	for i in _clock_labels.size():
 		_clock_labels[i].text = lines[i]
@@ -7634,6 +7691,7 @@ func _client_process(delta: float) -> void:
 	_update_xp_bar(local_player)
 	_update_land_sense_label(local_player)
 	_update_karma_display(local_player)
+	_update_settlement_card(local_player)
 	_update_fishing_label(local_player)
 	_update_lasso_label(local_player)
 	_step_planner_message(delta)

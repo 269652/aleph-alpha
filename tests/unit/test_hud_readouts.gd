@@ -291,3 +291,45 @@ func test_two_chips_do_not_collide_with_one_chip_named_after_both():
 
 func test_no_chips_is_a_stable_signature_of_its_own():
 	assert_eq(HudReadouts.chips_signature([]), HudReadouts.chips_signature([]))
+
+
+# -- FPS is back on the always-on card (see docs/concept/hud.md) -----------
+#
+# Reported back simply: "also add back the FPS". It shipped in the middle
+# of the clock line until the split-strip pass moved it, with lat/lon and
+# sun elevation, into the F3 diagnostics strip -- off by default. Only FPS
+# comes back: the other two are genuinely diagnostic, while a frame counter
+# is wanted visible exactly when you are not thinking to press F3.
+
+func test_the_clock_card_shows_the_frame_rate():
+	var lines := HudReadouts.world_clock_lines(9, 5, "Day", "Spring", "Clear", "walking", 0.56, 59)
+	var joined := " ".join(lines)
+	assert_string_contains(joined, "59", "the frame rate is not on the always-on card")
+	assert_string_contains(joined.to_upper(), "FPS")
+
+
+func test_the_card_keeps_its_fixed_line_count_with_fps_on_it():
+	# "No line ever appears or disappears, so the card never resizes under
+	# the player's eye" -- FPS has to share a line, not add one.
+	var lines := HudReadouts.world_clock_lines(9, 5, "Day", "Spring", "Clear", "walking", 0.56, 59)
+	assert_eq(lines.size(), HudReadouts.WORLD_CLOCK_LINE_COUNT)
+
+
+func test_the_clock_and_season_lines_are_untouched_by_the_frame_rate():
+	var lines := HudReadouts.world_clock_lines(9, 5, "Day", "Spring", "Clear", "walking", 0.56, 59)
+	assert_eq(lines[0], "09:05 · Day")
+	assert_eq(lines[1], "Spring · Clear")
+
+
+func test_an_unknown_frame_rate_leaves_the_card_readable():
+	# Engine.get_frames_per_second() is 0 on the very first frame; a card
+	# reading "0 FPS" then would be wrong rather than merely early.
+	var lines := HudReadouts.world_clock_lines(9, 5, "Day", "Spring", "Clear", "walking", 0.56, 0)
+	for line in lines:
+		assert_ne(String(line).strip_edges(), "")
+
+
+func test_fps_is_optional_so_every_existing_caller_is_untouched():
+	var without := HudReadouts.world_clock_lines(9, 5, "Day", "Spring", "Clear", "walking", 0.56)
+	assert_eq(without.size(), HudReadouts.WORLD_CLOCK_LINE_COUNT)
+	assert_eq(without[0], "09:05 · Day")

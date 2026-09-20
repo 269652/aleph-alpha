@@ -12687,6 +12687,21 @@ New concept doc this pass -- no prior doc covered what's underground (`stone.md`
 - ⬜ **Underground art is the flat procedural fallback** (`ProceduralStoneSprite`/`ProceduralOreSprite`, same textures surface stone/ore nodes fall back to with no illustrated sheet), not a cave-specific illustrated sheet -- none exists yet, the same honestly-documented situation `stone.md` itself describes for any future stone class with no art of its own.
 
 
+### The settlement card, and FPS back on (`concept/hud.md`)
+
+Asked for: *"a context dependent Village / City panel which shows stats and status of the village / city like population; happiness; gold and so"*, and mid-task, *"also add back the FPS"*.
+
+- ✅ **`SettlementReadout`** (17 tests) — pure model, thin Node, so a city's rows are testable without founding one. **The title is the settlement's real tier**, not the word "village": `SettlementTier.tier_for` classifies hamlet/town/city from three dimensions that must ALL cross together (households, active institutions, production diversity), so watching the title change is watching three real things happen at once.
+- ✅ **`EarthChunkManager.settlement_readout_at`** gathers it, returning `{}` where there is no settlement — which is the whole of "context dependent". No key, because standing somewhere IS the gesture.
+- ✅ **Every row reads state that already exists**: households and `VillageCensus` for population, `HouseholdWellbeing` for happiness, the village purse (`NpcEconomy.PURSE_META` — the same one wages and the civic tax use) for gold, `SettlementFood.carrying_capacity` for food, the growth ladder for what is being built. Nothing is tracked for the card's benefit.
+- ✅ **Happiness names its weakest need beside it** ("68% (worst: food)"). One blended percentage of five weighted needs tells a player nothing about what to do, and the per-need numbers are already computed to make the blend, so naming the worst costs nothing and turns a score into a prompt.
+- ✅ **Happiness is mean HAPPINESS, not mean PRODUCTIVITY.** `HouseholdWellbeing` keeps them apart deliberately — productivity is happiness dragged down by hunger — so a row labelled happiness reporting the work rate would answer a different question than it asks.
+- ✅ **Food is carrying capacity, not stock.** A first pass formatted a raw stock figure against a per-household target; corrected to `SettlementFood.carrying_capacity` ("feeds 17 of 12"), the number the simulation already assesses a settlement by.
+- ✅ **FPS returns to the always-on clock card**, sharing the movement line so the card's fixed three-line height is unchanged. Only FPS: lat/lon and sun elevation stay behind F3, because those are genuinely diagnostic while a frame counter is wanted visible exactly when you are not thinking to press F3. `UNKNOWN_FPS` (0) leaves the reading off on the first frame rather than claiming 0.
+- ✅ **Verified with a real render**, not only tests (`tools/probe_hud_layout.gd`, extended to cover the card): filled as a city in `busy`, and **gone rather than blank** in `calm` — the second is the failure mode a passing unit test would never catch.
+- ⬜ FPS appears twice while F3 is open. Harmless, left alone: removing it from the strip would shrink `DIAGNOSTICS_LINE_COUNT` and rewrite a contract this request never touched.
+- ⬜ The card is read-only, and shows nothing for a settlement whose chunk is not loaded (the purse and village market are only reachable while it is) — so a player cannot check on a town from the next valley.
+
 ### Reconciling two parallel wall fixes (2026-09-20)
 
 Merging this branch to `main` found that another session, `claude/brave-euler-bcoea4`, had independently fixed **the same three bugs** while this one was working: creatures through walls, villagers through walls, and things growing in water. 200 commits had landed on `main` in the meantime. A straight merge would have put two competing implementations of each fix into the live checkout, so the merge was aborted and reconciled deliberately instead.
