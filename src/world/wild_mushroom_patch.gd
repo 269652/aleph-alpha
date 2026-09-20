@@ -123,12 +123,35 @@ var _bite_stage: Dictionary = {}
 var _corpse_kind: Dictionary = {}
 
 
-func _init(seed_value: int, width: int, height: int, biome: PackedStringArray) -> void:
+func _init(
+	seed_value: int, width: int, height: int, biome: PackedStringArray,
+	is_water: PackedByteArray = PackedByteArray()
+) -> void:
 	_seed_value = seed_value
 	_width = width
 	_height = height
+	_is_water = is_water
 	_seed_sites(biome)
 	_seed_initial_fruiting()
+
+
+## 1 where this chunk's cell is drawn as WATER, 0 elsewhere -- the same
+## mask shape (and the same source) TallGrass already takes. A water cell
+## keeps its LAND biome, so seeding "by biome" alone puts mushrooms in
+## the middle of a lake: reported live with a screenshot taken while
+## swimming, and measured at 47.3N 19.6E, where an entirely-water chunk
+## held 31 crop patches, 60 mushroom sites, 4 flower patches and 2 ant
+## mounds. Empty by default, so every existing caller and test is
+## unaffected.
+var _is_water: PackedByteArray
+
+
+## Whether this cell is drawn as water. Mirrors TallGrass._is_river_at
+## exactly, including the bounds check that makes an empty mask read as
+## "nothing is water".
+func _is_water_at(x: int, y: int) -> bool:
+	var index := y * _width + x
+	return index < _is_water.size() and _is_water[index] == 1
 
 
 func get_site_cells() -> Array:
@@ -336,6 +359,8 @@ func _seed_sites(biome: PackedStringArray) -> void:
 		for x in _width:
 			if _sites.size() >= MAX_SITES:
 				return
+			if _is_water_at(x, y):
+				continue
 			var species := _eligible_species_at(x, y, biome)
 			if species.is_empty():
 				continue

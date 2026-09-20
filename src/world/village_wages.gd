@@ -58,6 +58,7 @@ extends RefCounted
 const NpcIdentity = preload("res://src/world/npc_identity.gd")
 const NpcProduction = preload("res://src/world/npc_production.gd")
 const VillageMarket = preload("res://src/world/village_market.gd")
+const VillageEstates = preload("res://src/emergence/village_estates.gd")
 
 
 ## How many of the real occupations actually gather food.
@@ -154,3 +155,39 @@ static func gross_earnings_per_wage() -> float:
 	if share <= 0.0:
 		return INF
 	return float(subsistence_wage()) / share
+
+
+## docs/concept/village_estates.md mechanism 6: what a village's own
+## households pay into this same purse over `days`.
+##
+## Deliberately the SAME purse the subsistence wage already comes out of,
+## rather than a second treasury -- which is exactly what closes the estate
+## loop on machinery that already exists: supply the baskets, households
+## rise, a risen household pays more tax, the purse funds the wages and the
+## next building, the building supplies the baskets.
+##
+## `estate_counts` is a real estate census (HouseholdStore.estate_census);
+## `provision_by_estate` is how well each estate is actually being kept,
+## in [0, 1] -- EstateConsumption's own reading. An estate whose provision
+## nobody reported is taxed as DESTITUTE rather than as provided: the same
+## destitute default every other estate module takes, and the only one that
+## cannot invent revenue out of missing information.
+##
+## A destitute village raises nothing however many live in it. That is
+## Anno's own shape and the real one: there is no surplus to take, so a
+## village that stops supplying its people also stops being able to pay for
+## anything -- which is the pressure that makes the whole loop a loop
+## rather than a one-way ratchet.
+static func estate_tax_for(
+	estate_counts: Dictionary, provision_by_estate: Dictionary, days: float
+) -> float:
+	if days <= 0.0:
+		return 0.0
+	var take := 0.0
+	for estate in estate_counts:
+		var households := float(estate_counts[estate])
+		if households <= 0.0:
+			continue
+		var provision := float(provision_by_estate.get(estate, 0.0))
+		take += VillageEstates.tax_per_day(estate, provision) * households * days
+	return take

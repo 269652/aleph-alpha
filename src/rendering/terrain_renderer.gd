@@ -164,6 +164,36 @@ static func is_road_tile(tile_id: String) -> bool:
 ## VillageFarm.MIN_FIELD_CELLS already uses in the other direction, and
 ## pinned to VillageFarm.FENCE_TILE_IDS by
 ## test_a_farm_rail_is_an_overlay_and_never_paints_a_ground_tile_of_its_own.
+## A WHOLE BUILDING is the same kind of thing again, and it arrived with the
+## same symptom. Reported in play with four of them in shot: *"Cottages and
+## Manors are clipped"*. Nothing was clipped. Every cell of a building's
+## footprint -- the anchor carrying the building id, and
+## BuildingCatalog.FOOTPRINT_TILE_ID on the rest -- fell through
+## atlas_coords_for_modification to this same plain-earth slot, so the whole
+## plot painted as a hard brown rectangle. A building's art is scaled to its
+## plot's WIDTH and keeps its own aspect, so a cottage covers about 97% of
+## its plot's depth and a manor as little as 85% (measured,
+## tools/probe_building_fit.gd) -- and the bare brown band left above the
+## roof is what reads as the roof being cut off inside a box.
+##
+## A building is a real Sprite2D standing on the ground (see
+## EarthChunkManager._spawn_building_node), exactly as a rail is: it has no
+## ground tile of its own to paint, and the grass it was raised on should go
+## on showing around it.
+##
+## Listed literally for the same reason the rails are -- this renderer keeps
+## its freedom from the gameplay modules -- and pinned to BuildingCatalog by
+## test_a_whole_building_is_an_overlay_and_paints_no_ground_of_its_own, so a
+## building added there and forgotten here fails rather than quietly
+## painting a brown square under itself.
+const BUILDING_OVERLAY_TILE_IDS: Array[String] = [
+	"building_footprint",
+	"house_small", "house_medium", "house_large",
+	"city_hall", "warehouse",
+	"sawmill", "farmhouse", "blacksmith", "brewery",
+	"trade_hall", "mage_guild",
+]
+
 const OVERLAY_ONLY_TILE_IDS: Array[String] = [
 	"farm_fence_north", "farm_fence_south", "farm_fence_east", "farm_fence_west",
 	"farm_fence_corner_nw", "farm_fence_corner_ne",
@@ -173,7 +203,7 @@ const OVERLAY_ONLY_TILE_IDS: Array[String] = [
 
 
 static func is_overlay_only_modification(tile_id: String) -> bool:
-	return OVERLAY_ONLY_TILE_IDS.has(tile_id)
+	return OVERLAY_ONLY_TILE_IDS.has(tile_id) or BUILDING_OVERLAY_TILE_IDS.has(tile_id)
 
 ## Cardinal directions a blend can be oriented toward -- up/down/left/right,
 ## in this fixed order so mask/atlas indexing is stable.

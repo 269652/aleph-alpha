@@ -13,6 +13,7 @@ extends RefCounted
 const PixelPalette = preload("res://src/rendering/pixel_palette.gd")
 const TreeSpecies = preload("res://src/world/tree_species.gd")
 const IllustratedTree = preload("res://src/rendering/illustrated_tree.gd")
+const IllustratedItemArt = preload("res://src/rendering/illustrated_item_art.gd")
 const PixelNoise = preload("res://src/rendering/pixel_noise.gd")
 
 ## The tree's WORLD footprint, in world units. Bumped from 16x20 (before the
@@ -776,7 +777,15 @@ static func tree_variant_for(seed_value: int) -> int:
 ## and vanished into the leaf texture. It was there, and no player would ever
 ## have seen it. Pinned from below by test_a_crop_is_actually_visible_on_the_
 ## tree so it cannot quietly shrink again.
-const ILLUSTRATED_FRUIT_WIDTH_FRAC := 0.22
+## Re-derived 2026-09-19 for the item icon (see _on_tree_fruit_texture). The
+## old 0.22 was measured against the composite row's own drawings, which are
+## mostly stem and leaf -- a fruit inside one of those is a fraction of the
+## frame, so the frame had to be big for the fruit to be seen. An icon IS the
+## fruit, edge to edge, so the same visible fruit needs a much smaller frame;
+## left at 0.22 an apple came out the size of a branch. Pinned from below by
+## test_a_crop_is_actually_visible_on_the_tree and from above by
+## test_one_fruit_is_a_small_part_of_the_crown.
+const ILLUSTRATED_FRUIT_WIDTH_FRAC := 0.11
 
 ## How many pixels of the tree one fruit must cover to count as visible. Small,
 ## because at this canvas a fruit IS a few pixels -- but not so few that a crop
@@ -1117,8 +1126,7 @@ func _blend_illustrated_fruit(
 	season: String
 ) -> void:
 	var variant := tree_variant_for(seed_value)
-	var fruit_width := maxi(2, int(float(SIZE.x) * ILLUSTRATED_FRUIT_WIDTH_FRAC))
-	var fruit_image := _scaled_fruit(art, species_id, fruit_width, season)
+	var fruit_image := _scaled_fruit(art, species_id, illustrated_fruit_width(), season)
 	if fruit_image == null:
 		return
 	# Placed in the FOLIAGE, not across the canopy box. The box reaches well
@@ -1204,17 +1212,60 @@ static func fruit_ground_offset(variant: int, index: int) -> Vector2:
 ## IllustratedTree.fruit_for's own doc comment.
 static var _fruit_cache := {}
 
+## The item art a hanging fruit is drawn from (see _on_tree_fruit_texture).
+## Static so a whole wood shares one loader and one frame cache.
+static var _item_art := IllustratedItemArt.new()
+
 
 func _scaled_fruit(art, species_id: String, width: int, season: String) -> Image:
 	var key := "%s/%s/%d" % [species_id, season, width]
 	if _fruit_cache.has(key):
 		return _fruit_cache[key]
-	var fruit: Texture2D = art.fruit_for(species_id, true, season)
+	var fruit := _on_tree_fruit_texture(art, species_id, season)
 	var scaled: Image = null
 	if fruit != null:
 		scaled = _fit_width(_trimmed(fruit.get_image()), width)
 	_fruit_cache[key] = scaled
 	return scaled
+
+
+## The picture ONE fruit of this species hangs as: its own ITEM ICON -- the
+## same individual apple, cherry, walnut, hazelnut, acorn or pinecone that
+## lands on the ground as a real entity and goes into the pack.
+##
+## Reported directly, with the apple sheet just repainted: *"can you make
+## sure all the trees bear real fruit (individual apples or cherrys / nuts)
+## by placing the fruit sprite on the tree"*. Rendered over all six species
+## before changing anything, the composite sheet's own on-tree row was not
+## that: cherry's is a leafy twig carrying a CLUSTER, so ten of them merged
+## into one red mass, and the repainted apple sheet's row runs green apple /
+## red apple / CUT HALVES, so the season-indexed lookup (which assumes four
+## season columns -- see IllustratedTree.fruit_for) drew a sliced-open apple
+## the size of a branch.
+##
+## An icon has no rows to mis-index, is one fruit rather than a bunch, and
+## cannot drift from what falls: what hangs, what drops and what is carried
+## are one picture. The composite row stays as the fallback for a species
+## with no item icon, the same fail-open shape every other art lookup here
+## uses.
+func _on_tree_fruit_texture(art, species_id: String, season: String) -> Texture2D:
+	var icon: Texture2D = _item_art.illustrated_texture_for(species_id, "icon")
+	if icon != null:
+		return icon
+	return art.fruit_for(species_id, true, season)
+
+
+## What one fruit of this species is drawn as on a tree, at the size it is
+## really drawn -- the same image _blend_illustrated_fruit lays on the
+## canopy. Exposed so the drawn crop can be tested and probed as itself
+## rather than only found by differencing two whole trees.
+func on_tree_fruit_image(species_id: String, season: String) -> Image:
+	return _scaled_fruit(IllustratedTree.new(), species_id, illustrated_fruit_width(), season)
+
+
+## How wide one fruit is drawn, in pixels on this canvas.
+func illustrated_fruit_width() -> int:
+	return maxi(2, int(float(SIZE.x) * ILLUSTRATED_FRUIT_WIDTH_FRAC))
 
 
 ## One box partway to another, so a crown changes size across a turn rather

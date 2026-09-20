@@ -15,6 +15,7 @@ extends RefCounted
 
 const EntityRef = preload("res://src/emergence/entity_ref.gd")
 const Wallet = preload("res://src/gameplay/wallet.gd")
+const VillageEstates = preload("res://src/emergence/village_estates.gd")
 
 ## An entity reference (see EntityRef) for every member of this household.
 var members: Array[String] = []
@@ -31,6 +32,30 @@ var wallet := Wallet.new()
 ## an allocated ID" idiom EntityRef itself uses, so no new counter has to be
 ## persisted or protected from collision just to hand out household ids.
 var id: String
+
+## This household's STANDING (docs/concept/village_estates.md mechanism 1):
+## which of VillageEstates.ESTATE_IDS it holds, and therefore which house
+## it lives in, which class of labour it supplies, what basket it consumes
+## and what tax it pays.
+##
+## Lives here rather than in a second parallel store for the same reason
+## the wallet and the property list do: a Household is this project's real
+## persistent unit, and an estate is not derivable from anything else --
+## it is HISTORY, the record of a ladder this household actually climbed.
+## Putting it here means HouseholdStorePersistence carries it with no new
+## file and no second source of truth.
+##
+## Every household is founded at the bottom rung; everything above it is
+## earned through EstateAscension's charter gate, never granted.
+var estate := VillageEstates.STARTING_ESTATE
+
+## Consecutive days this household has held its standard (fed, and at or
+## above its station) -- the run EstateAscension reads before letting it
+## rise. Cleared the moment either half lapses.
+var good_run_days := 0.0
+## Consecutive days it has been below EstateAscension.SUBSISTENCE_FLOOR --
+## the run read before it loses standing, or leaves.
+var short_run_days := 0.0
 
 
 static func for_founder(founder_id: String) -> RefCounted:

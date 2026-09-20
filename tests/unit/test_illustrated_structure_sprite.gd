@@ -10,6 +10,7 @@ extends GutTest
 ## archaeology itself.
 
 const IllustratedStructureSprite = preload("res://src/rendering/illustrated_structure_sprite.gd")
+const BuildingCatalog = preload("res://src/gameplay/building_catalog.gd")
 
 const VillageFarm = preload("res://src/gameplay/village_farm.gd")
 
@@ -270,16 +271,39 @@ func test_sheet_frame_image_is_null_for_a_missing_sheet_or_an_out_of_range_cell(
 	assert_null(sprite.sheet_frame_image(_CONTRACT_SHEET, _COLUMNS, _ROWS, 0, _COLUMNS), "column past the sheet")
 
 
-## A building standing on a 3-tile-wide footprint is drawn 3 tiles wide --
-## height by the same factor, so a tall building stays tall (the same
-## footprint anchor footprint_texture already keeps for a 1-tile placeable).
-func test_footprint_frame_texture_scales_to_the_footprint_width():
+## A building standing on a 3-tile-wide footprint is drawn INSIDE those
+## three tiles, leaving BuildingCatalog.PLOT_MARGIN_SHARE of air on each
+## side -- height by the same factor, so a tall building stays tall (the
+## same footprint anchor footprint_texture already keeps for a 1-tile
+## placeable).
+##
+## It used to be drawn at exactly the plot width, which is what had two
+## houses on neighbouring plots touching at the pixel; see
+## BuildingCatalog.PLOT_MARGIN_SHARE for the report and the measurement.
+func test_footprint_frame_texture_draws_inside_the_footprint_width():
 	var texture := sprite.footprint_frame_texture(_CONTRACT_SHEET, _COLUMNS, _ROWS, 2, 0, 16, 3)
 	assert_not_null(texture)
-	assert_eq(texture.get_width(), 48)
+	var expected_width := int(round(16.0 * BuildingCatalog.drawn_plot_width_tiles(3)))
+	assert_eq(texture.get_width(), expected_width)
+	assert_lt(texture.get_width(), 48, "the building fills its whole plot")
 	var frame := sprite.sheet_frame_image(_CONTRACT_SHEET, _COLUMNS, _ROWS, 2, 0)
-	var expected_height := int(round(48.0 * float(frame.get_height()) / float(frame.get_width())))
+	var expected_height := int(round(
+		float(expected_width) * float(frame.get_height()) / float(frame.get_width())
+	))
 	assert_eq(texture.get_height(), expected_height)
+
+
+## Shrinking, never squashing: the picture keeps its own proportions, so a
+## cottage does not become a bungalow on the way into its plot.
+func test_drawing_inside_the_plot_keeps_the_pictures_own_proportions():
+	var frame := sprite.sheet_frame_image(_CONTRACT_SHEET, _COLUMNS, _ROWS, 2, 0)
+	var texture := sprite.footprint_frame_texture(_CONTRACT_SHEET, _COLUMNS, _ROWS, 2, 0, 16, 3)
+	assert_almost_eq(
+		float(texture.get_width()) / float(texture.get_height()),
+		float(frame.get_width()) / float(frame.get_height()),
+		0.02
+	)
+
 
 
 func test_footprint_frame_texture_is_null_for_a_missing_sheet():
@@ -336,10 +360,18 @@ func test_a_divider_sheets_frames_are_cached_per_cell():
 	assert_true(first == second, "the same cell must not be re-sliced every time it is asked for")
 
 
+## A divider sheet is scaled to a real footprint like any other -- drawn
+## INSIDE the plot since BuildingCatalog.PLOT_MARGIN_SHARE, which is what
+## this test was really guarding: that the scaling happens at all and lands
+## on the plot, not the exact pixel it used to land on.
 func test_a_divider_sheet_scales_to_a_real_footprint():
 	var texture: ImageTexture = sprite.footprint_frame_texture(_LIFECYCLE_SHEET, 8, 10, 3, 2, 32, 2, "dividers")
 	assert_not_null(texture)
-	assert_eq(texture.get_width(), 64, "two tiles wide at 32 art px per tile")
+	assert_eq(
+		texture.get_width(),
+		int(round(32.0 * BuildingCatalog.drawn_plot_width_tiles(2))),
+		"inside a two-tile plot at 32 art px per tile"
+	)
 
 
 # -- the farm fence: one sheet, four orientation columns -------------------
@@ -712,3 +744,52 @@ func test_an_even_grid_frame_keeps_the_measured_column_pitch():
 	var frame := sprite.idle_texture("storage").get_image()
 	var cell: int = 1536 / 8
 	assert_eq(frame.get_width(), cell - IllustratedStructureSprite.CELL_INSET * 2)
+
+
+# -- the house tiers read as a ladder, in the real art ----------------------
+#
+# Asked directly, with the street in shot: *"also scale down cottage to be
+# smaller than house"*. Measured before changing anything
+# (tools/probe_building_fit.gd): a cottage drew 26.0 x 26.0 world px against
+# a house's 39.5 x 24.0 -- the smallest tier was the tallest building on the
+# street, because both are drawn at the same share of their own plot width
+# and the art's aspect does the rest (a cottage square, a house low and
+# wide).
+#
+# Asked of the REAL sheets through the REAL chain, not of the catalog's
+# arithmetic: what a player compares is the picture.
+
+
+func _drawn_size_of(building_id: String, seed_value: int) -> Vector2i:
+	var footprint := BuildingCatalog.footprint_of(building_id)
+	var chosen: Dictionary = BuildingCatalog.finished_sheet_for(building_id, seed_value)
+	var texture: ImageTexture = sprite.footprint_frame_texture(
+		String(chosen["path"]), int(chosen["columns"]), int(chosen["rows"]),
+		int(chosen["row"]), int(chosen["column"]), 32, footprint.x,
+		String(chosen["grid"]), building_id
+	)
+	assert_not_null(texture, "%s draws nothing at all" % building_id)
+	return Vector2i(texture.get_width(), texture.get_height())
+
+
+func test_a_cottage_really_draws_smaller_than_a_house():
+	for seed_value in [3, 29, 91]:
+		var cottage := _drawn_size_of("house_small", seed_value)
+		var house := _drawn_size_of("house_medium", seed_value)
+		assert_lt(cottage.x, house.x, "seed %d: a cottage is narrower" % seed_value)
+		assert_lt(cottage.y, house.y, "seed %d: and shorter -- it was taller" % seed_value)
+
+
+func test_a_house_really_draws_smaller_than_a_manor():
+	for seed_value in [3, 29, 91]:
+		var house := _drawn_size_of("house_medium", seed_value)
+		var manor := _drawn_size_of("house_large", seed_value)
+		assert_lt(house.y, manor.y, "seed %d: a manor looms over a house" % seed_value)
+		assert_lte(house.x, manor.x, "seed %d" % seed_value)
+
+
+## Still a building standing on its plot rather than a model of one -- the
+## same floor PLOT_MARGIN_SHARE is already pinned against.
+func test_a_cottage_still_fills_most_of_its_plot():
+	var cottage := _drawn_size_of("house_small", 29)
+	assert_gt(float(cottage.x) / float(2 * 32), 0.6, "a cottage this small is a doll's house")

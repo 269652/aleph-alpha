@@ -2366,6 +2366,33 @@ func _terrain_blocks_movement(heading: Vector2) -> bool:
 ##
 ## Villagers and the player are untouched: this lives on CreatureMarker, so
 ## the gate a farmer walks through is a gate only an animal finds shut.
+## Whether the step this creature is about to take walks into a real wall
+## (docs/concept/building.md "Placement rules"). Reported live: "Horses
+## still aren't blocked by houses".
+##
+## The SAME ask-before-you-step shape as _terrain_blocks_movement and
+## _fence_blocks_movement above, against the same look-ahead tile and at
+## the same cost: one world query per creature per movement decision, never
+## one per candidate direction. A marker is a Sprite2D, so the StaticBody2D
+## that stops the player is invisible to it -- this is how an animal learns
+## the same fact, from the same BuildingPiece walkability the body itself
+## is spawned from (EarthChunkManager.piece_blocks_movement_at_global).
+##
+## A door and a floor are walkable pieces and stay walkable: the question
+## is the piece's own walkability, not whether a building stands here, so
+## an animal can still follow a villager in through the door.
+func _building_blocks_movement(heading: Vector2) -> bool:
+	if (
+		_world == null
+		or not _world.has_method("piece_blocks_movement_at_global")
+		or heading.length() < 0.01
+	):
+		return false
+	var look_ahead := position + heading.normalized() * MOVEMENT_LOOKAHEAD
+	var tile := Vector2i(floori(look_ahead.x / _tile_size), floori(look_ahead.y / _tile_size))
+	return _world.piece_blocks_movement_at_global(tile.x, tile.y)
+
+
 func _fence_blocks_movement(heading: Vector2) -> bool:
 	if _world == null or not _world.has_method("fence_blocks_step_global") or heading.length() < 0.01:
 		return false
@@ -2411,7 +2438,11 @@ func _advance_gated(desired: Vector2, speed: float, delta: float, avoid_threats:
 	# whatever heading obstacle/threat avoidance above already settled on --
 	# see _terrain_blocks_movement's own doc comment for why this stays a
 	# single slope query rather than one per candidate direction.
-	if heading != Vector2.ZERO and (_terrain_blocks_movement(heading) or _fence_blocks_movement(heading)):
+	if heading != Vector2.ZERO and (
+		_terrain_blocks_movement(heading)
+		or _fence_blocks_movement(heading)
+		or _building_blocks_movement(heading)
+	):
 		heading = Vector2.ZERO
 	_last_gated_heading = heading
 	if heading == Vector2.ZERO:

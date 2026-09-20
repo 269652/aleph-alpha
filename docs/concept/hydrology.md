@@ -491,6 +491,90 @@ ocean, river and lake depth.
 Salinity and lake id (phase 3) become per-cell side fields on `Chunk`,
 never biome names: salt is a property of the water, not a kind of ground.
 
+### Nothing that belongs on land stands on water (2026-09-19)
+
+The paragraph above says `Chunk.blocks_ground_cover(index)` is "the one
+predicate trees, tall grass, snow presence and rooting read". That was
+true of those four and of nothing else, and it read as a general rule
+when it was really a list. Reported live -- "there are still patches of
+grass; potatoes in the river", then a screenshot taken while SWIMMING
+showing mushrooms, an ant mound, bushes, a stone and an alpaca out on
+open water.
+
+**The root cause is the rendering decision at the top of this section: a
+water tile keeps its land biome.** Every placement that seeds "by biome"
+therefore sees `grassland` on a lake bed and seeds it. Measured at
+47.3N 19.6E, where the whole chunk is drawn as water and
+`blocks_ground_cover` already agrees with `is_water_at_global` on all
+1024 cells — so this was never a mask-width problem, only a question of
+who consults the mask at all:
+
+| system | in one all-water chunk | took a water mask |
+| --- | ---: | --- |
+| tall grass | 0 | yes |
+| trees | 0 | yes (`_can_root_at`) |
+| wild crops | 31 | no |
+| mushrooms | 60 | no |
+| flowers | 4 | no |
+| ant mounds | 2 | no |
+| earthworm burrows | 21 | no |
+| stones | 74 | no |
+| land creatures | 24 (loaded radius) | no |
+
+The rule, now enforced rather than implied: **a system that places
+something on the ground consults the water mask, in seeding and in
+spread.** `WildCropPatch`, `WildMushroomPatch`, `AntColony` and
+`EarthwormPatch` take the same optional `PackedByteArray` `TallGrass`
+already took (empty by
+default, so nothing else changes); `FlowerPatch` needed no new parameter
+because its own `block_cells` already clears a cell and refuses every
+later rooting and seed-fall. For ant mounds one guard in
+`is_valid_mound_site` covers both the initial seeding and budding, which
+already funnels through it.
+
+**Two exceptions, both deliberate.**
+
+*Land creatures slide, they do not vanish.* A deterministic spawn point
+that lands wet is moved to the nearest dry tile within eight, ringing
+outward in a fixed order so placement stays as deterministic as the point
+it corrects. This is the same answer the village square already gives
+("slides clear of water instead of not existing"): a lakeside chunk
+should still carry its animals, just not on the lake, and dropping every
+individual whose point happened to land wet would thin a shoreline
+population for no reason a player could see. A chunk that is entirely
+water ends up with no land animals at all, which is correct.
+
+*Stones care which KIND of water.* A boulder standing in a **stream** is
+a feature, not a bug — rivers.md's "Boulders are hydrology" exists to
+bend the current around exactly the rocks the player can see. A boulder
+drawn sitting on top of a **lake** is the bug. The measurement decided
+the rule: all 74 stones in that chunk were in still water, none in
+flowing river, at solved depths of 1.9–2.7 m, deep enough to submerge
+even a 2 m boulder. So a naturally generated stone may stand in flowing
+river and never in a lake, a sea pocket, a pond or a shore feather --
+`EarthChunkManager.is_still_water_at_global`, the public global-tile form
+of the `is_still_water_probe` rule the flow paint and `is_water_at_global`
+already share. A boulder the player *drops* in still water is untouched:
+that is a deliberate act, and it still parts the surface.
+
+**And the same for BUILT ground (2026-09-19).** Reported next, with two
+more screenshots: "TherE's a shroom growing on a house", "Also potatoes
+growing on pavement". `_built_local_cells` has always named exactly the
+ground nothing may grow on -- a real building piece, a laid road, a
+village farm's own rail -- and `TallGrass`/`FlowerPatch` were handed it
+through `block_cells`; the sims that had only just learned about water
+were not, so a roof and a market square still read as `grassland` to
+them. Measured on a build-then-reload: **82** mushrooms and crops seeded
+straight back onto ground that had just been paved. Every sim that GROWS
+now takes water-or-built; the two aquatic sims keep the water mask alone,
+because for them it is an inclusion filter and folding buildings into it
+would seed pondweed on a roof.
+
+Pinned by `tests/unit/test_water_entity_exclusion.gd`, which drives one
+real `update()` at the reported coordinates and asserts against
+`is_water_at_global` directly — including the premise that the chunk
+really is all water and really does read back as `grassland`.
+
 ### Equilibrium bake and catch-up
 
 The bake also runs the *coupled* Layers 1–4 forward, offline, with lake

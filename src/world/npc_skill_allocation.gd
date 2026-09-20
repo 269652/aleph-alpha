@@ -50,6 +50,12 @@ const ARCHETYPE_BY_OCCUPATION := {
 	"herbalist": "herbalist",
 	"hunter": "ranger",
 	"nurse": "herbalist",
+	# A guild master (docs/concept/mage_guild.md) -- forced-only, never
+	# rolled (see NpcIdentity.FORCED_ONLY_OCCUPATIONS). Named here so a
+	# master walks the MAGE wedge rather than falling through this table's
+	# "artisan" default, which would have every archmage in the world
+	# quietly specialising in smelting.
+	"mage": "mage",
 }
 
 ## How many points a maximally-dedicated NPC ever spends. Deliberately

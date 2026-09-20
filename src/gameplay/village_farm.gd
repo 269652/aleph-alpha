@@ -184,12 +184,28 @@ const FIELD_REACH_TILES := 3
 ## the first MAX_WORKED_CELLS (see nearest_cells). Offering them nearest
 ## first is what makes that "the biggest field that actually fits", rather
 ## than whichever cells happened to come up.
-static func field_cells(origin: Vector2i, building_id: String) -> Array:
+## `behind` widens the reach NORTH of the building, exactly as it does for
+## field_rect -- so a caller that SITED something behind the house (a
+## fisher's pond, VillagePond.pond_rect) can look in the same place it put
+## it. Without that the two disagreed, and a reload that could not find the
+## pond it had already dug dug another one.
+## The tallest shape a field (or a pond) can take -- how far north of a
+## building `behind` has to reach to cover every rectangle field_rect could
+## have placed there.
+static func _tallest_field_shape() -> int:
+	var tallest := 0
+	for shape in FIELD_SHAPES:
+		tallest = maxi(tallest, (shape as Vector2i).y)
+	return tallest
+
+
+static func field_cells(origin: Vector2i, building_id: String, behind: bool = false) -> Array:
 	var footprint := BuildingCatalog.footprint_of(building_id)
 	if footprint == Vector2i.ZERO:
 		return []
 	var cells: Array = []
-	for y in range(origin.y, origin.y + footprint.y + FIELD_REACH_TILES):
+	var first_y := origin.y - (FIELD_REACH_TILES + _tallest_field_shape() if behind else 0)
+	for y in range(first_y, origin.y + footprint.y + FIELD_REACH_TILES):
 		for x in range(origin.x - FIELD_REACH_TILES, origin.x + footprint.x + FIELD_REACH_TILES):
 			var cell := Vector2i(x, y)
 			if _ring_distance(cell, origin, footprint) == 0:
@@ -632,7 +648,15 @@ static func _rail_stops_step(tile_id: String, step: Vector2i) -> bool:
 ## owned by this farmhouse rather than its neighbour. Every cell of a
 ## rectangle must pass, because a field with a rock in the middle of it is
 ## not the rectangle that was asked for.
-static func field_rect(origin: Vector2i, building_id: String, is_free: Callable):
+## `behind` opens the ground NORTH of the building to the search. Off by
+## default, because for a farmhouse north really is the next row of
+## buildings (see _rect_is_free). A fisher's pond passes it: measured at the
+## first grassland village with a fisher, every free cell on the fisher's
+## own side of the street was north of their house -- 32 of them -- so a
+## search that could only look south had nowhere to go but across the road.
+static func field_rect(
+	origin: Vector2i, building_id: String, is_free: Callable, behind: bool = false
+):
 	var footprint := BuildingCatalog.footprint_of(building_id)
 	if footprint == Vector2i.ZERO:
 		return null
@@ -641,10 +665,11 @@ static func field_rect(origin: Vector2i, building_id: String, is_free: Callable)
 	var centre := Vector2(origin) + Vector2(footprint) * 0.5
 	for shape in FIELD_SHAPES:
 		var size: Vector2i = shape
-		for top in range(origin.y, origin.y + footprint.y + FIELD_REACH_TILES):
+		var first_top := origin.y - (FIELD_REACH_TILES + size.y if behind else 0)
+		for top in range(first_top, origin.y + footprint.y + FIELD_REACH_TILES):
 			for left in range(origin.x - FIELD_REACH_TILES, origin.x + footprint.x + FIELD_REACH_TILES):
 				var rect := Rect2i(left, top, size.x, size.y)
-				if not _rect_is_free(rect, origin, footprint, is_free):
+				if not _rect_is_free(rect, origin, footprint, is_free, behind):
 					continue
 				var key: Array = [
 					_rect_reach(rect, origin, footprint),
@@ -660,12 +685,13 @@ static func field_rect(origin: Vector2i, building_id: String, is_free: Callable)
 ## Every cell of `rect` is ground this farmhouse may really sow: not north
 ## of the building, not under it, and accepted by the caller's own rule.
 static func _rect_is_free(
-	rect: Rect2i, origin: Vector2i, footprint: Vector2i, is_free: Callable
+	rect: Rect2i, origin: Vector2i, footprint: Vector2i, is_free: Callable,
+	behind: bool = false
 ) -> bool:
 	for y in range(rect.position.y, rect.end.y):
 		for x in range(rect.position.x, rect.end.x):
 			var cell := Vector2i(x, y)
-			if cell.y < origin.y:
+			if cell.y < origin.y and not behind:
 				return false  # north of a farmhouse is the next row of buildings
 			if _ring_distance(cell, origin, footprint) == 0:
 				return false  # the building stands here

@@ -46,7 +46,8 @@ const DESTROYED_ROWS: Array[int] = [8, 9]
 ## every_build_row so it cannot drift from the grid it describes.
 const BUILD_FRAMES := 24
 
-const _COTTAGE_VARIATIONS: Array[String] = [
+## The middle tier's own five sheets, on the 8x10 contract described above.
+const _HOUSE_VARIATIONS: Array[String] = [
 	"res://assets/sprites/buildings/house_1_1.png",
 	"res://assets/sprites/buildings/house_1_2.png",
 	"res://assets/sprites/buildings/house_1_3.png",
@@ -54,22 +55,82 @@ const _COTTAGE_VARIATIONS: Array[String] = [
 	"res://assets/sprites/buildings/house_1_5.png",
 ]
 
-## Which building ids have real lifecycle variation sheets.
+## The smallest tier's own five, delivered 2026-09-19 -- and on the OLDER
+## 8x5 contract (BuildingCatalog.SHEET_COLUMNS/SHEET_ROWS: construction,
+## active, idle, burning, ruined), not house_1_*'s richer one.
 ##
-## All three village HOUSES share the five cottage sheets, for the same
-## reason building.md already gives for the flat variant sheet they share:
-## declaring the art for only the smallest tier would leave a street half
-## beautiful cottages and half boxes. The scaler sizes each cell to its own
-## footprint without distorting it, so a larger house is simply a bigger
-## cottage, and a different seed picks a different one anyway.
+## MEASURED, not assumed, per this codebase's own "probe before you trust a
+## grid" convention: tools/probe_building_lifecycle_sheet.gd reads five
+## divider-separated row bands and eight columns off cottage_1.png, and the
+## rendered cells say the rows really mean what the 8x5 contract says --
+## row 0 is a foundation ring, row 2 a finished cottage, row 3 a cottage on
+## fire.
+const _COTTAGE_VARIATIONS: Array[String] = [
+	"res://assets/sprites/buildings/cottage_1.png",
+	"res://assets/sprites/buildings/cottage_2.png",
+	"res://assets/sprites/buildings/cottage_3.png",
+	"res://assets/sprites/buildings/cottage_4.png",
+	"res://assets/sprites/buildings/cottage_5.png",
+]
+
+## The largest tier's own five, delivered the same day and on the same 8x5
+## contract -- and really manors: row 2 of manor_1.png is a turreted,
+## bannered stone house, not a scaled-up cottage.
+const _MANOR_VARIATIONS: Array[String] = [
+	"res://assets/sprites/buildings/manor_1.png",
+	"res://assets/sprites/buildings/manor_2.png",
+	"res://assets/sprites/buildings/manor_3.png",
+	"res://assets/sprites/buildings/manor_4.png",
+	"res://assets/sprites/buildings/manor_5.png",
+]
+
+## The two grids a variation set can be drawn on, and which rows of each
+## mean what. A set carries its own, because the three house tiers are no
+## longer on one contract.
+##
+## The 8x5 one is BuildingCatalog's own asset contract, restated here as
+## rows rather than restated as numbers: one construction row of eight
+## stages, then active, idle, burning, ruined. Only the IDLE row is a
+## finished look -- "active" is an eight-frame animation of smoke and lit
+## windows, not a second standing variant, and burning and ruined are
+## states this module must never hand a finished building.
+const _GRID_8X5 := {
+	"columns": 8, "rows": 5, "build_rows": [0], "idle_rows": [2],
+}
+
+## The 8x10 one, whose own printed labels are quoted at the top of this
+## file: three build rows (24 real frames) and three idle rows (24 finished
+## looks).
+const _GRID_8X10 := {
+	"columns": COLUMNS, "rows": ROWS, "build_rows": BUILD_ROWS, "idle_rows": IDLE_ROWS,
+}
+
+## Which building ids have real lifecycle variation sheets, and what each
+## one is drawn from.
+##
+## One tier, one building. Asked directly once the art landed: *"I added
+## cottage and manor sprites... please fix that villages use scaled houses
+## for those and use the real illustrations"*. All three used to share the
+## house_1_* sheets, which was deliberate while it was the only house art
+## there was -- declaring it for the smallest tier alone would have left a
+## street half cottages and half boxes -- and building.md said exactly what
+## would end it: "when grander art for those tiers lands they get their own
+## entries here and nothing else changes".
 ##
 ## Nothing that is not a home is listed. A hall, a mill or a brewery drawn
 ## as a cottage would be drawing the wrong building, and each already has
 ## its own 8x5 sheet.
 const VARIATION_SHEETS := {
 	"house_small": _COTTAGE_VARIATIONS,
-	"house_medium": _COTTAGE_VARIATIONS,
-	"house_large": _COTTAGE_VARIATIONS,
+	"house_medium": _HOUSE_VARIATIONS,
+	"house_large": _MANOR_VARIATIONS,
+}
+
+## Which grid each set's own art is drawn on (see _GRID_8X5/_GRID_8X10).
+const _VARIATION_GRIDS := {
+	"house_small": _GRID_8X5,
+	"house_medium": _GRID_8X10,
+	"house_large": _GRID_8X5,
 }
 
 
@@ -79,6 +140,13 @@ const VARIATION_SHEETS := {
 ## same chain a missing lifecycle sheet already does.
 static func variation_sheets_of(building_id: String) -> Array:
 	return VARIATION_SHEETS.get(building_id, [])
+
+
+## The grid this building's own variation art is drawn on -- {columns, rows,
+## build_rows, idle_rows} -- or {} for a building with no variations. What
+## the sheet chain reads to slice the right cells out of the right sheet.
+static func grid_for(building_id: String) -> Dictionary:
+	return _VARIATION_GRIDS.get(building_id, {})
 
 
 ## Which of them THIS building draws from -- deterministic from its own
@@ -95,9 +163,15 @@ static func sheet_for(building_id: String, seed_value: int) -> String:
 ## frames in order, left to right and row by row, so foundation gives way
 ## to frames and frames to a roofed shell. Progress outside the range
 ## clamps to the first and last frame rather than reading off the sheet.
-static func build_cell_for(progress: float) -> Vector2i:
-	var frame := clampi(floori(clampf(progress, 0.0, 1.0) * BUILD_FRAMES), 0, BUILD_FRAMES - 1)
-	return Vector2i(frame % COLUMNS, BUILD_ROWS[frame / COLUMNS])
+static func build_cell_for(building_id: String, progress: float) -> Vector2i:
+	var grid := grid_for(building_id)
+	if grid.is_empty():
+		return Vector2i.ZERO
+	var columns := int(grid["columns"])
+	var build_rows: Array = grid["build_rows"]
+	var frames := columns * build_rows.size()
+	var frame := clampi(floori(clampf(progress, 0.0, 1.0) * float(frames)), 0, frames - 1)
+	return Vector2i(frame % columns, build_rows[frame / columns])
 
 
 ## The cell a FINISHED house stands in -- one of the idle rows, on its own
@@ -105,8 +179,12 @@ static func build_cell_for(progress: float) -> Vector2i:
 ## same seed so the pair spreads over the whole idle block rather than
 ## walking a diagonal (test-pinned: all of them are reachable), the same
 ## shape BuildingCatalog.variant_cell_for already uses.
-static func idle_cell_for(seed_value: int) -> Vector2i:
+static func idle_cell_for(building_id: String, seed_value: int) -> Vector2i:
+	var grid := grid_for(building_id)
+	if grid.is_empty():
+		return Vector2i.ZERO
+	var idle_rows: Array = grid["idle_rows"]
 	return Vector2i(
-		PixelNoise.range_index(seed_value, 61, 67, COLUMNS),
-		IDLE_ROWS[PixelNoise.range_index(seed_value, 71, 73, IDLE_ROWS.size())]
+		PixelNoise.range_index(seed_value, 61, 67, int(grid["columns"])),
+		idle_rows[PixelNoise.range_index(seed_value, 71, 73, idle_rows.size())]
 	)

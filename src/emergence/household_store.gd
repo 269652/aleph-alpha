@@ -10,6 +10,7 @@ extends RefCounted
 ## to wrap.
 
 const Household = preload("res://src/emergence/household.gd")
+const VillageEstates = preload("res://src/emergence/village_estates.gd")
 
 var _households: Dictionary = {}   # id -> Household
 var _by_member: Dictionary = {}    # entity_id -> household_id
@@ -65,6 +66,38 @@ func owner_of(property_id: String) -> String:
 	return _owner_of.get(property_id, "")
 
 
+## The household ids these members belong to, each once, in the order the
+## members were given. A member the store has never heard of is skipped --
+## an entity with no household is not an error, it is somebody who has not
+## settled anywhere.
+func household_ids_of_members(member_ids: Array) -> Array:
+	var ids: Array = []
+	for member_id in member_ids:
+		var household_id: String = _by_member.get(member_id, "")
+		if household_id != "" and not ids.has(household_id):
+			ids.append(household_id)
+	return ids
+
+
+## `{estate -> households}` over the given household ids -- the ONE input
+## every estate mechanism is fed (EstateConsumption.demand_for,
+## VillageLabor.supply_for, VillageAssembly.next_building). Answered here
+## rather than by each caller counting by hand, so there is one reading of
+## a settlement's standing rather than three that could disagree.
+##
+## An id the store has never heard of counts as nobody, which is the right
+## answer for a roster read back out of an event graph that has outrun the
+## household file.
+func estate_census(household_ids: Array) -> Dictionary:
+	var census := {}
+	for household_id in household_ids:
+		var household: Household = _households.get(household_id)
+		if household == null:
+			continue
+		census[household.estate] = int(census.get(household.estate, 0)) + 1
+	return census
+
+
 ## For HouseholdStorePersistence -- pure serialization, no FileAccess (same
 ## split EventStore/EventStorePersistence already use).
 func to_dicts() -> Array:
@@ -76,6 +109,9 @@ func to_dicts() -> Array:
 			"members": household.members,
 			"property": household.property,
 			"wallet_balance": household.wallet.balance,
+			"estate": household.estate,
+			"good_run_days": household.good_run_days,
+			"short_run_days": household.short_run_days,
 		})
 	return out
 
@@ -94,6 +130,13 @@ static func from_dicts(dicts: Array) -> RefCounted:
 		for property_id in d.get("property", []):
 			household.property.append(str(property_id))
 		household.wallet.add(int(d.get("wallet_balance", 0)))
+		# A save written before estates existed carries no standing at all.
+		# It reads back as a cottager rather than as an empty string every
+		# downstream lookup then quietly fails on -- the same migration
+		# default Household.for_founder itself applies.
+		household.estate = str(d.get("estate", VillageEstates.STARTING_ESTATE))
+		household.good_run_days = float(d.get("good_run_days", 0.0))
+		household.short_run_days = float(d.get("short_run_days", 0.0))
 
 		store._households[household.id] = household
 		for member in household.members:

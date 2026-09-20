@@ -28,9 +28,13 @@ func _demand_for(demands: Array, recipe_id: String) -> Dictionary:
 ## With every real structure-gated recipe's own structure present, there is
 ## nothing to demand -- the settlement is fully producer-equipped. The list
 ## grew with the bread chain (docs/concept/milling_and_baking.md): farm/
-## mill/bakery gate grow_wheat/mill_flour/bake_bread.
+## mill/bakery gate grow_wheat/mill_flour/bake_bread; and again with
+## brewing (docs/concept/village_estates.md mechanism 1), where the brewery
+## gates brew_beer.
 func test_no_demands_when_every_gated_structure_is_present():
-	var demands := SettlementDemand.demands_for({}, ["sagewerk", "campfire", "farm", "mill", "bakery"], book)
+	var demands := SettlementDemand.demands_for(
+		{}, ["sagewerk", "campfire", "farm", "mill", "bakery", "brewery"], book
+	)
 	assert_eq(demands, [])
 
 
@@ -39,12 +43,36 @@ func test_no_demands_when_every_gated_structure_is_present():
 ## a bakery" -- with no chain-specific code here: the chain is resolver
 ## data (docs/concept/milling_and_baking.md), and this step already walks
 ## every structure-gated recipe.
+## A fourth demand rides along with them now and it is not noise: brewing
+## (docs/concept/village_estates.md mechanism 1) draws on the SAME wheat
+## grow_wheat grows, so a village with a brewery and no farm is blocked on
+## the farm -- which is what the walk reports, naming the farm rather than
+## the brewery it already has. Beer and bread competing for one crop is
+## the intended shape, not an accident of adding a recipe.
 func test_a_missing_bread_chain_surfaces_as_three_demands():
-	var demands := SettlementDemand.demands_for({}, ["sagewerk", "campfire"], book)
+	var demands := SettlementDemand.demands_for({}, ["sagewerk", "campfire", "brewery"], book)
 	assert_eq(_demand_for(demands, "grow_wheat").get("missing_structure_id"), "farm")
 	assert_eq(_demand_for(demands, "mill_flour").get("missing_structure_id"), "mill")
 	assert_eq(_demand_for(demands, "bake_bread").get("missing_structure_id"), "bakery")
-	assert_eq(demands.size(), 3, "exactly the three chain links, nothing else")
+	assert_eq(
+		_demand_for(demands, "brew_beer").get("missing_structure_id"),
+		"farm",
+		"a brewery with no grain to brew is blocked on the farm, not on itself"
+	)
+	assert_eq(demands.size(), 4, "the three chain links and the grain the brewery wants")
+
+
+## The brewery surfaces the same way and for the same reason: a village
+## whose burghers want beer and whose brewery is not standing has a real,
+## nameable demand for one (docs/concept/village_estates.md mechanism 1).
+## No brewing-specific code here either -- this step already walks every
+## structure-gated recipe, which is precisely why adding one showed up.
+func test_a_missing_brewery_surfaces_as_a_real_demand():
+	var demands := SettlementDemand.demands_for({}, ["sagewerk", "campfire", "farm", "mill", "bakery"], book)
+	var brew := _demand_for(demands, "brew_beer")
+	assert_eq(brew.get("missing_structure_id"), "brewery")
+	assert_eq(brew.get("output_item_id"), "beer")
+	assert_eq(demands.size(), 1, "exactly the brewery, nothing else")
 
 
 ## With NO structures present, the two real sagewerk-gated recipes (see

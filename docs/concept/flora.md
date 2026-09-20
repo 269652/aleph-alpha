@@ -1372,6 +1372,39 @@ table `canopy_for` keys its own season lookup on); `ripe` is accepted for a
 future species that might ship a real ripening sequence again, but is not a
 fact any current species' art distinguishes.
 
+**The fruit on a tree is the item it becomes (2026-09-19).** Reported
+directly, with the apple sheet just repainted: *"I replaced the apple
+spritesheet to render without fruits... can you make sure all the trees bear
+real fruit (individual apples or cherrys / nuts) by placing the fruit sprite
+on the tree so that when fruit fall down in autumn or summer actually drops a
+fruit entity which then disappears from the tree and can be picked up or
+eaten by animals"*.
+
+The crop is drawn from the SPECIES' OWN ITEM ICON
+(`IllustratedItemArt.texture_for(species_id, "icon")`) — the same individual
+apple, cherry, walnut, hazelnut, acorn or pinecone that lands on the ground
+as a real entity and goes into the pack — rather than from the composite
+sheet's on-tree row. Three things follow, and each was a real defect:
+
+- **It is one fruit, not a bunch.** Cherry's on-tree row is a leafy twig with
+  a cluster of cherries on it; ten of those merged into a red mass in the
+  middle of the crown. An icon is one cherry.
+- **It cannot pick the wrong drawing.** The season-indexed lookup above
+  assumes every species' on-tree row is four season columns. The repainted
+  apple sheet's is not — measured, it runs green apple, red apple, then a
+  pair of CUT HALVES — so summer drew a sliced-open apple the size of a
+  branch. An icon has no rows to mis-index.
+- **It cannot drift from what falls.** What hangs, what drops and what is
+  carried are one picture, which is exactly the claim the report makes.
+
+The composite on-tree row stays as the fallback for a species with no item
+icon, the same fail-open shape every other art lookup here uses.
+
+The drawn size is against the icon's own full-bleed subject rather than the
+old row's mostly-stem drawings, so it is re-derived rather than inherited
+(`ILLUSTRATED_FRUIT_WIDTH_FRAC`), pinned from below by "a crop is actually
+visible" and from above by "a crop is individual fruit, not one mass".
+
 **Trunk and canopy are proportioned, and vary together.** A trunk is tall and
 narrow. Scaled to preserve the source art's aspect it came out squat and wide,
 because the trunk drawings are nearly square -- they include the flare of the

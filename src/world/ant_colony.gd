@@ -395,12 +395,35 @@ var _pheromones: Dictionary = {}
 const MAX_CONCURRENT_FORAGERS := 15
 
 
-func _init(seed_value: int, width: int, height: int, biome: PackedStringArray) -> void:
+func _init(
+	seed_value: int, width: int, height: int, biome: PackedStringArray,
+	is_water: PackedByteArray = PackedByteArray()
+) -> void:
 	_seed_value = seed_value
 	_width = width
 	_height = height
 	_biome = biome
+	_is_water = is_water
 	_seed_initial_mounds()
+
+
+## 1 where this chunk's cell is drawn as WATER, 0 elsewhere -- the same
+## mask shape (and the same source) TallGrass already takes. A water cell
+## keeps its LAND biome, so seeding "by biome" alone puts ant mounds in
+## the middle of a lake: reported live with a screenshot taken while
+## swimming, and measured at 47.3N 19.6E, where an entirely-water chunk
+## held 31 crop patches, 60 mushroom sites, 4 flower patches and 2 ant
+## mounds. Empty by default, so every existing caller and test is
+## unaffected.
+var _is_water: PackedByteArray
+
+
+## Whether this cell is drawn as water. Mirrors TallGrass._is_river_at
+## exactly, including the bounds check that makes an empty mask read as
+## "nothing is water".
+func _is_water_at(x: int, y: int) -> bool:
+	var index := y * _width + x
+	return index < _is_water.size() and _is_water[index] == 1
 
 
 func mound_cells() -> Array:
@@ -676,6 +699,8 @@ func is_valid_mound_site(cell: Vector2i) -> bool:
 	if cell.x < 0 or cell.x >= _width or cell.y < 0 or cell.y >= _height:
 		return false
 	if _mounds.has(cell):
+		return false
+	if _is_water_at(cell.x, cell.y):
 		return false
 	return SOIL_BIOMES.has(_biome[cell.y * _width + cell.x])
 
@@ -1171,6 +1196,8 @@ func _seed_initial_mounds() -> void:
 			if _mounds.size() >= MAX_MOUNDS:
 				return
 			if not SOIL_BIOMES.has(_biome[y * _width + x]):
+				continue
+			if _is_water_at(x, y):
 				continue
 			if PixelNoise.unit(_seed_value, x, y) >= MOUND_CHANCE:
 				continue

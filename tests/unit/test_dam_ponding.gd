@@ -19,6 +19,12 @@ const RiverFlowShader = preload("res://src/rendering/river_flow_shader.gd")
 var tile_map_layer: TileMapLayer
 var entities_parent: Node2D
 var creatures_parent: Node2D
+## The flow overlay's own layer. Without one registered,
+## _paint_river_flow_overlay returns immediately -- and that paint is the
+## ONLY thing that collects natural river boulders, so a fixture without
+## this layer can only ever exercise the dropped-piece path (see the
+## natural-boulder tests at the bottom of this file).
+var river_flow_layer: TileMapLayer
 var manager: EarthChunkManager
 var river_tile: Vector2i
 
@@ -27,7 +33,9 @@ func before_each():
 	tile_map_layer = TileMapLayer.new()
 	entities_parent = Node2D.new()
 	creatures_parent = Node2D.new()
+	river_flow_layer = TileMapLayer.new()
 	manager = EarthChunkManager.new(tile_map_layer, entities_parent, creatures_parent)
+	manager.set_river_flow_layer(river_flow_layer)
 
 	var geo := GeoCoordinates.new()
 	# The Gaskugel on the Dreisam -- this game's own spawn point, and a real
@@ -42,6 +50,7 @@ func after_each():
 	tile_map_layer.free()
 	entities_parent.free()
 	creatures_parent.free()
+	river_flow_layer.free()
 
 
 func test_the_fixture_really_is_an_undammed_river_cell():
@@ -372,4 +381,224 @@ func test_a_repeated_crest_check_hits_the_warm_cache():
 	assert_eq(
 		manager.generator._nearest_river_cache.size(), warm_size,
 		"a repeated crest check at the same tile should hit the warm cache, not grow it further"
+	)
+
+
+# -- a NATURAL boulder is a rock of its own size too -------------------------
+#
+# Reported live: "the boulders in the river doesn't affect hydrology whirls
+# and such correctly". Every boulder test above drives the DROPPED piece,
+# which reaches the shader through _sync_flow_boulder carrying its real
+# diameter. The natural rocks -- the overwhelming majority, and the only
+# ones a fresh session has at all -- are collected by the flow-overlay
+# PAINT instead, and that path stored a plain `true` in the tile->diameter
+# dictionary the feed reads back with `float(...)`. `float(true)` is 1.0, a
+# one-CENTIMETRE rock, so boulder_radius_px_for floored every natural
+# boulder at MIN_BOULDER_RADIUS_PX however big the rock the player sees.
+#
+# Radius sizes every single thing the water does around a rock -- the
+# shader's own doc comment lists the push reach, the eyot, the shoal, the
+# foam and the wake, all scaled from boulder_radius[b] -- so the whole set
+# came out identical and minimal. That is exactly "doesn't affect the
+# whirls correctly".
+#
+# These assert over the boulders the paint ACTUALLY collected rather than
+# over a tile picked by scanning, because the two sets are not the same
+# (see test_..._only_collects_what_it_paints_as_flowing below).
+
+## Tile -> real diameter for every boulder currently in the shader feed.
+func _fed_boulders() -> Dictionary:
+	manager.sync_river_flow_boulders()
+	var positions := manager.river_flow_boulder_positions()
+	var radii := manager.river_flow_boulder_radii()
+	var fed := {}
+	for i in positions.size():
+		var tile := Vector2i(
+			int((positions[i].x - 8.0) / 16.0), int((positions[i].y - 8.0) / 16.0)
+		)
+		fed[tile] = {"radius": radii[i], "diameter": manager.flow_boulder_diameter_cm_at_global(tile.x, tile.y)}
+	return fed
+
+
+func test_the_fixture_really_collects_natural_flow_boulders():
+	var fed := _fed_boulders()
+	assert_gt(fed.size(), 0, "the premise: this river must roll natural boulders")
+	var above_floor := 0
+	for tile in fed:
+		if RiverFlowShader.boulder_radius_px_for(fed[tile]["diameter"]) > RiverFlowShader.MIN_BOULDER_RADIUS_PX:
+			above_floor += 1
+	assert_gt(
+		above_floor, 0,
+		"at least one must be big enough that its own radius clears the floor, or this proves nothing"
+	)
+
+
+## The whole bug, stated directly: what the shader is told about a rock has
+## to be that rock's own size.
+func test_every_natural_boulder_feeds_its_own_radius():
+	var fed := _fed_boulders()
+	assert_gt(fed.size(), 0, "the premise: this river must roll natural boulders")
+	for tile in fed:
+		assert_almost_eq(
+			fed[tile]["radius"],
+			RiverFlowShader.boulder_radius_px_for(fed[tile]["diameter"]),
+			1e-6,
+			"the rock at %s is %.1fcm across" % [str(tile), fed[tile]["diameter"]]
+		)
+
+
+## The property the player actually sees -- a bigger rock parting more
+## water -- and the one a single stored `true` destroys outright, because
+## it makes every rock in the river exactly the same size.
+func test_natural_boulders_of_different_sizes_feed_different_radii():
+	var fed := _fed_boulders()
+	var distinct_diameters := {}
+	var distinct_radii := {}
+	for tile in fed:
+		distinct_diameters[snappedf(fed[tile]["diameter"], 0.01)] = true
+		distinct_radii[snappedf(fed[tile]["radius"], 0.01)] = true
+	if distinct_diameters.size() < 2:
+		pending("this river's rocks all rolled one size; nothing to compare")
+		return
+	assert_gt(
+		distinct_radii.size(), 1,
+		"%d distinct real sizes reached the shader as %d distinct radii"
+			% [distinct_diameters.size(), distinct_radii.size()]
+	)
+
+
+## Once more rocks are in the loaded world than the shader has slots, WHICH
+## rocks get one matters: the player sees the water bend around the boulders
+## in front of them, not around twenty-four arbitrary rocks somewhere in the
+## loaded span. The feed filled its slots in Dictionary insertion order --
+## i.e. whichever chunk happened to paint first -- so a cap that binds could
+## spend every slot on rocks off screen and leave the ones underfoot doing
+## nothing.
+##
+## Nearest-first is this file's own established answer to a capped
+## resource: _budgeted_load_order sorts the pending chunk set "NEAREST
+## FIRST and then capped", and SimulationScheduler wakes by distance to
+## the player. The centre is the tile update() was last called with -- the
+## same one record_water_disturbance already culls wakes against.
+func test_the_boulder_feed_keeps_the_nearest_rocks_when_slots_run_out():
+	var all_tiles: Array = manager._river_flow_boulder_tiles.keys()
+	if all_tiles.size() <= EarthChunkManager.RIVER_FLOW_BOULDER_SLOTS:
+		pending("this fixture rolls fewer rocks than slots; nothing is dropped")
+		return
+
+	var fed := _fed_boulders()
+	assert_eq(fed.size(), EarthChunkManager.RIVER_FLOW_BOULDER_SLOTS, "every slot is used")
+	var worst_fed := 0.0
+	for tile in fed:
+		worst_fed = maxf(worst_fed, Vector2(tile - river_tile).length())
+	for tile in all_tiles:
+		if fed.has(tile):
+			continue
+		assert_gte(
+			Vector2(tile - river_tile).length(), worst_fed,
+			"a rock at %s was dropped while a farther one kept its slot" % str(tile)
+		)
+
+
+
+# -- a dug pond is water with a real depth -----------------------------------
+#
+# Reported live: "there's no real pond with river / lake water physics".
+# A pond answered is_water_at_global from the day it was dug -- so nothing
+# was ever built or grown on one -- but carried no DEPTH, and the player's
+# own water state is the maximum of ocean, river and lake depth, three
+# sources a pond is not one of. So a fisher's pond was water a player
+# walked over on dry feet.
+
+const VillagePond = preload("res://src/gameplay/village_pond.gd")
+const WaterMovementModel = preload("res://src/gameplay/water_movement_model.gd")
+
+
+## A dry tile well away from the fixture's own river, so the depth measured
+## is the pond's and nothing else's.
+func _dry_tile() -> Vector2i:
+	for dx in range(20, 200):
+		var tile := river_tile + Vector2i(dx, 0)
+		if not manager.is_water_at_global(tile.x, tile.y) and manager.is_chunk_loaded(
+			manager._chunk_coord_for_tile(tile)
+		):
+			return tile
+	return Vector2i.MAX
+
+
+func test_dry_ground_has_no_pond_depth():
+	var tile := _dry_tile()
+	assert_ne(tile, Vector2i.MAX, "the premise: a dry loaded tile must be findable")
+	assert_eq(manager.pond_depth_meters_at_global(tile.x, tile.y), 0.0)
+
+
+func test_a_dug_pond_is_water_deep_enough_to_swim_in():
+	var tile := _dry_tile()
+	assert_ne(tile, Vector2i.MAX, "the premise: a dry loaded tile must be findable")
+	assert_true(manager.build_at_global(tile.x, tile.y, VillagePond.POND_TILE_ID))
+
+	assert_true(manager.is_water_at_global(tile.x, tile.y), "a dug pond is water")
+	assert_almost_eq(
+		manager.pond_depth_meters_at_global(tile.x, tile.y), VillagePond.DEPTH_METERS, 1e-6
+	)
+	assert_gt(
+		manager.pond_depth_meters_at_global(tile.x, tile.y),
+		WaterMovementModel.WADE_DEPTH_METERS,
+		"deep enough that the player swims rather than walks across it"
+	)
+
+
+## The wiring itself: the player's water depth has to ASK for the pond, or
+## the depth above never reaches the swim decision. A source-contract check,
+## the same shape test_world_perf_report_wiring.gd uses, because standing a
+## real Player up headlessly is not worth the fight.
+func test_the_players_water_state_asks_for_the_pond_depth():
+	var source := FileAccess.get_file_as_string("res://scenes/player.gd")
+	var start := source.find("func _resolve_water_state(")
+	assert_gt(start, -1, "the premise: _resolve_water_state must still exist")
+	var body := source.substr(start, source.find("\nfunc ", start + 1) - start)
+	assert_true(
+		body.contains("_chunk_manager.pond_depth_meters_at_global(tile.x, tile.y)"),
+		"the player's water depth must include a dug pond"
+	)
+	assert_true(
+		body.contains("pond_depth"),
+		"and fold it into the water_depth the swim decision is made from"
+	)
+
+
+## Reported live: "it's a procedural entity layn over and not properly dug
+## / built pond". The blue a player sees on a pond is the `pond_water`
+## MODIFICATION tile and nothing else -- a flat square laid over the grass.
+##
+## Every other kind of water in this game rides one surface: "ONE WATER
+## SURFACE (docs/concept/hydrology.md): rivers, lakes and the sea all ride
+## this overlay", which is what gives them a waterline, an ink edge, a
+## shore feather and ripples. _paint_river_flow_overlay works that out from
+## `generator.hydrology_at_global` and `generator.nearest_river_at` -- and
+## the generator is the one thing that cannot know about a dug pond, since
+## a pond is a player/village modification. So a pond fell through to the
+## "nothing is water here" branch and had its overlay cell ERASED.
+func test_a_dug_pond_is_painted_on_the_water_surface():
+	# Ground the surface does not paint at all -- past the river's own shore
+	# bleed, so the cell really is empty before the pond is dug.
+	var tile := Vector2i.MAX
+	for dx in range(20, 300):
+		var candidate := river_tile + Vector2i(dx, 0)
+		if not manager.is_chunk_loaded(manager._chunk_coord_for_tile(candidate)):
+			continue
+		if manager.is_water_at_global(candidate.x, candidate.y):
+			continue
+		if river_flow_layer.get_cell_source_id(candidate) == -1:
+			tile = candidate
+			break
+	assert_ne(tile, Vector2i.MAX, "the premise: unpainted dry ground must be findable")
+	var chunk_coord: Vector2i = manager._chunk_coord_for_tile(tile)
+
+	assert_true(manager.build_at_global(tile.x, tile.y, VillagePond.POND_TILE_ID))
+	manager._paint_river_flow_overlay(chunk_coord, manager._loaded_chunks[chunk_coord])
+
+	assert_ne(
+		river_flow_layer.get_cell_source_id(tile), -1,
+		"a dug pond must be painted by the one water surface, not left to a flat tile"
 	)

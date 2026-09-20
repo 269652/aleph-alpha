@@ -259,6 +259,12 @@ const _ITEMS := {
 	"bakery": ["Bakery", "placeable", 5, 0.0],
 	"flour": ["Flour", "material", 40, 0.0],
 	"bread": ["Bread", "food", 20, 0.0],
+	# The brewery's own product (docs/concept/village_estates.md's burgher
+	# basket). "food", not a new kind: small beer was a staple calorie
+	# source in this period -- safer than the well and drunk by everybody --
+	# so a village that has it really is better fed, and VillageMarket's own
+	# food filter reads it without a special case.
+	"beer": ["Beer", "food", 20, 0.0],
 	# The City Hall (see docs/concept/civic_construction.md's own "Meeting
 	# Hall" spec, docs/concept/npc_role_consensus.md): a settlement's real
 	# civic seat, where a real "compute demands" step runs. Same placeable

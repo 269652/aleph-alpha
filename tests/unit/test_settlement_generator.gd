@@ -225,13 +225,23 @@ func test_every_village_carries_the_food_producers_its_demand_asks_for():
 ## it really is, which is the whole point of making it demand-driven.
 func test_a_bigger_village_is_staffed_for_the_size_it_really_is():
 	var coord := Vector2i(631, 163)
-	var big: int = SettlementFoodDemand.households_fed_per_producer() * 2 + 1
+	# DERIVED, not guessed: the smallest roster that really asks for three
+	# producers. This used to be households_fed_per_producer() * 2 + 1, which
+	# only lands on three when that (floored) figure divides exactly -- it
+	# stopped doing so the moment a field's own measured yield changed
+	# (VillageFarm.FIELD_YIELD_PER_WORK_BLOCK, re-measured once beds stopped
+	# dying overnight), and the precondition failed rather than the claim.
+	var big := 0
+	for size in range(2, 400):
+		if SettlementFoodDemand.producers_needed(size) >= 3:
+			big = size
+			break
+	assert_gt(big, 0, "precondition: some village size really needs three producers")
 	var settlement := generator.generate_settlement(
 		coord, coord * CHUNK_SIZE, CHUNK_SIZE, TILE_SIZE, big
 	)
 	assert_eq(settlement.npcs.size(), big, "precondition: the whole roster really was generated")
 	assert_gte(_food_producers(settlement.npcs), SettlementFoodDemand.producers_needed(big))
-	assert_gte(SettlementFoodDemand.producers_needed(big), 3, "precondition: this size really needs several")
 
 
 ## The land picks the trade. Water means a fisher -- who digs and stocks a
@@ -544,3 +554,55 @@ func test_the_founding_roster_really_is_that_many_distinct_households():
 	for position in settlement.house_positions:
 		seen[position] = true
 	assert_eq(seen.size(), 10, "ten households means ten places to live")
+
+
+# -- a village founds cottages, never manors --------------------------------
+#
+# Asked directly: *"The village should not produce Manors from the beginning
+# only cottages and once all villagers needs are stable in the green they can
+# upgrade to houses"*.
+#
+# Every household is founded at the bottom estate (VillageEstates.STARTING_
+# ESTATE), which lives in a cottage -- but the house choice never asked, so
+# a founding merchant, whose pool is house/manor/manor/manor, raised a manor
+# before the village had fed anybody.
+
+const VillageEstates = preload("res://src/emergence/village_estates.gd")
+const BuildingCatalogForHouses = preload("res://src/gameplay/building_catalog.gd")
+
+
+func test_a_founding_village_raises_only_the_house_its_standing_entitles():
+	var entitled := VillageEstates.house_id_for(VillageEstates.STARTING_ESTATE)
+	assert_ne(entitled, "", "precondition: the founding estate really lives somewhere")
+	var founded := 0
+	for x in 400:
+		var coord := Vector2i(x, 0)
+		if not generator.has_settlement_at(coord, "grassland"):
+			continue
+		var settlement := generator.generate_settlement(coord, coord * CHUNK_SIZE, CHUNK_SIZE, TILE_SIZE)
+		for house_id in SettlementGenerator.house_ids_for(coord, settlement.npcs):
+			assert_eq(house_id, entitled, "the village at %s founded a %s" % [str(coord), house_id])
+		founded += 1
+		if founded >= 8:
+			break
+	assert_gt(founded, 0, "precondition: real villages were founded")
+
+
+## A village of five is not five identical people -- the occupations really
+## do differ, which is what made this worth fixing rather than a no-op.
+func test_the_founding_roster_really_holds_trades_that_would_have_built_bigger():
+	var reached := false
+	for x in 400:
+		var coord := Vector2i(x, 0)
+		if not generator.has_settlement_at(coord, "grassland"):
+			continue
+		var settlement := generator.generate_settlement(coord, coord * CHUNK_SIZE, CHUNK_SIZE, TILE_SIZE)
+		for npc in settlement.npcs:
+			var uncapped: String = BuildingCatalogForHouses.choose_house_id(
+				npc.occupation, npc.genome, hash("%d_%d" % [coord.x, coord.y])
+			)
+			if uncapped != VillageEstates.house_id_for(VillageEstates.STARTING_ESTATE):
+				reached = true
+		if reached:
+			break
+	assert_true(reached, "no founding villager anywhere would have built above a cottage")

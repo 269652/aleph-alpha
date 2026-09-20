@@ -311,6 +311,20 @@ const _RECIPES := {
 		"output": {"item_id": "bread", "count": 1},
 		"requires_structure": "bakery",
 	},
+	# The brewery finally brews (docs/concept/village_estates.md mechanism
+	# 1). docs/concept/village_growth.md carried the gap in as many words --
+	# "the ladder's rungs are buildings, not yet production" -- and the
+	# dearest rung on that ladder made nothing at all. Structure-gated on
+	# the brewery exactly as bread is on the bakery, and drawn on the SAME
+	# wheat grow_wheat already grows, so brewing is a third consumer of one
+	# existing crop rather than a new resource nobody produces. Dearer in
+	# grain than a loaf is in flour: it is the luxury at the top of the
+	# estate ladder and has to cost like one (test_brewing.gd).
+	"brew_beer": {
+		"inputs": [{"item_id": "wheat", "count": 3}],
+		"output": {"item_id": "beer", "count": 1},
+		"requires_structure": "brewery",
+	},
 	# Wayfinding & citizenship instruments (see docs/concept/wayfinding.md,
 	# docs/concept/player_citizenship.md). Every input below is an existing
 	# raw-material item id already in item_catalog.gd's _ITEMS -- no new
@@ -458,6 +472,23 @@ const _RECIPES := {
 	"blacksmith": {
 		"inputs": [{"item_id": "wood", "count": 18}, {"item_id": "stone", "count": 16}],
 		"output": {"item_id": "blacksmith", "count": 1},
+	},
+	# The chartered buildings (docs/concept/settlement_charter.md). ONE
+	# price, shared with BuildingCatalog.cost_of rather than a second that
+	# could drift from it -- the same rule every other building here keeps.
+	"trade_hall": {
+		"inputs": [
+			{"item_id": "wood", "count": 24}, {"item_id": "stone", "count": 18},
+			{"item_id": "plant_fibre", "count": 6},
+		],
+		"output": {"item_id": "trade_hall", "count": 1},
+	},
+	"mage_guild": {
+		"inputs": [
+			{"item_id": "wood", "count": 28}, {"item_id": "stone", "count": 26},
+			{"item_id": "plant_fibre", "count": 8},
+		],
+		"output": {"item_id": "mage_guild", "count": 1},
 	},
 	"brewery": {
 		"inputs": [

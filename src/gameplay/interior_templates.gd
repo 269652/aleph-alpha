@@ -142,18 +142,86 @@ const _MANOR_VARIANTS: Array = [
 	],
 ]
 
+## A hall is a WORKPLACE, not a home (docs/concept/building.md, "A hall is
+## a workplace"): the City Hall, the warehouse, the trade hall and the mage
+## guild all share this family, and not one of them is anybody's bedroom.
+##
+## No `B` slot anywhere, deliberately and test-pinned -- a bed in a City
+## Hall is exactly the kind of thing a later plan reintroduces by
+## copy-paste. What a hall has instead is **one big open room** with real
+## standing space (a cottage's best plan leaves 32 open cells; the poorest
+## of these leaves 52, which is what lets several masters stand in one
+## without standing on the furniture -- see HouseInteriorView.
+## standing_cells) plus side chambers through wall gaps, so it still keeps
+## the same "more than one room" shape houses and manors do.
+##
+## The occupation still decides the furnishing through the same
+## HouseDecor.piece_for_slot every house uses, so one shape serves a mage
+## guild's workbench and bookshelves and a warehouse's crates and
+## cupboards without a second table anywhere.
+const _HALL_VARIANTS: Array = [
+	[
+		"##w#####w####",
+		"#K.........S#",
+		"#....T.T....#",
+		"#L..C.@.C..P#",
+		"#...........#",
+		"#.###.#.###.#",
+		"#S..#...#..W#",
+		"#...#.L.#..R#",
+		"######D######",
+	],
+	[
+		"###w###w#####",
+		"#S.........K#",
+		"#..T.T.T....#",
+		"#L.C.@.C...P#",
+		"#...........#",
+		"#.#####.###.#",
+		"#.#..R..#..W#",
+		"#.#.L...#..S#",
+		"######D######",
+	],
+	[
+		"#####w#w#####",
+		"#....K.K....#",
+		"#...........#",
+		"#L..T.@.T..L#",
+		"#..C.....C..#",
+		"#.###.#.###.#",
+		"#S.#...#..P.#",
+		"#..#.R.#...W#",
+		"######D######",
+	],
+]
+
 const _VARIANTS_BY_FAMILY := {
 	"cottage": _COTTAGE_VARIANTS,
 	"house": _HOUSE_VARIANTS,
 	"manor": _MANOR_VARIANTS,
+	"hall": _HALL_VARIANTS,
 }
 
 
-## An unknown family (should never happen -- BuildingCatalog only ever
-## produces "cottage"/"house"/"manor"; "hall" gets a real plan when the
-## town hall grows an interior) falls back to the plainest real shape
+## Whether this family has plans of its own, or is borrowing the
+## cottage's through the fail-open default below.
+##
+## Public because that default is quiet by design and therefore dangerous
+## by accident: "hall" fell through it and was furnished as a BEDROOM for
+## as long as nothing happened indoors, and nobody noticed until three mage
+## masters were standing in one. test_interior_templates.gd holds the
+## catalog's every real family to being either planned or *declared* as
+## borrowing, so the next family cannot repeat it silently.
+static func has_own_plans(interior_family: String) -> bool:
+	return _VARIANTS_BY_FAMILY.has(interior_family)
+
+
+## A family with no plans of its own falls back to the plainest real shape
 ## (cottage) rather than crashing, the same fail-open convention this
-## project uses throughout for an unexpected occupation/id.
+## project uses throughout for an unexpected occupation/id. Still true of
+## "workshop" and "farmstead" (the sawmill, blacksmith, brewery and
+## farmhouse) -- see has_own_plans above for why that is declared rather
+## than left implicit.
 static func _variants_for(interior_family: String) -> Array:
 	return _VARIANTS_BY_FAMILY.get(interior_family, _COTTAGE_VARIANTS)
 

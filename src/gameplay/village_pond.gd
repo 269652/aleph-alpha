@@ -39,8 +39,15 @@ static func is_pond_tile(tile_id: String) -> bool:
 ## comment for why it is delegated rather than restated).
 ##
 ## `is_free` answers for ONE cell: is this ground the fisher may dig?
+## Unlike a farm's beds, a pond may be dug BEHIND the house. A farmhouse
+## refuses ground north of itself because that is the next row of buildings
+## -- true of a farm laid out along a street, and exactly wrong for a
+## fisher, whose house fronts the street to the south so that every scrap of
+## their own ground is behind them. Without this the search had nowhere to
+## go but over the road, which is what put the water across the street from
+## its owner (reported live).
 static func pond_rect(origin: Vector2i, building_id: String, is_free: Callable):
-	return VillageFarm.field_rect(origin, building_id, is_free)
+	return VillageFarm.field_rect(origin, building_id, is_free, true)
 
 
 ## Those cells, in the same (y, x) order everything else here returns, or []
@@ -69,6 +76,22 @@ static func fence_cells(origin: Vector2i, building_id: String, is_free: Callable
 ## village pond is stocked deliberately -- see docs/concept/village_ponds.md)
 ## and also what makes the stocking a real act rather than decoration. One
 ## fish is a pet. Pinned by test_a_stocking_is_enough_fish_to_breed.
+## How deep a dug pond is, in metres.
+##
+## A pond dug to KEEP fish is dug deep enough for them to overwinter in --
+## roughly two metres is the standard temperate figure, and the reason a
+## village fish pond is a real hole rather than a scrape. 1.8 m sits inside
+## that and comfortably past WaterMovementModel.WADE_DEPTH_METERS, which is
+## the part that matters in play: a fisher's pond is water to swim in, not a
+## puddle to walk through. Pinned against that threshold rather than as a
+## bare number (test_village_pond.gd).
+##
+## Reported live: "there's no real pond with river / lake water physics".
+## A pond answered is_water_at_global -- so nothing built or grew on it --
+## but had no depth at all, and the player's water state is the maximum of
+## ocean, river and lake depth, three sources a pond was not one of.
+const DEPTH_METERS := 1.8
+
 const STOCKING_FISH := 2
 
 ## The pond's own population model. The world's OWN aquatic one, not a second
