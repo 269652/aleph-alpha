@@ -233,8 +233,57 @@ func _report_pond(chunk_coord: Vector2i, body: Array, huts: Array) -> void:
 	print("        FISH  stock=%.2f, %d marker(s) swimming%s" % [
 		stock, markers, "   <-- EMPTY" if stock <= 0.0 else ""
 	])
+	_report_hut_road(chunk_coord, huts)
 	print("        HUT   %d in chunk, nearest %s tiles from the water%s" % [
 		huts.size(),
 		"none" if nearest_hut == INF else "%.1f" % nearest_hut,
 		"   <-- NO HUT ON THE BANK" if nearest_hut > float(_VillagePond.HUT_BANK_REACH_TILES) else "",
 	])
+
+
+## Whether a hut\'s door really reaches the village, reported live:
+## *"Fisher hut is there but not connected to street system"*. A front
+## step is one paved cell; a road home is a run of them that arrives
+## somewhere. So this floods the paving OUT from the doorstep and says how
+## far it gets, and whether it ever meets the village\'s own street row.
+func _report_hut_road(chunk_coord: Vector2i, huts: Array) -> void:
+	if huts.is_empty():
+		return
+	var TerrainRenderer = load("res://src/rendering/terrain_renderer.gd")
+	var BuildingCatalog = load("res://src/gameplay/building_catalog.gd")
+	var VillageLayout = load("res://src/world/village_layout.gd")
+	var is_buildable := func(cell: Vector2i) -> bool:
+		var g: Vector2i = chunk_coord * CHUNK_SIZE + cell
+		return not _manager.is_water_at_global(g.x, g.y)
+	var street_y: int = int(VillageLayout.skeleton(
+		CHUNK_SIZE, VillageLayout.seed_for(chunk_coord), is_buildable
+	)["street_y"])
+	for hut in huts:
+		var step: Vector2i = (hut as Vector2i) + BuildingCatalog.doorstep_of(
+			_VillagePond.HUT_BUILDING_ID
+		)
+		var seen: Dictionary = {}
+		var queue: Array = []
+		var g0: Vector2i = chunk_coord * CHUNK_SIZE + step
+		if TerrainRenderer.is_road_tile(_manager.modification_at_global(g0.x, g0.y)):
+			seen[step] = true
+			queue.append(step)
+		var reached_street := false
+		while not queue.is_empty():
+			var cell: Vector2i = queue.pop_back()
+			if (cell.y - street_y) % VillageLayout.STREET_PITCH_TILES == 0 and cell.y >= street_y:
+				reached_street = true
+			for d in [Vector2i(1, 0), Vector2i(-1, 0), Vector2i(0, 1), Vector2i(0, -1)]:
+				var next: Vector2i = cell + d
+				if seen.has(next) or next.x < 0 or next.y < 0 \
+						or next.x >= CHUNK_SIZE or next.y >= CHUNK_SIZE:
+					continue
+				var g: Vector2i = chunk_coord * CHUNK_SIZE + next
+				if not TerrainRenderer.is_road_tile(_manager.modification_at_global(g.x, g.y)):
+					continue
+				seen[next] = true
+				queue.append(next)
+		print("        ROAD  hut %s: door %s, %d paved cell(s) joined to it, street row %s" % [
+			str(hut), "paved" if seen.has(step) else "BARE", seen.size(),
+			"reached" if reached_street else "NOT REACHED",
+		])
