@@ -188,6 +188,19 @@ func _report_hut_sites(chunk_coord: Vector2i) -> void:
 	print("    %d would be free if the frame went round the hut instead%s" % [
 		free_without_rails, "" if example_cell == null else "   e.g. %s" % str(example_cell)
 	])
+	# Measured 0 on both hutless villages, so the frame is NOT what is in
+	# the way -- the street grid and the neighbours are. The two remaining
+	# levers are a SMALLER works and a LONGER reach, and neither is worth
+	# arguing about when it can be counted. A fisher\'s hut borrows the
+	# farmhouse\'s 3x2 because it is drawn as one; a real fisher\'s shack is
+	# not a farmhouse.
+	for shape in [Vector2i(3, 2), Vector2i(2, 2), Vector2i(2, 1), Vector2i(1, 1)]:
+		for reach in [2, 3, 4]:
+			var fits := _sites_for(chunk_coord, water, low, high, shape, reach)
+			print("      hut %s within %d tiles: %d site(s)%s" % [
+				str(shape), reach, fits.size(),
+				"" if fits.is_empty() else "   e.g. %s" % str(fits[0]),
+			])
 
 
 ## The FIRST thing that refuses a hut at this origin, named -- "free" when
@@ -243,3 +256,56 @@ func _free_ignoring_rails(
 		if existing != "":
 			return false
 	return true
+
+
+## Every origin a works of `shape` could really stand on within `reach` of
+## this water, doorstep included -- the same site test the real one uses,
+## with the footprint and the reach as parameters rather than as the
+## catalog\'s own. Counting what a DIFFERENT hut would fit is the only
+## honest way to choose between a smaller works and a longer reach.
+func _sites_for(
+	chunk_coord: Vector2i, water: Array, low: Vector2i, high: Vector2i,
+	shape: Vector2i, reach: int
+) -> Array:
+	var sites: Array = []
+	var margin: int = reach + maxi(shape.x, shape.y)
+	for y in range(low.y - margin, high.y + margin + 1):
+		for x in range(low.x - margin, high.x + margin + 1):
+			var origin := Vector2i(x, y)
+			var cells: Array = []
+			for dy in shape.y:
+				for dx in shape.x:
+					cells.append(origin + Vector2i(dx, dy))
+			var nearest := INF
+			for cell in cells:
+				for wet in water:
+					nearest = minf(
+						nearest, Vector2(cell as Vector2i).distance_to(Vector2(wet as Vector2i))
+					)
+			if nearest > float(reach):
+				continue
+			# A door on the south face, one row below the footprint --
+			# where BuildingCatalog.doorstep_of puts every village
+			# building\'s.
+			cells.append(origin + Vector2i(shape.x / 2, shape.y))
+			var free := true
+			for cell in cells:
+				var local: Vector2i = cell
+				if water.has(local) or local.x < 0 or local.y < 0 \
+						or local.x >= CHUNK_SIZE or local.y >= CHUNK_SIZE:
+					free = false
+					break
+				var g: Vector2i = chunk_coord * CHUNK_SIZE + local
+				if _manager.is_water_at_global(g.x, g.y) \
+						or not _manager.is_buildable_terrain_at(g.x, g.y):
+					free = false
+					break
+				var existing: String = _manager.modification_at_global(g.x, g.y)
+				if _VillageFarm.is_fence_tile(existing):
+					continue  # a rail the frame would route round a standing works
+				if existing != "":
+					free = false
+					break
+			if free:
+				sites.append(origin)
+	return sites
