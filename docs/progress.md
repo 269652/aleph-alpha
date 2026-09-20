@@ -29427,15 +29427,26 @@ retuning a constant that was fine, which is precisely the mistake that
 made `LITRES_PER_TENDING` four times too big earlier the same day.
 Recorded rather than quietly corrected.
 
-### 🚧 Found, not fixed
+### ✅ ...and the famine stopped advertising itself
 
-A village in permanent famine is still judged attractive by
-`VillageImmigration`: `market food` sits at 0 and `hungriest` at 1.00 from
-t=600 on, while households keep arriving. Its gate reads
-`_food_per_household`, which counts stock the villagers themselves cannot
-eat — the same "counted as food but unreachable" split
-[village_warehouse.md](concept/village_warehouse.md) already had to fix
-one layer down. Noted where it was measured.
+Found by the same run and fixed straight after: a village in permanent
+famine kept drawing households, because the gate counted **234 units of
+food on farmhouse shelves that nobody could eat** — 19.5 per household
+against a `FED_THRESHOLD` of 2.0.
+
+`SettlementFood.food_stock` documents that argument in its own words as
+*"a Storage holding hauled bread, a Bakery with loaves still on its
+shelf"*; `_settlement_structure_stocks` handed it every shelf in the
+chunk. The caller was breaking its own parameter's contract, and fixing
+the caller rather than the gate repairs every reader at once — the gate,
+the GROWING/DECLINING status, the build decision's food shortfall, and
+the card's "feeds N of M".
+
+🚧 **Still true underneath**: those farmhouses are full because
+`NpcMarker.HAULING_CARRY_LIMIT` is `0.0` — hauling is wired but
+deliberately switched off until delivery is proven to complete in a
+running village. Farm output has no route to anybody's plate; the village
+survives on foraging and the producers' regional drip.
 
 Tests: `test_starvation.gd` 16/16 (new), `test_npc_needs.gd` 14/14,
 `test_npc_marker.gd` 102/102, `test_earth_chunk_manager_village_

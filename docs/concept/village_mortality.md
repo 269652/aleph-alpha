@@ -197,17 +197,21 @@ was fine.
   asked for.
 - ⬜ **An unloaded village neither starves nor buries.** The same honest
   limitation immigration already carries, for the same reason.
-- 🚧 **A village in permanent famine is still judged attractive.** Seen in
-  the same run and NOT introduced by this doc's work: `market food` sits
-  at 0 and `hungriest` at 1.00 from t=600 onward, while
-  `VillageImmigration` keeps admitting households — its gate reads
-  `_food_per_household`, which counts stock the villagers themselves
-  cannot eat. So a village can starve its people and draw more of them at
-  the same time. That is a food-chain question
-  ([village_warehouse.md](village_warehouse.md), where a related
-  "counted as food but unreachable" split was already fixed), not a
-  mortality one, and it is recorded here because this is where it was
-  measured.
+- ✅ **A village in permanent famine no longer draws people into it.**
+  Seen in the same run and not introduced by this doc's work: `market
+  food` sat at 0 and `hungriest` at 1.00 from t=600 while
+  `VillageImmigration` kept admitting households. The gate was counting
+  234 units of food on farmhouse shelves that nobody could eat — 19.5 per
+  household against a `FED_THRESHOLD` of 2.0. Fixed in
+  [village_warehouse.md](village_warehouse.md)'s own terms: the
+  settlement's larder is what its people can eat.
+- 🚧 **Farm output still has no route to anybody's plate.** The reason
+  those farmhouses were full: `NpcMarker.HAULING_CARRY_LIMIT` is `0.0` —
+  hauling is wired but deliberately switched off until delivery is proven
+  to complete in a running village (see its own note). So a harvest
+  accumulates on the farmhouse shelf and reaches no market. The village in
+  the run above survives on foraging and the producers' regional drip, not
+  on its own farms.
 
 ## Interaction with other docs
 
