@@ -60,7 +60,9 @@ is found.
    sense, 7.5 tiles of release, 2.25 tiles/s of pursuit, 0.5 tenacity). The
    one number the fallback does not copy from today's engine is the
    windup, because today's engine has no windup at all. That absence is
-   the bug this module exists to fix.
+   the bug this module exists to fix. An animal with no bite at all is
+   owed no telegraph either: `required_windup_seconds(0, ...)` is zero,
+   not the base window.
 
 ## Real-world grounding
 
@@ -143,9 +145,13 @@ nothing about frames.
   tiles/s) and pinned against them by test. The band states the two design
   facts directly: **the slowest animal in the world is comfortably
   outwalked, and the fastest cannot be outsprinted.**
-- `release_distance_tiles` = `sense_radius_tiles` × `RELEASE_DISTANCE_RATIO`
+- `release_distance_tiles_for(sense)` = `sense` × `RELEASE_DISTANCE_RATIO`
   (1.5) = `FLEE_RELEASE_RADIUS` / `SENSE_RADIUS`, the engine's own existing
-  Schmitt-trigger ratio for fleeing, now also the ratio for pursuit.
+  Schmitt-trigger ratio for fleeing, now also the ratio for pursuit —
+  floored at `sense` + `MIN_RELEASE_HYSTERESIS_TILES` (one whole tile), so
+  a close-range ambusher nobody has authored yet still opens a real gap
+  rather than releasing half a tile out. The floor is a rule, not a
+  property of the radii that happen to be authored today.
 
 ### Fairness is a function, and it binds at runtime
 
@@ -245,6 +251,11 @@ before dying.
   function of live player max health, asserted for every row.
 - ✅ Monotone tier gradient asserted over the real rosters with a 1.25×
   margin; `release > sense` and a full tile of hysteresis asserted per row.
+- ✅ 48 tests in `tests/unit/test_species_bite.gd`, mutation-checked:
+  flattening the bear's tenacity back to 0.5, shortening its windup,
+  slowing the lion to a boar's pace, dropping a species from the table,
+  and collapsing bite damage back to a flat 6.0 each fail at least two
+  tests.
 - ⬜ Wiring: `CreatureMarker` still reads its own flat `ATTACK_DAMAGE`/
   `ATTACK_COOLDOWN`/`SENSE_RADIUS`/`HUNT_SPEED` and `CreatureBehavior`
   still reads one `STRONG_HEALTH_FRACTION`. Nothing in the live game reads

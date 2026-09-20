@@ -269,16 +269,23 @@ holds both halves of pillar 6 at once.
   `school_of`, `tier_of`, witness table + `first_witness_atom_for`,
   `drop_tier_cap_for_ring`, `can_drop_at_ring`,
   `droppable_atoms_at_ring`.
-- ✅ `SpellDraft`: `make`, `source_for`, `cost_of`, `complexity_of`,
-  `cast_time_of`, `rarity_of`, `validate`, `name_for`, `reactions_of`,
-  `reaction_multiplier`, `max_reaction_multiplier`.
+- ✅ `SpellDraft`: `make`, `atoms_of`, `delivery_of`, `pipeline_of`,
+  `source_for`, `cost_of`, `complexity_of`, `cast_time_of`, `rarity_of`,
+  `validate`, `name_for`, `reactions_of`, `reaction_pairs`,
+  `dominant_reaction`, `reaction_multiplier`, `max_reaction_multiplier`.
 - ✅ Round trip through the real parser and executor, for all four
-  deliveries.
-- ✅ Every authored `SpellBook` entry re-validated as a draft.
+  deliveries, plus the contract that anything `validate` accepts
+  compiles to source the parser accepts.
+- ✅ Every authored `SpellBook` entry re-validated as a draft (24 of
+  24).
 - ✅ Drop caps derived from `JourneyRing`/`RegionDifficulty`, swept over
-  the whole ring ladder.
+  the whole ring ladder and — independently — over real chunk distances
+  through `RegionDifficulty.tier_at`, the same call that decides whether
+  a bear may spawn there.
 - ✅ Reaction bound pinned by construction as a product of per-pair
   caps.
+- ✅ 53 tests: `tests/unit/test_spell_mote.gd` (21),
+  `tests/unit/test_spell_draft.gd` (32).
 - ⬜ Wiring: nothing grants a mote yet. The witness hooks
   (`SurvivalMeters.is_freezing`, `VenomModel`'s apply, the campfire,
   `WeatherModel`'s storm) are callers that do not exist.

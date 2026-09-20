@@ -25,12 +25,12 @@ const JourneyRing = preload("res://src/gameplay/journey_ring.gd")
 const RegionDifficulty = preload("res://src/world/region_difficulty.gd")
 
 var catalog: SpellAtomCatalog
-var rarity: RarityTier
+var region_difficulty: RegionDifficulty
 
 
 func before_each():
 	catalog = SpellAtomCatalog.new()
-	rarity = RarityTier.new()
+	region_difficulty = RegionDifficulty.new()
 
 
 # -- the mote record --------------------------------------------------------
@@ -153,6 +153,24 @@ func test_the_drop_cap_is_the_rings_own_difficulty_band_plus_one():
 			SpellMote.drop_tier_cap_for_ring(i),
 			SpellMote.MIN_ATOM_TIER + band,
 			"%s's cap disagrees with its RegionDifficulty band" % rings[i]["id"]
+		)
+
+
+func test_the_cap_at_a_distance_is_the_spawn_gates_own_band():
+	# The independent version of the test above: rather than reading the
+	# same ring dictionary the module reads, this walks real chunk
+	# distances through RegionDifficulty.tier_at -- the module that decides
+	# whether a bear may exist there at all. A tier-3 mote is unfindable in
+	# the hearth for exactly the reason a bear is, and if these two ever
+	# disagreed, magic's pacing and the ecosystem's would have drifted.
+	for distance in [0, 1, 5, 6, 14, 15, 16, 29, 30, 31, 59, 60, 61, 200]:
+		var band: int = int(
+			region_difficulty.tier_at(Vector2i(int(distance), 0), Vector2i.ZERO)
+		)
+		assert_eq(
+			SpellMote.drop_tier_cap_for_ring(JourneyRing.ring_index_at(int(distance))),
+			SpellMote.MIN_ATOM_TIER + band,
+			"at %d chunks the mote cap and the spawn gate disagree" % distance
 		)
 
 

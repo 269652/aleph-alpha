@@ -220,7 +220,7 @@ func _refusal_codes(draft: Dictionary) -> Array:
 
 func test_a_sound_draft_is_accepted_with_nothing_to_say():
 	var verdict: Dictionary = SpellDraft.validate(SpellDraft.make(["fire_damage", "ignite"], "projectile"))
-	assert_true(verdict["ok"], "a plain two-mote draft was refused: %s" % verdict["refusals"])
+	assert_true(verdict["ok"], "a plain two-mote draft was refused: %s" % str(verdict["refusals"]))
 	assert_eq(verdict["refusals"].size(), 0)
 
 
@@ -244,6 +244,41 @@ func test_too_many_sockets_is_refused_and_says_how_many_there_are():
 	var draft: Dictionary = SpellDraft.make(too_many, "touch")
 	assert_true(_refusal_codes(draft).has(SpellDraft.REFUSAL_TOO_MANY_SOCKETS))
 	assert_string_contains(String(SpellDraft.validate(draft)["refusals"][0]["reason"]), str(SpellDraft.MAX_SOCKETS))
+
+
+func test_a_row_of_exactly_max_sockets_is_accepted():
+	# The boundary, both sides of it: MAX_SOCKETS is a limit, not an
+	# off-by-one that quietly costs the player their last socket.
+	var full: Array = []
+	for i in range(SpellDraft.MAX_SOCKETS):
+		full.append("fire_damage")
+	assert_true(SpellDraft.validate(SpellDraft.make(full, "touch"))["ok"], "the last socket was refused")
+	full.append("fire_damage")
+	assert_false(SpellDraft.validate(SpellDraft.make(full, "touch"))["ok"], "one past the limit was allowed")
+
+
+func test_anything_validate_accepts_compiles_to_source_the_parser_accepts():
+	# The contract between the two halves of this module: a draft the
+	# socket screen would let you weave must always produce text the real
+	# parser reads. A refusal is the gate; unparsable source never is.
+	var rows: Array = [
+		["fire_damage"],
+		["frost_damage", "freeze"],
+		["shield", "illuminate"],
+		["summon_wisp"],
+		["fire_damage", "ignite", "fire_damage", "ignite"],
+	]
+	for row in rows:
+		for delivery in SpellDraft.DELIVERIES:
+			var draft: Dictionary = SpellDraft.make(row, String(delivery))
+			if not SpellDraft.validate(draft)["ok"]:
+				continue
+			var result: Dictionary = parser.parse(SpellDraft.source_for(draft))
+			assert_true(
+				result["ok"],
+				"an accepted draft produced unparsable source: %s" % SpellDraft.source_for(draft)
+			)
+			assert_eq(_atoms_of_rule(_rule_for(draft)), row, "the row changed on the way through")
 
 
 func test_a_delivery_the_executor_does_not_know_is_refused_rather_than_mispriced():
@@ -360,11 +395,14 @@ func test_no_full_row_can_pass_the_bound():
 
 
 func test_a_name_is_deterministic_and_reads_as_a_spell():
-	var draft: Dictionary = SpellDraft.make(["frost_damage", "freeze"], "projectile")
+	# A row that reacts with nothing wears its first mote's TRADITION, so
+	# this pair is deliberately one the reaction table has no entry for.
+	var draft: Dictionary = SpellDraft.make(["frost_damage", "slow"], "projectile")
 	var name: String = SpellDraft.name_for(draft)
 	assert_eq(name, SpellDraft.name_for(draft), "two looks, two names")
 	assert_eq(name.split(" ").size(), 2, "'%s' does not read as a spell name" % name)
-	assert_string_contains(name, "Rime", "cryomancy's own word should lead a cold spell")
+	assert_eq(SpellDraft.reactions_of(draft).size(), 0, "this pair was meant to be inert")
+	assert_string_contains(name, "Rime")
 
 
 func test_the_name_changes_when_the_order_changes_the_reaction():
