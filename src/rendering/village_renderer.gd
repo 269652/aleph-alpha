@@ -1878,13 +1878,58 @@ func _field_fits_at(
 	chunk_coord: Vector2i, chunk_size: int, world,
 	is_buildable: Callable, is_occupied: Callable
 ) -> bool:
-	return VillageFarm.field_rect(
+	var reserving := _reserving(chunk_coord, chunk_size, reserved, is_occupied)
+	var rect = VillageFarm.field_rect(
 		origin, VillageFarm.FARM_BUILDING_ID,
-		_may_sow(
-			origin, origins, chunk_coord, chunk_size, is_buildable,
-			_reserving(chunk_coord, chunk_size, reserved, is_occupied), world
-		)
-	) != null
+		_may_sow(origin, origins, chunk_coord, chunk_size, is_buildable, reserving, world)
+	)
+	if rect == null:
+		return false
+	# ...and the FENCE has to have somewhere to stand too. A fence is not
+	# decoration round a field, it is what makes the beds a field -- so
+	# asking only whether the beds fit is how a farmstead ends up sited one
+	# column from its neighbour, both wanting that column, with whichever
+	# is fenced second losing the whole side. Reported with the hamlet in
+	# shot: "The two farmhouses collide and only one gets an enclosure".
+	var beds: Array = []
+	for y in range((rect as Rect2i).position.y, (rect as Rect2i).end.y):
+		for x in range((rect as Rect2i).position.x, (rect as Rect2i).end.x):
+			beds.append(Vector2i(x, y))
+	return VillageFarm.fence_has_room(
+		beds, origin, VillageFarm.FARM_BUILDING_ID,
+		_may_rail(origin, origins, chunk_coord, chunk_size, is_buildable, reserving, world)
+	)
+
+
+## The ONE rule for "may a rail stand here" -- the fence's counterpart to
+## _may_sow, and shared by the siting check above with the same reasoning:
+## a rule that decides where to build has to be the rule that decides what
+## gets built.
+##
+## Three answers, in order:
+## - a cell off the chunk is not somewhere to fence;
+## - a STREET ROW is fine, and deliberately so: the village's own paving
+##   there is the field's GATE, not a hole in it (see _fence_the_fields,
+##   which leaves paving open on purpose). Every farmstead measured shows
+##   five such cells, and they are the gate rather than the defect;
+## - anything else must be this farmstead's OWN ground (VillageFarm.
+##   owner_of -- a cell the neighbour is nearer to is the neighbour's rail
+##   line, not this one's) and really clear: no water, no building, and no
+##   paving, since a spur running down a fence line is what cost one
+##   measured farmstead three of its fourteen rails.
+func _may_rail(
+	origin: Vector2i, origins: Array, chunk_coord: Vector2i, chunk_size: int,
+	is_buildable: Callable, is_occupied: Callable, world
+) -> Callable:
+	var renderer := self
+	return func(cell: Vector2i) -> bool:
+		if cell.x < 0 or cell.y < 0 or cell.x >= chunk_size or cell.y >= chunk_size:
+			return false
+		if renderer._is_street_row(chunk_coord, chunk_size, world, cell.y):
+			return true  # the village's own paving is this field's gate
+		if VillageFarm.owner_of(cell, origins, VillageFarm.FARM_BUILDING_ID) != origin:
+			return false  # the neighbouring farmstead's rail line, not this one's
+		return is_buildable.call(cell) and not is_occupied.call(cell)
 
 
 ## The ONE rule for "may this farmhouse sow this cell", shared by the siting

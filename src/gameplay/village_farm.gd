@@ -445,6 +445,36 @@ static func fence_cells(worked_cells: Array, origin: Vector2i, building_id: Stri
 	return ordered
 
 
+## Whether the ring around `beds` really has somewhere to stand -- every
+## cell of it allowed by `may_rail`, and at least one cell to ask about.
+##
+## A fence is not decoration round a field; it is what makes the beds a
+## field, so the ground it needs has to be asked for when the farmstead is
+## SITED, not discovered when the rails go up. Reported with the hamlet in
+## shot: *"The two farmhouses collide and only one gets an enclosure"*.
+## Measured on real villages (tools/probe_farmstead_collisions.gd): a road
+## spur running down the column a farmstead's east rail needs cost it three
+## of its fourteen rails, and two farmsteads sited one column apart both
+## wanted that column -- VillageRenderer._fence_the_fields skips a cell
+## that is already paved or already railed, so the side simply never went
+## up.
+##
+## `may_rail` is the caller's, for the same reason `may_sow` is: only the
+## caller knows what a street row, a neighbouring farmstead or the
+## village's own paving means here. Empty beds answer false rather than
+## vacuously true -- "no ring to make room for" must not read as "room".
+static func fence_has_room(
+	beds: Array, origin: Vector2i, building_id: String, may_rail: Callable
+) -> bool:
+	var ring := fence_cells(beds, origin, building_id)
+	if ring.is_empty():
+		return false
+	for cell in ring:
+		if not may_rail.call(cell):
+			return false
+	return true
+
+
 ## Which side of the field this rail stands on -- "north", "south", "east"
 ## or "west", or "" for a cell that touches no bed at all. The sheet has one
 ## orientation column per answer (docs/concept/village_farms.md's art

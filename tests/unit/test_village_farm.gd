@@ -1112,3 +1112,113 @@ func test_the_rail_is_thicker_than_the_fastest_single_step_across_it():
 ## filling the cell, which is the whole distinction the ring depends on.
 func test_the_rail_is_still_a_line_and_not_a_wall():
 	assert_lte(VillageFarm.FENCE_COLLIDER_THICKNESS_PX, 16.0 / 4.0)
+
+
+# -- a farmstead's ENCLOSURE needs room, not only its beds ------------------
+#
+# Reported with the hamlet in shot: *"The two farmhouses collide and only one
+# gets an enclosure"*. Measured on real villages
+# (tools/probe_farmstead_collisions.gd, 465 chunks, 10 villages with a
+# farmhouse, 7 of them with two or more):
+#
+#     VILLAGE (679, 141)
+#       farmhouse (13, 19)  rails standing  9/14
+#       farmhouse (20, 19)  rails standing  6/14
+#         gaps: (23,22) mod='road'  (23,23) mod='road'  (23,24) mod='road'
+#
+#     VILLAGE (714, 141)   OVERLAPS: (23,21)(23,22)(23,23)(23,24) rail/rail
+#       farmhouse (20, 19)  field x20..22      farmhouse (24, 19)  field x24..26
+#
+# Two shapes of the same fault. A road spur runs down the column a
+# farmstead's east rail needs, or two farmsteads are sited one column apart
+# and both want that column -- and _fence_the_fields skips a cell that is
+# already paved or already railed, so the side simply never goes up.
+#
+# The five gaps every farmstead shows at its street row are NOT this: the
+# village's paving there is the field's GATE, by design.
+#
+# The cause is that siting asks only whether the BEDS fit (_field_fits_at ->
+# field_rect over _may_sow). A fence is not decoration -- it is what makes
+# the beds a field -- so the ground it needs has to be asked for at the same
+# time. Same lesson _may_sow itself carries one function up: "a rule that
+# decides where to build has to be the rule that decides what gets built".
+
+
+func _all_clear(_cell: Vector2i) -> bool:
+	return true
+
+
+func _beds_3x2(x: int, y: int) -> Array:
+	var beds: Array = []
+	for dy in 2:
+		for dx in 3:
+			beds.append(Vector2i(x + dx, y + dy))
+	return beds
+
+
+func test_a_ring_with_room_everywhere_has_room():
+	var beds := _beds_3x2(20, 22)
+	assert_true(
+		VillageFarm.fence_has_room(beds, Vector2i(20, 19), VillageFarm.FARM_BUILDING_ID, _all_clear)
+	)
+
+
+## One refused cell is a hole in the fence, and a field with a hole in its
+## fence is what the report shows.
+func test_one_refused_rail_cell_is_enough_to_refuse_the_ring():
+	var beds := _beds_3x2(20, 22)
+	var ring: Array = VillageFarm.fence_cells(beds, Vector2i(20, 19), VillageFarm.FARM_BUILDING_ID)
+	assert_false(ring.is_empty(), "precondition: this field really has a ring")
+	for blocked in ring:
+		var refuse_one := func(cell: Vector2i) -> bool:
+			return cell != blocked
+		assert_false(
+			VillageFarm.fence_has_room(beds, Vector2i(20, 19), VillageFarm.FARM_BUILDING_ID, refuse_one),
+			"a ring missing %s is a fence with a hole in it" % str(blocked)
+		)
+
+
+## The measured case: a road spur down the column the east rail needs.
+func test_a_spur_down_the_fence_line_leaves_no_room():
+	var beds := _beds_3x2(20, 22)
+	var spur_column := 23
+	var off_the_spur := func(cell: Vector2i) -> bool:
+		return cell.x != spur_column
+	assert_false(
+		VillageFarm.fence_has_room(beds, Vector2i(20, 19), VillageFarm.FARM_BUILDING_ID, off_the_spur),
+		"the east rail of a field at x20..22 stands at x23, which is where the spur runs"
+	)
+
+
+## ...and the other measured case: the neighbour's ring wants the same
+## column. Both farmsteads' rings are computed from the real rule, so this
+## pins the actual overlap rather than a hand-written cell list.
+func test_two_fields_one_column_apart_want_the_same_rail():
+	var mine := _beds_3x2(20, 22)
+	var theirs := _beds_3x2(24, 22)
+	var my_ring: Dictionary = {}
+	for cell in VillageFarm.fence_cells(mine, Vector2i(20, 19), VillageFarm.FARM_BUILDING_ID):
+		my_ring[cell] = true
+	var shared: Array = []
+	for cell in VillageFarm.fence_cells(theirs, Vector2i(24, 19), VillageFarm.FARM_BUILDING_ID):
+		if my_ring.has(cell):
+			shared.append(cell)
+	assert_false(
+		shared.is_empty(),
+		"precondition: fields at x20..22 and x24..26 really do share a rail column"
+	)
+	var not_theirs := func(cell: Vector2i) -> bool:
+		return not my_ring.has(cell)
+	assert_false(
+		VillageFarm.fence_has_room(theirs, Vector2i(24, 19), VillageFarm.FARM_BUILDING_ID, not_theirs),
+		"a farmstead whose ring is already the neighbour's ring has nowhere to fence: %s" % str(shared)
+	)
+
+
+## An empty field has no ring, and a farmstead with no beds is refused by
+## the bed rule long before this one -- so this answers false rather than
+## "vacuously true", which would read as "room" to a caller.
+func test_a_farmstead_with_no_beds_has_no_ring_to_make_room_for():
+	assert_false(
+		VillageFarm.fence_has_room([], Vector2i(20, 19), VillageFarm.FARM_BUILDING_ID, _all_clear)
+	)

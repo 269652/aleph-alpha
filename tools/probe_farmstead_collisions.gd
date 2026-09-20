@@ -67,6 +67,14 @@ func _process(_delta: float) -> bool:
 		return false
 	if _step < STEPS:
 		var c: Vector2i = _origin + Vector2i(_step, 0)
+		# Founding, not a reload. Chunks persist on unload, so a second run
+		# of this probe would otherwise measure the villages the FIRST run
+		# founded -- which is how an A/B of a siting change can come back
+		# byte-identical and mean nothing. The test suites scrub the same
+		# way before loading a chunk they mean to found.
+		for dy in range(-2, 3):
+			for dx in range(-2, 3):
+				_scrub(c + Vector2i(dx, dy))
 		_manager.update(Vector2((c * CHUNK_SIZE + Vector2i(CHUNK_SIZE / 2, CHUNK_SIZE / 2))))
 		_step += 1
 		if _settling < SETTLE_STEPS:
@@ -87,6 +95,17 @@ func _process(_delta: float) -> bool:
 		_fieldless, _overlaps
 	])
 	return true
+
+
+## Everything persisted about this chunk, so the next load really founds it.
+func _scrub(chunk_coord: Vector2i) -> void:
+	for path in [
+		_manager._modifications_path(chunk_coord), _manager._buildings_path(chunk_coord),
+		_manager._roof_modifications_path(chunk_coord),
+		_manager._furniture_modifications_path(chunk_coord),
+	]:
+		if FileAccess.file_exists(path):
+			DirAccess.remove_absolute(path)
 
 
 func _examine(chunk_coord: Vector2i) -> void:

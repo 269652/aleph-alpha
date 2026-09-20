@@ -3268,10 +3268,29 @@ func test_a_rail_beside_a_real_farmhouse_but_on_no_frame_comes_down():
 	renderer.spawn_village(parent, coord, coord * CHUNK_SIZE, CHUNK_SIZE, TILE_SIZE, "grassland", world)
 	var farms := _buildings_of(world, VillageFarm.FARM_BUILDING_ID)
 	assert_gt(farms.size(), 0, "precondition: this village really raised a farmhouse")
-	# Right on the farmhouse's own doorstep row, well inside the reach the
-	# old distance rule allowed, and on nobody's frame.
-	var orphan_local: Vector2i = (farms[0]["origin_local"] as Vector2i) + Vector2i(-1, -1)
-	var orphan_global: Vector2i = coord * CHUNK_SIZE + orphan_local
+	# Right beside the farmhouse, well inside the reach the old distance
+	# rule allowed, and on nobody's frame -- SEARCHED rather than assumed,
+	# because which cells are frame depends on where the field landed, and
+	# a test that plants its orphan on a real frame proves nothing. (It was
+	# assumed, at origin + (-1,-1), until stricter farmstead siting moved a
+	# field under it.)
+	var frames: Dictionary = {}
+	for cell in _fence_cells(world, coord):
+		frames[cell] = true
+	var orphan_global: Vector2i = Vector2i.MAX
+	var house: Vector2i = coord * CHUNK_SIZE + (farms[0]["origin_local"] as Vector2i)
+	for dy in range(-2, 3):
+		for dx in range(-2, 3):
+			var candidate: Vector2i = house + Vector2i(dx, dy)
+			if frames.has(candidate):
+				continue
+			if world.modification_at_global(candidate.x, candidate.y) != "":
+				continue
+			orphan_global = candidate
+			break
+		if orphan_global != Vector2i.MAX:
+			break
+	assert_ne(orphan_global, Vector2i.MAX, "precondition: a free cell beside the farm, on no frame")
 	world.occupied_cells[orphan_global] = VillageFarm.fence_tile_for("north")
 
 	renderer.spawn_village(parent, coord, coord * CHUNK_SIZE, CHUNK_SIZE, TILE_SIZE, "grassland", world)
@@ -4066,3 +4085,77 @@ func test_a_world_that_cannot_say_leaves_the_village_alone():
 		parent, coord, coord * CHUNK_SIZE, CHUNK_SIZE, TILE_SIZE, null, nodes
 	)
 	assert_eq(_villagers_among(after), 10)
+
+
+# -- two farmsteads must not want the same rail -----------------------------
+#
+# Reported with the hamlet in shot: *"The two farmhouses collide and only one
+# gets an enclosure"*. Measured on real villages
+# (tools/probe_farmstead_collisions.gd, 465 chunks, 7 villages with two or
+# more farmhouses):
+#
+#     VILLAGE (714, 141)   OVERLAPS: (23,21)(23,22)(23,23)(23,24) rail/rail
+#       farmhouse (20, 19)  field x20..22     farmhouse (24, 19)  field x24..26
+#
+# Two farmsteads sited one column apart both want that column for a fence,
+# and _fence_the_fields skips a cell that is already railed -- so whichever
+# is fenced second loses that whole side. Siting asked only whether the BEDS
+# fit; a fence is what makes beds a field, so its ground has to be asked for
+# at the same time (VillageFarm.fence_has_room).
+
+
+## Every farmstead's own ring in this chunk, as origin -> {cell: true},
+## derived exactly the way VillageRenderer derives it.
+func _farmstead_rings(coord: Vector2i, world) -> Dictionary:
+	var origins: Array = []
+	for call in _buildings_of(world, VillageFarm.FARM_BUILDING_ID):
+		origins.append(call["origin_local"])
+	origins.sort_custom(func(a: Vector2i, b: Vector2i) -> bool:
+		return a.y < b.y if a.y != b.y else a.x < b.x
+	)
+	if origins.is_empty():
+		return {}
+	renderer._buildable_memo.clear()
+	renderer._dry_memo.clear()
+	renderer._skeleton_memo.clear()
+	var is_buildable: Callable = renderer._is_buildable_local(coord, CHUNK_SIZE, world)
+	var is_occupied: Callable = renderer._is_occupied_local(coord, CHUNK_SIZE, world)
+	var rings: Dictionary = {}
+	for origin in origins:
+		var local_field: Array = []
+		for g in renderer._workable_field_of(
+			origin, origins, coord, CHUNK_SIZE, is_buildable, is_occupied, world
+		):
+			local_field.append((g as Vector2i) - coord * CHUNK_SIZE)
+		var ring: Dictionary = {}
+		for cell in VillageFarm.fence_cells(local_field, origin, VillageFarm.FARM_BUILDING_ID):
+			ring[cell] = true
+		rings[origin] = ring
+	return rings
+
+
+func test_no_two_farmsteads_want_the_same_rail():
+	var clashes: Array = []
+	var checked := 0
+	for coord in _settlement_chunks_with_farmers(3, 14):
+		var world := StubWorld.new()
+		renderer.spawn_village(
+			parent, coord, coord * CHUNK_SIZE, CHUNK_SIZE, TILE_SIZE, "grassland", world
+		)
+		var rings := _farmstead_rings(coord, world)
+		if rings.size() < 2:
+			continue
+		checked += 1
+		var origins: Array = rings.keys()
+		for i in range(origins.size()):
+			for j in range(i + 1, origins.size()):
+				for cell in rings[origins[i]]:
+					if rings[origins[j]].has(cell):
+						clashes.append("%s: %s and %s both want a rail at %s" % [
+							str(coord), str(origins[i]), str(origins[j]), str(cell)
+						])
+	assert_gt(checked, 0, "precondition: villages with two or more farmsteads")
+	assert_eq(
+		clashes.size(), 0,
+		"a rail one farmstead lays is a side the other never gets: %s" % str(clashes.slice(0, 4))
+	)
