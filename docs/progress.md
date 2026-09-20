@@ -28387,3 +28387,98 @@ A/B'd in a clean worktree at `6c407024`, the commit immediately before it,
 where it fails with the identical 598/586. Recorded rather than quietly left,
 and deliberately not fixed here — the character creator's panel heights are
 live in another session's HUD pass.
+
+## A village does not build the player's Farm (`concept/npc_farm_production.md`, 2026-09-20)
+
+Reported live with one standing in a field, and then narrowed in as many
+words: *"it just should not spawn this weird looking npc with that 3 soil
+tiles"* — after explicitly declining the alternative of turning it into a
+real building.
+
+### ✅ What was actually spawning it
+
+`SettlementBuildDecision`. A `DECLINING` settlement's bread shortfall walks
+bread → bakery → flour → mill → wheat → **farm**, and `farm` is the root, so
+the village queued a `farm` construction project at
+`_settlement_build_origin_for` — *"the first free, buildable, clear cell
+spiralling out from the settlement's own centre"*. Completing it placed the
+one-tile placeable with a fence, and `_spawn_farmer_for` moved a
+`FarmerMarker` in beside it, which tends three plots at fixed offsets.
+
+That is the whole picture in the screenshot: a miniature farmhouse dropped in
+a field, one odd worker, three soil squares. Not a farmhouse bug, not a bed
+bug, not a soil bug — all three were the same spawn.
+
+### ✅ The Farm is the player's structure
+
+A village already grows wheat, and always did: `village_farms.md` gives the
+farmer and herbalist occupations real 3×2 `farmhouse` buildings with real
+fenced fields, worked by full `NpcMarker`s with a schedule, hunger and a
+wallet. The placeable Farm — one tile of ground, a narrow-purpose
+`FarmerMarker`, three fixed plots — was designed for a player who places it,
+fences it and staffs it. A settlement raising it stood a **second, redundant
+wheat mechanism next to the real one**, and the redundant one is what looked
+wrong.
+
+`SettlementBuildDecision.SETTLEMENT_WILL_NOT_RAISE` now refuses it. Refusing
+the root refuses the chain below it, which is the correct reading of
+`milling_and_baking.md`'s own pillar 1 rather than an exception to it: a
+Bakery raised with no Mill and no wheat is exactly the "stands waiting for
+flour that never comes" that doc exists to avoid. The refusal `continue`s
+rather than returns, so a smaller shortfall ranked below bread is still
+fixed — a village must not go idle over bread it cannot build its way to.
+
+**Give a village a farm and nothing above it changed.** Once one really
+stands there — the player's, or one they planned — the same shortfall raises
+the Mill and then the Bakery exactly as before. That is pinned by
+`test_with_a_farm_standing_the_chain_climbs_mill_then_bakery_at_distinct_cells`.
+
+### ⬜ The honest cost
+
+A `DECLINING` village short of bread can no longer build its way out of it
+unaided. Its wheat comes from whichever villagers hold the farmer occupation,
+and **nothing yet connects a bread shortfall to conscripting another one** —
+`SettlementGenerator._staff_food_producers` already knows how to make a
+farmer, it simply is not wired to shortfall. That is the real follow-up this
+leaves open, and it is a narrower, better-shaped problem than dropping a
+player's structure in a field.
+
+`mill`, `bakery`, `sagewerk` and `storage` are placeables on the same path
+and would look the same way if a shortfall reached them directly. Only `farm`
+is refused, because only `farm` was reported and only `farm` spawns a worker
+and plots of its own.
+
+### Seven tests rewritten to the new rule, not deleted
+
+`test_earth_chunk_manager_bread_chain.gd` was built end to end on "a hungry
+village raises a Farm". Each test was re-pointed rather than dropped:
+
+- The one that asserted a hungry village *starts* a farm now asserts it
+  raises nothing — keeping every bit of its setup, because the point is that
+  a village with every reason and every resource still does not.
+- The pipeline tests (one project not two, labour advancing in real time,
+  enough time completing and placing it, the chain climbing at distinct
+  cells) were re-pointed at the **Mill**, with a farm placed first. Their real
+  property was never about the Farm.
+- The Farm's own completion rule — a completed project places a fenced plot
+  a Farmer moves into — is unchanged and still covered, by starting the
+  project directly, which is what a plan the player raises does through the
+  same store.
+- `test_villagers_eat_the_merchants_meat_until_the_village_needs_a_farm`
+  keeps the half that was reported (*"the food should be actually consumed"*)
+  and now ends on the village being hungry again and still raising no farm,
+  then raising the Mill once given a farm.
+
+Tests: `test_settlement_build_decision.gd` 19/19 (+4 new, 1 rewritten),
+`test_earth_chunk_manager_bread_chain.gd` 10/11, and
+`test_construction_priority.gd`, `test_settlement_demand.gd`,
+`test_earth_chunk_manager_farm.gd`,
+`test_earth_chunk_manager_chain_logistics.gd`,
+`test_earth_chunk_manager_structure_workers.gd` 62/62.
+
+The one bread-chain failure is
+`test_spare_hands_gather_building_material_between_assessments` (stone and
+plant_fibre gathering staying at 0). **Pre-existing, not from this change**:
+A/B'd in a clean worktree at the commit before it, where it fails with the
+identical numbers at the identical two lines. Recorded rather than quietly
+left.

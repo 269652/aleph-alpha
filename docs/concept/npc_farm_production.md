@@ -362,13 +362,49 @@ avoiding.
   unload/reload, the same already-accepted gap the Sägewerk's own log stock
   has today — a real `construction_catchup.gd`-style closed-form integration
   is a genuine follow-up, not attempted here.
-- **Settlement-autonomous "build a farm" decision — resolved** by
+- **Settlement-autonomous "build a farm" decision — resolved, then
+  REVERSED (2026-09-20).** It was resolved by
   [milling_and_baking.md](milling_and_baking.md) (2026-09-13): wheat's
-  chain is resolver data now (`grow_wheat`, flagged `automated` so it can
-  never be hand-crafted for free — the exact exploit this question refused
-  to paper over), and a `DECLINING` settlement's own bread shortfall raises
-  farm → mill → bakery through `SettlementBuildDecision` on its own. See
-  that doc for the whole mechanism.
+  chain is resolver data (`grow_wheat`, flagged `automated` so it can never
+  be hand-crafted for free — the exact exploit this question refused to
+  paper over), and a `DECLINING` settlement's own bread shortfall raised
+  farm → mill → bakery through `SettlementBuildDecision` on its own.
+
+  What that produced, reported live with it in shot: a lone miniature
+  farmhouse dropped on the first clear cell spiralling out from the village
+  centre, a `FarmerMarker` beside it, and its three plots at fixed offsets —
+  *"it just should not spawn this weird looking npc with that 3 soil
+  tiles"*.
+
+  The Farm is a PLAYER structure. It is one tile of ground with a
+  narrow-purpose `FarmerMarker` who tends three plots, and it was designed
+  for a player who places it, fences it and staffs it. A village has its own
+  wheat mechanism and always did — [village_farms.md](village_farms.md)
+  gives the farmer and herbalist occupations real 3×2 `farmhouse` buildings
+  with real fenced fields, worked by full `NpcMarker`s with a schedule,
+  hunger and a wallet. A settlement raising the placeable was a SECOND,
+  redundant mechanism sitting beside the real one, and the redundant one is
+  what looked wrong.
+
+  So `SettlementBuildDecision` no longer raises it: see
+  `SETTLEMENT_WILL_NOT_RAISE` there. `farm` is the ROOT of the bread chain
+  (`deepest_missing_structure_id` walks bread → bakery → flour → mill →
+  wheat → farm), so declining to raise it declines the whole chain rather
+  than leaving a bakery standing waiting on flour that never comes.
+
+  **The honest cost**: a `DECLINING` village short of bread can no longer
+  build its way out of it. Its wheat comes from whichever villagers hold
+  the farmer occupation, and nothing yet connects a bread shortfall to
+  conscripting another one — `SettlementGenerator._staff_food_producers`
+  already knows how to make a farmer, it simply is not wired to shortfall.
+  That is the real follow-up this reversal leaves open, and it is a
+  narrower, better-shaped problem than dropping a player's structure in a
+  field.
+
+  `mill`, `bakery`, `sagewerk` and `storage` are placeables on this same
+  path and would look the same way if a shortfall ever reached them
+  directly; only `farm` is refused here, because only `farm` was reported
+  and only `farm` spawns a worker and plots of its own.
 - **Capacity and a second Farmer.** Three plots is a real, if arbitrary,
   cap on how much one Farmer can tend before something occasionally
   withers — a deliberate real constraint (pillar 2), not yet paired with any

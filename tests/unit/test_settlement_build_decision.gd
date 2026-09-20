@@ -237,13 +237,21 @@ func test_cancellation_never_touches_a_different_chunks_project():
 	assert_eq(elsewhere.status, ConstructionProject.Status.PLANNED)
 
 
-# -- the bread chain: a food shortfall raises the chain from its root -------
+# -- the bread chain: raised from its root, but never from the farm ---------
 #
-## docs/concept/milling_and_baking.md: a settlement short of bread with none
-## of farm/mill/bakery built must start a FARM project (the deepest missing
-## producer), not a bakery that would never see flour; the next decision,
-## with the farm present, names the mill; then the bakery. Real recipe book,
-## real materials for every link, no skill gates anywhere on the chain.
+## docs/concept/milling_and_baking.md: a settlement short of bread must raise
+## the chain from its DEEPEST missing producer, never a bakery that would
+## stand waiting on flour that never comes.
+##
+## That root is the farm, and a village does not build farms
+## (SETTLEMENT_WILL_NOT_RAISE, and docs/concept/npc_farm_production.md's own
+## reversal) -- so with nothing built the whole chain is declined. Once a
+## farm really stands there, whoever put it down, the same shortfall raises
+## the mill and then the bakery exactly as before: the rule is about who
+## builds a farm, not about the chain above it.
+##
+## Real recipe book, real materials for every link, no skill gates anywhere
+## on the chain.
 
 func _bread_shortfall() -> Array:
 	return [_shortfall([_missing("bread", 12.0)])]
@@ -255,14 +263,20 @@ func _stock_the_whole_chain() -> void:
 	market.add_stock("plant_fibre", 10.0)
 
 
-func test_a_bread_shortfall_with_nothing_built_starts_a_farm_first():
+## Rewritten, not deleted: this used to assert the opposite -- that the same
+## shortfall STARTS a farm -- and that is exactly the spawn reported live,
+## *"it just should not spawn this weird looking npc with that 3 soil
+## tiles"*. What it still guards is the half that never changed: a village
+## short of bread must not raise some middle link whose inputs can never
+## arrive.
+func test_a_bread_shortfall_with_nothing_built_raises_nothing_at_all():
 	_stock_the_whole_chain()
 	var result := SettlementBuildDecision.decide_and_advance(
 		projects, market, CHUNK, ORIGIN, "household:1", [], book, _bread_shortfall(), 3
 	)
-	assert_eq(result["item_id"], "bread")
-	assert_eq(result["priority"], ConstructionPriority.Priority.READY)
-	assert_not_null(projects.find_project(CHUNK, ORIGIN, "farm"), "the chain is raised from its root")
+	assert_eq(result["action"], "no_actionable_shortfall")
+	assert_null(projects.find_project(CHUNK, ORIGIN, "farm"), "a village does not build farms")
+	assert_null(projects.find_project(CHUNK, ORIGIN, "mill"), "nor the chain above one")
 	assert_null(projects.find_project(CHUNK, ORIGIN, "bakery"), "never a bakery with no flour ever coming")
 
 
@@ -285,3 +299,92 @@ func test_with_the_whole_chain_built_a_bread_shortfall_is_not_actionable():
 		projects, market, CHUNK, ORIGIN, "household:1", ["farm", "mill", "bakery"], book, _bread_shortfall(), 3
 	)
 	assert_eq(result["action"], "no_actionable_shortfall", "the chain exists; bread is a matter of time, not construction")
+
+
+# -- the Farm is a player's structure, never a village's --------------------
+#
+# Reported live with one standing in a field: *"it just should not spawn this
+# weird looking npc with that 3 soil tiles"*.
+#
+# A DECLINING village short of bread used to raise farm -> mill -> bakery on
+# its own (docs/concept/milling_and_baking.md), and `farm` is the ROOT of
+# that chain. What that produced was the one-tile placeable dropped on the
+# first clear cell spiralling out from the village centre, with its narrow
+# FarmerMarker beside it and its three plots at fixed offsets -- a second,
+# redundant wheat mechanism standing next to the real one, since
+# village_farms.md already gives the farmer occupation a real 3x2 farmhouse
+# and a real fenced field.
+#
+# The farm recipe is wood (6) + plant_fibre (4) and carries NO skill gate, so
+# every test below stocks those: refusing a farm the village could not have
+# afforded anyway would prove nothing.
+
+
+## The reported spawn itself: a real bread shortfall, real spare hands, and
+## every material the farm needs in the market -- and still no farm.
+func test_a_village_short_of_bread_never_raises_the_farm_placeable():
+	var shortfalls := [_shortfall([_missing("bread", 9.0)])]
+	market.add_stock("wood", 6.0)
+	market.add_stock("plant_fibre", 4.0)
+
+	var result := SettlementBuildDecision.decide_and_advance(
+		projects, market, CHUNK, ORIGIN, "household:1", [], book, shortfalls, 3
+	)
+
+	assert_null(projects.find_project(CHUNK, ORIGIN, "farm"), "no farm may be queued")
+	assert_eq(result["action"], "no_actionable_shortfall")
+
+
+## Refusing the ROOT refuses the whole chain, rather than leaving a bakery
+## standing waiting on flour that can never come.
+func test_refusing_the_farm_refuses_the_rest_of_the_bread_chain_too():
+	var shortfalls := [_shortfall([_missing("bread", 9.0)])]
+	market.add_stock("wood", 6.0)
+	market.add_stock("plant_fibre", 4.0)
+
+	SettlementBuildDecision.decide_and_advance(
+		projects, market, CHUNK, ORIGIN, "household:1", [], book, shortfalls, 3
+	)
+
+	for structure_id in ["farm", "mill", "bakery"]:
+		assert_null(
+			projects.find_project(CHUNK, ORIGIN, structure_id),
+			"%s is part of the chain the village declines" % structure_id
+		)
+
+
+## Refusing the farm must not make the village passive about everything else:
+## a timber shortfall still raises its own producer exactly as before. Same
+## log/wood stock and allocated_nodes the ranking tests above use, for the
+## same reason (clears the recursive Carpentry gate on "sagewerk" itself).
+func test_declining_the_farm_leaves_every_other_producer_decision_alone():
+	var shortfalls := [_shortfall([_missing("beam", 5.0)])]
+	market.add_stock("log", 8.0)
+	market.add_stock("wood", 4.0)
+	var allocated_nodes := {"carpentry_1": true, "carpentry_2": true}
+
+	var result := SettlementBuildDecision.decide_and_advance(
+		projects, market, CHUNK, ORIGIN, "household:1", [], book, shortfalls, 3, allocated_nodes
+	)
+
+	assert_eq(result.get("item_id", ""), "beam")
+	assert_not_null(projects.find_project(CHUNK, ORIGIN, "sagewerk"))
+
+
+## A bread shortfall must not shadow a fixable one ranked below it: the farm
+## is SKIPPED, not treated as "decided nothing, stop looking". Bread needs 40
+## against beam's 5, so bread is ranked first and still must not win.
+func test_a_refused_farm_does_not_hide_a_smaller_shortfall_it_can_still_fix():
+	var shortfalls := [_shortfall([_missing("bread", 40.0), _missing("beam", 5.0)])]
+	market.add_stock("log", 8.0)
+	market.add_stock("wood", 10.0)
+	market.add_stock("plant_fibre", 4.0)
+	var allocated_nodes := {"carpentry_1": true, "carpentry_2": true}
+
+	var result := SettlementBuildDecision.decide_and_advance(
+		projects, market, CHUNK, ORIGIN, "household:1", [], book, shortfalls, 3, allocated_nodes
+	)
+
+	assert_eq(result.get("item_id", ""), "beam", "bread is worse, but its only fix is refused")
+	assert_null(projects.find_project(CHUNK, ORIGIN, "farm"))
+	assert_not_null(projects.find_project(CHUNK, ORIGIN, "sagewerk"))
