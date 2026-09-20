@@ -435,15 +435,76 @@ func test_a_hungry_village_takes_nobody_in():
 	assert_eq(manager.household_count_for_settlement(_settlement_id), before, "an empty larder attracts nobody")
 
 
-func test_a_well_fed_village_with_room_eventually_takes_someone_in():
-	_market().add_stock("cooked_meat", 500.0)
-	var before := manager.household_count_for_settlement(_settlement_id)
+## Raises one more house than this village has people for, and answers with
+## the spare capacity that left standing -- the room an arrival needs.
+func _raise_a_spare_house() -> int:
+	var house_id: String = BuildingCatalog.BUILDING_IDS[0]
+	var origin = manager._growth_site_for(_chunk_coord, house_id)
+	if origin == null:
+		return 0
+	manager._place_building_over_roads(_chunk_coord, origin, house_id, 3, _settlement_id)
+	var census := manager._village_census_for(
+		_chunk_coord, manager._households_in_settlement(_settlement_id)
+	)
+	return int(census["spare_house_capacity"])
+
+
+func _draw_for_a_while() -> void:
 	# Many steps: the draw is a real rate per day, not one arrival per call.
 	for i in 400:
 		manager._step_village_immigration(
 			_settlement_id, _market(), manager._households_in_settlement(_settlement_id)
 		)
-	assert_gt(manager.household_count_for_settlement(_settlement_id), before, "a fed village with room grows")
+
+
+## **Rewritten 2026-09-20**, and the rewrite is the point. This used to drive
+## the immigration step alone and expect the village to grow, which worked
+## only because the old gate admitted one household per step on the strength
+## of FRONTAGE -- somewhere to BUILD, not somewhere to live. Reported live:
+## "NPCs should only move in when a new unoccupied house exists for them".
+##
+## So "a fed village grows" is two steps now, and this drives both: a village
+## whose roofs are all full takes nobody in however fed it is, and the same
+## village takes somebody in the moment one really stands empty.
+func test_a_well_fed_village_grows_once_a_house_really_stands_empty():
+	_market().add_stock("cooked_meat", 500.0)
+	var before := manager.household_count_for_settlement(_settlement_id)
+
+	_draw_for_a_while()
+	assert_eq(
+		manager.household_count_for_settlement(_settlement_id), before,
+		"a village with every roof full takes nobody in, however well fed"
+	)
+
+	var spare := _raise_a_spare_house()
+	if spare <= 0:
+		pending("no street frontage left in this village to raise a spare house on")
+		return
+
+	_draw_for_a_while()
+	assert_gt(
+		manager.household_count_for_settlement(_settlement_id), before,
+		"an empty house is exactly what a fed village grows into"
+	)
+
+
+## And the ladder is what puts that house there -- otherwise the gate above
+## would simply stop every village for ever. A village with every roof full
+## owes itself a house, whatever else it already has.
+func test_a_village_with_every_roof_full_owes_itself_a_house():
+	var census := manager._village_census_for(
+		_chunk_coord, manager._households_in_settlement(_settlement_id)
+	)
+	assert_eq(int(census["spare_house_capacity"]), 0, "the premise: nowhere for anyone to move in")
+	assert_eq(
+		VillageGrowth.next_building(
+			manager.household_count_for_settlement(_settlement_id),
+			int(census["housed_count"]),
+			VillageGrowth.LADDER_BUILDING_IDS,
+			int(census["spare_house_capacity"])
+		),
+		BuildingCatalog.BUILDING_IDS[0]
+	)
 
 
 # -- productivity is not decoration: it scales what the village gathers ----
