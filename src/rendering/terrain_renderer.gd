@@ -1430,9 +1430,13 @@ func _tile_set_cache_key() -> String:
 ## earth_dominant_blend_for), instead of always painting one dead-flat
 ## EARTH_COLOR square regardless of neighbors -- reported (screenshot): a
 ## grass-to-dirt-path boundary read as a hard edge, with the corner where
-## they met a hard square. Every other modification (structures, building
-## pieces) stays exactly as before: deliberately man-made, flat-edged, never
-## organically blended into the ground. Otherwise, if any cardinal neighbor
+## they met a hard square. A BUILDING's own footprint ids resolve first to
+## the ground that building stands on (see building_ground_by_cell), so a
+## hall on a paved square paints that paving and every other plot takes the
+## EARTH_TILE_ID branch above with it, yard edges dithering and all. Every
+## other modification (structures, building pieces) stays exactly as
+## before: deliberately man-made, flat-edged, never organically blended
+## into the ground. Otherwise, if any cardinal neighbor
 ## *within this same chunk* is a different biome, a corner-aware directional
 ## blend tile is used -- the cell dithers toward the dominant differing neighbor
 ## biome (see dominant_blend_for) on every edge that neighbor occupies, so

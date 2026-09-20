@@ -13598,7 +13598,6 @@ func _spawn_building_node(chunk_coord: Vector2i, origin_local: Vector2i, record:
 	kerb.texture = _footprint_kerb_sprite.footprint_texture(footprint, TerrainRenderer.ART_TILE_SIZE)
 	kerb.scale = Vector2.ONE * ArtResolution.SPRITE_SCALE
 	kerb.position = Vector2(0, -footprint_px.y * 0.5)
-	kerb.texture_filter = CanvasItem.TEXTURE_FILTER_NEAREST
 	node.add_child(kerb)
 
 	var sprite := Sprite2D.new()

@@ -25,6 +25,12 @@ const STEPS := 30
 const OUT_DIR := "res://tools/village_ground_renders"
 const VIEW := Vector2i(720, 480)
 
+## The middle of each frame, saved again at 4x: a kerb is EDGE_PIXELS +
+## TOP_PIXELS art pixels wide, which is a few screen pixels at the game's
+## own zoom -- big enough to read in play, too small to judge in a
+## screenshot without magnifying it.
+const CLOSEUP := Vector2i(240, 160)
+
 const Player = preload("res://scenes/player.gd")
 const TerrainRenderer = preload("res://src/rendering/terrain_renderer.gd")
 const BuildingCatalog = preload("res://src/gameplay/building_catalog.gd")
@@ -92,6 +98,15 @@ func _init() -> void:
 		var path := "%s/%s.png" % [OUT_DIR, shot["name"]]
 		image.save_png(path)
 		print("saved %s   centred on tile %s" % [path, shot["tile"]])
+		# ... and the same frame's own middle at 4x, which is the only way
+		# to actually look at a kerb three art pixels wide.
+		var closeup := image.get_region(Rect2i(
+			VIEW.x / 2 - CLOSEUP.x / 2, VIEW.y / 2 - CLOSEUP.y / 2, CLOSEUP.x, CLOSEUP.y
+		))
+		closeup.resize(CLOSEUP.x * 4, CLOSEUP.y * 4, Image.INTERPOLATE_NEAREST)
+		var closeup_path := "%s/%s_closeup.png" % [OUT_DIR, shot["name"]]
+		closeup.save_png(closeup_path)
+		print("saved %s" % closeup_path)
 
 	print("village chunk %s  hall %s  house %s" % [
 		village["chunk_coord"], village["hall_tile"], village["house_tile"]
