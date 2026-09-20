@@ -1210,3 +1210,135 @@ func test_the_foot_is_clamped_into_the_tile_whatever_height_it_is_given():
 			rect.size.y, VillageFarm.FENCE_COLLIDER_THICKNESS_PX, 0.0001,
 			"and stays a full rail thick rather than being squeezed, height %s" % height
 		)
+
+
+# -- two fields, one line between them ------------------------------------
+#
+# Reported with both enclosures in shot: *"It should be possible to build
+# two rails on a single tile so both enclosures are fenced properly."*
+#
+# A rail is an ordinary chunk modification and a tile holds ONE id, so
+# where two fields meet, the second one's rail finds the cell already
+# occupied and is skipped. Measured on a real village
+# (tools/probe_neighbouring_fences.gd):
+#
+#     (23, 20)  wanted as ["0:corner_ne", "1:corner_nw"] -- stands: road
+#     (23, 21)  wanted as ["0:east", "1:west"]           -- stands: road
+#     (23, 22)  wanted as ["0:east", "1:west"]           -- stands: farm_fence_east
+#     (23, 23)  wanted as ["0:corner_se", "1:corner_sw"] -- stands: farm_fence_east
+#
+# Field 0's east rail wins every contested cell; field 1 has no west rail
+# along the whole shared line, so its enclosure is open.
+#
+# The facing is carried in the id because nothing about a rail is persisted
+# (see FENCE_TILE_IDS), so a line carrying two rails is an id that names
+# both -- and everything downstream keeps working on the SINGLE rails it
+# already knows, because a shared id is defined as the two of them.
+
+func test_a_shared_line_carries_both_fields_rails():
+	assert_eq(
+		VillageFarm.fence_pieces_of("farm_fence_east_west"),
+		[VillageFarm.fence_tile_for("east"), VillageFarm.fence_tile_for("west")],
+		"a line between two fields is both their rails, named once"
+	)
+
+
+func test_an_ordinary_rail_carries_only_itself():
+	var east: String = VillageFarm.fence_tile_for("east")
+	assert_eq(VillageFarm.fence_pieces_of(east), [east])
+
+
+func test_ground_that_is_not_a_rail_carries_no_rails():
+	assert_eq(VillageFarm.fence_pieces_of(""), [])
+	assert_eq(VillageFarm.fence_pieces_of("road"), [])
+
+
+## The upgrade itself: a cell already carrying one field's rail, asked for
+## the OPPOSITE one, becomes the shared line.
+func test_the_opposite_rail_makes_a_shared_line():
+	assert_eq(
+		VillageFarm.shared_fence_tile_for(VillageFarm.fence_tile_for("east"), "west"),
+		"farm_fence_east_west"
+	)
+	assert_eq(
+		VillageFarm.shared_fence_tile_for(VillageFarm.fence_tile_for("west"), "east"),
+		"farm_fence_east_west",
+		"which field was stamped first cannot change what stands there"
+	)
+	assert_eq(
+		VillageFarm.shared_fence_tile_for(VillageFarm.fence_tile_for("north"), "south"),
+		"farm_fence_north_south"
+	)
+
+
+## IDEMPOTENT, which _fence_the_fields' own doc comment requires: a reload
+## re-derives the same ring and must build nothing twice. The same rail
+## asked for again is not a second field.
+func test_a_rail_asked_for_twice_is_not_a_shared_line():
+	assert_eq(VillageFarm.shared_fence_tile_for(VillageFarm.fence_tile_for("east"), "east"), "")
+
+
+## Only OPPOSITE rails share a line. Two fields cannot want the same cell
+## closed on the same side, and a rail that meets one at right angles is a
+## corner of one ring, not a line between two.
+func test_rails_that_are_not_opposite_share_nothing():
+	assert_eq(VillageFarm.shared_fence_tile_for(VillageFarm.fence_tile_for("east"), "north"), "")
+	assert_eq(VillageFarm.shared_fence_tile_for("road", "east"), "")
+	assert_eq(VillageFarm.shared_fence_tile_for("", "east"), "")
+
+
+func test_a_shared_line_is_still_a_fence():
+	assert_true(
+		VillageFarm.is_fence_tile("farm_fence_east_west"),
+		"a shared line that did not read as a fence would lose its art and its collider"
+	)
+	assert_true(VillageFarm.is_fence_tile("farm_fence_north_south"))
+
+
+## And it closes BOTH its sides: there is a crop on each of them.
+func test_a_shared_line_refuses_the_crop_on_either_side():
+	var shared := "farm_fence_east_west"
+	assert_true(
+		VillageFarm.rails_block_step(shared, "", Vector2i(-1, 0)),
+		"the field to the west is still fenced"
+	)
+	assert_true(
+		VillageFarm.rails_block_step(shared, "", Vector2i(1, 0)),
+		"and so is the field to the east"
+	)
+	assert_false(
+		VillageFarm.rails_block_step(shared, "", Vector2i(0, 1)),
+		"the lane along the line is ordinary walkable ground, as for any rail"
+	)
+
+
+## And the wiring, at the three seams a shared line has to pass through --
+## the source-contract boundary this repo already draws for renderer and
+## chunk-manager plumbing.
+func _source(path: String) -> String:
+	return FileAccess.get_file_as_string(path)
+
+
+func test_a_second_field_upgrades_the_line_rather_than_skipping_it():
+	var source := _source("res://src/rendering/village_renderer.gd")
+	assert_true(
+		source.contains("shared_fence_tile_for("),
+		"the second field still skips an occupied cell and leaves its side open"
+	)
+
+
+func test_a_shared_line_draws_both_its_rails():
+	var source := _source("res://src/world/earth_chunk_manager.gd")
+	assert_true(
+		source.contains("fence_pieces_of("),
+		"one sprite per cell draws one rail, so a shared line would show only one"
+	)
+
+
+func test_a_shared_line_leaves_the_ground_showing_through():
+	var TerrainRenderer = load("res://src/rendering/terrain_renderer.gd")
+	for shared_id in VillageFarm.SHARED_FENCE_TILE_IDS:
+		assert_true(
+			TerrainRenderer.is_overlay_only_modification(String(shared_id)),
+			"%s would paint a bare earth square over ground somebody walks" % shared_id
+		)

@@ -27,10 +27,9 @@ const TerrainRenderer = preload("res://src/rendering/terrain_renderer.gd")
 const _ALL_SUBJECTS := [
 	"farm", "sagewerk", "storage", "wooden_fence", "city_hall",
 	"farm_fence_north", "farm_fence_south", "farm_fence_east", "farm_fence_west",
-	"farm_fence_corner_nw", "farm_fence_corner_sw",
-	"farm_fence_corner_ne", "farm_fence_corner_se",
-	"farm_fence_corner_west", "farm_fence_corner_east",
 ]
+# The corner ids are deliberately NOT here: a corner is still a rail, but it
+# draws no post of its own (see "the corner post is gone from the picture").
 
 var sprite: IllustratedStructureSprite
 
@@ -377,12 +376,24 @@ func test_a_divider_sheet_scales_to_a_real_footprint():
 # -- the farm fence: one sheet, four orientation columns -------------------
 
 
+## The LENGTHS OF RAIL a village builds -- every facing except the corners,
+## which are still rails but draw no wood of their own (see "the corner post
+## is gone from the picture"). Stated once here, because five tests below
+## ask about where a rail's wood lands and a corner has none to ask about.
+func _run_subjects() -> Array:
+	var out: Array = []
+	for facing in VillageFarm.FENCE_TILE_IDS:
+		var subject: String = VillageFarm.fence_tile_for(facing)
+		if not VillageFarm.is_fence_corner_tile(subject):
+			out.append(subject)
+	return out
+
+
 ## Every facing the rule set can build really has art, under exactly the
 ## subject name the tile id implies -- the one link between "a rail was
 ## built facing east" and "an east rail is drawn".
 func test_every_rail_the_village_can_build_has_its_own_art():
-	for facing in VillageFarm.FENCE_TILE_IDS:
-		var subject: String = VillageFarm.fence_tile_for(facing)
+	for subject in _run_subjects():
 		assert_true(sprite.has_subject(subject), "%s has no art at all" % subject)
 
 
@@ -390,9 +401,18 @@ func test_every_rail_the_village_can_build_has_its_own_art():
 ## ground somebody has walked past is an ordinary chunk modification, and an
 ## id that lost its art would also stop being overlay-only and paint a bare
 ## earth square there.
-func test_every_rail_an_older_village_may_still_have_standing_keeps_its_art():
+## ...and what that was really guarding is the OVERLAY, which is what a
+## rail with no art would lose. The legacy ids are corners, so they draw
+## nothing now like every other corner -- but ground somebody has already
+## walked past must still show through them.
+func test_every_rail_an_older_village_may_still_have_standing_keeps_its_ground():
+	var TerrainRenderer2 = load("res://src/rendering/terrain_renderer.gd")
 	for subject in VillageFarm.LEGACY_FENCE_TILE_IDS:
-		assert_true(sprite.has_subject(subject), "%s has no art at all" % subject)
+		assert_true(VillageFarm.is_fence_tile(subject), "%s stopped reading as a rail" % subject)
+		assert_true(
+			TerrainRenderer2.is_overlay_only_modification(subject),
+			"%s would paint a bare earth square on ground already walked past" % subject
+		)
 
 
 ## And the four are really four different pictures -- a sheet read on the
@@ -492,8 +512,8 @@ func _placed_wood_rect(subject: String) -> Rect2:
 ## the edge from the inside puts the same fence half a tile nearer the
 ## viewer, covering nothing.
 func test_no_rails_wood_ever_crosses_into_the_beds():
-	for facing in VillageFarm.FENCE_TILE_IDS:
-		var subject: String = VillageFarm.fence_tile_for(facing)
+	for subject in _run_subjects():
+		var facing: String = VillageFarm.fence_facing_of(subject)
 		var inner: Vector2i = VillageFarm.fence_inner_direction(subject)
 		var placed := _placed_wood_rect(subject)
 		if inner.y > 0:
@@ -509,8 +529,8 @@ func test_no_rails_wood_ever_crosses_into_the_beds():
 ## Flush AGAINST it, not merely inside: a rail that stops short of its own
 ## inner edge leaves a gap between the fence and the crop it encloses.
 func test_every_rail_is_flush_against_the_edge_it_closes():
-	for facing in VillageFarm.FENCE_TILE_IDS:
-		var subject: String = VillageFarm.fence_tile_for(facing)
+	for subject in _run_subjects():
+		var facing: String = VillageFarm.fence_facing_of(subject)
 		var inner: Vector2i = VillageFarm.fence_inner_direction(subject)
 		var placed := _placed_wood_rect(subject)
 		if inner.y > 0:
@@ -526,8 +546,8 @@ func test_every_rail_is_flush_against_the_edge_it_closes():
 ## Every rail really moves -- including the north one the first attempt at
 ## this wrongly left alone.
 func test_every_rail_is_moved_off_the_middle_of_its_tile():
-	for facing in VillageFarm.FENCE_TILE_IDS:
-		var subject: String = VillageFarm.fence_tile_for(facing)
+	for subject in _run_subjects():
+		var facing: String = VillageFarm.fence_facing_of(subject)
 		assert_ne(
 			sprite.footprint_offset(subject, _TILE), Vector2.ZERO,
 			"%s is still drawn where a whole-tile structure would be" % subject
@@ -548,8 +568,7 @@ func test_every_rail_is_moved_off_the_middle_of_its_tile():
 ## Corners are held to both of their axes, which is the whole point of
 ## naming both sides (`corner_nw`/`ne`/`sw`/`se`).
 func test_every_rails_wood_lands_flush_against_the_edge_facing_its_beds():
-	for facing in VillageFarm.FENCE_TILE_IDS:
-		var subject: String = VillageFarm.fence_tile_for(facing)
+	for subject in _run_subjects():
 		var inner: Vector2i = VillageFarm.fence_inner_direction(subject)
 		var placed := _placed_wood_rect(subject)
 		if inner.x > 0:
@@ -657,27 +676,22 @@ func _corner_subjects() -> Array:
 	return out
 
 
+## Still true and still load-bearing, though nothing is drawn there any
+## more: knowing BOTH axes is what lets a corner refuse the diagonal into
+## the crop (VillageFarm._rail_stops_step's own corner branch).
 func test_a_corner_post_sits_in_the_corner_where_its_two_runs_meet():
 	var corners := _corner_subjects()
-	assert_gt(corners.size(), 0, "precondition: the sheet has corner posts")
+	assert_gt(corners.size(), 0, "precondition: a village still raises corners")
 	for subject in corners:
 		var inner: Vector2i = VillageFarm.fence_inner_direction(subject)
 		assert_ne(inner.x, 0, "%s must know which side wall it caps" % subject)
 		assert_ne(inner.y, 0, "%s must know which run it caps, or it cannot sit on the join" % subject)
 
 
-## Concretely, the thing that was on screen twice: a corner post may not
-## hang past the run it caps, in either direction. It used to be drawn as a
-## whole tile of vertical rail while the run sat on that tile's own edge.
-func test_a_corner_post_never_hangs_past_the_run_it_caps():
-	for subject in _corner_subjects():
-		var inner: Vector2i = VillageFarm.fence_inner_direction(subject)
-		var placed := _placed_wood_rect(subject)
-		var past := (placed.position.y + placed.size.y - float(_TILE)) if inner.y > 0 else -placed.position.y
-		assert_lt(
-			past, _EDGE_TOLERANCE,
-			"%s hangs %.0fpx past its own run, on a %dpx tile" % [subject, past, _TILE]
-		)
+## The overshoot this used to guard against cannot happen any more, because
+## a corner draws nothing at all -- asked for directly, *"the corner post
+## can be removed"*. Pinned by test_a_corner_draws_no_post_of_its_own
+## above, which is the stronger statement of the same thing.
 
 
 # -- the divider fringe (IllustratedStructureSprite.even_cell_crop) --------
@@ -1431,3 +1445,42 @@ func test_every_stage_of_one_build_is_drawn_at_the_scale_its_finished_house_will
 				"%s at %.2f is cut %d wide against the finished %d -- %.0f%% off, so it is drawn that much bigger"
 				% [building_id, progress, rising.get_width(), finished.get_width(), off * 100.0]
 			)
+
+
+# -- the corner post is gone from the picture -----------------------------
+#
+# Asked for directly with two enclosures in shot: *"also the corner post
+# can be removed"*.
+#
+# Every cell of fence.png is a WHOLE PANEL -- a post at EACH end with rails
+# between -- and tools/probe_fence_posts.gd measured those two posts 12.5px
+# apart inside a 16px tile. So the runs meeting at a corner already carry a
+# post each, and the corner cell drew a THIRD one beside them: the same
+# doubled-post look that probe was written about, at every turn of every
+# ring.
+#
+# The corner cell stays a rail. It is what refuses the diagonal into the
+# crop (test_village_farm.gd's own
+# test_a_corner_of_a_rectangular_field_still_refuses_the_diagonal_into_the_
+# crop), and a cell that stopped reading as a fence would lose its collider
+# and stop being overlay-only. It simply has no picture of its own now.
+
+const _CORNER_FACINGS := ["corner_nw", "corner_ne", "corner_sw", "corner_se"]
+
+
+func test_a_corner_draws_no_post_of_its_own():
+	for facing in _CORNER_FACINGS:
+		var subject: String = VillageFarm.fence_tile_for(facing)
+		assert_null(
+			sprite.footprint_texture(subject, _TILE),
+			"%s draws a third post beside the two its own runs already carry" % subject
+		)
+
+
+## The rails themselves are untouched: this removes a post, not a fence.
+func test_every_run_still_draws_its_own_panel():
+	for subject in _FENCE_SUBJECTS:
+		assert_not_null(
+			sprite.footprint_texture(subject, _TILE),
+			"%s is a length of rail and must still be drawn" % subject
+		)

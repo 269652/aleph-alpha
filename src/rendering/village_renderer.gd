@@ -1685,8 +1685,37 @@ func _fence_the_fields(
 				continue
 			if beds.has(cell):
 				continue  # the neighbouring farm's crop, not this farm's fence line
-			if not is_buildable.call(cell) or is_occupied.call(cell):
-				continue  # water, a building, or paving -- the paving being the gate
+			if not is_buildable.call(cell):
+				continue  # water
+			var g_probe: Vector2i = chunk_coord * chunk_size + cell
+			var standing: String = (
+				world.modification_at_global(g_probe.x, g_probe.y)
+				if world.has_method("modification_at_global") else ""
+			)
+			# TWO RAILS ON ONE TILE, where two fields meet.
+			#
+			# Reported with both enclosures in shot: *"It should be possible
+			# to build two rails on a single tile so both enclosures are
+			# fenced properly."* A rail is an ordinary chunk modification and
+			# a tile holds ONE id, so the second field found the cell
+			# occupied and was skipped -- measured on a real village
+			# (tools/probe_neighbouring_fences.gd), every contested cell
+			# along the line carried field 0's `east` and field 1 had no
+			# `west` rail at all, leaving its whole shared side open.
+			#
+			# Asked BEFORE the occupancy guard, because the cell being
+			# occupied by the other field's rail is precisely the case. Only
+			# the opposite rail shares a line, and the same rail asked for
+			# again returns "" -- so a reload still re-derives the ring and
+			# builds nothing twice, which this function's own doc requires.
+			var shared: String = VillageFarm.shared_fence_tile_for(
+				standing, VillageFarm.fence_facing(cell, local_beds)
+			)
+			if shared != "":
+				world.build_at_global(g_probe.x, g_probe.y, shared)
+				continue
+			if is_occupied.call(cell):
+				continue  # a building, or paving -- the paving being the gate
 			# Deliberately NOT skipped for standing on a street ROW, the way
 			# a BED is (_workable_field_of). Reported with the bed circled:
 			# "it's still not fully enclosing the bed" -- a field sits below

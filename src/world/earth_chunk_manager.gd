@@ -17589,10 +17589,24 @@ func _despawn_logistics_workers_at(chunk_coord: Vector2i, local_cell: Vector2i) 
 func _sync_structure_art(
 	chunk_coord: Vector2i, local_cell: Vector2i, previous_tile_id: String, new_tile_id: String
 ) -> void:
-	if previous_tile_id != new_tile_id and _illustrated_structure_sprite.has_subject(previous_tile_id):
+	if previous_tile_id != new_tile_id and _draws_structure_art(previous_tile_id):
 		_despawn_structure_art_at(chunk_coord, local_cell)
-	if previous_tile_id != new_tile_id and _illustrated_structure_sprite.has_subject(new_tile_id):
+	if previous_tile_id != new_tile_id and _draws_structure_art(new_tile_id):
 		_spawn_structure_art_for(chunk_coord, local_cell, new_tile_id)
+
+
+## Whether this tile has any real art to stand on it.
+##
+## Deliberately not has_subject alone. A SHARED LINE between two fields
+## (VillageFarm.SHARED_FENCE_TILE_IDS) is an id of its own that the art
+## registry has never heard of -- it is DEFINED as the two ordinary rails
+## standing there, and those are what get drawn. A corner is the mirror
+## case and answers false: it is still a rail, and it draws nothing.
+func _draws_structure_art(tile_id: String) -> bool:
+	for piece in VillageFarm.fence_pieces_of(tile_id):
+		if _illustrated_structure_sprite.has_subject(String(piece)):
+			return true
+	return _illustrated_structure_sprite.has_subject(tile_id)
 
 
 ## Spawns exactly one real-art overlay Sprite2D for `subject` at
@@ -17614,28 +17628,50 @@ func _spawn_structure_art_for(chunk_coord: Vector2i, local_cell: Vector2i, subje
 	var by_cell: Dictionary = _structure_art_sprites[chunk_coord]
 	if by_cell.has(local_cell):
 		return
-	var texture := _illustrated_structure_sprite.footprint_texture(subject, TerrainRenderer.TILE_SIZE)
-	if texture == null:
-		return
+	# ONE SPRITE PER PIECE, because one cell can carry more than one.
+	#
+	# A SHARED LINE between two neighbouring fields is both their rails
+	# standing on the same tile (VillageFarm.SHARED_FENCE_TILE_IDS), each
+	# drawn on its OWN inner edge -- which is exactly the picture asked for:
+	# *"two rails on a single tile so both enclosures are fenced properly"*.
+	# Nothing new is drawn: a shared id is defined as the two ordinary rails,
+	# so each piece keeps the art and the inner-edge offset it already had.
+	var pieces: Array = VillageFarm.fence_pieces_of(subject)
+	if pieces.is_empty():
+		pieces = [subject]
 	var global_cell: Vector2i = chunk_coord * CHUNK_SIZE + local_cell
 	var tile_center := (Vector2(global_cell) + Vector2(0.5, 0.5)) * TerrainRenderer.TILE_SIZE
 	var tile_bottom := tile_center.y + TerrainRenderer.TILE_SIZE * 0.5
-	var sprite := Sprite2D.new()
-	sprite.texture = texture
-	sprite.position = (
-		Vector2(tile_center.x, tile_bottom - float(texture.get_height()) * 0.5)
-		+ _illustrated_structure_sprite.footprint_offset(subject, TerrainRenderer.TILE_SIZE)
-	)
-	_entities_parent.add_child(sprite)
-	by_cell[local_cell] = sprite
+	var sprites: Array = []
+	for piece in pieces:
+		var texture := _illustrated_structure_sprite.footprint_texture(
+			String(piece), TerrainRenderer.TILE_SIZE
+		)
+		if texture == null:
+			continue
+		var sprite := Sprite2D.new()
+		sprite.texture = texture
+		sprite.position = (
+			Vector2(tile_center.x, tile_bottom - float(texture.get_height()) * 0.5)
+			+ _illustrated_structure_sprite.footprint_offset(
+				String(piece), TerrainRenderer.TILE_SIZE
+			)
+		)
+		_entities_parent.add_child(sprite)
+		sprites.append(sprite)
+	if sprites.is_empty():
+		return
+	by_cell[local_cell] = sprites
 
 
 func _despawn_structure_art_at(chunk_coord: Vector2i, local_cell: Vector2i) -> void:
 	var by_cell: Dictionary = _structure_art_sprites.get(chunk_coord, {})
-	var sprite: Node = by_cell.get(local_cell)
-	if sprite == null:
+	var sprites: Array = by_cell.get(local_cell, [])
+	if sprites.is_empty():
 		return
-	sprite.free()
+	for sprite in sprites:
+		if is_instance_valid(sprite):
+			sprite.free()
 	by_cell.erase(local_cell)
 
 
@@ -18450,7 +18486,7 @@ func _load_chunk(chunk_coord: Vector2i) -> void:
 		# _place_completed_construction_project) but draws itself through
 		# its own building node -- never a second, single-tile overlay on
 		# top of it.
-		if _illustrated_structure_sprite.has_subject(subject) and not chunk.buildings.has(local_cell):
+		if _draws_structure_art(subject) and not chunk.buildings.has(local_cell):
 			_spawn_structure_art_for(chunk_coord, local_cell, subject)
 
 	# A freshly (re)loaded chunk can bring either a Sägewerk or a Storage
@@ -20308,8 +20344,10 @@ func _unload_chunk(chunk_coord: Vector2i) -> void:
 			_resync_logistics_for_farm(farm_chunk_coord, farm_local_cell)
 	_resync_all_chain_legs()
 
-	for art_sprite in _structure_art_sprites.get(chunk_coord, {}).values():
-		art_sprite.free()
+	for art_sprites in _structure_art_sprites.get(chunk_coord, {}).values():
+		for art_sprite in art_sprites:
+			if is_instance_valid(art_sprite):
+				art_sprite.free()
 	_structure_art_sprites.erase(chunk_coord)
 
 	for sprite in _flower_sprites.get(chunk_coord, {}).values():
