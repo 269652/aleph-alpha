@@ -793,3 +793,131 @@ func test_a_house_really_draws_smaller_than_a_manor():
 func test_a_cottage_still_fills_most_of_its_plot():
 	var cottage := _drawn_size_of("house_small", 29)
 	assert_gt(float(cottage.x) / float(2 * 32), 0.6, "a cottage this small is a doll's house")
+
+
+# -- the crop must hold the WHOLE drawing (2026-09-20) ----------------------
+#
+# Reported live with five cottages in shot: *"Cottages are still slightly
+# clipped at the top despite having free space in the 2x2 tile."* They
+# were, and the cut happened in the SLICER, long before anything placed
+# them: the roof apex, its finial and the chimney cap were all outside the
+# cropped cell.
+#
+# The cause is measurable and is not about houses. `divider_bands` calls a
+# sheet row a divider when 60% of it is magenta, which is true of a row
+# crossing eight roof APEXES -- sparse art against background reads as
+# background. On cottage_*.png and manor_*.png there is no drawn divider to
+# find at all (no row anywhere is even 99% magenta; measured max 0.989),
+# so the band simply started wherever the roofs' silhouette happened to
+# thin past the threshold.
+#
+# The invariant below is the one that catches that class of bug whatever
+# its cause: **the sheet row directly above a cell's crop must be clear of
+# that cell's own art.** If it is not, the crop cut through the drawing.
+
+## Every house sheet a real building draws from, with the grid kind and
+## cell the game itself would ask for.
+func _house_sheet_cells() -> Array:
+	var cells: Array = []
+	for building_id in BuildingCatalog.BUILDING_IDS:
+		for seed_value in [1, 3, 7, 42]:
+			var chain: Array = BuildingCatalog.finished_sheet_chain(building_id, seed_value)
+			if chain.is_empty():
+				continue
+			var entry: Dictionary = chain[0]
+			entry["building_id"] = building_id
+			cells.append(entry)
+	return cells
+
+
+## How much of one sheet row has anything on it at all -- anything that is
+## not the chroma-key background -- across `from_x`..`to_x`.
+func _drawn_share(image: Image, y: int, from_x: int, to_x: int) -> float:
+	var span := to_x - from_x + 1
+	if span <= 0:
+		return 0.0
+	var drawn := 0
+	for x in range(from_x, to_x + 1):
+		var color := image.get_pixel(x, y)
+		var background: bool = color.r >= 0.85 and color.b >= 0.85 and color.g <= 0.15
+		if not background:
+			drawn += 1
+	return float(drawn) / float(span)
+
+
+## The band of "partly covered" that means a crop sliced through a picture.
+##
+## The row directly above a correct crop is one of two things, and neither
+## is partial:
+##
+## - **essentially empty** (0% to 17% covered) -- open background where the
+##   sheet simply spaces its rows apart, the remainder being antialiasing
+##   where a chimney cap meets the gap;
+## - **essentially full** (100%) -- the sheet's own boundary, which on
+##   these sheets is two rows deep (a solid dark line under a pale rule),
+##   or the bottom edge of the neighbouring cell.
+##
+## A row that is *partly* covered is neither: it is the silhouette of a
+## roof, which is exactly the thing a bad crop cuts through. Every cut
+## measured before the fix sat at **40% to 52%**. So the test is a band,
+## not a bound -- and that shape is the finding, not a convenience.
+const _CUT_ROW_MIN := 0.25
+const _CUT_ROW_MAX := 0.90
+
+
+func test_no_house_crop_cuts_through_the_top_of_its_own_drawing():
+	var sprite := IllustratedStructureSprite.new()
+	for entry in _house_sheet_cells():
+		var image: Image = (load(entry["path"]) as Texture2D).get_image()
+		var rect: Rect2i = sprite._cell_rect_for(
+			entry["path"], image, entry["columns"], entry["rows"], entry["row"], entry["column"], entry["grid"]
+		)
+		var above := rect.position.y - 1
+		if above < 0:
+			continue  # a cell on the sheet's own top edge has nothing above it
+		var share := _drawn_share(image, above, rect.position.x, rect.position.x + rect.size.x - 1)
+		assert_false(
+			share >= _CUT_ROW_MIN and share <= _CUT_ROW_MAX,
+			"%s (%s cell %d,%d): the sheet row above the crop is %d%% covered -- neither empty nor a boundary, so the crop sliced through a roof"
+			% [entry["building_id"], String(entry["path"]).get_file(), entry["column"], entry["row"], int(share * 100.0)]
+		)
+
+
+## The other half of the same fix. Reading a cell by where its ART is
+## reaches up past the roof -- and on some cells that is far enough to
+## swallow the sheet's own drawn RULE LINE, which then ships as a pale bar
+## across the top of the cottage. A roof apex is sparse (9 to 31 opaque
+## pixels of ~174); a rule line spans the whole cell. Measured: cottage_2
+## and cottage_4 grew one, cottage_3 did not.
+func test_no_house_crop_opens_with_the_sheets_own_rule_line():
+	var sprite := IllustratedStructureSprite.new()
+	for entry in _house_sheet_cells():
+		var frame: Image = sprite._frame_image(
+			entry["path"], entry["columns"], entry["rows"], entry["row"], entry["column"], entry["grid"]
+		)
+		assert_not_null(frame, "%s draws nothing" % entry["building_id"])
+		if frame == null:
+			continue
+		for y in mini(3, frame.get_height()):
+			assert_false(
+				_is_rule_line_row(frame, y),
+				"%s (%s cell %d,%d): row %d of the crop is the sheet's rule line, not the drawing"
+				% [entry["building_id"], String(entry["path"]).get_file(), entry["column"], entry["row"], y]
+			)
+
+
+## A full-width bar of pale pixels: the sheet's drawn rule, never a roof.
+func _is_rule_line_row(image: Image, y: int) -> bool:
+	var width := image.get_width()
+	var opaque := 0
+	var pale := 0
+	for x in width:
+		var color := image.get_pixel(x, y)
+		if color.a <= 0.02:
+			continue
+		opaque += 1
+		if color.r >= 0.85 and color.g >= 0.85 and color.b >= 0.85:
+			pale += 1
+	if opaque < int(float(width) * 0.8):
+		return false
+	return float(pale) / float(maxi(opaque, 1)) >= 0.5
