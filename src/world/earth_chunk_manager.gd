@@ -9945,6 +9945,29 @@ func stock_pond_at(global_x: int, global_y: int) -> void:
 	_sync_pond_fish_markers(chunk_coord, anchor)
 
 
+## Whether the pond this cell belongs to has EVER been stocked, which is a
+## different question from whether it holds fish now.
+##
+## Reported live with the water in shot, after the stock was made to
+## persist: *"also no fish in pond"*. Persisting a stock keeps one that
+## EXISTS; a pond dug by a build that never kept one has no record at all,
+## on disk or in memory, and the village pass that stocks a pond returns
+## early on water that is already dug (correctly -- a fisher stocks a pond
+## once). So every pond in every save made before POND_FISH_DIR existed
+## was empty for ever.
+##
+## The village stocks such a pond on its next visit (VillageRenderer.
+## _dig_fisher_ponds_if_missing), and this is the question that lets it do
+## so without refilling one it has merely FISHED OUT -- which is the one
+## thing persisting the stock exists to prevent. An emptied pond carries a
+## record of 0.0; a pond nobody ever stocked carries no record at all.
+func pond_has_been_stocked(global_x: int, global_y: int) -> bool:
+	var anchor = _pond_anchor(global_x, global_y)
+	if anchor == null:
+		return false
+	return _pond_fish.get(_chunk_coord_for_tile(anchor), {}).has(anchor)
+
+
 ## How many fish the pond this cell belongs to is holding -- 0.0 for dry
 ## ground, and for water nobody has stocked.
 func pond_fish_at(global_x: int, global_y: int) -> float:

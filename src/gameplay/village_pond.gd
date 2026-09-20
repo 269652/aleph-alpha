@@ -27,12 +27,44 @@ const BuildingCatalog = preload("res://src/gameplay/building_catalog.gd")
 const HUT_BUILDING_ID := "fisher_hut"
 
 ## How far from its own water a hut may stand, in tiles, measured from the
-## nearest cell of each. Two, not one: the water is fenced (VillageFarm's
-## own rails, on the ring), so a hut demanding to touch the water could
-## only ever stand on the rails themselves, and there would be no hut at
-## all. Two clears the ring and still reads as a building AT the pond
-## rather than one that happens to be near it.
-const HUT_BANK_REACH_TILES := 2
+## nearest cell of each.
+##
+## Not one, for a reason that has not changed: the water is fenced
+## (VillageFarm's own rails, on the ring), so a hut demanding to touch the
+## water could only ever stand on the rails themselves, and there would be
+## no hut at all.
+##
+## THREE rather than two, and measured rather than chosen. Reported live at
+## the water — *"no Fisher Hut is near"* — and found on two real villages
+## of three (tools/probe_village_geometry.gd). Both of those fishers live
+## at the far west end of the street with a street row above them and the
+## next below, so the only ground of their own is a two-row strip that the
+## water exactly fills; a 3x2 works plus its doorstep needs three rows.
+## Sites available on those banks, counted:
+##
+##     works  | reach 2 | reach 3 | reach 4
+##     3x2    |    0    |    1    |  5 / 9
+##     2x2    |    0    |    3    | 10 / 13
+##     2x1    |    2    |    5    | 15 / 16
+##
+## The works keeps the farmhouse's footprint because it is DRAWN as a
+## farmhouse until its own sheet exists ("use farmhouse sprite until
+## illustration exists"), and a 2x1 building drawn off a farmhouse sheet
+## would look like neither. So the reach is the lever, and three is the
+## smallest value that leaves those banks with anywhere at all.
+##
+## THE COST, stated rather than discovered later: at three tiles the one
+## site those two villages have is on the next house row, across the
+## street from the water. A fisher walks out of their hut, over the road,
+## and down to their pond. That is the shape of the thing already reported
+## once about the pond itself ("it's randomly placed somewhere not
+## adjacent to the fishers house or across the street"), accepted here
+## deliberately for the hut, because the alternative measured at zero.
+##
+## Pinned by test_the_bank_reach_is_the_measured_three_and_still_clears_
+## the_frame, so neither half of that — the floor or the figure — can
+## drift without a test saying so.
+const HUT_BANK_REACH_TILES := 3
 
 ## Where the water's own edge is, as the surface overlay reads it.
 ##
