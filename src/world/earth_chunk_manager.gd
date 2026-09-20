@@ -145,6 +145,7 @@ const FlyerPersonality = preload("res://src/gameplay/flyer_personality.gd")
 const PiscivoreBirdRenderer = preload("res://src/rendering/piscivore_bird_renderer.gd")
 const VillageRenderer = preload("res://src/rendering/village_renderer.gd")
 const VillageFarm = preload("res://src/gameplay/village_farm.gd")
+const VillageCropChoice = preload("res://src/gameplay/village_crop_choice.gd")
 const VillagePond = preload("res://src/gameplay/village_pond.gd")
 const AquaticPopulationModel = preload("res://src/world/aquatic_population_model.gd")
 const NpcMarker = preload("res://src/rendering/npc_marker.gd")
@@ -19416,6 +19417,27 @@ func begin_build_project(
 	var project := start_build_project(chunk_coord, origin, blueprint_id, household_id)
 	project.status = ConstructionProject.Status.IN_PROGRESS
 	return project
+
+
+## What a field at this global cell should sow (docs/concept/
+## village_farms.md, "What a field sows follows the village's need").
+##
+## Reads the SAME assembly state the needs panel shows, so what a village
+## says it lacks and what it plants cannot disagree -- and the rule itself
+## is VillageCropChoice's, never a second one written here.
+##
+## `default_crop` is the villager's own traditional crop, and it is the
+## whole answer where there is no settlement or nobody has assessed it yet:
+## the same fail-open shape every other hook on this path uses.
+func sow_choice_at(global_x: int, global_y: int, default_crop: String) -> String:
+	var state := _village_assembly_state(_chunk_coord_for_tile(Vector2i(global_x, global_y)))
+	if state.is_empty():
+		return default_crop
+	return VillageCropChoice.choose(
+		state.get("satisfaction", {}),
+		VillageCropChoice.can_bake(state.get("present_building_ids", [])),
+		default_crop
+	)
 
 
 ## The real labour hours a build of `blueprint_id` asks for -- off the SAME

@@ -122,3 +122,34 @@ func test_the_choice_is_deterministic():
 	var first := VillageCropChoice.choose(reading, true, "wheat")
 	for _i in 5:
 		assert_eq(VillageCropChoice.choose(reading, true, "wheat"), first)
+
+
+## Whether wheat answers anything here at all: a mill AND a bakery, because
+## the chain is grain -> flour -> bread and a village with only half of it
+## still cannot eat (docs/concept/milling_and_baking.md).
+func test_wheat_needs_both_halves_of_the_chain_before_it_is_worth_sowing():
+	assert_true(VillageCropChoice.can_bake(["mill", "bakery", "farmhouse"]))
+	assert_false(VillageCropChoice.can_bake(["mill"]), "flour nobody can bake")
+	assert_false(VillageCropChoice.can_bake(["bakery"]), "an oven with no flour")
+	assert_false(VillageCropChoice.can_bake([]), "the reported village")
+
+
+## Both links are real placeables rather than names invented here -- a
+## chain named after buildings the world cannot raise would gate wheat
+## for ever.
+func test_both_links_of_the_chain_are_real_buildable_things():
+	var catalog := ItemCatalog.new()
+	assert_gt(VillageCropChoice.BAKING_CHAIN.size(), 0, "the premise: there is a chain")
+	for structure_id in VillageCropChoice.BAKING_CHAIN:
+		assert_true(catalog.has(structure_id), "%s is not a real thing" % structure_id)
+
+
+## The end-to-end shape of the report: a village with three farmhouses, no
+## mill, wheat in the store and everybody hungry stops sowing wheat.
+func test_the_reported_village_stops_sowing_what_it_cannot_eat():
+	var reported := {FOOD: 0.5, "herb": 0.0, "bread": 0.5}
+	var chosen := VillageCropChoice.choose(
+		reported, VillageCropChoice.can_bake(["farmhouse", "warehouse"]), "wheat"
+	)
+	assert_ne(chosen, "wheat", "205 wheat and half rations is what this fixes")
+	assert_eq(chosen, "herb", "and the good actually at zero is the one it sows")

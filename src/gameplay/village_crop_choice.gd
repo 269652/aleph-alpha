@@ -46,6 +46,27 @@ const SOWABLE := {
 const MILLED_CROP := "wheat"
 
 
+## What has to be STANDING before wheat is worth putting in the ground.
+##
+## Both links, because the chain is grain -> flour -> bread
+## (docs/concept/milling_and_baking.md) and a village with only half of it
+## still cannot eat: a mill with no bakery makes flour nobody bakes, a
+## bakery with no mill is an oven with no flour. Real placeable ids, so a
+## chain named after something the world cannot raise could never gate
+## wheat for ever (both test-pinned).
+const BAKING_CHAIN: Array[String] = ["mill", "bakery"]
+
+
+## Whether this village can really turn grain into a meal.
+## `present_building_ids` is EarthChunkManager._settlement_present_building_
+## ids' own answer -- what actually stands here.
+static func can_bake(present_building_ids) -> bool:
+	for required in BAKING_CHAIN:
+		if not (required in present_building_ids):
+			return false
+	return true
+
+
 static func sowable_crops() -> Array:
 	return SOWABLE.keys()
 
