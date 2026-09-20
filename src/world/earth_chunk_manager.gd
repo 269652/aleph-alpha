@@ -45,6 +45,8 @@ const DecorationLod = preload("res://src/rendering/decoration_lod.gd")
 const DisplayScaling = preload("res://src/rendering/display_scaling.gd")
 const ProceduralGrassSprite = preload("res://src/rendering/procedural_grass_sprite.gd")
 const IllustratedGrassPatch = preload("res://src/rendering/illustrated_grass_patch.gd")
+const IllustratedFernPatch = preload("res://src/rendering/illustrated_fern_patch.gd")
+const ForestFern = preload("res://src/world/forest_fern.gd")
 const IllustratedWheatPatch = preload("res://src/rendering/illustrated_wheat_patch.gd")
 const FlowerPatch = preload("res://src/world/flower_patch.gd")
 const SeedDispersal = preload("res://src/world/seed_dispersal.gd")
@@ -189,6 +191,7 @@ const VillageCensus = preload("res://src/emergence/village_census.gd")
 const VillageImmigration = preload("res://src/emergence/village_immigration.gd")
 const MerchantVisit = preload("res://src/emergence/merchant_visit.gd")
 const SettlementSurplus = preload("res://src/emergence/settlement_surplus.gd")
+const StallRestock = preload("res://src/emergence/stall_restock.gd")
 const HouseholdWellbeing = preload("res://src/emergence/household_wellbeing.gd")
 const VillageEstates = preload("res://src/emergence/village_estates.gd")
 const EstateConsumption = preload("res://src/emergence/estate_consumption.gd")
@@ -482,6 +485,11 @@ var _grass_frog_renderer := GrassFrogRenderer.new()
 ## per-chunk-random-count decomposer/wild-crop spawners.
 var _grass_sprite_generator := ProceduralGrassSprite.new()
 var _illustrated_grass := IllustratedGrassPatch.new()
+## The wood's own ground cover (docs/concept/ferns.md). One renderer for
+## every loaded chunk, exactly as the grass has one: the sheet, the
+## material and the mesh are all shared, and only the per-band MultiMesh
+## instances are per chunk.
+var _illustrated_ferns := IllustratedFernPatch.new()
 ## The season's tint on living green, as last pushed in by World (see
 ## set_season_tint / SeasonalFoliage). Stored rather than read live because
 ## the things that need it are refreshed on their own cadences -- the grass
@@ -828,6 +836,10 @@ func _obstacle_radius(node: Node) -> float:
 			return maxf(extents.x, extents.y)
 	return DEFAULT_OBSTACLE_RADIUS
 var _grass_sims: Dictionary = {}  # Vector2i chunk_coord -> TallGrass
+## A wood's ferns, the fourth ground cover and the first one a forest ever
+## had (docs/concept/ferns.md).
+var _fern_sims: Dictionary = {}  # Vector2i chunk_coord -> ForestFern
+var _fern_sprites: Dictionary = {}  # Vector2i chunk_coord -> {band index int -> MultiMeshInstance2D}
 ## Vector2i chunk_coord -> FlowerPatch, and the Sprite2D per flower cell.
 var _flower_patches: Dictionary = {}
 var _flower_sprites: Dictionary = {}
@@ -855,6 +867,11 @@ var _grass_turn_progress := 0.0
 ## sync_grass_season, mirroring _last_tree_season exactly.
 var _last_grass_season := ""
 var _grass_refresh_accumulator := 0.0
+## The ferns' own, so a wood's refresh cadence is stated rather than
+## smuggled onto the grass's counter -- the interval is shared, the
+## accumulator is not, because step_ferns and step_tall_grass are called
+## separately and either could be turned off without the other.
+var _fern_refresh_accumulator := 0.0
 ## Wild carrot/potato (see docs/concept/wild_crops.md). One WildCropPatch per
 ## chunk PER CROP, not one sim juggling both -- see WildCropPatch's own doc
 ## comment. chunk_coord -> {crop_id String -> WildCropPatch}.
@@ -3865,6 +3882,13 @@ func step_settlements(delta_seconds: float) -> void:
 		# (docs/concept/traveling_merchants.md) -- BEFORE the build and
 		# immigration steps, so gold that arrives this tick is gold the
 		# village can act on this tick.
+		# ...and BEFORE he does, the village puts its goods out on the
+		# stall. A merchant buys a village's surplus, and what is on the
+		# stall is as much the village's as what is in the store -- he sees
+		# every container either way (SettlementSurplus), so the order here
+		# is about the VILLAGERS: a stall stocked before the visit is a
+		# stall somebody can buy a meal from this tick.
+		_step_stall_restock(settlement_id, village_market)
 		_step_merchant_visits(settlement_id, market, village_market)
 		# A fed village with room takes a household in, BEFORE the build
 		# step: a newcomer arriving this tick is owed a house this tick,
@@ -4887,6 +4911,51 @@ var _settlement_merchant_carry: Dictionary = {}
 ## Runs for loaded and UNLOADED settlements alike, unlike immigration: it
 ## needs only the market's own stock, which is persisted, so a village goes
 ## on trading while the player is away.
+## The village puts its goods out: the STORE keeps the STALL stocked
+## (docs/concept/village_warehouse.md, "The stall is the shop window of the
+## store"; docs/concept/milling_and_baking.md's own "three food containers,
+## one eater").
+##
+## The chain worked right up to the store and stopped there. Measured
+## (tools/probe_food_containers.gd) on a real village over a 600-second
+## watch: a farmhouse filling, a carter's round emptying it onto a cart,
+## the cart emptying into the warehouse -- and the stall, the thing
+## VillageMarket.buy_meal actually sells from, empty at every sample but
+## one.
+##
+## REAL UNITS MOVE. Whatever reaches the stall is withdrawn from the
+## store's own shelf, so the village holds exactly what it held before, in
+## a different place -- the same "nothing is conjured and nothing vanishes"
+## rule the merchant's sale keeps. A village with no store has no shop
+## window to fill and keeps the behaviour it always had: its producers
+## carry their own take in (NpcMarker.haul_stock_to_village).
+func _step_stall_restock(settlement_id: String, village_market) -> void:
+	if village_market == null:
+		return
+	var chunk_coord := RegionalTrade.chunk_coord_of(settlement_id)
+	if not _loaded_chunks.has(chunk_coord):
+		return
+	var households := _households_in_settlement(settlement_id).size()
+	if households <= 0:
+		return
+	var stall_food := float(SettlementFood.food_stock(null, village_market, _item_catalog, []))
+	# The STORE, not every shelf: a farmhouse is where a harvest waits for
+	# the carter, and taking off it here would be a second carter's round
+	# that nobody walks (see _settlement_larder_stocks for the same split).
+	for shelf in _shelves_in_settlement_chunk(settlement_id, [VillageLayout.WAREHOUSE_BUILDING_ID]):
+		var drawn: Dictionary = StallRestock.draw(
+			stall_food, households, shelf.stock, _food_ids_in(shelf.stock)
+		)
+		for item_id in drawn:
+			var units := int(floor(float(drawn[item_id])))
+			if units <= 0:
+				continue
+			if not shelf.remove_stock(String(item_id), units):
+				continue
+			village_market.add_stock(String(item_id), float(units))
+			stall_food += float(units)
+
+
 func _step_merchant_visits(settlement_id: String, market, village_market = null) -> void:
 	if market == null:
 		return
@@ -4986,6 +5055,18 @@ func _merchant_food_ids() -> Array:
 	for item_id in MerchantVisit.buy_list():
 		if _item_catalog.kind_of(item_id) == "food":
 			ids.append(item_id)
+	return ids
+
+
+## Which of the ids in `stock` this game calls food. Deliberately NOT
+## _merchant_food_ids: that answers "food a merchant deals in", which is a
+## question about the buy list, and a stall sells whatever its own village
+## put in its store -- including anything the cart never wanted.
+func _food_ids_in(stock: Dictionary) -> Array:
+	var ids: Array = []
+	for item_id in stock:
+		if _item_catalog.kind_of(String(item_id)) == "food":
+			ids.append(String(item_id))
 	return ids
 
 
@@ -8964,6 +9045,7 @@ func set_wind_strength(strength: float) -> void:
 	_wind_sway.set_wind_strength(strength)
 	_tree_renderer.set_wind_strength(strength)
 	_illustrated_grass.set_wind_strength(strength)
+	_illustrated_ferns.set_wind_strength(strength)
 	IllustratedWheatPatch.set_wind_strength(strength)
 
 
@@ -8975,6 +9057,7 @@ func set_wind_strength(strength: float) -> void:
 func set_season_tint(tint: Color) -> void:
 	_season_tint = tint
 	_illustrated_grass.set_season_tint(tint)
+	_illustrated_ferns.set_season_tint(tint)
 
 
 ## Pushes the real, live sun position (see solar_position.gd's
@@ -9545,6 +9628,102 @@ func step_tall_grass(delta_seconds: float) -> void:
 	_graze_by_herbivores()
 	for chunk_coord in _grass_sims.keys():
 		_sync_grass_sprites(chunk_coord)
+
+
+## The wood's own ground cover, advanced and re-synced on the same batched
+## refresh the grass uses (docs/concept/ferns.md).
+##
+## Shares GRASS_REFRESH_INTERVAL's own accumulator deliberately rather than
+## keeping a second one: a fern and a blade are re-synced by the same walk
+## over the same loaded chunks, so two accumulators would mean two walks at
+## two cadences for one visible result.
+##
+## A step nothing calls grows nothing {D} a bug this repo has already
+## shipped once with wild crops {D} so this is wired into the world's own
+## ecology tick beside step_tall_grass, and a test pins that it really
+## advances a planted fern.
+func step_ferns(delta_seconds: float) -> void:
+	_fern_refresh_accumulator += delta_seconds
+	if _fern_refresh_accumulator < GRASS_REFRESH_INTERVAL:
+		return
+	var elapsed := _fern_refresh_accumulator
+	_fern_refresh_accumulator = 0.0
+
+	var growth_modifier := _season_cycle.growth_modifier(_world_age_seconds)
+	for sim in _fern_sims.values():
+		sim.advance(elapsed, growth_modifier)
+	for chunk_coord in _fern_sims.keys():
+		_sync_fern_sprites(chunk_coord)
+
+
+## One MultiMeshInstance2D draw call per Y-band, exactly as the grass does
+## and through the grass's own band maths (IllustratedFernPatch forwards
+## to it) {D} so a walker cannot read as behind the ferns and in front of
+## the grass in the same step.
+##
+## Filtered to the player's own tile-precise view window on top of the
+## coarser chunk-level _decorates gate, the same two-stage cutoff
+## _sync_grass_sprites documents: a chunk is CHUNK_SIZE tiles square while
+## the camera only ever shows a much smaller window.
+func _sync_fern_sprites(chunk_coord: Vector2i) -> void:
+	if not _decorates(chunk_coord):
+		_drop_decoration(_fern_sprites, chunk_coord)
+		return
+	var sim = _fern_sims.get(chunk_coord)
+	if sim == null:
+		return
+	var bands: Dictionary = _fern_sprites.get(chunk_coord, {})
+	var origin := chunk_coord * CHUNK_SIZE
+	var half_span := _visible_half_span_tiles()
+	var cards_by_band: Dictionary = {}
+	for cell in sim.get_patch_cells():
+		var tile: Vector2i = origin + (cell as Vector2i)
+		if not DecorationLod.keeps_decoration_tile(tile, _disturbance_center_tile, half_span, GRASS_VIEW_BUFFER_TILES):
+			continue
+		var cell_spec := {
+			"seed": hash("%d_%d_fern_clump" % [tile.x, tile.y]),
+			"ground_position": Vector2(
+				(tile.x + 0.5) * TerrainRenderer.TILE_SIZE,
+				(tile.y + 0.5) * TerrainRenderer.TILE_SIZE
+			),
+			"growth": sim.get_growth(cell),
+		}
+		# Bucketed per CARD, not per cell: each card carries its own offset
+		# from the cell's nominal ground position, so a card's own REAL
+		# world Y decides which band it Y-sorts with. The same fix long
+		# grass needed after a live report, inherited by construction.
+		for card in IllustratedFernPatch.cards_for_cell(cell_spec):
+			var local_row := IllustratedFernPatch.local_row_for_world_y(
+				card.position.y, origin.y, TerrainRenderer.TILE_SIZE
+			)
+			var band := IllustratedFernPatch.band_index_for_local_y(local_row, CHUNK_SIZE)
+			var list: Array = cards_by_band.get(band, [])
+			list.append(card)
+			cards_by_band[band] = list
+
+	# A band whose last clump died (cropped, built on, or walked out of
+	# view) is freed outright rather than left holding a zero-instance
+	# MultiMesh.
+	for band in bands.keys().duplicate():
+		if not cards_by_band.has(band):
+			bands[band].queue_free()
+			bands.erase(band)
+
+	for band in cards_by_band:
+		var mmi: MultiMeshInstance2D = bands.get(band)
+		if mmi == null:
+			mmi = MultiMeshInstance2D.new()
+			mmi.position = Vector2(
+				(origin.x + CHUNK_SIZE * 0.5) * TerrainRenderer.TILE_SIZE,
+				IllustratedFernPatch.band_anchor_world_y(
+					band, origin.y, CHUNK_SIZE, TerrainRenderer.TILE_SIZE
+				)
+			)
+			_entities_parent.add_child(mmi)
+			bands[band] = mmi
+		_illustrated_ferns.fill_band(mmi, mmi.position, cards_by_band[band])
+
+	_fern_sprites[chunk_coord] = bands
 
 
 ## Mirrors step_tall_grass's own batched-refresh shape exactly (real growth
@@ -10207,6 +10386,7 @@ func _build_farm_plot_marker(tile: Vector2i) -> FarmPlotMarker:
 ## uniform" shape grass's own single call already uses.
 func set_grass_walker_position(world_position: Vector2) -> void:
 	_illustrated_grass.set_walker_position(world_position)
+	_illustrated_ferns.set_walker_position(world_position)
 	IllustratedWheatPatch.set_walker_position(world_position)
 
 
@@ -16190,7 +16370,7 @@ func _despawn_building_node(chunk_coord: Vector2i, origin_local: Vector2i) -> vo
 func _block_ground_cover_on_cells(chunk_coord: Vector2i, local_cells: Array) -> void:
 	if local_cells.is_empty():
 		return
-	for sims in [_grass_sims, _flower_patches, _scrub_sims, _lichen_sims]:
+	for sims in [_grass_sims, _flower_patches, _scrub_sims, _lichen_sims, _fern_sims]:
 		var sim = sims.get(chunk_coord)
 		if sim != null:
 			sim.block_cells(local_cells)
@@ -16200,7 +16380,7 @@ func _block_ground_cover_on_cells(chunk_coord: Vector2i, local_cells: Array) -> 
 ## The reverse, for a destroyed piece: bare ground again, open to the next
 ## seed like any other cell.
 func _unblock_ground_cover_on_cells(chunk_coord: Vector2i, local_cells: Array) -> void:
-	for sims in [_grass_sims, _flower_patches, _scrub_sims, _lichen_sims]:
+	for sims in [_grass_sims, _flower_patches, _scrub_sims, _lichen_sims, _fern_sims]:
 		var sim = sims.get(chunk_coord)
 		if sim != null:
 			sim.unblock_cells(local_cells)
@@ -16209,6 +16389,8 @@ func _unblock_ground_cover_on_cells(chunk_coord: Vector2i, local_cells: Array) -
 func _resync_ground_cover_sprites(chunk_coord: Vector2i) -> void:
 	if _grass_sims.has(chunk_coord):
 		_sync_grass_sprites(chunk_coord)
+	if _fern_sims.has(chunk_coord):
+		_sync_fern_sprites(chunk_coord)
 	if _flower_patches.has(chunk_coord):
 		_sync_flower_sprites(chunk_coord)
 	if _scrub_sims.has(chunk_coord):
@@ -17776,6 +17958,17 @@ func _load_chunk(chunk_coord: Vector2i) -> void:
 	_grass_sprites[chunk_coord] = {}
 	_grass_sprites_turning[chunk_coord] = {}
 	_sync_grass_sprites(chunk_coord)
+
+	# The wood's own cover, handed the IDENTICAL growth_blockers mask the
+	# grass just took: a fern must no more seed in a river or through a
+	# persisted floor than a blade must (docs/concept/ferns.md).
+	_fern_sims[chunk_coord] = ForestFern.new(
+		hash("%d_%d_forest_fern" % [chunk_coord.x, chunk_coord.y]),
+		chunk.width, chunk.height, chunk.biome, growth_blockers
+	)
+	_fern_sims[chunk_coord].block_cells(built_cells)
+	_fern_sprites[chunk_coord] = {}
+	_sync_fern_sprites(chunk_coord)
 
 	# Aquatic vegetation (see AquaticVegetation, docs/concept/
 	# aquatic_foraging.md "Aquatic Foraging") -- only chunks that actually
@@ -19644,6 +19837,11 @@ func _unload_chunk(chunk_coord: Vector2i) -> void:
 		mmi.free()
 	_grass_sprites_turning.erase(chunk_coord)
 	_grass_sims.erase(chunk_coord)
+
+	for mmi in _fern_sprites.get(chunk_coord, {}).values():
+		mmi.free()
+	_fern_sprites.erase(chunk_coord)
+	_fern_sims.erase(chunk_coord)
 
 	for markers_by_crop in _wild_crop_markers.get(chunk_coord, {}).values():
 		for marker in markers_by_crop.values():

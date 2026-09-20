@@ -30021,6 +30021,60 @@ meal — rather than left as numbers in a comment.
   because `main` had already chosen the other end of the same fix and
   carrying both would split the tank again.
 
+## Only a building raised ON paving is cobbled to its walls (`concept/building.md`, 2026-09-20)
+
+Reported with three farmhouses in shot, each standing on its own grey pad:
+*"make the farm houses ground grass instead of cobblestone... only
+buildings placed on pavement like the city hall should get the pavement bg
+... the farmhouses should be placed on grass / forest biomes without
+pavement under it"*.
+
+✅ **Measured first, on the villages that actually show it.** Re-running
+`tools/probe_building_ground.gd` over three real settlements near lat 48.6
+lon 12.7:
+
+```
+farmhouse   origin=(13, 19) 3x2  kerb 14/14 paved (100%)  plaza=false  painted as road (cobbles)
+farmhouse   origin=(20, 19) 3x2  kerb 11/14 paved ( 79%)  plaza=false  painted as road (cobbles)
+house_small origin=(17, 19) 2x2  kerb 10/12 paved ( 83%)  plaza=false  painted as road (cobbles)
+city_hall   origin=(14, 13) 4x3  kerb 12/18 paved ( 67%)  plaza=true   painted as road (cobbles)
+totals: road (cobbles) on open ground: 10   road (cobbles) on plaza: 3
+```
+
+✅ **The threshold was not badly chosen; it was asked the wrong question.**
+`PAVED_KERB_SHARE` was set at half when an ordinary house/farmhouse/sawmill
+plot ran 7-43% against a hall's 67%. A plot wedged between the square's
+southern rows and the second street is ringed by paving on every side while
+standing on none of it, so the worst offenders now beat the hall outright —
+100% against 67%. **No threshold can separate them**, and raising it would
+only have moved which villages broke.
+
+✅ **What separates them is which buildings a village ever raises on its own
+paving, and exactly one does.** The civic plot IS the paved square
+(`_civic_plot_origin_for` refuses a plot whose every footprint cell is not
+already a road tile), while `can_build_house_from_blueprint`,
+`_is_clear_settlement_site` and `VillageLayout._street_plot_fits` each
+refuse a modified footprint outright. `building_ground_tile_for` asks both
+questions now, and both halves earn their keep: a hall raised where there
+is no paving keeps its own ground, and a farmhouse ringed by the whole
+village keeps its grass.
+
+✅ **Confirmed on a real render**, not only by test
+(`tools/probe_village_render.gd` under `xvfb` + Mesa software GL, which
+takes a third frame now for the farmhouse — the hardest plot there is): the
+farmhouse and its yard stand on grass with the village's paving running
+past them, and the hall is still cobbled seamlessly into its square.
+End to end, `road (cobbles) on open ground` falls from **10 to 0** across
+the same three villages, and the three halls keep theirs.
+
+🚧 **Nothing is persisted, so an older save heals on its next load** — the
+same property that lets an older village re-derive and pave its square. The
+pads already written into a save are not pads; they were re-derived every
+paint, so they simply stop being drawn.
+
+Tests: 14/14 in `test_building_ground.gd` (+6), with the five rings the
+reported villages really measured pinned as data.
+
 ## Nothing grows in a pond, and a pond keeps its fish (`concept/village_ponds.md`, 2026-09-20)
 
 Reported live with the water in shot: *"Now there's a pond, but grass grows
@@ -30363,6 +30417,89 @@ Tested: `test_village_way_to_paving.gd` 10/10 (new file),
 `test_village_renderer.gd` + `test_village_layout.gd` 253/253. Red first
 at every step.
 
+
+## Ferns: a wood gets a floor (`concept/ferns.md`, 2026-09-20)
+
+Asked for directly: *"I added fern sprite.. can you wire it and make it
+grow in forest biome; also please add the same leaf tracing and bending
+mechanism which the long grass already has"*.
+
+Forest floor had no ground cover at all. Every sim this world has is gated
+to a biome that is not forest — grass to grassland, scrub to desert,
+lichen to tundra — so a wooded chunk drew its trees and then bare ground
+between them. A fern is the missing fourth and the one plant a temperate
+wood is actually carpeted in. A new system, so it got its own concept doc
+BEFORE any of it was built, with the pillars that decide the design
+written down to be argued with.
+
+**The bend is the grass's, not a copy of it.** `IllustratedFernPatch`
+reaches into `IllustratedGrassPatch` for the shader, the mesh subdivision
+that gives a bent card somewhere to travel, and the band maths that
+decides what Y-sorts in front of what. Those are forwarders, and the tests
+assert the equality directly — trivially true by construction, which is
+the point. Two bend implementations would be two wind systems in one
+world, and the first thing anybody would notice is ferns swaying out of
+time with the grass beside them, or a walker reading as behind the ferns
+and in front of the grass in the same step.
+
+**Fewer and larger cards, on a fill-rate budget.** A grass cell draws 8
+because a cell of meadow IS many blades; each delivered fern cell is
+already a whole clump with its own rocks, logs and mushrooms drawn in, so
+eight per tile would read as a hedge. What keeps it honest is AREA rather
+than count, since every card is a translucent blended quad regardless of
+batching: a test pins that a fern tile blends no more pixels than a grass
+tile. Root offsets are bounded by the TILE rather than by the card — a
+distinction grass never had to make, because its card IS a tile.
+
+**One checkerboard keyer.** The sheet arrives as opaque RGB with a
+checkerboard painted where transparency belongs, with the same two tones
+the building yard overlays carry. The routine that keys those moved to
+`SpriteSheetSlicer` beside `chroma_keyed`, thresholds and measurements
+intact, and the structure sprite delegates.
+
+**Rendered, not just tested** (`tools/probe_ferns.gd`, xvfb + Mesa
+software GL, the Harz chunk): 30 ferns on 242 forest cells with none in
+water — **12.4%** against the 12.0% the constant asks for — the
+checkerboard down to **0.00%** of drawn pixels, 13 bands holding 66
+instances, and **16.0%** of the frame moving when a walker stepped in,
+which is the only evidence that the bend is live rather than merely wired.
+
+The probe earned both of its findings by being wrong first, and both are
+kept in its comments. Its first run pointed the camera at the densest
+stand while the LOD window stayed on the tile `update()` was first called
+with, 22 tiles away: bare floor in the picture, 12 live instances in the
+numbers. And a closed wood seen from above is ALL CROWN, so the frame a
+player really sees hides almost every fern under the canopy — a fact
+about a top-down camera in a forest, recorded rather than cropped out.
+
+Tested, red first at every step: `test_forest_fern.gd` 21/21 (new),
+`test_illustrated_fern_patch.gd` 20/20 (new),
+`test_earth_chunk_manager_ferns.gd` 12/12 (new, anchored on a genuinely
+wooded chunk — 242 forest cells, where Berlin's has 29 and would pass by
+accident), `test_checkerboard_keying.gd` 6/6 (new), plus the suites the
+move and the wiring had to leave alone: `test_illustrated_structure_
+sprite.gd` + `test_sprite_sheet_slicer.gd` 71/71, and
+`test_world_ecology_cadence_wiring.gd` + `test_world_simulation_
+ownership.gd` 11/11 — the last of which failed for exactly the right
+reason before `scenes/world.gd` listed `step_ferns`, because a step
+nothing calls grows nothing.
+
+**Known gaps, named rather than implied:** no seasonal sheets (grass has
+four, ferns have one; the shared tint still reaches them); nothing eats
+them yet (`graze` works, no herbivore calls it); and no seed fall, so a
+fern can never cross a gap in the wood — which matches how bracken
+actually spreads, and is deliberate.
+
+**One pre-existing failure ruled out rather than assumed, while verifying
+the merge.** `test_illustrated_grass_patch.gd`'s
+`test_atlas_region_for_never_includes_the_previous_rows_bled_over_content_
+on_any_season_sheet` fails on **spring row 7 col 8** (25/32 mostly
+transparent against a 90% bar). Not this pass's: confirmed by running that
+one test in two worktrees, before and after the merge, sharing the SAME
+import cache so the only variable was the code {D} identical failure,
+identical message. `concept/long_grass.md` records winter[9] as a known
+narrowed-but-not-closed gap of exactly this kind; spring[7] is a second
+one, recorded here so it is not rediscovered as a regression.
 ## Why a village stopped growing — two links, both invisible (2026-09-20)
 
 Asked for directly: *"now make the village grow again"*. The roster held
@@ -30614,3 +30751,167 @@ a measurement would be the blind ruler again, one layer down.
 
 Tested: `test_intro_splash_sheet.gd` (+3, one blind test left in place and
 documented as superseded).
+## The food containers: the chain ended at the store (2026-09-20)
+
+Asked for directly: *"now fix the food containers so the market actually
+gets stocked"*. `milling_and_baking.md` had carried the gap in its own
+words since the bread chain landed — *"Three food containers, one eater. A
+villager now eats from the stall, the persisted Market and the shelves
+alike, but nothing ever moves food between them."*
+
+`tools/probe_food_containers.gd` (kept) prints **every container
+separately** over time, because *"the market is empty"* is equally
+consistent with the carter never running, the carter crediting the wrong
+place, and nobody producing at all:
+
+```
+  seconds farmhouse warehouse    STALL  ledger  hands  carts
+        0         0         0        0       0      0      0
+      100         5         0        0       0      0     12
+      200        15        12        9       0      0      2
+      300         3        16        0       0      0      2
+      400        23        13        0       0      0      2
+      500        22         9        0       0      0      8
+```
+
+The chain works **right up to the store**: a farmhouse fills, a carter's
+round empties it onto a cart, the cart empties into the warehouse. The
+stall — what `VillageMarket.buy_meal` actually sells from — is empty at
+every sample but one. Two faults, and the second is why that one sample
+existed.
+
+### ✅ The stall is the shop window of the store
+
+A market stall is not a warehouse. It is filled each morning from the store
+behind it and holds about a day's trade, which is exactly why a village can
+look *"out of bread"* at the stall while its granary is full.
+`StallRestock` is that leg, pure and static like `SettlementSurplus` beside
+it:
+
+- **A day's eating for the village**, derived rather than picked —
+  `households × SettlementState.FOOD_PER_HOUSEHOLD`, a constant already
+  pinned to the hunger clock by its own test.
+- **Only the shortfall**, or a stall would pull the store empty one
+  settlement step at a time.
+- **Real units move**: what reaches the stall is withdrawn from the store's
+  own shelf, never more of an id than it holds.
+- **A village with no store keeps what it had** — its producers carry their
+  own take in, exactly as `village_warehouse.md`'s Mechanism 7 already
+  ruled.
+
+### ✅ …and that one sample of 9 was food being invented
+
+`village_warehouse.md` Mechanism 7 rules *"ONE credit, at the moment the
+goods really get there — so nothing is counted twice, and the market's
+numbers describe a pile that exists."* It stopped being true without
+anybody touching it. `_unload_the_cart` put the load on the store's shelf
+**and** called `record_delivered_goods`, which was one credit when the
+shelf was invisible to every food reading. Then
+[milling_and_baking.md](concept/milling_and_baking.md)'s *"Food that
+counts"* taught `SettlementFood` to count shelves, and hauling was switched
+on so `_stock` routed that second credit into the **carter's own hands**,
+which `deliver_load` empties onto the stall.
+
+N units delivered became N on the shelf plus N on the stall — food
+invented, by a rule written to prevent exactly that. The pile on the shelf
+is the credit now, and `record_delivered_goods` is **gone rather than
+merely unused**, so there is no way back in.
+
+Worth naming: **no test covered `_unload_the_cart` at all**, which is how a
+double credit survived two separate changes that each made it worse.
+
+### ✅ Measured after both
+
+```
+  seconds farmhouse warehouse    STALL
+      200        17         0       12
+      300        12         7        2
+      400        10        21        0
+      500         7        15       10
+```
+
+The stall peaks at exactly **12** — ten households times a day's ration,
+which is the derivation, not a coincidence — and the farmhouse backlog
+falls from 22–23 to 7–10 because food moves through instead of piling up at
+the end of the chain.
+
+And on the famine watch every other reading in this thread has used:
+
+```
+   seconds   roster   standing  hungriest market food    purse
+         0       10         10       0.30          0      0.0
+       300        9          9       1.00          2     20.0
+       600       10         10       1.00         11      1.0
+       900       11         11       1.00          0      0.0
+      1200       13         13       1.00          1     20.0
+```
+
+| state | roster over the watch |
+|---|---|
+| before the gold faucet was closed | 10 → 10 → 12 → 12 → 12 |
+| faucet closed, nothing else | 10 → 3 → 4 → 4 → 6 |
+| + the clock fix alone | 10 → 3 → 5 → 6 → 8 |
+| + the money fixes | 10 → 10 → 10 → 10 → 10 |
+| + the growth links | 10 → 10 → 10 → 11 → 11 |
+| **+ the stall leg** | **10 → 9 → 10 → 11 → 13** |
+
+**Thirteen households — past the twelve the village reached when gold was
+still conjured.** `market food` reads real numbers now rather than 0 at
+every sample, which is the stall actually being traded at.
+
+### 🚧 Honestly, not all of it is closed
+
+- **One villager still died**, at t=300, before the chain filled. The
+  hungriest villager reads 1.00 at every later sample with the starvation
+  counter running 5–125 of 200: fed each time, never comfortably. The
+  village grows *through* a famine rather than avoiding one.
+- **The persisted `Market` is still a third container** nothing fills or
+  empties in live play — its own neighbouring comment says so — and the
+  **player's shop still prices only that Market**, so what a player buys
+  and what a village trades remain two different piles. Named in
+  `milling_and_baking.md` rather than folded in here.
+
+## A house going up is cut the way its own sheet is drawn (`concept/building.md`, 2026-09-20)
+
+Reported live with a village raising a cottage: *"it's clipped and doesn't
+use the intermediate construction sprites so you can see the progress...
+also it's scaled improperly"*. Three symptoms, one fault, and it is the
+previous day's crop fix stopping one chain short.
+
+**The grid kind is a property of the SHEET.** `finished_sheet_chain` has
+asked the sheet for it since the pass that fixed the finished crop —
+`construction_sheet_chain` still NAMED `dividers` for every house, so a
+cottage or manor going up was cut on magenta divider lines its own sheet
+does not draw (cottage/manor sheets top out at a 0.989 magenta share where
+`house_1_*` reaches 1.000), and the band began wherever the roofs'
+silhouette happened to thin.
+
+Measured before the fix (`tools/probe_construction_stage.gd`, new and
+kept), `cottage_1` row 0 as the build runs: cells **145×105, 149×105,
+153×105**, every one of them slicing through the drawing, where the
+sheet's own content cut gives **171×174** every time and the finished
+house is 172 wide. A cell half the sheet's own pitch tall, changing shape
+frame to frame, drawn scaled to one fixed plot width, is exactly a house
+that is clipped, scaled wrong, and unreadable as a stage of anything —
+all three of the reported symptoms out of one line.
+
+After, on a real render (`tools/probe_construction_render.gd`, new and
+kept: five real `ConstructionProject`s side by side, one per stage,
+through the real `_sync_construction_site`): the strip reads left to right
+as **footings → frame → truss → roof → house**, every stage drawn
+**21.0 × 21.0 world units**, nothing clipped.
+
+**Why a report had to find it.** The crop guard that exists for exactly
+this class of bug
+(`test_no_house_crop_cuts_through_the_top_of_its_own_drawing`) read its
+sheets with `load()` as a `Texture2D` — which answers null for art whose
+imported artifact has never been generated in that checkout, i.e. every
+headless run on a fresh clone with newly added art. It was erroring on
+`cottage_3` instead of guarding. It reads through `SpriteSheetLoader` now
+(the shared loader written for precisely that case, falling back to the
+file's own bytes), and the guard is asked of the RISING house too, beside
+a scale guard against the finished cell — the cut it catches was 11–16%
+narrow.
+
+Tested: `test_illustrated_structure_sprite.gd` (+2, one repaired),
+`test_building_catalog.gd` (+2).

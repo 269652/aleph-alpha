@@ -253,16 +253,6 @@ func record_real_harvest(item_id: String, count: int) -> void:
 	_stock(item_id, float(count))
 
 
-## The STOCKING half, without the pay -- what a delivery into the village's
-## own store is worth to the village (Mechanism 7). The producer was already
-## paid at the scythe; this is the moment the goods become something the
-## village can sell.
-func record_delivered_goods(item_id: String, count: int) -> void:
-	if count <= 0 or item_id == "":
-		return
-	_stock(item_id, float(count))
-
-
 ## Credits `count` units of something a real take produced ALONGSIDE the
 ## food -- the hide off a hunted animal (HuntableQuarry.hide_yield_of).
 ##
