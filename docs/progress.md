@@ -66,6 +66,50 @@ and most species have no loot row so they vanish on death.
   18/18, `test_earth_chunk_manager_errand.gd` 9/9 (new). 🚧 The debt rides
   on the event but no dialogue topic speaks to it yet, and
   `NpcRecognition` does not read `errand_delivered` as its own memory kind.
+- ✅ **Wired into the live game, requirement by requirement**
+  (2026-09-20). The rules above are only worth what a player meets, so
+  each was carried into the real paths and pinned there.
+  - **Requirement 3, the world has an order** — `SprintCost` wired to the
+    player (running drains, exhaustion refuses, walking stays free);
+    `SpeciesBite` wired to `CreatureMarker.bite_damage` /
+    `bite_cooldown_seconds` / `hunt_speed`. The sharpest finding of the
+    whole pass came from that last one: `HUNT_SPEED` was **36 px/s against
+    a walking speed of 40**, so every pursuer in the game was outWALKED by
+    a player who never touched sprint — a difficulty ring gating which
+    species may spawn while gating nothing at all. A bear now bites for 23
+    where everything bit for 6, and a test names which animal can close on
+    a walking player.
+  - **Requirement 7, the path reads as a build** —
+    `SkillWebView.node_tooltip` calls the real consumer twice and prints
+    the before → after against the character's own facts. **A key mismatch
+    caught in adversarial review** (`amount` passed where the module reads
+    `bonus_amount`) had every preview rendering `16 → 16`; the test now
+    asserts the two sides differ, which a mismatch cannot pass.
+  - **Requirement 1, a direct entry** — `DawnClause` wired to the sky: a
+    new character opens their eyes at first light whatever the wall clock
+    says, and the real-Earth clock returns on its own. A loaded save is
+    never shifted, a console-pinned clock wins outright, and once
+    converged the call stops being made.
+  - **Feedback** — `Player.answer` / `World._on_player_answered`: a
+    connecting swing floats its damage, a sweep says what it collected,
+    experience shows its number, a level announces itself.
+    `gain_experience` has always returned the levels it granted and all
+    three callers discarded it, which is exactly why levelling was a
+    silent change to a corner label.
+  - **Requirement 8, Magicraft** — motes owned and learned by living
+    through the phenomenon they name (venom from the far country's snake,
+    frost from the cold that took you, fire from one you lit), woven on a
+    real surface (**M**) whose header rewrites itself live, and cast
+    through the game's own parser, cost model and executor with no second
+    interpreter.
+  - **Requirement 5, crafting** — `Player.craft_refusal` asks the same
+    three gates `craft` checks, so a card that cannot proceed says
+    *"Needs heat source; you are not standing at one."* instead of doing
+    nothing.
+  - **Requirement 2 was closed earlier** by the give verb; **requirement 6**
+    is served by the feedback pass; **requirement 4** has its rings built
+    and named but is not yet raised on screen.
+
 - ✅ **Six pure modules for the overhaul's other requirements**
   (2026-09-20) — each spec-first and red-first, built in parallel and
   adversarially reviewed. Wiring into the live game is tracked separately
