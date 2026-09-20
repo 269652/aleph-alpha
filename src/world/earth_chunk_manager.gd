@@ -14968,7 +14968,7 @@ func _drinkers_in_house(record: Dictionary) -> int:
 ## A home, because the people in it drink -- and the FARMHOUSE, which
 ## nobody lives in (its capacity is 0) but whose FIELD drinks out of it
 ## (docs/concept/village_water.md mechanism 3). Deliberately a SEPARATE
-## rule from _drinkers_in_house below rather than a widening of it: a
+## rule from _drinkers_in_house above rather than a widening of it: a
 ## farmhouse holds water and never swallows a mouthful of it, and folding
 ## the two together would have a building with no residents drinking for
 ## somebody who does not exist.

@@ -146,11 +146,22 @@ static func level_after_tending(level: float) -> float:
 	return level - LITRES_PER_TENDING if can_water_crops(level) else level
 
 
+## The level a farmhouse sends somebody at: its household's own reserve
+## plus TENDINGS_IN_HAND more visits' worth.
+##
+## Named once rather than written twice, because the SAME number is also
+## the floor a farm is raised above (farm_starting_level). Two copies that
+## drifted apart would raise farms already needing a trip, which is the
+## one way to lose the whole anti-crowd stagger.
+static func farm_trip_level() -> float:
+	return DRINKING_RESERVE_LITRES + LITRES_PER_TENDING * TENDINGS_IN_HAND
+
+
 ## Whether this FARMHOUSE must send somebody to the well. Sooner than a
 ## household would go (TENDINGS_IN_HAND), because a field that stops being
 ## watered withers, where a household that runs low is merely thirsty.
 static func farm_trip_is_due(level: float) -> bool:
-	return spare_for_crops(level) < LITRES_PER_TENDING * TENDINGS_IN_HAND
+	return level < farm_trip_level()
 
 
 ## What a FARMHOUSE has in it the day it is raised.
@@ -164,4 +175,4 @@ static func farm_trip_is_due(level: float) -> bool:
 ## point of the stagger is that it is a property of the INITIAL
 ## CONDITION, so getting the initial condition wrong loses all of it.
 static func farm_starting_level(seed_value: int) -> float:
-	return _started_above(seed_value, DRINKING_RESERVE_LITRES + LITRES_PER_TENDING * TENDINGS_IN_HAND)
+	return _started_above(seed_value, farm_trip_level())
