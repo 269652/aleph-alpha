@@ -29522,3 +29522,79 @@ Tests: `test_village_immigration.gd` 20/20 (4 new, 2 rewritten),
 `test_earth_chunk_manager_village_growth.gd` (5 new, covering the roster
 matching the households after any number of arrivals and nobody being
 duplicated by the re-derivation).
+
+## A farmhouse stands in its own yard (`concept/building.md`, 2026-09-20)
+
+Asked for directly, with the art dropped in: *"I added
+farmhouse_bg_overlay.png which should be rendered as background behind the
+3x2 farmhouse it should use a random variation so that each farmhouses bg
+looks different"*.
+
+### ✅ Nine whole yards, seeded per building
+
+`farmhouse_bg_overlay.png` is a 3×3 grid of nine finished yards at the plot's
+own 3:2 shape — a woodpile, a barrel, a bench, a washing line, a well, a
+beaten path through the grass. None of that is in the building's own sheet,
+which draws the house alone. Picking one whole picture is a far smaller
+mechanism than scattering props and deciding what may overlap what, and it
+reuses the "one sheet, seeded cell" shape `BuildingLifecycleSheet` already
+uses to make a street of cottages a street of different cottages.
+
+Drawn **between the kerb and the house** — children paint in tree order, so
+the yard lies on the ground the kerb marks out and the walls stand on it.
+Same width as the house by the same `drawn_plot_width_tiles` rule, so it is
+the plot's and never wider. Wired per building id
+(`BuildingCatalog.background_sheet_for`), so every other building answers
+`{}` and draws exactly what it drew before.
+
+Worth stating, because it is what makes this art matter: **a farmhouse has no
+variant sheet of its own** — only `house_small`/`house_medium` do — so every
+farmhouse in the world draws the SAME house picture. Its yard is the only
+thing that tells one from another.
+
+### ✅ The keying was the real work, and my first reading of it was wrong
+
+This sheet has no alpha channel and paints its transparency as a
+grey-and-white **checkerboard**, which nothing else in the project does
+(everything else keys flat magenta or near-black).
+
+I first wrote this up as *"a flat key punches 674 px of holes through the
+flowers"* and that was **backwards** — the 674 were checker pixels enclosed
+by art, which the flood MISSES, not flowers a flat key destroys. Caught by
+re-measuring before it shipped; the conclusion survived, the reason did not.
+
+The true reason a flat colour key cannot be used: the checker's lighter
+square and the art's white flower highlights **are the same colour**. The
+tones measure about 253 and 213; a flower highlight sits at 235 and up.
+Measured — one source cell holds **46,354 near-white pixels**, almost all of
+them checker, and **63 survive keying at drawn size**. Those are the flowers,
+and a flat key takes every one of them.
+
+What separates them is **connectivity**, not colour: the checker reaches the
+cell's own edge and a flower enclosed in foliage does not. So the key floods
+inward from the edge, the same shape `head.png`'s own background removal
+uses. Two refinements, each measured rather than reasoned about:
+
+- **The darker square is a safe seed anywhere in the cell**, since nothing in
+  the art is that particular grey — which is what clears checker showing
+  through a gap in the foliage, enclosed by art and so unreachable from the
+  edge (**86 such pixels** in one cell).
+- **The flood then widens by a bounded two pixels** under a looser grey rule,
+  taking the anti-aliased edges where one square meets the next. The seed
+  rule cannot be loosened that far without swallowing a grey rock; bounding
+  the widening to the one or two pixels anti-aliasing actually spans cannot
+  reach a rock's interior however grey it is (**82 px of grey fringe**
+  survived before it).
+
+### ✅ Looked at, not just asserted on
+
+All nine yards were rendered to PNG and composited over a mid-grey backdrop
+(`tools/probe_farmhouse_yard.gd`), twice: once to find the fringe, once to
+confirm it was gone. Flowers, grey rocks, barrels, benches, the well and the
+washing line all survive; the checkerboard does not.
+
+Tests: `test_building_catalog.gd` 80/80 (+4 new),
+`test_earth_chunk_manager_buildings.gd` 40/40 (+4 new),
+`test_illustrated_structure_sprite.gd` 53/54 (+4 new). The one failure,
+`test_no_house_crop_cuts_through_the_top_of_its_own_drawing`, is the same
+pre-existing house-art failure recorded in the fence entry above.
