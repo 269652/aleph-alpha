@@ -31275,3 +31275,45 @@ that chunk. Every other ground cover can re-colonise.
 
 Tested, red first at every step: `test_earth_chunk_manager_ferns.gd` 15/15
 (+3), `test_earth_chunk_manager_brambles.gd` 16/16 (+4).
+
+
+## Blackberries at ten percent, and the cap that had to move with them (`concept/brambles.md`, 2026-09-20)
+
+Asked for directly after a live hunt for them came up short: *"Bump
+blackberrys to 10%.. canopy is fine"*.
+
+Measured before: **6 thickets on 242 forest cells** on a real Harz chunk,
+about one per 170 tiles of world. After: **21 on the same 242** (8.7%
+against the 10% asked, sampling variance on that few cells), and a render
+that had one thicket in frame now has two.
+
+**`MAX_PATCHES` had to move with it, and nothing was checking that.**
+`blackberry_bramble.gd` has claimed since the day it landed that its cap
+is derived from its density against a real 32x32 chunk — the trap
+`TallGrass.MAX_PATCHES` records paying for once — and no test recomputed
+it. So the bump walked straight into that paragraph's own warning: at 10%
+the old cap of 36 is reached by **seeding alone**, truncating every fully
+wooded chunk to roughly a third of what was asked for. The cap is 103 now
+and a test recomputes it, which went red on exactly this change — the
+guard doing its job on the first change that needed it.
+
+**One existing test was passing for the wrong reason, and the denser wood
+exposed it.** `pick_blackberries_near` searches a one-tile radius and
+takes the first bearing cane in it, so picking twice in the same spot only
+proves the first cane is stripped when nothing else is within reach. That
+was true by accident at 3.5% and false often enough at 10%. It clears the
+3x3 first now and says why in its own comment.
+
+The comment calling brambles *"scattered through"* a bracken carpet no
+longer describes the numbers — 10 against bracken's 12 is nearly as
+common — so it says what is true instead: still rarer, deliberately, but
+as a choice about findability rather than a claim about woods. The
+ordering test is renamed to match what it asserts.
+
+**The canopy was raised and declined.** A closed wood from above is all
+crown and nothing fades when a player walks under it, so a forest floor is
+invisible there — ferns, mushrooms and thickets alike. Recorded in
+`concept/brambles.md` as a known property rather than an open task.
+
+Tested, red first: `test_blackberry_bramble.gd` (+3, including the missing
+cap guard) and `test_earth_chunk_manager_brambles.gd`, 34/34 together.
