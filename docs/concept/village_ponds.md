@@ -86,56 +86,79 @@ beside a house whose record says `fisher`. So the pond, the hut and the
 villager's own marker all waited for the chunk to be unloaded and loaded
 again — with eleven mouths on four fields and one pond in the meantime.
 
-### The mechanism: the village re-derives itself when a house it raised stands
+### The mechanism: the ground settles around the people already standing
 
-An arrival already re-derives the whole village
-(`EarthChunkManager._respawn_village`, run from `admit_household`): the
-roster is regenerated with the newcomer in it and `spawn_village` runs
-every `_if_missing` pass against what stands. Run at arrival, that pass
-finds no house for the newcomer yet. **A completed whole-building project
-runs the same re-derivation the moment its building is placed.** Then,
-in the order `spawn_village` already keeps:
+**A completed whole-building project settles the village's ground the
+moment its building is placed** (`VillageRenderer.settle_the_ground`,
+run from `EarthChunkManager._place_completed_building_project`). Nothing
+in it is new; it is the founding's own passes, in the founding's own
+order, run around the villagers who are already there:
 
-1. the recovery matches the newcomer to the house they own
-   (`house_origin_for_villager`) and writes their trade and seed onto
-   its record — the same backfill a reload does, done at once;
-2. the pond pass sees a `fisher` house with no water beside it and digs,
-   stocks and fences the pond on the fisher's own side of the street;
-3. the hut pass raises the hut on its bank where one fits;
-4. the newcomer's marker is spawned at their own door.
+1. a house its owner lives in carries their trade and seed
+   (`house_origin_for_villager`, `set_building_resident`) — the backfill
+   `_recover_existing_village` does on a reload, done now, so the pond
+   pass can see a `fisher` house;
+2. the fields, the ponds and the huts, through the same idempotent
+   `_if_missing` passes founding and reload run, against the same
+   reserved ground (the landmarks, the beds already laid): the pond pass
+   sees a fisher's house with no water beside it and digs, stocks and
+   fences the pond on the fisher's own side of the street, and the hut
+   pass raises the hut on its bank where one fits;
+3. every villager standing is handed their own ground again — a field, a
+   pond — as plain properties on the marker they already are;
+4. whoever now owns a house lives at its door (`home_position`, read live
+   by the marker, so no rebuild is needed to move them).
 
-Nothing new is sited and nothing is stored: every pass is the idempotent
-one founding and reload already run, so a second re-derivation digs no
-second pond (`_has_pond_already`). The same rule gives a farmstead the
-assembly raises its beds and rails the day it stands, for the same
-reason. The cost is the one `_respawn_village` already names — a
-villager mid-errand restarts it — paid once per building the village
-actually completes.
+Nothing new is sited and nothing is stored, so a second settlement digs
+no second pond (`_has_pond_already`). The same rule gives a farmstead the
+assembly raises its beds and rails the day it stands.
 
-### And the re-derivation keeps the village's market
+**A pond goes to the fisher whose house it lies beside.** The handout
+paired fishers with ponds in roster order — the k-th fisher got the k-th
+pond — which is the only rule a founding needs and the wrong one the day
+a third fisher is housed: measured red, the two ponds went to the first
+two fishers in the roster and the newcomer, whose own water had been dug
+that day, worked none. The house's record says who lives there, so each
+pond is handed to that villager; what no record claims (a house from
+before houses remembered their villager) is handed out in roster order,
+as before (`_hand_out_fisher_ponds`).
 
-The first cut measured worse than the run before it: the purse fell to
-**0** the moment a house completed (450 s), fuel and food followed, and
-the roster fell **10 → 6 → 5**. The purse the cart fills and the wages
-come out of, and the stall's own stock, live on the `VillageMarket` that
+### Why not re-derive the village, and what that measured
+
+The first cut re-derived the whole village on a completed building, the
+way an arrival does (`_respawn_village`), and the economy probe measured
+it against the run before: every villager restarted their errand the
+moment the load-time house completed, the fields lost a cycle — **309**
+units harvested in twenty lived days against **360** — the food fell
+from 44 units to 12 by 600 s, and the roster fell **10 → 6 → 5** through
+the estate exodus. Restarting ten people's days to give one of them a
+door is the wrong trade, so the settlement above rebuilds nobody
+(`test_a_house_standing_does_not_rebuild_the_rest_of_the_village`).
+
+The same measurement found a second cost the arrival's own
+re-derivation had been paying quietly: the purse the cart fills and the
+wages come out of, and the stall's own stock, live on the `VillageMarket`
 `spawn_village` creates — fresh on every call, which a chunk reload had
-always accepted ([traveling_merchants.md](traveling_merchants.md)'s
-"the purse dies on a chunk reload") and which an arrival's re-derivation
-had been quietly paying too (the first measurement's unexplained
-720 → 369 at the newcomer's sample in
-[village_economy_balance.md](village_economy_balance.md)). A
+always accepted ([traveling_merchants.md](traveling_merchants.md)'s "the
+purse dies on a chunk reload") and which showed as the purse falling to
+**0** the moment a house completed, and as the first measurement's
+unexplained 720 → 369 at the newcomer's sample in
+[village_economy_balance.md](village_economy_balance.md). A
 re-derivation now hands the spawn the market the village already trades
 in, read off the villagers before they are freed — the reuse
-`reconcile_villagers` already did for a newcomer — so the purse and the
-stall survive an arrival and a completed building alike
-(`test_earth_chunk_manager_village_respawn.gd`). A chunk unload still
-loses them; that gap is unchanged.
+`reconcile_villagers` already did for a newcomer — so an arrival keeps
+the purse and the stall (`test_earth_chunk_manager_village_respawn.gd`).
+A chunk unload still loses them; that gap is unchanged. The arrival's
+re-derivation itself, and the errands it restarts, is unchanged too: it
+is the mechanism [village_growth.md](village_growth.md) already names,
+and its cost is now measured rather than assumed.
 
 **Pinned** by `test_earth_chunk_manager_newcomer_pond.gd` on a real
 settlement chunk whose next villager fishes: the house their project
 completes into carries their trade and seed at once, a pond lies within
-reach of it the same moment, and a further re-derivation digs no second
-one.
+reach of it the same moment and is handed to them, their home is their
+own door, nobody else in the village is rebuilt, and a further
+settlement digs no second pond.
 
 ## Status
 
@@ -174,10 +197,11 @@ one.
   the field's own skips.
 
   **And a fisher who arrives in play digs theirs the day their house
-  stands** (2026-09-20): a completed building project re-derives the
-  village the way an arrival already does, so the newcomer's house is
-  tagged with their trade at once and the same pond pass digs beside it —
-  see "A pond dug the day the fisher's house stands" below.
+  stands** (2026-09-20): a completed building project settles the ground
+  around the people already standing, so the newcomer's house is tagged
+  with their trade at once, the same pond pass digs beside it and the
+  pond is handed to them — see "A pond dug the day the fisher's house
+  stands" below.
 
   Idempotence needed its own answer, and a reload proved it: "a pond cell is
   occupied, so no pond fits there again" is not enough, because another
