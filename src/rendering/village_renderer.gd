@@ -370,6 +370,10 @@ func spawn_village(
 		var npc_marker := _build_npc(
 			settlement, i, door_positions[i], workspot, tile_size, parent, world, market, warehouse_door
 		)
+		# Which village they belong to, so a death reaches the right roster
+		# (docs/concept/village_mortality.md mechanism 2). Set here rather
+		# than inside _build_npc because this is where chunk_coord is.
+		npc_marker.settlement_id = EntityRef.for_settlement(chunk_coord)
 		spawned.append(npc_marker)
 		npc_markers.append(npc_marker)
 		# A merchant trades at their OWN stand, on the village square (see
@@ -445,6 +449,103 @@ func spawn_village(
 ## player walks out -- a cart is not a node this renderer leaks behind. That
 ## is not hypothetical: a porter and a cart left alive on every load/unload
 ## cycle is the measured cause of the reported framerate decay.
+## Brings the villagers standing in an already-built village into line with
+## the settlement's real roster (docs/concept/village_mortality.md
+## mechanism 4). Returns the village's nodes, newcomers included.
+##
+## Asked for directly: *"now make the npcs move in"*. Until this, the
+## villagers in a chunk were a SNAPSHOT: _population_for reads the real
+## roster, but only at spawn time, so a household admitted while the
+## player stood there got nobody and the settlement card and the street
+## disagreed until the chunk reloaded.
+##
+## Additive only, on purpose. A villager who dies removes themselves
+## (NpcMarker._step_starvation), which is the removal that has a cause a
+## player watched; culling markers here to match a shrunken roster would
+## have to pick somebody arbitrary, and the one it picked would be as
+## likely to be the farmer you were watching as anybody. See the doc's
+## Status for that gap stated plainly.
+##
+## **A newcomer gets a home, a market and their own settlement, but not a
+## specialist's ground**: fields, ponds and the carter's round are handed
+## out in bulk passes over the whole village, and re-running those against
+## a village mid-life is a different change from this one. A newcomer
+## works the village's general trades until the chunk next reloads, which
+## is honest rather than invisible.
+func reconcile_villagers(
+	parent: Node2D, chunk_coord: Vector2i, chunk_origin_tiles: Vector2i,
+	chunk_size: int, tile_size: int, world, nodes: Array
+) -> Array[Node2D]:
+	var standing: Array[Node2D] = []
+	var villagers: Array = []
+	for node in nodes:
+		if not is_instance_valid(node) or node.is_queued_for_deletion():
+			continue  # somebody who has already died out from under us
+		standing.append(node)
+		if node is NpcMarker:
+			villagers.append(node)
+
+	# The REAL roster, read directly rather than through _population_for.
+	# That helper reads 0 as "this settlement was never recorded, fall back
+	# to the founding roster" -- exactly right when spawning a village for
+	# the first time, and badly wrong here: a village whose last household
+	# died looks identical to one that was never written down, so the
+	# fallback resurrects it. Measured before it was fixed
+	# (tools/probe_village_famine.gd): a village fell to a roster of 0 and
+	# this put ten villagers back on the street, who starved, forever.
+	#
+	# A world that cannot answer is left exactly as it is. Reconciling
+	# against a number nobody supplied is the invented number this
+	# project's rules forbid.
+	if world == null or not world.has_method("household_count_for_settlement"):
+		return standing
+	var roster: int = world.household_count_for_settlement(
+		EntityRef.for_settlement(chunk_coord)
+	)
+	if roster <= villagers.size():
+		return standing
+
+	# The market this village already trades in -- taken from somebody who
+	# is already standing here rather than made fresh, or a newcomer would
+	# buy and sell in a market of their own that nobody else can see.
+	var market = null
+	for villager in villagers:
+		if villager.economy != null and villager.economy.market != null:
+			market = villager.economy.market
+			break
+	if market == null:
+		return standing  # nothing to join; a reload will build them properly
+
+	# One set of ground answers, exactly as spawn_village does.
+	_buildable_memo.clear()
+	_skeleton_memo.clear()
+	var settlement := _settlement_generator.generate_settlement(
+		chunk_coord, chunk_origin_tiles, chunk_size, tile_size, roster,
+		_is_buildable_local(chunk_coord, chunk_size, world) if world != null else Callable(),
+		(
+			world.seeded_region_for_chunk(chunk_coord)
+			if world != null and world.has_method("seeded_region_for_chunk") else null
+		)
+	)
+	var warehouse_door = _warehouse_door(chunk_coord, chunk_size, tile_size, world)
+
+	for i in range(villagers.size(), mini(roster, settlement.house_positions.size())):
+		# They arrive WITHOUT a house (village_growth.md mechanism 3: the
+		# village then owes them one), so their anchor is the founding
+		# ring's own fallback position -- the same one a villager whose
+		# plot fit nowhere already keeps.
+		var home: Vector2 = settlement.house_positions[i]
+		var workspot = _grounded_position(
+			home + Vector2(0, _WORKSPOT_OFFSET_TILES * tile_size), tile_size, world, false
+		)
+		var newcomer := _build_npc(
+			settlement, i, home, workspot, tile_size, parent, world, market, warehouse_door
+		)
+		newcomer.settlement_id = EntityRef.for_settlement(chunk_coord)
+		standing.append(newcomer)
+	return standing
+
+
 func _hand_out_the_store_round(
 	npcs: Array, npc_markers: Array, chunk_coord: Vector2i, chunk_size: int, world,
 	parent: Node2D, spawned: Array[Node2D]

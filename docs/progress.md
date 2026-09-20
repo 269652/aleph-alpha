@@ -12616,9 +12616,12 @@ New concept doc (2026-08-25), written for the one mechanism below:
 ### UI / presentation
 
 - **Unified UI theme** — ✅ Done — `src/ui/ui_theme.gd` (tested: palette, styleboxes, built `Theme` all pinned) is one dark/rounded/gold-accent theme applied to every menu and window (main menu, settings, inventory, crafting, skill tree, dev console) plus the HUD survival card. Replaces the earlier raw grey boxes. **Gained a formal "this one is selected" mark (2026-09-20)**: `selected_button_stylebox`/`BUTTON_SELECTED` — the gold `ACCENT` as a thicker border over a background that lifts out of the card. Godot draws a toggled control in its `pressed` stylebox, which here is a shade *darker* than normal (~5% of value) and measured as invisible over a dark card when the build palette was first rendered; applied per control rather than in the shared `Theme`, since `pressed` there also means a momentary click on every ordinary button in the game.
+- **Gold has exactly one faucet** — ✅ Done (2026-09-20) — asked directly: "Gold should only be conjured by the travelling merchant". `traveling_merchants.md`'s own opening already claimed this ("a village's gold used to come from nowhere... a traveling merchant is the faucet that replaces it") and it was **not true** — two other places minted gold with nothing behind them. (1) `NpcEconomy._earn` split a coin conjured per food unit gathered, whether or not anyone ever bought it; gone, along with `record_harvest_wage` (which was purely that pay) and the sub-coin `_take_home_carry`. A producer's work now earns the village **goods**, and the merchant pays for those — and a producer is not left unpaid, because `_draw_subsistence_wage` was *already* ungated on occupation and its own doc already anticipated this case. (2) `_collect_estate_tax` credited the purse and **debited nobody**; it is a real transfer now, through the new pure `VillageWages.tax_debits` (one debit per household, in order, never more than a household holds, summing to no more than is owed), with the fractional remainder **carried** per settlement rather than rounded — a `Wallet` holds integer gold and a kossaet owes 0.25 a day, so rounding would either forgive a real debt or charge it four times over. A village collects what is there, not what it is due: shortfalls are **not** banked as arrears, since a debt a household can never pay only grows and would make the purse a fiction again. The invariant is guarded four ways, not asserted once: nothing but the merchant sale and the household-funded tax may call `deposit_to_purse`; every *other* writer of the purse (`_set_purse`) must move gold to or from a wallet in the same breath, closing the loophole that guarding one function name would leave; the old levy arithmetic (`levy_on`/`take_home_of`/`deposit`) is kept and still tested but must stay unwired; and the mint itself must be gone rather than merely unused. **Eight existing tests asserted the old model and were rewritten, not deleted** — including a shared fixture that funded a purse by working a hunter, which now completes the real loop (goods, then a merchant's sale) and is a truer fixture than the one it replaced. Tests: `test_gold_has_one_faucet.gd` 7/7 (new), `test_village_wages.gd` 29/29, `test_npc_economy.gd` 80/80, `test_npc_marker.gd` 96/96, `test_settlement_surplus.gd` 13/13, `test_merchant_visit.gd` 25/25, `test_village_market.gd` 25/25.
+- **A merchant buys the whole village, not one of its cupboards** — ✅ Done (2026-09-20) — reported with the town panel open: "The village produces way too much food and the NPCs don't have an income" (`Food feeds 387 of 16`, `Gold 1`, `Happiness 62% (worst: income)`). **One fault, not two.** A settlement keeps goods in more than one container — `VillageMarket.stock`, and every structure's own `StructureStock` — and `MerchantVisit`, the only thing that turns goods into gold, was only ever shown the first. `SettlementFood` was taught to count the shelves when the bread chain landed (`milling_and_baking.md`, "Food that counts"); the merchant never was. So a village hauls its whole harvest into the warehouse — which is precisely what the carter's round is *for* — and thereby puts it beyond the reach of its own income. `src/emergence/settlement_surplus.gd` is the one view: `combined()` adds the containers up for the merchant to price, `allocate()` says how much to take from each, in view order, never more than a container holds. Pure — it never touches what it is shown, so a sale that cannot be completed has changed nothing, the same division `MerchantVisit` itself keeps. The market is drawn from **first**, deliberately: it is the abstract ledger a village trades out of anyway, while a warehouse shelf is a real building the player can walk up to and open, so what the player can *see* is the last thing to go. **Does not merge the containers** — `milling_and_baking.md`'s "three food containers, one eater" is still open; this says only that the merchant reads all of them. Tests: `test_settlement_surplus.gd` 13/13, `test_merchant_buys_the_whole_village.gd` 4/4, `test_merchant_visit.gd` 25/25, `test_village_wages.gd` 20/20, `test_npc_economy.gd` 80/80, `test_village_market.gd` 25/25. **Measured against the rest of the requested loop, which already exists:** the merchant's cadence already tops out at one call a day (`VISITS_PER_DAY 0.4 × (1 + SURPLUS_DRAW 1.5)` = 1.0 at full surplus), so he was always willing to come daily and simply had nothing to buy — the binding constraint on clearing a 387-unit backlog is `CART_CAPACITY` (20 units a visit), not the frequency. Progressive taxation by estate is likewise already real and wired (`VillageEstates.BASE_TAX_PER_DAY` kossaet 0.25 → buerger 1.75, through `VillageWages.estate_tax_for`, called from `EarthChunkManager`). **Still open:** producers' own gold is still conjured per unit gathered (`NpcProduction.YIELD_TO_GOLD_RATE`) rather than paid out of the civic purse, so "NPCs get paid by the City Hall" is true for non-producers only; and nothing yet throttles production against demand, which is the other half of "produces way too much food".
 - **A field sows what the village is short of** — ✅ Done (2026-09-20) — reported with the village's panels open: "they have 0 Herbs even though there are 3 farm houses... so deciding what to plant must be based on demand", and beside it "The warehouse shows 205 Wheat but the Villagers show 50% food". **Those are one defect, and the second explains it: `wheat` is `ItemCatalog` kind `"material"`, not `"food"`** (`milling_and_baking.md`'s own first pillar, "grain is not food until it is milled and baked"), so every filter that decides whether a village is fed — `SettlementFood`, `VillageMarket`, `VillageEstates`' `kind:food` token — counts a granary full of wheat as **zero food**. A village whose every field sowed wheat, with no mill standing, starved beside it. That is a cropping failure, not a distribution one. `src/gameplay/village_crop_choice.gd` picks the sowable crop whose good is least satisfied, reading `VillageAssembly`'s own per-good satisfaction — the same number the needs panel shows, so what a village says it lacks and what it plants cannot disagree — scored by the **worst** good a crop answers rather than the mean, the same minimum rule `EstateConsumption` applies one level up. Wheat is offered **only where a mill AND a bakery really stand**; everywhere else a field sows something edible the day it is harvested (`herb`, `carrot`, `potato`, all real `kind = "food"` items with real crop art). The crop is chosen **at sowing** rather than frozen in `setup_economy` from the occupation, which is how a village's whole cropping plan used to be fixed before a single basket had been drawn. `CROP_BY_OCCUPATION` survives with a changed meaning — the *traditional* crop, breaking a tie and answering where there is no reading — with the herbalist's `herb` restored; its other job, the predicate "does this occupation work a field at all" that three callers use, is untouched. One consequence handled rather than shipped: a farmhouse may now hold a crop its villager was never built with, and one shelf can hold two, so `haul_stock_to_village` reads the shelf instead of withdrawing a single assumed id. **Withdraws this session's own earlier wheat-only narrowing**, which was right for "the crop dies before it ripens" and wrong to keep once the night bug was fixed. Tests: `test_village_crop_choice.gd` 15/15, `test_village_sowing_wiring.gd` 4/4, `test_village_farm.gd` 78/78, `test_npc_marker.gd` 67/67, `test_npc_economy.gd` 80/80.
 - **A village square is laid around what stands in it** — ✅ Done (2026-09-20) — reported a further time: "There are still villages without plaza." Measured rather than guessed (`tools/probe_village_supply.gd`, new): of the two genuine villages in a 14-chunk sweep, chunk (682,132) had **8 of its 48 square cells paved — exactly the one street row crossing it**, with a `farm_fence_east` at (15,13) and a `warehouse` at (20,13) standing inside the square. Two separate faults, each fatal alone. (1) The paving pass walked the rect and **returned on the first cell it could not take**, so one rail cancelled the whole square; it steps over such a cell now, because a square laid *around* what stands in it is still a square. (2) It **skipped the pass entirely whenever the civic doorstep already carried a road tile** — and the street crossing the square paves exactly that cell — so a village that lost its square once could never gain it back on any later visit; that short-circuit is gone, and the walk being idempotent means every visit heals it. A floor remains, since scattered cells are stray paving rather than a square: `VillageLayout.plaza_is_worth_laying`, a **share** rather than a count so it does not change meaning if `PLAZA_WIDTH_TILES` does, pinned at both ends rather than by a number somebody liked. One existing test changed deliberately: it asserted that *not one* cell was paved when a house stood on any of them — broader than its own stated intent ("rather than paving through a building") and exactly the reported defect; it now pins both halves honestly. Tests: `test_village_layout.gd` 93/93, `test_village_renderer.gd` 136/136, `test_village_plaza_wiring.gd` 3/3.
 - **Planner build palette reads as a build menu** — ✅ Done (2026-09-20) — asked directly, with a screenshot of ten identical text buttons in a row: "Make the Planner / Building HUD more professional and more like Anno 1806. Add Icons not only text". Planner mode's palette is now `src/ui/blueprint_palette_view.gd`: a titled card with a row of category tabs (Roads / Homes / Production / Civic), the slots of whichever category is open, and a footer naming what is armed and what it will cost. Each slot carries the building's **own picture** and its name — icons alone would trade one unreadable menu for another, since a sawmill and a blacksmith are both a brown roof at 48 pixels — and a hover gives the whole reckoning: name, footprint in tiles, the real material list, the real hours. **The icon is cut from that building's own `BuildingCatalog.finished_sheet_chain`**, the very sheet `EarthChunkManager` draws the finished building from, so there is no second picture of any building free to drift from the first (`src/ui/blueprint_icon.gd` — trimmed to its own art, fitted into the box with its aspect intact rather than squashed square, centred on a transparent canvas; pavement draws the real road tile it will lay). The tabs **are** `BuildingCatalog`'s own id lists read at runtime (`src/ui/blueprint_palette_model.gd`), never a second grouping, so a building added to the game lands in the right tab for free; and the two numbers on a card arrive as the same calls the raising path makes (`_item_catalog.display_name_of`, `_chunk_manager.build_labor_hours_for`), so the menu cannot quote a price or a job size the site then disagrees with. Work that costs no hours reads as **"Laid by hand"** rather than "0 hours" — `PlanRaising.is_laid_by_hand`'s own rule, said in the menu instead of discovered at the site. **Two defects the rendered probe caught that the headless tests could not** (`tools/probe_build_palette.gd`, per this repo's probe-before-you-trust convention): the armed slot and open tab were drawn in the theme's ordinary `pressed` shade, ~5% of value from normal and invisible over the card's dark background (now `UiTheme.selected_button_stylebox`, see the theme row below); and three tabs read as open at once, because `set_pressed_no_signal` deliberately does not tell the `ButtonGroup`, so a tab opened from code left the previous one looking open. Tests: `test_blueprint_palette_view.gd` 15/15 (the real widget, driven for real), `test_blueprint_palette_model.gd` 22/22, `test_blueprint_icon.gd` 12/12, `test_world_planner_mode_wiring.gd` 31/31. **Nothing about the card's size is written down** — a slot is as wide as the widest name in its own tab, measured at the font it is really drawn in; the card is as wide as its slots; the footer wraps rather than clips and cannot widen either. That came out of merging `main`, where a concurrent session had landed the UI-scale setting: sweeping the probe across every scale the player can pick showed **six of the ten names clipping at 1.75** ("Warehouse" wanting 137px of a slot offering 84) and only 7px of headroom at 1.00, so the defect predated the slider — `UiScale` scales font sizes and deliberately not card widths, which is its own documented limit. Zero clipped names at 0.75, 1.00 and 1.75 now, footer included. **Known gap:** `CHARTERED_BUILDING_IDS` (trade hall, mage guild) is still not offered — a charter is a settlement-tier gate (`concept/settlement_charter.md`), and whether a player may plan a blueprint they could never raise is a separate question from how the menu looks.
+- **Every HUD card is laid out by its column** — ✅ Done (2026-09-20) — reported with both open: "The Town Panel and Warehouse / Building panel overlap.. a panel should occupy space and make other panels render below it.. don't use fixed coords". The HUD column system already stated the rule in its own doc comment ("each builder simply adds to the column it belongs in and never positions itself against its neighbour's height"); the **building readout was the one card that never joined it** — `PRESET_CENTER_RIGHT`, a hand-picked 24px from the edge, 180px tall whatever it held — while `_hud_right_column` grew down from the minimap straight into it. The settlement card landing in that column is what made the collision visible; the panel had been placed against nothing all along. It is a card in the right column now, **last**, because the cards above are standing readouts and this one comes and goes with a click, so it opens beneath them rather than shoving them about; closed it costs nothing, since a hidden child of a `VBox` leaves no hole (the same property the message stack already relies on). Its builder also had to move in `_ready` — it ran *before* `_build_hud_columns`, so there was no column to join. Pinned three ways: the stacking driven for real against a real `HousePanel` in a real `VBoxContainer` (a taller card above pushes it further down; a hidden one leaves no hole), a source-contract check on the builder, and a **generalised** check over every builder that adds a card, so the next panel cannot reintroduce the defect by being written the old way. Rendered for a look with `tools/probe_hud_column_flow.gd`: no overlap, 4px apart, both hugging the right edge. Tests: `test_hud_panel_flow.gd` 6/6, `test_world_hud.gd` 24/24, `test_hud_readouts.gd` 40/40, `test_house_panel.gd` 42/42, `test_ui_scale.gd` 15/15.
 - **Main-menu backdrop** — ✅ Done — the start-up menu now dims the whole screen behind a full-rect backdrop (`World._show_main_menu`) so the game world/HUD no longer bleed through it.
 - **HUD polish** — 🚧 Partial — survival meters grouped into a themed panel card; XP bar / creature panels repositioned to stop overlapping. Meter fills are still plain rects (no rounded fills).
 - **Character screen / inventory revamp** — ✅ Done (basic) — `scenes/inventory_window.gd` (toggle I) is now a PoE/Valheim/Hammerwatch-style **two-pane character screen**: a left **equipment paperdoll** (rendered head+torso preview + right-clickable head/chest/legs/feet/weapon slots) and a right **item-slot grid** (icon + count, hover tooltips). **Right-click** an inventory item to wear/equip or eat it; right-click a worn slot to unequip. **Drag-and-drop works** (left-click and drag): drag an item onto another grid slot to reorder, or out onto a HUD hotbar slot to bind it to a number key (`src/ui/drag_slot.gd` is the shared drag-capable slot Control; `src/gameplay/hotbar.gd` holds the bindings). Left and right are deliberately split across the two gestures — clicking left used to ALSO activate an item (equip/eat) on mouse-down, which fired the instant you pressed down to start a drag, before Godot's drag threshold even triggered (reported: "a click on a carrot makes it vanish"). Shows total armor. The hotbar picked up the same UX pass: a hover highlight, a tooltip naming what's bound and its count, and right-click to clear a slot (previously the only way to change one was overwriting it via drag). Not yet: splitting/merging stacks by drag, or dragging directly onto a paperdoll slot to equip.
@@ -29265,3 +29268,217 @@ assumed, so it failed for its own reasons rather than the code's. The rule
 is pinned where the decision lives, in `test_village_layout.gd`.
 
 Tests: 253/253 across the layout, renderer and both city-hall suites (+1).
+
+## Consecutive rails share a post (`concept/village_farms.md`, 2026-09-20)
+
+Reported with a finished enclosure in shot: *"the enclosures render
+unnecessary vertical rails"*.
+
+### ✅ Two whole panels meeting is two posts, not one
+
+Every cell of `fence.png` is a **whole panel** — a post at *each* end with
+rails between. The sheet's four columns are North/South front views and
+East/West top views, all the same design.
+
+An earlier pass, asked for in one word (*"also scale"*), made a rail's wood
+span exactly one tile so consecutive rails **meet** with no gap. That closed
+the gaps and left the real defect untouched: two complete panels meeting put
+two posts at every junction a few pixels apart. Six rails showed twelve posts
+where they should show seven.
+
+A straight rail is scaled by the distance between **its own two post
+centres** now, not by the length of its wood. Its posts land on its tile's
+two edges, the neighbour's near post lands on the same point, and the pair
+draw as one. Corners are untouched — a corner is a post on a join, not a run,
+and still takes the side wall's own scale.
+
+### ✅ The reader took two guards, and the sheet forced both
+
+Getting the measurement right was the whole job, and both guards were found
+by measuring the real art rather than reasoning about it:
+
+- **The threshold sits between the RAIL level** (the median of slices
+  carrying content) **and a robust high percentile**, never a fixed multiple
+  of either. The front views' posts cover about **twice** their rails (0.53
+  vs 0.27); the top views' end caps only about **1.3×** their bar (0.13 vs
+  0.10). No single multiple reads both — a 1.4× rule found north/south/west
+  and lost east entirely.
+- **The percentile is robust, and a band must be 2% of the run wide.** The
+  trimmed cells carry stray edge slices — including one **fully opaque
+  column** at the far end — which own the maximum and otherwise swallow the
+  entire run between them. Three detectors in a row reported "posts 99.7% of
+  the run apart" before that stray was found.
+
+Measured this way all four facings agree, at source resolution and at drawn
+resolution alike: **posts about 0.62–0.65 of the run apart**, which at a 16px
+tile had them 12.5–13.0px apart inside a 16px tile.
+
+### ✅ Verified end to end, not just per panel
+
+Six real rails composited the way `EarthChunkManager._spawn_structure_art_for`
+places them — each centred on its tile, bottom-anchored, shifted by
+`footprint_offset` — and the posts counted off the result: **7 posts, widths
+[11, 12, 12, 12, 12, 12, 11]**. Evenly spaced, one per tile boundary, the two
+end ones half-width because half of each hangs past the end of the run, which
+is what an end post should do. That composite is the test now, rather than a
+number derived from the spacing.
+
+### 🚧 The cost, stated plainly
+
+The timber draws about **a quarter thicker** than before. The scale is
+uniform on both axes and this project does not stretch art along one axis to
+fit, so a fence that shares its posts is necessarily a little heavier than
+one that merely abuts. Flagged rather than hidden: if that reads as too
+heavy, the alternative is new art with the post split across the cell edge,
+not a non-uniform scale.
+
+### Three tests rewritten to the new rule, not deleted
+
+The two `..._wood_spans_exactly_one_tile_...` tests now pin that a rail's
+wood spans one tile **plus the post it shares**, with the old rule quoted in
+place so the reversal is legible. `test_the_offset_moves_the_art_toward_the_
+beds` now allows an already-flush rail to need no nudge — a rail scaled by
+its post spacing is drawn larger than its tile, so a facing whose art already
+lands flush has nothing to move; where the wood actually lands stays pinned
+directly by `test_scaling_by_the_run_keeps_every_rail_flush_against_its_own_
+edge` and `test_no_rails_wood_ever_crosses_into_the_beds`.
+
+Tests: `test_illustrated_structure_sprite.gd` 49/50 (+3 new, 3 rewritten).
+The remaining failure,
+`test_no_house_crop_cuts_through_the_top_of_its_own_drawing`, is about house
+art and is **pre-existing** — A/B'd in a clean worktree at the commit before
+this change, where it fails identically. Recorded rather than quietly left.
+
+### ✅ And the corner followed the wall it caps
+
+`test_a_corner_post_lines_up_with_the_side_wall_it_caps` caught this
+immediately, which is exactly what it is for: a corner is a post on a join,
+not a run, and takes the scale of the side wall it caps so its timber is as
+thick as the run it meets. Moving how a run is scaled left the corner 0.4px
+behind its wall.
+
+A corner's art **is** the side column's art, so measuring that column's post
+spacing hands it the side wall's own scale by construction — the rule it
+already had, stated against the wall rather than against its own length. Its
+distinct *fallback* is kept: if the posts cannot be read, a corner still
+falls back to the side wall's length rather than a run's, because scaling a
+post as if it were a run is what once turned a corner into a whole tile of
+rail.
+
+That pass also rewrote `test_the_offset_moves_the_art_toward_the_beds` into
+`test_every_rails_wood_lands_flush_against_the_edge_facing_its_beds`. The old
+test asserted the OFFSET VECTOR points toward the beds — a premise that only
+holds while the art is smaller than its tile. A rail scaled by its post
+spacing is larger: the band already starts outside the tile, so landing the
+wood flush against the bed-facing edge means pushing it back the other way,
+and the offset's sign stopped meaning what was asserted. The rewrite pins
+where the wood LANDS, which is what the rule was always about, and now holds
+corners to **both** of their axes rather than straight rails to one.
+
+## They move in, and they starve (`concept/village_mortality.md`, 2026-09-20)
+
+Asked for directly: *"now make the npcs move in and make them starve and
+die if they don't have food"*.
+
+Two halves of one thing, and a new concept doc for them, because none
+existed — `death.md` is the PLAYER's nine lives and says nothing about
+NPCs.
+
+### ✅ Villagers follow the roster, both ways
+
+The gap this ledger recorded last round, closed. The villagers standing in
+a chunk were a SNAPSHOT: `VillageRenderer._population_for` reads the real
+roster, but only at spawn time, so a household admitted while the player
+stood there got nobody. `reconcile_villagers` runs per settlement step and
+brings the street into line with the ledger.
+
+Additive on purpose. A villager who dies removes themselves, which is the
+removal that has a cause a player watched; culling markers to match a
+shrunken roster would have to pick somebody arbitrary, and the one it
+picked would be as likely to be the farmer you were watching as anybody.
+
+### ✅ Hunger left at the top kills
+
+`Starvation`, pure and static, measured in hunger **cycles** rather than
+days — there are two day-lengths in this codebase (SeasonCycle's 14400s of
+material economy, EarthChunkManager's 60s a player feels) and a mortality
+clock written against the wrong one either kills instantly or never kills
+at all. Reading the drive's own cycle means it cannot drift onto a
+different clock than the hunger it measures.
+
+A death is a **departure with a reason**: it goes out through the same
+`npc_departed` event the estate exodus already appends, so the census, the
+tier, the ladder and the settlement card all see it with no new plumbing,
+and the roof stops counting as one of ours.
+
+### The whole loop, measured (`tools/probe_village_famine.gd`)
+
+```
+  seconds   roster   standing  hungriest market food  starved/win
+        0       10         10       0.30          0      0/200
+      600       12         12       1.00          0    151/200
+      750       12         12       1.00          0    189/200
+      900       12         12       1.00          0    102/200
+     1200       12         12       1.00          0    174/200
+     1500        7          7       1.00          0    117/200
+     2400       13         13       1.00          0    181/200
+```
+
+Five villagers starve between 1200 and 1500; the roster falls 12 → 7;
+immigration refills it and the newcomers appear. **`standing` equals
+`roster` at every single sample**, through five deaths and six arrivals —
+the strongest form of the claim the reconcile makes. The village ends
+larger than it started.
+
+At 750 the worst-off villager reached 189 of 200 and then fell back to
+102 as food arrived. That fallback IS the mechanic: the cart of grain
+saving somebody, which is what the window exists for.
+
+### 🚧 Three things this got wrong, all caught by measuring
+
+**A coarse step over-billed starvation.** Billing a whole step at the
+hunger level it ENDED on killed a villager who was starving for only its
+last instant — and steps here are not frame-sized (a settlement step is
+30s, a catch-up longer). Caught by its own test
+(`test_a_meal_at_the_last_moment_saves_them`): the villager was dead
+before the meal could reach them. Now billed pro rata along the linear
+rise.
+
+**The reconcile resurrected extinct villages.** It read the roster through
+`_population_for`, which treats 0 as *"never recorded, fall back to the
+founding roster"* — right for spawning, badly wrong for reconciling, since
+a village whose last household died looks identical to one never written
+down. Measured: a village fell to a roster of 0 and got ten fresh
+villagers on the street, who starved, forever.
+
+**The probe lied first.** Its first cut stepped only the settlements and
+the villagers, not the clock or the farm plots, so nothing could GROW
+food — and it reported a total wipe-out. Trusting it would have meant
+retuning a constant that was fine, which is precisely the mistake that
+made `LITRES_PER_TENDING` four times too big earlier the same day.
+Recorded rather than quietly corrected.
+
+### ✅ ...and the famine stopped advertising itself
+
+Found by the same run and fixed straight after: a village in permanent
+famine kept drawing households, because the gate counted **234 units of
+food on farmhouse shelves that nobody could eat** — 19.5 per household
+against a `FED_THRESHOLD` of 2.0.
+
+`SettlementFood.food_stock` documents that argument in its own words as
+*"a Storage holding hauled bread, a Bakery with loaves still on its
+shelf"*; `_settlement_structure_stocks` handed it every shelf in the
+chunk. The caller was breaking its own parameter's contract, and fixing
+the caller rather than the gate repairs every reader at once — the gate,
+the GROWING/DECLINING status, the build decision's food shortfall, and
+the card's "feeds N of M".
+
+🚧 **Still true underneath**: those farmhouses are full because
+`NpcMarker.HAULING_CARRY_LIMIT` is `0.0` — hauling is wired but
+deliberately switched off until delivery is proven to complete in a
+running village. Farm output has no route to anybody's plate; the village
+survives on foraging and the producers' regional drip.
+
+Tests: `test_starvation.gd` 16/16 (new), `test_npc_needs.gd` 14/14,
+`test_npc_marker.gd` 102/102, `test_earth_chunk_manager_village_
+mortality.gd` 5/5 (new), `test_village_renderer.gd` 150/150.

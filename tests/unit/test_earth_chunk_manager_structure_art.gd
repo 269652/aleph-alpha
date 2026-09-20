@@ -270,7 +270,45 @@ func test_the_two_side_walls_move_in_by_the_same_distance():
 	var west := _art_x_for(VillageFarm.fence_tile_for("west")) - centre
 	var east := centre - _art_x_for(VillageFarm.fence_tile_for("east"))
 	assert_almost_eq(west, east, 0.5)
-	assert_almost_eq(west, TerrainRenderer.TILE_SIZE * 0.5, 0.5, "half a tile in")
+	# How far in that is, DERIVED rather than pinned at a number: a wall sits
+	# flush against its own inner edge, so its centre line stands half the
+	# rail's own thickness back from that edge -- half a tile in, less half a
+	# rail. That used to be "half a tile" because the rail was thin enough
+	# for the difference to vanish into the tolerance; a rail scaled by its
+	# post spacing (docs/concept/village_farms.md, "Consecutive rails SHARE a
+	# post") is about a quarter thicker, and the distance shrinks with it.
+	# Pinning 8.0 would pin the old thickness, not the rule.
+	var thickness := _drawn_rail_thickness(VillageFarm.fence_tile_for("west"))
+	assert_gt(thickness, 0.0, "precondition: the west rail's wood was measured")
+	assert_almost_eq(
+		west, TerrainRenderer.TILE_SIZE * 0.5 - thickness * 0.5, 0.5,
+		"half a tile in, less half a rail"
+	)
+
+
+## How thick a side rail's wood really draws, across the run it travels --
+## the only number the distance above depends on, measured off the real
+## texture so it follows the art instead of restating it.
+func _drawn_rail_thickness(subject: String) -> float:
+	const IllustratedStructureSprite = preload(
+		"res://src/rendering/illustrated_structure_sprite.gd"
+	)
+	var texture := IllustratedStructureSprite.new().footprint_texture(
+		subject, TerrainRenderer.TILE_SIZE
+	)
+	if texture == null:
+		return 0.0
+	var image := texture.get_image()
+	var first := -1
+	var last := -1
+	for x in range(image.get_width()):
+		for y in range(image.get_height()):
+			if image.get_pixel(x, y).a > 0.5:
+				if first < 0:
+					first = x
+				last = x
+				break
+	return 0.0 if first < 0 else float(last - first + 1)
 
 
 ## A corner post caps a side wall, so it stands exactly where that wall
