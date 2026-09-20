@@ -16078,15 +16078,28 @@ func _spawn_building_node(chunk_coord: Vector2i, origin_local: Vector2i, record:
 	# every reload. A building with no yard declared grows no node at all.
 	var yard_sheet := BuildingCatalog.background_sheet_for(building_id, int(record["seed"]))
 	if not yard_sheet.is_empty():
-		var yard_texture := _first_texture_of([yard_sheet], footprint.x, building_id)
+		# Scaled to the WHOLE plot, exactly as the kerb above is, not to the
+		# narrower share the house itself is drawn at
+		# (BuildingCatalog.PLOT_MARGIN_SHARE). It was drawn at the house's
+		# width, and at that size it sat entirely inside the house's own
+		# silhouette: reported live as *"farm houses don't use the 3x2
+		# background image as background..."*, measured at 14.6% of the
+		# yard's opaque pixels reaching the screen
+		# (tools/probe_building_yard.gd).
+		var yard_texture := _illustrated_structure_sprite.plot_background_texture(
+			String(yard_sheet["path"]), int(yard_sheet["columns"]), int(yard_sheet["rows"]),
+			int(yard_sheet["row"]), int(yard_sheet["column"]),
+			TerrainRenderer.ART_TILE_SIZE, footprint, String(yard_sheet["grid"])
+		)
 		if yard_texture != null:
 			var yard := Sprite2D.new()
 			yard.name = "Yard"
 			yard.texture = yard_texture
 			yard.scale = Vector2.ONE * ArtResolution.SPRITE_SCALE
-			yard.position = Vector2(
-				0, -float(yard_texture.get_height()) * 0.5 * ArtResolution.SPRITE_SCALE
-			)
+			# The plot's own rect, the same one the kerb and the collision
+			# shape are built from -- a plot-sized picture centred on the
+			# plot's centre.
+			yard.position = Vector2(0, -footprint_px.y * 0.5)
 			node.add_child(yard)
 
 	var sprite := Sprite2D.new()
