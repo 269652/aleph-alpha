@@ -80,6 +80,11 @@ const _ITEMS := {
 	# player) forage tier still uses -- see EarthChunkManager.step_forage vs
 	# step_fruiting.
 	"cherry": ["Cherry", "food", 20, 0.0],
+	# Picked off a real bramble in a real autumn (see docs/concept/
+	# brambles.md and BlackberryBramble.pick) -- beside the other wild fruit
+	# and stacking like them, so everything that already knows what to do
+	# with a cherry knows what to do with this.
+	"blackberry": ["Blackberry", "food", 20, 0.0],
 	"apple": ["Apple", "food", 20, 0.0],
 	"walnut": ["Walnut", "food", 20, 0.0],
 	# The other three tree crops (see TreeSpecies -- a tree's species id IS the

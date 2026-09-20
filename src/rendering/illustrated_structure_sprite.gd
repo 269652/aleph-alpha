@@ -1,5 +1,7 @@
 extends RefCounted
 
+const SpriteSheetSlicer = preload("res://src/rendering/sprite_sheet_slicer.gd")
+
 ## Real illustrated art for the structures docs/concept/npc_farm_production.md
 ## and docs/concept/npc_role_consensus.md introduced: farm
 ## (assets/sprites/buildings/farmhouse.png), sagewerk (.../sawmill.png),
@@ -1018,146 +1020,16 @@ const _CHECKERBOARD_SHEETS := {
 	"res://assets/sprites/buildings/cottage_bg_overlay.png": true,
 }
 
-## How unsaturated and how bright a pixel must be to be checkerboard at all.
-## The checker's two tones measure (253, 253, 253) and about (213, 213, 213),
-## so both clear these comfortably while the art's own lightest real colour
-## -- the sandy path -- does not, being visibly warm.
-const _CHECKER_MAX_CHANNEL_SPREAD := 0.06
-const _CHECKER_MIN_CHANNEL := 0.78
-
-## The checker's two squares are anti-aliased into each other, and into the
-## art, so the pixels along every square's edge land at everything between
-## the two tones and below. The seed threshold above cannot be loosened to
-## take those -- at that width it would also swallow a grey rock -- so the
-## flood WIDENS by a bounded few pixels from background it has already
-## cleared, under a looser rule. Anti-aliasing is one or two pixels wide, so
-## a bounded widening cannot reach a rock's interior however grey it is.
+## Clears the checkerboard a yard sheet paints instead of transparency.
 ##
-## Measured before it: 338 opaque unsaturated pixels survived in one yard,
-## about 40 of them real white flower highlights; pinned now by
-## test_no_grey_checkerboard_fringe_survives_around_a_yard.
-const _CHECKER_FRINGE_MIN_CHANNEL := 0.55
-const _CHECKER_FRINGE_MAX_CHANNEL_SPREAD := 0.09
-const _CHECKER_FRINGE_DEPTH := 2
-
-## The checker's DARKER square, which is a safe seed anywhere in the cell --
-## not only at the border. Its two tones measure about 253 and 213: a white
-## flower highlight sits at 235 and above, so nothing in the art is this
-## particular grey. Seeding from it as well as from the border is what
-## clears the checker seen through small gaps in the foliage, which is
-## enclosed by art and so is never reachable from the cell's own edge.
-## Measured: 86 such pixels in one cell.
-const _CHECKER_DARK_MIN_CHANNEL := 0.76
-const _CHECKER_DARK_MAX_CHANNEL := 0.91
-
-
-## Clears the checkerboard a yard sheet paints instead of transparency, by
-## flooding inward from the cell's own edges.
-##
-## A FLOOD, not a flat key, and the difference is the whole point: the
-## checker's lighter square and the art's white flower highlights are THE
-## SAME COLOUR. The tones measure about 253 and 213; a flower highlight sits
-## at 235 and above. Measured, one source cell holds 46,354 near-white
-## pixels, almost all of them checker, and 63 survive keying at drawn size
-## -- those are the flowers, and a flat key takes every one of them.
-##
-## What separates them is connectivity, not colour: the checker reaches the
-## cell's own edge and a flower enclosed in foliage does not.
-##
-## Unlike IllustratedCharacterSprite's own flood (head.png), this one steps
-## between the checker's two tones freely rather than within a per-step
-## tolerance: those differ by about 40/255, far wider than any tolerance
-## would allow, because what is followed here is a KNOWN two-tone pattern
-## rather than an unknown gradient into the art.
+## The routine itself lives in SpriteSheetSlicer now, beside chroma_keyed,
+## because keying a delivered background is a KEYING problem rather than a
+## structure-sprite one — and a second sheet needed it: the fern sheet
+## arrives with the same two tones (docs/concept/ferns.md, "The
+## checkerboard"). Everything that makes it a FLOOD rather than a flat key
+## is documented there, with the thresholds it is measured against.
 static func _flood_off_checkerboard(image: Image) -> void:
-	var width := image.get_width()
-	var height := image.get_height()
-	if width <= 0 or height <= 0:
-		return
-	var cleared := {}
-	var queue: Array[Vector2i] = []
-	for x in range(width):
-		for y in [0, height - 1]:
-			var edge := Vector2i(x, y)
-			if not cleared.has(edge) and _is_checkerboard(image.get_pixelv(edge)):
-				cleared[edge] = true
-				queue.append(edge)
-	for y in range(height):
-		for x in [0, width - 1]:
-			var edge := Vector2i(x, y)
-			if not cleared.has(edge) and _is_checkerboard(image.get_pixelv(edge)):
-				cleared[edge] = true
-				queue.append(edge)
-	# ...and from the darker square anywhere in the cell, which no part of
-	# the art shares, so checker showing through a gap in the foliage is
-	# cleared even though it cannot be reached from the edge.
-	for y in range(height):
-		for x in range(width):
-			var inside := Vector2i(x, y)
-			if not cleared.has(inside) and _is_dark_checker(image.get_pixelv(inside)):
-				cleared[inside] = true
-				queue.append(inside)
-	var head := 0
-	while head < queue.size():
-		var at: Vector2i = queue[head]
-		head += 1
-		for step in [Vector2i(1, 0), Vector2i(-1, 0), Vector2i(0, 1), Vector2i(0, -1)]:
-			var next: Vector2i = at + step
-			if next.x < 0 or next.y < 0 or next.x >= width or next.y >= height:
-				continue
-			if cleared.has(next) or not _is_checkerboard(image.get_pixelv(next)):
-				continue
-			cleared[next] = true
-			queue.append(next)
-	# ...then widen by a bounded depth, so the checker's anti-aliased edges
-	# go with it without the seed rule having to be loose enough to eat art.
-	var frontier: Array[Vector2i] = queue
-	for _depth in range(_CHECKER_FRINGE_DEPTH):
-		var next_frontier: Array[Vector2i] = []
-		for at in frontier:
-			for step in [Vector2i(1, 0), Vector2i(-1, 0), Vector2i(0, 1), Vector2i(0, -1)]:
-				var near: Vector2i = at + step
-				if near.x < 0 or near.y < 0 or near.x >= width or near.y >= height:
-					continue
-				if cleared.has(near) or not _is_checker_fringe(image.get_pixelv(near)):
-					continue
-				cleared[near] = true
-				next_frontier.append(near)
-		frontier = next_frontier
-
-	for cell in cleared:
-		image.set_pixelv(cell, Color(0, 0, 0, 0))
-
-
-## The looser rule the bounded widening uses -- grey, and bright enough to
-## be a checker edge rather than a shadow, but reachable only from
-## background already cleared and only _CHECKER_FRINGE_DEPTH pixels deep.
-static func _is_checker_fringe(color: Color) -> bool:
-	var lowest: float = minf(color.r, minf(color.g, color.b))
-	var highest: float = maxf(color.r, maxf(color.g, color.b))
-	return (
-		lowest >= _CHECKER_FRINGE_MIN_CHANNEL
-		and highest - lowest <= _CHECKER_FRINGE_MAX_CHANNEL_SPREAD
-	)
-
-
-static func _is_dark_checker(color: Color) -> bool:
-	var lowest: float = minf(color.r, minf(color.g, color.b))
-	var highest: float = maxf(color.r, maxf(color.g, color.b))
-	return (
-		lowest >= _CHECKER_DARK_MIN_CHANNEL
-		and lowest <= _CHECKER_DARK_MAX_CHANNEL
-		and highest - lowest <= _CHECKER_MAX_CHANNEL_SPREAD
-	)
-
-
-static func _is_checkerboard(color: Color) -> bool:
-	var lowest: float = minf(color.r, minf(color.g, color.b))
-	var highest: float = maxf(color.r, maxf(color.g, color.b))
-	return (
-		lowest >= _CHECKER_MIN_CHANNEL
-		and highest - lowest <= _CHECKER_MAX_CHANNEL_SPREAD
-	)
+	SpriteSheetSlicer.checkerboard_key_in_place(image)
 
 
 func _key_and_despill(image: Image, keys_black: bool) -> void:

@@ -38,6 +38,7 @@ class CountingManager extends EarthChunkManager:
 	func step_flies(d: float) -> void: _note("flies", d)
 	func step_carried_food(d: float) -> void: _note("carried_food", d)
 	func step_tall_grass(d: float) -> void: _note("tall_grass", d)
+	func step_ferns(d: float) -> void: _note("ferns", d)
 	func step_aquatic_vegetation(d: float) -> void: _note("aquatic_vegetation", d)
 	func step_aquatic_invertebrates(d: float) -> void: _note("aquatic_invertebrates", d)
 	func step_wild_crops(d: float) -> void: _note("wild_crops", d)
@@ -72,7 +73,7 @@ const WORLD_STEPS: Array[String] = ["herbivore_food", "reproduction"]
 
 const CHUNK_MANAGER_STEPS: Array[String] = [
 	"worms", "ecosystem", "forage", "tree_spread", "tree_growth", "ground_food", "flies", "carried_food",
-	"tall_grass", "aquatic_vegetation", "aquatic_invertebrates", "wild_crops", "wild_mushrooms",
+	"tall_grass", "ferns", "aquatic_vegetation", "aquatic_invertebrates", "wild_crops", "wild_mushrooms",
 	"farm_plots", "ants", "bees", "leaf_litter", "footprints", "flowers", "desert_scrub",
 	"tundra_lichen", "settlements", "npc_encounters", "regional_trade",
 ]

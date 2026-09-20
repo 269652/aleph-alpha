@@ -122,3 +122,59 @@ func _every_sheet_path(root: String) -> Array:
 
 func test_returns_null_for_a_path_that_does_not_exist():
 	assert_null(SpriteSheetLoader.load_image("res://assets/sprites/not_a_real_sheet.png"))
+
+
+# -- every shipped sheet carries its own .import sidecar --------------------
+#
+# The tolerant loader above hides this one, and that is the point: a sheet
+# whose *.png.import was never committed still loads through
+# SpriteSheetLoader, because the fallback reads its bytes. But the art
+# classes that use `load()` directly -- the structure sheets, the yards --
+# get a NULL texture on a fresh checkout, and a null texture in a
+# sprite-crop test reads exactly like a genuine sheet regression.
+#
+# Twice in one day: the two yard sheets (fixed by 3e7286cb) and then
+# fern.png, which took down test_no_house_crop_cuts_through_the_top_of_its_
+# own_drawing with "Cannot call method 'get_image' on a null value" on a
+# file that was right there on disk.
+#
+# On a fresh clone -- CI, or a new container -- "the sidecar is on disk" and
+# "the sidecar was committed" are the same statement, which is what makes
+# this checkable at all from inside the engine.
+
+
+## Every *.png under `root` with no *.png.import beside it.
+func _sheets_missing_a_sidecar(root: String) -> Array:
+	var missing: Array = []
+	for path in _every_sheet_path(root):
+		if not FileAccess.file_exists(path + ".import"):
+			missing.append(path)
+	return missing
+
+
+## The rule itself, against a sheet deliberately left without one -- so a
+## green result below means "nothing is missing", never "nothing was
+## looked at".
+func test_a_sheet_with_no_sidecar_is_found():
+	var dir := "user://sidecar_fixture"
+	DirAccess.make_dir_recursive_absolute(dir)
+	var bare := "%s/bare.png" % dir
+	var out := FileAccess.open(bare, FileAccess.WRITE)
+	out.store_buffer(FileAccess.get_file_as_bytes(REAL_SHEET_PATH))
+	out.close()
+
+	assert_eq(
+		_sheets_missing_a_sidecar(dir), [bare],
+		"a sheet with no .import beside it has to be findable, or the sweep below proves nothing"
+	)
+
+	DirAccess.remove_absolute(ProjectSettings.globalize_path(bare))
+	DirAccess.remove_absolute(ProjectSettings.globalize_path(dir))
+
+
+func test_every_shipped_sheet_carries_its_own_import_sidecar():
+	var missing := _sheets_missing_a_sidecar("res://assets/sprites")
+	assert_eq(
+		missing, [],
+		"these sheets load as null through load() on a fresh checkout: %s" % str(missing)
+	)

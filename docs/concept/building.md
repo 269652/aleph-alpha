@@ -384,32 +384,60 @@ screenshot shows. Measured before the fix with
 48.6 lon 12.7: 28 buildings, and all three town halls painting ground that
 was not the square they stand on.
 
-**So a building reads its own kerb.** The kerb is the ring of cells
-immediately around the footprint -- 18 cells round a 4x3 hall, 12 round a
-2x2 cottage. When more than `TerrainRenderer.PAVED_KERB_SHARE` of it
-carries laid Road, the footprint paints Road as well, and the hall is
-cobbled right up to its own walls; anything less and it stays the plain
-overlay above, with the ground it was raised on showing through. One rule,
-both halves of the report: the ground a building carries is a reading of
-its surroundings, never a constant and never a rectangle of its own.
+**So a building reads its own kerb -- and which building it is.** The kerb
+is the ring of cells immediately around the footprint -- 18 cells round a
+4x3 hall, 12 round a 2x2 cottage. A building whose kerb carries more than
+`TerrainRenderer.PAVED_KERB_SHARE` of laid Road **and** which a village
+raises on its own paving to begin with
+(`BuildingCatalog.PAVED_PLOT_BUILDING_IDS`) paints that Road under itself,
+and the hall is cobbled right up to its own walls; anything else stays the
+plain overlay above, with the ground it was raised on showing through.
 
 The share is half, and the measurements are what put it there. On those
 same three villages every town hall's kerb is 12 of 18 paved (67%), the
 same 12 of 18 in all three because the plaza and the civic plot are both
 pure functions of the chunk and its seed. An ordinary house, farmhouse or
-sawmill plot runs 7-43% -- its doorstep and a spur, no more. Three plots of
-the 28 sat above half (58%, 71%, 86%); all three are corner plots genuinely
-ringed by street, and paving them is the same rule doing the same job
-rather than an exception to it. Trails do not count, only the laid Road
-tier ([infrastructure.md](infrastructure.md)): a building standing in
-ground worn by walking is standing in worn ground.
+sawmill plot ran 7-43% -- its doorstep and a spur, no more. Trails do not
+count, only the laid Road tier ([infrastructure.md](infrastructure.md)): a
+building standing in ground worn by walking is standing in worn ground.
+
+**The share alone stopped being enough, and the reason is geometry, not a
+badly chosen number.** Reported with three farmhouses in shot, each
+standing on its own grey pad: *"make the farm houses ground grass instead
+of cobblestone... only buildings placed on pavement like the city hall
+should get the pavement bg"*. Re-measured on the same three settlements
+once the square stopped being abandoned at founding
+([village_market_square.md](village_market_square.md)):
+
+| plot | kerb paved | on the square |
+| --- | --- | --- |
+| `farmhouse` (13, 19) | 14/14 (100%) | no |
+| `farmhouse` (20, 19) | 11/14 (79%) | no |
+| `house_small` (17, 19) | 10/12 (83%) | no |
+| `city_hall` (14, 13) | 12/18 (67%) | **yes** |
+
+Ten buildings across those three villages painted cobbles while standing on
+open ground, and the worst offenders beat the hall. A plot wedged between
+the square's southern rows and the second street is ringed by paving on
+every side while standing on none of it, so **no threshold can separate the
+two** -- the hall's own 67% is below the farmhouse's 100%.
+
+What separates them is not local geometry at all: it is which buildings a
+village ever raises on its own paving, and exactly one does. The civic plot
+IS the paved square -- `EarthChunkManager._civic_plot_origin_for` refuses a
+plot whose every footprint cell is not already a road tile -- while every
+other placement path refuses a modified footprint outright
+(`can_build_house_from_blueprint` with `road_allowed` false,
+`_is_clear_settlement_site`, `VillageLayout._street_plot_fits`). So the
+rule asks both questions, and both halves earn their keep: a hall raised
+somewhere with no paving round it keeps the ground it was raised on like
+anything else, and a farmhouse ringed by the whole village keeps its grass.
 
 **Nothing about this is persisted.** The ground is re-derived from the
 chunk on every paint, so a village saved before this existed heals on its
 next load -- the same property that lets an older village re-derive and
-pave its square (`VillageRenderer._lay_plaza_if_missing`). It also means a
-plot that is paved AROUND later becomes paved itself, with no migration
-and no second source of truth to drift.
+pave its square (`VillageRenderer._lay_plaza_if_missing`), and the same
+property that un-paves every farmhouse pad an older save already carries.
 
 `TerrainRenderer` preloads `BuildingCatalog` for this, which the literal
 `BUILDING_OVERLAY_TILE_IDS` list deliberately avoids -- a named divergence,
@@ -421,7 +449,11 @@ the catalog knows. The list stays literal.
 "what does this look like" question in this repo is
 (`tools/probe_village_render.gd`, under `xvfb` + Mesa software GL): the
 hall's plot is cobbled continuously into the plaza around it with no seam
-and no square, and a cottage's plot shows the grass it stands in.
+and no square, and a cottage's plot shows the grass it stands in. The
+probe takes a third frame since the farmhouse report -- that plot is the
+hardest case there is, ringed by the square on one side and the second
+street on the other -- and it shows the farmhouse and its yard standing on
+grass with the village's paving running past it.
 
 **The kerb is drawn, too.** `ProceduralFootprintKerbSprite` draws the
 footprint's own outline at art resolution -- a dark edge with a lighter
@@ -916,6 +948,75 @@ a crop must be **essentially empty or essentially full**, because a partly
 covered row is the silhouette of a roof being sliced. Every cut measured
 before the fix sat at 40–52%; every whole crop is at 0–17% or 100%.
 
+**…and the same house RISING (2026-09-20).** Reported the moment a village
+started one: *"it's clipped and doesn't use the intermediate construction
+sprites so you can see the progress... also it's scaled improperly"*. All
+three are one fault, and it is the pass above stopping one chain short. The
+grid kind is a property of the SHEET, `finished_sheet_chain` asks the sheet
+for it — and `construction_sheet_chain` still NAMED `dividers` for every
+house, so a cottage or manor going up was cut on magenta lines its own sheet
+does not draw.
+
+Measured before the fix (`tools/probe_construction_stage.gd`), `cottage_1`
+row 0 as the build runs: cells **145×105, 149×105, 153×105**, where the
+sheet's own content cut gives **171×174** every time and the finished house
+is 172 wide. A cell half the sheet's own pitch tall, changing shape frame to
+frame, drawn scaled to one fixed plot width, is precisely a house that is
+clipped, scaled wrong, and unreadable as a stage of anything. After: every
+stage within 2% of the finished house's own width, drawn 21.0 × 21.0 world
+units at every one of the five stages, and the strip reads left to right as
+footings → frame → truss → roof → house
+(`tools/probe_construction_render.gd`, kept).
+
+The guard above is now asked of the rising house as well as the standing one
+(`test_no_rising_house_crop_cuts_through_the_top_of_its_own_drawing`), plus
+a scale guard against the finished cell
+(`test_every_stage_of_one_build_is_drawn_at_the_scale_its_finished_house_
+will_be`) — the cut it catches was 11–16% narrow. **Why it took a report to
+find:** the existing crop guard read its sheets with `load()` as a
+`Texture2D`, which answers null for art whose imported artifact has never
+been generated in that checkout — every headless run on a fresh clone. It
+was erroring on `cottage_3` rather than guarding, while the bug shipped one
+chain along. It reads through `SpriteSheetLoader` now, which falls back to
+the file's own bytes.
+
+**Somebody is working on it (2026-09-20).** Asked for directly, watching a
+village raise a cottage: *"the construction site should show a builder
+working on it"*. A site was a picture of a building going up and nothing
+else: the stage sprite changed as labour accrued, and the plot was
+otherwise empty ground.
+
+The labour is not abstract, so the worker is not decoration. A settlement
+spends real spare hands on its projects — `SettlementSpareCapacity` scaled
+by `settlement_productivity`, the `builder_count` `ConstructionCatchup`
+charges the project's required hours against — and that number is already
+the difference between a hall that rises and one that does not. The
+builder is that number made visible.
+
+- **One builder per site that is really being worked.** A
+  `ConstructionWorkerMarker` stands on the plot while its settlement has
+  hands on the work, and is gone the moment the project completes, is
+  abandoned, or its chunk unloads — the site node's own life exactly
+  (`_sync_construction_site`/`_free_construction_site`), because a worker
+  outliving the site he works is a ghost.
+- **Nobody, when nobody is working.** `builder_count` is zero for a
+  settlement with no spare capacity — everyone fed, gathering, or too few
+  households to spare one — and a site that is accruing no labour shows no
+  worker. A figure standing over a project that has not moved in a week is
+  a lie the ledger would be telling for us.
+- **One figure, not a crew.** `builder_count` is settlement-WIDE and shared
+  across every project that settlement has going, so drawing one worker per
+  unit at each site would show the same hands two and three times over. One
+  builder per site is the honest reading of a shared number: somebody is
+  working here.
+- **A small purpose-built walker**, like the Farmer and the Lumberjack and
+  for the same reason — not the `NpcMarker` schedule stack. He paces his
+  own plot, works a spell, and moves on, and he never leaves the footprint:
+  the site is the job. Drawn by `ProceduralBuilderSprite` in the same tiny
+  silhouette style at the same `SIZE`, with a mallet up rather than an axe
+  held or a shaft pulled, so the three workers a village has out at once
+  are told apart at a glance.
+
 **The house tiers read as a ladder (2026-09-19).** Asked in the same breath:
 *"also scale down cottage to be smaller than house"*. Measured, a cottage
 drew 26.0 × 26.0 world px against a house's 39.5 × 24.0 — the smallest tier
@@ -1131,6 +1232,14 @@ tile, no dividers, no directional variants (see
   still the street. Full account in
   [civic_construction.md](civic_construction.md) "Meeting Hall". Tested
   (`test_civic_build_decision.gd`,
+  `test_earth_chunk_manager_city_hall_rising.gd`).
+- ✅ **Somebody is working on the site** (2026-09-20).
+  `ConstructionWorkerMarker` + `ProceduralBuilderSprite`: one builder on a
+  site its settlement really has hands on, gone with the site itself, and
+  legible at the size he is really drawn (both failures of the first draft
+  are pinned as measurements, not taste). Full account above, "Somebody is
+  working on it". Tested (`test_procedural_builder_sprite.gd`,
+  `test_construction_worker_marker.gd`,
   `test_earth_chunk_manager_city_hall_rising.gd`).
 - ✅ **The square under a hall, and the kerb round every plot**
   (2026-09-20). The overlay rule above leaves a building showing the

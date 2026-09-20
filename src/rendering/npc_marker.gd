@@ -2348,13 +2348,24 @@ func _unload_the_cart() -> void:
 	var unloaded: Dictionary = cart.unload_all()
 	for item_id in unloaded:
 		var delivered := int(unloaded[item_id])
+		# Onto the STORE'S SHELF, and nowhere else.
+		#
+		# This also called economy.record_delivered_goods, on Mechanism 7's
+		# rule that "the carter's arrival at the store is what credits the
+		# village's sellable stock -- ONE credit, for a pile that exists".
+		# Two things landed after that was written and between them made it
+		# two credits. The shelf was invisible to every food reading at the
+		# time, and milling_and_baking.md's "Food that counts" taught
+		# SettlementFood to count shelves; then hauling was switched on, so
+		# that second credit went into the carter's own HANDS, which
+		# deliver_load later empties onto the stall. N units delivered
+		# became N on the shelf plus N on the stall.
+		#
+		# The pile on the shelf IS the credit now: SettlementFood counts it,
+		# the settlement card reads it, and MerchantVisit buys off it. What
+		# reaches the stall reaches it by StallRestock, out of this same
+		# shelf, so every unit there really left the store.
 		_world.deposit_to_structure_at(store_cell.x, store_cell.y, String(item_id), delivered)
-		# The village's sellable stock is credited HERE, at the moment the
-		# goods really reach the store (docs/concept/village_warehouse.md,
-		# Mechanism 7) -- once, for a pile that exists. The producer was
-		# already paid at their own scythe.
-		if economy != null:
-			economy.record_delivered_goods(String(item_id), delivered)
 
 
 ## The nearest real thing this villager may take right now, or null.

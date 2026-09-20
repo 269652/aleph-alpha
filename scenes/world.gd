@@ -4339,6 +4339,11 @@ func _step_ecology_batch(delta: float, focus_player: Player) -> void:
 			# Food goes off in the pack too, on the same clock (see ItemStack.age).
 			"carried_food": _chunk_manager.step_carried_food,
 			"tall_grass": _chunk_manager.step_tall_grass,
+			# A wood's own ground cover, the fourth and newest
+			# (docs/concept/ferns.md). Beside the grass deliberately: the
+			# two share a refresh interval and are re-synced by the same
+			# kind of walk, so a reader looking for one finds the other.
+			"ferns": _chunk_manager.step_ferns,
 			# Real aquatic vegetation and the invertebrate layer on it (see
 			# docs/concept/aquatic_foraging.md).
 			"aquatic_vegetation": _chunk_manager.step_aquatic_vegetation,

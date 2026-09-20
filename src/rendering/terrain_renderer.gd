@@ -250,7 +250,9 @@ const PAVED_KERB_SHARE := 0.5
 ## (docs/concept/infrastructure.md). An empty kerb -- a plot at the
 ## chunk's own edge, whose neighbours nobody can read -- is "", never
 ## paving conjured out of nothing.
-static func building_ground_tile_for(kerb_tile_ids: Array) -> String:
+static func building_ground_tile_for(building_id: String, kerb_tile_ids: Array) -> String:
+	if not BuildingCatalog.stands_on_laid_paving(building_id):
+		return ""
 	var paved := 0
 	for tile_id in kerb_tile_ids:
 		if is_road_tile(tile_id):
@@ -281,6 +283,7 @@ static func building_ground_by_cell(chunk: Chunk) -> Dictionary:
 		if not BuildingCatalog.has_building(building_id):
 			continue
 		var tile_id := building_ground_tile_for(
+			building_id,
 			_kerb_tile_ids(chunk, origin_local, BuildingCatalog.footprint_of(building_id))
 		)
 		if tile_id == "":

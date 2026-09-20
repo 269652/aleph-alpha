@@ -2883,6 +2883,7 @@ func _perform_attack() -> void:
 	_smash_step()
 	_harvest_beehive_step()
 	_harvest_grass_step()
+	_pick_blackberries_step()
 	_pull_wild_crop_step()
 	_butcher_step()
 	_collect_step()
@@ -3154,6 +3155,21 @@ func _pickaxe_power() -> float:
 func _harvest_grass_step() -> void:
 	if _chunk_manager != null:
 		_chunk_manager.harvest_grass_near(position)
+
+
+## Picking: a swing at a ripe bramble takes its blackberries (see
+## EarthChunkManager.pick_blackberries_near, docs/concept/brambles.md).
+##
+## The same attack key every other harvest-shaped verb here already uses,
+## rather than a "pick" button of its own: a second way to do the one thing
+## this game already has a way to do is a worse world, not a richer one.
+##
+## Every refusal belongs to the bramble, not to this: fruit is only ripe
+## across autumn, and a patch picked this year gives nothing more until the
+## next. The swing just asks.
+func _pick_blackberries_step() -> void:
+	if _chunk_manager != null:
+		_chunk_manager.pick_blackberries_near(position)
 
 
 ## Pulling: a swing over a mature wild carrot/potato patch pulls it out of
