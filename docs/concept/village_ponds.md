@@ -276,12 +276,18 @@ building's own chain (`BuildingCatalog.finished_sheet_chain`): the day
 line is pure tidying. Pinned by
 `test_a_borrowed_sheet_never_hides_the_buildings_own`.
 
-What it borrows is the BUILDING, not the farmstead: a farmhouse also
-stands in one of nine drawn yards (`background_sheet_for`, "A building's
-own yard, drawn behind it" in [building.md](building.md)), and the hut is
-not declared for one. That is deliberate rather than an oversight -- a
-fisher's hut stands on a bank, not in a farmyard -- and it is also the one
-thing that tells the two apart until the hut's own sheet is drawn.
+**It borrows the yard as well** -- asked for directly the moment the hut
+was up beside its pond: *"the fisher hut should get a yard too"*. A
+farmhouse stands in one of nine drawn yards (`background_sheet_for`, "A
+building's own yard, drawn behind it" in [building.md](building.md)), and
+an earlier version of this paragraph argued the hut should not, on the
+grounds that a fisher's hut stands on a bank rather than in a farmyard.
+That was the wrong call and is recorded as one: a farmhouse in a finished
+yard beside a hut on bare plot reads as one building done and the other
+forgotten. What `draws_as` borrows is the whole picture -- the house AND
+the ground it stands in -- and the hut's OWN seed still picks which of the
+nine, so the hut by the pond and the farmhouse up the street are different
+pictures.
 
 ### Honest gaps
 

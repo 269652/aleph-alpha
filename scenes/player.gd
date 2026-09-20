@@ -90,6 +90,7 @@ const PixelNoise = preload("res://src/rendering/pixel_noise.gd")
 const PlayerIdentity = preload("res://src/emergence/player_identity.gd")
 const EntityRef = preload("res://src/emergence/entity_ref.gd")
 const StoneSize = preload("res://src/world/stone_size.gd")
+const GroundSlide = preload("res://src/gameplay/ground_slide.gd")
 const Kick = preload("res://src/gameplay/kick.gd")
 const InputLatch = preload("res://src/gameplay/input_latch.gd")
 const Throwable = preload("res://src/gameplay/throwable.gd")
@@ -109,7 +110,29 @@ const BASE_SPEED := 40.0
 ## Keybindings). Exactly double BASE_SPEED by construction, not a
 ## separately-tuned number of its own.
 const SPRINT_SPEED := BASE_SPEED * 2.0
-const PLAYER_SIZE := 12
+## A standing adult's real ground footprint, in metres. Reported live:
+## *"houses hitbox extend by 20% above their tiles blocking movement"*.
+##
+## The houses were innocent. Measured with tools/probe_building_hitbox.gd: a
+## `house_small` owns world rows 66624.0..66656.0 and its collider covers
+## 66624.0..66656.0 -- tile-exact, with no overhang at all. What reached past
+## the house was this box: PLAYER_SIZE was 12x12 px, centred on the player's
+## own feet, so its leading edge stood 6px ahead of wherever they were
+## standing. At a 16px tile that is well over a third of a tile of body in
+## front of you, and you are stopped that far short of every wall you walk
+## up to -- which reads exactly like the wall being too big.
+##
+## A person is not square on the ground: about 45cm across the shoulders and
+## 27cm front to back (ISO 7250's adult body breadth and depth). Squaring
+## that off at the WIDER of the two is where the extra depth came from.
+##
+## In metres through the project's own PX_PER_METER, like every other real
+## measurement in this world, rather than as a pixel count -- so the body
+## stays the same real size whatever the tile is worth.
+const BODY_BREADTH_M := 0.45
+const BODY_DEPTH_M := 0.27
+const BODY_BREADTH_PX := BODY_BREADTH_M * GroundSlide.PX_PER_METER
+const BODY_DEPTH_PX := BODY_DEPTH_M * GroundSlide.PX_PER_METER
 
 ## Taming reach (see docs/concept/taming.md). The throw is deliberately short:
 ## having to close with a wary animal first is the part that makes stalking a
@@ -841,7 +864,7 @@ func _ready() -> void:
 		worn_material.dry_rate = 0.05
 
 	var shape := RectangleShape2D.new()
-	shape.size = Vector2(PLAYER_SIZE, PLAYER_SIZE)
+	shape.size = Vector2(BODY_BREADTH_PX, BODY_DEPTH_PX)
 	_collision_shape.shape = shape
 
 	_build_rope_line()
@@ -856,13 +879,16 @@ func _ready() -> void:
 	_bobber.top_level = true  # world position, independent of the player's own transform
 	add_child(_bobber)
 
-	# Shadow width comes from PLAYER_SIZE -- the player's own real collision
-	# footprint -- rather than an eyeballed pixel count, the same "derive it,
-	# don't invent it" discipline the rest of this project holds itself to.
+	# Shadow width comes from the body's own BREADTH -- the player's real
+	# collision footprint across the shoulders -- rather than an eyeballed
+	# pixel count, the same "derive it, don't invent it" discipline the rest
+	# of this project holds itself to. It used to read PLAYER_SIZE, which was
+	# breadth and depth at once; a shadow has to follow the one that really
+	# is width.
 	# Foot offset 0: record_water_disturbance(position)/_spawn_thrown_item's
 	# own "the player's own feet" already treat plain `position` as the
 	# ground-contact point, so the shadow needs no offset to match it.
-	_shadow = DropShadow.new().make_shadow(PLAYER_SIZE, 0.0)
+	_shadow = DropShadow.new().make_shadow(int(round(BODY_BREADTH_PX)), 0.0)
 	add_child(_shadow)
 
 	# Keep the hotbar reconciled with what's actually carried (see

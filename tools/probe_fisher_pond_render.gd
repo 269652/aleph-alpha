@@ -90,6 +90,10 @@ func _init() -> void:
 	for i in 3:
 		_manager.update(centre_tile)
 		await process_frame
+	# The works over the water is the other half of the report, and it
+	# stands off to one side of the pond -- so it gets its own frame rather
+	# than whatever corner of the pond's shot it happens to fall in.
+	var hut_tile := _hut_tile()
 
 	var centre := (Vector2(centre_tile) + Vector2(0.5, 0.5)) * float(TerrainRenderer.TILE_SIZE)
 	var view_top_left := centre - Vector2(VIEW) * 0.5 / world.scale.x
@@ -111,6 +115,20 @@ func _init() -> void:
 	closeup.resize(240 * 3, 180 * 3, Image.INTERPOLATE_NEAREST)
 	closeup.save_png("%s/pond_closeup.png" % OUT_DIR)
 	print("saved %s/pond_closeup.png" % OUT_DIR)
+
+	if hut_tile != Vector2i.MAX:
+		var hut_centre := (Vector2(hut_tile) + Vector2(0.5, 0.5)) * float(TerrainRenderer.TILE_SIZE)
+		var hut_top_left := hut_centre - Vector2(VIEW) * 0.5 / world.scale.x
+		world.position = Vector2(VIEW) * 0.5 - hut_centre * world.scale
+		_flow_pass.sync(hut_top_left, Vector2(VIEW) / world.scale.x)
+		RenderingServer.force_draw()
+		await process_frame
+		RenderingServer.force_draw()
+		var hut_image: Image = viewport.get_texture().get_image()
+		var hut_closeup := hut_image.get_region(Rect2i(VIEW.x / 2 - 120, VIEW.y / 2 - 90, 240, 180))
+		hut_closeup.resize(240 * 3, 180 * 3, Image.INTERPOLATE_NEAREST)
+		hut_closeup.save_png("%s/hut_closeup.png" % OUT_DIR)
+		print("saved %s/hut_closeup.png   centred on the hut at %s" % [OUT_DIR, hut_tile])
 	print("dumped to: ", ProjectSettings.globalize_path(OUT_DIR))
 	quit()
 
@@ -178,3 +196,17 @@ func _report_buildings(pond: Array) -> void:
 			print("  %-12s at %s  %.1f tiles from the water   occupation=%s" % [
 				record["id"], origin, nearest, record.get("occupation", ""),
 			])
+
+
+## The middle tile of the fisher's hut, or Vector2i.MAX when no hut stands
+## in any loaded chunk (which is itself worth seeing in the output).
+func _hut_tile() -> Vector2i:
+	var BuildingCatalog = load("res://src/gameplay/building_catalog.gd")
+	var VillagePondScript = load("res://src/gameplay/village_pond.gd")
+	for chunk_coord in _manager._loaded_chunks:
+		for record in _manager.buildings_in_chunk(chunk_coord):
+			if record["id"] != VillagePondScript.HUT_BUILDING_ID:
+				continue
+			var footprint: Vector2i = BuildingCatalog.footprint_of(record["id"])
+			return chunk_coord * CHUNK_SIZE + (record["origin_local"] as Vector2i) + footprint / 2
+	return Vector2i.MAX
