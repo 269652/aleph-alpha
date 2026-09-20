@@ -20,7 +20,7 @@ const CHUNK_SIZE := 32
 const STEPS := 40
 const SLICE := 0.25
 ## Long enough for several starvation windows to pass end to end.
-const SIMULATED_SECONDS := 2400.0
+const SIMULATED_SECONDS := 1200.0
 const REPORT_EVERY := 300.0
 
 var _manager
@@ -119,6 +119,43 @@ func _market_food(chunk_coord: Vector2i) -> int:
 	return 0
 
 
+## WHERE the food the immigration gate counts actually is, and whether a
+## villager could eat it. The gate reads SettlementFood.food_stock across
+## three containers; a villager eats from the Market or from a structure
+## in STRUCTURE_MEAL_SOURCE_IDS. Those are not the same set, so a village
+## can be judged fed while its people starve -- which is exactly what the
+## rows above show.
+func _report_where_the_food_is(chunk_coord: Vector2i, settlement_id: String) -> void:
+	var ItemCatalog = load("res://src/gameplay/item_catalog.gd")
+	var SettlementFood = load("res://src/emergence/settlement_food.gd")
+	var catalog = ItemCatalog.new()
+	var market = _manager._market_store.market_for(settlement_id)
+	var village_market = SettlementFood.village_market_for(settlement_id, _manager._loaded_villages)
+
+	_lines.append("")
+	_lines.append("  -- where the food the gate counts actually is --")
+	_lines.append("  settlement Market : %d" % SettlementFood.food_stock(market, null, catalog, []))
+	_lines.append("  VillageMarket     : %d" % SettlementFood.food_stock(null, village_market, catalog, []))
+	_lines.append(
+		"  structure shelves : %d"
+		% SettlementFood.food_stock(null, null, catalog, _manager._settlement_structure_stocks(settlement_id))
+	)
+	for record in _manager.buildings_in_chunk(chunk_coord):
+		var tile: Vector2i = chunk_coord * CHUNK_SIZE + Vector2i(record["origin_local"])
+		var held: Dictionary = _manager.structure_stock_contents_at(tile.x, tile.y)
+		var food := 0
+		for item_id in held:
+			if catalog.kind_of(String(item_id)) == "food":
+				food += int(held[item_id])
+		if food <= 0:
+			continue
+		var pixel := (Vector2(tile) + Vector2(0.5, 0.5)) * 16.0
+		_lines.append(
+			"    %-12s holds %3d food -- a villager there %s eat it"
+			% [String(record["id"]), food, "CAN" if _manager.has_village_meal_near(pixel) else "CANNOT"]
+		)
+
+
 func _sample() -> void:
 	if _measured:
 		return
@@ -170,4 +207,5 @@ func _sample() -> void:
 			_market_food(chunk_coord),
 			_most_starved(chunk_coord), Starvation.seconds_to_die(),
 		])
+		_report_where_the_food_is(chunk_coord, settlement_id)
 		return
