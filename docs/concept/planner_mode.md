@@ -100,6 +100,71 @@ One vocabulary, deliberately: a plan names a `blueprint_id` that some
 existing system already understands, so nothing here invents a parallel
 catalogue that can drift from the real one.
 
+### The build palette
+
+Asked directly, with a screenshot of ten identical text buttons in a row:
+*"Make the Planner / Building HUD more professional and more like Anno 1806.
+Add Icons not only text"*.
+
+Ten equal-weight words side by side is a **list**, not a build menu. It says
+nothing about what a thing looks like, what it costs, how much ground it
+takes or what kind of thing it even is — a player reads "Brewery" and
+learns only that the word exists. Anno's menu answers all four before a
+click, and that is what this section specifies.
+
+**A card, not a strip.** The palette is one `PanelContainer` on the shared
+`UiTheme` card ([hud.md](hud.md)'s pillar 1), titled, sitting where the
+hotbar sits in rpg mode.
+
+**Grouped, and the groups are the catalogue's own.** `BuildingCatalog`
+already sorts its ids into meaning-carrying lists — `BUILDING_IDS` are
+homes, `PRODUCTION_BUILDING_IDS` are works, `CIVIC_BUILDING_IDS` are the
+commons — and each of those lists' own doc comment says what it means. The
+palette's categories **are** those lists, read at runtime, plus pavement's
+own Roads group. It does not keep a second grouping: a new building lands
+in the right category for free, and no category can drift out of step with
+what the catalogue says a building is.
+
+One category is shown at a time, chosen by a row of tabs — Anno's own
+shape, and the thing that makes ten buildings legible where one flat row
+of ten does not.
+
+**Icons are the building's own art, never a second icon set.** An icon is
+cut from exactly the picture that building will have when it is finished:
+`BuildingCatalog.finished_sheet_chain`'s best available sheet, the same
+chain `EarthChunkManager` draws the real building from. This is pillar 2's
+"one vocabulary" applied to the menu — a drawn icon set would be a second
+picture of every building, free to disagree with the first, and the player
+would be choosing from pictures of buildings this game does not have.
+
+Pavement's icon is the real road tile (`TerrainRenderer.road_tile_image`),
+for the same reason and by the same rule: the surface it will lay.
+
+The cut is **fitted into a square box**, aspect preserved, centred, never
+upscaled past the box — a manor is wider than a cottage and a warehouse is
+wider than both, and squashing each into a square would misreport the one
+thing the icon is for. `BlueprintIcon` is that fit, pure and pinned.
+
+**Every card says what it costs before it is clicked.** A slot carries the
+building's name and its footprint; hovering it gives the full reckoning —
+name, footprint in tiles, the real `BuildingCatalog.cost_of` material list,
+and the labour. All of it read from the catalogue, never a second price
+list (the same rule `PlanRaising` already keeps), so what the menu promises
+and what raising it actually charges cannot disagree.
+
+Work that costs no hours reads as **laid by hand** rather than as "0 hours"
+— the same `PlanRaising.is_laid_by_hand` rule the raising path already
+applies, said in the menu instead of discovered at the site.
+
+**The selected slot is visibly the selected one.** A toggled button in a
+`ButtonGroup`, so exactly one can be pressed at a time and the mode's own
+"nothing selected" state is a real state rather than a stuck-looking
+button.
+
+`BlueprintPaletteModel` is the whole model — categories, what each slot
+says, what a hover reads — pure and tested without standing up a `World`,
+the same split `ViewMode` already keeps for the mode itself.
+
 ### The plan ledger
 
 `BuildPlan` is one planned site: `blueprint_id`, the chunk it sits in, its
