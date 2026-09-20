@@ -102,3 +102,79 @@ func test_an_empty_warehouse_feeds_nobody():
 func test_a_warehouse_holding_no_food_feeds_nobody():
 	_a_stocked(VillageLayout.WAREHOUSE_BUILDING_ID, "wood", 20)
 	assert_false(manager.has_village_meal_near(_pixel_of(_store)))
+
+
+# -- the village's larder is what its people can eat ------------------------
+#
+# Reported as a village that kept drawing households while everybody in it
+# starved. Measured (tools/probe_village_famine.gd) on a real village at
+# t=1200, with hunger pinned at 1.00 and the worst-off villager 174 of 200
+# through the starvation window:
+#
+#     settlement Market : 0
+#     VillageMarket     : 0
+#     structure shelves : 234
+#       farmhouse  holds  68 food -- a villager there CANNOT eat it
+#       farmhouse  holds  68 food -- a villager there CANNOT eat it
+#       farmhouse  holds  96 food -- a villager there CANNOT eat it
+#
+# 234 units over twelve households is 19.5 each against a FED_THRESHOLD of
+# 2.0, so VillageImmigration read the place as richly fed and kept sending
+# people into a famine.
+#
+# SettlementFood.food_stock documents this argument as "a Storage holding
+# hauled bread, a Bakery with loaves still on its shelf" -- shelves people
+# eat off. _settlement_structure_stocks handed it EVERY shelf in the
+# chunk. The caller was breaking its own parameter's contract.
+
+func _settlement_larder() -> int:
+	var ItemCatalog = load("res://src/gameplay/item_catalog.gd")
+	var catalog = ItemCatalog.new()
+	var total := 0
+	for stock in manager._settlement_structure_stocks(
+		manager.EntityRef.for_settlement(_chunk_coord)
+	):
+		for item_id in stock.stock:
+			if catalog.kind_of(String(item_id)) == "food":
+				total += int(stock.stock[item_id])
+	return total
+
+
+## A farmhouse full of grain is not the village's larder. It is where a
+## harvest waits for the carter; nobody eats off it.
+func test_a_farmhouse_shelf_is_not_the_villages_larder():
+	_a_stocked("farmhouse", "cooked_meat", 50)
+	assert_false(
+		manager.has_village_meal_near(_pixel_of(_store)),
+		"precondition: nobody can eat off a farmhouse"
+	)
+	assert_eq(_settlement_larder(), 0, "the village counted food nobody could eat")
+
+
+func test_a_warehouse_shelf_is_the_villages_larder():
+	_a_stocked(VillageLayout.WAREHOUSE_BUILDING_ID, "cooked_meat", 50)
+	assert_eq(_settlement_larder(), 50)
+
+
+## The two the parameter's own documentation names.
+func test_a_storage_is_still_the_villages_larder():
+	_a_stocked("storage", "cooked_meat", 7)
+	assert_eq(_settlement_larder(), 7)
+
+
+func test_a_bakery_is_still_the_villages_larder():
+	_a_stocked("bakery", "bread", 9)
+	assert_eq(_settlement_larder(), 9)
+
+
+## The invariant, stated once: every unit the settlement counts is on a
+## shelf somebody standing there could eat from.
+func test_every_unit_the_village_counts_is_one_its_people_could_eat():
+	_a_stocked("farmhouse", "cooked_meat", 50)
+	if _settlement_larder() > 0:
+		assert_true(
+			manager.has_village_meal_near(_pixel_of(_store)),
+			"the village counted a shelf its own people cannot reach"
+		)
+	else:
+		assert_eq(_settlement_larder(), 0)
