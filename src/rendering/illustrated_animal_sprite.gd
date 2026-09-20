@@ -15,11 +15,16 @@ extends RefCounted
 ## uniform grid -- pose extents genuinely differ frame to frame, and rows
 ## can differ in frame count from each other) with thin divider lines
 ## between cells -- exactly which actions a given species' sheet covers
-## varies (deer/boar: walk + eat; horse: idle + walk, no eat -- see
-## _SHEETS and has_action's own doc comments). There is no swim/drink/
-## attack art for any species, and no per-seed variation (unlike the
-## procedural generator, every creature of a given species shows the exact
-## same illustrated frames) -- both explicitly out of scope for now.
+## varies (horse/deer/boar declare walk + idle + eat; sheep/wolf/alpaca
+## walk + eat; the four Germany bosses walk only -- see _SHEETS, and
+## declared_actions() for the same answer read off the registry). No sheet
+## declares swim, drink or attack art: each of those resolves to another
+## row instead (see has_action's fallback chain). No sheet declares hurt or
+## death art either, and those two deliberately resolve to NOTHING rather
+## than to a borrowed row -- see ONE_SHOT_ACTIONS. There is no per-seed
+## variation (unlike the procedural generator, every creature of a given
+## species shows the exact same illustrated frames) -- explicitly out of
+## scope for now.
 
 const SpriteSheetSlicer = preload("res://src/rendering/sprite_sheet_slicer.gd")
 const SpriteSheetLoader = preload("res://src/rendering/sprite_sheet_loader.gd")
@@ -377,11 +382,20 @@ static func holds_last_frame(action: String) -> bool:
 ##     the illustrated one").
 ##   - "drink" falls back to whatever "idle" itself resolves to -- a
 ##     creature drinking is standing still, same as idle.
-## Only "eat" and "attack" have no such fallback: eating's own head-down
-## grazing pose and attack's own lunge aren't well approximated by either
-## walk or idle, so a species with no dedicated art for them still falls all
-## the way through to ProceduralAnimalAnimation (see has_action's caller in
-## CreatureMarker).
+##   - "attack" falls back to the walk cycle too -- a charge IS a run, and
+##     the alternative was worse: reported live, "when the boar is attacking
+##     it switches to old procedural sprite". Pinned by
+##     test_attack_falls_back_to_illustrated_walk_rather_than_procedural.
+## Three actions have NO fallback, and that is deliberate rather than an
+## oversight to fill in later:
+##   - "eat" -- a head-down grazing pose is not approximated by walk or
+##     idle at all, so a species with no eat row falls all the way through
+##     to ProceduralAnimalAnimation (see has_action's caller in
+##     CreatureMarker).
+##   - "hurt" and "death" -- see ONE_SHOT_ACTIONS above. A flinch borrowed
+##     from the walk cycle reads as a stumble, and a death borrowed from a
+##     cycling row would never end. CreatureMarker skips the state entirely
+##     rather than dropping to procedural art for either.
 func has_action(species: String, action: String) -> bool:
 	if not _SHEETS.has(species):
 		return false
@@ -436,9 +450,11 @@ func _build_textures(species: String, action: String) -> Array[ImageTexture]:
 		return textures
 
 	# No dedicated band for this action -- see has_action's own doc comment
-	# for the exact fallback chain (only idle/swim/drink ever reach here;
-	# everything else is rejected by has_action before generate_textures
-	# ever calls in). Each branch calls generate_textures (cached), never
+	# for the exact fallback chain (only idle/swim/attack/drink ever reach
+	# here; everything else, hurt and death included, is rejected by
+	# has_action before generate_textures ever calls in, so a species
+	# without those rows slices to nothing rather than to the wrong ones).
+	# Each branch calls generate_textures (cached), never
 	# _slice_bands (a fresh re-slice) -- see this function's own doc comment.
 	if action == "swim" or action == "attack":
 		return generate_textures(species, "walk")

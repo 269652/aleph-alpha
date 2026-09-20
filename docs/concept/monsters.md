@@ -199,17 +199,55 @@ Measured from `IllustratedAnimalSprite` and `SpriteSheetSlicer`, not assumed:
 
 ### Which rows the engine consumes today
 
-`idle`, `walk`, `eat` and `swim` — `_SHEETS` carries `walk_bands`,
-`idle_bands`, `eat_bands`, and `IllustratedAnimalSprite`'s own header says
-plainly that **there is no attack art for any species** and that it is out
-of scope so far.
+**Every row in the skeleton below has somewhere to land except `defend`.**
+Measured from the code rather than from the class header, which had drifted:
 
-So **attack / hurt / death rows are new**, and commissioning them is the
-cheap half. The engine half is a small, well-shaped extension: add
-`attack_bands`/`hurt_bands`/`death_bands` to a sheet's `_SHEETS` entry,
-extend `has_action`'s fallback chain, and give `CreatureMarker.
-_animation_step` the states to ask for. Draw them anyway — art outlives the
-wiring, and the wiring is a day.
+Declaring the band is the whole integration. `has_action` and
+`_build_textures` both key off `"<action>_bands"` generically, so a sheet
+entry carrying `attack_bands`, `hurt_bands` or `death_bands` slices and
+plays with no further edit — `IllustratedAnimalSprite.declared_actions()`
+reads the rows straight off those keys.
+
+| Row | Asked for by | With no art of its own |
+| --- | --- | --- |
+| `idle` | a creature that has stopped | dedicated row → eat frame 0 → walk frame 0 |
+| `walk` | movement, paced by ground covered | — (every sheet has one) |
+| `eat` | grazing, browsing, carrion | falls through to `ProceduralAnimalAnimation` |
+| `swim` | standing in river, lake or ocean | the walk cycle |
+| `drink` | at water, thirsty | whatever `idle` resolves to |
+| `attack` | `CreatureMarker`'s predator strike | the walk cycle |
+| `hurt` | a survivable hit (`take_damage`) | **nothing — the row is skipped** |
+| `death` | the killing blow (`_die`) | **nothing — the marker frees at once** |
+| `defend` | *nobody yet* | no `defend` action exists |
+
+The two one-shot rows, `hurt` and `death`, deliberately have **no
+fallback** (see `ONE_SHOT_ACTIONS`). A flinch borrowed from the walk cycle
+reads as a stumble rather than as a hit landing, and a death borrowed from
+any cycling row would never end, so the body would never settle and the
+carcass that replaces it would never land. Absent beats approximated: with
+no art, a hit flinches nothing and a death frees the marker in the same
+frame it always did.
+
+What a one-shot row gets that a cycle does not:
+
+- It plays **through once**, off its own clock started at the moment of the
+  event — not the shared `_elapsed_time` every cycling action reads, so a
+  flinch that begins mid-cycle still starts at frame 0, and a second hit
+  restarts it rather than inheriting the first's remaining time.
+- `death` additionally **stops on its final frame** (`HOLDS_LAST_FRAME_ACTIONS`)
+  — the pose the body comes to rest in, rendered for a real step before the
+  carcass replaces it. A wrapping row would put the corpse back on its feet
+  for exactly that step.
+- While a death row plays the creature does **nothing else**: no AI, no
+  movement, no growth, no disease tick, and it cannot be killed again. The
+  death is still **booked against the region on the killing blow**, never
+  at the end of the row — a death that only lands when an animation
+  finishes is one a chunk unload mid-collapse would lose outright.
+
+`defend` is the one row with nowhere to go: there is no defending state in
+`CreatureMarker` at all. Draw it anyway if the sheet is being commissioned
+— art outlives the wiring — but expect it to sit unused until a monster
+needs a real brace-and-hold behaviour.
 
 ### The prompt skeleton
 
@@ -301,8 +339,15 @@ canvas — the slicer takes bands per row, so a per-row file with its own
 
 - ⬜ Nothing here is implemented. This is a design and art brief; no
   `CreatureInfo` entry, `MythicRegion` roster line or sheet exists yet.
-- ⬜ **Attack/hurt/death rows have no engine support** — see "Which rows the
-  engine consumes today". The extension is small and named there.
+- ✅ **Attack/hurt/death rows are wired** — see "Which rows the engine
+  consumes today". `attack` already resolves (to the walk cycle with no
+  dedicated art); `hurt` and `death` are one-shot rows with a real state in
+  `CreatureMarker`, gated on the art existing so no creature currently in
+  the game changes behaviour. Declaring the band is the whole integration.
+- ⬜ **No `defend` action exists** — a DEFEND row will slice correctly and
+  never be asked for until a braced/guarding state is built.
+- ⬜ **No sheet declares `hurt_bands` or `death_bands` yet** — the wiring is
+  in place and unexercised until real art lands.
 - 🚧 **Tier C's binding rule is stated but not built.** "Bound to a kind of
   place" needs a real predicate per monster (a bog, a scree slope, a worked
   shaft) and those predicates do not all exist yet.

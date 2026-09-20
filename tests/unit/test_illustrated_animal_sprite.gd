@@ -41,12 +41,12 @@ func test_has_action_true_for_walk_and_idle_on_horse():
 	assert_true(sprite.has_action("horse", "idle"))
 
 
-## No dedicated attack art exists for any illustrated species (none of the
-## three are predators), and attack's own lunge pose isn't well approximated
-## by walk or idle the way swim/drink are (see the fallback tests below) --
-## so it's the one action left with no illustrated fallback at all.
-## CreatureMarker falls back to ProceduralAnimalAnimation for it, rather
-## than crashing or showing nothing.
+## No dedicated attack art exists for any registered species, but attack is
+## still COVERED -- it resolves to the walk cycle (a charge is a run), the
+## same way swim does. Reported live before that fallback existed: "when
+## the boar is attacking it switches to old procedural sprite". See
+## test_attack_falls_back_to_illustrated_walk_rather_than_procedural below
+## for the frames themselves.
 func test_attack_is_covered_by_illustrated_art():
 	assert_true(sprite.has_action("horse", "attack"))
 
@@ -73,11 +73,9 @@ func test_has_action_true_for_drink_via_idle_fallback():
 	assert_true(sprite.has_action("boar", "drink"))
 
 
-## Horse's current sheet has no eat/graze row at all (its idle/walk/trot/
-## sit-hurt-death rows are all it has) -- unlike deer/boar, there's no eat
-## cycle to even synthesize an idle frame from, so this is a real, honest
-## gap: CreatureMarker falls back to ProceduralAnimalAnimation for a
-## grazing horse.
+## Horse's current sheet declares its own eat row (eat_path/eat_bands), so
+## a grazing horse stays on illustrated art rather than dropping to
+## ProceduralAnimalAnimation the way a species with no eat row still does.
 func test_horse_has_dedicated_eat_art():
 	assert_true(sprite.has_action("horse", "eat"))
 
@@ -93,17 +91,17 @@ func test_generate_textures_returns_eight_walk_frames_for_horse():
 		assert_true(texture is ImageTexture)
 
 
-## Horse's current sheet is a single walking row -- no idle row, no eat row.
-## Idle synthesizes from the walk cycle's own frame 0 (the last link in the
-## idle fallback chain: dedicated idle_bands, then eat frame 0, then walk
-## frame 0) rather than regressing a standing horse to procedural art.
-func test_generate_textures_returns_one_idle_frame_synthesized_from_walk_for_horse():
+## Horse declares its own idle row -- a single 1536x1024 portrait, so one
+## frame, held. (The idle fallback chain behind it is still: dedicated
+## idle_bands, then the eat cycle's frame 0, then walk's -- see
+## test_deer_idle_is_a_single_held_pose for a species that takes it.)
+func test_horse_idle_is_its_own_single_declared_frame():
 	assert_eq(sprite.generate_textures("horse", "idle").size(), 1)
+	assert_true(IllustratedAnimalSprite.declared_actions("horse").has("idle"))
 
 
-## has_action already rejects "eat" for horse (see
-## test_has_action_false_for_eat_on_horse) -- generate_textures must honor
-## that and return nothing to animate, not throw digging for a missing key.
+## Horse's eat row is its own file at its own resolution (see _SHEETS'
+## per-action "<action>_path" override) -- eight frames, same as its walk.
 func test_generate_textures_returns_eight_eat_frames_for_horse():
 	assert_eq(sprite.generate_textures("horse", "eat").size(), 8)
 
@@ -113,14 +111,19 @@ func test_generate_textures_returns_the_walk_frames_for_swim():
 
 
 ## Drink resolves through whatever "idle" itself resolves to -- horse's own
-## real 4-frame idle cycle here, not the single synthesized deer/boar pose
-## (see test_generate_textures_returns_four_real_idle_frames_for_horse).
+## declared idle row here (see test_horse_idle_is_its_own_single_declared_frame).
 func test_generate_textures_returns_the_idle_frames_for_drink():
 	assert_eq(sprite.generate_textures("horse", "drink").size(), sprite.generate_textures("horse", "idle").size())
 
 
+## Wolf declares no idle row of its own (walk + eat only), so drink goes
+## the long way round the chain: drink -> idle -> the eat cycle's frame 0.
+## The species taking this path matters -- horse/deer/boar all grew real
+## idle rows since, and pointing this at one of them would test the
+## dedicated-art branch while claiming to test the synthesis.
 func test_generate_textures_returns_the_synthesized_idle_frame_for_drink_when_no_real_idle_art_exists():
-	assert_eq(sprite.generate_textures("deer", "drink").size(), 1)
+	assert_false(IllustratedAnimalSprite.declared_actions("wolf").has("idle"), "precondition")
+	assert_eq(sprite.generate_textures("wolf", "drink").size(), 1)
 
 
 func test_generate_textures_returns_eight_walk_frames_for_deer():
@@ -135,18 +138,19 @@ func test_generate_textures_returns_eight_walk_frames_for_boar():
 	assert_eq(sprite.generate_textures("boar", "walk").size(), 8)
 
 
-func test_generate_textures_returns_six_eat_frames_for_boar():
+func test_generate_textures_returns_eight_eat_frames_for_boar():
 	assert_eq(sprite.generate_textures("boar", "eat").size(), 8)
 
 
-## For a species with no dedicated idle art (deer, boar), idle reuses a
-## single frame (the eat cycle's own head-up/alert pose) rather than needing
-## its own row -- see ProceduralAnimalAnimation's own "idle" precedent (a
-## single static neutral pose for a creature that isn't moving). Horse has
-## real idle art instead -- see
-## test_generate_textures_returns_four_real_idle_frames_for_horse.
-func test_deer_idle_is_a_single_held_pose():
-	assert_eq(sprite.generate_textures("deer", "idle").size(), 1)
+## For a species with no dedicated idle art (sheep, wolf, alpaca and the
+## four bosses), idle reuses a single frame -- the eat cycle's own head-up/
+## alert pose, or walk's frame 0 for a walk-only boss sheet -- rather than
+## needing its own row. Mirrors ProceduralAnimalAnimation's own "idle"
+## precedent: a single static neutral pose for a creature that isn't moving.
+func test_an_undeclared_idle_is_a_single_held_pose():
+	for species in ["sheep", "wolf", "alpaca", "krampus"]:
+		assert_false(IllustratedAnimalSprite.declared_actions(species).has("idle"), "precondition: %s" % species)
+		assert_eq(sprite.generate_textures(species, "idle").size(), 1, species)
 
 
 ## Every frame comes back the same canvas size, regardless of which action or
