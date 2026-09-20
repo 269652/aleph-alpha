@@ -54,9 +54,25 @@ class FakeNpcPlanner extends Planner:
 				{"time_block": "evening", "location_tag": "well", "activity": "socialize"},
 				{"time_block": "night", "location_tag": "home", "activity": "sleep"},
 			]
-		# A guard stays on watch through the evening instead of socializing at
-		# the well -- everyone else's workday winds down there.
-		var evening_location := "gate" if identity.occupation == "guard" else "well"
+		# A guard stays on watch through the evening; everyone else's
+		# evening is their OWN.
+		#
+		# It used to be the well, for everybody, and that is the whole of
+		# the report: *"All NPCs walk to the well at the same moments... and
+		# it's not visible what they are doing."* Measured, twenty-one
+		# villagers of twenty-four spent every evening at one prop,
+		# performing `socialize` -- a word with no verb behind it.
+		#
+		# NpcSchedule.personal_hour already staggers WHEN each villager's
+		# day turns, and it works. It cannot help here: a four-hour spread
+		# across a five-hour block still has almost everyone standing at the
+		# same spot for most of it. The crowd was never about timing, it was
+		# about the destination, so the destination is what changes.
+		#
+		# The well is reached by ERRAND now (docs/concept/village_water.md)
+		# or not at all -- nobody is ever scheduled to fetch water, they go
+		# when their own house runs dry.
+		var evening_location := "gate" if identity.occupation == "guard" else _evening_haunt(identity)
 		var evening_activity := "work" if identity.occupation == "guard" else "socialize"
 		return [
 			{"time_block": "morning", "location_tag": work_location, "activity": "work"},
@@ -64,3 +80,19 @@ class FakeNpcPlanner extends Planner:
 			{"time_block": "evening", "location_tag": evening_location, "activity": evening_activity},
 			{"time_block": "night", "location_tag": "home", "activity": "sleep"},
 		]
+
+
+	## Where this villager spends their own evening.
+	##
+	## Stable for a given villager, the same way NpcSchedule.shift_hours_for
+	## makes their day-shift theirs: somebody who drinks at the well is a
+	## regular rather than somebody who wanders somewhere different every
+	## night. Drawn from the settlement's three shared landmarks plus simply
+	## staying in -- every one of them is a real prop every village has
+	## (see SettlementGenerator), so no villager is sent somewhere that does
+	## not resolve.
+	const EVENING_HAUNTS: Array[String] = ["well", "stall", "gate", "home"]
+
+	static func _evening_haunt(identity: NpcIdentity) -> String:
+		var index := absi(hash("%d_evening" % identity.seed_value)) % 10000
+		return EVENING_HAUNTS[index % EVENING_HAUNTS.size()]
