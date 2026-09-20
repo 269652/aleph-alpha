@@ -1284,3 +1284,160 @@ func test_a_villager_with_no_field_is_stopped_by_every_rail():
 	var marker := _wall_marker(world)
 
 	assert_eq(marker._slid_along_walls(Vector2(8, 8), Vector2(24, 8)), Vector2(8, 8))
+
+
+# -- the water errand (docs/concept/village_water.md) -----------------------
+#
+# Asked for directly: *"when they get water they should carry the empty
+# bucket to the well and bring back a full bucket which they can pour into
+# their houses water tank"*. This is the half that makes the errand
+# LEGIBLE -- the state machine and the tank are already pinned in
+# test_water_errand.gd and test_earth_chunk_manager_household_water.gd; what
+# is tested here is that a villager actually walks it and is seen doing so.
+
+const WaterErrand = preload("res://src/emergence/water_errand.gd")
+const HouseholdWater = preload("res://src/emergence/household_water.gd")
+
+
+## A world with exactly one house in it, whose tank the test can set.
+class WateredWorld:
+	extends StubWorld
+	var house_level := HouseholdWater.TANK_LITRES
+	var poured := 0
+	var door_position := Vector2(1000, 1000)
+
+	func building_door_near(pixel_position: Vector2, radius_tiles: float) -> Dictionary:
+		if pixel_position.distance_to(door_position) > radius_tiles * 16.0:
+			return {}
+		return {
+			"id": "house_small", "chunk_coord": Vector2i(0, 0),
+			"origin_local": Vector2i(4, 4), "seed": 7,
+		}
+
+	func water_trip_due_at(_record: Dictionary) -> bool:
+		return HouseholdWater.trip_is_due(house_level)
+
+	func pour_bucket_into_house(_chunk_coord: Vector2i, _origin_local: Vector2i) -> bool:
+		poured += 1
+		house_level = HouseholdWater.poured_into(house_level, HouseholdWater.BUCKET_LITRES)
+		return true
+
+
+func _a_watered_villager(level: float) -> WateredWorld:
+	var world := WateredWorld.new()
+	world.house_level = level
+	world.door_position = marker.home_position
+	marker.setup(world, TILE_SIZE)
+	marker.set_planner(FixedPlanner.new([
+		{"time_block": "morning", "location_tag": "home", "activity": "idle"},
+		{"time_block": "midday", "location_tag": "home", "activity": "idle"},
+		{"time_block": "evening", "location_tag": "home", "activity": "idle"},
+		{"time_block": "night", "location_tag": "home", "activity": "idle"},
+	]))
+	return world
+
+
+## Walks the errand to completion, standing the villager on each leg's
+## target so the test is about the ERRAND rather than about walking speed.
+func _walk_the_errand(world: WateredWorld, steps: int = 12) -> void:
+	for i in steps:
+		marker.position = marker._resolve_location(
+			WaterErrand.location_tag_for(marker.water_errand)
+		)
+		marker._process(0.1)
+		if marker.water_errand == WaterErrand.AT_HOME and world.poured > 0:
+			return
+
+
+# -- setting out ------------------------------------------------------------
+
+func test_a_villager_with_a_full_tank_stays_off_the_errand():
+	_a_watered_villager(HouseholdWater.TANK_LITRES)
+	marker._process(0.1)
+	assert_eq(marker.water_errand, WaterErrand.AT_HOME)
+	assert_eq(marker.carried_item(), "")
+
+
+func test_a_villager_whose_house_is_low_sets_out_for_the_well():
+	_a_watered_villager(0.0)
+	marker._process(0.1)
+	assert_eq(marker.water_errand, WaterErrand.TO_WELL)
+
+
+func test_they_carry_an_empty_bucket_on_the_way_there():
+	_a_watered_villager(0.0)
+	marker._process(0.1)
+	assert_eq(marker.carried_item(), WaterErrand.BUCKET_EMPTY)
+
+
+func test_the_errand_sends_them_to_the_well_not_wherever_the_plan_said():
+	# The plan says home all day; the errand outranks it.
+	_a_watered_villager(0.0)
+	marker._process(0.1)
+	assert_eq(marker.current_location_tag(), "well")
+
+
+# -- and back again ---------------------------------------------------------
+
+func test_reaching_the_well_fills_the_bucket():
+	var world := _a_watered_villager(0.0)
+	marker._process(0.1)
+	marker.position = marker._resolve_location("well")
+	marker._process(0.1)  # arrive -> DRAWING
+	marker._process(0.1)  # drawn  -> TO_HOME
+	assert_eq(marker.water_errand, WaterErrand.TO_HOME)
+	assert_eq(marker.carried_item(), WaterErrand.BUCKET_FULL)
+	assert_eq(world.poured, 0, "nothing was poured before they got home")
+
+
+func test_getting_home_pours_the_bucket_into_the_tank():
+	var world := _a_watered_villager(0.0)
+	marker._process(0.1)
+	_walk_the_errand(world)
+	assert_gt(world.poured, 0, "the bucket was never poured")
+	assert_gt(world.house_level, 0.0, "the tank is still empty")
+
+
+func test_the_errand_ends_and_they_are_not_stuck_holding_a_bucket():
+	var world := _a_watered_villager(0.0)
+	marker._process(0.1)
+	_walk_the_errand(world)
+	assert_eq(marker.water_errand, WaterErrand.AT_HOME)
+	assert_eq(marker.carried_item(), "")
+
+
+## A villager pouring water into their own tank is standing at their own
+## door -- and must not vanish indoors while doing it, or the errand ends
+## invisibly and the whole point is lost.
+func test_they_stay_visible_while_they_are_on_the_errand():
+	var world := _a_watered_villager(0.0)
+	marker._process(0.1)
+	for i in 10:
+		marker.position = marker._resolve_location(
+			WaterErrand.location_tag_for(marker.water_errand)
+		)
+		marker._process(0.1)
+		if WaterErrand.is_running(marker.water_errand):
+			assert_true(marker.visible, "a villager on the errand went invisible")
+		if marker.water_errand == WaterErrand.AT_HOME and world.poured > 0:
+			break
+
+
+# -- nothing to fetch from --------------------------------------------------
+
+func test_a_villager_with_no_world_never_sets_out():
+	marker.set_planner(FixedPlanner.new([
+		{"time_block": "morning", "location_tag": "home", "activity": "idle"},
+		{"time_block": "midday", "location_tag": "home", "activity": "idle"},
+		{"time_block": "evening", "location_tag": "home", "activity": "idle"},
+		{"time_block": "night", "location_tag": "home", "activity": "idle"},
+	]))
+	marker._process(0.1)
+	assert_eq(marker.water_errand, WaterErrand.AT_HOME)
+
+
+func test_a_villager_with_no_house_of_their_own_never_sets_out():
+	var world := _a_watered_villager(0.0)
+	world.door_position = Vector2(50000, 50000)  # their house is nowhere near
+	marker._process(0.1)
+	assert_eq(marker.water_errand, WaterErrand.AT_HOME)

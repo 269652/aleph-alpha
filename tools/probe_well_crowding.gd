@@ -12,6 +12,9 @@ extends SceneTree
 const NpcIdentity = preload("res://src/world/npc_identity.gd")
 const NpcPlanner = preload("res://src/world/npc_planner.gd")
 const SettlementGenerator = preload("res://src/world/settlement_generator.gd")
+const HouseholdWater = preload("res://src/emergence/household_water.gd")
+const WaterErrand = preload("res://src/emergence/water_errand.gd")
+const SeasonCycle = preload("res://src/world/season_cycle.gd")
 
 const VILLAGERS := 12
 
@@ -50,4 +53,38 @@ func _initialize() -> void:
 	keys.sort()
 	for key in keys:
 		print("  %-26s x%d" % [key, int(activities[key])])
+
+	_print_water_rhythm()
 	quit()
+
+
+## What the water errand actually produces over a season: how often each
+## household has to send somebody, and how many of them are out fetching
+## on any given day. The second number is the one the report was about --
+## if it spikes, the square is a waiting room again.
+func _print_water_rhythm() -> void:
+	var households := 12
+	var levels: Array = []
+	for i in households:
+		levels.append(HouseholdWater.starting_level(hash("water_house_%d" % i)))
+	var trips_by_day: Array = []
+	var total_trips := 0
+	var days := int(SeasonCycle.DAYS_PER_YEAR / 4.0)
+	for day in days:
+		var out_today := 0
+		for i in households:
+			levels[i] = HouseholdWater.level_after(levels[i], 1, 1.0)
+			if HouseholdWater.trip_is_due(levels[i]):
+				levels[i] = WaterErrand.poured(levels[i])
+				out_today += 1
+				total_trips += 1
+		trips_by_day.append(out_today)
+	var busiest := 0
+	for n in trips_by_day:
+		busiest = maxi(busiest, int(n))
+	print("\n-- the water errand over one season (%d days, %d households) --" % [days, households])
+	print("  trips in all: %d  (about one per household every %.1f days)" % [
+		total_trips, float(days * households) / float(maxi(total_trips, 1))
+	])
+	print("  busiest day sent %d of %d households to the well" % [busiest, households])
+	print("  day by day: %s" % str(trips_by_day))

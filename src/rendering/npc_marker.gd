@@ -11,6 +11,8 @@ extends Sprite2D
 const NpcIdentity = preload("res://src/world/npc_identity.gd")
 const NpcPlanner = preload("res://src/world/npc_planner.gd")
 const NpcSchedule = preload("res://src/world/npc_schedule.gd")
+const WaterErrand = preload("res://src/emergence/water_errand.gd")
+const HouseholdWater = preload("res://src/emergence/household_water.gd")
 const NpcEconomy = preload("res://src/world/npc_economy.gd")
 const NpcInstructionEvaluator = preload("res://src/world/npc_instruction_evaluator.gd")
 const CharacterView = preload("res://scenes/character_view.gd")
@@ -98,6 +100,16 @@ var _planner: NpcPlanner.Planner = NpcPlanner.FakeNpcPlanner.new()
 ## its walk cycle can switch to swimming, same as the player/creatures.
 ## Without it (fail-open, see _is_in_water), an NPC just never swims.
 var _world = null
+
+## Which leg of the trip to the well this villager is on (docs/concept/
+## village_water.md mechanism 2). Public because it IS what they are doing,
+## and because what they are carrying is read straight off it.
+var water_errand := WaterErrand.AT_HOME
+## Where the errand is sending them right now, "" when they are not on one.
+var _errand_location_tag := ""
+## The tag the last processed frame actually walked toward -- what
+## current_location_tag reports when no errand is running.
+var _last_location_tag := "home"
 var _tile_size := 16
 var _perception := CreaturePerception.new()
 
@@ -452,6 +464,21 @@ func _process(delta: float) -> void:
 	var entry := NpcSchedule.current_entry_for(
 		schedule, _hour_of_day(), 0 if identity == null else identity.seed_value
 	)
+	# The trip to the well (docs/concept/village_water.md). An errand
+	# outranks a TIMETABLE -- being in the middle of carrying a bucket is a
+	# fact, where a schedule entry is only an intention -- so it replaces
+	# the entry here. It deliberately ranks BELOW the hunger interrupt just
+	# after it: a starving villager puts the bucket down, because thirst
+	# answered from a household tank is never as urgent as having nothing
+	# to eat.
+	_step_water_errand()
+	if WaterErrand.overrides_schedule(water_errand):
+		entry = {
+			"time_block": entry.get("time_block", ""),
+			"location_tag": _errand_location_tag,
+			"activity": "fetch_water",
+		}
+
 	# A real, urgent need overrides wherever today's ordinary schedule says
 	# to be right now (docs/progress.md's Interrupt/Replan Handling row: "a
 	# need crossing a threshold") -- without this, hunger only ever
@@ -510,6 +537,7 @@ func _process(delta: float) -> void:
 		if action != null:
 			entry = _entry_for_instructed_action(action)
 	var location_tag: String = entry.get("location_tag", "home")
+	_last_location_tag = location_tag
 	var is_working: bool = entry.get("activity", "") == "work"
 	var target := _resolve_location(location_tag)
 	# A hunter with a real animal in reach goes to the animal, not to the
@@ -592,6 +620,11 @@ func _process(delta: float) -> void:
 		quarry_target == null
 		and field_target == null
 		and location_tag == "home"
+		# A villager pouring a bucket into their own tank is standing at
+		# their own door, and must not vanish indoors while doing it --
+		# the errand would end invisibly and the whole point of carrying a
+		# visible bucket would be lost on its last step.
+		and not WaterErrand.is_running(water_errand)
 		and position.distance_to(home_position) < _ARRIVED_HOME_EPSILON_PX
 	)
 	visible = not _at_home
@@ -887,6 +920,75 @@ func begin_conversation(with_marker: Node, seconds: float = CONVERSATION_SECONDS
 
 var _talk_remaining := 0.0
 var _talking_to: Node = null
+
+
+## How near the well or their own door a villager has to get before that
+## leg of the water errand counts as walked. Deliberately looser than
+## NEED_REACH_PX's single pixel: a landmark is a place to stand around,
+## not a point to hit, and a villager who can never quite reach it is a
+## villager who never stops fetching water.
+const ERRAND_REACH_PX := 6.0
+
+
+## One frame of the trip to the well (docs/concept/village_water.md).
+##
+## Reads the household's own tank rather than any schedule: nobody is ever
+## SENT to fetch water, they go when their own house runs dry, which is
+## what staggers the village instead of emptying it into the square at once.
+##
+## A villager with no world, or none of their own house to find, simply
+## never sets out -- an NPC in an unloaded chunk or a test fixture is not
+## on an errand, it has nowhere to be on one.
+func _step_water_errand() -> void:
+	var house := _house_of_their_own()
+	if house.is_empty():
+		water_errand = WaterErrand.AT_HOME
+		_errand_location_tag = ""
+		return
+
+	if not WaterErrand.is_running(water_errand):
+		# Home and still short: set out (again, if one bucket was not
+		# enough -- see WaterErrand's own note on why the loop lives here).
+		water_errand = WaterErrand.begin_if_due(_tank_level_of(house))
+	elif position.distance_to(_resolve_location(_errand_location_tag)) <= ERRAND_REACH_PX:
+		water_errand = WaterErrand.arrived(water_errand)
+		if water_errand == WaterErrand.AT_HOME:
+			# They just finished pouring.
+			_world.pour_bucket_into_house(house["chunk_coord"], house["origin_local"])
+	_errand_location_tag = WaterErrand.location_tag_for(water_errand)
+
+
+## This villager's own house, as a building record -- {} when the world
+## cannot say. Found at their own doorstep, which is where home_position
+## already points.
+func _house_of_their_own() -> Dictionary:
+	if _world == null or not _world.has_method("building_door_near"):
+		return {}
+	if not _world.has_method("water_trip_due_at") or not _world.has_method("pour_bucket_into_house"):
+		return {}
+	return _world.building_door_near(home_position, 1.0)
+
+
+## Whether this household's tank says somebody must go. Asked of the world
+## rather than computed here, so the marker and the house can never
+## disagree about what "low" means.
+func _tank_level_of(house: Dictionary) -> float:
+	return 0.0 if _world.water_trip_due_at(house) else HouseholdWater.TANK_LITRES
+
+
+## What is in this villager's hands right now: "" for nothing, otherwise
+## WaterErrand.BUCKET_EMPTY or BUCKET_FULL. The renderer's whole input for
+## making the errand legible.
+func carried_item() -> String:
+	return WaterErrand.carried(water_errand)
+
+
+## Where this villager is headed right now, errand included -- what a
+## readout or a test should ask rather than reaching into the schedule.
+func current_location_tag() -> String:
+	if WaterErrand.is_running(water_errand):
+		return _errand_location_tag
+	return String(_last_location_tag)
 
 
 ## How near a villager has to get before a need counts as answered -- the
