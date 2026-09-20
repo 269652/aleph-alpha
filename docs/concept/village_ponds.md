@@ -143,6 +143,26 @@ the_same_step`). A record that still remembered the villager who left is
 brought up to date, so a house inherited from a departed household says
 who lives there now.
 
+**Measured, and where it honestly stops.** The probe's village (chunk
+(678,128), ten households, eleven houses once the ladder's roof for
+nobody stood): the fisher who arrived at 750 s moved into that roof on
+the next step, its record says a fisher lives there, the ladder stopped
+asking for a house, and the fields kept their cycle — 363 units harvested
+over the run against 360 before any of this and 309 under the full
+re-derivation. And they still work no water, because the roof the ladder
+raised at (17,24) stands in the farm belt: of the 84 cells in a pond's
+reach, 16 are street and every free rectangle among the other 32 lies on
+a farmstead's beds, which a fisher may not dig through. Run with nothing
+reserved the dig finds room there at once — on the beds. So the pond is
+refused, exactly as a founding fisher's would be on that plot, and the
+village of eleven keeps a producer who cannot produce (its shelves read
+6–18 units through the second half). Two levers, neither in yet: a
+move-in that prefers, among several spare roofs, one with room for the
+newcomer's works; and the ladder's roof for nobody sited where the trade
+that will take it has ground — both are siting questions, and a pond
+dug across the street or on somebody's beds is the wrong answer the
+first report already gave.
+
 ### Why not re-derive the village, and what that measured
 
 The first cut re-derived the whole village on a completed building, the
