@@ -4066,3 +4066,88 @@ func test_a_world_that_cannot_say_leaves_the_village_alone():
 		parent, coord, coord * CHUNK_SIZE, CHUNK_SIZE, TILE_SIZE, null, nodes
 	)
 	assert_eq(_villagers_among(after), 10)
+
+
+# -- the store's cart and the carter's work stand OUTSIDE the warehouse -----
+#
+# Found while gating the cart, and measured before anything was changed
+# (tools/probe_carts_and_caravans.gd, a real village east of Berlin): 2 of
+# 2 carts spawned INSIDE the warehouse footprint, 2 of 2 carters had their
+# work landmark inside it too, and a cart spent 97% of its frames standing
+# in a wall.
+#
+# `store_centre` was the literal CENTRE of the warehouse footprint. That
+# read as harmless while nothing stopped a marker walking into a building;
+# with the building gate live it is a cart parked in masonry and a carter
+# who can never arrive at their own workplace.
+#
+# The rule already exists and is the one houses use: a building is entered
+# from its DOORSTEP, which BuildingCatalog.doorstep_of puts "just south of
+# the door, outside the footprint".
+
+
+func _warehouse_origin(world, coord: Vector2i):
+	for record in world.buildings_in_chunk(coord):
+		if String(record.get("id", "")) == VillageLayout.WAREHOUSE_BUILDING_ID:
+			return coord * CHUNK_SIZE + (record["origin_local"] as Vector2i)
+	return null
+
+
+func _footprint_cells_of_every_building(world, coord: Vector2i) -> Dictionary:
+	var cells := {}
+	for record in world.buildings_in_chunk(coord):
+		var id := String(record.get("id", ""))
+		var origin: Vector2i = coord * CHUNK_SIZE + (record["origin_local"] as Vector2i)
+		for cell in BuildingCatalog.footprint_cells(id, origin):
+			cells[cell] = true
+	return cells
+
+
+func _cell_of(pixel: Vector2) -> Vector2i:
+	return Vector2i(floori(pixel.x / TILE_SIZE), floori(pixel.y / TILE_SIZE))
+
+
+func _a_village_with_a_store() -> Dictionary:
+	var coord := _find_settlement_chunk_with_occupation("grassland", VillageCart.OCCUPATION, 3)
+	var world := StubWorld.new()
+	_forest_band(world, coord)
+	var spawned := renderer.spawn_village(
+		parent, coord, coord * CHUNK_SIZE, CHUNK_SIZE, TILE_SIZE, "grassland", world
+	)
+	return {"coord": coord, "world": world, "spawned": spawned}
+
+
+func test_a_carters_cart_is_not_parked_inside_a_building():
+	var village := _a_village_with_a_store()
+	var occupied := _footprint_cells_of_every_building(village["world"], village["coord"])
+	var carters := _carter_markers(village["spawned"])
+	assert_gt(carters.size(), 0, "precondition: somebody in this village carts")
+	for carter in carters:
+		assert_not_null(carter.cart)
+		var cell := _cell_of(carter.cart.position)
+		assert_false(occupied.has(cell), "a cart was left standing in a wall at %s" % cell)
+
+
+func test_a_carters_workplace_is_somewhere_they_can_actually_stand():
+	var village := _a_village_with_a_store()
+	var occupied := _footprint_cells_of_every_building(village["world"], village["coord"])
+	for carter in _carter_markers(village["spawned"]):
+		var work: Vector2 = carter.landmarks[VillageCart.WORK_LOCATION]
+		assert_false(
+			occupied.has(_cell_of(work)),
+			"the carter's own workplace is inside a building they cannot enter"
+		)
+
+
+## Stated positively, and as the SHARED rule rather than "somewhere
+## outside": the store is entered where every other building is entered.
+func test_the_store_is_worked_from_its_own_doorstep():
+	var village := _a_village_with_a_store()
+	var origin = _warehouse_origin(village["world"], village["coord"])
+	assert_not_null(origin, "precondition: this village really raised a warehouse")
+	var doorstep: Vector2i = (
+		origin + BuildingCatalog.doorstep_of(VillageLayout.WAREHOUSE_BUILDING_ID)
+	)
+	for carter in _carter_markers(village["spawned"]):
+		assert_eq(_cell_of(carter.landmarks[VillageCart.WORK_LOCATION]), doorstep)
+		assert_eq(_cell_of(carter.cart.position), doorstep, "and the cart waits there too")

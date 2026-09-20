@@ -579,17 +579,29 @@ func _hand_out_the_store_round(
 	# schedule resolves to it the way a sawyer's resolves to the mill.
 	# Without this their work tag names somewhere that does not exist and
 	# they fall back to a decorative workspot.
-	var footprint := BuildingCatalog.footprint_of(VillageLayout.WAREHOUSE_BUILDING_ID)
-	var store_centre := Vector2(
-		(float((store as Vector2i).x + chunk_coord.x * chunk_size) + float(footprint.x) * 0.5) * TerrainRenderer.TILE_SIZE,
-		(float((store as Vector2i).y + chunk_coord.y * chunk_size) + float(footprint.y) * 0.5) * TerrainRenderer.TILE_SIZE
-	)
 	var store_cell: Vector2i = chunk_coord * chunk_size + (store as Vector2i)
+	# The store's DOORSTEP, not the centre of its footprint. A building is
+	# worked from the one cell BuildingCatalog.doorstep_of puts "just south
+	# of the door, outside the footprint" -- the same rule every house
+	# already follows -- and the middle of a warehouse is masonry.
+	#
+	# This used to be the footprint's centre, which read as harmless while
+	# nothing stopped a marker walking into a building. Measured once that
+	# changed (tools/probe_carts_and_caravans.gd, a real village east of
+	# Berlin): 2 of 2 carts spawned INSIDE the warehouse and spent 97% of
+	# their frames standing in it, and 2 of 2 carters had their own
+	# workplace in there -- somewhere they could no longer arrive at.
+	var store_doorstep_cell: Vector2i = store_cell + BuildingCatalog.doorstep_of(
+		VillageLayout.WAREHOUSE_BUILDING_ID
+	)
+	var store_doorstep := (
+		Vector2(store_doorstep_cell) + Vector2(0.5, 0.5)
+	) * float(TerrainRenderer.TILE_SIZE)
 	var round_cells: Array[Vector2i] = []
 	for producer_origin in producers:
 		round_cells.append(chunk_coord * chunk_size + producer_origin)
 	for i in npcs.size():
-		npc_markers[i].landmarks[VillageCart.WORK_LOCATION] = store_centre
+		npc_markers[i].landmarks[VillageCart.WORK_LOCATION] = store_doorstep
 		if not VillageCart.walks_the_round(npcs[i].occupation):
 			continue
 		npc_markers[i].store_cell = store_cell
@@ -598,7 +610,12 @@ func _hand_out_the_store_round(
 		# cart is a real thing on the map, and two carters sharing one would
 		# have each of them emptying the other's load.
 		var cart := CartMarker.new()
-		cart.position = store_centre
+		cart.position = store_doorstep
+		# A cart is pulled, so it rolls in a straight line at whoever holds
+		# its shaft and would cut the corner of a house the puller walked
+		# round. It asks the same gate every other marker does, but only
+		# once it has been handed a world to ask (see CartMarker.setup).
+		cart.setup(world, float(TerrainRenderer.TILE_SIZE))
 		parent.add_child(cart)
 		spawned.append(cart)
 		npc_markers[i].cart = cart

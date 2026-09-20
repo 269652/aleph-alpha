@@ -316,3 +316,105 @@ func test_the_placeable_scale_porter_has_no_cart_to_pull():
 		"cart" in porter,
 		"a placeable's porter carries in its arms; the Bollerwagen is the carter's"
 	)
+
+
+# -- a cart does not roll through a wall ------------------------------------
+#
+# Asked for directly: *"fix the caravan and cart markers too"*, after every
+# other walking marker had been given a building gate.
+#
+# A cart is PULLED: it integrates a straight step toward whoever holds its
+# shaft, so it is the CORNER of a house it cuts, not the middle of one --
+# the puller rounds the wall, the cart takes the hypotenuse through it.
+#
+# It had no world reference to ask with, which is why it was left out. It
+# takes one now, and it stays duck-typed like every other gate here: a cart
+# with no world, or a world that answers nothing, simply rolls.
+
+## A world that calls one cell a building and nothing else. Deliberately a
+## whole-building ENTITY rather than a piece, because that is the kind a
+## village warehouse is and the kind the last round of this was about.
+class WorldWithAHouse:
+	extends RefCounted
+	var house := Vector2i(2, 0)
+
+	func has_building_at_global(x: int, y: int) -> bool:
+		return Vector2i(x, y) == house
+
+
+const _TILE := 16
+
+
+func _cart_at(cell: Vector2i) -> CartMarker:
+	cart.position = (Vector2(cell) + Vector2(0.5, 0.5)) * float(_TILE)
+	return cart
+
+
+func test_a_cart_rolls_when_nothing_is_in_its_way():
+	cart.setup(WorldWithAHouse.new(), _TILE)
+	_cart_at(Vector2i(0, 0))
+	var before := cart.position
+	cart.pulled_toward = (Vector2(0, 4) + Vector2(0.5, 0.5)) * float(_TILE)
+	cart._process(0.5)
+	assert_gt(cart.position.distance_to(before), 1.0, "open ground is open")
+
+
+## The regression itself: pulled straight at a house, the cart stops at it.
+func test_a_cart_pulled_at_a_house_does_not_roll_into_it():
+	var world := WorldWithAHouse.new()
+	cart.setup(world, _TILE)
+	_cart_at(Vector2i(0, 0))
+	# Far enough past the house that the cart would cross it outright.
+	cart.pulled_toward = (Vector2(6, 0) + Vector2(0.5, 0.5)) * float(_TILE)
+	for tick in 60:
+		cart._process(0.1)
+	var cell := Vector2i(floori(cart.position.x / _TILE), floori(cart.position.y / _TILE))
+	assert_false(
+		world.has_building_at_global(cell.x, cell.y), "the cart ended up standing in the wall"
+	)
+	assert_lt(cart.position.x, float(world.house.x * _TILE), "and never got past it")
+
+
+## ...and it still SLIDES, so a cart follows its puller round a corner
+## instead of stopping dead against the wall and being left behind.
+##
+## Placed hard against the cell boundary, and stepped by a REAL frame
+## rather than half a second. The first draft of this stood the cart in the
+## middle of its cell and ran a 0.5 s tick, which puts the whole step
+## inside one cell (nothing to be refused) or clean past the house
+## (nothing in the way at the destination) depending on the distance --
+## either way it measured nothing. The gate asks about the cell a step
+## ENDS in, so a test of it has to end the step somewhere that matters.
+func test_a_cart_cutting_a_corner_keeps_the_free_axis():
+	var world := WorldWithAHouse.new()
+	world.house = Vector2i(1, 0)
+	cart.setup(world, _TILE)
+	cart.position = Vector2(float(_TILE) - 1.0, float(_TILE) * 0.5)  # east edge of (0, 0)
+	# Diagonally past the corner: the step would end in the house, and so
+	# would its eastward half, but its southward half is open ground.
+	cart.pulled_toward = (Vector2(1, 1) + Vector2(0.5, 0.5)) * float(_TILE)
+	var before := cart.position
+	cart._process(0.1)
+	assert_gt(cart.position.y, before.y + 1.0, "the free axis survives")
+	assert_almost_eq(cart.position.x, before.x, 0.001, "the axis into the house does not")
+
+
+## The gate asks about the cell a step ENDS in, so a mover that covers more
+## than a tile in one step could pass clean THROUGH a wall without ever
+## ending in it. A cart is the fastest thing that asks this gate, so the
+## bound is pinned here rather than assumed: at its own top speed, one
+## 60Hz frame is a small fraction of a tile.
+func test_a_cart_cannot_outrun_the_gate_in_one_frame():
+	assert_lt(
+		CartMarker.FOLLOW_SPEED / 60.0, float(_TILE),
+		"a cart that crosses a whole tile per frame could tunnel through a wall"
+	)
+
+
+## A cart with no world set at all rolls exactly as it always did -- a test
+## double, or a cart spawned before its world exists, must not freeze.
+func test_a_cart_with_no_world_still_rolls():
+	_cart_at(Vector2i(0, 0))
+	cart.pulled_toward = (Vector2(6, 0) + Vector2(0.5, 0.5)) * float(_TILE)
+	cart._process(0.5)
+	assert_gt(cart.position.x, float(_TILE), "no world means nothing is solid")

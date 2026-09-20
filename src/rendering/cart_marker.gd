@@ -19,6 +19,7 @@ const CartLoad = preload("res://src/gameplay/cart_load.gd")
 const IllustratedStructureSprite = preload("res://src/rendering/illustrated_structure_sprite.gd")
 const TerrainRenderer = preload("res://src/rendering/terrain_renderer.gd")
 const HoverTargetFinder = preload("res://src/rendering/hover_target_finder.gd")
+const WalkGate = preload("res://src/gameplay/walk_gate.gd")
 
 const GROUP_NAME := "cart"
 
@@ -67,6 +68,14 @@ var stock: Dictionary = {}
 ## Where the puller is right now (Vector2), or null when nobody is pulling
 ## -- a cart nobody is pulling stays exactly where it was left.
 var pulled_toward = null
+
+## The world this cart rolls in (an EarthChunkManager), and how big a tile
+## is there -- set by whoever spawns it, via setup(). Null until then, and a
+## cart with no world simply rolls, the same duck-typed fail-open every
+## other gate in this codebase keeps.
+var _world = null
+var _tile_size := float(TerrainRenderer.TILE_SIZE)
+
 
 ## Whoever has the shaft (a Node2D), or null when the cart is parked
 ## (docs/concept/village_warehouse.md, Mechanism 6). `pulled_toward` follows
@@ -246,6 +255,19 @@ func unload_all() -> Dictionary:
 	return taken
 
 
+## Hands this cart the world it stands in, so it can ask before it rolls.
+##
+## Asked for after every other walking marker had a building gate: *"fix
+## the caravan and cart markers too"*. A cart is PULLED -- it integrates a
+## straight step toward whoever holds its shaft -- so when the puller
+## rounds a house the cart takes the hypotenuse through it. It had no world
+## reference to ask with, which is the only reason it was left out.
+func setup(world, tile_size: float) -> void:
+	_world = world
+	if tile_size > 0.0:
+		_tile_size = tile_size
+
+
 func _process(delta: float) -> void:
 	# A holder that has been freed is not a holder: a cart whose carter's
 	# chunk unloaded is parked, not chasing a dangling reference.
@@ -261,9 +283,19 @@ func _process(delta: float) -> void:
 	var gap := to_puller.length()
 	if gap > TRAIL_DISTANCE_PX:
 		var step: float = minf(FOLLOW_SPEED * delta, gap - TRAIL_DISTANCE_PX)
-		position += to_puller.normalized() * step
-		_view_row = view_row_for(to_puller, _view_row)
-		_rolled_seconds += delta
+		# The same gate every walking marker asks (WalkGate): a wall or a
+		# whole building is a tile the cart may not be in, a farm rail is an
+		# edge it may not cross. It SLIDES rather than stopping dead, so a
+		# cart follows its puller round a corner instead of being abandoned
+		# against the wall -- which is the whole reason the gate slides.
+		var before := position
+		position = WalkGate.slide(
+			_world, position, position + to_puller.normalized() * step, _tile_size
+		)
+		var rolled := position - before
+		if rolled.length() > 0.0:
+			_view_row = view_row_for(rolled, _view_row)
+			_rolled_seconds += delta
 	_redraw()
 
 
