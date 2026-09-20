@@ -189,6 +189,7 @@ const VillageCensus = preload("res://src/emergence/village_census.gd")
 const VillageImmigration = preload("res://src/emergence/village_immigration.gd")
 const MerchantVisit = preload("res://src/emergence/merchant_visit.gd")
 const SettlementSurplus = preload("res://src/emergence/settlement_surplus.gd")
+const StallRestock = preload("res://src/emergence/stall_restock.gd")
 const HouseholdWellbeing = preload("res://src/emergence/household_wellbeing.gd")
 const VillageEstates = preload("res://src/emergence/village_estates.gd")
 const EstateConsumption = preload("res://src/emergence/estate_consumption.gd")
@@ -3865,6 +3866,13 @@ func step_settlements(delta_seconds: float) -> void:
 		# (docs/concept/traveling_merchants.md) -- BEFORE the build and
 		# immigration steps, so gold that arrives this tick is gold the
 		# village can act on this tick.
+		# ...and BEFORE he does, the village puts its goods out on the
+		# stall. A merchant buys a village's surplus, and what is on the
+		# stall is as much the village's as what is in the store -- he sees
+		# every container either way (SettlementSurplus), so the order here
+		# is about the VILLAGERS: a stall stocked before the visit is a
+		# stall somebody can buy a meal from this tick.
+		_step_stall_restock(settlement_id, village_market)
 		_step_merchant_visits(settlement_id, market, village_market)
 		# A fed village with room takes a household in, BEFORE the build
 		# step: a newcomer arriving this tick is owed a house this tick,
@@ -4887,6 +4895,51 @@ var _settlement_merchant_carry: Dictionary = {}
 ## Runs for loaded and UNLOADED settlements alike, unlike immigration: it
 ## needs only the market's own stock, which is persisted, so a village goes
 ## on trading while the player is away.
+## The village puts its goods out: the STORE keeps the STALL stocked
+## (docs/concept/village_warehouse.md, "The stall is the shop window of the
+## store"; docs/concept/milling_and_baking.md's own "three food containers,
+## one eater").
+##
+## The chain worked right up to the store and stopped there. Measured
+## (tools/probe_food_containers.gd) on a real village over a 600-second
+## watch: a farmhouse filling, a carter's round emptying it onto a cart,
+## the cart emptying into the warehouse -- and the stall, the thing
+## VillageMarket.buy_meal actually sells from, empty at every sample but
+## one.
+##
+## REAL UNITS MOVE. Whatever reaches the stall is withdrawn from the
+## store's own shelf, so the village holds exactly what it held before, in
+## a different place -- the same "nothing is conjured and nothing vanishes"
+## rule the merchant's sale keeps. A village with no store has no shop
+## window to fill and keeps the behaviour it always had: its producers
+## carry their own take in (NpcMarker.haul_stock_to_village).
+func _step_stall_restock(settlement_id: String, village_market) -> void:
+	if village_market == null:
+		return
+	var chunk_coord := RegionalTrade.chunk_coord_of(settlement_id)
+	if not _loaded_chunks.has(chunk_coord):
+		return
+	var households := _households_in_settlement(settlement_id).size()
+	if households <= 0:
+		return
+	var stall_food := float(SettlementFood.food_stock(null, village_market, _item_catalog, []))
+	# The STORE, not every shelf: a farmhouse is where a harvest waits for
+	# the carter, and taking off it here would be a second carter's round
+	# that nobody walks (see _settlement_larder_stocks for the same split).
+	for shelf in _shelves_in_settlement_chunk(settlement_id, [VillageLayout.WAREHOUSE_BUILDING_ID]):
+		var drawn: Dictionary = StallRestock.draw(
+			stall_food, households, shelf.stock, _food_ids_in(shelf.stock)
+		)
+		for item_id in drawn:
+			var units := int(floor(float(drawn[item_id])))
+			if units <= 0:
+				continue
+			if not shelf.remove_stock(String(item_id), units):
+				continue
+			village_market.add_stock(String(item_id), float(units))
+			stall_food += float(units)
+
+
 func _step_merchant_visits(settlement_id: String, market, village_market = null) -> void:
 	if market == null:
 		return
@@ -4986,6 +5039,18 @@ func _merchant_food_ids() -> Array:
 	for item_id in MerchantVisit.buy_list():
 		if _item_catalog.kind_of(item_id) == "food":
 			ids.append(item_id)
+	return ids
+
+
+## Which of the ids in `stock` this game calls food. Deliberately NOT
+## _merchant_food_ids: that answers "food a merchant deals in", which is a
+## question about the buy list, and a stall sells whatever its own village
+## put in its store -- including anything the cart never wanted.
+func _food_ids_in(stock: Dictionary) -> Array:
+	var ids: Array = []
+	for item_id in stock:
+		if _item_catalog.kind_of(String(item_id)) == "food":
+			ids.append(String(item_id))
 	return ids
 
 
