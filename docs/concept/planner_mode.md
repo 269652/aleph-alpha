@@ -72,6 +72,22 @@ without standing up a `World`, the same "pure model, thin Node" split
 Both modes keep the minimap, the meters and the message stack: they are
 readouts, not controls, and pillar 4 says the world goes on running.
 
+**What planner mode also takes down (2026-09-20).** Reported with a
+screenshot: the palette open, with *"Tree"*, *"Chop (Space)"* and a held-item
+card drawn over it. The held-item card was simply in the wrong place — it
+names what the hotbar's hand holds and sits in the hotbar's own strip, so it
+follows `shows_hotbar` now. The prompt and the tooltip were a deeper mistake
+than z-order: **in planner mode there is no chopping**, so a hint naming that
+action is wrong wherever it is drawn, not merely covered.
+`ViewMode.shows_world_hints` is that rule, and it tracks `shows_hotbar`
+exactly — a hint advertises an action, and the player's hands are where the
+actions live. Readouts are deliberately not swept in. See
+[hud.md](hud.md)'s "An affordance hint is wrong in planner mode".
+
+The palette is still **not** a modal: `World._any_gameplay_window_open` does
+not know about it, so Escape cannot close it and strand a player in planner
+mode with no controls.
+
 ### The toggle
 
 A button in the **top-right HUD column, immediately left of the minimap**

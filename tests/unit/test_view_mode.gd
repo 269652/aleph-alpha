@@ -68,3 +68,44 @@ func test_the_minimap_and_the_meters_survive_both_modes():
 func test_the_label_names_the_mode_the_button_would_switch_to():
 	assert_string_contains(ViewMode.toggle_label(ViewMode.Mode.RPG).to_lower(), "planner")
 	assert_string_contains(ViewMode.toggle_label(ViewMode.Mode.PLANNER).to_lower(), "rpg")
+
+
+# -- an affordance hint is wrong in planner mode, not merely covered --------
+
+## Reported live with a screenshot: the build palette open, with "Tree",
+## "Chop (Space)" and a held-item card drawn straight over it.
+##
+## The tempting reading is z-order -- do not draw a hint over the palette.
+## But "Chop (Space)" is not a label that landed in a bad place: in planner
+## mode there is no chopping, the hotbar is gone, and the key it names does
+## something else. The hint is WRONG, not covered, and would still be wrong
+## in an empty corner of the screen.
+func test_planner_mode_advertises_no_action_it_does_not_offer():
+	assert_false(ViewMode.shows_world_hints(ViewMode.Mode.PLANNER))
+
+
+func test_rpg_mode_still_shows_its_own_affordances():
+	assert_true(ViewMode.shows_world_hints(ViewMode.Mode.RPG))
+
+
+## A hint is exactly what the hotbar is: the player's own hands. The two
+## travel together, which is why the held-item card reads shows_hotbar and
+## not a third predicate of its own.
+func test_hints_and_the_hotbar_agree_in_both_modes():
+	for mode in [ViewMode.Mode.RPG, ViewMode.Mode.PLANNER]:
+		assert_eq(
+			ViewMode.shows_world_hints(mode), ViewMode.shows_hotbar(mode),
+			"an affordance hint belongs to the mode that offers the affordance"
+		)
+
+
+## Readouts are explicitly NOT swept in with the hints: they report what is
+## true rather than offering an action, and the mode laying out a settlement
+## is the one that most needs to know where it is.
+func test_readouts_are_not_hints_and_survive_planner_mode():
+	assert_true(ViewMode.shows_readouts(ViewMode.Mode.PLANNER))
+	assert_ne(
+		ViewMode.shows_world_hints(ViewMode.Mode.PLANNER),
+		ViewMode.shows_readouts(ViewMode.Mode.PLANNER),
+		"the two rules must actually differ, or one of them is redundant"
+	)
