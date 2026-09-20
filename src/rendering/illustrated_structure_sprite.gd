@@ -699,6 +699,46 @@ func footprint_frame_texture(
 	return ImageTexture.create_from_image(scaled)
 
 
+## That cell scaled to cover a whole PLOT: `footprint` tiles of `tile_size`
+## each, in BOTH axes. Null when the sheet is missing.
+##
+## The sibling above scales by width and lets the art's own aspect set the
+## height, because everything it draws is an object STANDING on the ground
+## and a building taller than its footprint stays taller. A yard is not an
+## object on the ground, it IS the ground: its rect is the plot's rect
+## (docs/concept/building.md, "A building's own yard, drawn behind it").
+##
+## It is also drawn to the FULL plot rather than to
+## BuildingCatalog.drawn_plot_width_tiles, and that difference is the whole
+## reason this function exists. Reported live -- *"farm houses don't use the
+## 3x2 background image as background..."* -- and measured before changing
+## anything (tools/probe_building_yard.gd): drawn through
+## footprint_frame_texture, a farmhouse's yard came out 79x53 art px against
+## a house of 79x54, the same width and a pixel shorter, so it sat entirely
+## inside the house's own silhouette and 85% of its opaque pixels never
+## reached the screen. That margin exists to keep two neighbouring HOUSES
+## from touching, which is a fact about walls; two neighbouring yards
+## meeting is grass meeting grass.
+##
+## Scaling to the rect can only stretch a sheet whose cells are not the
+## plot's shape, and test_building_catalog.gd pins every declared yard sheet
+## against the plot it fills, so that is a checkable promise rather than a
+## coincidence of the two sheets that exist today.
+func plot_background_texture(
+	path: String, columns: int, rows: int, row: int, column: int, tile_size: int,
+	footprint: Vector2i, grid: String = GRID_EVEN
+) -> ImageTexture:
+	var frame := _frame_image(path, columns, rows, row, column, grid)
+	if frame == null:
+		return null
+	var scaled := frame.duplicate() as Image
+	scaled.resize(
+		maxi(1, footprint.x * tile_size), maxi(1, footprint.y * tile_size),
+		Image.INTERPOLATE_LANCZOS
+	)
+	return ImageTexture.create_from_image(scaled)
+
+
 ## Band detection is a full scan of a 1536x1024 image, so its answer is
 ## kept per (path, grid kind, axis, count) -- a village placing five houses
 ## off one sheet scans it once, not ten times.
@@ -924,6 +964,11 @@ static func even_cell_crop(
 ## sheet rather than at the call site.
 const _CHECKERBOARD_SHEETS := {
 	"res://assets/sprites/buildings/farmhouse_bg_overlay.png": true,
+	# Delivered the same way, and later: *"I also added bg overlays for
+	# cottages ..."*. Measured on the raw file, its cells are 39% checker
+	# against the farmhouse sheet's 63%, and the checker is the same two
+	# tones, so it wants the same flood rather than a second rule.
+	"res://assets/sprites/buildings/cottage_bg_overlay.png": true,
 }
 
 ## Clears the checkerboard a yard sheet paints instead of transparency.

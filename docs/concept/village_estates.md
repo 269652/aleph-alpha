@@ -322,6 +322,30 @@ system most needed.
   asked the question. Once a real reading exists the fallback is gone, and
   a village that genuinely wants nothing genuinely builds nothing.
 
+- **A village that wants nothing still makes room** (added 2026-09-20).
+  *"A village that genuinely wants nothing genuinely builds nothing"* was
+  the rule above, and taken literally it sealed every successful village
+  shut. Once everyone is housed and every petition is answered, nothing is
+  built, so no roof ever stands empty, so
+  [village_growth.md](village_growth.md)'s arrival gate — which reads real
+  spare capacity and never frontage — takes nobody in again, ever.
+  Measured (`tools/probe_village_growth_gate.gd`) over a 1200-second watch
+  of a fed, fully-built village: `room` **zero at every single sample**.
+
+  So the assembly carries `village_growth.md`'s own lowest rung: **a house
+  for nobody in particular, when no roof stands empty.** Below every
+  petition, by that file's rule — a village finishes what it already owes
+  itself before it makes room for strangers — and the house is the
+  **starting** estate's, because that is what a newcomer arrives as, unlike
+  the shelter rung at the top which rehouses a *named* household in their
+  own estate's house.
+
+  That rung existed in `VillageGrowth.next_building` and had done for a
+  day. It never fired, because the live decision had moved to this
+  function, which was not handed the spare capacity to test it. A fix
+  documented against one function is not a fix if the caller has moved to
+  another.
+
 A village therefore builds what its own people are short of, in the order
 their standing entitles them to ask — and two villages with the same
 headcount and different estate mixes build visibly different towns. That is

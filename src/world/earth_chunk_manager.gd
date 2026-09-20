@@ -191,6 +191,7 @@ const VillageCensus = preload("res://src/emergence/village_census.gd")
 const VillageImmigration = preload("res://src/emergence/village_immigration.gd")
 const MerchantVisit = preload("res://src/emergence/merchant_visit.gd")
 const SettlementSurplus = preload("res://src/emergence/settlement_surplus.gd")
+const StallRestock = preload("res://src/emergence/stall_restock.gd")
 const HouseholdWellbeing = preload("res://src/emergence/household_wellbeing.gd")
 const VillageEstates = preload("res://src/emergence/village_estates.gd")
 const EstateConsumption = preload("res://src/emergence/estate_consumption.gd")
@@ -3881,6 +3882,13 @@ func step_settlements(delta_seconds: float) -> void:
 		# (docs/concept/traveling_merchants.md) -- BEFORE the build and
 		# immigration steps, so gold that arrives this tick is gold the
 		# village can act on this tick.
+		# ...and BEFORE he does, the village puts its goods out on the
+		# stall. A merchant buys a village's surplus, and what is on the
+		# stall is as much the village's as what is in the store -- he sees
+		# every container either way (SettlementSurplus), so the order here
+		# is about the VILLAGERS: a stall stocked before the visit is a
+		# stall somebody can buy a meal from this tick.
+		_step_stall_restock(settlement_id, village_market)
 		_step_merchant_visits(settlement_id, market, village_market)
 		# A fed village with room takes a household in, BEFORE the build
 		# step: a newcomer arriving this tick is owed a house this tick,
@@ -4903,6 +4911,51 @@ var _settlement_merchant_carry: Dictionary = {}
 ## Runs for loaded and UNLOADED settlements alike, unlike immigration: it
 ## needs only the market's own stock, which is persisted, so a village goes
 ## on trading while the player is away.
+## The village puts its goods out: the STORE keeps the STALL stocked
+## (docs/concept/village_warehouse.md, "The stall is the shop window of the
+## store"; docs/concept/milling_and_baking.md's own "three food containers,
+## one eater").
+##
+## The chain worked right up to the store and stopped there. Measured
+## (tools/probe_food_containers.gd) on a real village over a 600-second
+## watch: a farmhouse filling, a carter's round emptying it onto a cart,
+## the cart emptying into the warehouse -- and the stall, the thing
+## VillageMarket.buy_meal actually sells from, empty at every sample but
+## one.
+##
+## REAL UNITS MOVE. Whatever reaches the stall is withdrawn from the
+## store's own shelf, so the village holds exactly what it held before, in
+## a different place -- the same "nothing is conjured and nothing vanishes"
+## rule the merchant's sale keeps. A village with no store has no shop
+## window to fill and keeps the behaviour it always had: its producers
+## carry their own take in (NpcMarker.haul_stock_to_village).
+func _step_stall_restock(settlement_id: String, village_market) -> void:
+	if village_market == null:
+		return
+	var chunk_coord := RegionalTrade.chunk_coord_of(settlement_id)
+	if not _loaded_chunks.has(chunk_coord):
+		return
+	var households := _households_in_settlement(settlement_id).size()
+	if households <= 0:
+		return
+	var stall_food := float(SettlementFood.food_stock(null, village_market, _item_catalog, []))
+	# The STORE, not every shelf: a farmhouse is where a harvest waits for
+	# the carter, and taking off it here would be a second carter's round
+	# that nobody walks (see _settlement_larder_stocks for the same split).
+	for shelf in _shelves_in_settlement_chunk(settlement_id, [VillageLayout.WAREHOUSE_BUILDING_ID]):
+		var drawn: Dictionary = StallRestock.draw(
+			stall_food, households, shelf.stock, _food_ids_in(shelf.stock)
+		)
+		for item_id in drawn:
+			var units := int(floor(float(drawn[item_id])))
+			if units <= 0:
+				continue
+			if not shelf.remove_stock(String(item_id), units):
+				continue
+			village_market.add_stock(String(item_id), float(units))
+			stall_food += float(units)
+
+
 func _step_merchant_visits(settlement_id: String, market, village_market = null) -> void:
 	if market == null:
 		return
@@ -5002,6 +5055,18 @@ func _merchant_food_ids() -> Array:
 	for item_id in MerchantVisit.buy_list():
 		if _item_catalog.kind_of(item_id) == "food":
 			ids.append(item_id)
+	return ids
+
+
+## Which of the ids in `stock` this game calls food. Deliberately NOT
+## _merchant_food_ids: that answers "food a merchant deals in", which is a
+## question about the buy list, and a stall sells whatever its own village
+## put in its store -- including anything the cart never wanted.
+func _food_ids_in(stock: Dictionary) -> Array:
+	var ids: Array = []
+	for item_id in stock:
+		if _item_catalog.kind_of(String(item_id)) == "food":
+			ids.append(String(item_id))
 	return ids
 
 
@@ -16193,15 +16258,28 @@ func _spawn_building_node(chunk_coord: Vector2i, origin_local: Vector2i, record:
 	# every reload. A building with no yard declared grows no node at all.
 	var yard_sheet := BuildingCatalog.background_sheet_for(building_id, int(record["seed"]))
 	if not yard_sheet.is_empty():
-		var yard_texture := _first_texture_of([yard_sheet], footprint.x, building_id)
+		# Scaled to the WHOLE plot, exactly as the kerb above is, not to the
+		# narrower share the house itself is drawn at
+		# (BuildingCatalog.PLOT_MARGIN_SHARE). It was drawn at the house's
+		# width, and at that size it sat entirely inside the house's own
+		# silhouette: reported live as *"farm houses don't use the 3x2
+		# background image as background..."*, measured at 14.6% of the
+		# yard's opaque pixels reaching the screen
+		# (tools/probe_building_yard.gd).
+		var yard_texture := _illustrated_structure_sprite.plot_background_texture(
+			String(yard_sheet["path"]), int(yard_sheet["columns"]), int(yard_sheet["rows"]),
+			int(yard_sheet["row"]), int(yard_sheet["column"]),
+			TerrainRenderer.ART_TILE_SIZE, footprint, String(yard_sheet["grid"])
+		)
 		if yard_texture != null:
 			var yard := Sprite2D.new()
 			yard.name = "Yard"
 			yard.texture = yard_texture
 			yard.scale = Vector2.ONE * ArtResolution.SPRITE_SCALE
-			yard.position = Vector2(
-				0, -float(yard_texture.get_height()) * 0.5 * ArtResolution.SPRITE_SCALE
-			)
+			# The plot's own rect, the same one the kerb and the collision
+			# shape are built from -- a plot-sized picture centred on the
+			# plot's centre.
+			yard.position = Vector2(0, -footprint_px.y * 0.5)
 			node.add_child(yard)
 
 	var sprite := Sprite2D.new()
@@ -18686,6 +18764,14 @@ func _village_assembly_state(chunk_coord: Vector2i) -> Dictionary:
 		"estate_counts": _household_store.estate_census(household_ids),
 		"household_count": household_ids.size(),
 		"housed_count": int(census["housed_count"]),
+		# How many roofs really stand EMPTY, which is what lets the
+		# assembly raise one when none does (VillageAssembly.next_building's
+		# lowest rung, docs/concept/village_growth.md "Room is made first,
+		# moved into after"). Without it the assembly reads the default
+		# "there is already room", and a village that has housed everybody
+		# and answered every petition owes itself nothing for ever --
+		# measured at room 0 through a whole 1200-second watch.
+		"spare_house_capacity": int(census["spare_house_capacity"]),
 		"present_building_ids": _settlement_present_building_ids(chunk_coord),
 		# How many of each, so a works that feeds people can be raised again
 		# while it is outnumbered by the mouths (mechanism 7).
@@ -18729,11 +18815,21 @@ func _apply_village_growth_decision(chunk_coord: Vector2i) -> void:
 	if spare_capacity <= 0:
 		return
 
-	var owner_id := settlement_id
-	if BuildingCatalog.BUILDING_IDS.has(next_building):
-		if waiting.is_empty():
-			return
-		owner_id = waiting[0]
+	# Who it belongs to -- and a home with nobody waiting for it is the
+	# VILLAGE'S, not a reason to refuse the build.
+	#
+	# This credited a home to waiting[0] and RETURNED when nobody was
+	# waiting. That is right for the shelter rung, which exists for a named
+	# household, and wrong for the ladder's lowest rung, which raises a
+	# house precisely BECAUSE everybody is already housed and no roof
+	# stands empty (VillageGrowth.next_building, docs/concept/
+	# village_growth.md "Room is made first, moved into after"). So the
+	# village chose that house on every settlement step and never once
+	# began it. Measured (tools/probe_village_growth_gate.gd) with every
+	# other condition open -- food per household 2.3 to 3.6 against a
+	# threshold of 2.0, six spare hands, a site available, `house_small`
+	# chosen at every sample -- and `building now` empty throughout.
+	var owner_id := VillageGrowth.owner_for(next_building, waiting, settlement_id)
 
 	var origin = _growth_site_for(chunk_coord, next_building)
 	if origin == null:
@@ -18852,14 +18948,17 @@ func _mean_household_needs(assessments: Array) -> Dictionary:
 ## acts on, so the card cannot promise a building the village is not
 ## actually about to raise.
 func _next_growth_building_for(
-	chunk_coord: Vector2i, household_ids: Array, census: Dictionary
+	chunk_coord: Vector2i, household_ids: Array, _census: Dictionary
 ) -> String:
 	if household_ids.is_empty():
 		return ""
-	return VillageGrowth.next_building(
-		household_ids.size(), int(census.get("housed_count", 0)),
-		_present_structure_ids_for_settlement_chunk(chunk_coord)
-	)
+	# The SAME question _apply_village_growth_decision acts on, not a second
+	# prediction of it. It used to walk VillageGrowth's ladder directly,
+	# which is neither the function the village really asks (the assembly)
+	# nor handed the spare capacity that decides its lowest rung -- so the
+	# card could promise a building the village was not about to raise, and
+	# stay silent about the one it was.
+	return next_building_for_settlement(chunk_coord)
 
 
 func settlement_tier_of(settlement_id: String) -> String:

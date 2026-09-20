@@ -453,7 +453,8 @@ The village's goods have to be somewhere you can point at. So:
 - **The carter's arrival at the store is what credits the village's
   sellable stock.** One credit, at the moment the goods really get there —
   so nothing is counted twice, and the market's numbers describe a pile that
-  exists.
+  exists. **The credit is the pile itself now** (corrected 2026-09-20): see
+  "One credit meant one" below.
 - **A village with no store keeps the old behaviour exactly.** The producer
   carries their own shelf in and is paid and credited in one go, as before.
   That is not a leftover: a hamlet too cramped to raise a store (pillar 1's
@@ -465,6 +466,92 @@ The village's goods have to be somewhere you can point at. So:
 `record_real_harvest` paid, at exactly the same moment, so no villager earns
 more or less than before and the levy split is untouched. What moved is
 *where the goods are* between the field and the market.
+
+## One credit meant one, and two later changes made it two (2026-09-20)
+
+Mechanism 7's rule is *"ONE credit, at the moment the goods really get
+there — so nothing is counted twice, and the market's numbers describe a
+pile that exists."* It stopped being true, without anybody touching it.
+
+`_unload_the_cart` put the load on the store's shelf **and** called
+`NpcEconomy.record_delivered_goods`. That was one credit when it was
+written, because the shelf was invisible to every food reading in the game.
+Two things landed afterwards:
+
+1. [milling_and_baking.md](milling_and_baking.md)'s *"Food that counts"*
+   taught `SettlementFood` to count structure shelves — so the pile on the
+   shelf became a credit in its own right.
+2. Hauling was switched on, so `NpcEconomy._stock` routes that second
+   credit into the **carter's own hands**, which `deliver_load` later
+   empties onto the stall.
+
+N units delivered became N on the shelf plus N on the stall. Food invented,
+by a rule written to prevent exactly that.
+
+**The pile on the shelf IS the credit.** `SettlementFood` counts it, the
+settlement card reads it, and `MerchantVisit` buys off it.
+`record_delivered_goods` is gone rather than merely unused, so there is no
+way back in. What reaches the stall reaches it by the leg below, out of
+that same shelf.
+
+## Mechanism 8 — The stall is the shop window of the store
+
+A market stall is not a warehouse. It is the shop window of one: filled
+each morning from the store behind it and holding about a day's trade —
+which is exactly why a village can look *"out of bread"* at the stall while
+its granary is full.
+
+That leg did not exist, and it is the one
+[milling_and_baking.md](milling_and_baking.md) already named as open work:
+*"Three food containers, one eater… nothing ever moves food between them."*
+Measured (`tools/probe_food_containers.gd`), every container printed
+separately over a 600-second watch of a real village:
+
+```
+  seconds farmhouse warehouse    STALL  ledger  hands  carts
+      100         5         0        0       0      0     12
+      200        15        12        9       0      0      2
+      300         3        16        0       0      0      2
+      400        23        13        0       0      0      2
+      500        22         9        0       0      0      8
+```
+
+The chain works right up to the store — a farmhouse fills, a carter's round
+empties it onto a cart, the cart empties into the warehouse — and the
+**stall**, which is what `VillageMarket.buy_meal` actually sells from, is
+empty at every sample but one. (And that one was the double credit above,
+not the chain working.)
+
+`StallRestock` is the leg, pure and static like everything else here:
+
+- **A stall holds one day's eating for the village**, derived rather than
+  picked: `households × SettlementState.FOOD_PER_HOUSEHOLD`, and that
+  constant is already pinned to the hunger clock by its own test. Retuning
+  what people eat retunes the stall with it.
+- **Only the shortfall**, never the whole target again — a stall that drew
+  a full day on every settlement step would pull the store empty one step
+  at a time.
+- **Real units move.** Whatever reaches the stall is withdrawn from the
+  store's own shelf, so the village holds exactly what it held before, in a
+  different place. Never more of an id than the shelf has.
+- **A village with no store has no shop window to fill**, and keeps the
+  behaviour it always had: its producers carry their own take in
+  (`haul_stock_to_village`), exactly as Mechanism 7's last bullet already
+  rules.
+
+Measured after both halves, on the same watch:
+
+```
+  seconds farmhouse warehouse    STALL
+      200        17         0       12
+      300        12         7        2
+      400        10        21        0
+      500         7        15       10
+```
+
+The stall peaks at exactly 12 — ten households times a day's ration — and
+the farmhouse backlog falls from 22–23 to 7–10, because the food is moving
+through rather than piling up at the end of the chain.
 
 ## A store its own people may eat from
 

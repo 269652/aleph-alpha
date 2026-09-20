@@ -29690,10 +29690,13 @@ uses to make a street of cottages a street of different cottages.
 
 Drawn **between the kerb and the house** — children paint in tree order, so
 the yard lies on the ground the kerb marks out and the walls stand on it.
-Same width as the house by the same `drawn_plot_width_tiles` rule, so it is
-the plot's and never wider. Wired per building id
-(`BuildingCatalog.background_sheet_for`), so every other building answers
-`{}` and draws exactly what it drew before.
+Wired per building id (`BuildingCatalog.background_sheet_for`), so every
+other building answers `{}` and draws exactly what it drew before.
+
+> **Superseded the same day.** This entry originally read "same width as the
+> house by the same `drawn_plot_width_tiles` rule, so it is the plot's and
+> never wider" — and that rule is what hid the art. See *"A yard is the
+> ground of the plot, not a mat under the house"* below.
 
 Worth stating, because it is what makes this art matter: **a farmhouse has no
 variant sheet of its own** — only `house_small`/`house_medium` do — so every
@@ -30018,6 +30021,60 @@ meal — rather than left as numbers in a comment.
   because `main` had already chosen the other end of the same fix and
   carrying both would split the tank again.
 
+## Only a building raised ON paving is cobbled to its walls (`concept/building.md`, 2026-09-20)
+
+Reported with three farmhouses in shot, each standing on its own grey pad:
+*"make the farm houses ground grass instead of cobblestone... only
+buildings placed on pavement like the city hall should get the pavement bg
+... the farmhouses should be placed on grass / forest biomes without
+pavement under it"*.
+
+✅ **Measured first, on the villages that actually show it.** Re-running
+`tools/probe_building_ground.gd` over three real settlements near lat 48.6
+lon 12.7:
+
+```
+farmhouse   origin=(13, 19) 3x2  kerb 14/14 paved (100%)  plaza=false  painted as road (cobbles)
+farmhouse   origin=(20, 19) 3x2  kerb 11/14 paved ( 79%)  plaza=false  painted as road (cobbles)
+house_small origin=(17, 19) 2x2  kerb 10/12 paved ( 83%)  plaza=false  painted as road (cobbles)
+city_hall   origin=(14, 13) 4x3  kerb 12/18 paved ( 67%)  plaza=true   painted as road (cobbles)
+totals: road (cobbles) on open ground: 10   road (cobbles) on plaza: 3
+```
+
+✅ **The threshold was not badly chosen; it was asked the wrong question.**
+`PAVED_KERB_SHARE` was set at half when an ordinary house/farmhouse/sawmill
+plot ran 7-43% against a hall's 67%. A plot wedged between the square's
+southern rows and the second street is ringed by paving on every side while
+standing on none of it, so the worst offenders now beat the hall outright —
+100% against 67%. **No threshold can separate them**, and raising it would
+only have moved which villages broke.
+
+✅ **What separates them is which buildings a village ever raises on its own
+paving, and exactly one does.** The civic plot IS the paved square
+(`_civic_plot_origin_for` refuses a plot whose every footprint cell is not
+already a road tile), while `can_build_house_from_blueprint`,
+`_is_clear_settlement_site` and `VillageLayout._street_plot_fits` each
+refuse a modified footprint outright. `building_ground_tile_for` asks both
+questions now, and both halves earn their keep: a hall raised where there
+is no paving keeps its own ground, and a farmhouse ringed by the whole
+village keeps its grass.
+
+✅ **Confirmed on a real render**, not only by test
+(`tools/probe_village_render.gd` under `xvfb` + Mesa software GL, which
+takes a third frame now for the farmhouse — the hardest plot there is): the
+farmhouse and its yard stand on grass with the village's paving running
+past them, and the hall is still cobbled seamlessly into its square.
+End to end, `road (cobbles) on open ground` falls from **10 to 0** across
+the same three villages, and the three halls keep theirs.
+
+🚧 **Nothing is persisted, so an older save heals on its next load** — the
+same property that lets an older village re-derive and pave its square. The
+pads already written into a save are not pads; they were re-derived every
+paint, so they simply stop being drawn.
+
+Tests: 14/14 in `test_building_ground.gd` (+6), with the five rings the
+reported villages really measured pinned as data.
+
 ## Nothing grows in a pond, and a pond keeps its fish (`concept/village_ponds.md`, 2026-09-20)
 
 Reported live with the water in shot: *"Now there's a pond, but grass grows
@@ -30228,6 +30285,85 @@ so the next reader does not go looking for a bug that is a viewing
 position.
 
 
+## A yard is the ground of the plot, not a mat under the house (`concept/building.md`, 2026-09-20)
+
+Reported live, with the game running: *"farm houses don't use the 3x2
+background image as background..."*, and then, mid-session: *"I also added
+bg overlays for cottages ..."*.
+
+### ✅ The yard is scaled to the plot's whole rect
+
+The farmhouse yard was being drawn the whole time. Measured before changing
+anything (`tools/probe_building_yard.gd`, new): it came out **79×53 art px
+against a house of 79×54** — the same width and a pixel *shorter* — so it
+sat entirely inside the house's own silhouette. Only **14.6%** of the
+yard's opaque pixels reached the screen, about 5% of the yard rectangle.
+
+The failure was specified, not coded: `concept/building.md` said the yard
+is drawn at "the same width as the house's own art, by the same
+`drawn_plot_width_tiles` rule", and
+`test_the_yard_is_drawn_to_the_same_width_as_the_house` pinned it in those
+words. Two different widths were being conflated. A house is deliberately
+drawn *narrower* than its plot (`PLOT_MARGIN_SHARE`) so two neighbours have
+a street between them — a fact about **walls**. Two neighbouring yards
+meeting is grass meeting grass. So the ground takes the plot and the house
+stands inside it, which is also what makes a 3×2 picture the background of
+a 3×2 plot. The test is rewritten, not deleted, and the concept doc carries
+the correction rather than the old rule.
+
+New `IllustratedStructureSprite.plot_background_texture` scales a cell to
+`footprint` tiles in **both** axes. Its sibling `footprint_frame_texture`
+scales by width and lets the art's aspect set the height, which is right for
+an object *standing on* the ground (a building taller than its footprint
+stays taller) and wrong for the ground itself.
+
+Measured after: farmhouse **96×64** with **44.3%** of the yard visible past
+its house (from 14.6%), cottage **64×64** with **56.8%**, fisher_hut
+borrowing the farmhouse's yard unchanged.
+
+### ✅ A cottage stands in its own garden
+
+`cottage_bg_overlay.png` — 1254×1254, a 3×3 grid of **418×418 square**
+scenes — is declared for `house_small`, whose plot is 2×2. A cottage is the
+one building with both a variant sheet and a yard, so a street of them now
+carries 25 house pictures × 9 gardens rather than nine repeats, and the two
+axes are salted apart so a given cottage does not always arrive in the same
+garden.
+
+The sheet is delivered the same way the farmhouse's was — no alpha channel,
+transparency painted as a grey-and-white checkerboard — so it joins
+`_CHECKERBOARD_SHEETS` and is flooded rather than keyed. Measured on the raw
+files, a cottage cell is **39% checker** against the farmhouse sheet's
+**63%**, both in the same two tones, so the existing flood reads it
+unchanged.
+
+### The assertion that needs no constant
+
+Two of the new tests are pinned to measurements rather than to numbers
+somebody liked, which is the discipline this repo already keeps for
+`PLOT_MARGIN_SHARE` and `_DRAW_SCALES`:
+
+- `test_drawing_the_yard_to_the_plot_more_than_doubles_what_shows_of_it`
+  rebuilds the **old** texture beside the new one inside the test and
+  compares the two, so it bites with no threshold at all. (A first draft of
+  the sibling test guessed 0.55 for the visible share; the real figure is
+  0.465. The guess was replaced by the measurement, floor 0.40.)
+- `test_every_declared_yard_is_the_shape_of_the_plot_it_fills` pins every
+  declared sheet's cell aspect to its plot's (1.50 for 3×2, 1.00 for 2×2),
+  which is what makes scaling to the rect a checkable promise rather than a
+  coincidence of the two sheets that exist today. Verified by mutation:
+  declaring the square cottage sheet for the 3×2 `house_medium` fails it.
+
+### ⬜ Not done
+
+`house_medium` (3×2) and `house_large` (3×3) still stand on bare plot — no
+yard art has been drawn for them. `house_medium` shares the farmhouse's
+plot shape and could borrow that sheet, but a farmyard behind a town house
+is the wrong picture, so it waits for its own.
+
+Tested: `test_illustrated_structure_sprite.gd` (+5),
+`test_building_catalog.gd` (+4), `test_earth_chunk_manager_buildings.gd`
+(+3, one rewritten).
 ## A road home for the hut, and fish for a pond nobody could stock (`concept/village_ponds.md`, 2026-09-20)
 
 Two more, both reported live with the pond in shot: *"Fisher hut is there
@@ -30364,3 +30500,281 @@ import cache so the only variable was the code {D} identical failure,
 identical message. `concept/long_grass.md` records winter[9] as a known
 narrowed-but-not-closed gap of exactly this kind; spring[7] is a second
 one, recorded here so it is not rediscovered as a regression.
+## Why a village stopped growing — two links, both invisible (2026-09-20)
+
+Asked for directly: *"now make the village grow again"*. The roster held
+at its founding ten for a whole watch where it used to reach twelve.
+
+**The obvious hypothesis was wrong, and the measurement killed it.** The
+last food reading had been 19 units over 10 households — 1.9 against a
+`FED_THRESHOLD` of 2.0 — so the gate looked shut on food by a hair.
+`tools/probe_village_growth_gate.gd` (kept) prints every condition
+`VillageImmigration.arrivals` actually reads, separately, rather than the
+roster alone:
+
+```
+  seconds  house housed  room  food/hh  ladder
+      300     10     10     0     2.30    0.60
+      600     10     10     0     2.30    0.60
+      900     10     10     0     2.10    0.60
+     1050     10     10     0     2.30    0.60
+```
+
+Food comfortably **over** the threshold the whole way. `room` **zero at
+every single sample**. The village was fed, content, and sealed.
+
+### ✅ Link 1 — the documented fix was in a function the village had stopped asking
+
+[village_growth.md](concept/village_growth.md) has said since the day
+before: *"a village whose people are all housed would owe itself nothing,
+build nothing, and never have the roof an arrival needs… so
+`next_building` gains a lowest rung: a house for nobody in particular."*
+
+That rung went into `VillageGrowth.next_building`. The live decision had
+already moved: `_apply_village_growth_decision` →
+`next_building_for_settlement` → **`VillageAssembly.next_building`**, the
+estate-weighted petition that replaced the fixed ladder order. The
+assembly had no such rung, and its state dict was never handed a spare
+capacity to test one against — so the fix was unreachable from the path a
+village uses. Even the assembly's own fallback to the ladder called it with
+three arguments, so the capacity defaulted to *"there is already room"*
+there too.
+
+The assembly carries the rung now, below every petition (a village
+finishes what it already owes itself before it makes room for strangers),
+and `_village_assembly_state` hands it the real spare capacity. The house
+is the **starting** estate's, because that is what a newcomer arrives as,
+unlike the shelter rung above it which rehouses a *named* household in
+their own estate's house.
+
+`_next_growth_building_for` — the settlement card's read — walked
+`VillageGrowth`'s ladder directly, which is neither the function the
+village asks nor handed the capacity. Its own doc comment forbids exactly
+that (*"the card cannot promise a building the village is not actually
+about to raise"*). It asks the one question now.
+
+### ✅ Link 2 — and the one case the rung exists for was the one case the build refused
+
+With the rung firing, the village chose `house_small` at every sample and
+`room` stayed 0. Re-measured with the whole build pipeline in the probe:
+
+```
+  seconds  house housed  room  food/hh  labour waiting  site   next build   building now
+        0     10     10     0     0.00       6      0   yes    house_small  -
+      200     10     10     0     3.60       6      0   yes    house_small  -
+      500     10     10     0     3.20       6      0   yes    house_small  -
+```
+
+Food over the threshold, six spare hands, a site available, the house
+chosen every time — and **no project ever started**.
+
+`_apply_village_growth_decision` credited a new home to `waiting[0]` and
+**returned** when nobody was waiting. That is right for the shelter rung,
+which exists for a named household, and exactly wrong for the lowest rung,
+which raises a house *because* everybody is already housed. The one case
+the rung exists for was the one case the caller refused.
+
+`VillageGrowth.owner_for` answers it instead: a waiting household's home is
+theirs (the first in the queue, which `VillageCensus` sorts, so a repeated
+decision lands on the same plot); a home for nobody in particular is the
+**settlement's** — a commons roof standing empty, which is precisely the
+invitation the arrival gate reads; and nobody lives in a sawmill, so a
+works is the village's either way.
+
+### ✅ Measured after both
+
+```
+  seconds  house housed  room  food/hh  labour waiting  site   next build   building now
+        0     10     10     0     0.00       6      0   yes    house_small  house_small:0
+      200     10     10     0     3.60       6      0   yes    house_small  house_small:0
+      400     10     10     0     2.90       6      0   yes    house_small  house_small:0
+      500     10     10     1     3.20       6      0    NO    -            -
+
+  house_small x11   (was x10)
+```
+
+Chosen, **begun**, finished, and `room` is 1. The eleventh roof stands
+empty and the gate is open.
+
+**Exactly one commons house is ever raised**, which is worth stating
+because it looks like it could run away: once it stands, spare capacity is
+1, so the rung stops firing. From then on each arrival is unhoused, the
+shelter rung raises *their* house, and the spare roof stays as the standing
+invitation for the next. Population advances one household per house
+actually built — the pace the original report asked for.
+
+### ✅ And the roster rises, on the same watch every other reading used
+
+`tools/probe_village_famine.gd`, the 1200-second watch every measurement in
+this thread has used:
+
+```
+   seconds   roster   standing  hungriest market food    purse  wallets
+         0       10         10       0.30          0      0.0        0
+       300       10         10       0.60          2      0.0        0
+       600       10         10       1.00          0     20.0        0
+       900       11         11       1.00          0      0.0        0
+      1200       11         11       1.00          0      1.0        0
+```
+
+| state | roster over the watch |
+|---|---|
+| before the gold faucet was closed | 10 → 10 → 12 → 12 → 12 |
+| faucet closed, nothing else | 10 → 3 → 4 → 4 → 6 |
+| + the clock fix alone | 10 → 3 → 5 → 6 → 8 |
+| + the money fixes merged | 10 → 10 → 10 → 10 → 10 |
+| **+ both growth links** | **10 → 10 → 10 → 11 → 11** |
+
+**Nobody dies and the village grows.** `standing` equals `roster` at every
+sample, so the villager reconcile holds through the arrival: the eleventh
+household is somebody you can SEE.
+
+**Honest limit:** it is tight. The worst-off villager reached 185 of 200
+through the starvation window at t=900 and fell back to 125 by t=1200 —
+fed each time, but not comfortably. And the arrival lands at t=900 where
+the pre-faucet village reached twelve by t=600, so growth is slower than it
+was when gold was conjured. Both point at the same open gap
+([milling_and_baking.md](concept/milling_and_baking.md)): the harvest sits
+in farmhouses and the market reads 0, so a wage buys a meal only where a
+villager can reach one.
+
+### ⬜ A pre-existing failure set, named rather than absorbed
+
+`test_earth_chunk_manager.gd`'s settlement slice runs **75 of 90**, with
+fifteen failing — among them
+`test_step_settlements_records_a_first_production_shortfall_once`,
+`test_an_unloaded_settlement_can_grow_on_its_own_gathering` and
+`test_probe_eight_household_settlement`. A clean `origin/main` worktree
+runs the identical 75/90 with the identical fifteen names, so none of it is
+this work's. Recorded because fifteen is too many to leave as an unremarked
+background hum, and because the whole file (15,371 lines) does not finish
+inside a single run here, so nobody is looking at it by accident.
+
+### 🚧 The lesson, and it is the same one in a new costume
+
+A fix documented against one function is not a fix if the caller has moved
+to another. This file's own warnings about hand-maintained lists are the
+same failure: **a fact written in one place, and read from another.** What
+made it findable was a probe that prints each gate condition *separately*
+rather than the outcome they jointly produce — the roster alone said only
+"it stopped", which is consistent with at least four different causes.
+
+## The food containers: the chain ended at the store (2026-09-20)
+
+Asked for directly: *"now fix the food containers so the market actually
+gets stocked"*. `milling_and_baking.md` had carried the gap in its own
+words since the bread chain landed — *"Three food containers, one eater. A
+villager now eats from the stall, the persisted Market and the shelves
+alike, but nothing ever moves food between them."*
+
+`tools/probe_food_containers.gd` (kept) prints **every container
+separately** over time, because *"the market is empty"* is equally
+consistent with the carter never running, the carter crediting the wrong
+place, and nobody producing at all:
+
+```
+  seconds farmhouse warehouse    STALL  ledger  hands  carts
+        0         0         0        0       0      0      0
+      100         5         0        0       0      0     12
+      200        15        12        9       0      0      2
+      300         3        16        0       0      0      2
+      400        23        13        0       0      0      2
+      500        22         9        0       0      0      8
+```
+
+The chain works **right up to the store**: a farmhouse fills, a carter's
+round empties it onto a cart, the cart empties into the warehouse. The
+stall — what `VillageMarket.buy_meal` actually sells from — is empty at
+every sample but one. Two faults, and the second is why that one sample
+existed.
+
+### ✅ The stall is the shop window of the store
+
+A market stall is not a warehouse. It is filled each morning from the store
+behind it and holds about a day's trade, which is exactly why a village can
+look *"out of bread"* at the stall while its granary is full.
+`StallRestock` is that leg, pure and static like `SettlementSurplus` beside
+it:
+
+- **A day's eating for the village**, derived rather than picked —
+  `households × SettlementState.FOOD_PER_HOUSEHOLD`, a constant already
+  pinned to the hunger clock by its own test.
+- **Only the shortfall**, or a stall would pull the store empty one
+  settlement step at a time.
+- **Real units move**: what reaches the stall is withdrawn from the store's
+  own shelf, never more of an id than it holds.
+- **A village with no store keeps what it had** — its producers carry their
+  own take in, exactly as `village_warehouse.md`'s Mechanism 7 already
+  ruled.
+
+### ✅ …and that one sample of 9 was food being invented
+
+`village_warehouse.md` Mechanism 7 rules *"ONE credit, at the moment the
+goods really get there — so nothing is counted twice, and the market's
+numbers describe a pile that exists."* It stopped being true without
+anybody touching it. `_unload_the_cart` put the load on the store's shelf
+**and** called `record_delivered_goods`, which was one credit when the
+shelf was invisible to every food reading. Then
+[milling_and_baking.md](concept/milling_and_baking.md)'s *"Food that
+counts"* taught `SettlementFood` to count shelves, and hauling was switched
+on so `_stock` routed that second credit into the **carter's own hands**,
+which `deliver_load` empties onto the stall.
+
+N units delivered became N on the shelf plus N on the stall — food
+invented, by a rule written to prevent exactly that. The pile on the shelf
+is the credit now, and `record_delivered_goods` is **gone rather than
+merely unused**, so there is no way back in.
+
+Worth naming: **no test covered `_unload_the_cart` at all**, which is how a
+double credit survived two separate changes that each made it worse.
+
+### ✅ Measured after both
+
+```
+  seconds farmhouse warehouse    STALL
+      200        17         0       12
+      300        12         7        2
+      400        10        21        0
+      500         7        15       10
+```
+
+The stall peaks at exactly **12** — ten households times a day's ration,
+which is the derivation, not a coincidence — and the farmhouse backlog
+falls from 22–23 to 7–10 because food moves through instead of piling up at
+the end of the chain.
+
+And on the famine watch every other reading in this thread has used:
+
+```
+   seconds   roster   standing  hungriest market food    purse
+         0       10         10       0.30          0      0.0
+       300        9          9       1.00          2     20.0
+       600       10         10       1.00         11      1.0
+       900       11         11       1.00          0      0.0
+      1200       13         13       1.00          1     20.0
+```
+
+| state | roster over the watch |
+|---|---|
+| before the gold faucet was closed | 10 → 10 → 12 → 12 → 12 |
+| faucet closed, nothing else | 10 → 3 → 4 → 4 → 6 |
+| + the clock fix alone | 10 → 3 → 5 → 6 → 8 |
+| + the money fixes | 10 → 10 → 10 → 10 → 10 |
+| + the growth links | 10 → 10 → 10 → 11 → 11 |
+| **+ the stall leg** | **10 → 9 → 10 → 11 → 13** |
+
+**Thirteen households — past the twelve the village reached when gold was
+still conjured.** `market food` reads real numbers now rather than 0 at
+every sample, which is the stall actually being traded at.
+
+### 🚧 Honestly, not all of it is closed
+
+- **One villager still died**, at t=300, before the chain filled. The
+  hungriest villager reads 1.00 at every later sample with the starvation
+  counter running 5–125 of 200: fed each time, never comfortably. The
+  village grows *through* a famine rather than avoiding one.
+- **The persisted `Market` is still a third container** nothing fills or
+  empties in live play — its own neighbouring comment says so — and the
+  **player's shop still prices only that Market**, so what a player buys
+  and what a village trades remain two different piles. Named in
+  `milling_and_baking.md` rather than folded in here.

@@ -89,10 +89,17 @@ func _init() -> void:
 		manager.update(village["hall_tile"])
 		await process_frame
 
-	for shot in [
+	var shots: Array = [
 		{"name": "hall_on_the_square", "tile": village["hall_tile"]},
 		{"name": "house_on_the_street", "tile": village["house_tile"]},
-	]:
+	]
+	# The farmhouse is the one that was reported ("make the farm houses
+	# ground grass instead of cobblestone"), and it is the hardest case:
+	# wedged between the square's south rows and the second street, its
+	# kerb is 79-100% paved while it stands on none of it.
+	if village.has("farmhouse_tile"):
+		shots.append({"name": "farmhouse_on_its_plot", "tile": village["farmhouse_tile"]})
+	for shot in shots:
 		var centre := Vector2(shot["tile"]) * float(TerrainRenderer.TILE_SIZE)
 		world.position = Vector2(VIEW) * 0.5 - centre * world.scale
 		RenderingServer.force_draw()
@@ -125,18 +132,24 @@ func _village_with_a_hall(manager) -> Dictionary:
 	for chunk_coord in manager._loaded_chunks:
 		var hall := {}
 		var house := {}
+		var farmhouse := {}
 		for record in manager.buildings_in_chunk(chunk_coord):
 			if record["id"] == "city_hall":
 				hall = record
+			elif record["id"] == "farmhouse" and farmhouse.is_empty():
+				farmhouse = record
 			elif BuildingCatalog.capacity_of(record["id"]) > 0 and house.is_empty():
 				house = record
 		if hall.is_empty() or house.is_empty():
 			continue
-		return {
+		var found := {
 			"chunk_coord": chunk_coord,
 			"hall_tile": _centre_tile(chunk_coord, hall),
 			"house_tile": _centre_tile(chunk_coord, house),
 		}
+		if not farmhouse.is_empty():
+			found["farmhouse_tile"] = _centre_tile(chunk_coord, farmhouse)
+		return found
 	return {}
 
 
