@@ -122,11 +122,11 @@ var water_errand := WaterErrand.AT_HOME
 ## would silently change what it was for.
 var _errand_target: Dictionary = {}
 
-## How long they have been on this leg, and how long it is worth keeping
-## at before the bucket goes down (see ERRAND_PATIENCE_SLACK), plus how
-## long they stay off the errand once one has defeated them.
-var _errand_leg_seconds := 0.0
-var _errand_leg_budget := 0.0
+## The nearest this leg has brought them to where the bucket is going, how
+## long since that last improved (see ERRAND_PATIENCE_SECONDS), and how
+## long they stay off the errand once a leg has defeated them.
+var _errand_closest_px := INF
+var _errand_stalled_seconds := 0.0
 var _errand_retry_in := 0.0
 ## Where the errand is sending them right now, "" when they are not on one.
 var _errand_location_tag := ""
@@ -1006,27 +1006,35 @@ var _talking_to: Node = null
 ## villager who never stops fetching water.
 const ERRAND_REACH_PX := 6.0
 
-## How much longer than a straight-line walk a villager keeps at one leg of
-## the errand before putting the bucket down.
+## How far a villager may walk WITHOUT GETTING ANY NEARER to where the
+## bucket is going, before they put it down.
 ##
-## There is NO PATHFINDING here -- only a straight line at the target and a
-## slide along whatever it runs into (_slid_along_walls) -- so a villager
-## with a wall, a rail or a building between them and the well walks at it
-## for ever. Measured on the probe village (tools/probe_farm_water.gd): one
-## of three field workers ended a 600s run still `to_well`, 104 px short of
-## a well it had had 570 seconds to reach, having worked 156 of 6000 ticks
-## against its own baseline of 2750. It never farmed again.
+## A villager can be stopped dead: routing plans around what it can see
+## (TileRouter) and _slid_along_walls refuses the rest, but neither can
+## promise a way through, so without a give-up rule a villager pressed
+## against something walks at it for ever. Measured on the probe village
+## (tools/probe_farm_water.gd): one of three field workers ended a 600s
+## run still `to_well`, 104 px short of a well it had had 570 seconds to
+## reach, having worked 156 of 6000 ticks against its own baseline of
+## 2750. It never farmed again.
 ##
-## Derived rather than chosen: the leg's own straight-line walk at
-## WALK_SPEED, times this, for everything a straight line does not account
-## for -- sliding along a wall, being pulled off to eat, a day rolling over
-## mid-walk. Four times is generous; test_a_villager_who_can_walk_there_
-## still_finishes_the_errand is the other side of it.
-const ERRAND_PATIENCE_SLACK := 4.0
+## Patience is measured in PROGRESS, not in time, and that distinction is
+## not academic -- it is the second bug this constant has had. A time
+## budget scaled from the straight-line distance looked equivalent and was
+## not: merging real routing made villagers walk round buildings instead
+## of into them, a route is longer than the line it replaces, and every
+## well trip in the probe village stopped completing (farmer 1: 5 trips
+## and 51 tendings became 0 and 8, its beds dry for 5110 of 6000 ticks)
+## while the villagers walked perfectly well the whole time.
+##
+## So: far enough to round a building, because a detour genuinely takes
+## you AWAY from the target for a while, and that is not being stuck.
+const ERRAND_DETOUR_PX := 320.0
+const ERRAND_PATIENCE_SECONDS := ERRAND_DETOUR_PX / WALK_SPEED
 
-## The floor under that, so a villager standing almost on top of the well
-## still gets a moment rather than giving up on the first frame.
-const ERRAND_MIN_PATIENCE_SECONDS := 4.0
+## What counts as getting nearer at all -- a quarter tile, so float noise
+## on a villager standing still never reads as progress.
+const ERRAND_PROGRESS_PX := 4.0
 
 ## How long they get on with their day before setting out again, once a leg
 ## has defeated them. Without it they turn round at the door and walk into
@@ -1075,28 +1083,24 @@ func _step_water_errand(delta: float) -> void:
 			)
 			_errand_target = {}
 	else:
-		# Still walking this leg. If it has taken far longer than the walk
-		# itself could, they cannot get there: put it down (see
-		# ERRAND_PATIENCE_SLACK).
-		_errand_leg_seconds += delta
-		if _errand_leg_seconds > _errand_leg_budget:
-			_put_the_bucket_down(ERRAND_RETRY_SECONDS)
+		# Still walking this leg. Getting nearer is all that is asked --
+		# take as long as the way round needs (see
+		# ERRAND_PATIENCE_SECONDS); make no headway at all and the bucket
+		# goes down.
+		var distance := position.distance_to(_resolve_location(_errand_location_tag))
+		if distance < _errand_closest_px - ERRAND_PROGRESS_PX:
+			_errand_closest_px = distance
+			_errand_stalled_seconds = 0.0
+		else:
+			_errand_stalled_seconds += delta
+			if _errand_stalled_seconds > ERRAND_PATIENCE_SECONDS:
+				_put_the_bucket_down(ERRAND_RETRY_SECONDS)
 		return
 
 	if water_errand != was:
-		_errand_leg_seconds = 0.0
+		_errand_closest_px = INF
+		_errand_stalled_seconds = 0.0
 	_errand_location_tag = WaterErrand.location_tag_for(water_errand)
-	if WaterErrand.is_running(water_errand):
-		_errand_leg_budget = _patience_for(_resolve_location(_errand_location_tag))
-
-
-## How long this leg is worth keeping at: its own straight-line walk, times
-## the slack, never less than the floor.
-func _patience_for(target: Vector2) -> float:
-	return maxf(
-		ERRAND_MIN_PATIENCE_SECONDS,
-		position.distance_to(target) / WALK_SPEED * ERRAND_PATIENCE_SLACK
-	)
 
 
 ## Off the errand, empty-handed, and not setting out again for `retry_in`
@@ -1106,8 +1110,8 @@ func _put_the_bucket_down(retry_in: float) -> void:
 	water_errand = WaterErrand.AT_HOME
 	_errand_target = {}
 	_errand_location_tag = ""
-	_errand_leg_seconds = 0.0
-	_errand_leg_budget = 0.0
+	_errand_closest_px = INF
+	_errand_stalled_seconds = 0.0
 	_errand_retry_in = maxf(_errand_retry_in, retry_in)
 
 

@@ -1936,3 +1936,39 @@ func test_a_villager_never_climbs_a_cliff():
 		assert_ne(tile_x, world.cliff_x, "the villager walked onto the cliff at step %d" % i)
 		if tile_x == world.cliff_x:
 			return
+
+
+## Patience has to mean "I am getting nowhere", NOT "this is taking a
+## while" -- and the difference is not academic. Measured: merging
+## TileRouter (docs/concept/navigation.md) made villagers walk real routes
+## around buildings instead of pressing into them, and a route is LONGER
+## than the straight line a time budget was scaled from. Every well trip in
+## the probe village stopped completing -- farmer 1 went from 5 trips and
+## 51 tendings to 0 and 8, its beds dry for 5110 of 6000 ticks -- while the
+## villagers themselves were walking perfectly well.
+func test_a_villager_making_slow_progress_is_not_given_up_on():
+	var world := _a_watered_villager(0.0)
+	marker._process(0.1)
+	assert_true(WaterErrand.is_running(marker.water_errand), "precondition: they set out")
+
+	# A long way round: they close on the well far slower than a straight
+	# line would -- and never reach it inside this test -- but they are
+	# closing on it every single frame. `walked` is kept independently of
+	# marker.position, because _process moves them too and reading it back
+	# would hand them the straight-line walk this test exists to avoid.
+	var target := marker._resolve_location(WaterErrand.location_tag_for(marker.water_errand))
+	var walked := marker.position
+	for i in 600:
+		walked = walked.move_toward(target, 0.2)
+		marker.position = walked
+		marker._process(0.1)
+		if not WaterErrand.is_running(marker.water_errand):
+			break
+	assert_gt(
+		walked.distance_to(target), NpcMarker.ERRAND_REACH_PX,
+		"precondition: this walk must not finish, or it tests nothing"
+	)
+	assert_true(
+		WaterErrand.is_running(marker.water_errand),
+		"they put the bucket down while still walking steadily toward the well"
+	)
