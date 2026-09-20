@@ -136,7 +136,8 @@ func spawn_village(
 	tile_size: int,
 	dominant_biome: String,
 	world = null,
-	sun_elevation_deg: float = DEFAULT_SUN_ELEVATION_DEG
+	sun_elevation_deg: float = DEFAULT_SUN_ELEVATION_DEG,
+	existing_market = null
 ) -> Array[Node2D]:
 	if not _settlement_generator.has_settlement_at(chunk_coord, dominant_biome):
 		return []
@@ -180,7 +181,18 @@ func spawn_village(
 	# settlement's state -- a chunk reload regenerates an empty market, the
 	# same known "regenerates identically on revisit, no persistence"
 	# simplification trees/creatures already accept (see docs/progress.md).
-	var market := VillageMarket.new()
+	#
+	# Unless the caller hands over the market this village ALREADY trades
+	# in: a re-derivation in play (EarthChunkManager._respawn_village, on
+	# an arrival and on a completed building) keeps the village's live
+	# purse and stall rather than wiping them -- the purse the cart fills
+	# and the wages come out of lives on this object (NpcEconomy.PURSE_META),
+	# and a fresh one on every re-derivation was measured in play as the
+	# purse falling to 0 the moment a house completed, wages stopping and
+	# the roster falling from ten to five (docs/concept/village_ponds.md,
+	# "A pond dug the day the fisher's house stands"). The same reuse
+	# reconcile_villagers already does for a newcomer.
+	var market = existing_market if existing_market != null else VillageMarket.new()
 
 	var npcs: Array = settlement.npcs
 	# One building id per villager, chosen from their own occupation +

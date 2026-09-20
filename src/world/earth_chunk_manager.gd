@@ -5432,6 +5432,11 @@ func _respawn_village(chunk_coord: Vector2i) -> void:
 	var chunk: Chunk = _loaded_chunks.get(chunk_coord)
 	if chunk == null:
 		return
+	# The market this village already trades in -- its purse and its stall
+	# -- read off the villagers BEFORE they are freed, and handed back to
+	# the spawn so the re-derived village keeps trading in it
+	# (test_earth_chunk_manager_village_respawn.gd).
+	var market = village_market_for_settlement(EntityRef.for_settlement(chunk_coord))
 	for node in _loaded_villages[chunk_coord]:
 		if is_instance_valid(node):
 			node.free()
@@ -5443,7 +5448,8 @@ func _respawn_village(chunk_coord: Vector2i) -> void:
 		TerrainRenderer.TILE_SIZE,
 		_biome_classifier.dominant_biome(chunk.biome),
 		self,
-		_current_sun_elevation_deg
+		_current_sun_elevation_deg,
+		market
 	)
 
 
