@@ -20,10 +20,12 @@ exactly as regional_trade.md already specifies.
    speculative; only the *delivery* is still pending.
 2. **The shortage settlement's gain is only real once the goods actually
    arrive.** A real caravan (`CaravanTrip`, pure math + `CaravanMarker`,
-   the engine glue) walks the real straight-line route between the two
-   settlements' own "well" landmarks at ordinary on-foot NPC pace. The
-   destination market is credited, and the "shipped" event becomes real,
-   only when that walk actually finishes -- not at dispatch.
+   the engine glue) walks a real route between the two settlements' own
+   "well" landmarks at ordinary on-foot NPC pace. The destination market
+   is credited, and the "shipped" event becomes real, only when that walk
+   actually finishes -- not at dispatch. The route leaves and arrives **by
+   each village's own road** rather than straight across it; see "A
+   caravan leaves by the road" below.
 3. **Roads are earned by trade, not just by footsteps.** PathScarring
    (see [infrastructure.md](infrastructure.md)) already wears grass into
    dirt paths from repeated player movement. A caravan is a second real
@@ -98,6 +100,53 @@ raided never blocks or couples to another's.
 - ✅ Real raid risk scaled by the real `RegionDifficulty` gradient
   (`caravan_raid.gd`), with real scattered-goods consequences on failure
   (`_resolve_caravan_raid`, `WorldItemBus`) instead of a silent loss.
+### A caravan leaves by the road
+
+Asked for after every other walking marker had been given a building gate:
+*"fix the caravan and cart markers too"*.
+
+**A caravan cannot have that gate, and the reason is structural.** Its
+position is a pure closed-form function of elapsed time, and `is_arrived`,
+`raid_triggered` and its own `PathScarring` wear all read the same
+progress. Deflecting the *marker* would leave the marker and the trip
+disagreeing about where the caravan is: it would hug a wall, pop through as
+the pure position moved on, and be freed on arrival somewhere it was not.
+
+**So the route bends instead of the walker.** `CaravanTrip.waypoints` makes
+the route a polyline and `position_at` walks it by arc length. Nothing else
+changed, because everything else was already written in terms of progress
+-- and `travel_seconds` is the *route's* length, so a detour costs real
+walking time rather than being a faster straight line. An empty waypoint
+list is exactly the straight line every trip walked before.
+
+**The road is the way out.** A village's street is already a corridor with
+the plots lined either side, so running *along* it never crosses one; all a
+traveller needs on top is to be clear of its end before turning.
+`VillageLayout.road_exit_toward` gives both points — the end of the street
+that lies toward where you are going, and one
+`ROAD_EXIT_CLEARANCE_TILES` further out — read off the **skeleton** rather
+than the laid-out village, because a caravan has to compute this for a
+settlement whose chunk is not loaded. A departing caravan's waypoints are
+its own two, then the waiting village's two reversed.
+
+Measured over 60 real village layouts and every direction a caravan can
+leave a well in:
+
+| route | crosses a building |
+| --- | --- |
+| straight from the well | **6466 / 21600 (29.9%)** |
+| out by the road instead | **0 / 21600** |
+
+And the clearance is derived from the same sweep rather than chosen:
+turning at the street's own end still crossed on 19.72% of routes, one tile
+out 12.22%, one and a half 1.11%, two tiles none. Both that floor and a
+ceiling keeping the detour a road exit rather than a tour of the village
+are pinned by `test_village_layout.gd`.
+
+**The first measurement of this was wrong**, and it is worth keeping
+written down. Sampling five directions said a caravan never crosses a
+building. Five samples of a circle is not a measurement of a circle.
+
 - ✅ A second real `PathScarring.step_on` caller: a caravan's route wears
   real ground the same way player footsteps already do
   (`_caravan_path_scarring`).

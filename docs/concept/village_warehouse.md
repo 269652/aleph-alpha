@@ -687,6 +687,29 @@ number.
   way it is going). Spawned with the village, so it is freed with the chunk
   — a leak there was the measured cause of a reported framerate decay
   (`tools/probe_node_growth.gd`).
+
+- ✅ **The cart waits at the store's DOOR, and rolls round walls**
+  (2026-09-20). Asked for as *"fix the caravan and cart markers too"*, and
+  what the measurement found was not the expected corner-cutting:
+  `VillageRenderer` parked every cart at the literal **centre of the
+  warehouse footprint** and handed the carter the same point as their work
+  landmark. Harmless while nothing stopped a marker walking into a
+  building; with the building gate live it is a cart parked in masonry and
+  a carter who can never arrive at their own workplace. Measured on a real
+  village (`tools/probe_carts_and_caravans.gd`):
+
+  | | before | after |
+  | --- | --- | --- |
+  | carts spawned inside a building | 2 / 2 | 0 / 2 |
+  | carters whose work landmark is inside one | 2 / 2 | 0 / 2 |
+  | frames a cart stood inside a building | 97.0% | 0.0% |
+
+  Both now use the store's **doorstep**, which `BuildingCatalog.doorstep_of`
+  already puts "just south of the door, outside the footprint" — the same
+  rule every house follows, not a new one. And the cart itself asks the
+  shared `WalkGate` before it rolls (`CartMarker.setup(world, tile_size)`),
+  sliding so it follows its puller round a corner instead of being
+  abandoned against the wall. A cart with no world rolls exactly as before.
 - ✅ **Mechanism 6 — a real object.** `CartMarker` carries a `StaticBody2D`
   on the ground floor's own collision layer, joins the hover group with a
   name that says what is in it, and offers Take Hold / Let Go on the primary

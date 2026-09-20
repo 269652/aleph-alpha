@@ -27447,6 +27447,95 @@ than delete them, the placement invariants they were really pinning (a
 workspot is not a road or a wall; it touches the paving) were retargeted
 onto `NpcMarker.workspot_position`, which outlives the prop. 131/131.
 
+### ✅ Done (2026-09-20): the cart and the caravan, the last two ungated
+
+Asked for once the rest had landed: *"fix the caravan and cart markers
+too"*. They turned out to be two different problems, and measuring first
+(`tools/probe_carts_and_caravans.gd`) was what separated them.
+
+**The cart was not cutting corners — it was living in a wall.**
+`VillageRenderer` parked every cart at `store_centre`, the literal CENTRE
+of the warehouse footprint, and handed the carter the same point as their
+work landmark. That read as harmless while nothing stopped a marker
+walking into a building; with the building gate live it is a cart parked
+in masonry and a carter who can never arrive at their own workplace.
+
+| | before | after |
+| --- | --- | --- |
+| carts spawned inside a building | 2 / 2 | 0 / 2 |
+| carters whose work landmark is inside one | 2 / 2 | 0 / 2 |
+| frames a cart stood inside a building | 97.0% | 0.0% |
+
+Both now use the store's DOORSTEP — `BuildingCatalog.doorstep_of`, the
+same rule every house already follows. And the cart asks the shared
+`WalkGate` before it rolls (`CartMarker.setup(world, tile_size)`), sliding
+so it follows its puller round a corner rather than being abandoned
+against the wall. A cart with no world rolls exactly as before, pinned by
+its own test. The gate asks about the cell a step ENDS in, so a mover
+crossing more than a tile per frame could tunnel; a cart is the fastest
+thing that asks it, so that bound is test-pinned rather than assumed.
+
+**The caravan could not be given that gate at all**, and the reason is
+structural rather than awkward: its position is a pure closed-form
+function of elapsed time, and `is_arrived`, `raid_triggered` and its
+`PathScarring` wear all read the same progress. Deflecting the MARKER
+would leave the marker and the trip disagreeing about where the caravan
+is — hugging a wall, popping through as the pure position moved on, and
+being freed on arrival somewhere it was not.
+
+So the ROUTE bends instead of the walker. `CaravanTrip.waypoints` makes it
+a polyline walked by arc length; `travel_seconds` is the route's length,
+so a detour costs real walking time instead of being a faster straight
+line. Everything else needed no change, because everything else was
+already written in terms of progress.
+`VillageLayout.road_exit_toward` is the way out — the end of the street
+toward where you are going, plus a point clear of it — read off the
+SKELETON, because a caravan must compute this for a settlement whose chunk
+is not loaded.
+
+| route | crosses a building |
+| --- | --- |
+| straight from the well | **6466 / 21600 (29.9%)** |
+| out by the road instead | **0 / 21600** |
+
+`ROAD_EXIT_CLEARANCE_TILES` is derived from the same sweep, not chosen:
+turning at the street's own end still crossed on 19.72% of routes, one
+tile out 12.22%, one and a half 1.11%, two tiles none of 21600. Both that
+floor and a ceiling keeping the detour a road exit rather than a tour are
+test-pinned.
+
+**My first measurement of the caravan was wrong, and I reported it before
+catching it.** Sampling five directions said a caravan never crosses a
+building; sweeping all 360 said 30.2% of them do. Five samples of a circle
+is not a measurement of a circle. The probe sweeps the whole circle now.
+
+**Found while writing the wiring test, not fixed here:**
+`test_earth_chunk_manager.gd`'s caravan tests say `NpcIdentity` seed 8 is
+a blacksmith and it generates a **nurse** — so no shortage arises, no
+caravan departs, and those tests assert against an empty list. The new
+`test_caravan_departure_route.gd` uses seed 11, checked rather than
+copied. The stale ones live in the file that cannot be run to completion
+on this machine, which is presumably why nobody noticed. Left for whoever
+owns that file.
+
+**TDD:** 6 red in `test_caravan_trip.gd` (polyline, arc length, arrival,
+the raid fraction, the cost of a detour, a degenerate route), 6 in
+`test_village_layout.gd` including a 1440-route sweep asserting zero
+crossings, 4 in `test_cart_marker.gd`, 3 in `test_village_renderer.gd`,
+and 4 wiring pins in the new `test_caravan_departure_route.gd`. 19/19,
+106/106, 33/33, 156/156, 4/4.
+
+**Two of my own tests were wrong first,** both the same way: a 0.5 s tick
+puts a cart's whole step inside one cell or clean past the house, so
+neither measured the gate. Restated against the cell boundary with a real
+frame.
+
+**Still carried:** `test_npc_marker_cart` (2), `_farming` (3), `_timber`
+(1), `_fishing` (1), `_hunting` (1) fail identically with every change
+stashed — pre-existing, in the delivery/market path that came in with
+main. And nothing here is verified in a live session; every number is
+headless.
+
 ### ✅ Done (2026-09-20): ...and so do whole-building entities
 
 Reported unchanged after all of the above landed: **"NPCs still walk
