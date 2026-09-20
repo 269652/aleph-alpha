@@ -110,14 +110,21 @@ const MUSHROOM_CRUSH_MAX_DURATION_SECONDS := 0.3
 ## CLIP_PATH's own doc comment for the real, sourced clip this plays.
 ## Capped at MUSHROOM_CRUSH_MAX_DURATION_SECONDS above.
 ##
-## Deliberately passes NO surface: a crush is its own one-shot, played
-## whole from its own beginning at its own pitch, never a window into
-## somebody's recorded walk -- and never inheriting the pitch a reused
-## pool voice was left at by the last footstep, exactly as it already
-## relies on the default volume for the same reason.
+## Deliberately passes NO surface: a crush is its own one-shot, played at
+## its own pitch rather than a footstep's nudged one, and never inheriting
+## the pitch a reused pool voice was left at by the last step.
+##
+## It does pass its own VOLUME, which it did not used to. Reported live --
+## *"can you make the mushroom crush sound louder"* -- this was the one
+## sound played through these voices at a flat 0 dB while every footstep
+## pool is matched by K-weighted loudness to a shared target. See
+## FootstepSound.MUSHROOM_CRUSH_VOLUME_DB for the measurement, and for why
+## the offsets had to move with it: a gain alone would only have made 0.3s
+## of room tone louder.
 func play_mushroom_crush() -> AudioStreamPlayer:
 	return _play_footstep_clip(
-		FootstepSound.MUSHROOM_CRUSH_CLIP_PATH, 0.0, "", MUSHROOM_CRUSH_MAX_DURATION_SECONDS
+		FootstepSound.MUSHROOM_CRUSH_CLIP_PATH, FootstepSound.MUSHROOM_CRUSH_VOLUME_DB, "",
+		MUSHROOM_CRUSH_MAX_DURATION_SECONDS
 	)
 
 

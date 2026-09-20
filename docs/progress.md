@@ -2035,6 +2035,12 @@ Fixed in `StarterKit.DEFAULT_CHOICES` itself, not here -- see the Starting Kit e
 
 ✅ **A sapling is a different drawing, not a pruned adult** (2026-09-07; `assets/sprites/trees/sapling.png`, `IllustratedTree.sapling_frame`/`sapling_frame_for_progress`, `TreeGrowth.BRANCH_START_FRACTION`/`sapling_progress`/`canopy_growth_fraction`, `TreeMorphShader`, wired through `ChoppableTree._redraw_canopy`/`refresh_sapling_display` and `TreeRenderer._build_tree_node`). Reported: "small newborn trees are not saplings but rather have a miniaturized full canopy... they should grow like the player's height before branches start growing... also make it so that the branches grow individually using the same mechanic the season transitions use... so that each individual tree looks different when maturing and growing branches." Even the branch-pruned canopy above is still fundamentally the mature crown's own pixels, cut back -- this instead swaps in a real ten-frame growth-stage illustration (one shared sheet across all six species, a named v1 simplification) below `CharacterView.TARGET_HEIGHT_FRACTION_OF_TREE` -- reused rather than a second invented threshold, since that constant already IS "the player's own height as a fraction of a tree's" by construction -- and, past it, dissolves the sheet's last frame OUT into the real mature texture via a genuine per-clump GPU shader (`TreeMorphShader`, spliced into `WindSway`'s existing shared canopy material the same way canopy snow sparkle already is) as the tree keeps growing. Two procedural approaches were tried and rejected first, each confirmed by rendering and comparing rather than assumed: literal bare-branch-line extraction read as "almost as scaling the entire canopy" rather than a real seedling, and a CPU-composited trunk-outward flood fill for the morph itself (the exact technique the season turn/growth trace above already share) read as a wave sweeping up from the ground, not individual leaves coming in -- corrected on direct instruction ("use real gpu shading techniques similar to the season transitions per leaf and not bottom up"). The shipped hash is a trig-free lattice hash (mirroring `RiverFlowShader`'s own, for the same float32-precision reasons documented there) keyed by a per-tree variant seed (`ProceduralTreeSprite.tree_variant_for`), so two trees at identical progress scatter differently. Caught only on a real GPU, not the float64 CPU mirror every GLSL hash here also carries: a canopy-sized clump grid's smallest hashed roll can land close enough to zero (~0.0008) that float32 rounds it down to exactly 0, letting one clump reveal at zero progress -- fixed with an explicit "progress <= 0 shows nothing" short-circuit mirroring the shader's own pre-existing fast path at the fully-grown end. The hand-off back to ordinary rendering is a real off switch (`TreeMorphShader.clear` pins `morph_progress` to 1.0, and the shader's own fast path then skips the sapling texture entirely), and `TreeRenderer._build_tree_node` calls the same sapling-display path once, directly, right after a tree is bound -- closing the exact spawn-time window the original bug was seen in, where a freshly-spread seed's sprite started life holding the species/season-keyed shared texture cache (which has no per-tree growth to key on) until an unrelated season-sync tick happened to correct it. See [flora.md](flora.md#illustrated-trees)'s "Sapling phase" paragraphs for the full mechanism writeup.
 
+✅ **A sapling grows through its OWN species' art, in season** (2026-09-20; `assets/sprites/trees/composite_apple_sapling.png`, `IllustratedTree._SAPLING_SHEETS`/`_sapling_grid_for`/`sapling_column_for`/`SAPLING_SNOW_COVERAGE`, `SpriteSheetSlicer.detect_rows`, `ChoppableTree._species_id`/`_last_sapling_frame`). Asked for directly: "wire saplings... I added an apple sapling sprite sheet which should be used to render the stages between sapling and mature tree... the last stage should then be morphed / blended with the full tree so there will be a seamless transition." This lifts the entry above's own named v1 simplification for the first species that has art of its own. A species sheet is a stage × season **grid** whose columns are the mature canopy's OWN frame constants (`CANOPY_BARE`/`BLOSSOM`/`LEAF`/`TURNING`/`SNOW`) rather than a second invented season order, so a sapling and the crown it grows into address their picture through the same index and cannot drift apart; every species with no sheet keeps the shared ten-frame strip on both sides of the hand-off, so art is still never required. The grid is **found, not assumed**: the five apple stages measure 122, 173, 215, 250 and 302 pixels tall (the tree really does get bigger each stage) against an even fifth of 250.8, so an even split would cut through four of the five drawings — which needed a row detector `SpriteSheetSlicer` did not have, `detect_rows` being `detect_frames` turned ninety degrees with the same pale-divider rule, so detection runs on the RAW sheet before any keying. The column order is measured, not assumed either: the bottom row's five cells read (97, 75, 36) bare brown, (91, 104, 26) blossom, (54, 85, 13) leaf green, (161, 63, 12) turning orange and (132, 133, 153) snow-blue, and drawn content climbs monotonically down every column. All 25 cells are normalized together under one shared scale, so a stage-0 shoot really does come out smaller than a stage-4 sapling and all of them stand on the same ground line. **The seam is the point**: `TreeMorphShader` now dissolves out of THIS species' last stage in THIS tree's season and snow, not the strip's species-blind, season-blind last frame — an apple crossing `BRANCH_START_FRACTION` in autumn used to snap from an orange sapling to a generic green shoot and only THEN start dissolving. Pinned directly by `test_the_hand_off_from_sapling_to_morph_is_seamless`, which asserts the last drawing the sapling showed and the first the morph dissolves from are the same pixels. The sapling canvas was also moved onto the MATURE canopy's own canvas (`SAPLING_CANVAS_SIZE` = `ProceduralTreeSprite.SIZE` = 300 × 396, baseline on its very bottom row, up from an "only big enough to hold the art" 320 × 480): `TreeMorphShader` samples the sapling texture at the SAME UV as the mature one, so a differently shaped canvas squashed the sapling picture into the mature rect at the exact instant the mechanism exists to smooth, and `TreeRenderer`'s half-texture-height sprite offset hung every sapling's feet 10 px below the ground line. Measured after: the last apple stage draws 292 × 363 with its feet on row 395 against the mature autumn canopy's 286 × 366 on row 395 — within two percent on both axes, on the identical ground line, rendered and looked at as well as asserted. Snow is a deliberate simplification against the mature canopy's ten-band per-clump blend — a whole-column switch at a pinned `SAPLING_SNOW_COVERAGE` (0.5), because a sapling is shorter than the player by definition and the bands are not resolvable at that size, while blending would multiply the cache by every one of them. 16 new tests in `test_illustrated_tree.gd`, 6 in `test_choppable_tree.gd`, 4 in `test_sprite_sheet_slicer.gd`. Only apple has a sheet so far; the other five follow the moment their art does, at one line each.
+
+✅ **Keying a delivered checkerboard is a one-pass classification, not a per-pixel flood** (2026-09-20; `SpriteSheetSlicer.checkerboard_key_in_place`). The flood read and re-classified the same pixel every time a neighbour looked at it — four times over, through `Image.get_pixelv`, against a `Dictionary` of `Vector2i`. Fine for a fern clump, not fine for a whole sheet: the apple sapling grid is 1254 × 1254 with about a million checker pixels and measured **5257ms**, a five-second freeze the first time such a tree came on screen. Every pixel is now classified exactly once into a bitmask of the three tone rules and the flood walks nothing but bytes — a one-pixel border of "no tone at all" removes every bounds test and the index-to-column modulo from the millions of neighbour steps, the queue is allocated once at its own worst case, and the thresholds are rounded to whole bytes from the same constants rather than compared as floats a million times over. Same seeds, same rules, same bounded widening: the behaviour tests that pin all three are untouched, as are the fern patch's and the building yard's. **5257ms → 1050ms** on the real sheet, with the budget pinned by `test_keying_a_whole_sheet_fits_in_a_forgivable_hitch` rather than left to a comment.
+
+⚠️ **Pre-existing, not from the sapling work: apple's autumn foliage leaf reads green.** `test_the_autumn_foliage_leaf_is_orange_for_every_species_that_has_one` measures an orange share of **0.158** against a 0.2 threshold for apple. Confirmed by a worktree A/B at `f1087bd9`, the commit before the sapling work began: identical failure, identical value, and it is unaffected by whether the sheet loads through its imported resource or its raw bytes (the import changes only fully-transparent pixels' RGB — 0 differing opaque pixels measured). It dates from `c3b9eac6` "fix: replace apple tree spritesheet", which replaced the sheet after the test was written. An **art gap in `composite_apple.png`'s autumn foliage frame**, the same shape as pine's already-Pending bare-winter one, not a code bug — recorded here rather than silently worked around or marked pending.
+
 ✅ **A wood stops when it is full** (`TreeSpread.MAX_TREES_IN_WORLD`). Spread plants a few saplings per tick and the CALLER decides how often a tick happens, so the rate was frames-per-second rather than anything to do with the world clock. Nothing bounded the population: measured under `/ecotest`, about twenty-one saplings a second, two thousand loaded trees inside a minute, and the frame rate down to seven. Bounding the population rather than the rate is the fix that holds however the caller behaves. (The per-frame shed in `step_tree_spread` is deliberate and stays: under fast-forward it fires once per frame against ~960s of simulated time, so it plants far *slower* than the clock implies, not faster.)
 
 ✅ **Seasons arrive over time, branch by branch** (`SeasonTransition` + the canopy blend). The last third of each season is spent turning into the next, so by the moment spring starts the tree is already fully turned rather than swapping frames on one boundary. The turn spreads OUTWARD from where the canopy meets the trunk, so change runs along the branches to the twigs, with jitter so the edge breaks into individual twigs rather than sweeping as a clean arc.
@@ -31077,6 +31083,67 @@ narrow.
 Tested: `test_illustrated_structure_sprite.gd` (+2, one repaired),
 `test_building_catalog.gd` (+2).
 
+
+## A crush lands on a crush, at the level everything else plays at (`concept/creature_and_footstep_audio.md`, 2026-09-20)
+
+Reported live: *"can you make the mushroom crush sound louder"*.
+
+### ✅ Measured first, and the measurement split the report in two
+
+`mushroom_crush.mp3` is 7.54s of styrofoam crushed about **twenty separate
+times**, not a continuous crinkle — which is what the concept doc assumed
+("any moment in it is a crunch"). `offset_for` read it as an ordinary
+walking bed and took a uniform roll anywhere in it, so most rolls played the
+**gap** between crushes. Across 101 evenly spaced rolls the 0.30s window
+that actually reaches the speaker ran from **−60.65 to −33.73 LUFS with a
+median of −45.34**, against a footstep target of −33.13: **58 of the 101
+landed more than 10 dB under it**, 13 more than 20 dB under.
+
+Separately, `play_mushroom_crush` was the **one sound played through these
+voices at a flat 0 dB** while every footstep pool is matched by K-weighted
+loudness to a shared target. Either fact alone makes it quiet; together they
+make a gain useless, because turning up 0.3s of room tone gives louder room
+tone.
+
+### ✅ The crushes are measured now
+
+`tools/prepare_footstep_oneshots.py` grew a one-shots pass that reuses the
+onset detector already in it — the one that cuts footfalls out of a walking
+recording finds crushes just as well. Each onset is windowed exactly as
+playback will give it (0.30s, the cap `InteractionSfxPlayer` applies, pinned
+across the two languages), with 20ms of pre-roll so the attack is not
+clipped off.
+
+11 of 22 events survive, kept because they sit within **8.34 dB** of the
+loudest — not a threshold anybody chose, but the widest within-pool spread a
+*shipped* footstep pool already runs (snow's), derived in the same run. A
+pool takes one gain, so an event 20 dB under its neighbours would stay
+inaudible.
+
+The surviving pool measures **−37.06 LUFS**, takes **+3.9 dB**, lands at
+**−33.16** against the target of −33.13. Peak after gain −8.6 dBFS, inside
+the −1.0 ceiling. Both numbers go into `steps/levels.json` beside the
+surfaces' own and are pinned against it.
+
+### ⚠️ The spec said "any moment in it is a crunch"
+
+That sentence is what made the uniform roll look right, and it is corrected
+in place in the concept doc rather than quietly rewritten — along with a
+second one calling `0.0` dB "full volume", which it is not: it is
+*unadjusted*, and being unadjusted was the bug once everything around it had
+been matched.
+
+### ✅ Red first, and both halves bite
+
+One existing test asserted the crush plays at exactly `0.0` dB. Rewritten,
+not deleted: what it guards did not move — the voice pool recycles, so a
+crush must set its own volume unconditionally rather than inherit the last
+footstep's — and the flat `0.0` it expected was itself the bug. Re-confirmed
+by mutation: putting the gain back to 0 dB, and removing the crush branch
+from `offset_for`, each fail the new tests.
+
+Tested: `test_footstep_sound.gd` (+7), `test_interaction_sfx_player.gd`
+(+2, one rewritten).
 ## The forest floor: bracken that hides you, brambles that feed you (`concept/ferns.md`, `concept/brambles.md`, 2026-09-20)
 
 Reported live: *"The fern is not visible in forests ..."*, then mid-turn
@@ -31275,6 +31342,48 @@ that chunk. Every other ground cover can re-colonise.
 
 Tested, red first at every step: `test_earth_chunk_manager_ferns.gd` 15/15
 (+3), `test_earth_chunk_manager_brambles.gd` 16/16 (+4).
+
+
+## Blackberries at ten percent, and the cap that had to move with them (`concept/brambles.md`, 2026-09-20)
+
+Asked for directly after a live hunt for them came up short: *"Bump
+blackberrys to 10%.. canopy is fine"*.
+
+Measured before: **6 thickets on 242 forest cells** on a real Harz chunk,
+about one per 170 tiles of world. After: **21 on the same 242** (8.7%
+against the 10% asked, sampling variance on that few cells), and a render
+that had one thicket in frame now has two.
+
+**`MAX_PATCHES` had to move with it, and nothing was checking that.**
+`blackberry_bramble.gd` has claimed since the day it landed that its cap
+is derived from its density against a real 32x32 chunk — the trap
+`TallGrass.MAX_PATCHES` records paying for once — and no test recomputed
+it. So the bump walked straight into that paragraph's own warning: at 10%
+the old cap of 36 is reached by **seeding alone**, truncating every fully
+wooded chunk to roughly a third of what was asked for. The cap is 103 now
+and a test recomputes it, which went red on exactly this change — the
+guard doing its job on the first change that needed it.
+
+**One existing test was passing for the wrong reason, and the denser wood
+exposed it.** `pick_blackberries_near` searches a one-tile radius and
+takes the first bearing cane in it, so picking twice in the same spot only
+proves the first cane is stripped when nothing else is within reach. That
+was true by accident at 3.5% and false often enough at 10%. It clears the
+3x3 first now and says why in its own comment.
+
+The comment calling brambles *"scattered through"* a bracken carpet no
+longer describes the numbers — 10 against bracken's 12 is nearly as
+common — so it says what is true instead: still rarer, deliberately, but
+as a choice about findability rather than a claim about woods. The
+ordering test is renamed to match what it asserts.
+
+**The canopy was raised and declined.** A closed wood from above is all
+crown and nothing fades when a player walks under it, so a forest floor is
+invisible there — ferns, mushrooms and thickets alike. Recorded in
+`concept/brambles.md` as a known property rather than an open task.
+
+Tested, red first: `test_blackberry_bramble.gd` (+3, including the missing
+cap guard) and `test_earth_chunk_manager_brambles.gd`, 34/34 together.
 
 ## Two fields, one line of rails — and a corner without its post (2026-09-20)
 

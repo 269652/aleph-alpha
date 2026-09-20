@@ -16,6 +16,7 @@ const FelledTree = preload("res://src/rendering/felled_tree.gd")
 const HoverTargetFinder = preload("res://src/rendering/hover_target_finder.gd")
 const IllustratedTree = preload("res://src/rendering/illustrated_tree.gd")
 const TreeMorphShader = preload("res://src/rendering/tree_morph_shader.gd")
+const TreeSpecies = preload("res://src/world/tree_species.gd")
 
 const GROUP_NAME := "tree"
 const MAX_HEALTH := 30.0
@@ -200,7 +201,7 @@ func _redraw_canopy() -> void:
 	else:
 		TreeMorphShader.apply(
 			material,
-			_illustrated_art.sapling_frame(_illustrated_art.sapling_frame_count() - 1),
+			_last_sapling_frame(),
 			ProceduralTreeSprite.tree_variant_for(sprite_seed),
 			canopy_growth
 		)
@@ -230,10 +231,38 @@ func refresh_sapling_display() -> void:
 	var sapling_progress := _tree_growth.sapling_progress(growth_scale)
 	if sapling_progress >= 1.0:
 		return
-	_canopy_sprite.texture = _illustrated_art.sapling_frame_for_progress(sapling_progress)
+	_canopy_sprite.texture = _illustrated_art.sapling_frame_for_progress(
+		sapling_progress, _species_id(), _season, _snow_coverage
+	)
 	var material := _canopy_sprite.material as ShaderMaterial
 	if material != null:
 		TreeMorphShader.clear(material)
+
+
+## This tree's species id, resolved from its bias exactly the way
+## ProceduralTreeSprite resolves it for the mature picture (TreeSpecies.
+## species_for_bias) -- the sapling art has to be asked for under the same
+## name the canopy it grows into is, or a tree could draw one species'
+## sapling and another's crown.
+func _species_id() -> String:
+	return TreeSpecies.species_for_bias(species_bias)
+
+
+## The drawing the morph dissolves OUT of: this species' last growth stage,
+## in this tree's own season and snow.
+##
+## Species- and season-aware, and that is the entire point of it. The
+## hand-off at BRANCH_START_FRACTION is only seamless if this is the same
+## picture refresh_sapling_display had on screen the instant before -- asked
+## for the shared strip's species-blind, season-blind last frame instead, an
+## apple crossing the threshold in autumn would snap from an orange sapling
+## to a generic green shoot and only THEN start dissolving. Pinned by
+## test_the_hand_off_from_sapling_to_morph_is_seamless.
+func _last_sapling_frame() -> Texture2D:
+	var species := _species_id()
+	return _illustrated_art.sapling_frame(
+		_illustrated_art.sapling_frame_count(species) - 1, species, _season, _snow_coverage
+	)
 
 
 func current_season() -> String:

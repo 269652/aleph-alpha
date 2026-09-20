@@ -1,5 +1,88 @@
 {
   "generated_by": "tools/prepare_footstep_oneshots.py",
+  "one_shots": {
+    "mushroom_crush": {
+      "achieved_lufs": -33.16,
+      "achieved_peak_dbfs": -6.41,
+      "gain_db": 3.9,
+      "kept_within_db": 8.34,
+      "offsets_seconds": [
+        0.364,
+        1.137,
+        1.941,
+        2.205,
+        3.462,
+        4.19,
+        4.679,
+        4.909,
+        5.687,
+        6.814,
+        7.059
+      ],
+      "peak_capped": false,
+      "pre_roll_seconds": 0.02,
+      "raw_lufs": -37.06,
+      "source": "assets/audio/footsteps/mushroom_crush.mp3",
+      "window_seconds": 0.3,
+      "windows": [
+        {
+          "lufs": -37.53,
+          "offset_seconds": 0.364,
+          "peak_dbfs": -13.46
+        },
+        {
+          "lufs": -36.21,
+          "offset_seconds": 1.137,
+          "peak_dbfs": -12.02
+        },
+        {
+          "lufs": -33.81,
+          "offset_seconds": 1.941,
+          "peak_dbfs": -10.31
+        },
+        {
+          "lufs": -33.73,
+          "offset_seconds": 2.205,
+          "peak_dbfs": -10.31
+        },
+        {
+          "lufs": -38.69,
+          "offset_seconds": 3.462,
+          "peak_dbfs": -17.95
+        },
+        {
+          "lufs": -40.75,
+          "offset_seconds": 4.19,
+          "peak_dbfs": -14.22
+        },
+        {
+          "lufs": -34.67,
+          "offset_seconds": 4.679,
+          "peak_dbfs": -12.56
+        },
+        {
+          "lufs": -38.4,
+          "offset_seconds": 4.909,
+          "peak_dbfs": -12.56
+        },
+        {
+          "lufs": -41.73,
+          "offset_seconds": 5.687,
+          "peak_dbfs": -17.62
+        },
+        {
+          "lufs": -41.51,
+          "offset_seconds": 6.814,
+          "peak_dbfs": -17.31
+        },
+        {
+          "lufs": -41.63,
+          "offset_seconds": 7.059,
+          "peak_dbfs": -17.31
+        }
+      ]
+    }
+  },
   "peak_ceiling_dbfs": -1.0,
   "surfaces": {
     "default": {

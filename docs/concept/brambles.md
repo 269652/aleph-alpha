@@ -153,11 +153,30 @@ recorded as open questions below rather than quietly tuned away.
   of it, so a cell cleared by a building carries no thicket for the life of
   that chunk. Every other ground cover can re-colonise. Left as a design
   question rather than answered on the way past.
-- ⬜ **Sparse, and under a canopy.** Measured at one thicket per ~170
-  tiles, on a forest floor a top-down camera cannot see into. Raising the
-  density is a one-line change and would not fix the second half; a canopy
-  that fades when the player walks under it would fix both, for ferns,
-  mushrooms and everything else down there too. Neither is done.
+- ✅ **Dense enough to meet** (2026-09-20), asked for directly: *"Bump
+  blackberrys to 10%"*. `SEED_CHANCE` went 0.035 → 0.10, measured on a
+  real Harz chunk as **6 thickets on 242 forest cells → 21**, and a frame
+  that held one thicket now holds two.
+
+  `MAX_PATCHES` had to move with it, and that is the part worth reading.
+  This file had claimed since it landed that its cap is derived from its
+  density against a real 32×32 chunk — the trap
+  `TallGrass.MAX_PATCHES` records paying for once — and nothing checked
+  it. At 10% the old cap of 36 is reached by **seeding alone**,
+  truncating every fully wooded chunk to roughly a third of what was
+  asked for. The cap is 103 now, and a test recomputes it from the same
+  real constants, so raising one and forgetting the other fails there
+  rather than in a wood.
+
+  The old framing, *bracken carpets the floor and brambles are scattered
+  through it*, no longer describes the numbers: 10 against bracken's 12
+  is nearly as common. They are still rarer, deliberately, but as a
+  choice about findability rather than a claim about woods.
+- ⬜ **Under a canopy.** A closed wood seen from above is all crown, and
+  nothing fades when a player walks under it, so a forest floor is not
+  visible there at all — ferns, mushrooms and thickets alike. Raised as
+  a candidate and explicitly declined for now (*"canopy is fine"*), so it
+  stays a known property rather than an open task.
 - ✅ **The player picks them, on the same key as everything else.**
   `EarthChunkManager.pick_blackberries_near` sweeps the tile the player
   stands on and its neighbours, takes the first ripe unpicked patch, and

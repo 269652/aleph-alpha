@@ -22,19 +22,34 @@ const SeasonCycle = preload("res://src/world/season_cycle.gd")
 
 ## Chance (0..1) that any given forest cell carries a bramble.
 ##
-## Well BELOW ForestFern.SEED_CHANCE, which is the decision -- bracken
-## carpets a wood's floor and brambles are scattered through it. The
-## ORDERING is pinned by test_brambles_are_scattered_where_bracken_carpets
-## rather than asserted here.
-const SEED_CHANCE := 0.035
+## Asked for directly, after a live hunt for them came up short: *"Bump
+## blackberrys to 10%"*. Measured before it, on a real Harz chunk: 6
+## thickets on 242 forest cells, about one per 170 tiles of world, which
+## is a forageable a player can walk a wood without meeting.
+##
+## Still below ForestFern.SEED_CHANCE (0.12), and the ORDERING is pinned
+## by test_brambles_stay_rarer_than_bracken rather than asserted here {D}
+## but it is now a near thing rather than the "bracken carpets the floor,
+## brambles are scattered through it" this comment used to claim. At 10
+## against 12 they are nearly as common as the bracken, which is a
+## deliberate choice about findability rather than a claim about woods.
+const SEED_CHANCE := 0.10
 
 ## Hard cap on patches per chunk. Derived from the density above against a
 ## real EarthChunkManager.CHUNK_SIZE (32) chunk the way ForestFern.MAX_
 ## PATCHES is, and for the reason TallGrass' own comment records paying for
 ## once: a cap UNDER what seeding alone asks for on a fully wooded chunk is
 ## reached at worldgen, which silently truncates the thicket. 32 * 32 *
-## 0.035 = 35.84, rounded up.
-const MAX_PATCHES := 36
+## 0.10 = 102.4, rounded up.
+##
+## This file CLAIMED that derivation from the day it landed and nothing
+## checked it, so the density bump above walked straight into the trap the
+## paragraph describes: at 10% the old cap of 36 was reached by seeding
+## alone, truncating every fully wooded chunk to roughly a third of what
+## was asked for. test_the_cap_can_hold_the_density_it_asks_for_on_a_real_
+## chunk recomputes it now, so raising one and forgetting the other fails
+## there rather than in a wood.
+const MAX_PATCHES := 103
 
 ## The biome a bramble grows in. Named rather than inlined, because "which
 ## ground is a bramble's" is one decision.

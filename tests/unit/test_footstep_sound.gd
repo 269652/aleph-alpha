@@ -555,3 +555,133 @@ func test_the_crush_cap_fits_inside_the_window_margin_offset_for_leaves():
 		InteractionSfxPlayer.MUSHROOM_CRUSH_MAX_DURATION_SECONDS,
 		FootstepSound.STEP_WINDOW_SECONDS
 	)
+
+
+# -- a crush lands on a crush, at the level everything else plays at --------
+#
+# Reported live: *"can you make the mushroom crush sound louder"*.
+#
+# Measured before changing anything. The crush recording is 7.54s of
+# styrofoam being crushed about twenty separate times, and offset_for treated
+# it like any other walking bed: a UNIFORM roll anywhere in it. Most of a
+# recording of repeated crushes is the gap between them, so most rolls play
+# the gap. Across 101 evenly spaced rolls the 0.30s window that actually
+# reaches the speaker measured a median of -45.34 LUFS, 12.2 dB under the
+# level every footstep is matched to; 58 of the 101 landed more than 10 dB
+# under it and 13 more than 20 dB under. The quietest was -60.65 and the
+# loudest -33.73 -- a 27 dB spread between one crush and the next.
+#
+# So it is quiet for two measurable reasons, and a gain alone fixes neither:
+# turning up 0.3s of room tone gives louder room tone. The offsets have to
+# land on the crushes, and the pool they form then has to be matched to the
+# same target the footstep pools are (FootstepSound._VOLUME_DB_BY_SURFACE).
+
+
+## The onsets the pipeline found, and the gain it measured for the pool they
+## form, both live in the same levels.json the surfaces' own gains do.
+func _one_shot(name: String) -> Dictionary:
+	var levels := _levels()
+	assert_true(levels.has("one_shots"), "the manifest carries the one-shots it measured")
+	var one_shots: Dictionary = levels["one_shots"]
+	assert_true(one_shots.has(name), "%s was measured into the manifest" % name)
+	return one_shots[name]
+
+
+## Every roll has to land on a real crush. A roll that lands in the gap
+## between two of them plays the gap.
+func test_every_mushroom_crush_offset_lands_on_a_measured_crush():
+	var onsets := FootstepSound.MUSHROOM_CRUSH_OFFSET_SECONDS
+	assert_gt(onsets.size(), 0, "precondition: the crushes were measured")
+	for step in 200:
+		var roll := float(step) / 199.0
+		var offset := FootstepSound.offset_for(FootstepSound.MUSHROOM_CRUSH_CLIP_PATH, roll)
+		assert_true(
+			onsets.has(offset),
+			"roll %.3f starts the crush at %.3fs, which is not one of the measured crushes" % [
+				roll, offset
+			]
+		)
+
+
+## ...and across enough of them, every crush in the pool is used -- the same
+## thing step_clip_path_for's own pool test asks, for the same reason: a pool
+## nothing reaches is a pool that does not exist.
+func test_enough_rolls_reach_every_crush_in_the_pool():
+	var seen := {}
+	for step in 400:
+		seen[FootstepSound.offset_for(
+			FootstepSound.MUSHROOM_CRUSH_CLIP_PATH, float(step) / 399.0
+		)] = true
+	assert_eq(
+		seen.size(), FootstepSound.MUSHROOM_CRUSH_OFFSET_SECONDS.size(),
+		"every measured crush must be reachable: %d of %d" % [
+			seen.size(), FootstepSound.MUSHROOM_CRUSH_OFFSET_SECONDS.size()
+		]
+	)
+
+
+## The offsets are the pipeline's own measurement, not a list somebody typed.
+func test_the_crush_offsets_are_the_ones_the_pipeline_measured():
+	var measured: Array = _one_shot("mushroom_crush")["offsets_seconds"]
+	assert_eq(
+		FootstepSound.MUSHROOM_CRUSH_OFFSET_SECONDS.size(), measured.size(),
+		"the manifest found %d crushes" % measured.size()
+	)
+	for i in measured.size():
+		assert_almost_eq(
+			FootstepSound.MUSHROOM_CRUSH_OFFSET_SECONDS[i], float(measured[i]), 0.0005,
+			"crush %d" % i
+		)
+
+
+## And so is the gain -- the same rule every surface pool is held to: one
+## gain per pool, landing that pool's own loudness on the shared target.
+func test_the_crush_volume_is_the_gain_the_pipeline_measured():
+	assert_almost_eq(
+		FootstepSound.MUSHROOM_CRUSH_VOLUME_DB, float(_one_shot("mushroom_crush")["gain_db"]),
+		0.05
+	)
+
+
+## The point of the report: it is louder than it was, and it is louder
+## because it is matched, not because a number was nudged. A crush now plays
+## within the same tolerance of the shared target that the surface pools hold
+## each other to.
+func test_the_crush_ends_up_at_the_same_loudness_as_a_footstep():
+	var levels := _levels()
+	var achieved := float(_one_shot("mushroom_crush")["achieved_lufs"])
+	assert_almost_eq(
+		achieved, float(levels["target_lufs"]), 0.5,
+		"a crush lands on the same target every footstep pool is matched to"
+	)
+	assert_gt(
+		FootstepSound.MUSHROOM_CRUSH_VOLUME_DB, 0.0,
+		"the measured correction is upward -- it was under the target, which is the report"
+	)
+
+
+## The window a crush is played through must still fit inside the recording
+## past the last offset, or the last crush in the pool fades out against the
+## end of the file instead of finishing.
+func test_every_crush_offset_leaves_a_whole_window_of_recording_behind_it():
+	var length: float = float(
+		FootstepSound.CLIP_LENGTH_SECONDS[FootstepSound.MUSHROOM_CRUSH_CLIP_PATH]
+	)
+	for offset in FootstepSound.MUSHROOM_CRUSH_OFFSET_SECONDS:
+		assert_lte(
+			offset + FootstepSound.STEP_WINDOW_SECONDS, length,
+			"a crush at %.3fs runs off the end of a %.2fs recording" % [offset, length]
+		)
+
+
+## The pipeline measured a 0.30s window because that is what playback
+## actually allows. Measuring a second of a clip that is cut after 0.3 would
+## report a level nobody hears, and the two numbers live in different
+## languages in different directories -- so they are pinned to each other
+## here rather than left to agree by memory.
+func test_the_measured_crush_window_is_the_one_playback_really_allows():
+	assert_almost_eq(
+		float(_one_shot("mushroom_crush")["window_seconds"]),
+		InteractionSfxPlayer.MUSHROOM_CRUSH_MAX_DURATION_SECONDS, 0.0005,
+		"the pipeline measured a window playback does not give it"
+	)

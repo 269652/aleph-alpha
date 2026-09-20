@@ -191,7 +191,15 @@ func test_play_footstep_does_not_inherit_a_previous_surfaces_quieter_volume():
 
 
 ## Same reuse hazard, the other direction: a mushroom crush landing on a
-## voice grass just left quiet must still play at full volume.
+## voice grass just left quiet must still play at its OWN level.
+##
+## The expected number moved (2026-09-20, *"can you make the mushroom crush
+## sound louder"*) and the test is kept rather than deleted, because what it
+## guards did not move: the pool recycles voices, so a crush must set its own
+## volume unconditionally instead of taking whatever the last footstep left
+## behind. It used to be a flat 0 dB -- which was itself the bug, the one
+## sound here that was never matched to the shared target -- and is now
+## FootstepSound.MUSHROOM_CRUSH_VOLUME_DB.
 func test_play_mushroom_crush_does_not_inherit_a_previous_surfaces_quieter_volume():
 	add_child_autofree(player.build())
 	for i in InteractionSfxPlayer.FOOTSTEP_POOL_SIZE:
@@ -199,7 +207,47 @@ func test_play_mushroom_crush_does_not_inherit_a_previous_surfaces_quieter_volum
 	player.play_mushroom_crush()
 	var voice := _find_playing_voice(FootstepSound.MUSHROOM_CRUSH_CLIP_PATH)
 	assert_not_null(voice)
-	assert_eq(voice.volume_db, 0.0, "must not inherit grass's quieter volume from a reused pool voice")
+	assert_almost_eq(
+		voice.volume_db, FootstepSound.MUSHROOM_CRUSH_VOLUME_DB, 0.01,
+		"must not inherit grass's quieter volume from a reused pool voice"
+	)
+	assert_ne(
+		FootstepSound.volume_db_for("grass"), FootstepSound.MUSHROOM_CRUSH_VOLUME_DB,
+		"the premise: grass and a crush must actually want different volumes"
+	)
+
+
+## The report itself, at the one place it is finally audible: a crush is
+## played at the gain the pipeline measured for it, not at the flat 0 dB it
+## used to take by default.
+func test_a_crush_is_played_at_its_own_measured_gain_rather_than_flat_zero():
+	add_child_autofree(player.build())
+	var voice := player.play_mushroom_crush()
+	assert_not_null(voice)
+	assert_almost_eq(voice.volume_db, FootstepSound.MUSHROOM_CRUSH_VOLUME_DB, 0.01)
+	assert_gt(voice.volume_db, 0.0, "the measured correction is upward -- that is the report")
+
+
+## ...and it starts at a real crush. A gain alone would have made 0.3s of
+## the recording's room tone louder, which is why the offset is half of this
+## fix: see FootstepSound.MUSHROOM_CRUSH_OFFSET_SECONDS.
+func test_a_crush_starts_playing_at_one_of_the_measured_crushes():
+	add_child_autofree(player.build())
+	var started := {}
+	for i in 40:
+		var voice := player.play_mushroom_crush()
+		assert_not_null(voice)
+		var position := voice.get_playback_position()
+		var nearest := -1.0
+		for offset in FootstepSound.MUSHROOM_CRUSH_OFFSET_SECONDS:
+			if nearest < 0.0 or absf(offset - position) < absf(nearest - position):
+				nearest = offset
+		assert_almost_eq(
+			position, nearest, 0.05,
+			"a crush started at %.3fs, which is not one of the measured crushes" % position
+		)
+		started[nearest] = true
+	assert_gt(started.size(), 1, "forty crushes must not all be the same one")
 
 
 func _find_playing_voice(expected_clip_path: String) -> AudioStreamPlayer:
