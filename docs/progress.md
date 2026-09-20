@@ -30280,3 +30280,76 @@ Tested: `test_village_way_to_paving.gd` 10/10 (new file),
 (+2), `test_earth_chunk_manager_ponds.gd` stocking selection 13/13 (+4),
 `test_village_renderer.gd` + `test_village_layout.gd` 253/253. Red first
 at every step.
+
+
+## Ferns: a wood gets a floor (`concept/ferns.md`, 2026-09-20)
+
+Asked for directly: *"I added fern sprite.. can you wire it and make it
+grow in forest biome; also please add the same leaf tracing and bending
+mechanism which the long grass already has"*.
+
+Forest floor had no ground cover at all. Every sim this world has is gated
+to a biome that is not forest — grass to grassland, scrub to desert,
+lichen to tundra — so a wooded chunk drew its trees and then bare ground
+between them. A fern is the missing fourth and the one plant a temperate
+wood is actually carpeted in. A new system, so it got its own concept doc
+BEFORE any of it was built, with the pillars that decide the design
+written down to be argued with.
+
+**The bend is the grass's, not a copy of it.** `IllustratedFernPatch`
+reaches into `IllustratedGrassPatch` for the shader, the mesh subdivision
+that gives a bent card somewhere to travel, and the band maths that
+decides what Y-sorts in front of what. Those are forwarders, and the tests
+assert the equality directly — trivially true by construction, which is
+the point. Two bend implementations would be two wind systems in one
+world, and the first thing anybody would notice is ferns swaying out of
+time with the grass beside them, or a walker reading as behind the ferns
+and in front of the grass in the same step.
+
+**Fewer and larger cards, on a fill-rate budget.** A grass cell draws 8
+because a cell of meadow IS many blades; each delivered fern cell is
+already a whole clump with its own rocks, logs and mushrooms drawn in, so
+eight per tile would read as a hedge. What keeps it honest is AREA rather
+than count, since every card is a translucent blended quad regardless of
+batching: a test pins that a fern tile blends no more pixels than a grass
+tile. Root offsets are bounded by the TILE rather than by the card — a
+distinction grass never had to make, because its card IS a tile.
+
+**One checkerboard keyer.** The sheet arrives as opaque RGB with a
+checkerboard painted where transparency belongs, with the same two tones
+the building yard overlays carry. The routine that keys those moved to
+`SpriteSheetSlicer` beside `chroma_keyed`, thresholds and measurements
+intact, and the structure sprite delegates.
+
+**Rendered, not just tested** (`tools/probe_ferns.gd`, xvfb + Mesa
+software GL, the Harz chunk): 30 ferns on 242 forest cells with none in
+water — **12.4%** against the 12.0% the constant asks for — the
+checkerboard down to **0.01%** of drawn pixels, 13 bands holding 66
+instances, and **16.4%** of the frame moving when a walker stepped in,
+which is the only evidence that the bend is live rather than merely wired.
+
+The probe earned both of its findings by being wrong first, and both are
+kept in its comments. Its first run pointed the camera at the densest
+stand while the LOD window stayed on the tile `update()` was first called
+with, 22 tiles away: bare floor in the picture, 12 live instances in the
+numbers. And a closed wood seen from above is ALL CROWN, so the frame a
+player really sees hides almost every fern under the canopy — a fact
+about a top-down camera in a forest, recorded rather than cropped out.
+
+Tested, red first at every step: `test_forest_fern.gd` 21/21 (new),
+`test_illustrated_fern_patch.gd` 20/20 (new),
+`test_earth_chunk_manager_ferns.gd` 12/12 (new, anchored on a genuinely
+wooded chunk — 242 forest cells, where Berlin's has 29 and would pass by
+accident), `test_checkerboard_keying.gd` 6/6 (new), plus the suites the
+move and the wiring had to leave alone: `test_illustrated_structure_
+sprite.gd` + `test_sprite_sheet_slicer.gd` 71/71, and
+`test_world_ecology_cadence_wiring.gd` + `test_world_simulation_
+ownership.gd` 11/11 — the last of which failed for exactly the right
+reason before `scenes/world.gd` listed `step_ferns`, because a step
+nothing calls grows nothing.
+
+**Known gaps, named rather than implied:** no seasonal sheets (grass has
+four, ferns have one; the shared tint still reaches them); nothing eats
+them yet (`graze` works, no herbivore calls it); and no seed fall, so a
+fern can never cross a gap in the wood — which matches how bracken
+actually spreads, and is deliberate.

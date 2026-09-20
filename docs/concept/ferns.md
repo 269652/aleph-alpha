@@ -109,5 +109,71 @@ moved to the module that owns keying so there is one of it rather than two.
 
 ## Status
 
-⬜ Nothing implemented yet. This doc is the spec; the entries below are
-filled in as each part lands.
+- ✅ **`ForestFern`, the wood's own sim.** Seeds on forest cells, grows,
+  creeps by rhizome, is cropped by `graze` and blocked by a building's
+  floor through the same seam every other ground cover uses. Every flavour
+  ordering against the grass it is modelled on is pinned by a test rather
+  than asserted in a comment: sparser, slower-growing, slower to spread.
+  `MAX_PATCHES` is derived from the seed chance against a real 32x32 chunk
+  and recomputed by its own test — the trap `TallGrass.MAX_PATCHES`'
+  comment records paying for once, where a cap under the density reached by
+  seeding ALONE leaves planting and spreading permanently unable to
+  succeed.
+- ✅ **Ground nothing grows on, handed in at construction.** The same mask
+  `TallGrass` takes as `is_river`, and for the same reason: a river never
+  changes the biome array, and neither does a building already standing on
+  a reloaded chunk, so without it a fresh sim seeds ferns into water and
+  through floors on every chunk load. Optional and empty by default, the
+  same optional-trailing-parameter shape that addition used.
+- ✅ **`IllustratedFernPatch`, bent by the grass's own mechanism.** The
+  shader, the mesh subdivision and the band maths are all reached through
+  `IllustratedGrassPatch` rather than restated. Those are forwarders, and
+  the tests assert the equality directly; it is trivially true by
+  construction, which is the point.
+- ✅ **Fewer, larger cards, on a fill-rate budget.** 3 cards at 22 world
+  units against grass's 8 at 16. The budget that keeps it honest is AREA
+  rather than count — every card is a translucent blended quad regardless
+  of batching — and a test pins that a fern tile blends no more pixels
+  than a grass tile (3 x 22² = 1452 against 8 x 16² = 2048). Root offsets
+  are bounded by the TILE rather than by the card, a distinction grass does
+  not have to make because its card IS a tile.
+- ✅ **The checkerboard, keyed by one routine.** Moved to
+  `SpriteSheetSlicer` beside `chroma_keyed`, with every threshold and every
+  measurement behind it; `IllustratedStructureSprite` delegates, so nothing
+  about the yard sheets changed.
+- ✅ **Wired into the world.** Every loaded chunk gets a sim beside its
+  grass one, handed the identical blocker mask. `step_ferns` runs on the
+  world's own ecology tick beside `step_tall_grass`, sharing its refresh
+  interval but not its accumulator. The live wind, the season tint and the
+  walker's push all reach them, because a wood and the meadow beside it
+  have to sway in one wind.
+- ✅ **Rendered and measured, not just tested.** `tools/probe_ferns.gd`,
+  under xvfb + Mesa software GL on the Harz chunk: 30 ferns on 242 forest
+  cells with none in water (**12.4%** against the 12.0% asked for), the
+  checkerboard down to **0.01%** of drawn pixels, 13 bands holding 66
+  instances, and **16.4%** of the frame moving when a walker steps in —
+  which is the only evidence that the bend is really live rather than
+  merely wired.
+
+### Honest gaps
+
+- **A closed wood is all crown.** Measured in the same render: the frame a
+  player actually sees is almost entirely canopy, and the ferns under it
+  are barely visible. The probe keeps a second frame with the trees hidden
+  purely so the floor can be checked at all. That is a fact about a
+  top-down camera in a forest rather than a fault in the ferns, and
+  nothing here tries to work around it — but it does mean the feature
+  reads best at a wood's EDGE and in its clearings, which is also where a
+  player walks.
+- **No seasonal sheets.** Grass has four; ferns have one. The shared
+  season tint still reaches them, so a November wood is not summer-bright,
+  but there is no drawn autumn frond. Stated so nobody reads the single
+  sheet as an oversight.
+- **Nothing eats them.** `graze` exists and works, and no herbivore calls
+  it yet — `_graze_by_herbivores` is wired to the grass alone. A real
+  fern is the LAST thing a grazer takes, so this is a defensible order to
+  build in, but it is a gap rather than a decision.
+- **No seed fall.** Grass sheds seed onto nearby ground (`shed_seed`);
+  ferns only creep from a mature clump. That matches how bracken actually
+  spreads, so it is deliberate — but it means a fern can never cross a
+  gap in the wood, however narrow.
