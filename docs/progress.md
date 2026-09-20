@@ -30521,3 +30521,123 @@ same failure: **a fact written in one place, and read from another.** What
 made it findable was a probe that prints each gate condition *separately*
 rather than the outcome they jointly produce — the roster alone said only
 "it stopped", which is consistent with at least four different causes.
+
+## The food containers: the chain ended at the store (2026-09-20)
+
+Asked for directly: *"now fix the food containers so the market actually
+gets stocked"*. `milling_and_baking.md` had carried the gap in its own
+words since the bread chain landed — *"Three food containers, one eater. A
+villager now eats from the stall, the persisted Market and the shelves
+alike, but nothing ever moves food between them."*
+
+`tools/probe_food_containers.gd` (kept) prints **every container
+separately** over time, because *"the market is empty"* is equally
+consistent with the carter never running, the carter crediting the wrong
+place, and nobody producing at all:
+
+```
+  seconds farmhouse warehouse    STALL  ledger  hands  carts
+        0         0         0        0       0      0      0
+      100         5         0        0       0      0     12
+      200        15        12        9       0      0      2
+      300         3        16        0       0      0      2
+      400        23        13        0       0      0      2
+      500        22         9        0       0      0      8
+```
+
+The chain works **right up to the store**: a farmhouse fills, a carter's
+round empties it onto a cart, the cart empties into the warehouse. The
+stall — what `VillageMarket.buy_meal` actually sells from — is empty at
+every sample but one. Two faults, and the second is why that one sample
+existed.
+
+### ✅ The stall is the shop window of the store
+
+A market stall is not a warehouse. It is filled each morning from the store
+behind it and holds about a day's trade, which is exactly why a village can
+look *"out of bread"* at the stall while its granary is full.
+`StallRestock` is that leg, pure and static like `SettlementSurplus` beside
+it:
+
+- **A day's eating for the village**, derived rather than picked —
+  `households × SettlementState.FOOD_PER_HOUSEHOLD`, a constant already
+  pinned to the hunger clock by its own test.
+- **Only the shortfall**, or a stall would pull the store empty one
+  settlement step at a time.
+- **Real units move**: what reaches the stall is withdrawn from the store's
+  own shelf, never more of an id than it holds.
+- **A village with no store keeps what it had** — its producers carry their
+  own take in, exactly as `village_warehouse.md`'s Mechanism 7 already
+  ruled.
+
+### ✅ …and that one sample of 9 was food being invented
+
+`village_warehouse.md` Mechanism 7 rules *"ONE credit, at the moment the
+goods really get there — so nothing is counted twice, and the market's
+numbers describe a pile that exists."* It stopped being true without
+anybody touching it. `_unload_the_cart` put the load on the store's shelf
+**and** called `record_delivered_goods`, which was one credit when the
+shelf was invisible to every food reading. Then
+[milling_and_baking.md](concept/milling_and_baking.md)'s *"Food that
+counts"* taught `SettlementFood` to count shelves, and hauling was switched
+on so `_stock` routed that second credit into the **carter's own hands**,
+which `deliver_load` empties onto the stall.
+
+N units delivered became N on the shelf plus N on the stall — food
+invented, by a rule written to prevent exactly that. The pile on the shelf
+is the credit now, and `record_delivered_goods` is **gone rather than
+merely unused**, so there is no way back in.
+
+Worth naming: **no test covered `_unload_the_cart` at all**, which is how a
+double credit survived two separate changes that each made it worse.
+
+### ✅ Measured after both
+
+```
+  seconds farmhouse warehouse    STALL
+      200        17         0       12
+      300        12         7        2
+      400        10        21        0
+      500         7        15       10
+```
+
+The stall peaks at exactly **12** — ten households times a day's ration,
+which is the derivation, not a coincidence — and the farmhouse backlog
+falls from 22–23 to 7–10 because food moves through instead of piling up at
+the end of the chain.
+
+And on the famine watch every other reading in this thread has used:
+
+```
+   seconds   roster   standing  hungriest market food    purse
+         0       10         10       0.30          0      0.0
+       300        9          9       1.00          2     20.0
+       600       10         10       1.00         11      1.0
+       900       11         11       1.00          0      0.0
+      1200       13         13       1.00          1     20.0
+```
+
+| state | roster over the watch |
+|---|---|
+| before the gold faucet was closed | 10 → 10 → 12 → 12 → 12 |
+| faucet closed, nothing else | 10 → 3 → 4 → 4 → 6 |
+| + the clock fix alone | 10 → 3 → 5 → 6 → 8 |
+| + the money fixes | 10 → 10 → 10 → 10 → 10 |
+| + the growth links | 10 → 10 → 10 → 11 → 11 |
+| **+ the stall leg** | **10 → 9 → 10 → 11 → 13** |
+
+**Thirteen households — past the twelve the village reached when gold was
+still conjured.** `market food` reads real numbers now rather than 0 at
+every sample, which is the stall actually being traded at.
+
+### 🚧 Honestly, not all of it is closed
+
+- **One villager still died**, at t=300, before the chain filled. The
+  hungriest villager reads 1.00 at every later sample with the starvation
+  counter running 5–125 of 200: fed each time, never comfortably. The
+  village grows *through* a famine rather than avoiding one.
+- **The persisted `Market` is still a third container** nothing fills or
+  empties in live play — its own neighbouring comment says so — and the
+  **player's shop still prices only that Market**, so what a player buys
+  and what a village trades remain two different piles. Named in
+  `milling_and_baking.md` rather than folded in here.
