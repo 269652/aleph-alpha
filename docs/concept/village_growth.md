@@ -293,6 +293,49 @@ strangers — and `next_building`'s new parameter defaults to 1 ("there is
 already room"), so a caller that does not know its spare capacity gets
 exactly the ladder it always got.
 
+#### …and it went into a function the village had stopped asking (2026-09-20)
+
+The paragraph above was true of `VillageGrowth.next_building` and **false
+of the game**, for as long as it stood here.
+
+The live decision does not walk that ladder any more. It goes
+`_apply_village_growth_decision` → `next_building_for_settlement` →
+`VillageAssembly.next_building` ([village_estates.md](village_estates.md)
+mechanism 5, the estate-weighted petition that replaced the fixed ladder
+order). The assembly had no lowest rung, and its state dict was never
+handed a spare capacity to test one against — so the rung above could
+never fire on the path a village actually uses. The ladder kept it only as
+a fallback for a village nobody had assessed yet, and that fallback called
+itself with three arguments, so the capacity defaulted to *"there is
+already room"* even there.
+
+Measured (`tools/probe_village_growth_gate.gd`) on a real village over a
+1200-second watch, every rung it was entitled to already standing:
+
+```
+  seconds  house housed  room  food/hh  ladder
+      300     10     10     0     2.30    0.60
+      600     10     10     0     2.30    0.60
+      900     10     10     0     2.10    0.60
+     1050     10     10     0     2.30    0.60
+```
+
+Food comfortably over `FED_THRESHOLD` the whole way — the obvious
+hypothesis, and wrong — and **`room` zero at every single sample.** The
+village was fed, content, and sealed.
+
+The assembly carries the rung now, in the same place and under the same
+rule: below every petition, and only when no roof stands empty. The house
+it raises is the **starting** estate's, because that is what a newcomer
+arrives as (`admit_household` forms exactly one), unlike the shelter rung
+above it which rehouses a *named* household in their own estate's house.
+
+The lesson is the one this file's own "hand-written list" warnings keep
+landing on, in a different costume: **a fix documented against one
+function is not a fix, if the caller has moved to another.** What made it
+findable was a probe that prints each gate condition separately, rather
+than the roster alone.
+
 The shape this gives a growing village: build the rungs it is entitled to →
 find itself with no spare roof → raise a house → somebody moves into it →
 no spare roof again. Population now advances one household per house
