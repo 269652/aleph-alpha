@@ -1017,20 +1017,35 @@ by being carried too, and the builder is who carries them.
   chose for producers ("a village with no store has nowhere to carry to"),
   not a special case invented here.
 - **He is visibly loaded on the way back.** `ProceduralBuilderSprite` draws
-  the mallet up on the way out and a timber load on the shoulder on the way
-  back, so which leg of the round he is on reads at village zoom, where he
-  is seven world units tall and a silhouette is all there is.
-- **He walks the village now, so he walks it through `WalkGate`.** A
-  builder who never left his footprint could not walk through a wall; one
-  crossing the square to the store can, and every other walking marker
-  already asks the same gate the same question.
+  the mallet up on the way out and an armful of boards on the way back, so
+  which leg of the round he is on reads at village zoom, where he is seven
+  world units tall and a silhouette is all there is. Carried at chest
+  height rather than up on the shoulder, because on a real render the
+  shoulder is where the head is, and sawn timber and skin merge at this
+  size into one pale mass over a brown body.
+- **He crosses a village now, so he crosses it the way villagers do.**
+  Through `WalkGate`, which every other walking marker already asks the
+  same question — a builder who never left his footprint could not walk
+  through a wall, and one crossing the square to the store can — and, past
+  that, on a real route (`TileRouter`, [navigation.md](navigation.md)):
+  sliding is a reflex for a wall you brush, and getting *around* a building
+  between the site and the store is a plan. Measured before he had one
+  (`tools/probe_construction_haul.gd`): 68 px walked, then stuck against a
+  building 25 px short of the door for the remaining 230 simulated seconds.
+  He is sent to the store's DOOR as well, the cell a villager hauling into
+  it is sent to — a whole building's own origin cell is inside its walls.
 - **Honest limit: the haul does not gate the labour.** Hours accrue against
   a project whether or not the load has arrived, exactly as they did
   before. They must: `ConstructionCatchup` advances projects in chunks with
   no builder walking in them at all, so a haul that gated hours would stall
   every unloaded village's building and make a settlement's progress depend
   on being looked at. The round is already-committed material becoming
-  visible, not a second ledger over the top of the first.
+  visible, not a second ledger over the top of the first — and for the same
+  reason what he has carried in so far is the WORKER's own tally rather
+  than the project's, so a chunk that unloads takes the man and his count
+  with it and a reloaded site starts its round over. Nothing depends on it;
+  persisting it would mean keeping a second material ledger to change
+  nothing about what gets built.
 
 **Somebody is working on it (2026-09-20).** Asked for directly, watching a
 village raise a cottage: *"the construction site should show a builder
