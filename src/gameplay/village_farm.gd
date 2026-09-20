@@ -69,19 +69,27 @@ const FIELD_SHAPES: Array[Vector2i] = [Vector2i(3, 2), Vector2i(2, 3)]
 ## QUARRY_KIND_BY_OCCUPATION already uses for hunter/fisher; an occupation
 ## absent from it has no field at all, which is the honest answer for every
 ## villager who is not a farmer or a herbalist.
-## Asked directly, with a field of unrecognisable purple plants in shot:
-## *"i don't even know what the purple crops are it plants.. atm it should
-## plant only wheat which grows and gets harvested properly"*. The purple was
-## the herbalist's own herb, and it was dying overnight exactly as the wheat
-## beside it was (see FarmPlot.MIN_WATER_GRACE_SECONDS, fixed in the same
-## pass).
+## The TRADITIONAL crop of each farming occupation -- what they reach for,
+## not what necessarily goes in the ground.
 ##
-## So every field sows wheat for now. Deliberately a narrowing of the CROP,
-## not of who farms: the herbalist keeps the farmhouse and field an earlier
-## ask gave them ("similar to a farmer the herbalist should build a farm
-## house and plant herbs"), and putting herbs back in their bed is this one
-## entry -- "herbalist": "herb" -- and nothing else.
-const CROP_BY_OCCUPATION := {"farmer": "wheat", "herbalist": "wheat"}
+## What is actually sown is the village's own worst-supplied need
+## (VillageCropChoice, docs/concept/village_farms.md "What a field sows
+## follows the village's need"); this table breaks a tie between crops the
+## village needs equally, and is the whole answer where there is no reading
+## to go on.
+##
+## It briefly read {"farmer": "wheat", "herbalist": "wheat"}, asked for
+## directly with a field of unrecognisable purple plants in shot: *"i don't
+## even know what the purple crops are it plants.. atm it should plant only
+## wheat"*. The purple was the herbalist's own herb dying overnight exactly
+## as the wheat beside it was (FarmPlot.MIN_WATER_GRACE_SECONDS, fixed in
+## the same pass). That narrowing is withdrawn -- reported next was *"they
+## have 0 Herbs even though there are 3 farm houses"*, and this one entry is
+## what had removed them.
+##
+## An occupation absent from it has no field at all, which is the honest
+## answer for every villager who is not a farmer or a herbalist.
+const CROP_BY_OCCUPATION := {"farmer": "wheat", "herbalist": "herb"}
 
 ## Re-water a growing plot once it has used up this much of its own real
 ## wither grace window (FarmPlot.WATER_GRACE_FRACTION) -- a real margin

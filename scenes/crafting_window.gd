@@ -12,7 +12,7 @@ extends PanelContainer
 ## refreshes. Purely glue -- recipe data/affordability come from the tested
 ## CraftingRecipeBook and the player's inventory counts.
 
-const ProceduralItemSprite = preload("res://src/rendering/procedural_item_sprite.gd")
+const IllustratedItemArt = preload("res://src/rendering/illustrated_item_art.gd")
 const CraftingRecipeBook = preload("res://src/gameplay/crafting_recipe_book.gd")
 const ItemCatalog = preload("res://src/gameplay/item_catalog.gd")
 const UiTheme = preload("res://src/ui/ui_theme.gd")
@@ -44,7 +44,17 @@ const _SECTION_LABELS := {
 
 var _recipe_book := CraftingRecipeBook.new()
 var _item_catalog := ItemCatalog.new()
-var _item_sprite_generator := ProceduralItemSprite.new()
+## A card's thumbnail and its material rows are the same flat `icon` surface
+## docs/concept/illustrated_art_addressing.md names
+## ("inventory/hotbar/paperdoll/tooltip"). IllustratedItemArt falls back to
+## ProceduralItemSprite for a subject with no art and fits every frame to
+## ProceduralItemSprite.SIZE, so it is a drop-in -- nothing below re-scales.
+##
+## The sibling half of *"The inventory still renders the old procedual icons
+## and not the illustrated ones"*: this window was not among the six call
+## sites the art-wiring pass reached, so the crafting menu drew a generated
+## axe for the very recipe whose output draws its real art everywhere else.
+var _item_art := IllustratedItemArt.new()
 var _sections_container: VBoxContainer
 
 ## recipe_id -> the card Control (also test/debug introspection).
@@ -230,7 +240,7 @@ func _build_card(recipe_id: String, counts: Dictionary) -> Control:
 	content.add_child(header)
 
 	var icon := TextureRect.new()
-	icon.texture = _item_sprite_generator.generate_texture(_sprite_id_for(item_id))
+	icon.texture = _item_art.texture_for(_sprite_id_for(item_id), "icon")
 	icon.custom_minimum_size = Vector2(CARD_ICON_SIZE, CARD_ICON_SIZE)
 	icon.stretch_mode = TextureRect.STRETCH_KEEP_ASPECT_CENTERED
 	icon.mouse_filter = Control.MOUSE_FILTER_IGNORE
@@ -285,7 +295,7 @@ func _build_material_chip(input: Dictionary, counts: Dictionary) -> Dictionary:
 	chip.tooltip_text = _display_name(item_id)
 
 	var icon := TextureRect.new()
-	icon.texture = _item_sprite_generator.generate_texture(_sprite_id_for(item_id))
+	icon.texture = _item_art.texture_for(_sprite_id_for(item_id), "icon")
 	icon.custom_minimum_size = Vector2(MATERIAL_ICON_SIZE, MATERIAL_ICON_SIZE)
 	icon.stretch_mode = TextureRect.STRETCH_KEEP_ASPECT_CENTERED
 	icon.mouse_filter = Control.MOUSE_FILTER_IGNORE

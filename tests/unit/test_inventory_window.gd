@@ -482,3 +482,124 @@ func test_the_paperdoll_character_wears_equipped_armor_and_drops_it_when_unequip
 
 	window.refresh([], {}, 0.0, 12)
 	assert_false(view.is_slot_equipped("head"), "unequipping must strip the paperdoll's armor too")
+
+
+# -- the inventory draws the real illustrated art ---------------------------
+#
+# Reported live: *"The inventory still renders the old procedual icons and
+# not the illustrated ones"*.
+#
+# docs/concept/illustrated_art_addressing.md has said from the start that the
+# `icon` context is "inventory/hotbar/paperdoll/tooltip", and the pass that
+# wired real art (2026-09-19) wired six call sites -- the World hotbar slot,
+# DroppedItem, and the equip paths -- but not this window. So the hotbar
+# under the inventory showed the real axe while the inventory slot directly
+# above it showed the generated one.
+#
+# IllustratedItemArt.texture_for falls back to ProceduralItemSprite for a
+# subject with no art and fits every frame to ProceduralItemSprite.SIZE, so
+# this is a drop-in: the assertions below are about WHICH picture, never
+# about size or layout.
+
+const IllustratedItemArt = preload("res://src/rendering/illustrated_item_art.gd")
+
+## A subject with real icon art, so "illustrated" and "procedural" are
+## genuinely different pictures and the test can tell them apart.
+const ART_ITEM := "iron_axe"
+
+
+## The icon TextureRect inside slot `index` of the grid.
+func _slot_icon(index: int) -> TextureRect:
+	for child in window._grid.get_child(index).get_children():
+		if child is TextureRect:
+			return child
+	return null
+
+
+func test_an_inventory_slot_draws_the_illustrated_icon_art():
+	window.refresh([ItemStack.new(catalog.make(ART_ITEM), 1)], {}, 0.0, 12)
+
+	var icon := _slot_icon(0)
+	assert_not_null(icon, "precondition: the slot has an icon")
+	var expected = IllustratedItemArt.new().texture_for(ART_ITEM, "icon")
+	assert_true(
+		icon.texture.get_image().get_data() == expected.get_image().get_data(),
+		"an inventory slot draws the item's own icon art"
+	)
+
+
+## The paperdoll's worn-item frames are the same `icon` surface the doc names.
+func test_a_paperdoll_slot_draws_the_illustrated_icon_art():
+	window.refresh([], {"weapon": catalog.make(ART_ITEM)}, 0.0, 12)
+
+	var icon: TextureRect = window._paperdoll_icons["weapon"]
+	var expected = IllustratedItemArt.new().texture_for(ART_ITEM, "icon")
+	assert_true(
+		icon.texture.get_image().get_data() == expected.get_image().get_data(),
+		"a worn item's paperdoll frame draws its icon art"
+	)
+
+
+## Dragging one must not swap the picture mid-drag: the thing under the
+## cursor has to be the thing that was in the slot.
+func test_the_drag_preview_draws_the_same_illustrated_icon_as_the_slot():
+	window.refresh([ItemStack.new(catalog.make(ART_ITEM), 1)], {}, 0.0, 12)
+
+	var preview: TextureRect = window._drag_preview_for(ART_ITEM)
+	assert_true(
+		preview.texture.get_image().get_data() == _slot_icon(0).texture.get_image().get_data(),
+		"the dragged picture is the one that was in the slot"
+	)
+	preview.free()
+
+
+## An item with no art of its own is untouched -- the fallback is what makes
+## it safe to wire every subject at once rather than one id at a time.
+##
+## "bread" rather than the obvious "rock": 104 of the catalog's 149 ids have
+## real icon art now, `rock` among them, so picking a familiar-sounding id by
+## hand proves nothing. Bread is one of the 45 that genuinely has none.
+func test_an_item_with_no_art_still_draws_its_generated_icon():
+	const ProceduralItemSprite = preload("res://src/rendering/procedural_item_sprite.gd")
+	const NO_ART_ITEM := "bread"
+	assert_null(
+		IllustratedItemArt.new().illustrated_texture_for(NO_ART_ITEM, "icon"),
+		"precondition: %s really has no icon art" % NO_ART_ITEM
+	)
+	window.refresh([ItemStack.new(catalog.make(NO_ART_ITEM), 1)], {}, 0.0, 12)
+
+	var expected = ProceduralItemSprite.new().texture_for(NO_ART_ITEM)
+	assert_true(
+		_slot_icon(0).texture.get_image().get_data() == expected.get_image().get_data(),
+		"a subject with no illustrated art keeps the generated picture"
+	)
+
+
+## The paperdoll CHARACTER is the same rig the world draws, so what it wears
+## comes from the same contexts Player.equip_armor/equip_item use -- worn on
+## the body, and gripped in the hand -- not from the flat icon. Otherwise the
+## preview shows a different axe from the one the player is holding two
+## panels away.
+func test_the_preview_character_wears_its_armor_from_the_equipped_art():
+	const ARMOR_ITEM := "leather_chest"
+	window.refresh([], {"chest": catalog.make(ARMOR_ITEM)}, 0.0, 12)
+
+	var expected = IllustratedItemArt.new().texture_for(ARMOR_ITEM, "equipped")
+	var worn := window._preview_view.slot_texture("chest")
+	assert_not_null(worn, "precondition: the preview equipped something")
+	assert_true(
+		worn.get_image().get_data() == expected.get_image().get_data(),
+		"the preview wears the art of a thing worn on a body"
+	)
+
+
+func test_the_preview_character_grips_its_weapon_from_the_held_art():
+	window.refresh([], {"weapon": catalog.make(ART_ITEM)}, 0.0, 12)
+
+	var expected = IllustratedItemArt.new().texture_for(ART_ITEM, "held")
+	var gripped: Texture2D = window._preview_view._tool_slot.texture
+	assert_not_null(gripped, "precondition: the preview equipped a weapon")
+	assert_true(
+		gripped.get_image().get_data() == expected.get_image().get_data(),
+		"the preview grips the art of a thing held in a hand"
+	)

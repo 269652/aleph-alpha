@@ -75,6 +75,7 @@ const IllustratedStructureSprite = preload("res://src/rendering/illustrated_stru
 const BuildingCatalog = preload("res://src/gameplay/building_catalog.gd")
 const InteriorTemplates = preload("res://src/gameplay/interior_templates.gd")
 const ProceduralBuildingPlaceholderSprite = preload("res://src/rendering/procedural_building_placeholder_sprite.gd")
+const ProceduralFootprintKerbSprite = preload("res://src/rendering/procedural_footprint_kerb_sprite.gd")
 const FarmerMarker = preload("res://src/rendering/farmer_marker.gd")
 const MillMarker = preload("res://src/rendering/mill_marker.gd")
 const BakeryMarker = preload("res://src/rendering/bakery_marker.gd")
@@ -145,6 +146,7 @@ const FlyerPersonality = preload("res://src/gameplay/flyer_personality.gd")
 const PiscivoreBirdRenderer = preload("res://src/rendering/piscivore_bird_renderer.gd")
 const VillageRenderer = preload("res://src/rendering/village_renderer.gd")
 const VillageFarm = preload("res://src/gameplay/village_farm.gd")
+const VillageCropChoice = preload("res://src/gameplay/village_crop_choice.gd")
 const VillagePond = preload("res://src/gameplay/village_pond.gd")
 const AquaticPopulationModel = preload("res://src/world/aquatic_population_model.gd")
 const NpcMarker = preload("res://src/rendering/npc_marker.gd")
@@ -214,6 +216,7 @@ const VillageWages = preload("res://src/world/village_wages.gd")
 const OccupationProduction = preload("res://src/emergence/occupation_production.gd")
 const NpcIdentity = preload("res://src/world/npc_identity.gd")
 const SettlementTier = preload("res://src/emergence/settlement_tier.gd")
+const SettlementReadout = preload("res://src/ui/settlement_readout.gd")
 const SettlementCharter = preload("res://src/emergence/settlement_charter.gd")
 const MageGuildRoster = preload("res://src/gameplay/mage_guild_roster.gd")
 const HouseholdWater = preload("res://src/emergence/household_water.gd")
@@ -951,6 +954,12 @@ const SAGEWERK_STORAGE_PAIR_RADIUS_TILES := 20
 var _structure_art_sprites: Dictionary = {}
 var _illustrated_structure_sprite := IllustratedStructureSprite.new()
 var _building_placeholder_sprite := ProceduralBuildingPlaceholderSprite.new()
+
+## The kerb every placed building's own plot is edged with (docs/concept/
+## building.md, "The ground a building stands on, and the kerb round its
+## plot") -- one generator, shared, like every other procedural sprite
+## this manager holds.
+var _footprint_kerb_sprite := ProceduralFootprintKerbSprite.new()
 
 ## Every placed Farm currently staffed with a real FarmerMarker (see
 ## docs/concept/npc_farm_production.md) -- chunk_coord -> {local_cell ->
@@ -15608,7 +15617,20 @@ func _spawn_building_node(chunk_coord: Vector2i, origin_local: Vector2i, record:
 	node.name = "Building"
 	node.position = bottom_centre
 
+	# The kerb first, so it lies on the ground UNDER the building rather
+	# than as a box drawn round its walls (children paint in tree order).
+	# Built from the same footprint_px the collision rect below is built
+	# from -- see docs/concept/building.md, "The ground a building stands
+	# on, and the kerb round its plot": what is drawn IS the hitbox.
+	var kerb := Sprite2D.new()
+	kerb.name = "FootprintKerb"
+	kerb.texture = _footprint_kerb_sprite.footprint_texture(footprint, TerrainRenderer.ART_TILE_SIZE)
+	kerb.scale = Vector2.ONE * ArtResolution.SPRITE_SCALE
+	kerb.position = Vector2(0, -footprint_px.y * 0.5)
+	node.add_child(kerb)
+
 	var sprite := Sprite2D.new()
+	sprite.name = "Art"
 	# Which picture a FINISHED building has is BuildingCatalog's call (see
 	# finished_sheet_for): a building with a real variant sheet draws its
 	# own seeded variant, so a street of cottages is a street of DIFFERENT
@@ -18087,6 +18109,87 @@ func estate_report_for_household(household_id: String, chunk_coord: Vector2i) ->
 ## The LOWEST tier for a settlement nobody founded, which is the reading
 ## that refuses rather than the one letting a place nobody has heard of
 ## raise a mage guild.
+## Everything the settlement card shows, for the settlement standing in
+## `chunk_coord` -- {} when there is none, which is what makes the card
+## context-dependent (see docs/concept/hud.md "The settlement card").
+##
+## A gatherer, not a model: every value here is a READ of state the
+## simulation already keeps, and how it reads on screen is
+## SettlementReadout's question. Nothing is tracked for the card.
+##
+## Happiness is the households' mean HAPPINESS, not their mean
+## PRODUCTIVITY. The two are different numbers in HouseholdWellbeing on
+## purpose -- productivity is happiness dragged down by hunger, because a
+## household with a beautiful town and an empty stomach does not work well
+## -- and a row labelled "happiness" that silently reported the work rate
+## would be answering a different question than it asks.
+func settlement_readout_at(chunk_coord: Vector2i) -> Dictionary:
+	if not _loaded_villages.has(chunk_coord):
+		return {}
+	var settlement_id := EntityRef.for_settlement(chunk_coord)
+	var household_ids := _households_in_settlement(settlement_id)
+	var census := _village_census_for(chunk_coord, household_ids)
+	var market := _market_store.market_for(settlement_id)
+	var village_market = SettlementFood.village_market_for(settlement_id, _loaded_villages)
+	var assessments := _household_wellbeing_for_settlement(settlement_id)
+	return {
+		"tier": settlement_tier_of(settlement_id),
+		"households": household_ids.size(),
+		"housed": int(census.get("housed_count", 0)),
+		"happiness": _mean_household_happiness(assessments),
+		"needs": _mean_household_needs(assessments),
+		# The REAL settlement purse lives on the older VillageMarket's own
+		# meta (NpcEconomy.PURSE_META) -- the same one wages and the civic
+		# tax already read and write. Only reachable while the settlement's
+		# chunk is loaded, which it is by construction here: the card only
+		# exists because the player is standing in it.
+		"gold": 0 if village_market == null else int(NpcEconomy.purse_of(village_market)),
+		"feeds": _settlement_capacity(settlement_id, market, village_market),
+		"building": _next_growth_building_for(chunk_coord, household_ids, census),
+	}
+
+
+## Mean happiness across a settlement's households, or
+## SettlementReadout.UNKNOWN when nothing has been assessed yet -- a real
+## state, and one a 0% reading would misreport as misery.
+func _mean_household_happiness(assessments: Array) -> float:
+	if assessments.is_empty():
+		return SettlementReadout.UNKNOWN
+	var total := 0.0
+	for assessment in assessments:
+		total += float(assessment.get("happiness", 0.0))
+	return total / float(assessments.size())
+
+
+## Mean score per need, so the card can name the settlement's weakest one.
+func _mean_household_needs(assessments: Array) -> Dictionary:
+	if assessments.is_empty():
+		return {}
+	var totals := {}
+	for assessment in assessments:
+		var needs: Dictionary = assessment.get("needs", {})
+		for need_id in needs:
+			totals[need_id] = float(totals.get(need_id, 0.0)) + float(needs[need_id])
+	for need_id in totals:
+		totals[need_id] = float(totals[need_id]) / float(assessments.size())
+	return totals
+
+
+## What this settlement's own growth ladder says it owes itself next, or ""
+## when it owes nothing -- the same read _apply_village_growth_decision
+## acts on, so the card cannot promise a building the village is not
+## actually about to raise.
+func _next_growth_building_for(
+	chunk_coord: Vector2i, household_ids: Array, census: Dictionary
+) -> String:
+	if household_ids.is_empty():
+		return ""
+	return VillageGrowth.next_building(
+		household_ids.size(), int(census.get("housed_count", 0)),
+		_present_structure_ids_for_settlement_chunk(chunk_coord)
+	)
+
+
 func settlement_tier_of(settlement_id: String) -> String:
 	var household_ids := _households_in_settlement(settlement_id)
 	if household_ids.is_empty():
@@ -19613,6 +19716,27 @@ func begin_build_project(
 	var project := start_build_project(chunk_coord, origin, blueprint_id, household_id)
 	project.status = ConstructionProject.Status.IN_PROGRESS
 	return project
+
+
+## What a field at this global cell should sow (docs/concept/
+## village_farms.md, "What a field sows follows the village's need").
+##
+## Reads the SAME assembly state the needs panel shows, so what a village
+## says it lacks and what it plants cannot disagree -- and the rule itself
+## is VillageCropChoice's, never a second one written here.
+##
+## `default_crop` is the villager's own traditional crop, and it is the
+## whole answer where there is no settlement or nobody has assessed it yet:
+## the same fail-open shape every other hook on this path uses.
+func sow_choice_at(global_x: int, global_y: int, default_crop: String) -> String:
+	var state := _village_assembly_state(_chunk_coord_for_tile(Vector2i(global_x, global_y)))
+	if state.is_empty():
+		return default_crop
+	return VillageCropChoice.choose(
+		state.get("satisfaction", {}),
+		VillageCropChoice.can_bake(state.get("present_building_ids", [])),
+		default_crop
+	)
 
 
 ## The real labour hours a build of `blueprint_id` asks for -- off the SAME

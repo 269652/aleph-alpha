@@ -1880,7 +1880,7 @@ func _work_field_cell() -> void:
 				_store_harvest(crop_id, count)
 		"plant":
 			if _world.has_method("till_and_plant_farm_plot_at_global"):
-				_world.till_and_plant_farm_plot_at_global(cell.x, cell.y, _field_crop)
+				_world.till_and_plant_farm_plot_at_global(cell.x, cell.y, _sow_choice_for(cell))
 		"water":
 			if paid_for and _world.has_method("water_farm_plot_at_global"):
 				_world.water_farm_plot_at_global(cell.x, cell.y)
@@ -2039,16 +2039,50 @@ func haul_stock_to_village() -> void:
 		return
 	if not _world.has_method("withdraw_from_structure_at"):
 		return
-	var crop := _field_crop if _field_crop != "" else VillageFarm.crop_for(identity.occupation)
-	if crop == "" and not pond_cells.is_empty():
-		crop = POND_CATCH_ITEM  # a fisher's building holds fish, not a crop
-	if crop == "":
-		return
-	var carried := 0
-	while _world.withdraw_from_structure_at(stock_building_cell.x, stock_building_cell.y, crop, 1):
-		carried += 1
-	if carried > 0:
-		economy.record_real_harvest(crop, carried)
+	# WHATEVER is on the shelf, not one assumed crop.
+	#
+	# A field sows by demand now (see _sow_choice_for), so a farmhouse may
+	# hold a crop this villager was never built with -- and one shelf can
+	# hold two, since the choice can change between one sowing and the next.
+	# Withdrawing `_field_crop` alone would quietly carry nothing home and
+	# leave the harvest to rot in the building it was stored in.
+	var held: Dictionary = {}
+	if _world.has_method("structure_stock_contents_at"):
+		held = _world.structure_stock_contents_at(stock_building_cell.x, stock_building_cell.y)
+	if held.is_empty():
+		# No shelf to read: the crop this villager works, or a fisher's
+		# catch, exactly as before.
+		var crop := _field_crop if _field_crop != "" else VillageFarm.crop_for(identity.occupation)
+		if crop == "" and not pond_cells.is_empty():
+			crop = POND_CATCH_ITEM  # a fisher's building holds fish, not a crop
+		if crop == "":
+			return
+		held = {crop: 1}
+	for item_id in held.keys():
+		var carried := 0
+		while _world.withdraw_from_structure_at(
+			stock_building_cell.x, stock_building_cell.y, item_id, 1
+		):
+			carried += 1
+		if carried > 0:
+			economy.record_real_harvest(item_id, carried)
+
+
+## What to put in THIS bed.
+##
+## Asked of the village at sowing rather than decided when this villager was
+## built (docs/concept/village_farms.md, "What a field sows follows the
+## village's need"): `_field_crop` was set once in setup_economy from the
+## occupation and never revisited, so a village's whole cropping plan was
+## fixed before a single basket had ever been drawn -- which is how three
+## farmhouses ended up growing nothing anybody could eat.
+##
+## Fail-open, the same shape every other world hook here uses: no world, or
+## a world that cannot answer, and the villager sows what they always did.
+func _sow_choice_for(cell: Vector2i) -> String:
+	if _world == null or not _world.has_method("sow_choice_at"):
+		return _field_crop
+	return _world.sow_choice_at(cell.x, cell.y, _field_crop)
 
 
 ## Whatever the farmer just did on `cell`, the beds around it get wet too.
