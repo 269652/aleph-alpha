@@ -1562,3 +1562,29 @@ func test_most_of_the_square_has_to_be_real_paving():
 func test_an_empty_square_is_never_worth_laying():
 	assert_false(VillageLayout.plaza_is_worth_laying(0, 0))
 	assert_false(VillageLayout.plaza_is_worth_laying(5, 0))
+
+
+## Asked for directly, after a fourth report of a village with no square:
+## *"Every village should have a square"*.
+##
+## When no 8-wide window is wholly usable, plaza_x0_for used to return
+## `centred` -- a site it had just proved unusable -- so the village planned
+## a square it could never pave. It must pick the best partial window
+## instead: a clipped square is still a square.
+func test_the_square_goes_where_most_of_it_fits_when_none_of_it_fits_wholly():
+	var street_y := 16
+	var pocket_x0 := 10
+	var pocket_width := VillageLayout.PLAZA_WIDTH_TILES - 2
+	var is_dry := func(cell: Vector2i) -> bool:
+		return cell.x >= pocket_x0 and cell.x < pocket_x0 + pocket_width
+
+	var x0 := VillageLayout.plaza_x0_for(32, street_y, 2, 29, is_dry)
+
+	var usable := 0
+	for x in range(x0, x0 + VillageLayout.PLAZA_WIDTH_TILES):
+		if is_dry.call(Vector2i(x, street_y)):
+			usable += 1
+	assert_eq(
+		usable, pocket_width,
+		"the square lands over the whole pocket, not on ground it cannot use"
+	)

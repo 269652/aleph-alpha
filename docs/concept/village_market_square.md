@@ -220,6 +220,34 @@ Honest gaps, each real:
   `Player.sell_food_to_village` and the dialogue/market path; standing in
   front of a merchant's trestle is not yet a way in.
 
+## Every village has a square, even a clipped one (2026-09-20)
+
+Asked for directly, after a fourth report of a village with no square and
+no seat: *"Every village should have a square"*.
+
+`VillageLayout.plaza_x0_for` slides its 8-wide square along the street
+looking for somewhere wholly usable. Three earlier rounds each removed a
+real reason it could fail to find one (the decorative street jitter vetoing
+dry columns; a rule demanding room for a house beside the square). What
+none of them touched is what it does when the search finds **nothing**: it
+returned `centred` — a site it had just proved unusable. The village then
+planned a square on ground it could never pave, ended up with no square at
+all, and silently lost its seat too, because the civic plot *is* the
+square's paving.
+
+It takes the **best partial** window now: the one whose square would have
+the most usable cells, ties to the westmost. `_lay_plaza_if_missing`
+already paves around what it cannot use ("a square laid around what stands
+in it is still a square") and already refuses a square that would be mostly
+holes (`PLAZA_MIN_PAVED_SHARE`, 0.6), so the clipped square either lands
+properly or is honestly declined — instead of being planned onto trees.
+
+A village with nothing usable anywhere still keeps `centred`, which is the
+honest answer when there is no ground at all.
+
+Pinned by
+`test_the_square_goes_where_most_of_it_fits_when_none_of_it_fits_wholly`.
+
 ## The well stands on a free 2x2 (2026-09-19)
 
 Asked for directly: *"The well should be placed on a free 2x2 place; not

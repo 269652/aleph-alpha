@@ -29144,3 +29144,46 @@ Tests: `test_village_census.gd` 12/12 (+3 new),
 stays 10/11 — `test_spare_hands_gather_building_material_between_
 assessments`, the same pre-existing failure already A/B'd and recorded
 above.
+
+## Every village gets a square, even a clipped one (`concept/village_market_square.md`, 2026-09-20)
+
+Reported a fourth time, with the hamlet in shot: *"There's still a village
+without plaza and city hall"*, then answered directly: *"Every village
+should have a square"*.
+
+✅ **The fallback was the hole.** `plaza_x0_for` slides its 8-wide square
+along the street looking for somewhere wholly usable, and when it finds
+nothing it returned `centred` — a site it had just proved unusable. The
+village planned a square on ground it could never pave, had none, and
+silently lost its seat with it, because the civic plot *is* the square's
+paving. It takes the **best partial window** now (most usable cells, ties
+westmost); `_lay_plaza_if_missing` already paves around what it cannot use
+and already declines a square that would be mostly holes, so a clipped
+square either lands properly or is honestly refused.
+
+⬜ **I could not reproduce a village that ends up with no seat**, and said
+so rather than shipping a guess. Four measurements found none: 96 real
+layouts all place a hall; a spoiled centred site slides and still seats;
+a 6-wide pocket still seats; 32 squares measured cell by cell are fully
+paved. That last one first read as "32 of 32 villages never paved their
+square" until the shape was printed and the 4×3 block turned out to be the
+**city hall standing on it** — a false alarm caught before it was reported
+as a defect.
+
+🚧 **The reported hamlet's hall never finishes** (confirmed by the player:
+"No"). `SettlementReadout` shows `Building  City Hall`, so the project
+exists and is not completing. Two gates in
+`_apply_construction_labor_catchup` can hold it forever, and both are
+silent: `spare_capacity` of 0 (`household_count` minus households with a
+producer occupation — only `farmer`/`hunter`/`fisher` count), and
+`_civic_site_is_clear` failing, which `continue`s with nothing said
+anywhere. Both are tested as deliberate behaviour
+(`test_labour_waits_while_the_plot_is_blocked`), so telling a stall from
+the design needs that save. Not guessed at.
+
+⬜ **A renderer-level test of the same rule was written and withdrawn.** It
+asserted paving on a row the stub's predicate does not govern the way I
+assumed, so it failed for its own reasons rather than the code's. The rule
+is pinned where the decision lives, in `test_village_layout.gd`.
+
+Tests: 253/253 across the layout, renderer and both city-hall suites (+1).
