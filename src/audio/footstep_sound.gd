@@ -254,6 +254,16 @@ static func is_walking_bed(clip_path: String) -> bool:
 ## test_the_crush_cap_fits_inside_the_window_margin_offset_for_leaves, so
 ## neither can be moved into the other's way unnoticed.
 static func offset_for(clip_path: String, roll: float) -> float:
+	# A recording of REPEATED events is not the same problem as a recording
+	# of continuous walking, and a uniform roll is the wrong answer to it.
+	# See MUSHROOM_CRUSH_OFFSET_SECONDS: most of a recording of twenty
+	# crushes is the gap between them, so a uniform roll mostly plays the
+	# gap. The crushes were measured; the roll picks one of those.
+	if clip_path == MUSHROOM_CRUSH_CLIP_PATH:
+		# 0.999999, not 1.0, for the same reason step_clip_path_for uses it.
+		return MUSHROOM_CRUSH_OFFSET_SECONDS[
+			int(clampf(roll, 0.0, 0.999999) * MUSHROOM_CRUSH_OFFSET_SECONDS.size())
+		]
 	if not is_walking_bed(clip_path):
 		return 0.0
 	var length: float = float(CLIP_LENGTH_SECONDS.get(clip_path, 0.0))
@@ -288,6 +298,46 @@ static func pitch_scale_for(roll: float) -> float:
 ## convention), not Wikimedia Commons -- Commons genuinely had nothing
 ## for this, checked directly, not assumed.
 const MUSHROOM_CRUSH_CLIP_PATH := "res://assets/audio/footsteps/mushroom_crush.mp3"
+
+
+## Where each real crush starts in that recording, and the one gain the pool
+## they form takes -- both MEASURED by tools/prepare_footstep_oneshots.py
+## into steps/levels.json, exactly as _VOLUME_DB_BY_SURFACE's numbers are,
+## and pinned against it by test_the_crush_offsets_are_the_ones_the_pipeline_
+## measured / test_the_crush_volume_is_the_gain_the_pipeline_measured.
+##
+## Reported live: *"can you make the mushroom crush sound louder"*.
+##
+## It was quiet for two reasons, and turning it up fixes neither on its own.
+##
+## **The offset landed anywhere.** The clip is 7.54s of styrofoam crushed
+## about twenty separate times, and offset_for read it as an ordinary
+## walking bed: a uniform roll anywhere in the recording. Most of a
+## recording of repeated crushes is the GAP between them. Measured across
+## 101 evenly spaced rolls, the 0.30s window that actually reaches the
+## speaker (InteractionSfxPlayer.MUSHROOM_CRUSH_MAX_DURATION_SECONDS) ran
+## from -60.65 to -33.73 LUFS with a median of -45.34 -- 12.2 dB under the
+## level every footstep is matched to, with 58 of the 101 rolls more than
+## 10 dB under it and 13 more than 20 dB under. Amplifying that gives louder
+## room tone, not a louder crush.
+##
+## **And the pool was never matched.** play_mushroom_crush was the one sound
+## here playing at a flat 0 dB, while every footstep pool is matched by
+## K-weighted loudness to a shared target (see _VOLUME_DB_BY_SURFACE). Its
+## kept events measure -37.06 LUFS, so the correction is +3.9 dB.
+##
+## 11 crushes of the 22 the onset detector finds, kept because they sit
+## within 8.34 dB of the loudest -- which is not a threshold anybody chose
+## but the widest spread a SHIPPED footstep pool already runs (snow's), so
+## what survives is exactly as varied as a pool this project has already
+## accepted. The quiet half stays out because a pool takes ONE gain: an
+## event 20 dB under its neighbours stays 20 dB under them.
+const MUSHROOM_CRUSH_OFFSET_SECONDS: Array[float] = [
+	0.364, 1.137, 1.941, 2.205, 3.462,
+	4.190, 4.679, 4.909, 5.687, 6.814,
+	7.059,
+]
+const MUSHROOM_CRUSH_VOLUME_DB := 3.9
 
 
 ## Per-surface volume in dB, MEASURED rather than chosen. Every number in
