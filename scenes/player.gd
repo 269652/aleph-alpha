@@ -62,6 +62,7 @@ const Carcass = preload("res://src/rendering/carcass.gd")
 const DroppedItem = preload("res://src/rendering/dropped_item.gd")
 const ItemStack = preload("res://src/gameplay/item_stack.gd")
 const TerrainRenderer = preload("res://src/rendering/terrain_renderer.gd")
+const BlackberryBramble = preload("res://src/world/blackberry_bramble.gd")
 const Taming = preload("res://src/gameplay/taming.gd")
 const CaptureTool = preload("res://src/gameplay/capture_tool.gd")
 const AmbientFlyerMarker = preload("res://src/rendering/ambient_flyer_marker.gd")
@@ -2366,6 +2367,7 @@ func _authority_step(delta: float) -> void:
 		* _weather_speed_multiplier()
 		* _terrain_speed_multiplier(tile)
 		* _surface_speed_multiplier(tile)
+		* _bramble_speed_multiplier(tile)
 		* ConditionPenalty.speed_multiplier(survival.fitness)
 		* _spell_speed_multiplier()
 	)
@@ -2416,6 +2418,7 @@ func _authority_step(delta: float) -> void:
 	_fishing_step(delta)
 	_lasso_step(delta)
 	_food_buff_step(delta)
+	_step_bramble_thorns(delta)
 	_venom_step(delta)
 	_mushroom_toxin_step(delta)
 	_sickness_step(delta)
@@ -2774,6 +2777,42 @@ func _terrain_speed_multiplier(tile: Vector2i) -> float:
 ## they always were. Pinned by test_surface_speed_multiplier_is_the_road_
 ## bonus_on_a_road_cell.
 const ROAD_SPEED_MULTIPLIER := 1.15
+
+## Pushing INTO a blackberry thicket (docs/concept/brambles.md). Asked for
+## directly: *"when walked through in the middle it should slow down
+## movement to 10% and inflict minor damage"*.
+##
+## The thicket's own CELL is the whole test {D} the same question every
+## other ground-cover rule asks, with no radius to tune. The drawn clump is
+## wider than its tile, so clipping its edge from the next tile over parts
+## its canes and nothing else. One more term in the same
+## current_speed_multiplier product chain the road bonus and the wade
+## penalty already live in.
+func _bramble_speed_multiplier(tile: Vector2i) -> float:
+	if _chunk_manager == null:
+		return 1.0
+	if not _chunk_manager.is_bramble_at_global(tile.x, tile.y):
+		return 1.0
+	return BlackberryBramble.THICKET_SPEED_MULTIPLIER
+
+
+## ...and the thorns, for as long as you are in there. Rate rather than a
+## one-off hit: a crossing costs what it costs because of how long it takes
+## at thicket speed, which is what makes the slow and the damage one
+## decision instead of two numbers (see BlackberryBramble.thorn_damage_per_
+## second, which derives it from exactly that).
+func _step_bramble_thorns(delta: float) -> void:
+	if _chunk_manager == null or health <= 0.0:
+		return
+	var tile := current_tile()
+	if not _chunk_manager.is_bramble_at_global(tile.x, tile.y):
+		return
+	take_damage(
+		BlackberryBramble.thorn_damage_per_second(
+			max_health, float(TerrainRenderer.TILE_SIZE), BASE_SPEED
+		) * delta
+	)
+
 
 func _surface_speed_multiplier(tile: Vector2i) -> float:
 	if _chunk_manager == null:

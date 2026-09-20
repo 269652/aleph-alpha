@@ -49,7 +49,7 @@ const IllustratedFernPatch = preload("res://src/rendering/illustrated_fern_patch
 const PlantSway = preload("res://src/rendering/plant_sway.gd")
 const ForestFern = preload("res://src/world/forest_fern.gd")
 const BlackberryBramble = preload("res://src/world/blackberry_bramble.gd")
-const IllustratedBrambleSprite = preload("res://src/rendering/illustrated_bramble_sprite.gd")
+const IllustratedBramblePatch = preload("res://src/rendering/illustrated_bramble_patch.gd")
 const IllustratedWheatPatch = preload("res://src/rendering/illustrated_wheat_patch.gd")
 const FlowerPatch = preload("res://src/world/flower_patch.gd")
 const SeedDispersal = preload("res://src/world/seed_dispersal.gd")
@@ -494,6 +494,8 @@ var _illustrated_grass := IllustratedGrassPatch.new()
 ## material and the mesh are all shared, and only the per-band MultiMesh
 ## instances are per chunk.
 var _illustrated_ferns := IllustratedFernPatch.new()
+## The thickets, drawn and bent the same way (docs/concept/brambles.md).
+var _illustrated_brambles := IllustratedBramblePatch.new()
 
 ## Where the bend is drawn against right now, which TRAILS the real walker
 ## (see set_grass_walker_position and PlantSway). Kept here rather than in
@@ -9220,6 +9222,7 @@ func set_wind_strength(strength: float) -> void:
 	_tree_renderer.set_wind_strength(strength)
 	_illustrated_grass.set_wind_strength(strength)
 	_illustrated_ferns.set_wind_strength(strength)
+	_illustrated_brambles.set_wind_strength(strength)
 	IllustratedWheatPatch.set_wind_strength(strength)
 
 
@@ -9232,6 +9235,7 @@ func set_season_tint(tint: Color) -> void:
 	_season_tint = tint
 	_illustrated_grass.set_season_tint(tint)
 	_illustrated_ferns.set_season_tint(tint)
+	_illustrated_brambles.set_season_tint(tint)
 
 
 ## Pushes the real, live sun position (see solar_position.gd's
@@ -9843,33 +9847,83 @@ func step_ferns(delta_seconds: float) -> void:
 ## the same shape _sync_scrub_sprites uses, and for the same reason: at
 ## BlackberryBramble.MAX_PATCHES (36) a chunk's brambles are nowhere near the
 ## density that would need instancing.
+## Whether a blackberry thicket stands on this global tile.
+##
+## The one question the player asks about brambles (docs/concept/
+## brambles.md, "The middle is not the edge"): the thicket's own CELL is
+## what slows a walker and draws blood, and clipping the drawn edge of a
+## clump from the next tile over is a visual event only, since the art is
+## wider than the tile it is planted on.
+func is_bramble_at_global(global_x: int, global_y: int) -> bool:
+	var tile := Vector2i(global_x, global_y)
+	var sim = _bramble_sims.get(_chunk_coord_for_tile(tile))
+	return sim != null and sim.has_bramble(_local_coord(global_x, global_y))
+
+
+## One MultiMeshInstance2D draw call per Y-band, exactly as the ferns and
+## the grass are drawn, and through the grass's own band maths.
+##
+## This REPLACED a Sprite2D per thicket, and the reason is the bend: the
+## shared shader reads INSTANCE_CUSTOM for its atlas sub-rect and the
+## instance origin for its root, and neither exists outside a MultiMesh.
+## Asked for directly — *"they should bend slightly when walked over from
+## the side"* — which retires this system's own earlier reasoning that
+## brambles "do not sway" (docs/concept/brambles.md).
 func _sync_bramble_sprites(chunk_coord: Vector2i) -> void:
+	if not _decorates(chunk_coord):
+		_drop_decoration(_bramble_sprites, chunk_coord)
+		return
 	var sim = _bramble_sims.get(chunk_coord)
-	var sprites: Dictionary = _bramble_sprites.get(chunk_coord, {})
 	if sim == null:
 		return
-	for cell in sprites.keys():
-		if not sim.has_bramble(cell):
-			sprites[cell].free()
-			sprites.erase(cell)
-
+	var bands: Dictionary = _bramble_sprites.get(chunk_coord, {})
 	var origin := chunk_coord * CHUNK_SIZE
+	var half_span := _visible_half_span_tiles()
+	var cards_by_band: Dictionary = {}
 	for cell in sim.get_patch_cells():
-		if sprites.has(cell):
+		var tile: Vector2i = origin + (cell as Vector2i)
+		if not DecorationLod.keeps_decoration_tile(tile, _disturbance_center_tile, half_span, GRASS_VIEW_BUFFER_TILES):
 			continue
-		var texture := IllustratedBrambleSprite.frame_for(origin + cell)
-		if texture == null:
-			continue  # no sheet on disk: draw nothing rather than a box
-		var sprite := Sprite2D.new()
-		sprite.texture = texture
-		sprite.scale = Vector2.ONE * IllustratedBrambleSprite.world_scale()
-		sprite.position = Vector2(
-			(origin.x + cell.x + 0.5) * TerrainRenderer.TILE_SIZE,
-			(origin.y + cell.y + 0.5) * TerrainRenderer.TILE_SIZE
-		)
-		_ground_decor_parent.add_child(sprite)
-		sprites[cell] = sprite
-	_bramble_sprites[chunk_coord] = sprites
+		var cell_spec := {
+			# Off the GLOBAL cell, so which of the twenty-five clumps a
+			# thicket wears is its own and survives a reload — the same
+			# guarantee the Sprite2D draw gave, kept.
+			"seed": hash("%d_%d_bramble_clump" % [tile.x, tile.y]),
+			"ground_position": Vector2(
+				(tile.x + 0.5) * TerrainRenderer.TILE_SIZE,
+				(tile.y + 0.5) * TerrainRenderer.TILE_SIZE
+			),
+			"growth": 1.0,  # a cane is a cane: it has no growth stage to sample
+		}
+		for card in IllustratedBramblePatch.cards_for_cell(cell_spec):
+			var local_row := IllustratedBramblePatch.local_row_for_world_y(
+				card.position.y, origin.y, TerrainRenderer.TILE_SIZE
+			)
+			var band := IllustratedBramblePatch.band_index_for_local_y(local_row, CHUNK_SIZE)
+			var list: Array = cards_by_band.get(band, [])
+			list.append(card)
+			cards_by_band[band] = list
+
+	for band in bands.keys().duplicate():
+		if not cards_by_band.has(band):
+			bands[band].queue_free()
+			bands.erase(band)
+
+	for band in cards_by_band:
+		var mmi: MultiMeshInstance2D = bands.get(band)
+		if mmi == null:
+			mmi = MultiMeshInstance2D.new()
+			mmi.position = Vector2(
+				(origin.x + CHUNK_SIZE * 0.5) * TerrainRenderer.TILE_SIZE,
+				IllustratedBramblePatch.band_anchor_world_y(
+					band, origin.y, CHUNK_SIZE, TerrainRenderer.TILE_SIZE
+				)
+			)
+			_entities_parent.add_child(mmi)
+			bands[band] = mmi
+		_illustrated_brambles.fill_band(mmi, mmi.position, cards_by_band[band])
+
+	_bramble_sprites[chunk_coord] = bands
 
 
 func _sync_fern_sprites(chunk_coord: Vector2i) -> void:
@@ -10619,6 +10673,7 @@ func set_grass_walker_position(world_position: Vector2, delta: float = 0.0) -> v
 		_walker_bend_position = world_position
 	_illustrated_grass.set_walker_position(_walker_bend_position)
 	_illustrated_ferns.set_walker_position(_walker_bend_position)
+	_illustrated_brambles.set_walker_position(_walker_bend_position)
 	IllustratedWheatPatch.set_walker_position(_walker_bend_position)
 
 
@@ -20269,8 +20324,8 @@ func _unload_chunk(chunk_coord: Vector2i) -> void:
 	_fern_sprites.erase(chunk_coord)
 	_fern_sims.erase(chunk_coord)
 
-	for sprite in _bramble_sprites.get(chunk_coord, {}).values():
-		sprite.free()
+	for mmi in _bramble_sprites.get(chunk_coord, {}).values():
+		mmi.free()
 	_bramble_sprites.erase(chunk_coord)
 	_bramble_sims.erase(chunk_coord)
 

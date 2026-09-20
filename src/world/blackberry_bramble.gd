@@ -55,6 +55,62 @@ const MAX_PATCHES := 103
 ## ground is a bramble's" is one decision.
 const HOME_BIOME := "forest"
 
+
+# -- pushing through one -----------------------------------------------------
+#
+# Asked for directly: *"when walked through in the middle it should slow
+# down movement to 10% and inflict minor damage"*.
+#
+# The MIDDLE is the thicket's own cell. That is the question every other
+# ground-cover rule already asks, it needs no radius to tune, and it lines
+# up with what a player sees — the tile the clump is planted on. Clipping
+# the drawn edge of a clump from the next tile over is a visual event only
+# (the art is wider than its tile), and nothing here fires for it.
+
+## What a walker's speed is multiplied by while they are IN a thicket.
+## Given, not derived: *"slow down movement to 10%"*.
+const THICKET_SPEED_MULTIPLIER := 0.1
+
+## What one crossing costs, as a fraction of full health.
+##
+## "Minor damage" is not a number. This world already names the smallest
+## damage it counts as real — BossAggro.MIN_DAMAGE_FRACTION_OF_MAX_HEALTH,
+## the threshold under which a hit is not worth reacting to — and a
+## bramble crossing is exactly that size of hurt. Kept as a literal here
+## with the EQUALITY pinned by a test rather than imported, the same way
+## this file keeps its density ordering against the ferns.
+const CROSSING_COST_FRACTION := 0.02
+
+
+## How long a walker takes to cross one thicket, at thicket speed.
+##
+## A tile of `tile_size` at THICKET_SPEED_MULTIPLIER of `base_speed`: at
+## the real numbers (16 units, 40 a second) that is four seconds, which is
+## what makes a crossing a decision rather than a nuisance.
+static func seconds_to_cross(tile_size: float, base_speed: float) -> float:
+	var crawl: float = base_speed * THICKET_SPEED_MULTIPLIER
+	if crawl <= 0.0:
+		return 0.0
+	return tile_size / crawl
+
+
+## Health a second the thorns take while a walker is in there.
+##
+## Derived from the two above rather than picked, so a change to the
+## player's speed or the tile size moves it instead of quietly making a
+## crossing cheaper or dearer: the cost of a whole crossing, spread over
+## how long a crossing takes. A test multiplies them back together.
+##
+## Zero for a walker who cannot move at all — there is no crossing to
+## charge for, and it is the one input that could divide by zero.
+static func thorn_damage_per_second(
+	max_health: float, tile_size: float, base_speed: float
+) -> float:
+	var seconds := seconds_to_cross(tile_size, base_speed)
+	if seconds <= 0.0:
+		return 0.0
+	return (max_health * CROSSING_COST_FRACTION) / seconds
+
 ## Where "ripe enough to eat" sits on the ripeness curve. Below this the
 ## fruit is green or reddening and pick() refuses it -- reaching into a
 ## bramble in June and coming out with blackberries is the kind of small lie
