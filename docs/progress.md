@@ -27515,6 +27515,70 @@ wrong first: it asserted a "north" rail's collider touches its northern edge,
 when a rail on the field's north side closes its own SOUTHERN one -- the side
 the crop is on.
 
+### ✅ Done (2026-09-20): and it stops them at the foot of the rail
+
+Reported straight after: *"The horizontal fences should have the hitbox at
+the bottom of the rail ... so it should use fence height instead of
+thickness"*.
+
+Naming the edge is not the same as knowing where on that edge the fence
+stands. The two horizontal facings anchor their art to **opposite ends** of
+their cell (`IllustratedStructureSprite.footprint_offset`: `inner.y > 0`
+bottom-anchors, `inner.y < 0` top-anchors), so a collider pinned to the edge
+its normal names is right for one facing and wrong for the other. Measured
+before anything was changed, on a 16px tile:
+
+| rail | inner | wood, tile-local | collider was | correct |
+| --- | --- | --- | --- | --- |
+| north | `(0, 1)` | `y = 5.5 .. 16.0` | `12.0 .. 16.0` | yes |
+| south | `(0, -1)` | `y = 0.0 .. 10.9` | `0.0 .. 4.0` | no |
+
+A south rail's wood hangs DOWN from its top edge, so the body on that edge
+stopped the player at the rail's **head** -- seven pixels short of the line
+they could see. `fence_collider_rect` now takes the height of the wood as
+drawn and stands the strip at its **foot**, clamped into the cell so art
+that measures oddly can never put a body in the neighbour's tile. The strip
+is still `FENCE_COLLIDER_THICKNESS_PX` deep: the height decides *where* it
+sits, not how thick it is. A **vertical** rail is anchored left or right,
+has no foot on the `y` axis, and is untouched.
+
+Finding that foot means the band arithmetic `footprint_offset` already does,
+so `IllustratedStructureSprite.placed_art_rect` answers it once ("where does
+this subject's ink land inside its tile"), `footprint_offset` is refactored
+onto the same helper, and `EarthChunkManager` only forwards the number --
+the body cannot drift from the picture. That helper's result is cached per
+`subject|tile_size`, because `get_image()` is a readback and a chunk load
+asks once per rail cell.
+
+**TDD:** 5 new geometry pins in `test_village_farm.gd` (top-anchored blocks
+at its wood's foot, bottom-anchored does not move, both facings stated as
+one property, vertical unchanged, the foot clamped into the tile for any
+height) and 4 wiring pins in `test_earth_chunk_manager_rail_collision.gd`,
+plus 4 in `test_illustrated_structure_sprite.gd` holding `placed_art_rect`
+against the test file's own independent pixel measurement. All confirmed red
+first (`Too many arguments for "fence_collider_rect()"`, then
+`Nonexistent function 'placed_art_rect'`, then 9/9 against the unwired
+manager). 93/93, 9/9, 63/63.
+
+`test_the_collider_touches_the_edge_its_normal_names` asserted all four
+facings, and so **encoded this exact bug**. It is now vertical-only
+(`test_a_vertical_colliders_edge_is_the_one_its_normal_names`), with the
+horizontal rule stated as the foot it really is.
+
+**Known divergence, deliberate:** this is the one place the player and the
+markers stop at different *lines*. `rails_block_step` is a cell-grid rule
+and refuses the crossing at the cell boundary; the body refuses it a few
+pixels later, inside the cell. They still refuse the same crossings, and the
+rest of a rail's tile being ordinary ground is the design rule rather than
+an accident, so standing in it is allowed.
+
+**Also read as ambiguous and decided:** *"use fence height instead of
+thickness"* could have meant the strip's DEPTH becomes the fence height (a
+band covering the whole drawn rail) rather than its PLACEMENT. Read as
+placement, because *"have the hitbox at the bottom of the rail"* is where it
+sits; a band spanning the wood's full height would not be "at the bottom".
+Easy to change if the other reading was meant.
+
 ### 🚧 Honest note
 
 None of this is verified in a live session -- every number above is from

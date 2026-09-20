@@ -483,7 +483,24 @@ func placed_art_rect(subject: String, tile_size: int) -> Rect2:
 ## _spawn_structure_art_for), and is NOT one tile wide once a rail is scaled
 ## by its own run, so where its edges fall has to be carried rather than
 ## assumed away.
+## "subject|tile_size" -> Rect2. Shared across instances like _cache and
+## _art_rect_cache, and worth having because idle_texture().get_image() is a
+## readback, not a dictionary lookup: EarthChunkManager asks for a rail's
+## wood height once per rail CELL while a chunk streams in, and a fence ring
+## is a good twenty of them.
+static var _unplaced_art_rect_cache: Dictionary = {}
+
+
 func _unplaced_art_rect(subject: String, tile_size: int) -> Rect2:
+	var key := "%s|%d" % [subject, tile_size]
+	if _unplaced_art_rect_cache.has(key):
+		return _unplaced_art_rect_cache[key]
+	var rect := _measure_unplaced_art_rect(subject, tile_size)
+	_unplaced_art_rect_cache[key] = rect
+	return rect
+
+
+func _measure_unplaced_art_rect(subject: String, tile_size: int) -> Rect2:
 	var idle := idle_texture(subject)
 	if idle == null:
 		return Rect2()
