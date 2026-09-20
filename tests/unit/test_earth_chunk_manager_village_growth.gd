@@ -19,6 +19,7 @@ const GeoCoordinates = preload("res://src/world/geo_coordinates.gd")
 const SettlementGenerator = preload("res://src/world/settlement_generator.gd")
 const BiomeClassifier = preload("res://src/world/biome_classifier.gd")
 const BuildingCatalog = preload("res://src/gameplay/building_catalog.gd")
+const VillageFarm = preload("res://src/gameplay/village_farm.gd")
 const TerrainRenderer = preload("res://src/rendering/terrain_renderer.gd")
 const VillageLayout = preload("res://src/world/village_layout.gd")
 const VillageGrowth = preload("res://src/emergence/village_growth.gd")
@@ -798,16 +799,27 @@ func test_a_growth_building_is_never_sited_on_ground_another_project_already_cla
 	# one already rising -- asked for directly, since the ladder will not
 	# name anything else until this rung actually stands.
 	#
-	# A house, not the next ladder rung. The question here is whether the
-	# spiral search respects a live project's claim, and the rung this
+	# A farmstead, not the next ladder rung. The question here is whether
+	# a later siting respects a live project's claim, and the rung this
 	# village happens to be owed may be the last one on the ladder or simply
 	# too big for what frontage is left -- neither of which is this test's
-	# subject, and both of which made it fail for the wrong reason.
-	var after: String = BuildingCatalog.BUILDING_IDS[0]
-	var next_origin = manager._growth_site_for(_chunk_coord, after)
-	assert_not_null(next_origin, "the village still has frontage somewhere")
-	for cell in BuildingCatalog.footprint_cells(after, next_origin):
-		assert_false(claimed.has(cell), "cell %s overlaps the rung already rising" % str(cell))
+	# subject, and both of which made it fail for the wrong reason. This
+	# asked for a house, and a village of fourteen with its food works
+	# really up (docs/concept/village_economy_balance.md mechanism 6) has a
+	# plot or two of frontage left at most, so that too failed for the
+	# wrong reason once the farmhouses it had always been owed began to
+	# stand. A farmstead is sited while any open ground with room for a
+	# field remains (VillageRenderer.farm_plot_with_field falls back to the
+	# outskirts), against the same project claims -- and the house is
+	# checked as well whenever frontage does remain.
+	var farmstead_origin = manager._growth_site_for(_chunk_coord, VillageFarm.FARM_BUILDING_ID)
+	assert_not_null(farmstead_origin, "the village still has open ground somewhere")
+	for after in [VillageFarm.FARM_BUILDING_ID, BuildingCatalog.BUILDING_IDS[0]]:
+		var next_origin = manager._growth_site_for(_chunk_coord, after)
+		if next_origin == null:
+			continue
+		for cell in BuildingCatalog.footprint_cells(after, next_origin):
+			assert_false(claimed.has(cell), "%s cell %s overlaps the rung already rising" % [after, str(cell)])
 
 
 # -- the sawmill really stands, in the real pipeline ----------------------

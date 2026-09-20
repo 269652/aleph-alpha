@@ -122,6 +122,13 @@ const SUPPLIED := EstateAscension.FULL_SATISFACTION
 ##                         toward refusing rather than letting a hamlet
 ##                         build a mage guild because a caller forgot an
 ##                         argument.
+##   field_hands           how many households hold a trade that works a
+##                         field (VillageFarm.crop_for), whatever their
+##                         estate -- the people a farmstead is REALLY worked
+##                         by (docs/concept/village_economy_balance.md
+##                         mechanism 6). ABSENT falls back to judging the
+##                         food works by estate labour class, exactly as
+##                         every caller did before this key existed.
 static func next_building(state: Dictionary) -> String:
 	var household_count := int(state.get("household_count", 0))
 	if household_count <= 0:
@@ -147,7 +154,8 @@ static func next_building(state: Dictionary) -> String:
 		estate_counts, present, state.get("satisfaction", {}),
 		state.get("building_counts", {}), household_count,
 		String(state.get("food_trade", SettlementFoodDemand.FALLBACK_TRADE)),
-		String(state.get("tier", SettlementTier.TIERS[0]))
+		String(state.get("tier", SettlementTier.TIERS[0])),
+		int(state.get("field_hands", FIELD_HANDS_UNCOUNTED))
 	)
 	if petitions.is_empty():
 		# Nothing anybody in this village is asking for -- but silence is
@@ -196,10 +204,16 @@ static func next_building(state: Dictionary) -> String:
 	return _winner(petitions)
 
 
+## What a caller that never counted its field hands passes, so the food
+## works are judged by estate labour class as they always were.
+const FIELD_HANDS_UNCOUNTED := -1
+
+
 ## building_id -> total weight petitioned for it.
 static func _petitions(
 	estate_counts: Dictionary, present: Array, satisfaction: Dictionary,
-	building_counts: Dictionary, household_count: int, food_trade: String, tier: String
+	building_counts: Dictionary, household_count: int, food_trade: String, tier: String,
+	field_hands: int = FIELD_HANDS_UNCOUNTED
 ) -> Dictionary:
 	var supply: Dictionary = VillageLabor.supply_for(estate_counts)
 	var petitions := {}
@@ -209,7 +223,7 @@ static func _petitions(
 			continue
 		var asked: String = _ask_of(
 			estate, present, satisfaction, supply, estate_counts,
-			building_counts, household_count, food_trade, tier
+			building_counts, household_count, food_trade, tier, field_hands
 		)
 		if asked == "":
 			continue
@@ -230,11 +244,12 @@ static func _ask_of(
 	building_counts: Dictionary,
 	household_count: int,
 	food_trade: String,
-	tier: String
+	tier: String,
+	field_hands: int = FIELD_HANDS_UNCOUNTED
 ) -> String:
 	var remedy: String = remedy_for(_worst_shortage_of(estate, satisfaction), food_trade)
 	if remedy != "" and _is_remedy_petitionable(
-		remedy, present, supply, estate_counts, building_counts, household_count, tier
+		remedy, present, supply, estate_counts, building_counts, household_count, tier, field_hands
 	):
 		return remedy
 	# A CHARTER is satisfied by one standing building and never scales: it
@@ -265,9 +280,21 @@ static func _ask_of(
 ##
 ## A second door on the remedy path alone, rather than a loosening of
 ## _is_petitionable, so the charter path above is untouched by it.
+##
+## WHO WOULD WORK IT is judged by TRADE when the caller has counted its
+## field hands (docs/concept/village_economy_balance.md mechanism 6): a
+## field is worked by whoever's trade it is, whatever their standing
+## (VillageFarm hands a farmer their field; the estate's labour class never
+## enters into it), so the next farmstead is wanted while a farming
+## household stands without one. Measured before this: ten cottagers, two
+## farmers and a herbalist among them, one farmhouse, shelves at zero --
+## and a vote for a trade hall, because the husbandman gate below could
+## never pass in a village nobody had yet risen in. A caller that has not
+## counted keeps that estate gate.
 static func _is_remedy_petitionable(
 	building_id: String, present: Array, supply: Dictionary, estate_counts: Dictionary,
-	building_counts: Dictionary, household_count: int, tier: String
+	building_counts: Dictionary, household_count: int, tier: String,
+	field_hands: int = FIELD_HANDS_UNCOUNTED
 ) -> bool:
 	if _is_petitionable(building_id, present, supply, estate_counts, tier):
 		return true
@@ -275,6 +302,8 @@ static func _is_remedy_petitionable(
 		return false
 	if not _wants_another(building_id, building_counts, household_count):
 		return false
+	if field_hands != FIELD_HANDS_UNCOUNTED:
+		return field_hands > int(building_counts.get(building_id, 0))
 	return VillageLabor.can_staff(building_id, supply)
 
 

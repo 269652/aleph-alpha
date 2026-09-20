@@ -1813,47 +1813,13 @@ func _place_farms_if_missing(
 			wanted += 1
 	if wanted == 0:
 		return  # nobody here farms, so nothing here needs a farmhouse
-	# The farmhouses already up, and WHERE -- a candidate origin has to be
-	# judged against the ground its neighbours already own (see _may_sow),
-	# not just against how many of them there are.
-	var standing_origins: Array = []
-	if world.has_method("buildings_in_chunk"):
-		for record in world.buildings_in_chunk(chunk_coord):
-			if record.get("id", "") == VillageFarm.FARM_BUILDING_ID:
-				standing_origins.append(record.get("origin_local", Vector2i.ZERO))
-	var standing := standing_origins.size()
-
-	var is_buildable := _is_buildable_local(chunk_coord, chunk_size, world)
-	var is_occupied := _is_occupied_local(chunk_coord, chunk_size, world)
-	var is_paved := _is_paved_local(chunk_coord, chunk_size, world)
-	var renderer := self
-	var accepts_origin := func(origin: Vector2i) -> bool:
-		# The candidate itself joins the origins it is judged against: a
-		# farmhouse owns ground by being nearest to it, so it cannot be
-		# weighed against its neighbours without being in the running.
-		return renderer._field_fits_at(
-			origin, standing_origins + [origin], reserved,
-			chunk_coord, chunk_size, world, is_buildable, is_occupied
-		)
+	var standing := _farmhouse_origins(chunk_coord, world).size()
 	for index in range(standing, wanted):
-		var plot: Dictionary = VillageLayout.next_street_plot(
-			VillageFarm.FARM_BUILDING_ID, chunk_size, VillageLayout.seed_for(chunk_coord),
-			is_buildable, is_occupied, is_buildable, accepts_origin, is_paved
-		)
-		if plot.is_empty():
-			# No frontage left -- which on a village hemmed in by water is
-			# the normal case, not the rare one. Measured on chunk
-			# (661,139) near lat 49.8 lon 10.6, reported in play as "no
-			# farmers": next_street_plot returns nothing at all there for a
-			# 3x2 farmhouse, while SIXTY origins elsewhere in the same
-			# chunk fit one, every one with a full field ring. A farmstead
-			# does not need frontage the way a house does; it needs open
-			# ground and a path home, which is what the sawmill's own
-			# siting already gives.
-			plot = VillageLayout.outskirt_plot(
-				VillageFarm.FARM_BUILDING_ID, chunk_size, VillageLayout.seed_for(chunk_coord),
-				is_buildable, is_occupied, accepts_origin, is_buildable
-			)
+		# Searched afresh for every farmstead, so the second is judged
+		# against the ground the first now owns (farm_plot_with_field
+		# re-reads what stands). One list read before the loop judged every
+		# founding farm against the ground of none of the others.
+		var plot: Dictionary = farm_plot_with_field(chunk_coord, chunk_size, world, reserved)
 		if plot.is_empty():
 			return  # nowhere at all with room for a field -- honestly, no farm
 		# Over the paving, not beside it: a street-frontage plot's own
@@ -1884,6 +1850,75 @@ func _place_farms_if_missing(
 			for local_cell in paving:
 				var g: Vector2i = chunk_coord * chunk_size + (local_cell as Vector2i)
 				world.build_at_global(g.x, g.y, TerrainRenderer.ROAD_TILE_ID)
+
+
+## The plot a farmstead goes on -- the ONE search for it, whoever asks.
+##
+## The next free street frontage whose ground really has room for a whole
+## field (_field_fits_at), and the outskirts when the streets are full.
+## No frontage left is, on a village hemmed in by water, the normal case
+## and not the rare one: measured on chunk (661,139) near lat 49.8 lon
+## 10.6, reported in play as "no farmers", next_street_plot returned
+## nothing at all there for a 3x2 farmhouse while SIXTY origins elsewhere
+## in the same chunk fit one, every one with a full field ring. A farmstead
+## does not need frontage the way a house does; it needs open ground and a
+## path home, which is what the sawmill's own siting
+## (VillageLayout.outskirt_plot) already gives.
+##
+## Shared by the founding placement (_place_farms_if_missing) and the
+## growth path (EarthChunkManager._growth_site_for) rather than written
+## twice, for the reason _may_sow gives: a growth farmhouse sited by the
+## plain frontage ladder stood where this rule would have refused it, and
+## its villager was then handed nowhere to sow (docs/concept/
+## village_economy_balance.md mechanism 6). A rule that decides where to
+## build has to be the rule that decides what gets built.
+##
+## Judged against the farmhouses ALREADY standing -- re-read from the
+## world on every call, so the next farmstead keeps off the ground the
+## last one owns -- against `reserved` (GLOBAL landmark cells, see
+## _may_sow), and against `is_occupied` when the caller knows of ground
+## not yet modified (a project rising: EarthChunkManager
+## ._cells_reserved_by_building_projects); omitted, the chunk's own
+## modifications are the occupied ground. The square is derived from
+## generated water (_is_dry_local) like every other consumer of it.
+## Empty when nowhere in the chunk has room for a field.
+func farm_plot_with_field(
+	chunk_coord: Vector2i, chunk_size: int, world, reserved: Dictionary = {},
+	is_occupied := Callable()
+) -> Dictionary:
+	var standing_origins := _farmhouse_origins(chunk_coord, world)
+	var is_buildable := _is_buildable_local(chunk_coord, chunk_size, world)
+	if not is_occupied.is_valid():
+		is_occupied = _is_occupied_local(chunk_coord, chunk_size, world)
+	var is_dry := _is_dry_local(chunk_coord, chunk_size, world)
+	var seed_value := VillageLayout.seed_for(chunk_coord)
+	var renderer := self
+	var accepts_origin := func(origin: Vector2i) -> bool:
+		# One clear column or row between this yard and every standing
+		# neighbour's, for the line of rails two fields share to stand on
+		# (VillageFarm.yards_touch). The frontage lays farmhouses at that
+		# pitch by itself; the outskirts search does not, and packed two
+		# farmsteads together whose fields then had no side between them.
+		for standing in standing_origins:
+			if VillageFarm.yards_touch(origin, standing):
+				return false
+		# The candidate itself joins the origins it is judged against: a
+		# farmhouse owns ground by being nearest to it, so it cannot be
+		# weighed against its neighbours without being in the running.
+		return renderer._field_fits_at(
+			origin, standing_origins + [origin], reserved,
+			chunk_coord, chunk_size, world, is_buildable, is_occupied
+		)
+	var plot: Dictionary = VillageLayout.next_street_plot(
+		VillageFarm.FARM_BUILDING_ID, chunk_size, seed_value, is_buildable, is_occupied,
+		is_dry, accepts_origin, _is_paved_local(chunk_coord, chunk_size, world)
+	)
+	if plot.is_empty():
+		plot = VillageLayout.outskirt_plot(
+			VillageFarm.FARM_BUILDING_ID, chunk_size, seed_value,
+			is_buildable, is_occupied, accepts_origin, is_dry
+		)
+	return plot
 
 
 ## Whether a farmhouse at `origin` would really have somewhere to sow: a

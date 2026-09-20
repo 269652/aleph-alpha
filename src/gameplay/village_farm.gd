@@ -185,6 +185,39 @@ const WORK_BLOCK_SECONDS := 900.0
 ## by hand.
 const FIELD_YIELD_PER_WORK_BLOCK := 278.0
 
+## The day a farmer's own schedule turns on: NpcMarker.SECONDS_PER_
+## SIMULATED_DAY's own VALUE (60), restated here for the reason
+## VillageImmigration gives for its copy -- a rendering node is not
+## something a pure gameplay module may depend on -- and cross-checked by
+## test_the_fields_day_is_the_farmers_own_clock so the two cannot drift.
+const SECONDS_PER_LIVED_DAY := 60.0
+
+## What a real field yields in one lived day (docs/concept/
+## village_economy_balance.md mechanism 6), and the number a village SIZES
+## its food works by -- SettlementFoodDemand.producers_needed and the
+## assembly's "outnumbered" test read this, not the work-block figure
+## above.
+##
+## MEASURED (tools/probe_village_economy.gd, tools/probe_field_timeline.gd,
+## a real village east of Berlin): three six-bed fields harvested 299 units
+## onto their farmhouse shelves in 20 lived days, and 163 in 10 -- five a
+## field a day. FIELD_YIELD_PER_WORK_BLOCK works out to 18.5 a day, and it
+## is not wrong about what it measures: a field worked for 900 seconds by a
+## farmer who never leaves it. A real farmer works the day's two work
+## blocks (eleven hours of twenty-four), walks between a cottage a street
+## away and the field at walking pace -- a commute that eats most of a
+## 27-second work window -- fetches water, and leaves beds empty for most
+## of the day (the timeline probe reads five of six empty at many samples).
+## A roster sized against the stub's figure founded a village of ten on two
+## fields, raised three, and ate its shelves to zero.
+##
+## A literal, because it is a measurement; pinned in test_settlement_food_
+## demand.gd below the stub's continuous-work day (the commute is real)
+## and above one household's day of meals (a farmhouse is never a building
+## for nobody). The two levers that would raise it are the commute and the
+## well, and both are recorded in the concept doc rather than tuned here.
+const FIELD_YIELD_PER_LIVED_DAY := 5.0
+
 ## How far out from the farmhouse a field may reach. Not the field's size
 ## -- MAX_WORKED_CELLS is that -- but how far the search looks for cells
 ## worth working when the near ones are water, road or already built on.
@@ -436,6 +469,29 @@ static func next_action(plots: Array) -> int:
 ## really stand on a given cell -- water, paving, something already built
 ## there -- is the caller's question, and the caller leaving the paving open
 ## is what makes the gate.
+## Whether two farmsteads at `a` and `b` stand yard to yard: their
+## footprints touching, side by side or at a corner, with no clear column
+## or row between them.
+##
+## Two fields can share ONE line of rails (SHARED_FENCE_TILE_IDS), and that
+## line needs a cell to stand on. A field lies nearest its own house, so
+## two houses with no gap between them get two fields with no gap between
+## them, and each field's inner rail line falls on the other's beds -- a
+## field open along a side, which is not an enclosure. Measured on the
+## stub villages once the founding roster raised five farmsteads: the
+## outskirts search packed farmhouses at (6,24) and (9,24) together, and
+## 28 rails were missing across the villages sampled. One clear column or
+## row between the yards is the room the shared line stands on, which is
+## exactly the pitch the street frontage already lays farmhouses at.
+##
+## The siting gate (VillageRenderer.farm_plot_with_field) refuses a plot
+## that would touch a standing neighbour's yard. Pure, so the rule can be
+## pinned by itself.
+static func yards_touch(a: Vector2i, b: Vector2i, building_id: String = FARM_BUILDING_ID) -> bool:
+	var footprint := BuildingCatalog.footprint_of(building_id)
+	return Rect2i(a, footprint).grow(1).intersects(Rect2i(b, footprint))
+
+
 static func fence_cells(worked_cells: Array, origin: Vector2i, building_id: String) -> Array:
 	var footprint := BuildingCatalog.footprint_of(building_id)
 	if footprint == Vector2i.ZERO or worked_cells.is_empty():
