@@ -306,3 +306,121 @@ func test_the_water_surface_pass_paints_a_pond_from_this_model():
 		source.contains("VillagePond.BANK_ACROSS"),
 		"and the ring round it must carry the bank that puts the waterline on its edge"
 	)
+
+
+# -- a pond is dug where its works can stand -------------------------------
+#
+# Reported live, standing at the water: *"no Fisher Hut is near"*. Measured
+# on three real streamed villages (tools/probe_village_geometry.gd): one of
+# them had a pond with NO hut anywhere, and the reason was not a near miss
+# -- all 51 candidate origins within HUT_BANK_REACH_TILES of that water
+# were refused, 19 by the village street, 21 by neighbouring houses, 5 by
+# the pond's own fence rail and 6 by the water itself. The pond had been
+# dug into the two-row strip between the street and the next house row,
+# which is exactly wide enough for the water and nothing else.
+#
+# Two passes that never spoke: the dig takes the best rectangle in reach,
+# and the hut is sited afterwards on whatever bank that leaves. A pond with
+# nowhere to put its works is a pond that should have been dug elsewhere --
+# the same rule VillageLayout already applies to a farmhouse, which refuses
+# a plot with no room for its field.
+
+
+## The ground as it WILL BE, not as it is: a candidate hut site is judged
+## against the pond dug and FENCED, because the rails go in with the water
+## and a site that overlaps one is a site the hut cannot have.
+##
+## The fixture is the whole point. The only clear ground within reach of
+## this water is the three rows under it, and the nearest of those three
+## is the pond's own southern rail line -- so the question asked at
+## PLACEMENT time (where the rails are already real ground the caller's
+## own is_free refuses) and the question asked BEFORE the dig have to give
+## different answers, or the dig would choose a site whose only bank is
+## the fence it is about to build.
+func test_a_bank_that_only_the_fence_would_block_is_not_a_bank():
+	var water := _pond_at(Vector2i(8, 8), Vector2i(3, 2))
+	var rails := VillageFarm.fence_cells(water, Vector2i(8, 13), HOUSE)
+	assert_false(rails.is_empty(), "precondition: this pond really is fenced")
+	var under_the_water := func(cell: Vector2i) -> bool:
+		return cell.x >= 7 and cell.x <= 11 and cell.y >= 10 and cell.y <= 12
+
+	assert_not_null(
+		VillagePond.hut_origin(water, under_the_water),
+		"precondition: the placement-time question puts a hut on this ground"
+	)
+	assert_null(
+		VillagePond.hut_origin_after_fencing(water, Vector2i(8, 13), HOUSE, under_the_water),
+		"...and that ground is the pond's own rail line, so before the dig it is no bank at all"
+	)
+
+
+## And open ground still does -- the fencing test must not refuse a bank
+## that is genuinely clear.
+func test_open_ground_round_a_pond_still_takes_a_hut_once_it_is_fenced():
+	var water := _pond_at(Vector2i(8, 8), Vector2i(3, 2))
+	var origin = VillagePond.hut_origin_after_fencing(water, Vector2i(8, 11), HOUSE, _anywhere)
+	assert_not_null(origin, "open ground round a pond must still put a hut somewhere")
+	for cell in _hut_cells(origin):
+		assert_false(
+			VillageFarm.fence_cells(water, Vector2i(8, 11), HOUSE).has(cell),
+			"%s is one of the pond's own rails" % cell
+		)
+
+
+## A strip of ground exactly as deep as the water itself takes a pond but
+## no works. Given a wider site as well, the dig must take the wider one.
+func test_a_pond_is_dug_where_its_hut_can_stand():
+	var house := Vector2i(8, 12)
+	# Two tiles deep immediately behind the house -- room for the water and
+	# nothing else, which is the real village layout this was measured in
+	# (the strip between the street and the next house row). And open
+	# ground one row further out, wide enough for both. Both inside
+	# VillageFarm.FIELD_REACH_TILES of the house, or the search would never
+	# see the second.
+	var strip := func(cell: Vector2i) -> bool:
+		if cell.y >= 10 and cell.y <= 11:
+			return cell.x >= 6 and cell.x <= 12
+		return cell.x >= 5 and cell.x <= 13 and cell.y >= 5 and cell.y <= 9
+
+	var takes_a_hut := func(cells: Array) -> bool:
+		return VillagePond.bank_takes_a_hut(cells, house, HOUSE, strip)
+	var water: Array = VillagePond.pond_cells(house, HOUSE, strip, takes_a_hut)
+
+	assert_false(water.is_empty(), "there is room for a pond here")
+	assert_not_null(
+		VillagePond.hut_origin_after_fencing(water, house, HOUSE, strip),
+		"the pond was dug on ground its own works cannot stand beside: %s" % str(water)
+	)
+
+
+## ...and the strip alone still gets its water. A pond with no hut beats no
+## pond at all: the fisher works the water, not the building.
+func test_ground_that_can_never_take_a_hut_still_gets_its_pond():
+	var house := Vector2i(8, 12)
+	var strip := func(cell: Vector2i) -> bool:
+		return cell.y >= 10 and cell.y <= 11 and cell.x >= 6 and cell.x <= 12
+
+	var takes_a_hut := func(cells: Array) -> bool:
+		return VillagePond.bank_takes_a_hut(cells, house, HOUSE, strip)
+	assert_true(
+		VillagePond.pond_cells(house, HOUSE, strip, takes_a_hut).is_empty(),
+		"precondition: nowhere on this strip can take a hut"
+	)
+	assert_false(
+		VillagePond.pond_cells(house, HOUSE, strip).is_empty(),
+		"and without the condition there is still a pond to dig"
+	)
+
+
+## The condition is the caller's, exactly like VillageLayout's own
+## accepts_origin -- passing none leaves the search it has always done.
+func test_a_dig_with_no_condition_sites_the_pond_exactly_as_before():
+	var house := Vector2i(6, 4)
+	assert_eq(
+		VillagePond.pond_rect(house, HOUSE, _anywhere, Callable()),
+		VillagePond.pond_rect(house, HOUSE, _anywhere)
+	)
+	assert_eq(
+		VillagePond.pond_rect(house, HOUSE, _anywhere),
+		VillageFarm.field_rect(house, HOUSE, _anywhere, true)
+	)
