@@ -20,7 +20,25 @@ const ConstructionCatchup = preload("res://src/world/construction_catchup.gd")
 ## real output of a producer occupation (NpcProduction), of butchering, or
 ## of the sawmill's own chain -- nothing the village cannot make, and
 ## nothing it makes that he refuses.
-const BUY_LIST: Array[String] = ["beam", "plank", "hide", "wood", "fish", "meat", "fruit"]
+## MEASURED addition (tools/probe_village_famine.gd, with its purse and
+## wallet columns): purse 0.0 and wallets 0 at EVERY sample, in a village
+## holding 38 sellable food in its market and 187 across its shelves. He
+## was offered that stock on every settlement step and refused all of it.
+##
+## The list was beam/plank/hide/wood/fish/meat/fruit while a village's
+## fields grow herb/carrot/potato/wheat (VillageCropChoice.SOWABLE) -- the
+## two sets did not intersect AT ALL. Once gold had one faucet and it was
+## this merchant, that meant the faucet could never open: no sale, no
+## purse, no wage, no meal, and a village starving on top of its own
+## harvest. Seven of ten died inside 300 seconds.
+##
+## So the real crops are on it, and
+## test_a_merchant_buys_every_crop_a_village_can_be_told_to_grow fails if a
+## crop is ever added that he will not take.
+const BUY_LIST: Array[String] = [
+	"beam", "plank", "hide", "wood", "fish", "meat", "fruit",
+	"herb", "carrot", "potato", "wheat",
+]
 
 ## The base timber unit every sawn price is derived from, and the cheapest
 ## thing on the list.
@@ -53,6 +71,14 @@ const FARM_GATE_PRICES := {
 	"fish": LOG_PRICE,
 	"meat": LOG_PRICE,
 	"fruit": LOG_PRICE,
+	# The field crops, at exactly what the raw food already here fetches:
+	# raw produce is raw produce, and preparing it is what adds the value
+	# (see this table's own doc comment). Test-pinned against `fruit`
+	# rather than written as a second number.
+	"herb": LOG_PRICE,
+	"carrot": LOG_PRICE,
+	"potato": LOG_PRICE,
+	"wheat": LOG_PRICE,
 }
 
 ## How much a merchant can carry away in one visit, in whole units. Finite
@@ -60,6 +86,30 @@ const FARM_GATE_PRICES := {
 ## turning it into one enormous windfall, and what makes a second visit
 ## worth waiting for.
 const CART_CAPACITY := 20
+
+## The length of the day a visit is paced on.
+##
+## MEASURED, and it is the number that mattered most here
+## (tools/probe_village_famine.gd, run before and after): once the conjured
+## gold faucet was closed and this merchant became a village's ONLY income,
+## 7 of 10 villagers died inside 300 seconds where the same village had
+## survived and grown to 12. He was not too stingy -- he was too SLOW.
+##
+## His day was ConstructionCatchup.SECONDS_PER_DAY (3600), the deliberately
+## conservative rate for integrating an UNLOADED chunk's vegetation and
+## herds, while hunger kills in Starvation.seconds_to_die (200 seconds) of
+## the day the village actually lives on. The soonest he could possibly
+## call was eighteen times the window in which everybody who could not feed
+## themselves was already dead.
+##
+## So: the day the village lives in -- the same 60 seconds NpcMarker's
+## schedule, the ecosystem step, the settlement step and the day/night
+## cycle all run on. Exactly the defect, and exactly the fix, that a raised
+## build already had (docs/concept/planner_mode.md, "A raised build runs on
+## the game's own day"): a thing the player is WATCHING is paced by the day
+## they live in; a background integration over absence keeps the catch-up
+## rate.
+const SECONDS_PER_DAY := 60.0
 
 ## Visits per day to a village with something, anything, worth buying.
 const VISITS_PER_DAY := 0.4
@@ -102,15 +152,20 @@ static func _surplus_of(stock: Dictionary, reserved: Dictionary, item_id: String
 ## its own next building really needs (see this doc's "Mercantile
 ## surplus, not stock"). Stock up to the reserve is not surplus and is
 ## neither sold nor counted toward a visit being worth the walk.
+## `seconds_per_day` is the clock the draw is paced on -- see
+## SECONDS_PER_DAY, and the measurement that set it. A parameter rather
+## than a hard reference so the pacing is testable directly, the same shape
+## ConstructionCatchup already gives its own.
 static func arrivals(
-	seconds: float, stock: Dictionary, carry: float, reserved: Dictionary = {}
+	seconds: float, stock: Dictionary, carry: float, reserved: Dictionary = {},
+	seconds_per_day: float = SECONDS_PER_DAY
 ) -> Dictionary:
 	if seconds <= 0.0 or sellable_units(stock, reserved) <= 0:
 		return {"arrived": false, "carry": carry}
 
 	var surplus := clampf(float(sellable_units(stock, reserved)) / SURPLUS_FOR_FULL_DRAW, 0.0, 1.0)
 	var draw := VISITS_PER_DAY * (1.0 + SURPLUS_DRAW * surplus)
-	var accrued := carry + draw * (seconds / ConstructionCatchup.SECONDS_PER_DAY)
+	var accrued := carry + draw * (seconds / maxf(seconds_per_day, 0.001))
 	if accrued < 1.0:
 		return {"arrived": false, "carry": accrued}
 	# One visit at a time, whatever has accrued: a merchant who is overdue
