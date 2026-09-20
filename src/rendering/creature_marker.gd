@@ -62,6 +62,7 @@ const HoverTargetFinder = preload("res://src/rendering/hover_target_finder.gd")
 const SubmersionShader = preload("res://src/rendering/submersion_shader.gd")
 const WaterMovementModel = preload("res://src/gameplay/water_movement_model.gd")
 const CreatureMovementGate = preload("res://src/gameplay/creature_movement_gate.gd")
+const AgentPassability = preload("res://src/gameplay/agent_passability.gd")
 const TerrainPassability = preload("res://src/gameplay/terrain_passability.gd")
 const AnimalFitness = preload("res://src/world/animal_fitness.gd")
 const EarthwormPatch = preload("res://src/world/earthworm_patch.gd")
@@ -474,6 +475,10 @@ var carried_nut_species := ""
 var carried_nut_origin := Vector2.ZERO
 var carried_nut_direction := Vector2.ZERO
 var _world = null
+
+## Which tiles this creature may not step into -- buildings and cliffs (see
+## AgentPassability). Invalid until setup() binds a world that can answer.
+var _wall_tiles := Callable()
 var _tile_size := 16
 
 var _knockback_remaining := Vector2.ZERO
@@ -591,6 +596,11 @@ func _ready() -> void:
 func setup(world, tile_size: int) -> void:
 	_world = world
 	_tile_size = tile_size
+	# Built once, not per frame -- see AgentPassability's own doc comment.
+	# Buildings AND ground too steep to climb, so the gate can TURN a
+	# creature away from a cliff rather than only stopping it dead the way
+	# _terrain_blocks_movement below does (see docs/concept/navigation.md).
+	_wall_tiles = AgentPassability.blocked_predicate_for(world)
 
 
 ## This creature's own real, live, current body mass -- see
@@ -2425,14 +2435,22 @@ func _advance_gated(desired: Vector2, speed: float, delta: float, avoid_threats:
 	# meaningful slice of the frame budget for no behavioural gain.
 	var has_threats := avoid_threats and not _cached_caution_threats.is_empty()
 	var heading: Vector2
-	if _cached_blockers.is_empty() and not has_threats:
+	# `_wall_tiles.is_valid()` belongs in this condition, not just in the
+	# call below it: the fast path skips the gate ENTIRELY when no tree or
+	# stone is near, so a creature standing in open ground beside a house
+	# would have walked straight through it however the gate was taught
+	# about buildings (reported live: "fix creatures walking through houses
+	# too"). The added cost on that path is one dictionary lookup -- the
+	# gate returns the desired heading on its first _is_clear when nothing
+	# is in the way.
+	if _cached_blockers.is_empty() and not has_threats and not _wall_tiles.is_valid():
 		heading = desired
 	else:
 		var threats: Array = _positions_of(_cached_caution_threats) if avoid_threats else []
 		var facing := 0.0 if _is_serpent() else facing_sign()
 		heading = CreatureMovementGate.clear_direction(
 			position, desired, MOVEMENT_LOOKAHEAD, _cached_blockers, threats, SENSE_RADIUS,
-			_last_gated_heading, facing
+			_last_gated_heading, facing, _wall_tiles, _tile_size
 		)
 	# Terrain is a SEPARATE ask-before-you-step check, layered on top of
 	# whatever heading obstacle/threat avoidance above already settled on --

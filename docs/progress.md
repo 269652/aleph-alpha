@@ -12615,7 +12615,8 @@ New concept doc (2026-08-25), written for the one mechanism below:
 
 ### UI / presentation
 
-- **Unified UI theme** — ✅ Done — `src/ui/ui_theme.gd` (tested: palette, styleboxes, built `Theme` all pinned) is one dark/rounded/gold-accent theme applied to every menu and window (main menu, settings, inventory, crafting, skill tree, dev console) plus the HUD survival card. Replaces the earlier raw grey boxes.
+- **Unified UI theme** — ✅ Done — `src/ui/ui_theme.gd` (tested: palette, styleboxes, built `Theme` all pinned) is one dark/rounded/gold-accent theme applied to every menu and window (main menu, settings, inventory, crafting, skill tree, dev console) plus the HUD survival card. Replaces the earlier raw grey boxes. **Gained a formal "this one is selected" mark (2026-09-20)**: `selected_button_stylebox`/`BUTTON_SELECTED` — the gold `ACCENT` as a thicker border over a background that lifts out of the card. Godot draws a toggled control in its `pressed` stylebox, which here is a shade *darker* than normal (~5% of value) and measured as invisible over a dark card when the build palette was first rendered; applied per control rather than in the shared `Theme`, since `pressed` there also means a momentary click on every ordinary button in the game.
+- **Planner build palette reads as a build menu** — ✅ Done (2026-09-20) — asked directly, with a screenshot of ten identical text buttons in a row: "Make the Planner / Building HUD more professional and more like Anno 1806. Add Icons not only text". Planner mode's palette is now `src/ui/blueprint_palette_view.gd`: a titled card with a row of category tabs (Roads / Homes / Production / Civic), the slots of whichever category is open, and a footer naming what is armed and what it will cost. Each slot carries the building's **own picture** and its name — icons alone would trade one unreadable menu for another, since a sawmill and a blacksmith are both a brown roof at 48 pixels — and a hover gives the whole reckoning: name, footprint in tiles, the real material list, the real hours. **The icon is cut from that building's own `BuildingCatalog.finished_sheet_chain`**, the very sheet `EarthChunkManager` draws the finished building from, so there is no second picture of any building free to drift from the first (`src/ui/blueprint_icon.gd` — trimmed to its own art, fitted into the box with its aspect intact rather than squashed square, centred on a transparent canvas; pavement draws the real road tile it will lay). The tabs **are** `BuildingCatalog`'s own id lists read at runtime (`src/ui/blueprint_palette_model.gd`), never a second grouping, so a building added to the game lands in the right tab for free; and the two numbers on a card arrive as the same calls the raising path makes (`_item_catalog.display_name_of`, `_chunk_manager.build_labor_hours_for`), so the menu cannot quote a price or a job size the site then disagrees with. Work that costs no hours reads as **"Laid by hand"** rather than "0 hours" — `PlanRaising.is_laid_by_hand`'s own rule, said in the menu instead of discovered at the site. **Two defects the rendered probe caught that the headless tests could not** (`tools/probe_build_palette.gd`, per this repo's probe-before-you-trust convention): the armed slot and open tab were drawn in the theme's ordinary `pressed` shade, ~5% of value from normal and invisible over the card's dark background (now `UiTheme.selected_button_stylebox`, see the theme row below); and three tabs read as open at once, because `set_pressed_no_signal` deliberately does not tell the `ButtonGroup`, so a tab opened from code left the previous one looking open. Tests: `test_blueprint_palette_view.gd` 15/15 (the real widget, driven for real), `test_blueprint_palette_model.gd` 22/22, `test_blueprint_icon.gd` 12/12, `test_world_planner_mode_wiring.gd` 31/31. **Nothing about the card's size is written down** — a slot is as wide as the widest name in its own tab, measured at the font it is really drawn in; the card is as wide as its slots; the footer wraps rather than clips and cannot widen either. That came out of merging `main`, where a concurrent session had landed the UI-scale setting: sweeping the probe across every scale the player can pick showed **six of the ten names clipping at 1.75** ("Warehouse" wanting 137px of a slot offering 84) and only 7px of headroom at 1.00, so the defect predated the slider — `UiScale` scales font sizes and deliberately not card widths, which is its own documented limit. Zero clipped names at 0.75, 1.00 and 1.75 now, footer included. **Known gap:** `CHARTERED_BUILDING_IDS` (trade hall, mage guild) is still not offered — a charter is a settlement-tier gate (`concept/settlement_charter.md`), and whether a player may plan a blueprint they could never raise is a separate question from how the menu looks.
 - **Main-menu backdrop** — ✅ Done — the start-up menu now dims the whole screen behind a full-rect backdrop (`World._show_main_menu`) so the game world/HUD no longer bleed through it.
 - **HUD polish** — 🚧 Partial — survival meters grouped into a themed panel card; XP bar / creature panels repositioned to stop overlapping. Meter fills are still plain rects (no rounded fills).
 - **Character screen / inventory revamp** — ✅ Done (basic) — `scenes/inventory_window.gd` (toggle I) is now a PoE/Valheim/Hammerwatch-style **two-pane character screen**: a left **equipment paperdoll** (rendered head+torso preview + right-clickable head/chest/legs/feet/weapon slots) and a right **item-slot grid** (icon + count, hover tooltips). **Right-click** an inventory item to wear/equip or eat it; right-click a worn slot to unequip. **Drag-and-drop works** (left-click and drag): drag an item onto another grid slot to reorder, or out onto a HUD hotbar slot to bind it to a number key (`src/ui/drag_slot.gd` is the shared drag-capable slot Control; `src/gameplay/hotbar.gd` holds the bindings). Left and right are deliberately split across the two gestures — clicking left used to ALSO activate an item (equip/eat) on mouse-down, which fired the instant you pressed down to start a drag, before Godot's drag threshold even triggered (reported: "a click on a carrot makes it vanish"). Shows total armor. The hotbar picked up the same UX pass: a hover highlight, a tooltip naming what's bound and its count, and right-click to clear a slot (previously the only way to change one was overwriting it via drag). Not yet: splitting/merging stacks by drag, or dragging directly onto a paperdoll slot to equip.
@@ -12680,10 +12681,110 @@ New concept doc this pass -- no prior doc covered what's underground (`stone.md`
 - ✅ **`GeologyChamber.cells_for`** -- the small circular pocket of Strata cells a cave entrance reveals, the underground equivalent of `RoomDetector`'s room cells. `test_geology_chamber.gd`.
   - 🐛 **Fixed (playtest report, 2026-08-28): `CHAMBER_RADIUS` was "small" only by tile count, not on screen.** At the shipped camera zoom (`Player.TARGET_TILE_SCREEN_PX` = 64px/tile) the old `CHAMBER_RADIUS := 3` (a 7-tile-diameter, ~37-cell disk) rendered at ~448px against the project's own 720px-tall default viewport — ~62% of the visible screen's shorter side. Since `Strata` cells are `SOLID`/`ORE` by default until mined (see below), the chamber fills essentially 100% on first reveal, with every rock sitting dead-center on its tile — a true grid, not a scatter — so this read live as "a dense, near-uniform grid... covering most of the visible ground" the instant a player brushed within one tile of a cave entrance, including on plain grassland (`CaveEntrancePlacement` rolls there too, just rarely). Shrunk to `CHAMBER_RADIUS := 1` (a 3x3, 9-cell pocket) — the largest radius that still clears a new screen-relative bound (`test_chamber_diameter_stays_a_small_fraction_of_the_visible_screen`) rather than the bare `< 50`-cells check that existed before and never caught this.
 - ✅ **Topsoil/regolith wired fully end-to-end and playable.** `GeologyRenderer` spawns a visible `CaveEntranceMarker` (real, if honestly-flat-fallback, procedural art -- `ProceduralCaveEntranceSprite`) at every entrance a loaded chunk rolls (`EarthChunkManager._load_chunk`'s new geology block), and `EarthChunkManager._update_geology_reveal` (called from `update()`, mirroring `_update_roof_visibility`'s reveal-on-entry shape exactly) spawns real `DiggableRock` nodes for the chamber the moment the player is within `CAVE_ENTRY_TRIGGER_RADIUS` of an entrance, and despawns them the moment the player leaves. `DiggableRock` mirrors `MinableOre`'s contract exactly (real `WorldItemBus` drops scaled by pickaxe power via the same `OreYield`, same hover-tooltip contract, same "attack"-bound swing) plus writes the mined cell permanently back into the chunk's own `Strata` instance, so a chamber re-revealed later shows real tunnels instead of resetting. `test_diggable_rock.gd`, `test_geology_renderer.gd`, `test_procedural_cave_entrance_sprite.gd`.
-- ⬜ **The physical shaft from topsoil/regolith down into bedrock, and onward through deep bedrock into the hydrothermal zone.** All three deeper layers' `Strata` configuration, ore weighting, and hazard functions are fully implemented and fully tested (see above); nothing yet lets a player physically reach them -- a deliberately scoped, honestly documented gap (see the geology doc's own Status section for the full statement).
+- 🚧 **The physical shaft from topsoil/regolith down into bedrock** -- substantially narrowed by the Underground pass below, not still wholly open: the transition mechanism, the bedrock cave system, and the descend/ascend/reveal wiring are all built and tested; the binding that would make it playable is not. **⬜ Bedrock into deep bedrock and onward into the hydrothermal zone** remains untouched -- both deeper layers stay fully configured, fully tested and completely unreachable, with no per-chunk instance built for either.
 - ⬜ **Collapse/foul-air/flood-risk are not yet live gameplay events.** The pure hazard functions exist and are tested; nothing calls them from the reveal/mining path yet (no actual cave-in, no actual air/water damage-over-time tick).
 - ⬜ **Mined-tunnel state does not persist across a chunk unload/reload** -- `_topsoil_strata` is kept only for a chunk's LOADED lifetime, unlike `chunk.modifications`'s own on-disk persistence. Walking away far enough to unload the chunk and returning currently resets any tunnels dug there. A documented gap, not an oversight -- persisting it would need a new save-file format this pass didn't build.
 - ⬜ **Underground art is the flat procedural fallback** (`ProceduralStoneSprite`/`ProceduralOreSprite`, same textures surface stone/ore nodes fall back to with no illustrated sheet), not a cave-specific illustrated sheet -- none exists yet, the same honestly-documented situation `stone.md` itself describes for any future stone class with no art of its own.
+
+
+### Reconciling two parallel wall fixes (2026-09-20)
+
+Merging this branch to `main` found that another session, `claude/brave-euler-bcoea4`, had independently fixed **the same three bugs** while this one was working: creatures through walls, villagers through walls, and things growing in water. 200 commits had landed on `main` in the meantime. A straight merge would have put two competing implementations of each fix into the live checkout, so the merge was aborted and reconciled deliberately instead.
+
+**What main had, and why it won.** Its wall gate asks `piece_blocks_movement_at_global` — the same question the wall's own collision body is spawned from — so what stops a player, what stops a villager and what a route plans around can never disagree. It also knows a DOOR and a FLOOR are walkable pieces, where this branch's footprint question reported the whole building solid and would have meant no villager could ever plan a way indoors. It handles farm rails too. On the water side, `38a2312` covers crops and flowers as well as mushrooms and ant mounds, and `75e30d4` reads the painted water rather than `is_river` alone.
+
+**Convergence worth noting.** The two `AntColony`/`WildMushroomPatch` fixes were written independently and came out nearly identical — same signature, same optional trailing `is_water` mask, both gating budding, both following `TallGrass`'s precedent. That is a good sign about the precedent, and it made those two files a clean "take theirs".
+
+- ✅ **Took main's**: `ant_colony.gd`, `wild_mushroom_patch.gd`, the NPC wall slide, the creature wall check, and `_ground_cover_and_built_blockers` (which also covers built ground).
+- ✅ **Kept from this branch**: the whole underground stack (nine modules, zero conflicts — nothing on main touches it), `TileRouter`, `AgentPassability`, and terrain/water costing. None of it existed on main.
+- ✅ **Deleted as superseded**: `npc_building_gate.gd` and `building_walls.gd`, with their tests. Keeping them beside better equivalents would have left two answers to one question.
+- ✅ **`AgentPassability` now prefers the piece question** over the footprint one, so the router and the slide agree and a villager can still plan a way through a door.
+- ⚠️ **One real regression, caught by a test rather than by reasoning.** The surviving slide knew walls and rails but NOT slope, so deleting this branch's gate removed the only thing enforcing terrain on the actual step: a villager whose goal sat behind a cliff found no route, fell back to walking straight at its target, and climbed it. `test_a_villager_never_climbs_a_cliff` failed at step 7. Slope now lives in the slide — the one place every step passes through — rather than in a second gate beside it.
+- 632/633 across fourteen suites; the one failure is the long-standing `test_follow_speed_is_slower_than_the_players_own_base_speed`, which fails on `main` independently.
+
+### Terrain and water reach both navigation paths (`concept/navigation.md`)
+
+Asked directly: *"wire terrain passability and water into both paths too"*.
+
+**The decision that shaped this: slope and water are not the same kind of obstacle.** Slope is absolute — `TerrainPassability.is_passable` already owns the threshold. Water is **costly, not blocked**, and treating it as blocked would have deleted working behaviour rather than adding safety: a creature must stand ON a water tile to drink from it (`CreatureMarker`'s own thirst check), and creatures, villagers and the player all already have swim animations and a real `WaterMovementModel`.
+
+- ✅ **`AgentPassability`** (9 tests) — one module, two deliberately separate questions: `blocked_predicate_for` (buildings OR ground too steep) and `cost_scale_for` (how much longer a tile takes to cross). Every hook is duck-typed and asked only of a world that offers it, so a partial stub answers for whichever it knows.
+- ✅ **Routes are priced in TRAVEL TIME, not distance, and the prices are derived rather than invented.** If `WaterMovementModel.BASE_SWIM_SPEED` is 0.6 of walking pace, a water tile takes 1/0.6 as long to cross, and that is exactly what the router is told; slope reads the same way through `TerrainPassability.speed_multiplier`. So a villager walks round a river when there is a dry crossing and **wades when going round would cost more** — which is what a person does, and what no amount of blocking could express. Both pinned as real behaviour tests, not just unit maths.
+- ✅ **Cost scales clamp at 1.0.** The octile heuristic assumes open ground is the cheapest there is, so a tile cheaper than open ground would make it overestimate and quietly return non-optimal routes — wrong rather than merely odd.
+- ✅ **Creatures now TURN at a cliff instead of stopping at one.** Wired through the same predicate, which upgrades behaviour that already existed: `_terrain_blocks_movement` ran *after* the heading was chosen, so the only thing a creature could do about a cliff was stand still. Folding slope into the gate's per-candidate predicate lets the existing twelve-turn search find a way along the contour. Cost on the common path stays one predicate call, because the gate returns on its first clear candidate.
+- ⚠️ **Correcting the previous entry**: it claimed "terrain is in neither navigation path". That was wrong for creatures, which already had `_terrain_blocks_movement` and already refused to climb cliffs. What was missing was that they could only stop, not steer.
+- ⬜ **Water costs a creature nothing.** Only villagers route, and only a router can price a tile — a wandering animal has no route to weigh, so it wades whatever it walks into. Right for a deer at a stream, less so for one that ought to prefer the bank.
+- ⬜ Trees and stones are still not in the villager's predicate; no cross-chunk routing.
+- ⚠️ Still pre-existing and untouched: `test_follow_speed_is_slower_than_the_players_own_base_speed` fails on `main` independently (`FOLLOW_SPEED` 60.0 vs `Player.BASE_SPEED` 40.0).
+
+### Navigation: creatures see walls, and villagers route around them (`concept/navigation.md`)
+
+Reported live: *"fix creatures walking through houses too also add proper wayfinding / routing"*. New concept doc this pass — `wayfinding.md` turned out to be about PLAYER INSTRUMENTS (compass, map, spyglass), so agent navigation had no spec at all.
+
+**The central decision, and why there are two systems rather than one.** A wandering creature and a travelling villager need different machinery: a deer crossing a meadow is not solving a route, it is moving and reacting, while a person walking to work executes a plan and will walk right around a building to do it. Giving the deer A\* would be both wasted work and wrong behaviour; giving the villager only reactive avoidance is what produced the reported bug. So creatures got **reactive avoidance** and villagers got a **real route**.
+
+- ✅ **Creatures see buildings** — `CreatureMovementGate.clear_direction` takes an optional tile predicate. Its twelve-turn search needed no change, only a new kind of obstacle. Buildings arrive as a TILE PREDICATE rather than as circles in the existing `blockers` array: circles over a rectangle either leave real diamond gaps at every four-tile corner that a step can land in, or block past the wall, and either way cost O(footprint tiles) per candidate heading — ~70 blockers against twelve headings per creature per tick in a village, the exact shape of cost `solid_obstacles_near` was created to escape. **The condition guarding the gate mattered as much as the gate**: both call sites took a fast path skipping it ENTIRELY when no tree or stone was near, so a creature in open ground beside a house would have walked straight through however well the gate understood buildings.
+- ✅ **`BuildingWalls`** — one predicate for all three movers (`NpcMarker`, `CreatureMarker`, `BondedCompanionMarker`), so they cannot drift apart about what a wall is, built once per mover in `setup()` rather than allocating a lambda per frame. `BondedCompanionMarker` had been discarding its `tile_size` parameter outright (`setup(world, _tile_size)`); it is kept now, because the predicate works in tiles.
+- ✅ **`TileRouter`** (13 tests) — 8-connected A\*, octile heuristic, no corner cutting (two buildings that touch leave a diagonal seam that is not walkable however the geometry looks), a hard NODE budget rather than a distance limit (the world is chunk-streamed and effectively infinite; an unbounded search toward an unreachable goal would walk the whole loaded region), and integer costs scaled by 100 so two genuinely equal paths compare equal and the result is deterministic. A blocked goal returns nothing rather than a nearest-reachable guess — a villager's destination is its doorstep, which is never inside a footprint, so a blocked goal means something genuinely unexpected and guessing would hide it.
+- ✅ **Villagers route** — `NpcMarker._steer_toward` aims at the next waypoint, recomputed only when the destination TILE changes and no more often than `ROUTE_RECOMPUTE_SECONDS`, so a villager walking to a fixed doorstep pays for exactly one search; the throttle only matters for a moving destination like a hunter's quarry. **The test that mattered was arrival, not avoidance**: "never inside a house" already passed with sliding alone, while "gets home with a house squarely in the way" failed at 89px out, pressed against the wall. That is the assertion this pass moved.
+- ✅ **The gate stays underneath the router**, not replaced by it: a route can go stale when a house is raised across it mid-walk, and `NpcBuildingGate` is what guarantees a stale route still never ends inside a wall. 497/498 across thirteen suites.
+- ⬜ **Creatures still do not route**, deliberately. A creature blocked by a long wall turns along it and wanders off, which is right for a wandering animal — but a predator committed to a hunt inherits the same limitation, and that is the one creature case that genuinely looks like a villager's.
+- ⬜ **Terrain is in neither navigation path.** `TerrainPassability` answers slope and `blocks_ground_cover` answers water, and neither is wired in, so agents still route up cliffs and across rivers. The router takes an arbitrary predicate, so closing this is additive rather than a redesign.
+- ⬜ Trees and stones are not in the villager's predicate; creatures avoid them through `solid_obstacles_near`, villagers only avoid buildings. No cross-chunk routing.
+- ⚠️ **Pre-existing failure, untouched**: `test_follow_speed_is_slower_than_the_players_own_base_speed` fails on `main` independently of this work (`BondedCompanionMarker.FOLLOW_SPEED` 60.0 vs `Player.BASE_SPEED` 40.0 — the player's base speed was lowered and the test never followed). Verified by stashing this branch's changes and re-running.
+
+### Walls are solid to a villager too (`concept/npc.md`)
+
+Reported live: *"NPCs walk straight through houses, ignoring the hitbox"*.
+
+**The hitbox was never broken.** Every building really does get a `StaticBody2D` (`EarthChunkManager._spawn_building_node`), and that is exactly what stops the PLAYER, who is a real physics body. An `NpcMarker` is a plain `Sprite2D` assigning `position` directly (`position = position.move_toward(target, ...)`), so no physics body is ever consulted on its behalf and no collision can possibly occur. Nothing about the building needed fixing — the villager needed to be asked to look. Reproduced first as a failing test: with a 3x3 house between a villager and its home, the villager stood inside it by step 23.
+
+- ✅ **`NpcBuildingGate`** (`src/gameplay/npc_building_gate.gd`, 12 tests) — the same ask-first shape `CreatureMovementGate` already uses for trees and stones, and the same "pure math over plain data, no nodes" split. Tile-based rather than radius-based, because a building already knows its own footprint cell by cell and a tile test is exact as well as cheaper than fitting circles to rectangles. Three rules in order: already standing in something solid means every step is allowed (a house raised over a villager must not imprison them permanently — a worse bug than the one being fixed); blocked head-on slides along whichever axis is free (walking diagonally into a wall is the commonest case, and refusing outright would pin villagers against their own houses rather than letting them walk along them); nowhere free means stay put. Includes a sweep asserting no reachable step from any tile around a house ever lands inside it, and `floori` rather than `int()` for tiles because villages exist west and north of the origin where truncation rounds the wrong way.
+- ✅ **`EarthChunkManager.has_building_at_global`** — the allocation-free half of `building_at_global`, which resolves the owning origin and then `duplicate()`s the whole record. Worth its own function because the predicate is called up to three times per villager per frame; a footprint tile always belongs to a real building, so testing the tile id alone is exact.
+- ✅ **Wired into `NpcMarker`'s one movement line**, with the predicate built ONCE in `setup()` rather than per frame — a fresh lambda each frame is exactly the churn the creature-blocker cache already exists to avoid. Fail-open when no world is bound or it cannot answer, the same duck-typed contract `_is_in_water` keeps, so every pre-existing fixture is untouched.
+- ✅ **Nobody is stranded.** A villager's `home_position` IS their house's doorstep, and `BuildingCatalog.doorstep_of` puts that one row south of the footprint, outside it. The door cell itself stays blocked, which is correct — entering a house is a real transition, not a walk. Both pinned against every house in the catalog rather than asserted in prose. 195/195 green across all eight NPC marker suites.
+- ⬜ **No pathfinding.** Sliding handles brushing a wall; it does not get a villager out of a concave pocket, so one whose target sits directly behind a building can still press into the wall rather than walking around. Real navigation is a much larger piece of work.
+- ⬜ **Creatures still walk through houses.** `solid_obstacles_near`, which `CreatureMovementGate` reads, walks `_loaded_trees` and `_loaded_stones` only and has no building term at all — the same class of bug, deliberately untouched by this pass rather than widened into.
+- ⬜ Only buildings are solid to a villager; trees and stones, which creatures already avoid, are still walked straight through.
+
+### Nothing grows in the river that is not meant to (`concept/soil_fauna.md`, `concept/mushrooms.md`)
+
+Reported live, with a screenshot: *"ant mounds and long grass should not spawn in rivers"*, then *"Also no shrooms in rivers"*.
+
+**One root cause, two systems.** A river or lake in this world leaves the biome array completely untouched -- it is an overlay flag (`Chunk.is_river`/`Chunk.is_lake`, read through the one `Chunk.blocks_ground_cover` predicate), never an eighth biome, per `concept/rivers.md`'s Rendering decision. So any placement that consults only `chunk.biome` is structurally blind to water. `TallGrass` was fixed for exactly this once before (its own source still carries the comment *"reported live: grass grows in rivers"*), but the fix was never propagated: `AntColony.new(...)` and `WildMushroomPatch.new(...)` were both still being handed `chunk.biome` and nothing else.
+
+**Measured at the reported coordinates** (HUD read Lat 48.2 Lon 7.9 -> global tile 20857, 4640, chunk (651, 145)) rather than reasoned about. That chunk is 874 grassland + 150 forest with **zero** ocean-biome cells, and 142 river + 578 lake flags -- 63% water by area, all of it overlay on land biome, which is precisely why a biome-only check saw dry grassland everywhere:
+
+| | before | after |
+|---|---|---|
+| ant mounds in water | **2 of 2** | 0 of 2 |
+| mushroom sites in water | **39 of 60** | 0 of 50 |
+| long grass in water | 0 of 77 | 0 of 77 |
+
+- ✅ **`AntColony`** takes the `Chunk.blocks_ground_cover` mask as an optional trailing `PackedByteArray`, the identical shape `TallGrass`'s own `is_river` addition already used, so every pre-existing 4-argument caller and fixture is untouched. Gated in **`is_valid_mound_site`** as well as initial seeding -- budding goes through that predicate, so gating seeding alone would have stopped mounds *starting* in a river while still letting a colony creep into one over time. `test_ant_colony.gd` (4 new tests, 117 total).
+- ✅ **`WildMushroomPatch`** the same, gated in `_seed_sites`. The sites are relocated rather than lost: the same chunk still seeds 50, all on soil. `test_wild_mushroom_patch.gd` (4 new tests, 46 total).
+- ✅ **`EarthChunkManager`** passes `_ground_cover_blockers(chunk)` to both -- the helper whose own doc comment already said it existed "for consumers that take a whole flag array", but which only `TallGrass` had ever been given.
+- ✅ **Long grass was already correct** and is left alone. The plants visible over water in the screenshot are `AquaticVegetation`, which reads the *same* mask as an inclusion filter and is supposed to be there.
+- ⬜ Not audited: every other `chunk.biome`-only placement in the codebase. This pass fixed the two that were reported; the class of bug is "consults biome, never asks about water", and `Chunk.blocks_ground_cover`'s own docstring still claims stone is covered when no stone placer reads it.
+
+### The underground (`concept/underground.md`)
+
+New concept doc and new system this pass, asked for directly: *"brainstorm and spec the second level underground mechanics and structure ... the underground levels get progressively difficult and rewarding; we need cave systems; content; instances."* `geology.md` specified the rock; nothing specified what the rock CONTAINS. The design decisions taken with the user: **one shared persistent planet with no per-party copies**, and a **chemosynthetic clade throughout** rather than troglomorphic descendants of surface species.
+
+The organising pillar is that **each layer changes the verb, not the numbers** -- dig (topsoil), explore (bedrock), survive (deep bedrock), exploit (hydrothermal) -- so difficulty rises with depth without a depth multiplier existing anywhere.
+
+- ✅ **`Lithology`** -- province-scale bedrock rock type across 40km provinces, eight real rock types, weighted so the global carbonate share reproduces the **measured 15.2%** of ice-free continental surface (Goldscheider et al. 2020, World Karst Aquifer Map). Carbonate share is relief-INDEPENDENT by construction because real alpine karst is widespread; relief redistributes only the clastic/crystalline remainder, since orogenic belts expose basement and cratonic platforms are buried under sedimentary cover. Solubility is a real relative dissolution rate -- gypsum ~10x limestone, dolomite ~0.1x (an order of magnitude slower kinetics, which is why real dolomite terrains have smaller, less-integrated caves rather than none) -- with four rock types at exactly zero. `test_lithology.gd` (18 tests).
+- ✅ **`CaveRecharge` / `CavePattern`** -- Palmer 1991 (GSA Bulletin 103), whose central finding is that cave pattern follows the **mode of groundwater recharge**, not rock type, depth or age. Five modes with causal precedence: rising sulfidic water dissolves whether or not anything happens at the surface (Carlsbad and Lechuguilla have no feeding stream), so hypogenic wins first, then the coastal mixing zone, then how surface water gets in. Bare karst resolves to POINT recharge via its own epikarst; genuinely diffuse recharge needs an insoluble permeable cover (sandstone over limestone, as in the Black Hills maze caves). A first pass had this backwards and made the caprock parameter inert -- the corrected model is both truer to Palmer and explains why branchwork dominates his survey. `test_cave_recharge.gd` (15), `test_cave_pattern.gd` (13).
+- ✅ **`CaveNetwork`** -- the void field, and the hardest piece. Porosity is **derived from real cave surveys** (Mammoth ~676km/150km²; Optymistychna ~257km/2km², the densest real pattern there is; Lechuguilla ~240km/13km²) times a real mean passage width, with rooms distinguished from conduits because Carlsbad's Big Room is 190m across. Three real bugs found and fixed along the way: blob patterns were using the LINE spacing formula (cavities are not lines -- packing gives `s = w·sqrt(π/4p)`; with line spacing, spongework merged into a few huge blobs carrying a through-route, the one thing spongework is defined by not having); conduits were banded on the raw field value, whose width `t/|∇f|` pinches to sub-tile along every steep stretch, so a conduit came out a dotted line until banding by DISTANCE to the contour made it constant-width; and one cycle per surveyed spacing satisfied only ONE survey number, squeezing conduits to 0.42 tiles half-wide against a surveyed 1.05 until the frequency was calibrated from the `p = 2hL` relation. Branchwork now lands at 1.13 tiles and anastomotic at 1.01 against 1.05 surveyed -- **porosity and width are independent survey numbers, so the two agreeing is a real check on the model.** Connectivity is tested against a same-porosity scatter control rather than an absolute bound, because several contour arcs crossing one window are several real conduits that may only join outside it. `test_cave_network.gd` (14).
+- ✅ **`CaveZonation`** -- speleobiology's standard four zones. Daylight is **exactly zero** below the twilight zone, not asymptotically small: `lighting.md`'s "dim, never pitch black" is justified explicitly by moonlight, starlight and skyglow, none of which exists underground, so the justification does not travel down and neither does the rule (that doc is cross-updated). The deep zone holds its locality's mean annual surface temperature whatever the weather does above, making it a real refuge in both directions -- which is why people have stored food in caves for as long as there have been both. `test_cave_zonation.gd` (17).
+- ✅ **`ChemosyntheticEnergy`** -- the difficulty curve, with no difficulty multiplier in it. Real ecosystems behind every number: Movile Cave (sealed ~5.5Ma, ~48 species on sulfur- and methane-oxidising mats), Frasassi snottites at pH 0-1, *Candidatus* Desulforudis audaxviator 2.8km down in Mponeng living on radiolytic hydrogen. Three consequences: **few** (starved rock sits at ~0.1% of surface productivity, so the player meets individuals, never swarms), **old** (the olm passes 100 years against 20-25 for a comparable surface salamander -- and age is exactly what `worldbosses.md`'s promotion threshold already reads, so the emptiest places underground become boss factories through the EXISTING mechanic with no cave-specific boss code), and **enormous but only with endosymbiosis** (Riftia has no gut at all; an animal farming its own producers reads a seep's worth of energy wherever it is, which is the only reason anything large can exist somewhere this energy-poor). Both exponents are real laws -- Kleiber inverted for attainable mass, and a longevity exponent fitted to the olm end of a real pair that then **independently returns 17.5 years at surface-equivalent energy**, a surface salamander's lifespan it was never fitted to. `test_chemosynthetic_energy.gd` (17).
+- ✅ **`CaveDescent`** -- layers connect through a real aven: a place where the deeper layer's own void opens under a cell you can stand on. Nothing is placed, so finding a way down is an exploration result. Light is a hard gate, the first non-cosmetic use `lighting.md`'s torch has; the real caving standard of three independent lights per person is recorded and the game gates at one, a divergence kept visible rather than silently rounded away. `test_cave_descent.gd` (15).
+- ✅ **`CaveSiting` / `CaveSignals`** -- the composition, and the translation from this world's own readings (real slope degrees, biome-derived precipitation seasonality, scanned ocean distance). **Palmer's 57% stops being a recorded constant and becomes a load-bearing assertion**: the generated global mix measures 16.8% cave-bearing (against 16.5% soluble bedrock) and **60.3% branchwork against his surveyed 57%**, with maze plus anastomotic at 25.4% -- his "the maze types make up most of the rest". `test_cave_siting.gd` (6), `test_cave_signals.gd` (13).
+- ✅ **`Strata.KIND_VOID`** -- natural passage, distinct from the `KIND_TUNNEL` a player mined. Void wins over both mined state and ore (there is no rock in an open passage), and `mine_at` on a natural passage is a no-op because swinging at open air is not work and must not turn a void water carved into a claimable working. Every existing caller defaults to no cave pattern and keeps exactly the old solid-rock behaviour. `GeologyRenderer.reveal_chamber` now skips any open cell rather than only a mined one -- spawning rock in a natural passage would wall off a cave with rock that was never there.
+- ✅ **`EarthChunkManager` wiring** -- every loaded chunk now gets a real bedrock `Strata` sited from its own lithology and hydrology; `bedrock_strata_at`/`strata_for_layer`/`pitch_at`/`try_descend`/`try_ascend`/`player_cave_layer` all exist and are tested, and `_update_underground_reveal` reveals the player's surroundings in whichever layer they are in -- `geology.md`'s "reveal-on-entry, reused recursively" finally applied recursively.
+- ⬜ **Descent is NOT playable yet, and that is the honest headline.** Nothing in the game calls `try_descend`/`try_ascend` -- no key, no prompt, no automatic trigger. Deliberately left rather than auto-triggered inside `update()`: with no visual transition, a player silently flipped underground would have no way to understand what happened. **The underground also does not look like one** -- no cave floor, no hiding of surface terrain, no true-black rendering; `CaveZonation` computes the darkness and the temperature and nothing reads either. And **finding a pitch is currently impractical**, because the topsoil chamber is a fixed 3x3 pocket, so there are at most nine cells to try; it needs to grow as the player mines outward before the dig-to-find-the-way-down loop can happen.
+- ⬜ **Not built**: cutoff grade (so depth is not yet a real economic trade); the underground clade (no creature pools keyed by zone and chemical flux, no spawning, no snottites -- `ChemosyntheticEnergy` answers what the budget allows and nothing consumes the answer); claims/gates/lapse, so the whole "instancing without instances" mechanism is design only; lava tubes; saltpetre, speleothems-as-climate-archives, chemosynthetic food and cold storage; and `PATTERN_RAMIFORM`'s branching side passages (it generates rooms but not the connections between them).
+- ⬜ **Honestly weaker than it looks**, flagged rather than dressed up: `CaveSignals.hydrothermal_proximity_at` is a **placeholder** -- this world has no tectonics or heat-flow field, so every ramiform cave in the game is sited by a die roll, not by geology. `Lithology.PERMEABLE_COVER_SHARE` is the least-anchored constant in the stack, calibrated against Palmer's share within a sweep whose own assumptions are named out loud in the test rather than measured directly. `CaveNetwork`'s spongework passage density is the one of five not taken from a named survey. And the play-scale/map-scale split (~1.426 m/tile for passages, ~1km/tile for biomes and oceans) is the project's existing deliberate scale fiction -- every conversion says which it uses, but the two genuinely coexist and that is a standing trap.
 
 ### Wayfinding & Instruments (`concept/wayfinding.md`)
 
@@ -19637,6 +19738,130 @@ to its original 2,338,456-byte version) — the user's own explicit choice
 between reverting and keeping the new art with the known jump. The
 45-frame art (extra row/column) is not lost -- recoverable from `aad16cff`
 whenever a version with genuinely continuous inter-row rotation exists.
+
+## The minimap is framed, and the planner toggle is a real switch (`concept/hud.md`, 2026-09-20)
+
+Two asks in one screenshot: *"Can you add a border and borderradius of 4px
+to the minimap and make the planner switch a ios like switch button with
+two states?"*
+
+**The minimap** was the one readout on screen with no frame — a bare
+`TextureRect` running to a hard square edge, directly above a world-clock
+card and a Karma card that both carry the shared rounded, bordered one. Not
+a legibility problem (a map is opaque), a coherence one. `UiTheme.
+map_frame_stylebox` is the shared `PANEL_BORDER` at `MAP_CORNER_RADIUS` 4
+with **no fill** — the map is the background, making this the one stylebox
+in the theme that draws only an edge. Four rather than the theme's six is
+deliberate and pinned: a map is read for the shapes in it, and rounding eats
+them. Rounding a `TextureRect` needs two nodes, because a stylebox draws
+*behind* a texture rather than clipping it and its border draws under its own
+children: a clipper (`clip_children = CLIP_CHILDREN_ONLY`, never drawn, its
+shape the mask) that the map moves into, and a frame added **after** the map
+so it draws on top of it.
+
+**The planner toggle** was a `Button` captioned with the mode you would
+switch *to* (`ViewMode.toggle_label`: "Planner Mode" while you are in RPG
+mode). Correct for a button, wrong for this control — a player could read it
+as *you are in planner mode* or as *press for planner mode*, and nothing on
+screen settled it. `src/ui/toggle_switch.gd` is a real two-state switch: the
+caption is now the constant `ViewMode.SWITCH_LABEL` ("Planner"), and the
+switch's on-state is the existing `ViewMode.shows_palette`, never a second
+predicate that could drift. `toggle_label` stays for callers that really do
+describe the action. The knob slides (a short `Tween`), which is what makes
+it read as one control with two states rather than two pictures; keyboard
+focus stays off it for the reason the old button already documented (a
+focused Control answers `ui_accept`, which is Space, which is attack).
+
+**Rendered, and the render earned its keep.** `tools/probe_hud_layout.gd`
+grew the minimap and the switch, and shows both switch states (planner on in
+the busy render, off in the calm one). It caught two things no unit test
+could: the off-track all but vanished into the card behind it —
+`UiTheme.BUTTON_NORMAL` sits within 0.06 luminance of `PANEL_BG`, so the
+track now carries the shared border in both states — and, inside its row, the
+switch stretched to the row's height, which stops a pill being a pill
+(the radius is half of `TRACK_SIZE.y`, so a taller track turns semicircular
+ends into merely-rounded corners). Both fixed; the second is now pinned by
+`test_the_switch_keeps_its_own_height_inside_a_row`, a test written *because*
+a picture showed what twelve geometry assertions measuring the constants
+could not.
+
+**TDD:** 12 pins in `test_toggle_switch.gd` (the knob is inside the track at
+both ends, the rest positions are symmetric, the travel is exactly track less
+knob less both paddings, the track is a pill, on/off are the theme's own pair
+and visibly differ in luminance), 4 in `test_toggle_switch_view_mode.gd` and
+3 in `test_ui_theme.gd`, all red first. One existing test changed its
+PREMISE rather than its assertion: `test_world_planner_mode_wiring.gd` asserted
+`_apply_view_mode` reads `ViewMode.toggle_label`, which is exactly what must
+no longer be true — it now asserts the caption is the constant, that
+`toggle_label` is absent, and that the switch follows a mode flipped by a
+keypress rather than only by a click. UI suites 144/144.
+
+🚧 **Not verified in a live session** — rendered offscreen, not played.
+
+## The mushroom crush was playing its own silent lead-in (`concept/creature_and_footstep_audio.md`, "Mushroom crush", 2026-09-20)
+
+Reported live: *"Mushroom crush sounds are gone"*. Two earlier changes,
+each correct on its own, composed into a sound that never played:
+
+1. The sourced clip (2026-09-09) is **7.54 seconds of continuous crinkling
+   styrofoam**, not a trimmed one-shot — it could not be trimmed, because
+   no audio-editing tooling was available in the session that sourced it.
+2. The 0.3s playback cap (2026-09-10, asked for directly: *"It plays long
+   after you stepped on it"*) plays the clip's **first** 0.3 seconds.
+
+The join between them is `FootstepSound.offset_for`, which returned `0.0`
+for this clip because it was never entered in `CLIP_LENGTH_SECONDS`. An
+unmeasured clip reads as length `0.0` there, so `is_walking_bed` called a
+7.5-second recording a one-shot ("it is already the step") and every
+crush played the same opening lead-in, before the performer has touched
+the styrofoam. Deterministic silence, not intermittent quiet.
+
+**Measured, not guessed, and three candidate causes ruled out first.**
+`tools/probe_mushroom_crush.gd` (new) loads real generated chunks, counts
+fruiting mushrooms and steps on every one: **298 fruiting, 298 crushed**
+on ordinary land — so mushrooms exist and `crush_mushroom_at` returns
+true, which is the branch the sound is played in. (The probe's first run
+reported zero, on chunks that turned out to be open ocean — `"sea": true`
+in the generator's own hydrology. Re-run on land before drawing any
+conclusion.) The audio player itself was already covered by
+`test_interaction_sfx_player.gd`, which loads and plays the real clip. That
+left the offset, and the clip's real length measured **7.536s** against a
+`CLIP_LENGTH_SECONDS` that knew only `default.ogg`.
+
+**Fix:** the clip's measured length (`7.54`) joins `CLIP_LENGTH_SECONDS`,
+where the existing `test_the_pinned_clip_lengths_are_the_real_files_own`
+now checks it against the real file every run like every other length
+there. `is_walking_bed` is then true for it, so each crush reads a
+**random 0.3s window out of the recording** instead of its first 0.3s —
+which for a continuously crinkling source is the right reading anyway:
+any moment in it is a crunch, and a different one each time is variation
+the crush never had. No change to the 0.3s cap the user asked for, and no
+change to any footstep. `is_walking_bed`'s name is now narrower than what
+it does (it is about LENGTH, not walking); the name is left alone rather
+than churned through every caller and its doc comment carries the
+correction.
+
+**TDD:** four pins in `test_footstep_sound.gd` — the clip is registered,
+a 7.5s recording is read as a window, two rolls read different moments,
+the latest window still fits inside the recording — plus the wiring half
+in `test_interaction_sfx_player.gd`: 24 crushes start in more than one
+place, and at least one reads deeper in than a whole window (not merely
+"not exactly zero", which passes vacuously because playback advances a
+hair on its own). All confirmed red against the unmeasured constant
+first, the key one failing with *"every crush started in the same
+place"* — the bug stated exactly. Also pinned: the crush's cap must stay
+inside the tail margin `offset_for` leaves, so neither can be moved into
+the other's way unnoticed. Audio suites 93/93.
+
+Fixed in passing, in the same file: two `assert_eq` comparisons against
+`volume_db` were failing on float precision (`1.1` reads back as
+`1.10000002384186` from a 32-bit engine property). These gains are
+MEASURED by `tools/prepare_footstep_oneshots.py` rather than chosen, so
+most are not exactly representable; both are `assert_almost_eq` now.
+
+🚧 **Not verified by ear.** Nothing in this environment can hear the
+result — what is tested is that the window varies, starts inside the
+recording, and never reads off its end.
 
 ## The mushroom-crush sound is sourced: crushed styrofoam (`concept/creature_and_footstep_audio.md`, "Mushroom crush", 2026-09-09)
 
@@ -28252,3 +28477,108 @@ Tests: `test_hero_sprite.gd` 49/49 (+3 new, 3 rewritten to the new contract),
 `test_character_sheet_portrait_scene.gd`,
 `test_companion_character_sheet_view.gd`, `test_interior_avatar.gd`,
 `test_house_interior_view.gd` 142/142 green against the change.
+
+Also run, and green: `test_village_renderer.gd`,
+`test_character_preview_diorama.gd`, `test_inventory_window.gd`,
+`test_main_menu.gd` — 308 of 309, the one failure being
+`diorama panel bottom (598) is cut off by the scroll area's own visible
+bottom (586)` in `test_main_menu.gd`. **Pre-existing, not from this change**:
+A/B'd in a clean worktree at `6c407024`, the commit immediately before it,
+where it fails with the identical 598/586. Recorded rather than quietly left,
+and deliberately not fixed here — the character creator's panel heights are
+live in another session's HUD pass.
+
+## A village does not build the player's Farm (`concept/npc_farm_production.md`, 2026-09-20)
+
+Reported live with one standing in a field, and then narrowed in as many
+words: *"it just should not spawn this weird looking npc with that 3 soil
+tiles"* — after explicitly declining the alternative of turning it into a
+real building.
+
+### ✅ What was actually spawning it
+
+`SettlementBuildDecision`. A `DECLINING` settlement's bread shortfall walks
+bread → bakery → flour → mill → wheat → **farm**, and `farm` is the root, so
+the village queued a `farm` construction project at
+`_settlement_build_origin_for` — *"the first free, buildable, clear cell
+spiralling out from the settlement's own centre"*. Completing it placed the
+one-tile placeable with a fence, and `_spawn_farmer_for` moved a
+`FarmerMarker` in beside it, which tends three plots at fixed offsets.
+
+That is the whole picture in the screenshot: a miniature farmhouse dropped in
+a field, one odd worker, three soil squares. Not a farmhouse bug, not a bed
+bug, not a soil bug — all three were the same spawn.
+
+### ✅ The Farm is the player's structure
+
+A village already grows wheat, and always did: `village_farms.md` gives the
+farmer and herbalist occupations real 3×2 `farmhouse` buildings with real
+fenced fields, worked by full `NpcMarker`s with a schedule, hunger and a
+wallet. The placeable Farm — one tile of ground, a narrow-purpose
+`FarmerMarker`, three fixed plots — was designed for a player who places it,
+fences it and staffs it. A settlement raising it stood a **second, redundant
+wheat mechanism next to the real one**, and the redundant one is what looked
+wrong.
+
+`SettlementBuildDecision.SETTLEMENT_WILL_NOT_RAISE` now refuses it. Refusing
+the root refuses the chain below it, which is the correct reading of
+`milling_and_baking.md`'s own pillar 1 rather than an exception to it: a
+Bakery raised with no Mill and no wheat is exactly the "stands waiting for
+flour that never comes" that doc exists to avoid. The refusal `continue`s
+rather than returns, so a smaller shortfall ranked below bread is still
+fixed — a village must not go idle over bread it cannot build its way to.
+
+**Give a village a farm and nothing above it changed.** Once one really
+stands there — the player's, or one they planned — the same shortfall raises
+the Mill and then the Bakery exactly as before. That is pinned by
+`test_with_a_farm_standing_the_chain_climbs_mill_then_bakery_at_distinct_cells`.
+
+### ⬜ The honest cost
+
+A `DECLINING` village short of bread can no longer build its way out of it
+unaided. Its wheat comes from whichever villagers hold the farmer occupation,
+and **nothing yet connects a bread shortfall to conscripting another one** —
+`SettlementGenerator._staff_food_producers` already knows how to make a
+farmer, it simply is not wired to shortfall. That is the real follow-up this
+leaves open, and it is a narrower, better-shaped problem than dropping a
+player's structure in a field.
+
+`mill`, `bakery`, `sagewerk` and `storage` are placeables on the same path
+and would look the same way if a shortfall reached them directly. Only `farm`
+is refused, because only `farm` was reported and only `farm` spawns a worker
+and plots of its own.
+
+### Seven tests rewritten to the new rule, not deleted
+
+`test_earth_chunk_manager_bread_chain.gd` was built end to end on "a hungry
+village raises a Farm". Each test was re-pointed rather than dropped:
+
+- The one that asserted a hungry village *starts* a farm now asserts it
+  raises nothing — keeping every bit of its setup, because the point is that
+  a village with every reason and every resource still does not.
+- The pipeline tests (one project not two, labour advancing in real time,
+  enough time completing and placing it, the chain climbing at distinct
+  cells) were re-pointed at the **Mill**, with a farm placed first. Their real
+  property was never about the Farm.
+- The Farm's own completion rule — a completed project places a fenced plot
+  a Farmer moves into — is unchanged and still covered, by starting the
+  project directly, which is what a plan the player raises does through the
+  same store.
+- `test_villagers_eat_the_merchants_meat_until_the_village_needs_a_farm`
+  keeps the half that was reported (*"the food should be actually consumed"*)
+  and now ends on the village being hungry again and still raising no farm,
+  then raising the Mill once given a farm.
+
+Tests: `test_settlement_build_decision.gd` 19/19 (+4 new, 1 rewritten),
+`test_earth_chunk_manager_bread_chain.gd` 10/11, and
+`test_construction_priority.gd`, `test_settlement_demand.gd`,
+`test_earth_chunk_manager_farm.gd`,
+`test_earth_chunk_manager_chain_logistics.gd`,
+`test_earth_chunk_manager_structure_workers.gd` 62/62.
+
+The one bread-chain failure is
+`test_spare_hands_gather_building_material_between_assessments` (stone and
+plant_fibre gathering staying at 0). **Pre-existing, not from this change**:
+A/B'd in a clean worktree at the commit before it, where it fails with the
+identical numbers at the identical two lines. Recorded rather than quietly
+left.

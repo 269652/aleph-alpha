@@ -6,6 +6,15 @@ surface boulder; this doc is everything *beneath* that -- the rock the
 player has to dig down into, and the four real, distinct depths that make
 digging down mean something different at every stage.
 
+**This doc is the rock. [underground.md](underground.md) is what the rock
+CONTAINS** -- the cave systems water carved into it, the chemosynthetic
+biosphere living down there, why depth is a trade rather than a tier, and
+what "an instance" means on a planet with one copy of itself. The two are
+deliberately split: everything here answers "what is this cell made of",
+everything there answers "what is this place". Where this doc says a layer
+is `SOLID`/`ORE`/`TUNNEL`, underground.md adds the fourth answer --
+`VOID`, natural passage nobody dug.
+
 ## Design pillars
 
 **Real strata, not a backdrop.** The underground is not a painted cave
@@ -25,7 +34,10 @@ revealed is a chamber of diggable rock instead of a floor and walls. Each
 shaft between one layer and the next is that exact mechanism applied again,
 recursively, one layer down.
 
-**Four real layers, not one depth number.** Real ground is not
+**Four real layers, not one depth number.** (What each layer is *for* --
+dig, explore, survive, exploit -- is [underground.md](underground.md)'s
+"each layer changes the verb" pillar; this doc specifies the rock those
+verbs act on.) Real ground is not
 uniform with depth: the first few metres are weathered mantle, then solid
 crustal rock, then rock under real pressure at real mine depths, and
 mineral veins concentrate wherever hot circulating fluids once passed
@@ -173,14 +185,28 @@ already uses (see `CLAUDE.md`'s house-style notes); there is no dedicated
   ore cells (`DiggableRock`, mirroring `MinableOre`'s shape exactly --
   real `WorldItemBus` drops, real removal, same hover-tooltip contract),
   and they despawn (without losing mined state) once the player leaves.
-- ⬜ The physical shaft/transition from topsoil/regolith down into bedrock,
-  and bedrock into deep bedrock, and deep bedrock into the hydrothermal
-  zone -- i.e. the engine-side "walk onto a shaft cell found while digging
-  layer N, reveal layer N+1" wiring. All three deeper layers' `Strata`
-  configuration, ore weighting, and hazard functions are fully implemented
-  and fully tested; the game does not yet let a player physically reach
-  them. A deliberately scoped, honestly documented gap -- see this
-  system's task scope note.
+- 🚧 The physical shaft/transition from topsoil/regolith down into
+  bedrock. **Substantially narrowed** by
+  [underground.md](underground.md)'s work rather than still wholly open:
+  the transition mechanism is now real and tested (a pitch is a place
+  where the deeper layer's own natural void opens under a cell you can
+  stand on -- `CaveDescent`), every loaded chunk now carries a real
+  bedrock `Strata` with a genuine cave system in it
+  (`EarthChunkManager.bedrock_strata_at`), and `try_descend`/`try_ascend`/
+  `_update_underground_reveal` all exist and are tested. What is still
+  missing is the binding: nothing in the game CALLS them, and the
+  underground is not yet rendered as one. See underground.md's own Status
+  for the honest, itemised remainder.
+- ⬜ Bedrock into deep bedrock, and deep bedrock into the hydrothermal
+  zone. Both deeper layers' `Strata` configuration, ore weighting and
+  hazard functions remain fully implemented and fully tested, and both
+  remain unreachable -- no per-chunk instance is built for either.
+- ✅ `Strata` now answers a fourth cell kind, `KIND_VOID`: natural cave
+  passage, distinct from the `KIND_TUNNEL` a player mined. Both are
+  walkable, and `Strata.is_walkable` is the one predicate for that. The
+  distinction is load-bearing rather than cosmetic -- nobody took ore out
+  of a natural void, and a tunnel is somebody's working, which is what
+  underground.md's mining-claim mechanism gets staked on.
 - ⬜ Collapse/foul-air/flood-risk are not yet triggered as live gameplay
   events (no actual cave-in, no actual air/water damage-over-time tick).
   The pure hazard functions exist and are tested; nothing calls them from

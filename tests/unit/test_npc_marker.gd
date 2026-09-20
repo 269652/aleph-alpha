@@ -1758,3 +1758,181 @@ func test_a_villager_who_can_walk_there_still_finishes_the_errand():
 			break
 	assert_gt(world.poured, 0, "a villager who could simply walk to the well never got there")
 	assert_lt(walked, 3999, "they were still walking after %.0f simulated seconds" % 400.0)
+# -- walls are solid to a villager too -------------------------------------
+#
+# Reported live: "NPCs walk straight through houses, ignoring the hitbox".
+# The hitbox was never broken -- every building really does get a
+# StaticBody2D (EarthChunkManager._spawn_building_node), which is exactly
+# what stops the PLAYER. But an NpcMarker is a plain Sprite2D assigning
+# `position` directly, so no physics body is ever consulted on its behalf.
+# The marker has to ASK -- and now both asks: the router plans around
+# walls, and _slid_along_walls refuses a step into one.
+
+
+## A world exposing just the two hooks NpcMarker duck-types on: the biome
+## read its water check makes, and the building lookup the new wall check
+## makes. Blocks one 3x3 house squarely between the villager and its home.
+class HouseInTheWayWorld:
+	extends RefCounted
+	var house_min := Vector2i(63, 60)
+	var house_max := Vector2i(65, 62)
+	var trespassed := false
+
+	func biome_at_global(_x: int, _y: int) -> String:
+		return "grassland"
+
+	func covers(tile: Vector2i) -> bool:
+		return (
+			tile.x >= house_min.x and tile.x <= house_max.x
+			and tile.y >= house_min.y and tile.y <= house_max.y
+		)
+
+	func piece_blocks_movement_at_global(x: int, y: int) -> bool:
+		return covers(Vector2i(x, y))
+
+
+func test_a_villager_never_walks_through_a_house():
+	var world := HouseInTheWayWorld.new()
+	marker.setup(world, TILE_SIZE)
+	# Standing west of the house, with home due east of it -- the straight
+	# line between the two runs right through the building.
+	marker.position = Vector2(61 * TILE_SIZE + 8, 61 * TILE_SIZE + 8)
+	marker.home_position = Vector2(68 * TILE_SIZE + 8, 61 * TILE_SIZE + 8)
+	marker.workspot_position = marker.home_position
+	marker.landmarks = {}
+	for i in 600:
+		marker._process(0.05)
+		var tile := Vector2i(
+			floori(marker.position.x / TILE_SIZE), floori(marker.position.y / TILE_SIZE)
+		)
+		assert_false(
+			world.covers(tile),
+			"the villager is standing inside the house at %s (step %d)" % [tile, i]
+		)
+		if world.covers(tile):
+			return  # one failure is the point; don't flood the report
+
+
+func test_a_villager_with_no_world_bound_walks_exactly_as_before():
+	# Fail-open, the same contract _is_in_water already keeps: an unbound
+	# marker (every pre-existing fixture) must be completely unaffected.
+	marker.position = Vector2(1000, 1000)
+	marker.home_position = Vector2(1000, 1200)
+	marker.workspot_position = marker.home_position
+	var before := marker.position
+	for i in 20:
+		marker._process(0.05)
+	assert_gt(
+		before.distance_to(marker.position), 0.0,
+		"an NPC with no world bound stopped moving"
+	)
+
+
+func test_a_villager_routes_around_a_house_and_actually_gets_home():
+	# The bug sliding could never fix (see docs/concept/navigation.md):
+	# the wall slide keeps a villager ALONG a wall it brushes, but a
+	# villager whose own doorstep sits directly behind its own house has
+	# nowhere to slide to and presses into the wall forever. Avoiding the
+	# house was never the hard part -- ARRIVING was.
+	var world := HouseInTheWayWorld.new()
+	marker.setup(world, TILE_SIZE)
+	marker.position = Vector2(61 * TILE_SIZE + 8, 61 * TILE_SIZE + 8)
+	marker.home_position = Vector2(68 * TILE_SIZE + 8, 61 * TILE_SIZE + 8)
+	marker.workspot_position = marker.home_position
+	marker.landmarks = {}
+	var closest := INF
+	for i in 2000:
+		marker._process(0.05)
+		closest = minf(closest, marker.position.distance_to(marker.home_position))
+		if closest <= TILE_SIZE:
+			break
+	assert_lte(
+		closest, float(TILE_SIZE),
+		"the villager never got home -- closest approach was %.1fpx, with a house in the way" % closest
+	)
+
+
+func test_routing_still_never_puts_a_villager_inside_the_house():
+	# The gate stays underneath the router: a route can go stale (a house
+	# raised across it mid-walk), and this is what guarantees a stale route
+	# still cannot end inside a wall.
+	var world := HouseInTheWayWorld.new()
+	marker.setup(world, TILE_SIZE)
+	marker.position = Vector2(61 * TILE_SIZE + 8, 61 * TILE_SIZE + 8)
+	marker.home_position = Vector2(68 * TILE_SIZE + 8, 61 * TILE_SIZE + 8)
+	marker.workspot_position = marker.home_position
+	marker.landmarks = {}
+	for i in 2000:
+		marker._process(0.05)
+		var tile := Vector2i(
+			floori(marker.position.x / TILE_SIZE), floori(marker.position.y / TILE_SIZE)
+		)
+		if world.covers(tile):
+			assert_false(true, "routing put the villager inside the house at %s" % tile)
+			return
+	assert_true(true)
+
+
+## A world with a river running north-south, crossable but slow, and a
+## cliff the villager must never climb. Exposes exactly the hooks
+## AgentPassability duck-types on.
+class RiverAndCliffWorld:
+	extends RefCounted
+	var river_x := 64
+	var river_gap_y := 70   # the one dry tile in the river's course
+	var cliff_x := 66
+
+	func biome_at_global(_x: int, _y: int) -> String:
+		return "grassland"
+
+	func piece_blocks_movement_at_global(_x: int, _y: int) -> bool:
+		return false
+
+	func slope_at_global(x: int, _y: int) -> float:
+		return 70.0 if x == cliff_x else 0.0
+
+	func is_river_at_global(x: int, y: int) -> bool:
+		return x == river_x and y != river_gap_y
+
+	func is_lake_at_global(_x: int, _y: int) -> bool:
+		return false
+
+
+func test_a_villager_prefers_the_dry_crossing_over_wading():
+	# Water is costly, not blocked (creatures must stand on it to drink,
+	# and both they and villagers already swim), so the router should route
+	# THROUGH the one dry gap rather than wading straight across.
+	var world := RiverAndCliffWorld.new()
+	marker.setup(world, TILE_SIZE)
+	marker.position = Vector2(62 * TILE_SIZE + 8, 70 * TILE_SIZE + 8)
+	marker.home_position = Vector2(65 * TILE_SIZE + 8, 70 * TILE_SIZE + 8)
+	marker.workspot_position = marker.home_position
+	marker.landmarks = {}
+	var waded := false
+	for i in 400:
+		marker._process(0.05)
+		var tile := Vector2i(
+			floori(marker.position.x / TILE_SIZE), floori(marker.position.y / TILE_SIZE)
+		)
+		if world.is_river_at_global(tile.x, tile.y):
+			waded = true
+		if marker.position.distance_to(marker.home_position) <= TILE_SIZE:
+			break
+	assert_false(waded, "the villager waded the river with a dry crossing right there")
+
+
+func test_a_villager_never_climbs_a_cliff():
+	# Slope is absolute, unlike water: TerrainPassability.is_passable says
+	# 70 degrees is not climbable, so no step may ever land there.
+	var world := RiverAndCliffWorld.new()
+	marker.setup(world, TILE_SIZE)
+	marker.position = Vector2(65 * TILE_SIZE + 8, 70 * TILE_SIZE + 8)
+	marker.home_position = Vector2(68 * TILE_SIZE + 8, 70 * TILE_SIZE + 8)
+	marker.workspot_position = marker.home_position
+	marker.landmarks = {}
+	for i in 400:
+		marker._process(0.05)
+		var tile_x := floori(marker.position.x / TILE_SIZE)
+		assert_ne(tile_x, world.cliff_x, "the villager walked onto the cliff at step %d" % i)
+		if tile_x == world.cliff_x:
+			return

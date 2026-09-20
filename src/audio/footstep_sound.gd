@@ -212,16 +212,33 @@ const PITCH_VARIATION := 0.06
 ## reading steps off the end of itself.
 const CLIP_LENGTH_SECONDS := {
 	FALLBACK_CLIP_PATH: 3.64,
+	# 7.54s of continuous crinkling styrofoam -- see MUSHROOM_CRUSH_CLIP_PATH
+	# below for why the clip is a field recording rather than a trimmed
+	# one-shot. Measured off the real file, like every length here, and pinned
+	# against it by test_the_pinned_clip_lengths_are_the_real_files_own.
+	#
+	# Reported live: "Mushroom crush sounds are gone". It was missing from
+	# this dictionary, so its length read as the 0.0 default, is_walking_bed
+	# called a 7.5-second recording a one-shot, offset_for returned 0.0 for
+	# every roll, and every crush played the same opening 0.3s of lead-in --
+	# before the performer has touched the styrofoam. Silence, deterministically.
+	MUSHROOM_CRUSH_CLIP_PATH: 7.54,
 }
 
 
-## Whether this clip is a recording of somebody WALKING, which one step is a
-## window into -- rather than a single recorded step, which is played whole.
+## Whether this clip is a long CONTINUOUS recording, which one event is a
+## window into -- rather than a single recorded event, which is played whole.
+##
+## Named for the case it was written for (a recording of somebody walking),
+## but the rule is about length, not about walking: the mushroom crush's own
+## 7.5 seconds of continuous crinkling is read the same way, one crush at a
+## time. The name is left alone rather than churned through every caller;
+## this comment is the correction.
 ##
 ## Twice the step window is the line: a clip that cannot hold two
-## non-overlapping steps has no second step to offer, so there is nothing to
+## non-overlapping events has no second one to offer, so there is nothing to
 ## vary and reading it from anywhere but its own beginning would only clip
-## the one step it has.
+## the one event it has.
 static func is_walking_bed(clip_path: String) -> bool:
 	return float(CLIP_LENGTH_SECONDS.get(clip_path, 0.0)) > STEP_WINDOW_SECONDS * 2.0
 
@@ -229,9 +246,13 @@ static func is_walking_bed(clip_path: String) -> bool:
 ## Where in the clip this step starts. `roll` is [0, 1] -- the caller's own
 ## randomness, kept out of here so this stays pure and testable.
 ##
-## Zero for a real one-shot: it is already the step. For a bed, anywhere
-## that still leaves a whole window of recording ahead of it, so a step
-## never fades out because it ran off the end.
+## Zero for a real one-shot: it is already the step. For a long recording,
+## anywhere that still leaves a whole window of recording ahead of it, so an
+## event never fades out because it ran off the end. The margin left is
+## STEP_WINDOW_SECONDS, which is longer than the mushroom crush's own cap
+## (InteractionSfxPlayer.MUSHROOM_CRUSH_MAX_DURATION_SECONDS) -- pinned by
+## test_the_crush_cap_fits_inside_the_window_margin_offset_for_leaves, so
+## neither can be moved into the other's way unnoticed.
 static func offset_for(clip_path: String, roll: float) -> float:
 	if not is_walking_bed(clip_path):
 		return 0.0

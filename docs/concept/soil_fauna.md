@@ -390,6 +390,23 @@ flight, `SeedCaching`'s rodent scatter-hoard, and now this).
   only source of ground SEED in this game, only grows on grassland, so a
   forest/rainforest mound cannot forage grass seed — but it now has a second,
   real forage target instead of sitting idle (see "Windfall foraging" below).
+- **A mound is excavated soil, so water is not soil.** A river or lake in
+  this world leaves the biome array completely untouched -- it is an
+  overlay flag, never an eighth biome (see
+  [rivers.md](rivers.md)'s Rendering section) -- so the soil-biome check
+  above cannot see water on its own, and for a long time it did not:
+  reported live, with a screenshot, as mounds sitting in open water.
+  Measured at the reported coordinates, **both** of that chunk's mounds
+  were in water, on a chunk that was 63% river/lake by area and contained
+  no ocean biome at all. `AntColony` now takes the same
+  `Chunk.blocks_ground_cover` mask (river OR lake) that `TallGrass`
+  already reads to keep grass out of the water, as an optional trailing
+  parameter so every existing caller is untouched. It gates
+  `is_valid_mound_site` as well as initial seeding, which matters because
+  budding goes through that predicate -- gating seeding alone would stop
+  mounds *starting* in the river while still letting a colony creep into
+  it over time.
+
 - **A single forager ant cannot carry off an intact fallen nut or dried
   fruit the way a squirrel or bird can.** Real ants interacting with fallen
   fruit/nut debris are documented almost entirely as scavengers/decomposers

@@ -11,6 +11,7 @@ extends GutTest
 const ViewMode = preload("res://src/gameplay/view_mode.gd")
 const World = preload("res://scenes/world.gd")
 const Keybindings = preload("res://src/gameplay/keybindings.gd")
+const BlueprintPaletteModel = preload("res://src/ui/blueprint_palette_model.gd")
 
 
 func _source() -> String:
@@ -49,7 +50,24 @@ func test_what_each_mode_shows_is_read_from_view_mode_not_reimplemented():
 	var body := _function_body("_apply_view_mode")
 	assert_true(body.contains("ViewMode.shows_hotbar("), "the hotbar's visibility comes from the model")
 	assert_true(body.contains("ViewMode.shows_palette("), "and so does the palette's")
-	assert_true(body.contains("ViewMode.toggle_label("), "and the button's own label")
+	# The premise changed with the switch (docs/concept/hud.md "The planner
+	# toggle is a switch"): the caption used to be derived from the mode
+	# (ViewMode.toggle_label, reading "Planner Mode" while you were in RPG
+	# mode). It is a CONSTANT now, because the switch carries the state -- so
+	# what _apply_view_mode must read from the model is the switch's POSITION,
+	# and shows_palette above is that same read.
+	assert_true(
+		body.contains("ViewMode.SWITCH_LABEL"),
+		"the caption is the model's constant, not a second copy of the word"
+	)
+	assert_false(
+		body.contains("ViewMode.toggle_label("),
+		"a switch's caption must not change with the mode -- the switch shows it"
+	)
+	assert_true(
+		body.contains("_view_mode_switch.set_on("),
+		"the switch has to follow a mode flipped by a keypress, not only by a click"
+	)
 
 
 ## Pillar 4: the toggle changes what the player COMMANDS, never what the
@@ -328,3 +346,99 @@ func test_the_wireframe_prompt_reads_both_keys_live():
 	assert_true(body.contains('keycode_for("primary_action")'))
 	assert_true(body.contains('keycode_for("secondary_action")'))
 	assert_true(body.contains("display_name_of("), "and it names what is planned there")
+
+
+# -- the build palette (docs/concept/planner_mode.md, "The build palette") --
+#
+# Asked directly, with a screenshot of ten identical text buttons in a row:
+# "Make the Planner / Building HUD more professional and more like Anno
+# 1806. Add Icons not only text".
+#
+# The menu's own behaviour -- tabs, icons, the armed slot, the footer -- is
+# BlueprintPaletteView's, driven for real in test_blueprint_palette_view.gd
+# rather than read out of World's source. What is pinned here is only what
+# is genuinely World's: that it builds that view rather than a menu of its
+# own, and that the two numbers the view is not allowed to invent arrive
+# from the same places the raising path reads them from.
+
+
+func test_the_palette_is_the_shared_view_not_a_menu_built_here():
+	var body := _function_body("_build_blueprint_palette")
+	assert_true(body.contains("BlueprintPaletteView.new()"), body)
+	assert_false(
+		_source().contains("func _palette_blueprint_ids"),
+		"the old flat list of text buttons is deleted rather than left beside it"
+	)
+	assert_false(
+		_source().contains("func _make_blueprint_slot"),
+		"and World builds no slots of its own"
+	)
+
+
+## The two numbers on a card come from the same calls the RAISING path
+## makes -- the real item catalog for material names, and the ledger's own
+## labour requirement -- so the menu cannot quote a price or a job size the
+## site then disagrees with.
+func test_the_card_quotes_the_same_cost_and_hours_the_site_will():
+	var body := _function_body("_build_blueprint_palette")
+	assert_true(body.contains("_item_catalog.display_name_of"), body)
+	assert_true(
+		body.contains("_chunk_manager.build_labor_hours_for("),
+		"the same requirement PlanRaising.is_laid_by_hand is asked about: %s" % body
+	)
+
+
+## hud.md's pillar 1: the palette carries meaning, so it wears the one
+## shared themed card rather than a look of its own.
+func test_the_palette_wears_the_shared_theme():
+	assert_true(_function_body("_build_blueprint_palette").contains("_ui_theme"))
+
+
+## Arming a blueprint is the player's choice reaching the cursor, so the
+## view announces and World decides -- the view never plans anything
+## itself (pillar 1).
+func test_arming_a_slot_reaches_the_rest_of_planner_mode():
+	var body := _function_body("_build_blueprint_palette")
+	assert_true(body.contains("blueprint_selected.connect(_on_blueprint_selected)"), body)
+	assert_true(
+		_function_body("_on_blueprint_selected").contains("_update_plan_cursor()"),
+		"and the cursor follows it"
+	)
+
+
+## Leaving planner mode clears the selection (_apply_view_mode's own rule),
+## so the palette has to be told, or a slot is left looking stuck down over
+## an unarmed cursor.
+func test_what_the_palette_says_is_armed_clears_with_the_selection():
+	var body := _function_body("_apply_view_mode")
+	assert_true(body.contains('_selected_blueprint = ""'), "the premise: it still clears")
+	assert_true(body.contains("_update_palette_selection()"), body)
+	assert_true(
+		_function_body("_update_palette_selection").contains("set_selected(_selected_blueprint)"),
+		"and it is told the state the rest of the mode acts on, not a second one"
+	)
+
+
+## A slot's width is measured from the names it holds now
+## (BlueprintPaletteView.slot_size_for), so the card's own width has to
+## follow its content -- a card pinned to a written-down width would just
+## clip the wider slots instead of the names, which is the same defect one
+## level up.
+func test_the_card_fits_the_menu_rather_than_a_written_down_width():
+	var body := _function_body("_fit_blueprint_palette")
+	assert_true(body.contains("get_combined_minimum_size()"), body)
+	assert_false(
+		_source().contains("const PALETTE_SIZE"),
+		"the fixed card size is gone rather than left beside the measured one"
+	)
+
+
+## Moving the UI-scale slider changes font sizes under a layout that has
+## already been measured (UiScale scales fonts, deliberately not card
+## widths), so the palette has to measure again or every slot keeps the
+## width it had at the old size.
+func test_the_palette_is_re_measured_when_the_ui_scale_changes():
+	assert_true(
+		_function_body("_apply_ui_scale").contains("_blueprint_palette.refresh()"),
+		_function_body("_apply_ui_scale")
+	)

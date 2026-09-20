@@ -17,6 +17,9 @@ const NpcEconomy = preload("res://src/world/npc_economy.gd")
 const NpcInstructionEvaluator = preload("res://src/world/npc_instruction_evaluator.gd")
 const CharacterView = preload("res://scenes/character_view.gd")
 const CreaturePerception = preload("res://src/gameplay/creature_perception.gd")
+const AgentPassability = preload("res://src/gameplay/agent_passability.gd")
+const TerrainPassability = preload("res://src/gameplay/terrain_passability.gd")
+const TileRouter = preload("res://src/gameplay/tile_router.gd")
 const ForagerBehavior = preload("res://src/gameplay/forager_behavior.gd")
 const VillageFarm = preload("res://src/gameplay/village_farm.gd")
 const BuildingCatalog = preload("res://src/gameplay/building_catalog.gd")
@@ -131,6 +134,37 @@ var _errand_location_tag := ""
 ## current_location_tag reports when no errand is running.
 var _last_location_tag := "home"
 var _tile_size := 16
+
+## Which tiles this villager may not step into -- building footprints (see
+## AgentPassability). Invalid until setup() binds a world that can answer,
+## and left invalid for one that cannot, so an unbound marker walks exactly
+## as it always did.
+var _wall_tiles := Callable()
+
+## How much A* a single villager may spend on one route (see
+## docs/concept/navigation.md). A chunk is 32x32, so 1024 tiles is a full
+## chunk-wide search; this allows that plus headroom for re-expansion, and
+## caps the worst case directly rather than trusting the goal to be near.
+const ROUTE_NODE_BUDGET := 1500
+
+## The smallest gap between two recomputes of a route. A villager walking
+## to a fixed doorstep pays for ONE search; this only matters for a moving
+## destination (a hunter's quarry), where the goal tile can change every
+## frame and an unthrottled A* would run every frame with it.
+const ROUTE_RECOMPUTE_SECONDS := 0.5
+
+## Tiles still to walk (TileRouter), the destination they were computed
+## for, and time since that computation. Empty route means "no detour
+## needed or none found" -- either way the villager walks straight at its
+## target and _slid_along_walls keeps it out of walls.
+var _route: Array = []
+var _route_goal_tile := Vector2i(2147483647, 2147483647)
+var _route_age := 0.0
+
+## How much longer each tile takes to cross than open flat ground (see
+## AgentPassability) -- water is slow but crossable, so a villager routes
+## round a river when there is a dry way and wades when there is not.
+var _route_cost := Callable()
 var _perception := CreaturePerception.new()
 
 ## docs/concept/npc.md "Needs and the local production economy": this
@@ -402,6 +436,14 @@ func set_planner(planner: NpcPlanner.Planner) -> void:
 func setup(world, tile_size: int) -> void:
 	_world = world
 	_tile_size = tile_size
+	# Built ONCE here, not per frame: this predicate is called up to three
+	# times per villager per frame by the router, and allocating a
+	# fresh lambda each time is exactly the kind of per-frame churn the
+	# creature-blocker cache already exists to avoid. Invalid when the
+	# world cannot answer, which the gate reads as "nothing is solid" --
+	# the same duck-typed fail-open _is_in_water makes.
+	_wall_tiles = AgentPassability.blocked_predicate_for(world)
+	_route_cost = AgentPassability.cost_scale_for(world)
 
 
 ## Builds this villager's NpcEconomy from its already-assigned `identity`
@@ -620,11 +662,25 @@ func _process(delta: float) -> void:
 	var running := _is_chasing_at_a_run(quarry_target)
 	condition.advance(delta, economy.needs.hunger if economy != null else 0.0, running)
 	var before := position
-	# Walls are asked about here, once, on the step actually being taken --
-	# the same ask-before-you-step shape CreatureMarker uses for rails and
-	# walls, and at the same cost.
+	# Two layers, and the order matters.
+	#
+	# ROUTE first: the slide below is a local reflex and cannot detour, so
+	# a villager whose doorstep sits behind its own house has nowhere to
+	# slide to and would press into the wall forever ("add proper
+	# wayfinding / routing"). _steer_toward returns the next waypoint of a
+	# real route when one is needed, or `target` itself when the way is
+	# clear.
+	#
+	# SLIDE second, and it stays underneath rather than being replaced: a
+	# route can go stale mid-walk (a house raised across it), and
+	# _slid_along_walls is what guarantees a stale route still never ends
+	# inside a wall. It also knows about farm rails, which the router does
+	# not, and it asks the same question the wall's own collision body is
+	# spawned from -- so a door and a floor stay walkable and going indoors
+	# is untouched.
+	var steer := _steer_toward(target, delta)
 	position = _slid_along_walls(
-		position, position.move_toward(target, (RUN_SPEED if running else WALK_SPEED) * delta)
+		position, position.move_toward(steer, (RUN_SPEED if running else WALK_SPEED) * delta)
 	)
 	_update_animation(position - before)
 	# Hidden once actually arrived home on a "home"-tagged entry -- a house
@@ -1346,12 +1402,22 @@ var _at_home := false
 ## spawned from, so what stops a player and what stops a villager can never
 ## disagree. A DOOR and a FLOOR are walkable pieces, so going indoors is
 ## untouched.
+##
+## GROUND TOO STEEP TO CLIMB is refused here too. The router plans around a
+## cliff, but a route is only a plan: when none exists (the goal is behind
+## the cliff, or the budget ran out) the villager falls back to walking
+## straight at its target, and without this check that fallback walked up
+## the cliff. Caught by test_a_villager_never_climbs_a_cliff during the
+## reconciliation with main -- the slide is the ONE place every step
+## passes through, so terrain belongs in it rather than in a second gate
+## beside it.
 func _slid_along_walls(from: Vector2, to: Vector2) -> Vector2:
 	if _world == null or from == to:
 		return to
 	if (
 		not _world.has_method("piece_blocks_movement_at_global")
 		and not _world.has_method("fence_blocks_step_global")
+		and not _world.has_method("slope_at_global")
 	):
 		return to
 	if not _blocked_step(from, to):
@@ -1373,6 +1439,10 @@ func _slid_along_walls(from: Vector2, to: Vector2) -> Vector2:
 ## field stays ordinary ground a villager may walk along.
 func _blocked_step(from: Vector2, point: Vector2) -> bool:
 	var tile := Vector2i(floori(point.x / _tile_size), floori(point.y / _tile_size))
+	if _world.has_method("slope_at_global") and not TerrainPassability.is_passable(
+		_world.slope_at_global(tile.x, tile.y)
+	):
+		return true
 	if (
 		_world.has_method("piece_blocks_movement_at_global")
 		and _world.piece_blocks_movement_at_global(tile.x, tile.y)
@@ -1526,6 +1596,45 @@ func _sync_market_stand(is_working: bool) -> void:
 		return
 	market_stand.visible = stand_is_up(
 		is_working, position.distance_to(market_stand.position), market_stand_reach()
+	)
+
+
+## Where to actually aim this frame: the next waypoint of a real route
+## when one is needed, or `target` itself when the way is clear, no route
+## was found, or this villager has no world to ask.
+##
+## Falling back to `target` on a failed search is deliberate. A route that
+## cannot be found (goal unreachable, or budget spent) must not stop a
+## villager walking -- it only means they walk the old, direct way, with
+## the gate keeping them out of walls exactly as before.
+func _steer_toward(target: Vector2, delta: float) -> Vector2:
+	_route_age += delta
+	if not _wall_tiles.is_valid() or _tile_size <= 0:
+		return target
+	var here := _tile_of(position)
+	var goal := _tile_of(target)
+	if here == goal:
+		return target  # final approach, inside the destination tile
+	if goal != _route_goal_tile and _route_age >= ROUTE_RECOMPUTE_SECONDS:
+		_route_goal_tile = goal
+		_route_age = 0.0
+		_route = TileRouter.route(here, goal, _wall_tiles, ROUTE_NODE_BUDGET, _route_cost)
+	# Drop whatever has already been walked. A villager can cross more than
+	# one waypoint in a frame at RUN_SPEED, so this is a loop, not an if.
+	while not _route.is_empty() and _tile_of(position) == _route[0]:
+		_route.remove_at(0)
+	if _route.is_empty():
+		return target
+	return _tile_centre(_route[0])
+
+
+func _tile_of(point: Vector2) -> Vector2i:
+	return Vector2i(floori(point.x / _tile_size), floori(point.y / _tile_size))
+
+
+func _tile_centre(tile: Vector2i) -> Vector2:
+	return Vector2(
+		tile.x * _tile_size + _tile_size * 0.5, tile.y * _tile_size + _tile_size * 0.5
 	)
 
 

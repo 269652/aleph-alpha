@@ -36,6 +36,10 @@ const StoneRenderer = preload("res://src/rendering/stone_renderer.gd")
 const GeologyRenderer = preload("res://src/rendering/geology_renderer.gd")
 const Strata = preload("res://src/world/strata.gd")
 const CaveEntrancePlacement = preload("res://src/world/cave_entrance_placement.gd")
+const CaveSiting = preload("res://src/world/cave_siting.gd")
+const CaveSignals = preload("res://src/world/cave_signals.gd")
+const CaveDescent = preload("res://src/world/cave_descent.gd")
+const CavePattern = preload("res://src/world/cave_pattern.gd")
 const TallGrass = preload("res://src/world/tall_grass.gd")
 const DecorationLod = preload("res://src/rendering/decoration_lod.gd")
 const DisplayScaling = preload("res://src/rendering/display_scaling.gd")
@@ -599,6 +603,44 @@ var _cave_entrance_markers: Dictionary = {}  # Vector2i chunk_coord -> Array[Nod
 var _revealed_cave_entrance_tile = null  # Vector2i global tile, or null
 var _revealed_cave_nodes: Array = []
 
+# -- the underground proper (see docs/concept/underground.md) ----------------
+# The bedrock layer, which unlike topsoil/regolith carries a real cave
+# system: a Palmer pattern sited from this chunk's own lithology, recharge
+# and hydrology (see _cave_pattern_for_chunk), whose natural VOID cells are
+# passage the player can walk rather than rock to dig. Most chunks get
+# PATTERN_NONE and stay solid rock, which is the honest majority answer on
+# a planet whose bedrock is ~85% insoluble.
+var _bedrock_strata: Dictionary = {}  # Vector2i chunk_coord -> Strata
+
+## Which underground layer the player is currently in, or "" while on the
+## surface. Deliberately a single value rather than per-entity: only the
+## player descends today.
+var player_cave_layer := ""
+
+## The tile whose surroundings are currently revealed underground, and the
+## nodes revealing them -- same "entry-lifetime reveal" split as
+## _revealed_cave_entrance_tile above, one layer down.
+var _revealed_underground_tile = null
+var _revealed_underground_nodes: Array = []
+
+## The pitch the player most recently used. Held until they step off it so
+## a descent does not immediately re-trigger as an ascent and oscillate.
+var _pitch_in_use = null
+
+var _cave_siting := CaveSiting.new()
+var _cave_signals := CaveSignals.new()
+var _cave_descent := CaveDescent.new()
+
+## How far to look for ocean when siting a cave system. Comfortably past
+## CaveRecharge.MIXING_ZONE_COAST_KM at this world's ~1km/tile map scale,
+## so a coastal setting is never missed by the scan itself.
+const CAVE_OCEAN_SCAN_RADIUS_TILES := 14
+
+## How far to look for a surface watercourse that could sink into soluble
+## rock. A real swallet forms where a stream MEETS karst, which is a local
+## relationship, not a regional one.
+const CAVE_SINKING_CHANNEL_SCAN_RADIUS_TILES := 4
+
 ## Fallback half-extent for a solid prop carrying no CollisionShape2D of its
 ## own to measure -- see solid_obstacles_near.
 const DEFAULT_OBSTACLE_RADIUS := 8.0
@@ -617,6 +659,106 @@ const DEFAULT_OBSTACLE_RADIUS := 8.0
 ## bookkeeping (see docs/concept/geology.md).
 func strata_at(chunk_coord: Vector2i) -> Strata:
 	return _topsoil_strata.get(chunk_coord)
+
+
+## The bedrock Strata sim for a loaded chunk, or null if that chunk isn't
+## loaded. Unlike topsoil/regolith this one carries a real cave system
+## (see docs/concept/underground.md).
+func bedrock_strata_at(chunk_coord: Vector2i) -> Strata:
+	return _bedrock_strata.get(chunk_coord)
+
+
+## The Strata for a named layer of a loaded chunk, or null. The dispatch
+## the descent logic walks -- only the two shallowest layers are built
+## today (see underground.md's Status).
+func strata_for_layer(layer: String, chunk_coord: Vector2i) -> Strata:
+	if layer == Strata.LAYER_TOPSOIL_REGOLITH:
+		return _topsoil_strata.get(chunk_coord)
+	if layer == Strata.LAYER_BEDROCK:
+		return _bedrock_strata.get(chunk_coord)
+	return null
+
+
+## Which Palmer cave pattern this chunk's bedrock carries, sited from the
+## world's own readings: real lithology at the chunk centre, real slope as
+## relief, a real nearby watercourse as a sinking channel, biome-derived
+## precipitation seasonality, hydrothermal proximity, and scanned ocean
+## distance (see CaveSignals, which does the unit translation, and
+## CaveSiting, which composes the decision).
+func _cave_pattern_for_chunk(chunk_coord: Vector2i) -> String:
+	if generator == null:
+		return CavePattern.PATTERN_NONE
+	var centre: Vector2i = chunk_coord * CHUNK_SIZE + Vector2i(CHUNK_SIZE / 2, CHUNK_SIZE / 2)
+	var relief: float = _cave_signals.relief_from_slope_degrees(
+		generator.slope_at_global(centre.x, centre.y)
+	)
+	var seasonality: float = _cave_signals.seasonality_for_biome(
+		generator.biome_at_global(centre.x, centre.y)
+	)
+	var hydrothermal: float = _cave_signals.hydrothermal_proximity_at(centre.x, centre.y)
+	var ocean_tiles: float = WaterProximity.nearest_distance_tiles(
+		centre.x, centre.y, CAVE_OCEAN_SCAN_RADIUS_TILES,
+		func(x: int, y: int) -> bool: return generator.biome_at_global(x, y) == "ocean"
+	)
+	var channel_tiles: float = WaterProximity.nearest_distance_tiles(
+		centre.x, centre.y, CAVE_SINKING_CHANNEL_SCAN_RADIUS_TILES,
+		func(x: int, y: int) -> bool: return generator.is_river_at_global(x, y)
+	)
+	return _cave_siting.pattern_at(
+		centre.x, centre.y, relief,
+		is_finite(channel_tiles), seasonality, hydrothermal,
+		_cave_signals.coast_distance_km(ocean_tiles)
+	)
+
+
+## Whether a real pitch drops from the player's current layer into the one
+## below at this tile -- somewhere to stand here, and natural passage
+## opening underneath (see docs/concept/underground.md "Descent: a pitch,
+## not a staircase").
+func pitch_at(global_tile: Vector2i) -> bool:
+	var upper := _current_underground_layer()
+	var lower := _cave_descent.layer_below(upper)
+	if lower == "":
+		return false
+	var chunk_coord := _chunk_coord_for_tile(global_tile)
+	var above: Strata = strata_for_layer(upper, chunk_coord)
+	var below: Strata = strata_for_layer(lower, chunk_coord)
+	if above == null or below == null:
+		return false
+	var local := _local_coord(global_tile.x, global_tile.y)
+	return _cave_descent.is_pitch(above.cell_kind_at(local), below.cell_kind_at(local))
+
+
+## Takes the player one layer down if this tile really is a pitch and they
+## are carrying a light. Returns whether they descended.
+func try_descend(global_tile: Vector2i, light_sources: int) -> bool:
+	var upper := _current_underground_layer()
+	var lower := _cave_descent.layer_below(upper)
+	if lower == "" or not pitch_at(global_tile):
+		return false
+	if light_sources < CaveDescent.MINIMUM_LIGHT_SOURCES:
+		return false
+	player_cave_layer = lower
+	_pitch_in_use = global_tile
+	return true
+
+
+## Takes the player one layer back up. Always available from a layer that
+## has one above it -- climbing out is never gated, since gating the way
+## out is how a player gets stranded rather than challenged.
+func try_ascend() -> bool:
+	if player_cave_layer == "":
+		return false
+	player_cave_layer = _cave_descent.layer_above(player_cave_layer)
+	if player_cave_layer == Strata.LAYER_TOPSOIL_REGOLITH:
+		player_cave_layer = ""
+	return true
+
+
+## The layer the player's feet are in for descent purposes. On the surface
+## that is the topsoil/regolith layer they would be digging into.
+func _current_underground_layer() -> String:
+	return player_cave_layer if player_cave_layer != "" else Strata.LAYER_TOPSOIL_REGOLITH
 
 
 func solid_obstacles_near(at: Vector2, radius: float) -> Array:
@@ -1272,6 +1414,7 @@ func update(player_global_tile: Vector2i) -> void:
 	var ground_room := _update_roof_visibility(player_global_tile)
 	_update_upper_floor_visibility(player_global_tile, ground_room)
 	_update_geology_reveal(player_global_tile)
+	_update_underground_reveal(player_global_tile)
 
 
 ## The decoration-LOD and grass tile-precise-culling bookkeeping update()
@@ -1423,6 +1566,7 @@ func update_with_progress(player_global_tile: Vector2i, on_progress: Callable = 
 	var ground_room := _update_roof_visibility(player_global_tile)
 	_update_upper_floor_visibility(player_global_tile, ground_room)
 	_update_geology_reveal(player_global_tile)
+	_update_underground_reveal(player_global_tile)
 
 
 func is_chunk_loaded(chunk_coord: Vector2i) -> bool:
@@ -7480,6 +7624,11 @@ const CAVE_ENTRY_TRIGGER_RADIUS := 1
 ## wired here today (_topsoil_strata); deeper layers are not yet reachable
 ## (see geology.md's Status).
 func _update_geology_reveal(player_global_tile: Vector2i) -> void:
+	if player_cave_layer != "":
+		# Underground, the surface entrance's own chamber is not what is
+		# around the player any more -- _update_underground_reveal owns the
+		# reveal from here down.
+		return
 	# Nine biome reads and entrance rolls a frame for a player who has not
 	# moved (FPS regression round 15) -- entrance placement is a pure
 	# function of the tile, so the answer is kept until the tile changes.
@@ -7514,6 +7663,40 @@ func _update_geology_reveal(player_global_tile: Vector2i) -> void:
 		_entities_parent, strata, local_cell, entrance_chunk_coord * CHUNK_SIZE, TerrainRenderer.TILE_SIZE
 	)
 	_revealed_cave_entrance_tile = entrance_tile
+
+
+## Reveals the player's immediate surroundings in whichever underground
+## layer they are currently standing in, and clears them the moment they
+## climb back out -- the same reveal-on-entry mechanism
+## _update_geology_reveal uses at a surface cave mouth, applied
+## recursively one layer down exactly as geology.md said it would be.
+##
+## The difference is what the reveal is CENTRED on. A surface chamber is
+## centred on the cave entrance, because that is the fixed thing the
+## player walked up to; underground there is no entrance to key off, so it
+## follows the player. Natural passage is skipped by reveal_chamber
+## itself (see GeologyRenderer), so what spawns is the rock AROUND the
+## passage, not in it.
+func _update_underground_reveal(player_global_tile: Vector2i) -> void:
+	if player_cave_layer != "" and player_global_tile == _revealed_underground_tile:
+		return  # nothing changed -- still standing in the same place
+	for node in _revealed_underground_nodes:
+		if is_instance_valid(node):
+			node.free()
+	_revealed_underground_nodes = []
+	_revealed_underground_tile = null
+	if player_cave_layer == "":
+		return
+	var chunk_coord := _chunk_coord_for_tile(player_global_tile)
+	var strata: Strata = strata_for_layer(player_cave_layer, chunk_coord)
+	if strata == null:
+		return  # the player's own chunk isn't loaded (yet) -- nothing to reveal
+	_revealed_underground_nodes = _geology_renderer.reveal_chamber(
+		_entities_parent, strata,
+		_local_coord(player_global_tile.x, player_global_tile.y),
+		chunk_coord * CHUNK_SIZE, TerrainRenderer.TILE_SIZE
+	)
+	_revealed_underground_tile = player_global_tile
 
 
 ## The global tile of a real cave entrance within CAVE_ENTRY_TRIGGER_RADIUS
@@ -15267,6 +15450,23 @@ func remove_building(chunk_coord: Vector2i, origin_local: Vector2i) -> bool:
 	return true
 
 
+## Whether ANY building stands on this cell -- the cheap half of
+## building_at_global, for a caller that only needs the yes/no.
+##
+## Worth its own function rather than `not building_at_global(...).is_empty()`:
+## that one resolves the owning origin and then `duplicate()`s the whole
+## record, and this is called per villager per frame by AgentPassability's
+## own predicate (see NpcMarker.setup). A footprint tile always belongs to
+## a real building, so testing the tile id alone is exact as well as
+## allocation-free.
+func has_building_at_global(global_x: int, global_y: int) -> bool:
+	var chunk: Chunk = _loaded_chunks.get(_chunk_coord_for_tile(Vector2i(global_x, global_y)))
+	if chunk == null:
+		return false
+	var tile_id: String = chunk.modifications.get(_local_coord(global_x, global_y), "")
+	return BuildingCatalog.has_building(tile_id) or tile_id == BuildingCatalog.FOOTPRINT_TILE_ID
+
+
 ## The full building record standing on `(global_x, global_y)` -- ANY
 ## footprint cell answers, not just the anchor -- with `chunk_coord` and
 ## `origin_local` merged in so a caller can act on it (remove it, compute
@@ -16957,6 +17157,12 @@ func _load_chunk(chunk_coord: Vector2i) -> void:
 	# re-revealed later still shows real mined tunnels; only ever mutated
 	# by _update_geology_reveal's spawned DiggableRock nodes.
 	_topsoil_strata[chunk_coord] = Strata.new(Strata.LAYER_TOPSOIL_REGOLITH, chunk_coord * CHUNK_SIZE)
+	# The bedrock beneath it, with whatever cave system this chunk's own
+	# lithology and hydrology actually site there (usually none -- see
+	# docs/concept/underground.md).
+	_bedrock_strata[chunk_coord] = Strata.new(
+		Strata.LAYER_BEDROCK, chunk_coord * CHUNK_SIZE, _cave_pattern_for_chunk(chunk_coord)
+	)
 	_cave_entrance_markers[chunk_coord] = _geology_renderer.spawn_entrance_markers(
 		_entities_parent, chunk_coord * CHUNK_SIZE, chunk.biome, chunk.width, chunk.height, TerrainRenderer.TILE_SIZE
 	)
@@ -17034,6 +17240,9 @@ func _load_chunk(chunk_coord: Vector2i) -> void:
 	# Wild mushrooms (see docs/concept/mushrooms.md): one sim covering all 6
 	# species for this chunk, already carrying whatever it seeded/was
 	# already fruiting on arrival.
+	# Same water mask, same reason as the ant colony below: a mycelium
+	# needs soil, and MushroomSpecies.allows_biome cannot see a river on
+	# its own because a river is not a biome.
 	var mushroom_sim := WildMushroomPatch.new(
 		hash("%d_%d_mushroom" % [chunk_coord.x, chunk_coord.y]), chunk.width, chunk.height, chunk.biome,
 		growth_blockers
@@ -17207,6 +17416,12 @@ func _load_chunk(chunk_coord: Vector2i) -> void:
 	# Ant mounds in the soil (see docs/concept/soil_fauna.md "Ants"). Placed
 	# once at chunk creation -- mound_cells() never changes for a loaded
 	# chunk's lifetime, exactly like the earthworm burrows just above.
+	# The water mask is the SAME Chunk.blocks_ground_cover array TallGrass
+	# already reads to keep grass out of the river: a river or lake leaves
+	# the biome array untouched (docs/concept/rivers.md's Rendering
+	# section), so AntColony's own SOIL_BIOMES check cannot see water
+	# without it -- reported live, with a screenshot, as mounds sitting in
+	# open water.
 	_ant_colonies[chunk_coord] = AntColony.new(
 		hash("%d_%d_ants" % [chunk_coord.x, chunk_coord.y]), chunk.width, chunk.height, chunk.biome,
 		growth_blockers
@@ -18720,6 +18935,13 @@ func _unload_chunk(chunk_coord: Vector2i) -> void:
 		_revealed_cave_nodes = []
 		_revealed_cave_entrance_tile = null
 	_topsoil_strata.erase(chunk_coord)
+	if _revealed_underground_tile != null and _chunk_coord_for_tile(_revealed_underground_tile) == chunk_coord:
+		for node in _revealed_underground_nodes:
+			if is_instance_valid(node):
+				node.free()
+		_revealed_underground_nodes = []
+		_revealed_underground_tile = null
+	_bedrock_strata.erase(chunk_coord)
 
 	for mmi in _grass_sprites.get(chunk_coord, {}).values():
 		mmi.free()

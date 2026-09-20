@@ -15,6 +15,8 @@ const AudioSettings = preload("res://src/audio/audio_settings.gd")
 const AudioDiagnostics = preload("res://src/audio/audio_diagnostics.gd")
 const ViewMode = preload("res://src/gameplay/view_mode.gd")
 const BuildPlan = preload("res://src/world/build_plan.gd")
+const BlueprintPaletteModel = preload("res://src/ui/blueprint_palette_model.gd")
+const BlueprintPaletteView = preload("res://src/ui/blueprint_palette_view.gd")
 const BuildPlanLedger = preload("res://src/world/build_plan_ledger.gd")
 const BuildingCatalog = preload("res://src/gameplay/building_catalog.gd")
 const PlanWireframe = preload("res://src/rendering/plan_wireframe.gd")
@@ -145,6 +147,8 @@ const UiTheme = preload("res://src/ui/ui_theme.gd")
 ## The pure HUD readouts and the UI scale model (docs/concept/hud.md).
 const HudReadouts = preload("res://src/ui/hud_readouts.gd")
 const UiScale = preload("res://src/ui/ui_scale.gd")
+## The planner switch (docs/concept/hud.md "The planner toggle is a switch").
+const ToggleSwitch = preload("res://src/ui/toggle_switch.gd")
 const WeatherModel = preload("res://src/world/weather_model.gd")
 const SeasonCycle = preload("res://src/world/season_cycle.gd")
 const EntityRef = preload("res://src/emergence/entity_ref.gd")
@@ -566,6 +570,9 @@ var _torch_glow := TorchGlow.new()
 var _torch_glow_mesh: MeshInstance2D
 @onready var _ui: CanvasLayer = $UI
 @onready var _minimap: TextureRect = $UI/Minimap
+## The planner switch, and the two nodes that round and frame the minimap --
+## see docs/concept/hud.md.
+var _view_mode_switch: ToggleSwitch
 ## The two halves the old $UI/DebugLabel split into (docs/concept/hud.md "The
 ## top-left strip"): the world-clock card, always on, and the diagnostics
 ## strip, off until toggle_diagnostics (F3).
@@ -1215,6 +1222,9 @@ func _ready() -> void:
 	_build_plans = _build_plan_store.load_ledger()
 	_build_plan_wireframes()
 	_build_blueprint_palette()
+	# Before the toggle beside it, so the minimap is already in its frame when
+	# the switch measures itself against the frame's own left edge.
+	_build_minimap_frame()
 	_build_view_mode_toggle()
 	_build_spell_bar()
 	_build_dev_console()
@@ -2362,6 +2372,12 @@ func _apply_ui_scale() -> void:
 	# player's state changes, see _update_condition_chips). Forgetting what the
 	# row currently says makes the next frame rebuild it at the new size.
 	_condition_chips_signature = ""
+	# The build palette measures its own slots against the font they are
+	# drawn in (BlueprintPaletteView._size_slots), so a scale change means
+	# measuring again -- otherwise every slot keeps the width it had at the
+	# old size and the names clip.
+	if _blueprint_palette != null:
+		_blueprint_palette.refresh()
 
 
 ## The settings menu's UI scale slider moved -- applies and persists
@@ -5826,7 +5842,7 @@ var _build_plans := BuildPlanLedger.new()
 var _selected_blueprint := ""
 
 var _view_mode_button: Button
-var _blueprint_palette: PanelContainer
+var _blueprint_palette: BlueprintPaletteView
 var _plan_wireframes: PlanWireframeLayer
 
 ## Plans on disk. A wireframe is world state (planner_mode.md's pillar 3),
@@ -5934,51 +5950,82 @@ func _build_plan_wireframes() -> void:
 	add_child(_plan_wireframes)
 
 
-## The blueprint palette: planner mode's own controls, where the hotbar
-## sits in rpg mode. One button per thing the game can already raise --
-## pavement plus the real BuildingCatalog, never a parallel list that could
-## drift from what is actually buildable (planner_mode.md's "one
-## vocabulary").
-func _build_blueprint_palette() -> void:
-	_blueprint_palette = PanelContainer.new()
-	_blueprint_palette.theme = _ui_theme
-	_blueprint_palette.set_anchors_preset(Control.PRESET_CENTER_BOTTOM)
-	_blueprint_palette.offset_left = -260.0
-	_blueprint_palette.offset_right = 260.0
-	_blueprint_palette.offset_top = -96.0
-	_blueprint_palette.offset_bottom = -8.0
-	_ui.add_child(_blueprint_palette)
+## How far the palette's card sits off the bottom edge. Its WIDTH and
+## HEIGHT are not written down: a slot is as wide as the names it has to
+## hold (BlueprintPaletteView.slot_size_for), so the card is as wide as its
+## slots -- see _fit_blueprint_palette.
+const PALETTE_MARGIN := 8.0
 
-	var row := HBoxContainer.new()
-	row.add_theme_constant_override("separation", 4)
-	_blueprint_palette.add_child(row)
-	for blueprint_id in _palette_blueprint_ids():
-		var button := Button.new()
-		button.theme = _ui_theme
-		button.text = BuildPlan.display_name_of(blueprint_id)
-		button.toggle_mode = true
-		button.pressed.connect(_on_blueprint_selected.bind(blueprint_id))
-		row.add_child(button)
+
+## The blueprint palette: planner mode's own controls, where the hotbar
+## sits in rpg mode. See docs/concept/planner_mode.md, "The build palette".
+##
+## Asked directly, with a screenshot of the ten identical text buttons this
+## replaced: *"Make the Planner / Building HUD more professional and more
+## like Anno 1806. Add Icons not only text"*.
+##
+## The menu itself is BlueprintPaletteView -- tabs, icons, the armed slot
+## and the footer are its behaviour, tested for real rather than by reading
+## this file. What stays here is the only part that is genuinely World's:
+## where it sits, and the two numbers it is not allowed to invent. Both
+## arrive as the SAME calls the raising path itself makes -- the real
+## _item_catalog for material names, and _chunk_manager.build_labor_hours_
+## for for the requirement PlanRaising.is_laid_by_hand is asked about -- so
+## the menu cannot quote a price or a job size the site then disagrees
+## with.
+func _build_blueprint_palette() -> void:
+	_blueprint_palette = BlueprintPaletteView.new()
+	_ui.add_child(_blueprint_palette)
+	_blueprint_palette.configure(
+		_ui_theme,
+		func(blueprint_id: String) -> float:
+			return _chunk_manager.build_labor_hours_for(blueprint_id),
+		func(item_id: String) -> String:
+			return _item_catalog.display_name_of(item_id)
+	)
+	_blueprint_palette.blueprint_selected.connect(_on_blueprint_selected)
+	# Whenever the menu needs more room -- a wider tab, a larger UI scale --
+	# the card grows with it rather than clipping.
+	_blueprint_palette.minimum_size_changed.connect(_fit_blueprint_palette)
+	_fit_blueprint_palette()
 	_blueprint_palette.visible = false
 
 
-## Pavement first (the cheapest, most-used thing a player lays), then every
-## real catalog building. Read from BuildingCatalog rather than listed here
-## so a building added to the game shows up in the palette for free.
-func _palette_blueprint_ids() -> Array[String]:
-	var ids: Array[String] = [BuildPlan.PAVEMENT_BLUEPRINT_ID]
-	for building_id in BuildingCatalog.BUILDING_IDS:
-		ids.append(building_id)
-	for building_id in BuildingCatalog.PRODUCTION_BUILDING_IDS:
-		ids.append(building_id)
-	for building_id in BuildingCatalog.CIVIC_BUILDING_IDS:
-		ids.append(building_id)
-	return ids
+## Centres the card on the bottom edge at exactly the size the menu needs.
+##
+## Measured rather than written down, because a slot is now as wide as the
+## names it really has to hold (BlueprintPaletteView.slot_size_for, and the
+## measurement that forced it): a card pinned to a constant width would
+## clip the wider slots instead of the names, which is the same defect one
+## level up.
+func _fit_blueprint_palette() -> void:
+	if _blueprint_palette == null:
+		return
+	var wanted := _blueprint_palette.get_combined_minimum_size()
+	_blueprint_palette.set_anchors_preset(Control.PRESET_CENTER_BOTTOM)
+	_blueprint_palette.offset_left = -wanted.x * 0.5
+	_blueprint_palette.offset_right = wanted.x * 0.5
+	_blueprint_palette.offset_top = -wanted.y - PALETTE_MARGIN
+	_blueprint_palette.offset_bottom = -PALETTE_MARGIN
+
+
+## Tells the palette what the rest of planner mode thinks is armed.
+##
+## One direction only, and deliberately: _selected_blueprint is the state
+## the cursor and the click-to-plan path act on, so the palette follows it
+## rather than the other way round -- including the empty one
+## _apply_view_mode clears to every time the mode is left, which would
+## otherwise leave a slot looking stuck down over an unarmed cursor.
+func _update_palette_selection() -> void:
+	if _blueprint_palette == null:
+		return
+	_blueprint_palette.set_selected(_selected_blueprint)
 
 
 func _on_blueprint_selected(blueprint_id: String) -> void:
 	_selected_blueprint = blueprint_id
 	_show_planner_message("%s selected -- click the map to plan it." % BuildPlan.display_name_of(blueprint_id))
+	_update_palette_selection()
 	_update_plan_cursor()
 
 
@@ -5992,26 +6039,95 @@ func _on_blueprint_selected(blueprint_id: String) -> void:
 ## A themed card rather than a bare Button, per docs/concept/hud.md's own
 ## pillar 1: which mode you are in carries meaning, and nothing that
 ## carries meaning may be drawn as bare text over the world.
+## Rounds the minimap's own corners and frames it, so the top-right column
+## reads as one column (docs/concept/hud.md "The minimap is framed like every
+## other card"). Asked for directly: "add a border and borderradius of 4px to
+## the minimap".
+##
+## Two nodes, because a stylebox cannot do it alone: it draws BEHIND a
+## TextureRect rather than clipping it, and its border draws under its own
+## children.
+##
+## 1. A clipper the minimap is moved INTO, carrying the rounded shape with
+##    clip_children = CLIP_CHILDREN_ONLY -- never drawn itself, its shape
+##    used as the mask that rounds the map texture.
+## 2. A frame added AFTER the map, so it draws on top of it (later sibling =
+##    later draw, see this file's own "One CanvasLayer" note), carrying the
+##    border and nothing else.
+func _build_minimap_frame() -> void:
+	var ui_theme := UiTheme.new()
+	var clipper := Panel.new()
+	clipper.add_theme_stylebox_override("panel", ui_theme.map_clip_stylebox())
+	clipper.clip_children = CanvasItem.CLIP_CHILDREN_ONLY
+	clipper.mouse_filter = Control.MOUSE_FILTER_IGNORE
+	clipper.set_anchors_preset(Control.PRESET_TOP_RIGHT)
+	clipper.offset_left = _minimap.offset_left
+	clipper.offset_top = _minimap.offset_top
+	clipper.offset_right = _minimap.offset_right
+	clipper.offset_bottom = _minimap.offset_bottom
+	_ui.add_child(clipper)
+
+	# The map itself moves inside the clipper and fills it. Its PlayerDot
+	# child rides along, still anchored to the map's own centre.
+	_ui.remove_child(_minimap)
+	clipper.add_child(_minimap)
+	_minimap.set_anchors_preset(Control.PRESET_FULL_RECT)
+	_minimap.offset_left = 0.0
+	_minimap.offset_top = 0.0
+	_minimap.offset_right = 0.0
+	_minimap.offset_bottom = 0.0
+
+	var frame := Panel.new()
+	frame.add_theme_stylebox_override("panel", ui_theme.map_frame_stylebox())
+	frame.mouse_filter = Control.MOUSE_FILTER_IGNORE
+	frame.set_anchors_preset(Control.PRESET_TOP_RIGHT)
+	frame.offset_left = clipper.offset_left
+	frame.offset_top = clipper.offset_top
+	frame.offset_right = clipper.offset_right
+	frame.offset_bottom = clipper.offset_bottom
+	_ui.add_child(frame)
+
+
 func _build_view_mode_toggle() -> void:
 	var panel := PanelContainer.new()
 	panel.theme = _ui_theme
 	panel.set_anchors_preset(Control.PRESET_TOP_RIGHT)
-	panel.offset_left = -300.0
+	# Right edge pinned just left of the minimap; the left edge follows the
+	# content, so a caption plus a switch is not rattling around inside a box
+	# sized for the old, wider "Planner Mode" caption.
+	panel.offset_left = -178.0
 	panel.offset_top = 8.0
 	panel.offset_right = -178.0
-	panel.offset_bottom = 40.0
+	panel.offset_bottom = 8.0
+	panel.grow_horizontal = Control.GROW_DIRECTION_BEGIN
+	panel.grow_vertical = Control.GROW_DIRECTION_END
 	_ui.add_child(panel)
+
+	# A real two-state SWITCH, not a button whose caption is the mode you are
+	# not in -- asked for directly ("make the planner switch a ios like switch
+	# button with two states"), and see docs/concept/hud.md for why a button's
+	# caption could be read either way.
+	#
+	# The caption is constant (ViewMode.SWITCH_LABEL) because the switch, not
+	# the words, now carries the state. Neither node takes keyboard focus: a
+	# focused Control answers ui_accept, which is Space, which is the attack
+	# key (reported live, "space now toggles between plann mode and rpg").
+	var row := HBoxContainer.new()
+	row.add_theme_constant_override("separation", 8)
+	row.alignment = BoxContainer.ALIGNMENT_CENTER
+	panel.add_child(row)
 
 	_view_mode_button = Button.new()
 	_view_mode_button.theme = _ui_theme
-	# Never takes keyboard focus. A focused Button answers `ui_accept`, and
-	# ui_accept is Space -- which is the ATTACK key, so once this had been
-	# clicked every later Space press flipped the mode instead of swinging
-	# (reported live: "space now toggles between plann mode and rpg"). A HUD
-	# readout the mouse presses has no business holding the keyboard.
+	_view_mode_button.text = ViewMode.SWITCH_LABEL
 	_view_mode_button.focus_mode = Control.FOCUS_NONE
+	_view_mode_button.flat = true
 	_view_mode_button.pressed.connect(_toggle_view_mode)
-	panel.add_child(_view_mode_button)
+	row.add_child(_view_mode_button)
+
+	_view_mode_switch = ToggleSwitch.new()
+	_view_mode_switch.toggled_to.connect(func(_on: bool): _toggle_view_mode())
+	row.add_child(_view_mode_switch)
 	_apply_view_mode()
 
 
@@ -6029,14 +6145,21 @@ func _toggle_view_mode() -> void:
 ## than decided again here: a second `if` over the same two cases is how a
 ## tested model and the real HUD drift apart.
 func _apply_view_mode() -> void:
+	# The caption never changes now -- the SWITCH shows the state, which is
+	# the whole reason it is a switch (docs/concept/hud.md). set_on rather
+	# than a second predicate: a keypress flips the mode without touching the
+	# switch, and the switch has to follow the mode either way.
 	if _view_mode_button != null:
-		_view_mode_button.text = ViewMode.toggle_label(_view_mode)
+		_view_mode_button.text = ViewMode.SWITCH_LABEL
+	if _view_mode_switch != null:
+		_view_mode_switch.set_on(ViewMode.shows_palette(_view_mode))
 	if _hotbar != null:
 		_hotbar.visible = ViewMode.shows_hotbar(_view_mode)
 	if _blueprint_palette != null:
 		_blueprint_palette.visible = ViewMode.shows_palette(_view_mode)
 	if not ViewMode.shows_palette(_view_mode):
 		_selected_blueprint = ""
+	_update_palette_selection()
 	_update_plan_cursor()
 
 
