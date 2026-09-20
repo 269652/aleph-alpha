@@ -63,6 +63,10 @@ const VIEW_ONLY_ACTIONS := [
 	"toggle_inventory", "toggle_crafting", "toggle_quest_log",
 	"toggle_skills", "toggle_planner", "toggle_settings",
 	"toggle_console", "toggle_diagnostics",
+	# The Weave (docs/concept/spell_weaving.md) opens a surface and performs
+	# nothing -- World.weave_requested -> Player.weave owns the two gates, so
+	# the key itself changes only what the player is looking at.
+	"toggle_weave",
 ]
 
 ## World-changing acts that reach the player through something other than a

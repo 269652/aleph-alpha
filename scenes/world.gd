@@ -156,6 +156,7 @@ const EntityRef = preload("res://src/emergence/entity_ref.gd")
 const ErrandDelivery = preload("res://src/gameplay/errand_delivery.gd")
 const NodePayoff = preload("res://src/gameplay/node_payoff.gd")
 const Answerback = preload("res://src/gameplay/answerback.gd")
+const Discovery = preload("res://src/gameplay/discovery.gd")
 const DawnClause = preload("res://src/gameplay/dawn_clause.gd")
 const SpellWeaveWindow = preload("res://scenes/spell_weave_window.gd")
 const SpellDraft = preload("res://src/gameplay/spell_draft.gd")
@@ -2297,6 +2298,62 @@ const ANSWER_FLOAT_RISE_PX := 24.0
 const ANSWER_FLOAT_SECONDS := Answerback.DELIBERATE_INTERVAL_SECONDS
 
 
+## The crossing card's own banner and the time left on it
+## (docs/concept/discovery.md). The duration is never a constant here:
+## Discovery.seconds_to_read gives each card its OWN word count at the
+## reading rate the feedback layer already grounds itself on, because the
+## hearth's card is seventeen words and the far country's is thirty-four
+## and showing both for the same six seconds means one of them is wrong.
+var _discovery_banner: PanelContainer
+var _discovery_card_seconds_left := 0.0
+
+
+## One footfall, every client frame (docs/concept/discovery.md).
+##
+## Before this existed, the ONLY caller of `mark_chunk_explored` in the game
+## was the `reveal` spell atom, so a player who walked across a continent
+## still had an empty map; and distance from spawn appeared in no XP formula
+## anywhere, so the far country was strictly more dangerous and strictly no
+## more rewarding.
+##
+## `record_footfall` owns the whole decision (it holds the explored record
+## and the spawn coordinate, and asks `Discovery` for the rest) and hands
+## back `{}` on all but a handful of frames -- the player is still in the
+## chunk they were already in. World only performs what it decided: the XP,
+## the floating receipt every other act in this game answers with, and the
+## card.
+func _discovery_step(local_player: Player, delta: float) -> void:
+	_expire_discovery_card(delta)
+	if local_player == null or _chunk_manager == null:
+		return
+	var report: Dictionary = _chunk_manager.record_footfall(local_player.current_tile())
+	if report.is_empty():
+		return
+	var xp := int(report.get("xp", 0))
+	if xp > 0:
+		local_player.gain_experience(xp)
+		_float_answer_text(
+			String(report.get("float_text", "")),
+			Answerback.flash_color_for(Answerback.FLASH_GAIN)
+		)
+	var card := String(report.get("message", ""))
+	if card != "":
+		_set_message_banner(_discovery_banner, card)
+		_discovery_card_seconds_left = Discovery.seconds_to_read(card)
+
+
+## Clears the crossing card once it has been up long enough to read. Kept
+## separate from the step itself so the card decays on every frame rather
+## than only on the frames a chunk edge is crossed -- otherwise a player who
+## stopped walking would keep the card until they moved again.
+func _expire_discovery_card(delta: float) -> void:
+	if _discovery_card_seconds_left <= 0.0:
+		return
+	_discovery_card_seconds_left = maxf(0.0, _discovery_card_seconds_left - delta)
+	if _discovery_card_seconds_left <= 0.0 and _discovery_banner != null:
+		_set_message_banner(_discovery_banner, "")
+
+
 ## The local hour a YOUNG character's sky should read, or NO_FORCED_HOUR
 ## when this character is old enough to live under the real one
 ## (DawnClause, docs/concept/arrival.md).
@@ -3342,6 +3399,10 @@ func _build_message_stack() -> void:
 	_easter_egg_banner = _make_message_banner(14)
 	_cast_banner = _make_message_banner(16)
 	_planner_banner = _make_message_banner(16)
+	# The crossing card (docs/concept/discovery.md) -- a three-line passage
+	# rather than a one-line result, so it reads at the same size as the
+	# other prose banners rather than at a result's.
+	_discovery_banner = _make_message_banner(14)
 	# A sighting is an ambient world event rather than something the player
 	# did, and reads in its own cooler ink -- the one per-banner difference.
 	(_easter_egg_banner.get_child(0) as Label).add_theme_color_override(
@@ -7994,6 +8055,11 @@ func _client_process(delta: float) -> void:
 		perf_started = _perf_section("cli_chunk_update", perf_started)
 
 	var player_tile := local_player.current_tile()
+	# Before the minimap, so the ground under the player is on the explored
+	# record the same frame it is walked (docs/concept/discovery.md).
+	_discovery_step(local_player, delta)
+	if _perf_report != null:
+		perf_started = _perf_section("cli_discovery", perf_started)
 	_update_minimap(player_tile, delta)
 	if _perf_report != null:
 		perf_started = _perf_section("cli_minimap", perf_started)

@@ -286,6 +286,8 @@ const SettlementGenerator = preload("res://src/world/settlement_generator.gd")
 const VillageFinder = preload("res://src/world/village_finder.gd")
 const ExploredTiles = preload("res://src/world/explored_tiles.gd")
 const WeatherForecast = preload("res://src/gameplay/weather_forecast.gd")
+const Discovery = preload("res://src/gameplay/discovery.gd")
+const JourneyRing = preload("res://src/gameplay/journey_ring.gd")
 
 ## Where player-made tile modifications (Phase 3 building) are persisted,
 ## keyed per chunk -- terrain itself is deterministically regenerable (see
@@ -1663,6 +1665,45 @@ func explored_chunks() -> Array:
 
 func is_chunk_explored(chunk_coord: Vector2i) -> bool:
 	return _explored_tiles.is_visited(chunk_coord)
+
+
+## The chunk the last footfall was recorded in, and how far out that was --
+## the two pieces of state a crossing needs, kept here rather than in World
+## because the explored record they belong with is here (see
+## docs/concept/discovery.md).
+var _has_footfall := false
+var _last_footfall_chunk := Vector2i.ZERO
+var _last_footfall_distance := Discovery.NO_PREVIOUS_DISTANCE
+
+
+## One footfall: the player is standing on `player_global_tile`.
+##
+## Marks the chunk underfoot on the SAME `ExploredTiles` `/map` and
+## `MapProjection` read -- which, before this existed, only the `reveal`
+## spell atom ever wrote to -- and hands back `Discovery`'s whole report for
+## the caller to pay and to say out loud. One chunk per footfall, the one
+## underfoot: the streamer loads a 5x5 neighbourhood and the camera shows a
+## fraction of one chunk, so marking all 25 would be the map claiming
+## knowledge the player never had.
+##
+## `{}` means nothing happened, and is the ordinary answer on all but a
+## handful of frames: the player is still in the chunk they were already in.
+## Also `{}` before `set_spawn_tile` -- a world that has not decided where
+## home is cannot say how far out you are, and guessing the origin would pay
+## far-country rates for the ground under a fresh character's feet.
+func record_footfall(player_global_tile: Vector2i) -> Dictionary:
+	if not _spawn_configured:
+		return {}
+	var chunk := Discovery.chunk_of(player_global_tile)
+	if _has_footfall and chunk == _last_footfall_chunk:
+		return {}
+	_has_footfall = true
+	_last_footfall_chunk = chunk
+	var is_new_ground := _explored_tiles.mark_visited(chunk)
+	var distance := JourneyRing.distance_chunks(chunk, _spawn_chunk_coord)
+	var report := Discovery.report_for(_last_footfall_distance, distance, is_new_ground)
+	_last_footfall_distance = distance
+	return report
 
 
 func _difficulty_tier_at(chunk_coord: Vector2i) -> int:
