@@ -19123,7 +19123,33 @@ func _village_assembly_state(chunk_coord: Vector2i) -> Dictionary:
 		# The settlement's own charter (docs/concept/settlement_charter.md
 		# mechanism 4): the village reads the same gate the player does.
 		"tier": settlement_tier_of(settlement_id),
+		# Who really works a field here (docs/concept/village_economy_balance
+		# .md mechanism 6): the next farmstead is voted for while one of
+		# them stands without one, whatever estate they hold.
+		"field_hands": _field_hands_for_settlement(settlement_id),
 	}
+
+
+## How many of this settlement's households hold a trade that works a
+## field (VillageFarm.crop_for) -- read off the roster the village really
+## SPAWNS, conscription included, because that roster is who farms.
+## _occupation_of_household re-rolls a founder's trade from their seed and
+## so cannot see a conscripted farmer; this is the reading the assembly's
+## food works are sized by, so it has to.
+func _field_hands_for_settlement(settlement_id: String) -> int:
+	var households := _households_in_settlement(settlement_id).size()
+	if households <= 0:
+		return 0
+	var chunk_coord := RegionalTrade.chunk_coord_of(settlement_id)
+	var roster: Dictionary = _settlement_generator.generate_settlement(
+		chunk_coord, chunk_coord * CHUNK_SIZE, CHUNK_SIZE, TerrainRenderer.TILE_SIZE,
+		households, _is_dry_local(chunk_coord), seeded_region_for_chunk(chunk_coord)
+	)
+	var hands := 0
+	for npc in roster.npcs:
+		if VillageFarm.crop_for(npc.occupation) != "":
+			hands += 1
+	return hands
 
 
 ## The needs graph for the village in `chunk_coord`, or [] where there is no
@@ -19423,6 +19449,19 @@ func _growth_site_for(chunk_coord: Vector2i, building_id: String):
 		)
 		return null if industry.is_empty() else industry["origin"]
 
+	if building_id == VillageFarm.FARM_BUILDING_ID:
+		# A farmstead is sited where its FIELD fits, on the outskirts when
+		# the streets are full -- the founding placement's own search
+		# (VillageRenderer.farm_plot_with_field), so a farmhouse the village
+		# raises through its own ledger is never one with nowhere to sow
+		# (docs/concept/village_economy_balance.md mechanism 6). Reserves
+		# what founding reserves: the landmarks, and the ground a project
+		# is already rising on.
+		var farm: Dictionary = _village_renderer.farm_plot_with_field(
+			chunk_coord, CHUNK_SIZE, self, _landmark_cells_in(chunk_coord), is_occupied
+		)
+		return null if farm.is_empty() else farm["origin"]
+
 	# is_paved lets the plot's own tie-back cross the paving this village
 	# has ALREADY laid -- another street's row, an earlier plot's doorstep,
 	# the square. Without it every junction reads as blocked ground and the
@@ -19436,6 +19475,20 @@ func _growth_site_for(chunk_coord: Vector2i, building_id: String):
 		_is_dry_local(chunk_coord), Callable(), is_paved
 	)
 	return null if plot.is_empty() else plot["origin"]
+
+
+## The GLOBAL cells this chunk's settlement landmarks stand on (the well,
+## the stall, the gate): what the founding farm pass reserves against
+## (VillageRenderer.spawn_village), re-derived the way
+## _well_position_for_settlement re-derives the well, so growth siting
+## keeps a field off the well exactly as founding did.
+func _landmark_cells_in(chunk_coord: Vector2i) -> Dictionary:
+	var settlement := _settlement_generator.generate_settlement(
+		chunk_coord, chunk_coord * CHUNK_SIZE, CHUNK_SIZE, TerrainRenderer.TILE_SIZE,
+		SettlementGenerator.POPULATION, _is_dry_local(chunk_coord),
+		seeded_region_for_chunk(chunk_coord)
+	)
+	return _village_renderer._landmark_cells(settlement.landmarks, TerrainRenderer.TILE_SIZE, self)
 
 
 ## This settlement's real census (VillageCensus) -- who has a roof, how

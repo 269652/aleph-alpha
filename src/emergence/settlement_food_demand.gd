@@ -64,18 +64,23 @@ const FALLBACK_TRADE := "farmer"
 ## REAL WORK, not the ambient drip. Measured, the drip is about 0.22 food
 ## units per assessment on ordinary grassland against a draw of 6 for five
 ## households -- so no amount of foraging feeds a village, which is correct
-## and is precisely why a village farms. A real worked field yields
-## VillageFarm.FIELD_YIELD_PER_WORK_BLOCK over a work block, and that is the
-## number a roster has to be sized against.
+## and is precisely why a village farms.
+##
+## And a REAL FIELD'S DAY, not the stub's (docs/concept/
+## village_economy_balance.md mechanism 6): VillageFarm.FIELD_YIELD_PER_
+## LIVED_DAY over the assessments in the day the farmer's own schedule runs
+## on. This used to read FIELD_YIELD_PER_WORK_BLOCK straight, 3.7 times
+## what a field worked from a cottage a street away really gives, and a
+## village of ten was founded on two fields where it needs five.
 ##
 ## The farmhouse stands for every food trade here. A fisher's pond and a
-## hunter's range are real work too, and neither has a measured per-block
-## yield of its own yet; using the one that HAS been measured, and saying so,
-## beats inventing two more.
+## hunter's range are real work too, and neither has a measured per-day
+## yield of its own yet; using the one that HAS been measured, and saying
+## so, beats inventing two more.
 static func yield_per_producer_per_assessment() -> float:
 	return (
-		VillageFarm.FIELD_YIELD_PER_WORK_BLOCK / VillageFarm.WORK_BLOCK_SECONDS
-		* SettlementState.ASSESSMENT_SECONDS
+		VillageFarm.FIELD_YIELD_PER_LIVED_DAY
+		/ (VillageFarm.SECONDS_PER_LIVED_DAY / SettlementState.ASSESSMENT_SECONDS)
 	)
 
 

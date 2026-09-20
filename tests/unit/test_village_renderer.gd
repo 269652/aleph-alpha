@@ -1071,6 +1071,15 @@ func _forest_band(world: StubWorld, coord: Vector2i) -> void:
 			world.forest_cells[coord * CHUNK_SIZE + Vector2i(x, y)] = true
 
 
+## The same band along the chunk's NORTH edge -- the side the village's
+## streets do not grow into (see test_an_older_village_gains_its_sawmill_
+## on_a_later_visit for why that matters).
+func _north_forest_band(world: StubWorld, coord: Vector2i) -> void:
+	for y in range(0, 7):
+		for x in CHUNK_SIZE:
+			world.forest_cells[coord * CHUNK_SIZE + Vector2i(x, y)] = true
+
+
 func _placed(world: StubWorld, building_id: String) -> Array:
 	var out: Array = []
 	for call in world.place_calls:
@@ -1162,6 +1171,18 @@ func test_an_older_village_gains_its_sawmill_on_a_later_visit():
 	# how a village packs (it fell over when the manor went from 4x3 to
 	# 3x3). What is really being claimed is that an older village heals,
 	# not that every last one of them does.
+	#
+	# The timber stands NORTH of the village. Its streets are laid
+	# southward from the spine, and since the founding roster feeds itself
+	# by real fields (docs/concept/village_economy_balance.md mechanism 6:
+	# five farmsteads for ten households) the last street is a belt of
+	# farmhouses and fenced fields right up to the south edge. A mill's
+	# spur is three columns wide at most (VillageLayout._industry_spur)
+	# and cannot lane through a field, so timber beyond that belt is
+	# timber the village cannot reach -- measured 0 of 12 healing with the
+	# band on the south, 12 of 12 with it on the north. The claim under
+	# test is that an older village heals when its timber is reachable,
+	# not that a village can cut a road through its own crops.
 	var healed := 0
 	var villages := 0
 	for x in 400:
@@ -1173,7 +1194,7 @@ func test_an_older_village_gains_its_sawmill_on_a_later_visit():
 		renderer.spawn_village(parent, coord, coord * CHUNK_SIZE, CHUNK_SIZE, TILE_SIZE, "grassland", world)
 		if _placed(world, VillageRenderer.INDUSTRY_BUILDING_ID).size() != 0:
 			continue  # this one had timber at founding -- not the case under test
-		_forest_band(world, coord)
+		_north_forest_band(world, coord)
 		renderer.spawn_village(parent, coord, coord * CHUNK_SIZE, CHUNK_SIZE, TILE_SIZE, "grassland", world)
 		if _placed(world, VillageRenderer.INDUSTRY_BUILDING_ID).size() == 1:
 			healed += 1

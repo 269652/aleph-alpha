@@ -127,9 +127,19 @@ func generate_settlement(
 		npcs.append(NpcIdentity.new(seed_value))
 		house_positions.append(_house_position(chunk_coord, center_pos, tile_size, i))
 
-	_staff_food_producers(npcs, region)
+	# The FOUNDING roster is staffed exactly as it was founded -- its own
+	# demand, then its carter, then its sawyer -- so a village that has grown
+	# still has the founders it was founded with. Only then does the grown
+	# village's larger demand conscript, and it takes NEWCOMERS first and
+	# never the wagon or the saw (docs/concept/village_economy_balance.md
+	# mechanism 6): a real field feeds two households, so a village of
+	# fifteen asks for eight producers, and a single pass off the end of the
+	# whole roster reached the founding carter and handed the wagon to
+	# somebody else on every reload.
+	_staff_food_producers(npcs, region, mini(npcs.size(), POPULATION))
 	_staff_the_carter(npcs)
 	_staff_the_sawyer(npcs)
+	_staff_food_producers(npcs, region, npcs.size(), true)
 
 	return {"house_positions": house_positions, "landmarks": landmarks, "npcs": npcs}
 
@@ -154,20 +164,35 @@ func generate_settlement(
 ## Conscription comes off the END of the roster and only takes villagers who
 ## are not already feeding the village, so it is deterministic per chunk and
 ## leaves the earlier founders exactly as they rolled.
-static func _staff_food_producers(npcs: Array, region) -> void:
+##
+## `count` is how much of the roster this pass sees -- the founding ten, or
+## the whole grown village -- and `keep_the_wagon_and_the_saw` is the grown
+## village's rule: a carter or a sawyer the founding conscripted is not
+## re-conscripted into a field, because growth is additive and the wagon
+## is not handed round.
+static func _staff_food_producers(
+	npcs: Array, region, count: int = -1, keep_the_wagon_and_the_saw: bool = false
+) -> void:
 	if npcs.is_empty():
 		return
-	var needed := SettlementFoodDemand.producers_needed(npcs.size())
+	var seen: int = npcs.size() if count < 0 else mini(count, npcs.size())
+	if seen <= 0:
+		return
+	var needed := SettlementFoodDemand.producers_needed(seen)
 	var have := 0
-	for npc in npcs:
-		if SettlementFoodDemand.FOOD_TRADES.has(npc.occupation):
+	for i in seen:
+		if SettlementFoodDemand.FOOD_TRADES.has(npcs[i].occupation):
 			have += 1
 	if have >= needed:
 		return
 	var trade := SettlementFoodDemand.trade_for(region)
-	var index: int = npcs.size() - 1
+	var index: int = seen - 1
 	while have < needed and index >= 0:
-		if not SettlementFoodDemand.FOOD_TRADES.has(npcs[index].occupation):
+		var occupation: String = npcs[index].occupation
+		var spared: bool = keep_the_wagon_and_the_saw and (
+			VillageCart.walks_the_round(occupation) or VillageSawmill.works_timber(occupation)
+		)
+		if not SettlementFoodDemand.FOOD_TRADES.has(occupation) and not spared:
 			npcs[index] = NpcIdentity.new(npcs[index].seed_value, trade)
 			have += 1
 		index -= 1
