@@ -76,6 +76,17 @@ const NpcIdentity = preload("res://src/world/npc_identity.gd")
 const NpcProduction = preload("res://src/world/npc_production.gd")
 const VillageMarket = preload("res://src/world/village_market.gd")
 const VillageEstates = preload("res://src/emergence/village_estates.gd")
+const SettlementState = preload("res://src/emergence/settlement_state.gd")
+const HouseholdWellbeing = preload("res://src/emergence/household_wellbeing.gd")
+
+## docs/concept/village_economy_balance.md mechanism 1: a day's work earns
+## a day's keep and as much again to put by.
+##
+## Pinned by the PROPERTY it produces rather than by its value
+## (test_village_living_wage.gd): a paid household that buys its meals saves
+## exactly its keep, and reaches HouseholdWellbeing's full purse inside the
+## wait assessments_to_full_purse derives -- simulated, not asserted.
+const LIVING_WAGE_KEEP_MULTIPLE := 2.0
 
 
 ## How many of the real occupations actually gather food.
@@ -172,6 +183,74 @@ static func gross_earnings_per_wage() -> float:
 	if share <= 0.0:
 		return INF
 	return float(subsistence_wage()) / share
+
+
+## What one household's meals cost over ONE settlement assessment: the
+## measured draw (SettlementState.FOOD_PER_HOUSEHOLD, off the villagers'
+## own hunger clock) at the market's own price. Anchored to the assessment,
+## the clock the draw itself was measured on, so no day-length constant
+## enters here at all.
+static func keep_per_assessment() -> float:
+	return SettlementState.FOOD_PER_HOUSEHOLD * float(VillageMarket.VILLAGE_LOCAL_FOOD_PRICE)
+
+
+## The living wage, per household per assessment (docs/concept/
+## village_economy_balance.md mechanism 1). NOT the subsistence wage above:
+## that one is the safety net, a meal for somebody found starving; this is
+## what a worker is paid for the work, whether or not they are hungry.
+static func living_wage_per_assessment() -> float:
+	return keep_per_assessment() * LIVING_WAGE_KEEP_MULTIPLE
+
+
+## How many assessments a household on the living wage, buying its own
+## meals, takes to reach HouseholdWellbeing's full purse from nothing --
+## the readout the whole wage exists to move. INF if the wage does not
+## clear the keep, which is the honest answer for a wage nobody could save
+## on.
+static func assessments_to_full_purse() -> float:
+	var saved_per_assessment := living_wage_per_assessment() - keep_per_assessment()
+	if saved_per_assessment <= 0.0:
+		return INF
+	var full_purse := float(HouseholdWellbeing.INCOME_MEALS_FOR_FULL * VillageMarket.VILLAGE_LOCAL_FOOD_PRICE)
+	return full_purse / saved_per_assessment
+
+
+## The whole village's bill over `assessments`: every household is a worker
+## (one villager to a household, every villager with a trade). Nobody, or
+## no time, owes nothing rather than going negative -- the same clamp
+## estate_tax_for keeps.
+static func wage_bill_for(household_count: int, assessments: float) -> float:
+	if household_count <= 0 or assessments <= 0.0:
+		return 0.0
+	return float(household_count) * living_wage_per_assessment() * assessments
+
+
+## Who gets the `coins` a settlement can really pay this assessment, given
+## the households' `balances` in whole gold: one payout per balance, in the
+## order given, the same shape tax_debits keeps for the other direction.
+##
+## Split as evenly as whole coins allow, the remainder to the POOREST first
+## (balance, then position, so the answer is deterministic): when the purse
+## cannot cover the whole bill, it is the household with nothing in hand
+## that gets the coin. The payouts add up to exactly `coins` -- a payout can
+## neither invent a coin nor lose one -- and a nonsense demand pays nobody.
+static func wage_payouts(balances: Array, coins: int) -> Array:
+	var payouts: Array = []
+	for _balance in balances:
+		payouts.append(0)
+	if coins <= 0 or balances.is_empty():
+		return payouts
+	var each := coins / balances.size()
+	var remainder := coins - each * balances.size()
+	for index in balances.size():
+		payouts[index] = each
+	var order: Array = []
+	for index in balances.size():
+		order.append([int(balances[index]), index])
+	order.sort()
+	for rank in remainder:
+		payouts[int(order[rank][1])] += 1
+	return payouts
 
 
 ## docs/concept/village_estates.md mechanism 6: what a village's own

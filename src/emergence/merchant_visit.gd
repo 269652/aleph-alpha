@@ -102,6 +102,16 @@ const SURPLUS_DRAW := 1.5
 const SURPLUS_FOR_FULL_DRAW := float(CART_CAPACITY) * 2.0
 
 
+## The longest a village worth the detour waits between his calls: he comes
+## at most VISITS_PER_DAY times a day when a village is barely worth it, so
+## one visit's worth of days on the day he is paced on. The COVER every
+## other reading of "until the cart comes again" is derived from
+## (docs/concept/village_economy_balance.md): the food a village keeps, and
+## the labour he pays for on a first call.
+static func cover_seconds() -> float:
+	return SECONDS_PER_DAY / VISITS_PER_DAY
+
+
 ## Everything a village's own producers really put into its stock, read off
 ## the producers' OWN maps rather than named again here.
 ##
