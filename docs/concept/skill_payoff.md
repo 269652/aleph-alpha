@@ -229,8 +229,23 @@ are named as such below.
   `_apply_skill_stat` branch, and requires `spell_efficiency` *not* to
   — so unwiring a stat, or wiring `spell_efficiency` up without
   correcting this doc, fails the suite.
-- ⬜ **Not wired into the view.** `SkillWebView`'s tooltip still prints
-  the stat name and the raw bonus; the lead wires `preview_for` into it.
+- ✅ **Wired into the view** (2026-09-20). `SkillWebView.node_tooltip`
+  prints the stat line and then, beneath it, one before → after line per
+  stat that has a live consumer, computed against the character's own
+  facts (`World._payoff_facts_for`: the weapon really in hand, their real
+  max health, whether they know spells or keep a companion) and their
+  already-allocated bonuses (`_allocated_bonuses_for`, read through
+  `Player.skill_bonus`, the one reader for every stat the web grants).
+  A stat with no consumer prints nothing rather than an invented effect.
+
+  **Caught in adversarial review, recorded because it is the instructive
+  part**: the first cut of this wiring passed `amount` where
+  `_summed_grants` reads `bonus_amount`, so every preview computed a
+  delta of zero and rendered `Wolf bites survived 16 → 16` — an arrow
+  that said nothing, on a tooltip that looked right. The view test had
+  asserted only that an arrow was present, which a key mismatch passes
+  happily. It now asserts the two SIDES DIFFER, which a key mismatch
+  cannot.
 - ⬜ **20 stats still inert.** This module reports them; it does not
   read them. Each is a separate change in its own system, and
   `spell_efficiency` is the cheapest of them by a distance — the
