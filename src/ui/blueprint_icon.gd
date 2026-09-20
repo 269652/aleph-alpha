@@ -63,7 +63,7 @@ static func fitted_size(source: Vector2i, box: int) -> Vector2i:
 func icon_image(blueprint_id: String, box: int) -> Image:
 	if box <= 0:
 		return null
-	var source := _source_image(blueprint_id)
+	var source := source_image(blueprint_id)
 	if source == null:
 		return null
 	return _boxed(source, box)
@@ -76,13 +76,16 @@ func icon_texture(blueprint_id: String, box: int) -> ImageTexture:
 	return ImageTexture.create_from_image(image)
 
 
-## The raw art, before it is fitted: the road tile for pavement, otherwise
+## The raw art, BEFORE it is boxed -- public so a test can pin which cut it
+## really came off, which the boxed 48x48 result cannot show.
+##
+## The road tile for pavement, otherwise
 ## the first sheet of the building's own finished chain that is really on
 ## disk. Null when none of them is -- the same walk-the-chain-and-take-the-
 ## first-that-loads shape EarthChunkManager._first_texture_of already uses,
 ## so an icon and the building it stands for cannot come off different
 ## sheets.
-func _source_image(blueprint_id: String) -> Image:
+func source_image(blueprint_id: String) -> Image:
 	if blueprint_id == BuildPlan.PAVEMENT_BLUEPRINT_ID:
 		if _terrain == null:
 			_terrain = TerrainRenderer.new()
@@ -96,22 +99,22 @@ func _source_image(blueprint_id: String) -> Image:
 	return null
 
 
-## One chain entry's cell. Dispatches on the entry's own declared grid
-## rather than assuming an even one -- all three kinds are real on disk
-## (see IllustratedStructureSprite), and reading a divider sheet as an even
-## one is a whole label band out.
+## One chain entry's cell, cut on the kind the ENTRY names.
+##
+## No match of its own, deliberately. This used to dispatch over three
+## named kinds with an even cut as the fallback, and while that was open a
+## FOURTH landed on main (IllustratedStructureSprite.GRID_CONTENT, for the
+## cottage and manor sheets, because reading those as `dividers` cost every
+## cottage its roof -- see docs/concept/building.md). Both of those sheets
+## are ones the palette draws, so the menu was quietly cutting them the
+## wrong way, and no assertion about a picture's size, art share or
+## uniqueness catches that: a wrong cut is still a plausible picture. A
+## fifth kind now works here the day it is declared.
 func _cut(entry: Dictionary) -> Image:
-	var path := String(entry["path"])
-	var columns := int(entry["columns"])
-	var rows := int(entry["rows"])
-	var row := int(entry["row"])
-	var column := int(entry["column"])
-	match String(entry["grid"]):
-		IllustratedStructureSprite.GRID_GUTTERS:
-			return _structures.variant_frame_image(path, columns, rows, row, column)
-		IllustratedStructureSprite.GRID_DIVIDERS:
-			return _structures.divider_frame_image(path, columns, rows, row, column)
-	return _structures.sheet_frame_image(path, columns, rows, row, column)
+	return _structures.frame_image(
+		String(entry["path"]), int(entry["columns"]), int(entry["rows"]),
+		int(entry["row"]), int(entry["column"]), String(entry["grid"])
+	)
 
 
 ## Trimmed to its own art, fitted, and centred on a transparent square.

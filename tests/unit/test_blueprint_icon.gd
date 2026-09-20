@@ -7,6 +7,8 @@ extends GutTest
 const BlueprintIcon = preload("res://src/ui/blueprint_icon.gd")
 const BlueprintPaletteModel = preload("res://src/ui/blueprint_palette_model.gd")
 const BuildPlan = preload("res://src/world/build_plan.gd")
+const BuildingCatalog = preload("res://src/gameplay/building_catalog.gd")
+const IllustratedStructureSprite = preload("res://src/rendering/illustrated_structure_sprite.gd")
 
 const BOX := 48
 
@@ -136,3 +138,61 @@ func test_pavement_draws_the_surface_it_will_lay():
 
 func test_an_unknown_blueprint_gets_no_icon_rather_than_a_wrong_one():
 	assert_null(BlueprintIcon.new().icon_image("not_a_building", BOX))
+
+
+## An icon is cut on the grid kind ITS OWN SHEET declares, whatever that
+## kind is.
+##
+## There are four kinds now (IllustratedStructureSprite.GRID_KINDS), and
+## cottage_*.png / manor_*.png declare `content` -- a kind added on main
+## while this branch was open, because reading those sheets as `dividers`
+## cost every cottage its roof in the world sprite (see building.md, "a row
+## crossing eight roof APEXES is mostly magenta"). An icon that dispatches
+## on a hand-written subset of kinds falls silently through to the EVEN cut
+## for any kind it does not know, which is the same defect one surface
+## over -- and one that every assertion about size, art share and
+## uniqueness passes straight through, because a wrong cut is still a
+## plausible picture.
+func test_an_icon_is_cut_on_the_grid_kind_its_own_sheet_declares():
+	var sprite := IllustratedStructureSprite.new()
+	var icons := BlueprintIcon.new()
+	var checked := 0
+	for blueprint_id in _all_offered():
+		if not BuildingCatalog.has_building(blueprint_id):
+			continue
+		var entry: Dictionary = BuildingCatalog.finished_sheet_chain(
+			blueprint_id, BlueprintIcon.ICON_SEED
+		)[0]
+		var declared: Image = sprite.frame_image(
+			String(entry["path"]), int(entry["columns"]), int(entry["rows"]),
+			int(entry["row"]), int(entry["column"]), String(entry["grid"])
+		)
+		if declared == null:
+			continue
+		var source: Image = icons.source_image(blueprint_id)
+		assert_not_null(source, "%s has no source at all" % blueprint_id)
+		assert_eq(
+			source.get_size(), declared.get_size(),
+			"%s (%s sheet) is cut on a different grid than its sheet declares" % [
+				blueprint_id, entry["grid"]
+			]
+		)
+		checked += 1
+	assert_gt(checked, 0, "the premise: some offered building has a real sheet")
+
+
+## Their own published invariant, applied to the palette's path: a sheet
+## naming a kind nothing can read must fail loudly rather than fall through
+## to an even cut.
+func test_every_grid_kind_the_palette_meets_is_one_the_slicer_can_read():
+	var checked := 0
+	for blueprint_id in _all_offered():
+		if not BuildingCatalog.has_building(blueprint_id):
+			continue
+		for entry in BuildingCatalog.finished_sheet_chain(blueprint_id, BlueprintIcon.ICON_SEED):
+			assert_true(
+				IllustratedStructureSprite.GRID_KINDS.has(String(entry["grid"])),
+				"%s declares an unreadable grid kind %s" % [blueprint_id, entry["grid"]]
+			)
+			checked += 1
+	assert_gt(checked, 0, "the premise: there are chains to check")
