@@ -107,6 +107,16 @@ an edge flood can never reach. It is the routine
 `IllustratedStructureSprite` already used for the building yard sheets,
 moved to the module that owns keying so there is one of it rather than two.
 
+It classifies every pixel exactly once, into a bitmask of the three tone
+rules, and the flood itself then walks bytes and never colours. That is not
+tidiness: the routine is also what cuts whole delivered SHEETS now (the
+apple sapling grid, 1254 x 1254 — see flora.md's "Sapling phase"), and
+written as a per-pixel `get_pixelv` over a `Dictionary` it measured 5.3
+seconds on that one sheet, a visible freeze the first time such a tree came
+on screen. Same seeds, same rules, same bounded widening, measured at 1.05
+seconds on the same sheet afterwards; the budget it may not exceed is a real
+test (`test_keying_a_whole_sheet_fits_in_a_forgivable_hitch`), not a comment.
+
 ## Status
 
 - ✅ **`ForestFern`, the wood's own sim.** Seeds on forest cells, grows,
