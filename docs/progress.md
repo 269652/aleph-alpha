@@ -23,6 +23,65 @@ reference, not a curated highlight reel — it intentionally includes every
 minor/open-question mechanism the source docs mention, not just headline
 features.
 
+### The gameplay overhaul (2026-09-20) — see `concept/errands.md`, `concept/survival.md`
+
+Asked directly, after the game was shown to someone who was not impressed:
+*"can you rehaul the whole gameplay and experience depth?"*, with eight named
+requirements — a direct entry into play, a concrete thread of action, not
+being able to stroll to the final boss, exploration, crafting, character
+development, a Path-of-Exile-style skill path, and Magicraft-style
+composable spellcrafting.
+
+**Diagnosed first**, across ten lenses over the concept docs, both playtest
+write-ups, the ledger, the roadmap and the player-facing code, then
+synthesised and adversarially checked. The verdict: a very deep simulation
+with a very thin game on top. Three facts a first-timer meets — nothing
+after spawn says what to do; nothing answers back when they act (no chop
+sound, no hit flash, no XP or level-up message, `gain_experience`'s return
+value discarded by all three callers); nothing is at stake (every species
+bites for the same 6 damage on a 0.8 s cooldown and gives up quickly,
+hunger takes two real hours to matter, sprint is free, death is a
+three-second reset). Under those, the few directed loops break in the
+player's hands: the villager asks for three rock and there is no give verb,
+gated crafts fail silently, the sell key sells the starter fishing rod,
+and most species have no loot row so they vanish on death.
+
+- ✅ **The give verb — the loop that never closed** (2026-09-20) — see
+  `concept/errands.md`. The production-shortfall projection was read-only
+  end to end: `QuestLog` paid `Karma.QUEST_FULFILLED_REWARD` when a
+  shortage *happened to* end, which meant the village fixed it itself and
+  the player was paid for standing nearby. Now `ErrandDelivery` is the
+  whole transaction decided before anything moves (what can be given, what
+  it is worth at the settlement's own scarcity price with a pinned floor,
+  what a finite household purse can pay, what it still owes as a debt,
+  whether the shortage really ends), the conversation window carries the
+  offer built from the **same frame** the villager's own "I could use three
+  more rock" line is built from, and `EarthChunkManager.deliver_errand`
+  performs it atomically against live state — goods into the same `Market`
+  object the projection reads, coins out of the household's own `Wallet`,
+  a real witnessed `errand_delivered` event. The projection then reports no
+  shortage **because there is none**. An offer the player cannot meet is a
+  sentence naming what is needed, not a dead button. Tests:
+  `test_errand_delivery.gd` 28/28 (new), `test_conversation_window.gd`
+  18/18, `test_earth_chunk_manager_errand.gd` 9/9 (new). 🚧 The debt rides
+  on the event but no dialogue topic speaks to it yet, and
+  `NpcRecognition` does not read `errand_delivered` as its own memory kind.
+- ✅ **Running costs the legs** (2026-09-20) — see `concept/survival.md`.
+  `spend_stamina` had exactly one caller in the entire game (the sickness
+  step), so sprint was free, unlimited and exactly twice walking speed —
+  which is why the world's danger gradient gated nothing: `RegionDifficulty`
+  decides which species may *spawn*, but a player who can outrun all of
+  them forever need not care. `SprintCost` is the rule: one tuned constant
+  (`SECONDS_OF_SPRINT_FROM_FULL` 14 s) with the drain rate derived from it,
+  walking free for ever so nobody is stranded, and the gate being
+  `SurvivalMeters.EXHAUSTED_THRESHOLD` itself so the Exhausted chip and the
+  legs refusing to run are one fact. Measured at play scale and pinned: one
+  burst carries **80 m**, the safe ring's radius is **684 m**, reaching the
+  HARD tier is over thirty full bars and more than ten minutes of walking.
+  Tests: `test_sprint_cost.gd` 18/18 (new), including two that pin the
+  wiring so this cannot become another tested module with no callers.
+
+
 ### Loose stone (see `docs/concept/stone.md`)
 
 ✅ **Stone comes in sizes now**, on the Wentworth grain-size scale (the real geological one): pebble, cobble, boulder. The lift/smash line falls at the cobble-boulder boundary (256mm) because that is roughly where a rock stops being liftable -- the game rule and the classification agree because they answer the same question.
