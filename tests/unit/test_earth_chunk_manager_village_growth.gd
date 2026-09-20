@@ -422,9 +422,19 @@ func test_the_house_is_credited_to_the_household_waiting_for_it():
 
 	manager._apply_village_growth_decision(_chunk_coord)
 
-	var houses: Array = _projects_for(BuildingCatalog.BUILDING_IDS[0])
-	assert_eq(houses.size(), 1, "precondition")
-	assert_eq(houses[0].household_id, newcomer, "the newcomer's own house, not the settlement's")
+	# THEIR house among the village's, not the only house in it. A village
+	# with no spare roof also owes itself a commons one (VillageGrowth's
+	# lowest rung -- "room is made first, moved into after"), and this test
+	# is about who a WAITING household's house is credited to, which is a
+	# different question from how many the village is raising.
+	var theirs: Array = []
+	for project in _projects_for(BuildingCatalog.BUILDING_IDS[0]):
+		if project.household_id == newcomer:
+			theirs.append(project)
+	assert_eq(
+		theirs.size(), 1,
+		"the newcomer's own house, not the settlement's -- and one of it, not two"
+	)
 
 
 # -- the immigration step -------------------------------------------------
