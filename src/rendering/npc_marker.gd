@@ -1466,12 +1466,22 @@ func _blocked_step(from: Vector2, point: Vector2) -> bool:
 	# move_toward per frame does not have -- the commit that gave rails
 	# their hitbox said so itself: "boxed in on both, they stay put".
 	#
-	# So the worker may cross into ground they themselves work, and nothing
-	# else changes: every other rail still stops them, a neighbour's
-	# included, and no other villager is exempt from any rail.
-	if field_cells.has(tile):
-		return false
+	# So the worker may cross their own field's rail, and nothing else
+	# changes: every other rail still stops them, a neighbour's included,
+	# and no other villager is exempt from any rail.
+	#
+	# EITHER WAY across it. The exemption used to be one-directional --
+	# only a step INTO a bed they work -- which let a farmer walk into
+	# their own field and then never leave it. Measured
+	# (tools/probe_farm_water.gd): three field workers set out for the well
+	# 8, 2 and 8 times and were refused at their very first step by their
+	# own rail, and not one came within 105 px of a well whose arrival
+	# reach is 6 px. The rails keep animals out and read as an enclosure;
+	# they were never meant to shut the worker out of their beds, and they
+	# are just as clearly not meant to shut them in.
 	var here := Vector2i(floori(from.x / _tile_size), floori(from.y / _tile_size))
+	if field_cells.has(tile) or field_cells.has(here):
+		return false
 	return _world.fence_blocks_step_global(here.x, here.y, tile.x, tile.y)
 
 

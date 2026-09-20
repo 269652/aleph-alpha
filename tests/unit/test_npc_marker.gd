@@ -1266,6 +1266,28 @@ func test_a_farmer_may_step_into_a_bed_they_work():
 	)
 
 
+## ...and it must not shut them IN either. The rails keep animals out and
+## read as an enclosure; the exemption was one-directional, so a farmer
+## could step into their own beds and then never leave them.
+##
+## Measured (tools/probe_farm_water.gd): three field workers set out for
+## the well 8, 2 and 8 times and were refused at their VERY FIRST STEP by
+## their own field's rail -- `farm_fence_west`, `farm_fence_north`, 0 px
+## along the way. Not one of them ever came within 105 px of a well whose
+## arrival reach is 6 px, and one never closed the gap by a single pixel
+## across a whole 600s run.
+func test_a_farmer_may_step_back_out_of_a_bed_they_work():
+	var world := StubWorldWithFence.new()
+	world.blocks_step = true
+	var marker := _wall_marker(world)
+	marker.field_cells = [Vector2i(0, 0)]  # they are standing in their own bed
+
+	assert_eq(
+		marker._slid_along_walls(Vector2(8, 8), Vector2(24, 8)), Vector2(24, 8),
+		"the rail round a farmer's own field shut the farmer inside it"
+	)
+
+
 func test_a_rail_still_stops_a_villager_stepping_anywhere_else():
 	var world := StubWorldWithFence.new()
 	world.blocks_step = true

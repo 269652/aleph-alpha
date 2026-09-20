@@ -14233,7 +14233,20 @@ func biome_at_global(global_x: int, global_y: int) -> String:
 	var chunk: Chunk = _loaded_chunks.get(_chunk_coord_for_tile(Vector2i(global_x, global_y)))
 	if chunk == null:
 		return ""  # not currently loaded/rendered; callers shouldn't query far outside the load radius
-	return chunk.biome[_local_index(global_x, global_y)]
+	# ...and a chunk that is PRESENT BUT EMPTY says the same thing. A bare
+	# Chunk.new() is what a fixture builds when it only needs somewhere to
+	# hang modifications, and nothing asked it about arbitrary tiles until
+	# routing did (AgentPassability._is_water via TileRouter.route) --
+	# measured on a clean origin/main worktree,
+	# test_earth_chunk_manager_village_farm_loop failed 4/4 with 17,376 of
+	# these in one run. The same size check Chunk.blocks_ground_cover
+	# already keeps, for the same reason it gives: a fixture that never
+	# filled the array reads as "nothing known here" rather than indexing
+	# off the end.
+	var index := _local_index(global_x, global_y)
+	if index < 0 or index >= chunk.biome.size():
+		return ""
+	return chunk.biome[index]
 
 
 ## Finds the nearest loaded FishMarker within max_distance pixels of
