@@ -426,6 +426,64 @@ Deliberately **not** done by scaling the `$UI` CanvasLayer: a `CanvasLayer`
 scales about its origin, so every bottom- and right-anchored card would walk
 off the screen. Layout stays at one scale and text is what grows.
 
+### The settlement card: what the place you are standing in is doing
+
+Asked for directly: *"a context dependent Village / City panel which shows
+stats and status of the village / city like population; happiness; gold and
+so"*.
+
+**Context-dependent means it appears because you are somewhere, not because
+you pressed something.** A settlement exists per chunk
+(`EntityRef.for_settlement`), so the card shows while the player stands in
+a chunk that has one and hides the moment they leave — the same shape the
+land-sense label and the creature panels already use, and the reason it
+needs no key of its own.
+
+**The title is the settlement's real tier, not the word "village".**
+`SettlementTier.tier_for` already classifies a settlement as **hamlet /
+town / city** from three real dimensions that must ALL cross together —
+household count, active institutions, and production diversity — precisely
+so that population alone never promotes a place. The card says whichever
+one the simulation currently computes, so watching the title change from
+Hamlet to Town is watching three real things happen at once.
+
+**Every row is a read of state that already exists.** Nothing here is
+tracked for the card's benefit:
+
+| row | where it comes from |
+|---|---|
+| tier | `SettlementTier.tier_for` |
+| population | households in the settlement, and how many are housed (`VillageCensus`) |
+| happiness | `HouseholdWellbeing.mean_productivity`, the same number `settlement_productivity` already scales build rates by |
+| worst need | the lowest of `HouseholdWellbeing`'s five real needs — food, shelter, work, income, community |
+| gold | the settlement's own guild chest (`guild_for_settlement`) |
+| food | village market stock against `FOOD_STOCK_PER_HOUSEHOLD_TARGET` |
+| building | what the growth ladder says this settlement owes itself next |
+
+**Happiness is shown with the reason beside it.** One blended percentage
+is nearly useless on its own — `HouseholdWellbeing` is a weighted mix of
+five needs, and "68%" tells a player nothing about what to do. Naming the
+weakest need next to it ("68% · worst: food") turns the card from a score
+into a prompt, and costs nothing, because the per-need numbers are already
+computed to produce the blend.
+
+**A settlement with no data reads as unknown, never as zero.** A chunk
+whose village is loaded but whose households have not been assessed yet is
+a real state, and showing 0% happiness for it would be a lie the player
+would act on.
+
+### FPS is back on, outside the diagnostics strip
+
+FPS shipped in the middle of the clock line until the split-strip pass
+moved it, with lat/lon and sun elevation, into the F3 diagnostics strip —
+off by default. Reported back simply: *"also add back the FPS"*.
+
+It returns to the always-on world-clock card, and **only it**: lat/lon and
+sun elevation stay behind F3. Those two are genuinely diagnostic — a
+player reads them when debugging worldgen — while a frame counter is
+something you want visible while the thing it measures is going wrong,
+which is exactly when you are not thinking to press F3.
+
 ## Status
 
 - ✅ **One shared message stack** — `World._build_message_stack` /
