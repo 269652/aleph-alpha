@@ -16958,9 +16958,27 @@ func withdraw_from_building_at(global_x: int, global_y: int, item_id: String, co
 const STRUCTURE_MEAL_RADIUS_TILES := CHUNK_SIZE
 
 ## The structures whose own stock a villager may eat from: where baked
-## bread ends up (see CHAIN_LOGISTICS_LEGS) -- a Bakery's shelf and any
-## Storage it was hauled into.
-const STRUCTURE_MEAL_SOURCE_IDS: Array[String] = ["bakery", "storage"]
+## bread ends up (see CHAIN_LOGISTICS_LEGS) -- a Bakery's shelf, any
+## Storage it was hauled into, and THE VILLAGE'S OWN WAREHOUSE.
+##
+## The warehouse was the reported bug: *"there's still not enough food even
+## though the warehouse is full"*. Both halves of that sentence were true
+## at once. A settlement's food ASSESSMENT counts every StructureStock
+## standing in its chunk (_settlement_structure_stocks), so the grain a
+## carter hauls in really is food the village has -- while a villager's own
+## meal came from this list, which was written before the warehouse existed
+## and never grew to include it. The village was fed on paper and its
+## people could not eat.
+##
+## This list has to name every place the village really puts food. It is
+## hand-written because the meal search scans FOR ids, and that is exactly
+## how it drifted; test_earth_chunk_manager_village_meals.gd pins the
+## behaviour that matters -- what the settlement counts as food is what its
+## people can eat -- so the next store added here fails a test rather than
+## starving a village quietly.
+const STRUCTURE_MEAL_SOURCE_IDS: Array[String] = [
+	"bakery", "storage", VillageLayout.WAREHOUSE_BUILDING_ID
+]
 
 
 ## Whether the village's own stores hold a whole meal near `pixel_position`
