@@ -429,3 +429,67 @@ func test_unloading_the_chunk_takes_the_builder_with_it():
 	manager._unload_chunk(_chunk_coord)
 
 	assert_null(_builder_at(_civic_origin), "a worker cannot outlive the chunk he works in")
+
+
+# -- and he carries the material (docs/concept/building.md) ----------------
+#
+# Asked for directly: *"the builders should carry materials to the site"*.
+# The hall's wood and stone left VillageMarket the moment the project
+# started (SettlementConstruction.try_start) and landed in the project's
+# own reserved_material -- arriving, until this, nowhere at all. The
+# builder is who walks it from the village store to the plot, so he has to
+# be handed both ends of that walk.
+
+
+func test_the_builder_is_handed_the_halls_own_reserved_material():
+	_stock_the_hall()
+	manager._apply_civic_build_decision(_chunk_coord)
+	manager._advance_construction_labor(_chunk_coord, 1.0)
+
+	var builder = _builder_at(_civic_origin)
+	assert_not_null(builder, "precondition: somebody is working")
+	if builder == null:
+		return
+	var project = _hall_project()
+	assert_false(project.reserved_material.is_empty(), "precondition: the hall really reserved material")
+	assert_eq(
+		builder.reserved_material.size(), project.reserved_material.size(),
+		"what he carries is the project's own pile, not a number invented for him"
+	)
+	for item_id in project.reserved_material:
+		assert_almost_eq(
+			float(builder.reserved_material.get(item_id, 0.0)),
+			float(project.reserved_material[item_id]), 0.001,
+			"the %s the hall reserved is the %s he fetches" % [item_id, item_id]
+		)
+
+
+func test_the_builder_is_sent_to_the_village_store_for_it():
+	_stock_the_hall()
+	manager._apply_civic_build_decision(_chunk_coord)
+	manager._advance_construction_labor(_chunk_coord, 1.0)
+
+	var builder = _builder_at(_civic_origin)
+	assert_not_null(builder, "precondition: somebody is working")
+	if builder == null:
+		return
+	var store = manager.nearest_structure_position(
+		builder.plot.get_center(), EarthChunkManager.WAREHOUSE_BUILDING_ID,
+		float(EarthChunkManager.CONSTRUCTION_STORE_REACH_TILES) * TerrainRenderer.TILE_SIZE
+	)
+	assert_not_null(store, "precondition: this village has a store to fetch from")
+	assert_eq(builder.depot, store, "he is sent to the store the village really has")
+
+
+## And he walks the village through the same gate everybody else does --
+## which needs the world, not just a pair of points in it.
+func test_the_builder_is_given_the_world_he_walks_through():
+	_stock_the_hall()
+	manager._apply_civic_build_decision(_chunk_coord)
+	manager._advance_construction_labor(_chunk_coord, 1.0)
+
+	var builder = _builder_at(_civic_origin)
+	assert_not_null(builder, "precondition: somebody is working")
+	if builder == null:
+		return
+	assert_eq(builder.earth, manager, "a builder crossing the square can walk into a wall")

@@ -19698,6 +19698,13 @@ var _construction_site_nodes: Dictionary = {}
 ## should show a builder working on it".
 var _construction_site_workers: Dictionary = {}
 
+## How far a builder walks for the material his project reserved -- his own
+## village, one chunk across, exactly the reach and exactly the reasoning
+## STRUCTURE_MEAL_RADIUS_TILES already uses for a villager walking to a
+## shelf to eat, rather than a second radius invented here. A store further
+## off than that belongs to somebody else's village.
+const CONSTRUCTION_STORE_REACH_TILES := CHUNK_SIZE
+
 
 func _sync_construction_site(chunk_coord: Vector2i, project) -> void:
 	var building_id: String = project.blueprint_id
@@ -19774,16 +19781,36 @@ func _sync_construction_worker(chunk_coord: Vector2i, project, builder_count: fl
 	if not _construction_site_workers.has(chunk_coord):
 		_construction_site_workers[chunk_coord] = {}
 	var by_origin: Dictionary = _construction_site_workers[chunk_coord]
-	var standing = by_origin.get(origin_local)
-	if standing != null and is_instance_valid(standing):
-		return
 	var footprint := BuildingCatalog.footprint_of(project.blueprint_id)
 	var plot := Rect2(
 		Vector2(chunk_coord * CHUNK_SIZE + origin_local) * TerrainRenderer.TILE_SIZE,
 		Vector2(footprint) * TerrainRenderer.TILE_SIZE
 	)
+	var standing = by_origin.get(origin_local)
+	if standing != null and is_instance_valid(standing):
+		# He keeps his round across ticks, but two things can become true
+		# after he starts: a project reserves its material (a site that
+		# began as a bare plan), and a village finishes the store he would
+		# fetch from. Both are picked up here rather than only at spawn, so
+		# neither needs him to die and respawn to notice.
+		if standing.reserved_material.is_empty():
+			standing.reserved_material = project.reserved_material.duplicate()
+		if standing.depot == null:
+			standing.depot = _construction_store_near(plot.get_center())
+		return
 	var worker := ConstructionWorkerMarker.new()
 	worker.plot = plot
+	# The two ends of the haul (docs/concept/building.md, "And he carries
+	# the material"): the project's OWN reservation -- material already
+	# drawn out of VillageMarket when the project started, which used to
+	# travel from a number to the site by teleport -- and the village store
+	# that is physically holding it. No store in reach is a real answer: he
+	# works the plot, exactly as he did before this.
+	worker.reserved_material = project.reserved_material.duplicate()
+	worker.depot = _construction_store_near(plot.get_center())
+	# And the world he crosses to get there, so WalkGate can refuse him a
+	# wall the way it refuses every other walker one.
+	worker.earth = self
 	# The site's own seed, so one builder works one site the same way on
 	# every reload -- the same seed the stage sprite is picked from.
 	worker.seed_value = _house_site_seed(
@@ -19792,6 +19819,16 @@ func _sync_construction_worker(chunk_coord: Vector2i, project, builder_count: fl
 	worker.position = plot.position + plot.size * 0.5
 	_entities_parent.add_child(worker)
 	by_origin[origin_local] = worker
+
+
+## The village store this site fetches from, or null when none is in reach
+## -- the cramped site that went without one (village_warehouse.md's own
+## pillar-1 caveat), or a settlement whose warehouse is not built yet.
+func _construction_store_near(pixel_position: Vector2):
+	return nearest_structure_position(
+		pixel_position, WAREHOUSE_BUILDING_ID,
+		float(CONSTRUCTION_STORE_REACH_TILES) * TerrainRenderer.TILE_SIZE
+	)
 
 
 func _free_construction_worker(chunk_coord: Vector2i, origin_local: Vector2i) -> void:
