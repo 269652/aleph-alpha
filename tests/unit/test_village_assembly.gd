@@ -364,11 +364,8 @@ func _households_needing(producers: int) -> int:
 	return 0
 
 
-## With husbandmen in it, who are the class a farmstead is worked by. A
-## village of pure cottagers cannot staff a SECOND farm -- the first is
-## raised under the charter exemption, and rising off it is what produces
-## the field hands the next one needs. That ordering is the ladder working,
-## not a gap.
+## With husbandmen in it, who are the class a farmstead is worked by under
+## the staffing rule a caller that counts no field hands still gets.
 func test_a_village_short_of_food_raises_a_second_farmhouse():
 	var households := _households_needing(2)
 	var state := _hungry_village(households, ["farmhouse"], {
@@ -380,13 +377,77 @@ func test_a_village_short_of_food_raises_a_second_farmhouse():
 
 ## And a village with nobody who could work one does not vote for a second
 ## farmstead it would leave standing empty -- the same rule that has always
-## kept a village from voting for a forge it has no smith for.
+## kept a village from voting for a forge it has no smith for. A caller
+## that counts no field hands is judged by estate, exactly as before.
 func test_a_village_of_cottagers_alone_does_not_vote_for_a_farm_it_cannot_work():
 	var households := _households_needing(2)
 	var state := _hungry_village(households, ["farmhouse"], {
 		"building_counts": {"farmhouse": 1},
 	})
 	assert_ne(VillageAssembly.next_building(state), "farmhouse")
+
+
+# -- the food works are worked by TRADE, not by estate ----------------------
+#
+# docs/concept/village_economy_balance.md mechanism 6. MEASURED
+# (tools/probe_village_economy.gd, a real village east of Berlin): ten
+# cottager households, two farmers and a herbalist among them, ONE
+# farmhouse; the shelves ate down to zero, the food reading hit 0.00 -- and
+# the assembly voted for a TRADE HALL. The second-farmhouse petition died on
+# the husbandman staffing gate, while the one field the village had was
+# being worked by a farmer who is a cottager, because a field is worked by
+# whoever's trade it is (VillageFarm), whatever their standing.
+
+## A farming household with no field of its own is the reason to raise the
+## next farmstead, whatever estate it holds.
+func test_a_farming_household_without_a_field_is_reason_to_raise_the_next_farm():
+	var households := _households_needing(2)
+	var state := _hungry_village(households, ["farmhouse"], {
+		"building_counts": {"farmhouse": 1},
+		"field_hands": 3,
+	})
+	assert_eq(VillageAssembly.next_building(state), "farmhouse")
+
+
+## And a village whose every farming household already has a field does
+## not raise one nobody would work, however short of food it is.
+func test_a_village_whose_farmers_all_have_fields_raises_no_farm_nobody_would_work():
+	var households := _households_needing(2)
+	var state := _hungry_village(households, ["farmhouse"], {
+		"building_counts": {"farmhouse": 1},
+		"field_hands": 1,
+	})
+	assert_ne(VillageAssembly.next_building(state), "farmhouse")
+	var none := _hungry_village(households, ["farmhouse"], {
+		"building_counts": {"farmhouse": 1},
+		"field_hands": 0,
+	})
+	assert_ne(VillageAssembly.next_building(none), "farmhouse")
+
+
+## The demand cap still holds: a village with a farmstead for every
+## producer its own draw asks for stops asking, spare farmers or not.
+func test_field_hands_never_raise_more_farms_than_the_villages_demand_asks_for():
+	var households := _households_needing(2)
+	var enough := SettlementFoodDemand.producers_needed(households)
+	var state := _hungry_village(households, ["farmhouse"], {
+		"building_counts": {"farmhouse": enough},
+		"field_hands": enough + 4,
+	})
+	assert_ne(VillageAssembly.next_building(state), "farmhouse")
+
+
+## The regression itself: with the food reading on the floor and a farmer
+## standing idle, the village asks for a farm, not for a civic hall.
+func test_a_starving_village_with_an_idle_farmer_asks_for_a_farm_before_a_hall():
+	var households := _households_needing(2)
+	var state := _hungry_village(households, ["farmhouse", "warehouse", "sawmill", "city_hall"], {
+		"building_counts": {"farmhouse": 1, "warehouse": 1, "sawmill": 1, "city_hall": 1},
+		"field_hands": 3,
+		"satisfaction": {VillageEstates.FOOD_KIND_TOKEN: 0.0},
+		"tier": SettlementTier.TOWN,
+	})
+	assert_eq(VillageAssembly.next_building(state), "farmhouse")
 
 
 func test_a_village_with_a_farmhouse_for_every_farmer_it_needs_stops_asking():

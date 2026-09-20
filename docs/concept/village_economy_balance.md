@@ -280,6 +280,57 @@ fraction is carried exactly as it already is for that market.
 A herbalist's forty herbs on the farmhouse shelf are, from now on, forty
 herbs the cottagers have.
 
+## Mechanism 6 — the works keep up with the mouths
+
+Asked directly, after the after-measurement above: *"fix the food
+production deficit so a fed village keeps its stock."*
+
+### What was measured, second pass
+
+The same village, with the probe extended to count harvests and to ask
+the assembly what it would build (`tools/probe_village_economy.gd`,
+`tools/probe_field_room.gd`):
+
+| fact | measured |
+|---|---|
+| farming households | 2 farmers, 1 herbalist, each with a six-bed field; 1 fisher with a pond |
+| farmhouses standing | **3** (at (20,19), (24,19), (6,24)), with fields |
+| farmhouses the settlement *counts* | **1** — `_standing_building_ids_in_chunk` deduplicates by id, so `_settlement_building_counts` cannot count a second farmhouse at all |
+| harvest onto the farmhouse shelves | 299 units in 20 lived days over 3 fields: **5.0 per field per day** |
+| the yield the roster is sized by | `FIELD_YIELD_PER_WORK_BLOCK` 278 per 900 s = **18.5 per field per day** |
+| meals eaten | 10 households × 2.4 = 24 a day |
+| the assembly's vote with the food reading at 0.00 | **a trade hall** |
+| room for another field | 499 of 509 clear farmhouse origins fit a field; both walkers find one |
+
+So the deficit is not room, and not a village too poor to build. It is
+three faults, each a number the village reasons with that is not the
+number the world produces:
+
+1. **The food works are gated on the wrong people.** Mechanism 7 of
+   [village_estates.md](village_estates.md) lets a village petition for
+   another farmhouse while fewer stand than its demand asks for — and then
+   asks `VillageLabor.can_staff`, which wants a *husbandman*. But a field
+   is worked by whoever's **trade** it is: `VillageFarm` hands a farmer
+   their field whatever their estate, and the only field this village had
+   was being worked by a cottager. A village nobody has yet risen in can
+   never pass that gate, so it votes for a trade hall while it starves.
+   ✅ **Fixed**: the assembly state carries `field_hands`, the households
+   whose trade works a field, and the next farmstead is wanted while one of
+   them stands without a field (`test_village_assembly.gd`). A caller that
+   has not counted keeps the estate gate.
+2. **Farmhouses are not counted.** 🚧 The settlement's building count
+   deduplicates, so "outnumbered" is judged against one farmhouse however
+   many stand — with fault 1 fixed alone the village would vote for a
+   fourth.
+3. **The roster is sized against a yield the field does not give.** 🚧 The
+   stub-world measurement behind `FIELD_YIELD_PER_WORK_BLOCK` is 3.7× what
+   a real field yields once real water, real seasons and real walks are in
+   it; two fields are sized to feed ten households and five would be
+   needed. Whether the gap is a mechanism (a farmhouse tank at its drinking
+   reserve refuses to water, and a bed that is not watered withers — see
+   [village_water.md](village_water.md) mechanism 3) or the honest cost of
+   a real field is being measured before anything is re-derived.
+
 ## Interaction with other docs
 
 - [traveling_merchants.md](traveling_merchants.md) — the cart, the buy
