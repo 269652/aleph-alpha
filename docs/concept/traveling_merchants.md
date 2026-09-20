@@ -491,10 +491,9 @@ built:
   tanks sharing one name. He trades with the live market now and pays the
   purse the wage comes out of. The savings still die on a chunk reload,
   which is a gap this file states rather than implies. They no longer
-  die on a re-derivation in play — an arrival, or a building the village
-  completes — since that hands the spawn the market the village already
-  trades in ([village_ponds.md](village_ponds.md), "And the re-derivation
-  keeps the village's market", 2026-09-20).
+  die on a re-derivation in play — an arrival — since that hands the spawn
+  the market the village already trades in ([village_ponds.md](village_ponds.md),
+  "Why not re-derive the village, and what that measured", 2026-09-20).
 - ✅ **The cart runs on the village's own day** (2026-09-20). `arrivals`
   divided by `ConstructionCatchup.SECONDS_PER_DAY` (3600), the offscreen
   catch-up's day, while `_step_merchant_visits` runs from the settlement

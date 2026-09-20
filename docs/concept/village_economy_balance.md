@@ -510,9 +510,9 @@ standing where there were two fields and a pond:
   shelf. Eleven mouths on four fields and one pond is what drains the
   shelves from 45 to 4. Not a fault in the count, and closed since in
   [village_ponds.md](village_ponds.md) ("A pond dug the day the fisher's
-  house stands"): the house the ladder raises for them re-derives the
-  village the day it stands, and the pond is dug beside it the same
-  moment.
+  house stands"): the house the ladder raises for them settles the
+  ground around it the day it stands, and the pond is dug beside it and
+  handed to them the same moment.
 - **Herb reads 1.00 throughout**; fuel read 0.00 at two samples (450 and
   600 s) while a trade-hall project started and took its wood, and the
   purse fell once, 720 → 369, at the sample the newcomer arrived, then
@@ -560,8 +560,8 @@ honestly show through the step.
   holds its stock. Past the founding ten the works must keep growing
   with the village; a newcomer who fishes now digs their pond the day
   their house stands ([village_ponds.md](village_ponds.md), "A pond dug
-  the day the fisher's house stands" — a completed building re-derives
-  the village the way an arrival does), where measured before that they
+  the day the fisher's house stands" — a completed building settles the
+  ground around the people already standing), where measured before that they
   counted as a producer and produced nothing until the chunk was next
   loaded. The
   estate layer also still reads food's satisfaction off stock rather
