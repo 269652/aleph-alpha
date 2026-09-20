@@ -115,7 +115,70 @@ does not swap them for somebody else.
 
 ## Status
 
-(filled in as this is built)
+- ✅ **Mechanism 1 — starvation is time at the top of the drive.**
+  `Starvation`, pure and static, measured in hunger CYCLES rather than
+  days — there are two day-lengths in this codebase and a mortality clock
+  written against the wrong one either kills instantly or never kills at
+  all. The window is pinned by what it produces (longer than one cycle;
+  short enough that a village with nothing to eat really loses people),
+  never chosen. `test_starvation.gd` 16/16, `test_npc_needs.gd` 14/14.
+- ✅ **Mechanism 2 — dying where you can see it.** `NpcMarker.
+  _step_starvation`, beside the hunger interrupt. `test_npc_marker.gd`
+  102/102 — including the case that a HUNTER in a region full of game
+  feeds itself off its own work and correctly never starves, which the
+  famine chain already depended on.
+- ✅ **Mechanism 3 — a death is a departure with a reason.**
+  `record_villager_death` goes out through the same `npc_departed` event
+  the estate exodus already appends, so the census, the tier, the ladder
+  and the settlement card all see it with no new plumbing.
+  `test_earth_chunk_manager_village_mortality.gd` 5/5.
+- ✅ **Mechanism 4 — villagers follow the roster.**
+  `VillageRenderer.reconcile_villagers`, stepped per settlement.
+  `test_village_renderer.gd` 150/150.
+
+### Measured on a real village (`tools/probe_village_famine.gd`)
+
+```
+  seconds   roster   standing  hungriest market food  starved/win
+        0       10         10       0.30          0      0/200
+      300       11         11       0.83          6      0/200
+      450       12         12       1.00         14     12/200
+      600       12         12       1.00          0    151/200
+      750       12         12       1.00          0    189/200
+      900       12         12       1.00          0    102/200
+```
+
+Two claims, both from that run. **Newcomers really do move in**: the
+roster grew 10 → 12 and the villagers standing there tracked it exactly at
+every sample, which is the gap
+[village_growth.md](village_growth.md) recorded. And **the window behaves
+as pillar 3 asks**: the worst-off villager reached 189 of 200 — eleven
+seconds from death — and then fell back to 102 as food arrived. That
+fallback IS the mechanic: the cart of grain saving somebody.
+
+A first, unfaithful cut of that probe stepped only the settlements and
+the villagers, so nothing in the village could ever GROW food, and it
+reported a total wipe-out. Recorded here because the number was wrong in
+the direction that would have caused a panicked retune of a constant that
+was fine.
+
+### Known gaps, stated rather than papered over
+
+- 🚧 **A newcomer gets no specialist's ground until the chunk reloads.**
+  Fields, ponds and the carter's round are handed out in bulk passes over
+  the whole village; re-running those against a village mid-life is a
+  different change from this one. They work the general trades meanwhile.
+- 🚧 **Only DEATH removes a villager.** A household that leaves through
+  the estate exodus still has its villager standing there until the chunk
+  reloads. The reconcile is additive on purpose: culling markers to match
+  a shrunken roster has to pick somebody arbitrary, and the one it picked
+  would be as likely to be the farmer you were watching as anybody.
+- ⬜ **Nothing is left behind.** No corpse, no grave, no estate. What a
+  dead villager leaves is a question [death.md](death.md) has not answered
+  for NPCs, and inventing one here would be inventing a mechanic nobody
+  asked for.
+- ⬜ **An unloaded village neither starves nor buries.** The same honest
+  limitation immigration already carries, for the same reason.
 
 ## Interaction with other docs
 
