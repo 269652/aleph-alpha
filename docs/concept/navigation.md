@@ -129,8 +129,46 @@ observation, not an optimisation.
 
 ## Status
 
-- ⬜ Everything below is the spec; see the Status list at the bottom of
-  this file as slices land.
+- ✅ **Creatures see buildings.** `CreatureMovementGate.clear_direction`
+  takes an optional tile predicate and `tile_size`; the twelve-turn search
+  it already did needed no change, only a new kind of obstacle. 17 tests,
+  including a sweep from every tile ringing a house in all eight
+  directions. The condition *guarding* the gate mattered as much: both
+  call sites took a fast path skipping it entirely when no tree or stone
+  was near, so a creature in open ground beside a house walked straight
+  through however well the gate understood buildings.
+- ✅ **`BuildingWalls`** holds the predicate once for all three movers
+  (`NpcMarker`, `CreatureMarker`, `BondedCompanionMarker`), built once per
+  mover in `setup()` rather than per frame. `BondedCompanionMarker` had
+  been discarding its `tile_size` parameter entirely; it is kept now.
+- ✅ **`TileRouter`** — 8-connected A\* with an octile heuristic, no corner
+  cutting, a hard node budget, and integer costs (scaled by 100) so that
+  two genuinely equal paths compare equal and the result is deterministic.
+  13 tests.
+- ✅ **Villagers route.** `NpcMarker._steer_toward` aims at the next
+  waypoint of a real route, recomputed only when the destination *tile*
+  changes and no more often than `ROUTE_RECOMPUTE_SECONDS` — so a villager
+  walking to a fixed doorstep pays for exactly one search. Pinned by the
+  test that actually mattered: not "never inside a house", which sliding
+  already passed, but **arrives at a doorstep with a house squarely in the
+  way**, which sliding failed at 89px out.
+- ✅ **The gate stays underneath the router.** A route can go stale — a
+  house raised across it mid-walk — and `NpcBuildingGate` is what
+  guarantees a stale route still never ends inside a wall.
+- ⬜ **Creatures still do not route**, by design (see the open question
+  below). A creature blocked by a long wall turns along it and wanders
+  off, which is what a wandering animal should do, but a predator
+  committed to a hunt inherits the same limitation.
+- ⬜ **Terrain is still not part of either navigation path.**
+  `TerrainPassability` answers slope and `blocks_ground_cover` answers
+  water, and neither is wired in — so agents still route up cliffs and
+  across rivers. The router takes an arbitrary predicate, so this is
+  additive rather than a redesign.
+- ⬜ **Trees and stones are not in the villager's predicate.** Creatures
+  avoid them through `solid_obstacles_near`; villagers only avoid
+  buildings.
+- ⬜ **No cross-chunk routing.** A destination in an unloaded chunk cannot
+  be routed to. Villagers never have one; carters eventually might.
 
 ## Open questions
 

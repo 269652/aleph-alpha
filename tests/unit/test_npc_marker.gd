@@ -1202,3 +1202,48 @@ func test_a_villager_with_no_world_bound_walks_exactly_as_before():
 		before.distance_to(marker.position), 0.0,
 		"an NPC with no world bound stopped moving"
 	)
+
+
+func test_a_villager_routes_around_a_house_and_actually_gets_home():
+	# The bug sliding could never fix (see docs/concept/navigation.md):
+	# NpcBuildingGate keeps a villager ALONG a wall it brushes, but a
+	# villager whose own doorstep sits directly behind its own house has
+	# nowhere to slide to and presses into the wall forever. Avoiding the
+	# house was never the hard part -- ARRIVING was.
+	var world := HouseInTheWayWorld.new()
+	marker.setup(world, TILE_SIZE)
+	marker.position = Vector2(61 * TILE_SIZE + 8, 61 * TILE_SIZE + 8)
+	marker.home_position = Vector2(68 * TILE_SIZE + 8, 61 * TILE_SIZE + 8)
+	marker.workspot_position = marker.home_position
+	marker.landmarks = {}
+	var closest := INF
+	for i in 2000:
+		marker._process(0.05)
+		closest = minf(closest, marker.position.distance_to(marker.home_position))
+		if closest <= TILE_SIZE:
+			break
+	assert_lte(
+		closest, float(TILE_SIZE),
+		"the villager never got home -- closest approach was %.1fpx, with a house in the way" % closest
+	)
+
+
+func test_routing_still_never_puts_a_villager_inside_the_house():
+	# The gate stays underneath the router: a route can go stale (a house
+	# raised across it mid-walk), and this is what guarantees a stale route
+	# still cannot end inside a wall.
+	var world := HouseInTheWayWorld.new()
+	marker.setup(world, TILE_SIZE)
+	marker.position = Vector2(61 * TILE_SIZE + 8, 61 * TILE_SIZE + 8)
+	marker.home_position = Vector2(68 * TILE_SIZE + 8, 61 * TILE_SIZE + 8)
+	marker.workspot_position = marker.home_position
+	marker.landmarks = {}
+	for i in 2000:
+		marker._process(0.05)
+		var tile := Vector2i(
+			floori(marker.position.x / TILE_SIZE), floori(marker.position.y / TILE_SIZE)
+		)
+		if world.covers(tile):
+			assert_false(true, "routing put the villager inside the house at %s" % tile)
+			return
+	assert_true(true)

@@ -16,6 +16,7 @@ const NpcInstructionEvaluator = preload("res://src/world/npc_instruction_evaluat
 const CharacterView = preload("res://scenes/character_view.gd")
 const CreaturePerception = preload("res://src/gameplay/creature_perception.gd")
 const NpcBuildingGate = preload("res://src/gameplay/npc_building_gate.gd")
+const TileRouter = preload("res://src/gameplay/tile_router.gd")
 const ForagerBehavior = preload("res://src/gameplay/forager_behavior.gd")
 const VillageFarm = preload("res://src/gameplay/village_farm.gd")
 const FarmerBehavior = preload("res://src/gameplay/farmer_behavior.gd")
@@ -105,6 +106,26 @@ var _tile_size := 16
 ## and left invalid for one that cannot, so an unbound marker walks exactly
 ## as it always did.
 var _wall_tiles := Callable()
+
+## How much A* a single villager may spend on one route (see
+## docs/concept/navigation.md). A chunk is 32x32, so 1024 tiles is a full
+## chunk-wide search; this allows that plus headroom for re-expansion, and
+## caps the worst case directly rather than trusting the goal to be near.
+const ROUTE_NODE_BUDGET := 1500
+
+## The smallest gap between two recomputes of a route. A villager walking
+## to a fixed doorstep pays for ONE search; this only matters for a moving
+## destination (a hunter's quarry), where the goal tile can change every
+## frame and an unthrottled A* would run every frame with it.
+const ROUTE_RECOMPUTE_SECONDS := 0.5
+
+## Tiles still to walk (TileRouter), the destination they were computed
+## for, and time since that computation. Empty route means "no detour
+## needed or none found" -- either way the villager walks straight at its
+## target and NpcBuildingGate keeps it out of walls.
+var _route: Array = []
+var _route_goal_tile := Vector2i(2147483647, 2147483647)
+var _route_age := 0.0
 var _perception := CreaturePerception.new()
 
 ## docs/concept/npc.md "Needs and the local production economy": this
@@ -587,7 +608,15 @@ func _process(delta: float) -> void:
 	# body; this marker is a Sprite2D assigning `position` directly, so a
 	# wall means nothing to it unless it looks -- reported live: "NPCs walk
 	# straight through houses, ignoring the hitbox".
-	var desired := position.move_toward(target, (RUN_SPEED if running else WALK_SPEED) * delta)
+	# Route AROUND buildings, not merely along them. The gate below is a
+	# local reflex and cannot detour: a villager whose doorstep sits behind
+	# its own house has nowhere to slide to and would press into the wall
+	# forever (reported live: "add proper wayfinding / routing").
+	var steer := _steer_toward(target, delta)
+	var desired := position.move_toward(steer, (RUN_SPEED if running else WALK_SPEED) * delta)
+	# The gate stays UNDERNEATH the router rather than being replaced by it:
+	# a route can go stale mid-walk (a house raised across it), and this is
+	# what guarantees a stale route still never ends inside a wall.
 	position = NpcBuildingGate.resolve_step(position, desired, _tile_size, _wall_tiles)
 	_update_animation(position - before)
 	# Hidden once actually arrived home on a "home"-tagged entry -- a house
@@ -1160,6 +1189,45 @@ func _sync_market_stand(is_working: bool) -> void:
 		return
 	market_stand.visible = stand_is_up(
 		is_working, position.distance_to(market_stand.position), market_stand_reach()
+	)
+
+
+## Where to actually aim this frame: the next waypoint of a real route
+## when one is needed, or `target` itself when the way is clear, no route
+## was found, or this villager has no world to ask.
+##
+## Falling back to `target` on a failed search is deliberate. A route that
+## cannot be found (goal unreachable, or budget spent) must not stop a
+## villager walking -- it only means they walk the old, direct way, with
+## the gate keeping them out of walls exactly as before.
+func _steer_toward(target: Vector2, delta: float) -> Vector2:
+	_route_age += delta
+	if not _wall_tiles.is_valid() or _tile_size <= 0:
+		return target
+	var here := _tile_of(position)
+	var goal := _tile_of(target)
+	if here == goal:
+		return target  # final approach, inside the destination tile
+	if goal != _route_goal_tile and _route_age >= ROUTE_RECOMPUTE_SECONDS:
+		_route_goal_tile = goal
+		_route_age = 0.0
+		_route = TileRouter.route(here, goal, _wall_tiles, ROUTE_NODE_BUDGET)
+	# Drop whatever has already been walked. A villager can cross more than
+	# one waypoint in a frame at RUN_SPEED, so this is a loop, not an if.
+	while not _route.is_empty() and _tile_of(position) == _route[0]:
+		_route.remove_at(0)
+	if _route.is_empty():
+		return target
+	return _tile_centre(_route[0])
+
+
+func _tile_of(point: Vector2) -> Vector2i:
+	return Vector2i(floori(point.x / _tile_size), floori(point.y / _tile_size))
+
+
+func _tile_centre(tile: Vector2i) -> Vector2:
+	return Vector2(
+		tile.x * _tile_size + _tile_size * 0.5, tile.y * _tile_size + _tile_size * 0.5
 	)
 
 

@@ -308,16 +308,17 @@ every real house in the catalog by
   exists to avoid. Backed by a new `EarthChunkManager.has_building_at_global`,
   the allocation-free half of `building_at_global` (which resolves the
   owning origin and then `duplicate()`s the whole record).
-- ⬜ **No pathfinding.** Sliding handles brushing a wall; it does not get a
-  villager out of a concave pocket. A villager whose target sits directly
-  behind a building can still press into the wall rather than walking
-  around it. Real navigation is a separate, much larger piece of work.
-- ⬜ **Creatures still walk through houses.** `solid_obstacles_near` — what
-  `CreatureMovementGate` reads — walks `_loaded_trees` and `_loaded_stones`
-  only, with no building term at all. The same class of bug, untouched by
-  this pass.
+- ✅ **Pathfinding, since closed.** The gap this list originally named —
+  sliding gets a villager *along* a wall but never *around* one — is
+  fixed: `TileRouter` gives villagers a real A\* route and `NpcMarker`
+  follows it, with this gate still underneath as the last line of defence
+  against a stale route. See [navigation.md](navigation.md).
+- ✅ **Creatures see buildings too**, via the same shared `BuildingWalls`
+  predicate reaching `CreatureMovementGate`. Also in
+  [navigation.md](navigation.md).
 - ⬜ Only buildings are solid to a villager. Trees and stones, which
-  creatures already avoid, are still walked straight through.
+  creatures already avoid through `solid_obstacles_near`, are still walked
+  straight through.
 
 ## Settlement growth: migration toward player-built structures
 
