@@ -137,6 +137,25 @@ stands with nowhere to farm. Placed with the same self-healing
 older village gains its farmhouses on its next visit rather than only at
 founding.
 
+**One rule, two callers** (2026-09-19). "Has real room" and "here is your
+field" were two separate copies of the same question — `_field_fits_at` at
+siting, `_workable_field_of` at derivation — and they had drifted. The
+derivation rejects a cell a **neighbouring farmhouse owns** (ownership is
+geometric, so a farmhouse raised later can take ground from one raised
+earlier) and a cell **reserved for a landmark** (the village well is not
+somewhere to sow); siting checked neither. A farmhouse could therefore be
+raised on ground that looked free and then be handed nothing at all — no
+beds, and so no fence ring either. Reported live with the village in shot:
+*"There's a farmhouse without bed enclosure"*.
+
+Both now go through one `_may_sow(origin, origins, …)` predicate, with
+`_reserving` wrapping the occupancy test the same way for both, so the two
+cannot answer differently. A candidate origin is judged with **itself in the
+running** against the farmhouses already standing, since a farmhouse owns
+ground by being nearest to it. `test_siting_and_derivation_never_disagree_
+about_an_origin` states the invariant directly rather than testing the two
+copies separately.
+
 ### The villager's work
 
 `NpcMarker` gains `_step_farm(delta, is_working)`, a sibling of the existing
@@ -730,6 +749,26 @@ again.
 
 ## Status
 
+- ✅ **A farmhouse is only raised where its field will really be derived**
+  (2026-09-19) — see "One rule, two callers" above. Siting and derivation
+  were two copies of the same question that had drifted apart, so a
+  farmhouse could be raised on ground the derivation then refused it: no
+  beds, no fence, reported as *"a farmhouse without bed enclosure"*. They
+  are one predicate now. **Honestly: not reproduced before fixing.** 29
+  farmhouses across 14 villages of flat stub ground all took a full six-cell
+  field, with landmarks reserved and with the two rules agreeing every time
+  (`tools/probe_farmhouse_fields.gd`), so the gaps are real and proven by
+  construction rather than caught in the act on real terrain.
+- ✅ **A farmer sows the field before sowing any of it twice** (2026-09-19)
+  — reported as *"the NPC only sows 4 / 6 tiles"*, and measured: every field
+  in the sample held six cells with the LAST one "never tilled" after a full
+  work block, for both farmers in the village. `next_action` returned the
+  first bed wanting the top-priority job, and unbroken ground asks to be
+  planted exactly like a bed that has already been harvested — so once the
+  earlier beds began cycling, one of them was always an earlier "plant" and
+  the end of the field was never broken. Unbroken ground now wins among beds
+  asking for the same thing; a ripe crop and a dying bed still come first.
+  Re-measured after the fix: every field 6/6.
 - ✅ **A fence with nothing left to enclose comes down.**
   `VillageRenderer._clear_rails_with_nothing_to_enclose` now asks whether a
   rail is on a real frame this visit — a farmhouse's ring around its own

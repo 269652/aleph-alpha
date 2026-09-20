@@ -28021,25 +28021,101 @@ furnished for a *nurse*.
 for a merchant, so the one shared shape can be read next to both trades that
 use it rather than trusted from ASCII.
 
-### A pre-existing failure found while verifying this, recorded rather than fixed
+### A pre-existing failure found while verifying this — and then fixed
 
-`test_player.gd`'s `test_entering_a_house_furnishes_it_for_its_own_residents_
-occupation` (and its sibling `test_entering_a_house_with_no_recorded_
-resident_still_gets_a_real_occupation`) fail: the player never gets indoors,
-so the assertion reads a null interior view. **Not caused here** — verified
-by running the same test against clean worktrees at `d3ddbe8`, `0bfe582` and
-`03a94ff`, where it fails identically. It predates this work by at least two
-merges, and it is not one of the four pre-existing failures the charter pass
-recorded, because no pass so far has run `test_player.gd` to completion (it
-is ~324 tests and takes the better part of an hour). Both tests place a
-`house_small` at chunk (0,0) tile (10,10), which is in the Earth
-projection's open-ocean corner — the likely cause is that `place_building`
-now refuses a wet footprint, which the test predates.
+`test_player.gd`'s interior tests were failing on "precondition: entered":
+the player never got indoors, so every assertion after it read a null
+interior view. **Not caused here** — verified against clean worktrees at
+`d3ddbe8`, `0bfe582` and `03a94ff`, where it failed identically. It predates
+this work by at least two merges, and it is not among the four pre-existing
+failures the charter pass recorded, because **no pass had ever run
+`test_player.gd` to completion** (~324 tests, the better part of an hour).
+
+It was **nineteen** tests, not the two first noticed, and the cause was one
+line repeated across two fixtures and four tests: every one of them placed
+its `house_small` at chunk (0, 0) tile (10, 10). Global tile (0, 0) is the
+Earth projection's corner, so that is **open ocean** — measured, not
+assumed: every footprint cell and the doorstep come back `water=true`,
+`place_building` returns false, and `building_door_near` finds nothing.
+`place_building` learned to refuse a wet footprint at some point after these
+tests were written (see building.md, "Buildings are placed in rivers"), and
+they had been silently asserting nothing ever since.
+
+The fix is the one `_a_dry_site_for` already existed for: **find the ground,
+do not assume it.** `_a_house_on_dry_ground` raises the house on a real dry
+site in Berlin's chunk, hands back `{chunk_coord, origin, global_origin,
+doorstep_global}`, and leaves the player on its doorstep; `_walk_in` presses
+Enter for real. The villager fixture takes the house's own chunk now, because
+`resident_marker_for` looks a resident up in
+`_loaded_villages[record.chunk_coord]` — one filed under the origin chunk
+while their house stands in Berlin's is a villager nobody indoors can find.
+Every house these tests raise is torn down in `after_each`, like the guilds.
 
 Tests: `test_interior_templates.gd` (29, up from 22), `test_house_decor.gd`
 (9), plus additions to `test_player.gd`; `test_house_interior_view.gd` (23),
 `test_house_interior_view_occupants.gd` (15) and `test_building_catalog.gd`
 (75) green alongside.
+
+---
+
+## 2026-09-20 — A farmhouse with no field, and a field with an unbroken bed
+
+Reported live with the village in shot: *"There's a farmhouse without bed
+enclosure and the NPC only sows 4 / 6 tiles"*. Two reports, two causes.
+
+### The last bed of every field was never broken
+
+Measured before changing anything (`tools/probe_village_farming.gd`). Every
+field in the sample held exactly six cells, five cycling normally — and the
+sixth, the last in the field's own order, reported `no marker -- never
+tilled` after a full 600-second work block. The same bed, for both farmers
+in the village.
+
+`VillageFarm.next_action` scanned from index 0 and returned the first plot
+wanting the highest-priority kind. **Ground nobody has tilled asks to be
+planted, and so does a bed that was sown, ripened and harvested.** So the
+moment the earlier beds started cycling, one of them was always an earlier
+"plant" than the ground at the end, and the last bed was never broken at all.
+
+✅ Unbroken ground now wins **among beds asking for the same thing**, which
+only reorders equals: a `null` plot's action is `"plant"` and nothing else,
+so a ripe crop and a dying bed still come first — that priority is what the
+kind order exists for, and what the existing tests pin. Re-measured after
+the fix: the two previously untilled cells now read `grown=30.3/30.3` and
+`23.7/23.6`, and every field is 6/6.
+
+### Siting and derivation had drifted apart
+
+"Is there room for a field here?" (`_field_fits_at`, at siting) and "here is
+your field" (`_workable_field_of`, later) were two separate copies of the
+same question. The derivation rejects a cell a **neighbouring farmhouse
+owns** — ownership is geometric, so a farmhouse raised later can take ground
+from one raised earlier — and a cell **reserved for a landmark**. Siting
+checked neither. A farmhouse could be raised on ground that looked free and
+then be handed nothing: no beds, so no fence ring.
+
+✅ Both go through one `_may_sow(origin, origins, …)` predicate now, with
+`_reserving` wrapping the occupancy test identically for both. A candidate
+origin is judged **with itself in the running** against the farmhouses
+already standing, because a farmhouse owns ground by being nearest to it.
+`test_siting_and_derivation_never_disagree_about_an_origin` states that
+invariant directly instead of testing the two copies apart; mutating the
+reserved-cell handling back out fails it with the bug's own words —
+*"siting said true at (10, 10), derivation handed over 0 cells"*.
+
+⬜ **Not reproduced before fixing, and worth saying so.**
+`tools/probe_farmhouse_fields.gd` scanned 14 villages and 29 farmhouses on
+flat stub ground: every one took a full six-cell field, with landmarks
+reserved, and the two rules never disagreed there. The first run of that
+probe was worse than useless — it called `_fenced_farm_fields` *without* the
+reserved landmarks the real village passes, so it measured a more permissive
+world than the game's and reported everything fine. Flat ground has no
+water, no trees and no prior tiles, so the terrain that would expose this is
+exactly what the stub lacks. The gaps are real and are fixed by
+construction; catching one in the act still wants a real-terrain probe.
+
+Tests: `test_village_farm.gd` 77/77 (4 new), `test_village_renderer.gd`
+132/132 (3 new), `test_npc_marker_farming.gd` 39/39.
 
 ## A field's fence shut its own farmer out (`concept/village_farms.md`, "The rail stands on the inner edge", 2026-09-20)
 
