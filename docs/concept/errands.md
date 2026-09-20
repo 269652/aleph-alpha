@@ -139,5 +139,29 @@ refusal in the game.
 
 ## Status
 
-- ⬜ Everything above, as of this doc's writing. Tracked slice by slice
-  in `docs/progress.md`.
+- ✅ **`ErrandDelivery`, the whole transaction** (2026-09-20).
+  `deliverable_for` / `settle` / `offer_from_frame`, pure and pinned by
+  the properties they produce (`test_errand_delivery.gd`, 28: value
+  conserved as `paid + debt == value` across purse balances, a purse
+  never overdrawn, never more given than carried or needed, `clears`
+  exactly when every input is covered, the pinned floor, and the offer's
+  refusals naming who needs what).
+- ✅ **The verb, at the villager's door** (2026-09-20).
+  `ConversationWindow.open_for`'s fifth argument and its
+  `give_requested` signal (`test_conversation_window.gd`, 18: the button
+  names the count, an unmeetable offer is a sentence rather than a dead
+  button, asking about the weather does not withdraw the offer, and
+  giving withdraws it so it cannot be pressed twice).
+- ✅ **The transfer** (2026-09-20).
+  `EarthChunkManager.deliver_errand` (`test_earth_chunk_manager_errand.gd`,
+  9: the goods leave the player and enter the settlement's own market, the
+  household pays out of its own purse and is never overdrawn, a poor
+  household still takes the goods and carries a debt, an offer the player
+  can no longer meet moves only what is really there, the delivery is a
+  real witnessed event, and the projection reports no shortage afterwards
+  **because there is none**). The deal is re-settled from live inventory
+  at the moment of the press, so a stale offer can never take goods that
+  are gone.
+- ⬜ The debt is recorded on the event but no dialogue topic speaks to it
+  yet, and `NpcRecognition` does not yet read `errand_delivered` as its
+  own memory kind. Both are named follow-ups, not silent gaps.

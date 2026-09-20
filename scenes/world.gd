@@ -153,6 +153,7 @@ const ToggleSwitch = preload("res://src/ui/toggle_switch.gd")
 const WeatherModel = preload("res://src/world/weather_model.gd")
 const SeasonCycle = preload("res://src/world/season_cycle.gd")
 const EntityRef = preload("res://src/emergence/entity_ref.gd")
+const ErrandDelivery = preload("res://src/gameplay/errand_delivery.gd")
 const Why = preload("res://src/emergence/why.gd")
 const SimulationMetrics = preload("res://src/emergence/simulation_metrics.gd")
 const TreeSpecies = preload("res://src/world/tree_species.gd")
@@ -1917,6 +1918,7 @@ func _build_conversation_window() -> void:
 	_conversation_window.offset_bottom = 210.0
 	_ui.add_child(_conversation_window)
 	_conversation_window.topic_chosen.connect(_on_conversation_topic_chosen)
+	_conversation_window.give_requested.connect(_on_conversation_give_requested)
 
 
 ## The talk key's real handler (docs/concept/dialogue.md's own Status
@@ -2000,7 +2002,13 @@ func _open_conversation_with(npc: NpcMarker, local_player: Player) -> void:
 		beats.append(DialogueBeat.build({}, frame, voice_register, recognition))
 
 	_conversation_npc_id = npc_id
-	_conversation_window.open_for(npc_id, npc.identity.npc_name, result["greeting"], beats)
+	# The errand, read off the very frame the villager's own "I could use
+	# three more rock" line is built from (docs/concept/errands.md): the
+	# saying and the giving cannot disagree, because they are one state.
+	_conversation_window.open_for(
+		npc_id, npc.identity.npc_name, result["greeting"], beats,
+		ErrandDelivery.offer_from_frame(frame)
+	)
 
 
 ## Burns the chosen topic in the real, persistent ledger (see
@@ -2009,6 +2017,42 @@ func _open_conversation_with(npc: NpcMarker, local_player: Player) -> void:
 ## itself holds no ledger of its own (see that window's own doc comment).
 func _on_conversation_topic_chosen(topic_id: String) -> void:
 	_chunk_manager.seen_ledger().mark_told(_conversation_npc_id, topic_id, _chunk_manager.world_age_seconds())
+
+
+## The player handed a villager the goods their household is short of
+## (docs/concept/errands.md). EarthChunkManager.deliver_errand performs the
+## whole transfer atomically against live state -- inventory, the
+## settlement's own market, the household's purse, a witnessed event -- and
+## hands back what really moved, which is what the banner then reports.
+func _on_conversation_give_requested(offer: Dictionary) -> void:
+	var local_player := _players.get_node_or_null(str(multiplayer.get_unique_id())) as Player
+	if local_player == null:
+		return
+	var deal: Dictionary = _chunk_manager.deliver_errand(offer, local_player)
+	if int(deal["units"]) <= 0:
+		return
+	_show_errand_banner(deal)
+
+
+## What a delivery reports: what moved, what it paid, and what it is still
+## owed -- a village too poor to pay takes the goods anyway and carries the
+## rest as a debt, which the player should hear about rather than be
+## silently short-changed over.
+func _show_errand_banner(deal: Dictionary) -> void:
+	var parts: Array[String] = []
+	for entry in deal["given"]:
+		parts.append("%d %s" % [int(entry["count"]), String(entry["item_id"]).replace("_", " ")])
+	var moved := ", ".join(parts)
+	var paid := int(deal["paid"])
+	var debt := int(deal["debt"])
+	var line := "Handed over %s." % moved
+	if paid > 0:
+		line += " Paid %d gold." % paid
+	if debt > 0:
+		line += " They owe you %d more." % debt
+	elif paid <= 0:
+		line += " They have nothing to pay with."
+	_set_message_banner(_trade_banner, line)
 
 
 func _on_craft_requested(recipe_id: String) -> void:

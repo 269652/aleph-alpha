@@ -158,3 +158,86 @@ func _all_text() -> String:
 	for label in window.find_children("*", "Label", true, false):
 		text += label.text + "\n"
 	return text
+
+
+# -- the give verb, at the villager's door -------------------------------
+#
+# docs/concept/errands.md: the villager already says "I could use three
+# more rock" through the household_ask beat; the button that hands them
+# over belongs in the same window the saying happens in. An unavailable
+# offer is shown as a named reason rather than hidden, so a player
+# carrying the wrong thing learns what the right thing is.
+
+const ErrandDelivery = preload("res://src/gameplay/errand_delivery.gd")
+
+
+func _give_offer(carried: Dictionary) -> Dictionary:
+	return ErrandDelivery.offer_from_frame({
+		"npc_name": "Bren",
+		"household_id": "household:7",
+		"settlement_id": "settlement:1_2",
+		"shortfall_missing": [{"item_id": "rock", "need": 3}],
+		"player_carrying": carried,
+	})
+
+
+func _give_buttons() -> Array:
+	var found: Array = []
+	for child in window._topics_container.get_children():
+		if child is Button and String(child.text).begins_with("Give"):
+			found.append(child)
+	return found
+
+
+func test_no_offer_means_no_give_button():
+	window.open_for("npc:1", "Bren", "Hello.", [_weather_beat()], {})
+	assert_eq(_give_buttons().size(), 0)
+
+
+func test_an_offer_the_player_can_meet_shows_a_give_button_naming_the_goods():
+	window.open_for("npc:1", "Bren", "Hello.", [_weather_beat()], _give_offer({"rock": 5}))
+	var buttons := _give_buttons()
+	assert_eq(buttons.size(), 1, "exactly one give button")
+	assert_true(String(buttons[0].text).contains("3"), buttons[0].text)
+	assert_false(buttons[0].disabled, "the player is carrying the goods")
+
+
+func test_an_offer_the_player_cannot_meet_is_shown_disabled_with_its_reason():
+	window.open_for("npc:1", "Bren", "Hello.", [_weather_beat()], _give_offer({"wood": 9}))
+	var buttons := _give_buttons()
+	assert_eq(buttons.size(), 0, "there is nothing to give, so no give button")
+	var reasons: Array = []
+	for child in window._topics_container.get_children():
+		if child is Label and String(child.text).contains("rock"):
+			reasons.append(child)
+	assert_eq(reasons.size(), 1, "the refusal is a sentence naming what is needed, not a dead button")
+
+
+func test_pressing_give_emits_the_offer_it_was_built_from():
+	var offer := _give_offer({"rock": 5})
+	window.open_for("npc:1", "Bren", "Hello.", [_weather_beat()], offer)
+	var emitted: Array = []
+	window.give_requested.connect(func(o): emitted.append(o))
+	_give_buttons()[0].emit_signal("pressed")
+	assert_eq(emitted.size(), 1, "one press, one request")
+	assert_eq(emitted[0]["given"], [{"item_id": "rock", "count": 3}])
+	assert_eq(emitted[0]["household_id"], "household:7")
+
+
+func test_the_give_button_survives_a_topic_being_chosen():
+	window.open_for("npc:1", "Bren", "Hello.", [_weather_beat(), _household_ask_beat()], _give_offer({"rock": 5}))
+	assert_eq(_give_buttons().size(), 1, "precondition")
+	for child in window._topics_container.get_children():
+		if child is Button and not String(child.text).begins_with("Give"):
+			child.emit_signal("pressed")
+			break
+	assert_eq(_give_buttons().size(), 1, "asking about the weather does not withdraw the offer")
+
+
+func test_giving_withdraws_the_offer_so_it_cannot_be_pressed_twice():
+	window.open_for("npc:1", "Bren", "Hello.", [_weather_beat()], _give_offer({"rock": 5}))
+	var emitted: Array = []
+	window.give_requested.connect(func(o): emitted.append(o))
+	_give_buttons()[0].emit_signal("pressed")
+	assert_eq(_give_buttons().size(), 0, "the goods are gone; the button goes with them")
+	assert_eq(emitted.size(), 1)

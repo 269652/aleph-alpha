@@ -93,6 +93,85 @@ static func _coin_value_of(item_id: String, price_for: Callable) -> int:
 	return maxi(MIN_COIN_PER_UNIT, int(round(price)))
 
 
+## The give button, read straight off the dialogue frame DialogueContext
+## already builds (docs/concept/errands.md, "The verb, at the villager's
+## door"). The villager who says "I could use three more rock"
+## (DialogueTopic's household_ask beat, from this same frame's
+## shortfall_missing) and the button that hands them over therefore read
+## the same state -- they cannot disagree.
+##
+## Returns {available, label, reason, given, household_id, settlement_id}.
+## `available` false always carries a `reason` that names who needs what,
+## because a refusal in this game is a sentence about the world and not a
+## dead button (the same rule docs/concept/hud.md states for prompts).
+##
+## A frame with no settlement id is refused rather than half-performed:
+## there is no market to add the stock to, and taking the goods anyway
+## would be exactly the half-delivery pillar 2 forbids.
+static func offer_from_frame(frame: Dictionary) -> Dictionary:
+	var missing: Array = frame.get("shortfall_missing", [])
+	var carried: Dictionary = frame.get("player_carrying", {})
+	var who := String(frame.get("npc_name", "They"))
+	var household_id := String(frame.get("household_id", ""))
+	var settlement_id := String(frame.get("settlement_id", ""))
+	var offer := {
+		"available": false,
+		"label": "",
+		"reason": "",
+		"given": [],
+		"household_id": household_id,
+		"settlement_id": settlement_id,
+	}
+	if missing.is_empty():
+		offer["reason"] = "%s needs nothing you are carrying." % who
+		return offer
+
+	var given := deliverable_for(missing, carried)
+	if given.is_empty():
+		offer["reason"] = "%s needs %s; you carry none." % [who, _needed_phrase(missing)]
+		return offer
+	if settlement_id == "" or household_id == "":
+		offer["reason"] = "%s keeps no household stores here." % who
+		return offer
+
+	offer["available"] = true
+	offer["given"] = given
+	offer["label"] = "Give %s" % _given_phrase(given)
+	return offer
+
+
+## "3 rock" / "3 rock and 1 wood" / "3 rock, 1 wood and 2 clay" -- the
+## count first, because the count is what the player is deciding about.
+static func _given_phrase(given: Array) -> String:
+	var parts: Array[String] = []
+	for entry in given:
+		parts.append("%d %s" % [int(entry["count"]), _item_word(String(entry["item_id"]))])
+	return _join_plainly(parts)
+
+
+## What the household is short of, for a refusal that names it.
+static func _needed_phrase(missing: Array) -> String:
+	var parts: Array[String] = []
+	for entry in missing:
+		parts.append("%d %s" % [int(entry.get("need", 0)), _item_word(String(entry.get("item_id", "")))])
+	return _join_plainly(parts)
+
+
+static func _join_plainly(parts: Array[String]) -> String:
+	if parts.is_empty():
+		return ""
+	if parts.size() == 1:
+		return parts[0]
+	return "%s and %s" % [", ".join(parts.slice(0, parts.size() - 1)), parts[-1]]
+
+
+## An item id as a villager would say it: "plant_fibre" -> "plant fibre".
+## Deliberately NOT an ItemCatalog lookup -- this module stays pure, and a
+## shortfall names recipe inputs that are catalog ids by construction.
+static func _item_word(item_id: String) -> String:
+	return item_id.replace("_", " ")
+
+
 ## Whether this delivery really ends the shortage: EVERY missing input
 ## fully covered by what the player carries. Partial help is still help
 ## (the goods move and are paid for), but the projection will still report

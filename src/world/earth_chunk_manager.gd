@@ -152,6 +152,7 @@ const FlyerPersonality = preload("res://src/gameplay/flyer_personality.gd")
 const PiscivoreBirdRenderer = preload("res://src/rendering/piscivore_bird_renderer.gd")
 const VillageRenderer = preload("res://src/rendering/village_renderer.gd")
 const VillageFarm = preload("res://src/gameplay/village_farm.gd")
+const ErrandDelivery = preload("res://src/gameplay/errand_delivery.gd")
 const VillageCropChoice = preload("res://src/gameplay/village_crop_choice.gd")
 const VillagePond = preload("res://src/gameplay/village_pond.gd")
 const AquaticPopulationModel = preload("res://src/world/aquatic_population_model.gd")
@@ -19694,6 +19695,84 @@ func _landmark_cells_in(chunk_coord: Vector2i) -> Dictionary:
 		seeded_region_for_chunk(chunk_coord)
 	)
 	return _village_renderer._landmark_cells(settlement.landmarks, TerrainRenderer.TILE_SIZE, self)
+
+
+## A player really hands a household the goods it is short of
+## (docs/concept/errands.md). The one transfer that turns every
+## production-shortfall projection in this game into something a player can
+## act on, and the only place it happens.
+##
+## Atomic, or it did not happen (that doc's pillar 2). The goods leave
+## `player.inventory` and enter the SAME Market object
+## Quest.production_shortfall_quests_for reads
+## (`_market_store.market_for(settlement_id)`), the household pays out of
+## its OWN finite Wallet -- the purse wages come out of, so no coin is
+## conjured and docs/concept/economy.md's one-faucet rule is untouched --
+## and the whole thing is recorded as a real witnessed Event so
+## docs/concept/npc.md's memory, rumour and recognition layers see it with
+## no new bookkeeping. A village too poor to pay still takes the delivery
+## and carries the remainder as a debt.
+##
+## `offer` is ErrandDelivery.offer_from_frame's own dictionary, straight
+## from the conversation window. What it PROMISED is re-checked against
+## what the player really carries at this instant, so an offer built a
+## moment ago can never take goods that are no longer there: the deal is
+## re-settled from live inventory, and a player who has since eaten the
+## fish hands over the fish they still have, not the fish they had.
+##
+## Returns ErrandDelivery.settle's own dictionary (given/units/value/paid/
+## debt/clears), or a zero deal when there is nothing to move.
+func deliver_errand(offer: Dictionary, player) -> Dictionary:
+	var settlement_id := String(offer.get("settlement_id", ""))
+	var household_id := String(offer.get("household_id", ""))
+	var promised: Array = offer.get("given", [])
+	if settlement_id == "" or household_id == "" or promised.is_empty() or player == null:
+		return ErrandDelivery.settle([], {}, 0, Callable())
+
+	var household = _household_store.get_household(household_id)
+	if household == null:
+		return ErrandDelivery.settle([], {}, 0, Callable())
+	var market = _market_store.market_for(settlement_id)
+
+	# What was promised, re-read as a shortfall against what is really in
+	# the player's hands right now -- so the deal is settled from live
+	# state and can never move goods that are gone.
+	var wanted: Array = []
+	for entry in promised:
+		wanted.append({"item_id": String(entry["item_id"]), "need": int(entry["count"])})
+	var carried: Dictionary = player.inventory_counts()
+	var deal := ErrandDelivery.settle(
+		wanted, carried, int(household.wallet.balance),
+		func(item_id: String) -> float: return market.price_for(item_id)
+	)
+	if int(deal["units"]) <= 0:
+		return deal
+
+	for entry in deal["given"]:
+		var item_id := String(entry["item_id"])
+		var count := int(entry["count"])
+		player.inventory.remove(item_id, count)
+		market.add_stock(item_id, count)
+	var paid := int(deal["paid"])
+	if paid > 0 and household.wallet.spend(paid):
+		player.wallet.add(paid)
+
+	var delivered := Event.new(ERRAND_DELIVERED_EVENT_TYPE, _world_age_seconds)
+	delivered.actors = [household_id]
+	delivered.witnesses = [settlement_id]
+	delivered.importance = 0.3
+	for entry in deal["given"]:
+		delivered.tags.append(String(entry["item_id"]))
+	_event_store.append(delivered)
+	_memory_store.witness_event(delivered, _world_age_seconds)
+	return deal
+
+
+## The event a real delivery writes (deliver_errand). Its own type rather
+## than a generic trade event: docs/concept/npc.md's recognition ladder
+## treats "this person carried my household through a shortage" as a
+## different memory from "this person sold me a fish."
+const ERRAND_DELIVERED_EVENT_TYPE := "errand_delivered"
 
 
 ## This settlement's real census (VillageCensus) -- who has a roof, how

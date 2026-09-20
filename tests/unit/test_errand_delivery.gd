@@ -221,3 +221,78 @@ func test_settle_gives_exactly_what_deliverable_for_offered():
 		ErrandDelivery.settle(missing, carried, 100, _flat_price)["given"],
 		ErrandDelivery.deliverable_for(missing, carried)
 	)
+
+
+# -- the offer the give button shows -------------------------------------
+#
+# docs/concept/errands.md, "The verb, at the villager's door" and
+# "Refusals are sentences": the button is built from the dialogue frame
+# DialogueContext already produces (shortfall_missing, household_id,
+# settlement_id, and the carrying facts), so the villager who says "I could
+# use three more rock" and the button that hands them over read the same
+# state. A refusal names its reason instead of standing dead.
+
+func _frame(missing: Array, carried: Dictionary) -> Dictionary:
+	return {
+		"npc_name": "Mira",
+		"household_id": "household:7",
+		"settlement_id": "settlement:676_120",
+		"shortfall_missing": missing,
+		"player_carrying": carried,
+	}
+
+
+func test_a_villager_with_no_shortfall_is_offered_no_give_at_all():
+	var offer := ErrandDelivery.offer_from_frame(_frame([], {"rock": 9}))
+	assert_false(offer["available"], "nobody here needs anything")
+
+
+func test_a_shortfall_the_player_cannot_help_with_says_why():
+	var offer := ErrandDelivery.offer_from_frame(
+		_frame([{"item_id": "rock", "need": 3}], {"wood": 10})
+	)
+	assert_false(offer["available"])
+	assert_true(offer["reason"].contains("rock"), "the reason names what is needed: %s" % offer["reason"])
+	assert_true(offer["reason"].contains("Mira"), "and who needs it: %s" % offer["reason"])
+
+
+func test_carrying_the_goods_offers_the_give_and_names_the_count():
+	var offer := ErrandDelivery.offer_from_frame(
+		_frame([{"item_id": "rock", "need": 3}], {"rock": 5})
+	)
+	assert_true(offer["available"])
+	assert_eq(offer["given"], [{"item_id": "rock", "count": 3}])
+	assert_true(offer["label"].contains("3"), "the label names the count: %s" % offer["label"])
+	assert_true(offer["label"].contains("Rock") or offer["label"].contains("rock"), offer["label"])
+
+
+func test_carrying_part_of_it_is_still_offered():
+	var offer := ErrandDelivery.offer_from_frame(
+		_frame([{"item_id": "rock", "need": 3}], {"rock": 1})
+	)
+	assert_true(offer["available"], "partial help is help")
+	assert_eq(offer["given"], [{"item_id": "rock", "count": 1}])
+
+
+func test_the_offer_carries_the_household_and_settlement_the_transfer_needs():
+	var offer := ErrandDelivery.offer_from_frame(
+		_frame([{"item_id": "rock", "need": 3}], {"rock": 3})
+	)
+	assert_eq(offer["household_id"], "household:7")
+	assert_eq(offer["settlement_id"], "settlement:676_120")
+
+
+func test_an_offer_without_a_settlement_is_refused_rather_than_half_performed():
+	var frame := _frame([{"item_id": "rock", "need": 3}], {"rock": 3})
+	frame["settlement_id"] = ""
+	var offer := ErrandDelivery.offer_from_frame(frame)
+	assert_false(offer["available"], "there is no market to add the stock to")
+
+
+func test_several_missing_inputs_read_as_one_labelled_offer():
+	var offer := ErrandDelivery.offer_from_frame(
+		_frame([{"item_id": "rock", "need": 2}, {"item_id": "wood", "need": 1}], {"rock": 2, "wood": 1})
+	)
+	assert_true(offer["available"])
+	assert_eq(offer["given"].size(), 2)
+	assert_true(offer["label"].contains("2"), offer["label"])
