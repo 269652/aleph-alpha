@@ -16249,6 +16249,23 @@ func _sync_piece_collision(global_cell: Vector2i, tile_id: String) -> void:
 	_remove_piece_collision(global_cell)
 	if BuildingPiece.has_piece(tile_id) and not BuildingPiece.is_walkable(tile_id):
 		_spawn_piece_collision(global_cell, tile_id)
+		return
+	# A village farm's rail is the one solid thing here that is NOT a
+	# building piece, and it is why the player walked through every fence in
+	# the game while every animal and villager respected them: rails_block_step
+	# is an ask-before-you-step rule, markers ask it, and a CharacterBody2D
+	# cannot -- it needs something in the world to hit.
+	#
+	# An EDGE body, not a tile one: a rail stands on the inner edge of its
+	# cell and the rest of that cell is street you may walk (docs/concept/
+	# village_farms.md, "The rail stands on the inner edge"). VillageFarm owns
+	# which edge and how thick, so physics and the step rule read the same
+	# source.
+	var rail := VillageFarm.fence_collider_rect(
+		tile_id, float(TerrainRenderer.TILE_SIZE), VillageFarm.FENCE_COLLIDER_THICKNESS_PX
+	)
+	if rail.size != Vector2.ZERO:
+		_spawn_rail_collision(global_cell, rail)
 
 
 func _spawn_piece_collision(global_cell: Vector2i, piece_id: String) -> void:
@@ -16261,6 +16278,28 @@ func _spawn_piece_collision(global_cell: Vector2i, piece_id: String) -> void:
 	var shape := CollisionShape2D.new()
 	var rect := RectangleShape2D.new()
 	rect.size = Vector2.ONE * TerrainRenderer.TILE_SIZE
+	shape.shape = rect
+	body.add_child(shape)
+	_entities_parent.add_child(body)
+	var chunk_coord := _chunk_coord_for_tile(global_cell)
+	if not _piece_collision_bodies.has(chunk_coord):
+		_piece_collision_bodies[chunk_coord] = {}
+	_piece_collision_bodies[chunk_coord][global_cell] = body
+
+
+## A rail's edge body. Deliberately stored in _piece_collision_bodies beside
+## the tile-sized ones: chunk unload already frees everything in there, and a
+## second per-chunk dictionary would be a second thing to remember to free
+## (see test_unloading_a_chunk_frees_its_wall_collision_bodies).
+func _spawn_rail_collision(global_cell: Vector2i, local_rect: Rect2) -> void:
+	var body := StaticBody2D.new()
+	body.name = "RailCollision"
+	var tile_origin := Vector2(global_cell) * float(TerrainRenderer.TILE_SIZE)
+	body.position = tile_origin + local_rect.position + local_rect.size * 0.5
+	body.collision_layer = GROUND_FLOOR_COLLISION_LAYER
+	var shape := CollisionShape2D.new()
+	var rect := RectangleShape2D.new()
+	rect.size = local_rect.size
 	shape.shape = rect
 	body.add_child(shape)
 	_entities_parent.add_child(body)

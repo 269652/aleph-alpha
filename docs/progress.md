@@ -27474,17 +27474,46 @@ villagers asked about nothing at all.
   you cannot be IN, a rail is an edge you cannot CROSS, so the ring round
   a field remains ordinary ground.
 
-### ⬜ Not done: the player still walks through fences
+### ✅ Done (2026-09-20): the player is stopped by a fence
 
-The one part of the fence report still open. A fence tile is not a
-`BuildingPiece`, so `_sync_piece_collision` never spawns a body for it and
-the player passes straight through. It cannot simply be registered as a
-solid piece: `village_farm.gd` records that a rail used to be a whole
-solid tile and was deliberately made a LINE on one edge ("move the fences
-to the inner edge of the enclosure and treat the rest of the tile as
-street"), so the player needs an EDGE collider on the side
-`fence_edge_normal` names, not a tile-sized box. Flagged rather than
-guessed at.
+Carried open for several rounds, and the diagnosis recorded here was the
+right one. A fence tile is not a `BuildingPiece`, so `_sync_piece_collision`
+never spawned a body and the player -- the one walker in the game that is a
+real `CharacterBody2D` -- passed straight through, while every animal and
+villager respected the same rails through `rails_block_step`.
+
+It could not be registered as a solid piece, for the reason this entry
+already gave: a rail stands on the INNER EDGE of its cell and the rest of
+that cell is street you may walk. So it gets an **edge** body.
+`VillageFarm.fence_collider_normal`/`fence_collider_rect` own the geometry --
+the same inner edge `rails_block_step` already shuts, so physics and the step
+rule read one source and cannot disagree about a rail.
+
+**A corner post deliberately gets no collider at all**, and that is the
+load-bearing case rather than an omission. Its inner direction is DIAGONAL,
+so an edge collider would have to lie along one of its two cardinal sides --
+and both of those are the runs it caps. Walling either shuts the ring
+itself, which is the exact opposite of "treat the rest of the tile as
+street" and precisely what `_rail_stops_step` already refuses. The diagonal a
+corner does block needs nothing of its own: the two neighbouring runs'
+colliders meet at the shared corner point and a body with any width cannot
+thread it.
+
+`FENCE_COLLIDER_THICKNESS_PX` is derived rather than chosen, and both bounds
+are pinned by test: at least the fastest the player can ever be (mounted on a
+maximum-fitness horse, 180 px/s = 3.0 px in one 60Hz tick, so the rail holds
+even if a step is ever resolved without sweeping), and at most a quarter of a
+tile, so it stays a LINE rather than becoming the wall the ring is not.
+
+**TDD:** 10 geometry pins in `test_village_farm.gd` plus 5 wiring pins in the
+new `test_earth_chunk_manager_rail_collision.gd` (a real rail in a real chunk
+produces a body, a strip not a block, on the edge the crop is behind, corners
+raise none, and pulling the rail out takes its body with it). 4 of those 5
+confirmed red against the unwired manager; the corner one passes from the
+start, which is what makes it a regression guard. One of my own tests was
+wrong first: it asserted a "north" rail's collider touches its northern edge,
+when a rail on the field's north side closes its own SOUTHERN one -- the side
+the crop is on.
 
 ### 🚧 Honest note
 
@@ -29673,6 +29702,43 @@ bank) and is all a scene with no flow overlay registered would draw at all.
 Tested: `test_village_pond.gd` (+11), `test_earth_chunk_manager_ponds.gd`
 (+3), `test_village_renderer.gd` (+2), `test_building_catalog.gd` (+3, one
 list test renamed).
+
+## A borrowed building borrows the yard it stands in (`concept/building.md`, 2026-09-20)
+
+Asked for directly the moment the fisher's hut was up beside its pond:
+*"the fisher hut should get a yard too"*.
+
+A farmhouse stands in one of nine drawn yards
+(`BuildingCatalog.background_sheet_for`, landed in parallel the same day),
+and the hut is drawn AS a farmhouse through `draws_as` — so it stood on
+bare plot beside the real thing in its finished yard, which reads as one
+building done and the other forgotten. `background_sheet_for` now falls
+through `draws_as` when a building declares no yard of its own: what is
+borrowed is the whole picture, the house and the ground it stands in. The
+hut's OWN seed still picks which of the nine, so the hut by the pond and
+the farmhouse up the street are different pictures, and borrowing art
+stays the only way to inherit a yard — a building that declares neither
+still stands on bare plot.
+
+**A correction, recorded as one.** The doc written a few hours earlier
+argued the opposite — that a fisher's hut stands on a bank rather than in
+a farmyard, so the missing yard was deliberate. It was the wrong call and
+`concept/village_ponds.md` now says so in place of the old reasoning.
+
+**And one thing measured rather than assumed on the way past.** The yard
+is drawn AFTER the kerb (children paint in tree order), so a yard whose
+scene reached the plot's edge would hide the line that marks the hitbox.
+Measured on the delivered `farmhouse_bg_overlay.png`: **0 of 5118 pixels**
+in the outer three-pixel band are opaque, so the kerb is never covered and
+the existing order is right. Pinned by
+`test_a_yard_never_paints_over_the_kerb_at_the_plots_own_edge` rather than
+by reordering two features that were each deliberate — yard art delivered
+one day with its scene bled to the edge would erase every kerb it covers,
+and the first anybody would know is a screenshot.
+
+Tested: `test_building_catalog.gd` (+3),
+`test_earth_chunk_manager_buildings.gd` (+2).
+
 ## A village with no money — two sessions, one diagnosis (2026-09-20)
 
 Reported as *"fix the money problem"*. Worked in parallel with
