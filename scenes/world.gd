@@ -2064,7 +2064,20 @@ func _show_errand_banner(deal: Dictionary) -> void:
 
 func _on_craft_requested(recipe_id: String) -> void:
 	var local_player := _players.get_node_or_null(str(multiplayer.get_unique_id())) as Player
-	if local_player != null and local_player.craft(recipe_id):
+	if local_player == null:
+		return
+	# Why it would refuse, asked BEFORE trying, so the answer is a sentence
+	# about the world rather than a button that did nothing
+	# (docs/concept/feedback.md). Measured before this: clicking a recipe
+	# card that looked affordable but failed a heat/skill gate produced no
+	# sound, no line and no change -- one of the first things that broke in
+	# a new player's hands.
+	var refusal: String = local_player.craft_refusal(recipe_id)
+	if refusal != "":
+		local_player.answer("craft", {"failed": true, "reason": refusal})
+		return
+	if local_player.craft(recipe_id):
+		local_player.answer("craft", {"item": recipe_id})
 		_crafting_window.refresh(local_player.inventory_counts())
 
 

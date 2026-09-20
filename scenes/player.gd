@@ -2301,6 +2301,49 @@ func _inventory_counts() -> Dictionary:
 ## removed or added) if the recipe is unknown, its requires_structure/
 ## required_skill gate (see docs/concept/production_chains.md) isn't met, or
 ## inputs are insufficient.
+## Why this craft would refuse, as a sentence, or "" when it would
+## succeed (docs/concept/feedback.md's refusal rule).
+##
+## Measured before this existed: `craft` returns a bare false for three
+## different reasons -- no heat source, too little skill, not enough
+## inputs -- and the caller discarded it, so clicking a recipe card that
+## LOOKED affordable did nothing at all and said nothing. The diagnosis
+## named it among the first things that break in a new player's hands.
+##
+## Deliberately the same three gates `craft` itself checks, in the same
+## order, so the explanation and the refusal can never disagree: anything
+## else would be a second opinion about what is craftable.
+func craft_refusal(recipe_id: String) -> String:
+	var inputs: Array = _crafting_recipe_book.recipe_inputs(recipe_id)
+	if inputs.is_empty() and _crafting_recipe_book.recipe_output(recipe_id).is_empty():
+		return "No such recipe."
+
+	var structure_id := _crafting_recipe_book.recipe_requires_structure(recipe_id)
+	if structure_id != "" and not _meets_requires_structure(recipe_id):
+		return "Needs %s; you are not standing at one." % structure_id.replace("_", " ")
+
+	var requirement: Dictionary = _crafting_recipe_book.recipe_required_skill(recipe_id)
+	if not requirement.is_empty() and not _meets_required_skill(recipe_id):
+		var stat_name := String(requirement["stat_name"])
+		return "Needs %s %s; you have %s." % [
+			stat_name.replace("_", " "),
+			String.num(float(requirement["level"]), 1).trim_suffix(".0"),
+			String.num(skill_bonus(stat_name), 1).trim_suffix(".0"),
+		]
+
+	var counts := _inventory_counts()
+	var short: Array[String] = []
+	for input in inputs:
+		var item_id := String(input["item_id"])
+		var need := int(input["count"])
+		var have := int(counts.get(item_id, 0))
+		if have < need:
+			short.append("%d %s" % [need - have, item_id.replace("_", " ")])
+	if not short.is_empty():
+		return "Short %s." % ", ".join(short)
+	return ""
+
+
 func craft(recipe_id: String) -> bool:
 	if not _meets_requires_structure(recipe_id) or not _meets_required_skill(recipe_id):
 		return false

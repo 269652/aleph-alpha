@@ -232,6 +232,19 @@ the suite goes red before it can ship.
 - ✅ **Derived intervals** (2026-09-20). Reflex from the real stride,
   swing from `Player.ATTACK_COOLDOWN`, deliberate from a measured silent
   reading rate. No global magic cooldown anywhere.
+- ✅ **A craft that cannot proceed says why** (2026-09-20).
+  `Player.craft_refusal` asks the same three gates `craft` itself checks,
+  in the same order, so the explanation and the refusal can never
+  disagree: *"Needs heat source; you are not standing at one."*,
+  *"Needs smelting 2; you have 0."*, *"Short 3 wood, 1 plant fibre."*
+  `World._on_craft_requested` asks BEFORE trying and answers the refusal
+  through the same feedback path a success uses.
+
+  Measured before it: `craft` returned a bare false for three different
+  reasons and the caller discarded it, so clicking a recipe card that
+  looked affordable did nothing at all and said nothing
+  (`test_craft_refusal.gd`, 5 -- including one that a craftable recipe
+  refuses nothing, so the card cannot lie in the other direction either).
 - ⬜ **The sounds themselves.** Every `sound` id but the footsteps names a
   clip that does not exist yet. The table is the commissioning list; the
   clips are a separate pass.
