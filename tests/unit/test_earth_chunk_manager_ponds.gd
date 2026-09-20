@@ -44,6 +44,7 @@ func _forget_persisted_chunk() -> void:
 		EarthChunkManager.MODIFICATIONS_DIR,
 		EarthChunkManager.ROOF_MODIFICATIONS_DIR,
 		EarthChunkManager.PLANTED_TREES_DIR,
+		EarthChunkManager.POND_FISH_DIR,
 	]:
 		var path := "%s/%d_%d.bin" % [dir, chunk_coord.x, chunk_coord.y]
 		if FileAccess.file_exists(path):
@@ -397,3 +398,84 @@ func test_filling_a_pond_in_takes_its_water_surface_with_it():
 		"filled-in ground must not go on being painted as water"
 	)
 	flow_layer.free()
+
+
+# -- a pond keeps its fish when you walk away ------------------------------
+#
+# Reported live, with the pond in shot: *"no fish are in it"*. Measured on
+# two real streamed villages before anything was changed: both held a dug,
+# fenced pond and both reported stock=0.00, 0 markers
+# (tools/probe_pond_and_farmhouse.gd).
+#
+# The water survives a reload because it is a persisted chunk modification.
+# NOTHING ELSE about a pond was stored at all: the stock lived only in
+# EarthChunkManager's own in-memory dictionary, and the village pass that
+# stocks a pond only runs on the visit that DIGS one (VillageRenderer.
+# _dig_fisher_ponds_if_missing returns early on a pond that is already
+# there -- correctly, since "a fisher stocks a pond, they do not keep
+# stocking it"). So a pond was a fishery on the one visit that founded it
+# and a hole for the rest of the game.
+
+func test_a_ponds_fish_are_still_swimming_when_the_chunk_comes_back():
+	_dig_pond(_a_pond())
+	manager.stock_pond_at(_tile.x, _tile.y)
+	var before: float = manager.pond_fish_at(_tile.x, _tile.y)
+	assert_gt(before, 0.0, "precondition: the pond was stocked")
+	var chunk_coord := manager._chunk_coord_for_tile(_tile)
+
+	manager._unload_chunk(chunk_coord)
+	manager._load_chunk(chunk_coord)
+
+	assert_almost_eq(manager.pond_fish_at(_tile.x, _tile.y), before, 0.0001,
+		"the pond forgot its stock the moment the player walked away")
+	assert_gt(manager.pond_fish_marker_count_at(_tile.x, _tile.y), 0,
+		"the stock came back but nothing is swimming in it")
+
+
+## And across a real restart, which is the case the report is actually
+## about: a stocked pond persisted to disk is a stocked pond to a manager
+## that has never seen it, exactly as a region's own fish population
+## already is (FISH_POPULATION_DIR).
+func test_a_ponds_fish_survive_a_manager_that_never_dug_it():
+	_dig_pond(_a_pond())
+	manager.stock_pond_at(_tile.x, _tile.y)
+	var before: float = manager.pond_fish_at(_tile.x, _tile.y)
+	var chunk_coord := manager._chunk_coord_for_tile(_tile)
+	manager._unload_chunk(chunk_coord)
+
+	var other_layer := TileMapLayer.new()
+	var other_entities := Node2D.new()
+	var other_creatures := Node2D.new()
+	add_child(other_entities)
+	var other := EarthChunkManager.new(other_layer, other_entities, other_creatures)
+	other._load_chunk(chunk_coord)
+	var after: float = other.pond_fish_at(_tile.x, _tile.y)
+	var swimming: int = other.pond_fish_marker_count_at(_tile.x, _tile.y)
+	remove_child(other_entities)
+	other_entities.free()
+	other_creatures.free()
+	other_layer.free()
+
+	assert_almost_eq(after, before, 0.0001,
+		"a pond dug and stocked in an earlier session came back empty")
+	assert_gt(swimming, 0, "a pond that kept its stock but shows no fish is a hole with a number on it")
+
+
+## A pond fished flat and left flat stays flat -- the stock is real state,
+## not a value that resets to its stocking every time the chunk is read.
+## This is the whole reason the answer is PERSISTENCE and not "stock it
+## again on reload".
+func test_a_pond_fished_out_is_still_fished_out_after_a_reload():
+	_dig_pond(_a_pond())
+	manager.stock_pond_at(_tile.x, _tile.y)
+	for _attempt in 20:
+		manager.catch_pond_fish_at(_tile.x, _tile.y)
+	var emptied: float = manager.pond_fish_at(_tile.x, _tile.y)
+	assert_lt(emptied, 1.0, "precondition: the pond was fished below a whole fish")
+	var chunk_coord := manager._chunk_coord_for_tile(_tile)
+
+	manager._unload_chunk(chunk_coord)
+	manager._load_chunk(chunk_coord)
+
+	assert_almost_eq(manager.pond_fish_at(_tile.x, _tile.y), emptied, 0.0001,
+		"a reload restocked a pond the village had already fished out")
