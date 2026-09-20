@@ -194,7 +194,13 @@ doing two jobs.
 - ✅ Derivation sweep against `RegionDifficulty.tier_at`, 0..400 chunks.
 - ✅ Cumulative-demands assertion, pairwise over the whole table.
 - ✅ Reflection test forbidding any entry-refusing method name.
-- ⬜ Wiring: nothing reads this yet. The crossing card, the HUD's "place"
-  chip naming the ring, and the ring's demands feeding a departure
-  checklist are all callers that do not exist.
+- ✅ **Wired** (2026-09-20). `Discovery` is the caller this list was
+  missing: `crossing_between` raises a real card on the shared message
+  stack when the player walks a boundary, naming the ring, what is new and
+  lethal there, and its packing list; and `demands_at` is the *only*
+  difficulty input to what newly-walked ground pays, so the rings now grant
+  as well as threaten. See [discovery.md](discovery.md).
+- ⬜ The HUD has no permanent "place" chip naming the current ring — the
+  card is raised on the crossing and then gone. A ring's demands do not yet
+  feed a departure checklist.
 - ⬜ Ring names are not yet spoken by any NPC or written on any map.

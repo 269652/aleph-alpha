@@ -395,3 +395,50 @@ static func _fill(template: String, context: Dictionary) -> String:
 	out = out.replace("{level}", str(int(context.get("level", 0))))
 	out = out.replace("{target}", String(context.get("target", "")))
 	return out.strip_edges()
+
+
+# -- how long a passage needs to be on screen ---------------------------
+#
+# The intervals above answer "how often"; these answer "how long". Same
+# source, because they are the same fact about a reader: a line has to be
+# read before the next thing can happen.
+
+## The longest any prose card may need. Not a clamp -- `seconds_to_read`
+## never truncates, because a card cut off mid-warning is worse than a card
+## shown a moment too long. It is the ceiling tests hold real card text to,
+## so a passage that grows into an essay fails loudly instead of quietly
+## becoming a HUD element. The figure is
+## `World.ANCIENT_TERMINAL_MESSAGE_DURATION`, the longest passage this HUD
+## already shows anywhere, restated (a pure rule must not preload a scene
+## script) and held to it by test.
+const MAX_CARD_SECONDS := 12.0
+
+
+## Words in a passage, counted across the line breaks a card is built from.
+static func word_count(text: String) -> int:
+	var flattened := text.replace("\n", " ").replace("\t", " ").strip_edges()
+	if flattened == "":
+		return 0
+	return flattened.split(" ", false).size()
+
+
+## How long a card must stay on screen: its OWN word count at the reading
+## rate above (Brysbaert's 2019 meta-analysis, 238 wpm).
+##
+## Derived rather than picked, because a duration nobody derived is a
+## duration somebody eyeballed -- and a card is not one length: a journey
+## ring's crossing card runs from seventeen words to thirty-four, and
+## showing both for the same six seconds means one of them is wrong.
+##
+## The floor is `DELIBERATE_INTERVAL_SECONDS`, this module's own "a sentence
+## has to be read" interval, so a very short card is still a sentence rather
+## than a flash. Nothing at all to read is no time at all -- the caller has
+## no business showing an empty card.
+static func seconds_to_read(text: String) -> float:
+	var words := word_count(text)
+	if words <= 0:
+		return 0.0
+	return maxf(
+		DELIBERATE_INTERVAL_SECONDS,
+		float(words) / WORDS_PER_MINUTE_SILENT_READING * 60.0
+	)

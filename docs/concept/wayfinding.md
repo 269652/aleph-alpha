@@ -188,11 +188,24 @@ What's still missing for the remaining four: in-world UI (a real fogged
 map render, an on-screen forecast label, etc.) — the dev console is a real,
 honest interim call site for those, not the design's own final
 interaction, the same role `/give`/`/craft` already play elsewhere in this
-project. Map's own remaining gap is unchanged: nothing calls
-`mark_chunk_explored` from the player's actual movement/visibility-range
-path yet (deliberately out of scope — see `ExploredTiles`' own doc comment
-on why "when does a chunk get marked explored" stays a caller-side decision
-for later).
+project.
+
+**Map's movement gap is closed** (2026-09-20). `EarthChunkManager.
+record_footfall`, taken once per client frame by `World._discovery_step`,
+marks the chunk under the player on this same `ExploredTiles` — so
+`/map`'s "N chunk(s) explored" and `MapProjection.landmarks_visible_on_map`
+are now a record of a real journey rather than of whether a `reveal` was
+ever cast. The caller-side decision `ExploredTiles`' own doc comment left
+open is answered in [discovery.md](discovery.md), pillar 1: **one chunk per
+footfall, the one underfoot** — not the 5×5 neighbourhood the streamer
+loads and not a visibility radius, because the camera shows a fraction of
+one chunk and marking what the streamer touched would be the map claiming
+knowledge the player never had.
+
+Two Map gaps remain, and neither is silent: there is still no fogged
+in-world map render (the dev console stays the honest interim call site),
+and `ExploredTiles` is still session-only, so a reloaded character's map is
+empty.
 
 **Compass now has its own in-world UI** (2026-09-08, `scenes/compass_
 window.gd`'s `CompassWindow`) — a small always-on corner widget (top-left,

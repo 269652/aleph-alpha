@@ -375,3 +375,56 @@ func test_an_errand_that_knows_its_own_village_names_that_one():
 	var line: String = ArrivalBriefing.briefing_for(facts)["errand_line"]
 	assert_string_contains(line, "Brissac")
 	assert_false(line.contains("Aubance"), "the errand is not in the nearest village")
+
+
+# -- the card the three lines become ------------------------------------
+#
+# The briefing hands back three separately-optional lines, and every caller
+# would otherwise invent its own way of joining them. `card_text` is that
+# join, once, so "a missing fact is a line the caller does not draw" stays
+# one rule rather than one rule per caller.
+
+func test_the_card_is_the_three_lines_in_order():
+	var card := ArrivalBriefing.card_text({
+		"place_line": "You are on the Loire, in spring.",
+		"bearing_line": "A village lies about 12 km northeast.",
+		"errand_line": "A potter needs 3 clay.",
+	})
+	assert_eq(
+		card,
+		"You are on the Loire, in spring.\nA village lies about 12 km northeast.\nA potter needs 3 clay."
+	)
+
+
+## The case the whole "read real state, invent nothing" rule exists for: no
+## village anywhere near, so there is no bearing to give. The card closes up
+## rather than showing a blank line where a fact should have been.
+func test_a_missing_line_leaves_no_gap():
+	var card := ArrivalBriefing.card_text({
+		"place_line": "You are on the Loire, in spring.",
+		"bearing_line": "",
+		"errand_line": "A potter needs 3 clay.",
+	})
+	assert_eq(card, "You are on the Loire, in spring.\nA potter needs 3 clay.")
+	assert_false(card.contains("\n\n"), "no blank line where a fact would have been")
+
+
+func test_a_briefing_that_knows_nothing_is_no_card_at_all():
+	assert_eq(ArrivalBriefing.card_text({"place_line": "", "bearing_line": "", "errand_line": ""}), "")
+	assert_eq(ArrivalBriefing.card_text({}), "")
+
+
+## Straight from the real entry point, so the two cannot drift: whatever
+## briefing_for produces is what card_text is given.
+func test_the_card_is_built_from_the_real_briefing():
+	var facts := {
+		"river_name": "Loire",
+		"season": "spring",
+		"player_tile": Vector2i(0, 0),
+		"settlement_tile": Vector2i(11, 0),
+		"errands": [],
+	}
+	var briefing: Dictionary = ArrivalBriefing.briefing_for(facts)
+	var card := ArrivalBriefing.card_text(briefing)
+	assert_true(card.contains(String(briefing["place_line"])))
+	assert_true(card.contains(String(briefing["bearing_line"])))

@@ -1,5 +1,11 @@
 ## Exploration: points of interest seeded by world-sim history
 
+> **The act of going is [discovery.md](discovery.md).** That doc owns what
+> walking records, what new ground pays, and what a journey-ring crossing
+> says. This one owns what is eventually out there to find — and none of it
+> is built yet, so today a player who explores is rewarded for the journey
+> and not yet for the destination.
+
 No doc currently covers dungeons, ruins, or other explorable points of
 interest. Rather than scattering generic procedural dungeons, POIs are
 **seeded by the world simulation's own history** — exploration becomes
