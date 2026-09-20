@@ -167,3 +167,15 @@ func _measure(farmer) -> void:
 		"  worked %d/%d ticks, farmhouse peak %d %s"
 		% [working_ticks, int(SIMULATED_SECONDS / SLICE), peak_harvest, crop]
 	)
+	# Where the errand actually left them. A villager who set out and never
+	# came back is indistinguishable from one who never set out, by the
+	# litre counts alone -- and the two want completely different fixes.
+	var well = farmer.landmarks.get("well", null)
+	_report_lines.append(
+		"  ended errand=%s tag='%s' at %s; well=%s (%.0f px away); home %s (%.0f px away)"
+		% [
+			farmer.water_errand, farmer.current_location_tag(), str(farmer.position),
+			str(well), (0.0 if well == null else farmer.position.distance_to(well)),
+			str(farmer.home_position), farmer.position.distance_to(farmer.home_position),
+		]
+	)

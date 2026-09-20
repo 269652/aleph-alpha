@@ -118,6 +118,13 @@ var water_errand := WaterErrand.AT_HOME
 ## the other tank crossed its own threshold, and the bucket in their hand
 ## would silently change what it was for.
 var _errand_target: Dictionary = {}
+
+## How long they have been on this leg, and how long it is worth keeping
+## at before the bucket goes down (see ERRAND_PATIENCE_SLACK), plus how
+## long they stay off the errand once one has defeated them.
+var _errand_leg_seconds := 0.0
+var _errand_leg_budget := 0.0
+var _errand_retry_in := 0.0
 ## Where the errand is sending them right now, "" when they are not on one.
 var _errand_location_tag := ""
 ## The tag the last processed frame actually walked toward -- what
@@ -484,7 +491,7 @@ func _process(delta: float) -> void:
 	# after it: a starving villager puts the bucket down, because thirst
 	# answered from a household tank is never as urgent as having nothing
 	# to eat.
-	_step_water_errand()
+	_step_water_errand(delta)
 	_sync_carried_item()
 	if WaterErrand.overrides_schedule(water_errand):
 		entry = {
@@ -943,6 +950,34 @@ var _talking_to: Node = null
 ## villager who never stops fetching water.
 const ERRAND_REACH_PX := 6.0
 
+## How much longer than a straight-line walk a villager keeps at one leg of
+## the errand before putting the bucket down.
+##
+## There is NO PATHFINDING here -- only a straight line at the target and a
+## slide along whatever it runs into (_slid_along_walls) -- so a villager
+## with a wall, a rail or a building between them and the well walks at it
+## for ever. Measured on the probe village (tools/probe_farm_water.gd): one
+## of three field workers ended a 600s run still `to_well`, 104 px short of
+## a well it had had 570 seconds to reach, having worked 156 of 6000 ticks
+## against its own baseline of 2750. It never farmed again.
+##
+## Derived rather than chosen: the leg's own straight-line walk at
+## WALK_SPEED, times this, for everything a straight line does not account
+## for -- sliding along a wall, being pulled off to eat, a day rolling over
+## mid-walk. Four times is generous; test_a_villager_who_can_walk_there_
+## still_finishes_the_errand is the other side of it.
+const ERRAND_PATIENCE_SLACK := 4.0
+
+## The floor under that, so a villager standing almost on top of the well
+## still gets a moment rather than giving up on the first frame.
+const ERRAND_MIN_PATIENCE_SECONDS := 4.0
+
+## How long they get on with their day before setting out again, once a leg
+## has defeated them. Without it they turn round at the door and walk into
+## the same wall immediately, which is the stall this replaces rather than
+## fixes. One simulated day: they try again tomorrow.
+const ERRAND_RETRY_SECONDS := SECONDS_PER_SIMULATED_DAY
+
 
 ## One frame of the trip to the well (docs/concept/village_water.md).
 ##
@@ -953,19 +988,22 @@ const ERRAND_REACH_PX := 6.0
 ## A villager with no world, or none of their own house to find, simply
 ## never sets out -- an NPC in an unloaded chunk or a test fixture is not
 ## on an errand, it has nowhere to be on one.
-func _step_water_errand() -> void:
+func _step_water_errand(delta: float) -> void:
+	_errand_retry_in = maxf(0.0, _errand_retry_in - delta)
 	# No world to fetch from, or an errand whose target has somehow been
 	# lost: put the bucket down rather than walk one leg further. Nothing
 	# produces the second case today, but a villager stranded mid-square
 	# holding a bucket forever is exactly the failure this errand exists
 	# to replace.
 	if _world == null or (WaterErrand.is_running(water_errand) and _errand_target.is_empty()):
-		water_errand = WaterErrand.AT_HOME
-		_errand_target = {}
-		_errand_location_tag = ""
+		_put_the_bucket_down(0.0)
 		return
 
+	var was := water_errand
 	if not WaterErrand.is_running(water_errand):
+		if _errand_retry_in > 0.0:
+			_errand_location_tag = ""
+			return
 		# Home and still short: set out (again, if one bucket was not
 		# enough -- see WaterErrand's own note on why the loop lives here).
 		_errand_target = _thirsty_building()
@@ -980,7 +1018,41 @@ func _step_water_errand() -> void:
 				_errand_target["chunk_coord"], _errand_target["origin_local"]
 			)
 			_errand_target = {}
+	else:
+		# Still walking this leg. If it has taken far longer than the walk
+		# itself could, they cannot get there: put it down (see
+		# ERRAND_PATIENCE_SLACK).
+		_errand_leg_seconds += delta
+		if _errand_leg_seconds > _errand_leg_budget:
+			_put_the_bucket_down(ERRAND_RETRY_SECONDS)
+		return
+
+	if water_errand != was:
+		_errand_leg_seconds = 0.0
 	_errand_location_tag = WaterErrand.location_tag_for(water_errand)
+	if WaterErrand.is_running(water_errand):
+		_errand_leg_budget = _patience_for(_resolve_location(_errand_location_tag))
+
+
+## How long this leg is worth keeping at: its own straight-line walk, times
+## the slack, never less than the floor.
+func _patience_for(target: Vector2) -> float:
+	return maxf(
+		ERRAND_MIN_PATIENCE_SECONDS,
+		position.distance_to(target) / WALK_SPEED * ERRAND_PATIENCE_SLACK
+	)
+
+
+## Off the errand, empty-handed, and not setting out again for `retry_in`
+## seconds. The bucket goes back by the door; nothing is spilled and
+## nothing is poured, because they never filled it.
+func _put_the_bucket_down(retry_in: float) -> void:
+	water_errand = WaterErrand.AT_HOME
+	_errand_target = {}
+	_errand_location_tag = ""
+	_errand_leg_seconds = 0.0
+	_errand_leg_budget = 0.0
+	_errand_retry_in = maxf(_errand_retry_in, retry_in)
 
 
 ## The building this villager must fetch water for right now, or {} when

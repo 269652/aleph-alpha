@@ -1690,3 +1690,71 @@ func test_they_put_the_bucket_down_once_they_are_home():
 	_walk_the_errand(world)
 	assert_eq(marker.water_errand, WaterErrand.AT_HOME, "precondition: the errand ended")
 	assert_false(view.is_slot_equipped("tool"), "they are still holding the bucket indoors")
+
+
+# -- an errand you cannot finish -------------------------------------------
+#
+# There is no pathfinding here, only a straight line at the target and a
+# slide along whatever it runs into (_slid_along_walls), so a villager with
+# a wall, a rail or a building between them and the well walks at it
+# forever. Measured on the probe village (tools/probe_farm_water.gd): one
+# of three field workers ended a 600s run still `to_well`, 104 px short of
+# a well it had had 570 seconds to reach, having worked 156 of 6000 ticks
+# against its own baseline of 2750. It never farmed again.
+
+## Walks the errand until they give up, standing them still so they make no
+## progress at all -- which is what a wall looks like from in here.
+func _walk_into_a_wall(steps: int = 4000) -> void:
+	var stuck := marker.position
+	for i in steps:
+		marker.position = stuck
+		marker._process(0.1)
+		if not WaterErrand.is_running(marker.water_errand):
+			return
+
+
+func test_a_villager_who_cannot_reach_the_well_puts_the_bucket_down():
+	var world := _a_watered_villager(0.0)
+	marker._process(0.1)
+	assert_true(WaterErrand.is_running(marker.water_errand), "precondition: they set out")
+	_walk_into_a_wall()
+	assert_eq(marker.water_errand, WaterErrand.AT_HOME, "they walked at the wall for ever")
+	assert_eq(marker.carried_item(), "", "still holding a bucket they never filled")
+	assert_eq(world.poured, 0, "they poured a bucket they never filled")
+
+
+func test_they_get_on_with_their_day_before_trying_again():
+	_a_watered_villager(0.0)
+	marker._process(0.1)
+	_walk_into_a_wall()
+	assert_eq(marker.water_errand, WaterErrand.AT_HOME, "precondition: they gave up")
+	marker._process(0.1)
+	assert_eq(
+		marker.water_errand, WaterErrand.AT_HOME,
+		"they turned round at the door and walked into the same wall again"
+	)
+
+
+func test_they_try_again_the_next_day():
+	_a_watered_villager(0.0)
+	marker._process(0.1)
+	_walk_into_a_wall()
+	assert_eq(marker.water_errand, WaterErrand.AT_HOME, "precondition: they gave up")
+	marker._process(NpcMarker.ERRAND_RETRY_SECONDS)
+	marker._process(0.1)
+	assert_true(WaterErrand.is_running(marker.water_errand), "they gave up on water for good")
+
+
+## The other side of the same constant: patience has to be generous enough
+## that a REAL walk never trips it. This villager teleports nowhere -- they
+## walk to the well and back at their own speed.
+func test_a_villager_who_can_walk_there_still_finishes_the_errand():
+	var world := _a_watered_villager(0.0)
+	var walked := 0
+	for i in 4000:
+		marker._process(0.1)
+		walked = i
+		if world.poured > 0:
+			break
+	assert_gt(world.poured, 0, "a villager who could simply walk to the well never got there")
+	assert_lt(walked, 3999, "they were still walking after %.0f simulated seconds" % 400.0)
