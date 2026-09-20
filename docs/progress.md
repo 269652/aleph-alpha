@@ -29454,6 +29454,151 @@ Tests: `test_starvation.gd` 16/16 (new), `test_npc_needs.gd` 14/14,
 `test_npc_marker.gd` 102/102, `test_earth_chunk_manager_village_
 mortality.gd` 5/5 (new), `test_village_renderer.gd` 150/150.
 
+---
+
+## 2026-09-20 — Room is made first, and moved into after
+
+Reported live with the town panel in shot — *"Population 21 (10 housed)"* —
+*"The population is rising but no new houses are built.. NPCs should only
+move in when a new unoccupied house exists for them... also despite showing
+20 population only 10 NPCs are there"*.
+
+**The concept doc already specified what was asked for.**
+`village_growth.md`'s mechanism 3: *"Gated on room: `free_capacity <= 0` ⇒
+no arrivals. A village with no spare roof takes nobody in, however rich."*
+The code had drifted: `arrivals` capped at `spare_house_capacity + 1 if the
+village still had FRONTAGE`. That allowance was written as a cap and behaves
+as a standing invitation — it is granted again on **every settlement step**,
+whether or not the house the last one promised was ever raised, and frontage
+is nearly always available. Hence eleven of twenty-one households under no
+roof at all.
+
+✅ **Arrivals need a real empty house.** `room = spare_house_capacity`; the
+frontage term is deleted rather than reduced, so there is no dial left to
+reopen it. Whatever the draw produced beyond the cap is still lost rather
+than banked.
+
+✅ **The ladder builds a house when no spare roof stands.** Necessary, not
+decorative: priority 1 only fires for a household already here with nowhere
+to live, so with the gate alone a village whose people are all housed would
+owe itself nothing, build nothing, and never have the roof an arrival needs
+— it would stop growing for good the moment it caught up with itself.
+`next_building` gains a lowest rung (a house for nobody in particular, when
+`spare_house_capacity <= 0`), **below** the civic and production rungs: a
+village finishes what it owes itself before making room for strangers. The
+new parameter defaults to 1 ("there is already room"), so a caller that does
+not pass it gets exactly the ladder it always got — pinned by its own test.
+
+The resulting shape: build the entitled rungs → no spare roof → raise a
+house → somebody moves in → no spare roof again. Population advances one
+household per house actually built.
+
+**Two tests pinned the old behaviour and were rewritten, not deleted** —
+*"room to build is room enough"* became *"an empty house is room enough"*,
+and *"room for one plot is one household, however long the absence"* became
+a pair: no empty house admits nobody however long the absence, one empty
+roof admits one.
+
+✅ **And an arrival you can actually see.** *"Despite showing 20 population
+only 10 NPCs are there"*: `spawn_village` runs only from `_load_chunk`, so
+the villager roster was fixed at load time while `admit_household` kept
+adding to the abstract household count — a household that moved in while you
+stood there had nobody to show for it until the chunk unloaded and reloaded.
+`admit_household` re-derives the village now.
+
+A whole re-derivation, not one appended marker: a villager needs their
+farmhouse's field, their pond, their market stand, their store round and
+their workspot prop, all handed out together against the roster as a whole,
+so one bolted on afterwards would be the only villager without any of it.
+Safe to re-run because everything `spawn_village` does to the world already
+goes through an `_if_missing` check — that is what stops a chunk reload
+raising a second village. The cost, named rather than hidden: a villager
+mid-errand restarts it, which happens once per house the village raises and
+is the same thing walking away and back already does.
+
+Tests: `test_village_immigration.gd` 20/20 (4 new, 2 rewritten),
+`test_village_growth.gd` 23/23 (5 new), `test_village_census.gd` 9/9,
+`test_village_assembly.gd` 39/39,
+`test_earth_chunk_manager_village_growth.gd` (5 new, covering the roster
+matching the households after any number of arrivals and nobody being
+duplicated by the re-derivation).
+
+## A farmhouse stands in its own yard (`concept/building.md`, 2026-09-20)
+
+Asked for directly, with the art dropped in: *"I added
+farmhouse_bg_overlay.png which should be rendered as background behind the
+3x2 farmhouse it should use a random variation so that each farmhouses bg
+looks different"*.
+
+### ✅ Nine whole yards, seeded per building
+
+`farmhouse_bg_overlay.png` is a 3×3 grid of nine finished yards at the plot's
+own 3:2 shape — a woodpile, a barrel, a bench, a washing line, a well, a
+beaten path through the grass. None of that is in the building's own sheet,
+which draws the house alone. Picking one whole picture is a far smaller
+mechanism than scattering props and deciding what may overlap what, and it
+reuses the "one sheet, seeded cell" shape `BuildingLifecycleSheet` already
+uses to make a street of cottages a street of different cottages.
+
+Drawn **between the kerb and the house** — children paint in tree order, so
+the yard lies on the ground the kerb marks out and the walls stand on it.
+Same width as the house by the same `drawn_plot_width_tiles` rule, so it is
+the plot's and never wider. Wired per building id
+(`BuildingCatalog.background_sheet_for`), so every other building answers
+`{}` and draws exactly what it drew before.
+
+Worth stating, because it is what makes this art matter: **a farmhouse has no
+variant sheet of its own** — only `house_small`/`house_medium` do — so every
+farmhouse in the world draws the SAME house picture. Its yard is the only
+thing that tells one from another.
+
+### ✅ The keying was the real work, and my first reading of it was wrong
+
+This sheet has no alpha channel and paints its transparency as a
+grey-and-white **checkerboard**, which nothing else in the project does
+(everything else keys flat magenta or near-black).
+
+I first wrote this up as *"a flat key punches 674 px of holes through the
+flowers"* and that was **backwards** — the 674 were checker pixels enclosed
+by art, which the flood MISSES, not flowers a flat key destroys. Caught by
+re-measuring before it shipped; the conclusion survived, the reason did not.
+
+The true reason a flat colour key cannot be used: the checker's lighter
+square and the art's white flower highlights **are the same colour**. The
+tones measure about 253 and 213; a flower highlight sits at 235 and up.
+Measured — one source cell holds **46,354 near-white pixels**, almost all of
+them checker, and **63 survive keying at drawn size**. Those are the flowers,
+and a flat key takes every one of them.
+
+What separates them is **connectivity**, not colour: the checker reaches the
+cell's own edge and a flower enclosed in foliage does not. So the key floods
+inward from the edge, the same shape `head.png`'s own background removal
+uses. Two refinements, each measured rather than reasoned about:
+
+- **The darker square is a safe seed anywhere in the cell**, since nothing in
+  the art is that particular grey — which is what clears checker showing
+  through a gap in the foliage, enclosed by art and so unreachable from the
+  edge (**86 such pixels** in one cell).
+- **The flood then widens by a bounded two pixels** under a looser grey rule,
+  taking the anti-aliased edges where one square meets the next. The seed
+  rule cannot be loosened that far without swallowing a grey rock; bounding
+  the widening to the one or two pixels anti-aliasing actually spans cannot
+  reach a rock's interior however grey it is (**82 px of grey fringe**
+  survived before it).
+
+### ✅ Looked at, not just asserted on
+
+All nine yards were rendered to PNG and composited over a mid-grey backdrop
+(`tools/probe_farmhouse_yard.gd`), twice: once to find the fringe, once to
+confirm it was gone. Flowers, grey rocks, barrels, benches, the well and the
+washing line all survive; the checkerboard does not.
+
+Tests: `test_building_catalog.gd` 80/80 (+4 new),
+`test_earth_chunk_manager_buildings.gd` 40/40 (+4 new),
+`test_illustrated_structure_sprite.gd` 53/54 (+4 new). The one failure,
+`test_no_house_crop_cuts_through_the_top_of_its_own_drawing`, is the same
+pre-existing house-art failure recorded in the fence entry above.
+
 ## A dug pond is water you can see, and a hut stands over it (`concept/village_ponds.md`, 2026-09-20)
 
 Reported live with a screenshot: *"The built pond renders as earth instead

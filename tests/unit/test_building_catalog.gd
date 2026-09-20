@@ -917,6 +917,82 @@ func test_a_cottage_still_covers_most_of_its_own_plot():
 	assert_gt(drawn / 2.0, 0.6, "a cottage that covers less than this is a model of a cottage")
 
 
+# -- a farmhouse has a yard behind it ---------------------------------------
+#
+# Asked for directly, with the art dropped in: *"I added
+# farmhouse_bg_overlay.png which should be rendered as background behind the
+# 3x2 farmhouse it should use a random variation so that each farmhouses bg
+# looks different"*.
+#
+# See docs/concept/building.md, "A building's own yard, drawn behind it".
+
+
+func test_a_farmhouse_has_a_yard_sheet_and_other_buildings_do_not():
+	var yard := BuildingCatalog.background_sheet_for("farmhouse", 1)
+	assert_false(yard.is_empty(), "the farmhouse's yard art is declared")
+	assert_eq(String(yard["path"]), "res://assets/sprites/buildings/farmhouse_bg_overlay.png")
+	for building_id in ["sawmill", "warehouse", "blacksmith", "brewery", "city_hall"]:
+		assert_true(
+			BuildingCatalog.background_sheet_for(building_id, 1).is_empty(),
+			"%s has no yard declared, so nothing changes for it" % building_id
+		)
+
+
+## The whole point of the ask: two farmhouses do not look the same. Across a
+## spread of seeds every one of the sheet's nine yards must come up, or the
+## variation is narrower than the art paid for.
+func test_every_one_of_the_nine_yards_is_reachable_by_some_seed():
+	var seen := {}
+	for seed_value in range(400):
+		var yard := BuildingCatalog.background_sheet_for("farmhouse", seed_value)
+		seen["%d,%d" % [int(yard["column"]), int(yard["row"])]] = true
+	assert_eq(seen.size(), 9, "all nine yards are used: %s" % str(seen.keys()))
+
+
+## ...and one farmhouse looks the same every reload, like every other seeded
+## art pick in this codebase.
+func test_the_same_seed_always_picks_the_same_yard():
+	for seed_value in [0, 7, 4242, -19]:
+		var once := BuildingCatalog.background_sheet_for("farmhouse", seed_value)
+		var twice := BuildingCatalog.background_sheet_for("farmhouse", seed_value)
+		assert_eq(once["row"], twice["row"], "seed %d" % seed_value)
+		assert_eq(once["column"], twice["column"], "seed %d" % seed_value)
+
+
+## The two axes are picked from independent hashes, so the pair covers the
+## grid instead of walking a diagonal of it -- the exact failure
+## variant_cell_for's own doc comment names, and the reason both of these
+## take two salts rather than splitting one index into nine.
+func test_the_yard_covers_the_grid_rather_than_walking_a_diagonal():
+	var columns := {}
+	var rows := {}
+	var off_diagonal := 0
+	for seed_value in range(200):
+		var yard := BuildingCatalog.background_sheet_for("farmhouse", seed_value)
+		columns[int(yard["column"])] = true
+		rows[int(yard["row"])] = true
+		if int(yard["column"]) != int(yard["row"]):
+			off_diagonal += 1
+	assert_eq(columns.size(), 3, "every column is used")
+	assert_eq(rows.size(), 3, "every row is used")
+	assert_gt(off_diagonal, 100, "the pair is not just (n, n) -- the axes are independent")
+
+
+## Worth stating because it is what makes this art matter: a farmhouse has
+## no variant sheet of its own (only house_small/house_medium do), so every
+## farmhouse in the world draws the SAME house picture. Its yard is the only
+## thing that tells one from another.
+func test_a_farmhouse_has_no_house_variant_so_the_yard_is_its_whole_variety():
+	assert_eq(
+		BuildingCatalog.variant_sheet_of("farmhouse"), "",
+		"a farmhouse draws one house picture"
+	)
+	var yards := {}
+	for seed_value in range(200):
+		var yard := BuildingCatalog.background_sheet_for("farmhouse", seed_value)
+		yards["%d,%d" % [int(yard["column"]), int(yard["row"])]] = true
+	assert_eq(yards.size(), 9, "...and nine yards to stand it in")
+
 # -- borrowed art (docs/concept/building.md, "Asset contract") -------------
 #
 # "use farmhouse sprite until illustration exists" -- asked for directly,

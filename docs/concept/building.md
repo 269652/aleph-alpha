@@ -436,6 +436,73 @@ beside a PAVED plot still blends toward it as though it were open ground
 arise today, since a paved plot is by definition ringed by paving rather
 than by earth.
 
+### A building's own yard, drawn behind it
+
+Asked for directly, with the art dropped in: *"I added
+farmhouse_bg_overlay.png which should be rendered as background behind the
+3x2 farmhouse it should use a random variation so that each farmhouses bg
+looks different"*.
+
+The kerb above says where a plot *is*. This says what stands on it. A
+farmhouse is a working yard as much as a building — a woodpile, a barrel, a
+bench, a washing line, a beaten path through the grass — and none of that is
+in the building's own sheet, which draws only the house.
+
+- **A yard is one sheet of whole scenes, not props to place.** The delivered
+  `farmhouse_bg_overlay.png` is a 3×3 grid of nine finished yards, each drawn
+  at the plot's own 3:2 shape. Picking one picture is a far smaller mechanism
+  than scattering props and deciding what may overlap what, and it is the
+  same "one sheet, seeded cell" shape `BuildingLifecycleSheet` already uses
+  to make a street of cottages a street of DIFFERENT cottages.
+- **Which yard is seeded from the building's own seed**, the same
+  `record["seed"]` its house variant is already picked from, salted so the
+  two axes cannot move together. Two farmhouses in one village differ; one
+  farmhouse looks the same on every reload.
+- **It is drawn BETWEEN the kerb and the house.** Children paint in tree
+  order (see `_spawn_building_node`), so the yard lies on the ground the kerb
+  marks out and the house stands on top of it. Same width as the house's own
+  art, by the same `drawn_plot_width_tiles` rule, so the yard is the plot's
+  and never wider than it.
+- **It is an overlay like everything else here.** A building with no yard
+  sheet declared draws exactly what it drew before; the wiring is per
+  building id (`BuildingCatalog.background_sheet_for`), so the farmhouse
+  having one costs nothing anywhere else.
+
+**The background must be flooded off, not keyed off.** This sheet has no
+alpha channel and its transparency is a painted grey-and-white
+**checkerboard**, which is a new problem here: every other sheet in this
+project keys flat magenta or near-black.
+
+A flat colour key cannot separate it from the art, because the checker's
+lighter square and the art's **white flower highlights are the same colour**
+— the tones measure about 253 and 213, and a flower highlight sits at 235
+and above. Measured: one source cell holds 46,354 near-white pixels, almost
+all of them checker; 63 survive keying at drawn size, and those are the
+flowers. A flat key takes every one of them.
+
+What separates them is **connectivity**, not colour: the checker reaches the
+cell's own edge, and a flower enclosed in foliage does not. So the key
+floods inward from the edge over checker-coloured pixels — the same shape
+`IllustratedCharacterSprite._remove_background_by_flood` already uses on
+`head.png`, for the same reason. Unlike the head's flood it steps between
+the checker's two tones freely (they differ by about 40/255, far more than
+a per-step tolerance would allow) because what is followed here is a KNOWN
+two-tone pattern rather than an unknown gradient into the art.
+
+Two refinements, each measured on the real sheet rather than reasoned about:
+
+- **The darker square is a safe seed anywhere in the cell**, not only at the
+  edge, since nothing in the art is that particular grey. That is what
+  clears checker showing through a gap in the foliage, which is enclosed by
+  art and so can never be reached from the edge — 86 such pixels in one
+  cell.
+- **The flood then widens by a bounded two pixels** under a looser grey
+  rule, which takes the anti-aliased edges where one square meets the next
+  and where a square meets the art. The seed rule cannot be loosened that
+  far without also swallowing a grey rock; bounding the widening to the one
+  or two pixels anti-aliasing actually spans cannot reach a rock's interior
+  however grey it is. Measured: 82 px of grey fringe survived before it.
+
 ### When the ground says no: water, a split spine, and a drowned square
 
 `BiomeClassifier` knows nothing of hydrology, so a lake still reads as

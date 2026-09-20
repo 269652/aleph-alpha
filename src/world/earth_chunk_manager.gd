@@ -4922,7 +4922,8 @@ func _construction_reserve_for(settlement_id: String) -> Dictionary:
 	var census := _village_census_for(chunk_coord, household_ids)
 	var next_building: String = VillageGrowth.next_building(
 		household_ids.size(), int(census["housed_count"]),
-		_present_structure_ids_for_settlement_chunk(chunk_coord)
+		_present_structure_ids_for_settlement_chunk(chunk_coord),
+		int(census["spare_house_capacity"])
 	)
 	if next_building == "":
 		return {}
@@ -4950,11 +4951,14 @@ func _step_village_immigration(settlement_id: String, market, household_ids: Arr
 		return
 
 	var census := _village_census_for(chunk_coord, household_ids)
+	# No frontage term any more: a household moves into a house that really
+	# stands, never onto the promise of one (see VillageImmigration.arrivals
+	# -- the old allowance was granted again on every step, so households
+	# piled up under no roof at all). Making the room is the LADDER's job.
 	var result: Dictionary = VillageImmigration.arrivals(
 		SETTLEMENT_STEP_INTERVAL,
 		_food_per_household(settlement_id, market, household_ids.size()),
 		int(census["spare_house_capacity"]),
-		_growth_site_for(chunk_coord, BuildingCatalog.BUILDING_IDS[0]) != null,
 		VillageGrowth.ladder_share(_present_structure_ids_for_settlement_chunk(chunk_coord)),
 		float(_settlement_immigration_carry.get(settlement_id, 0.0))
 	)
@@ -5022,7 +5026,63 @@ func admit_household(chunk_coord: Vector2i) -> String:
 	settled.witnesses = [settlement_id]
 	_event_store.append(settled)
 	_memory_store.witness_event(settled, _world_age_seconds)
-	return _household_store.form_household(npc_id).id
+	var household_id: String = _household_store.form_household(npc_id).id
+	# Somebody you can actually see. Reported live with the town panel in
+	# shot: *"despite showing 20 population only 10 NPCs are there"*.
+	_respawn_village(chunk_coord)
+	return household_id
+
+
+## Re-derives the village standing in `chunk_coord`, so the people on screen
+## are the households that really live there.
+##
+## `spawn_village` runs only from `_load_chunk`, which fixes the villager
+## roster at the moment the chunk loaded -- while admit_household goes on
+## adding to the settlement's household count. A household that moved in
+## while the player stood in the village therefore had no villager at all
+## until the chunk was unloaded and loaded again.
+##
+## A whole re-derivation rather than appending one marker, because a
+## villager is not just a marker: they need their farmhouse's field, their
+## pond, their market stand, their store round, their workspot prop -- all
+## handed out together by spawn_village against the roster as a whole. One
+## villager bolted on afterwards would be the only one in the village
+## missing all of it.
+##
+## Safe to re-run because everything spawn_village does to the WORLD is
+## already idempotent -- every building, fence, pond and paved cell goes
+## through a `_if_missing` check, precisely so a chunk reload never raises a
+## second village on top of the first. What is rebuilt is the scene nodes,
+## which is exactly what a reload rebuilds too.
+##
+## The cost is real and worth naming: a villager mid-errand restarts it. An
+## arrival happens once per house the village actually raises, so that is
+## rare, and it is the same thing the player already causes every time they
+## walk far enough away to unload the chunk.
+##
+## A no-op unless this chunk's village is really on screen -- which is what
+## makes it safe to call from admit_household, since settle_up_to_founding_
+## roster admits households during _load_chunk BEFORE the village is spawned
+## at all.
+func _respawn_village(chunk_coord: Vector2i) -> void:
+	if not _loaded_villages.has(chunk_coord):
+		return
+	var chunk: Chunk = _loaded_chunks.get(chunk_coord)
+	if chunk == null:
+		return
+	for node in _loaded_villages[chunk_coord]:
+		if is_instance_valid(node):
+			node.free()
+	_loaded_villages[chunk_coord] = _village_renderer.spawn_village(
+		_creatures_parent,
+		chunk_coord,
+		chunk_coord * CHUNK_SIZE,
+		CHUNK_SIZE,
+		TerrainRenderer.TILE_SIZE,
+		_biome_classifier.dominant_biome(chunk.biome),
+		self,
+		_current_sun_elevation_deg
+	)
 
 
 ## This settlement's own mean household productivity (HouseholdWellbeing),
@@ -15819,6 +15879,28 @@ func _spawn_building_node(chunk_coord: Vector2i, origin_local: Vector2i, record:
 	kerb.scale = Vector2.ONE * ArtResolution.SPRITE_SCALE
 	kerb.position = Vector2(0, -footprint_px.y * 0.5)
 	node.add_child(kerb)
+
+	# The yard the building stands in, between the kerb and the house: on the
+	# ground the kerb marks out, under the walls (children paint in tree
+	# order). A woodpile, a barrel, a bench, a beaten path -- none of it in
+	# the building's own sheet, which draws the house alone. See
+	# docs/concept/building.md, "A building's own yard, drawn behind it".
+	#
+	# Seeded from the building's own seed through BuildingCatalog's own
+	# salts, so two farmhouses in a village differ and one looks the same on
+	# every reload. A building with no yard declared grows no node at all.
+	var yard_sheet := BuildingCatalog.background_sheet_for(building_id, int(record["seed"]))
+	if not yard_sheet.is_empty():
+		var yard_texture := _first_texture_of([yard_sheet], footprint.x, building_id)
+		if yard_texture != null:
+			var yard := Sprite2D.new()
+			yard.name = "Yard"
+			yard.texture = yard_texture
+			yard.scale = Vector2.ONE * ArtResolution.SPRITE_SCALE
+			yard.position = Vector2(
+				0, -float(yard_texture.get_height()) * 0.5 * ArtResolution.SPRITE_SCALE
+			)
+			node.add_child(yard)
 
 	var sprite := Sprite2D.new()
 	sprite.name = "Art"

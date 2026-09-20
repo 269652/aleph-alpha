@@ -402,6 +402,53 @@ static func variant_cell_for(building_id: String, seed_value: int) -> Vector2i:
 	)
 
 
+## The yard a building stands in, drawn BEHIND it (see docs/concept/
+## building.md, "A building's own yard, drawn behind it"). One sheet of
+## whole scenes per building id, each a finished yard at the plot's own
+## shape -- a woodpile, a barrel, a bench, a beaten path -- none of which is
+## in the building's own sheet, which draws only the house.
+##
+## Per building id, so declaring one for the farmhouse costs nothing
+## anywhere else: every other building answers {} and draws exactly what it
+## drew before.
+const _BACKGROUND_SHEETS := {
+	"farmhouse": {
+		"path": "res://assets/sprites/buildings/farmhouse_bg_overlay.png",
+		"columns": 3, "rows": 3,
+	},
+}
+
+
+## Which yard THIS building stands in -- chain-shaped
+## ({path, columns, rows, row, column, grid}) so the renderer can hand it to
+## footprint_frame_texture unchanged, or {} for a building with no yard art.
+##
+## Seeded from the building's own seed, the same one its house variant comes
+## from, but through its OWN salts: sharing them would tie the two axes
+## together, so a given cottage would arrive with the same yard every time
+## instead of the yard and the house varying independently. Pinned by
+## test_the_yard_does_not_move_in_lockstep_with_the_house_variant.
+##
+## Two independent hashes rather than one index into nine, for the same
+## reason variant_cell_for uses two: one hash split into a row and a column
+## walks a diagonal of the grid instead of covering it.
+static func background_sheet_for(building_id: String, seed_value: int) -> Dictionary:
+	if not _BACKGROUND_SHEETS.has(building_id):
+		return {}
+	var sheet: Dictionary = _BACKGROUND_SHEETS[building_id]
+	var columns := int(sheet["columns"])
+	var rows := int(sheet["rows"])
+	return {
+		"path": String(sheet["path"]),
+		"columns": columns, "rows": rows,
+		"column": PixelNoise.range_index(seed_value, 53, 59, columns),
+		"row": PixelNoise.range_index(seed_value, 61, 67, rows),
+		# An even grid: the sheet is a plain 3x3 with no dividers and no
+		# printed labels, so its cells really are on a pitch.
+		"grid": "even",
+	}
+
+
 ## Every sheet a FINISHED building of this id and seed could be drawn
 ## from, BEST FIRST: `{path, columns, rows, row, column, grid}`. The
 ## renderer walks the chain and takes the first whose file is really on
