@@ -79,6 +79,9 @@ func _init() -> void:
 		var project = store.start_project(chunk_coord, origin, BUILDING_ID, "")
 		project.labor_hours_accumulated = required * STAGES[i]
 		manager._sync_construction_site(chunk_coord, project)
+		# ...and the builder working it, through the real seam, with a crew
+		# of one -- what a settlement with a single spare hand really has.
+		manager._sync_construction_worker(chunk_coord, project, 1.0)
 		print("stage %.2f at %s" % [STAGES[i], origin])
 	await process_frame
 
@@ -89,10 +92,20 @@ func _init() -> void:
 	RenderingServer.force_draw()
 	await process_frame
 	RenderingServer.force_draw()
+	# A second of work, so the builders are somewhere they walked to rather
+	# than all standing on their own plot's exact centre.
+	for i in 60:
+		for origin in row:
+			var worker = manager._construction_site_workers.get(chunk_coord, {}).get(origin)
+			if worker != null:
+				worker._process(1.0 / 60.0)
 	var image: Image = viewport.get_texture().get_image()
 	image.save_png("%s/rising.png" % OUT_DIR)
 	print("saved %s/rising.png   left to right: %s" % [OUT_DIR, str(STAGES)])
 	_report_sizes(manager, chunk_coord, row)
+	for origin in row:
+		var worker = manager._construction_site_workers.get(chunk_coord, {}).get(origin)
+		print("  builder at %s: %s" % [origin, "standing on the site" if worker != null else "NOBODY"])
 	print("dumped to: ", ProjectSettings.globalize_path(OUT_DIR))
 	quit()
 

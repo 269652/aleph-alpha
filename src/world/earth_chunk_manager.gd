@@ -80,6 +80,7 @@ const BuildingCatalog = preload("res://src/gameplay/building_catalog.gd")
 const InteriorTemplates = preload("res://src/gameplay/interior_templates.gd")
 const ProceduralBuildingPlaceholderSprite = preload("res://src/rendering/procedural_building_placeholder_sprite.gd")
 const ProceduralFootprintKerbSprite = preload("res://src/rendering/procedural_footprint_kerb_sprite.gd")
+const ConstructionWorkerMarker = preload("res://src/rendering/construction_worker_marker.gd")
 const FarmerMarker = preload("res://src/rendering/farmer_marker.gd")
 const MillMarker = preload("res://src/rendering/mill_marker.gd")
 const BakeryMarker = preload("res://src/rendering/bakery_marker.gd")
@@ -10681,6 +10682,51 @@ func tall_grass_growth_at(pixel_position: Vector2) -> float:
 ## `radius_tiles`, dropping plant fibre as a ground item (the fibre in the
 ## stick+shard+fibre crude-blade recipe). Returns true if a patch was
 ## harvested. Only mature patches yield fibre -- young shoots tear uselessly.
+## Picks the blackberries off a ripe bramble the player is standing at or
+## beside, dropping them on the ground through WorldItemBus -- the same real
+## ground-drop path harvest_grass_near uses, so nothing about carrying,
+## stacking or picking the item back up is special-cased here.
+##
+## Returns whether anything was actually picked. False is the ordinary
+## answer for most of the year: fruit is only ripe across autumn (see
+## BlackberryBramble.ripeness_at), and a patch already picked this bearing
+## year gives nothing more until the next one. Both refusals are the sim's,
+## not this function's -- it only asks.
+##
+## The CANE always survives, so unlike harvest_grass_near this does not
+## remove anything from the sim and the sprite stays exactly where it is: a
+## bramble is not an annual, and the same patch bears again next year.
+##
+## `year` is whole years elapsed, which is what makes "already picked" mean
+## "this season" rather than "ever" -- derived from the same world clock the
+## season itself comes from, so the two can never disagree.
+func pick_blackberries_near(pixel_position: Vector2, radius_tiles: int = 1) -> bool:
+	var year_fraction := _season_cycle.year_fraction(_world_age_seconds)
+	var year := int(floor(_world_age_seconds / SeasonCycle.SECONDS_PER_YEAR))
+	var center_tile := _world_tile_for_pixel(pixel_position)
+	for dy in range(-radius_tiles, radius_tiles + 1):
+		for dx in range(-radius_tiles, radius_tiles + 1):
+			var tile := center_tile + Vector2i(dx, dy)
+			var chunk_coord := _chunk_coord_for_tile(tile)
+			var sim = _bramble_sims.get(chunk_coord)
+			if sim == null:
+				continue
+			var local := _local_coord(tile.x, tile.y)
+			var picked: int = sim.pick(local, year_fraction, year)
+			if picked <= 0:
+				continue
+			var drop_position := Vector2(
+				(tile.x + 0.5) * TerrainRenderer.TILE_SIZE,
+				(tile.y + 0.5) * TerrainRenderer.TILE_SIZE
+			)
+			WorldItemBus.item_dropped.emit(
+				ItemStack.new(Item.new("blackberry", "Blackberry", "food", 20), picked),
+				drop_position
+			)
+			return true
+	return false
+
+
 func harvest_grass_near(pixel_position: Vector2, radius_tiles: int = 1) -> bool:
 	var center_tile := _world_tile_for_pixel(pixel_position)
 	for dy in range(-radius_tiles, radius_tiles + 1):
@@ -18810,6 +18856,10 @@ func _advance_construction_labor(
 			_place_completed_construction_project(project)
 		elif is_building:
 			_sync_construction_site(chunk_coord, project)
+			# ... and the builder working it, present exactly while the
+			# crew above is real (docs/concept/building.md, "Somebody is
+			# working on it").
+			_sync_construction_worker(chunk_coord, project, float(capacity["builder_count"]))
 
 
 ## The real, live chunk-load caller for docs/concept/timber_construction.md's
@@ -19574,6 +19624,13 @@ func _place_completed_building_project(project) -> void:
 ## on chunk unload; rebuilt by the next labour tick after a reload.
 var _construction_site_nodes: Dictionary = {}
 
+## The builder working each of those sites -- chunk_coord -> {origin_local
+## -> ConstructionWorkerMarker}, the same shape as the sites themselves and
+## kept in step with them (see _sync_construction_worker). Asked for
+## directly, watching a village raise a cottage: "the construction site
+## should show a builder working on it".
+var _construction_site_workers: Dictionary = {}
+
 
 func _sync_construction_site(chunk_coord: Vector2i, project) -> void:
 	var building_id: String = project.blueprint_id
@@ -19627,6 +19684,57 @@ func _sync_construction_site(chunk_coord: Vector2i, project) -> void:
 	sprite.position = Vector2(0, -float(texture.get_height()) * 0.5 * ArtResolution.SPRITE_SCALE)
 
 
+## Keeps the builder on a site in step with whether anybody is really
+## working it (docs/concept/building.md, "Somebody is working on it").
+##
+## `builder_count` is the crew the ledger is actually spending on this
+## settlement's projects this tick -- its spare hands scaled by its own
+## productivity. Zero is a real answer (a village with nobody to spare
+## builds nothing), and a site accruing no labour shows no worker rather
+## than a figure standing over work that is not happening.
+##
+## ONE builder, never a crew of `builder_count`: that number is
+## settlement-WIDE and shared across every project the settlement has
+## going, so drawing one worker per unit at each site would show the same
+## hands twice over. One figure per site is the honest reading of it.
+func _sync_construction_worker(chunk_coord: Vector2i, project, builder_count: float) -> void:
+	if project == null:
+		return
+	var origin_local: Vector2i = project.origin
+	if builder_count <= 0.0:
+		_free_construction_worker(chunk_coord, origin_local)
+		return
+	if not _construction_site_workers.has(chunk_coord):
+		_construction_site_workers[chunk_coord] = {}
+	var by_origin: Dictionary = _construction_site_workers[chunk_coord]
+	var standing = by_origin.get(origin_local)
+	if standing != null and is_instance_valid(standing):
+		return
+	var footprint := BuildingCatalog.footprint_of(project.blueprint_id)
+	var plot := Rect2(
+		Vector2(chunk_coord * CHUNK_SIZE + origin_local) * TerrainRenderer.TILE_SIZE,
+		Vector2(footprint) * TerrainRenderer.TILE_SIZE
+	)
+	var worker := ConstructionWorkerMarker.new()
+	worker.plot = plot
+	# The site's own seed, so one builder works one site the same way on
+	# every reload -- the same seed the stage sprite is picked from.
+	worker.seed_value = _house_site_seed(
+		chunk_coord, chunk_coord * CHUNK_SIZE + origin_local, project.blueprint_id
+	)
+	worker.position = plot.position + plot.size * 0.5
+	_entities_parent.add_child(worker)
+	by_origin[origin_local] = worker
+
+
+func _free_construction_worker(chunk_coord: Vector2i, origin_local: Vector2i) -> void:
+	var by_origin: Dictionary = _construction_site_workers.get(chunk_coord, {})
+	var worker = by_origin.get(origin_local)
+	if worker != null and is_instance_valid(worker):
+		worker.free()
+	by_origin.erase(origin_local)
+
+
 ## The first sheet of `chain` (BuildingCatalog.finished_sheet_chain /
 ## construction_sheet_chain) whose file is really on disk, as a texture
 ## scaled to a `footprint_width_tiles`-wide footprint -- null when none of
@@ -19661,6 +19769,9 @@ func _free_construction_site(chunk_coord: Vector2i, origin_local: Vector2i) -> v
 	if node != null and is_instance_valid(node):
 		node.free()
 	by_origin.erase(origin_local)
+	# The builder goes with the site he works -- a worker standing over a
+	# finished building is a ghost.
+	_free_construction_worker(chunk_coord, origin_local)
 
 
 func _free_construction_sites_in_chunk(chunk_coord: Vector2i) -> void:
@@ -19668,6 +19779,12 @@ func _free_construction_sites_in_chunk(chunk_coord: Vector2i) -> void:
 	for origin_local in by_origin.keys():
 		_free_construction_site(chunk_coord, origin_local)
 	_construction_site_nodes.erase(chunk_coord)
+	# A builder whose site was never spawned this session (a project that
+	# advanced while the chunk was loaded but never drew a stage) still has
+	# to go with the chunk he works in.
+	for origin_local in _construction_site_workers.get(chunk_coord, {}).keys():
+		_free_construction_worker(chunk_coord, origin_local)
+	_construction_site_workers.erase(chunk_coord)
 
 
 ## The house pieces the water reclaims (see _reclaim_pieces_standing_in_
