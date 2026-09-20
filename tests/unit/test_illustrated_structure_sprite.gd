@@ -534,27 +534,33 @@ func test_every_rail_is_moved_off_the_middle_of_its_tile():
 		)
 
 
-## And it moves TOWARD the beds, never away from them.
+## And the art ends up against the edge facing the beds.
 ##
-## Not STRICTLY toward: since a rail is scaled by its own post spacing it is
-## drawn larger than its tile, and a facing whose art already lands flush
-## against its inner edge needs no nudge at all -- a zero offset is that, not
-## a rail left in the middle of its tile. The property that would actually be
-## broken by a wrong offset is where the wood lands, which
-## test_scaling_by_the_run_keeps_every_rail_flush_against_its_own_edge and
-## test_no_rails_wood_ever_crosses_into_the_beds both pin directly.
-func test_the_offset_moves_the_art_toward_the_beds():
+## **Rewritten 2026-09-20.** This used to assert that the OFFSET VECTOR
+## points toward the beds, which only holds while the art is SMALLER than
+## its tile. A rail is scaled by its own post spacing now (see "consecutive
+## rails share a post" below), so it is drawn larger than its tile: the
+## band already starts outside the tile, and landing it flush against the
+## edge facing the beds means pushing it back the other way. The offset's
+## sign stopped meaning what this asserted; where the wood LANDS is what the
+## rule was always about, and it is unchanged.
+##
+## Corners are held to both of their axes, which is the whole point of
+## naming both sides (`corner_nw`/`ne`/`sw`/`se`).
+func test_every_rails_wood_lands_flush_against_the_edge_facing_its_beds():
 	for facing in VillageFarm.FENCE_TILE_IDS:
 		var subject: String = VillageFarm.fence_tile_for(facing)
-		var offset: Vector2 = sprite.footprint_offset(subject, _TILE)
 		var inner: Vector2i = VillageFarm.fence_inner_direction(subject)
-		# a hair below zero, not zero: the offset is a difference of scaled
-		# floats, so an already-flush rail lands on -0.0 or a rounding wisp
-		# below it rather than on a clean 0.0
-		assert_gt(
-			offset.dot(Vector2(inner)), -_EDGE_TOLERANCE,
-			"%s's art must move toward its own beds, not away from them" % subject
-		)
+		var placed := _placed_wood_rect(subject)
+		if inner.x > 0:
+			assert_almost_eq(placed.end.x, float(_TILE), _EDGE_TOLERANCE, subject)
+		elif inner.x < 0:
+			assert_almost_eq(placed.position.x, 0.0, _EDGE_TOLERANCE, subject)
+		if inner.y > 0:
+			assert_almost_eq(placed.end.y, float(_TILE), _EDGE_TOLERANCE, subject)
+		elif inner.y < 0:
+			assert_almost_eq(placed.position.y, 0.0, _EDGE_TOLERANCE, subject)
+
 
 
 ## Everything that is a whole building standing on its own tile is

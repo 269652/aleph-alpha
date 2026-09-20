@@ -305,8 +305,6 @@ func _footprint_scale(subject: String, image: Image, tile_size: int) -> float:
 	# side wall's own scale (the vertical run it caps), so its timber is
 	# exactly as thick as the run it meets; scaling it by its own length
 	# instead is what turned a post into a whole tile of rail.
-	if inner.x != 0 and inner.y != 0:
-		return float(tile_size) / float(maxi(art.size.y, 1))
 	# A straight run is scaled by the distance between its own two POST
 	# CENTRES, not by the length of its wood. Every cell of fence.png is a
 	# whole panel -- a post at EACH end -- so two panels whose wood merely
@@ -316,12 +314,23 @@ func _footprint_scale(subject: String, image: Image, tile_size: int) -> float:
 	# two edges, where the neighbour's near post lands too, and the pair draw
 	# as one. See docs/concept/village_farms.md, "Consecutive rails SHARE a
 	# post".
+	#
+	# A CORNER takes this same rule, and must: its art IS the side column's
+	# art, so measuring that column's post spacing gives it exactly the side
+	# wall's own scale -- which is the rule the corner already had, stated
+	# against the wall rather than against its own length, and is what keeps
+	# its timber as thick as the run it meets.
 	var vertical_run := inner.x != 0
 	var spacing := _post_spacing_of(subject, image, vertical_run)
 	if spacing > 0.0:
 		return float(tile_size) / spacing
 	# No two post bands found: fall back to the older wood-spans-a-tile rule
-	# rather than returning a nonsense scale for art this cannot read.
+	# rather than returning a nonsense scale for art this cannot read. The
+	# corner keeps its own fallback, the side wall's rather than its own
+	# length's -- scaling a post as if it were a run is what once turned a
+	# corner into a whole tile of rail.
+	if inner.x != 0 and inner.y != 0:
+		return float(tile_size) / float(maxi(art.size.y, 1))
 	if inner.y != 0:
 		return float(tile_size) / float(maxi(art.size.x, 1))
 	return float(tile_size) / float(maxi(art.size.y, 1))
