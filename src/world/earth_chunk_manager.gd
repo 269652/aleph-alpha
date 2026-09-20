@@ -4322,8 +4322,18 @@ func _settlement_present_building_ids(chunk_coord: Vector2i) -> Array:
 ## anybody is standing in it.
 func _settlement_building_counts(chunk_coord: Vector2i) -> Dictionary:
 	var counts := {}
-	for building_id in _standing_building_ids_in_chunk(chunk_coord):
-		counts[building_id] = int(counts.get(building_id, 0)) + 1
+	# The RECORDS, not _standing_building_ids_in_chunk: that list names each
+	# KIND once, which is what every "already stands" check wants and
+	# exactly what a count must not do. Measured (tools/probe_field_room.gd)
+	# on a real village with three farmhouses standing: `"farmhouse": 1`,
+	# so mechanism 7's "outnumbered" was judged against one however many
+	# stood (docs/concept/village_economy_balance.md mechanism 6).
+	var chunk: Chunk = _loaded_chunks.get(chunk_coord)
+	if chunk != null:
+		for origin_local in chunk.buildings:
+			var building_id: String = chunk.buildings[origin_local].get("id", "")
+			if building_id != "":
+				counts[building_id] = int(counts.get(building_id, 0)) + 1
 	for building_id in _construction_project_store.completed_blueprint_ids_in_chunk(chunk_coord):
 		counts[building_id] = int(counts.get(building_id, 0)) + 1
 	return counts
