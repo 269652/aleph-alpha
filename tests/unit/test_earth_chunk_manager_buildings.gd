@@ -558,3 +558,53 @@ func test_the_kerb_is_drawn_beneath_the_building_it_marks():
 		node.get_children().find(kerb), node.get_children().find(art),
 		"a kerb drawn over the walls would be a box round the house, not a plot marked on the ground"
 	)
+
+
+# -- a farmhouse stands in its own yard -------------------------------------
+#
+# Asked for directly, with the art dropped in: *"I added
+# farmhouse_bg_overlay.png which should be rendered as background behind the
+# 3x2 farmhouse it should use a random variation so that each farmhouses bg
+# looks different"*. See docs/concept/building.md, "A building's own yard,
+# drawn behind it".
+
+
+func test_a_farmhouse_draws_a_yard_behind_it():
+	assert_true(manager.place_building(_chunk_coord, _origin, "farmhouse", Vector2i(0, 1), 5, ""))
+	var yard := _building_child_named(_origin, "Yard")
+	assert_not_null(yard, "a farmhouse stands in a yard")
+	assert_true(yard is Sprite2D)
+	assert_not_null((yard as Sprite2D).texture, "...with real art in it")
+
+
+## Order is the whole point of calling it a BACKGROUND: children paint in
+## tree order, so the yard lies on the ground the kerb marks out and the
+## house stands on top of it.
+func test_the_yard_paints_under_the_house_and_over_the_kerb():
+	assert_true(manager.place_building(_chunk_coord, _origin, "farmhouse", Vector2i(0, 1), 5, ""))
+	var node: Node2D = manager._building_nodes.get(_chunk_coord, {}).get(_origin)
+	var kerb_at := node.get_node("FootprintKerb").get_index()
+	var yard_at := node.get_node("Yard").get_index()
+	var art_at := node.get_node("Art").get_index()
+	assert_lt(kerb_at, yard_at, "the kerb is the ground, so it paints first")
+	assert_lt(yard_at, art_at, "the yard is behind the house, not in front of it")
+
+
+## A building with no yard declared is untouched -- which is what makes it
+## safe to wire this without auditing every building in the catalog.
+func test_a_building_with_no_yard_declared_grows_no_yard_node():
+	assert_true(manager.place_building(_chunk_coord, _origin, "house_large", Vector2i(0, 1), 5, ""))
+	assert_null(_building_child_named(_origin, "Yard"), "no yard art, no yard node")
+
+
+## The yard is the plot's, so it is drawn to the same width the house is --
+## never wider than the ground it stands on.
+func test_the_yard_is_drawn_to_the_same_width_as_the_house():
+	assert_true(manager.place_building(_chunk_coord, _origin, "farmhouse", Vector2i(0, 1), 5, ""))
+	var yard: Sprite2D = _building_child_named(_origin, "Yard")
+	var art: Sprite2D = _building_child_named(_origin, "Art")
+	assert_almost_eq(
+		yard.texture.get_width() * yard.scale.x,
+		float(art.texture.get_width()) * art.scale.x, 1.0,
+		"the yard covers the plot the house covers"
+	)

@@ -336,6 +336,10 @@ func spawn_village(
 	var fisher_ponds := _dig_fisher_ponds_if_missing(
 		chunk_coord, chunk_size, world, pond_reserved
 	)
+	# And the works over that water, the way a farmhouse stands over its own
+	# beds -- after the dig, because a hut stands on the bank of a pond that
+	# is already there.
+	_place_fisher_huts_if_missing(chunk_coord, chunk_size, world, fisher_ponds)
 	# Where this village's market really is: cells OF its square, one per
 	# merchant (see VillageLayout.market_stand_cells). Worked out before the
 	# landmark loop because the square's own stall IS the first of them --
@@ -1373,6 +1377,51 @@ func _dig_fisher_ponds_if_missing(
 			var g: Vector2i = chunk_coord * chunk_size + cell
 			world.build_at_global(g.x, g.y, tile_id)
 	return ponds
+
+
+## Raises the hut that stands over a fisher's own water (docs/concept/
+## village_ponds.md, "The hut on the bank"). Reported live with a
+## screenshot of a dug, fenced, EMPTY enclosure: "it's missing a fisher hut
+## (use farmhouse sprite until illustration exists)" -- the half of "the
+## same shape as a field" that was never built, since a farmer's beds have
+## a farmhouse over them and a fisher's water had nothing at all.
+##
+## Sited on the BANK rather than on street frontage: the hut belongs to the
+## water, and the water is already dug and fenced by the time this runs, so
+## there is one obvious right place for it and no search of the chunk to
+## do. Idempotent the way everything else here is, and asked of the ground
+## rather than of a record: a hut already standing on this pond's bank is
+## this pond's hut, so a reload raises nothing.
+func _place_fisher_huts_if_missing(
+	chunk_coord: Vector2i, chunk_size: int, world, ponds: Dictionary
+) -> void:
+	if world == null or ponds.is_empty() or not world.has_method("place_building"):
+		return
+	var is_buildable := _is_buildable_local(chunk_coord, chunk_size, world)
+	var is_occupied := _is_occupied_local(chunk_coord, chunk_size, world)
+	var is_free := func(cell: Vector2i) -> bool:
+		if cell.x < 0 or cell.y < 0 or cell.x >= chunk_size or cell.y >= chunk_size:
+			return false
+		return is_buildable.call(cell) and not is_occupied.call(cell)
+	var standing: Array = []
+	if world.has_method("buildings_in_chunk"):
+		for record in world.buildings_in_chunk(chunk_coord):
+			if record.get("id", "") == VillagePond.HUT_BUILDING_ID:
+				standing.append(record.get("origin_local", Vector2i.ZERO))
+	for house_origin in ponds:
+		var water: Array = ponds[house_origin]
+		if water.is_empty() or VillagePond.hut_stands_by(water, standing):
+			continue
+		var origin = VillagePond.hut_origin(water, is_free)
+		if origin == null:
+			continue  # no bank clear enough to build on -- honestly, no hut
+		var building_seed := hash("%d_%d_fisher_hut_%d_%d" % [
+			chunk_coord.x, chunk_coord.y, (house_origin as Vector2i).x, (house_origin as Vector2i).y
+		])
+		if world.place_building(
+			chunk_coord, origin, VillagePond.HUT_BUILDING_ID, Vector2i(0, 1), building_seed, ""
+		):
+			standing.append(origin)
 
 
 ## The water already standing in this house's own reach, in the same local
