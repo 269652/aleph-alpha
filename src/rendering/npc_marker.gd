@@ -15,6 +15,7 @@ const NpcEconomy = preload("res://src/world/npc_economy.gd")
 const NpcInstructionEvaluator = preload("res://src/world/npc_instruction_evaluator.gd")
 const CharacterView = preload("res://scenes/character_view.gd")
 const CreaturePerception = preload("res://src/gameplay/creature_perception.gd")
+const NpcBuildingGate = preload("res://src/gameplay/npc_building_gate.gd")
 const ForagerBehavior = preload("res://src/gameplay/forager_behavior.gd")
 const VillageFarm = preload("res://src/gameplay/village_farm.gd")
 const FarmerBehavior = preload("res://src/gameplay/farmer_behavior.gd")
@@ -98,6 +99,12 @@ var _planner: NpcPlanner.Planner = NpcPlanner.FakeNpcPlanner.new()
 ## Without it (fail-open, see _is_in_water), an NPC just never swims.
 var _world = null
 var _tile_size := 16
+
+## Which tiles this villager may not step into -- building footprints (see
+## NpcBuildingGate). Invalid until setup() binds a world that can answer,
+## and left invalid for one that cannot, so an unbound marker walks exactly
+## as it always did.
+var _wall_tiles := Callable()
 var _perception := CreaturePerception.new()
 
 ## docs/concept/npc.md "Needs and the local production economy": this
@@ -364,6 +371,16 @@ func set_planner(planner: NpcPlanner.Planner) -> void:
 func setup(world, tile_size: int) -> void:
 	_world = world
 	_tile_size = tile_size
+	# Built ONCE here, not per frame: this predicate is called up to three
+	# times per villager per frame by NpcBuildingGate, and allocating a
+	# fresh lambda each time is exactly the kind of per-frame churn the
+	# creature-blocker cache already exists to avoid. Invalid when the
+	# world cannot answer, which the gate reads as "nothing is solid" --
+	# the same duck-typed fail-open _is_in_water makes.
+	_wall_tiles = Callable()
+	if world != null and world.has_method("has_building_at_global"):
+		_wall_tiles = func(tile: Vector2i) -> bool:
+			return world.has_building_at_global(tile.x, tile.y)
 
 
 ## Builds this villager's NpcEconomy from its already-assigned `identity`
@@ -565,7 +582,13 @@ func _process(delta: float) -> void:
 	var running := _is_chasing_at_a_run(quarry_target)
 	condition.advance(delta, economy.needs.hunger if economy != null else 0.0, running)
 	var before := position
-	position = position.move_toward(target, (RUN_SPEED if running else WALK_SPEED) * delta)
+	# Ask before stepping, rather than discovering afterwards. A building's
+	# StaticBody2D stops the player because the player is a real physics
+	# body; this marker is a Sprite2D assigning `position` directly, so a
+	# wall means nothing to it unless it looks -- reported live: "NPCs walk
+	# straight through houses, ignoring the hitbox".
+	var desired := position.move_toward(target, (RUN_SPEED if running else WALK_SPEED) * delta)
+	position = NpcBuildingGate.resolve_step(position, desired, _tile_size, _wall_tiles)
 	_update_animation(position - before)
 	# Hidden once actually arrived home on a "home"-tagged entry -- a house
 	# is now a real whole-building entity (docs/concept/building.md

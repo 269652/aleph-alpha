@@ -1133,3 +1133,72 @@ func _closest_approach(target, destination: Vector2, ticks := 600) -> float:
 		target._process(1.0)
 		closest = minf(closest, target.position.distance_to(destination))
 	return closest
+
+
+# -- walls are solid to a villager too -------------------------------------
+#
+# Reported live: "NPCs walk straight through houses, ignoring the hitbox".
+# The hitbox was never broken -- every building really does get a
+# StaticBody2D (EarthChunkManager._spawn_building_node), which is exactly
+# what stops the PLAYER. But an NpcMarker is a plain Sprite2D assigning
+# `position` directly, so no physics body is ever consulted on its behalf.
+# The marker has to ASK, via NpcBuildingGate.
+
+
+## A world exposing just the two hooks NpcMarker duck-types on: the biome
+## read its water check makes, and the building lookup the new wall check
+## makes. Blocks one 3x3 house squarely between the villager and its home.
+class HouseInTheWayWorld:
+	extends RefCounted
+	var house_min := Vector2i(63, 60)
+	var house_max := Vector2i(65, 62)
+	var trespassed := false
+
+	func biome_at_global(_x: int, _y: int) -> String:
+		return "grassland"
+
+	func covers(tile: Vector2i) -> bool:
+		return (
+			tile.x >= house_min.x and tile.x <= house_max.x
+			and tile.y >= house_min.y and tile.y <= house_max.y
+		)
+
+	func has_building_at_global(x: int, y: int) -> bool:
+		return covers(Vector2i(x, y))
+
+
+func test_a_villager_never_walks_through_a_house():
+	var world := HouseInTheWayWorld.new()
+	marker.setup(world, TILE_SIZE)
+	# Standing west of the house, with home due east of it -- the straight
+	# line between the two runs right through the building.
+	marker.position = Vector2(61 * TILE_SIZE + 8, 61 * TILE_SIZE + 8)
+	marker.home_position = Vector2(68 * TILE_SIZE + 8, 61 * TILE_SIZE + 8)
+	marker.workspot_position = marker.home_position
+	marker.landmarks = {}
+	for i in 600:
+		marker._process(0.05)
+		var tile := Vector2i(
+			floori(marker.position.x / TILE_SIZE), floori(marker.position.y / TILE_SIZE)
+		)
+		assert_false(
+			world.covers(tile),
+			"the villager is standing inside the house at %s (step %d)" % [tile, i]
+		)
+		if world.covers(tile):
+			return  # one failure is the point; don't flood the report
+
+
+func test_a_villager_with_no_world_bound_walks_exactly_as_before():
+	# Fail-open, the same contract _is_in_water already keeps: an unbound
+	# marker (every pre-existing fixture) must be completely unaffected.
+	marker.position = Vector2(1000, 1000)
+	marker.home_position = Vector2(1000, 1200)
+	marker.workspot_position = marker.home_position
+	var before := marker.position
+	for i in 20:
+		marker._process(0.05)
+	assert_gt(
+		before.distance_to(marker.position), 0.0,
+		"an NPC with no world bound stopped moving"
+	)

@@ -255,6 +255,70 @@ once the production systems it depends on are built").
     institutions and caravans now name the settlement's villagers as
     witnesses, which is what gives them anything to know or gossip about.
 
+## Walls are solid to a villager too
+
+Reported live: *"NPCs walk straight through houses, ignoring the hitbox"*.
+
+**The hitbox was never broken.** Every building really does get a
+`StaticBody2D` (`EarthChunkManager._spawn_building_node`), and that is
+exactly what stops the *player*, who is a real physics body. An
+`NpcMarker` is a plain `Sprite2D` that assigns its own `position`
+directly (`position = position.move_toward(target, ...)`), so no physics
+body is ever consulted on its behalf and no collision can possibly occur.
+Nothing about the building needed fixing; the villager needed to be asked
+to look.
+
+`NpcBuildingGate` (`src/gameplay/npc_building_gate.gd`) is that ask, and
+it is deliberately the same **ask-first** shape `CreatureMovementGate`
+already uses for trees and stones: pure math over plain data, no nodes,
+the caller supplying the facts. It is tile-based rather than
+radius-based, because a building already knows its own footprint cell by
+cell and a tile test is both exact and cheaper than fitting circles to
+rectangles.
+
+Three rules, in order:
+
+1. **Standing in something solid? Every step is allowed.** A house raised
+   over a standing villager, or an old save that put one there, must not
+   imprison them permanently — that would be a worse bug than the one
+   being fixed.
+2. **Blocked head-on? Slide along whichever axis is free.** Walking
+   diagonally into a wall is the commonest case by far, and refusing
+   outright would pin villagers against their own houses instead of
+   letting them walk along them, which is what a person does.
+3. **Nowhere free? Stay put.**
+
+**Why this does not strand anybody.** A villager's `home_position` *is*
+their house's doorstep, not its interior (`VillageRenderer._build_npc`),
+and `BuildingCatalog.doorstep_of` puts the doorstep one row south of the
+footprint, outside it. So the whole schedule still resolves to reachable
+ground. The door cell itself stays blocked, which is correct: entering a
+house is a real transition, not a walk. Both halves are pinned against
+every real house in the catalog by
+`test_a_villager_can_still_reach_its_own_doorstep`.
+
+### Status
+
+- ✅ `NpcBuildingGate`, 12 tests, including a sweep asserting that no
+  reachable step from any tile around a house ever lands inside it.
+- ✅ Wired into `NpcMarker`'s one movement line, with the blocked-tile
+  predicate built **once** in `setup()` rather than per frame — it is
+  called up to three times per villager per frame, and a fresh lambda each
+  time is exactly the per-frame churn the creature-blocker cache already
+  exists to avoid. Backed by a new `EarthChunkManager.has_building_at_global`,
+  the allocation-free half of `building_at_global` (which resolves the
+  owning origin and then `duplicate()`s the whole record).
+- ⬜ **No pathfinding.** Sliding handles brushing a wall; it does not get a
+  villager out of a concave pocket. A villager whose target sits directly
+  behind a building can still press into the wall rather than walking
+  around it. Real navigation is a separate, much larger piece of work.
+- ⬜ **Creatures still walk through houses.** `solid_obstacles_near` — what
+  `CreatureMovementGate` reads — walks `_loaded_trees` and `_loaded_stones`
+  only, with no building term at all. The same class of bug, untouched by
+  this pass.
+- ⬜ Only buildings are solid to a villager. Trees and stones, which
+  creatures already avoid, are still walked straight through.
+
 ## Settlement growth: migration toward player-built structures
 
 The dwindling side of the lifecycle above has a growth counterpart: a

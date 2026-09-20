@@ -14101,6 +14101,23 @@ func remove_building(chunk_coord: Vector2i, origin_local: Vector2i) -> bool:
 	return true
 
 
+## Whether ANY building stands on this cell -- the cheap half of
+## building_at_global, for a caller that only needs the yes/no.
+##
+## Worth its own function rather than `not building_at_global(...).is_empty()`:
+## that one resolves the owning origin and then `duplicate()`s the whole
+## record, and this is called per villager per frame by NpcBuildingGate's
+## own predicate (see NpcMarker.setup). A footprint tile always belongs to
+## a real building, so testing the tile id alone is exact as well as
+## allocation-free.
+func has_building_at_global(global_x: int, global_y: int) -> bool:
+	var chunk: Chunk = _loaded_chunks.get(_chunk_coord_for_tile(Vector2i(global_x, global_y)))
+	if chunk == null:
+		return false
+	var tile_id: String = chunk.modifications.get(_local_coord(global_x, global_y), "")
+	return BuildingCatalog.has_building(tile_id) or tile_id == BuildingCatalog.FOOTPRINT_TILE_ID
+
+
 ## The full building record standing on `(global_x, global_y)` -- ANY
 ## footprint cell answers, not just the anchor -- with `chunk_coord` and
 ## `origin_local` merged in so a caller can act on it (remove it, compute
