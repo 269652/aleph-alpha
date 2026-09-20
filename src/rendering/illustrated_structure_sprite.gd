@@ -154,42 +154,22 @@ const _SUBJECTS := {
 		"columns": 4, "rows": 3, "idle_row": 0, "idle_column": 3,
 		"keys_black": true, "grid": "dividers",
 	},
-	# A corner caps two runs at once. The sheet has no corner cell of its
-	# own, so it is drawn with the same post art the side columns use --
-	# which is what a real corner post is, and is what stops a horizontal
-	# rail being drawn across the turn (reported: "corner pieces added so it
-	# doesn't look that broken"). One per side, drawn from that side's own
-	# column, because each is pushed out with the wall it caps.
-	"farm_fence_corner_nw": {
-		"path": "res://assets/sprites/buildings/fence.png",
-		"columns": 4, "rows": 3, "idle_row": 0, "idle_column": 3,
-		"keys_black": true, "grid": "dividers",
-	},
-	"farm_fence_corner_sw": {
-		"path": "res://assets/sprites/buildings/fence.png",
-		"columns": 4, "rows": 3, "idle_row": 0, "idle_column": 3,
-		"keys_black": true, "grid": "dividers",
-	},
-	"farm_fence_corner_ne": {
-		"path": "res://assets/sprites/buildings/fence.png",
-		"columns": 4, "rows": 3, "idle_row": 0, "idle_column": 2,
-		"keys_black": true, "grid": "dividers",
-	},
-	"farm_fence_corner_se": {
-		"path": "res://assets/sprites/buildings/fence.png",
-		"columns": 4, "rows": 3, "idle_row": 0, "idle_column": 2,
-		"keys_black": true, "grid": "dividers",
-	},
-	"farm_fence_corner_west": {
-		"path": "res://assets/sprites/buildings/fence.png",
-		"columns": 4, "rows": 3, "idle_row": 0, "idle_column": 3,
-		"keys_black": true, "grid": "dividers",
-	},
-	"farm_fence_corner_east": {
-		"path": "res://assets/sprites/buildings/fence.png",
-		"columns": 4, "rows": 3, "idle_row": 0, "idle_column": 2,
-		"keys_black": true, "grid": "dividers",
-	},
+	# A CORNER DRAWS NO POST OF ITS OWN.
+	#
+	# Asked for directly with two enclosures in shot: *"also the corner post
+	# can be removed"*. Every cell of fence.png is a WHOLE PANEL -- a post
+	# at EACH end with rails between -- and tools/probe_fence_posts.gd
+	# measured those two 12.5px apart inside a 16px tile. The two runs
+	# meeting at a corner therefore already carry a post each, and the
+	# corner cell drew a THIRD one beside them: the doubled-post look that
+	# probe was written about, at every turn of every ring.
+	#
+	# The corner cell is STILL A RAIL -- it is what refuses the diagonal
+	# into the crop (VillageFarm._rail_stops_step's own corner branch), and
+	# a cell that stopped reading as a fence would lose its collider and
+	# stop being overlay-only, painting a bare earth square on ground
+	# somebody has already walked past. It simply has no entry here, so
+	# footprint_texture answers null and no sprite is spawned for it.
 }
 
 static var _cache: Dictionary = {}  # subject -> ImageTexture

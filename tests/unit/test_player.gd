@@ -9,6 +9,7 @@ extends GutTest
 ## (mirroring test_earth_chunk_manager.gd's fixtures) so the actual wiring is
 ## exercised, not a stub.
 
+const BlackberryBramble = preload("res://src/world/blackberry_bramble.gd")
 const PlayerScene = preload("res://scenes/player.tscn")
 const EarthChunkManager = preload("res://src/world/earth_chunk_manager.gd")
 const TerrainRenderer = preload("res://src/rendering/terrain_renderer.gd")
@@ -5100,3 +5101,99 @@ func test_the_shadow_is_as_wide_as_the_body_really_is():
 	assert_almost_eq(
 		float(shadow.texture.get_width()), Player.BODY_BREADTH_M * GroundSlide.PX_PER_METER, 1.0
 	)
+
+
+# -- pushing through a bramble ------------------------------------------------
+#
+# Asked for directly: *"when walked through in the middle it should slow
+# down movement to 10% and inflict minor damage"* (docs/concept/
+# brambles.md). The numbers are the sim's and tested there; what is pinned
+# here is that they reach the player at all.
+#
+# A stand-in chunk manager rather than a real thicket: brambles seed only
+# on forest cells when a chunk is created and there is no plant(), so a
+# real one cannot be put under this fixture's own feet. The same
+# subclass-the-manager shape test_world_ecology_cadence_wiring.gd already
+# uses.
+
+
+class ThicketWorld extends EarthChunkManager:
+	var thicket := Vector2i(-99999, -99999)
+
+	func is_bramble_at_global(x: int, y: int) -> bool:
+		return Vector2i(x, y) == thicket
+
+
+func _thicket_world() -> ThicketWorld:
+	var layer := TileMapLayer.new()
+	var entities := Node2D.new()
+	var creatures := Node2D.new()
+	autofree(layer)
+	autofree(entities)
+	autofree(creatures)
+	return ThicketWorld.new(layer, entities, creatures)
+
+
+func test_standing_in_a_thicket_drops_the_player_to_a_tenth_of_their_speed():
+	var world := _thicket_world()
+	var tile := player.current_tile()
+	world.thicket = tile
+	player._chunk_manager = world
+	assert_almost_eq(
+		player._bramble_speed_multiplier(tile),
+		BlackberryBramble.THICKET_SPEED_MULTIPLIER, 0.0001
+	)
+
+
+## Clipping the drawn edge of a clump from the next tile over is a visual
+## event only -- the art is wider than its tile, and nothing fires for it.
+func test_the_tile_beside_a_thicket_is_not_slowed():
+	var world := _thicket_world()
+	var tile := player.current_tile()
+	world.thicket = tile + Vector2i(1, 0)
+	player._chunk_manager = world
+	assert_almost_eq(player._bramble_speed_multiplier(tile), 1.0, 0.0001)
+
+
+## The penalty has to reach the REAL per-frame multiplier chain, not just a
+## helper nobody calls -- the same thing the road bonus above is held to.
+func test_the_thicket_penalty_reaches_the_real_speed_multiplier():
+	_register_all_keybindings()
+	var world := _thicket_world()
+	player._chunk_manager = world
+	var tile := player.current_tile()
+	player._authority_step(1.0 / 60.0)
+	var clear: float = player.current_speed_multiplier
+
+	world.thicket = player.current_tile()
+	player._authority_step(1.0 / 60.0)
+
+	assert_lt(
+		player.current_speed_multiplier, clear * 0.5,
+		"the thicket never reached the chain the player actually moves by"
+	)
+
+
+## And the thorns draw blood for as long as you are in there.
+func test_the_thorns_hurt_while_you_are_in_there():
+	_register_all_keybindings()
+	var world := _thicket_world()
+	player._chunk_manager = world
+	world.thicket = player.current_tile()
+	var before: float = player.health
+
+	for _frame in 60:
+		player._authority_step(1.0 / 60.0)
+
+	assert_lt(player.health, before, "a second in a bramble cost nothing")
+	assert_gt(player.health, before - 5.0, "'minor damage' is not a mauling")
+
+
+func test_nothing_hurts_you_off_a_thicket():
+	_register_all_keybindings()
+	var world := _thicket_world()
+	player._chunk_manager = world
+	var before: float = player.health
+	for _frame in 60:
+		player._authority_step(1.0 / 60.0)
+	assert_almost_eq(player.health, before, 0.0001)

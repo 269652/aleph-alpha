@@ -3268,10 +3268,29 @@ func test_a_rail_beside_a_real_farmhouse_but_on_no_frame_comes_down():
 	renderer.spawn_village(parent, coord, coord * CHUNK_SIZE, CHUNK_SIZE, TILE_SIZE, "grassland", world)
 	var farms := _buildings_of(world, VillageFarm.FARM_BUILDING_ID)
 	assert_gt(farms.size(), 0, "precondition: this village really raised a farmhouse")
-	# Right on the farmhouse's own doorstep row, well inside the reach the
-	# old distance rule allowed, and on nobody's frame.
-	var orphan_local: Vector2i = (farms[0]["origin_local"] as Vector2i) + Vector2i(-1, -1)
-	var orphan_global: Vector2i = coord * CHUNK_SIZE + orphan_local
+	# Right beside the farmhouse, well inside the reach the old distance
+	# rule allowed, and on nobody's frame -- SEARCHED rather than assumed,
+	# because which cells are frame depends on where the field landed, and
+	# a test that plants its orphan on a real frame proves nothing. (It was
+	# assumed, at origin + (-1,-1), until stricter farmstead siting moved a
+	# field under it.)
+	var frames: Dictionary = {}
+	for cell in _fence_cells(world, coord):
+		frames[cell] = true
+	var orphan_global: Vector2i = Vector2i.MAX
+	var house: Vector2i = coord * CHUNK_SIZE + (farms[0]["origin_local"] as Vector2i)
+	for dy in range(-2, 3):
+		for dx in range(-2, 3):
+			var candidate: Vector2i = house + Vector2i(dx, dy)
+			if frames.has(candidate):
+				continue
+			if world.modification_at_global(candidate.x, candidate.y) != "":
+				continue
+			orphan_global = candidate
+			break
+		if orphan_global != Vector2i.MAX:
+			break
+	assert_ne(orphan_global, Vector2i.MAX, "precondition: a free cell beside the farm, on no frame")
 	world.occupied_cells[orphan_global] = VillageFarm.fence_tile_for("north")
 
 	renderer.spawn_village(parent, coord, coord * CHUNK_SIZE, CHUNK_SIZE, TILE_SIZE, "grassland", world)
@@ -4066,3 +4085,144 @@ func test_a_world_that_cannot_say_leaves_the_village_alone():
 		parent, coord, coord * CHUNK_SIZE, CHUNK_SIZE, TILE_SIZE, null, nodes
 	)
 	assert_eq(_villagers_among(after), 10)
+
+
+# -- every farmstead really gets its enclosure -------------------------------
+#
+# Reported with the hamlet in shot: *"The two farmhouses collide and only one
+# gets an enclosure"*. Measured on real villages
+# (tools/probe_farmstead_collisions.gd, 465 chunks, 7 villages with two or
+# more farmhouses):
+#
+#     VILLAGE (679, 141)
+#       farmhouse (13, 19)  rails standing  9/14
+#       farmhouse (20, 19)  rails standing  6/14
+#         gaps: (23,22) mod='road'  (23,23) mod='road'  (23,24) mod='road'
+#
+# Two shapes of one fault. A road spur runs down the column a farmstead's
+# east rail needs, or two farmsteads want the same column -- and
+# _fence_the_fields skips a cell already paved or already railed, so the
+# side never goes up.
+#
+# The SHARED side is answered where it belongs, in the fence itself: two
+# fields meeting share a line, and a shared id carries both rails
+# (VillageFarm.SHARED_FENCE_TILE_IDS). What a shared line cannot do is share
+# with a ROAD -- a rail and a road are not two halves of one tile -- so
+# siting has to keep a farmstead off a fence line that a spur already runs
+# down. A fence is what makes beds a field, so its ground is asked for when
+# the farmstead is sited (VillageFarm.fence_has_room), not discovered when
+# the rails go up.
+#
+# The five gaps every farmstead shows at its own STREET ROW are not this:
+# the village's paving there is the field's gate, by design.
+
+
+## Every farmstead's own ring in this chunk, as origin -> {cell: true},
+## derived exactly the way VillageRenderer derives it.
+func _farmstead_rings(coord: Vector2i, world) -> Dictionary:
+	var origins: Array = []
+	for call in _buildings_of(world, VillageFarm.FARM_BUILDING_ID):
+		origins.append(call["origin_local"])
+	origins.sort_custom(func(a: Vector2i, b: Vector2i) -> bool:
+		return a.y < b.y if a.y != b.y else a.x < b.x
+	)
+	if origins.is_empty():
+		return {}
+	renderer._buildable_memo.clear()
+	renderer._dry_memo.clear()
+	renderer._skeleton_memo.clear()
+	var is_buildable: Callable = renderer._is_buildable_local(coord, CHUNK_SIZE, world)
+	var is_occupied: Callable = renderer._is_occupied_local(coord, CHUNK_SIZE, world)
+	var rings: Dictionary = {}
+	for origin in origins:
+		var local_field: Array = []
+		for g in renderer._workable_field_of(
+			origin, origins, coord, CHUNK_SIZE, is_buildable, is_occupied, world
+		):
+			local_field.append((g as Vector2i) - coord * CHUNK_SIZE)
+		var ring: Dictionary = {}
+		for cell in VillageFarm.fence_cells(local_field, origin, VillageFarm.FARM_BUILDING_ID):
+			ring[cell] = true
+		rings[origin] = ring
+	return rings
+
+
+func test_every_farmstead_really_gets_its_enclosure():
+	var open_sides: Array = []
+	var checked := 0
+	for coord in _settlement_chunks_with_farmers(3, 14):
+		var world := StubWorld.new()
+		renderer.spawn_village(
+			parent, coord, coord * CHUNK_SIZE, CHUNK_SIZE, TILE_SIZE, "grassland", world
+		)
+		var rings := _farmstead_rings(coord, world)
+		for origin in rings:
+			checked += 1
+			for cell in rings[origin]:
+				var c: Vector2i = cell
+				if c.x < 0 or c.y < 0 or c.x >= CHUNK_SIZE or c.y >= CHUNK_SIZE:
+					continue
+				if renderer._is_street_row(coord, CHUNK_SIZE, world, c.y):
+					continue  # the gate, by design
+				var g: Vector2i = coord * CHUNK_SIZE + c
+				var tile: String = world.modification_at_global(g.x, g.y)
+				if VillageFarm.is_fence_tile(tile):
+					continue
+				open_sides.append("%s: farmstead %s has no rail at %s (tile '%s')" % [
+					str(coord), str(origin), str(c), tile
+				])
+	assert_gt(checked, 0, "precondition: farmsteads were raised")
+	assert_eq(
+		open_sides.size(), 0,
+		"a field open along a side is not an enclosure: %s" % str(open_sides.slice(0, 5))
+	)
+
+
+## The half a shared line cannot answer: a rail and a road are not two
+## halves of one tile, so a farmstead must not be sited on a fence line a
+## spur already runs down. Measured on a real village
+## (tools/probe_farmstead_collisions.gd): with the shared line in place and
+## this rule absent, farmhouse (20,19) in chunk (679,141) still stood at
+## 6 of 14 rails, its whole east side road.
+func test_a_farmstead_is_refused_a_fence_line_a_road_runs_down():
+	var coord := _find_settlement_chunk_with_occupation("grassland", "farmer", 3)
+	var world := StubWorld.new()
+	renderer.spawn_village(
+		parent, coord, coord * CHUNK_SIZE, CHUNK_SIZE, TILE_SIZE, "grassland", world
+	)
+	var farms := _buildings_of(world, VillageFarm.FARM_BUILDING_ID)
+	assert_gt(farms.size(), 0, "precondition: this village really raised a farmhouse")
+	var origin: Vector2i = farms[0]["origin_local"]
+	var rings := _farmstead_rings(coord, world)
+	var ring: Dictionary = rings.get(origin, {})
+	assert_false(ring.is_empty(), "precondition: that farmstead really has a ring")
+
+	renderer._buildable_memo.clear()
+	renderer._dry_memo.clear()
+	renderer._skeleton_memo.clear()
+	var is_buildable: Callable = renderer._is_buildable_local(coord, CHUNK_SIZE, world)
+	var is_occupied: Callable = renderer._is_occupied_local(coord, CHUNK_SIZE, world)
+	assert_true(
+		renderer._field_fits_at(
+			origin, [origin], {}, coord, CHUNK_SIZE, world, is_buildable, is_occupied
+		),
+		"precondition: this is a site the rule accepts before the spur is laid"
+	)
+
+	# Now run a road down one of its rail cells, clear of the street row
+	# that is the field's own gate.
+	var spur_cell := Vector2i(-1, -1)
+	for cell in ring:
+		if not renderer._is_street_row(coord, CHUNK_SIZE, world, (cell as Vector2i).y):
+			spur_cell = cell
+			break
+	assert_ne(spur_cell, Vector2i(-1, -1), "precondition: a rail cell off the street row")
+	var g: Vector2i = coord * CHUNK_SIZE + spur_cell
+	world.build_at_global(g.x, g.y, TerrainRenderer.ROAD_TILE_ID)
+
+	assert_false(
+		renderer._field_fits_at(
+			origin, [origin], {}, coord, CHUNK_SIZE, world, is_buildable, is_occupied
+		),
+		"a fence line with a road down it at %s is not a fence line" % str(spur_cell)
+	)

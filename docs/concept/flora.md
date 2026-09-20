@@ -1861,6 +1861,25 @@ shared strip already uses, so ONE scale covers the whole grid: a stage-0 shoot
 really does come out smaller than a stage-4 sapling instead of every stage
 being blown up to fill the canvas, and all 25 stand on the same ground line.
 
+**That canvas is the MATURE canopy's own canvas, and that is what makes the
+hand-off seamless.** `IllustratedTree.SAPLING_CANVAS_SIZE` is exactly
+`ProceduralTreeSprite.SIZE` (300 × 396) with `SAPLING_BASELINE_Y` on its very
+bottom row, because the canvas is half of a real geometric contract rather
+than merely "big enough to hold the art" — which is what it used to be, at
+320 × 480. Two things depend on it. `TreeMorphShader` samples the sapling
+texture at the SAME UV as the mature one it dissolves into, so a differently
+shaped canvas was squashing the sapling picture into the mature rect at
+precisely the instant the mechanism exists to smooth; and `TreeRenderer`
+offsets the one canopy sprite by half the mature texture's height so its
+bottom edge lands on the node origin, the foot of the trunk, so a taller
+canvas hung every sapling's feet below the ground line (measured: 10 px of
+canvas under a baseline of 470). Measured after: the last apple sapling stage
+draws 292 × 363 with its feet on row 395, against the mature autumn canopy's
+286 × 366 on row 395 — within two percent on both axes and on the identical
+ground line. The literals are written out rather than read off
+`ProceduralTreeSprite`, which already preloads `IllustratedTree` and so cannot
+be named back without a cycle; the equality is a test instead.
+
 **Snow on a sapling is a switch, where snow on a canopy is a blend.** A mature
 tree mixes its snow frame over its season frame per clump, at
 `ProceduralTreeSprite.snow_level`'s ten quantised bands. A sapling takes the

@@ -2035,6 +2035,14 @@ Fixed in `StarterKit.DEFAULT_CHOICES` itself, not here -- see the Starting Kit e
 
 ✅ **A sapling is a different drawing, not a pruned adult** (2026-09-07; `assets/sprites/trees/sapling.png`, `IllustratedTree.sapling_frame`/`sapling_frame_for_progress`, `TreeGrowth.BRANCH_START_FRACTION`/`sapling_progress`/`canopy_growth_fraction`, `TreeMorphShader`, wired through `ChoppableTree._redraw_canopy`/`refresh_sapling_display` and `TreeRenderer._build_tree_node`). Reported: "small newborn trees are not saplings but rather have a miniaturized full canopy... they should grow like the player's height before branches start growing... also make it so that the branches grow individually using the same mechanic the season transitions use... so that each individual tree looks different when maturing and growing branches." Even the branch-pruned canopy above is still fundamentally the mature crown's own pixels, cut back -- this instead swaps in a real ten-frame growth-stage illustration (one shared sheet across all six species, a named v1 simplification) below `CharacterView.TARGET_HEIGHT_FRACTION_OF_TREE` -- reused rather than a second invented threshold, since that constant already IS "the player's own height as a fraction of a tree's" by construction -- and, past it, dissolves the sheet's last frame OUT into the real mature texture via a genuine per-clump GPU shader (`TreeMorphShader`, spliced into `WindSway`'s existing shared canopy material the same way canopy snow sparkle already is) as the tree keeps growing. Two procedural approaches were tried and rejected first, each confirmed by rendering and comparing rather than assumed: literal bare-branch-line extraction read as "almost as scaling the entire canopy" rather than a real seedling, and a CPU-composited trunk-outward flood fill for the morph itself (the exact technique the season turn/growth trace above already share) read as a wave sweeping up from the ground, not individual leaves coming in -- corrected on direct instruction ("use real gpu shading techniques similar to the season transitions per leaf and not bottom up"). The shipped hash is a trig-free lattice hash (mirroring `RiverFlowShader`'s own, for the same float32-precision reasons documented there) keyed by a per-tree variant seed (`ProceduralTreeSprite.tree_variant_for`), so two trees at identical progress scatter differently. Caught only on a real GPU, not the float64 CPU mirror every GLSL hash here also carries: a canopy-sized clump grid's smallest hashed roll can land close enough to zero (~0.0008) that float32 rounds it down to exactly 0, letting one clump reveal at zero progress -- fixed with an explicit "progress <= 0 shows nothing" short-circuit mirroring the shader's own pre-existing fast path at the fully-grown end. The hand-off back to ordinary rendering is a real off switch (`TreeMorphShader.clear` pins `morph_progress` to 1.0, and the shader's own fast path then skips the sapling texture entirely), and `TreeRenderer._build_tree_node` calls the same sapling-display path once, directly, right after a tree is bound -- closing the exact spawn-time window the original bug was seen in, where a freshly-spread seed's sprite started life holding the species/season-keyed shared texture cache (which has no per-tree growth to key on) until an unrelated season-sync tick happened to correct it. See [flora.md](flora.md#illustrated-trees)'s "Sapling phase" paragraphs for the full mechanism writeup.
 
+✅ **A sapling grows through its OWN species' art, in season** (2026-09-20; `assets/sprites/trees/composite_apple_sapling.png`, `IllustratedTree._SAPLING_SHEETS`/`_sapling_grid_for`/`sapling_column_for`/`SAPLING_SNOW_COVERAGE`, `SpriteSheetSlicer.detect_rows`, `ChoppableTree._species_id`/`_last_sapling_frame`). Asked for directly: "wire saplings... I added an apple sapling sprite sheet which should be used to render the stages between sapling and mature tree... the last stage should then be morphed / blended with the full tree so there will be a seamless transition." This lifts the entry above's own named v1 simplification for the first species that has art of its own. A species sheet is a stage × season **grid** whose columns are the mature canopy's OWN frame constants (`CANOPY_BARE`/`BLOSSOM`/`LEAF`/`TURNING`/`SNOW`) rather than a second invented season order, so a sapling and the crown it grows into address their picture through the same index and cannot drift apart; every species with no sheet keeps the shared ten-frame strip on both sides of the hand-off, so art is still never required. The grid is **found, not assumed**: the five apple stages measure 122, 173, 215, 250 and 302 pixels tall (the tree really does get bigger each stage) against an even fifth of 250.8, so an even split would cut through four of the five drawings — which needed a row detector `SpriteSheetSlicer` did not have, `detect_rows` being `detect_frames` turned ninety degrees with the same pale-divider rule, so detection runs on the RAW sheet before any keying. The column order is measured, not assumed either: the bottom row's five cells read (97, 75, 36) bare brown, (91, 104, 26) blossom, (54, 85, 13) leaf green, (161, 63, 12) turning orange and (132, 133, 153) snow-blue, and drawn content climbs monotonically down every column. All 25 cells are normalized together under one shared scale, so a stage-0 shoot really does come out smaller than a stage-4 sapling and all of them stand on the same ground line. **The seam is the point**: `TreeMorphShader` now dissolves out of THIS species' last stage in THIS tree's season and snow, not the strip's species-blind, season-blind last frame — an apple crossing `BRANCH_START_FRACTION` in autumn used to snap from an orange sapling to a generic green shoot and only THEN start dissolving. Pinned directly by `test_the_hand_off_from_sapling_to_morph_is_seamless`, which asserts the last drawing the sapling showed and the first the morph dissolves from are the same pixels. The sapling canvas was also moved onto the MATURE canopy's own canvas (`SAPLING_CANVAS_SIZE` = `ProceduralTreeSprite.SIZE` = 300 × 396, baseline on its very bottom row, up from an "only big enough to hold the art" 320 × 480): `TreeMorphShader` samples the sapling texture at the SAME UV as the mature one, so a differently shaped canvas squashed the sapling picture into the mature rect at the exact instant the mechanism exists to smooth, and `TreeRenderer`'s half-texture-height sprite offset hung every sapling's feet 10 px below the ground line. Measured after: the last apple stage draws 292 × 363 with its feet on row 395 against the mature autumn canopy's 286 × 366 on row 395 — within two percent on both axes, on the identical ground line, rendered and looked at as well as asserted. Snow is a deliberate simplification against the mature canopy's ten-band per-clump blend — a whole-column switch at a pinned `SAPLING_SNOW_COVERAGE` (0.5), because a sapling is shorter than the player by definition and the bands are not resolvable at that size, while blending would multiply the cache by every one of them. 16 new tests in `test_illustrated_tree.gd`, 6 in `test_choppable_tree.gd`, 4 in `test_sprite_sheet_slicer.gd`. Only apple has a sheet so far; the other five follow the moment their art does, at one line each.
+
+✅ **Keying a delivered checkerboard is a one-pass classification, not a per-pixel flood** (2026-09-20; `SpriteSheetSlicer.checkerboard_key_in_place`). The flood read and re-classified the same pixel every time a neighbour looked at it — four times over, through `Image.get_pixelv`, against a `Dictionary` of `Vector2i`. Fine for a fern clump, not fine for a whole sheet: the apple sapling grid is 1254 × 1254 with about a million checker pixels and measured **5257ms**, a five-second freeze the first time such a tree came on screen. Every pixel is now classified exactly once into a bitmask of the three tone rules and the flood walks nothing but bytes — a one-pixel border of "no tone at all" removes every bounds test and the index-to-column modulo from the millions of neighbour steps, the queue is allocated once at its own worst case, and the thresholds are rounded to whole bytes from the same constants rather than compared as floats a million times over. Same seeds, same rules, same bounded widening: the behaviour tests that pin all three are untouched, as are the fern patch's and the building yard's. **5257ms → 1050ms** on the real sheet, with the budget pinned by `test_keying_a_whole_sheet_fits_in_a_forgivable_hitch` rather than left to a comment.
+
+⚠️ **Pre-existing, not from the sapling work: apple's autumn foliage leaf reads green.** `test_the_autumn_foliage_leaf_is_orange_for_every_species_that_has_one` measures an orange share of **0.158** against a 0.2 threshold for apple. Confirmed by a worktree A/B at `f1087bd9`, the commit before the sapling work began: identical failure, identical value, and it is unaffected by whether the sheet loads through its imported resource or its raw bytes (the import changes only fully-transparent pixels' RGB — 0 differing opaque pixels measured). It dates from `c3b9eac6` "fix: replace apple tree spritesheet", which replaced the sheet after the test was written. An **art gap in `composite_apple.png`'s autumn foliage frame**, the same shape as pine's already-Pending bare-winter one, not a code bug — recorded here rather than silently worked around or marked pending.
+
+⚠️ **Pre-existing, not from the sapling work: one grass atlas row still bleeds.** `test_atlas_region_for_never_includes_the_previous_rows_bled_over_content_on_any_season_sheet` fails on `spring row 7 col 8` at 0.781 clear against a 0.9 bar. Confirmed by a worktree A/B at `f1087bd9`, identical value. The same shape of gap as the winter/row-9 one that test already skips explicitly and pins separately — an atlas-inset gap in `ROW_TOP_BLEED_PX_BY_SEASON` (see long_grass.md's Status), not a code bug, and untouched by anything in the sapling or checkerboard work.
+
 ✅ **A wood stops when it is full** (`TreeSpread.MAX_TREES_IN_WORLD`). Spread plants a few saplings per tick and the CALLER decides how often a tick happens, so the rate was frames-per-second rather than anything to do with the world clock. Nothing bounded the population: measured under `/ecotest`, about twenty-one saplings a second, two thousand loaded trees inside a minute, and the frame rate down to seven. Bounding the population rather than the rate is the fix that holds however the caller behaves. (The per-frame shed in `step_tree_spread` is deliberate and stays: under fast-forward it fires once per frame against ~960s of simulated time, so it plants far *slower* than the clock implies, not faster.)
 
 ✅ **Seasons arrive over time, branch by branch** (`SeasonTransition` + the canopy blend). The last third of each season is spent turning into the next, so by the moment spring starts the tree is already fully turned rather than swapping frames on one boundary. The turn spreads OUTWARD from where the canopy meets the trunk, so change runs along the branches to the twigs, with jitter so the edge breaks into individual twigs rather than sweeping as a clean arc.
@@ -31077,6 +31085,70 @@ narrow.
 Tested: `test_illustrated_structure_sprite.gd` (+2, one repaired),
 `test_building_catalog.gd` (+2).
 
+## A farmstead is sited where its fence fits (`concept/village_farms.md`, 2026-09-20)
+
+Reported with the hamlet in shot: *"The two farmhouses collide and only one
+gets an enclosure"*.
+
+✅ **Measured first, on real villages** (`tools/probe_farmstead_collisions.gd`,
+kept — 465 chunks, 10 villages with a farmhouse, 7 with two or more). Two
+shapes of one fault: two farmsteads sited one column apart both wanting
+that column for a fence (`OVERLAPS: (23,21)…(23,24) rail/rail`), and a road
+spur running down the column an east rail needs (`6/14` rails standing
+where its neighbour had `9/14`). The fencing pass skips a cell already
+paved or already railed, so whichever is fenced second loses that side.
+
+✅ **Half of it was already being fixed on `main` while this ran.** Another
+session took the same report from the other end — *"It should be possible
+to build two rails on a single tile"* — and gave two meeting fields a
+SHARED line of rails (`SHARED_FENCE_TILE_IDS`). That answers the contested
+cell completely, and the first cut of the rule below was wrong to refuse a
+neighbour's rail line: a shared line is a better village than two
+farmsteads shoved to opposite outskirts. `_may_rail` allows it now.
+
+✅ **What a shared line cannot answer is a ROAD down the fence line** — a
+rail and a road are not two halves of one tile. Measured with the shared
+line already in place: farmhouse (20,19) in chunk (679,141) still stood at
+**6 of 14** rails, its whole east side road. The cause is that siting asked
+only whether the BEDS fit; a fence is what makes beds a field, so its
+ground has to be asked for at the same moment — the lesson `_may_sow`
+already carried, applied to the half of the farmstead it had not reached.
+`VillageFarm.fence_has_room` is the pure half; `_may_rail` is its predicate
+(a street row is the gate; the neighbour's standing rail may be joined;
+anything else must be clear).
+
+✅ **A/B on freshly founded villages**, both runs scrubbing each chunk
+first — chunks persist on unload, and the first attempt at this comparison
+came back **byte-identical** because it was measuring a reload of its own
+earlier founding:
+
+| | shared line only | + this rule |
+| --- | --- | --- |
+| worst enclosure measured | 6 of 14 | **8 of 12** |
+| farmhouses with no field | 0 | 0 |
+| villages with a farmhouse (of which 2+) | 10 (7) | 10 (7) |
+
+✅ **A latent bug fell out of it.** `_sited_plot` — the scan behind
+`outskirt_plot` and `industry_plot` — never returned a `facing`, and
+`_place_farms_if_missing` reads `plot["facing"]` on any world without
+`place_building_over_roads`. The stricter rule reached that fallback
+immediately and the run died on a missing key rather than on anything about
+farms.
+
+🚧 **One farmstead in the swept set still measures 6 of 14.** It has no
+overlap and a full field; what its remaining gaps are has not been run
+down, so it is named rather than absorbed.
+
+> **A test that proved nothing, replaced.** The first pin here asserted
+> that no two farmsteads want the same rail — 36 clashes before the fix,
+> zero after. Once `main`'s shared line landed, that assertion was pinning
+> the *wrong design*: a shared rail is now correct. It is replaced by
+> `test_every_farmstead_really_gets_its_enclosure` (every ring cell off the
+> street-row gate really carries a rail) and by
+> `test_a_farmstead_is_refused_a_fence_line_a_road_runs_down`, which is red
+> against `main` and green with this rule — the only test here that
+> actually distinguishes the two.
+
 
 ## A crush lands on a crush, at the level everything else plays at (`concept/creature_and_footstep_audio.md`, 2026-09-20)
 
@@ -31273,11 +31345,13 @@ apron about as well as the woodsman's does from his tunic, and the tool
 must be smaller than the man's own head, which is the honest standard for
 "a thing he is carrying" rather than "an axe, but bigger".
 
-Honest gap:
+Honest gap, **half closed the same day** — see "The builder carries the
+material" below:
 
-🚧 **He does not carry material or place anything.** The labour he stands
-for is abstract — hours against a required total — so he is the face of
-work happening here, not a piece-by-piece builder.
+🚧 **He places nothing.** He carries the project's real reserved material
+from the village store to the site now, but the labour he stands for is
+still abstract — hours against a required total — so he is the face of
+work happening here rather than a piece-by-piece builder.
 `BuilderMarker`/`civic_construction.md`'s piece-placing worker is a
 different, still-unbuilt thing for the legacy piece model.
 
@@ -31378,3 +31452,248 @@ invisible there — ferns, mushrooms and thickets alike. Recorded in
 
 Tested, red first: `test_blackberry_bramble.gd` (+3, including the missing
 cap guard) and `test_earth_chunk_manager_brambles.gd`, 34/34 together.
+
+## Two fields, one line of rails — and a corner without its post (2026-09-20)
+
+Reported with both enclosures in shot: *"It should be possible to build two
+rails on a single tile so both enclosures are fenced properly. also the
+corner post can be removed"*.
+
+Measured before touching anything (`tools/probe_neighbouring_fences.gd`,
+kept — it walks real chunks for a village whose fence rings actually
+*touch*, then prints what each field WANTS on every contested cell beside
+what really stands there). Four farmhouses at (678, 128):
+
+```
+  (23, 20)  wanted as ["0:corner_ne", "1:corner_nw"] -- stands: road
+  (23, 21)  wanted as ["0:east", "1:west"]           -- stands: road
+  (23, 22)  wanted as ["0:east", "1:west"]           -- stands: farm_fence_east
+  (23, 23)  wanted as ["0:corner_se", "1:corner_sw"] -- stands: farm_fence_east
+```
+
+A rail is an ordinary chunk modification and a tile holds **one** id, so
+field 0's east rail won every contested cell and field 1 had no west rail
+at all — its enclosure open along the whole shared side. The two `road`
+cells are correct: that paving is the gate the farmer walks in through.
+
+### ✅ A shared line
+
+`VillageFarm.SHARED_FENCE_TILE_IDS` names the two opposite pairs, and that
+is the whole set — two fields meeting share a line, and a line has a field
+on each side. A shared id is **defined as the two ordinary rails standing
+there** (`fence_pieces_of`), which is what makes it cost nothing
+downstream: each piece keeps the art and the inner edge it already had,
+`_spawn_structure_art_for` raises one sprite per piece, and
+`rails_block_step` refuses the crop on both sides because there is one on
+each.
+
+Idempotent, which `_fence_the_fields`' own doc comment requires: only the
+*opposite* rail shares a line and never the same rail twice, so a reload
+re-derives the ring and builds nothing. Re-measured after:
+
+```
+  (23, 22)  wanted as ["0:east", "1:west"] -- stands: farm_fence_east_west
+  (23, 23)  ...                            -- stands: farm_fence_east_west
+```
+
+### ✅ A corner draws no post of its own
+
+Every cell of `fence.png` is a whole panel with a post at **each** end —
+`tools/probe_fence_posts.gd` measured them 12.5px apart inside a 16px tile
+— so the two runs meeting at a corner already carry one each and the
+corner's own was a third beside them.
+
+**The corner cell stays a rail**, and that distinction is load-bearing: it
+is what refuses the diagonal into the crop
+(`test_a_corner_of_a_rectangular_field_still_refuses_the_diagonal_into_the_crop`,
+still green), and an id that stopped reading as a fence would lose its
+collider *and* stop being overlay-only, painting a bare earth square on
+ground already walked past. Only its art entry is gone, so nothing spawns.
+
+That nuance was worth naming to the user rather than discovered later: the
+post is removed from the picture, not the fence from the ring.
+
+### 🚧 Tests that pinned the old picture, rewritten rather than deleted
+
+Six asked where a corner's wood lands or where its post stood. Four now ask
+it only of the **lengths of rail** (a `_run_subjects` helper states the rule
+once), and the two that pinned the post's position are replaced by the
+stronger statement that none exists. One more — `test_every_rail_an_older_
+village_may_still_have_standing_keeps_its_art` — was really guarding the
+*overlay*, which is what a rail with no art would lose, so it asks that
+directly now.
+
+`_structure_art_sprites` changed shape (one cell can carry more than one
+sprite), so its three readers and the test fixture moved with it.
+
+### ⬜ Not mine, checked
+
+`test_terrain_renderer.gd` runs 185/187, and a clean `origin/main`
+worktree runs the identical 185/187 with the same two village-square
+failures.
+
+
+## The builder carries the material (`concept/building.md`, 2026-09-20)
+
+Asked in the next breath after the builder himself: *"the builders should
+carry materials to the site"*. He worked an empty plot — the timber a
+cottage is made of left the village store as a number and arrived nowhere,
+and the man standing over the work had never fetched any of it.
+
+**The material was already real; only its journey was missing.**
+`SettlementConstruction.try_start` draws every one of a recipe's inputs out
+of `VillageMarket.stock` the moment a project starts and puts them in that
+project's own `reserved_material`. `village_warehouse.md` pillar 2 had
+already given that stock an address and pillar 4 had already made goods
+*arrive* by being carried; this is the other half of pillar 4 — goods leave
+by being carried too, and the site's builder is who carries them.
+
+- **A real round.** Out to the store, a spell loading, back to the plot,
+  the load set down, two spells of work, out again — until everything the
+  project reserved is standing on the site, after which there is nothing
+  left to fetch and he is a man working his plot again
+  (`ConstructionWorkerMarker`'s four phases).
+- **The load is read, not authored.** `ConstructionHaul` takes the item
+  with the most still outstanding, `CARRY_LOAD` at a time, the last trip
+  carrying only the remainder. `CARRY_LOAD` is pinned against the REAL
+  catalog costs rather than eyeballed: a cottage's 12 wood must come out a
+  handful of journeys (3) and a hall's 20 wood + 10 stone must cost more of
+  them (8).
+- **Nothing to fetch is a real answer.** An unreserved project, and a
+  village whose site was too cramped for a store (`village_warehouse.md`'s
+  own pillar-1 caveat), both fall back to exactly the builder that existed
+  before this. That is the same default pillar 4 already chose for
+  producers, not a special case invented here.
+- **Visibly loaded on the way back.** `ProceduralBuilderSprite` gained a
+  second drawing — a bundle of boards under the arm in place of the mallet
+  up — swapped exactly as his hands fill and empty.
+- **The haul does not gate the labour, and must not.**
+  `ConstructionCatchup` advances projects in chunks with no builder walking
+  in them at all, so hours that waited on a delivery would stall every
+  unloaded village's building and make a settlement's progress depend on
+  being looked at. The round is committed material becoming visible, not a
+  second ledger over the first.
+
+**Two failures, both found by looking at a real village rather than at a
+passing test** (`tools/probe_construction_haul.gd`, kept — it raises a real
+hall on a real village's plaza and walks its builder for four simulated
+minutes).
+
+1. **Sent into a wall.** `nearest_structure_position` answers with a
+   whole-building's ORIGIN cell, which is inside its walls. Measured: the
+   builder walked 68 px toward it, pressed into the building 25 px short,
+   and stood there for the remaining 230 seconds — nothing delivered, never
+   once back on his plot. He is sent to the store's DOOR now, the same cell
+   a villager hauling into it is sent to (`VillageRenderer._warehouse_door`),
+   pinned both against that door and against `WalkGate` itself.
+2. **And then stuck against the next building along.** The wall slide is a
+   reflex for a wall you brush; getting *around* one is a plan, and
+   `TileRouter` is that plan — villagers have routed since
+   `navigation.md`'s own pass. The builder steers the same way `NpcMarker`
+   does now, on the same node budget and throttle (pinned to that marker's
+   constants), plus one addition: a route that runs out while he is short
+   of his goal is recomputed, and a search that finds *nothing* backs off,
+   because that is the expensive one.
+
+After both: **all 30 units delivered — 20 wood and 10 stone, eight trips —
+inside 140 of the 240 simulated seconds, 80% of his time spent on the plot
+and 11% of it carrying.** Then the pile is in and he only works, which is
+what the spec says should happen.
+
+**The art failed once more, and measurably.** Drawn up on the shoulder, the
+bundle sat exactly where the head is, and sawn timber and skin are near
+enough in tone that they merged into one pale mass over a brown body
+(`loaded.png` at the game's own zoom). Carried at chest height the dark
+apron runs between them and both read. Pinned by the rule rather than by
+the colour that fixed it: the head is the same head on both legs of the
+round, and no load pixel is even adjacent to it.
+
+Tested: `test_construction_haul.gd` (10, new),
+`test_construction_worker_marker.gd` (18, was 5),
+`test_procedural_builder_sprite.gd` (15, was 6),
+`test_earth_chunk_manager_city_hall_rising.gd` (+3).
+
+
+## A plant is not rubber, and a bramble fights back (`concept/long_grass.md`, `concept/brambles.md`, 2026-09-20)
+
+Two reports in one turn: *"Black berrys have no bend mechanism.. they
+should bend slightly when walked over from the side but when walked
+through in the middle it should slow down movement to 10% and inflict
+minor damage... still should animate walking in the middle using path
+tracing"*, and then *"it bounces back too fast and also bending too fast
+giving the impression of rubber instead of natural plant"* — *"for all
+plants"*.
+
+### The rubber, which was every plant
+
+There was no TIME in the bend model at all. The shader's push term is a
+pure function of the walker's CURRENT distance, so a blade reached full
+lean the frame they came into range and stood upright the frame they left,
+tracking them exactly with no inertia and no settling. Zero damping is
+what rubber looks like.
+
+`PlantSway` gives it **0.18s to yield and 0.55s to come back**, and that
+ratio is the decision rather than two tuning numbers: a stem is pushed
+over by a force and returns on its own stiffness alone, so it always
+returns more slowly than it went. Exponential so the response is
+frame-rate independent (a linear step bends faster on a faster machine),
+clamped so a stalled frame lands ON the walker instead of swinging
+through, and ONE eased point shared by grass, ferns, wheat and brambles —
+two plants leaning toward different places would be worse than both
+snapping.
+
+A test found the edge case rather than inspection: the first placement has
+to SNAP, because easing in from the "no walker" sentinel would take
+several seconds to cross a hundred thousand units and leave the opening
+seconds of a fresh session with no parting at all.
+
+### The bramble
+
+A plain `Sprite2D` cannot carry the bend — the shared shader reads
+`INSTANCE_CUSTOM` and the instance origin, and neither exists outside a
+MultiMesh — so a thicket is drawn the way a fern is, reaching into the
+grass for one bend rather than growing a second. That **reverses this
+system's own recorded reasoning** ("brambles are sparse and woody, they do
+not sway"), and the doc says so rather than leaving it beside code that
+contradicts it.
+
+"Slightly" needed a knob that did not exist: `wind_strength` deliberately
+does not scale the walker's push, and that push IS "bend when walked over".
+`bend_scale` multiplies the whole offset, defaults to 1.0 so grass and
+ferns render byte-identically, and is 0.25 for a cane.
+
+The MIDDLE is the thicket's own cell — the question every other
+ground-cover rule already asks, with no radius to tune. Speed drops to a
+tenth and the thorns draw blood while you are in there, with the path
+tracing still running because you are still moving, just slowly. The
+damage is derived rather than picked: four seconds to cross a tile at a
+tenth of base speed, and a crossing costs the smallest damage this world
+already names as real (`BossAggro`'s 2% of max health), so half a point a
+second — as a function of those inputs, with a test multiplying them back.
+
+### Three test premises were wrong, and all three are corrected in place
+
+The delivered bramble sheet's corner is not exactly transparent (2/255 of
+compression noise in real alpha, a fact about the file). The bramble
+fixture never placed a viewer, which an empty wood revealed the moment
+drawing became view-filtered like every other cover. And the probe
+re-synced the ferns after moving the camera but not the brambles, so a
+frame came back with the thickets missing and 2 stale bands — the picture
+being wrong is what caught it.
+
+Rendered and measured: **17 cards drawn** on a real Harz chunk, and a
+frame centred on a thicket shows two of them correctly beside the bracken.
+
+Tested, red first throughout: `test_plant_sway.gd` 8/8 and
+`test_plant_sway_wiring.gd` 5/5 (both new),
+`test_illustrated_bramble_patch.gd` 12/12 (new), plus 200/201 across all
+eight plant suites — the one failure being the pre-existing spring row 7
+bleed already confirmed by A/B as not this work's.
+
+**Gaps named rather than implied:** one lagged point cannot express a
+plant still settling while the walker presses a different one (that needs
+per-card state, which the banded design exists to avoid); nothing but the
+player feels a thicket, so a boar pushes through bramble untouched; and
+the drawn clump is wider than its tile while the penalty is not, so a
+player can be visually waist-deep in canes from the next tile over and
+walk at full speed.

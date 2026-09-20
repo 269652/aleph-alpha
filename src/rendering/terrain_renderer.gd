@@ -206,6 +206,11 @@ const OVERLAY_ONLY_TILE_IDS: Array[String] = [
 	"farm_fence_corner_nw", "farm_fence_corner_ne",
 	"farm_fence_corner_sw", "farm_fence_corner_se",
 	"farm_fence_corner_west", "farm_fence_corner_east",
+	# A SHARED LINE between two neighbouring fields -- both their rails on
+	# one tile (VillageFarm.SHARED_FENCE_TILE_IDS). Overlay-only for the
+	# same reason every other rail is: it is a LINE on an edge, not a
+	# surface, so the ground it stands on goes on showing through.
+	"farm_fence_east_west", "farm_fence_north_south",
 ]
 
 

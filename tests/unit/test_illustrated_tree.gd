@@ -346,6 +346,60 @@ func test_the_shared_strip_still_answers_when_no_species_is_named():
 
 
 
+
+# -- the sapling canvas is the mature canopy's own canvas -------------------
+#
+# TreeMorphShader samples the sapling texture at the SAME UV as the mature
+# one it dissolves into (see that file's morph_canopy). Two textures of
+# different sizes therefore do not line up: the sapling picture is squashed
+# into the mature rect the instant the tree crosses BRANCH_START_FRACTION,
+# on top of the sprite's own drawn rect changing under it. Cutting the
+# sapling frames onto exactly the mature texture's canvas, with their feet
+# on exactly its ground line, is what makes the hand-off a dissolve rather
+# than a jump.
+
+## A cross-class contract, pinned here rather than in a comment, because
+## IllustratedTree cannot name ProceduralTreeSprite itself -- that class
+## already preloads THIS one, and GDScript will not take the cycle.
+func test_the_sapling_canvas_is_the_mature_canopy_texture_size():
+	assert_eq(IllustratedTree.SAPLING_CANVAS_SIZE, ProceduralTreeSprite.SIZE)
+
+
+## The mature canopy stands with its feet on the very bottom row of its own
+## texture -- measured, not assumed: TreeRenderer offsets the canopy sprite
+## by exactly half that texture's height so its bottom edge lands on the
+## node origin, which is the foot of the trunk.
+func test_the_mature_canopy_stands_on_the_bottom_row_of_its_texture():
+	var mature := ProceduralTreeSprite.new().generate_image_with_fruit(
+		_apple_bias(), 7, 0, "summer"
+	)
+	assert_eq(_content_bottom(mature), mature.get_height() - 1)
+
+
+func test_a_sapling_stands_where_the_mature_tree_it_becomes_stands():
+	var mature := ProceduralTreeSprite.new().generate_image_with_fruit(
+		_apple_bias(), 7, 0, "summer"
+	)
+	var last := trees.sapling_frame(
+		trees.sapling_frame_count("apple") - 1, "apple", "summer", 0.0
+	)
+	assert_eq(
+		_content_bottom(last.get_image()),
+		_content_bottom(mature),
+		"a sapling's feet and the mature tree's have to land on the same row"
+	)
+
+
+## The shared strip is cut onto the same canvas, so a species without art of
+## its own gets the same lined-up hand-off.
+func test_the_shared_strip_stands_on_the_same_ground_line_too():
+	var mature := ProceduralTreeSprite.new().generate_image_with_fruit(
+		_apple_bias(), 7, 0, "summer"
+	)
+	var last := trees.sapling_frame(trees.sapling_frame_count() - 1)
+	assert_eq(last.get_image().get_size(), mature.get_size())
+	assert_eq(_content_bottom(last.get_image()), _content_bottom(mature))
+
 # -- the fifth frame: snow ----------------------------------------------------
 #
 # A canopy sheet may carry a FIFTH drawing after the four seasons -- how much
@@ -722,6 +776,26 @@ func _opaque_share(image: Image) -> float:
 			if image.get_pixel(x, y).a > 0.5:
 				opaque += 1
 	return float(opaque) / float(maxi(total, 1))
+
+
+## The bottommost row of the image holding any drawn content -- where a
+## bottom-aligned frame's feet actually land.
+func _content_bottom(image: Image) -> int:
+	for y in range(image.get_height() - 1, -1, -1):
+		for x in image.get_width():
+			if image.get_pixel(x, y).a > 0.5:
+				return y
+	return -1
+
+
+## The species_bias that lands on apple -- TreeSpecies keys off a float
+## rather than an id, so a test wanting a species has to search for it.
+func _apple_bias() -> float:
+	for step in 201:
+		var bias := float(step) / 200.0
+		if TreeSpecies.species_for_bias(bias) == "apple":
+			return bias
+	return 1.0
 
 
 ## The topmost row of the image holding any drawn content -- how TALL a

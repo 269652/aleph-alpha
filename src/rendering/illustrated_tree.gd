@@ -247,14 +247,33 @@ const _SAPLING_SHEET_PATH := "%s/sapling.png" % _SHEET_DIR
 ## narrowest (seed) frame.
 const _SAPLING_MIN_FRAME_WIDTH := 20
 
-## The working canvas every sapling frame is normalized onto before caching
-## -- generous enough to hold the sheet's own largest frame content without
-## downscaling it, matching this class's existing "cut once, let the
-## renderer's own _scaled_piece rescale to the final box" division of
-## labour (see trunk_for/canopy_for, neither of which pre-scales for a
-## specific tree either).
-const _SAPLING_CANVAS_SIZE := Vector2i(320, 480)
-const _SAPLING_BASELINE_Y := 470
+## ## The working canvas every sapling frame is normalized onto
+##
+## Exactly ProceduralTreeSprite.SIZE, with the feet on its very bottom row
+## -- the same canvas and the same ground line the MATURE canopy texture
+## uses. Not merely "generous enough to hold the art", which is what it used
+## to be (320 x 480), because this canvas is half of a real geometric
+## contract:
+##
+## 1. TreeMorphShader samples the sapling texture at the SAME UV as the
+##    mature one it dissolves into (see morph_canopy). Two different sizes
+##    do not line up, so the sapling picture was being squashed into the
+##    mature rect at the instant of the hand-off -- a visible jump in
+##    exactly the moment the whole mechanism exists to make smooth.
+## 2. TreeRenderer offsets the one canopy sprite by half the mature
+##    texture's height so its bottom edge lands on the node origin, the
+##    foot of the trunk. A taller canvas therefore hangs a sapling's feet
+##    BELOW the ground line -- measured at 10 px of canvas under a baseline
+##    of 470, which drew every sapling sunk into the soil relative to the
+##    tree it grew into.
+##
+## Written as literals rather than read off ProceduralTreeSprite because
+## that class already preloads THIS one and GDScript will not take the
+## cycle; the equality is pinned instead by
+## test_the_sapling_canvas_is_the_mature_canopy_texture_size and
+## test_a_sapling_stands_where_the_mature_tree_it_becomes_stands.
+const SAPLING_CANVAS_SIZE := Vector2i(300, 396)
+const SAPLING_BASELINE_Y := 396
 
 var _sapling_slicer := SpriteSheetSlicer.new()
 
@@ -374,7 +393,7 @@ func _sapling_frames() -> Array[Texture2D]:
 	var keyed := SpriteSheetSlicer.chroma_keyed(sheet, Color.BLACK, 0.08)
 	var rects := _sapling_slicer.detect_frames(keyed, 0, keyed.get_height(), _SAPLING_MIN_FRAME_WIDTH)
 	var normalized := _sapling_slicer.normalize_frames(
-		keyed, rects, _SAPLING_CANVAS_SIZE, _SAPLING_BASELINE_Y
+		keyed, rects, SAPLING_CANVAS_SIZE, SAPLING_BASELINE_Y
 	)
 	var frames: Array[Texture2D] = []
 	for frame_image in normalized:
@@ -449,7 +468,7 @@ func _sapling_grid_for(species: String) -> Dictionary:
 		return empty
 	var frames: Array[Texture2D] = []
 	for frame_image in _sapling_slicer.normalize_frames(
-		keyed, cells, _SAPLING_CANVAS_SIZE, _SAPLING_BASELINE_Y
+		keyed, cells, SAPLING_CANVAS_SIZE, SAPLING_BASELINE_Y
 	):
 		frames.append(ImageTexture.create_from_image(frame_image))
 	var grid := {"frames": frames, "stages": rows.size(), "columns": columns}

@@ -94,11 +94,18 @@ func _structure_art_sprite_count() -> int:
 	return total
 
 
-## The one real overlay sprite for _berlin_tile itself, or null -- for
-## tests that need to inspect the sprite, not just count it.
-func _structure_art_sprite_at_berlin_tile() -> Sprite2D:
+## Every overlay sprite standing on _berlin_tile. One cell can carry more
+## than one: a SHARED LINE between two neighbouring fields is both their
+## rails on the same tile (VillageFarm.SHARED_FENCE_TILE_IDS).
+func _structure_art_sprites_at_berlin_tile() -> Array:
 	var local_cell := manager._local_coord(_berlin_tile.x, _berlin_tile.y)
-	return manager._structure_art_sprites.get(_berlin_chunk, {}).get(local_cell)
+	return manager._structure_art_sprites.get(_berlin_chunk, {}).get(local_cell, [])
+
+
+## The first of them, or null -- for tests that inspect one sprite.
+func _structure_art_sprite_at_berlin_tile() -> Sprite2D:
+	var sprites := _structure_art_sprites_at_berlin_tile()
+	return null if sprites.is_empty() else sprites[0]
 
 
 func test_placing_a_farm_spawns_a_real_art_overlay_sprite():
@@ -198,6 +205,8 @@ func test_every_rails_overlay_really_carries_its_own_inner_edge_offset():
 	var art := IllustratedStructureSprite.new()
 	for facing in VillageFarm.FENCE_TILE_IDS:
 		var subject: String = VillageFarm.fence_tile_for(facing)
+		if VillageFarm.is_fence_corner_tile(subject):
+			continue  # a corner draws nothing, so it has no overlay to offset
 		manager.build_at_global(_berlin_tile.x, _berlin_tile.y, subject)
 		var sprite := _structure_art_sprite_at_berlin_tile()
 		var offset: Vector2 = art.footprint_offset(subject, TerrainRenderer.TILE_SIZE)
@@ -311,22 +320,40 @@ func _drawn_rail_thickness(subject: String) -> float:
 	return 0.0 if first < 0 else float(last - first + 1)
 
 
-## A corner post caps a side wall, so it stands exactly where that wall
-## does -- a post half a tile off the run it caps is a visibly broken joint,
-## which is what "corner pieces added so it doesn't look that broken" asked
-## to be rid of, whichever way the walls move.
-func test_a_corner_post_lines_up_with_the_side_wall_it_caps():
-	var centre := (float(_berlin_tile.x) + 0.5) * TerrainRenderer.TILE_SIZE
-	var west_wall := _art_x_for(VillageFarm.fence_tile_for("west"))
-	var east_wall := _art_x_for(VillageFarm.fence_tile_for("east"))
-	for facing in ["corner_nw", "corner_sw"]:
-		assert_almost_eq(
-			_art_x_for(VillageFarm.fence_tile_for(facing)), west_wall, 0.001,
-			"%s stands exactly where the west wall below it does" % facing
+## A corner raises NO post at all now -- asked for directly with two
+## enclosures in shot: *"also the corner post can be removed"*. Each of the
+## two runs meeting there already carries a post at its own end
+## (tools/probe_fence_posts.gd measured them 12.5px apart inside a 16px
+## tile), so the corner's own was a third one beside them.
+##
+## This used to assert that a corner post lined up with the side wall it
+## caps, which is the right question to ask of a post that exists. The
+## stronger statement is that none does.
+func test_a_corner_raises_no_post_at_all():
+	for facing in ["corner_nw", "corner_sw", "corner_ne", "corner_se"]:
+		manager.build_at_global(
+			_berlin_tile.x, _berlin_tile.y, VillageFarm.fence_tile_for(facing)
 		)
-	for facing in ["corner_ne", "corner_se"]:
-		assert_almost_eq(
-			_art_x_for(VillageFarm.fence_tile_for(facing)), east_wall, 0.001,
-			"%s stands exactly where the east wall below it does" % facing
+		assert_true(
+			_structure_art_sprites_at_berlin_tile().is_empty(),
+			"%s still draws a post of its own" % facing
 		)
-	assert_ne(west_wall, centre, "precondition: the side walls really do move")
+	manager.build_at_global(_berlin_tile.x, _berlin_tile.y, VillageFarm.fence_tile_for("west"))
+	assert_false(
+		_structure_art_sprites_at_berlin_tile().is_empty(),
+		"precondition: a length of rail is still drawn"
+	)
+
+
+## And a SHARED LINE raises BOTH its fields' rails on the one tile -- asked
+## for directly: *"It should be possible to build two rails on a single tile
+## so both enclosures are fenced properly."*
+func test_a_shared_line_raises_both_its_rails_on_one_tile():
+	manager.build_at_global(_berlin_tile.x, _berlin_tile.y, "farm_fence_east_west")
+	var sprites := _structure_art_sprites_at_berlin_tile()
+	assert_eq(sprites.size(), 2, "a line between two fields is two rails")
+	assert_ne(
+		sprites[0].position.x, sprites[1].position.x,
+		"each is drawn on its OWN inner edge, or they stand on top of each other"
+	)
+

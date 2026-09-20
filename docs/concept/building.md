@@ -980,6 +980,73 @@ was erroring on `cottage_3` rather than guarding, while the bug shipped one
 chain along. It reads through `SpriteSheetLoader` now, which falls back to
 the file's own bytes.
 
+**And he carries the material (2026-09-20).** Asked in the next breath:
+*"the builders should carry materials to the site"*. He worked an empty
+plot: the timber a cottage is made of left the village store as a number
+and arrived nowhere, and the man standing over the work had never fetched
+any of it.
+
+The material is already real and already committed —
+`SettlementConstruction.try_start` draws every one of the recipe's inputs
+out of `VillageMarket.stock` into the project's own `reserved_material` the
+moment the project starts. What was missing is that it moved by teleport.
+[village_warehouse.md](village_warehouse.md) pillar 2 gave that stock an
+address ("storage is somewhere, not nowhere") and pillar 4 made goods
+*arrive* by being carried; this is the other half of pillar 4 — goods leave
+by being carried too, and the builder is who carries them.
+
+- **A real round, not a pace.** Out to the store, a spell loading, back to
+  the plot, the load set down, a spell or two of work, and out again —
+  until everything the project reserved is standing on the site, after
+  which he only works, because there is nothing left to fetch. The legs are
+  `ConstructionWorkerMarker`'s own phases, the same shape `LogisticsMarker`
+  already runs its round on.
+- **What he carries is the project's reservation, not a prop.**
+  `ConstructionHaul` reads the load off `reserved_material` against what
+  has already been delivered: the item with the most still outstanding
+  first, `CARRY_LOAD` units in his arms at a time, and the last trip
+  carries only the remainder. A cottage's 12 wood is a handful of trips and
+  a hall's 20 wood + 10 stone is more of them, because that is what those
+  two buildings really cost — the count is read, never authored.
+- **Nothing to fetch is not a bug.** An unreserved project (a player's own
+  planned site, a ledger row restored without material) has nothing to
+  carry, and so does a village with no store to carry from — the cramped
+  site that `village_warehouse.md`'s own pillar-1 caveat says goes without
+  one. Both cases fall back to exactly the builder that existed before
+  this: a man working his plot. That is the same default pillar 4 already
+  chose for producers ("a village with no store has nowhere to carry to"),
+  not a special case invented here.
+- **He is visibly loaded on the way back.** `ProceduralBuilderSprite` draws
+  the mallet up on the way out and an armful of boards on the way back, so
+  which leg of the round he is on reads at village zoom, where he is seven
+  world units tall and a silhouette is all there is. Carried at chest
+  height rather than up on the shoulder, because on a real render the
+  shoulder is where the head is, and sawn timber and skin merge at this
+  size into one pale mass over a brown body.
+- **He crosses a village now, so he crosses it the way villagers do.**
+  Through `WalkGate`, which every other walking marker already asks the
+  same question — a builder who never left his footprint could not walk
+  through a wall, and one crossing the square to the store can — and, past
+  that, on a real route (`TileRouter`, [navigation.md](navigation.md)):
+  sliding is a reflex for a wall you brush, and getting *around* a building
+  between the site and the store is a plan. Measured before he had one
+  (`tools/probe_construction_haul.gd`): 68 px walked, then stuck against a
+  building 25 px short of the door for the remaining 230 simulated seconds.
+  He is sent to the store's DOOR as well, the cell a villager hauling into
+  it is sent to — a whole building's own origin cell is inside its walls.
+- **Honest limit: the haul does not gate the labour.** Hours accrue against
+  a project whether or not the load has arrived, exactly as they did
+  before. They must: `ConstructionCatchup` advances projects in chunks with
+  no builder walking in them at all, so a haul that gated hours would stall
+  every unloaded village's building and make a settlement's progress depend
+  on being looked at. The round is already-committed material becoming
+  visible, not a second ledger over the top of the first — and for the same
+  reason what he has carried in so far is the WORKER's own tally rather
+  than the project's, so a chunk that unloads takes the man and his count
+  with it and a reloaded site starts its round over. Nothing depends on it;
+  persisting it would mean keeping a second material ledger to change
+  nothing about what gets built.
+
 **Somebody is working on it (2026-09-20).** Asked for directly, watching a
 village raise a cottage: *"the construction site should show a builder
 working on it"*. A site was a picture of a building going up and nothing
@@ -1240,6 +1307,17 @@ tile, no dividers, no directional variants (see
   are pinned as measurements, not taste). Full account above, "Somebody is
   working on it". Tested (`test_procedural_builder_sprite.gd`,
   `test_construction_worker_marker.gd`,
+  `test_earth_chunk_manager_city_hall_rising.gd`).
+- ✅ **And he carries the material** (2026-09-20). `ConstructionHaul` +
+  `ConstructionWorkerMarker`'s round: out to the village store, a load of
+  the project's OWN `reserved_material` in his arms, back to the plot, a
+  couple of spells of work, and out again until the pile is on site. What
+  he carries and how many journeys it takes are read off the project, not
+  authored, and he is visibly loaded on the way back. Nothing reserved and
+  no store in reach both fall back to the builder above, working his plot.
+  Full account above, "And he carries the material". Tested
+  (`test_construction_haul.gd`, `test_construction_worker_marker.gd`,
+  `test_procedural_builder_sprite.gd`,
   `test_earth_chunk_manager_city_hall_rising.gd`).
 - ✅ **The square under a hall, and the kerb round every plot**
   (2026-09-20). The overlay rule above leaves a building showing the

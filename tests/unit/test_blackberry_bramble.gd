@@ -8,6 +8,7 @@ extends GutTest
 ## then directly: *"Forageable, bearing with the seasons"*.
 
 const BlackberryBramble = preload("res://src/world/blackberry_bramble.gd")
+const BossAggro = preload("res://src/gameplay/boss_aggro.gd")
 const ForestFern = preload("res://src/world/forest_fern.gd")
 const SeasonCycle = preload("res://src/world/season_cycle.gd")
 
@@ -176,3 +177,76 @@ func test_a_blackberry_is_a_real_food_item():
 	assert_eq(berry.kind, "food", "a blackberry is food")
 	var cherry = catalog.make("cherry")
 	assert_eq(berry.max_stack, cherry.max_stack, "it stacks like the other wild fruit")
+
+
+# -- pushing through one ------------------------------------------------------
+#
+# Asked for directly: *"when walked through in the middle it should slow
+# down movement to 10% and inflict minor damage"*.
+#
+# The MIDDLE is the thicket's own cell, and that is the whole test. It is
+# the question every other ground-cover rule already asks, it needs no
+# radius to tune, and it lines up with what a player sees -- the tile the
+# clump is planted on. Clipping the drawn edge of a clump from the next
+# tile over is a visual event only.
+
+
+func test_pushing_into_a_thicket_drops_you_to_a_tenth_of_your_speed():
+	assert_almost_eq(BlackberryBramble.THICKET_SPEED_MULTIPLIER, 0.1, 0.0001)
+
+
+## "Minor" is not a number, so it is derived from the speed rather than
+## picked: at a tenth of BASE_SPEED a walker covers 4 world units a second,
+## a tile is 16, so a thicket takes four seconds to cross. A crossing
+## should cost the smallest damage this world already counts as real.
+func test_it_takes_four_seconds_to_cross_a_thicket():
+	assert_almost_eq(
+		BlackberryBramble.seconds_to_cross(16.0, 40.0), 4.0, 0.0001,
+		"a tile at a tenth of base speed"
+	)
+
+
+## ...and that smallest-real-damage figure is not invented here either: the
+## world names it once, for when a hit is too small to be worth reacting
+## to, and a bramble crossing is exactly that size of hurt.
+func test_a_crossing_costs_the_smallest_damage_this_world_counts_as_real():
+	assert_almost_eq(
+		BlackberryBramble.CROSSING_COST_FRACTION,
+		BossAggro.MIN_DAMAGE_FRACTION_OF_MAX_HEALTH,
+		0.0001
+	)
+
+
+func test_the_thorn_rate_is_that_cost_spread_over_that_crossing():
+	var rate: float = BlackberryBramble.thorn_damage_per_second(100.0, 16.0, 40.0)
+	assert_almost_eq(rate, 0.5, 0.0001, "2 health over 4 seconds")
+	assert_almost_eq(
+		rate * BlackberryBramble.seconds_to_cross(16.0, 40.0),
+		100.0 * BlackberryBramble.CROSSING_COST_FRACTION, 0.0001,
+		"the rate and the crossing must multiply back to the cost"
+	)
+
+
+## Derived, so a change to the player's speed or the tile size moves it
+## instead of quietly making a crossing cheaper.
+func test_a_faster_walker_is_hurt_less_because_they_are_in_there_for_less_time():
+	assert_lt(
+		BlackberryBramble.thorn_damage_per_second(100.0, 16.0, 80.0)
+		* BlackberryBramble.seconds_to_cross(16.0, 80.0),
+		BlackberryBramble.thorn_damage_per_second(100.0, 16.0, 40.0)
+		* BlackberryBramble.seconds_to_cross(16.0, 40.0) + 0.0001,
+		"a crossing never costs MORE for being quicker"
+	)
+	assert_almost_eq(
+		BlackberryBramble.thorn_damage_per_second(100.0, 16.0, 80.0)
+		* BlackberryBramble.seconds_to_cross(16.0, 80.0),
+		100.0 * BlackberryBramble.CROSSING_COST_FRACTION, 0.0001,
+		"a crossing costs the same wherever the speed lands"
+	)
+
+
+## Nonsense in, nothing out -- never a division by zero or a negative rate.
+func test_a_standing_still_walker_is_not_divided_by_zero():
+	var rate: float = BlackberryBramble.thorn_damage_per_second(100.0, 16.0, 0.0)
+	assert_gte(rate, 0.0)
+	assert_false(is_inf(rate), "a walker who cannot move is not hurt infinitely fast")
