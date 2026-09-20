@@ -401,3 +401,77 @@ func test_a_verb_with_no_feedback_never_plays():
 
 func test_the_interval_of_a_verb_with_no_row_is_zero_rather_than_an_error():
 	assert_almost_eq(Answerback.interval_for("toggle_map"), 0.0, 0.0001)
+
+
+# -- sweeps: the table is checked as a whole, not by sampling ------------
+#
+# The tests above name individual verbs, which means a row added later
+# could quietly be malformed and never be looked at. These walk every row.
+
+## A row could satisfy `has_feedback` and still answer with nothing --
+## which is precisely the bug this module exists to make impossible. Every
+## row must produce at least one perceptible thing.
+func test_no_row_answers_with_nothing():
+	var full := {"damage": 5, "item": "Stick", "count": 2, "coins": 3, "xp": 4, "level": 2, "target": "Wolf"}
+	for action in Answerback.answered_actions():
+		var fb: Dictionary = Answerback.for_action(action, full)
+		var says_something: bool = (
+			not String(fb["sound"]).is_empty()
+			or fb["flash"] != Answerback.FLASH_NONE
+			or not String(fb["float_text"]).is_empty()
+			or not String(fb["message"]).is_empty()
+		)
+		assert_true(says_something, "%s has a row but answers with nothing" % action)
+
+
+## Every row resolves to the full answer shape, so a typo'd key in the
+## table is a failure here rather than a crash at the call site.
+func test_every_row_resolves_to_a_complete_answer():
+	var keys := ["action", "sound", "flash", "flash_color", "message", "float_text", "interval", "failed"]
+	for action in Answerback.answered_actions():
+		var fb: Dictionary = Answerback.for_action(action, {"item": "Stick", "damage": 3})
+		for key in keys:
+			assert_true(fb.has(key), "%s's answer is missing %s" % [action, key])
+		assert_eq(fb["action"], action)
+		assert_gt(float(fb["interval"]), 0.0, "%s answers with no interval at all" % action)
+
+
+## Every verb can be refused, and a refusal never looks like a success.
+func test_every_verb_can_refuse_and_a_refusal_never_looks_like_a_success():
+	for action in Answerback.answered_actions():
+		var ok: Dictionary = Answerback.for_action(action, {"item": "Stick", "damage": 3})
+		var no: Dictionary = Answerback.for_action(
+			action, {"item": "Stick", "damage": 3, "failed": true}
+		)
+		assert_true(no["failed"], "%s cannot be refused" % action)
+		assert_ne(no["sound"], ok["sound"], "%s's refusal sounds like its success" % action)
+		assert_ne(no["flash_color"], ok["flash_color"], "%s's refusal looks like its success" % action)
+		assert_eq(no["float_text"], "", "%s floats a number on a refusal" % action)
+		assert_false(String(no["message"]).is_empty(), "%s refuses silently" % action)
+
+
+## The rate limit really holds for every verb, not just the two sampled
+## above: answering twice in the same instant is never allowed.
+func test_no_verb_answers_twice_in_the_same_instant():
+	for action in Answerback.answered_actions():
+		assert_true(Answerback.should_play(action, -1.0, 100.0), "%s never answers" % action)
+		assert_false(
+			Answerback.should_play(action, 100.0, 100.0),
+			"%s answers twice in the same instant" % action
+		)
+		assert_true(
+			Answerback.should_play(action, 100.0, 100.0 + Answerback.interval_for(action)),
+			"%s does not answer again after its own interval" % action
+		)
+
+
+## The partition lists must not double-count: a repeated entry would keep
+## both containment directions happy on its own.
+func test_neither_partition_repeats_an_action():
+	var seen: Dictionary = {}
+	var both: Array = []
+	both.append_array(WORLD_CHANGING_ACTIONS)
+	both.append_array(VIEW_ONLY_ACTIONS)
+	for action in both:
+		assert_false(seen.has(action), "%s is listed twice in the partition" % action)
+		seen[action] = true
