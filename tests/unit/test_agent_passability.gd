@@ -132,7 +132,7 @@ func test_a_world_that_knows_nothing_costs_nothing():
 	assert_false(AgentPassability.cost_scale_for(null).is_valid())
 
 
-# -- agreeing with the wall's own collision body ---------------------------
+# -- agreeing with the building's own collision body -----------------------
 #
 # main's NpcMarker._slid_along_walls asks `piece_blocks_movement_at_global`
 # -- "the same question the wall's own collision body is spawned from, so
@@ -140,10 +140,26 @@ func test_a_world_that_knows_nothing_costs_nothing():
 # ROUTER has to ask that same question, or it would plan through a door the
 # slide then refuses, or around a door the slide would have allowed.
 #
-# It also matters for what a building IS: has_building_at_global reports
-# the whole footprint, door included, while the piece question knows a DOOR
-# and a FLOOR are walkable. Routing on the footprint would mean no villager
-# could ever plan a way indoors.
+# **Rewritten 2026-09-20.** This block used to assert the piece question
+# was PREFERRED -- `elif`, so a world knowing pieces never asked about
+# whole buildings at all. That was the bug reported as "NPCs still walk
+# through houses and ignore the hitbox": a village house is a whole-
+# building ENTITY with no BuildingPiece walls (docs/concept/building.md,
+# "Buildings are entities; interiors are scenes"), so the piece question
+# answers `false` on every cell of one while the player is stopped by a
+# StaticBody2D over its whole footprint.
+#
+# The worry the preference expressed was real but aimed at the wrong
+# defence: routing on a whole FOOTPRINT would shut a villager out of a
+# piece-built structure's walkable DOOR and FLOOR. What protects those is
+# that the two kinds of building are DISJOINT -- a BuildingPiece answers
+# false to has_building_at_global, measured on real stamped pieces in
+# test_marker_gates_block_buildings.gd -- so both questions can be asked
+# and a door stays a door.
+#
+# The stub below is faithful to that: a piece-built structure is not a
+# whole-building entity. A stub that answered `true` to both is not a world
+# that exists, and asserting against it pinned the bug in place.
 
 class WorldWithPieces:
 	extends RefCounted
@@ -151,21 +167,64 @@ class WorldWithPieces:
 
 	func piece_blocks_movement_at_global(x: int, y: int) -> bool:
 		asked_pieces += 1
-		return x == 7  # a wall line; the door at (7,3) is carved out below
+		return x == 7  # a wall line; the door at (3, 3) is open ground
 
 	func has_building_at_global(_x: int, _y: int) -> bool:
-		return true  # the whole footprint -- deliberately the wrong answer
+		return false  # a BuildingPiece structure is not a building ENTITY
 
 
-func test_the_piece_question_is_preferred_over_the_footprint_one():
+func test_a_walkable_cell_of_a_piece_built_structure_is_not_blocked():
 	var world := WorldWithPieces.new()
 	var blocked := AgentPassability.blocked_predicate_for(world)
 	assert_true(blocked.call(Vector2i(7, 0)), "the wall line should block")
 	assert_false(
 		blocked.call(Vector2i(3, 3)),
-		"open ground inside the footprint was blocked -- the footprint question won"
+		"a door or floor must stay walkable, or no villager can plan a way indoors"
 	)
 	assert_gt(world.asked_pieces, 0, "the piece question was never asked")
+
+
+class WorldWithBothKinds:
+	extends RefCounted
+	## A piece wall at x == 7, and a whole-building entity on (4, 4) --
+	## which, being an entity, has no pieces at all.
+	func piece_blocks_movement_at_global(x: int, _y: int) -> bool:
+		return x == 7
+
+	func has_building_at_global(x: int, y: int) -> bool:
+		return Vector2i(x, y) == Vector2i(4, 4)
+
+
+## The regression itself: a world that knows BOTH must be stopped by both.
+## Reported after every marker already had a gate -- "NPCs still walk
+## through houses and ignore the hitbox" -- because knowing about pieces
+## used to mean never asking about buildings.
+func test_a_world_that_knows_pieces_is_still_stopped_by_a_whole_building():
+	var blocked := AgentPassability.blocked_predicate_for(WorldWithBothKinds.new())
+	assert_true(blocked.call(Vector2i(7, 0)), "the piece wall still blocks")
+	assert_true(
+		blocked.call(Vector2i(4, 4)),
+		"a house with no pieces in it is still a house"
+	)
+	assert_false(blocked.call(Vector2i(4, 5)), "and the ground beside it is still ground")
+
+
+## ...and the same question, asked directly. `structure_blocks` is what the
+## four marker gates read, so it is pinned here beside the predicate rather
+## than only through it.
+func test_structure_blocks_answers_for_both_kinds_and_neither():
+	var world := WorldWithBothKinds.new()
+	assert_true(AgentPassability.structure_blocks(world, Vector2i(7, 0)))
+	assert_true(AgentPassability.structure_blocks(world, Vector2i(4, 4)))
+	assert_false(AgentPassability.structure_blocks(world, Vector2i(0, 0)))
+
+
+## A world that answers neither question reports nothing solid rather than
+## erroring -- the same duck-typed fail-open every gate here keeps, for a
+## test double or a marker set up before its world exists.
+func test_structure_blocks_is_silent_about_a_world_that_cannot_answer():
+	assert_false(AgentPassability.structure_blocks(WorldThatKnowsNothing.new(), Vector2i(1, 1)))
+	assert_false(AgentPassability.structure_blocks(null, Vector2i(1, 1)))
 
 
 func test_the_footprint_question_is_still_the_fallback():
