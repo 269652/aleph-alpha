@@ -249,6 +249,70 @@ Player piece placement is retired with them; the player's blueprint build
 places a finished building through the same ledger, and hiring a builder
 for a house returns in the construction-over-time pass. See Status.
 
+### The ground a building stands on, and the kerb round its plot
+
+Reported live with a screenshot (2026-09-20): *"the background of the
+houses 2x2 should be variable; if the city hall is placed on the plaza it
+should have cobblestone background so it looks seamless... also there
+should be some kind of border so the hitbox is visible."*
+
+Placement writes the building's own ids into `Chunk.modifications` -- the
+anchor carries the building id, every other footprint cell carries
+`BuildingCatalog.FOOTPRINT_TILE_ID` -- and neither is a tile the painter
+knows, so both fell through `atlas_coords_for_modification`'s fail-safe
+default onto one dead-flat `EARTH_COLOR` square. Every building in the
+world stood on the same brown rectangle whatever it was really built on,
+and a hall raised on the village square had the square's own paving
+*lifted* out from under it by `_place_building_over_roads` and replaced
+with that rectangle. Measured before the fix with
+`tools/probe_building_ground.gd` across three real settlements near lat
+48.6 lon 12.7: 28 buildings, 28 flat-earth squares, all three town halls
+included.
+
+**A building stands on the ground its own kerb is made of.** The kerb is
+the ring of cells immediately around the footprint -- 18 cells around a
+4x3 hall, 12 around a 2x2 cottage. When more than
+`TerrainRenderer.PAVED_KERB_SHARE` of that ring carries the village's own
+Road paving, the footprint paints Road as well, so a hall on the square is
+cobbled right up to its own walls and reads as part of the square rather
+than a patch cut out of it. Otherwise it paints the trodden earth yard it
+always did -- but through the same branch `PathScarring`'s worn ground
+already takes, so the yard's outer cells dither into whatever biome
+borders them instead of cutting a hard square out of the grass. That is
+the "variable" the report asks for, in both directions: the ground a
+building carries is a reading of its surroundings, never a constant.
+
+The share is half, and the measurements are what put it there. On those
+same three villages every town hall's kerb is 12 of 18 paved (67%), the
+same 12 of 18 in all three because the plaza and the civic plot are both
+pure functions of the chunk and its seed. An ordinary house, farmhouse or
+sawmill plot runs 7-43% -- its doorstep and a spur, no more. Three plots
+of the 28 sat above half (58%, 71%, 86%); all three are corner plots
+genuinely ringed by street, and paving them is the same rule doing the
+same job rather than an exception to it. Trails do not count, only the
+laid Road tier ([infrastructure.md](infrastructure.md)): a path worn
+across a yard is worn earth, which is what the yard already is.
+
+**Nothing about this is persisted.** The ground is re-derived from the
+chunk on every paint, so a village saved before this existed heals on its
+next load -- the same property that lets an older village re-derive and
+pave its square (`VillageRenderer._lay_plaza_if_missing`). It also means a
+plot that is paved AROUND later becomes paved itself, with no migration
+and no second source of truth to drift.
+
+**The kerb is drawn, too.** `ProceduralFootprintKerbSprite` draws the
+footprint's own outline at art resolution -- a dark edge with a lighter
+inner line and a joint every few pixels, so it reads as laid kerb stones
+rather than a debug rectangle -- and the building node carries it beneath
+its art, built from the same `footprint_px` the `StaticBody2D`'s
+`RectangleShape2D` is built from. What is drawn IS the hitbox, not a
+picture of one that can drift from it, which is what
+`test_the_kerb_a_building_draws_is_exactly_its_own_collision_rect` pins.
+Its middle is fully transparent: the kerb marks the plot, it never paints
+over the ground the rule above just chose. A construction site draws no
+kerb -- it has no collision body yet, and a border round a hitbox that
+does not exist would be a lie.
+
 ### When the ground says no: water, a split spine, and a drowned square
 
 `BiomeClassifier` knows nothing of hydrology, so a lake still reads as

@@ -142,6 +142,43 @@ const ROAD_ART_PATH := "res://assets/sprites/terrain/road.png"
 static func is_road_tile(tile_id: String) -> bool:
 	return tile_id == ROAD_TILE_ID
 
+
+## How much of a building's own KERB -- the ring of cells immediately
+## around its footprint -- must carry laid paving before the footprint
+## paints paving too rather than its own worn earth yard (docs/concept/
+## building.md, "The ground a building stands on, and the kerb round its
+## plot").
+##
+## Half, and the real geometry is what put it there:
+## tools/probe_building_ground.gd measured 28 buildings across three real
+## settlements near lat 48.6 lon 12.7 -- every town hall's kerb is 12 of
+## 18 paved (67%, the same in all three, since plaza and civic plot are
+## both pure functions of the chunk and its seed), while an ordinary
+## house/farmhouse/sawmill plot runs 7-43%: its doorstep and a spur, no
+## more. Three corner plots of the 28 sat above half (58%, 71%, 86%) and
+## are genuinely ringed by street, so paving them is this rule working,
+## not an exception to it.
+const PAVED_KERB_SHARE := 0.5
+
+
+## Which ground a building's own footprint paints, given every tile id its
+## kerb carries (see PAVED_KERB_SHARE). More than that share of laid Road
+## means the building stands ON the paving -- a hall is cobbled up to its
+## walls and reads as part of the square it was raised on; anything less
+## is the trodden EARTH_TILE_ID yard, which paint() then dithers into
+## whatever biome borders it the way any worn ground is.
+##
+## Only the laid Road tier counts: a trail is ground worn by walking,
+## which is what the yard already is (docs/concept/infrastructure.md).
+## An empty kerb -- a plot at the chunk's own edge, whose neighbours
+## nobody can read -- is earth, never paving conjured from nothing.
+static func building_ground_tile_for(kerb_tile_ids: Array) -> String:
+	var paved := 0
+	for tile_id in kerb_tile_ids:
+		if is_road_tile(tile_id):
+			paved += 1
+	return ROAD_TILE_ID if float(paved) > float(kerb_tile_ids.size()) * PAVED_KERB_SHARE else EARTH_TILE_ID
+
 ## Cardinal directions a blend can be oriented toward -- up/down/left/right,
 ## in this fixed order so mask/atlas indexing is stable.
 const _DIRECTIONS: Array[Vector2i] = [Vector2i(0, -1), Vector2i(0, 1), Vector2i(-1, 0), Vector2i(1, 0)]
