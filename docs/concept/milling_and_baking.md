@@ -484,21 +484,32 @@ directly affected neighbouring suites were.
   decision raise a second Farm — this is also
   [npc_farm_production.md](npc_farm_production.md)'s own "Capacity and a
   second Farmer" question.
-- **Three food containers, one eater.** A villager now eats from the stall,
-  the persisted Market and the shelves alike, but nothing ever moves food
-  between them (baked bread never reaches the `VillageMarket` a player
-  sells food into), and the player's shop still prices only the Market —
-  unifying the three containers is real, separate work.
+- 🚧 **Three food containers, one eater.** *Partly closed, 2026-09-20.*
+  Food does move between them now: the **store keeps the stall stocked**
+  (`StallRestock`, see [village_warehouse.md](village_warehouse.md)'s
+  Mechanism 8) — a day's trade, drawn out of the warehouse's own shelf, so
+  a village that bakes really does sell what it baked. Measured on a real
+  village, the stall went from empty at every sample but one to holding its
+  full twelve.
+
+  Still open, and deliberately named rather than quietly folded in: the
+  **persisted `Market`** is still a third container nothing fills or
+  empties in live play (its own neighbouring comment says *"live play
+  essentially never stocks that one"*), and the **player's shop still
+  prices only that Market**, so what a player buys and what a village
+  trades are still two different piles.
 - **Oven fuel.** A real bakehouse burns wood per batch; modeling it means
   a second input the resolver would surface as a `wood` need — correct,
   and cheap once the destination-logistics leg exists, but deliberately
   not in the first pass so the chain's first live run has three links to
   debug, not four.
-- **Bread as a purchasable meal.** `village_market.gd`'s meals come from
-  the producer occupations' own live yield; Storage-held bread reaching
-  that market (or hungry villagers walking to the Storage) is the natural
-  next step, so a village that bakes actually eats what it bakes at the
-  individual level too, not only in the settlement's aggregate signal.
+- ✅ **Bread as a purchasable meal.** *Done, 2026-09-20, by both routes.*
+  Hungry villagers walk to the shelves (`STRUCTURE_MEAL_SOURCE_IDS`, which
+  grew to include the warehouse and the farmhouse as each was measured to
+  be stranding food people could not eat), and store-held food now reaches
+  the stall itself through `StallRestock`. A village that bakes eats what
+  it bakes at the individual level, not only in the settlement's aggregate
+  signal.
 - **Real art.** `mill`/`bakery` structure sprites and `flour`/`bread`
   icons resolve through procedural fallbacks; the Farm/Sägewerk/Storage
   each got a real user-supplied sheet, and these should follow.
