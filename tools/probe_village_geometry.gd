@@ -22,7 +22,7 @@ const CHUNK_SIZE := 32
 ## The chunks tools/probe_pond_and_farmhouse.gd found real, stamped
 ## villages in on the Berlin transect -- named here so this probe founds
 ## two villages instead of twenty-six.
-const VILLAGE_CHUNKS: Array[Vector2i] = [Vector2i(696, 128), Vector2i(678, 128)]
+const VILLAGE_CHUNKS: Array[Vector2i] = [Vector2i(678, 128), Vector2i(682, 132), Vector2i(696, 128)]
 
 var _manager
 var _step := -1
@@ -156,6 +156,20 @@ func _report_hut_sites(chunk_coord: Vector2i) -> void:
 	print("    %d candidate origin(s) in reach of the water" % in_reach)
 	for why in reasons:
 		print("      %-34s x%d   e.g. %s" % [why, reasons[why], str(examples[why])])
+	# And the counterfactual the fix turns on: the fence goes in with the
+	# water and the hut goes up afterwards, so every site on the ring is
+	# lost to a rail. Raising the hut FIRST would let the frame go round it
+	# the way it already goes round a farmhouse -- so the number that
+	# matters is how many candidates ONLY the rails refuse.
+	var only_rails := 0
+	var example_cell = null
+	for why in reasons:
+		if String(why) == "the pond\'s own fence rail":
+			only_rails = int(reasons[why])
+			example_cell = examples[why]
+	print("    %d of them are refused by the pond\'s own rails ALONE%s" % [
+		only_rails, "" if example_cell == null else "   e.g. %s" % str(example_cell)
+	])
 
 
 ## The FIRST thing that refuses a hut at this origin, named -- "free" when
