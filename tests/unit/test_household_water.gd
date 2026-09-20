@@ -200,3 +200,38 @@ func test_the_drinking_reserve_is_real_water_not_the_whole_tank():
 func test_the_reserve_outlasts_the_walk_to_the_well():
 	var days_of_reserve := HouseholdWater.DRINKING_RESERVE_LITRES / HouseholdWater.draw_for(2, 1.0)
 	assert_gte(days_of_reserve, 1.0, "a farm household could go thirsty while somebody fetches water")
+
+
+# -- the bucket is a real thing (2026-09-20) --------------------------------
+#
+# Asked for directly: *"each NPC should have a bucket in its house
+# inventory"*. A bucket is a vessel, never the place water lives -- the
+# water itself is a level on the house (pillar 3), so the bucket is an
+# ordinary carryable item and nothing more.
+
+const ItemCatalog = preload("res://src/gameplay/item_catalog.gd")
+
+
+func test_a_bucket_is_a_real_catalog_item():
+	var catalog := ItemCatalog.new()
+	assert_true(catalog.known_ids().has(HouseholdWater.BUCKET_ITEM_ID))
+
+
+func test_a_bucket_is_a_tool_rather_than_food_or_a_weapon():
+	var catalog := ItemCatalog.new()
+	assert_eq(catalog.kind_of(HouseholdWater.BUCKET_ITEM_ID), "tool")
+
+
+func test_a_bucket_has_a_name_somebody_could_read():
+	var catalog := ItemCatalog.new()
+	var bucket = catalog.make(HouseholdWater.BUCKET_ITEM_ID)
+	assert_not_null(bucket)
+	assert_ne(bucket.display_name, "")
+
+
+## Water is never an item. It is a level on the house, and a bucket is how
+## it moves -- if water became a catalog item too there would be two places
+## a household's water could live and they would drift.
+func test_water_itself_is_not_an_item_anybody_can_carry():
+	var catalog := ItemCatalog.new()
+	assert_false(catalog.known_ids().has("water"))

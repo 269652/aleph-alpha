@@ -17,6 +17,11 @@ extends RefCounted
 
 const SeasonCycle = preload("res://src/world/season_cycle.gd")
 
+## The vessel the water is carried in. A bucket is never where water
+## LIVES (that is the tank on the house) -- it is how a trip's worth moves
+## across the square, and it is what a villager is seen holding.
+const BUCKET_ITEM_ID := "bucket"
+
 ## What a house holds: a kitchen barrel, not a cistern. Six full buckets.
 const TANK_LITRES := 60.0
 
