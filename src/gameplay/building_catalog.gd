@@ -35,7 +35,16 @@ const CIVIC_BUILDING_IDS: Array[String] = ["city_hall", "warehouse"]
 ## then the farmhouse, the blacksmith and finally the brewery, the one
 ## rung raised for comfort rather than survival. Also never homes; the
 ## trade they house is worked from, not lived in.
-const PRODUCTION_BUILDING_IDS: Array[String] = ["sawmill", "farmhouse", "blacksmith", "brewery"]
+##
+## The fisher's hut is one of these and is NOT a rung: it is raised over a
+## fisher's own dug pond by the pond pass itself (docs/concept/
+## village_ponds.md, "The hut on the bank"), the way a farmhouse stands
+## over its beds, rather than by the ladder a village climbs. The ladder
+## keeps its own list (VillageGrowth.LADDER_BUILDING_IDS), which is what
+## lets these two answers differ without either lying.
+const PRODUCTION_BUILDING_IDS: Array[String] = [
+	"sawmill", "farmhouse", "blacksmith", "brewery", "fisher_hut",
+]
 
 ## Buildings a settlement's own TIER entitles it to (docs/concept/
 ## settlement_charter.md): a place may not simply decide to have one, it
@@ -216,6 +225,22 @@ const _BUILDINGS := {
 	"mage_guild": {
 		"footprint": Vector2i(3, 3), "interior_family": "hall", "capacity": 0, "storage": 60,
 		"labor_hours": 93.0, "cost": {"wood": 28, "stone": 26, "plant_fibre": 8},
+	},
+	# The fisher's works, standing over their pond the way a farmhouse
+	# stands over its beds (docs/concept/village_ponds.md, "The hut on the
+	# bank"). Reported live with a screenshot of a dug, fenced, EMPTY
+	# enclosure: "it's missing a fisher hut (use farmhouse sprite until
+	# illustration exists)".
+	#
+	# Priced, sized and stocked as the farmhouse it is drawn as: the same
+	# 3x2 works beside the same 3x2 patch of worked ground, in the same
+	# three materials a village can actually gather. `draws_as` is the
+	# whole of the borrowed art -- drop fisher_hut.png in and this one line
+	# comes out again, with nothing else to change (see draws_as_of).
+	"fisher_hut": {
+		"footprint": Vector2i(3, 2), "interior_family": "farmstead", "capacity": 0, "storage": 60,
+		"labor_hours": 36.0, "cost": {"wood": 14, "stone": 4, "plant_fibre": 6},
+		"draws_as": "farmhouse",
 	},
 }
 
@@ -419,6 +444,14 @@ static func finished_sheet_chain(building_id: String, seed_value: int) -> Array:
 		"path": sheet_of(building_id), "columns": sheet_columns_of(building_id), "rows": SHEET_ROWS,
 		"row": ROW_IDLE, "column": 0, "grid": "even",
 	})
+	# The borrowed link, if this building has no art of its own yet -- read
+	# with the SHEET's own grid, never the borrower's (see draws_as_of).
+	var borrowed := draws_as_of(building_id)
+	if borrowed != "":
+		chain.append({
+			"path": sheet_of(borrowed), "columns": sheet_columns_of(borrowed), "rows": SHEET_ROWS,
+			"row": ROW_IDLE, "column": 0, "grid": "even",
+		})
 	return chain
 
 
@@ -474,6 +507,15 @@ static func sheet_of(building_id: String) -> String:
 ## for every sheet but farmhouse.png's six (see _SHEET_COLUMNS_BY_ID).
 static func sheet_columns_of(building_id: String) -> int:
 	return _SHEET_COLUMNS_BY_ID.get(building_id, SHEET_COLUMNS)
+
+
+## Whose picture this building borrows until its own is drawn -- "" for
+## every building that has its own art (docs/concept/building.md, "Asset
+## contract"). A borrowed sheet is the LAST link of the chain, behind the
+## building's own, so the day the real file lands it wins with no code
+## change; removing the `draws_as` line is then pure tidying.
+static func draws_as_of(building_id: String) -> String:
+	return String(_BUILDINGS.get(building_id, {}).get("draws_as", ""))
 
 
 ## The construction row's stage column for a project `progress` in [0, 1]

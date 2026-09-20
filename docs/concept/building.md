@@ -530,6 +530,22 @@ Everything below lights up by dropping the file in and bumping
 there is no registry to edit. Until a file exists, a procedural placeholder
 draws so the system is playable and testable without art.
 
+**Or a borrowed sheet, where a placeholder box is too little.** A catalog
+entry may name another building's art with `draws_as`, and that sheet
+becomes the LAST link of its own chain (`BuildingCatalog.draws_as_of`,
+`finished_sheet_chain`): the building draws as its stand-in until its own
+file lands, and the day it does, it wins with no code change at all —
+removing the one line is then pure tidying. Asked for directly, for the
+fisher's hut: *"use farmhouse sprite until illustration exists"*
+([village_ponds.md](village_ponds.md), "The hut on the bank"). Read with
+the SHEET's own grid, never the borrower's, since farmhouse.png has six
+columns where every other contract sheet has eight. Pinned by
+`test_a_borrowed_sheet_never_hides_the_buildings_own` and
+`test_a_borrowed_sheet_is_read_with_its_own_grid`. A building whose
+stand-in is a plain box still gets the procedural placeholder above; this
+is for the case where "it should look like a farmhouse" is the real
+answer.
+
 **Building sheets** — `assets/sprites/buildings/<building_id>.png`
 (`house_small`, `house_medium`, `house_large`, `city_hall` …), 1536×1024,
 8 columns × 5 rows, black background, magenta cell dividers and a thin

@@ -2529,6 +2529,59 @@ func _connected_groups(cells: Array) -> Array:
 	return groups
 
 
+## And a HUT stands on its bank, the way a farmhouse stands over its own
+## beds -- reported live with a screenshot of a dug, fenced, EMPTY
+## enclosure: "it's missing a fisher hut (use farmhouse sprite until
+## illustration exists)".
+func test_every_fishers_pond_gets_a_hut_on_its_own_bank():
+	var coord := _find_settlement_chunk_with_occupation("grassland", "fisher", 3)
+	var world := StubWorld.new()
+	renderer.spawn_village(
+		parent, coord, coord * CHUNK_SIZE, CHUNK_SIZE, TILE_SIZE, "grassland", world
+	)
+	var built := _built_tiles(world, coord)
+	var water: Array = []
+	for cell in built:
+		if VillagePond.is_pond_tile(built[cell]):
+			water.append(cell)
+	assert_gt(water.size(), 0, "precondition: the village's fisher dug a pond")
+
+	var huts: Array = []
+	for call in world.place_calls:
+		if call["building_id"] == VillagePond.HUT_BUILDING_ID:
+			huts.append(call["origin_local"])
+	for pond in _connected_groups(water):
+		assert_true(
+			VillagePond.hut_stands_by(pond, huts),
+			"the pond at %s has no hut on its bank" % str(pond[0])
+		)
+
+
+## One hut per pond, on every reload -- a village walked past twice must
+## not grow a second hut beside the same water.
+func test_a_reload_does_not_raise_a_second_hut_over_the_same_water():
+	var coord := _find_settlement_chunk_with_occupation("grassland", "fisher", 3)
+	var world := StubWorld.new()
+	renderer.spawn_village(
+		parent, coord, coord * CHUNK_SIZE, CHUNK_SIZE, TILE_SIZE, "grassland", world
+	)
+	var first := 0
+	for call in world.place_calls:
+		if call["building_id"] == VillagePond.HUT_BUILDING_ID:
+			first += 1
+	assert_gt(first, 0, "precondition: at least one hut went up")
+
+	renderer.spawn_village(
+		parent, coord, coord * CHUNK_SIZE, CHUNK_SIZE, TILE_SIZE, "grassland", world
+	)
+
+	var total := 0
+	for call in world.place_calls:
+		if call["building_id"] == VillagePond.HUT_BUILDING_ID:
+			total += 1
+	assert_eq(total, first, "a second visit raised another hut over water that already had one")
+
+
 ## And it is FENCED, like the field it is modelled on -- the ask says "a
 ## similar 3x2 enclosure", and an enclosure is the frame.
 func test_a_fishers_pond_is_fenced_like_a_field():
