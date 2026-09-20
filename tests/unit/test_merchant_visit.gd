@@ -22,8 +22,8 @@ const _DAY := 3600.0
 
 func test_every_buyable_good_is_a_real_item_the_village_can_actually_make():
 	var catalog := ItemCatalog.new()
-	assert_false(MerchantVisit.BUY_LIST.is_empty())
-	for item_id in MerchantVisit.BUY_LIST:
+	assert_false(MerchantVisit.buy_list().is_empty())
+	for item_id in MerchantVisit.buy_list():
 		assert_true(catalog.has(item_id), "%s is not a real item" % item_id)
 		assert_gt(MerchantVisit.price_of(item_id), 0, "%s must be worth something" % item_id)
 
@@ -218,3 +218,98 @@ func test_a_merchant_still_walks_to_a_village_with_a_real_surplus():
 		1.0e6, {"wood": 40.0}, 0.0, {"wood": 12}
 	)
 	assert_true(result["arrived"])
+
+
+# -- nothing the village makes is unsellable -------------------------------
+#
+# This file's own doc states it as design pillar 3: *"They buy what a
+# village actually produces... nothing the village makes is unsellable."*
+# It was not true. The buy list was hand-written and the village kept growing
+# past it -- a herbalist's crop, a farmer's wheat, a felled log, gathered
+# stone and plant fibre all arrived after it was written and none was ever
+# added.
+#
+# Measured (tools/probe_village_purse.gd) on a real village after 1200
+# simulated seconds, standing where _step_merchant_visits stands:
+#
+#     herb               117  kind=food       merchant refuses
+#     log                 24  kind=material   merchant refuses
+#     wheat                5  kind=material   merchant refuses
+#     stone                5  kind=material   merchant refuses
+#     plant_fibre          1  kind=material   merchant refuses
+#     wood                10  kind=material   merchant BUYS @1
+#     sellable after reserve : 0     (reserve {"wood": 12})
+#     villagers' purse 0.0 gold | merchant's purse 0.0 gold
+#
+# One of nine ids was sellable, and all ten of those units were spoken for
+# by the village's own next house. A merchant is the ONLY faucet gold has,
+# so a village that makes nothing he buys has no income at all, forever --
+# which is exactly what "all villagers have 0 gold" was reported as.
+
+const NpcProduction = preload("res://src/world/npc_production.gd")
+const VillageFarm = preload("res://src/gameplay/village_farm.gd")
+const SettlementGathering = preload("res://src/emergence/settlement_gathering.gd")
+
+
+## The invariant itself, made structural rather than aspirational.
+func test_everything_a_villages_own_producers_make_is_sellable():
+	var produce: Array = MerchantVisit.village_produce()
+	assert_false(produce.is_empty(), "the premise: a village makes something")
+	for item_id in produce:
+		assert_true(
+			MerchantVisit.buy_list().has(item_id),
+			"a village makes %s and no merchant will buy it" % item_id
+		)
+		assert_gt(MerchantVisit.price_of(item_id), 0, "%s must be worth something" % item_id)
+
+
+## ...and the produce list is read off the producers' OWN maps, never a
+## second hand-written list, because a second list is precisely what drifted.
+func test_the_produce_list_is_the_producers_own_maps():
+	var produce: Array = MerchantVisit.village_produce()
+	for occupation in NpcProduction.PRODUCER_ITEM_BY_OCCUPATION:
+		assert_true(
+			produce.has(String(NpcProduction.PRODUCER_ITEM_BY_OCCUPATION[occupation])),
+			"a %s's take is village produce" % occupation
+		)
+	for occupation in VillageFarm.CROP_BY_OCCUPATION:
+		assert_true(
+			produce.has(String(VillageFarm.CROP_BY_OCCUPATION[occupation])),
+			"a %s's crop is village produce" % occupation
+		)
+	for item_id in SettlementGathering.gathered_item_ids():
+		assert_true(produce.has(String(item_id)), "gathered %s is village produce" % item_id)
+
+
+## The five ids the drift actually cost that village, named so the
+## regression has a shape a later reader can check against.
+func test_the_goods_a_real_village_was_sitting_on_are_sellable():
+	for item_id in ["herb", "wheat", "log", "stone", "plant_fibre"]:
+		assert_gt(
+			MerchantVisit.price_of(item_id), 0,
+			"a real village held %s and could not turn it into a coin" % item_id
+		)
+
+
+## Raw produce is all worth the same base unit -- the rule already latent
+## in the old table, where wood, fish, meat and fruit were every one of them
+## LOG_PRICE. Stated once here so a new crop needs no new number.
+func test_raw_produce_is_all_worth_the_base_unit():
+	for item_id in MerchantVisit.village_produce():
+		if MerchantVisit.KEEPING_GOOD_PRICES.has(item_id):
+			continue
+		assert_eq(
+			MerchantVisit.price_of(item_id), MerchantVisit.LOG_PRICE,
+			"%s is raw produce and prices at the base unit" % item_id
+		)
+
+
+## And the goods that KEEP are still dearer than the produce that spoils --
+## the doc's own grounding ("He buys what travels") and the reason a
+## merchant walks the circuit at all.
+func test_goods_that_keep_are_worth_more_than_raw_produce():
+	for item_id in MerchantVisit.KEEPING_GOOD_PRICES:
+		assert_gt(
+			MerchantVisit.price_of(String(item_id)), MerchantVisit.LOG_PRICE,
+			"%s keeps and travels, so it beats the farm gate" % item_id
+		)

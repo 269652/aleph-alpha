@@ -165,15 +165,14 @@ func _purse_and_pockets(chunk_coord: Vector2i, settlement_id: String) -> String:
 	var NpcEconomy = load("res://src/world/npc_economy.gd")
 	var SettlementFood = load("res://src/emergence/settlement_food.gd")
 	var village_market = SettlementFood.village_market_for(settlement_id, _manager._loaded_villages)
-	var purse: float = 0.0 if village_market == null else NpcEconomy.purse_of(village_market)
-	# The OTHER purse. The merchant deposits into the emergence Market
-	# (EarthChunkManager._step_merchant_visits), while the subsistence wage
-	# and the settlement card read the VillageMarket's own meta. If gold is
-	# sitting in one and nobody draws from the other, the faucet is
-	# plumbed to the wrong tank -- and that is a different bug from a
-	# merchant who never came.
-	var traded = _manager._market_store.market_for(settlement_id)
-	var trade_purse: float = 0.0 if traded == null else NpcEconomy.purse_of(traded)
+	# The SETTLEMENT purse: the persisted Market the merchant pays into and
+	# the one a villager's wage is now drawn from
+	# (NpcEconomy.bind_settlement_purse). These were two tanks sharing one
+	# name -- PURSE_META set on whichever market object was in hand -- so
+	# both are still reported, and the stale one must stay at zero.
+	var stale: float = 0.0 if village_market == null else NpcEconomy.purse_of(village_market)
+	var purse = _manager.settlement_purse_for(chunk_coord)
+	var settlement_purse: float = 0.0 if purse == null else NpcEconomy.purse_of(purse)
 	var broke := 0
 	var villagers := 0
 	for node in _manager._loaded_villages.get(chunk_coord, []):
@@ -184,8 +183,8 @@ func _purse_and_pockets(chunk_coord: Vector2i, settlement_id: String) -> String:
 		villagers += 1
 		if node.economy.wallet.balance < 1.0:
 			broke += 1
-	return "villagers' purse %.1f gold | merchant's purse %.1f gold | %d of %d villagers broke" % [
-		purse, trade_purse, broke, villagers
+	return "settlement purse %.1f gold (stale tank %.1f) | %d of %d villagers broke" % [
+		settlement_purse, stale, broke, villagers
 	]
 
 

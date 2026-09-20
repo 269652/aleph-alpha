@@ -15,18 +15,23 @@ extends RefCounted
 
 const SagewerkProduction = preload("res://src/world/sagewerk_production.gd")
 const ConstructionCatchup = preload("res://src/world/construction_catchup.gd")
+const NpcProduction = preload("res://src/world/npc_production.gd")
+const VillageFarm = preload("res://src/gameplay/village_farm.gd")
+const SettlementGathering = preload("res://src/emergence/settlement_gathering.gd")
+const HuntableQuarry = preload("res://src/gameplay/huntable_quarry.gd")
 
-## What a village makes and a merchant can carry away. Everything here is a
-## real output of a producer occupation (NpcProduction), of butchering, or
-## of the sawmill's own chain -- nothing the village cannot make, and
-## nothing it makes that he refuses.
-const BUY_LIST: Array[String] = ["beam", "plank", "hide", "wood", "fish", "meat", "fruit"]
+## The raw timber a woodcutter fells. Not in any producer map -- it comes
+## off a tree (ChoppableTree) -- and it is what the sawmill's whole chain
+## is priced from (CraftingRecipeBook's log_to_balken/log_to_planke).
+const RAW_TIMBER := "log"
 
-## The base timber unit every sawn price is derived from, and the cheapest
-## thing on the list.
+## The base unit every other price is derived from: one raw log at the farm
+## gate, the cheapest thing a village can sell.
 const LOG_PRICE := 1
 
-## Farm-gate prices, in whole gold per unit.
+## What a merchant pays for goods that have had WORK put into them or that
+## KEEP and travel -- the doc's own grounding, *"Hide, salted meat, dried
+## fish and sawn timber keep and are worth carrying"*.
 ##
 ## This project refuses to invent item values -- Shop's own comment says
 ## "CATALOG is the only place in the game an item has a price at all, and
@@ -39,20 +44,21 @@ const LOG_PRICE := 1
 ## - `beam` is LOG_COST_PER_BEAM / LOG_COST_PER_PLANK times a plank --
 ##   the sawmill's OWN conversion rate (3 logs to a Balken, 1 to a Planke),
 ##   so sawn timber is worth exactly what its logs were worth.
-## - raw food sits UNDER VillageMarket.VILLAGE_LOCAL_FOOD_PRICE (what a
-##   villager pays for a meal of it) and under Shop.CATALOG's prepared
-##   cooked_meat: preparing food is what adds the value, and the merchant's
-##   margin is his reason to walk the circuit at all.
 ## - `hide` is a by-product that keeps and travels, so it is worth more
 ##   than food that spoils and less than worked timber.
-const FARM_GATE_PRICES := {
+##
+## Everything NOT here is raw produce and prices at LOG_PRICE, which is the
+## rule the old hand-written table already followed without saying so --
+## wood, fish, meat and fruit were every one of them LOG_PRICE. Stating it
+## means a new crop needs no new number, and raw food still sits UNDER
+## VillageMarket.VILLAGE_LOCAL_FOOD_PRICE (what a villager pays for a meal
+## of it) and under Shop.CATALOG's prepared cooked_meat: preparing food is
+## what adds the value, and the merchant's margin is his reason to walk the
+## circuit at all.
+const KEEPING_GOOD_PRICES := {
 	"beam": LOG_PRICE * 2 * int(SagewerkProduction.LOG_COST_PER_BEAM / SagewerkProduction.LOG_COST_PER_PLANK),
 	"plank": LOG_PRICE * 2,
-	"hide": LOG_PRICE * 2,
-	"wood": LOG_PRICE,
-	"fish": LOG_PRICE,
-	"meat": LOG_PRICE,
-	"fruit": LOG_PRICE,
+	HuntableQuarry.HIDE_ITEM_ID: LOG_PRICE * 2,
 }
 
 ## How much a merchant can carry away in one visit, in whole units. Finite
@@ -70,17 +76,82 @@ const SURPLUS_DRAW := 1.5
 const SURPLUS_FOR_FULL_DRAW := float(CART_CAPACITY) * 2.0
 
 
+## Everything a village's own producers really put into its stock, read off
+## the producers' OWN maps rather than named again here.
+##
+## This is the whole fix. The buy list used to be a hand-written const, and
+## a village kept growing past it: a herbalist's crop, a farmer's wheat,
+## gathered stone and plant fibre all arrived after it was written and none
+## was ever added to it. Measured (tools/probe_village_purse.gd) on a real
+## village after 1200 simulated seconds, ONE of the nine ids it was holding
+## was sellable and all ten of those units were reserved for its own next
+## house -- so both purses read 0.0 gold and 8 of 8 villagers were broke. A
+## merchant is the ONLY faucet gold has (see the doc's "the merchant is the
+## ONLY faucet"), so a village that makes nothing he buys has no income at
+## all, ever.
+##
+## A second list of the same facts can only ever drift from the first. This
+## one cannot: add an occupation, a crop or a gathered material and it is
+## sellable the same day it exists.
+static func village_produce() -> Array[String]:
+	var ids: Array[String] = Array([], TYPE_STRING, "", null)
+	for occupation in NpcProduction.PRODUCER_ITEM_BY_OCCUPATION:
+		var item_id := String(NpcProduction.PRODUCER_ITEM_BY_OCCUPATION[occupation])
+		if item_id != "" and not ids.has(item_id):
+			ids.append(item_id)
+	for occupation in VillageFarm.CROP_BY_OCCUPATION:
+		var crop_id := String(VillageFarm.CROP_BY_OCCUPATION[occupation])
+		if crop_id != "" and not ids.has(crop_id):
+			ids.append(crop_id)
+	for gathered_id in SettlementGathering.gathered_item_ids():
+		if not ids.has(gathered_id):
+			ids.append(gathered_id)
+	return ids
+
+
+## Computed once: the walk above touches four maps, and this is read inside
+## every price lookup.
+static var _buy_list_cache: Array[String] = Array([], TYPE_STRING, "", null)
+
+
+## What a village makes and a merchant can carry away: everything its
+## producers make, the raw timber it fells, and the worked goods and
+## by-products it makes from those.
+##
+## Sorted so the order is deterministic rather than dependent on Dictionary
+## iteration -- `purchase` below fills the cart by price and then by id.
+static func buy_list() -> Array[String]:
+	if not _buy_list_cache.is_empty():
+		return _buy_list_cache
+	var ids := village_produce()
+	if not ids.has(RAW_TIMBER):
+		ids.append(RAW_TIMBER)
+	for item_id in KEEPING_GOOD_PRICES:
+		var worked_id := String(item_id)
+		if not ids.has(worked_id):
+			ids.append(worked_id)
+	ids.sort()
+	_buy_list_cache = ids
+	return _buy_list_cache
+
+
 ## What `item_id` fetches at the farm gate; 0 for anything he does not deal
-## in, which is a real answer rather than a stub (see FARM_GATE_PRICES).
+## in, which is a real answer rather than a stub. Goods that keep have their
+## own derived price; everything else a village makes is raw produce at the
+## base unit (see KEEPING_GOOD_PRICES).
 static func price_of(item_id: String) -> int:
-	return int(FARM_GATE_PRICES.get(item_id, 0))
+	if KEEPING_GOOD_PRICES.has(item_id):
+		return int(KEEPING_GOOD_PRICES[item_id])
+	if buy_list().has(item_id):
+		return LOG_PRICE
+	return 0
 
 
 ## How many whole units of sellable goods a settlement is holding -- what
 ## decides both whether a merchant comes at all and how soon.
 static func sellable_units(stock: Dictionary, reserved: Dictionary = {}) -> int:
 	var total := 0
-	for item_id in BUY_LIST:
+	for item_id in buy_list():
 		total += _surplus_of(stock, reserved, item_id)
 	return total
 
@@ -136,7 +207,7 @@ static func arrivals(
 ## not one house for any of them.
 static func purchase(stock: Dictionary, reserved: Dictionary = {}) -> Dictionary:
 	var order: Array = []
-	for item_id in BUY_LIST:
+	for item_id in buy_list():
 		var available := _surplus_of(stock, reserved, item_id)
 		if available > 0:
 			order.append([-price_of(item_id), item_id, available])

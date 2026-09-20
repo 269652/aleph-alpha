@@ -368,7 +368,8 @@ func spawn_village(
 			door_positions[i] + Vector2(0, _WORKSPOT_OFFSET_TILES * tile_size), tile_size, world, false
 		)
 		var npc_marker := _build_npc(
-			settlement, i, door_positions[i], workspot, tile_size, parent, world, market, warehouse_door
+			settlement, i, door_positions[i], workspot, tile_size, parent, world, market,
+			warehouse_door, _settlement_purse_for(world, chunk_coord)
 		)
 		# Which village they belong to, so a death reaches the right roster
 		# (docs/concept/village_mortality.md mechanism 2). Set here rather
@@ -539,7 +540,8 @@ func reconcile_villagers(
 			home + Vector2(0, _WORKSPOT_OFFSET_TILES * tile_size), tile_size, world, false
 		)
 		var newcomer := _build_npc(
-			settlement, i, home, workspot, tile_size, parent, world, market, warehouse_door
+			settlement, i, home, workspot, tile_size, parent, world, market,
+			warehouse_door, _settlement_purse_for(world, chunk_coord)
 		)
 		newcomer.settlement_id = EntityRef.for_settlement(chunk_coord)
 		standing.append(newcomer)
@@ -2351,9 +2353,21 @@ func _landmark_texture(
 ## somewhere it could actually have walked to. `world` is forwarded into
 ## NpcMarker.setup so villagers are water-aware (swim animation) exactly
 ## like the player and wild creatures.
+## The settlement purse a villager spawned into `chunk_coord` draws their
+## subsistence wage from (EarthChunkManager.settlement_purse_for): the
+## PERSISTED Market a merchant really pays into, not the live VillageMarket
+## whose meta the wage used to read. Duck-typed like every other world read
+## here, so a renderer given no world simply binds nothing.
+func _settlement_purse_for(world, chunk_coord: Vector2i):
+	if world == null or not world.has_method("settlement_purse_for"):
+		return null
+	return world.settlement_purse_for(chunk_coord)
+
+
 func _build_npc(
 	settlement: Dictionary, index: int, home_position: Vector2, workspot, tile_size: int,
-	parent: Node2D, world = null, market = null, warehouse_door = null
+	parent: Node2D, world = null, market = null, warehouse_door = null,
+	settlement_purse = null
 ) -> NpcMarker:
 	var identity = settlement.npcs[index]
 
@@ -2378,7 +2392,13 @@ func _build_npc(
 			world.household_wallet_for_villager(identity.seed_value)
 			if world != null and world.has_method("household_wallet_for_villager") else null
 		)
-		marker.setup_economy(market, household_wallet)
+		# ...and the settlement's own purse, which is NOT this market: the
+		# merchant pays into the persisted one, and reading the wage off
+		# the VillageMarket's meta meant a village could be paid and still
+		# starve (see NpcEconomy.bind_settlement_purse). Handed in by the
+		# caller, for the same reason settlement_id is -- that is where
+		# chunk_coord is.
+		marker.setup_economy(market, household_wallet, settlement_purse)
 
 	# Villagers use the SAME CharacterView the player does, rather than a
 	# hand-assembled torso-plus-head. Sharing the view means body

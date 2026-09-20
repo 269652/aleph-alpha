@@ -108,7 +108,7 @@ func _report_the_merchant(settlement_id: String) -> void:
 		if units <= 0:
 			continue
 		var kind: String = catalog.kind_of(item_id)
-		var buys: bool = MerchantVisit.BUY_LIST.has(item_id)
+		var buys: bool = MerchantVisit.buy_list().has(item_id)
 		if buys:
 			on_list += units
 		if kind == "food":
@@ -152,13 +152,27 @@ func _sample() -> void:
 			elapsed += SLICE
 
 		var village_market = SettlementFood.village_market_for(settlement_id, _manager._loaded_villages)
-		var traded = _manager._market_store.market_for(settlement_id)
+		var purse = _manager.settlement_purse_for(chunk_coord)
 		_lines.append("  after %.0f simulated seconds:" % elapsed)
-		_lines.append("    villagers' purse %.1f gold" % (
+		# The one tank: what the merchant pays into IS what the wage draws
+		# from (NpcEconomy.bind_settlement_purse). The VillageMarket's own
+		# meta is the tank that used to hold it, and must now stay empty.
+		_lines.append("    settlement purse %.1f gold" % (
+			0.0 if purse == null else NpcEconomy.purse_of(purse)
+		))
+		_lines.append("    stale tank      %.1f gold" % (
 			0.0 if village_market == null else NpcEconomy.purse_of(village_market)
 		))
-		_lines.append("    merchant's purse %.1f gold" % (
-			0.0 if traded == null else NpcEconomy.purse_of(traded)
-		))
+		var broke := 0
+		var villagers := 0
+		for node in _manager._loaded_villages.get(chunk_coord, []):
+			if not is_instance_valid(node) or not node.has_method("setup_economy"):
+				continue
+			if node.economy == null or node.economy.wallet == null:
+				continue
+			villagers += 1
+			if node.economy.wallet.balance < 1.0:
+				broke += 1
+		_lines.append("    %d of %d villagers broke" % [broke, villagers])
 		_report_the_merchant(settlement_id)
 		return

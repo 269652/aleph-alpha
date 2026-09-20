@@ -84,7 +84,7 @@ const STRIKE_DISTANCE_PX := 4.0
 
 ## What the hide off a kill is called. Butchering.PART_ORDER's own first
 ## entry -- the part a real cut takes off first, and an id ItemCatalog and
-## MerchantVisit.BUY_LIST already both know -- rather than a second string
+## MerchantVisit.buy_list() already both know -- rather than a second string
 ## that a rename could leave disagreeing with it. Test-pinned
 ## (test_the_hide_is_butcherings_own_first_part).
 const HIDE_ITEM_ID := "hide"
@@ -173,7 +173,7 @@ static func _mass_ratio_of(candidate, info) -> float:
 ## a smaller one.
 ##
 ## Unlike meat this is not food and no villager buys one; it reaches the
-## village market so that a travelling cart can (MerchantVisit.BUY_LIST has
+## village market so that a travelling cart can (MerchantVisit.buy_list() has
 ## bought hides since it was written, and until a hunter took one, no hide
 ## ever reached a village market for a cart to find).
 ##

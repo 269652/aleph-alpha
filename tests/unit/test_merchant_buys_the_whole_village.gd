@@ -158,3 +158,39 @@ func test_the_larder_still_leaves_the_farmhouse_out():
 			if catalog.kind_of(String(item_id)) == "food":
 				larder += int(stock.stock[item_id])
 	assert_eq(larder, 0, "a farmhouse is where a harvest waits for the carter")
+
+
+# -- the gold lands where the village actually spends from ----------------
+#
+# _step_merchant_visits pays into the settlement's PERSISTED Market, and
+# NpcEconomy._draw_subsistence_wage read the VillageMarket's own meta.
+# PURSE_META is set on whichever market OBJECT is in hand, so those were
+# two tanks sharing one name.
+
+const NpcEconomy = preload("res://src/world/npc_economy.gd")
+
+
+## The accessor a villager is bound to must see the merchant's own coin.
+func test_the_purse_a_villager_draws_from_is_the_one_the_merchant_pays_into():
+	var settlement_id: String = manager.EntityRef.for_settlement(_chunk_coord)
+	var paid_into = manager._market_store.market_for(settlement_id)
+	NpcEconomy.deposit_to_purse(paid_into, 25.0)
+	assert_almost_eq(
+		NpcEconomy.purse_of(manager.settlement_purse_for(_chunk_coord)), 25.0, 0.0001,
+		"a village was paid and cannot spend it"
+	)
+
+
+## ...and a villager really is bound to it when one is stood up.
+func test_a_spawned_villager_is_bound_to_the_settlements_purse():
+	var source := FileAccess.get_file_as_string("res://src/rendering/village_renderer.gd")
+	assert_true(
+		source.contains("settlement_purse_for("),
+		"VillageRenderer must resolve the settlement's own purse"
+	)
+	var setup_at := source.find("setup_economy(")
+	assert_gt(setup_at, -1, "the premise: villagers still get an economy")
+	assert_true(
+		source.substr(setup_at, 120).contains("purse"),
+		"...and it is handed to the economy it funds"
+	)

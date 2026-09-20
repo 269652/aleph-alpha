@@ -5358,6 +5358,20 @@ func place_building_over_roads(
 ## NpcEconomy.bind_household_wallet) -- without it a villager's whole
 ## working life is kept in a wallet that dies with the chunk, which is
 ## exactly why every villager read 0 gold however long they had worked.
+## The settlement purse a villager standing in `chunk_coord` draws their
+## subsistence wage from (see NpcEconomy.bind_settlement_purse): the
+## settlement's PERSISTED Market, which is the very object
+## _step_merchant_visits pays the merchant's gold into.
+##
+## The wage used to read the live VillageMarket's own meta instead, and
+## PURSE_META is set on whichever market object is in hand -- so the gold a
+## village earned and the gold it could spend were two different tanks
+## sharing one name. Resolved here, beside household_wallet_for_villager,
+## because this is the object that knows which settlement a chunk is.
+func settlement_purse_for(chunk_coord: Vector2i):
+	return _market_store.market_for(EntityRef.for_settlement(chunk_coord))
+
+
 func household_wallet_for_villager(villager_seed: int):
 	var household = _household_store.household_for(EntityRef.for_npc(villager_seed))
 	return null if household == null else household.wallet

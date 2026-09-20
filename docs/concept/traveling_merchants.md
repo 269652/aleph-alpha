@@ -179,6 +179,97 @@ containers, one eater" question
 open. It says only that the merchant reads all of them, which is what makes
 the gold faucet reach the goods a village actually has.
 
+## Mechanism — he buys what the village actually makes
+
+Design pillar 3 above states it plainly: *"Nothing on the buy list is an
+item the village cannot make, and nothing the village makes is
+unsellable."* It was not true, and it had not been true for a long time.
+
+`BUY_LIST` was a hand-written const — `beam, plank, hide, wood, fish, meat,
+fruit` — and a village kept growing past it. A herbalist's crop, a farmer's
+wheat, gathered stone and plant fibre, and the raw log a woodcutter fells
+all arrived in the game **after** that line was written, and not one of
+them was ever added to it.
+
+Measured (`tools/probe_village_purse.gd`) standing exactly where
+`_step_merchant_visits` stands, on a real village after 1200 simulated
+seconds:
+
+| item | units | kind | the merchant |
+|---|---:|---|---|
+| `herb` | 117 | food | **refuses** |
+| `log` | 24 | material | **refuses** |
+| `bucket` | 13 | tool | refuses (not produce) |
+| `wood` | 10 | material | buys @1 |
+| `wheat` | 5 | material | **refuses** |
+| `stone` | 5 | material | **refuses** |
+| `plant_fibre` | 1 | material | **refuses** |
+
+One of nine ids was sellable, and all ten of those units were reserved for
+the village's own next house — so `sellable_units` came out at **0**, no
+visit ever accrued past 0.021 of one, and the purse read **0.0 gold with 8
+of 8 villagers broke**. A merchant is the only faucet gold has, so a
+village that makes nothing he buys has no income at all, ever. That is the
+literal shape of the original report: *"all villagers have 0 gold"*.
+
+The rule:
+
+> The buy list is **derived from what a village's own producers make**, not
+> named a second time. A second list of the same facts is free to drift
+> from the first, and this one did.
+
+`MerchantVisit.village_produce()` reads the producers' own maps —
+`NpcProduction.PRODUCER_ITEM_BY_OCCUPATION` (a farmer's, hunter's and
+fisher's take), `VillageFarm.CROP_BY_OCCUPATION` (what a farmer and a
+herbalist grow), `SettlementGathering.gathered_item_ids()` (what spare
+hands gather) — and `buy_list()` is that plus the raw timber a woodcutter
+fells and the worked goods a village makes from those. Add an occupation, a
+crop or a gathered material and it is sellable the same day it exists.
+
+Prices follow the same discipline. The old table had four separate entries
+all reading `LOG_PRICE`, which was an unstated rule rather than four
+numbers; it is now stated once. Goods that have had **work** put into them
+or that **keep and travel** — sawn `plank` and `beam`, and `hide` — carry
+their own derived price in `KEEPING_GOOD_PRICES`. Everything else a village
+makes is raw produce at `LOG_PRICE`, one raw log at the farm gate. So a new
+crop needs no new number, and the existing pins hold: raw food still sits
+under `VillageMarket.VILLAGE_LOCAL_FOOD_PRICE` and under `Shop.CATALOG`'s
+prepared `cooked_meat`, and sawn timber is still worth exactly what its
+logs were worth.
+
+## Mechanism — one purse, and it is the persisted one
+
+`NpcEconomy.PURSE_META` is set on whichever **market object** is in hand,
+and a settlement has two of them:
+
+| object | what it is | who touched the purse |
+|---|---|---|
+| `Market` (`MarketStore.market_for`) | the persisted, per-settlement ledger | `_step_merchant_visits` **paid into it** |
+| `VillageMarket` | the live stall, rebuilt on every chunk load | `_draw_subsistence_wage` **drew from it** |
+
+Two tanks sharing one name. Every coin the merchant paid landed where
+nobody could spend it, and every wage was drawn from a tank nothing ever
+filled. The suite did not catch it because its own fixture
+(`_fund_village_as_a_merchant_would`) deposited into the `VillageMarket` —
+the test was more correct than the wiring.
+
+Measured on the real village above, **both** read `0.0`, which is why this
+was not the cause of that famine — only the next thing that would have
+been, the moment the buy list was fixed.
+
+The purse belongs on the **persisted** Market, for the same reason
+`bind_household_wallet` exists at all: a `VillageMarket` is rebuilt from
+scratch on every chunk load, so a purse kept there dies with the chunk —
+*"a villager's whole working life evaporated the moment the player walked
+away"*. A merchant can also visit a settlement whose chunk is not loaded,
+and his gold has to land somewhere that still exists when it is.
+
+`NpcEconomy.bind_settlement_purse` is that binding, resolved by
+`EarthChunkManager.settlement_purse_for` and wired through
+`NpcMarker.setup_economy` / `VillageRenderer` — exactly the path the
+household wallet already takes. Passing null is a no-op, so a bare
+`NpcEconomy` keeps its market's own meta and nothing in a test changes.
+
 ## Mechanism — the merchant is the ONLY faucet
 
 Asked directly: *"Gold should only be conjured by the travelling
@@ -278,15 +369,39 @@ built:
   `Butchering.HIDE_COUNT` into the village market, deliberately unpaid at
   the kill, precisely so the cart is what a hide is worth anything to (see
   [npc.md](npc.md#work-against-the-real-world-not-against-a-number)).
-- 🚧 **The gold faucet is narrowed, not closed.** A producer is still paid
-  `NpcProduction.YIELD_TO_GOLD_RATE` per food unit the instant it is
-  gathered or taken, whether or not a cart ever buys it — the faucet this
-  doc exists to make honest. What changed is that a second, real income
-  path now exists beside it and that the one good with no local buyer
-  (hide) goes through the cart alone. Making food income conditional on an
-  actual sale is the next slice, and it needs a village to survive the gap
-  between visits first (a granary, or a purse deep enough to ride out a
-  bad week).
+- ✅ **The faucet is closed** (2026-09-20). `NpcEconomy._earn` is gone and
+  `_collect_estate_tax` debits what it credits, so the merchant really is
+  the only place gold enters a settlement (see "the merchant is the ONLY
+  faucet" above). `NpcProduction.YIELD_TO_GOLD_RATE` still exists as a
+  constant but no longer mints: a producer draws from the purse through the
+  same `_draw_subsistence_wage` every other villager uses. Guarded by
+  `test_gold_has_one_faucet.gd`, which scans the source so a new caller of
+  `_set_purse` cannot quietly reopen it.
+- ✅ **He buys what the village actually makes** (2026-09-20). `BUY_LIST`
+  was a hand-written const that a growing game outgrew — `herb`, `wheat`,
+  `log`, `stone` and `plant_fibre` were all unsellable, which on a real
+  measured village left exactly one sellable id and a purse of 0.0 gold
+  with 8 of 8 villagers broke. `MerchantVisit.buy_list()` is now derived
+  from the producers' own maps (`village_produce()`), and prices are one
+  stated rule rather than a table: goods that keep carry their own derived
+  price, everything else a village makes is raw produce at `LOG_PRICE`.
+  Pinned by `test_merchant_visit.gd`'s
+  `test_everything_a_villages_own_producers_make_is_sellable`, which reads
+  the producer maps directly, so a new crop or occupation cannot be
+  silently unsellable again.
+- ✅ **One purse, and it is the persisted one** (2026-09-20). The merchant
+  paid into the settlement's persisted `Market` while the subsistence wage
+  drew from the live `VillageMarket`'s own meta — two tanks sharing one
+  name. `NpcEconomy.bind_settlement_purse`, resolved by
+  `EarthChunkManager.settlement_purse_for` and wired through
+  `NpcMarker.setup_economy` / `VillageRenderer`, makes them one, on the
+  object that survives the chunk unloading. Tested in
+  `test_npc_economy.gd` and `test_merchant_buys_the_whole_village.gd`.
+- 🚧 **Food income is still not conditional on a sale.** A producer's take
+  reaches the village as GOODS and is paid for only when a cart buys it,
+  which is the honest loop — but a village still has to survive the gap
+  between visits, and the granary/purse depth that makes a bad week
+  survivable is not designed yet.
 - ⬜ Everything else in this doc is specified here first and implemented in
   the slices that follow; each entry moves to ✅/🚧 as it lands, and
   [progress.md](../progress.md) carries the ledger.

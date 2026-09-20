@@ -404,7 +404,7 @@ func test_the_frame_after_a_kill_already_knows_the_next_deer_is_there():
 
 
 func test_a_kill_puts_a_real_hide_in_the_village_market():
-	# MerchantVisit.BUY_LIST has bought hides since it was written; until
+	# MerchantVisit.buy_list() has bought hides since it was written; until
 	# now no hide ever reached a village market for a cart to buy.
 	var deer := _creature_at(Vector2(-20.0, 0.0))
 	_hunt_until_dead(deer)
@@ -414,7 +414,7 @@ func test_a_kill_puts_a_real_hide_in_the_village_market():
 
 
 func test_a_travelling_cart_is_willing_to_buy_that_hide():
-	assert_true(MerchantVisit.BUY_LIST.has(HuntableQuarry.HIDE_ITEM_ID))
+	assert_true(MerchantVisit.buy_list().has(HuntableQuarry.HIDE_ITEM_ID))
 
 
 func test_a_marker_outside_the_tree_hunts_nothing_rather_than_crashing():
