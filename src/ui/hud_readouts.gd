@@ -27,6 +27,12 @@ const SOLAR_NOON_HOUR := 12
 ## How many lines each card carries. The cards are built with exactly this many
 ## Labels, so a readout that grew a line without the card growing one would
 ## silently drop it on the floor.
+## Engine.get_frames_per_second() reads 0 on the very first frame, before
+## any frame has been timed. A card saying "0 FPS" then would be wrong
+## rather than merely early, so 0 means "not measured yet" and the reading
+## is simply left off until there is one.
+const UNKNOWN_FPS := 0
+
 const WORLD_CLOCK_LINE_COUNT := 3
 const DIAGNOSTICS_LINE_COUNT := 3
 
@@ -52,14 +58,22 @@ static func world_clock_lines(
 	season: String,
 	weather: String,
 	movement_mode: String,
-	speed_multiplier: float
+	speed_multiplier: float,
+	frames_per_second: int = UNKNOWN_FPS
 ) -> PackedStringArray:
+	# FPS SHARES the movement line rather than adding a fourth: this card's
+	# own contract is that no line ever appears or disappears, so it never
+	# resizes under the player's eye. Optional, so every pre-existing
+	# 7-argument caller and fixture is untouched.
+	var movement := "%s · %d%%" % [movement_mode.capitalize(), roundi(speed_multiplier * 100.0)]
+	if frames_per_second > UNKNOWN_FPS:
+		movement += "  ·  %d FPS" % frames_per_second
 	return PackedStringArray(
 		[
 			# Zero-padded so the card keeps its width as the hour ticks over.
 			"%02d:%02d · %s" % [local_hour, local_minute, phase],
 			"%s · %s" % [season, weather],
-			"%s · %d%%" % [movement_mode.capitalize(), roundi(speed_multiplier * 100.0)],
+			movement,
 		]
 	)
 

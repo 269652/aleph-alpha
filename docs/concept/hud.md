@@ -486,6 +486,39 @@ which is exactly when you are not thinking to press F3.
 
 ## Status
 
+- ✅ **The settlement card** (`src/ui/settlement_readout.gd`, 17 tests) —
+  pure model, thin Node: facts in, strings out, so a city's rows are
+  testable without founding one. `EarthChunkManager.settlement_readout_at`
+  is the gatherer, returning `{}` where there is no settlement, which is
+  the whole of "context dependent". Verified with a real render at both
+  ends (`tools/probe_hud_layout.gd`): filled as a city in `busy`, and
+  **gone rather than blank** in `calm`.
+- ✅ Happiness is the households' mean **happiness**, not their mean
+  **productivity**. `HouseholdWellbeing` keeps the two apart on purpose —
+  productivity is happiness dragged down by hunger, because a household
+  with a beautiful town and an empty stomach does not work well — so a row
+  labelled happiness that reported the work rate would answer a different
+  question than it asks.
+- ✅ Food reads as **carrying capacity** (`SettlementFood.carrying_capacity`,
+  "feeds 17 of 12"), the number the simulation already assesses a
+  settlement by, rather than a raw stock figure invented for this card.
+- ✅ **FPS is back on the always-on clock card**, sharing the movement line
+  so the card's fixed three-line height is unchanged. `UNKNOWN_FPS` (0)
+  leaves the reading off entirely on the first frame, before anything has
+  been measured, rather than claiming 0.
+- ⬜ **FPS now appears twice while F3 is open** — once on the clock card and
+  once in the diagnostics strip. Harmless, and left alone deliberately:
+  removing it from the strip would shrink `DIAGNOSTICS_LINE_COUNT` and
+  rewrite a contract this request never asked about.
+- ⬜ The card is read-only. It reports what a settlement is doing and offers
+  no way to act on it — no way to see WHICH household is unhoused, or to
+  act on the worst need it names.
+- ⬜ Nothing is shown for a settlement whose chunk is not loaded, because
+  the purse and the village market are only reachable while it is. A
+  player cannot check on a town from the next valley.
+
+
+
 - ✅ **One shared message stack** — `World._build_message_stack` /
   `_make_message_banner` / `_set_message_banner`; order pinned by
   `message_banner_lines`, tested (`test_world_hud.gd`).
