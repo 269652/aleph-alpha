@@ -14961,6 +14961,29 @@ func _drinkers_in_house(record: Dictionary) -> int:
 	return 1 if lived_in else 0
 
 
+## Which buildings hold a tank at all.
+##
+## A home, because the people in it drink -- and the FARMHOUSE, which
+## nobody lives in (its capacity is 0) but whose FIELD drinks out of it
+## (docs/concept/village_water.md mechanism 3). Deliberately a SEPARATE
+## rule from _drinkers_in_house below rather than a widening of it: a
+## farmhouse holds water and never swallows a mouthful of it, and folding
+## the two together would have a building with no residents drinking for
+## somebody who does not exist.
+func _holds_a_tank(record: Dictionary) -> bool:
+	var building_id := String(record.get("id", ""))
+	return (
+		BuildingCatalog.capacity_of(building_id) > 0
+		or building_id == VillageFarm.FARM_BUILDING_ID
+	)
+
+
+## Whether this building's tank is worked by a field rather than drunk
+## from -- the one distinction between the two kinds of tank there is.
+func _is_a_farmhouse(record: Dictionary) -> bool:
+	return String(record.get("id", "")) == VillageFarm.FARM_BUILDING_ID
+
+
 ## What is in this house's tank.
 ##
 ## A record with no tank yet -- every house raised before this existed --
@@ -14968,20 +14991,31 @@ func _drinkers_in_house(record: Dictionary) -> int:
 ## village does not wake up dry and send every household to the well at
 ## once on the morning it loads. That is the same crowd this whole feature
 ## exists to prevent, and a migration is exactly where it would come back.
-## 0.0 for anything that is not somebody's home.
+## 0.0 for anything that holds no tank.
 func house_water_at(record: Dictionary) -> float:
-	if BuildingCatalog.capacity_of(String(record.get("id", ""))) <= 0:
+	if not _holds_a_tank(record):
 		return 0.0
 	if not record.has(WATER_LITRES_KEY):
+		# Off the building's OWN floor: a farmhouse's trip comes sooner
+		# than a household's, so seeding it from the household's floor
+		# would raise a third of all farms already needing one.
+		if _is_a_farmhouse(record):
+			return HouseholdWater.farm_starting_level(int(record.get("seed", 0)))
 		return HouseholdWater.starting_level(int(record.get("seed", 0)))
 	return float(record[WATER_LITRES_KEY])
 
 
-## Whether this house must send somebody to the well.
+## Whether this building must send somebody to the well. A farmhouse is
+## sent sooner than a household is (HouseholdWater.farm_trip_is_due): a
+## field that stops being watered withers, where a household that runs low
+## is merely thirsty.
 func water_trip_due_at(record: Dictionary) -> bool:
-	if BuildingCatalog.capacity_of(String(record.get("id", ""))) <= 0:
+	if not _holds_a_tank(record):
 		return false
-	return HouseholdWater.trip_is_due(house_water_at(record))
+	var level := house_water_at(record)
+	if _is_a_farmhouse(record):
+		return HouseholdWater.farm_trip_is_due(level)
+	return HouseholdWater.trip_is_due(level)
 
 
 ## Every household in ONE chunk drinks for `days`.
@@ -15012,11 +15046,37 @@ func pour_bucket_into_house(chunk_coord: Vector2i, origin_local: Vector2i) -> bo
 	if chunk == null or not chunk.buildings.has(origin_local):
 		return false
 	var record: Dictionary = chunk.buildings[origin_local]
-	if BuildingCatalog.capacity_of(String(record.get("id", ""))) <= 0:
+	if not _holds_a_tank(record):
 		return false
 	record[WATER_LITRES_KEY] = HouseholdWater.poured_into(
 		house_water_at(record), HouseholdWater.BUCKET_LITRES
 	)
+	return true
+
+
+## A farmer waters a bed, and the farmhouse pays for it.
+##
+## `global_x/y` is any footprint cell of the farmhouse itself -- the same
+## "any cell answers" rule building_at_global already keeps, so a farmer
+## standing at the far corner of their own farmhouse is still at it.
+##
+## False, and NOTHING drawn, when there is no farmhouse there or its tank
+## is down to the household's own drinking reserve. That false is the
+## whole mechanism: it is what stops the field being watered, which is
+## what makes the trip to the well matter (see NpcMarker._work_field_cell).
+## A cottage never pays for crop water -- its tank is for the people in it.
+func draw_crop_water_at_global(global_x: int, global_y: int) -> bool:
+	var found := building_at_global(global_x, global_y)
+	if found.is_empty() or not _is_a_farmhouse(found):
+		return false
+	var chunk: Chunk = _loaded_chunks.get(found["chunk_coord"])
+	if chunk == null or not chunk.buildings.has(found["origin_local"]):
+		return false
+	var record: Dictionary = chunk.buildings[found["origin_local"]]
+	var level := house_water_at(record)
+	if not HouseholdWater.can_water_crops(level):
+		return false
+	record[WATER_LITRES_KEY] = HouseholdWater.level_after_tending(level)
 	return true
 
 

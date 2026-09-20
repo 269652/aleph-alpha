@@ -87,9 +87,15 @@ static func trip_is_due(level: float) -> bool:
 ## every household to the well before noon, which is exactly the crowd this
 ## feature exists to break up.
 static func starting_level(seed_value: int) -> float:
-	var lowest := TANK_LITRES * TRIP_THRESHOLD_SHARE
+	return _started_above(seed_value, TANK_LITRES * TRIP_THRESHOLD_SHARE)
+
+
+## The same stagger, seeded the same way, from a different floor -- so a
+## building whose trip comes sooner is not simply raised already needing
+## one. See farm_starting_level.
+static func _started_above(seed_value: int, lowest: float) -> float:
 	# 1..10000 rather than 0..9999, so the lowest possible start is still
-	# strictly above the threshold rather than exactly on it.
+	# strictly above the floor rather than exactly on it.
 	var steps := float((absi(hash("%d_water_start" % seed_value)) % 10000) + 1) / 10000.0
 	return lowest + (TANK_LITRES - lowest) * steps
 
@@ -145,3 +151,17 @@ static func level_after_tending(level: float) -> float:
 ## watered withers, where a household that runs low is merely thirsty.
 static func farm_trip_is_due(level: float) -> bool:
 	return spare_for_crops(level) < LITRES_PER_TENDING * TENDINGS_IN_HAND
+
+
+## What a FARMHOUSE has in it the day it is raised.
+##
+## The same anti-crowd stagger, off the same seed -- but floored at the
+## farm's OWN threshold rather than a household's. A farm seeded from
+## starting_level would be raised already needing a trip about a third of
+## the time (measured: seeds 3, 17 and 91 of the four in
+## test_earth_chunk_manager_household_water.gd), and two farms founded
+## together would then walk to the well together forever after. The whole
+## point of the stagger is that it is a property of the INITIAL
+## CONDITION, so getting the initial condition wrong loses all of it.
+static func farm_starting_level(seed_value: int) -> float:
+	return _started_above(seed_value, DRINKING_RESERVE_LITRES + LITRES_PER_TENDING * TENDINGS_IN_HAND)

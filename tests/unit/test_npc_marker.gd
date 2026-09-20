@@ -1441,3 +1441,191 @@ func test_a_villager_with_no_house_of_their_own_never_sets_out():
 	world.door_position = Vector2(50000, 50000)  # their house is nowhere near
 	marker._process(0.1)
 	assert_eq(marker.water_errand, WaterErrand.AT_HOME)
+
+
+# -- the farmhouse's own tank (docs/concept/village_water.md mechanism 3) ---
+#
+# Asked for directly: *"they then drink from their houses stock or use it to
+# water crops in case of a farmhouse"*. A farmhouse is nobody's home, so
+# nothing drinks there -- its tank is emptied by the FIELD. When it runs
+# down to the household's drinking reserve the beds stop being watered, and
+# that is what sends the farmer to the well for it.
+
+const VillageFarm = preload("res://src/gameplay/village_farm.gd")
+
+
+## A world with a cottage AND the farmhouse its farmer works, each with a
+## tank of its own that the test can run dry independently.
+class FarmingWorld:
+	extends StubWorld
+	var house_due := false
+	var farmhouse_due := false
+	var crop_water := true
+	var drawn := 0
+	var watered: Array = []
+	var poured: Array = []
+	var door_position := Vector2(1000, 1000)
+	var farmhouse_cell := Vector2i(200, 200)
+
+	const HOUSE_ORIGIN := Vector2i(4, 4)
+	const FARMHOUSE_ORIGIN := Vector2i(2, 2)
+
+	func building_door_near(pixel_position: Vector2, radius_tiles: float) -> Dictionary:
+		if pixel_position.distance_to(door_position) > radius_tiles * 16.0:
+			return {}
+		return {
+			"id": "house_small", "chunk_coord": Vector2i(0, 0),
+			"origin_local": HOUSE_ORIGIN, "seed": 7,
+		}
+
+	func building_at_global(global_x: int, global_y: int) -> Dictionary:
+		if Vector2i(global_x, global_y) != farmhouse_cell:
+			return {}
+		return {
+			"id": VillageFarm.FARM_BUILDING_ID, "chunk_coord": Vector2i(1, 1),
+			"origin_local": FARMHOUSE_ORIGIN, "seed": 9,
+		}
+
+	func water_trip_due_at(record: Dictionary) -> bool:
+		if String(record.get("id", "")) == VillageFarm.FARM_BUILDING_ID:
+			return farmhouse_due
+		return house_due
+
+	func pour_bucket_into_house(_chunk_coord: Vector2i, origin_local: Vector2i) -> bool:
+		poured.append(origin_local)
+		return true
+
+	func draw_crop_water_at_global(_global_x: int, _global_y: int) -> bool:
+		if not crop_water:
+			return false
+		drawn += 1
+		return true
+
+	func water_farm_plot_at_global(global_x: int, global_y: int) -> bool:
+		watered.append(Vector2i(global_x, global_y))
+		return true
+
+
+func _a_farmer_with_a_farmhouse() -> FarmingWorld:
+	var world := FarmingWorld.new()
+	world.door_position = marker.home_position
+	marker.setup(world, TILE_SIZE)
+	marker.set_planner(FixedPlanner.new([
+		{"time_block": "morning", "location_tag": "home", "activity": "idle"},
+		{"time_block": "midday", "location_tag": "home", "activity": "idle"},
+		{"time_block": "evening", "location_tag": "home", "activity": "idle"},
+		{"time_block": "night", "location_tag": "home", "activity": "idle"},
+	]))
+	marker.field_cells = [world.farmhouse_cell + Vector2i(1, 1), world.farmhouse_cell + Vector2i(2, 1)]
+	marker.stock_building_cell = world.farmhouse_cell
+	return world
+
+
+## Stands the villager on each leg's own target so the test is about the
+## ERRAND rather than about walking speed.
+func _walk_the_farm_errand(world: FarmingWorld, steps: int = 12) -> void:
+	for i in steps:
+		marker.position = marker._resolve_location(
+			WaterErrand.location_tag_for(marker.water_errand)
+		)
+		marker._process(0.1)
+		if marker.water_errand == WaterErrand.AT_HOME and not world.poured.is_empty():
+			return
+
+
+# -- the field is billed to the farmhouse -----------------------------------
+
+func test_watering_the_beds_is_paid_for_out_of_the_farmhouse_tank():
+	var world := _a_farmer_with_a_farmhouse()
+	marker._field_index = 0
+	marker._work_field_cell()
+	assert_eq(world.drawn, 1, "a visit to the beds cost the farmhouse nothing")
+	assert_false(world.watered.is_empty(), "the beds never got wet")
+
+
+func test_a_farmhouse_down_to_its_reserve_stops_the_beds_being_watered():
+	var world := _a_farmer_with_a_farmhouse()
+	world.crop_water = false
+	marker._field_index = 0
+	marker._work_field_cell()
+	assert_true(
+		world.watered.is_empty(),
+		"the field drank water the farmhouse did not have"
+	)
+
+
+## A farmer with no farmhouse of their own -- a village that has not raised
+## one -- keeps the free drip they always had. There is no tank to bill it
+## to, and failing CLOSED here would kill every such field on this commit.
+func test_a_farmer_with_no_farmhouse_still_waters_their_beds():
+	var world := _a_farmer_with_a_farmhouse()
+	world.crop_water = false
+	marker.stock_building_cell = NpcMarker.NO_STOCK_BUILDING
+	marker._field_index = 0
+	marker._work_field_cell()
+	assert_false(world.watered.is_empty())
+
+
+# -- so somebody fetches water for the farmhouse too ------------------------
+
+func test_a_farmer_sets_out_when_the_farmhouse_tank_is_low():
+	var world := _a_farmer_with_a_farmhouse()
+	world.farmhouse_due = true
+	marker._process(0.1)
+	assert_eq(marker.water_errand, WaterErrand.TO_WELL)
+	assert_eq(marker.carried_item(), WaterErrand.BUCKET_EMPTY)
+
+
+func test_the_bucket_for_the_field_is_carried_to_the_farmhouse_not_the_cottage():
+	var world := _a_farmer_with_a_farmhouse()
+	world.farmhouse_due = true
+	_walk_the_farm_errand(world)
+	assert_eq(world.poured, [FarmingWorld.FARMHOUSE_ORIGIN])
+
+
+func test_the_walk_home_with_a_full_bucket_ends_at_the_farmhouse():
+	var world := _a_farmer_with_a_farmhouse()
+	world.farmhouse_due = true
+	for i in 4:
+		marker.position = marker._resolve_location(
+			WaterErrand.location_tag_for(marker.water_errand)
+		)
+		marker._process(0.1)
+		if marker.carried_item() == WaterErrand.BUCKET_FULL:
+			break
+	assert_eq(marker.carried_item(), WaterErrand.BUCKET_FULL, "precondition: they filled the bucket")
+	assert_eq(
+		marker._resolve_location(marker.current_location_tag()),
+		marker._cell_centre(world.farmhouse_cell),
+		"a full bucket for the field was carried to the villager's own doorstep instead"
+	)
+
+
+## People before plants -- the same order the drinking reserve keeps.
+func test_their_own_house_is_served_before_the_field():
+	var world := _a_farmer_with_a_farmhouse()
+	world.house_due = true
+	world.farmhouse_due = true
+	_walk_the_farm_errand(world)
+	assert_eq(world.poured, [FarmingWorld.HOUSE_ORIGIN])
+
+
+## An errand is a thing somebody is in the MIDDLE of: whichever building
+## sent them is the building the bucket comes back to, however the other
+## one's tank changes while they walk.
+func test_a_villager_does_not_change_their_mind_halfway_across_the_square():
+	var world := _a_farmer_with_a_farmhouse()
+	world.farmhouse_due = true
+	marker._process(0.1)
+	assert_true(WaterErrand.is_running(marker.water_errand), "precondition: they set out")
+	world.house_due = true
+	_walk_the_farm_errand(world)
+	assert_eq(world.poured, [FarmingWorld.FARMHOUSE_ORIGIN])
+
+
+func test_a_villager_with_no_farmhouse_is_never_sent_for_one():
+	var world := _a_farmer_with_a_farmhouse()
+	world.farmhouse_due = true
+	marker.stock_building_cell = NpcMarker.NO_STOCK_BUILDING
+	marker._process(0.1)
+	assert_eq(marker.water_errand, WaterErrand.AT_HOME)

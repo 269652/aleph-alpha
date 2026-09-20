@@ -260,6 +260,50 @@ func _tendings_from(level: float) -> int:
 	return tendings
 
 
+## A FARMHOUSE stands in exactly the same crowd problem, and has to be
+## staggered by the same mechanism -- but off its own threshold, which is
+## higher than a household's. Seeded from the plain starting level it would
+## be raised already needing a trip about a third of the time, and two
+## farms founded together would go to the well together forever after.
+
+func test_a_new_farmhouse_starts_with_water_in_it():
+	for seed_value in _seeds(50):
+		assert_gt(HouseholdWater.farm_starting_level(seed_value), 0.0)
+
+
+func test_a_new_farmhouse_never_starts_already_needing_a_trip():
+	for seed_value in _seeds(200):
+		assert_false(
+			HouseholdWater.farm_trip_is_due(HouseholdWater.farm_starting_level(seed_value)),
+			"seed %d starts dry" % seed_value
+		)
+
+
+## A farm raised this morning must be able to work its beds this morning.
+func test_a_new_farmhouse_can_water_its_field_from_the_day_it_is_raised():
+	for seed_value in _seeds(200):
+		assert_true(
+			HouseholdWater.can_water_crops(HouseholdWater.farm_starting_level(seed_value)),
+			"seed %d cannot water a thing" % seed_value
+		)
+
+
+func test_a_new_farmhouse_never_starts_overfull():
+	for seed_value in _seeds(200):
+		assert_lte(HouseholdWater.farm_starting_level(seed_value), HouseholdWater.TANK_LITRES)
+
+
+func test_two_farmhouses_do_not_start_at_the_same_level():
+	var levels := {}
+	for seed_value in _seeds(40):
+		levels[HouseholdWater.farm_starting_level(seed_value)] = true
+	assert_gt(levels.size(), 20, "farms are starting from a handful of levels, so they will run dry together")
+
+
+func test_the_same_farmhouse_always_starts_the_same():
+	assert_eq(HouseholdWater.farm_starting_level(1234), HouseholdWater.farm_starting_level(1234))
+
+
 # -- a farmhouse sends somebody sooner than a cottage does ------------------
 
 func test_a_full_farmhouse_sends_nobody():

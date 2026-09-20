@@ -192,3 +192,128 @@ func test_a_houses_water_survives_a_chunk_round_trip():
 	var reloaded: Dictionary = chunk_manager.building_record_at(chunk_coord, origin)
 	assert_false(reloaded.is_empty(), "the house did not come back")
 	assert_almost_eq(chunk_manager.house_water_at(reloaded), level, 0.0001)
+
+
+# -- the farmhouse holds a tank for its field -------------------------------
+
+## A farmhouse is nobody's home (capacity 0) and so drinks nothing, but its
+## FIELD drinks -- docs/concept/village_water.md mechanism 3. That makes it
+## the one building that holds a tank without anyone living in it.
+
+const FARMHOUSE := "farmhouse"
+const FarmPlot = preload("res://src/gameplay/farm_plot.gd")
+
+
+func _a_farmhouse(seed_value: int) -> Dictionary:
+	var site := _a_dry_site_for(FARMHOUSE)
+	assert_false(site.is_empty(), "precondition: somewhere dry to raise a farmhouse")
+	if site.is_empty():
+		return {}
+	assert_true(chunk_manager.place_building(
+		site["chunk_coord"], site["origin"], FARMHOUSE, Vector2i(0, 1), seed_value
+	), "precondition: the farmhouse stands")
+	_placed.append(site)
+	return chunk_manager.building_record_at(site["chunk_coord"], site["origin"])
+
+
+func _global_anchor_of(record: Dictionary) -> Vector2i:
+	return (
+		Vector2i(record["chunk_coord"]) * EarthChunkManager.CHUNK_SIZE
+		+ Vector2i(record["origin_local"])
+	)
+
+
+func test_a_farmhouse_holds_water_even_though_nobody_lives_there():
+	assert_gt(chunk_manager.house_water_at(_a_farmhouse(31)), 0.0)
+
+
+func test_a_farmhouse_drinks_nothing_itself():
+	var farm := _a_farmhouse(31)
+	var before := chunk_manager.house_water_at(farm)
+	chunk_manager.drink_household_water_in(farm["chunk_coord"], 50.0)
+	assert_almost_eq(chunk_manager.house_water_at(_reread(farm)), before, 0.0001)
+
+
+func test_a_bucket_can_be_poured_into_a_farmhouse():
+	var farm := _a_farmhouse(31)
+	var anchor := _global_anchor_of(farm)
+	while chunk_manager.draw_crop_water_at_global(anchor.x, anchor.y):
+		pass
+	var dry := chunk_manager.house_water_at(_reread(farm))
+	assert_true(chunk_manager.pour_bucket_into_house(farm["chunk_coord"], farm["origin_local"]))
+	assert_gt(chunk_manager.house_water_at(_reread(farm)), dry)
+
+
+# -- watering the beds is paid for ------------------------------------------
+
+func test_watering_the_beds_takes_water_out_of_the_farmhouse():
+	var farm := _a_farmhouse(31)
+	var anchor := _global_anchor_of(farm)
+	var before := chunk_manager.house_water_at(farm)
+	assert_true(chunk_manager.draw_crop_water_at_global(anchor.x, anchor.y))
+	assert_almost_eq(
+		chunk_manager.house_water_at(_reread(farm)),
+		HouseholdWater.level_after_tending(before), 0.0001
+	)
+
+
+## ANY footprint cell answers, the same rule building_at_global already
+## keeps -- a farmer standing at the far corner of their own farmhouse is
+## still at their own farmhouse.
+func test_any_corner_of_the_farmhouse_pays_for_the_field():
+	var farm := _a_farmhouse(31)
+	var footprint := BuildingCatalog.footprint_of(FARMHOUSE)
+	var far_corner := _global_anchor_of(farm) + footprint - Vector2i(1, 1)
+	assert_true(chunk_manager.draw_crop_water_at_global(far_corner.x, far_corner.y))
+
+
+func test_a_farmhouse_down_to_its_reserve_refuses_to_water():
+	var farm := _a_farmhouse(31)
+	var anchor := _global_anchor_of(farm)
+	var drawn := 0
+	while chunk_manager.draw_crop_water_at_global(anchor.x, anchor.y) and drawn < 10000:
+		drawn += 1
+	assert_gt(drawn, 0, "a full farmhouse could not water its beds even once")
+	assert_lt(drawn, 10000, "the field drank the tank forever")
+	assert_gte(
+		chunk_manager.house_water_at(_reread(farm)),
+		HouseholdWater.DRINKING_RESERVE_LITRES,
+		"the field drank the household's own reserve"
+	)
+
+
+func test_a_cottage_never_pays_for_crop_water():
+	var house := _a_house(11)
+	var anchor := _global_anchor_of(house)
+	var before := chunk_manager.house_water_at(house)
+	assert_false(chunk_manager.draw_crop_water_at_global(anchor.x, anchor.y))
+	assert_almost_eq(chunk_manager.house_water_at(_reread(house)), before, 0.0001)
+
+
+func test_drawing_crop_water_off_bare_ground_is_a_no_op_rather_than_a_crash():
+	assert_false(chunk_manager.draw_crop_water_at_global(3, 3))
+
+
+# -- so the farmer is sent to the well for it -------------------------------
+
+func test_a_new_farmhouse_is_not_already_due_a_trip():
+	for seed_value in [3, 17, 91, 404]:
+		assert_false(chunk_manager.water_trip_due_at(_a_farmhouse(seed_value)), "seed %d" % seed_value)
+
+
+func test_watering_the_field_long_enough_makes_a_trip_due():
+	var farm := _a_farmhouse(31)
+	var anchor := _global_anchor_of(farm)
+	for i in 10000:
+		if not chunk_manager.draw_crop_water_at_global(anchor.x, anchor.y):
+			break
+	assert_true(chunk_manager.water_trip_due_at(_reread(farm)))
+
+
+## The premise HouseholdWater.LITRES_PER_TENDING is grounded in: a bed
+## withers if it is not re-watered inside its own grace, and that grace is
+## shorter than a simulated day -- so a field that STAYS ALIVE is tended
+## more than once a day, and a tending costing more than a day's drinking
+## really does make the farmhouse the thirstier building.
+func test_a_living_field_is_tended_more_than_once_a_simulated_day():
+	assert_lt(FarmPlot.MIN_WATER_GRACE_SECONDS, EarthChunkManager.SECONDS_PER_SIMULATED_DAY)

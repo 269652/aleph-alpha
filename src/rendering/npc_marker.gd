@@ -105,6 +105,17 @@ var _world = null
 ## village_water.md mechanism 2). Public because it IS what they are doing,
 ## and because what they are carrying is read straight off it.
 var water_errand := WaterErrand.AT_HOME
+
+## The building this errand's bucket is FOR -- their own house, or the
+## farmhouse whose FIELD drinks out of its own tank (docs/concept/
+## village_water.md mechanism 3). {} when nobody is on an errand.
+##
+## LATCHED when they set out rather than re-read each frame: whichever
+## building sent them is the building the bucket comes back to. Re-reading
+## would let a villager change their mind halfway across the square when
+## the other tank crossed its own threshold, and the bucket in their hand
+## would silently change what it was for.
+var _errand_target: Dictionary = {}
 ## Where the errand is sending them right now, "" when they are not on one.
 var _errand_location_tag := ""
 ## The tag the last processed frame actually walked toward -- what
@@ -940,22 +951,39 @@ const ERRAND_REACH_PX := 6.0
 ## never sets out -- an NPC in an unloaded chunk or a test fixture is not
 ## on an errand, it has nowhere to be on one.
 func _step_water_errand() -> void:
-	var house := _house_of_their_own()
-	if house.is_empty():
-		water_errand = WaterErrand.AT_HOME
-		_errand_location_tag = ""
-		return
-
 	if not WaterErrand.is_running(water_errand):
 		# Home and still short: set out (again, if one bucket was not
 		# enough -- see WaterErrand's own note on why the loop lives here).
-		water_errand = WaterErrand.begin_if_due(_tank_level_of(house))
+		_errand_target = _thirsty_building()
+		water_errand = WaterErrand.begin_if_due(_tank_level_of(_errand_target))
+		if not WaterErrand.is_running(water_errand):
+			_errand_target = {}
 	elif position.distance_to(_resolve_location(_errand_location_tag)) <= ERRAND_REACH_PX:
 		water_errand = WaterErrand.arrived(water_errand)
 		if water_errand == WaterErrand.AT_HOME:
-			# They just finished pouring.
-			_world.pour_bucket_into_house(house["chunk_coord"], house["origin_local"])
+			# They just finished pouring -- into whatever sent them.
+			_world.pour_bucket_into_house(
+				_errand_target["chunk_coord"], _errand_target["origin_local"]
+			)
+			_errand_target = {}
 	_errand_location_tag = WaterErrand.location_tag_for(water_errand)
+
+
+## The building this villager must fetch water for right now, or {} when
+## neither of theirs is short.
+##
+## Their own house FIRST, always: people before plants, the same order the
+## farmhouse's own drinking reserve keeps (HouseholdWater.spare_for_crops).
+## Then the farmhouse they work, whose field drinks out of its own tank and
+## whose beds stop being watered when it runs down.
+func _thirsty_building() -> Dictionary:
+	var house := _house_of_their_own()
+	if not house.is_empty() and _world.water_trip_due_at(house):
+		return house
+	var farmhouse := _farmhouse_of_their_own()
+	if not farmhouse.is_empty() and _world.water_trip_due_at(farmhouse):
+		return farmhouse
+	return {}
 
 
 ## This villager's own house, as a building record -- {} when the world
@@ -969,11 +997,43 @@ func _house_of_their_own() -> Dictionary:
 	return _world.building_door_near(home_position, 1.0)
 
 
-## Whether this household's tank says somebody must go. Asked of the world
-## rather than computed here, so the marker and the house can never
-## disagree about what "low" means.
-func _tank_level_of(house: Dictionary) -> float:
-	return 0.0 if _world.water_trip_due_at(house) else HouseholdWater.TANK_LITRES
+## The FARMHOUSE this villager works, as a building record -- {} for
+## everyone else. Checked by id rather than assumed from
+## stock_building_cell alone, because that field holds a FISHER's own
+## cottage too (see its own note), and a cottage has no field to water.
+func _farmhouse_of_their_own() -> Dictionary:
+	if stock_building_cell == NO_STOCK_BUILDING or _world == null:
+		return {}
+	if not _world.has_method("building_at_global") or not _world.has_method("water_trip_due_at"):
+		return {}
+	var record: Dictionary = _world.building_at_global(
+		stock_building_cell.x, stock_building_cell.y
+	)
+	if String(record.get("id", "")) != VillageFarm.FARM_BUILDING_ID:
+		return {}
+	return record
+
+
+## Whether the bucket in this villager's hand is for the field rather than
+## for their own kitchen -- which is what makes the walk home a walk to the
+## farmhouse (see _resolve_location).
+func _errand_is_for_the_farmhouse() -> bool:
+	return (
+		WaterErrand.is_running(water_errand)
+		and stock_building_cell != NO_STOCK_BUILDING
+		and String(_errand_target.get("id", "")) == VillageFarm.FARM_BUILDING_ID
+	)
+
+
+## Whether this building's tank says somebody must go. Asked of the world
+## rather than computed here, so the marker and the building can never
+## disagree about what "low" means -- and a farmhouse is sent sooner than a
+## household is, which is the world's rule to keep, not the marker's.
+## Nothing to fetch for reads as a full tank.
+func _tank_level_of(building: Dictionary) -> float:
+	if building.is_empty():
+		return HouseholdWater.TANK_LITRES
+	return 0.0 if _world.water_trip_due_at(building) else HouseholdWater.TANK_LITRES
 
 
 ## What is in this villager's hands right now: "" for nothing, otherwise
@@ -1333,6 +1393,13 @@ func _sync_market_stand(is_working: bool) -> void:
 
 func _resolve_location(tag: String) -> Vector2:
 	if tag == "home":
+		# Mid-errand, "home" is wherever the bucket is GOING. A farmer
+		# carrying water for their own field walks it to the FARMHOUSE
+		# (docs/concept/village_water.md mechanism 3) -- resolving to their
+		# own doorstep would have them pour the field's water into their
+		# kitchen and the beds would never get any.
+		if _errand_is_for_the_farmhouse():
+			return _cell_centre(stock_building_cell)
 		return home_position
 	if landmarks.has(tag):
 		return landmarks[tag]
@@ -1534,6 +1601,13 @@ func _work_field_cell() -> void:
 	if _field_index < 0 or _field_index >= field_cells.size():
 		return
 	var cell: Vector2i = field_cells[_field_index]
+	# What the beds get is paid for out of the farmhouse's own tank
+	# (docs/concept/village_water.md mechanism 3). A farmhouse down to its
+	# household's drinking reserve cannot water at all -- and that refusal
+	# is the mechanism, not a failure case: it is what makes somebody walk
+	# to the well for the FIELD, which is the errand this whole feature
+	# exists to make visible.
+	var paid_for := _draw_crop_water()
 	match VillageFarm.action_for(_field_plot_at(cell)):
 		"harvest":
 			if not _world.has_method("harvest_farm_plot_at_global"):
@@ -1547,9 +1621,25 @@ func _work_field_cell() -> void:
 			if _world.has_method("till_and_plant_farm_plot_at_global"):
 				_world.till_and_plant_farm_plot_at_global(cell.x, cell.y, _field_crop)
 		"water":
-			if _world.has_method("water_farm_plot_at_global"):
+			if paid_for and _world.has_method("water_farm_plot_at_global"):
 				_world.water_farm_plot_at_global(cell.x, cell.y)
-	_water_the_beds_around(cell)
+	if paid_for:
+		_water_the_beds_around(cell)
+
+
+## Takes this visit's water out of the farmhouse this villager works for.
+## True when the beds may be wetted.
+##
+## Fails OPEN for a villager with no farmhouse of their own -- a village
+## that has not raised one -- and for a world that cannot answer at all.
+## There is no tank to bill it to in either case, and failing closed would
+## kill every such field rather than send anybody anywhere.
+func _draw_crop_water() -> bool:
+	if _farmhouse_of_their_own().is_empty():
+		return true
+	if not _world.has_method("draw_crop_water_at_global"):
+		return true
+	return _world.draw_crop_water_at_global(stock_building_cell.x, stock_building_cell.y)
 
 
 ## Where a cut crop goes: into the FARMHOUSE this villager works for, which
