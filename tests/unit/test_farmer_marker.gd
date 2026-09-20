@@ -267,22 +267,27 @@ func test_the_farmer_crosses_the_rail_around_its_own_field():
 	assert_ne(marker.position, before, "its own rail must not shut it out of its beds")
 
 
-## And the exemption is its OWN field, not fences in general: a neighbour's
-## rail still stops it.
+## And the exemption is its OWN field, not fences in general: a fence crossed
+## on the WAY to its beds, enclosing somebody else's, still stops it.
+##
+## The first draft of this test moved `home` to make the fence a stranger's,
+## which quietly moved the farmer's TARGET too -- so it walked off toward a
+## different bed and never took the step the rail was registered for. The
+## honest scenario is a farmer approaching from far enough away that the
+## blocked step is nowhere near its own soil.
 func test_a_neighbours_rail_still_stops_the_farmer():
-	var world := _farmer_walking_to_its_bed()
-	# A rail crossing on the way OUT of the farm, nowhere near its own beds.
-	marker._target_index = 1
-	marker.position = Vector2(200.0, 200.0)
+	var world := FenceStubWorld.new()
+	marker.earth = world
 	marker.home = Vector2(200.0, 200.0)
-	var bed := marker.home + marker._plot_offset(1)
-	world.rails["%d,%d>%d,%d" % [
-		_tile_of(marker.position).x, _tile_of(marker.position).y,
-		_tile_of(bed).x, _tile_of(bed).y
-	]] = true
-	# ...but tell the farmer its beds are somewhere else entirely, so this
-	# rail is a stranger's.
-	marker.home = Vector2(1000.0, 1000.0)
+	marker._target_index = 1
+	marker.position = Vector2(100.0, 200.0)  # a long walk east to its beds
+	var here := _tile_of(marker.position)
+	var next := here + Vector2i(1, 0)
+	assert_false(
+		marker.own_field_cells().has(here) or marker.own_field_cells().has(next),
+		"precondition: this step must be nowhere near its own beds"
+	)
+	world.rails["%d,%d>%d,%d" % [here.x, here.y, next.x, next.y]] = true
 	var before := marker.position
 	marker._step_approaching(0.5)
 	assert_eq(marker.position, before, "somebody else's fence is still a fence")
