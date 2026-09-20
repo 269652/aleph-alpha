@@ -30915,3 +30915,50 @@ narrow.
 
 Tested: `test_illustrated_structure_sprite.gd` (+2, one repaired),
 `test_building_catalog.gd` (+2).
+
+## A farmstead is sited where its fence fits (`concept/village_farms.md`, 2026-09-20)
+
+Reported with the hamlet in shot: *"The two farmhouses collide and only one
+gets an enclosure"*.
+
+✅ **Measured first, on real villages** (`tools/probe_farmstead_collisions.gd`,
+kept — 465 chunks, 10 villages with a farmhouse, 7 with two or more). Two
+shapes of one fault: two farmsteads sited one column apart both wanting
+that column for a fence (`OVERLAPS: (23,21)…(23,24) rail/rail`), and a road
+spur running down the column an east rail needs (`6/14` rails standing
+where its neighbour had `9/14`). The fencing pass skips a cell already
+paved or already railed, so whichever is fenced second loses that side.
+
+✅ **The cause was that siting asked only whether the BEDS fit.** A fence is
+what makes beds a field, so its ground has to be asked for at the same
+moment — the lesson `_may_sow` already carried, applied to the half of the
+farmstead it had not reached. `VillageFarm.fence_has_room` is the pure
+half; `_may_rail` is its predicate (a street row is the gate; a cell the
+neighbour is nearer to is theirs; anything else must be clear).
+
+✅ **A/B on freshly founded villages**, both runs scrubbing each chunk
+first — chunks persist on unload, and the first attempt at this comparison
+came back **byte-identical** because it was measuring a reload of its own
+earlier founding:
+
+| | before | after |
+| --- | --- | --- |
+| villages with overlapping farm ground | 2 | **0** |
+| farmhouses with no field | 0 | 0 |
+| villages with a farmhouse (of which 2+) | 10 (7) | 10 (7) |
+| rails standing | 6–9 of 14 | 8–12 of 12 |
+
+✅ **A latent bug fell out of it.** `_sited_plot` — the scan behind
+`outskirt_plot` and `industry_plot` — never returned a `facing`, and
+`_place_farms_if_missing` reads `plot["facing"]` on any world without
+`place_building_over_roads`. The stricter rule reached that fallback
+immediately and the run died on a missing key rather than on anything about
+farms.
+
+🚧 **One farmstead in the swept set still measures 6 of 14.** It has no
+overlap and a full field; what its remaining gaps are has not been run
+down, so it is named rather than absorbed.
+
+Tests: 348/348 across `test_village_renderer.gd`, `test_village_farm.gd`
+and `test_village_layout.gd`, including the new
+`test_no_two_farmsteads_want_the_same_rail` (36 clashes before the fix).

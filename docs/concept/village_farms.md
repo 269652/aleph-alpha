@@ -873,6 +873,67 @@ neighbouring runs' colliders meeting at the shared corner.
 least one 60Hz tick of the fastest the player can be (a maximum-fitness
 mount, 3.0 px), and at most a quarter tile so it stays a line.
 
+### A farmstead is sited where its FENCE fits, not only its beds (2026-09-20)
+
+Reported with the hamlet in shot: *"The two farmhouses collide and only one
+gets an enclosure"*. Measured on real villages
+(`tools/probe_farmstead_collisions.gd` — 465 chunks, 10 villages with a
+farmhouse, 7 of them with two or more):
+
+```
+VILLAGE (714, 141)   OVERLAPS: (23,21)(23,22)(23,23)(23,24) rail/rail
+  farmhouse (20,19) field x20..22     farmhouse (24,19) field x24..26
+
+VILLAGE (679, 141)
+  farmhouse (13,19)  rails standing  9/14
+  farmhouse (20,19)  rails standing  6/14
+    gaps: (23,22) mod='road'  (23,23) mod='road'  (23,24) mod='road'
+```
+
+Two shapes of one fault. Two farmsteads sited one column apart both want
+that column for a fence, or a road spur runs down it — and the fencing pass
+skips a cell that is already paved or already railed, so whichever is
+fenced second loses that whole side.
+
+The five gaps every farmstead shows at its **street row** are not this: the
+village's paving there is the field's gate, by design (see "The fence
+around the beds").
+
+**The cause is that siting asked only whether the BEDS fit.** A fence is not
+decoration round a field; it is what makes the beds a field, so the ground
+it needs has to be asked for at the same moment. That is the same lesson
+`_may_sow` already carries one function up — *a rule that decides where to
+build has to be the rule that decides what gets built* — applied to the
+half of the farmstead it had not yet reached.
+
+`VillageFarm.fence_has_room` is the pure half: every cell of the ring
+allowed by a caller-supplied `may_rail`, and empty beds answer **false**
+rather than vacuously true. `VillageRenderer._may_rail` is that predicate:
+a street row is fine (the gate), a cell the neighbouring farmstead is
+nearer to is its rail line and not this one's, and anything else must be
+clear of water, buildings and paving.
+
+Measured after, on freshly founded villages — the probe scrubs each chunk
+first, because chunks persist on unload and an A/B against a reload of
+one's own earlier founding comes back byte-identical and means nothing:
+
+| | before | after |
+| --- | --- | --- |
+| villages with overlapping farm ground | 2 | **0** |
+| farmhouses with no field | 0 | 0 |
+| villages with a farmhouse (of which 2+) | 10 (7) | 10 (7) |
+| rails standing | 6–9 of 14 | 8–12 of 12 |
+
+No village lost a farm to the stricter rule; the farmsteads simply move off
+the crowded street row to the outskirts, where a whole enclosure fits.
+
+> Exposed one latent bug on the way: `_sited_plot` — the scan behind
+> `outskirt_plot` and `industry_plot` — never returned a `facing`, and
+> `_place_farms_if_missing` reads `plot["facing"]` on any world without
+> `place_building_over_roads`. It had simply never been reached before,
+> because the street-frontage search almost always answered first. Pinned
+> by `test_every_plot_says_which_way_its_building_faces`.
+
 ## Status
 
 - ✅ **A field sows what the village is short of** (2026-09-20) —
