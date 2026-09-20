@@ -232,6 +232,30 @@ the suite goes red before it can ship.
 - ✅ **Derived intervals** (2026-09-20). Reflex from the real stride,
   swing from `Player.ATTACK_COOLDOWN`, deliberate from a measured silent
   reading rate. No global magic cooldown anywhere.
+- ✅ **Derived dwell, too** (2026-09-20). `Answerback.seconds_to_read` and
+  `word_count`: how long a PROSE card stays up, from the card's own word
+  count at the same measured reading rate, floored at
+  `DELIBERATE_INTERVAL_SECONDS` so a very short card is still a sentence
+  rather than a flash. The intervals above answer *how often*; this
+  answers *how long*, from the same fact about a reader.
+
+  It exists because a journey ring's crossing card
+  ([discovery.md](discovery.md)) runs from seventeen words to thirty-four,
+  and showing both for the same six seconds means one of them is wrong.
+  The arrival card ([arrival.md](arrival.md)) reads the same rule.
+  `MAX_CARD_SECONDS` is the ceiling real card text is held to — restated
+  from `World.ANCIENT_TERMINAL_MESSAGE_DURATION`, the longest passage this
+  HUD already shows anywhere, and pinned to it by test. It is deliberately
+  **not** a clamp: a card cut off mid-warning is worse than a card shown a
+  moment too long, so text that grows past it fails a test instead of
+  being silently truncated.
+- ✅ **Exploration answers too** (2026-09-20). Newly-walked ground floats
+  its own receipt through the same rising label every other act uses —
+  *"New ground  +2 XP"*, naming what it was paid for rather than a bare
+  number. An ordinary new chunk gets the float and nothing else: a chunk
+  edge arrives every ~13 s of walking, and a banner at that rate teaches a
+  player to stop reading banners, which is this doc's own rule about an
+  unread line applied to a verb that fires on its own.
 - ✅ **A craft that cannot proceed says why** (2026-09-20).
   `Player.craft_refusal` asks the same three gates `craft` itself checks,
   in the same order, so the explanation and the refusal can never

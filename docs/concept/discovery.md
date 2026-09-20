@@ -149,29 +149,47 @@ Every one of those is a pure assertion a test makes before the module
 exists, per this repo's `CLAUDE.md`. Every constant is either read from its
 real source or test-pinned to it.
 
-### The step, in `World`
+### `EarthChunkManager.record_footfall` — the step, performed
 
-`World._discovery_step(local_player)`, once per client frame, next to the
-other per-frame reads of the local player:
+The footfall lives on the manager rather than in `World`, because both
+pieces of state it needs are already there: the explored record and the
+spawn coordinate. `World` would otherwise have to reach through the manager
+for one and duplicate the other.
 
-1. `Discovery.chunk_of(local_player.current_tile())`. Unchanged since last
-   frame → return immediately. A chunk edge is crossed every ~13 s of
+```
+record_footfall(player_global_tile) -> Discovery's report, or {}
+```
+
+1. `Discovery.chunk_of(player_global_tile)`. Unchanged since the last
+   footfall → `{}` immediately. A chunk edge is crossed every ~13 s of
    walking, so this is a `Vector2i` compare on all but a handful of frames.
-2. `_chunk_manager.mark_chunk_explored(chunk)` — the real, live
-   `ExploredTiles`, the same one `/map` and `MapProjection` read. Its
-   return value **is** "this ground is new".
-3. `JourneyRing.distance_chunks(chunk, _chunk_manager.spawn_chunk_coord())`
-   — the same Chebyshev distance `RegionDifficulty` tiers by, from the same
-   spawn the world set at `set_spawn_tile`.
-4. `Discovery.report_for(...)` decides; `World` performs: `gain_experience`
-   for the XP, `_float_answer_text` for the receipt (the same rising label
-   every other act uses, see [feedback.md](feedback.md)), and the shared
-   message stack for the crossing card.
+2. `ExploredTiles.mark_visited(chunk)` — the real, live record `/map` and
+   `MapProjection` read. Its return value **is** "this ground is new".
+3. `JourneyRing.distance_chunks(chunk, spawn_chunk_coord)` — the same
+   Chebyshev distance `RegionDifficulty` tiers by, from the same spawn the
+   world set at `set_spawn_tile`.
+4. `Discovery.report_for(...)` decides, and the report is handed back.
 
-`Player` is not touched. The explored record lives on the manager, the XP
-on the player, and the decision in a pure module none of them own — the
-same division `ConversationWindow`/`World`/`EarthChunkManager` keep for the
-give verb.
+`{}` also comes back before `set_spawn_tile`: a world that has not decided
+where home is cannot say how far out you are, and guessing the origin would
+pay far-country rates for the ground under a fresh character's feet.
+
+### What `World` does with it
+
+`World._discovery_step(local_player, delta)`, once per client frame,
+performs what the report decided and nothing else: `gain_experience` for the
+XP, `_float_answer_text` for the receipt (the same rising label every other
+act uses, see [feedback.md](feedback.md)), and the shared message stack for
+the crossing card. The card is shown for its own reading time —
+`Answerback.seconds_to_read`, the passage's own word count at the rate the
+feedback layer already grounds itself on — and cleared on the frame it runs
+out, which is why the decay ticks every frame rather than only on the frames
+a boundary is crossed.
+
+`Player` is not touched. The explored record and the footfall live on the
+manager, the XP on the player, and the decision in a pure module none of
+them own — the same division `ConversationWindow`/`World`/`EarthChunkManager`
+keep for the give verb.
 
 ### What the map now means
 
@@ -207,7 +225,44 @@ reading something real.
 
 ## Status
 
-- ⬜ `Discovery` pure module.
-- ⬜ Walking marks ground explored.
-- ⬜ New ground pays, once, at the ring's own price.
-- ⬜ The crossing card.
+- ✅ **`Discovery`, the whole rule** (2026-09-20). `chunk_of`,
+  `xp_for_distance`, `xp_per_demand`, `max_demand_count`, `demand_phrase`,
+  `packing_line`, `crossing_card`, `report_for` — pure and pinned by the
+  properties they produce (`test_discovery.gd`, 29: the payoff strictly
+  increasing across every boundary in the real table and never decreasing
+  anywhere, the per-demand step dividing the anchor exactly, the restated
+  chunk size and kill XP held to their real sources, every demand in the
+  table reading as words rather than an id, a crossing outward reading as a
+  warning and inward as relief, a multi-ring jump reporting the ring landed
+  in, wandering inside a ring never raising a card, and the reflection test
+  forbidding any entry-refusing method name).
+- ✅ **Walking marks ground explored** (2026-09-20).
+  `EarthChunkManager.record_footfall` (`test_earth_chunk_manager_discovery.gd`,
+  11: the chunk underfoot and *only* the chunk underfoot lands on the live
+  `ExploredTiles`, the map filling as the player walks, the distance measured
+  from the world's own spawn chunk wherever that is, a world with no spawn
+  yet reporting nothing, and staying put costing nothing).
+- ✅ **New ground pays, once, at the ring's own price** (2026-09-20).
+  Ground already walked pays nothing — `mark_visited` is idempotent and its
+  return value is the gate, so pacing over a boundary cannot farm it.
+- ✅ **The crossing card** (2026-09-20). `World._discovery_step` on the
+  shared message stack, shown for `Answerback.seconds_to_read` of its own
+  text and cleared on the frame that runs out
+  (`test_world_discovery.gd`, 11: the step really runs every client frame,
+  really takes a footfall, really pays the player, floats through the same
+  rising label as every other act, and never forms a second opinion about
+  what new ground is worth).
+- ⬜ **The map is still a console command.** `/map` now reports real
+  explored ground, and `MapProjection.landmarks_visible_on_map` now filters
+  by a real journey — but there is still no fogged in-world map render,
+  which [wayfinding.md](wayfinding.md) has always named as its own open
+  piece of work. The minimap is a local 81×81-tile window and deliberately
+  shows no fog.
+- ⬜ **The explored record is not persisted.** `ExploredTiles` is
+  session-only by its own documented design, so a reloaded character's map
+  is empty and their ground pays again. Named here rather than left to be
+  discovered: it is the one place the "once, and only once" pillar does not
+  hold across a save.
+- ⬜ **Nothing is out there to find yet.** [exploration.md](exploration.md)'s
+  ruins, lairs and ancient groves are unbuilt. This doc is the act of going;
+  the destination is still the world itself.

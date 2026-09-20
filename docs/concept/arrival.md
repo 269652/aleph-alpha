@@ -276,10 +276,27 @@ becomes its own piece of work:
 
   Deliberately **not persisted**: the shift exists for a first impression,
   and a character old enough to have been saved has already had one.
-- ⬜ `ArrivalBriefing` is built and tested but not yet raised on screen;
-  the three lines it produces need the spawn's river name, the nearest
-  settlement's bearing and the live shortfall projection handed to it at
-  the moment the world finishes loading.
+- ✅ **The three lines are on screen** (2026-09-20).
+  `World._show_arrival_briefing`, last in `_spawn_local_singleplayer` and
+  after `player.setup` (the bearing is measured from `current_tile()`,
+  which needs the tile size setup hands it). Every fact is live: the river
+  is `SpawnRiverPicker.pick`'s own `"river"` — kept in `_spawn_river_name`
+  now, where before it was printed to stdout and thrown away — the season
+  is `EarthChunkManager.current_season()`, the bearing is to the nearest
+  settlement the event store really recorded a `settlement_founded` for,
+  and the errand is `production_shortfall_quests_for_settlement` for that
+  settlement. `ArrivalBriefing.card_text` joins the lines, closing up the
+  missing ones rather than leaving blank rows, and nothing known at all
+  raises no card. It is shown for `Answerback.seconds_to_read` of its own
+  text and clears itself.
+
+  Pinned by `test_world_arrival_card.gd` (11) and
+  `test_arrival_briefing.gd`'s own card tests (26 total): a **loaded save
+  is never greeted as a newcomer** — the wiring is on the NEW-game path
+  only, the same rule pillar 3 states for the clock — the season comes
+  from the world's own clock rather than a literal, the errand from the
+  live projection rather than authored content, and a briefing that knows
+  nothing produces no card.
 
 
 - ✅ **`DawnClause`, the hour itself** (2026-09-20).
@@ -302,10 +319,11 @@ becomes its own piece of work:
   from any order the projection listed its households in, and a battery
   of half-empty and broken facts that must never reach a player as
   "null", a raw id or a fragment).
-- ⬜ **Neither module is wired.** `World` still drives the sun straight
-  off the wall clock, and no HUD card shows the three lines. Until the
-  lead threads them through, an evening demo is still a night demo and a
-  new character is still greeted by nothing. Both are pure by design —
-  the wiring is a separate, deliberate step.
+- ✅ **Both modules are wired** (2026-09-20). The sun is driven through
+  `DawnClause` and the three lines reach a real HUD card — see the two
+  "reaches the sky" / "on screen" entries above for what each one reads
+  and what each is pinned by. The *Wiring* bullet under **What this does
+  NOT fix** is out of date in that respect only; the boot-sequence items
+  beside it still stand.
 - ⬜ Boot-sequence work (art-cache warm, double intro, 25-chunk first
   load) is untouched and is separate work, as above.

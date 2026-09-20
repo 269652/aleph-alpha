@@ -106,9 +106,18 @@ and most species have no loot row so they vanish on death.
     three gates `craft` checks, so a card that cannot proceed says
     *"Needs heat source; you are not standing at one."* instead of doing
     nothing.
+  - **Requirement 4, exploration** — see `concept/discovery.md`. Walking
+    now records ground, pays for it once at the journey ring's own price,
+    and says where you are. Before it, `mark_chunk_explored` had exactly
+    ONE caller in the whole game — the `reveal` spell atom — so a player
+    who crossed a continent still had an empty map; and distance from
+    spawn appeared in no XP formula anywhere, so the far country was
+    strictly more dangerous and strictly no more rewarding. And the three
+    facts a new character wakes up to are on screen at last
+    (`concept/arrival.md`): `ArrivalBriefing` had been built, tested and
+    uncalled since the overhaul's second slice.
   - **Requirement 2 was closed earlier** by the give verb; **requirement 6**
-    is served by the feedback pass; **requirement 4** has its rings built
-    and named but is not yet raised on screen.
+    is served by the feedback pass. All eight are now playable.
 
 - ✅ **Six pure modules for the overhaul's other requirements**
   (2026-09-20) — each spec-first and red-first, built in parallel and
@@ -161,7 +170,7 @@ and most species have no loot row so they vanish on death.
     had three sound effects and no hit flash, damage number, XP float or
     level-up toast anywhere.
   - **`DawnClause` / `ArrivalBriefing`** (`concept/arrival.md`,
-    `test_dawn_clause.gd` 15/15, `test_arrival_briefing.gd` 22/22) — a
+    `test_dawn_clause.gd` 15/15, `test_arrival_briefing.gd` 26/26) — a
     brand-new character opens their eyes at first light whatever the wall
     clock says, with the offset decaying so the real-Earth clock returns
     on its own within a few in-game days (swept across all 24 real
@@ -183,6 +192,66 @@ and most species have no loot row so they vanish on death.
   HARD tier is over thirty full bars and more than ten minutes of walking.
   Tests: `test_sprint_cost.gd` 18/18 (new), including two that pin the
   wiring so this cannot become another tested module with no callers.
+
+- ✅ **Going somewhere is recorded, pays, and says where you are**
+  (2026-09-20) — see `concept/discovery.md`, the overhaul's requirement 4.
+  Three measurements before it. `EarthChunkManager.mark_chunk_explored` had
+  exactly **one** caller in the whole game — `Player._cast_reveal`, the
+  `reveal` spell atom — so `/map` reported an empty world to anyone who
+  never wove that spell, and `wayfinding.md` had carried "nothing calls
+  `mark_chunk_explored` from the player's movement path" as an open gap
+  since the Map item shipped. Distance from spawn appeared in **no XP
+  formula anywhere** (all three `gain_experience` callers are a kill, a
+  fruit harvest and a village sale), so the far country was strictly more
+  dangerous and strictly no more rewarding — the ring gradient was a pure
+  tax. And `JourneyRing.crossing_between` had been written for a card that
+  did not exist.
+
+  `Discovery` is the rule and is pure: what a newly-walked chunk is worth is
+  the ring's **own declared packing list** (`JourneyRing.demands_at`) and
+  nothing else, so there is no second difficulty model — the hearth pays 2,
+  what an off-peak harvest pays, and the far country pays 12, exactly two
+  level-1 kills. The per-demand step is derived from that anchor rather
+  than picked, and the division is asserted **exact** for the real table, so
+  retuning the demands fails loudly instead of rounding the payoff away.
+  `EarthChunkManager.record_footfall` performs it — one chunk per footfall,
+  the one underfoot, never the 5×5 the streamer loads — and pays once per
+  chunk by construction, because `ExploredTiles.mark_visited` is idempotent
+  and its return value *is* the gate. `World._discovery_step` performs what
+  the report decided: the XP, the same rising receipt every other act uses
+  (*"New ground  +2 XP"*, naming what it paid for), and the crossing card on
+  the shared message stack.
+
+  The card's dwell is derived too: `Answerback.seconds_to_read`, the
+  passage's own word count at the reading rate the feedback layer already
+  grounds itself on — the hearth's card is seventeen words and the far
+  country's is thirty-four, and showing both for the same six seconds means
+  one of them is wrong. Like `JourneyRing`, `Discovery` exposes no function
+  that can refuse a step, pinned by a reflection test over its own method
+  list.
+
+  Tests: `test_discovery.gd` 29/29 (new), `test_earth_chunk_manager_
+  discovery.gd` 11/11 (new), `test_world_discovery.gd` 11/11 (new).
+  Known gaps, named rather than left to be found: `ExploredTiles` is still
+  session-only, so a reloaded character's map is empty and their ground
+  pays again; there is still no fogged in-world map render; and
+  `exploration.md`'s ruins, lairs and groves are still unbuilt, so the act
+  of going is real but the destination is still the world itself.
+
+- ✅ **The first ten seconds say something** (2026-09-20) — see
+  `concept/arrival.md`. `ArrivalBriefing` had been built, tested and
+  **uncalled** since the overhaul's second slice; its own status list said
+  so. `World._show_arrival_briefing` now assembles its facts from live
+  state and raises the card: the river `SpawnRiverPicker` really drew (kept
+  in `_spawn_river_name` now — it was printed to stdout at spawn and thrown
+  away), the season the world's own clock is in, the bearing to the nearest
+  settlement the event store really recorded, and the live
+  production-shortfall projection for that settlement, so the one thing to
+  do is a real shortage rather than an authored first quest. NEW game only,
+  the same rule the dawn clause keeps: a character old enough to have been
+  saved has already had a first morning. Nothing known raises no card.
+  Tests: `test_world_arrival_card.gd` 11/11 (new),
+  `test_arrival_briefing.gd` 26/26 (4 new, for the card join).
 
 
 ### Loose stone (see `docs/concept/stone.md`)
@@ -5976,7 +6045,7 @@ No faction/reputation system exists. All ⬜ Not started:
 
 ### Exploration (`concept/exploration.md`)
 
-No map/fog-of-war/waypoint exploration mechanics exist beyond raw walking. All ⬜ Not started except the two below:
+**The act of exploring is built** (2026-09-20, `concept/discovery.md`): walking records the chunk underfoot on the live `ExploredTiles`, newly-walked ground pays once at the journey ring's own declared price, and crossing a ring boundary raises a card naming what is new and lethal there. What is still missing is the other half — there is no fogged in-world map render or waypoint UI (the `/map` console command remains the honest interim call site, see `concept/wayfinding.md`), the explored record is session-only, and nothing below is built, so there is still nothing out there to FIND. All ⬜ Not started except the two below:
 
 - **History-Seeded POI System** (large) — ⬜ Not started. No POI/ruin/dungeon generator exists anywhere in `src/world/` yet (checked before building the obstacle below) — placement is the honest next step, not silently implied by the obstacle existing.
 - **Abandoned Settlements** (medium) — a settlement lost to a `concept/quests.md` village-endangerment fight is now a named, specific cause among these (2026-08-13), the unresolved quest itself standing in as the ruin's "what happened" fragment.
