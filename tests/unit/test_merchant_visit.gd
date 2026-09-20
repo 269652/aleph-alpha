@@ -15,7 +15,7 @@ const Shop = preload("res://src/gameplay/shop.gd")
 const SagewerkProduction = preload("res://src/world/sagewerk_production.gd")
 const ConstructionCatchup = preload("res://src/world/construction_catchup.gd")
 
-const _DAY := 3600.0
+const _DAY := MerchantVisit.SECONDS_PER_DAY
 
 
 # -- the buy list is real goods at grounded prices -------------------------
@@ -218,3 +218,108 @@ func test_a_merchant_still_walks_to_a_village_with_a_real_surplus():
 		1.0e6, {"wood": 40.0}, 0.0, {"wood": 12}
 	)
 	assert_true(result["arrived"])
+
+
+# -- which clock a visit is paced on --------------------------------------
+#
+# MEASURED (tools/probe_village_famine.gd, before and after): closing the
+# conjured gold faucet so the merchant is a village's only income killed 7
+# of 10 villagers inside 300 seconds, where the same village had survived
+# and grown to 12. The merchant is not too stingy -- he is too SLOW. His
+# day was ConstructionCatchup.SECONDS_PER_DAY (3600), the deliberately
+# conservative rate for integrating an UNLOADED chunk, while hunger kills
+# in Starvation.seconds_to_die (200) of the day the village actually lives
+# on. The soonest he could possibly call was 18x the window in which
+# everyone who could not feed themselves was already dead.
+#
+# The same defect, and the same fix, as the raised build that "ran on the
+# game's own day" (docs/concept/planner_mode.md): a thing the player is
+# WATCHING is paced by the day they live in; a background integration over
+# absence keeps the catch-up rate.
+
+const Starvation = preload("res://src/emergence/starvation.gd")
+
+
+func test_a_visit_is_paced_on_whatever_day_the_caller_names():
+	var stock := {"fish": 100.0}
+	var slow: Dictionary = MerchantVisit.arrivals(60.0, stock, 0.0, {}, 3600.0)
+	var lived: Dictionary = MerchantVisit.arrivals(60.0, stock, 0.0, {}, 60.0)
+	assert_false(bool(slow["arrived"]), "a minute of a 3600-second day buys no visit")
+	assert_true(bool(lived["arrived"]), "a minute of a 60-second day is a whole day's draw")
+
+
+## The rule that matters, stated against the two real numbers: a village
+## with goods to sell must be able to see a merchant INSIDE the window in
+## which its people starve, or its only income arrives after the funeral.
+func test_a_merchant_can_reach_a_village_before_its_people_starve():
+	var stock := {"fish": 100.0}  # plenty to sell: the best draw there is
+	var carry := 0.0
+	var elapsed := 0.0
+	var step := 5.0
+	while elapsed < Starvation.seconds_to_die():
+		var result: Dictionary = MerchantVisit.arrivals(
+			step, stock, carry, {}, MerchantVisit.SECONDS_PER_DAY
+		)
+		carry = float(result["carry"])
+		elapsed += step
+		if bool(result["arrived"]):
+			break
+	assert_lt(
+		elapsed, Starvation.seconds_to_die(),
+		"the merchant arrives %.0fs into a %.0fs starvation window" % [
+			elapsed, Starvation.seconds_to_die()
+		]
+	)
+
+
+## And the day he is paced on is the one the village lives in, not the
+## offscreen catch-up rate.
+func test_the_merchants_day_is_the_day_the_village_lives_in():
+	assert_eq(
+		MerchantVisit.SECONDS_PER_DAY, 60.0,
+		"the same day NpcMarker's schedule, the ecosystem step and the day/night cycle run on"
+	)
+
+
+# -- he must buy what a village actually makes ----------------------------
+#
+# MEASURED (tools/probe_village_famine.gd, with the purse and wallet
+# columns): purse 0.0 and wallets 0 at EVERY sample, in a village holding
+# 38 sellable food in its market and 187 across its shelves. The merchant
+# was being offered the stock every settlement step and refusing all of it.
+#
+# BUY_LIST was beam/plank/hide/wood/fish/meat/fruit. A village's fields
+# grow herb/carrot/potato/wheat (VillageCropChoice.SOWABLE). The two sets
+# did not intersect AT ALL, so the only faucet for gold could never open,
+# so nobody could buy a meal, so they starved standing on food.
+
+const VillageCropChoice = preload("res://src/gameplay/village_crop_choice.gd")
+
+
+## The rule, generalised so the next crop cannot reintroduce the famine: a
+## village must be able to SELL what its own fields are told to grow.
+func test_a_merchant_buys_every_crop_a_village_can_be_told_to_grow():
+	var refused: Array = []
+	for crop_id in VillageCropChoice.sowable_crops():
+		if not MerchantVisit.BUY_LIST.has(crop_id):
+			refused.append(crop_id)
+	assert_eq(refused, [], "the fields grow what he will not buy: %s" % str(refused))
+
+
+## And every one of them has a real price, or he would take it for nothing.
+func test_every_crop_he_buys_fetches_something():
+	for crop_id in VillageCropChoice.sowable_crops():
+		assert_gt(
+			MerchantVisit.price_of(crop_id), 0,
+			"%s sells for nothing" % crop_id
+		)
+
+
+## Raw produce is priced like the raw food already on the list -- not above
+## it, since preparing food is what adds the value (see FARM_GATE_PRICES).
+func test_raw_produce_is_priced_like_the_raw_food_already_on_the_list():
+	for crop_id in VillageCropChoice.sowable_crops():
+		assert_eq(
+			MerchantVisit.price_of(crop_id), MerchantVisit.price_of("fruit"),
+			"%s is raw produce and fetches what raw produce fetches" % crop_id
+		)
