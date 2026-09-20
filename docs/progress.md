@@ -19757,6 +19757,55 @@ between reverting and keeping the new art with the known jump. The
 45-frame art (extra row/column) is not lost -- recoverable from `aad16cff`
 whenever a version with genuinely continuous inter-row rotation exists.
 
+## Nothing is drawn over the build palette any more (`concept/planner_mode.md`, `concept/hud.md`, 2026-09-20)
+
+Reported with a screenshot: the build palette open, with *"Tree"*, *"Chop
+(Space)"* and an *"Iron Axe"* card all drawn straight over it. Two faults,
+worth keeping apart because the fix for one is not the fix for the other.
+
+**The held-item card was a regression from the HUD pass, and it was mine.**
+It names what the hotbar's hand is holding and sits in the hotbar's own
+bottom-centre strip — the strip `_apply_view_mode` gives to the palette when
+it hides `_hotbar`. The card was added later and nobody hid it alongside the
+thing it belongs to. It reads `ViewMode.shows_hotbar` now, the same predicate
+the hotbar itself reads, in both `_apply_view_mode` and the per-frame
+updater (without the second one it would re-show itself over the palette on
+the very next frame).
+
+**The prompt and the tooltip were a deeper mistake than occlusion.** The
+tempting fix is "do not draw a world hint over the palette" — a z-order
+problem. But *"Chop (Space)"* is not a label that landed in a bad place: in
+planner mode the hotbar is gone, a click plants a blueprint, and the key the
+prompt names does something else. The hint is **wrong**, not covered, and
+would still be wrong drawn in an empty corner. `ViewMode.shows_world_hints`
+is the rule that follows from that, and it tracks `shows_hotbar` exactly
+(pinned) — a hint advertises an action, and the player's hands are where the
+actions live. It gates the interaction prompt, the hover tooltip and the
+charge meter (the charge on a held stone is an RPG action in progress).
+Readouts are deliberately NOT swept in: `shows_readouts` stays true in both
+modes, because a readout reports what is true rather than offering an action,
+and the mode laying out a settlement is the one that most needs to know where
+it is. A test pins that the two rules actually differ, so neither is
+redundant.
+
+**`_any_gameplay_window_open` is untouched**, and a test now guards that: it
+is Escape's notion of "a modal is open", and Escape closing the palette would
+strand a player in planner mode with no controls at all. The mode gate
+composes with the window gate at each call site instead, so the two questions
+stay separate.
+
+**TDD:** four pins in `test_view_mode.gd` and four in
+`test_world_planner_mode_wiring.gd`, red first (three of them; the fourth,
+"the palette is not a modal", passes from the start as a regression guard —
+which is the point of writing it). `tools/probe_hud_layout.gd` gained a
+`planner` state that builds the real `BlueprintPaletteView` and drives
+World's own `_apply_view_mode`, so the render shows what the game decides
+rather than a second opinion the probe holds; it renders the exact screen the
+bug was reported against, now clean, and the RPG render still shows the
+held-item card. Affected suites 275/275.
+
+🚧 **Not verified in a live session** — rendered offscreen, not played.
+
 ## The minimap is framed, and the planner toggle is a real switch (`concept/hud.md`, 2026-09-20)
 
 Two asks in one screenshot: *"Can you add a border and borderradius of 4px
