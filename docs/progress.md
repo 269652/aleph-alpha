@@ -30170,9 +30170,43 @@ reorder opens **7** sites in the village that already has a hut and **0**
 in each of the two that do not. The frame is not what is in the way. The
 reorder is not the fix, and was not written.
 
-What remains is a design question rather than a defect: a fisher's hut
-borrows the farmhouse's 3x2 footprint because it is drawn as one, and a
-real fisher's shack is not a farmhouse.
+### What WOULD fit, counted
+
+Two levers remain: a smaller works, and a longer reach. Both are numbers,
+so both were counted rather than argued about — sites available on the
+two hutless villages' banks, with the pond's own rails treated as clear
+ground (that is, assuming the reorder above):
+
+| works | reach 2 | reach 3 | reach 4 |
+| --- | --- | --- | --- |
+| 3x2 (today) | **0** | 1 | 5 / 9 |
+| 2x2 | **0** | 3 | 10 / 13 |
+| 2x1 | **2** | 5 | 15 / 16 |
+| 1x1 | 2 / 5 | 5 / 8 | 17 / 20 |
+
+(Two figures where the villages differ.)
+
+**The reach is the wrong lever.** A 3x2 works fits at reach 3, but its
+only site in either village is `(0,14)` — the next house row, on the far
+side of the street row at `y=16` from water at `y=17-18`. That is exactly
+the fault already reported and fixed for the pond itself: *"it's randomly
+placed somewhere not adjacent to the fishers house or across the
+street"*. A hut across the road from its own pond is not a hut on the
+bank.
+
+**The footprint is the right one.** A 2x1 works fits at the CURRENT reach,
+at `(7,17)` — immediately east of the water, same rows, no street
+between, on the fisher's own side. And it needs the reorder to get there,
+because `(7,17)` is a ring cell: the frame has to go round the shack, the
+way it already goes round a farmhouse in its field's ring. Neither change
+is sufficient alone; together they give both villages a hut in the right
+place.
+
+That leaves a design question rather than a defect, and it is the
+borrowing. `fisher_hut` takes the farmhouse's 3x2 because it is DRAWN as
+one (`draws_as`), under a direct instruction: *"use farmhouse sprite until
+illustration exists"*. A real fisher's shack is not a farmhouse, and a 2x1
+building drawn from a farmhouse sheet would not look like either.
 
 ### And the farmhouse half of the same report, which did NOT reproduce
 
