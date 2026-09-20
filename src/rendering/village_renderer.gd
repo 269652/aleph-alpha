@@ -300,9 +300,21 @@ func spawn_village(
 	# in a street row into a short one -- and before the first rail, so a
 	# hole that becomes paving is a gate rather than somewhere a fence is
 	# then laid across the road.
-	_close_short_street_gaps(chunk_coord, chunk_size, world)
+	#
+	# The landmark block is worked out BEFORE the gaps are closed, and the
+	# gap closer is told about it. Reported live with the well in shot:
+	# "The well is still placed partly on streets ... it should be placed
+	# on a free 2x2 grass patch" -- and it IS sited on a free 2x2
+	# (_grounded_landmarks, allow_road false). Then this ran and paved it
+	# over: a well standing in a one- or two-tile hole in a street row is
+	# not `_is_occupied_local` to the closer, because a landmark is a prop
+	# node rather than a building or a modification. Measured before the
+	# fix across eight real villages: sixteen well cells turned to road,
+	# two per well, every one of them in the well's own west column.
+	var landmark_block := _landmark_cells(settlement.landmarks, tile_size, world)
+	_close_short_street_gaps(chunk_coord, chunk_size, world, landmark_block)
 	var farm_fields := _fenced_farm_fields(
-		chunk_coord, chunk_size, world, _landmark_cells(settlement.landmarks, tile_size, world)
+		chunk_coord, chunk_size, world, landmark_block
 	)
 	# After the farms: a pond must not be dug through ground a farmhouse has
 	# already claimed for its beds, and the beds are only known once
@@ -346,7 +358,9 @@ func spawn_village(
 	for landmark_id in settlement.landmarks:
 		if landmark_id == "stall":
 			continue  # pitched with the market below, and only when tended
-		var landmark := _build_landmark(landmark_id, settlement.landmarks[landmark_id], parent)
+		var landmark := _build_landmark(
+			landmark_id, settlement.landmarks[landmark_id], parent, false, tile_size
+		)
 		if landmark != null:
 			spawned.append(landmark)
 	for i in npcs.size():
@@ -356,6 +370,10 @@ func spawn_village(
 		var npc_marker := _build_npc(
 			settlement, i, door_positions[i], workspot, tile_size, parent, world, market, warehouse_door
 		)
+		# Which village they belong to, so a death reaches the right roster
+		# (docs/concept/village_mortality.md mechanism 2). Set here rather
+		# than inside _build_npc because this is where chunk_coord is.
+		npc_marker.settlement_id = EntityRef.for_settlement(chunk_coord)
 		spawned.append(npc_marker)
 		npc_markers.append(npc_marker)
 		# A merchant trades at their OWN stand, on the village square (see
@@ -431,6 +449,103 @@ func spawn_village(
 ## player walks out -- a cart is not a node this renderer leaks behind. That
 ## is not hypothetical: a porter and a cart left alive on every load/unload
 ## cycle is the measured cause of the reported framerate decay.
+## Brings the villagers standing in an already-built village into line with
+## the settlement's real roster (docs/concept/village_mortality.md
+## mechanism 4). Returns the village's nodes, newcomers included.
+##
+## Asked for directly: *"now make the npcs move in"*. Until this, the
+## villagers in a chunk were a SNAPSHOT: _population_for reads the real
+## roster, but only at spawn time, so a household admitted while the
+## player stood there got nobody and the settlement card and the street
+## disagreed until the chunk reloaded.
+##
+## Additive only, on purpose. A villager who dies removes themselves
+## (NpcMarker._step_starvation), which is the removal that has a cause a
+## player watched; culling markers here to match a shrunken roster would
+## have to pick somebody arbitrary, and the one it picked would be as
+## likely to be the farmer you were watching as anybody. See the doc's
+## Status for that gap stated plainly.
+##
+## **A newcomer gets a home, a market and their own settlement, but not a
+## specialist's ground**: fields, ponds and the carter's round are handed
+## out in bulk passes over the whole village, and re-running those against
+## a village mid-life is a different change from this one. A newcomer
+## works the village's general trades until the chunk next reloads, which
+## is honest rather than invisible.
+func reconcile_villagers(
+	parent: Node2D, chunk_coord: Vector2i, chunk_origin_tiles: Vector2i,
+	chunk_size: int, tile_size: int, world, nodes: Array
+) -> Array[Node2D]:
+	var standing: Array[Node2D] = []
+	var villagers: Array = []
+	for node in nodes:
+		if not is_instance_valid(node) or node.is_queued_for_deletion():
+			continue  # somebody who has already died out from under us
+		standing.append(node)
+		if node is NpcMarker:
+			villagers.append(node)
+
+	# The REAL roster, read directly rather than through _population_for.
+	# That helper reads 0 as "this settlement was never recorded, fall back
+	# to the founding roster" -- exactly right when spawning a village for
+	# the first time, and badly wrong here: a village whose last household
+	# died looks identical to one that was never written down, so the
+	# fallback resurrects it. Measured before it was fixed
+	# (tools/probe_village_famine.gd): a village fell to a roster of 0 and
+	# this put ten villagers back on the street, who starved, forever.
+	#
+	# A world that cannot answer is left exactly as it is. Reconciling
+	# against a number nobody supplied is the invented number this
+	# project's rules forbid.
+	if world == null or not world.has_method("household_count_for_settlement"):
+		return standing
+	var roster: int = world.household_count_for_settlement(
+		EntityRef.for_settlement(chunk_coord)
+	)
+	if roster <= villagers.size():
+		return standing
+
+	# The market this village already trades in -- taken from somebody who
+	# is already standing here rather than made fresh, or a newcomer would
+	# buy and sell in a market of their own that nobody else can see.
+	var market = null
+	for villager in villagers:
+		if villager.economy != null and villager.economy.market != null:
+			market = villager.economy.market
+			break
+	if market == null:
+		return standing  # nothing to join; a reload will build them properly
+
+	# One set of ground answers, exactly as spawn_village does.
+	_buildable_memo.clear()
+	_skeleton_memo.clear()
+	var settlement := _settlement_generator.generate_settlement(
+		chunk_coord, chunk_origin_tiles, chunk_size, tile_size, roster,
+		_is_buildable_local(chunk_coord, chunk_size, world) if world != null else Callable(),
+		(
+			world.seeded_region_for_chunk(chunk_coord)
+			if world != null and world.has_method("seeded_region_for_chunk") else null
+		)
+	)
+	var warehouse_door = _warehouse_door(chunk_coord, chunk_size, tile_size, world)
+
+	for i in range(villagers.size(), mini(roster, settlement.house_positions.size())):
+		# They arrive WITHOUT a house (village_growth.md mechanism 3: the
+		# village then owes them one), so their anchor is the founding
+		# ring's own fallback position -- the same one a villager whose
+		# plot fit nowhere already keeps.
+		var home: Vector2 = settlement.house_positions[i]
+		var workspot = _grounded_position(
+			home + Vector2(0, _WORKSPOT_OFFSET_TILES * tile_size), tile_size, world, false
+		)
+		var newcomer := _build_npc(
+			settlement, i, home, workspot, tile_size, parent, world, market, warehouse_door
+		)
+		newcomer.settlement_id = EntityRef.for_settlement(chunk_coord)
+		standing.append(newcomer)
+	return standing
+
+
 func _hand_out_the_store_round(
 	npcs: Array, npc_markers: Array, chunk_coord: Vector2i, chunk_size: int, world,
 	parent: Node2D, spawned: Array[Node2D]
@@ -905,7 +1020,12 @@ func _is_street_row(chunk_coord: Vector2i, chunk_size: int, world, y: int) -> bo
 ##
 ## Idempotent like everything else here: a cell already paved is no longer a
 ## gap, so a reload closes the same holes and builds nothing twice.
-func _close_short_street_gaps(chunk_coord: Vector2i, chunk_size: int, world) -> void:
+## `reserved` holds GLOBAL cells no paving may be laid on -- the shared
+## landmarks' own footprints (see _landmark_cells). A hole a prop is
+## standing in is not a hole in the street; it is the prop.
+func _close_short_street_gaps(
+	chunk_coord: Vector2i, chunk_size: int, world, reserved: Dictionary = {}
+) -> void:
 	if world == null or not world.has_method("build_at_global"):
 		return
 	var is_buildable := _is_buildable_local(chunk_coord, chunk_size, world)
@@ -920,6 +1040,8 @@ func _close_short_street_gaps(chunk_coord: Vector2i, chunk_size: int, world) -> 
 		chunk_size, street_y, VillageLayout.STREET_GAP_CLOSE_TILES
 	):
 		var g: Vector2i = chunk_coord * chunk_size + cell
+		if reserved.has(g):
+			continue
 		world.build_at_global(g.x, g.y, TerrainRenderer.ROAD_TILE_ID)
 
 
@@ -986,14 +1108,10 @@ func _market_stand_positions(
 func _landmark_cells(landmarks: Dictionary, tile_size: int, world = null) -> Dictionary:
 	var cells: Dictionary = {}
 	for landmark_id in landmarks:
-		var at: Vector2 = landmarks[landmark_id]
-		var anchor := Vector2i(floori(at.x / float(tile_size)), floori(at.y / float(tile_size)))
-		var block: Array = [anchor]
-		if world != null and world.has_method("modification_at_global"):
-			var allow_road: bool = landmark_id != "well"
-			var chosen := _clear_block(anchor, world, allow_road, landmark_id)
-			if not chosen.is_empty():
-				block = chosen
+		# The block the landmark REALLY stands on, read back off its own
+		# position -- not a fresh search from its anchor, which is how the
+		# reservation came to cover a different 2x2 than the well did.
+		var block: Array = landmark_block_at(landmarks[landmark_id], tile_size, landmark_id)
 		for cell in block:
 			cells[cell as Vector2i] = true
 	return cells
@@ -1786,19 +1904,39 @@ func _lay_plaza_if_missing(chunk_coord: Vector2i, chunk_size: int, world) -> voi
 	var skeleton := VillageLayout.skeleton(
 		chunk_size, VillageLayout.seed_for(chunk_coord), is_buildable
 	)
-	var doorstep: Vector2i = chunk_coord * chunk_size + skeleton["civic_plot"]["doorstep"]
-	if TerrainRenderer.is_road_tile(world.modification_at_global(doorstep.x, doorstep.y)):
-		return
+	# No short-circuit on the civic doorstep. It used to skip the whole pass
+	# whenever that cell was already a road tile -- and the STREET crossing
+	# the square paves exactly that cell, so a village whose square was once
+	# abandoned could never gain it back on any later visit. The walk below
+	# is idempotent (an already-paved cell is simply counted), so running it
+	# every time costs nothing and heals such a village, the same
+	# self-healing shape the rest of this file uses.
 	var plaza: Rect2i = skeleton["plaza"]
 	var cells: Array = []
+	var pavable := 0
+	var total := 0
 	for y in range(plaza.position.y, plaza.end.y):
 		for x in range(plaza.position.x, plaza.end.x):
+			total += 1
 			var cell := Vector2i(x, y)
 			var g: Vector2i = chunk_coord * chunk_size + cell
 			var existing: String = world.modification_at_global(g.x, g.y)
-			if not is_buildable.call(cell) or (existing != "" and not TerrainRenderer.is_road_tile(existing)):
-				return
+			if TerrainRenderer.is_road_tile(existing):
+				pavable += 1  # already laid, by this pass or by the street
+				continue
+			# Water, or something already standing in the square -- a farm
+			# rail, a warehouse. Stepped OVER rather than treated as a reason
+			# to abandon the whole square: a square laid around what stands
+			# in it is still a square, and one fence cancelling a village its
+			# centre is the reported defect.
+			if not is_buildable.call(cell) or existing != "":
+				continue
+			pavable += 1
 			cells.append(g)
+	# But a handful of scattered cells is stray paving rather than a square
+	# (VillageLayout.plaza_is_worth_laying, and the measurement behind it).
+	if not VillageLayout.plaza_is_worth_laying(pavable, total):
+		return
 	for g in cells:
 		world.build_at_global(g.x, g.y, TerrainRenderer.ROAD_TILE_ID)
 
@@ -1845,6 +1983,50 @@ const _BLOCK_TOP_LEFT_OFFSETS := [
 ## Every placement a landmark's footprint could take around `cell`, each as
 ## the list of cells it would occupy. One entry, `[cell]`, for anything
 ## one tile across.
+## The cells a landmark standing at `position` (world pixels) really
+## occupies -- the ONE answer siting, reservation, solidity and the test
+## suite all read.
+##
+## There used to be three different answers, which is the whole of
+## "The well is still placed partly on streets": `_clear_block` VALIDATED
+## whichever quadrant round the anchor was free (its first option runs
+## NORTH of it), `_nearest_prop_cell` returned the centre of the anchor
+## cell ALONE, and anything reading the position back assumed the block
+## ran south-east from it. So a well was checked on one 2x2, positioned
+## over a second and reserved on a third; two of the three could be road
+## while the check passed.
+##
+## A multi-tile landmark is positioned on its block's CENTRE, so the block
+## is recovered by stepping back half a footprint -- exact for even
+## footprints, which is every one there is (the well's 2x2).
+static func landmark_block_at(position: Vector2, tile_size: int, landmark_id: String) -> Array:
+	var footprint := landmark_footprint_tiles(landmark_id)
+	if footprint == Vector2i.ONE:
+		return [Vector2i(floori(position.x / tile_size), floori(position.y / tile_size))]
+	var top_left := Vector2i(
+		roundi(position.x / tile_size) - footprint.x / 2,
+		roundi(position.y / tile_size) - footprint.y / 2
+	)
+	var cells: Array = []
+	for dy in footprint.y:
+		for dx in footprint.x:
+			cells.append(top_left + Vector2i(dx, dy))
+	return cells
+
+
+## Where a landmark whose block is `cells` stands: the block's centre.
+static func landmark_position_for_block(cells: Array, tile_size: int) -> Vector2:
+	var top_left: Vector2i = cells[0]
+	var bottom_right: Vector2i = cells[0]
+	for cell in cells:
+		top_left = Vector2i(mini(top_left.x, cell.x), mini(top_left.y, cell.y))
+		bottom_right = Vector2i(maxi(bottom_right.x, cell.x), maxi(bottom_right.y, cell.y))
+	return Vector2(
+		(float(top_left.x + bottom_right.x) + 1.0) * 0.5 * tile_size,
+		(float(top_left.y + bottom_right.y) + 1.0) * 0.5 * tile_size
+	)
+
+
 static func landmark_block_options(cell: Vector2i, landmark_id: String) -> Array:
 	var footprint := landmark_footprint_tiles(landmark_id)
 	if footprint == Vector2i.ONE:
@@ -1930,7 +2112,13 @@ func _nearest_prop_cell(
 					continue
 				if require_street_access and not _touches_road(cell, world):
 					continue
-				return Vector2((cell.x + 0.5) * tile_size, (cell.y + 0.5) * tile_size)
+				if footprint == Vector2i.ONE:
+					return Vector2((cell.x + 0.5) * tile_size, (cell.y + 0.5) * tile_size)
+				# Stand on the block that was just CHECKED, not on the
+				# anchor cell it was searched from -- see landmark_block_at.
+				return landmark_position_for_block(
+					_clear_block(cell, world, allow_road, _footprint_id(footprint)), tile_size
+				)
 	return null
 
 
@@ -2048,8 +2236,11 @@ const _SOLID_LANDMARK_FOOTPRINT_FRACTION := 0.7
 const GROUND_FLOOR_COLLISION_LAYER := 1
 
 
-func _build_landmark(landmark_id: String, position: Vector2, parent: Node2D, personal: bool = false) -> Sprite2D:
-	var texture := _landmark_texture(landmark_id, position)
+func _build_landmark(
+	landmark_id: String, position: Vector2, parent: Node2D, personal: bool = false,
+	tile_size: int = TerrainRenderer.TILE_SIZE
+) -> Sprite2D:
+	var texture := _landmark_texture(landmark_id, position, tile_size)
 	if texture == null:
 		return null  # no art for this prop: nothing is drawn (see _landmark_texture)
 	var landmark := Sprite2D.new()
@@ -2120,12 +2311,22 @@ func _solid_body_for(size: Vector2i) -> StaticBody2D:
 ## prop does not draw the same variant twice, and so a prop looks like
 ## itself across reloads. Only matters for a prop whose art is a grid; a
 ## plain single-image sheet has one cell whatever the seed.
-func _landmark_texture(landmark_id: String, position: Vector2) -> Texture2D:
+func _landmark_texture(
+	landmark_id: String, position: Vector2, tile_size: int = TerrainRenderer.TILE_SIZE
+) -> Texture2D:
 	var seed_value := hash("%d_%d_prop" % [int(position.x), int(position.y)])
+	# A prop that stands on a declared footprint is drawn exactly as wide
+	# as that ground -- see LandmarkSheet.world_scaled_image. Asked for
+	# directly: "scale the art to its footprint". One cell wide props keep
+	# the size their own art declares, which is what they always had.
+	var footprint := landmark_footprint_tiles(landmark_id)
+	var world_width: int = footprint.x * tile_size if footprint != Vector2i.ONE else 0
 	# Scaled to the size that prop really is, never assumed to have been
 	# authored at it -- see LandmarkSheet.world_scaled_image, and the
 	# "huge potato crops" history it cites.
-	var image := LandmarkSheet.world_scaled_image(landmark_id, seed_value, _structure_sprite)
+	var image := LandmarkSheet.world_scaled_image(
+		landmark_id, seed_value, _structure_sprite, world_width
+	)
 	if image != null:
 		return ImageTexture.create_from_image(image)
 	# No sheet, no prop. The procedural box (ProceduralLandmarkSprite) was

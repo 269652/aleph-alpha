@@ -402,7 +402,11 @@ static func finished_sheet_chain(building_id: String, seed_value: int) -> Array:
 		chain.append({
 			"path": variation,
 			"columns": int(idle_grid["columns"]), "rows": int(idle_grid["rows"]),
-			"row": idle.y, "column": idle.x, "grid": "dividers",
+			# The sheet's own, not one kind for all of them: cottage_*/
+			# manor_* have no divider line to cut on (see
+			# BuildingLifecycleSheet._GRID_8X5).
+			"row": idle.y, "column": idle.x,
+			"grid": String(idle_grid.get("grid", "dividers")),
 		})
 	var variant_sheet := variant_sheet_of(building_id)
 	if variant_sheet != "":
@@ -540,8 +544,16 @@ const PLOT_MARGIN_SHARE := 0.09
 ## same discipline PLOT_MARGIN_SHARE itself keeps: a cottage must come out
 ## smaller than a house in both dimensions, and must still cover most of its
 ## own plot, or it stops reading as a building on that ground.
+## It was 0.85, against a cottage whose picture was being cut off above the
+## eaves. Un-cutting it (2026-09-20 -- see BuildingLifecycleSheet._GRID_8X5)
+## gave every cottage back its roof apex, finial and chimney cap: 31 more
+## rows of drawing, about a fifth taller. Drawn at the old share that made
+## the cottage the tallest thing on the street again, which is the exact
+## misorder this constant exists to correct, so it moves with the art it is
+## scaling -- pinned by the same two tests, not by a new number anybody
+## liked.
 const _DRAW_SCALES := {
-	"house_small": 0.85,
+	"house_small": 0.80,
 }
 
 

@@ -70,7 +70,8 @@ func spawn_entrance_markers(
 
 ## Reveals the real diggable-rock chamber around `entrance_local_cell` (see
 ## GeologyChamber.cells_for): spawns one DiggableRock per chamber cell that
-## `strata` doesn't already report as a mined-out TUNNEL, wired straight
+## `strata` doesn't already report as open -- a mined-out TUNNEL or a
+## natural cave VOID -- wired straight
 ## back to that same Strata instance so mining one permanently updates it.
 ## Entry-lifetime -- the caller frees these the moment the player leaves
 ## the entrance's vicinity, same as paint_roofs' hidden-room repaint, but
@@ -82,8 +83,13 @@ func reveal_chamber(
 	var spawned: Array[Node2D] = []
 	for cell in GeologyChamber.cells_for(entrance_local_cell):
 		var kind := strata.cell_kind_at(cell)
-		if kind == Strata.KIND_TUNNEL:
-			continue  # already dug out -- nothing to spawn, walk straight through
+		if Strata.is_walkable(kind):
+			# Already open -- nothing to spawn, walk straight through.
+			# Covers both a tunnel a player dug and a natural passage water
+			# carved (see docs/concept/underground.md); spawning rock in
+			# the latter would wall off a cave with rock that was never
+			# there.
+			continue
 		var rock := DiggableRock.new()
 		rock.strata = strata
 		rock.local_cell = cell

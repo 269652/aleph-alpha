@@ -21,6 +21,17 @@ allowed to appear.
    `UiTheme.panel_stylebox()` (`PANEL_BG`, alpha 0.98, with a border) — the
    same card the survival panel and `CreaturePanel` already use, so "legible"
    is one decision made once rather than a per-widget judgement call.
+
+   The same rule now covers **selection**: a control that is toggled ON
+   wears `UiTheme.selected_button_stylebox` — the gold `ACCENT`, thicker
+   than an ordinary border, over a background that lifts rather than sinks.
+   Godot's own `pressed` stylebox is a shade *darker* than normal in this
+   theme (about 5% of value), which measured as invisible over a dark card
+   when the build palette was first rendered
+   (`tools/probe_build_palette.gd`). It is applied per control rather than
+   in the shared `Theme`, because `pressed` there also means a momentary
+   click on every ordinary button in the game, and marking those gold would
+   make every button in every window flash as selected while held.
 2. **A number and the bar beside it always mean the same thing, and full is
    always good.** Every meter is shown as a **reserve**, never as a deficit,
    whichever way the model happens to store it internally.
@@ -49,6 +60,51 @@ The rule is **not** to reorder the layers but to hide the floaters:
 > is true. `World.world_hint_visible_for(can_show, window_open)` is the single
 > pinned expression; `_any_gameplay_window_open()` is the same predicate
 > `EscapeAction.action_for` already treats as "a modal is open".
+
+### An affordance hint is wrong in planner mode, not merely covered
+
+Reported live with a screenshot: the build palette open, and *"Tree"*,
+*"Chop (Space)"* and an *"Iron Axe"* card all drawn straight over it.
+
+Two different faults, and it is worth keeping them apart because the fix for
+one is not the fix for the other.
+
+**The held-item card was simply in the wrong place.** It sits in the hotbar's
+own bottom-centre strip, naming what the hotbar's hand is holding, and
+`_apply_view_mode` gives that strip to the palette in planner mode — it hides
+`_hotbar` there. The card was added later and nobody hid it with the thing it
+belongs to. It now follows `ViewMode.shows_hotbar`, the same predicate the
+hotbar itself reads.
+
+**The prompt and the tooltip were a deeper mistake than occlusion.** The
+tempting fix is "do not draw a world hint over the palette", treating this as
+a z-order problem. But *"Chop (Space)"* is not a label that happened to land
+in a bad place — in planner mode there is no chopping. The hotbar is gone, the
+click plants a blueprint, and the key the prompt names does something else.
+The hint is **wrong**, not covered, and it would still be wrong drawn in an
+empty corner of the screen.
+
+So the rule is about the mode, not about the rectangle:
+
+> `ViewMode.shows_world_hints(mode)` is false in planner mode. An affordance
+> hint names an action the player could take right now; a mode that does not
+> offer that action must not advertise it.
+
+Readouts are explicitly **not** covered by this and keep their existing rule
+(`ViewMode.shows_readouts`, true in both modes): the minimap, the meters and
+the message stack report what is true, they do not offer an action, and the
+mode that is laying out a settlement is the one that most needs to know where
+it is.
+
+The charge meter goes with the hints rather than the readouts — it is the
+charge on a held stone, which is an RPG-mode action in progress.
+
+`_any_gameplay_window_open()` is **not** touched by any of this. It is
+Escape's notion of "a modal is open", and the palette is not a modal: Escape
+must not close the palette and strand a player in planner mode with no
+controls. The mode gate composes with the window gate at each call site
+instead — `world_hint_visible_for(can_show and shows_world_hints(mode), ...)`
+— so the two questions stay separate.
 
 That predicate is deliberately **not** widened:
 
@@ -317,6 +373,79 @@ The death card stays centred on the screen and is the one card in the HUD
 allowed to sit over the world's middle, because it is the one message the
 player must not miss.
 
+### The minimap is framed like every other card
+
+Asked for directly: *"add a border and borderradius of 4px to the minimap"*.
+
+The minimap was the one readout on screen with no frame at all — a bare
+`TextureRect` whose generated map ran to a hard square edge against the world
+behind it, sitting directly above a world-clock card and a Karma card that
+both have the shared rounded, bordered one. It is not a pillar-1 legibility
+problem (a map is opaque; it does not vanish over snow), it is a *coherence*
+one: the corner reads as one column only if everything in it is built the
+same way.
+
+`UiTheme.map_frame_stylebox()` is the frame: the shared `PANEL_BORDER` at the
+shared `BORDER_WIDTH`, a **transparent** background — the map is the
+background — and `MAP_CORNER_RADIUS` of **4**, the radius that was asked for
+rather than the theme's own 6. Four is deliberate and pinned: a map is read
+for the shapes in it, and the more its corners are rounded the more of the
+actual map they eat.
+
+Rounding a `TextureRect`'s own corners needs more than a stylebox, which
+draws *behind* the texture rather than clipping it. Two nodes do it:
+
+1. a **clipper** `Panel` with the same 4px-radius shape and
+   `clip_children = CLIP_CHILDREN_ONLY`, so it is never drawn itself and its
+   shape is used as a mask for the map inside it;
+2. a **frame** `Panel` drawn *after* the map (later sibling = later draw, the
+   rule this file's own "One CanvasLayer" section already states), carrying
+   the border only.
+
+The border has to be a separate node drawn on top rather than part of the
+clipper, because a stylebox's border is drawn under the clipper's children —
+the map would cover the inner half of it.
+
+### The planner toggle is a switch, because it has two states
+
+Asked for directly: *"make the planner switch a ios like switch button with
+two states"*.
+
+It was a `Button` whose caption was the mode you would switch **to** —
+`ViewMode.toggle_label`, reading "Planner Mode" while you are in RPG mode and
+"RPG Mode" while you are in planner mode. That is a correct label for a
+*button*, and the wrong model for a *switch*: a button says what pressing it
+does, a switch shows what is currently true. Both readings of "Planner Mode"
+are available to a player looking at the old button — *am I in planner mode,
+or is that what I get if I press it?* — and nothing on screen answered it.
+
+A switch answers it by construction, so the label stops changing:
+
+- The caption is the constant `ViewMode.SWITCH_LABEL` ("Planner"), naming the
+  thing the switch controls rather than the action.
+- The switch's **on** state is `ViewMode.shows_palette(mode)` — the existing
+  predicate, not a second one that could drift from it.
+
+`src/ui/toggle_switch.gd` is the widget, with its geometry and colours as
+pure statics so the parts that can be wrong are tested rather than eyeballed:
+
+| Rule | Why |
+|------|-----|
+| The knob is fully inside the track at **both** ends | A knob that overhangs at one end is the classic off-by-a-padding bug, and it only shows in one of the two states |
+| Off→on moves the knob by exactly `track_width - knob - 2·padding` | The two rest positions are symmetric; neither end is special |
+| The track is a pill: corner radius is **half its height** | What makes it read as a switch rather than a small rounded button |
+| On is `UiTheme.ACCENT`, off is `UiTheme.BUTTON_NORMAL` | The theme's own existing on/off pair, not a third palette |
+| On and off must be **visibly** different in luminance | A switch whose two states look alike is not a switch |
+
+The knob slides rather than jumps — a short `Tween` on its position — which
+is the whole reason an iOS switch reads as one control with two states
+instead of two different pictures. The animation is deliberately *not*
+tested: what is pinned is where the knob comes to rest.
+
+Keyboard focus stays off it (`FOCUS_NONE`), for the reason the old button
+already documented: a focused `Control` answers `ui_accept`, which is Space,
+which is the attack key.
+
 ### UI scale
 
 Every font size in the HUD was a hardcoded `add_theme_font_size_override`
@@ -342,7 +471,136 @@ Deliberately **not** done by scaling the `$UI` CanvasLayer: a `CanvasLayer`
 scales about its origin, so every bottom- and right-anchored card would walk
 off the screen. Layout stays at one scale and text is what grows.
 
+### The settlement card: what the place you are standing in is doing
+
+Asked for directly: *"a context dependent Village / City panel which shows
+stats and status of the village / city like population; happiness; gold and
+so"*.
+
+**Context-dependent means it appears because you are somewhere, not because
+you pressed something.** A settlement exists per chunk
+(`EntityRef.for_settlement`), so the card shows while the player stands in
+a chunk that has one and hides the moment they leave — the same shape the
+land-sense label and the creature panels already use, and the reason it
+needs no key of its own.
+
+**The title is the settlement's real tier, not the word "village".**
+`SettlementTier.tier_for` already classifies a settlement as **hamlet /
+town / city** from three real dimensions that must ALL cross together —
+household count, active institutions, and production diversity — precisely
+so that population alone never promotes a place. The card says whichever
+one the simulation currently computes, so watching the title change from
+Hamlet to Town is watching three real things happen at once.
+
+**Every row is a read of state that already exists.** Nothing here is
+tracked for the card's benefit:
+
+| row | where it comes from |
+|---|---|
+| tier | `SettlementTier.tier_for` |
+| population | households in the settlement, and how many are housed (`VillageCensus`) |
+| happiness | `HouseholdWellbeing.mean_productivity`, the same number `settlement_productivity` already scales build rates by |
+| worst need | the lowest of `HouseholdWellbeing`'s five real needs — food, shelter, work, income, community |
+| gold | the settlement's own guild chest (`guild_for_settlement`) |
+| food | village market stock against `FOOD_STOCK_PER_HOUSEHOLD_TARGET` |
+| building | what the growth ladder says this settlement owes itself next |
+
+**Happiness is shown with the reason beside it.** One blended percentage
+is nearly useless on its own — `HouseholdWellbeing` is a weighted mix of
+five needs, and "68%" tells a player nothing about what to do. Naming the
+weakest need next to it ("68% · worst: food") turns the card from a score
+into a prompt, and costs nothing, because the per-need numbers are already
+computed to produce the blend.
+
+**A settlement with no data reads as unknown, never as zero.** A chunk
+whose village is loaded but whose households have not been assessed yet is
+a real state, and showing 0% happiness for it would be a lie the player
+would act on.
+
+### FPS is back on, outside the diagnostics strip
+
+FPS shipped in the middle of the clock line until the split-strip pass
+moved it, with lat/lon and sun elevation, into the F3 diagnostics strip —
+off by default. Reported back simply: *"also add back the FPS"*.
+
+It returns to the always-on world-clock card, and **only it**: lat/lon and
+sun elevation stay behind F3. Those two are genuinely diagnostic — a
+player reads them when debugging worldgen — while a frame counter is
+something you want visible while the thing it measures is going wrong,
+which is exactly when you are not thinking to press F3.
+
+### A panel occupies space; it does not choose coordinates
+
+Reported with both open: *"The Town Panel and Warehouse / Building panel
+overlap.. a panel should occupy space and make other panels render below
+it.. don't use fixed coords"*.
+
+The column system already said this in its own doc comment — *"each builder
+simply adds to the column it belongs in and never positions itself against
+its neighbour's height"* — and the building readout was the one card that
+never joined. It sat at `PRESET_CENTER_RIGHT`, a hand-picked 24px from the
+edge and 180px tall whatever it held, while the right column grew down from
+the minimap straight into it. The settlement card landing in that column is
+what finally made the collision visible; the panel had been placed against
+nothing all along.
+
+The rule, now pinned rather than merely written down:
+
+> A control that joins a HUD column is positioned **by** that column.
+> `_add_hud_card` and `offset_top`/`offset_bottom` in the same builder is a
+> contradiction, and `test_no_card_that_joins_a_column_also_places_itself`
+> fails on it — for every builder, not just the one that was reported.
+
+Two properties fall out of the container rather than being arranged, and
+both are tested against a real `HousePanel` in a real `VBoxContainer`
+(`test_hud_panel_flow.gd`) instead of asserted about constants:
+
+- **A taller card above pushes the one below further down.** That is what
+  "occupies space" means, and it is exactly what a hand-picked offset
+  cannot do.
+- **A closed panel leaves no hole.** A hidden child of a `VBox` takes no
+  room — the same property the message stack above already relies on — so
+  the building readout costs nothing while it is shut.
+
+Ordering within the column is a judgement, not a constraint: the standing
+readouts (where you are, when you are, what this place is doing) come
+first, and the readout a *click* opens comes last, so it appears beneath
+them rather than shoving them about.
+
 ## Status
+
+- ✅ **The settlement card** (`src/ui/settlement_readout.gd`, 17 tests) —
+  pure model, thin Node: facts in, strings out, so a city's rows are
+  testable without founding one. `EarthChunkManager.settlement_readout_at`
+  is the gatherer, returning `{}` where there is no settlement, which is
+  the whole of "context dependent". Verified with a real render at both
+  ends (`tools/probe_hud_layout.gd`): filled as a city in `busy`, and
+  **gone rather than blank** in `calm`.
+- ✅ Happiness is the households' mean **happiness**, not their mean
+  **productivity**. `HouseholdWellbeing` keeps the two apart on purpose —
+  productivity is happiness dragged down by hunger, because a household
+  with a beautiful town and an empty stomach does not work well — so a row
+  labelled happiness that reported the work rate would answer a different
+  question than it asks.
+- ✅ Food reads as **carrying capacity** (`SettlementFood.carrying_capacity`,
+  "feeds 17 of 12"), the number the simulation already assesses a
+  settlement by, rather than a raw stock figure invented for this card.
+- ✅ **FPS is back on the always-on clock card**, sharing the movement line
+  so the card's fixed three-line height is unchanged. `UNKNOWN_FPS` (0)
+  leaves the reading off entirely on the first frame, before anything has
+  been measured, rather than claiming 0.
+- ⬜ **FPS now appears twice while F3 is open** — once on the clock card and
+  once in the diagnostics strip. Harmless, and left alone deliberately:
+  removing it from the strip would shrink `DIAGNOSTICS_LINE_COUNT` and
+  rewrite a contract this request never asked about.
+- ⬜ The card is read-only. It reports what a settlement is doing and offers
+  no way to act on it — no way to see WHICH household is unhoused, or to
+  act on the worst need it names.
+- ⬜ Nothing is shown for a settlement whose chunk is not loaded, because
+  the purse and the village market are only reachable while it is. A
+  player cannot check on a town from the next valley.
+
+
 
 - ✅ **One shared message stack** — `World._build_message_stack` /
   `_make_message_banner` / `_set_message_banner`; order pinned by
@@ -361,6 +619,21 @@ off the screen. Layout stays at one scale and text is what grows.
   minimap, top-right. `World.karma_display_text`/`karma_display_color`
   are the pure, tested halves (`test_world_hud.gd`): a signed number,
   coloured gold/red/neutral by sign.
+- ✅ **Every HUD card is laid out by its column** (2026-09-20) — the
+  building readout joined the right-hand column; it was the last card
+  placed by hand, and it overlapped the settlement card. See "A panel
+  occupies space" above. Pinned three ways: the real stacking behaviour
+  against a real `HousePanel`, a source-contract check on the builder, and
+  a generalised one over *every* builder that adds a card, so the next one
+  cannot reintroduce it. `test_hud_panel_flow.gd` 6/6; rendered for a look
+  with `tools/probe_hud_column_flow.gd`.
+- ✅ **One shared mark for "this one is selected"** (2026-09-20) —
+  `UiTheme.selected_button_stylebox` / `BUTTON_SELECTED`, pinned by
+  `test_ui_theme.gd` against the measured failure it replaced: the
+  distance from normal must beat the ~5% of value that `pressed` gave and
+  that could not be seen. Its first consumer is the build palette's armed
+  slot and open tab (see
+  [planner_mode.md](planner_mode.md)'s "The build palette").
 - ✅ **The top-left strip is split** — `$UI/DebugLabel` is gone from
   `world.tscn`. Its player half is the world-clock card
   (`World._build_world_clock_card`, `HudReadouts.world_clock_lines` /
@@ -396,6 +669,25 @@ off the screen. Layout stays at one scale and text is what grows.
   `World._build_hud_columns` / `_add_hud_card` / `_survival_row_height`.
   Verified by rendering rather than by argument, at 0.75, 1.0 and 1.75
   (`tools/probe_hud_layout.gd`).
+- ✅ **The minimap is framed** (2026-09-20, asked for directly) —
+  `UiTheme.map_frame_stylebox`/`map_clip_stylebox` +
+  `World._build_minimap_frame`: a clipper that rounds the map texture's own
+  corners to 4px and a frame drawn over it carrying the shared border.
+  Tested (`test_ui_theme.gd`) and rendered.
+- ✅ **The planner toggle is a switch** (2026-09-20, asked for directly) —
+  `src/ui/toggle_switch.gd`, captioned by the constant `ViewMode.SWITCH_LABEL`
+  and turned on by the existing `ViewMode.shows_palette`. Geometry and colours
+  tested (`test_toggle_switch.gd`), both states rendered. The render caught
+  what the geometry tests could not: inside a row the track stretched and
+  stopped being a pill, now pinned by
+  `test_the_switch_keeps_its_own_height_inside_a_row`.
+- ✅ **Nothing is drawn over the build palette** (2026-09-20, reported with a
+  screenshot) — `ViewMode.shows_world_hints` gates the interaction prompt,
+  the hover tooltip and the charge meter; the held-item card follows
+  `ViewMode.shows_hotbar`, the strip it lives in. `_any_gameplay_window_open`
+  is untouched, so Escape still cannot close the palette. Tested
+  (`test_view_mode.gd`, `test_world_planner_mode_wiring.gd`) and rendered
+  (`tools/probe_hud_layout.gd -- 1.0 planner`).
 - 🚧 **Not verified in a live session.** Every check above is headless: unit
   tests plus offscreen renders of the real builders. Nobody has yet pressed
   F3, dragged the scale slider or watched a chip appear in a running game.

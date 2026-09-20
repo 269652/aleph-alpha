@@ -203,3 +203,109 @@ func test_no_facing_preference_keeps_the_smallest_turn():
 	)
 
 	assert_gt(heading.dot(Vector2.RIGHT), 0.0)
+
+
+# -- buildings (see docs/concept/navigation.md) -----------------------------
+#
+# Reported live: "fix creatures walking through houses too". Buildings were
+# invisible to this gate for a structural reason, not a tuning one:
+# EarthChunkManager.solid_obstacles_near -- the only thing it ever sees --
+# walks _loaded_trees and _loaded_stones and has no building term at all.
+#
+# They arrive as a TILE PREDICATE rather than as circles in `blockers`.
+# Circles over a rectangle either leave real diamond gaps at every
+# four-tile corner or block past the wall, and either way cost
+# O(footprint tiles) per candidate heading -- ~70 blockers against twelve
+# headings per creature per tick in a village, the exact shape of cost
+# solid_obstacles_near exists to escape.
+
+const GATE_TILE := 16
+
+
+## One 3x3 house occupying tiles (4,4)-(6,6).
+func _house_tiles() -> Callable:
+	return func(tile: Vector2i) -> bool:
+		return tile.x >= 4 and tile.x <= 6 and tile.y >= 4 and tile.y <= 6
+
+
+func _tile_centre(tile: Vector2i) -> Vector2:
+	return Vector2(tile.x * GATE_TILE + GATE_TILE * 0.5, tile.y * GATE_TILE + GATE_TILE * 0.5)
+
+
+func test_a_creature_will_not_step_into_a_house():
+	# Standing just west of the wall, wanting to walk straight east into it.
+	var origin := _tile_centre(Vector2i(3, 5))
+	var heading: Vector2 = CreatureMovementGate.clear_direction(
+		origin, Vector2.RIGHT, GATE_TILE, [], [], 0.0, Vector2.ZERO, 0.0,
+		_house_tiles(), GATE_TILE
+	)
+	if heading == Vector2.ZERO:
+		pass  # "nowhere to go" is an acceptable answer; walking in is not
+	else:
+		var landed := origin + heading * GATE_TILE
+		var tile := Vector2i(floori(landed.x / GATE_TILE), floori(landed.y / GATE_TILE))
+		assert_false(_house_tiles().call(tile), "the creature stepped into the house at %s" % tile)
+
+
+func test_a_blocked_creature_turns_rather_than_stopping():
+	# The whole point of this gate is that it finds a way round: with open
+	# ground north and south of the wall, a creature facing it must get a
+	# real heading back, not Vector2.ZERO.
+	var origin := _tile_centre(Vector2i(3, 5))
+	var heading: Vector2 = CreatureMovementGate.clear_direction(
+		origin, Vector2.RIGHT, GATE_TILE, [], [], 0.0, Vector2.ZERO, 0.0,
+		_house_tiles(), GATE_TILE
+	)
+	assert_ne(heading, Vector2.ZERO, "the creature froze at the wall instead of turning")
+
+
+func test_no_candidate_heading_ever_lands_inside_a_house():
+	# Swept rather than sampled: from every tile ringing the house, in
+	# every direction, whatever heading comes back must be walkable.
+	var blocked := _house_tiles()
+	for y in range(2, 9):
+		for x in range(2, 9):
+			if blocked.call(Vector2i(x, y)):
+				continue
+			var origin := _tile_centre(Vector2i(x, y))
+			for degrees in [0, 45, 90, 135, 180, 225, 270, 315]:
+				var desired := Vector2.RIGHT.rotated(deg_to_rad(float(degrees)))
+				var heading: Vector2 = CreatureMovementGate.clear_direction(
+					origin, desired, GATE_TILE, [], [], 0.0, Vector2.ZERO, 0.0, blocked, GATE_TILE
+				)
+				if heading == Vector2.ZERO:
+					continue
+				var landed := origin + heading * GATE_TILE
+				var tile := Vector2i(floori(landed.x / GATE_TILE), floori(landed.y / GATE_TILE))
+				assert_false(
+					blocked.call(tile),
+					"from %s heading %d deg landed in the house at %s" % [
+						Vector2i(x, y), degrees, tile
+					]
+				)
+
+
+func test_a_creature_caught_inside_a_building_can_always_leave():
+	# Same escape every other rule here keeps: a house raised over a
+	# standing animal must not imprison it.
+	var origin := _tile_centre(Vector2i(5, 5))  # dead centre of the house
+	var heading: Vector2 = CreatureMovementGate.clear_direction(
+		origin, Vector2.RIGHT, GATE_TILE, [], [], 0.0, Vector2.ZERO, 0.0,
+		_house_tiles(), GATE_TILE
+	)
+	assert_ne(heading, Vector2.ZERO, "a creature caught inside a building was trapped there")
+
+
+func test_without_a_tile_predicate_the_gate_behaves_exactly_as_before():
+	# Every pre-existing 6- and 8-argument call site must be untouched.
+	var origin := _tile_centre(Vector2i(3, 5))
+	assert_eq(
+		CreatureMovementGate.clear_direction(origin, Vector2.RIGHT, GATE_TILE, [], [], 0.0),
+		Vector2.RIGHT
+	)
+	assert_eq(
+		CreatureMovementGate.clear_direction(
+			origin, Vector2.RIGHT, GATE_TILE, [], [], 0.0, Vector2.ZERO, 0.0, Callable(), 0
+		),
+		Vector2.RIGHT
+	)

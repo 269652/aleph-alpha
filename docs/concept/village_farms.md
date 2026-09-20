@@ -220,6 +220,42 @@ rails/posts and plant_fibre (4) lashing them".
   axes of a corner, so the frame touches the crop on every side without ever
   covering it.
 
+- **Consecutive rails SHARE a post — they do not merely meet.** Reported
+  with a finished enclosure in shot: *"the enclosures render unnecessary
+  vertical rails"*.
+
+  Every cell of `fence.png` is a whole panel: a post at **each** end with
+  rails between (the sheet's four columns are North/South front views and
+  East/West top views, all the same design). An earlier pass — *"also
+  scale"* — made a rail's wood span exactly one tile so that consecutive
+  rails MEET with no gap. That closed the gaps and left the real problem
+  untouched: two whole panels meeting put **two posts** at every junction, a
+  few pixels apart, which is what reads as a doubled or unnecessary rail.
+
+  A run of six rails should show seven posts, not twelve. So a rail is
+  scaled so the distance between **its own two post centres** is exactly one
+  tile, rather than so its whole wood is. Its two posts then land precisely
+  on its tile's two edges, the neighbour's near post lands on the same
+  point, and the two draw over each other as one — the outer half of each
+  end post overhanging into the next tile is the same post that tile draws
+  for itself.
+
+  The number is MEASURED from the art, never assumed: `_post_spacing_of`
+  classifies each slice of the panel against the **rail** level (the median
+  of the slices carrying any content) rather than against the peak, and
+  requires a post band to be at least 2% of the run wide. Both guards are
+  load-bearing — the trimmed cells carry stray edge slices, including one
+  fully opaque column at the far end, that own the peak and otherwise
+  swallow the whole run. Measured this way all four facings agree, at source
+  resolution and at drawn resolution alike: the posts sit about 0.62–0.65 of
+  the run apart, which at a 16px tile had them **12.5–13.0px apart inside a
+  16px tile**.
+
+  The consequence, stated plainly: the timber is drawn about a quarter
+  thicker than before, because the scale is uniform on both axes (this
+  project does not stretch art along one axis to fit). A fence that shares
+  its posts is necessarily a little heavier than one that merely abuts.
+
 - **A corner post has a ground POINT, not a ground line.** Reported with all
   three visible corners crossed out (*"the fences still aren't optimal"*).
   A corner knew only which side WALL it capped, so its art was placed as a
@@ -474,6 +510,31 @@ moat round every field with the rails floating in the middle of it. A rail
 is a **line on one edge** instead — the edge facing the beds it encloses —
 and the rest of its own tile is ordinary ground.
 
+- **The worker may cross into their own beds.** Rails stop a villager the
+  way they stop an animal (`NpcMarker._blocked_step`) — but a field's rails
+  stand on its *inner* edge, so the one villager they shut out is the
+  farmer whose beds they enclose. Reported live: *"The farmer doesn't farm
+  anymore"*. Measured on a real village with
+  `tools/probe_village_farming.gd`: of three villagers with a field, one
+  worked 58 beds in ten minutes and the other two worked **none**, frozen
+  in `APPROACHING` for 2650 of 2750 on-field ticks — the herbalist nine
+  pixels from its own soil, refused the last step south into it.
+
+  "The gate" above exists for exactly this, but *reaching* it needs
+  pathfinding a `Sprite2D` walking one `move_toward` per frame does not
+  have. The commit that gave rails their hitbox said so itself: *"boxed in
+  on both, they stay put"*. So a villager may cross into a cell of their
+  own `field_cells`, and nothing else moves — every other rail still stops
+  them, **a neighbour's field included**, and no villager without a field
+  is exempt from any rail. The farmer is who the enclosure is *for*; it is
+  there to keep animals out, not the worker.
+
+  Still open, and measured rather than assumed: a farmer whose own field
+  lies beyond **another** farmstead's ring still cannot reach it. In the
+  probe's village the third farmer stands west of its neighbour's fenced
+  beds with its own field east of them, and walks into that ring's rail
+  forever. Its own gate would serve if it went to its farmhouse frontage
+  first; that is the routing this rule deliberately does not attempt.
 - **Which edge.** `VillageFarm.fence_inner_direction` is the inverse of what
   the facing names: a rail closing the field's *north* side stands north of
   the beds, so its rails lie on its own *south* edge. Pinned against
@@ -680,18 +741,83 @@ and 0. `FIELD_YIELD_PER_WORK_BLOCK` was re-measured at **278** from 225 by
 the same test that pinned the old one — the roster had been sized against a
 field that lost beds every night.
 
-### Every field sows wheat, for now (2026-09-19)
+### Every field sows wheat, for now (2026-09-19) — superseded
 
 Asked directly, with a field of unrecognisable purple plants in shot: *"i
 don't even know what the purple crops are it plants.. atm it should plant
 only wheat which grows and gets harvested properly"*. The purple was the
 herbalist's own herb, dying overnight exactly as the wheat beside it was.
 
-`CROP_BY_OCCUPATION` now reads `{"farmer": "wheat", "herbalist": "wheat"}`.
-Deliberately a narrowing of the CROP, not of who farms: the herbalist keeps
-the farmhouse and field an earlier ask gave them (*"similar to a farmer the
-herbalist should build a farm house and plant herbs"*), and putting herbs
-back in their bed is that one entry and nothing else.
+`CROP_BY_OCCUPATION` was narrowed to `{"farmer": "wheat", "herbalist":
+"wheat"}` — deliberately a narrowing of the CROP, not of who farms.
+
+**That narrowing is withdrawn by the section below.** It was the right
+answer to "the crop dies before it ripens" and the wrong one to keep once
+the night bug was fixed: a village that sows nothing but wheat has nothing
+edible, because wheat is not food (see below), and the herbalist's own herb
+— which is — never went back in.
+
+### What a field sows follows the village's need (2026-09-20)
+
+Reported with the village's own panels open: *"they have 0 Herbs even though
+there are 3 farm houses... so deciding what to plant must be based on
+demand"*, alongside *"The warehouse shows 205 Wheat but the Villagers show
+50% food"*.
+
+Both are the same defect seen from two sides, and the second is the one that
+explains it. **Wheat is `kind = "material"`, not `kind = "food"`** —
+[milling_and_baking.md](milling_and_baking.md)'s own first pillar, "grain is
+not food until it is milled and baked". Every filter that decides whether a
+village is fed (`SettlementFood`, `VillageMarket`, `VillageEstates`'
+`kind:food` token) therefore counts a full granary of wheat as **zero
+food**. A village sowing nothing but wheat, with no mill standing, starves
+beside it. That is not a distribution failure; it is a cropping one.
+
+Two rules replace the occupation table:
+
+1. **The crop is chosen at SOWING, not at hiring.** `NpcMarker._field_crop`
+   was set once in `setup_economy` from the villager's occupation and never
+   revisited, so a village's entire cropping plan was fixed the moment its
+   villagers were built — before a single basket had ever been drawn.
+2. **It is chosen from the same satisfaction reading the needs panel
+   shows.** `VillageAssembly`'s state already carries `satisfaction` per
+   good, straight off the real `EstateConsumption.draw`
+   ([village_estates.md](village_estates.md) mechanism 8). A field sows the
+   sowable crop whose good is **least satisfied**. The panel and the plough
+   read one number, so what a village says it lacks and what it plants
+   cannot disagree.
+
+**What a crop answers**, and why each is in the list rather than a crop
+being anything with art:
+
+| Crop | Answers | Why |
+|------|---------|-----|
+| `herb` | `herb`, `kind:food` | the kossaet station good, and edible itself |
+| `carrot` | `kind:food` | real `kind = "food"`, real crop art |
+| `potato` | `kind:food` | the same |
+| `wheat` | `bread` | **only through a mill and a bakery** |
+
+Wheat's row is the rule that matters. It is offered **only where the
+village can really bake it** — a mill and a bakery standing. Everywhere
+else it answers nothing at all, so a field sows something the village can
+eat on the day it is harvested rather than a material nobody can mill.
+
+A crop is scored by the **worst-supplied** good it answers, not the mean: a
+crop that would relieve a good sitting at 0.0 is worth more than one
+relieving a good at 0.9, which is the same "a household with all the bread
+in the world and no fuel is cold" minimum rule `EstateConsumption` already
+applies one level up.
+
+**Occupation survives as a tie-break, not as the rule.** Among crops the
+village needs equally, an herbalist reaches for herbs. `VillageFarm.
+crop_for` keeps its second job untouched — three callers use it as the
+predicate *"does this occupation work a field at all"* (`VillageRenderer`
+twice, `NpcMarker.setup_economy` once), and that question is not the same as
+*"what goes in the ground today"*.
+
+**Fail-open, like every other world hook here.** A marker with no world to
+ask, or a village with no reading yet, keeps the occupation's own
+traditional crop — an isolated test sows exactly what it always did.
 
 ### Persistence
 
@@ -724,6 +850,17 @@ again.
 
 ## Status
 
+- ✅ **A field sows what the village is short of** (2026-09-20) —
+  `VillageCropChoice`, reading `VillageAssembly`'s own per-good
+  satisfaction so the needs panel and the plough share one number. Wheat is
+  offered only where a mill AND a bakery stand, because wheat is
+  `kind = "material"` and a granary of it counts as zero food — which is
+  what *"the warehouse shows 205 Wheat but the Villagers show 50% food"*
+  really was. The crop is chosen at sowing rather than frozen in
+  `setup_economy`, and the haul reads the shelf rather than one assumed id,
+  since a farmhouse may now hold a crop its villager was never built with.
+  `CROP_BY_OCCUPATION` survives as the TRADITIONAL crop — a tie-break and
+  the fallback — with the herbalist's herb restored. 15/15 + 4/4 wiring.
 - ✅ **A farmhouse is only raised where its field will really be derived**
   (2026-09-19) — see "One rule, two callers" above. Siting and derivation
   were two copies of the same question that had drifted apart, so a

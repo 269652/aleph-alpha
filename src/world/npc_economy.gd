@@ -79,13 +79,13 @@ var _production := NpcProduction.new()
 var _accumulated_yield := 0.0
 
 ## This household's own unbanked take-home gold. Take-home is a fraction of
-## a single gold coin per gathered food unit (VillageWages.take_home_of) and
+## goods into the village market -- no coin is minted for them, since the
+## merchant is the only faucet (docs/concept/traveling_merchants.md) -- and
 ## a Wallet holds only whole gold, so it accrues here and is banked a coin
 ## at a time -- the same carry-until-it-crosses-a-whole-unit idiom
 ## _accumulated_yield already runs on. Truncating per earning instead would
 ## round every producer's income to zero and silently hand the whole gross
 ## to the purse.
-var _take_home_carry := 0.0
 
 # -- the load in a villager's hands (village_warehouse.md mechanism 3) ------
 
@@ -233,7 +233,6 @@ func record_real_catch(count: int) -> void:
 	if count <= 0 or not _production.is_producer(occupation):
 		return
 	_stock(_production.item_id_for(occupation), float(count))
-	_earn(float(count) * float(NpcProduction.YIELD_TO_GOLD_RATE))
 
 
 ## Credits `count` units of `item_id` really harvested off this villager's
@@ -252,25 +251,6 @@ func record_real_harvest(item_id: String, count: int) -> void:
 	if count <= 0 or item_id == "":
 		return
 	_stock(item_id, float(count))
-	record_harvest_wage(item_id, count)
-
-
-## The PAY half of record_real_harvest, without the stocking.
-##
-## For a producer whose village has a real store (docs/concept/
-## village_warehouse.md, Mechanism 7): the crop stays on their own shelf for
-## the carter to fetch, so the village's sellable stock is credited when the
-## goods really ARRIVE there, not at the scythe. The villager is still paid
-## at the scythe, for exactly the same amount and at exactly the same moment
-## -- they did the work, and the pay is for the work.
-##
-## Deliberately the same arithmetic as above rather than a second rate: if
-## these could differ, a village with a store would pay its farmers
-## differently from one without, which nothing in the design asks for.
-func record_harvest_wage(item_id: String, count: int) -> void:
-	if count <= 0 or item_id == "":
-		return
-	_earn(float(count) * float(NpcProduction.YIELD_TO_GOLD_RATE))
 
 
 ## The STOCKING half, without the pay -- what a delivery into the village's
@@ -319,7 +299,6 @@ func _gather(delta_seconds: float, world, pixel_position: Vector2) -> void:
 			break
 		_accumulated_yield -= NpcProduction.FOOD_UNIT
 		_stock(_production.item_id_for(occupation), NpcProduction.FOOD_UNIT)
-		_earn(float(NpcProduction.YIELD_TO_GOLD_RATE))
 		_deplete_discrete_unit(world, pixel_position)
 
 
@@ -371,19 +350,6 @@ func _stock(item_id: String, amount: float) -> void:
 		market.add_stock(item_id, amount)
 		return
 	carried[item_id] = float(carried.get(item_id, 0.0)) + amount
-
-
-## Splits one food unit's gross gold between the village purse and this
-## producing household's own wallet, at VillageWages' derived levy rate. The
-## split creates and destroys no gold (VillageWages.take_home_of is the exact
-## complement of levy_on); the only gold that ever sits outside both is this
-## household's sub-coin carry.
-func _earn(gross_gold: float) -> void:
-	_set_purse(market, VillageWages.deposit(purse_of(market), gross_gold))
-	_take_home_carry += VillageWages.take_home_of(gross_gold)
-	while _take_home_carry >= 1.0:  # 1.0 == one whole coin, the only amount a Wallet can hold
-		_take_home_carry -= 1.0
-		wallet.add(1)
 
 
 ## Real depletion counterpart to NpcProduction.yield_per_second's read: the

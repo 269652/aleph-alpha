@@ -75,16 +75,34 @@ static func clear_direction(
 	threats: Array,
 	keep_out_radius: float,
 	previous_heading: Vector2 = Vector2.ZERO,
-	facing_sign: float = 0.0
+	facing_sign: float = 0.0,
+	is_blocked_tile: Callable = Callable(),
+	tile_size: int = 0
 ) -> Vector2:
 	if desired.length() < 0.001:
 		return Vector2.ZERO
+	# A building is a rectangle of whole tiles, so it arrives as a tile
+	# predicate rather than as circles in `blockers` (see
+	# docs/concept/navigation.md): circles over a rectangle either leave
+	# real diamond gaps at every four-tile corner or block past the wall,
+	# and either way cost O(footprint tiles) per candidate heading -- ~70
+	# blockers against twelve headings per creature per tick in a village,
+	# the exact shape of cost solid_obstacles_near exists to escape.
+	#
+	# Resolved to a plain bool ONCE here rather than per candidate: a
+	# creature already standing in a building may take any step, the same
+	# escape _is_clear's own "don't make it worse" rule already keeps, so
+	# that it is never pinned inside a wall.
+	var walls := is_blocked_tile
+	if walls.is_valid() and tile_size > 0 and walls.call(_tile_of(origin, tile_size)):
+		walls = Callable()
+
 	var base := desired.normalized()
-	if _is_clear(origin, origin + base * step_distance, blockers, threats, keep_out_radius):
+	if _is_clear(origin, origin + base * step_distance, blockers, threats, keep_out_radius, walls, tile_size):
 		return base
 	if previous_heading.length() > 0.001:
 		var committed := previous_heading.normalized()
-		if _is_clear(origin, origin + committed * step_distance, blockers, threats, keep_out_radius):
+		if _is_clear(origin, origin + committed * step_distance, blockers, threats, keep_out_radius, walls, tile_size):
 			return committed
 	# Pass 1: facing-preserving candidates only. Pass 2: anything clear.
 	if facing_sign != 0.0:
@@ -92,13 +110,19 @@ static func clear_direction(
 			var candidate: Vector2 = base.rotated(offset)
 			if candidate.x * facing_sign < 0.0:
 				continue
-			if _is_clear(origin, origin + candidate * step_distance, blockers, threats, keep_out_radius):
+			if _is_clear(origin, origin + candidate * step_distance, blockers, threats, keep_out_radius, walls, tile_size):
 				return candidate
 	for offset in _TURN_OFFSETS:
 		var candidate: Vector2 = base.rotated(offset)
-		if _is_clear(origin, origin + candidate * step_distance, blockers, threats, keep_out_radius):
+		if _is_clear(origin, origin + candidate * step_distance, blockers, threats, keep_out_radius, walls, tile_size):
 			return candidate
 	return Vector2.ZERO
+
+
+## floori, not int(): the world extends west and north of the origin, where
+## truncation rounds toward zero and would read one tile too far east/south.
+static func _tile_of(point: Vector2, tile_size: int) -> Vector2i:
+	return Vector2i(floori(point.x / tile_size), floori(point.y / tile_size))
 
 
 ## Whether stepping from `origin` to `destination` is allowed.
@@ -114,8 +138,16 @@ static func _is_clear(
 	destination: Vector2,
 	blockers: Array,
 	threats: Array,
-	keep_out_radius: float
+	keep_out_radius: float,
+	is_blocked_tile: Callable = Callable(),
+	tile_size: int = 0
 ) -> bool:
+	# Unlike the two "don't make it WORSE" checks below, a wall is absolute:
+	# there is no degree of being inside a building. The caller has already
+	# cleared this predicate for a creature that starts inside one.
+	if is_blocked_tile.is_valid() and tile_size > 0:
+		if is_blocked_tile.call(_tile_of(destination, tile_size)):
+			return false
 	for blocker in blockers:
 		var at: Vector2 = blocker["position"]
 		var radius: float = blocker["radius"]

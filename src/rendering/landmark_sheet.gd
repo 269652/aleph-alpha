@@ -171,11 +171,27 @@ static func frame_image(landmark_id: String, seed_value: int, illustrator) -> Im
 ## length ("huge potato crops above soil", and again after a re-tune).
 ## Measuring the art and scaling it to the world is the fix that stuck
 ## there, and it is the rule here.
-static func world_scaled_image(landmark_id: String, seed_value: int, illustrator) -> Image:
+## `world_width_px` overrides how wide this prop really is in the world.
+## Given one, the art is scaled to IT -- the rule a building's own sheet
+## follows: width matches the ground the thing stands on, height follows
+## the same factor, so a tall prop overhangs upward and nothing ever
+## overhangs sideways onto a neighbour's cell.
+##
+## Asked for directly: *"scale the art to its footprint"*. Without it the
+## size comes from `ProceduralLandmarkSprite.SIZES` -- the old procedural
+## placeholder box -- which has nothing to do with the ground a prop is
+## sited and reserved on. The well's box is 40 world px against a 2x2
+## footprint of 32, so a quarter of a tile hung over the paving on each
+## side however well it was sited.
+static func world_scaled_image(
+	landmark_id: String, seed_value: int, illustrator, world_width_px: int = 0
+) -> Image:
 	var frame := frame_image(landmark_id, seed_value, illustrator)
 	if frame == null:
 		return null
 	var world_size: Vector2i = ProceduralLandmarkSprite.SIZES.get(landmark_id, Vector2i(20, 20))
+	if world_width_px > 0:
+		world_size = Vector2i(world_width_px, world_size.y)
 	var target_width: int = maxi(ArtResolution.art_size(world_size).x, 1)
 	if frame.get_width() == target_width:
 		return frame

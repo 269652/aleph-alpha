@@ -12615,7 +12615,13 @@ New concept doc (2026-08-25), written for the one mechanism below:
 
 ### UI / presentation
 
-- **Unified UI theme** — ✅ Done — `src/ui/ui_theme.gd` (tested: palette, styleboxes, built `Theme` all pinned) is one dark/rounded/gold-accent theme applied to every menu and window (main menu, settings, inventory, crafting, skill tree, dev console) plus the HUD survival card. Replaces the earlier raw grey boxes.
+- **Unified UI theme** — ✅ Done — `src/ui/ui_theme.gd` (tested: palette, styleboxes, built `Theme` all pinned) is one dark/rounded/gold-accent theme applied to every menu and window (main menu, settings, inventory, crafting, skill tree, dev console) plus the HUD survival card. Replaces the earlier raw grey boxes. **Gained a formal "this one is selected" mark (2026-09-20)**: `selected_button_stylebox`/`BUTTON_SELECTED` — the gold `ACCENT` as a thicker border over a background that lifts out of the card. Godot draws a toggled control in its `pressed` stylebox, which here is a shade *darker* than normal (~5% of value) and measured as invisible over a dark card when the build palette was first rendered; applied per control rather than in the shared `Theme`, since `pressed` there also means a momentary click on every ordinary button in the game.
+- **Gold has exactly one faucet** — ✅ Done (2026-09-20) — asked directly: "Gold should only be conjured by the travelling merchant". `traveling_merchants.md`'s own opening already claimed this ("a village's gold used to come from nowhere... a traveling merchant is the faucet that replaces it") and it was **not true** — two other places minted gold with nothing behind them. (1) `NpcEconomy._earn` split a coin conjured per food unit gathered, whether or not anyone ever bought it; gone, along with `record_harvest_wage` (which was purely that pay) and the sub-coin `_take_home_carry`. A producer's work now earns the village **goods**, and the merchant pays for those — and a producer is not left unpaid, because `_draw_subsistence_wage` was *already* ungated on occupation and its own doc already anticipated this case. (2) `_collect_estate_tax` credited the purse and **debited nobody**; it is a real transfer now, through the new pure `VillageWages.tax_debits` (one debit per household, in order, never more than a household holds, summing to no more than is owed), with the fractional remainder **carried** per settlement rather than rounded — a `Wallet` holds integer gold and a kossaet owes 0.25 a day, so rounding would either forgive a real debt or charge it four times over. A village collects what is there, not what it is due: shortfalls are **not** banked as arrears, since a debt a household can never pay only grows and would make the purse a fiction again. The invariant is guarded four ways, not asserted once: nothing but the merchant sale and the household-funded tax may call `deposit_to_purse`; every *other* writer of the purse (`_set_purse`) must move gold to or from a wallet in the same breath, closing the loophole that guarding one function name would leave; the old levy arithmetic (`levy_on`/`take_home_of`/`deposit`) is kept and still tested but must stay unwired; and the mint itself must be gone rather than merely unused. **Eight existing tests asserted the old model and were rewritten, not deleted** — including a shared fixture that funded a purse by working a hunter, which now completes the real loop (goods, then a merchant's sale) and is a truer fixture than the one it replaced. Tests: `test_gold_has_one_faucet.gd` 7/7 (new), `test_village_wages.gd` 29/29, `test_npc_economy.gd` 80/80, `test_npc_marker.gd` 96/96, `test_settlement_surplus.gd` 13/13, `test_merchant_visit.gd` 25/25, `test_village_market.gd` 25/25.
+- **A merchant buys the whole village, not one of its cupboards** — ✅ Done (2026-09-20) — reported with the town panel open: "The village produces way too much food and the NPCs don't have an income" (`Food feeds 387 of 16`, `Gold 1`, `Happiness 62% (worst: income)`). **One fault, not two.** A settlement keeps goods in more than one container — `VillageMarket.stock`, and every structure's own `StructureStock` — and `MerchantVisit`, the only thing that turns goods into gold, was only ever shown the first. `SettlementFood` was taught to count the shelves when the bread chain landed (`milling_and_baking.md`, "Food that counts"); the merchant never was. So a village hauls its whole harvest into the warehouse — which is precisely what the carter's round is *for* — and thereby puts it beyond the reach of its own income. `src/emergence/settlement_surplus.gd` is the one view: `combined()` adds the containers up for the merchant to price, `allocate()` says how much to take from each, in view order, never more than a container holds. Pure — it never touches what it is shown, so a sale that cannot be completed has changed nothing, the same division `MerchantVisit` itself keeps. The market is drawn from **first**, deliberately: it is the abstract ledger a village trades out of anyway, while a warehouse shelf is a real building the player can walk up to and open, so what the player can *see* is the last thing to go. **Does not merge the containers** — `milling_and_baking.md`'s "three food containers, one eater" is still open; this says only that the merchant reads all of them. Tests: `test_settlement_surplus.gd` 13/13, `test_merchant_buys_the_whole_village.gd` 4/4, `test_merchant_visit.gd` 25/25, `test_village_wages.gd` 20/20, `test_npc_economy.gd` 80/80, `test_village_market.gd` 25/25. **Measured against the rest of the requested loop, which already exists:** the merchant's cadence already tops out at one call a day (`VISITS_PER_DAY 0.4 × (1 + SURPLUS_DRAW 1.5)` = 1.0 at full surplus), so he was always willing to come daily and simply had nothing to buy — the binding constraint on clearing a 387-unit backlog is `CART_CAPACITY` (20 units a visit), not the frequency. Progressive taxation by estate is likewise already real and wired (`VillageEstates.BASE_TAX_PER_DAY` kossaet 0.25 → buerger 1.75, through `VillageWages.estate_tax_for`, called from `EarthChunkManager`). **Still open:** producers' own gold is still conjured per unit gathered (`NpcProduction.YIELD_TO_GOLD_RATE`) rather than paid out of the civic purse, so "NPCs get paid by the City Hall" is true for non-producers only; and nothing yet throttles production against demand, which is the other half of "produces way too much food".
+- **A field sows what the village is short of** — ✅ Done (2026-09-20) — reported with the village's panels open: "they have 0 Herbs even though there are 3 farm houses... so deciding what to plant must be based on demand", and beside it "The warehouse shows 205 Wheat but the Villagers show 50% food". **Those are one defect, and the second explains it: `wheat` is `ItemCatalog` kind `"material"`, not `"food"`** (`milling_and_baking.md`'s own first pillar, "grain is not food until it is milled and baked"), so every filter that decides whether a village is fed — `SettlementFood`, `VillageMarket`, `VillageEstates`' `kind:food` token — counts a granary full of wheat as **zero food**. A village whose every field sowed wheat, with no mill standing, starved beside it. That is a cropping failure, not a distribution one. `src/gameplay/village_crop_choice.gd` picks the sowable crop whose good is least satisfied, reading `VillageAssembly`'s own per-good satisfaction — the same number the needs panel shows, so what a village says it lacks and what it plants cannot disagree — scored by the **worst** good a crop answers rather than the mean, the same minimum rule `EstateConsumption` applies one level up. Wheat is offered **only where a mill AND a bakery really stand**; everywhere else a field sows something edible the day it is harvested (`herb`, `carrot`, `potato`, all real `kind = "food"` items with real crop art). The crop is chosen **at sowing** rather than frozen in `setup_economy` from the occupation, which is how a village's whole cropping plan used to be fixed before a single basket had been drawn. `CROP_BY_OCCUPATION` survives with a changed meaning — the *traditional* crop, breaking a tie and answering where there is no reading — with the herbalist's `herb` restored; its other job, the predicate "does this occupation work a field at all" that three callers use, is untouched. One consequence handled rather than shipped: a farmhouse may now hold a crop its villager was never built with, and one shelf can hold two, so `haul_stock_to_village` reads the shelf instead of withdrawing a single assumed id. **Withdraws this session's own earlier wheat-only narrowing**, which was right for "the crop dies before it ripens" and wrong to keep once the night bug was fixed. Tests: `test_village_crop_choice.gd` 15/15, `test_village_sowing_wiring.gd` 4/4, `test_village_farm.gd` 78/78, `test_npc_marker.gd` 67/67, `test_npc_economy.gd` 80/80.
+- **A village square is laid around what stands in it** — ✅ Done (2026-09-20) — reported a further time: "There are still villages without plaza." Measured rather than guessed (`tools/probe_village_supply.gd`, new): of the two genuine villages in a 14-chunk sweep, chunk (682,132) had **8 of its 48 square cells paved — exactly the one street row crossing it**, with a `farm_fence_east` at (15,13) and a `warehouse` at (20,13) standing inside the square. Two separate faults, each fatal alone. (1) The paving pass walked the rect and **returned on the first cell it could not take**, so one rail cancelled the whole square; it steps over such a cell now, because a square laid *around* what stands in it is still a square. (2) It **skipped the pass entirely whenever the civic doorstep already carried a road tile** — and the street crossing the square paves exactly that cell — so a village that lost its square once could never gain it back on any later visit; that short-circuit is gone, and the walk being idempotent means every visit heals it. A floor remains, since scattered cells are stray paving rather than a square: `VillageLayout.plaza_is_worth_laying`, a **share** rather than a count so it does not change meaning if `PLAZA_WIDTH_TILES` does, pinned at both ends rather than by a number somebody liked. One existing test changed deliberately: it asserted that *not one* cell was paved when a house stood on any of them — broader than its own stated intent ("rather than paving through a building") and exactly the reported defect; it now pins both halves honestly. Tests: `test_village_layout.gd` 93/93, `test_village_renderer.gd` 136/136, `test_village_plaza_wiring.gd` 3/3.
+- **Planner build palette reads as a build menu** — ✅ Done (2026-09-20) — asked directly, with a screenshot of ten identical text buttons in a row: "Make the Planner / Building HUD more professional and more like Anno 1806. Add Icons not only text". Planner mode's palette is now `src/ui/blueprint_palette_view.gd`: a titled card with a row of category tabs (Roads / Homes / Production / Civic), the slots of whichever category is open, and a footer naming what is armed and what it will cost. Each slot carries the building's **own picture** and its name — icons alone would trade one unreadable menu for another, since a sawmill and a blacksmith are both a brown roof at 48 pixels — and a hover gives the whole reckoning: name, footprint in tiles, the real material list, the real hours. **The icon is cut from that building's own `BuildingCatalog.finished_sheet_chain`**, the very sheet `EarthChunkManager` draws the finished building from, so there is no second picture of any building free to drift from the first (`src/ui/blueprint_icon.gd` — trimmed to its own art, fitted into the box with its aspect intact rather than squashed square, centred on a transparent canvas; pavement draws the real road tile it will lay). The tabs **are** `BuildingCatalog`'s own id lists read at runtime (`src/ui/blueprint_palette_model.gd`), never a second grouping, so a building added to the game lands in the right tab for free; and the two numbers on a card arrive as the same calls the raising path makes (`_item_catalog.display_name_of`, `_chunk_manager.build_labor_hours_for`), so the menu cannot quote a price or a job size the site then disagrees with. Work that costs no hours reads as **"Laid by hand"** rather than "0 hours" — `PlanRaising.is_laid_by_hand`'s own rule, said in the menu instead of discovered at the site. **Two defects the rendered probe caught that the headless tests could not** (`tools/probe_build_palette.gd`, per this repo's probe-before-you-trust convention): the armed slot and open tab were drawn in the theme's ordinary `pressed` shade, ~5% of value from normal and invisible over the card's dark background (now `UiTheme.selected_button_stylebox`, see the theme row below); and three tabs read as open at once, because `set_pressed_no_signal` deliberately does not tell the `ButtonGroup`, so a tab opened from code left the previous one looking open. Tests: `test_blueprint_palette_view.gd` 15/15 (the real widget, driven for real), `test_blueprint_palette_model.gd` 22/22, `test_blueprint_icon.gd` 12/12, `test_world_planner_mode_wiring.gd` 31/31. **Nothing about the card's size is written down** — a slot is as wide as the widest name in its own tab, measured at the font it is really drawn in; the card is as wide as its slots; the footer wraps rather than clips and cannot widen either. That came out of merging `main`, where a concurrent session had landed the UI-scale setting: sweeping the probe across every scale the player can pick showed **six of the ten names clipping at 1.75** ("Warehouse" wanting 137px of a slot offering 84) and only 7px of headroom at 1.00, so the defect predated the slider — `UiScale` scales font sizes and deliberately not card widths, which is its own documented limit. Zero clipped names at 0.75, 1.00 and 1.75 now, footer included. **Known gap:** `CHARTERED_BUILDING_IDS` (trade hall, mage guild) is still not offered — a charter is a settlement-tier gate (`concept/settlement_charter.md`), and whether a player may plan a blueprint they could never raise is a separate question from how the menu looks.
+- **Every HUD card is laid out by its column** — ✅ Done (2026-09-20) — reported with both open: "The Town Panel and Warehouse / Building panel overlap.. a panel should occupy space and make other panels render below it.. don't use fixed coords". The HUD column system already stated the rule in its own doc comment ("each builder simply adds to the column it belongs in and never positions itself against its neighbour's height"); the **building readout was the one card that never joined it** — `PRESET_CENTER_RIGHT`, a hand-picked 24px from the edge, 180px tall whatever it held — while `_hud_right_column` grew down from the minimap straight into it. The settlement card landing in that column is what made the collision visible; the panel had been placed against nothing all along. It is a card in the right column now, **last**, because the cards above are standing readouts and this one comes and goes with a click, so it opens beneath them rather than shoving them about; closed it costs nothing, since a hidden child of a `VBox` leaves no hole (the same property the message stack already relies on). Its builder also had to move in `_ready` — it ran *before* `_build_hud_columns`, so there was no column to join. Pinned three ways: the stacking driven for real against a real `HousePanel` in a real `VBoxContainer` (a taller card above pushes it further down; a hidden one leaves no hole), a source-contract check on the builder, and a **generalised** check over every builder that adds a card, so the next panel cannot reintroduce the defect by being written the old way. Rendered for a look with `tools/probe_hud_column_flow.gd`: no overlap, 4px apart, both hugging the right edge. Tests: `test_hud_panel_flow.gd` 6/6, `test_world_hud.gd` 24/24, `test_hud_readouts.gd` 40/40, `test_house_panel.gd` 42/42, `test_ui_scale.gd` 15/15.
 - **Main-menu backdrop** — ✅ Done — the start-up menu now dims the whole screen behind a full-rect backdrop (`World._show_main_menu`) so the game world/HUD no longer bleed through it.
 - **HUD polish** — 🚧 Partial — survival meters grouped into a themed panel card; XP bar / creature panels repositioned to stop overlapping. Meter fills are still plain rects (no rounded fills).
 - **Character screen / inventory revamp** — ✅ Done (basic) — `scenes/inventory_window.gd` (toggle I) is now a PoE/Valheim/Hammerwatch-style **two-pane character screen**: a left **equipment paperdoll** (rendered head+torso preview + right-clickable head/chest/legs/feet/weapon slots) and a right **item-slot grid** (icon + count, hover tooltips). **Right-click** an inventory item to wear/equip or eat it; right-click a worn slot to unequip. **Drag-and-drop works** (left-click and drag): drag an item onto another grid slot to reorder, or out onto a HUD hotbar slot to bind it to a number key (`src/ui/drag_slot.gd` is the shared drag-capable slot Control; `src/gameplay/hotbar.gd` holds the bindings). Left and right are deliberately split across the two gestures — clicking left used to ALSO activate an item (equip/eat) on mouse-down, which fired the instant you pressed down to start a drag, before Godot's drag threshold even triggered (reported: "a click on a carrot makes it vanish"). Shows total armor. The hotbar picked up the same UX pass: a hover highlight, a tooltip naming what's bound and its count, and right-click to clear a slot (previously the only way to change one was overwriting it via drag). Not yet: splitting/merging stacks by drag, or dragging directly onto a paperdoll slot to equip.
@@ -12680,10 +12686,125 @@ New concept doc this pass -- no prior doc covered what's underground (`stone.md`
 - ✅ **`GeologyChamber.cells_for`** -- the small circular pocket of Strata cells a cave entrance reveals, the underground equivalent of `RoomDetector`'s room cells. `test_geology_chamber.gd`.
   - 🐛 **Fixed (playtest report, 2026-08-28): `CHAMBER_RADIUS` was "small" only by tile count, not on screen.** At the shipped camera zoom (`Player.TARGET_TILE_SCREEN_PX` = 64px/tile) the old `CHAMBER_RADIUS := 3` (a 7-tile-diameter, ~37-cell disk) rendered at ~448px against the project's own 720px-tall default viewport — ~62% of the visible screen's shorter side. Since `Strata` cells are `SOLID`/`ORE` by default until mined (see below), the chamber fills essentially 100% on first reveal, with every rock sitting dead-center on its tile — a true grid, not a scatter — so this read live as "a dense, near-uniform grid... covering most of the visible ground" the instant a player brushed within one tile of a cave entrance, including on plain grassland (`CaveEntrancePlacement` rolls there too, just rarely). Shrunk to `CHAMBER_RADIUS := 1` (a 3x3, 9-cell pocket) — the largest radius that still clears a new screen-relative bound (`test_chamber_diameter_stays_a_small_fraction_of_the_visible_screen`) rather than the bare `< 50`-cells check that existed before and never caught this.
 - ✅ **Topsoil/regolith wired fully end-to-end and playable.** `GeologyRenderer` spawns a visible `CaveEntranceMarker` (real, if honestly-flat-fallback, procedural art -- `ProceduralCaveEntranceSprite`) at every entrance a loaded chunk rolls (`EarthChunkManager._load_chunk`'s new geology block), and `EarthChunkManager._update_geology_reveal` (called from `update()`, mirroring `_update_roof_visibility`'s reveal-on-entry shape exactly) spawns real `DiggableRock` nodes for the chamber the moment the player is within `CAVE_ENTRY_TRIGGER_RADIUS` of an entrance, and despawns them the moment the player leaves. `DiggableRock` mirrors `MinableOre`'s contract exactly (real `WorldItemBus` drops scaled by pickaxe power via the same `OreYield`, same hover-tooltip contract, same "attack"-bound swing) plus writes the mined cell permanently back into the chunk's own `Strata` instance, so a chamber re-revealed later shows real tunnels instead of resetting. `test_diggable_rock.gd`, `test_geology_renderer.gd`, `test_procedural_cave_entrance_sprite.gd`.
-- ⬜ **The physical shaft from topsoil/regolith down into bedrock, and onward through deep bedrock into the hydrothermal zone.** All three deeper layers' `Strata` configuration, ore weighting, and hazard functions are fully implemented and fully tested (see above); nothing yet lets a player physically reach them -- a deliberately scoped, honestly documented gap (see the geology doc's own Status section for the full statement).
+- 🚧 **The physical shaft from topsoil/regolith down into bedrock** -- substantially narrowed by the Underground pass below, not still wholly open: the transition mechanism, the bedrock cave system, and the descend/ascend/reveal wiring are all built and tested; the binding that would make it playable is not. **⬜ Bedrock into deep bedrock and onward into the hydrothermal zone** remains untouched -- both deeper layers stay fully configured, fully tested and completely unreachable, with no per-chunk instance built for either.
 - ⬜ **Collapse/foul-air/flood-risk are not yet live gameplay events.** The pure hazard functions exist and are tested; nothing calls them from the reveal/mining path yet (no actual cave-in, no actual air/water damage-over-time tick).
 - ⬜ **Mined-tunnel state does not persist across a chunk unload/reload** -- `_topsoil_strata` is kept only for a chunk's LOADED lifetime, unlike `chunk.modifications`'s own on-disk persistence. Walking away far enough to unload the chunk and returning currently resets any tunnels dug there. A documented gap, not an oversight -- persisting it would need a new save-file format this pass didn't build.
 - ⬜ **Underground art is the flat procedural fallback** (`ProceduralStoneSprite`/`ProceduralOreSprite`, same textures surface stone/ore nodes fall back to with no illustrated sheet), not a cave-specific illustrated sheet -- none exists yet, the same honestly-documented situation `stone.md` itself describes for any future stone class with no art of its own.
+
+
+### The settlement card, and FPS back on (`concept/hud.md`)
+
+Asked for: *"a context dependent Village / City panel which shows stats and status of the village / city like population; happiness; gold and so"*, and mid-task, *"also add back the FPS"*.
+
+- ✅ **`SettlementReadout`** (17 tests) — pure model, thin Node, so a city's rows are testable without founding one. **The title is the settlement's real tier**, not the word "village": `SettlementTier.tier_for` classifies hamlet/town/city from three dimensions that must ALL cross together (households, active institutions, production diversity), so watching the title change is watching three real things happen at once.
+- ✅ **`EarthChunkManager.settlement_readout_at`** gathers it, returning `{}` where there is no settlement — which is the whole of "context dependent". No key, because standing somewhere IS the gesture.
+- ✅ **Every row reads state that already exists**: households and `VillageCensus` for population, `HouseholdWellbeing` for happiness, the village purse (`NpcEconomy.PURSE_META` — the same one wages and the civic tax use) for gold, `SettlementFood.carrying_capacity` for food, the growth ladder for what is being built. Nothing is tracked for the card's benefit.
+- ✅ **Happiness names its weakest need beside it** ("68% (worst: food)"). One blended percentage of five weighted needs tells a player nothing about what to do, and the per-need numbers are already computed to make the blend, so naming the worst costs nothing and turns a score into a prompt.
+- ✅ **Happiness is mean HAPPINESS, not mean PRODUCTIVITY.** `HouseholdWellbeing` keeps them apart deliberately — productivity is happiness dragged down by hunger — so a row labelled happiness reporting the work rate would answer a different question than it asks.
+- ✅ **Food is carrying capacity, not stock.** A first pass formatted a raw stock figure against a per-household target; corrected to `SettlementFood.carrying_capacity` ("feeds 17 of 12"), the number the simulation already assesses a settlement by.
+- ✅ **FPS returns to the always-on clock card**, sharing the movement line so the card's fixed three-line height is unchanged. Only FPS: lat/lon and sun elevation stay behind F3, because those are genuinely diagnostic while a frame counter is wanted visible exactly when you are not thinking to press F3. `UNKNOWN_FPS` (0) leaves the reading off on the first frame rather than claiming 0.
+- ✅ **Verified with a real render**, not only tests (`tools/probe_hud_layout.gd`, extended to cover the card): filled as a city in `busy`, and **gone rather than blank** in `calm` — the second is the failure mode a passing unit test would never catch.
+- ⬜ FPS appears twice while F3 is open. Harmless, left alone: removing it from the strip would shrink `DIAGNOSTICS_LINE_COUNT` and rewrite a contract this request never touched.
+- ⬜ The card is read-only, and shows nothing for a settlement whose chunk is not loaded (the purse and village market are only reachable while it is) — so a player cannot check on a town from the next valley.
+
+### Reconciling two parallel wall fixes (2026-09-20)
+
+Merging this branch to `main` found that another session, `claude/brave-euler-bcoea4`, had independently fixed **the same three bugs** while this one was working: creatures through walls, villagers through walls, and things growing in water. 200 commits had landed on `main` in the meantime. A straight merge would have put two competing implementations of each fix into the live checkout, so the merge was aborted and reconciled deliberately instead.
+
+**What main had, and why it won.** Its wall gate asks `piece_blocks_movement_at_global` — the same question the wall's own collision body is spawned from — so what stops a player, what stops a villager and what a route plans around can never disagree. It also knows a DOOR and a FLOOR are walkable pieces, where this branch's footprint question reported the whole building solid and would have meant no villager could ever plan a way indoors. It handles farm rails too. On the water side, `38a2312` covers crops and flowers as well as mushrooms and ant mounds, and `75e30d4` reads the painted water rather than `is_river` alone.
+
+**Convergence worth noting.** The two `AntColony`/`WildMushroomPatch` fixes were written independently and came out nearly identical — same signature, same optional trailing `is_water` mask, both gating budding, both following `TallGrass`'s precedent. That is a good sign about the precedent, and it made those two files a clean "take theirs".
+
+- ✅ **Took main's**: `ant_colony.gd`, `wild_mushroom_patch.gd`, the NPC wall slide, the creature wall check, and `_ground_cover_and_built_blockers` (which also covers built ground).
+- ✅ **Kept from this branch**: the whole underground stack (nine modules, zero conflicts — nothing on main touches it), `TileRouter`, `AgentPassability`, and terrain/water costing. None of it existed on main.
+- ✅ **Deleted as superseded**: `npc_building_gate.gd` and `building_walls.gd`, with their tests. Keeping them beside better equivalents would have left two answers to one question.
+- ✅ **`AgentPassability` now prefers the piece question** over the footprint one, so the router and the slide agree and a villager can still plan a way through a door.
+- ⚠️ **One real regression, caught by a test rather than by reasoning.** The surviving slide knew walls and rails but NOT slope, so deleting this branch's gate removed the only thing enforcing terrain on the actual step: a villager whose goal sat behind a cliff found no route, fell back to walking straight at its target, and climbed it. `test_a_villager_never_climbs_a_cliff` failed at step 7. Slope now lives in the slide — the one place every step passes through — rather than in a second gate beside it.
+- 632/633 across fourteen suites; the one failure is the long-standing `test_follow_speed_is_slower_than_the_players_own_base_speed`, which fails on `main` independently.
+
+### Terrain and water reach both navigation paths (`concept/navigation.md`)
+
+Asked directly: *"wire terrain passability and water into both paths too"*.
+
+**The decision that shaped this: slope and water are not the same kind of obstacle.** Slope is absolute — `TerrainPassability.is_passable` already owns the threshold. Water is **costly, not blocked**, and treating it as blocked would have deleted working behaviour rather than adding safety: a creature must stand ON a water tile to drink from it (`CreatureMarker`'s own thirst check), and creatures, villagers and the player all already have swim animations and a real `WaterMovementModel`.
+
+- ✅ **`AgentPassability`** (9 tests) — one module, two deliberately separate questions: `blocked_predicate_for` (buildings OR ground too steep) and `cost_scale_for` (how much longer a tile takes to cross). Every hook is duck-typed and asked only of a world that offers it, so a partial stub answers for whichever it knows.
+- ✅ **Routes are priced in TRAVEL TIME, not distance, and the prices are derived rather than invented.** If `WaterMovementModel.BASE_SWIM_SPEED` is 0.6 of walking pace, a water tile takes 1/0.6 as long to cross, and that is exactly what the router is told; slope reads the same way through `TerrainPassability.speed_multiplier`. So a villager walks round a river when there is a dry crossing and **wades when going round would cost more** — which is what a person does, and what no amount of blocking could express. Both pinned as real behaviour tests, not just unit maths.
+- ✅ **Cost scales clamp at 1.0.** The octile heuristic assumes open ground is the cheapest there is, so a tile cheaper than open ground would make it overestimate and quietly return non-optimal routes — wrong rather than merely odd.
+- ✅ **Creatures now TURN at a cliff instead of stopping at one.** Wired through the same predicate, which upgrades behaviour that already existed: `_terrain_blocks_movement` ran *after* the heading was chosen, so the only thing a creature could do about a cliff was stand still. Folding slope into the gate's per-candidate predicate lets the existing twelve-turn search find a way along the contour. Cost on the common path stays one predicate call, because the gate returns on its first clear candidate.
+- ⚠️ **Correcting the previous entry**: it claimed "terrain is in neither navigation path". That was wrong for creatures, which already had `_terrain_blocks_movement` and already refused to climb cliffs. What was missing was that they could only stop, not steer.
+- ⬜ **Water costs a creature nothing.** Only villagers route, and only a router can price a tile — a wandering animal has no route to weigh, so it wades whatever it walks into. Right for a deer at a stream, less so for one that ought to prefer the bank.
+- ⬜ Trees and stones are still not in the villager's predicate; no cross-chunk routing.
+- ⚠️ Still pre-existing and untouched: `test_follow_speed_is_slower_than_the_players_own_base_speed` fails on `main` independently (`FOLLOW_SPEED` 60.0 vs `Player.BASE_SPEED` 40.0).
+
+### Navigation: creatures see walls, and villagers route around them (`concept/navigation.md`)
+
+Reported live: *"fix creatures walking through houses too also add proper wayfinding / routing"*. New concept doc this pass — `wayfinding.md` turned out to be about PLAYER INSTRUMENTS (compass, map, spyglass), so agent navigation had no spec at all.
+
+**The central decision, and why there are two systems rather than one.** A wandering creature and a travelling villager need different machinery: a deer crossing a meadow is not solving a route, it is moving and reacting, while a person walking to work executes a plan and will walk right around a building to do it. Giving the deer A\* would be both wasted work and wrong behaviour; giving the villager only reactive avoidance is what produced the reported bug. So creatures got **reactive avoidance** and villagers got a **real route**.
+
+- ✅ **Creatures see buildings** — `CreatureMovementGate.clear_direction` takes an optional tile predicate. Its twelve-turn search needed no change, only a new kind of obstacle. Buildings arrive as a TILE PREDICATE rather than as circles in the existing `blockers` array: circles over a rectangle either leave real diamond gaps at every four-tile corner that a step can land in, or block past the wall, and either way cost O(footprint tiles) per candidate heading — ~70 blockers against twelve headings per creature per tick in a village, the exact shape of cost `solid_obstacles_near` was created to escape. **The condition guarding the gate mattered as much as the gate**: both call sites took a fast path skipping it ENTIRELY when no tree or stone was near, so a creature in open ground beside a house would have walked straight through however well the gate understood buildings.
+- ✅ **`BuildingWalls`** — one predicate for all three movers (`NpcMarker`, `CreatureMarker`, `BondedCompanionMarker`), so they cannot drift apart about what a wall is, built once per mover in `setup()` rather than allocating a lambda per frame. `BondedCompanionMarker` had been discarding its `tile_size` parameter outright (`setup(world, _tile_size)`); it is kept now, because the predicate works in tiles.
+- ✅ **`TileRouter`** (13 tests) — 8-connected A\*, octile heuristic, no corner cutting (two buildings that touch leave a diagonal seam that is not walkable however the geometry looks), a hard NODE budget rather than a distance limit (the world is chunk-streamed and effectively infinite; an unbounded search toward an unreachable goal would walk the whole loaded region), and integer costs scaled by 100 so two genuinely equal paths compare equal and the result is deterministic. A blocked goal returns nothing rather than a nearest-reachable guess — a villager's destination is its doorstep, which is never inside a footprint, so a blocked goal means something genuinely unexpected and guessing would hide it.
+- ✅ **Villagers route** — `NpcMarker._steer_toward` aims at the next waypoint, recomputed only when the destination TILE changes and no more often than `ROUTE_RECOMPUTE_SECONDS`, so a villager walking to a fixed doorstep pays for exactly one search; the throttle only matters for a moving destination like a hunter's quarry. **The test that mattered was arrival, not avoidance**: "never inside a house" already passed with sliding alone, while "gets home with a house squarely in the way" failed at 89px out, pressed against the wall. That is the assertion this pass moved.
+- ✅ **The gate stays underneath the router**, not replaced by it: a route can go stale when a house is raised across it mid-walk, and `NpcBuildingGate` is what guarantees a stale route still never ends inside a wall. 497/498 across thirteen suites.
+- ⬜ **Creatures still do not route**, deliberately. A creature blocked by a long wall turns along it and wanders off, which is right for a wandering animal — but a predator committed to a hunt inherits the same limitation, and that is the one creature case that genuinely looks like a villager's.
+- ⬜ **Terrain is in neither navigation path.** `TerrainPassability` answers slope and `blocks_ground_cover` answers water, and neither is wired in, so agents still route up cliffs and across rivers. The router takes an arbitrary predicate, so closing this is additive rather than a redesign.
+- ⬜ Trees and stones are not in the villager's predicate; creatures avoid them through `solid_obstacles_near`, villagers only avoid buildings. No cross-chunk routing.
+- ⚠️ **Pre-existing failure, untouched**: `test_follow_speed_is_slower_than_the_players_own_base_speed` fails on `main` independently of this work (`BondedCompanionMarker.FOLLOW_SPEED` 60.0 vs `Player.BASE_SPEED` 40.0 — the player's base speed was lowered and the test never followed). Verified by stashing this branch's changes and re-running.
+
+### Walls are solid to a villager too (`concept/npc.md`)
+
+Reported live: *"NPCs walk straight through houses, ignoring the hitbox"*.
+
+**The hitbox was never broken.** Every building really does get a `StaticBody2D` (`EarthChunkManager._spawn_building_node`), and that is exactly what stops the PLAYER, who is a real physics body. An `NpcMarker` is a plain `Sprite2D` assigning `position` directly (`position = position.move_toward(target, ...)`), so no physics body is ever consulted on its behalf and no collision can possibly occur. Nothing about the building needed fixing — the villager needed to be asked to look. Reproduced first as a failing test: with a 3x3 house between a villager and its home, the villager stood inside it by step 23.
+
+- ✅ **`NpcBuildingGate`** (`src/gameplay/npc_building_gate.gd`, 12 tests) — the same ask-first shape `CreatureMovementGate` already uses for trees and stones, and the same "pure math over plain data, no nodes" split. Tile-based rather than radius-based, because a building already knows its own footprint cell by cell and a tile test is exact as well as cheaper than fitting circles to rectangles. Three rules in order: already standing in something solid means every step is allowed (a house raised over a villager must not imprison them permanently — a worse bug than the one being fixed); blocked head-on slides along whichever axis is free (walking diagonally into a wall is the commonest case, and refusing outright would pin villagers against their own houses rather than letting them walk along them); nowhere free means stay put. Includes a sweep asserting no reachable step from any tile around a house ever lands inside it, and `floori` rather than `int()` for tiles because villages exist west and north of the origin where truncation rounds the wrong way.
+- ✅ **`EarthChunkManager.has_building_at_global`** — the allocation-free half of `building_at_global`, which resolves the owning origin and then `duplicate()`s the whole record. Worth its own function because the predicate is called up to three times per villager per frame; a footprint tile always belongs to a real building, so testing the tile id alone is exact.
+- ✅ **Wired into `NpcMarker`'s one movement line**, with the predicate built ONCE in `setup()` rather than per frame — a fresh lambda each frame is exactly the churn the creature-blocker cache already exists to avoid. Fail-open when no world is bound or it cannot answer, the same duck-typed contract `_is_in_water` keeps, so every pre-existing fixture is untouched.
+- ✅ **Nobody is stranded.** A villager's `home_position` IS their house's doorstep, and `BuildingCatalog.doorstep_of` puts that one row south of the footprint, outside it. The door cell itself stays blocked, which is correct — entering a house is a real transition, not a walk. Both pinned against every house in the catalog rather than asserted in prose. 195/195 green across all eight NPC marker suites.
+- ⬜ **No pathfinding.** Sliding handles brushing a wall; it does not get a villager out of a concave pocket, so one whose target sits directly behind a building can still press into the wall rather than walking around. Real navigation is a much larger piece of work.
+- ⬜ **Creatures still walk through houses.** `solid_obstacles_near`, which `CreatureMovementGate` reads, walks `_loaded_trees` and `_loaded_stones` only and has no building term at all — the same class of bug, deliberately untouched by this pass rather than widened into.
+- ⬜ Only buildings are solid to a villager; trees and stones, which creatures already avoid, are still walked straight through.
+
+### Nothing grows in the river that is not meant to (`concept/soil_fauna.md`, `concept/mushrooms.md`)
+
+Reported live, with a screenshot: *"ant mounds and long grass should not spawn in rivers"*, then *"Also no shrooms in rivers"*.
+
+**One root cause, two systems.** A river or lake in this world leaves the biome array completely untouched -- it is an overlay flag (`Chunk.is_river`/`Chunk.is_lake`, read through the one `Chunk.blocks_ground_cover` predicate), never an eighth biome, per `concept/rivers.md`'s Rendering decision. So any placement that consults only `chunk.biome` is structurally blind to water. `TallGrass` was fixed for exactly this once before (its own source still carries the comment *"reported live: grass grows in rivers"*), but the fix was never propagated: `AntColony.new(...)` and `WildMushroomPatch.new(...)` were both still being handed `chunk.biome` and nothing else.
+
+**Measured at the reported coordinates** (HUD read Lat 48.2 Lon 7.9 -> global tile 20857, 4640, chunk (651, 145)) rather than reasoned about. That chunk is 874 grassland + 150 forest with **zero** ocean-biome cells, and 142 river + 578 lake flags -- 63% water by area, all of it overlay on land biome, which is precisely why a biome-only check saw dry grassland everywhere:
+
+| | before | after |
+|---|---|---|
+| ant mounds in water | **2 of 2** | 0 of 2 |
+| mushroom sites in water | **39 of 60** | 0 of 50 |
+| long grass in water | 0 of 77 | 0 of 77 |
+
+- ✅ **`AntColony`** takes the `Chunk.blocks_ground_cover` mask as an optional trailing `PackedByteArray`, the identical shape `TallGrass`'s own `is_river` addition already used, so every pre-existing 4-argument caller and fixture is untouched. Gated in **`is_valid_mound_site`** as well as initial seeding -- budding goes through that predicate, so gating seeding alone would have stopped mounds *starting* in a river while still letting a colony creep into one over time. `test_ant_colony.gd` (4 new tests, 117 total).
+- ✅ **`WildMushroomPatch`** the same, gated in `_seed_sites`. The sites are relocated rather than lost: the same chunk still seeds 50, all on soil. `test_wild_mushroom_patch.gd` (4 new tests, 46 total).
+- ✅ **`EarthChunkManager`** passes `_ground_cover_blockers(chunk)` to both -- the helper whose own doc comment already said it existed "for consumers that take a whole flag array", but which only `TallGrass` had ever been given.
+- ✅ **Long grass was already correct** and is left alone. The plants visible over water in the screenshot are `AquaticVegetation`, which reads the *same* mask as an inclusion filter and is supposed to be there.
+- ⬜ Not audited: every other `chunk.biome`-only placement in the codebase. This pass fixed the two that were reported; the class of bug is "consults biome, never asks about water", and `Chunk.blocks_ground_cover`'s own docstring still claims stone is covered when no stone placer reads it.
+
+### The underground (`concept/underground.md`)
+
+New concept doc and new system this pass, asked for directly: *"brainstorm and spec the second level underground mechanics and structure ... the underground levels get progressively difficult and rewarding; we need cave systems; content; instances."* `geology.md` specified the rock; nothing specified what the rock CONTAINS. The design decisions taken with the user: **one shared persistent planet with no per-party copies**, and a **chemosynthetic clade throughout** rather than troglomorphic descendants of surface species.
+
+The organising pillar is that **each layer changes the verb, not the numbers** -- dig (topsoil), explore (bedrock), survive (deep bedrock), exploit (hydrothermal) -- so difficulty rises with depth without a depth multiplier existing anywhere.
+
+- ✅ **`Lithology`** -- province-scale bedrock rock type across 40km provinces, eight real rock types, weighted so the global carbonate share reproduces the **measured 15.2%** of ice-free continental surface (Goldscheider et al. 2020, World Karst Aquifer Map). Carbonate share is relief-INDEPENDENT by construction because real alpine karst is widespread; relief redistributes only the clastic/crystalline remainder, since orogenic belts expose basement and cratonic platforms are buried under sedimentary cover. Solubility is a real relative dissolution rate -- gypsum ~10x limestone, dolomite ~0.1x (an order of magnitude slower kinetics, which is why real dolomite terrains have smaller, less-integrated caves rather than none) -- with four rock types at exactly zero. `test_lithology.gd` (18 tests).
+- ✅ **`CaveRecharge` / `CavePattern`** -- Palmer 1991 (GSA Bulletin 103), whose central finding is that cave pattern follows the **mode of groundwater recharge**, not rock type, depth or age. Five modes with causal precedence: rising sulfidic water dissolves whether or not anything happens at the surface (Carlsbad and Lechuguilla have no feeding stream), so hypogenic wins first, then the coastal mixing zone, then how surface water gets in. Bare karst resolves to POINT recharge via its own epikarst; genuinely diffuse recharge needs an insoluble permeable cover (sandstone over limestone, as in the Black Hills maze caves). A first pass had this backwards and made the caprock parameter inert -- the corrected model is both truer to Palmer and explains why branchwork dominates his survey. `test_cave_recharge.gd` (15), `test_cave_pattern.gd` (13).
+- ✅ **`CaveNetwork`** -- the void field, and the hardest piece. Porosity is **derived from real cave surveys** (Mammoth ~676km/150km²; Optymistychna ~257km/2km², the densest real pattern there is; Lechuguilla ~240km/13km²) times a real mean passage width, with rooms distinguished from conduits because Carlsbad's Big Room is 190m across. Three real bugs found and fixed along the way: blob patterns were using the LINE spacing formula (cavities are not lines -- packing gives `s = w·sqrt(π/4p)`; with line spacing, spongework merged into a few huge blobs carrying a through-route, the one thing spongework is defined by not having); conduits were banded on the raw field value, whose width `t/|∇f|` pinches to sub-tile along every steep stretch, so a conduit came out a dotted line until banding by DISTANCE to the contour made it constant-width; and one cycle per surveyed spacing satisfied only ONE survey number, squeezing conduits to 0.42 tiles half-wide against a surveyed 1.05 until the frequency was calibrated from the `p = 2hL` relation. Branchwork now lands at 1.13 tiles and anastomotic at 1.01 against 1.05 surveyed -- **porosity and width are independent survey numbers, so the two agreeing is a real check on the model.** Connectivity is tested against a same-porosity scatter control rather than an absolute bound, because several contour arcs crossing one window are several real conduits that may only join outside it. `test_cave_network.gd` (14).
+- ✅ **`CaveZonation`** -- speleobiology's standard four zones. Daylight is **exactly zero** below the twilight zone, not asymptotically small: `lighting.md`'s "dim, never pitch black" is justified explicitly by moonlight, starlight and skyglow, none of which exists underground, so the justification does not travel down and neither does the rule (that doc is cross-updated). The deep zone holds its locality's mean annual surface temperature whatever the weather does above, making it a real refuge in both directions -- which is why people have stored food in caves for as long as there have been both. `test_cave_zonation.gd` (17).
+- ✅ **`ChemosyntheticEnergy`** -- the difficulty curve, with no difficulty multiplier in it. Real ecosystems behind every number: Movile Cave (sealed ~5.5Ma, ~48 species on sulfur- and methane-oxidising mats), Frasassi snottites at pH 0-1, *Candidatus* Desulforudis audaxviator 2.8km down in Mponeng living on radiolytic hydrogen. Three consequences: **few** (starved rock sits at ~0.1% of surface productivity, so the player meets individuals, never swarms), **old** (the olm passes 100 years against 20-25 for a comparable surface salamander -- and age is exactly what `worldbosses.md`'s promotion threshold already reads, so the emptiest places underground become boss factories through the EXISTING mechanic with no cave-specific boss code), and **enormous but only with endosymbiosis** (Riftia has no gut at all; an animal farming its own producers reads a seep's worth of energy wherever it is, which is the only reason anything large can exist somewhere this energy-poor). Both exponents are real laws -- Kleiber inverted for attainable mass, and a longevity exponent fitted to the olm end of a real pair that then **independently returns 17.5 years at surface-equivalent energy**, a surface salamander's lifespan it was never fitted to. `test_chemosynthetic_energy.gd` (17).
+- ✅ **`CaveDescent`** -- layers connect through a real aven: a place where the deeper layer's own void opens under a cell you can stand on. Nothing is placed, so finding a way down is an exploration result. Light is a hard gate, the first non-cosmetic use `lighting.md`'s torch has; the real caving standard of three independent lights per person is recorded and the game gates at one, a divergence kept visible rather than silently rounded away. `test_cave_descent.gd` (15).
+- ✅ **`CaveSiting` / `CaveSignals`** -- the composition, and the translation from this world's own readings (real slope degrees, biome-derived precipitation seasonality, scanned ocean distance). **Palmer's 57% stops being a recorded constant and becomes a load-bearing assertion**: the generated global mix measures 16.8% cave-bearing (against 16.5% soluble bedrock) and **60.3% branchwork against his surveyed 57%**, with maze plus anastomotic at 25.4% -- his "the maze types make up most of the rest". `test_cave_siting.gd` (6), `test_cave_signals.gd` (13).
+- ✅ **`Strata.KIND_VOID`** -- natural passage, distinct from the `KIND_TUNNEL` a player mined. Void wins over both mined state and ore (there is no rock in an open passage), and `mine_at` on a natural passage is a no-op because swinging at open air is not work and must not turn a void water carved into a claimable working. Every existing caller defaults to no cave pattern and keeps exactly the old solid-rock behaviour. `GeologyRenderer.reveal_chamber` now skips any open cell rather than only a mined one -- spawning rock in a natural passage would wall off a cave with rock that was never there.
+- ✅ **`EarthChunkManager` wiring** -- every loaded chunk now gets a real bedrock `Strata` sited from its own lithology and hydrology; `bedrock_strata_at`/`strata_for_layer`/`pitch_at`/`try_descend`/`try_ascend`/`player_cave_layer` all exist and are tested, and `_update_underground_reveal` reveals the player's surroundings in whichever layer they are in -- `geology.md`'s "reveal-on-entry, reused recursively" finally applied recursively.
+- ⬜ **Descent is NOT playable yet, and that is the honest headline.** Nothing in the game calls `try_descend`/`try_ascend` -- no key, no prompt, no automatic trigger. Deliberately left rather than auto-triggered inside `update()`: with no visual transition, a player silently flipped underground would have no way to understand what happened. **The underground also does not look like one** -- no cave floor, no hiding of surface terrain, no true-black rendering; `CaveZonation` computes the darkness and the temperature and nothing reads either. And **finding a pitch is currently impractical**, because the topsoil chamber is a fixed 3x3 pocket, so there are at most nine cells to try; it needs to grow as the player mines outward before the dig-to-find-the-way-down loop can happen.
+- ⬜ **Not built**: cutoff grade (so depth is not yet a real economic trade); the underground clade (no creature pools keyed by zone and chemical flux, no spawning, no snottites -- `ChemosyntheticEnergy` answers what the budget allows and nothing consumes the answer); claims/gates/lapse, so the whole "instancing without instances" mechanism is design only; lava tubes; saltpetre, speleothems-as-climate-archives, chemosynthetic food and cold storage; and `PATTERN_RAMIFORM`'s branching side passages (it generates rooms but not the connections between them).
+- ⬜ **Honestly weaker than it looks**, flagged rather than dressed up: `CaveSignals.hydrothermal_proximity_at` is a **placeholder** -- this world has no tectonics or heat-flow field, so every ramiform cave in the game is sited by a die roll, not by geology. `Lithology.PERMEABLE_COVER_SHARE` is the least-anchored constant in the stack, calibrated against Palmer's share within a sweep whose own assumptions are named out loud in the test rather than measured directly. `CaveNetwork`'s spongework passage density is the one of five not taken from a named survey. And the play-scale/map-scale split (~1.426 m/tile for passages, ~1km/tile for biomes and oceans) is the project's existing deliberate scale fiction -- every conversion says which it uses, but the two genuinely coexist and that is a standing trap.
 
 ### Wayfinding & Instruments (`concept/wayfinding.md`)
 
@@ -19637,6 +19758,179 @@ to its original 2,338,456-byte version) — the user's own explicit choice
 between reverting and keeping the new art with the known jump. The
 45-frame art (extra row/column) is not lost -- recoverable from `aad16cff`
 whenever a version with genuinely continuous inter-row rotation exists.
+
+## Nothing is drawn over the build palette any more (`concept/planner_mode.md`, `concept/hud.md`, 2026-09-20)
+
+Reported with a screenshot: the build palette open, with *"Tree"*, *"Chop
+(Space)"* and an *"Iron Axe"* card all drawn straight over it. Two faults,
+worth keeping apart because the fix for one is not the fix for the other.
+
+**The held-item card was a regression from the HUD pass, and it was mine.**
+It names what the hotbar's hand is holding and sits in the hotbar's own
+bottom-centre strip — the strip `_apply_view_mode` gives to the palette when
+it hides `_hotbar`. The card was added later and nobody hid it alongside the
+thing it belongs to. It reads `ViewMode.shows_hotbar` now, the same predicate
+the hotbar itself reads, in both `_apply_view_mode` and the per-frame
+updater (without the second one it would re-show itself over the palette on
+the very next frame).
+
+**The prompt and the tooltip were a deeper mistake than occlusion.** The
+tempting fix is "do not draw a world hint over the palette" — a z-order
+problem. But *"Chop (Space)"* is not a label that landed in a bad place: in
+planner mode the hotbar is gone, a click plants a blueprint, and the key the
+prompt names does something else. The hint is **wrong**, not covered, and
+would still be wrong drawn in an empty corner. `ViewMode.shows_world_hints`
+is the rule that follows from that, and it tracks `shows_hotbar` exactly
+(pinned) — a hint advertises an action, and the player's hands are where the
+actions live. It gates the interaction prompt, the hover tooltip and the
+charge meter (the charge on a held stone is an RPG action in progress).
+Readouts are deliberately NOT swept in: `shows_readouts` stays true in both
+modes, because a readout reports what is true rather than offering an action,
+and the mode laying out a settlement is the one that most needs to know where
+it is. A test pins that the two rules actually differ, so neither is
+redundant.
+
+**`_any_gameplay_window_open` is untouched**, and a test now guards that: it
+is Escape's notion of "a modal is open", and Escape closing the palette would
+strand a player in planner mode with no controls at all. The mode gate
+composes with the window gate at each call site instead, so the two questions
+stay separate.
+
+**TDD:** four pins in `test_view_mode.gd` and four in
+`test_world_planner_mode_wiring.gd`, red first (three of them; the fourth,
+"the palette is not a modal", passes from the start as a regression guard —
+which is the point of writing it). `tools/probe_hud_layout.gd` gained a
+`planner` state that builds the real `BlueprintPaletteView` and drives
+World's own `_apply_view_mode`, so the render shows what the game decides
+rather than a second opinion the probe holds; it renders the exact screen the
+bug was reported against, now clean, and the RPG render still shows the
+held-item card. Affected suites 275/275.
+
+🚧 **Not verified in a live session** — rendered offscreen, not played.
+
+## The minimap is framed, and the planner toggle is a real switch (`concept/hud.md`, 2026-09-20)
+
+Two asks in one screenshot: *"Can you add a border and borderradius of 4px
+to the minimap and make the planner switch a ios like switch button with
+two states?"*
+
+**The minimap** was the one readout on screen with no frame — a bare
+`TextureRect` running to a hard square edge, directly above a world-clock
+card and a Karma card that both carry the shared rounded, bordered one. Not
+a legibility problem (a map is opaque), a coherence one. `UiTheme.
+map_frame_stylebox` is the shared `PANEL_BORDER` at `MAP_CORNER_RADIUS` 4
+with **no fill** — the map is the background, making this the one stylebox
+in the theme that draws only an edge. Four rather than the theme's six is
+deliberate and pinned: a map is read for the shapes in it, and rounding eats
+them. Rounding a `TextureRect` needs two nodes, because a stylebox draws
+*behind* a texture rather than clipping it and its border draws under its own
+children: a clipper (`clip_children = CLIP_CHILDREN_ONLY`, never drawn, its
+shape the mask) that the map moves into, and a frame added **after** the map
+so it draws on top of it.
+
+**The planner toggle** was a `Button` captioned with the mode you would
+switch *to* (`ViewMode.toggle_label`: "Planner Mode" while you are in RPG
+mode). Correct for a button, wrong for this control — a player could read it
+as *you are in planner mode* or as *press for planner mode*, and nothing on
+screen settled it. `src/ui/toggle_switch.gd` is a real two-state switch: the
+caption is now the constant `ViewMode.SWITCH_LABEL` ("Planner"), and the
+switch's on-state is the existing `ViewMode.shows_palette`, never a second
+predicate that could drift. `toggle_label` stays for callers that really do
+describe the action. The knob slides (a short `Tween`), which is what makes
+it read as one control with two states rather than two pictures; keyboard
+focus stays off it for the reason the old button already documented (a
+focused Control answers `ui_accept`, which is Space, which is attack).
+
+**Rendered, and the render earned its keep.** `tools/probe_hud_layout.gd`
+grew the minimap and the switch, and shows both switch states (planner on in
+the busy render, off in the calm one). It caught two things no unit test
+could: the off-track all but vanished into the card behind it —
+`UiTheme.BUTTON_NORMAL` sits within 0.06 luminance of `PANEL_BG`, so the
+track now carries the shared border in both states — and, inside its row, the
+switch stretched to the row's height, which stops a pill being a pill
+(the radius is half of `TRACK_SIZE.y`, so a taller track turns semicircular
+ends into merely-rounded corners). Both fixed; the second is now pinned by
+`test_the_switch_keeps_its_own_height_inside_a_row`, a test written *because*
+a picture showed what twelve geometry assertions measuring the constants
+could not.
+
+**TDD:** 12 pins in `test_toggle_switch.gd` (the knob is inside the track at
+both ends, the rest positions are symmetric, the travel is exactly track less
+knob less both paddings, the track is a pill, on/off are the theme's own pair
+and visibly differ in luminance), 4 in `test_toggle_switch_view_mode.gd` and
+3 in `test_ui_theme.gd`, all red first. One existing test changed its
+PREMISE rather than its assertion: `test_world_planner_mode_wiring.gd` asserted
+`_apply_view_mode` reads `ViewMode.toggle_label`, which is exactly what must
+no longer be true — it now asserts the caption is the constant, that
+`toggle_label` is absent, and that the switch follows a mode flipped by a
+keypress rather than only by a click. UI suites 144/144.
+
+🚧 **Not verified in a live session** — rendered offscreen, not played.
+
+## The mushroom crush was playing its own silent lead-in (`concept/creature_and_footstep_audio.md`, "Mushroom crush", 2026-09-20)
+
+Reported live: *"Mushroom crush sounds are gone"*. Two earlier changes,
+each correct on its own, composed into a sound that never played:
+
+1. The sourced clip (2026-09-09) is **7.54 seconds of continuous crinkling
+   styrofoam**, not a trimmed one-shot — it could not be trimmed, because
+   no audio-editing tooling was available in the session that sourced it.
+2. The 0.3s playback cap (2026-09-10, asked for directly: *"It plays long
+   after you stepped on it"*) plays the clip's **first** 0.3 seconds.
+
+The join between them is `FootstepSound.offset_for`, which returned `0.0`
+for this clip because it was never entered in `CLIP_LENGTH_SECONDS`. An
+unmeasured clip reads as length `0.0` there, so `is_walking_bed` called a
+7.5-second recording a one-shot ("it is already the step") and every
+crush played the same opening lead-in, before the performer has touched
+the styrofoam. Deterministic silence, not intermittent quiet.
+
+**Measured, not guessed, and three candidate causes ruled out first.**
+`tools/probe_mushroom_crush.gd` (new) loads real generated chunks, counts
+fruiting mushrooms and steps on every one: **298 fruiting, 298 crushed**
+on ordinary land — so mushrooms exist and `crush_mushroom_at` returns
+true, which is the branch the sound is played in. (The probe's first run
+reported zero, on chunks that turned out to be open ocean — `"sea": true`
+in the generator's own hydrology. Re-run on land before drawing any
+conclusion.) The audio player itself was already covered by
+`test_interaction_sfx_player.gd`, which loads and plays the real clip. That
+left the offset, and the clip's real length measured **7.536s** against a
+`CLIP_LENGTH_SECONDS` that knew only `default.ogg`.
+
+**Fix:** the clip's measured length (`7.54`) joins `CLIP_LENGTH_SECONDS`,
+where the existing `test_the_pinned_clip_lengths_are_the_real_files_own`
+now checks it against the real file every run like every other length
+there. `is_walking_bed` is then true for it, so each crush reads a
+**random 0.3s window out of the recording** instead of its first 0.3s —
+which for a continuously crinkling source is the right reading anyway:
+any moment in it is a crunch, and a different one each time is variation
+the crush never had. No change to the 0.3s cap the user asked for, and no
+change to any footstep. `is_walking_bed`'s name is now narrower than what
+it does (it is about LENGTH, not walking); the name is left alone rather
+than churned through every caller and its doc comment carries the
+correction.
+
+**TDD:** four pins in `test_footstep_sound.gd` — the clip is registered,
+a 7.5s recording is read as a window, two rolls read different moments,
+the latest window still fits inside the recording — plus the wiring half
+in `test_interaction_sfx_player.gd`: 24 crushes start in more than one
+place, and at least one reads deeper in than a whole window (not merely
+"not exactly zero", which passes vacuously because playback advances a
+hair on its own). All confirmed red against the unmeasured constant
+first, the key one failing with *"every crush started in the same
+place"* — the bug stated exactly. Also pinned: the crush's cap must stay
+inside the tail margin `offset_for` leaves, so neither can be moved into
+the other's way unnoticed. Audio suites 93/93.
+
+Fixed in passing, in the same file: two `assert_eq` comparisons against
+`volume_db` were failing on float precision (`1.1` reads back as
+`1.10000002384186` from a 32-bit engine property). These gains are
+MEASURED by `tools/prepare_footstep_oneshots.py` rather than chosen, so
+most are not exactly representable; both are `assert_almost_eq` now.
+
+🚧 **Not verified by ear.** Nothing in this environment can hear the
+result — what is tested is that the window varies, starts inside the
+recording, and never reads off its end.
 
 ## The mushroom-crush sound is sourced: crushed styrofoam (`concept/creature_and_footstep_audio.md`, "Mushroom crush", 2026-09-09)
 
@@ -28116,6 +28410,1049 @@ construction; catching one in the act still wants a real-terrain probe.
 
 Tests: `test_village_farm.gd` 77/77 (4 new), `test_village_renderer.gd`
 132/132 (3 new), `test_npc_marker_farming.gd` 39/39.
+
+## A field's fence shut its own farmer out (`concept/village_farms.md`, "The rail stands on the inner edge", 2026-09-20)
+
+Reported live, with the village in shot: *"The farmer doesn't farm anymore"*.
+
+✅ **A regression from `f64a360e`** ("a villager walks round a wall and a
+rail, not through them"), which gave rails a hitbox against villagers. A
+field's rails stand on its **inner** edge, so the one villager they shut out
+is the farmer whose beds they enclose.
+
+✅ **Measured, not guessed — and three wrong guesses were measured away
+first.** `tools/probe_village_farming.gd` on a real village: of three
+villagers with a field, one worked 58 beds in 600s and the other two worked
+**none**, each frozen in `APPROACHING` for 2650 of 2750 on-field ticks. The
+hypotheses that died, in order:
+
+| Guess | How it died |
+| --- | --- |
+| The fence blocks them | Tested `fence_blocks_step_global` with **pixel** coordinates — it takes tiles — and on a straight line to the bed centre rather than the 2px step actually taken. Read false. Wrong test, right suspect. |
+| The carter round hijacks the target | `VillageCart.walks_the_round` is carter-only |
+| A conversation freezes them | 0 talking ticks while on the field |
+| Some other override hijacks the target | Recorded the real target every tick: it was the field for all 2650 |
+
+What finally showed it was tracing the actual per-tick step: position frozen,
+a 2px step east proposed, and `_slid_along_walls` handing back the same
+position — then asking the fence in **tile** coordinates: `FENCE=true`.
+
+✅ **The worker may cross into ground they themselves work.** "The gate"
+exists for this, but reaching one needs pathfinding a `Sprite2D` walking one
+`move_toward` per frame does not have — `f64a360e` said so itself: *"boxed
+in on both, they stay put"*. Nothing else moves: every other rail still
+stops them, a neighbour's included, and no villager without a field is
+exempt.
+
+After, over the same 600s run: the herbalist **0 → 100 wheat** (30 deposits,
+all six beds worked), farmer one **45 → 77** (18 → 29 deposits, 3 → 6 beds).
+
+🚧 **A farmer whose field lies beyond ANOTHER farmstead's ring still cannot
+reach it.** In the probe's village the third farmer stands west of its
+neighbour's fenced beds with its own field east of them, and walks into that
+ring's rail forever — still 0 of 6 beds. Its own gate would serve if it went
+to its farmhouse frontage first; that routing is deliberately not attempted
+here. Named rather than silently left.
+
+Tests: `test_npc_marker.gd` + `test_npc_marker_farming.gd` 100/100 (+3 new).
+
+## A villager gets a face, and their own clothes (`concept/character_art_brief.md`, 2026-09-20)
+
+Reported live with one in shot: *"There's still a weird looking farm house
+with a weird npc and weird sil tiles"*, and, asked which part: *"It's a rough
+sketch with a square as head and poor resolution"*. Two independent causes
+under one complaint, each measured before either was touched.
+
+### ✅ A square for a head — the safety net was catching one villager in five
+
+19 of `head.png`'s 100 cells fail background removal (7 erode to almost
+nothing, 12 keep the whole opaque square). `has_usable_head` already caught
+every one of them and `CharacterView._apply_head` already fell back to
+`ProceduralCharacterSprite`'s flat 24×24 `ART_HEAD_SIZE` head. None of that
+was broken and none of it changed.
+
+What was broken is that `HeroAppearance` rolled `"head"` uniformly across all
+100 cells, so the net caught **19% of every villager rolled** — a plain
+square head on a finely illustrated body, which is exactly what reads as "a
+rough sketch with a square as head". Measured with
+`tools/probe_usable_heads.gd`: 81 cells usable for every skin tone, 19
+unusable for every skin tone, and **0 cells usable for some tones and not
+others** — the flood runs before the recolor, so usability is a fact about
+the sheet alone.
+
+The head axis now walks only drawable faces. `option_count("head")` counts
+`usable_head_cells()` instead of the grid, and `head_cell_for_axis`/
+`axis_for_head_cell` map an axis position onto a real `head.png` cell and
+back — so `appearance.head_index` still means the same thing it always did,
+`generate_head_texture` is still indexed by it, and a hero saved before this
+still round-trips through `choices_from_appearance`.
+
+The 19 are **pinned**, not swept at startup: deciding usability means
+flood-filling and scanning all 100 cells, far too much to repeat every
+launch, and the answer only changes when the art does.
+`test_the_pinned_broken_head_cells_are_exactly_the_ones_the_art_cannot_draw`
+checks the list against `has_usable_head` itself, so it cannot drift — fix or
+re-export the art and that test fails and says so.
+
+🚧 **Still a real gap**: the 19 cells are still broken art. Nobody is handed
+one now, but the underlying flood/margin problem is untouched, and the
+character brief still carries it as the open item it was.
+
+### ✅ Dressed as a soldier — a missing palette costs more than colours
+
+`"lumberjack"` and `"carter"` reached `NpcIdentity.OCCUPATIONS` without ever
+reaching `HeroAppearance.CLASS_PALETTES`. That is not only missing colours:
+`outfit_variant_for` derives the illustrated rig's outfit **row** from that
+same table's index, through `maxi(find(...), 0)` — so "not found" (`-1`)
+silently became index `0`, the **warrior's** row. Every lumberjack and every
+carter in every village wore plate with an axe on its back. The villager in
+the screenshot is a carter, hauling a cart across a farm dressed for a
+battle.
+
+Both have their own palette now, appended rather than inserted so the first
+seven entries stay the player archetypes whose order *is* the row mapping.
+
+Worth stating plainly: `test_every_npc_occupation_has_its_own_tunic_palette`
+had been failing on exactly this since those two trades landed — **my own
+regression**, from the pass that added them, and it sat red rather than being
+noticed.
+
+### The beds were measured and are NOT at fault
+
+The same report called the farm beds weird, and three beds 64px wide sitting
+80px apart looks exactly like soil that does not cover its tile — the failure
+`village_farms.md` already records once ("six brown squares in a black
+lattice"). It is not that. Measured twice
+(`tools/probe_soil_ground_size.gd`, `tools/probe_bed_layers.gd`): all nine
+soil frames are 32×32 with **alpha 1.0 in every pixel**, drawn at scale 0.5
+for exactly **1.000 × 1.000 tiles**. A bed covers its whole tile in solid
+dirt, and adjacent beds cannot leave grass between them. Both probes are kept
+precisely so the next session to read that screenshot does not reach for the
+same wrong fix.
+
+⬜ **Unresolved, and named rather than guessed at**: a bed pitch of 1.25 tiles
+is not producible by any path in the code — beds are keyed by `Vector2i` and
+placed at `(tile + 0.5) * TILE_SIZE`, and the terrain's own pitch is
+`TILE_SIZE` via `LAYER_SCALE`. Either the screenshot is rescaled or those
+squares are not `FarmPlotMarker`s at all. The user's own answer — *"They
+shouldn't be there at all"*, alongside *"not a real farmhouse but a
+downscaled miniature farmhouse with no real mechanics"* — points at the
+placeable/real-building split rather than at bed rendering, and that is where
+the next pass should start, not in `FarmPlotMarker`.
+
+Tests: `test_hero_sprite.gd` 49/49 (+3 new, 3 rewritten to the new contract),
+`test_illustrated_character_sprite.gd` 53/53 (+2 new), and
+`test_character_view.gd`, `test_hero_dna.gd`,
+`test_character_sheet_portrait_scene.gd`,
+`test_companion_character_sheet_view.gd`, `test_interior_avatar.gd`,
+`test_house_interior_view.gd` 142/142 green against the change.
+
+Also run, and green: `test_village_renderer.gd`,
+`test_character_preview_diorama.gd`, `test_inventory_window.gd`,
+`test_main_menu.gd` — 308 of 309, the one failure being
+`diorama panel bottom (598) is cut off by the scroll area's own visible
+bottom (586)` in `test_main_menu.gd`. **Pre-existing, not from this change**:
+A/B'd in a clean worktree at `6c407024`, the commit immediately before it,
+where it fails with the identical 598/586. Recorded rather than quietly left,
+and deliberately not fixed here — the character creator's panel heights are
+live in another session's HUD pass.
+
+## A village does not build the player's Farm (`concept/npc_farm_production.md`, 2026-09-20)
+
+Reported live with one standing in a field, and then narrowed in as many
+words: *"it just should not spawn this weird looking npc with that 3 soil
+tiles"* — after explicitly declining the alternative of turning it into a
+real building.
+
+### ✅ What was actually spawning it
+
+`SettlementBuildDecision`. A `DECLINING` settlement's bread shortfall walks
+bread → bakery → flour → mill → wheat → **farm**, and `farm` is the root, so
+the village queued a `farm` construction project at
+`_settlement_build_origin_for` — *"the first free, buildable, clear cell
+spiralling out from the settlement's own centre"*. Completing it placed the
+one-tile placeable with a fence, and `_spawn_farmer_for` moved a
+`FarmerMarker` in beside it, which tends three plots at fixed offsets.
+
+That is the whole picture in the screenshot: a miniature farmhouse dropped in
+a field, one odd worker, three soil squares. Not a farmhouse bug, not a bed
+bug, not a soil bug — all three were the same spawn.
+
+### ✅ The Farm is the player's structure
+
+A village already grows wheat, and always did: `village_farms.md` gives the
+farmer and herbalist occupations real 3×2 `farmhouse` buildings with real
+fenced fields, worked by full `NpcMarker`s with a schedule, hunger and a
+wallet. The placeable Farm — one tile of ground, a narrow-purpose
+`FarmerMarker`, three fixed plots — was designed for a player who places it,
+fences it and staffs it. A settlement raising it stood a **second, redundant
+wheat mechanism next to the real one**, and the redundant one is what looked
+wrong.
+
+`SettlementBuildDecision.SETTLEMENT_WILL_NOT_RAISE` now refuses it. Refusing
+the root refuses the chain below it, which is the correct reading of
+`milling_and_baking.md`'s own pillar 1 rather than an exception to it: a
+Bakery raised with no Mill and no wheat is exactly the "stands waiting for
+flour that never comes" that doc exists to avoid. The refusal `continue`s
+rather than returns, so a smaller shortfall ranked below bread is still
+fixed — a village must not go idle over bread it cannot build its way to.
+
+**Give a village a farm and nothing above it changed.** Once one really
+stands there — the player's, or one they planned — the same shortfall raises
+the Mill and then the Bakery exactly as before. That is pinned by
+`test_with_a_farm_standing_the_chain_climbs_mill_then_bakery_at_distinct_cells`.
+
+### ⬜ The honest cost
+
+A `DECLINING` village short of bread can no longer build its way out of it
+unaided. Its wheat comes from whichever villagers hold the farmer occupation,
+and **nothing yet connects a bread shortfall to conscripting another one** —
+`SettlementGenerator._staff_food_producers` already knows how to make a
+farmer, it simply is not wired to shortfall. That is the real follow-up this
+leaves open, and it is a narrower, better-shaped problem than dropping a
+player's structure in a field.
+
+`mill`, `bakery`, `sagewerk` and `storage` are placeables on the same path
+and would look the same way if a shortfall reached them directly. Only `farm`
+is refused, because only `farm` was reported and only `farm` spawns a worker
+and plots of its own.
+
+### Seven tests rewritten to the new rule, not deleted
+
+`test_earth_chunk_manager_bread_chain.gd` was built end to end on "a hungry
+village raises a Farm". Each test was re-pointed rather than dropped:
+
+- The one that asserted a hungry village *starts* a farm now asserts it
+  raises nothing — keeping every bit of its setup, because the point is that
+  a village with every reason and every resource still does not.
+- The pipeline tests (one project not two, labour advancing in real time,
+  enough time completing and placing it, the chain climbing at distinct
+  cells) were re-pointed at the **Mill**, with a farm placed first. Their real
+  property was never about the Farm.
+- The Farm's own completion rule — a completed project places a fenced plot
+  a Farmer moves into — is unchanged and still covered, by starting the
+  project directly, which is what a plan the player raises does through the
+  same store.
+- `test_villagers_eat_the_merchants_meat_until_the_village_needs_a_farm`
+  keeps the half that was reported (*"the food should be actually consumed"*)
+  and now ends on the village being hungry again and still raising no farm,
+  then raising the Mill once given a farm.
+
+Tests: `test_settlement_build_decision.gd` 19/19 (+4 new, 1 rewritten),
+`test_earth_chunk_manager_bread_chain.gd` 10/11, and
+`test_construction_priority.gd`, `test_settlement_demand.gd`,
+`test_earth_chunk_manager_farm.gd`,
+`test_earth_chunk_manager_chain_logistics.gd`,
+`test_earth_chunk_manager_structure_workers.gd` 62/62.
+
+The one bread-chain failure is
+`test_spare_hands_gather_building_material_between_assessments` (stone and
+plant_fibre gathering staying at 0). **Pre-existing, not from this change**:
+A/B'd in a clean worktree at the commit before it, where it fails with the
+identical numbers at the identical two lines. Recorded rather than quietly
+left.
+
+
+## The well trip becomes an errand (`concept/village_water.md`, 2026-09-20)
+
+Reported live, with the square in shot: *"All NPCs walk to the well at the
+same moments... and it's not visible what they are doing."*
+
+Both halves are one bug wearing two faces, and both were measured before
+anything was touched (`tools/probe_well_crowding.gd`, a real twelve-villager
+roster):
+
+```
+morning  busiest spot holds 2 of 12
+midday   busiest spot holds 2 of 12
+evening  well x10                     busiest spot holds 10 of 12
+night    home x12
+```
+
+Ten of twelve, every evening, all performing `socialize` — a word with no
+verb behind it. `FakeNpcPlanner` gave every non-guard villager the same
+evening entry, so the village emptied into the square and stood there.
+
+The fix asked for was not a stagger bolted onto the timetable but a
+**reason**: *"each NPC should have a bucket in its house inventory and when
+they get water they should carry the empty bucket to the well and bring back
+a full bucket of water which they can pour into their houses water tank
+which then gets tracked as distinct ressource and they then drink from their
+houses stock or use it to water crops in case of a farmhouse"*.
+
+### ✅ Water is a level on the house, and the level is what staggers the village
+
+`HouseholdWater` is pure and static; the level itself is **one number on the
+building's own record** (`water_litres`), the same idiom `guild_days_open`
+already uses — no new store, no new save format, and it travels through a
+chunk round trip.
+
+The anti-crowd mechanism is `starting_level(seed)`: a new house starts
+somewhere between its own trip threshold and full, chosen from its own seed,
+so two houses raised on the same day never run dry on the same day and never
+re-synchronise afterwards. **Staggering is a property of the initial
+condition**, not jitter applied to a queue — nothing has to remember to
+spread anybody out.
+
+None of the four tuned numbers is a number somebody liked. Tank capacity,
+draw per head, the trip threshold and the drinking reserve are each pinned
+by the *errand they produce*: a household must reach the well at least once
+a season and not every day, a bigger household must go oftener than a
+smaller one, and the reserve must outlast the walk.
+
+### ✅ The bucket is the entire UI this needed, and it is actually drawn
+
+`WaterErrand` is the state machine, and `carried(state)` is not decoration
+hung off it — it *is* the state, seen from outside: an empty bucket out, a
+full one back. `bucket` is a real `ItemCatalog` entry (a `tool`), and every
+building that holds a tank keeps exactly one in its own stock
+(`stock_household_buckets_in`, stepped per chunk beside the drinking) —
+stepped rather than seeded at placement, so a house raised before any of
+this existed gets one with no migration and no new field on the record.
+
+`carried()` told the truth from the first commit and **went nowhere**: for
+several commits the errand ran completely invisibly, which is the half of
+the report that reads *"it's not visible what they are doing"*.
+`ProceduralItemSprite` now draws the pail — the same pail empty and full,
+water standing at the brim being the only difference between the two, so a
+full bucket reads as the same object coming back rather than as a second
+one — and `NpcMarker._sync_carried_item` puts it in the `CharacterView`
+tool slot, the seam a held weapon already uses.
+
+The "go again" loop lives in the **caller**, deliberately. A 10 L pail does
+not lift a dry household off its threshold in one trip — caught by the tests
+rather than by play — and the wrong fix is a bigger pail. Fetching water
+meant going twice; a villager who is home and still short simply sets out
+again.
+
+### ✅ The square stopped being a waiting room
+
+The evening entry is now each villager's own haunt
+(`NpcPlanner._evening_haunt`, seeded per villager) rather than the well for
+everybody. A guard still holds the gate. This half is a **deletion**: the
+crowd was a line in a table saying "go here now", and the table stopped
+saying it.
+
+Measured after: evening went from `well x10` (busiest 10 of 12) to
+`gate x5, home x3, stall x2, well x2` (busiest 5 of 12). The errand itself
+produces 27 trips for 12 households over a season — about one each every
+5.3 days, busiest day 4 of 12, day by day `[3, 0, 1, 2, 4, 0, 3, 3, 4, 1,
+3, 3]`.
+
+### ✅ A farmhouse holds a tank with nobody living in it, because its field drinks
+
+`BuildingCatalog.capacity_of("farmhouse")` is 0 — it is a workplace, not a
+home, and nothing drinks there. It holds a tank anyway.
+`EarthChunkManager._holds_a_tank` is deliberately a **separate rule** from
+`_drinkers_in_house` rather than a widening of it: folding the two together
+would have a building with no residents drinking for somebody who does not
+exist.
+
+The field is billed **per visit**, not per tile: a farmer at a bed waters it
+and the beds around it (`_water_the_beds_around` — one trip with a can wets
+the ground you are standing on, not one plant), so the unit priced is the
+visit. `LITRES_PER_TENDING` must be less than a bucket (or one trip to the
+well buys less than one visit to the field) and more than a villager drinks
+in a whole day (or the farmhouse is not the thirstier building and the
+pillar describes nothing a player could see).
+
+Once the tank is down to the drinking reserve the beds are **not watered at
+all**, and an unwatered bed withers. That refusal is the mechanism rather
+than a failure case: it is what sends somebody to the well for the *field*.
+A farmer with no farmhouse — a village that has not raised one — keeps the
+free drip they always had; failing closed there would have killed every such
+field on this commit instead of sending anybody anywhere.
+
+So the errand serves two buildings, their own house first (people before
+plants, the same order the reserve keeps), and the chosen one is **latched**
+when they set out. Re-reading it each frame would let a villager change
+their mind halfway across the square, and the bucket in their hand would
+silently change what it was for. Carrying a full bucket for the farmhouse,
+`"home"` resolves to the farmhouse.
+
+Measured: a working farm reaches the well about **every 3 days** against a
+one-person cottage's ~11, with no day on which the beds went dry.
+
+### 🚧 The field's bill was four times too big, and every test passed
+
+This is the one worth remembering. `LITRES_PER_TENDING` was pinned against
+the premise that a living field is tended *"more than once a simulated
+day"* — reasoned from `FarmPlot.MIN_WATER_GRACE_SECONDS` (45 s) being
+shorter than a simulated day (60 s), and expressed as a test, exactly as
+the tuned-values rule asks.
+
+The premise is **true and nearly useless**. `tools/probe_farm_water.gd`
+(written for this) counts **5.7 and 6.1 tendings a simulated day** on the
+two working farms of a real twelve-villager village. The bill was more than
+four times what it should have been: the farmhouse ran dry almost at once,
+the beds stopped being watered, and `tools/probe_village_farming.gd` went
+from **164 wheat harvested to 24** on the same village, with the farmers'
+on-field time falling from 2750/6000 ticks to 1441 and 68.
+
+Every unit test passed throughout, including the one that pinned the
+constant. A number pinned to a *reasoned* rate is still an eyeballed
+number; only the probe said so.
+
+`TENDINGS_PER_SIMULATED_DAY` is now measured, and the cost is pinned
+through the rhythm it produces rather than through the visit:
+`field_draw_per_day`, `days_between_farm_trips` and
+`days_between_household_trips` are the tested functions, and the tests
+demand a farm reach the well oftener than a household, *and* not spend the
+day walking there, *and* be lifted clear of its own threshold by one
+bucket.
+
+### 🚧 An errand you cannot finish used to last forever
+
+The same probe, once it was taught to report *where* the errand left each
+villager, found the second half of the same wound. One of the three field
+workers ended a 600s run still `to_well`, **104 px short** of a well it had
+had 570 seconds to reach — 5 seconds of walking. It had worked 156 of 6000
+ticks against its own baseline of 2750: it set out once and never farmed
+again.
+
+There is no pathfinding here, only a straight line at the target and a
+slide along whatever it runs into (`_slid_along_walls`), so a wall, a rail
+or a building between a villager and the well is enough to stop them
+permanently. That hole was in the errand from its first commit; it only
+became *visible* once a farmhouse could send somebody.
+
+An errand now has **patience** — and patience is measured in **progress,
+not in time**. A villager who has walked `ERRAND_DETOUR_PX` without
+getting any nearer to where the bucket is going puts it down and tries
+again tomorrow, rather than turning round at the door and walking into the
+same wall.
+
+That distinction cost a second round. The first version *was* a time
+budget, scaled from the straight-line distance, and it looked equivalent.
+Then `TileRouter` ([navigation.md](concept/navigation.md), merged from
+`main` alongside this) landed and villagers began walking real routes
+around buildings — and a route is longer than the line the budget was
+scaled from. **Every well trip in the probe village stopped completing**:
+farmer 1 went from 5 trips and 51 tendings to 0 and 8, its beds dry for
+5110 of 6000 ticks, while the villagers walked perfectly well the whole
+time. A detour takes you away from the target for a while; that is not
+being stuck, and a rule that cannot tell the difference is not a rule
+about being stuck.
+
+Both ends are pinned: a villager who cannot move gives up, and a villager
+crawling toward the well at a tenth of walking speed is left alone.
+
+### 🚧 A farmhouse seeded from a household's floor started dry
+
+Found by its own test rather than by play: a farmhouse seeded from
+`starting_level` was raised **already needing a trip** for three of the
+four probe seeds — the household's floor sits below the farm's own, higher
+threshold. `farm_starting_level` seeds it off its own floor instead, and
+the threshold itself is now named once (`farm_trip_level`) so the two
+cannot drift. The whole stagger is a property of the initial condition, so
+getting the initial condition wrong loses all of it.
+
+⬜ Still open, and named in the concept doc: nobody washes, brews or waters
+livestock from a tank; the well itself is inexhaustible (nothing reaches
+into `hydrology.md`'s aquifer); and the player has no tank of their own.
+
+### Where the field ended up
+
+`tools/probe_village_farming.gd`, same village, end to end:
+
+| | baseline | billed 4x too much | shipped |
+|---|---|---|---|
+| wheat harvested | 164 | 24 | **183** |
+| farmer 1, on-field ticks of 6000 | 2750 | 1441 | 2515 |
+| herbalist, on-field ticks of 6000 | 2750 | 68 | 2190 |
+| well trips completed | — | 0 | **5 each, one every 2.0 days** |
+| ticks with the beds dry | — | 5110+ | **0** |
+
+The remaining gap to baseline is the errand's real cost — a villager
+walking to the well is a villager not farming, which is the feature.
+
+Routing then changed the picture again, in both directions at once. The
+farmer that had never produced anything — `0` wheat on the baseline too,
+a pre-existing failure this feature did not cause — started working and
+brought in 62. And **every well trip stopped completing**, which took two
+more rounds of measurement to explain: the time-budget patience rule was
+one cause and was rewritten to measure progress, but the real one was a
+rail. See "A farmer's own rail shut them in", below.
+
+The shipped column is the state after both: the village harvests **more
+than its own pre-water baseline**, and two of its three field workers make
+five well trips each without a single tick of dry beds.
+
+### 🚧 A farmer's own rail shut them in, and an empty chunk crashed the router
+
+Neither of these is in the water code; both were found by
+`tools/probe_farm_water.gd` asking *why* nobody could reach the well.
+
+The rail exemption in `NpcMarker._blocked_step` was **one-directional**.
+`field_cells.has(tile)` exempts a step INTO a bed you work — the fix for
+*"The farmer doesn't farm anymore"* — but stepping back OUT crosses the
+same rail and was refused. A farmer could walk into their own field and
+never leave it. Measured: three field workers set out for the well 8, 2
+and 8 times and were refused at their **very first step**, 0 px along,
+by `farm_fence_west` / `farm_fence_north`. Not one came within 105 px of
+a well whose arrival reach is 6 px. The rails keep animals out and read
+as an enclosure; they were never meant to shut the worker out of their
+beds, and they are just as clearly not meant to shut them in.
+
+`EarthChunkManager.biome_at_global` guarded a chunk that is not loaded
+but not one that is **present and empty** — a bare `Chunk.new()`, which
+is what a fixture builds when it only needs somewhere to hang
+modifications. Nothing asked it about arbitrary tiles until routing did.
+**A/B'd in a clean `origin/main` worktree: `test_earth_chunk_manager_
+village_farm_loop` fails 4/4 there with 17,376 out-of-bounds errors in a
+single run** — pre-existing, not from this branch. The fix is the size
+check `Chunk.blocks_ground_cover` already documents a few files away, and
+that suite now passes 4/4 with zero errors.
+
+⬜ One field worker still makes no trip: its straight way to the well runs
+through its NEIGHBOUR's fenced field, a refusal that is correct, and
+routing did not find a way round inside `ROUTE_NODE_BUDGET`. Widening the
+exemption would "fix" it by breaking the enclosure.
+## The square stays under the hall, and every plot shows its own kerb (`concept/building.md`, 2026-09-20)
+
+Reported live with a screenshot: *"the background of the houses 2x2 should
+be variable; if the city hall is placed on the plaza it should have
+cobblestone background so it looks seamless... also there should be some
+kind of border so the hitbox is visible."*
+
+**Half of it was already fixed, in parallel, the day before.** "A building
+stands on the ground; it does not replace it" (2026-09-19,
+`TerrainRenderer.BUILDING_OVERLAY_TILE_IDS`) made a footprint an overlay,
+so a house on grass shows the grass it was raised on and the ground under
+a building is exactly as variable as the ground is. This entry is the
+other half, and the two are reconciled rather than stacked — one branch
+was written against the pre-overlay code and was merged into it by hand.
+
+**The square is the one thing an overlay cannot answer.** Placement LIFTS
+the paving it covers — `EarthChunkManager._place_building_over_roads`
+erases the Road modification from every footprint cell before writing the
+building's own ids — so a hall raised on the village square falls back to
+the *biome* under it and shows the grassland the square was paved over.
+Not a seam: a hole punched in the square, which is what the screenshot
+shows. Measured before the fix with `tools/probe_building_ground.gd`
+(new, kept) across three real settlements near lat 48.6 lon 12.7: 28
+buildings, all three town halls standing on ground that is not the square
+they stand on.
+
+**So a building reads its own kerb** — the ring of cells immediately
+around the footprint, 18 round a 4×3 hall and 12 round a 2×2 cottage.
+More than `TerrainRenderer.PAVED_KERB_SHARE` of it carrying laid Road
+means the footprint paints Road as well and the hall is cobbled up to its
+own walls; anything less leaves it the plain overlay, ground showing
+through. The share is half and the real geometry put it there: every town
+hall's kerb is 12 of 18 paved (67%, the same in all three villages, since
+plaza and civic plot are both pure functions of the chunk and its seed),
+an ordinary house/farmhouse/sawmill plot runs 7–43%, and the three plots
+of 28 that sat above half (58%, 71%, 86%) are corner plots genuinely
+ringed by street.
+`test_the_town_hall_on_a_real_villages_square_stands_on_the_square` builds
+the kerb out of `VillageLayout`'s own real output rather than a made-up
+ring, so a change to the plaza or the street pitch fails there instead of
+on screen — mutation-checked by raising the share to 0.75 and watching all
+four seeds fail. Trails do not count, only the laid Road tier: a building
+standing in ground worn by walking is standing in worn ground.
+
+**Nothing is persisted.** The ground is re-derived from the chunk on every
+paint, so a village saved before this existed heals on its next load (the
+same property that lets an older village re-derive and pave its square),
+and a plot that is paved *around* later becomes paved itself with no
+migration and no second source of truth to drift. `TerrainRenderer` does
+now preload `BuildingCatalog`, which the literal `BUILDING_OVERLAY_TILE_
+IDS` list deliberately avoids — a named divergence: the overlay question
+needs nothing but an id, while a kerb is read around a whole PLOT and a
+footprint is the one thing only the catalog knows. The list stays literal.
+
+**The kerb is drawn, too.** `ProceduralFootprintKerbSprite` (new) draws
+the plot's own outline at art resolution — two art pixels of stone, one of
+lit top face, a joint every eight so it reads as laid kerb stones rather
+than a debug rectangle — and `_spawn_building_node` carries it *beneath*
+the building's art (children paint in tree order; the art sprite is now
+named `Art` so nothing has to guess which `Sprite2D` is which), built from
+the same `footprint_px` the `StaticBody2D`'s `RectangleShape2D` is built
+from. What is drawn IS the hitbox rather than a picture of one that can
+drift from it, pinned by
+`test_the_kerb_a_building_draws_is_exactly_its_own_collision_rect`. Its
+middle is fully transparent, so it never paints over the ground the rule
+above just chose. "Visible" is measured rather than eyeballed:
+`contrast_over` composites the kerb's own drawn pixels onto a ground and
+returns how far they land from it, and every ground a kerb can lie on
+clears `MIN_GROUND_CONTRAST` — 0.44 over the village's cobbles, 0.28 over
+bare earth, 0.31 over the grass beside a plot, against a floor of 0.12 —
+with a second test recomputing that number straight off the generated
+image so the function cannot drift from the drawing. A construction site
+draws none; it has no collision body yet.
+
+**Confirmed on a real render** (`tools/probe_village_render.gd`, new,
+under `xvfb` + Mesa software GL, because a headless run paints no pixels):
+the hall's plot is cobbled continuously into the plaza with no seam, and a
+cottage's plot shows the grass it stands in, with a kerb legible against
+both.
+
+Honest gaps, both real:
+
+🚧 **The kerb is drawn on a paved plot too**, where it is an outline over
+the square rather than a boundary between two surfaces. That is what "so
+the hitbox is visible" asked for, and it does mean a village square
+carries outlines a photograph of one would not.
+
+🚧 **An earth cell beside a PAVED plot blends toward it as open ground.**
+`_neighbor_biomes` reads overlays as unmodified, and the paved branch runs
+ahead of that. It cannot arise today — a paved plot is by definition
+ringed by paving, not by earth — but it is a real hole in the rule rather
+than a guarantee.
+
+Tested: `test_building_ground.gd` (7, new),
+`test_procedural_footprint_kerb_sprite.gd` (9, new),
+`test_terrain_renderer.gd` (+5, beside the overlay tests they reconcile
+with), `test_earth_chunk_manager_buildings.gd` (+4).
+
+## The item panels draw the real art too (`concept/illustrated_art_addressing.md`, 2026-09-20)
+
+Reported live: *"The inventory still renders the old procedual icons and not
+the illustrated ones"*.
+
+### ✅ Documented from the start, wired for only one of its four surfaces
+
+`illustrated_art_addressing.md` has described the `icon` context as
+"inventory/hotbar/paperdoll/tooltip" since its first draft. The pass that
+finally made real art reach the screen (2026-09-19) wired **six** call sites
+— the `World` hotbar slot, `DroppedItem`, and the two equip paths — and of
+`icon`'s own four named surfaces it reached only the hotbar.
+
+So the hotbar along the bottom of the screen drew the real axe while the
+inventory slot directly above it drew the generated one. Nothing was broken;
+two windows were simply never connected.
+
+### ✅ Seven more call sites, each asking for the context that depicts it
+
+| Window | Call sites | Context |
+| --- | --- | --- |
+| `InventoryWindow` | grid slot, paperdoll frame, drag preview | `icon` |
+| `InventoryWindow` | preview character's armour / weapon | `equipped` / `held` |
+| `CraftingWindow` | card thumbnail, material row | `icon` |
+
+The preview character mattered as much as the slots. It is the **same rig**
+the world draws, so it takes the same contexts `Player.equip_armor`/
+`equip_item` ask for rather than the flat icon — a paperdoll showing a
+different axe from the one in the player's hand two panels away would be its
+own bug.
+
+A drop-in in both windows: `IllustratedItemArt` falls back to
+`ProceduralItemSprite` for a subject with no art and fits every frame to
+`ProceduralItemSprite.SIZE`, so no call site re-scales and no layout moved.
+Both files dropped their `ProceduralItemSprite` preload outright — the
+fallback lives behind `IllustratedItemArt` now, in one place.
+
+### The fallback test does not use the obvious item
+
+`test_an_item_with_no_art_still_draws_its_generated_icon` pins `"bread"`, not
+`"rock"`. Measured against the real asset tree: **104 of the catalog's 149
+ids have icon art** now and `rock` is one of them, so the first draft of that
+test asserted a no-art fallback for an item that has art and failed for the
+right reason. Bread is one of the 45 that genuinely has none. Picking a
+familiar-sounding id by hand proves nothing here.
+
+Tests: `test_inventory_window.gd` 42/42 (+5 new), `test_crafting_window.gd`
+20/20 (+1 new).
+
+## The well had three different 2x2s, and only one was checked (`concept/village_market_square.md`, 2026-09-20)
+
+Reported live with the well in shot: *"The well is still placed partly on
+streets ... it should be placed on a free 2x2 grass patch"*.
+
+✅ **"Still", because the siting was never the problem.** `c2b78947` really
+does site the well with `allow_road` false and the whole 2×2 checked. What
+undid it is that three functions each answered "which 2×2" differently:
+
+| | which 2×2 |
+| --- | --- |
+| `_clear_block` | whichever quadrant round the anchor was free — its first option runs **north** of it |
+| `_nearest_prop_cell` | returned the centre of the **anchor cell alone** |
+| `_landmark_cells` | searched again from that position, landing on a third |
+
+So a well was validated on one patch, drawn over a second and reserved on a
+third, and two of the three could be road while the check passed. Measured
+across eight real villages: **16 well cells on road, two per well**.
+
+✅ **One answer now.** `VillageRenderer.landmark_block_at` — a multi-tile
+landmark stands on its block's centre, so the block is recovered by
+stepping back half a footprint. Siting, reservation and the tests all read
+it. Measured after: **0 road cells** under the well that had 2.
+
+✅ **A wrong guess worth recording.** The first suspect was ordering:
+`_close_short_street_gaps` runs *after* the landmarks are grounded and
+paves one- and two-tile holes, and a prop is not `_is_occupied_local` to
+it. That is a real hazard, so the gap closer is now told about the landmark
+block — but it was not the bug: the fix changed nothing on its own, because
+the cells it protected were the wrong 2×2 too. Kept, as the guard it should
+always have had.
+
+✅ **Two tests that passed by coincidence are corrected.**
+`test_landmarks_are_rendered_as_sprites_at_their_positions` and
+`test_spawned_npc_markers_know_the_settlements_shared_landmarks` compared
+the **grounded** landmark against the generator's **ungrounded** plan, which
+only matched while the well sat on one cell's centre. They now assert what
+they meant — the sprite stands where the settlement thinks it does, and
+every villager agrees with every other.
+
+✅ **And the art is scaled to that ground** (asked for next: *"scale the
+art to its footprint"*). The well's world size came from
+`ProceduralLandmarkSprite.SIZES` — the old procedural placeholder box,
+40×44 world px — which has nothing to do with the 2×2 it stands on. 40px
+is 2.5 tiles over a 2-tile footprint, so a quarter of a tile hung over the
+paving each side however well it was sited.
+`LandmarkSheet.world_scaled_image` takes a world width now and the
+renderer passes `footprint.x * tile_size`: **40×30 → 32×24 world px**,
+exactly its 2×2. One-cell props are unchanged.
+
+**A measurement of mine, corrected.** I first reported this as "80×60 px,
+five tiles wide, covering 24 cells". That read the raw texture and ignored
+`ArtResolution.SPRITE_SCALE` — art is authored at 2× and drawn back at
+0.5, so 80×60 texture pixels are 40×30 world pixels. The overhang was half
+a tile of width, not three.
+
+Tests: `test_village_renderer.gd` + `test_village_layout.gd` +
+`test_landmark_sheet.gd` 253/253 (+1 new, 2 corrected).
+
+## A village starving beside its own full store (`concept/village_warehouse.md`, `concept/village_growth.md`, 2026-09-20)
+
+Reported live with the settlement card in shot: *"The villages population
+is declining but there still run around more NPCs than the number displays
+also there's still not enough food even though the warehouse is full"*.
+
+Three complaints, two bugs, and the second one explains the first.
+
+### ✅ The village was fed on paper and its people could not eat
+
+Both halves of *"not enough food even though the warehouse is full"* were
+true at once, and the two halves of the codebase disagreed.
+
+A settlement's food **assessment** counts every `StructureStock` standing
+in its chunk (`_settlement_structure_stocks` → `SettlementFood.carrying_
+capacity`), so the grain a carter hauls in really is food the village has.
+An individual villager's **meal** came from `STRUCTURE_MEAL_SOURCE_IDS` —
+a hand-written list of `bakery` and `storage`, written before the
+warehouse existed and never grown to include it. A full warehouse fed
+nobody.
+
+Pinned by the behaviour rather than by the list, because the list is
+exactly how it drifted: *what the settlement counts as food is what its
+people can eat* (`test_earth_chunk_manager_village_meals.gd`).
+
+### ✅ A household that left kept its house, and that froze the village
+
+*"Population 1 (10 housed)"* is impossible on its face — you cannot have
+ten of one household under roofs.
+
+`_record_household_departure` appends an `npc_departed` event and
+**releases nothing**: no roof, no villager, no household record.
+`_households_in_settlement` then stops counting that household while the
+house it built still names it as owner, so `VillageCensus` met roofs whose
+owners were not on the roster it was handed and counted them among "ours"
+— against the contract `VillageAssembly` states in its own argument list,
+*"housed_count — how many of THEM have a roof"*.
+
+The bookkeeping error froze the village solid, which is the part that
+mattered, and it is the reported decline:
+
+- `housed_count >= household_count` tells `VillageGrowth.next_building`
+  there is nobody left to house → **no house is ever raised again**.
+- `spare_house_capacity = capacity - housed_count` tells
+  `VillageImmigration` there is no room → **nobody ever moves in again**.
+
+A village carrying ghost owners could only lose people. Counting just the
+roster restores both gates, and a roof whose owner has left is room the
+village may grow into again.
+
+### 🚧 The villagers you can see are a snapshot; the card is live
+
+*"there still run around more NPCs than the number displays"* is **not
+fixed**, and is named in `village_growth.md` rather than implied.
+`VillageRenderer._population_for` reads the real roster — but only when
+the chunk is rendered. Nothing spawns a villager when a household arrives
+mid-session and nothing removes one when a household departs, so the two
+drift apart until the chunk reloads. Measured with
+`tools/probe_village_population.gd` on a real village: at load the card
+says `Population 10 (10 housed)` and exactly 10 villager markers stand
+there — **they agree**, so the divergence is drift during play, not a
+constant offset. Closing it means spawning and despawning villagers live,
+which is a change to how a village is rendered rather than a counting fix.
+
+That probe also prints the pressure that starts the whole chain: a fresh
+village loads at `Food feeds 0 of 10`, `Happiness 29% (worst: food)`, with
+no building holding any food at all.
+
+**Honest limit on all of this**: the two fixes are verified by their own
+tests and by the code path, not by watching the reported save recover —
+that state could not be reproduced in a probe.
+
+Tests: `test_village_census.gd` 12/12 (+3 new),
+`test_earth_chunk_manager_village_meals.gd` 5/5 (new),
+`test_village_growth.gd` 18/18, `test_village_immigration.gd` 16/16,
+`test_village_assembly.gd` 39/39, `test_settlement_state.gd` 14/14,
+`test_npc_economy.gd` 80/80,
+`test_earth_chunk_manager_chain_logistics.gd` 14/14,
+`test_settlement_food.gd` 29/29. `test_earth_chunk_manager_bread_chain.gd`
+stays 10/11 — `test_spare_hands_gather_building_material_between_
+assessments`, the same pre-existing failure already A/B'd and recorded
+above.
+
+## Every village gets a square, even a clipped one (`concept/village_market_square.md`, 2026-09-20)
+
+Reported a fourth time, with the hamlet in shot: *"There's still a village
+without plaza and city hall"*, then answered directly: *"Every village
+should have a square"*.
+
+✅ **The fallback was the hole.** `plaza_x0_for` slides its 8-wide square
+along the street looking for somewhere wholly usable, and when it finds
+nothing it returned `centred` — a site it had just proved unusable. The
+village planned a square on ground it could never pave, had none, and
+silently lost its seat with it, because the civic plot *is* the square's
+paving. It takes the **best partial window** now (most usable cells, ties
+westmost); `_lay_plaza_if_missing` already paves around what it cannot use
+and already declines a square that would be mostly holes, so a clipped
+square either lands properly or is honestly refused.
+
+⬜ **I could not reproduce a village that ends up with no seat**, and said
+so rather than shipping a guess. Four measurements found none: 96 real
+layouts all place a hall; a spoiled centred site slides and still seats;
+a 6-wide pocket still seats; 32 squares measured cell by cell are fully
+paved. That last one first read as "32 of 32 villages never paved their
+square" until the shape was printed and the 4×3 block turned out to be the
+**city hall standing on it** — a false alarm caught before it was reported
+as a defect.
+
+🚧 **The reported hamlet's hall never finishes** (confirmed by the player:
+"No"). `SettlementReadout` shows `Building  City Hall`, so the project
+exists and is not completing. Two gates in
+`_apply_construction_labor_catchup` can hold it forever, and both are
+silent: `spare_capacity` of 0 (`household_count` minus households with a
+producer occupation — only `farmer`/`hunter`/`fisher` count), and
+`_civic_site_is_clear` failing, which `continue`s with nothing said
+anywhere. Both are tested as deliberate behaviour
+(`test_labour_waits_while_the_plot_is_blocked`), so telling a stall from
+the design needs that save. Not guessed at.
+
+⬜ **A renderer-level test of the same rule was written and withdrawn.** It
+asserted paving on a row the stub's predicate does not govern the way I
+assumed, so it failed for its own reasons rather than the code's. The rule
+is pinned where the decision lives, in `test_village_layout.gd`.
+
+Tests: 253/253 across the layout, renderer and both city-hall suites (+1).
+
+## Consecutive rails share a post (`concept/village_farms.md`, 2026-09-20)
+
+Reported with a finished enclosure in shot: *"the enclosures render
+unnecessary vertical rails"*.
+
+### ✅ Two whole panels meeting is two posts, not one
+
+Every cell of `fence.png` is a **whole panel** — a post at *each* end with
+rails between. The sheet's four columns are North/South front views and
+East/West top views, all the same design.
+
+An earlier pass, asked for in one word (*"also scale"*), made a rail's wood
+span exactly one tile so consecutive rails **meet** with no gap. That closed
+the gaps and left the real defect untouched: two complete panels meeting put
+two posts at every junction a few pixels apart. Six rails showed twelve posts
+where they should show seven.
+
+A straight rail is scaled by the distance between **its own two post
+centres** now, not by the length of its wood. Its posts land on its tile's
+two edges, the neighbour's near post lands on the same point, and the pair
+draw as one. Corners are untouched — a corner is a post on a join, not a run,
+and still takes the side wall's own scale.
+
+### ✅ The reader took two guards, and the sheet forced both
+
+Getting the measurement right was the whole job, and both guards were found
+by measuring the real art rather than reasoning about it:
+
+- **The threshold sits between the RAIL level** (the median of slices
+  carrying content) **and a robust high percentile**, never a fixed multiple
+  of either. The front views' posts cover about **twice** their rails (0.53
+  vs 0.27); the top views' end caps only about **1.3×** their bar (0.13 vs
+  0.10). No single multiple reads both — a 1.4× rule found north/south/west
+  and lost east entirely.
+- **The percentile is robust, and a band must be 2% of the run wide.** The
+  trimmed cells carry stray edge slices — including one **fully opaque
+  column** at the far end — which own the maximum and otherwise swallow the
+  entire run between them. Three detectors in a row reported "posts 99.7% of
+  the run apart" before that stray was found.
+
+Measured this way all four facings agree, at source resolution and at drawn
+resolution alike: **posts about 0.62–0.65 of the run apart**, which at a 16px
+tile had them 12.5–13.0px apart inside a 16px tile.
+
+### ✅ Verified end to end, not just per panel
+
+Six real rails composited the way `EarthChunkManager._spawn_structure_art_for`
+places them — each centred on its tile, bottom-anchored, shifted by
+`footprint_offset` — and the posts counted off the result: **7 posts, widths
+[11, 12, 12, 12, 12, 12, 11]**. Evenly spaced, one per tile boundary, the two
+end ones half-width because half of each hangs past the end of the run, which
+is what an end post should do. That composite is the test now, rather than a
+number derived from the spacing.
+
+### 🚧 The cost, stated plainly
+
+The timber draws about **a quarter thicker** than before. The scale is
+uniform on both axes and this project does not stretch art along one axis to
+fit, so a fence that shares its posts is necessarily a little heavier than
+one that merely abuts. Flagged rather than hidden: if that reads as too
+heavy, the alternative is new art with the post split across the cell edge,
+not a non-uniform scale.
+
+### Three tests rewritten to the new rule, not deleted
+
+The two `..._wood_spans_exactly_one_tile_...` tests now pin that a rail's
+wood spans one tile **plus the post it shares**, with the old rule quoted in
+place so the reversal is legible. `test_the_offset_moves_the_art_toward_the_
+beds` now allows an already-flush rail to need no nudge — a rail scaled by
+its post spacing is drawn larger than its tile, so a facing whose art already
+lands flush has nothing to move; where the wood actually lands stays pinned
+directly by `test_scaling_by_the_run_keeps_every_rail_flush_against_its_own_
+edge` and `test_no_rails_wood_ever_crosses_into_the_beds`.
+
+Tests: `test_illustrated_structure_sprite.gd` 49/50 (+3 new, 3 rewritten).
+The remaining failure,
+`test_no_house_crop_cuts_through_the_top_of_its_own_drawing`, is about house
+art and is **pre-existing** — A/B'd in a clean worktree at the commit before
+this change, where it fails identically. Recorded rather than quietly left.
+
+### ✅ And the corner followed the wall it caps
+
+`test_a_corner_post_lines_up_with_the_side_wall_it_caps` caught this
+immediately, which is exactly what it is for: a corner is a post on a join,
+not a run, and takes the scale of the side wall it caps so its timber is as
+thick as the run it meets. Moving how a run is scaled left the corner 0.4px
+behind its wall.
+
+A corner's art **is** the side column's art, so measuring that column's post
+spacing hands it the side wall's own scale by construction — the rule it
+already had, stated against the wall rather than against its own length. Its
+distinct *fallback* is kept: if the posts cannot be read, a corner still
+falls back to the side wall's length rather than a run's, because scaling a
+post as if it were a run is what once turned a corner into a whole tile of
+rail.
+
+That pass also rewrote `test_the_offset_moves_the_art_toward_the_beds` into
+`test_every_rails_wood_lands_flush_against_the_edge_facing_its_beds`. The old
+test asserted the OFFSET VECTOR points toward the beds — a premise that only
+holds while the art is smaller than its tile. A rail scaled by its post
+spacing is larger: the band already starts outside the tile, so landing the
+wood flush against the bed-facing edge means pushing it back the other way,
+and the offset's sign stopped meaning what was asserted. The rewrite pins
+where the wood LANDS, which is what the rule was always about, and now holds
+corners to **both** of their axes rather than straight rails to one.
+
+## They move in, and they starve (`concept/village_mortality.md`, 2026-09-20)
+
+Asked for directly: *"now make the npcs move in and make them starve and
+die if they don't have food"*.
+
+Two halves of one thing, and a new concept doc for them, because none
+existed — `death.md` is the PLAYER's nine lives and says nothing about
+NPCs.
+
+### ✅ Villagers follow the roster, both ways
+
+The gap this ledger recorded last round, closed. The villagers standing in
+a chunk were a SNAPSHOT: `VillageRenderer._population_for` reads the real
+roster, but only at spawn time, so a household admitted while the player
+stood there got nobody. `reconcile_villagers` runs per settlement step and
+brings the street into line with the ledger.
+
+Additive on purpose. A villager who dies removes themselves, which is the
+removal that has a cause a player watched; culling markers to match a
+shrunken roster would have to pick somebody arbitrary, and the one it
+picked would be as likely to be the farmer you were watching as anybody.
+
+### ✅ Hunger left at the top kills
+
+`Starvation`, pure and static, measured in hunger **cycles** rather than
+days — there are two day-lengths in this codebase (SeasonCycle's 14400s of
+material economy, EarthChunkManager's 60s a player feels) and a mortality
+clock written against the wrong one either kills instantly or never kills
+at all. Reading the drive's own cycle means it cannot drift onto a
+different clock than the hunger it measures.
+
+A death is a **departure with a reason**: it goes out through the same
+`npc_departed` event the estate exodus already appends, so the census, the
+tier, the ladder and the settlement card all see it with no new plumbing,
+and the roof stops counting as one of ours.
+
+### The whole loop, measured (`tools/probe_village_famine.gd`)
+
+```
+  seconds   roster   standing  hungriest market food  starved/win
+        0       10         10       0.30          0      0/200
+      600       12         12       1.00          0    151/200
+      750       12         12       1.00          0    189/200
+      900       12         12       1.00          0    102/200
+     1200       12         12       1.00          0    174/200
+     1500        7          7       1.00          0    117/200
+     2400       13         13       1.00          0    181/200
+```
+
+Five villagers starve between 1200 and 1500; the roster falls 12 → 7;
+immigration refills it and the newcomers appear. **`standing` equals
+`roster` at every single sample**, through five deaths and six arrivals —
+the strongest form of the claim the reconcile makes. The village ends
+larger than it started.
+
+At 750 the worst-off villager reached 189 of 200 and then fell back to
+102 as food arrived. That fallback IS the mechanic: the cart of grain
+saving somebody, which is what the window exists for.
+
+### 🚧 Three things this got wrong, all caught by measuring
+
+**A coarse step over-billed starvation.** Billing a whole step at the
+hunger level it ENDED on killed a villager who was starving for only its
+last instant — and steps here are not frame-sized (a settlement step is
+30s, a catch-up longer). Caught by its own test
+(`test_a_meal_at_the_last_moment_saves_them`): the villager was dead
+before the meal could reach them. Now billed pro rata along the linear
+rise.
+
+**The reconcile resurrected extinct villages.** It read the roster through
+`_population_for`, which treats 0 as *"never recorded, fall back to the
+founding roster"* — right for spawning, badly wrong for reconciling, since
+a village whose last household died looks identical to one never written
+down. Measured: a village fell to a roster of 0 and got ten fresh
+villagers on the street, who starved, forever.
+
+**The probe lied first.** Its first cut stepped only the settlements and
+the villagers, not the clock or the farm plots, so nothing could GROW
+food — and it reported a total wipe-out. Trusting it would have meant
+retuning a constant that was fine, which is precisely the mistake that
+made `LITRES_PER_TENDING` four times too big earlier the same day.
+Recorded rather than quietly corrected.
+
+### ✅ ...and the famine stopped advertising itself
+
+Found by the same run and fixed straight after: a village in permanent
+famine kept drawing households, because the gate counted **234 units of
+food on farmhouse shelves that nobody could eat** — 19.5 per household
+against a `FED_THRESHOLD` of 2.0.
+
+`SettlementFood.food_stock` documents that argument in its own words as
+*"a Storage holding hauled bread, a Bakery with loaves still on its
+shelf"*; `_settlement_structure_stocks` handed it every shelf in the
+chunk. The caller was breaking its own parameter's contract, and fixing
+the caller rather than the gate repairs every reader at once — the gate,
+the GROWING/DECLINING status, the build decision's food shortfall, and
+the card's "feeds N of M".
+
+🚧 **Still true underneath**: those farmhouses are full because
+`NpcMarker.HAULING_CARRY_LIMIT` is `0.0` — hauling is wired but
+deliberately switched off until delivery is proven to complete in a
+running village. Farm output has no route to anybody's plate; the village
+survives on foraging and the producers' regional drip.
+
+Tests: `test_starvation.gd` 16/16 (new), `test_npc_needs.gd` 14/14,
+`test_npc_marker.gd` 102/102, `test_earth_chunk_manager_village_
+mortality.gd` 5/5 (new), `test_village_renderer.gd` 150/150.
 
 ---
 

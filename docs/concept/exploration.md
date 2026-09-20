@@ -58,6 +58,29 @@ obstacles; an old fire-scarred one biases toward "burnt-sealed" ones) — so
 ruins read as genuinely guarded without a single hand-designed puzzle
 existing in the game.
 
+### The underground is where this pillar got its first real generator
+
+[underground.md](underground.md) is the first system to actually deliver
+on "procedurally generated, causally grounded, nothing hand-placed" for a
+whole class of explorable space rather than for obstacles alone. A bedrock
+cave system's SHAPE is generated from real speleogenesis -- Palmer's
+classification, in which cave pattern follows the mode of groundwater
+recharge -- so a branchwork, a network maze, an anastomotic maze, a
+ramiform cave or a sponge is chosen by this world's own lithology,
+hydrology and climate, exactly the way biome banding is. No cave layout is
+authored anywhere, and most of the planet correctly has no cave under it
+at all, because only ~16.5% of continental bedrock dissolves.
+
+That also gives two POI categories above a real place to exist. **Monster
+lairs** get a habitat with its own energy budget rather than a decorated
+room: underground.md's chemosynthetic biosphere makes the emptiest, most
+starved rock the likeliest source of an exceptional individual, because
+scarcity buys longevity and age is what
+[worldbosses.md](worldbosses.md)'s promotion threshold already reads.
+**Abandoned infrastructure** (`docs/emergence/05`'s "mines") gets somewhere
+to be abandoned in, since a player-mined `Strata.KIND_TUNNEL` is already
+distinct from natural passage.
+
 ### Status
 
 The emergence substrate (`docs/emergence/05-dungeons-bosses-exploration-

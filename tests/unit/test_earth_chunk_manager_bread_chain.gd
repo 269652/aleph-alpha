@@ -2,12 +2,20 @@ extends GutTest
 
 ## The emergent need, end to end at the real chunk-load boundary (docs/
 ## concept/milling_and_baking.md, "The emergent need"): a DECLINING
-## settlement with spare hands and its own gathered material raises a
-## fenced Farm at a real buildable cell, then a Mill, then a Bakery -- in
-## that order, at distinct cells -- through the existing SettlementBuild
+## settlement with spare hands and its own gathered material raises the
+## bread chain at real buildable cells, through the existing SettlementBuild
 ## Decision / ConstructionProject pipeline; its construction labor advances
 ## in real time while the player is near; and bread on its own shelves
 ## counts toward the food that clears the need.
+##
+## It raises that chain from a FARM it did not build. A village never raises
+## the Farm placeable itself (SettlementBuildDecision.SETTLEMENT_WILL_NOT_
+## RAISE, and docs/concept/npc_farm_production.md's own reversal) -- reported
+## live with one standing in a field, *"it just should not spawn this weird
+## looking npc with that 3 soil tiles"*. Once a farm really stands there,
+## whoever put it down, everything above it in the chain works exactly as it
+## always did, which is what most of this file now exercises through the Mill
+## instead of the Farm.
 ##
 ## Berlin's real chunk (land, unlike the (0, 0) fixture the sibling fast
 ## files use) loaded directly via _load_chunk, never update() -- see
@@ -107,35 +115,67 @@ func _global(local: Vector2i) -> Vector2i:
 	return _chunk_coord * EarthChunkManager.CHUNK_SIZE + local
 
 
+## A farm already standing, put there by somebody who is not the village --
+## the player, or a plan they raised. The village will not build one, but it
+## reasons about the chain above one perfectly well, so this is the
+## precondition for every "and then the mill" test below.
+func _a_farm_already_stands() -> Vector2i:
+	var cell := _global(Vector2i(20, 20))
+	manager.build_at_global(cell.x, cell.y, "farm")
+	return cell
+
+
 # -- the decision fires, for real, at a real cell ----------------------------
 
-func test_a_hungry_village_with_material_and_spare_hands_starts_a_farm_at_a_real_buildable_cell():
+## Rewritten, not deleted: this used to assert the opposite -- that a hungry
+## village with material and spare hands STARTS a farm at a real buildable
+## cell -- and that is precisely the spawn reported live. Everything it set
+## up is kept, because the point is that a village with every reason and
+## every resource to raise one still does not.
+func test_a_hungry_village_raises_no_farm_however_badly_it_needs_bread():
 	_found_a_hungry_village()
 	_stock_materials()
 	assert_eq(manager._settlement_status_for(_settlement_id), SettlementState.DECLINING, "precondition: nothing to eat")
 
 	manager._apply_settlement_build_decision(_chunk_coord)
 
-	var farm = _active_project("farm")
-	assert_not_null(farm, "the deepest missing link of bread's chain is the Farm")
-	assert_eq(farm.status, ConstructionProject.Status.IN_PROGRESS, "material was on hand, so work began")
-	var cell := _global(farm.origin)
+	assert_null(_active_project("farm"), "a village does not build the player's Farm")
+	assert_null(_active_project("mill"), "nor anything above one it will never have")
+	assert_null(_active_project("bakery"), "never a bakery with no flour coming")
+
+
+## ...and it is the FARM it refuses, not building in general: give the same
+## village a farm it did not raise and the chain above it starts at once.
+func test_with_a_farm_standing_the_same_village_raises_the_mill_at_a_real_buildable_cell():
+	_found_a_hungry_village()
+	_stock_materials()
+	_a_farm_already_stands()
+
+	manager._apply_settlement_build_decision(_chunk_coord)
+
+	var mill = _active_project("mill")
+	assert_not_null(mill, "the deepest missing link ABOVE the farm is the Mill")
+	assert_eq(mill.status, ConstructionProject.Status.IN_PROGRESS, "material was on hand, so work began")
+	var cell := _global(mill.origin)
 	assert_true(manager.is_buildable_terrain_at(cell.x, cell.y), "sited on real buildable ground")
 	assert_eq(manager.modification_at_global(cell.x, cell.y), "", "...that nothing already occupies")
 	assert_null(_active_project("bakery"), "never a bakery with no flour coming")
-	assert_null(_active_project("mill"))
 
 
-func test_the_same_decision_taken_twice_queues_one_farm_not_two():
+## Re-pointed at the Mill, which is the link a village really does raise --
+## the property under test is "one decision taken twice queues one project",
+## and it was never about the Farm in particular.
+func test_the_same_decision_taken_twice_queues_one_mill_not_two():
 	_found_a_hungry_village()
 	_stock_materials()
+	_a_farm_already_stands()
 	manager._apply_settlement_build_decision(_chunk_coord)
 	manager._apply_settlement_build_decision(_chunk_coord)
-	var farms := 0
+	var mills := 0
 	for project in manager.construction_project_store().active_projects_in_chunk(_chunk_coord):
-		if project.blueprint_id == "farm":
-			farms += 1
-	assert_eq(farms, 1)
+		if project.blueprint_id == "mill":
+			mills += 1
+	assert_eq(mills, 1)
 
 
 func test_a_well_fed_village_wants_no_farm():
@@ -148,11 +188,21 @@ func test_a_well_fed_village_wants_no_farm():
 
 # -- completion places a FENCED farm, and the chain climbs -------------------
 
+## The FARM project's own completion rule is unchanged and still covered --
+## only who starts one moved. The village no longer decides a farm, so this
+## starts the project directly, which is what a plan the player raises does
+## through the same store.
 func test_a_completed_farm_project_places_a_fenced_farm_that_a_farmer_moves_into():
 	_found_a_hungry_village()
 	_stock_materials()
-	manager._apply_settlement_build_decision(_chunk_coord)
-	var farm = _active_project("farm")
+	# Sited the same way the settlement sites anything -- the first free,
+	# buildable, clear cell out from its own centre -- rather than a cell
+	# picked by hand that might be water or already occupied.
+	var origin = manager._settlement_build_origin_for(_chunk_coord)
+	assert_not_null(origin, "precondition: the village has somewhere to build")
+	var farm = manager.construction_project_store().start_project(
+		_chunk_coord, origin, "farm", "household:bread_chain_test"
+	)
 
 	_complete_and_place(farm)
 
@@ -165,11 +215,14 @@ func test_a_completed_farm_project_places_a_fenced_farm_that_a_farmer_moves_into
 	assert_true(manager._farm_farmers.get(_chunk_coord, {}).has(farm.origin), "...so its Farmer moved in")
 
 
-func test_the_chain_climbs_farm_then_mill_then_bakery_at_distinct_cells():
+## Re-pointed: the chain a VILLAGE climbs now starts above the farm. The
+## property under test -- each link raised in order, at its own cell, never
+## stamped over the last -- is untouched.
+func test_with_a_farm_standing_the_chain_climbs_mill_then_bakery_at_distinct_cells():
 	_found_a_hungry_village()
 	_stock_materials()
-	var cells := {}
-	for expected in ["farm", "mill", "bakery"]:
+	var cells := {_a_farm_already_stands(): true}
+	for expected in ["mill", "bakery"]:
 		manager._apply_settlement_build_decision(_chunk_coord)
 		var project = _active_project(expected)
 		assert_not_null(project, "next link to raise: %s" % expected)
@@ -203,32 +256,37 @@ func test_spare_hands_gather_building_material_between_assessments():
 	assert_gt(market.stock_of("plant_fibre"), 0)
 
 
+## Both re-pointed at the Mill for the same reason as the tests above: real
+## time advancing a real project is the property, and the Mill is the link a
+## village genuinely raises now.
 func test_construction_labor_advances_while_the_player_is_near_not_only_on_reload():
 	_found_a_hungry_village()
 	_stock_materials()
+	_a_farm_already_stands()
 	manager._apply_settlement_build_decision(_chunk_coord)
-	var farm = _active_project("farm")
-	assert_almost_eq(farm.labor_hours_accumulated, 0.0, 0.0001, "precondition")
+	var mill = _active_project("mill")
+	assert_almost_eq(mill.labor_hours_accumulated, 0.0, 0.0001, "precondition")
 
 	manager.step_settlements(EarthChunkManager.SETTLEMENT_STEP_INTERVAL)
 
-	assert_gt(farm.labor_hours_accumulated, 0.0, "the settlement kept building while loaded")
+	assert_gt(mill.labor_hours_accumulated, 0.0, "the settlement kept building while loaded")
 
 
-func test_enough_loaded_time_completes_the_farm_and_places_it():
+func test_enough_loaded_time_completes_the_mill_and_places_it():
 	_found_a_hungry_village()
 	_stock_materials()
+	_a_farm_already_stands()
 	manager._apply_settlement_build_decision(_chunk_coord)
-	var farm = _active_project("farm")
-	var cell := _global(farm.origin)
+	var mill = _active_project("mill")
+	var cell := _global(mill.origin)
 
 	for i in 200:
 		manager.step_settlements(EarthChunkManager.SETTLEMENT_STEP_INTERVAL)
-		if farm.status == ConstructionProject.Status.COMPLETE:
+		if mill.status == ConstructionProject.Status.COMPLETE:
 			break
 
-	assert_eq(farm.status, ConstructionProject.Status.COMPLETE)
-	assert_eq(manager.modification_at_global(cell.x, cell.y), "farm", "and it stands in the world")
+	assert_eq(mill.status, ConstructionProject.Status.COMPLETE)
+	assert_eq(manager.modification_at_global(cell.x, cell.y), "mill", "and it stands in the world")
 
 
 # -- bread on the village's own shelves is food the classification sees -----
@@ -250,10 +308,10 @@ func test_bread_in_a_storage_lifts_the_settlement_out_of_declining():
 # capacity -- which nobody ever ate and the shop refilled whenever it hit
 # zero. Villagers now eat from those stores, and the shop's food is a
 # one-time opening inventory: what the village eats is gone until its own
-# economy replaces it, so a merchant village comes to need a Farm like any
+# economy replaces it, so a merchant village comes to be hungry like any
 # other.
 
-func test_villagers_eat_the_merchants_meat_until_the_village_needs_a_farm():
+func test_villagers_eat_the_merchants_meat_until_the_village_is_hungry_again():
 	_found_a_hungry_village()
 	_stock_materials()
 	var market = manager._market_store.market_for(_settlement_id)
@@ -261,7 +319,7 @@ func test_villagers_eat_the_merchants_meat_until_the_village_needs_a_farm():
 	assert_eq(market.stock_of("cooked_meat"), Market.REFERENCE_STOCK, "precondition: the merchant arrived with meat")
 	assert_ne(manager._settlement_status_for(_settlement_id), SettlementState.DECLINING, "precondition: fed by it")
 	manager._apply_settlement_build_decision(_chunk_coord)
-	assert_null(_active_project("farm"), "precondition: no farm wanted while the meat lasts")
+	assert_null(_active_project("mill"), "precondition: nothing wanted while the meat lasts")
 
 	var here := (Vector2(_global(Vector2i(16, 16))) + Vector2(0.5, 0.5)) * 16.0
 	var meals := 0
@@ -276,5 +334,15 @@ func test_villagers_eat_the_merchants_meat_until_the_village_needs_a_farm():
 	Shop.new().stock_initial_goods(market)  # the player walks past the merchant again
 	assert_eq(market.stock_of("cooked_meat"), 0, "the shop does not conjure the meat back")
 	assert_eq(manager._settlement_status_for(_settlement_id), SettlementState.DECLINING)
+	# The need is real again -- which is the whole point of this test, and
+	# what "the food should be actually consumed" was reported about. What
+	# the village does with it changed: it raises the chain above a farm it
+	# has, and there is none here, so it raises nothing. A village that
+	# cannot build its way out of hunger is the named cost of refusing to
+	# drop a player's Farm in a field (docs/concept/npc_farm_production.md).
 	manager._apply_settlement_build_decision(_chunk_coord)
-	assert_not_null(_active_project("farm"), "now the village raises a Farm like any other")
+	assert_null(_active_project("farm"), "still never a Farm, hungry or not")
+
+	_a_farm_already_stands()
+	manager._apply_settlement_build_decision(_chunk_coord)
+	assert_not_null(_active_project("mill"), "given a farm, it builds the rest for itself")

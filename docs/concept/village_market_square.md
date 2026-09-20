@@ -190,6 +190,23 @@ villager in the village to one merchant's trestle.
 
 Honest gaps, each real:
 
+- ✅ **The square is laid AROUND what stands in it** (2026-09-20) — reported
+  a further time: *"There are still villages without plaza."* Measured
+  (`tools/probe_village_supply.gd`): of the two genuine villages in a
+  14-chunk sweep, one had 8 of its 48 square cells paved — exactly the
+  single street row crossing it — with a farm rail and a warehouse standing
+  inside the square. Two faults, each fatal alone. The paving pass
+  **returned on the first cell it could not take**, so one rail cancelled
+  the whole square; it steps over such a cell now. And it **skipped the
+  pass whenever the civic doorstep already carried a road tile** — which
+  the street crossing the square paves — so a village that lost its square
+  once could never gain it back on any later visit; that short-circuit is
+  gone, and the walk being idempotent means every visit now heals it.
+  A floor remains, because scattered cells are stray paving rather than a
+  square: `VillageLayout.plaza_is_worth_laying`, a **share** rather than a
+  count so it does not change meaning if `PLAZA_WIDTH_TILES` does, pinned
+  at both ends. Paving *through* a building is still forbidden — that half
+  of the old rule was right and is kept.
 - 🚧 **A stand is up or down, never being set up.** There is no carrying-out
   animation and no goods on the boards: the sprite appears when its trader
   arrives and vanishes when they leave. What a stand is *selling* is the
@@ -202,6 +219,34 @@ Honest gaps, each real:
 - 🚧 **A player cannot buy at a stand.** Trading with a village is
   `Player.sell_food_to_village` and the dialogue/market path; standing in
   front of a merchant's trestle is not yet a way in.
+
+## Every village has a square, even a clipped one (2026-09-20)
+
+Asked for directly, after a fourth report of a village with no square and
+no seat: *"Every village should have a square"*.
+
+`VillageLayout.plaza_x0_for` slides its 8-wide square along the street
+looking for somewhere wholly usable. Three earlier rounds each removed a
+real reason it could fail to find one (the decorative street jitter vetoing
+dry columns; a rule demanding room for a house beside the square). What
+none of them touched is what it does when the search finds **nothing**: it
+returned `centred` — a site it had just proved unusable. The village then
+planned a square on ground it could never pave, ended up with no square at
+all, and silently lost its seat too, because the civic plot *is* the
+square's paving.
+
+It takes the **best partial** window now: the one whose square would have
+the most usable cells, ties to the westmost. `_lay_plaza_if_missing`
+already paves around what it cannot use ("a square laid around what stands
+in it is still a square") and already refuses a square that would be mostly
+holes (`PLAZA_MIN_PAVED_SHARE`, 0.6), so the clipped square either lands
+properly or is honestly declined — instead of being planned onto trees.
+
+A village with nothing usable anywhere still keeps `centred`, which is the
+honest answer when there is no ground at all.
+
+Pinned by
+`test_the_square_goes_where_most_of_it_fits_when_none_of_it_fits_wholly`.
 
 ## The well stands on a free 2x2 (2026-09-19)
 
@@ -241,3 +286,58 @@ Pinned by `test_the_well_stands_on_a_free_2x2_clear_of_street_and_plaza`,
 which asserts the contract as asked: the well stands on free ground, and
 that ground is part of a free 2×2. Which quadrant is the renderer's
 business; that there is one is the rule.
+
+> **Which quadrant turned out to be the whole bug** (corrected
+> 2026-09-20). Reported again, with the well in shot: *"The well is still
+> placed partly on streets"*. The siting above is real and does its job —
+> but "which quadrant is the renderer's business" was answered **three
+> different ways** by three functions, and only one of them was ever
+> checked:
+>
+> | | which 2×2 |
+> | --- | --- |
+> | `_clear_block` | whichever quadrant round the anchor was free — its first option runs **north** of it |
+> | `_nearest_prop_cell` | returned the centre of the **anchor cell alone** |
+> | `_landmark_cells` | searched *again* from that position, landing on a third |
+>
+> So a well was validated on one patch, drawn over a second and reserved
+> on a third. Two of the three could be road while the check passed —
+> measured across eight real villages: **sixteen well cells on road, two
+> per well**, every one in the well's own column.
+>
+> `VillageRenderer.landmark_block_at(position, tile_size, id)` is the one
+> answer now. A multi-tile landmark stands on its block's **centre**, so
+> the block is recovered by stepping back half a footprint — exact for
+> even footprints, which is every one there is. Siting, reservation and
+> the tests all read it, and a probe that reimplemented the old assumption
+> got the wrong 2×2 too, which is exactly why it is one function.
+>
+> Two renderer tests had been comparing the **grounded** landmark against
+> the generator's **ungrounded** plan, and passed only because the two
+> coincided while the well sat on a single cell's centre. They now assert
+> what they meant: the sprite stands where the settlement thinks the
+> landmark is, and every villager agrees with every other.
+
+✅ **And the art is scaled to that ground** (asked for directly: *"scale
+the art to its footprint"*). The well took its world size from
+`ProceduralLandmarkSprite.SIZES` — the old procedural placeholder box,
+40×44 world px — which has nothing to do with the 2×2 it is sited and
+reserved on. 40px is **2.5 tiles over a 2-tile footprint**, so a quarter
+of a tile hung over the paving on each side however well it was sited.
+
+> A measurement worth correcting rather than quietly fixing: this was
+> first reported here as "80×60 px, five tiles wide, covering 24 cells".
+> That read the raw TEXTURE and ignored `ArtResolution.SPRITE_SCALE` —
+> art is authored at `DETAIL_MULTIPLIER` (2×) and drawn back down at 0.5,
+> so 80×60 texture pixels are 40×30 **world** pixels. The overhang was
+> half a tile of width, not three.
+
+`LandmarkSheet.world_scaled_image` takes the world width the caller knows
+now, and the renderer passes `footprint.x * tile_size` for any prop with a
+declared footprint — the rule a building's own sheet already follows:
+width matches the ground the thing stands on, height follows the same
+factor, so a tall prop overhangs **upward** (it is foot-anchored) and
+nothing ever overhangs sideways onto a neighbour's cell. The well is
+32×24 world px now, exactly its 2×2. A one-cell prop keeps the size its
+own art declares, unchanged. Pinned by
+`test_the_wells_art_is_as_wide_as_the_2x2_it_stands_on`.

@@ -1520,3 +1520,88 @@ func test_mark_retired_makes_is_retired_true():
 	var colony := _colony()
 	colony.mark_retired()
 	assert_true(colony.is_retired())
+
+
+# -- water: a mound is an excavated soil nest, never a hole in a river -----
+#
+# Reported live, with a screenshot: "ant mounds and long grass should not
+# spawn in rivers". A river or lake NEVER changes the biome array (see
+# docs/concept/rivers.md's Rendering section -- it is an overlay flag on
+# untouched land biome), so the SOIL_BIOMES check alone cannot see water at
+# all. Measured at the reported coordinates before the fix: 2 of 2 mounds
+# in that chunk sat in water.
+#
+# The identical mask and the identical shape TallGrass already uses to keep
+# grass out of the water (Chunk.blocks_ground_cover -> an optional trailing
+# PackedByteArray), so the two cannot drift apart.
+
+const _WATER_W := 24
+const _WATER_H := 24
+
+
+func _all_grassland(width: int, height: int) -> PackedStringArray:
+	var biome := PackedStringArray()
+	biome.resize(width * height)
+	for i in width * height:
+		biome[i] = "grassland"
+	return biome
+
+
+## Water over the left half of the chunk, dry land on the right.
+func _left_half_water(width: int, height: int) -> PackedByteArray:
+	var mask := PackedByteArray()
+	mask.resize(width * height)
+	for y in height:
+		for x in width:
+			mask[y * width + x] = 1 if x < width / 2 else 0
+	return mask
+
+
+func test_no_mound_is_ever_seeded_in_water():
+	var colony := AntColony.new(
+		12345, _WATER_W, _WATER_H, _all_grassland(_WATER_W, _WATER_H),
+		_left_half_water(_WATER_W, _WATER_H)
+	)
+	for cell in colony.mound_cells():
+		assert_gte(
+			cell.x, _WATER_W / 2,
+			"mound at %s sits in water -- a nest is excavated soil, not a hole in a river" % cell
+		)
+
+
+func test_mounds_still_appear_on_the_dry_half():
+	# The fix must not simply stop mounds existing: the same seed on all-dry
+	# ground still has to produce them, or "no mounds in water" would be
+	# satisfied by having no mounds at all.
+	var dry := AntColony.new(999, _WATER_W, _WATER_H, _all_grassland(_WATER_W, _WATER_H))
+	assert_gt(dry.mound_cells().size(), 0, "precondition: this seed produces mounds on dry land")
+	var half := AntColony.new(
+		999, _WATER_W, _WATER_H, _all_grassland(_WATER_W, _WATER_H),
+		_left_half_water(_WATER_W, _WATER_H)
+	)
+	assert_gt(half.mound_cells().size(), 0, "every mound was culled, not just the wet ones")
+
+
+func test_a_water_cell_is_not_a_valid_bud_site():
+	# Budding goes through is_valid_mound_site (see bud_new_mound), so
+	# gating there is what stops a colony creeping into the river over time
+	# rather than only at chunk creation.
+	var colony := AntColony.new(
+		7, _WATER_W, _WATER_H, _all_grassland(_WATER_W, _WATER_H),
+		_left_half_water(_WATER_W, _WATER_H)
+	)
+	assert_false(colony.is_valid_mound_site(Vector2i(1, 5)), "a river cell is not a bud site")
+	assert_true(colony.is_valid_mound_site(Vector2i(_WATER_W - 2, 5)), "dry land still is")
+
+
+func test_a_colony_given_no_water_mask_behaves_exactly_as_before():
+	# Every pre-existing 4-argument call site and fixture must be untouched,
+	# the same optional-trailing-parameter contract TallGrass's own is_river
+	# addition already keeps.
+	var without := AntColony.new(4242, _WATER_W, _WATER_H, _all_grassland(_WATER_W, _WATER_H))
+	var with_empty := AntColony.new(
+		4242, _WATER_W, _WATER_H, _all_grassland(_WATER_W, _WATER_H), PackedByteArray()
+	)
+	assert_eq(without.mound_cells().size(), with_empty.mound_cells().size())
+	for cell in without.mound_cells():
+		assert_true(with_empty.has_mound(cell))

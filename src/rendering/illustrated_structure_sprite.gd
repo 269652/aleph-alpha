@@ -63,6 +63,27 @@ const BuildingCatalog = preload("res://src/gameplay/building_catalog.gd")
 const GRID_EVEN := "even"
 const GRID_GUTTERS := "gutters"
 const GRID_DIVIDERS := "dividers"
+
+## Cells found by asking where the ART is, on BOTH axes.
+##
+## For a sheet that has no drawn divider between its cells at all -- only
+## the background showing through, and a near-white rule line the magenta
+## key cannot see. `dividers` reads such a sheet by accident and badly: a
+## row crossing eight roof APEXES is mostly background, so a band begins
+## where the silhouette thins rather than where the drawing ends, and the
+## apex, the finial and the chimney cap are cut off above it. Measured on
+## cottage_3.png: the divider band is rows 421..569 where the art really
+## runs 390..570, and the columns lose 13px a side as well.
+const GRID_CONTENT := "content"
+
+## Every grid kind _cell_rect_for can actually read.
+##
+## Listed off the constants rather than written out again wherever
+## somebody needs to check one, so a sheet declaring a kind this reader
+## does not have fails loudly instead of silently falling through to the
+## even cut -- which is exactly how cottage_*.png spent its life being read
+## the wrong way.
+const GRID_KINDS: Array[String] = [GRID_EVEN, GRID_GUTTERS, GRID_DIVIDERS, GRID_CONTENT]
 const VariantSheetGrid = preload("res://src/rendering/variant_sheet_grid.gd")
 
 ## Same measured thresholds as illustrated_beehive_sprite.gd/
@@ -284,11 +305,105 @@ func _footprint_scale(subject: String, image: Image, tile_size: int) -> float:
 	# side wall's own scale (the vertical run it caps), so its timber is
 	# exactly as thick as the run it meets; scaling it by its own length
 	# instead is what turned a post into a whole tile of rail.
+	# A straight run is scaled by the distance between its own two POST
+	# CENTRES, not by the length of its wood. Every cell of fence.png is a
+	# whole panel -- a post at EACH end -- so two panels whose wood merely
+	# MEETS put two posts at every junction a few pixels apart, reported with
+	# an enclosure in shot: *"the enclosures render unnecessary vertical
+	# rails"*. One tile between a panel's own posts puts them on its tile's
+	# two edges, where the neighbour's near post lands too, and the pair draw
+	# as one. See docs/concept/village_farms.md, "Consecutive rails SHARE a
+	# post".
+	#
+	# A CORNER takes this same rule, and must: its art IS the side column's
+	# art, so measuring that column's post spacing gives it exactly the side
+	# wall's own scale -- which is the rule the corner already had, stated
+	# against the wall rather than against its own length, and is what keeps
+	# its timber as thick as the run it meets.
+	var vertical_run := inner.x != 0
+	var spacing := _post_spacing_of(subject, image, vertical_run)
+	if spacing > 0.0:
+		return float(tile_size) / spacing
+	# No two post bands found: fall back to the older wood-spans-a-tile rule
+	# rather than returning a nonsense scale for art this cannot read. The
+	# corner keeps its own fallback, the side wall's rather than its own
+	# length's -- scaling a post as if it were a run is what once turned a
+	# corner into a whole tile of rail.
 	if inner.x != 0 and inner.y != 0:
 		return float(tile_size) / float(maxi(art.size.y, 1))
 	if inner.y != 0:
 		return float(tile_size) / float(maxi(art.size.x, 1))
 	return float(tile_size) / float(maxi(art.size.y, 1))
+
+
+## Measured once per subject: scanning a whole source cell per rail spawn
+## would be real work repeated for every rail in every enclosure.
+static var _post_spacing_cache: Dictionary = {}
+
+
+## How far apart a rail panel's two POST CENTRES are, along the axis its run
+## travels, in the source image's own pixels -- or 0.0 when two post bands
+## cannot be told apart, which the caller treats as "measurement failed".
+##
+## A post spans the panel's whole cross-axis and the rails between span only
+## their own bars, so posts stand out as slices of higher coverage. Reading
+## that reliably needs two guards, BOTH load-bearing and both found by
+## measuring the real sheet rather than reasoned about:
+##
+## - The threshold sits between the RAIL level (the median of the slices
+##   carrying content) and a robust high percentile, never at a fixed
+##   multiple of either. The front views' posts cover about twice their
+##   rails (0.53 vs 0.27), but the top views' end caps only about 1.3x their
+##   bar (0.13 vs 0.10) -- one fixed multiple cannot read both.
+## - The percentile is robust, not the plain maximum, and a band must be at
+##   least 2% of the run wide. The trimmed cells carry stray edge slices --
+##   including one FULLY OPAQUE column at the far end -- which own the
+##   maximum and otherwise swallow the entire run between them.
+static func _post_spacing_of(subject: String, image: Image, vertical_run: bool) -> float:
+	if _post_spacing_cache.has(subject):
+		return _post_spacing_cache[subject]
+	var along := image.get_height() if vertical_run else image.get_width()
+	var across := image.get_width() if vertical_run else image.get_height()
+	var coverage: Array[float] = []
+	var content: Array[float] = []
+	for i in range(along):
+		var opaque := 0
+		for j in range(across):
+			var pixel := image.get_pixel(j, i) if vertical_run else image.get_pixel(i, j)
+			if pixel.a > 0.5:
+				opaque += 1
+		var value := float(opaque) / float(maxi(across, 1))
+		coverage.append(value)
+		if value > 0.02:
+			content.append(value)
+	var spacing := 0.0
+	if content.size() >= 3:
+		content.sort()
+		var rail_level: float = content[content.size() / 2]
+		var high: float = content[mini(int(float(content.size()) * 0.9), content.size() - 1)]
+		var threshold: float = rail_level + (high - rail_level) * 0.4
+		var min_width: int = maxi(2, int(round(float(along) * 0.02)))
+		var bands: Array = []
+		var run_start := -1
+		for i in range(along):
+			var is_post: bool = coverage[i] >= threshold
+			if is_post and run_start < 0:
+				run_start = i
+			if (not is_post) and run_start >= 0:
+				if i - run_start >= min_width:
+					bands.append([run_start, i - 1])
+				run_start = -1
+		if run_start >= 0 and along - run_start >= min_width:
+			bands.append([run_start, along - 1])
+		if bands.size() >= 2:
+			var first: Array = bands[0]
+			var last: Array = bands[bands.size() - 1]
+			spacing = (
+				(float(last[0]) + float(last[1])) * 0.5
+				- (float(first[0]) + float(first[1])) * 0.5
+			)
+	_post_spacing_cache[subject] = spacing
+	return spacing
 
 
 ## Where a subject's footprint_texture really stands INSIDE its own tile, as
@@ -497,6 +612,24 @@ func explicit_frame_image(
 	return frame
 
 
+## The same cut, by the grid kind a chain entry NAMES rather than by
+## picking one of the wrappers above.
+##
+## BuildingCatalog.finished_sheet_chain carries a `grid` per entry because
+## the kind is a property of the SHEET (see GRID_CONTENT's own comment and
+## docs/concept/building.md) -- so a caller holding an entry has the answer
+## already and must not re-derive it. A caller that matched on a
+## hand-written subset of kinds instead would fall silently through to the
+## even cut for any kind it did not know, which is exactly what cost every
+## cottage its roof. Fails loudly for a kind nothing can read, the same way
+## GRID_KINDS exists so a sheet naming one fails loudly.
+func frame_image(
+	path: String, columns: int, rows: int, row: int, column: int, grid: String
+) -> Image:
+	assert(GRID_KINDS.has(grid), "unreadable grid kind: %s" % grid)
+	return _frame_image(path, columns, rows, row, column, grid)
+
+
 ## One body for all three, differing only in where the cell's rect comes
 ## from. Cached per (path, row, column, grid kind), so the band scan a
 ## detected grid needs is paid once per sheet rather than per building
@@ -575,13 +708,14 @@ func _cell_rect_for(
 				_span(_band(path, image, columns, grid, false)[column]),
 				_span(_band(path, image, rows, grid, true)[row])
 			)
-		GRID_DIVIDERS:
-			return Rect2i(
+		GRID_DIVIDERS, GRID_CONTENT:
+			var found := Rect2i(
 				_band(path, image, columns, grid, false)[column].x,
 				_band(path, image, rows, grid, true)[row].x,
 				_span(_band(path, image, columns, grid, false)[column]),
 				_span(_band(path, image, rows, grid, true)[row])
 			)
+			return _trimmed_of_rule_lines(image, found) if grid == GRID_CONTENT else found
 	# The even grid is even on ONE axis. Columns really are on a pitch
 	# (1536/8 is exactly 192, and every column's art starts ~12px inside
 	# it); rows are not, so they are read off the sheet itself.
@@ -599,7 +733,7 @@ const _CONTENT_ROWS := "content_rows"
 func _band(path: String, image: Image, count: int, grid: String, horizontal: bool) -> Array:
 	var key := "%s|%s|%d|%s" % [path, grid, count, "rows" if horizontal else "columns"]
 	if not _grid_band_cache.has(key):
-		if grid == _CONTENT_ROWS:
+		if grid == _CONTENT_ROWS or grid == GRID_CONTENT:
 			_grid_band_cache[key] = VariantSheetGrid.content_bands(image, count, horizontal)
 		elif grid == GRID_DIVIDERS:
 			_grid_band_cache[key] = VariantSheetGrid.art_bands(image, count, horizontal)
@@ -609,6 +743,67 @@ func _band(path: String, image: Image, count: int, grid: String, horizontal: boo
 				else VariantSheetGrid.column_bands(image, count)
 			)
 	return _grid_band_cache[key]
+
+
+## `rect` with any of the sheet's own drawn RULE LINES shaved off its top
+## and bottom edges.
+##
+## Reading a cell by where its art is (GRID_CONTENT) reaches up past the
+## roof, which is the point -- but on some cells it reaches far enough to
+## swallow the pale rule the sheet draws between its rows, and that ships
+## as a bright bar across the top of a cottage. Trading a clipped roof for
+## a white scratch is not a fix.
+##
+## A rule line is told apart from a drawing by SPAN, not by colour alone: a
+## roof apex is sparse where it meets the background (measured: 9 to 31
+## opaque pixels across a ~174-wide cell) while a rule runs the whole way.
+## So a row is shaved only when it is nearly full width AND mostly pale --
+## which no top-of-roof row in these sheets is, and every rule line is.
+func _trimmed_of_rule_lines(image: Image, rect: Rect2i) -> Rect2i:
+	var top := rect.position.y
+	var bottom := rect.position.y + rect.size.y - 1
+	# A rule line found INSIDE the edge of a band means the band reached
+	# across the boundary it is drawn on, so everything up to and including
+	# it belongs to the neighbouring cell -- not just the line itself. That
+	# is the real shape of the miss: a chimney tip from the row above
+	# survives one or two rows ABOVE the rule, so trimming only the line
+	# leaves the tip behind and the scratch with it.
+	var reach: int = maxi(_RULE_ROW_REACH, int(float(rect.size.y) * _RULE_ROW_REACH_SHARE))
+	for offset in mini(reach, bottom - top):
+		if _is_rule_line_row(image, rect, top + offset):
+			top += offset + 1
+	for offset in mini(reach, bottom - top):
+		if _is_rule_line_row(image, rect, bottom - offset):
+			bottom -= offset + 1
+	return Rect2i(rect.position.x, top, rect.size.x, maxi(1, bottom - top + 1))
+
+
+## How much of a row must be drawn on before it can be a rule rather than
+## the sparse top of a drawing, and how much of that must be pale.
+const _RULE_ROW_COVERAGE := 0.8
+const _RULE_ROW_PALENESS := 0.5
+
+## How far into a band's edge a rule line may be looked for. A rule sits on
+## the boundary, so it is always within a few rows; searching further would
+## start finding pale things that are really part of the drawing (a
+## whitewashed gable, a snow-covered roof).
+const _RULE_ROW_REACH := 6
+const _RULE_ROW_REACH_SHARE := 0.05
+
+
+func _is_rule_line_row(image: Image, rect: Rect2i, y: int) -> bool:
+	var drawn := 0
+	var pale := 0
+	for x in range(rect.position.x, rect.position.x + rect.size.x):
+		var color := image.get_pixel(x, y)
+		if VariantSheetGrid.is_background(color):
+			continue
+		drawn += 1
+		if color.r >= VariantSheetGrid.RULE_LINE_MIN and color.g >= VariantSheetGrid.RULE_LINE_MIN and color.b >= VariantSheetGrid.RULE_LINE_MIN:
+			pale += 1
+	if drawn < int(float(rect.size.x) * _RULE_ROW_COVERAGE):
+		return false
+	return float(pale) / float(maxi(drawn, 1)) >= _RULE_ROW_PALENESS
 
 
 static func _span(band: Vector2i) -> int:

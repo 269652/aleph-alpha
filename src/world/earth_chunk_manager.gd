@@ -36,6 +36,10 @@ const StoneRenderer = preload("res://src/rendering/stone_renderer.gd")
 const GeologyRenderer = preload("res://src/rendering/geology_renderer.gd")
 const Strata = preload("res://src/world/strata.gd")
 const CaveEntrancePlacement = preload("res://src/world/cave_entrance_placement.gd")
+const CaveSiting = preload("res://src/world/cave_siting.gd")
+const CaveSignals = preload("res://src/world/cave_signals.gd")
+const CaveDescent = preload("res://src/world/cave_descent.gd")
+const CavePattern = preload("res://src/world/cave_pattern.gd")
 const TallGrass = preload("res://src/world/tall_grass.gd")
 const DecorationLod = preload("res://src/rendering/decoration_lod.gd")
 const DisplayScaling = preload("res://src/rendering/display_scaling.gd")
@@ -71,6 +75,7 @@ const IllustratedStructureSprite = preload("res://src/rendering/illustrated_stru
 const BuildingCatalog = preload("res://src/gameplay/building_catalog.gd")
 const InteriorTemplates = preload("res://src/gameplay/interior_templates.gd")
 const ProceduralBuildingPlaceholderSprite = preload("res://src/rendering/procedural_building_placeholder_sprite.gd")
+const ProceduralFootprintKerbSprite = preload("res://src/rendering/procedural_footprint_kerb_sprite.gd")
 const FarmerMarker = preload("res://src/rendering/farmer_marker.gd")
 const MillMarker = preload("res://src/rendering/mill_marker.gd")
 const BakeryMarker = preload("res://src/rendering/bakery_marker.gd")
@@ -141,6 +146,7 @@ const FlyerPersonality = preload("res://src/gameplay/flyer_personality.gd")
 const PiscivoreBirdRenderer = preload("res://src/rendering/piscivore_bird_renderer.gd")
 const VillageRenderer = preload("res://src/rendering/village_renderer.gd")
 const VillageFarm = preload("res://src/gameplay/village_farm.gd")
+const VillageCropChoice = preload("res://src/gameplay/village_crop_choice.gd")
 const VillagePond = preload("res://src/gameplay/village_pond.gd")
 const AquaticPopulationModel = preload("res://src/world/aquatic_population_model.gd")
 const NpcMarker = preload("res://src/rendering/npc_marker.gd")
@@ -182,6 +188,7 @@ const VillageGrowth = preload("res://src/emergence/village_growth.gd")
 const VillageCensus = preload("res://src/emergence/village_census.gd")
 const VillageImmigration = preload("res://src/emergence/village_immigration.gd")
 const MerchantVisit = preload("res://src/emergence/merchant_visit.gd")
+const SettlementSurplus = preload("res://src/emergence/settlement_surplus.gd")
 const HouseholdWellbeing = preload("res://src/emergence/household_wellbeing.gd")
 const VillageEstates = preload("res://src/emergence/village_estates.gd")
 const EstateConsumption = preload("res://src/emergence/estate_consumption.gd")
@@ -210,8 +217,10 @@ const VillageWages = preload("res://src/world/village_wages.gd")
 const OccupationProduction = preload("res://src/emergence/occupation_production.gd")
 const NpcIdentity = preload("res://src/world/npc_identity.gd")
 const SettlementTier = preload("res://src/emergence/settlement_tier.gd")
+const SettlementReadout = preload("res://src/ui/settlement_readout.gd")
 const SettlementCharter = preload("res://src/emergence/settlement_charter.gd")
 const MageGuildRoster = preload("res://src/gameplay/mage_guild_roster.gd")
+const HouseholdWater = preload("res://src/emergence/household_water.gd")
 const WorldBoss = preload("res://src/emergence/world_boss.gd")
 const WorldBossStore = preload("res://src/emergence/world_boss_store.gd")
 const WorldBossStorePersistence = preload("res://src/emergence/world_boss_store_persistence.gd")
@@ -598,6 +607,44 @@ var _cave_entrance_markers: Dictionary = {}  # Vector2i chunk_coord -> Array[Nod
 var _revealed_cave_entrance_tile = null  # Vector2i global tile, or null
 var _revealed_cave_nodes: Array = []
 
+# -- the underground proper (see docs/concept/underground.md) ----------------
+# The bedrock layer, which unlike topsoil/regolith carries a real cave
+# system: a Palmer pattern sited from this chunk's own lithology, recharge
+# and hydrology (see _cave_pattern_for_chunk), whose natural VOID cells are
+# passage the player can walk rather than rock to dig. Most chunks get
+# PATTERN_NONE and stay solid rock, which is the honest majority answer on
+# a planet whose bedrock is ~85% insoluble.
+var _bedrock_strata: Dictionary = {}  # Vector2i chunk_coord -> Strata
+
+## Which underground layer the player is currently in, or "" while on the
+## surface. Deliberately a single value rather than per-entity: only the
+## player descends today.
+var player_cave_layer := ""
+
+## The tile whose surroundings are currently revealed underground, and the
+## nodes revealing them -- same "entry-lifetime reveal" split as
+## _revealed_cave_entrance_tile above, one layer down.
+var _revealed_underground_tile = null
+var _revealed_underground_nodes: Array = []
+
+## The pitch the player most recently used. Held until they step off it so
+## a descent does not immediately re-trigger as an ascent and oscillate.
+var _pitch_in_use = null
+
+var _cave_siting := CaveSiting.new()
+var _cave_signals := CaveSignals.new()
+var _cave_descent := CaveDescent.new()
+
+## How far to look for ocean when siting a cave system. Comfortably past
+## CaveRecharge.MIXING_ZONE_COAST_KM at this world's ~1km/tile map scale,
+## so a coastal setting is never missed by the scan itself.
+const CAVE_OCEAN_SCAN_RADIUS_TILES := 14
+
+## How far to look for a surface watercourse that could sink into soluble
+## rock. A real swallet forms where a stream MEETS karst, which is a local
+## relationship, not a regional one.
+const CAVE_SINKING_CHANNEL_SCAN_RADIUS_TILES := 4
+
 ## Fallback half-extent for a solid prop carrying no CollisionShape2D of its
 ## own to measure -- see solid_obstacles_near.
 const DEFAULT_OBSTACLE_RADIUS := 8.0
@@ -616,6 +663,106 @@ const DEFAULT_OBSTACLE_RADIUS := 8.0
 ## bookkeeping (see docs/concept/geology.md).
 func strata_at(chunk_coord: Vector2i) -> Strata:
 	return _topsoil_strata.get(chunk_coord)
+
+
+## The bedrock Strata sim for a loaded chunk, or null if that chunk isn't
+## loaded. Unlike topsoil/regolith this one carries a real cave system
+## (see docs/concept/underground.md).
+func bedrock_strata_at(chunk_coord: Vector2i) -> Strata:
+	return _bedrock_strata.get(chunk_coord)
+
+
+## The Strata for a named layer of a loaded chunk, or null. The dispatch
+## the descent logic walks -- only the two shallowest layers are built
+## today (see underground.md's Status).
+func strata_for_layer(layer: String, chunk_coord: Vector2i) -> Strata:
+	if layer == Strata.LAYER_TOPSOIL_REGOLITH:
+		return _topsoil_strata.get(chunk_coord)
+	if layer == Strata.LAYER_BEDROCK:
+		return _bedrock_strata.get(chunk_coord)
+	return null
+
+
+## Which Palmer cave pattern this chunk's bedrock carries, sited from the
+## world's own readings: real lithology at the chunk centre, real slope as
+## relief, a real nearby watercourse as a sinking channel, biome-derived
+## precipitation seasonality, hydrothermal proximity, and scanned ocean
+## distance (see CaveSignals, which does the unit translation, and
+## CaveSiting, which composes the decision).
+func _cave_pattern_for_chunk(chunk_coord: Vector2i) -> String:
+	if generator == null:
+		return CavePattern.PATTERN_NONE
+	var centre: Vector2i = chunk_coord * CHUNK_SIZE + Vector2i(CHUNK_SIZE / 2, CHUNK_SIZE / 2)
+	var relief: float = _cave_signals.relief_from_slope_degrees(
+		generator.slope_at_global(centre.x, centre.y)
+	)
+	var seasonality: float = _cave_signals.seasonality_for_biome(
+		generator.biome_at_global(centre.x, centre.y)
+	)
+	var hydrothermal: float = _cave_signals.hydrothermal_proximity_at(centre.x, centre.y)
+	var ocean_tiles: float = WaterProximity.nearest_distance_tiles(
+		centre.x, centre.y, CAVE_OCEAN_SCAN_RADIUS_TILES,
+		func(x: int, y: int) -> bool: return generator.biome_at_global(x, y) == "ocean"
+	)
+	var channel_tiles: float = WaterProximity.nearest_distance_tiles(
+		centre.x, centre.y, CAVE_SINKING_CHANNEL_SCAN_RADIUS_TILES,
+		func(x: int, y: int) -> bool: return generator.is_river_at_global(x, y)
+	)
+	return _cave_siting.pattern_at(
+		centre.x, centre.y, relief,
+		is_finite(channel_tiles), seasonality, hydrothermal,
+		_cave_signals.coast_distance_km(ocean_tiles)
+	)
+
+
+## Whether a real pitch drops from the player's current layer into the one
+## below at this tile -- somewhere to stand here, and natural passage
+## opening underneath (see docs/concept/underground.md "Descent: a pitch,
+## not a staircase").
+func pitch_at(global_tile: Vector2i) -> bool:
+	var upper := _current_underground_layer()
+	var lower := _cave_descent.layer_below(upper)
+	if lower == "":
+		return false
+	var chunk_coord := _chunk_coord_for_tile(global_tile)
+	var above: Strata = strata_for_layer(upper, chunk_coord)
+	var below: Strata = strata_for_layer(lower, chunk_coord)
+	if above == null or below == null:
+		return false
+	var local := _local_coord(global_tile.x, global_tile.y)
+	return _cave_descent.is_pitch(above.cell_kind_at(local), below.cell_kind_at(local))
+
+
+## Takes the player one layer down if this tile really is a pitch and they
+## are carrying a light. Returns whether they descended.
+func try_descend(global_tile: Vector2i, light_sources: int) -> bool:
+	var upper := _current_underground_layer()
+	var lower := _cave_descent.layer_below(upper)
+	if lower == "" or not pitch_at(global_tile):
+		return false
+	if light_sources < CaveDescent.MINIMUM_LIGHT_SOURCES:
+		return false
+	player_cave_layer = lower
+	_pitch_in_use = global_tile
+	return true
+
+
+## Takes the player one layer back up. Always available from a layer that
+## has one above it -- climbing out is never gated, since gating the way
+## out is how a player gets stranded rather than challenged.
+func try_ascend() -> bool:
+	if player_cave_layer == "":
+		return false
+	player_cave_layer = _cave_descent.layer_above(player_cave_layer)
+	if player_cave_layer == Strata.LAYER_TOPSOIL_REGOLITH:
+		player_cave_layer = ""
+	return true
+
+
+## The layer the player's feet are in for descent purposes. On the surface
+## that is the topsoil/regolith layer they would be digging into.
+func _current_underground_layer() -> String:
+	return player_cave_layer if player_cave_layer != "" else Strata.LAYER_TOPSOIL_REGOLITH
 
 
 func solid_obstacles_near(at: Vector2, radius: float) -> Array:
@@ -808,6 +955,12 @@ const SAGEWERK_STORAGE_PAIR_RADIUS_TILES := 20
 var _structure_art_sprites: Dictionary = {}
 var _illustrated_structure_sprite := IllustratedStructureSprite.new()
 var _building_placeholder_sprite := ProceduralBuildingPlaceholderSprite.new()
+
+## The kerb every placed building's own plot is edged with (docs/concept/
+## building.md, "The ground a building stands on, and the kerb round its
+## plot") -- one generator, shared, like every other procedural sprite
+## this manager holds.
+var _footprint_kerb_sprite := ProceduralFootprintKerbSprite.new()
 
 ## Every placed Farm currently staffed with a real FarmerMarker (see
 ## docs/concept/npc_farm_production.md) -- chunk_coord -> {local_cell ->
@@ -1271,6 +1424,7 @@ func update(player_global_tile: Vector2i) -> void:
 	var ground_room := _update_roof_visibility(player_global_tile)
 	_update_upper_floor_visibility(player_global_tile, ground_room)
 	_update_geology_reveal(player_global_tile)
+	_update_underground_reveal(player_global_tile)
 
 
 ## The decoration-LOD and grass tile-precise-culling bookkeeping update()
@@ -1422,6 +1576,7 @@ func update_with_progress(player_global_tile: Vector2i, on_progress: Callable = 
 	var ground_room := _update_roof_visibility(player_global_tile)
 	_update_upper_floor_visibility(player_global_tile, ground_room)
 	_update_geology_reveal(player_global_tile)
+	_update_underground_reveal(player_global_tile)
 
 
 func is_chunk_loaded(chunk_coord: Vector2i) -> bool:
@@ -2451,10 +2606,33 @@ func _settlement_capacity(settlement_id: String, market, village_market) -> int:
 	)
 
 
-## Every StructureStock standing in `settlement_id`'s own chunk (a settlement
-## IS its chunk -- EntityRef.for_settlement) -- the third food container
-## SettlementFood counts. Keys are "%d_%d" global tiles (see
-## _structure_stock_key), so the chunk each belongs to is a plain divide.
+## The settlement's own LARDER: the StructureStock of each shelf in its
+## chunk that its people can actually eat off. Keys are "%d_%d" global
+## tiles (see _structure_stock_key), so the chunk each belongs to is a
+## plain divide.
+##
+## Filtered by STRUCTURE_MEAL_SOURCE_IDS, which is the contract
+## SettlementFood.food_stock states for this argument in its own words --
+## "a Storage holding hauled bread, a Bakery with loaves still on its
+## shelf". This handed it EVERY shelf in the chunk instead, and a
+## FARMHOUSE is where a harvest waits for the carter, not a place anybody
+## eats.
+##
+## Measured before the fix (tools/probe_village_famine.gd) on a real
+## village whose hunger was pinned at 1.00 and whose worst-off villager
+## was 174 of 200 through the starvation window:
+##
+##     settlement Market : 0
+##     VillageMarket     : 0
+##     structure shelves : 234   (three farmhouses; nobody could eat any)
+##
+## 234 units over twelve households is 19.5 each against
+## VillageImmigration.FED_THRESHOLD of 2.0, so the village read as richly
+## fed and kept drawing households into a famine. The same "counted as
+## food but unreachable" split STRUCTURE_MEAL_SOURCE_IDS itself had to fix
+## one layer down, and fixing it here fixes every reader at once: the
+## immigration gate, the settlement's GROWING/DECLINING status, the food
+## shortfall a build decision acts on, and the card's own "feeds N of M".
 func _settlement_structure_stocks(settlement_id: String) -> Array:
 	var chunk_coord := RegionalTrade.chunk_coord_of(settlement_id)
 	var stocks: Array = []
@@ -2463,8 +2641,11 @@ func _settlement_structure_stocks(settlement_id: String) -> Array:
 		if parts.size() != 2:
 			continue
 		var tile := Vector2i(int(parts[0]), int(parts[1]))
-		if _chunk_coord_for_tile(tile) == chunk_coord:
-			stocks.append(_structure_stocks.stock_for(instance_key))
+		if _chunk_coord_for_tile(tile) != chunk_coord:
+			continue
+		if not STRUCTURE_MEAL_SOURCE_IDS.has(modification_at_global(tile.x, tile.y)):
+			continue
+		stocks.append(_structure_stocks.stock_for(instance_key))
 	return stocks
 
 
@@ -3662,6 +3843,22 @@ func step_settlements(delta_seconds: float) -> void:
 			RegionalTrade.chunk_coord_of(settlement_id),
 			SETTLEMENT_STEP_INTERVAL / SECONDS_PER_SIMULATED_DAY
 		)
+		# The households drink (docs/concept/village_water.md). On the
+		# player-felt clock beside the guilds and immigration, because
+		# running dry is what sends somebody to the well and a player has
+		# to be able to watch that happen.
+		drink_household_water_in(
+			RegionalTrade.chunk_coord_of(settlement_id),
+			SETTLEMENT_STEP_INTERVAL / SECONDS_PER_SIMULATED_DAY
+		)
+		# ...and every one of them has a pail by the door to fetch it with.
+		stock_household_buckets_in(RegionalTrade.chunk_coord_of(settlement_id))
+		# ...and the villagers standing there follow the roster, so a
+		# household that moved in this step is somebody you can SEE
+		# (docs/concept/village_mortality.md mechanism 4). Runs after
+		# immigration, on purpose: a newcomer admitted this tick gets a
+		# villager this tick rather than one step later.
+		_reconcile_village_villagers(RegionalTrade.chunk_coord_of(settlement_id))
 		_step_settlement_construction(settlement_id, household_ids)
 		var capacity := _settlement_capacity(settlement_id, market, village_market)
 		var status := SettlementState.status_for(household_ids.size(), capacity)
@@ -4398,6 +4595,45 @@ func _record_household_departure(settlement_id: String, household) -> void:
 	_memory_store.witness_event(departed, _world_age_seconds)
 
 
+## The villagers standing in a loaded village catch up with its roster
+## (docs/concept/village_mortality.md mechanism 4).
+##
+## Only a LOADED village: an unloaded one has no markers to reconcile, and
+## spawning people into a chunk nobody is looking at is the same invented
+## number immigration already refuses to guess at.
+func _reconcile_village_villagers(chunk_coord: Vector2i) -> void:
+	if not _loaded_villages.has(chunk_coord):
+		return
+	_loaded_villages[chunk_coord] = _village_renderer.reconcile_villagers(
+		_creatures_parent, chunk_coord, chunk_coord * CHUNK_SIZE,
+		CHUNK_SIZE, TerrainRenderer.TILE_SIZE, self, _loaded_villages[chunk_coord]
+	)
+
+
+## A villager has starved to death (docs/concept/village_mortality.md
+## mechanism 3). True when somebody really was taken off the roster.
+##
+## A death is a DEPARTURE WITH A REASON, not a second mechanism beside it:
+## it goes out through the same `npc_departed` event the estate exodus
+## already appends, so _households_in_settlement, the census, the tier,
+## the growth ladder and the settlement card all see it with no new
+## plumbing -- and the roof they owned stops counting as one of ours,
+## exactly as VillageCensus' roster rule arranges.
+##
+## False for a villager who does not live here, and for one already gone:
+## a death that fired twice would cost the village two households for one
+## person, and a marker can be freed on the same frame the settlement
+## step notices it.
+func record_villager_death(settlement_id: String, seed_value: int) -> bool:
+	var household = _household_store.household_for(EntityRef.for_npc(seed_value))
+	if household == null:
+		return false
+	if not _households_in_settlement(settlement_id).has(household.id):
+		return false
+	_record_household_departure(settlement_id, household)
+	return true
+
+
 ## docs/concept/village_estates.md mechanism 6: the households pay into the
 ## SAME purse VillageWages already pays the subsistence wage out of, which
 ## is what closes the loop on machinery that already exists rather than
@@ -4419,10 +4655,48 @@ func _collect_estate_tax(
 			EstateConsumption.subsistence_satisfaction(estate, satisfaction),
 			EstateConsumption.station_satisfaction(estate, satisfaction)
 		)
-	var take := VillageWages.estate_tax_for(census, provision, days)
-	if take > 0.0:
-		NpcEconomy.deposit_to_purse(market, take)
+	# A TRANSFER, not a faucet (docs/concept/traveling_merchants.md, "The
+	# merchant is the ONLY faucet"). This used to credit the purse and debit
+	# nobody, which made it a second place gold came from nothing -- the
+	# very thing that doc's opening claims to have closed.
+	#
+	# Whole coins only, with the remainder carried: a Wallet holds integer
+	# gold and a kossaet owes 0.25 a day, so collecting per step would
+	# either forgive a real debt or charge it four times over. Same
+	# carry-until-it-crosses-a-whole-unit idiom the rest of this economy
+	# runs on.
+	var owed: float = (
+		VillageWages.estate_tax_for(census, provision, days)
+		+ float(_settlement_tax_carry.get(settlement_id, 0.0))
+	)
+	var demand := int(floor(owed))
+	_settlement_tax_carry[settlement_id] = owed - float(demand)
+	if demand <= 0:
+		return
+	var households: Array = []
+	var balances: Array = []
+	for household_id in _households_in_settlement(settlement_id):
+		var household = _household_store.household_for(household_id)
+		if household == null or household.wallet == null:
+			continue
+		households.append(household)
+		balances.append(int(household.wallet.balance))
+	var debits: Array = VillageWages.tax_debits(balances, demand)
+	var collected := 0
+	for index in debits.size():
+		var debit := int(debits[index])
+		if debit <= 0:
+			continue
+		if households[index].wallet.spend(debit):
+			collected += debit
+	if collected > 0:
+		NpcEconomy.deposit_to_purse(market, float(collected))
 
+
+## settlement_id -> the fraction of a coin this village is owed in tax but
+## cannot yet collect, since a Wallet holds only whole gold. Carried rather
+## than rounded (see _collect_estate_tax).
+var _settlement_tax_carry: Dictionary = {}
 
 ## settlement_id -> StaffedProduction's own per-recipe batch remainder.
 var _settlement_staffed_production_carry: Dictionary = {}
@@ -4582,19 +4856,41 @@ func _step_merchant_visits(settlement_id: String, market) -> void:
 	if market == null:
 		return
 	var reserved := _construction_reserve_for(settlement_id)
+	# Every container this settlement really keeps goods in, market FIRST
+	# (docs/concept/traveling_merchants.md). He used to price market.stock
+	# alone while SettlementFood counted the shelves too, so a village that
+	# hauled its harvest into the warehouse -- which is the whole point of
+	# the carter's round -- put it beyond the reach of its own only income.
+	# Reported as "way too much food and the NPCs don't have an income",
+	# which is one fault, not two.
+	var shelves: Array = _settlement_structure_stocks(settlement_id)
+	var views: Array = [market.stock]
+	for shelf in shelves:
+		views.append(shelf.stock)
+	var surplus := SettlementSurplus.combined(views)
+
 	var result: Dictionary = MerchantVisit.arrivals(
-		SETTLEMENT_STEP_INTERVAL, market.stock,
+		SETTLEMENT_STEP_INTERVAL, surplus,
 		float(_settlement_merchant_carry.get(settlement_id, 0.0)), reserved
 	)
 	_settlement_merchant_carry[settlement_id] = result["carry"]
 	if not result["arrived"]:
 		return
 
-	var sale: Dictionary = MerchantVisit.purchase(market.stock, reserved)
+	var sale: Dictionary = MerchantVisit.purchase(surplus, reserved)
 	if int(sale["paid"]) <= 0:
 		return
-	for item_id in sale["bought"]:
-		market.remove_stock(str(item_id), float(sale["bought"][item_id]))
+	# Out of the real containers the goods were actually in: paying for
+	# warehouse fish and taking them out of the market would invent goods in
+	# one place and destroy them in another.
+	var plan: Array = SettlementSurplus.allocate(sale["bought"], views)
+	var from_market: Dictionary = plan[0]
+	for item_id in from_market:
+		market.remove_stock(str(item_id), float(from_market[item_id]))
+	for index in shelves.size():
+		var taken: Dictionary = plan[index + 1]
+		for item_id in taken:
+			shelves[index].remove_stock(str(item_id), int(floor(float(taken[item_id]))))
 	NpcEconomy.deposit_to_purse(market, float(sale["paid"]))
 
 
@@ -7529,6 +7825,11 @@ const CAVE_ENTRY_TRIGGER_RADIUS := 1
 ## wired here today (_topsoil_strata); deeper layers are not yet reachable
 ## (see geology.md's Status).
 func _update_geology_reveal(player_global_tile: Vector2i) -> void:
+	if player_cave_layer != "":
+		# Underground, the surface entrance's own chamber is not what is
+		# around the player any more -- _update_underground_reveal owns the
+		# reveal from here down.
+		return
 	# Nine biome reads and entrance rolls a frame for a player who has not
 	# moved (FPS regression round 15) -- entrance placement is a pure
 	# function of the tile, so the answer is kept until the tile changes.
@@ -7563,6 +7864,40 @@ func _update_geology_reveal(player_global_tile: Vector2i) -> void:
 		_entities_parent, strata, local_cell, entrance_chunk_coord * CHUNK_SIZE, TerrainRenderer.TILE_SIZE
 	)
 	_revealed_cave_entrance_tile = entrance_tile
+
+
+## Reveals the player's immediate surroundings in whichever underground
+## layer they are currently standing in, and clears them the moment they
+## climb back out -- the same reveal-on-entry mechanism
+## _update_geology_reveal uses at a surface cave mouth, applied
+## recursively one layer down exactly as geology.md said it would be.
+##
+## The difference is what the reveal is CENTRED on. A surface chamber is
+## centred on the cave entrance, because that is the fixed thing the
+## player walked up to; underground there is no entrance to key off, so it
+## follows the player. Natural passage is skipped by reveal_chamber
+## itself (see GeologyRenderer), so what spawns is the rock AROUND the
+## passage, not in it.
+func _update_underground_reveal(player_global_tile: Vector2i) -> void:
+	if player_cave_layer != "" and player_global_tile == _revealed_underground_tile:
+		return  # nothing changed -- still standing in the same place
+	for node in _revealed_underground_nodes:
+		if is_instance_valid(node):
+			node.free()
+	_revealed_underground_nodes = []
+	_revealed_underground_tile = null
+	if player_cave_layer == "":
+		return
+	var chunk_coord := _chunk_coord_for_tile(player_global_tile)
+	var strata: Strata = strata_for_layer(player_cave_layer, chunk_coord)
+	if strata == null:
+		return  # the player's own chunk isn't loaded (yet) -- nothing to reveal
+	_revealed_underground_nodes = _geology_renderer.reveal_chamber(
+		_entities_parent, strata,
+		_local_coord(player_global_tile.x, player_global_tile.y),
+		chunk_coord * CHUNK_SIZE, TerrainRenderer.TILE_SIZE
+	)
+	_revealed_underground_tile = player_global_tile
 
 
 ## The global tile of a real cave entrance within CAVE_ENTRY_TRIGGER_RADIUS
@@ -14099,7 +14434,20 @@ func biome_at_global(global_x: int, global_y: int) -> String:
 	var chunk: Chunk = _loaded_chunks.get(_chunk_coord_for_tile(Vector2i(global_x, global_y)))
 	if chunk == null:
 		return ""  # not currently loaded/rendered; callers shouldn't query far outside the load radius
-	return chunk.biome[_local_index(global_x, global_y)]
+	# ...and a chunk that is PRESENT BUT EMPTY says the same thing. A bare
+	# Chunk.new() is what a fixture builds when it only needs somewhere to
+	# hang modifications, and nothing asked it about arbitrary tiles until
+	# routing did (AgentPassability._is_water via TileRouter.route) --
+	# measured on a clean origin/main worktree,
+	# test_earth_chunk_manager_village_farm_loop failed 4/4 with 17,376 of
+	# these in one run. The same size check Chunk.blocks_ground_cover
+	# already keeps, for the same reason it gives: a fixture that never
+	# filled the array reads as "nothing known here" rather than indexing
+	# off the end.
+	var index := _local_index(global_x, global_y)
+	if index < 0 or index >= chunk.biome.size():
+		return ""
+	return chunk.biome[index]
 
 
 ## Finds the nearest loaded FishMarker within max_distance pixels of
@@ -14985,6 +15333,179 @@ func place_building(
 const WAREHOUSE_BUILDING_ID := "warehouse"
 
 
+# -- a house's own water (docs/concept/village_water.md) --------------------
+
+## The ONE number a house persists about its water: what is in the tank.
+## Same idiom as GUILD_DAYS_OPEN_KEY -- a field on the building's own
+## record, so it costs no new store and travels with the house through a
+## chunk round trip.
+const WATER_LITRES_KEY := "water_litres"
+
+
+## How many people drink out of this house.
+##
+## One, for an occupied home. Households are single-member on this
+## substrate and say so (see VillageCensus: "Everyone housed occupies one
+## place in the roof they own. Single-member households are all this
+## substrate has"), so reading capacity_of here would have a cottage
+## drinking for three people who do not exist. A house nobody lives in
+## drinks nothing, and a workplace is not a home at all.
+func _drinkers_in_house(record: Dictionary) -> int:
+	if BuildingCatalog.capacity_of(String(record.get("id", ""))) <= 0:
+		return 0
+	var lived_in: bool = (
+		int(record.get("resident_seed", 0)) != 0
+		or String(record.get("owner_household_id", "")) != ""
+	)
+	return 1 if lived_in else 0
+
+
+## Which buildings hold a tank at all.
+##
+## A home, because the people in it drink -- and the FARMHOUSE, which
+## nobody lives in (its capacity is 0) but whose FIELD drinks out of it
+## (docs/concept/village_water.md mechanism 3). Deliberately a SEPARATE
+## rule from _drinkers_in_house above rather than a widening of it: a
+## farmhouse holds water and never swallows a mouthful of it, and folding
+## the two together would have a building with no residents drinking for
+## somebody who does not exist.
+func _holds_a_tank(record: Dictionary) -> bool:
+	var building_id := String(record.get("id", ""))
+	return (
+		BuildingCatalog.capacity_of(building_id) > 0
+		or building_id == VillageFarm.FARM_BUILDING_ID
+	)
+
+
+## Whether this building's tank is worked by a field rather than drunk
+## from -- the one distinction between the two kinds of tank there is.
+func _is_a_farmhouse(record: Dictionary) -> bool:
+	return String(record.get("id", "")) == VillageFarm.FARM_BUILDING_ID
+
+
+## What is in this house's tank.
+##
+## A record with no tank yet -- every house raised before this existed --
+## reads its own SEEDED starting level rather than zero, so an old save's
+## village does not wake up dry and send every household to the well at
+## once on the morning it loads. That is the same crowd this whole feature
+## exists to prevent, and a migration is exactly where it would come back.
+## 0.0 for anything that holds no tank.
+func house_water_at(record: Dictionary) -> float:
+	if not _holds_a_tank(record):
+		return 0.0
+	if not record.has(WATER_LITRES_KEY):
+		# Off the building's OWN floor: a farmhouse's trip comes sooner
+		# than a household's, so seeding it from the household's floor
+		# would raise a third of all farms already needing one.
+		if _is_a_farmhouse(record):
+			return HouseholdWater.farm_starting_level(int(record.get("seed", 0)))
+		return HouseholdWater.starting_level(int(record.get("seed", 0)))
+	return float(record[WATER_LITRES_KEY])
+
+
+## Whether this building must send somebody to the well. A farmhouse is
+## sent sooner than a household is (HouseholdWater.farm_trip_is_due): a
+## field that stops being watered withers, where a household that runs low
+## is merely thirsty.
+func water_trip_due_at(record: Dictionary) -> bool:
+	if not _holds_a_tank(record):
+		return false
+	var level := house_water_at(record)
+	if _is_a_farmhouse(record):
+		return HouseholdWater.farm_trip_is_due(level)
+	return HouseholdWater.trip_is_due(level)
+
+
+## Every household in ONE chunk drinks for `days`.
+##
+## Per-chunk rather than global for the same reason age_mage_guilds_in is:
+## the settlement step runs once per SETTLEMENT, so draining every loaded
+## house from inside it would empty a village once per neighbour in range.
+func drink_household_water_in(chunk_coord: Vector2i, days: float) -> void:
+	if days <= 0.0:
+		return
+	var chunk: Chunk = _loaded_chunks.get(chunk_coord)
+	if chunk == null:
+		return
+	for origin_local in chunk.buildings:
+		var record: Dictionary = chunk.buildings[origin_local]
+		var drinkers := _drinkers_in_house(record)
+		if drinkers <= 0:
+			continue
+		record[WATER_LITRES_KEY] = HouseholdWater.level_after(
+			house_water_at(record), drinkers, days
+		)
+
+
+## A villager tips their bucket into the tank at the end of an errand.
+## False for anything that is not a home standing there.
+func pour_bucket_into_house(chunk_coord: Vector2i, origin_local: Vector2i) -> bool:
+	var chunk: Chunk = _loaded_chunks.get(chunk_coord)
+	if chunk == null or not chunk.buildings.has(origin_local):
+		return false
+	var record: Dictionary = chunk.buildings[origin_local]
+	if not _holds_a_tank(record):
+		return false
+	record[WATER_LITRES_KEY] = HouseholdWater.poured_into(
+		house_water_at(record), HouseholdWater.BUCKET_LITRES
+	)
+	return true
+
+
+## The bucket by the door.
+##
+## Asked for directly: *"each NPC should have a bucket in its house
+## inventory"*. The bucket belongs to the HOUSEHOLD rather than to the
+## villager -- it is what the water is carried in, and it stands by the
+## door whether or not anybody is out with it right now. Every building
+## that holds a tank keeps exactly one, the farmhouse included.
+##
+## Stepped per chunk rather than seeded in place_building, for the same
+## reason house_water_at reads a starting level rather than migrating one:
+## a house raised before any of this existed gets its bucket the first
+## time its village is stepped, with no migration and no new field on the
+## record. Idempotent by construction -- it asks the building's OWN stock,
+## so a village stepped a thousand times still has one pail per door.
+func stock_household_buckets_in(chunk_coord: Vector2i) -> void:
+	var chunk: Chunk = _loaded_chunks.get(chunk_coord)
+	if chunk == null:
+		return
+	for origin_local in chunk.buildings:
+		if not _holds_a_tank(chunk.buildings[origin_local]):
+			continue
+		var tile: Vector2i = chunk_coord * CHUNK_SIZE + origin_local
+		if building_stock_at(tile.x, tile.y, HouseholdWater.BUCKET_ITEM_ID) > 0:
+			continue
+		deposit_to_building_at(tile.x, tile.y, HouseholdWater.BUCKET_ITEM_ID, 1)
+
+
+## A farmer waters a bed, and the farmhouse pays for it.
+##
+## `global_x/y` is any footprint cell of the farmhouse itself -- the same
+## "any cell answers" rule building_at_global already keeps, so a farmer
+## standing at the far corner of their own farmhouse is still at it.
+##
+## False, and NOTHING drawn, when there is no farmhouse there or its tank
+## is down to the household's own drinking reserve. That false is the
+## whole mechanism: it is what stops the field being watered, which is
+## what makes the trip to the well matter (see NpcMarker._work_field_cell).
+## A cottage never pays for crop water -- its tank is for the people in it.
+func draw_crop_water_at_global(global_x: int, global_y: int) -> bool:
+	var found := building_at_global(global_x, global_y)
+	if found.is_empty() or not _is_a_farmhouse(found):
+		return false
+	var chunk: Chunk = _loaded_chunks.get(found["chunk_coord"])
+	if chunk == null or not chunk.buildings.has(found["origin_local"]):
+		return false
+	var record: Dictionary = chunk.buildings[found["origin_local"]]
+	var level := house_water_at(record)
+	if not HouseholdWater.can_water_crops(level):
+		return false
+	record[WATER_LITRES_KEY] = HouseholdWater.level_after_tending(level)
+	return true
+
+
 # -- the mage guild fills with masters (docs/concept/mage_guild.md) ---------
 
 const MAGE_GUILD_BUILDING_ID := "mage_guild"
@@ -15143,6 +15664,23 @@ func remove_building(chunk_coord: Vector2i, origin_local: Vector2i) -> bool:
 	return true
 
 
+## Whether ANY building stands on this cell -- the cheap half of
+## building_at_global, for a caller that only needs the yes/no.
+##
+## Worth its own function rather than `not building_at_global(...).is_empty()`:
+## that one resolves the owning origin and then `duplicate()`s the whole
+## record, and this is called per villager per frame by AgentPassability's
+## own predicate (see NpcMarker.setup). A footprint tile always belongs to
+## a real building, so testing the tile id alone is exact as well as
+## allocation-free.
+func has_building_at_global(global_x: int, global_y: int) -> bool:
+	var chunk: Chunk = _loaded_chunks.get(_chunk_coord_for_tile(Vector2i(global_x, global_y)))
+	if chunk == null:
+		return false
+	var tile_id: String = chunk.modifications.get(_local_coord(global_x, global_y), "")
+	return BuildingCatalog.has_building(tile_id) or tile_id == BuildingCatalog.FOOTPRINT_TILE_ID
+
+
 ## The full building record standing on `(global_x, global_y)` -- ANY
 ## footprint cell answers, not just the anchor -- with `chunk_coord` and
 ## `origin_local` merged in so a caller can act on it (remove it, compute
@@ -15271,7 +15809,20 @@ func _spawn_building_node(chunk_coord: Vector2i, origin_local: Vector2i, record:
 	node.name = "Building"
 	node.position = bottom_centre
 
+	# The kerb first, so it lies on the ground UNDER the building rather
+	# than as a box drawn round its walls (children paint in tree order).
+	# Built from the same footprint_px the collision rect below is built
+	# from -- see docs/concept/building.md, "The ground a building stands
+	# on, and the kerb round its plot": what is drawn IS the hitbox.
+	var kerb := Sprite2D.new()
+	kerb.name = "FootprintKerb"
+	kerb.texture = _footprint_kerb_sprite.footprint_texture(footprint, TerrainRenderer.ART_TILE_SIZE)
+	kerb.scale = Vector2.ONE * ArtResolution.SPRITE_SCALE
+	kerb.position = Vector2(0, -footprint_px.y * 0.5)
+	node.add_child(kerb)
+
 	var sprite := Sprite2D.new()
+	sprite.name = "Art"
 	# Which picture a FINISHED building has is BuildingCatalog's call (see
 	# finished_sheet_for): a building with a real variant sheet draws its
 	# own seeded variant, so a street of cottages is a street of DIFFERENT
@@ -16599,9 +17150,27 @@ func withdraw_from_building_at(global_x: int, global_y: int, item_id: String, co
 const STRUCTURE_MEAL_RADIUS_TILES := CHUNK_SIZE
 
 ## The structures whose own stock a villager may eat from: where baked
-## bread ends up (see CHAIN_LOGISTICS_LEGS) -- a Bakery's shelf and any
-## Storage it was hauled into.
-const STRUCTURE_MEAL_SOURCE_IDS: Array[String] = ["bakery", "storage"]
+## bread ends up (see CHAIN_LOGISTICS_LEGS) -- a Bakery's shelf, any
+## Storage it was hauled into, and THE VILLAGE'S OWN WAREHOUSE.
+##
+## The warehouse was the reported bug: *"there's still not enough food even
+## though the warehouse is full"*. Both halves of that sentence were true
+## at once. A settlement's food ASSESSMENT counts every StructureStock
+## standing in its chunk (_settlement_structure_stocks), so the grain a
+## carter hauls in really is food the village has -- while a villager's own
+## meal came from this list, which was written before the warehouse existed
+## and never grew to include it. The village was fed on paper and its
+## people could not eat.
+##
+## This list has to name every place the village really puts food. It is
+## hand-written because the meal search scans FOR ids, and that is exactly
+## how it drifted; test_earth_chunk_manager_village_meals.gd pins the
+## behaviour that matters -- what the settlement counts as food is what its
+## people can eat -- so the next store added here fails a test rather than
+## starving a village quietly.
+const STRUCTURE_MEAL_SOURCE_IDS: Array[String] = [
+	"bakery", "storage", VillageLayout.WAREHOUSE_BUILDING_ID
+]
 
 
 ## Whether the village's own stores hold a whole meal near `pixel_position`
@@ -16833,6 +17402,12 @@ func _load_chunk(chunk_coord: Vector2i) -> void:
 	# re-revealed later still shows real mined tunnels; only ever mutated
 	# by _update_geology_reveal's spawned DiggableRock nodes.
 	_topsoil_strata[chunk_coord] = Strata.new(Strata.LAYER_TOPSOIL_REGOLITH, chunk_coord * CHUNK_SIZE)
+	# The bedrock beneath it, with whatever cave system this chunk's own
+	# lithology and hydrology actually site there (usually none -- see
+	# docs/concept/underground.md).
+	_bedrock_strata[chunk_coord] = Strata.new(
+		Strata.LAYER_BEDROCK, chunk_coord * CHUNK_SIZE, _cave_pattern_for_chunk(chunk_coord)
+	)
 	_cave_entrance_markers[chunk_coord] = _geology_renderer.spawn_entrance_markers(
 		_entities_parent, chunk_coord * CHUNK_SIZE, chunk.biome, chunk.width, chunk.height, TerrainRenderer.TILE_SIZE
 	)
@@ -16910,6 +17485,9 @@ func _load_chunk(chunk_coord: Vector2i) -> void:
 	# Wild mushrooms (see docs/concept/mushrooms.md): one sim covering all 6
 	# species for this chunk, already carrying whatever it seeded/was
 	# already fruiting on arrival.
+	# Same water mask, same reason as the ant colony below: a mycelium
+	# needs soil, and MushroomSpecies.allows_biome cannot see a river on
+	# its own because a river is not a biome.
 	var mushroom_sim := WildMushroomPatch.new(
 		hash("%d_%d_mushroom" % [chunk_coord.x, chunk_coord.y]), chunk.width, chunk.height, chunk.biome,
 		growth_blockers
@@ -17083,6 +17661,12 @@ func _load_chunk(chunk_coord: Vector2i) -> void:
 	# Ant mounds in the soil (see docs/concept/soil_fauna.md "Ants"). Placed
 	# once at chunk creation -- mound_cells() never changes for a loaded
 	# chunk's lifetime, exactly like the earthworm burrows just above.
+	# The water mask is the SAME Chunk.blocks_ground_cover array TallGrass
+	# already reads to keep grass out of the river: a river or lake leaves
+	# the biome array untouched (docs/concept/rivers.md's Rendering
+	# section), so AntColony's own SOIL_BIOMES check cannot see water
+	# without it -- reported live, with a screenshot, as mounds sitting in
+	# open water.
 	_ant_colonies[chunk_coord] = AntColony.new(
 		hash("%d_%d_ants" % [chunk_coord.x, chunk_coord.y]), chunk.width, chunk.height, chunk.biome,
 		growth_blockers
@@ -17735,6 +18319,87 @@ func estate_report_for_household(household_id: String, chunk_coord: Vector2i) ->
 ## The LOWEST tier for a settlement nobody founded, which is the reading
 ## that refuses rather than the one letting a place nobody has heard of
 ## raise a mage guild.
+## Everything the settlement card shows, for the settlement standing in
+## `chunk_coord` -- {} when there is none, which is what makes the card
+## context-dependent (see docs/concept/hud.md "The settlement card").
+##
+## A gatherer, not a model: every value here is a READ of state the
+## simulation already keeps, and how it reads on screen is
+## SettlementReadout's question. Nothing is tracked for the card.
+##
+## Happiness is the households' mean HAPPINESS, not their mean
+## PRODUCTIVITY. The two are different numbers in HouseholdWellbeing on
+## purpose -- productivity is happiness dragged down by hunger, because a
+## household with a beautiful town and an empty stomach does not work well
+## -- and a row labelled "happiness" that silently reported the work rate
+## would be answering a different question than it asks.
+func settlement_readout_at(chunk_coord: Vector2i) -> Dictionary:
+	if not _loaded_villages.has(chunk_coord):
+		return {}
+	var settlement_id := EntityRef.for_settlement(chunk_coord)
+	var household_ids := _households_in_settlement(settlement_id)
+	var census := _village_census_for(chunk_coord, household_ids)
+	var market := _market_store.market_for(settlement_id)
+	var village_market = SettlementFood.village_market_for(settlement_id, _loaded_villages)
+	var assessments := _household_wellbeing_for_settlement(settlement_id)
+	return {
+		"tier": settlement_tier_of(settlement_id),
+		"households": household_ids.size(),
+		"housed": int(census.get("housed_count", 0)),
+		"happiness": _mean_household_happiness(assessments),
+		"needs": _mean_household_needs(assessments),
+		# The REAL settlement purse lives on the older VillageMarket's own
+		# meta (NpcEconomy.PURSE_META) -- the same one wages and the civic
+		# tax already read and write. Only reachable while the settlement's
+		# chunk is loaded, which it is by construction here: the card only
+		# exists because the player is standing in it.
+		"gold": 0 if village_market == null else int(NpcEconomy.purse_of(village_market)),
+		"feeds": _settlement_capacity(settlement_id, market, village_market),
+		"building": _next_growth_building_for(chunk_coord, household_ids, census),
+	}
+
+
+## Mean happiness across a settlement's households, or
+## SettlementReadout.UNKNOWN when nothing has been assessed yet -- a real
+## state, and one a 0% reading would misreport as misery.
+func _mean_household_happiness(assessments: Array) -> float:
+	if assessments.is_empty():
+		return SettlementReadout.UNKNOWN
+	var total := 0.0
+	for assessment in assessments:
+		total += float(assessment.get("happiness", 0.0))
+	return total / float(assessments.size())
+
+
+## Mean score per need, so the card can name the settlement's weakest one.
+func _mean_household_needs(assessments: Array) -> Dictionary:
+	if assessments.is_empty():
+		return {}
+	var totals := {}
+	for assessment in assessments:
+		var needs: Dictionary = assessment.get("needs", {})
+		for need_id in needs:
+			totals[need_id] = float(totals.get(need_id, 0.0)) + float(needs[need_id])
+	for need_id in totals:
+		totals[need_id] = float(totals[need_id]) / float(assessments.size())
+	return totals
+
+
+## What this settlement's own growth ladder says it owes itself next, or ""
+## when it owes nothing -- the same read _apply_village_growth_decision
+## acts on, so the card cannot promise a building the village is not
+## actually about to raise.
+func _next_growth_building_for(
+	chunk_coord: Vector2i, household_ids: Array, census: Dictionary
+) -> String:
+	if household_ids.is_empty():
+		return ""
+	return VillageGrowth.next_building(
+		household_ids.size(), int(census.get("housed_count", 0)),
+		_present_structure_ids_for_settlement_chunk(chunk_coord)
+	)
+
+
 func settlement_tier_of(settlement_id: String) -> String:
 	var household_ids := _households_in_settlement(settlement_id)
 	if household_ids.is_empty():
@@ -18596,6 +19261,13 @@ func _unload_chunk(chunk_coord: Vector2i) -> void:
 		_revealed_cave_nodes = []
 		_revealed_cave_entrance_tile = null
 	_topsoil_strata.erase(chunk_coord)
+	if _revealed_underground_tile != null and _chunk_coord_for_tile(_revealed_underground_tile) == chunk_coord:
+		for node in _revealed_underground_nodes:
+			if is_instance_valid(node):
+				node.free()
+		_revealed_underground_nodes = []
+		_revealed_underground_tile = null
+	_bedrock_strata.erase(chunk_coord)
 
 	for mmi in _grass_sprites.get(chunk_coord, {}).values():
 		mmi.free()
@@ -19254,6 +19926,27 @@ func begin_build_project(
 	var project := start_build_project(chunk_coord, origin, blueprint_id, household_id)
 	project.status = ConstructionProject.Status.IN_PROGRESS
 	return project
+
+
+## What a field at this global cell should sow (docs/concept/
+## village_farms.md, "What a field sows follows the village's need").
+##
+## Reads the SAME assembly state the needs panel shows, so what a village
+## says it lacks and what it plants cannot disagree -- and the rule itself
+## is VillageCropChoice's, never a second one written here.
+##
+## `default_crop` is the villager's own traditional crop, and it is the
+## whole answer where there is no settlement or nobody has assessed it yet:
+## the same fail-open shape every other hook on this path uses.
+func sow_choice_at(global_x: int, global_y: int, default_crop: String) -> String:
+	var state := _village_assembly_state(_chunk_coord_for_tile(Vector2i(global_x, global_y)))
+	if state.is_empty():
+		return default_crop
+	return VillageCropChoice.choose(
+		state.get("satisfaction", {}),
+		VillageCropChoice.can_bake(state.get("present_building_ids", [])),
+		default_crop
+	)
 
 
 ## The real labour hours a build of `blueprint_id` asks for -- off the SAME

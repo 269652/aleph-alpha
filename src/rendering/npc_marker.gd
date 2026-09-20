@@ -11,12 +11,19 @@ extends Sprite2D
 const NpcIdentity = preload("res://src/world/npc_identity.gd")
 const NpcPlanner = preload("res://src/world/npc_planner.gd")
 const NpcSchedule = preload("res://src/world/npc_schedule.gd")
+const WaterErrand = preload("res://src/emergence/water_errand.gd")
+const HouseholdWater = preload("res://src/emergence/household_water.gd")
 const NpcEconomy = preload("res://src/world/npc_economy.gd")
 const NpcInstructionEvaluator = preload("res://src/world/npc_instruction_evaluator.gd")
 const CharacterView = preload("res://scenes/character_view.gd")
 const CreaturePerception = preload("res://src/gameplay/creature_perception.gd")
+const AgentPassability = preload("res://src/gameplay/agent_passability.gd")
+const TerrainPassability = preload("res://src/gameplay/terrain_passability.gd")
+const TileRouter = preload("res://src/gameplay/tile_router.gd")
 const ForagerBehavior = preload("res://src/gameplay/forager_behavior.gd")
 const VillageFarm = preload("res://src/gameplay/village_farm.gd")
+const BuildingCatalog = preload("res://src/gameplay/building_catalog.gd")
+const ProceduralItemSprite = preload("res://src/rendering/procedural_item_sprite.gd")
 const FarmerBehavior = preload("res://src/gameplay/farmer_behavior.gd")
 const HuntableQuarry = preload("res://src/gameplay/huntable_quarry.gd")
 const Carcass = preload("res://src/rendering/carcass.gd")
@@ -98,7 +105,73 @@ var _planner: NpcPlanner.Planner = NpcPlanner.FakeNpcPlanner.new()
 ## its walk cycle can switch to swimming, same as the player/creatures.
 ## Without it (fail-open, see _is_in_water), an NPC just never swims.
 var _world = null
+
+## Which leg of the trip to the well this villager is on (docs/concept/
+## village_water.md mechanism 2). Public because it IS what they are doing,
+## and because what they are carrying is read straight off it.
+var water_errand := WaterErrand.AT_HOME
+
+## The building this errand's bucket is FOR -- their own house, or the
+## farmhouse whose FIELD drinks out of its own tank (docs/concept/
+## village_water.md mechanism 3). {} when nobody is on an errand.
+##
+## LATCHED when they set out rather than re-read each frame: whichever
+## building sent them is the building the bucket comes back to. Re-reading
+## would let a villager change their mind halfway across the square when
+## the other tank crossed its own threshold, and the bucket in their hand
+## would silently change what it was for.
+## Which settlement this villager belongs to (EntityRef.for_settlement),
+## set by VillageRenderer, which is the only thing that knows. "" for a
+## villager nobody is simulating a village for -- a test fixture, or a
+## marker built without one -- who then simply dies without anybody being
+## told (docs/concept/village_mortality.md mechanism 2).
+var settlement_id := ""
+
+var _errand_target: Dictionary = {}
+
+## The nearest this leg has brought them to where the bucket is going, how
+## long since that last improved (see ERRAND_PATIENCE_SECONDS), and how
+## long they stay off the errand once a leg has defeated them.
+var _errand_closest_px := INF
+var _errand_stalled_seconds := 0.0
+var _errand_retry_in := 0.0
+## Where the errand is sending them right now, "" when they are not on one.
+var _errand_location_tag := ""
+## The tag the last processed frame actually walked toward -- what
+## current_location_tag reports when no errand is running.
+var _last_location_tag := "home"
 var _tile_size := 16
+
+## Which tiles this villager may not step into -- building footprints (see
+## AgentPassability). Invalid until setup() binds a world that can answer,
+## and left invalid for one that cannot, so an unbound marker walks exactly
+## as it always did.
+var _wall_tiles := Callable()
+
+## How much A* a single villager may spend on one route (see
+## docs/concept/navigation.md). A chunk is 32x32, so 1024 tiles is a full
+## chunk-wide search; this allows that plus headroom for re-expansion, and
+## caps the worst case directly rather than trusting the goal to be near.
+const ROUTE_NODE_BUDGET := 1500
+
+## The smallest gap between two recomputes of a route. A villager walking
+## to a fixed doorstep pays for ONE search; this only matters for a moving
+## destination (a hunter's quarry), where the goal tile can change every
+## frame and an unthrottled A* would run every frame with it.
+const ROUTE_RECOMPUTE_SECONDS := 0.5
+
+## Tiles still to walk (TileRouter), the destination they were computed
+## for, and time since that computation. Empty route means "no detour
+## needed or none found" -- either way the villager walks straight at its
+## target and _slid_along_walls keeps it out of walls.
+var _route: Array = []
+var _route_goal_tile := Vector2i(2147483647, 2147483647)
+var _route_age := 0.0
+
+## How much longer each tile takes to cross than open flat ground (see
+## AgentPassability) -- water is slow but crossable, so a villager routes
+## round a river when there is a dry way and wades when there is not.
+var _route_cost := Callable()
 var _perception := CreaturePerception.new()
 
 ## docs/concept/npc.md "Needs and the local production economy": this
@@ -370,6 +443,14 @@ func set_planner(planner: NpcPlanner.Planner) -> void:
 func setup(world, tile_size: int) -> void:
 	_world = world
 	_tile_size = tile_size
+	# Built ONCE here, not per frame: this predicate is called up to three
+	# times per villager per frame by the router, and allocating a
+	# fresh lambda each time is exactly the kind of per-frame churn the
+	# creature-blocker cache already exists to avoid. Invalid when the
+	# world cannot answer, which the gate reads as "nothing is solid" --
+	# the same duck-typed fail-open _is_in_water makes.
+	_wall_tiles = AgentPassability.blocked_predicate_for(world)
+	_route_cost = AgentPassability.cost_scale_for(world)
 
 
 ## Builds this villager's NpcEconomy from its already-assigned `identity`
@@ -452,6 +533,29 @@ func _process(delta: float) -> void:
 	var entry := NpcSchedule.current_entry_for(
 		schedule, _hour_of_day(), 0 if identity == null else identity.seed_value
 	)
+	# The trip to the well (docs/concept/village_water.md). An errand
+	# outranks a TIMETABLE -- being in the middle of carrying a bucket is a
+	# fact, where a schedule entry is only an intention -- so it replaces
+	# the entry here. It deliberately ranks BELOW the hunger interrupt just
+	# after it: a starving villager puts the bucket down, because thirst
+	# answered from a household tank is never as urgent as having nothing
+	# to eat.
+	# Before anything else this frame: a villager who has starved to death
+	# has no day left to plan (docs/concept/village_mortality.md mechanism
+	# 2). Checked after condition.advance above, so the hunger that killed
+	# them is this frame's hunger and not last frame's.
+	if _step_starvation():
+		return
+
+	_step_water_errand(delta)
+	_sync_carried_item()
+	if WaterErrand.overrides_schedule(water_errand):
+		entry = {
+			"time_block": entry.get("time_block", ""),
+			"location_tag": _errand_location_tag,
+			"activity": "fetch_water",
+		}
+
 	# A real, urgent need overrides wherever today's ordinary schedule says
 	# to be right now (docs/progress.md's Interrupt/Replan Handling row: "a
 	# need crossing a threshold") -- without this, hunger only ever
@@ -510,6 +614,7 @@ func _process(delta: float) -> void:
 		if action != null:
 			entry = _entry_for_instructed_action(action)
 	var location_tag: String = entry.get("location_tag", "home")
+	_last_location_tag = location_tag
 	var is_working: bool = entry.get("activity", "") == "work"
 	var target := _resolve_location(location_tag)
 	# A hunter with a real animal in reach goes to the animal, not to the
@@ -571,11 +676,25 @@ func _process(delta: float) -> void:
 	var running := _is_chasing_at_a_run(quarry_target)
 	condition.advance(delta, economy.needs.hunger if economy != null else 0.0, running)
 	var before := position
-	# Walls are asked about here, once, on the step actually being taken --
-	# the same ask-before-you-step shape CreatureMarker uses for rails and
-	# walls, and at the same cost.
+	# Two layers, and the order matters.
+	#
+	# ROUTE first: the slide below is a local reflex and cannot detour, so
+	# a villager whose doorstep sits behind its own house has nowhere to
+	# slide to and would press into the wall forever ("add proper
+	# wayfinding / routing"). _steer_toward returns the next waypoint of a
+	# real route when one is needed, or `target` itself when the way is
+	# clear.
+	#
+	# SLIDE second, and it stays underneath rather than being replaced: a
+	# route can go stale mid-walk (a house raised across it), and
+	# _slid_along_walls is what guarantees a stale route still never ends
+	# inside a wall. It also knows about farm rails, which the router does
+	# not, and it asks the same question the wall's own collision body is
+	# spawned from -- so a door and a floor stay walkable and going indoors
+	# is untouched.
+	var steer := _steer_toward(target, delta)
 	position = _slid_along_walls(
-		position, position.move_toward(target, (RUN_SPEED if running else WALK_SPEED) * delta)
+		position, position.move_toward(steer, (RUN_SPEED if running else WALK_SPEED) * delta)
 	)
 	_update_animation(position - before)
 	# Hidden once actually arrived home on a "home"-tagged entry -- a house
@@ -592,6 +711,11 @@ func _process(delta: float) -> void:
 		quarry_target == null
 		and field_target == null
 		and location_tag == "home"
+		# A villager pouring a bucket into their own tank is standing at
+		# their own door, and must not vanish indoors while doing it --
+		# the errand would end invisibly and the whole point of carrying a
+		# visible bucket would be lost on its last step.
+		and not WaterErrand.is_running(water_errand)
 		and position.distance_to(home_position) < _ARRIVED_HOME_EPSILON_PX
 	)
 	visible = not _at_home
@@ -797,13 +921,11 @@ func _shape_a_beam(delta: float) -> void:
 	):
 		return
 	_world.deposit_to_structure_at(sawmill_cell.x, sawmill_cell.y, "beam", 1)
-	# Paid at the saw when the village has a store to cart it to
-	# (docs/concept/village_warehouse.md, Mechanism 7) -- the beam stays on
-	# the mill's shelf for the carter, so the village is credited when it
-	# really arrives at the store rather than here. The same pay, for the
-	# same work; what moved is where the beam is.
-	if economy != null and _village_has_a_store():
-		economy.record_harvest_wage("beam", 1)
+	# No pay at the saw. A sawyer's work earns the village a BEAM, and the
+	# beam is paid for when a merchant buys it out of the village's stock
+	# (docs/concept/traveling_merchants.md, "The merchant is the ONLY
+	# faucet"). Paying here as well would be minting a coin on top of the
+	# goods -- the conjured faucet that doc exists to close.
 
 
 ## Carries the mill's finished BEAMS into the village's own stock -- the
@@ -887,6 +1009,284 @@ func begin_conversation(with_marker: Node, seconds: float = CONVERSATION_SECONDS
 
 var _talk_remaining := 0.0
 var _talking_to: Node = null
+
+
+## How near the well or their own door a villager has to get before that
+## leg of the water errand counts as walked. Deliberately looser than
+## NEED_REACH_PX's single pixel: a landmark is a place to stand around,
+## not a point to hit, and a villager who can never quite reach it is a
+## villager who never stops fetching water.
+const ERRAND_REACH_PX := 6.0
+
+## How far a villager may walk WITHOUT GETTING ANY NEARER to where the
+## bucket is going, before they put it down.
+##
+## A villager can be stopped dead: routing plans around what it can see
+## (TileRouter) and _slid_along_walls refuses the rest, but neither can
+## promise a way through, so without a give-up rule a villager pressed
+## against something walks at it for ever. Measured on the probe village
+## (tools/probe_farm_water.gd): one of three field workers ended a 600s
+## run still `to_well`, 104 px short of a well it had had 570 seconds to
+## reach, having worked 156 of 6000 ticks against its own baseline of
+## 2750. It never farmed again.
+##
+## Patience is measured in PROGRESS, not in time, and that distinction is
+## not academic -- it is the second bug this constant has had. A time
+## budget scaled from the straight-line distance looked equivalent and was
+## not: merging real routing made villagers walk round buildings instead
+## of into them, a route is longer than the line it replaces, and every
+## well trip in the probe village stopped completing (farmer 1: 5 trips
+## and 51 tendings became 0 and 8, its beds dry for 5110 of 6000 ticks)
+## while the villagers walked perfectly well the whole time.
+##
+## So: far enough to round a building, because a detour genuinely takes
+## you AWAY from the target for a while, and that is not being stuck.
+const ERRAND_DETOUR_PX := 320.0
+const ERRAND_PATIENCE_SECONDS := ERRAND_DETOUR_PX / WALK_SPEED
+
+## What counts as getting nearer at all -- a quarter tile, so float noise
+## on a villager standing still never reads as progress.
+const ERRAND_PROGRESS_PX := 4.0
+
+## How long they get on with their day before setting out again, once a leg
+## has defeated them. Without it they turn round at the door and walk into
+## the same wall immediately, which is the stall this replaces rather than
+## fixes. One simulated day: they try again tomorrow.
+const ERRAND_RETRY_SECONDS := SECONDS_PER_SIMULATED_DAY
+
+
+## One frame of the trip to the well (docs/concept/village_water.md).
+##
+## Reads the household's own tank rather than any schedule: nobody is ever
+## SENT to fetch water, they go when their own house runs dry, which is
+## what staggers the village instead of emptying it into the square at once.
+##
+## A villager with no world, or none of their own house to find, simply
+## never sets out -- an NPC in an unloaded chunk or a test fixture is not
+## on an errand, it has nowhere to be on one.
+func _step_water_errand(delta: float) -> void:
+	_errand_retry_in = maxf(0.0, _errand_retry_in - delta)
+	# No world to fetch from, or an errand whose target has somehow been
+	# lost: put the bucket down rather than walk one leg further. Nothing
+	# produces the second case today, but a villager stranded mid-square
+	# holding a bucket forever is exactly the failure this errand exists
+	# to replace.
+	if _world == null or (WaterErrand.is_running(water_errand) and _errand_target.is_empty()):
+		_put_the_bucket_down(0.0)
+		return
+
+	var was := water_errand
+	if not WaterErrand.is_running(water_errand):
+		if _errand_retry_in > 0.0:
+			_errand_location_tag = ""
+			return
+		# Home and still short: set out (again, if one bucket was not
+		# enough -- see WaterErrand's own note on why the loop lives here).
+		_errand_target = _thirsty_building()
+		water_errand = WaterErrand.begin_if_due(_tank_level_of(_errand_target))
+		if not WaterErrand.is_running(water_errand):
+			_errand_target = {}
+	elif position.distance_to(_resolve_location(_errand_location_tag)) <= ERRAND_REACH_PX:
+		water_errand = WaterErrand.arrived(water_errand)
+		if water_errand == WaterErrand.AT_HOME:
+			# They just finished pouring -- into whatever sent them.
+			_world.pour_bucket_into_house(
+				_errand_target["chunk_coord"], _errand_target["origin_local"]
+			)
+			_errand_target = {}
+	else:
+		# Still walking this leg. Getting nearer is all that is asked --
+		# take as long as the way round needs (see
+		# ERRAND_PATIENCE_SECONDS); make no headway at all and the bucket
+		# goes down.
+		var distance := position.distance_to(_resolve_location(_errand_location_tag))
+		if distance < _errand_closest_px - ERRAND_PROGRESS_PX:
+			_errand_closest_px = distance
+			_errand_stalled_seconds = 0.0
+		else:
+			_errand_stalled_seconds += delta
+			if _errand_stalled_seconds > ERRAND_PATIENCE_SECONDS:
+				_put_the_bucket_down(ERRAND_RETRY_SECONDS)
+		return
+
+	if water_errand != was:
+		_errand_closest_px = INF
+		_errand_stalled_seconds = 0.0
+	_errand_location_tag = WaterErrand.location_tag_for(water_errand)
+
+
+## Off the errand, empty-handed, and not setting out again for `retry_in`
+## seconds. The bucket goes back by the door; nothing is spilled and
+## nothing is poured, because they never filled it.
+func _put_the_bucket_down(retry_in: float) -> void:
+	water_errand = WaterErrand.AT_HOME
+	_errand_target = {}
+	_errand_location_tag = ""
+	_errand_closest_px = INF
+	_errand_stalled_seconds = 0.0
+	_errand_retry_in = maxf(_errand_retry_in, retry_in)
+
+
+## One frame of dying of hunger. True when this villager is gone, and the
+## caller must stop touching them.
+##
+## A villager does not vanish on a die roll: they have spent
+## Starvation.seconds_to_die at the top of their own hunger drive, having
+## visibly failed to find food that whole time (pillar 2). The village is
+## told so the household leaves the roster with them
+## (EarthChunkManager.record_villager_death) -- a marker that simply
+## disappeared would leave exactly the ghost owner village_growth.md
+## already had to fix.
+##
+## No corpse: a villager is not a creature, and carrion.md's loot table is
+## not the right vocabulary for a person. What a dead villager leaves
+## behind is a question death.md has not answered for NPCs yet.
+func _step_starvation() -> bool:
+	if economy == null or not economy.needs.has_starved_to_death():
+		return false
+	if (
+		_world != null
+		and settlement_id != ""
+		and identity != null
+		and _world.has_method("record_villager_death")
+	):
+		_world.record_villager_death(settlement_id, identity.seed_value)
+	queue_free()
+	return true
+
+
+## The building this villager must fetch water for right now, or {} when
+## neither of theirs is short.
+##
+## Their own house FIRST, always: people before plants, the same order the
+## farmhouse's own drinking reserve keeps (HouseholdWater.spare_for_crops).
+## Then the farmhouse they work, whose field drinks out of its own tank and
+## whose beds stop being watered when it runs down.
+func _thirsty_building() -> Dictionary:
+	if _world == null:
+		return {}
+	var house := _house_of_their_own()
+	if not house.is_empty() and _world.water_trip_due_at(house):
+		return house
+	# The whole errand or none of it: a world that can say a tank is low
+	# but cannot be poured into would strand somebody at the farmhouse
+	# door holding a full bucket forever. (_house_of_their_own already
+	# answers {} for such a world, which is why this only guards here.)
+	if not _world.has_method("water_trip_due_at") or not _world.has_method("pour_bucket_into_house"):
+		return {}
+	var farmhouse := _farmhouse_of_their_own()
+	if not farmhouse.is_empty() and _world.water_trip_due_at(farmhouse):
+		return farmhouse
+	return {}
+
+
+## This villager's own house, as a building record -- {} when the world
+## cannot say. Found at their own doorstep, which is where home_position
+## already points.
+func _house_of_their_own() -> Dictionary:
+	if _world == null or not _world.has_method("building_door_near"):
+		return {}
+	if not _world.has_method("water_trip_due_at") or not _world.has_method("pour_bucket_into_house"):
+		return {}
+	return _world.building_door_near(home_position, 1.0)
+
+
+## The FARMHOUSE this villager works, as a building record -- {} for
+## everyone else. Checked by id rather than assumed from
+## stock_building_cell alone, because that field holds a FISHER's own
+## cottage too (see its own note), and a cottage has no field to water.
+func _farmhouse_of_their_own() -> Dictionary:
+	if stock_building_cell == NO_STOCK_BUILDING or _world == null:
+		return {}
+	if not _world.has_method("building_at_global"):
+		return {}
+	var record: Dictionary = _world.building_at_global(
+		stock_building_cell.x, stock_building_cell.y
+	)
+	if String(record.get("id", "")) != VillageFarm.FARM_BUILDING_ID:
+		return {}
+	return record
+
+
+## The one cell the farmhouse is reached from -- the same doorstep rule
+## building_door_near keeps, rather than its anchor, which is a cell the
+## building itself stands on. A villager who walked to the anchor would
+## pour the bucket standing inside the farmhouse's own art.
+func _farmhouse_doorstep() -> Vector2i:
+	return stock_building_cell + BuildingCatalog.doorstep_of(VillageFarm.FARM_BUILDING_ID)
+
+
+## Whether the bucket in this villager's hand is for the field rather than
+## for their own kitchen -- which is what makes the walk home a walk to the
+## farmhouse (see _resolve_location).
+func _errand_is_for_the_farmhouse() -> bool:
+	return (
+		WaterErrand.is_running(water_errand)
+		and stock_building_cell != NO_STOCK_BUILDING
+		and String(_errand_target.get("id", "")) == VillageFarm.FARM_BUILDING_ID
+	)
+
+
+## Whether this building's tank says somebody must go. Asked of the world
+## rather than computed here, so the marker and the building can never
+## disagree about what "low" means -- and a farmhouse is sent sooner than a
+## household is, which is the world's rule to keep, not the marker's.
+## Nothing to fetch for reads as a full tank.
+func _tank_level_of(building: Dictionary) -> float:
+	if building.is_empty():
+		return HouseholdWater.TANK_LITRES
+	return 0.0 if _world.water_trip_due_at(building) else HouseholdWater.TANK_LITRES
+
+
+## One generator for the whole village. Its texture cache is static and
+## keyed by id, so twelve villagers on twelve errands share two bucket
+## textures between them rather than rebuilding a 32x32 image each.
+static var _item_art := ProceduralItemSprite.new()
+
+## What the CharacterView is currently showing in their hand, so a frame
+## that changed nothing touches nothing.
+var _shown_carried := ""
+
+
+## Puts what they are carrying into the view's tool slot -- or takes it
+## out of their hand again.
+##
+## This is the whole of docs/concept/village_water.md pillar 2: what a
+## villager is doing has to be answerable by LOOKING at them. carried_item
+## has always SAID what is in their hand; without this it went nowhere and
+## the errand ran invisibly, which is the half of the report that reads
+## *"it's not visible what they are doing"*.
+##
+## A view that is not in the tree yet is left alone WITHOUT recording what
+## it would have been shown, so the next frame tries again --
+## CharacterView.equip_weapon writes straight to its slot node and has no
+## pending-value stash (see CharacterPreviewDiorama's own note).
+func _sync_carried_item() -> void:
+	var carried := carried_item()
+	if carried == _shown_carried:
+		return
+	if _character_view == null or not _character_view.is_node_ready():
+		return
+	_shown_carried = carried
+	if carried == "":
+		_character_view.unequip_slot("tool")
+		return
+	_character_view.equip_weapon(_item_art.texture_for(carried))
+
+
+## What is in this villager's hands right now: "" for nothing, otherwise
+## WaterErrand.BUCKET_EMPTY or BUCKET_FULL. The renderer's whole input for
+## making the errand legible.
+func carried_item() -> String:
+	return WaterErrand.carried(water_errand)
+
+
+## Where this villager is headed right now, errand included -- what a
+## readout or a test should ask rather than reaching into the schedule.
+func current_location_tag() -> String:
+	if WaterErrand.is_running(water_errand):
+		return _errand_location_tag
+	return String(_last_location_tag)
 
 
 ## How near a villager has to get before a need counts as answered -- the
@@ -1046,12 +1446,22 @@ var _at_home := false
 ## spawned from, so what stops a player and what stops a villager can never
 ## disagree. A DOOR and a FLOOR are walkable pieces, so going indoors is
 ## untouched.
+##
+## GROUND TOO STEEP TO CLIMB is refused here too. The router plans around a
+## cliff, but a route is only a plan: when none exists (the goal is behind
+## the cliff, or the budget ran out) the villager falls back to walking
+## straight at its target, and without this check that fallback walked up
+## the cliff. Caught by test_a_villager_never_climbs_a_cliff during the
+## reconciliation with main -- the slide is the ONE place every step
+## passes through, so terrain belongs in it rather than in a second gate
+## beside it.
 func _slid_along_walls(from: Vector2, to: Vector2) -> Vector2:
 	if _world == null or from == to:
 		return to
 	if (
 		not _world.has_method("piece_blocks_movement_at_global")
 		and not _world.has_method("fence_blocks_step_global")
+		and not _world.has_method("slope_at_global")
 	):
 		return to
 	if not _blocked_step(from, to):
@@ -1073,6 +1483,10 @@ func _slid_along_walls(from: Vector2, to: Vector2) -> Vector2:
 ## field stays ordinary ground a villager may walk along.
 func _blocked_step(from: Vector2, point: Vector2) -> bool:
 	var tile := Vector2i(floori(point.x / _tile_size), floori(point.y / _tile_size))
+	if _world.has_method("slope_at_global") and not TerrainPassability.is_passable(
+		_world.slope_at_global(tile.x, tile.y)
+	):
+		return true
 	if (
 		_world.has_method("piece_blocks_movement_at_global")
 		and _world.piece_blocks_movement_at_global(tile.x, tile.y)
@@ -1080,7 +1494,34 @@ func _blocked_step(from: Vector2, point: Vector2) -> bool:
 		return true
 	if not _world.has_method("fence_blocks_step_global"):
 		return false
+	# A field's rails stand on its INNER edge (see "The rail stands on the
+	# inner edge"), so the one villager they shut out is the farmer whose
+	# beds they enclose. Reported live: "The farmer doesn't farm anymore" --
+	# measured on a real village, two of three villagers with a field worked
+	# no bed at all, frozen in APPROACHING nine pixels from their own soil,
+	# refused the last step into it.
+	#
+	# A gate exists for this (docs/concept/village_farms.md, "The gate"),
+	# but reaching one needs pathfinding a Sprite2D walking a single
+	# move_toward per frame does not have -- the commit that gave rails
+	# their hitbox said so itself: "boxed in on both, they stay put".
+	#
+	# So the worker may cross their own field's rail, and nothing else
+	# changes: every other rail still stops them, a neighbour's included,
+	# and no other villager is exempt from any rail.
+	#
+	# EITHER WAY across it. The exemption used to be one-directional --
+	# only a step INTO a bed they work -- which let a farmer walk into
+	# their own field and then never leave it. Measured
+	# (tools/probe_farm_water.gd): three field workers set out for the well
+	# 8, 2 and 8 times and were refused at their very first step by their
+	# own rail, and not one came within 105 px of a well whose arrival
+	# reach is 6 px. The rails keep animals out and read as an enclosure;
+	# they were never meant to shut the worker out of their beds, and they
+	# are just as clearly not meant to shut them in.
 	var here := Vector2i(floori(from.x / _tile_size), floori(from.y / _tile_size))
+	if field_cells.has(tile) or field_cells.has(here):
+		return false
 	return _world.fence_blocks_step_global(here.x, here.y, tile.x, tile.y)
 
 
@@ -1212,8 +1653,54 @@ func _sync_market_stand(is_working: bool) -> void:
 	)
 
 
+## Where to actually aim this frame: the next waypoint of a real route
+## when one is needed, or `target` itself when the way is clear, no route
+## was found, or this villager has no world to ask.
+##
+## Falling back to `target` on a failed search is deliberate. A route that
+## cannot be found (goal unreachable, or budget spent) must not stop a
+## villager walking -- it only means they walk the old, direct way, with
+## the gate keeping them out of walls exactly as before.
+func _steer_toward(target: Vector2, delta: float) -> Vector2:
+	_route_age += delta
+	if not _wall_tiles.is_valid() or _tile_size <= 0:
+		return target
+	var here := _tile_of(position)
+	var goal := _tile_of(target)
+	if here == goal:
+		return target  # final approach, inside the destination tile
+	if goal != _route_goal_tile and _route_age >= ROUTE_RECOMPUTE_SECONDS:
+		_route_goal_tile = goal
+		_route_age = 0.0
+		_route = TileRouter.route(here, goal, _wall_tiles, ROUTE_NODE_BUDGET, _route_cost)
+	# Drop whatever has already been walked. A villager can cross more than
+	# one waypoint in a frame at RUN_SPEED, so this is a loop, not an if.
+	while not _route.is_empty() and _tile_of(position) == _route[0]:
+		_route.remove_at(0)
+	if _route.is_empty():
+		return target
+	return _tile_centre(_route[0])
+
+
+func _tile_of(point: Vector2) -> Vector2i:
+	return Vector2i(floori(point.x / _tile_size), floori(point.y / _tile_size))
+
+
+func _tile_centre(tile: Vector2i) -> Vector2:
+	return Vector2(
+		tile.x * _tile_size + _tile_size * 0.5, tile.y * _tile_size + _tile_size * 0.5
+	)
+
+
 func _resolve_location(tag: String) -> Vector2:
 	if tag == "home":
+		# Mid-errand, "home" is wherever the bucket is GOING. A farmer
+		# carrying water for their own field walks it to the FARMHOUSE
+		# (docs/concept/village_water.md mechanism 3) -- resolving to their
+		# own doorstep would have them pour the field's water into their
+		# kitchen and the beds would never get any.
+		if _errand_is_for_the_farmhouse():
+			return _cell_centre(_farmhouse_doorstep())
 		return home_position
 	if landmarks.has(tag):
 		return landmarks[tag]
@@ -1415,6 +1902,13 @@ func _work_field_cell() -> void:
 	if _field_index < 0 or _field_index >= field_cells.size():
 		return
 	var cell: Vector2i = field_cells[_field_index]
+	# What the beds get is paid for out of the farmhouse's own tank
+	# (docs/concept/village_water.md mechanism 3). A farmhouse down to its
+	# household's drinking reserve cannot water at all -- and that refusal
+	# is the mechanism, not a failure case: it is what makes somebody walk
+	# to the well for the FIELD, which is the errand this whole feature
+	# exists to make visible.
+	var paid_for := _draw_crop_water()
 	match VillageFarm.action_for(_field_plot_at(cell)):
 		"harvest":
 			if not _world.has_method("harvest_farm_plot_at_global"):
@@ -1426,11 +1920,27 @@ func _work_field_cell() -> void:
 				_store_harvest(crop_id, count)
 		"plant":
 			if _world.has_method("till_and_plant_farm_plot_at_global"):
-				_world.till_and_plant_farm_plot_at_global(cell.x, cell.y, _field_crop)
+				_world.till_and_plant_farm_plot_at_global(cell.x, cell.y, _sow_choice_for(cell))
 		"water":
-			if _world.has_method("water_farm_plot_at_global"):
+			if paid_for and _world.has_method("water_farm_plot_at_global"):
 				_world.water_farm_plot_at_global(cell.x, cell.y)
-	_water_the_beds_around(cell)
+	if paid_for:
+		_water_the_beds_around(cell)
+
+
+## Takes this visit's water out of the farmhouse this villager works for.
+## True when the beds may be wetted.
+##
+## Fails OPEN for a villager with no farmhouse of their own -- a village
+## that has not raised one -- and for a world that cannot answer at all.
+## There is no tank to bill it to in either case, and failing closed would
+## kill every such field rather than send anybody anywhere.
+func _draw_crop_water() -> bool:
+	if _farmhouse_of_their_own().is_empty():
+		return true
+	if not _world.has_method("draw_crop_water_at_global"):
+		return true
+	return _world.draw_crop_water_at_global(stock_building_cell.x, stock_building_cell.y)
 
 
 ## Where a cut crop goes: into the FARMHOUSE this villager works for, which
@@ -1448,13 +1958,11 @@ func _store_harvest(crop_id: String, count: int) -> void:
 		and _world.has_method("deposit_to_structure_at")
 	):
 		_world.deposit_to_structure_at(stock_building_cell.x, stock_building_cell.y, crop_id, count)
-		# Paid at the scythe when the village has a store to cart it to
-		# (docs/concept/village_warehouse.md, Mechanism 7): the crop stays
-		# on this shelf for the carter, so the village is credited when the
-		# goods really arrive there rather than here. The same pay, at the
-		# same moment, either way -- what moved is where the goods are.
-		if economy != null and _village_has_a_store():
-			economy.record_harvest_wage(crop_id, count)
+		# No pay at the scythe. A farmer's work earns the village a CROP,
+		# and the crop is paid for when a merchant buys it out of the
+		# village's stock (docs/concept/traveling_merchants.md, "The
+		# merchant is the ONLY faucet"). Paying here as well would be
+		# minting a coin on top of the goods.
 		return
 	if economy != null:
 		economy.record_real_harvest(crop_id, count)
@@ -1569,16 +2077,50 @@ func haul_stock_to_village() -> void:
 		return
 	if not _world.has_method("withdraw_from_structure_at"):
 		return
-	var crop := _field_crop if _field_crop != "" else VillageFarm.crop_for(identity.occupation)
-	if crop == "" and not pond_cells.is_empty():
-		crop = POND_CATCH_ITEM  # a fisher's building holds fish, not a crop
-	if crop == "":
-		return
-	var carried := 0
-	while _world.withdraw_from_structure_at(stock_building_cell.x, stock_building_cell.y, crop, 1):
-		carried += 1
-	if carried > 0:
-		economy.record_real_harvest(crop, carried)
+	# WHATEVER is on the shelf, not one assumed crop.
+	#
+	# A field sows by demand now (see _sow_choice_for), so a farmhouse may
+	# hold a crop this villager was never built with -- and one shelf can
+	# hold two, since the choice can change between one sowing and the next.
+	# Withdrawing `_field_crop` alone would quietly carry nothing home and
+	# leave the harvest to rot in the building it was stored in.
+	var held: Dictionary = {}
+	if _world.has_method("structure_stock_contents_at"):
+		held = _world.structure_stock_contents_at(stock_building_cell.x, stock_building_cell.y)
+	if held.is_empty():
+		# No shelf to read: the crop this villager works, or a fisher's
+		# catch, exactly as before.
+		var crop := _field_crop if _field_crop != "" else VillageFarm.crop_for(identity.occupation)
+		if crop == "" and not pond_cells.is_empty():
+			crop = POND_CATCH_ITEM  # a fisher's building holds fish, not a crop
+		if crop == "":
+			return
+		held = {crop: 1}
+	for item_id in held.keys():
+		var carried := 0
+		while _world.withdraw_from_structure_at(
+			stock_building_cell.x, stock_building_cell.y, item_id, 1
+		):
+			carried += 1
+		if carried > 0:
+			economy.record_real_harvest(item_id, carried)
+
+
+## What to put in THIS bed.
+##
+## Asked of the village at sowing rather than decided when this villager was
+## built (docs/concept/village_farms.md, "What a field sows follows the
+## village's need"): `_field_crop` was set once in setup_economy from the
+## occupation and never revisited, so a village's whole cropping plan was
+## fixed before a single basket had ever been drawn -- which is how three
+## farmhouses ended up growing nothing anybody could eat.
+##
+## Fail-open, the same shape every other world hook here uses: no world, or
+## a world that cannot answer, and the villager sows what they always did.
+func _sow_choice_for(cell: Vector2i) -> String:
+	if _world == null or not _world.has_method("sow_choice_at"):
+		return _field_crop
+	return _world.sow_choice_at(cell.x, cell.y, _field_crop)
 
 
 ## Whatever the farmer just did on `cell`, the beds around it get wet too.

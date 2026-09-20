@@ -464,8 +464,11 @@ func test_a_working_hunter_gathers_real_food_through_process():
 		marker._process(1.0)
 		peak_gold = maxi(peak_gold, marker.economy.wallet.balance)
 
-	assert_gt(market.total_stock(), 0.0)
-	assert_gt(peak_gold, 0, "a working hunter really earns")
+	assert_gt(market.total_stock(), 0.0, "a working hunter really fills the market")
+	# And mints nothing doing it. Gold has one faucet and it is the merchant
+	# (docs/concept/traveling_merchants.md, "The merchant is the ONLY
+	# faucet"); this used to assert the opposite, which was the faucet.
+	assert_eq(peak_gold, 0, "no coin is minted at the kill, at any moment of the work")
 
 
 # -- instruction scripts (docs/concept/npc_instructions.md "Execution /
@@ -1230,3 +1233,877 @@ func test_a_villager_walks_on_when_no_rail_is_crossed():
 	world.blocks_step = false
 	var marker := _wall_marker(world)
 	assert_eq(marker._slid_along_walls(Vector2(8, 8), Vector2(24, 8)), Vector2(24, 8))
+
+
+## Reported live, with the village in shot: *"The farmer doesn't farm
+## anymore"*.
+##
+## A regression from f64a360e ("a villager walks round a wall and a rail,
+## not through them"), whose own message named this failure mode: *"there
+## is no pathfinding here, only a straight line at the target... boxed in
+## on both, they stay put"*. Rails round a field stop a villager now -- and
+## a field's rails stand on its INNER edge, so the one villager they shut
+## out is the farmer whose beds they enclose.
+##
+## Measured on a real village (tools/probe_village_farming.gd): of three
+## villagers with a field, one worked 58 beds in 600s and the other two
+## worked NONE. Both spent 2650 of 2750 on-field ticks in APPROACHING,
+## frozen -- the herbalist nine pixels from its own bed, refused the last
+## step south into it.
+##
+## A gate exists for exactly this (docs/concept/village_farms.md, "The
+## gate"), but reaching it needs pathfinding a Sprite2D walking one
+## move_toward per frame does not have. The farmer is who the field is
+## FOR; the rails are there to keep animals out and to read as an
+## enclosure, not to shut the worker out of their own beds. So a villager
+## may cross into a bed they themselves work, and no other rail moves.
+func test_a_farmer_may_step_into_a_bed_they_work():
+	var world := StubWorldWithFence.new()
+	world.blocks_step = true
+	var marker := _wall_marker(world)
+	marker.field_cells = [Vector2i(1, 0)]
+
+	assert_eq(
+		marker._slid_along_walls(Vector2(8, 8), Vector2(24, 8)), Vector2(24, 8),
+		"the rail round a farmer's own field does not shut the farmer out of it"
+	)
+
+
+## ...and it must not shut them IN either. The rails keep animals out and
+## read as an enclosure; the exemption was one-directional, so a farmer
+## could step into their own beds and then never leave them.
+##
+## Measured (tools/probe_farm_water.gd): three field workers set out for
+## the well 8, 2 and 8 times and were refused at their VERY FIRST STEP by
+## their own field's rail -- `farm_fence_west`, `farm_fence_north`, 0 px
+## along the way. Not one of them ever came within 105 px of a well whose
+## arrival reach is 6 px, and one never closed the gap by a single pixel
+## across a whole 600s run.
+func test_a_farmer_may_step_back_out_of_a_bed_they_work():
+	var world := StubWorldWithFence.new()
+	world.blocks_step = true
+	var marker := _wall_marker(world)
+	marker.field_cells = [Vector2i(0, 0)]  # they are standing in their own bed
+
+	assert_eq(
+		marker._slid_along_walls(Vector2(8, 8), Vector2(24, 8)), Vector2(24, 8),
+		"the rail round a farmer's own field shut the farmer inside it"
+	)
+
+
+func test_a_rail_still_stops_a_villager_stepping_anywhere_else():
+	var world := StubWorldWithFence.new()
+	world.blocks_step = true
+	var marker := _wall_marker(world)
+	marker.field_cells = [Vector2i(9, 9)]  # their field is somewhere else entirely
+
+	assert_eq(
+		marker._slid_along_walls(Vector2(8, 8), Vector2(24, 8)), Vector2(8, 8),
+		"every other rail still stops them, including a neighbour's"
+	)
+
+
+func test_a_villager_with_no_field_is_stopped_by_every_rail():
+	var world := StubWorldWithFence.new()
+	world.blocks_step = true
+	var marker := _wall_marker(world)
+
+	assert_eq(marker._slid_along_walls(Vector2(8, 8), Vector2(24, 8)), Vector2(8, 8))
+
+
+# -- the water errand (docs/concept/village_water.md) -----------------------
+#
+# Asked for directly: *"when they get water they should carry the empty
+# bucket to the well and bring back a full bucket which they can pour into
+# their houses water tank"*. This is the half that makes the errand
+# LEGIBLE -- the state machine and the tank are already pinned in
+# test_water_errand.gd and test_earth_chunk_manager_household_water.gd; what
+# is tested here is that a villager actually walks it and is seen doing so.
+
+const WaterErrand = preload("res://src/emergence/water_errand.gd")
+const HouseholdWater = preload("res://src/emergence/household_water.gd")
+
+
+## A world with exactly one house in it, whose tank the test can set.
+class WateredWorld:
+	extends StubWorld
+	var house_level := HouseholdWater.TANK_LITRES
+	var poured := 0
+	var door_position := Vector2(1000, 1000)
+
+	func building_door_near(pixel_position: Vector2, radius_tiles: float) -> Dictionary:
+		if pixel_position.distance_to(door_position) > radius_tiles * 16.0:
+			return {}
+		return {
+			"id": "house_small", "chunk_coord": Vector2i(0, 0),
+			"origin_local": Vector2i(4, 4), "seed": 7,
+		}
+
+	func water_trip_due_at(_record: Dictionary) -> bool:
+		return HouseholdWater.trip_is_due(house_level)
+
+	func pour_bucket_into_house(_chunk_coord: Vector2i, _origin_local: Vector2i) -> bool:
+		poured += 1
+		house_level = HouseholdWater.poured_into(house_level, HouseholdWater.BUCKET_LITRES)
+		return true
+
+
+func _a_watered_villager(level: float) -> WateredWorld:
+	var world := WateredWorld.new()
+	world.house_level = level
+	world.door_position = marker.home_position
+	marker.setup(world, TILE_SIZE)
+	marker.set_planner(FixedPlanner.new([
+		{"time_block": "morning", "location_tag": "home", "activity": "idle"},
+		{"time_block": "midday", "location_tag": "home", "activity": "idle"},
+		{"time_block": "evening", "location_tag": "home", "activity": "idle"},
+		{"time_block": "night", "location_tag": "home", "activity": "idle"},
+	]))
+	return world
+
+
+## Walks the errand to completion, standing the villager on each leg's
+## target so the test is about the ERRAND rather than about walking speed.
+func _walk_the_errand(world: WateredWorld, steps: int = 12) -> void:
+	for i in steps:
+		marker.position = marker._resolve_location(
+			WaterErrand.location_tag_for(marker.water_errand)
+		)
+		marker._process(0.1)
+		if marker.water_errand == WaterErrand.AT_HOME and world.poured > 0:
+			return
+
+
+# -- setting out ------------------------------------------------------------
+
+func test_a_villager_with_a_full_tank_stays_off_the_errand():
+	_a_watered_villager(HouseholdWater.TANK_LITRES)
+	marker._process(0.1)
+	assert_eq(marker.water_errand, WaterErrand.AT_HOME)
+	assert_eq(marker.carried_item(), "")
+
+
+func test_a_villager_whose_house_is_low_sets_out_for_the_well():
+	_a_watered_villager(0.0)
+	marker._process(0.1)
+	assert_eq(marker.water_errand, WaterErrand.TO_WELL)
+
+
+func test_they_carry_an_empty_bucket_on_the_way_there():
+	_a_watered_villager(0.0)
+	marker._process(0.1)
+	assert_eq(marker.carried_item(), WaterErrand.BUCKET_EMPTY)
+
+
+func test_the_errand_sends_them_to_the_well_not_wherever_the_plan_said():
+	# The plan says home all day; the errand outranks it.
+	_a_watered_villager(0.0)
+	marker._process(0.1)
+	assert_eq(marker.current_location_tag(), "well")
+
+
+# -- and back again ---------------------------------------------------------
+
+func test_reaching_the_well_fills_the_bucket():
+	var world := _a_watered_villager(0.0)
+	marker._process(0.1)
+	marker.position = marker._resolve_location("well")
+	marker._process(0.1)  # arrive -> DRAWING
+	marker._process(0.1)  # drawn  -> TO_HOME
+	assert_eq(marker.water_errand, WaterErrand.TO_HOME)
+	assert_eq(marker.carried_item(), WaterErrand.BUCKET_FULL)
+	assert_eq(world.poured, 0, "nothing was poured before they got home")
+
+
+func test_getting_home_pours_the_bucket_into_the_tank():
+	var world := _a_watered_villager(0.0)
+	marker._process(0.1)
+	_walk_the_errand(world)
+	assert_gt(world.poured, 0, "the bucket was never poured")
+	assert_gt(world.house_level, 0.0, "the tank is still empty")
+
+
+func test_the_errand_ends_and_they_are_not_stuck_holding_a_bucket():
+	var world := _a_watered_villager(0.0)
+	marker._process(0.1)
+	_walk_the_errand(world)
+	assert_eq(marker.water_errand, WaterErrand.AT_HOME)
+	assert_eq(marker.carried_item(), "")
+
+
+## A villager pouring water into their own tank is standing at their own
+## door -- and must not vanish indoors while doing it, or the errand ends
+## invisibly and the whole point is lost.
+func test_they_stay_visible_while_they_are_on_the_errand():
+	var world := _a_watered_villager(0.0)
+	marker._process(0.1)
+	for i in 10:
+		marker.position = marker._resolve_location(
+			WaterErrand.location_tag_for(marker.water_errand)
+		)
+		marker._process(0.1)
+		if WaterErrand.is_running(marker.water_errand):
+			assert_true(marker.visible, "a villager on the errand went invisible")
+		if marker.water_errand == WaterErrand.AT_HOME and world.poured > 0:
+			break
+
+
+# -- nothing to fetch from --------------------------------------------------
+
+func test_a_villager_with_no_world_never_sets_out():
+	marker.set_planner(FixedPlanner.new([
+		{"time_block": "morning", "location_tag": "home", "activity": "idle"},
+		{"time_block": "midday", "location_tag": "home", "activity": "idle"},
+		{"time_block": "evening", "location_tag": "home", "activity": "idle"},
+		{"time_block": "night", "location_tag": "home", "activity": "idle"},
+	]))
+	marker._process(0.1)
+	assert_eq(marker.water_errand, WaterErrand.AT_HOME)
+
+
+func test_a_villager_with_no_house_of_their_own_never_sets_out():
+	var world := _a_watered_villager(0.0)
+	world.door_position = Vector2(50000, 50000)  # their house is nowhere near
+	marker._process(0.1)
+	assert_eq(marker.water_errand, WaterErrand.AT_HOME)
+
+
+# -- the farmhouse's own tank (docs/concept/village_water.md mechanism 3) ---
+#
+# Asked for directly: *"they then drink from their houses stock or use it to
+# water crops in case of a farmhouse"*. A farmhouse is nobody's home, so
+# nothing drinks there -- its tank is emptied by the FIELD. When it runs
+# down to the household's drinking reserve the beds stop being watered, and
+# that is what sends the farmer to the well for it.
+
+const VillageFarm = preload("res://src/gameplay/village_farm.gd")
+const BuildingCatalog = preload("res://src/gameplay/building_catalog.gd")
+
+
+## A world with a cottage AND the farmhouse its farmer works, each with a
+## tank of its own that the test can run dry independently.
+class FarmingWorld:
+	extends StubWorld
+	var house_due := false
+	var farmhouse_due := false
+	var crop_water := true
+	var drawn := 0
+	var watered: Array = []
+	var poured: Array = []
+	var door_position := Vector2(1000, 1000)
+	var farmhouse_cell := Vector2i(200, 200)
+
+	const HOUSE_ORIGIN := Vector2i(4, 4)
+	const FARMHOUSE_ORIGIN := Vector2i(2, 2)
+
+	func building_door_near(pixel_position: Vector2, radius_tiles: float) -> Dictionary:
+		if pixel_position.distance_to(door_position) > radius_tiles * 16.0:
+			return {}
+		return {
+			"id": "house_small", "chunk_coord": Vector2i(0, 0),
+			"origin_local": HOUSE_ORIGIN, "seed": 7,
+		}
+
+	func building_at_global(global_x: int, global_y: int) -> Dictionary:
+		if Vector2i(global_x, global_y) != farmhouse_cell:
+			return {}
+		return {
+			"id": VillageFarm.FARM_BUILDING_ID, "chunk_coord": Vector2i(1, 1),
+			"origin_local": FARMHOUSE_ORIGIN, "seed": 9,
+		}
+
+	func water_trip_due_at(record: Dictionary) -> bool:
+		if String(record.get("id", "")) == VillageFarm.FARM_BUILDING_ID:
+			return farmhouse_due
+		return house_due
+
+	func pour_bucket_into_house(_chunk_coord: Vector2i, origin_local: Vector2i) -> bool:
+		poured.append(origin_local)
+		return true
+
+	func draw_crop_water_at_global(_global_x: int, _global_y: int) -> bool:
+		if not crop_water:
+			return false
+		drawn += 1
+		return true
+
+	func water_farm_plot_at_global(global_x: int, global_y: int) -> bool:
+		watered.append(Vector2i(global_x, global_y))
+		return true
+
+
+func _a_farmer_with_a_farmhouse() -> FarmingWorld:
+	var world := FarmingWorld.new()
+	world.door_position = marker.home_position
+	marker.setup(world, TILE_SIZE)
+	marker.set_planner(FixedPlanner.new([
+		{"time_block": "morning", "location_tag": "home", "activity": "idle"},
+		{"time_block": "midday", "location_tag": "home", "activity": "idle"},
+		{"time_block": "evening", "location_tag": "home", "activity": "idle"},
+		{"time_block": "night", "location_tag": "home", "activity": "idle"},
+	]))
+	marker.field_cells = [world.farmhouse_cell + Vector2i(1, 1), world.farmhouse_cell + Vector2i(2, 1)]
+	marker.stock_building_cell = world.farmhouse_cell
+	return world
+
+
+## Stands the villager on each leg's own target so the test is about the
+## ERRAND rather than about walking speed.
+func _walk_the_farm_errand(world: FarmingWorld, steps: int = 12) -> void:
+	for i in steps:
+		marker.position = marker._resolve_location(
+			WaterErrand.location_tag_for(marker.water_errand)
+		)
+		marker._process(0.1)
+		if marker.water_errand == WaterErrand.AT_HOME and not world.poured.is_empty():
+			return
+
+
+# -- the field is billed to the farmhouse -----------------------------------
+
+func test_watering_the_beds_is_paid_for_out_of_the_farmhouse_tank():
+	var world := _a_farmer_with_a_farmhouse()
+	marker._field_index = 0
+	marker._work_field_cell()
+	assert_eq(world.drawn, 1, "a visit to the beds cost the farmhouse nothing")
+	assert_false(world.watered.is_empty(), "the beds never got wet")
+
+
+func test_a_farmhouse_down_to_its_reserve_stops_the_beds_being_watered():
+	var world := _a_farmer_with_a_farmhouse()
+	world.crop_water = false
+	marker._field_index = 0
+	marker._work_field_cell()
+	assert_true(
+		world.watered.is_empty(),
+		"the field drank water the farmhouse did not have"
+	)
+
+
+## A farmer with no farmhouse of their own -- a village that has not raised
+## one -- keeps the free drip they always had. There is no tank to bill it
+## to, and failing CLOSED here would kill every such field on this commit.
+func test_a_farmer_with_no_farmhouse_still_waters_their_beds():
+	var world := _a_farmer_with_a_farmhouse()
+	world.crop_water = false
+	marker.stock_building_cell = NpcMarker.NO_STOCK_BUILDING
+	marker._field_index = 0
+	marker._work_field_cell()
+	assert_false(world.watered.is_empty())
+
+
+# -- so somebody fetches water for the farmhouse too ------------------------
+
+func test_a_farmer_sets_out_when_the_farmhouse_tank_is_low():
+	var world := _a_farmer_with_a_farmhouse()
+	world.farmhouse_due = true
+	marker._process(0.1)
+	assert_eq(marker.water_errand, WaterErrand.TO_WELL)
+	assert_eq(marker.carried_item(), WaterErrand.BUCKET_EMPTY)
+
+
+func test_the_bucket_for_the_field_is_carried_to_the_farmhouse_not_the_cottage():
+	var world := _a_farmer_with_a_farmhouse()
+	world.farmhouse_due = true
+	_walk_the_farm_errand(world)
+	assert_eq(world.poured, [FarmingWorld.FARMHOUSE_ORIGIN])
+
+
+## The farmhouse's DOORSTEP, the one cell a building is reached from
+## (BuildingCatalog.doorstep_of, the same rule building_door_near keeps) --
+## not its anchor, which is a cell the building itself stands on. A
+## villager who walks to the anchor pours the bucket standing inside the
+## farmhouse's own art.
+func test_the_walk_home_with_a_full_bucket_ends_at_the_farmhouse_doorstep():
+	var world := _a_farmer_with_a_farmhouse()
+	world.farmhouse_due = true
+	for i in 4:
+		marker.position = marker._resolve_location(
+			WaterErrand.location_tag_for(marker.water_errand)
+		)
+		marker._process(0.1)
+		if marker.carried_item() == WaterErrand.BUCKET_FULL:
+			break
+	assert_eq(marker.carried_item(), WaterErrand.BUCKET_FULL, "precondition: they filled the bucket")
+	assert_eq(
+		marker._resolve_location(marker.current_location_tag()),
+		marker._cell_centre(
+			world.farmhouse_cell + BuildingCatalog.doorstep_of(VillageFarm.FARM_BUILDING_ID)
+		),
+		"a full bucket for the field was carried somewhere other than the farmhouse door"
+	)
+
+
+## People before plants -- the same order the drinking reserve keeps.
+func test_their_own_house_is_served_before_the_field():
+	var world := _a_farmer_with_a_farmhouse()
+	world.house_due = true
+	world.farmhouse_due = true
+	_walk_the_farm_errand(world)
+	assert_eq(world.poured, [FarmingWorld.HOUSE_ORIGIN])
+
+
+## An errand is a thing somebody is in the MIDDLE of: whichever building
+## sent them is the building the bucket comes back to, however the other
+## one's tank changes while they walk.
+func test_a_villager_does_not_change_their_mind_halfway_across_the_square():
+	var world := _a_farmer_with_a_farmhouse()
+	world.farmhouse_due = true
+	marker._process(0.1)
+	assert_true(WaterErrand.is_running(marker.water_errand), "precondition: they set out")
+	world.house_due = true
+	_walk_the_farm_errand(world)
+	assert_eq(world.poured, [FarmingWorld.FARMHOUSE_ORIGIN])
+
+
+func test_a_villager_with_no_farmhouse_is_never_sent_for_one():
+	var world := _a_farmer_with_a_farmhouse()
+	world.farmhouse_due = true
+	marker.stock_building_cell = NpcMarker.NO_STOCK_BUILDING
+	marker._process(0.1)
+	assert_eq(marker.water_errand, WaterErrand.AT_HOME)
+
+
+# -- the bucket is actually in their hand -----------------------------------
+#
+# The other half of the report: *"it's not visible what they are doing"*.
+# WaterErrand.carried() has always SAID what is in the villager's hand;
+# until this it went nowhere, so the errand ran invisibly and the crowd at
+# the well was replaced by people walking about for no apparent reason.
+
+func test_a_villager_on_the_errand_is_carrying_something_you_can_see():
+	var view := _bind_real_view()
+	_a_watered_villager(0.0)
+	marker._process(0.1)
+	assert_true(WaterErrand.is_running(marker.water_errand), "precondition: they set out")
+	assert_true(view.is_slot_equipped("tool"), "the errand is invisible: their hands are empty")
+	assert_ne(view.tool_slot_texture(), null)
+
+
+func test_a_villager_off_the_errand_is_empty_handed():
+	var view := _bind_real_view()
+	_a_watered_villager(HouseholdWater.TANK_LITRES)
+	marker._process(0.1)
+	assert_false(view.is_slot_equipped("tool"))
+
+
+## Pillar 2 at the one point it can actually fail: the two legs must not
+## look alike, or nothing has been fixed.
+func test_the_bucket_they_carry_back_is_not_the_one_they_carried_out():
+	var view := _bind_real_view()
+	var world := _a_watered_villager(0.0)
+	marker._process(0.1)
+	var carried_out := view.tool_slot_texture()
+	assert_ne(carried_out, null, "precondition: they set out with something")
+	for i in 4:
+		marker.position = marker._resolve_location(
+			WaterErrand.location_tag_for(marker.water_errand)
+		)
+		marker._process(0.1)
+		if marker.carried_item() == WaterErrand.BUCKET_FULL:
+			break
+	assert_eq(marker.carried_item(), WaterErrand.BUCKET_FULL, "precondition: they filled it")
+	assert_ne(view.tool_slot_texture(), carried_out, "a full bucket looks exactly like an empty one")
+
+
+func test_they_put_the_bucket_down_once_they_are_home():
+	var view := _bind_real_view()
+	var world := _a_watered_villager(0.0)
+	marker._process(0.1)
+	assert_true(view.is_slot_equipped("tool"), "precondition: they set out with it")
+	world.house_level = HouseholdWater.TANK_LITRES  # filled while they walked
+	_walk_the_errand(world)
+	assert_eq(marker.water_errand, WaterErrand.AT_HOME, "precondition: the errand ended")
+	assert_false(view.is_slot_equipped("tool"), "they are still holding the bucket indoors")
+
+
+# -- an errand you cannot finish -------------------------------------------
+#
+# There is no pathfinding here, only a straight line at the target and a
+# slide along whatever it runs into (_slid_along_walls), so a villager with
+# a wall, a rail or a building between them and the well walks at it
+# forever. Measured on the probe village (tools/probe_farm_water.gd): one
+# of three field workers ended a 600s run still `to_well`, 104 px short of
+# a well it had had 570 seconds to reach, having worked 156 of 6000 ticks
+# against its own baseline of 2750. It never farmed again.
+
+## Walks the errand until they give up, standing them still so they make no
+## progress at all -- which is what a wall looks like from in here.
+func _walk_into_a_wall(steps: int = 4000) -> void:
+	var stuck := marker.position
+	for i in steps:
+		marker.position = stuck
+		marker._process(0.1)
+		if not WaterErrand.is_running(marker.water_errand):
+			return
+
+
+func test_a_villager_who_cannot_reach_the_well_puts_the_bucket_down():
+	var world := _a_watered_villager(0.0)
+	marker._process(0.1)
+	assert_true(WaterErrand.is_running(marker.water_errand), "precondition: they set out")
+	_walk_into_a_wall()
+	assert_eq(marker.water_errand, WaterErrand.AT_HOME, "they walked at the wall for ever")
+	assert_eq(marker.carried_item(), "", "still holding a bucket they never filled")
+	assert_eq(world.poured, 0, "they poured a bucket they never filled")
+
+
+func test_they_get_on_with_their_day_before_trying_again():
+	_a_watered_villager(0.0)
+	marker._process(0.1)
+	_walk_into_a_wall()
+	assert_eq(marker.water_errand, WaterErrand.AT_HOME, "precondition: they gave up")
+	marker._process(0.1)
+	assert_eq(
+		marker.water_errand, WaterErrand.AT_HOME,
+		"they turned round at the door and walked into the same wall again"
+	)
+
+
+func test_they_try_again_the_next_day():
+	_a_watered_villager(0.0)
+	marker._process(0.1)
+	_walk_into_a_wall()
+	assert_eq(marker.water_errand, WaterErrand.AT_HOME, "precondition: they gave up")
+	marker._process(NpcMarker.ERRAND_RETRY_SECONDS)
+	marker._process(0.1)
+	assert_true(WaterErrand.is_running(marker.water_errand), "they gave up on water for good")
+
+
+## The other side of the same constant: patience has to be generous enough
+## that a REAL walk never trips it. This villager teleports nowhere -- they
+## walk to the well and back at their own speed.
+func test_a_villager_who_can_walk_there_still_finishes_the_errand():
+	var world := _a_watered_villager(0.0)
+	var walked := 0
+	for i in 4000:
+		marker._process(0.1)
+		walked = i
+		if world.poured > 0:
+			break
+	assert_gt(world.poured, 0, "a villager who could simply walk to the well never got there")
+	assert_lt(walked, 3999, "they were still walking after %.0f simulated seconds" % 400.0)
+# -- walls are solid to a villager too -------------------------------------
+#
+# Reported live: "NPCs walk straight through houses, ignoring the hitbox".
+# The hitbox was never broken -- every building really does get a
+# StaticBody2D (EarthChunkManager._spawn_building_node), which is exactly
+# what stops the PLAYER. But an NpcMarker is a plain Sprite2D assigning
+# `position` directly, so no physics body is ever consulted on its behalf.
+# The marker has to ASK -- and now both asks: the router plans around
+# walls, and _slid_along_walls refuses a step into one.
+
+
+## A world exposing just the two hooks NpcMarker duck-types on: the biome
+## read its water check makes, and the building lookup the new wall check
+## makes. Blocks one 3x3 house squarely between the villager and its home.
+class HouseInTheWayWorld:
+	extends RefCounted
+	var house_min := Vector2i(63, 60)
+	var house_max := Vector2i(65, 62)
+	var trespassed := false
+
+	func biome_at_global(_x: int, _y: int) -> String:
+		return "grassland"
+
+	func covers(tile: Vector2i) -> bool:
+		return (
+			tile.x >= house_min.x and tile.x <= house_max.x
+			and tile.y >= house_min.y and tile.y <= house_max.y
+		)
+
+	func piece_blocks_movement_at_global(x: int, y: int) -> bool:
+		return covers(Vector2i(x, y))
+
+
+func test_a_villager_never_walks_through_a_house():
+	var world := HouseInTheWayWorld.new()
+	marker.setup(world, TILE_SIZE)
+	# Standing west of the house, with home due east of it -- the straight
+	# line between the two runs right through the building.
+	marker.position = Vector2(61 * TILE_SIZE + 8, 61 * TILE_SIZE + 8)
+	marker.home_position = Vector2(68 * TILE_SIZE + 8, 61 * TILE_SIZE + 8)
+	marker.workspot_position = marker.home_position
+	marker.landmarks = {}
+	for i in 600:
+		marker._process(0.05)
+		var tile := Vector2i(
+			floori(marker.position.x / TILE_SIZE), floori(marker.position.y / TILE_SIZE)
+		)
+		assert_false(
+			world.covers(tile),
+			"the villager is standing inside the house at %s (step %d)" % [tile, i]
+		)
+		if world.covers(tile):
+			return  # one failure is the point; don't flood the report
+
+
+func test_a_villager_with_no_world_bound_walks_exactly_as_before():
+	# Fail-open, the same contract _is_in_water already keeps: an unbound
+	# marker (every pre-existing fixture) must be completely unaffected.
+	marker.position = Vector2(1000, 1000)
+	marker.home_position = Vector2(1000, 1200)
+	marker.workspot_position = marker.home_position
+	var before := marker.position
+	for i in 20:
+		marker._process(0.05)
+	assert_gt(
+		before.distance_to(marker.position), 0.0,
+		"an NPC with no world bound stopped moving"
+	)
+
+
+func test_a_villager_routes_around_a_house_and_actually_gets_home():
+	# The bug sliding could never fix (see docs/concept/navigation.md):
+	# the wall slide keeps a villager ALONG a wall it brushes, but a
+	# villager whose own doorstep sits directly behind its own house has
+	# nowhere to slide to and presses into the wall forever. Avoiding the
+	# house was never the hard part -- ARRIVING was.
+	var world := HouseInTheWayWorld.new()
+	marker.setup(world, TILE_SIZE)
+	marker.position = Vector2(61 * TILE_SIZE + 8, 61 * TILE_SIZE + 8)
+	marker.home_position = Vector2(68 * TILE_SIZE + 8, 61 * TILE_SIZE + 8)
+	marker.workspot_position = marker.home_position
+	marker.landmarks = {}
+	var closest := INF
+	for i in 2000:
+		marker._process(0.05)
+		closest = minf(closest, marker.position.distance_to(marker.home_position))
+		if closest <= TILE_SIZE:
+			break
+	assert_lte(
+		closest, float(TILE_SIZE),
+		"the villager never got home -- closest approach was %.1fpx, with a house in the way" % closest
+	)
+
+
+func test_routing_still_never_puts_a_villager_inside_the_house():
+	# The gate stays underneath the router: a route can go stale (a house
+	# raised across it mid-walk), and this is what guarantees a stale route
+	# still cannot end inside a wall.
+	var world := HouseInTheWayWorld.new()
+	marker.setup(world, TILE_SIZE)
+	marker.position = Vector2(61 * TILE_SIZE + 8, 61 * TILE_SIZE + 8)
+	marker.home_position = Vector2(68 * TILE_SIZE + 8, 61 * TILE_SIZE + 8)
+	marker.workspot_position = marker.home_position
+	marker.landmarks = {}
+	for i in 2000:
+		marker._process(0.05)
+		var tile := Vector2i(
+			floori(marker.position.x / TILE_SIZE), floori(marker.position.y / TILE_SIZE)
+		)
+		if world.covers(tile):
+			assert_false(true, "routing put the villager inside the house at %s" % tile)
+			return
+	assert_true(true)
+
+
+## A world with a river running north-south, crossable but slow, and a
+## cliff the villager must never climb. Exposes exactly the hooks
+## AgentPassability duck-types on.
+class RiverAndCliffWorld:
+	extends RefCounted
+	var river_x := 64
+	var river_gap_y := 70   # the one dry tile in the river's course
+	var cliff_x := 66
+
+	func biome_at_global(_x: int, _y: int) -> String:
+		return "grassland"
+
+	func piece_blocks_movement_at_global(_x: int, _y: int) -> bool:
+		return false
+
+	func slope_at_global(x: int, _y: int) -> float:
+		return 70.0 if x == cliff_x else 0.0
+
+	func is_river_at_global(x: int, y: int) -> bool:
+		return x == river_x and y != river_gap_y
+
+	func is_lake_at_global(_x: int, _y: int) -> bool:
+		return false
+
+
+func test_a_villager_prefers_the_dry_crossing_over_wading():
+	# Water is costly, not blocked (creatures must stand on it to drink,
+	# and both they and villagers already swim), so the router should route
+	# THROUGH the one dry gap rather than wading straight across.
+	var world := RiverAndCliffWorld.new()
+	marker.setup(world, TILE_SIZE)
+	marker.position = Vector2(62 * TILE_SIZE + 8, 70 * TILE_SIZE + 8)
+	marker.home_position = Vector2(65 * TILE_SIZE + 8, 70 * TILE_SIZE + 8)
+	marker.workspot_position = marker.home_position
+	marker.landmarks = {}
+	var waded := false
+	for i in 400:
+		marker._process(0.05)
+		var tile := Vector2i(
+			floori(marker.position.x / TILE_SIZE), floori(marker.position.y / TILE_SIZE)
+		)
+		if world.is_river_at_global(tile.x, tile.y):
+			waded = true
+		if marker.position.distance_to(marker.home_position) <= TILE_SIZE:
+			break
+	assert_false(waded, "the villager waded the river with a dry crossing right there")
+
+
+func test_a_villager_never_climbs_a_cliff():
+	# Slope is absolute, unlike water: TerrainPassability.is_passable says
+	# 70 degrees is not climbable, so no step may ever land there.
+	var world := RiverAndCliffWorld.new()
+	marker.setup(world, TILE_SIZE)
+	marker.position = Vector2(65 * TILE_SIZE + 8, 70 * TILE_SIZE + 8)
+	marker.home_position = Vector2(68 * TILE_SIZE + 8, 70 * TILE_SIZE + 8)
+	marker.workspot_position = marker.home_position
+	marker.landmarks = {}
+	for i in 400:
+		marker._process(0.05)
+		var tile_x := floori(marker.position.x / TILE_SIZE)
+		assert_ne(tile_x, world.cliff_x, "the villager walked onto the cliff at step %d" % i)
+		if tile_x == world.cliff_x:
+			return
+
+
+## Patience has to mean "I am getting nowhere", NOT "this is taking a
+## while" -- and the difference is not academic. Measured: merging
+## TileRouter (docs/concept/navigation.md) made villagers walk real routes
+## around buildings instead of pressing into them, and a route is LONGER
+## than the straight line a time budget was scaled from. Every well trip in
+## the probe village stopped completing -- farmer 1 went from 5 trips and
+## 51 tendings to 0 and 8, its beds dry for 5110 of 6000 ticks -- while the
+## villagers themselves were walking perfectly well.
+func test_a_villager_making_slow_progress_is_not_given_up_on():
+	var world := _a_watered_villager(0.0)
+	marker._process(0.1)
+	assert_true(WaterErrand.is_running(marker.water_errand), "precondition: they set out")
+
+	# A long way round: they close on the well far slower than a straight
+	# line would -- and never reach it inside this test -- but they are
+	# closing on it every single frame. `walked` is kept independently of
+	# marker.position, because _process moves them too and reading it back
+	# would hand them the straight-line walk this test exists to avoid.
+	var target := marker._resolve_location(WaterErrand.location_tag_for(marker.water_errand))
+	var walked := marker.position
+	for i in 600:
+		walked = walked.move_toward(target, 0.2)
+		marker.position = walked
+		marker._process(0.1)
+		if not WaterErrand.is_running(marker.water_errand):
+			break
+	assert_gt(
+		walked.distance_to(target), NpcMarker.ERRAND_REACH_PX,
+		"precondition: this walk must not finish, or it tests nothing"
+	)
+	assert_true(
+		WaterErrand.is_running(marker.water_errand),
+		"they put the bucket down while still walking steadily toward the well"
+	)
+
+
+# -- starving to death (docs/concept/village_mortality.md mechanism 2) ------
+#
+# Asked for directly: *"make them starve and die if they don't have
+# food"*. The check sits beside the hunger interrupt, which is where a
+# villager's relationship with food is already decided.
+
+const Starvation = preload("res://src/emergence/starvation.gd")
+
+
+## A world that only remembers who it was told died.
+class BuryingWorld:
+	extends StubWorld
+	var buried: Array = []
+
+	func record_villager_death(settlement_id: String, seed_value: int) -> bool:
+		buried.append({"settlement": settlement_id, "seed": seed_value})
+		return true
+
+
+## A villager with an empty market to buy from and no way to feed
+## themselves from their own work.
+##
+## The occupation matters and is chosen, not inherited: seed 1 (this
+## file's default) is a HUNTER, and a hunter standing in a region full of
+## game feeds itself off its own work (NpcEconomy.feeds_itself_from_work)
+## and correctly never starves -- which is what
+## test_a_producer_who_feeds_itself_from_its_work_does_not_starve pins.
+## Seed 2 is a nurse: somebody who has to BUY their food, and so has
+## nothing when the market is empty.
+func _a_villager_with_nothing_to_eat() -> BuryingWorld:
+	var world := BuryingWorld.new()
+	marker.identity = NpcIdentity.new(2)
+	marker.setup(world, TILE_SIZE)
+	marker.settlement_id = "settlement:test"
+	marker.setup_economy(VillageMarket.new())
+	assert_ne(marker.identity.occupation, "hunter", "precondition: they cannot feed themselves")
+	return world
+
+
+## Runs them past the whole starvation window.
+func _starve(steps: int = 400) -> void:
+	var slice := Starvation.seconds_to_die() / 100.0
+	for i in steps:
+		if not is_instance_valid(marker) or marker.is_queued_for_deletion():
+			return
+		marker._process(slice)
+
+
+func test_a_villager_with_nothing_to_eat_starves_to_death():
+	_a_villager_with_nothing_to_eat()
+	_starve()
+	assert_true(marker.is_queued_for_deletion(), "they starved and stayed standing there")
+
+
+func test_the_village_is_told_who_died():
+	var world := _a_villager_with_nothing_to_eat()
+	_starve()
+	assert_eq(world.buried.size(), 1, "a villager died and the village never heard")
+	assert_eq(world.buried[0]["seed"], marker.identity.seed_value)
+	assert_eq(world.buried[0]["settlement"], "settlement:test")
+
+
+func test_a_villager_who_keeps_eating_does_not_die():
+	var world := _a_villager_with_nothing_to_eat()
+	var slice := Starvation.seconds_to_die() / 100.0
+	for i in 400:
+		if not is_instance_valid(marker) or marker.is_queued_for_deletion():
+			break
+		marker.economy.needs.feed()
+		marker._process(slice)
+	assert_false(marker.is_queued_for_deletion(), "a villager who ate every day still died")
+	assert_true(world.buried.is_empty())
+
+
+## A villager nobody is simulating a village for still has a body.
+func test_a_villager_with_no_village_to_tell_still_dies():
+	var world := StubWorld.new()
+	marker.identity = NpcIdentity.new(2)
+	marker.setup(world, TILE_SIZE)
+	marker.setup_economy(VillageMarket.new())
+	_starve()
+	assert_true(marker.is_queued_for_deletion())
+
+
+## A producer standing in a region that still yields eats off its own
+## work, and mortality must not break that. The famine chain this file
+## already carries (see the hunger interrupt's own note: a hunter sent to
+## an empty market "never worked again") exists precisely because a
+## producer who cannot feed itself deadlocks -- and now it would die.
+func test_a_producer_who_feeds_itself_from_its_work_does_not_starve():
+	var world := BuryingWorld.new()
+	marker.identity = NpcIdentity.new(1)
+	marker.setup(world, TILE_SIZE)
+	marker.settlement_id = "settlement:test"
+	marker.setup_economy(VillageMarket.new())
+	assert_eq(marker.identity.occupation, "hunter", "precondition: somebody who works for their food")
+	_starve()
+	assert_false(
+		marker.is_queued_for_deletion(),
+		"a hunter starved to death in a region full of game"
+	)
+	assert_true(world.buried.is_empty())
+
+
+## A marker with no economy has no hunger to die of, and must not crash.
+func test_a_villager_with_no_economy_never_starves():
+	marker._process(0.1)
+	assert_false(marker.is_queued_for_deletion())

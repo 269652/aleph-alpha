@@ -51,6 +51,25 @@ static func shows_readouts(_mode: int) -> bool:
 	return true
 
 
+## Whether the world's own affordance HINTS -- the "Talk (G)"/"Chop (Space)"
+## prompt, the hover tooltip, the charge meter -- may be drawn.
+##
+## Reported live with a screenshot: the build palette open, with "Tree",
+## "Chop (Space)" and a held-item card drawn straight over it. The tempting
+## reading is z-order, but "Chop (Space)" is not a label that landed in a bad
+## place: in planner mode there is no chopping, the hotbar is gone, and the
+## key it names does something else. The hint is WRONG, not covered, and
+## would still be wrong drawn in an empty corner of the screen.
+##
+## So this tracks shows_hotbar exactly (pinned by
+## test_hints_and_the_hotbar_agree_in_both_modes): a hint advertises an
+## action, and the player's hands are where those actions live. Readouts are
+## deliberately NOT swept in -- see shows_readouts above, which stays true in
+## both modes because it reports what is TRUE rather than offering an action.
+static func shows_world_hints(mode: int) -> bool:
+	return mode == Mode.RPG
+
+
 ## Whether a click on the world plants a blueprint. False in rpg mode on
 ## purpose: a stray click while swinging a sword must never plan a house.
 static func arms_build_cursor(mode: int) -> bool:
@@ -76,5 +95,17 @@ static func pauses_world(_mode: int) -> bool:
 ## What the toggle button says. Names the mode it would switch TO, not the
 ## one you are in: a button is a thing you press to get somewhere, and
 ## labelling it with where you already are is the classic ambiguity.
+## What the planner SWITCH is captioned (see docs/concept/hud.md "The planner
+## toggle is a switch"). Constant, unlike toggle_label below: a switch shows
+## what IS, so its caption names the thing it controls and the switch itself
+## carries the state. The old caption read "Planner Mode" while you were in
+## RPG mode, which a player could read either way and nothing on screen
+## settled.
+const SWITCH_LABEL := "Planner"
+
+
+## What a BUTTON that flips the mode should be captioned -- the mode you get
+## by pressing it. Kept for callers that really do describe the action (the
+## key-binding row still does); the HUD switch uses SWITCH_LABEL instead.
 static func toggle_label(mode: int) -> String:
 	return "Planner Mode" if mode == Mode.RPG else "RPG Mode"

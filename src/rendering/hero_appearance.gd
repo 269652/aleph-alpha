@@ -63,6 +63,22 @@ const CLASS_PALETTES := {
 	"nurse": {
 		"tunic": Color(0.82, 0.8, 0.76), "trim": Color(0.68, 0.28, 0.32), "legs": Color(0.5, 0.48, 0.46),
 	},
+	# The two trades added for the sawmill and the cart (NpcIdentity.
+	# OCCUPATIONS) reached the villages before they reached this table, and
+	# an occupation that is not here does not merely lose its colours: it
+	# falls to _FALLBACK_CLASS for those, and outfit_variant_for's own
+	# maxi(find(...), 0) turns "not found" into index 0 -- the WARRIOR's
+	# outfit row. Every lumberjack and carter in every village was therefore
+	# dressed as a soldier, reported live with one in shot: *"a weird npc"*,
+	# pulling a cart across a farm in plate with an axe on its back. Appended
+	# rather than inserted: the first seven entries are the player archetypes
+	# and their order IS the row mapping (see outfit_variant_for).
+	"lumberjack": {
+		"tunic": Color(0.46, 0.26, 0.2), "trim": Color(0.74, 0.66, 0.46), "legs": Color(0.3, 0.26, 0.2),
+	},
+	"carter": {
+		"tunic": Color(0.36, 0.42, 0.52), "trim": Color(0.64, 0.5, 0.28), "legs": Color(0.26, 0.26, 0.28),
+	},
 }
 const _FALLBACK_CLASS := "warrior"
 
@@ -177,7 +193,12 @@ func option_count(axis: String) -> int:
 		"trim":
 			return TRIM_COLORS.size()
 		"head":
-			return IllustratedCharacterSprite.HEAD_GRID_COLUMNS * IllustratedCharacterSprite.HEAD_GRID_ROWS
+			# The faces the art can really DRAW, not the grid's own 100 cells
+			# -- 19 of those fall back to the procedural head (see
+			# IllustratedCharacterSprite.UNUSABLE_HEAD_CELLS). Counting the
+			# grid meant about one hero in five was handed one, reported live
+			# as *"a rough sketch with a square as head"*.
+			return IllustratedCharacterSprite.usable_head_cells().size()
 		_:
 			return 0
 
@@ -232,7 +253,7 @@ func appearance_from_choices(class_id: String, choices: Dictionary, seed_value: 
 		# portrait) -- a real index, not derived from "seed" the way it used
 		# to be, so the creator can cycle it independently of a full DNA
 		# reroll (reported: "you can't choose different heads").
-		"head_index": _wrap(int(choices.get("head", 0)), option_count("head")),
+		"head_index": head_cell_for_axis(int(choices.get("head", 0))),
 		# Which pre-coloured outfit row the illustrated rig dresses this hero
 		# in -- carried on the appearance rather than re-rolled inside each
 		# renderer, so the creator's class icon (a composited portrait) and
@@ -253,8 +274,35 @@ func choices_from_appearance(appearance: Dictionary) -> Dictionary:
 		"beard": int(appearance.get("beard", 0)),
 		"eyes": maxi(EYE_COLORS.find(appearance.get("eyes", EYE_COLORS[0])), 0),
 		"trim": maxi(TRIM_COLORS.find(appearance.get("trim", TRIM_COLORS[0])), 0),
-		"head": int(appearance.get("head_index", 0)),
+		"head": axis_for_head_cell(int(appearance.get("head_index", 0))),
 	}
+
+
+## The real head.png cell at position `axis_index` on the head axis. The axis
+## only ever walks drawable faces (see option_count("head")), so cycling
+## never stops on a broken one and a rolled hero never wears one.
+##
+## appearance.head_index stays a real CELL index either way -- it is what
+## IllustratedCharacterSprite.generate_head_texture is indexed by -- so this
+## is a mapping, not a change of what head_index means.
+static func head_cell_for_axis(axis_index: int) -> int:
+	var usable := IllustratedCharacterSprite.usable_head_cells()
+	if usable.is_empty():
+		return 0
+	return usable[posmod(axis_index, usable.size())]
+
+
+## Where a real head.png cell sits on the head axis -- the inverse of
+## head_cell_for_axis, so a creator resuming from a built appearance picks up
+## on the face it is actually wearing.
+##
+## A cell that is not on the axis at all (a hero saved before the axis
+## narrowed to drawable faces) resumes at the first face rather than
+## refusing: it was already falling back to the procedural head, and
+## snapping to something real is the better of two imperfect answers.
+static func axis_for_head_cell(cell_index: int) -> int:
+	var at := IllustratedCharacterSprite.usable_head_cells().find(cell_index)
+	return at if at >= 0 else 0
 
 
 ## Wraps an index into [0, count) in both directions, so a creator's

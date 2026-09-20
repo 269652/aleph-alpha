@@ -227,6 +227,14 @@ static func _size_spread(bands: Array, start: int, count: int) -> float:
 	return (largest - smallest) / largest
 
 
+## The sheets' own chroma-key background. Public because a caller reading
+## a cell has to agree with this module about what is background and what
+## is drawing -- IllustratedStructureSprite._is_rule_line_row does -- and
+## two independent copies of one key is how a fringe survives a crop.
+static func is_background(color: Color) -> bool:
+	return _is_magenta(color)
+
+
 static func _is_magenta(color: Color) -> bool:
 	return (
 		color.r >= _MAGENTA_RED_MIN and color.b >= _MAGENTA_BLUE_MIN

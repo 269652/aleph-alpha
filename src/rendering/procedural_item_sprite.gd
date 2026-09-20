@@ -66,6 +66,15 @@ const HIGHLIGHT_LIGHTEN := 0.25
 ## Push base item colors toward a brighter, more saturated look before shading.
 const BASE_SATURATE := 0.16
 
+## The water standing in a carried bucket.
+const WATER_COLOR := Color(0.32, 0.55, 0.72)
+
+## The pail itself: bare wood. Named once and shared by all three bucket
+## looks below, because a full bucket must be the SAME pail with water in
+## it -- two colours that drifted apart would read as two different
+## objects, and the errand would stop being one thing you watch.
+const BUCKET_WOOD := Color(0.52, 0.36, 0.2)
+
 var _palette := PixelPalette.new()
 
 ## id -> {color, shape}. shape is one of: round, oval, fang, sword, axe.
@@ -98,6 +107,14 @@ const _ITEM_LOOKS := {
 	"stick": {"color": Color(0.45, 0.32, 0.18), "shape": "sword"},
 	"sharp_shard": {"color": Color(0.7, 0.7, 0.74), "shape": "fang"},
 	"plant_fibre": {"color": Color(0.55, 0.7, 0.3), "shape": "oval"},
+	# The household's pail (docs/concept/village_water.md pillar 2). Three
+	# ids, ONE object: the catalog item a house keeps by its door, and the
+	# two legs of the errand WaterErrand names. An empty bucket and a full
+	# one must not look alike -- that difference is the entire UI the water
+	# errand has -- and the full one must still be the same pail.
+	"bucket": {"color": BUCKET_WOOD, "shape": "bucket"},
+	"bucket_empty": {"color": BUCKET_WOOD, "shape": "bucket"},
+	"bucket_full": {"color": BUCKET_WOOD, "shape": "bucket_full"},
 	# Taming gear (see docs/concept/taming.md). The lasso is braided grass
 	# gone pale and dry -- rope, not the green fibre it came from, so the two
 	# never read as the same thing sitting side by side in the inventory.
@@ -236,6 +253,10 @@ func generate_image(item_id: String) -> Image:
 			_draw_plate(image, base, 4, 2, SIZE - 4, SIZE - 2)  # narrower greaves
 		"boots":
 			_draw_plate(image, base, 3, 8, SIZE - 3, SIZE - 2)  # short, low boots
+		"bucket":
+			_draw_bucket(image, base, false)
+		"bucket_full":
+			_draw_bucket(image, base, true)
 		"campfire":
 			_draw_campfire(image)
 		"furnace":
@@ -278,6 +299,55 @@ func _draw_plate(image: Image, base: Color, x0: int, y0: int, x1: int, y1: int) 
 			elif y >= y1 - 2:
 				color = shade
 			image.set_pixel(x, y, color)
+
+
+## A pail: a tapered body under a rim, with a bail arcing over it.
+##
+## The one object the whole water errand is legible through (docs/concept/
+## village_water.md pillar 2 -- "no label, no icon, no UI"). `filled`
+## stands water at the brim and changes NOTHING else: a full bucket that
+## altered the pail as well would read as a second object rather than as
+## the same one coming back.
+func _draw_bucket(image: Image, base: Color, filled: bool) -> void:
+	var outline := base.darkened(OUTLINE_DARKEN)
+	var highlight := _palette.highlight(base)
+	var shade := base.darkened(SHADE_DARKEN)
+	var top := int(SIZE * 0.34)
+	var bottom := SIZE - 3
+	var half_top := int(SIZE * 0.28)
+	var half_bottom := int(SIZE * 0.20)
+	var cx: int = SIZE / 2
+
+	# The bail, springing from the rim and arcing over the top.
+	for x in range(cx - half_top, cx + half_top + 1):
+		var along := float(x - (cx - half_top)) / maxf(float(2 * half_top), 1.0)
+		var arc := top - 1 - int(round(sin(along * PI) * float(SIZE) * 0.2))
+		if arc >= 0:
+			image.set_pixel(x, arc, outline)
+
+	for y in range(top, bottom + 1):
+		var down := float(y - top) / maxf(float(bottom - top), 1.0)
+		var half := int(round(lerpf(float(half_top), float(half_bottom), down)))
+		for x in range(cx - half, cx + half + 1):
+			var color := base
+			if x <= cx - half or x >= cx + half or y == bottom:
+				color = outline
+			elif y <= top + 1:
+				color = highlight  # the rim catches the light
+			elif y >= bottom - 2:
+				color = shade
+			elif (x - cx) % 4 == 0:
+				color = shade  # the staves
+			image.set_pixel(x, y, color)
+
+	if not filled:
+		return
+	var brim := top + 2
+	for y in range(brim, brim + 4):
+		var down := float(y - top) / maxf(float(bottom - top), 1.0)
+		var half := int(round(lerpf(float(half_top), float(half_bottom), down))) - 1
+		for x in range(cx - half, cx + half + 1):
+			image.set_pixel(x, y, _palette.highlight(WATER_COLOR) if y == brim else WATER_COLOR)
 
 
 const LOG_COLOR := Color(0.4, 0.26, 0.14)

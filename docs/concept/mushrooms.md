@@ -153,6 +153,17 @@ One `WildMushroomPatch` per chunk, same per-chunk-instance contract as
 crop's continuous `0..1` growth, a cell here is binary: **fruiting** or not,
 because pillar 1 above means there is no visible growth stage to track.
 
+**A mycelium needs soil, so no site is ever seeded in water.**
+`MushroomSpecies.allows_biome` cannot see a river or a lake, because
+neither is a biome -- both are overlay flags on untouched land biome (see
+[rivers.md](rivers.md)'s Rendering section). Reported live, with a
+screenshot: "no shrooms in rivers". Measured at the reported coordinates,
+**39 of that chunk's 60 sites** were in water. `WildMushroomPatch` now
+takes the same `Chunk.blocks_ground_cover` mask `TallGrass` and
+`AntColony` already read, as an optional trailing parameter so every
+existing caller is untouched. The sites are not lost, only relocated: the
+same chunk still seeds 50 of them, all on real soil.
+
 Mycorrhizal species (`fly_agaric`, `black_trumpet`, `chanterelle`) seed
 only on forest/rainforest soil — the same biome their real host tree
 already grows in, per `TreeSpecies`. The saprotrophs don't share one

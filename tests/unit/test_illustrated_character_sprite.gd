@@ -716,3 +716,55 @@ func test_loading_the_head_sheet_does_not_log_an_engine_warning():
 	IllustratedCharacterSprite._head_texture_cache.clear()
 	sprite.generate_head_texture(0, Color(0.8, 0.6, 0.44))
 	assert_engine_error_count(0, "loading head.png should not warn")
+
+
+# -- nobody is handed a face the art cannot draw ----------------------------
+#
+# Reported live with a villager in shot: *"It's a rough sketch with a square
+# as head and poor resolution"*.
+#
+# 19 of head.png's 100 cells fail background removal, two opposite ways (see
+# docs/concept/character_art_brief.md, "19 of the 100 cells' flood fill
+# fails"). has_usable_head already catches all 19 and CharacterView._apply_
+# head falls back to ProceduralCharacterSprite's flat ART_HEAD_SIZE (24x24)
+# head for them -- which is the square that got reported, sitting on an
+# otherwise illustrated body.
+#
+# The fallback is right and stays. What was wrong is that HeroAppearance
+# rolled "head" uniformly across all 100 cells, so close to one villager in
+# five was handed a broken face in the first place.
+
+
+## The pinned list is a fact about head.png, so it has to be checked against
+## head.png rather than trusted. Deciding usability means flood-filling and
+## scanning every cell, which is why the list is pinned rather than computed
+## at startup -- and why this test, not a launch-time sweep, is what keeps it
+## honest. If the art is ever fixed or re-exported, this fails and says so.
+func test_the_pinned_broken_head_cells_are_exactly_the_ones_the_art_cannot_draw():
+	var tone := Color(0.8, 0.6, 0.44)
+	var measured: Array[int] = []
+	var cells: int = (
+		IllustratedCharacterSprite.HEAD_GRID_COLUMNS * IllustratedCharacterSprite.HEAD_GRID_ROWS
+	)
+	for cell in range(cells):
+		if not sprite.has_usable_head(cell, tone):
+			measured.append(cell)
+	assert_eq(
+		measured, IllustratedCharacterSprite.UNUSABLE_HEAD_CELLS,
+		"UNUSABLE_HEAD_CELLS must match what has_usable_head really reports"
+	)
+
+
+## The usable list is the grid minus the broken cells -- and it is what every
+## head pick walks, so it must never be empty or contain a broken cell.
+func test_the_usable_head_cells_are_the_grid_minus_the_broken_ones():
+	var usable := IllustratedCharacterSprite.usable_head_cells()
+	var cells: int = (
+		IllustratedCharacterSprite.HEAD_GRID_COLUMNS * IllustratedCharacterSprite.HEAD_GRID_ROWS
+	)
+	assert_eq(
+		usable.size(), cells - IllustratedCharacterSprite.UNUSABLE_HEAD_CELLS.size(),
+		"every cell is either usable or pinned broken, never both and never neither"
+	)
+	for broken in IllustratedCharacterSprite.UNUSABLE_HEAD_CELLS:
+		assert_false(usable.has(broken), "cell %d is broken and must not be offered" % broken)

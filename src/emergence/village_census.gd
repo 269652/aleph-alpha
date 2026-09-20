@@ -37,6 +37,22 @@ const ConstructionProject = preload("res://src/emergence/construction_project.gd
 static func of(household_ids: Array, building_records: Array, household_store) -> Dictionary:
 	var capacity := 0
 	var housed := {}
+	# Only OUR households can be among our housed. A household that has
+	# left the settlement still owns the house it built --
+	# EarthChunkManager._record_household_departure appends an event and
+	# releases nothing -- so roofs here are met whose owners are not on the
+	# roster this was handed. Counting them reported *"Population 1 (10
+	# housed)"* on the settlement card, which is impossible on its face.
+	#
+	# And it froze the village solid, which is the part that mattered:
+	# `housed_count >= household_count` tells VillageGrowth.next_building
+	# there is nobody left to house, and `spare_house_capacity` tells
+	# VillageImmigration there is no room to take anybody in. A village
+	# carrying ghost owners could raise no house and accept no newcomer
+	# ever again -- reported as *"The villages population is declining"*.
+	var roster := {}
+	for household_id in household_ids:
+		roster[household_id] = true
 	for record in building_records:
 		var building_id: String = record.get("id", "")
 		var building_capacity := BuildingCatalog.capacity_of(building_id)
@@ -46,7 +62,7 @@ static func of(household_ids: Array, building_records: Array, household_store) -
 		var owner: String = household_owning(
 			record.get("chunk_coord", Vector2i.ZERO), record.get("origin_local", Vector2i.ZERO), household_store
 		)
-		if owner != "":
+		if owner != "" and roster.has(owner):
 			housed[owner] = true
 
 	var unhoused: Array[String] = []
@@ -58,7 +74,9 @@ static func of(household_ids: Array, building_records: Array, household_store) -
 	# Everyone housed occupies one place in the roof they own. Single-member
 	# households are all this substrate has (see Household's own doc
 	# comment), so "how many people are already under a roof" is exactly
-	# how many households are.
+	# how many households are -- and never more of us than there are of us,
+	# which VillageAssembly's own argument list already states as the
+	# contract ("housed_count -- how many of THEM have a roof").
 	var housed_count: int = housed.size()
 	return {
 		"housed_count": housed_count,
