@@ -19,6 +19,7 @@ const CharacterView = preload("res://scenes/character_view.gd")
 const CreaturePerception = preload("res://src/gameplay/creature_perception.gd")
 const ForagerBehavior = preload("res://src/gameplay/forager_behavior.gd")
 const VillageFarm = preload("res://src/gameplay/village_farm.gd")
+const BuildingCatalog = preload("res://src/gameplay/building_catalog.gd")
 const FarmerBehavior = preload("res://src/gameplay/farmer_behavior.gd")
 const HuntableQuarry = preload("res://src/gameplay/huntable_quarry.gd")
 const Carcass = preload("res://src/rendering/carcass.gd")
@@ -951,6 +952,17 @@ const ERRAND_REACH_PX := 6.0
 ## never sets out -- an NPC in an unloaded chunk or a test fixture is not
 ## on an errand, it has nowhere to be on one.
 func _step_water_errand() -> void:
+	# No world to fetch from, or an errand whose target has somehow been
+	# lost: put the bucket down rather than walk one leg further. Nothing
+	# produces the second case today, but a villager stranded mid-square
+	# holding a bucket forever is exactly the failure this errand exists
+	# to replace.
+	if _world == null or (WaterErrand.is_running(water_errand) and _errand_target.is_empty()):
+		water_errand = WaterErrand.AT_HOME
+		_errand_target = {}
+		_errand_location_tag = ""
+		return
+
 	if not WaterErrand.is_running(water_errand):
 		# Home and still short: set out (again, if one bucket was not
 		# enough -- see WaterErrand's own note on why the loop lives here).
@@ -1020,6 +1032,14 @@ func _farmhouse_of_their_own() -> Dictionary:
 	if String(record.get("id", "")) != VillageFarm.FARM_BUILDING_ID:
 		return {}
 	return record
+
+
+## The one cell the farmhouse is reached from -- the same doorstep rule
+## building_door_near keeps, rather than its anchor, which is a cell the
+## building itself stands on. A villager who walked to the anchor would
+## pour the bucket standing inside the farmhouse's own art.
+func _farmhouse_doorstep() -> Vector2i:
+	return stock_building_cell + BuildingCatalog.doorstep_of(VillageFarm.FARM_BUILDING_ID)
 
 
 ## Whether the bucket in this villager's hand is for the field rather than
@@ -1407,7 +1427,7 @@ func _resolve_location(tag: String) -> Vector2:
 		# own doorstep would have them pour the field's water into their
 		# kitchen and the beds would never get any.
 		if _errand_is_for_the_farmhouse():
-			return _cell_centre(stock_building_cell)
+			return _cell_centre(_farmhouse_doorstep())
 		return home_position
 	if landmarks.has(tag):
 		return landmarks[tag]

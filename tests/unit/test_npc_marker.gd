@@ -1452,6 +1452,7 @@ func test_a_villager_with_no_house_of_their_own_never_sets_out():
 # that is what sends the farmer to the well for it.
 
 const VillageFarm = preload("res://src/gameplay/village_farm.gd")
+const BuildingCatalog = preload("res://src/gameplay/building_catalog.gd")
 
 
 ## A world with a cottage AND the farmhouse its farmer works, each with a
@@ -1583,7 +1584,12 @@ func test_the_bucket_for_the_field_is_carried_to_the_farmhouse_not_the_cottage()
 	assert_eq(world.poured, [FarmingWorld.FARMHOUSE_ORIGIN])
 
 
-func test_the_walk_home_with_a_full_bucket_ends_at_the_farmhouse():
+## The farmhouse's DOORSTEP, the one cell a building is reached from
+## (BuildingCatalog.doorstep_of, the same rule building_door_near keeps) --
+## not its anchor, which is a cell the building itself stands on. A
+## villager who walks to the anchor pours the bucket standing inside the
+## farmhouse's own art.
+func test_the_walk_home_with_a_full_bucket_ends_at_the_farmhouse_doorstep():
 	var world := _a_farmer_with_a_farmhouse()
 	world.farmhouse_due = true
 	for i in 4:
@@ -1596,8 +1602,10 @@ func test_the_walk_home_with_a_full_bucket_ends_at_the_farmhouse():
 	assert_eq(marker.carried_item(), WaterErrand.BUCKET_FULL, "precondition: they filled the bucket")
 	assert_eq(
 		marker._resolve_location(marker.current_location_tag()),
-		marker._cell_centre(world.farmhouse_cell),
-		"a full bucket for the field was carried to the villager's own doorstep instead"
+		marker._cell_centre(
+			world.farmhouse_cell + BuildingCatalog.doorstep_of(VillageFarm.FARM_BUILDING_ID)
+		),
+		"a full bucket for the field was carried somewhere other than the farmhouse door"
 	)
 
 
