@@ -30915,3 +30915,96 @@ narrow.
 
 Tested: `test_illustrated_structure_sprite.gd` (+2, one repaired),
 `test_building_catalog.gd` (+2).
+
+## The forest floor: bracken that hides you, brambles that feed you (`concept/ferns.md`, `concept/brambles.md`, 2026-09-20)
+
+Reported live: *"The fern is not visible in forests ..."*, then mid-turn
+*"And I added blackberry.png"*.
+
+### The answer to the report itself
+
+Neither sheet was referenced **anywhere** in the code. Both had been
+delivered and never wired, so there was nothing to see — the same
+delivered-but-unwired gap the illustrated item art had two entries above.
+
+### 🤝 A concurrent session built the fern while this was being written
+
+Worth recording plainly, because it is the case CLAUDE.md's
+concurrent-sessions rule exists for. I wrote a `ForestFern` and its tests,
+and on pushing found another session had landed **the same module, further
+along**: a dedicated `ferns.md`, a `MAX_PATCHES` *derived* from the seed
+chance against a real 32×32 chunk and recomputed by its own test (against my
+eyeballed number), a growth-blocked mask so ferns never seed into rivers or
+through floors, an `IllustratedFernPatch` reaching into the grass's own bend
+so a wood and the meadow beside it sway in one wind, and a rendered probe
+measuring 12.4% cover with the checkerboard down to 0.00% of drawn pixels.
+
+**I dropped mine and kept theirs**, then built only what theirs did not
+have. Their work also moved the checkerboard key I had just written for the
+farmhouse yards into `SpriteSheetSlicer` and made `IllustratedStructureSprite`
+delegate, which is the better home for it.
+
+### ✅ Bracken is cover (added to their sim)
+
+Chosen explicitly between decoration, ground cover, and cover that matters:
+*"Ground cover + shelter for wildlife"*. `ForestFern.is_shelter(cell)` is the
+single question the creature code asks, so nothing in the ethogram needs to
+know what a fern is.
+
+Only a **mature** clump shelters — a frond that has not unrolled hides
+nothing, and tying cover to growth is what makes the understorey establish
+over time rather than be a flag set at worldgen. It reads straight off the
+growth map, so everything that already takes a fern away (`graze`,
+`block_cells`) takes its cover with it for free.
+
+### ✅ Brambles bear with the seasons, and you can pick them
+
+Chosen explicitly: *"Forageable, bearing with the seasons"*. The sheet draws
+green fruit, reddening fruit, black fruit and flowers — art that specific is
+a specification, so ripeness is a **number**, not a flag.
+
+`ripeness_at(year_fraction)` is a **pure function of the calendar** with no
+state at all: nothing on the cane through winter and spring while it flowers,
+swelling through summer, ripe across autumn, bare again at the turn into
+winter. That is `flora.md`'s own "BARE BY WINTER" rule, and it is pure for
+the reason that section records — a crop on its own unaligned clock is what
+once put apples under snow. Being pure, it is testable at any point of any
+year without stepping a simulation to reach it.
+
+Only ripe fruit can be picked. A patch picked this autumn gives nothing more
+until the next one, because foraging that refills as you walk away is the
+"permanent larder" `flora.md` already refuses — but the **cane survives**, so
+the same bramble bears again next year with no regrowth timer to tune. The
+calendar is the timer. `blackberry` is a real `ItemCatalog` food beside the
+other wild fruit.
+
+### ✅ And they are on screen
+
+Every loaded chunk gets a bramble sim beside its fern one with the identical
+growth-blocked mask, and one ordinary `Sprite2D` per thicket — deliberately
+**not** the fern's banded MultiMesh, which exists to bend a chunk's worth of
+blades as one mesh. Brambles are sparse (36 against a fern's 123) and woody;
+a thicket does not sway. Which of the twenty-five clumps it wears is
+hash-derived from its own global cell, so a wood is not one bramble stamped
+over and over.
+
+Pinned against the **real Harz chunk** the fern suite uses (573 forest cells,
+against Berlin's 29) rather than a fixture — a fixture with almost no wood in
+it would pass these by accident.
+
+### 🚧 Honest gaps
+
+- **A closed wood is all crown.** Measured by the other session in a real
+  render: the frame a player sees is almost entirely canopy, so the
+  understorey reads best at a wood's EDGE and in its clearings. That is a
+  fact about a top-down camera in a forest, not a fault in the plants — but
+  it means "not visible in forests" may still be partly true *under dense
+  canopy* even now that both plants are wired.
+- **Nothing forages a bramble but the player would.** `pick()` exists and is
+  tested; no bird, mammal or villager calls it yet.
+- **Nothing eats a fern.** `graze` exists and works; `_graze_by_herbivores`
+  is wired to the grass alone (the other session's own recorded gap).
+
+Tests: 151/151 across `test_forest_fern.gd`, `test_blackberry_bramble.gd`,
+`test_earth_chunk_manager_ferns.gd`, `test_earth_chunk_manager_brambles.gd`
+and `test_item_catalog.gd`.
