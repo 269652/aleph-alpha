@@ -180,6 +180,23 @@ A farmer with **no** farmhouse — a village that has not raised one — keeps
 the free drip they always had. There is no tank to bill it to, and failing
 closed there would kill every such field rather than send anybody anywhere.
 
+### An errand you cannot finish ends
+
+There is no pathfinding here — only a straight line at the target and a
+slide along whatever it runs into (`NpcMarker._slid_along_walls`) — so a
+wall, a rail or a building between a villager and the well stops them
+permanently. Measured (`tools/probe_farm_water.gd`): one of the probe
+village's three field workers ended a 600s run still `to_well`, **104 px
+short** of a well it had had 570 seconds to reach, having worked 156 of
+6000 ticks against its own baseline of 2750. It never farmed again.
+
+So an errand has **patience**: its own straight-line walk at `WALK_SPEED`
+times `ERRAND_PATIENCE_SLACK`, after which the bucket goes back by the
+door. They try again **tomorrow** (`ERRAND_RETRY_SECONDS`) rather than
+turning round at the door and walking into the same wall, which would
+replace the stall rather than fix it. This is not a pathfinding fix — it
+is the promise that a villager always comes back to their day.
+
 ### So the errand serves two buildings
 
 `NpcMarker._thirsty_building` asks, in order:
@@ -263,6 +280,11 @@ table stops saying it.
   into.
 - ⬜ **The player has no tank.** `Player` neither drinks nor fetches; this
   is a villager mechanism only.
+- 🚧 **A villager still cannot route around a wall.** `ERRAND_PATIENCE_
+  SLACK` stops a blocked trip lasting forever, but the trip still fails: a
+  household on the wrong side of an obstacle gives up daily and its tank
+  keeps falling. Real pathfinding is the fix and is out of this doc's
+  scope; see `NpcMarker._slid_along_walls`.
 
 ## Interaction with other docs
 
