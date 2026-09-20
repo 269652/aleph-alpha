@@ -12619,6 +12619,7 @@ New concept doc (2026-08-25), written for the one mechanism below:
 - **A field sows what the village is short of** — ✅ Done (2026-09-20) — reported with the village's panels open: "they have 0 Herbs even though there are 3 farm houses... so deciding what to plant must be based on demand", and beside it "The warehouse shows 205 Wheat but the Villagers show 50% food". **Those are one defect, and the second explains it: `wheat` is `ItemCatalog` kind `"material"`, not `"food"`** (`milling_and_baking.md`'s own first pillar, "grain is not food until it is milled and baked"), so every filter that decides whether a village is fed — `SettlementFood`, `VillageMarket`, `VillageEstates`' `kind:food` token — counts a granary full of wheat as **zero food**. A village whose every field sowed wheat, with no mill standing, starved beside it. That is a cropping failure, not a distribution one. `src/gameplay/village_crop_choice.gd` picks the sowable crop whose good is least satisfied, reading `VillageAssembly`'s own per-good satisfaction — the same number the needs panel shows, so what a village says it lacks and what it plants cannot disagree — scored by the **worst** good a crop answers rather than the mean, the same minimum rule `EstateConsumption` applies one level up. Wheat is offered **only where a mill AND a bakery really stand**; everywhere else a field sows something edible the day it is harvested (`herb`, `carrot`, `potato`, all real `kind = "food"` items with real crop art). The crop is chosen **at sowing** rather than frozen in `setup_economy` from the occupation, which is how a village's whole cropping plan used to be fixed before a single basket had been drawn. `CROP_BY_OCCUPATION` survives with a changed meaning — the *traditional* crop, breaking a tie and answering where there is no reading — with the herbalist's `herb` restored; its other job, the predicate "does this occupation work a field at all" that three callers use, is untouched. One consequence handled rather than shipped: a farmhouse may now hold a crop its villager was never built with, and one shelf can hold two, so `haul_stock_to_village` reads the shelf instead of withdrawing a single assumed id. **Withdraws this session's own earlier wheat-only narrowing**, which was right for "the crop dies before it ripens" and wrong to keep once the night bug was fixed. Tests: `test_village_crop_choice.gd` 15/15, `test_village_sowing_wiring.gd` 4/4, `test_village_farm.gd` 78/78, `test_npc_marker.gd` 67/67, `test_npc_economy.gd` 80/80.
 - **A village square is laid around what stands in it** — ✅ Done (2026-09-20) — reported a further time: "There are still villages without plaza." Measured rather than guessed (`tools/probe_village_supply.gd`, new): of the two genuine villages in a 14-chunk sweep, chunk (682,132) had **8 of its 48 square cells paved — exactly the one street row crossing it**, with a `farm_fence_east` at (15,13) and a `warehouse` at (20,13) standing inside the square. Two separate faults, each fatal alone. (1) The paving pass walked the rect and **returned on the first cell it could not take**, so one rail cancelled the whole square; it steps over such a cell now, because a square laid *around* what stands in it is still a square. (2) It **skipped the pass entirely whenever the civic doorstep already carried a road tile** — and the street crossing the square paves exactly that cell — so a village that lost its square once could never gain it back on any later visit; that short-circuit is gone, and the walk being idempotent means every visit heals it. A floor remains, since scattered cells are stray paving rather than a square: `VillageLayout.plaza_is_worth_laying`, a **share** rather than a count so it does not change meaning if `PLAZA_WIDTH_TILES` does, pinned at both ends rather than by a number somebody liked. One existing test changed deliberately: it asserted that *not one* cell was paved when a house stood on any of them — broader than its own stated intent ("rather than paving through a building") and exactly the reported defect; it now pins both halves honestly. Tests: `test_village_layout.gd` 93/93, `test_village_renderer.gd` 136/136, `test_village_plaza_wiring.gd` 3/3.
 - **Planner build palette reads as a build menu** — ✅ Done (2026-09-20) — asked directly, with a screenshot of ten identical text buttons in a row: "Make the Planner / Building HUD more professional and more like Anno 1806. Add Icons not only text". Planner mode's palette is now `src/ui/blueprint_palette_view.gd`: a titled card with a row of category tabs (Roads / Homes / Production / Civic), the slots of whichever category is open, and a footer naming what is armed and what it will cost. Each slot carries the building's **own picture** and its name — icons alone would trade one unreadable menu for another, since a sawmill and a blacksmith are both a brown roof at 48 pixels — and a hover gives the whole reckoning: name, footprint in tiles, the real material list, the real hours. **The icon is cut from that building's own `BuildingCatalog.finished_sheet_chain`**, the very sheet `EarthChunkManager` draws the finished building from, so there is no second picture of any building free to drift from the first (`src/ui/blueprint_icon.gd` — trimmed to its own art, fitted into the box with its aspect intact rather than squashed square, centred on a transparent canvas; pavement draws the real road tile it will lay). The tabs **are** `BuildingCatalog`'s own id lists read at runtime (`src/ui/blueprint_palette_model.gd`), never a second grouping, so a building added to the game lands in the right tab for free; and the two numbers on a card arrive as the same calls the raising path makes (`_item_catalog.display_name_of`, `_chunk_manager.build_labor_hours_for`), so the menu cannot quote a price or a job size the site then disagrees with. Work that costs no hours reads as **"Laid by hand"** rather than "0 hours" — `PlanRaising.is_laid_by_hand`'s own rule, said in the menu instead of discovered at the site. **Two defects the rendered probe caught that the headless tests could not** (`tools/probe_build_palette.gd`, per this repo's probe-before-you-trust convention): the armed slot and open tab were drawn in the theme's ordinary `pressed` shade, ~5% of value from normal and invisible over the card's dark background (now `UiTheme.selected_button_stylebox`, see the theme row below); and three tabs read as open at once, because `set_pressed_no_signal` deliberately does not tell the `ButtonGroup`, so a tab opened from code left the previous one looking open. Tests: `test_blueprint_palette_view.gd` 15/15 (the real widget, driven for real), `test_blueprint_palette_model.gd` 22/22, `test_blueprint_icon.gd` 12/12, `test_world_planner_mode_wiring.gd` 31/31. **Nothing about the card's size is written down** — a slot is as wide as the widest name in its own tab, measured at the font it is really drawn in; the card is as wide as its slots; the footer wraps rather than clips and cannot widen either. That came out of merging `main`, where a concurrent session had landed the UI-scale setting: sweeping the probe across every scale the player can pick showed **six of the ten names clipping at 1.75** ("Warehouse" wanting 137px of a slot offering 84) and only 7px of headroom at 1.00, so the defect predated the slider — `UiScale` scales font sizes and deliberately not card widths, which is its own documented limit. Zero clipped names at 0.75, 1.00 and 1.75 now, footer included. **Known gap:** `CHARTERED_BUILDING_IDS` (trade hall, mage guild) is still not offered — a charter is a settlement-tier gate (`concept/settlement_charter.md`), and whether a player may plan a blueprint they could never raise is a separate question from how the menu looks.
+- **Every HUD card is laid out by its column** — ✅ Done (2026-09-20) — reported with both open: "The Town Panel and Warehouse / Building panel overlap.. a panel should occupy space and make other panels render below it.. don't use fixed coords". The HUD column system already stated the rule in its own doc comment ("each builder simply adds to the column it belongs in and never positions itself against its neighbour's height"); the **building readout was the one card that never joined it** — `PRESET_CENTER_RIGHT`, a hand-picked 24px from the edge, 180px tall whatever it held — while `_hud_right_column` grew down from the minimap straight into it. The settlement card landing in that column is what made the collision visible; the panel had been placed against nothing all along. It is a card in the right column now, **last**, because the cards above are standing readouts and this one comes and goes with a click, so it opens beneath them rather than shoving them about; closed it costs nothing, since a hidden child of a `VBox` leaves no hole (the same property the message stack already relies on). Its builder also had to move in `_ready` — it ran *before* `_build_hud_columns`, so there was no column to join. Pinned three ways: the stacking driven for real against a real `HousePanel` in a real `VBoxContainer` (a taller card above pushes it further down; a hidden one leaves no hole), a source-contract check on the builder, and a **generalised** check over every builder that adds a card, so the next panel cannot reintroduce the defect by being written the old way. Rendered for a look with `tools/probe_hud_column_flow.gd`: no overlap, 4px apart, both hugging the right edge. Tests: `test_hud_panel_flow.gd` 6/6, `test_world_hud.gd` 24/24, `test_hud_readouts.gd` 40/40, `test_house_panel.gd` 42/42, `test_ui_scale.gd` 15/15.
 - **Main-menu backdrop** — ✅ Done — the start-up menu now dims the whole screen behind a full-rect backdrop (`World._show_main_menu`) so the game world/HUD no longer bleed through it.
 - **HUD polish** — 🚧 Partial — survival meters grouped into a themed panel card; XP bar / creature panels repositioned to stop overlapping. Meter fills are still plain rects (no rounded fills).
 - **Character screen / inventory revamp** — ✅ Done (basic) — `scenes/inventory_window.gd` (toggle I) is now a PoE/Valheim/Hammerwatch-style **two-pane character screen**: a left **equipment paperdoll** (rendered head+torso preview + right-clickable head/chest/legs/feet/weapon slots) and a right **item-slot grid** (icon + count, hover tooltips). **Right-click** an inventory item to wear/equip or eat it; right-click a worn slot to unequip. **Drag-and-drop works** (left-click and drag): drag an item onto another grid slot to reorder, or out onto a HUD hotbar slot to bind it to a number key (`src/ui/drag_slot.gd` is the shared drag-capable slot Control; `src/gameplay/hotbar.gd` holds the bindings). Left and right are deliberately split across the two gestures — clicking left used to ALSO activate an item (equip/eat) on mouse-down, which fired the instant you pressed down to start a drag, before Godot's drag threshold even triggered (reported: "a click on a carrot makes it vanish"). Shows total armor. The hotbar picked up the same UX pass: a hover highlight, a tooltip naming what's bound and its count, and right-click to clear a slot (previously the only way to change one was overwriting it via drag). Not yet: splitting/merging stacks by drag, or dragging directly onto a paperdoll slot to equip.
@@ -19755,6 +19756,55 @@ to its original 2,338,456-byte version) — the user's own explicit choice
 between reverting and keeping the new art with the known jump. The
 45-frame art (extra row/column) is not lost -- recoverable from `aad16cff`
 whenever a version with genuinely continuous inter-row rotation exists.
+
+## Nothing is drawn over the build palette any more (`concept/planner_mode.md`, `concept/hud.md`, 2026-09-20)
+
+Reported with a screenshot: the build palette open, with *"Tree"*, *"Chop
+(Space)"* and an *"Iron Axe"* card all drawn straight over it. Two faults,
+worth keeping apart because the fix for one is not the fix for the other.
+
+**The held-item card was a regression from the HUD pass, and it was mine.**
+It names what the hotbar's hand is holding and sits in the hotbar's own
+bottom-centre strip — the strip `_apply_view_mode` gives to the palette when
+it hides `_hotbar`. The card was added later and nobody hid it alongside the
+thing it belongs to. It reads `ViewMode.shows_hotbar` now, the same predicate
+the hotbar itself reads, in both `_apply_view_mode` and the per-frame
+updater (without the second one it would re-show itself over the palette on
+the very next frame).
+
+**The prompt and the tooltip were a deeper mistake than occlusion.** The
+tempting fix is "do not draw a world hint over the palette" — a z-order
+problem. But *"Chop (Space)"* is not a label that landed in a bad place: in
+planner mode the hotbar is gone, a click plants a blueprint, and the key the
+prompt names does something else. The hint is **wrong**, not covered, and
+would still be wrong drawn in an empty corner. `ViewMode.shows_world_hints`
+is the rule that follows from that, and it tracks `shows_hotbar` exactly
+(pinned) — a hint advertises an action, and the player's hands are where the
+actions live. It gates the interaction prompt, the hover tooltip and the
+charge meter (the charge on a held stone is an RPG action in progress).
+Readouts are deliberately NOT swept in: `shows_readouts` stays true in both
+modes, because a readout reports what is true rather than offering an action,
+and the mode laying out a settlement is the one that most needs to know where
+it is. A test pins that the two rules actually differ, so neither is
+redundant.
+
+**`_any_gameplay_window_open` is untouched**, and a test now guards that: it
+is Escape's notion of "a modal is open", and Escape closing the palette would
+strand a player in planner mode with no controls at all. The mode gate
+composes with the window gate at each call site instead, so the two questions
+stay separate.
+
+**TDD:** four pins in `test_view_mode.gd` and four in
+`test_world_planner_mode_wiring.gd`, red first (three of them; the fourth,
+"the palette is not a modal", passes from the start as a regression guard —
+which is the point of writing it). `tools/probe_hud_layout.gd` gained a
+`planner` state that builds the real `BlueprintPaletteView` and drives
+World's own `_apply_view_mode`, so the render shows what the game decides
+rather than a second opinion the probe holds; it renders the exact screen the
+bug was reported against, now clean, and the RPG render still shows the
+held-item card. Affected suites 275/275.
+
+🚧 **Not verified in a live session** — rendered offscreen, not played.
 
 ## The minimap is framed, and the planner toggle is a real switch (`concept/hud.md`, 2026-09-20)
 
@@ -29187,3 +29237,109 @@ assumed, so it failed for its own reasons rather than the code's. The rule
 is pinned where the decision lives, in `test_village_layout.gd`.
 
 Tests: 253/253 across the layout, renderer and both city-hall suites (+1).
+
+## Consecutive rails share a post (`concept/village_farms.md`, 2026-09-20)
+
+Reported with a finished enclosure in shot: *"the enclosures render
+unnecessary vertical rails"*.
+
+### ✅ Two whole panels meeting is two posts, not one
+
+Every cell of `fence.png` is a **whole panel** — a post at *each* end with
+rails between. The sheet's four columns are North/South front views and
+East/West top views, all the same design.
+
+An earlier pass, asked for in one word (*"also scale"*), made a rail's wood
+span exactly one tile so consecutive rails **meet** with no gap. That closed
+the gaps and left the real defect untouched: two complete panels meeting put
+two posts at every junction a few pixels apart. Six rails showed twelve posts
+where they should show seven.
+
+A straight rail is scaled by the distance between **its own two post
+centres** now, not by the length of its wood. Its posts land on its tile's
+two edges, the neighbour's near post lands on the same point, and the pair
+draw as one. Corners are untouched — a corner is a post on a join, not a run,
+and still takes the side wall's own scale.
+
+### ✅ The reader took two guards, and the sheet forced both
+
+Getting the measurement right was the whole job, and both guards were found
+by measuring the real art rather than reasoning about it:
+
+- **The threshold sits between the RAIL level** (the median of slices
+  carrying content) **and a robust high percentile**, never a fixed multiple
+  of either. The front views' posts cover about **twice** their rails (0.53
+  vs 0.27); the top views' end caps only about **1.3×** their bar (0.13 vs
+  0.10). No single multiple reads both — a 1.4× rule found north/south/west
+  and lost east entirely.
+- **The percentile is robust, and a band must be 2% of the run wide.** The
+  trimmed cells carry stray edge slices — including one **fully opaque
+  column** at the far end — which own the maximum and otherwise swallow the
+  entire run between them. Three detectors in a row reported "posts 99.7% of
+  the run apart" before that stray was found.
+
+Measured this way all four facings agree, at source resolution and at drawn
+resolution alike: **posts about 0.62–0.65 of the run apart**, which at a 16px
+tile had them 12.5–13.0px apart inside a 16px tile.
+
+### ✅ Verified end to end, not just per panel
+
+Six real rails composited the way `EarthChunkManager._spawn_structure_art_for`
+places them — each centred on its tile, bottom-anchored, shifted by
+`footprint_offset` — and the posts counted off the result: **7 posts, widths
+[11, 12, 12, 12, 12, 12, 11]**. Evenly spaced, one per tile boundary, the two
+end ones half-width because half of each hangs past the end of the run, which
+is what an end post should do. That composite is the test now, rather than a
+number derived from the spacing.
+
+### 🚧 The cost, stated plainly
+
+The timber draws about **a quarter thicker** than before. The scale is
+uniform on both axes and this project does not stretch art along one axis to
+fit, so a fence that shares its posts is necessarily a little heavier than
+one that merely abuts. Flagged rather than hidden: if that reads as too
+heavy, the alternative is new art with the post split across the cell edge,
+not a non-uniform scale.
+
+### Three tests rewritten to the new rule, not deleted
+
+The two `..._wood_spans_exactly_one_tile_...` tests now pin that a rail's
+wood spans one tile **plus the post it shares**, with the old rule quoted in
+place so the reversal is legible. `test_the_offset_moves_the_art_toward_the_
+beds` now allows an already-flush rail to need no nudge — a rail scaled by
+its post spacing is drawn larger than its tile, so a facing whose art already
+lands flush has nothing to move; where the wood actually lands stays pinned
+directly by `test_scaling_by_the_run_keeps_every_rail_flush_against_its_own_
+edge` and `test_no_rails_wood_ever_crosses_into_the_beds`.
+
+Tests: `test_illustrated_structure_sprite.gd` 49/50 (+3 new, 3 rewritten).
+The remaining failure,
+`test_no_house_crop_cuts_through_the_top_of_its_own_drawing`, is about house
+art and is **pre-existing** — A/B'd in a clean worktree at the commit before
+this change, where it fails identically. Recorded rather than quietly left.
+
+### ✅ And the corner followed the wall it caps
+
+`test_a_corner_post_lines_up_with_the_side_wall_it_caps` caught this
+immediately, which is exactly what it is for: a corner is a post on a join,
+not a run, and takes the scale of the side wall it caps so its timber is as
+thick as the run it meets. Moving how a run is scaled left the corner 0.4px
+behind its wall.
+
+A corner's art **is** the side column's art, so measuring that column's post
+spacing hands it the side wall's own scale by construction — the rule it
+already had, stated against the wall rather than against its own length. Its
+distinct *fallback* is kept: if the posts cannot be read, a corner still
+falls back to the side wall's length rather than a run's, because scaling a
+post as if it were a run is what once turned a corner into a whole tile of
+rail.
+
+That pass also rewrote `test_the_offset_moves_the_art_toward_the_beds` into
+`test_every_rails_wood_lands_flush_against_the_edge_facing_its_beds`. The old
+test asserted the OFFSET VECTOR points toward the beds — a premise that only
+holds while the art is smaller than its tile. A rail scaled by its post
+spacing is larger: the band already starts outside the tile, so landing the
+wood flush against the bed-facing edge means pushing it back the other way,
+and the offset's sign stopped meaning what was asserted. The rewrite pins
+where the wood LANDS, which is what the rule was always about, and now holds
+corners to **both** of their axes rather than straight rails to one.
