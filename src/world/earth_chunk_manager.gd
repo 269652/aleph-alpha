@@ -2606,10 +2606,33 @@ func _settlement_capacity(settlement_id: String, market, village_market) -> int:
 	)
 
 
-## Every StructureStock standing in `settlement_id`'s own chunk (a settlement
-## IS its chunk -- EntityRef.for_settlement) -- the third food container
-## SettlementFood counts. Keys are "%d_%d" global tiles (see
-## _structure_stock_key), so the chunk each belongs to is a plain divide.
+## The settlement's own LARDER: the StructureStock of each shelf in its
+## chunk that its people can actually eat off. Keys are "%d_%d" global
+## tiles (see _structure_stock_key), so the chunk each belongs to is a
+## plain divide.
+##
+## Filtered by STRUCTURE_MEAL_SOURCE_IDS, which is the contract
+## SettlementFood.food_stock states for this argument in its own words --
+## "a Storage holding hauled bread, a Bakery with loaves still on its
+## shelf". This handed it EVERY shelf in the chunk instead, and a
+## FARMHOUSE is where a harvest waits for the carter, not a place anybody
+## eats.
+##
+## Measured before the fix (tools/probe_village_famine.gd) on a real
+## village whose hunger was pinned at 1.00 and whose worst-off villager
+## was 174 of 200 through the starvation window:
+##
+##     settlement Market : 0
+##     VillageMarket     : 0
+##     structure shelves : 234   (three farmhouses; nobody could eat any)
+##
+## 234 units over twelve households is 19.5 each against
+## VillageImmigration.FED_THRESHOLD of 2.0, so the village read as richly
+## fed and kept drawing households into a famine. The same "counted as
+## food but unreachable" split STRUCTURE_MEAL_SOURCE_IDS itself had to fix
+## one layer down, and fixing it here fixes every reader at once: the
+## immigration gate, the settlement's GROWING/DECLINING status, the food
+## shortfall a build decision acts on, and the card's own "feeds N of M".
 func _settlement_structure_stocks(settlement_id: String) -> Array:
 	var chunk_coord := RegionalTrade.chunk_coord_of(settlement_id)
 	var stocks: Array = []
@@ -2618,8 +2641,11 @@ func _settlement_structure_stocks(settlement_id: String) -> Array:
 		if parts.size() != 2:
 			continue
 		var tile := Vector2i(int(parts[0]), int(parts[1]))
-		if _chunk_coord_for_tile(tile) == chunk_coord:
-			stocks.append(_structure_stocks.stock_for(instance_key))
+		if _chunk_coord_for_tile(tile) != chunk_coord:
+			continue
+		if not STRUCTURE_MEAL_SOURCE_IDS.has(modification_at_global(tile.x, tile.y)):
+			continue
+		stocks.append(_structure_stocks.stock_for(instance_key))
 	return stocks
 
 
