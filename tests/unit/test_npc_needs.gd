@@ -88,3 +88,48 @@ func test_the_numbers_are_the_ethograms_villager_profile():
 	# on the same drive vector underneath.
 	assert_eq(needs.gains().keys(), profile.keys())
 	assert_true(needs.gains().has("hunger"))
+
+
+# -- starving (docs/concept/village_mortality.md mechanism 1) ---------------
+#
+# The clock lives here, beside the drive it reads, so it advances on
+# exactly the same advance(delta) every villager already ticks -- a
+# villager with no world still ages normally, and no caller has to
+# remember to tick a second thing.
+
+const Starvation = preload("res://src/emergence/starvation.gd")
+
+
+func test_a_fresh_villager_is_not_starving():
+	var needs := NpcNeeds.new(7)
+	assert_eq(needs.starved_seconds, 0.0)
+	assert_false(needs.has_starved_to_death())
+
+
+func test_hunger_left_to_rise_eventually_kills():
+	var needs := NpcNeeds.new()
+	# Long enough to empty, then long enough at the top to die.
+	needs.advance(Starvation.hunger_cycle_seconds())
+	assert_false(needs.has_starved_to_death(), "precondition: emptying alone is not fatal")
+	needs.advance(Starvation.seconds_to_die())
+	assert_true(needs.has_starved_to_death())
+
+
+func test_a_villager_who_eats_never_starves():
+	var needs := NpcNeeds.new()
+	for i in 200:
+		needs.advance(Starvation.hunger_cycle_seconds() * 0.5)
+		needs.feed()
+	assert_false(needs.has_starved_to_death())
+	assert_eq(needs.starved_seconds, 0.0)
+
+
+## The cart of grain arriving mid-famine really does save them.
+func test_a_meal_at_the_last_moment_saves_them():
+	var needs := NpcNeeds.new()
+	needs.advance(Starvation.hunger_cycle_seconds())
+	needs.advance(Starvation.seconds_to_die() * 0.9)
+	assert_false(needs.has_starved_to_death(), "precondition: not dead yet")
+	needs.feed()
+	assert_eq(needs.starved_seconds, 0.0, "a fed villager is still dying from last week")
+	assert_false(needs.has_starved_to_death())

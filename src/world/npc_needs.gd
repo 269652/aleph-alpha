@@ -41,7 +41,16 @@ static var START_STAGGER: float = float(
 	Ethogram.drive_profile("", BODY_PLAN)[Ethogram.DRIVE_HUNGER]["stagger"]
 )
 
+const Starvation = preload("res://src/emergence/starvation.gd")
+
 var _drives: Drives
+
+## How long this villager has been at the top of their hunger drive
+## (docs/concept/village_mortality.md mechanism 1). Public because it IS
+## how close they are to dying, and a readout or a test should be able to
+## ask rather than infer it from hunger alone -- hunger sits at 1.0 for a
+## villager who is about to die and for one who emptied a moment ago.
+var starved_seconds := 0.0
 
 var hunger: float:
 	get:
@@ -58,7 +67,11 @@ func _init(seed_value: int = 0) -> void:
 
 
 func advance(delta_seconds: float) -> void:
+	var before := hunger
 	_drives.advance(delta_seconds)
+	# Ticked HERE rather than by every caller, so a villager cannot age
+	# their hunger without also aging what that hunger is doing to them.
+	starved_seconds = Starvation.advance(starved_seconds, before, hunger, delta_seconds)
 
 
 func is_hungry() -> bool:
@@ -67,6 +80,15 @@ func is_hungry() -> bool:
 
 func feed() -> void:
 	_drives.satisfy(Ethogram.DRIVE_HUNGER)
+	# A fed villager is not still dying from last week (pillar 3). Cleared
+	# here as well as in Starvation.advance so a meal counts the instant it
+	# is eaten, rather than on whatever frame happens to tick next.
+	starved_seconds = 0.0
+
+
+## Whether hunger has been left at the top long enough to kill.
+func has_starved_to_death() -> bool:
+	return Starvation.is_dead(starved_seconds)
 
 
 ## The need as the behaviour kernel's gate (Drives.gains).
