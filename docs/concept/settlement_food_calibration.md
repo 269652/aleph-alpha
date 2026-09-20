@@ -201,10 +201,17 @@ Hall's own recipe-graph step and has nothing to do with food):
 
 - **How many.** `producers_needed(household_count)` is the village's own
   subsistence draw over what one producer's real work brings in
-  (`VillageFarm.FIELD_YIELD_PER_WORK_BLOCK`, measured by a real villager
-  over a real field, not described in a comment). A founding five needs
-  **one** — the old hardcode's answer, for the first time for a reason —
-  and a village that outgrows one field needs a second.
+  (`VillageFarm.FIELD_YIELD_PER_LIVED_DAY`: about **five units a field a
+  lived day**, measured over twenty lived days of three real fields on a
+  real chunk, with the walk between cottage and field and the water the
+  beds get inside it — not `FIELD_YIELD_PER_WORK_BLOCK`, the stub-world
+  figure 3.7× that, which sized two farmers to feed ten households and
+  left the shelves at nothing; see
+  [village_economy_balance.md](village_economy_balance.md) mechanism 6).
+  A field hand feeds **two** households: a founding five needs **three**,
+  a village of ten needs five, and the founding roster is staffed to it
+  before its carter and its sawyer are picked, the grown village's larger
+  demand conscripting newcomers only.
 - **Which trade.** `trade_for(region)` is whichever of farmer, herbalist and
   fisher yields most *here* — only askable at all because the three are
   finally the same kind of number. Land with real water is worked by a

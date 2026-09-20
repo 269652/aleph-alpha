@@ -137,6 +137,18 @@ stands with nowhere to farm. Placed with the same self-healing
 older village gains its farmhouses on its next visit rather than only at
 founding.
 
+**One search, whoever asks** (2026-09-20). `VillageRenderer
+.farm_plot_with_field` is the field-aware plot: the next free frontage
+whose ground fits a field, and the outskirts (`VillageLayout.outskirt_plot`)
+when the streets are full. The founding placement asks it for each
+farmstead in turn, judged against the farmhouses already standing, and
+the growth path (`EarthChunkManager._growth_site_for`) asks the same
+function for a farmhouse the assembly votes itself — against the
+landmarks and the ground a project is already rising on — so a farmhouse
+raised through the village's own ledger is never one the founding rule
+would have refused ([village_economy_balance.md](village_economy_balance.md)
+mechanism 6).
+
 **One rule, two callers** (2026-09-19). "Has real room" and "here is your
 field" were two separate copies of the same question — `_field_fits_at` at
 siting, `_workable_field_of` at derivation — and they had drifted. The
@@ -741,6 +753,15 @@ and 0. `FIELD_YIELD_PER_WORK_BLOCK` was re-measured at **278** from 225 by
 the same test that pinned the old one — the roster had been sized against a
 field that lost beds every night.
 
+That number is the stub world's, a villager standing at a field with no
+walk to it, and it is no longer what the roster is sized by. A real field
+on a real chunk yields about **five units a lived day**
+(`FIELD_YIELD_PER_LIVED_DAY`, 299 units in twenty lived days over three
+fields), 3.7× less, because the walk between cottage and field eats most
+of a 27.5-second work window; `SettlementFoodDemand` reads the real
+figure ([village_economy_balance.md](village_economy_balance.md)
+mechanism 6).
+
 ### Every field sows wheat, for now (2026-09-19) — superseded
 
 Asked directly, with a field of unrecognisable purple plants in shot: *"i
@@ -988,6 +1009,12 @@ ordinary ground is the rule, not an accident, so standing in it is allowed.
   doorstep is already a road cell by then, and an ordinary `place_building`
   refuses that. Idempotent, so a reload raises no second set and an older
   village gains its farmhouses on the next visit.
+- ✅ **A growth farmhouse is sited where its field fits** (2026-09-20).
+  `VillageRenderer.farm_plot_with_field` is the one search for a farmstead's
+  plot; `_place_farms_if_missing` and `EarthChunkManager._growth_site_for`
+  both ask it (`test_earth_chunk_manager_farm_growth_site.gd`: the site
+  fits a field, it is the founding search's own answer, and the next farm
+  keeps off the first one's ground).
 - ✅ **`NpcMarker._step_farm`.** The villager walks out to their own field
   during their work block and really tills, waters and harvests it through
   the same `FarmPlot` lifecycle a player's own plot uses. Each farming
