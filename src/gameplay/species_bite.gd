@@ -207,7 +207,7 @@ const TIER_THREAT_MARGIN := 1.25
 ## drift-tested in both directions.
 const PROFILES := {
 	# -- predators, by what they do rather than what they look like -----
-	"bear": {"real_top_speed_kmh": 56.0, "windup_seconds": 0.90, "sense_radius_tiles": 10.0, "tenacity": 0.50},
+	"bear": {"real_top_speed_kmh": 56.0, "windup_seconds": 0.90, "sense_radius_tiles": 10.0, "tenacity": 0.10},
 	"lion": {"real_top_speed_kmh": 80.0, "windup_seconds": 0.60, "sense_radius_tiles": 9.0, "tenacity": 0.20},
 	"venomous_snake": {"real_top_speed_kmh": 11.0, "windup_seconds": 0.25, "sense_radius_tiles": 3.0, "tenacity": 0.15},
 	"jaguar": {"real_top_speed_kmh": 65.0, "windup_seconds": 0.45, "sense_radius_tiles": 6.0, "tenacity": 0.40},
