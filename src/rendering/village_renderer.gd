@@ -249,11 +249,16 @@ func spawn_village(
 			# ghost village nobody can live in.
 			if not _place_new_village(
 				chunk_coord, chunk_size, tile_size, building_ids, npcs, world,
-				plots, door_positions, stand_positions
+				plots, door_positions, stand_positions,
+				_landmark_cells(settlement.landmarks, tile_size)
 			):
 				return []
 		else:
-			_recover_existing_village(chunk_coord, chunk_size, tile_size, npcs, world, existing_buildings, plots, door_positions, stand_positions)
+			_recover_existing_village(
+				chunk_coord, chunk_size, tile_size, npcs, world, existing_buildings,
+				plots, door_positions, stand_positions,
+				_landmark_cells(settlement.landmarks, tile_size)
+			)
 
 	# Tells the world this settlement exists, duck-typed exactly like
 	# place_building above -- world == null or lacking the method is
@@ -500,7 +505,7 @@ func _hand_out_the_sawmill(
 ## reported bug.
 func _place_new_village(
 	chunk_coord: Vector2i, chunk_size: int, tile_size: int, building_ids: Array, npcs: Array, world,
-	plots: Array, door_positions: Array, stand_positions: Array
+	plots: Array, door_positions: Array, stand_positions: Array, reserved: Dictionary = {}
 ) -> bool:
 	var layout_seed := VillageLayout.seed_for(chunk_coord)
 	var is_buildable := _is_buildable_local(chunk_coord, chunk_size, world)
@@ -589,7 +594,7 @@ func _place_new_village(
 	_place_warehouse_if_missing(chunk_coord, chunk_size, world)
 	_place_industry_if_missing(chunk_coord, chunk_size, world)
 	_place_civic_if_missing(chunk_coord, chunk_size, world)
-	_place_farms_if_missing(chunk_coord, chunk_size, npcs, world)
+	_place_farms_if_missing(chunk_coord, chunk_size, npcs, world, reserved)
 	return true
 
 
@@ -607,7 +612,8 @@ func _place_new_village(
 ## _place_new_village.
 func _recover_existing_village(
 	chunk_coord: Vector2i, chunk_size: int, tile_size: int, npcs: Array, world,
-	existing_buildings: Array, plots: Array, door_positions: Array, stand_positions: Array
+	existing_buildings: Array, plots: Array, door_positions: Array, stand_positions: Array,
+	reserved: Dictionary = {}
 ) -> void:
 	_lay_plaza_if_missing(chunk_coord, chunk_size, world)
 	# Every village keeps a store, including one founded before there was
@@ -619,7 +625,7 @@ func _recover_existing_village(
 	_place_warehouse_if_missing(chunk_coord, chunk_size, world)
 	_place_industry_if_missing(chunk_coord, chunk_size, world)
 	_place_civic_if_missing(chunk_coord, chunk_size, world)
-	_place_farms_if_missing(chunk_coord, chunk_size, npcs, world)
+	_place_farms_if_missing(chunk_coord, chunk_size, npcs, world, reserved)
 	for i in npcs.size():
 		var expected_seed := hash("%d_%d_house_%d" % [chunk_coord.x, chunk_coord.y, i])
 		# A NEWCOMER's house was raised by the growth ladder, not stamped at
@@ -972,10 +978,7 @@ func _fenced_farm_fields(
 	# A shared landmark counts as occupied ground for the whole farm pass --
 	# beds and rails alike. Neither a crop nor a fence belongs in the village
 	# well.
-	var is_occupied := func(cell: Vector2i) -> bool:
-		if reserved.has(chunk_coord * chunk_size + cell):
-			return true
-		return occupied_by_tile.call(cell)
+	var is_occupied := _reserving(chunk_coord, chunk_size, reserved, occupied_by_tile)
 	var fields: Dictionary = {}
 	for origin in origins:
 		fields[origin] = _workable_field_of(
@@ -1351,16 +1354,10 @@ func _workable_field_of(
 	origin: Vector2i, origins: Array, chunk_coord: Vector2i, chunk_size: int,
 	is_buildable: Callable, is_occupied: Callable, world
 ) -> Array[Vector2i]:
-	var renderer := self
-	var is_free := func(cell: Vector2i) -> bool:
-		if cell.x < 0 or cell.y < 0 or cell.x >= chunk_size or cell.y >= chunk_size:
-			return false
-		if VillageFarm.owner_of(cell, origins, VillageFarm.FARM_BUILDING_ID) != origin:
-			return false  # the neighbouring farmstead's ground, not this one's
-		if renderer._is_street_row(chunk_coord, chunk_size, world, cell.y):
-			return false  # a village does not sow in its own road
-		return is_buildable.call(cell) and not is_occupied.call(cell)
-	var rect = VillageFarm.field_rect(origin, VillageFarm.FARM_BUILDING_ID, is_free)
+	var rect = VillageFarm.field_rect(
+		origin, VillageFarm.FARM_BUILDING_ID,
+		_may_sow(origin, origins, chunk_coord, chunk_size, is_buildable, is_occupied, world)
+	)
 	var worked: Array[Vector2i] = []
 	if rect == null:
 		return worked
@@ -1390,7 +1387,11 @@ func _workable_field_of(
 ## The doorstep is paved AFTER the building goes up, for exactly the reason
 ## _place_new_village places its houses before its roads: place_building
 ## refuses a plot whose doorstep is already modified.
-func _place_farms_if_missing(chunk_coord: Vector2i, chunk_size: int, npcs: Array, world) -> void:
+## `reserved` is the village's own landmark cells -- see _may_sow for why
+## siting has to know about them.
+func _place_farms_if_missing(
+	chunk_coord: Vector2i, chunk_size: int, npcs: Array, world, reserved: Dictionary = {}
+) -> void:
 	if world == null or not world.has_method("place_building"):
 		return
 	var wanted := 0
@@ -1399,19 +1400,27 @@ func _place_farms_if_missing(chunk_coord: Vector2i, chunk_size: int, npcs: Array
 			wanted += 1
 	if wanted == 0:
 		return  # nobody here farms, so nothing here needs a farmhouse
-	var standing := 0
+	# The farmhouses already up, and WHERE -- a candidate origin has to be
+	# judged against the ground its neighbours already own (see _may_sow),
+	# not just against how many of them there are.
+	var standing_origins: Array = []
 	if world.has_method("buildings_in_chunk"):
 		for record in world.buildings_in_chunk(chunk_coord):
 			if record.get("id", "") == VillageFarm.FARM_BUILDING_ID:
-				standing += 1
+				standing_origins.append(record.get("origin_local", Vector2i.ZERO))
+	var standing := standing_origins.size()
 
 	var is_buildable := _is_buildable_local(chunk_coord, chunk_size, world)
 	var is_occupied := _is_occupied_local(chunk_coord, chunk_size, world)
 	var is_paved := _is_paved_local(chunk_coord, chunk_size, world)
 	var renderer := self
 	var accepts_origin := func(origin: Vector2i) -> bool:
+		# The candidate itself joins the origins it is judged against: a
+		# farmhouse owns ground by being nearest to it, so it cannot be
+		# weighed against its neighbours without being in the running.
 		return renderer._field_fits_at(
-			origin, chunk_coord, chunk_size, world, is_buildable, is_occupied
+			origin, standing_origins + [origin], reserved,
+			chunk_coord, chunk_size, world, is_buildable, is_occupied
 		)
 	for index in range(standing, wanted):
 		var plot: Dictionary = VillageLayout.next_street_plot(
@@ -1481,17 +1490,57 @@ func _place_farms_if_missing(chunk_coord: Vector2i, chunk_size: int, npcs: Array
 ## here: no other farmhouse stands yet at siting time, and the field this
 ## one finally works is re-derived once they all do.
 func _field_fits_at(
-	origin: Vector2i, chunk_coord: Vector2i, chunk_size: int, world,
+	origin: Vector2i, origins: Array, reserved: Dictionary,
+	chunk_coord: Vector2i, chunk_size: int, world,
 	is_buildable: Callable, is_occupied: Callable
 ) -> bool:
+	return VillageFarm.field_rect(
+		origin, VillageFarm.FARM_BUILDING_ID,
+		_may_sow(
+			origin, origins, chunk_coord, chunk_size, is_buildable,
+			_reserving(chunk_coord, chunk_size, reserved, is_occupied), world
+		)
+	) != null
+
+
+## The ONE rule for "may this farmhouse sow this cell", shared by the siting
+## check above and the field derivation in _workable_field_of.
+##
+## Shared, rather than written twice, because it WAS written twice and the
+## two drifted. Reported live with the village in shot: *"There's a farmhouse
+## without bed enclosure"*. Siting asked only whether a rectangle of open,
+## off-street ground existed; the derivation also rejects a cell a
+## NEIGHBOURING farmhouse owns and a cell RESERVED for a landmark. So a
+## farmhouse could be raised on ground that looked free and then be handed
+## nothing at all -- no beds, and so no fence ring either. A rule that
+## decides where to build has to be the rule that decides what gets built.
+func _may_sow(
+	origin: Vector2i, origins: Array, chunk_coord: Vector2i, chunk_size: int,
+	is_buildable: Callable, is_occupied: Callable, world
+) -> Callable:
 	var renderer := self
-	var is_free := func(cell: Vector2i) -> bool:
+	return func(cell: Vector2i) -> bool:
 		if cell.x < 0 or cell.y < 0 or cell.x >= chunk_size or cell.y >= chunk_size:
 			return false
+		if VillageFarm.owner_of(cell, origins, VillageFarm.FARM_BUILDING_ID) != origin:
+			return false  # the neighbouring farmstead's ground, not this one's
 		if renderer._is_street_row(chunk_coord, chunk_size, world, cell.y):
-			return false
+			return false  # a village does not sow in its own road
 		return is_buildable.call(cell) and not is_occupied.call(cell)
-	return VillageFarm.field_rect(origin, VillageFarm.FARM_BUILDING_ID, is_free) != null
+
+
+## `is_occupied`, widened to count a reserved landmark cell as taken. A
+## shared landmark is occupied ground for the whole farm pass -- beds and
+## rails alike -- since neither a crop nor a fence belongs in the village
+## well. Its own function so siting and derivation cannot reserve different
+## things, the same reason _may_sow exists.
+func _reserving(
+	chunk_coord: Vector2i, chunk_size: int, reserved: Dictionary, is_occupied: Callable
+) -> Callable:
+	return func(cell: Vector2i) -> bool:
+		if reserved.has(chunk_coord * chunk_size + cell):
+			return true
+		return is_occupied.call(cell)
 
 
 ## The village's civic seat, standing on the plaza's own reserved plot.

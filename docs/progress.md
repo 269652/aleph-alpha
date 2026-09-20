@@ -26932,3 +26932,64 @@ true), and the overlay-wiring test now checks the drawn footprint instead
 of the tile.
 
 Tests: `test_illustrated_structure_sprite.gd` 41/41 (3 new).
+
+---
+
+## 2026-09-20 — A farmhouse with no field, and a field with an unbroken bed
+
+Reported live with the village in shot: *"There's a farmhouse without bed
+enclosure and the NPC only sows 4 / 6 tiles"*. Two reports, two causes.
+
+### The last bed of every field was never broken
+
+Measured before changing anything (`tools/probe_village_farming.gd`). Every
+field in the sample held exactly six cells, five cycling normally — and the
+sixth, the last in the field's own order, reported `no marker -- never
+tilled` after a full 600-second work block. The same bed, for both farmers
+in the village.
+
+`VillageFarm.next_action` scanned from index 0 and returned the first plot
+wanting the highest-priority kind. **Ground nobody has tilled asks to be
+planted, and so does a bed that was sown, ripened and harvested.** So the
+moment the earlier beds started cycling, one of them was always an earlier
+"plant" than the ground at the end, and the last bed was never broken at all.
+
+✅ Unbroken ground now wins **among beds asking for the same thing**, which
+only reorders equals: a `null` plot's action is `"plant"` and nothing else,
+so a ripe crop and a dying bed still come first — that priority is what the
+kind order exists for, and what the existing tests pin. Re-measured after
+the fix: the two previously untilled cells now read `grown=30.3/30.3` and
+`23.7/23.6`, and every field is 6/6.
+
+### Siting and derivation had drifted apart
+
+"Is there room for a field here?" (`_field_fits_at`, at siting) and "here is
+your field" (`_workable_field_of`, later) were two separate copies of the
+same question. The derivation rejects a cell a **neighbouring farmhouse
+owns** — ownership is geometric, so a farmhouse raised later can take ground
+from one raised earlier — and a cell **reserved for a landmark**. Siting
+checked neither. A farmhouse could be raised on ground that looked free and
+then be handed nothing: no beds, so no fence ring.
+
+✅ Both go through one `_may_sow(origin, origins, …)` predicate now, with
+`_reserving` wrapping the occupancy test identically for both. A candidate
+origin is judged **with itself in the running** against the farmhouses
+already standing, because a farmhouse owns ground by being nearest to it.
+`test_siting_and_derivation_never_disagree_about_an_origin` states that
+invariant directly instead of testing the two copies apart; mutating the
+reserved-cell handling back out fails it with the bug's own words —
+*"siting said true at (10, 10), derivation handed over 0 cells"*.
+
+⬜ **Not reproduced before fixing, and worth saying so.**
+`tools/probe_farmhouse_fields.gd` scanned 14 villages and 29 farmhouses on
+flat stub ground: every one took a full six-cell field, with landmarks
+reserved, and the two rules never disagreed there. The first run of that
+probe was worse than useless — it called `_fenced_farm_fields` *without* the
+reserved landmarks the real village passes, so it measured a more permissive
+world than the game's and reported everything fine. Flat ground has no
+water, no trees and no prior tiles, so the terrain that would expose this is
+exactly what the stub lacks. The gaps are real and are fixed by
+construction; catching one in the act still wants a real-terrain probe.
+
+Tests: `test_village_farm.gd` 77/77 (4 new), `test_village_renderer.gd`
+132/132 (3 new), `test_npc_marker_farming.gd` 39/39.
