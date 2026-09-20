@@ -241,3 +241,43 @@ Pinned by `test_the_well_stands_on_a_free_2x2_clear_of_street_and_plaza`,
 which asserts the contract as asked: the well stands on free ground, and
 that ground is part of a free 2×2. Which quadrant is the renderer's
 business; that there is one is the rule.
+
+> **Which quadrant turned out to be the whole bug** (corrected
+> 2026-09-20). Reported again, with the well in shot: *"The well is still
+> placed partly on streets"*. The siting above is real and does its job —
+> but "which quadrant is the renderer's business" was answered **three
+> different ways** by three functions, and only one of them was ever
+> checked:
+>
+> | | which 2×2 |
+> | --- | --- |
+> | `_clear_block` | whichever quadrant round the anchor was free — its first option runs **north** of it |
+> | `_nearest_prop_cell` | returned the centre of the **anchor cell alone** |
+> | `_landmark_cells` | searched *again* from that position, landing on a third |
+>
+> So a well was validated on one patch, drawn over a second and reserved
+> on a third. Two of the three could be road while the check passed —
+> measured across eight real villages: **sixteen well cells on road, two
+> per well**, every one in the well's own column.
+>
+> `VillageRenderer.landmark_block_at(position, tile_size, id)` is the one
+> answer now. A multi-tile landmark stands on its block's **centre**, so
+> the block is recovered by stepping back half a footprint — exact for
+> even footprints, which is every one there is. Siting, reservation and
+> the tests all read it, and a probe that reimplemented the old assumption
+> got the wrong 2×2 too, which is exactly why it is one function.
+>
+> Two renderer tests had been comparing the **grounded** landmark against
+> the generator's **ungrounded** plan, and passed only because the two
+> coincided while the well sat on a single cell's centre. They now assert
+> what they meant: the sprite stands where the settlement thinks the
+> landmark is, and every villager agrees with every other.
+
+🚧 **The art is still much bigger than the 2×2 it stands on.** Measured on
+a real village: the well's sprite is **80×60 px — five tiles by nearly
+four — over a 32×32 px footprint**, covering 24 cells of which 12 are
+road. So even sited perfectly on clean grass it reads as standing on the
+street. Whether that is fixed by scaling the art to its footprint (the
+rule a building's own sheet follows: width matches the footprint, height
+overhangs upward) or by giving the well a larger footprint is a look
+decision, not a correctness one, and is deliberately left open.

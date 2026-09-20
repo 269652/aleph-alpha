@@ -28597,3 +28597,52 @@ plant_fibre gathering staying at 0). **Pre-existing, not from this change**:
 A/B'd in a clean worktree at the commit before it, where it fails with the
 identical numbers at the identical two lines. Recorded rather than quietly
 left.
+
+## The well had three different 2x2s, and only one was checked (`concept/village_market_square.md`, 2026-09-20)
+
+Reported live with the well in shot: *"The well is still placed partly on
+streets ... it should be placed on a free 2x2 grass patch"*.
+
+✅ **"Still", because the siting was never the problem.** `c2b78947` really
+does site the well with `allow_road` false and the whole 2×2 checked. What
+undid it is that three functions each answered "which 2×2" differently:
+
+| | which 2×2 |
+| --- | --- |
+| `_clear_block` | whichever quadrant round the anchor was free — its first option runs **north** of it |
+| `_nearest_prop_cell` | returned the centre of the **anchor cell alone** |
+| `_landmark_cells` | searched again from that position, landing on a third |
+
+So a well was validated on one patch, drawn over a second and reserved on a
+third, and two of the three could be road while the check passed. Measured
+across eight real villages: **16 well cells on road, two per well**.
+
+✅ **One answer now.** `VillageRenderer.landmark_block_at` — a multi-tile
+landmark stands on its block's centre, so the block is recovered by
+stepping back half a footprint. Siting, reservation and the tests all read
+it. Measured after: **0 road cells** under the well that had 2.
+
+✅ **A wrong guess worth recording.** The first suspect was ordering:
+`_close_short_street_gaps` runs *after* the landmarks are grounded and
+paves one- and two-tile holes, and a prop is not `_is_occupied_local` to
+it. That is a real hazard, so the gap closer is now told about the landmark
+block — but it was not the bug: the fix changed nothing on its own, because
+the cells it protected were the wrong 2×2 too. Kept, as the guard it should
+always have had.
+
+✅ **Two tests that passed by coincidence are corrected.**
+`test_landmarks_are_rendered_as_sprites_at_their_positions` and
+`test_spawned_npc_markers_know_the_settlements_shared_landmarks` compared
+the **grounded** landmark against the generator's **ungrounded** plan, which
+only matched while the well sat on one cell's centre. They now assert what
+they meant — the sprite stands where the settlement thinks it does, and
+every villager agrees with every other.
+
+🚧 **The art is still five tiles wide over a 2×2.** The well's sprite
+measures **80×60 px against a 32×32 footprint**, covering 24 cells of which
+12 are road, so even a perfectly sited well reads as standing on the
+street. Scaling the art to its footprint, or giving the well a bigger
+footprint, is a look decision and is left open rather than guessed at.
+
+Tests: `test_village_renderer.gd` + `test_village_layout.gd` +
+`test_landmark_sheet.gd` 253/253 (+1 new, 2 corrected).
