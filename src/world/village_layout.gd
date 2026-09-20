@@ -1370,3 +1370,102 @@ static func _close_row_gaps(
 				break
 			run.append(Vector2i(gap_x, y))
 		cells.append_array(run)
+
+
+## How far a way home may run, in tiles.
+##
+## Derived rather than picked: a building raised off the street grid stands
+## between two street rows, so the longest honest way home is one street
+## pitch down to a row and one pitch along it. Anything further is not a
+## spur, it is a new road, and this is not the pass that lays roads.
+const WAY_TO_PAVING_MAX_TILES := STREET_PITCH_TILES * 2
+
+
+## The cells to pave so that `doorstep` has a way to ground the village has
+## ALREADY paved: `[]` when it is already touching some, `null` when
+## nothing clear reaches it inside WAY_TO_PAVING_MAX_TILES.
+##
+## Reported live with a fisher's hut in shot: *"Fisher hut is there but
+## not connected to street system"*. Every other building a village places
+## is sited ON frontage, so the layout lays its doorstep among the plot's
+## own road cells and the plot is joined by construction. A works raised
+## against something else — a hut against its pond — is joined by nothing,
+## and a single paved cell at its door is a front step, not a road home.
+##
+## Two L-shaped runs per target, the same shape _frontage_spur already
+## walks for a street plot: down the door's own column then along, or
+## along then down. Targets are taken nearest first and ties broken by
+## (y, x), so the same ground lays the same way on every reload — a
+## village that paved a different way each visit would grow a new road
+## every time it was walked past.
+##
+## `[]` and `null` are deliberately different answers: "already joined" and
+## "cannot be joined" must never read the same, or a caller cannot tell a
+## hut with a road from a hut without one.
+static func way_to_paving(
+	doorstep: Vector2i, chunk_size: int, is_free: Callable, is_paved: Callable,
+	max_length: int = WAY_TO_PAVING_MAX_TILES
+):
+	var none: Array[Vector2i] = []
+	for step in [Vector2i(1, 0), Vector2i(-1, 0), Vector2i(0, 1), Vector2i(0, -1)]:
+		if is_paved.call(doorstep + (step as Vector2i)):
+			return none
+	var targets: Array = []
+	for y in chunk_size:
+		for x in chunk_size:
+			var cell := Vector2i(x, y)
+			var run := absi(cell.x - doorstep.x) + absi(cell.y - doorstep.y)
+			if run == 0 or run > max_length:
+				continue
+			if is_paved.call(cell):
+				targets.append(cell)
+	targets.sort_custom(func(a: Vector2i, b: Vector2i) -> bool:
+		var da := absi(a.x - doorstep.x) + absi(a.y - doorstep.y)
+		var db := absi(b.x - doorstep.x) + absi(b.y - doorstep.y)
+		if da != db:
+			return da < db
+		return a.y < b.y if a.y != b.y else a.x < b.x
+	)
+	for target in targets:
+		for vertical_first in [true, false]:
+			var run := _way_cells(doorstep, target as Vector2i, vertical_first)
+			if _way_is_clear(run, chunk_size, is_free, is_paved):
+				var to_lay: Array[Vector2i] = []
+				for cell in run:
+					if not is_paved.call(cell as Vector2i):
+						to_lay.append(cell as Vector2i)
+				return to_lay
+	return null
+
+
+## One L from `doorstep` to `target`, excluding both ends.
+static func _way_cells(doorstep: Vector2i, target: Vector2i, vertical_first: bool) -> Array:
+	var cells: Array = []
+	var corner := Vector2i(doorstep.x, target.y) if vertical_first else Vector2i(target.x, doorstep.y)
+	var here := doorstep
+	for leg in [corner, target]:
+		while here.y != (leg as Vector2i).y:
+			here.y += 1 if (leg as Vector2i).y > here.y else -1
+			cells.append(here)
+		while here.x != (leg as Vector2i).x:
+			here.x += 1 if (leg as Vector2i).x > here.x else -1
+			cells.append(here)
+	cells.pop_back()  # the target is the village's own paving, not ours to lay
+	return cells
+
+
+## Every cell of a candidate way is inside the chunk and is either clear
+## ground or paving the village already laid — a way that crosses its own
+## street at a junction is fine, one that runs through a house is not.
+static func _way_is_clear(
+	cells: Array, chunk_size: int, is_free: Callable, is_paved: Callable
+) -> bool:
+	for cell in cells:
+		var c: Vector2i = cell
+		if c.x < 0 or c.y < 0 or c.x >= chunk_size or c.y >= chunk_size:
+			return false
+		if is_paved.call(c):
+			continue
+		if not is_free.call(c):
+			return false
+	return true

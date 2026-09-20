@@ -71,3 +71,42 @@ func test_the_rule_the_dig_asks_for_is_a_real_question_with_a_real_answer():
 		),
 		"and ground nothing may be built on must not"
 	)
+
+
+## A pond the village finds already dug, with no record of ever having
+## been stocked, is stocked now (docs/concept/village_ponds.md, "A pond
+## nobody ever stocked"). Reported live with the water in shot a second
+## time: *"also no fish in pond"* -- every pond in every save made before
+## the stock was persisted holds no record at all, and the dig pass
+## returns early on water that is already there.
+##
+## It asks pond_has_been_stocked rather than pond_fish_at, because a pond
+## the village has FISHED OUT holds 0.0 and must stay that way.
+func test_the_dig_stocks_water_it_finds_that_nobody_ever_stocked():
+	var dig := _body("_dig_fisher_ponds_if_missing")
+	assert_true(
+		dig.contains("_stock_if_nobody_ever_did("),
+		"the branch that finds water already dug must still ask about its fish: %s" % dig
+	)
+	var stocking := _body("_stock_if_nobody_ever_did")
+	assert_true(
+		stocking.contains("pond_has_been_stocked"),
+		"it must tell water nobody stocked from water the village emptied: %s" % stocking
+	)
+	assert_false(
+		stocking.contains("pond_fish_at"),
+		"a pond FISHED OUT holds 0.0 and must not be refilled: %s" % stocking
+	)
+	assert_true(stocking.contains("stock_pond_at"), "...and stock the first kind")
+
+
+## The hut is JOINED to the village, not merely given a front step.
+## Reported live with the hut in shot: *"Fisher hut is there but not
+## connected to street system"* -- one paved cell at its door is a step,
+## and a step that reaches nothing is not a road home.
+func test_the_hut_is_joined_to_the_street_not_just_given_a_step():
+	var body := _body("_place_fisher_huts_if_missing")
+	assert_true(
+		body.contains("_join_to_the_street("),
+		"the hut pass must lay a real way back to the village: %s" % body
+	)

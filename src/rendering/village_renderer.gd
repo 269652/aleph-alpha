@@ -1366,6 +1366,7 @@ func _dig_fisher_ponds_if_missing(
 		var building_id: String = record.get("id", "")
 		if _has_pond_already(chunk_coord, chunk_size, world, origin, building_id):
 			ponds[origin] = _pond_water_near(chunk_coord, chunk_size, world, origin, building_id)
+			_stock_if_nobody_ever_did(chunk_coord, chunk_size, world, ponds[origin])
 			continue
 		# On the fisher's OWN side of the street. field_rect reaches
 		# FIELD_REACH_TILES in every direction and takes the first rectangle
@@ -1491,7 +1492,7 @@ func _place_fisher_huts_if_missing(
 			chunk_coord, origin, VillagePond.HUT_BUILDING_ID, Vector2i(0, 1), building_seed, ""
 		):
 			standing.append(origin)
-			_lay_front_step(chunk_coord, chunk_size, world, origin)
+			_join_to_the_street(chunk_coord, chunk_size, world, origin)
 
 
 ## The front step of a building the village raised off the street grid.
@@ -1514,16 +1515,63 @@ func _place_fisher_huts_if_missing(
 ## doorstep cell is already non-empty, so paving first would refuse the hut
 ## over its own future front step — the same ordering trap
 ## _place_new_village's own comment records for the houses.
-func _lay_front_step(chunk_coord: Vector2i, chunk_size: int, world, origin: Vector2i) -> void:
+## ...and the way back from that step to the village.
+##
+## Reported live with the hut in shot: *"Fisher hut is there but not
+## connected to street system"*. The first answer to the missing doorstep
+## was the step alone, and a step that reaches nothing is not a road home
+## — which is exactly what the screenshot showed. VillageLayout.
+## way_to_paving finds the run (pure geometry, tested on its own); this
+## lays it.
+##
+## Both halves are skipped in silence where they cannot be had: a hut
+## whose door already opens onto a rail keeps it, and a hut nothing clear
+## reaches keeps its step and no road, which is honest rather than a lane
+## paved through a neighbour's house.
+func _join_to_the_street(chunk_coord: Vector2i, chunk_size: int, world, origin: Vector2i) -> void:
 	if not world.has_method("build_at_global") or not world.has_method("modification_at_global"):
 		return
 	var step: Vector2i = origin + BuildingCatalog.doorstep_of(VillagePond.HUT_BUILDING_ID)
 	if step.x < 0 or step.y < 0 or step.x >= chunk_size or step.y >= chunk_size:
 		return
-	var g: Vector2i = chunk_coord * chunk_size + step
-	if world.modification_at_global(g.x, g.y) != "":
-		return  # a rail, a road or the gate is already a front step
-	world.build_at_global(g.x, g.y, TerrainRenderer.ROAD_TILE_ID)
+	var step_global: Vector2i = chunk_coord * chunk_size + step
+	if world.modification_at_global(step_global.x, step_global.y) == "":
+		world.build_at_global(step_global.x, step_global.y, TerrainRenderer.ROAD_TILE_ID)
+	var way = VillageLayout.way_to_paving(
+		step, chunk_size,
+		_is_buildable_local(chunk_coord, chunk_size, world),
+		_is_paved_local(chunk_coord, chunk_size, world)
+	)
+	if way == null:
+		return  # nothing clear reaches this door -- honestly, no road
+	for cell in way:
+		var g: Vector2i = chunk_coord * chunk_size + (cell as Vector2i)
+		world.build_at_global(g.x, g.y, TerrainRenderer.ROAD_TILE_ID)
+
+
+## Puts a stocking into water the village dug but nobody ever stocked.
+##
+## Reported live with the water in shot a second time: *"also no fish in
+## pond"*. Persisting the stock (EarthChunkManager.POND_FISH_DIR) keeps one
+## that EXISTS; a pond dug by a build that never kept one has no record at
+## all, and the branch above returns early on water that is already dug
+## — correctly, since a fisher stocks a pond once. So every pond in every
+## save made before the stock was kept stayed empty for ever.
+##
+## It asks pond_has_been_stocked, never pond_fish_at: a pond the village
+## has FISHED OUT holds 0.0 and must stay that way, and telling those two
+## apart is the whole reason that question exists.
+func _stock_if_nobody_ever_did(
+	chunk_coord: Vector2i, chunk_size: int, world, water: Array
+) -> void:
+	if water.is_empty() or not world.has_method("pond_has_been_stocked"):
+		return
+	if not world.has_method("stock_pond_at"):
+		return
+	var first: Vector2i = chunk_coord * chunk_size + (water[0] as Vector2i)
+	if world.pond_has_been_stocked(first.x, first.y):
+		return
+	world.stock_pond_at(first.x, first.y)
 
 
 ## The water already standing in this house's own reach, in the same local
