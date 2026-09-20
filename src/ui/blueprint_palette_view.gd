@@ -39,10 +39,23 @@ signal blueprint_selected(blueprint_id: String)
 ## buttons" problem again, with pictures instead of words.
 const ICON_SIZE := 48
 
-## Icon, then the name under it, with room for the longest name the
-## catalogue actually has ("Blacksmith", "Farmhouse") rather than whatever
-## happens to fit today.
-const SLOT_SIZE := Vector2(100.0, 82.0)
+## A slot is the icon with the name under it, and its size is MEASURED from
+## the names it actually has to hold rather than written down.
+##
+## It was a constant (100x82), and tools/probe_build_palette.gd showed what
+## that costs: at UiScale.MAX_SCALE six of the ten names ran past it --
+## "Warehouse" wanted 137px of a slot offering 84 -- and even at 1.00 the
+## tightest had 7px to spare, so one longer building name would have
+## clipped today. UiScale deliberately scales FONT SIZES and not card widths
+## (its own documented limit), so a written-down slot width is a slot that
+## clips the moment that slider moves.
+static func slot_size_for(
+	widest_name_px: float, line_height_px: float, padding_px: float
+) -> Vector2:
+	return Vector2(
+		maxf(float(ICON_SIZE), widest_name_px) + padding_px * 2.0,
+		float(ICON_SIZE) + line_height_px + padding_px * 2.0
+	)
 
 const TITLE_TEXT := "BUILD"
 
@@ -133,7 +146,16 @@ func _build() -> void:
 
 	_footer = Label.new()
 	_footer.add_theme_color_override("font_color", UiTheme.TEXT_MUTED)
-	_footer.clip_text = true
+	# Wraps rather than clips. Measured at UiScale.MAX_SCALE
+	# (tools/probe_build_palette.gd): clipped, the brewery's footer read
+	# "22 Wood, 12 Stone, 4 Plant Fi" -- and the footer is the one line that
+	# says what an armed blueprint will really cost.
+	#
+	# An autowrapping Label reports a near-zero minimum width, which is
+	# exactly what is wanted here: the SLOT row decides how wide the card
+	# is, and a long cost line is not allowed to stretch the whole menu to
+	# fit one string.
+	_footer.autowrap_mode = TextServer.AUTOWRAP_WORD_SMART
 	_column.add_child(_footer)
 
 	_slot_group = ButtonGroup.new()
@@ -166,7 +188,42 @@ func show_category(category_id: String) -> void:
 	# letting it re-emit would run it again mid-rebuild.
 	for known_id in _tabs:
 		_tabs[known_id].set_pressed_no_signal(known_id == category_id)
+	_size_slots()
 	_apply_selection()
+
+
+## One width for every slot in the row -- the widest name in this category,
+## measured with the font the slots are really drawn in rather than the one
+## they were built with, so a UI-scale change lands correctly on a refresh.
+## One width and not each slot's own, or a short name leaves a narrow button
+## beside a wide one and the row reads as ragged.
+func _size_slots() -> void:
+	var slots := _slot_row.get_children()
+	if slots.is_empty():
+		return
+	var widest := 0.0
+	var line_height := 0.0
+	var padding := 0.0
+	for slot: Button in slots:
+		var font: Font = slot.get_theme_font("font")
+		var font_size: int = slot.get_theme_font_size("font_size")
+		var box: StyleBox = slot.get_theme_stylebox("normal")
+		widest = maxf(
+			widest,
+			font.get_string_size(slot.text, HORIZONTAL_ALIGNMENT_LEFT, -1, font_size).x
+		)
+		line_height = maxf(line_height, font.get_height(font_size))
+		padding = maxf(padding, box.content_margin_left)
+	var size := slot_size_for(widest, line_height, padding)
+	for slot: Button in slots:
+		slot.custom_minimum_size = size
+
+
+## Re-measures everything against the font the theme carries NOW -- what
+## World calls when the player moves the UI-scale slider, since that scales
+## font sizes under a layout that has already been measured.
+func refresh() -> void:
+	show_category(_shown_category)
 
 
 ## Freed outright rather than queue_free'd: the row's contents must be the
@@ -198,7 +255,6 @@ func _make_slot(blueprint_id: String) -> Button:
 	button.toggle_mode = true
 	button.button_group = _slot_group
 	button.focus_mode = Control.FOCUS_NONE
-	button.custom_minimum_size = SLOT_SIZE
 	button.text = BlueprintPaletteModel.slot_title(blueprint_id)
 	button.icon = _icons.icon_texture(blueprint_id, ICON_SIZE)
 	# The icon is already cut to exactly ICON_SIZE (BlueprintIcon boxes it),
@@ -305,3 +361,7 @@ func tab_for(category_id: String) -> Button:
 
 func footer_text() -> String:
 	return "" if _footer == null else _footer.text
+
+
+func footer_label() -> Label:
+	return _footer

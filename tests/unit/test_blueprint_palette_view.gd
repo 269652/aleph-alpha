@@ -14,6 +14,7 @@ const BlueprintPaletteView = preload("res://src/ui/blueprint_palette_view.gd")
 const BlueprintPaletteModel = preload("res://src/ui/blueprint_palette_model.gd")
 const BuildPlan = preload("res://src/world/build_plan.gd")
 const UiTheme = preload("res://src/ui/ui_theme.gd")
+const UiScale = preload("res://src/ui/ui_scale.gd")
 
 const HOURS := 12.0
 
@@ -225,3 +226,91 @@ func test_only_the_open_tab_reads_as_open():
 			if _view.tab_for(other).button_pressed:
 				open.append(other)
 		assert_eq(open, [category_id], "after opening %s" % category_id)
+
+
+func _name_width(slot: Button) -> float:
+	return slot.get_theme_font("font").get_string_size(
+		slot.text, HORIZONTAL_ALIGNMENT_LEFT, -1, slot.get_theme_font_size("font_size")
+	).x
+
+
+## What the name really has to fit in: the slot minus its own stylebox
+## padding, not the slot's outer width.
+func _room_for_name(slot: Button) -> float:
+	return slot.custom_minimum_size.x - slot.get_theme_stylebox("normal").content_margin_left * 2.0
+
+
+## MEASURED, not assumed (tools/probe_build_palette.gd): with the slot width
+## written down as a constant, six of the ten names ran past it at the
+## largest UI scale the player can pick -- "Warehouse" wanted 137px of a
+## slot offering 84 -- and even at 1.00 the tightest had 7px to spare, so
+## one longer building name would have clipped today.
+##
+## UiScale deliberately scales FONT SIZES and not card widths (its own
+## documented limit), so a slot whose width is a constant is a slot that
+## clips the moment that slider moves. The width is measured from the names
+## it actually has to hold instead.
+func test_a_slot_is_wide_enough_for_its_own_name_at_every_ui_scale():
+	var checked := 0
+	for scale in [UiScale.MIN_SCALE, UiScale.DEFAULT_SCALE, UiScale.MAX_SCALE]:
+		UiTheme.new().apply_scale(_view.theme, scale)
+		for category in BlueprintPaletteModel.categories():
+			_view.show_category(String(category["id"]))
+			for slot in _view.slots():
+				assert_true(
+					_room_for_name(slot) >= _name_width(slot),
+					"%s clips at scale %.2f: %d px of name in %d px of slot" % [
+						slot.get_meta("blueprint_id"), scale,
+						int(_name_width(slot)), int(_room_for_name(slot))
+					]
+				)
+				checked += 1
+	assert_gt(checked, 0, "the premise: there were slots to measure")
+
+
+## The row stays a row: one width for every slot in it, so a short name does
+## not leave a narrow button beside a wide one.
+func test_every_slot_in_a_row_is_the_same_width():
+	for category in BlueprintPaletteModel.categories():
+		_view.show_category(String(category["id"]))
+		var widths := {}
+		for slot in _view.slots():
+			widths[slot.custom_minimum_size.x] = true
+		assert_eq(widths.size(), 1, "tab %s has a ragged row" % category["id"])
+
+
+## A slot is never narrower than the picture it holds, however short the
+## name is.
+func test_a_slot_is_never_narrower_than_its_own_picture():
+	for category in BlueprintPaletteModel.categories():
+		_view.show_category(String(category["id"]))
+		for slot in _view.slots():
+			assert_true(
+				slot.custom_minimum_size.x >= float(BlueprintPaletteView.ICON_SIZE),
+				"%s is narrower than its icon" % slot.get_meta("blueprint_id")
+			)
+
+
+## Measured at UiScale.MAX_SCALE (tools/probe_build_palette.gd): the
+## brewery's footer read "22 Wood, 12 Stone, 4 Plant Fi" -- clipped
+## mid-word. The footer is the one line that says what an armed blueprint
+## will really cost, so losing its end is losing the thing it is for.
+##
+## It wraps instead of clipping. Wrapping and not widening, deliberately:
+## the card's width is the SLOT row's to decide, and a long cost line
+## allowed to drive it would stretch the whole menu to fit one string.
+func test_the_footer_wraps_rather_than_losing_its_own_end():
+	var footer: Label = _view.footer_label()
+	assert_false(footer.clip_text, "a clipped footer loses the cost it exists to state")
+	assert_ne(footer.autowrap_mode, TextServer.AUTOWRAP_OFF, "so it has to wrap")
+
+
+func test_the_footer_never_decides_how_wide_the_card_is():
+	UiTheme.new().apply_scale(_view.theme, UiScale.MAX_SCALE)
+	_view.show_category(BlueprintPaletteModel.CATEGORY_PRODUCTION)
+	_view.set_selected("brewery")
+	var footer: Label = _view.footer_label()
+	assert_true(
+		footer.get_combined_minimum_size().x < _view.get_combined_minimum_size().x,
+		"the slot row sets the width, not the longest cost string"
+	)

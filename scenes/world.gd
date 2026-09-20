@@ -2364,6 +2364,12 @@ func _apply_ui_scale() -> void:
 	# player's state changes, see _update_condition_chips). Forgetting what the
 	# row currently says makes the next frame rebuild it at the new size.
 	_condition_chips_signature = ""
+	# The build palette measures its own slots against the font they are
+	# drawn in (BlueprintPaletteView._size_slots), so a scale change means
+	# measuring again -- otherwise every slot keeps the width it had at the
+	# old size and the names clip.
+	if _blueprint_palette != null:
+		_blueprint_palette.refresh()
 
 
 ## The settings menu's UI scale slider moved -- applies and persists
@@ -5936,7 +5942,10 @@ func _build_plan_wireframes() -> void:
 	add_child(_plan_wireframes)
 
 
-const PALETTE_SIZE := Vector2(480.0, 196.0)
+## How far the palette's card sits off the bottom edge. Its WIDTH and
+## HEIGHT are not written down: a slot is as wide as the names it has to
+## hold (BlueprintPaletteView.slot_size_for), so the card is as wide as its
+## slots -- see _fit_blueprint_palette.
 const PALETTE_MARGIN := 8.0
 
 
@@ -5958,11 +5967,6 @@ const PALETTE_MARGIN := 8.0
 ## with.
 func _build_blueprint_palette() -> void:
 	_blueprint_palette = BlueprintPaletteView.new()
-	_blueprint_palette.set_anchors_preset(Control.PRESET_CENTER_BOTTOM)
-	_blueprint_palette.offset_left = -PALETTE_SIZE.x * 0.5
-	_blueprint_palette.offset_right = PALETTE_SIZE.x * 0.5
-	_blueprint_palette.offset_top = -PALETTE_SIZE.y - PALETTE_MARGIN
-	_blueprint_palette.offset_bottom = -PALETTE_MARGIN
 	_ui.add_child(_blueprint_palette)
 	_blueprint_palette.configure(
 		_ui_theme,
@@ -5972,7 +5976,29 @@ func _build_blueprint_palette() -> void:
 			return _item_catalog.display_name_of(item_id)
 	)
 	_blueprint_palette.blueprint_selected.connect(_on_blueprint_selected)
+	# Whenever the menu needs more room -- a wider tab, a larger UI scale --
+	# the card grows with it rather than clipping.
+	_blueprint_palette.minimum_size_changed.connect(_fit_blueprint_palette)
+	_fit_blueprint_palette()
 	_blueprint_palette.visible = false
+
+
+## Centres the card on the bottom edge at exactly the size the menu needs.
+##
+## Measured rather than written down, because a slot is now as wide as the
+## names it really has to hold (BlueprintPaletteView.slot_size_for, and the
+## measurement that forced it): a card pinned to a constant width would
+## clip the wider slots instead of the names, which is the same defect one
+## level up.
+func _fit_blueprint_palette() -> void:
+	if _blueprint_palette == null:
+		return
+	var wanted := _blueprint_palette.get_combined_minimum_size()
+	_blueprint_palette.set_anchors_preset(Control.PRESET_CENTER_BOTTOM)
+	_blueprint_palette.offset_left = -wanted.x * 0.5
+	_blueprint_palette.offset_right = wanted.x * 0.5
+	_blueprint_palette.offset_top = -wanted.y - PALETTE_MARGIN
+	_blueprint_palette.offset_bottom = -PALETTE_MARGIN
 
 
 ## Tells the palette what the rest of planner mode thinks is armed.

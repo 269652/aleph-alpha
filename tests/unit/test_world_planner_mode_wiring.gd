@@ -400,3 +400,28 @@ func test_what_the_palette_says_is_armed_clears_with_the_selection():
 		_function_body("_update_palette_selection").contains("set_selected(_selected_blueprint)"),
 		"and it is told the state the rest of the mode acts on, not a second one"
 	)
+
+
+## A slot's width is measured from the names it holds now
+## (BlueprintPaletteView.slot_size_for), so the card's own width has to
+## follow its content -- a card pinned to a written-down width would just
+## clip the wider slots instead of the names, which is the same defect one
+## level up.
+func test_the_card_fits_the_menu_rather_than_a_written_down_width():
+	var body := _function_body("_fit_blueprint_palette")
+	assert_true(body.contains("get_combined_minimum_size()"), body)
+	assert_false(
+		_source().contains("const PALETTE_SIZE"),
+		"the fixed card size is gone rather than left beside the measured one"
+	)
+
+
+## Moving the UI-scale slider changes font sizes under a layout that has
+## already been measured (UiScale scales fonts, deliberately not card
+## widths), so the palette has to measure again or every slot keeps the
+## width it had at the old size.
+func test_the_palette_is_re_measured_when_the_ui_scale_changes():
+	assert_true(
+		_function_body("_apply_ui_scale").contains("_blueprint_palette.refresh()"),
+		_function_body("_apply_ui_scale")
+	)
