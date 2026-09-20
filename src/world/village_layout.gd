@@ -881,6 +881,15 @@ static func _sited_plot(
 				best_key = key
 				best = {
 					"origin": origin, "building_id": building_id,
+					# A plot's door is its south edge here, like every other
+					# plot's (BuildingCatalog.doorstep_of), so it faces the
+					# same way. This was the one plot maker that did not say
+					# so, and _place_farms_if_missing reads plot["facing"]
+					# on any world without place_building_over_roads -- it
+					# never crashed only because this fallback was rarely
+					# reached (pinned by
+					# test_every_plot_says_which_way_its_building_faces).
+					"facing": Vector2i(0, 1),
 					"doorstep": doorstep, "road_spur": spur,
 				}
 	return best

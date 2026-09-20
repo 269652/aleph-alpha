@@ -46,9 +46,10 @@ const DisplayScaling = preload("res://src/rendering/display_scaling.gd")
 const ProceduralGrassSprite = preload("res://src/rendering/procedural_grass_sprite.gd")
 const IllustratedGrassPatch = preload("res://src/rendering/illustrated_grass_patch.gd")
 const IllustratedFernPatch = preload("res://src/rendering/illustrated_fern_patch.gd")
+const PlantSway = preload("res://src/rendering/plant_sway.gd")
 const ForestFern = preload("res://src/world/forest_fern.gd")
 const BlackberryBramble = preload("res://src/world/blackberry_bramble.gd")
-const IllustratedBrambleSprite = preload("res://src/rendering/illustrated_bramble_sprite.gd")
+const IllustratedBramblePatch = preload("res://src/rendering/illustrated_bramble_patch.gd")
 const IllustratedWheatPatch = preload("res://src/rendering/illustrated_wheat_patch.gd")
 const FlowerPatch = preload("res://src/world/flower_patch.gd")
 const SeedDispersal = preload("res://src/world/seed_dispersal.gd")
@@ -493,6 +494,13 @@ var _illustrated_grass := IllustratedGrassPatch.new()
 ## material and the mesh are all shared, and only the per-band MultiMesh
 ## instances are per chunk.
 var _illustrated_ferns := IllustratedFernPatch.new()
+## The thickets, drawn and bent the same way (docs/concept/brambles.md).
+var _illustrated_brambles := IllustratedBramblePatch.new()
+
+## Where the bend is drawn against right now, which TRAILS the real walker
+## (see set_grass_walker_position and PlantSway). Kept here rather than in
+## each patch renderer so every plant reads one point.
+var _walker_bend_position := PlantSway.UNSET_POSITION
 ## The season's tint on living green, as last pushed in by World (see
 ## set_season_tint / SeasonalFoliage). Stored rather than read live because
 ## the things that need it are refreshed on their own cadences -- the grass
@@ -9224,6 +9232,7 @@ func set_wind_strength(strength: float) -> void:
 	_tree_renderer.set_wind_strength(strength)
 	_illustrated_grass.set_wind_strength(strength)
 	_illustrated_ferns.set_wind_strength(strength)
+	_illustrated_brambles.set_wind_strength(strength)
 	IllustratedWheatPatch.set_wind_strength(strength)
 
 
@@ -9236,6 +9245,7 @@ func set_season_tint(tint: Color) -> void:
 	_season_tint = tint
 	_illustrated_grass.set_season_tint(tint)
 	_illustrated_ferns.set_season_tint(tint)
+	_illustrated_brambles.set_season_tint(tint)
 
 
 ## Pushes the real, live sun position (see solar_position.gd's
@@ -9847,33 +9857,83 @@ func step_ferns(delta_seconds: float) -> void:
 ## the same shape _sync_scrub_sprites uses, and for the same reason: at
 ## BlackberryBramble.MAX_PATCHES (36) a chunk's brambles are nowhere near the
 ## density that would need instancing.
+## Whether a blackberry thicket stands on this global tile.
+##
+## The one question the player asks about brambles (docs/concept/
+## brambles.md, "The middle is not the edge"): the thicket's own CELL is
+## what slows a walker and draws blood, and clipping the drawn edge of a
+## clump from the next tile over is a visual event only, since the art is
+## wider than the tile it is planted on.
+func is_bramble_at_global(global_x: int, global_y: int) -> bool:
+	var tile := Vector2i(global_x, global_y)
+	var sim = _bramble_sims.get(_chunk_coord_for_tile(tile))
+	return sim != null and sim.has_bramble(_local_coord(global_x, global_y))
+
+
+## One MultiMeshInstance2D draw call per Y-band, exactly as the ferns and
+## the grass are drawn, and through the grass's own band maths.
+##
+## This REPLACED a Sprite2D per thicket, and the reason is the bend: the
+## shared shader reads INSTANCE_CUSTOM for its atlas sub-rect and the
+## instance origin for its root, and neither exists outside a MultiMesh.
+## Asked for directly — *"they should bend slightly when walked over from
+## the side"* — which retires this system's own earlier reasoning that
+## brambles "do not sway" (docs/concept/brambles.md).
 func _sync_bramble_sprites(chunk_coord: Vector2i) -> void:
+	if not _decorates(chunk_coord):
+		_drop_decoration(_bramble_sprites, chunk_coord)
+		return
 	var sim = _bramble_sims.get(chunk_coord)
-	var sprites: Dictionary = _bramble_sprites.get(chunk_coord, {})
 	if sim == null:
 		return
-	for cell in sprites.keys():
-		if not sim.has_bramble(cell):
-			sprites[cell].free()
-			sprites.erase(cell)
-
+	var bands: Dictionary = _bramble_sprites.get(chunk_coord, {})
 	var origin := chunk_coord * CHUNK_SIZE
+	var half_span := _visible_half_span_tiles()
+	var cards_by_band: Dictionary = {}
 	for cell in sim.get_patch_cells():
-		if sprites.has(cell):
+		var tile: Vector2i = origin + (cell as Vector2i)
+		if not DecorationLod.keeps_decoration_tile(tile, _disturbance_center_tile, half_span, GRASS_VIEW_BUFFER_TILES):
 			continue
-		var texture := IllustratedBrambleSprite.frame_for(origin + cell)
-		if texture == null:
-			continue  # no sheet on disk: draw nothing rather than a box
-		var sprite := Sprite2D.new()
-		sprite.texture = texture
-		sprite.scale = Vector2.ONE * IllustratedBrambleSprite.world_scale()
-		sprite.position = Vector2(
-			(origin.x + cell.x + 0.5) * TerrainRenderer.TILE_SIZE,
-			(origin.y + cell.y + 0.5) * TerrainRenderer.TILE_SIZE
-		)
-		_ground_decor_parent.add_child(sprite)
-		sprites[cell] = sprite
-	_bramble_sprites[chunk_coord] = sprites
+		var cell_spec := {
+			# Off the GLOBAL cell, so which of the twenty-five clumps a
+			# thicket wears is its own and survives a reload — the same
+			# guarantee the Sprite2D draw gave, kept.
+			"seed": hash("%d_%d_bramble_clump" % [tile.x, tile.y]),
+			"ground_position": Vector2(
+				(tile.x + 0.5) * TerrainRenderer.TILE_SIZE,
+				(tile.y + 0.5) * TerrainRenderer.TILE_SIZE
+			),
+			"growth": 1.0,  # a cane is a cane: it has no growth stage to sample
+		}
+		for card in IllustratedBramblePatch.cards_for_cell(cell_spec):
+			var local_row := IllustratedBramblePatch.local_row_for_world_y(
+				card.position.y, origin.y, TerrainRenderer.TILE_SIZE
+			)
+			var band := IllustratedBramblePatch.band_index_for_local_y(local_row, CHUNK_SIZE)
+			var list: Array = cards_by_band.get(band, [])
+			list.append(card)
+			cards_by_band[band] = list
+
+	for band in bands.keys().duplicate():
+		if not cards_by_band.has(band):
+			bands[band].queue_free()
+			bands.erase(band)
+
+	for band in cards_by_band:
+		var mmi: MultiMeshInstance2D = bands.get(band)
+		if mmi == null:
+			mmi = MultiMeshInstance2D.new()
+			mmi.position = Vector2(
+				(origin.x + CHUNK_SIZE * 0.5) * TerrainRenderer.TILE_SIZE,
+				IllustratedBramblePatch.band_anchor_world_y(
+					band, origin.y, CHUNK_SIZE, TerrainRenderer.TILE_SIZE
+				)
+			)
+			_entities_parent.add_child(mmi)
+			bands[band] = mmi
+		_illustrated_brambles.fill_band(mmi, mmi.position, cards_by_band[band])
+
+	_bramble_sprites[chunk_coord] = bands
 
 
 func _sync_fern_sprites(chunk_coord: Vector2i) -> void:
@@ -10595,10 +10655,36 @@ func _build_farm_plot_marker(tile: Vector2i) -> FarmPlotMarker:
 ## long_grass.md's "A second atlas family: farmed wheat") -- one write here
 ## updates every wheat crop on every farm at once, the same "one shared
 ## uniform" shape grass's own single call already uses.
-func set_grass_walker_position(world_position: Vector2) -> void:
-	_illustrated_grass.set_walker_position(world_position)
-	_illustrated_ferns.set_walker_position(world_position)
-	IllustratedWheatPatch.set_walker_position(world_position)
+## Where every plant's bend is drawn against this frame — the walker's
+## position, EASED, not the walker's position.
+##
+## Reported live for every plant at once: *"it bounces back too fast and
+## also bending too fast giving the impression of rubber instead of
+## natural plant"*. The push term in the shader is a pure function of the
+## walker's CURRENT distance, so a blade reached full lean the frame they
+## came into range and stood upright the frame they left — tracking them
+## exactly, with no inertia and no settling. PlantSway puts real time into
+## that, asymmetric: quick to give, slower to come back, which is what a
+## stem pushed over by a force and returning on its own stiffness does.
+##
+## ONE eased point, pushed to every plant. Two plants leaning toward
+## different places would be worse than both snapping, and a test pins
+## that grass and the ferns are handed the same one.
+##
+## `delta` defaults to 0, which SNAPS: every existing caller that never
+## passes one keeps behaving exactly as it did, and a test asks for that
+## directly rather than leaving it to be found.
+func set_grass_walker_position(world_position: Vector2, delta: float = 0.0) -> void:
+	if delta > 0.0:
+		_walker_bend_position = PlantSway.eased_walker_position(
+			_walker_bend_position, world_position, delta
+		)
+	else:
+		_walker_bend_position = world_position
+	_illustrated_grass.set_walker_position(_walker_bend_position)
+	_illustrated_ferns.set_walker_position(_walker_bend_position)
+	_illustrated_brambles.set_walker_position(_walker_bend_position)
+	IllustratedWheatPatch.set_walker_position(_walker_bend_position)
 
 
 ## How grown the tall-grass patch at `pixel_position` is (0..1, 1 mature), or
@@ -17599,10 +17685,24 @@ func _despawn_logistics_workers_at(chunk_coord: Vector2i, local_cell: Vector2i) 
 func _sync_structure_art(
 	chunk_coord: Vector2i, local_cell: Vector2i, previous_tile_id: String, new_tile_id: String
 ) -> void:
-	if previous_tile_id != new_tile_id and _illustrated_structure_sprite.has_subject(previous_tile_id):
+	if previous_tile_id != new_tile_id and _draws_structure_art(previous_tile_id):
 		_despawn_structure_art_at(chunk_coord, local_cell)
-	if previous_tile_id != new_tile_id and _illustrated_structure_sprite.has_subject(new_tile_id):
+	if previous_tile_id != new_tile_id and _draws_structure_art(new_tile_id):
 		_spawn_structure_art_for(chunk_coord, local_cell, new_tile_id)
+
+
+## Whether this tile has any real art to stand on it.
+##
+## Deliberately not has_subject alone. A SHARED LINE between two fields
+## (VillageFarm.SHARED_FENCE_TILE_IDS) is an id of its own that the art
+## registry has never heard of -- it is DEFINED as the two ordinary rails
+## standing there, and those are what get drawn. A corner is the mirror
+## case and answers false: it is still a rail, and it draws nothing.
+func _draws_structure_art(tile_id: String) -> bool:
+	for piece in VillageFarm.fence_pieces_of(tile_id):
+		if _illustrated_structure_sprite.has_subject(String(piece)):
+			return true
+	return _illustrated_structure_sprite.has_subject(tile_id)
 
 
 ## Spawns exactly one real-art overlay Sprite2D for `subject` at
@@ -17624,28 +17724,50 @@ func _spawn_structure_art_for(chunk_coord: Vector2i, local_cell: Vector2i, subje
 	var by_cell: Dictionary = _structure_art_sprites[chunk_coord]
 	if by_cell.has(local_cell):
 		return
-	var texture := _illustrated_structure_sprite.footprint_texture(subject, TerrainRenderer.TILE_SIZE)
-	if texture == null:
-		return
+	# ONE SPRITE PER PIECE, because one cell can carry more than one.
+	#
+	# A SHARED LINE between two neighbouring fields is both their rails
+	# standing on the same tile (VillageFarm.SHARED_FENCE_TILE_IDS), each
+	# drawn on its OWN inner edge -- which is exactly the picture asked for:
+	# *"two rails on a single tile so both enclosures are fenced properly"*.
+	# Nothing new is drawn: a shared id is defined as the two ordinary rails,
+	# so each piece keeps the art and the inner-edge offset it already had.
+	var pieces: Array = VillageFarm.fence_pieces_of(subject)
+	if pieces.is_empty():
+		pieces = [subject]
 	var global_cell: Vector2i = chunk_coord * CHUNK_SIZE + local_cell
 	var tile_center := (Vector2(global_cell) + Vector2(0.5, 0.5)) * TerrainRenderer.TILE_SIZE
 	var tile_bottom := tile_center.y + TerrainRenderer.TILE_SIZE * 0.5
-	var sprite := Sprite2D.new()
-	sprite.texture = texture
-	sprite.position = (
-		Vector2(tile_center.x, tile_bottom - float(texture.get_height()) * 0.5)
-		+ _illustrated_structure_sprite.footprint_offset(subject, TerrainRenderer.TILE_SIZE)
-	)
-	_entities_parent.add_child(sprite)
-	by_cell[local_cell] = sprite
+	var sprites: Array = []
+	for piece in pieces:
+		var texture := _illustrated_structure_sprite.footprint_texture(
+			String(piece), TerrainRenderer.TILE_SIZE
+		)
+		if texture == null:
+			continue
+		var sprite := Sprite2D.new()
+		sprite.texture = texture
+		sprite.position = (
+			Vector2(tile_center.x, tile_bottom - float(texture.get_height()) * 0.5)
+			+ _illustrated_structure_sprite.footprint_offset(
+				String(piece), TerrainRenderer.TILE_SIZE
+			)
+		)
+		_entities_parent.add_child(sprite)
+		sprites.append(sprite)
+	if sprites.is_empty():
+		return
+	by_cell[local_cell] = sprites
 
 
 func _despawn_structure_art_at(chunk_coord: Vector2i, local_cell: Vector2i) -> void:
 	var by_cell: Dictionary = _structure_art_sprites.get(chunk_coord, {})
-	var sprite: Node = by_cell.get(local_cell)
-	if sprite == null:
+	var sprites: Array = by_cell.get(local_cell, [])
+	if sprites.is_empty():
 		return
-	sprite.free()
+	for sprite in sprites:
+		if is_instance_valid(sprite):
+			sprite.free()
 	by_cell.erase(local_cell)
 
 
@@ -18460,7 +18582,7 @@ func _load_chunk(chunk_coord: Vector2i) -> void:
 		# _place_completed_construction_project) but draws itself through
 		# its own building node -- never a second, single-tile overlay on
 		# top of it.
-		if _illustrated_structure_sprite.has_subject(subject) and not chunk.buildings.has(local_cell):
+		if _draws_structure_art(subject) and not chunk.buildings.has(local_cell):
 			_spawn_structure_art_for(chunk_coord, local_cell, subject)
 
 	# A freshly (re)loaded chunk can bring either a Sägewerk or a Storage
@@ -19761,6 +19883,13 @@ var _construction_site_nodes: Dictionary = {}
 ## should show a builder working on it".
 var _construction_site_workers: Dictionary = {}
 
+## How far a builder walks for the material his project reserved -- his own
+## village, one chunk across, exactly the reach and exactly the reasoning
+## STRUCTURE_MEAL_RADIUS_TILES already uses for a villager walking to a
+## shelf to eat, rather than a second radius invented here. A store further
+## off than that belongs to somebody else's village.
+const CONSTRUCTION_STORE_REACH_TILES := CHUNK_SIZE
+
 
 func _sync_construction_site(chunk_coord: Vector2i, project) -> void:
 	var building_id: String = project.blueprint_id
@@ -19837,16 +19966,36 @@ func _sync_construction_worker(chunk_coord: Vector2i, project, builder_count: fl
 	if not _construction_site_workers.has(chunk_coord):
 		_construction_site_workers[chunk_coord] = {}
 	var by_origin: Dictionary = _construction_site_workers[chunk_coord]
-	var standing = by_origin.get(origin_local)
-	if standing != null and is_instance_valid(standing):
-		return
 	var footprint := BuildingCatalog.footprint_of(project.blueprint_id)
 	var plot := Rect2(
 		Vector2(chunk_coord * CHUNK_SIZE + origin_local) * TerrainRenderer.TILE_SIZE,
 		Vector2(footprint) * TerrainRenderer.TILE_SIZE
 	)
+	var standing = by_origin.get(origin_local)
+	if standing != null and is_instance_valid(standing):
+		# He keeps his round across ticks, but two things can become true
+		# after he starts: a project reserves its material (a site that
+		# began as a bare plan), and a village finishes the store he would
+		# fetch from. Both are picked up here rather than only at spawn, so
+		# neither needs him to die and respawn to notice.
+		if standing.reserved_material.is_empty():
+			standing.reserved_material = project.reserved_material.duplicate()
+		if standing.depot == null:
+			standing.depot = _construction_store_near(plot.get_center())
+		return
 	var worker := ConstructionWorkerMarker.new()
 	worker.plot = plot
+	# The two ends of the haul (docs/concept/building.md, "And he carries
+	# the material"): the project's OWN reservation -- material already
+	# drawn out of VillageMarket when the project started, which used to
+	# travel from a number to the site by teleport -- and the village store
+	# that is physically holding it. No store in reach is a real answer: he
+	# works the plot, exactly as he did before this.
+	worker.reserved_material = project.reserved_material.duplicate()
+	worker.depot = _construction_store_near(plot.get_center())
+	# And the world he crosses to get there, so WalkGate can refuse him a
+	# wall the way it refuses every other walker one.
+	worker.earth = self
 	# The site's own seed, so one builder works one site the same way on
 	# every reload -- the same seed the stage sprite is picked from.
 	worker.seed_value = _house_site_seed(
@@ -19855,6 +20004,40 @@ func _sync_construction_worker(chunk_coord: Vector2i, project, builder_count: fl
 	worker.position = plot.position + plot.size * 0.5
 	_entities_parent.add_child(worker)
 	by_origin[origin_local] = worker
+
+
+## The DOOR of the village store this site fetches from, or null when none
+## is in reach -- the cramped site that went without one
+## (village_warehouse.md's own pillar-1 caveat), or a settlement whose
+## warehouse is not built yet.
+##
+## The door, not the building. nearest_structure_position answers with a
+## whole-building's ORIGIN cell, which is inside its walls -- and measured
+## on a real village (tools/probe_construction_haul.gd) a builder sent
+## there was refused by WalkGate at the wall and slid along it for the
+## whole run, delivering nothing in four simulated minutes. This is the
+## same cell a villager hauling INTO the store is sent to
+## (VillageRenderer._warehouse_door), derived the same way.
+func _construction_store_near(pixel_position: Vector2):
+	var reach := float(CONSTRUCTION_STORE_REACH_TILES) * TerrainRenderer.TILE_SIZE
+	var query_tile := Vector2i(
+		floori(pixel_position.x / TerrainRenderer.TILE_SIZE),
+		floori(pixel_position.y / TerrainRenderer.TILE_SIZE)
+	)
+	var doorstep := BuildingCatalog.doorstep_of(WAREHOUSE_BUILDING_ID)
+	var nearest = null
+	var nearest_distance := reach
+	for chunk_coord in chunks_in_radius(_chunk_coord_for_tile(query_tile), 1):
+		for record in buildings_in_chunk(chunk_coord):
+			if String(record.get("id", "")) != WAREHOUSE_BUILDING_ID:
+				continue
+			var door: Vector2i = chunk_coord * CHUNK_SIZE + record["origin_local"] + doorstep
+			var door_px: Vector2 = (Vector2(door) + Vector2.ONE * 0.5) * float(TerrainRenderer.TILE_SIZE)
+			var distance := pixel_position.distance_to(door_px)
+			if distance <= nearest_distance:
+				nearest = door_px
+				nearest_distance = distance
+	return nearest
 
 
 func _free_construction_worker(chunk_coord: Vector2i, origin_local: Vector2i) -> void:
@@ -20301,8 +20484,8 @@ func _unload_chunk(chunk_coord: Vector2i) -> void:
 	_fern_sprites.erase(chunk_coord)
 	_fern_sims.erase(chunk_coord)
 
-	for sprite in _bramble_sprites.get(chunk_coord, {}).values():
-		sprite.free()
+	for mmi in _bramble_sprites.get(chunk_coord, {}).values():
+		mmi.free()
 	_bramble_sprites.erase(chunk_coord)
 	_bramble_sims.erase(chunk_coord)
 
@@ -20371,8 +20554,10 @@ func _unload_chunk(chunk_coord: Vector2i) -> void:
 			_resync_logistics_for_farm(farm_chunk_coord, farm_local_cell)
 	_resync_all_chain_legs()
 
-	for art_sprite in _structure_art_sprites.get(chunk_coord, {}).values():
-		art_sprite.free()
+	for art_sprites in _structure_art_sprites.get(chunk_coord, {}).values():
+		for art_sprite in art_sprites:
+			if is_instance_valid(art_sprite):
+				art_sprite.free()
 	_structure_art_sprites.erase(chunk_coord)
 
 	for sprite in _flower_sprites.get(chunk_coord, {}).values():

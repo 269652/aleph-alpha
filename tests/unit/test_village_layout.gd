@@ -1763,3 +1763,43 @@ func test_the_founding_layout_sites_its_square_by_is_dry_not_by_what_it_can_buil
 		(result["plaza"] as Rect2i).position.x, by_dry.position.x,
 		"the square slid for a pond -- it must only ever slide for the generated world"
 	)
+
+
+## Every plot this module offers says which way its building faces.
+##
+## `_sited_plot` -- the scan behind both `industry_plot` and
+## `outskirt_plot` -- was the one that did not, and `_place_farms_if_missing`
+## reads `plot["facing"]` on any world without `place_building_over_roads`.
+## It never crashed only because the outskirt fallback was rarely reached;
+## the moment farmstead siting got stricter about its fence it was reached
+## at once, and the run died on a missing key rather than on anything about
+## farms. A plot's door is its south edge here, like every other plot's.
+func test_every_plot_says_which_way_its_building_faces():
+	var never_forest := func(_cell: Vector2i) -> bool: return false
+	var plots := {
+		"street": VillageLayout.next_street_plot(
+			"house_small", CHUNK_SIZE, 7, _always_buildable, _never_occupied
+		),
+		"industry": VillageLayout.industry_plot(
+			"sawmill", CHUNK_SIZE, 7, _always_buildable,
+			func(cell: Vector2i) -> bool: return cell.y < 4,
+			_never_occupied
+		),
+		"outskirt": VillageLayout.outskirt_plot(
+			"farmhouse", CHUNK_SIZE, 7, _always_buildable, _never_occupied
+		),
+	}
+	var checked := 0
+	for kind in plots:
+		var plot: Dictionary = plots[kind]
+		if plot.is_empty():
+			continue
+		checked += 1
+		assert_true(plot.has("facing"), "the %s plot does not say which way it faces" % kind)
+		var doorstep: Vector2i = plot["origin"] + BuildingCatalog.doorstep_of(plot["building_id"])
+		assert_eq(plot["doorstep"], doorstep, "the %s plot's doorstep is its catalog doorstep" % kind)
+		assert_eq(
+			plot["facing"], Vector2i(0, 1),
+			"the %s plot's building faces its own door, which is its south edge" % kind
+		)
+	assert_gt(checked, 0, "precondition: this seed offers plots at all")

@@ -132,6 +132,7 @@ func _init() -> void:
 	# ...and re-sync, because update() only re-walks the ground cover on a
 	# throttle or a chunk-boundary crossing, and this move is neither.
 	_manager._sync_fern_sprites(chunk_coord)
+	_manager._sync_bramble_sprites(chunk_coord)
 	await process_frame
 	print("  window now centred on %s" % str(_manager._disturbance_center_tile))
 	_manager.set_wind_strength(1.0)
@@ -169,6 +170,7 @@ func _init() -> void:
 	if bramble_tile != Vector2i.MAX:
 		_manager.update(bramble_tile)
 		_manager._sync_fern_sprites(chunk_coord)
+		_manager._sync_bramble_sprites(chunk_coord)
 		_hide_trees()
 		var bramble_view := await _frame(bramble_tile, Vector2(-9999.0, -9999.0))
 		bramble_view.save_png("%s/bramble.png" % OUT_DIR)
@@ -306,8 +308,11 @@ func _report_brambles(chunk_coord: Vector2i) -> void:
 			if chunk.biome[y * chunk.width + x] == BlackberryBramble.HOME_BIOME:
 				wood += 1
 	var cells: Array = sim.get_patch_cells()
-	var drawn: int = _manager._bramble_sprites.get(chunk_coord, {}).size()
-	print("  BRAMBLES: %d on %d forest cells — %.1f%%, asked for %.1f%%; %d drawn" % [
+	var drawn := 0
+	for band in _manager._bramble_sprites.get(chunk_coord, {}).values():
+		if band.multimesh != null:
+			drawn += band.multimesh.instance_count
+	print("  BRAMBLES: %d on %d forest cells — %.1f%%, asked for %.1f%%; %d card(s) drawn" % [
 		cells.size(), wood,
 		100.0 * float(cells.size()) / float(maxi(wood, 1)),
 		100.0 * BlackberryBramble.SEED_CHANCE, drawn,

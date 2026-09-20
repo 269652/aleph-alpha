@@ -247,20 +247,98 @@ const _SAPLING_SHEET_PATH := "%s/sapling.png" % _SHEET_DIR
 ## narrowest (seed) frame.
 const _SAPLING_MIN_FRAME_WIDTH := 20
 
-## The working canvas every sapling frame is normalized onto before caching
-## -- generous enough to hold the sheet's own largest frame content without
-## downscaling it, matching this class's existing "cut once, let the
-## renderer's own _scaled_piece rescale to the final box" division of
-## labour (see trunk_for/canopy_for, neither of which pre-scales for a
-## specific tree either).
-const _SAPLING_CANVAS_SIZE := Vector2i(320, 480)
-const _SAPLING_BASELINE_Y := 470
+## ## The working canvas every sapling frame is normalized onto
+##
+## Exactly ProceduralTreeSprite.SIZE, with the feet on its very bottom row
+## -- the same canvas and the same ground line the MATURE canopy texture
+## uses. Not merely "generous enough to hold the art", which is what it used
+## to be (320 x 480), because this canvas is half of a real geometric
+## contract:
+##
+## 1. TreeMorphShader samples the sapling texture at the SAME UV as the
+##    mature one it dissolves into (see morph_canopy). Two different sizes
+##    do not line up, so the sapling picture was being squashed into the
+##    mature rect at the instant of the hand-off -- a visible jump in
+##    exactly the moment the whole mechanism exists to make smooth.
+## 2. TreeRenderer offsets the one canopy sprite by half the mature
+##    texture's height so its bottom edge lands on the node origin, the
+##    foot of the trunk. A taller canvas therefore hangs a sapling's feet
+##    BELOW the ground line -- measured at 10 px of canvas under a baseline
+##    of 470, which drew every sapling sunk into the soil relative to the
+##    tree it grew into.
+##
+## Written as literals rather than read off ProceduralTreeSprite because
+## that class already preloads THIS one and GDScript will not take the
+## cycle; the equality is pinned instead by
+## test_the_sapling_canvas_is_the_mature_canopy_texture_size and
+## test_a_sapling_stands_where_the_mature_tree_it_becomes_stands.
+const SAPLING_CANVAS_SIZE := Vector2i(300, 396)
+const SAPLING_BASELINE_Y := 396
 
 var _sapling_slicer := SpriteSheetSlicer.new()
 
 
-## How many real growth-stage drawings the sapling sheet carries.
-func sapling_frame_count() -> int:
+## ## A species' OWN sapling sheet: a stage x season grid
+##
+## The shared strip above has no seasons in it at all -- a young apple in
+## October wore the same green shoot as one in May, right up to the height
+## where it handed over to a canopy that has worn all four seasons since the
+## day it was drawn. A species listed here draws from a GRID instead: growth
+## stages down, and one column per canopy frame across, in exactly the
+## CANOPY_* order the mature canopy strip already runs. Reusing the canopy's
+## own column constants rather than inventing a second season order is the
+## point -- a sapling and the tree it becomes pick their picture through the
+## SAME index, so they cannot drift apart.
+##
+## Listed rather than probed for on disk, for the same reason
+## SPECIES_WITH_ART is: a missing file should be a visible registration, not
+## a silent fallback that leaves an artist wondering why their sheet does
+## nothing. Everything not listed keeps drawing the shared strip, so adding
+## art is never required. See docs/concept/flora.md's "Sapling phase".
+const _SAPLING_SHEETS := {
+	"apple": "%s/composite_apple_sapling.png" % _SHEET_DIR,
+}
+
+## Where a sapling stops wearing its season and wears snow instead.
+##
+## A SWITCH, where the mature canopy blends its snow frame over its season
+## frame across ProceduralTreeSprite.SNOW_LEVELS bands -- a deliberate
+## difference, not an oversight. A sapling is by definition shorter than the
+## player, a few dozen screen pixels at the game's real zoom, where a
+## ten-band partial blend is not resolvable; and that blend is a per-pixel
+## CPU composite whose cost would multiply this cache by every band, for a
+## distinction nobody can see. Half-covered is the cut point: below it the
+## shoot still reads as its season, at and above it as buried.
+const SAPLING_SNOW_COVERAGE := 0.5
+
+static var _species_sapling_cache := {}
+
+
+## Which column of a species' sapling grid a tree in `season` under
+## `snow_coverage` of snow wears -- the one mapping every caller shares,
+## and a pure function so it can be asserted directly rather than only
+## through the pixels it produces.
+static func sapling_column_for(season: String, snow_coverage: float) -> int:
+	if snow_coverage >= SAPLING_SNOW_COVERAGE:
+		return CANOPY_SNOW
+	return _CANOPY_FRAME_BY_SEASON.get(season, _CANOPY_FRAME_BY_SEASON[_FALLBACK_SEASON])
+
+
+## Whether this species has a sapling sheet of its own rather than the
+## shared strip. False for every species with no entry, and also for one
+## whose sheet is registered but did not slice into a real grid -- the
+## caller's fallback is the same either way, and a sheet that cannot be read
+## is not art this species has.
+func has_sapling_sheet_for(species: String) -> bool:
+	return not _sapling_grid_for(species)["frames"].is_empty()
+
+
+## How many real growth-stage drawings the sapling art carries: a species'
+## own grid has one per ROW, and everything else has the shared strip's.
+func sapling_frame_count(species: String = "") -> int:
+	var grid := _sapling_grid_for(species)
+	if not grid["frames"].is_empty():
+		return int(grid["stages"])
 	return _sapling_frames().size()
 
 
@@ -270,7 +348,20 @@ func sapling_frame_count() -> int:
 ## contract this project's other indexed pools already give (see
 ## HeroAppearance._wrap's own doc comment for the general shape, though
 ## this clamps rather than wraps: a sapling has no "previous" past frame 0).
-func sapling_frame(index: int) -> Texture2D:
+func sapling_frame(
+	index: int, species: String = "", season: String = "", snow_coverage: float = 0.0
+) -> Texture2D:
+	var grid := _sapling_grid_for(species)
+	var grid_frames: Array[Texture2D] = grid["frames"]
+	if not grid_frames.is_empty():
+		var columns := int(grid["columns"])
+		var stage := clampi(index, 0, int(grid["stages"]) - 1)
+		# Clamped against the grid's REAL width, not CANOPY_SNOW: a sheet
+		# drawn without the fifth column still answers, wearing its last
+		# one, exactly as has_snow_frame_for lets a mature canopy without
+		# that frame go on rendering.
+		var column := clampi(sapling_column_for(season, snow_coverage), 0, columns - 1)
+		return grid_frames[stage * columns + column]
 	var frames := _sapling_frames()
 	if frames.is_empty():
 		return null
@@ -283,12 +374,14 @@ func sapling_frame(index: int) -> Texture2D:
 ## quantise it itself. Clamped the same way sapling_frame's own index is: a
 ## caller handing in progress it derived itself (which can round fractionally
 ## outside [0, 1] at the very ends) never has to separately guard them.
-func sapling_frame_for_progress(progress: float) -> Texture2D:
-	var frames := _sapling_frames()
-	if frames.is_empty():
+func sapling_frame_for_progress(
+	progress: float, species: String = "", season: String = "", snow_coverage: float = 0.0
+) -> Texture2D:
+	var stages := sapling_frame_count(species)
+	if stages <= 0:
 		return null
-	var index := int(round(clampf(progress, 0.0, 1.0) * float(frames.size() - 1)))
-	return sapling_frame(index)
+	var index := int(round(clampf(progress, 0.0, 1.0) * float(stages - 1)))
+	return sapling_frame(index, species, season, snow_coverage)
 
 
 func _sapling_frames() -> Array[Texture2D]:
@@ -300,13 +393,87 @@ func _sapling_frames() -> Array[Texture2D]:
 	var keyed := SpriteSheetSlicer.chroma_keyed(sheet, Color.BLACK, 0.08)
 	var rects := _sapling_slicer.detect_frames(keyed, 0, keyed.get_height(), _SAPLING_MIN_FRAME_WIDTH)
 	var normalized := _sapling_slicer.normalize_frames(
-		keyed, rects, _SAPLING_CANVAS_SIZE, _SAPLING_BASELINE_Y
+		keyed, rects, SAPLING_CANVAS_SIZE, SAPLING_BASELINE_Y
 	)
 	var frames: Array[Texture2D] = []
 	for frame_image in normalized:
 		frames.append(ImageTexture.create_from_image(frame_image))
 	_sapling_frame_cache = frames
 	return _sapling_frame_cache
+
+
+## This species' sapling grid: its frames in reading order (stage by stage,
+## and within a stage column by column), and the shape they were found in.
+##
+## Empty for a species with no sheet of its own, which every caller reads as
+## "draw the shared strip instead".
+##
+## ## The grid is FOUND, not assumed
+##
+## The apple sheet's five growth stages measure 122, 173, 215, 250 and 302
+## pixels tall, because the tree really does get bigger every stage -- an
+## even split of the sheet would cut through four of the five drawings. So
+## the rows are detected, then each row's columns within it, exactly as
+## CompositeSheetSlicer finds the canopy/trunk/fruit blocks rather than
+## assuming a grid. Detection runs on the RAW sheet, before any keying: the
+## delivered checkerboard is pale and unsaturated, which is precisely what
+## detect_rows/detect_frames already read as background.
+##
+## Keying is then per CELL rather than over the whole sheet -- the same
+## answer either way (the flood seeds from the checker's darker tone
+## anywhere, not only from an edge), but a third less of the sheet to walk,
+## and it is the cells this needs.
+##
+## All of them are normalized TOGETHER, through one shared scale on the
+## shared strip's own canvas and baseline: a stage-0 shoot has to come out
+## smaller than a stage-4 sapling instead of every stage being blown up to
+## fill the canvas, and all of them have to stand on the same ground line.
+func _sapling_grid_for(species: String) -> Dictionary:
+	if _species_sapling_cache.has(species):
+		return _species_sapling_cache[species]
+	var empty := {"frames": [] as Array[Texture2D], "stages": 0, "columns": 0}
+	if not _SAPLING_SHEETS.has(species):
+		return empty
+	var sheet := _load_image(String(_SAPLING_SHEETS[species]))
+	if sheet == null:
+		_species_sapling_cache[species] = empty
+		return empty
+	var rows := _sapling_slicer.detect_rows(
+		sheet, 0, sheet.get_width(), _SAPLING_MIN_FRAME_WIDTH
+	)
+	var keyed := Image.create(sheet.get_width(), sheet.get_height(), false, Image.FORMAT_RGBA8)
+	var cells: Array[Rect2i] = []
+	var columns := -1
+	for row in rows:
+		var in_row := _sapling_slicer.detect_frames(
+			sheet, row.position.y, row.end.y, _SAPLING_MIN_FRAME_WIDTH
+		)
+		if columns < 0:
+			columns = in_row.size()
+		elif in_row.size() != columns:
+			# A ragged sheet is not a grid, and guessing which cell is
+			# missing would draw the wrong season on the wrong stage. Fall
+			# back to the shared strip and let the species' own test say so.
+			_species_sapling_cache[species] = empty
+			return empty
+		for cell in in_row:
+			keyed.blit_rect(
+				SpriteSheetSlicer.checkerboard_keyed(sheet.get_region(cell)),
+				Rect2i(Vector2i.ZERO, cell.size),
+				cell.position
+			)
+			cells.append(cell)
+	if cells.is_empty() or columns <= 0:
+		_species_sapling_cache[species] = empty
+		return empty
+	var frames: Array[Texture2D] = []
+	for frame_image in _sapling_slicer.normalize_frames(
+		keyed, cells, SAPLING_CANVAS_SIZE, SAPLING_BASELINE_Y
+	):
+		frames.append(ImageTexture.create_from_image(frame_image))
+	var grid := {"frames": frames, "stages": rows.size(), "columns": columns}
+	_species_sapling_cache[species] = grid
+	return grid
 
 
 ## Every fruit frame this species has, in sheet order.

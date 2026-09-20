@@ -177,6 +177,229 @@ func test_sapling_frame_for_progress_walks_through_distinct_frames():
 	assert_gt(seen.size(), 1, "progress from 0 to 1 should show more than one frame")
 
 
+# -- a species' OWN sapling sheet: a stage x season grid ---------------------
+#
+# The shared strip above has no seasons in it at all, and is now the FALLBACK
+# (see docs/concept/flora.md's "Sapling phase"). A species given a sheet of
+# its own gets a 5 x 5 grid instead: rows are growth stages smallest first,
+# and the columns run in exactly the mature canopy's own frame order --
+# CANOPY_BARE, CANOPY_BLOSSOM, CANOPY_LEAF, CANOPY_TURNING, CANOPY_SNOW -- so
+# a sapling and the tree it becomes pick their picture through the SAME index
+# and cannot drift apart.
+
+func test_apple_has_a_sapling_sheet_of_its_own():
+	assert_true(trees.has_sapling_sheet_for("apple"))
+
+
+## Every other species still draws from the shared strip, unchanged. Adding
+## art must never be required -- exactly the contract has_art_for already
+## gives for trunk/canopy/fruit.
+func test_a_species_without_its_own_sapling_sheet_uses_the_shared_strip():
+	assert_false(trees.has_sapling_sheet_for("pine"))
+	assert_eq(trees.sapling_frame_count("pine"), trees.sapling_frame_count())
+	assert_eq(
+		trees.sapling_frame(0, "pine").get_image().get_data(),
+		trees.sapling_frame(0).get_image().get_data()
+	)
+
+
+## Five rows, measured off the real sheet (1254 x 1254, an even 5 x 5 split).
+func test_the_apple_sapling_sheet_has_five_growth_stages():
+	assert_eq(trees.sapling_frame_count("apple"), 5)
+
+
+## The sheet is a GRID, so every (stage, season) pair is its own drawing --
+## 25 distinct ones, not five repeated four times over.
+func test_every_apple_sapling_stage_and_season_is_a_distinct_drawing():
+	var seen := {}
+	for stage in trees.sapling_frame_count("apple"):
+		for season in SeasonCycle.SEASONS:
+			var frame := trees.sapling_frame(stage, "apple", season)
+			assert_not_null(frame, "apple sapling stage %d in %s is missing" % [stage, season])
+			seen[frame.get_image().get_data()] = true
+	assert_eq(seen.size(), trees.sapling_frame_count("apple") * SeasonCycle.SEASONS.size())
+
+
+## The column order is not assumed, it is measured: winter's bare column
+## carries the LEAST drawn content of the four seasons in every row of the
+## real sheet (3939 opaque source pixels in the top row against 5843-6721
+## for the others), because a bare shoot has no leaves on it.
+func test_the_bare_column_is_the_sparsest_of_the_four_seasons():
+	var bare := _opaque_share(trees.sapling_frame(4, "apple", "winter").get_image())
+	for season in ["spring", "summer", "autumn"]:
+		assert_lt(
+			bare,
+			_opaque_share(trees.sapling_frame(4, "apple", season).get_image()),
+			"the bare column should be sparser than %s" % season
+		)
+
+
+## ... and summer's leaf column is the greenest, the same way the mature
+## canopy's own leaf frame is (see test_the_leaf_frame_is_the_greenest).
+## Measured mean colour of the bottom row's cells: (54, 85, 13) leaf green
+## against (97, 75, 36) bare brown and (161, 63, 12) turning orange.
+func test_the_leaf_column_is_the_greenest_of_the_four_seasons():
+	var leaf := _green_share(trees.sapling_frame(4, "apple", "summer").get_image())
+	for season in ["winter", "spring", "autumn"]:
+		assert_gt(
+			leaf,
+			_green_share(trees.sapling_frame(4, "apple", season).get_image()),
+			"the leaf column should be greener than %s" % season
+		)
+
+
+## An unrecognised season falls back the same way the mature canopy's own
+## does -- in leaf, because a tree that is unexpectedly green is a tree
+## where one that is unexpectedly bare reads as dead.
+func test_an_unknown_season_draws_a_sapling_in_leaf():
+	assert_eq(
+		trees.sapling_frame(3, "apple", "harvest").get_image().get_data(),
+		trees.sapling_frame(3, "apple", "summer").get_image().get_data()
+	)
+
+
+## The stages have to actually GROW -- the whole reason the 25 cells are
+## normalized together under one shared scale rather than each blown up to
+## fill its own canvas.
+func test_apple_sapling_stages_grow_progressively_fuller():
+	var first := _opaque_share(trees.sapling_frame(0, "apple", "summer").get_image())
+	var last := _opaque_share(trees.sapling_frame(4, "apple", "summer").get_image())
+	assert_lt(first, last, "the first apple sapling stage should be sparser than the last")
+
+
+## Taller, not just fuller: the frames stand on a shared baseline, so a later
+## stage's drawn content must start HIGHER up the canvas than an earlier
+## one's. This is what a per-frame scale would destroy.
+func test_apple_sapling_stages_grow_progressively_taller():
+	var first := _content_top(trees.sapling_frame(0, "apple", "summer").get_image())
+	var last := _content_top(trees.sapling_frame(4, "apple", "summer").get_image())
+	assert_lt(last, first, "a grown apple sapling should stand taller than a fresh one")
+
+
+## Snow is a SWITCH here, not the mature canopy's ten-band per-clump blend
+## (see flora.md) -- a sapling is a few dozen screen pixels tall and the
+## bands are not resolvable at that size.
+func test_deep_snow_shows_the_sapling_snow_column():
+	assert_eq(
+		trees.sapling_frame(4, "apple", "winter", 1.0).get_image().get_data(),
+		trees.sapling_frame(4, "apple", "", IllustratedTree.SAPLING_SNOW_COVERAGE)
+			.get_image()
+			.get_data()
+	)
+
+
+func test_a_dusting_of_snow_leaves_a_sapling_in_its_season():
+	assert_eq(
+		trees.sapling_frame(4, "apple", "autumn", 0.1).get_image().get_data(),
+		trees.sapling_frame(4, "apple", "autumn").get_image().get_data()
+	)
+
+
+## The snow column reads neutral grey-white rather than any season's hue --
+## measured mean (132, 133, 153) against leaf's (54, 85, 13). The same
+## property test_the_snow_frame_reads_neutral_rather_than_a_season_hue
+## already pins for the mature canopy, and the reason this file can trust
+## "column 4 is snow" at all.
+func test_the_sapling_snow_column_reads_neutral_rather_than_a_season_hue():
+	var snowed := trees.sapling_frame(4, "apple", "winter", 1.0).get_image()
+	assert_lt(
+		_green_share(snowed),
+		_green_share(trees.sapling_frame(4, "apple", "summer").get_image()),
+		"a snowed sapling should not read as green as a leafed one"
+	)
+
+
+## The cut point is a real pinned constant, not a number chosen in a comment.
+func test_sapling_snow_coverage_is_a_real_pinned_constant():
+	assert_eq(IllustratedTree.SAPLING_SNOW_COVERAGE, 0.5)
+
+
+## The column chooser is a pure function of season and snow, so the one
+## mapping every caller shares can be asserted directly rather than only
+## through the pixels it produces.
+func test_the_sapling_column_follows_the_canopy_frame_constants():
+	assert_eq(IllustratedTree.sapling_column_for("winter", 0.0), IllustratedTree.CANOPY_BARE)
+	assert_eq(IllustratedTree.sapling_column_for("spring", 0.0), IllustratedTree.CANOPY_BLOSSOM)
+	assert_eq(IllustratedTree.sapling_column_for("summer", 0.0), IllustratedTree.CANOPY_LEAF)
+	assert_eq(IllustratedTree.sapling_column_for("autumn", 0.0), IllustratedTree.CANOPY_TURNING)
+	assert_eq(IllustratedTree.sapling_column_for("winter", 1.0), IllustratedTree.CANOPY_SNOW)
+
+
+## A continuous growth fraction walks the species' OWN stages, the same way
+## it walks the shared strip's -- ChoppableTree hands in a fraction, never
+## a row index.
+func test_sapling_frame_for_progress_walks_a_species_own_stages():
+	assert_eq(
+		trees.sapling_frame_for_progress(1.0, "apple", "autumn").get_image().get_data(),
+		trees.sapling_frame(4, "apple", "autumn").get_image().get_data()
+	)
+	assert_eq(
+		trees.sapling_frame_for_progress(0.0, "apple", "autumn").get_image().get_data(),
+		trees.sapling_frame(0, "apple", "autumn").get_image().get_data()
+	)
+
+
+## A species' own art must not leak into the shared strip's own contract --
+## the fallback path is what every other species still renders through.
+func test_the_shared_strip_still_answers_when_no_species_is_named():
+	assert_eq(trees.sapling_frame_count(), 10)
+
+
+
+
+# -- the sapling canvas is the mature canopy's own canvas -------------------
+#
+# TreeMorphShader samples the sapling texture at the SAME UV as the mature
+# one it dissolves into (see that file's morph_canopy). Two textures of
+# different sizes therefore do not line up: the sapling picture is squashed
+# into the mature rect the instant the tree crosses BRANCH_START_FRACTION,
+# on top of the sprite's own drawn rect changing under it. Cutting the
+# sapling frames onto exactly the mature texture's canvas, with their feet
+# on exactly its ground line, is what makes the hand-off a dissolve rather
+# than a jump.
+
+## A cross-class contract, pinned here rather than in a comment, because
+## IllustratedTree cannot name ProceduralTreeSprite itself -- that class
+## already preloads THIS one, and GDScript will not take the cycle.
+func test_the_sapling_canvas_is_the_mature_canopy_texture_size():
+	assert_eq(IllustratedTree.SAPLING_CANVAS_SIZE, ProceduralTreeSprite.SIZE)
+
+
+## The mature canopy stands with its feet on the very bottom row of its own
+## texture -- measured, not assumed: TreeRenderer offsets the canopy sprite
+## by exactly half that texture's height so its bottom edge lands on the
+## node origin, which is the foot of the trunk.
+func test_the_mature_canopy_stands_on_the_bottom_row_of_its_texture():
+	var mature := ProceduralTreeSprite.new().generate_image_with_fruit(
+		_apple_bias(), 7, 0, "summer"
+	)
+	assert_eq(_content_bottom(mature), mature.get_height() - 1)
+
+
+func test_a_sapling_stands_where_the_mature_tree_it_becomes_stands():
+	var mature := ProceduralTreeSprite.new().generate_image_with_fruit(
+		_apple_bias(), 7, 0, "summer"
+	)
+	var last := trees.sapling_frame(
+		trees.sapling_frame_count("apple") - 1, "apple", "summer", 0.0
+	)
+	assert_eq(
+		_content_bottom(last.get_image()),
+		_content_bottom(mature),
+		"a sapling's feet and the mature tree's have to land on the same row"
+	)
+
+
+## The shared strip is cut onto the same canvas, so a species without art of
+## its own gets the same lined-up hand-off.
+func test_the_shared_strip_stands_on_the_same_ground_line_too():
+	var mature := ProceduralTreeSprite.new().generate_image_with_fruit(
+		_apple_bias(), 7, 0, "summer"
+	)
+	var last := trees.sapling_frame(trees.sapling_frame_count() - 1)
+	assert_eq(last.get_image().get_size(), mature.get_size())
+	assert_eq(_content_bottom(last.get_image()), _content_bottom(mature))
+
 # -- the fifth frame: snow ----------------------------------------------------
 #
 # A canopy sheet may carry a FIFTH drawing after the four seasons -- how much
@@ -553,6 +776,37 @@ func _opaque_share(image: Image) -> float:
 			if image.get_pixel(x, y).a > 0.5:
 				opaque += 1
 	return float(opaque) / float(maxi(total, 1))
+
+
+## The bottommost row of the image holding any drawn content -- where a
+## bottom-aligned frame's feet actually land.
+func _content_bottom(image: Image) -> int:
+	for y in range(image.get_height() - 1, -1, -1):
+		for x in image.get_width():
+			if image.get_pixel(x, y).a > 0.5:
+				return y
+	return -1
+
+
+## The species_bias that lands on apple -- TreeSpecies keys off a float
+## rather than an id, so a test wanting a species has to search for it.
+func _apple_bias() -> float:
+	for step in 201:
+		var bias := float(step) / 200.0
+		if TreeSpecies.species_for_bias(bias) == "apple":
+			return bias
+	return 1.0
+
+
+## The topmost row of the image holding any drawn content -- how TALL a
+## bottom-aligned frame stands on its shared baseline, which a per-frame
+## scale would flatten to the same number for every stage.
+func _content_top(image: Image) -> int:
+	for y in image.get_height():
+		for x in image.get_width():
+			if image.get_pixel(x, y).a > 0.5:
+				return y
+	return image.get_height()
 
 
 func _green_share(image: Image) -> float:

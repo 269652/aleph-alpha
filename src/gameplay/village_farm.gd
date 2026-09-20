@@ -59,6 +59,24 @@ const LEGACY_FENCE_TILE_IDS: Array[String] = [
 	"farm_fence_corner_west", "farm_fence_corner_east",
 ]
 
+## A SHARED LINE: one tile carrying the rails of two different fields, and
+## which facings each one carries.
+##
+## Where two farmsteads sit side by side their rings meet on one column (or
+## row) of cells, and a rail is an ordinary chunk modification -- a tile
+## holds ONE id. So the second field's rail found the cell occupied and was
+## skipped, leaving that enclosure open along the whole shared side.
+## Reported with both in shot: *"It should be possible to build two rails
+## on a single tile so both enclosures are fenced properly."*
+##
+## Only the OPPOSITE pairs are here, and that is the whole set: two fields
+## meeting share a line, and a line has a field on each side of it. Rails
+## that meet at right angles belong to one ring's corner, not to two rings.
+const SHARED_FENCE_TILE_IDS := {
+	"farm_fence_east_west": ["east", "west"],
+	"farm_fence_north_south": ["north", "south"],
+}
+
 ## The shapes a farmhouse's field may take -- asked for directly, with the
 ## broken ring circled in a screenshot: "The fence should enclose a 2x3 or
 ## 3x2 area". Six beds either way, which is also exactly where the measured
@@ -478,6 +496,36 @@ static func fence_cells(worked_cells: Array, origin: Vector2i, building_id: Stri
 	return ordered
 
 
+## Whether the ring around `beds` really has somewhere to stand -- every
+## cell of it allowed by `may_rail`, and at least one cell to ask about.
+##
+## A fence is not decoration round a field; it is what makes the beds a
+## field, so the ground it needs has to be asked for when the farmstead is
+## SITED, not discovered when the rails go up. Reported with the hamlet in
+## shot: *"The two farmhouses collide and only one gets an enclosure"*.
+## Measured on real villages (tools/probe_farmstead_collisions.gd): a road
+## spur running down the column a farmstead's east rail needs cost it three
+## of its fourteen rails, and two farmsteads sited one column apart both
+## wanted that column -- VillageRenderer._fence_the_fields skips a cell
+## that is already paved or already railed, so the side simply never went
+## up.
+##
+## `may_rail` is the caller's, for the same reason `may_sow` is: only the
+## caller knows what a street row, a neighbouring farmstead or the
+## village's own paving means here. Empty beds answer false rather than
+## vacuously true -- "no ring to make room for" must not read as "room".
+static func fence_has_room(
+	beds: Array, origin: Vector2i, building_id: String, may_rail: Callable
+) -> bool:
+	var ring := fence_cells(beds, origin, building_id)
+	if ring.is_empty():
+		return false
+	for cell in ring:
+		if not may_rail.call(cell):
+			return false
+	return true
+
+
 ## Which side of the field this rail stands on -- "north", "south", "east"
 ## or "west", or "" for a cell that touches no bed at all. The sheet has one
 ## orientation column per answer (docs/concept/village_farms.md's art
@@ -532,12 +580,62 @@ static func fence_tile_for(facing: String) -> String:
 	return FENCE_TILE_IDS.get(facing, "")
 
 
+## The rail tile ids really standing on one cell: one for an ordinary rail,
+## TWO for a shared line between two fields. [] for ground that is not a
+## rail at all.
+##
+## This is what makes a shared line cost nothing downstream. A shared id is
+## DEFINED as the two ordinary rails standing there, so the art, the inner
+## edge each is drawn on and the collider each carries are the ones the
+## game already had -- nothing new is drawn, priced or blocked, it is
+## simply drawn twice on the one tile.
+static func fence_pieces_of(tile_id: String) -> Array[String]:
+	var pieces: Array[String] = Array([], TYPE_STRING, "", null)
+	if SHARED_FENCE_TILE_IDS.has(tile_id):
+		for facing in SHARED_FENCE_TILE_IDS[tile_id]:
+			pieces.append(fence_tile_for(String(facing)))
+		return pieces
+	if is_fence_tile(tile_id):
+		pieces.append(tile_id)
+	return pieces
+
+
+## What a cell already carrying `standing` becomes when a second field asks
+## it for `facing` -- or "" when the two do not make a shared line.
+##
+## Reported with both enclosures in shot: *"It should be possible to build
+## two rails on a single tile so both enclosures are fenced properly."*
+## Measured (tools/probe_neighbouring_fences.gd) on a real village with
+## four farmhouses: every contested cell along the line between two fields
+## was wanted as `east` by one and `west` by the other, and carried only
+## the first -- so one enclosure was open along its whole shared side.
+##
+## ONLY OPPOSITE rails, and never the same one twice. Two fields cannot
+## want a cell closed on the same side, a rail meeting one at right angles
+## is a corner of one ring rather than a line between two, and the same
+## rail asked for again is a RELOAD re-deriving the ring it already built
+## -- which _fence_the_fields' own doc comment requires to build nothing.
+static func shared_fence_tile_for(standing: String, facing: String) -> String:
+	if standing == "" or facing == "":
+		return ""
+	var standing_facing := fence_facing_of(standing)
+	if standing_facing == "" or standing_facing == facing:
+		return ""
+	for shared_id in SHARED_FENCE_TILE_IDS:
+		var pair: Array = SHARED_FENCE_TILE_IDS[shared_id]
+		if pair.has(standing_facing) and pair.has(facing):
+			return shared_id
+	return ""
+
+
 ## Whether this tile id is one of a village farm's rails, whichever way it
 ## faces -- the one question a creature's movement and the art registry both
 ## have to ask, so neither re-lists the ids.
 static func is_fence_tile(tile_id: String) -> bool:
 	if tile_id == "":
 		return false
+	if SHARED_FENCE_TILE_IDS.has(tile_id):
+		return true
 	return FENCE_TILE_IDS.values().has(tile_id) or LEGACY_FENCE_TILE_IDS.has(tile_id)
 
 
@@ -729,6 +827,13 @@ static func rails_block_step(from_tile_id: String, to_tile_id: String, step: Vec
 ## a first pass failed at all four corners. Nothing is opened by it: every
 ## cardinal way in is still shut by the run's own rail.
 static func _rail_stops_step(tile_id: String, step: Vector2i) -> bool:
+	# A SHARED LINE is two rails, and it stops what either of them stops --
+	# there is a crop on both sides of it (see SHARED_FENCE_TILE_IDS).
+	if SHARED_FENCE_TILE_IDS.has(tile_id):
+		for piece in fence_pieces_of(tile_id):
+			if _rail_stops_step(piece, step):
+				return true
+		return false
 	var inner := fence_inner_direction(tile_id)
 	if inner == Vector2i.ZERO or step == Vector2i.ZERO:
 		return false

@@ -22,23 +22,94 @@ const SeasonCycle = preload("res://src/world/season_cycle.gd")
 
 ## Chance (0..1) that any given forest cell carries a bramble.
 ##
-## Well BELOW ForestFern.SEED_CHANCE, which is the decision -- bracken
-## carpets a wood's floor and brambles are scattered through it. The
-## ORDERING is pinned by test_brambles_are_scattered_where_bracken_carpets
-## rather than asserted here.
-const SEED_CHANCE := 0.035
+## Asked for directly, after a live hunt for them came up short: *"Bump
+## blackberrys to 10%"*. Measured before it, on a real Harz chunk: 6
+## thickets on 242 forest cells, about one per 170 tiles of world, which
+## is a forageable a player can walk a wood without meeting.
+##
+## Still below ForestFern.SEED_CHANCE (0.12), and the ORDERING is pinned
+## by test_brambles_stay_rarer_than_bracken rather than asserted here {D}
+## but it is now a near thing rather than the "bracken carpets the floor,
+## brambles are scattered through it" this comment used to claim. At 10
+## against 12 they are nearly as common as the bracken, which is a
+## deliberate choice about findability rather than a claim about woods.
+const SEED_CHANCE := 0.10
 
 ## Hard cap on patches per chunk. Derived from the density above against a
 ## real EarthChunkManager.CHUNK_SIZE (32) chunk the way ForestFern.MAX_
 ## PATCHES is, and for the reason TallGrass' own comment records paying for
 ## once: a cap UNDER what seeding alone asks for on a fully wooded chunk is
 ## reached at worldgen, which silently truncates the thicket. 32 * 32 *
-## 0.035 = 35.84, rounded up.
-const MAX_PATCHES := 36
+## 0.10 = 102.4, rounded up.
+##
+## This file CLAIMED that derivation from the day it landed and nothing
+## checked it, so the density bump above walked straight into the trap the
+## paragraph describes: at 10% the old cap of 36 was reached by seeding
+## alone, truncating every fully wooded chunk to roughly a third of what
+## was asked for. test_the_cap_can_hold_the_density_it_asks_for_on_a_real_
+## chunk recomputes it now, so raising one and forgetting the other fails
+## there rather than in a wood.
+const MAX_PATCHES := 103
 
 ## The biome a bramble grows in. Named rather than inlined, because "which
 ## ground is a bramble's" is one decision.
 const HOME_BIOME := "forest"
+
+
+# -- pushing through one -----------------------------------------------------
+#
+# Asked for directly: *"when walked through in the middle it should slow
+# down movement to 10% and inflict minor damage"*.
+#
+# The MIDDLE is the thicket's own cell. That is the question every other
+# ground-cover rule already asks, it needs no radius to tune, and it lines
+# up with what a player sees — the tile the clump is planted on. Clipping
+# the drawn edge of a clump from the next tile over is a visual event only
+# (the art is wider than its tile), and nothing here fires for it.
+
+## What a walker's speed is multiplied by while they are IN a thicket.
+## Given, not derived: *"slow down movement to 10%"*.
+const THICKET_SPEED_MULTIPLIER := 0.1
+
+## What one crossing costs, as a fraction of full health.
+##
+## "Minor damage" is not a number. This world already names the smallest
+## damage it counts as real — BossAggro.MIN_DAMAGE_FRACTION_OF_MAX_HEALTH,
+## the threshold under which a hit is not worth reacting to — and a
+## bramble crossing is exactly that size of hurt. Kept as a literal here
+## with the EQUALITY pinned by a test rather than imported, the same way
+## this file keeps its density ordering against the ferns.
+const CROSSING_COST_FRACTION := 0.02
+
+
+## How long a walker takes to cross one thicket, at thicket speed.
+##
+## A tile of `tile_size` at THICKET_SPEED_MULTIPLIER of `base_speed`: at
+## the real numbers (16 units, 40 a second) that is four seconds, which is
+## what makes a crossing a decision rather than a nuisance.
+static func seconds_to_cross(tile_size: float, base_speed: float) -> float:
+	var crawl: float = base_speed * THICKET_SPEED_MULTIPLIER
+	if crawl <= 0.0:
+		return 0.0
+	return tile_size / crawl
+
+
+## Health a second the thorns take while a walker is in there.
+##
+## Derived from the two above rather than picked, so a change to the
+## player's speed or the tile size moves it instead of quietly making a
+## crossing cheaper or dearer: the cost of a whole crossing, spread over
+## how long a crossing takes. A test multiplies them back together.
+##
+## Zero for a walker who cannot move at all — there is no crossing to
+## charge for, and it is the one input that could divide by zero.
+static func thorn_damage_per_second(
+	max_health: float, tile_size: float, base_speed: float
+) -> float:
+	var seconds := seconds_to_cross(tile_size, base_speed)
+	if seconds <= 0.0:
+		return 0.0
+	return (max_health * CROSSING_COST_FRACTION) / seconds
 
 ## Where "ripe enough to eat" sits on the ripeness curve. Below this the
 ## fruit is green or reddening and pick() refuses it -- reaching into a

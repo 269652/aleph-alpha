@@ -687,6 +687,20 @@ number.
   way it is going). Spawned with the village, so it is freed with the chunk
   — a leak there was the measured cause of a reported framerate decay
   (`tools/probe_node_growth.gd`).
+- ✅ **Pillar 4's other half — goods LEAVE by being carried too**
+  (2026-09-20). Asked for directly: *"the builders should carry materials
+  to the site"*. A settlement's construction material leaves
+  `VillageMarket.stock` the moment a project starts
+  (`SettlementConstruction.try_start`) and lands in that project's own
+  `reserved_material` — and used to arrive nowhere. The site's builder now
+  walks it out of the store he is standing next to: `ConstructionHaul`
+  decides the load, `ConstructionWorkerMarker` walks the round, and
+  `EarthChunkManager` hands him this store if one is within his own
+  village (`CONSTRUCTION_STORE_REACH_TILES`). The caveat under pillar 1
+  reaches here as well, and decides the same default: a village with no
+  store has nowhere to fetch FROM, so its builder works the plot with the
+  material already deemed to be there. See
+  [building.md](building.md), "And he carries the material".
 - ✅ **Mechanism 6 — a real object.** `CartMarker` carries a `StaticBody2D`
   on the ground floor's own collision layer, joins the hover group with a
   name that says what is in it, and offers Take Hold / Let Go on the primary

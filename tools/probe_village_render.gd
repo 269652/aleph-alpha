@@ -148,7 +148,11 @@ func _village_with_a_hall(manager) -> Dictionary:
 			"house_tile": _centre_tile(chunk_coord, house),
 		}
 		if not farmhouse.is_empty():
-			found["farmhouse_tile"] = _centre_tile(chunk_coord, farmhouse)
+			# Centred BELOW the house, not on it: a farmstead is the house
+			# AND the enclosure it works, and the field sits a few rows
+			# south -- a frame on the house alone cuts off the very thing
+			# the report is about ("only one gets an enclosure").
+			found["farmhouse_tile"] = _centre_tile(chunk_coord, farmhouse) + Vector2i(0, 3)
 		return found
 	return {}
 

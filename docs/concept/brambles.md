@@ -115,6 +115,94 @@ above is all crown, and this world has no canopy fade when a player walks
 under it, so nothing on a forest floor is visible there at all. Both are
 recorded as open questions below rather than quietly tuned away.
 
+## A bramble gives, and it fights back (2026-09-20)
+
+Asked for directly: *"Black berrys have no bend mechanism.. they should
+bend slightly when walked over from the side but when walked through in
+the middle it should slow down movement to 10% and inflict minor damage...
+still should animate walking in the middle using path tracing"*.
+
+This **reverses** a decision recorded above. The Sprite2D draw was chosen
+deliberately, on the grounds that *"brambles are sparse and woody — they
+do not sway"*. They sway now, slightly, and that reasoning is retired
+rather than left standing next to code that contradicts it.
+
+### The bend is the grass's, scaled down
+
+A plain `Sprite2D` cannot carry the bend at all: the shared shader reads
+`INSTANCE_CUSTOM` for its atlas sub-rect and the instance origin for its
+root, and neither exists outside a `MultiMesh`. So a bramble is drawn the
+way a fern is — `IllustratedBramblePatch`, banded, reaching into
+`IllustratedGrassPatch` for the shader, the mesh subdivision and the band
+maths exactly as `IllustratedFernPatch` does. That keeps ONE bend in the
+world; a second would be two wind systems, visible the moment a thicket
+swayed out of time with the bracken beside it.
+
+**"Slightly" needed a knob that did not exist.** `wind_strength` already
+scales the ambient sway but deliberately not the walker's push, and the
+push amplitude is baked into the shader. A new `bend_scale` uniform
+multiplies the whole returned offset — wind and push together — and
+defaults to 1.0, so grass and ferns render byte-identically and only a
+caller that asks for less gets less. A cane is woody: it gives a little
+and springs back, where a blade lays over.
+
+### The middle is not the edge
+
+- **Clipping the side** of a thicket is a visual event only: the drawn
+  clump is wider than its tile, so a walker passing the next tile over
+  parts its outer canes and nothing else happens.
+- **Standing on its own cell** is pushing INTO it: movement drops to
+  **10%** and the thorns draw blood for as long as you are in there. The
+  path tracing keeps running, because you are still moving through it —
+  slowly, which is the point.
+
+The cell is the whole test. It is the same question every other
+ground-cover rule already asks, it needs no radius to tune, and it lines
+up with what a player sees: the tile the clump is planted on.
+
+### What a crossing costs, derived rather than picked
+
+The speed is given (10%). The damage is not, and "minor" is not a number,
+so it is derived from the speed and pinned by a test:
+
+- one tile is 16 world units, and a walker at 10% of `BASE_SPEED` (40)
+  covers 4 a second, so **a thicket takes 4 seconds to cross**;
+- a crossing should cost the smallest damage this world counts as real,
+  which it already names once — `BossAggro.MIN_DAMAGE_FRACTION_OF_MAX_
+  HEALTH`, 2% of full health;
+- so the rate is 2 health over 4 seconds: **0.5 a second**.
+
+Expressed as a function of those inputs rather than a literal, so a change
+to the player's speed or the tile size moves it instead of silently making
+a crossing cheaper.
+
+### Built, and measured
+
+- ✅ `IllustratedBramblePatch`, banded like the ferns, forwarding to
+  `IllustratedGrassPatch` for the shader, the mesh subdivision and the
+  band maths. **17 cards drawn** on a real Harz chunk, and a frame centred
+  on a thicket shows two of them correctly beside the bracken.
+- ✅ `bend_scale` at **0.25**, set once on the material because it is a
+  fact about the plant rather than a live condition like the wind. The
+  ORDERING against the plants that lay over is what a test pins.
+- ✅ **One card per cell**, not the fern's three: a thicket is a single
+  woody clump with its berries drawn into it, and brambles are the sparser
+  plant besides.
+- ✅ **The cell penalty**: `_bramble_speed_multiplier` joins the same
+  product chain the road bonus and the wade penalty live in, and
+  `_step_bramble_thorns` runs in the outdoor authority step. A test pins
+  that both reach the REAL per-frame values rather than a helper nobody
+  calls.
+- ⬜ **Nothing but the player feels it.** A creature walking a thicket is
+  neither slowed nor scratched; the penalty is wired into the player's own
+  step alone. A boar pushing through bramble is exactly the kind of thing
+  this world models elsewhere, so this is a gap rather than a decision.
+- ⬜ **The drawn clump is wider than its tile, and the penalty is not.**
+  Standing on the cell is the whole test, so a player can be visually
+  waist-deep in canes drawn from the neighbouring tile and walk at full
+  speed. Deliberate — it needs no radius to tune and it matches what the
+  cell means everywhere else — but it is a seam somebody will notice.
+
 ## Status
 
 - ✅ **`BlackberryBramble`, the thicket's own sim.** Seeds on forest cells
@@ -153,11 +241,30 @@ recorded as open questions below rather than quietly tuned away.
   of it, so a cell cleared by a building carries no thicket for the life of
   that chunk. Every other ground cover can re-colonise. Left as a design
   question rather than answered on the way past.
-- ⬜ **Sparse, and under a canopy.** Measured at one thicket per ~170
-  tiles, on a forest floor a top-down camera cannot see into. Raising the
-  density is a one-line change and would not fix the second half; a canopy
-  that fades when the player walks under it would fix both, for ferns,
-  mushrooms and everything else down there too. Neither is done.
+- ✅ **Dense enough to meet** (2026-09-20), asked for directly: *"Bump
+  blackberrys to 10%"*. `SEED_CHANCE` went 0.035 → 0.10, measured on a
+  real Harz chunk as **6 thickets on 242 forest cells → 21**, and a frame
+  that held one thicket now holds two.
+
+  `MAX_PATCHES` had to move with it, and that is the part worth reading.
+  This file had claimed since it landed that its cap is derived from its
+  density against a real 32×32 chunk — the trap
+  `TallGrass.MAX_PATCHES` records paying for once — and nothing checked
+  it. At 10% the old cap of 36 is reached by **seeding alone**,
+  truncating every fully wooded chunk to roughly a third of what was
+  asked for. The cap is 103 now, and a test recomputes it from the same
+  real constants, so raising one and forgetting the other fails there
+  rather than in a wood.
+
+  The old framing, *bracken carpets the floor and brambles are scattered
+  through it*, no longer describes the numbers: 10 against bracken's 12
+  is nearly as common. They are still rarer, deliberately, but as a
+  choice about findability rather than a claim about woods.
+- ⬜ **Under a canopy.** A closed wood seen from above is all crown, and
+  nothing fades when a player walks under it, so a forest floor is not
+  visible there at all — ferns, mushrooms and thickets alike. Raised as
+  a candidate and explicitly declined for now (*"canopy is fine"*), so it
+  stays a known property rather than an open task.
 - ✅ **The player picks them, on the same key as everything else.**
   `EarthChunkManager.pick_blackberries_near` sweeps the tile the player
   stands on and its neighbours, takes the first ripe unpicked patch, and
