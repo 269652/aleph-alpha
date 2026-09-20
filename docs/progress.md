@@ -66,6 +66,65 @@ and most species have no loot row so they vanish on death.
   18/18, `test_earth_chunk_manager_errand.gd` 9/9 (new). 🚧 The debt rides
   on the event but no dialogue topic speaks to it yet, and
   `NpcRecognition` does not read `errand_delivered` as its own memory kind.
+- ✅ **Six pure modules for the overhaul's other requirements**
+  (2026-09-20) — each spec-first and red-first, built in parallel and
+  adversarially reviewed. Wiring into the live game is tracked separately
+  below; these are the rules, tested, not yet all called.
+  - **`SpeciesBite`** (`concept/predator_profiles.md`,
+    `test_species_bite.gd` 48/48) — per-species damage, windup, pursuit,
+    release distance and tenacity, replacing the single ATTACK_DAMAGE
+    (6.0), cooldown (0.8 s), sense radius and flee-at-half-health rule
+    every animal in the game shared. Fairness is structural: a bite that
+    can take a large share of the player's health must carry a
+    proportionally longer telegraph, asserted for every profile. The
+    difficulty gradient is pinned monotone against the real spawn
+    rosters, so a new species cannot be added that breaks the world's
+    order. A bear now holds to a tenth of its health rather than half,
+    which is what makes it the animal the ring gates you away from.
+  - **`JourneyRing`** (`concept/journey_rings.md`,
+    `test_journey_ring.gd` 30/30) — the named, player-facing rings, every
+    boundary derived from `RegionDifficulty`'s own constants and swept
+    across all distances so the two can never disagree. Demands are
+    cumulative. It deliberately exposes **no** function that can refuse a
+    step, pinned by a reflection test over its own method list: the
+    world's order is enforced by cold and teeth, never by an invisible
+    fence.
+  - **`SpellMote`** (`concept/spell_weaving.md`, `test_spell_mote.gd`
+    21/21) — an atom as a thing you own. The first mote of any atom is
+    granted by experiencing the phenomenon it names; after that it drops,
+    with tier caps per ring so power is paced by distance rather than by
+    a level gate.
+  - **`SpellDraft`** (same doc, `test_spell_draft.gd` 32/32) — the
+    Magicraft loop's hinge: an ordered socket list whose source text
+    **round-trips through the real `SpellParser`**, so a player's
+    arrangement becomes a castable spell through the pipeline that
+    already exists rather than a second interpreter, costed by the
+    existing `SpellCost`. Order is load-bearing — adjacent atoms react,
+    so swapping two motes changes the result — and the reaction bound
+    holds by construction rather than by searching the space.
+  - **`NodePayoff`** (`concept/skill_payoff.md`, `test_node_payoff.gd`
+    28/28) — the 84-node web's real weakness answered: a node is rendered
+    by calling the real consumer function **twice**, at the current stat
+    and at the granted one, so the web says "Fire Bolt 8 → 11 damage"
+    instead of a stat name. Stats with no live consumer are reported
+    honestly rather than given invented effects, which also measures how
+    much of the web is still inert.
+  - **`Answerback`** (`concept/feedback.md`, `test_answerback.gd` 43/43)
+    — the single statement of what every world-changing verb answers
+    with, held by a **two-way drift test** against the real bound
+    actions: a new verb without feedback fails, and a feedback row for a
+    verb that no longer exists fails. Measured before it: the entire game
+    had three sound effects and no hit flash, damage number, XP float or
+    level-up toast anywhere.
+  - **`DawnClause` / `ArrivalBriefing`** (`concept/arrival.md`,
+    `test_dawn_clause.gd` 15/15, `test_arrival_briefing.gd` 22/22) — a
+    brand-new character opens their eyes at first light whatever the wall
+    clock says, with the offset decaying so the real-Earth clock returns
+    on its own within a few in-game days (swept across all 24 real
+    hours); and the three facts a player needs in their first ten seconds
+    — where they are, what is around them, and one real thing to do from
+    the live shortfall projection — every line empty-safe.
+
 - ✅ **Running costs the legs** (2026-09-20) — see `concept/survival.md`.
   `spend_stamina` had exactly one caller in the entire game (the sickness
   step), so sprint was free, unlimited and exactly twice walking speed —
