@@ -29702,11 +29702,16 @@ This entry records only what this session contributed on top.
 The larder fix narrowed `_settlement_structure_stocks` to
 `STRUCTURE_MEAL_SOURCE_IDS`, and **four** callers shared it: three food
 readings and the merchant. Right for what a village can EAT, wrong for
-what it can SELL — a farmhouse is not a place anybody eats, and it is
-exactly the container a carter's round fills. Split into
-`_settlement_larder_stocks` (what people can eat) and
-`_settlement_structure_stocks` (every shelf), over one walk. Without it
-the merchant still could not see a farmhouse's harvest.
+what it can SELL. Split into `_settlement_larder_stocks` (what people can
+eat) and `_settlement_structure_stocks` (every shelf), over one walk.
+
+The example that drove it was a farmhouse, and `main` has since **measured
+a farmhouse onto the meal list** — 97 units of a village's own crop that
+its own people could not eat while they starved around it — so today the
+two answers overlap on that one building. They are still different
+questions, and a **sawmill** is where they still differ: nobody takes
+their dinner off one, and its sawn timber is a village's income. The
+split's own test moved there.
 
 ### ✅ The buy list is derived, not written down again
 
