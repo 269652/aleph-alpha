@@ -132,6 +132,53 @@ village whose every plank is already spoken for.
 A village with a real surplus still sells it. A village saving for a house
 keeps its wood, and the merchant comes back when there is more.
 
+## Mechanism — a merchant buys the whole village, not one of its cupboards
+
+Reported with the town panel open: *"The village produces way too much food
+and the NPCs don't have an income"* — `Food feeds 387 of 16`, `Gold 1`,
+`Happiness 62% (worst: income)`.
+
+Both halves of that are one fault. A settlement keeps its goods in **more
+than one container**, and the merchant could only ever see one of them:
+
+| Container | What puts goods in it | Seen by the merchant |
+|---|---|---|
+| `VillageMarket.stock` | `NpcProduction` / `SettlementGathering` | **yes** |
+| each structure's `StructureStock` | a carter's round, a mill, a bakery | **no** |
+
+`SettlementFood` was taught to count the shelves
+([milling_and_baking.md](milling_and_baking.md), "Food that counts"), which
+is why the panel can truthfully report food for 387 households. The
+merchant never was. So a village hauls its whole harvest into the warehouse
+— which is exactly what the carter's round is *for* — and thereby puts it
+beyond the reach of the only thing that turns goods into gold. It reads as
+"too much food AND no income" because it is one fact: **the goods and the
+buyer are in different cupboards.**
+
+The rule:
+
+> A merchant buys a settlement's **whole** surplus. Every container the
+> settlement really keeps goods in is one view of one stock, and the sale
+> is drawn back out of the real containers it came from.
+
+`SettlementSurplus` is that, and it is pure: `combined(views)` adds the
+containers up for the merchant to price, and `allocate(bought, views)` says
+how much to take from each, in view order, never more than a container
+holds. The caller does the moving — the same division `MerchantVisit`
+itself already keeps, so a sale that cannot be completed has changed
+nothing.
+
+The market is drawn from **first**, deliberately. It is the abstract ledger
+a village trades out of anyway, while a warehouse shelf is a real building
+the player can walk up to and open; emptying the ledger before the shelf
+means what the player can *see* is the last thing to go.
+
+This does not merge the containers, and deliberately so — the "three food
+containers, one eater" question
+([milling_and_baking.md](milling_and_baking.md)'s own open list) is still
+open. It says only that the merchant reads all of them, which is what makes
+the gold faucet reach the goods a village actually has.
+
 ## Mechanism — what the gold is for
 
 Once a purse has real money in it, the paths that spend it are already
