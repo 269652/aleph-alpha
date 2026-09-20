@@ -19862,9 +19862,22 @@ func _place_completed_building_project(project) -> void:
 		return
 	var origin_tile: Vector2i = project.chunk_coord * CHUNK_SIZE + project.origin
 	var seed_value := _house_site_seed(project.chunk_coord, origin_tile, building_id)
-	_place_building_over_roads(
+	if not _place_building_over_roads(
 		project.chunk_coord, project.origin, building_id, seed_value, project.household_id, true
-	)
+	):
+		return
+	# The village re-derives itself the moment something it raised stands,
+	# the way an arrival already makes it (admit_household). Placed alone,
+	# a newcomer's house carried the household that owns it and nothing
+	# about who lives there, so their trade reached its record, their pond
+	# was dug, their hut raised and their marker spawned only on the next
+	# chunk load -- measured with the town at eleven households: a fisher
+	# counted as a producer with no water to work for the rest of the run
+	# (docs/concept/village_ponds.md, "A pond dug the day the fisher's
+	# house stands"). spawn_village's passes are all idempotent, so this
+	# digs nothing twice; a farmstead the assembly raises gets its beds and
+	# rails the same day by the same rule.
+	_respawn_village(project.chunk_coord)
 
 
 ## Construction sites: chunk_coord -> {origin_local -> Node2D}, one per

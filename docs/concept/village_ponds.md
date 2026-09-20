@@ -64,6 +64,60 @@ toward a carrying capacity derived from the water it has. Stocking is not
 spontaneous: a pond starts empty and the fisher stocks it, which is what a
 village actually does.
 
+## A pond dug the day the fisher's house stands (2026-09-20)
+
+Asked directly, after the food-works measurement in
+[village_economy_balance.md](village_economy_balance.md) mechanism 6
+found an immigrant fisher counted as a producer and producing nothing:
+*"fix the immigrant fisher so they dig their pond on arrival"*.
+
+### What was measured
+
+The same village, eleven households after one arrival (the probe's field
+report): the newcomer's trade is fisher, the demand counts them, the
+assembly wants no farmhouse for them — and they stand with no pond, no
+hut and no shelf. Their house was raised by the growth ladder
+(`_place_completed_building_project`), whose record carries the
+household that owns it and **nothing about who lives there**: the
+`occupation` and `resident_seed` a founding house is placed with are
+written onto a newcomer's house only by the next reload
+(`_recover_existing_village`'s backfill), and the pond pass digs only
+beside a house whose record says `fisher`. So the pond, the hut and the
+villager's own marker all waited for the chunk to be unloaded and loaded
+again — with eleven mouths on four fields and one pond in the meantime.
+
+### The mechanism: the village re-derives itself when a house it raised stands
+
+An arrival already re-derives the whole village
+(`EarthChunkManager._respawn_village`, run from `admit_household`): the
+roster is regenerated with the newcomer in it and `spawn_village` runs
+every `_if_missing` pass against what stands. Run at arrival, that pass
+finds no house for the newcomer yet. **A completed whole-building project
+runs the same re-derivation the moment its building is placed.** Then,
+in the order `spawn_village` already keeps:
+
+1. the recovery matches the newcomer to the house they own
+   (`house_origin_for_villager`) and writes their trade and seed onto
+   its record — the same backfill a reload does, done at once;
+2. the pond pass sees a `fisher` house with no water beside it and digs,
+   stocks and fences the pond on the fisher's own side of the street;
+3. the hut pass raises the hut on its bank where one fits;
+4. the newcomer's marker is spawned at their own door.
+
+Nothing new is sited and nothing is stored: every pass is the idempotent
+one founding and reload already run, so a second re-derivation digs no
+second pond (`_has_pond_already`). The same rule gives a farmstead the
+assembly raises its beds and rails the day it stands, for the same
+reason. The cost is the one `_respawn_village` already names — a
+villager mid-errand restarts it — paid once per building the village
+actually completes.
+
+**Pinned** by `test_earth_chunk_manager_newcomer_pond.gd` on a real
+settlement chunk whose next villager fishes: the house their project
+completes into carries their trade and seed at once, a pond lies within
+reach of it the same moment, and a further re-derivation digs no second
+one.
+
 ## Status
 
 - ✅ **`VillagePond.pond_rect` and its frame.** Delegated to
@@ -99,6 +153,12 @@ village actually does.
   `fisher` occupation, since a fisher lives in an ordinary house and there is
   no separate building to hang it on. Fenced on the field's own rule, through
   the field's own skips.
+
+  **And a fisher who arrives in play digs theirs the day their house
+  stands** (2026-09-20): a completed building project re-derives the
+  village the way an arrival already does, so the newcomer's house is
+  tagged with their trade at once and the same pond pass digs beside it —
+  see "A pond dug the day the fisher's house stands" below.
 
   Idempotence needed its own answer, and a reload proved it: "a pond cell is
   occupied, so no pond fits there again" is not enough, because another
@@ -575,14 +635,10 @@ and never `pond_fish_at`.
   muddy bank and is left deliberately; it is also the fallback a scene with
   no flow overlay registered would show, where a pond is still a brown
   rectangle.
-- **A fisher who arrives in play digs nothing until the next visit**
-  (measured 2026-09-20, [village_economy_balance.md](village_economy_balance.md)
-  mechanism 6). The dig runs at founding and on reload
-  (`_dig_fisher_ponds_if_missing`), never from the settlement step, so an
-  immigrant whose trade is fisher counts toward the village's producers
-  from the day they arrive and produces nothing until the chunk is next
-  loaded — the probe's field report shows them with no pond and no shelf,
-  and a village of eleven on four fields and one pond eats its shelves
-  from 45 units to 4. The step digging the pond on arrival, or the
-  assembly treating a pondless fisher as a field hand without a field, is
-  the fix; neither is in yet.
+- **A fisher who arrives in play digs nothing until the next visit** —
+  closed (2026-09-20, "A pond dug the day the fisher's house stands"). What
+  remains of it: the newcomer's pond is dug where their house leaves room,
+  on the same rule as founding, so a house with no free ground behind it
+  gets no pond, honestly, exactly as a founding fisher's would; and a
+  fisher still counts as a producer whether or not their water exists —
+  the demand reads trades, not ponds.
