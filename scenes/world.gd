@@ -15,6 +15,8 @@ const AudioSettings = preload("res://src/audio/audio_settings.gd")
 const AudioDiagnostics = preload("res://src/audio/audio_diagnostics.gd")
 const ViewMode = preload("res://src/gameplay/view_mode.gd")
 const BuildPlan = preload("res://src/world/build_plan.gd")
+const BlueprintPaletteModel = preload("res://src/ui/blueprint_palette_model.gd")
+const BlueprintPaletteView = preload("res://src/ui/blueprint_palette_view.gd")
 const BuildPlanLedger = preload("res://src/world/build_plan_ledger.gd")
 const BuildingCatalog = preload("res://src/gameplay/building_catalog.gd")
 const PlanWireframe = preload("res://src/rendering/plan_wireframe.gd")
@@ -2362,6 +2364,12 @@ func _apply_ui_scale() -> void:
 	# player's state changes, see _update_condition_chips). Forgetting what the
 	# row currently says makes the next frame rebuild it at the new size.
 	_condition_chips_signature = ""
+	# The build palette measures its own slots against the font they are
+	# drawn in (BlueprintPaletteView._size_slots), so a scale change means
+	# measuring again -- otherwise every slot keeps the width it had at the
+	# old size and the names clip.
+	if _blueprint_palette != null:
+		_blueprint_palette.refresh()
 
 
 ## The settings menu's UI scale slider moved -- applies and persists
@@ -5826,7 +5834,7 @@ var _build_plans := BuildPlanLedger.new()
 var _selected_blueprint := ""
 
 var _view_mode_button: Button
-var _blueprint_palette: PanelContainer
+var _blueprint_palette: BlueprintPaletteView
 var _plan_wireframes: PlanWireframeLayer
 
 ## Plans on disk. A wireframe is world state (planner_mode.md's pillar 3),
@@ -5934,51 +5942,82 @@ func _build_plan_wireframes() -> void:
 	add_child(_plan_wireframes)
 
 
-## The blueprint palette: planner mode's own controls, where the hotbar
-## sits in rpg mode. One button per thing the game can already raise --
-## pavement plus the real BuildingCatalog, never a parallel list that could
-## drift from what is actually buildable (planner_mode.md's "one
-## vocabulary").
-func _build_blueprint_palette() -> void:
-	_blueprint_palette = PanelContainer.new()
-	_blueprint_palette.theme = _ui_theme
-	_blueprint_palette.set_anchors_preset(Control.PRESET_CENTER_BOTTOM)
-	_blueprint_palette.offset_left = -260.0
-	_blueprint_palette.offset_right = 260.0
-	_blueprint_palette.offset_top = -96.0
-	_blueprint_palette.offset_bottom = -8.0
-	_ui.add_child(_blueprint_palette)
+## How far the palette's card sits off the bottom edge. Its WIDTH and
+## HEIGHT are not written down: a slot is as wide as the names it has to
+## hold (BlueprintPaletteView.slot_size_for), so the card is as wide as its
+## slots -- see _fit_blueprint_palette.
+const PALETTE_MARGIN := 8.0
 
-	var row := HBoxContainer.new()
-	row.add_theme_constant_override("separation", 4)
-	_blueprint_palette.add_child(row)
-	for blueprint_id in _palette_blueprint_ids():
-		var button := Button.new()
-		button.theme = _ui_theme
-		button.text = BuildPlan.display_name_of(blueprint_id)
-		button.toggle_mode = true
-		button.pressed.connect(_on_blueprint_selected.bind(blueprint_id))
-		row.add_child(button)
+
+## The blueprint palette: planner mode's own controls, where the hotbar
+## sits in rpg mode. See docs/concept/planner_mode.md, "The build palette".
+##
+## Asked directly, with a screenshot of the ten identical text buttons this
+## replaced: *"Make the Planner / Building HUD more professional and more
+## like Anno 1806. Add Icons not only text"*.
+##
+## The menu itself is BlueprintPaletteView -- tabs, icons, the armed slot
+## and the footer are its behaviour, tested for real rather than by reading
+## this file. What stays here is the only part that is genuinely World's:
+## where it sits, and the two numbers it is not allowed to invent. Both
+## arrive as the SAME calls the raising path itself makes -- the real
+## _item_catalog for material names, and _chunk_manager.build_labor_hours_
+## for for the requirement PlanRaising.is_laid_by_hand is asked about -- so
+## the menu cannot quote a price or a job size the site then disagrees
+## with.
+func _build_blueprint_palette() -> void:
+	_blueprint_palette = BlueprintPaletteView.new()
+	_ui.add_child(_blueprint_palette)
+	_blueprint_palette.configure(
+		_ui_theme,
+		func(blueprint_id: String) -> float:
+			return _chunk_manager.build_labor_hours_for(blueprint_id),
+		func(item_id: String) -> String:
+			return _item_catalog.display_name_of(item_id)
+	)
+	_blueprint_palette.blueprint_selected.connect(_on_blueprint_selected)
+	# Whenever the menu needs more room -- a wider tab, a larger UI scale --
+	# the card grows with it rather than clipping.
+	_blueprint_palette.minimum_size_changed.connect(_fit_blueprint_palette)
+	_fit_blueprint_palette()
 	_blueprint_palette.visible = false
 
 
-## Pavement first (the cheapest, most-used thing a player lays), then every
-## real catalog building. Read from BuildingCatalog rather than listed here
-## so a building added to the game shows up in the palette for free.
-func _palette_blueprint_ids() -> Array[String]:
-	var ids: Array[String] = [BuildPlan.PAVEMENT_BLUEPRINT_ID]
-	for building_id in BuildingCatalog.BUILDING_IDS:
-		ids.append(building_id)
-	for building_id in BuildingCatalog.PRODUCTION_BUILDING_IDS:
-		ids.append(building_id)
-	for building_id in BuildingCatalog.CIVIC_BUILDING_IDS:
-		ids.append(building_id)
-	return ids
+## Centres the card on the bottom edge at exactly the size the menu needs.
+##
+## Measured rather than written down, because a slot is now as wide as the
+## names it really has to hold (BlueprintPaletteView.slot_size_for, and the
+## measurement that forced it): a card pinned to a constant width would
+## clip the wider slots instead of the names, which is the same defect one
+## level up.
+func _fit_blueprint_palette() -> void:
+	if _blueprint_palette == null:
+		return
+	var wanted := _blueprint_palette.get_combined_minimum_size()
+	_blueprint_palette.set_anchors_preset(Control.PRESET_CENTER_BOTTOM)
+	_blueprint_palette.offset_left = -wanted.x * 0.5
+	_blueprint_palette.offset_right = wanted.x * 0.5
+	_blueprint_palette.offset_top = -wanted.y - PALETTE_MARGIN
+	_blueprint_palette.offset_bottom = -PALETTE_MARGIN
+
+
+## Tells the palette what the rest of planner mode thinks is armed.
+##
+## One direction only, and deliberately: _selected_blueprint is the state
+## the cursor and the click-to-plan path act on, so the palette follows it
+## rather than the other way round -- including the empty one
+## _apply_view_mode clears to every time the mode is left, which would
+## otherwise leave a slot looking stuck down over an unarmed cursor.
+func _update_palette_selection() -> void:
+	if _blueprint_palette == null:
+		return
+	_blueprint_palette.set_selected(_selected_blueprint)
 
 
 func _on_blueprint_selected(blueprint_id: String) -> void:
 	_selected_blueprint = blueprint_id
 	_show_planner_message("%s selected -- click the map to plan it." % BuildPlan.display_name_of(blueprint_id))
+	_update_palette_selection()
 	_update_plan_cursor()
 
 
@@ -6037,6 +6076,7 @@ func _apply_view_mode() -> void:
 		_blueprint_palette.visible = ViewMode.shows_palette(_view_mode)
 	if not ViewMode.shows_palette(_view_mode):
 		_selected_blueprint = ""
+	_update_palette_selection()
 	_update_plan_cursor()
 
 

@@ -21,6 +21,17 @@ allowed to appear.
    `UiTheme.panel_stylebox()` (`PANEL_BG`, alpha 0.98, with a border) — the
    same card the survival panel and `CreaturePanel` already use, so "legible"
    is one decision made once rather than a per-widget judgement call.
+
+   The same rule now covers **selection**: a control that is toggled ON
+   wears `UiTheme.selected_button_stylebox` — the gold `ACCENT`, thicker
+   than an ordinary border, over a background that lifts rather than sinks.
+   Godot's own `pressed` stylebox is a shade *darker* than normal in this
+   theme (about 5% of value), which measured as invisible over a dark card
+   when the build palette was first rendered
+   (`tools/probe_build_palette.gd`). It is applied per control rather than
+   in the shared `Theme`, because `pressed` there also means a momentary
+   click on every ordinary button in the game, and marking those gold would
+   make every button in every window flash as selected while held.
 2. **A number and the bar beside it always mean the same thing, and full is
    always good.** Every meter is shown as a **reserve**, never as a deficit,
    whichever way the model happens to store it internally.
@@ -361,6 +372,13 @@ off the screen. Layout stays at one scale and text is what grows.
   minimap, top-right. `World.karma_display_text`/`karma_display_color`
   are the pure, tested halves (`test_world_hud.gd`): a signed number,
   coloured gold/red/neutral by sign.
+- ✅ **One shared mark for "this one is selected"** (2026-09-20) —
+  `UiTheme.selected_button_stylebox` / `BUTTON_SELECTED`, pinned by
+  `test_ui_theme.gd` against the measured failure it replaced: the
+  distance from normal must beat the ~5% of value that `pressed` gave and
+  that could not be seen. Its first consumer is the build palette's armed
+  slot and open tab (see
+  [planner_mode.md](planner_mode.md)'s "The build palette").
 - ✅ **The top-left strip is split** — `$UI/DebugLabel` is gone from
   `world.tscn`. Its player half is the world-clock card
   (`World._build_world_clock_card`, `HudReadouts.world_clock_lines` /

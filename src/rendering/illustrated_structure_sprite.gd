@@ -518,6 +518,24 @@ func explicit_frame_image(
 	return frame
 
 
+## The same cut, by the grid kind a chain entry NAMES rather than by
+## picking one of the wrappers above.
+##
+## BuildingCatalog.finished_sheet_chain carries a `grid` per entry because
+## the kind is a property of the SHEET (see GRID_CONTENT's own comment and
+## docs/concept/building.md) -- so a caller holding an entry has the answer
+## already and must not re-derive it. A caller that matched on a
+## hand-written subset of kinds instead would fall silently through to the
+## even cut for any kind it did not know, which is exactly what cost every
+## cottage its roof. Fails loudly for a kind nothing can read, the same way
+## GRID_KINDS exists so a sheet naming one fails loudly.
+func frame_image(
+	path: String, columns: int, rows: int, row: int, column: int, grid: String
+) -> Image:
+	assert(GRID_KINDS.has(grid), "unreadable grid kind: %s" % grid)
+	return _frame_image(path, columns, rows, row, column, grid)
+
+
 ## One body for all three, differing only in where the cell's rect comes
 ## from. Cached per (path, row, column, grid kind), so the band scan a
 ## detected grid needs is paid once per sheet rather than per building
