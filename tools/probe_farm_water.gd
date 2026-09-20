@@ -124,10 +124,24 @@ func _measure(farmer) -> void:
 	var working_ticks := 0
 	var peak_harvest := 0
 	var last := _tank_of(store_cell)
+	# How near the well they EVER got, and how many trips they started
+	# against how many they finished. A villager stopped at the well's own
+	# edge and one stopped halfway across the village both report "0 trips"
+	# and want completely different fixes.
+	var well = farmer.landmarks.get("well", null)
+	var nearest_well := INF
+	var starts := 0
+	var was_running := false
 	while elapsed < SIMULATED_SECONDS:
 		farmer._process(SLICE)
 		_manager.step_farm_plots(SLICE)
 		elapsed += SLICE
+		var running: bool = farmer.water_errand != "at_home"
+		if running and not was_running:
+			starts += 1
+		was_running = running
+		if well != null and running:
+			nearest_well = minf(nearest_well, farmer.position.distance_to(well))
 		if farmer._on_real_field:
 			working_ticks += 1
 		var now := _tank_of(store_cell)
@@ -160,6 +174,14 @@ func _measure(farmer) -> void:
 		% [poured, trips, days / float(maxi(trips, 1))]
 	)
 	_report_lines.append(
+		"  set out %d time(s); nearest they ever came to the well: %s (reach is %.0f px)"
+		% [
+			starts,
+			("never on an errand" if nearest_well == INF else "%.0f px" % nearest_well),
+			farmer.ERRAND_REACH_PX,
+		]
+	)
+	_report_lines.append(
 		"  %d/%d ticks with nothing to spare (the beds went unwatered)"
 		% [dry_ticks, int(SIMULATED_SECONDS / SLICE)]
 	)
@@ -170,7 +192,6 @@ func _measure(farmer) -> void:
 	# Where the errand actually left them. A villager who set out and never
 	# came back is indistinguishable from one who never set out, by the
 	# litre counts alone -- and the two want completely different fixes.
-	var well = farmer.landmarks.get("well", null)
 	_report_lines.append(
 		"  ended errand=%s tag='%s' at %s; well=%s (%.0f px away); home %s (%.0f px away)"
 		% [
