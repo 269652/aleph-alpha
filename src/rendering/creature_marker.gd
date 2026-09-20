@@ -35,6 +35,12 @@ const MushroomEffect = preload("res://src/gameplay/mushroom_effect.gd")
 const ScentForaging = preload("res://src/gameplay/scent_foraging.gd")
 const Olfaction = preload("res://src/gameplay/olfaction.gd")
 const Taming = preload("res://src/gameplay/taming.gd")
+const SpeciesBite = preload("res://src/gameplay/species_bite.gd")
+## The play-scale tile in pixels, for converting a species profile's
+## tiles-per-second pace into this scene's own pixel speeds. Restated
+## rather than preloading TerrainRenderer (a creature does not otherwise
+## need the renderer) and pinned to it by test.
+const TILE_SIZE_PX := 16
 const CaptureTool = preload("res://src/gameplay/capture_tool.gd")
 const SimulationLod = preload("res://src/gameplay/simulation_lod.gd")
 const SimulationLodClock = preload("res://src/gameplay/simulation_lod_clock.gd")
@@ -2275,15 +2281,15 @@ func _apply_decision(decision: Dictionary, delta: float) -> void:
 		# it. Measured at the time: a wall one tile ahead, and the animal
 		# crossed two full tiles through it in a single 0.5s step.
 		"attack":
-			_advance_gated(decision.direction, HUNT_SPEED, delta, false)
+			_advance_gated(decision.direction, hunt_speed(), delta, false)
 			_try_attack(_stimulus_node(decision))
 			_current_action = "attack"
 		"hunt":
-			_advance_gated(decision.direction, HUNT_SPEED, delta, false)
+			_advance_gated(decision.direction, hunt_speed(), delta, false)
 			_try_eat(_stimulus_node(decision))
 			_current_action = "attack"
 		"scavenge":
-			_advance_gated(decision.direction, HUNT_SPEED, delta, false)
+			_advance_gated(decision.direction, hunt_speed(), delta, false)
 			_try_scavenge(_stimulus_node(decision))
 			_current_action = "attack"
 		"seek_water":
@@ -2335,17 +2341,66 @@ func _step_courtship_movement(direction: Vector2, delta: float) -> void:
 const VENOMOUS_SPECIES := {"venomous_snake": true}
 
 
+## How fast this individual runs when it is hunting you, from its own
+## species profile (SpeciesBite, docs/concept/predator_profiles.md).
+##
+## Measured before this existed, and the sharpest single fact about the
+## world's difficulty gradient: HUNT_SPEED is 36.0 px/s while
+## Player.BASE_SPEED is 40.0 -- so every pursuer in the game was outWALKED
+## by a player who never touched the sprint key. A ring that gates which
+## species may spawn gates nothing at all when none of them can close a
+## metre on you.
+##
+## A species with no profile keeps the shared HUNT_SPEED, so nothing
+## unprofiled silently stops moving.
+func hunt_speed() -> float:
+	var species := info.species if info != null else ""
+	if SpeciesBite.has_profile(species):
+		return float(
+			SpeciesBite.profile_for(species)["pursuit_speed_tiles_per_second"]
+		) * TILE_SIZE_PX
+	return HUNT_SPEED
+
+
+## What this individual bites for, from its own species profile
+## (SpeciesBite, docs/concept/predator_profiles.md). Falls back to the
+## shared ATTACK_DAMAGE for a species with no profile -- an unprofiled
+## animal must still be able to hurt you, not silently deal zero.
+func bite_damage() -> float:
+	var species := info.species if info != null else ""
+	if SpeciesBite.has_profile(species):
+		return SpeciesBite.bite_damage_for(species)
+	return ATTACK_DAMAGE
+
+
+## How long this individual waits between bites, from the same profile.
+## A heavy hitter swings slowly, which is what gives a player the room to
+## answer it.
+func bite_cooldown_seconds() -> float:
+	var species := info.species if info != null else ""
+	if SpeciesBite.has_profile(species):
+		return SpeciesBite.bite_cooldown_seconds_for(species)
+	return ATTACK_COOLDOWN
+
+
 func _try_attack(target: Node) -> void:
 	if target == null or _attack_cooldown_remaining > 0.0:
 		return
 	if position.distance_to(target.position) > ATTACK_RANGE:
 		return
 	if target.has_method("take_damage"):
-		target.take_damage(ATTACK_DAMAGE)
+		# What THIS animal bites for, not one number every species shares
+		# (docs/concept/predator_profiles.md). Measured before SpeciesBite:
+		# a mouse and a bear both bit for ATTACK_DAMAGE 6.0 on the same
+		# 0.8 s cooldown, so the world's difficulty rings gated which
+		# species may spawn while gating nothing a player could feel. A
+		# species with no profile of its own falls back to the shared
+		# constants rather than dealing nothing.
+		target.take_damage(bite_damage())
 		if VENOMOUS_SPECIES.has(info.species) and target.has_method("apply_venom"):
 			target.apply_venom()
 		_try_transmit_predator_disease(target)
-		_attack_cooldown_remaining = ATTACK_COOLDOWN
+		_attack_cooldown_remaining = bite_cooldown_seconds()
 
 
 ## Predator (rabies-like) disease transmission: rides this SAME bite,

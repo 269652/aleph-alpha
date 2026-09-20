@@ -4729,3 +4729,129 @@ func test_the_body_comes_to_rest_on_the_death_rows_last_frame():
 		frames[frames.size() - 1].get_size(),
 		"a wrapped row would be showing frame 0 -- the creature back on its feet"
 	)
+# -- a bear is not a boar (docs/concept/predator_profiles.md) ------------
+#
+# Measured before SpeciesBite existed: every species in the game bit for
+# one ATTACK_DAMAGE (6.0) on one ATTACK_COOLDOWN (0.8 s), sensed at one
+# radius and fled below half health, so the only difference between a
+# mouse and a bear was the sprite and the hit points. That is why the
+# world's difficulty rings gated nothing a player could feel.
+
+const SpeciesBite = preload("res://src/gameplay/species_bite.gd")
+
+
+func _bite_of(species: String) -> float:
+	var biter := CreatureMarker.new()
+	biter.home = Vector2(100, 100)
+	biter.position = Vector2(100, 100)
+	biter.wander_seed = 5
+	biter.info = CreatureInfo.new(species)
+	add_child(biter)
+	var victim := StubPlayer.new()
+	victim.position = Vector2(100, 100)
+	add_child(victim)
+	biter._try_attack(victim)
+	var dealt: float = victim.damage_taken
+	biter.queue_free()
+	victim.queue_free()
+	return dealt
+
+
+func test_each_species_bites_for_its_own_profile_not_one_shared_number():
+	for species in ["wolf", "bear", "boar"]:
+		if not SpeciesBite.has_profile(species):
+			continue
+		assert_almost_eq(
+			_bite_of(species), SpeciesBite.bite_damage_for(species), 0.001,
+			"%s must bite for its own profile" % species
+		)
+
+
+func test_a_bear_bites_harder_than_a_boar():
+	if not (SpeciesBite.has_profile("bear") and SpeciesBite.has_profile("boar")):
+		pass_test("both profiles are needed for this comparison")
+		return
+	assert_gt(_bite_of("bear"), _bite_of("boar"), "the animal the rings gate you from hits harder")
+
+
+func test_a_species_with_no_profile_still_bites_the_shared_default():
+	assert_almost_eq(
+		_bite_of("not_a_real_species"), CreatureMarker.ATTACK_DAMAGE, 0.001,
+		"an unknown species falls back rather than dealing zero"
+	)
+
+
+func test_the_cooldown_between_bites_is_the_species_own():
+	var biter := CreatureMarker.new()
+	biter.home = Vector2(100, 100)
+	biter.position = Vector2(100, 100)
+	biter.wander_seed = 5
+	biter.info = CreatureInfo.new("bear")
+	add_child(biter)
+	var victim := StubPlayer.new()
+	victim.position = Vector2(100, 100)
+	add_child(victim)
+	biter._try_attack(victim)
+	if SpeciesBite.has_profile("bear"):
+		assert_almost_eq(
+			biter._attack_cooldown_remaining,
+			SpeciesBite.bite_cooldown_seconds_for("bear"), 0.001
+		)
+	biter._try_attack(victim)
+	assert_eq(victim.damage_taken, _bite_of("bear"), "a second bite inside the cooldown lands nothing")
+	biter.queue_free()
+	victim.queue_free()
+
+
+# -- and a hunter can actually catch you --------------------------------
+#
+# Measured in adversarial review, and the sharpest fact about the world's
+# difficulty gradient: HUNT_SPEED is 36.0 px/s while Player.BASE_SPEED is
+# 40.0, so EVERY pursuer in the game today is outwalked -- not outrun,
+# outWALKED -- by a player who never touches the sprint key. A ring that
+# gates which species may spawn gates nothing at all when none of them can
+# close a metre on you.
+
+func test_a_hunting_predator_runs_at_its_own_species_pace():
+	var hunter := CreatureMarker.new()
+	hunter.info = CreatureInfo.new("wolf")
+	add_child(hunter)
+	assert_almost_eq(
+		hunter.hunt_speed(),
+		SpeciesBite.profile_for("wolf")["pursuit_speed_tiles_per_second"] * float(TerrainRenderer.TILE_SIZE),
+		0.001
+	)
+	hunter.queue_free()
+
+
+func test_at_least_one_real_predator_is_faster_than_a_walking_player():
+	var fastest := 0.0
+	var fastest_species := ""
+	for species in SpeciesBite.species_list():
+		var speed: float = (
+			SpeciesBite.profile_for(species)["pursuit_speed_tiles_per_second"]
+			* float(TerrainRenderer.TILE_SIZE)
+		)
+		if speed > fastest:
+			fastest = speed
+			fastest_species = species
+	assert_gt(
+		fastest, PlayerScript.BASE_SPEED,
+		"something on this planet (%s) must be able to close on a walking player" % fastest_species
+	)
+
+
+func test_a_species_with_no_profile_still_hunts_at_the_shared_pace():
+	var hunter := CreatureMarker.new()
+	hunter.info = CreatureInfo.new("not_a_real_species")
+	add_child(hunter)
+	assert_almost_eq(hunter.hunt_speed(), CreatureMarker.HUNT_SPEED, 0.001)
+	hunter.queue_free()
+
+
+const PlayerScript = preload("res://scenes/player.gd")
+const TerrainRenderer = preload("res://src/rendering/terrain_renderer.gd")
+
+
+func test_the_restated_tile_size_is_the_renderers_own():
+	assert_eq(CreatureMarker.TILE_SIZE_PX, TerrainRenderer.TILE_SIZE)

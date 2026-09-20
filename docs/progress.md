@@ -23,6 +23,168 @@ reference, not a curated highlight reel — it intentionally includes every
 minor/open-question mechanism the source docs mention, not just headline
 features.
 
+### The gameplay overhaul (2026-09-20) — see `concept/errands.md`, `concept/survival.md`
+
+Asked directly, after the game was shown to someone who was not impressed:
+*"can you rehaul the whole gameplay and experience depth?"*, with eight named
+requirements — a direct entry into play, a concrete thread of action, not
+being able to stroll to the final boss, exploration, crafting, character
+development, a Path-of-Exile-style skill path, and Magicraft-style
+composable spellcrafting.
+
+**Diagnosed first**, across ten lenses over the concept docs, both playtest
+write-ups, the ledger, the roadmap and the player-facing code, then
+synthesised and adversarially checked. The verdict: a very deep simulation
+with a very thin game on top. Three facts a first-timer meets — nothing
+after spawn says what to do; nothing answers back when they act (no chop
+sound, no hit flash, no XP or level-up message, `gain_experience`'s return
+value discarded by all three callers); nothing is at stake (every species
+bites for the same 6 damage on a 0.8 s cooldown and gives up quickly,
+hunger takes two real hours to matter, sprint is free, death is a
+three-second reset). Under those, the few directed loops break in the
+player's hands: the villager asks for three rock and there is no give verb,
+gated crafts fail silently, the sell key sells the starter fishing rod,
+and most species have no loot row so they vanish on death.
+
+- ✅ **The give verb — the loop that never closed** (2026-09-20) — see
+  `concept/errands.md`. The production-shortfall projection was read-only
+  end to end: `QuestLog` paid `Karma.QUEST_FULFILLED_REWARD` when a
+  shortage *happened to* end, which meant the village fixed it itself and
+  the player was paid for standing nearby. Now `ErrandDelivery` is the
+  whole transaction decided before anything moves (what can be given, what
+  it is worth at the settlement's own scarcity price with a pinned floor,
+  what a finite household purse can pay, what it still owes as a debt,
+  whether the shortage really ends), the conversation window carries the
+  offer built from the **same frame** the villager's own "I could use three
+  more rock" line is built from, and `EarthChunkManager.deliver_errand`
+  performs it atomically against live state — goods into the same `Market`
+  object the projection reads, coins out of the household's own `Wallet`,
+  a real witnessed `errand_delivered` event. The projection then reports no
+  shortage **because there is none**. An offer the player cannot meet is a
+  sentence naming what is needed, not a dead button. Tests:
+  `test_errand_delivery.gd` 28/28 (new), `test_conversation_window.gd`
+  18/18, `test_earth_chunk_manager_errand.gd` 9/9 (new). 🚧 The debt rides
+  on the event but no dialogue topic speaks to it yet, and
+  `NpcRecognition` does not read `errand_delivered` as its own memory kind.
+- ✅ **Wired into the live game, requirement by requirement**
+  (2026-09-20). The rules above are only worth what a player meets, so
+  each was carried into the real paths and pinned there.
+  - **Requirement 3, the world has an order** — `SprintCost` wired to the
+    player (running drains, exhaustion refuses, walking stays free);
+    `SpeciesBite` wired to `CreatureMarker.bite_damage` /
+    `bite_cooldown_seconds` / `hunt_speed`. The sharpest finding of the
+    whole pass came from that last one: `HUNT_SPEED` was **36 px/s against
+    a walking speed of 40**, so every pursuer in the game was outWALKED by
+    a player who never touched sprint — a difficulty ring gating which
+    species may spawn while gating nothing at all. A bear now bites for 23
+    where everything bit for 6, and a test names which animal can close on
+    a walking player.
+  - **Requirement 7, the path reads as a build** —
+    `SkillWebView.node_tooltip` calls the real consumer twice and prints
+    the before → after against the character's own facts. **A key mismatch
+    caught in adversarial review** (`amount` passed where the module reads
+    `bonus_amount`) had every preview rendering `16 → 16`; the test now
+    asserts the two sides differ, which a mismatch cannot pass.
+  - **Requirement 1, a direct entry** — `DawnClause` wired to the sky: a
+    new character opens their eyes at first light whatever the wall clock
+    says, and the real-Earth clock returns on its own. A loaded save is
+    never shifted, a console-pinned clock wins outright, and once
+    converged the call stops being made.
+  - **Feedback** — `Player.answer` / `World._on_player_answered`: a
+    connecting swing floats its damage, a sweep says what it collected,
+    experience shows its number, a level announces itself.
+    `gain_experience` has always returned the levels it granted and all
+    three callers discarded it, which is exactly why levelling was a
+    silent change to a corner label.
+  - **Requirement 8, Magicraft** — motes owned and learned by living
+    through the phenomenon they name (venom from the far country's snake,
+    frost from the cold that took you, fire from one you lit), woven on a
+    real surface (**M**) whose header rewrites itself live, and cast
+    through the game's own parser, cost model and executor with no second
+    interpreter.
+  - **Requirement 5, crafting** — `Player.craft_refusal` asks the same
+    three gates `craft` checks, so a card that cannot proceed says
+    *"Needs heat source; you are not standing at one."* instead of doing
+    nothing.
+  - **Requirement 2 was closed earlier** by the give verb; **requirement 6**
+    is served by the feedback pass; **requirement 4** has its rings built
+    and named but is not yet raised on screen.
+
+- ✅ **Six pure modules for the overhaul's other requirements**
+  (2026-09-20) — each spec-first and red-first, built in parallel and
+  adversarially reviewed. Wiring into the live game is tracked separately
+  below; these are the rules, tested, not yet all called.
+  - **`SpeciesBite`** (`concept/predator_profiles.md`,
+    `test_species_bite.gd` 48/48) — per-species damage, windup, pursuit,
+    release distance and tenacity, replacing the single ATTACK_DAMAGE
+    (6.0), cooldown (0.8 s), sense radius and flee-at-half-health rule
+    every animal in the game shared. Fairness is structural: a bite that
+    can take a large share of the player's health must carry a
+    proportionally longer telegraph, asserted for every profile. The
+    difficulty gradient is pinned monotone against the real spawn
+    rosters, so a new species cannot be added that breaks the world's
+    order. A bear now holds to a tenth of its health rather than half,
+    which is what makes it the animal the ring gates you away from.
+  - **`JourneyRing`** (`concept/journey_rings.md`,
+    `test_journey_ring.gd` 30/30) — the named, player-facing rings, every
+    boundary derived from `RegionDifficulty`'s own constants and swept
+    across all distances so the two can never disagree. Demands are
+    cumulative. It deliberately exposes **no** function that can refuse a
+    step, pinned by a reflection test over its own method list: the
+    world's order is enforced by cold and teeth, never by an invisible
+    fence.
+  - **`SpellMote`** (`concept/spell_weaving.md`, `test_spell_mote.gd`
+    21/21) — an atom as a thing you own. The first mote of any atom is
+    granted by experiencing the phenomenon it names; after that it drops,
+    with tier caps per ring so power is paced by distance rather than by
+    a level gate.
+  - **`SpellDraft`** (same doc, `test_spell_draft.gd` 32/32) — the
+    Magicraft loop's hinge: an ordered socket list whose source text
+    **round-trips through the real `SpellParser`**, so a player's
+    arrangement becomes a castable spell through the pipeline that
+    already exists rather than a second interpreter, costed by the
+    existing `SpellCost`. Order is load-bearing — adjacent atoms react,
+    so swapping two motes changes the result — and the reaction bound
+    holds by construction rather than by searching the space.
+  - **`NodePayoff`** (`concept/skill_payoff.md`, `test_node_payoff.gd`
+    28/28) — the 84-node web's real weakness answered: a node is rendered
+    by calling the real consumer function **twice**, at the current stat
+    and at the granted one, so the web says "Fire Bolt 8 → 11 damage"
+    instead of a stat name. Stats with no live consumer are reported
+    honestly rather than given invented effects, which also measures how
+    much of the web is still inert.
+  - **`Answerback`** (`concept/feedback.md`, `test_answerback.gd` 43/43)
+    — the single statement of what every world-changing verb answers
+    with, held by a **two-way drift test** against the real bound
+    actions: a new verb without feedback fails, and a feedback row for a
+    verb that no longer exists fails. Measured before it: the entire game
+    had three sound effects and no hit flash, damage number, XP float or
+    level-up toast anywhere.
+  - **`DawnClause` / `ArrivalBriefing`** (`concept/arrival.md`,
+    `test_dawn_clause.gd` 15/15, `test_arrival_briefing.gd` 22/22) — a
+    brand-new character opens their eyes at first light whatever the wall
+    clock says, with the offset decaying so the real-Earth clock returns
+    on its own within a few in-game days (swept across all 24 real
+    hours); and the three facts a player needs in their first ten seconds
+    — where they are, what is around them, and one real thing to do from
+    the live shortfall projection — every line empty-safe.
+
+- ✅ **Running costs the legs** (2026-09-20) — see `concept/survival.md`.
+  `spend_stamina` had exactly one caller in the entire game (the sickness
+  step), so sprint was free, unlimited and exactly twice walking speed —
+  which is why the world's danger gradient gated nothing: `RegionDifficulty`
+  decides which species may *spawn*, but a player who can outrun all of
+  them forever need not care. `SprintCost` is the rule: one tuned constant
+  (`SECONDS_OF_SPRINT_FROM_FULL` 14 s) with the drain rate derived from it,
+  walking free for ever so nobody is stranded, and the gate being
+  `SurvivalMeters.EXHAUSTED_THRESHOLD` itself so the Exhausted chip and the
+  legs refusing to run are one fact. Measured at play scale and pinned: one
+  burst carries **80 m**, the safe ring's radius is **684 m**, reaching the
+  HARD tier is over thirty full bars and more than ten minutes of walking.
+  Tests: `test_sprint_cost.gd` 18/18 (new), including two that pin the
+  wiring so this cannot become another tested module with no callers.
+
+
 ### Loose stone (see `docs/concept/stone.md`)
 
 ✅ **Stone comes in sizes now**, on the Wentworth grain-size scale (the real geological one): pebble, cobble, boulder. The lift/smash line falls at the cobble-boulder boundary (256mm) because that is roughly where a rock stops being liftable -- the game rule and the classification agree because they answer the same question.

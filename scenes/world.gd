@@ -153,6 +153,12 @@ const ToggleSwitch = preload("res://src/ui/toggle_switch.gd")
 const WeatherModel = preload("res://src/world/weather_model.gd")
 const SeasonCycle = preload("res://src/world/season_cycle.gd")
 const EntityRef = preload("res://src/emergence/entity_ref.gd")
+const ErrandDelivery = preload("res://src/gameplay/errand_delivery.gd")
+const NodePayoff = preload("res://src/gameplay/node_payoff.gd")
+const Answerback = preload("res://src/gameplay/answerback.gd")
+const DawnClause = preload("res://src/gameplay/dawn_clause.gd")
+const SpellWeaveWindow = preload("res://scenes/spell_weave_window.gd")
+const SpellDraft = preload("res://src/gameplay/spell_draft.gd")
 const Why = preload("res://src/emergence/why.gd")
 const SimulationMetrics = preload("res://src/emergence/simulation_metrics.gd")
 const TreeSpecies = preload("res://src/world/tree_species.gd")
@@ -446,6 +452,7 @@ const INVENTORY_TOGGLE_ACTION := "toggle_inventory"
 const CRAFTING_TOGGLE_ACTION := "toggle_crafting"
 const QUEST_LOG_TOGGLE_ACTION := "toggle_quest_log"
 const SKILLS_TOGGLE_ACTION := "toggle_skills"
+const WEAVE_TOGGLE_ACTION := "toggle_weave"
 ## P for planner (docs/concept/planner_mode.md). The mode toggle used to be
 ## the HUD button alone, and a focused Button answers ui_accept -- which is
 ## Space, the attack key.
@@ -1235,6 +1242,7 @@ func _ready() -> void:
 	_build_quest_log_window()
 	_build_conversation_window()
 	_build_skill_window()
+	_build_weave_window()
 	_build_settings_overlay()
 	_build_hover_tooltip()
 	_build_death_label()
@@ -1917,6 +1925,7 @@ func _build_conversation_window() -> void:
 	_conversation_window.offset_bottom = 210.0
 	_ui.add_child(_conversation_window)
 	_conversation_window.topic_chosen.connect(_on_conversation_topic_chosen)
+	_conversation_window.give_requested.connect(_on_conversation_give_requested)
 
 
 ## The talk key's real handler (docs/concept/dialogue.md's own Status
@@ -2000,7 +2009,13 @@ func _open_conversation_with(npc: NpcMarker, local_player: Player) -> void:
 		beats.append(DialogueBeat.build({}, frame, voice_register, recognition))
 
 	_conversation_npc_id = npc_id
-	_conversation_window.open_for(npc_id, npc.identity.npc_name, result["greeting"], beats)
+	# The errand, read off the very frame the villager's own "I could use
+	# three more rock" line is built from (docs/concept/errands.md): the
+	# saying and the giving cannot disagree, because they are one state.
+	_conversation_window.open_for(
+		npc_id, npc.identity.npc_name, result["greeting"], beats,
+		ErrandDelivery.offer_from_frame(frame)
+	)
 
 
 ## Burns the chosen topic in the real, persistent ledger (see
@@ -2011,15 +2026,131 @@ func _on_conversation_topic_chosen(topic_id: String) -> void:
 	_chunk_manager.seen_ledger().mark_told(_conversation_npc_id, topic_id, _chunk_manager.world_age_seconds())
 
 
+## The player handed a villager the goods their household is short of
+## (docs/concept/errands.md). EarthChunkManager.deliver_errand performs the
+## whole transfer atomically against live state -- inventory, the
+## settlement's own market, the household's purse, a witnessed event -- and
+## hands back what really moved, which is what the banner then reports.
+func _on_conversation_give_requested(offer: Dictionary) -> void:
+	var local_player := _players.get_node_or_null(str(multiplayer.get_unique_id())) as Player
+	if local_player == null:
+		return
+	var deal: Dictionary = _chunk_manager.deliver_errand(offer, local_player)
+	if int(deal["units"]) <= 0:
+		return
+	_show_errand_banner(deal)
+
+
+## What a delivery reports: what moved, what it paid, and what it is still
+## owed -- a village too poor to pay takes the goods anyway and carries the
+## rest as a debt, which the player should hear about rather than be
+## silently short-changed over.
+func _show_errand_banner(deal: Dictionary) -> void:
+	var parts: Array[String] = []
+	for entry in deal["given"]:
+		parts.append("%d %s" % [int(entry["count"]), String(entry["item_id"]).replace("_", " ")])
+	var moved := ", ".join(parts)
+	var paid := int(deal["paid"])
+	var debt := int(deal["debt"])
+	var line := "Handed over %s." % moved
+	if paid > 0:
+		line += " Paid %d gold." % paid
+	if debt > 0:
+		line += " They owe you %d more." % debt
+	elif paid <= 0:
+		line += " They have nothing to pay with."
+	_set_message_banner(_trade_banner, line)
+
+
 func _on_craft_requested(recipe_id: String) -> void:
 	var local_player := _players.get_node_or_null(str(multiplayer.get_unique_id())) as Player
-	if local_player != null and local_player.craft(recipe_id):
+	if local_player == null:
+		return
+	# Why it would refuse, asked BEFORE trying, so the answer is a sentence
+	# about the world rather than a button that did nothing
+	# (docs/concept/feedback.md). Measured before this: clicking a recipe
+	# card that looked affordable but failed a heat/skill gate produced no
+	# sound, no line and no change -- one of the first things that broke in
+	# a new player's hands.
+	var refusal: String = local_player.craft_refusal(recipe_id)
+	if refusal != "":
+		local_player.answer("craft", {"failed": true, "reason": refusal})
+		return
+	if local_player.craft(recipe_id):
+		local_player.answer("craft", {"item": recipe_id})
 		_crafting_window.refresh(local_player.inventory_counts())
 
 
 ## Builds the skill-tree spend window (see SkillTreeWindow), hidden until
 ## toggled with toggle_skills (default L). Clicking an affordable node/keystone
 ## allocates it on the local player and refreshes.
+## The spell-weave surface (docs/concept/spell_weaving.md), hidden until
+## toggled with toggle_weave (default M). The window reports what the
+## player arranged; Player.weave owns whether it is allowed.
+func _build_weave_window() -> void:
+	_weave_window = SpellWeaveWindow.new()
+	_weave_window.theme = _ui_theme
+	_weave_window.set_anchors_preset(Control.PRESET_CENTER)
+	_weave_window.offset_left = -SpellWeaveWindow.WINDOW_SIZE.x * 0.5
+	_weave_window.offset_top = -SpellWeaveWindow.WINDOW_SIZE.y * 0.5
+	_weave_window.offset_right = SpellWeaveWindow.WINDOW_SIZE.x * 0.5
+	_weave_window.offset_bottom = SpellWeaveWindow.WINDOW_SIZE.y * 0.5
+	_ui.add_child(_weave_window)
+	_weave_window.weave_requested.connect(_on_weave_requested)
+	_weave_window.socket_requested.connect(_on_weave_socket_requested)
+	_weave_window.unsocket_requested.connect(_on_weave_unsocket_requested)
+
+
+var _weave_window: SpellWeaveWindow
+
+## The arrangement being built on screen, before it is committed. Held
+## here rather than in the window because the window is a view: it is
+## rebuilt from this on every refresh and owns nothing.
+var _weave_draft: Dictionary = {}
+
+
+func _refresh_weave_window(local_player: Player) -> void:
+	if _weave_window == null or not _weave_window.visible:
+		return
+	_weave_window.refresh(local_player.motes(), _weave_draft)
+
+
+## Clicking a mote in the pouch sockets it next, up to the shared socket
+## limit. Refused past that by the same constant the validator uses.
+func _on_weave_socket_requested(atom_id: String) -> void:
+	var atoms: Array = SpellDraft.atoms_of(_weave_draft)
+	if atoms.size() >= SpellDraft.MAX_SOCKETS:
+		return
+	atoms.append(atom_id)
+	_weave_draft = SpellDraft.make(atoms, SpellDraft.delivery_of(_weave_draft))
+	var local_player := _players.get_node_or_null(str(multiplayer.get_unique_id())) as Player
+	if local_player != null:
+		_refresh_weave_window(local_player)
+
+
+func _on_weave_unsocket_requested(socket_index: int) -> void:
+	var atoms: Array = SpellDraft.atoms_of(_weave_draft)
+	if socket_index < 0 or socket_index >= atoms.size():
+		return
+	atoms.remove_at(socket_index)
+	_weave_draft = SpellDraft.make(atoms, SpellDraft.delivery_of(_weave_draft))
+	var local_player := _players.get_node_or_null(str(multiplayer.get_unique_id())) as Player
+	if local_player != null:
+		_refresh_weave_window(local_player)
+
+
+## Committing the arrangement. Player.weave owns both gates and writes its
+## own refusal into cast_message, which the HUD already shows -- so a
+## refused weave reads as a sentence rather than a button that did nothing.
+func _on_weave_requested(draft: Dictionary) -> void:
+	var local_player := _players.get_node_or_null(str(multiplayer.get_unique_id())) as Player
+	if local_player == null:
+		return
+	if local_player.weave(draft):
+		_set_message_banner(_cast_banner, "Woven: %s" % SpellDraft.name_for(draft))
+	_refresh_weave_window(local_player)
+
+
 func _build_skill_window() -> void:
 	_skill_window = SkillTreeWindow.new()
 	_skill_window.theme = _ui_theme
@@ -2069,12 +2200,148 @@ func _refresh_skill_window(local_player: Player) -> void:
 		local_player.skill_web,
 		local_player.character_class,
 		local_player.dna_resonance,
-		local_player.dna_seed
+		local_player.dna_seed,
+		_payoff_facts_for(local_player),
+		_allocated_bonuses_for(local_player)
 	)
 	_skill_window.refresh(
 		local_player.experience.unspent_points,
 		local_player.allocated_nodes,
 		local_player.unlocked_keystones
+	)
+
+
+## The stat bonuses this character has ALREADY allocated, for the payoff
+## preview's "before" (docs/concept/skill_payoff.md). Read through
+## Player.skill_bonus, the one reader for every stat the web grants, so
+## this can never disagree with what the character really has.
+func _allocated_bonuses_for(local_player: Player) -> Dictionary:
+	var bonuses := {}
+	for stat_name in NodePayoff.CONSUMER_STATS:
+		bonuses[stat_name] = local_player.skill_bonus(stat_name)
+	return bonuses
+
+
+## What this character already is, for the skill web's payoff preview
+## (docs/concept/skill_payoff.md): the consumers need to know what they are
+## computing against -- the weapon really in hand, the health they really
+## have, the spell they really know -- so a node's "before" is the player's
+## own before rather than a textbook one. Every key is optional; NodePayoff
+## falls back to a neutral character for anything missing.
+func _payoff_facts_for(local_player: Player) -> Dictionary:
+	var facts := {
+		"base_max_health": float(local_player.max_health),
+		"knows_spells": 1.0 if local_player.known_spell_ids().size() > 0 else 0.0,
+		"has_companion": 1.0 if local_player.bonded_companions.size() > 0 else 0.0,
+	}
+	var weapon = local_player.held_weapon()
+	if weapon != null:
+		facts["held_weapon"] = weapon
+	return facts
+
+
+## Draws what an act answered with (docs/concept/feedback.md): the line on
+## the shared message stack, the number floating up off the player.
+##
+## World owns the screen; the Player owns knowing what happened. The same
+## division `topic_chosen` keeps for the seen ledger, and the reason the
+## resolved feedback arrives here already decided rather than as raw
+## numbers to interpret.
+func _listen_for_answers(player: Player) -> void:
+	if player == null or player.answered.is_connected(_on_player_answered):
+		return
+	player.answered.connect(_on_player_answered)
+
+
+func _on_player_answered(feedback: Dictionary) -> void:
+	var message := String(feedback.get("message", ""))
+	if message != "":
+		_set_message_banner(_talk_banner, message)
+	var float_text := String(feedback.get("float_text", ""))
+	if float_text != "":
+		_float_answer_text(float_text, Color(feedback.get("flash_color", Color.WHITE)))
+
+
+## One rising, fading label over the player: the receipt for an act, gone
+## before it can clutter. Deliberately a plain Label on the UI layer rather
+## than a world-space node -- it belongs to the reading of the act, not to
+## the place it happened, and a world-space number is the first thing to
+## get lost behind a tree.
+func _float_answer_text(text: String, colour: Color) -> void:
+	if _ui == null:
+		return
+	var label := Label.new()
+	label.text = text
+	label.theme = _ui_theme
+	label.add_theme_color_override("font_color", colour)
+	label.add_theme_font_size_override("font_size", ANSWER_FLOAT_FONT_SIZE)
+	label.set_anchors_preset(Control.PRESET_CENTER)
+	label.offset_top = ANSWER_FLOAT_START_OFFSET_Y
+	label.mouse_filter = Control.MOUSE_FILTER_IGNORE
+	_ui.add_child(label)
+	var rise := create_tween()
+	rise.set_parallel(true)
+	rise.tween_property(label, "offset_top", ANSWER_FLOAT_START_OFFSET_Y - ANSWER_FLOAT_RISE_PX,
+		ANSWER_FLOAT_SECONDS)
+	rise.tween_property(label, "modulate:a", 0.0, ANSWER_FLOAT_SECONDS)
+	rise.chain().tween_callback(label.queue_free)
+
+
+## How a floating answer reads: far enough above the hero to clear their
+## own sprite, rising a little, gone inside the interval the feedback table
+## itself uses for a deliberate act (Answerback.DELIBERATE_INTERVAL_SECONDS)
+## so two receipts never stack.
+const ANSWER_FLOAT_FONT_SIZE := 14
+const ANSWER_FLOAT_START_OFFSET_Y := -36.0
+const ANSWER_FLOAT_RISE_PX := 24.0
+const ANSWER_FLOAT_SECONDS := Answerback.DELIBERATE_INTERVAL_SECONDS
+
+
+## The local hour a YOUNG character's sky should read, or NO_FORCED_HOUR
+## when this character is old enough to live under the real one
+## (DawnClause, docs/concept/arrival.md).
+##
+## `_arrival_unix_seconds` is when this character first opened their eyes
+## and `_arrival_real_hour` is the local hour it really was then, both set
+## at spawn. Days elapsed is measured in REAL time because the sky is: an
+## in-game day is DawnClause.REAL_HOURS_PER_IN_GAME_DAY of it. A character
+## loaded from a save has no recorded arrival and so is never shifted,
+## which is exactly the "a save made on day 9 loads on day 9" rule.
+func _dawn_shifted_local_hour(longitude: float) -> float:
+	if _arrival_real_hour < 0.0:
+		return NO_FORCED_HOUR
+	var now := Time.get_datetime_dict_from_system(true)
+	var real_hour := _solar_position.local_hour(
+		float(now.hour) + float(now.minute) / 60.0 + float(now.second) / 3600.0, longitude
+	)
+	var elapsed_real_hours := (
+		float(Time.get_unix_time_from_system() - _arrival_unix_seconds) / 3600.0
+	)
+	var days := elapsed_real_hours / DawnClause.REAL_HOURS_PER_IN_GAME_DAY
+	if days >= DawnClause.CONVERGENCE_DAYS:
+		# Converged: stop asking, and stop paying for the call every frame.
+		_arrival_real_hour = -1.0
+		return NO_FORCED_HOUR
+	return DawnClause.local_hour_for(real_hour, days, _arrival_real_hour)
+
+
+## When this character first opened their eyes, and what the local hour
+## really was then. Set only on a NEW character (see
+## _record_arrival_for_first_light); a loaded save leaves them at -1 and is
+## never shifted. Not persisted on purpose: the shift exists for a first
+## impression, and a character old enough to have been saved has had one.
+var _arrival_real_hour := -1.0
+var _arrival_unix_seconds := 0
+
+
+## Marks this instant as a new character's arrival, so their first days
+## open at first light (docs/concept/arrival.md). Called from the NEW-game
+## spawn only.
+func _record_arrival_for_first_light(longitude: float) -> void:
+	_arrival_unix_seconds = int(Time.get_unix_time_from_system())
+	var now := Time.get_datetime_dict_from_system(true)
+	_arrival_real_hour = _solar_position.local_hour(
+		float(now.hour) + float(now.minute) / 60.0 + float(now.second) / 3600.0, longitude
 	)
 
 
@@ -4255,6 +4522,15 @@ func _unhandled_input(event: InputEvent) -> void:
 		var lp := _players.get_node_or_null(str(multiplayer.get_unique_id())) as Player
 		if lp != null:
 			_refresh_skill_window(lp)
+	elif event.is_action_pressed(WEAVE_TOGGLE_ACTION):
+		_weave_window.toggle()
+		var weaver := _players.get_node_or_null(str(multiplayer.get_unique_id())) as Player
+		if weaver != null:
+			# Opening on what is already woven, so the window is a view of
+			# this character rather than a blank slate each time.
+			if _weave_draft.is_empty():
+				_weave_draft = weaver.woven_draft()
+			_refresh_weave_window(weaver)
 	elif event.is_action_pressed(SETTINGS_TOGGLE_ACTION):
 		_handle_escape()
 	elif event is InputEventMouseButton and event.pressed and event.button_index == MOUSE_BUTTON_LEFT:
@@ -6726,6 +7002,7 @@ func _on_peer_connected(peer_id: int) -> void:
 	player.position = _spawn_position_for_tile(await _compute_dry_land_spawn_tile())
 	player.respawn_position = player.position
 	_players.add_child(player)
+	_listen_for_answers(player)
 	# So its pack ages and, once something in it turns, smells (see
 	# EarthChunkManager.register_scent_carrier).
 	_chunk_manager.register_scent_carrier(player)
@@ -6761,6 +7038,16 @@ func _spawn_local_singleplayer() -> void:
 	var player := PlayerScene.instantiate()
 	player.name = str(multiplayer.get_unique_id())
 	player.position = _spawn_position_for_tile(await _compute_dry_land_spawn_tile())
+	# This character's first morning (docs/concept/arrival.md). NEW game
+	# only: _spawn_local_singleplayer_from_save is a separate function and
+	# never records an arrival, which is what makes a loaded save read the
+	# real sky.
+	_record_arrival_for_first_light(
+		_geo_coordinates.longitude_for_tile(
+			int(player.position.x / TerrainRenderer.TILE_SIZE),
+			EarthChunkGenerator.WORLD_WIDTH_TILES
+		)
+	)
 	player.respawn_position = player.position
 	# BEFORE apply_class: the class start node it grants is a real web node, and
 	# what that node is worth to this character depends on the resonance the
@@ -6773,6 +7060,7 @@ func _spawn_local_singleplayer() -> void:
 		_pending_appearance
 	)
 	_players.add_child(player)
+	_listen_for_answers(player)
 	# AFTER add_child: _ready() has just wired inventory_changed ->
 	# sync_hotbar, so the grant's own emit actually reaches something (see
 	# Player.grant_starter_items's own doc comment). Only this NEW-game path
@@ -6814,6 +7102,7 @@ func _spawn_local_singleplayer_from_save() -> void:
 		save_data.get("appearance", {})
 	)
 	_players.add_child(player)
+	_listen_for_answers(player)
 	# So its pack ages and, once something in it turns, smells (see
 	# EarthChunkManager.register_scent_carrier).
 	_chunk_manager.register_scent_carrier(player)
@@ -7770,6 +8059,24 @@ func _client_process(delta: float) -> void:
 	# together instead of the readout drifting away from the sky.
 	if _forced_local_hour != NO_FORCED_HOUR:
 		utc_hour = _solar_position.utc_hour_for_local(_forced_local_hour, longitude)
+	else:
+		# A brand-new character opens their eyes at first light, whatever
+		# the wall clock says, and the real-Earth clock comes back on its
+		# own within a few in-game days (DawnClause, docs/concept/
+		# arrival.md). Measured as possibly the single biggest factor in a
+		# bad first impression: the sun is driven by the REAL clock at the
+		# spawn latitude, so a game shown to someone after work opens in
+		# darkness with Cold chips in spring, and they never see the world
+		# the screenshots promise.
+		#
+		# The clause is the IDENTITY for an old character, so a save made
+		# on day 9 loads on day 9 under the real sky -- the game never
+		# lies about the planet for longer than the first few days of a
+		# life. A console-pinned clock wins outright: /time means what it
+		# says.
+		var shifted := _dawn_shifted_local_hour(longitude)
+		if shifted != NO_FORCED_HOUR:
+			utc_hour = _solar_position.utc_hour_for_local(shifted, longitude)
 
 	var elevation := forced_elevation_for(
 		_forced_sky,

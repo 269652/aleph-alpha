@@ -94,6 +94,10 @@ const ACTIONS := [
 	# Moved off K (the very next key over, an easy muscle-memory shift) to
 	# make room for "kick" -- see docs/concept/stone.md.
 	{"action": "toggle_skills", "label": "Toggle Skill Tree", "default": KEY_L},
+	# M for the weave: the spell-composition surface (docs/concept/
+	# spell_weaving.md). Free, and the obvious letter for Magic once I, C,
+	# U and L are taken by the inventory, crafting, quests and the web.
+	{"action": "toggle_weave", "label": "Toggle Spell Weave", "default": KEY_M},
 	# P for planner (docs/concept/planner_mode.md). A mode toggle is a real
 	# control, so it gets a real key rather than only the HUD button it had
 	# -- which, being a focusable Button, was answering the ATTACK key
