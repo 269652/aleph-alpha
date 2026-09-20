@@ -28598,6 +28598,153 @@ A/B'd in a clean worktree at the commit before it, where it fails with the
 identical numbers at the identical two lines. Recorded rather than quietly
 left.
 
+## The square stays under the hall, and every plot shows its own kerb (`concept/building.md`, 2026-09-20)
+
+Reported live with a screenshot: *"the background of the houses 2x2 should
+be variable; if the city hall is placed on the plaza it should have
+cobblestone background so it looks seamless... also there should be some
+kind of border so the hitbox is visible."*
+
+**Half of it was already fixed, in parallel, the day before.** "A building
+stands on the ground; it does not replace it" (2026-09-19,
+`TerrainRenderer.BUILDING_OVERLAY_TILE_IDS`) made a footprint an overlay,
+so a house on grass shows the grass it was raised on and the ground under
+a building is exactly as variable as the ground is. This entry is the
+other half, and the two are reconciled rather than stacked — one branch
+was written against the pre-overlay code and was merged into it by hand.
+
+**The square is the one thing an overlay cannot answer.** Placement LIFTS
+the paving it covers — `EarthChunkManager._place_building_over_roads`
+erases the Road modification from every footprint cell before writing the
+building's own ids — so a hall raised on the village square falls back to
+the *biome* under it and shows the grassland the square was paved over.
+Not a seam: a hole punched in the square, which is what the screenshot
+shows. Measured before the fix with `tools/probe_building_ground.gd`
+(new, kept) across three real settlements near lat 48.6 lon 12.7: 28
+buildings, all three town halls standing on ground that is not the square
+they stand on.
+
+**So a building reads its own kerb** — the ring of cells immediately
+around the footprint, 18 round a 4×3 hall and 12 round a 2×2 cottage.
+More than `TerrainRenderer.PAVED_KERB_SHARE` of it carrying laid Road
+means the footprint paints Road as well and the hall is cobbled up to its
+own walls; anything less leaves it the plain overlay, ground showing
+through. The share is half and the real geometry put it there: every town
+hall's kerb is 12 of 18 paved (67%, the same in all three villages, since
+plaza and civic plot are both pure functions of the chunk and its seed),
+an ordinary house/farmhouse/sawmill plot runs 7–43%, and the three plots
+of 28 that sat above half (58%, 71%, 86%) are corner plots genuinely
+ringed by street.
+`test_the_town_hall_on_a_real_villages_square_stands_on_the_square` builds
+the kerb out of `VillageLayout`'s own real output rather than a made-up
+ring, so a change to the plaza or the street pitch fails there instead of
+on screen — mutation-checked by raising the share to 0.75 and watching all
+four seeds fail. Trails do not count, only the laid Road tier: a building
+standing in ground worn by walking is standing in worn ground.
+
+**Nothing is persisted.** The ground is re-derived from the chunk on every
+paint, so a village saved before this existed heals on its next load (the
+same property that lets an older village re-derive and pave its square),
+and a plot that is paved *around* later becomes paved itself with no
+migration and no second source of truth to drift. `TerrainRenderer` does
+now preload `BuildingCatalog`, which the literal `BUILDING_OVERLAY_TILE_
+IDS` list deliberately avoids — a named divergence: the overlay question
+needs nothing but an id, while a kerb is read around a whole PLOT and a
+footprint is the one thing only the catalog knows. The list stays literal.
+
+**The kerb is drawn, too.** `ProceduralFootprintKerbSprite` (new) draws
+the plot's own outline at art resolution — two art pixels of stone, one of
+lit top face, a joint every eight so it reads as laid kerb stones rather
+than a debug rectangle — and `_spawn_building_node` carries it *beneath*
+the building's art (children paint in tree order; the art sprite is now
+named `Art` so nothing has to guess which `Sprite2D` is which), built from
+the same `footprint_px` the `StaticBody2D`'s `RectangleShape2D` is built
+from. What is drawn IS the hitbox rather than a picture of one that can
+drift from it, pinned by
+`test_the_kerb_a_building_draws_is_exactly_its_own_collision_rect`. Its
+middle is fully transparent, so it never paints over the ground the rule
+above just chose. "Visible" is measured rather than eyeballed:
+`contrast_over` composites the kerb's own drawn pixels onto a ground and
+returns how far they land from it, and every ground a kerb can lie on
+clears `MIN_GROUND_CONTRAST` — 0.44 over the village's cobbles, 0.28 over
+bare earth, 0.31 over the grass beside a plot, against a floor of 0.12 —
+with a second test recomputing that number straight off the generated
+image so the function cannot drift from the drawing. A construction site
+draws none; it has no collision body yet.
+
+**Confirmed on a real render** (`tools/probe_village_render.gd`, new,
+under `xvfb` + Mesa software GL, because a headless run paints no pixels):
+the hall's plot is cobbled continuously into the plaza with no seam, and a
+cottage's plot shows the grass it stands in, with a kerb legible against
+both.
+
+Honest gaps, both real:
+
+🚧 **The kerb is drawn on a paved plot too**, where it is an outline over
+the square rather than a boundary between two surfaces. That is what "so
+the hitbox is visible" asked for, and it does mean a village square
+carries outlines a photograph of one would not.
+
+🚧 **An earth cell beside a PAVED plot blends toward it as open ground.**
+`_neighbor_biomes` reads overlays as unmodified, and the paved branch runs
+ahead of that. It cannot arise today — a paved plot is by definition
+ringed by paving, not by earth — but it is a real hole in the rule rather
+than a guarantee.
+
+Tested: `test_building_ground.gd` (7, new),
+`test_procedural_footprint_kerb_sprite.gd` (9, new),
+`test_terrain_renderer.gd` (+5, beside the overlay tests they reconcile
+with), `test_earth_chunk_manager_buildings.gd` (+4).
+
+## The item panels draw the real art too (`concept/illustrated_art_addressing.md`, 2026-09-20)
+
+Reported live: *"The inventory still renders the old procedual icons and not
+the illustrated ones"*.
+
+### ✅ Documented from the start, wired for only one of its four surfaces
+
+`illustrated_art_addressing.md` has described the `icon` context as
+"inventory/hotbar/paperdoll/tooltip" since its first draft. The pass that
+finally made real art reach the screen (2026-09-19) wired **six** call sites
+— the `World` hotbar slot, `DroppedItem`, and the two equip paths — and of
+`icon`'s own four named surfaces it reached only the hotbar.
+
+So the hotbar along the bottom of the screen drew the real axe while the
+inventory slot directly above it drew the generated one. Nothing was broken;
+two windows were simply never connected.
+
+### ✅ Seven more call sites, each asking for the context that depicts it
+
+| Window | Call sites | Context |
+| --- | --- | --- |
+| `InventoryWindow` | grid slot, paperdoll frame, drag preview | `icon` |
+| `InventoryWindow` | preview character's armour / weapon | `equipped` / `held` |
+| `CraftingWindow` | card thumbnail, material row | `icon` |
+
+The preview character mattered as much as the slots. It is the **same rig**
+the world draws, so it takes the same contexts `Player.equip_armor`/
+`equip_item` ask for rather than the flat icon — a paperdoll showing a
+different axe from the one in the player's hand two panels away would be its
+own bug.
+
+A drop-in in both windows: `IllustratedItemArt` falls back to
+`ProceduralItemSprite` for a subject with no art and fits every frame to
+`ProceduralItemSprite.SIZE`, so no call site re-scales and no layout moved.
+Both files dropped their `ProceduralItemSprite` preload outright — the
+fallback lives behind `IllustratedItemArt` now, in one place.
+
+### The fallback test does not use the obvious item
+
+`test_an_item_with_no_art_still_draws_its_generated_icon` pins `"bread"`, not
+`"rock"`. Measured against the real asset tree: **104 of the catalog's 149
+ids have icon art** now and `rock` is one of them, so the first draft of that
+test asserted a no-art fallback for an item that has art and failed for the
+right reason. Bread is one of the 45 that genuinely has none. Picking a
+familiar-sounding id by hand proves nothing here.
+
+Tests: `test_inventory_window.gd` 42/42 (+5 new), `test_crafting_window.gd`
+20/20 (+1 new).
+
 ## The well had three different 2x2s, and only one was checked (`concept/village_market_square.md`, 2026-09-20)
 
 Reported live with the well in shot: *"The well is still placed partly on

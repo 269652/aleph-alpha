@@ -280,3 +280,33 @@ func test_the_window_lists_exactly_the_books_bench_recipes():
 	from_book.sort()
 	assert_gt(from_book.size(), 0, "the bench set must not be empty or this proves nothing")
 	assert_eq(from_window, from_book)
+
+
+# -- recipe cards draw the real illustrated art -----------------------------
+#
+# The sibling half of the same report: *"The inventory still renders the old
+# procedual icons and not the illustrated ones"*. A recipe card's thumbnail
+# and its material rows are the same flat `icon` surface
+# docs/concept/illustrated_art_addressing.md names
+# ("inventory/hotbar/paperdoll/tooltip"), and this window was not among the
+# six call sites the art-wiring pass reached either -- so the crafting menu
+# showed a generated axe for the recipe whose output, once made, draws its
+# real art everywhere else.
+
+const IllustratedItemArt = preload("res://src/rendering/illustrated_item_art.gd")
+
+
+## A recipe whose OUTPUT has real icon art, so illustrated and generated are
+## genuinely different pictures.
+const ART_RECIPE := "torch"
+
+
+func test_a_recipe_cards_thumbnail_draws_the_illustrated_icon_art():
+	window.refresh({})
+
+	var icon := window._cards[ART_RECIPE].get_meta("icon") as TextureRect
+	var expected = IllustratedItemArt.new().texture_for(ART_RECIPE, "icon")
+	assert_true(
+		icon.texture.get_image().get_data() == expected.get_image().get_data(),
+		"a recipe card draws its output's own icon art"
+	)

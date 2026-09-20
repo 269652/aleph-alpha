@@ -72,7 +72,13 @@ decreasing with disuse — a real escalation, not three unrelated systems:
   blended the way the Path tier's earth tile is; "man-made, flat-edged,
   never organically blended into the ground" is this codebase's own
   existing rule for every other modification tile, and ground walked all
-  the way to a trail reads as MORE deliberately worn, not less.
+  the way to a trail reads as MORE deliberately worn, not less. (Two later
+  exceptions, and neither is really one: a farm rail and a whole building
+  stopped being ground tiles at all — they are overlays standing on
+  whatever ground was already there — and a building raised on a paved
+  square paints THIS Road tier under itself, because placement lifted the
+  paving it covers. See [building.md](building.md)'s "The ground a
+  building stands on, and the kerb round its plot".)
 - **Road** — the built tier, and the one that is *laid* rather than worn
   (see pillar 1's exception). A settlement lays its streets and plaza as
   `TerrainRenderer.ROAD_TILE_ID` at founding (`VillageLayout` →

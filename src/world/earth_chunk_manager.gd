@@ -75,6 +75,7 @@ const IllustratedStructureSprite = preload("res://src/rendering/illustrated_stru
 const BuildingCatalog = preload("res://src/gameplay/building_catalog.gd")
 const InteriorTemplates = preload("res://src/gameplay/interior_templates.gd")
 const ProceduralBuildingPlaceholderSprite = preload("res://src/rendering/procedural_building_placeholder_sprite.gd")
+const ProceduralFootprintKerbSprite = preload("res://src/rendering/procedural_footprint_kerb_sprite.gd")
 const FarmerMarker = preload("res://src/rendering/farmer_marker.gd")
 const MillMarker = preload("res://src/rendering/mill_marker.gd")
 const BakeryMarker = preload("res://src/rendering/bakery_marker.gd")
@@ -951,6 +952,12 @@ const SAGEWERK_STORAGE_PAIR_RADIUS_TILES := 20
 var _structure_art_sprites: Dictionary = {}
 var _illustrated_structure_sprite := IllustratedStructureSprite.new()
 var _building_placeholder_sprite := ProceduralBuildingPlaceholderSprite.new()
+
+## The kerb every placed building's own plot is edged with (docs/concept/
+## building.md, "The ground a building stands on, and the kerb round its
+## plot") -- one generator, shared, like every other procedural sprite
+## this manager holds.
+var _footprint_kerb_sprite := ProceduralFootprintKerbSprite.new()
 
 ## Every placed Farm currently staffed with a real FarmerMarker (see
 ## docs/concept/npc_farm_production.md) -- chunk_coord -> {local_cell ->
@@ -15412,7 +15419,20 @@ func _spawn_building_node(chunk_coord: Vector2i, origin_local: Vector2i, record:
 	node.name = "Building"
 	node.position = bottom_centre
 
+	# The kerb first, so it lies on the ground UNDER the building rather
+	# than as a box drawn round its walls (children paint in tree order).
+	# Built from the same footprint_px the collision rect below is built
+	# from -- see docs/concept/building.md, "The ground a building stands
+	# on, and the kerb round its plot": what is drawn IS the hitbox.
+	var kerb := Sprite2D.new()
+	kerb.name = "FootprintKerb"
+	kerb.texture = _footprint_kerb_sprite.footprint_texture(footprint, TerrainRenderer.ART_TILE_SIZE)
+	kerb.scale = Vector2.ONE * ArtResolution.SPRITE_SCALE
+	kerb.position = Vector2(0, -footprint_px.y * 0.5)
+	node.add_child(kerb)
+
 	var sprite := Sprite2D.new()
+	sprite.name = "Art"
 	# Which picture a FINISHED building has is BuildingCatalog's call (see
 	# finished_sheet_for): a building with a real variant sheet draws its
 	# own seeded variant, so a street of cottages is a street of DIFFERENT

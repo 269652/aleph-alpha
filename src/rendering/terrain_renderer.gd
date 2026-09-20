@@ -6,6 +6,7 @@ const ProceduralTerrainSprite = preload("res://src/rendering/procedural_terrain_
 const ProceduralStructureSprite = preload("res://src/rendering/procedural_structure_sprite.gd")
 const ProceduralBuildingPieceSprite = preload("res://src/rendering/procedural_building_piece_sprite.gd")
 const BuildingPiece = preload("res://src/gameplay/building_piece.gd")
+const BuildingCatalog = preload("res://src/gameplay/building_catalog.gd")
 const RoofShape = preload("res://src/rendering/roof_shape.gd")
 const ProceduralShoreDistanceSprite = preload("res://src/rendering/procedural_shore_distance_sprite.gd")
 const TerrainAtlasCache = preload("res://src/rendering/terrain_atlas_cache.gd")
@@ -204,6 +205,102 @@ const OVERLAY_ONLY_TILE_IDS: Array[String] = [
 
 static func is_overlay_only_modification(tile_id: String) -> bool:
 	return OVERLAY_ONLY_TILE_IDS.has(tile_id) or BUILDING_OVERLAY_TILE_IDS.has(tile_id)
+
+
+## How much of a building's own KERB -- the ring of cells immediately
+## around its footprint -- must carry laid paving before the footprint
+## paints THAT paving, rather than leaving the ground it was raised on to
+## show through like any other overlay above (docs/concept/building.md,
+## "The ground a building stands on, and the kerb round its plot").
+##
+## The one case an overlay cannot answer on its own: placement LIFTS the
+## paving it covers (EarthChunkManager._place_building_over_roads), so a
+## hall raised on the village square would otherwise stand in a hole
+## punched in that square, showing the grassland underneath it. Reported
+## with a screenshot: "if the city hall is placed on the plaza it should
+## have cobblestone background so it looks seamless".
+##
+## Half, and the real geometry is what put it there:
+## tools/probe_building_ground.gd measured 28 buildings across three real
+## settlements near lat 48.6 lon 12.7 -- every town hall's kerb is 12 of
+## 18 paved (67%, the same in all three, since plaza and civic plot are
+## both pure functions of the chunk and its seed), while an ordinary
+## house/farmhouse/sawmill plot runs 7-43%: its doorstep and a spur, no
+## more. Three corner plots of the 28 sat above half (58%, 71%, 86%) and
+## are genuinely ringed by street, so paving them is this rule working,
+## not an exception to it.
+const PAVED_KERB_SHARE := 0.5
+
+
+## Which ground a building's own footprint paints, given every tile id its
+## kerb carries (see PAVED_KERB_SHARE): the laid Road tier when more than
+## that share of the ring is paved -- the building stands ON the square
+## and is cobbled up to its own walls -- and otherwise "", no ground of
+## its own, which leaves it the plain overlay the list above makes it and
+## the ground it was raised on showing round it.
+##
+## Only the laid Road tier counts: a trail is ground worn by walking, and
+## a building that stands in worn ground stands in worn ground
+## (docs/concept/infrastructure.md). An empty kerb -- a plot at the
+## chunk's own edge, whose neighbours nobody can read -- is "", never
+## paving conjured out of nothing.
+static func building_ground_tile_for(kerb_tile_ids: Array) -> String:
+	var paved := 0
+	for tile_id in kerb_tile_ids:
+		if is_road_tile(tile_id):
+			paved += 1
+	return ROAD_TILE_ID if float(paved) > float(kerb_tile_ids.size()) * PAVED_KERB_SHARE else ""
+
+
+## Every building footprint cell in `chunk` that paints a ground of its
+## own, as local cell -> tile id. Computed once per paint() rather than
+## per cell, and keyed off the RECORD in Chunk.buildings rather than off
+## the markers: a kerb is read around the whole footprint, so every cell
+## of one building shares one answer and one reading of the ring (the
+## doorstep road south of a house's own door must not pave the house that
+## fronts it).
+##
+## A building whose kerb is not paved is simply absent here, as is a
+## footprint cell no record owns (a stale marker, or a chunk read
+## mid-load) -- and paint() then treats it exactly as the overlay it is.
+##
+## BuildingCatalog IS preloaded for this, unlike the literal id list
+## above: a kerb is read around a whole PLOT, and a footprint is the one
+## thing only the catalog knows. The list stays literal because the
+## overlay question it answers genuinely needs nothing but an id.
+static func building_ground_by_cell(chunk: Chunk) -> Dictionary:
+	var ground := {}
+	for origin_local in chunk.buildings:
+		var building_id: String = chunk.buildings[origin_local].get("id", "")
+		if not BuildingCatalog.has_building(building_id):
+			continue
+		var tile_id := building_ground_tile_for(
+			_kerb_tile_ids(chunk, origin_local, BuildingCatalog.footprint_of(building_id))
+		)
+		if tile_id == "":
+			continue
+		for cell in BuildingCatalog.footprint_cells(building_id, origin_local):
+			ground[cell] = tile_id
+	return ground
+
+
+## The tile ids carried by the ring of cells immediately around the
+## footprint at `origin_local`. A cell outside the chunk is left out
+## rather than counted as open ground: a plot at the chunk's own edge has
+## neighbours this chunk genuinely cannot read, and calling them unpaved
+## would be an answer invented rather than measured.
+static func _kerb_tile_ids(chunk: Chunk, origin_local: Vector2i, footprint: Vector2i) -> Array:
+	var ids: Array = []
+	var plot := Rect2i(origin_local, footprint)
+	for y in range(origin_local.y - 1, origin_local.y + footprint.y + 1):
+		for x in range(origin_local.x - 1, origin_local.x + footprint.x + 1):
+			var cell := Vector2i(x, y)
+			if plot.has_point(cell):
+				continue
+			if cell.x < 0 or cell.y < 0 or cell.x >= chunk.width or cell.y >= chunk.height:
+				continue
+			ids.append(chunk.modifications.get(cell, ""))
+	return ids
 
 ## Cardinal directions a blend can be oriented toward -- up/down/left/right,
 ## in this fixed order so mask/atlas indexing is stable.
@@ -1412,9 +1509,13 @@ func _tile_set_cache_key() -> String:
 ## earth_dominant_blend_for), instead of always painting one dead-flat
 ## EARTH_COLOR square regardless of neighbors -- reported (screenshot): a
 ## grass-to-dirt-path boundary read as a hard edge, with the corner where
-## they met a hard square. Every other modification (structures, building
-## pieces) stays exactly as before: deliberately man-made, flat-edged, never
-## organically blended into the ground. Otherwise, if any cardinal neighbor
+## they met a hard square. A BUILDING's own footprint ids resolve first to
+## the ground that building stands on (see building_ground_by_cell), so a
+## hall on a paved square paints that paving and every other plot takes the
+## EARTH_TILE_ID branch above with it, yard edges dithering and all. Every
+## other modification (structures, building pieces) stays exactly as
+## before: deliberately man-made, flat-edged, never organically blended
+## into the ground. Otherwise, if any cardinal neighbor
 ## *within this same chunk* is a different biome, a corner-aware directional
 ## blend tile is used -- the cell dithers toward the dominant differing neighbor
 ## biome (see dominant_blend_for) on every edge that neighbor occupies, so
@@ -1436,12 +1537,21 @@ func paint(
 	origin: Vector2i = Vector2i.ZERO,
 	global_biome_lookup: Callable = Callable()
 ) -> void:
+	# The one kind of overlay that DOES put a ground down: a building whose
+	# own kerb is the village's paving keeps that paving under it, because
+	# placement lifted it (docs/concept/building.md, "The ground a building
+	# stands on, and the kerb round its plot"). Read once here per
+	# building rather than per cell; every other building is absent from
+	# this and stays the plain overlay above.
+	var building_ground := building_ground_by_cell(chunk)
 	for y in chunk.height:
 		for x in chunk.width:
 			var local := Vector2i(x, y)
 			var global := origin + local
 			var atlas_coords: Vector2i
-			if _replaces_the_ground(chunk, local):
+			if building_ground.has(local):
+				atlas_coords = atlas_coords_for_modification(building_ground[local])
+			elif _replaces_the_ground(chunk, local):
 				var tile_id: String = chunk.modifications[local]
 				if tile_id == EARTH_TILE_ID:
 					var variant := variant_index_for_position(global.x, global.y)

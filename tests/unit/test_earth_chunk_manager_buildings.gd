@@ -408,14 +408,12 @@ func test_terrain_renderer_returns_the_same_instance_every_call():
 const ArtResolution = preload("res://src/rendering/art_resolution.gd")
 
 
+## The building's OWN art, by name -- not merely the first Sprite2D child,
+## which is the kerb lying on the ground beneath it (see "the kerb round
+## the plot" at the end of this file).
 func _building_sprite_at(origin_local: Vector2i) -> Sprite2D:
 	var node: Node2D = manager._building_nodes.get(_chunk_coord, {}).get(origin_local)
-	if node == null:
-		return null
-	for child in node.get_children():
-		if child is Sprite2D:
-			return child
-	return null
+	return null if node == null else node.get_node_or_null("Art") as Sprite2D
 
 
 ## A building is drawn INSIDE its own plot (BuildingCatalog.
@@ -482,4 +480,81 @@ func test_a_taller_building_still_overhangs_north_of_its_footprint():
 	assert_almost_eq(
 		sprite.position.y, -sprite.texture.get_height() * 0.5 * sprite.scale.y, 0.01,
 		"anchored at its own bottom edge in WORLD units, not art pixels"
+	)
+
+
+# -- the kerb round the plot (docs/concept/building.md, "The ground a ------
+# -- building stands on, and the kerb round its plot") ---------------------
+#
+# Reported live with a screenshot: "there should be some kind of border so
+# the hitbox is visible". The kerb is drawn from the SAME footprint rect
+# the StaticBody2D's own RectangleShape2D is built from, so it cannot end
+# up marking something other than what a player actually walks into.
+
+const ProceduralFootprintKerbSprite = preload("res://src/rendering/procedural_footprint_kerb_sprite.gd")
+
+
+func _building_child_named(origin_local: Vector2i, child_name: String) -> Node:
+	var node: Node2D = manager._building_nodes.get(_chunk_coord, {}).get(origin_local)
+	return null if node == null else node.get_node_or_null(child_name)
+
+
+func _collision_shape_at(origin_local: Vector2i) -> CollisionShape2D:
+	var body := _building_child_named(origin_local, "BuildingCollision")
+	if body == null:
+		return null
+	for child in body.get_children():
+		if child is CollisionShape2D:
+			return child
+	return null
+
+
+func test_a_placed_building_draws_a_kerb_round_its_own_plot():
+	assert_true(manager.place_building(_chunk_coord, _origin, "house_large", Vector2i(0, 1), 5, ""))
+	var kerb := _building_child_named(_origin, "FootprintKerb")
+	assert_not_null(kerb, "a placed building shows where its own plot is")
+	assert_true(kerb is Sprite2D)
+
+
+## The one property that matters: what is drawn IS the hitbox, not a
+## picture of it that can drift from it.
+func test_the_kerb_a_building_draws_is_exactly_its_own_collision_rect():
+	assert_true(manager.place_building(_chunk_coord, _origin, "house_large", Vector2i(0, 1), 5, ""))
+	var kerb: Sprite2D = _building_child_named(_origin, "FootprintKerb")
+	var shape := _collision_shape_at(_origin)
+	assert_not_null(kerb, "precondition")
+	assert_not_null(shape, "precondition")
+
+	var drawn_size := Vector2(kerb.texture.get_size()) * kerb.scale
+	var drawn_rect := Rect2(kerb.position - drawn_size * 0.5, drawn_size)
+	var body_size: Vector2 = (shape.shape as RectangleShape2D).size
+	var body_rect := Rect2(shape.position - body_size * 0.5, body_size)
+	assert_almost_eq(drawn_rect.position.x, body_rect.position.x, 0.01, "left edge")
+	assert_almost_eq(drawn_rect.position.y, body_rect.position.y, 0.01, "top edge")
+	assert_almost_eq(drawn_rect.size.x, body_rect.size.x, 0.01, "width")
+	assert_almost_eq(drawn_rect.size.y, body_rect.size.y, 0.01, "height")
+
+
+## Drawn at the same pixels-per-world-unit as the ground it lies on and
+## the building it marks -- a kerb at half the detail would shimmer
+## against both (docs/concept/art_resolution.md).
+func test_the_kerb_carries_the_same_art_detail_per_world_unit_as_everything_else():
+	assert_true(manager.place_building(_chunk_coord, _origin, "house_large", Vector2i(0, 1), 5, ""))
+	var kerb: Sprite2D = _building_child_named(_origin, "FootprintKerb")
+	assert_not_null(kerb, "precondition")
+	var footprint := BuildingCatalog.footprint_of("house_large")
+	assert_eq(kerb.texture.get_width(), footprint.x * TerrainRenderer.ART_TILE_SIZE)
+	assert_almost_eq(kerb.scale.x, ArtResolution.SPRITE_SCALE, 0.001)
+
+
+## It lies on the ground under the building, not over its walls.
+func test_the_kerb_is_drawn_beneath_the_building_it_marks():
+	assert_true(manager.place_building(_chunk_coord, _origin, "house_large", Vector2i(0, 1), 5, ""))
+	var node: Node2D = manager._building_nodes.get(_chunk_coord, {}).get(_origin)
+	var kerb := _building_child_named(_origin, "FootprintKerb")
+	var art := _building_child_named(_origin, "Art")
+	assert_not_null(art, "the building's own art is named, so the kerb cannot be mistaken for it")
+	assert_lt(
+		node.get_children().find(kerb), node.get_children().find(art),
+		"a kerb drawn over the walls would be a box round the house, not a plot marked on the ground"
 	)

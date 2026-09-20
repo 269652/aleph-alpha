@@ -401,6 +401,9 @@ section, which now cross-references here).
   | `DroppedItem` | `ground` | the thing laid down |
   | `Player.equip_armor` / interior outfit | `equipped` | worn on the body — the axe on its belt strap |
   | `Player.equip_item` / interior outfit | `held` | the gripped pose the tool slot swings |
+  | `InventoryWindow` grid slot / paperdoll frame / drag preview | `icon` | the item presented flat |
+  | `InventoryWindow` preview character | `equipped` / `held` | the same rig, wearing and gripping what the world one does |
+  | `CraftingWindow` card thumbnail / material row | `icon` | the item presented flat |
 
   Every frame is fitted to `ProceduralItemSprite.SIZE`, which is what makes
   each a drop-in: no call site re-scales, and `world_scale_for` keeps
@@ -411,6 +414,24 @@ section, which now cross-references here).
   compatible with the pivot contract rather than a violation of it: every
   pixel keeps its position relative to every other, so the grip point stays
   put at a different resolution.
+
+
+  **The two item panels followed, 2026-09-20.** Reported live: *"The
+  inventory still renders the old procedual icons and not the illustrated
+  ones"*. `icon` was documented as "inventory/hotbar/paperdoll/tooltip" from
+  the first draft of this doc, but of those four surfaces only the hotbar was
+  actually wired above — so the hotbar along the bottom of the screen showed
+  the real axe while the inventory slot directly above it showed the
+  generated one, and the crafting menu drew a generated axe for the very
+  recipe whose output draws real art everywhere else. Seven more call sites,
+  listed in the table above.
+
+  The preview character inside `InventoryWindow` takes `equipped`/`held`
+  rather than `icon`, for the same reason `Player` does: it is the same rig,
+  and a paperdoll showing a different axe from the one in the player's hand
+  two panels away is its own bug. Both windows dropped their
+  `ProceduralItemSprite` preload outright — the fallback lives behind
+  `IllustratedItemArt` now, in one place.
 
   101 of the catalog's 145 ids now draw real art; the other 44 fall back to
   the generated sprite exactly as before, which is what made it safe to
