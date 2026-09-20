@@ -173,6 +173,7 @@ func _measure(farmer) -> void:
 		"  poured %.1f L in %d trips to the well -- one every %.1f days"
 		% [poured, trips, days / float(maxi(trips, 1))]
 	)
+	_probe_the_way_to_the_well(farmer)
 	_report_lines.append(
 		"  set out %d time(s); nearest they ever came to the well: %s (reach is %.0f px)"
 		% [
@@ -200,3 +201,45 @@ func _measure(farmer) -> void:
 			str(farmer.home_position), farmer.position.distance_to(farmer.home_position),
 		]
 	)
+
+
+## WHY a villager cannot get to the well. Walks the straight line from
+## where they are to the landmark, asking the marker's own step gate
+## (_blocked_step) about each step, and reports the first one it refuses
+## together with what refused it.
+##
+## Measured need: after routing landed, three field workers set out 8, 2
+## and 8 times and never came within 105 px of a well whose arrival reach
+## is 6 px -- one of them never closed the gap by a single pixel. "They
+## give up too early" and "they are refused the step" look identical from
+## the trip count, and only one of them is about the errand.
+func _probe_the_way_to_the_well(farmer) -> void:
+	var well = farmer.landmarks.get("well", null)
+	if well == null:
+		_report_lines.append("  no well landmark at all -- nothing to walk to")
+		return
+	var TerrainPassability = load("res://src/gameplay/terrain_passability.gd")
+	var here: Vector2 = farmer.position
+	var steps := int(here.distance_to(well) / 8.0)
+	for i in steps:
+		var from: Vector2 = here.lerp(well, float(i) / float(maxi(steps, 1)))
+		var to: Vector2 = here.lerp(well, float(i + 1) / float(maxi(steps, 1)))
+		if not farmer._blocked_step(from, to):
+			continue
+		var tile := Vector2i(floori(to.x / 16.0), floori(to.y / 16.0))
+		var slope: float = (
+			_manager.slope_at_global(tile.x, tile.y)
+			if _manager.has_method("slope_at_global") else -1.0
+		)
+		_report_lines.append(
+			"  the way to the well is refused at %s (%.0f px along): slope=%.3f passable=%s piece='%s' building=%s"
+			% [
+				str(tile), from.distance_to(here), slope,
+				str(TerrainPassability.is_passable(slope)),
+				_manager.modification_at_global(tile.x, tile.y),
+				str(_manager.has_building_at_global(tile.x, tile.y)
+					if _manager.has_method("has_building_at_global") else "?"),
+			]
+		)
+		return
+	_report_lines.append("  the straight way to the well is clear from where they stand")
