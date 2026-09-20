@@ -441,7 +441,9 @@ than by earth.
 Asked for directly, with the art dropped in: *"I added
 farmhouse_bg_overlay.png which should be rendered as background behind the
 3x2 farmhouse it should use a random variation so that each farmhouses bg
-looks different"*.
+looks different"*, and then, when it did not show: *"farm houses don't use
+the 3x2 background image as background..."* and *"I also added bg overlays
+for cottages ..."*.
 
 The kerb above says where a plot *is*. This says what stands on it. A
 farmhouse is a working yard as much as a building — a woodpile, a barrel, a
@@ -454,15 +456,50 @@ in the building's own sheet, which draws only the house.
   than scattering props and deciding what may overlap what, and it is the
   same "one sheet, seeded cell" shape `BuildingLifecycleSheet` already uses
   to make a street of cottages a street of DIFFERENT cottages.
+- **A sheet's cells must be the SHAPE of the plot they fill**, because a
+  yard is scaled to the plot's whole rect. The farmhouse's 1536×1024 cuts
+  into 512×341 cells at 1.50 for its 3×2 plot; `cottage_bg_overlay.png`'s
+  1254×1254 cuts into 418×418 at 1.00 for the cottage's 2×2. That is a fact
+  about the art, checkable the moment a sheet is declared, so it is checked
+  there (`test_every_declared_yard_is_the_shape_of_the_plot_it_fills`)
+  rather than left for a screenshot.
+- **A cottage has a yard of its own.** It is the one building with both a
+  variant sheet and a yard, so a street of cottages carries 25 house
+  pictures × 9 gardens rather than nine repeats — and the two are salted
+  apart, so a given cottage does not always arrive in the same garden.
 - **Which yard is seeded from the building's own seed**, the same
   `record["seed"]` its house variant is already picked from, salted so the
   two axes cannot move together. Two farmhouses in one village differ; one
   farmhouse looks the same on every reload.
 - **It is drawn BETWEEN the kerb and the house.** Children paint in tree
   order (see `_spawn_building_node`), so the yard lies on the ground the kerb
-  marks out and the house stands on top of it. Same width as the house's own
-  art, by the same `drawn_plot_width_tiles` rule, so the yard is the plot's
-  and never wider than it.
+  marks out and the house stands on top of it.
+- **It is scaled to the WHOLE plot, in both axes** — `footprint` tiles wide
+  by `footprint` tiles deep, the same rect the kerb and the collision shape
+  are built from (`IllustratedStructureSprite.plot_background_texture`).
+
+  This was the bug behind *"farm houses don't use the 3x2 background image
+  as background"*, and it is worth recording because the first version was
+  specified wrong here rather than coded wrong: this doc said "same width as
+  the house's own art, by the same `drawn_plot_width_tiles` rule", and a
+  test pinned it in those words. Measured (`tools/probe_building_yard.gd`),
+  that produced a yard of 79×53 art px against a house of 79×54 — the same
+  width and a pixel shorter — so the yard sat entirely inside the house's
+  own silhouette and 14.6% of its opaque pixels reached the screen.
+
+  Two different widths were being conflated. A house is deliberately drawn
+  narrower than its plot (`PLOT_MARGIN_SHARE`) so two neighbours have a
+  street between them, which is a fact about **walls**; two neighbouring
+  yards meeting is grass meeting grass. The ground takes the plot and the
+  house stands inside it, which is also what makes a 3×2 picture the
+  background of a 3×2 plot.
+
+  Everything else in `IllustratedStructureSprite` is scaled by width alone,
+  letting the art's own aspect set the height, because everything else is an
+  object **standing on** the ground and a building taller than its footprint
+  stays taller. A yard is not an object on the ground; it *is* the ground,
+  so its rect is the plot's rect. Measured after: farmhouse 96×64 with 44.3%
+  of the yard visible past its house, cottage 64×64 with 56.8%.
 - **It is an overlay like everything else here.** A building with no yard
   sheet declared draws exactly what it drew before; the wiring is per
   building id (`BuildingCatalog.background_sheet_for`), so the farmhouse
@@ -482,10 +519,13 @@ in the building's own sheet, which draws only the house.
   rather than left to luck — yard art bled to the edge would quietly erase
   the kerb of every building that stands in one.
 
-**The background must be flooded off, not keyed off.** This sheet has no
-alpha channel and its transparency is a painted grey-and-white
+**The background must be flooded off, not keyed off.** Both delivered
+sheets have no alpha channel and paint their transparency as a grey-and-white
 **checkerboard**, which is a new problem here: every other sheet in this
-project keys flat magenta or near-black.
+project keys flat magenta or near-black. A sheet that needs this is listed
+by path (`_CHECKERBOARD_SHEETS`), because which key a file needs is a fact
+about that file; measured, a farmhouse cell is 63% checker and a cottage
+cell 39%, and both use the same two tones.
 
 A flat colour key cannot separate it from the art, because the checker's
 lighter square and the art's **white flower highlights are the same colour**

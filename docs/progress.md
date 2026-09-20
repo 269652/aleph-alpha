@@ -29690,10 +29690,13 @@ uses to make a street of cottages a street of different cottages.
 
 Drawn **between the kerb and the house** — children paint in tree order, so
 the yard lies on the ground the kerb marks out and the walls stand on it.
-Same width as the house by the same `drawn_plot_width_tiles` rule, so it is
-the plot's and never wider. Wired per building id
-(`BuildingCatalog.background_sheet_for`), so every other building answers
-`{}` and draws exactly what it drew before.
+Wired per building id (`BuildingCatalog.background_sheet_for`), so every
+other building answers `{}` and draws exactly what it drew before.
+
+> **Superseded the same day.** This entry originally read "same width as the
+> house by the same `drawn_plot_width_tiles` rule, so it is the plot's and
+> never wider" — and that rule is what hid the art. See *"A yard is the
+> ground of the plot, not a mat under the house"* below.
 
 Worth stating, because it is what makes this art matter: **a farmhouse has no
 variant sheet of its own** — only `house_small`/`house_medium` do — so every
@@ -30153,3 +30156,84 @@ there is no farmhouse in shot, and in that particular village there was
 genuinely no hut either. Nothing is changed for this half; it is recorded
 so the next reader does not go looking for a bug that is a viewing
 position.
+
+
+## A yard is the ground of the plot, not a mat under the house (`concept/building.md`, 2026-09-20)
+
+Reported live, with the game running: *"farm houses don't use the 3x2
+background image as background..."*, and then, mid-session: *"I also added
+bg overlays for cottages ..."*.
+
+### ✅ The yard is scaled to the plot's whole rect
+
+The farmhouse yard was being drawn the whole time. Measured before changing
+anything (`tools/probe_building_yard.gd`, new): it came out **79×53 art px
+against a house of 79×54** — the same width and a pixel *shorter* — so it
+sat entirely inside the house's own silhouette. Only **14.6%** of the
+yard's opaque pixels reached the screen, about 5% of the yard rectangle.
+
+The failure was specified, not coded: `concept/building.md` said the yard
+is drawn at "the same width as the house's own art, by the same
+`drawn_plot_width_tiles` rule", and
+`test_the_yard_is_drawn_to_the_same_width_as_the_house` pinned it in those
+words. Two different widths were being conflated. A house is deliberately
+drawn *narrower* than its plot (`PLOT_MARGIN_SHARE`) so two neighbours have
+a street between them — a fact about **walls**. Two neighbouring yards
+meeting is grass meeting grass. So the ground takes the plot and the house
+stands inside it, which is also what makes a 3×2 picture the background of
+a 3×2 plot. The test is rewritten, not deleted, and the concept doc carries
+the correction rather than the old rule.
+
+New `IllustratedStructureSprite.plot_background_texture` scales a cell to
+`footprint` tiles in **both** axes. Its sibling `footprint_frame_texture`
+scales by width and lets the art's aspect set the height, which is right for
+an object *standing on* the ground (a building taller than its footprint
+stays taller) and wrong for the ground itself.
+
+Measured after: farmhouse **96×64** with **44.3%** of the yard visible past
+its house (from 14.6%), cottage **64×64** with **56.8%**, fisher_hut
+borrowing the farmhouse's yard unchanged.
+
+### ✅ A cottage stands in its own garden
+
+`cottage_bg_overlay.png` — 1254×1254, a 3×3 grid of **418×418 square**
+scenes — is declared for `house_small`, whose plot is 2×2. A cottage is the
+one building with both a variant sheet and a yard, so a street of them now
+carries 25 house pictures × 9 gardens rather than nine repeats, and the two
+axes are salted apart so a given cottage does not always arrive in the same
+garden.
+
+The sheet is delivered the same way the farmhouse's was — no alpha channel,
+transparency painted as a grey-and-white checkerboard — so it joins
+`_CHECKERBOARD_SHEETS` and is flooded rather than keyed. Measured on the raw
+files, a cottage cell is **39% checker** against the farmhouse sheet's
+**63%**, both in the same two tones, so the existing flood reads it
+unchanged.
+
+### The assertion that needs no constant
+
+Two of the new tests are pinned to measurements rather than to numbers
+somebody liked, which is the discipline this repo already keeps for
+`PLOT_MARGIN_SHARE` and `_DRAW_SCALES`:
+
+- `test_drawing_the_yard_to_the_plot_more_than_doubles_what_shows_of_it`
+  rebuilds the **old** texture beside the new one inside the test and
+  compares the two, so it bites with no threshold at all. (A first draft of
+  the sibling test guessed 0.55 for the visible share; the real figure is
+  0.465. The guess was replaced by the measurement, floor 0.40.)
+- `test_every_declared_yard_is_the_shape_of_the_plot_it_fills` pins every
+  declared sheet's cell aspect to its plot's (1.50 for 3×2, 1.00 for 2×2),
+  which is what makes scaling to the rect a checkable promise rather than a
+  coincidence of the two sheets that exist today. Verified by mutation:
+  declaring the square cottage sheet for the 3×2 `house_medium` fails it.
+
+### ⬜ Not done
+
+`house_medium` (3×2) and `house_large` (3×3) still stand on bare plot — no
+yard art has been drawn for them. `house_medium` shares the farmhouse's
+plot shape and could borrow that sheet, but a farmyard behind a town house
+is the wrong picture, so it waits for its own.
+
+Tested: `test_illustrated_structure_sprite.gd` (+5),
+`test_building_catalog.gd` (+4), `test_earth_chunk_manager_buildings.gd`
+(+3, one rewritten).
