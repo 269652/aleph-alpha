@@ -237,6 +237,81 @@ under `VillageMarket.VILLAGE_LOCAL_FOOD_PRICE` and under `Shop.CATALOG`'s
 prepared `cooked_meat`, and sawn timber is still worth exactly what its
 logs were worth.
 
+## Mechanism — the cart runs on the day the village lives on
+
+`MerchantVisit.arrivals` divided its per-day rate by
+`ConstructionCatchup.SECONDS_PER_DAY` (3600). That constant is documented
+in its own file as the **offscreen catch-up** rate — *"one in-game hour
+away is one day of progress, deliberately conservative"* — and the same
+comment names its opposite: *"a build the PLAYER raised and is standing at
+runs on the game's own day (`EarthChunkManager.SECONDS_PER_SIMULATED_DAY`,
+60 seconds — what the ecosystem step, **the settlement step**, the
+day/night cycle and every colony already run on)."*
+
+`_step_merchant_visits` runs **from the settlement step**, for a village
+the player is standing in. It was borrowing the absence clock for a village
+that is present.
+
+This is not a new discovery; it is the unfixed twin of a fault
+[village_growth.md](village_growth.md)'s immigration model already had and
+already corrected, in `test_village_immigration.gd`'s own words: *"It used
+to be `ConstructionCatchup.SECONDS_PER_DAY` (3600), which is the offscreen
+catch-up's day and was never this module's to borrow."*
+
+What it cost, measured (`tools/probe_village_purse.gd`) with the buy list
+already derived and the purse already bound, on a real village after 5000
+simulated seconds:
+
+| | |
+|---|---:|
+| sellable units | 811 |
+| what a visit would pay | 20 gold |
+| settlement purse | **0.0 gold** |
+| villagers broke | **22 of 22** |
+
+One visit per 3600 seconds is one visit per **60 player-felt days**,
+against a starvation window (`Starvation.seconds_to_die`) of 200 seconds.
+The village is dead many times over before the first coin arrives.
+`MerchantVisit.SECONDS_PER_SIMULATED_DAY` now restates the game's own 60,
+the same way `VillageImmigration` does and for the same stated reason — a
+pure emergence module must not depend on `EarthChunkManager` — cross-pinned
+by a test so the two cannot drift.
+
+## Mechanism — a village does not sell the food its own people need
+
+The reserve above protects what a village is **building**. Nothing
+protected what it was **eating**, and until the buy list was derived that
+was harmless: the only food a merchant bought was fish, meat and fruit,
+which a village rarely stockpiles.
+
+A herbalist's crop and a farmer's wheat have to be sellable, or those two
+trades earn the village nothing at all. But a cart that can buy them, on
+the village's own clock, settles a village's food stock at whatever level
+its own draw balances at — and that level is **below**
+`VillageImmigration.FED_THRESHOLD`. A village would sell itself into the
+famine its own immigration gate then reads.
+
+The rule, and it is the same rule as the construction reserve pointed at
+the other thing a village cannot do without:
+
+> A village sells what is left once its own households are fed **until the
+> cart comes again**.
+
+`MerchantVisit.food_reserve(households)` is
+`households × SettlementState.FOOD_PER_HOUSEHOLD ÷ VISITS_PER_DAY`. Both
+halves are already real and already pinned: `FOOD_PER_HOUSEHOLD` is what
+one household really eats in a day (itself test-pinned to the hunger
+clock), and `1 ÷ VISITS_PER_DAY` is how many days pass between carts at the
+base rate. Nothing is invented, and retuning how often he comes retunes
+what a village must keep, by itself.
+
+`with_food_reserve` spreads it across the food ids a settlement really
+holds — it is a number of **meals**, not a claim on any one crop, so a
+village with a little herb and a lot of wheat keeps all of the herb and the
+rest in wheat, and never more of an id than it has. The item catalog stays
+on the caller's side of the seam, which is what keeps this module
+numbers-in, numbers-out like everything else here.
+
 ## Mechanism — one purse, and it is the persisted one
 
 `NpcEconomy.PURSE_META` is set on whichever **market object** is in hand,
@@ -397,6 +472,22 @@ built:
   `NpcMarker.setup_economy` / `VillageRenderer`, makes them one, on the
   object that survives the chunk unloading. Tested in
   `test_npc_economy.gd` and `test_merchant_buys_the_whole_village.gd`.
+- ✅ **The cart runs on the village's own day** (2026-09-20). `arrivals`
+  divided by `ConstructionCatchup.SECONDS_PER_DAY` (3600), the offscreen
+  catch-up's day, while `_step_merchant_visits` runs from the settlement
+  step for a village the player is standing in — the unfixed twin of the
+  fault `VillageImmigration` already corrected for itself. One visit per 60
+  player-felt days against a 200-second starvation window meant a village
+  measured at 811 sellable units still had 0.0 gold and 22 of 22 villagers
+  broke. `MerchantVisit.SECONDS_PER_SIMULATED_DAY` restates the game's own
+  60, cross-pinned by a test.
+- ✅ **A village keeps back what it eats** (2026-09-20). Making a
+  herbalist's and a farmer's crops sellable — which they must be, or those
+  trades earn the village nothing — put a village's own food on the cart.
+  `MerchantVisit.food_reserve` holds back
+  `households × SettlementState.FOOD_PER_HOUSEHOLD ÷ VISITS_PER_DAY`: what
+  the village eats before he comes back, derived from two numbers that were
+  already real and already pinned, spread across the food it actually holds.
 - 🚧 **Food income is still not conditional on a sale.** A producer's take
   reaches the village as GOODS and is paid for only when a cart buys it,
   which is the honest loop — but a village still has to survive the gap

@@ -15,7 +15,12 @@ const Shop = preload("res://src/gameplay/shop.gd")
 const SagewerkProduction = preload("res://src/world/sagewerk_production.gd")
 const ConstructionCatchup = preload("res://src/world/construction_catchup.gd")
 
-const _DAY := 3600.0
+## One simulated day, in real seconds -- the module's OWN day, so these
+## tests go on measuring "a day of draw" whatever that day is worth. It
+## used to be a literal 3600, which is ConstructionCatchup's offscreen
+## catch-up day and was never this module's to borrow. The identical
+## correction test_village_immigration.gd already made for itself.
+const _DAY := MerchantVisit.SECONDS_PER_SIMULATED_DAY
 
 
 # -- the buy list is real goods at grounded prices -------------------------
@@ -313,3 +318,137 @@ func test_goods_that_keep_are_worth_more_than_raw_produce():
 			MerchantVisit.price_of(String(item_id)), MerchantVisit.LOG_PRICE,
 			"%s keeps and travels, so it beats the farm gate" % item_id
 		)
+
+
+# -- the cart runs on the day the village lives on ------------------------
+#
+# Identical to the fault test_village_immigration.gd already names in its
+# own words: *"It used to be ConstructionCatchup.SECONDS_PER_DAY (3600),
+# which is the offscreen catch-up's day and was never this module's to
+# borrow."* MerchantVisit is the unfixed twin.
+#
+# construction_catchup.gd says plainly what that day is for -- "the
+# offscreen catch-up integrates an absence at the ecology LOD rate (one
+# in-game hour away is one day of progress, deliberately conservative),
+# while a build the PLAYER raised and is standing at runs on the game's own
+# day (EarthChunkManager.SECONDS_PER_SIMULATED_DAY, 60 seconds -- what the
+# ecosystem step, THE SETTLEMENT STEP, the day/night cycle and every colony
+# already run on)". _step_merchant_visits runs from the settlement step,
+# for a village the player is standing in.
+#
+# Measured (tools/probe_village_purse.gd) with the buy list fixed, on a
+# real village the player is at, after 1200 simulated seconds:
+#
+#     sellable after reserve    : 226
+#     a visit right now would pay: 20 gold
+#     visit accrued (0..1)      : 0.323
+#     settlement purse 0.0 gold | 8 of 8 villagers broke
+#
+# One visit every ~3700 seconds is one visit every 62 player-felt days,
+# against a starvation window (Starvation.seconds_to_die) of 200 seconds.
+# The village is dead eighteen times over before the first coin arrives.
+
+func test_the_cart_runs_on_the_games_own_day_not_the_catchup_day():
+	assert_eq(
+		MerchantVisit.SECONDS_PER_SIMULATED_DAY, 60.0,
+		"the day the ecosystem step, the settlement step and every colony already run on"
+	)
+	assert_ne(
+		MerchantVisit.SECONDS_PER_SIMULATED_DAY, ConstructionCatchup.SECONDS_PER_DAY,
+		"the premise: the offscreen catch-up day really is a different, longer thing"
+	)
+
+
+## What that means where it is felt: a village sitting on a full surplus
+## gets a visit within a day, not within an hour of real play.
+func test_a_village_with_a_full_surplus_is_visited_within_its_own_day():
+	var stock := {"fish": MerchantVisit.SURPLUS_FOR_FULL_DRAW * 2.0}
+	var out: Dictionary = MerchantVisit.arrivals(
+		MerchantVisit.SECONDS_PER_SIMULATED_DAY, stock, 0.0
+	)
+	assert_true(out["arrived"], "a full surplus draws him inside one day")
+
+
+# -- a village does not sell the food its own people need -----------------
+#
+# The reserve only ever protected BUILDING materials (VillageGrowth's next
+# building), and until the buy list was derived that was harmless, because
+# the only food he bought was fish/meat/fruit a village rarely stockpiles.
+# With `herb` and `wheat` sellable -- which they must be, or a herbalist
+# earns the village nothing -- a cart on the village's own clock would hold
+# its food at the level its own draw settles at, and that level is BELOW
+# VillageImmigration.FED_THRESHOLD.
+#
+# The same rule the construction reserve already states, pointed at the
+# other thing a village cannot do without: a peasant sells what is left
+# once the household is fed until the next market day.
+
+const SettlementState = preload("res://src/emergence/settlement_state.gd")
+const VillageImmigration = preload("res://src/emergence/village_immigration.gd")
+
+
+func test_a_village_keeps_back_what_its_own_households_eat():
+	var reserve := MerchantVisit.food_reserve(10)
+	assert_almost_eq(
+		reserve, 10.0 * SettlementState.FOOD_PER_HOUSEHOLD / MerchantVisit.VISITS_PER_DAY, 0.0001,
+		"what ten households eat between one cart and the next"
+	)
+
+
+## Derived from the cart's OWN cadence, so retuning how often he comes
+## retunes how much a village has to keep -- never two numbers to keep in
+## step by hand.
+func test_the_reserve_is_the_gap_between_visits_not_a_number():
+	assert_gt(
+		MerchantVisit.food_reserve(1), SettlementState.FOOD_PER_HOUSEHOLD,
+		"one household keeps more than one day's food, because he is not daily"
+	)
+	assert_gt(
+		MerchantVisit.food_reserve(1), VillageImmigration.FED_THRESHOLD,
+		"and what it keeps leaves it FED, not merely alive"
+	)
+
+
+func test_a_village_with_nobody_in_it_keeps_no_food_back():
+	assert_eq(MerchantVisit.food_reserve(0), 0.0)
+
+
+func test_the_food_a_village_needs_is_not_for_sale():
+	var stock := {"herb": 40.0, "wood": 10.0}
+	var reserved: Dictionary = MerchantVisit.with_food_reserve({}, stock, ["herb"], 5)
+	assert_almost_eq(
+		float(reserved.get("herb", 0.0)), MerchantVisit.food_reserve(5), 0.0001,
+		"the village's own meals are held back"
+	)
+	assert_false(reserved.has("wood"), "timber is not food and this rule is not about timber")
+
+
+## Held back ACROSS the food it really has, never more of an id than it
+## holds -- a village with two crops keeps some of each rather than being
+## told to keep grain it has none of.
+func test_the_reserve_never_claims_food_a_village_does_not_have():
+	var stock := {"herb": 2.0, "wheat": 100.0}
+	var reserved: Dictionary = MerchantVisit.with_food_reserve({}, stock, ["herb", "wheat"], 10)
+	assert_lte(float(reserved.get("herb", 0.0)), 2.0, "it cannot keep back herb it never grew")
+	var total := float(reserved.get("herb", 0.0)) + float(reserved.get("wheat", 0.0))
+	assert_almost_eq(total, MerchantVisit.food_reserve(10), 0.0001, "and the whole reserve is still kept")
+
+
+## The building reserve is untouched: a village saves for its next house
+## AND feeds itself, it does not choose.
+func test_the_building_reserve_survives_beside_it():
+	var stock := {"herb": 40.0, "wood": 20.0}
+	var reserved: Dictionary = MerchantVisit.with_food_reserve({"wood": 12}, stock, ["herb"], 5)
+	assert_eq(int(reserved["wood"]), 12, "the next house is still spoken for")
+	assert_gt(float(reserved["herb"]), 0.0)
+
+
+## And a village with a real glut still sells: this holds back what people
+## eat, it does not close the market.
+func test_a_village_with_a_real_glut_still_sells_it():
+	var stock := {"herb": 500.0}
+	var reserved: Dictionary = MerchantVisit.with_food_reserve({}, stock, ["herb"], 10)
+	assert_gt(
+		MerchantVisit.sellable_units(stock, reserved), MerchantVisit.CART_CAPACITY,
+		"a glut is still a glut"
+	)

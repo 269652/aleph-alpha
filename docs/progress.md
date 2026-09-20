@@ -29453,3 +29453,150 @@ survives on foraging and the producers' regional drip.
 Tests: `test_starvation.gd` 16/16 (new), `test_npc_needs.gd` 14/14,
 `test_npc_marker.gd` 102/102, `test_earth_chunk_manager_village_
 mortality.gd` 5/5 (new), `test_village_renderer.gd` 150/150.
+
+## A village with no money — three faults behind one symptom (2026-09-20)
+
+Reported as *"fix the money problem"*, after a session in which a village
+measurably grew food, hauled it, ate it and still had nothing in anyone's
+pocket. Measured before reasoning (`tools/probe_village_purse.gd`, kept —
+it stands exactly where `EarthChunkManager._step_merchant_visits` stands
+and prints that function's real inputs), on a real village at 20
+player-felt days:
+
+```
+  bucket              13  kind=tool       merchant refuses
+  herb               117  kind=food       merchant refuses
+  log                 24  kind=material   merchant refuses
+  plant_fibre          1  kind=material   merchant refuses
+  stone                5  kind=material   merchant refuses
+  wheat                5  kind=material   merchant refuses
+  wood                10  kind=material   merchant BUYS @1
+  sellable after reserve    : 0      (reserve {"wood": 12})
+  villagers' purse 0.0 | merchant's purse 0.0 | 8 of 8 villagers broke
+```
+
+A hypothesis that the gold had landed in the wrong purse was **disproved
+by that measurement** — both purses read 0.0, so no gold existed anywhere.
+Three real faults sat behind it, and only the last was the one guessed at.
+
+### ✅ 1. The merchant refused everything the village makes
+
+`MerchantVisit.BUY_LIST` was a hand-written const — `beam, plank, hide,
+wood, fish, meat, fruit` — and the game outgrew it. A herbalist's `herb`,
+a farmer's `wheat`, gathered `stone` and `plant_fibre`, and the raw `log`
+a woodcutter fells all arrived **after** that line was written and none
+was ever added. One of nine held ids was sellable, and all ten of those
+units were reserved for the village's own next house. A merchant is the
+only faucet gold has, so the village had no income at all — the literal
+shape of the original report, *"all villagers have 0 gold"*.
+
+`MerchantVisit.buy_list()` is now **derived** from the producers' own maps
+— `NpcProduction.PRODUCER_ITEM_BY_OCCUPATION`,
+`VillageFarm.CROP_BY_OCCUPATION`,
+`SettlementGathering.gathered_item_ids()` — plus the raw timber and the
+worked goods made from those. Prices became one stated rule instead of a
+table: goods that KEEP (`plank`, `beam`, `hide`) carry their own derived
+price, everything else a village makes is raw produce at `LOG_PRICE` —
+which is what the old table already did in four of its seven entries
+without saying so. `test_everything_a_villages_own_producers_make_is_
+sellable` reads the producer maps directly, so a new crop or occupation
+cannot be silently unsellable again.
+
+### ✅ 2. The purse was two tanks sharing one name
+
+`NpcEconomy.PURSE_META` is set on whichever market **object** is in hand,
+and a settlement has two: `_step_merchant_visits` paid into the persisted
+`Market` (`MarketStore.market_for`), while `_draw_subsistence_wage` read
+the live `VillageMarket`'s meta. Every coin landed where nobody could
+spend it.
+
+The suite never caught it because its own fixture
+(`_fund_village_as_a_merchant_would`) deposits into the `VillageMarket` —
+**the test was more correct than the wiring**.
+
+`NpcEconomy.bind_settlement_purse` binds the **persisted** one, for the
+same reason `bind_household_wallet` exists: a `VillageMarket` is rebuilt
+from scratch on every chunk load, so a purse kept there dies with the
+chunk. That also closes this file's own older note that *"a village's
+savings die whenever you walk away and return"*. Resolved by
+`EarthChunkManager.settlement_purse_for`, wired through
+`NpcMarker.setup_economy` / `VillageRenderer`. Null is a no-op, so a bare
+`NpcEconomy` is unchanged.
+
+### ✅ 3. The cart ran on the wrong clock — the unfixed twin
+
+`arrivals` divided its per-day rate by `ConstructionCatchup.SECONDS_PER_
+DAY` (3600). `construction_catchup.gd` states what that day is for: the
+offscreen catch-up integrates an **absence**, *"while a build the PLAYER
+raised and is standing at runs on the game's own day
+(`EarthChunkManager.SECONDS_PER_SIMULATED_DAY`, 60 seconds — what the
+ecosystem step, THE SETTLEMENT STEP, the day/night cycle and every colony
+already run on)"*. `_step_merchant_visits` runs from the settlement step.
+
+This is the **identical fault `VillageImmigration` already had and already
+fixed**, in `test_village_immigration.gd`'s own words: *"the offscreen
+catch-up's day, and never this module's to borrow."* Re-measured with
+faults 1 and 2 fixed, at 83 player-felt days:
+
+```
+  after 5000 simulated seconds:
+    settlement purse 0.0 gold | 22 of 22 villagers broke
+    units the merchant BUYS   : 811
+    a visit right now would pay: 20 gold
+    visit accrued (0..1)      : 0.373
+```
+
+One visit per 3600 seconds is one per **60 player-felt days**, against a
+starvation window of 200 seconds.
+
+### ✅ ...and the thing that fix would have broken
+
+Making `herb` and `wheat` sellable put a village's own **food** on the
+cart, and the reserve only ever protected building materials. On the
+village's own clock, the surplus-driven draw settles a village's food at
+a level *below* `VillageImmigration.FED_THRESHOLD` — it would have sold
+itself into the famine its own immigration gate then reads.
+
+`MerchantVisit.food_reserve(households)` is
+`households × SettlementState.FOOD_PER_HOUSEHOLD ÷ VISITS_PER_DAY`: what
+the village eats before the cart returns. Both halves were already real
+and already test-pinned, and retuning how often he comes retunes what a
+village keeps, by itself. `with_food_reserve` spreads it across the food
+ids a settlement really holds — a number of meals, not a claim on one
+crop — and never more of an id than it has.
+
+### ✅ A larder and a warehouse answer different questions
+
+The previous day's larder fix narrowed `_settlement_structure_stocks` to
+`STRUCTURE_MEAL_SOURCE_IDS`, and **four** callers shared it: three food
+readings and the merchant. Right for what a village can EAT, wrong for
+what it can SELL — a farmhouse is not a place anybody eats, and it is
+exactly the container the carter's round fills. Split into
+`_settlement_larder_stocks` (what people can eat) and
+`_settlement_structure_stocks` (every shelf), over one walk.
+
+### 🚧 Two things this got wrong, both caught by measuring
+
+**The two-purse hypothesis was stated before it was measured**, and the
+measurement disproved it as the *cause*: both purses read 0.0, so the
+disconnect was real but inert — the next thing that would have bitten,
+not the thing that had. Recorded rather than quietly reframed.
+
+**The first haul fixture went red and it took an A/B to see why.**
+`test_npc_marker.gd` was 105/105 at the commit that switched hauling on
+and 103/105 after `_eat_from_the_load` landed. Both commits are right: a
+villager who carries food and is not working eats out of their own hands,
+and that fixture's producer is a hunter whose regional rate is far below
+one meal per hunger cycle, so their hands can never fill. Answered the
+same way `_stand_at_the_door` already answers thirst and rest, with the
+reason pinned as a **relationship** (one hunger cycle's catch is less than
+one meal) rather than left as two numbers in a comment.
+
+### ⬜ Still open
+
+- `test_a_kill_pays_the_hunter_real_gold` in `test_npc_marker_hunting.gd`
+  fails (31/32), and fails identically on a clean `origin/main` worktree —
+  a leftover of the faucet closure (`0514f08`), which deliberately stopped
+  minting a coin at a kill. Not this work's, and not silently fixed here.
+- Food income is still not conditional on a sale, and a village still has
+  no granary depth designed for riding out a bad week between carts.

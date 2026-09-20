@@ -4879,10 +4879,20 @@ var _settlement_merchant_carry: Dictionary = {}
 ## Runs for loaded and UNLOADED settlements alike, unlike immigration: it
 ## needs only the market's own stock, which is persisted, so a village goes
 ## on trading while the player is away.
+## Which of the ids in `stock` this game calls food -- the one place the
+## merchant's reserve needs the item catalog, kept on this side of the seam
+## so MerchantVisit stays numbers-in, numbers-out.
+func _food_ids_in(stock: Dictionary) -> Array:
+	var ids: Array = []
+	for item_id in stock:
+		if _item_catalog.kind_of(String(item_id)) == "food":
+			ids.append(String(item_id))
+	return ids
+
+
 func _step_merchant_visits(settlement_id: String, market) -> void:
 	if market == null:
 		return
-	var reserved := _construction_reserve_for(settlement_id)
 	# Every container this settlement really keeps goods in, market FIRST
 	# (docs/concept/traveling_merchants.md). He used to price market.stock
 	# alone while SettlementFood counted the shelves too, so a village that
@@ -4895,6 +4905,20 @@ func _step_merchant_visits(settlement_id: String, market) -> void:
 	for shelf in shelves:
 		views.append(shelf.stock)
 	var surplus := SettlementSurplus.combined(views)
+
+	# What this village is saving for, and what it is EATING. The second
+	# half only started to matter when the buy list was derived from what a
+	# village really makes: a herbalist's crop and a farmer's wheat have to
+	# be sellable or those two trades earn the village nothing, and a cart
+	# that can buy them would otherwise hold a village's food below
+	# VillageImmigration.FED_THRESHOLD -- selling it into the famine its own
+	# immigration gate then reads. The catalog lives here, not in the pure
+	# module, which is why the food ids are passed in.
+	var reserved := _construction_reserve_for(settlement_id)
+	reserved = MerchantVisit.with_food_reserve(
+		reserved, surplus, _food_ids_in(surplus),
+		_households_in_settlement(settlement_id).size()
+	)
 
 	var result: Dictionary = MerchantVisit.arrivals(
 		SETTLEMENT_STEP_INTERVAL, surplus,

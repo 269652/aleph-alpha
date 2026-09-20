@@ -19,12 +19,15 @@ extends SceneTree
 ## Usage: godot --headless -s tools/probe_village_purse.gd
 
 const MerchantVisit = preload("res://src/emergence/merchant_visit.gd")
+const NpcEconomy = preload("res://src/world/npc_economy.gd")
 const SettlementSurplus = preload("res://src/emergence/settlement_surplus.gd")
 
 const CHUNK_SIZE := 32
 const STEPS := 40
 const SLICE := 0.25
-const SIMULATED_SECONDS := 1200.0
+const SIMULATED_SECONDS := 5000.0
+## How often the timeline above prints a row.
+const REPORT_EVERY := 500.0
 
 var _manager
 var _origin: Vector2i
@@ -131,7 +134,6 @@ func _sample() -> void:
 	if _measured:
 		return
 	var EntityRef = load("res://src/emergence/entity_ref.gd")
-	var NpcEconomy = load("res://src/world/npc_economy.gd")
 	var SettlementFood = load("res://src/emergence/settlement_food.gd")
 	for chunk_coord in _manager._loaded_villages:
 		if _villagers_in(chunk_coord) == 0:
@@ -142,7 +144,21 @@ func _sample() -> void:
 		_lines.append("PURSE watch at %s" % str(chunk_coord))
 
 		var elapsed := 0.0
+		var next_report := 0.0
+		_lines.append("  %8s %10s %10s %12s" % ["seconds", "sellable", "visit 0..1", "purse gold"])
 		while elapsed < SIMULATED_SECONDS:
+			if elapsed >= next_report:
+				var purse_now = _manager.settlement_purse_for(chunk_coord)
+				_lines.append("  %8.0f %10d %10.3f %12.1f" % [
+					elapsed,
+					MerchantVisit.sellable_units(
+						SettlementSurplus.combined(_merchant_views(settlement_id)),
+						_manager._construction_reserve_for(settlement_id)
+					),
+					float(_manager._settlement_merchant_carry.get(settlement_id, 0.0)),
+					0.0 if purse_now == null else NpcEconomy.purse_of(purse_now),
+				])
+				next_report += REPORT_EVERY
 			for node in _manager._loaded_villages.get(chunk_coord, []):
 				if is_instance_valid(node) and not node.is_queued_for_deletion() and node.has_method("setup_economy"):
 					node._process(SLICE)

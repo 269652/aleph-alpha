@@ -194,3 +194,39 @@ func test_a_spawned_villager_is_bound_to_the_settlements_purse():
 		source.substr(setup_at, 120).contains("purse"),
 		"...and it is handed to the economy it funds"
 	)
+
+
+## ...and a visit really pays. Measured (tools/probe_village_purse.gd) on a
+## real village after 5000 simulated seconds, with the buy list derived and
+## the purse bound: 811 sellable units, a visit's carry at 0.373 -- which
+## is 1.373 less the one visit that fired -- and the purse still reading
+## 0.0 with 22 of 22 villagers broke. A sale happened and no gold arrived,
+## so something between `purchase` and the deposit is dropping it.
+func test_a_visit_really_pays_gold_into_the_settlements_purse():
+	var settlement_id: String = manager.EntityRef.for_settlement(_chunk_coord)
+	_a_stocked("farmhouse", "hide", 12)
+	var market = manager._market_store.market_for(settlement_id)
+	# One tick short of a visit, so THIS step is the visit.
+	manager._settlement_merchant_carry[settlement_id] = 0.999
+
+	manager._step_merchant_visits(settlement_id, market)
+
+	assert_gt(
+		NpcEconomy.purse_of(manager.settlement_purse_for(_chunk_coord)), 0.0,
+		"the cart came, took the goods, and paid nobody"
+	)
+
+
+## Nothing conjured and nothing vanished: what he took really left the
+## shelf he took it from.
+func test_what_he_paid_for_really_leaves_the_shelf():
+	var settlement_id: String = manager.EntityRef.for_settlement(_chunk_coord)
+	_a_stocked("farmhouse", "hide", 12)
+	manager._settlement_merchant_carry[settlement_id] = 0.999
+
+	manager._step_merchant_visits(settlement_id, manager._market_store.market_for(settlement_id))
+
+	assert_lt(
+		manager.structure_stock_at(_store.x, _store.y, "hide"), 12,
+		"he paid for hides and left them on the shelf"
+	)
