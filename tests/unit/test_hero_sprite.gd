@@ -456,7 +456,15 @@ func test_portrait_is_a_cohesive_figure_when_legs_are_a_fused_pair():
 ## pixels -- a real gap between body parts, wherever it falls, must fail
 ## this, not just an empty bottom band.
 func test_no_large_vertical_gap_appears_anywhere_below_the_head():
-	var image := sprite.generate_hero_portrait_image(appearance_maker.appearance_for("warrior", 1))
+	assert_lte(
+		_longest_gap_below_the_head(appearance_maker.appearance_for("warrior", 1)), 2,
+		"the figure isn't one cohesive body"
+	)
+
+
+## The longest run of fully-transparent rows below the head band.
+func _longest_gap_below_the_head(appearance: Dictionary) -> int:
+	var image := sprite.generate_hero_portrait_image(appearance)
 	var width := ProceduralCharacterSprite.PORTRAIT_SIZE.x
 	var height := ProceduralCharacterSprite.PORTRAIT_SIZE.y
 	var head_height := ProceduralCharacterSprite._PORTRAIT_HEAD.y
@@ -473,10 +481,37 @@ func test_no_large_vertical_gap_appears_anywhere_below_the_head():
 		else:
 			current_gap += 1
 			longest_gap = maxi(longest_gap, current_gap)
-	assert_lte(
-		longest_gap, 2,
-		"a %d-row fully-transparent gap appeared below the head -- the figure isn't one cohesive body" % longest_gap
-	)
+	return longest_gap
+
+
+## ...and for EVERY outfit row, not just whichever one a single seed
+## happens to land on.
+##
+## The single-seed check above passed for years while two of the seven
+## usable rows failed it, because warrior/seed 1 never reached them. It took
+## a change to which row that seed lands on to surface it, which is exactly
+## the kind of "green by luck" a fixture-shaped test hides. Measured:
+##
+##     row 0  torso trimmed 64x51  empty rows 50-53
+##     row 1  torso trimmed 64x49  empty rows 49-53
+##     row 6  torso trimmed 64x59  no empty rows
+##
+## The torso art's own height varies row to row, _fit_to_box preserves
+## aspect, and legs_y was derived from the torso BOX rather than from the
+## torso really drawn -- so a short torso left a gap above the legs. The
+## same lesson _blend_portrait_legs already learned about _PORTRAIT_LEG.
+func test_every_outfit_row_draws_one_cohesive_figure():
+	var base: Dictionary = appearance_maker.appearance_for("warrior", 1)
+	var checked := 0
+	for row in IllustratedCharacterSprite.usable_composite_rows():
+		var look := base.duplicate()
+		look["outfit_variant"] = row
+		checked += 1
+		assert_lte(
+			_longest_gap_below_the_head(look), 2,
+			"outfit row %d leaves a gap below the head -- not one cohesive body" % row
+		)
+	assert_gt(checked, 0, "precondition: there are outfit rows to draw")
 
 
 ## The character creator's class-icon row renders exactly this portrait, one
@@ -626,3 +661,22 @@ func test_the_head_still_carries_real_facial_detail():
 		Vector2i(24, 24), appearance_maker.appearance_for("ranger", 4)
 	)
 	assert_gte(_distinct_colors(image), 6, "the face should carry eyes, brows and mouth detail")
+
+
+## No villager, of any class, at any seed, is handed an outfit row the art
+## cannot draw. Reported live: *"Some NPCs look like proper chars, others
+## have rectangles as legs"* -- measured at 400 of 3200 class/seed pairs
+## (12.5%, an even one in eight) landing on row 7, whose bands merge and
+## which _composite_frames therefore refuses outright
+## (tools/probe_hero_composite_rows.gd).
+func test_no_villager_is_ever_handed_an_outfit_row_the_art_cannot_draw():
+	var handed := 0
+	var checked := 0
+	for class_id in HeroAppearance.CLASS_PALETTES.keys():
+		for seed_value in range(0, 200):
+			checked += 1
+			var row: int = appearance_maker.outfit_variant_for(class_id, seed_value)
+			if IllustratedCharacterSprite.UNUSABLE_COMPOSITE_ROWS.has(row):
+				handed += 1
+	assert_gt(checked, 0, "precondition: there are classes and seeds to check")
+	assert_eq(handed, 0, "%d of %d villagers were dressed in a row the art cannot draw" % [handed, checked])

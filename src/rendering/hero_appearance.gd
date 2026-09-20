@@ -170,10 +170,20 @@ var _illustrated := IllustratedCharacterSprite.new()
 ## occupations further down the table may share a row with an archetype --
 ## they wear this palette for its colours (VillageRenderer's markers), not
 ## for the composite rig.
+## Both the offset and the roll walk the rows the art can really DRAW
+## (IllustratedCharacterSprite.usable_composite_rows), never all 8. Rolling
+## across the sheet's full height dressed one villager in eight in a row
+## _composite_frames refuses, and a refused row is the procedural rig --
+## reported live as "Some NPCs look like proper chars, others have
+## rectangles as legs". The seven archetypes still land on seven distinct
+## rows, because there are seven usable ones.
 func outfit_variant_for(class_id: String, seed_value: int) -> int:
-	var class_offset := maxi(CLASS_PALETTES.keys().find(class_id), 0)
+	var usable := IllustratedCharacterSprite.usable_composite_rows()
 	var rolled := _illustrated.outfit_variant_for(seed_value)
-	return (class_offset + rolled) % IllustratedCharacterSprite.HERO_COMPOSITE_ROWS
+	var class_offset := maxi(CLASS_PALETTES.keys().find(class_id), 0)
+	if usable.is_empty():
+		return (class_offset + rolled) % IllustratedCharacterSprite.HERO_COMPOSITE_ROWS
+	return usable[(class_offset + maxi(usable.find(rolled), 0)) % usable.size()]
 
 
 ## How many options a customization axis offers. 0 for an unknown axis

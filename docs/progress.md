@@ -31699,3 +31699,43 @@ player feels a thicket, so a boar pushes through bramble untouched; and
 the drawn clump is wider than its tile while the penalty is not, so a
 player can be visually waist-deep in canes from the next tile over and
 walk at full speed.
+
+## A starving village plants what actually feeds it (`concept/village_farms.md`, 2026-09-20)
+
+Reported live with the panels open: *"The farmers produce mostly herbs even
+though it says it can feed 0 / 10 ... the supply chain needs to be stable,
+so that happiness can saturate at 100% and unlock second tier buildings"*.
+
+✅ **Measured, and the first measurement was wrong in an instructive way.**
+A probe that only LOADED chunks read an empty satisfaction dict and would
+have reported "the demand rule never fires at all". A settlement only reads
+its own basket when it is STEPPED, so the probe advances real world time
+now (`tools/probe_village_cropping.gd`, kept). With the clock running:
+
+```
+satisfaction: { "wood": 1.0, "herb": 0.0, "kind:food": 0.0 }
+scores:       { "herb": 0.0, "carrot": 0.0, "potato": 0.0, "wheat": inf }
+a wheat-farmer sows: herb    a herb-farmer sows: herb
+```
+
+✅ **The tie was the bug.** Both goods at 0.0 means every food crop scores
+identically — the normal state of a village that needs feeding, not an edge
+case — and the tie fell through to *declaration order*, where `herb` is
+first. Every field in a starving village sowed the crop that feeds it least:
+20g of herbs against a 170g potato.
+
+✅ **Below `HUNGRY_BELOW` the heavier harvest breaks the tie**, on the
+`ItemCatalog`'s own real produce masses rather than numbers invented for
+this; above it the occupation tie-break stands exactly as documented. The
+floor is bounded by the two readings that define it (strictly above the
+starving villages measured, no higher than the half-fed case the occupation
+rule was written for), both test-pinned.
+
+✅ **Verified end to end on the same three villages**: every farmer sows
+`potato` now, wheat- and herb-farmers alike.
+
+🚧 **Three tests in `test_npc_marker_farming.gd` fail, and failed before
+this** — A/B'd against the parent commit, 36 passing and 3 failing either
+way, same names. Not this work's, and not silently absorbed.
+
+Tests: 21/21 in `test_village_crop_choice.gd` (+6).
