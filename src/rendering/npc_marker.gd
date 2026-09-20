@@ -921,13 +921,11 @@ func _shape_a_beam(delta: float) -> void:
 	):
 		return
 	_world.deposit_to_structure_at(sawmill_cell.x, sawmill_cell.y, "beam", 1)
-	# Paid at the saw when the village has a store to cart it to
-	# (docs/concept/village_warehouse.md, Mechanism 7) -- the beam stays on
-	# the mill's shelf for the carter, so the village is credited when it
-	# really arrives at the store rather than here. The same pay, for the
-	# same work; what moved is where the beam is.
-	if economy != null and _village_has_a_store():
-		economy.record_harvest_wage("beam", 1)
+	# No pay at the saw. A sawyer's work earns the village a BEAM, and the
+	# beam is paid for when a merchant buys it out of the village's stock
+	# (docs/concept/traveling_merchants.md, "The merchant is the ONLY
+	# faucet"). Paying here as well would be minting a coin on top of the
+	# goods -- the conjured faucet that doc exists to close.
 
 
 ## Carries the mill's finished BEAMS into the village's own stock -- the
@@ -1960,13 +1958,11 @@ func _store_harvest(crop_id: String, count: int) -> void:
 		and _world.has_method("deposit_to_structure_at")
 	):
 		_world.deposit_to_structure_at(stock_building_cell.x, stock_building_cell.y, crop_id, count)
-		# Paid at the scythe when the village has a store to cart it to
-		# (docs/concept/village_warehouse.md, Mechanism 7): the crop stays
-		# on this shelf for the carter, so the village is credited when the
-		# goods really arrive there rather than here. The same pay, at the
-		# same moment, either way -- what moved is where the goods are.
-		if economy != null and _village_has_a_store():
-			economy.record_harvest_wage(crop_id, count)
+		# No pay at the scythe. A farmer's work earns the village a CROP,
+		# and the crop is paid for when a merchant buys it out of the
+		# village's stock (docs/concept/traveling_merchants.md, "The
+		# merchant is the ONLY faucet"). Paying here as well would be
+		# minting a coin on top of the goods.
 		return
 	if economy != null:
 		economy.record_real_harvest(crop_id, count)

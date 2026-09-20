@@ -188,6 +188,7 @@ const VillageGrowth = preload("res://src/emergence/village_growth.gd")
 const VillageCensus = preload("res://src/emergence/village_census.gd")
 const VillageImmigration = preload("res://src/emergence/village_immigration.gd")
 const MerchantVisit = preload("res://src/emergence/merchant_visit.gd")
+const SettlementSurplus = preload("res://src/emergence/settlement_surplus.gd")
 const HouseholdWellbeing = preload("res://src/emergence/household_wellbeing.gd")
 const VillageEstates = preload("res://src/emergence/village_estates.gd")
 const EstateConsumption = preload("res://src/emergence/estate_consumption.gd")
@@ -4628,10 +4629,48 @@ func _collect_estate_tax(
 			EstateConsumption.subsistence_satisfaction(estate, satisfaction),
 			EstateConsumption.station_satisfaction(estate, satisfaction)
 		)
-	var take := VillageWages.estate_tax_for(census, provision, days)
-	if take > 0.0:
-		NpcEconomy.deposit_to_purse(market, take)
+	# A TRANSFER, not a faucet (docs/concept/traveling_merchants.md, "The
+	# merchant is the ONLY faucet"). This used to credit the purse and debit
+	# nobody, which made it a second place gold came from nothing -- the
+	# very thing that doc's opening claims to have closed.
+	#
+	# Whole coins only, with the remainder carried: a Wallet holds integer
+	# gold and a kossaet owes 0.25 a day, so collecting per step would
+	# either forgive a real debt or charge it four times over. Same
+	# carry-until-it-crosses-a-whole-unit idiom the rest of this economy
+	# runs on.
+	var owed: float = (
+		VillageWages.estate_tax_for(census, provision, days)
+		+ float(_settlement_tax_carry.get(settlement_id, 0.0))
+	)
+	var demand := int(floor(owed))
+	_settlement_tax_carry[settlement_id] = owed - float(demand)
+	if demand <= 0:
+		return
+	var households: Array = []
+	var balances: Array = []
+	for household_id in _households_in_settlement(settlement_id):
+		var household = _household_store.household_for(household_id)
+		if household == null or household.wallet == null:
+			continue
+		households.append(household)
+		balances.append(int(household.wallet.balance))
+	var debits: Array = VillageWages.tax_debits(balances, demand)
+	var collected := 0
+	for index in debits.size():
+		var debit := int(debits[index])
+		if debit <= 0:
+			continue
+		if households[index].wallet.spend(debit):
+			collected += debit
+	if collected > 0:
+		NpcEconomy.deposit_to_purse(market, float(collected))
 
+
+## settlement_id -> the fraction of a coin this village is owed in tax but
+## cannot yet collect, since a Wallet holds only whole gold. Carried rather
+## than rounded (see _collect_estate_tax).
+var _settlement_tax_carry: Dictionary = {}
 
 ## settlement_id -> StaffedProduction's own per-recipe batch remainder.
 var _settlement_staffed_production_carry: Dictionary = {}
@@ -4791,19 +4830,41 @@ func _step_merchant_visits(settlement_id: String, market) -> void:
 	if market == null:
 		return
 	var reserved := _construction_reserve_for(settlement_id)
+	# Every container this settlement really keeps goods in, market FIRST
+	# (docs/concept/traveling_merchants.md). He used to price market.stock
+	# alone while SettlementFood counted the shelves too, so a village that
+	# hauled its harvest into the warehouse -- which is the whole point of
+	# the carter's round -- put it beyond the reach of its own only income.
+	# Reported as "way too much food and the NPCs don't have an income",
+	# which is one fault, not two.
+	var shelves: Array = _settlement_structure_stocks(settlement_id)
+	var views: Array = [market.stock]
+	for shelf in shelves:
+		views.append(shelf.stock)
+	var surplus := SettlementSurplus.combined(views)
+
 	var result: Dictionary = MerchantVisit.arrivals(
-		SETTLEMENT_STEP_INTERVAL, market.stock,
+		SETTLEMENT_STEP_INTERVAL, surplus,
 		float(_settlement_merchant_carry.get(settlement_id, 0.0)), reserved
 	)
 	_settlement_merchant_carry[settlement_id] = result["carry"]
 	if not result["arrived"]:
 		return
 
-	var sale: Dictionary = MerchantVisit.purchase(market.stock, reserved)
+	var sale: Dictionary = MerchantVisit.purchase(surplus, reserved)
 	if int(sale["paid"]) <= 0:
 		return
-	for item_id in sale["bought"]:
-		market.remove_stock(str(item_id), float(sale["bought"][item_id]))
+	# Out of the real containers the goods were actually in: paying for
+	# warehouse fish and taking them out of the market would invent goods in
+	# one place and destroy them in another.
+	var plan: Array = SettlementSurplus.allocate(sale["bought"], views)
+	var from_market: Dictionary = plan[0]
+	for item_id in from_market:
+		market.remove_stock(str(item_id), float(from_market[item_id]))
+	for index in shelves.size():
+		var taken: Dictionary = plan[index + 1]
+		for item_id in taken:
+			shelves[index].remove_stock(str(item_id), int(floor(float(taken[item_id]))))
 	NpcEconomy.deposit_to_purse(market, float(sale["paid"]))
 
 

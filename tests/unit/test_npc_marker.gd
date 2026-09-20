@@ -464,8 +464,11 @@ func test_a_working_hunter_gathers_real_food_through_process():
 		marker._process(1.0)
 		peak_gold = maxi(peak_gold, marker.economy.wallet.balance)
 
-	assert_gt(market.total_stock(), 0.0)
-	assert_gt(peak_gold, 0, "a working hunter really earns")
+	assert_gt(market.total_stock(), 0.0, "a working hunter really fills the market")
+	# And mints nothing doing it. Gold has one faucet and it is the merchant
+	# (docs/concept/traveling_merchants.md, "The merchant is the ONLY
+	# faucet"); this used to assert the opposite, which was the faucet.
+	assert_eq(peak_gold, 0, "no coin is minted at the kill, at any moment of the work")
 
 
 # -- instruction scripts (docs/concept/npc_instructions.md "Execution /
