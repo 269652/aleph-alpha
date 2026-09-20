@@ -28252,3 +28252,13 @@ Tests: `test_hero_sprite.gd` 49/49 (+3 new, 3 rewritten to the new contract),
 `test_character_sheet_portrait_scene.gd`,
 `test_companion_character_sheet_view.gd`, `test_interior_avatar.gd`,
 `test_house_interior_view.gd` 142/142 green against the change.
+
+Also run, and green: `test_village_renderer.gd`,
+`test_character_preview_diorama.gd`, `test_inventory_window.gd`,
+`test_main_menu.gd` — 308 of 309, the one failure being
+`diorama panel bottom (598) is cut off by the scroll area's own visible
+bottom (586)` in `test_main_menu.gd`. **Pre-existing, not from this change**:
+A/B'd in a clean worktree at `6c407024`, the commit immediately before it,
+where it fails with the identical 598/586. Recorded rather than quietly left,
+and deliberately not fixed here — the character creator's panel heights are
+live in another session's HUD pass.
