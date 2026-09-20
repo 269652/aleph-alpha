@@ -115,6 +115,67 @@ above is all crown, and this world has no canopy fade when a player walks
 under it, so nothing on a forest floor is visible there at all. Both are
 recorded as open questions below rather than quietly tuned away.
 
+## A bramble gives, and it fights back (2026-09-20)
+
+Asked for directly: *"Black berrys have no bend mechanism.. they should
+bend slightly when walked over from the side but when walked through in
+the middle it should slow down movement to 10% and inflict minor damage...
+still should animate walking in the middle using path tracing"*.
+
+This **reverses** a decision recorded above. The Sprite2D draw was chosen
+deliberately, on the grounds that *"brambles are sparse and woody — they
+do not sway"*. They sway now, slightly, and that reasoning is retired
+rather than left standing next to code that contradicts it.
+
+### The bend is the grass's, scaled down
+
+A plain `Sprite2D` cannot carry the bend at all: the shared shader reads
+`INSTANCE_CUSTOM` for its atlas sub-rect and the instance origin for its
+root, and neither exists outside a `MultiMesh`. So a bramble is drawn the
+way a fern is — `IllustratedBramblePatch`, banded, reaching into
+`IllustratedGrassPatch` for the shader, the mesh subdivision and the band
+maths exactly as `IllustratedFernPatch` does. That keeps ONE bend in the
+world; a second would be two wind systems, visible the moment a thicket
+swayed out of time with the bracken beside it.
+
+**"Slightly" needed a knob that did not exist.** `wind_strength` already
+scales the ambient sway but deliberately not the walker's push, and the
+push amplitude is baked into the shader. A new `bend_scale` uniform
+multiplies the whole returned offset — wind and push together — and
+defaults to 1.0, so grass and ferns render byte-identically and only a
+caller that asks for less gets less. A cane is woody: it gives a little
+and springs back, where a blade lays over.
+
+### The middle is not the edge
+
+- **Clipping the side** of a thicket is a visual event only: the drawn
+  clump is wider than its tile, so a walker passing the next tile over
+  parts its outer canes and nothing else happens.
+- **Standing on its own cell** is pushing INTO it: movement drops to
+  **10%** and the thorns draw blood for as long as you are in there. The
+  path tracing keeps running, because you are still moving through it —
+  slowly, which is the point.
+
+The cell is the whole test. It is the same question every other
+ground-cover rule already asks, it needs no radius to tune, and it lines
+up with what a player sees: the tile the clump is planted on.
+
+### What a crossing costs, derived rather than picked
+
+The speed is given (10%). The damage is not, and "minor" is not a number,
+so it is derived from the speed and pinned by a test:
+
+- one tile is 16 world units, and a walker at 10% of `BASE_SPEED` (40)
+  covers 4 a second, so **a thicket takes 4 seconds to cross**;
+- a crossing should cost the smallest damage this world counts as real,
+  which it already names once — `BossAggro.MIN_DAMAGE_FRACTION_OF_MAX_
+  HEALTH`, 2% of full health;
+- so the rate is 2 health over 4 seconds: **0.5 a second**.
+
+Expressed as a function of those inputs rather than a literal, so a change
+to the player's speed or the tile size moves it instead of silently making
+a crossing cheaper.
+
 ## Status
 
 - ✅ **`BlackberryBramble`, the thicket's own sim.** Seeds on forest cells
