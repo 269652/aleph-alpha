@@ -28582,3 +28582,207 @@ plant_fibre gathering staying at 0). **Pre-existing, not from this change**:
 A/B'd in a clean worktree at the commit before it, where it fails with the
 identical numbers at the identical two lines. Recorded rather than quietly
 left.
+
+
+## The well trip becomes an errand (`concept/village_water.md`, 2026-09-20)
+
+Reported live, with the square in shot: *"All NPCs walk to the well at the
+same moments... and it's not visible what they are doing."*
+
+Both halves are one bug wearing two faces, and both were measured before
+anything was touched (`tools/probe_well_crowding.gd`, a real twelve-villager
+roster):
+
+```
+morning  busiest spot holds 2 of 12
+midday   busiest spot holds 2 of 12
+evening  well x10                     busiest spot holds 10 of 12
+night    home x12
+```
+
+Ten of twelve, every evening, all performing `socialize` — a word with no
+verb behind it. `FakeNpcPlanner` gave every non-guard villager the same
+evening entry, so the village emptied into the square and stood there.
+
+The fix asked for was not a stagger bolted onto the timetable but a
+**reason**: *"each NPC should have a bucket in its house inventory and when
+they get water they should carry the empty bucket to the well and bring back
+a full bucket of water which they can pour into their houses water tank
+which then gets tracked as distinct ressource and they then drink from their
+houses stock or use it to water crops in case of a farmhouse"*.
+
+### ✅ Water is a level on the house, and the level is what staggers the village
+
+`HouseholdWater` is pure and static; the level itself is **one number on the
+building's own record** (`water_litres`), the same idiom `guild_days_open`
+already uses — no new store, no new save format, and it travels through a
+chunk round trip.
+
+The anti-crowd mechanism is `starting_level(seed)`: a new house starts
+somewhere between its own trip threshold and full, chosen from its own seed,
+so two houses raised on the same day never run dry on the same day and never
+re-synchronise afterwards. **Staggering is a property of the initial
+condition**, not jitter applied to a queue — nothing has to remember to
+spread anybody out.
+
+None of the four tuned numbers is a number somebody liked. Tank capacity,
+draw per head, the trip threshold and the drinking reserve are each pinned
+by the *errand they produce*: a household must reach the well at least once
+a season and not every day, a bigger household must go oftener than a
+smaller one, and the reserve must outlast the walk.
+
+### ✅ The bucket is the entire UI this needed, and it is actually drawn
+
+`WaterErrand` is the state machine, and `carried(state)` is not decoration
+hung off it — it *is* the state, seen from outside: an empty bucket out, a
+full one back. `bucket` is a real `ItemCatalog` entry (a `tool`), and every
+building that holds a tank keeps exactly one in its own stock
+(`stock_household_buckets_in`, stepped per chunk beside the drinking) —
+stepped rather than seeded at placement, so a house raised before any of
+this existed gets one with no migration and no new field on the record.
+
+`carried()` told the truth from the first commit and **went nowhere**: for
+several commits the errand ran completely invisibly, which is the half of
+the report that reads *"it's not visible what they are doing"*.
+`ProceduralItemSprite` now draws the pail — the same pail empty and full,
+water standing at the brim being the only difference between the two, so a
+full bucket reads as the same object coming back rather than as a second
+one — and `NpcMarker._sync_carried_item` puts it in the `CharacterView`
+tool slot, the seam a held weapon already uses.
+
+The "go again" loop lives in the **caller**, deliberately. A 10 L pail does
+not lift a dry household off its threshold in one trip — caught by the tests
+rather than by play — and the wrong fix is a bigger pail. Fetching water
+meant going twice; a villager who is home and still short simply sets out
+again.
+
+### ✅ The square stopped being a waiting room
+
+The evening entry is now each villager's own haunt
+(`NpcPlanner._evening_haunt`, seeded per villager) rather than the well for
+everybody. A guard still holds the gate. This half is a **deletion**: the
+crowd was a line in a table saying "go here now", and the table stopped
+saying it.
+
+Measured after: evening went from `well x10` (busiest 10 of 12) to
+`gate x5, home x3, stall x2, well x2` (busiest 5 of 12). The errand itself
+produces 27 trips for 12 households over a season — about one each every
+5.3 days, busiest day 4 of 12, day by day `[3, 0, 1, 2, 4, 0, 3, 3, 4, 1,
+3, 3]`.
+
+### ✅ A farmhouse holds a tank with nobody living in it, because its field drinks
+
+`BuildingCatalog.capacity_of("farmhouse")` is 0 — it is a workplace, not a
+home, and nothing drinks there. It holds a tank anyway.
+`EarthChunkManager._holds_a_tank` is deliberately a **separate rule** from
+`_drinkers_in_house` rather than a widening of it: folding the two together
+would have a building with no residents drinking for somebody who does not
+exist.
+
+The field is billed **per visit**, not per tile: a farmer at a bed waters it
+and the beds around it (`_water_the_beds_around` — one trip with a can wets
+the ground you are standing on, not one plant), so the unit priced is the
+visit. `LITRES_PER_TENDING` must be less than a bucket (or one trip to the
+well buys less than one visit to the field) and more than a villager drinks
+in a whole day (or the farmhouse is not the thirstier building and the
+pillar describes nothing a player could see).
+
+Once the tank is down to the drinking reserve the beds are **not watered at
+all**, and an unwatered bed withers. That refusal is the mechanism rather
+than a failure case: it is what sends somebody to the well for the *field*.
+A farmer with no farmhouse — a village that has not raised one — keeps the
+free drip they always had; failing closed there would have killed every such
+field on this commit instead of sending anybody anywhere.
+
+So the errand serves two buildings, their own house first (people before
+plants, the same order the reserve keeps), and the chosen one is **latched**
+when they set out. Re-reading it each frame would let a villager change
+their mind halfway across the square, and the bucket in their hand would
+silently change what it was for. Carrying a full bucket for the farmhouse,
+`"home"` resolves to the farmhouse.
+
+Measured: a working farm reaches the well about **every 3 days** against a
+one-person cottage's ~11, with no day on which the beds went dry.
+
+### 🚧 The field's bill was four times too big, and every test passed
+
+This is the one worth remembering. `LITRES_PER_TENDING` was pinned against
+the premise that a living field is tended *"more than once a simulated
+day"* — reasoned from `FarmPlot.MIN_WATER_GRACE_SECONDS` (45 s) being
+shorter than a simulated day (60 s), and expressed as a test, exactly as
+the tuned-values rule asks.
+
+The premise is **true and nearly useless**. `tools/probe_farm_water.gd`
+(written for this) counts **5.7 and 6.1 tendings a simulated day** on the
+two working farms of a real twelve-villager village. The bill was more than
+four times what it should have been: the farmhouse ran dry almost at once,
+the beds stopped being watered, and `tools/probe_village_farming.gd` went
+from **164 wheat harvested to 24** on the same village, with the farmers'
+on-field time falling from 2750/6000 ticks to 1441 and 68.
+
+Every unit test passed throughout, including the one that pinned the
+constant. A number pinned to a *reasoned* rate is still an eyeballed
+number; only the probe said so.
+
+`TENDINGS_PER_SIMULATED_DAY` is now measured, and the cost is pinned
+through the rhythm it produces rather than through the visit:
+`field_draw_per_day`, `days_between_farm_trips` and
+`days_between_household_trips` are the tested functions, and the tests
+demand a farm reach the well oftener than a household, *and* not spend the
+day walking there, *and* be lifted clear of its own threshold by one
+bucket.
+
+### 🚧 An errand you cannot finish used to last forever
+
+The same probe, once it was taught to report *where* the errand left each
+villager, found the second half of the same wound. One of the three field
+workers ended a 600s run still `to_well`, **104 px short** of a well it had
+had 570 seconds to reach — 5 seconds of walking. It had worked 156 of 6000
+ticks against its own baseline of 2750: it set out once and never farmed
+again.
+
+There is no pathfinding here, only a straight line at the target and a
+slide along whatever it runs into (`_slid_along_walls`), so a wall, a rail
+or a building between a villager and the well is enough to stop them
+permanently. That hole was in the errand from its first commit; it only
+became *visible* once a farmhouse could send somebody.
+
+An errand now has **patience**: its own straight-line walk at `WALK_SPEED`
+times `ERRAND_PATIENCE_SLACK`, after which the bucket goes back by the
+door and they get on with their day. They try again **tomorrow** rather
+than turning round at the door and walking into the same wall, which would
+have replaced the stall rather than fixed it. Both sides are pinned — a
+villager who cannot move gives up, and a villager who can simply walk
+there still finishes the trip.
+
+### 🚧 A farmhouse seeded from a household's floor started dry
+
+Found by its own test rather than by play: a farmhouse seeded from
+`starting_level` was raised **already needing a trip** for three of the
+four probe seeds — the household's floor sits below the farm's own, higher
+threshold. `farm_starting_level` seeds it off its own floor instead, and
+the threshold itself is now named once (`farm_trip_level`) so the two
+cannot drift. The whole stagger is a property of the initial condition, so
+getting the initial condition wrong loses all of it.
+
+⬜ Still open, and named in the concept doc: nobody washes, brews or waters
+livestock from a tank; the well itself is inexhaustible (nothing reaches
+into `hydrology.md`'s aquifer); and the player has no tank of their own.
+
+### Where the field ended up
+
+`tools/probe_village_farming.gd`, same village, end to end:
+
+| | baseline | billed 4x too much | shipped |
+|---|---|---|---|
+| wheat harvested | 164 | 24 | 125 |
+| farmer 1, on-field ticks of 6000 | 2750 | 1441 | 2379 |
+| herbalist, on-field ticks of 6000 | 2750 | 68 | 2081 |
+
+The remaining gap to baseline is the errand's real cost — a villager
+walking to the well is a villager not farming, which is the feature. The
+herbalist's share of it is not: it still makes **zero** completed trips
+because it cannot reach the well at all, and its beds spend 5131 of 6000
+ticks with nothing to spare. That is the pathfinding hole, and it is the
+one number to re-measure once `TileRouter` routing (merged from `main`
+alongside this) has had a run at it.
