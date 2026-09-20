@@ -598,17 +598,136 @@ func test_a_building_with_no_yard_declared_grows_no_yard_node():
 	assert_null(_building_child_named(_origin, "Yard"), "no yard art, no yard node")
 
 
-## The yard is the plot's, so it is drawn to the same width the house is --
-## never wider than the ground it stands on.
-func test_the_yard_is_drawn_to_the_same_width_as_the_house():
+## The yard covers the WHOLE PLOT -- footprint tiles wide and footprint
+## tiles tall -- not the smaller share the house itself is drawn at.
+##
+## This used to assert the opposite ("drawn to the same width the house
+## is"), and that assertion is what hid the art: reported live, *"farm
+## houses don't use the 3x2 background image as background"*. Measured
+## before changing anything (tools/probe_building_yard.gd), a farmhouse's
+## yard came out 79x53 art px against a house of 79x54 -- the same width
+## and a pixel SHORTER -- so 85.4% of the yard's own opaque pixels were
+## behind the house and only 5.1% of the yard rectangle ever reached the
+## screen. A yard the size of the house is a yard nobody can see.
+##
+## The house is deliberately drawn NARROWER than its plot
+## (BuildingCatalog.PLOT_MARGIN_SHARE), so that a house and its neighbour
+## have a street between them. That margin is about walls, not ground: two
+## neighbouring yards meeting is grass meeting grass. So the yard takes the
+## plot and the house stands inside it, which is also what makes a 3x2
+## picture the background of a 3x2 plot.
+func test_the_yard_is_drawn_to_the_whole_plot_and_not_the_houses_share():
 	assert_true(manager.place_building(_chunk_coord, _origin, "farmhouse", Vector2i(0, 1), 5, ""))
 	var yard: Sprite2D = _building_child_named(_origin, "Yard")
 	var art: Sprite2D = _building_child_named(_origin, "Art")
+	var footprint := BuildingCatalog.footprint_of("farmhouse")
 	assert_almost_eq(
 		yard.texture.get_width() * yard.scale.x,
-		float(art.texture.get_width()) * art.scale.x, 1.0,
-		"the yard covers the plot the house covers"
+		float(footprint.x * TerrainRenderer.TILE_SIZE), 1.0,
+		"the yard is as wide as the plot it is the ground of"
 	)
+	assert_almost_eq(
+		yard.texture.get_height() * yard.scale.y,
+		float(footprint.y * TerrainRenderer.TILE_SIZE), 1.0,
+		"...and as deep, so a 3x2 picture fills a 3x2 plot"
+	)
+	assert_gt(
+		yard.texture.get_width() * yard.scale.x,
+		float(art.texture.get_width()) * art.scale.x,
+		"the house stands INSIDE its yard, so the yard is the wider of the two"
+	)
+
+
+## The whole point, measured the way the screenshot reads it: with the house
+## standing in it, a real share of the yard is there to be seen.
+##
+## Both sprites are bottom-centred on the same node origin, so they align on
+## their bottom edge and their horizontal centre; a yard pixel is visible
+## when no opaque house pixel lands on it.
+##
+## The floor is the measurement, not a number anybody liked: the live yard
+## comes out at 0.465 of its own opaque pixels visible, and this sits below
+## that with room for the art to be redrawn a little heavier. What it rules
+## out is the state that was reported -- at the house's own width the yard
+## measured 0.186 here, and a yard the house is wearing rather than standing
+## in cannot clear this.
+const _YARD_MIN_VISIBLE_SHARE := 0.40
+
+
+func test_a_real_share_of_the_yard_is_visible_with_the_house_standing_in_it():
+	assert_true(manager.place_building(_chunk_coord, _origin, "farmhouse", Vector2i(0, 1), 5, ""))
+	var yard: Sprite2D = _building_child_named(_origin, "Yard")
+	var art: Sprite2D = _building_child_named(_origin, "Art")
+	assert_gt(
+		_visible_share_of(yard.texture.get_image(), art), _YARD_MIN_VISIBLE_SHARE,
+		"a yard the house covers is a yard nobody sees"
+	)
+
+
+## ...and the same thing said without a constant at all, which is the
+## assertion that actually bites if the margin is ever tuned: the yard drawn
+## to the PLOT shows more than twice what the same yard drawn at the house's
+## own width did. The "before" is rebuilt here from the very call the
+## renderer used to make, so the comparison is between two real textures
+## rather than between a texture and a remembered figure.
+func test_drawing_the_yard_to_the_plot_more_than_doubles_what_shows_of_it():
+	assert_true(manager.place_building(_chunk_coord, _origin, "farmhouse", Vector2i(0, 1), 5, ""))
+	var yard: Sprite2D = _building_child_named(_origin, "Yard")
+	var art: Sprite2D = _building_child_named(_origin, "Art")
+	var sheet := BuildingCatalog.background_sheet_for("farmhouse", 5)
+	var at_the_houses_width := IllustratedStructureSprite.new().footprint_frame_texture(
+		String(sheet["path"]), int(sheet["columns"]), int(sheet["rows"]),
+		int(sheet["row"]), int(sheet["column"]), TerrainRenderer.ART_TILE_SIZE,
+		BuildingCatalog.footprint_of("farmhouse").x, String(sheet["grid"]), "farmhouse"
+	)
+	assert_not_null(at_the_houses_width, "precondition: the old call still resolves the sheet")
+	assert_gt(
+		_visible_share_of(yard.texture.get_image(), art),
+		2.0 * _visible_share_of(at_the_houses_width.get_image(), art),
+		"drawing the yard to the plot is what makes it a background"
+	)
+
+
+## A cottage stands in its own yard too -- *"I also added bg overlays for
+## cottages ..."*, delivered as a second 3x3 sheet of square scenes for the
+## 2x2 plot a cottage stands on.
+func test_a_cottage_draws_its_own_yard_behind_it():
+	assert_true(manager.place_building(_chunk_coord, _origin, "house_small", Vector2i(0, 1), 5, ""))
+	var yard: Sprite2D = _building_child_named(_origin, "Yard")
+	assert_not_null(yard, "a cottage stands in a yard")
+	assert_not_null(yard.texture, "...with real art in it")
+	var footprint := BuildingCatalog.footprint_of("house_small")
+	assert_almost_eq(
+		yard.texture.get_width() * yard.scale.x,
+		float(footprint.x * TerrainRenderer.TILE_SIZE), 1.0,
+		"and it is the ground of the whole 2x2 plot"
+	)
+
+
+## What a viewer can actually see of the `ground` image: its opaque pixels
+## that no opaque `art` pixel lands on, as a share of its opaque pixels.
+## Both sprites are bottom-centred on the same node origin (see
+## EarthChunkManager._spawn_building_node) and drawn at the same scale, so
+## they share a bottom edge and a horizontal centre and the two images can
+## be compared pixel for pixel.
+func _visible_share_of(ground: Image, art: Sprite2D) -> float:
+	var house := art.texture.get_image()
+	var offset_x := int(round(float(ground.get_width() - house.get_width()) * 0.5))
+	var offset_y := ground.get_height() - house.get_height()
+	var visible := 0
+	var total := 0
+	for y in ground.get_height():
+		for x in ground.get_width():
+			if ground.get_pixel(x, y).a <= 0.5:
+				continue
+			total += 1
+			var hx := x - offset_x
+			var hy := y - offset_y
+			if hx < 0 or hy < 0 or hx >= house.get_width() or hy >= house.get_height():
+				visible += 1
+			elif house.get_pixel(hx, hy).a <= 0.5:
+				visible += 1
+	return float(visible) / float(maxi(1, total))
 
 
 ## A yard is the ground a building stands IN (BuildingCatalog.background_
