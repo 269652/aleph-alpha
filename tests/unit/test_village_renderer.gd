@@ -8,6 +8,7 @@ extends GutTest
 ## free" shape as TreeRenderer/CreatureRenderer/FishRenderer.
 
 const VillageRenderer = preload("res://src/rendering/village_renderer.gd")
+const CivicBuildDecision = preload("res://src/emergence/civic_build_decision.gd")
 const SettlementGenerator = preload("res://src/world/settlement_generator.gd")
 const NpcMarker = preload("res://src/rendering/npc_marker.gd")
 const BuildingCatalog = preload("res://src/gameplay/building_catalog.gd")
@@ -3670,3 +3671,313 @@ func test_no_farm_rail_is_ever_laid_across_the_market_square():
 				"a farm rail stands on the square at %s" % str(g)
 			)
 	assert_gt(checked, 0, "the premise: this village has a square to protect")
+
+## Reported a FOURTH time, with the hamlet in shot: *"There's still a
+## village without plaza and city hall... all villages should have a city
+## hall"*.
+##
+## The three earlier rounds each fixed a real reason the SQUARE could not be
+## sited (the decorative street jitter vetoing dry columns; a rule demanding
+## room for a house beside the square). What none of them changed is the
+## last line of `VillageLayout.plaza_x0_for`: when no candidate column is
+## dry it returns `centred` anyway -- a site it has just proved is wet. The
+## village then plans its square there, never paves it, and
+## `_place_civic_building_if_missing` refuses because the plot is not road.
+##
+## This measures the real rate across many villages rather than arguing
+## from one screenshot.
+func test_every_village_big_enough_for_a_seat_gets_one():
+	var without: Array = []
+	var checked := 0
+	var coords: Array = []
+	for row in [3, 6, 9, 12, 15, 18, 21, 24]:
+		coords.append_array(_settlement_chunks_with_farmers(row, 12))
+	for coord in coords:
+		var world := StubWorld.new()
+		world.household_count = CivicBuildDecision.CITY_HALL_MIN_HOUSEHOLDS + 2
+		renderer.spawn_village(
+			parent, coord, coord * CHUNK_SIZE, CHUNK_SIZE, TILE_SIZE, "grassland", world
+		)
+		checked += 1
+		if _placed(world, "city_hall").is_empty():
+			without.append(str(coord))
+	assert_gt(checked, 8, "precondition: enough real villages to say anything")
+	assert_eq(
+		without.size(), 0,
+		"%d of %d villages have no seat: %s" % [without.size(), checked, str(without.slice(0, 8))]
+	)
+
+
+## The case the coverage test above cannot reach, and the one in the
+## screenshot: a village whose CENTRED square site is unusable. The report
+## was a forest-edge hamlet, and `_is_buildable_local` -- the very
+## predicate the skeleton is handed as `is_dry` -- rejects forest as well
+## as water, so a village hemmed in by trees is in exactly this position.
+##
+## `plaza_x0_for` is built to slide the square along the street until it
+## finds a site that works. What it does when nothing works is return
+## `centred` anyway -- the site it has just proved unusable -- and the
+## village then plans a square it can never pave, so
+## `_place_civic_building_if_missing` refuses the seat for want of road.
+## Asked for directly: *"all villages should have a city hall"*.
+func test_a_village_slides_its_square_clear_of_unbuildable_ground_and_still_gets_a_seat():
+	var coord := _find_settlement_chunk("grassland")
+	var world := StubWorld.new()
+	world.household_count = CivicBuildDecision.CITY_HALL_MIN_HOUSEHOLDS + 2
+	# Only the CENTRED site is spoiled -- the rest of the street row is
+	# ordinary ground, so a square genuinely fits elsewhere on it.
+	var centred: Rect2i = VillageLayout.skeleton(CHUNK_SIZE, VillageLayout.seed_for(coord))["plaza"]
+	for y in range(centred.position.y, centred.end.y):
+		for x in range(centred.position.x, centred.end.x):
+			world.unbuildable_cells[coord * CHUNK_SIZE + Vector2i(x, y)] = true
+
+	renderer.spawn_village(
+		parent, coord, coord * CHUNK_SIZE, CHUNK_SIZE, TILE_SIZE, "grassland", world
+	)
+
+	assert_eq(
+		_placed(world, "city_hall").size(), 1,
+		"the square slides off the bad ground and the village keeps its seat"
+	)
+
+
+## The forest-edge case, and the one the report is about: a village with
+## room for a SEAT but nowhere for a whole SQUARE.
+##
+## The plaza is 8 wide by 6 deep; the hall is 4x3. `_is_buildable_local` --
+## the predicate the skeleton is handed -- rejects forest as well as water,
+## so a hamlet hemmed in by trees can easily have a pocket that fits the
+## hall and no pocket that fits the square. `plaza_x0_for` then falls
+## through its whole search and returns `centred` regardless, the village
+## plans a square on ground it cannot pave, and the seat is refused for
+## want of road -- silently, with nothing said anywhere.
+##
+## Asked for directly, a fourth time: *"all villages should have a city
+## hall"*. A square is how a village would LIKE to seat its hall; it is not
+## a condition of having one.
+func test_a_village_with_room_for_a_seat_but_not_a_square_still_gets_its_seat():
+	var coord := _find_settlement_chunk("grassland")
+	var world := StubWorld.new()
+	world.household_count = CivicBuildDecision.CITY_HALL_MIN_HOUSEHOLDS + 2
+	# Trees over everything on the street band except a pocket too narrow
+	# for the 8-wide square but wide enough for the 4x3 hall.
+	var street_y: int = VillageLayout.skeleton(CHUNK_SIZE, VillageLayout.seed_for(coord))["street_y"]
+	var pocket_x0 := CHUNK_SIZE / 2 - 3
+	for y in range(street_y - VillageLayout.PLAZA_ROWS_NORTH, street_y + VillageLayout.PLAZA_ROWS_SOUTH + 1):
+		for x in CHUNK_SIZE:
+			if x >= pocket_x0 and x < pocket_x0 + 6:
+				continue  # the pocket: 6 wide, less than PLAZA_WIDTH_TILES
+			world.unbuildable_cells[coord * CHUNK_SIZE + Vector2i(x, y)] = true
+
+	renderer.spawn_village(
+		parent, coord, coord * CHUNK_SIZE, CHUNK_SIZE, TILE_SIZE, "grassland", world
+	)
+
+	assert_eq(
+		_placed(world, "city_hall").size(), 1,
+		"a square is how a village would LIKE to seat its hall, not a condition of having one"
+	)
+
+
+## The other half of the same report: *"a village without plaza"*. A square
+## the village planned but never paved would be invisible on the ground,
+## and would also silently cost the village its seat (the civic plot IS the
+## square's paving).
+##
+## Measured across 32 real villages: every one paves its whole square
+## except a 4x3 block in the north-centre -- which is not a hole, it is the
+## CITY HALL standing on it. Worth a test precisely because it looks like a
+## defect: the first run of this measurement reported "32 of 32 villages
+## planned a square they never paved" before the shape was printed and the
+## block turned out to be the hall's own footprint.
+func test_every_village_paves_the_square_it_planned_apart_from_the_seat_on_it():
+	var unpaved_villages: Array = []
+	var checked := 0
+	var coords: Array = []
+	for row in [3, 9, 15, 21]:
+		coords.append_array(_settlement_chunks_with_farmers(row, 8))
+	for coord in coords:
+		var world := StubWorld.new()
+		world.household_count = CivicBuildDecision.CITY_HALL_MIN_HOUSEHOLDS + 2
+		renderer.spawn_village(
+			parent, coord, coord * CHUNK_SIZE, CHUNK_SIZE, TILE_SIZE, "grassland", world
+		)
+		checked += 1
+		var bones: Dictionary = VillageLayout.skeleton(
+			CHUNK_SIZE, VillageLayout.seed_for(coord),
+			func(cell: Vector2i) -> bool:
+				return not world.unbuildable_cells.has(coord * CHUNK_SIZE + cell) \
+					and not world.water_cells.has(coord * CHUNK_SIZE + cell)
+		)
+		var plaza: Rect2i = bones["plaza"]
+		# The seat's own cells are the one legitimate exception.
+		var seat: Dictionary = {}
+		for cell in BuildingCatalog.footprint_cells("city_hall", bones["civic_plot"]["origin"]):
+			seat[cell as Vector2i] = true
+		var unpaved := 0
+		for y in range(plaza.position.y, plaza.end.y):
+			for x in range(plaza.position.x, plaza.end.x):
+				if seat.has(Vector2i(x, y)):
+					continue
+				var g: Vector2i = coord * CHUNK_SIZE + Vector2i(x, y)
+				if not TerrainRenderer.is_road_tile(world.modification_at_global(g.x, g.y)):
+					unpaved += 1
+		if unpaved > 0:
+			unpaved_villages.append("%s: %d cells" % [str(coord), unpaved])
+	assert_gt(checked, 8, "precondition: enough real villages")
+	assert_eq(
+		unpaved_villages.size(), 0,
+		"%d of %d villages left real holes in their square: %s"
+			% [unpaved_villages.size(), checked, str(unpaved_villages.slice(0, 6))]
+	)
+
+
+# -- villagers follow the roster (docs/concept/village_mortality.md ---------
+#    mechanism 4)
+#
+# Asked for directly: *"now make the npcs move in"*. The villagers
+# standing in a chunk used to be a snapshot taken when it was rendered --
+# _population_for reads the REAL roster, but only at spawn time -- so a
+# household admitted while the player stood there got nobody, and the
+# settlement card and the street disagreed until the chunk reloaded.
+# Reported live: *"there still run around more NPCs than the number
+# displays"*.
+
+func _villagers_among(nodes: Array) -> int:
+	var count := 0
+	for node in nodes:
+		if is_instance_valid(node) and node is NpcMarker:
+			count += 1
+	return count
+
+
+func _a_village_of(world: StubWorld, coord: Vector2i, roster: int) -> Array:
+	world.household_count = roster
+	return renderer.spawn_village(
+		parent, coord, coord * CHUNK_SIZE, CHUNK_SIZE, TILE_SIZE, "grassland", world
+	)
+
+
+func test_a_household_that_moves_in_gets_a_villager_without_a_reload():
+	var coord := _find_settlement_chunk("grassland")
+	var world := StubWorld.new()
+	var nodes := _a_village_of(world, coord, 10)
+	assert_eq(_villagers_among(nodes), 10, "precondition: ten live here")
+
+	world.household_count = 12  # two moved in while the player stood there
+	var after: Array = renderer.reconcile_villagers(
+		parent, coord, coord * CHUNK_SIZE, CHUNK_SIZE, TILE_SIZE, world, nodes
+	)
+	assert_eq(_villagers_among(after), 12, "the newcomers never showed up")
+
+
+func test_a_roster_that_has_not_changed_spawns_nobody():
+	var coord := _find_settlement_chunk("grassland")
+	var world := StubWorld.new()
+	var nodes := _a_village_of(world, coord, 10)
+	var after: Array = renderer.reconcile_villagers(
+		parent, coord, coord * CHUNK_SIZE, CHUNK_SIZE, TILE_SIZE, world, nodes
+	)
+	assert_eq(_villagers_among(after), 10, "the village spawned a second copy of itself")
+
+
+## Reconciling repeatedly must not keep adding people -- it runs every
+## settlement step.
+func test_reconciling_again_and_again_is_idempotent():
+	var coord := _find_settlement_chunk("grassland")
+	var world := StubWorld.new()
+	var nodes := _a_village_of(world, coord, 10)
+	world.household_count = 11
+	for i in 5:
+		nodes = renderer.reconcile_villagers(
+			parent, coord, coord * CHUNK_SIZE, CHUNK_SIZE, TILE_SIZE, world, nodes
+		)
+	assert_eq(_villagers_among(nodes), 11)
+
+
+## A newcomer is a real villager of THIS village, not a marker at the
+## world origin: they stand in the chunk, they know which settlement they
+## belong to (so their death reaches the right roster), and they have a
+## market to buy food from.
+func test_a_newcomer_is_a_real_villager_of_this_village():
+	var coord := _find_settlement_chunk("grassland")
+	var world := StubWorld.new()
+	var nodes := _a_village_of(world, coord, 10)
+	world.household_count = 11
+	var after: Array = renderer.reconcile_villagers(
+		parent, coord, coord * CHUNK_SIZE, CHUNK_SIZE, TILE_SIZE, world, nodes
+	)
+
+	var newcomer: NpcMarker = null
+	for node in after:
+		if node is NpcMarker and not nodes.has(node):
+			newcomer = node
+	assert_not_null(newcomer, "precondition: somebody moved in")
+
+	var chunk_origin := Vector2(coord * CHUNK_SIZE) * float(TILE_SIZE)
+	var chunk_span := float(CHUNK_SIZE * TILE_SIZE)
+	assert_between(newcomer.position.x, chunk_origin.x, chunk_origin.x + chunk_span)
+	assert_between(newcomer.position.y, chunk_origin.y, chunk_origin.y + chunk_span)
+	assert_ne(newcomer.settlement_id, "", "a newcomer who dies would tell nobody")
+	assert_not_null(newcomer.economy, "a newcomer with no market can never buy food")
+
+
+## Who arrives is deterministic: the same village reconciled to the same
+## roster produces the same person, so a reload does not swap them.
+func test_who_moves_in_is_the_same_person_every_time():
+	var coord := _find_settlement_chunk("grassland")
+	var seeds: Array = []
+	for attempt in 2:
+		var world := StubWorld.new()
+		var nodes := _a_village_of(world, coord, 10)
+		world.household_count = 11
+		var after: Array = renderer.reconcile_villagers(
+			parent, coord, coord * CHUNK_SIZE, CHUNK_SIZE, TILE_SIZE, world, nodes
+		)
+		for node in after:
+			if node is NpcMarker and not nodes.has(node):
+				seeds.append(node.identity.seed_value)
+	assert_eq(seeds.size(), 2, "precondition: somebody moved in both times")
+	assert_eq(seeds[0], seeds[1], "a different person arrived on the second run")
+
+
+## An EXTINCT village must stay extinct. _population_for reads a roster of
+## 0 as "this settlement was never recorded, fall back to the founding
+## roster" -- exactly right when spawning a village for the first time,
+## and badly wrong here, because a village whose last household died looks
+## identical to one that was never written down.
+##
+## Measured before it was fixed (tools/probe_village_famine.gd): a village
+## fell to a roster of 0, and the reconcile put ten villagers back on the
+## street, who starved, forever.
+func test_an_extinct_village_is_not_repopulated():
+	var coord := _find_settlement_chunk("grassland")
+	var world := StubWorld.new()
+	var nodes := _a_village_of(world, coord, 10)
+	# Everybody died: the markers are gone and the roster is empty.
+	var survivors: Array = []
+	var freed := 0
+	for node in nodes:
+		if node is NpcMarker and freed < 8:
+			freed += 1
+			node.queue_free()
+			continue
+		survivors.append(node)
+	world.household_count = 0
+
+	var after: Array = renderer.reconcile_villagers(
+		parent, coord, coord * CHUNK_SIZE, CHUNK_SIZE, TILE_SIZE, world, survivors
+	)
+	assert_eq(_villagers_among(after), 2, "an extinct village refilled itself off the street")
+
+
+## ...and a world that cannot answer at all is left exactly as it is,
+## rather than being guessed at.
+func test_a_world_that_cannot_say_leaves_the_village_alone():
+	var coord := _find_settlement_chunk("grassland")
+	var world := StubWorld.new()
+	var nodes := _a_village_of(world, coord, 10)
+	var after: Array = renderer.reconcile_villagers(
+		parent, coord, coord * CHUNK_SIZE, CHUNK_SIZE, TILE_SIZE, null, nodes
+	)
+	assert_eq(_villagers_among(after), 10)

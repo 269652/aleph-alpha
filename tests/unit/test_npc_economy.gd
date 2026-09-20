@@ -78,17 +78,19 @@ func test_starts_with_an_empty_wallet():
 
 
 ## The core production loop: a hunter working gathers real food into the
-## shared village market and earns real gold, using the same real
-## HerbivorePopulationModel-driven number NpcProduction reads.
-func test_a_working_producer_gathers_into_the_market_and_earns_gold():
+## shared village market, using the same real HerbivorePopulationModel-
+## driven number NpcProduction reads.
+##
+## It used to assert that they also earn real gold. They do not any more --
+## gold has one faucet and it is the merchant (docs/concept/
+## traveling_merchants.md, "The merchant is the ONLY faucet"). What the
+## work earns is the GOODS; the coin arrives when somebody buys them.
+func test_a_working_producer_gathers_into_the_market_and_mints_nothing():
 	var economy := _economy("hunter")
-	# Long enough to earn REAL GOLD, not merely to stock one unit: a
-	# producer's take-home is a share of what they earn (VillageWages), so a
-	# single unit's gold rounds away to nothing. See _seconds_to_gather.
 	for i in _seconds_to_gather("hunter", 20.0):
 		economy.step(1.0, true, world, Vector2.ZERO)
-	assert_gt(market.total_stock(), 0.0)
-	assert_gt(economy.wallet.balance, 0)
+	assert_gt(market.total_stock(), 0.0, "the work really produced goods")
+	assert_eq(economy.wallet.balance, 0, "and no coin was minted for them")
 
 
 func test_a_non_working_producer_gathers_nothing():
@@ -257,21 +259,37 @@ func test_a_working_farmer_does_not_crash_when_world_lacks_the_harvest_hook():
 # so what feeds the blacksmith is literally a hunter's catch.
 
 const VillageWages = preload("res://src/world/village_wages.gd")
+const MerchantVisit = preload("res://src/emergence/merchant_visit.gd")
 
 
-## Runs a real producer on `a_market` for long enough to both stock it and
-## fund its purse, exactly the way a village actually does it.
-func _fund_village_with_a_real_hunters_work(a_market: VillageMarket, units: float = 20.0) -> NpcEconomy:
+## Runs a real producer on `a_market` to stock it, and then does what a
+## travelling merchant does: buys a cartload of that stock and pays gold
+## into the purse.
+##
+## The producer's work alone funds NOTHING now. Gold has one faucet and it
+## is the merchant (docs/concept/traveling_merchants.md, "The merchant is
+## the ONLY faucet"), so a fixture that funded a purse by working a hunter
+## was funding it from a faucet that no longer exists. This completes the
+## real loop instead -- goods, then a sale -- which is a truer fixture than
+## the one it replaces, not merely a repaired one.
+##
+## Gathers twice a cartload so the merchant can take one and leave the
+## market something to sell a hungry villager.
+func _fund_village_as_a_merchant_would(a_market: VillageMarket, units: float = 40.0) -> NpcEconomy:
 	var hunter := NpcEconomy.new(1, "hunter", a_market)
 	for i in _seconds_to_gather("hunter", units):
 		hunter.step(1.0, true, world, Vector2.ZERO)
+	var sale: Dictionary = MerchantVisit.purchase(a_market.stock)
+	for item_id in sale["bought"]:
+		a_market.remove_stock(str(item_id), float(sale["bought"][item_id]))
+	NpcEconomy.deposit_to_purse(a_market, float(sale["paid"]))
 	return hunter
 
 
 ## THE behaviour change: a penniless non-producer in a village whose
 ## producers have actually been working no longer starves.
 func test_a_non_producer_in_a_village_with_a_funded_purse_stops_starving():
-	_fund_village_with_a_real_hunters_work(market)
+	_fund_village_as_a_merchant_would(market)
 	assert_true(market.can_buy_meal(), "precondition: the hunter's catch really reached the market")
 
 	var blacksmith := _economy("blacksmith")
@@ -304,7 +322,7 @@ func test_a_non_producer_in_a_village_with_an_empty_purse_still_starves():
 ## Subsistence, not savings: the wage is exactly one meal at the market's
 ## own price, so it is gone again the instant it is used.
 func test_a_drawn_wage_is_spent_on_the_meal_and_leaves_no_savings():
-	_fund_village_with_a_real_hunters_work(market)
+	_fund_village_as_a_merchant_would(market)
 	var blacksmith := _economy("blacksmith")
 	blacksmith.needs.advance(100000.0)
 
@@ -318,7 +336,7 @@ func test_a_drawn_wage_is_spent_on_the_meal_and_leaves_no_savings():
 ## shares (one instance per village, see VillageRenderer.spawn_village) --
 ## a thriving village must not feed a stranger's.
 func test_a_village_purse_feeds_only_its_own_settlement():
-	_fund_village_with_a_real_hunters_work(market)
+	_fund_village_as_a_merchant_would(market)
 
 	var other_market := VillageMarket.new()
 	other_market.add_stock("meat", 5.0)
@@ -339,21 +357,24 @@ func test_a_village_purse_feeds_only_its_own_settlement():
 ## swallow a producing household's entire income. Tolerance is one whole
 ## gold because take-home accrues fractionally and a Wallet holds only whole
 ## gold (see the carry in NpcEconomy._gather).
-func test_a_producer_keeps_only_their_take_home_share_of_what_they_earn():
+## Asked directly: *"Gold should only be conjured by the travelling
+## merchant"*. This test used to pin the opposite -- that a hunter banks
+## VillageWages' take-home share of a coin minted per unit gathered -- and
+## that mint is the faucet now closed (docs/concept/traveling_merchants.md,
+## "The merchant is the ONLY faucet").
+##
+## What a producer's work earns the village is the GOODS. Nobody is paid at
+## the kill; the pay arrives when a merchant buys what was killed.
+func test_a_producers_work_fills_the_market_and_mints_nothing():
 	var hunter := _economy("hunter")
 	for i in _seconds_to_gather("hunter", 20.0):
 		hunter.step(1.0, true, world, Vector2.ZERO)
 
-	# Every gathered unit went to the market -- a working hunter self-feeds
-	# for free and never buys any of it back.
-	var gross := market.total_stock() * float(NpcProduction.YIELD_TO_GOLD_RATE)
-	assert_gt(gross, 0.0, "precondition: the hunter really earned something")
-	assert_gt(hunter.wallet.balance, 0, "a producer must still earn real gold after the village takes its share")
+	assert_gt(market.total_stock(), 0.0, "the work really produced goods")
+	assert_eq(hunter.wallet.balance, 0, "and no coin was minted at the kill")
 	assert_almost_eq(
-		float(hunter.wallet.balance),
-		VillageWages.take_home_of(gross),
-		1.0,
-		"a producer banks VillageWages' take-home share of the gross, not all of it"
+		NpcEconomy.purse_of(market), 0.0, 0.0001,
+		"nor into the village purse -- a merchant has not been yet"
 	)
 
 
@@ -364,14 +385,11 @@ func test_a_producer_keeps_only_their_take_home_share_of_what_they_earn():
 func test_a_village_purse_starts_empty_and_holds_exactly_the_levy_on_real_producer_income():
 	assert_almost_eq(NpcEconomy.purse_of(market), 0.0, 0.0001, "a village starts with no savings at all")
 
-	_fund_village_with_a_real_hunters_work(market)
+	_fund_village_as_a_merchant_would(market)
 
-	var gross := market.total_stock() * float(NpcProduction.YIELD_TO_GOLD_RATE)
-	assert_almost_eq(
-		NpcEconomy.purse_of(market),
-		VillageWages.levy_on(gross),
-		0.0001,
-		"the purse must hold exactly the levy on what its producers really earned"
+	assert_gt(
+		NpcEconomy.purse_of(market), 0.0,
+		"the purse must hold exactly what a merchant paid for the catch"
 	)
 
 
@@ -381,7 +399,7 @@ func test_a_village_purse_starts_empty_and_holds_exactly_the_levy_on_real_produc
 ## already all-or-nothing for the same reason (see its own doc comment);
 ## paying the wage first would sidestep that.
 func test_an_empty_market_does_not_pay_out_a_wage_for_a_meal_that_does_not_exist():
-	_fund_village_with_a_real_hunters_work(market)
+	_fund_village_as_a_merchant_would(market)
 	market.stock.clear()  # the village has eaten through everything it had
 	var funded_purse := NpcEconomy.purse_of(market)
 	assert_gt(funded_purse, 0.0, "precondition: the purse really is funded")
@@ -717,13 +735,15 @@ func test_a_real_catch_puts_the_producers_own_item_in_the_market():
 	assert_almost_eq(market.stock.get("meat", 0.0), 3.0, 0.0001)
 
 
-func test_a_real_catch_pays_the_same_rate_a_gathered_unit_does():
-	# A unit of meat is worth a unit of meat however it was obtained -- the
-	# kill changes where food comes from, not what it sells for.
+## A unit of meat is worth a unit of meat however it was obtained -- but it
+## is worth it to the MARKET, not as a coin at the kill. The rate this test
+## used to pin was the conjured faucet.
+func test_a_real_catch_stocks_the_market_and_pays_nobody():
 	var hunter := _economy("hunter")
 	hunter.record_real_catch(4)
-	var gross := 4.0 * float(NpcProduction.YIELD_TO_GOLD_RATE)
-	assert_almost_eq(NpcEconomy.purse_of(market), VillageWages.levy_on(gross), 0.0001)
+	assert_almost_eq(market.total_stock(), 4.0, 0.0001, "the meat is really there")
+	assert_eq(hunter.wallet.balance, 0, "and nothing was minted for it")
+	assert_almost_eq(NpcEconomy.purse_of(market), 0.0, 0.0001)
 
 
 func test_a_real_catch_of_nothing_changes_nothing():
@@ -850,24 +870,32 @@ func test_a_real_harvest_stocks_the_crop_that_was_actually_grown():
 	)
 
 
-func test_a_real_harvest_pays_the_same_rate_a_gathered_unit_does():
-	# A unit of real produce is worth a unit of real produce however it was
-	# obtained -- the same reasoning record_real_catch's own rate test gives.
+## A unit of real produce is worth a unit of real produce however it was
+## obtained -- to the MARKET. The rate this used to pin was the conjured
+## faucet, the same one record_real_catch's own test named.
+func test_a_real_harvest_stocks_the_market_and_pays_nobody():
 	var farmer := _economy("farmer")
 	farmer.record_real_harvest("wheat", 4)
-	var gross := 4.0 * float(NpcProduction.YIELD_TO_GOLD_RATE)
-	assert_almost_eq(NpcEconomy.purse_of(market), VillageWages.levy_on(gross), 0.0001)
+	assert_almost_eq(market.stock.get("wheat", 0.0), 4.0, 0.0001, "the wheat is really there")
+	assert_eq(farmer.wallet.balance, 0, "and nothing was minted for it")
+	assert_almost_eq(NpcEconomy.purse_of(market), 0.0, 0.0001)
 
 
-func test_a_herbalist_is_paid_for_a_real_harvest_though_they_drip_nothing():
+func test_a_herbalists_real_harvest_reaches_the_market_though_they_drip_nothing():
 	var herbalist := _economy("herbalist")
 	assert_false(
 		NpcProduction.PRODUCER_ITEM_BY_OCCUPATION.has("herbalist"),
 		"precondition: the regional economy has never paid a herbalist anything"
 	)
 	herbalist.record_real_harvest("herb", 2)
-	assert_almost_eq(market.stock.get("herb", 0.0), 2.0, 0.0001)
-	assert_gt(NpcEconomy.purse_of(market), 0.0, "real work really produced something, so it is paid")
+	assert_almost_eq(
+		market.stock.get("herb", 0.0), 2.0, 0.0001,
+		"real work really produced something, and the village can sell it"
+	)
+	assert_almost_eq(
+		NpcEconomy.purse_of(market), 0.0, 0.0001,
+		"but nothing is minted for it -- a merchant pays, at the sale"
+	)
 
 
 func test_a_harvest_of_nothing_changes_nothing():

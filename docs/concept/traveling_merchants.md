@@ -132,6 +132,110 @@ village whose every plank is already spoken for.
 A village with a real surplus still sells it. A village saving for a house
 keeps its wood, and the merchant comes back when there is more.
 
+## Mechanism — a merchant buys the whole village, not one of its cupboards
+
+Reported with the town panel open: *"The village produces way too much food
+and the NPCs don't have an income"* — `Food feeds 387 of 16`, `Gold 1`,
+`Happiness 62% (worst: income)`.
+
+Both halves of that are one fault. A settlement keeps its goods in **more
+than one container**, and the merchant could only ever see one of them:
+
+| Container | What puts goods in it | Seen by the merchant |
+|---|---|---|
+| `VillageMarket.stock` | `NpcProduction` / `SettlementGathering` | **yes** |
+| each structure's `StructureStock` | a carter's round, a mill, a bakery | **no** |
+
+`SettlementFood` was taught to count the shelves
+([milling_and_baking.md](milling_and_baking.md), "Food that counts"), which
+is why the panel can truthfully report food for 387 households. The
+merchant never was. So a village hauls its whole harvest into the warehouse
+— which is exactly what the carter's round is *for* — and thereby puts it
+beyond the reach of the only thing that turns goods into gold. It reads as
+"too much food AND no income" because it is one fact: **the goods and the
+buyer are in different cupboards.**
+
+The rule:
+
+> A merchant buys a settlement's **whole** surplus. Every container the
+> settlement really keeps goods in is one view of one stock, and the sale
+> is drawn back out of the real containers it came from.
+
+`SettlementSurplus` is that, and it is pure: `combined(views)` adds the
+containers up for the merchant to price, and `allocate(bought, views)` says
+how much to take from each, in view order, never more than a container
+holds. The caller does the moving — the same division `MerchantVisit`
+itself already keeps, so a sale that cannot be completed has changed
+nothing.
+
+The market is drawn from **first**, deliberately. It is the abstract ledger
+a village trades out of anyway, while a warehouse shelf is a real building
+the player can walk up to and open; emptying the ledger before the shelf
+means what the player can *see* is the last thing to go.
+
+This does not merge the containers, and deliberately so — the "three food
+containers, one eater" question
+([milling_and_baking.md](milling_and_baking.md)'s own open list) is still
+open. It says only that the merchant reads all of them, which is what makes
+the gold faucet reach the goods a village actually has.
+
+## Mechanism — the merchant is the ONLY faucet
+
+Asked directly: *"Gold should only be conjured by the travelling
+merchant"*.
+
+This file's own opening already claimed that — *"A village's gold used to
+come from nowhere... A traveling merchant is the faucet that replaces
+it"* — and it was not true. Two other places minted gold with nothing
+behind it:
+
+| Faucet | What it did | Standing |
+|---|---|---|
+| `NpcEconomy._earn` | a coin per food unit gathered, whether or not anyone bought it | **closed** |
+| `_collect_estate_tax` | credited the purse and debited **nobody** | **closed** |
+
+The rule now, and it is an invariant rather than an aspiration:
+
+> The settlement purse gains gold from **one** place: a merchant paying
+> for goods he takes away. Everything else that moves gold is a
+> **transfer** — it must debit exactly what it credits.
+
+### A producer is paid like everyone else
+
+`_earn` split a conjured coin between the purse and the producer's own
+wallet. With it gone, a producer draws from the purse through the same
+`_draw_subsistence_wage` every other villager uses — which was already
+written for this and says so: *"Deliberately NOT gated on occupation... in
+practice a working producer's own take-home already covers the price, so
+this only ever fires for them once their work has genuinely stopped
+paying."* That parenthesis is simply no longer true, and the mechanism
+underneath needed no change at all.
+
+What a producer's work earns the village is now the **goods**, which the
+merchant pays for. That is the whole point: a hunter feeds the village by
+filling the warehouse, not by minting a coin as the arrow lands.
+
+### Tax is a transfer, so it must be taken from somebody
+
+`estate_tax_for` says what a village is *owed*. What it can actually
+**collect** is bounded by what its households hold, and the coins really
+leave their wallets. `VillageWages.tax_debits` is that, and it is pure: a
+list of balances and a whole-coin demand in, one debit per household out,
+never more than a household has, summing to no more than is owed.
+
+Two details that are rules rather than conveniences:
+
+- **Whole coins only, with the remainder carried.** A `Wallet` holds
+  integer gold and a kossaet owes 0.25 a day, so collecting per step would
+  round a real debt to nothing or to four times itself. The fraction
+  carries per settlement — the same carry-until-it-crosses-a-whole-unit
+  idiom `NpcEconomy._take_home_carry` already runs on.
+- **A village collects what is there, not what it is due.** Households
+  short of coin pay what they have and the rest is simply not collected;
+  the shortfall is not banked as arrears. A debt a household can never pay
+  is a number that only ever grows, and it would make the purse's balance
+  a fiction again.
+
 ## Mechanism — what the gold is for
 
 Once a purse has real money in it, the paths that spend it are already

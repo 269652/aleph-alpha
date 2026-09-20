@@ -25,6 +25,8 @@ extends SceneTree
 ## Output: tools/hud_renders/hud_<scale>_<state>.png (gitignored via
 ## tools/*_renders/).
 
+const ViewMode = preload("res://src/gameplay/view_mode.gd")
+
 const OUT_DIR := "res://tools/hud_renders"
 const DESIGN_SIZE := Vector2i(1280, 720)
 
@@ -89,10 +91,34 @@ func _initialize() -> void:
 	world._build_minimap_frame()
 	world._build_view_mode_toggle()
 
+	if state == "planner":
+		world._view_mode = ViewMode.Mode.PLANNER
 	if state == "calm":
 		_fill_in_calm(world)
 	else:
 		_fill_in(world, scale)
+	if state == "planner":
+		# The palette is built directly rather than through World's own
+		# builder, which reaches for _chunk_manager for real labour hours --
+		# a whole generated world this probe deliberately does not have. The
+		# VIEW is the same class the game builds; only the two numbers it is
+		# not allowed to invent are stubbed.
+		var palette = load("res://src/ui/blueprint_palette_view.gd").new()
+		world._blueprint_palette = palette
+		ui.add_child(palette)
+		palette.configure(
+			world._ui_theme,
+			func(_blueprint_id: String) -> float: return 6.0,
+			func(item_id: String) -> String: return String(item_id).capitalize()
+		)
+		# The same refit-on-growth wiring World does: the view's minimum size
+		# changes once its slots have laid themselves out, and without this
+		# the render clips the palette's own footer.
+		palette.minimum_size_changed.connect(world._fit_blueprint_palette)
+		world._fit_blueprint_palette()
+		# Through World's own _apply_view_mode, so what the render shows is
+		# what the game decides -- not a second opinion the probe holds.
+		world._apply_view_mode()
 	world._death_card.visible = state == "dead"
 
 	world.remove_child(ui)
@@ -144,7 +170,10 @@ func _fill_in(world, scale: float) -> void:
 	# at each state shows both halves of the switch.
 	world._view_mode_switch.set_on(true)
 	world._held_item_label.text = HudReadouts.held_item_line("Stone Axe", "worn")
-	world._held_item_card.visible = true
+	# Whether the card is SHOWN is the mode's call, not the probe's -- that is
+	# exactly the bug this render has to be able to catch (reported live: the
+	# card drawn over the build palette).
+	world._held_item_card.visible = ViewMode.shows_hotbar(world._view_mode)
 
 	world._hunger_label.text = world.meter_label_text("Food", 0.1)
 	world._thirst_label.text = world.meter_label_text("Water", 0.4)

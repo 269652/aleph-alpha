@@ -218,7 +218,39 @@ static func plaza_x0_for(
 			# street and reaches it by the gate lane. A square can only ever
 			# straddle a street.
 			return candidate
-	return centred
+	# Nothing fits WHOLLY. Reported a fourth time, and answered directly:
+	# "Every village should have a square". This used to return `centred`
+	# -- a site the search has just proved unusable -- so the village
+	# planned a square on ground it could never pave and ended up with
+	# none at all, which also silently cost it its seat (the civic plot IS
+	# the square's paving).
+	#
+	# The best partial site is a real square, just a clipped one: paving
+	# lays on the cells that are usable and skips the rest, so a village
+	# hemmed in by trees gets the widest piece of square its pocket allows
+	# instead of nothing. A narrower square is still a square.
+	return _widest_usable_plaza_x0(chunk_size, street_y, is_dry, westmost, eastmost, centred)
+
+
+## The candidate whose square would have the MOST usable cells -- the
+## fallback for a village where none is wholly usable. Ties go to the
+## westmost, and a village with nothing usable anywhere keeps `centred`,
+## which is the honest answer when there is no ground at all.
+static func _widest_usable_plaza_x0(
+	chunk_size: int, street_y: int, is_dry: Callable, westmost: int, eastmost: int, centred: int
+) -> int:
+	var best := centred
+	var best_usable := -1
+	for candidate in range(westmost, eastmost + 1):
+		var usable := 0
+		for y in range(street_y - PLAZA_ROWS_NORTH, street_y + PLAZA_ROWS_SOUTH + 1):
+			for x in range(candidate, candidate + PLAZA_WIDTH_TILES):
+				if is_dry.call(Vector2i(x, y)):
+					usable += 1
+		if usable > best_usable:
+			best_usable = usable
+			best = candidate
+	return best
 
 
 ## Whether every cell of the square standing at `plaza_x0` is dry -- the
