@@ -479,3 +479,50 @@ func test_a_pond_fished_out_is_still_fished_out_after_a_reload():
 
 	assert_almost_eq(manager.pond_fish_at(_tile.x, _tile.y), emptied, 0.0001,
 		"a reload restocked a pond the village had already fished out")
+
+
+# -- a pond nobody ever stocked, because nobody could -----------------------
+#
+# Reported live with the water in shot a second time, after the stock was
+# made to persist: *"also no fish in pond"*. The fix before this one keeps
+# a stock that EXISTS; a pond dug by a build that never kept one has no
+# record at all, on disk or in memory, and the village pass that stocks a
+# pond returns early on water that is already dug. So every pond in every
+# save made before POND_FISH_DIR existed is empty for ever.
+#
+# The answer has to tell "never stocked" apart from "fished out", or it
+# would quietly refill a pond the village had emptied -- which is the one
+# thing the persistence fix exists to prevent.
+
+
+func test_water_nobody_stocked_has_no_record_of_a_stocking():
+	_dig_pond(_a_pond())
+	assert_false(
+		manager.pond_has_been_stocked(_tile.x, _tile.y),
+		"a hole somebody dug this minute was never stocked"
+	)
+
+
+func test_stocking_a_pond_leaves_a_record_of_it():
+	_dig_pond(_a_pond())
+	manager.stock_pond_at(_tile.x, _tile.y)
+	assert_true(manager.pond_has_been_stocked(_tile.x, _tile.y))
+
+
+## The distinction the whole thing turns on: a pond fished flat still
+## carries its record, so it is never mistaken for one nobody ever put
+## fish in.
+func test_a_pond_fished_flat_is_still_a_pond_that_was_stocked():
+	_dig_pond(_a_pond())
+	manager.stock_pond_at(_tile.x, _tile.y)
+	for _attempt in 20:
+		manager.catch_pond_fish_at(_tile.x, _tile.y)
+	assert_lt(manager.pond_fish_at(_tile.x, _tile.y), 1.0, "precondition: fished below a whole fish")
+	assert_true(
+		manager.pond_has_been_stocked(_tile.x, _tile.y),
+		"an emptied pond must not read as one nobody ever stocked, or a reload refills it"
+	)
+
+
+func test_dry_ground_was_never_stocked():
+	assert_false(manager.pond_has_been_stocked(_tile.x, _tile.y))
