@@ -407,7 +407,15 @@ adding to the settlement's household count. A household that moved in while
 the player stood in the village had no villager at all until they walked far
 enough away to unload the chunk and came back.
 
-`admit_household` now re-derives the village (`_respawn_village`), which is
+`admit_household` now re-derives the village (`_respawn_village`), and so
+does a completed building project the moment its building is placed
+(`_place_completed_building_project`, 2026-09-20): a newcomer arrives
+without a house, so the arrival's re-derivation can hand them nothing yet,
+and it is the house the ladder raises for them that gives their record
+their trade, a fisher their pond and hut, a farmstead its beds and rails
+— on the day it stands rather than on the next chunk load
+([village_ponds.md](village_ponds.md), "A pond dug the day the fisher's
+house stands"). Each is
 a **whole re-derivation rather than one appended marker** on purpose: a
 villager is not just a marker. They need their farmhouse's field, their
 pond, their market stand, their store round, their workspot prop — all
