@@ -212,6 +212,7 @@ const NpcIdentity = preload("res://src/world/npc_identity.gd")
 const SettlementTier = preload("res://src/emergence/settlement_tier.gd")
 const SettlementCharter = preload("res://src/emergence/settlement_charter.gd")
 const MageGuildRoster = preload("res://src/gameplay/mage_guild_roster.gd")
+const HouseholdWater = preload("res://src/emergence/household_water.gd")
 const WorldBoss = preload("res://src/emergence/world_boss.gd")
 const WorldBossStore = preload("res://src/emergence/world_boss_store.gd")
 const WorldBossStorePersistence = preload("res://src/emergence/world_boss_store_persistence.gd")
@@ -3659,6 +3660,14 @@ func step_settlements(delta_seconds: float) -> void:
 		# clock, because it is the same kind of decision -- a person
 		# choosing to move to this place.
 		age_mage_guilds_in(
+			RegionalTrade.chunk_coord_of(settlement_id),
+			SETTLEMENT_STEP_INTERVAL / SECONDS_PER_SIMULATED_DAY
+		)
+		# The households drink (docs/concept/village_water.md). On the
+		# player-felt clock beside the guilds and immigration, because
+		# running dry is what sends somebody to the well and a player has
+		# to be able to watch that happen.
+		drink_household_water_in(
 			RegionalTrade.chunk_coord_of(settlement_id),
 			SETTLEMENT_STEP_INTERVAL / SECONDS_PER_SIMULATED_DAY
 		)
@@ -14923,6 +14932,92 @@ func place_building(
 ## Mechanism 4 -- "It should be a real NPC pulling the cart, not an
 ## additional sprite").
 const WAREHOUSE_BUILDING_ID := "warehouse"
+
+
+# -- a house's own water (docs/concept/village_water.md) --------------------
+
+## The ONE number a house persists about its water: what is in the tank.
+## Same idiom as GUILD_DAYS_OPEN_KEY -- a field on the building's own
+## record, so it costs no new store and travels with the house through a
+## chunk round trip.
+const WATER_LITRES_KEY := "water_litres"
+
+
+## How many people drink out of this house.
+##
+## One, for an occupied home. Households are single-member on this
+## substrate and say so (see VillageCensus: "Everyone housed occupies one
+## place in the roof they own. Single-member households are all this
+## substrate has"), so reading capacity_of here would have a cottage
+## drinking for three people who do not exist. A house nobody lives in
+## drinks nothing, and a workplace is not a home at all.
+func _drinkers_in_house(record: Dictionary) -> int:
+	if BuildingCatalog.capacity_of(String(record.get("id", ""))) <= 0:
+		return 0
+	var lived_in: bool = (
+		int(record.get("resident_seed", 0)) != 0
+		or String(record.get("owner_household_id", "")) != ""
+	)
+	return 1 if lived_in else 0
+
+
+## What is in this house's tank.
+##
+## A record with no tank yet -- every house raised before this existed --
+## reads its own SEEDED starting level rather than zero, so an old save's
+## village does not wake up dry and send every household to the well at
+## once on the morning it loads. That is the same crowd this whole feature
+## exists to prevent, and a migration is exactly where it would come back.
+## 0.0 for anything that is not somebody's home.
+func house_water_at(record: Dictionary) -> float:
+	if BuildingCatalog.capacity_of(String(record.get("id", ""))) <= 0:
+		return 0.0
+	if not record.has(WATER_LITRES_KEY):
+		return HouseholdWater.starting_level(int(record.get("seed", 0)))
+	return float(record[WATER_LITRES_KEY])
+
+
+## Whether this house must send somebody to the well.
+func water_trip_due_at(record: Dictionary) -> bool:
+	if BuildingCatalog.capacity_of(String(record.get("id", ""))) <= 0:
+		return false
+	return HouseholdWater.trip_is_due(house_water_at(record))
+
+
+## Every household in ONE chunk drinks for `days`.
+##
+## Per-chunk rather than global for the same reason age_mage_guilds_in is:
+## the settlement step runs once per SETTLEMENT, so draining every loaded
+## house from inside it would empty a village once per neighbour in range.
+func drink_household_water_in(chunk_coord: Vector2i, days: float) -> void:
+	if days <= 0.0:
+		return
+	var chunk: Chunk = _loaded_chunks.get(chunk_coord)
+	if chunk == null:
+		return
+	for origin_local in chunk.buildings:
+		var record: Dictionary = chunk.buildings[origin_local]
+		var drinkers := _drinkers_in_house(record)
+		if drinkers <= 0:
+			continue
+		record[WATER_LITRES_KEY] = HouseholdWater.level_after(
+			house_water_at(record), drinkers, days
+		)
+
+
+## A villager tips their bucket into the tank at the end of an errand.
+## False for anything that is not a home standing there.
+func pour_bucket_into_house(chunk_coord: Vector2i, origin_local: Vector2i) -> bool:
+	var chunk: Chunk = _loaded_chunks.get(chunk_coord)
+	if chunk == null or not chunk.buildings.has(origin_local):
+		return false
+	var record: Dictionary = chunk.buildings[origin_local]
+	if BuildingCatalog.capacity_of(String(record.get("id", ""))) <= 0:
+		return false
+	record[WATER_LITRES_KEY] = HouseholdWater.poured_into(
+		house_water_at(record), HouseholdWater.BUCKET_LITRES
+	)
+	return true
 
 
 # -- the mage guild fills with masters (docs/concept/mage_guild.md) ---------
